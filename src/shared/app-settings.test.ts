@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  APP_LOCALES,
   applyKunRuntimePatch,
   kunSettingsEnvelope,
   kunSettingsPatch,
@@ -82,6 +83,17 @@ function settings(): AppSettingsV1 {
     disabledSkillIds: []
   }
 }
+
+describe('application locale settings', () => {
+  it.each(APP_LOCALES)('preserves the supported %s locale', (locale) => {
+    expect(normalizeAppSettings({ ...settings(), locale }).locale).toBe(locale)
+  })
+
+  it('falls back to English for an unsupported persisted locale', () => {
+    const input = { ...settings(), locale: 'fr' } as unknown as AppSettingsV1
+    expect(normalizeAppSettings(input).locale).toBe('en')
+  })
+})
 
 describe('chat content max width', () => {
   it('defaults invalid values to 896px', () => {

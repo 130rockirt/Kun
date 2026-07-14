@@ -25,6 +25,7 @@ import {
   type WorkflowSettingsPatchV1,
   type WriteSettingsPatchV1
 } from './app-settings-types'
+import { isAppLocale } from './app-locales'
 import { normalizeKeyboardShortcuts, type KeyboardShortcutsConfigV1 } from './keyboard-shortcuts'
 import {
   defaultKunRuntimeSettings,
@@ -82,7 +83,7 @@ export function normalizeAppSettings(settings: AppSettingsV1): AppSettingsV1 {
   })
   return {
     version: 1,
-    locale: maybeSettings.locale === 'zh' ? 'zh' : 'en',
+    locale: isAppLocale(maybeSettings.locale) ? maybeSettings.locale : 'en',
     theme:
       maybeSettings.theme === 'light' || maybeSettings.theme === 'dark' || maybeSettings.theme === 'system'
         ? maybeSettings.theme

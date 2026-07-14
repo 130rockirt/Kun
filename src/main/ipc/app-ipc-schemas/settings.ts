@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import {
+  APP_LOCALES,
   IMAGE_GENERATION_QUALITIES,
   IMAGE_GENERATION_PROTOCOLS,
   IMAGE_GENERATION_RESOLUTIONS,
@@ -39,7 +40,7 @@ import {
   optionalTrimmedString,
   trimmedString
 } from './common'
-const localeSchema = z.enum(['en', 'zh'])
+const localeSchema = z.enum(APP_LOCALES)
 const themeSchema = z.enum(['system', 'light', 'dark'])
 const uiFontScaleSchema = z.union([
   z.number().min(UI_FONT_SCALE_MIN).max(UI_FONT_SCALE_MAX),

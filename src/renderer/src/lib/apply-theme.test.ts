@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { APP_LOCALE_OPTIONS } from '@shared/app-locales'
 import { applyCursorSpotlight, applyCursorSpotlightColor, applyDocumentLocale } from './apply-theme'
 
 describe('applyDocumentLocale', () => {
@@ -17,11 +18,10 @@ describe('applyDocumentLocale', () => {
       }
     })
 
-    applyDocumentLocale('en')
-    expect(attributes.get('lang')).toBe('en')
-
-    applyDocumentLocale('zh')
-    expect(attributes.get('lang')).toBe('zh-CN')
+    for (const option of APP_LOCALE_OPTIONS) {
+      applyDocumentLocale(option.value)
+      expect(attributes.get('lang')).toBe(option.documentLanguage)
+    }
   })
 
   it('does not touch the attribute when the locale already matches', () => {

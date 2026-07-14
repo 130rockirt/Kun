@@ -15,6 +15,7 @@ import type {
 } from '../shared/gui-update'
 import { nextGuiUpdateCheckDelay } from '../shared/gui-update-schedule'
 import { DEFAULT_GUI_UPDATE_CHANNEL, normalizeGuiUpdateChannel } from '../shared/gui-update'
+import type { AppLocale } from '../shared/app-locales'
 
 // R2 prefix 保持旧值:线上还在运行的 DeepSeek GUI 老版本轮询的
 // 就是 `deepseek-gui/channels/<channel>/latest/`,prefix 一改老客户端
@@ -41,7 +42,7 @@ let configuredChannel: GuiUpdateChannel = normalizeGuiUpdateChannel(
 )
 let configuredFeedUrl = ''
 let getSelectedChannel: (() => GuiUpdateChannel | Promise<GuiUpdateChannel>) | null = null
-let getSelectedLocale: (() => 'en' | 'zh' | Promise<'en' | 'zh'>) | null = null
+let getSelectedLocale: (() => AppLocale | Promise<AppLocale>) | null = null
 let beforeInstallUpdate: (() => void | Promise<void>) | null = null
 let beforeInstallUpdatePromise: Promise<void> | null = null
 let setUpdateInstallQuitting: ((active: boolean) => void) | null = null
@@ -562,7 +563,7 @@ export function initializeGuiUpdater(
   windowGetter: () => BrowserWindow | null,
   channelGetter?: () => GuiUpdateChannel | Promise<GuiUpdateChannel>,
   beforeInstall?: () => void | Promise<void>,
-  localeGetter?: () => 'en' | 'zh' | Promise<'en' | 'zh'>,
+  localeGetter?: () => AppLocale | Promise<AppLocale>,
   updateInstallQuittingSetter?: (active: boolean) => void
 ): void {
   getMainWindow = windowGetter

@@ -1,3 +1,4 @@
+export * from './app-locales'
 export * from './app-settings-types'
 export * from './app-settings-provider'
 export * from './app-settings-kun'

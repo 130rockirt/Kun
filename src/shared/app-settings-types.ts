@@ -1,3 +1,4 @@
+import type { AppLocale } from './app-locales'
 import type { GuiUpdateChannel } from './gui-update'
 import type { KeyboardShortcutsConfigV1 } from './keyboard-shortcuts'
 import type { LocalWhisperDownloadSourceId } from './local-whisper'
@@ -1976,7 +1977,7 @@ export type TerminalSettingsPatchV1 = {
 
 export type AppSettingsV1 = {
   version: 1
-  locale: 'en' | 'zh'
+  locale: AppLocale
   theme: 'system' | 'light' | 'dark'
   uiFontScale: UiFontScale
   chatContentMaxWidthPx: ChatContentMaxWidthPx

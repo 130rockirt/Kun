@@ -601,6 +601,17 @@ describe('app-ipc-schemas', () => {
     expect('quickChat' in (payload.agents ?? {})).toBe(false)
   })
 
+  it.each(['en', 'zh', 'ru', 'hi', 'th', 'ja', 'ko'] as const)(
+    'accepts the %s application locale in settings patches',
+    (locale) => {
+      expect(settingsPatchSchema.parse({ locale }).locale).toBe(locale)
+    }
+  )
+
+  it('rejects unsupported application locales', () => {
+    expect(() => settingsPatchSchema.parse({ locale: 'fr' })).toThrow()
+  })
+
   it('accepts persisted claw channel welcome markers in full settings snapshots', () => {
     const payload = settingsPatchSchema.parse({
       claw: {

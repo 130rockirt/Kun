@@ -1,4 +1,5 @@
 import {
+  isAppLocale,
   normalizeAppSettings,
   normalizeScheduledTask,
   normalizeWorkflow,
@@ -260,7 +261,7 @@ function arrayValue(value: unknown): unknown[] {
 }
 
 function isLocale(value: unknown): value is AppSettingsV1['locale'] {
-  return value === 'en' || value === 'zh'
+  return isAppLocale(value)
 }
 
 function isTheme(value: unknown): value is AppSettingsV1['theme'] {

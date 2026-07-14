@@ -2,6 +2,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { GeneralSettingsSection } from './settings-section-general'
+import { APP_LOCALE_OPTIONS } from '@shared/app-locales'
 
 const labels: Record<string, string> = {
   sectionGeneral: 'General',
@@ -119,5 +120,13 @@ describe('GeneralSettingsSection workspace layout', () => {
     expect(html).toContain('w-full min-w-0 rounded-xl border border-ds-border')
     expect(html).toContain('flex flex-wrap justify-end gap-2')
     expect(html.indexOf('~/data/code/python/Kook-Voices')).toBeLessThan(html.indexOf('Restore default'))
+  })
+
+  it('offers every supported application locale', () => {
+    const html = renderToStaticMarkup(createElement(GeneralSettingsSection, { ctx: baseCtx() }))
+    for (const option of APP_LOCALE_OPTIONS) {
+      expect(html).toContain(`value="${option.value}"`)
+      expect(html).toContain(option.label)
+    }
   })
 })

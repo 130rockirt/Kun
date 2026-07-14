@@ -1,4 +1,5 @@
 import {
+  isAppLocale,
   DEFAULT_CHECKPOINT_CLEANUP_INTERVAL_DAYS,
   DEFAULT_LOG_RETENTION_DAYS,
   DEFAULT_GUI_UPDATE_CHANNEL,
@@ -134,7 +135,7 @@ export function coerceRendererSettings(settings: AppSettingsV1): AppSettingsV1 {
   const chatContentMaxWidthPx = normalizeChatContentMaxWidth(raw.chatContentMaxWidthPx)
   return {
     version: 1,
-    locale: raw.locale === 'zh' ? 'zh' : 'en',
+    locale: isAppLocale(raw.locale) ? raw.locale : 'en',
     theme,
     uiFontScale,
     chatContentMaxWidthPx,

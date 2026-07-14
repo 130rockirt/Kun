@@ -1,4 +1,5 @@
 import type { ExtensionConsentBinding } from './extension-consent-service'
+import type { AppLocale } from '../../shared/app-locales'
 
 export type ProtectedExtensionPromptCopy = {
   title: string
@@ -6,7 +7,7 @@ export type ProtectedExtensionPromptCopy = {
   detail?: string
 }
 
-export type ProtectedExtensionPromptLocale = 'en' | 'zh'
+export type ProtectedExtensionPromptLocale = AppLocale
 
 export type ProtectedExtensionPromptPresentation = ProtectedExtensionPromptCopy & {
   approveLabel: string

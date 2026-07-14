@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactElement } from 'react'
 import type { ApprovalPolicy, AppSettingsV1, SandboxMode, WindowCloseAction } from '@shared/app-settings'
 import {
+  APP_LOCALE_OPTIONS,
   CHECKPOINT_CLEANUP_INTERVAL_DAYS,
   DEFAULT_CURSOR_SPOTLIGHT_COLOR,
   CHAT_CONTENT_MAX_WIDTH_MAX,
@@ -262,10 +263,11 @@ export function GeneralSettingsSection({ ctx }: { ctx: Record<string, any> }): R
                     <select
                       className={selectControlClass}
                       value={form.locale}
-                      onChange={(e) => update({ locale: e.target.value as 'en' | 'zh' })}
+                      onChange={(e) => update({ locale: e.target.value as AppSettingsV1['locale'] })}
                     >
-                      <option value="en">English</option>
-                      <option value="zh">简体中文</option>
+                      {APP_LOCALE_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
                     </select>
                   }
                 />

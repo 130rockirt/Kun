@@ -42,6 +42,11 @@ describe('application state migration', () => {
     expect(migrated.log).toEqual(current.log)
   })
 
+  it('preserves newly supported locales during portable migration', () => {
+    const current = settings({ locale: 'en' })
+    expect(applyPortableSettingsMigration(current, { locale: 'ko' }).locale).toBe('ko')
+  })
+
   it('rebinds schema-declared renderer references without rewriting prose', () => {
     const restored = restoreSemanticRendererState({
       state: {

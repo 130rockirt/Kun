@@ -14,6 +14,7 @@ import type {
 } from '../agent/types'
 import type { KunRuntimeStatusPayload } from '@shared/kun-gui-api'
 import type {
+  AppLocale,
   ClawImAgentProfileV1,
   ClawImChannelV1,
   ClawImPlatformCredentialV1,
@@ -389,7 +390,7 @@ export type ChatState = {
     action: { kind: 'submit'; answers: UserInputAnswer[] } | { kind: 'cancel' }
   ) => Promise<void>
   selectInspectorItem: (id: string | null) => void
-  applyI18nFromSettings: (locale: 'en' | 'zh') => Promise<void>
+  applyI18nFromSettings: (locale: AppLocale) => Promise<void>
   reloadUiSettings: () => Promise<void>
 }
 
