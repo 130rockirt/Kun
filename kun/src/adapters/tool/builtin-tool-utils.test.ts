@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events'
 import { describe, expect, it, vi } from 'vitest'
 import {
   createShellCommandRunner,
+  globToRegExp,
   makeListEntry,
   normalizeToolPath,
   resolveExecutable,
@@ -440,5 +441,29 @@ describe('tool path normalization', () => {
     const entry = makeListEntry('/workspace/src/index.ts', '/workspace', fileStat)
 
     expect(entry.relative_path).toBe('src/index.ts')
+  })
+})
+
+describe('globToRegExp', () => {
+  it('matches ? as exactly one non-separator character', () => {
+    const matcher = globToRegExp('src/?.ts')
+
+    expect(matcher.test('src/a.ts')).toBe(true)
+    expect(matcher.test('src/A.ts')).toBe(true)
+    expect(matcher.test('src/😀.ts')).toBe(true)
+    expect(matcher.test('src/ab.ts')).toBe(false)
+    expect(matcher.test('src/😀😀.ts')).toBe(false)
+    expect(matcher.test('src/.ts')).toBe(false)
+    expect(matcher.test('src/a/b.ts')).toBe(false)
+  })
+
+  it('keeps the optional **/ prefix without allowing ? to cross directories', () => {
+    const matcher = globToRegExp('**/a?.tsx')
+
+    expect(matcher.test('ab.tsx')).toBe(true)
+    expect(matcher.test('src/ab.tsx')).toBe(true)
+    expect(matcher.test('src/nested/ab.tsx')).toBe(true)
+    expect(matcher.test('src/nested/abc.tsx')).toBe(false)
+    expect(matcher.test('src/nested/a/b.tsx')).toBe(false)
   })
 })
