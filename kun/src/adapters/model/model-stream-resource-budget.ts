@@ -47,6 +47,13 @@ export class ModelStreamResourceLimitError extends Error {
   }
 }
 
+export class ModelStreamResourceStateError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'ModelStreamResourceStateError'
+  }
+}
+
 export class ModelStreamResourceBudget {
   private totalBytes = 0
   private frames = 0
@@ -56,6 +63,10 @@ export class ModelStreamResourceBudget {
   private pendingToolCalls = 0
   private completedToolCalls = 0
   private completedToolArgumentBytes = 0
+  private readonly pendingAccounting = new WeakMap<PendingToolCall, {
+    argumentBytes: number
+    argumentFragments: number
+  }>()
 
   constructor(readonly limits: ModelStreamLimits) {}
 
@@ -79,6 +90,7 @@ export class ModelStreamResourceBudget {
   ): PendingToolCall {
     const existing = pending.get(callId)
     if (existing) {
+      this.assertTrackedPending(existing, pending)
       if (index !== undefined) existing.index = index
       return existing
     }
@@ -93,6 +105,7 @@ export class ModelStreamResourceBudget {
       argumentFragments: 0
     }
     pending.set(callId, created)
+    this.pendingAccounting.set(created, { argumentBytes: 0, argumentFragments: 0 })
     this.pendingToolCalls += 1
     return created
   }
@@ -106,6 +119,7 @@ export class ModelStreamResourceBudget {
 
   appendArguments(pending: PendingToolCall, value: string): void {
     if (!value) return
+    const accounting = this.assertTrackedPending(pending)
     const bytes = Buffer.byteLength(value, 'utf8')
     this.assertPendingCapacity(pending, bytes)
     pending.argumentParts.push(value)
@@ -113,6 +127,8 @@ export class ModelStreamResourceBudget {
     pending.argumentFragments += 1
     this.pendingArgumentBytes += bytes
     this.pendingArgumentFragments += 1
+    accounting.argumentBytes += bytes
+    accounting.argumentFragments += 1
     if (pending.argumentParts.length >= TOOL_ARGUMENT_PART_COMPACTION_WINDOW) {
       const blocks = pending.argumentBlocks ?? (pending.argumentBlocks = [])
       blocks.push(pending.argumentParts.join(''))
@@ -121,6 +137,7 @@ export class ModelStreamResourceBudget {
   }
 
   replaceArguments(pending: PendingToolCall, value: string): void {
+    const accounting = this.assertTrackedPending(pending)
     const bytes = value ? Buffer.byteLength(value, 'utf8') : 0
     const fragments = value ? 1 : 0
     this.assertPendingCapacity(
@@ -131,6 +148,8 @@ export class ModelStreamResourceBudget {
     )
     this.pendingArgumentBytes += bytes - pending.argumentBytes
     this.pendingArgumentFragments += fragments - pending.argumentFragments
+    accounting.argumentBytes = bytes
+    accounting.argumentFragments = fragments
     pending.argumentBlocks = []
     pending.argumentParts = value ? [value] : []
     pending.argumentBytes = bytes
@@ -162,10 +181,21 @@ export class ModelStreamResourceBudget {
   ): PendingToolCall | undefined {
     const value = pending.get(callId)
     if (!value) return undefined
+    const accounting = this.assertTrackedPending(value, pending)
+    if (
+      value.argumentBytes !== accounting.argumentBytes ||
+      value.argumentFragments !== accounting.argumentFragments ||
+      this.pendingToolCalls <= 0 ||
+      this.pendingArgumentBytes < accounting.argumentBytes ||
+      this.pendingArgumentFragments < accounting.argumentFragments
+    ) {
+      throw new ModelStreamResourceStateError('pending tool-call accounting is inconsistent')
+    }
     pending.delete(callId)
-    this.pendingToolCalls = Math.max(0, this.pendingToolCalls - 1)
-    this.pendingArgumentBytes -= value.argumentBytes
-    this.pendingArgumentFragments -= value.argumentFragments
+    this.pendingAccounting.delete(value)
+    this.pendingToolCalls -= 1
+    this.pendingArgumentBytes -= accounting.argumentBytes
+    this.pendingArgumentFragments -= accounting.argumentFragments
     return value
   }
 
@@ -206,6 +236,22 @@ export class ModelStreamResourceBudget {
         nextArgumentFragments: nextFragments
       })
     }
+  }
+
+  private assertTrackedPending(
+    pending: PendingToolCall,
+    collection?: Map<string, PendingToolCall>
+  ): { argumentBytes: number; argumentFragments: number } {
+    const accounting = this.pendingAccounting.get(pending)
+    if (
+      !accounting ||
+      pending.argumentBytes !== accounting.argumentBytes ||
+      pending.argumentFragments !== accounting.argumentFragments ||
+      (collection && this.pendingToolCalls !== collection.size)
+    ) {
+      throw new ModelStreamResourceStateError('pending tool-call accounting is inconsistent')
+    }
+    return accounting
   }
 
   exceeded(

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { CompatModelClient, type ModelStreamLimits } from './compat-model-client.js'
 import {
   ModelStreamResourceBudget,
+  ModelStreamResourceStateError,
   TOOL_ARGUMENT_PART_COMPACTION_WINDOW,
   type PendingToolCall
 } from './model-stream-resource-budget.js'
@@ -530,14 +531,61 @@ describe('CompatModelClient streaming resource limits', () => {
       maxCompletedToolCalls: 32,
       maxCompletedToolArgumentBytes: 1_000_000
     })
-    const pending: PendingToolCall = {
-      name: 'edit', argumentParts: [], argumentBytes: 0, argumentFragments: 0
-    }
+    const pendingCalls = new Map<string, PendingToolCall>()
+    const pending = budget.pendingCall(pendingCalls, 'call-1', 0)
+    pending.name = 'edit'
     for (let index = 0; index < 5_000; index += 1) budget.appendArguments(pending, 'x')
     expect(pending.argumentFragments).toBe(5_000)
     expect(pending.argumentParts.length).toBeLessThanOrEqual(TOOL_ARGUMENT_PART_COMPACTION_WINDOW)
     expect(pending.argumentBlocks?.length).toBeGreaterThan(1)
     expect(budget.pendingArguments(pending)).toBe('x'.repeat(5_000))
+  })
+
+  it('releases pending argument capacity exactly once', () => {
+    const budget = new ModelStreamResourceBudget({
+      maxBufferBytes: 1_000,
+      maxFrameBytes: 1_000,
+      maxTotalBytes: 1_000,
+      maxFrames: 100,
+      maxOutputBytes: 1_000,
+      maxPendingToolCalls: 2,
+      maxPendingToolArgumentBytes: 4,
+      maxTotalPendingToolArgumentBytes: 4,
+      maxCompletedToolCalls: 2,
+      maxCompletedToolArgumentBytes: 8
+    })
+    const pendingCalls = new Map<string, PendingToolCall>()
+    const first = budget.pendingCall(pendingCalls, 'first', 0)
+    budget.appendArguments(first, '1234')
+
+    expect(budget.removePendingCall(pendingCalls, 'first')).toBe(first)
+    expect(budget.removePendingCall(pendingCalls, 'first')).toBeUndefined()
+
+    const second = budget.pendingCall(pendingCalls, 'second', 1)
+    expect(() => budget.appendArguments(second, '1234')).not.toThrow()
+  })
+
+  it('fails closed instead of hiding corrupted pending counters', () => {
+    const budget = new ModelStreamResourceBudget({
+      maxBufferBytes: 1_000,
+      maxFrameBytes: 1_000,
+      maxTotalBytes: 1_000,
+      maxFrames: 100,
+      maxOutputBytes: 1_000,
+      maxPendingToolCalls: 2,
+      maxPendingToolArgumentBytes: 8,
+      maxTotalPendingToolArgumentBytes: 8,
+      maxCompletedToolCalls: 2,
+      maxCompletedToolArgumentBytes: 8
+    })
+    const pendingCalls = new Map<string, PendingToolCall>()
+    const pending = budget.pendingCall(pendingCalls, 'call-1', 0)
+    budget.appendArguments(pending, '{}')
+    pending.argumentBytes += 1
+
+    expect(() => budget.removePendingCall(pendingCalls, 'call-1'))
+      .toThrow(ModelStreamResourceStateError)
+    expect(pendingCalls.has('call-1')).toBe(true)
   })
 
   it('bounds and sanitizes provider-controlled tool names in limit diagnostics', () => {
@@ -553,12 +601,9 @@ describe('CompatModelClient streaming resource limits', () => {
       maxCompletedToolCalls: 2,
       maxCompletedToolArgumentBytes: 2
     })
-    const pending: PendingToolCall = {
-      name: `edit\n${'x'.repeat(10_000)}SECRET_TAIL`,
-      argumentParts: [],
-      argumentBytes: 0,
-      argumentFragments: 0
-    }
+    const pendingCalls = new Map<string, PendingToolCall>()
+    const pending = budget.pendingCall(pendingCalls, 'call-1', 0)
+    pending.name = `edit\n${'x'.repeat(10_000)}SECRET_TAIL`
 
     let message = ''
     try {
