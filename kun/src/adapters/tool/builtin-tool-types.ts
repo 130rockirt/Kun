@@ -1,4 +1,5 @@
 import { stat } from 'node:fs/promises'
+import type { FileHandle } from 'node:fs/promises'
 import type { LocalTool } from './local-tool-host.js'
 
 export type FsStats = NonNullable<Awaited<ReturnType<typeof stat>>>
@@ -235,11 +236,15 @@ export interface BashLocalToolOperations {
 export interface WriteLocalToolOperations {
   mkdir?: (path: string) => Promise<void>
   writeFile?: (path: string, content: string) => Promise<void>
+  /** Test/composition seam; the returned handle is always identity-verified before use. */
+  openExternal?: (path: string, flags: number) => Promise<FileHandle>
 }
 
 export interface EditLocalToolOperations {
   readFile?: (path: string) => Promise<string>
   writeFile?: (path: string, content: string) => Promise<void>
+  /** Test/composition seam; the returned handle is always identity-verified before use. */
+  openExternal?: (path: string, flags: number) => Promise<FileHandle>
 }
 
 export interface GrepLocalToolOperations {

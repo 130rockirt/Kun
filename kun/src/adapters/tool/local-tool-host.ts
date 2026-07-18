@@ -29,7 +29,11 @@ import {
   ReadTracker,
   type ReadTrackerOptions
 } from './read-tracker.js'
-import { sandboxBlockForTool, type SandboxBlock } from './sandbox-policy.js'
+import {
+  externalWriteTargetsForApproval,
+  sandboxBlockForTool,
+  type SandboxBlock
+} from './sandbox-policy.js'
 import {
   createToolOperationIdentity,
   ToolOperationJournal
@@ -56,6 +60,13 @@ export type LocalTool = {
    * such as sending workspace data to a third-party chat channel.
    */
   requiresExplicitApproval?: boolean
+  /**
+   * String argument names that are exact file mutation targets eligible for a
+   * one-call external workspace grant. Tools must opt in explicitly; merely
+   * being a `file_change` tool never grants inferred path arguments. Opted-in
+   * tools must still resolve and validate the target with `resolveWorkspacePath`.
+   */
+  externalWritePathArguments?: readonly string[]
   /**
    * Optional gating predicate. When present, the tool is only listed
    * and only executed when `shouldAdvertise` returns true for the
@@ -203,9 +214,25 @@ export class LocalToolHost implements ToolHost {
         approved: false
       }
     }
+    let externalWriteTargets: Awaited<ReturnType<typeof externalWriteTargetsForApproval>>
+    try {
+      externalWriteTargets = await externalWriteTargetsForApproval(tool, activeCall, context)
+    } catch (error) {
+      return {
+        item: this.errorToolResult(
+          context,
+          activeCall,
+          tool,
+          error instanceof Error ? error.message : String(error),
+          'sandbox_write_blocked'
+        ),
+        approved: false
+      }
+    }
+    const externalPathApproval = externalWriteTargets.length > 0
     // A configured hook may auto-approve ordinary tool calls, but it must not
     // bypass an explicit user decision for an external side effect.
-    const needsApproval = tool.requiresExplicitApproval ||
+    const needsApproval = externalPathApproval || tool.requiresExplicitApproval ||
       (!preHooks.autoApproved && this.requiresApproval(tool, activeCall, context))
     if (needsApproval) {
       const approvalId = `appr_${randomUUID().replaceAll('-', '')}`
@@ -214,7 +241,12 @@ export class LocalToolHost implements ToolHost {
         threadId: context.threadId,
         turnId: context.turnId,
         toolName: activeCall.toolName,
-        summary: this.buildApprovalSummary(activeCall)
+        summary: externalPathApproval
+          ? this.buildExternalPathApprovalSummary(
+              activeCall,
+              externalWriteTargets.map((target) => target.path)
+            )
+          : this.buildApprovalSummary(activeCall)
       })
       const resolution = await context.awaitApproval(approval)
       const decision = typeof resolution === 'string' ? resolution : resolution.decision
@@ -285,9 +317,19 @@ export class LocalToolHost implements ToolHost {
       }
     }
     this.operationJournal.begin(operationIdentity)
+    // Grants are minted by this host after an approval and must never be
+    // accepted from a reused/caller-supplied context.
+    const ungrantedContext = { ...context }
+    delete ungrantedContext.approvedExternalWriteTargets
+    const approvedExternalWriteTargets = Object.freeze(
+      externalWriteTargets.map((target) => Object.freeze({ ...target }))
+    )
+    const executionContext = externalPathApproval
+      ? { ...ungrantedContext, approvedExternalWriteTargets }
+      : ungrantedContext
     let result: Awaited<ReturnType<LocalTool['execute']>>
     try {
-      result = await tool.execute(activeCall.arguments, context, async (update) => {
+      result = await tool.execute(activeCall.arguments, executionContext, async (update) => {
         if (!onUpdate) return
         const partialItem = makeToolResultItem({
           id: `item_${activeCall.callId}`,
@@ -401,6 +443,11 @@ export class LocalToolHost implements ToolHost {
     return `Run ${call.toolName}(${args})`
   }
 
+  private buildExternalPathApprovalSummary(call: ToolCallLike, paths: readonly string[]): string {
+    const targets = paths.map((path) => JSON.stringify(path)).join(', ')
+    return `Allow ${call.toolName} to modify these exact paths outside the workspace for this call only: ${targets}`
+  }
+
   private completedToolResult(
     context: ToolHostContext,
     call: ToolCallLike,
@@ -454,7 +501,10 @@ export class LocalToolHost implements ToolHost {
       toolKind: tool.toolKind ?? 'tool_call',
       execute: tool.execute,
       ...(tool.shouldAdvertise ? { shouldAdvertise: tool.shouldAdvertise } : {}),
-      ...(tool.requiresExplicitApproval ? { requiresExplicitApproval: true } : {})
+      ...(tool.requiresExplicitApproval ? { requiresExplicitApproval: true } : {}),
+      ...(tool.externalWritePathArguments?.length
+        ? { externalWritePathArguments: [...tool.externalWritePathArguments] }
+        : {})
     }
   }
 }

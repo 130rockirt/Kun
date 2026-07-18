@@ -60,6 +60,17 @@ export type GuiDesignArtifactContext = {
   relativePath: string
 }
 
+export type ApprovedExternalWriteTarget = {
+  /** Physical path shown in the approval prompt. */
+  path: string
+  /** Stable file identity captured before prompting. */
+  device: bigint
+  inode: bigint
+  /** Stable parent-directory identity captured before prompting. */
+  parentDevice: bigint
+  parentInode: bigint
+}
+
 export type ToolHostContext = {
   threadId: string
   turnId: string
@@ -112,6 +123,8 @@ export type ToolHostContext = {
   approvalPolicy: ApprovalPolicy
   /** Filesystem/command sandbox selected for this turn. Defaults at execution time for old callers. */
   sandboxMode?: SandboxMode
+  /** Existing physical files approved only for the active tool invocation. */
+  approvedExternalWriteTargets?: readonly ApprovedExternalWriteTarget[]
   /** Kun runtime data root; used to allow sandbox-safe reads of background shell output files. */
   runtimeDataDir?: string
   /** Store used to offload oversized tool results from model context. */
