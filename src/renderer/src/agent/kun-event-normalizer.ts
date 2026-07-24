@@ -3,6 +3,7 @@ import type {
   ApprovalStatusPayload,
   CompactionEventPayload,
   ReviewEventPayload,
+  RequestContextSnapshot,
   RuntimeErrorEventPayload,
   RuntimeStatusEventPayload,
   ThreadUsageSnapshot,
@@ -32,6 +33,7 @@ export type KunEventNormalizerDeps = {
   ) => RuntimeProjectionAction
   goalAction: (event: CoreRuntimeEventJson, cleared: boolean) => RuntimeProjectionAction
   todosAction: (event: CoreRuntimeEventJson, cleared: boolean) => RuntimeProjectionAction
+  contextSnapshot: (event: CoreRuntimeEventJson) => RequestContextSnapshot | null
   usage: (event: CoreRuntimeEventJson) => ThreadUsageSnapshot | null
   runtimeError: (event: CoreRuntimeEventJson, fallback: string) => RuntimeErrorEventPayload
   errorFromRuntime: (payload: RuntimeErrorEventPayload) => Error
@@ -139,6 +141,10 @@ export function normalizeKunRuntimeEvent(
       return [deps.todosAction(event, false)]
     case 'todos_cleared':
       return [deps.todosAction(event, true)]
+    case 'context_snapshot': {
+      const snapshot = deps.contextSnapshot(event)
+      return snapshot ? [{ type: 'context_snapshot_received', payload: snapshot }] : []
+    }
     case 'usage': {
       const usage = deps.usage(event)
       return usage ? [{ type: 'usage_received', payload: usage }] : []

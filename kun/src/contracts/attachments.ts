@@ -13,6 +13,8 @@ export const AttachmentTextFallback = z.object({
   wasCompressed: z.boolean().optional()
 }).strict()
 export type AttachmentTextFallback = z.infer<typeof AttachmentTextFallback>
+export const AttachmentVisualPreview = AttachmentTextFallback
+export type AttachmentVisualPreview = z.infer<typeof AttachmentVisualPreview>
 
 export const AttachmentMetadata = z.object({
   id: z.string().min(1),
@@ -24,10 +26,13 @@ export const AttachmentMetadata = z.object({
   width: z.number().int().positive().optional(),
   height: z.number().int().positive().optional(),
   documentText: z.string().optional(),
+  documentFormat: z.enum(['pdf', 'docx', 'xlsx', 'pptx', 'text', 'csv', 'json', 'xml']).optional(),
+  sourceSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   pageCount: z.number().int().positive().optional(),
   truncated: z.boolean().optional(),
   localFilePath: z.string().min(1).optional(),
   textFallback: AttachmentTextFallback.optional(),
+  visualPreview: AttachmentVisualPreview.optional(),
   threadIds: z.array(z.string().min(1)).default([]),
   workspaces: z.array(z.string().min(1)).default([]),
   createdAt: z.string(),
@@ -40,9 +45,12 @@ export const AttachmentUploadRequest = z.object({
   mimeType: z.string().min(1).optional(),
   dataBase64: z.string().min(1),
   documentText: z.string().optional(),
+  documentFormat: z.enum(['pdf', 'docx', 'xlsx', 'pptx', 'text', 'csv', 'json', 'xml']).optional(),
+  sourceSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   pageCount: z.number().int().positive().optional(),
   localFilePath: z.string().min(1).optional(),
   textFallback: AttachmentTextFallback.optional(),
+  visualPreview: AttachmentVisualPreview.optional(),
   threadId: z.string().min(1).optional(),
   workspace: z.string().min(1).optional()
 }).strict()

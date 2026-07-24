@@ -49,6 +49,7 @@ import {
   calculateQueuedMessageMenuPlacement,
   canEditQueuedComposerMessage
 } from './FloatingComposerQueuedMessages'
+import { requestContextSnapshotMatchesSelection } from './FloatingComposerContextCapacity'
 import { getGoalPanelDraftObjective } from './floating-composer-commands'
 import { useChatStore } from '../../store/chat-store'
 import i18n from '../../i18n'
@@ -761,6 +762,54 @@ describe('FloatingComposer model controls', () => {
     expect(placement.left).toBe(670)
     expect(placement.top).toBe(500)
     expect(placement.width).toBe(300)
+  })
+
+  it('isolates context snapshots from a different thread, model, or provider', () => {
+    const snapshot = {
+      threadId: 'thr_1',
+      model: 'DeepSeek-V4-Pro',
+      providerId: 'deepseek',
+      stepIndex: 0,
+      contextWindowTokens: 256_000,
+      softThresholdTokens: 192_000,
+      hardThresholdTokens: 217_600,
+      estimatedInputTokens: 12_000,
+      breakdown: { tools: 3_000, system: 2_000, skills: 1_000, messages: 5_000, other: 1_000 },
+      toolCount: 21,
+      activeSkillIds: []
+    }
+
+    expect(requestContextSnapshotMatchesSelection(snapshot, {
+      threadId: 'thr_1',
+      model: 'deepseek-v4-pro',
+      providerId: 'deepseek'
+    })).toBe(true)
+    expect(requestContextSnapshotMatchesSelection(snapshot, {
+      threadId: 'thr_2',
+      model: 'deepseek-v4-pro',
+      providerId: 'deepseek'
+    })).toBe(false)
+    expect(requestContextSnapshotMatchesSelection(snapshot, {
+      threadId: 'thr_1',
+      model: 'deepseek-v4-flash',
+      providerId: 'deepseek'
+    })).toBe(false)
+    expect(requestContextSnapshotMatchesSelection(snapshot, {
+      threadId: 'thr_1',
+      model: 'deepseek-v4-pro',
+      providerId: 'minimax'
+    })).toBe(false)
+    expect(requestContextSnapshotMatchesSelection(snapshot, {
+      threadId: 'thr_1',
+      model: 'auto'
+    })).toBe(false)
+    expect(requestContextSnapshotMatchesSelection({
+      ...snapshot,
+      providerId: undefined
+    }, {
+      threadId: 'thr_1',
+      model: 'auto'
+    })).toBe(true)
   })
 
   it('keeps execution menus anchored when the app UI is zoomed', () => {

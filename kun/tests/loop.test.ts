@@ -305,6 +305,37 @@ describe('AgentLoop', () => {
     ])
   })
 
+  it('emits the selected model window and runtime compaction thresholds', async () => {
+    const h = makeHarness(makeSilentModel(), {
+      tools: [],
+      compactor: new ContextCompactor({
+        softThreshold: 750,
+        hardThreshold: 850
+      }),
+      modelCapabilities: (model) => ({
+        id: model,
+        inputModalities: ['text'],
+        outputModalities: ['text'],
+        supportsToolCalling: true,
+        contextWindowTokens: 1_000,
+        messageParts: ['text']
+      })
+    })
+    await bootstrapThread(h)
+
+    await h.loop.runTurn(h.threadId, h.turnId)
+
+    const events = await h.sessionStore.loadEventsSince(h.threadId, 0)
+    const snapshot = events.find((event) => event.kind === 'context_snapshot')
+    expect(snapshot).toMatchObject({
+      kind: 'context_snapshot',
+      model: 'fake',
+      contextWindowTokens: 1_000,
+      softThresholdTokens: 750,
+      hardThresholdTokens: 850
+    })
+  })
+
   it('records provider endpoint diagnostics for model send stages', async () => {
     const model = {
       provider: 'compat',
@@ -508,6 +539,21 @@ describe('AgentLoop', () => {
     expect(events.some((event) =>
       event.kind === 'tool_result_upload_wait' && event.toolResultCount === 1
     )).toBe(true)
+    const contextSnapshots = events.filter((event) => event.kind === 'context_snapshot')
+    expect(contextSnapshots).toHaveLength(2)
+    expect(contextSnapshots.map((event) => event.stepIndex)).toEqual([0, 1])
+    for (const snapshot of contextSnapshots) {
+      expect(snapshot.estimatedInputTokens).toBe(
+        snapshot.breakdown.tools +
+        snapshot.breakdown.system +
+        snapshot.breakdown.skills +
+        snapshot.breakdown.messages +
+        snapshot.breakdown.other
+      )
+      expect(snapshot.toolCount).toBeGreaterThan(0)
+    }
+    expect(contextSnapshots[1]?.breakdown.messages)
+      .toBeGreaterThan(contextSnapshots[0]?.breakdown.messages ?? 0)
     const thread = await h.threadStore.get(h.threadId)
     const toolCall = thread?.turns
       .flatMap((turn) => turn.items)
@@ -2553,6 +2599,104 @@ describe('AgentLoop', () => {
         '## Plan\nImplement auth after checking context.'
       )
     } finally {
+      await rm(workspace, { recursive: true, force: true })
+    }
+  })
+
+  it('reopens the plan gate when guidance is accepted after a successful plan write', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'kun-loop-plan-guidance-'))
+    const requests: ModelRequest[] = []
+    let releaseSecondResponse: (() => void) | undefined
+    let markSecondResponseStarted: (() => void) | undefined
+    const secondResponseStarted = new Promise<void>((resolve) => {
+      markSecondResponseStarted = resolve
+    })
+    const secondResponseRelease = new Promise<void>((resolve) => {
+      releaseSecondResponse = resolve
+    })
+    try {
+      const model = {
+        provider: 'planner',
+        model: 'plan-guidance-model',
+        async *stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
+          requests.push(request)
+          if (requests.length === 1) {
+            yield {
+              kind: 'tool_call_complete',
+              callId: 'call_plan_initial',
+              toolName: CREATE_PLAN_TOOL_NAME,
+              arguments: {
+                markdown: '## Plan\nFollow the repository ignore rules.',
+                operation: 'draft',
+                source_request: 'Plan the restriction change'
+              }
+            }
+            yield { kind: 'completed', stopReason: 'tool_calls' }
+            return
+          }
+          if (requests.length === 2) {
+            markSecondResponseStarted?.()
+            await secondResponseRelease
+            yield { kind: 'assistant_text_delta', text: 'Initial plan saved.' }
+            yield { kind: 'completed', stopReason: 'stop' }
+            return
+          }
+          if (requests.length === 3) {
+            yield {
+              kind: 'tool_call_complete',
+              callId: 'call_plan_refined',
+              toolName: CREATE_PLAN_TOOL_NAME,
+              arguments: {
+                markdown: '## Plan\nFollow both repository ignore and hasconfig rules.',
+                operation: 'refine',
+                plan_relative_path: '.kunsdd/plan/plan-the-restriction-change.md',
+                source_request: 'Plan the restriction change'
+              }
+            }
+            yield { kind: 'completed', stopReason: 'tool_calls' }
+            return
+          }
+          yield { kind: 'assistant_text_delta', text: 'Updated the plan with the added constraint.' }
+          yield { kind: 'completed', stopReason: 'stop' }
+        }
+      }
+      const h = makeHarness(model, { tools: buildDefaultLocalTools() })
+      await bootstrapThread(h, {
+        workspace,
+        request: {
+          prompt: 'Plan the restriction change',
+          mode: 'plan',
+          model: model.model
+        }
+      })
+
+      const run = h.loop.runTurn(h.threadId, h.turnId)
+      await secondResponseStarted
+      await h.turns.steerTurn({
+        threadId: h.threadId,
+        turnId: h.turnId,
+        text: 'Also follow the hasconfig rules'
+      })
+      releaseSecondResponse?.()
+
+      await expect(run).resolves.toBe('completed')
+      expect(requests).toHaveLength(4)
+      expect(requests[2]).toMatchObject({
+        model: model.model,
+        requiredToolName: CREATE_PLAN_TOOL_NAME
+      })
+      expect(requests[2]?.modeInstruction).toContain('You are in Plan mode.')
+      expect(requests[2]?.history).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'user_message',
+          text: 'Also follow the hasconfig rules'
+        })
+      ]))
+      await expect(
+        readFile(join(workspace, '.kunsdd/plan/plan-the-restriction-change.md'), 'utf8')
+      ).resolves.toBe('## Plan\nFollow both repository ignore and hasconfig rules.')
+    } finally {
+      releaseSecondResponse?.()
       await rm(workspace, { recursive: true, force: true })
     }
   })

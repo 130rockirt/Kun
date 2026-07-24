@@ -1,5 +1,4 @@
 import { useMemo, type Dispatch, type SetStateAction } from 'react'
-import type { CoreRuntimeInfoJson } from '../../agent/kun-contract'
 import type { QueuedUserMessage } from '../../store/chat-store-types'
 import { canGuideQueuedMessage } from '../../store/queued-message-guidance'
 import type { WorkbenchChatStageProps } from './WorkbenchChatStage'
@@ -15,8 +14,6 @@ type UseWorkbenchChatComposerPropsInput = {
   route: string
   runtimeReady: boolean
   activeThreadId: string | null
-  selectedContextWindowTokens: number | undefined
-  runtimeInfo: CoreRuntimeInfoJson | null
   activeClawChannelId: string | null
   activeClawChannelModel: string | undefined
   composerModel: string
@@ -77,8 +74,6 @@ export function useWorkbenchChatComposerProps({
   route,
   runtimeReady,
   activeThreadId,
-  selectedContextWindowTokens,
-  runtimeInfo,
   activeClawChannelId,
   activeClawChannelModel,
   composerModel,
@@ -137,13 +132,6 @@ export function useWorkbenchChatComposerProps({
     busy,
     runtimeReady,
     hasActiveThread: Boolean(activeThreadId),
-    contextWindowTokens: selectedContextWindowTokens,
-    runtimeToolCount: runtimeInfo
-      ? runtimeInfo.capabilities.mcp.search?.active
-        ? runtimeInfo.capabilities.mcp.search.advertisedToolCount
-        : runtimeInfo.capabilities.mcp.toolCount
-      : undefined,
-    runtimeSkillCount: runtimeInfo?.capabilities.skills.discoveredSkills,
     composerModel: route === 'claw' ? activeClawChannelModel ?? 'auto' : composerModel,
     composerProviderId: route === 'chat' ? composerProviderId : undefined,
     composerPickList,
@@ -255,9 +243,7 @@ export function useWorkbenchChatComposerProps({
     reviewActiveThread,
     route,
     runtimeReady,
-    runtimeInfo,
     runtimeSkills,
-    selectedContextWindowTokens,
     setClawChannelModel,
     setComposerMode,
     setComposerModel,

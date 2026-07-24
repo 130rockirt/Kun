@@ -1,5 +1,5 @@
 import { createRequire } from 'node:module'
-import { readFile, stat } from 'node:fs/promises'
+import { open, readFile, stat } from 'node:fs/promises'
 import { extname } from 'node:path'
 import type { PDFDocumentProxy, PDFPageProxy } from 'pdfjs-dist/legacy/build/pdf.mjs'
 import type { WorkspaceFileTarget } from '../../shared/workspace-file'
@@ -355,6 +355,16 @@ async function readLocalPdfTextByPath(targetPath: string, tooLargeMessage: strin
   }
   if (extname(targetPath).toLowerCase() !== '.pdf') {
     return { ok: false, message: 'This file is not a PDF document.' }
+  }
+  const header = Buffer.alloc(5)
+  const handle = await open(targetPath, 'r')
+  try {
+    const { bytesRead } = await handle.read(header, 0, header.length, 0)
+    if (bytesRead !== header.length || header.toString('ascii') !== '%PDF-') {
+      return { ok: false, message: 'File content does not match the PDF format.' }
+    }
+  } finally {
+    await handle.close()
   }
 
   const cacheKey = `${targetPath}:${fileInfo.size}:${fileInfo.mtimeMs}`

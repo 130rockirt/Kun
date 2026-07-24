@@ -2025,7 +2025,7 @@
   "contextCapacityThresholdLabel": "Compacts near {{percent}}",
   "contextCapacityChipAria": "Context window {{percent}} used",
   "contextCapacityBarAria": "Context {{percent}} used",
-  "contextCapacityEstimatedBreakdown": "Total is measured; the per-category split is estimated.",
+  "contextCapacityEstimatedBreakdown": "Estimated from the actual request payload; cumulative thread usage is excluded.",
   "contextCapacityEstimatedAll": "No turn yet — values are estimated and refresh after you send.",
   "running": "Running…",
   "guiUpdateTopbarAvailable": "Update {{version}}",

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { mkdtemp, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -151,6 +152,13 @@ describe('Attachment store and multimodal input', () => {
       mimeType: 'application/octet-stream'
     })).rejects.toThrow(/unsupported/)
 
+    await expect(createStore().create({
+      name: 'spoofed.xlsx',
+      data: Buffer.from('not a zip package'),
+      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      documentText: 'fake'
+    })).rejects.toThrow(/unsupported/)
+
     await expect(createStore({ maxImageBytes: 10 }).create({
       name: 'large.png',
       data: png(1, 1)
@@ -172,6 +180,69 @@ describe('Attachment store and multimodal input', () => {
         height: 1
       }
     })).rejects.toThrow(/fallback image exceeds/)
+  })
+
+  it('stores Office semantics and visual previews while verifying the declared source hash', async () => {
+    const store = createStore()
+    const data = Buffer.from('PK\u0003\u0004 workbook fixture')
+    const sourceSha256 = createHash('sha256').update(data).digest('hex')
+    const preview = {
+      dataBase64: Buffer.from('preview').toString('base64'),
+      mimeType: 'image/webp',
+      byteSize: 7,
+      width: 800,
+      height: 600,
+      wasCompressed: true
+    } as const
+
+    const attachment = await store.create({
+      name: 'book.xlsx',
+      data,
+      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      documentText: 'Sheet1\nA1 = 42',
+      documentFormat: 'xlsx',
+      sourceSha256,
+      visualPreview: preview,
+      threadId: 'thr_office'
+    })
+
+    expect(attachment).toMatchObject({
+      kind: 'document',
+      documentFormat: 'xlsx',
+      sourceSha256,
+      documentText: 'Sheet1\nA1 = 42',
+      visualPreview: preview
+    })
+    await expect(store.create({
+      name: 'book.xlsx',
+      data,
+      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      documentText: 'Sheet1',
+      documentFormat: 'xlsx',
+      sourceSha256: '0'.repeat(64)
+    })).rejects.toThrow(/source SHA-256/)
+  })
+
+  it('decodes UTF-16 BOM text documents without treating their NUL bytes as binary', async () => {
+    const store = createStore()
+    const text = '编号\t金额\n1\t42'
+    const data = Buffer.concat([
+      Buffer.from([0xff, 0xfe]),
+      Buffer.from(text, 'utf16le')
+    ])
+
+    const attachment = await store.create({
+      name: 'data.tsv',
+      data,
+      mimeType: 'text/tab-separated-values',
+      documentFormat: 'text',
+      threadId: 'thr_text'
+    })
+
+    expect(attachment).toMatchObject({
+      kind: 'document',
+      documentText: text
+    })
   })
 
   it('serves authenticated upload, metadata, content, and diagnostics routes', async () => {

@@ -395,23 +395,8 @@ export function createMaintenanceActions(
       const result = await p.compactThread(activeThreadId, reason)
       await get().refreshThreads()
       await get().selectThread(activeThreadId)
-      // Manual compaction may use a model request for the summary, but the
-      // chat context gauge is still based on the main turn's measured prompt.
-      // Drop the last turn's total by the folded amount so the UI reflects the
-      // compacted model-visible history immediately. The next real turn
-      // replaces this with a precise provider count.
       const replacedTokens = result && typeof result.replacedTokens === 'number' ? result.replacedTokens : 0
-      if (replacedTokens > 0) {
-        set((s) => {
-          const prev = s.lastTurnUsage
-          if (!prev || prev.threadId !== activeThreadId) return {}
-          const inputTokens = Math.max(0, prev.snapshot.inputTokens - replacedTokens)
-          return {
-            usageRefreshKey: s.usageRefreshKey + 1,
-            lastTurnUsage: { threadId: prev.threadId, snapshot: { ...prev.snapshot, inputTokens } }
-          }
-        })
-      } else {
+      if (replacedTokens <= 0) {
         // Nothing was folded (e.g. a near-empty thread). The compaction emits no
         // timeline row in that case, so surface a transient notice instead of
         // leaving the command silently doing nothing.

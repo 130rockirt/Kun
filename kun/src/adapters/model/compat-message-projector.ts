@@ -412,6 +412,8 @@ function formatAttachmentDocument(
     `Name: ${document.name}`,
     `FilePath: ${document.localFilePath ?? 'unknown'}`,
     `MIME: ${document.mimeType}`,
+    ...(document.documentFormat ? [`Format: ${document.documentFormat}`] : []),
+    ...(document.sourceSha256 ? [`SourceSHA256: ${document.sourceSha256}`] : []),
     ...(document.pageCount ? [`Pages: ${document.pageCount}`] : []),
     ...(document.truncated ? ['Note: text truncated to fit the context limit'] : []),
     'Content:',

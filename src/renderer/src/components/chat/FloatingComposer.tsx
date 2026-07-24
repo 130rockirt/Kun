@@ -216,12 +216,6 @@ type Props = {
    * Hide the `/btw` slash entry (e.g. inside a side conversation).
    */
   hideBtwCommand?: boolean
-  /** Active model's context window, for the 上下文容量 gauge. */
-  contextWindowTokens?: number
-  /** Tool definitions advertised to the model (built-ins are added on top). */
-  runtimeToolCount?: number
-  /** Skills in the always-injected catalog. */
-  runtimeSkillCount?: number
 }
 
 const EMPTY_MODEL_GROUPS: ModelProviderModelGroup[] = []
@@ -320,10 +314,7 @@ export function FloatingComposer({
   onReviewCommand,
   onExecutionSettingsChange,
   onBtwCommand,
-  hideBtwCommand = false,
-  contextWindowTokens,
-  runtimeToolCount,
-  runtimeSkillCount
+  hideBtwCommand = false
 }: Props): ReactElement {
   const { t, i18n } = useTranslation('common')
   const route = useChatStore((s) => s.route)
@@ -333,7 +324,6 @@ export function FloatingComposer({
     ? storeActiveThreadId
     : activeThreadIdOverride
   const usageRefreshKey = useChatStore((s) => s.usageRefreshKey)
-  const lastTurnUsage = useChatStore((s) => s.lastTurnUsage)
   const threads = useChatStore((s) => s.threads)
   const compactActiveThread = useChatStore((s) => s.compactActiveThread)
   const forkActiveThread = useChatStore((s) => s.forkActiveThread)
@@ -502,10 +492,6 @@ export function FloatingComposer({
   const composerMenuButtonRef = useRef<HTMLButtonElement | null>(null)
   const composerMenuPanelRef = useRef<HTMLDivElement | null>(null)
   const goalPanelRef = useRef<HTMLDivElement | null>(null)
-  const lastTurnInputTokens =
-    lastTurnUsage && lastTurnUsage.threadId === activeThreadId
-      ? lastTurnUsage.snapshot.inputTokens
-      : null
   const goalRuntimeStartedAtRef = useRef<number | null>(null)
   const placeholder = !runtimeReady
     ? t('runtimeActionNeedsConnection')
@@ -1071,7 +1057,7 @@ export function FloatingComposer({
           data-composer-floaters
           className="pointer-events-none absolute inset-x-0 bottom-full z-30 mb-2 flex flex-col items-center gap-2"
         >
-          {runtimeReady ? <BackgroundShellOverlay /> : null}
+          {runtimeReady ? <BackgroundShellOverlay threadId={activeThreadId} /> : null}
           {showGoalFloater && activeThreadGoal && !pendingUserInputBlock ? (
             <div className="pointer-events-auto flex min-h-11 w-full max-w-[46rem] items-center gap-2 rounded-full border border-ds-border bg-white px-3 py-1.5 text-ds-muted shadow-[0_12px_34px_rgba(20,47,95,0.10)] backdrop-blur-xl dark:bg-ds-card">
               <Target className="h-3.5 w-3.5 shrink-0 text-ds-faint" strokeWidth={1.9} />
@@ -1504,7 +1490,7 @@ export function FloatingComposer({
             <input
               ref={fileInputRef}
               type="file"
-              accept="image/png,image/jpeg,image/webp,application/pdf,.pdf"
+              accept="image/png,image/jpeg,image/webp,application/pdf,.pdf,.docx,.xlsx,.pptx"
               multiple
               className="hidden"
               onChange={handleAttachmentInput}
@@ -1615,10 +1601,8 @@ export function FloatingComposer({
                       compact={compact}
                       route={route}
                       activeThreadId={activeThreadId}
-                      lastTurnInputTokens={lastTurnInputTokens}
-                      contextWindowTokens={contextWindowTokens}
-                      runtimeToolCount={runtimeToolCount}
-                      runtimeSkillCount={runtimeSkillCount}
+                      selectedModel={composerModel}
+                      selectedProviderId={composerProviderId}
                     />
                   )}
                   {hideModelPicker ? null : (

@@ -63,6 +63,7 @@
     "preview": "electron-vite preview",
     "typecheck": "npm run build:extensions && tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.node.json",
     "prepare:whisper": "node ./scripts/prepare-whisper-runner.cjs",
+    "prepare:officecli": "node ./scripts/prepare-officecli.cjs",
     "mac:unquarantine": "bash ./scripts/mac-unquarantine.sh"
   },
   "dependencies": {

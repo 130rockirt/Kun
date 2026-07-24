@@ -52,6 +52,7 @@ import { modelCapabilitiesForModel } from './model-context-profile.js'
 import type { ModelRoundEngine } from './model-round-engine.js'
 import { modelClientDiagnostics } from './model-client-diagnostics.js'
 import { composeModelRequest } from './model-request-composer.js'
+import { estimateModelRequestInputTokenBreakdown } from './model-request-estimator.js'
 import type { ModelRoutingService } from './model-routing-service.js'
 import {
   PLAN_MODE_INSTRUCTION,
@@ -541,6 +542,9 @@ export class ModelStepService {
         : [])
     ]
     const contextInstructions = buildKunTurnContextInstructions(contextBlocks)
+    const skillContextInstructions = buildKunTurnContextInstructions(
+      contextBlocks.filter((block) => block.authority === 'skill')
+    ).slice(1)
     await this.deps.recordPipelineStage(threadId, turnId, 'input_remembered', {
       memoryCount: memories.length,
       contextInstructionCount: contextInstructions.length
@@ -572,6 +576,9 @@ export class ModelStepService {
       signal
     })
     const { request, rawInputTokens, sentInputTokens, tokenEconomy } = composedRequest
+    const requestContext = estimateModelRequestInputTokenBreakdown(request, {
+      skillContextInstructions
+    })
     const inputTokens = sentInputTokens
     const outputTokens = modelCapabilities.maxOutputTokens ?? 0
     // A configured model context window is authoritative. ContextCompactor's
@@ -592,6 +599,30 @@ export class ModelStepService {
       })
       return 'failed'
     }
+    const contextThresholds = this.deps.compactor.thresholds(model)
+    const contextWindowTokens = modelCapabilities.contextWindowTokens ??
+      Math.max(contextThresholds.softThreshold, contextThresholds.hardThreshold)
+    await this.deps.events.record({
+      kind: 'context_snapshot',
+      threadId,
+      turnId,
+      model: request.model,
+      ...(request.providerId ? { providerId: request.providerId } : {}),
+      stepIndex,
+      contextWindowTokens,
+      softThresholdTokens: contextThresholds.softThreshold,
+      hardThresholdTokens: contextThresholds.hardThreshold,
+      estimatedInputTokens: requestContext.total,
+      breakdown: {
+        tools: requestContext.tools,
+        system: requestContext.system,
+        skills: requestContext.skills,
+        messages: requestContext.messages,
+        other: requestContext.other
+      },
+      toolCount: request.tools.length,
+      activeSkillIds: skillResolution.activeSkillIds
+    })
     if (tokenEconomy.enabled) {
       await this.deps.recordTokenEconomySavings({
         threadId,

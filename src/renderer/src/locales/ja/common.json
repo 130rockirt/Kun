@@ -2025,7 +2025,7 @@
   "contextCapacityThresholdLabel": "Compacts near {{percent}}",
   "contextCapacityChipAria": "Context window {{percent}} used",
   "contextCapacityBarAria": "Context {{percent}} used",
-  "contextCapacityEstimatedBreakdown": "合計が測定されます。カテゴリごとの分割が推定されます。",
+  "contextCapacityEstimatedBreakdown": "実際のリクエスト内容から推定し、スレッドの累積使用量は含みません。",
   "contextCapacityEstimatedAll": "まだ順番はありません。値は推定され、送信後に更新されます。",
   "running": "実行中…",
   "guiUpdateTopbarAvailable": "Update {{version}}",

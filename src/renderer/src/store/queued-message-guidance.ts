@@ -4,7 +4,6 @@ import type { QueuedUserMessage } from './chat-store-types'
 export function canGuideQueuedMessage(message: QueuedUserMessage): boolean {
   return Boolean(
     message.text.trim() &&
-    message.mode !== 'plan' &&
     !message.attachmentIds?.length &&
     !message.attachments?.length &&
     !message.fileReferences?.length &&

@@ -95,6 +95,8 @@ const api = {
     ipcRenderer.invoke('runtime:settings-sync-status:get'),
   uploadRuntimeImageAttachment: (request) =>
     ipcRenderer.invoke('runtime:attachment:upload-image', request),
+  readLocalOfficeDocument: (options) =>
+    ipcRenderer.invoke('file:read-local-office-document', options),
   resolveKunApproval: (request) => ipcRenderer.invoke('approval:decide', request),
   restartRuntime: () => ipcRenderer.invoke('runtime:restart'),
   fetchUpstreamModels: () => ipcRenderer.invoke('upstream:models'),

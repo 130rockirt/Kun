@@ -2,7 +2,12 @@ import { createHash } from 'node:crypto'
 import { chmod, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { AttachmentsCapabilityConfig } from '../contracts/capabilities.js'
-import type { AttachmentDiagnostics, AttachmentMetadata, AttachmentTextFallback } from '../contracts/attachments.js'
+import type {
+  AttachmentDiagnostics,
+  AttachmentMetadata,
+  AttachmentTextFallback,
+  AttachmentVisualPreview
+} from '../contracts/attachments.js'
 import { AttachmentMetadata as AttachmentMetadataSchema } from '../contracts/attachments.js'
 
 const ATTACHMENT_ID_PATTERN = /^att_[0-9a-f]{24}$/
@@ -17,9 +22,12 @@ export interface AttachmentStore {
     data: Buffer
     mimeType?: string
     documentText?: string
+    documentFormat?: AttachmentMetadata['documentFormat']
+    sourceSha256?: string
     pageCount?: number
     localFilePath?: string
     textFallback?: AttachmentTextFallback
+    visualPreview?: AttachmentVisualPreview
     threadId?: string
     workspace?: string
   }): Promise<AttachmentMetadata>
@@ -49,9 +57,12 @@ export class FileAttachmentStore implements AttachmentStore {
     data: Buffer
     mimeType?: string
     documentText?: string
+    documentFormat?: AttachmentMetadata['documentFormat']
+    sourceSha256?: string
     pageCount?: number
     localFilePath?: string
     textFallback?: AttachmentTextFallback
+    visualPreview?: AttachmentVisualPreview
     threadId?: string
     workspace?: string
   }): Promise<AttachmentMetadata> {
@@ -59,7 +70,11 @@ export class FileAttachmentStore implements AttachmentStore {
     const image = detectImage(input.data)
     const descriptor = image ? this.describeImage(image, input) : this.describeDocument(input)
     if (input.textFallback) validateTextFallback(input.textFallback, this.options.config)
+    if (input.visualPreview) validateTextFallback(input.visualPreview, this.options.config)
     const hash = createHash('sha256').update(input.data).digest('hex')
+    if (input.sourceSha256 && input.sourceSha256 !== hash) {
+      throw new Error('declared source SHA-256 does not match attachment content')
+    }
     const id = `att_${hash.slice(0, 24)}`
     const contentPath = this.contentPath(id)
     const metadataPath = this.metadataPath(id)
@@ -72,7 +87,10 @@ export class FileAttachmentStore implements AttachmentStore {
         mimeType: descriptor.mimeType,
         ...(input.localFilePath ? { localFilePath: input.localFilePath } : {}),
         ...(input.textFallback ? { textFallback: input.textFallback } : {}),
+        ...(input.visualPreview ? { visualPreview: input.visualPreview } : {}),
         ...(descriptor.documentText !== undefined ? { documentText: descriptor.documentText } : {}),
+        ...(input.documentFormat ? { documentFormat: input.documentFormat } : {}),
+        sourceSha256: hash,
         ...(descriptor.pageCount ? { pageCount: descriptor.pageCount } : {}),
         ...(descriptor.truncated !== undefined ? { truncated: descriptor.truncated } : {}),
         updatedAt: now
@@ -91,10 +109,13 @@ export class FileAttachmentStore implements AttachmentStore {
       ...(descriptor.width ? { width: descriptor.width } : {}),
       ...(descriptor.height ? { height: descriptor.height } : {}),
       ...(descriptor.documentText !== undefined ? { documentText: descriptor.documentText } : {}),
+      ...(input.documentFormat ? { documentFormat: input.documentFormat } : {}),
+      sourceSha256: hash,
       ...(descriptor.pageCount ? { pageCount: descriptor.pageCount } : {}),
       ...(descriptor.truncated !== undefined ? { truncated: descriptor.truncated } : {}),
       ...(input.localFilePath ? { localFilePath: input.localFilePath } : {}),
       ...(input.textFallback ? { textFallback: input.textFallback } : {}),
+      ...(input.visualPreview ? { visualPreview: input.visualPreview } : {}),
       threadIds: [],
       workspaces: [],
       createdAt: now,
@@ -288,14 +309,51 @@ type AttachmentDescriptor = {
 }
 
 function resolveDocumentMimeType(input: { data: Buffer; mimeType?: string }): string | undefined {
-  if (input.data.length >= 5 && input.data.subarray(0, 5).toString('ascii') === '%PDF-') {
+  const declared = input.mimeType?.trim().toLowerCase()
+  const isPdf = input.data.length >= 5 &&
+    input.data.subarray(0, 5).toString('ascii') === '%PDF-'
+  if (isPdf) {
+    if (declared && declared !== 'application/pdf') {
+      throw new Error(`declared MIME type does not match PDF content: ${declared}`)
+    }
     return 'application/pdf'
   }
-  return input.mimeType?.trim().toLowerCase() || undefined
+  if (declared === 'application/pdf') return undefined
+
+  if (declared && isOoxmlMimeType(declared)) {
+    const zipSignature = input.data.length >= 4
+      ? input.data.subarray(0, 4).toString('hex')
+      : ''
+    if (!['504b0304', '504b0506', '504b0708'].includes(zipSignature)) return undefined
+  }
+  return declared || undefined
+}
+
+function isOoxmlMimeType(mimeType: string): boolean {
+  return mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+    mimeType === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
+    mimeType === 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
 }
 
 function decodeTextDocument(mimeType: string, data: Buffer): string | undefined {
-  if (!mimeType.startsWith('text/') && mimeType !== 'application/json') return undefined
+  if (
+    !mimeType.startsWith('text/') &&
+    mimeType !== 'application/json' &&
+    mimeType !== 'application/xml'
+  ) return undefined
+  if (data.length >= 2 && data[0] === 0xff && data[1] === 0xfe) {
+    const body = data.subarray(2, data.length - ((data.length - 2) % 2))
+    return body.toString('utf16le')
+  }
+  if (data.length >= 2 && data[0] === 0xfe && data[1] === 0xff) {
+    const body = Buffer.from(data.subarray(2, data.length - ((data.length - 2) % 2)))
+    for (let index = 0; index + 1 < body.length; index += 2) {
+      const first = body[index]
+      body[index] = body[index + 1]
+      body[index + 1] = first
+    }
+    return body.toString('utf16le')
+  }
   return data.toString('utf8').replace(/^\uFEFF/, '')
 }
 

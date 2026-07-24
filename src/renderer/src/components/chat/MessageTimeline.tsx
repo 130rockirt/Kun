@@ -13,7 +13,11 @@ import { GeneratedFilesPanel, MessageBubble } from './message-timeline-bubbles'
 import { PresentationFilesPanel } from './PresentationFilesPanel'
 import { presentationFileArtifactsForTurn } from './presentation-file-artifacts'
 import { ReviewPlanCard, ReviewSummaryCard, TurnChangeSummary, WorkMetaRow } from './message-timeline-cards'
-import { ProcessSectionRow, groupProcessSections } from './message-timeline-process'
+import {
+  ProcessSectionRow,
+  groupProcessSections,
+  processSectionHasActiveWork
+} from './message-timeline-process'
 import { ComponentPrototypeCard } from './ComponentPrototypeCard'
 import type { OpenChildThreadHandler } from './SubagentCallCard'
 import {
@@ -1073,8 +1077,7 @@ export function ConversationTurn({
   const showLiveProgress =
     isProcessing &&
     !onlyCompactionProcess &&
-    processSections.length === 0 &&
-    !showLiveAssistant
+    !processSections.some((section) => processSectionHasActiveWork(section, true))
   const forkFromTurn = async (): Promise<void> => {
     if (!allowMainThreadActions || !forkTurnId || forking) return
     setForking(true)

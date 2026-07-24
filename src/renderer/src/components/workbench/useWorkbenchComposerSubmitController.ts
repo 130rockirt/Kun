@@ -36,12 +36,14 @@ import type { ComposerFileReference } from '../chat/FloatingComposer'
 import type { ComposerAttachmentScope } from '../workbench-composer-attachments'
 import type { RightPanelMode } from '../chat/WorkbenchTopBar'
 import { BUILTIN_RIGHT_PANEL_IDS } from '../../extensions/contribution-ids'
+import { officeDocumentFormatFromName } from '@shared/office-document'
 import type { CodeCanvasOutboundPromptInput } from '../design/canvas/useCodeCanvasPromptController'
 import {
   COMPOSER_DIRECTORY_CONTEXT_MAX_FILES,
   COMPOSER_FILE_CONTEXT_MAX_TOTAL_CHARS,
   buildComposerDocumentContextPrompt,
   clipComposerFileContext,
+  composerToolReferencePlaceholder,
   composerReferencesToUserFileReferences,
   stripTransientAttachmentFields
 } from './workbench-composer-prompts'
@@ -232,6 +234,19 @@ export function useWorkbenchComposerSubmitController({
       if (remainingChars <= 0) return
       const key = contextKey(reference.relativePath || reference.path)
       if (seen.has(key)) return
+      const officeFormat = officeDocumentFormatFromName(reference.name || reference.path)
+      if (officeFormat) {
+        const content = composerToolReferencePlaceholder(reference, officeFormat)
+        const clipped = clipComposerFileContext(content, remainingChars, false)
+        remainingChars -= clipped.consumed
+        seen.add(key)
+        entries.push({
+          relativePath: reference.relativePath,
+          content: clipped.content,
+          ...(clipped.truncated ? { truncated: true } : {})
+        })
+        return
+      }
       const result = await window.kunGui.readWorkspaceFile({
         ...(reference.workspaceRoot === null
           ? {}
@@ -242,6 +257,18 @@ export function useWorkbenchComposerSubmitController({
       })
       if (!result.ok) {
         if (!strict) return
+        if (/binary|cannot be previewed|too large|only supports text/i.test(result.message)) {
+          const content = composerToolReferencePlaceholder(reference)
+          const clipped = clipComposerFileContext(content, remainingChars, false)
+          remainingChars -= clipped.consumed
+          seen.add(key)
+          entries.push({
+            relativePath: reference.relativePath,
+            content: clipped.content,
+            ...(clipped.truncated ? { truncated: true } : {})
+          })
+          return
+        }
         throw new Error(t('composerFileReadFailed', {
           path: reference.relativePath,
           message: result.message

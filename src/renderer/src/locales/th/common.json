@@ -2025,7 +2025,7 @@
   "contextCapacityThresholdLabel": "คอมแพ็คใกล้ {{percent}}",
   "contextCapacityChipAria": "ใช้หน้าต่างบริบท {{percent}} แล้ว",
   "contextCapacityBarAria": "ใช้บริบท {{percent}}",
-  "contextCapacityEstimatedBreakdown": "วัดผลรวม; มีการประเมินการแยกตามหมวดหมู่",
+  "contextCapacityEstimatedBreakdown": "ประเมินจากเพย์โหลดคำขอจริง โดยไม่รวมการใช้งานสะสมของเธรด",
   "contextCapacityEstimatedAll": "ยังไม่มีเทิร์น — ค่าจะถูกประมาณและรีเฟรชหลังจากที่คุณส่ง",
   "running": "กำลังดำเนินการ...",
   "guiUpdateTopbarAvailable": "Update {{version}}",

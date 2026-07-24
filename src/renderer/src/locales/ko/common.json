@@ -2025,7 +2025,7 @@
   "contextCapacityThresholdLabel": "{{percent}}에 가까운 콤팩트",
   "contextCapacityChipAria": "컨텍스트 창 {{percent}} 사용됨",
   "contextCapacityBarAria": "컨텍스트 {{percent}} 사용됨",
-  "contextCapacityEstimatedBreakdown": "총계가 측정됩니다. 카테고리별 분할이 추정됩니다.",
+  "contextCapacityEstimatedBreakdown": "실제 요청 페이로드에서 추정되며 누적 스레드 사용량은 제외됩니다.",
   "contextCapacityEstimatedAll": "아직 차례가 없습니다. 값이 추정되며 전송 후 새로 고쳐집니다.",
   "running": "실행 중…",
   "guiUpdateTopbarAvailable": "Update {{version}}",

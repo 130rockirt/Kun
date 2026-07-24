@@ -50,6 +50,7 @@ import { buildComponentDesignToolProviders } from '../adapters/tool/component-de
 import { buildWebToolProviders } from '../adapters/tool/web-tool-provider.js'
 import { buildImageGenToolProviders } from '../adapters/tool/image-gen-tool-provider.js'
 import { buildComputerUseToolProviders } from '../adapters/tool/computer-use-tool-provider.js'
+import { buildOfficeCliToolProviders } from '../adapters/tool/office-cli-tool-provider.js'
 import {
   buildMusicGenToolProviders,
   buildSpeechGenToolProviders,
@@ -169,6 +170,7 @@ import {
   LegacyProviderCredentialMigrationService,
   materializeLegacyProviderCredential
 } from '../services/legacy-provider-credential-migration.js'
+import { CodexOAuthCredentialRefresher } from '../services/codex-oauth-credential-refresher.js'
 import { GrokOAuthCredentialRefresher } from '../services/grok-oauth-credential-refresher.js'
 import { ExtensionViewSessionService } from '../services/extension-view-session-service.js'
 import { ExtensionViewHostGenerationTracker } from '../extensions/view-host-generation-tracker.js'
@@ -384,6 +386,9 @@ export async function createKunServeRuntime(
   const grokCredentialRefresher = new GrokOAuthCredentialRefresher(
     legacyCredentialMigration
   )
+  const codexCredentialRefresher = new CodexOAuthCredentialRefresher(
+    legacyCredentialMigration
+  )
   const resolveLegacyRequestCredentials = async (
     sourceId: string,
     rejectedAccessToken?: string
@@ -392,7 +397,10 @@ export async function createKunServeRuntime(
     headers?: Record<string, string>
     refreshable: boolean
   }> => {
-    const resolved = await grokCredentialRefresher.resolve(sourceId, rejectedAccessToken)
+    let resolved = await codexCredentialRefresher.resolve(sourceId, rejectedAccessToken)
+    if (!resolved.refreshable) {
+      resolved = await grokCredentialRefresher.resolve(sourceId, rejectedAccessToken)
+    }
     const material = materializeLegacyProviderCredential(resolved.rawApiKey)
     return {
       ...material,
@@ -626,6 +634,10 @@ export async function createKunServeRuntime(
     available: true,
     tools: buildPptMasterLocalTools()
   }
+  const officeCliProviders = buildOfficeCliToolProviders({
+    binaryPath: process.env.KUN_OFFICECLI_BINARY,
+    profileDir: join(activeOptions.dataDir, 'officecli-profile')
+  })
 	  const taskGraphTool = createTaskGraphTool({ rootDir: join(activeOptions.dataDir, 'task-graphs') })
 	  let baseToolProviders = [
     {
@@ -653,6 +665,7 @@ export async function createKunServeRuntime(
     ...speechGenProviders.providers,
     ...musicGenProviders.providers,
     ...videoGenProviders.providers,
+    ...officeCliProviders,
     pptMasterProvider,
     designCanvasProvider,
     // NOTE: computer_use is intentionally NOT in baseToolProviders — host
@@ -1620,6 +1633,10 @@ export async function createKunServeRuntime(
 	      ...buildBuiltinHooks({ quality: nextOptions.quality ?? DEFAULT_QUALITY_CONFIG }),
 	      ...resolveConfiguredHooks(nextOptions.hooks)
 	    ]
+	    const nextOfficeCliProviders = buildOfficeCliToolProviders({
+	      binaryPath: process.env.KUN_OFFICECLI_BINARY,
+	      profileDir: join(nextOptions.dataDir, 'officecli-profile')
+	    })
 	    const nextBaseToolProviders = [
 	      {
 	        id: 'builtin',
@@ -1646,6 +1663,7 @@ export async function createKunServeRuntime(
 	      ...nextSpeechGenProviders.providers,
 	      ...nextMusicGenProviders.providers,
 	      ...nextVideoGenProviders.providers,
+	      ...nextOfficeCliProviders,
 	      nextPptMasterProvider,
 	      designCanvasProvider
 	    ]

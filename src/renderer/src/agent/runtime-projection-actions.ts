@@ -5,6 +5,7 @@ import type {
   ReviewEventPayload,
   RuntimeErrorEventPayload,
   RuntimeStatusEventPayload,
+  RequestContextSnapshot,
   ChatBlock,
   ThreadGoal,
   ThreadTodoList,
@@ -44,6 +45,7 @@ export type RuntimeProjectionAction =
   | { type: 'goal_changed'; payload: GoalProjection }
   | { type: 'todos_changed'; payload: TodoProjection }
   | { type: 'thread_metadata_changed'; payload: ThreadMetadataProjection }
+  | { type: 'context_snapshot_received'; payload: RequestContextSnapshot }
   | { type: 'usage_received'; payload: ThreadUsageSnapshot }
   | {
       type: 'thread_snapshot_reconciled'

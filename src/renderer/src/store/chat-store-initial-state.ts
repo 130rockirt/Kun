@@ -33,6 +33,7 @@ export function createInitialChatStoreState(workingDirectoryLabel: string) {
     liveAssistant: '',
     lastSeq: 0,
     usageRefreshKey: 0,
+    lastContextSnapshot: null,
     lastTurnUsage: null,
     busy: false,
     error: null,

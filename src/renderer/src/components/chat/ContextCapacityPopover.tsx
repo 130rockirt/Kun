@@ -13,23 +13,20 @@ const CATEGORY_COLORS: Record<ContextCategoryKey, string> = {
 
 const CATEGORY_ORDER: ContextCategoryKey[] = ['tools', 'system', 'skills', 'messages', 'other']
 
-const WARN_RATIO = 0.75
-
 function stateColor(usedRatio: number, thresholdRatio: number): string {
   if (usedRatio >= thresholdRatio) return '#d9544e'
-  if (usedRatio >= WARN_RATIO) return '#d9920f'
+  if (usedRatio >= thresholdRatio * 0.85) return '#d9920f'
   return 'var(--ds-accent)'
 }
 
 type Props = {
   capacity: ContextCapacity
-  /** Approximate auto-compaction trigger, as a share of the window. */
-  thresholdRatio?: number
   style?: CSSProperties
 }
 
-export function ContextCapacityPopover({ capacity, thresholdRatio = 0.9, style }: Props): ReactElement {
+export function ContextCapacityPopover({ capacity, style }: Props): ReactElement {
   const { t } = useTranslation()
+  const thresholdRatio = capacity.softThresholdRatio
   const accent = stateColor(capacity.usedRatio, thresholdRatio)
 
   const labelFor = (key: ContextCategoryKey): string =>
@@ -42,7 +39,7 @@ export function ContextCapacityPopover({ capacity, thresholdRatio = 0.9, style }
   const statusText =
     capacity.usedRatio >= thresholdRatio
       ? t('contextCapacityOverLimit')
-      : capacity.usedRatio >= WARN_RATIO
+      : capacity.usedRatio >= thresholdRatio * 0.85
         ? t('contextCapacityNearLimit')
         : t('contextCapacityShareNote')
 
@@ -138,9 +135,7 @@ export function ContextCapacityPopover({ capacity, thresholdRatio = 0.9, style }
 
       {capacity.estimated ? (
         <p className="mt-2.5 text-[10.5px] leading-snug text-ds-faint">
-          {capacity.hasMeasuredTotal
-            ? t('contextCapacityEstimatedBreakdown')
-            : t('contextCapacityEstimatedAll')}
+          {t('contextCapacityEstimatedBreakdown')}
         </p>
       ) : null}
     </div>

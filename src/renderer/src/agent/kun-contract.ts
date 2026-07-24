@@ -63,10 +63,13 @@ export type CoreAttachmentMetadataJson = {
   width?: number
   height?: number
   documentText?: string
+  documentFormat?: 'pdf' | 'docx' | 'xlsx' | 'pptx' | 'text' | 'csv' | 'json' | 'xml'
+  sourceSha256?: string
   pageCount?: number
   truncated?: boolean
   localFilePath?: string
   textFallback?: CoreAttachmentTextFallbackJson
+  visualPreview?: CoreAttachmentTextFallbackJson
   threadIds?: string[]
   workspaces?: string[]
   createdAt: string
@@ -660,6 +663,21 @@ export type CoreRuntimeEventJson = {
   toolCount?: number
   changeKind?: 'additive' | 'breaking'
   toolNames?: string[]
+  model?: string
+  providerId?: string
+  stepIndex?: number
+  contextWindowTokens?: number
+  softThresholdTokens?: number
+  hardThresholdTokens?: number
+  estimatedInputTokens?: number
+  breakdown?: {
+    tools?: number
+    system?: number
+    skills?: number
+    messages?: number
+    other?: number
+  }
+  activeSkillIds?: string[]
   status?: string | number
   /** thread_created / thread_updated: the thread's (possibly upgraded) title. */
   title?: string

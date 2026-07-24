@@ -27,6 +27,9 @@ export type AttachmentReference = {
   truncated?: boolean
   textPreview?: string
   documentText?: string
+  documentFormat?: 'pdf' | 'docx' | 'xlsx' | 'pptx' | 'text' | 'csv' | 'json' | 'xml'
+  sourceSha256?: string
+  previewUnavailableReason?: string
   previewUrl?: string
 }
 
@@ -498,6 +501,27 @@ export type ThreadUsageSnapshot = {
   turns: number
 }
 
+export type RequestContextSnapshot = {
+  threadId: string
+  turnId?: string
+  model: string
+  providerId?: string
+  stepIndex: number
+  contextWindowTokens: number
+  softThresholdTokens: number
+  hardThresholdTokens: number
+  estimatedInputTokens: number
+  breakdown: {
+    tools: number
+    system: number
+    skills: number
+    messages: number
+    other: number
+  }
+  toolCount: number
+  activeSkillIds: string[]
+}
+
 export type ThreadEventSink = {
   onSeq(seq: number): void
   onDeltas(deltas: ThreadDeltaEvent[]): void
@@ -519,6 +543,8 @@ export type ThreadEventSink = {
   onError(err: Error, options?: ThreadErrorOptions): void
   /** Optional: cumulative usage update for the thread. */
   onUsage?(usage: ThreadUsageSnapshot): void
+  /** Optional: request-local context accounting for the main agent. */
+  onContextSnapshot?(snapshot: RequestContextSnapshot): void
 }
 
 export interface AgentProvider {
@@ -597,9 +623,12 @@ export interface AgentProvider {
     mimeType?: string
     dataBase64: string
     documentText?: string
+    documentFormat?: 'pdf' | 'docx' | 'xlsx' | 'pptx' | 'text' | 'csv' | 'json' | 'xml'
+    sourceSha256?: string
     pageCount?: number
     localFilePath?: string
     textFallback?: CoreAttachmentTextFallbackJson
+    visualPreview?: CoreAttachmentTextFallbackJson
     threadId?: string
     workspace?: string
   }): Promise<CoreAttachmentMetadataJson>

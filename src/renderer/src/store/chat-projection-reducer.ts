@@ -483,6 +483,10 @@ export function reduceChatProjection(
         )
       }
     }
+    case 'context_snapshot_received':
+      return state.activeThreadId === action.payload.threadId
+        ? { lastContextSnapshot: action.payload }
+        : {}
     case 'usage_received':
       return {
         usageRefreshKey: state.usageRefreshKey + 1,

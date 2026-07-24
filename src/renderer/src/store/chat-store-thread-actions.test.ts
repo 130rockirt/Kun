@@ -492,7 +492,7 @@ describe('chat-store-thread-actions queued messages', () => {
     })
   })
 
-  it('guides an eligible queued message into the active turn before removing it', async () => {
+  it('guides an eligible plan-mode message into the active turn before removing it', async () => {
     const steerUserMessage = vi.fn(async () => undefined)
     registryMock.getProvider.mockReturnValue({ steerUserMessage })
     const { actions, state } = buildHarness()
@@ -502,7 +502,7 @@ describe('chat-store-thread-actions queued messages', () => {
       id: 'q-guide',
       text: 'use the compact logo instead',
       displayText: 'Use the compact logo instead',
-      mode: 'agent'
+      mode: 'plan'
     }]
 
     await expect(actions.guideQueuedMessage('q-guide')).resolves.toBe(true)

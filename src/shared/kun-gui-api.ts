@@ -66,6 +66,10 @@ import type {
   WorkspaceFileWritePayload,
   WorkspaceFileWriteResult
 } from './workspace-file'
+import type {
+  LocalOfficeDocumentReadResult,
+  LocalOfficeDocumentTarget
+} from './office-document'
 
 export type ExtensionArtifactActionPayload = {
   artifactId: string
@@ -583,6 +587,9 @@ export type KunGuiApi = ExtensionIpcApi & {
   uploadRuntimeImageAttachment: (
     request: RuntimeImageAttachmentUploadRequest
   ) => Promise<RuntimeImageAttachmentUploadResult>
+  readLocalOfficeDocument: (
+    options: LocalOfficeDocumentTarget
+  ) => Promise<LocalOfficeDocumentReadResult>
   resolveKunApproval: (request: KunProtectedApprovalRequest) => Promise<KunProtectedApprovalResult>
   restartRuntime: () => Promise<void>
   fetchUpstreamModels: () => Promise<UpstreamModelsResult>

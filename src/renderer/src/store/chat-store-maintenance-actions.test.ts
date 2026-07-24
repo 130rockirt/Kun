@@ -218,6 +218,45 @@ describe('chat-store-maintenance-actions fork actions', () => {
   })
 })
 
+describe('chat-store-maintenance-actions compaction', () => {
+  beforeEach(() => {
+    registryMock.getProvider.mockReset()
+  })
+
+  it('does not mutate cumulative usage to simulate a smaller context', async () => {
+    const { actions, provider, state } = buildHarness()
+    const usage = {
+      threadId: 'thr_existing',
+      snapshot: {
+        inputTokens: 120_000,
+        outputTokens: 5_000,
+        reasoningTokens: 0,
+        cachedTokens: 80_000,
+        cacheMissTokens: 40_000,
+        cacheHitRate: 2 / 3,
+        totalTokens: 125_000,
+        costUsd: 1,
+        costCny: null,
+        tokenEconomySavingsTokens: 0,
+        turns: 4
+      }
+    }
+    Object.assign(provider, {
+      compactThread: vi.fn(async () => ({ replacedTokens: 50_000 }))
+    })
+    Object.assign(state, {
+      busy: false,
+      lastTurnUsage: usage,
+      usageRefreshKey: 7
+    })
+
+    await actions.compactActiveThread()
+
+    expect(state.lastTurnUsage).toBe(usage)
+    expect(state.usageRefreshKey).toBe(7)
+  })
+})
+
 describe('chat-store-maintenance-actions delete actions', () => {
   beforeEach(() => {
     registryMock.getProvider.mockReset()

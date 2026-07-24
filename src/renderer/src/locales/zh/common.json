@@ -2025,7 +2025,7 @@
   "contextCapacityThresholdLabel": "约 {{percent}} 触发压缩",
   "contextCapacityChipAria": "上下文容量 {{percent}}",
   "contextCapacityBarAria": "上下文已用 {{percent}}",
-  "contextCapacityEstimatedBreakdown": "总量为实测值,分类占比为估算。",
+  "contextCapacityEstimatedBreakdown": "按实际请求内容估算,不包含线程累计用量。",
   "contextCapacityEstimatedAll": "尚无回合,数值为估算,发送后按实测刷新。",
   "running": "运行中…",
   "guiUpdateTopbarAvailable": "更新到 {{version}}",

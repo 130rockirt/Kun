@@ -39,6 +39,7 @@ import {
 } from './message-timeline-tools'
 import { SubagentGroup, type OpenChildThreadHandler } from './SubagentCallCard'
 import { InjectedMemoryMetaChip } from './injected-memory-meta-chip'
+import { AnimatedWorkLogo } from './AnimatedWorkLogo'
 
 export type ProcessSection = {
   id: string
@@ -151,7 +152,10 @@ function sectionHasDetails(
   return block ? getProcessDetail(block, describeProcessBlock(block, t)).kind !== 'none' : false
 }
 
-function isProcessSectionActive(section: ProcessSection, processing: boolean): boolean {
+export function processSectionHasActiveWork(
+  section: ProcessSection,
+  processing: boolean
+): boolean {
   if (!processing) return false
   if (section.kind === 'reasoning') {
     return section.blocks.some((block) => block.id === 'live-reasoning')
@@ -249,9 +253,14 @@ export function ProcessSectionRow({
         )
       : []
   const hasDetails = sectionHasDetails(section, t)
-  const active = isProcessSectionActive(section, processing)
+  const active = processSectionHasActiveWork(section, processing)
   const errorTone = processSectionErrorTone(section.blocks)
   const hasError = errorTone !== null
+  const showActiveAnimation =
+    active &&
+    !hasError &&
+    !sectionHasPendingApproval(section) &&
+    !sectionHasRequestUserInput(section)
   const defaultExpanded =
     (processing && hasError) ||
     sectionHasPendingApproval(section) ||
@@ -332,7 +341,13 @@ export function ProcessSectionRow({
               <span className={`h-2 w-2 rounded-full ${processErrorDotClass(errorTone)}`} />
             </span>
           ) : null}
-          {SectionIcon ? <ProcessGlyph Icon={SectionIcon} /> : null}
+          {showActiveAnimation ? (
+            <span className="ds-work-logo-slot ds-work-logo-slot-sm mr-0.5">
+              <AnimatedWorkLogo active phase="trail" size="sm" />
+            </span>
+          ) : SectionIcon ? (
+            <ProcessGlyph Icon={SectionIcon} />
+          ) : null}
           <span className={active && !hasError ? 'ds-shiny-text' : ''}>{title}</span>
           {expanded ? (
             <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-45" strokeWidth={1.8} />
@@ -351,7 +366,13 @@ export function ProcessSectionRow({
               <span className={`h-2 w-2 rounded-full ${processErrorDotClass(errorTone)}`} />
             </span>
           ) : null}
-          {SectionIcon ? <ProcessGlyph Icon={SectionIcon} /> : null}
+          {showActiveAnimation ? (
+            <span className="ds-work-logo-slot ds-work-logo-slot-sm mr-0.5">
+              <AnimatedWorkLogo active phase="trail" size="sm" />
+            </span>
+          ) : SectionIcon ? (
+            <ProcessGlyph Icon={SectionIcon} />
+          ) : null}
           <span className={active && !hasError ? 'ds-shiny-text' : ''}>{title}</span>
         </div>
       )}
@@ -577,6 +598,11 @@ function ProcessEntryRow({
 
   const { verb, rest } = splitVerb(summary)
   const rowActive = isRunningTool || isAutoOpenPending || isStreamingAssistant
+  const showActiveAnimation =
+    rowActive &&
+    !isError &&
+    !isPendingApproval(block) &&
+    !isRequestUserInputTool(block)
   const wrapSummary = (block.kind === 'system' && !canExpand) || isAssistantProcessText
   const canToggle = canExpand && !forceOpen
   const RowIcon = processBlockIcon(block)
@@ -613,7 +639,13 @@ function ProcessEntryRow({
             : 'cursor-default'
         }`}
       >
-        {RowIcon ? <ProcessGlyph Icon={RowIcon} className="mt-1" /> : null}
+        {showActiveAnimation ? (
+          <span className="ds-work-logo-slot ds-work-logo-slot-sm mr-0.5 mt-1">
+            <AnimatedWorkLogo active phase="trail" size="sm" />
+          </span>
+        ) : RowIcon ? (
+          <ProcessGlyph Icon={RowIcon} className="mt-1" />
+        ) : null}
         <span
           className={`min-w-0 flex-1 ${wrapSummary ? 'whitespace-pre-wrap break-words' : 'truncate'} ${
             rowActive && !isError ? 'ds-shiny-text' : ''
@@ -695,7 +727,7 @@ function describeProcessSection(
   }
 ): string {
   if (section.kind === 'reasoning') {
-    if (opts.processing && isProcessSectionActive(section, true)) {
+    if (opts.processing && processSectionHasActiveWork(section, true)) {
       return t('thinkingNow')
     }
     if (
@@ -714,7 +746,7 @@ function describeProcessSection(
     return t('processTextLabel')
   }
 
-  if (opts.processing && isProcessSectionActive(section, true)) {
+  if (opts.processing && processSectionHasActiveWork(section, true)) {
     const activeBlock = [...section.blocks].reverse().find(
       (block) =>
         block.id === 'live-reasoning' ||

@@ -9,6 +9,7 @@ import {
   imageFilesFromTransfer,
   imageTransferHasImages,
   isComposerImageMimeType,
+  isComposerOfficeFile,
   isComposerPdfFile,
   type ComposerImageTransferSource
 } from './FloatingComposerAttachments'
@@ -67,8 +68,13 @@ export function canAcceptComposerFileDrop(
   if (canRouteAttachments && imageTransferHasImages(source)) return true
 
   const files = arrayLikeValues(source.files)
-  if (canRouteAttachments && files.some(isComposerPdfFile)) return true
-  if (canRouteLocalFiles && files.some((file) => !isImageLike(file) && !isComposerPdfFile(file))) {
+  if (canRouteAttachments && files.some((file) => isComposerPdfFile(file) || isComposerOfficeFile(file))) {
+    return true
+  }
+  if (
+    canRouteLocalFiles &&
+    files.some((file) => !isImageLike(file) && !isComposerPdfFile(file) && !isComposerOfficeFile(file))
+  ) {
     return true
   }
 
@@ -96,13 +102,16 @@ export function routeComposerFileDrop(
   const imageFiles = options.canPickAttachment ? imageFilesFromTransfer(source) : []
   const rawFiles = arrayLikeValues(source.files)
   const pdfFiles = options.canPickAttachment ? rawFiles.filter(isComposerPdfFile) : []
-  if ((imageFiles.length > 0 || pdfFiles.length > 0) && options.onPickAttachments) {
-    options.onPickAttachments([...imageFiles, ...pdfFiles])
+  const officeFiles = options.canPickAttachment ? rawFiles.filter(isComposerOfficeFile) : []
+  if ((imageFiles.length > 0 || pdfFiles.length > 0 || officeFiles.length > 0) && options.onPickAttachments) {
+    options.onPickAttachments([...imageFiles, ...pdfFiles, ...officeFiles])
     handled = true
   }
 
   const pathFiles = options.canPickLocalFileReference && options.onAddFileReference
-    ? rawFiles.filter((file) => !isImageLike(file) && !isComposerPdfFile(file))
+    ? rawFiles.filter(
+        (file) => !isImageLike(file) && !isComposerPdfFile(file) && !isComposerOfficeFile(file)
+      )
     : []
   if (pathFiles.length > 0 && options.getPathForFile && options.onAddFileReference) {
     for (const file of pathFiles) {

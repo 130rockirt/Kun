@@ -71,6 +71,29 @@ const WORKSPACE_IMAGE_MIME_BY_EXT = new Map([
   ['.ico', 'image/x-icon']
 ])
 
+export function decodeWorkspaceTextPreview(bytes: Buffer): string | null {
+  if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) {
+    return bytes.subarray(3).toString('utf8')
+  }
+
+  if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) {
+    const body = bytes.subarray(2, bytes.length - ((bytes.length - 2) % 2))
+    return body.toString('utf16le')
+  }
+
+  if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) {
+    const body = Buffer.from(bytes.subarray(2, bytes.length - ((bytes.length - 2) % 2)))
+    for (let index = 0; index + 1 < body.length; index += 2) {
+      const first = body[index]
+      body[index] = body[index + 1]
+      body[index + 1] = first
+    }
+    return body.toString('utf16le')
+  }
+
+  return bytes.includes(0) ? null : bytes.toString('utf8')
+}
+
 export async function listWorkspaceDirectory(
   payload: WorkspaceDirectoryTarget
 ): Promise<WorkspaceDirectoryListResult> {
@@ -110,14 +133,15 @@ export async function readWorkspaceFile(payload: WorkspaceFileTarget): Promise<W
       const buffer = Buffer.alloc(maxBytes)
       const { bytesRead } = await handle.read(buffer, 0, maxBytes, 0)
       const bytes = buffer.subarray(0, bytesRead)
-      if (bytes.includes(0)) {
+      const content = decodeWorkspaceTextPreview(bytes)
+      if (content === null) {
         return { ok: false, message: 'This file appears to be binary and cannot be previewed.' }
       }
 
       return {
         ok: true,
         path: targetPath,
-        content: bytes.toString('utf8'),
+        content,
         size: fileInfo.size,
         truncated: fileInfo.size > MAX_FILE_PREVIEW_BYTES,
         ...(payload.line ? { line: payload.line } : {}),

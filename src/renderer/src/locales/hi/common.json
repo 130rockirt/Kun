@@ -2025,7 +2025,7 @@
   "contextCapacityThresholdLabel": "Compacts near {{percent}}",
   "contextCapacityChipAria": "Context window {{percent}} used",
   "contextCapacityBarAria": "Context {{percent}} used",
-  "contextCapacityEstimatedBreakdown": "कुल मापा जाता है; प्रति श्रेणी विभाजन का अनुमान लगाया गया है।",
+  "contextCapacityEstimatedBreakdown": "वास्तविक अनुरोध पेलोड से अनुमानित; संचयी थ्रेड उपयोग शामिल नहीं है।",
   "contextCapacityEstimatedAll": "अभी तक कोई मोड़ नहीं है - आपके भेजने के बाद मूल्यों का अनुमान लगाया जाता है और ताज़ा किया जाता है।",
   "running": "चल रहा है...",
   "guiUpdateTopbarAvailable": "Update {{version}}",

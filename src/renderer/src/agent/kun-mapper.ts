@@ -9,6 +9,7 @@ import type {
   ReviewEventPayload,
   ReviewOutput,
   ReviewTarget,
+  RequestContextSnapshot,
   RuntimeErrorEventPayload,
   RuntimeStatusEventPayload,
   ThreadGoal,
@@ -963,6 +964,12 @@ function positiveInteger(value: unknown): number | undefined {
   return normalized > 0 ? normalized : undefined
 }
 
+function nonnegativeInteger(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined
+  const normalized = Math.floor(value)
+  return normalized >= 0 ? normalized : undefined
+}
+
 function normalizeUserInputOption(option: unknown): UserInputQuestion['options'][number] | null {
   if (!option || typeof option !== 'object') return null
   const raw = option as Record<string, unknown>
@@ -1030,6 +1037,58 @@ function usageFromCore(usage: CoreUsageSnapshotJson): ThreadUsageSnapshot {
     costCny: usage.costCny ?? null,
     tokenEconomySavingsTokens: usage.tokenEconomySavingsTokens ?? 0,
     turns: usage.turns ?? 0
+  }
+}
+
+function contextSnapshotFromCore(event: CoreRuntimeEventJson): RequestContextSnapshot | null {
+  const threadId = event.threadId?.trim()
+  const model = event.model?.trim()
+  const contextWindowTokens = positiveInteger(event.contextWindowTokens)
+  const softThresholdTokens = positiveInteger(event.softThresholdTokens)
+  const hardThresholdTokens = positiveInteger(event.hardThresholdTokens)
+  const estimatedInputTokens = nonnegativeInteger(event.estimatedInputTokens)
+  const stepIndex = nonnegativeInteger(event.stepIndex)
+  const toolCount = nonnegativeInteger(event.toolCount)
+  const rawBreakdown = event.breakdown
+  const tools = nonnegativeInteger(rawBreakdown?.tools)
+  const system = nonnegativeInteger(rawBreakdown?.system)
+  const skills = nonnegativeInteger(rawBreakdown?.skills)
+  const messages = nonnegativeInteger(rawBreakdown?.messages)
+  const other = nonnegativeInteger(rawBreakdown?.other)
+  if (
+    !threadId ||
+    !model ||
+    contextWindowTokens === undefined ||
+    softThresholdTokens === undefined ||
+    hardThresholdTokens === undefined ||
+    estimatedInputTokens === undefined ||
+    stepIndex === undefined ||
+    toolCount === undefined ||
+    tools === undefined ||
+    system === undefined ||
+    skills === undefined ||
+    messages === undefined ||
+    other === undefined
+  ) {
+    return null
+  }
+  if (tools + system + skills + messages + other !== estimatedInputTokens) return null
+  return {
+    threadId,
+    ...(event.turnId?.trim() ? { turnId: event.turnId.trim() } : {}),
+    model,
+    ...(event.providerId?.trim() ? { providerId: event.providerId.trim() } : {}),
+    stepIndex,
+    contextWindowTokens,
+    softThresholdTokens,
+    hardThresholdTokens,
+    estimatedInputTokens,
+    breakdown: { tools, system, skills, messages, other },
+    toolCount,
+    activeSkillIds: Array.isArray(event.activeSkillIds)
+      ? event.activeSkillIds.filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
+          .map((id) => id.trim())
+      : []
   }
 }
 
@@ -1540,6 +1599,7 @@ const kunEventNormalizerDeps: KunEventNormalizerDeps = {
           createdAt: event.timestamp
         }
   }),
+  contextSnapshot: contextSnapshotFromCore,
   usage: (event) => event.usage ? usageFromCore(event.usage) : null,
   runtimeError: runtimeErrorFromEvent,
   errorFromRuntime: errorForRuntimeEvent
@@ -1573,6 +1633,7 @@ async function applyRuntimeProjectionAction(
     case 'goal_changed': sink.onGoal(action.payload); return
     case 'todos_changed': sink.onTodos?.(action.payload); return
     case 'thread_metadata_changed': sink.onThreadUpdated?.(action.payload); return
+    case 'context_snapshot_received': sink.onContextSnapshot?.(action.payload); return
     case 'usage_received': sink.onUsage?.(action.payload); return
     case 'turn_completed': sink.onTurnComplete(); return
     case 'turn_failed': sink.onError(action.error, action.options); return

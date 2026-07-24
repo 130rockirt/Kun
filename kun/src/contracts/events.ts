@@ -49,6 +49,7 @@ export const RuntimeEventKind = z.enum([
   'bash_session_updated',
   'bash_session_completed',
   'pipeline_stage',
+  'context_snapshot',
   'usage',
   'error',
   'heartbeat'
@@ -256,6 +257,30 @@ export const BashSessionEvent = RuntimeEventBase.extend({
 })
 export type BashSessionEvent = z.infer<typeof BashSessionEvent>
 
+export const RequestContextTokenBreakdownSchema = z.object({
+  tools: z.number().int().nonnegative(),
+  system: z.number().int().nonnegative(),
+  skills: z.number().int().nonnegative(),
+  messages: z.number().int().nonnegative(),
+  other: z.number().int().nonnegative()
+})
+export type RequestContextTokenBreakdown = z.infer<typeof RequestContextTokenBreakdownSchema>
+
+export const ContextSnapshotEvent = RuntimeEventBase.extend({
+  kind: z.literal('context_snapshot'),
+  model: z.string().min(1),
+  providerId: z.string().min(1).optional(),
+  stepIndex: z.number().int().nonnegative(),
+  contextWindowTokens: z.number().int().positive(),
+  softThresholdTokens: z.number().int().positive(),
+  hardThresholdTokens: z.number().int().positive(),
+  estimatedInputTokens: z.number().int().nonnegative(),
+  breakdown: RequestContextTokenBreakdownSchema,
+  toolCount: z.number().int().nonnegative(),
+  activeSkillIds: z.array(z.string().min(1))
+})
+export type ContextSnapshotEvent = z.infer<typeof ContextSnapshotEvent>
+
 export const UsageEvent = RuntimeEventBase.extend({
   kind: z.literal('usage'),
   model: z.string().optional(),
@@ -301,6 +326,7 @@ export const RuntimeEvent = z.discriminatedUnion('kind', [
   TodoEvent,
   BashSessionEvent,
   PipelineStageEvent,
+  ContextSnapshotEvent,
   UsageEvent,
   ErrorEvent,
   HeartbeatEvent

@@ -654,6 +654,33 @@ check(
   'Root postinstall must complete the Extension API/Kun bootstrap before native rebuilds'
 )
 const kunLock = await json('kun/package-lock.json')
+const kunPackage = await json('kun/package.json')
+for (const [dependency, version] of [
+  ['typescript', '5.9.3'],
+  ['typescript-language-server', '5.3.0']
+]) {
+  check(
+    kunPackage.dependencies?.[dependency] === version,
+    `Kun must pin bundled ${dependency}@${version} as a production dependency`
+  )
+  check(
+    kunLock.packages?.['']?.dependencies?.[dependency] === version &&
+      kunLock.packages?.[`node_modules/${dependency}`]?.dev !== true,
+    `Kun lockfile does not retain bundled production dependency ${dependency}@${version}`
+  )
+}
+const ensureKunInstallSource = await text('scripts/ensure-kun-install.cjs')
+for (const path of [
+  'kun/node_modules/typescript/package.json',
+  'kun/node_modules/typescript/lib/typescript.js',
+  'kun/node_modules/typescript-language-server/package.json',
+  'kun/node_modules/typescript-language-server/lib/cli.mjs'
+]) {
+  check(
+    ensureKunInstallSource.includes(`'${path}'`),
+    `Kun bootstrap does not require bundled LSP resource: ${path}`
+  )
+}
 const semver = requireKun('semver')
 const wasmRuntimeLock = kunLock.packages?.['node_modules/@napi-rs/wasm-runtime']
 for (const dependency of ['@emnapi/core', '@emnapi/runtime']) {
@@ -737,6 +764,10 @@ for (const pattern of [
 for (const path of [
   'kun/dist/cli/extension-cli.js',
   'kun/dist/extensions/host-runner.js',
+  'kun/node_modules/typescript/package.json',
+  'kun/node_modules/typescript/lib/typescript.js',
+  'kun/node_modules/typescript-language-server/package.json',
+  'kun/node_modules/typescript-language-server/lib/cli.mjs',
   'kun/node_modules/@kun/extension-api/dist/index.js',
   'kun/node_modules/create-kun-extension/src/cli.mjs',
   'node_modules/better-sqlite3/package.json',

@@ -125,6 +125,8 @@ export type ModelDocumentAttachment = {
   mimeType: string
   text: string
   byteSize: number
+  documentFormat?: 'pdf' | 'docx' | 'xlsx' | 'pptx' | 'text' | 'csv' | 'json' | 'xml'
+  sourceSha256?: string
   pageCount?: number
   truncated?: boolean
   localFilePath?: string

@@ -1,16 +1,25 @@
 import { EventEmitter } from 'node:events'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { accessMock, spawnMock } = vi.hoisted(() => ({
+const { accessMock, existsSyncMock, spawnMock } = vi.hoisted(() => ({
   accessMock: vi.fn(),
+  existsSyncMock: vi.fn(),
   spawnMock: vi.fn()
 }))
 
 vi.mock('node:child_process', () => ({
   spawn: spawnMock
 }))
+
+vi.mock('node:fs', async () => {
+  const actual = await vi.importActual<typeof import('node:fs')>('node:fs')
+  return {
+    ...actual,
+    existsSync: existsSyncMock
+  }
+})
 
 vi.mock('node:fs/promises', async () => {
   const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
@@ -61,15 +70,38 @@ function emitJsonRpc(proc: MockProcess, message: Record<string, unknown>): void 
   proc.stdout.emit('data', Buffer.from(`Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`, 'utf8'))
 }
 
+beforeEach(() => {
+  existsSyncMock.mockReturnValue(false)
+})
+
 afterEach(() => {
   shutdownAllLspSessions()
   spawnMock.mockReset()
   accessMock.mockReset()
+  existsSyncMock.mockReset()
   vi.restoreAllMocks()
   vi.useRealTimers()
 })
 
 describe('resolveServerCommand', () => {
+  it('prefers the TypeScript language server bundled under Kun', async () => {
+    existsSyncMock.mockReturnValue(true)
+
+    const resolved = await resolveServerCommand('/workspace', 'typescript')
+
+    expect(resolved).toEqual({
+      command: process.execPath,
+      args: [
+        expect.stringMatching(
+          /kun[\\/]node_modules[\\/]typescript-language-server[\\/]lib[\\/]cli\.mjs$/
+        ),
+        '--stdio'
+      ],
+      env: { ELECTRON_RUN_AS_NODE: '1' }
+    })
+    expect(spawnMock).not.toHaveBeenCalled()
+  })
+
   it('uses where on Windows when looking up a server on PATH', async () => {
     vi.spyOn(process, 'platform', 'get').mockReturnValue('win32')
 
@@ -89,6 +121,41 @@ describe('resolveServerCommand', () => {
       args: ['--stdio']
     })
     expect(accessMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('bundled LSP process', () => {
+  it('launches the bundled server with Electron Node mode preserved', async () => {
+    existsSyncMock.mockReturnValue(true)
+    let spawnOptions: { env?: NodeJS.ProcessEnv } | undefined
+
+    spawnMock.mockImplementation(
+      (command: string, args: string[], options: { env?: NodeJS.ProcessEnv }) => {
+        expect(command).toBe(process.execPath)
+        expect(args).toEqual([
+          expect.stringMatching(
+            /kun[\\/]node_modules[\\/]typescript-language-server[\\/]lib[\\/]cli\.mjs$/
+          ),
+          '--stdio'
+        ])
+        spawnOptions = options
+        return createMockProcess((chunk, proc) => {
+          const request = parseJsonRpc(chunk)
+          if (request.method === 'initialize') {
+            queueMicrotask(() => emitJsonRpc(proc, {
+              jsonrpc: '2.0',
+              id: request.id,
+              result: {}
+            }))
+          }
+        })
+      }
+    )
+
+    const session = await acquireLspSession('/workspace/bundled', 'typescript')
+
+    expect(spawnOptions?.env).toMatchObject({ ELECTRON_RUN_AS_NODE: '1' })
+    releaseLspSession('/workspace/bundled', 'typescript')
   })
 })
 

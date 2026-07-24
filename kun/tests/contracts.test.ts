@@ -168,6 +168,40 @@ describe('contracts', () => {
     })
   })
 
+  it('accepts request-local context snapshot events', () => {
+    const event = RuntimeEvent.parse({
+      kind: 'context_snapshot',
+      seq: 2,
+      timestamp: '2026-07-24T00:00:01.000Z',
+      threadId: 'thr_1',
+      turnId: 'turn_1',
+      model: 'deepseek-v4-pro',
+      providerId: 'deepseek',
+      stepIndex: 1,
+      contextWindowTokens: 256_000,
+      softThresholdTokens: 192_000,
+      hardThresholdTokens: 217_600,
+      estimatedInputTokens: 12_000,
+      breakdown: {
+        tools: 3_000,
+        system: 2_000,
+        skills: 1_000,
+        messages: 5_000,
+        other: 1_000
+      },
+      toolCount: 21,
+      activeSkillIds: ['openspec-apply-change']
+    })
+
+    expect(event).toMatchObject({
+      kind: 'context_snapshot',
+      model: 'deepseek-v4-pro',
+      stepIndex: 1,
+      softThresholdTokens: 192_000,
+      breakdown: { tools: 3_000, messages: 5_000 }
+    })
+  })
+
   it('accepts GUI plan context on start turn payloads', () => {
     const parsed = StartTurnRequest.parse({
       prompt: 'Plan auth',

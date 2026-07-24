@@ -59,6 +59,7 @@ const MUTATION_TOOL_NAMES = ['edit', 'write'] as const
 const TODO_TOOL_NAMES = ['todo_list', 'todo_write'] as const
 const GOAL_TOOL_NAMES = ['get_goal', 'create_goal', 'update_goal'] as const
 const USER_INPUT_TOOL_NAMES = ['user_input', 'request_user_input'] as const
+const DELEGATION_TOOL_NAMES = ['delegate_task'] as const
 const MEMORY_TOOL_NAMES = ['memory_create', 'memory_update', 'memory_delete'] as const
 
 /**
@@ -76,6 +77,7 @@ export function buildToolPreferenceInstruction(
   const todoTools = presentNames(names, TODO_TOOL_NAMES)
   const goalTools = presentNames(names, GOAL_TOOL_NAMES)
   const inputTools = presentNames(names, USER_INPUT_TOOL_NAMES)
+  const delegationTools = presentNames(names, DELEGATION_TOOL_NAMES)
   const memoryTools = presentNames(names, MEMORY_TOOL_NAMES)
   const bullets: string[] = []
 
@@ -128,6 +130,15 @@ export function buildToolPreferenceInstruction(
   if (inputTools.length > 0) {
     bullets.push(
       `Use ${formatToolNames(inputTools)} sparingly for one concise round of material clarification, then act on the answer instead of asking variants of the same question.`
+    )
+  }
+
+  if (delegationTools.length > 0) {
+    bullets.push(
+      'Use `delegate_task` when a substantial task benefits from specialist expertise, a fresh independent review, or parallel investigation of independent workstreams. Delegate a clear bounded outcome with enough context; keep integration and final verification in the parent agent.'
+    )
+    bullets.push(
+      'Do not delegate trivial work, tightly coupled sequential steps, or tasks the parent can complete faster directly. Issue multiple child calls together only when they are genuinely independent.'
     )
   }
 

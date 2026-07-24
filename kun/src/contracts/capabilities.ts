@@ -382,7 +382,13 @@ export const DEFAULT_ATTACHMENT_DOCUMENT_MIME_TYPES = [
   'text/plain',
   'text/markdown',
   'text/csv',
-  'application/json'
+  'text/tab-separated-values',
+  'application/json',
+  'application/xml',
+  'text/xml',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation'
 ]
 export const DEFAULT_ATTACHMENT_MAX_DOCUMENT_BYTES = 10 * 1024 * 1024
 export const DEFAULT_ATTACHMENT_MAX_DOCUMENT_TEXT_CHARS = 200_000

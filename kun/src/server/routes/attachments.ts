@@ -60,9 +60,12 @@ export async function uploadAttachment(
       mimeType: parsed.data.mimeType,
       data,
       documentText: parsed.data.documentText,
+      documentFormat: parsed.data.documentFormat,
+      sourceSha256: parsed.data.sourceSha256,
       pageCount: parsed.data.pageCount,
       localFilePath: parsed.data.localFilePath,
       textFallback: parsed.data.textFallback,
+      visualPreview: parsed.data.visualPreview,
       threadId: parsed.data.threadId,
       workspace: parsed.data.workspace
     })

@@ -145,13 +145,23 @@ function escapeXmlText(value: string): string {
 }
 
 export function hasSuccessfulCreatePlanResult(items: readonly TurnItem[], turnId: string): boolean {
-  return items.some((item) =>
-    item.turnId === turnId &&
-    item.kind === 'tool_result' &&
-    item.toolName === CREATE_PLAN_TOOL_NAME &&
-    item.status === 'completed' &&
-    item.isError !== true
-  )
+  let satisfied = false
+  for (const item of items) {
+    if (item.turnId !== turnId) continue
+    if (item.kind === 'user_message') {
+      satisfied = false
+      continue
+    }
+    if (
+      item.kind === 'tool_result' &&
+      item.toolName === CREATE_PLAN_TOOL_NAME &&
+      item.status === 'completed' &&
+      item.isError !== true
+    ) {
+      satisfied = true
+    }
+  }
+  return satisfied
 }
 
 export function latestUserMessageText(items: readonly TurnItem[], turnId: string): string {

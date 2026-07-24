@@ -357,7 +357,7 @@ export const MODEL_PROVIDER_PRESETS: ModelProviderPreset[] = [
       auto: textChatProfile(undefined, CURSOR_SDK_ADAPTIVE_REASONING)
     },
     docsUrl: 'https://cursor.com/docs/api/sdk/typescript',
-    apiKeyUrl: 'https://cursor.com/dashboard?tab=integrations'
+    apiKeyUrl: 'https://cursor.com/dashboard/api?section=user-keys#user-api-keys'
   },
   {
     id: 'zhipu-coding-plan',

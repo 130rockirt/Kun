@@ -125,6 +125,18 @@ describe('buildToolPreferenceInstruction', () => {
     expect(buildToolPreferenceInstruction([...tools].reverse())).toBe(instruction)
   })
 
+  it('adds bounded delegation guidance only when the child-agent tool is available', () => {
+    const instruction = buildToolPreferenceInstruction([
+      { name: 'delegate_task', description: 'Run a standalone child agent' }
+    ])
+
+    expect(instruction).toContain('specialist expertise')
+    expect(instruction).toContain('fresh independent review')
+    expect(instruction).toContain('parallel investigation of independent workstreams')
+    expect(instruction).toContain('keep integration and final verification in the parent agent')
+    expect(instruction).toContain('Do not delegate trivial work')
+  })
+
   it('prefers specialized MCP source navigation with available built-in fallback', () => {
     const instruction = buildToolPreferenceInstruction([
       { name: 'grep', description: 'Search file contents' },

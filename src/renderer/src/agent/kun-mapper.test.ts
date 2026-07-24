@@ -1606,6 +1606,82 @@ describe('usage event mapping', () => {
   })
 })
 
+describe('context snapshot event mapping', () => {
+  it('preserves request-local categories and runtime thresholds', () => {
+    const actions = runtimeProjectionActionsFromEvent({
+      kind: 'context_snapshot',
+      seq: 14,
+      timestamp: '2026-07-24T00:00:00.000Z',
+      threadId: 'thr_1',
+      turnId: 'turn_1',
+      model: 'deepseek-v4-pro',
+      providerId: 'deepseek',
+      stepIndex: 1,
+      contextWindowTokens: 256_000,
+      softThresholdTokens: 192_000,
+      hardThresholdTokens: 217_600,
+      estimatedInputTokens: 12_000,
+      breakdown: {
+        tools: 3_000,
+        system: 2_000,
+        skills: 1_000,
+        messages: 5_000,
+        other: 1_000
+      },
+      toolCount: 21,
+      activeSkillIds: [' skill-a ', '', 'skill-b']
+    })
+
+    expect(actions).toEqual([{
+      type: 'context_snapshot_received',
+      payload: {
+        threadId: 'thr_1',
+        turnId: 'turn_1',
+        model: 'deepseek-v4-pro',
+        providerId: 'deepseek',
+        stepIndex: 1,
+        contextWindowTokens: 256_000,
+        softThresholdTokens: 192_000,
+        hardThresholdTokens: 217_600,
+        estimatedInputTokens: 12_000,
+        breakdown: {
+          tools: 3_000,
+          system: 2_000,
+          skills: 1_000,
+          messages: 5_000,
+          other: 1_000
+        },
+        toolCount: 21,
+        activeSkillIds: ['skill-a', 'skill-b']
+      }
+    }])
+  })
+
+  it('drops incomplete snapshot events instead of showing mixed accounting', () => {
+    expect(runtimeProjectionActionsFromEvent({
+      kind: 'context_snapshot',
+      threadId: 'thr_1',
+      model: 'deepseek-v4-pro'
+    })).toEqual([])
+  })
+
+  it('drops snapshots whose declared total does not equal their categories', () => {
+    expect(runtimeProjectionActionsFromEvent({
+      kind: 'context_snapshot',
+      threadId: 'thr_1',
+      model: 'deepseek-v4-pro',
+      stepIndex: 0,
+      contextWindowTokens: 256_000,
+      softThresholdTokens: 192_000,
+      hardThresholdTokens: 217_600,
+      estimatedInputTokens: 999,
+      breakdown: { tools: 1, system: 2, skills: 3, messages: 4, other: 5 },
+      toolCount: 1,
+      activeSkillIds: []
+    })).toEqual([])
+  })
+})
+
 describe('tool presentation inference', () => {
   it('prefers explicit toolKind from Kun over local heuristics', () => {
     const block = chatBlockFromItem({

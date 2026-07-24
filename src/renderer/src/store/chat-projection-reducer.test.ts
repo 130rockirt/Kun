@@ -89,6 +89,34 @@ describe('chat projection reducer', () => {
     expect(live.error).toBeNull()
   })
 
+  it('stores context snapshots only for the active thread', () => {
+    const activeSnapshot: RuntimeProjectionAction = {
+      type: 'context_snapshot_received',
+      payload: {
+        threadId: 'thread_1',
+        model: 'model',
+        stepIndex: 0,
+        contextWindowTokens: 100_000,
+        softThresholdTokens: 75_000,
+        hardThresholdTokens: 85_000,
+        estimatedInputTokens: 15,
+        breakdown: { tools: 1, system: 2, skills: 3, messages: 4, other: 5 },
+        toolCount: 1,
+        activeSkillIds: []
+      }
+    }
+    const otherSnapshot: RuntimeProjectionAction = {
+      ...activeSnapshot,
+      payload: { ...activeSnapshot.payload, threadId: 'thread_2' }
+    }
+
+    const active = project(state(), [activeSnapshot])
+    const ignored = project(state(), [otherSnapshot])
+
+    expect(active.lastContextSnapshot).toEqual(activeSnapshot.payload)
+    expect(ignored.lastContextSnapshot).toBeUndefined()
+  })
+
   it('deduplicates approval and user-input replay by stable runtime identity', () => {
     const approval: RuntimeProjectionAction = {
       type: 'approval_received',

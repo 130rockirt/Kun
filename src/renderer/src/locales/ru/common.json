@@ -2025,7 +2025,7 @@
   "contextCapacityThresholdLabel": "Сжимается около {{percent}}",
   "contextCapacityChipAria": "Контекстное окно {{percent}} использовано",
   "contextCapacityBarAria": "Контекст использован {{percent}}",
-  "contextCapacityEstimatedBreakdown": "Итого измеряется; оценивается распределение по категориям.",
+  "contextCapacityEstimatedBreakdown": "Оценка по фактическому запросу; накопленное использование потока не учитывается.",
   "contextCapacityEstimatedAll": "Очереди еще нет — значения оцениваются и обновляются после отправки.",
   "running": "Выполняется",
   "guiUpdateTopbarAvailable": "Update {{version}}",

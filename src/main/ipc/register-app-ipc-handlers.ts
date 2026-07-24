@@ -61,6 +61,7 @@ import {
   gitWorktreeRemoveSchema,
   guiUpdateChannelSchema,
   localPdfTextTargetPayloadSchema,
+  localOfficeDocumentTargetPayloadSchema,
   logErrorPayloadSchema,
   notificationPayloadSchema,
   openEditorPathPayloadSchema,
@@ -262,6 +263,8 @@ import { exportConversation } from '../services/conversation-export-service'
 import { exportMemoryMarkdown } from '../services/memory-export-service'
 import { importGithubSkillsToRoot } from '../services/github-skill-import-service'
 import { readLocalPdfText } from '../services/write-pdf-text-service'
+import { readLocalOfficeDocument } from '../services/office-document-service'
+import { resolveOfficeCliBinary } from '../officecli-resources'
 import { ensurePptMaster } from '../services/ppt-master-service'
 import { saveGuiSkillPackage } from '../services/skill-save-service'
 import {
@@ -1931,6 +1934,38 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       ocrApplied: result.ocrApplied,
       ocrPageCount: result.ocrPageCount,
       truncated: result.truncated
+    }
+  })
+  ipcMain.handle('file:read-local-office-document', async (event, payload: unknown) => {
+    assertTrustedWorkbenchSender(event, getMainWindow)
+    const target = parseIpcPayload(
+      'file:read-local-office-document',
+      localOfficeDocumentTargetPayloadSchema,
+      payload
+    )
+    const binaryPath = resolveOfficeCliBinary({
+      isPackaged: app.isPackaged,
+      resourcesPath: process.resourcesPath,
+      appRoot: app.getAppPath(),
+      explicitPath: process.env.KUN_OFFICECLI_BINARY
+    })
+    if (!binaryPath) {
+      return {
+        ok: false as const,
+        code: 'officecli_unavailable',
+        message: 'Office document support is unavailable because the bundled OfficeCLI binary was not found.'
+      }
+    }
+    const abortController = new AbortController()
+    const cancelWhenRendererCloses = (): void => abortController.abort()
+    event.sender.once('destroyed', cancelWhenRendererCloses)
+    try {
+      return await readLocalOfficeDocument(target, {
+        binaryPath,
+        signal: abortController.signal
+      })
+    } finally {
+      event.sender.removeListener('destroyed', cancelWhenRendererCloses)
     }
   })
   ipcMain.handle('file:save-as', async (_, payload: unknown) =>

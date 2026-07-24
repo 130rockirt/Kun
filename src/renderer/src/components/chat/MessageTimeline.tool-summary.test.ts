@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import type { ChatBlock, NormalizedThread, ToolBlock } from '../../agent/types'
 import { useChatStore } from '../../store/chat-store'
 import {
+  ConversationTurn,
   MessageTimeline,
   goalTimelinePaddingClass,
   liveTurnProgressClass,
@@ -634,7 +635,8 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
 
     expect(html).toContain('Read')
     expect(html).toContain('/tmp/readme.md')
-    expect(html).not.toContain('ds-work-logo')
+    expect(html).toContain('ds-work-logo')
+    expect(html).toContain('is-active')
     expect(html).toContain('ds-shiny-text')
     expect(html).not.toContain('partial tool output while running')
     expect(html).toContain('ds-process-file-reference')
@@ -750,7 +752,8 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
     )
 
     expect(html).toContain('ds-shiny-text')
-    expect(html).not.toContain('ds-work-logo')
+    expect(html).toContain('ds-work-logo')
+    expect(html).toContain('is-active')
     expect(html).toMatch(/Thinking|思考中|thinkingNow/)
     expect(html).toContain('aria-expanded="false"')
     expect(html).not.toContain('current reasoning summary')
@@ -980,6 +983,38 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
     expect(html).toContain('Read')
     expect(html).toContain('/tmp/project/src/app.ts')
     expect(html).not.toContain('running timeline detail should stay collapsed')
+  })
+
+  it('keeps the fallback running animation visible between process events', () => {
+    const turn = {
+      user: {
+        kind: 'user',
+        id: 'user_1',
+        text: 'keep working'
+      } as const,
+      blocks: [toolBlock({
+        id: 'tool_read',
+        summary: 'read: file',
+        status: 'success',
+        meta: { toolName: 'read' },
+        filePath: '/tmp/project/src/app.ts'
+      })]
+    }
+
+    const html = renderToStaticMarkup(
+      createElement(ConversationTurn, {
+        turn,
+        isProcessing: true,
+        liveReasoning: '',
+        live: '',
+        filePreviewWorkspaceRoot: '/tmp/project',
+        viewportRef: { current: null }
+      })
+    )
+
+    expect(html).toContain('Read')
+    expect(html).toContain('ds-work-logo-phase-trail')
+    expect(html).toContain('is-active')
   })
 
   it('keeps intermediate text visible between compact activity phases', () => {
