@@ -261,17 +261,6 @@ export function TimelineJumpPreviewTitle({
   )
 }
 
-function processBlockHasError(block: ChatBlock): boolean {
-  return (
-    (block.kind === 'tool' && block.status === 'error') ||
-    (block.kind === 'compaction' && block.status === 'error') ||
-    (block.kind === 'review' && block.status === 'error') ||
-    (block.kind === 'approval' && block.status === 'error') ||
-    (block.kind === 'user_input' && block.status === 'error') ||
-    (block.kind === 'system' && block.severity === 'error')
-  )
-}
-
 export function resultPreviewSourcesForTurn(turn: Turn): ExtensionResultPreviewSource[] {
   const sources: ExtensionResultPreviewSource[] = []
   const seen = new Set<string>()
@@ -1034,19 +1023,15 @@ export function ConversationTurn({
     [processBlocks]
   )
   const onlyCompactionProcess = processBlocks.length > 0 && workProcessBlocks.length === 0
-  const hasProcessError = workProcessBlocks.some(processBlockHasError)
-  // Keep active process/tool failures visible while a turn is still running,
-  // then fold those execution details into the normal work summary.
-  const forceExpandForError = isProcessing && hasProcessError
-  const workExpanded = forceExpandForError || (workExpandedOverride ?? isProcessing)
+  const workExpanded = workExpandedOverride ?? false
   const reviewBlocks = useMemo(
     () => turn.blocks.filter((block) => block.kind === 'review'),
     [turn.blocks]
   )
 
   const processSections = useMemo(
-    () => (workExpanded ? groupProcessSections(workProcessBlocks) : []),
-    [workProcessBlocks, workExpanded]
+    () => (isProcessing || workExpanded ? groupProcessSections(workProcessBlocks) : []),
+    [isProcessing, workProcessBlocks, workExpanded]
   )
   const reasoningSectionCount = useMemo(
     () => processSections.filter((section) => section.kind === 'reasoning').length,
@@ -1054,8 +1039,8 @@ export function ConversationTurn({
   )
   // Show the live assistant bubble whenever the SSE has streamed any text
   // into `live`. We deliberately do NOT gate on `isProcessing`: the
-  // processing indicator (WorkMetaRow above) already covers "the agent is
-  // working", and hiding the streaming text here causes real-time updates
+  // live activity rows already cover "the agent is working", and hiding the
+  // streaming text here causes real-time updates
   // (Feishu bot streaming) to appear only after turn_completed, which the
   // user perceives as a long delay.
   // Note: `live` is the generic SSE sink output across ALL channels
@@ -1077,14 +1062,19 @@ export function ConversationTurn({
       ? assistantContentBlocks[assistantContentBlocks.length - 1]?.id
       : undefined
 
-  // Keep completed reasoning/tool work tucked away, but make the active turn's
-  // work visible unless the user explicitly collapses it.
+  // During a live turn, activity phases stay visible as one-line loading rows
+  // and intermediate assistant text remains readable between them. Completed
+  // work folds back into the turn-level summary.
 
   const hasProcess =
     (isProcessing && !onlyCompactionProcess) ||
     workProcessBlocks.length > 0 ||
     (runtimeErrorBlocks.length > 0 && typeof durationMs === 'number')
-  const showLiveProgress = isProcessing && !onlyCompactionProcess
+  const showLiveProgress =
+    isProcessing &&
+    !onlyCompactionProcess &&
+    processSections.length === 0 &&
+    !showLiveAssistant
   const forkFromTurn = async (): Promise<void> => {
     if (!allowMainThreadActions || !forkTurnId || forking) return
     setForking(true)
@@ -1113,16 +1103,18 @@ export function ConversationTurn({
 
       {hasProcess ? (
         <div className="flex flex-col gap-1 pb-2">
-          <WorkMetaRow
-            processing={isProcessing}
-            stepCount={workProcessBlocks.length}
-            durationMs={durationMs}
-            reasoningDurationMs={reasoningDurationMs}
-            expanded={workExpanded}
-            collapsible={workProcessBlocks.length > 0 && !forceExpandForError}
-            onToggle={() => setWorkExpandedOverride((value) => !(value ?? isProcessing))}
-          />
-          {workExpanded && processSections.length > 0 ? (
+          {!isProcessing ? (
+            <WorkMetaRow
+              processing={false}
+              stepCount={workProcessBlocks.length}
+              durationMs={durationMs}
+              reasoningDurationMs={reasoningDurationMs}
+              expanded={workExpanded}
+              collapsible={workProcessBlocks.length > 0}
+              onToggle={() => setWorkExpandedOverride((value) => !(value ?? false))}
+            />
+          ) : null}
+          {processSections.length > 0 ? (
             <div className="flex flex-col gap-1">
               {processSections.map((section) => (
                 <ProcessSectionRow

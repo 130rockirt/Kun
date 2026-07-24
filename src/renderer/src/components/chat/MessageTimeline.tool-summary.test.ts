@@ -15,7 +15,7 @@ import {
   MessageBubble,
   generatedMediaScrollAvailability
 } from './message-timeline-bubbles'
-import { ProcessSectionRow } from './message-timeline-process'
+import { ProcessSectionRow, groupProcessSections } from './message-timeline-process'
 import {
   TimelineFilePreviewWorkspaceProvider,
   timelineFilePreviewWorkspaceRoot,
@@ -224,6 +224,34 @@ describe('MessageTimeline tool summaries', () => {
         t
       )
     ).toBe('Read background shell 2mcorxhe sleep 15 && echo "Hello from background!"')
+  })
+
+  it('coalesces reasoning and tools into one activity phase until visible text appears', () => {
+    const sections = groupProcessSections([
+      { kind: 'reasoning', id: 'reasoning_1', text: 'inspect the code' },
+      toolBlock({ id: 'tool_read', summary: 'read: file', meta: { toolName: 'read' } }),
+      { kind: 'reasoning', id: 'reasoning_2', text: 'check one more path' },
+      { kind: 'assistant', id: 'assistant_1', text: 'I found the relevant component.' },
+      toolBlock({ id: 'tool_test', summary: 'bash: test', meta: { toolName: 'bash' } })
+    ])
+
+    expect(sections.map((section) => ({
+      kind: section.kind,
+      ids: section.blocks.map((block) => block.id)
+    }))).toEqual([
+      {
+        kind: 'execution',
+        ids: ['reasoning_1', 'tool_read', 'reasoning_2']
+      },
+      {
+        kind: 'output',
+        ids: ['assistant_1']
+      },
+      {
+        kind: 'execution',
+        ids: ['tool_test']
+      }
+    ])
   })
 })
 
@@ -704,7 +732,7 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
     expect(html).not.toContain('read detail should stay tucked away')
   })
 
-  it('expands active reasoning so the current process is visible', () => {
+  it('keeps active reasoning in one collapsed loading row', () => {
     const block: ChatBlock = {
       kind: 'reasoning',
       id: 'live-reasoning',
@@ -723,7 +751,9 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
 
     expect(html).toContain('ds-shiny-text')
     expect(html).not.toContain('ds-work-logo')
-    expect(html).toContain('current reasoning summary')
+    expect(html).toMatch(/Thinking|思考中|thinkingNow/)
+    expect(html).toContain('aria-expanded="false"')
+    expect(html).not.toContain('current reasoning summary')
     expect(html).not.toContain('&lt;!-- --&gt;')
     expect(block.text).toContain('<!-- -->')
   })
@@ -913,7 +943,7 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
     expect(html).toContain('Cancelled')
   })
 
-  it('expands the live work timeline by default while keeping tool details collapsed', () => {
+  it('shows the current tool as one loading action while keeping its detail collapsed', () => {
     const blocks: ChatBlock[] = [
       {
         kind: 'user',
@@ -946,10 +976,106 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
       })
     )
 
-    expect(html).toContain('aria-expanded="true"')
+    expect(html).toContain('aria-expanded="false"')
     expect(html).toContain('Read')
     expect(html).toContain('/tmp/project/src/app.ts')
     expect(html).not.toContain('running timeline detail should stay collapsed')
+  })
+
+  it('keeps intermediate text visible between compact activity phases', () => {
+    const blocks: ChatBlock[] = [
+      {
+        kind: 'user',
+        id: 'user_1',
+        text: 'inspect this flow'
+      },
+      {
+        kind: 'reasoning',
+        id: 'reasoning_1',
+        text: 'internal reasoning should stay collapsed'
+      },
+      toolBlock({
+        id: 'tool_read',
+        summary: 'read: file',
+        detail: 'completed read detail should stay collapsed',
+        meta: { toolName: 'read' },
+        filePath: '/tmp/project/src/flow.ts'
+      }),
+      {
+        kind: 'assistant',
+        id: 'assistant_progress',
+        text: 'I found the rendering path and am checking the active state.'
+      },
+      toolBlock({
+        id: 'tool_search',
+        summary: 'grep: search',
+        status: 'running',
+        detail: 'running search detail should stay collapsed',
+        meta: { toolName: 'grep', pattern: 'workExpanded' },
+        filePath: '/tmp/project/src'
+      })
+    ]
+    useChatStore.setState({
+      busy: true,
+      currentTurnUserId: 'user_1',
+      turnStartedAtByUserId: { user_1: Date.now() }
+    })
+
+    const html = renderToStaticMarkup(
+      createElement(MessageTimeline, {
+        blocks,
+        liveReasoning: '',
+        live: '',
+        activeThreadId: 'thr_1',
+        runtimeConnection: 'ready',
+        onRetryConnection: () => undefined,
+        onOpenSettings: () => undefined
+      })
+    )
+
+    expect(html).toContain('I found the rendering path and am checking the active state.')
+    expect(html).toContain('workExpanded')
+    expect(html).not.toContain('internal reasoning should stay collapsed')
+    expect(html).not.toContain('completed read detail should stay collapsed')
+    expect(html).not.toContain('running search detail should stay collapsed')
+  })
+
+  it('still expands live work automatically when an approval needs attention', () => {
+    const blocks: ChatBlock[] = [
+      {
+        kind: 'user',
+        id: 'user_1',
+        text: 'edit this file'
+      },
+      {
+        kind: 'approval',
+        id: 'approval_1',
+        approvalId: 'approval_1',
+        status: 'pending',
+        toolName: 'edit',
+        summary: 'Run edit(path="/tmp/project/src/app.ts")'
+      }
+    ]
+    useChatStore.setState({
+      busy: true,
+      currentTurnUserId: 'user_1',
+      turnStartedAtByUserId: { user_1: Date.now() }
+    })
+
+    const html = renderToStaticMarkup(
+      createElement(MessageTimeline, {
+        blocks,
+        liveReasoning: '',
+        live: '',
+        activeThreadId: 'thr_1',
+        runtimeConnection: 'ready',
+        onRetryConnection: () => undefined,
+        onOpenSettings: () => undefined
+      })
+    )
+
+    expect(html).toContain('Run edit(path=&quot;/tmp/project/src/app.ts&quot;)')
+    expect(html).toMatch(/Approval required|需要审批|approvalTitle/)
   })
 
   it('renders running compaction as a lightweight status divider', () => {

@@ -95,6 +95,20 @@ export function groupProcessSections(blocks: ChatBlock[]): ProcessSection[] {
           ? 'output'
           : 'execution'
     const last = sections[sections.length - 1]
+
+    // Reasoning and tool calls between two visible assistant updates are one
+    // activity phase. Keeping them together prevents long-running turns from
+    // becoming an alternating "thinking / tool / thinking / tool" waterfall.
+    if (
+      last &&
+      (last.kind === 'reasoning' || last.kind === 'execution') &&
+      (kind === 'reasoning' || kind === 'execution')
+    ) {
+      if (last.kind !== kind) last.kind = 'execution'
+      last.blocks.push(block)
+      continue
+    }
+
     if (last && last.kind === kind) {
       last.blocks.push(block)
       continue
@@ -146,7 +160,10 @@ function isProcessSectionActive(section: ProcessSection, processing: boolean): b
     return section.blocks.some((block) => block.id === 'live-assistant')
   }
   return section.blocks.some(
-    (block) => block.id === 'live-assistant' || blockHasPendingRuntimeWork(block)
+    (block) =>
+      block.id === 'live-reasoning' ||
+      block.id === 'live-assistant' ||
+      blockHasPendingRuntimeWork(block)
   )
 }
 
@@ -238,7 +255,6 @@ export function ProcessSectionRow({
   const defaultExpanded =
     (processing && hasError) ||
     sectionHasPendingApproval(section) ||
-    (active && section.kind === 'reasoning') ||
     (processing && section.kind === 'execution' && sectionHasRequestUserInput(section))
   const forceExpanded = sectionHasPendingApproval(section)
   const expanded = hasDetails && (forceExpanded || (userExpanded ?? defaultExpanded))
@@ -262,7 +278,11 @@ export function ProcessSectionRow({
     return <SubagentGroup blocks={section.blocks} onOpenChildThread={onOpenChildThread} />
   }
 
-  if (section.kind === 'execution' && section.blocks.length === 1) {
+  if (
+    section.kind === 'execution' &&
+    section.blocks.length === 1 &&
+    section.blocks[0]?.kind !== 'reasoning'
+  ) {
     const [block] = section.blocks
     if (block) {
       return (
@@ -302,6 +322,7 @@ export function ProcessSectionRow({
         <button
           type="button"
           onClick={() => setUserExpanded(!(userExpanded ?? defaultExpanded))}
+          aria-expanded={expanded}
           className={`group flex w-fit max-w-full items-center gap-1.5 rounded-md py-0.5 text-left text-[14px] font-medium transition hover:opacity-85 ${
             hasError ? processErrorTextClass(errorTone) : 'text-ds-muted'
           }`}
@@ -691,6 +712,17 @@ function describeProcessSection(
 
   if (section.kind === 'output') {
     return t('processTextLabel')
+  }
+
+  if (opts.processing && isProcessSectionActive(section, true)) {
+    const activeBlock = [...section.blocks].reverse().find(
+      (block) =>
+        block.id === 'live-reasoning' ||
+        block.id === 'live-assistant' ||
+        blockHasPendingRuntimeWork(block)
+    )
+    if (activeBlock?.kind === 'reasoning') return t('thinkingNow')
+    if (activeBlock) return describeProcessBlock(activeBlock, t)
   }
 
   if (section.blocks.length === 1) {
