@@ -196,7 +196,33 @@ describe('CursorSdkRuntime', () => {
 
   test('runs a complete local SDK turn with isolated settings and an SDK trace', async () => {
     const debugSink = new LlmDebugRecorder()
-    const h = harness({ debugSink })
+    const h = harness({
+      debugSink,
+      run: fakeRun({
+        stream: [{
+          type: 'tool_call',
+          agent_id: 'agent_1',
+          run_id: 'run_1',
+          call_id: 'call_1',
+          name: 'shell',
+          status: 'running',
+          args: { command: 'pwd' }
+        }, {
+          type: 'tool_call',
+          agent_id: 'agent_1',
+          run_id: 'run_1',
+          call_id: 'call_1',
+          name: 'shell',
+          status: 'completed',
+          result: { stdout: '/tmp' }
+        }, {
+          type: 'assistant',
+          agent_id: 'agent_1',
+          run_id: 'run_1',
+          message: { role: 'assistant', content: [{ type: 'text', text: 'hello' }] }
+        }]
+      })
+    })
     await expect(h.runtime.runTurn(
       'thread_1',
       'turn_1',
@@ -224,7 +250,21 @@ describe('CursorSdkRuntime', () => {
     expect(trace).toMatchObject({
       transport: 'sdk',
       endpointFormat: 'cursor-sdk',
-      request: { method: 'SDK', url: 'cursor-sdk://local/agent' }
+      request: { method: 'SDK', url: 'cursor-sdk://local/agent' },
+      delegated: {
+        providerKind: 'cursor-sdk',
+        phase: 'rebased',
+        contextManagement: 'sdk-managed',
+        nativeHistory: 'none'
+      },
+      decoded: {
+        toolResults: [{
+          callId: 'call_1',
+          toolName: 'shell',
+          output: '{"stdout":"/tmp"}',
+          isError: false
+        }]
+      }
     })
     expect(JSON.stringify(trace)).not.toContain('cursor-secret')
   })

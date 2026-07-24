@@ -207,6 +207,12 @@ describe('AntigravityCliRuntime', () => {
       transport: 'cli',
       endpointFormat: 'antigravity-cli',
       status: 'completed',
+      delegated: {
+        providerKind: 'antigravity-cli',
+        phase: 'portable',
+        contextManagement: 'sdk-managed',
+        nativeHistory: 'none'
+      },
       request: {
         method: 'CLI',
         url: 'antigravity-cli://local/print'

@@ -242,4 +242,56 @@ describe('AgentPerspectivePanel', () => {
     expect(rendered).toContain('Kun managed')
     expect(rendered).toContain('call-schedule')
   })
+
+  it('shows delegated SDK continuity, context ownership, and capability limits', () => {
+    const state = useTraces()
+    const record = {
+      ...state.records[0],
+      provider: 'claude-subscription',
+      model: 'claude-sonnet-4-5',
+      transport: 'sdk',
+      endpointFormat: 'agent-sdk',
+      request: {
+        ...state.records[0].request,
+        method: 'SDK',
+        url: 'agent-sdk://local/query'
+      },
+      delegated: {
+        providerKind: 'agent-sdk',
+        phase: 'rebased',
+        reason: 'native_state_unavailable',
+        contextManagement: 'sdk-managed',
+        nativeHistory: 'none',
+        capabilities: {
+          nativeResume: true,
+          structuredStreaming: true,
+          kunTools: true,
+          externalApproval: true,
+          liveSteering: false,
+          nativeContextTelemetry: false,
+          fork: false
+        }
+      }
+    }
+    useTraces.mockReturnValue({ ...state, records: [record], selected: record })
+
+    let renderer!: ReactTestRenderer
+    act(() => {
+      renderer = create(createElement(AgentPerspectivePanel, {
+        threadId: 'thread-1',
+        active: true,
+        threadRunning: false
+      }))
+    })
+
+    const rendered = textContent(renderer.root)
+    expect(rendered).toContain('SDK execution')
+    expect(rendered).toContain('Claude Agent SDK')
+    expect(rendered).toContain('Rebased from Kun history')
+    expect(rendered).toContain('Native checkpoint unavailable')
+    expect(rendered).toContain('No provider-native history')
+    expect(rendered).toContain('Native resume')
+    expect(rendered).toContain('Live steering')
+    expect(renderer.root.findByProps({ 'aria-label': 'SDK execution' })).toBeDefined()
+  })
 })

@@ -15,7 +15,10 @@ import {
   MAX_TURN_ATTACHMENT_BYTES,
   MAX_TURN_ATTACHMENT_IDS
 } from '../../contracts/attachments.js'
-import type { ModelRequestTraceRecord } from '../../contracts/model-request-trace.js'
+import type {
+  ModelRequestTraceDelegated,
+  ModelRequestTraceRecord
+} from '../../contracts/model-request-trace.js'
 import type { TurnItem } from '../../contracts/items.js'
 import type { UsageSnapshot } from '../../contracts/usage.js'
 import { userMessageTextWithComposerContexts } from '../../domain/composer-context.js'
@@ -525,7 +528,15 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
         prompt,
         images: resolvedImages.summaries,
         mode: options.mode ?? 'plan',
-        sandboxEnabled: options.local?.sandboxOptions?.enabled !== false
+        sandboxEnabled: options.local?.sandboxOptions?.enabled !== false,
+        delegated: {
+          providerKind: 'cursor-sdk',
+          phase: preparation?.resumed ? 'resumed' : 'rebased',
+          ...(preparation?.rebaseReason ? { reason: preparation.rebaseReason } : {}),
+          contextManagement: 'sdk-managed',
+          nativeHistory: preparation?.resumed ? 'unknown' : 'none',
+          capabilities
+        }
       })
       run = await Promise.race([
         agent.send(sdkMessage, { mode: options.mode }),
@@ -624,6 +635,7 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
   ): Promise<void> {
     captureCursorMessage(trace, message)
     for (const draft of mapper.map(message)) {
+      captureCursorTraceDraft(trace, draft)
       await this.emitDraft(draft.threadId, draft)
     }
   }
@@ -640,6 +652,34 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
       return
     }
     await this.deps.events.record(draft)
+  }
+}
+
+function captureCursorTraceDraft(
+  trace: CursorTrace | undefined,
+  draft: RuntimeEventDraft
+): void {
+  if (!trace?.sink.captureToolResult) return
+  const item = itemOf(draft)
+  if (draft.kind !== 'tool_call_finished' || item?.kind !== 'tool_result') return
+  try {
+    trace.sink.captureToolResult(trace.round, {
+      callId: item.callId,
+      toolName: item.toolName,
+      output: traceOutputText(item.output),
+      isError: item.isError
+    })
+  } catch {
+    warnCursorTraceFailure()
+  }
+}
+
+function traceOutputText(value: unknown): string {
+  if (typeof value === 'string') return value
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return String(value)
   }
 }
 
@@ -686,6 +726,7 @@ function startCursorTrace(
     images: readonly CursorSdkImageSummary[]
     mode: 'agent' | 'plan'
     sandboxEnabled: boolean
+    delegated: ModelRequestTraceDelegated
   }
 ): CursorTrace | undefined {
   if (!sink?.beginSdkInvocation) return undefined
@@ -709,7 +750,8 @@ function startCursorTrace(
         },
         mode: input.mode,
         sandbox: input.sandboxEnabled
-      })
+      }),
+      delegated: input.delegated
     })
     return { sink, round, record }
   } catch {

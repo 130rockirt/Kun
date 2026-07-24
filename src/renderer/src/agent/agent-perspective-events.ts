@@ -97,7 +97,7 @@ export function projectAgentPerspectiveEvents(
 ): AgentPerspectiveEvent[] {
   const ordered = [...records].sort(oldestRecordFirst)
   const semanticByRecord = new Map(ordered.map((record) => [record.id, parseSemanticRequest(record)]))
-  const toolResults = collectToolResults([...semanticByRecord.values()])
+  const toolResults = collectToolResults(ordered, [...semanticByRecord.values()])
   const events: AgentPerspectiveEvent[] = []
 
   for (const record of ordered) {
@@ -276,8 +276,23 @@ function roleForItemType(type: string): string {
   return ''
 }
 
-function collectToolResults(requests: readonly SemanticRequest[]): Map<string, SemanticMessage> {
+function collectToolResults(
+  records: readonly ModelRequestTraceRecord[],
+  requests: readonly SemanticRequest[]
+): Map<string, SemanticMessage> {
   const results = new Map<string, SemanticMessage>()
+  for (const record of records) {
+    for (const result of record.decoded?.toolResults ?? []) {
+      results.set(result.callId, {
+        id: `trace-tool-result-${record.id}-${result.callId}`,
+        role: 'tool',
+        text: result.output,
+        callId: result.callId,
+        name: result.toolName,
+        kind: result.isError ? 'tool_result_error' : 'tool_result'
+      })
+    }
+  }
   for (const request of requests) {
     for (const message of request.messages) {
       if (message.role === 'tool' && message.callId) results.set(message.callId, message)

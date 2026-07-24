@@ -7,6 +7,7 @@ import {
   MAX_MODEL_REQUEST_TRACE_TOOL_NAME_LENGTH,
   MODEL_REQUEST_TRACE_SCHEMA_VERSION,
   type ModelRequestTraceDecoded,
+  type ModelRequestTraceDelegated,
   type ModelRequestTraceLimits,
   type ModelRequestTracePage,
   type ModelRequestTraceRecord,
@@ -49,8 +50,15 @@ export type LlmDebugToolCall = {
   arguments: Record<string, unknown>
 }
 
+export type LlmDebugToolResult = {
+  callId: string
+  toolName: string
+  output: string
+  isError: boolean
+}
+
 export type LlmDebugOutputTruncation = Partial<Record<
-  'text' | 'reasoning' | 'toolCalls' | 'usage' | 'stopReason' | 'error',
+  'text' | 'reasoning' | 'toolCalls' | 'toolResults' | 'usage' | 'stopReason' | 'error',
   true
 >>
 
@@ -58,6 +66,7 @@ export type LlmDebugOutput = {
   text: string
   reasoning: string
   toolCalls: LlmDebugToolCall[]
+  toolResults: LlmDebugToolResult[]
   usage?: UsageSnapshot
   stopReason?: string
   error?: string
@@ -88,6 +97,7 @@ export type LlmCliInvocationMeta = {
   endpointFormat: string
   target: string
   bodyText: string
+  delegated?: ModelRequestTraceDelegated
 }
 
 export type LlmSdkInvocationMeta = {
@@ -95,6 +105,7 @@ export type LlmSdkInvocationMeta = {
   target: string
   bodyText: string
   secretValues?: readonly string[]
+  delegated?: ModelRequestTraceDelegated
 }
 
 /** Narrow sink used by model clients to retain bounded debug data. */
@@ -107,6 +118,7 @@ export interface LlmDebugSink {
   captureHttpError(record: ModelRequestTraceRecord, error: unknown): void
   captureTransportError(record: ModelRequestTraceRecord, error: unknown): void
   captureChunk(round: LlmDebugRound, chunk: ModelStreamChunk): void
+  captureToolResult?(round: LlmDebugRound, result: LlmDebugToolResult): void
   finish(round: LlmDebugRound): Promise<void>
 }
 
@@ -192,7 +204,7 @@ export class LlmDebugRecorder implements LlmDebugSink {
       finishedAt: startedAt,
       durationMs: 0,
       requestBody: null,
-      output: { text: '', reasoning: '', toolCalls: [] },
+      output: { text: '', reasoning: '', toolCalls: [], toolResults: [] },
       exchanges: []
     }
     this.states.set(round, createCaptureState(meta.toolCatalog))
@@ -226,7 +238,8 @@ export class LlmDebugRecorder implements LlmDebugSink {
       reason: 'initial',
       target: meta.target,
       headers: {},
-      bodyText: meta.bodyText
+      bodyText: meta.bodyText,
+      ...(meta.delegated ? { delegated: meta.delegated } : {})
     })
   }
 
@@ -240,7 +253,8 @@ export class LlmDebugRecorder implements LlmDebugSink {
       target: meta.target,
       headers: {},
       bodyText: meta.bodyText,
-      ...(meta.secretValues ? { secretValues: meta.secretValues } : {})
+      ...(meta.secretValues ? { secretValues: meta.secretValues } : {}),
+      ...(meta.delegated ? { delegated: meta.delegated } : {})
     })
   }
 
@@ -256,6 +270,7 @@ export class LlmDebugRecorder implements LlmDebugSink {
       headers: Record<string, string>
       bodyText: string
       secretValues?: readonly string[]
+      delegated?: ModelRequestTraceDelegated
     }
   ): ModelRequestTraceRecord {
     const state = this.stateFor(round)
@@ -284,7 +299,15 @@ export class LlmDebugRecorder implements LlmDebugSink {
         urlRedacted: sanitizedUrl.redacted,
         headers: sanitizeModelTraceHeaders(meta.headers, meta.secretValues),
         body
-      }
+      },
+      ...(meta.delegated
+        ? {
+            delegated: {
+              ...meta.delegated,
+              capabilities: { ...meta.delegated.capabilities }
+            }
+          }
+        : {})
     }
     round.exchanges.push(record)
     round.url = sanitizedUrl.value
@@ -354,6 +377,28 @@ export class LlmDebugRecorder implements LlmDebugSink {
         this.captureString(round, state, 'error', chunk.message)
         break
     }
+  }
+
+  captureToolResult(round: LlmDebugRound, result: LlmDebugToolResult): void {
+    const state = this.stateFor(round)
+    const base = {
+      callId: result.callId,
+      toolName: result.toolName,
+      output: '',
+      isError: result.isError
+    }
+    const available = Math.max(0, this.remainingOutputBytes(state) - jsonBytes(base))
+    const output = truncateJsonStringContent(result.output, available)
+    const retained = { ...base, output }
+    const bytes = jsonBytes(retained)
+    if (bytes <= this.remainingOutputBytes(state)) {
+      round.output.toolResults.push(retained)
+      state.outputBytes += bytes
+    } else {
+      markTruncated(round.output, 'toolResults')
+      return
+    }
+    if (output !== result.output) markTruncated(round.output, 'toolResults')
   }
 
   async finish(round: LlmDebugRound): Promise<void> {
@@ -630,6 +675,9 @@ function cloneDecoded(output: LlmDebugOutput): ModelRequestTraceDecoded {
     text: output.text,
     reasoning: output.reasoning,
     toolCalls: output.toolCalls.map((call) => ({ ...call, arguments: { ...call.arguments } })),
+    ...(output.toolResults.length
+      ? { toolResults: output.toolResults.map((result) => ({ ...result })) }
+      : {}),
     ...(output.usage ? { usage: { ...output.usage } } : {}),
     ...(output.stopReason ? { stopReason: output.stopReason } : {}),
     ...(output.error ? { error: output.error } : {}),

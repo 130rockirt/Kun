@@ -6,7 +6,10 @@ import { makeAssistantTextItem } from '../../domain/item.js'
 import { normalizeTurnLimits, type TurnLimitsConfig } from '../../loop/turn-limits.js'
 import type { SessionStore } from '../../ports/session-store.js'
 import type { ThreadStore } from '../../ports/thread-store.js'
-import type { ModelRequestTraceRecord } from '../../contracts/model-request-trace.js'
+import type {
+  ModelRequestTraceDelegated,
+  ModelRequestTraceRecord
+} from '../../contracts/model-request-trace.js'
 import type {
   LlmDebugRound,
   LlmDebugSink
@@ -269,7 +272,15 @@ export class AntigravityCliRuntime implements DelegatedTurnRuntime {
       effort,
       planMode,
       approvalPolicy: thread.approvalPolicy,
-      sandboxMode
+      sandboxMode,
+      delegated: {
+        providerKind: 'antigravity-cli',
+        phase: 'portable',
+        ...(preparation?.rebaseReason ? { reason: preparation.rebaseReason } : {}),
+        contextManagement: 'sdk-managed',
+        nativeHistory: 'none',
+        capabilities
+      }
     })
 
     try {
@@ -460,6 +471,7 @@ function startAntigravityTrace(
     planMode: boolean
     approvalPolicy: string
     sandboxMode: string
+    delegated: ModelRequestTraceDelegated
   }
 ): AntigravityTrace | undefined {
   if (!sink) return undefined
@@ -481,7 +493,8 @@ function startAntigravityTrace(
         mode: input.planMode ? 'plan' : 'agent',
         approvalPolicy: input.approvalPolicy,
         sandboxMode: input.sandboxMode
-      })
+      }),
+      delegated: input.delegated
     })
     return { sink, round, record }
   } catch {

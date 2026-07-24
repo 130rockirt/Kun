@@ -366,7 +366,7 @@ describe('DelegationRuntime', () => {
     expect(seen.at(-1)?.toolPolicy).toBe('readOnly')
   })
 
-  it('lets the parent create an ephemeral custom subagent that inherits the active turn model', async () => {
+  it('lets reusable-profile mode create an ephemeral custom subagent that inherits the active turn model', async () => {
     const seen: Array<{
       systemPrompt?: string
       blockedTools?: string[]
@@ -376,7 +376,7 @@ describe('DelegationRuntime', () => {
       reasoningEffort?: string
     }> = []
     const runtime = createRuntime({
-      useExistingAgents: false,
+      useExistingAgents: true,
       profiles: { general: { description: 'General worker', toolPolicy: 'inherit' } },
       executor: async (input) => {
         seen.push({
@@ -608,7 +608,10 @@ describe('DelegationRuntime', () => {
     expect(properties).not.toHaveProperty('tokenBudget')
     expect(properties).not.toHaveProperty('timeBudgetMs')
     expect(properties).not.toHaveProperty('skill_id')
-    expect(tools.map((candidate) => candidate.name)).toEqual(['delegate_task'])
+    expect(tools.map((candidate) => candidate.name)).toEqual([
+      'delegate_task',
+      'list_subagent_profiles'
+    ])
   })
 
   it('keeps built-in specialists searchable without embedding the full roster in the tool schema', () => {
@@ -624,7 +627,7 @@ describe('DelegationRuntime', () => {
       'security-auditor',
       'web-performance-auditor'
     ]))
-    expect(tool?.description).toContain('existing agent profiles')
+    expect(tool?.description).toContain('reusable profile id')
     expect(tool?.description).not.toContain('Senior code reviewer')
   })
 
@@ -632,7 +635,17 @@ describe('DelegationRuntime', () => {
     const runtime = createRuntime({
       profiles: {
         reviewer: { description: 'Configured reviewer', toolPolicy: 'readOnly' },
-        primary: { description: 'Primary only', mode: 'primary', toolPolicy: 'inherit' }
+        primary: { description: 'Primary only', mode: 'primary', toolPolicy: 'inherit' },
+        'code-only': {
+          description: 'Code-only implementation role',
+          surfaces: ['code'],
+          toolPolicy: 'inherit'
+        },
+        'design-only': {
+          description: 'Design-only implementation role',
+          surfaces: ['design'],
+          toolPolicy: 'inherit'
+        }
       }
     })
     const agentDir = join(dir, '.kun', 'agents')
@@ -688,6 +701,57 @@ describe('DelegationRuntime', () => {
     const workspaceProfile = await runtime.resolveProfileSnapshot('reviewer', dir)
     expect(workspaceProfile?.profile.model).toBeUndefined()
     expect(workspaceProfile?.profile.providerId).toBeUndefined()
+
+    const host = new LocalToolHost({
+      registry: new CapabilityRegistry(buildDelegationToolProviders(runtime))
+    })
+    const discovered = await host.execute({
+      callId: 'call_list_profiles',
+      toolName: 'list_subagent_profiles',
+      arguments: {}
+    }, {
+      threadId: 'thr_list_profiles',
+      turnId: 'turn_list_profiles',
+      workspace: dir,
+      agentSurface: 'design',
+      approvalPolicy: 'auto',
+      abortSignal: new AbortController().signal,
+      awaitApproval: async () => 'allow'
+    })
+    if (discovered.item.kind !== 'tool_result') {
+      throw new Error(`expected tool_result, received ${discovered.item.kind}`)
+    }
+    const discoveredOutput = discovered.item.output as {
+      profiles: Array<{ id: string; name: string; description: string; toolPolicy: string }>
+    }
+    expect(discovered.item).toMatchObject({
+      kind: 'tool_result',
+      isError: false,
+      output: {
+        mode: 'custom-and-profiles',
+        surface: 'design',
+        customAgent: expect.objectContaining({ id: 'custom', argument: 'custom_agent' })
+      }
+    })
+    expect(discoveredOutput.profiles).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'reviewer',
+        name: 'Workspace Reviewer',
+        description: 'Workspace-specific API contract review',
+        toolPolicy: 'inherit'
+      }),
+      expect.objectContaining({
+        id: 'workspace-only',
+        name: 'Workspace Only',
+        toolPolicy: 'readOnly'
+      }),
+      expect.objectContaining({ id: 'design-only' })
+    ]))
+    expect(discoveredOutput.profiles).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'primary' }),
+      expect.objectContaining({ id: 'code-only' })
+    ]))
+    expect(JSON.stringify(discovered.item.output)).not.toContain('Workspace-only role body.')
 
     await expect(runtime.listWorkspaceProfiles(dir)).resolves.toEqual(expect.arrayContaining([
       expect.objectContaining({

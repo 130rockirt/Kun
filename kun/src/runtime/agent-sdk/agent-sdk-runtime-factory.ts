@@ -14,6 +14,7 @@ import { resolveSdkModel, type ToolApprovalDecision } from './sdk-options-builde
 import type { BridgeableTool, KunToolResult } from './sdk-tool-bridge.js'
 import type { SdkApi } from './sdk-protocol.js'
 import type { RuntimeEventRecorder } from '../../services/runtime-event-recorder.js'
+import type { LlmDebugSink } from '../../services/llm-debug-recorder.js'
 import type { TurnService } from '../../services/turn-service.js'
 import type { SessionStore } from '../../ports/session-store.js'
 import type { ThreadStore } from '../../ports/thread-store.js'
@@ -81,6 +82,8 @@ export interface AgentSdkRuntimeFactoryDeps {
   sessionStore: SessionStore
   threadStore: ThreadStore
   events: RuntimeEventRecorder
+  /** Existing Agent Perspective model-request trace sink. */
+  debugSink?: LlmDebugSink
   ids: { next(prefix: string): string }
   prefix: { systemPrompt: string }
   /** serve.providers map; `kind:'agent-sdk'` entries carry the OAuth token in apiKey. */
@@ -883,6 +886,7 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
     kunSystemPrompt: () => deps.prefix.systemPrompt,
     nextId: (prefix) => deps.ids.next(prefix),
     getTurnLimits: () => deps.turnLimits,
+    ...(deps.debugSink ? { debugSink: deps.debugSink } : {}),
     ...(deps.sdkStreamLimits
       ? { getSdkStreamLimits: () => deps.sdkStreamLimits }
       : {}),

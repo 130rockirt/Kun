@@ -86,8 +86,15 @@ provider 原生缓存字段；这些历史数据只能作为旧实现的证据�
 
 ## Subagent 召回与派发
 
-`delegate_task` 把可信的内置、GUI 配置和工作区 `.kun/agents/*.md` 目标统一成
-独立 agent profile 检索集合，不再存在 skill worker。仓库可编辑的
+`delegate_task` 是唯一创建 child run 的入口，`list_subagent_profiles` 是主代理专用的
+只读发现工具。发现结果始终说明如何通过 `custom_agent` 定义一次性角色；开启
+“使用现有代理”时，还会按页返回当前 workspace 和 product surface 的有效 profile。
+关闭该开关时不读取或返回注入目录，`delegate_task` 必须提供 `custom_agent`；开启时
+可以提供 `custom_agent`、按精确 ID 提供 `profile`，或同时省略两者让 Kun 自动路由。
+动态目录只出现在工具结果中，不写入稳定 system prompt 或工具 schema。
+
+可信的内置、GUI 配置和工作区 `.kun/agents/*.md` 目标统一成独立 agent profile
+检索集合，不再存在 skill worker。仓库可编辑的
 `.kun/agents/*.md` 进入自动 BM25/LLM 召回（仅索引 id/name/description，不索引
 body），也可按精确 ID 显式选择，并出现在设置页与工作台右侧子代理面板（带
 「自定义」标签；定义来自 markdown，面板内只读）。未写 `toolPolicy` 时默认只读；显式
@@ -121,21 +128,17 @@ shared 读取，保持升级前的全局可用语义。
 2. 使用 `roles.smallModel`（未配置则父会话/运行时模型）做一次无工具、JSON
    约束的判断。模型只能选择 Top 5 中的 profile，且 confidence 至少为 0.60；
    低于阈值或没有完整匹配时返回生成角色所需的 brief。
-3. 无合适项时由独立 `SubagentGenerator` 从最多 3 个可信内置 agent prompt 中总结
-   设计模式，生成只对本次 child run 生效的完整 profile；它不写入 settings 或
-   workspace，并强制屏蔽 `delegate_task`、`generate_subagent`、`load_skill`。
-4. 判断模型超时、报错、输出非法 JSON 或虚构候选 ID 时，只有任务明确点名
-   Top 1 的 ID/名称才直达该候选；普通词面重叠不足以证明适配，此时与完全无召回
-   一样进入独立生成器；失败路径默认 read-only，只有显式权限选择或一次有效的
-   LLM 判断可以要求 inherit。父 abort 会直接终止派发，不会生成 fallback child。
+3. 没有有效 specialist、判断模型超时/报错/输出非法 JSON 或虚构候选 ID 时，
+   复用配置的 default profile（通常是 `general`），而不是现场生成角色。父 abort
+   会直接终止派发，不会启动 fallback child。
 
 显式 `profile` 是稳定直达路径；选中的 profile 会连同来源和权限在执行前快照，
-不在 recall 与 run 之间重新读取。`custom_agent` 允许主 agent 直接给出一次性角色，
-`generate_subagent` 则显式要求系统自动设计并立即执行临时角色。任何路径都不能扩大
+不在 recall 与 run 之间重新读取。`custom_agent` 允许主 agent 直接给出一次性角色；
+它不写入 settings/workspace，并继承当前 turn 的 model/provider/reasoning 选择。任何路径都不能扩大
 父 turn 的 approval policy、sandbox 根、工具/工具 Provider allowlist、denylist 或 Memory
-边界；有效能力始终是父快照与 profile 约束的交集。独立 workflow agent 和生成 agent
-都禁用 Skills 自动激活。child record 持久化 route method、Top 5、选择理由、置信度、
-生成样例及临时角色快照；router 与 generator 的 usage 分别计入父 thread。
+边界；有效能力始终是父快照与 profile 约束的交集。独立 workflow agent 和一次性
+custom agent 都禁用 Skills 自动激活。child record 持久化 route method、Top 5、
+选择理由、置信度及临时角色快照；router usage 计入父 thread。
 
 下一阶段仍值得推进的缓存能力：
 

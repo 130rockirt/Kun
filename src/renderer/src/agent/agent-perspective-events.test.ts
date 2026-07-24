@@ -248,4 +248,67 @@ describe('Agent Perspective semantic projection', () => {
     expect(parseSemanticRequest(malformed)).toMatchObject({ body: null, prompts: [], tools: [] })
     expect(parseSemanticRequest(malformed).parseError).toBeTruthy()
   })
+
+  it('preserves delegated SDK continuity metadata on projected requests', () => {
+    const delegated = trace('1', {
+      model: 'claude-sonnet-4-5',
+      system: 'Kun system',
+      input: 'Continue the task'
+    }, {
+      transport: 'sdk',
+      endpointFormat: 'agent-sdk',
+      decoded: {
+        text: 'done',
+        reasoning: '',
+        toolCalls: [{
+          callId: 'sdk-call-1',
+          toolName: 'read_file',
+          arguments: { path: 'README.md' }
+        }],
+        toolResults: [{
+          callId: 'sdk-call-1',
+          toolName: 'read_file',
+          output: 'README content',
+          isError: false
+        }]
+      },
+      delegated: {
+        providerKind: 'agent-sdk',
+        phase: 'resumed',
+        contextManagement: 'sdk-managed',
+        nativeHistory: 'unknown',
+        capabilities: {
+          nativeResume: true,
+          structuredStreaming: true,
+          kunTools: true,
+          externalApproval: true,
+          liveSteering: false,
+          nativeContextTelemetry: false,
+          fork: false
+        }
+      }
+    })
+
+    const events = projectAgentPerspectiveEvents([delegated])
+    expect(events[0]).toMatchObject({
+      kind: 'llm_request',
+      record: {
+        transport: 'sdk',
+        delegated: {
+          providerKind: 'agent-sdk',
+          phase: 'resumed',
+          nativeHistory: 'unknown'
+        }
+      }
+    })
+    expect(events[1]).toMatchObject({
+      kind: 'tool_call',
+      callId: 'sdk-call-1',
+      result: {
+        role: 'tool',
+        text: 'README content',
+        kind: 'tool_result'
+      }
+    })
+  })
 })

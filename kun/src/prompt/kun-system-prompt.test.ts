@@ -137,6 +137,29 @@ describe('buildToolPreferenceInstruction', () => {
     expect(instruction).toContain('Do not delegate trivial work')
   })
 
+  it('explains custom, exact-profile, and automatic routes when discovery is available', () => {
+    const instruction = buildToolPreferenceInstruction([
+      { name: 'list_subagent_profiles', description: 'List custom and reusable roles' },
+      { name: 'delegate_task', description: 'Run a standalone child agent' }
+    ])
+
+    expect(instruction).toContain('exact roster knowledge')
+    expect(instruction).toContain('`custom_agent`')
+    expect(instruction).toContain('exact returned `profile` id')
+    expect(instruction).toContain('omit both selectors for automatic routing')
+    expect(instruction).not.toContain('security-auditor')
+  })
+
+  it('keeps read-only profile discovery useful when child execution is not advertised', () => {
+    const instruction = buildToolPreferenceInstruction([
+      { name: 'list_subagent_profiles', description: 'List custom and reusable roles' }
+    ])
+
+    expect(instruction).toContain('while planning')
+    expect(instruction).toContain('does not create a child run')
+    expect(instruction).not.toContain('Issue multiple child calls')
+  })
+
   it('prefers specialized MCP source navigation with available built-in fallback', () => {
     const instruction = buildToolPreferenceInstruction([
       { name: 'grep', description: 'Search file contents' },

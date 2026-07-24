@@ -10,6 +10,7 @@ import {
 } from './agent-sdk-runtime.js'
 import type { SdkApi, SdkCanUseTool, SdkMessage, SdkQueryResult } from './sdk-protocol.js'
 import type { RuntimeEventDraft } from '../../services/runtime-event-recorder.js'
+import { LlmDebugRecorder } from '../../services/llm-debug-recorder.js'
 import type { TurnItem } from '../../contracts/items.js'
 
 function fakeSdk(messages: SdkMessage[], onQuery?: (opts: unknown) => void): SdkApi {
@@ -306,6 +307,72 @@ describe('AgentSdkRuntime.runTurn', () => {
     expect(persistedKinds).toContain('assistant_text')
   })
 
+  test('publishes a sanitized Claude SDK trace to Agent Perspective', async () => {
+    const debugSink = new LlmDebugRecorder()
+    const { deps } = makeDeps({
+      debugSink,
+      loadTurnContext: async () => ({
+        workspace: '/ws',
+        userText: 'inspect this turn',
+        approvalPolicy: 'auto',
+        oauthToken: 'claude-oauth-secret',
+        images: [{ mediaType: 'image/png', base64: 'private-image-bytes' }],
+        bridgeableTools: [{
+          name: 'generate_image',
+          description: 'Generate an image',
+          inputSchema: { type: 'object' }
+        }]
+      }),
+      loadSdk: async () => fakeSdk(STREAM)
+    })
+
+    await expect(new AgentSdkRuntime(deps).runTurn(
+      'th',
+      'tn',
+      new AbortController().signal
+    )).resolves.toBe('completed')
+
+    const trace = debugSink.snapshot()[0]?.exchanges[0]
+    expect(trace).toMatchObject({
+      transport: 'sdk',
+      endpointFormat: 'agent-sdk',
+      status: 'completed',
+      delegated: {
+        providerKind: 'agent-sdk',
+        phase: 'rebased',
+        contextManagement: 'sdk-managed',
+        nativeHistory: 'none'
+      },
+      request: {
+        method: 'SDK',
+        url: 'agent-sdk://local/query'
+      },
+      decoded: {
+        text: 'Hi there',
+        toolCalls: [{
+          callId: 'toolu_1',
+          toolName: 'mcp__kun__generate_image'
+        }],
+        toolResults: [{
+          callId: 'toolu_1',
+          toolName: 'mcp__kun__generate_image',
+          output: 'done',
+          isError: false
+        }]
+      }
+    })
+    const serialized = JSON.stringify(trace)
+    expect(serialized).not.toContain('claude-oauth-secret')
+    expect(serialized).not.toContain('private-image-bytes')
+    expect(serialized).not.toContain('sess_42')
+    expect(JSON.parse(trace!.request.body.text)).toMatchObject({
+      attachments: {
+        count: 1,
+        images: [{ mediaType: 'image/png' }]
+      }
+    })
+  })
+
   test('uses official resume without replaying portable history', async () => {
     const queries: Array<{ prompt: unknown; options?: unknown }> = []
     const { deps } = makeDeps({
@@ -371,6 +438,66 @@ describe('AgentSdkRuntime.runTurn', () => {
       }
       return successfulQuery(input)
     }
+    const debugSink = new LlmDebugRecorder()
+    const { deps } = makeDeps({
+      loadTurnContext: async () => ({
+        workspace: '/ws',
+        userText: 'current request',
+        approvalPolicy: 'auto',
+        bridgeableTools: [],
+        resumeSessionId: 'session_missing',
+        historyTranscript: '[user] portable recovery state'
+      }),
+      loadSdk: async () => sdk,
+      rejectResume,
+      debugSink
+    })
+
+    await expect(new AgentSdkRuntime(deps).runTurn(
+      'th',
+      'tn',
+      new AbortController().signal
+    )).resolves.toBe('completed')
+
+    expect(rejectResume).toHaveBeenCalledWith('th', 'tn')
+    const actualQueries = queries.filter((entry, index) => index === 0 || index === queries.length - 1)
+    expect(actualQueries[0]?.options).toMatchObject({ resume: 'session_missing' })
+    expect(actualQueries.at(-1)?.options).not.toHaveProperty('resume')
+    expect(String(actualQueries.at(-1)?.prompt)).toContain('portable recovery state')
+    const traces = debugSink.snapshot()
+      .flatMap((round) => round.exchanges)
+      .sort((left, right) => left.sequence - right.sequence)
+    expect(traces).toHaveLength(2)
+    expect(traces[0]).toMatchObject({
+      status: 'transport_error',
+      delegated: {
+        providerKind: 'agent-sdk',
+        phase: 'resumed',
+        nativeHistory: 'unknown'
+      }
+    })
+    expect(traces[1]).toMatchObject({
+      status: 'completed',
+      delegated: {
+        providerKind: 'agent-sdk',
+        phase: 'rebased',
+        reason: 'native_state_unavailable',
+        nativeHistory: 'none'
+      }
+    })
+    expect(JSON.stringify(traces)).not.toContain('session_missing')
+  })
+
+  test('rebases when the official resume query throws synchronously', async () => {
+    let queryCount = 0
+    const sdk = fakeSdk(STREAM)
+    const query = sdk.query
+    sdk.query = (input): SdkQueryResult => {
+      queryCount += 1
+      if (queryCount === 1) throw new Error('native session unavailable')
+      return query(input)
+    }
+    const rejectResume = vi.fn()
     const { deps } = makeDeps({
       loadTurnContext: async () => ({
         workspace: '/ws',
@@ -389,12 +516,8 @@ describe('AgentSdkRuntime.runTurn', () => {
       'tn',
       new AbortController().signal
     )).resolves.toBe('completed')
-
+    expect(queryCount).toBe(2)
     expect(rejectResume).toHaveBeenCalledWith('th', 'tn')
-    const actualQueries = queries.filter((entry, index) => index === 0 || index === queries.length - 1)
-    expect(actualQueries[0]?.options).toMatchObject({ resume: 'session_missing' })
-    expect(actualQueries.at(-1)?.options).not.toHaveProperty('resume')
-    expect(String(actualQueries.at(-1)?.prompt)).toContain('portable recovery state')
   })
 
   test('coalesces token-granular SDK deltas before durable recording', async () => {
@@ -1045,7 +1168,9 @@ describe('AgentSdkRuntime.runTurn', () => {
   })
 
   test('maps SDK error_max_turns onto the native turn_step_limit code', async () => {
+    const debugSink = new LlmDebugRecorder()
     const { deps, events, finished } = makeDeps({
+      debugSink,
       getTurnLimits: () => ({ maxSteps: 3 }),
       loadSdk: async () => fakeSdk([{
         type: 'result', subtype: 'error_max_turns', is_error: true, num_turns: 3
@@ -1059,6 +1184,13 @@ describe('AgentSdkRuntime.runTurn', () => {
       kind: 'error', code: 'turn_step_limit', severity: 'warning'
     }))
     expect(finished.at(-1)?.error).toBe('turn exceeded 3 model steps')
+    expect(debugSink.snapshot()[0]?.exchanges[0]).toMatchObject({
+      status: 'completed',
+      decoded: {
+        error: 'error_max_turns',
+        stopReason: 'error'
+      }
+    })
   })
 
   test('fails closed when SDK usage reports more turns than the supplied maxTurns', async () => {

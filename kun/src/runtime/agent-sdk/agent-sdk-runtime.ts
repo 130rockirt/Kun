@@ -13,7 +13,15 @@ import { existsSync, realpathSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { RuntimeEventDraft } from '../../services/runtime-event-recorder.js'
 import type { TurnItem } from '../../contracts/items.js'
+import type {
+  ModelRequestTraceDelegated,
+  ModelRequestTraceRecord
+} from '../../contracts/model-request-trace.js'
 import type { ApprovalPolicy, SandboxMode } from '../../contracts/policy.js'
+import type {
+  LlmDebugRound,
+  LlmDebugSink
+} from '../../services/llm-debug-recorder.js'
 import { makeAssistantReasoningItem, makeAssistantTextItem } from '../../domain/item.js'
 import { normalizeTurnLimits, type TurnLimitsConfig } from '../../loop/turn-limits.js'
 import { utf8PrefixWithinBytes } from '../../shared/utf8-text-blocks.js'
@@ -166,6 +174,8 @@ export interface SdkRuntimeDeps {
   getTurnLimits?(): TurnLimitsConfig | undefined
   /** Optional SDK stream-budget overrides (primarily a focused-test seam). */
   getSdkStreamLimits?(): Partial<SdkStreamResourceLimits> | undefined
+  /** Existing Agent Perspective trace sink; observability must never affect execution. */
+  debugSink?: LlmDebugSink
   /** Optional explicit path to the bundled Claude Code binary (packaging). */
   pathToClaudeCodeExecutable?: string
   /** Serialize native ownership for one Kun thread. */
@@ -411,6 +421,7 @@ export class AgentSdkRuntime {
         this.deps.executeKunTool(threadId, turnId, name, args, abort.signal)
       )
       let resumeSessionId = ctx.resumeSessionId
+      let activeRebaseReason = ctx.sessionPreparation?.rebaseReason
       const buildOptions = (maxTurns?: number) => assembleSdkOptions({
           cwd: ctx.workspace,
           kunSystemPrompt: this.deps.kunSystemPrompt(),
@@ -527,14 +538,39 @@ export class AgentSdkRuntime {
           : attemptText
         const options = buildOptions(remainingTurns)
         mapper.beginQuery()
-        const stream = sdk.query({ prompt, options })
-        activeStream = stream
-        activeStreamInterrupted = false
         let attemptFinalSeen = false
         let attemptMessageSeen = false
         let attemptTurns = 0
-        const iterator = stream[Symbol.asyncIterator]()
+        let trace = startAgentSdkTrace(this.deps.debugSink, {
+          threadId,
+          turnId,
+          provider: ctx.sessionPreparation?.route.providerId ?? 'default',
+          model: ctx.model ?? 'claude-default',
+          prompt: attemptText,
+          systemPrompt: this.deps.kunSystemPrompt(),
+          threadPersona: ctx.threadPersona,
+          contextInstructions: ctx.contextInstructions ?? [],
+          tools: ctx.bridgeableTools,
+          images: (ctx.images ?? []).map((image) => ({ mediaType: image.mediaType })),
+          approvalPolicy: ctx.approvalPolicy,
+          sandboxMode: ctx.sandboxMode,
+          oauthToken: ctx.oauthToken,
+          delegated: {
+            providerKind: 'agent-sdk',
+            phase: resumeSessionId ? 'resumed' : 'rebased',
+            ...(!resumeSessionId && activeRebaseReason
+              ? { reason: activeRebaseReason }
+              : {}),
+            contextManagement: 'sdk-managed',
+            nativeHistory: resumeSessionId ? 'unknown' : 'none',
+            capabilities
+          }
+        })
         try {
+          const stream = sdk.query({ prompt, options })
+          activeStream = stream
+          activeStreamInterrupted = false
+          const iterator = stream[Symbol.asyncIterator]()
           for (;;) {
             const next = await awaitAbortable(() => iterator.next(), abort.signal)
             if (next.done) break
@@ -549,6 +585,7 @@ export class AgentSdkRuntime {
               attemptTurns = sdkResultTurnCount(message)
             }
             for (const draft of mapper.map(message)) {
+              captureAgentSdkTraceDraft(trace, draft)
               const delta = assistantDeltaOf(draft)
               if (delta) {
                 await deltaEvents.append(delta)
@@ -578,9 +615,38 @@ export class AgentSdkRuntime {
               break
             }
           }
+          if (!attemptFinalSeen && !signal.aborted && !abort.signal.aborted) {
+            const protocolError = new AgentSdkProtocolError(
+              'agent SDK stream ended without a terminal result'
+            )
+            await finishAgentSdkTrace(trace, { kind: 'error', error: protocolError })
+            trace = undefined
+            throw protocolError
+          }
+          const attemptFinal = mapper.getFinal()
+          if (attemptFinalSeen && attemptFinal?.status === 'failed') {
+            await finishAgentSdkTrace(trace, {
+              kind: 'failed',
+              error: new Error(attemptFinal.message ?? 'agent SDK query failed')
+            })
+          } else if (signal.aborted || abort.signal.aborted) {
+            await finishAgentSdkTrace(trace, {
+              kind: 'error',
+              error: abortError(abort.signal)
+            })
+          } else {
+            await finishAgentSdkTrace(trace, { kind: 'completed' })
+          }
+          trace = undefined
         } catch (error) {
+          await finishAgentSdkTrace(trace, {
+            kind: 'error',
+            error: new Error(sanitizeAgentSdkError(error, ctx.oauthToken))
+          })
+          trace = undefined
           if (resumeSessionId && !attemptMessageSeen && !abort.signal.aborted) {
             resumeSessionId = undefined
+            activeRebaseReason = 'native_state_unavailable'
             activeStream = undefined
             await this.deps.rejectResume?.(threadId, turnId)
             await this.deps.recordEvent({
@@ -601,9 +667,6 @@ export class AgentSdkRuntime {
         }
         if (timedOut) interruptActiveStream()
         activeStream = undefined
-        if (!attemptFinalSeen && !signal.aborted && !abort.signal.aborted) {
-          throw new AgentSdkProtocolError('agent SDK stream ended without a terminal result')
-        }
         // Starting a query consumes at least one native model step even if a
         // malformed/aborted SDK stream omits its terminal result message.
         sdkTurnsUsed += attemptFinalSeen ? Math.max(1, attemptTurns) : 1
@@ -707,6 +770,214 @@ export class AgentSdkRuntime {
       signal.removeEventListener('abort', onAbort)
     }
   }
+}
+
+type AgentSdkTrace = {
+  sink: LlmDebugSink
+  round: LlmDebugRound
+  record: ModelRequestTraceRecord
+  currentText: string
+  currentReasoning: string
+}
+
+function startAgentSdkTrace(
+  sink: LlmDebugSink | undefined,
+  input: {
+    threadId: string
+    turnId: string
+    provider: string
+    model: string
+    prompt: string
+    systemPrompt: string
+    threadPersona?: string
+    contextInstructions: readonly string[]
+    tools: readonly BridgeableTool[]
+    images: ReadonlyArray<{ mediaType: string }>
+    approvalPolicy: ApprovalPolicy
+    sandboxMode?: SandboxMode
+    oauthToken?: string
+    delegated: ModelRequestTraceDelegated
+  }
+): AgentSdkTrace | undefined {
+  if (!sink?.beginSdkInvocation) return undefined
+  let round: LlmDebugRound | undefined
+  try {
+    round = sink.start({
+      threadId: input.threadId,
+      turnId: input.turnId,
+      provider: input.provider,
+      model: input.model
+    })
+    const record = sink.beginSdkInvocation(round, {
+      endpointFormat: 'agent-sdk',
+      target: 'agent-sdk://local/query',
+      bodyText: JSON.stringify({
+        model: input.model,
+        system: [input.systemPrompt, input.threadPersona ?? ''].filter(Boolean).join('\n'),
+        instructions: input.contextInstructions,
+        input: input.prompt,
+        tools: input.tools.map((tool) => ({
+          name: tool.name,
+          description: tool.description,
+          input_schema: tool.inputSchema
+        })),
+        attachments: {
+          count: input.images.length,
+          images: input.images
+        },
+        approvalPolicy: input.approvalPolicy,
+        ...(input.sandboxMode ? { sandboxMode: input.sandboxMode } : {})
+      }),
+      ...(input.oauthToken ? { secretValues: [input.oauthToken] } : {}),
+      delegated: input.delegated
+    })
+    return {
+      sink,
+      round,
+      record,
+      currentText: '',
+      currentReasoning: ''
+    }
+  } catch {
+    if (round) void sink.finish(round).catch(() => undefined)
+    warnAgentSdkTraceFailure()
+    return undefined
+  }
+}
+
+function captureAgentSdkTraceDraft(
+  trace: AgentSdkTrace | undefined,
+  draft: RuntimeEventDraft
+): void {
+  if (!trace) return
+  try {
+    const item = itemOf(draft)
+    if (draft.kind === 'assistant_text_delta' && item?.kind === 'assistant_text') {
+      trace.currentText += item.text
+      trace.sink.captureChunk(trace.round, {
+        kind: 'assistant_text_delta',
+        text: item.text
+      })
+      return
+    }
+    if (
+      draft.kind === 'assistant_reasoning_delta' &&
+      item?.kind === 'assistant_reasoning'
+    ) {
+      trace.currentReasoning += item.text
+      trace.sink.captureChunk(trace.round, {
+        kind: 'assistant_reasoning_delta',
+        text: item.text
+      })
+      return
+    }
+    if (draft.kind === 'item_created' && item?.kind === 'assistant_text') {
+      const missing = item.text.startsWith(trace.currentText)
+        ? item.text.slice(trace.currentText.length)
+        : trace.currentText === item.text
+          ? ''
+          : item.text
+      if (missing) {
+        trace.sink.captureChunk(trace.round, {
+          kind: 'assistant_text_delta',
+          text: missing
+        })
+      }
+      trace.currentText = ''
+      return
+    }
+    if (draft.kind === 'item_created' && item?.kind === 'assistant_reasoning') {
+      const missing = item.text.startsWith(trace.currentReasoning)
+        ? item.text.slice(trace.currentReasoning.length)
+        : trace.currentReasoning === item.text
+          ? ''
+          : item.text
+      if (missing) {
+        trace.sink.captureChunk(trace.round, {
+          kind: 'assistant_reasoning_delta',
+          text: missing
+        })
+      }
+      trace.currentReasoning = ''
+      return
+    }
+    if (draft.kind === 'item_created' && item?.kind === 'tool_call') {
+      trace.sink.captureChunk(trace.round, {
+        kind: 'tool_call_complete',
+        callId: item.callId,
+        toolName: item.toolName,
+        arguments: item.arguments
+      })
+      return
+    }
+    if (draft.kind === 'tool_call_finished' && item?.kind === 'tool_result') {
+      trace.sink.captureToolResult?.(trace.round, {
+        callId: item.callId,
+        toolName: item.toolName,
+        output: traceOutputText(item.output),
+        isError: item.isError
+      })
+      return
+    }
+    if (draft.kind === 'usage') {
+      trace.sink.captureChunk(trace.round, {
+        kind: 'usage',
+        usage: draft.usage
+      })
+    }
+  } catch {
+    warnAgentSdkTraceFailure()
+  }
+}
+
+function traceOutputText(value: unknown): string {
+  if (typeof value === 'string') return value
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return String(value)
+  }
+}
+
+async function finishAgentSdkTrace(
+  trace: AgentSdkTrace | undefined,
+  result:
+    | { kind: 'completed' }
+    | { kind: 'failed'; error: unknown }
+    | { kind: 'error'; error: unknown }
+): Promise<void> {
+  if (!trace) return
+  try {
+    if (result.kind === 'completed') {
+      trace.sink.captureChunk(trace.round, { kind: 'completed', stopReason: 'stop' })
+    } else {
+      trace.sink.captureChunk(trace.round, {
+        kind: 'error',
+        message: result.error instanceof Error ? result.error.message : String(result.error)
+      })
+      if (result.kind === 'error') {
+        trace.sink.captureTransportError(trace.record, result.error)
+      } else {
+        trace.sink.captureChunk(trace.round, {
+          kind: 'completed',
+          stopReason: 'error'
+        })
+      }
+    }
+    await trace.sink.finish(trace.round)
+  } catch {
+    warnAgentSdkTraceFailure()
+  }
+}
+
+let agentSdkTraceFailureWarned = false
+
+function warnAgentSdkTraceFailure(): void {
+  if (agentSdkTraceFailureWarned) return
+  agentSdkTraceFailureWarned = true
+  console.warn(
+    '[kun:agent-sdk] model request observability capture failed; the SDK turn continues unchanged'
+  )
 }
 
 function estimatedTokens(text: string): number {

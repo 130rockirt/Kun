@@ -50,6 +50,12 @@ function record(id = 'trace-1') {
       text: 'hello',
       reasoning: '',
       toolCalls: [],
+      toolResults: [{
+        callId: 'call-1',
+        toolName: 'read_file',
+        output: 'done',
+        isError: false
+      }],
       usage: { inputTokens: 12 }
     }
   }
@@ -83,7 +89,10 @@ describe('model request trace renderer contract', () => {
         }
       },
       response: { status: 200 },
-      decoded: { text: 'hello' }
+      decoded: {
+        text: 'hello',
+        toolResults: [{ callId: 'call-1', output: 'done' }]
+      }
     })
     expect(parsed.records[0]?.response?.body?.text).toContain('data:')
   })
@@ -135,7 +144,23 @@ describe('model request trace renderer contract', () => {
         url: 'cursor-sdk://local/agent',
         headers: { values: {}, redactedNames: [] }
       },
-      response: undefined
+      response: undefined,
+      delegated: {
+        providerKind: 'agent-sdk',
+        phase: 'rebased',
+        reason: 'native_state_unavailable',
+        contextManagement: 'sdk-managed',
+        nativeHistory: 'none',
+        capabilities: {
+          nativeResume: true,
+          structuredStreaming: true,
+          kunTools: true,
+          externalApproval: true,
+          liveSteering: false,
+          nativeContextTelemetry: false,
+          fork: false
+        }
+      }
     }]))
 
     expect(parsed.records[0]).toMatchObject({
@@ -144,9 +169,28 @@ describe('model request trace renderer contract', () => {
       request: {
         method: 'SDK',
         url: 'cursor-sdk://local/agent'
+      },
+      delegated: {
+        providerKind: 'agent-sdk',
+        phase: 'rebased',
+        reason: 'native_state_unavailable',
+        nativeHistory: 'none'
       }
     })
     expect(parsed.records[0].response).toBeUndefined()
+  })
+
+  it('rejects malformed delegated capabilities instead of guessing support', () => {
+    expect(() => parseModelRequestTracePage(page([{
+      ...record(),
+      delegated: {
+        providerKind: 'cursor-sdk',
+        phase: 'resumed',
+        contextManagement: 'sdk-managed',
+        nativeHistory: 'unknown',
+        capabilities: { nativeResume: true }
+      }
+    }]))).toThrow('capabilities.structuredStreaming')
   })
 
   it('rejects malformed JSON and unbounded header values', () => {
