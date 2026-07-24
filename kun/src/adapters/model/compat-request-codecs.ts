@@ -3,9 +3,12 @@ import type { ModelEndpointFormat } from '../../contracts/model-endpoint-format.
 import type { ModelRequest, ModelToolSpec } from '../../ports/model-client.js'
 import { isDeepSeekHost } from './model-error-probe.js'
 
+export const COMPAT_HISTORY_CONTEXT = Symbol('compat-history-context')
+
 export type CompatChatMessage = {
   role: 'system' | 'user' | 'assistant' | 'tool'
   content: string | CompatChatMessageContentPart[] | null
+  [COMPAT_HISTORY_CONTEXT]?: true
   name?: string
   tool_call_id?: string
   reasoning_content?: string
@@ -124,18 +127,31 @@ export class CompatRequestCodecs {
   }
 
   private responses(input: CompatRequestCodecInput): Record<string, unknown> {
-    const system = input.isCodex ? input.messages.filter((message) => message.role === 'system') : []
+    const system = input.isCodex
+      ? input.messages.filter(
+          (message) => message.role === 'system' && message[COMPAT_HISTORY_CONTEXT] !== true
+        )
+      : []
     const nonSystem = input.isCodex
-      ? input.messages.filter((message) => message.role !== 'system')
+      ? input.messages.filter(
+          (message) => message.role !== 'system' || message[COMPAT_HISTORY_CONTEXT] === true
+        )
       : input.messages
-    const instructions = system
+    let instructions = system
       .map((message) => this.deps.plainText(message.content).trim())
       .filter(Boolean)
       .join('\n\n')
     const responseTools = input.tools.map((tool) => ({
       type: 'function', name: tool.name, description: tool.description, parameters: tool.inputSchema
     }))
-    const responseInput = this.deps.responsesInput(this.deps.splitOpenAiMessages(nonSystem))
+    let responseInput = this.deps.responsesInput(this.deps.splitOpenAiMessages(nonSystem))
+    if (input.isCodex && !input.isCodexLite && responseInput.length === 0 && instructions) {
+      // The Responses endpoint requires input even when the request has only
+      // system context. Move (rather than duplicate) that context into a
+      // supported system-role input item so the wire request remains valid.
+      responseInput = [{ role: 'system', content: instructions }]
+      instructions = ''
+    }
     const litePrefix: Array<Record<string, unknown>> = input.isCodexLite
       ? [
           { type: 'additional_tools', role: 'developer', tools: responseTools },

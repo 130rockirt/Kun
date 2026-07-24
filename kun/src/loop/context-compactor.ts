@@ -185,6 +185,21 @@ export class ContextCompactor {
     const tailStart = keepRecent === 0
       ? history.length
       : repairTailStartForToolResults(history, history.length - keepRecent)
+    if (tailStart === 0) {
+      return {
+        next: [...frozen, ...history],
+        summaryItem: makeCompactionItem({
+          id: `compaction_${input.turnId}_noop`,
+          turnId: input.turnId,
+          threadId: input.threadId,
+          summary: 'compaction skipped to preserve a complete tool interaction',
+          replacedTokens: 0,
+          pinnedConstraints: input.prefix.pinnedConstraints,
+          auto: input.auto
+        }),
+        replacedTokens: 0
+      }
+    }
     const head = history.slice(0, tailStart)
     const tail = history.slice(tailStart)
     // Re-summarizing only the previous summary cannot reclaim any conversation
@@ -267,21 +282,70 @@ export function trimTrailingToolCalls(history: TurnItem[]): TurnItem[] {
 }
 
 function repairTailStartForToolResults(history: TurnItem[], start: number): number {
-  const tailStart = Math.max(0, Math.min(history.length, start))
-  const tail = history.slice(tailStart)
-  if (!hasOrphanToolResult(tail)) return tailStart
-  for (let index = tailStart - 1; index >= 0; index -= 1) {
-    if (history[index].kind === 'user_message') return index > 0 ? index : tailStart
+  let tailStart = Math.max(0, Math.min(history.length, start))
+  while (tailStart > 0) {
+    const orphanCallIds = orphanToolResultCallIds(history.slice(tailStart))
+    if (orphanCallIds.length === 0) return tailStart
+
+    const latestUserStart = findLatestUserMessageBefore(history, tailStart)
+    if (latestUserStart > 0) return latestUserStart
+
+    let expandedStart = tailStart
+    for (const callId of orphanCallIds) {
+      const callIndex = findMatchingToolCallBefore(history, callId, tailStart)
+      if (callIndex < 0) {
+        // The persisted history is already malformed. Leave it unchanged
+        // instead of committing a compaction that would strand a result
+        // behind the summary and silently drop it during model-history repair.
+        return 0
+      }
+      expandedStart = Math.min(expandedStart, toolCallBatchStart(history, callIndex))
+    }
+    if (expandedStart >= tailStart) return 0
+    tailStart = expandedStart
   }
   return tailStart
 }
 
-function hasOrphanToolResult(items: TurnItem[]): boolean {
+function findLatestUserMessageBefore(history: TurnItem[], before: number): number {
+  for (let index = Math.min(before, history.length) - 1; index >= 0; index -= 1) {
+    if (history[index].kind === 'user_message') return index
+  }
+  return -1
+}
+
+function orphanToolResultCallIds(items: TurnItem[]): string[] {
   const callIds = new Set<string>()
   for (const item of items) {
     if (item.kind === 'tool_call') callIds.add(item.callId)
   }
-  return items.some((item) => item.kind === 'tool_result' && !callIds.has(item.callId))
+  return [...new Set(
+    items
+      .filter((item): item is Extract<TurnItem, { kind: 'tool_result' }> => item.kind === 'tool_result')
+      .filter((item) => !callIds.has(item.callId))
+      .map((item) => item.callId)
+  )]
+}
+
+function findMatchingToolCallBefore(history: TurnItem[], callId: string, before: number): number {
+  for (let index = Math.min(before, history.length) - 1; index >= 0; index -= 1) {
+    const item = history[index]
+    if (item.kind === 'tool_call' && item.callId === callId) return index
+  }
+  return -1
+}
+
+function toolCallBatchStart(history: TurnItem[], callIndex: number): number {
+  const turnId = history[callIndex]?.turnId
+  let start = callIndex
+  while (
+    start > 0 &&
+    history[start - 1]?.kind === 'tool_call' &&
+    history[start - 1]?.turnId === turnId
+  ) {
+    start -= 1
+  }
+  return start
 }
 
 function aggressiveCompactionThreshold(thresholds: ModelContextThresholds): number {

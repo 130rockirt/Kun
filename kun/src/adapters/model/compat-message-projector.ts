@@ -3,7 +3,11 @@ import type { ModelRequest } from '../../ports/model-client.js'
 import { isToolResultBridgeItem, repairModelHistoryItems } from '../../domain/model-history-repair.js'
 import { extractToolResultImages, toolResultTextWithoutImages } from '../../loop/tool-result-image.js'
 import { wrapUntrustedContent } from '../../security/untrusted-content.js'
-import type { CompatChatMessage, CompatChatMessageContentPart } from './compat-request-codecs.js'
+import {
+  COMPAT_HISTORY_CONTEXT,
+  type CompatChatMessage,
+  type CompatChatMessageContentPart
+} from './compat-request-codecs.js'
 import { userMessageTextWithComposerContexts } from '../../domain/composer-context.js'
 
 export type CompatMessageProjectionOptions = {
@@ -233,7 +237,11 @@ class CompatMessageProjector {
         return this.toolResultToMessage(item, supportsImages)
       case 'compaction':
         return item.replacedTokens > 0
-          ? { role: 'system', content: `Conversation summary from earlier turns:\n${item.summary}` }
+          ? {
+              role: 'system',
+              content: `Conversation summary from earlier turns:\n${item.summary}`,
+              [COMPAT_HISTORY_CONTEXT]: true
+            }
           : null
       case 'review':
         return item.status === 'completed' && item.reviewText?.trim()
