@@ -1048,6 +1048,13 @@ export function buildThreadEventSink(
     onContextSnapshot: (snapshot) => {
       if (!isCurrentStream()) return
       set((state) => reduce(state, { type: 'context_snapshot_received', payload: snapshot }))
+    },
+    onDelegatedRuntimeState: (runtimeState) => {
+      if (!isCurrentStream()) return
+      set((state) => reduce(state, {
+        type: 'delegated_runtime_received',
+        payload: runtimeState
+      }))
     }
   }
 }

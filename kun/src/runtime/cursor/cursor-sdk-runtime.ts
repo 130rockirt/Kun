@@ -1,5 +1,6 @@
 import type {
   AgentOptions,
+  LocalAgentStore,
   Run,
   RunResult,
   SDKAgent,
@@ -32,7 +33,17 @@ import {
   composeSdkPromptText,
   DEFAULT_SDK_HISTORY_TRANSCRIPT_MAX_BYTES
 } from '../agent-sdk/sdk-context-assembler.js'
-import type { DelegatedTurnRuntime } from '../delegated-turn-runtime.js'
+import type {
+  DelegatedRuntimeCapabilities,
+  DelegatedTurnRuntime
+} from '../delegated-turn-runtime.js'
+import {
+  delegatedCapabilityFingerprint,
+  delegatedCredentialIdentity,
+  priorItemsForDelegatedTurn,
+  type DelegatedSessionCoordinator,
+  type DelegatedSessionPreparation
+} from '../delegated-session-binding.js'
 import {
   CursorSdkEventMapper,
   CursorSdkResourceLimitError,
@@ -46,7 +57,9 @@ const MAX_CURSOR_ERROR_LENGTH = 2_000
 export interface CursorSdkApi {
   Agent: {
     create(options: AgentOptions): Promise<SDKAgent>
+    resume(agentId: string, options?: Partial<AgentOptions>): Promise<SDKAgent>
   }
+  JsonlLocalAgentStore?: new (rootDir: string) => LocalAgentStore
 }
 
 export interface CursorSdkRuntimeDeps {
@@ -68,6 +81,12 @@ export interface CursorSdkRuntimeDeps {
   loadSdk?: () => Promise<CursorSdkApi>
   /** Delegated read-only children must deny mutation regardless of parent defaults. */
   enforceReadOnly?: boolean
+  sessionCoordinator?: DelegatedSessionCoordinator
+  contextProfile?: (model: string) => {
+    contextWindowTokens: number
+    softThresholdTokens: number
+    hardThresholdTokens: number
+  }
 }
 
 class CursorTurnInterruptedError extends Error {
@@ -216,7 +235,24 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
     return !providerId || !this.deps.providerConfigs[providerId]
   }
 
+  capabilities(providerId: string | undefined): DelegatedRuntimeCapabilities | undefined {
+    if (!this.handlesProvider(providerId)) return undefined
+    return cursorSdkCapabilities()
+  }
+
   async runTurn(
+    threadId: string,
+    turnId: string,
+    signal: AbortSignal,
+    providerId?: string
+  ): Promise<'completed' | 'failed' | 'aborted'> {
+    const execute = () => this.runTurnOwned(threadId, turnId, signal, providerId)
+    return this.deps.sessionCoordinator
+      ? this.deps.sessionCoordinator.runExclusive(threadId, execute)
+      : execute()
+  }
+
+  private async runTurnOwned(
     threadId: string,
     turnId: string,
     signal: AbortSignal,
@@ -270,20 +306,17 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
       return 'aborted'
     }
 
-    const prompt = composeSdkPromptText({
-      historyTranscript: buildHistoryTranscript(
-        items,
-        turnId,
-        DEFAULT_SDK_HISTORY_TRANSCRIPT_MAX_BYTES
-      ),
-      userText: userMessageTextWithComposerContexts(userItem),
-      instructionBlocks: [
-        this.deps.systemPrompt?.trim(),
-        thread.systemPrompt?.trim()
-      ].filter((value, index, all): value is string =>
-        Boolean(value) && all.indexOf(value) === index
-      )
-    })
+    const historyTranscript = buildHistoryTranscript(
+      items,
+      turnId,
+      DEFAULT_SDK_HISTORY_TRANSCRIPT_MAX_BYTES
+    )
+    const instructionBlocks = [
+      this.deps.systemPrompt?.trim(),
+      thread.systemPrompt?.trim()
+    ].filter((value, index, all): value is string =>
+      Boolean(value) && all.indexOf(value) === index
+    )
     const model = normalizeCursorModel(turn.model || thread.model || this.deps.defaultModel)
     const attachmentIds = userItem.attachmentIds ?? []
     const resolvedImages = await resolveCursorSdkImages({
@@ -292,11 +325,9 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
       threadId,
       workspace: thread.workspace
     })
-    const sdkMessage: string | SDKUserMessage = resolvedImages.images.length > 0
-      ? { text: prompt, images: resolvedImages.images }
-      : prompt
     const planMode = this.deps.enforceReadOnly === true || (turn.mode ?? thread.mode) === 'plan'
-    const options = cursorAgentExecutionOptions({
+    let capabilities = cursorSdkCapabilities()
+    let options = cursorAgentExecutionOptions({
       workspace: thread.workspace,
       apiKey,
       model,
@@ -306,6 +337,79 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
       sandboxMode: thread.sandboxMode,
       enforceReadOnly: this.deps.enforceReadOnly
     })
+    let preparation: DelegatedSessionPreparation | undefined
+    if (this.deps.sessionCoordinator) {
+      preparation = await this.deps.sessionCoordinator.prepare({
+        threadId,
+        route: {
+          providerKind: 'cursor-sdk',
+          providerId: resolvedProviderId,
+          credentialIdentity: delegatedCredentialIdentity({
+            providerId: resolvedProviderId,
+            accountId: turn.accountId || thread.accountId,
+            credentialSourceId: provider?.credentialSourceId,
+            credentialSecret: apiKey
+          }),
+          workspace: thread.workspace,
+          model,
+          capabilityFingerprint: delegatedCapabilityFingerprint({
+            systemPrompt: this.deps.systemPrompt?.trim() || '',
+            threadPersona: thread.systemPrompt?.trim() || '',
+            mode: options.mode,
+            sandbox: options.local?.sandboxOptions?.enabled !== false,
+            settingSources: options.local?.settingSources ?? [],
+            capabilities
+          }),
+          continuationMode: 'native'
+        },
+        priorItems: priorItemsForDelegatedTurn(items, turnId)
+      })
+    }
+    const buildPrompt = (includeHistory: boolean): string => composeSdkPromptText({
+      ...(includeHistory && historyTranscript ? { historyTranscript } : {}),
+      userText: userMessageTextWithComposerContexts(userItem),
+      instructionBlocks
+    })
+    let prompt = buildPrompt(!preparation?.resumed)
+    let sdkMessage: string | SDKUserMessage = resolvedImages.images.length > 0
+      ? { text: prompt, images: resolvedImages.images }
+      : prompt
+    await this.deps.events.record({
+      kind: 'delegated_runtime',
+      threadId,
+      turnId,
+      providerKind: 'cursor-sdk',
+      providerId: resolvedProviderId,
+      phase: preparation?.resumed ? 'resumed' : 'rebased',
+      ...(preparation?.rebaseReason ? { reason: preparation.rebaseReason } : {}),
+      capabilities
+    })
+    const contextProfile = this.deps.contextProfile?.(model)
+    const recordContextSnapshot = async (resumed: boolean): Promise<void> => {
+      if (!contextProfile) return
+      const system = estimateDelegatedTokens(instructionBlocks.join('\n'))
+      const messages = estimateDelegatedTokens([
+        resumed ? '' : historyTranscript,
+        userMessageTextWithComposerContexts(userItem)
+      ].join('\n'))
+      const other = resolvedImages.images.length * 1_024
+      await this.deps.events.record({
+        kind: 'context_snapshot',
+        threadId,
+        turnId,
+        model,
+        providerId: resolvedProviderId,
+        stepIndex: 0,
+        ...contextProfile,
+        estimatedInputTokens: system + messages + other,
+        breakdown: { tools: 0, system, skills: 0, messages, other },
+        toolCount: 0,
+        activeSkillIds: [],
+        contextManagement: 'sdk-managed',
+        nativeHistory: resumed ? 'unknown' : 'none'
+      })
+    }
+    await recordContextSnapshot(preparation?.resumed === true)
     const limits = normalizeTurnLimits(this.deps.turnLimits)
     const mapper = new CursorSdkEventMapper({
       threadId,
@@ -315,16 +419,7 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
       nextId: (prefix) => this.deps.ids.next(prefix),
       limits: this.deps.streamLimits
     })
-    let trace = startCursorTrace(this.deps.debugSink, {
-      threadId,
-      turnId,
-      provider: resolvedProviderId,
-      model,
-      prompt,
-      images: resolvedImages.summaries,
-      mode: options.mode ?? 'plan',
-      sandboxEnabled: options.local?.sandboxOptions?.enabled !== false
-    })
+    let trace: CursorTrace | undefined
     let agent: SDKAgent | undefined
     let run: Run | undefined
     let timedOut = false
@@ -354,7 +449,84 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
             import('@cursor/sdk').then((module) => module as CursorSdkApi),
             interrupted
           ])
-      agent = await Promise.race([sdk.Agent.create(options), interrupted])
+      const attachIsolatedStore = (): void => {
+        if (!this.deps.sessionCoordinator || !sdk.JsonlLocalAgentStore) return
+        const store = new sdk.JsonlLocalAgentStore(
+          this.deps.sessionCoordinator.store.providerStateDir('cursor-sdk', threadId)
+        )
+        options = {
+          ...options,
+          local: { ...options.local, store }
+        }
+      }
+      if (this.deps.sessionCoordinator && !sdk.JsonlLocalAgentStore) {
+        if (preparation?.resumed) {
+          preparation = await this.deps.sessionCoordinator.rejectResume(preparation)
+        }
+        capabilities = { ...capabilities, nativeResume: false }
+        await this.deps.events.record({
+          kind: 'delegated_runtime',
+          threadId,
+          turnId,
+          providerKind: 'cursor-sdk',
+          providerId: resolvedProviderId,
+          phase: 'portable',
+          reason: 'capabilities_changed',
+          capabilities
+        })
+        throw new Error(
+          'Cursor SDK configuration does not expose the isolated local agent store required for durable sessions'
+        )
+      }
+      attachIsolatedStore()
+      if (preparation?.resumed && preparation.nativeSessionId) {
+        try {
+          agent = await Promise.race([
+            sdk.Agent.resume(preparation.nativeSessionId, options),
+            interrupted
+          ])
+        } catch (error) {
+          if (error instanceof CursorTurnInterruptedError) throw error
+          preparation = this.deps.sessionCoordinator
+            ? await this.deps.sessionCoordinator.rejectResume(preparation)
+            : {
+                ...preparation,
+                generation: preparation.generation + 1,
+                nativeSessionId: undefined,
+                resumed: false,
+                rebaseReason: 'native_state_unavailable'
+              }
+          attachIsolatedStore()
+          prompt = buildPrompt(true)
+          sdkMessage = resolvedImages.images.length > 0
+            ? { text: prompt, images: resolvedImages.images }
+            : prompt
+          await this.deps.events.record({
+            kind: 'delegated_runtime',
+            threadId,
+            turnId,
+            providerKind: 'cursor-sdk',
+            providerId: resolvedProviderId,
+            phase: 'rebased',
+            reason: 'native_state_unavailable',
+            capabilities
+          })
+          await recordContextSnapshot(false)
+          agent = await Promise.race([sdk.Agent.create(options), interrupted])
+        }
+      } else {
+        agent = await Promise.race([sdk.Agent.create(options), interrupted])
+      }
+      trace = startCursorTrace(this.deps.debugSink, {
+        threadId,
+        turnId,
+        provider: resolvedProviderId,
+        model,
+        prompt,
+        images: resolvedImages.summaries,
+        mode: options.mode ?? 'plan',
+        sandboxEnabled: options.local?.sandboxOptions?.enabled !== false
+      })
       run = await Promise.race([
         agent.send(sdkMessage, { mode: options.mode }),
         interrupted
@@ -388,6 +560,19 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
       await finishCursorTrace(trace, { kind: 'completed' })
       trace = undefined
       await this.deps.turns.finishTurn({ threadId, turnId, status: 'completed' })
+      if (preparation && this.deps.sessionCoordinator) {
+        try {
+          await this.deps.sessionCoordinator.commit({
+            preparation,
+            committedItems: await this.deps.sessionStore.loadItems(threadId),
+            lastCommittedTurnId: turnId,
+            nativeSessionId: agent.agentId
+          })
+        } catch {
+          // The canonical Kun turn is already durable. A checkpoint write
+          // failure simply forces a portable rebase on the next turn.
+        }
+      }
       return 'completed'
     } catch (error) {
       const safeTraceError = new Error(sanitizeCursorSdkError(error, apiKey))
@@ -455,6 +640,22 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
       return
     }
     await this.deps.events.record(draft)
+  }
+}
+
+function estimateDelegatedTokens(text: string): number {
+  return text ? Math.ceil(Buffer.byteLength(text, 'utf8') / 4) : 0
+}
+
+export function cursorSdkCapabilities(): DelegatedRuntimeCapabilities {
+  return {
+    nativeResume: true,
+    structuredStreaming: true,
+    kunTools: false,
+    externalApproval: false,
+    liveSteering: false,
+    nativeContextTelemetry: false,
+    fork: false
   }
 }
 

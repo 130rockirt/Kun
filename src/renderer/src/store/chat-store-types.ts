@@ -3,6 +3,7 @@ import type {
   ChatBlock,
   NormalizedThread,
   RequestContextSnapshot,
+  DelegatedRuntimeState,
   RuntimeConnectionStatus,
   ReviewTarget,
   ThreadGoal,
@@ -228,6 +229,8 @@ export type ChatState = {
   usageRefreshKey: number
   /** Latest main-agent request context snapshot, tagged with its owning thread. */
   lastContextSnapshot: RequestContextSnapshot | null
+  /** Latest truthful optional-capability snapshot for the active delegated route. */
+  lastDelegatedRuntimeState: DelegatedRuntimeState | null
   /**
    * Latest cumulative usage snapshot, tagged with the thread it belongs to.
    * This is billing/cache telemetry and must not be used as context occupancy.

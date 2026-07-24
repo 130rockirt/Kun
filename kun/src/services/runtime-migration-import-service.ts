@@ -85,6 +85,8 @@ export class RuntimeMigrationImportService {
     attachmentStore: () => AttachmentStore | undefined
     artifactStore?: ArtifactStore
     memoryStore: () => MemoryStore | undefined
+    /** Imported threads must not inherit machine-local provider checkpoints. */
+    onThreadImported?: (threadId: string) => Promise<void>
   }) {
     this.rootDir = resolve(deps.rootDir)
   }
@@ -236,6 +238,7 @@ export class RuntimeMigrationImportService {
           await this.persistState(state)
           const existing = await this.deps.threadStore.get(targetThreadId)
           if (!existing) {
+            await this.deps.onThreadImported?.(targetThreadId)
             await this.deps.threadStore.upsert(thread)
             increment(state.counts, 'threads')
           } else if (canonicalLine('thread', sanitizeMigrationValue(existing)) !== canonicalLine('thread', sanitizeMigrationValue(thread))) {

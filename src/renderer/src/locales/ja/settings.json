@@ -1078,6 +1078,7 @@
   "firstRunTokenPlanNoSpeech": "Speech to Text は従量課金制の API キーでのみ機能します。プランキーは受け付けられません。音声入力が必要な場合は、API キーも追加します。",
   "firstRunTokenPlanNoImage": "このプロバイダーのトークン プランはイメージ生成用に構成されていません。画像が必要な場合は、従量課金制の API キーも追加します。",
   "firstRunClose": "閉じる",
+  "firstRunSkip": "今はスキップ",
   "firstRunSave": "保存して続行",
   "firstRunSaving": "設定を保存中…",
   "firstRunChangeLater": "これらの値は、ワークベンチを開いた後、[設定] からいつでも変更できます。",

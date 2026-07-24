@@ -1,4 +1,7 @@
 import { describe, expect, test, vi } from 'vitest'
+import { mkdtemp } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type {
   AgentOptions,
   Run,
@@ -9,11 +12,19 @@ import type {
 import { LlmDebugRecorder } from '../../services/llm-debug-recorder.js'
 import {
   CursorSdkRuntime,
+  cursorSdkCapabilities,
   cursorAgentExecutionOptions,
   sanitizeCursorSdkError,
   type CursorSdkApi,
   type CursorSdkRuntimeDeps
 } from './cursor-sdk-runtime.js'
+import {
+  DelegatedSessionCoordinator,
+  FileDelegatedSessionBindingStore,
+  delegatedCapabilityFingerprint,
+  delegatedCredentialIdentity,
+  delegatedHistoryDigest
+} from '../delegated-session-binding.js'
 
 function messages(values: SDKMessage[]): AsyncGenerator<SDKMessage, void> {
   return (async function* () {
@@ -67,12 +78,16 @@ function harness(input: {
   debugSink?: LlmDebugRecorder
   turnLimits?: { maxWallTimeMs?: number }
   loadError?: Error
+  sessionCoordinator?: CursorSdkRuntimeDeps['sessionCoordinator']
+  omitLocalStore?: boolean
 }) {
   const applied: unknown[] = []
   const recorded: unknown[] = []
   const finished: unknown[] = []
   const createOptions: AgentOptions[] = []
   const sentMessages: unknown[] = []
+  const resumedAgentIds: string[] = []
+  const resumedOptions: Array<Partial<AgentOptions> | undefined> = []
   const run = input.run ?? fakeRun()
   const agent = {
     agentId: 'agent_1',
@@ -92,8 +107,20 @@ function harness(input: {
       create: async (options) => {
         createOptions.push(options)
         return agent
+      },
+      resume: async (agentId, options) => {
+        resumedAgentIds.push(agentId)
+        resumedOptions.push(options)
+        return agent
       }
-    }
+    },
+    ...(input.sessionCoordinator && !input.omitLocalStore
+      ? {
+          JsonlLocalAgentStore: class {
+            constructor(readonly rootDir: string) {}
+          } as never
+        }
+      : {})
   }
   const thread = {
     id: 'thread_1',
@@ -143,7 +170,8 @@ function harness(input: {
     },
     debugSink: input.debugSink,
     attachmentStore: input.attachmentStore,
-    turnLimits: input.turnLimits
+    turnLimits: input.turnLimits,
+    sessionCoordinator: input.sessionCoordinator
   } as unknown as CursorSdkRuntimeDeps
   return {
     runtime: new CursorSdkRuntime(deps),
@@ -152,6 +180,8 @@ function harness(input: {
     recorded,
     finished,
     sentMessages,
+    resumedAgentIds,
+    resumedOptions,
     agent
   }
 }
@@ -197,6 +227,112 @@ describe('CursorSdkRuntime', () => {
       request: { method: 'SDK', url: 'cursor-sdk://local/agent' }
     })
     expect(JSON.stringify(trace)).not.toContain('cursor-secret')
+  })
+
+  test('resumes a compatible persisted agent and sends only the current request', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-cursor-resume-'))
+    const coordinator = new DelegatedSessionCoordinator(
+      new FileDelegatedSessionBindingStore(root)
+    )
+    const priorItems = [{
+      id: 'user_old',
+      threadId: 'thread_1',
+      turnId: 'turn_old',
+      role: 'user',
+      status: 'completed',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      kind: 'user_message',
+      text: 'portable old context'
+    }] as const
+    const route = {
+      providerKind: 'cursor-sdk' as const,
+      providerId: 'cursor-subscription',
+      credentialIdentity: delegatedCredentialIdentity({
+        providerId: 'cursor-subscription',
+        credentialSecret: 'cursor-secret'
+      }),
+      workspace: '/tmp/cursor-workspace',
+      model: 'auto',
+      capabilityFingerprint: delegatedCapabilityFingerprint({
+        systemPrompt: 'Kun system prompt',
+        threadPersona: '',
+        mode: 'agent',
+        sandbox: false,
+        settingSources: [],
+        capabilities: cursorSdkCapabilities()
+      }),
+      continuationMode: 'native' as const
+    }
+    const prepared = await coordinator.prepare({
+      threadId: 'thread_1',
+      route,
+      priorItems: []
+    })
+    await coordinator.commit({
+      preparation: prepared,
+      committedItems: priorItems as never,
+      lastCommittedTurnId: 'turn_old',
+      nativeSessionId: 'agent_persisted'
+    })
+    expect((await coordinator.store.load('thread_1'))?.synchronizedHistoryDigest)
+      .toBe(delegatedHistoryDigest(priorItems as never))
+    const h = harness({
+      sessionCoordinator: coordinator,
+      thread: {
+        turns: [{ id: 'turn_1', model: 'auto', mode: 'agent' }]
+      },
+      items: [
+        ...priorItems,
+        {
+          id: 'user_1',
+          threadId: 'thread_1',
+          turnId: 'turn_1',
+          role: 'user',
+          status: 'completed',
+          createdAt: '2026-01-01T00:01:00.000Z',
+          kind: 'user_message',
+          text: 'current only'
+        }
+      ]
+    })
+
+    await expect(h.runtime.runTurn(
+      'thread_1',
+      'turn_1',
+      new AbortController().signal,
+      'cursor-subscription'
+    )).resolves.toBe('completed')
+
+    expect(h.resumedAgentIds).toEqual(['agent_persisted'])
+    expect(
+      (h.resumedOptions[0]?.local?.store as unknown as { rootDir?: string })?.rootDir
+    ).toContain('provider-state')
+    expect(String(h.sentMessages[0])).toContain('current only')
+    expect(String(h.sentMessages[0])).not.toContain('portable old context')
+  })
+
+  test('fails closed when an SDK downgrade removes the isolated local store', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-cursor-store-missing-'))
+    const coordinator = new DelegatedSessionCoordinator(
+      new FileDelegatedSessionBindingStore(root)
+    )
+    const h = harness({
+      sessionCoordinator: coordinator,
+      omitLocalStore: true
+    })
+    await expect(h.runtime.runTurn(
+      'thread_1',
+      'turn_1',
+      new AbortController().signal,
+      'cursor-subscription'
+    )).resolves.toBe('failed')
+    expect(h.createOptions).toEqual([])
+    expect(h.recorded).toContainEqual(expect.objectContaining({
+      kind: 'delegated_runtime',
+      phase: 'portable',
+      reason: 'capabilities_changed',
+      capabilities: expect.objectContaining({ nativeResume: false })
+    }))
   })
 
   test('uses plan mode and sandbox when Kun cannot auto-approve mutation', () => {
@@ -298,6 +434,10 @@ describe('CursorSdkRuntime', () => {
   })
 
   test('cancels an active SDK run when the Kun turn aborts', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-cursor-abort-'))
+    const coordinator = new DelegatedSessionCoordinator(
+      new FileDelegatedSessionBindingStore(root)
+    )
     let release!: () => void
     const blocked = new Promise<void>((resolve) => { release = resolve })
     const cancel = vi.fn(async () => { release() })
@@ -306,7 +446,7 @@ describe('CursorSdkRuntime', () => {
       await blocked
       yield* []
     })()
-    const h = harness({ run })
+    const h = harness({ run, sessionCoordinator: coordinator })
     const controller = new AbortController()
     const outcome = h.runtime.runTurn('thread_1', 'turn_1', controller.signal, 'cursor-subscription')
     await vi.waitFor(() => expect(h.createOptions).toHaveLength(1))
@@ -314,6 +454,7 @@ describe('CursorSdkRuntime', () => {
     await expect(outcome).resolves.toBe('aborted')
     expect(cancel).toHaveBeenCalled()
     expect(h.finished).toContainEqual(expect.objectContaining({ status: 'aborted' }))
+    expect(await coordinator.store.load('thread_1')).toBeNull()
   })
 
   test('cancels and reports a stable failure when wall time expires', async () => {

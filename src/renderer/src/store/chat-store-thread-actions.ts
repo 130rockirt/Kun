@@ -810,6 +810,15 @@ export function createThreadActions(
       if (!state.busy) void get().drainQueuedMessages()
       return false
     }
+    const delegated = state.lastDelegatedRuntimeState
+    if (
+      delegated?.threadId === state.activeThreadId &&
+      delegated.turnId === state.currentTurnId &&
+      delegated.capabilities.liveSteering === false
+    ) {
+      set({ error: i18n.t('common:guideQueuedMessageUnsupported') })
+      return false
+    }
     const provider = getProvider()
     if (typeof provider.steerUserMessage !== 'function') {
       set({ error: i18n.t('common:guideQueuedMessageUnsupported') })

@@ -2,6 +2,7 @@ import type { CoreChildRuntimeMetadataJson, CoreRuntimeEventJson, CoreTurnItemJs
 import type {
   ApprovalStatusPayload,
   CompactionEventPayload,
+  DelegatedRuntimeState,
   ReviewEventPayload,
   RequestContextSnapshot,
   RuntimeErrorEventPayload,
@@ -34,6 +35,7 @@ export type KunEventNormalizerDeps = {
   goalAction: (event: CoreRuntimeEventJson, cleared: boolean) => RuntimeProjectionAction
   todosAction: (event: CoreRuntimeEventJson, cleared: boolean) => RuntimeProjectionAction
   contextSnapshot: (event: CoreRuntimeEventJson) => RequestContextSnapshot | null
+  delegatedRuntime: (event: CoreRuntimeEventJson) => DelegatedRuntimeState | null
   usage: (event: CoreRuntimeEventJson) => ThreadUsageSnapshot | null
   runtimeError: (event: CoreRuntimeEventJson, fallback: string) => RuntimeErrorEventPayload
   errorFromRuntime: (payload: RuntimeErrorEventPayload) => Error
@@ -144,6 +146,10 @@ export function normalizeKunRuntimeEvent(
     case 'context_snapshot': {
       const snapshot = deps.contextSnapshot(event)
       return snapshot ? [{ type: 'context_snapshot_received', payload: snapshot }] : []
+    }
+    case 'delegated_runtime': {
+      const state = deps.delegatedRuntime(event)
+      return state ? [{ type: 'delegated_runtime_received', payload: state }] : []
     }
     case 'usage': {
       const usage = deps.usage(event)

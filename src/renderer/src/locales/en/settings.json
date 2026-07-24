@@ -1080,6 +1080,7 @@
   "firstRunTokenPlanNoSpeech": "Speech to text only works with pay-as-you-go API keys; plan keys are not accepted. Add an API key too if you want voice input.",
   "firstRunTokenPlanNoImage": "This provider's Token Plan is not configured for image generation. Add a pay-as-you-go API key too if you want images.",
   "firstRunClose": "Close",
+  "firstRunSkip": "Skip for now",
   "firstRunSave": "Save and continue",
   "firstRunSaving": "Saving configuration…",
   "firstRunChangeLater": "You can change these values anytime from Settings after the workbench opens.",

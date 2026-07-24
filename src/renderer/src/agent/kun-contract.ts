@@ -678,6 +678,19 @@ export type CoreRuntimeEventJson = {
     other?: number
   }
   activeSkillIds?: string[]
+  contextManagement?: 'kun-managed' | 'sdk-managed'
+  nativeHistory?: 'known' | 'unknown' | 'none'
+  providerKind?: 'agent-sdk' | 'cursor-sdk' | 'antigravity-cli'
+  phase?: 'portable' | 'resumed' | 'rebased'
+  capabilities?: {
+    nativeResume?: boolean
+    structuredStreaming?: boolean
+    kunTools?: boolean
+    externalApproval?: boolean
+    liveSteering?: boolean
+    nativeContextTelemetry?: boolean
+    fork?: boolean
+  }
   status?: string | number
   /** thread_created / thread_updated: the thread's (possibly upgraded) title. */
   title?: string

@@ -18,7 +18,16 @@ import {
   composeSdkPromptText,
   DEFAULT_SDK_HISTORY_TRANSCRIPT_MAX_BYTES
 } from '../agent-sdk/sdk-context-assembler.js'
-import type { DelegatedTurnRuntime } from '../delegated-turn-runtime.js'
+import type {
+  DelegatedRuntimeCapabilities,
+  DelegatedTurnRuntime
+} from '../delegated-turn-runtime.js'
+import {
+  delegatedCapabilityFingerprint,
+  delegatedCredentialIdentity,
+  priorItemsForDelegatedTurn,
+  type DelegatedSessionCoordinator
+} from '../delegated-session-binding.js'
 
 const DEFAULT_MODEL = 'gemini-3.6-flash'
 const MAX_STDOUT_BYTES = 8 * 1024 * 1024
@@ -42,6 +51,12 @@ export interface AntigravityCliRuntimeDeps {
   spawnFn?: typeof spawn
   /** Delegated read-only children must deny mutation regardless of parent defaults. */
   enforceReadOnly?: boolean
+  sessionCoordinator?: DelegatedSessionCoordinator
+  contextProfile?: (model: string) => {
+    contextWindowTokens: number
+    softThresholdTokens: number
+    hardThresholdTokens: number
+  }
 }
 
 export function normalizeAntigravityModel(model: string | undefined): string {
@@ -78,7 +93,7 @@ export function buildAntigravityArgs(input: {
   ]
   const denyMutation =
     input.planMode ||
-    input.approvalPolicy === 'never' ||
+    input.approvalPolicy !== 'auto' ||
     input.sandboxMode === 'read-only' ||
     input.sandboxMode === 'external-sandbox'
   if (denyMutation) {
@@ -86,10 +101,6 @@ export function buildAntigravityArgs(input: {
   } else if (input.approvalPolicy === 'auto') {
     args.push('--dangerously-skip-permissions')
     if (input.sandboxMode !== 'danger-full-access') args.push('--sandbox')
-  } else if (input.sandboxMode !== 'danger-full-access') {
-    // Headless Antigravity cannot surface Kun's GUI approval gate. Preserve the
-    // requested sandbox and let the official CLI soft-deny interactive actions.
-    args.push('--sandbox')
   }
   return args
 }
@@ -103,7 +114,24 @@ export class AntigravityCliRuntime implements DelegatedTurnRuntime {
     return !providerId || !this.deps.providerConfigs[providerId]
   }
 
+  capabilities(providerId: string | undefined): DelegatedRuntimeCapabilities | undefined {
+    if (!this.handlesProvider(providerId)) return undefined
+    return antigravityCapabilities()
+  }
+
   async runTurn(
+    threadId: string,
+    turnId: string,
+    signal: AbortSignal,
+    providerId?: string
+  ): Promise<'completed' | 'failed' | 'aborted'> {
+    const execute = () => this.runTurnOwned(threadId, turnId, signal, providerId)
+    return this.deps.sessionCoordinator
+      ? this.deps.sessionCoordinator.runExclusive(threadId, execute)
+      : execute()
+  }
+
+  private async runTurnOwned(
     threadId: string,
     turnId: string,
     signal: AbortSignal,
@@ -164,6 +192,74 @@ export class AntigravityCliRuntime implements DelegatedTurnRuntime {
       approvalPolicy: thread.approvalPolicy,
       sandboxMode
     })
+    const resolvedProviderId = providerId?.trim() || 'antigravity-cli'
+    const provider = providerId ? this.deps.providerConfigs[providerId] : undefined
+    const capabilities = antigravityCapabilities()
+    const preparation = this.deps.sessionCoordinator
+      ? await this.deps.sessionCoordinator.prepare({
+          threadId,
+          route: {
+            providerKind: 'antigravity-cli',
+            providerId: resolvedProviderId,
+            credentialIdentity: delegatedCredentialIdentity({
+              providerId: resolvedProviderId,
+              accountId: turn.accountId || thread.accountId,
+              credentialSourceId: provider?.credentialSourceId
+            }),
+            workspace: thread.workspace,
+            model,
+            capabilityFingerprint: delegatedCapabilityFingerprint({
+              systemPrompt: this.deps.systemPrompt?.trim() || '',
+              threadPersona: thread.systemPrompt?.trim() || '',
+              effort,
+              planMode,
+              approvalPolicy: thread.approvalPolicy,
+              sandboxMode,
+              capabilities
+            }),
+            // The supported non-interactive CLI output does not provide a
+            // validated conversation id. Never use process-global --continue.
+            continuationMode: 'portable'
+          },
+          priorItems: priorItemsForDelegatedTurn(items, turnId)
+        })
+      : undefined
+    await this.deps.events.record({
+      kind: 'delegated_runtime',
+      threadId,
+      turnId,
+      providerKind: 'antigravity-cli',
+      providerId: resolvedProviderId,
+      phase: 'portable',
+      ...(preparation?.rebaseReason ? { reason: preparation.rebaseReason } : {}),
+      capabilities
+    })
+    const contextProfile = this.deps.contextProfile?.(model)
+    if (contextProfile) {
+      const system = estimateAntigravityTokens(instructionBlocks.join('\n'))
+      const messages = estimateAntigravityTokens(prompt) - system
+      await this.deps.events.record({
+        kind: 'context_snapshot',
+        threadId,
+        turnId,
+        model,
+        providerId: resolvedProviderId,
+        stepIndex: 0,
+        ...contextProfile,
+        estimatedInputTokens: system + Math.max(0, messages),
+        breakdown: {
+          tools: 0,
+          system,
+          skills: 0,
+          messages: Math.max(0, messages),
+          other: 0
+        },
+        toolCount: 0,
+        activeSkillIds: [],
+        contextManagement: 'sdk-managed',
+        nativeHistory: 'none'
+      })
+    }
     let trace = startAntigravityTrace(this.deps.debugSink, {
       threadId,
       turnId,
@@ -223,6 +319,18 @@ export class AntigravityCliRuntime implements DelegatedTurnRuntime {
         })
       )
       await this.deps.turns.finishTurn({ threadId, turnId, status: 'completed' })
+      if (preparation && this.deps.sessionCoordinator) {
+        try {
+          await this.deps.sessionCoordinator.commit({
+            preparation,
+            committedItems: await this.deps.sessionStore.loadItems(threadId),
+            lastCommittedTurnId: turnId
+          })
+        } catch {
+          // Portable history remains authoritative if the disposable binding
+          // cannot be recorded.
+        }
+      }
       return 'completed'
     } catch (error) {
       await finishAntigravityTrace(trace, { kind: 'error', error })
@@ -242,6 +350,22 @@ export class AntigravityCliRuntime implements DelegatedTurnRuntime {
       })
       return 'failed'
     }
+  }
+}
+
+function estimateAntigravityTokens(text: string): number {
+  return text ? Math.ceil(Buffer.byteLength(text, 'utf8') / 4) : 0
+}
+
+export function antigravityCapabilities(): DelegatedRuntimeCapabilities {
+  return {
+    nativeResume: false,
+    structuredStreaming: false,
+    kunTools: false,
+    externalApproval: false,
+    liveSteering: false,
+    nativeContextTelemetry: false,
+    fork: false
   }
 }
 

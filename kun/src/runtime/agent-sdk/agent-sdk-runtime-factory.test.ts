@@ -11,6 +11,11 @@ import { CapabilityRegistry } from '../../adapters/tool/capability-registry.js'
 import { LocalToolHost } from '../../adapters/tool/local-tool-host.js'
 import { InMemoryApprovalGate } from '../../adapters/in-memory-approval-gate.js'
 import { InMemoryUserInputGate } from '../../adapters/in-memory-user-input-gate.js'
+import {
+  DelegatedSessionCoordinator,
+  FileDelegatedSessionBindingStore,
+  type DelegatedSessionPreparation
+} from '../delegated-session-binding.js'
 
 function fakeGate(pending: Promise<UserInputResolution>): {
   gate: UserInputGate
@@ -108,6 +113,100 @@ describe('resolveTurnPlanContext', () => {
   test('a normal agent turn is not a plan turn', () => {
     const thread = threadWith({ turns: [{ id: 'tn', prompt: 'x' } as ThreadRecord['turns'][number]] })
     expect(resolveTurnPlanContext(thread, 'tn')).toEqual({ planMode: false })
+  })
+})
+
+describe('createAgentSdkRuntime delegated session binding', () => {
+  test('restores a compatible Claude session and scopes OAuth state under Kun data', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-claude-binding-'))
+    try {
+      let items = [{
+        id: 'item_t1',
+        turnId: 't1',
+        threadId: 'th',
+        kind: 'user_message',
+        role: 'user',
+        status: 'completed',
+        text: 'first',
+        createdAt: '2026-07-25T00:00:00.000Z'
+      }]
+      let thread = threadWith({
+        id: 'th',
+        providerId: 'claude-subscription',
+        workspace: '/ws',
+        turns: [{ id: 't1', prompt: 'first' } as ThreadRecord['turns'][number]]
+      })
+      const buildRuntime = (sessionCoordinator: DelegatedSessionCoordinator) =>
+        createAgentSdkRuntime({
+          registry: CapabilityRegistry.fromLocalTools([]),
+          turns: { updateTurnMetadata: async () => undefined } as never,
+          sessionStore: { loadItems: async () => items } as never,
+          threadStore: { get: async () => thread } as never,
+          events: {} as never,
+          ids: { next: (prefix) => prefix },
+          prefix: { systemPrompt: 'Kun system prompt' },
+          providerConfigs: {
+            'claude-subscription': { kind: 'agent-sdk', apiKey: 'oauth-secret' }
+          } as never,
+          agentSdkProviderIds: new Set(['claude-subscription']),
+          defaultApprovalPolicy: 'auto',
+          sessionCoordinator
+        })
+      const firstCoordinator = new DelegatedSessionCoordinator(
+        new FileDelegatedSessionBindingStore(root)
+      )
+      const firstRuntime = buildRuntime(firstCoordinator)
+      const firstDeps = (firstRuntime as unknown as {
+        deps: {
+          loadTurnContext(threadId: string, turnId: string): Promise<{
+            claudeConfigDir?: string
+            sessionPreparation?: DelegatedSessionPreparation
+          } | null>
+        }
+      }).deps
+      const first = await firstDeps.loadTurnContext('th', 't1')
+      expect(first?.claudeConfigDir).toContain('provider-state')
+      await firstCoordinator.commit({
+        preparation: first!.sessionPreparation!,
+        committedItems: items as never,
+        lastCommittedTurnId: 't1',
+        nativeSessionId: 'session_persisted'
+      })
+
+      items = [...items, {
+        id: 'item_t2',
+        turnId: 't2',
+        threadId: 'th',
+        kind: 'user_message',
+        role: 'user',
+        status: 'completed',
+        text: 'second',
+        createdAt: '2026-07-25T00:01:00.000Z'
+      }]
+      thread = {
+        ...thread,
+        turns: [
+          ...thread.turns,
+          { id: 't2', prompt: 'second' } as ThreadRecord['turns'][number]
+        ]
+      }
+      const restarted = buildRuntime(new DelegatedSessionCoordinator(
+        new FileDelegatedSessionBindingStore(root)
+      ))
+      const restartedDeps = (restarted as unknown as {
+        deps: {
+          loadTurnContext(threadId: string, turnId: string): Promise<{
+            resumeSessionId?: string
+            historyTranscript?: string
+          } | null>
+        }
+      }).deps
+      const second = await restartedDeps.loadTurnContext('th', 't2')
+      expect(second?.resumeSessionId).toBe('session_persisted')
+      expect(second?.historyTranscript).toContain('first')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
   })
 })
 

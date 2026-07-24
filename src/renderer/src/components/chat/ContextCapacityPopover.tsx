@@ -27,7 +27,9 @@ type Props = {
 export function ContextCapacityPopover({ capacity, style }: Props): ReactElement {
   const { t } = useTranslation()
   const thresholdRatio = capacity.softThresholdRatio
-  const accent = stateColor(capacity.usedRatio, thresholdRatio)
+  const accent = capacity.nativeHistoryUnknown
+    ? 'var(--ds-muted)'
+    : stateColor(capacity.usedRatio, thresholdRatio)
 
   const labelFor = (key: ContextCategoryKey): string =>
     t(`contextCapacityCat_${key}`, { defaultValue: key })
@@ -37,7 +39,9 @@ export function ContextCapacityPopover({ capacity, style }: Props): ReactElement
   ).filter((c): c is NonNullable<typeof c> => Boolean(c) && (c?.tokens ?? 0) > 0)
 
   const statusText =
-    capacity.usedRatio >= thresholdRatio
+    capacity.nativeHistoryUnknown
+      ? t('contextCapacitySdkManagedUnknown')
+      : capacity.usedRatio >= thresholdRatio
       ? t('contextCapacityOverLimit')
       : capacity.usedRatio >= thresholdRatio * 0.85
         ? t('contextCapacityNearLimit')
@@ -56,16 +60,22 @@ export function ContextCapacityPopover({ capacity, style }: Props): ReactElement
           <span className="font-medium" style={{ color: accent }}>
             {formatCompactNumber(capacity.usedTokens)}
           </span>
-          {' / '}
-          {formatCompactNumber(capacity.windowTokens)}
-          {' · '}
-          <span className="font-medium" style={{ color: accent }}>
-            {formatPercent(capacity.usedRatio)}
-          </span>
+          {capacity.nativeHistoryUnknown
+            ? ` ${t('contextCapacitySentTokens')}`
+            : (
+                <>
+                  {' / '}
+                  {formatCompactNumber(capacity.windowTokens)}
+                  {' · '}
+                  <span className="font-medium" style={{ color: accent }}>
+                    {formatPercent(capacity.usedRatio)}
+                  </span>
+                </>
+              )}
         </span>
       </div>
 
-      <div className="relative mb-1.5 mt-3">
+      {!capacity.nativeHistoryUnknown ? <div className="relative mb-1.5 mt-3">
         <div
           className="flex h-2 overflow-hidden rounded-full"
           style={{ background: 'var(--ds-surface-subtle)' }}
@@ -89,15 +99,15 @@ export function ContextCapacityPopover({ capacity, style }: Props): ReactElement
           title={t('contextCapacityThresholdLabel', { percent: formatPercent(thresholdRatio) })}
           aria-hidden="true"
         />
-      </div>
+      </div> : null}
 
       <div className="mb-2 flex items-center justify-between text-[11px]">
         <span className="font-medium" style={{ color: accent }}>
           {statusText}
         </span>
-        <span className="text-ds-faint">
+        {!capacity.nativeHistoryUnknown ? <span className="text-ds-faint">
           {t('contextCapacityThresholdLabel', { percent: formatPercent(thresholdRatio) })}
-        </span>
+        </span> : null}
       </div>
 
       <div className="flex flex-col">
@@ -115,13 +125,13 @@ export function ContextCapacityPopover({ capacity, style }: Props): ReactElement
                 {formatCompactNumber(category.tokens)}
               </span>
               <span className="text-right text-[12px] tabular-nums text-ds-faint">
-                {formatPercent(category.ratio)}
+                {capacity.nativeHistoryUnknown ? '—' : formatPercent(category.ratio)}
               </span>
             </div>
           )
         })}
 
-        <div className="mt-1 grid grid-cols-[13px_1fr_auto_46px] items-center gap-x-2 border-t border-ds-border-muted pt-1.5">
+        {!capacity.nativeHistoryUnknown ? <div className="mt-1 grid grid-cols-[13px_1fr_auto_46px] items-center gap-x-2 border-t border-ds-border-muted pt-1.5">
           <span className="h-[8px] w-[8px] rounded-[3px] border border-ds-faint" />
           <span className="truncate text-[12.5px] text-ds-faint">{t('contextCapacityCat_free')}</span>
           <span className="text-[12px] tabular-nums text-ds-faint">
@@ -130,12 +140,14 @@ export function ContextCapacityPopover({ capacity, style }: Props): ReactElement
           <span className="text-right text-[12px] tabular-nums text-ds-faint">
             {formatPercent(capacity.freeRatio)}
           </span>
-        </div>
+        </div> : null}
       </div>
 
       {capacity.estimated ? (
         <p className="mt-2.5 text-[10.5px] leading-snug text-ds-faint">
-          {t('contextCapacityEstimatedBreakdown')}
+          {capacity.nativeHistoryUnknown
+            ? t('contextCapacitySdkManagedEstimate')
+            : t('contextCapacityEstimatedBreakdown')}
         </p>
       ) : null}
     </div>

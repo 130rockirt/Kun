@@ -621,7 +621,9 @@ export class ModelStepService {
         other: requestContext.other
       },
       toolCount: request.tools.length,
-      activeSkillIds: skillResolution.activeSkillIds
+      activeSkillIds: skillResolution.activeSkillIds,
+      contextManagement: 'kun-managed',
+      nativeHistory: 'none'
     })
     if (tokenEconomy.enabled) {
       await this.deps.recordTokenEconomySavings({

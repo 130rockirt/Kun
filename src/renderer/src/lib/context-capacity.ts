@@ -20,6 +20,8 @@ export type ContextCapacity = {
   categories: ContextCategory[]
   /** Request-derived values use Kun's deterministic estimator, not a provider tokenizer. */
   estimated: true
+  /** The SDK owns prior native history but does not report its occupancy. */
+  nativeHistoryUnknown: boolean
 }
 
 const CATEGORY_ORDER: readonly ContextCategoryKey[] = [
@@ -63,6 +65,9 @@ export function buildContextCapacity(snapshot: RequestContextSnapshot): ContextC
     softThresholdRatio: clamp(snapshot.softThresholdTokens / windowTokens, 0, 1),
     hardThresholdRatio: clamp(snapshot.hardThresholdTokens / windowTokens, 0, 1),
     categories,
-    estimated: true
+    estimated: true,
+    nativeHistoryUnknown:
+      snapshot.contextManagement === 'sdk-managed' &&
+      snapshot.nativeHistory === 'unknown'
   }
 }

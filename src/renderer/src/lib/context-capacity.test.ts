@@ -92,4 +92,13 @@ describe('buildContextCapacity', () => {
     expect(cap.softThresholdRatio).toBe(1)
     expect(cap.hardThresholdRatio).toBe(1)
   })
+
+  it('marks SDK-managed native history as unknown instead of zero', () => {
+    const cap = buildContextCapacity(snapshot({
+      contextManagement: 'sdk-managed',
+      nativeHistory: 'unknown'
+    }))
+    expect(cap.nativeHistoryUnknown).toBe(true)
+    expect(cap.usedTokens).toBe(60_000)
+  })
 })

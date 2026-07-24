@@ -49,6 +49,7 @@ export const RuntimeEventKind = z.enum([
   'bash_session_updated',
   'bash_session_completed',
   'pipeline_stage',
+  'delegated_runtime',
   'context_snapshot',
   'usage',
   'error',
@@ -277,9 +278,37 @@ export const ContextSnapshotEvent = RuntimeEventBase.extend({
   estimatedInputTokens: z.number().int().nonnegative(),
   breakdown: RequestContextTokenBreakdownSchema,
   toolCount: z.number().int().nonnegative(),
-  activeSkillIds: z.array(z.string().min(1))
+  activeSkillIds: z.array(z.string().min(1)),
+  contextManagement: z.enum(['kun-managed', 'sdk-managed']).optional(),
+  nativeHistory: z.enum(['known', 'unknown', 'none']).optional()
 })
 export type ContextSnapshotEvent = z.infer<typeof ContextSnapshotEvent>
+
+export const DelegatedRuntimeCapabilitiesSchema = z.object({
+  nativeResume: z.boolean(),
+  structuredStreaming: z.boolean(),
+  kunTools: z.boolean(),
+  externalApproval: z.boolean(),
+  liveSteering: z.boolean(),
+  nativeContextTelemetry: z.boolean(),
+  fork: z.boolean()
+})
+
+export const DelegatedRuntimeEvent = RuntimeEventBase.extend({
+  kind: z.literal('delegated_runtime'),
+  providerKind: z.enum(['agent-sdk', 'cursor-sdk', 'antigravity-cli']),
+  providerId: z.string().min(1),
+  phase: z.enum(['portable', 'resumed', 'rebased']),
+  reason: z.enum([
+    'new',
+    'route_changed',
+    'capabilities_changed',
+    'history_changed',
+    'native_state_unavailable'
+  ]).optional(),
+  capabilities: DelegatedRuntimeCapabilitiesSchema
+})
+export type DelegatedRuntimeEvent = z.infer<typeof DelegatedRuntimeEvent>
 
 export const UsageEvent = RuntimeEventBase.extend({
   kind: z.literal('usage'),
@@ -326,6 +355,7 @@ export const RuntimeEvent = z.discriminatedUnion('kind', [
   TodoEvent,
   BashSessionEvent,
   PipelineStageEvent,
+  DelegatedRuntimeEvent,
   ContextSnapshotEvent,
   UsageEvent,
   ErrorEvent,

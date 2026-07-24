@@ -520,6 +520,31 @@ export type RequestContextSnapshot = {
   }
   toolCount: number
   activeSkillIds: string[]
+  contextManagement?: 'kun-managed' | 'sdk-managed'
+  nativeHistory?: 'known' | 'unknown' | 'none'
+}
+
+export type DelegatedRuntimeState = {
+  threadId: string
+  turnId?: string
+  providerKind: 'agent-sdk' | 'cursor-sdk' | 'antigravity-cli'
+  providerId: string
+  phase: 'portable' | 'resumed' | 'rebased'
+  reason?:
+    | 'new'
+    | 'route_changed'
+    | 'capabilities_changed'
+    | 'history_changed'
+    | 'native_state_unavailable'
+  capabilities: {
+    nativeResume: boolean
+    structuredStreaming: boolean
+    kunTools: boolean
+    externalApproval: boolean
+    liveSteering: boolean
+    nativeContextTelemetry: boolean
+    fork: boolean
+  }
 }
 
 export type ThreadEventSink = {
@@ -545,6 +570,7 @@ export type ThreadEventSink = {
   onUsage?(usage: ThreadUsageSnapshot): void
   /** Optional: request-local context accounting for the main agent. */
   onContextSnapshot?(snapshot: RequestContextSnapshot): void
+  onDelegatedRuntimeState?(state: DelegatedRuntimeState): void
 }
 
 export interface AgentProvider {

@@ -1078,6 +1078,7 @@
   "firstRunTokenPlanNoSpeech": "Распознавание речи работает только с pay-as-you-go ключами.",
   "firstRunTokenPlanNoImage": "Token Plan не настроен для генерации изображений.",
   "firstRunClose": "Закрыть",
+  "firstRunSkip": "Пропустить пока",
   "firstRunSave": "Сохранить и продолжить",
   "firstRunSaving": "Сохранение…",
   "firstRunChangeLater": "Вы можете изменить эти настройки позже в разделе «Настройки».",

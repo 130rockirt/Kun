@@ -75,8 +75,8 @@ describe('InitialSetupDialog completion flow', () => {
     expect(closeInitialSetup).toHaveBeenCalledTimes(1)
   })
 
-  it('only allows manual close in preview mode', () => {
-    expect(canCloseInitialSetup('required')).toBe(false)
+  it('allows users to dismiss both required and preview setup flows', () => {
+    expect(canCloseInitialSetup('required')).toBe(true)
     expect(canCloseInitialSetup('preview')).toBe(true)
   })
 })

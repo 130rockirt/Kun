@@ -40,6 +40,20 @@ describe('AntigravityCliRuntime', () => {
     expect(args).not.toContain('--dangerously-skip-permissions')
   })
 
+  it('fails closed to plan mode when GUI approval cannot be surfaced', () => {
+    const args = buildAntigravityArgs({
+      prompt: 'change files after approval',
+      model: 'gemini-3.6-flash',
+      effort: 'medium',
+      timeoutMs: 60_000,
+      planMode: false,
+      approvalPolicy: 'on-request',
+      sandboxMode: 'danger-full-access'
+    })
+    expect(args).toEqual(expect.arrayContaining(['--mode', 'plan', '--sandbox']))
+    expect(args).not.toContain('--dangerously-skip-permissions')
+  })
+
   it('maps Kun auto approval into the CLI while retaining workspace sandboxing', () => {
     const args = buildAntigravityArgs({
       prompt: 'make the change',
@@ -56,6 +70,8 @@ describe('AntigravityCliRuntime', () => {
       '--model',
       'gemini-3.5-flash'
     ]))
+    expect(args).not.toContain('--continue')
+    expect(args.some((value) => value.startsWith('--conversation'))).toBe(false)
   })
 
   it('forces delegated read-only children into plan and sandbox controls', async () => {

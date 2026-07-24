@@ -3,6 +3,7 @@ import type {
   ChatBlock,
   CompactionEventPayload,
   ComponentPrototypeMetadata,
+  DelegatedRuntimeState,
   GeneratedFileReference,
   NormalizedThread,
   ReviewBlock,
@@ -1088,7 +1089,67 @@ function contextSnapshotFromCore(event: CoreRuntimeEventJson): RequestContextSna
     activeSkillIds: Array.isArray(event.activeSkillIds)
       ? event.activeSkillIds.filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
           .map((id) => id.trim())
-      : []
+      : [],
+    ...(event.contextManagement === 'kun-managed' || event.contextManagement === 'sdk-managed'
+      ? { contextManagement: event.contextManagement }
+      : {}),
+    ...(event.nativeHistory === 'known' ||
+      event.nativeHistory === 'unknown' ||
+      event.nativeHistory === 'none'
+      ? { nativeHistory: event.nativeHistory }
+      : {})
+  }
+}
+
+function delegatedRuntimeFromCore(event: CoreRuntimeEventJson): DelegatedRuntimeState | null {
+  const threadId = event.threadId?.trim()
+  const providerId = event.providerId?.trim()
+  const providerKind = event.providerKind
+  const phase = event.phase
+  const capabilities = event.capabilities
+  if (
+    !threadId ||
+    !providerId ||
+    (
+      providerKind !== 'agent-sdk' &&
+      providerKind !== 'cursor-sdk' &&
+      providerKind !== 'antigravity-cli'
+    ) ||
+    (phase !== 'portable' && phase !== 'resumed' && phase !== 'rebased') ||
+    !capabilities ||
+    ![
+      capabilities.nativeResume,
+      capabilities.structuredStreaming,
+      capabilities.kunTools,
+      capabilities.externalApproval,
+      capabilities.liveSteering,
+      capabilities.nativeContextTelemetry,
+      capabilities.fork
+    ].every((value) => typeof value === 'boolean')
+  ) return null
+  const reason = event.reason
+  return {
+    threadId,
+    ...(event.turnId?.trim() ? { turnId: event.turnId.trim() } : {}),
+    providerKind,
+    providerId,
+    phase,
+    ...(reason === 'new' ||
+      reason === 'route_changed' ||
+      reason === 'capabilities_changed' ||
+      reason === 'history_changed' ||
+      reason === 'native_state_unavailable'
+      ? { reason }
+      : {}),
+    capabilities: {
+      nativeResume: capabilities.nativeResume!,
+      structuredStreaming: capabilities.structuredStreaming!,
+      kunTools: capabilities.kunTools!,
+      externalApproval: capabilities.externalApproval!,
+      liveSteering: capabilities.liveSteering!,
+      nativeContextTelemetry: capabilities.nativeContextTelemetry!,
+      fork: capabilities.fork!
+    }
   }
 }
 
@@ -1600,6 +1661,7 @@ const kunEventNormalizerDeps: KunEventNormalizerDeps = {
         }
   }),
   contextSnapshot: contextSnapshotFromCore,
+  delegatedRuntime: delegatedRuntimeFromCore,
   usage: (event) => event.usage ? usageFromCore(event.usage) : null,
   runtimeError: runtimeErrorFromEvent,
   errorFromRuntime: errorForRuntimeEvent
@@ -1634,6 +1696,7 @@ async function applyRuntimeProjectionAction(
     case 'todos_changed': sink.onTodos?.(action.payload); return
     case 'thread_metadata_changed': sink.onThreadUpdated?.(action.payload); return
     case 'context_snapshot_received': sink.onContextSnapshot?.(action.payload); return
+    case 'delegated_runtime_received': sink.onDelegatedRuntimeState?.(action.payload); return
     case 'usage_received': sink.onUsage?.(action.payload); return
     case 'turn_completed': sink.onTurnComplete(); return
     case 'turn_failed': sink.onError(action.error, action.options); return

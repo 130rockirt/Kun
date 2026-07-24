@@ -686,6 +686,7 @@ describe('TurnService compact', () => {
       nowIso
     })
     const model = new SummaryModel()
+    const compactedThreads: string[] = []
     const prefix = createImmutablePrefix({
       systemPrompt: 'System prompt used by both chat and compaction.',
       pinnedConstraints: ['system: keep GUI HTTP/SSE stable']
@@ -706,6 +707,9 @@ describe('TurnService compact', () => {
         summaryTimeoutMs: 1_000,
         summaryMaxTokens: 400,
         summaryInputMaxBytes: 16_384
+      },
+      onCompacted: async (threadId) => {
+        compactedThreads.push(threadId)
       },
       ids: new SequentialIdGenerator(),
       nowIso
@@ -778,6 +782,7 @@ describe('TurnService compact', () => {
     expect(continuationItem.text).not.toContain('Active Skill: retained-manual-tail-only')
     expect(response.summary).toContain('MODEL SUMMARY kept the durable state.')
     expect(response.pinnedConstraints).toEqual(prefix.pinnedConstraints)
+    expect(compactedThreads).toEqual([threadId])
 
     const visibleItems = await sessionStore.loadItems(threadId)
     expect(visibleItems).toHaveLength(7)

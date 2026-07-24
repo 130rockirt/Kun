@@ -117,6 +117,31 @@ describe('chat projection reducer', () => {
     expect(ignored.lastContextSnapshot).toBeUndefined()
   })
 
+  it('stores delegated capabilities only for the active thread', () => {
+    const action: RuntimeProjectionAction = {
+      type: 'delegated_runtime_received',
+      payload: {
+        threadId: 'thread_1',
+        turnId: 'turn_1',
+        providerKind: 'antigravity-cli',
+        providerId: 'google-subscription',
+        phase: 'portable',
+        capabilities: {
+          nativeResume: false,
+          structuredStreaming: false,
+          kunTools: false,
+          externalApproval: false,
+          liveSteering: false,
+          nativeContextTelemetry: false,
+          fork: false
+        }
+      }
+    }
+    expect(project(state(), [action]).lastDelegatedRuntimeState).toEqual(action.payload)
+    expect(project({ ...state(), activeThreadId: 'thread_2' }, [action]).lastDelegatedRuntimeState)
+      .toBeUndefined()
+  })
+
   it('deduplicates approval and user-input replay by stable runtime identity', () => {
     const approval: RuntimeProjectionAction = {
       type: 'approval_received',

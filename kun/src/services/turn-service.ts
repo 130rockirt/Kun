@@ -61,6 +61,8 @@ export type TurnServiceDeps = {
   /** Reject turn admission while this thread is being destructively removed. */
   lifecycleFence?: ThreadLifecycleFence
   migrationMaintenance?: MigrationMaintenanceLock
+  /** Dispose machine-local continuation state after a successful manual compaction. */
+  onCompacted?: (threadId: string) => Promise<void>
   ids: IdGenerator
   nowIso: () => string
 }
@@ -625,6 +627,7 @@ export class TurnService {
           ? { sourceItemIds: result.summaryItem.sourceItemIds }
           : {})
       })
+      await this.deps.onCompacted?.(input.threadId)
     }
     return {
       threadId: input.threadId,

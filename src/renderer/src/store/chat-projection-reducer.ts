@@ -487,6 +487,10 @@ export function reduceChatProjection(
       return state.activeThreadId === action.payload.threadId
         ? { lastContextSnapshot: action.payload }
         : {}
+    case 'delegated_runtime_received':
+      return state.activeThreadId === action.payload.threadId
+        ? { lastDelegatedRuntimeState: action.payload }
+        : {}
     case 'usage_received':
       return {
         usageRefreshKey: state.usageRefreshKey + 1,

@@ -525,6 +525,42 @@ describe('chat-store-thread-actions queued messages', () => {
     expect(state.error).toBeNull()
   })
 
+  it('keeps guidance queued when the active delegated runtime cannot steer live', async () => {
+    const steerUserMessage = vi.fn(async () => undefined)
+    registryMock.getProvider.mockReturnValue({ steerUserMessage })
+    const { actions, state } = buildHarness()
+    state.currentTurnId = 'turn_active'
+    state.lastDelegatedRuntimeState = {
+      threadId: 'thr_existing',
+      turnId: 'turn_active',
+      providerKind: 'cursor-sdk',
+      providerId: 'cursor-subscription',
+      phase: 'resumed',
+      capabilities: {
+        nativeResume: true,
+        structuredStreaming: true,
+        kunTools: false,
+        externalApproval: false,
+        liveSteering: false,
+        nativeContextTelemetry: false,
+        fork: false
+      }
+    }
+    state.queuedMessages = [{
+      id: 'q-delegated',
+      text: 'apply this on the next turn',
+      mode: 'agent'
+    }]
+
+    await expect(actions.guideQueuedMessage('q-delegated')).resolves.toBe(false)
+
+    expect(steerUserMessage).not.toHaveBeenCalled()
+    expect(state.queuedMessages).toEqual([
+      expect.objectContaining({ id: 'q-delegated' })
+    ])
+    expect(state.error).toBeTruthy()
+  })
+
   it('does not duplicate guided input when its SSE user message wins the request race', async () => {
     const { actions, state } = buildHarness()
     state.currentTurnId = 'turn_active'

@@ -1080,6 +1080,7 @@
   "firstRunTokenPlanNoSpeech": "语音转文字仅按量 API 支持，套餐 Key 不适用；如需语音输入请同时填写按量 Key。",
   "firstRunTokenPlanNoImage": "当前供应商的 Token Plan 未配置图像生成；如需生图请同时填写按量 Key。",
   "firstRunClose": "关闭",
+  "firstRunSkip": "暂时跳过",
   "firstRunSave": "保存并继续",
   "firstRunSaving": "正在保存配置…",
   "firstRunChangeLater": "进入工作台后，你仍然可以随时在设置里修改这些内容。",

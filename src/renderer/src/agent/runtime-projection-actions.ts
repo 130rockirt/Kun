@@ -13,6 +13,7 @@ import type {
   ThreadErrorOptions,
   ThreadEventSink,
   ThreadUsageSnapshot,
+  DelegatedRuntimeState,
   ToolEventPayload,
   UserInputRequestPayload,
   UserInputStatusPayload,
@@ -46,6 +47,7 @@ export type RuntimeProjectionAction =
   | { type: 'todos_changed'; payload: TodoProjection }
   | { type: 'thread_metadata_changed'; payload: ThreadMetadataProjection }
   | { type: 'context_snapshot_received'; payload: RequestContextSnapshot }
+  | { type: 'delegated_runtime_received'; payload: DelegatedRuntimeState }
   | { type: 'usage_received'; payload: ThreadUsageSnapshot }
   | {
       type: 'thread_snapshot_reconciled'

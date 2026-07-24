@@ -1680,6 +1680,76 @@ describe('context snapshot event mapping', () => {
       activeSkillIds: []
     })).toEqual([])
   })
+
+  it('preserves SDK-managed unknown native history without inventing occupancy', () => {
+    const actions = runtimeProjectionActionsFromEvent({
+      kind: 'context_snapshot',
+      threadId: 'thr_1',
+      turnId: 'turn_2',
+      model: 'claude-sonnet-4-5',
+      providerId: 'claude-subscription',
+      stepIndex: 0,
+      contextWindowTokens: 200_000,
+      softThresholdTokens: 150_000,
+      hardThresholdTokens: 170_000,
+      estimatedInputTokens: 12,
+      breakdown: { tools: 1, system: 2, skills: 3, messages: 6, other: 0 },
+      toolCount: 1,
+      activeSkillIds: [],
+      contextManagement: 'sdk-managed',
+      nativeHistory: 'unknown'
+    })
+    expect(actions).toEqual([{
+      type: 'context_snapshot_received',
+      payload: expect.objectContaining({
+        contextManagement: 'sdk-managed',
+        nativeHistory: 'unknown',
+        estimatedInputTokens: 12
+      })
+    }])
+  })
+})
+
+describe('delegated runtime capability mapping', () => {
+  it('maps bounded capability and rebase state without a native session id', () => {
+    expect(runtimeProjectionActionsFromEvent({
+      kind: 'delegated_runtime',
+      threadId: 'thr_1',
+      turnId: 'turn_1',
+      providerKind: 'cursor-sdk',
+      providerId: 'cursor-subscription',
+      phase: 'rebased',
+      reason: 'history_changed',
+      capabilities: {
+        nativeResume: true,
+        structuredStreaming: true,
+        kunTools: false,
+        externalApproval: false,
+        liveSteering: false,
+        nativeContextTelemetry: false,
+        fork: false
+      }
+    })).toEqual([{
+      type: 'delegated_runtime_received',
+      payload: {
+        threadId: 'thr_1',
+        turnId: 'turn_1',
+        providerKind: 'cursor-sdk',
+        providerId: 'cursor-subscription',
+        phase: 'rebased',
+        reason: 'history_changed',
+        capabilities: {
+          nativeResume: true,
+          structuredStreaming: true,
+          kunTools: false,
+          externalApproval: false,
+          liveSteering: false,
+          nativeContextTelemetry: false,
+          fork: false
+        }
+      }
+    }])
+  })
 })
 
 describe('tool presentation inference', () => {

@@ -170,7 +170,7 @@ function makeDeps(overrides: Partial<SdkRuntimeDeps> = {}): {
     finishTurn: async (_t, _u, status, error) => {
       finished.push({ status, error })
     },
-    saveSessionId: async (_t, id) => {
+    saveSessionId: async (_t, _turnId, id) => {
       sessions.push(id)
     },
     loadSdk: async () => fakeSdk([]),
@@ -306,6 +306,97 @@ describe('AgentSdkRuntime.runTurn', () => {
     expect(persistedKinds).toContain('assistant_text')
   })
 
+  test('uses official resume without replaying portable history', async () => {
+    const queries: Array<{ prompt: unknown; options?: unknown }> = []
+    const { deps } = makeDeps({
+      loadTurnContext: async () => ({
+        workspace: '/ws',
+        userText: 'current request',
+        approvalPolicy: 'auto',
+        bridgeableTools: [],
+        resumeSessionId: 'session_previous',
+        historyTranscript: '[user] should not be replayed'
+      }),
+      loadSdk: async () => fakeSdkAttempts([STREAM], (input) => queries.push(input))
+    })
+
+    await expect(new AgentSdkRuntime(deps).runTurn(
+      'th',
+      'tn',
+      new AbortController().signal
+    )).resolves.toBe('completed')
+
+    expect(queries).toHaveLength(1)
+    expect(queries[0]?.options).toMatchObject({ resume: 'session_previous' })
+    expect(String(queries[0]?.prompt)).toContain('current request')
+    expect(String(queries[0]?.prompt)).not.toContain('should not be replayed')
+  })
+
+  test('retains the validated resume id when a successful stream omits init metadata', async () => {
+    const { deps, sessions } = makeDeps({
+      loadTurnContext: async () => ({
+        workspace: '/ws',
+        userText: 'current request',
+        approvalPolicy: 'auto',
+        bridgeableTools: [],
+        resumeSessionId: 'session_previous'
+      }),
+      loadSdk: async () => fakeSdk(svgSdkTextAttempt('continued'))
+    })
+
+    await expect(new AgentSdkRuntime(deps).runTurn(
+      'th',
+      'tn',
+      new AbortController().signal
+    )).resolves.toBe('completed')
+
+    expect(sessions).toEqual(['session_previous'])
+  })
+
+  test('rebases once from portable history when native resume cannot load', async () => {
+    const queries: Array<{ prompt: unknown; options?: unknown }> = []
+    const rejectResume = vi.fn()
+    let call = 0
+    const sdk = fakeSdkAttempts([STREAM], (input) => queries.push(input))
+    const successfulQuery = sdk.query
+    sdk.query = (input): SdkQueryResult => {
+      queries.push(input as { prompt: unknown; options?: unknown })
+      call += 1
+      if (call === 1) {
+        const failed = (async function* (): AsyncGenerator<SdkMessage> {
+          yield await Promise.reject(new Error('session checkpoint missing'))
+        })() as SdkQueryResult
+        failed.interrupt = async () => {}
+        return failed
+      }
+      return successfulQuery(input)
+    }
+    const { deps } = makeDeps({
+      loadTurnContext: async () => ({
+        workspace: '/ws',
+        userText: 'current request',
+        approvalPolicy: 'auto',
+        bridgeableTools: [],
+        resumeSessionId: 'session_missing',
+        historyTranscript: '[user] portable recovery state'
+      }),
+      loadSdk: async () => sdk,
+      rejectResume
+    })
+
+    await expect(new AgentSdkRuntime(deps).runTurn(
+      'th',
+      'tn',
+      new AbortController().signal
+    )).resolves.toBe('completed')
+
+    expect(rejectResume).toHaveBeenCalledWith('th', 'tn')
+    const actualQueries = queries.filter((entry, index) => index === 0 || index === queries.length - 1)
+    expect(actualQueries[0]?.options).toMatchObject({ resume: 'session_missing' })
+    expect(actualQueries.at(-1)?.options).not.toHaveProperty('resume')
+    expect(String(actualQueries.at(-1)?.prompt)).toContain('portable recovery state')
+  })
+
   test('coalesces token-granular SDK deltas before durable recording', async () => {
     const text = 'x'.repeat(1_000)
     const messages: SdkMessage[] = [
@@ -401,7 +492,7 @@ describe('AgentSdkRuntime.runTurn', () => {
       const running = new AgentSdkRuntime(deps).runTurn('th', 'tn', new AbortController().signal)
       await waiting
 
-      expect(events).toHaveLength(0)
+      expect(events.filter((event) => event.kind === 'assistant_text_delta')).toHaveLength(0)
       await vi.advanceTimersByTimeAsync(40)
       expect(events).toContainEqual(expect.objectContaining({
         kind: 'assistant_text_delta', item: expect.objectContaining({ text: 'live' })
@@ -433,9 +524,12 @@ describe('AgentSdkRuntime.runTurn', () => {
     await expect(new AgentSdkRuntime(deps).runTurn(
       'th', 'tn', new AbortController().signal
     )).resolves.toBe('failed')
-    expect(events.map((event) => event.kind)).toEqual(['assistant_text_delta', 'error'])
-    expect((events[0] as { item: { text: string } }).item.text).toBe('ok')
-    expect(events[1]).toMatchObject({ code: 'stream_resource_limit' })
+    const terminalEvents = events.filter((event) =>
+      event.kind === 'assistant_text_delta' || event.kind === 'error'
+    )
+    expect(terminalEvents.map((event) => event.kind)).toEqual(['assistant_text_delta', 'error'])
+    expect((terminalEvents[0] as { item: { text: string } }).item.text).toBe('ok')
+    expect(terminalEvents[1]).toMatchObject({ code: 'stream_resource_limit' })
   })
 
   test('flushes pending SDK deltas when the user aborts a stalled stream', async () => {

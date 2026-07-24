@@ -224,6 +224,9 @@ export function FloatingComposerContextCapacity({
         visibility: 'hidden'
       }
   const percent = formatPercent(capacity.usedRatio)
+  const ariaLabel = capacity.nativeHistoryUnknown
+    ? t('contextCapacitySdkManagedChipAria', { tokens: capacity.usedTokens })
+    : t('contextCapacityChipAria', { percent })
 
   return (
     <>
@@ -255,7 +258,7 @@ export function FloatingComposerContextCapacity({
           onMouseEnter={openPreview}
           onMouseLeave={closePreviewSoon}
           className="ds-composer-context ds-no-drag inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-transparent text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
-          aria-label={t('contextCapacityChipAria', { percent })}
+          aria-label={ariaLabel}
           aria-expanded={open}
           aria-haspopup="dialog"
         >
@@ -264,25 +267,40 @@ export function FloatingComposerContextCapacity({
             viewBox={`0 0 ${RING_SIZE} ${RING_SIZE}`}
             aria-hidden="true"
           >
-            <circle
-              cx={RING_SIZE / 2}
-              cy={RING_SIZE / 2}
-              r={RING_RADIUS}
-              fill="none"
-              stroke="var(--ds-surface-subtle)"
-              strokeWidth={RING_STROKE}
-            />
-            <circle
-              cx={RING_SIZE / 2}
-              cy={RING_SIZE / 2}
-              r={RING_RADIUS}
-              fill="none"
-              stroke={capacityColor(capacity.usedRatio, capacity.softThresholdRatio)}
-              strokeWidth={RING_STROKE}
-              strokeLinecap="round"
-              strokeDasharray={RING_CIRCUMFERENCE}
-              strokeDashoffset={RING_CIRCUMFERENCE * (1 - Math.min(1, Math.max(0, capacity.usedRatio)))}
-            />
+            {capacity.nativeHistoryUnknown ? (
+              <circle
+                cx={RING_SIZE / 2}
+                cy={RING_SIZE / 2}
+                r={RING_RADIUS}
+                fill="none"
+                stroke="var(--ds-muted)"
+                strokeWidth={RING_STROKE}
+                strokeLinecap="round"
+                strokeDasharray="2 3"
+              />
+            ) : (
+              <>
+                <circle
+                  cx={RING_SIZE / 2}
+                  cy={RING_SIZE / 2}
+                  r={RING_RADIUS}
+                  fill="none"
+                  stroke="var(--ds-surface-subtle)"
+                  strokeWidth={RING_STROKE}
+                />
+                <circle
+                  cx={RING_SIZE / 2}
+                  cy={RING_SIZE / 2}
+                  r={RING_RADIUS}
+                  fill="none"
+                  stroke={capacityColor(capacity.usedRatio, capacity.softThresholdRatio)}
+                  strokeWidth={RING_STROKE}
+                  strokeLinecap="round"
+                  strokeDasharray={RING_CIRCUMFERENCE}
+                  strokeDashoffset={RING_CIRCUMFERENCE * (1 - Math.min(1, Math.max(0, capacity.usedRatio)))}
+                />
+              </>
+            )}
           </svg>
         </button>
       </div>

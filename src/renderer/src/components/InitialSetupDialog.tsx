@@ -166,8 +166,8 @@ function keyPlaceholder(card: SetupProviderCard, mode: InitialSetupSelection['mo
   return card.presetId === 'minimax' ? 'API Key' : 'sk-...'
 }
 
-export function canCloseInitialSetup(mode: InitialSetupMode): boolean {
-  return mode === 'preview'
+export function canCloseInitialSetup(_mode: InitialSetupMode): boolean {
+  return true
 }
 
 export async function completeInitialSetupAfterSave(input: {
@@ -685,7 +685,7 @@ export function InitialSetupDialog(): ReactElement {
                 onClick={handleClose}
                 className="min-h-11 rounded-xl border border-slate-300/80 bg-white/75 px-4 py-2 text-[15px] font-semibold text-slate-700 transition hover:border-slate-400 hover:bg-white dark:border-white/10 dark:bg-white/[0.04] dark:text-slate-200 dark:hover:border-white/16 dark:hover:bg-white/[0.06]"
               >
-                {t('firstRunClose')}
+                {t(isPreview ? 'firstRunClose' : 'firstRunSkip')}
               </button>
             ) : null}
             <button

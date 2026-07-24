@@ -131,15 +131,36 @@ export class ToolExecutionService {
       },
       async () => {
         try {
-          return await this.deps.toolHost.execute(input.call, input.context, async (item) => {
-            const existing = await this.deps.turns.updateItem(input.threadId, item.id, {
-              output: item.kind === 'tool_result' ? item.output : undefined,
-              isError: item.kind === 'tool_result' ? item.isError : undefined,
-              status: 'running'
-            } as Partial<TurnItem>)
-            if (existing) return
-            await this.deps.turns.applyItem(input.threadId, item)
-          })
+          let acceptingUpdates = true
+          let updateFailure: unknown
+          let pendingUpdates = Promise.resolve()
+          let result: ToolHostResult
+          try {
+            result = await this.deps.toolHost.execute(input.call, input.context, (item) => {
+              if (!acceptingUpdates) return
+              const update = pendingUpdates.then(async () => {
+                const existing = await this.deps.turns.updateItem(input.threadId, item.id, {
+                  output: item.kind === 'tool_result' ? item.output : undefined,
+                  isError: item.kind === 'tool_result' ? item.isError : undefined,
+                  status: 'running'
+                } as Partial<TurnItem>)
+                if (existing) return
+                await this.deps.turns.applyItem(input.threadId, item)
+              })
+              pendingUpdates = update.catch((error) => {
+                updateFailure ??= error
+              })
+              return update
+            })
+          } finally {
+            // Tool progress is scoped to the execute() promise. Detached work
+            // may keep a callback reference, but it must not regress an already
+            // completed tool_result back to "running".
+            acceptingUpdates = false
+            await pendingUpdates
+          }
+          if (updateFailure) throw updateFailure
+          return result
         } catch (error) {
           if (input.context.abortSignal.aborted || !isRecoverableToolDispatchError(error)) {
             throw error

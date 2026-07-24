@@ -30,6 +30,11 @@ import {
   type CursorSdkRuntimeDeps
 } from '../runtime/cursor/cursor-sdk-runtime.js'
 import { composeDelegatedTurnRuntimes } from '../runtime/delegated-turn-runtime.js'
+import {
+  DelegatedSessionCoordinator,
+  FileDelegatedSessionBindingStore,
+  delegatedSessionRoot
+} from '../runtime/delegated-session-binding.js'
 import { buildGoalLocalTools } from '../adapters/tool/goal-tools.js'
 import { buildTodoLocalTools } from '../adapters/tool/todo-tools.js'
 import { buildDesignCanvasLocalTools } from '../adapters/tool/design-canvas-tool.js'
@@ -67,8 +72,10 @@ import { AgentLoop, type AgentLoopOptions } from '../loop/agent-loop.js'
 import { ContextCompactor } from '../loop/context-compactor.js'
 import type { TokenEconomyConfig } from '../loop/token-economy.js'
 import {
+  DEFAULT_CONTEXT_THRESHOLDS,
   modelCapabilitiesForModel,
   modelContextProfilesFromConfig,
+  contextThresholdsForModel,
   type ContextCompactionConfig,
   type ModelConfig
 } from '../loop/model-context-profile.js'
@@ -317,6 +324,10 @@ export async function createKunServeRuntime(
   })
   let abortThreadExecution: ((threadId: string) => number) | undefined
   let stopThreadAuxiliaryWork: ((threadId: string) => Promise<void>) | undefined
+  const delegatedSessions = new DelegatedSessionCoordinator(
+    new FileDelegatedSessionBindingStore(delegatedSessionRoot(activeOptions.dataDir)),
+    nowIso
+  )
   const threadService = new ThreadService({
     threadStore,
     deleteThreadStore: rawThreadStore,
@@ -336,7 +347,10 @@ export async function createKunServeRuntime(
       usageService.reset(threadId)
       events.clearThread(threadId)
       eventBus.clearThread(threadId)
-      await llmDebug.deleteThread(threadId)
+      await Promise.all([
+        llmDebug.deleteThread(threadId),
+        delegatedSessions.invalidate(threadId)
+      ])
     }
   })
   const artifactStore = new FileArtifactStore(join(activeOptions.dataDir, 'artifacts'), nowIso)
@@ -345,6 +359,22 @@ export async function createKunServeRuntime(
     models: activeOptions.models
   })
   const modelCapabilities = (model: string) => modelCapabilitiesForModel(model, modelProfiles)
+  const delegatedContextProfile = (model: string) => {
+    const thresholds = contextThresholdsForModel(model, {
+      softThreshold:
+        activeOptions.contextCompaction?.defaultSoftThreshold ??
+        DEFAULT_CONTEXT_THRESHOLDS.softThreshold,
+      hardThreshold:
+        activeOptions.contextCompaction?.defaultHardThreshold ??
+        DEFAULT_CONTEXT_THRESHOLDS.hardThreshold
+    }, modelProfiles)
+    return {
+      contextWindowTokens: modelCapabilities(model).contextWindowTokens ??
+        Math.max(thresholds.softThreshold, thresholds.hardThreshold),
+      softThresholdTokens: thresholds.softThreshold,
+      hardThresholdTokens: thresholds.hardThreshold
+    }
+  }
   // Provider-native subscription transports don't get an HTTP client.
   const agentSdkProviderIds = agentSdkProviderIdsForOptions(activeOptions)
   const antigravityProviderIds = antigravityProviderIdsForOptions(activeOptions)
@@ -518,6 +548,7 @@ export async function createKunServeRuntime(
     contextCompaction: options.contextCompaction,
     maxConcurrentTurns: activeOptions.runtime?.turnLimits?.maxConcurrentTurns,
     lifecycleFence,
+    onCompacted: (threadId) => delegatedSessions.invalidate(threadId),
     migrationMaintenance,
     ids,
     nowIso
@@ -604,7 +635,8 @@ export async function createKunServeRuntime(
 	    maintenance: migrationMaintenance,
 	    attachmentStore: () => attachmentStore,
 	    artifactStore,
-	    memoryStore: () => memoryStore
+	    memoryStore: () => memoryStore,
+	    onThreadImported: (threadId) => delegatedSessions.invalidate(threadId)
 	  })
 	  let imageGenProviders = buildImageGenToolProviders(activeOptions.capabilities?.imageGen, {
 	    attachmentStore,
@@ -724,7 +756,9 @@ export async function createKunServeRuntime(
           ...(process.env.KUN_CLAUDE_BINARY
             ? { pathToClaudeCodeExecutable: process.env.KUN_CLAUDE_BINARY }
             : {}),
-          nowIso
+          nowIso,
+          sessionCoordinator: delegatedSessions,
+          contextProfile: delegatedContextProfile
         })]
       : []),
     ...(antigravityProviderIds.size > 0 || defaultIsAntigravity
@@ -742,7 +776,9 @@ export async function createKunServeRuntime(
           ids: child.ids,
           debugSink: llmDebug,
           turnLimits: activeOptions.runtime?.turnLimits,
-          enforceReadOnly: child.toolPolicy === 'readOnly'
+          enforceReadOnly: child.toolPolicy === 'readOnly',
+          sessionCoordinator: delegatedSessions,
+          contextProfile: delegatedContextProfile
         })]
       : []),
     ...(cursorSdkProviderIds.size > 0 || defaultIsCursorSdk
@@ -761,7 +797,9 @@ export async function createKunServeRuntime(
           debugSink: llmDebug,
           ...(attachmentStore ? { attachmentStore } : {}),
           turnLimits: activeOptions.runtime?.turnLimits,
-          enforceReadOnly: child.toolPolicy === 'readOnly'
+          enforceReadOnly: child.toolPolicy === 'readOnly',
+          sessionCoordinator: delegatedSessions,
+          contextProfile: delegatedContextProfile
         })]
       : [])
     ])
@@ -946,7 +984,9 @@ export async function createKunServeRuntime(
 	      ...(memoryStore ? { memoryStore } : {}),
 	      ...(process.env.KUN_CLAUDE_BINARY
 	        ? { pathToClaudeCodeExecutable: process.env.KUN_CLAUDE_BINARY }
-	        : {})
+	        : {}),
+	      sessionCoordinator: delegatedSessions,
+	      contextProfile: delegatedContextProfile
 	    }
 	  }
 	  let antigravityRuntimeDeps: AntigravityCliRuntimeDeps | undefined
@@ -964,7 +1004,9 @@ export async function createKunServeRuntime(
 	      events,
 	      ids,
 	      debugSink: llmDebug,
-	      turnLimits: activeOptions.runtime?.turnLimits
+	      turnLimits: activeOptions.runtime?.turnLimits,
+	      sessionCoordinator: delegatedSessions,
+	      contextProfile: delegatedContextProfile
 	    }
 	  }
 	  let cursorRuntimeDeps: CursorSdkRuntimeDeps | undefined
@@ -983,7 +1025,9 @@ export async function createKunServeRuntime(
 	      ids,
 	      debugSink: llmDebug,
 	      ...(attachmentStore ? { attachmentStore } : {}),
-	      turnLimits: activeOptions.runtime?.turnLimits
+	      turnLimits: activeOptions.runtime?.turnLimits,
+	      sessionCoordinator: delegatedSessions,
+	      contextProfile: delegatedContextProfile
 	    }
 	  }
 

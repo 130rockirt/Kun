@@ -37,6 +37,8 @@ import {
 } from './sdk-tool-bridge.js'
 import { composeSdkPromptText } from './sdk-context-assembler.js'
 import type { SdkApi, SdkMessage, SdkQueryResult } from './sdk-protocol.js'
+import type { DelegatedSessionPreparation } from '../delegated-session-binding.js'
+import type { DelegatedRuntimeCapabilities } from '../delegated-turn-runtime.js'
 
 export type TurnStatus = 'completed' | 'failed' | 'aborted'
 
@@ -66,6 +68,15 @@ export interface SdkTurnContext {
   model?: string
   /** Prior SDK session id for multi-turn continuity. */
   resumeSessionId?: string
+  /** Kun-owned local Claude state root for this thread. */
+  claudeConfigDir?: string
+  /** Opaque, non-secret coordinator token for committing a successful turn. */
+  sessionPreparation?: DelegatedSessionPreparation
+  contextProfile?: {
+    contextWindowTokens: number
+    softThresholdTokens: number
+    hardThresholdTokens: number
+  }
   /** Subscription OAuth token; absent => rely on the host's Claude Code login. */
   oauthToken?: string
   /** Image attachments to forward to the model (base64 + media type). */
@@ -73,8 +84,8 @@ export interface SdkTurnContext {
   /** kun tool catalog to consider bridging (overlap/excluded are filtered here). */
   bridgeableTools: BridgeableTool[]
   /**
-   * Prior-conversation transcript replayed each turn so the model has kun's
-   * canonical history (the SDK doesn't see it otherwise). '' / absent => none.
+   * Portable prior-conversation handoff used only when creating/rebasing a
+   * native session. Resumed turns send only their current delta.
    */
   historyTranscript?: string
   /**
@@ -83,6 +94,7 @@ export interface SdkTurnContext {
    * Mirrors the native loop's `contextInstructions`.
    */
   contextInstructions?: string[]
+  activeSkillIds?: string[]
 }
 
 /**
@@ -138,8 +150,10 @@ export interface SdkRuntimeDeps {
   applyItem(threadId: string, item: TurnItem): Promise<void>
   /** Finish the turn lifecycle (turns.finishTurn). */
   finishTurn(threadId: string, turnId: string, status: TurnStatus, error?: string): Promise<void>
-  /** Persist the SDK session id on the thread for next-turn resume. */
-  saveSessionId(threadId: string, sessionId: string): Promise<void>
+  /** Stage the SDK session id for commit after Kun finishes successfully. */
+  saveSessionId(threadId: string, turnId: string, sessionId: string): Promise<void>
+  /** Rotate an unusable native resume preparation before the portable retry. */
+  rejectResume?(threadId: string, turnId: string): Promise<void> | void
   /** Lazy-load the real `@anthropic-ai/claude-agent-sdk`. */
   loadSdk(): Promise<SdkApi>
   /** Base process env to scope for the Claude Code subprocess. */
@@ -154,6 +168,8 @@ export interface SdkRuntimeDeps {
   getSdkStreamLimits?(): Partial<SdkStreamResourceLimits> | undefined
   /** Optional explicit path to the bundled Claude Code binary (packaging). */
   pathToClaudeCodeExecutable?: string
+  /** Serialize native ownership for one Kun thread. */
+  runExclusive?<T>(threadId: string, operation: () => Promise<T>): Promise<T>
 }
 
 /** Persist an item only at milestones, not on every streaming delta. */
@@ -269,7 +285,23 @@ export class AgentSdkRuntime {
     return this.deps.handlesProvider(providerId)
   }
 
+  capabilities(providerId: string | undefined): DelegatedRuntimeCapabilities | undefined {
+    if (!this.handlesProvider(providerId)) return undefined
+    return agentSdkCapabilities()
+  }
+
   async runTurn(
+    threadId: string,
+    turnId: string,
+    signal: AbortSignal
+  ): Promise<'completed' | 'failed' | 'aborted'> {
+    const execute = () => this.runTurnOwned(threadId, turnId, signal)
+    return this.deps.runExclusive
+      ? this.deps.runExclusive(threadId, execute)
+      : execute()
+  }
+
+  private async runTurnOwned(
     threadId: string,
     turnId: string,
     signal: AbortSignal
@@ -378,6 +410,7 @@ export class AgentSdkRuntime {
       const bridged = buildBridgedToolSpecs(selectBridgeableTools(ctx.bridgeableTools), (name, args) =>
         this.deps.executeKunTool(threadId, turnId, name, args, abort.signal)
       )
+      let resumeSessionId = ctx.resumeSessionId
       const buildOptions = (maxTurns?: number) => assembleSdkOptions({
           cwd: ctx.workspace,
           kunSystemPrompt: this.deps.kunSystemPrompt(),
@@ -402,26 +435,72 @@ export class AgentSdkRuntime {
             if (sandboxDecision) return sandboxDecision
             return this.deps.decideToolApproval(threadId, turnId, name, input, abort.signal)
           }),
-          baseEnv: this.deps.baseEnv(),
+          baseEnv: {
+            ...this.deps.baseEnv(),
+            ...(ctx.claudeConfigDir ? { CLAUDE_CONFIG_DIR: ctx.claudeConfigDir } : {})
+          },
           oauthToken: ctx.oauthToken,
           abortController: abort,
           ...(maxTurns !== undefined ? { maxTurns } : {}),
           ...(ctx.model ? { model: ctx.model } : {}),
-          ...(ctx.resumeSessionId ? { resume: ctx.resumeSessionId } : {}),
+          ...(resumeSessionId ? { resume: resumeSessionId } : {}),
           ...(this.deps.pathToClaudeCodeExecutable
             ? { pathToClaudeCodeExecutable: this.deps.pathToClaudeCodeExecutable }
             : {})
         })
 
-      // kun owns canonical history, so each SDK turn is stateless: replay the
-      // prior conversation + per-turn instructions as text and end with the live
-      // request. (Deliberately NOT using the SDK's `resume` — it's lost on a
-      // provider switch or runtime restart; the transcript survives both.)
-      const composedText = composeSdkPromptText({
-        ...(ctx.historyTranscript ? { historyTranscript: ctx.historyTranscript } : {}),
+      // A compatible native session already owns prior context. Portable
+      // history is sent only when seeding a new generation.
+      const composeTurnText = (): string => composeSdkPromptText({
+        ...(!resumeSessionId && ctx.historyTranscript
+          ? { historyTranscript: ctx.historyTranscript }
+          : {}),
         userText: ctx.userText,
         ...(ctx.contextInstructions?.length ? { instructionBlocks: ctx.contextInstructions } : {})
       })
+      const capabilities = agentSdkCapabilities()
+      await this.deps.recordEvent({
+        kind: 'delegated_runtime',
+        threadId,
+        turnId,
+        providerKind: 'agent-sdk',
+        providerId: ctx.sessionPreparation?.route.providerId ?? 'default',
+        phase: resumeSessionId ? 'resumed' : 'rebased',
+        ...(ctx.sessionPreparation?.rebaseReason
+          ? { reason: ctx.sessionPreparation.rebaseReason }
+          : {}),
+        capabilities
+      })
+      const recordContextSnapshot = async (): Promise<void> => {
+        if (!ctx.contextProfile) return
+        const system = estimatedTokens([
+          this.deps.kunSystemPrompt(),
+          ctx.threadPersona ?? ''
+        ].join('\n'))
+        const tools = estimatedTokens(JSON.stringify(ctx.bridgeableTools))
+        const skills = estimatedTokens((ctx.contextInstructions ?? []).join('\n'))
+        const messages = estimatedTokens([
+          resumeSessionId ? '' : ctx.historyTranscript ?? '',
+          ctx.userText
+        ].join('\n'))
+        const other = (ctx.images?.length ?? 0) * 1_024
+        await this.deps.recordEvent({
+          kind: 'context_snapshot',
+          threadId,
+          turnId,
+          model: ctx.model ?? 'claude-default',
+          providerId: ctx.sessionPreparation?.route.providerId ?? 'default',
+          stepIndex: 0,
+          ...ctx.contextProfile,
+          estimatedInputTokens: tools + system + skills + messages + other,
+          breakdown: { tools, system, skills, messages, other },
+          toolCount: ctx.bridgeableTools.length,
+          activeSkillIds: [...(ctx.activeSkillIds ?? [])],
+          contextManagement: 'sdk-managed',
+          nativeHistory: resumeSessionId ? 'unknown' : 'none'
+        })
+      }
+      await recordContextSnapshot()
       const svgCompletion: SdkSvgCompletionState = {
         sequence: 0,
         lastMutation: -1,
@@ -439,6 +518,7 @@ export class AgentSdkRuntime {
           stepLimitFailed = true
           break
         }
+        const composedText = composeTurnText()
         const attemptText = attempt === 0
           ? composedText
           : `${composedText}\n\n${svgCompletionRecoveryInstruction(svgCompletion)}`
@@ -451,49 +531,73 @@ export class AgentSdkRuntime {
         activeStream = stream
         activeStreamInterrupted = false
         let attemptFinalSeen = false
+        let attemptMessageSeen = false
         let attemptTurns = 0
         const iterator = stream[Symbol.asyncIterator]()
-        for (;;) {
-          const next = await awaitAbortable(() => iterator.next(), abort.signal)
-          if (next.done) break
-          const message = next.value
-          if (signal.aborted || abort.signal.aborted) {
-            interruptActiveStream()
-            break
-          }
-          if (message.type === 'result') {
-            attemptFinalSeen = true
-            attemptTurns = sdkResultTurnCount(message)
-          }
-          for (const draft of mapper.map(message)) {
-            const delta = assistantDeltaOf(draft)
-            if (delta) {
-              await deltaEvents.append(delta)
-              continue
+        try {
+          for (;;) {
+            const next = await awaitAbortable(() => iterator.next(), abort.signal)
+            if (next.done) break
+            attemptMessageSeen = true
+            const message = next.value
+            if (signal.aborted || abort.signal.aborted) {
+              interruptActiveStream()
+              break
             }
-            // Preserve the mapper's exact event order: milestones, tools,
-            // usage, and errors may not overtake pending assistant deltas.
-            await deltaEvents.flush()
-            const item = itemOf(draft)
-            if (ctx.requireSvgCompletion && item) observeSvgToolResult(svgCompletion, item)
-            if (item && shouldPersist(item)) {
-              // applyItem persists the item AND records its own item_created event,
-              // so only ALSO record non-item_created signal events (tool_call_ready,
-              // tool_call_finished) — never the item_created draft itself, or the
-              // item would be published twice.
-              await this.deps.applyItem(threadId, item)
-              if (draft.kind !== 'item_created') await this.deps.recordEvent(draft)
-            } else {
-              await this.deps.recordEvent(draft)
+            if (message.type === 'result') {
+              attemptFinalSeen = true
+              attemptTurns = sdkResultTurnCount(message)
+            }
+            for (const draft of mapper.map(message)) {
+              const delta = assistantDeltaOf(draft)
+              if (delta) {
+                await deltaEvents.append(delta)
+                continue
+              }
+              // Preserve the mapper's exact event order: milestones, tools,
+              // usage, and errors may not overtake pending assistant deltas.
+              await deltaEvents.flush()
+              const item = itemOf(draft)
+              if (ctx.requireSvgCompletion && item) observeSvgToolResult(svgCompletion, item)
+              if (item && shouldPersist(item)) {
+                // applyItem persists the item AND records its own item_created event,
+                // so only ALSO record non-item_created signal events (tool_call_ready,
+                // tool_call_finished) — never the item_created draft itself, or the
+                // item would be published twice.
+                await this.deps.applyItem(threadId, item)
+                if (draft.kind !== 'item_created') await this.deps.recordEvent(draft)
+              } else {
+                await this.deps.recordEvent(draft)
+              }
+            }
+            // `result` is terminal and already carries usage/final status. Give
+            // the Query a bounded chance to clean up before an SVG retry starts.
+            if (attemptFinalSeen) {
+              const closed = await closeIterator(iterator, abort.signal)
+              if (!closed) interruptActiveStream()
+              break
             }
           }
-          // `result` is terminal and already carries usage/final status. Give
-          // the Query a bounded chance to clean up before an SVG retry starts.
-          if (attemptFinalSeen) {
-            const closed = await closeIterator(iterator, abort.signal)
-            if (!closed) interruptActiveStream()
-            break
+        } catch (error) {
+          if (resumeSessionId && !attemptMessageSeen && !abort.signal.aborted) {
+            resumeSessionId = undefined
+            activeStream = undefined
+            await this.deps.rejectResume?.(threadId, turnId)
+            await this.deps.recordEvent({
+              kind: 'delegated_runtime',
+              threadId,
+              turnId,
+              providerKind: 'agent-sdk',
+              providerId: ctx.sessionPreparation?.route.providerId ?? 'default',
+              phase: 'rebased',
+              reason: 'native_state_unavailable',
+              capabilities
+            })
+            await recordContextSnapshot()
+            attempt -= 1
+            continue
           }
+          throw error
         }
         if (timedOut) interruptActiveStream()
         activeStream = undefined
@@ -527,8 +631,11 @@ export class AgentSdkRuntime {
       }
 
       await deltaEvents.flush()
-      const sessionId = mapper.getSessionId()
-      if (sessionId) await this.deps.saveSessionId(threadId, sessionId)
+      // Some SDK versions omit a fresh init/session message when resuming.
+      // A successful resumed query still advances the already validated native
+      // session, so retain that ID instead of downgrading the binding.
+      const sessionId = mapper.getSessionId() ?? resumeSessionId
+      if (sessionId) await this.deps.saveSessionId(threadId, turnId, sessionId)
 
       if (signal.aborted) {
         await this.deps.finishTurn(threadId, turnId, 'aborted')
@@ -590,7 +697,7 @@ export class AgentSdkRuntime {
       }
       abort.abort(failure)
       interruptActiveStream()
-      const message = failure instanceof Error ? failure.message : String(failure)
+      const message = sanitizeAgentSdkError(failure, ctx.oauthToken)
       await this.deps.recordEvent({ kind: 'error', threadId, turnId, message })
       await this.deps.finishTurn(threadId, turnId, 'failed', message)
       return 'failed'
@@ -599,6 +706,27 @@ export class AgentSdkRuntime {
       clearTimeout(timeout)
       signal.removeEventListener('abort', onAbort)
     }
+  }
+}
+
+function estimatedTokens(text: string): number {
+  return text ? Math.ceil(Buffer.byteLength(text, 'utf8') / 4) : 0
+}
+
+function sanitizeAgentSdkError(error: unknown, oauthToken: string | undefined): string {
+  const message = error instanceof Error ? error.message : String(error)
+  return oauthToken ? message.split(oauthToken).join('[REDACTED]') : message
+}
+
+export function agentSdkCapabilities(): DelegatedRuntimeCapabilities {
+  return {
+    nativeResume: true,
+    structuredStreaming: true,
+    kunTools: true,
+    externalApproval: true,
+    liveSteering: false,
+    nativeContextTelemetry: false,
+    fork: false
   }
 }
 
