@@ -497,6 +497,7 @@ describe('chat-store-thread-actions queued messages', () => {
     registryMock.getProvider.mockReturnValue({ steerUserMessage })
     const { actions, state } = buildHarness()
     state.currentTurnId = 'turn_active'
+    state.currentTurnUserId = 'user-original'
     state.queuedMessages = [{
       id: 'q-guide',
       text: 'use the compact logo instead',
@@ -513,7 +514,49 @@ describe('chat-store-thread-actions queued messages', () => {
       { displayText: 'Use the compact logo instead' }
     )
     expect(state.queuedMessages).toEqual([])
+    expect(state.blocks).toContainEqual(expect.objectContaining({
+      kind: 'user',
+      id: 'q-guide',
+      turnId: 'turn_active',
+      text: 'Use the compact logo instead',
+      meta: { displayText: 'Use the compact logo instead' }
+    }))
+    expect(state.currentTurnUserId).toBe('user-original')
     expect(state.error).toBeNull()
+  })
+
+  it('does not duplicate guided input when its SSE user message wins the request race', async () => {
+    const { actions, state } = buildHarness()
+    state.currentTurnId = 'turn_active'
+    state.currentTurnUserId = 'user-original'
+    state.queuedMessages = [{
+      id: 'q-guide-race',
+      text: 'use the compact logo instead',
+      displayText: 'Use the compact logo instead',
+      mode: 'agent'
+    }]
+    const steerUserMessage = vi.fn(async () => {
+      state.blocks = [
+        ...state.blocks,
+        {
+          kind: 'user',
+          id: 'item_guided_user',
+          turnId: 'turn_active',
+          createdAt: new Date().toISOString(),
+          text: 'use the compact logo instead',
+          meta: { displayText: 'Use the compact logo instead' }
+        }
+      ]
+    })
+    registryMock.getProvider.mockReturnValue({ steerUserMessage })
+
+    await expect(actions.guideQueuedMessage('q-guide-race')).resolves.toBe(true)
+
+    expect(state.queuedMessages).toEqual([])
+    expect(state.blocks.filter((block) => block.kind === 'user')).toEqual([
+      expect.objectContaining({ id: 'item_guided_user' })
+    ])
+    expect(state.currentTurnUserId).toBe('user-original')
   })
 
   it('keeps structured queued input when text-only guidance is ineligible', async () => {
@@ -553,6 +596,7 @@ describe('chat-store-thread-actions queued messages', () => {
     expect(state.queuedMessages).toEqual([
       expect.objectContaining({ id: 'q-race', text: 'do not lose this follow-up' })
     ])
+    expect(state.blocks).toEqual([])
     expect(state.error).toContain('turn is no longer accepting steering')
   })
 

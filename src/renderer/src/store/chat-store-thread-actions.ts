@@ -130,6 +130,35 @@ import {
 import { GitCheckpointAvailabilityCache } from '../lib/git-checkpoint-availability'
 import type { ComposerContextAttachment } from '@kun/extension-api'
 
+const GUIDED_MESSAGE_RACE_WINDOW_MS = 5_000
+
+function hasRuntimeUserBlockForGuidance(
+  blocks: ChatBlock[],
+  message: { text: string; displayText?: string },
+  turnId: string,
+  requestStartedAt: number,
+  requestCompletedAt: number
+): boolean {
+  const expectedTexts = new Set(
+    [message.text, message.displayText]
+      .map((text) => text?.trim())
+      .filter((text): text is string => Boolean(text))
+  )
+  return blocks.some((block) => {
+    if (block.kind !== 'user' || block.id.startsWith('q-')) return false
+    const blockTurnId = block.turnId?.trim() || block.meta?.turnId?.trim()
+    if (blockTurnId !== turnId) return false
+    const blockTexts = [block.text, block.meta?.displayText]
+      .map((text) => text?.trim())
+      .filter((text): text is string => Boolean(text))
+    if (!blockTexts.some((text) => expectedTexts.has(text))) return false
+    const createdAt = block.createdAt ? Date.parse(block.createdAt) : Number.NaN
+    return Number.isFinite(createdAt) &&
+      createdAt >= requestStartedAt - GUIDED_MESSAGE_RACE_WINDOW_MS &&
+      createdAt <= requestCompletedAt + GUIDED_MESSAGE_RACE_WINDOW_MS
+  })
+}
+
 type SseAbortRef = { current: AbortController | null }
 
 type StoreActionContext = {
@@ -788,6 +817,7 @@ export function createThreadActions(
     }
 
     guidingQueuedMessageIds.add(id)
+    const requestStartedAt = Date.now()
     try {
       await provider.steerUserMessage(
         state.activeThreadId,
@@ -795,10 +825,39 @@ export function createThreadActions(
         message.text,
         message.displayText ? { displayText: message.displayText } : undefined
       )
-      set((current) => ({
-        queuedMessages: current.queuedMessages.filter((candidate) => candidate.id !== id),
-        error: null
-      }))
+      const requestCompletedAt = Date.now()
+      set((current) => {
+        const stillQueued = current.queuedMessages.some((candidate) => candidate.id === id)
+        if (!stillQueued) return { error: null }
+        const runtimeMessageAlreadyVisible = hasRuntimeUserBlockForGuidance(
+          current.blocks,
+          message,
+          state.currentTurnId!,
+          requestStartedAt,
+          requestCompletedAt
+        )
+        const displayText = message.displayText ?? message.text
+        return {
+          queuedMessages: current.queuedMessages.filter((candidate) => candidate.id !== id),
+          blocks: runtimeMessageAlreadyVisible
+            ? current.blocks
+            : [
+                ...current.blocks,
+                {
+                  kind: 'user' as const,
+                  id: message.id,
+                  turnId: state.currentTurnId!,
+                  createdAt: new Date(requestCompletedAt).toISOString(),
+                  text: displayText,
+                  ...(message.modelLabel ? { modelLabel: message.modelLabel } : {}),
+                  ...(message.displayText && message.displayText !== message.text
+                    ? { meta: { displayText: message.displayText } }
+                    : {})
+                }
+              ],
+          error: null
+        }
+      })
       persistActiveQueuedMessages()
       return true
     } catch (error) {

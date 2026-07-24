@@ -95,9 +95,9 @@ export function reduceChatProjection(
         : baseBlocks
       const currentTurnUserId = backgroundNotice
         ? optimisticUserId
-        : reconcileOptimistic || !optimisticUserId
+        : currentOptimisticUserId
           ? event.itemId
-          : optimisticUserId
+          : optimisticUserId ?? event.itemId
       const startedAt = runtimeEventStartedAt(event.createdAt, context.now)
       return {
         ...flushed,

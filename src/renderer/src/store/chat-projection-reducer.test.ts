@@ -168,6 +168,54 @@ describe('chat projection reducer', () => {
     expect(projected.blocks[1]).toMatchObject({ kind: 'compaction', id: 'compaction_1' })
   })
 
+  it('reconciles guided optimistic input without replacing the active turn owner', () => {
+    const createdAt = '2026-07-11T00:00:00.000Z'
+    const initial = {
+      ...state(),
+      busy: true,
+      currentTurnId: 'turn_1',
+      currentTurnUserId: 'item_original_user',
+      turnStartedAtByUserId: { item_original_user: NOW - 1_000 },
+      blocks: [
+        {
+          kind: 'user' as const,
+          id: 'item_original_user',
+          turnId: 'turn_1',
+          createdAt: '2026-07-10T23:59:00.000Z',
+          text: 'Build the page'
+        },
+        {
+          kind: 'user' as const,
+          id: 'q-guided',
+          turnId: 'turn_1',
+          createdAt,
+          text: 'Use the compact logo instead',
+          meta: { displayText: 'Use the compact logo instead' }
+        }
+      ]
+    }
+
+    const projected = project(initial, [{
+      type: 'user_message_received',
+      payload: {
+        itemId: 'item_guided_user',
+        turnId: 'turn_1',
+        createdAt,
+        text: 'use the compact logo instead',
+        meta: { displayText: 'Use the compact logo instead' }
+      }
+    }])
+
+    expect(projected.blocks).toHaveLength(2)
+    expect(projected.blocks[1]).toMatchObject({
+      kind: 'user',
+      id: 'item_guided_user',
+      turnId: 'turn_1',
+      meta: { displayText: 'Use the compact logo instead' }
+    })
+    expect(projected.currentTurnUserId).toBe('item_original_user')
+  })
+
   it('keeps only the latest automatic compaction marker for a turn', () => {
     const projected = project(state(), [
       {
