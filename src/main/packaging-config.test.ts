@@ -258,6 +258,9 @@ describe('electron-builder Kun packaging', () => {
     const installerScript = readFileSync(join(process.cwd(), 'build/installer.nsh'), 'utf8')
 
     expect(builderConfig.nsis.include).toBe('build/installer.nsh')
+    expect(installerScript).toContain('!macro customInit')
+    expect(installerScript).toContain('${if} ${isUpdated}')
+    expect(installerScript).toContain('SetSilent silent')
     expect(installerScript).toContain('customCheckAppRunning')
     expect(installerScript).toContain('customUnInstallCheck')
     expect(installerScript).toContain('customUnInstallCheckCurrentUser')
