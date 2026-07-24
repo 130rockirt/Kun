@@ -1019,6 +1019,8 @@
   "mcpFormVisibleRootsHint": "Optional. Leave blank to show this server in every workspace; add paths to expose it only inside those projects.",
   "mcpFormTrustedRoots": "Trusted workspace paths (one per line)",
   "mcpFormTrustedRootsPlaceholder": "/Users/me/project",
+  "mcpFormPlanReadOnlyTools": "Plan-mode read-only tools (one name per line)",
+  "mcpFormPlanReadOnlyToolsHint": "Only list tools you trust to have no side effects. Remote MCP read-only annotations are not treated as authorization.",
   "mcpFormErrorNameRequired": "Name is required.",
   "mcpFormErrorNameDuplicate": "Names must be unique.",
   "mcpFormErrorCommandRequired": "Command is required for a local (stdio) server.",

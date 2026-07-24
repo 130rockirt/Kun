@@ -77,6 +77,60 @@ const descriptor: McpToolDescriptor = {
 }
 
 describe('mcp tool provider reliability', () => {
+  it('uses only host configuration, not remote read-only annotations, for Plan access', async () => {
+    const client = new MockMcpClient([descriptor], vi.fn(async () => ({ ok: true })))
+    const untrustedHint = await buildMcpToolProviders(config, {
+      clientFactory: vi.fn(async () => client)
+    })
+    const hintedTool = untrustedHint.providers
+      .flatMap((provider) => provider.tools)
+      .find((tool) => tool.name === 'mcp_docs_lookup')
+    expect(hintedTool?.sideEffect).toBeUndefined()
+
+    const hostConfigured = McpCapabilityConfig.parse({
+      enabled: true,
+      servers: { docs: { ...server, planModeReadOnlyTools: ['lookup'] } },
+      search: { enabled: false }
+    })
+    const configured = await buildMcpToolProviders(hostConfigured, {
+      clientFactory: vi.fn(async () => new MockMcpClient([descriptor], vi.fn(async () => ({ ok: true }))))
+    })
+    const configuredTool = configured.providers
+      .flatMap((provider) => provider.tools)
+      .find((tool) => tool.name === 'mcp_docs_lookup')
+    expect(configuredTool?.sideEffect).toBe('read-only')
+  })
+
+  it('gates the search-mode read-only call gateway with host configuration', async () => {
+    const callTool = vi.fn(async () => ({ rows: [{ id: 1 }] }))
+    const configured = McpCapabilityConfig.parse({
+      enabled: true,
+      servers: { docs: { ...server, planModeReadOnlyTools: ['lookup'] } },
+      search: { enabled: true, mode: 'search', topKDefault: 5, topKMax: 10, minScore: 0.15 }
+    })
+    const built = await buildMcpToolProviders(configured, {
+      clientFactory: vi.fn(async () => new MockMcpClient([descriptor], callTool))
+    })
+    const gateway = built.providers
+      .flatMap((provider) => provider.tools)
+      .find((tool) => tool.name === 'mcp_read_only_call')
+
+    expect(gateway?.sideEffect).toBe('read-only')
+    await expect(gateway!.execute({ toolId: 'mcp_docs_lookup', arguments: {} }, context))
+      .resolves.toMatchObject({ output: { result: { rows: [{ id: 1 }] } } })
+    expect(callTool).toHaveBeenCalledTimes(1)
+
+    const unconfigured = await buildMcpToolProviders(searchConfig, {
+      clientFactory: vi.fn(async () => new MockMcpClient([descriptor], callTool))
+    })
+    const blockedGateway = unconfigured.providers
+      .flatMap((provider) => provider.tools)
+      .find((tool) => tool.name === 'mcp_read_only_call')
+    await expect(blockedGateway!.execute({ toolId: 'mcp_docs_lookup', arguments: {} }, context))
+      .resolves.toMatchObject({ isError: true, output: { error: expect.stringContaining('not host-approved') } })
+    expect(callTool).toHaveBeenCalledTimes(1)
+  })
+
   it('does not replay concurrent MCP calls based on server read-only annotations', async () => {
     const first = new MockMcpClient([descriptor], vi.fn(async () => {
       throw new Error('socket connection reset')

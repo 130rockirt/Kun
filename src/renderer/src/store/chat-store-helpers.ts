@@ -481,11 +481,11 @@ export function fallbackComposerModel(
   runtimeDefault: string,
   modelGroups: readonly ModelProviderModelGroup[] = []
 ): string {
-  const firstProviderModel = firstSelectableProviderModel(pickList, modelGroups)
-  if (firstProviderModel) return firstProviderModel
   const allowed = new Set(pickList)
   const preferred = runtimeDefault.trim()
   if (preferred && preferred.toLowerCase() !== 'auto' && allowed.has(preferred)) return preferred
+  const firstProviderModel = firstSelectableProviderModel(pickList, modelGroups)
+  if (firstProviderModel) return firstProviderModel
   return DEFAULT_COMPOSER_MODEL_IDS.find((id) => allowed.has(id)) ?? pickList[0] ?? ''
 }
 

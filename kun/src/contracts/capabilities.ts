@@ -143,6 +143,8 @@ export const McpServerConfig = z
     oauth: McpOAuthConfig.optional(),
     trustScope: McpTrustScope.default('workspace'),
     trustedWorkspaceRoots: z.array(z.string().min(1)).default([]),
+    /** MCP tool names explicitly trusted by the host as read-only in Plan mode. */
+    planModeReadOnlyTools: z.array(z.string().min(1)).default([]),
     timeoutMs: z.number().int().positive().default(30_000)
   })
   .strict()
@@ -187,7 +189,10 @@ export const McpServerConfig = z
       })
     }
   })
-export type McpServerConfig = z.infer<typeof McpServerConfig>
+type ParsedMcpServerConfig = z.infer<typeof McpServerConfig>
+export type McpServerConfig = Omit<ParsedMcpServerConfig, 'planModeReadOnlyTools'> & {
+  planModeReadOnlyTools?: string[]
+}
 
 export const McpCapabilityConfig = CapabilityToggleConfig.extend({
   servers: z.record(z.string().min(1), McpServerConfig).default({}),

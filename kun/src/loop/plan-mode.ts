@@ -16,7 +16,8 @@ export const PLAN_MODE_INSTRUCTION = [
   'Do NOT modify project files, apply edits, run shell commands, or run mutating commands in this mode.',
   'If the request is ambiguous or hinges on a decision only the user can make, ask before planning: prefer the `user_input` tool to ask one concise round of clarifying questions (offer concrete options when there are any), then use the answer to write the plan in the same turn. If that tool is not available, end your turn with the question(s) in prose and wait for the answer. Either way, do NOT call `create_plan` until the ambiguity is resolved — a set of options the user still has to choose between is not a plan.',
   'When you understand the task well enough, call the `create_plan` tool to save a complete implementation plan as Markdown.',
-  'Use `operation: "draft"` for the first plan, and `operation: "refine"` when revising an existing plan; you may call `create_plan` multiple times as the plan evolves.',
+  'Use `operation: "draft"` only when this thread has no associated plan or the user explicitly asks for a separate new plan. Use `operation: "refine"` for changes, adjustments, additions, or optimizations to the associated plan, and keep its exact `plan_id` and `plan_relative_path`.',
+  'Never create `-2`, `-3`, or similar version-suffixed plan files to revise an associated plan; revise that plan in place.',
   'Write concrete, actionable steps rather than vague intentions, and structure the saved Markdown with `##` section headings (e.g. Summary, Steps, Tests, Risks).',
   'Favor the smallest plan that fully solves the task: question whether each proposed component, abstraction, dependency, config knob, or new file needs to exist at all (YAGNI), and prefer the standard library, a native platform feature, or an already-present dependency over new custom code. Do NOT trim correctness, input validation, error handling, security, or accessibility to make a plan smaller.',
   'After saving, give the user a short summary of the plan and what to review.'
@@ -69,7 +70,11 @@ export function resolvePlanModeToolSpecs(
   const planTool = options.planToolName ?? CREATE_PLAN_TOOL_NAME
   return options.stepIndex === 0
     ? toolSpecs.filter(
-        (tool) => tool.name === planTool || readOnly.has(tool.name) || interactive.has(tool.name)
+        (tool) =>
+          tool.name === planTool ||
+          readOnly.has(tool.name) ||
+          interactive.has(tool.name) ||
+          tool.sideEffect === 'read-only'
       )
     : toolSpecs.filter((tool) => tool.name === planTool)
 }

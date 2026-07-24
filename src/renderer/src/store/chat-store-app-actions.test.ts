@@ -122,7 +122,7 @@ describe('chat-store app actions composer model loading', () => {
     vi.unstubAllGlobals()
   })
 
-  it('restores the previously selected custom model after the full model list loads', async () => {
+  it('prefers the configured default model over a stale global composer model', async () => {
     localStorage.setItem(COMPOSER_MODEL_STORAGE_KEY, 'MiniMax-M2')
     const { actions, state } = buildHarness({
       ok: true,
@@ -137,10 +137,10 @@ describe('chat-store app actions composer model loading', () => {
 
     await actions.loadComposerModels()
 
-    expect(state.composerModel).toBe('MiniMax-M2')
-    expect(state.composerProviderId).toBe('minimax')
+    expect(state.composerModel).toBe('deepseek-v4-pro')
+    expect(state.composerProviderId).toBe('')
     expect(localStorage.getItem(COMPOSER_MODEL_STORAGE_KEY)).toBe('MiniMax-M2')
-    expect(localStorage.getItem(COMPOSER_PROVIDER_STORAGE_KEY)).toBe('minimax')
+    expect(localStorage.getItem(COMPOSER_PROVIDER_STORAGE_KEY)).toBeNull()
   })
 
   it('reloads the composer list after settings change during an in-flight model read', async () => {
@@ -381,7 +381,7 @@ describe('chat-store app actions composer model loading', () => {
     expect(state.composerProviderId).toBe('')
   })
 
-  it('falls back to the first configured provider model when a thread selection was removed', async () => {
+  it('falls back to the configured runtime default when a thread selection was removed', async () => {
     localStorage.setItem(
       THREAD_COMPOSER_SELECTION_STORAGE_KEY,
       JSON.stringify({ 'thread-a': { model: 'deleted-model', providerId: 'old-provider' } })
@@ -409,10 +409,10 @@ describe('chat-store app actions composer model loading', () => {
 
     await actions.loadComposerModels()
 
-    expect(state.composerModel).toBe('MiniMax-M3')
-    expect(state.composerProviderId).toBe('minimax')
+    expect(state.composerModel).toBe('deepseek-v4-pro')
+    expect(state.composerProviderId).toBe('')
     expect(JSON.parse(localStorage.getItem(THREAD_COMPOSER_SELECTION_STORAGE_KEY) ?? '{}')).toEqual({
-      'thread-a': { model: 'MiniMax-M3', providerId: 'minimax' }
+      'thread-a': { model: 'deepseek-v4-pro', providerId: '' }
     })
   })
 

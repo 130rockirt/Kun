@@ -493,7 +493,21 @@ describe('AgentSdkRuntime.runTurn', () => {
     expect(seenOptions.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe('sk-ant-oat01-tok')
   })
 
-  test('maps native maxSteps onto the SDK maxTurns option', async () => {
+  test('omits the SDK maxTurns option by default', async () => {
+    let seenMaxTurns: number | undefined
+    const { deps } = makeDeps({
+      loadSdk: async () => fakeSdk(STREAM, (options) => {
+        seenMaxTurns = (options as { maxTurns?: number }).maxTurns
+      })
+    })
+
+    await expect(new AgentSdkRuntime(deps).runTurn(
+      'th', 'tn', new AbortController().signal
+    )).resolves.toBe('completed')
+    expect(seenMaxTurns).toBeUndefined()
+  })
+
+  test('maps an explicit native maxSteps onto the SDK maxTurns option', async () => {
     let seenMaxTurns: number | undefined
     const { deps } = makeDeps({
       getTurnLimits: () => ({ maxSteps: 7, maxWallTimeMs: 60_000, maxToolCallsPerStep: 3 }),

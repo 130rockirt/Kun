@@ -378,7 +378,7 @@ export class AgentSdkRuntime {
       const bridged = buildBridgedToolSpecs(selectBridgeableTools(ctx.bridgeableTools), (name, args) =>
         this.deps.executeKunTool(threadId, turnId, name, args, abort.signal)
       )
-      const buildOptions = (maxTurns: number) => assembleSdkOptions({
+      const buildOptions = (maxTurns?: number) => assembleSdkOptions({
           cwd: ctx.workspace,
           kunSystemPrompt: this.deps.kunSystemPrompt(),
           threadPersona: ctx.threadPersona,
@@ -405,7 +405,7 @@ export class AgentSdkRuntime {
           baseEnv: this.deps.baseEnv(),
           oauthToken: ctx.oauthToken,
           abortController: abort,
-          maxTurns,
+          ...(maxTurns !== undefined ? { maxTurns } : {}),
           ...(ctx.model ? { model: ctx.model } : {}),
           ...(ctx.resumeSessionId ? { resume: ctx.resumeSessionId } : {}),
           ...(this.deps.pathToClaudeCodeExecutable
@@ -432,8 +432,10 @@ export class AgentSdkRuntime {
       let stepLimitFailed = false
       let sdkTurnsUsed = 0
       for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-        const remainingTurns = limits.maxSteps - sdkTurnsUsed
-        if (remainingTurns <= 0) {
+        const remainingTurns = limits.maxSteps === undefined
+          ? undefined
+          : limits.maxSteps - sdkTurnsUsed
+        if (remainingTurns !== undefined && remainingTurns <= 0) {
           stepLimitFailed = true
           break
         }
@@ -501,12 +503,12 @@ export class AgentSdkRuntime {
         // Starting a query consumes at least one native model step even if a
         // malformed/aborted SDK stream omits its terminal result message.
         sdkTurnsUsed += attemptFinalSeen ? Math.max(1, attemptTurns) : 1
-        if (sdkTurnsUsed > limits.maxSteps) stepLimitFailed = true
+        if (limits.maxSteps !== undefined && sdkTurnsUsed > limits.maxSteps) stepLimitFailed = true
         if (attemptFinalSeen && mapper.getFinal()?.status === 'failed') break
         if (signal.aborted || abort.signal.aborted || !ctx.requireSvgCompletion || svgCompletionSatisfied(svgCompletion)) {
           break
         }
-        if (sdkTurnsUsed >= limits.maxSteps) {
+        if (limits.maxSteps !== undefined && sdkTurnsUsed >= limits.maxSteps) {
           stepLimitFailed = true
           break
         }
@@ -536,7 +538,7 @@ export class AgentSdkRuntime {
         const message = `turn exceeded ${maxWallTimeMs}ms wall time`
         return await failWithLimit('turn_wall_time_limit', message)
       }
-      if (stepLimitFailed) {
+      if (stepLimitFailed && limits.maxSteps !== undefined) {
         return await failWithLimit('turn_step_limit', `turn exceeded ${limits.maxSteps} model steps`)
       }
       if (completionGateFailed) {
@@ -546,7 +548,7 @@ export class AgentSdkRuntime {
       }
 
       const final = mapper.getFinal()
-      if (final?.code === 'turn_step_limit') {
+      if (final?.code === 'turn_step_limit' && limits.maxSteps !== undefined) {
         return await failWithLimit('turn_step_limit', `turn exceeded ${limits.maxSteps} model steps`)
       }
       const status: 'completed' | 'failed' | 'aborted' =

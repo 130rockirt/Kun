@@ -1019,6 +1019,8 @@
   "mcpFormVisibleRootsHint": "可选。留空时所有工作区都能看到此服务器；填写路径后只在这些项目内暴露。",
   "mcpFormTrustedRoots": "受信任的工作区路径（每行一个）",
   "mcpFormTrustedRootsPlaceholder": "/Users/me/project",
+  "mcpFormPlanReadOnlyTools": "Plan 模式只读工具（每行一个名称）",
+  "mcpFormPlanReadOnlyToolsHint": "仅填写你确认没有副作用的工具。远程 MCP 自报的只读标记不会被视为授权。",
   "mcpFormErrorNameRequired": "名称不能为空。",
   "mcpFormErrorNameDuplicate": "名称不能重复。",
   "mcpFormErrorCommandRequired": "本地（stdio）服务器需要填写命令。",

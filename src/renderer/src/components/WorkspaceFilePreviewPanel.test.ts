@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  isJsonPreviewPath,
   nextFilePreviewTargetForWheel,
   parsePreviewScrollPositions,
   rememberPreviewScrollPosition,
@@ -217,6 +218,67 @@ describe('file preview navigation and scroll memory', () => {
     expect(parsePreviewScrollPositions(raw, 'linux')).toEqual({
       'c:/repo\nc:/repo/two.md': 240
     })
+  })
+})
+
+describe('JSON workspace preview', () => {
+  it('recognizes JSON files case-insensitively', () => {
+    expect(isJsonPreviewPath('/repo/package.json')).toBe(true)
+    expect(isJsonPreviewPath('/repo/CONFIG.JSON')).toBe(true)
+    expect(isJsonPreviewPath('/repo/config.json.bak')).toBe(false)
+  })
+
+  it('renders JSON as an editor and saves changed content', async () => {
+    const writeWorkspaceFile = vi.fn(async (payload: { path: string }) => ({
+      ok: true as const,
+      path: payload.path,
+      savedAt: new Date().toISOString()
+    }))
+    vi.stubGlobal('window', {
+      kunGui: {
+        platform: 'linux',
+        readWorkspaceFile: vi.fn(async () => ({
+          ok: true as const,
+          path: '/repo/package.json',
+          content: '{\n  "name": "before"\n}',
+          size: 22,
+          truncated: false
+        })),
+        writeWorkspaceFile
+      },
+      innerWidth: 1200,
+      innerHeight: 800,
+      requestAnimationFrame: (callback: FrameRequestCallback) => {
+        callback(0)
+        return 1
+      },
+      cancelAnimationFrame: vi.fn(),
+      clearTimeout,
+      setTimeout
+    })
+
+    let renderer!: ReactTestRenderer
+    await act(async () => {
+      renderer = create(createElement(WorkspaceFilePreviewPanel, {
+        target: { path: '/repo/package.json', workspaceRoot: '/repo' },
+        workspaceRoot: '/repo',
+        onClose: () => undefined
+      }))
+    })
+
+    const editor = renderer.root.findByType('textarea')
+    await act(async () => editor.props.onChange({ target: { value: '{\n  "name": "after"\n}' } }))
+    const saveButton = renderer.root.findAllByType('button').find(
+      (button) => button.props['aria-label'] === 'filePreviewSaveJson'
+    )!
+    await act(async () => saveButton.props.onClick())
+
+    expect(writeWorkspaceFile).toHaveBeenCalledWith({
+      path: '/repo/package.json',
+      workspaceRoot: '/repo',
+      content: '{\n  "name": "after"\n}'
+    })
+    await act(async () => renderer.unmount())
   })
 })
 

@@ -14,6 +14,7 @@ import {
 const MCP_SEARCH_TOOL_NAME = 'mcp_search'
 const MCP_DESCRIBE_TOOL_NAME = 'mcp_describe'
 const MCP_CALL_TOOL_NAME = 'mcp_call'
+const MCP_READ_ONLY_CALL_TOOL_NAME = 'mcp_read_only_call'
 const MCP_REFRESH_CATALOG_TOOL_NAME = 'mcp_refresh_catalog'
 const MAX_FROZEN_MCP_CATALOGS = 256
 
@@ -245,6 +246,7 @@ function createMcpSearchTools(
         required: ['query']
       },
       policy: 'auto',
+      sideEffect: 'read-only',
       execute: async (args, context) => {
         const query = stringArg(args.query)
         if (!query) return { output: { error: 'query is required' }, isError: true }
@@ -277,11 +279,52 @@ function createMcpSearchTools(
         required: ['toolId']
       },
       policy: 'auto',
+      sideEffect: 'read-only',
       execute: async (args, context) => {
         const toolId = stringArg(args.toolId)
         const record = resolveAvailableRecord(options, catalog, context, toolId)
         if (!record) return { output: { error: `unknown MCP tool: ${toolId}` }, isError: true }
         return { output: describeRecord(record) }
+      }
+    }),
+    LocalToolHost.defineTool({
+      name: MCP_READ_ONLY_CALL_TOOL_NAME,
+      description: 'Call a host-approved read-only MCP tool by canonical tool id. Available in Plan mode; rejects tools not listed in the server planModeReadOnlyTools configuration.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          toolId: { type: 'string', description: 'Canonical MCP tool id in the form mcp_<server>_<tool>.' },
+          arguments: { type: 'object', description: 'Arguments matching the MCP tool input schema.' }
+        },
+        required: ['toolId', 'arguments']
+      },
+      policy: 'on-request',
+      sideEffect: 'read-only',
+      toolKind: 'command_execution',
+      execute: async (args, context) => {
+        const toolId = stringArg(args.toolId)
+        const record = resolveAvailableRecord(options, catalog, context, toolId)
+        if (!record) return { output: { error: `unknown MCP tool: ${toolId}` }, isError: true }
+        if (!record.server.planModeReadOnlyTools?.includes(record.descriptor.name)) {
+          return {
+            output: { error: `MCP tool ${record.toolId} is not host-approved as read-only` },
+            isError: true
+          }
+        }
+        const callArgs = objectArg(args.arguments)
+        const result = await record.client.callTool(
+          { name: record.descriptor.name, arguments: callArgs },
+          { signal: context.abortSignal, timeout: record.server.timeoutMs }
+        )
+        return {
+          output: {
+            serverId: record.serverId,
+            toolName: record.descriptor.name,
+            toolId: record.toolId,
+            result
+          },
+          isError: typeof result === 'object' && result !== null && (result as { isError?: boolean }).isError === true
+        }
       }
     }),
     LocalToolHost.defineTool({

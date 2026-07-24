@@ -167,7 +167,8 @@ export class CompatRequestCodecs {
       input: input.isCodexLite ? [...litePrefix, ...responseInput] : responseInput,
       ...(input.isCodexLite
         ? { store: false, tool_choice: 'auto', parallel_tool_calls: false }
-        : input.isCodex ? { instructions: instructions || ' ', store: false } : {})
+        : input.isCodex ? { instructions: instructions || ' ', store: false } : {}),
+      ...(input.isCodex ? { prompt_cache_key: input.request.threadId } : {})
     }
     if (input.maxTokens !== undefined && !input.isCodex) body.max_output_tokens = input.maxTokens
     if (input.request.temperature !== undefined) body.temperature = input.request.temperature

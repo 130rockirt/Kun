@@ -875,6 +875,22 @@ describe('resolvePlanModeToolSpecs', () => {
     expect(names).not.toContain('bash')
   })
 
+  it('step 0: allows host-classified read-only MCP tools but not unknown calls', () => {
+    const tools: ModelToolSpec[] = [
+      { ...spec('mcp_read_resource'), sideEffect: 'read-only', providerKind: 'mcp' },
+      { ...spec('mcp_call'), providerKind: 'mcp' },
+      spec('create_plan')
+    ]
+    const result = resolvePlanModeToolSpecs(tools, {
+      planTurnActive: true,
+      createPlanSatisfied: false,
+      stepIndex: 0,
+      readOnlyToolNames: new Set()
+    })
+
+    expect(result.map((tool) => tool.name)).toEqual(['mcp_read_resource', 'create_plan'])
+  })
+
   it('step > 0: only create_plan', () => {
     const result = resolvePlanModeToolSpecs(ALL_TOOLS, {
       planTurnActive: true,

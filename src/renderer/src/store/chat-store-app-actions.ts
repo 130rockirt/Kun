@@ -243,24 +243,23 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
           const currentModel = state.composerModel.trim()
           const normalizedCurrentModel = currentModel.toLowerCase() === 'auto' ? '' : currentModel
           const storedModel = readStoredComposerModel(pick)
+          const selectableRuntimeDefault = isSelectable(runtimeDefault) ? runtimeDefault : ''
           let model = activeThread
             ? threadSelection?.model?.trim() || activeThread.model.trim()
-            : normalizedCurrentModel
-          let shouldPersist = !activeThread && model !== state.composerModel
+            : selectableRuntimeDefault || normalizedCurrentModel
           if (model === '' || !isSelectable(model)) {
             model = activeThread ? '' : storedModel
-            shouldPersist = false
           }
           if (model === '' || !isSelectable(model)) {
             model = fallbackComposerModel(pick, runtimeDefault, groups)
-            shouldPersist = false
           }
-          if (shouldPersist) persistComposerModel(model)
           const threadProviderId =
             threadSelection && providerIdMatchesComposerModel(groups, threadSelection.providerId, model)
               ? threadSelection.providerId
               : ''
-          const storedProviderId = activeThread ? '' : readStoredComposerProviderId(groups, model)
+          const storedProviderId = activeThread || selectableRuntimeDefault
+            ? ''
+            : readStoredComposerProviderId(groups, model)
           const providerId = threadProviderId || storedProviderId || providerIdForComposerModel(groups, model)
           if (!activeThread && providerId !== state.composerProviderId) persistComposerProviderId(providerId)
           if (

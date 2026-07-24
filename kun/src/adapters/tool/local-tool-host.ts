@@ -43,11 +43,15 @@ import {
  * A single registered tool. Tools are pure functions that observe the
  * abort signal and may be guarded by an approval policy.
  */
+export type ToolSideEffect = 'read-only' | 'unknown'
+
 export type LocalTool = {
   name: string
   description: string
   inputSchema: Record<string, unknown>
   toolKind: 'tool_call' | 'command_execution' | 'file_change'
+  /** Host-authored side-effect classification. Unknown is denied in Plan mode. */
+  sideEffect?: ToolSideEffect
   /**
    * Tool policy. `auto` runs the tool without asking. `on-request` and
    * `suggest` always ask the user. `never` blocks the tool. `untrusted`
@@ -511,6 +515,7 @@ export class LocalToolHost implements ToolHost {
       description: tool.description,
       inputSchema: tool.inputSchema,
       toolKind: tool.toolKind ?? 'tool_call',
+      ...(tool.sideEffect ? { sideEffect: tool.sideEffect } : {}),
       execute: tool.execute,
       ...(tool.shouldAdvertise ? { shouldAdvertise: tool.shouldAdvertise } : {}),
       ...(tool.requiresExplicitApproval ? { requiresExplicitApproval: true } : {}),

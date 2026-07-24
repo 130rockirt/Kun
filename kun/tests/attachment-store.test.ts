@@ -60,6 +60,51 @@ describe('Attachment store and multimodal input', () => {
     await expect(store.resolveContent(first.id, { workspace: '/tmp/ws' })).resolves.toMatchObject({ id: first.id })
   })
 
+  it('binds an authorized attachment to its final thread idempotently', async () => {
+    const store = createStore()
+    const attachment = await store.create({
+      name: 'draft.png',
+      data: png(2, 3),
+      workspace: '/tmp/ws'
+    })
+
+    await store.bindScope(attachment.id, { threadId: 'thr_final', workspace: '/tmp/ws' })
+    await store.bindScope(attachment.id, { threadId: 'thr_final', workspace: '/tmp/ws' })
+
+    expect(await store.get(attachment.id)).toMatchObject({
+      threadIds: ['thr_final'],
+      workspaces: ['/tmp/ws']
+    })
+    await expect(store.resolveContent(attachment.id, { threadId: 'thr_final' }))
+      .resolves.toMatchObject({ id: attachment.id })
+  })
+
+  it('does not bind an attachment from an unrelated scope', async () => {
+    const store = createStore()
+    const attachment = await store.create({
+      name: 'private.png',
+      data: png(2, 3),
+      threadId: 'thr_owner',
+      workspace: '/tmp/owner'
+    })
+
+    await expect(store.bindScope(attachment.id, {
+      threadId: 'thr_attacker',
+      workspace: '/tmp/other'
+    })).rejects.toThrow(/not authorized/)
+    expect(await store.get(attachment.id)).toMatchObject({
+      threadIds: ['thr_owner'],
+      workspaces: ['/tmp/owner']
+    })
+  })
+
+  it('rejects invalid or missing attachment ids when binding scope', async () => {
+    const store = createStore()
+    await expect(store.bindScope('../outside', { threadId: 'thr_1' })).rejects.toThrow(/invalid attachment id/)
+    await expect(store.bindScope('att_000000000000000000000000', { threadId: 'thr_1' }))
+      .rejects.toThrow(/attachment not found/)
+  })
+
   it('keeps attachment data and metadata private on disk', async () => {
     const store = createStore()
     const attachment = await store.create({ name: 'shot.png', data: png(2, 3), threadId: 'thr_1' })

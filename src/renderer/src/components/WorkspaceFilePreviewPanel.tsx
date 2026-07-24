@@ -17,6 +17,7 @@ import {
   Minimize2,
   PanelRightClose,
   Pin,
+  Save,
   X
 } from 'lucide-react'
 import { createPortal } from 'react-dom'
@@ -210,6 +211,10 @@ function isSvgPreviewPath(path: string): boolean {
   return /\.svg$/i.test(path)
 }
 
+export function isJsonPreviewPath(path: string): boolean {
+  return /\.json$/i.test(path)
+}
+
 export function svgPreviewDataUrl(content: string): string {
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(content)}`
 }
@@ -307,6 +312,9 @@ export function WorkspaceFilePreviewPanel({
   const [copied, setCopied] = useState(false)
   const [markdownRendered, setMarkdownRendered] = useState(true)
   const [svgRendered, setSvgRendered] = useState(true)
+  const [jsonDraft, setJsonDraft] = useState('')
+  const [jsonSaveError, setJsonSaveError] = useState<string | null>(null)
+  const [savingJson, setSavingJson] = useState(false)
   const [readingMode, setReadingMode] = useState(false)
   const [tabMenu, setTabMenu] = useState<{
     target: WorkspaceFileTarget
@@ -336,6 +344,9 @@ export function WorkspaceFilePreviewPanel({
 
     let cancelled = false
     setSvgRendered(true)
+    setJsonDraft('')
+    setJsonSaveError(null)
+    setSavingJson(false)
     setLoading(true)
     setResult(null)
     setImageResult(null)
@@ -380,7 +391,10 @@ export function WorkspaceFilePreviewPanel({
     void window.kunGui
       .readWorkspaceFile(readTarget)
       .then((next) => {
-        if (!cancelled) setResult(next)
+        if (!cancelled) {
+          setResult(next)
+          if (next.ok && isJsonPreviewPath(next.path)) setJsonDraft(next.content)
+        }
       })
       .catch((error) => {
         if (!cancelled) {
@@ -536,6 +550,8 @@ export function WorkspaceFilePreviewPanel({
   }, [result, target])
   const isMarkdownFile = isMarkdownPreviewPath(result?.ok ? result.path : target?.path ?? '')
   const isSvgFile = isSvgPreviewPath(result?.ok ? result.path : target?.path ?? '')
+  const isJsonFile = isJsonPreviewPath(result?.ok ? result.path : target?.path ?? '')
+  const jsonDirty = Boolean(result?.ok && !result.truncated && isJsonFile && jsonDraft !== result.content)
   const svgDataUrl = useMemo(
     () => result?.ok && isSvgFile && !result.truncated ? svgPreviewDataUrl(result.content) : '',
     [isSvgFile, result]
@@ -608,12 +624,34 @@ export function WorkspaceFilePreviewPanel({
   const copyContent = async (): Promise<void> => {
     if (!result?.ok || !navigator?.clipboard?.writeText) return
     try {
-      await navigator.clipboard.writeText(result.content)
+      await navigator.clipboard.writeText(isJsonFile ? jsonDraft : result.content)
       setCopied(true)
       if (copyResetRef.current !== null) window.clearTimeout(copyResetRef.current)
       copyResetRef.current = window.setTimeout(() => setCopied(false), COPY_RESET_MS)
     } catch {
       setCopied(false)
+    }
+  }
+
+  const saveJson = async (): Promise<void> => {
+    if (!target || !result?.ok || !isJsonFile || !jsonDirty || savingJson) return
+    setSavingJson(true)
+    setJsonSaveError(null)
+    try {
+      const next = await window.kunGui.writeWorkspaceFile({
+        path: result.path,
+        workspaceRoot: target.workspaceRoot ?? workspaceRoot,
+        content: jsonDraft
+      })
+      if (!next.ok) {
+        setJsonSaveError(next.message)
+        return
+      }
+      setResult({ ...result, content: jsonDraft, size: new TextEncoder().encode(jsonDraft).byteLength })
+    } catch (error) {
+      setJsonSaveError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setSavingJson(false)
     }
   }
 
@@ -777,6 +815,22 @@ export function WorkspaceFilePreviewPanel({
               )}
             </button>
           ) : null}
+          {isJsonFile ? (
+            <button
+              type="button"
+              onClick={() => void saveJson()}
+              disabled={!jsonDirty || savingJson}
+              className="ds-code-sidebar-icon-button"
+              title={t('filePreviewSaveJson', { defaultValue: 'Save JSON' })}
+              aria-label={t('filePreviewSaveJson', { defaultValue: 'Save JSON' })}
+            >
+              {savingJson ? (
+                <Loader2 className="h-4 w-4 animate-spin" strokeWidth={1.8} />
+              ) : (
+                <Save className="h-4 w-4" strokeWidth={1.75} />
+              )}
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={openInEditor}
@@ -876,7 +930,30 @@ export function WorkspaceFilePreviewPanel({
                 {t('filePreviewTruncated')}
               </div>
             ) : null}
-            {isSvgFile && svgRendered && !result.truncated ? (
+            {jsonSaveError ? (
+              <div className="shrink-0 border-b border-red-200/70 px-4 py-1.5 text-[11px] text-red-700 dark:border-red-900/60 dark:text-red-300">
+                {jsonSaveError}
+              </div>
+            ) : null}
+            {isJsonFile ? (
+              <textarea
+                value={jsonDraft}
+                readOnly={result.truncated}
+                spellCheck={false}
+                aria-label={t('filePreviewEditJson', { defaultValue: 'Edit JSON' })}
+                className="min-h-0 flex-1 resize-none border-0 bg-transparent p-4 font-mono text-[12px] leading-[22px] text-ds-ink outline-none"
+                onChange={(event) => {
+                  setJsonDraft(event.target.value)
+                  setJsonSaveError(null)
+                }}
+                onKeyDown={(event) => {
+                  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
+                    event.preventDefault()
+                    void saveJson()
+                  }
+                }}
+              />
+            ) : isSvgFile && svgRendered && !result.truncated ? (
               <div
                 ref={scrollRef}
                 onScroll={handlePreviewScroll}

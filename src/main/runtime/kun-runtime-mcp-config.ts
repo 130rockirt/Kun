@@ -117,6 +117,7 @@ function normalizeGuiManagedMcpServer(server: unknown): Record<string, unknown> 
   if (!transport) return null
   const workspaceRoots = stringArrayValue(raw.workspaceRoots)
   const trustedWorkspaceRoots = stringArrayValue(raw.trustedWorkspaceRoots)
+  const planModeReadOnlyTools = stringArrayValue(raw.planModeReadOnlyTools)
   const trustScope = normalizeMcpTrustScope(raw.trustScope, trustedWorkspaceRoots)
   if (trustScope === 'workspace' && trustedWorkspaceRoots.length === 0) return null
   const timeoutMs = positiveIntegerValue(raw.timeoutMs)
@@ -133,6 +134,7 @@ function normalizeGuiManagedMcpServer(server: unknown): Record<string, unknown> 
     ...(Object.keys(oauth).length ? { oauth } : {}),
     trustScope,
     ...(trustedWorkspaceRoots.length ? { trustedWorkspaceRoots } : {}),
+    ...(planModeReadOnlyTools.length ? { planModeReadOnlyTools } : {}),
     ...(timeoutMs ? { timeoutMs } : {})
   })
   return parsed.success ? objectValue(parsed.data) : null

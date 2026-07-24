@@ -28,7 +28,11 @@ import { InjectedMemoryMetaChip } from './injected-memory-meta-chip'
 import { isPresentationArtifactPath } from './presentation-file-artifacts'
 import { readGeneratedWorkspaceImagePreview } from './generated-media-preview'
 import { useTimelineFilePreviewWorkspaceRoot } from './timeline-file-preview-workspace'
-import { attachmentPreviewLoader } from './attachment-preview-loader'
+import {
+  attachmentPreviewFailureStateForScope,
+  attachmentPreviewLoader,
+  type AttachmentPreviewFailureState
+} from './attachment-preview-loader'
 import { useDeferredRender } from '../../hooks/use-deferred-render'
 
 const COPY_FEEDBACK_RESET_MS = 1600
@@ -725,8 +729,15 @@ function useMediaPreviewUrls(
   const globalWorkspaceRoot = useChatStore((s) => s.workspaceRoot)
   const timelineWorkspaceRoot = useTimelineFilePreviewWorkspaceRoot()
   const workspaceRoot = timelineWorkspaceRoot || globalWorkspaceRoot
+  const scopeKey = JSON.stringify([activeThreadId ?? '', workspaceRoot])
+  const [previewFailures, setPreviewFailures] = useState<AttachmentPreviewFailureState>(() => ({
+    scopeKey,
+    failedPreviewIds: {}
+  }))
+  const failedPreviewIds = previewFailures.scopeKey === scopeKey
+    ? previewFailures.failedPreviewIds
+    : {}
   const [resolvedPreviewUrls, setResolvedPreviewUrls] = useState<Record<string, string>>({})
-  const [failedPreviewIds, setFailedPreviewIds] = useState<Record<string, true>>({})
   const previewRequests = useMemo(
     () =>
       media
@@ -810,18 +821,19 @@ function useMediaPreviewUrls(
         }
         return next
       })
-      setFailedPreviewIds((current) => {
-        const next = { ...current }
+      setPreviewFailures((current) => {
+        const scoped = attachmentPreviewFailureStateForScope(current, scopeKey)
+        const next = { ...scoped.failedPreviewIds }
         for (const result of results) {
           if ('failed' in result) next[result.key] = true
         }
-        return next
+        return { scopeKey, failedPreviewIds: next }
       })
     })
     return () => {
       cancelled = true
     }
-  }, [activeThreadId, enabled, missingPreviewKey, previewRequests, workspaceRoot])
+  }, [activeThreadId, enabled, missingPreviewKey, previewRequests, scopeKey, workspaceRoot])
 
   return resolvedPreviewUrls
 }

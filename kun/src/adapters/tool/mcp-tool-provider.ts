@@ -621,6 +621,9 @@ function createMcpLocalTool(
     // annotations are unauthenticated metadata, so it must not bypass the
     // host command sandbox by masquerading as a harmless tool call.
     toolKind: 'command_execution',
+    ...(state.server.planModeReadOnlyTools?.includes(descriptor.name)
+      ? { sideEffect: 'read-only' as const }
+      : {}),
     policy: policyFromAnnotations(descriptor.annotations),
     shouldAdvertise: (context: ToolHostContext) => canUseMcpServer(state.server, context.workspace),
     execute: async (args, context) => {

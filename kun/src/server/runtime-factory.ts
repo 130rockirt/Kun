@@ -494,6 +494,7 @@ export async function createKunServeRuntime(
   ])
   const instructionRuntime = new InstructionRuntime(activeOptions.capabilities?.instructions)
   const migrationMaintenance = new ScopedMigrationMaintenanceLock()
+  let attachmentStore: FileAttachmentStore | undefined
   const turnService = new TurnService({
     threadStore,
     sessionStore,
@@ -504,6 +505,7 @@ export async function createKunServeRuntime(
     model: modelClient,
     usage: usageService,
     prefix,
+    attachmentStore: () => attachmentStore,
     defaultModel: options.model,
     contextCompaction: options.contextCompaction,
     maxConcurrentTurns: activeOptions.runtime?.turnLimits?.maxConcurrentTurns,
@@ -561,7 +563,7 @@ export async function createKunServeRuntime(
 	  }
 	  const reviewService = new ReviewService(reviewDeps)
 	  let webProviders = buildWebToolProviders(activeOptions.capabilities?.web)
-	  let attachmentStore = activeOptions.capabilities?.attachments.enabled
+	  attachmentStore = activeOptions.capabilities?.attachments.enabled
 	    ? new FileAttachmentStore({
 	        rootDir: join(activeOptions.dataDir, 'attachments'),
 	        config: activeOptions.capabilities.attachments,

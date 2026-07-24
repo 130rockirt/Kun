@@ -135,6 +135,8 @@ export type ModelToolSpec = {
   description: string
   inputSchema: Record<string, unknown>
   toolKind?: 'tool_call' | 'command_execution' | 'file_change'
+  /** Host-authored side-effect classification; never forwarded to model providers. */
+  sideEffect?: 'read-only' | 'unknown'
   /** Local execution provenance. Provider serializers must not forward it. */
   providerKind?: ToolProviderKind
   /** Stable local provider id (for example `builtin` or `mcp:filesystem`). */

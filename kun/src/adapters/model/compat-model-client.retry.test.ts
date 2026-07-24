@@ -132,6 +132,48 @@ describe('CompatModelClient transient gateway retry', () => {
 })
 
 describe('CompatModelClient refreshed credentials', () => {
+  it('keeps one Codex session across sequential calls and a 401 credential refresh', async () => {
+    const sessionIds: string[] = []
+    const authorization: string[] = []
+    const fetchImpl = (async (_url: string | URL | Request, init?: RequestInit) => {
+      const headers = new Headers(init?.headers)
+      sessionIds.push(headers.get('session_id') ?? '')
+      const value = headers.get('authorization') ?? ''
+      authorization.push(value)
+      return value === 'Bearer old-access'
+        ? Response.json({ error: 'expired' }, { status: 401 })
+        : Response.json({ output_text: 'ok', status: 'completed' })
+    }) as unknown as typeof fetch
+    let resolution = 0
+    const oauthClient = new CompatModelClient({
+      baseUrl: 'https://chatgpt.com/backend-api/codex',
+      apiKey: 'old-access',
+      model: 'gpt-5.6-sol',
+      endpointFormat: 'responses',
+      nonStreaming: true,
+      fetchImpl,
+      resolveCredentials: async (rejectedAccessToken?: string) => ({
+        apiKey: rejectedAccessToken ? 'new-access' : 'old-access',
+        headers: { session_id: `credential-session-${++resolution}` },
+        refreshable: true
+      })
+    })
+
+    await drain(oauthClient.stream({ ...request(), model: 'gpt-5.6-sol' }))
+    await drain(oauthClient.stream({ ...request(), model: 'gpt-5.6-sol', turnId: 'u2' }))
+
+    expect(authorization).toEqual([
+      'Bearer old-access',
+      'Bearer new-access',
+      'Bearer old-access',
+      'Bearer new-access'
+    ])
+    expect(sessionIds).toHaveLength(4)
+    expect(sessionIds[0]).not.toBe('')
+    expect(new Set(sessionIds)).toEqual(new Set([sessionIds[0]]))
+    expect(sessionIds[0]).not.toMatch(/^credential-session-/)
+  })
+
   it('refreshes a rejected OAuth bearer once and retries the request with the new token', async () => {
     const authorization: string[] = []
     const fetchImpl = (async (_url: string | URL | Request, init?: RequestInit) => {

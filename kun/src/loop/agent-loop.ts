@@ -697,7 +697,9 @@ export class AgentLoop {
     const limits = thread?.extensionBudget
       ? {
           ...configuredLimits,
-          maxSteps: Math.min(configuredLimits.maxSteps, thread.extensionBudget.maxModelRequests),
+          maxSteps: configuredLimits.maxSteps === undefined
+            ? thread.extensionBudget.maxModelRequests
+            : Math.min(configuredLimits.maxSteps, thread.extensionBudget.maxModelRequests),
           maxWallTimeMs: Math.min(configuredLimits.maxWallTimeMs, thread.extensionBudget.maxElapsedMs)
         }
       : configuredLimits
@@ -707,10 +709,13 @@ export class AgentLoop {
         await this.drainAndSealSteering(threadId, turnId, signal)
         return 'aborted'
       }
-      if (step >= limits.maxSteps) {
+      if (limits.maxSteps !== undefined && step >= limits.maxSteps) {
         await this.drainAndSealSteering(threadId, turnId, signal)
         const extensionLimited = Boolean(
-          thread?.extensionBudget && thread.extensionBudget.maxModelRequests <= configuredLimits.maxSteps
+          thread?.extensionBudget && (
+            configuredLimits.maxSteps === undefined ||
+            thread.extensionBudget.maxModelRequests <= configuredLimits.maxSteps
+          )
         )
         await this.recordTurnLimitExceeded(
           threadId,

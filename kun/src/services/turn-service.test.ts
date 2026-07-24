@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { createImmutablePrefix } from '../cache/immutable-prefix.js'
 import { InMemoryEventBus } from '../adapters/in-memory-event-bus.js'
 import { InMemorySessionStore } from '../adapters/in-memory-session-store.js'
@@ -24,6 +27,19 @@ import {
 } from './turn-service.js'
 import { ThreadService } from './thread-service.js'
 import { UsageService } from './usage-service.js'
+import { FileAttachmentStore } from '../attachments/attachment-store.js'
+import { KunCapabilitiesConfig } from '../contracts/capabilities.js'
+
+function testPng(): Buffer {
+  const buffer = Buffer.alloc(24)
+  buffer[0] = 0x89
+  buffer[1] = 0x50
+  buffer[2] = 0x4e
+  buffer[3] = 0x47
+  buffer.writeUInt32BE(1, 16)
+  buffer.writeUInt32BE(1, 20)
+  return buffer
+}
 
 class SummaryModel implements ModelClient {
   readonly provider = 'test'
@@ -101,6 +117,110 @@ class FailOnceAppendSessionStore extends InMemorySessionStore {
 describe('TurnService startTurn', () => {
   it('defaults to 256 concurrent active turns', () => {
     expect(DEFAULT_MAX_CONCURRENT_TURNS).toBe(256)
+  })
+
+  it('binds submitted attachments to the final thread before persisting the turn', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-turn-attachment-'))
+    try {
+      const sessionStore = new InMemorySessionStore()
+      const threadStore = new InMemoryThreadStore()
+      const eventBus = new InMemoryEventBus()
+      const nowIso = () => '2026-07-24T00:00:00.000Z'
+      const attachmentStore = new FileAttachmentStore({
+        rootDir: join(root, 'attachments'),
+        config: KunCapabilitiesConfig.parse({ attachments: { enabled: true } }).attachments,
+        nowIso
+      })
+      const service = new TurnService({
+        threadStore,
+        sessionStore,
+        events: new RuntimeEventRecorder({
+          eventBus,
+          sessionStore,
+          allocateSeq: (threadId) => eventBus.allocateSeq(threadId),
+          nowIso
+        }),
+        inflight: new InflightTracker(),
+        steering: new SteeringQueue(),
+        compactor: new ContextCompactor(),
+        attachmentStore: () => attachmentStore,
+        ids: new SequentialIdGenerator(),
+        nowIso
+      })
+      const threadId = 'thr_attachment_final'
+      await threadStore.upsert(createThreadRecord({
+        id: threadId,
+        title: 'Attachment turn',
+        workspace: '/tmp/workspace',
+        model: 'deepseek-v4-pro'
+      }))
+      const attachment = await attachmentStore.create({
+        name: 'draft.png',
+        data: testPng(),
+        workspace: '/tmp/workspace'
+      })
+
+      const started = await service.startTurn({
+        threadId,
+        request: { prompt: 'inspect', model: 'm', attachmentIds: [attachment.id, attachment.id] }
+      })
+
+      await expect(attachmentStore.resolveContent(attachment.id, { threadId })).resolves.toMatchObject({
+        id: attachment.id
+      })
+      expect((await threadStore.get(threadId))?.turns[0]?.attachmentIds).toEqual([attachment.id])
+      expect((await sessionStore.loadItems(threadId))[0]).toMatchObject({
+        attachmentIds: [attachment.id]
+      })
+      await service.interruptTurn({ threadId, turnId: started.turnId })
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('does not persist a turn when a submitted attachment is missing', async () => {
+    const sessionStore = new InMemorySessionStore()
+    const threadStore = new InMemoryThreadStore()
+    const eventBus = new InMemoryEventBus()
+    const nowIso = () => '2026-07-24T00:00:00.000Z'
+    const bindScope = async (): Promise<never> => {
+      throw new Error('attachment not found: att_000000000000000000000000')
+    }
+    const service = new TurnService({
+      threadStore,
+      sessionStore,
+      events: new RuntimeEventRecorder({
+        eventBus,
+        sessionStore,
+        allocateSeq: (threadId) => eventBus.allocateSeq(threadId),
+        nowIso
+      }),
+      inflight: new InflightTracker(),
+      steering: new SteeringQueue(),
+      compactor: new ContextCompactor(),
+      attachmentStore: () => ({ bindScope } as never),
+      ids: new SequentialIdGenerator(),
+      nowIso
+    })
+    const threadId = 'thr_attachment_missing'
+    await threadStore.upsert(createThreadRecord({
+      id: threadId,
+      title: 'Missing attachment',
+      workspace: '/tmp/workspace',
+      model: 'deepseek-v4-pro'
+    }))
+
+    await expect(service.startTurn({
+      threadId,
+      request: {
+        prompt: 'inspect',
+        model: 'm',
+        attachmentIds: ['att_000000000000000000000000']
+      }
+    })).rejects.toThrow(/attachment not found/)
+
+    expect((await threadStore.get(threadId))?.turns).toEqual([])
+    expect(await sessionStore.loadItems(threadId)).toEqual([])
   })
 
   it('atomically admits only one active turn for a thread', async () => {

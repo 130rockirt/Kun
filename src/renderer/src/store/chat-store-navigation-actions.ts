@@ -50,7 +50,6 @@ import {
   isClawThread,
   optimisticUserModelLabel,
   readCodeWorkspaceRoots,
-  readStoredComposerModel,
   rememberCodeWorkspaceRoots,
   rememberTurnModel,
   reconcileCodeWorkspaceRoots,
@@ -637,11 +636,6 @@ export function createNavigationActions(
           runtimeErrorDetail: needsInitialSetup ? null : get().runtimeErrorDetail
         })
         if (needsInitialSetup) return
-        const initialPick = get().composerPickList
-        const fromStorage = readStoredComposerModel(initialPick)
-        if (fromStorage) {
-          set({ composerModel: fromStorage })
-        }
         scheduleStartupRuntimeProbe(get)
       } catch (e) {
         set({

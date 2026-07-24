@@ -36,6 +36,8 @@ export type McpFormServer = {
   workspaceRoots: string[]
   trustScope: 'user' | 'workspace'
   trustedWorkspaceRoots: string[]
+  /** MCP tool names explicitly allowed for read-only Plan-mode calls. */
+  planModeReadOnlyTools: string[]
   /** null = use the runtime default (30s). */
   timeoutMs: number | null
 }
@@ -103,6 +105,7 @@ function parseServerEntry(name: string, raw: unknown): McpFormServer {
   const transport = normalizeTransport(record.transport ?? record.type, command, url)
   const workspaceRoots = asStringArray(record.workspaceRoots)
   const trustedWorkspaceRoots = asStringArray(record.trustedWorkspaceRoots)
+  const planModeReadOnlyTools = asStringArray(record.planModeReadOnlyTools)
   const rawScope = asString(record.trustScope).trim().toLowerCase()
   const trustScope: 'user' | 'workspace' =
     rawScope === 'workspace' || rawScope === 'user'
@@ -131,6 +134,7 @@ function parseServerEntry(name: string, raw: unknown): McpFormServer {
     workspaceRoots,
     trustScope,
     trustedWorkspaceRoots,
+    planModeReadOnlyTools,
     timeoutMs
   }
 }
@@ -151,6 +155,7 @@ export function createBlankMcpServer(transport: McpTransport = 'stdio'): McpForm
     workspaceRoots: [],
     trustScope: 'user',
     trustedWorkspaceRoots: [],
+    planModeReadOnlyTools: [],
     timeoutMs: null
   }
 }
@@ -227,6 +232,8 @@ export function serializeMcpServer(server: McpFormServer): Record<string, unknow
     const roots = server.trustedWorkspaceRoots.map((r) => r.trim()).filter(Boolean)
     if (roots.length > 0) out.trustedWorkspaceRoots = roots
   }
+  const planModeReadOnlyTools = server.planModeReadOnlyTools.map((name) => name.trim()).filter(Boolean)
+  if (planModeReadOnlyTools.length > 0) out.planModeReadOnlyTools = [...new Set(planModeReadOnlyTools)]
   if (server.timeoutMs && server.timeoutMs > 0) out.timeoutMs = server.timeoutMs
   return out
 }

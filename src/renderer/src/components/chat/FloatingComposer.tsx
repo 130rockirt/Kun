@@ -542,6 +542,7 @@ export function FloatingComposer({
     && Boolean(activeThreadId)
     && activeThreadTodos?.threadId === activeThreadId
     && activeThreadTodos.items.length > 0
+    && activeThreadTodos.items.some((item) => item.status !== 'completed')
     && slashQuery == null
     && !composerMenuOpen
     && !goalPanelOpen

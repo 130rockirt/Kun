@@ -87,7 +87,42 @@ describe('CompatModelClient per-model endpointFormat', () => {
       expect(serialized).not.toContain('providerKind')
       expect(serialized).not.toContain('providerId')
       expect(serialized).not.toContain('design-canvas')
+      if (endpointFormat === 'responses') {
+        expect(body).not.toHaveProperty('prompt_cache_key')
+      }
     }
+  })
+
+  it('uses stable thread-scoped prompt cache keys only for Codex Responses', () => {
+    const codecs = createCompatRequestCodecs()
+    const buildResponses = (threadId: string, isCodex: boolean, isCodexLite = false) =>
+      codecs.build({
+        request: { ...request('gpt-5.6-sol'), threadId },
+        model: 'gpt-5.6-sol',
+        messages: [],
+        tools: [],
+        stream: true,
+        endpointFormat: 'responses',
+        baseUrl: isCodex
+          ? 'https://chatgpt.com/backend-api/codex'
+          : 'https://provider.example/v1',
+        isCodex,
+        isCodexLite,
+        codexNativeImageGeneration: false
+      })
+
+    const first = buildResponses('thread-a', true)
+    const repeated = buildResponses('thread-a', true)
+    const isolated = buildResponses('thread-b', true)
+    const lite = buildResponses('thread-a', true, true)
+    const compatible = buildResponses('thread-a', false)
+
+    expect(first.prompt_cache_key).toBe('thread-a')
+    expect(repeated.prompt_cache_key).toBe(first.prompt_cache_key)
+    expect(isolated.prompt_cache_key).toBe('thread-b')
+    expect(isolated.prompt_cache_key).not.toBe(first.prompt_cache_key)
+    expect(lite.prompt_cache_key).toBe('thread-a')
+    expect(compatible).not.toHaveProperty('prompt_cache_key')
   })
 
   it('routes an override model to the Anthropic Messages endpoint while others use chat completions', async () => {
@@ -287,6 +322,7 @@ describe('CompatModelClient per-model endpointFormat', () => {
       model: 'gpt-5.6-sol',
       store: false,
       parallel_tool_calls: false,
+      prompt_cache_key: 't1',
       reasoning: { effort: 'xhigh', context: 'all_turns' }
     })
     expect(calls[0].body).not.toHaveProperty('instructions')

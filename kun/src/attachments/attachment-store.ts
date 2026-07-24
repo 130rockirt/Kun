@@ -24,6 +24,7 @@ export interface AttachmentStore {
     workspace?: string
   }): Promise<AttachmentMetadata>
   get(id: string): Promise<AttachmentMetadata | null>
+  bindScope(id: string, scope: { threadId?: string; workspace?: string }): Promise<AttachmentMetadata>
   delete?(id: string): Promise<void>
   replaceMetadata?(metadata: AttachmentMetadata): Promise<void>
   resolveContent(id: string, scope: { threadId?: string; workspace?: string }): Promise<AttachmentContent>
@@ -154,6 +155,23 @@ export class FileAttachmentStore implements AttachmentStore {
     } catch {
       return null
     }
+  }
+
+  async bindScope(id: string, scope: { threadId?: string; workspace?: string }): Promise<AttachmentMetadata> {
+    if (!ATTACHMENT_ID_PATTERN.test(id)) throw new Error(`invalid attachment id: ${id}`)
+    const metadata = await this.get(id)
+    if (!metadata) throw new Error(`attachment not found: ${id}`)
+    if (!isAuthorized(metadata, scope)) {
+      throw new Error(`attachment is not authorized for this turn: ${id}`)
+    }
+    const next = AttachmentMetadataSchema.parse(mergeScope({
+      ...metadata,
+      updatedAt: this.options.nowIso?.() ?? new Date().toISOString()
+    }, scope))
+    await this.ensureRoot()
+    await readFile(this.contentPath(id))
+    await writeFile(this.metadataPath(id), JSON.stringify(next, null, 2), { encoding: 'utf8', mode: 0o600 })
+    return next
   }
 
   async delete(id: string): Promise<void> {
