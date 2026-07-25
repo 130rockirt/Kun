@@ -38,7 +38,13 @@ function createMemoryStorage(): Storage {
 }
 
 type FetchModelsResult =
-  | { ok: true; modelIds: string[]; defaultModelId?: string; modelGroups?: ChatState['composerModelGroups'] }
+  | {
+      ok: true
+      modelIds: string[]
+      defaultModelId?: string
+      defaultModel?: { providerId: string; modelId: string }
+      modelGroups?: ChatState['composerModelGroups']
+    }
   | { ok: false; message: string }
 
 function buildHarness(fetchModelsResult: FetchModelsResult): {
@@ -142,6 +148,32 @@ describe('chat-store app actions composer model loading', () => {
     expect(state.composerProviderId).toBe('')
     expect(localStorage.getItem(COMPOSER_MODEL_STORAGE_KEY)).toBe('MiniMax-M2')
     expect(localStorage.getItem(COMPOSER_PROVIDER_STORAGE_KEY)).toBeNull()
+  })
+
+  it('uses the configured provider when the default model id exists in multiple groups', async () => {
+    const { actions, state } = buildHarness({
+      ok: true,
+      modelIds: ['shared-model'],
+      defaultModelId: 'shared-model',
+      defaultModel: { providerId: 'provider-b', modelId: 'shared-model' },
+      modelGroups: [
+        {
+          providerId: 'provider-a',
+          label: 'Provider A',
+          modelIds: ['shared-model']
+        },
+        {
+          providerId: 'provider-b',
+          label: 'Provider B',
+          modelIds: ['shared-model']
+        }
+      ]
+    })
+
+    await actions.loadComposerModels()
+
+    expect(state.composerModel).toBe('shared-model')
+    expect(state.composerProviderId).toBe('provider-b')
   })
 
   it('reloads the composer list after settings change during an in-flight model read', async () => {

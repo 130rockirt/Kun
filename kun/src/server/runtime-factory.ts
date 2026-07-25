@@ -292,9 +292,18 @@ export async function createKunServeRuntime(
   const usageService = new UsageService()
   const inflight = new InflightTracker()
   const steering = new SteeringQueue()
-  const compactor = new ContextCompactor({
+  let modelProfiles = modelContextProfilesFromConfig({
     contextCompaction: activeOptions.contextCompaction,
     models: activeOptions.models
+  })
+  let providerModelProfiles = modelContextProfilesByProvider(activeOptions.providers)
+  const profilesForProvider = (providerId?: string) => providerId
+    ? providerModelProfiles.get(providerId.trim().toLowerCase()) ?? modelProfiles
+    : modelProfiles
+  const compactor = new ContextCompactor({
+    contextCompaction: activeOptions.contextCompaction,
+    models: activeOptions.models,
+    profilesForProvider
   })
   let tokenEconomy = tokenEconomyConfigForOptions(activeOptions)
   const ids = new RandomIdGenerator()
@@ -355,11 +364,10 @@ export async function createKunServeRuntime(
     }
   })
   const artifactStore = new FileArtifactStore(join(activeOptions.dataDir, 'artifacts'), nowIso)
-  let modelProfiles = modelContextProfilesFromConfig({
-    contextCompaction: activeOptions.contextCompaction,
-    models: activeOptions.models
-  })
-  const modelCapabilities = (model: string) => modelCapabilitiesForModel(model, modelProfiles)
+  const modelCapabilities = (model: string, providerId?: string) => modelCapabilitiesForModel(
+    model,
+    profilesForProvider(providerId)
+  )
   const delegatedContextProfile = (model: string) => {
     const thresholds = contextThresholdsForModel(model, {
       softThreshold:
@@ -590,6 +598,7 @@ export async function createKunServeRuntime(
     defaultModel: activeOptions.model,
     nowIso,
     modelCapabilities,
+    profilesForProvider,
 	    ...(activeOptions.models ? { models: activeOptions.models } : {}),
 	    ...(activeOptions.contextCompaction ? { contextCompaction: activeOptions.contextCompaction } : {}),
 	    ...(tokenEconomy ? { tokenEconomy } : {}),
@@ -839,6 +848,7 @@ export async function createKunServeRuntime(
 	          approvalPolicy: activeOptions.approvalPolicy,
 	          sandboxMode: activeOptions.sandboxMode,
 	          modelCapabilities,
+	          profilesForProvider,
 	          skillRuntime,
 	          instructionRuntime,
 	          tokenEconomy,
@@ -1658,6 +1668,7 @@ export async function createKunServeRuntime(
 	      contextCompaction: nextOptions.contextCompaction,
 	      models: nextOptions.models
 	    })
+	    const nextProviderModelProfiles = modelContextProfilesByProvider(nextOptions.providers)
 	    const nextTokenEconomy = tokenEconomyConfigForOptions(nextOptions)
 	    const nextMcpHasOAuth = Object.values(nextOptions.capabilities?.mcp?.servers ?? {}).some((server) =>
 	      server.oauth?.enabled !== false && Boolean(server.oauth) && server.transport !== 'stdio'
@@ -1775,6 +1786,7 @@ export async function createKunServeRuntime(
 	    const previousMcpProviders = mcpProviders
 	    activeOptions = nextOptions
 	    modelProfiles = nextModelProfiles
+	    providerModelProfiles = nextProviderModelProfiles
 	    tokenEconomy = nextTokenEconomy
 	    delegatedProviderSignature = nextDelegatedProviderSignature
 	    replaceRoutedModelClients()
@@ -2127,7 +2139,10 @@ async function hydrateLegacyCredentialOptions(
 
 function buildModelClientRouterInput(
   options: KunServeRuntimeOptions,
-  modelCapabilities: (model: string) => ReturnType<typeof modelCapabilitiesForModel>,
+  modelCapabilities: (
+    model: string,
+    providerId?: string
+  ) => ReturnType<typeof modelCapabilitiesForModel>,
   llmDebug?: LlmDebugRecorder,
   credentialResolver?: (
     sourceId: string,
@@ -2157,7 +2172,7 @@ function buildModelClientRouterInput(
           endpointFormat: options.endpointFormat ?? DEFAULT_MODEL_ENDPOINT_FORMAT,
           retry: options.retry,
           model: options.model,
-          modelCapabilities,
+          modelCapabilities: (model) => modelCapabilities(model),
           headers: options.headers,
           ...(options.credentialSourceId && credentialResolver
             ? {
@@ -2188,7 +2203,7 @@ function buildModelClientRouterInput(
           endpointFormat: provider.endpointFormat ?? options.endpointFormat ?? DEFAULT_MODEL_ENDPOINT_FORMAT,
           retry: provider.retry ?? options.retry,
           model: options.model,
-          modelCapabilities,
+          modelCapabilities: (model) => modelCapabilities(model, trimmedId),
           headers: provider.headers,
           ...(provider.credentialSourceId && credentialResolver
             ? {
@@ -2202,6 +2217,20 @@ function buildModelClientRouterInput(
     providerClients.set(trimmedId, client)
   }
   return { default: defaultClient, providers: providerClients }
+}
+
+function modelContextProfilesByProvider(
+  providers: KunServeRuntimeOptions['providers']
+): Map<string, ReturnType<typeof modelContextProfilesFromConfig>> {
+  const out = new Map<string, ReturnType<typeof modelContextProfilesFromConfig>>()
+  for (const [providerId, provider] of Object.entries(providers ?? {})) {
+    const normalized = providerId.trim().toLowerCase()
+    if (!normalized) continue
+    out.set(normalized, modelContextProfilesFromConfig({
+      models: { profiles: provider.modelProfiles ?? {} }
+    }))
+  }
+  return out
 }
 
 function agentSdkProviderIdsForOptions(options: KunServeRuntimeOptions): Set<string> {

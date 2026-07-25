@@ -36,6 +36,7 @@ import {
   migrateLegacyAppSettings
 } from './app-settings-kun'
 import {
+  activeModelProviderNeedsApiKey,
   defaultMiniMaxMediaGenerationKunPatch,
   normalizeModelProviderSettings
 } from './app-settings-provider'
@@ -85,15 +86,17 @@ export function normalizeAppSettings(settings: AppSettingsV1): AppSettingsV1 {
     currentKun: runtime,
     kunPatch: rawMediaPatch
   })
-  const selectedProvider = runtime.providerId.trim()
-    ? providerSettings.providers.find((provider) => provider.id === runtime.providerId.trim())
-    : providerSettings.providers[0]
   // Before this field existed, having an active API key was the onboarding
-  // completion signal. Preserve that behavior once while making future
-  // dismissals independent from provider credentials.
+  // completion signal. Keyless subscription/CLI providers are also complete
+  // configurations, so use the same active-provider policy as the setup UI.
+  const setupMigrationSettings = {
+    ...maybeSettings,
+    provider: providerSettings,
+    agents: kunSettingsEnvelope(runtime)
+  } as AppSettingsV1
   const initialSetupCompleted = typeof maybeSettings.initialSetupCompleted === 'boolean'
     ? maybeSettings.initialSetupCompleted
-    : Boolean(runtime.apiKey.trim() || selectedProvider?.apiKey.trim())
+    : !activeModelProviderNeedsApiKey(setupMigrationSettings)
   return {
     version: 1,
     initialSetupCompleted,

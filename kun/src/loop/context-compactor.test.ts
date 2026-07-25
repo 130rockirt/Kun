@@ -10,8 +10,35 @@ import {
 } from '../domain/item.js'
 import { repairModelHistoryItems } from '../domain/model-history-repair.js'
 import { ContextCompactor } from './context-compactor.js'
+import { modelContextProfilesFromConfig } from './model-context-profile.js'
 
 describe('ContextCompactor', () => {
+  it('resolves same-id context thresholds from the active provider profile', () => {
+    const providerProfiles = modelContextProfilesFromConfig({
+      profiles: {
+        shared: { contextWindowTokens: 1_000_000 }
+      }
+    })
+    const compactor = new ContextCompactor({
+      models: {
+        profiles: {
+          shared: { contextWindowTokens: 100_000 }
+        }
+      },
+      profilesForProvider: (providerId) =>
+        providerId === 'provider-b' ? providerProfiles : []
+    })
+
+    expect(compactor.thresholds('shared')).toEqual({
+      softThreshold: 75_000,
+      hardThreshold: 85_000
+    })
+    expect(compactor.thresholds('shared', 'provider-b')).toEqual({
+      softThreshold: 750_000,
+      hardThreshold: 850_000
+    })
+  })
+
   it('does not replace an existing summary when no new history can be folded', () => {
     const threadId = 'thr_compaction_no_progress'
     const turnId = 'turn_compaction_no_progress'

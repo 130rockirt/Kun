@@ -301,8 +301,19 @@ export type ClawChannelMirrorResult =
   | { ok: true }
   | { ok: false; message: string }
 export type UpstreamModelsResult =
-  | { ok: true; modelIds: string[]; defaultModelId?: string; modelGroups?: ModelProviderModelGroup[] }
+  | {
+      ok: true
+      modelIds: string[]
+      /** @deprecated Use defaultModel so the provider binding is not ambiguous. */
+      defaultModelId?: string
+      defaultModel?: ModelProviderModelSelection
+      modelGroups?: ModelProviderModelGroup[]
+    }
   | { ok: false; message: string }
+export type ModelProviderModelSelection = {
+  providerId: string
+  modelId: string
+}
 export type ModelProviderModelGroup = {
   providerId: string
   label: string

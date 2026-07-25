@@ -24,6 +24,10 @@ const DEFAULT_STATUS_TIMEOUT_MS = 5_000
 const DEFAULT_LOGIN_TIMEOUT_MS = 5 * 60 * 1000
 const DEFAULT_PROBE_TIMEOUT_MS = 30_000
 const LOGIN_POLL_INTERVAL_MS = 500
+const ANSI_ESCAPE_SEQUENCE_PATTERN = new RegExp(
+  `${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`,
+  'g'
+)
 
 type SpawnFn = typeof spawn
 
@@ -61,7 +65,7 @@ function appendBounded(current: string, chunk: Buffer): string {
 }
 
 function redactClaudeAuthText(value: string, token?: string): string {
-  let redacted = value.replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, '')
+  let redacted = value.replace(ANSI_ESCAPE_SEQUENCE_PATTERN, '')
   if (token) redacted = redacted.split(token).join('<redacted>')
   return redacted
     .replace(OAUTH_TOKEN_REDACTION_PATTERN, '<redacted>')

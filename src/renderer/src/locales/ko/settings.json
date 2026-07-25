@@ -1028,6 +1028,8 @@
   "mcpFormVisibleRootsHint": "선택사항. 모든 작업공간에 이 서버를 표시하려면 비워 두세요. 해당 프로젝트 내에서만 노출되도록 경로를 추가하세요.",
   "mcpFormTrustedRoots": "신뢰할 수 있는 작업공간 경로(한 줄에 하나씩)",
   "mcpFormTrustedRootsPlaceholder": "/사용자/나/프로젝트",
+  "mcpFormPlanReadOnlyTools": "Plan 모드 읽기 전용 도구(한 줄에 이름 하나)",
+  "mcpFormPlanReadOnlyToolsHint": "부작용이 없다고 신뢰하는 도구만 입력하세요. 원격 MCP가 자체 보고한 읽기 전용 표시는 권한으로 간주되지 않습니다.",
   "mcpFormErrorNameRequired": "이름은 필수입니다.",
   "mcpFormErrorNameDuplicate": "이름은 고유해야 합니다.",
   "mcpFormErrorCommandRequired": "로컬(stdio) 서버에는 명령이 필요합니다.",

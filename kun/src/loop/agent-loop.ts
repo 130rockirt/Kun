@@ -127,7 +127,7 @@ export type AgentLoopOptions = {
   ids: IdGenerator
   nowIso: () => string
   nowMs?: () => number
-  modelCapabilities?: (model: string) => ModelCapabilityMetadata
+  modelCapabilities?: (model: string, providerId?: string) => ModelCapabilityMetadata
   skillRuntime?: SkillRuntime
   instructionRuntime?: InstructionRuntime
   attachmentStore?: AttachmentStore

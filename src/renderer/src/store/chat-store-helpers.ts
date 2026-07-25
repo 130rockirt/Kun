@@ -330,11 +330,16 @@ export function composerModelAllowed(pickList: readonly string[], modelId: strin
 export function composerModelSelectable(
   pickList: readonly string[],
   modelGroups: readonly ModelProviderModelGroup[],
-  modelId: string
+  modelId: string,
+  providerId = ''
 ): boolean {
   if (!composerModelAllowed(pickList, modelId)) return false
   if (!isComposerChatModelId(modelId)) return false
-  const group = modelGroups.find((item) => modelGroupHasModel(item, modelId))
+  const provider = providerId.trim()
+  const group = provider
+    ? modelGroups.find((item) => item.providerId === provider && modelGroupHasModel(item, modelId))
+    : modelGroups.find((item) => modelGroupHasModel(item, modelId))
+  if (provider && !group) return false
   if (!group) return true
   return modelProfileSupportsTextChat(modelProfileForComposerModel(group, modelId))
 }

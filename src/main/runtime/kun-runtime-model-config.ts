@@ -76,6 +76,7 @@ export function providersConfigForRuntime(
       ...(provider.kind ? { kind: provider.kind } : {}),
       ...(provider.endpointFormat ? { endpointFormat: provider.endpointFormat } : {}),
       retry: provider.retry,
+      modelProfiles: modelConfigProfilesFromProviderProfiles(provider.modelProfiles),
       ...(proxyUrl ? { modelProxyUrl: proxyUrl } : {}),
       // Credential-derived transport headers are reconstructed in Kun from
       // the protected binding and are never persisted in config.json.

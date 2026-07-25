@@ -360,11 +360,9 @@ export function listModelProviderModelIds(settings: AppSettingsV1): string[] {
   const ids = new Set<string>()
   const providerSettings = getModelProviderSettings(settings)
   for (const provider of providerSettings.providers) {
-    const nonTextModelIds = listProviderNonTextModelIds(provider)
     for (const model of provider.models) {
       const trimmed = model.trim()
-      if (!trimmed || !isComposerChatModelId(trimmed, nonTextModelIds)) continue
-      if (!modelProfileSupportsTextChat(modelProviderModelProfile(provider, trimmed))) continue
+      if (!trimmed || !isProviderComposerChatModelId(provider, trimmed)) continue
       ids.add(trimmed)
     }
   }
@@ -465,6 +463,18 @@ export function isComposerChatModelId(
   return !SPEECH_ONLY_MODEL_PATTERN.test(normalized) && !NON_TEXT_MODEL_PATTERN.test(normalized)
 }
 
+export function isProviderComposerChatModelId(
+  provider: ModelProviderProfileV1,
+  modelId: string
+): boolean {
+  const profile = modelProviderModelProfile(provider, modelId)
+  if (profile && !modelProfileSupportsTextChat(profile)) return false
+  return isComposerChatModelId(
+    modelId,
+    profile ? [] : listProviderNonTextModelIds(provider)
+  )
+}
+
 export function isSpeechToTextModelId(modelId: string): boolean {
   const normalized = modelId.trim().toLowerCase()
   return Boolean(normalized) && SPEECH_TO_TEXT_MODEL_PATTERN.test(normalized)
@@ -506,20 +516,18 @@ export function modelProviderModelProfile(
   return provider.modelProfiles[normalized]
 }
 
-export function modelProviderModelProfilesForSettings(
-  settings: AppSettingsV1
+export function modelProviderModelProfilesForProvider(
+  settings: AppSettingsV1,
+  providerId: string
 ): Record<string, ModelProviderModelProfileV1> {
   const profiles: Record<string, ModelProviderModelProfileV1> = {}
-  const nonTextModelIds = listNonTextModelIds(settings)
-  for (const provider of getModelProviderSettings(settings).providers) {
-    for (const [modelId, profile] of Object.entries(provider.modelProfiles)) {
-      const normalized = normalizeModelKey(modelId)
-      if (!normalized || !isComposerChatModelId(normalized, nonTextModelIds)) continue
-      if (!modelProfileSupportsTextChat(profile)) continue
-      profiles[normalized] = {
-        ...profile,
-        contextWindowTokens: profile.contextWindowTokens ?? DEFAULT_PROVIDER_CONTEXT_WINDOW_TOKENS
-      }
+  const provider = getModelProviderProfile(settings, providerId)
+  for (const [modelId, profile] of Object.entries(provider.modelProfiles)) {
+    const normalized = normalizeModelKey(modelId)
+    if (!normalized || !isProviderComposerChatModelId(provider, normalized)) continue
+    profiles[normalized] = {
+      ...profile,
+      contextWindowTokens: profile.contextWindowTokens ?? DEFAULT_PROVIDER_CONTEXT_WINDOW_TOKENS
     }
   }
   return profiles
@@ -1130,7 +1138,7 @@ export function resolveKunRuntimeSettings(settings: AppSettingsV1): KunRuntimeSe
     textToSpeech: resolveKunTextToSpeechSettings(settings),
     musicGeneration: resolveKunMusicGenerationSettings(settings),
     videoGeneration: resolveKunVideoGenerationSettings(settings),
-    modelProfiles: modelProviderModelProfilesForSettings(settings),
+    modelProfiles: modelProviderModelProfilesForProvider(settings, provider.id),
     memoryEnabled: resolveKunMemoryEnabled(settings)
   }
 }

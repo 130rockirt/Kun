@@ -1028,6 +1028,8 @@
   "mcpFormVisibleRootsHint": "Опционально. Оставьте пустым для показа во всех директориях.",
   "mcpFormTrustedRoots": "Доверенные пути (один на строку)",
   "mcpFormTrustedRootsPlaceholder": "/Пользователи/я/проект",
+  "mcpFormPlanReadOnlyTools": "Инструменты только для чтения в режиме Plan (по одному имени на строку)",
+  "mcpFormPlanReadOnlyToolsHint": "Указывайте только инструменты, которым вы доверяете отсутствие побочных эффектов. Удалённые отметки MCP «только чтение» не считаются авторизацией.",
   "mcpFormErrorNameRequired": "Имя обязательно.",
   "mcpFormErrorNameDuplicate": "Имена должны быть уникальными.",
   "mcpFormErrorCommandRequired": "Команда обязательна для локального сервера (stdio).",

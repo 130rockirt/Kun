@@ -256,6 +256,7 @@ describe('MCP tool provider', () => {
     expect(tools.map((tool) => tool.name)).toEqual([
       'mcp_search',
       'mcp_describe',
+      'mcp_read_only_call',
       'mcp_call',
       'mcp_refresh_catalog',
       'mcp_github_search_issues'
@@ -341,11 +342,12 @@ describe('MCP tool provider', () => {
       mode: 'search',
       active: true,
       indexedToolCount: 2,
-      advertisedToolCount: 9
+      advertisedToolCount: 10
     })
     expect((await host.listTools(context)).map((tool) => tool.name)).toEqual([
       'mcp_search',
       'mcp_describe',
+      'mcp_read_only_call',
       'mcp_call',
       'mcp_refresh_catalog'
     ])
@@ -412,6 +414,7 @@ describe('MCP tool provider', () => {
     expect((await host.listTools(buildContext('/tmp/other'))).map((tool) => tool.name)).toEqual([
       'mcp_search',
       'mcp_describe',
+      'mcp_read_only_call',
       'mcp_call',
       'mcp_refresh_catalog'
     ])
@@ -449,6 +452,7 @@ describe('MCP tool provider', () => {
     expect((await host.listTools(buildContext('/tmp/project'))).map((tool) => tool.name)).toEqual([
       'mcp_search',
       'mcp_describe',
+      'mcp_read_only_call',
       'mcp_call',
       'mcp_refresh_catalog',
       'mcp_codegraph_search_issues'

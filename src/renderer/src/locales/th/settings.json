@@ -1028,6 +1028,8 @@
   "mcpFormVisibleRootsHint": "ไม่จำเป็น เว้นว่างไว้เพื่อแสดงเซิร์ฟเวอร์นี้ในทุกพื้นที่ทำงาน เพิ่มเส้นทางเพื่อแสดงเฉพาะภายในโครงการเหล่านั้น",
   "mcpFormTrustedRoots": "พาธพื้นที่ทำงานที่เชื่อถือได้ (หนึ่งรายการต่อบรรทัด)",
   "mcpFormTrustedRootsPlaceholder": "/ผู้ใช้/ฉัน/โครงการ",
+  "mcpFormPlanReadOnlyTools": "เครื่องมืออ่านอย่างเดียวในโหมด Plan (หนึ่งชื่อต่อบรรทัด)",
+  "mcpFormPlanReadOnlyToolsHint": "ระบุเฉพาะเครื่องมือที่คุณเชื่อถือว่าไม่มีผลข้างเคียง ป้ายกำกับอ่านอย่างเดียวที่ MCP ระยะไกลรายงานเองไม่ถือเป็นการอนุญาต",
   "mcpFormErrorNameRequired": "ต้องระบุชื่อ",
   "mcpFormErrorNameDuplicate": "ชื่อจะต้องไม่ซ้ำกัน",
   "mcpFormErrorCommandRequired": "จำเป็นต้องมีคำสั่งสำหรับเซิร์ฟเวอร์ภายในเครื่อง (stdio)",

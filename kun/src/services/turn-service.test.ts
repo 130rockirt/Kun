@@ -183,7 +183,7 @@ describe('TurnService startTurn', () => {
     const threadStore = new InMemoryThreadStore()
     const eventBus = new InMemoryEventBus()
     const nowIso = () => '2026-07-24T00:00:00.000Z'
-    const bindScope = async (): Promise<never> => {
+    const bindScopes = async (): Promise<never> => {
       throw new Error('attachment not found: att_000000000000000000000000')
     }
     const service = new TurnService({
@@ -198,7 +198,7 @@ describe('TurnService startTurn', () => {
       inflight: new InflightTracker(),
       steering: new SteeringQueue(),
       compactor: new ContextCompactor(),
-      attachmentStore: () => ({ bindScope } as never),
+      attachmentStore: () => ({ bindScopes } as never),
       ids: new SequentialIdGenerator(),
       nowIso
     })
@@ -221,6 +221,121 @@ describe('TurnService startTurn', () => {
 
     expect((await threadStore.get(threadId))?.turns).toEqual([])
     expect(await sessionStore.loadItems(threadId)).toEqual([])
+  })
+
+  it('does not bind any attachment when batch validation fails', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-turn-attachment-batch-'))
+    try {
+      const sessionStore = new InMemorySessionStore()
+      const threadStore = new InMemoryThreadStore()
+      const eventBus = new InMemoryEventBus()
+      const nowIso = () => '2026-07-24T00:00:00.000Z'
+      const attachmentStore = new FileAttachmentStore({
+        rootDir: join(root, 'attachments'),
+        config: KunCapabilitiesConfig.parse({ attachments: { enabled: true } }).attachments,
+        nowIso
+      })
+      const service = new TurnService({
+        threadStore,
+        sessionStore,
+        events: new RuntimeEventRecorder({
+          eventBus,
+          sessionStore,
+          allocateSeq: (threadId) => eventBus.allocateSeq(threadId),
+          nowIso
+        }),
+        inflight: new InflightTracker(),
+        steering: new SteeringQueue(),
+        compactor: new ContextCompactor(),
+        attachmentStore: () => attachmentStore,
+        ids: new SequentialIdGenerator(),
+        nowIso
+      })
+      const threadId = 'thr_attachment_batch_failure'
+      await threadStore.upsert(createThreadRecord({
+        id: threadId,
+        title: 'Attachment batch failure',
+        workspace: '/tmp/workspace',
+        model: 'deepseek-v4-pro'
+      }))
+      const valid = await attachmentStore.create({
+        name: 'valid.png',
+        data: testPng(),
+        workspace: '/tmp/workspace'
+      })
+
+      await expect(service.startTurn({
+        threadId,
+        request: {
+          prompt: 'inspect',
+          model: 'm',
+          attachmentIds: [valid.id, 'att_000000000000000000000000']
+        }
+      })).rejects.toThrow(/attachment not found/)
+
+      expect(await attachmentStore.get(valid.id)).toMatchObject({ threadIds: [] })
+      expect((await threadStore.get(threadId))?.turns).toEqual([])
+      expect(await sessionStore.loadItems(threadId)).toEqual([])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('preserves every thread scope when turns bind the same attachment concurrently', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-turn-attachment-concurrent-'))
+    try {
+      const sessionStore = new InMemorySessionStore()
+      const threadStore = new InMemoryThreadStore()
+      const eventBus = new InMemoryEventBus()
+      const nowIso = () => '2026-07-24T00:00:00.000Z'
+      const attachmentStore = new FileAttachmentStore({
+        rootDir: join(root, 'attachments'),
+        config: KunCapabilitiesConfig.parse({ attachments: { enabled: true } }).attachments,
+        nowIso
+      })
+      const service = new TurnService({
+        threadStore,
+        sessionStore,
+        events: new RuntimeEventRecorder({
+          eventBus,
+          sessionStore,
+          allocateSeq: (threadId) => eventBus.allocateSeq(threadId),
+          nowIso
+        }),
+        inflight: new InflightTracker(),
+        steering: new SteeringQueue(),
+        compactor: new ContextCompactor(),
+        attachmentStore: () => attachmentStore,
+        ids: new SequentialIdGenerator(),
+        nowIso
+      })
+      const threadIds = ['thr_attachment_concurrent_a', 'thr_attachment_concurrent_b']
+      for (const threadId of threadIds) {
+        await threadStore.upsert(createThreadRecord({
+          id: threadId,
+          title: threadId,
+          workspace: '/tmp/shared-workspace',
+          model: 'deepseek-v4-pro'
+        }))
+      }
+      const attachment = await attachmentStore.create({
+        name: 'shared.png',
+        data: testPng(),
+        workspace: '/tmp/shared-workspace'
+      })
+
+      const starts = await Promise.all(threadIds.map((threadId) => service.startTurn({
+        threadId,
+        request: { prompt: 'inspect', model: 'm', attachmentIds: [attachment.id] }
+      })))
+
+      expect((await attachmentStore.get(attachment.id))?.threadIds.sort()).toEqual([...threadIds].sort())
+      await Promise.all(starts.map((started, index) =>
+        service.interruptTurn({ threadId: threadIds[index], turnId: started.turnId })
+      ))
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
   })
 
   it('atomically admits only one active turn for a thread', async () => {

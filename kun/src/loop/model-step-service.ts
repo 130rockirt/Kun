@@ -107,7 +107,7 @@ export type ModelStepServiceDeps = {
   prefix: ImmutablePrefix
   ids: Pick<IdGenerator, 'next'>
   nowIso: () => string
-  modelCapabilities?: (model: string) => ModelCapabilityMetadata
+  modelCapabilities?: (model: string, providerId?: string) => ModelCapabilityMetadata
   activePlanContext?: GuiPlanContext
   tokenEconomy?: TokenEconomyConfig
   toolArgumentRepair?: { maxStringBytes?: number }
@@ -271,7 +271,8 @@ export class ModelStepService {
       ...(modelRoute.reasoningEffort ? { reasoningEffort: modelRoute.reasoningEffort } : {})
     })
     const model = modelRoute.model
-    const modelCapabilities = this.deps.modelCapabilities?.(model) ?? modelCapabilitiesForModel(model)
+    const modelCapabilities =
+      this.deps.modelCapabilities?.(model, providerId) ?? modelCapabilitiesForModel(model)
     const prepared = await this.deps.turnContextResolver.resolve({
       threadId,
       turnId,
@@ -587,7 +588,7 @@ export class ModelStepService {
     // metadata is unavailable.
     const hardCap = modelCapabilities.contextWindowTokens
       ? Math.floor(modelCapabilities.contextWindowTokens * 0.85)
-      : this.deps.compactor.hardCap(model)
+      : this.deps.compactor.hardCap(model, providerId)
     if (inputTokens + outputTokens > hardCap) {
       await this.deps.events.record({
         kind: 'error',
@@ -599,7 +600,7 @@ export class ModelStepService {
       })
       return 'failed'
     }
-    const contextThresholds = this.deps.compactor.thresholds(model)
+    const contextThresholds = this.deps.compactor.thresholds(model, providerId)
     const contextWindowTokens = modelCapabilities.contextWindowTokens ??
       Math.max(contextThresholds.softThreshold, contextThresholds.hardThreshold)
     await this.deps.events.record({

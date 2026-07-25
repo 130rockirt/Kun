@@ -734,9 +734,12 @@ function useMediaPreviewUrls(
     scopeKey,
     failedPreviewIds: {}
   }))
-  const failedPreviewIds = previewFailures.scopeKey === scopeKey
-    ? previewFailures.failedPreviewIds
-    : {}
+  const failedPreviewIds = useMemo(
+    () => previewFailures.scopeKey === scopeKey
+      ? previewFailures.failedPreviewIds
+      : {},
+    [previewFailures, scopeKey]
+  )
   const [resolvedPreviewUrls, setResolvedPreviewUrls] = useState<Record<string, string>>({})
   const previewRequests = useMemo(
     () =>

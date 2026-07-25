@@ -118,6 +118,29 @@ describe('initial setup completion', () => {
     })
     expect(normalized.initialSetupCompleted).toBe(true)
   })
+
+  it('migrates an existing keyless subscription provider to complete', () => {
+    const current = settings()
+    const preset = getModelProviderPreset('gemini-cli-subscription')
+    if (!preset) throw new Error('Gemini CLI subscription preset is missing')
+    const subscription = modelProviderPresetProfile(preset, '')
+    const normalized = normalizeAppSettings({
+      ...current,
+      provider: {
+        ...current.provider,
+        providers: [...current.provider.providers, subscription]
+      },
+      agents: {
+        kun: {
+          ...current.agents.kun,
+          providerId: subscription.id,
+          model: subscription.models[0]
+        }
+      }
+    })
+
+    expect(normalized.initialSetupCompleted).toBe(true)
+  })
 })
 
 describe('chat content max width', () => {

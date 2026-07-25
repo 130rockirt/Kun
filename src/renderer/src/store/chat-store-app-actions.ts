@@ -233,7 +233,12 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
           res.ok || extensionGroups.length > 0,
           [...(res.ok ? res.modelIds : []), ...extensionGroups.flatMap((group) => group.modelIds)]
         )
-        const runtimeDefault = res.ok ? res.defaultModelId?.trim() ?? '' : ''
+        const runtimeDefault = res.ok
+          ? res.defaultModel?.modelId.trim() || res.defaultModelId?.trim() || ''
+          : ''
+        const runtimeDefaultProviderId = res.ok
+          ? res.defaultModel?.providerId.trim() ?? ''
+          : ''
         set((state) => {
           const isSelectable = (model: string): boolean => composerModelSelectable(pick, groups, model)
           const activeThread = state.activeThreadId
@@ -243,7 +248,18 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
           const currentModel = state.composerModel.trim()
           const normalizedCurrentModel = currentModel.toLowerCase() === 'auto' ? '' : currentModel
           const storedModel = readStoredComposerModel(pick)
-          const selectableRuntimeDefault = isSelectable(runtimeDefault) ? runtimeDefault : ''
+          const selectableRuntimeDefault = composerModelSelectable(
+            pick,
+            groups,
+            runtimeDefault,
+            runtimeDefaultProviderId
+          )
+            ? runtimeDefault
+            : runtimeDefaultProviderId
+              ? ''
+              : isSelectable(runtimeDefault)
+                ? runtimeDefault
+                : ''
           const threadHasUserMessages = activeThread
             ? state.blocks.some((block) => block.kind === 'user')
             : false
@@ -266,7 +282,17 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
           const storedProviderId = activeThread || selectableRuntimeDefault
             ? ''
             : readStoredComposerProviderId(groups, model)
-          const providerId = threadProviderId || storedProviderId || providerIdForComposerModel(groups, model)
+          const runtimeProviderId =
+            selectableRuntimeDefault &&
+            model.trim().toLowerCase() === selectableRuntimeDefault.trim().toLowerCase() &&
+            providerIdMatchesComposerModel(groups, runtimeDefaultProviderId, model)
+              ? runtimeDefaultProviderId
+              : ''
+          const providerId =
+            threadProviderId ||
+            runtimeProviderId ||
+            storedProviderId ||
+            providerIdForComposerModel(groups, model)
           if (!activeThread && providerId !== state.composerProviderId) persistComposerProviderId(providerId)
           if (
             activeThread &&

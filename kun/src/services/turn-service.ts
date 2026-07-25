@@ -179,12 +179,10 @@ export class TurnService {
           if (attachmentIds.length > 0) {
             const attachmentStore = this.deps.attachmentStore?.()
             if (!attachmentStore) throw new Error('attachment store is unavailable')
-            for (const attachmentId of attachmentIds) {
-              await attachmentStore.bindScope(attachmentId, {
-                threadId: input.threadId,
-                ...(thread.workspace ? { workspace: thread.workspace } : {})
-              })
-            }
+            await attachmentStore.bindScopes(attachmentIds, {
+              threadId: input.threadId,
+              ...(thread.workspace ? { workspace: thread.workspace } : {})
+            })
           }
           const turn = createTurnRecord({
             id: turnId,

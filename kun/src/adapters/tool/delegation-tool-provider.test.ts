@@ -21,7 +21,7 @@ describe('delegate_task observability output', () => {
     expect(properties).not.toHaveProperty('model')
     expect(properties).not.toHaveProperty('providerId')
     expect(properties).toHaveProperty('profile')
-    expect(properties).toHaveProperty('custom_agent')
+    expect(properties).not.toHaveProperty('custom_agent')
     expect(delegateTool?.inputSchema.required).toEqual(['prompt'])
 
     const customRuntime = {
@@ -134,7 +134,7 @@ describe('delegate_task observability output', () => {
 
     expect(listRoutingProfiles).toHaveBeenCalledWith('/workspace/design', 'design')
     expect(result.output).toMatchObject({
-      mode: 'custom-and-profiles',
+      mode: 'profiles-only',
       surface: 'design',
       profileCount: 2,
       offset: 0,
@@ -146,6 +146,7 @@ describe('delegate_task observability output', () => {
         access: expect.stringContaining('parent')
       }]
     })
+    expect(result.output).not.toHaveProperty('customAgent')
     expect(output.profiles[0]?.name).toHaveLength(256)
     expect(output.profiles[0]?.description).toHaveLength(1_000)
     expect(JSON.stringify(result.output)).not.toContain('secret system prompt')
@@ -155,7 +156,7 @@ describe('delegate_task observability output', () => {
     expect(JSON.stringify(result.output)).not.toContain('blockedTools')
   })
 
-  it('runs an explicit custom agent in reusable-profile mode without invoking catalog routing', async () => {
+  it('runs an explicit custom agent in custom-only mode without invoking catalog routing', async () => {
     const listRoutingProfiles = vi.fn()
     const runChild = vi.fn(async (input: Parameters<DelegationRuntime['runChild']>[0]) => ({
       id: 'child_custom',
@@ -175,7 +176,7 @@ describe('delegate_task observability output', () => {
     }))
     const runtime = {
       enabled: () => true,
-      useExistingAgents: true,
+      useExistingAgents: false,
       defaultToolPolicy: 'inherit',
       listRoutingProfiles,
       runChild
@@ -301,7 +302,7 @@ describe('delegate_task observability output', () => {
     expect(childInput).not.toHaveProperty('providerId')
   })
 
-  it('rejects conflicting selectors and stale arguments that cross custom-only mode', async () => {
+  it('rejects custom arguments in existing-profile mode and stale arguments that cross custom-only mode', async () => {
     const runChild = vi.fn()
     const existingRuntime = {
       enabled: () => true,
@@ -312,6 +313,17 @@ describe('delegate_task observability output', () => {
     const existingTool = buildDelegationToolProviders(existingRuntime)[0]!.tools[0]!
     await expect(existingTool.execute({
       prompt: 'Review the change',
+      custom_agent: {
+        name: 'Reviewer',
+        description: 'Reviews changes.',
+        system_prompt: 'Review the change.'
+      }
+    }, context())).resolves.toMatchObject({
+      isError: true,
+      output: { error: expect.stringContaining('turned on') }
+    })
+    await expect(existingTool.execute({
+      prompt: 'Review the change',
       profile: 'reviewer',
       custom_agent: {
         name: 'Reviewer',
@@ -320,7 +332,7 @@ describe('delegate_task observability output', () => {
       }
     }, context())).resolves.toMatchObject({
       isError: true,
-      output: { error: expect.stringContaining('mutually exclusive') }
+      output: { error: expect.stringContaining('custom_agent is unavailable') }
     })
 
     const customRuntime = {

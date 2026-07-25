@@ -71,6 +71,7 @@ export class HistoryCompactionService {
     })
     const plan = this.deps.compactor.planCompaction(input.items, {
       model: thresholdModel,
+      providerId: input.providerId,
       promptTokens: pressure?.promptTokens,
       overheadTokens
     })
@@ -106,6 +107,7 @@ export class HistoryCompactionService {
           ? plan
           : this.deps.compactor.planCompaction(currentItems, {
               model: thresholdModel,
+              providerId: input.providerId,
               overheadTokens
             })
         if (!currentPlan) {

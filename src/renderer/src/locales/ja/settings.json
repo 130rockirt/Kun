@@ -1028,6 +1028,8 @@
   "mcpFormVisibleRootsHint": "オプション。このサーバーをすべてのワークスペースに表示するには、空白のままにします。パスを追加して、それらのプロジェクト内でのみ公開します。",
   "mcpFormTrustedRoots": "信頼できるワークスペース パス (1 行に 1 つ)",
   "mcpFormTrustedRootsPlaceholder": "/ユーザー/私/プロジェクト",
+  "mcpFormPlanReadOnlyTools": "Plan モードの読み取り専用ツール (1 行に 1 つ)",
+  "mcpFormPlanReadOnlyToolsHint": "副作用がないと信頼できるツールだけを指定してください。リモート MCP の自己申告による読み取り専用表示は許可とは見なしません。",
   "mcpFormErrorNameRequired": "名前は必須です。",
   "mcpFormErrorNameDuplicate": "名前は一意である必要があります。",
   "mcpFormErrorCommandRequired": "コマンドはローカル (stdio) サーバーに必要です。",

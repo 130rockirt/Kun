@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { AttachmentContent, AttachmentStore } from '../attachments/attachment-store.js'
+import type { ModelCapabilityMetadata } from '../contracts/capabilities.js'
 import {
   TurnAttachmentService,
   imageGenerationReferenceInstructions
@@ -109,12 +110,12 @@ describe('TurnAttachmentService', () => {
   it('sends Office semantics to every model and adds its preview only for visual models', async () => {
     const content = officeDocumentAttachment()
     const service = new TurnAttachmentService(store(content))
-    const textModel = {
+    const textModel: ModelCapabilityMetadata = {
       id: 'text',
-      inputModalities: ['text'] as const,
-      outputModalities: ['text'] as const,
+      inputModalities: ['text'],
+      outputModalities: ['text'],
       supportsToolCalling: true,
-      messageParts: ['text'] as const
+      messageParts: ['text']
     }
 
     await expect(service.resolveTurnAttachments({

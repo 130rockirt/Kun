@@ -137,17 +137,49 @@ describe('buildToolPreferenceInstruction', () => {
     expect(instruction).toContain('Do not delegate trivial work')
   })
 
-  it('explains custom, exact-profile, and automatic routes when discovery is available', () => {
+  it('explains only exact-profile and automatic routes in existing-profile mode', () => {
     const instruction = buildToolPreferenceInstruction([
-      { name: 'list_subagent_profiles', description: 'List custom and reusable roles' },
-      { name: 'delegate_task', description: 'Run a standalone child agent' }
+      { name: 'list_subagent_profiles', description: 'List reusable roles' },
+      {
+        name: 'delegate_task',
+        description: 'Run a standalone child agent',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            prompt: { type: 'string' },
+            profile: { type: 'string' }
+          }
+        }
+      }
     ])
 
     expect(instruction).toContain('exact roster knowledge')
-    expect(instruction).toContain('`custom_agent`')
     expect(instruction).toContain('exact returned `profile` id')
-    expect(instruction).toContain('omit both selectors for automatic routing')
+    expect(instruction).toContain('omit `profile` for automatic routing')
+    expect(instruction).not.toContain('`custom_agent`')
     expect(instruction).not.toContain('security-auditor')
+  })
+
+  it('explains only custom roles in custom-only mode', () => {
+    const instruction = buildToolPreferenceInstruction([
+      { name: 'list_subagent_profiles', description: 'Describe custom roles' },
+      {
+        name: 'delegate_task',
+        description: 'Run a standalone child agent',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            prompt: { type: 'string' },
+            custom_agent: { type: 'object' }
+          }
+        }
+      }
+    ])
+
+    expect(instruction).toContain('`custom_agent`')
+    expect(instruction).toContain('reusable profile selection and automatic catalog routing are unavailable')
+    expect(instruction).not.toContain('exact returned `profile` id')
+    expect(instruction).not.toContain('omit `profile` for automatic routing')
   })
 
   it('keeps read-only profile discovery useful when child execution is not advertised', () => {

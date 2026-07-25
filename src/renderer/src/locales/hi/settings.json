@@ -1028,6 +1028,8 @@
   "mcpFormVisibleRootsHint": "वैकल्पिक. इस सर्वर को प्रत्येक कार्यक्षेत्र में दिखाने के लिए खाली छोड़ दें; केवल उन परियोजनाओं के अंदर इसे उजागर करने के लिए पथ जोड़ें।",
   "mcpFormTrustedRoots": "विश्वसनीय कार्यस्थान पथ (प्रति पंक्ति एक)",
   "mcpFormTrustedRootsPlaceholder": "/उपयोगकर्ता/मैं/परियोजना",
+  "mcpFormPlanReadOnlyTools": "Plan मोड के केवल-पढ़ने वाले टूल (प्रति पंक्ति एक नाम)",
+  "mcpFormPlanReadOnlyToolsHint": "केवल उन्हीं टूल को सूचीबद्ध करें जिन पर आपको भरोसा है कि उनका कोई दुष्प्रभाव नहीं है। दूरस्थ MCP के केवल-पढ़ने के चिह्न को अनुमति नहीं माना जाता।",
   "mcpFormErrorNameRequired": "नाम आवश्यक है.",
   "mcpFormErrorNameDuplicate": "नाम अद्वितीय होने चाहिए.",
   "mcpFormErrorCommandRequired": "स्थानीय (stdio) सर्वर के लिए कमांड आवश्यक है।",

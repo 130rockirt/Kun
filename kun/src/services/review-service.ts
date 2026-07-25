@@ -13,7 +13,11 @@ import type { ReviewTarget } from '../contracts/review.js'
 import { AgentLoop } from '../loop/agent-loop.js'
 import { ContextCompactor } from '../loop/context-compactor.js'
 import { InflightTracker } from '../loop/inflight-tracker.js'
-import type { ContextCompactionConfig, ModelConfig } from '../loop/model-context-profile.js'
+import type {
+  ContextCompactionConfig,
+  ModelConfig,
+  ModelContextProfile
+} from '../loop/model-context-profile.js'
 import { modelCapabilitiesForModel } from '../loop/model-context-profile.js'
 import { SteeringQueue } from '../loop/steering-queue.js'
 import type { TokenEconomyConfig } from '../loop/token-economy.js'
@@ -39,7 +43,10 @@ export type ReviewServiceDeps = {
   contextCompaction?: ContextCompactionConfig
   tokenEconomy?: TokenEconomyConfig
   runtime?: RuntimeTuningConfig
-  modelCapabilities?: (model: string) => ModelCapabilityMetadata
+  modelCapabilities?: (model: string, providerId?: string) => ModelCapabilityMetadata
+  profilesForProvider?: (
+    providerId: string | undefined
+  ) => readonly ModelContextProfile[]
   /** Reasoning depth for the code-review model call. Invalid/missing => 'off'. */
   reasoningEffort?: string
   roleModel?: string
@@ -148,7 +155,8 @@ export class ReviewService {
     const steering = new SteeringQueue()
     const compactor = new ContextCompactor({
       contextCompaction: this.deps.contextCompaction,
-      models: this.deps.models
+      models: this.deps.models,
+      profilesForProvider: this.deps.profilesForProvider
     })
     const events = new RuntimeEventRecorder({
       eventBus,
@@ -196,7 +204,7 @@ export class ReviewService {
       ids,
       nowIso,
       modelCapabilities: (model) =>
-        this.deps.modelCapabilities?.(model) ?? modelCapabilitiesForModel(model),
+        this.deps.modelCapabilities?.(model, input.providerId) ?? modelCapabilitiesForModel(model),
       ...(this.deps.contextCompaction ? { contextCompaction: this.deps.contextCompaction } : {}),
       ...(this.deps.tokenEconomy ? { tokenEconomy: this.deps.tokenEconomy } : {}),
       ...(this.deps.runtime?.toolStorm ? { toolStorm: this.deps.runtime.toolStorm } : {}),

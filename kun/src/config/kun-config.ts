@@ -312,6 +312,7 @@ export const ServeProviderConfigSchema = z
       .optional(),
     retry: ModelRequestRetryConfigSchema.optional(),
     modelProxyUrl: z.string().optional(),
+    modelProfiles: z.record(z.string().min(1), ModelContextProfileConfigSchema).optional(),
     headers: z.record(z.string(), z.string()).optional()
   })
   .strict()

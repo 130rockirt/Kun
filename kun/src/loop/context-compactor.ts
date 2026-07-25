@@ -38,6 +38,7 @@ export type CompactionPlan = {
 
 export type CompactionTriggerOptions = {
   model?: string
+  providerId?: string
   /** Provider-reported prompt token count for the last request, when known. */
   promptTokens?: number
   frozenMessageCount?: number
@@ -61,6 +62,9 @@ export class ContextCompactor {
   private readonly softThreshold: number
   private readonly hardThreshold: number
   private readonly modelProfiles: readonly ModelContextProfile[]
+  private readonly profilesForProvider?: (
+    providerId: string | undefined
+  ) => readonly ModelContextProfile[]
 
   constructor(options?: {
     estimator?: ContextEstimator
@@ -68,6 +72,9 @@ export class ContextCompactor {
     hardThreshold?: number
     contextCompaction?: ContextCompactionConfig
     models?: ModelConfig
+    profilesForProvider?: (
+      providerId: string | undefined
+    ) => readonly ModelContextProfile[]
   }) {
     const contextCompaction = options?.contextCompaction
     this.estimator = options?.estimator ?? new ContextEstimator()
@@ -83,6 +90,7 @@ export class ContextCompactor {
       contextCompaction,
       models: options?.models
     })
+    this.profilesForProvider = options?.profilesForProvider
   }
 
   estimate(items: TurnItem[]): number {
@@ -94,7 +102,7 @@ export class ContextCompactor {
   }
 
   planCompaction(items: TurnItem[], options?: CompactionTriggerOptions): CompactionPlan | null {
-    const thresholds = this.thresholds(options?.model)
+    const thresholds = this.thresholds(options?.model, options?.providerId)
     const frozenMessageCount = normalizeFrozenMessageCount(options?.frozenMessageCount, items.length)
     const compactableItems = frozenMessageCount > 0 ? items.slice(frozenMessageCount) : items
     // `overheadTokens` accounts for the system prompt and tool schemas that
@@ -259,15 +267,18 @@ export class ContextCompactor {
   }
 
   /** Hard cap used by the loop to enforce an upper bound on the conversation. */
-  hardCap(model?: string): number {
-    return this.thresholds(model).hardThreshold
+  hardCap(model?: string, providerId?: string): number {
+    return this.thresholds(model, providerId).hardThreshold
   }
 
-  thresholds(model?: string): ModelContextThresholds {
+  thresholds(model?: string, providerId?: string): ModelContextThresholds {
+    const profiles = providerId
+      ? this.profilesForProvider?.(providerId) ?? this.modelProfiles
+      : this.modelProfiles
     return contextThresholdsForModel(model, {
       softThreshold: this.softThreshold,
       hardThreshold: this.hardThreshold
-    }, this.modelProfiles)
+    }, profiles)
   }
 }
 

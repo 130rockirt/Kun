@@ -37,9 +37,8 @@ export function buildDelegationToolProviders(
     ? {
         profile: {
           type: 'string',
-          description: 'Optional exact reusable profile id returned by list_subagent_profiles. Mutually exclusive with custom_agent; omit both to route over the effective catalog.'
-        },
-        custom_agent: customAgentSchema()
+          description: 'Optional exact reusable profile id returned by list_subagent_profiles. Omit it to route over the effective catalog.'
+        }
       }
     : { custom_agent: customAgentSchema() }
 
@@ -74,8 +73,8 @@ export function buildDelegationToolProviders(
           let routing: ChildRoutingMetadata | undefined
           const agentSurface = context.agentSurface ?? 'code'
 
-          if (requestedProfile && customAgentSupplied) {
-            return toolError('profile and custom_agent are mutually exclusive')
+          if (useExistingAgents && customAgentSupplied) {
+            return toolError('custom_agent is unavailable while "Use existing agents" is turned on; select a reusable profile or omit profile for automatic routing')
           }
           if (!useExistingAgents) {
             if (requestedProfile) {
@@ -85,7 +84,7 @@ export function buildDelegationToolProviders(
               return toolError('custom_agent is required while "Use existing agents" is turned off')
             }
           }
-          if (customAgentSupplied) {
+          if (!useExistingAgents && customAgentSupplied) {
             const customDefinition = parseCustomAgent(args.custom_agent)
             if (customDefinition instanceof Error) return toolError(customDefinition.message)
             if (!customDefinition) return toolError('custom_agent is required')
@@ -151,14 +150,14 @@ export function buildDelegationToolProviders(
       }),
       LocalToolHost.defineTool({
         name: 'list_subagent_profiles',
-        description: 'Describe the one-run custom subagent capability and, when "Use existing agents" is enabled, list the effective reusable profiles for the current workspace and product surface.',
+        description: buildListSubagentProfilesDescription(runtime),
         inputSchema: {
           type: 'object',
           properties: {
             offset: {
               type: 'integer',
               minimum: 0,
-              description: 'Zero-based reusable-profile offset. Custom capability metadata is always returned.'
+              description: 'Zero-based reusable-profile offset.'
             },
             limit: {
               type: 'integer',
@@ -188,9 +187,9 @@ export function buildDelegationToolProviders(
             : null
           return {
             output: {
-              mode: useExistingAgents ? 'custom-and-profiles' : 'custom-only',
+              mode: useExistingAgents ? 'profiles-only' : 'custom-only',
               surface: agentSurface,
-              customAgent: customAgentCapability(),
+              ...(!useExistingAgents ? { customAgent: customAgentCapability() } : {}),
               profileCount: documents.length,
               offset,
               limit,
@@ -211,7 +210,7 @@ export function buildDelegationToolProviders(
                   : 'May use only tools allowed by the parent capability and approval boundary.'
               })),
               guidance: useExistingAgents
-                ? 'Use delegate_task.custom_agent for a one-run custom role, pass an exact id as delegate_task.profile, or omit both selectors for automatic routing.'
+                ? 'Pass an exact id as delegate_task.profile, or omit profile for automatic routing over the effective catalog.'
                 : 'Reusable profiles are disabled. Define a one-run role with delegate_task.custom_agent.'
             }
           }
@@ -487,8 +486,8 @@ function routingToolOutput(routing: ChildRoutingMetadata): Record<string, unknow
 }
 
 function buildDelegateTaskDescription(runtime: DelegationRuntime): string {
-  const modeDescription = runtime.useExistingAgents
-    ? 'Define a one-run role in custom_agent, select an exact reusable profile id from list_subagent_profiles, or omit both selectors so Kun can route over the effective catalog.'
+  const modeDescription = runtime.useExistingAgents !== false
+    ? 'Select an exact reusable profile id from list_subagent_profiles, or omit profile so Kun can route over the effective catalog.'
     : 'Define the best one-run role for this task in custom_agent. Do not select or recall an existing profile in this mode.'
   return [
     'Run a standalone child agent and return its result.',
@@ -497,6 +496,12 @@ function buildDelegateTaskDescription(runtime: DelegationRuntime): string {
     'Issue multiple calls in one message for independent parallel work.',
     `Children default to the "${runtime.defaultToolPolicy}" tool policy and can never recursively delegate.`
   ].join(' ')
+}
+
+function buildListSubagentProfilesDescription(runtime: DelegationRuntime): string {
+  return runtime.useExistingAgents !== false
+    ? 'List the effective reusable subagent profiles for the current workspace and product surface.'
+    : 'Describe the one-run custom subagent capability available while reusable profiles are disabled.'
 }
 
 function nonnegativeInteger(value: unknown, fallback: number): number {

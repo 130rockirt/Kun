@@ -366,7 +366,7 @@ describe('DelegationRuntime', () => {
     expect(seen.at(-1)?.toolPolicy).toBe('readOnly')
   })
 
-  it('lets reusable-profile mode create an ephemeral custom subagent that inherits the active turn model', async () => {
+  it('lets custom-only mode create an ephemeral subagent that inherits the active turn model', async () => {
     const seen: Array<{
       systemPrompt?: string
       blockedTools?: string[]
@@ -376,7 +376,7 @@ describe('DelegationRuntime', () => {
       reasoningEffort?: string
     }> = []
     const runtime = createRuntime({
-      useExistingAgents: true,
+      useExistingAgents: false,
       profiles: { general: { description: 'General worker', toolPolicy: 'inherit' } },
       executor: async (input) => {
         seen.push({
@@ -567,7 +567,7 @@ describe('DelegationRuntime', () => {
     })
   })
 
-  it('rejects profile plus custom_agent before consuming a child-run slot', async () => {
+  it('rejects custom_agent in existing-profile mode before consuming a child-run slot', async () => {
     const runtime = createRuntime({ profiles: { general: { toolPolicy: 'inherit' } } })
     const host = new LocalToolHost({
       registry: new CapabilityRegistry(buildDelegationToolProviders(runtime))
@@ -593,7 +593,13 @@ describe('DelegationRuntime', () => {
       awaitApproval: async () => 'allow'
     })
 
-    expect(result.item).toMatchObject({ kind: 'tool_result', isError: true })
+    expect(result.item).toMatchObject({
+      kind: 'tool_result',
+      isError: true,
+      output: {
+        error: expect.stringContaining('custom_agent is unavailable')
+      }
+    })
     expect((await runtime.diagnostics('thr_conflict')).childRuns).toEqual([])
   })
 
@@ -728,11 +734,11 @@ describe('DelegationRuntime', () => {
       kind: 'tool_result',
       isError: false,
       output: {
-        mode: 'custom-and-profiles',
-        surface: 'design',
-        customAgent: expect.objectContaining({ id: 'custom', argument: 'custom_agent' })
+        mode: 'profiles-only',
+        surface: 'design'
       }
     })
+    expect(discovered.item.output).not.toHaveProperty('customAgent')
     expect(discoveredOutput.profiles).toEqual(expect.arrayContaining([
       expect.objectContaining({
         id: 'reviewer',

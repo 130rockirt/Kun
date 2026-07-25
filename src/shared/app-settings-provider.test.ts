@@ -31,7 +31,7 @@ import {
   listSpeechToTextProviderProfiles,
   listTextToSpeechProviderProfiles,
   listVideoGenerationProviderProfiles,
-  modelProviderModelProfilesForSettings,
+  modelProviderModelProfilesForProvider,
   listModelProviderModelIds,
   modelSupportsImageInput,
   defaultDesignSettings,
@@ -616,7 +616,35 @@ describe('model provider settings', () => {
         : provider
     )
 
-    expect(modelProviderModelProfilesForSettings(state)['custom-model'].contextWindowTokens).toBe(256_000)
+    expect(modelProviderModelProfilesForProvider(state, 'custom')['custom-model'].contextWindowTokens)
+      .toBe(256_000)
+  })
+
+  it('keeps same-id model profiles scoped to the selected provider', () => {
+    const state = settings()
+    state.provider.providers = state.provider.providers.map((provider) => ({
+      ...provider,
+      models: [...provider.models, 'shared-model'],
+      modelProfiles: {
+        ...provider.modelProfiles,
+        'shared-model': {
+          inputModalities: ['text'],
+          outputModalities: ['text'],
+          supportsToolCalling: true,
+          messageParts: ['text'],
+          endpointFormat: provider.id === 'custom' ? 'messages' : 'responses'
+        }
+      }
+    }))
+    state.agents.kun.providerId = 'custom'
+    state.agents.kun.model = 'shared-model'
+
+    expect(resolveKunRuntimeSettings(state).modelProfiles['shared-model']).toMatchObject({
+      endpointFormat: 'messages'
+    })
+    expect(modelProviderModelProfilesForProvider(state, 'deepseek')['shared-model']).toMatchObject({
+      endpointFormat: 'responses'
+    })
   })
 
   it('preserves per-model max output tokens in custom provider profiles', () => {
@@ -1276,6 +1304,13 @@ describe('model provider settings', () => {
             modelProfiles: {}
           }
         ]
+      },
+      agents: {
+        kun: {
+          ...base.agents.kun,
+          providerId: 'xiaomi-token-plan',
+          model: 'mimo-v2.5'
+        }
       }
     })
 

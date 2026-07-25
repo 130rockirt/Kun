@@ -20,7 +20,8 @@ import {
   resolveKunRuntimeSettings,
   defaultWriteSettings,
   defaultTerminalSettings,
-  type AppSettingsV1
+  type AppSettingsV1,
+  type ModelProviderModelProfileV1
 } from '../shared/app-settings'
 import { KunConfigSchema } from '../../kun/src/config/kun-config.js'
 
@@ -550,6 +551,68 @@ describe('syncGuiManagedKunConfig', () => {
     const parsed = JSON.parse(readFileSync(configPath, 'utf8')) as any
     expect(parsed.models.profiles['gemini-2.5-flash']).toMatchObject({
       contextWindowTokens: 1_048_576
+    })
+  })
+
+  it('keeps same-id model profiles scoped to their provider in runtime config', async () => {
+    if (!tempRoot) throw new Error('temp root not initialized')
+    const configPath = join(tempRoot, 'config.json')
+    const module = await import('./kun-process')
+    const settings = createSettings('/tmp/fake-kun-child.js')
+    const profile = (
+      endpointFormat: 'messages' | 'responses',
+      contextWindowTokens: number
+    ): ModelProviderModelProfileV1 => ({
+      contextWindowTokens,
+      inputModalities: ['text'],
+      outputModalities: ['text'],
+      supportsToolCalling: true,
+      messageParts: ['text'],
+      endpointFormat
+    })
+    settings.provider.providers.push(
+      {
+        id: 'shared-a',
+        name: 'Shared A',
+        apiKey: 'sk-a',
+        baseUrl: 'https://a.example/v1',
+        endpointFormat: 'chat_completions',
+        models: ['shared-model'],
+        modelProfiles: { 'shared-model': profile('messages', 128_000) }
+      },
+      {
+        id: 'shared-b',
+        name: 'Shared B',
+        apiKey: 'sk-b',
+        baseUrl: 'https://b.example/v1',
+        endpointFormat: 'chat_completions',
+        models: ['shared-model'],
+        modelProfiles: { 'shared-model': profile('responses', 256_000) }
+      }
+    )
+    settings.agents.kun = {
+      ...settings.agents.kun,
+      providerId: 'shared-b',
+      model: 'shared-model'
+    }
+
+    await module.syncGuiManagedKunConfig(tempRoot, resolveKunRuntimeSettings(settings), {
+      appSettings: settings
+    })
+
+    const parsed = JSON.parse(readFileSync(configPath, 'utf8')) as any
+    expect(KunConfigSchema.safeParse(parsed).success).toBe(true)
+    expect(parsed.models.profiles['shared-model']).toMatchObject({
+      endpointFormat: 'responses',
+      contextWindowTokens: 256_000
+    })
+    expect(parsed.serve.providers['shared-a'].modelProfiles['shared-model']).toMatchObject({
+      endpointFormat: 'messages',
+      contextWindowTokens: 128_000
+    })
+    expect(parsed.serve.providers['shared-b'].modelProfiles['shared-model']).toMatchObject({
+      endpointFormat: 'responses',
+      contextWindowTokens: 256_000
     })
   })
 

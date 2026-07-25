@@ -3,11 +3,11 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import {
   getModelProviderSettings,
+  getModelProviderProfile,
   isComposerChatModelId,
+  isProviderComposerChatModelId,
   listModelProviderModelIds,
   listNonTextModelIds,
-  listProviderNonTextModelIds,
-  modelProfileSupportsTextChat,
   modelProviderModelProfile,
   projectExecutableModelRoutePools,
   resolveKunRuntimeSettings,
@@ -15,10 +15,20 @@ import {
   type ModelProviderModelProfileV1
 } from '../shared/app-settings'
 import { DEFAULT_COMPOSER_MODEL_IDS } from '../shared/default-composer-models'
-import type { ModelProviderModelGroup } from '../shared/kun-gui-api'
+import type {
+  ModelProviderModelGroup,
+  ModelProviderModelSelection
+} from '../shared/kun-gui-api'
 
 export type FetchUpstreamModelsResult =
-  | { ok: true; modelIds: string[]; defaultModelId?: string; modelGroups?: ModelProviderModelGroup[] }
+  | {
+      ok: true
+      modelIds: string[]
+      /** @deprecated Use defaultModel so the provider binding is not ambiguous. */
+      defaultModelId?: string
+      defaultModel?: ModelProviderModelSelection
+      modelGroups?: ModelProviderModelGroup[]
+    }
   | { ok: false; message: string }
 
 export function fallbackModelIds(): string[] {
@@ -47,18 +57,16 @@ export async function fetchUpstreamModelIds(
 ): Promise<FetchUpstreamModelsResult> {
   const configuredModelIds = await readConfiguredKunModelIds(settings)
   const configuredGroups = await readConfiguredModelGroups(settings)
-  const providerSettings = getModelProviderSettings(settings)
   const runtime = resolveKunRuntimeSettings(settings)
   const runtimeModel = runtime.model.trim()
-  const runtimeProvider = providerSettings.providers.find((provider) => provider.id === runtime.providerId)
-  const runtimeNonTextModelIds = runtimeProvider
-    ? listProviderNonTextModelIds(runtimeProvider)
-    : listNonTextModelIds(settings)
-  const defaultModelId = isComposerChatModelId(runtimeModel, runtimeNonTextModelIds) ? runtimeModel : ''
+  const runtimeProvider = getModelProviderProfile(settings, runtime.providerId)
+  const defaultModel = isProviderComposerChatModelId(runtimeProvider, runtimeModel)
+    ? { providerId: runtimeProvider.id, modelId: runtimeModel }
+    : undefined
   return modelListOrError(
     configuredModelIds,
     configuredGroups,
-    defaultModelId,
+    defaultModel,
     'Configured providers have no usable text models yet.'
   )
 }
@@ -90,22 +98,25 @@ export async function readConfiguredKunModelIds(settings: AppSettingsV1): Promis
 function modelListOrError(
   ids: readonly string[],
   groups: readonly ModelProviderModelGroup[],
-  defaultModelId: string,
+  defaultModel: ModelProviderModelSelection | undefined,
   message: string
 ): FetchUpstreamModelsResult {
   return hasCustomModelId(ids)
-    ? { ok: true, modelIds: mergeModelIds(ids), defaultModelId, modelGroups: mergeModelGroups(groups) }
+    ? {
+        ok: true,
+        modelIds: mergeModelIds(ids),
+        ...(defaultModel
+          ? { defaultModelId: defaultModel.modelId, defaultModel }
+          : {}),
+        modelGroups: mergeModelGroups(groups)
+      }
     : { ok: false, message }
 }
 
 async function readConfiguredModelGroups(settings: AppSettingsV1): Promise<ModelProviderModelGroup[]> {
   const groups: ModelProviderModelGroup[] = []
   for (const provider of getModelProviderSettings(settings).providers) {
-    const nonTextModelIds = listProviderNonTextModelIds(provider)
-    const modelIds = provider.models.filter((id) =>
-      isComposerChatModelId(id, nonTextModelIds)
-      && modelProfileSupportsTextChat(modelProviderModelProfile(provider, id))
-    )
+    const modelIds = provider.models.filter((id) => isProviderComposerChatModelId(provider, id))
     if (modelIds.length === 0) continue
     groups.push({
       providerId: provider.id,

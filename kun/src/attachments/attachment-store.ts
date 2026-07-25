@@ -33,6 +33,7 @@ export interface AttachmentStore {
   }): Promise<AttachmentMetadata>
   get(id: string): Promise<AttachmentMetadata | null>
   bindScope(id: string, scope: { threadId?: string; workspace?: string }): Promise<AttachmentMetadata>
+  bindScopes(ids: readonly string[], scope: { threadId?: string; workspace?: string }): Promise<AttachmentMetadata[]>
   delete?(id: string): Promise<void>
   replaceMetadata?(metadata: AttachmentMetadata): Promise<void>
   resolveContent(id: string, scope: { threadId?: string; workspace?: string }): Promise<AttachmentContent>
@@ -179,20 +180,63 @@ export class FileAttachmentStore implements AttachmentStore {
   }
 
   async bindScope(id: string, scope: { threadId?: string; workspace?: string }): Promise<AttachmentMetadata> {
-    if (!ATTACHMENT_ID_PATTERN.test(id)) throw new Error(`invalid attachment id: ${id}`)
-    const metadata = await this.get(id)
-    if (!metadata) throw new Error(`attachment not found: ${id}`)
-    if (!isAuthorized(metadata, scope)) {
-      throw new Error(`attachment is not authorized for this turn: ${id}`)
-    }
-    const next = AttachmentMetadataSchema.parse(mergeScope({
-      ...metadata,
-      updatedAt: this.options.nowIso?.() ?? new Date().toISOString()
-    }, scope))
-    await this.ensureRoot()
-    await readFile(this.contentPath(id))
-    await writeFile(this.metadataPath(id), JSON.stringify(next, null, 2), { encoding: 'utf8', mode: 0o600 })
-    return next
+    const [metadata] = await this.bindScopes([id], scope)
+    return metadata
+  }
+
+  async bindScopes(
+    ids: readonly string[],
+    scope: { threadId?: string; workspace?: string }
+  ): Promise<AttachmentMetadata[]> {
+    const attachmentIds = [...new Set(ids)]
+    if (attachmentIds.length === 0) return []
+    return withAttachmentStoreLock(this.options.rootDir, async () => {
+      await this.ensureRoot()
+      const records = await Promise.all(attachmentIds.map(async (id) => {
+        if (!ATTACHMENT_ID_PATTERN.test(id)) throw new Error(`invalid attachment id: ${id}`)
+        const metadataText = await readFile(this.metadataPath(id), 'utf8')
+          .catch(() => null)
+        if (metadataText === null) throw new Error(`attachment not found: ${id}`)
+        let metadata: AttachmentMetadata
+        try {
+          metadata = AttachmentMetadataSchema.parse(JSON.parse(metadataText))
+        } catch {
+          throw new Error(`attachment not found: ${id}`)
+        }
+        if (!isAuthorized(metadata, scope)) {
+          throw new Error(`attachment is not authorized for this turn: ${id}`)
+        }
+        await readFile(this.contentPath(id))
+        return { id, metadata, metadataText }
+      }))
+      const now = this.options.nowIso?.() ?? new Date().toISOString()
+      const nextRecords = records.map(({ metadata }) =>
+        AttachmentMetadataSchema.parse(mergeScope({
+          ...metadata,
+          updatedAt: now
+        }, scope))
+      )
+      const written: number[] = []
+      try {
+        for (let index = 0; index < records.length; index += 1) {
+          await writeFile(
+            this.metadataPath(records[index].id),
+            JSON.stringify(nextRecords[index], null, 2),
+            { encoding: 'utf8', mode: 0o600 }
+          )
+          written.push(index)
+        }
+      } catch (error) {
+        await Promise.allSettled(written.map((index) =>
+          writeFile(this.metadataPath(records[index].id), records[index].metadataText, {
+            encoding: 'utf8',
+            mode: 0o600
+          })
+        ))
+        throw error
+      }
+      return nextRecords
+    })
   }
 
   async delete(id: string): Promise<void> {
@@ -263,6 +307,25 @@ export class FileAttachmentStore implements AttachmentStore {
   private async ensureRoot(): Promise<void> {
     await mkdir(this.options.rootDir, { recursive: true, mode: 0o700 })
     await chmod(this.options.rootDir, 0o700)
+  }
+}
+
+const attachmentStoreLocks = new Map<string, Promise<void>>()
+
+async function withAttachmentStoreLock<T>(rootDir: string, operation: () => Promise<T>): Promise<T> {
+  const previous = attachmentStoreLocks.get(rootDir) ?? Promise.resolve()
+  let release!: () => void
+  const current = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const tail = previous.then(() => current)
+  attachmentStoreLocks.set(rootDir, tail)
+  await previous
+  try {
+    return await operation()
+  } finally {
+    release()
+    if (attachmentStoreLocks.get(rootDir) === tail) attachmentStoreLocks.delete(rootDir)
   }
 }
 

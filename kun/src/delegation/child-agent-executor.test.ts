@@ -213,6 +213,17 @@ describe('createChildAgentExecutor', () => {
         capturedBoundary = boundary
         return {
           handlesProvider: (providerId) => providerId === 'claude-subscription',
+          capabilities: (providerId) => providerId === 'claude-subscription'
+            ? {
+                nativeResume: true,
+                structuredStreaming: true,
+                kunTools: true,
+                externalApproval: true,
+                liveSteering: true,
+                nativeContextTelemetry: true,
+                fork: true
+              }
+            : undefined,
           runTurn: async (threadId, turnId) => {
             await boundary.turns.applyItem(
               threadId,
