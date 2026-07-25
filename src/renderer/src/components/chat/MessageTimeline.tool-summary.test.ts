@@ -749,9 +749,12 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
       })
     )
 
+    // Tool failures must not open the batch or tint the folded header; the
+    // warning-toned inner rows only appear after the user expands.
     expect(html).toContain('Used 2 tools')
-    expect(html).toContain('Search needle')
-    expect(html).toContain('text-orange-700')
+    expect(html).toContain('aria-expanded="false"')
+    expect(html).not.toContain('Search needle')
+    expect(html).not.toContain('text-orange-700')
     expect(html).not.toContain('search error detail should stay tucked away')
     expect(html).not.toContain('read detail should stay tucked away')
   })

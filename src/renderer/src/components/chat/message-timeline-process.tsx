@@ -263,18 +263,20 @@ export function ProcessSectionRow({
   const hasDetails = sectionHasDetails(section, t)
   const active = processSectionHasActiveWork(section, processing)
   const errorTone = processSectionErrorTone(section.blocks)
-  const hasError = errorTone !== null
+  // Tool failures stay quiet on the batch header: only runtime/system errors
+  // expand the group or tint the collapsed title. Inner rows keep their own tone.
+  const hasRuntimeError = errorTone === 'error'
   // Ordinary tool execution loading chrome lives on the turn-bottom row.
   // Keep in-section animation only for non-execution phases (e.g. live
   // reasoning fallback); approvals / user-input expand in place without it.
   const showActiveAnimation =
     active &&
     section.kind !== 'execution' &&
-    !hasError &&
+    !hasRuntimeError &&
     !sectionHasPendingApproval(section) &&
     !sectionHasRequestUserInput(section)
   const defaultExpanded =
-    (processing && hasError) ||
+    (processing && hasRuntimeError) ||
     sectionHasPendingApproval(section) ||
     (processing && section.kind === 'execution' && sectionHasRequestUserInput(section))
   const forceExpanded = sectionHasPendingApproval(section)
@@ -287,7 +289,7 @@ export function ProcessSectionRow({
   const SectionIcon = processSectionIcon(section)
   const reasoningText = section.kind === 'reasoning' ? getReasoningSectionText(section) : ''
   const canToggleSection = hasDetails && !forceExpanded
-  const showActiveError = active && hasError
+  const showActiveError = active && hasRuntimeError
   const shouldDeferDetails = section.kind !== 'subagent'
   const { ref: deferredDetailRef, shouldRender: shouldRenderDetail } = useDeferredRender<HTMLDivElement>({
     enabled: shouldDeferDetails && expanded,
@@ -345,7 +347,7 @@ export function ProcessSectionRow({
           onClick={() => setUserExpanded(!(userExpanded ?? defaultExpanded))}
           aria-expanded={expanded}
           className={`group flex w-fit max-w-full items-center gap-1.5 rounded-md py-0.5 text-left text-[14px] font-medium transition hover:opacity-85 ${
-            hasError ? processErrorTextClass(errorTone) : 'text-ds-muted'
+            hasRuntimeError ? processErrorTextClass(errorTone) : 'text-ds-muted'
           }`}
         >
           {showActiveError ? (
@@ -360,7 +362,7 @@ export function ProcessSectionRow({
           ) : SectionIcon ? (
             <ProcessGlyph Icon={SectionIcon} />
           ) : null}
-          <span className={active && !hasError ? 'ds-shiny-text' : ''}>{title}</span>
+          <span className={active && !hasRuntimeError ? 'ds-shiny-text' : ''}>{title}</span>
           {expanded ? (
             <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-45" strokeWidth={1.8} />
           ) : (
@@ -370,7 +372,7 @@ export function ProcessSectionRow({
       ) : (
         <div
           className={`flex w-fit max-w-full items-center gap-1.5 py-0.5 text-[14px] font-medium ${
-            hasError ? processErrorTextClass(errorTone) : 'text-ds-muted'
+            hasRuntimeError ? processErrorTextClass(errorTone) : 'text-ds-muted'
           }`}
         >
           {showActiveError ? (
@@ -385,7 +387,7 @@ export function ProcessSectionRow({
           ) : SectionIcon ? (
             <ProcessGlyph Icon={SectionIcon} />
           ) : null}
-          <span className={active && !hasError ? 'ds-shiny-text' : ''}>{title}</span>
+          <span className={active && !hasRuntimeError ? 'ds-shiny-text' : ''}>{title}</span>
         </div>
       )}
 
