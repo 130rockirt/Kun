@@ -31,6 +31,8 @@ export type GitCheckpointRestoreResult =
         | 'git_unavailable'
         | 'not_found'
         | 'conflict'
+        // Rescue-snapshot failures reuse the create-checkpoint reasons, which include 'disabled'.
+        | 'disabled'
         | 'partial'
         | 'error'
       message: string
