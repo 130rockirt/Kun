@@ -9,7 +9,7 @@ export type GitCheckpointCreateResult =
     }
   | {
       ok: false
-      reason: 'no_workspace' | 'not_git_repo' | 'git_unavailable' | 'conflict' | 'error'
+      reason: 'no_workspace' | 'not_git_repo' | 'git_unavailable' | 'conflict' | 'disabled' | 'error'
       message: string
     }
 

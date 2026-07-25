@@ -469,6 +469,59 @@ describe('git checkpoint service', () => {
     await expect(stat(join(dataDir, 'git-checkpoints', unused))).rejects.toThrow()
   })
 
+  it('deletes checkpoints older than maxAgeDays even when still referenced', async () => {
+    const fresh = 'gcp_fresh_ref'
+    const stale = 'gcp_stale_ref'
+    const now = new Date('2026-07-25T12:00:00.000Z')
+    await mkdir(join(dataDir, 'git-checkpoints', fresh), { recursive: true })
+    await mkdir(join(dataDir, 'git-checkpoints', stale), { recursive: true })
+    await writeFile(
+      join(dataDir, 'git-checkpoints', fresh, 'metadata.json'),
+      JSON.stringify({
+        checkpointId: fresh,
+        threadId: 'thr_1',
+        repositoryRoot: '/tmp/repo',
+        head: null,
+        currentBranch: null,
+        createdAt: '2026-07-24T12:00:00.000Z',
+        untrackedFiles: []
+      }),
+      'utf-8'
+    )
+    await writeFile(
+      join(dataDir, 'git-checkpoints', stale, 'metadata.json'),
+      JSON.stringify({
+        checkpointId: stale,
+        threadId: 'thr_1',
+        repositoryRoot: '/tmp/repo',
+        head: null,
+        currentBranch: null,
+        createdAt: '2026-07-20T12:00:00.000Z',
+        untrackedFiles: []
+      }),
+      'utf-8'
+    )
+    await mkdir(join(dataDir, 'threads', 'thr_1'), { recursive: true })
+    await writeFile(
+      join(dataDir, 'threads', 'thr_1', 'items.jsonl'),
+      `${JSON.stringify({ id: 'item_1', workspaceCheckpointId: fresh })}\n` +
+        `${JSON.stringify({ id: 'item_2', workspaceCheckpointId: stale })}\n`,
+      'utf-8'
+    )
+
+    const result = await cleanupUnusedGitCheckpoints({
+      dataDir,
+      graceMs: 0,
+      maxAgeDays: 3,
+      now
+    })
+
+    expect(result.deletedIds).toEqual([stale])
+    expect(result.kept).toBe(1)
+    await expect(stat(join(dataDir, 'git-checkpoints', fresh))).resolves.toBeTruthy()
+    await expect(stat(join(dataDir, 'git-checkpoints', stale))).rejects.toThrow()
+  })
+
   it('keeps recently created checkpoints (create-vs-flush grace) and deletes old ones', async () => {
     const fresh = 'gcp_fresh'
     const stale = 'gcp_stale'
@@ -520,6 +573,52 @@ describe('git checkpoint service', () => {
     expect(second.due).toBe(true)
     if (!second.due) throw new Error('expected cleanup to run after interval')
     expect(second.result.deletedIds).toEqual(['gcp_second'])
+  })
+
+  it('force and app-version upgrades bypass the interval gate', async () => {
+    await mkdir(join(dataDir, 'git-checkpoints', 'gcp_a'), { recursive: true })
+    const first = await cleanupUnusedGitCheckpointsIfDue({
+      dataDir,
+      intervalDays: 3,
+      graceMs: 0,
+      appVersion: '0.1.0',
+      now: new Date('2026-01-01T00:00:00.000Z')
+    })
+    expect(first.due).toBe(true)
+
+    await mkdir(join(dataDir, 'git-checkpoints', 'gcp_b'), { recursive: true })
+    const skipped = await cleanupUnusedGitCheckpointsIfDue({
+      dataDir,
+      intervalDays: 3,
+      graceMs: 0,
+      appVersion: '0.1.0',
+      now: new Date('2026-01-01T12:00:00.000Z')
+    })
+    expect(skipped.due).toBe(false)
+
+    const forced = await cleanupUnusedGitCheckpointsIfDue({
+      dataDir,
+      intervalDays: 3,
+      graceMs: 0,
+      force: true,
+      appVersion: '0.1.0',
+      now: new Date('2026-01-01T12:00:01.000Z')
+    })
+    expect(forced.due).toBe(true)
+    if (!forced.due) throw new Error('expected forced cleanup')
+    expect(forced.result.deletedIds).toEqual(['gcp_b'])
+
+    await mkdir(join(dataDir, 'git-checkpoints', 'gcp_c'), { recursive: true })
+    const upgraded = await cleanupUnusedGitCheckpointsIfDue({
+      dataDir,
+      intervalDays: 3,
+      graceMs: 0,
+      appVersion: '0.2.0',
+      now: new Date('2026-01-01T12:00:02.000Z')
+    })
+    expect(upgraded.due).toBe(true)
+    if (!upgraded.due) throw new Error('expected version-upgrade cleanup')
+    expect(upgraded.result.deletedIds).toEqual(['gcp_c'])
   })
 })
 

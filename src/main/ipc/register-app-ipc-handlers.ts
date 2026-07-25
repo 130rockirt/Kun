@@ -1788,6 +1788,13 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   ipcMain.handle('git:checkpoint:create', async (_, payload: unknown) => {
     const request = parseIpcPayload('git:checkpoint:create', gitCheckpointCreatePayloadSchema, payload)
     const settings = await store.load()
+    if (!settings.checkpointCleanup.createEnabled) {
+      return {
+        ok: false as const,
+        reason: 'disabled' as const,
+        message: 'Git checkpoint creation is disabled in settings.'
+      }
+    }
     return createGitCheckpoint({
       dataDir: await resolveKunThreadsDataDir(),
       workspaceRoot: request.workspaceRoot,

@@ -1260,6 +1260,7 @@ export function createThreadActions(
       const checkpointWorkspaceRoot = normalizeWorkspaceRoot(checkpointThread?.workspace) || normalizeWorkspaceRoot(settings.workspaceRoot)
       const checkpointWorkspaceKey = checkpointWorkspaceRoot.replaceAll('\\', '/').toLowerCase()
       if (
+        settings.checkpointCleanup?.createEnabled &&
         checkpointWorkspaceRoot &&
         checkpointGitAvailability.canAttempt(checkpointWorkspaceKey) &&
         typeof window.kunGui.createGitCheckpoint === 'function'
@@ -1274,7 +1275,11 @@ export function createThreadActions(
         }))
         if (checkpoint.ok) {
           workspaceCheckpointId = checkpoint.checkpointId
-        } else if (checkpoint.reason !== 'not_git_repo' && checkpoint.reason !== 'no_workspace') {
+        } else if (
+          checkpoint.reason !== 'not_git_repo' &&
+          checkpoint.reason !== 'no_workspace' &&
+          checkpoint.reason !== 'disabled'
+        ) {
           if (checkpoint.reason === 'git_unavailable') {
             checkpointGitAvailability.markUnavailable(checkpointWorkspaceKey)
           }

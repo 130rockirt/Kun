@@ -1410,7 +1410,7 @@ describe('chat-store-thread-actions createThread conversation mode', () => {
           workspaceRoot: '/tmp/workspace',
           conversationWorkspaceRoot: '~/.local/share/Kun/conversations',
           log: { enabled: false, retentionDays: 7 },
-          checkpointCleanup: { enabled: false, intervalDays: 3 },
+          checkpointCleanup: { createEnabled: false, enabled: false, intervalDays: 3 },
           notifications: { turnComplete: true },
           appBehavior: { openAtLogin: false, startMinimized: false, closeToTray: false },
           keyboardShortcuts: { bindings: [] },

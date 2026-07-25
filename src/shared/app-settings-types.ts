@@ -164,6 +164,8 @@ export const DEFAULT_CHECKPOINT_CLEANUP_INTERVAL_DAYS: CheckpointCleanupInterval
 // Checkpoint cleanup is enabled by default so stale Git checkpoint directories
 // do not accumulate. Users who want to keep every checkpoint can opt out in settings.
 export const DEFAULT_CHECKPOINT_CLEANUP_ENABLED = true
+/** Creating Git checkpoints on send is opt-in; disk usage is too easy to balloon. */
+export const DEFAULT_GIT_CHECKPOINT_CREATE_ENABLED = false
 export const DEFAULT_GIT_BRANCH_PREFIX = 'codex/'
 export const DEFAULT_CURSOR_SPOTLIGHT_COLOR = '#85c1f1'
 export const DEFAULT_WEIXIN_BRIDGE_RPC_URL = 'http://127.0.0.1:18790/api/v1/admin/rpc'
@@ -836,7 +838,20 @@ export type LogConfigV1 = {
 }
 
 export type CheckpointCleanupConfigV1 = {
+  /**
+   * Whether to create a Git checkpoint before each user turn.
+   * Defaults to off so checkpoint storage does not grow unless the user opts in.
+   */
+  createEnabled: boolean
+  /**
+   * Whether automatic cleanup runs. When enabled, unused checkpoints and
+   * checkpoints older than `intervalDays` are removed on that schedule.
+   */
   enabled: boolean
+  /**
+   * Cleanup cadence and age retention (default 3 days): scan on this interval
+   * and delete checkpoints older than this many days.
+   */
   intervalDays: CheckpointCleanupIntervalDays
   /**
    * Optional override for the Git checkpoint storage directory (issue #651).

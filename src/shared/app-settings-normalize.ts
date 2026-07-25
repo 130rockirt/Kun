@@ -3,6 +3,7 @@ import {
   CHECKPOINT_CLEANUP_INTERVAL_DAYS,
   DEFAULT_CHECKPOINT_CLEANUP_ENABLED,
   DEFAULT_CHECKPOINT_CLEANUP_INTERVAL_DAYS,
+  DEFAULT_GIT_CHECKPOINT_CREATE_ENABLED,
   DEFAULT_CURSOR_SPOTLIGHT_COLOR,
   DEFAULT_GIT_BRANCH_PREFIX,
   DEFAULT_LOG_RETENTION_DAYS,
@@ -255,6 +256,10 @@ export function normalizeCheckpointCleanupSettings(
     ? Math.max(1, Math.min(100, Math.floor(settings.maxPerThread)))
     : undefined
   return {
+    createEnabled:
+      typeof settings?.createEnabled === 'boolean'
+        ? settings.createEnabled
+        : DEFAULT_GIT_CHECKPOINT_CREATE_ENABLED,
     enabled: typeof settings?.enabled === 'boolean' ? settings.enabled : DEFAULT_CHECKPOINT_CLEANUP_ENABLED,
     intervalDays: CHECKPOINT_CLEANUP_INTERVAL_DAYS.includes(intervalDays)
       ? intervalDays

@@ -40,10 +40,7 @@ function baseCtx(): Record<string, unknown> {
       notifications: {
         turnComplete: false
       },
-      checkpointCleanup: {
-        enabled: false,
-        intervalDays: 3
-      },
+      checkpointCleanup: { createEnabled: false, enabled: false, intervalDays: 3 },
       log: {
         enabled: false,
         retentionDays: 3

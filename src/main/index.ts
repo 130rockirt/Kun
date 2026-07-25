@@ -323,7 +323,10 @@ function setUpdateInstallQuitting(active: boolean): void {
   runtimeShutdown.setUpdateInstallQuit(active)
 }
 
-async function runCheckpointCleanupIfDue(settings: AppSettingsV1): Promise<void> {
+async function runCheckpointCleanup(
+  settings: AppSettingsV1,
+  options: { force?: boolean; reason?: string } = {}
+): Promise<void> {
   if (!settings.checkpointCleanup.enabled) return
   const runtime = resolveKunRuntimeSettings(settings)
   const dataDir = resolveKunDataDir(runtime)
@@ -331,26 +334,31 @@ async function runCheckpointCleanupIfDue(settings: AppSettingsV1): Promise<void>
   const checkpointsRoot = settings.checkpointCleanup.directory?.trim()
     ? expandHomePath(settings.checkpointCleanup.directory.trim())
     : undefined
+  const reason = options.reason ?? (options.force ? 'forced' : 'interval')
   try {
     const cleanup = await cleanupUnusedGitCheckpointsIfDue({
       dataDir,
       intervalDays,
+      appVersion: app.getVersion(),
+      ...(options.force ? { force: true } : {}),
       ...(checkpointsRoot ? { checkpointsRoot } : {})
     })
     if (!cleanup.due) return
     const { result } = cleanup
     console.info(
-      `[kun-gui] git checkpoint cleanup scanned=${result.scanned} deleted=${result.deleted} kept=${result.kept} failed=${result.failed}`
+      `[kun-gui] git checkpoint cleanup reason=${reason} scanned=${result.scanned} deleted=${result.deleted} kept=${result.kept} failed=${result.failed}`
     )
     if (result.failed > 0) {
       logWarn('git-checkpoint-cleanup', 'failed to delete some unused checkpoints', {
         failed: result.failed,
-        failedIds: result.failedIds
+        failedIds: result.failedIds,
+        reason
       })
     }
   } catch (error) {
     logWarn('git-checkpoint-cleanup', 'failed to clean unused checkpoints', {
-      message: error instanceof Error ? error.message : String(error)
+      message: error instanceof Error ? error.message : String(error),
+      reason
     })
   }
 }
@@ -359,11 +367,11 @@ function syncCheckpointCleanupTimer(settings: AppSettingsV1): void {
   stopCheckpointCleanupTimer()
   if (!settings.checkpointCleanup.enabled) return
   const intervalMs = settings.checkpointCleanup.intervalDays * 24 * 60 * 60 * 1_000
-  const run = (): void => {
-    void runCheckpointCleanupIfDue(settings)
-  }
-  run()
-  checkpointCleanupTimer = setInterval(run, intervalMs)
+  // Interval / version-upgrade passes only. The forced startup pass is scheduled
+  // earlier in app.whenReady so retention does not wait on the interval gate.
+  checkpointCleanupTimer = setInterval(() => {
+    void runCheckpointCleanup(settings, { reason: 'interval' })
+  }, intervalMs)
   checkpointCleanupTimer.unref?.()
 }
 
@@ -1642,6 +1650,13 @@ app.whenReady().then(async () => {
   traceStartup('settings load:start')
   const initial = await store.load()
   traceStartup('settings load:done')
+  // Run Git checkpoint retention early in startup so stale/oversized stores are
+  // pruned before the rest of the app (and kun serve) come up. Fire-and-forget:
+  // cleanup is best-effort and must not block window creation.
+  if (initial.checkpointCleanup.enabled) {
+    void runCheckpointCleanup(initial, { force: true, reason: 'startup' })
+    traceStartup('git checkpoint cleanup scheduled')
+  }
   const extensionDescriptors = new ExtensionDescriptorResolver(async (path, method, body) => {
     const settings = await store.load()
     return runtimeRequest(settings, path, { method, body })

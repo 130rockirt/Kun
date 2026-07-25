@@ -44,6 +44,8 @@ describe('JsonSettingsStore', () => {
     expect(loaded.checkpointCleanup.intervalDays).toBe(DEFAULT_CHECKPOINT_CLEANUP_INTERVAL_DAYS)
     // Checkpoint cleanup is enabled by default to keep stale checkpoints from accumulating.
     expect(loaded.checkpointCleanup.enabled).toBe(DEFAULT_CHECKPOINT_CLEANUP_ENABLED)
+    // Creating checkpoints on send is opt-in to avoid unbounded disk growth.
+    expect(loaded.checkpointCleanup.createEnabled).toBe(false)
     expect(loaded.appBehavior).toEqual({
       openAtLogin: false,
       startMinimized: false,

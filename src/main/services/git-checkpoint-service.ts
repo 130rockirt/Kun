@@ -71,6 +71,8 @@ export type GitCheckpointCleanupDueResult =
 
 type GitCheckpointCleanupState = {
   lastRunAt?: string
+  /** App version that last completed a cleanup pass (forces a run after upgrades). */
+  lastAppVersion?: string
 }
 
 const DAY_MS = 24 * 60 * 60 * 1_000
@@ -481,14 +483,36 @@ function isCheckpointCleanupDue(lastRunAt: string | undefined, intervalDays: num
 // disable it with graceMs: 0.
 const CHECKPOINT_CLEANUP_GRACE_MS = 10 * 60 * 1_000
 
+async function resolveCheckpointCreatedMs(root: string, checkpointId: string): Promise<number | null> {
+  const metadata = await readMetadata(root, checkpointId)
+  if (metadata) {
+    const createdMs = Date.parse(metadata.createdAt)
+    if (Number.isFinite(createdMs)) return createdMs
+  }
+  const named = checkpointNameTimestamp(checkpointId)
+  if (named > 0) return named
+  try {
+    const dirStat = await stat(join(root, checkpointId))
+    return dirStat.mtimeMs
+  } catch {
+    return null
+  }
+}
+
 export async function cleanupUnusedGitCheckpoints(params: {
   dataDir: string
   checkpointsRoot?: string
+  /** Delete checkpoints older than this many days (by createdAt / name / mtime). */
+  maxAgeDays?: number
   graceMs?: number
   now?: Date
 }): Promise<GitCheckpointCleanupResult> {
   const graceMs = params.graceMs ?? CHECKPOINT_CLEANUP_GRACE_MS
   const nowMs = (params.now ?? new Date()).getTime()
+  const maxAgeMs =
+    typeof params.maxAgeDays === 'number' && Number.isFinite(params.maxAgeDays) && params.maxAgeDays > 0
+      ? params.maxAgeDays * DAY_MS
+      : null
   const root = resolveCheckpointsRoot(params.dataDir, params.checkpointsRoot)
   const referenced = await collectReferencedCheckpointIds(params.dataDir)
   const result: GitCheckpointCleanupResult = {
@@ -513,11 +537,14 @@ export async function cleanupUnusedGitCheckpoints(params: {
     if (!entry.isDirectory()) continue
     const checkpointId = entry.name
     result.scanned += 1
-    if (referenced.has(checkpointId)) {
+    const createdMs = await resolveCheckpointCreatedMs(root, checkpointId)
+    const expiredByAge =
+      maxAgeMs != null && createdMs != null && nowMs - createdMs >= maxAgeMs
+    if (!expiredByAge && referenced.has(checkpointId)) {
       result.kept += 1
       continue
     }
-    if (graceMs > 0) {
+    if (!expiredByAge && graceMs > 0) {
       try {
         const dirStat = await stat(join(root, checkpointId))
         if (nowMs - dirStat.mtimeMs < graceMs) {
@@ -548,22 +575,39 @@ export async function cleanupUnusedGitCheckpointsIfDue(params: {
   intervalDays: number
   now?: Date
   graceMs?: number
+  /**
+   * When true, skip the interval gate (used on app startup so retention always
+   * runs once per launch). Age pruning still uses `intervalDays`.
+   */
+  force?: boolean
+  /** When set and different from the last recorded version, force a cleanup pass. */
+  appVersion?: string
 }): Promise<GitCheckpointCleanupDueResult> {
   const now = params.now ?? new Date()
   const root = resolveCheckpointsRoot(params.dataDir, params.checkpointsRoot)
   const state = await readCleanupState(root)
   const lastRunAt = typeof state.lastRunAt === 'string' ? state.lastRunAt : undefined
-  if (!isCheckpointCleanupDue(lastRunAt, params.intervalDays, now)) {
+  const appVersion = typeof params.appVersion === 'string' ? params.appVersion.trim() : ''
+  const versionChanged = Boolean(appVersion) && state.lastAppVersion !== appVersion
+  if (!params.force && !versionChanged && !isCheckpointCleanupDue(lastRunAt, params.intervalDays, now)) {
     return { due: false, lastRunAt: lastRunAt ?? null }
   }
   const result = await cleanupUnusedGitCheckpoints({
     dataDir: params.dataDir,
     ...(params.checkpointsRoot ? { checkpointsRoot: params.checkpointsRoot } : {}),
+    maxAgeDays: params.intervalDays,
     now,
     ...(params.graceMs !== undefined ? { graceMs: params.graceMs } : {})
   })
   const nextLastRunAt = now.toISOString()
-  await writeCleanupState(root, { lastRunAt: nextLastRunAt })
+  await writeCleanupState(root, {
+    lastRunAt: nextLastRunAt,
+    ...(appVersion
+      ? { lastAppVersion: appVersion }
+      : typeof state.lastAppVersion === 'string'
+        ? { lastAppVersion: state.lastAppVersion }
+        : {})
+  })
   return { due: true, lastRunAt: nextLastRunAt, result }
 }
 
