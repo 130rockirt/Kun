@@ -164,8 +164,8 @@ export const DEFAULT_CHECKPOINT_CLEANUP_INTERVAL_DAYS: CheckpointCleanupInterval
 // Checkpoint cleanup is enabled by default so stale Git checkpoint directories
 // do not accumulate. Users who want to keep every checkpoint can opt out in settings.
 export const DEFAULT_CHECKPOINT_CLEANUP_ENABLED = true
-/** Creating Git checkpoints on send is opt-in; disk usage is too easy to balloon. */
-export const DEFAULT_GIT_CHECKPOINT_CREATE_ENABLED = false
+/** Create Git checkpoints on send unless the user explicitly opts out. */
+export const DEFAULT_GIT_CHECKPOINT_CREATE_ENABLED = true
 export const DEFAULT_GIT_BRANCH_PREFIX = 'codex/'
 export const DEFAULT_CURSOR_SPOTLIGHT_COLOR = '#85c1f1'
 export const DEFAULT_WEIXIN_BRIDGE_RPC_URL = 'http://127.0.0.1:18790/api/v1/admin/rpc'

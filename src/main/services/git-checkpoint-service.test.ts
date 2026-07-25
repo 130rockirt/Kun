@@ -469,7 +469,7 @@ describe('git checkpoint service', () => {
     await expect(stat(join(dataDir, 'git-checkpoints', unused))).rejects.toThrow()
   })
 
-  it('enforces maxPerThread during cleanup even for recent referenced checkpoints', async () => {
+  it('preserves referenced checkpoints when cleanup reaches maxPerThread', async () => {
     const now = new Date('2026-07-25T12:00:00.000Z')
     const ids = ['gcp_t1', 'gcp_t2', 'gcp_t3', 'gcp_t4']
     await mkdir(join(dataDir, 'threads', 'thr_cap'), { recursive: true })
@@ -502,12 +502,13 @@ describe('git checkpoint service', () => {
       now
     })
 
-    expect(result.deletedIds.sort()).toEqual(['gcp_t1', 'gcp_t2'])
-    await expect(stat(join(dataDir, 'git-checkpoints', 'gcp_t3'))).resolves.toBeTruthy()
-    await expect(stat(join(dataDir, 'git-checkpoints', 'gcp_t4'))).resolves.toBeTruthy()
+    expect(result.deletedIds).toEqual([])
+    for (const id of ids) {
+      await expect(stat(join(dataDir, 'git-checkpoints', id))).resolves.toBeTruthy()
+    }
   })
 
-  it('deletes checkpoints older than maxAgeDays even when still referenced', async () => {
+  it('preserves referenced checkpoints after maxAgeDays', async () => {
     const fresh = 'gcp_fresh_ref'
     const stale = 'gcp_stale_ref'
     const now = new Date('2026-07-25T12:00:00.000Z')
@@ -554,10 +555,10 @@ describe('git checkpoint service', () => {
       now
     })
 
-    expect(result.deletedIds).toEqual([stale])
-    expect(result.kept).toBe(1)
+    expect(result.deletedIds).toEqual([])
+    expect(result.kept).toBe(2)
     await expect(stat(join(dataDir, 'git-checkpoints', fresh))).resolves.toBeTruthy()
-    await expect(stat(join(dataDir, 'git-checkpoints', stale))).rejects.toThrow()
+    await expect(stat(join(dataDir, 'git-checkpoints', stale))).resolves.toBeTruthy()
   })
 
   it('keeps recently created checkpoints (create-vs-flush grace) and deletes old ones', async () => {
@@ -812,6 +813,45 @@ describe('git checkpoint storage limits (issue #651)', () => {
     // Only the two newest survive; the two oldest are pruned.
     await expect(stat(join(root, ids[0]))).rejects.toBeTruthy()
     await expect(stat(join(root, ids[1]))).rejects.toBeTruthy()
+    await expect(stat(join(root, ids[2]))).resolves.toBeTruthy()
+    await expect(stat(join(root, ids[3]))).resolves.toBeTruthy()
+  })
+
+  it('keeps a message-referenced checkpoint when new checkpoints exceed the cap', async () => {
+    const ids: string[] = []
+    for (let i = 0; i < 2; i += 1) {
+      const checkpoint = await createGitCheckpoint({
+        dataDir,
+        workspaceRoot: repoRoot,
+        threadId: 'thr_referenced_cap',
+        checkpointId: `gcp_${2000 + i}_fixed-${i}`,
+        storage: { maxPerThread: 2 }
+      })
+      if (!checkpoint.ok) throw new Error(checkpoint.message)
+      ids.push(checkpoint.checkpointId)
+    }
+    await mkdir(join(dataDir, 'threads', 'thr_referenced_cap'), { recursive: true })
+    await writeFile(
+      join(dataDir, 'threads', 'thr_referenced_cap', 'items.jsonl'),
+      `${JSON.stringify({ id: 'item_1', workspaceCheckpointId: ids[0] })}\n`,
+      'utf-8'
+    )
+
+    for (let i = 2; i < 4; i += 1) {
+      const checkpoint = await createGitCheckpoint({
+        dataDir,
+        workspaceRoot: repoRoot,
+        threadId: 'thr_referenced_cap',
+        checkpointId: `gcp_${2000 + i}_fixed-${i}`,
+        storage: { maxPerThread: 2 }
+      })
+      if (!checkpoint.ok) throw new Error(checkpoint.message)
+      ids.push(checkpoint.checkpointId)
+    }
+
+    const root = join(dataDir, 'git-checkpoints')
+    await expect(stat(join(root, ids[0]))).resolves.toBeTruthy()
+    await expect(stat(join(root, ids[1]))).rejects.toThrow()
     await expect(stat(join(root, ids[2]))).resolves.toBeTruthy()
     await expect(stat(join(root, ids[3]))).resolves.toBeTruthy()
   })

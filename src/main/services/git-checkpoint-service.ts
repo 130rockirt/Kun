@@ -546,7 +546,9 @@ export async function cleanupUnusedGitCheckpoints(params: {
     const createdMs = await resolveCheckpointCreatedMs(root, checkpointId)
     const expiredByAge =
       maxAgeMs != null && createdMs != null && nowMs - createdMs >= maxAgeMs
-    if (!expiredByAge && referenced.has(checkpointId)) {
+    // A message may expose this checkpoint as its rollback target. Retain it
+    // regardless of its age so cleanup can never leave a broken rollback link.
+    if (referenced.has(checkpointId)) {
       result.kept += 1
       continue
     }
@@ -572,9 +574,10 @@ export async function cleanupUnusedGitCheckpoints(params: {
     }
   }
 
-  // Cap every thread after age/orphan deletion so a busy day cannot leave dozens
-  // of still-referenced checkpoints (the common cause of multi-GB stores).
-  const pruned = await pruneAllThreadCheckpoints(root, maxPerThread)
+  // Keep all checkpoints that remain reachable from thread history. The cap is
+  // deliberately a soft limit over unreferenced directories only: deleting a
+  // referenced checkpoint would turn an existing rollback action into data loss.
+  const pruned = await pruneAllThreadCheckpoints(root, maxPerThread, referenced)
   for (const checkpointId of pruned.deleted) {
     if (result.deletedIds.includes(checkpointId)) continue
     result.deleted += 1
@@ -712,8 +715,11 @@ export async function createGitCheckpoint(params: {
     await writeFile(join(dir, 'metadata.json'), JSON.stringify(metadata, null, 2), 'utf-8')
     const manifest = await createCheckpointManifestV1({ metadata, workspaceRoot })
     await writeFile(manifestPath(root, checkpointId), JSON.stringify(manifest, null, 2), 'utf-8')
-    // Bound per-thread retention so an active thread cannot grow unboundedly.
-    await pruneThreadCheckpoints(root, params.threadId, maxPerThread, checkpointId).catch(() => undefined)
+    // Retention may only remove checkpoints that thread history no longer
+    // references. This keeps all visible rollback actions restorable.
+    const referenced = await collectReferencedCheckpointIds(params.dataDir)
+    await pruneThreadCheckpoints(root, params.threadId, maxPerThread, checkpointId, referenced)
+      .catch(() => undefined)
     return { ok: true, checkpointId, repositoryRoot, head, currentBranch }
   } catch (error) {
     const failure = checkpointFailure(error)
@@ -725,15 +731,18 @@ export async function createGitCheckpoint(params: {
 }
 
 /**
- * Keep at most `max` checkpoints for a thread (issue #651, per-thread cap).
- * Oldest checkpoints (by createdAt, falling back to the `gcp_<ts>_` name) are
- * removed first; `keepId` (the just-created checkpoint) is always retained.
+ * Keep at most `max` unreferenced checkpoints for a thread. Checkpoints still
+ * referenced by saved messages are never pruned: they are user-visible rollback
+ * targets, so the cap is intentionally soft when thread history needs them.
+ * Oldest eligible checkpoints (by createdAt, falling back to the
+ * `gcp_<ts>_` name) are removed first; `keepId` is always retained.
  */
 export async function pruneThreadCheckpoints(
   root: string,
   threadId: string,
   max: number,
-  keepId?: string
+  keepId?: string,
+  referencedIds: ReadonlySet<string> = new Set()
 ): Promise<{ deleted: string[] }> {
   if (max <= 0) return { deleted: [] }
   let entries: Dirent<string>[]
@@ -751,12 +760,20 @@ export async function pruneThreadCheckpoints(
     const order = Number.isFinite(createdMs) ? createdMs : checkpointNameTimestamp(entry.name)
     owned.push({ id: entry.name, order })
   }
-  // Newest first; keep the first `max`, delete the rest (never the keepId).
+  // Newest first; keep the first `max` unreferenced entries. Referenced
+  // checkpoints and the just-created checkpoint are always protected.
   owned.sort((a, b) => b.order - a.order)
   const deleted: string[] = []
-  for (let i = 0; i < owned.length; i += 1) {
-    const { id } = owned[i]
-    if (i < max || id === keepId) continue
+  const keepIdCountsTowardCap = Boolean(
+    keepId && !referencedIds.has(keepId) && owned.some(({ id }) => id === keepId)
+  )
+  let keptUnreferenced = keepIdCountsTowardCap ? 1 : 0
+  for (const { id } of owned) {
+    if (id === keepId || referencedIds.has(id)) continue
+    if (keptUnreferenced < max) {
+      keptUnreferenced += 1
+      continue
+    }
     try {
       await rm(checkpointDir(root, id), { recursive: true, force: true })
       deleted.push(id)
@@ -767,10 +784,11 @@ export async function pruneThreadCheckpoints(
   return { deleted }
 }
 
-/** Enforce `max` checkpoints for every thread that owns directories under `root`. */
+/** Enforce the unreferenced checkpoint cap for every thread under `root`. */
 export async function pruneAllThreadCheckpoints(
   root: string,
-  max: number
+  max: number,
+  referencedIds: ReadonlySet<string> = new Set()
 ): Promise<{ deleted: string[] }> {
   if (max <= 0) return { deleted: [] }
   let entries: Dirent<string>[]
@@ -793,8 +811,13 @@ export async function pruneAllThreadCheckpoints(
   const deleted: string[] = []
   for (const owned of byThread.values()) {
     owned.sort((a, b) => b.order - a.order)
-    for (let i = max; i < owned.length; i += 1) {
-      const { id } = owned[i]
+    let keptUnreferenced = 0
+    for (const { id } of owned) {
+      if (referencedIds.has(id)) continue
+      if (keptUnreferenced < max) {
+        keptUnreferenced += 1
+        continue
+      }
       try {
         await rm(checkpointDir(root, id), { recursive: true, force: true })
         deleted.push(id)

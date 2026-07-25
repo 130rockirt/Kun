@@ -6,6 +6,7 @@ import {
   DEFAULT_APPROVAL_POLICY,
   DEFAULT_CHECKPOINT_CLEANUP_ENABLED,
   DEFAULT_CHECKPOINT_CLEANUP_INTERVAL_DAYS,
+  DEFAULT_GIT_CHECKPOINT_CREATE_ENABLED,
   defaultKunRuntimeSettings,
   defaultModelProviderSettings
 } from '../shared/app-settings'
@@ -44,8 +45,7 @@ describe('JsonSettingsStore', () => {
     expect(loaded.checkpointCleanup.intervalDays).toBe(DEFAULT_CHECKPOINT_CLEANUP_INTERVAL_DAYS)
     // Checkpoint cleanup is enabled by default to keep stale checkpoints from accumulating.
     expect(loaded.checkpointCleanup.enabled).toBe(DEFAULT_CHECKPOINT_CLEANUP_ENABLED)
-    // Creating checkpoints on send is opt-in to avoid unbounded disk growth.
-    expect(loaded.checkpointCleanup.createEnabled).toBe(false)
+    expect(loaded.checkpointCleanup.createEnabled).toBe(DEFAULT_GIT_CHECKPOINT_CREATE_ENABLED)
     expect(loaded.appBehavior).toEqual({
       openAtLogin: false,
       startMinimized: false,
