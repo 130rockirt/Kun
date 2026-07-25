@@ -985,9 +985,10 @@ function GeminiSubscriptionSection({
 
   return (
     <div className="grid gap-3">
-      <p className="rounded-lg border border-ds-border bg-ds-main/30 px-3 py-2 text-[12px] leading-5 text-ds-muted">
-        {t('geminiSubscriptionNote')}
-      </p>
+      <div className="grid gap-2 rounded-lg border border-amber-500/25 bg-amber-500/5 px-3 py-2.5 text-[12px] leading-5 text-ds-muted">
+        <p>{t('geminiSubscriptionNote')}</p>
+        <p className="text-ds-ink/85">{t('geminiSubscriptionLimitations')}</p>
+      </div>
       <div className="flex items-center gap-2 text-[13px] text-ds-ink">
         {busy ? (
           <Loader2 className="h-4 w-4 animate-spin text-ds-muted" strokeWidth={1.9} />

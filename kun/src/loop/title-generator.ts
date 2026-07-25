@@ -77,8 +77,6 @@ export async function generateThreadTitle(input: {
   systemPrompt?: string
   /** First user message text (intent). Required for a meaningful title. */
   userText: string
-  /** First assistant reply text. Optional supporting context. */
-  assistantText?: string
   /** Reasoning depth for the title call. Invalid/missing => 'off'. */
   reasoningEffort?: string
   timeoutMs?: number
@@ -95,7 +93,7 @@ export async function generateThreadTitle(input: {
   input.abortSignal?.addEventListener('abort', onAbort, { once: true })
 
   try {
-    const promptText = buildTitlePrompt(userText, input.assistantText)
+    const promptText = buildTitlePrompt(userText)
     const requestItem: TurnItem = {
       id: `item_${input.turnId}_title_request`,
       turnId: input.turnId,
@@ -139,14 +137,13 @@ export async function generateThreadTitle(input: {
   }
 }
 
-function buildTitlePrompt(userText: string, assistantText?: string): string {
-  const lines = ['User message:', clip(userText, MAX_TITLE_INPUT_CHARS)]
-  const assistant = trim(assistantText)
-  if (assistant) {
-    lines.push('', 'Assistant reply (for context only):', clip(assistant, 1_000))
-  }
-  lines.push('', `Title (single line, <= ${MAX_TITLE_CHARS} chars):`)
-  return lines.join('\n')
+function buildTitlePrompt(userText: string): string {
+  return [
+    'User message:',
+    clip(userText, MAX_TITLE_INPUT_CHARS),
+    '',
+    `Title (single line, <= ${MAX_TITLE_CHARS} chars):`
+  ].join('\n')
 }
 
 /** Strip quotes/markdown/leading "Title:" and clamp to the char cap. */

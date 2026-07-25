@@ -3,10 +3,10 @@ import { canUpgradeThreadTitle } from '../src/loop/agent-loop.js'
 
 /**
  * Guards the "placeholder → LLM-summary upgrade" titling contract: the backend
- * LLM titler may overwrite a placeholder or an explicitly-provisional title,
- * but must never clobber a user-renamed (locked) one. Regression coverage for
- * the bug where the renderer's eager first-message rename pre-empted the
- * backend titler.
+ * LLM titler (fired in parallel at first-turn start) may overwrite a
+ * placeholder or an explicitly-provisional title, but must never clobber a
+ * user-renamed (locked) one. Regression coverage for the bug where the
+ * renderer's eager first-message rename pre-empted the backend titler.
  */
 describe('canUpgradeThreadTitle', () => {
   it('upgrades placeholder titles when titleAuto is absent (legacy)', () => {

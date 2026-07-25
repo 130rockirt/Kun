@@ -1446,6 +1446,7 @@
   "claudeEndpointLocked": "การสมัครสมาชิก Claude ใช้อุปกรณ์ปลายทางคงที่และไม่สามารถเปลี่ยนแปลงได้",
   "geminiEndpointLocked": "Gemini subscription turns use the official Antigravity CLI; HTTP endpoint settings do not apply.",
   "geminiSubscriptionNote": "Uses Google's official Antigravity CLI and its existing Google subscription login.",
+  "geminiSubscriptionLimitations": "Each chat turn is handed entirely to that CLI. Kun tools, MCP servers, and Kun's normal agent prompt/tool setup are not inherited here. If you need Kun-managed tools, MCP, and long-session history, use Gemini CLI subscription (API) instead.",
   "geminiCliApiEndpointLocked": "The Gemini CLI subscription uses the official Gemini CLI Code Assist API contract directly through Kun; its endpoint is fixed.",
   "geminiCliApiSubscriptionNote": "Reuses the official Google Gemini CLI OAuth login and Code Assist API directly. Kun owns long-session history, tools, and compaction here; this model catalog is separate from Antigravity whole-turn delegation.",
   "geminiCliApiChecking": "Checking the Gemini CLI login…",

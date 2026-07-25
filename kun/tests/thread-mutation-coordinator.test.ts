@@ -100,13 +100,14 @@ describe('shared thread mutation coordination', () => {
     expect(thread?.turns[0]).toMatchObject({ id: h.turnId, status: 'completed' })
   })
 
-  it('preserves a delayed generated title and a concurrently-started next turn', async () => {
+  it('preserves a delayed generated title while the first turn finishes concurrently', async () => {
+    // Title generation now runs in parallel with the first turn (before any
+    // completed turn). Race the title mutation against finishTurn.
     const h = makeHarness(makeFakeModel([
       { kind: 'assistant_text_delta', text: 'Generated task title' },
       { kind: 'completed', stopReason: 'stop' }
     ]))
     await bootstrapThread(h)
-    await h.turns.finishTurn({ threadId: h.threadId, turnId: h.turnId, status: 'completed' })
     await h.threads.update(h.threadId, { title: 'New chat', titleAuto: true })
     const block = blockThreadRead(h, 2)
     const loop = h.loop as unknown as {
@@ -116,24 +117,22 @@ describe('shared thread mutation coordination', () => {
     const title = loop.maybeGenerateThreadTitle(h.threadId, h.turnId)
     await block.entered
 
-    let startSettled = false
-    const started = h.turns.startTurn({
+    let finishSettled = false
+    const finish = h.turns.finishTurn({
       threadId: h.threadId,
-      request: { prompt: 'second request' }
+      turnId: h.turnId,
+      status: 'completed'
     }).finally(() => {
-      startSettled = true
+      finishSettled = true
     })
     await flushCompetingMutation()
-    const startWaitedForTitle = startSettled
+    const finishWaitedForTitle = finishSettled
     block.release()
 
-    const [, turn] = await Promise.all([title, started])
-    expect(startWaitedForTitle).toBe(false)
+    await Promise.all([title, finish])
+    expect(finishWaitedForTitle).toBe(false)
     const thread = await h.threadStore.get(h.threadId)
-    expect(thread).toMatchObject({ title: 'Generated task title', titleAuto: true, status: 'running' })
-    expect(thread?.turns).toHaveLength(2)
-    expect(thread?.turns.at(-1)?.id).toBe(turn.turnId)
-
-    await h.turns.interruptTurn({ threadId: h.threadId, turnId: turn.turnId })
+    expect(thread).toMatchObject({ title: 'Generated task title', titleAuto: true, status: 'idle' })
+    expect(thread?.turns[0]).toMatchObject({ id: h.turnId, status: 'completed' })
   })
 })

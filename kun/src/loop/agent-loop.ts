@@ -532,6 +532,10 @@ export class AgentLoop {
       }
       await this.drainSteering(threadId, turnId, signal)
       await this.recordPipelineStage(threadId, turnId, 'post_start')
+      // Fire-and-forget: start LLM title generation as soon as the first-turn
+      // user message is in place, in parallel with the main reply. Only uses
+      // user input; never blocks the agent loop.
+      void this.threadTitle.generateAfterTurn(threadId, turnId, signal).catch(() => {})
       if (delegatedSdkRuntime) {
         // The delegated SDK owns its model stream and cannot consume Kun's
         // native mid-turn queue. Drain anything that arrived before startup,
@@ -546,9 +550,6 @@ export class AgentLoop {
         const settlement = await finalizer.observeExternal({ threadId, turnId })
         finalStatus = statusFromSettlement(settlement, reportedStatus)
         finalError = errorFromSettlement(settlement)
-        if (finalStatus === 'completed') {
-          void this.threadTitle.generateAfterTurn(threadId, turnId, signal).catch(() => {})
-        }
         return finalStatus
       }
       const status = await this.loop(threadId, turnId, signal)
@@ -560,11 +561,6 @@ export class AgentLoop {
       })
       finalStatus = statusFromSettlement(settlement, status)
       finalError = errorFromSettlement(settlement)
-      if (finalStatus === 'completed') {
-        // Fire-and-forget: generate an LLM title after the FIRST assistant
-        // reply completes, only when the thread still has a default title.
-        void this.threadTitle.generateAfterTurn(threadId, turnId, signal).catch(() => {})
-      }
       return finalStatus
     } catch (error) {
       if (wallTimeExceeded) return failWallTimeLimit()

@@ -28,13 +28,14 @@ export class ThreadTitleService {
   ): Promise<void> {
     const thread = await this.deps.threadStore.get(threadId)
     if (!thread) return
-    if (thread.turns.filter((turn) => turn.status === 'completed').length > 1) return
+    // Skip once any turn has already completed — title runs in parallel with
+    // the first turn, so later turn starts must not re-title.
+    if (thread.turns.some((turn) => turn.status === 'completed')) return
     if (!canUpgradeThreadTitle(thread)) return
 
     const items = await this.deps.sessionStore.loadItems(threadId)
     const userText = items.find((item) => item.kind === 'user_message')?.text ?? ''
     if (!userText.trim()) return
-    const assistantText = items.find((item) => item.kind === 'assistant_text')?.text
     const roles = this.deps.getRoles()
     const resolved = resolveRoleModel({
       roleModel: roles?.titleModel,
@@ -55,7 +56,6 @@ export class ThreadTitleService {
       ...(resolved.providerId ? { providerId: resolved.providerId } : {}),
       ...(resolved.accountId ? { accountId: resolved.accountId } : {}),
       userText,
-      ...(assistantText ? { assistantText } : {}),
       ...(roles?.titleReasoningEffort
         ? { reasoningEffort: roles.titleReasoningEffort }
         : {}),
