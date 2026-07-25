@@ -16,6 +16,6 @@ export function normalizeTurnLimits(input: TurnLimitsConfig | undefined): Normal
       ? { maxSteps: Math.max(1, Math.floor(input.maxSteps)) }
       : {}),
     maxWallTimeMs: Math.max(1, Math.floor(input?.maxWallTimeMs ?? 15 * 60_000)),
-    maxToolCallsPerStep: Math.max(1, Math.floor(input?.maxToolCallsPerStep ?? 32))
+    maxToolCallsPerStep: Math.max(1, Math.floor(input?.maxToolCallsPerStep ?? 10_000))
   }
 }

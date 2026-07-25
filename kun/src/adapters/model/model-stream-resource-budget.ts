@@ -33,10 +33,11 @@ export const DEFAULT_MODEL_STREAM_LIMITS: ModelStreamLimits = {
   maxTotalBytes: 32 * 1024 * 1024,
   maxFrames: 65_536,
   maxOutputBytes: 8 * 1024 * 1024,
-  maxPendingToolCalls: 32,
+  // High backstop so long agent turns are not cut off; byte limits still bind memory.
+  maxPendingToolCalls: 10_000,
   maxPendingToolArgumentBytes: 1 * 1024 * 1024,
   maxTotalPendingToolArgumentBytes: 4 * 1024 * 1024,
-  maxCompletedToolCalls: 32,
+  maxCompletedToolCalls: 10_000,
   maxCompletedToolArgumentBytes: 4 * 1024 * 1024
 }
 

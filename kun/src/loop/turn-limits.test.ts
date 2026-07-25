@@ -5,7 +5,7 @@ describe('normalizeTurnLimits', () => {
   it('leaves model steps unlimited by default', () => {
     expect(normalizeTurnLimits(undefined)).toEqual({
       maxWallTimeMs: 15 * 60_000,
-      maxToolCallsPerStep: 32
+      maxToolCallsPerStep: 10_000
     })
   })
 
