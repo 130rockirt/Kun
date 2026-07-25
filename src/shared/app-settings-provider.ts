@@ -660,13 +660,29 @@ function providerWithPresetCapabilities(provider: ModelProviderProfileV1): Model
     ? modelProviderTokenPlanProfile(tokenPlanPreset, provider.apiKey, provider.baseUrl)
     : modelProviderPresetProfileForProvider(provider)
   if (!presetProfile) return provider
+  // Profiles saved before subscription transports moved to their official
+  // SDK/CLI paths may have a valid preset identity but no `kind`. Restore the
+  // preset transport during normalization so blank-base-URL subscriptions are
+  // retained in serve.providers and reach DelegatedTurnRuntime.
+  const kind = provider.kind ?? presetProfile.kind
   const image = mergePresetCapability(provider.image, presetProfile.image)
-  const speech = mergePresetCapability(provider.speech, presetProfile.speech)
+  const presetSource = resolveModelProviderPresetSource(provider)
+  const hasFixedSubscriptionCapabilities =
+    presetSource?.mode === 'api' && presetSource.preset.category === 'subscription'
+  // Subscription/SDK credentials are tied to documented transports. Do not
+  // let a stale hand-authored speech block turn Cursor, Codex, Claude, or
+  // Antigravity into an OpenAI transcription endpoint.
+  const speech = hasFixedSubscriptionCapabilities
+    ? presetProfile.speech
+    : mergePresetCapability(provider.speech, presetProfile.speech)
   const textToSpeech = mergePresetCapability(provider.textToSpeech, presetProfile.textToSpeech)
   const music = mergePresetCapability(provider.music, presetProfile.music)
   const video = mergePresetCapability(provider.video, presetProfile.video)
+  const { speech: _storedSpeech, ...providerWithoutSpeech } = provider
+  void _storedSpeech
   return {
-    ...provider,
+    ...(hasFixedSubscriptionCapabilities ? providerWithoutSpeech : provider),
+    ...(kind ? { kind } : {}),
     ...(image ? { image } : {}),
     ...(speech ? { speech } : {}),
     ...(textToSpeech ? { textToSpeech } : {}),
@@ -1120,12 +1136,23 @@ function normalizeModelProviderProfile(
   const id = normalizeModelProviderId(input?.id)
   if (!id) return null
   const presetSource = normalizeModelProviderPresetSource(input, id)
+  const resolvedPresetSource = presetSource
+    ? resolveModelProviderPresetSource({ id, presetSource })
+    : null
+  const kind =
+    input?.kind === 'gemini-code-assist'
+      ? 'antigravity-cli'
+      : input?.kind ?? (
+          resolvedPresetSource?.mode === 'api'
+            ? resolvedPresetSource.preset.kind
+            : undefined
+        )
   const rawName = typeof input?.name === 'string' && input.name.trim() ? input.name.trim() : id
   const baseUrl = normalizeModelProviderBaseUrl(input?.baseUrl)
   const savedModels = normalizeProviderModels(input?.models)
-  // Existing builds persisted the retired Code Assist model list. Replace it
-  // once during transport migration so 3.5/3.6 are visible immediately; later
-  // Antigravity CLI syncs remain authoritative.
+  // Existing builds used `gemini-code-assist` on the legacy Antigravity preset.
+  // Keep that one-time migration on Antigravity; the new direct Gemini CLI API
+  // preset has its own id and never silently takes ownership of legacy threads.
   const rawModels =
     presetSource?.presetId === 'gemini-subscription' && input?.kind === 'gemini-code-assist'
       ? [...GEMINI_SUBSCRIPTION_MODEL_IDS]
@@ -1146,7 +1173,7 @@ function normalizeModelProviderProfile(
     name,
     ...(presetSource ? { presetSource } : {}),
     apiKey:
-      input?.kind === 'antigravity-cli' || input?.kind === 'gemini-code-assist'
+      kind === 'antigravity-cli' || kind === 'gemini-cli-api'
         ? ''
         : typeof input?.apiKey === 'string'
           ? input.apiKey.trim()
@@ -1154,13 +1181,7 @@ function normalizeModelProviderProfile(
     baseUrl,
     endpointFormat: normalizeModelEndpointFormat(input?.endpointFormat),
     retry: normalizeModelRequestRetrySettings(input?.retry),
-    ...(input?.kind === 'agent-sdk'
-      ? { kind: 'agent-sdk' as const }
-      : input?.kind === 'cursor-sdk'
-        ? { kind: 'cursor-sdk' as const }
-      : input?.kind === 'antigravity-cli' || input?.kind === 'gemini-code-assist'
-        ? { kind: 'antigravity-cli' as const }
-        : {}),
+    ...(kind ? { kind } : {}),
     models,
     modelProfiles,
     ...(image ? { image } : {}),
@@ -1483,7 +1504,11 @@ function normalizeModelProviderSpeechCapability(
 
 export function normalizeSpeechToTextProtocol(value: unknown): SpeechToTextProtocol {
   if (value === 'local-whisper') return 'local-whisper'
-  return value === 'mimo-asr' ? 'mimo-asr' : DEFAULT_SPEECH_TO_TEXT_PROTOCOL
+  if (value === 'mimo-asr') return 'mimo-asr'
+  if (value === 'xai-stt') return 'xai-stt'
+  if (value === 'gemini-audio') return 'gemini-audio'
+  if (value === 'gemini-cli-audio') return 'gemini-cli-audio'
+  return DEFAULT_SPEECH_TO_TEXT_PROTOCOL
 }
 
 function normalizeModelProviderTextToSpeechCapability(

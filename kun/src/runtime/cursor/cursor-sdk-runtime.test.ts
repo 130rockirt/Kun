@@ -16,6 +16,7 @@ import {
   cursorAgentExecutionOptions,
   sanitizeCursorSdkError,
   type CursorSdkApi,
+  type CursorKunTurnContext,
   type CursorSdkRuntimeDeps
 } from './cursor-sdk-runtime.js'
 import {
@@ -80,6 +81,8 @@ function harness(input: {
   loadError?: Error
   sessionCoordinator?: CursorSdkRuntimeDeps['sessionCoordinator']
   omitLocalStore?: boolean
+  kunContext?: CursorKunTurnContext
+  contextProfile?: CursorSdkRuntimeDeps['contextProfile']
 }) {
   const applied: unknown[] = []
   const recorded: unknown[] = []
@@ -171,7 +174,11 @@ function harness(input: {
     debugSink: input.debugSink,
     attachmentStore: input.attachmentStore,
     turnLimits: input.turnLimits,
-    sessionCoordinator: input.sessionCoordinator
+    sessionCoordinator: input.sessionCoordinator,
+    contextProfile: input.contextProfile,
+    ...(input.kunContext
+      ? { loadKunTurnContext: async () => input.kunContext! }
+      : {})
   } as unknown as CursorSdkRuntimeDeps
   return {
     runtime: new CursorSdkRuntime(deps),
@@ -269,6 +276,82 @@ describe('CursorSdkRuntime', () => {
     expect(JSON.stringify(trace)).not.toContain('cursor-secret')
   })
 
+  test('injects Kun instructions and custom tools into Cursor capabilities, context, and traces', async () => {
+    const debugSink = new LlmDebugRecorder()
+    const mcpExecute = vi.fn(async () => ({
+      content: [{ type: 'text' as const, text: 'mcp result' }]
+    }))
+    const h = harness({
+      debugSink,
+      contextProfile: () => ({
+        contextWindowTokens: 100_000,
+        softThresholdTokens: 80_000,
+        hardThresholdTokens: 90_000
+      }),
+      kunContext: {
+        instructionBlocks: ['Workspace AGENTS instructions', 'Active skill instructions'],
+        activeSkillIds: ['docs-skill'],
+        tools: [{
+          name: 'mcp_call_tool',
+          description: 'Call an MCP tool',
+          inputSchema: { type: 'object' },
+          providerId: 'mcp:facade',
+          providerKind: 'mcp'
+        }],
+        customTools: {
+          mcp_call_tool: {
+            description: 'Call an MCP tool',
+            inputSchema: { type: 'object' },
+            execute: mcpExecute
+          }
+        }
+      }
+    })
+
+    await expect(h.runtime.runTurn(
+      'thread_1',
+      'turn_1',
+      new AbortController().signal,
+      'cursor-subscription'
+    )).resolves.toBe('completed')
+
+    expect(h.createOptions[0]?.local?.customTools).toHaveProperty('mcp_call_tool')
+    expect(String(h.sentMessages[0])).toContain('Kun system prompt')
+    expect(String(h.sentMessages[0])).toContain('Workspace AGENTS instructions')
+    expect(String(h.sentMessages[0])).toContain('Active skill instructions')
+    expect(h.recorded).toContainEqual(expect.objectContaining({
+      kind: 'delegated_runtime',
+      capabilities: expect.objectContaining({
+        kunTools: true,
+        externalApproval: true
+      })
+    }))
+    expect(h.recorded).toContainEqual(expect.objectContaining({
+      kind: 'context_snapshot',
+      toolCount: 1,
+      activeSkillIds: ['docs-skill'],
+      breakdown: expect.objectContaining({ tools: expect.any(Number) })
+    }))
+    const trace = debugSink.snapshot()[0]?.exchanges[0]
+    expect(trace?.toolCatalog).toEqual([{
+      name: 'mcp_call_tool',
+      providerId: 'mcp:facade',
+      providerKind: 'mcp'
+    }])
+    const traceBody = JSON.parse(trace?.request.body.text ?? '{}') as Record<string, unknown>
+    expect(traceBody).toMatchObject({
+      instructions: expect.arrayContaining([
+        'Kun system prompt',
+        'Workspace AGENTS instructions'
+      ]),
+      tools: [{
+        name: 'mcp_call_tool',
+        description: 'Call an MCP tool'
+      }]
+    })
+    expect(JSON.stringify(traceBody)).not.toContain('mcpExecute')
+  })
+
   test('resumes a compatible persisted agent and sends only the current request', async () => {
     const root = await mkdtemp(join(tmpdir(), 'kun-cursor-resume-'))
     const coordinator = new DelegatedSessionCoordinator(
@@ -349,6 +432,104 @@ describe('CursorSdkRuntime', () => {
     ).toContain('provider-state')
     expect(String(h.sentMessages[0])).toContain('current only')
     expect(String(h.sentMessages[0])).not.toContain('portable old context')
+  })
+
+  test('rotates native continuation when the bridged Kun tool catalog changes', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-cursor-tool-rotation-'))
+    const coordinator = new DelegatedSessionCoordinator(
+      new FileDelegatedSessionBindingStore(root)
+    )
+    const priorItems = [{
+      id: 'user_old',
+      threadId: 'thread_1',
+      turnId: 'turn_old',
+      role: 'user',
+      status: 'completed',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      kind: 'user_message',
+      text: 'portable old context'
+    }] as const
+    const prepared = await coordinator.prepare({
+      threadId: 'thread_1',
+      route: {
+        providerKind: 'cursor-sdk',
+        providerId: 'cursor-subscription',
+        credentialIdentity: delegatedCredentialIdentity({
+          providerId: 'cursor-subscription',
+          credentialSecret: 'cursor-secret'
+        }),
+        workspace: '/tmp/cursor-workspace',
+        model: 'auto',
+        capabilityFingerprint: delegatedCapabilityFingerprint({
+          systemPrompt: 'Kun system prompt',
+          threadPersona: '',
+          mode: 'agent',
+          sandbox: false,
+          settingSources: [],
+          capabilities: cursorSdkCapabilities(true),
+          instructions: [],
+          tools: [{
+            name: 'old_mcp_tool',
+            description: 'Old MCP tool',
+            inputSchema: { type: 'object' },
+            providerId: 'mcp:old',
+            providerKind: 'mcp'
+          }]
+        }),
+        continuationMode: 'native'
+      },
+      priorItems: []
+    })
+    await coordinator.commit({
+      preparation: prepared,
+      committedItems: priorItems as never,
+      lastCommittedTurnId: 'turn_old',
+      nativeSessionId: 'agent_old_catalog'
+    })
+    const h = harness({
+      sessionCoordinator: coordinator,
+      kunContext: {
+        instructionBlocks: [],
+        activeSkillIds: [],
+        tools: [{
+          name: 'new_mcp_tool',
+          description: 'New MCP tool',
+          inputSchema: { type: 'object' },
+          providerId: 'mcp:new',
+          providerKind: 'mcp'
+        }],
+        customTools: {}
+      },
+      items: [
+        ...priorItems,
+        {
+          id: 'user_1',
+          threadId: 'thread_1',
+          turnId: 'turn_1',
+          role: 'user',
+          status: 'completed',
+          createdAt: '2026-01-01T00:01:00.000Z',
+          kind: 'user_message',
+          text: 'current request'
+        }
+      ]
+    })
+
+    await expect(h.runtime.runTurn(
+      'thread_1',
+      'turn_1',
+      new AbortController().signal,
+      'cursor-subscription'
+    )).resolves.toBe('completed')
+
+    expect(h.resumedAgentIds).toEqual([])
+    expect(h.createOptions).toHaveLength(1)
+    expect(String(h.sentMessages[0])).toContain('portable old context')
+    expect(h.recorded).toContainEqual(expect.objectContaining({
+      kind: 'delegated_runtime',
+      phase: 'rebased',
+      reason: 'capabilities_changed'
+    }))
   })
 
   test('fails closed when an SDK downgrade removes the isolated local store', async () => {

@@ -143,6 +143,10 @@ function registerOptions(overrides: Partial<Parameters<typeof import('./register
     loadGuiUpdaterModule: vi.fn() as never,
     resolveLogDirectory: () => '/tmp/logs',
     logError: vi.fn(),
+    workspacePreviewProtocols: {
+      createLease: vi.fn(async () => ({ ok: false, message: 'unavailable' })),
+      release: vi.fn(() => ({ ok: true }))
+    } as never,
     ...overrides
   }
 }
@@ -170,6 +174,8 @@ describe('registerAppIpcHandlers', () => {
     registerAppIpcHandlers(registerOptions())
 
     expect(handlers.get('cursor-subscription:discover')).toBeTypeOf('function')
+    expect(handlers.get('gemini-cli-subscription:status')).toBeTypeOf('function')
+    expect(handlers.get('gemini-cli-subscription:models')).toBeTypeOf('function')
   })
 
   it('bypasses cache for development reload commands and keeps packaged reloads ordinary', async () => {

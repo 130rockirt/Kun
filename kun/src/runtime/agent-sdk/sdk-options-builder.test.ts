@@ -56,8 +56,20 @@ describe('buildScopedEnv', () => {
 
   test('does not mutate the input env', () => {
     const base = { ANTHROPIC_API_KEY: 'k' }
-    buildScopedEnv(base, 't')
+    buildScopedEnv(base, 'sk-ant-oat01-valid')
     expect(base.ANTHROPIC_API_KEY).toBe('k')
+  })
+
+  test('rejects wrapped or malformed setup tokens without echoing the secret', () => {
+    const raw = 'Bearer sk-ant-oat01-should-not-leak'
+    expect(() => buildScopedEnv({}, raw)).toThrow(
+      'Claude subscription token format is invalid'
+    )
+    try {
+      buildScopedEnv({}, raw)
+    } catch (error) {
+      expect(String(error)).not.toContain('sk-ant-oat01-should-not-leak')
+    }
   })
 })
 

@@ -146,7 +146,7 @@ describe('createAgentSdkRuntime delegated session binding', () => {
           ids: { next: (prefix) => prefix },
           prefix: { systemPrompt: 'Kun system prompt' },
           providerConfigs: {
-            'claude-subscription': { kind: 'agent-sdk', apiKey: 'oauth-secret' }
+            'claude-subscription': { kind: 'agent-sdk', apiKey: 'sk-ant-oat01-oauth-secret' }
           } as never,
           agentSdkProviderIds: new Set(['claude-subscription']),
           defaultApprovalPolicy: 'auto',
@@ -208,6 +208,113 @@ describe('createAgentSdkRuntime delegated session binding', () => {
       await rm(root, { recursive: true, force: true })
     }
   })
+
+  test('rotates Claude continuation when a bridged tool changes provider identity', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-claude-tool-provider-'))
+    try {
+      let items = [{
+        id: 'item_t1',
+        turnId: 't1',
+        threadId: 'th',
+        kind: 'user_message',
+        role: 'user',
+        status: 'completed',
+        text: 'first',
+        createdAt: '2026-07-25T00:00:00.000Z'
+      }]
+      let thread = threadWith({
+        id: 'th',
+        providerId: 'claude-subscription',
+        turns: [{ id: 't1', prompt: 'first' } as ThreadRecord['turns'][number]]
+      })
+      const coordinator = new DelegatedSessionCoordinator(
+        new FileDelegatedSessionBindingStore(root)
+      )
+      const buildRegistry = (providerId: string) => new CapabilityRegistry([{
+        id: providerId,
+        kind: 'mcp',
+        enabled: true,
+        available: true,
+        tools: [LocalToolHost.defineTool({
+          name: 'remote_lookup',
+          description: 'Look up remote documentation',
+          inputSchema: { type: 'object' },
+          sideEffect: 'read-only',
+          execute: async () => ({ output: 'ok' })
+        })]
+      }])
+      const buildRuntime = (registry: CapabilityRegistry) => createAgentSdkRuntime({
+        registry,
+        toolHost: new LocalToolHost({ registry }),
+        turns: { updateTurnMetadata: async () => undefined } as never,
+        sessionStore: { loadItems: async () => items } as never,
+        threadStore: { get: async () => thread } as never,
+        events: {} as never,
+        ids: { next: (prefix) => prefix },
+        prefix: { systemPrompt: 'Kun system prompt' },
+        providerConfigs: {
+          'claude-subscription': { kind: 'agent-sdk', apiKey: 'sk-ant-oat01-oauth-secret' }
+        } as never,
+        agentSdkProviderIds: new Set(['claude-subscription']),
+        defaultApprovalPolicy: 'auto',
+        sessionCoordinator: coordinator
+      })
+      const firstRuntime = buildRuntime(buildRegistry('mcp:first'))
+      const firstDeps = (firstRuntime as unknown as {
+        deps: {
+          loadTurnContext(threadId: string, turnId: string): Promise<{
+            sessionPreparation?: DelegatedSessionPreparation
+          } | null>
+        }
+      }).deps
+      const first = await firstDeps.loadTurnContext('th', 't1')
+      await coordinator.commit({
+        preparation: first!.sessionPreparation!,
+        committedItems: items as never,
+        lastCommittedTurnId: 't1',
+        nativeSessionId: 'session_first_provider'
+      })
+
+      items = [...items, {
+        id: 'item_t2',
+        turnId: 't2',
+        threadId: 'th',
+        kind: 'user_message',
+        role: 'user',
+        status: 'completed',
+        text: 'second',
+        createdAt: '2026-07-25T00:01:00.000Z'
+      }]
+      thread = {
+        ...thread,
+        turns: [
+          ...thread.turns,
+          { id: 't2', prompt: 'second' } as ThreadRecord['turns'][number]
+        ]
+      }
+      const secondRuntime = buildRuntime(buildRegistry('mcp:second'))
+      const secondDeps = (secondRuntime as unknown as {
+        deps: {
+          loadTurnContext(threadId: string, turnId: string): Promise<{
+            resumeSessionId?: string
+            bridgeableTools: Array<{ providerId?: string }>
+            sessionPreparation?: DelegatedSessionPreparation
+          } | null>
+        }
+      }).deps
+      const second = await secondDeps.loadTurnContext('th', 't2')
+
+      expect(second?.resumeSessionId).toBeUndefined()
+      expect(second?.sessionPreparation?.rebaseReason).toBe('capabilities_changed')
+      expect(second?.bridgeableTools).toContainEqual(expect.objectContaining({
+        name: 'remote_lookup',
+        providerId: 'mcp:second',
+        providerKind: 'mcp'
+      }))
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
 })
 
 // handlesProvider only reads providerConfigs / agentSdkProviderIds / defaultIsAgentSdk,
@@ -216,7 +323,9 @@ function make(opts: { agentSdk: string[]; http: string[]; defaultIsAgentSdk: boo
   handlesProvider(id: string | undefined): boolean
 } {
   const providerConfigs: Record<string, { baseUrl?: string; apiKey: string; kind?: 'http' | 'agent-sdk' }> = {}
-  for (const id of opts.agentSdk) providerConfigs[id] = { kind: 'agent-sdk', apiKey: 'tok' }
+  for (const id of opts.agentSdk) {
+    providerConfigs[id] = { kind: 'agent-sdk', apiKey: 'sk-ant-oat01-tok' }
+  }
   for (const id of opts.http) providerConfigs[id] = { baseUrl: 'https://x', apiKey: 'key' }
   return createAgentSdkRuntime({
     registry: {} as never,
@@ -230,7 +339,7 @@ function make(opts: { agentSdk: string[]; http: string[]; defaultIsAgentSdk: boo
     agentSdkProviderIds: new Set(opts.agentSdk),
     defaultApprovalPolicy: 'auto',
     defaultIsAgentSdk: opts.defaultIsAgentSdk,
-    defaultToken: 'tok'
+    defaultToken: 'sk-ant-oat01-tok'
   })
 }
 
@@ -273,6 +382,196 @@ describe('createAgentSdkRuntime handlesProvider', () => {
 })
 
 describe('createAgentSdkRuntime turn context', () => {
+  const credentialContext = async (options: {
+    providerId?: string
+    providerToken?: string
+    defaultToken?: string
+  }): Promise<{ oauthToken?: string } | null> => {
+    const runtime = createAgentSdkRuntime({
+      registry: CapabilityRegistry.fromLocalTools([]),
+      turns: { updateTurnMetadata: async () => undefined } as never,
+      sessionStore: {
+        loadItems: async () => [{
+          id: 'item_user',
+          turnId: 'tn',
+          threadId: 'th',
+          kind: 'user_message',
+          role: 'user',
+          status: 'completed',
+          text: 'check credentials',
+          createdAt: '2026-07-25T00:00:00.000Z'
+        }]
+      } as never,
+      threadStore: {
+        get: async () => threadWith({
+          ...(options.providerId ? { providerId: options.providerId } : {}),
+          turns: [{ id: 'tn', prompt: 'check credentials' } as ThreadRecord['turns'][number]]
+        })
+      } as never,
+      events: {} as never,
+      ids: { next: (prefix) => prefix },
+      prefix: { systemPrompt: 'Kun system prompt' },
+      providerConfigs: options.providerId
+        ? {
+            [options.providerId]: {
+              kind: 'agent-sdk',
+              apiKey: options.providerToken ?? ''
+            }
+          } as never
+        : {},
+      agentSdkProviderIds: new Set(options.providerId ? [options.providerId] : []),
+      defaultApprovalPolicy: 'auto',
+      defaultIsAgentSdk: !options.providerId,
+      defaultToken: options.defaultToken
+    })
+    const deps = (runtime as unknown as {
+      deps: {
+        loadTurnContext(
+          threadId: string,
+          turnId: string
+        ): Promise<{ oauthToken?: string } | null>
+      }
+    }).deps
+    return deps.loadTurnContext('th', 'tn')
+  }
+
+  test('keeps an explicit Claude provider on ambient login instead of inheriting the default token', async () => {
+    const context = await credentialContext({
+      providerId: 'claude-subscription',
+      providerToken: '',
+      defaultToken: 'sk-ant-oat01-unrelated-provider'
+    })
+    expect(context?.oauthToken).toBeUndefined()
+  })
+
+  test('uses the default token only for the implicit default Agent SDK route', async () => {
+    const context = await credentialContext({
+      defaultToken: 'sk-ant-oat01-default-agent-sdk'
+    })
+    expect(context?.oauthToken).toBe('sk-ant-oat01-default-agent-sdk')
+  })
+
+  test('rejects an invalid explicit token without disclosing it', async () => {
+    const raw = 'Bearer sk-ant-oat01-private-value'
+    const loading = credentialContext({
+      providerId: 'claude-subscription',
+      providerToken: raw
+    })
+    await expect(loading).rejects.toThrow('Claude subscription token format is invalid')
+    await loading.catch((error) => {
+      expect(String(error)).not.toContain('sk-ant-oat01-private-value')
+    })
+  })
+
+  test('prepares lazy extension tools and preserves MCP/extension provenance', async () => {
+    const extensionExecute = vi.fn(async () => ({ output: 'extension result' }))
+    const registry = new CapabilityRegistry([{
+      id: 'mcp:docs',
+      kind: 'mcp',
+      enabled: true,
+      available: true,
+      tools: [LocalToolHost.defineTool({
+        name: 'mcp_docs_lookup',
+        description: 'Look up MCP docs',
+        inputSchema: { type: 'object' },
+        sideEffect: 'read-only',
+        execute: async () => ({ output: 'mcp result' })
+      })]
+    }])
+    let prepared = false
+    const host = new LocalToolHost({
+      registry,
+      prepare: () => {
+        if (prepared) return
+        prepared = true
+        registry.registerProvider({
+          id: 'extension:demo',
+          kind: 'extension',
+          enabled: true,
+          available: true,
+          tools: [LocalToolHost.defineTool({
+            name: 'extension_render',
+            description: 'Render with an extension',
+            inputSchema: { type: 'object' },
+            sideEffect: 'read-only',
+            execute: extensionExecute
+          })]
+        })
+      }
+    })
+    const runtime = createAgentSdkRuntime({
+      registry,
+      toolHost: host,
+      turns: { updateTurnMetadata: async () => undefined } as never,
+      sessionStore: {
+        loadItems: async () => [{
+          id: 'item_user',
+          turnId: 'tn',
+          threadId: 'th',
+          kind: 'user_message',
+          role: 'user',
+          status: 'completed',
+          text: 'use the configured tools',
+          createdAt: '2026-07-25T00:00:00.000Z'
+        }]
+      } as never,
+      threadStore: {
+        get: async () => threadWith({
+          providerId: 'claude-subscription',
+          turns: [{ id: 'tn', prompt: 'use the configured tools' } as ThreadRecord['turns'][number]]
+        })
+      } as never,
+      events: {} as never,
+      ids: { next: (prefix) => prefix },
+      prefix: { systemPrompt: 'Kun system prompt' },
+      providerConfigs: {
+        'claude-subscription': { kind: 'agent-sdk', apiKey: 'sk-ant-oat01-tok' }
+      } as never,
+      agentSdkProviderIds: new Set(['claude-subscription']),
+      defaultApprovalPolicy: 'auto'
+    })
+    const deps = (runtime as unknown as {
+      deps: {
+        loadTurnContext(threadId: string, turnId: string): Promise<{
+          bridgeableTools: Array<{
+            name: string
+            providerId?: string
+            providerKind?: string
+          }>
+          contextInstructions?: string[]
+        } | null>
+        executeKunTool(
+          threadId: string,
+          turnId: string,
+          toolName: string,
+          args: Record<string, unknown>
+        ): Promise<{ output: unknown; isError?: boolean }>
+      }
+    }).deps
+
+    const context = await deps.loadTurnContext('th', 'tn')
+    expect(context?.bridgeableTools).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: 'mcp_docs_lookup',
+        providerId: 'mcp:docs',
+        providerKind: 'mcp'
+      }),
+      expect.objectContaining({
+        name: 'extension_render',
+        providerId: 'extension:demo',
+        providerKind: 'extension'
+      })
+    ]))
+    expect(context?.contextInstructions?.join('\n')).toContain(
+      'Kun-managed capabilities are available through the mcp__kun__ tools.'
+    )
+    await expect(deps.executeKunTool('th', 'tn', 'extension_render', {})).resolves.toEqual({
+      output: 'extension result',
+      isError: false
+    })
+    expect(extensionExecute).toHaveBeenCalledOnce()
+  })
+
   test('applies a child capability boundary to SDK discovery and execution', async () => {
     const executionContexts: Array<{
       allowedToolNames?: readonly string[]
@@ -337,7 +636,7 @@ describe('createAgentSdkRuntime turn context', () => {
       ids: { next: (prefix) => prefix },
       prefix: { systemPrompt: '' },
       providerConfigs: {
-        'claude-subscription': { kind: 'agent-sdk', apiKey: 'tok' }
+        'claude-subscription': { kind: 'agent-sdk', apiKey: 'sk-ant-oat01-tok' }
       } as never,
       agentSdkProviderIds: new Set(['claude-subscription']),
       defaultApprovalPolicy: 'auto',
@@ -461,7 +760,9 @@ describe('createAgentSdkRuntime turn context', () => {
       events: {} as never,
       ids: { next: (prefix) => prefix },
       prefix: { systemPrompt: '' },
-      providerConfigs: { 'claude-subscription': { kind: 'agent-sdk', apiKey: 'tok' } } as never,
+      providerConfigs: {
+        'claude-subscription': { kind: 'agent-sdk', apiKey: 'sk-ant-oat01-tok' }
+      } as never,
       agentSdkProviderIds: new Set(['claude-subscription']),
       defaultApprovalPolicy: 'auto'
     })
@@ -1243,7 +1544,9 @@ describe('createAgentSdkRuntime turn context', () => {
         events: {} as never,
         ids: { next: (p: string) => p },
         prefix: { systemPrompt: '' },
-        providerConfigs: { 'claude-subscription': { kind: 'agent-sdk', apiKey: 'tok' } } as never,
+        providerConfigs: {
+          'claude-subscription': { kind: 'agent-sdk', apiKey: 'sk-ant-oat01-tok' }
+        } as never,
         agentSdkProviderIds: new Set(['claude-subscription']),
         defaultApprovalPolicy: 'auto',
         instructionRuntime: new InstructionRuntime(

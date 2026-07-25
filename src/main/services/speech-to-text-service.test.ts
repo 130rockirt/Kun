@@ -49,6 +49,8 @@ describe('speech-to-text service', () => {
     expect(isSpeechToTextConfigured({ enabled: false, protocol: 'mimo-asr', baseUrl: 'x', apiKey: 'y', model: 'z' })).toBe(false)
     expect(isSpeechToTextConfigured({ enabled: true, protocol: 'mimo-asr', baseUrl: '', apiKey: 'y', model: 'z' })).toBe(false)
     expect(isSpeechToTextConfigured({ enabled: true, protocol: 'local-whisper', baseUrl: '', apiKey: '', model: 'whisper-small-q5_1' })).toBe(true)
+    expect(isSpeechToTextConfigured({ enabled: true, protocol: 'xai-stt', baseUrl: 'x', apiKey: 'y', model: '' })).toBe(true)
+    expect(isSpeechToTextConfigured({ enabled: true, protocol: 'gemini-cli-audio', baseUrl: '', apiKey: '', model: 'gemini-2.5-flash' })).toBe(true)
   })
 
   it('transcribes via MiMo ASR chat completions with a base64 data URI', async () => {
@@ -130,6 +132,110 @@ describe('speech-to-text service', () => {
     const form = requests[0].init.body as FormData
     expect(form.get('model')).toBe('whisper-1')
     expect(form.get('file')).toBeInstanceOf(Blob)
+  })
+
+  it('transcribes via the dedicated xAI STT multipart endpoint', async () => {
+    const { fetchImpl, requests } = fakeFetch({ text: 'hello from Grok' })
+    const result = await requestSpeechTranscription(
+      settingsWithSpeech({
+        protocol: 'xai-stt',
+        baseUrl: 'https://api.x.ai/v1',
+        apiKey: 'xai-key',
+        model: 'grok-transcribe',
+        language: 'en'
+      }),
+      { audioBase64: AUDIO_BASE64, mimeType: 'audio/wav' },
+      { fetchImpl }
+    )
+
+    expect(result).toEqual({ ok: true, text: 'hello from Grok' })
+    expect(requests[0].url).toBe('https://api.x.ai/v1/stt')
+    const headers = requests[0].init.headers as Record<string, string>
+    expect(headers.Authorization).toBe('Bearer xai-key')
+    const form = requests[0].init.body as FormData
+    expect(form.get('format')).toBe('true')
+    expect(form.get('language')).toBe('en')
+    expect(form.get('file')).toBeInstanceOf(Blob)
+    expect(form.get('model')).toBeNull()
+  })
+
+  it('does not send unsupported xAI formatting languages', async () => {
+    const { fetchImpl, requests } = fakeFetch({ text: '你好' })
+    await requestSpeechTranscription(
+      settingsWithSpeech({
+        protocol: 'xai-stt',
+        baseUrl: 'https://api.x.ai/v1',
+        apiKey: 'xai-key',
+        model: 'grok-transcribe',
+        language: 'zh'
+      }),
+      { audioBase64: AUDIO_BASE64, mimeType: 'audio/wav' },
+      { fetchImpl }
+    )
+    const form = requests[0].init.body as FormData
+    expect(form.get('format')).toBeNull()
+    expect(form.get('language')).toBeNull()
+  })
+
+  it('transcribes via Gemini native inline audio', async () => {
+    const { fetchImpl, requests } = fakeFetch({
+      candidates: [{
+        content: {
+          parts: [
+            { text: 'internal thought', thought: true },
+            { text: ' Gemini transcript ' }
+          ]
+        }
+      }]
+    })
+    const result = await requestSpeechTranscription(
+      settingsWithSpeech({
+        protocol: 'gemini-audio',
+        baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+        apiKey: 'gemini-key',
+        model: 'gemini-2.5-flash',
+        language: 'zh'
+      }),
+      { audioBase64: AUDIO_BASE64, mimeType: 'audio/wav' },
+      { fetchImpl }
+    )
+
+    expect(result).toEqual({ ok: true, text: 'Gemini transcript' })
+    expect(requests[0].url).toBe(
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent'
+    )
+    const headers = requests[0].init.headers as Record<string, string>
+    expect(headers['x-goog-api-key']).toBe('gemini-key')
+    const payload = JSON.parse(String(requests[0].init.body))
+    expect(payload.contents[0].parts[0].text).toContain('expected language is zh')
+    expect(payload.contents[0].parts[1]).toEqual({
+      inlineData: {
+        mimeType: 'audio/wav',
+        data: AUDIO_BASE64
+      }
+    })
+  })
+
+  it('uses Gemini CLI OAuth transcription without a base URL or API key', async () => {
+    const result = await requestSpeechTranscription(
+      settingsWithSpeech({
+        providerId: 'gemini-cli-subscription',
+        protocol: 'gemini-cli-audio',
+        baseUrl: '',
+        apiKey: '',
+        model: 'gemini-2.5-flash'
+      }),
+      { audioBase64: AUDIO_BASE64, mimeType: 'audio/wav' },
+      {
+        geminiCliTranscriber: async (speechToText, request) => {
+          expect(speechToText.model).toBe('gemini-2.5-flash')
+          expect(request.audioBase64).toBe(AUDIO_BASE64)
+          return ' Gemini CLI transcript '
+        }
+      }
+    )
+
+    expect(result).toEqual({ ok: true, text: 'Gemini CLI transcript' })
   })
 
   it('transcribes local Whisper without requiring a base URL or API key', async () => {

@@ -32,6 +32,7 @@ import {
 import {
   DEFAULT_MODEL_PROVIDER_ID,
   getKunRuntimeSettings,
+  modelProviderModelProfilesForSettings,
   resolveKunRuntimeSettings,
   resolveModelProviderProxyUrl,
   type AppSettingsV1,
@@ -103,6 +104,10 @@ export async function syncGuiManagedKunConfig(
     )
   )
   const appSettings = options?.appSettings ?? options?.scheduleMcp?.settings
+  const modelProfiles = {
+    ...runtime.modelProfiles,
+    ...(appSettings ? modelProviderModelProfilesForSettings(appSettings) : {})
+  }
   const projectMcpServers = appSettings
     ? await approvedProjectMcpServers(appSettings)
     : {}
@@ -147,7 +152,7 @@ export async function syncGuiManagedKunConfig(
       ...(routePools ? { routePools } : {}),
       ...(localModelGateway ? { localModelGateway } : {})
     },
-    models: modelConfigForRuntime(objectValue(existing?.models), runtime.modelProfiles),
+    models: modelConfigForRuntime(objectValue(existing?.models), modelProfiles),
     contextCompaction: contextCompactionConfigForRuntime(
       runtime.contextCompaction,
       objectValue(existing?.contextCompaction)

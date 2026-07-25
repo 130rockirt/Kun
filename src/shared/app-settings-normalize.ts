@@ -32,6 +32,7 @@ import {
   getKunRuntimeSettings,
   kunSettingsEnvelope,
   mergeKunRuntimeSettings,
+  migrateKunContextCompactionDefaults,
   migrateLegacyAppSettings
 } from './app-settings-kun'
 import {
@@ -71,6 +72,9 @@ export function normalizeAppSettings(settings: AppSettingsV1): AppSettingsV1 {
     providerSettings.providers,
     typeof rawKun?.model === 'string' && Boolean(rawKun.model.trim())
   )
+  const contextCompaction = migrateKunContextCompactionDefaults(
+    rawKun?.contextCompaction ?? runtime.contextCompaction
+  )
   const rawMediaPatch: Parameters<typeof defaultMiniMaxMediaGenerationKunPatch>[0]['kunPatch'] = {
     ...(rawKun?.textToSpeech !== undefined ? { textToSpeech: rawKun.textToSpeech } : {}),
     ...(rawKun?.musicGeneration !== undefined ? { musicGeneration: rawKun.musicGeneration } : {}),
@@ -81,8 +85,18 @@ export function normalizeAppSettings(settings: AppSettingsV1): AppSettingsV1 {
     currentKun: runtime,
     kunPatch: rawMediaPatch
   })
+  const selectedProvider = runtime.providerId.trim()
+    ? providerSettings.providers.find((provider) => provider.id === runtime.providerId.trim())
+    : providerSettings.providers[0]
+  // Before this field existed, having an active API key was the onboarding
+  // completion signal. Preserve that behavior once while making future
+  // dismissals independent from provider credentials.
+  const initialSetupCompleted = typeof maybeSettings.initialSetupCompleted === 'boolean'
+    ? maybeSettings.initialSetupCompleted
+    : Boolean(runtime.apiKey.trim() || selectedProvider?.apiKey.trim())
   return {
     version: 1,
+    initialSetupCompleted,
     locale: isAppLocale(maybeSettings.locale) ? maybeSettings.locale : 'en',
     theme:
       maybeSettings.theme === 'light' || maybeSettings.theme === 'dark' || maybeSettings.theme === 'system'
@@ -95,6 +109,7 @@ export function normalizeAppSettings(settings: AppSettingsV1): AppSettingsV1 {
     provider: providerSettings,
     agents: kunSettingsEnvelope(mergeKunRuntimeSettings(defaultKunRuntimeSettings(), {
       ...runtime,
+      contextCompaction,
       baseUrl: runtime.baseUrl.trim() ? normalizeDeepseekBaseUrl(runtime.baseUrl) : '',
       ...(miniMaxMediaDefaults ?? {})
     })),

@@ -91,6 +91,7 @@ import {
 } from './kun-process'
 import { expandHomePath } from './settings-store'
 import { KunRuntimeSupervisor, type KunRuntimeStatus } from './kun-runtime-supervisor'
+import { managedKunHostCanAutoStart } from './managed-runtime-startup-policy'
 import { configureLogger, logError, logInfo, logWarn, pruneOnStartup } from './logger'
 import { cleanupUnusedGitCheckpointsIfDue } from './services/git-checkpoint-service'
 import { resolveMainWindowCloseDecision } from './window-close-behavior'
@@ -171,6 +172,7 @@ import {
   startExtensionSecretRevealConsentPump,
   type RegisterExtensionIpcHandlersOptions
 } from './ipc/register-extension-ipc-handlers'
+import { WorkspacePreviewProtocolRegistry } from './services/workspace-preview-protocol'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 registerKunExtensionPlatformSchemesAsPrivileged(protocol)
@@ -813,9 +815,7 @@ function publishRuntimeSettingsSyncStatus(
 const runtimeSupervisor = new KunRuntimeSupervisor<AppSettingsV1>({
   deps: {
     loadSettings: () => store.load(),
-    canAutoRestart: (settings) => Boolean(
-      resolveConfiguredApiKey(settings) && getKunRuntimeSettings(settings).autoStart
-    ),
+    canAutoRestart: managedKunHostCanAutoStart,
     ensureRuntime: (settings) => ensureRuntime(settings),
     restartRuntime: (settings) => restartRuntime(settings),
     checkHealth: (settings, timeoutMs) => kunRuntimeHealthMonitor.waitForHealthy(settings, timeoutMs),
@@ -1028,7 +1028,6 @@ async function ensureKunRuntime(settings: AppSettingsV1): Promise<AppSettingsV1>
   }
 
   const runtime = getKunRuntimeSettings(currentSettings)
-  const hasApiKey = Boolean(resolveConfiguredApiKey(currentSettings))
 
   const healthy = await kunRuntimeHealthMonitor.waitForHealthy(currentSettings, 2_000)
   if (healthy) {
@@ -1040,12 +1039,6 @@ async function ensureKunRuntime(settings: AppSettingsV1): Promise<AppSettingsV1>
     throw runtimeJsonError(threadApi.error, threadApi.message)
   }
 
-  if (!hasApiKey) {
-    throw runtimeJsonError(
-      'missing_api_key',
-      'DeepSeek API Key is required before the GUI can start Kun.'
-    )
-  }
   if (!runtime.autoStart) {
     throw runtimeJsonError(
       'runtime_offline',
@@ -1121,12 +1114,6 @@ async function restartRuntimeOnce(settings: AppSettingsV1): Promise<void> {
   await waitForKunStartupSettled()
   const runtime = getKunRuntimeSettings(settings)
 
-  if (!resolveConfiguredApiKey(settings)) {
-    throw runtimeJsonError(
-      'missing_api_key',
-      'DeepSeek API Key is required before the GUI can start Kun.'
-    )
-  }
   if (!runtime.autoStart) {
     throw runtimeJsonError(
       'runtime_offline',
@@ -1459,33 +1446,13 @@ async function restartManagedRuntimeForSettingsChange(
 
   if (!wasRunning) return { state: 'unavailable', message: 'Kun Runtime is not running.' }
 
-  // Decide BEFORE stopping the child. Stranding a healthy runtime is exactly
-  // issue #329: a partial/transient save (e.g. the active providerId moved to
-  // a profile whose key lives elsewhere) can momentarily resolve to "no API
-  // key" even though the user clearly has one configured. If the runtime we
-  // are about to restart was healthy and the previous settings had a usable
-  // key, don't kill it on the strength of a key check the new settings fail —
-  // leave it running on its current config; the next save with a resolvable
-  // key restarts cleanly.
-  const nextHasApiKey = Boolean(resolveConfiguredApiKey(next))
-  if (!nextHasApiKey && Boolean(resolveConfiguredApiKey(prev))) {
-    logWarn(
-      'settings-apply',
-      'Skipping Kun restart: the new settings resolve to no API key but the running runtime had one — leaving the healthy runtime in place.'
-    )
-    return {
-      state: 'failed',
-      message: 'Kun Runtime kept the previous provider configuration because the new credentials are unavailable.'
-    }
-  }
-
   await waitForManagedRuntimeReadyBeforeStop(prev, 'settings-apply')
   await adapter.stopAndWait()
-  if (!nextHasApiKey || !runtime.autoStart) {
+  if (!runtime.autoStart) {
     publishRuntimeStatus({
       state: 'stopped',
       source: 'settings-apply',
-      message: 'Kun was stopped: the new settings have no API key or auto-start is disabled.'
+      message: 'Kun was stopped because automatic startup is disabled.'
     })
     return { state: 'unavailable', message: 'Kun Runtime is stopped by the current settings.' }
   }
@@ -1533,7 +1500,7 @@ async function rollbackRuntimeSettingsAfterFailedApply(
       message: error instanceof Error ? error.message : String(error)
     })
   }
-  if (!resolveConfiguredApiKey(base) || !getKunRuntimeSettings(base).autoStart) {
+  if (!getKunRuntimeSettings(base).autoStart) {
     publishRuntimeStatus({
       state: 'stopped',
       source: 'settings-apply',
@@ -1582,7 +1549,7 @@ async function restartManagedRuntimeForMcpConfigChange(
   if (!wasRunning) return { state: 'unavailable', message: 'Kun Runtime is not running.' }
   await waitForManagedRuntimeReadyBeforeStop(settings, 'mcp-config')
   await adapter.stopAndWait()
-  if (!resolveConfiguredApiKey(settings) || !runtime.autoStart) {
+  if (!runtime.autoStart) {
     return { state: 'unavailable', message: 'Kun Runtime is stopped by the current settings.' }
   }
 
@@ -1689,6 +1656,8 @@ app.whenReady().then(async () => {
     })
   }
   registerExtensionProtocol(protocol)
+  const workspacePreviewProtocols = new WorkspacePreviewProtocolRegistry()
+  workspacePreviewProtocols.register(protocol)
 
   const extensionProtocolForPartition = (partition: string) => session.fromPartition(partition).protocol
   const extensionMediaProtocols = new ExtensionMediaProtocolRegistry({
@@ -1924,7 +1893,8 @@ app.whenReady().then(async () => {
     readGuiUpdateState,
     loadGuiUpdaterModule,
     resolveLogDirectory: () => resolveLogDirectory(app),
-    logError
+    logError,
+    workspacePreviewProtocols
   })
   const dataMigrationController = new DataMigrationController({
     userDataPath: app.getPath('userData'),
@@ -2040,7 +2010,7 @@ app.whenReady().then(async () => {
     console.warn('[kun-gui] prune logs:', err)
   })
 
-  if (resolveConfiguredApiKey(initial)) {
+  if (managedKunHostCanAutoStart(initial)) {
     setTimeout(() => {
       void kunRuntimeAdapter.resolveExecutable(initial).catch((err) => {
         console.warn('[kun-gui] prewarm Kun binary:', err)

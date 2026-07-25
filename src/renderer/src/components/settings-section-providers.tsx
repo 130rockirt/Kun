@@ -49,7 +49,10 @@ import {
   resolveModelProviderPresetSource,
   tokenPlanProviderId
 } from '@shared/app-settings'
-import type { ModelProviderPreset } from '@shared/model-provider-presets'
+import type {
+  ModelProviderPreset,
+  ModelProviderSubscriptionRegion
+} from '@shared/model-provider-presets'
 import type {
   CursorSubscriptionModel,
   ModelsDevCatalogResult,
@@ -113,7 +116,10 @@ const IMAGE_GENERATION_PROTOCOL_LABEL_KEYS: Record<ImageGenerationProtocol, stri
 
 const SPEECH_TO_TEXT_PROTOCOL_LABEL_KEYS: Partial<Record<SpeechToTextProtocol, string>> = {
   'openai-transcriptions': 'speechProtocolOpenAi',
-  'mimo-asr': 'speechProtocolMimoAsr'
+  'mimo-asr': 'speechProtocolMimoAsr',
+  'xai-stt': 'speechProtocolXaiStt',
+  'gemini-audio': 'speechProtocolGeminiAudio',
+  'gemini-cli-audio': 'speechProtocolGeminiCliAudio'
 }
 
 const TEXT_TO_SPEECH_PROTOCOL_LABEL_KEYS: Record<TextToSpeechProtocol, string> = {
@@ -133,12 +139,22 @@ const VIDEO_GENERATION_PROTOCOL_LABEL_KEYS: Record<VideoGenerationProtocol, stri
 
 type ProviderTaskTab = 'connection' | 'models' | 'capabilities' | 'advanced'
 type ProviderCapability = 'image' | 'speech' | 'tts' | 'music' | 'video'
+type SubscriptionRegionFilter = 'all' | ModelProviderSubscriptionRegion
 
 const PROVIDER_TASK_TABS: Array<{ id: ProviderTaskTab; labelKey: string }> = [
   { id: 'connection', labelKey: 'modelProviderTabConnection' },
   { id: 'models', labelKey: 'modelProviderTabModels' },
   { id: 'capabilities', labelKey: 'modelProviderTabCapabilities' },
   { id: 'advanced', labelKey: 'modelProviderTabAdvanced' }
+]
+
+const SUBSCRIPTION_REGION_TABS: Array<{
+  id: SubscriptionRegionFilter
+  labelKey: string
+}> = [
+  { id: 'all', labelKey: 'modelProviderSubscriptionRegionAll' },
+  { id: 'china', labelKey: 'modelProviderSubscriptionRegionChina' },
+  { id: 'united-states', labelKey: 'modelProviderSubscriptionRegionUnitedStates' }
 ]
 
 export function modelProvidersSettingsPatch(input: {
@@ -210,6 +226,7 @@ function cursorSubscriptionDiscoveryErrorMessage(
 function isDelegatedEndpointProvider(provider: ModelProviderProfileV1): boolean {
   return isAgentSdkProvider(provider)
     || isGeminiSubscriptionProvider(provider)
+    || isGeminiCliApiSubscriptionProvider(provider)
     || isCursorSubscriptionProvider(provider)
 }
 
@@ -365,12 +382,25 @@ function isGeminiSubscriptionProvider(provider: Pick<ModelProviderProfileV1, 'id
   return resolveModelProviderPresetSource(provider)?.preset.id === 'gemini-subscription'
 }
 
+function isGeminiCliApiSubscriptionProvider(
+  provider: Pick<ModelProviderProfileV1, 'id' | 'presetSource'>
+): boolean {
+  return resolveModelProviderPresetSource(provider)?.preset.id === 'gemini-cli-subscription'
+}
+
 function isOAuthSubscriptionProvider(provider: Pick<ModelProviderProfileV1, 'id' | 'presetSource'>): boolean {
-  return isCodexProvider(provider) || isGrokSubscriptionProvider(provider) || isGeminiSubscriptionProvider(provider)
+  return isCodexProvider(provider)
+    || isGrokSubscriptionProvider(provider)
+    || isGeminiSubscriptionProvider(provider)
+    || isGeminiCliApiSubscriptionProvider(provider)
 }
 
 function providerRequiresApiKey(provider: ModelProviderProfileV1): boolean {
-  if (isAgentSdkProvider(provider) || isGeminiSubscriptionProvider(provider)) return false
+  if (
+    isAgentSdkProvider(provider) ||
+    isGeminiSubscriptionProvider(provider) ||
+    isGeminiCliApiSubscriptionProvider(provider)
+  ) return false
   if (provider.id === DEFAULT_MODEL_PROVIDER_ID || isOAuthSubscriptionProvider(provider)) return true
   return providerPresetRequiresApiKey(provider)
 }
@@ -1025,6 +1055,117 @@ function GeminiSubscriptionSection({
   )
 }
 
+function GeminiCliApiSubscriptionSection({
+  onModelsChange,
+  t
+}: {
+  onModelsChange: (models: string[]) => void
+  t: (key: string, params?: Record<string, unknown>) => string
+}): ReactElement {
+  const [checking, setChecking] = useState(true)
+  const [syncing, setSyncing] = useState(false)
+  const [status, setStatus] = useState<{
+    installed: boolean
+    authenticated: boolean
+    path?: string
+    credentialSource?: 'keychain' | 'file'
+  } | null>(null)
+  const [notice, setNotice] = useState<InlineNotice | null>(null)
+
+  const refresh = useCallback(async (): Promise<void> => {
+    setChecking(true)
+    try {
+      setStatus(await window.kunGui.geminiCliSubscriptionStatus())
+    } catch (error) {
+      setNotice({
+        tone: 'error',
+        message: error instanceof Error ? error.message : t('geminiCliApiStatusFailed')
+      })
+    } finally {
+      setChecking(false)
+    }
+  }, [t])
+
+  useEffect(() => {
+    void refresh()
+  }, [refresh])
+
+  const syncModels = async (): Promise<void> => {
+    setSyncing(true)
+    setNotice(null)
+    try {
+      const models = await window.kunGui.geminiCliSubscriptionModels()
+      onModelsChange(models)
+      setNotice({
+        tone: 'success',
+        message: t('geminiCliApiModelsSynced', { count: models.length })
+      })
+    } catch (error) {
+      setNotice({
+        tone: 'error',
+        message: error instanceof Error ? error.message : t('geminiCliApiModelsSyncFailed')
+      })
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  const ready = status?.authenticated === true
+  return (
+    <div className="grid gap-3">
+      <p className="rounded-lg border border-ds-border bg-ds-main/30 px-3 py-2 text-[12px] leading-5 text-ds-muted">
+        {t('geminiCliApiSubscriptionNote')}
+      </p>
+      <div className="flex items-center gap-2 text-[13px] text-ds-ink">
+        {checking ? (
+          <Loader2 className="h-4 w-4 animate-spin text-ds-muted" strokeWidth={1.9} />
+        ) : ready ? (
+          <CheckCircle2 className="h-4 w-4 text-emerald-500" strokeWidth={1.9} />
+        ) : (
+          <AlertCircle className="h-4 w-4 text-amber-500" strokeWidth={1.9} />
+        )}
+        <span>
+          {checking
+            ? t('geminiCliApiChecking')
+            : ready
+              ? t('geminiCliApiReady')
+              : status?.installed
+                ? t('geminiCliApiLoginRequired')
+                : t('geminiCliApiMissing')}
+        </span>
+      </div>
+      {!checking && !ready ? (
+        <p className="text-[12px] leading-5 text-ds-muted">
+          {status?.installed
+            ? t('geminiCliApiLoginHint')
+            : t('geminiCliApiInstallHint')}
+        </p>
+      ) : null}
+      <div className="grid gap-2 sm:grid-cols-2">
+        <button
+          type="button"
+          className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-ds-border bg-ds-card px-4 py-2 text-[13px] font-medium text-ds-ink transition hover:bg-ds-hover disabled:opacity-60"
+          onClick={() => void refresh()}
+          disabled={checking}
+        >
+          {checking ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+          {t('geminiCliApiRecheck')}
+        </button>
+        <button
+          type="button"
+          className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-ds-border bg-ds-card px-4 py-2 text-[13px] font-medium text-ds-ink transition hover:bg-ds-hover disabled:opacity-60"
+          onClick={() => void syncModels()}
+          disabled={syncing}
+        >
+          {syncing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+          {t('geminiCliApiSyncModels')}
+        </button>
+      </div>
+      {notice ? <InlineNoticeView notice={notice} /> : null}
+    </div>
+  )
+}
+
 const fieldLabelClass = 'grid gap-1.5 text-[12px] font-semibold text-ds-muted'
 const textInputClass =
   'w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] font-normal text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30'
@@ -1113,6 +1254,7 @@ function CapabilitySection({
   enabledLabel,
   disabledLabel,
   needsConfigurationLabel,
+  toggleDisabled = false,
   onToggle,
   onExpandedChange,
   children
@@ -1130,6 +1272,7 @@ function CapabilitySection({
   enabledLabel: string
   disabledLabel: string
   needsConfigurationLabel: string
+  toggleDisabled?: boolean
   onToggle: (enabled: boolean) => void
   onExpandedChange: (expanded: boolean) => void
   children: ReactNode
@@ -1171,7 +1314,12 @@ function CapabilitySection({
             <SlidersHorizontal className="h-3.5 w-3.5" strokeWidth={1.9} />
             {expanded ? collapseLabel : configureLabel}
           </button>
-          <Toggle checked={enabled} onChange={onToggle} ariaLabel={title} />
+          <Toggle
+            checked={enabled}
+            onChange={onToggle}
+            disabled={toggleDisabled}
+            ariaLabel={title}
+          />
         </div>
       </div>
       {enabled && expanded ? (
@@ -1324,6 +1472,7 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
   )
   const [addMenuOpen, setAddMenuOpen] = useState(false)
   const [addProviderQuery, setAddProviderQuery] = useState('')
+  const [subscriptionRegion, setSubscriptionRegion] = useState<SubscriptionRegionFilter>('all')
   const [providerListQuery, setProviderListQuery] = useState('')
   const [activeTab, setActiveTab] = useState<ProviderTaskTab>('connection')
   const [workspaceMode, setWorkspaceMode] = useState<'providers' | 'routes'>('providers')
@@ -1406,6 +1555,7 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
 
   const openAddProviderDialog = (): void => {
     setAddProviderQuery('')
+    setSubscriptionRegion('all')
     setAddMenuOpen(true)
   }
 
@@ -1432,6 +1582,25 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
       event.preventDefault()
       first.focus()
     }
+  }
+
+  const handleSubscriptionRegionTabKeyDown = (
+    event: ReactKeyboardEvent<HTMLButtonElement>,
+    currentRegion: SubscriptionRegionFilter
+  ): void => {
+    const currentIndex = SUBSCRIPTION_REGION_TABS.findIndex((tab) => tab.id === currentRegion)
+    let nextIndex = currentIndex
+    if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % SUBSCRIPTION_REGION_TABS.length
+    else if (event.key === 'ArrowLeft') {
+      nextIndex = (currentIndex - 1 + SUBSCRIPTION_REGION_TABS.length) % SUBSCRIPTION_REGION_TABS.length
+    } else if (event.key === 'Home') nextIndex = 0
+    else if (event.key === 'End') nextIndex = SUBSCRIPTION_REGION_TABS.length - 1
+    else return
+
+    event.preventDefault()
+    setSubscriptionRegion(SUBSCRIPTION_REGION_TABS[nextIndex].id)
+    const tabs = event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]')
+    tabs?.[nextIndex]?.focus()
   }
 
   const handleProviderTabKeyDown = (
@@ -2039,9 +2208,60 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
       }))
       return
     }
-    // Subscription (agent-sdk) providers have no HTTP /models endpoint — the turn
-    // is delegated to the Claude Agent SDK. "Test" reports login readiness instead
-    // of probing api.anthropic.com, which would 401 on the x-api-key header.
+    if (isGeminiCliApiSubscriptionProvider(target)) {
+      setProbeStates((previous) => ({
+        ...previous,
+        [target.id]: { fingerprint, mode, status: 'busy' }
+      }))
+      const [statusResult, modelResult, catalogResult] = await Promise.all([
+        window.kunGui.geminiCliSubscriptionStatus()
+          .catch(() => ({ installed: false, authenticated: false })),
+        window.kunGui.geminiCliSubscriptionModels()
+          .then((modelIds) => ({ modelIds, error: undefined as string | undefined }))
+          .catch((error: unknown) => ({
+            modelIds: [] as string[],
+            error: error instanceof Error ? error.message : String(error)
+          })),
+        fetchModelsDevCatalogFor(target)
+      ])
+      const authError = statusResult.authenticated
+        ? undefined
+        : t('geminiCliApiLoginHint')
+      if (mode === 'fetch') {
+        openModelImport({
+          target,
+          fingerprint,
+          providerModelIds: modelResult.modelIds,
+          catalogResult,
+          providerError: modelResult.error ?? authError,
+          latencyMs: 0,
+          authoritative: true
+        })
+        return
+      }
+      setProbeStates((previous) => ({
+        ...previous,
+        [target.id]: statusResult.authenticated
+          ? {
+              fingerprint,
+              mode,
+              status: 'ok',
+              latencyMs: 0,
+              total: modelResult.modelIds.length
+            }
+          : {
+              fingerprint,
+              mode,
+              status: 'error',
+              message: authError
+            }
+      }))
+      return
+    }
+    // Subscription (agent-sdk) providers have no HTTP /models endpoint. Model
+    // enumeration remains a catalog operation, while Test makes a bounded real
+    // request through the official Claude transport so a non-empty/revoked token
+    // can never produce a false success state.
     if (isAgentSdkProvider(target)) {
       setProbeStates((previous) => ({
         ...previous,
@@ -2068,20 +2288,34 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
         })
         return
       }
-      // mode === 'test': report login/token readiness instead of an HTTP probe.
-      let ready = target.apiKey.trim().length > 0
-      if (!ready) {
-        try {
-          ready = (await window.kunGui.claudeSubscriptionStatus()).loggedIn
-        } catch {
-          ready = false
-        }
-      }
+      const result = await window.kunGui.claudeSubscriptionProbe(
+        target.apiKey.trim() || undefined
+      ).catch((error: unknown) => ({
+        ok: false as const,
+        message: error instanceof Error ? error.message : String(error)
+      }))
       setProbeStates((previous) => ({
         ...previous,
-        [target.id]: ready
-          ? { fingerprint, mode, status: 'ok', latencyMs: 0, total: target.models.length }
-          : { fingerprint, mode, status: 'error', message: t('claudeSubProbeNotReady') }
+        [target.id]: result.ok
+          ? {
+              fingerprint,
+              mode,
+              status: 'ok',
+              latencyMs: result.latencyMs,
+              total: target.models.length
+            }
+          : {
+              fingerprint,
+              mode,
+              status: 'error',
+              message: result.message === 'invalid-token-format'
+                ? t('claudeSubTokenInvalid')
+                : result.message === 'probe-timeout'
+                  ? t('claudeSubProbeTimeout')
+                  : result.message === 'claude-cli-not-found'
+                    ? t('claudeSubLoginFailedCli')
+                    : result.message || t('claudeSubProbeNotReady')
+            }
       }))
       return
     }
@@ -2265,7 +2499,21 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
     activeProvider?.image && !isAcceptableHttpUrl(activeProvider.image.baseUrl)
   )
   const activeSpeechBaseUrlInvalid = Boolean(
-    activeProvider?.speech && !isAcceptableHttpUrl(activeProvider.speech.baseUrl)
+    activeProvider?.speech &&
+    activeProvider.speech.protocol !== 'gemini-cli-audio' &&
+    activeProvider.speech.protocol !== 'local-whisper' &&
+    !isAcceptableHttpUrl(activeProvider.speech.baseUrl)
+  )
+  const activePresetSpeechCapability = activeProvider
+    ? presetSpeechCapability(activeProvider)
+    : null
+  const activeSpeechToggleDisabled = Boolean(
+    activePresetSpeechCapability ||
+    (
+      activeProvider &&
+      !activeProvider.speech &&
+      (isDelegatedEndpointProvider(activeProvider) || isOAuthSubscriptionProvider(activeProvider))
+    )
   )
   const activeTextToSpeechBaseUrlInvalid = Boolean(
     activeProvider?.textToSpeech && !isAcceptableHttpUrl(activeProvider.textToSpeech.baseUrl)
@@ -2358,13 +2606,15 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
       profileId: string
       label: string
       group: 'subscription' | 'api'
+      region?: ModelProviderSubscriptionRegion
     }[] = [
       {
         preset,
         mode: 'api',
         profileId: preset.id,
         label: preset.name,
-        group: preset.category === 'subscription' ? 'subscription' : 'api'
+        group: preset.category === 'subscription' ? 'subscription' : 'api',
+        region: preset.subscriptionRegion
       }
     ]
     if (preset.tokenPlan) {
@@ -2373,7 +2623,8 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
         mode: 'token-plan',
         profileId: tokenPlanProviderId(preset.id),
         label: `${preset.name} · Token Plan`,
-        group: 'subscription'
+        group: 'subscription',
+        region: preset.subscriptionRegion
       })
     }
     return entries
@@ -2384,8 +2635,12 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
         `${entry.label} ${entry.profileId}`.toLowerCase().includes(normalizedAddProviderQuery)
       )
     : addMenuEntries
-  const planAddEntries = visibleAddEntries.filter((entry) => entry.group === 'subscription')
+  const queriedPlanAddEntries = visibleAddEntries.filter((entry) => entry.group === 'subscription')
+  const planAddEntries = subscriptionRegion === 'all'
+    ? queriedPlanAddEntries
+    : queriedPlanAddEntries.filter((entry) => entry.region === subscriptionRegion)
   const apiAddEntries = visibleAddEntries.filter((entry) => entry.group === 'api')
+  const showPlanAddGroup = queriedPlanAddEntries.length > 0 || !normalizedAddProviderQuery
   const renderAddEntry = (entry: (typeof addMenuEntries)[number]): ReactElement => {
     const multiAccount = isMultiAccountProviderPreset(entry.preset, entry.mode)
     const accountCount = multiAccount
@@ -2630,6 +2885,11 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                       onModelsChange={(models) => updateModelProvider(activeProvider.id, { models })}
                       t={t}
                     />
+                  ) : isGeminiCliApiSubscriptionProvider(activeProvider) ? (
+                    <GeminiCliApiSubscriptionSection
+                      onModelsChange={(models) => updateModelProvider(activeProvider.id, { models })}
+                      t={t}
+                    />
                   ) : isCursorSubscriptionProvider(activeProvider) ? (
                     <div className="grid gap-3">
                       <div className="grid gap-2 rounded-lg border border-ds-border bg-ds-main/30 px-3 py-2 text-[12px] leading-5 text-ds-muted sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
@@ -2777,6 +3037,10 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                   ) : isGeminiSubscriptionProvider(activeProvider) ? (
                     <p className="text-[12px] leading-5 text-ds-muted">
                       {t('geminiEndpointLocked')}
+                    </p>
+                  ) : isGeminiCliApiSubscriptionProvider(activeProvider) ? (
+                    <p className="text-[12px] leading-5 text-ds-muted">
+                      {t('geminiCliApiEndpointLocked')}
                     </p>
                   ) : isCursorSubscriptionProvider(activeProvider) ? (
                     <p className="text-[12px] leading-5 text-ds-muted">
@@ -3038,6 +3302,7 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                   enabledLabel={t('modelProviderCapabilityEnabled')}
                   disabledLabel={t('modelProviderCapabilityDisabled')}
                   needsConfigurationLabel={t('modelProviderNeedsConfiguration')}
+                  toggleDisabled={activeSpeechToggleDisabled}
                   onExpandedChange={(expanded) => setCapabilityExpanded('speech', expanded)}
                   onToggle={(value) => {
                     if (value) {
@@ -3463,13 +3728,44 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                 </span>
                 <Plus className="h-4 w-4 shrink-0 text-accent" strokeWidth={2} />
               </button>
-              {planAddEntries.length > 0 ? (
+              {showPlanAddGroup ? (
                 <div className="mb-5 grid gap-2">
-                  <div className="flex items-center gap-2 px-1">
-                    <h3 className="text-[12px] font-semibold text-ds-muted">{t('modelProviderGroupPlans')}</h3>
-                    <span className="text-[11px] text-ds-faint">{planAddEntries.length}</span>
+                  <div className="flex flex-wrap items-center gap-2 px-1">
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-[12px] font-semibold text-ds-muted">{t('modelProviderGroupPlans')}</h3>
+                      <span className="text-[11px] text-ds-faint">{planAddEntries.length}</span>
+                    </div>
+                    <div
+                      role="tablist"
+                      aria-label={t('modelProviderSubscriptionRegions')}
+                      className="inline-flex items-center rounded-lg border border-ds-border-muted bg-ds-main/70 p-0.5"
+                    >
+                      {SUBSCRIPTION_REGION_TABS.map((tab) => {
+                        const selected = subscriptionRegion === tab.id
+                        return (
+                          <button
+                            key={tab.id}
+                            type="button"
+                            role="tab"
+                            aria-selected={selected}
+                            tabIndex={selected ? 0 : -1}
+                            onClick={() => setSubscriptionRegion(tab.id)}
+                            onKeyDown={(event) => handleSubscriptionRegionTabKeyDown(event, tab.id)}
+                            className={`min-w-12 rounded-md border px-2.5 py-1 text-[11.5px] font-medium leading-none transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 ${
+                              selected
+                                ? 'border-accent/25 bg-accent/10 text-accent shadow-sm'
+                                : 'border-transparent text-ds-faint hover:bg-ds-card hover:text-ds-muted'
+                            }`}
+                          >
+                            {t(tab.labelKey)}
+                          </button>
+                        )
+                      })}
+                    </div>
                   </div>
-                  <div className="grid gap-2 sm:grid-cols-2">{planAddEntries.map(renderAddEntry)}</div>
+                  {planAddEntries.length > 0 ? (
+                    <div className="grid gap-2 sm:grid-cols-2">{planAddEntries.map(renderAddEntry)}</div>
+                  ) : null}
                 </div>
               ) : null}
               {apiAddEntries.length > 0 ? (

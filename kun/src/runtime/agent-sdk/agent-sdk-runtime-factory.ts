@@ -10,8 +10,16 @@ import {
   type SdkTurnContext
 } from './agent-sdk-runtime.js'
 import type { SdkStreamResourceLimits } from './sdk-event-mapper.js'
-import { resolveSdkModel, type ToolApprovalDecision } from './sdk-options-builder.js'
-import type { BridgeableTool, KunToolResult } from './sdk-tool-bridge.js'
+import {
+  normalizeClaudeOAuthToken,
+  resolveSdkModel,
+  type ToolApprovalDecision
+} from './sdk-options-builder.js'
+import {
+  selectBridgeableTools,
+  type BridgeableTool,
+  type KunToolResult
+} from './sdk-tool-bridge.js'
 import type { SdkApi } from './sdk-protocol.js'
 import type { RuntimeEventRecorder } from '../../services/runtime-event-recorder.js'
 import type { LlmDebugSink } from '../../services/llm-debug-recorder.js'
@@ -69,6 +77,12 @@ import {
   type DelegatedSessionCoordinator,
   type DelegatedSessionPreparation
 } from '../delegated-session-binding.js'
+
+const CLAUDE_KUN_TOOL_INSTRUCTION = [
+  'Kun-managed capabilities are available through the mcp__kun__ tools.',
+  'Use these tools for Kun capabilities such as MCP, extensions, skills, memory, media, GUI input, and delegation.',
+  'Their execution remains governed by Kun ToolHost approval and sandbox policy.'
+].join(' ')
 
 export interface AgentSdkRuntimeFactoryDeps {
   registry: CapabilityRegistry
@@ -530,7 +544,11 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
 
       const providerId = turn?.providerId?.trim() || thread.providerId?.trim()
       const providerCfg = providerId ? deps.providerConfigs[providerId] : undefined
-      const token = providerCfg?.apiKey?.trim() || deps.defaultToken?.trim()
+      // An explicit Claude provider owns its credential boundary. Empty means
+      // ambient Claude Code login; it must never inherit another provider's key.
+      const token = normalizeClaudeOAuthToken(
+        providerId ? providerCfg?.apiKey : deps.defaultToken
+      )
       // Resolve skills before listing bridgeable tools. Some managed tools
       // (notably PPT Master) are deliberately advertised only for an active
       // skill, and the SDK must see the same per-turn catalog as the native
@@ -591,11 +609,19 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
         sandboxMode: thread.sandboxMode ?? deps.defaultSandboxMode,
         awaitUserInput: makeAwaitUserInput(threadId, turnId, new AbortController().signal)
       })
+      if (deps.toolHost) {
+        // Activate turn-scoped extension contributions before taking the
+        // canonical registry snapshot used by the SDK MCP bridge.
+        await deps.toolHost.listTools(bridgeListingContext)
+      }
       const bridgeableTools: BridgeableTool[] = deps.registry.listTools(bridgeListingContext).map((spec) => ({
         name: spec.name,
         description: spec.description,
-        inputSchema: spec.inputSchema
+        inputSchema: spec.inputSchema,
+        providerId: spec.providerId,
+        providerKind: spec.providerKind
       }))
+      const bridgedTools = selectBridgeableTools(bridgeableTools)
 
       // This is the portable rebase handoff. Compatible consecutive turns use
       // the official SDK resume id and do not send this transcript again.
@@ -645,7 +671,8 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
         ...(todoInstruction ? [todoInstruction] : []),
         ...memoryBlocks,
         ...(skillResolution?.catalogInstruction ? [skillResolution.catalogInstruction] : []),
-        ...(skillResolution?.instructions ?? [])
+        ...(skillResolution?.instructions ?? []),
+        ...(bridgedTools.length ? [CLAUDE_KUN_TOOL_INSTRUCTION] : [])
       ]
 
       const model = resolveSdkModel(turn?.model || thread.model, deps.defaultModel)
@@ -678,10 +705,12 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
                   ? false
                   : deps.allowSdkBuiltins ?? true,
               capabilities: agentSdkCapabilities(),
-              tools: bridgeableTools.map((tool) => ({
+              tools: bridgedTools.map((tool) => ({
                 name: tool.name,
                 description: tool.description,
-                inputSchema: tool.inputSchema
+                inputSchema: tool.inputSchema,
+                providerId: tool.providerId,
+                providerKind: tool.providerKind
               }))
             }),
             continuationMode: 'native'

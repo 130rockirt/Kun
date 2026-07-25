@@ -10,6 +10,14 @@ function settings(kunPatch: Partial<KunRuntimeSettingsV1> = {}): AppSettingsV1 {
   } as unknown as AppSettingsV1)
 }
 
+describe('coerceRendererSettings', () => {
+  it('preserves the persisted initial setup completion flag', () => {
+    expect(coerceRendererSettings({
+      initialSetupCompleted: true
+    } as AppSettingsV1).initialSetupCompleted).toBe(true)
+  })
+})
+
 describe('diffSettingsPatch', () => {
   it('omits an unchanged blank runtime token when another setting changes', () => {
     const base = settings({ runtimeToken: '' })

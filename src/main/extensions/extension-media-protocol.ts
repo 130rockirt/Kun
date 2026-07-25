@@ -14,6 +14,7 @@ import type {
   ExtensionViewSessionRegistry
 } from './extension-view-sessions'
 import { KUN_EXTENSION_PRIVILEGED_SCHEME } from './extension-resource-protocol'
+import { KUN_WORKSPACE_PREVIEW_PRIVILEGED_SCHEME } from '../services/workspace-preview-protocol'
 
 export const KUN_MEDIA_SCHEME = 'kun-media'
 
@@ -124,7 +125,8 @@ export function registerKunMediaSchemeAsPrivileged(protocol: SchemeRegistrar): v
 export function registerKunExtensionPlatformSchemesAsPrivileged(protocol: SchemeRegistrar): void {
   protocol.registerSchemesAsPrivileged([
     KUN_EXTENSION_PRIVILEGED_SCHEME,
-    KUN_MEDIA_PRIVILEGED_SCHEME
+    KUN_MEDIA_PRIVILEGED_SCHEME,
+    KUN_WORKSPACE_PREVIEW_PRIVILEGED_SCHEME
   ])
 }
 

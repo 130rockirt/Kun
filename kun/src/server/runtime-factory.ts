@@ -13,6 +13,7 @@ import { InMemoryEventBus } from '../adapters/in-memory-event-bus.js'
 import { FileSessionStore, FileThreadStore } from '../adapters/file/index.js'
 import { HybridSessionStore, HybridThreadStore } from '../adapters/hybrid/index.js'
 import { CompatModelClient } from '../adapters/model/compat-model-client.js'
+import { GeminiCliApiModelClient } from '../adapters/model/gemini-cli-api-model-client.js'
 import { ExtensionModelProviderRegistry } from '../adapters/model/extension-model-provider.js'
 import { MultiProviderModelClient } from '../adapters/model/multi-provider-model-client.js'
 import { RoutePoolHealthStore, RoutePoolModelClient } from '../adapters/model/route-pool-model-client.js'
@@ -26,9 +27,9 @@ import {
   type AntigravityCliRuntimeDeps
 } from '../runtime/antigravity/antigravity-cli-runtime.js'
 import {
-  CursorSdkRuntime,
-  type CursorSdkRuntimeDeps
-} from '../runtime/cursor/cursor-sdk-runtime.js'
+  createCursorSdkRuntime,
+  type CursorSdkRuntimeFactoryDeps
+} from '../runtime/cursor/cursor-sdk-runtime-factory.js'
 import { composeDelegatedTurnRuntimes } from '../runtime/delegated-turn-runtime.js'
 import {
   DelegatedSessionCoordinator,
@@ -783,12 +784,16 @@ export async function createKunServeRuntime(
         })]
       : []),
     ...(cursorSdkProviderIds.size > 0 || defaultIsCursorSdk
-      ? [new CursorSdkRuntime({
+      ? [createCursorSdkRuntime({
+          registry: childRegistry,
+          toolHost: childToolHost,
           providerConfigs: activeOptions.providers ?? {},
           providerIds: cursorSdkProviderIds,
           defaultIsCursor: defaultIsCursorSdk,
           defaultApiKey: activeOptions.apiKey,
           defaultModel: activeOptions.model,
+          defaultApprovalPolicy: activeOptions.approvalPolicy,
+          defaultSandboxMode: activeOptions.sandboxMode,
           systemPrompt: child.prefix.systemPrompt,
           threadStore: child.threadStore,
           sessionStore: child.sessionStore,
@@ -799,6 +804,18 @@ export async function createKunServeRuntime(
           ...(attachmentStore ? { attachmentStore } : {}),
           turnLimits: activeOptions.runtime?.turnLimits,
           enforceReadOnly: child.toolPolicy === 'readOnly',
+          approvalGate,
+          instructionRuntime,
+          toolContextBoundary: {
+            ...(child.allowedProviderIds ? { allowedProviderIds: child.allowedProviderIds } : {}),
+            ...(child.allowedToolNames ? { allowedToolNames: child.allowedToolNames } : {}),
+            ...(child.blockedProviderIds ? { blockedProviderIds: child.blockedProviderIds } : {}),
+            ...(child.blockedToolNames ? { blockedToolNames: child.blockedToolNames } : {}),
+            ...(child.blockedSkillIds ? { blockedSkillIds: child.blockedSkillIds } : {})
+          },
+          ...(child.skillsEnabled ? { skillRuntime } : {}),
+          ...(child.memoryEnabled && memoryStore ? { memoryStore } : {}),
+          nowIso,
           sessionCoordinator: delegatedSessions,
           contextProfile: delegatedContextProfile
         })]
@@ -1011,14 +1028,18 @@ export async function createKunServeRuntime(
 	      contextProfile: delegatedContextProfile
 	    }
 	  }
-	  let cursorRuntimeDeps: CursorSdkRuntimeDeps | undefined
+	  let cursorRuntimeDeps: CursorSdkRuntimeFactoryDeps | undefined
 	  if (cursorSdkProviderIds.size > 0 || defaultIsCursorSdk) {
 	    cursorRuntimeDeps = {
+	      registry,
+	      toolHost,
 	      providerConfigs: activeOptions.providers ?? {},
 	      providerIds: cursorSdkProviderIds,
 	      defaultIsCursor: defaultIsCursorSdk,
 	      defaultApiKey: activeOptions.apiKey,
 	      defaultModel: activeOptions.model,
+	      defaultApprovalPolicy: activeOptions.approvalPolicy,
+	      defaultSandboxMode: activeOptions.sandboxMode,
 	      systemPrompt: prefix.systemPrompt,
 	      threadStore,
 	      sessionStore,
@@ -1026,6 +1047,12 @@ export async function createKunServeRuntime(
 	      events,
 	      ids,
 	      debugSink: llmDebug,
+	      approvalGate,
+	      userInputGate,
+	      skillRuntime,
+	      instructionRuntime,
+	      nowIso,
+	      ...(memoryStore ? { memoryStore } : {}),
 	      ...(attachmentStore ? { attachmentStore } : {}),
 	      turnLimits: activeOptions.runtime?.turnLimits,
 	      sessionCoordinator: delegatedSessions,
@@ -1046,7 +1073,7 @@ export async function createKunServeRuntime(
 	  const sdkRuntime = composeDelegatedTurnRuntimes([
 	    ...(sdkRuntimeDeps ? [createAgentSdkRuntime(sdkRuntimeDeps)] : []),
 	    ...(antigravityRuntimeDeps ? [new AntigravityCliRuntime(antigravityRuntimeDeps)] : []),
-	    ...(cursorRuntimeDeps ? [new CursorSdkRuntime(cursorRuntimeDeps)] : [])
+	    ...(cursorRuntimeDeps ? [createCursorSdkRuntime(cursorRuntimeDeps)] : [])
 	  ])
 	  const loopOptions: AgentLoopOptions = {
 	    threadStore,
@@ -2115,46 +2142,63 @@ function buildModelClientRouterInput(
     options.runtime?.streamIdleTimeoutMs !== undefined
       ? { streamIdleTimeoutMs: options.runtime.streamIdleTimeoutMs }
       : {}
-  const defaultClient: ModelClient = new CompatModelClient({
-    baseUrl: options.baseUrl,
-    apiKey: options.apiKey,
-    modelProxyUrl: options.modelProxyUrl,
-    endpointFormat: options.endpointFormat ?? DEFAULT_MODEL_ENDPOINT_FORMAT,
-    retry: options.retry,
-    model: options.model,
-    modelCapabilities,
-    headers: options.headers,
-    ...(options.credentialSourceId && credentialResolver
-      ? {
-          resolveCredentials: (rejectedAccessToken?: string) =>
-            credentialResolver(options.credentialSourceId!, rejectedAccessToken)
-        }
-      : {}),
-    ...(llmDebug ? { debugSink: llmDebug } : {}),
-    ...streamIdleOverride
-  })
+  const defaultClient: ModelClient =
+    process.env.KUN_RUNTIME_PROVIDER_KIND === 'gemini-cli-api'
+      ? new GeminiCliApiModelClient({
+          model: options.model,
+          modelProxyUrl: options.modelProxyUrl,
+          retry: options.retry,
+          ...(llmDebug ? { debugSink: llmDebug } : {})
+        })
+      : new CompatModelClient({
+          baseUrl: options.baseUrl,
+          apiKey: options.apiKey,
+          modelProxyUrl: options.modelProxyUrl,
+          endpointFormat: options.endpointFormat ?? DEFAULT_MODEL_ENDPOINT_FORMAT,
+          retry: options.retry,
+          model: options.model,
+          modelCapabilities,
+          headers: options.headers,
+          ...(options.credentialSourceId && credentialResolver
+            ? {
+                resolveCredentials: (rejectedAccessToken?: string) =>
+                  credentialResolver(options.credentialSourceId!, rejectedAccessToken)
+              }
+            : {}),
+          ...(llmDebug ? { debugSink: llmDebug } : {}),
+          ...streamIdleOverride
+        })
   const providerClients = new Map<string, ModelClient>()
   for (const [providerId, provider] of Object.entries(options.providers ?? {})) {
     const trimmedId = providerId.trim()
-    if (!trimmedId || (provider.kind ?? 'http') !== 'http') continue
-    const client: ModelClient = new CompatModelClient({
-      baseUrl: provider.baseUrl ?? options.baseUrl ?? '',
-      apiKey: provider.apiKey,
-      modelProxyUrl: provider.modelProxyUrl ?? options.modelProxyUrl,
-      endpointFormat: provider.endpointFormat ?? options.endpointFormat ?? DEFAULT_MODEL_ENDPOINT_FORMAT,
-      retry: provider.retry ?? options.retry,
-      model: options.model,
-      modelCapabilities,
-      headers: provider.headers,
-      ...(provider.credentialSourceId && credentialResolver
-        ? {
-            resolveCredentials: (rejectedAccessToken?: string) =>
-              credentialResolver(provider.credentialSourceId!, rejectedAccessToken)
-          }
-        : {}),
-      ...(llmDebug ? { debugSink: llmDebug } : {}),
-      ...streamIdleOverride
-    })
+    if (!trimmedId) continue
+    const kind = provider.kind ?? 'http'
+    if (kind !== 'http' && kind !== 'gemini-cli-api') continue
+    const client: ModelClient = kind === 'gemini-cli-api'
+      ? new GeminiCliApiModelClient({
+          model: options.model,
+          modelProxyUrl: provider.modelProxyUrl ?? options.modelProxyUrl,
+          retry: provider.retry ?? options.retry,
+          ...(llmDebug ? { debugSink: llmDebug } : {})
+        })
+      : new CompatModelClient({
+          baseUrl: provider.baseUrl ?? options.baseUrl ?? '',
+          apiKey: provider.apiKey,
+          modelProxyUrl: provider.modelProxyUrl ?? options.modelProxyUrl,
+          endpointFormat: provider.endpointFormat ?? options.endpointFormat ?? DEFAULT_MODEL_ENDPOINT_FORMAT,
+          retry: provider.retry ?? options.retry,
+          model: options.model,
+          modelCapabilities,
+          headers: provider.headers,
+          ...(provider.credentialSourceId && credentialResolver
+            ? {
+                resolveCredentials: (rejectedAccessToken?: string) =>
+                  credentialResolver(provider.credentialSourceId!, rejectedAccessToken)
+              }
+            : {}),
+          ...(llmDebug ? { debugSink: llmDebug } : {}),
+          ...streamIdleOverride
+        })
     providerClients.set(trimmedId, client)
   }
   return { default: defaultClient, providers: providerClients }

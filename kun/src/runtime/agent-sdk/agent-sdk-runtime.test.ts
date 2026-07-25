@@ -315,12 +315,15 @@ describe('AgentSdkRuntime.runTurn', () => {
         workspace: '/ws',
         userText: 'inspect this turn',
         approvalPolicy: 'auto',
-        oauthToken: 'claude-oauth-secret',
+        oauthToken: 'sk-ant-oat01-claude-oauth-secret',
         images: [{ mediaType: 'image/png', base64: 'private-image-bytes' }],
+        contextInstructions: ['Workspace AGENTS.md instruction'],
         bridgeableTools: [{
           name: 'generate_image',
           description: 'Generate an image',
-          inputSchema: { type: 'object' }
+          inputSchema: { type: 'object' },
+          providerId: 'image:primary',
+          providerKind: 'image'
         }]
       }),
       loadSdk: async () => fakeSdk(STREAM)
@@ -347,6 +350,11 @@ describe('AgentSdkRuntime.runTurn', () => {
         method: 'SDK',
         url: 'agent-sdk://local/query'
       },
+      toolCatalog: [{
+        name: 'mcp__kun__generate_image',
+        providerId: 'image:primary',
+        providerKind: 'image'
+      }],
       decoded: {
         text: 'Hi there',
         toolCalls: [{
@@ -366,6 +374,13 @@ describe('AgentSdkRuntime.runTurn', () => {
     expect(serialized).not.toContain('private-image-bytes')
     expect(serialized).not.toContain('sess_42')
     expect(JSON.parse(trace!.request.body.text)).toMatchObject({
+      system: 'You are kun.',
+      instructions: ['Workspace AGENTS.md instruction'],
+      tools: [{
+        name: 'mcp__kun__generate_image',
+        description: 'Generate an image',
+        input_schema: { type: 'object' }
+      }],
       attachments: {
         count: 1,
         images: [{ mediaType: 'image/png' }]
@@ -1223,6 +1238,77 @@ describe('AgentSdkRuntime.runTurn', () => {
     expect(status).toBe('failed')
     expect(events.some((e) => e.kind === 'error')).toBe(true)
     expect(finished[0]).toMatchObject({ status: 'failed' })
+  })
+
+  test('redacts a Claude credential from Agent Perspective and conversation failures', async () => {
+    const token = 'sk-ant-oat01-private-auth-token'
+    const debugSink = new LlmDebugRecorder()
+    const { deps, events, finished } = makeDeps({
+      debugSink,
+      loadTurnContext: async () => ({
+        workspace: '/ws',
+        userText: 'authenticate',
+        approvalPolicy: 'auto',
+        oauthToken: token,
+        bridgeableTools: []
+      }),
+      loadSdk: async () => ({
+        query: () => {
+          throw new Error(`Failed to authenticate: 401 Invalid Bearer ${token}`)
+        },
+        createSdkMcpServer: () => ({ type: 'sdk', name: 'kun', instance: {} }),
+        tool: () => ({})
+      })
+    })
+
+    await expect(new AgentSdkRuntime(deps).runTurn(
+      'th',
+      'tn',
+      new AbortController().signal
+    )).resolves.toBe('failed')
+
+    const diagnostics = JSON.stringify({
+      events,
+      finished,
+      perspective: debugSink.snapshot()
+    })
+    expect(diagnostics).toContain('401 Invalid Bearer [REDACTED]')
+    expect(diagnostics).not.toContain(token)
+  })
+
+  test('redacts credentials from a terminal SDK error result', async () => {
+    const token = 'sk-ant-oat01-terminal-result-secret'
+    const debugSink = new LlmDebugRecorder()
+    const { deps, finished } = makeDeps({
+      debugSink,
+      loadTurnContext: async () => ({
+        workspace: '/ws',
+        userText: 'authenticate',
+        approvalPolicy: 'auto',
+        oauthToken: token,
+        bridgeableTools: []
+      }),
+      loadSdk: async () => fakeSdk([{
+        type: 'result',
+        subtype: 'error_during_execution',
+        is_error: true,
+        result: `Invalid Bearer ${token}`,
+        num_turns: 1
+      } as SdkMessage])
+    })
+
+    await expect(new AgentSdkRuntime(deps).runTurn(
+      'th',
+      'tn',
+      new AbortController().signal
+    )).resolves.toBe('failed')
+
+    const diagnostics = JSON.stringify({
+      finished,
+      perspective: debugSink.snapshot()
+    })
+    expect(diagnostics).toContain('Invalid Bearer [REDACTED]')
+    expect(diagnostics).not.toContain(token)
   })
 
   test('forwards image attachments as a structured user message (text + image block)', async () => {

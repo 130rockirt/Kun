@@ -15,6 +15,8 @@ import {
   defaultModelProviderSettings,
   defaultScheduleSettings,
   defaultWorkflowSettings,
+  getModelProviderPreset,
+  modelProviderPresetProfile,
   resolveKunRuntimeSettings,
   defaultWriteSettings,
   defaultTerminalSettings,
@@ -518,6 +520,39 @@ describe('parseListeningPidsFromNetstat', () => {
 })
 
 describe('syncGuiManagedKunConfig', () => {
+  it('exports provider model profiles even when the runtime snapshot is stale', async () => {
+    if (!tempRoot) throw new Error('temp root not initialized')
+    const configPath = join(tempRoot, 'config.json')
+    const module = await import('./kun-process')
+    const settings = createSettings('/tmp/fake-kun-child.js')
+    const preset = getModelProviderPreset('gemini-cli-subscription')
+    if (!preset) throw new Error('Gemini CLI subscription preset is missing')
+    const geminiProvider = modelProviderPresetProfile(preset, '')
+    settings.provider.providers.push(geminiProvider)
+    settings.agents.kun = {
+      ...settings.agents.kun,
+      providerId: geminiProvider.id,
+      model: 'gemini-2.5-flash',
+      modelProfiles: {}
+    }
+
+    await module.syncGuiManagedKunConfig(tempRoot, settings.agents.kun, {
+      scheduleMcp: {
+        settings,
+        launch: {
+          appPath: '/tmp/deepseek-gui-test-app',
+          execPath: '/tmp/electron',
+          isPackaged: false
+        }
+      }
+    })
+
+    const parsed = JSON.parse(readFileSync(configPath, 'utf8')) as any
+    expect(parsed.models.profiles['gemini-2.5-flash']).toMatchObject({
+      contextWindowTokens: 1_048_576
+    })
+  })
+
   it('creates GUI-managed config with attachments enabled for image paste/upload', async () => {
     if (!tempRoot) throw new Error('temp root not initialized')
     const configPath = join(tempRoot, 'config.json')

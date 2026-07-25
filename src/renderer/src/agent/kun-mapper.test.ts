@@ -273,7 +273,32 @@ describe('create_plan tool mapping', () => {
       message: 'model stream exploded',
       severity: 'error'
     })
-    expect(capturedErrorOptions).toEqual({ terminal: true })
+    expect(capturedErrorOptions).toEqual({ terminal: true, scope: 'conversation' })
+  })
+
+  it('settles message-less turn failures without adding a generic duplicate error', async () => {
+    let capturedErrorOptions: ThreadErrorOptions | null = null
+    let runtimeErrorCount = 0
+    const sink: ThreadEventSink = {
+      ...makeSink(),
+      onRuntimeError: () => {
+        runtimeErrorCount += 1
+      },
+      onError: (_error, options) => {
+        capturedErrorOptions = options ?? null
+      }
+    }
+
+    await dispatchKunRuntimeEvent({
+      kind: 'turn_failed',
+      seq: 8,
+      timestamp: '2024-01-01T00:00:00.000Z',
+      threadId: 'thr_1',
+      turnId: 'turn_1'
+    }, sink, async () => undefined)
+
+    expect(runtimeErrorCount).toBe(0)
+    expect(capturedErrorOptions).toEqual({ terminal: true, scope: 'conversation' })
   })
 
   it('does not finish the parent turn for child lifecycle events', async () => {

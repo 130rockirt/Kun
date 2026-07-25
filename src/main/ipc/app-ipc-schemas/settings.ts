@@ -13,6 +13,7 @@ import {
   MAX_WRITE_AUTOSAVE_DELAY_MS,
   MIN_WRITE_AUTOSAVE_DELAY_MS,
   MIN_KUN_LOCAL_PORT,
+  KUN_CONTEXT_COMPACTION_DEFAULTS_VERSION,
   SCHEDULE_MODEL_IDS,
   SCHEDULE_REASONING_EFFORT_IDS,
   SPEECH_TO_TEXT_PROTOCOLS,
@@ -139,7 +140,14 @@ const modelProviderPatchSchema = z.object({
       initialDelayMs: z.number().int().min(0).max(600_000).optional(),
       httpStatusCodes: z.array(z.number().int().min(400).max(599)).max(64).optional()
     }).strict().optional(),
-    kind: z.enum(['http', 'agent-sdk', 'antigravity-cli', 'cursor-sdk', 'gemini-code-assist']).optional(),
+    kind: z.enum([
+      'http',
+      'agent-sdk',
+      'antigravity-cli',
+      'gemini-cli-api',
+      'cursor-sdk',
+      'gemini-code-assist'
+    ]).optional(),
     // Some third-party aggregators (litellm, oneapi, …) advertise 500+ chat
     // models in a single /v1/models response. The previous 200/50 caps caused
     // settings:set to silently fail with no toast (#397). Raised to leave
@@ -302,6 +310,7 @@ const kunRuntimePatchSchema = z.object({
     sqlitePath: defaultPathSchema
   }).strict().optional(),
   contextCompaction: z.object({
+    defaultsVersion: z.number().int().positive().max(KUN_CONTEXT_COMPACTION_DEFAULTS_VERSION).optional(),
     defaultSoftThreshold: z.number().int().positive().optional(),
     defaultHardThreshold: z.number().int().positive().optional(),
     summaryMode: kunCompactionSummaryModeSchema.optional(),
@@ -1300,6 +1309,7 @@ function stripLegacySettingsPatchKeys(payload: unknown): unknown {
 
 const settingsPatchObjectSchema = z.object({
   version: z.literal(1).optional(),
+  initialSetupCompleted: z.boolean().optional(),
   locale: localeSchema.optional(),
   theme: themeSchema.optional(),
   uiFontScale: uiFontScaleSchema.optional(),

@@ -228,11 +228,12 @@ describe('JSON workspace preview', () => {
     expect(isJsonPreviewPath('/repo/config.json.bak')).toBe(false)
   })
 
-  it('renders JSON as an editor and saves changed content', async () => {
+  it('edits JSON through the shared text editor and saves with its disk version', async () => {
     const writeWorkspaceFile = vi.fn(async (payload: { path: string }) => ({
       ok: true as const,
       path: payload.path,
-      savedAt: new Date().toISOString()
+      savedAt: new Date().toISOString(),
+      mtimeMs: 200
     }))
     vi.stubGlobal('window', {
       kunGui: {
@@ -242,6 +243,7 @@ describe('JSON workspace preview', () => {
           path: '/repo/package.json',
           content: '{\n  "name": "before"\n}',
           size: 22,
+          mtimeMs: 100,
           truncated: false
         })),
         writeWorkspaceFile
@@ -266,17 +268,22 @@ describe('JSON workspace preview', () => {
       }))
     })
 
+    const editButton = renderer.root.findAllByType('button').find(
+      (button) => button.props['aria-label'] === 'filePreviewEditText'
+    )!
+    await act(async () => editButton.props.onClick())
     const editor = renderer.root.findByType('textarea')
     await act(async () => editor.props.onChange({ target: { value: '{\n  "name": "after"\n}' } }))
     const saveButton = renderer.root.findAllByType('button').find(
-      (button) => button.props['aria-label'] === 'filePreviewSaveJson'
+      (button) => button.props['aria-label'] === 'filePreviewSaveText'
     )!
     await act(async () => saveButton.props.onClick())
 
     expect(writeWorkspaceFile).toHaveBeenCalledWith({
       path: '/repo/package.json',
       workspaceRoot: '/repo',
-      content: '{\n  "name": "after"\n}'
+      content: '{\n  "name": "after"\n}',
+      expectedMtimeMs: 100
     })
     await act(async () => renderer.unmount())
   })

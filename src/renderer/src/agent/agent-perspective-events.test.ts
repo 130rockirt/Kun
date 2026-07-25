@@ -178,6 +178,119 @@ describe('Agent Perspective semantic projection', () => {
     })
   })
 
+  it('extracts the nested Gemini CLI Code Assist request without exposing binary or signature data', () => {
+    const parsed = parseSemanticRequest(trace('1', {
+      model: 'gemini-3-flash-preview',
+      project: 'managed-project',
+      user_prompt_id: 'prompt-1',
+      request: {
+        systemInstruction: {
+          role: 'user',
+          parts: [{ text: 'Kun Gemini system prompt.' }]
+        },
+        contents: [{
+          role: 'user',
+          parts: [
+            { text: 'Inspect the Gemini request' },
+            { inlineData: { mimeType: 'image/png', data: 'secret-base64-image' } }
+          ]
+        }, {
+          role: 'model',
+          parts: [{
+            functionCall: {
+              id: 'gemini-call-1',
+              name: 'read_file',
+              args: { path: 'package.json' }
+            },
+            thoughtSignature: 'secret-thought-signature'
+          }]
+        }, {
+          role: 'user',
+          parts: [{
+            functionResponse: {
+              id: 'gemini-call-1',
+              name: 'read_file',
+              response: { output: '{"name":"kun"}' }
+            }
+          }]
+        }],
+        tools: [{
+          functionDeclarations: [{
+            name: 'read_file',
+            description: 'Read a file',
+            parametersJsonSchema: {
+              type: 'object',
+              properties: { path: { type: 'string' } }
+            }
+          }]
+        }],
+        toolConfig: { functionCallingConfig: { mode: 'AUTO' } },
+        generationConfig: {
+          maxOutputTokens: 256,
+          thinkingConfig: { thinkingBudget: 8_192, includeThoughts: true }
+        },
+        session_id: 'thread-1'
+      }
+    }, {
+      provider: 'gemini-cli-subscription',
+      model: 'gemini-3-flash-preview',
+      endpointFormat: 'gemini-cli-api',
+      toolCatalog: [{
+        name: 'read_file',
+        providerKind: 'built-in',
+        providerId: 'builtin'
+      }]
+    }))
+
+    expect(parsed).toMatchObject({
+      model: 'gemini-3-flash-preview',
+      prompts: [{
+        id: 'systemInstruction',
+        source: 'system',
+        text: 'Kun Gemini system prompt.'
+      }],
+      tools: [{
+        name: 'read_file',
+        description: 'Read a file',
+        inputSchema: expect.objectContaining({ type: 'object' }),
+        provenance: { source: 'kun', inferred: false }
+      }],
+      messages: [
+        {
+          role: 'user',
+          text: 'Inspect the Gemini request\n[inline data: image/png]'
+        },
+        {
+          role: 'assistant',
+          callId: 'gemini-call-1',
+          name: 'read_file',
+          kind: 'function_call'
+        },
+        {
+          role: 'tool',
+          callId: 'gemini-call-1',
+          name: 'read_file',
+          kind: 'function_call_output'
+        }
+      ]
+    })
+    expect(parsed.parameters.map((parameter) => parameter.name)).toEqual([
+      'project',
+      'user_prompt_id',
+      'toolConfig',
+      'generationConfig',
+      'session_id'
+    ])
+    const semanticText = JSON.stringify({
+      prompts: parsed.prompts,
+      tools: parsed.tools,
+      messages: parsed.messages,
+      parameters: parsed.parameters
+    })
+    expect(semanticText).not.toContain('secret-base64-image')
+    expect(semanticText).not.toContain('secret-thought-signature')
+  })
+
   it('uses exactly the three supported event classes and matches tool results by call id', () => {
     const first = trace('1', {
       model: 'gpt-test',
@@ -309,6 +422,155 @@ describe('Agent Perspective semantic projection', () => {
         text: 'README content',
         kind: 'tool_result'
       }
+    })
+  })
+
+  it('projects Claude SDK Kun MCP instructions and original tool provenance', () => {
+    const claude = trace('claude-kun-tools', {
+      model: 'claude-sonnet-4-5',
+      system: 'Kun canonical system prompt.',
+      instructions: ['Workspace AGENTS.md instruction.'],
+      input: 'Use the configured Kun tools.',
+      tools: [{
+        name: 'mcp__kun__mcp_docs_lookup',
+        description: 'Look up MCP docs',
+        input_schema: { type: 'object' }
+      }, {
+        name: 'mcp__kun__extension_render',
+        description: 'Render through a Kun extension',
+        input_schema: { type: 'object' }
+      }]
+    }, {
+      transport: 'sdk',
+      endpointFormat: 'agent-sdk',
+      toolCatalog: [{
+        name: 'mcp__kun__mcp_docs_lookup',
+        providerKind: 'mcp',
+        providerId: 'mcp:docs'
+      }, {
+        name: 'mcp__kun__extension_render',
+        providerKind: 'extension',
+        providerId: 'extension:demo'
+      }],
+      decoded: {
+        text: 'done',
+        reasoning: '',
+        toolCalls: [{
+          callId: 'sdk-call-extension',
+          toolName: 'mcp__kun__extension_render',
+          arguments: {}
+        }],
+        toolResults: []
+      }
+    })
+
+    const semantic = parseSemanticRequest(claude)
+    expect(semantic.prompts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ source: 'system', text: 'Kun canonical system prompt.' }),
+      expect.objectContaining({ source: 'instructions', text: 'Workspace AGENTS.md instruction.' })
+    ]))
+    expect(semantic.tools).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: 'mcp__kun__mcp_docs_lookup',
+        provenance: expect.objectContaining({
+          source: 'mcp',
+          providerId: 'mcp:docs',
+          inferred: false
+        })
+      }),
+      expect.objectContaining({
+        name: 'mcp__kun__extension_render',
+        provenance: expect.objectContaining({
+          source: 'extension',
+          providerId: 'extension:demo',
+          inferred: false
+        })
+      })
+    ]))
+    expect(projectAgentPerspectiveEvents([claude])).toContainEqual(expect.objectContaining({
+      kind: 'tool_call',
+      toolName: 'mcp__kun__extension_render',
+      provenance: expect.objectContaining({
+        source: 'extension',
+        providerId: 'extension:demo',
+        inferred: false
+      })
+    }))
+  })
+
+  it('projects Cursor SDK Kun instructions and tool provenance', () => {
+    const cursor = trace('1', {
+      model: 'cursor-auto',
+      instructions: [
+        'Kun canonical system prompt.',
+        'Workspace AGENTS.md instruction.'
+      ],
+      input: 'Use the configured MCP server.',
+      tools: [{
+        name: 'mcp_call_tool',
+        description: 'Call an MCP tool through Kun',
+        inputSchema: { type: 'object' }
+      }, {
+        name: 'extension_render',
+        description: 'Render through a Kun extension',
+        inputSchema: { type: 'object' }
+      }],
+      mode: 'agent'
+    }, {
+      provider: 'cursor-subscription',
+      model: 'cursor-auto',
+      transport: 'sdk',
+      endpointFormat: 'cursor-sdk',
+      toolCatalog: [{
+        name: 'mcp_call_tool',
+        providerKind: 'mcp',
+        providerId: 'mcp:facade'
+      }, {
+        name: 'extension_render',
+        providerKind: 'extension',
+        providerId: 'extension:demo'
+      }],
+      delegated: {
+        providerKind: 'cursor-sdk',
+        phase: 'rebased',
+        contextManagement: 'sdk-managed',
+        nativeHistory: 'none',
+        capabilities: {
+          nativeResume: true,
+          structuredStreaming: true,
+          kunTools: true,
+          externalApproval: true,
+          liveSteering: false,
+          nativeContextTelemetry: false,
+          fork: false
+        }
+      }
+    })
+
+    expect(parseSemanticRequest(cursor)).toMatchObject({
+      prompts: [{
+        source: 'instructions',
+        text: 'Kun canonical system prompt.\nWorkspace AGENTS.md instruction.'
+      }],
+      messages: [{
+        role: 'user',
+        text: 'Use the configured MCP server.'
+      }],
+      tools: [{
+        name: 'mcp_call_tool',
+        provenance: {
+          source: 'mcp',
+          providerName: 'facade',
+          inferred: false
+        }
+      }, {
+        name: 'extension_render',
+        provenance: {
+          source: 'extension',
+          providerName: 'demo',
+          inferred: false
+        }
+      }]
     })
   })
 })

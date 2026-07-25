@@ -65,6 +65,7 @@ import {
   useThreadUsageState
 } from '../../hooks/use-thread-usage'
 import { FloatingComposerContextCapacity } from './FloatingComposerContextCapacity'
+import { FloatingComposerUsageHistory } from './FloatingComposerUsageHistory'
 export { calculateContextCapacityPopoverPlacement } from './FloatingComposerContextCapacity'
 import { GitBranchPicker } from './GitBranchPicker'
 import { WorkspaceProjectPicker } from './WorkspaceProjectPicker'
@@ -133,6 +134,18 @@ export function shouldSurfaceComposerUserInput(route: AppRoute, compact: boolean
   // Chat/Design surface and would duplicate the prompt if they rendered it.
   if (route === 'write') return true
   return !compact && (route === 'chat' || route === 'design')
+}
+
+export function shouldShowUsageHistory({
+  compact,
+  route,
+  runtimeReady
+}: {
+  compact: boolean
+  route: AppRoute
+  runtimeReady: boolean
+}): boolean {
+  return !compact && route === 'chat' && runtimeReady
 }
 export type { DesignComposerContext } from '../../design/design-composer-context'
 
@@ -390,10 +403,10 @@ export function FloatingComposer({
     ? threads.find((thread) => thread.id === activeThreadId) ?? null
     : null
   const activeThreadArchived = activeThread?.archived === true
-  const showThreadUsageFooter = !compact && route === 'chat' && Boolean(activeThreadId) && runtimeReady
+  const showUsageHistoryFooter = shouldShowUsageHistory({ compact, route, runtimeReady })
   const threadUsageState = useThreadUsageState(
     activeThreadId,
-    showThreadUsageFooter,
+    showUsageHistoryFooter && Boolean(activeThreadId),
     `${activeThread?.updatedAt ?? ''}:${busy ? 'busy' : 'idle'}:${usageRefreshKey}`
   )
   const threadUsage = threadUsageState.usage
@@ -1720,9 +1733,8 @@ export function FloatingComposer({
                 </select>
               </label>
             ) : null}
-            {showThreadUsageFooter ? (
-              <div
-                className="ds-composer-usage ds-no-drag inline-flex min-h-7 max-w-full min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 overflow-visible rounded-lg border border-ds-border-muted bg-ds-card px-2.5 py-0.5 text-[12.5px] font-medium leading-5 text-ds-muted shadow-sm"
+            {showUsageHistoryFooter ? (
+              <FloatingComposerUsageHistory
                 title={
                   threadUsage
                     ? t(
@@ -1740,7 +1752,9 @@ export function FloatingComposer({
                         turns: threadUsage.turns
                         }
                       )
-                    : t('sessionUsageUnavailable')
+                    : activeThreadId
+                      ? t('sessionUsageUnavailable')
+                      : t('usageHistoryOpen')
                 }
               >
                 <BarChart3 className="h-3.5 w-3.5 shrink-0 text-ds-faint" strokeWidth={1.9} />
@@ -1787,14 +1801,18 @@ export function FloatingComposer({
                       {t('sessionUsageTurns', { turns: threadUsage.turns })}
                     </span>
                   </>
-                ) : (
+                ) : activeThreadId ? (
                   <span className="shrink-0 text-ds-faint">
                     {threadUsageState.loading
                       ? t('sessionUsageLoading')
                       : t('sessionUsageUnavailable')}
                   </span>
+                ) : (
+                  <span className="shrink-0 text-ds-muted">
+                    {t('usageHistoryTitle')}
+                  </span>
                 )}
-              </div>
+              </FloatingComposerUsageHistory>
             ) : null}
           </div>
           {footerHint ? (

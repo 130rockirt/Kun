@@ -52,6 +52,28 @@ describe('contextThresholdsForModel safety cap', () => {
     const thresholds = contextThresholdsForModel('unknown-model', fallback, [])
     expect(thresholds).toEqual(fallback)
   })
+
+  it('derives safe thresholds from a Gemini context-window-only profile', () => {
+    const profiles = modelContextProfilesFromConfig({
+      models: {
+        profiles: {
+          'gemini-2.5-flash': {
+            contextWindowTokens: 1_048_576,
+            maxOutputTokens: 65_536
+          }
+        }
+      }
+    })
+
+    expect(contextThresholdsForModel('gemini-2.5-flash', undefined, profiles)).toEqual({
+      softThreshold: 786_432,
+      hardThreshold: 891_289
+    })
+    expect(modelCapabilitiesForModel('gemini-2.5-flash', profiles)).toMatchObject({
+      contextWindowTokens: 1_048_576,
+      maxOutputTokens: 65_536
+    })
+  })
 })
 
 describe('per-model endpointFormat', () => {

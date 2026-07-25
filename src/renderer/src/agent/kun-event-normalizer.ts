@@ -178,10 +178,17 @@ export function normalizeKunRuntimeEvent(
         return tool ? [{ type: 'tool_updated', payload: tool }] : []
       }
       const payload = deps.runtimeError(event, 'Kun turn failed')
-      return [
-        { type: 'runtime_error_received', payload },
-        { type: 'turn_failed', error: deps.errorFromRuntime(payload), options: { terminal: true } }
-      ]
+      const terminal: RuntimeProjectionAction = {
+        type: 'turn_failed',
+        error: deps.errorFromRuntime(payload),
+        options: { terminal: true, scope: 'conversation' }
+      }
+      // A message-less terminal event normally follows a more useful
+      // structured `error` event. Settle the turn without adding a generic
+      // "Kun turn failed" duplicate to the conversation.
+      return event.message?.trim()
+        ? [{ type: 'runtime_error_received', payload }, terminal]
+        : [terminal]
     }
     case 'error':
       if (event.code === 'compaction_summary_fallback') {

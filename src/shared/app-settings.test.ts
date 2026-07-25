@@ -95,6 +95,31 @@ describe('application locale settings', () => {
   })
 })
 
+describe('initial setup completion', () => {
+  it('defaults a new keyless configuration to incomplete', () => {
+    expect(normalizeAppSettings(settings()).initialSetupCompleted).toBe(false)
+  })
+
+  it('keeps explicitly completed keyless configurations complete', () => {
+    expect(normalizeAppSettings({
+      ...settings(),
+      initialSetupCompleted: true
+    }).initialSetupCompleted).toBe(true)
+  })
+
+  it('migrates an existing configured API provider to complete', () => {
+    const current = settings()
+    const normalized = normalizeAppSettings({
+      ...current,
+      provider: {
+        ...current.provider,
+        apiKey: 'sk-existing'
+      }
+    })
+    expect(normalized.initialSetupCompleted).toBe(true)
+  })
+})
+
 describe('chat content max width', () => {
   it('defaults invalid values to 896px', () => {
     expect(normalizeChatContentMaxWidth(undefined)).toBe(896)

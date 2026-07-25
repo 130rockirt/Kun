@@ -1,9 +1,9 @@
 /**
  * Official Antigravity CLI provisioning and model discovery.
  *
- * Google moved consumer Gemini subscriptions from Gemini CLI / Code Assist to
- * Antigravity CLI. Kun therefore invokes the official `agy` binary instead of
- * calling the retired Code Assist v1internal transport.
+ * This is the whole-turn Antigravity subscription transport. It intentionally
+ * remains separate from Kun's Gemini CLI API provider, which reuses the
+ * official Gemini CLI OAuth login and Code Assist request contract.
  */
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'

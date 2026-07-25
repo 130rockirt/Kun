@@ -61,6 +61,7 @@ const api = {
   getSettings: () => ipcRenderer.invoke('settings:get'),
   claudeSubscriptionStatus: () => ipcRenderer.invoke('claude-subscription:status'),
   claudeSubscriptionLogin: () => ipcRenderer.invoke('claude-subscription:login'),
+  claudeSubscriptionProbe: (token) => ipcRenderer.invoke('claude-subscription:probe', token),
   claudeSubscriptionModels: (token) => ipcRenderer.invoke('claude-subscription:models', token),
   claudeSubscriptionSdkStatus: () => ipcRenderer.invoke('claude-subscription:sdk-status'),
   claudeSubscriptionSdkInstall: () => ipcRenderer.invoke('claude-subscription:sdk-install'),
@@ -83,6 +84,8 @@ const api = {
     return () => ipcRenderer.removeListener('gemini-subscription:cli-progress', wrapped)
   },
   geminiSubscriptionModels: () => ipcRenderer.invoke('gemini-subscription:models'),
+  geminiCliSubscriptionStatus: () => ipcRenderer.invoke('gemini-cli-subscription:status'),
+  geminiCliSubscriptionModels: () => ipcRenderer.invoke('gemini-cli-subscription:models'),
   cursorSubscriptionDiscover: (apiKey) =>
     ipcRenderer.invoke('cursor-subscription:discover', { apiKey }),
   setSettings: (partial) =>
@@ -247,6 +250,8 @@ const api = {
     ipcRenderer.invoke('file:list-workspace-directory', options),
   resolveWorkspaceFile: (options) =>
     ipcRenderer.invoke('file:resolve-workspace', options),
+  openWorkspaceFileInSystem: (options) =>
+    ipcRenderer.invoke('file:open-workspace-system', options),
   readWorkspaceFile: (options) =>
     ipcRenderer.invoke('file:read-workspace', options),
   lintProjectDesignMd: (content) =>
@@ -255,6 +260,10 @@ const api = {
     ipcRenderer.invoke('file:read-workspace-image', options),
   readWorkspacePdf: (options) =>
     ipcRenderer.invoke('file:read-workspace-pdf', options),
+  openWorkspacePreviewResource: (options) =>
+    ipcRenderer.invoke('file:open-workspace-preview', options),
+  releaseWorkspacePreviewResource: (payload) =>
+    ipcRenderer.invoke('file:release-workspace-preview', payload),
   readLocalPdfText: (options) =>
     ipcRenderer.invoke('file:read-local-pdf-text', options),
   saveWorkspaceFileAs: (payload) =>

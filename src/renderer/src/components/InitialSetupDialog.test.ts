@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   canCloseInitialSetup,
-  completeInitialSetupAfterSave
+  completeInitialSetupAfterSave,
+  dismissInitialSetup
 } from './InitialSetupDialog'
 
 describe('InitialSetupDialog completion flow', () => {
@@ -78,5 +79,43 @@ describe('InitialSetupDialog completion flow', () => {
   it('allows users to dismiss both required and preview setup flows', () => {
     expect(canCloseInitialSetup('required')).toBe(true)
     expect(canCloseInitialSetup('preview')).toBe(true)
+  })
+
+  it('persists a required dismissal and starts probing Kun after closing', async () => {
+    const persistCompletion = vi.fn(async () => undefined)
+    const reloadUiSettings = vi.fn(async () => undefined)
+    const probeRuntime = vi.fn(async () => undefined)
+    const closeInitialSetup = vi.fn()
+
+    await dismissInitialSetup({
+      mode: 'required',
+      persistCompletion,
+      reloadUiSettings,
+      probeRuntime,
+      closeInitialSetup
+    })
+
+    expect(persistCompletion).toHaveBeenCalledTimes(1)
+    expect(reloadUiSettings).toHaveBeenCalledTimes(1)
+    expect(closeInitialSetup).toHaveBeenCalledTimes(1)
+    expect(probeRuntime).toHaveBeenCalledWith('user')
+  })
+
+  it('does not persist or start Kun when closing the settings preview', async () => {
+    const persistCompletion = vi.fn(async () => undefined)
+    const probeRuntime = vi.fn(async () => undefined)
+    const closeInitialSetup = vi.fn()
+
+    await dismissInitialSetup({
+      mode: 'preview',
+      persistCompletion,
+      reloadUiSettings: vi.fn(async () => undefined),
+      probeRuntime,
+      closeInitialSetup
+    })
+
+    expect(persistCompletion).not.toHaveBeenCalled()
+    expect(probeRuntime).not.toHaveBeenCalled()
+    expect(closeInitialSetup).toHaveBeenCalledTimes(1)
   })
 })

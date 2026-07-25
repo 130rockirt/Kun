@@ -18,6 +18,7 @@ import {
   type ModelProviderProfileV1
 } from '@shared/app-settings'
 import type {
+  ClaudeSubscriptionProbeResult,
   CursorSubscriptionModel,
   ModelsDevCatalogResult,
   ModelProviderProbeResult
@@ -53,6 +54,10 @@ const labels: Record<string, string> = {
   modelProviderSearchPlaceholder: 'Search configured providers…',
   modelProviderSearchEmpty: 'No providers match "{{query}}".',
   modelProviderGroupPlans: 'Subscription plans',
+  modelProviderSubscriptionRegions: 'Subscription plan regions',
+  modelProviderSubscriptionRegionAll: 'All',
+  modelProviderSubscriptionRegionChina: 'China',
+  modelProviderSubscriptionRegionUnitedStates: 'United States',
   modelProviderGroupApi: 'Pay-as-you-go',
   modelProviderPlanBadge: 'Plan',
   modelProviderTokenPlanBadge: 'Token Plan',
@@ -78,6 +83,9 @@ const labels: Record<string, string> = {
   modelProviderTestSuccess: 'Connected · {{latency}}ms · {{total}} models',
   modelProviderTestFailed: 'Connection failed: {{message}}',
   modelProviderPresetMissingKeyForProbe: 'Enter this provider API key first.',
+  claudeSubProbeNotReady: 'Claude subscription is not ready.',
+  claudeSubProbeTimeout: 'The real Claude authentication test timed out.',
+  claudeSubTokenInvalid: 'Paste only the complete sk-ant-oat token.',
   modelProviderInvalidUrl: 'URL must start with http:// or https://',
   modelProviderFetchModels: 'Fetch models',
   modelProviderFetchedModels: 'Fetched {{total}} new models',
@@ -100,6 +108,19 @@ const labels: Record<string, string> = {
   cursorSubscriptionGetApiKey: 'Get Cursor API key',
   cursorSubscriptionAccount: 'Connected account: {{account}} · API key: {{keyName}}',
   cursorSubscriptionRestartRequired: 'Fully quit Kun and reopen it, then try again.',
+  geminiCliApiEndpointLocked: 'Gemini CLI API endpoint is fixed.',
+  geminiCliApiSubscriptionNote: 'Gemini CLI direct API keeps Kun in charge of long sessions.',
+  geminiCliApiChecking: 'Checking the Gemini CLI login…',
+  geminiCliApiReady: 'Gemini CLI Google login is ready',
+  geminiCliApiLoginRequired: 'Gemini CLI is not signed in to Google',
+  geminiCliApiMissing: 'Gemini CLI is not installed',
+  geminiCliApiLoginHint: 'Run gemini and sign in with Google.',
+  geminiCliApiInstallHint: 'Install and sign in to Gemini CLI.',
+  geminiCliApiRecheck: 'Check login again',
+  geminiCliApiSyncModels: 'Sync Gemini CLI API models',
+  geminiCliApiStatusFailed: 'Could not inspect the Gemini CLI login.',
+  geminiCliApiModelsSynced: 'Synced {{count}} Gemini CLI API models.',
+  geminiCliApiModelsSyncFailed: 'Could not read the Gemini CLI API model catalog.',
   modelProviderBaseUrl: 'Provider base URL',
   modelProviderEndpointFormat: 'Endpoint format',
   modelProviderRetrySection: 'Failure retry',
@@ -753,7 +774,27 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
         }
       ]
     }))
-    const claudeSubscriptionStatus = vi.fn(async () => ({ loggedIn: true }))
+    const claudeSubscriptionStatus = vi.fn(async () => ({
+      loggedIn: true,
+      source: 'cli' as const
+    }))
+    const claudeSubscriptionProbe = vi.fn(async (): Promise<ClaudeSubscriptionProbeResult> => ({
+      ok: true as const,
+      latencyMs: 23
+    }))
+    const geminiCliSubscriptionStatus = vi.fn(async () => ({
+      installed: true,
+      authenticated: true,
+      path: '/usr/local/bin/gemini',
+      credentialSource: 'keychain' as const
+    }))
+    const geminiCliSubscriptionModels = vi.fn(async () => [
+      'gemini-3.1-pro-preview',
+      'gemini-3-flash-preview',
+      'gemini-3.1-flash-lite',
+      'gemini-2.5-pro',
+      'gemini-2.5-flash'
+    ])
     const cursorSubscriptionDiscover = vi.fn(async (): Promise<{
       account: {
         apiKeyName: string
@@ -774,6 +815,10 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       probeModelProvider.mockClear()
       fetchModelsDevCatalog.mockClear()
       claudeSubscriptionStatus.mockClear()
+      claudeSubscriptionProbe.mockReset()
+      claudeSubscriptionProbe.mockResolvedValue({ ok: true, latencyMs: 23 })
+      geminiCliSubscriptionStatus.mockClear()
+      geminiCliSubscriptionModels.mockClear()
       cursorSubscriptionDiscover.mockReset()
       cursorSubscriptionDiscover.mockResolvedValue({
         account: { apiKeyName: 'test-key', userEmail: 'cursor@example.com' },
@@ -786,8 +831,11 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
           probeModelProvider,
           fetchModelsDevCatalog,
           cursorSubscriptionDiscover,
+          geminiCliSubscriptionStatus,
+          geminiCliSubscriptionModels,
           openExternal,
           claudeSubscriptionStatus,
+          claudeSubscriptionProbe,
           claudeSubscriptionSdkStatus: vi.fn(async () => ({ installed: true })),
           claudeSubscriptionModels: vi.fn(async () => []),
           onClaudeSubscriptionSdkProgress: vi.fn(() => () => undefined)
@@ -836,7 +884,41 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       await act(async () => findButton(renderer, 'Get Cursor API key').props.onClick())
 
       expect(openExternal).toHaveBeenCalledOnce()
-      expect(openExternal).toHaveBeenCalledWith('https://cursor.com/dashboard?tab=integrations')
+      expect(openExternal).toHaveBeenCalledWith(
+        'https://cursor.com/dashboard/api?section=user-keys#user-api-keys'
+      )
+    })
+
+    it('renders Gemini CLI direct API as a keyless provider separate from Antigravity', async () => {
+      const settings = defaultModelProviderSettings()
+      const direct = modelProviderPresetProfile(
+        getModelProviderPreset('gemini-cli-subscription')!,
+        'must-not-be-stored'
+      )
+      const renderer = await mountProviders({
+        ...baseCtx(),
+        provider: { ...settings, providers: [...settings.providers, direct] },
+        kun: {
+          ...defaultKunRuntimeSettings(),
+          providerId: direct.id,
+          model: 'gemini-2.5-flash'
+        }
+      })
+      await act(async () => {
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+
+      const panel = activePanelText(renderer)
+      expect(panel).toContain('Gemini CLI direct API keeps Kun in charge of long sessions.')
+      expect(panel).toContain('Gemini CLI Google login is ready')
+      expect(panel).toContain('Gemini CLI API endpoint is fixed.')
+      expect(panel).not.toContain('Enter provider API key')
+      expect(findButton(renderer, 'Sync Gemini CLI API models')).toBeTruthy()
+      expect(geminiCliSubscriptionStatus).toHaveBeenCalled()
+      await act(async () => findButton(renderer, 'Models').props.onClick())
+      expect(rendererText(renderer)).toContain('gemini-3-flash-preview')
+      expect(rendererText(renderer)).not.toContain('gemini-3.6-flash')
     })
 
     it('turns a stale Cursor discovery handler error into restart guidance', async () => {
@@ -1206,7 +1288,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       expect(rendererText(renderer)).not.toContain('Needs configuration')
       const testConnection = findButton(renderer, 'Test connection')
       expect(testConnection.props.disabled).toBe(false)
-      claudeSubscriptionStatus.mockClear()
+      claudeSubscriptionProbe.mockClear()
 
       await act(async () => {
         testConnection.props.onClick()
@@ -1214,9 +1296,70 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
         await Promise.resolve()
       })
 
-      expect(claudeSubscriptionStatus).toHaveBeenCalledOnce()
+      expect(claudeSubscriptionProbe).toHaveBeenCalledOnce()
+      expect(claudeSubscriptionProbe).toHaveBeenCalledWith(undefined)
       expect(probeModelProvider).not.toHaveBeenCalled()
-      expect(rendererText(renderer)).toContain('Connected · 0ms')
+      expect(rendererText(renderer)).toContain('Connected · 23ms')
+    })
+
+    it('shows a real Claude authentication failure instead of a false connected state', async () => {
+      const provider = defaultModelProviderSettings()
+      const preset = getModelProviderPreset('claude-subscription')
+      expect(preset).not.toBeNull()
+      const profile = modelProviderPresetProfile(preset!)
+      claudeSubscriptionProbe.mockResolvedValueOnce({
+        ok: false,
+        message: 'API Error: 401 Invalid Bearer <redacted>'
+      })
+      const renderer = await mountProviders({
+        ...baseCtx(),
+        provider: {
+          ...provider,
+          providers: [...provider.providers, profile]
+        },
+        kun: {
+          ...defaultKunRuntimeSettings(),
+          providerId: profile.id
+        }
+      })
+
+      await act(async () => {
+        findButton(renderer, 'Test connection').props.onClick()
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+
+      expect(claudeSubscriptionProbe).toHaveBeenCalledWith(undefined)
+      expect(rendererText(renderer)).toContain(
+        'Connection failed: API Error: 401 Invalid Bearer <redacted>'
+      )
+      expect(rendererText(renderer)).not.toContain('Connected ·')
+    })
+
+    it('marks a wrapped Claude setup token invalid before a request is sent', async () => {
+      const provider = defaultModelProviderSettings()
+      const preset = getModelProviderPreset('claude-subscription')
+      expect(preset).not.toBeNull()
+      const profile = {
+        ...modelProviderPresetProfile(preset!),
+        apiKey: 'Bearer sk-ant-oat01-wrapped-token'
+      }
+      const renderer = await mountProviders({
+        ...baseCtx(),
+        provider: {
+          ...provider,
+          providers: [...provider.providers, profile]
+        },
+        kun: {
+          ...defaultKunRuntimeSettings(),
+          providerId: profile.id
+        }
+      })
+
+      expect(rendererText(renderer)).toContain(
+        'Paste only the complete sk-ant-oat token.'
+      )
+      expect(claudeSubscriptionProbe).not.toHaveBeenCalled()
     })
 
     it('filters the add dialog and keeps custom providers local until confirmation', async () => {
@@ -1248,6 +1391,34 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       expect(dialog.props['aria-modal']).toBe('true')
       expect(instanceText(dialog)).toContain('Choose a preset or create a custom provider.')
 
+      const regionTablist = renderer.root.findByProps({
+        role: 'tablist',
+        'aria-label': 'Subscription plan regions'
+      })
+      const regionTab = (label: string): ReactTestInstance => {
+        const tab = regionTablist.findAllByProps({ role: 'tab' })
+          .find((candidate) => instanceText(candidate) === label)
+        expect(tab, `subscription region tab "${label}"`).toBeTruthy()
+        return tab!
+      }
+      expect(regionTab('All').props['aria-selected']).toBe(true)
+      expect(instanceText(renderer.root.findByProps({ role: 'dialog' }))).toContain('Claude (Pro/Max 订阅)')
+      expect(instanceText(renderer.root.findByProps({ role: 'dialog' }))).toContain('Kimi Code')
+
+      await act(async () => regionTab('China').props.onClick())
+      expect(regionTab('China').props['aria-selected']).toBe(true)
+      expect(instanceText(renderer.root.findByProps({ role: 'dialog' }))).toContain('Zhipu Coding Plan')
+      expect(instanceText(renderer.root.findByProps({ role: 'dialog' }))).toContain('Kimi Code')
+      expect(instanceText(renderer.root.findByProps({ role: 'dialog' }))).not.toContain('Claude (Pro/Max 订阅)')
+      expect(instanceText(renderer.root.findByProps({ role: 'dialog' }))).not.toContain('ChatGPT 订阅')
+
+      await act(async () => regionTab('United States').props.onClick())
+      expect(regionTab('United States').props['aria-selected']).toBe(true)
+      expect(instanceText(renderer.root.findByProps({ role: 'dialog' }))).toContain('Claude (Pro/Max 订阅)')
+      expect(instanceText(renderer.root.findByProps({ role: 'dialog' }))).toContain('ChatGPT 订阅')
+      expect(instanceText(renderer.root.findByProps({ role: 'dialog' }))).not.toContain('Kimi Code')
+
+      await act(async () => regionTab('All').props.onClick())
       const searchInput = renderer.root.findByProps({ 'aria-label': 'Search provider presets…' })
       await act(async () => searchInput.props.onChange({ target: { value: 'xiaomi' } }))
       expect(instanceText(renderer.root.findByProps({ role: 'dialog' }))).toContain('Xiaomi')

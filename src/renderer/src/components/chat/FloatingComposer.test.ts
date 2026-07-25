@@ -19,6 +19,7 @@ import {
   returnQueuedMessageToComposer,
   shouldCaptureFileMentionCommitKey,
   shouldShowGoalFloater,
+  shouldShowUsageHistory,
   shouldSurfaceComposerUserInput
 } from './FloatingComposer'
 import {
@@ -71,6 +72,31 @@ const DEEPSEEK_PROVIDER_GROUP = {
   label: 'DeepSeek',
   modelIds: ['deepseek-v4-pro', 'deepseek-v4-flash']
 }
+
+describe('FloatingComposer usage history visibility', () => {
+  it('keeps the history entry discoverable before the first message', () => {
+    expect(shouldShowUsageHistory({
+      compact: false,
+      route: 'chat',
+      runtimeReady: true
+    })).toBe(true)
+    expect(shouldShowUsageHistory({
+      compact: false,
+      route: 'chat',
+      runtimeReady: false
+    })).toBe(false)
+    expect(shouldShowUsageHistory({
+      compact: true,
+      route: 'chat',
+      runtimeReady: true
+    })).toBe(false)
+    expect(shouldShowUsageHistory({
+      compact: false,
+      route: 'write',
+      runtimeReady: true
+    })).toBe(false)
+  })
+})
 
 describe('FloatingComposer queued guidance', () => {
   it('renders compact Guide rows and disables structured payload guidance', async () => {

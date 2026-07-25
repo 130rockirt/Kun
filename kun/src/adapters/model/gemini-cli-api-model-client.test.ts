@@ -1,0 +1,380 @@
+import { describe, expect, it, vi } from 'vitest'
+import type { ModelRequest, ModelStreamChunk } from '../../ports/model-client.js'
+import { makeToolCallItem, makeToolResultItem } from '../../domain/item.js'
+import { LlmDebugRecorder } from '../../services/llm-debug-recorder.js'
+import { GeminiCliOAuthSource } from './gemini-cli-oauth.js'
+import {
+  buildGeminiCliCodeAssistRequest,
+  GeminiCliApiModelClient
+} from './gemini-cli-api-model-client.js'
+
+function request(overrides: Partial<ModelRequest> = {}): ModelRequest {
+  return {
+    threadId: 'thread-gemini',
+    turnId: 'turn-gemini',
+    providerId: 'gemini-cli-subscription',
+    model: 'gemini-2.5-flash',
+    systemPrompt: 'You are Kun.',
+    prefix: [],
+    history: [{
+      id: 'user-1',
+      turnId: 'turn-gemini',
+      threadId: 'thread-gemini',
+      role: 'user',
+      status: 'completed',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      kind: 'user_message',
+      text: 'Say hello.'
+    }],
+    tools: [],
+    abortSignal: new AbortController().signal,
+    ...overrides
+  }
+}
+
+async function drain(iterable: AsyncIterable<ModelStreamChunk>): Promise<ModelStreamChunk[]> {
+  const chunks: ModelStreamChunk[] = []
+  for await (const chunk of iterable) chunks.push(chunk)
+  return chunks
+}
+
+function oauth(fetchImpl: typeof fetch): GeminiCliOAuthSource {
+  return new GeminiCliOAuthSource({
+    fetchImpl,
+    now: () => 1_000,
+    loadCredential: async () => ({
+      accessToken: 'official-access-token',
+      refreshToken: 'official-refresh-token',
+      expiresAt: 100_000
+    })
+  })
+}
+
+describe('GeminiCliApiModelClient', () => {
+  it('streams direct Code Assist text, reasoning, tools, usage, and provider metadata', async () => {
+    const requests: Array<{ url: string; body: Record<string, unknown>; authorization: string }> = []
+    const stream = [
+      'data: {"response":{"candidates":[{"content":{"role":"model","parts":[{"text":"thinking","thought":true},{"text":"hello "},{"functionCall":{"id":"provider-call","name":"read","args":{"path":"a.ts"}},"thoughtSignature":"signature-bytes"}]}}],"usageMetadata":{"promptTokenCount":20,"candidatesTokenCount":4,"thoughtsTokenCount":2,"totalTokenCount":26,"cachedContentTokenCount":15}}}\n\n',
+      'data: {"response":{"candidates":[{"content":{"role":"model","parts":[{"text":"world"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":20,"candidatesTokenCount":5,"thoughtsTokenCount":2,"totalTokenCount":27,"cachedContentTokenCount":15}}}\n\n'
+    ].join('')
+    const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>
+      requests.push({
+        url: String(url),
+        body,
+        authorization: new Headers(init?.headers).get('authorization') ?? ''
+      })
+      if (String(url).endsWith(':loadCodeAssist')) {
+        return new Response(JSON.stringify({
+          currentTier: { id: 'standard-tier' },
+          paidTier: { id: 'g1-pro-tier' },
+          cloudaicompanionProject: 'managed-project'
+        }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' }
+        })
+      }
+      return new Response(stream, {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' }
+      })
+    }) as unknown as typeof fetch
+    const client = new GeminiCliApiModelClient({
+      model: 'gemini-2.5-flash',
+      fetchImpl,
+      oauthSource: oauth(fetchImpl)
+    })
+
+    const chunks = await drain(client.stream(request({
+      tools: [{
+        name: 'read',
+        description: 'Read a file',
+        inputSchema: {
+          type: 'object',
+          properties: { path: { type: 'string' } },
+          required: ['path']
+        }
+      }],
+      reasoningEffort: 'medium',
+      maxTokens: 256
+    })))
+
+    expect(chunks).toContainEqual({ kind: 'assistant_reasoning_delta', text: 'thinking' })
+    expect(chunks).toContainEqual({ kind: 'assistant_text_delta', text: 'hello ' })
+    expect(chunks).toContainEqual({ kind: 'assistant_text_delta', text: 'world' })
+    expect(chunks).toContainEqual({
+      kind: 'tool_call_complete',
+      callId: 'provider-call',
+      toolName: 'read',
+      arguments: { path: 'a.ts' },
+      providerMetadata: { gemini: { thoughtSignature: 'signature-bytes' } }
+    })
+    expect(chunks).toContainEqual({
+      kind: 'usage',
+      usage: expect.objectContaining({
+        promptTokens: 20,
+        completionTokens: 5,
+        reasoningTokens: 2,
+        totalTokens: 27,
+        cacheHitTokens: 15,
+        cacheMissTokens: 5,
+        actualProviderId: 'gemini-cli-subscription',
+        actualModelId: 'gemini-2.5-flash'
+      })
+    })
+    expect(chunks.at(-1)).toEqual({ kind: 'completed', stopReason: 'tool_calls' })
+    expect(requests).toHaveLength(2)
+    expect(requests[1]?.authorization).toBe('Bearer official-access-token')
+    expect(requests[1]?.url).toContain(':streamGenerateContent?alt=sse')
+    expect(requests[1]?.body).toMatchObject({
+      model: 'gemini-2.5-flash',
+      project: 'managed-project',
+      request: {
+        tools: [{
+          functionDeclarations: [{
+            name: 'read',
+            parametersJsonSchema: expect.objectContaining({ type: 'object' })
+          }]
+        }],
+        generationConfig: {
+          maxOutputTokens: 256,
+          thinkingConfig: { thinkingBudget: 8_192, includeThoughts: true }
+        }
+      }
+    })
+  })
+
+  it('replays thought signatures only in Gemini requests and redacts them from traces', async () => {
+    const signature = 'opaque-thought-signature'
+    const toolCall = makeToolCallItem({
+      id: 'tool-call',
+      turnId: 'turn-old',
+      threadId: 'thread-gemini',
+      callId: 'call-old',
+      toolName: 'read',
+      arguments: { path: 'old.ts' },
+      providerMetadata: { gemini: { thoughtSignature: signature } },
+      status: 'completed'
+    })
+    const toolResult = makeToolResultItem({
+      id: 'tool-result',
+      turnId: 'turn-old',
+      threadId: 'thread-gemini',
+      callId: 'call-old',
+      toolName: 'read',
+      output: 'old contents',
+      status: 'completed'
+    })
+    const input = request({ history: [toolCall, toolResult] })
+    const built = buildGeminiCliCodeAssistRequest(input, input.model, 'project')
+    expect(JSON.stringify(built)).toContain(signature)
+
+    let transmittedBody = ''
+    const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      if (String(url).endsWith(':loadCodeAssist')) {
+        return new Response(JSON.stringify({
+          currentTier: { id: 'standard-tier' },
+          cloudaicompanionProject: 'project'
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      transmittedBody = String(init?.body)
+      return new Response(
+        'data: {"response":{"candidates":[{"content":{"role":"model","parts":[{"text":"done"}]},"finishReason":"STOP"]}}\n\n',
+        { status: 200, headers: { 'content-type': 'text/event-stream' } }
+      )
+    }) as unknown as typeof fetch
+    const recorder = new LlmDebugRecorder()
+    const client = new GeminiCliApiModelClient({
+      model: input.model,
+      fetchImpl,
+      oauthSource: oauth(fetchImpl),
+      debugSink: recorder
+    })
+
+    await drain(client.stream(input))
+    const trace = (await recorder.listThread(input.threadId)).records[0]
+    expect(transmittedBody).toContain(signature)
+    expect(trace?.request.body.text).not.toContain(signature)
+    expect(trace?.request.body.text).toContain('[REDACTED]')
+    expect(trace?.request.headers.values.authorization).not.toContain('official-access-token')
+  })
+
+  it('returns a conversation-safe login error instead of falling back providers', async () => {
+    const client = new GeminiCliApiModelClient({
+      model: 'gemini-2.5-flash',
+      fetchImpl: vi.fn() as unknown as typeof fetch,
+      oauthSource: new GeminiCliOAuthSource({
+        loadCredential: async () => null
+      })
+    })
+
+    expect(await drain(client.stream(request()))).toEqual([{
+      kind: 'error',
+      code: 'gemini_cli_login_required',
+      message: expect.stringContaining('Run `gemini`')
+    }])
+  })
+
+  it('classifies unavailable account models for inline conversation errors', async () => {
+    const fetchImpl = vi.fn(async (url: string | URL | Request) => {
+      if (String(url).endsWith(':loadCodeAssist')) {
+        return new Response(JSON.stringify({
+          currentTier: { id: 'standard-tier' },
+          cloudaicompanionProject: 'project'
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      return new Response(JSON.stringify({
+        error: {
+          code: 404,
+          status: 'NOT_FOUND',
+          message: 'Requested model is unavailable for this account.'
+        }
+      }), {
+        status: 404,
+        headers: {
+          'content-type': 'application/json',
+          'retry-after': '30'
+        }
+      })
+    }) as unknown as typeof fetch
+    const client = new GeminiCliApiModelClient({
+      model: 'gemini-3.1-pro-preview',
+      fetchImpl,
+      oauthSource: oauth(fetchImpl)
+    })
+
+    expect(await drain(client.stream(request({
+      model: 'gemini-3.1-pro-preview'
+    })))).toEqual([{
+      kind: 'error',
+      code: 'gemini_cli_api_request_failed',
+      message: expect.stringContaining('NOT_FOUND'),
+      failure: {
+        category: 'model_not_found',
+        httpStatus: 404,
+        providerCode: 'NOT_FOUND',
+        retryAfterMs: 30_000,
+        failoverAllowed: true
+      }
+    }])
+  })
+
+  it('turns a provider success with no visible content into an inline error', async () => {
+    const fetchImpl = vi.fn(async (url: string | URL | Request) => {
+      if (String(url).endsWith(':loadCodeAssist')) {
+        return new Response(JSON.stringify({
+          currentTier: { id: 'standard-tier' },
+          cloudaicompanionProject: 'project'
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      return new Response(
+        'data: {"response":{"candidates":[{"content":{"role":"model","parts":[]},"finishReason":"MAX_TOKENS"}]}}\n\n',
+        { status: 200, headers: { 'content-type': 'text/event-stream' } }
+      )
+    }) as unknown as typeof fetch
+    const client = new GeminiCliApiModelClient({
+      model: 'gemini-2.5-flash',
+      fetchImpl,
+      oauthSource: oauth(fetchImpl)
+    })
+
+    expect(await drain(client.stream(request()))).toEqual([{
+      kind: 'error',
+      code: 'gemini_cli_api_empty_response',
+      message: expect.stringContaining('output-token budget'),
+      failure: {
+        category: 'unavailable',
+        failoverAllowed: true
+      }
+    }])
+  })
+
+  it('retries transient Code Assist capacity failures before completing a tool round', async () => {
+    let streamAttempts = 0
+    const fetchImpl = vi.fn(async (url: string | URL | Request) => {
+      if (String(url).endsWith(':loadCodeAssist')) {
+        return new Response(JSON.stringify({
+          currentTier: { id: 'standard-tier' },
+          cloudaicompanionProject: 'project'
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      streamAttempts += 1
+      if (streamAttempts === 1) {
+        return new Response(JSON.stringify({
+          error: {
+            code: 429,
+            status: 'RESOURCE_EXHAUSTED',
+            message: 'You have exhausted your capacity. Your quota will reset after 0s.'
+          }
+        }), {
+          status: 429,
+          headers: {
+            'content-type': 'application/json',
+            'retry-after': '0'
+          }
+        })
+      }
+      return new Response(
+        'data: {"response":{"candidates":[{"content":{"role":"model","parts":[{"text":"recovered"}]},"finishReason":"STOP"}]}}\n\n',
+        { status: 200, headers: { 'content-type': 'text/event-stream' } }
+      )
+    }) as unknown as typeof fetch
+    const client = new GeminiCliApiModelClient({
+      model: 'gemini-2.5-flash',
+      fetchImpl,
+      oauthSource: oauth(fetchImpl),
+      retry: {
+        maxAttempts: 1,
+        initialDelayMs: 0,
+        httpStatusCodes: [429]
+      }
+    })
+
+    expect(await drain(client.stream(request()))).toEqual([
+      {
+        kind: 'retrying',
+        status: 429,
+        attempt: 1,
+        maxAttempts: 1,
+        delayMs: 0
+      },
+      { kind: 'assistant_text_delta', text: 'recovered' },
+      { kind: 'completed', stopReason: 'stop' }
+    ])
+    expect(streamAttempts).toBe(2)
+  })
+
+  it('parses Google quota reset durations into failure metadata', async () => {
+    const fetchImpl = vi.fn(async (url: string | URL | Request) => {
+      if (String(url).endsWith(':loadCodeAssist')) {
+        return new Response(JSON.stringify({
+          currentTier: { id: 'standard-tier' },
+          cloudaicompanionProject: 'project'
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      return new Response(JSON.stringify({
+        error: {
+          code: 429,
+          status: 'RESOURCE_EXHAUSTED',
+          message: 'You have exhausted your capacity. Your quota will reset after 42s.'
+        }
+      }), { status: 429, headers: { 'content-type': 'application/json' } })
+    }) as unknown as typeof fetch
+    const client = new GeminiCliApiModelClient({
+      model: 'gemini-2.5-flash',
+      fetchImpl,
+      oauthSource: oauth(fetchImpl)
+    })
+
+    expect(await drain(client.stream(request()))).toEqual([expect.objectContaining({
+      kind: 'error',
+      code: 'rate_limit_exceeded',
+      failure: expect.objectContaining({
+        category: 'rate_limit',
+        httpStatus: 429,
+        providerCode: 'RESOURCE_EXHAUSTED',
+        retryAfterMs: 42_000
+      })
+    })])
+  })
+})

@@ -22,6 +22,9 @@ export interface BridgeableTool {
   name: string
   description: string
   inputSchema: Record<string, unknown>
+  /** Original Kun capability provider retained across the SDK MCP rename. */
+  providerId?: string
+  providerKind?: string
 }
 
 export interface KunToolResult {
@@ -189,5 +192,9 @@ export function toSdkMcpServer(
 
 /** The `mcp__<server>__<tool>` names the model will see, for allowedTools wiring. */
 export function bridgedToolModelNames(specs: readonly BridgedToolSpec[], serverName = 'kun'): string[] {
-  return specs.map((spec) => `mcp__${serverName}__${spec.name}`)
+  return specs.map((spec) => bridgedToolModelName(spec.name, serverName))
+}
+
+export function bridgedToolModelName(toolName: string, serverName = 'kun'): string {
+  return `mcp__${serverName}__${toolName}`
 }

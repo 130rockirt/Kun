@@ -36,6 +36,7 @@ import {
   type ToolApprovalDecision
 } from './sdk-options-builder.js'
 import {
+  bridgedToolModelName,
   bridgedToolModelNames,
   buildBridgedToolSpecs,
   selectBridgeableTools,
@@ -417,7 +418,8 @@ export class AgentSdkRuntime {
       const sdk = await awaitAbortable(() => this.deps.loadSdk(), abort.signal)
 
       // Bridge kun-exclusive tools into an in-process MCP server.
-      const bridged = buildBridgedToolSpecs(selectBridgeableTools(ctx.bridgeableTools), (name, args) =>
+      const selectedKunTools = selectBridgeableTools(ctx.bridgeableTools)
+      const bridged = buildBridgedToolSpecs(selectedKunTools, (name, args) =>
         this.deps.executeKunTool(threadId, turnId, name, args, abort.signal)
       )
       let resumeSessionId = ctx.resumeSessionId
@@ -488,7 +490,7 @@ export class AgentSdkRuntime {
           this.deps.kunSystemPrompt(),
           ctx.threadPersona ?? ''
         ].join('\n'))
-        const tools = estimatedTokens(JSON.stringify(ctx.bridgeableTools))
+        const tools = estimatedTokens(JSON.stringify(selectedKunTools))
         const skills = estimatedTokens((ctx.contextInstructions ?? []).join('\n'))
         const messages = estimatedTokens([
           resumeSessionId ? '' : ctx.historyTranscript ?? '',
@@ -505,7 +507,7 @@ export class AgentSdkRuntime {
           ...ctx.contextProfile,
           estimatedInputTokens: tools + system + skills + messages + other,
           breakdown: { tools, system, skills, messages, other },
-          toolCount: ctx.bridgeableTools.length,
+          toolCount: selectedKunTools.length,
           activeSkillIds: [...(ctx.activeSkillIds ?? [])],
           contextManagement: 'sdk-managed',
           nativeHistory: resumeSessionId ? 'unknown' : 'none'
@@ -550,7 +552,7 @@ export class AgentSdkRuntime {
           systemPrompt: this.deps.kunSystemPrompt(),
           threadPersona: ctx.threadPersona,
           contextInstructions: ctx.contextInstructions ?? [],
-          tools: ctx.bridgeableTools,
+          tools: selectedKunTools,
           images: (ctx.images ?? []).map((image) => ({ mediaType: image.mediaType })),
           approvalPolicy: ctx.approvalPolicy,
           sandboxMode: ctx.sandboxMode,
@@ -627,7 +629,10 @@ export class AgentSdkRuntime {
           if (attemptFinalSeen && attemptFinal?.status === 'failed') {
             await finishAgentSdkTrace(trace, {
               kind: 'failed',
-              error: new Error(attemptFinal.message ?? 'agent SDK query failed')
+              error: new Error(sanitizeAgentSdkError(
+                attemptFinal.message ?? 'agent SDK query failed',
+                ctx.oauthToken
+              ))
             })
           } else if (signal.aborted || abort.signal.aborted) {
             await finishAgentSdkTrace(trace, {
@@ -723,7 +728,12 @@ export class AgentSdkRuntime {
       }
       const status: 'completed' | 'failed' | 'aborted' =
         final?.status === 'failed' ? 'failed' : 'completed'
-      await this.deps.finishTurn(threadId, turnId, status, final?.message)
+      await this.deps.finishTurn(
+        threadId,
+        turnId,
+        status,
+        final?.message ? sanitizeAgentSdkError(final.message, ctx.oauthToken) : undefined
+      )
       return status
     } catch (err) {
       let failure = err
@@ -806,7 +816,12 @@ function startAgentSdkTrace(
       threadId: input.threadId,
       turnId: input.turnId,
       provider: input.provider,
-      model: input.model
+      model: input.model,
+      toolCatalog: input.tools.map((tool) => ({
+        name: bridgedToolModelName(tool.name),
+        ...(tool.providerId ? { providerId: tool.providerId } : {}),
+        ...(tool.providerKind ? { providerKind: tool.providerKind } : {})
+      }))
     })
     const record = sink.beginSdkInvocation(round, {
       endpointFormat: 'agent-sdk',
@@ -817,7 +832,7 @@ function startAgentSdkTrace(
         instructions: input.contextInstructions,
         input: input.prompt,
         tools: input.tools.map((tool) => ({
-          name: tool.name,
+          name: bridgedToolModelName(tool.name),
           description: tool.description,
           input_schema: tool.inputSchema
         })),
@@ -984,9 +999,14 @@ function estimatedTokens(text: string): number {
   return text ? Math.ceil(Buffer.byteLength(text, 'utf8') / 4) : 0
 }
 
+const CLAUDE_CREDENTIAL_PATTERN = /sk-ant-(?:oat|api)[\w-]+/g
+
 function sanitizeAgentSdkError(error: unknown, oauthToken: string | undefined): string {
   const message = error instanceof Error ? error.message : String(error)
-  return oauthToken ? message.split(oauthToken).join('[REDACTED]') : message
+  const withoutKnownToken = oauthToken
+    ? message.split(oauthToken).join('[REDACTED]')
+    : message
+  return withoutKnownToken.replace(CLAUDE_CREDENTIAL_PATTERN, '[REDACTED]')
 }
 
 export function agentSdkCapabilities(): DelegatedRuntimeCapabilities {

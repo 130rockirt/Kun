@@ -1,7 +1,7 @@
 import type { ReactElement, RefObject } from 'react'
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { CircleAlert, GitCommitHorizontal, Hash } from 'lucide-react'
+import { ChevronDown, CircleAlert, GitCommitHorizontal, Hash } from 'lucide-react'
 import type { ChatBlock, RuntimeConnectionStatus } from '../../agent/types'
 import { useChatStore } from '../../store/chat-store'
 import { threadHasPendingRuntimeWork } from '../../store/chat-store-runtime-helpers'
@@ -359,8 +359,10 @@ function CompactionDivider({ block }: { block: CompactionTimelineBlock }): React
 
 /** Non-interactive runtime error rendered directly in the conversation flow. */
 export function TimelineRuntimeError({ block }: { block: TurnRuntimeErrorBlock }): ReactElement {
+  const { t } = useTranslation('common')
   const message = block.text.trim() || block.detail?.trim() || block.code?.trim() || ''
   const code = block.code?.trim() ?? ''
+  const detail = block.detail?.trim() ?? ''
   const showCode = Boolean(code && !message.toLowerCase().includes(code.toLowerCase()))
 
   return (
@@ -382,6 +384,21 @@ export function TimelineRuntimeError({ block }: { block: TurnRuntimeErrorBlock }
           <p className="mt-1 font-mono text-[11.5px] leading-5 text-orange-700/75 dark:text-orange-300/75">
             {code}
           </p>
+        ) : null}
+        {detail ? (
+          <details className="group/error-detail mt-2">
+            <summary className="inline-flex cursor-pointer list-none items-center gap-1 text-[12px] font-medium text-orange-700/80 hover:text-orange-900 dark:text-orange-300/80 dark:hover:text-orange-100">
+              <ChevronDown
+                aria-hidden="true"
+                className="h-3.5 w-3.5 -rotate-90 transition-transform group-open/error-detail:rotate-0"
+                strokeWidth={1.9}
+              />
+              {t('runtimeErrorDetails')}
+            </summary>
+            <pre className="mt-2 max-h-52 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-orange-300/50 bg-orange-50/70 px-3 py-2 font-mono text-[11.5px] leading-5 text-orange-950 dark:border-orange-800/50 dark:bg-orange-950/30 dark:text-orange-100">
+              {detail}
+            </pre>
+          </details>
         ) : null}
       </div>
     </div>

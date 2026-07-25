@@ -4,6 +4,7 @@ import type {
   Run,
   RunResult,
   SDKAgent,
+  SDKCustomTool,
   SDKImage,
   SDKMessage,
   SDKUserMessage,
@@ -53,6 +54,7 @@ import {
   mapCursorUsage,
   type CursorSdkStreamLimits
 } from './cursor-sdk-event-mapper.js'
+import type { CursorBridgeTool } from './cursor-sdk-tool-bridge.js'
 
 const DEFAULT_CURSOR_MODEL = 'auto'
 const MAX_CURSOR_ERROR_LENGTH = 2_000
@@ -90,6 +92,19 @@ export interface CursorSdkRuntimeDeps {
     softThresholdTokens: number
     hardThresholdTokens: number
   }
+  loadKunTurnContext?: (input: {
+    threadId: string
+    turnId: string
+    userText: string
+    signal: AbortSignal
+  }) => Promise<CursorKunTurnContext>
+}
+
+export type CursorKunTurnContext = {
+  instructionBlocks: string[]
+  activeSkillIds: string[]
+  tools: CursorBridgeTool[]
+  customTools: Record<string, SDKCustomTool>
 }
 
 class CursorTurnInterruptedError extends Error {
@@ -240,7 +255,7 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
 
   capabilities(providerId: string | undefined): DelegatedRuntimeCapabilities | undefined {
     if (!this.handlesProvider(providerId)) return undefined
-    return cursorSdkCapabilities()
+    return cursorSdkCapabilities(Boolean(this.deps.loadKunTurnContext))
   }
 
   async runTurn(
@@ -314,9 +329,46 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
       turnId,
       DEFAULT_SDK_HISTORY_TRANSCRIPT_MAX_BYTES
     )
+    const userText = userMessageTextWithComposerContexts(userItem)
+    let kunContext: CursorKunTurnContext = {
+      instructionBlocks: [],
+      activeSkillIds: [],
+      tools: [],
+      customTools: {}
+    }
+    if (this.deps.loadKunTurnContext) {
+      try {
+        kunContext = await this.deps.loadKunTurnContext({
+          threadId,
+          turnId,
+          userText,
+          signal
+        })
+      } catch (error) {
+        const message = sanitizeCursorSdkError(error, apiKey)
+        await this.deps.events.record({
+          kind: 'error',
+          threadId,
+          turnId,
+          message,
+          code: 'cursor_sdk_context_failed',
+          severity: 'error'
+        })
+        await this.deps.turns.finishTurn({
+          threadId,
+          turnId,
+          status: 'failed',
+          error: message,
+          code: 'cursor_sdk_context_failed',
+          severity: 'error'
+        })
+        return 'failed'
+      }
+    }
     const instructionBlocks = [
       this.deps.systemPrompt?.trim(),
-      thread.systemPrompt?.trim()
+      thread.systemPrompt?.trim(),
+      ...kunContext.instructionBlocks
     ].filter((value, index, all): value is string =>
       Boolean(value) && all.indexOf(value) === index
     )
@@ -329,7 +381,7 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
       workspace: thread.workspace
     })
     const planMode = this.deps.enforceReadOnly === true || (turn.mode ?? thread.mode) === 'plan'
-    let capabilities = cursorSdkCapabilities()
+    let capabilities = cursorSdkCapabilities(Boolean(this.deps.loadKunTurnContext))
     let options = cursorAgentExecutionOptions({
       workspace: thread.workspace,
       apiKey,
@@ -340,6 +392,15 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
       sandboxMode: thread.sandboxMode,
       enforceReadOnly: this.deps.enforceReadOnly
     })
+    if (Object.keys(kunContext.customTools).length > 0) {
+      options = {
+        ...options,
+        local: {
+          ...options.local,
+          customTools: kunContext.customTools
+        }
+      }
+    }
     let preparation: DelegatedSessionPreparation | undefined
     if (this.deps.sessionCoordinator) {
       preparation = await this.deps.sessionCoordinator.prepare({
@@ -361,7 +422,19 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
             mode: options.mode,
             sandbox: options.local?.sandboxOptions?.enabled !== false,
             settingSources: options.local?.settingSources ?? [],
-            capabilities
+            capabilities,
+            ...(this.deps.loadKunTurnContext
+              ? {
+                  instructions: kunContext.instructionBlocks,
+                  tools: kunContext.tools.map((tool) => ({
+                    name: tool.name,
+                    description: tool.description,
+                    inputSchema: tool.inputSchema,
+                    providerId: tool.providerId,
+                    providerKind: tool.providerKind
+                  }))
+                }
+              : {})
           }),
           continuationMode: 'native'
         },
@@ -370,7 +443,7 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
     }
     const buildPrompt = (includeHistory: boolean): string => composeSdkPromptText({
       ...(includeHistory && historyTranscript ? { historyTranscript } : {}),
-      userText: userMessageTextWithComposerContexts(userItem),
+      userText,
       instructionBlocks
     })
     let prompt = buildPrompt(!preparation?.resumed)
@@ -393,8 +466,10 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
       const system = estimateDelegatedTokens(instructionBlocks.join('\n'))
       const messages = estimateDelegatedTokens([
         resumed ? '' : historyTranscript,
-        userMessageTextWithComposerContexts(userItem)
+        userText
       ].join('\n'))
+      const tools = estimateDelegatedTokens(JSON.stringify(kunContext.tools))
+      const skills = estimateDelegatedTokens(kunContext.activeSkillIds.join('\n'))
       const other = resolvedImages.images.length * 1_024
       await this.deps.events.record({
         kind: 'context_snapshot',
@@ -404,10 +479,10 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
         providerId: resolvedProviderId,
         stepIndex: 0,
         ...contextProfile,
-        estimatedInputTokens: system + messages + other,
-        breakdown: { tools: 0, system, skills: 0, messages, other },
-        toolCount: 0,
-        activeSkillIds: [],
+        estimatedInputTokens: system + skills + tools + messages + other,
+        breakdown: { tools, system, skills, messages, other },
+        toolCount: kunContext.tools.length,
+        activeSkillIds: kunContext.activeSkillIds,
         contextManagement: 'sdk-managed',
         nativeHistory: resumed ? 'unknown' : 'none'
       })
@@ -526,6 +601,8 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
         provider: resolvedProviderId,
         model,
         prompt,
+        instructions: instructionBlocks,
+        tools: kunContext.tools,
         images: resolvedImages.summaries,
         mode: options.mode ?? 'plan',
         sandboxEnabled: options.local?.sandboxOptions?.enabled !== false,
@@ -687,12 +764,12 @@ function estimateDelegatedTokens(text: string): number {
   return text ? Math.ceil(Buffer.byteLength(text, 'utf8') / 4) : 0
 }
 
-export function cursorSdkCapabilities(): DelegatedRuntimeCapabilities {
+export function cursorSdkCapabilities(kunTools = false): DelegatedRuntimeCapabilities {
   return {
     nativeResume: true,
     structuredStreaming: true,
-    kunTools: false,
-    externalApproval: false,
+    kunTools,
+    externalApproval: kunTools,
     liveSteering: false,
     nativeContextTelemetry: false,
     fork: false
@@ -723,6 +800,8 @@ function startCursorTrace(
     provider: string
     model: string
     prompt: string
+    instructions: readonly string[]
+    tools: readonly CursorBridgeTool[]
     images: readonly CursorSdkImageSummary[]
     mode: 'agent' | 'plan'
     sandboxEnabled: boolean
@@ -736,14 +815,25 @@ function startCursorTrace(
       threadId: input.threadId,
       turnId: input.turnId,
       provider: input.provider,
-      model: input.model
+      model: input.model,
+      toolCatalog: input.tools.map((tool) => ({
+        name: tool.name,
+        providerKind: tool.providerKind,
+        providerId: tool.providerId
+      }))
     })
     const record = sink.beginSdkInvocation(round, {
       endpointFormat: 'cursor-sdk',
       target: 'cursor-sdk://local/agent',
       bodyText: JSON.stringify({
         model: input.model,
+        instructions: input.instructions,
         input: input.prompt,
+        tools: input.tools.map((tool) => ({
+          name: tool.name,
+          description: tool.description,
+          inputSchema: tool.inputSchema
+        })),
         attachments: {
           count: input.images.length,
           images: input.images

@@ -5,6 +5,7 @@ import type {
   WorkspaceEntry
 } from '@shared/workspace-file'
 import {
+  chatFileTreeEntryMatchesQuery,
   compareChatFileTreeEntriesByModified,
   formatChatFileTreeUnsupportedMessage,
   isChatFileTreeIgnoredDirectory,
@@ -39,10 +40,23 @@ describe('ChatFileTreePanel helpers', () => {
     expect(isChatFileTreeIgnoredDirectory('src')).toBe(false)
   })
 
-  it('marks only text files as previewable', () => {
+  it('marks all supported preview families as previewable', () => {
     expect(isChatFileTreePreviewableEntry(entry({ name: 'main.ts', type: 'file' }))).toBe(true)
-    expect(isChatFileTreePreviewableEntry(entry({ name: 'logo.png', type: 'file' }))).toBe(false)
+    expect(isChatFileTreePreviewableEntry(entry({ name: 'logo.png', type: 'file' }))).toBe(true)
+    expect(isChatFileTreePreviewableEntry(entry({ name: 'report.pdf', type: 'file' }))).toBe(true)
+    expect(isChatFileTreePreviewableEntry(entry({ name: 'archive.zip', type: 'file' }))).toBe(false)
     expect(isChatFileTreePreviewableEntry(entry({ name: 'src', type: 'directory' }))).toBe(false)
+  })
+
+  it('matches loaded entries by name or workspace-relative path', () => {
+    const candidate = entry({
+      name: 'App.tsx',
+      type: 'file',
+      path: '/tmp/project/src/components/App.tsx'
+    })
+    expect(chatFileTreeEntryMatchesQuery(candidate, '/tmp/project', 'app')).toBe(true)
+    expect(chatFileTreeEntryMatchesQuery(candidate, '/tmp/project', 'components/app')).toBe(true)
+    expect(chatFileTreeEntryMatchesQuery(candidate, '/tmp/project', 'server')).toBe(false)
   })
 
   it('formats unsupported preview titles without leaking UI state', () => {

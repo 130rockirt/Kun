@@ -236,6 +236,9 @@ export class ModelRoundEngine {
                   toolName: intent.call.toolName,
                   toolKind: intent.call.toolKind,
                   arguments: intent.call.arguments,
+                  ...(intent.providerMetadata
+                    ? { providerMetadata: intent.providerMetadata }
+                    : {}),
                   ...(intent.repairNotes.length
                     ? { summary: `Repaired tool arguments: ${intent.repairNotes.join('; ')}` }
                     : {})

@@ -339,6 +339,7 @@ export type ChatBlock =
   | {
       kind: 'system'
       id: string
+      turnId?: string
       createdAt?: string
       text: string
       code?: string
@@ -424,6 +425,7 @@ export type RuntimeStatusEventPayload = {
 
 export type RuntimeErrorEventPayload = {
   itemId: string
+  turnId?: string
   createdAt?: string
   message: string
   code?: string
@@ -484,6 +486,11 @@ export type ThreadDeltaEvent = {
 
 export type ThreadErrorOptions = {
   terminal?: boolean
+  /**
+   * Conversation-scoped failures already have a durable runtime-error card in
+   * the owning thread. Runtime-scoped failures use the global recovery banner.
+   */
+  scope?: 'conversation' | 'runtime'
 }
 
 /** Cumulative usage/cost for a Kun thread. */

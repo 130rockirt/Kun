@@ -165,6 +165,7 @@ export function buildInitialSetupSettings(
 
   const next = normalizeAppSettings({
     ...settings,
+    initialSetupCompleted: true,
     provider: {
       apiKey: nextApiKey,
       baseUrl: nextBaseUrl,

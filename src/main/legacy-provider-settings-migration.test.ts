@@ -64,6 +64,48 @@ describe('LegacyProviderSettingsMigrationCoordinator', () => {
     expect(JSON.stringify(runtimeProviders)).not.toContain('cursor-secret')
   })
 
+  it('projects legacy subscription profiles through their preset SDK transports', () => {
+    const providerSettings = defaultModelProviderSettings()
+    const legacySubscriptions = [
+      'claude-subscription',
+      'cursor-subscription',
+      'gemini-subscription',
+      'gemini-cli-subscription'
+    ].map((providerId) => {
+      const { kind: _removedKind, ...profile } = modelProviderPresetProfile(
+        getModelProviderPreset(providerId)!,
+        ''
+      )
+      return profile
+    })
+    const runtimeProviders = providersConfigForRuntime({
+      provider: {
+        ...providerSettings,
+        providers: [...providerSettings.providers, ...legacySubscriptions]
+      }
+    } as AppSettingsV1)
+
+    expect(runtimeProviders['claude-subscription']).toEqual(expect.objectContaining({
+      kind: 'agent-sdk',
+      credentialSourceId: 'settings:provider:claude-subscription'
+    }))
+    expect(runtimeProviders['cursor-subscription']).toEqual(expect.objectContaining({
+      kind: 'cursor-sdk',
+      credentialSourceId: 'settings:provider:cursor-subscription'
+    }))
+    expect(runtimeProviders['gemini-subscription']).toEqual(expect.objectContaining({
+      kind: 'antigravity-cli',
+      credentialSourceId: 'settings:provider:gemini-subscription'
+    }))
+    expect(runtimeProviders['gemini-cli-subscription']).toEqual(expect.objectContaining({
+      kind: 'gemini-cli-api',
+      credentialSourceId: 'settings:provider:gemini-cli-subscription'
+    }))
+    expect(runtimeProviders['cursor-subscription']?.baseUrl).toBeUndefined()
+    expect(runtimeProviders['gemini-subscription']?.baseUrl).toBeUndefined()
+    expect(runtimeProviders['gemini-cli-subscription']?.baseUrl).toBeUndefined()
+  })
+
   it('backs up and removes plaintext while keeping secure bindings readable across restarts', async () => {
     const userDataDir = await mkdtemp(join(tmpdir(), 'kun-settings-credential-migration-'))
     const dataDir = join(userDataDir, 'runtime-data')

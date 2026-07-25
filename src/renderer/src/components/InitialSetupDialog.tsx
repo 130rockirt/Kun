@@ -198,6 +198,23 @@ export async function completeInitialSetupAfterSave(input: {
   return true
 }
 
+export async function dismissInitialSetup(input: {
+  mode: InitialSetupMode
+  persistCompletion: () => Promise<void>
+  reloadUiSettings: () => Promise<void>
+  probeRuntime: (mode?: 'user' | 'background') => Promise<void>
+  closeInitialSetup: () => void
+}): Promise<void> {
+  if (input.mode === 'required') {
+    await input.persistCompletion()
+  }
+  await input.reloadUiSettings()
+  input.closeInitialSetup()
+  if (input.mode === 'required') {
+    void input.probeRuntime('user')
+  }
+}
+
 export function InitialSetupDialog(): ReactElement {
   const { t } = useTranslation('settings')
   const initialSetupMode = useChatStore((s) => s.initialSetupMode)
@@ -260,9 +277,22 @@ export function InitialSetupDialog(): ReactElement {
 
   const handleClose = () => {
     if (!closeAllowed) return
+    setSaving(true)
     setError(null)
-    closeInitialSetup()
-    void reloadUiSettings()
+    void dismissInitialSetup({
+      mode: initialSetupMode,
+      persistCompletion: async () => {
+        const next = await rendererRuntimeClient.setSettings({ initialSetupCompleted: true })
+        emitRendererSettingsChanged(next)
+      },
+      reloadUiSettings,
+      probeRuntime,
+      closeInitialSetup
+    }).catch((e: unknown) => {
+      setError(e instanceof Error ? e.message : String(e))
+    }).finally(() => {
+      setSaving(false)
+    })
   }
 
   const handleOpenKeyPage = (url: string) => {
@@ -421,6 +451,7 @@ export function InitialSetupDialog(): ReactElement {
               <button
                 type="button"
                 onClick={handleClose}
+                disabled={saving}
                 aria-label={t('firstRunClose')}
                 title={t('firstRunClose')}
                 className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-slate-300/80 bg-white/72 text-slate-500 transition hover:border-slate-400 hover:text-slate-700 dark:border-white/10 dark:bg-white/[0.04] dark:text-slate-400 dark:hover:border-white/18 dark:hover:text-slate-200"
@@ -683,6 +714,7 @@ export function InitialSetupDialog(): ReactElement {
               <button
                 type="button"
                 onClick={handleClose}
+                disabled={saving}
                 className="min-h-11 rounded-xl border border-slate-300/80 bg-white/75 px-4 py-2 text-[15px] font-semibold text-slate-700 transition hover:border-slate-400 hover:bg-white dark:border-white/10 dark:bg-white/[0.04] dark:text-slate-200 dark:hover:border-white/16 dark:hover:bg-white/[0.06]"
               >
                 {t(isPreview ? 'firstRunClose' : 'firstRunSkip')}

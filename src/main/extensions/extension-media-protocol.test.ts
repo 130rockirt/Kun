@@ -120,13 +120,14 @@ describe('kun-media protocol', () => {
     ])
   })
 
-  it('registers both Extension schemes in the one permitted pre-ready call', () => {
+  it('registers all custom schemes in the one permitted pre-ready call', () => {
     const registerSchemesAsPrivileged = vi.fn()
     registerKunExtensionPlatformSchemesAsPrivileged({ registerSchemesAsPrivileged } as never)
     expect(registerSchemesAsPrivileged).toHaveBeenCalledTimes(1)
     expect(registerSchemesAsPrivileged).toHaveBeenCalledWith([
       expect.objectContaining({ scheme: 'kun-extension' }),
-      expect.objectContaining({ scheme: 'kun-media' })
+      expect.objectContaining({ scheme: 'kun-media' }),
+      expect.objectContaining({ scheme: 'kun-workspace-preview' })
     ])
   })
 

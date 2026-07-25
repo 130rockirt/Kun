@@ -32,6 +32,7 @@ export type ModelProviderPresetId =
   | 'codex'
   | 'claude-subscription'
   | 'gemini-subscription'
+  | 'gemini-cli-subscription'
   | 'cursor-subscription'
   | 'grok-subscription'
   | 'moonshot-cn'
@@ -50,7 +51,9 @@ export const CHATGPT_SUBSCRIPTION_NAME = 'ChatGPT 订阅'
 export const GROK_SUBSCRIPTION_PROVIDER_ID = 'grok-subscription'
 export const GROK_SUBSCRIPTION_NAME = 'Grok 订阅'
 export const GEMINI_SUBSCRIPTION_PROVIDER_ID = 'gemini-subscription'
-export const GEMINI_SUBSCRIPTION_NAME = 'Gemini 订阅'
+export const GEMINI_SUBSCRIPTION_NAME = 'Google Antigravity 订阅'
+export const GEMINI_CLI_SUBSCRIPTION_PROVIDER_ID = 'gemini-cli-subscription'
+export const GEMINI_CLI_SUBSCRIPTION_NAME = 'Gemini CLI 订阅（API）'
 export const CURSOR_SUBSCRIPTION_PROVIDER_ID = 'cursor-subscription'
 export const CURSOR_SUBSCRIPTION_NAME = 'Cursor 订阅'
 export const CURSOR_SUBSCRIPTION_MODEL_IDS = ['auto'] as const
@@ -58,6 +61,16 @@ export const GEMINI_SUBSCRIPTION_MODEL_IDS = [
   'gemini-3.6-flash',
   'gemini-3.5-flash',
   'gemini-3.1-pro'
+] as const
+// Concrete model ids accepted by the official Gemini CLI Code Assist API
+// path. Keep this catalog independent from Antigravity's `agy models` output:
+// the two transports can expose different releases to the same Google account.
+export const GEMINI_CLI_SUBSCRIPTION_MODEL_IDS = [
+  'gemini-3.1-pro-preview',
+  'gemini-3-flash-preview',
+  'gemini-3.1-flash-lite',
+  'gemini-2.5-pro',
+  'gemini-2.5-flash'
 ] as const
 export const GROK_SUBSCRIPTION_MODEL_IDS = [
   'grok-4.5',
@@ -85,6 +98,8 @@ export type ModelProviderTokenPlanRegion = {
   id: string
   baseUrl: string
 }
+
+export type ModelProviderSubscriptionRegion = 'china' | 'united-states'
 
 /**
  * Subscription ("Token Plan") access mode. Providers issue separate keys for
@@ -140,12 +155,18 @@ export type ModelProviderPreset = {
    */
   category?: 'api' | 'subscription'
   /**
+   * 套餐订阅筛选所使用的供应商归属地区。仅用于预设选择器展示，不写入 provider profile。
+   * 同一个预设的 Token Plan 入口沿用这里的地区。
+   */
+  subscriptionRegion?: ModelProviderSubscriptionRegion
+  /**
    * 传输类型。'agent-sdk' = 把整轮委托给内置的官方 Claude Agent SDK(消耗 Claude
    * Pro/Max 订阅额度,合规路径);'antigravity-cli' = 把整轮委托给 Google 官方
-   * Antigravity CLI(使用 Gemini 订阅);'cursor-sdk' = 使用 Cursor API Key 把
-   * 整轮委托给官方 Cursor SDK;缺省按 HTTP 模型客户端走 baseUrl。
+   * Antigravity CLI(使用 Gemini 订阅);'gemini-cli-api' = 复用官方 Gemini CLI
+   * OAuth 登录并直接调用 Code Assist API,由 Kun 保留 agent loop;'cursor-sdk' =
+   * 使用 Cursor API Key 把整轮委托给官方 Cursor SDK;缺省按 HTTP 模型客户端走 baseUrl。
    */
-  kind?: 'agent-sdk' | 'antigravity-cli' | 'cursor-sdk'
+  kind?: 'agent-sdk' | 'antigravity-cli' | 'gemini-cli-api' | 'cursor-sdk'
   baseUrl: string
   endpointFormat: ModelEndpointFormat
   models: string[]
@@ -217,6 +238,13 @@ const ANTIGRAVITY_REASONING: ModelProviderReasoningCapabilityV1 = {
   defaultEffort: 'medium',
   // The delegated runtime maps this to `agy --effort`; the HTTP request
   // protocol is intentionally unused.
+  requestProtocol: 'none'
+}
+
+const GEMINI_CLI_API_REASONING: ModelProviderReasoningCapabilityV1 = {
+  supportedEfforts: ['off', 'low', 'medium', 'high'],
+  defaultEffort: 'medium',
+  // The dedicated Gemini CLI API adapter maps this to generationConfig.thinkingConfig.
   requestProtocol: 'none'
 }
 
@@ -300,6 +328,7 @@ export const MODEL_PROVIDER_PRESETS: ModelProviderPreset[] = [
     id: 'claude-subscription',
     name: 'Claude (Pro/Max 订阅)',
     category: 'subscription',
+    subscriptionRegion: 'united-states',
     // Delegates whole turns to the official Claude Agent SDK so requests draw on
     // the user's Claude subscription. baseUrl is unused for this kind (kept for
     // display); auth comes from the host's Claude Code login or a pasted
@@ -326,9 +355,10 @@ export const MODEL_PROVIDER_PRESETS: ModelProviderPreset[] = [
     id: GEMINI_SUBSCRIPTION_PROVIDER_ID,
     name: GEMINI_SUBSCRIPTION_NAME,
     category: 'subscription',
-    // Consumer Gemini subscriptions are served by Google's official
-    // Antigravity CLI. Do not route these ids to the retired Code Assist
-    // v1internal endpoint or the public API-key endpoint.
+    subscriptionRegion: 'united-states',
+    // Antigravity subscription models are served by Google's official
+    // Antigravity CLI. Do not route this provider's ids through the separate
+    // Gemini CLI Code Assist API transport or the public API-key endpoint.
     kind: 'antigravity-cli',
     baseUrl: '',
     endpointFormat: 'custom_endpoint',
@@ -343,9 +373,36 @@ export const MODEL_PROVIDER_PRESETS: ModelProviderPreset[] = [
     apiKeyUrl: 'https://antigravity.google'
   },
   {
+    id: GEMINI_CLI_SUBSCRIPTION_PROVIDER_ID,
+    name: GEMINI_CLI_SUBSCRIPTION_NAME,
+    category: 'subscription',
+    subscriptionRegion: 'united-states',
+    // Reuses the official Gemini CLI's OAuth credential and direct Code Assist
+    // API contract. This is a native Kun model transport, not an Antigravity
+    // whole-turn delegation and not the public API-key endpoint.
+    kind: 'gemini-cli-api',
+    baseUrl: '',
+    endpointFormat: 'custom_endpoint',
+    models: [...GEMINI_CLI_SUBSCRIPTION_MODEL_IDS],
+    modelProfiles: Object.fromEntries(
+      GEMINI_CLI_SUBSCRIPTION_MODEL_IDS.map((model) => [
+        model,
+        visionChatProfile(1_048_576, GEMINI_CLI_API_REASONING)
+      ])
+    ),
+    speech: {
+      protocol: 'gemini-cli-audio',
+      baseUrl: '',
+      models: [...GEMINI_CLI_SUBSCRIPTION_MODEL_IDS]
+    },
+    docsUrl: 'https://github.com/google-gemini/gemini-cli',
+    apiKeyUrl: 'https://github.com/google-gemini/gemini-cli#authentication-options'
+  },
+  {
     id: CURSOR_SUBSCRIPTION_PROVIDER_ID,
     name: CURSOR_SUBSCRIPTION_NAME,
     category: 'subscription',
+    subscriptionRegion: 'united-states',
     // Cursor exposes an official Agent SDK instead of an OpenAI-compatible
     // subscription endpoint. Account-visible models are pulled after the user
     // supplies a Cursor API key; `auto` remains the offline fallback.
@@ -363,6 +420,7 @@ export const MODEL_PROVIDER_PRESETS: ModelProviderPreset[] = [
     id: 'zhipu-coding-plan',
     name: 'Zhipu Coding Plan',
     category: 'subscription',
+    subscriptionRegion: 'china',
     baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4/chat/completions',
     endpointFormat: 'custom_endpoint',
     models: [...ZHIPU_CODING_PLAN_MODELS],
@@ -380,6 +438,7 @@ export const MODEL_PROVIDER_PRESETS: ModelProviderPreset[] = [
     id: 'zai-coding-plan',
     name: 'Z.ai Coding Plan',
     category: 'subscription',
+    subscriptionRegion: 'china',
     baseUrl: 'https://api.z.ai/api/coding/paas/v4/chat/completions',
     endpointFormat: 'custom_endpoint',
     models: [...ZAI_CODING_PLAN_MODELS],
@@ -398,6 +457,7 @@ export const MODEL_PROVIDER_PRESETS: ModelProviderPreset[] = [
     id: 'kimi-code',
     name: 'Kimi Code',
     category: 'subscription',
+    subscriptionRegion: 'china',
     baseUrl: 'https://api.kimi.com/coding/v1',
     endpointFormat: 'chat_completions',
     models: ['kimi-for-coding'],
@@ -411,6 +471,7 @@ export const MODEL_PROVIDER_PRESETS: ModelProviderPreset[] = [
     id: 'volcengine-coding-plan',
     name: 'Volcano Ark Coding Plan',
     category: 'subscription',
+    subscriptionRegion: 'china',
     // 火山方舟 Coding Plan 与按量付费共用同一个 API Key,但套餐额度只在 /api/coding 网关上消费;
     // 用按量 base(/api/v3)调用会按量计费。官方注明套餐额度仅限编程工具(Claude Code / Cursor 等)使用。
     baseUrl: 'https://ark.cn-beijing.volces.com/api/coding/v3',
@@ -427,6 +488,7 @@ export const MODEL_PROVIDER_PRESETS: ModelProviderPreset[] = [
     id: 'opencode-go',
     name: 'OpenCode Go',
     category: 'subscription',
+    subscriptionRegion: 'united-states',
     // 网关默认走 chat_completions;MiniMax / Qwen 系列在 OpenCode Go 上以
     // Anthropic Messages 格式提供,故按模型用 endpointFormat:'messages' 覆盖
     // (请求改打 …/zen/go/v1/messages)。
@@ -512,6 +574,7 @@ export const MODEL_PROVIDER_PRESETS: ModelProviderPreset[] = [
   {
     id: 'xiaomi',
     name: 'Xiaomi',
+    subscriptionRegion: 'china',
     baseUrl: 'https://api.xiaomimimo.com/v1',
     endpointFormat: 'chat_completions',
     models: [
@@ -573,6 +636,7 @@ export const MODEL_PROVIDER_PRESETS: ModelProviderPreset[] = [
   {
     id: 'minimax',
     name: 'MiniMax',
+    subscriptionRegion: 'china',
     baseUrl: 'https://api.minimaxi.com/anthropic',
     endpointFormat: 'messages',
     models: [
@@ -670,6 +734,7 @@ export const MODEL_PROVIDER_PRESETS: ModelProviderPreset[] = [
   {
     id: 'aliyun',
     name: 'Aliyun',
+    subscriptionRegion: 'china',
     baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
     endpointFormat: 'chat_completions',
     models: [
@@ -724,6 +789,7 @@ export const MODEL_PROVIDER_PRESETS: ModelProviderPreset[] = [
   {
     id: 'tencentcloud',
     name: 'Tencent Cloud',
+    subscriptionRegion: 'china',
     baseUrl: 'https://api.hunyuan.cloud.tencent.com/v1',
     endpointFormat: 'chat_completions',
     models: ['hunyuan-turbos-latest', 'hunyuan-t1-latest', 'hunyuan-lite'],
@@ -752,6 +818,7 @@ export const MODEL_PROVIDER_PRESETS: ModelProviderPreset[] = [
     id: CHATGPT_SUBSCRIPTION_PROVIDER_ID,
     name: CHATGPT_SUBSCRIPTION_NAME,
     category: 'subscription',
+    subscriptionRegion: 'united-states',
     baseUrl: 'https://chatgpt.com/backend-api/codex/responses',
     endpointFormat: 'custom_endpoint',
     models: [...CHATGPT_SUBSCRIPTION_MODEL_IDS],
@@ -776,6 +843,7 @@ export const MODEL_PROVIDER_PRESETS: ModelProviderPreset[] = [
     id: GROK_SUBSCRIPTION_PROVIDER_ID,
     name: GROK_SUBSCRIPTION_NAME,
     category: 'subscription',
+    subscriptionRegion: 'united-states',
     // Session OAuth tokens must hit cli-chat-proxy (subscription quota). Pay-as-you-go
     // XAI_API_KEY traffic uses https://api.x.ai/v1 instead — keep them separate.
     baseUrl: 'https://cli-chat-proxy.grok.com/v1',
@@ -798,6 +866,11 @@ export const MODEL_PROVIDER_PRESETS: ModelProviderPreset[] = [
       protocol: 'grok-imagine-video',
       baseUrl: 'https://api.x.ai/v1',
       models: ['grok-imagine-video-1.5-preview', 'grok-imagine-video']
+    },
+    speech: {
+      protocol: 'xai-stt',
+      baseUrl: 'https://api.x.ai/v1',
+      models: ['grok-transcribe']
     },
     docsUrl: 'https://docs.x.ai/',
     apiKeyUrl: 'https://accounts.x.ai'
@@ -836,7 +909,14 @@ export function modelProviderPresetProfile(
     apiKey: apiKey.trim(),
     baseUrl: preset.baseUrl,
     endpointFormat: preset.endpointFormat,
-    retry: defaultPresetRetrySettings(),
+    retry: preset.kind === 'gemini-cli-api'
+      ? {
+          ...defaultPresetRetrySettings(),
+          // The official Gemini CLI retries transient Code Assist capacity and
+          // server failures. Preserve that behavior for multi-step tool turns.
+          maxAttempts: 3
+        }
+      : defaultPresetRetrySettings(),
     ...(preset.kind ? { kind: preset.kind } : {}),
     models: [...preset.models],
     modelProfiles: copyModelProfiles(preset.modelProfiles),

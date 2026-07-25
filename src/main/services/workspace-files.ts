@@ -100,15 +100,21 @@ export async function listWorkspaceDirectory(
   try {
     const root = await resolveWorkspaceDirectory(payload)
     const entries = await readdir(root, { withFileTypes: true })
-    const normalized = entries
+    const normalized = await Promise.all(entries
       .filter((entry) => entry.name !== '.DS_Store')
-      .map((entry) => ({
+      .map(async (entry) => {
+        const entryPath = join(root, entry.name)
+        const metadata = await stat(entryPath).catch(() => null)
+        return {
         name: entry.name,
-        path: join(root, entry.name),
+        path: entryPath,
         type: entry.isDirectory() ? ('directory' as const) : ('file' as const),
-        ext: entry.isDirectory() ? '' : extensionFromName(entry.name)
+        ext: entry.isDirectory() ? '' : extensionFromName(entry.name),
+        ...(metadata ? { mtimeMs: metadata.mtimeMs } : {}),
+        ...(metadata?.isFile() ? { size: metadata.size } : {})
+        }
       }))
-      .sort(compareWorkspaceEntries)
+    normalized.sort(compareWorkspaceEntries)
 
     return { ok: true, root, entries: normalized }
   } catch (error) {
@@ -143,6 +149,7 @@ export async function readWorkspaceFile(payload: WorkspaceFileTarget): Promise<W
         path: targetPath,
         content,
         size: fileInfo.size,
+        mtimeMs: fileInfo.mtimeMs,
         truncated: fileInfo.size > MAX_FILE_PREVIEW_BYTES,
         ...(payload.line ? { line: payload.line } : {}),
         ...(payload.column ? { column: payload.column } : {})
@@ -237,6 +244,17 @@ export async function writeWorkspaceFile(
   // previous version intact rather than producing a half-written file.
   try {
     const targetPath = await resolveTargetPathWithinWorkspace(payload.path, payload.workspaceRoot)
+    if (payload.expectedMtimeMs !== undefined && payload.force !== true) {
+      const current = await stat(targetPath).catch(() => null)
+      if (!current || current.mtimeMs !== payload.expectedMtimeMs) {
+        return {
+          ok: false,
+          code: 'modified_on_disk',
+          message: 'This file changed on disk after it was opened.',
+          ...(current ? { mtimeMs: current.mtimeMs } : {})
+        }
+      }
+    }
     await mkdir(dirname(targetPath), { recursive: true })
     const tmpPath = `${targetPath}.${randomUUID()}.tmp`
     try {
@@ -247,10 +265,12 @@ export async function writeWorkspaceFile(
       await unlink(tmpPath).catch(() => undefined)
       throw writeError
     }
+    const saved = await stat(targetPath)
     return {
       ok: true,
       path: targetPath,
-      savedAt: new Date().toISOString()
+      savedAt: new Date().toISOString(),
+      mtimeMs: saved.mtimeMs
     }
   } catch (error) {
     return {

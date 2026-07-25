@@ -6,6 +6,7 @@ import { useChatStore } from '../../store/chat-store'
 import {
   ConversationTurn,
   MessageTimeline,
+  TimelineRuntimeError,
   goalTimelinePaddingClass,
   liveTurnProgressClass,
   resultPreviewSourcesForTurn,
@@ -1195,6 +1196,29 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
     expect(html).not.toContain('request failed with status 400')
     expect(html).not.toContain('Code: http_400')
     expect(html).not.toContain('full provider body only visible in the expanded error detail')
+  })
+
+  it('renders a durable runtime failure inline with expandable technical detail', () => {
+    const html = renderToStaticMarkup(
+      createElement(TimelineRuntimeError, {
+        block: {
+          kind: 'system',
+          id: 'error_1',
+          turnId: 'turn_1',
+          text: 'Cursor SDK authentication failed',
+          detail: 'Code: cursor_sdk_authentication_failed\n\nMessage:\nInvalid API key',
+          code: 'cursor_sdk_authentication_failed',
+          severity: 'error',
+          runtimeError: true
+        }
+      })
+    )
+
+    expect(html).toContain('role="alert"')
+    expect(html).toContain('Cursor SDK authentication failed')
+    expect(html).toContain('cursor_sdk_authentication_failed')
+    expect(html).toContain('<details')
+    expect(html).toContain('Invalid API key')
   })
 
   it('adds extra bottom padding only for chat timelines with an active goal banner', () => {

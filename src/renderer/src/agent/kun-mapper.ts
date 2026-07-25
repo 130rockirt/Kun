@@ -1372,6 +1372,7 @@ function systemErrorBlockFromItem(item: CoreTurnItemJson): ChatBlock {
   return {
     kind: 'system',
     id: item.id,
+    turnId: item.turnId,
     createdAt: itemCreatedAt(item),
     text: redactSecretText(message),
     ...(item.code ? { code: item.code } : {}),
@@ -1385,6 +1386,7 @@ function runtimeErrorFromItem(item: CoreTurnItemJson): RuntimeErrorEventPayload 
   const message = item.message ?? 'Runtime error'
   return {
     itemId: item.id,
+    turnId: item.turnId,
     createdAt: itemCreatedAt(item),
     message: redactSecretText(message),
     ...(item.code ? { code: item.code } : {}),
@@ -1401,6 +1403,7 @@ function runtimeErrorFromEvent(
   const itemId = event.itemId ?? `runtime_error_${event.turnId ?? event.threadId ?? event.seq ?? Date.now()}`
   return {
     itemId,
+    ...(event.turnId ? { turnId: event.turnId } : {}),
     createdAt: event.timestamp,
     message: redactSecretText(message),
     ...(event.code ? { code: event.code } : {}),

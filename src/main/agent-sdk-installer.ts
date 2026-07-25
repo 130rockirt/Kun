@@ -17,7 +17,7 @@ import { join } from 'node:path'
 import { fetchWithOptionalProxy } from './proxy-fetch'
 
 // Keep in sync with kun/package.json's @anthropic-ai/claude-agent-sdk version.
-export const AGENT_SDK_VERSION = '0.3.193'
+export const AGENT_SDK_VERSION = '0.3.220'
 const REGISTRY = 'https://registry.npmjs.org'
 
 export function claudeBinaryName(): string {

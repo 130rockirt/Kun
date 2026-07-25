@@ -1,4 +1,5 @@
 import type { UsageSnapshot } from '../contracts/usage.js'
+import type { ToolCallProviderMetadata } from '../contracts/items.js'
 import type { ModelStreamChunk } from '../ports/model-client.js'
 import type { ToolCallLike } from '../ports/tool-host.js'
 import { repairDispatchToolArguments } from './tool-call-repair.js'
@@ -26,7 +27,12 @@ export type ModelStreamIntent =
   | { kind: 'assistant_text_delta'; text: string }
   | { kind: 'assistant_reasoning_delta'; text: string }
   | { kind: 'retrying'; status: number; attempt: number; maxAttempts: number; delayMs: number }
-  | { kind: 'tool_call_ready'; call: ToolCallLike; repairNotes: readonly string[] }
+  | {
+      kind: 'tool_call_ready'
+      call: ToolCallLike
+      repairNotes: readonly string[]
+      providerMetadata?: ToolCallProviderMetadata
+    }
   | { kind: 'generated_image'; imageBase64: string; mimeType: string }
   | { kind: 'usage'; usage: UsageSnapshot }
   | { kind: 'model_error'; message: string; code?: string }
@@ -166,7 +172,8 @@ export class ModelStreamCollector {
       intents: [{
         kind: 'tool_call_ready',
         call,
-        repairNotes: repaired.notes
+        repairNotes: repaired.notes,
+        ...(chunk.providerMetadata ? { providerMetadata: chunk.providerMetadata } : {})
       }]
     }
   }

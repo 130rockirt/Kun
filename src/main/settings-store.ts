@@ -225,6 +225,7 @@ async function ensureManagedWorkspaceRootsExist(settings: AppSettingsV1): Promis
 
 const defaultSettings = (): AppSettingsV1 => ({
   version: 1,
+  initialSetupCompleted: false,
   locale: 'en',
   theme: 'system',
   uiFontScale: DEFAULT_UI_FONT_SCALE,
