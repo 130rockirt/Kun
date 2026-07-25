@@ -249,6 +249,7 @@ export function reduceChatProjection(
     }
     case 'user_input_requested': {
       const req = action.payload
+      if (req.questions.length === 0) return {}
       const existing = state.blocks.find(
         (block) => block.kind === 'user_input' && block.requestId === req.requestId
       )

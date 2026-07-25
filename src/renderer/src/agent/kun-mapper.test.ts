@@ -1068,6 +1068,79 @@ describe('user input mapping', () => {
     })
   })
 
+  it('maps prompt/message aliases on user-input questions', async () => {
+    let request: unknown = null
+    const sink: ThreadEventSink = {
+      ...makeSink(),
+      onUserInput: (payload) => {
+        request = payload
+      }
+    }
+    await dispatchKunRuntimeEvent(
+      {
+        kind: 'user_input_requested',
+        seq: 8,
+        itemId: 'item_input_alias',
+        inputId: 'input_alias',
+        questions: [
+          {
+            id: 'next_action',
+            prompt: 'Release review finished. What should I do next?',
+            options: [{ label: 'Fix blockers', description: '' }]
+          }
+        ]
+      },
+      sink,
+      async () => undefined
+    )
+    expect(request).toMatchObject({
+      itemId: 'item_input_alias',
+      requestId: 'input_alias',
+      questions: [
+        {
+          id: 'next_action',
+          question: 'Release review finished. What should I do next?',
+          options: [{ label: 'Fix blockers', description: '' }]
+        }
+      ]
+    })
+  })
+
+  it('drops empty user-input requests instead of inventing placeholder text', async () => {
+    let request: unknown = null
+    const sink: ThreadEventSink = {
+      ...makeSink(),
+      onUserInput: (payload) => {
+        request = payload
+      }
+    }
+    await dispatchKunRuntimeEvent(
+      {
+        kind: 'user_input_requested',
+        seq: 9,
+        itemId: 'item_input_empty',
+        inputId: 'input_empty',
+        questions: [{ id: 'blank', options: [{ label: 'Continue', description: '' }] }]
+      },
+      sink,
+      async () => undefined
+    )
+    expect(request).toBeNull()
+    expect(
+      chatBlockFromItem({
+        id: 'item_input_empty',
+        turnId: 'turn_1',
+        threadId: 'thr_1',
+        role: 'tool',
+        status: 'pending',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        kind: 'user_input',
+        inputId: 'input_empty',
+        questions: [{ id: 'blank', options: [{ label: 'Continue', description: '' }] }]
+      })
+    ).toBeNull()
+  })
+
   it('surfaces submitted user-input answers from runtime events', async () => {
     let status: unknown = null
     const sink: ThreadEventSink = {

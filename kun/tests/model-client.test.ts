@@ -1119,14 +1119,16 @@ describe('CompatModelClient', () => {
       // drain
     }
     expect(sentAccept[0]).toBe('application/json')
+    // Non-DeepSeek OpenAI-compat hosts must not receive DeepSeek-only `thinking`
+    // (see compat-request-builder nativeDeepSeekHost scoping / issue #26).
     expect(sentBodies[0]).toMatchObject({
       model: 'deepseek-v4-flash',
       stream: false,
       max_tokens: 96,
       temperature: 0,
-      response_format: { type: 'json_object' },
-      thinking: { type: 'disabled' }
+      response_format: { type: 'json_object' }
     })
+    expect(sentBodies[0]).not.toHaveProperty('thinking')
   })
 
   it('requests usage in streaming responses', async () => {

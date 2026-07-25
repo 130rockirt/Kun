@@ -149,10 +149,22 @@ describe('chat projection reducer', () => {
     }
     const input: RuntimeProjectionAction = {
       type: 'user_input_requested',
-      payload: { itemId: 'input_item_1', requestId: 'input_1', questions: [] }
+      payload: {
+        itemId: 'input_item_1',
+        requestId: 'input_1',
+        questions: [{ header: 'Input', id: 'input_1', question: 'Continue?', options: [] }]
+      }
     }
     const projected = project(state(), [approval, input, approval, input])
     expect(projected.blocks).toHaveLength(2)
+  })
+
+  it('ignores user-input requests that have no question text', () => {
+    const projected = project(state(), [{
+      type: 'user_input_requested',
+      payload: { itemId: 'input_item_empty', requestId: 'input_empty', questions: [] }
+    }])
+    expect(projected.blocks).toHaveLength(0)
   })
 
   it('projects the sanitized runtime message as a durable conversation error', () => {

@@ -637,7 +637,7 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
     expect(html).toContain('Sources 1')
   })
 
-  it('keeps running tool calls collapsed by default while showing active status', () => {
+  it('keeps running tool calls collapsed by default without in-row loading chrome', () => {
     const block: ChatBlock = toolBlock({
       summary: 'read: file',
       status: 'running',
@@ -658,9 +658,8 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
 
     expect(html).toContain('Read')
     expect(html).toContain('/tmp/readme.md')
-    expect(html).toContain('ds-work-logo')
-    expect(html).toContain('is-active')
-    expect(html).toContain('ds-shiny-text')
+    expect(html).not.toContain('is-active')
+    expect(html).not.toContain('ds-shiny-text')
     expect(html).not.toContain('partial tool output while running')
     expect(html).toContain('ds-process-file-reference')
   })
@@ -757,31 +756,42 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
     expect(html).not.toContain('read detail should stay tucked away')
   })
 
-  it('keeps active reasoning in one collapsed loading row', () => {
-    const block: ChatBlock = {
-      kind: 'reasoning',
-      id: 'live-reasoning',
-      text: '**current reasoning summary**\n\n<!-- -->'
+  it('keeps live thinking on the turn-bottom loading row', () => {
+    const turn = {
+      user: {
+        kind: 'user' as const,
+        id: 'user_1',
+        text: 'keep reviewing'
+      },
+      blocks: [
+        toolBlock({
+          id: 'tool_read',
+          summary: 'read: file',
+          status: 'success',
+          meta: { toolName: 'read' },
+          filePath: '/tmp/project/src/app.ts'
+        })
+      ]
     }
 
     const html = renderToStaticMarkup(
-      createElement(ProcessSectionRow, {
-        section: { id: 'reasoning', kind: 'reasoning', blocks: [block] },
-        processing: true,
-        singleReasoningSection: true,
-        workspaceRoot: '/tmp/project',
+      createElement(ConversationTurn, {
+        turn,
+        isProcessing: true,
+        liveReasoning: '**current reasoning summary**\n\n<!-- -->',
+        live: '',
+        filePreviewWorkspaceRoot: '/tmp/project',
         viewportRef: { current: null }
       })
     )
 
+    expect(html).toContain('Read')
     expect(html).toContain('ds-shiny-text')
     expect(html).toContain('ds-work-logo')
     expect(html).toContain('is-active')
     expect(html).toMatch(/Thinking|思考中|thinkingNow/)
-    expect(html).toContain('aria-expanded="false"')
     expect(html).not.toContain('current reasoning summary')
     expect(html).not.toContain('&lt;!-- --&gt;')
-    expect(block.text).toContain('<!-- -->')
   })
 
   it('keeps same-batch tool calls collapsed by default', () => {
@@ -818,47 +828,45 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
     expect(html).not.toContain('grep detail should stay tucked away')
   })
 
-  it('keeps the completed tool summary visible while live thinking renders on its own row', () => {
-    const readBlock: ChatBlock = toolBlock({
-      id: 'tool_read',
-      summary: 'read: file',
-      meta: { toolName: 'read' }
-    })
-    const grepBlock: ChatBlock = toolBlock({
-      id: 'tool_grep',
-      summary: 'grep: search',
-      meta: { toolName: 'grep', pattern: 'needle' }
-    })
-    const sections = groupProcessSections([
-      readBlock,
-      grepBlock,
-      { kind: 'reasoning', id: 'live-reasoning', text: 'next plan' }
-    ])
+  it('keeps the completed tool summary visible while live thinking stays at the turn bottom', () => {
+    const turn = {
+      user: {
+        kind: 'user' as const,
+        id: 'user_1',
+        text: 'review the release'
+      },
+      blocks: [
+        toolBlock({
+          id: 'tool_read',
+          summary: 'read: file',
+          status: 'success',
+          meta: { toolName: 'read' }
+        }),
+        toolBlock({
+          id: 'tool_grep',
+          summary: 'grep: search',
+          status: 'success',
+          meta: { toolName: 'grep', pattern: 'needle' }
+        })
+      ]
+    }
 
-    const toolHtml = renderToStaticMarkup(
-      createElement(ProcessSectionRow, {
-        section: sections[0],
-        processing: true,
-        singleReasoningSection: false,
-        workspaceRoot: '/tmp/project',
-        viewportRef: { current: null }
-      })
-    )
-    const thinkingHtml = renderToStaticMarkup(
-      createElement(ProcessSectionRow, {
-        section: sections[1],
-        processing: true,
-        singleReasoningSection: true,
-        workspaceRoot: '/tmp/project',
+    const html = renderToStaticMarkup(
+      createElement(ConversationTurn, {
+        turn,
+        isProcessing: true,
+        liveReasoning: 'next plan',
+        live: '发现阻塞项：继续审阅。',
+        filePreviewWorkspaceRoot: '/tmp/project',
         viewportRef: { current: null }
       })
     )
 
-    expect(sections).toHaveLength(2)
-    expect(toolHtml).toContain('Used 2 tools')
-    expect(toolHtml).not.toMatch(/Thinking|思考中|thinkingNow/)
-    expect(thinkingHtml).toMatch(/Thinking|思考中|thinkingNow/)
-    expect(thinkingHtml).not.toContain('Used 2 tools')
+    expect(html).toContain('Used 2 tools')
+    expect(html).toContain('发现阻塞项：继续审阅。')
+    expect(html).toMatch(/Thinking|思考中|thinkingNow/)
+    expect(html.indexOf('Used 2 tools')).toBeLessThan(html.search(/Thinking|思考中|thinkingNow/))
+    expect(html.indexOf('发现阻塞项：继续审阅。')).toBeLessThan(html.search(/Thinking|思考中|thinkingNow/))
   })
 
   it('auto-expands pending request_user_input while keeping other tool details tucked away', () => {
@@ -1012,7 +1020,7 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
     expect(html).toContain('Cancelled')
   })
 
-  it('shows the current tool as one loading action while keeping its detail collapsed', () => {
+  it('shows the current tool collapsed while the bottom running row stays active', () => {
     const blocks: ChatBlock[] = [
       {
         kind: 'user',
@@ -1048,6 +1056,8 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
     expect(html).toContain('aria-expanded="false"')
     expect(html).toContain('Read')
     expect(html).toContain('/tmp/project/src/app.ts')
+    expect(html).toContain('is-active')
+    expect(html).toContain('ds-work-logo-phase-trail')
     expect(html).not.toContain('running timeline detail should stay collapsed')
   })
 

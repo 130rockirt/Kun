@@ -989,4 +989,70 @@ describe('LocalToolHost approval policy', () => {
       }]
     })
   })
+
+  it('rejects empty user_input calls instead of prompting with a fallback', async () => {
+    const host = new LocalToolHost({ tools: [userInputTool] })
+    const awaitUserInput = vi.fn(async () => ({ status: 'submitted' as const, answers: [] }))
+    const context = {
+      threadId: 'thread_empty_input',
+      turnId: 'turn_empty_input',
+      workspace: '/tmp/workspace',
+      approvalPolicy: 'auto',
+      sandboxMode: 'workspace-write',
+      abortSignal: new AbortController().signal,
+      awaitApproval: vi.fn(async () => 'allow' as const),
+      awaitUserInput
+    } satisfies ToolHostContext
+
+    const result = await host.execute(
+      {
+        callId: 'call_empty_input',
+        toolName: 'user_input',
+        arguments: {}
+      },
+      context
+    )
+
+    expect(awaitUserInput).not.toHaveBeenCalled()
+    expect(result.item).toMatchObject({
+      kind: 'tool_result',
+      toolName: 'user_input',
+      isError: true,
+      output: {
+        error: 'user_input requires a non-empty prompt, question, message, or questions[].question'
+      }
+    })
+  })
+
+  it('rejects user_input questions that only include options without text', async () => {
+    const host = new LocalToolHost({ tools: [userInputTool] })
+    const awaitUserInput = vi.fn(async () => ({ status: 'submitted' as const, answers: [] }))
+    const context = {
+      threadId: 'thread_blank_questions',
+      turnId: 'turn_blank_questions',
+      workspace: '/tmp/workspace',
+      approvalPolicy: 'auto',
+      sandboxMode: 'workspace-write',
+      abortSignal: new AbortController().signal,
+      awaitApproval: vi.fn(async () => 'allow' as const),
+      awaitUserInput
+    } satisfies ToolHostContext
+
+    const result = await host.execute(
+      {
+        callId: 'call_blank_questions',
+        toolName: 'user_input',
+        arguments: {
+          questions: [{ id: 'next', options: ['Continue', 'Stop'] }]
+        }
+      },
+      context
+    )
+
+    expect(awaitUserInput).not.toHaveBeenCalled()
+    expect(result.item).toMatchObject({
+      kind: 'tool_result',
+      isError: true
+    })
+  })
 })

@@ -610,7 +610,8 @@ function createUserInputTool(name: string): LocalTool {
   }
   return LocalToolHost.defineTool({
     name,
-    description: 'Ask the GUI user a structured question and wait for the answer.',
+    description:
+      'Ask the GUI user a structured question and wait for the answer. Requires a non-empty prompt, question, message, or questions[].question (prompt/message aliases allowed).',
     toolKind: 'tool_call',
     inputSchema: {
       type: 'object',
@@ -688,8 +689,17 @@ function createUserInputTool(name: string): LocalTool {
       const inputId = `in_${Math.random().toString(36).slice(2, 10)}`
       const itemId = `item_${inputId}`
       const explicitPrompt = firstNonEmptyString(args.prompt, args.question, args.message)
-      const questions = normalizeUserInputQuestions(args, inputId, explicitPrompt ?? 'Input requested')
-      const prompt = explicitPrompt ?? questions[0]?.question ?? 'Input requested'
+      const questions = normalizeUserInputQuestions(args, inputId, explicitPrompt)
+      if (questions.length === 0) {
+        return {
+          output: {
+            error:
+              'user_input requires a non-empty prompt, question, message, or questions[].question'
+          },
+          isError: true
+        }
+      }
+      const prompt = explicitPrompt ?? questions[0]!.question
       const resolution = await context.awaitUserInput({ id: inputId, itemId, prompt, questions })
       return {
         output: resolution,
@@ -712,7 +722,7 @@ export const defaultLocalTools: LocalTool[] = [
 function normalizeUserInputQuestions(
   args: Record<string, unknown>,
   fallbackId: string,
-  fallbackPrompt: string
+  fallbackPrompt: string | undefined
 ): UserInputQuestion[] {
   const rawQuestions = Array.isArray(args.questions) ? args.questions : null
   if (rawQuestions && rawQuestions.length > 0) {
@@ -721,6 +731,7 @@ function normalizeUserInputQuestions(
       .filter((question): question is UserInputQuestion => question !== null)
     if (questions.length > 0) return questions
   }
+  if (!fallbackPrompt) return []
   const options = Array.isArray(args.options)
     ? args.options
         .map((option) => normalizeUserInputOption(option))

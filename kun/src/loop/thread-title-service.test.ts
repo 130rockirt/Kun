@@ -94,6 +94,11 @@ describe('ThreadTitleService', () => {
       events: {
         async record(event) {
           recorded.push({ kind: event.kind, title: 'title' in event ? event.title : undefined })
+          return {
+            ...event,
+            seq: recorded.length,
+            timestamp: new Date().toISOString()
+          }
         }
       },
       nowIso: () => new Date().toISOString(),
@@ -170,7 +175,15 @@ describe('ThreadTitleService', () => {
       model: makeTitleModel(() => {
         called += 1
       }),
-      events: { async record() {} },
+      events: {
+        async record(event) {
+          return {
+            ...event,
+            seq: 1,
+            timestamp: new Date().toISOString()
+          }
+        }
+      },
       nowIso: () => new Date().toISOString(),
       getRoles: () => undefined
     })

@@ -264,8 +264,12 @@ export function ProcessSectionRow({
   const active = processSectionHasActiveWork(section, processing)
   const errorTone = processSectionErrorTone(section.blocks)
   const hasError = errorTone !== null
+  // Ordinary tool execution loading chrome lives on the turn-bottom row.
+  // Keep in-section animation only for non-execution phases (e.g. live
+  // reasoning fallback); approvals / user-input expand in place without it.
   const showActiveAnimation =
     active &&
+    section.kind !== 'execution' &&
     !hasError &&
     !sectionHasPendingApproval(section) &&
     !sectionHasRequestUserInput(section)
@@ -415,10 +419,6 @@ export function ProcessSectionRow({
   )
 }
 
-function processBlockIsRunningTool(block: ChatBlock, processing: boolean): boolean {
-  return processing && block.kind === 'tool' && block.status === 'running'
-}
-
 function processBlockIsAutoOpenPending(block: ChatBlock, processing: boolean): boolean {
   return (
     processing &&
@@ -429,8 +429,9 @@ function processBlockIsAutoOpenPending(block: ChatBlock, processing: boolean): b
 }
 
 function processBlockIsActive(block: ChatBlock, processing: boolean): boolean {
+  // Running tools stay visually quiet in the process timeline; ConversationTurn
+  // owns the bottom "thinking / running" loading row.
   return (
-    processBlockIsRunningTool(block, processing) ||
     processBlockIsAutoOpenPending(block, processing) ||
     (processing && block.kind === 'assistant' && block.id === 'live-assistant')
   )
@@ -460,7 +461,6 @@ function ProcessStackRows({
       {blocks.map((block) => {
         const summary = describeProcessBlock(block, t)
         const detail = getProcessDetail(block, summary)
-        const isRunningTool = processBlockIsRunningTool(block, processing)
         const canExpand = detail.kind !== 'none'
         const autoOpenRequestInput = processing && isRequestUserInputTool(block)
         const autoOpenPending = processBlockIsAutoOpenPending(block, processing) || isPendingApproval(block)
@@ -591,7 +591,6 @@ function ProcessEntryRow({
   const detail = getProcessDetail(block, summary)
   const canExpand = detail.kind !== 'none'
   const isAssistantProcessText = block.kind === 'assistant'
-  const isRunningTool = processBlockIsRunningTool(block, processing)
   const isAutoOpenPending = processBlockIsAutoOpenPending(block, processing) || isPendingApproval(block)
   const isStreamingAssistant = processing && block.kind === 'assistant' && block.id === 'live-assistant'
   const errorTone = processBlockErrorTone(block)
@@ -605,7 +604,7 @@ function ProcessEntryRow({
     (forceOpen || (userOpen ?? defaultOpen))
 
   const { verb, rest } = splitVerb(summary)
-  const rowActive = isRunningTool || isAutoOpenPending || isStreamingAssistant
+  const rowActive = isAutoOpenPending || isStreamingAssistant
   const showActiveAnimation =
     rowActive &&
     !isError &&
@@ -754,17 +753,9 @@ function describeProcessSection(
     return t('processTextLabel')
   }
 
-  if (opts.processing && processSectionHasActiveWork(section, true)) {
-    const activeBlock = [...section.blocks].reverse().find(
-      (block) =>
-        block.id === 'live-reasoning' ||
-        block.id === 'live-assistant' ||
-        blockHasPendingRuntimeWork(block)
-    )
-    if (activeBlock?.kind === 'reasoning') return t('thinkingNow')
-    if (activeBlock) return describeProcessBlock(activeBlock, t)
-  }
-
+  // Keep execution titles stable while the turn is live. Active thinking /
+  // running chrome is rendered at the turn bottom, not by replacing this
+  // summary with a single in-flight tool or "Thinking...".
   if (section.blocks.length === 1) {
     return describeProcessBlock(section.blocks[0], t)
   }

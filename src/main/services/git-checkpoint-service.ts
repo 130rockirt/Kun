@@ -504,6 +504,8 @@ export async function cleanupUnusedGitCheckpoints(params: {
   checkpointsRoot?: string
   /** Delete checkpoints older than this many days (by createdAt / name / mtime). */
   maxAgeDays?: number
+  /** Also enforce the per-thread cap across every thread in the store. */
+  maxPerThread?: number
   graceMs?: number
   now?: Date
 }): Promise<GitCheckpointCleanupResult> {
@@ -513,6 +515,10 @@ export async function cleanupUnusedGitCheckpoints(params: {
     typeof params.maxAgeDays === 'number' && Number.isFinite(params.maxAgeDays) && params.maxAgeDays > 0
       ? params.maxAgeDays * DAY_MS
       : null
+  const maxPerThread =
+    typeof params.maxPerThread === 'number' && Number.isFinite(params.maxPerThread)
+      ? Math.max(1, Math.min(100, Math.floor(params.maxPerThread)))
+      : DEFAULT_MAX_CHECKPOINTS_PER_THREAD
   const root = resolveCheckpointsRoot(params.dataDir, params.checkpointsRoot)
   const referenced = await collectReferencedCheckpointIds(params.dataDir)
   const result: GitCheckpointCleanupResult = {
@@ -566,6 +572,16 @@ export async function cleanupUnusedGitCheckpoints(params: {
     }
   }
 
+  // Cap every thread after age/orphan deletion so a busy day cannot leave dozens
+  // of still-referenced checkpoints (the common cause of multi-GB stores).
+  const pruned = await pruneAllThreadCheckpoints(root, maxPerThread)
+  for (const checkpointId of pruned.deleted) {
+    if (result.deletedIds.includes(checkpointId)) continue
+    result.deleted += 1
+    result.deletedIds.push(checkpointId)
+    result.kept = Math.max(0, result.kept - 1)
+  }
+
   return result
 }
 
@@ -575,6 +591,7 @@ export async function cleanupUnusedGitCheckpointsIfDue(params: {
   intervalDays: number
   now?: Date
   graceMs?: number
+  maxPerThread?: number
   /**
    * When true, skip the interval gate (used on app startup so retention always
    * runs once per launch). Age pruning still uses `intervalDays`.
@@ -596,6 +613,7 @@ export async function cleanupUnusedGitCheckpointsIfDue(params: {
     dataDir: params.dataDir,
     ...(params.checkpointsRoot ? { checkpointsRoot: params.checkpointsRoot } : {}),
     maxAgeDays: params.intervalDays,
+    ...(params.maxPerThread !== undefined ? { maxPerThread: params.maxPerThread } : {}),
     now,
     ...(params.graceMs !== undefined ? { graceMs: params.graceMs } : {})
   })
@@ -744,6 +762,45 @@ export async function pruneThreadCheckpoints(
       deleted.push(id)
     } catch {
       // best-effort
+    }
+  }
+  return { deleted }
+}
+
+/** Enforce `max` checkpoints for every thread that owns directories under `root`. */
+export async function pruneAllThreadCheckpoints(
+  root: string,
+  max: number
+): Promise<{ deleted: string[] }> {
+  if (max <= 0) return { deleted: [] }
+  let entries: Dirent<string>[]
+  try {
+    entries = await readdir(root, { withFileTypes: true })
+  } catch {
+    return { deleted: [] }
+  }
+  const byThread = new Map<string, Array<{ id: string; order: number }>>()
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue
+    const metadata = await readMetadata(root, entry.name)
+    if (!metadata?.threadId) continue
+    const createdMs = Date.parse(metadata.createdAt)
+    const order = Number.isFinite(createdMs) ? createdMs : checkpointNameTimestamp(entry.name)
+    const list = byThread.get(metadata.threadId) ?? []
+    list.push({ id: entry.name, order })
+    byThread.set(metadata.threadId, list)
+  }
+  const deleted: string[] = []
+  for (const owned of byThread.values()) {
+    owned.sort((a, b) => b.order - a.order)
+    for (let i = max; i < owned.length; i += 1) {
+      const { id } = owned[i]
+      try {
+        await rm(checkpointDir(root, id), { recursive: true, force: true })
+        deleted.push(id)
+      } catch {
+        // best-effort
+      }
     }
   }
   return { deleted }

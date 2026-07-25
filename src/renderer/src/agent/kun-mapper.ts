@@ -930,19 +930,32 @@ function questionsFromCore(
       .map((question) => normalizeUserInputQuestion(question))
       .filter((question): question is UserInputQuestion => question !== null)
   }
+  const promptText = typeof prompt === 'string' ? prompt.trim() : ''
+  if (!promptText) return []
   return [
     {
       header: 'Input',
       id: fallbackId,
-      question: prompt?.trim() || 'Input requested',
+      question: promptText,
       options: []
     }
   ]
 }
 
+function firstNonEmptyUserInputText(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value !== 'string') continue
+    const normalized = value.trim()
+    if (normalized) return normalized
+  }
+  return undefined
+}
+
 function normalizeUserInputQuestion(question: unknown): UserInputQuestion | null {
   if (!question || typeof question !== 'object') return null
   const raw = question as Record<string, unknown>
+  const text = firstNonEmptyUserInputText(raw.question, raw.prompt, raw.message)
+  if (!text) return null
   const options = Array.isArray(raw.options)
     ? raw.options
         .map((option) => normalizeUserInputOption(option))
@@ -951,7 +964,7 @@ function normalizeUserInputQuestion(question: unknown): UserInputQuestion | null
   return {
     header: typeof raw.header === 'string' && raw.header.trim() ? raw.header.trim() : 'Input',
     id: typeof raw.id === 'string' && raw.id.trim() ? raw.id.trim() : 'input',
-    question: typeof raw.question === 'string' && raw.question.trim() ? raw.question.trim() : 'Input requested',
+    question: text,
     options,
     selectionMode: raw.selectionMode === 'multiple' && options.length > 0 ? 'multiple' : 'single',
     ...(positiveInteger(raw.minSelections) ? { minSelections: positiveInteger(raw.minSelections) } : {}),
@@ -1439,8 +1452,10 @@ export function chatBlockFromItem(item: CoreTurnItemJson, child?: CoreChildRunti
       return toolBlockFromItem(item, child)
     case 'approval':
       return approvalBlockFromItem(item, child)
-    case 'user_input':
-      return userInputBlockFromItem(item)
+    case 'user_input': {
+      const block = userInputBlockFromItem(item)
+      return block.questions.length > 0 ? block : null
+    }
     case 'compaction':
       return compactionBlockFromItem(item)
     case 'review':

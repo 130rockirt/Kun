@@ -469,6 +469,44 @@ describe('git checkpoint service', () => {
     await expect(stat(join(dataDir, 'git-checkpoints', unused))).rejects.toThrow()
   })
 
+  it('enforces maxPerThread during cleanup even for recent referenced checkpoints', async () => {
+    const now = new Date('2026-07-25T12:00:00.000Z')
+    const ids = ['gcp_t1', 'gcp_t2', 'gcp_t3', 'gcp_t4']
+    await mkdir(join(dataDir, 'threads', 'thr_cap'), { recursive: true })
+    const lines: string[] = []
+    for (let i = 0; i < ids.length; i += 1) {
+      const id = ids[i]
+      await mkdir(join(dataDir, 'git-checkpoints', id), { recursive: true })
+      await writeFile(
+        join(dataDir, 'git-checkpoints', id, 'metadata.json'),
+        JSON.stringify({
+          checkpointId: id,
+          threadId: 'thr_cap',
+          repositoryRoot: '/tmp/repo',
+          head: null,
+          currentBranch: null,
+          createdAt: `2026-07-25T0${i}:00:00.000Z`,
+          untrackedFiles: []
+        }),
+        'utf-8'
+      )
+      lines.push(JSON.stringify({ id: `item_${i}`, workspaceCheckpointId: id }))
+    }
+    await writeFile(join(dataDir, 'threads', 'thr_cap', 'items.jsonl'), `${lines.join('\n')}\n`, 'utf-8')
+
+    const result = await cleanupUnusedGitCheckpoints({
+      dataDir,
+      graceMs: 0,
+      maxAgeDays: 3,
+      maxPerThread: 2,
+      now
+    })
+
+    expect(result.deletedIds.sort()).toEqual(['gcp_t1', 'gcp_t2'])
+    await expect(stat(join(dataDir, 'git-checkpoints', 'gcp_t3'))).resolves.toBeTruthy()
+    await expect(stat(join(dataDir, 'git-checkpoints', 'gcp_t4'))).resolves.toBeTruthy()
+  })
+
   it('deletes checkpoints older than maxAgeDays even when still referenced', async () => {
     const fresh = 'gcp_fresh_ref'
     const stale = 'gcp_stale_ref'

@@ -15,8 +15,7 @@ import { presentationFileArtifactsForTurn } from './presentation-file-artifacts'
 import { ReviewPlanCard, ReviewSummaryCard, TurnChangeSummary, WorkMetaRow } from './message-timeline-cards'
 import {
   ProcessSectionRow,
-  groupProcessSections,
-  processSectionHasActiveWork
+  groupProcessSections
 } from './message-timeline-process'
 import { ComponentPrototypeCard } from './ComponentPrototypeCard'
 import type { OpenChildThreadHandler } from './SubagentCallCard'
@@ -25,7 +24,9 @@ import {
   IKUN_WORK_LOGO_VARIANT_LABEL_KEYS,
   WORK_LOGO_SWIM_MODE_LABEL_KEYS,
   useIkunWorkLogoVariant,
-  useWorkLogoSwimMode
+  useWorkLogoSwimMode,
+  type IkunWorkLogoVariant,
+  type WorkLogoSwimMode
 } from './AnimatedWorkLogo'
 import type { UiPluginLabelKey } from '@shared/ui-plugin'
 import { useUiPluginWorkLabel } from '../../store/ui-plugin-store'
@@ -1088,13 +1089,14 @@ export function ConversationTurn({
   // work folds back into the turn-level summary.
 
   const hasProcess =
-    (isProcessing && !onlyCompactionProcess) ||
     workProcessBlocks.length > 0 ||
     (runtimeErrorBlocks.length > 0 && typeof durationMs === 'number')
+  // Live thinking / running chrome is independent of process sections and
+  // always renders at the turn bottom so it cannot interleave above text
+  // or replace completed tool summaries.
+  const showLiveThinking = isProcessing && !!liveProcessText.trim()
   const showLiveProgress =
-    isProcessing &&
-    !onlyCompactionProcess &&
-    !processSections.some((section) => processSectionHasActiveWork(section, true))
+    isProcessing && !onlyCompactionProcess && !showLiveThinking
   const forkFromTurn = async (): Promise<void> => {
     if (!allowMainThreadActions || !forkTurnId || forking) return
     setForking(true)
@@ -1210,6 +1212,10 @@ export function ConversationTurn({
         <TimelineRuntimeError key={block.id} block={block} />
       ))}
 
+      {showLiveThinking ? (
+        <LiveTurnThinkingRow hasActiveGoal={showActiveGoal && Boolean(activeThreadGoal)} />
+      ) : null}
+
       {showLiveProgress ? (
         <LiveTurnProgressRow hasActiveGoal={showActiveGoal && Boolean(activeThreadGoal)} />
       ) : null}
@@ -1248,6 +1254,13 @@ export function ConversationTurn({
   )
 }
 
+function LiveTurnThinkingRow({ hasActiveGoal }: { hasActiveGoal: boolean }): ReactElement {
+  const { t } = useTranslation('common')
+  return (
+    <LiveTurnActivityRow hasActiveGoal={hasActiveGoal} label={t('thinkingNow')} />
+  )
+}
+
 function LiveTurnProgressRow({ hasActiveGoal }: { hasActiveGoal: boolean }): ReactElement {
   const { t, i18n } = useTranslation('common')
   const swimMode = useWorkLogoSwimMode(true)
@@ -1268,6 +1281,27 @@ function LiveTurnProgressRow({ hasActiveGoal }: { hasActiveGoal: boolean }): Rea
     ? t(IKUN_WORK_LOGO_VARIANT_LABEL_KEYS[ikunVariant])
     : pluginLabel ?? t(swimLabelKey)
 
+  return (
+    <LiveTurnActivityRow
+      hasActiveGoal={hasActiveGoal}
+      label={label}
+      ikunVariant={ikunVariant}
+      swimMode={swimMode}
+    />
+  )
+}
+
+function LiveTurnActivityRow({
+  hasActiveGoal,
+  label,
+  ikunVariant,
+  swimMode
+}: {
+  hasActiveGoal: boolean
+  label: string
+  ikunVariant?: IkunWorkLogoVariant
+  swimMode?: WorkLogoSwimMode
+}): ReactElement {
   return (
     <div className={liveTurnProgressClass(hasActiveGoal)}>
       <span className="ds-work-logo-slot ds-work-logo-slot-sm mr-0.5">

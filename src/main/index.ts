@@ -327,21 +327,27 @@ async function runCheckpointCleanup(
   settings: AppSettingsV1,
   options: { force?: boolean; reason?: string } = {}
 ): Promise<void> {
-  if (!settings.checkpointCleanup.enabled) return
+  const force = options.force === true
+  const reason = options.reason ?? (force ? 'forced' : 'interval')
+  // Startup / upgrade retention always runs. The settings toggle only gates the
+  // periodic background timer so a previous "cleanup off" cannot leave gigabytes
+  // of stale checkpoints behind after relaunch or app update.
+  if (!force && !settings.checkpointCleanup.enabled) return
   const runtime = resolveKunRuntimeSettings(settings)
   const dataDir = resolveKunDataDir(runtime)
   const intervalDays = settings.checkpointCleanup.intervalDays
   const checkpointsRoot = settings.checkpointCleanup.directory?.trim()
     ? expandHomePath(settings.checkpointCleanup.directory.trim())
     : undefined
-  const reason = options.reason ?? (options.force ? 'forced' : 'interval')
+  const maxPerThread = settings.checkpointCleanup.maxPerThread
   try {
     const cleanup = await cleanupUnusedGitCheckpointsIfDue({
       dataDir,
       intervalDays,
       appVersion: app.getVersion(),
-      ...(options.force ? { force: true } : {}),
-      ...(checkpointsRoot ? { checkpointsRoot } : {})
+      ...(force ? { force: true } : {}),
+      ...(checkpointsRoot ? { checkpointsRoot } : {}),
+      ...(maxPerThread !== undefined ? { maxPerThread } : {})
     })
     if (!cleanup.due) return
     const { result } = cleanup
@@ -1650,13 +1656,10 @@ app.whenReady().then(async () => {
   traceStartup('settings load:start')
   const initial = await store.load()
   traceStartup('settings load:done')
-  // Run Git checkpoint retention early in startup so stale/oversized stores are
-  // pruned before the rest of the app (and kun serve) come up. Fire-and-forget:
-  // cleanup is best-effort and must not block window creation.
-  if (initial.checkpointCleanup.enabled) {
-    void runCheckpointCleanup(initial, { force: true, reason: 'startup' })
-    traceStartup('git checkpoint cleanup scheduled')
-  }
+  // Retention always runs at startup (and again after version upgrades inside
+  // IfDue). Fire-and-forget: must not block window creation.
+  void runCheckpointCleanup(initial, { force: true, reason: 'startup' })
+  traceStartup('git checkpoint cleanup scheduled')
   const extensionDescriptors = new ExtensionDescriptorResolver(async (path, method, body) => {
     const settings = await store.load()
     return runtimeRequest(settings, path, { method, body })

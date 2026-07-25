@@ -118,8 +118,12 @@ export function normalizeKunRuntimeEvent(
       const status = deps.approvalStatus(event)
       return status ? [{ type: 'approval_status_changed', payload: status }] : []
     }
-    case 'user_input_requested':
-      return [{ type: 'user_input_requested', payload: deps.userInputRequest(event) }]
+    case 'user_input_requested': {
+      const payload = deps.userInputRequest(event)
+      return payload.questions.length > 0
+        ? [{ type: 'user_input_requested', payload }]
+        : []
+    }
     case 'user_input_resolved': {
       const answers = deps.userInputAnswers(event.answers)
       return [{
