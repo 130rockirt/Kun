@@ -1,7 +1,7 @@
 import type { ModelCapabilityMetadata } from '../../contracts/capabilities.js'
 import type { ModelEndpointFormat } from '../../contracts/model-endpoint-format.js'
 import type { ModelRequest, ModelToolSpec } from '../../ports/model-client.js'
-import { isDeepSeekHost } from './model-error-probe.js'
+import { isDeepSeekHost, isGeminiOpenAiHost } from './model-error-probe.js'
 
 export const COMPAT_HISTORY_CONTEXT = Symbol('compat-history-context')
 
@@ -53,7 +53,12 @@ export type CompatRequestCodecDeps = {
   applyChatReasoning: (
     body: Record<string, unknown>,
     effort: string | undefined,
-    input: { includeThinking: boolean; nativeDeepSeekHost: boolean; reasoning?: ReasoningCapability }
+    input: {
+      includeThinking: boolean
+      nativeDeepSeekHost: boolean
+      geminiOpenAiHost: boolean
+      reasoning?: ReasoningCapability
+    }
   ) => void
   responsesReasoning: (
     effort: string | undefined,
@@ -100,10 +105,12 @@ export class CompatRequestCodecs {
     if (input.request.responseFormat === 'json_object') body.response_format = { type: 'json_object' }
     if (input.stream && input.includeStreamUsage !== false) body.stream_options = { include_usage: true }
     const nativeDeepSeekHost = isDeepSeekHost(input.baseUrl)
-    const includeThinking = !isAzureOpenAiEndpoint(input.baseUrl)
+    const geminiOpenAiHost = isGeminiOpenAiHost(input.baseUrl)
+    const includeThinking = !isAzureOpenAiEndpoint(input.baseUrl) && !geminiOpenAiHost
     this.deps.applyChatReasoning(body, input.request.reasoningEffort, {
       includeThinking,
       nativeDeepSeekHost,
+      geminiOpenAiHost,
       reasoning: input.reasoning
     })
     if (

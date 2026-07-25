@@ -59,6 +59,59 @@ async function drain(iterable: AsyncIterable<ModelStreamChunk>): Promise<ModelSt
 }
 
 describe('CompatModelClient per-model endpointFormat', () => {
+  it('uses Gemini-compatible reasoning controls on the Google OpenAI endpoint', () => {
+    const codecs = createCompatRequestCodecs()
+    const expected = new Map([
+      ['auto', undefined],
+      ['off', 'minimal'],
+      ['low', 'low'],
+      ['medium', 'medium'],
+      ['high', 'high'],
+      ['max', 'high']
+    ])
+
+    for (const [reasoningEffort, wireEffort] of expected) {
+      const body = codecs.build({
+        request: { ...request('gemini-3.6-flash'), reasoningEffort },
+        model: 'gemini-3.6-flash',
+        messages: [],
+        tools: [],
+        stream: true,
+        endpointFormat: 'chat_completions',
+        baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/',
+        isCodex: false,
+        isCodexLite: false,
+        codexNativeImageGeneration: false
+      })
+
+      expect(body).not.toHaveProperty('thinking')
+      if (wireEffort === undefined) {
+        expect(body).not.toHaveProperty('reasoning_effort')
+      } else {
+        expect(body.reasoning_effort).toBe(wireEffort)
+      }
+    }
+  })
+
+  it('keeps DeepSeek thinking controls scoped to the official DeepSeek host', () => {
+    const codecs = createCompatRequestCodecs()
+    const build = (baseUrl: string) => codecs.build({
+      request: { ...request('custom-model'), reasoningEffort: 'off' },
+      model: 'custom-model',
+      messages: [],
+      tools: [],
+      stream: true,
+      endpointFormat: 'chat_completions',
+      baseUrl,
+      isCodex: false,
+      isCodexLite: false,
+      codexNativeImageGeneration: false
+    })
+
+    expect(build('https://api.deepseek.com').thinking).toEqual({ type: 'disabled' })
+    expect(build('https://openrouter.ai/api/v1')).not.toHaveProperty('thinking')
+  })
+
   it('excludes local tool provenance from every supported wire format', () => {
     const codecs = createCompatRequestCodecs()
     const tools = normalizeToolSpecs([{
