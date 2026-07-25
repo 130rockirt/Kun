@@ -532,6 +532,12 @@ export type SdkDownloadState = {
   message?: string
 }
 
+export const UNREADABLE_CREDENTIAL_KEY_ERROR_CODE = 'credential_key_unreadable'
+
+export type CredentialRecoveryResetResult =
+  | { reset: false }
+  | { reset: true; backupPath: string; movedItems: string[] }
+
 export type KunGuiApi = ExtensionIpcApi & {
   platform: string
   homeDir: string
@@ -564,6 +570,7 @@ export type KunGuiApi = ExtensionIpcApi & {
     respondRendererRequest: (response: DataMigrationRendererResponse) => Promise<void>
   }
   getSettings: () => Promise<AppSettingsV1>
+  resetUnreadableCredentials: () => Promise<CredentialRecoveryResetResult>
   /** Detect an existing local Claude Code login (subscription auth). */
   claudeSubscriptionStatus: () => Promise<ClaudeSubscriptionStatus>
   /** Run the official ambient Claude subscription login flow. */
