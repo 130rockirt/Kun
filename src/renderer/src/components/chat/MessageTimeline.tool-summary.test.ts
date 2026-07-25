@@ -255,6 +255,28 @@ describe('MessageTimeline tool summaries', () => {
       }
     ])
   })
+
+  it('keeps live reasoning out of a completed tool batch so thinking does not eat the summary', () => {
+    const sections = groupProcessSections([
+      toolBlock({ id: 'tool_read', summary: 'read: file', meta: { toolName: 'read' } }),
+      toolBlock({ id: 'tool_grep', summary: 'grep: search', meta: { toolName: 'grep' } }),
+      { kind: 'reasoning', id: 'live-reasoning', text: 'next plan' }
+    ])
+
+    expect(sections.map((section) => ({
+      kind: section.kind,
+      ids: section.blocks.map((block) => block.id)
+    }))).toEqual([
+      {
+        kind: 'execution',
+        ids: ['tool_read', 'tool_grep']
+      },
+      {
+        kind: 'reasoning',
+        ids: ['live-reasoning']
+      }
+    ])
+  })
 })
 
 describe('MessageTimeline Kun runtime metadata smoke', () => {
@@ -794,6 +816,49 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
     expect(html).not.toContain('needle')
     expect(html).not.toContain('read detail should stay tucked away')
     expect(html).not.toContain('grep detail should stay tucked away')
+  })
+
+  it('keeps the completed tool summary visible while live thinking renders on its own row', () => {
+    const readBlock: ChatBlock = toolBlock({
+      id: 'tool_read',
+      summary: 'read: file',
+      meta: { toolName: 'read' }
+    })
+    const grepBlock: ChatBlock = toolBlock({
+      id: 'tool_grep',
+      summary: 'grep: search',
+      meta: { toolName: 'grep', pattern: 'needle' }
+    })
+    const sections = groupProcessSections([
+      readBlock,
+      grepBlock,
+      { kind: 'reasoning', id: 'live-reasoning', text: 'next plan' }
+    ])
+
+    const toolHtml = renderToStaticMarkup(
+      createElement(ProcessSectionRow, {
+        section: sections[0],
+        processing: true,
+        singleReasoningSection: false,
+        workspaceRoot: '/tmp/project',
+        viewportRef: { current: null }
+      })
+    )
+    const thinkingHtml = renderToStaticMarkup(
+      createElement(ProcessSectionRow, {
+        section: sections[1],
+        processing: true,
+        singleReasoningSection: true,
+        workspaceRoot: '/tmp/project',
+        viewportRef: { current: null }
+      })
+    )
+
+    expect(sections).toHaveLength(2)
+    expect(toolHtml).toContain('Used 2 tools')
+    expect(toolHtml).not.toMatch(/Thinking|思考中|thinkingNow/)
+    expect(thinkingHtml).toMatch(/Thinking|思考中|thinkingNow/)
+    expect(thinkingHtml).not.toContain('Used 2 tools')
   })
 
   it('auto-expands pending request_user_input while keeping other tool details tucked away', () => {

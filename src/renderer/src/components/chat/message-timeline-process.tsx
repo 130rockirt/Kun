@@ -100,8 +100,16 @@ export function groupProcessSections(blocks: ChatBlock[]): ProcessSection[] {
     // Reasoning and tool calls between two visible assistant updates are one
     // activity phase. Keeping them together prevents long-running turns from
     // becoming an alternating "thinking / tool / thinking / tool" waterfall.
+    // Exception: live thinking after a completed tool batch must stay separate,
+    // otherwise the section title becomes "Thinking..." and eats the tool summary.
+    const liveReasoningAfterTools =
+      block.kind === 'reasoning' &&
+      block.id === 'live-reasoning' &&
+      last?.kind === 'execution' &&
+      last.blocks.some((entry) => entry.kind !== 'reasoning')
     if (
       last &&
+      !liveReasoningAfterTools &&
       (last.kind === 'reasoning' || last.kind === 'execution') &&
       (kind === 'reasoning' || kind === 'execution')
     ) {
