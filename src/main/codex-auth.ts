@@ -1,5 +1,11 @@
 import { createServer, type Server } from 'node:http'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
+import {
+  CODEX_CLI_ORIGINATOR,
+  CODEX_CLI_VERSION,
+  codexCliRequestHeaders,
+  codexCliUserAgent
+} from '../../kun/src/adapters/model/provider-cli-identity.js'
 import { grokRequestHeaders } from './grok-auth'
 
 const CODEX_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann'
@@ -11,7 +17,8 @@ const CODEX_OAUTH_HOST = '127.0.0.1'
 const CODEX_OAUTH_TIMEOUT_MS = 5 * 60 * 1000
 const CODEX_SESSION_ID = randomUUID()
 const CODEX_OAUTH_SCOPE = 'openid profile email offline_access api.connectors.read api.connectors.invoke'
-const CODEX_ORIGINATOR = 'codex_cli_rs'
+const CODEX_ORIGINATOR = CODEX_CLI_ORIGINATOR
+export { CODEX_CLI_VERSION, codexCliUserAgent as codexUserAgent }
 
 export type CodexOAuthCredentials = {
   kind: 'codex-oauth'
@@ -452,13 +459,10 @@ export function encodeCodexCredentials(creds: CodexOAuthCredentials): string {
 }
 
 export function codexRequestHeaders(creds: CodexOAuthCredentials): Record<string, string> {
-  return {
-    'ChatGPT-Account-Id': creds.accountId,
-    originator: CODEX_ORIGINATOR,
-    'OpenAI-Beta': 'responses=experimental',
-    'User-Agent': `${CODEX_ORIGINATOR}/0.0.0 (deepseekgui)`,
-    session_id: CODEX_SESSION_ID
-  }
+  return codexCliRequestHeaders({
+    accountId: creds.accountId,
+    sessionId: CODEX_SESSION_ID
+  })
 }
 
 export function resolveCodexOAuthApiKey(rawApiKey: string): { apiKey: string; headers?: Record<string, string> } {

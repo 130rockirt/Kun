@@ -1,14 +1,20 @@
 import { createServer, type Server } from 'node:http'
 import { createHash, randomBytes } from 'node:crypto'
+import {
+  GROK_CLI_TOKEN_AUTH,
+  GROK_CLI_VERSION,
+  grokCliMediaHeaders,
+  grokCliProxyHeaders
+} from '../../kun/src/adapters/model/provider-cli-identity.js'
 
 /** Matches the public Grok CLI OAuth client (xai-grok-shell GrokComConfig::default). */
 export const GROK_OAUTH_CLIENT_ID = 'b1a00492-073a-47ea-816f-4c329264a828'
 export const GROK_OAUTH_ISSUER = 'https://auth.x.ai'
 export const GROK_CLI_CHAT_PROXY_BASE_URL = 'https://cli-chat-proxy.grok.com/v1'
-export const GROK_TOKEN_AUTH_HEADER = 'xai-grok-cli'
+export const GROK_TOKEN_AUTH_HEADER = GROK_CLI_TOKEN_AUTH
 export const GROK_OAUTH_REFERRER = 'kun'
 /** Keep aligned with the Grok Build client whose public OAuth contract we use. */
-export const GROK_CLIENT_VERSION = '0.2.106'
+export const GROK_CLIENT_VERSION = GROK_CLI_VERSION
 
 /** Align with grok-build DEFAULT_EARLY_INVALIDATION_SECS. */
 export const GROK_EARLY_INVALIDATION_MS = 5 * 60 * 1000
@@ -564,12 +570,7 @@ export function encodeGrokCredentials(creds: GrokOAuthCredentials): string {
 }
 
 export function grokRequestHeaders(): Record<string, string> {
-  return {
-    'X-XAI-Token-Auth': GROK_TOKEN_AUTH_HEADER,
-    'x-authenticateresponse': 'authenticate-response',
-    'x-grok-client-version': GROK_CLIENT_VERSION,
-    'x-grok-client-mode': 'interactive'
-  }
+  return grokCliProxyHeaders()
 }
 
 /**
@@ -577,11 +578,7 @@ export function grokRequestHeaders(): Record<string, string> {
  * Proxy-only authentication headers must not be forwarded to this endpoint.
  */
 export function grokMediaRequestHeaders(): Record<string, string> {
-  return {
-    'User-Agent': `xai-grok-build/${GROK_CLIENT_VERSION}`,
-    'x-grok-client-version': GROK_CLIENT_VERSION,
-    'x-grok-client-identifier': 'kun'
-  }
+  return grokCliMediaHeaders()
 }
 
 /**

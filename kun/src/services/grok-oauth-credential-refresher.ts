@@ -1,6 +1,8 @@
+import { GROK_CLI_VERSION } from '../adapters/model/provider-cli-identity.js'
+
 export const GROK_OAUTH_CLIENT_ID = 'b1a00492-073a-47ea-816f-4c329264a828'
 export const GROK_OAUTH_ISSUER = 'https://auth.x.ai'
-export const GROK_CLIENT_VERSION = '0.2.106'
+export const GROK_CLIENT_VERSION = GROK_CLI_VERSION
 const GROK_EARLY_INVALIDATION_MS = 5 * 60 * 1000
 const GROK_TOKEN_TTL_FALLBACK_MS = 30 * 24 * 60 * 60 * 1000
 const GROK_REFRESH_TIMEOUT_MS = 10_000

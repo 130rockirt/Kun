@@ -425,8 +425,8 @@ describe('Media gen tool provider', () => {
     }))
     const updates: ToolExecutionUpdate[] = []
     const client = new GrokImagineVideoClient('https://api.x.ai/v1', 'grok-access', {
-      'x-grok-client-version': '0.2.106',
-      'x-grok-client-identifier': 'kun'
+      'x-grok-client-version': '0.2.112',
+      'x-grok-client-identifier': 'grok-shell'
     })
 
     const media = await client.generate({
@@ -446,7 +446,7 @@ describe('Media gen tool provider', () => {
     expect(media.data.toString('utf8')).toBe('grok-video')
     expect(requests[0].url).toBe('https://api.x.ai/v1/videos/generations')
     expect(requests[0].headers.get('authorization')).toBe('Bearer grok-access')
-    expect(requests[0].headers.get('x-grok-client-identifier')).toBe('kun')
+    expect(requests[0].headers.get('x-grok-client-identifier')).toBe('grok-shell')
     expect(requests[0].body).toEqual({
       model: 'grok-imagine-video-1.5-preview',
       prompt: 'Animate the clouds',

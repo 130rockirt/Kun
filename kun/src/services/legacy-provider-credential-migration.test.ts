@@ -211,8 +211,12 @@ describe('materializeLegacyProviderCredential', () => {
     expect(material.apiKey).toBe('codex-access')
     expect(material.headers).toMatchObject({
       'ChatGPT-Account-Id': 'acct_1',
-      originator: 'codex_cli_rs'
+      originator: 'codex_cli_rs',
+      'OpenAI-Beta': 'responses=experimental'
     })
+    expect(material.headers?.['User-Agent']).toMatch(/^codex_cli_rs\/0\.145\.0 \(.+; .+\)$/)
+    expect(material.headers?.['User-Agent']).not.toMatch(/deepseekgui|kun/i)
+    expect(material.headers?.['x-grok-client-identifier']).toBeUndefined()
   })
 
   it('unwraps Grok OAuth credentials into access token + cli-chat-proxy headers', () => {
@@ -228,7 +232,7 @@ describe('materializeLegacyProviderCredential', () => {
       headers: {
         'X-XAI-Token-Auth': 'xai-grok-cli',
         'x-authenticateresponse': 'authenticate-response',
-        'x-grok-client-version': '0.2.106',
+        'x-grok-client-version': '0.2.112',
         'x-grok-client-mode': 'interactive'
       }
     })

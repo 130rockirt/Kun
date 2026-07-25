@@ -1,11 +1,17 @@
 import { randomBytes, randomUUID, scryptSync } from 'node:crypto'
 import { join } from 'node:path'
 import { z } from 'zod'
+import {
+  codexCliRequestHeaders,
+  codexCliUserAgent,
+  grokCliProxyHeaders
+} from '../adapters/model/provider-cli-identity.js'
 import { AtomicJsonFile } from '../extensions/atomic-json.js'
 import type { ExtensionPrincipal } from './extension-agent-service.js'
 import type { ExtensionCredentialStore } from './extension-credential-store.js'
 import type { ExtensionProviderAccountStore } from './extension-provider-account-store.js'
-import { GROK_CLIENT_VERSION } from './grok-oauth-credential-refresher.js'
+
+export { codexCliUserAgent }
 
 const MigrationRollbackSchema = z.object({
   accountId: z.string().min(1),
@@ -87,25 +93,17 @@ export function materializeLegacyProviderCredential(rawApiKey: string): LegacyPr
       if (!accessToken || !accountId) return { apiKey }
       return {
         apiKey: accessToken,
-        headers: {
-          'ChatGPT-Account-Id': accountId,
-          originator: 'codex_cli_rs',
-          'OpenAI-Beta': 'responses=experimental',
-          'User-Agent': 'codex_cli_rs/0.0.0 (deepseekgui)',
-          session_id: randomUUID()
-        }
+        headers: codexCliRequestHeaders({
+          accountId,
+          sessionId: randomUUID()
+        })
       }
     }
     if (parsed.kind === 'grok-oauth') {
       if (!accessToken) return { apiKey }
       return {
         apiKey: accessToken,
-        headers: {
-          'X-XAI-Token-Auth': 'xai-grok-cli',
-          'x-authenticateresponse': 'authenticate-response',
-          'x-grok-client-version': GROK_CLIENT_VERSION,
-          'x-grok-client-mode': 'interactive'
-        }
+        headers: grokCliProxyHeaders()
       }
     }
     return { apiKey }

@@ -22,12 +22,15 @@ describe('Gemini CLI speech-to-text service', () => {
     const requests: Array<{
       url: string
       authorization: string
+      headers: Record<string, string>
       body: Record<string, unknown>
     }> = []
     const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const headers = new Headers(init?.headers)
       requests.push({
         url: String(url),
-        authorization: new Headers(init?.headers).get('authorization') ?? '',
+        authorization: headers.get('authorization') ?? '',
+        headers: Object.fromEntries(headers.entries()),
         body: JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>
       })
       if (String(url).endsWith(':loadCodeAssist')) {
@@ -71,6 +74,8 @@ describe('Gemini CLI speech-to-text service', () => {
       'https://code-assist.example.test/v1internal:generateContent'
     ])
     expect(requests[1].authorization).toBe('Bearer official-access-token')
+    expect(requests[1].headers['user-agent']).toBe('google-gemini-cli')
+    expect(requests[1].headers['x-goog-api-client']).toBe('gl-node/kun gemini-cli-audio')
     expect(requests[1].body).toMatchObject({
       model: 'gemini-2.5-flash',
       project: 'managed-project',

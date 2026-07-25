@@ -102,6 +102,7 @@ export type {
   ComposerImageTransferSource
 } from './FloatingComposerAttachments'
 import { useComposerDraft } from './use-composer-draft'
+import { useComposerInputHistory } from './use-composer-input-history'
 import { usePromptOptimizationSettings, useSpeechToTextSettings, useVoiceDictation } from './use-voice-dictation'
 import { VoiceRecordingStrip } from './VoiceRecordingStrip'
 import type { DesignComposerContext } from '../../design/design-composer-context'
@@ -461,6 +462,7 @@ export function FloatingComposer({
   const stretchModelPicker =
     compact && modelPickerMode === 'combobox' && !showToolbarStartControls && !hideModelPicker
   const draft = useComposerDraft({ input, canCompose: canEditComposer })
+  const inputHistory = useComposerInputHistory()
   const slashQuery = getSlashQuery(input)
   const [composerMenuOpen, setComposerMenuOpen] = useState(false)
   const [worktreeBranches, setWorktreeBranches] = useState<string[]>([])
@@ -538,7 +540,7 @@ export function FloatingComposer({
             : t('clawComposerHintNeedsInbound')
           : useWorktreePool
             ? t('composerWorktreeModeHint')
-            : null
+            : t('composerShortcut')
   const showTodoProgress = !compact
     && route === 'chat'
     && Boolean(activeThreadId)
@@ -886,6 +888,7 @@ export function FloatingComposer({
       const trimmed = input.trim()
       if (!trimmed.startsWith('/')) {
         if (trimmed && userInput.submitTypedText(input)) {
+          inputHistory.push(input)
           setInput('')
           draft.focusComposer()
         }
@@ -954,10 +957,12 @@ export function FloatingComposer({
     // no real command (e.g. a free-form answer like "/usr/local/bin") still
     // answers the current question instead of leaking into chat via onSend.
     if (userInput.active && input.trim() && userInput.submitTypedText(input)) {
+      inputHistory.push(input)
       setInput('')
       draft.focusComposer()
       return
     }
+    inputHistory.push(input)
     onSend()
   }
   dictationPrimaryActionRef.current = primaryActionDisabled ? null : handlePrimaryAction
@@ -970,6 +975,8 @@ export function FloatingComposer({
     if (fileMentions.handleKeyDown(event, composing)) return
 
     if (slashCommandMenu.handleKeyDown(event, composing)) return
+
+    if (inputHistory.handleKeyDown(event, { input, setInput, composing })) return
 
     // Esc cancels a pending ask-user request. (Option picking is click-only:
     // a bare-digit accelerator would hijack the first character of a

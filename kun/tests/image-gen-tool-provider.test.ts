@@ -346,8 +346,8 @@ describe('Image gen tool provider', () => {
       }), { status: 200, headers: { 'content-type': 'application/json' } })
     }))
     const client = new GrokImagineImageClient('https://api.x.ai/v1', 'grok-access', {
-      'x-grok-client-version': '0.2.106',
-      'x-grok-client-identifier': 'kun'
+      'x-grok-client-version': '0.2.112',
+      'x-grok-client-identifier': 'grok-shell'
     })
 
     const image = await client.generate({
@@ -362,8 +362,8 @@ describe('Image gen tool provider', () => {
     expect(image.data.byteLength).toBeGreaterThan(0)
     expect(requests[0].url).toBe('https://api.x.ai/v1/images/generations')
     expect(requests[0].headers.get('authorization')).toBe('Bearer grok-access')
-    expect(requests[0].headers.get('x-grok-client-version')).toBe('0.2.106')
-    expect(requests[0].headers.get('x-grok-client-identifier')).toBe('kun')
+    expect(requests[0].headers.get('x-grok-client-version')).toBe('0.2.112')
+    expect(requests[0].headers.get('x-grok-client-identifier')).toBe('grok-shell')
     expect(requests[0].body).toEqual({
       model: 'grok-imagine-image-quality',
       prompt: 'cinematic mountain lake',

@@ -916,7 +916,8 @@ describe('syncGuiManagedKunConfig', () => {
         'OpenAI-Beta': 'responses=experimental'
       }
     })
-    expect(parsed.capabilities.imageGen.headers['User-Agent']).toContain('codex_cli_rs')
+    expect(parsed.capabilities.imageGen.headers['User-Agent']).toMatch(/^codex_cli_rs\/0\.145\.0 \(.+; .+\)$/)
+    expect(parsed.capabilities.imageGen.headers['User-Agent']).not.toMatch(/deepseekgui|kun/i)
     expect(typeof parsed.capabilities.imageGen.headers.session_id).toBe('string')
     expect(KunConfigSchema.safeParse(parsed).success).toBe(true)
   })
@@ -962,7 +963,7 @@ describe('syncGuiManagedKunConfig', () => {
       expect(capability.apiKey).toBe('grok-access-token')
       expect(capability.headers).toMatchObject({
         'x-grok-client-version': expect.any(String),
-        'x-grok-client-identifier': 'kun'
+        'x-grok-client-identifier': 'grok-shell'
       })
       expect(capability.headers['X-XAI-Token-Auth']).toBeUndefined()
       expect(capability.headers['x-authenticateresponse']).toBeUndefined()

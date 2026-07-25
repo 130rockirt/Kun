@@ -52,17 +52,24 @@ function oauth(fetchImpl: typeof fetch): GeminiCliOAuthSource {
 
 describe('GeminiCliApiModelClient', () => {
   it('streams direct Code Assist text, reasoning, tools, usage, and provider metadata', async () => {
-    const requests: Array<{ url: string; body: Record<string, unknown>; authorization: string }> = []
+    const requests: Array<{
+      url: string
+      body: Record<string, unknown>
+      authorization: string
+      headers: Record<string, string>
+    }> = []
     const stream = [
       'data: {"response":{"candidates":[{"content":{"role":"model","parts":[{"text":"thinking","thought":true},{"text":"hello "},{"functionCall":{"id":"provider-call","name":"read","args":{"path":"a.ts"}},"thoughtSignature":"signature-bytes"}]}}],"usageMetadata":{"promptTokenCount":20,"candidatesTokenCount":4,"thoughtsTokenCount":2,"totalTokenCount":26,"cachedContentTokenCount":15}}}\n\n',
       'data: {"response":{"candidates":[{"content":{"role":"model","parts":[{"text":"world"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":20,"candidatesTokenCount":5,"thoughtsTokenCount":2,"totalTokenCount":27,"cachedContentTokenCount":15}}}\n\n'
     ].join('')
     const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>
+      const headers = new Headers(init?.headers)
       requests.push({
         url: String(url),
         body,
-        authorization: new Headers(init?.headers).get('authorization') ?? ''
+        authorization: headers.get('authorization') ?? '',
+        headers: Object.fromEntries(headers.entries())
       })
       if (String(url).endsWith(':loadCodeAssist')) {
         return new Response(JSON.stringify({
@@ -125,6 +132,8 @@ describe('GeminiCliApiModelClient', () => {
     expect(chunks.at(-1)).toEqual({ kind: 'completed', stopReason: 'tool_calls' })
     expect(requests).toHaveLength(2)
     expect(requests[1]?.authorization).toBe('Bearer official-access-token')
+    expect(requests[1]?.headers['user-agent']).toBe('google-gemini-cli')
+    expect(requests[1]?.headers['x-goog-api-client']).toBe('gl-node/kun gemini-cli-api')
     expect(requests[1]?.url).toContain(':streamGenerateContent?alt=sse')
     expect(requests[1]?.body).toMatchObject({
       model: 'gemini-2.5-flash',

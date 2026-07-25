@@ -63,6 +63,7 @@ export async function transcribeViaGeminiCliAudio(
   ).replace(/^\/+|\/+$/g, '')
   const signal = AbortSignal.timeout(speechToText.timeoutMs)
 
+  const model = speechToText.model
   let accessToken = await oauthSource.accessToken()
   let setup = await postGeminiCliJson(
     fetchImpl,
@@ -111,7 +112,7 @@ export async function transcribeViaGeminiCliAudio(
     `${endpoint}/${apiVersion}:generateContent`,
     accessToken,
     {
-      model: speechToText.model,
+      model,
       project: projectId,
       user_prompt_id: randomUUID(),
       request: {
@@ -143,7 +144,7 @@ export async function transcribeViaGeminiCliAudio(
       `${endpoint}/${apiVersion}:generateContent`,
       accessToken,
       {
-        model: speechToText.model,
+        model,
         project: projectId,
         user_prompt_id: randomUUID(),
         request: {

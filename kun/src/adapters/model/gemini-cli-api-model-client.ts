@@ -21,7 +21,6 @@ import {
   sleepWithAbort
 } from './compat-retry-policy.js'
 import type { ModelRequestRetryConfig } from '../../config/kun-config.js'
-
 export const GEMINI_CLI_CODE_ASSIST_ENDPOINT = 'https://cloudcode-pa.googleapis.com'
 export const GEMINI_CLI_CODE_ASSIST_API_VERSION = 'v1internal'
 
