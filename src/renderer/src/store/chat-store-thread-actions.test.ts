@@ -19,6 +19,8 @@ vi.mock('../agent/registry', () => ({
 
 import { createThreadActions } from './chat-store-thread-actions'
 
+const THREAD_COMPOSER_SELECTION_STORAGE_KEY = 'kun.threadComposerSelection.v1'
+
 class MemoryStorage implements BrowserStorageLike {
   private readonly values = new Map<string, string>()
 
@@ -174,6 +176,52 @@ describe('chat-store-thread-actions queued messages', () => {
         deliveryState: 'pending'
       })
     ])
+  })
+
+  it('uses the runtime model for an empty thread instead of a legacy cached selection', async () => {
+    const storage = new MemoryStorage()
+    storage.setItem(
+      THREAD_COMPOSER_SELECTION_STORAGE_KEY,
+      JSON.stringify({
+        thr_existing: { model: 'deepseek-v4-flash', providerId: 'deepseek' }
+      })
+    )
+    vi.stubGlobal('window', { localStorage: storage })
+    registryMock.getProvider.mockReturnValue({
+      getThreadDetail: vi.fn(async () => ({
+        blocks: [],
+        latestSeq: 0,
+        threadStatus: 'idle',
+        model: 'gemini-2.5-flash'
+      })),
+      subscribeThreadEvents: vi.fn(async () => undefined)
+    })
+    const { actions, state } = buildHarness()
+    state.busy = false
+    state.composerPickList = ['deepseek-v4-flash', 'gemini-2.5-flash']
+    state.composerModelGroups = [
+      {
+        providerId: 'deepseek',
+        label: 'DeepSeek',
+        modelIds: ['deepseek-v4-flash']
+      },
+      {
+        providerId: 'gemini-cli-subscription',
+        label: 'Gemini CLI',
+        modelIds: ['gemini-2.5-flash']
+      }
+    ]
+    state.threads = [{
+      ...thread('thr_existing'),
+      title: '新会话',
+      model: 'deepseek-v4-flash',
+      status: 'idle'
+    }]
+
+    await actions.selectThread('thr_existing')
+
+    expect(state.composerModel).toBe('gemini-2.5-flash')
+    expect(state.composerProviderId).toBe('gemini-cli-subscription')
   })
 
   it('reorders queued messages in the order they will be sent', () => {
@@ -1278,6 +1326,59 @@ describe('chat-store-thread-actions createThread conversation mode', () => {
     expect(alertDialog).toHaveBeenCalledOnce()
     expect(state.error).toBeTruthy()
     expect(state.blocks).toEqual([])
+  })
+
+  it('resets a reused empty thread to the configured default model', async () => {
+    const storage = new MemoryStorage()
+    const createThreadProvider = vi.fn()
+    registryMock.getProvider.mockReturnValue({ createThread: createThreadProvider })
+    vi.stubGlobal('window', {
+      localStorage: storage,
+      kunGui: {
+        getSettings: vi.fn(async () => ({
+          workspaceRoot: '/workspace/deepseek-gui',
+          agents: {
+            kun: {
+              providerId: 'gemini-cli-subscription',
+              model: 'gemini-2.5-flash',
+              subagents: { profiles: [] }
+            }
+          }
+        })),
+        workspaceDirectoryExists: vi.fn(async () => true)
+      }
+    })
+    const { actions, state } = buildHarness()
+    state.activeThreadId = 'thr_existing'
+    state.blocks = []
+    state.busy = false
+    state.composerModel = 'deepseek-v4-flash'
+    state.composerProviderId = 'deepseek'
+    state.composerPickList = ['deepseek-v4-flash', 'gemini-2.5-flash']
+    state.composerModelGroups = [{
+      providerId: 'gemini-cli-subscription',
+      label: 'Gemini CLI',
+      modelIds: ['gemini-2.5-flash']
+    }]
+    state.threads = [{
+      ...thread('thr_existing'),
+      title: '新会话',
+      model: 'deepseek-v4-flash',
+      status: 'idle'
+    }]
+
+    await actions.createThread({ workspaceRoot: '/workspace/deepseek-gui' })
+
+    expect(createThreadProvider).not.toHaveBeenCalled()
+    expect(state.composerModel).toBe('gemini-2.5-flash')
+    expect(state.composerProviderId).toBe('gemini-cli-subscription')
+    expect(JSON.parse(storage.getItem(THREAD_COMPOSER_SELECTION_STORAGE_KEY) ?? '{}')).toEqual({
+      thr_existing: {
+        model: 'gemini-2.5-flash',
+        providerId: 'gemini-cli-subscription',
+        source: 'default'
+      }
+    })
   })
 
   it('creates a conversation thread bound to the auto-created timestamped workspace', async () => {

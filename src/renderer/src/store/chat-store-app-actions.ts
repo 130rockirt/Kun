@@ -244,17 +244,23 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
           const normalizedCurrentModel = currentModel.toLowerCase() === 'auto' ? '' : currentModel
           const storedModel = readStoredComposerModel(pick)
           const selectableRuntimeDefault = isSelectable(runtimeDefault) ? runtimeDefault : ''
-          let model = activeThread
-            ? threadSelection?.model?.trim() || activeThread.model.trim()
-            : selectableRuntimeDefault || normalizedCurrentModel
-          if (model === '' || !isSelectable(model)) {
-            model = activeThread ? '' : storedModel
-          }
-          if (model === '' || !isSelectable(model)) {
-            model = fallbackComposerModel(pick, runtimeDefault, groups)
-          }
+          const threadHasUserMessages = activeThread
+            ? state.blocks.some((block) => block.kind === 'user')
+            : false
+          const preserveThreadSelection =
+            threadHasUserMessages || threadSelection?.source === 'user'
+          const candidates = activeThread
+            ? preserveThreadSelection
+              ? [threadSelection?.model ?? '', activeThread.model, selectableRuntimeDefault]
+              : [selectableRuntimeDefault, activeThread.model, threadSelection?.model ?? '']
+            : [selectableRuntimeDefault, normalizedCurrentModel, storedModel]
+          const model = candidates.find(isSelectable) ??
+            fallbackComposerModel(pick, runtimeDefault, groups)
+          const selectedStoredModel =
+            threadSelection?.model.trim().toLowerCase() === model.trim().toLowerCase()
           const threadProviderId =
-            threadSelection && providerIdMatchesComposerModel(groups, threadSelection.providerId, model)
+            threadSelection && selectedStoredModel &&
+              providerIdMatchesComposerModel(groups, threadSelection.providerId, model)
               ? threadSelection.providerId
               : ''
           const storedProviderId = activeThread || selectableRuntimeDefault
@@ -267,7 +273,7 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
             (!threadSelection || threadSelection.model !== model || threadSelection.providerId !== providerId) &&
             composerModelSelectable(pick, groups, model)
           ) {
-            rememberThreadComposerSelection(activeThread.id, model, providerId)
+            rememberThreadComposerSelection(activeThread.id, model, providerId, 'default')
           }
           return {
             composerPickList: pick,

@@ -22,21 +22,35 @@ export async function ensureRuntimeProviderForSend(input: {
 
 export function composerSelectionForThread(
   state: ChatState,
-  thread: Pick<NormalizedThread, 'id' | 'model'> | null | undefined
+  thread: Pick<NormalizedThread, 'id' | 'model'> | null | undefined,
+  options: {
+    hasUserMessages?: boolean
+    runtimeModel?: string
+  } = {}
 ): { model: string; providerId: string } | null {
   if (!thread) return null
   const pickList = state.composerPickList
   const stored = readThreadComposerSelection(thread.id)
   const storedModel = stored?.model.trim() ?? ''
-  const threadModel = thread.model.trim()
-  const model = composerModelSelectable(pickList, state.composerModelGroups, storedModel)
+  const threadModel = options.runtimeModel?.trim() || thread.model.trim()
+  const storedSelectable = composerModelSelectable(pickList, state.composerModelGroups, storedModel)
+  const storedShouldWin = storedSelectable && (
+    options.hasUserMessages !== false ||
+    stored?.source === 'user' ||
+    stored?.source === 'default'
+  )
+  const model = storedShouldWin
     ? storedModel
     : composerModelSelectable(pickList, state.composerModelGroups, threadModel)
       ? threadModel
-      : ''
+      : storedSelectable
+        ? storedModel
+        : ''
   if (!model) return null
+  const usesStoredModel = storedModel.toLowerCase() === model.toLowerCase()
   const storedProviderId =
-    stored && providerIdMatchesComposerModel(state.composerModelGroups, stored.providerId, model)
+    stored && usesStoredModel &&
+      providerIdMatchesComposerModel(state.composerModelGroups, stored.providerId, model)
       ? stored.providerId
       : ''
   return {

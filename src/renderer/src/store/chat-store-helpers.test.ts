@@ -357,7 +357,8 @@ describe('chat-store Claw helpers', () => {
     for (let index = 0; index < MAX_THREAD_COMPOSER_SELECTIONS + 5; index += 1) {
       raw[`thread-${index}`] = {
         model: ` model-${index} `,
-        providerId: ` provider-${index} `
+        providerId: ` provider-${index} `,
+        ...(index === 5 ? { source: 'default' } : {})
       }
     }
 
@@ -365,7 +366,11 @@ describe('chat-store Claw helpers', () => {
 
     expect(Object.keys(normalized)).toHaveLength(MAX_THREAD_COMPOSER_SELECTIONS)
     expect(normalized['thread-0']).toBeUndefined()
-    expect(normalized['thread-5']).toEqual({ model: 'model-5', providerId: 'provider-5' })
+    expect(normalized['thread-5']).toEqual({
+      model: 'model-5',
+      providerId: 'provider-5',
+      source: 'default'
+    })
     expect(normalized['bad-empty-model']).toBeUndefined()
     expect(normalized['bad-number']).toBeUndefined()
   })
@@ -461,15 +466,17 @@ describe('chat-store Claw helpers', () => {
 
     expect(readThreadComposerSelection('thread-a')).toEqual({
       model: 'deepseek-v4-pro',
-      providerId: 'deepseek'
+      providerId: 'deepseek',
+      source: 'user'
     })
     expect(readThreadComposerSelection('thread-b')).toEqual({
       model: 'MiniMax-M2',
-      providerId: 'minimax'
+      providerId: 'minimax',
+      source: 'user'
     })
     expect(JSON.parse(localStorage.getItem(THREAD_COMPOSER_SELECTION_STORAGE_KEY) ?? '{}')).toMatchObject({
-      'thread-a': { model: 'deepseek-v4-pro', providerId: 'deepseek' },
-      'thread-b': { model: 'MiniMax-M2', providerId: 'minimax' }
+      'thread-a': { model: 'deepseek-v4-pro', providerId: 'deepseek', source: 'user' },
+      'thread-b': { model: 'MiniMax-M2', providerId: 'minimax', source: 'user' }
     })
   })
 })

@@ -50,6 +50,7 @@ export type ComposerPlanMode = 'plan' | 'agent'
 export type ThreadComposerSelection = {
   model: string
   providerId: string
+  source?: 'user' | 'default'
 }
 
 export const CLAW_COMPOSER_MODEL_IDS = [...CLAW_MODEL_IDS]
@@ -222,7 +223,8 @@ export function composerModeForThread(
 export function rememberThreadComposerSelection(
   threadId: string,
   model: string,
-  providerId = ''
+  providerId = '',
+  source: NonNullable<ThreadComposerSelection['source']> = 'user'
 ): void {
   const thread = threadId.trim()
   const nextModel = model.trim()
@@ -231,7 +233,8 @@ export function rememberThreadComposerSelection(
   delete map[thread]
   map[thread] = {
     model: nextModel,
-    providerId: providerId.trim()
+    providerId: providerId.trim(),
+    source
   }
   saveThreadComposerSelectionMap(map)
 }
@@ -245,8 +248,11 @@ export function normalizeThreadComposerSelectionMap(raw: unknown): Record<string
     const value = rawValue as Record<string, unknown>
     const model = typeof value.model === 'string' ? value.model.trim() : ''
     const providerId = typeof value.providerId === 'string' ? value.providerId.trim() : ''
+    const source = value.source === 'user' || value.source === 'default'
+      ? value.source
+      : undefined
     if (!model) continue
-    entries.push([key, { model, providerId }])
+    entries.push([key, { model, providerId, ...(source ? { source } : {}) }])
   }
   return Object.fromEntries(entries.slice(-MAX_THREAD_COMPOSER_SELECTIONS))
 }

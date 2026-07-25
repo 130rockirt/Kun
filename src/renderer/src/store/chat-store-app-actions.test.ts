@@ -48,6 +48,7 @@ function buildHarness(fetchModelsResult: FetchModelsResult): {
 } {
   let state = {
     activeThreadId: null,
+    blocks: [],
     threads: [],
     composerMode: 'agent',
     composerModel: '',
@@ -302,7 +303,7 @@ describe('chat-store app actions composer model loading', () => {
     expect(localStorage.getItem(COMPOSER_MODEL_STORAGE_KEY)).toBeNull()
     expect(localStorage.getItem(COMPOSER_PROVIDER_STORAGE_KEY)).toBeNull()
     expect(JSON.parse(localStorage.getItem(THREAD_COMPOSER_SELECTION_STORAGE_KEY) ?? '{}')).toEqual({
-      'thread-a': { model: 'MiniMax-M2', providerId: 'minimax' }
+      'thread-a': { model: 'MiniMax-M2', providerId: 'minimax', source: 'user' }
     })
     expect(window.kunGui.saveSettingsSilent).not.toHaveBeenCalled()
   })
@@ -311,7 +312,9 @@ describe('chat-store app actions composer model loading', () => {
     localStorage.setItem(COMPOSER_MODEL_STORAGE_KEY, 'deepseek-v4-flash')
     localStorage.setItem(
       THREAD_COMPOSER_SELECTION_STORAGE_KEY,
-      JSON.stringify({ 'thread-a': { model: 'MiniMax-M2', providerId: 'minimax' } })
+      JSON.stringify({
+        'thread-a': { model: 'MiniMax-M2', providerId: 'minimax', source: 'user' }
+      })
     )
     const { actions, state } = buildHarness({
       ok: true,
@@ -339,6 +342,90 @@ describe('chat-store app actions composer model loading', () => {
     expect(state.composerModel).toBe('MiniMax-M2')
     expect(state.composerProviderId).toBe('minimax')
     expect(localStorage.getItem(COMPOSER_MODEL_STORAGE_KEY)).toBe('deepseek-v4-flash')
+  })
+
+  it('migrates a legacy empty-thread selection to the configured runtime default', async () => {
+    localStorage.setItem(
+      THREAD_COMPOSER_SELECTION_STORAGE_KEY,
+      JSON.stringify({
+        'thread-a': { model: 'deepseek-v4-flash', providerId: 'deepseek' }
+      })
+    )
+    const { actions, state } = buildHarness({
+      ok: true,
+      modelIds: ['deepseek-v4-flash', 'gemini-2.5-flash'],
+      defaultModelId: 'gemini-2.5-flash',
+      modelGroups: [
+        {
+          providerId: 'deepseek',
+          label: 'DeepSeek',
+          modelIds: ['deepseek-v4-flash']
+        },
+        {
+          providerId: 'gemini-cli-subscription',
+          label: 'Gemini CLI',
+          modelIds: ['gemini-2.5-flash']
+        }
+      ]
+    })
+    state.activeThreadId = 'thread-a'
+    state.threads = [{
+      id: 'thread-a',
+      title: '新会话',
+      workspace: '/tmp/project',
+      model: 'deepseek-v4-flash',
+      status: 'idle',
+      mode: 'agent',
+      updatedAt: '2026-07-25T00:00:00.000Z'
+    }]
+
+    await actions.loadComposerModels()
+
+    expect(state.composerModel).toBe('gemini-2.5-flash')
+    expect(state.composerProviderId).toBe('gemini-cli-subscription')
+    expect(JSON.parse(localStorage.getItem(THREAD_COMPOSER_SELECTION_STORAGE_KEY) ?? '{}')).toEqual({
+      'thread-a': {
+        model: 'gemini-2.5-flash',
+        providerId: 'gemini-cli-subscription',
+        source: 'default'
+      }
+    })
+  })
+
+  it('keeps the thread model for a conversation with history and no cached selection', async () => {
+    const { actions, state } = buildHarness({
+      ok: true,
+      modelIds: ['deepseek-v4-flash', 'gemini-2.5-flash'],
+      defaultModelId: 'gemini-2.5-flash',
+      modelGroups: [
+        {
+          providerId: 'deepseek',
+          label: 'DeepSeek',
+          modelIds: ['deepseek-v4-flash']
+        },
+        {
+          providerId: 'gemini-cli-subscription',
+          label: 'Gemini CLI',
+          modelIds: ['gemini-2.5-flash']
+        }
+      ]
+    })
+    state.activeThreadId = 'thread-a'
+    state.blocks = [{ kind: 'user', id: 'user-1', text: 'hello' }]
+    state.threads = [{
+      id: 'thread-a',
+      title: 'Existing conversation',
+      workspace: '/tmp/project',
+      model: 'deepseek-v4-flash',
+      status: 'idle',
+      mode: 'agent',
+      updatedAt: '2026-07-25T00:00:00.000Z'
+    }]
+
+    await actions.loadComposerModels()
+
+    expect(state.composerModel).toBe('deepseek-v4-flash')
+    expect(state.composerProviderId).toBe('deepseek')
   })
 
   it('does not restore a per-thread selection filtered out of the composer menu', async () => {
@@ -412,7 +499,7 @@ describe('chat-store app actions composer model loading', () => {
     expect(state.composerModel).toBe('deepseek-v4-pro')
     expect(state.composerProviderId).toBe('')
     expect(JSON.parse(localStorage.getItem(THREAD_COMPOSER_SELECTION_STORAGE_KEY) ?? '{}')).toEqual({
-      'thread-a': { model: 'deepseek-v4-pro', providerId: '' }
+      'thread-a': { model: 'deepseek-v4-pro', providerId: '', source: 'default' }
     })
   })
 
@@ -467,7 +554,7 @@ describe('chat-store app actions composer model loading', () => {
     expect(state.composerModel).toBe('text-model')
     expect(state.composerProviderId).toBe('test-provider')
     expect(JSON.parse(localStorage.getItem(THREAD_COMPOSER_SELECTION_STORAGE_KEY) ?? '{}')).toEqual({
-      'thread-a': { model: 'text-model', providerId: 'test-provider' }
+      'thread-a': { model: 'text-model', providerId: 'test-provider', source: 'user' }
     })
     expect(window.kunGui.saveSettingsSilent).not.toHaveBeenCalled()
   })
