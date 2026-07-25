@@ -473,9 +473,11 @@ export type CoreTurnItemJson = {
   inputId?: string
   prompt?: string
   questions?: Array<{
-    header: string
+    header?: string
     id: string
-    question: string
+    question?: string
+    prompt?: string
+    message?: string
     options: Array<{ label: string; description: string }>
     selectionMode?: 'single' | 'multiple'
     minSelections?: number
@@ -715,9 +717,11 @@ export type CoreRuntimeEventJson = {
   prompt?: string
   inputId?: string
   questions?: Array<{
-    header: string
+    header?: string
     id: string
-    question: string
+    question?: string
+    prompt?: string
+    message?: string
     options: Array<{ label: string; description: string }>
     selectionMode?: 'single' | 'multiple'
     minSelections?: number

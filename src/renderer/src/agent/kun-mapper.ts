@@ -1236,7 +1236,9 @@ function approvalStatusFromEvent(event: CoreRuntimeEventJson): ApprovalStatusPay
   }
 }
 
-function userInputBlockFromItem(item: CoreTurnItemJson): ChatBlock {
+function userInputBlockFromItem(
+  item: CoreTurnItemJson
+): Extract<ChatBlock, { kind: 'user_input' }> {
   const answers = userInputAnswersFromCore(item.answers)
   return {
     kind: 'user_input',
