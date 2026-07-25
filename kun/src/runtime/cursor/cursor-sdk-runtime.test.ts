@@ -9,6 +9,7 @@ import type {
   SDKAgent,
   SDKMessage
 } from '@cursor/sdk'
+import type { TurnItem } from '../../contracts/items.js'
 import { LlmDebugRecorder } from '../../services/llm-debug-recorder.js'
 import {
   CursorSdkRuntime,
@@ -83,14 +84,18 @@ function harness(input: {
   omitLocalStore?: boolean
   kunContext?: CursorKunTurnContext
   contextProfile?: CursorSdkRuntimeDeps['contextProfile']
+  streamLimits?: CursorSdkRuntimeDeps['streamLimits']
 }) {
   const applied: unknown[] = []
+  const updated: unknown[] = []
+  const materialized = new Map<string, TurnItem>()
   const recorded: unknown[] = []
   const finished: unknown[] = []
   const createOptions: AgentOptions[] = []
   const sentMessages: unknown[] = []
   const resumedAgentIds: string[] = []
   const resumedOptions: Array<Partial<AgentOptions> | undefined> = []
+  const kunContextSignals: AbortSignal[] = []
   const run = input.run ?? fakeRun()
   const agent = {
     agentId: 'agent_1',
@@ -162,7 +167,18 @@ function harness(input: {
       }]
     },
     turns: {
-      applyItem: async (_threadId: string, item: unknown) => { applied.push(item) },
+      applyItem: async (_threadId: string, item: TurnItem) => {
+        applied.push(item)
+        materialized.set(item.id, item)
+      },
+      updateItem: async (_threadId: string, itemId: string, patch: Partial<TurnItem>) => {
+        const existing = materialized.get(itemId)
+        if (!existing) return null
+        const item = { ...existing, ...patch } as TurnItem
+        updated.push(item)
+        materialized.set(itemId, item)
+        return item
+      },
       finishTurn: async (value: unknown) => { finished.push(value) }
     },
     events: { record: async (value: unknown) => { recorded.push(value) } },
@@ -176,17 +192,26 @@ function harness(input: {
     turnLimits: input.turnLimits,
     sessionCoordinator: input.sessionCoordinator,
     contextProfile: input.contextProfile,
+    streamLimits: input.streamLimits,
     ...(input.kunContext
-      ? { loadKunTurnContext: async () => input.kunContext! }
+      ? {
+          loadKunTurnContext: async ({ signal }: { signal: AbortSignal }) => {
+            kunContextSignals.push(signal)
+            return input.kunContext!
+          }
+        }
       : {})
   } as unknown as CursorSdkRuntimeDeps
   return {
     runtime: new CursorSdkRuntime(deps),
     createOptions,
     applied,
+    updated,
+    materialized,
     recorded,
     finished,
     sentMessages,
+    kunContextSignals,
     resumedAgentIds,
     resumedOptions,
     agent
@@ -274,6 +299,74 @@ describe('CursorSdkRuntime', () => {
       }
     })
     expect(JSON.stringify(trace)).not.toContain('cursor-secret')
+  })
+
+  test('materializes cumulative partial output before a stream failure', async () => {
+    const h = harness({
+      streamLimits: { maxToolCalls: 1 },
+      kunContext: {
+        instructionBlocks: [],
+        activeSkillIds: [],
+        tools: [],
+        customTools: {}
+      },
+      run: fakeRun({
+        stream: [{
+          type: 'assistant',
+          agent_id: 'agent_1',
+          run_id: 'run_1',
+          message: { role: 'assistant', content: [{ type: 'text', text: 'first part' }] }
+        }, {
+          type: 'assistant',
+          agent_id: 'agent_1',
+          run_id: 'run_1',
+          message: { role: 'assistant', content: [{ type: 'text', text: ' and second part' }] }
+        }, {
+          type: 'tool_call',
+          agent_id: 'agent_1',
+          run_id: 'run_1',
+          call_id: 'call_1',
+          name: 'shell',
+          status: 'running',
+          args: { command: 'pwd' }
+        }, {
+          type: 'tool_call',
+          agent_id: 'agent_1',
+          run_id: 'run_1',
+          call_id: 'call_2',
+          name: 'shell',
+          status: 'running',
+          args: { command: 'ls' }
+        }]
+      })
+    })
+
+    await expect(h.runtime.runTurn(
+      'thread_1',
+      'turn_1',
+      new AbortController().signal,
+      'cursor-subscription'
+    )).resolves.toBe('failed')
+
+    expect(h.applied).toContainEqual(expect.objectContaining({
+      kind: 'assistant_text',
+      text: 'first part',
+      status: 'running'
+    }))
+    expect(h.updated).toContainEqual(expect.objectContaining({
+      kind: 'assistant_text',
+      text: 'first part and second part',
+      status: 'running'
+    }))
+    expect([...h.materialized.values()]).toContainEqual(expect.objectContaining({
+      kind: 'assistant_text',
+      text: 'first part and second part'
+    }))
+    expect(h.finished).toContainEqual(expect.objectContaining({
+      status: 'failed',
+      code: 'cursor_sdk_stream_resource_limit'
+    }))
+    expect(h.kunContextSignals[0]?.aborted).toBe(true)
   })
 
   test('injects Kun instructions and custom tools into Cursor capabilities, context, and traces', async () => {

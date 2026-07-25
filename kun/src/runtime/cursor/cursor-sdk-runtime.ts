@@ -264,17 +264,33 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
     signal: AbortSignal,
     providerId?: string
   ): Promise<'completed' | 'failed' | 'aborted'> {
-    const execute = () => this.runTurnOwned(threadId, turnId, signal, providerId)
-    return this.deps.sessionCoordinator
-      ? this.deps.sessionCoordinator.runExclusive(threadId, execute)
-      : execute()
+    const runtimeController = new AbortController()
+    const abortRuntime = (): void => runtimeController.abort()
+    signal.addEventListener('abort', abortRuntime, { once: true })
+    if (signal.aborted) abortRuntime()
+    const execute = () => this.runTurnOwned(
+      threadId,
+      turnId,
+      runtimeController.signal,
+      providerId,
+      abortRuntime
+    )
+    try {
+      return await (this.deps.sessionCoordinator
+        ? this.deps.sessionCoordinator.runExclusive(threadId, execute)
+        : execute())
+    } finally {
+      abortRuntime()
+      signal.removeEventListener('abort', abortRuntime)
+    }
   }
 
   private async runTurnOwned(
     threadId: string,
     turnId: string,
     signal: AbortSignal,
-    providerId?: string
+    providerId: string | undefined,
+    abortRuntime: () => void
   ): Promise<'completed' | 'failed' | 'aborted'> {
     const thread = await this.deps.threadStore.get(threadId)
     const turn = thread?.turns.find((candidate) => candidate.id === turnId)
@@ -345,6 +361,7 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
           signal
         })
       } catch (error) {
+        abortRuntime()
         const message = sanitizeCursorSdkError(error, apiKey)
         await this.deps.events.record({
           kind: 'error',
@@ -497,6 +514,7 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
       nextId: (prefix) => this.deps.ids.next(prefix),
       limits: this.deps.streamLimits
     })
+    const materializedOutputItemIds = new Set<string>()
     let trace: CursorTrace | undefined
     let agent: SDKAgent | undefined
     let run: Run | undefined
@@ -625,7 +643,7 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
         for (;;) {
           const next = await Promise.race([iterator.next(), interrupted])
           if (next.done) break
-          await this.consumeMessage(mapper, next.value, trace)
+          await this.consumeMessage(mapper, next.value, trace, materializedOutputItemIds)
         }
       }
       const result = await Promise.race([run.wait(), interrupted])
@@ -663,12 +681,15 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
       }
       return 'completed'
     } catch (error) {
+      const abortedBeforeFailure = signal.aborted
+      abortRuntime()
+      cancelRun()
       const safeTraceError = new Error(sanitizeCursorSdkError(error, apiKey))
       safeTraceError.name = error instanceof Error ? error.name : 'CursorSdkError'
       await finishCursorTrace(trace, { kind: 'error', error: safeTraceError })
       trace = undefined
       if (
-        signal.aborted
+        abortedBeforeFailure
         || error instanceof CursorTurnInterruptedError && error.reason === 'aborted'
       ) {
         await this.deps.turns.finishTurn({ threadId, turnId, status: 'aborted' })
@@ -708,10 +729,32 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
   private async consumeMessage(
     mapper: CursorSdkEventMapper,
     message: SDKMessage,
-    trace: CursorTrace | undefined
+    trace: CursorTrace | undefined,
+    materializedOutputItemIds: Set<string>
   ): Promise<void> {
     captureCursorMessage(trace, message)
-    for (const draft of mapper.map(message)) {
+    const drafts = mapper.map(message)
+    const outputItem = message.type === 'assistant'
+      ? mapper.runningTextItem
+      : message.type === 'thinking'
+        ? mapper.runningReasoningItem
+        : undefined
+    if (outputItem) {
+      if (materializedOutputItemIds.has(outputItem.id)) {
+        const updated = await this.deps.turns.updateItem(
+          outputItem.threadId,
+          outputItem.id,
+          outputItem
+        )
+        if (!updated) {
+          await this.deps.turns.applyItem(outputItem.threadId, outputItem)
+        }
+      } else {
+        await this.deps.turns.applyItem(outputItem.threadId, outputItem)
+        materializedOutputItemIds.add(outputItem.id)
+      }
+    }
+    for (const draft of drafts) {
       captureCursorTraceDraft(trace, draft)
       await this.emitDraft(draft.threadId, draft)
     }

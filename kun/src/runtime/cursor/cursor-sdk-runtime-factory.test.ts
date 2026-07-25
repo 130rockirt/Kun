@@ -92,12 +92,17 @@ describe('Cursor SDK runtime factory', () => {
     const sentMessages: unknown[] = []
     const recorded: unknown[] = []
     const updatedMetadata: unknown[] = []
+    let bridgedToolResult: unknown
     const debugSink = new LlmDebugRecorder()
     const agent = {
       agentId: 'agent_1',
       model: { id: 'auto' },
       send: async (message: unknown) => {
         sentMessages.push(message)
+        bridgedToolResult = await createOptions[0]?.local?.customTools?.mcp_call_tool?.execute(
+          { serverId: 'docs' },
+          { toolCallId: 'cursor-mcp-call' }
+        )
         return completedRun()
       },
       close: vi.fn(),
@@ -210,14 +215,18 @@ describe('Cursor SDK runtime factory', () => {
       instructionInjectionBytes: 31
     }))
 
-    await expect(customTools?.mcp_call_tool?.execute(
-      { serverId: 'docs' },
-      { toolCallId: 'cursor-mcp-call' }
-    )).resolves.toEqual({
+    expect(bridgedToolResult).toEqual({
       content: [{
         type: 'text',
         text: JSON.stringify({ server: 'docs', ok: true }, null, 2)
       }]
+    })
+    await expect(customTools?.mcp_call_tool?.execute(
+      { serverId: 'late' },
+      { toolCallId: 'cursor-late-call' }
+    )).resolves.toMatchObject({
+      isError: true,
+      content: [{ type: 'text', text: 'tool call aborted before start' }]
     })
     expect(mcpExecute).toHaveBeenCalledWith(
       { serverId: 'docs' },

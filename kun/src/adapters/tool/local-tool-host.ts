@@ -647,6 +647,14 @@ function createUserInputTool(name: string): LocalTool {
               header: { type: 'string' },
               id: { type: 'string' },
               question: { type: 'string' },
+              prompt: {
+                type: 'string',
+                description: 'Alias for question used by delegated SDK tool callers.'
+              },
+              message: {
+                type: 'string',
+                description: 'Alias for question used by delegated SDK tool callers.'
+              },
               options: {
                 type: 'array',
                 items: optionSchema
@@ -663,8 +671,7 @@ function createUserInputTool(name: string): LocalTool {
                 type: 'integer',
                 minimum: 1
               }
-            },
-            required: ['question']
+            }
           }
         }
       },
@@ -680,8 +687,9 @@ function createUserInputTool(name: string): LocalTool {
       }
       const inputId = `in_${Math.random().toString(36).slice(2, 10)}`
       const itemId = `item_${inputId}`
-      const prompt = String(args.prompt ?? args.question ?? args.message ?? 'Input requested')
-      const questions = normalizeUserInputQuestions(args, inputId, prompt)
+      const explicitPrompt = firstNonEmptyString(args.prompt, args.question, args.message)
+      const questions = normalizeUserInputQuestions(args, inputId, explicitPrompt ?? 'Input requested')
+      const prompt = explicitPrompt ?? questions[0]?.question ?? 'Input requested'
       const resolution = await context.awaitUserInput({ id: inputId, itemId, prompt, questions })
       return {
         output: resolution,
@@ -736,9 +744,7 @@ function normalizeUserInputQuestion(
 ): UserInputQuestion | null {
   if (!value || typeof value !== 'object') return null
   const raw = value as Record<string, unknown>
-  const question = typeof raw.question === 'string' && raw.question.trim()
-    ? raw.question.trim()
-    : null
+  const question = firstNonEmptyString(raw.question, raw.prompt, raw.message)
   if (!question) return null
   const options = Array.isArray(raw.options)
     ? raw.options
@@ -752,6 +758,15 @@ function normalizeUserInputQuestion(
     options,
     ...normalizeUserInputSelection(raw, options.length)
   }
+}
+
+function firstNonEmptyString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value !== 'string') continue
+    const normalized = value.trim()
+    if (normalized) return normalized
+  }
+  return undefined
 }
 
 function normalizeUserInputSelection(

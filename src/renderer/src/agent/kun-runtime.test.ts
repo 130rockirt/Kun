@@ -196,6 +196,61 @@ describe('KunRuntimeProvider', () => {
     expect(detail.latestUserMessageId).toBe('item_user')
   })
 
+  it('rehydrates persisted partial assistant output for a running turn', async () => {
+    installDsGui({
+      runtimeRequest: vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        body: JSON.stringify({
+          id: 'thr_cursor',
+          title: 'Cursor turn',
+          workspace: '/tmp',
+          model: 'grok-4.5',
+          mode: 'agent',
+          status: 'running',
+          createdAt: 't0',
+          updatedAt: 't1',
+          latestSeq: 42,
+          turns: [{
+            id: 'turn_cursor',
+            threadId: 'thr_cursor',
+            status: 'running',
+            prompt: 'review',
+            createdAt: 't0',
+            items: [{
+              id: 'item_user',
+              turnId: 'turn_cursor',
+              threadId: 'thr_cursor',
+              role: 'user',
+              status: 'completed',
+              createdAt: 't0',
+              kind: 'user_message',
+              text: 'review'
+            }, {
+              id: 'item_cursor_text',
+              turnId: 'turn_cursor',
+              threadId: 'thr_cursor',
+              role: 'assistant',
+              status: 'running',
+              createdAt: 't1',
+              kind: 'assistant_text',
+              text: 'partial Cursor response'
+            }]
+          }]
+        })
+      }))
+    })
+
+    const detail = await new KunRuntimeProvider().getThreadDetail('thr_cursor')
+
+    expect(detail.threadStatus).toBe('running')
+    expect(detail.blocks).toContainEqual(expect.objectContaining({
+      kind: 'assistant',
+      id: 'item_cursor_text',
+      text: 'partial Cursor response'
+    }))
+  })
+
   it('flags user_input blocks live only when the runtime gate still awaits them (#606)', async () => {
     const threadBody = (pendingUserInputIds: string[]): string =>
       JSON.stringify({
