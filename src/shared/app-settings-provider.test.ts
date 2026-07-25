@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  activeModelProviderNeedsApiKey,
   DEFAULT_DEEPSEEK_BASE_URL,
   defaultClawSettings,
   defaultKeyboardShortcuts,
@@ -14,6 +15,7 @@ import {
   isTextToSpeechModelId,
   isVideoGenerationModelId,
   modelProviderPresetProfile,
+  modelProviderRequiresApiKey,
   modelProviderPresetAccountCount,
   modelProviderPresetAccountProfile,
   modelProviderTokenPlanProfile,
@@ -437,6 +439,66 @@ function settings(): AppSettingsV1 {
     disabledSkillIds: []
   }
 }
+
+describe('active model provider API-key status', () => {
+  it('requires an API key when the active default provider has no effective key', () => {
+    const state = settings()
+    state.provider.providers = state.provider.providers.map((provider) =>
+      provider.id === 'deepseek' ? { ...provider, apiKey: '' } : provider
+    )
+    state.agents.kun.providerId = 'deepseek'
+    state.agents.kun.apiKey = ''
+
+    expect(modelProviderRequiresApiKey(
+      state.provider.providers.find((provider) => provider.id === 'deepseek')!
+    )).toBe(true)
+    expect(activeModelProviderNeedsApiKey(state)).toBe(true)
+  })
+
+  it('accepts the configured effective key for an active API-key provider', () => {
+    const state = settings()
+    state.provider.apiKey = 'sk-deepseek'
+    state.provider.providers = state.provider.providers.map((provider) =>
+      provider.id === 'deepseek' ? { ...provider, apiKey: 'sk-deepseek' } : provider
+    )
+    state.agents.kun.providerId = 'deepseek'
+
+    expect(activeModelProviderNeedsApiKey(state)).toBe(false)
+  })
+
+  it.each([
+    ['claude-subscription', 'agent-sdk'],
+    ['gemini-subscription', 'antigravity-cli'],
+    ['gemini-cli-subscription', 'gemini-cli-api']
+  ] as const)('accepts the keyless %s transport', (presetId, expectedKind) => {
+    const preset = getModelProviderPreset(presetId)
+    expect(preset).not.toBeNull()
+    const profile = modelProviderPresetProfile(preset!, '')
+    expect(profile.kind).toBe(expectedKind)
+    expect(modelProviderRequiresApiKey(profile)).toBe(false)
+
+    const state = settings()
+    state.provider.providers.push(profile)
+    state.agents.kun.providerId = profile.id
+    state.agents.kun.apiKey = ''
+
+    expect(activeModelProviderNeedsApiKey(state)).toBe(false)
+  })
+
+  it('still requires the Cursor dashboard key for the active Cursor SDK provider', () => {
+    const preset = getModelProviderPreset('cursor-subscription')
+    expect(preset).not.toBeNull()
+    const profile = modelProviderPresetProfile(preset!, '')
+    expect(modelProviderRequiresApiKey(profile)).toBe(true)
+
+    const state = settings()
+    state.provider.providers.push(profile)
+    state.agents.kun.providerId = profile.id
+    state.agents.kun.apiKey = ''
+
+    expect(activeModelProviderNeedsApiKey(state)).toBe(true)
+  })
+})
 
 describe('model provider settings', () => {
   it('resolves Kun runtime credentials from the selected provider', () => {

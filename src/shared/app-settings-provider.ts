@@ -332,6 +332,30 @@ export function getModelProviderProfile(
   return provider.providers.find((profile) => profile.id === id) ?? provider.providers[0] ?? defaultModelProviderProfile(provider.apiKey, provider.baseUrl)
 }
 
+export function modelProviderRequiresApiKey(
+  provider: Pick<ModelProviderProfileV1, 'id' | 'kind' | 'presetSource'>
+): boolean {
+  if (
+    provider.kind === 'agent-sdk' ||
+    provider.kind === 'antigravity-cli' ||
+    provider.kind === 'gemini-cli-api' ||
+    provider.kind === 'gemini-code-assist'
+  ) {
+    return false
+  }
+
+  const source = resolveModelProviderPresetSource(provider)
+  if (source?.preset.id === 'litellm') return false
+  if (provider.id === DEFAULT_MODEL_PROVIDER_ID) return true
+  return Boolean(source)
+}
+
+export function activeModelProviderNeedsApiKey(settings: AppSettingsV1): boolean {
+  const runtime = getKunRuntimeSettings(settings)
+  const provider = getModelProviderProfile(settings, runtime.providerId)
+  return modelProviderRequiresApiKey(provider) && !resolveKunRuntimeSettings(settings).apiKey.trim()
+}
+
 export function listModelProviderModelIds(settings: AppSettingsV1): string[] {
   const ids = new Set<string>()
   const providerSettings = getModelProviderSettings(settings)

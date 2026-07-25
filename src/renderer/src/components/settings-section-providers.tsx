@@ -43,6 +43,7 @@ import {
   modelProviderPresetAccountCount,
   modelProviderPresetAccountProfile,
   modelProviderPresetProfile,
+  modelProviderRequiresApiKey,
   modelSupportsImageInput,
   modelProviderTokenPlanProfile,
   normalizeModelProviderId,
@@ -363,13 +364,6 @@ type ProbeState = {
   message?: string
 }
 
-function providerPresetRequiresApiKey(provider: ModelProviderProfileV1): boolean {
-  const source = resolveModelProviderPresetSource(provider)
-  if (source?.preset.id === 'litellm') return false
-  if (isOAuthSubscriptionProvider(provider)) return false
-  return Boolean(source)
-}
-
 function isCodexProvider(provider: Pick<ModelProviderProfileV1, 'id' | 'presetSource'>): boolean {
   return resolveModelProviderPresetSource(provider)?.preset.id === 'codex'
 }
@@ -393,16 +387,6 @@ function isOAuthSubscriptionProvider(provider: Pick<ModelProviderProfileV1, 'id'
     || isGrokSubscriptionProvider(provider)
     || isGeminiSubscriptionProvider(provider)
     || isGeminiCliApiSubscriptionProvider(provider)
-}
-
-function providerRequiresApiKey(provider: ModelProviderProfileV1): boolean {
-  if (
-    isAgentSdkProvider(provider) ||
-    isGeminiSubscriptionProvider(provider) ||
-    isGeminiCliApiSubscriptionProvider(provider)
-  ) return false
-  if (provider.id === DEFAULT_MODEL_PROVIDER_ID || isOAuthSubscriptionProvider(provider)) return true
-  return providerPresetRequiresApiKey(provider)
 }
 
 function parseCodexEmail(apiKey: string): string | undefined {
@@ -2319,7 +2303,7 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
       }))
       return
     }
-    if (providerRequiresApiKey(target) && !target.apiKey.trim()) {
+    if (modelProviderRequiresApiKey(target) && !target.apiKey.trim()) {
       setProbeStates((previous) => ({
         ...previous,
         [target.id]: {
@@ -2526,7 +2510,7 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
   )
   const activeMissingCredential = Boolean(
     activeProvider &&
-    providerRequiresApiKey(activeProvider) &&
+    modelProviderRequiresApiKey(activeProvider) &&
     !activeProvider.apiKey.trim()
   )
   const activeProbeBlocked = activeBaseUrlInvalid || activeMissingCredential
@@ -2560,7 +2544,7 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
     const selected = activeProvider?.id === item.id
     const isDraft = draftProvider?.id === item.id
     const inUse = !isDraft && activeKunProviderId === item.id
-    const missingKey = providerRequiresApiKey(item) && !item.apiKey.trim()
+    const missingKey = modelProviderRequiresApiKey(item) && !item.apiKey.trim()
     return (
       <button
         key={item.id}
