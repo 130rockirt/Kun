@@ -4,6 +4,7 @@ import {
   type KunSpeechToTextSettingsV1
 } from '../../shared/app-settings'
 import {
+  isSpeechToTextConfigured,
   SPEECH_TRANSCRIPTION_MAX_BASE64_CHARS,
   type SpeechTranscriptionRequest,
   type SpeechTranscriptionResult
@@ -33,30 +34,6 @@ const XAI_FORMAT_LANGUAGE_CODES = new Set([
   'ar', 'cs', 'da', 'nl', 'en', 'fil', 'fr', 'de', 'hi', 'id', 'it', 'ja', 'ko',
   'mk', 'ms', 'fa', 'pl', 'pt', 'ro', 'ru', 'es', 'sv', 'th', 'tr', 'vi'
 ])
-
-export function isSpeechToTextConfigured(
-  speechToText: Pick<KunSpeechToTextSettingsV1, 'enabled' | 'protocol' | 'baseUrl' | 'apiKey' | 'model'>
-): boolean {
-  if (speechToText.protocol === 'local-whisper') {
-    return speechToText.enabled && Boolean(speechToText.model.trim())
-  }
-  if (speechToText.protocol === 'gemini-cli-audio') {
-    return speechToText.enabled && Boolean(speechToText.model.trim())
-  }
-  if (speechToText.protocol === 'xai-stt') {
-    return (
-      speechToText.enabled &&
-      Boolean(speechToText.baseUrl.trim()) &&
-      Boolean(speechToText.apiKey.trim())
-    )
-  }
-  return (
-    speechToText.enabled &&
-    Boolean(speechToText.baseUrl.trim()) &&
-    Boolean(speechToText.apiKey.trim()) &&
-    Boolean(speechToText.model.trim())
-  )
-}
 
 export async function requestSpeechTranscription(
   settings: AppSettingsV1,

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { AppSettingsV1 } from '../../shared/app-settings'
-import { isSpeechToTextConfigured, requestSpeechTranscription } from './speech-to-text-service'
+import { isSpeechToTextConfigured } from '../../shared/speech-to-text'
+import { requestSpeechTranscription } from './speech-to-text-service'
 
 const AUDIO_BASE64 = Buffer.from('fake-wav-bytes').toString('base64')
 

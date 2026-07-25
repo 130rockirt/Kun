@@ -18,6 +18,7 @@ import {
   parseReviewCommand,
   returnQueuedMessageToComposer,
   shouldCaptureFileMentionCommitKey,
+  shouldShowVoiceDictation,
   shouldShowGoalFloater,
   shouldShowUsageHistory,
   shouldSurfaceComposerUserInput
@@ -1227,6 +1228,32 @@ describe('FloatingComposer image transfer helpers', () => {
 })
 
 describe('FloatingComposer capability controls', () => {
+  it('shows voice dictation for every runnable speech configuration', () => {
+    expect(shouldShowVoiceDictation({
+      enabled: true,
+      providerId: 'gemini-cli-subscription',
+      protocol: 'gemini-cli-audio',
+      baseUrl: '',
+      apiKey: '',
+      model: 'gemini-3.1-pro-preview',
+      localWhisperDownloadSource: 'huggingface',
+      language: 'zh',
+      timeoutMs: 60_000
+    })).toBe(true)
+
+    expect(shouldShowVoiceDictation({
+      enabled: true,
+      providerId: 'custom',
+      protocol: 'openai-transcriptions',
+      baseUrl: '',
+      apiKey: '',
+      model: 'whisper-1',
+      localWhisperDownloadSource: 'huggingface',
+      language: '',
+      timeoutMs: 60_000
+    })).toBe(false)
+  })
+
   it('surfaces user-input requests in Chat, Design, and the compact Write composer', () => {
     expect(shouldSurfaceComposerUserInput('chat', false)).toBe(true)
     expect(shouldSurfaceComposerUserInput('design', false)).toBe(true)

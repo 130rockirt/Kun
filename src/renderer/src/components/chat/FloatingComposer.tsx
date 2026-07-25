@@ -36,6 +36,8 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { ModelProviderModelGroup } from '@shared/kun-gui-api'
+import type { KunSpeechToTextSettingsV1 } from '@shared/app-settings'
+import { isSpeechToTextConfigured } from '@shared/speech-to-text'
 import type { AttachmentReference, ReviewTarget } from '../../agent/types'
 import { useChatStore } from '../../store/chat-store'
 import type { AppRoute } from '../../store/chat-store-types'
@@ -118,6 +120,12 @@ import {
 
 export type { ComposerFileReference } from '../../lib/composer-file-references'
 export type { ComposerExecutionSettings } from './FloatingComposerExecutionPicker'
+
+export function shouldShowVoiceDictation(
+  speechToText: KunSpeechToTextSettingsV1 | null | undefined
+): boolean {
+  return speechToText != null && isSpeechToTextConfigured(speechToText)
+}
 
 export function returnQueuedMessageToComposer(
   message: QueuedComposerMessage,
@@ -386,12 +394,7 @@ export function FloatingComposer({
       }
     }
   })
-  const showVoiceDictation = Boolean(
-    speechToTextSettings?.enabled &&
-    speechToTextSettings.model.trim() &&
-    (speechToTextSettings.protocol === 'local-whisper' ||
-      (speechToTextSettings.baseUrl.trim() && speechToTextSettings.apiKey.trim()))
-  )
+  const showVoiceDictation = shouldShowVoiceDictation(speechToTextSettings)
   const activeClawChannel = useMemo(
     () => clawChannels.find((channel) => channel.id === activeClawChannelId) ?? null,
     [activeClawChannelId, clawChannels]
