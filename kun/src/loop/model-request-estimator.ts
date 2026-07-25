@@ -12,21 +12,55 @@ const CHARS_PER_TOKEN = 4
 
 const estimator = new ContextEstimator(CHARS_PER_TOKEN)
 
+export type ModelRequestInputTokenBreakdown = {
+  tools: number
+  system: number
+  skills: number
+  messages: number
+  other: number
+  total: number
+}
+
 export function estimateModelRequestInputTokens(request: ModelRequest): number {
-  let tokens = 0
-  tokens += estimateText(request.systemPrompt)
-  tokens += estimateText(request.threadProfileInstruction)
-  tokens += estimateText(request.modeInstruction)
-  tokens += estimateText(request.contextInstructions?.join('\n'))
-  tokens += estimateItems(request.prefix)
-  tokens += estimateItems(request.history)
-  tokens += estimateTools(request.tools)
-  tokens += estimateTextFallbacks(request.attachmentTextFallbacks)
-  tokens += estimateDocuments(request.attachmentDocuments)
-  tokens += estimateImageAttachments(request.attachments)
-  tokens += estimateText(request.requiredToolName)
-  tokens += estimateText(request.reasoningEffort)
-  return Math.max(0, tokens)
+  return estimateModelRequestInputTokenBreakdown(request).total
+}
+
+/**
+ * Estimate the model-visible parts of one final request without mixing in
+ * provider billing counters or earlier requests from the same thread.
+ */
+export function estimateModelRequestInputTokenBreakdown(
+  request: ModelRequest,
+  options?: { skillContextInstructions?: readonly string[] }
+): ModelRequestInputTokenBreakdown {
+  const { skill } = partitionContextInstructions(
+    request.contextInstructions,
+    options?.skillContextInstructions
+  )
+  const contextInstructions = estimateText(request.contextInstructions?.join('\n'))
+  const skills = Math.min(contextInstructions, estimateText(skill.join('\n')))
+  const nonSkillContext = contextInstructions - skills
+  const system =
+    estimateText(request.systemPrompt) +
+    estimateText(request.threadProfileInstruction) +
+    estimateText(request.modeInstruction) +
+    nonSkillContext
+  const messages = estimateItems(request.prefix) + estimateItems(request.history)
+  const tools = estimateTools(request.tools)
+  const other =
+    estimateTextFallbacks(request.attachmentTextFallbacks) +
+    estimateDocuments(request.attachmentDocuments) +
+    estimateImageAttachments(request.attachments) +
+    estimateText(request.requiredToolName) +
+    estimateText(request.reasoningEffort)
+  return {
+    tools,
+    system,
+    skills,
+    messages,
+    other,
+    total: tools + system + skills + messages + other
+  }
 }
 
 /**
@@ -58,6 +92,31 @@ export function estimateRequestOverheadTokens(input: {
 
 function estimateItems(items?: TurnItem[]): number {
   return items && items.length > 0 ? estimator.estimateItems(items) : 0
+}
+
+function partitionContextInstructions(
+  instructions: readonly string[] | undefined,
+  skillInstructions: readonly string[] | undefined
+): { skill: string[]; nonSkill: string[] } {
+  if (!instructions?.length) return { skill: [], nonSkill: [] }
+  if (!skillInstructions?.length) return { skill: [], nonSkill: [...instructions] }
+  const remaining = new Map<string, number>()
+  for (const instruction of skillInstructions) {
+    remaining.set(instruction, (remaining.get(instruction) ?? 0) + 1)
+  }
+  const skill: string[] = []
+  const nonSkill: string[] = []
+  for (const instruction of instructions) {
+    const count = remaining.get(instruction) ?? 0
+    if (count > 0) {
+      skill.push(instruction)
+      if (count === 1) remaining.delete(instruction)
+      else remaining.set(instruction, count - 1)
+    } else {
+      nonSkill.push(instruction)
+    }
+  }
+  return { skill, nonSkill }
 }
 
 function estimateTools(tools?: readonly ModelToolSpec[]): number {
@@ -109,5 +168,5 @@ function estimateImageAttachments(attachments?: ModelInputAttachment[]): number 
 
 function estimateText(text?: string): number {
   if (!text?.trim()) return 0
-  return Math.max(1, Math.ceil(text.length / CHARS_PER_TOKEN))
+  return Math.max(1, estimator.estimateText(text))
 }

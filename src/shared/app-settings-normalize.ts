@@ -3,6 +3,7 @@ import {
   CHECKPOINT_CLEANUP_INTERVAL_DAYS,
   DEFAULT_CHECKPOINT_CLEANUP_ENABLED,
   DEFAULT_CHECKPOINT_CLEANUP_INTERVAL_DAYS,
+  DEFAULT_GIT_CHECKPOINT_CREATE_ENABLED,
   DEFAULT_CURSOR_SPOTLIGHT_COLOR,
   DEFAULT_GIT_BRANCH_PREFIX,
   DEFAULT_LOG_RETENTION_DAYS,
@@ -32,9 +33,11 @@ import {
   getKunRuntimeSettings,
   kunSettingsEnvelope,
   mergeKunRuntimeSettings,
+  migrateKunContextCompactionDefaults,
   migrateLegacyAppSettings
 } from './app-settings-kun'
 import {
+  activeModelProviderNeedsApiKey,
   defaultMiniMaxMediaGenerationKunPatch,
   normalizeModelProviderSettings
 } from './app-settings-provider'
@@ -71,6 +74,9 @@ export function normalizeAppSettings(settings: AppSettingsV1): AppSettingsV1 {
     providerSettings.providers,
     typeof rawKun?.model === 'string' && Boolean(rawKun.model.trim())
   )
+  const contextCompaction = migrateKunContextCompactionDefaults(
+    rawKun?.contextCompaction ?? runtime.contextCompaction
+  )
   const rawMediaPatch: Parameters<typeof defaultMiniMaxMediaGenerationKunPatch>[0]['kunPatch'] = {
     ...(rawKun?.textToSpeech !== undefined ? { textToSpeech: rawKun.textToSpeech } : {}),
     ...(rawKun?.musicGeneration !== undefined ? { musicGeneration: rawKun.musicGeneration } : {}),
@@ -81,8 +87,20 @@ export function normalizeAppSettings(settings: AppSettingsV1): AppSettingsV1 {
     currentKun: runtime,
     kunPatch: rawMediaPatch
   })
+  // Before this field existed, having an active API key was the onboarding
+  // completion signal. Keyless subscription/CLI providers are also complete
+  // configurations, so use the same active-provider policy as the setup UI.
+  const setupMigrationSettings = {
+    ...maybeSettings,
+    provider: providerSettings,
+    agents: kunSettingsEnvelope(runtime)
+  } as AppSettingsV1
+  const initialSetupCompleted = typeof maybeSettings.initialSetupCompleted === 'boolean'
+    ? maybeSettings.initialSetupCompleted
+    : !activeModelProviderNeedsApiKey(setupMigrationSettings)
   return {
     version: 1,
+    initialSetupCompleted,
     locale: isAppLocale(maybeSettings.locale) ? maybeSettings.locale : 'en',
     theme:
       maybeSettings.theme === 'light' || maybeSettings.theme === 'dark' || maybeSettings.theme === 'system'
@@ -95,6 +113,7 @@ export function normalizeAppSettings(settings: AppSettingsV1): AppSettingsV1 {
     provider: providerSettings,
     agents: kunSettingsEnvelope(mergeKunRuntimeSettings(defaultKunRuntimeSettings(), {
       ...runtime,
+      contextCompaction,
       baseUrl: runtime.baseUrl.trim() ? normalizeDeepseekBaseUrl(runtime.baseUrl) : '',
       ...(miniMaxMediaDefaults ?? {})
     })),
@@ -237,6 +256,10 @@ export function normalizeCheckpointCleanupSettings(
     ? Math.max(1, Math.min(100, Math.floor(settings.maxPerThread)))
     : undefined
   return {
+    createEnabled:
+      typeof settings?.createEnabled === 'boolean'
+        ? settings.createEnabled
+        : DEFAULT_GIT_CHECKPOINT_CREATE_ENABLED,
     enabled: typeof settings?.enabled === 'boolean' ? settings.enabled : DEFAULT_CHECKPOINT_CLEANUP_ENABLED,
     intervalDays: CHECKPOINT_CLEANUP_INTERVAL_DAYS.includes(intervalDays)
       ? intervalDays

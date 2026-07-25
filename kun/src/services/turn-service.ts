@@ -16,6 +16,7 @@ import type { MigrationMaintenanceLock } from '../ports/migration-maintenance-lo
 import type { IdGenerator } from '../ports/id-generator.js'
 import type { ModelClient } from '../ports/model-client.js'
 import type { ImmutablePrefix } from '../cache/immutable-prefix.js'
+import type { AttachmentStore } from '../attachments/attachment-store.js'
 import type { InflightTracker } from '../loop/inflight-tracker.js'
 import type { SteeringQueue } from '../loop/steering-queue.js'
 import { ContextCompactor, extractSkillPins } from '../loop/context-compactor.js'
@@ -52,6 +53,7 @@ export type TurnServiceDeps = {
   model?: ModelClient
   usage?: UsageService
   prefix?: ImmutablePrefix
+  attachmentStore?: () => AttachmentStore | undefined
   defaultModel?: string
   contextCompaction?: ContextCompactionConfig
   /** Maximum number of active turns this in-process runtime may admit. */
@@ -59,6 +61,8 @@ export type TurnServiceDeps = {
   /** Reject turn admission while this thread is being destructively removed. */
   lifecycleFence?: ThreadLifecycleFence
   migrationMaintenance?: MigrationMaintenanceLock
+  /** Dispose machine-local continuation state after a successful manual compaction. */
+  onCompacted?: (threadId: string) => Promise<void>
   ids: IdGenerator
   nowIso: () => string
 }
@@ -169,6 +173,17 @@ export class TurnService {
           const composerContexts = ComposerContextAttachmentSchema.array().parse(
             input.request.composerContexts ?? []
           )
+          const attachmentIds = [...new Set(
+            (input.request.attachmentIds ?? []).map((id) => id.trim()).filter(Boolean)
+          )]
+          if (attachmentIds.length > 0) {
+            const attachmentStore = this.deps.attachmentStore?.()
+            if (!attachmentStore) throw new Error('attachment store is unavailable')
+            await attachmentStore.bindScopes(attachmentIds, {
+              threadId: input.threadId,
+              ...(thread.workspace ? { workspace: thread.workspace } : {})
+            })
+          }
           const turn = createTurnRecord({
             id: turnId,
             threadId: input.threadId,
@@ -177,7 +192,7 @@ export class TurnService {
             providerId: input.request.providerId,
             accountId: input.request.accountId,
             reasoningEffort: input.request.reasoningEffort,
-            attachmentIds: input.request.attachmentIds ?? [],
+            attachmentIds,
             composerContexts,
             guiPlan: input.request.guiPlan,
             guiDesignCanvas: input.request.guiDesignCanvas,
@@ -199,7 +214,7 @@ export class TurnService {
             text: input.request.prompt,
             displayText: input.request.displayText,
             messageSource: input.request.messageSource,
-            attachmentIds: input.request.attachmentIds ?? [],
+            attachmentIds,
             composerContexts,
             fileReferences: input.request.fileReferences ?? [],
             workspaceCheckpointId: input.request.workspaceCheckpointId
@@ -610,6 +625,7 @@ export class TurnService {
           ? { sourceItemIds: result.summaryItem.sourceItemIds }
           : {})
       })
+      await this.deps.onCompacted?.(input.threadId)
     }
     return {
       threadId: input.threadId,

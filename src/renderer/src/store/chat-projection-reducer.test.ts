@@ -89,6 +89,59 @@ describe('chat projection reducer', () => {
     expect(live.error).toBeNull()
   })
 
+  it('stores context snapshots only for the active thread', () => {
+    const activeSnapshot: RuntimeProjectionAction = {
+      type: 'context_snapshot_received',
+      payload: {
+        threadId: 'thread_1',
+        model: 'model',
+        stepIndex: 0,
+        contextWindowTokens: 100_000,
+        softThresholdTokens: 75_000,
+        hardThresholdTokens: 85_000,
+        estimatedInputTokens: 15,
+        breakdown: { tools: 1, system: 2, skills: 3, messages: 4, other: 5 },
+        toolCount: 1,
+        activeSkillIds: []
+      }
+    }
+    const otherSnapshot: RuntimeProjectionAction = {
+      ...activeSnapshot,
+      payload: { ...activeSnapshot.payload, threadId: 'thread_2' }
+    }
+
+    const active = project(state(), [activeSnapshot])
+    const ignored = project(state(), [otherSnapshot])
+
+    expect(active.lastContextSnapshot).toEqual(activeSnapshot.payload)
+    expect(ignored.lastContextSnapshot).toBeUndefined()
+  })
+
+  it('stores delegated capabilities only for the active thread', () => {
+    const action: RuntimeProjectionAction = {
+      type: 'delegated_runtime_received',
+      payload: {
+        threadId: 'thread_1',
+        turnId: 'turn_1',
+        providerKind: 'antigravity-cli',
+        providerId: 'google-subscription',
+        phase: 'portable',
+        capabilities: {
+          nativeResume: false,
+          structuredStreaming: false,
+          kunTools: false,
+          externalApproval: false,
+          liveSteering: false,
+          nativeContextTelemetry: false,
+          fork: false
+        }
+      }
+    }
+    expect(project(state(), [action]).lastDelegatedRuntimeState).toEqual(action.payload)
+    expect(project({ ...state(), activeThreadId: 'thread_2' }, [action]).lastDelegatedRuntimeState)
+      .toBeUndefined()
+  })
+
   it('deduplicates approval and user-input replay by stable runtime identity', () => {
     const approval: RuntimeProjectionAction = {
       type: 'approval_received',
@@ -96,10 +149,22 @@ describe('chat projection reducer', () => {
     }
     const input: RuntimeProjectionAction = {
       type: 'user_input_requested',
-      payload: { itemId: 'input_item_1', requestId: 'input_1', questions: [] }
+      payload: {
+        itemId: 'input_item_1',
+        requestId: 'input_1',
+        questions: [{ header: 'Input', id: 'input_1', question: 'Continue?', options: [] }]
+      }
     }
     const projected = project(state(), [approval, input, approval, input])
     expect(projected.blocks).toHaveLength(2)
+  })
+
+  it('ignores user-input requests that have no question text', () => {
+    const projected = project(state(), [{
+      type: 'user_input_requested',
+      payload: { itemId: 'input_item_empty', requestId: 'input_empty', questions: [] }
+    }])
+    expect(projected.blocks).toHaveLength(0)
   })
 
   it('projects the sanitized runtime message as a durable conversation error', () => {
@@ -166,6 +231,54 @@ describe('chat projection reducer', () => {
       meta: { displayText: '检查一下脚本并优化执行进度' }
     })
     expect(projected.blocks[1]).toMatchObject({ kind: 'compaction', id: 'compaction_1' })
+  })
+
+  it('reconciles guided optimistic input without replacing the active turn owner', () => {
+    const createdAt = '2026-07-11T00:00:00.000Z'
+    const initial = {
+      ...state(),
+      busy: true,
+      currentTurnId: 'turn_1',
+      currentTurnUserId: 'item_original_user',
+      turnStartedAtByUserId: { item_original_user: NOW - 1_000 },
+      blocks: [
+        {
+          kind: 'user' as const,
+          id: 'item_original_user',
+          turnId: 'turn_1',
+          createdAt: '2026-07-10T23:59:00.000Z',
+          text: 'Build the page'
+        },
+        {
+          kind: 'user' as const,
+          id: 'q-guided',
+          turnId: 'turn_1',
+          createdAt,
+          text: 'Use the compact logo instead',
+          meta: { displayText: 'Use the compact logo instead' }
+        }
+      ]
+    }
+
+    const projected = project(initial, [{
+      type: 'user_message_received',
+      payload: {
+        itemId: 'item_guided_user',
+        turnId: 'turn_1',
+        createdAt,
+        text: 'use the compact logo instead',
+        meta: { displayText: 'Use the compact logo instead' }
+      }
+    }])
+
+    expect(projected.blocks).toHaveLength(2)
+    expect(projected.blocks[1]).toMatchObject({
+      kind: 'user',
+      id: 'item_guided_user',
+      turnId: 'turn_1',
+      meta: { displayText: 'Use the compact logo instead' }
+    })
+    expect(projected.currentTurnUserId).toBe('item_original_user')
   })
 
   it('keeps only the latest automatic compaction marker for a turn', () => {

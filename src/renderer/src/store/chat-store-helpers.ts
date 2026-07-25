@@ -50,6 +50,7 @@ export type ComposerPlanMode = 'plan' | 'agent'
 export type ThreadComposerSelection = {
   model: string
   providerId: string
+  source?: 'user' | 'default'
 }
 
 export const CLAW_COMPOSER_MODEL_IDS = [...CLAW_MODEL_IDS]
@@ -222,7 +223,8 @@ export function composerModeForThread(
 export function rememberThreadComposerSelection(
   threadId: string,
   model: string,
-  providerId = ''
+  providerId = '',
+  source: NonNullable<ThreadComposerSelection['source']> = 'user'
 ): void {
   const thread = threadId.trim()
   const nextModel = model.trim()
@@ -231,7 +233,8 @@ export function rememberThreadComposerSelection(
   delete map[thread]
   map[thread] = {
     model: nextModel,
-    providerId: providerId.trim()
+    providerId: providerId.trim(),
+    source
   }
   saveThreadComposerSelectionMap(map)
 }
@@ -245,8 +248,11 @@ export function normalizeThreadComposerSelectionMap(raw: unknown): Record<string
     const value = rawValue as Record<string, unknown>
     const model = typeof value.model === 'string' ? value.model.trim() : ''
     const providerId = typeof value.providerId === 'string' ? value.providerId.trim() : ''
+    const source = value.source === 'user' || value.source === 'default'
+      ? value.source
+      : undefined
     if (!model) continue
-    entries.push([key, { model, providerId }])
+    entries.push([key, { model, providerId, ...(source ? { source } : {}) }])
   }
   return Object.fromEntries(entries.slice(-MAX_THREAD_COMPOSER_SELECTIONS))
 }
@@ -324,11 +330,16 @@ export function composerModelAllowed(pickList: readonly string[], modelId: strin
 export function composerModelSelectable(
   pickList: readonly string[],
   modelGroups: readonly ModelProviderModelGroup[],
-  modelId: string
+  modelId: string,
+  providerId = ''
 ): boolean {
   if (!composerModelAllowed(pickList, modelId)) return false
   if (!isComposerChatModelId(modelId)) return false
-  const group = modelGroups.find((item) => modelGroupHasModel(item, modelId))
+  const provider = providerId.trim()
+  const group = provider
+    ? modelGroups.find((item) => item.providerId === provider && modelGroupHasModel(item, modelId))
+    : modelGroups.find((item) => modelGroupHasModel(item, modelId))
+  if (provider && !group) return false
   if (!group) return true
   return modelProfileSupportsTextChat(modelProfileForComposerModel(group, modelId))
 }
@@ -481,11 +492,11 @@ export function fallbackComposerModel(
   runtimeDefault: string,
   modelGroups: readonly ModelProviderModelGroup[] = []
 ): string {
-  const firstProviderModel = firstSelectableProviderModel(pickList, modelGroups)
-  if (firstProviderModel) return firstProviderModel
   const allowed = new Set(pickList)
   const preferred = runtimeDefault.trim()
   if (preferred && preferred.toLowerCase() !== 'auto' && allowed.has(preferred)) return preferred
+  const firstProviderModel = firstSelectableProviderModel(pickList, modelGroups)
+  if (firstProviderModel) return firstProviderModel
   return DEFAULT_COMPOSER_MODEL_IDS.find((id) => allowed.has(id)) ?? pickList[0] ?? ''
 }
 

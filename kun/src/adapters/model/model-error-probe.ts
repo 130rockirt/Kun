@@ -13,6 +13,14 @@ export function isDeepSeekHost(baseUrl: string): boolean {
   }
 }
 
+export function isGeminiOpenAiHost(baseUrl: string): boolean {
+  try {
+    return new URL(baseUrl).hostname.toLowerCase() === 'generativelanguage.googleapis.com'
+  } catch {
+    return false
+  }
+}
+
 export async function probeDeepSeekReachable(input: {
   baseUrl: string
   fetchImpl: typeof fetch

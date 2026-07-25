@@ -1,13 +1,14 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { DelegationRuntime } from '../../delegation/delegation-runtime.js'
 import type { ToolHostContext } from '../../ports/tool-host.js'
+import { CapabilityRegistry } from './capability-registry.js'
 import { buildDelegationToolProviders } from './delegation-tool-provider.js'
+import { LocalToolHost } from './local-tool-host.js'
 
 describe('delegate_task observability output', () => {
-  it('exposes one mode-specific tool without child runtime selection fields', () => {
+  it('exposes discovery plus the switch-dependent delegate schema without child runtime selection fields', () => {
     const existingRuntime = {
       enabled: () => true,
-      listProfiles: () => [],
       useExistingAgents: true,
       defaultToolPolicy: 'inherit'
     } as unknown as DelegationRuntime
@@ -15,26 +16,196 @@ describe('delegate_task observability output', () => {
     const delegateTool = tools[0]
     const properties = delegateTool?.inputSchema.properties as Record<string, { description?: string }> | undefined
 
-    expect(tools.map((tool) => tool.name)).toEqual(['delegate_task'])
+    expect(tools.map((tool) => tool.name)).toEqual(['delegate_task', 'list_subagent_profiles'])
     expect(delegateTool?.description).toContain('not tool-call arguments')
     expect(properties).not.toHaveProperty('model')
     expect(properties).not.toHaveProperty('providerId')
     expect(properties).toHaveProperty('profile')
     expect(properties).not.toHaveProperty('custom_agent')
+    expect(delegateTool?.inputSchema.required).toEqual(['prompt'])
 
     const customRuntime = {
       enabled: () => true,
-      listProfiles: () => [],
       useExistingAgents: false,
       defaultToolPolicy: 'inherit'
     } as unknown as DelegationRuntime
-    const customTool = buildDelegationToolProviders(customRuntime)[0]?.tools[0]
+    const customTools = buildDelegationToolProviders(customRuntime)[0]?.tools ?? []
+    const customTool = customTools[0]
     const customModeProperties = customTool?.inputSchema.properties as Record<string, { description?: string }> | undefined
+    expect(customTools.map((tool) => tool.name)).toEqual(['delegate_task', 'list_subagent_profiles'])
     expect(customModeProperties).not.toHaveProperty('profile')
     expect(customModeProperties?.custom_agent?.description).toContain('always inherits the current turn model/provider/reasoning strength')
     expect(customTool?.inputSchema.required).toEqual(['prompt', 'custom_agent'])
     const customProperties = (customModeProperties?.custom_agent as { properties?: Record<string, unknown> })?.properties
     expect(customProperties).not.toHaveProperty('reasoning_effort')
+  })
+
+  it('returns only the custom capability when reusable profiles are disabled', async () => {
+    const listRoutingProfiles = vi.fn()
+    const runtime = {
+      enabled: () => true,
+      useExistingAgents: false,
+      defaultToolPolicy: 'inherit',
+      listRoutingProfiles
+    } as unknown as DelegationRuntime
+    const tool = buildDelegationToolProviders(runtime)[0]?.tools
+      .find((candidate) => candidate.name === 'list_subagent_profiles')
+
+    const result = await tool!.execute({}, context())
+
+    expect(result.output).toMatchObject({
+      mode: 'custom-only',
+      surface: 'code',
+      profileCount: 0,
+      nextOffset: null,
+      profiles: [],
+      customAgent: {
+        id: 'custom',
+        argument: 'custom_agent',
+        lifetime: 'one-run',
+        requiredFields: ['name', 'description', 'system_prompt']
+      }
+    })
+    expect(listRoutingProfiles).not.toHaveBeenCalled()
+  })
+
+  it('keeps read-only discovery visible in plan mode without advertising child execution', async () => {
+    const runtime = {
+      enabled: () => true,
+      useExistingAgents: true,
+      defaultToolPolicy: 'inherit'
+    } as unknown as DelegationRuntime
+    const host = new LocalToolHost({
+      registry: new CapabilityRegistry(buildDelegationToolProviders(runtime))
+    })
+
+    const tools = await host.listTools({ ...context(), threadMode: 'plan' })
+
+    expect(tools.map((tool) => tool.name)).toEqual(['list_subagent_profiles'])
+    expect(tools[0]?.sideEffect).toBe('read-only')
+  })
+
+  it('lists a bounded page from the current workspace and surface without leaking profile instructions', async () => {
+    const listRoutingProfiles = vi.fn(async () => [
+      {
+        kind: 'profile' as const,
+        id: 'alpha',
+        source: 'configured' as const,
+        profile: {
+          name: 'A'.repeat(300),
+          description: 'D'.repeat(1_200),
+          toolPolicy: 'inherit' as const,
+          systemPrompt: 'secret system prompt',
+          promptPreamble: 'secret preamble',
+          model: 'secret-model',
+          providerId: 'secret-provider'
+        }
+      },
+      {
+        kind: 'profile' as const,
+        id: 'workspace-reviewer',
+        source: 'workspace' as const,
+        profile: {
+          name: 'Workspace Reviewer',
+          description: 'Reviews the active design workspace.',
+          toolPolicy: 'readOnly' as const,
+          blockedTools: ['write']
+        }
+      }
+    ])
+    const runtime = {
+      enabled: () => true,
+      useExistingAgents: true,
+      defaultProfileName: 'general',
+      defaultToolPolicy: 'inherit',
+      listRoutingProfiles
+    } as unknown as DelegationRuntime
+    const tool = buildDelegationToolProviders(runtime)[0]?.tools
+      .find((candidate) => candidate.name === 'list_subagent_profiles')
+
+    const result = await tool!.execute({ offset: 0, limit: 1 }, {
+      ...context(),
+      workspace: '/workspace/design',
+      agentSurface: 'design'
+    })
+    const output = result.output as {
+      profiles: Array<{ name: string; description: string }>
+    }
+
+    expect(listRoutingProfiles).toHaveBeenCalledWith('/workspace/design', 'design')
+    expect(result.output).toMatchObject({
+      mode: 'profiles-only',
+      surface: 'design',
+      profileCount: 2,
+      offset: 0,
+      limit: 1,
+      nextOffset: 1,
+      profiles: [{
+        id: 'alpha',
+        toolPolicy: 'inherit',
+        access: expect.stringContaining('parent')
+      }]
+    })
+    expect(result.output).not.toHaveProperty('customAgent')
+    expect(output.profiles[0]?.name).toHaveLength(256)
+    expect(output.profiles[0]?.description).toHaveLength(1_000)
+    expect(JSON.stringify(result.output)).not.toContain('secret system prompt')
+    expect(JSON.stringify(result.output)).not.toContain('secret preamble')
+    expect(JSON.stringify(result.output)).not.toContain('secret-model')
+    expect(JSON.stringify(result.output)).not.toContain('secret-provider')
+    expect(JSON.stringify(result.output)).not.toContain('blockedTools')
+  })
+
+  it('runs an explicit custom agent in custom-only mode without invoking catalog routing', async () => {
+    const listRoutingProfiles = vi.fn()
+    const runChild = vi.fn(async (input: Parameters<DelegationRuntime['runChild']>[0]) => ({
+      id: 'child_custom',
+      parentThreadId: input.parentThreadId,
+      parentTurnId: input.parentTurnId,
+      prompt: input.prompt,
+      profile: input.inlineProfile?.id,
+      profileSource: 'custom' as const,
+      profileSnapshot: input.inlineProfile?.profile,
+      toolPolicy: 'readOnly' as const,
+      status: 'completed' as const,
+      summary: 'Custom review complete.',
+      usage: { promptTokens: 3, completionTokens: 2, totalTokens: 5 },
+      returnFormat: 'summary' as const,
+      createdAt: '2026-07-25T00:00:00.000Z',
+      updatedAt: '2026-07-25T00:00:01.000Z'
+    }))
+    const runtime = {
+      enabled: () => true,
+      useExistingAgents: false,
+      defaultToolPolicy: 'inherit',
+      listRoutingProfiles,
+      runChild
+    } as unknown as DelegationRuntime
+    const tool = buildDelegationToolProviders(runtime)[0]?.tools
+      .find((candidate) => candidate.name === 'delegate_task')
+
+    const result = await tool!.execute({
+      prompt: 'Review the IPC boundary',
+      custom_agent: {
+        name: 'IPC Reviewer',
+        description: 'Reviews IPC boundaries.',
+        system_prompt: 'Review IPC boundaries and return concrete evidence.',
+        tool_policy: 'readOnly'
+      }
+    }, context())
+
+    expect(result.isError).toBe(false)
+    expect(listRoutingProfiles).not.toHaveBeenCalled()
+    expect(runChild).toHaveBeenCalledWith(expect.objectContaining({
+      inlineProfile: expect.objectContaining({
+        id: 'custom:ipc-reviewer',
+        source: 'custom'
+      }),
+      routing: expect.objectContaining({
+        method: 'explicit-custom',
+        selectedKind: 'custom'
+      })
+    }))
   })
 
   it('includes the effective model and snapshotted profile name in live and final output', async () => {
@@ -131,11 +302,10 @@ describe('delegate_task observability output', () => {
     expect(childInput).not.toHaveProperty('providerId')
   })
 
-  it('rejects stale arguments that cross the configured delegation mode', async () => {
+  it('rejects custom arguments in existing-profile mode and stale arguments that cross custom-only mode', async () => {
     const runChild = vi.fn()
     const existingRuntime = {
       enabled: () => true,
-      listProfiles: () => [],
       useExistingAgents: true,
       defaultToolPolicy: 'inherit',
       runChild
@@ -152,10 +322,21 @@ describe('delegate_task observability output', () => {
       isError: true,
       output: { error: expect.stringContaining('turned on') }
     })
+    await expect(existingTool.execute({
+      prompt: 'Review the change',
+      profile: 'reviewer',
+      custom_agent: {
+        name: 'Reviewer',
+        description: 'Reviews changes.',
+        system_prompt: 'Review the change.'
+      }
+    }, context())).resolves.toMatchObject({
+      isError: true,
+      output: { error: expect.stringContaining('custom_agent is unavailable') }
+    })
 
     const customRuntime = {
       enabled: () => true,
-      listProfiles: () => [],
       useExistingAgents: false,
       defaultToolPolicy: 'inherit',
       runChild

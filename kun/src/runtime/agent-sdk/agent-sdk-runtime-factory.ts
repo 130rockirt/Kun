@@ -3,12 +3,26 @@
  * This is the only place that touches the SDK package and kun's concrete stores,
  * keeping the orchestration (and its tests) free of both.
  */
-import { AgentSdkRuntime, type SdkRuntimeDeps, type SdkTurnContext } from './agent-sdk-runtime.js'
+import {
+  AgentSdkRuntime,
+  agentSdkCapabilities,
+  type SdkRuntimeDeps,
+  type SdkTurnContext
+} from './agent-sdk-runtime.js'
 import type { SdkStreamResourceLimits } from './sdk-event-mapper.js'
-import { resolveSdkModel, type ToolApprovalDecision } from './sdk-options-builder.js'
-import type { BridgeableTool, KunToolResult } from './sdk-tool-bridge.js'
+import {
+  normalizeClaudeOAuthToken,
+  resolveSdkModel,
+  type ToolApprovalDecision
+} from './sdk-options-builder.js'
+import {
+  selectBridgeableTools,
+  type BridgeableTool,
+  type KunToolResult
+} from './sdk-tool-bridge.js'
 import type { SdkApi } from './sdk-protocol.js'
 import type { RuntimeEventRecorder } from '../../services/runtime-event-recorder.js'
+import type { LlmDebugSink } from '../../services/llm-debug-recorder.js'
 import type { TurnService } from '../../services/turn-service.js'
 import type { SessionStore } from '../../ports/session-store.js'
 import type { ThreadStore } from '../../ports/thread-store.js'
@@ -55,6 +69,20 @@ import {
 import { shellSpawnEnv } from '../../adapters/tool/builtin-tool-utils.js'
 import type { TurnLimitsConfig } from '../../loop/turn-limits.js'
 import { userMessageTextWithComposerContexts } from '../../domain/composer-context.js'
+import { mkdir } from 'node:fs/promises'
+import {
+  delegatedCapabilityFingerprint,
+  delegatedCredentialIdentity,
+  priorItemsForDelegatedTurn,
+  type DelegatedSessionCoordinator,
+  type DelegatedSessionPreparation
+} from '../delegated-session-binding.js'
+
+const CLAUDE_KUN_TOOL_INSTRUCTION = [
+  'Kun-managed capabilities are available through the mcp__kun__ tools.',
+  'Use these tools for Kun capabilities such as MCP, extensions, skills, memory, media, GUI input, and delegation.',
+  'Their execution remains governed by Kun ToolHost approval and sandbox policy.'
+].join(' ')
 
 export interface AgentSdkRuntimeFactoryDeps {
   registry: CapabilityRegistry
@@ -68,6 +96,8 @@ export interface AgentSdkRuntimeFactoryDeps {
   sessionStore: SessionStore
   threadStore: ThreadStore
   events: RuntimeEventRecorder
+  /** Existing Agent Perspective model-request trace sink. */
+  debugSink?: LlmDebugSink
   ids: { next(prefix: string): string }
   prefix: { systemPrompt: string }
   /** serve.providers map; `kind:'agent-sdk'` entries carry the OAuth token in apiKey. */
@@ -117,9 +147,14 @@ export interface AgentSdkRuntimeFactoryDeps {
   /** Optional SDK stream-budget overrides; omitted in normal production wiring. */
   sdkStreamLimits?: Partial<SdkStreamResourceLimits>
   pathToClaudeCodeExecutable?: string
+  /** Shared durable provider-session coordinator. */
+  sessionCoordinator?: DelegatedSessionCoordinator
+  contextProfile?: (model: string) => {
+    contextWindowTokens: number
+    softThresholdTokens: number
+    hardThresholdTokens: number
+  }
 }
-
-const MAX_DIAGNOSTIC_SESSION_IDS = 256
 
 /** Lazily load the real SDK without a static import (so kun typechecks without it). */
 let sdkPromise: Promise<SdkApi> | undefined
@@ -186,11 +221,8 @@ function intersectAllowedToolNames(
 }
 
 export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSdkRuntime {
-  // Last SDK session id per thread, recorded for diagnostics only. We do NOT
-  // resume from it: kun owns the canonical history and replays it as a transcript
-  // every turn (see loadTurnContext), which — unlike the SDK's in-memory resume —
-  // survives a provider switch mid-thread and a runtime restart.
-  const sessionIds = new Map<string, string>()
+  const sessionIdsByTurn = new Map<string, string>()
+  const sessionPreparationsByTurn = new Map<string, DelegatedSessionPreparation>()
   // Skill activation is turn-scoped. Keep the exact result used for the SDK
   // tool catalog so bridged execution sees the same skill-gated tools after a
   // GUI input pause/resume.
@@ -512,7 +544,11 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
 
       const providerId = turn?.providerId?.trim() || thread.providerId?.trim()
       const providerCfg = providerId ? deps.providerConfigs[providerId] : undefined
-      const token = providerCfg?.apiKey?.trim() || deps.defaultToken?.trim()
+      // An explicit Claude provider owns its credential boundary. Empty means
+      // ambient Claude Code login; it must never inherit another provider's key.
+      const token = normalizeClaudeOAuthToken(
+        providerId ? providerCfg?.apiKey : deps.defaultToken
+      )
       // Resolve skills before listing bridgeable tools. Some managed tools
       // (notably PPT Master) are deliberately advertised only for an active
       // skill, and the SDK must see the same per-turn catalog as the native
@@ -573,16 +609,22 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
         sandboxMode: thread.sandboxMode ?? deps.defaultSandboxMode,
         awaitUserInput: makeAwaitUserInput(threadId, turnId, new AbortController().signal)
       })
+      if (deps.toolHost) {
+        // Activate turn-scoped extension contributions before taking the
+        // canonical registry snapshot used by the SDK MCP bridge.
+        await deps.toolHost.listTools(bridgeListingContext)
+      }
       const bridgeableTools: BridgeableTool[] = deps.registry.listTools(bridgeListingContext).map((spec) => ({
         name: spec.name,
         description: spec.description,
-        inputSchema: spec.inputSchema
+        inputSchema: spec.inputSchema,
+        providerId: spec.providerId,
+        providerKind: spec.providerKind
       }))
+      const bridgedTools = selectBridgeableTools(bridgeableTools)
 
-      // The SDK doesn't see kun's history or per-turn context, so assemble both
-      // here (parity with the native loop's `contextInstructions`). kun owns the
-      // canonical history, so we replay it as a transcript every turn rather than
-      // relying on the SDK's in-memory resume (lost on provider switch / restart).
+      // This is the portable rebase handoff. Compatible consecutive turns use
+      // the official SDK resume id and do not send this transcript again.
       const historyTranscript = buildHistoryTranscript(
         items,
         turnId,
@@ -629,15 +671,65 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
         ...(todoInstruction ? [todoInstruction] : []),
         ...memoryBlocks,
         ...(skillResolution?.catalogInstruction ? [skillResolution.catalogInstruction] : []),
-        ...(skillResolution?.instructions ?? [])
+        ...(skillResolution?.instructions ?? []),
+        ...(bridgedTools.length ? [CLAUDE_KUN_TOOL_INSTRUCTION] : [])
       ]
+
+      const model = resolveSdkModel(turn?.model || thread.model, deps.defaultModel)
+      const approvalPolicy = thread.approvalPolicy ?? deps.defaultApprovalPolicy
+      const sandboxMode = thread.sandboxMode ?? deps.defaultSandboxMode
+      let preparation: DelegatedSessionPreparation | undefined
+      let claudeConfigDir: string | undefined
+      if (deps.sessionCoordinator) {
+        preparation = await deps.sessionCoordinator.prepare({
+          threadId,
+          route: {
+            providerKind: 'agent-sdk',
+            providerId: providerId || 'default',
+            credentialIdentity: delegatedCredentialIdentity({
+              providerId: providerId || 'default',
+              accountId: turn.accountId || thread.accountId,
+              credentialSourceId: providerCfg?.credentialSourceId,
+              credentialSecret: token
+            }),
+            workspace: thread.workspace,
+            model: model ?? 'claude-default',
+            capabilityFingerprint: delegatedCapabilityFingerprint({
+              systemPrompt: deps.prefix.systemPrompt,
+              threadPersona: thread.systemPrompt?.trim() || '',
+              approvalPolicy,
+              sandboxMode,
+              planMode,
+              allowSdkBuiltins:
+                turn?.guiDesignArtifact?.kind === 'svg'
+                  ? false
+                  : deps.allowSdkBuiltins ?? true,
+              capabilities: agentSdkCapabilities(),
+              tools: bridgedTools.map((tool) => ({
+                name: tool.name,
+                description: tool.description,
+                inputSchema: tool.inputSchema,
+                providerId: tool.providerId,
+                providerKind: tool.providerKind
+              }))
+            }),
+            continuationMode: 'native'
+          },
+          priorItems: priorItemsForDelegatedTurn(items, turnId)
+        })
+        if (token) {
+          claudeConfigDir = deps.sessionCoordinator.store.providerStateDir('agent-sdk', threadId)
+          await mkdir(claudeConfigDir, { recursive: true, mode: 0o700 })
+        }
+        sessionPreparationsByTurn.set(skillTurnKey(threadId, turnId), preparation)
+      }
 
       return {
         workspace: thread.workspace,
         userText: modelUserText,
         threadPersona: thread.systemPrompt?.trim() || undefined,
-        approvalPolicy: thread.approvalPolicy ?? deps.defaultApprovalPolicy,
-        sandboxMode: thread.sandboxMode,
+        approvalPolicy,
+        sandboxMode,
         planMode,
         allowSdkBuiltins:
           turn?.guiDesignArtifact?.kind === 'svg'
@@ -647,12 +739,21 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
         // Claude Code only accepts Anthropic models; coerce a thread's non-Claude
         // model (e.g. an old deepseek thread now routed to the subscription) to
         // the runtime default so the turn doesn't fail "model may not exist".
-        model: resolveSdkModel(turn?.model || thread.model, deps.defaultModel),
+        model,
+        ...(preparation?.nativeSessionId
+          ? { resumeSessionId: preparation.nativeSessionId }
+          : {}),
+        ...(claudeConfigDir ? { claudeConfigDir } : {}),
+        ...(preparation ? { sessionPreparation: preparation } : {}),
+        ...(deps.contextProfile
+          ? { contextProfile: deps.contextProfile(model ?? 'claude-default') }
+          : {}),
         oauthToken: token || undefined,
         ...(images.length ? { images } : {}),
         bridgeableTools,
         ...(historyTranscript ? { historyTranscript } : {}),
-        ...(contextInstructions.length ? { contextInstructions } : {})
+        ...(contextInstructions.length ? { contextInstructions } : {}),
+        ...(activeSkillIds.length ? { activeSkillIds: [...activeSkillIds] } : {})
       }
     },
 
@@ -761,24 +862,49 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
     },
 
     async finishTurn(threadId, turnId, status, error): Promise<void> {
+      const key = skillTurnKey(threadId, turnId)
       try {
         await deps.turns.finishTurn({ threadId, turnId, status, ...(error ? { error } : {}) })
+        if (status === 'completed' && deps.sessionCoordinator) {
+          const preparation = sessionPreparationsByTurn.get(key)
+          if (preparation) {
+            try {
+              await deps.sessionCoordinator.commit({
+                preparation,
+                committedItems: await deps.sessionStore.loadItems(threadId),
+                lastCommittedTurnId: turnId,
+                nativeSessionId: sessionIdsByTurn.get(key)
+              })
+            } catch {
+              // Native continuation is an optimization. A failed checkpoint
+              // commit must not turn a successfully persisted Kun turn into a
+              // failed answer; the next history digest safely forces a rebase.
+            }
+          }
+        }
       } finally {
-        activeSkillIdsByTurn.delete(skillTurnKey(threadId, turnId))
-        skillPromptByTurn.delete(skillTurnKey(threadId, turnId))
+        activeSkillIdsByTurn.delete(key)
+        skillPromptByTurn.delete(key)
+        sessionIdsByTurn.delete(key)
+        sessionPreparationsByTurn.delete(key)
         if (typeof deps.skillRuntime?.clearTurnActivation === 'function') {
           deps.skillRuntime.clearTurnActivation(threadId, turnId)
         }
       }
     },
 
-    async saveSessionId(threadId, sessionId): Promise<void> {
-      sessionIds.delete(threadId)
-      sessionIds.set(threadId, sessionId)
-      if (sessionIds.size > MAX_DIAGNOSTIC_SESSION_IDS) {
-        const oldest = sessionIds.keys().next().value
-        if (oldest !== undefined) sessionIds.delete(oldest)
-      }
+    async saveSessionId(threadId, turnId, sessionId): Promise<void> {
+      sessionIdsByTurn.set(skillTurnKey(threadId, turnId), sessionId)
+    },
+
+    async rejectResume(threadId, turnId): Promise<void> {
+      const key = skillTurnKey(threadId, turnId)
+      const preparation = sessionPreparationsByTurn.get(key)
+      if (!preparation) return
+      sessionPreparationsByTurn.set(
+        key,
+        await deps.sessionCoordinator!.rejectResume(preparation)
+      )
     },
 
     loadSdk: loadAgentSdk,
@@ -789,11 +915,16 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
     kunSystemPrompt: () => deps.prefix.systemPrompt,
     nextId: (prefix) => deps.ids.next(prefix),
     getTurnLimits: () => deps.turnLimits,
+    ...(deps.debugSink ? { debugSink: deps.debugSink } : {}),
     ...(deps.sdkStreamLimits
       ? { getSdkStreamLimits: () => deps.sdkStreamLimits }
       : {}),
     ...(deps.pathToClaudeCodeExecutable
       ? { pathToClaudeCodeExecutable: deps.pathToClaudeCodeExecutable }
+      : {}),
+    ...(deps.sessionCoordinator
+      ? { runExclusive: (threadId, operation) =>
+          deps.sessionCoordinator!.runExclusive(threadId, operation) }
       : {})
   }
 

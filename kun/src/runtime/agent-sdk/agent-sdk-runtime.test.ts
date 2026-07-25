@@ -10,6 +10,7 @@ import {
 } from './agent-sdk-runtime.js'
 import type { SdkApi, SdkCanUseTool, SdkMessage, SdkQueryResult } from './sdk-protocol.js'
 import type { RuntimeEventDraft } from '../../services/runtime-event-recorder.js'
+import { LlmDebugRecorder } from '../../services/llm-debug-recorder.js'
 import type { TurnItem } from '../../contracts/items.js'
 
 function fakeSdk(messages: SdkMessage[], onQuery?: (opts: unknown) => void): SdkApi {
@@ -170,7 +171,7 @@ function makeDeps(overrides: Partial<SdkRuntimeDeps> = {}): {
     finishTurn: async (_t, _u, status, error) => {
       finished.push({ status, error })
     },
-    saveSessionId: async (_t, id) => {
+    saveSessionId: async (_t, _turnId, id) => {
       sessions.push(id)
     },
     loadSdk: async () => fakeSdk([]),
@@ -306,6 +307,234 @@ describe('AgentSdkRuntime.runTurn', () => {
     expect(persistedKinds).toContain('assistant_text')
   })
 
+  test('publishes a sanitized Claude SDK trace to Agent Perspective', async () => {
+    const debugSink = new LlmDebugRecorder()
+    const { deps } = makeDeps({
+      debugSink,
+      loadTurnContext: async () => ({
+        workspace: '/ws',
+        userText: 'inspect this turn',
+        approvalPolicy: 'auto',
+        oauthToken: 'sk-ant-oat01-claude-oauth-secret',
+        images: [{ mediaType: 'image/png', base64: 'private-image-bytes' }],
+        contextInstructions: ['Workspace AGENTS.md instruction'],
+        bridgeableTools: [{
+          name: 'generate_image',
+          description: 'Generate an image',
+          inputSchema: { type: 'object' },
+          providerId: 'image:primary',
+          providerKind: 'image'
+        }]
+      }),
+      loadSdk: async () => fakeSdk(STREAM)
+    })
+
+    await expect(new AgentSdkRuntime(deps).runTurn(
+      'th',
+      'tn',
+      new AbortController().signal
+    )).resolves.toBe('completed')
+
+    const trace = debugSink.snapshot()[0]?.exchanges[0]
+    expect(trace).toMatchObject({
+      transport: 'sdk',
+      endpointFormat: 'agent-sdk',
+      status: 'completed',
+      delegated: {
+        providerKind: 'agent-sdk',
+        phase: 'rebased',
+        contextManagement: 'sdk-managed',
+        nativeHistory: 'none'
+      },
+      request: {
+        method: 'SDK',
+        url: 'agent-sdk://local/query'
+      },
+      toolCatalog: [{
+        name: 'mcp__kun__generate_image',
+        providerId: 'image:primary',
+        providerKind: 'image'
+      }],
+      decoded: {
+        text: 'Hi there',
+        toolCalls: [{
+          callId: 'toolu_1',
+          toolName: 'mcp__kun__generate_image'
+        }],
+        toolResults: [{
+          callId: 'toolu_1',
+          toolName: 'mcp__kun__generate_image',
+          output: 'done',
+          isError: false
+        }]
+      }
+    })
+    const serialized = JSON.stringify(trace)
+    expect(serialized).not.toContain('claude-oauth-secret')
+    expect(serialized).not.toContain('private-image-bytes')
+    expect(serialized).not.toContain('sess_42')
+    expect(JSON.parse(trace!.request.body.text)).toMatchObject({
+      system: 'You are kun.',
+      instructions: ['Workspace AGENTS.md instruction'],
+      tools: [{
+        name: 'mcp__kun__generate_image',
+        description: 'Generate an image',
+        input_schema: { type: 'object' }
+      }],
+      attachments: {
+        count: 1,
+        images: [{ mediaType: 'image/png' }]
+      }
+    })
+  })
+
+  test('uses official resume without replaying portable history', async () => {
+    const queries: Array<{ prompt: unknown; options?: unknown }> = []
+    const { deps } = makeDeps({
+      loadTurnContext: async () => ({
+        workspace: '/ws',
+        userText: 'current request',
+        approvalPolicy: 'auto',
+        bridgeableTools: [],
+        resumeSessionId: 'session_previous',
+        historyTranscript: '[user] should not be replayed'
+      }),
+      loadSdk: async () => fakeSdkAttempts([STREAM], (input) => queries.push(input))
+    })
+
+    await expect(new AgentSdkRuntime(deps).runTurn(
+      'th',
+      'tn',
+      new AbortController().signal
+    )).resolves.toBe('completed')
+
+    expect(queries).toHaveLength(1)
+    expect(queries[0]?.options).toMatchObject({ resume: 'session_previous' })
+    expect(String(queries[0]?.prompt)).toContain('current request')
+    expect(String(queries[0]?.prompt)).not.toContain('should not be replayed')
+  })
+
+  test('retains the validated resume id when a successful stream omits init metadata', async () => {
+    const { deps, sessions } = makeDeps({
+      loadTurnContext: async () => ({
+        workspace: '/ws',
+        userText: 'current request',
+        approvalPolicy: 'auto',
+        bridgeableTools: [],
+        resumeSessionId: 'session_previous'
+      }),
+      loadSdk: async () => fakeSdk(svgSdkTextAttempt('continued'))
+    })
+
+    await expect(new AgentSdkRuntime(deps).runTurn(
+      'th',
+      'tn',
+      new AbortController().signal
+    )).resolves.toBe('completed')
+
+    expect(sessions).toEqual(['session_previous'])
+  })
+
+  test('rebases once from portable history when native resume cannot load', async () => {
+    const queries: Array<{ prompt: unknown; options?: unknown }> = []
+    const rejectResume = vi.fn()
+    let call = 0
+    const sdk = fakeSdkAttempts([STREAM], (input) => queries.push(input))
+    const successfulQuery = sdk.query
+    sdk.query = (input): SdkQueryResult => {
+      queries.push(input as { prompt: unknown; options?: unknown })
+      call += 1
+      if (call === 1) {
+        const failed = (async function* (): AsyncGenerator<SdkMessage> {
+          yield await Promise.reject(new Error('session checkpoint missing'))
+        })() as SdkQueryResult
+        failed.interrupt = async () => {}
+        return failed
+      }
+      return successfulQuery(input)
+    }
+    const debugSink = new LlmDebugRecorder()
+    const { deps } = makeDeps({
+      loadTurnContext: async () => ({
+        workspace: '/ws',
+        userText: 'current request',
+        approvalPolicy: 'auto',
+        bridgeableTools: [],
+        resumeSessionId: 'session_missing',
+        historyTranscript: '[user] portable recovery state'
+      }),
+      loadSdk: async () => sdk,
+      rejectResume,
+      debugSink
+    })
+
+    await expect(new AgentSdkRuntime(deps).runTurn(
+      'th',
+      'tn',
+      new AbortController().signal
+    )).resolves.toBe('completed')
+
+    expect(rejectResume).toHaveBeenCalledWith('th', 'tn')
+    const actualQueries = queries.filter((entry, index) => index === 0 || index === queries.length - 1)
+    expect(actualQueries[0]?.options).toMatchObject({ resume: 'session_missing' })
+    expect(actualQueries.at(-1)?.options).not.toHaveProperty('resume')
+    expect(String(actualQueries.at(-1)?.prompt)).toContain('portable recovery state')
+    const traces = debugSink.snapshot()
+      .flatMap((round) => round.exchanges)
+      .sort((left, right) => left.sequence - right.sequence)
+    expect(traces).toHaveLength(2)
+    expect(traces[0]).toMatchObject({
+      status: 'transport_error',
+      delegated: {
+        providerKind: 'agent-sdk',
+        phase: 'resumed',
+        nativeHistory: 'unknown'
+      }
+    })
+    expect(traces[1]).toMatchObject({
+      status: 'completed',
+      delegated: {
+        providerKind: 'agent-sdk',
+        phase: 'rebased',
+        reason: 'native_state_unavailable',
+        nativeHistory: 'none'
+      }
+    })
+    expect(JSON.stringify(traces)).not.toContain('session_missing')
+  })
+
+  test('rebases when the official resume query throws synchronously', async () => {
+    let queryCount = 0
+    const sdk = fakeSdk(STREAM)
+    const query = sdk.query
+    sdk.query = (input): SdkQueryResult => {
+      queryCount += 1
+      if (queryCount === 1) throw new Error('native session unavailable')
+      return query(input)
+    }
+    const rejectResume = vi.fn()
+    const { deps } = makeDeps({
+      loadTurnContext: async () => ({
+        workspace: '/ws',
+        userText: 'current request',
+        approvalPolicy: 'auto',
+        bridgeableTools: [],
+        resumeSessionId: 'session_missing',
+        historyTranscript: '[user] portable recovery state'
+      }),
+      loadSdk: async () => sdk,
+      rejectResume
+    })
+
+    await expect(new AgentSdkRuntime(deps).runTurn(
+      'th',
+      'tn',
+      new AbortController().signal
+    )).resolves.toBe('completed')
+    expect(queryCount).toBe(2)
+    expect(rejectResume).toHaveBeenCalledWith('th', 'tn')
+  })
+
   test('coalesces token-granular SDK deltas before durable recording', async () => {
     const text = 'x'.repeat(1_000)
     const messages: SdkMessage[] = [
@@ -401,7 +630,7 @@ describe('AgentSdkRuntime.runTurn', () => {
       const running = new AgentSdkRuntime(deps).runTurn('th', 'tn', new AbortController().signal)
       await waiting
 
-      expect(events).toHaveLength(0)
+      expect(events.filter((event) => event.kind === 'assistant_text_delta')).toHaveLength(0)
       await vi.advanceTimersByTimeAsync(40)
       expect(events).toContainEqual(expect.objectContaining({
         kind: 'assistant_text_delta', item: expect.objectContaining({ text: 'live' })
@@ -433,9 +662,12 @@ describe('AgentSdkRuntime.runTurn', () => {
     await expect(new AgentSdkRuntime(deps).runTurn(
       'th', 'tn', new AbortController().signal
     )).resolves.toBe('failed')
-    expect(events.map((event) => event.kind)).toEqual(['assistant_text_delta', 'error'])
-    expect((events[0] as { item: { text: string } }).item.text).toBe('ok')
-    expect(events[1]).toMatchObject({ code: 'stream_resource_limit' })
+    const terminalEvents = events.filter((event) =>
+      event.kind === 'assistant_text_delta' || event.kind === 'error'
+    )
+    expect(terminalEvents.map((event) => event.kind)).toEqual(['assistant_text_delta', 'error'])
+    expect((terminalEvents[0] as { item: { text: string } }).item.text).toBe('ok')
+    expect(terminalEvents[1]).toMatchObject({ code: 'stream_resource_limit' })
   })
 
   test('flushes pending SDK deltas when the user aborts a stalled stream', async () => {
@@ -493,7 +725,21 @@ describe('AgentSdkRuntime.runTurn', () => {
     expect(seenOptions.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe('sk-ant-oat01-tok')
   })
 
-  test('maps native maxSteps onto the SDK maxTurns option', async () => {
+  test('omits the SDK maxTurns option by default', async () => {
+    let seenMaxTurns: number | undefined
+    const { deps } = makeDeps({
+      loadSdk: async () => fakeSdk(STREAM, (options) => {
+        seenMaxTurns = (options as { maxTurns?: number }).maxTurns
+      })
+    })
+
+    await expect(new AgentSdkRuntime(deps).runTurn(
+      'th', 'tn', new AbortController().signal
+    )).resolves.toBe('completed')
+    expect(seenMaxTurns).toBeUndefined()
+  })
+
+  test('maps an explicit native maxSteps onto the SDK maxTurns option', async () => {
     let seenMaxTurns: number | undefined
     const { deps } = makeDeps({
       getTurnLimits: () => ({ maxSteps: 7, maxWallTimeMs: 60_000, maxToolCallsPerStep: 3 }),
@@ -937,7 +1183,9 @@ describe('AgentSdkRuntime.runTurn', () => {
   })
 
   test('maps SDK error_max_turns onto the native turn_step_limit code', async () => {
+    const debugSink = new LlmDebugRecorder()
     const { deps, events, finished } = makeDeps({
+      debugSink,
       getTurnLimits: () => ({ maxSteps: 3 }),
       loadSdk: async () => fakeSdk([{
         type: 'result', subtype: 'error_max_turns', is_error: true, num_turns: 3
@@ -951,6 +1199,13 @@ describe('AgentSdkRuntime.runTurn', () => {
       kind: 'error', code: 'turn_step_limit', severity: 'warning'
     }))
     expect(finished.at(-1)?.error).toBe('turn exceeded 3 model steps')
+    expect(debugSink.snapshot()[0]?.exchanges[0]).toMatchObject({
+      status: 'completed',
+      decoded: {
+        error: 'error_max_turns',
+        stopReason: 'error'
+      }
+    })
   })
 
   test('fails closed when SDK usage reports more turns than the supplied maxTurns', async () => {
@@ -983,6 +1238,77 @@ describe('AgentSdkRuntime.runTurn', () => {
     expect(status).toBe('failed')
     expect(events.some((e) => e.kind === 'error')).toBe(true)
     expect(finished[0]).toMatchObject({ status: 'failed' })
+  })
+
+  test('redacts a Claude credential from Agent Perspective and conversation failures', async () => {
+    const token = 'sk-ant-oat01-private-auth-token'
+    const debugSink = new LlmDebugRecorder()
+    const { deps, events, finished } = makeDeps({
+      debugSink,
+      loadTurnContext: async () => ({
+        workspace: '/ws',
+        userText: 'authenticate',
+        approvalPolicy: 'auto',
+        oauthToken: token,
+        bridgeableTools: []
+      }),
+      loadSdk: async () => ({
+        query: () => {
+          throw new Error(`Failed to authenticate: 401 Invalid Bearer ${token}`)
+        },
+        createSdkMcpServer: () => ({ type: 'sdk', name: 'kun', instance: {} }),
+        tool: () => ({})
+      })
+    })
+
+    await expect(new AgentSdkRuntime(deps).runTurn(
+      'th',
+      'tn',
+      new AbortController().signal
+    )).resolves.toBe('failed')
+
+    const diagnostics = JSON.stringify({
+      events,
+      finished,
+      perspective: debugSink.snapshot()
+    })
+    expect(diagnostics).toContain('401 Invalid Bearer [REDACTED]')
+    expect(diagnostics).not.toContain(token)
+  })
+
+  test('redacts credentials from a terminal SDK error result', async () => {
+    const token = 'sk-ant-oat01-terminal-result-secret'
+    const debugSink = new LlmDebugRecorder()
+    const { deps, finished } = makeDeps({
+      debugSink,
+      loadTurnContext: async () => ({
+        workspace: '/ws',
+        userText: 'authenticate',
+        approvalPolicy: 'auto',
+        oauthToken: token,
+        bridgeableTools: []
+      }),
+      loadSdk: async () => fakeSdk([{
+        type: 'result',
+        subtype: 'error_during_execution',
+        is_error: true,
+        result: `Invalid Bearer ${token}`,
+        num_turns: 1
+      } as SdkMessage])
+    })
+
+    await expect(new AgentSdkRuntime(deps).runTurn(
+      'th',
+      'tn',
+      new AbortController().signal
+    )).resolves.toBe('failed')
+
+    const diagnostics = JSON.stringify({
+      finished,
+      perspective: debugSink.snapshot()
+    })
+    expect(diagnostics).toContain('Invalid Bearer [REDACTED]')
+    expect(diagnostics).not.toContain(token)
   })
 
   test('forwards image attachments as a structured user message (text + image block)', async () => {

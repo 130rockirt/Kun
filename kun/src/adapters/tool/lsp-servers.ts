@@ -1,11 +1,20 @@
 import { spawn } from 'node:child_process'
+import { existsSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { shellSpawnEnv } from './builtin-tool-utils.js'
 
 const SERVER_PROBE_TIMEOUT = 3_000
+const KUN_PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
+const BUNDLED_TYPESCRIPT_LANGUAGE_SERVER_CLI = resolve(
+  KUN_PACKAGE_ROOT,
+  'node_modules/typescript-language-server/lib/cli.mjs'
+)
 
 export type LspServerCommand = {
   command: string
   args: string[]
+  env?: NodeJS.ProcessEnv
 }
 
 export interface LanguageServerDef {
@@ -34,8 +43,16 @@ function registerDefaultLanguageServers(): void {
       key: 'typescript',
       displayName: 'TypeScript/JavaScript',
       extensions: ['.ts', '.tsx', '.js', '.jsx', '.mts', '.mjs', '.cts', '.cjs'],
-      installHint: 'Install with: npm install -g typescript-language-server typescript',
+      installHint:
+        'Reinstall Kun to restore its bundled TypeScript language server, or install a compatible typescript-language-server on PATH.',
       resolveCommand: async () => {
+        if (existsSync(BUNDLED_TYPESCRIPT_LANGUAGE_SERVER_CLI)) {
+          return {
+            command: process.execPath,
+            args: [BUNDLED_TYPESCRIPT_LANGUAGE_SERVER_CLI, '--stdio'],
+            env: { ELECTRON_RUN_AS_NODE: '1' }
+          }
+        }
         return resolvePathOnly('typescript-language-server', ['--stdio'])
       },
       languageIdForFile: (filePath) => {

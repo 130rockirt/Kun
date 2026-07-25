@@ -122,7 +122,10 @@ export function makeHarness(
     steering,
     compactor,
     ids,
-    nowIso
+    nowIso,
+    ...(options.attachmentStore
+      ? { attachmentStore: () => options.attachmentStore }
+      : {})
   })
   const threads = new ThreadService({ threadStore, sessionStore, events, ids, nowIso })
   const loop = new AgentLoop({

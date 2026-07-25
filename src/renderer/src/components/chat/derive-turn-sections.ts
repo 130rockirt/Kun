@@ -30,7 +30,9 @@ type ResolvedFileChangeBlock = ToolBlock & {
 type DeriveTurnSectionsInput = {
   turn: Turn
   isProcessing: boolean
+  /** Reserved for call-site clarity; live thinking is rendered at the turn bottom. */
   liveProcessText: string
+  /** Reserved for call-site clarity; live assistant is rendered by MessageTimeline. */
   liveContent: string
   workspaceRoot: string
 }
@@ -105,8 +107,8 @@ function findLastAssistantContentIndex(blocks: ChatBlock[]): number {
 export function deriveTurnSections({
   turn,
   isProcessing,
-  liveProcessText,
-  liveContent,
+  liveProcessText: _liveProcessText,
+  liveContent: _liveContent,
   workspaceRoot
 }: DeriveTurnSectionsInput): TurnSections {
   const processBlocks: ChatBlock[] = []
@@ -146,16 +148,10 @@ export function deriveTurnSections({
     }
   }
 
-  if (liveProcessText.trim()) {
-    processBlocks.push({ kind: 'reasoning', id: 'live-reasoning', text: liveProcessText })
-  }
-  // The streaming assistant text is rendered as a separate MessageBubble by
-  // MessageTimeline (see `<MessageBubble block={{ kind: 'assistant',
-  // id: 'live-assistant', text: liveContent }} />`). Avoid adding it to
-  // processBlocks here — that would show the same content twice (once in
-  // the WorkMetaRow process area, once in the regular message flow) until
-  // turn_completed drains the live block. Reasoning, by contrast, is
-  // process-only and stays here.
+  // Live thinking and streaming assistant text are rendered at the turn
+  // bottom / as a dedicated MessageBubble by MessageTimeline. Keep them out
+  // of processBlocks so loading chrome cannot interleave above later text
+  // or replace completed tool summaries.
 
   const turnFileChanges: ToolBlock[] = isProcessing
     ? []

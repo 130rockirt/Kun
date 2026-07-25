@@ -247,6 +247,20 @@ describe('AnimatedWorkLogo', () => {
     expect(html).not.toContain('ds-work-logo-slot')
   })
 
+  it('summarizes collapsed work with its step count', () => {
+    const html = renderToStaticMarkup(
+      createElement(WorkMetaRow, {
+        processing: false,
+        stepCount: 12,
+        expanded: false,
+        onToggle: () => undefined
+      })
+    )
+
+    expect(html).toMatch(/12 steps|12 步|processStepCount/)
+    expect(html).toContain('aria-expanded="false"')
+  })
+
   it('keeps the swim animation layers wired in CSS', async () => {
     const nodeFs = 'node:fs/promises'
     const { readFile } = await import(/* @vite-ignore */ nodeFs)

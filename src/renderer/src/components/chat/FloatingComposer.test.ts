@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { act, create as createRenderer } from 'react-test-renderer'
@@ -18,9 +18,12 @@ import {
   parseReviewCommand,
   returnQueuedMessageToComposer,
   shouldCaptureFileMentionCommitKey,
+  shouldShowVoiceDictation,
   shouldShowGoalFloater,
+  shouldShowUsageHistory,
   shouldSurfaceComposerUserInput
 } from './FloatingComposer'
+import { COMPOSER_INPUT_HISTORY_STORAGE_KEY } from './use-composer-input-history'
 import {
   FloatingComposerModelPicker,
   buildComposerModelMenuGroups,
@@ -49,6 +52,7 @@ import {
   calculateQueuedMessageMenuPlacement,
   canEditQueuedComposerMessage
 } from './FloatingComposerQueuedMessages'
+import { requestContextSnapshotMatchesSelection } from './FloatingComposerContextCapacity'
 import { getGoalPanelDraftObjective } from './floating-composer-commands'
 import { useChatStore } from '../../store/chat-store'
 import i18n from '../../i18n'
@@ -70,6 +74,31 @@ const DEEPSEEK_PROVIDER_GROUP = {
   label: 'DeepSeek',
   modelIds: ['deepseek-v4-pro', 'deepseek-v4-flash']
 }
+
+describe('FloatingComposer usage history visibility', () => {
+  it('keeps the history entry discoverable before the first message', () => {
+    expect(shouldShowUsageHistory({
+      compact: false,
+      route: 'chat',
+      runtimeReady: true
+    })).toBe(true)
+    expect(shouldShowUsageHistory({
+      compact: false,
+      route: 'chat',
+      runtimeReady: false
+    })).toBe(false)
+    expect(shouldShowUsageHistory({
+      compact: true,
+      route: 'chat',
+      runtimeReady: true
+    })).toBe(false)
+    expect(shouldShowUsageHistory({
+      compact: false,
+      route: 'write',
+      runtimeReady: true
+    })).toBe(false)
+  })
+})
 
 describe('FloatingComposer queued guidance', () => {
   it('renders compact Guide rows and disables structured payload guidance', async () => {
@@ -763,6 +792,54 @@ describe('FloatingComposer model controls', () => {
     expect(placement.width).toBe(300)
   })
 
+  it('isolates context snapshots from a different thread, model, or provider', () => {
+    const snapshot = {
+      threadId: 'thr_1',
+      model: 'DeepSeek-V4-Pro',
+      providerId: 'deepseek',
+      stepIndex: 0,
+      contextWindowTokens: 256_000,
+      softThresholdTokens: 192_000,
+      hardThresholdTokens: 217_600,
+      estimatedInputTokens: 12_000,
+      breakdown: { tools: 3_000, system: 2_000, skills: 1_000, messages: 5_000, other: 1_000 },
+      toolCount: 21,
+      activeSkillIds: []
+    }
+
+    expect(requestContextSnapshotMatchesSelection(snapshot, {
+      threadId: 'thr_1',
+      model: 'deepseek-v4-pro',
+      providerId: 'deepseek'
+    })).toBe(true)
+    expect(requestContextSnapshotMatchesSelection(snapshot, {
+      threadId: 'thr_2',
+      model: 'deepseek-v4-pro',
+      providerId: 'deepseek'
+    })).toBe(false)
+    expect(requestContextSnapshotMatchesSelection(snapshot, {
+      threadId: 'thr_1',
+      model: 'deepseek-v4-flash',
+      providerId: 'deepseek'
+    })).toBe(false)
+    expect(requestContextSnapshotMatchesSelection(snapshot, {
+      threadId: 'thr_1',
+      model: 'deepseek-v4-pro',
+      providerId: 'minimax'
+    })).toBe(false)
+    expect(requestContextSnapshotMatchesSelection(snapshot, {
+      threadId: 'thr_1',
+      model: 'auto'
+    })).toBe(false)
+    expect(requestContextSnapshotMatchesSelection({
+      ...snapshot,
+      providerId: undefined
+    }, {
+      threadId: 'thr_1',
+      model: 'auto'
+    })).toBe(true)
+  })
+
   it('keeps execution menus anchored when the app UI is zoomed', () => {
     const placement = calculateExecutionMenuPlacement({
       anchorRect: { top: 624, left: 240, bottom: 648, width: 96 },
@@ -1152,6 +1229,32 @@ describe('FloatingComposer image transfer helpers', () => {
 })
 
 describe('FloatingComposer capability controls', () => {
+  it('shows voice dictation for every runnable speech configuration', () => {
+    expect(shouldShowVoiceDictation({
+      enabled: true,
+      providerId: 'gemini-cli-subscription',
+      protocol: 'gemini-cli-audio',
+      baseUrl: '',
+      apiKey: '',
+      model: 'gemini-3.1-pro-preview',
+      localWhisperDownloadSource: 'huggingface',
+      language: 'zh',
+      timeoutMs: 60_000
+    })).toBe(true)
+
+    expect(shouldShowVoiceDictation({
+      enabled: true,
+      providerId: 'custom',
+      protocol: 'openai-transcriptions',
+      baseUrl: '',
+      apiKey: '',
+      model: 'whisper-1',
+      localWhisperDownloadSource: 'huggingface',
+      language: '',
+      timeoutMs: 60_000
+    })).toBe(false)
+  })
+
   it('surfaces user-input requests in Chat, Design, and the compact Write composer', () => {
     expect(shouldSurfaceComposerUserInput('chat', false)).toBe(true)
     expect(shouldSurfaceComposerUserInput('design', false)).toBe(true)
@@ -2052,5 +2155,172 @@ describe('FloatingComposer capability controls', () => {
     const sendButton = html.match(/<button[^>]*aria-label="Send"[^>]*>/)?.[0] ?? ''
     expect(sendButton).toContain('disabled=""')
     expect(html).toContain('lucide-loader-circle')
+  })
+})
+
+describe('FloatingComposer input history and shortcut hint', () => {
+  class MemoryStorage {
+    private values = new Map<string, string>()
+
+    getItem(key: string): string | null {
+      return this.values.get(key) ?? null
+    }
+
+    setItem(key: string, value: string): void {
+      this.values.set(key, value)
+    }
+
+    removeItem(key: string): void {
+      this.values.delete(key)
+    }
+  }
+
+  function installHistoryTestGlobals(storage: MemoryStorage): void {
+    ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+    Object.defineProperty(globalThis, 'localStorage', {
+      configurable: true,
+      value: storage
+    })
+    vi.stubGlobal('window', {
+      localStorage: storage,
+      innerWidth: 1280,
+      innerHeight: 800,
+      requestAnimationFrame: (cb: FrameRequestCallback) => {
+        cb(0)
+        return 1
+      },
+      cancelAnimationFrame: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      kunGui: undefined
+    })
+    vi.stubGlobal('document', {
+      activeElement: null,
+      body: {}
+    })
+  }
+
+  afterEach(async () => {
+    await act(async () => undefined)
+    vi.unstubAllGlobals()
+    Reflect.deleteProperty(globalThis, 'localStorage')
+  })
+
+  function baseComposerProps(overrides: Record<string, unknown> = {}) {
+    return {
+      input: '',
+      setInput: () => undefined,
+      mode: 'agent' as const,
+      setMode: () => undefined,
+      busy: false,
+      runtimeReady: true,
+      hasActiveThread: true,
+      composerModel: '',
+      composerPickList: [] as string[],
+      onComposerModelChange: () => undefined,
+      queuedMessages: [] as [],
+      onRemoveQueuedMessage: () => undefined,
+      onSend: () => undefined,
+      onInterrupt: () => undefined,
+      attachmentUploadEnabled: false,
+      webAccessAvailable: false,
+      ...overrides
+    }
+  }
+
+  it('shows the Shift+Enter newline shortcut in the footer when ready', async () => {
+    const previousLanguage = i18n.language
+    await i18n.changeLanguage('en')
+    try {
+      const html = renderToStaticMarkup(createElement(FloatingComposer, baseComposerProps()))
+      expect(html).toContain('Enter to send · Shift+Enter for newline')
+      expect(html).toContain('Ask the agent… (Shift+Enter for newline)')
+    } finally {
+      await i18n.changeLanguage(previousLanguage)
+    }
+  })
+
+  it('restores previous sent text with ArrowUp when the caret is on the first line', async () => {
+    const storage = new MemoryStorage()
+    storage.setItem(COMPOSER_INPUT_HISTORY_STORAGE_KEY, JSON.stringify(['previous prompt']))
+    installHistoryTestGlobals(storage)
+
+    const setInput = vi.fn()
+    let renderer: ReturnType<typeof createRenderer>
+    await act(async () => {
+      renderer = createRenderer(createElement(FloatingComposer, baseComposerProps({
+        variant: 'compact',
+        input: 'current draft',
+        setInput
+      })))
+    })
+
+    try {
+      const textarea = renderer!.root.findByType('textarea')
+      const preventDefault = vi.fn()
+      await act(async () => {
+        textarea.props.onKeyDown({
+          key: 'ArrowUp',
+          altKey: false,
+          metaKey: false,
+          ctrlKey: false,
+          shiftKey: false,
+          nativeEvent: { isComposing: false },
+          preventDefault,
+          currentTarget: {
+            selectionStart: 0,
+            focus: vi.fn(),
+            setSelectionRange: vi.fn()
+          }
+        })
+      })
+      expect(preventDefault).toHaveBeenCalled()
+      expect(setInput).toHaveBeenCalledWith('previous prompt')
+    } finally {
+      await act(async () => {
+        renderer!.unmount()
+      })
+    }
+  })
+
+  it('lets the slash-command menu own ArrowUp instead of input history', async () => {
+    const storage = new MemoryStorage()
+    storage.setItem(COMPOSER_INPUT_HISTORY_STORAGE_KEY, JSON.stringify(['previous prompt']))
+    installHistoryTestGlobals(storage)
+
+    const setInput = vi.fn()
+    let renderer: ReturnType<typeof createRenderer>
+    await act(async () => {
+      renderer = createRenderer(createElement(FloatingComposer, baseComposerProps({
+        variant: 'compact',
+        input: '/',
+        setInput
+      })))
+    })
+
+    try {
+      const textarea = renderer!.root.findByType('textarea')
+      await act(async () => {
+        textarea.props.onKeyDown({
+          key: 'ArrowUp',
+          altKey: false,
+          metaKey: false,
+          ctrlKey: false,
+          shiftKey: false,
+          nativeEvent: { isComposing: false },
+          preventDefault: vi.fn(),
+          currentTarget: {
+            selectionStart: 1,
+            focus: vi.fn(),
+            setSelectionRange: vi.fn()
+          }
+        })
+      })
+      expect(setInput).not.toHaveBeenCalled()
+    } finally {
+      await act(async () => {
+        renderer!.unmount()
+      })
+    }
   })
 })

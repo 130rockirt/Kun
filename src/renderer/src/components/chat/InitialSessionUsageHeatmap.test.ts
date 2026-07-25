@@ -5,6 +5,7 @@ import i18n from '../../i18n'
 import type { DailyUsageState, DailyUsageSummary } from '../../hooks/use-daily-usage'
 import type { ModelUsageState } from '../../hooks/use-model-usage'
 import {
+  buildUsageCalendarWeeks,
   InitialSessionUsageHeatmapView,
   USAGE_HEATMAP_CONTRAST_COLORS,
   usageHeatmapIntensityLevel
@@ -253,8 +254,28 @@ describe('InitialSessionUsageHeatmap', () => {
   })
 
   it('uses turns as the intensity fallback when token totals are unavailable', () => {
-    expect(usageHeatmapIntensityLevel({ totalTokens: 0, turns: 3 }, 0, 6)).toBe(2)
-    expect(usageHeatmapIntensityLevel({ totalTokens: 0, turns: 0 }, 0, 6)).toBe(0)
+    expect(usageHeatmapIntensityLevel({ totalTokens: 0, turns: 3 }, [3, 6], true)).toBe(2)
+    expect(usageHeatmapIntensityLevel({ totalTokens: 0, turns: 0 }, [3, 6], true)).toBe(0)
+  })
+
+  it('aligns annual buckets from Sunday through Saturday and pads only calendar blanks', () => {
+    const weeks = buildUsageCalendarWeeks([
+      bucket('2026-05-01', 100),
+      bucket('2026-05-02', 200),
+      bucket('2026-05-03', 300)
+    ])
+    expect(weeks).toHaveLength(2)
+    expect(weeks[0].cells.slice(0, 5)).toEqual([null, null, null, null, null])
+    expect(weeks[0].cells[5]?.date).toBe('2026-05-01')
+    expect(weeks[1].cells[0]?.date).toBe('2026-05-03')
+  })
+
+  it('uses quantile ranks so an outlier does not flatten lower activity', () => {
+    const metrics = [10, 20, 30, 1_000_000]
+    expect(usageHeatmapIntensityLevel({ totalTokens: 10, turns: 1 }, metrics)).toBe(1)
+    expect(usageHeatmapIntensityLevel({ totalTokens: 20, turns: 1 }, metrics)).toBe(2)
+    expect(usageHeatmapIntensityLevel({ totalTokens: 30, turns: 1 }, metrics)).toBe(3)
+    expect(usageHeatmapIntensityLevel({ totalTokens: 1_000_000, turns: 1 }, metrics)).toBe(4)
   })
 
   it('keeps visible non-zero intensity colors in light and dark themes', () => {

@@ -27,6 +27,9 @@ export type AttachmentReference = {
   truncated?: boolean
   textPreview?: string
   documentText?: string
+  documentFormat?: 'pdf' | 'docx' | 'xlsx' | 'pptx' | 'text' | 'csv' | 'json' | 'xml'
+  sourceSha256?: string
+  previewUnavailableReason?: string
   previewUrl?: string
 }
 
@@ -336,6 +339,7 @@ export type ChatBlock =
   | {
       kind: 'system'
       id: string
+      turnId?: string
       createdAt?: string
       text: string
       code?: string
@@ -421,6 +425,7 @@ export type RuntimeStatusEventPayload = {
 
 export type RuntimeErrorEventPayload = {
   itemId: string
+  turnId?: string
   createdAt?: string
   message: string
   code?: string
@@ -481,6 +486,11 @@ export type ThreadDeltaEvent = {
 
 export type ThreadErrorOptions = {
   terminal?: boolean
+  /**
+   * Conversation-scoped failures already have a durable runtime-error card in
+   * the owning thread. Runtime-scoped failures use the global recovery banner.
+   */
+  scope?: 'conversation' | 'runtime'
 }
 
 /** Cumulative usage/cost for a Kun thread. */
@@ -496,6 +506,52 @@ export type ThreadUsageSnapshot = {
   costCny: number | null
   tokenEconomySavingsTokens: number
   turns: number
+}
+
+export type RequestContextSnapshot = {
+  threadId: string
+  turnId?: string
+  model: string
+  providerId?: string
+  stepIndex: number
+  contextWindowTokens: number
+  softThresholdTokens: number
+  hardThresholdTokens: number
+  estimatedInputTokens: number
+  breakdown: {
+    tools: number
+    system: number
+    skills: number
+    messages: number
+    other: number
+  }
+  toolCount: number
+  activeSkillIds: string[]
+  contextManagement?: 'kun-managed' | 'sdk-managed'
+  nativeHistory?: 'known' | 'unknown' | 'none'
+}
+
+export type DelegatedRuntimeState = {
+  threadId: string
+  turnId?: string
+  providerKind: 'agent-sdk' | 'cursor-sdk' | 'antigravity-cli'
+  providerId: string
+  phase: 'portable' | 'resumed' | 'rebased'
+  reason?:
+    | 'new'
+    | 'route_changed'
+    | 'capabilities_changed'
+    | 'history_changed'
+    | 'native_state_unavailable'
+  capabilities: {
+    nativeResume: boolean
+    structuredStreaming: boolean
+    kunTools: boolean
+    externalApproval: boolean
+    liveSteering: boolean
+    nativeContextTelemetry: boolean
+    fork: boolean
+  }
 }
 
 export type ThreadEventSink = {
@@ -519,6 +575,9 @@ export type ThreadEventSink = {
   onError(err: Error, options?: ThreadErrorOptions): void
   /** Optional: cumulative usage update for the thread. */
   onUsage?(usage: ThreadUsageSnapshot): void
+  /** Optional: request-local context accounting for the main agent. */
+  onContextSnapshot?(snapshot: RequestContextSnapshot): void
+  onDelegatedRuntimeState?(state: DelegatedRuntimeState): void
 }
 
 export interface AgentProvider {
@@ -597,9 +656,12 @@ export interface AgentProvider {
     mimeType?: string
     dataBase64: string
     documentText?: string
+    documentFormat?: 'pdf' | 'docx' | 'xlsx' | 'pptx' | 'text' | 'csv' | 'json' | 'xml'
+    sourceSha256?: string
     pageCount?: number
     localFilePath?: string
     textFallback?: CoreAttachmentTextFallbackJson
+    visualPreview?: CoreAttachmentTextFallbackJson
     threadId?: string
     workspace?: string
   }): Promise<CoreAttachmentMetadataJson>

@@ -5,10 +5,28 @@ import {
   type ComposerFileContextEntry
 } from '../../lib/composer-file-references'
 import type { ComposerFileReference } from '../chat/FloatingComposer'
+import type { OfficeDocumentFormat } from '@shared/office-document'
 
 export const COMPOSER_FILE_CONTEXT_MAX_CHARS_PER_FILE = 60_000
 export const COMPOSER_FILE_CONTEXT_MAX_TOTAL_CHARS = 180_000
 export const COMPOSER_DIRECTORY_CONTEXT_MAX_FILES = 60
+
+export function composerToolReferencePlaceholder(
+  reference: Pick<ComposerFileReference, 'path'>,
+  officeFormat?: OfficeDocumentFormat | null
+): string {
+  return officeFormat
+    ? [
+        `[${officeFormat.toUpperCase()} binary content is not embedded in this prompt.]`,
+        `The file remains available to tools at: ${reference.path}`,
+        'Use office_inspect before reading or editing it.'
+      ].join('\n')
+    : [
+        '[Binary or oversized file content is not embedded in this prompt.]',
+        `The file remains available to tools at: ${reference.path}`,
+        'Use a suitable file tool to inspect it.'
+      ].join('\n')
+}
 
 export function clipComposerFileContext(
   content: string,
@@ -38,7 +56,12 @@ export function composerReferencesToUserFileReferences(
 export function stripTransientAttachmentFields(
   attachments: AttachmentReference[]
 ): AttachmentReference[] {
-  return attachments.map(({ documentText: _documentText, ...attachment }) => attachment)
+  return attachments.map(({
+    documentText: _documentText,
+    previewUrl: _previewUrl,
+    previewUnavailableReason: _previewUnavailableReason,
+    ...attachment
+  }) => attachment)
 }
 
 export function buildComposerDocumentContextPrompt(

@@ -4,7 +4,9 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import type { ChatBlock, NormalizedThread, ToolBlock } from '../../agent/types'
 import { useChatStore } from '../../store/chat-store'
 import {
+  ConversationTurn,
   MessageTimeline,
+  TimelineRuntimeError,
   goalTimelinePaddingClass,
   liveTurnProgressClass,
   resultPreviewSourcesForTurn,
@@ -15,7 +17,7 @@ import {
   MessageBubble,
   generatedMediaScrollAvailability
 } from './message-timeline-bubbles'
-import { ProcessSectionRow } from './message-timeline-process'
+import { ProcessSectionRow, groupProcessSections } from './message-timeline-process'
 import {
   TimelineFilePreviewWorkspaceProvider,
   timelineFilePreviewWorkspaceRoot,
@@ -224,6 +226,56 @@ describe('MessageTimeline tool summaries', () => {
         t
       )
     ).toBe('Read background shell 2mcorxhe sleep 15 && echo "Hello from background!"')
+  })
+
+  it('coalesces reasoning and tools into one activity phase until visible text appears', () => {
+    const sections = groupProcessSections([
+      { kind: 'reasoning', id: 'reasoning_1', text: 'inspect the code' },
+      toolBlock({ id: 'tool_read', summary: 'read: file', meta: { toolName: 'read' } }),
+      { kind: 'reasoning', id: 'reasoning_2', text: 'check one more path' },
+      { kind: 'assistant', id: 'assistant_1', text: 'I found the relevant component.' },
+      toolBlock({ id: 'tool_test', summary: 'bash: test', meta: { toolName: 'bash' } })
+    ])
+
+    expect(sections.map((section) => ({
+      kind: section.kind,
+      ids: section.blocks.map((block) => block.id)
+    }))).toEqual([
+      {
+        kind: 'execution',
+        ids: ['reasoning_1', 'tool_read', 'reasoning_2']
+      },
+      {
+        kind: 'output',
+        ids: ['assistant_1']
+      },
+      {
+        kind: 'execution',
+        ids: ['tool_test']
+      }
+    ])
+  })
+
+  it('keeps live reasoning out of a completed tool batch so thinking does not eat the summary', () => {
+    const sections = groupProcessSections([
+      toolBlock({ id: 'tool_read', summary: 'read: file', meta: { toolName: 'read' } }),
+      toolBlock({ id: 'tool_grep', summary: 'grep: search', meta: { toolName: 'grep' } }),
+      { kind: 'reasoning', id: 'live-reasoning', text: 'next plan' }
+    ])
+
+    expect(sections.map((section) => ({
+      kind: section.kind,
+      ids: section.blocks.map((block) => block.id)
+    }))).toEqual([
+      {
+        kind: 'execution',
+        ids: ['tool_read', 'tool_grep']
+      },
+      {
+        kind: 'reasoning',
+        ids: ['live-reasoning']
+      }
+    ])
   })
 })
 
@@ -585,7 +637,7 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
     expect(html).toContain('Sources 1')
   })
 
-  it('keeps running tool calls collapsed by default while showing active status', () => {
+  it('keeps running tool calls collapsed by default without in-row loading chrome', () => {
     const block: ChatBlock = toolBlock({
       summary: 'read: file',
       status: 'running',
@@ -606,8 +658,8 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
 
     expect(html).toContain('Read')
     expect(html).toContain('/tmp/readme.md')
-    expect(html).not.toContain('ds-work-logo')
-    expect(html).toContain('ds-shiny-text')
+    expect(html).not.toContain('is-active')
+    expect(html).not.toContain('ds-shiny-text')
     expect(html).not.toContain('partial tool output while running')
     expect(html).toContain('ds-process-file-reference')
   })
@@ -704,28 +756,42 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
     expect(html).not.toContain('read detail should stay tucked away')
   })
 
-  it('expands active reasoning so the current process is visible', () => {
-    const block: ChatBlock = {
-      kind: 'reasoning',
-      id: 'live-reasoning',
-      text: '**current reasoning summary**\n\n<!-- -->'
+  it('keeps live thinking on the turn-bottom loading row', () => {
+    const turn = {
+      user: {
+        kind: 'user' as const,
+        id: 'user_1',
+        text: 'keep reviewing'
+      },
+      blocks: [
+        toolBlock({
+          id: 'tool_read',
+          summary: 'read: file',
+          status: 'success',
+          meta: { toolName: 'read' },
+          filePath: '/tmp/project/src/app.ts'
+        })
+      ]
     }
 
     const html = renderToStaticMarkup(
-      createElement(ProcessSectionRow, {
-        section: { id: 'reasoning', kind: 'reasoning', blocks: [block] },
-        processing: true,
-        singleReasoningSection: true,
-        workspaceRoot: '/tmp/project',
+      createElement(ConversationTurn, {
+        turn,
+        isProcessing: true,
+        liveReasoning: '**current reasoning summary**\n\n<!-- -->',
+        live: '',
+        filePreviewWorkspaceRoot: '/tmp/project',
         viewportRef: { current: null }
       })
     )
 
+    expect(html).toContain('Read')
     expect(html).toContain('ds-shiny-text')
-    expect(html).not.toContain('ds-work-logo')
-    expect(html).toContain('current reasoning summary')
+    expect(html).toContain('ds-work-logo')
+    expect(html).toContain('is-active')
+    expect(html).toMatch(/Thinking|思考中|thinkingNow/)
+    expect(html).not.toContain('current reasoning summary')
     expect(html).not.toContain('&lt;!-- --&gt;')
-    expect(block.text).toContain('<!-- -->')
   })
 
   it('keeps same-batch tool calls collapsed by default', () => {
@@ -760,6 +826,47 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
     expect(html).not.toContain('needle')
     expect(html).not.toContain('read detail should stay tucked away')
     expect(html).not.toContain('grep detail should stay tucked away')
+  })
+
+  it('keeps the completed tool summary visible while live thinking stays at the turn bottom', () => {
+    const turn = {
+      user: {
+        kind: 'user' as const,
+        id: 'user_1',
+        text: 'review the release'
+      },
+      blocks: [
+        toolBlock({
+          id: 'tool_read',
+          summary: 'read: file',
+          status: 'success',
+          meta: { toolName: 'read' }
+        }),
+        toolBlock({
+          id: 'tool_grep',
+          summary: 'grep: search',
+          status: 'success',
+          meta: { toolName: 'grep', pattern: 'needle' }
+        })
+      ]
+    }
+
+    const html = renderToStaticMarkup(
+      createElement(ConversationTurn, {
+        turn,
+        isProcessing: true,
+        liveReasoning: 'next plan',
+        live: '发现阻塞项：继续审阅。',
+        filePreviewWorkspaceRoot: '/tmp/project',
+        viewportRef: { current: null }
+      })
+    )
+
+    expect(html).toContain('Used 2 tools')
+    expect(html).toContain('发现阻塞项：继续审阅。')
+    expect(html).toMatch(/Thinking|思考中|thinkingNow/)
+    expect(html.indexOf('Used 2 tools')).toBeLessThan(html.search(/Thinking|思考中|thinkingNow/))
+    expect(html.indexOf('发现阻塞项：继续审阅。')).toBeLessThan(html.search(/Thinking|思考中|thinkingNow/))
   })
 
   it('auto-expands pending request_user_input while keeping other tool details tucked away', () => {
@@ -913,7 +1020,7 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
     expect(html).toContain('Cancelled')
   })
 
-  it('expands the live work timeline by default while keeping tool details collapsed', () => {
+  it('shows the current tool collapsed while the bottom running row stays active', () => {
     const blocks: ChatBlock[] = [
       {
         kind: 'user',
@@ -946,10 +1053,140 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
       })
     )
 
-    expect(html).toContain('aria-expanded="true"')
+    expect(html).toContain('aria-expanded="false"')
     expect(html).toContain('Read')
     expect(html).toContain('/tmp/project/src/app.ts')
+    expect(html).toContain('is-active')
+    expect(html).toContain('ds-work-logo-phase-trail')
     expect(html).not.toContain('running timeline detail should stay collapsed')
+  })
+
+  it('keeps the fallback running animation visible between process events', () => {
+    const turn = {
+      user: {
+        kind: 'user',
+        id: 'user_1',
+        text: 'keep working'
+      } as const,
+      blocks: [toolBlock({
+        id: 'tool_read',
+        summary: 'read: file',
+        status: 'success',
+        meta: { toolName: 'read' },
+        filePath: '/tmp/project/src/app.ts'
+      })]
+    }
+
+    const html = renderToStaticMarkup(
+      createElement(ConversationTurn, {
+        turn,
+        isProcessing: true,
+        liveReasoning: '',
+        live: '',
+        filePreviewWorkspaceRoot: '/tmp/project',
+        viewportRef: { current: null }
+      })
+    )
+
+    expect(html).toContain('Read')
+    expect(html).toContain('ds-work-logo-phase-trail')
+    expect(html).toContain('is-active')
+  })
+
+  it('keeps intermediate text visible between compact activity phases', () => {
+    const blocks: ChatBlock[] = [
+      {
+        kind: 'user',
+        id: 'user_1',
+        text: 'inspect this flow'
+      },
+      {
+        kind: 'reasoning',
+        id: 'reasoning_1',
+        text: 'internal reasoning should stay collapsed'
+      },
+      toolBlock({
+        id: 'tool_read',
+        summary: 'read: file',
+        detail: 'completed read detail should stay collapsed',
+        meta: { toolName: 'read' },
+        filePath: '/tmp/project/src/flow.ts'
+      }),
+      {
+        kind: 'assistant',
+        id: 'assistant_progress',
+        text: 'I found the rendering path and am checking the active state.'
+      },
+      toolBlock({
+        id: 'tool_search',
+        summary: 'grep: search',
+        status: 'running',
+        detail: 'running search detail should stay collapsed',
+        meta: { toolName: 'grep', pattern: 'workExpanded' },
+        filePath: '/tmp/project/src'
+      })
+    ]
+    useChatStore.setState({
+      busy: true,
+      currentTurnUserId: 'user_1',
+      turnStartedAtByUserId: { user_1: Date.now() }
+    })
+
+    const html = renderToStaticMarkup(
+      createElement(MessageTimeline, {
+        blocks,
+        liveReasoning: '',
+        live: '',
+        activeThreadId: 'thr_1',
+        runtimeConnection: 'ready',
+        onRetryConnection: () => undefined,
+        onOpenSettings: () => undefined
+      })
+    )
+
+    expect(html).toContain('I found the rendering path and am checking the active state.')
+    expect(html).toContain('workExpanded')
+    expect(html).not.toContain('internal reasoning should stay collapsed')
+    expect(html).not.toContain('completed read detail should stay collapsed')
+    expect(html).not.toContain('running search detail should stay collapsed')
+  })
+
+  it('still expands live work automatically when an approval needs attention', () => {
+    const blocks: ChatBlock[] = [
+      {
+        kind: 'user',
+        id: 'user_1',
+        text: 'edit this file'
+      },
+      {
+        kind: 'approval',
+        id: 'approval_1',
+        approvalId: 'approval_1',
+        status: 'pending',
+        toolName: 'edit',
+        summary: 'Run edit(path="/tmp/project/src/app.ts")'
+      }
+    ]
+    useChatStore.setState({
+      busy: true,
+      currentTurnUserId: 'user_1',
+      turnStartedAtByUserId: { user_1: Date.now() }
+    })
+
+    const html = renderToStaticMarkup(
+      createElement(MessageTimeline, {
+        blocks,
+        liveReasoning: '',
+        live: '',
+        activeThreadId: 'thr_1',
+        runtimeConnection: 'ready',
+        onRetryConnection: () => undefined,
+        onOpenSettings: () => undefined
+      })
+    )
+
+    expect(html).toContain('Run edit(path=&quot;/tmp/project/src/app.ts&quot;)')
+    expect(html).toMatch(/Approval required|需要审批|approvalTitle/)
   })
 
   it('renders running compaction as a lightweight status divider', () => {
@@ -1034,6 +1271,29 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
     expect(html).not.toContain('request failed with status 400')
     expect(html).not.toContain('Code: http_400')
     expect(html).not.toContain('full provider body only visible in the expanded error detail')
+  })
+
+  it('renders a durable runtime failure inline with expandable technical detail', () => {
+    const html = renderToStaticMarkup(
+      createElement(TimelineRuntimeError, {
+        block: {
+          kind: 'system',
+          id: 'error_1',
+          turnId: 'turn_1',
+          text: 'Cursor SDK authentication failed',
+          detail: 'Code: cursor_sdk_authentication_failed\n\nMessage:\nInvalid API key',
+          code: 'cursor_sdk_authentication_failed',
+          severity: 'error',
+          runtimeError: true
+        }
+      })
+    )
+
+    expect(html).toContain('role="alert"')
+    expect(html).toContain('Cursor SDK authentication failed')
+    expect(html).toContain('cursor_sdk_authentication_failed')
+    expect(html).toContain('<details')
+    expect(html).toContain('Invalid API key')
   })
 
   it('adds extra bottom padding only for chat timelines with an active goal banner', () => {

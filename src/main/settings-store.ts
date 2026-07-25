@@ -7,6 +7,7 @@ import {
   DEFAULT_GUI_UPDATE_CHANNEL,
   DEFAULT_CHECKPOINT_CLEANUP_ENABLED,
   DEFAULT_CHECKPOINT_CLEANUP_INTERVAL_DAYS,
+  DEFAULT_GIT_CHECKPOINT_CREATE_ENABLED,
   DEFAULT_CURSOR_SPOTLIGHT_COLOR,
   DEFAULT_GIT_BRANCH_PREFIX,
   DEFAULT_LOG_RETENTION_DAYS,
@@ -225,6 +226,7 @@ async function ensureManagedWorkspaceRootsExist(settings: AppSettingsV1): Promis
 
 const defaultSettings = (): AppSettingsV1 => ({
   version: 1,
+  initialSetupCompleted: false,
   locale: 'en',
   theme: 'system',
   uiFontScale: DEFAULT_UI_FONT_SCALE,
@@ -242,6 +244,7 @@ const defaultSettings = (): AppSettingsV1 => ({
     retentionDays: DEFAULT_LOG_RETENTION_DAYS
   },
   checkpointCleanup: {
+    createEnabled: DEFAULT_GIT_CHECKPOINT_CREATE_ENABLED,
     enabled: DEFAULT_CHECKPOINT_CLEANUP_ENABLED,
     intervalDays: DEFAULT_CHECKPOINT_CLEANUP_INTERVAL_DAYS
   },

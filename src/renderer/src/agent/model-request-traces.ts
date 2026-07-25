@@ -31,6 +31,28 @@ export type ModelRequestTraceToolCatalogEntry = {
   providerId?: string
 }
 
+export type ModelRequestTraceDelegated = {
+  providerKind: 'agent-sdk' | 'cursor-sdk' | 'antigravity-cli'
+  phase: 'portable' | 'resumed' | 'rebased'
+  reason?:
+    | 'new'
+    | 'route_changed'
+    | 'capabilities_changed'
+    | 'history_changed'
+    | 'native_state_unavailable'
+  contextManagement: 'sdk-managed'
+  nativeHistory: 'known' | 'unknown' | 'none'
+  capabilities: {
+    nativeResume: boolean
+    structuredStreaming: boolean
+    kunTools: boolean
+    externalApproval: boolean
+    liveSteering: boolean
+    nativeContextTelemetry: boolean
+    fork: boolean
+  }
+}
+
 export type ModelRequestTraceRecord = {
   schemaVersion: 1
   id: string
@@ -56,6 +78,7 @@ export type ModelRequestTraceRecord = {
     headers: ModelRequestTraceHeaders
     body: ModelRequestTraceBody
   }
+  delegated?: ModelRequestTraceDelegated
   toolCatalog?: ModelRequestTraceToolCatalogEntry[]
   response?: {
     status: number
@@ -68,6 +91,7 @@ export type ModelRequestTraceRecord = {
     text: string
     reasoning: string
     toolCalls: Array<{ callId: string; toolName: string; arguments: Record<string, unknown> }>
+    toolResults?: Array<{ callId: string; toolName: string; output: string; isError: boolean }>
     usage?: Record<string, unknown>
     stopReason?: string
     error?: string
@@ -180,9 +204,65 @@ function parseRecord(value: unknown, label: string): ModelRequestTraceRecord {
   if (input.toolCatalog !== undefined) {
     parsed.toolCatalog = parseToolCatalog(input.toolCatalog)
   }
+  if (input.delegated !== undefined) {
+    parsed.delegated = parseDelegated(input.delegated, `${label}.delegated`)
+  }
   if (input.response !== undefined) parsed.response = parseResponse(input.response, `${label}.response`)
   if (input.decoded !== undefined) parsed.decoded = parseDecoded(input.decoded, `${label}.decoded`)
   return parsed
+}
+
+function parseDelegated(value: unknown, label: string): ModelRequestTraceDelegated {
+  const input = object(value, label)
+  const capabilities = object(input.capabilities, `${label}.capabilities`)
+  const reason = input.reason === undefined
+    ? undefined
+    : oneOf(input.reason, `${label}.reason`, [
+        'new',
+        'route_changed',
+        'capabilities_changed',
+        'history_changed',
+        'native_state_unavailable'
+      ] as const)
+  return {
+    providerKind: oneOf(input.providerKind, `${label}.providerKind`, [
+      'agent-sdk',
+      'cursor-sdk',
+      'antigravity-cli'
+    ] as const),
+    phase: oneOf(input.phase, `${label}.phase`, [
+      'portable',
+      'resumed',
+      'rebased'
+    ] as const),
+    ...(reason ? { reason } : {}),
+    contextManagement: oneOf(input.contextManagement, `${label}.contextManagement`, [
+      'sdk-managed'
+    ] as const),
+    nativeHistory: oneOf(input.nativeHistory, `${label}.nativeHistory`, [
+      'known',
+      'unknown',
+      'none'
+    ] as const),
+    capabilities: {
+      nativeResume: bool(capabilities.nativeResume, `${label}.capabilities.nativeResume`),
+      structuredStreaming: bool(
+        capabilities.structuredStreaming,
+        `${label}.capabilities.structuredStreaming`
+      ),
+      kunTools: bool(capabilities.kunTools, `${label}.capabilities.kunTools`),
+      externalApproval: bool(
+        capabilities.externalApproval,
+        `${label}.capabilities.externalApproval`
+      ),
+      liveSteering: bool(capabilities.liveSteering, `${label}.capabilities.liveSteering`),
+      nativeContextTelemetry: bool(
+        capabilities.nativeContextTelemetry,
+        `${label}.capabilities.nativeContextTelemetry`
+      ),
+      fork: bool(capabilities.fork, `${label}.capabilities.fork`)
+    }
+  }
 }
 
 function parseToolCatalog(value: unknown): ModelRequestTraceToolCatalogEntry[] {
@@ -234,6 +314,19 @@ function parseDecoded(value: unknown, label: string): NonNullable<ModelRequestTr
     text: text(input.text, `${label}.text`, MAX_TRACE_TEXT_CHARS),
     reasoning: text(input.reasoning, `${label}.reasoning`, MAX_TRACE_TEXT_CHARS),
     toolCalls
+  }
+  if (input.toolResults !== undefined) {
+    decoded.toolResults = array(input.toolResults, `${label}.toolResults`, 512).map(
+      (value, index) => {
+        const result = object(value, `${label}.toolResults[${index}]`)
+        return {
+          callId: text(result.callId, `${label}.toolResults[${index}].callId`, 512),
+          toolName: text(result.toolName, `${label}.toolResults[${index}].toolName`, 512),
+          output: text(result.output, `${label}.toolResults[${index}].output`, MAX_TRACE_TEXT_CHARS),
+          isError: bool(result.isError, `${label}.toolResults[${index}].isError`)
+        }
+      }
+    )
   }
   if (input.usage !== undefined) decoded.usage = object(input.usage, `${label}.usage`)
   for (const key of ['stopReason', 'error'] as const) {

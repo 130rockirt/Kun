@@ -31,6 +31,7 @@ import {
 import type {
   ClawImInstallPollResult,
   ClawImInstallQrResult,
+  CredentialRecoveryResetResult,
   ConversationWorkspaceCreateResult,
   DesktopCommand,
   KunRuntimeSettingsSyncStatusPayload,
@@ -61,6 +62,7 @@ import {
   gitWorktreeRemoveSchema,
   guiUpdateChannelSchema,
   localPdfTextTargetPayloadSchema,
+  localOfficeDocumentTargetPayloadSchema,
   logErrorPayloadSchema,
   notificationPayloadSchema,
   openEditorPathPayloadSchema,
@@ -107,6 +109,8 @@ import {
   workspaceFileTargetPayloadSchema,
   workspaceFileWatchPayloadSchema,
   workspaceFileWritePayloadSchema,
+  workspacePreviewLeaseReleasePayloadSchema,
+  workspacePreviewLeaseTargetPayloadSchema,
   localWhisperDownloadPayloadSchema,
   localWhisperModelIdPayloadSchema,
   localWhisperSourceStatusPayloadSchema,
@@ -140,7 +144,11 @@ import {
 } from '../../shared/app-settings'
 import { detectLegacySessions, importLegacySessions } from '../services/legacy-session-import-service'
 import { lintProjectDesignMd } from '../services/project-design-md-lint'
-import { claudeSubscriptionStatus, runClaudeSetupToken } from '../claude-subscription-auth'
+import {
+  claudeSubscriptionStatus,
+  probeClaudeSubscription,
+  runClaudeSubscriptionLogin
+} from '../claude-subscription-auth'
 import { fetchSdkModels } from '../claude-subscription-models'
 import {
   agentSdkDownloadState,
@@ -168,6 +176,10 @@ import {
   startAntigravityCliInstall
 } from '../antigravity-cli'
 import { discoverCursorSubscription } from '../cursor-subscription-models'
+import {
+  geminiCliSubscriptionModels,
+  geminiCliSubscriptionStatus
+} from '../gemini-cli-subscription'
 import type { WorkflowRuntime } from '../workflow-runtime'
 import { checkWorkflowCode } from '../workflow-runtime'
 import {
@@ -262,6 +274,9 @@ import { exportConversation } from '../services/conversation-export-service'
 import { exportMemoryMarkdown } from '../services/memory-export-service'
 import { importGithubSkillsToRoot } from '../services/github-skill-import-service'
 import { readLocalPdfText } from '../services/write-pdf-text-service'
+import { readLocalOfficeDocument } from '../services/office-document-service'
+import type { WorkspacePreviewProtocolRegistry } from '../services/workspace-preview-protocol'
+import { resolveOfficeCliBinary } from '../officecli-resources'
 import { ensurePptMaster } from '../services/ppt-master-service'
 import { saveGuiSkillPackage } from '../services/skill-save-service'
 import {
@@ -313,6 +328,7 @@ type RegisterAppIpcHandlersOptions = {
   getMainWindow: () => BrowserWindow | null
   applySettingsPatch: (partial: AppSettingsPatch) => Promise<AppSettingsV1>
   saveSettingsPatch: (partial: AppSettingsPatch) => Promise<AppSettingsV1>
+  resetUnreadableCredentials: () => Promise<CredentialRecoveryResetResult>
   runtimeRequest: (
     path: string,
     method?: string,
@@ -340,6 +356,7 @@ type RegisterAppIpcHandlersOptions = {
   loadGuiUpdaterModule: () => Promise<GuiUpdaterModule>
   resolveLogDirectory: () => string
   logError: (category: string, message: string, detail?: unknown) => void
+  workspacePreviewProtocols: WorkspacePreviewProtocolRegistry
 }
 
 function parseIpcPayload<T>(channel: string, schema: z.ZodType<T>, payload: unknown): T {
@@ -551,6 +568,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     getMainWindow,
     applySettingsPatch,
     saveSettingsPatch,
+    resetUnreadableCredentials,
     runtimeRequest,
     getRuntimeSettingsSyncStatus,
     restartRuntime,
@@ -764,9 +782,30 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   }
 
   ipcMain.handle('settings:get', async () => store.load())
-  // Claude Pro/Max subscription login (compliant path: official CLI does the
-  // OAuth; we only detect it / capture the setup-token).
-  ipcMain.handle('claude-subscription:status', async () => claudeSubscriptionStatus())
+  ipcMain.handle('credentials:reset-unreadable', async (event): Promise<CredentialRecoveryResetResult> => {
+    assertTrustedWorkbenchSender(event, getMainWindow)
+    const parent = getMainWindow()
+    if (!parent || parent.isDestroyed()) {
+      throw new Error('Credential recovery window is unavailable.')
+    }
+    const confirmation = await dialog.showMessageBox(parent, {
+      type: 'warning',
+      title: 'Reset encrypted credentials',
+      message: 'Reset the credentials that Windows can no longer decrypt?',
+      detail: [
+        'Kun will back up the unreadable encrypted data before resetting it.',
+        'Saved API keys and OAuth sessions must be entered or authorized again.',
+        'Conversations, workspaces, and ordinary settings are not removed.'
+      ].join('\n'),
+      buttons: ['Back up and reset', 'Cancel'],
+      defaultId: 1,
+      cancelId: 1,
+      noLink: true,
+      normalizeAccessKeys: true
+    })
+    if (confirmation.response !== 0) return { reset: false }
+    return resetUnreadableCredentials()
+  })
   // The Claude Code binary (~222MB) is NOT bundled — it's downloaded on demand
   // into userData/agent-sdk and resolved from there (or kun/node_modules in dev).
   const claudeSubKunDirs = (): string[] =>
@@ -776,6 +815,11 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     ].map((root) => join(root, 'kun'))
   const claudeSubBinary = (): string | undefined =>
     resolveClaudeBinary(app.getPath('userData'), claudeSubKunDirs())
+  // Claude Pro/Max subscription login. The official CLI owns browser OAuth and
+  // platform credential storage; Kun observes only structured, redacted state.
+  ipcMain.handle('claude-subscription:status', async () =>
+    claudeSubscriptionStatus({ binaryPath: claudeSubBinary() })
+  )
   ipcMain.handle('claude-subscription:sdk-status', async () => ({
     ...agentSdkStatus(app.getPath('userData'), claudeSubKunDirs()),
     download: agentSdkDownloadState()
@@ -787,7 +831,13 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     )
   )
   ipcMain.handle('claude-subscription:login', async () =>
-    runClaudeSetupToken({ binaryPath: claudeSubBinary() })
+    runClaudeSubscriptionLogin({ binaryPath: claudeSubBinary() })
+  )
+  ipcMain.handle('claude-subscription:probe', async (_event, token: unknown) =>
+    probeClaudeSubscription({
+      token: typeof token === 'string' ? token : undefined,
+      binaryPath: claudeSubBinary()
+    })
   )
   ipcMain.handle('claude-subscription:models', async (_event, token: unknown) =>
     fetchSdkModels({
@@ -816,6 +866,12 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     }
     return fetchAntigravityModels({ binaryPath })
   })
+  ipcMain.handle('gemini-cli-subscription:status', async () =>
+    geminiCliSubscriptionStatus()
+  )
+  ipcMain.handle('gemini-cli-subscription:models', async () =>
+    geminiCliSubscriptionModels()
+  )
   ipcMain.handle('cursor-subscription:discover', async (_event, payload: unknown) => {
     const { apiKey } = parseIpcPayload(
       'cursor-subscription:discover',
@@ -1759,6 +1815,13 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   ipcMain.handle('git:checkpoint:create', async (_, payload: unknown) => {
     const request = parseIpcPayload('git:checkpoint:create', gitCheckpointCreatePayloadSchema, payload)
     const settings = await store.load()
+    if (!settings.checkpointCleanup.createEnabled) {
+      return {
+        ok: false as const,
+        reason: 'disabled' as const,
+        message: 'Git checkpoint creation is disabled in settings.'
+      }
+    }
     return createGitCheckpoint({
       dataDir: await resolveKunThreadsDataDir(),
       workspaceRoot: request.workspaceRoot,
@@ -1895,6 +1958,15 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       parseIpcPayload('file:resolve-workspace', workspaceFileTargetPayloadSchema, payload)
     )
   )
+  ipcMain.handle('file:open-workspace-system', async (event, payload: unknown) => {
+    assertTrustedWorkbenchSender(event, options.getMainWindow)
+    const resolved = await resolveWorkspaceFile(
+      parseIpcPayload('file:open-workspace-system', workspaceFileTargetPayloadSchema, payload)
+    )
+    if (!resolved.ok) return resolved
+    const message = await shell.openPath(resolved.path)
+    return message ? { ok: false as const, message } : { ok: true as const }
+  })
   ipcMain.handle('file:list-workspace-directory', async (_, payload: unknown) =>
     listWorkspaceDirectory(
       parseIpcPayload('file:list-workspace-directory', workspaceDirectoryTargetPayloadSchema, payload)
@@ -1915,6 +1987,26 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       parseIpcPayload('file:read-workspace-pdf', workspaceFileTargetPayloadSchema, payload)
     )
   )
+  ipcMain.handle('file:open-workspace-preview', async (event, payload: unknown) => {
+    assertTrustedWorkbenchSender(event, options.getMainWindow)
+    return options.workspacePreviewProtocols.createLease(
+      event.sender,
+      parseIpcPayload(
+        'file:open-workspace-preview',
+        workspacePreviewLeaseTargetPayloadSchema,
+        payload
+      )
+    )
+  })
+  ipcMain.handle('file:release-workspace-preview', async (event, payload: unknown) => {
+    assertTrustedWorkbenchSender(event, options.getMainWindow)
+    const request = parseIpcPayload(
+      'file:release-workspace-preview',
+      workspacePreviewLeaseReleasePayloadSchema,
+      payload
+    )
+    return options.workspacePreviewProtocols.release(event.sender.id, request.leaseId)
+  })
   ipcMain.handle('file:read-local-pdf-text', async (_, payload: unknown) => {
     const result = await readLocalPdfText(
       parseIpcPayload('file:read-local-pdf-text', localPdfTextTargetPayloadSchema, payload)
@@ -1931,6 +2023,38 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       ocrApplied: result.ocrApplied,
       ocrPageCount: result.ocrPageCount,
       truncated: result.truncated
+    }
+  })
+  ipcMain.handle('file:read-local-office-document', async (event, payload: unknown) => {
+    assertTrustedWorkbenchSender(event, getMainWindow)
+    const target = parseIpcPayload(
+      'file:read-local-office-document',
+      localOfficeDocumentTargetPayloadSchema,
+      payload
+    )
+    const binaryPath = resolveOfficeCliBinary({
+      isPackaged: app.isPackaged,
+      resourcesPath: process.resourcesPath,
+      appRoot: app.getAppPath(),
+      explicitPath: process.env.KUN_OFFICECLI_BINARY
+    })
+    if (!binaryPath) {
+      return {
+        ok: false as const,
+        code: 'officecli_unavailable',
+        message: 'Office document support is unavailable because the bundled OfficeCLI binary was not found.'
+      }
+    }
+    const abortController = new AbortController()
+    const cancelWhenRendererCloses = (): void => abortController.abort()
+    event.sender.once('destroyed', cancelWhenRendererCloses)
+    try {
+      return await readLocalOfficeDocument(target, {
+        binaryPath,
+        signal: abortController.signal
+      })
+    } finally {
+      event.sender.removeListener('destroyed', cancelWhenRendererCloses)
     }
   })
   ipcMain.handle('file:save-as', async (_, payload: unknown) =>

@@ -799,7 +799,7 @@ describe('thread event sink runtime errors', () => {
     ])
   })
 
-  it('settles terminal turn failures instead of keeping the composer busy', () => {
+  it('settles conversation-scoped terminal failures without showing the global banner', () => {
     const blocks: ChatBlock[] = [
       { kind: 'user', id: 'user-1', text: 'work toward goal' },
       {
@@ -832,26 +832,41 @@ describe('thread event sink runtime errors', () => {
       Object.assign(state, typeof partial === 'function' ? partial(state) : partial)
     }
 
-    buildThreadEventSink(set, () => state).onError(
+    const sink = buildThreadEventSink(set, () => state)
+    sink.onRuntimeError?.({
+      itemId: 'runtime_error_turn-1',
+      turnId: 'turn-1',
+      message: 'model stream exploded',
+      code: 'http_400',
+      severity: 'error'
+    })
+    sink.onError(
       new Error(JSON.stringify({
         code: 'http_400',
         message: 'model stream exploded',
         severity: 'error'
       })),
-      { terminal: true }
+      { terminal: true, scope: 'conversation' }
     )
 
     expect(state.busy).toBe(false)
     expect(state.currentTurnId).toBeNull()
     expect(state.currentTurnUserId).toBeNull()
-    expect(state.error).toBe('model stream exploded')
-    expect(state.runtimeErrorDetail).toContain('Code: http_400')
+    expect(state.error).toBeNull()
+    expect(state.runtimeErrorDetail).toBeNull()
     expect(state.watchTurnCompletion).toEqual({})
     expect(state.unreadThreadIds).toEqual({})
     expect(state.blocks.map((block) => ('status' in block ? block.status : block.kind))).toEqual([
       'user',
-      'error'
+      'error',
+      'system'
     ])
+    expect(state.blocks[2]).toMatchObject({
+      kind: 'system',
+      text: 'model stream exploded',
+      code: 'http_400',
+      runtimeError: true
+    })
   })
 })
 

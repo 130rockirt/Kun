@@ -30,7 +30,7 @@ function settings(apiKey: string): AppSettingsV1 {
     workspaceRoot: '/tmp/workspace',
     conversationWorkspaceRoot: '~/Documents/Kun',
     log: { enabled: false, retentionDays: 7 },
-    checkpointCleanup: { enabled: false, intervalDays: 3 },
+    checkpointCleanup: { createEnabled: false, enabled: false, intervalDays: 3 },
     notifications: { turnComplete: true },
     appBehavior: { openAtLogin: false, startMinimized: false, closeToTray: false },
     keyboardShortcuts: defaultKeyboardShortcuts(),
@@ -101,6 +101,38 @@ describe('rendererRuntimeClient', () => {
     expect(cached.agents.kun.apiKey).toBe('sk-2')
     expect(getSettings).toHaveBeenCalledTimes(1)
     expect(setSettings).toHaveBeenCalledTimes(1)
+  })
+
+  it('invalidates cached settings after encrypted credentials are reset', async () => {
+    const getSettings = vi.fn()
+      .mockResolvedValueOnce(settings(''))
+      .mockResolvedValueOnce(settings('sk-after-reset'))
+    const resetUnreadableCredentials = vi.fn(async () => ({
+      reset: true as const,
+      backupPath: '/tmp/credential-recovery',
+      movedItems: ['secret.key']
+    }))
+    vi.stubGlobal('window', {
+      kunGui: {
+        getSettings,
+        setSettings: vi.fn(),
+        resetUnreadableCredentials,
+        runtimeRequest: vi.fn(),
+        restartRuntime: vi.fn(),
+        startSse: vi.fn(),
+        stopSse: vi.fn(),
+        onSseEvent: vi.fn(),
+        onSseEnd: vi.fn(),
+        onSseError: vi.fn()
+      }
+    })
+
+    await rendererRuntimeClient.getSettings()
+    await expect(rendererRuntimeClient.resetUnreadableCredentials()).resolves.toMatchObject({ reset: true })
+    const refreshed = await rendererRuntimeClient.getSettings()
+
+    expect(refreshed.agents.kun.apiKey).toBe('sk-after-reset')
+    expect(getSettings).toHaveBeenCalledTimes(2)
   })
 
   it('forwards explicit runtime restarts through the preload bridge', async () => {

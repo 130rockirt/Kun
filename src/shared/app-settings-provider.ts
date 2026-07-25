@@ -332,15 +332,37 @@ export function getModelProviderProfile(
   return provider.providers.find((profile) => profile.id === id) ?? provider.providers[0] ?? defaultModelProviderProfile(provider.apiKey, provider.baseUrl)
 }
 
+export function modelProviderRequiresApiKey(
+  provider: Pick<ModelProviderProfileV1, 'id' | 'kind' | 'presetSource'>
+): boolean {
+  if (
+    provider.kind === 'agent-sdk' ||
+    provider.kind === 'antigravity-cli' ||
+    provider.kind === 'gemini-cli-api' ||
+    provider.kind === 'gemini-code-assist'
+  ) {
+    return false
+  }
+
+  const source = resolveModelProviderPresetSource(provider)
+  if (source?.preset.id === 'litellm') return false
+  if (provider.id === DEFAULT_MODEL_PROVIDER_ID) return true
+  return Boolean(source)
+}
+
+export function activeModelProviderNeedsApiKey(settings: AppSettingsV1): boolean {
+  const runtime = getKunRuntimeSettings(settings)
+  const provider = getModelProviderProfile(settings, runtime.providerId)
+  return modelProviderRequiresApiKey(provider) && !resolveKunRuntimeSettings(settings).apiKey.trim()
+}
+
 export function listModelProviderModelIds(settings: AppSettingsV1): string[] {
   const ids = new Set<string>()
   const providerSettings = getModelProviderSettings(settings)
   for (const provider of providerSettings.providers) {
-    const nonTextModelIds = listProviderNonTextModelIds(provider)
     for (const model of provider.models) {
       const trimmed = model.trim()
-      if (!trimmed || !isComposerChatModelId(trimmed, nonTextModelIds)) continue
-      if (!modelProfileSupportsTextChat(modelProviderModelProfile(provider, trimmed))) continue
+      if (!trimmed || !isProviderComposerChatModelId(provider, trimmed)) continue
       ids.add(trimmed)
     }
   }
@@ -441,6 +463,18 @@ export function isComposerChatModelId(
   return !SPEECH_ONLY_MODEL_PATTERN.test(normalized) && !NON_TEXT_MODEL_PATTERN.test(normalized)
 }
 
+export function isProviderComposerChatModelId(
+  provider: ModelProviderProfileV1,
+  modelId: string
+): boolean {
+  const profile = modelProviderModelProfile(provider, modelId)
+  if (profile && !modelProfileSupportsTextChat(profile)) return false
+  return isComposerChatModelId(
+    modelId,
+    profile ? [] : listProviderNonTextModelIds(provider)
+  )
+}
+
 export function isSpeechToTextModelId(modelId: string): boolean {
   const normalized = modelId.trim().toLowerCase()
   return Boolean(normalized) && SPEECH_TO_TEXT_MODEL_PATTERN.test(normalized)
@@ -482,20 +516,18 @@ export function modelProviderModelProfile(
   return provider.modelProfiles[normalized]
 }
 
-export function modelProviderModelProfilesForSettings(
-  settings: AppSettingsV1
+export function modelProviderModelProfilesForProvider(
+  settings: AppSettingsV1,
+  providerId: string
 ): Record<string, ModelProviderModelProfileV1> {
   const profiles: Record<string, ModelProviderModelProfileV1> = {}
-  const nonTextModelIds = listNonTextModelIds(settings)
-  for (const provider of getModelProviderSettings(settings).providers) {
-    for (const [modelId, profile] of Object.entries(provider.modelProfiles)) {
-      const normalized = normalizeModelKey(modelId)
-      if (!normalized || !isComposerChatModelId(normalized, nonTextModelIds)) continue
-      if (!modelProfileSupportsTextChat(profile)) continue
-      profiles[normalized] = {
-        ...profile,
-        contextWindowTokens: profile.contextWindowTokens ?? DEFAULT_PROVIDER_CONTEXT_WINDOW_TOKENS
-      }
+  const provider = getModelProviderProfile(settings, providerId)
+  for (const [modelId, profile] of Object.entries(provider.modelProfiles)) {
+    const normalized = normalizeModelKey(modelId)
+    if (!normalized || !isProviderComposerChatModelId(provider, normalized)) continue
+    profiles[normalized] = {
+      ...profile,
+      contextWindowTokens: profile.contextWindowTokens ?? DEFAULT_PROVIDER_CONTEXT_WINDOW_TOKENS
     }
   }
   return profiles
@@ -660,13 +692,29 @@ function providerWithPresetCapabilities(provider: ModelProviderProfileV1): Model
     ? modelProviderTokenPlanProfile(tokenPlanPreset, provider.apiKey, provider.baseUrl)
     : modelProviderPresetProfileForProvider(provider)
   if (!presetProfile) return provider
+  // Profiles saved before subscription transports moved to their official
+  // SDK/CLI paths may have a valid preset identity but no `kind`. Restore the
+  // preset transport during normalization so blank-base-URL subscriptions are
+  // retained in serve.providers and reach DelegatedTurnRuntime.
+  const kind = provider.kind ?? presetProfile.kind
   const image = mergePresetCapability(provider.image, presetProfile.image)
-  const speech = mergePresetCapability(provider.speech, presetProfile.speech)
+  const presetSource = resolveModelProviderPresetSource(provider)
+  const hasFixedSubscriptionCapabilities =
+    presetSource?.mode === 'api' && presetSource.preset.category === 'subscription'
+  // Subscription/SDK credentials are tied to documented transports. Do not
+  // let a stale hand-authored speech block turn Cursor, Codex, Claude, or
+  // Antigravity into an OpenAI transcription endpoint.
+  const speech = hasFixedSubscriptionCapabilities
+    ? presetProfile.speech
+    : mergePresetCapability(provider.speech, presetProfile.speech)
   const textToSpeech = mergePresetCapability(provider.textToSpeech, presetProfile.textToSpeech)
   const music = mergePresetCapability(provider.music, presetProfile.music)
   const video = mergePresetCapability(provider.video, presetProfile.video)
+  const { speech: _storedSpeech, ...providerWithoutSpeech } = provider
+  void _storedSpeech
   return {
-    ...provider,
+    ...(hasFixedSubscriptionCapabilities ? providerWithoutSpeech : provider),
+    ...(kind ? { kind } : {}),
     ...(image ? { image } : {}),
     ...(speech ? { speech } : {}),
     ...(textToSpeech ? { textToSpeech } : {}),
@@ -1090,7 +1138,7 @@ export function resolveKunRuntimeSettings(settings: AppSettingsV1): KunRuntimeSe
     textToSpeech: resolveKunTextToSpeechSettings(settings),
     musicGeneration: resolveKunMusicGenerationSettings(settings),
     videoGeneration: resolveKunVideoGenerationSettings(settings),
-    modelProfiles: modelProviderModelProfilesForSettings(settings),
+    modelProfiles: modelProviderModelProfilesForProvider(settings, provider.id),
     memoryEnabled: resolveKunMemoryEnabled(settings)
   }
 }
@@ -1120,12 +1168,23 @@ function normalizeModelProviderProfile(
   const id = normalizeModelProviderId(input?.id)
   if (!id) return null
   const presetSource = normalizeModelProviderPresetSource(input, id)
+  const resolvedPresetSource = presetSource
+    ? resolveModelProviderPresetSource({ id, presetSource })
+    : null
+  const kind =
+    input?.kind === 'gemini-code-assist'
+      ? 'antigravity-cli'
+      : input?.kind ?? (
+          resolvedPresetSource?.mode === 'api'
+            ? resolvedPresetSource.preset.kind
+            : undefined
+        )
   const rawName = typeof input?.name === 'string' && input.name.trim() ? input.name.trim() : id
   const baseUrl = normalizeModelProviderBaseUrl(input?.baseUrl)
   const savedModels = normalizeProviderModels(input?.models)
-  // Existing builds persisted the retired Code Assist model list. Replace it
-  // once during transport migration so 3.5/3.6 are visible immediately; later
-  // Antigravity CLI syncs remain authoritative.
+  // Existing builds used `gemini-code-assist` on the legacy Antigravity preset.
+  // Keep that one-time migration on Antigravity; the new direct Gemini CLI API
+  // preset has its own id and never silently takes ownership of legacy threads.
   const rawModels =
     presetSource?.presetId === 'gemini-subscription' && input?.kind === 'gemini-code-assist'
       ? [...GEMINI_SUBSCRIPTION_MODEL_IDS]
@@ -1146,7 +1205,7 @@ function normalizeModelProviderProfile(
     name,
     ...(presetSource ? { presetSource } : {}),
     apiKey:
-      input?.kind === 'antigravity-cli' || input?.kind === 'gemini-code-assist'
+      kind === 'antigravity-cli' || kind === 'gemini-cli-api'
         ? ''
         : typeof input?.apiKey === 'string'
           ? input.apiKey.trim()
@@ -1154,13 +1213,7 @@ function normalizeModelProviderProfile(
     baseUrl,
     endpointFormat: normalizeModelEndpointFormat(input?.endpointFormat),
     retry: normalizeModelRequestRetrySettings(input?.retry),
-    ...(input?.kind === 'agent-sdk'
-      ? { kind: 'agent-sdk' as const }
-      : input?.kind === 'cursor-sdk'
-        ? { kind: 'cursor-sdk' as const }
-      : input?.kind === 'antigravity-cli' || input?.kind === 'gemini-code-assist'
-        ? { kind: 'antigravity-cli' as const }
-        : {}),
+    ...(kind ? { kind } : {}),
     models,
     modelProfiles,
     ...(image ? { image } : {}),
@@ -1483,7 +1536,11 @@ function normalizeModelProviderSpeechCapability(
 
 export function normalizeSpeechToTextProtocol(value: unknown): SpeechToTextProtocol {
   if (value === 'local-whisper') return 'local-whisper'
-  return value === 'mimo-asr' ? 'mimo-asr' : DEFAULT_SPEECH_TO_TEXT_PROTOCOL
+  if (value === 'mimo-asr') return 'mimo-asr'
+  if (value === 'xai-stt') return 'xai-stt'
+  if (value === 'gemini-audio') return 'gemini-audio'
+  if (value === 'gemini-cli-audio') return 'gemini-cli-audio'
+  return DEFAULT_SPEECH_TO_TEXT_PROTOCOL
 }
 
 function normalizeModelProviderTextToSpeechCapability(

@@ -780,7 +780,12 @@ export async function installGuiUpdate(): Promise<GuiUpdateInstallResult> {
     await Promise.all([pendingVersionStateWrite, runBeforeInstallUpdate()])
     markUpdateInstallQuitting(true)
     updateInstallQuitMarked = true
-    autoUpdater.quitAndInstall(false, true)
+    // In-app updates must stay silent on Windows. The assisted NSIS UI can
+    // surface its old-uninstaller retry dialog even though our overwrite
+    // fallback can safely continue; silent mode applies that dialog's default
+    // cancel action instead of asking the user to make the counter-intuitive
+    // choice. Manually launched installers remain interactive.
+    autoUpdater.quitAndInstall(true, true)
     return { ok: true }
   } catch (e) {
     if (updateInstallQuitMarked) markUpdateInstallQuitting(false)

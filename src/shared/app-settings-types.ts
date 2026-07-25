@@ -97,7 +97,14 @@ export const DEFAULT_IMAGE_GENERATION_RESOLUTION: ImageGenerationResolution = '1
 export const IMAGE_GENERATION_QUALITIES = ['auto', 'low', 'medium', 'high'] as const
 export type ImageGenerationQuality = (typeof IMAGE_GENERATION_QUALITIES)[number]
 export const CUSTOM_SPEECH_TO_TEXT_PROVIDER_ID = 'custom'
-export const SPEECH_TO_TEXT_PROTOCOLS = ['openai-transcriptions', 'mimo-asr', 'local-whisper'] as const
+export const SPEECH_TO_TEXT_PROTOCOLS = [
+  'openai-transcriptions',
+  'mimo-asr',
+  'xai-stt',
+  'gemini-audio',
+  'gemini-cli-audio',
+  'local-whisper'
+] as const
 export type SpeechToTextProtocol = (typeof SPEECH_TO_TEXT_PROTOCOLS)[number]
 export const DEFAULT_SPEECH_TO_TEXT_PROTOCOL: SpeechToTextProtocol = 'openai-transcriptions'
 export const CUSTOM_TEXT_TO_SPEECH_PROVIDER_ID = 'custom'
@@ -157,6 +164,8 @@ export const DEFAULT_CHECKPOINT_CLEANUP_INTERVAL_DAYS: CheckpointCleanupInterval
 // Checkpoint cleanup is enabled by default so stale Git checkpoint directories
 // do not accumulate. Users who want to keep every checkpoint can opt out in settings.
 export const DEFAULT_CHECKPOINT_CLEANUP_ENABLED = true
+/** Create Git checkpoints on send unless the user explicitly opts out. */
+export const DEFAULT_GIT_CHECKPOINT_CREATE_ENABLED = true
 export const DEFAULT_GIT_BRANCH_PREFIX = 'codex/'
 export const DEFAULT_CURSOR_SPOTLIGHT_COLOR = '#85c1f1'
 export const DEFAULT_WEIXIN_BRIDGE_RPC_URL = 'http://127.0.0.1:18790/api/v1/admin/rpc'
@@ -258,12 +267,14 @@ export type ModelProviderProfileV1 = {
    * Agent SDK (Claude Pro/Max subscription); `apiKey` then carries the
    * CLAUDE_CODE_OAUTH_TOKEN (empty => host Claude Code login).
    * `antigravity-cli` delegates whole turns to Google's official Antigravity
-   * CLI, which uses the user's Gemini subscription login. The retired
-   * `gemini-code-assist` value is accepted only for settings migration.
+   * CLI, which uses the user's Gemini subscription login. `gemini-cli-api`
+   * reuses the official Gemini CLI OAuth login while Kun calls the Code Assist
+   * API directly. The retired `gemini-code-assist` value is accepted only for
+   * settings migration.
    * `cursor-sdk` delegates whole turns to the official Cursor SDK and requires
    * a Cursor API key in `apiKey`.
    */
-  kind?: 'http' | 'agent-sdk' | 'antigravity-cli' | 'cursor-sdk' | 'gemini-code-assist'
+  kind?: 'http' | 'agent-sdk' | 'antigravity-cli' | 'gemini-cli-api' | 'cursor-sdk' | 'gemini-code-assist'
   models: string[]
   modelProfiles: Record<string, ModelProviderModelProfileV1>
   image?: ModelProviderImageCapabilityV1
@@ -724,6 +735,8 @@ export type KunTokenEconomySettingsV1 = {
 export type KunToolOutputLimitsSettingsV1 = Required<ToolOutputLimitsConfig>
 
 export type KunContextCompactionSettingsV1 = {
+  /** Tracks one-time migrations when the product's context-window defaults change. */
+  defaultsVersion?: number
   defaultSoftThreshold: number
   defaultHardThreshold: number
   summaryMode: KunCompactionSummaryMode
@@ -825,7 +838,20 @@ export type LogConfigV1 = {
 }
 
 export type CheckpointCleanupConfigV1 = {
+  /**
+   * Whether to create a Git checkpoint before each user turn.
+   * Defaults to off so checkpoint storage does not grow unless the user opts in.
+   */
+  createEnabled: boolean
+  /**
+   * Whether automatic cleanup runs. When enabled, unused checkpoints and
+   * checkpoints older than `intervalDays` are removed on that schedule.
+   */
   enabled: boolean
+  /**
+   * Cleanup cadence and age retention (default 3 days): scan on this interval
+   * and delete checkpoints older than this many days.
+   */
   intervalDays: CheckpointCleanupIntervalDays
   /**
    * Optional override for the Git checkpoint storage directory (issue #651).
@@ -2053,6 +2079,8 @@ export type TerminalSettingsPatchV1 = {
 
 export type AppSettingsV1 = {
   version: 1
+  /** Persisted independently from credentials so SDK/subscription providers do not reopen onboarding. */
+  initialSetupCompleted?: boolean
   locale: AppLocale
   theme: 'system' | 'light' | 'dark'
   uiFontScale: UiFontScale

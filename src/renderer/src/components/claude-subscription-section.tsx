@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type ReactElement } from 'react'
 import { AlertCircle, CheckCircle2, Copy, Download, Loader2, LogIn } from 'lucide-react'
 import type { ModelProviderProfileV1 } from '@shared/app-settings-types'
+import { validateClaudeSubscriptionToken } from '@shared/claude-subscription-auth'
 import { SecretInput } from './settings-controls'
 
 type Translate = (key: string) => string
@@ -12,14 +13,16 @@ const formatMb = (bytes: number): string => (bytes / (1024 * 1024)).toFixed(1)
 function loginErrorText(message: string, t: Translate): string {
   if (message === 'claude-cli-not-found') return t('claudeSubLoginFailedCli')
   if (message === 'timeout') return t('claudeSubLoginFailedTimeout')
+  if (message === 'invalid-token-format') return t('claudeSubTokenInvalid')
   return message ? `${t('claudeSubLoginFailedGeneric')}: ${message}` : t('claudeSubLoginFailedGeneric')
 }
 
 /**
  * Subscription-login UI for the `agent-sdk` (Claude Pro/Max) provider. Replaces
- * the bare "API Key" box: detects an existing Claude Code login, can run
- * `claude setup-token` to capture a token, and falls back to manual paste. The
- * resulting token is stored in the provider's `apiKey` (empty => host CLI login).
+ * the bare "API Key" box: detects an existing Claude Code login, starts the
+ * official ambient browser-login flow, and keeps `claude setup-token` as an
+ * explicit advanced/manual alternative. A manually pasted token is stored in
+ * the provider's `apiKey` (empty => host CLI login).
  */
 export function ClaudeSubscriptionSection({
   provider,
@@ -141,11 +144,11 @@ export function ClaudeSubscriptionSection({
     try {
       const res = await window.kunGui.claudeSubscriptionLogin()
       if (res.ok) {
-        onTokenChange(res.token)
+        // Ambient login must not remain shadowed by a stale setup-token.
+        onTokenChange('')
         setStatus('logged-in')
         setMessage({ kind: 'ok', text: t('claudeSubLoginSuccess') })
-        // Right after login, pull the subscription's model list once and fill it.
-        void fetchModels(res.token)
+        void fetchModels()
       } else {
         setMessage({ kind: 'err', text: loginErrorText(res.message, t) })
       }
@@ -166,7 +169,10 @@ export function ClaudeSubscriptionSection({
     }
   }
 
-  const hasToken = provider.apiKey.trim().length > 0
+  const rawToken = provider.apiKey.trim()
+  const tokenValidation = rawToken ? validateClaudeSubscriptionToken(rawToken) : null
+  const hasToken = tokenValidation?.ok === true
+  const invalidToken = Boolean(tokenValidation && !tokenValidation.ok)
   const downloadPct =
     progress && progress.total > 0
       ? Math.min(100, Math.round((progress.received / progress.total) * 100))
@@ -228,7 +234,7 @@ export function ClaudeSubscriptionSection({
 
       <div className="flex items-center gap-2 text-[13px]">
         {hasToken ? (
-          // A pasted/captured token authenticates regardless of a local CLI login.
+          // A valid manually pasted token takes precedence over ambient CLI login.
           <>
             <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" strokeWidth={1.9} />
             <span className="text-ds-ink">{t('claudeSubStatusToken')}</span>
@@ -311,12 +317,17 @@ export function ClaudeSubscriptionSection({
           onToggleVisibility={() => setShowToken((value) => !value)}
           placeholder={t('claudeSubManualPlaceholder')}
           autoComplete="off"
+          invalid={invalidToken}
           showLabel={t('showSecret')}
           hideLabel={t('hideSecret')}
         />
       </label>
       <p className="text-[12px] leading-5 text-ds-muted">
-        {hasToken ? t('claudeSubTokenSetHint') : t('claudeSubEmptyHint')}
+        {invalidToken
+          ? t('claudeSubTokenInvalid')
+          : hasToken
+            ? t('claudeSubTokenSetHint')
+            : t('claudeSubEmptyHint')}
       </p>
     </div>
   )

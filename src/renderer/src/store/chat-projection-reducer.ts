@@ -95,9 +95,9 @@ export function reduceChatProjection(
         : baseBlocks
       const currentTurnUserId = backgroundNotice
         ? optimisticUserId
-        : reconcileOptimistic || !optimisticUserId
+        : currentOptimisticUserId
           ? event.itemId
-          : optimisticUserId
+          : optimisticUserId ?? event.itemId
       const startedAt = runtimeEventStartedAt(event.createdAt, context.now)
       return {
         ...flushed,
@@ -249,6 +249,7 @@ export function reduceChatProjection(
     }
     case 'user_input_requested': {
       const req = action.payload
+      if (req.questions.length === 0) return {}
       const existing = state.blocks.find(
         (block) => block.kind === 'user_input' && block.requestId === req.requestId
       )
@@ -329,6 +330,7 @@ export function reduceChatProjection(
       const block: Extract<ChatBlock, { kind: 'system' }> = {
         kind: 'system',
         id: event.itemId,
+        ...(event.turnId ? { turnId: event.turnId } : {}),
         createdAt: event.createdAt ?? new Date(context.now).toISOString(),
         text: view.message,
         ...(view.code ? { code: view.code } : {}),
@@ -483,6 +485,14 @@ export function reduceChatProjection(
         )
       }
     }
+    case 'context_snapshot_received':
+      return state.activeThreadId === action.payload.threadId
+        ? { lastContextSnapshot: action.payload }
+        : {}
+    case 'delegated_runtime_received':
+      return state.activeThreadId === action.payload.threadId
+        ? { lastDelegatedRuntimeState: action.payload }
+        : {}
     case 'usage_received':
       return {
         usageRefreshKey: state.usageRefreshKey + 1,
@@ -526,12 +536,13 @@ export function reduceChatProjection(
       const message = context.formatRuntimeError(action.error)
       const detail = context.runtimeErrorDetail(action.error)
       const terminal = action.options?.terminal === true
+      const conversationScoped = action.options?.scope === 'conversation'
       const interrupted = context.isInterruptSettledError(action.error, message)
       const shouldSettle = terminal || !state.busy || interrupted
       const patch = flushLiveProjection(state, context.now, {
         ...finalizeTurnTimingAt(state, context.now),
-        error: interrupted ? null : message,
-        runtimeErrorDetail: interrupted ? null : detail || null
+        error: interrupted || conversationScoped ? null : message,
+        runtimeErrorDetail: interrupted || conversationScoped ? null : detail || null
       })
       if (!shouldSettle) return patch
       patch.busy = false

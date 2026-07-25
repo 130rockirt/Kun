@@ -273,7 +273,32 @@ describe('create_plan tool mapping', () => {
       message: 'model stream exploded',
       severity: 'error'
     })
-    expect(capturedErrorOptions).toEqual({ terminal: true })
+    expect(capturedErrorOptions).toEqual({ terminal: true, scope: 'conversation' })
+  })
+
+  it('settles message-less turn failures without adding a generic duplicate error', async () => {
+    let capturedErrorOptions: ThreadErrorOptions | null = null
+    let runtimeErrorCount = 0
+    const sink: ThreadEventSink = {
+      ...makeSink(),
+      onRuntimeError: () => {
+        runtimeErrorCount += 1
+      },
+      onError: (_error, options) => {
+        capturedErrorOptions = options ?? null
+      }
+    }
+
+    await dispatchKunRuntimeEvent({
+      kind: 'turn_failed',
+      seq: 8,
+      timestamp: '2024-01-01T00:00:00.000Z',
+      threadId: 'thr_1',
+      turnId: 'turn_1'
+    }, sink, async () => undefined)
+
+    expect(runtimeErrorCount).toBe(0)
+    expect(capturedErrorOptions).toEqual({ terminal: true, scope: 'conversation' })
   })
 
   it('does not finish the parent turn for child lifecycle events', async () => {
@@ -1043,6 +1068,79 @@ describe('user input mapping', () => {
     })
   })
 
+  it('maps prompt/message aliases on user-input questions', async () => {
+    let request: unknown = null
+    const sink: ThreadEventSink = {
+      ...makeSink(),
+      onUserInput: (payload) => {
+        request = payload
+      }
+    }
+    await dispatchKunRuntimeEvent(
+      {
+        kind: 'user_input_requested',
+        seq: 8,
+        itemId: 'item_input_alias',
+        inputId: 'input_alias',
+        questions: [
+          {
+            id: 'next_action',
+            prompt: 'Release review finished. What should I do next?',
+            options: [{ label: 'Fix blockers', description: '' }]
+          }
+        ]
+      },
+      sink,
+      async () => undefined
+    )
+    expect(request).toMatchObject({
+      itemId: 'item_input_alias',
+      requestId: 'input_alias',
+      questions: [
+        {
+          id: 'next_action',
+          question: 'Release review finished. What should I do next?',
+          options: [{ label: 'Fix blockers', description: '' }]
+        }
+      ]
+    })
+  })
+
+  it('drops empty user-input requests instead of inventing placeholder text', async () => {
+    let request: unknown = null
+    const sink: ThreadEventSink = {
+      ...makeSink(),
+      onUserInput: (payload) => {
+        request = payload
+      }
+    }
+    await dispatchKunRuntimeEvent(
+      {
+        kind: 'user_input_requested',
+        seq: 9,
+        itemId: 'item_input_empty',
+        inputId: 'input_empty',
+        questions: [{ id: 'blank', options: [{ label: 'Continue', description: '' }] }]
+      },
+      sink,
+      async () => undefined
+    )
+    expect(request).toBeNull()
+    expect(
+      chatBlockFromItem({
+        id: 'item_input_empty',
+        turnId: 'turn_1',
+        threadId: 'thr_1',
+        role: 'tool',
+        status: 'pending',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        kind: 'user_input',
+        inputId: 'input_empty',
+        questions: [{ id: 'blank', options: [{ label: 'Continue', description: '' }] }]
+      })
+    ).toBeNull()
+  })
+
   it('surfaces submitted user-input answers from runtime events', async () => {
     let status: unknown = null
     const sink: ThreadEventSink = {
@@ -1603,6 +1701,152 @@ describe('usage event mapping', () => {
       tokenEconomySavingsTokens: 4096,
       turns: 1
     })
+  })
+})
+
+describe('context snapshot event mapping', () => {
+  it('preserves request-local categories and runtime thresholds', () => {
+    const actions = runtimeProjectionActionsFromEvent({
+      kind: 'context_snapshot',
+      seq: 14,
+      timestamp: '2026-07-24T00:00:00.000Z',
+      threadId: 'thr_1',
+      turnId: 'turn_1',
+      model: 'deepseek-v4-pro',
+      providerId: 'deepseek',
+      stepIndex: 1,
+      contextWindowTokens: 256_000,
+      softThresholdTokens: 192_000,
+      hardThresholdTokens: 217_600,
+      estimatedInputTokens: 12_000,
+      breakdown: {
+        tools: 3_000,
+        system: 2_000,
+        skills: 1_000,
+        messages: 5_000,
+        other: 1_000
+      },
+      toolCount: 21,
+      activeSkillIds: [' skill-a ', '', 'skill-b']
+    })
+
+    expect(actions).toEqual([{
+      type: 'context_snapshot_received',
+      payload: {
+        threadId: 'thr_1',
+        turnId: 'turn_1',
+        model: 'deepseek-v4-pro',
+        providerId: 'deepseek',
+        stepIndex: 1,
+        contextWindowTokens: 256_000,
+        softThresholdTokens: 192_000,
+        hardThresholdTokens: 217_600,
+        estimatedInputTokens: 12_000,
+        breakdown: {
+          tools: 3_000,
+          system: 2_000,
+          skills: 1_000,
+          messages: 5_000,
+          other: 1_000
+        },
+        toolCount: 21,
+        activeSkillIds: ['skill-a', 'skill-b']
+      }
+    }])
+  })
+
+  it('drops incomplete snapshot events instead of showing mixed accounting', () => {
+    expect(runtimeProjectionActionsFromEvent({
+      kind: 'context_snapshot',
+      threadId: 'thr_1',
+      model: 'deepseek-v4-pro'
+    })).toEqual([])
+  })
+
+  it('drops snapshots whose declared total does not equal their categories', () => {
+    expect(runtimeProjectionActionsFromEvent({
+      kind: 'context_snapshot',
+      threadId: 'thr_1',
+      model: 'deepseek-v4-pro',
+      stepIndex: 0,
+      contextWindowTokens: 256_000,
+      softThresholdTokens: 192_000,
+      hardThresholdTokens: 217_600,
+      estimatedInputTokens: 999,
+      breakdown: { tools: 1, system: 2, skills: 3, messages: 4, other: 5 },
+      toolCount: 1,
+      activeSkillIds: []
+    })).toEqual([])
+  })
+
+  it('preserves SDK-managed unknown native history without inventing occupancy', () => {
+    const actions = runtimeProjectionActionsFromEvent({
+      kind: 'context_snapshot',
+      threadId: 'thr_1',
+      turnId: 'turn_2',
+      model: 'claude-sonnet-4-5',
+      providerId: 'claude-subscription',
+      stepIndex: 0,
+      contextWindowTokens: 200_000,
+      softThresholdTokens: 150_000,
+      hardThresholdTokens: 170_000,
+      estimatedInputTokens: 12,
+      breakdown: { tools: 1, system: 2, skills: 3, messages: 6, other: 0 },
+      toolCount: 1,
+      activeSkillIds: [],
+      contextManagement: 'sdk-managed',
+      nativeHistory: 'unknown'
+    })
+    expect(actions).toEqual([{
+      type: 'context_snapshot_received',
+      payload: expect.objectContaining({
+        contextManagement: 'sdk-managed',
+        nativeHistory: 'unknown',
+        estimatedInputTokens: 12
+      })
+    }])
+  })
+})
+
+describe('delegated runtime capability mapping', () => {
+  it('maps bounded capability and rebase state without a native session id', () => {
+    expect(runtimeProjectionActionsFromEvent({
+      kind: 'delegated_runtime',
+      threadId: 'thr_1',
+      turnId: 'turn_1',
+      providerKind: 'cursor-sdk',
+      providerId: 'cursor-subscription',
+      phase: 'rebased',
+      reason: 'history_changed',
+      capabilities: {
+        nativeResume: true,
+        structuredStreaming: true,
+        kunTools: false,
+        externalApproval: false,
+        liveSteering: false,
+        nativeContextTelemetry: false,
+        fork: false
+      }
+    })).toEqual([{
+      type: 'delegated_runtime_received',
+      payload: {
+        threadId: 'thr_1',
+        turnId: 'turn_1',
+        providerKind: 'cursor-sdk',
+        providerId: 'cursor-subscription',
+        phase: 'rebased',
+        reason: 'history_changed',
+        capabilities: {
+          nativeResume: true,
+          structuredStreaming: true,
+          kunTools: false,
+          externalApproval: false,
+          liveSteering: false,
+          nativeContextTelemetry: false,
+          fork: false
+        }
+      }
+    }])
   })
 })
 

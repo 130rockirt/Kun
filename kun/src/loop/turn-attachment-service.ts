@@ -70,10 +70,34 @@ export class TurnAttachmentService {
           mimeType: attachment.mimeType,
           text,
           byteSize: attachment.byteSize,
+          ...(attachment.documentFormat ? { documentFormat: attachment.documentFormat } : {}),
+          ...(attachment.sourceSha256 ? { sourceSha256: attachment.sourceSha256 } : {}),
           ...(attachment.pageCount ? { pageCount: attachment.pageCount } : {}),
           ...(attachment.truncated || text.length < fullText.length ? { truncated: true } : {}),
           ...(attachment.localFilePath ? { localFilePath: attachment.localFilePath } : {})
         })
+        if (supportsImageInput && attachment.visualPreview) {
+          const preview = attachment.visualPreview
+          const previewBase64Bytes = Buffer.byteLength(preview.dataBase64, 'utf8')
+          if (previewBase64Bytes > textFallbackPolicy.textFallbackMaxBase64Bytes) {
+            throw new Error(
+              `attachment ${attachment.id} visual preview exceeds ${textFallbackPolicy.textFallbackMaxBase64Bytes} base64 byte limit`
+            )
+          }
+          totalAttachmentBytes += preview.byteSize
+          if (totalAttachmentBytes > MAX_TURN_ATTACHMENT_BYTES) {
+            throw new Error(`turn attachments exceed ${MAX_TURN_ATTACHMENT_BYTES} byte limit`)
+          }
+          imageAttachments.push({
+            id: `${attachment.id}_preview`,
+            name: `${attachment.name} preview`,
+            mimeType: preview.mimeType,
+            dataBase64: preview.dataBase64,
+            ...(preview.width ? { width: preview.width } : {}),
+            ...(preview.height ? { height: preview.height } : {}),
+            ...(attachment.localFilePath ? { localFilePath: attachment.localFilePath } : {})
+          })
+        }
         if (remainingDocumentChars <= 0) break
         continue
       }

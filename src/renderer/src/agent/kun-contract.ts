@@ -63,10 +63,13 @@ export type CoreAttachmentMetadataJson = {
   width?: number
   height?: number
   documentText?: string
+  documentFormat?: 'pdf' | 'docx' | 'xlsx' | 'pptx' | 'text' | 'csv' | 'json' | 'xml'
+  sourceSha256?: string
   pageCount?: number
   truncated?: boolean
   localFilePath?: string
   textFallback?: CoreAttachmentTextFallbackJson
+  visualPreview?: CoreAttachmentTextFallbackJson
   threadIds?: string[]
   workspaces?: string[]
   createdAt: string
@@ -470,9 +473,11 @@ export type CoreTurnItemJson = {
   inputId?: string
   prompt?: string
   questions?: Array<{
-    header: string
+    header?: string
     id: string
-    question: string
+    question?: string
+    prompt?: string
+    message?: string
     options: Array<{ label: string; description: string }>
     selectionMode?: 'single' | 'multiple'
     minSelections?: number
@@ -660,6 +665,34 @@ export type CoreRuntimeEventJson = {
   toolCount?: number
   changeKind?: 'additive' | 'breaking'
   toolNames?: string[]
+  model?: string
+  providerId?: string
+  stepIndex?: number
+  contextWindowTokens?: number
+  softThresholdTokens?: number
+  hardThresholdTokens?: number
+  estimatedInputTokens?: number
+  breakdown?: {
+    tools?: number
+    system?: number
+    skills?: number
+    messages?: number
+    other?: number
+  }
+  activeSkillIds?: string[]
+  contextManagement?: 'kun-managed' | 'sdk-managed'
+  nativeHistory?: 'known' | 'unknown' | 'none'
+  providerKind?: 'agent-sdk' | 'cursor-sdk' | 'antigravity-cli'
+  phase?: 'portable' | 'resumed' | 'rebased'
+  capabilities?: {
+    nativeResume?: boolean
+    structuredStreaming?: boolean
+    kunTools?: boolean
+    externalApproval?: boolean
+    liveSteering?: boolean
+    nativeContextTelemetry?: boolean
+    fork?: boolean
+  }
   status?: string | number
   /** thread_created / thread_updated: the thread's (possibly upgraded) title. */
   title?: string
@@ -684,9 +717,11 @@ export type CoreRuntimeEventJson = {
   prompt?: string
   inputId?: string
   questions?: Array<{
-    header: string
+    header?: string
     id: string
-    question: string
+    question?: string
+    prompt?: string
+    message?: string
     options: Array<{ label: string; description: string }>
     selectionMode?: 'single' | 'multiple'
     minSelections?: number

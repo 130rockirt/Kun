@@ -140,6 +140,17 @@ describe('write PDF text service', () => {
     expect(result.pages[0]?.text).toContain('Local PDF attachment text')
   }, 15_000)
 
+  it('rejects a renamed non-PDF before parsing', async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), 'ds-gui-local-pdf-spoof-'))
+    const pdfPath = join(workspaceRoot, 'not-really.pdf')
+    await writeFile(pdfPath, 'plain text with a PDF extension')
+
+    await expect(readLocalPdfText({ path: pdfPath })).resolves.toEqual({
+      ok: false,
+      message: 'File content does not match the PDF format.'
+    })
+  })
+
   it('falls back to OCR for image-only local PDF attachments', async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), 'ds-gui-local-pdf-ocr-'))
     const pdfPath = join(workspaceRoot, 'scanned.pdf')

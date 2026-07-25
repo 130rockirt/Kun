@@ -53,7 +53,7 @@ function settings(dataDir: string, model = 'settings-model'): AppSettingsV1 {
     workspaceRoot: '/tmp/workspace',
     conversationWorkspaceRoot: '~/Documents/Kun',
     log: { enabled: false, retentionDays: 7 },
-    checkpointCleanup: { enabled: false, intervalDays: 3 },
+    checkpointCleanup: { createEnabled: false, enabled: false, intervalDays: 3 },
     notifications: { turnComplete: true },
     appBehavior: { openAtLogin: false, startMinimized: false, closeToTray: false },
     keyboardShortcuts: defaultKeyboardShortcuts(),
@@ -130,6 +130,10 @@ describe('upstream model picker list', () => {
       expect(result.modelIds).toContain('deepseek-chat')
       expect(result.modelIds).not.toContain('auto')
       expect(result.defaultModelId).toBe('local-only-model')
+      expect(result.defaultModel).toEqual({
+        providerId: 'custom-provider',
+        modelId: 'local-only-model'
+      })
       expect(result.modelGroups).toEqual(expect.arrayContaining([
         expect.objectContaining({
           providerId: 'custom-provider',
@@ -256,6 +260,29 @@ describe('upstream model picker list', () => {
         })
       ]))
     }
+  })
+
+  it('keeps the configured provider on a default model id shared by multiple providers', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'deepseek-gui-models-'))
+    await mkdir(dataDir, { recursive: true })
+    const configured = settings(dataDir, 'shared-model')
+    configured.provider.providers = configured.provider.providers.map((provider) =>
+      provider.id === 'deepseek'
+        ? { ...provider, models: [...provider.models, 'shared-model'] }
+        : provider.id === 'custom-provider'
+          ? { ...provider, models: [...provider.models, 'shared-model'] }
+          : provider
+    )
+
+    const result = await fetchUpstreamModelIds(configured)
+
+    expect(result).toMatchObject({
+      ok: true,
+      defaultModel: {
+        providerId: 'custom-provider',
+        modelId: 'shared-model'
+      }
+    })
   })
 
   it('never queries the upstream /v1/models catalog for the composer picker (issue #337)', async () => {

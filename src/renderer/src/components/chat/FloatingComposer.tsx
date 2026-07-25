@@ -36,6 +36,8 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { ModelProviderModelGroup } from '@shared/kun-gui-api'
+import type { KunSpeechToTextSettingsV1 } from '@shared/app-settings'
+import { isSpeechToTextConfigured } from '@shared/speech-to-text'
 import type { AttachmentReference, ReviewTarget } from '../../agent/types'
 import { useChatStore } from '../../store/chat-store'
 import type { AppRoute } from '../../store/chat-store-types'
@@ -65,6 +67,7 @@ import {
   useThreadUsageState
 } from '../../hooks/use-thread-usage'
 import { FloatingComposerContextCapacity } from './FloatingComposerContextCapacity'
+import { FloatingComposerUsageHistory } from './FloatingComposerUsageHistory'
 export { calculateContextCapacityPopoverPlacement } from './FloatingComposerContextCapacity'
 import { GitBranchPicker } from './GitBranchPicker'
 import { WorkspaceProjectPicker } from './WorkspaceProjectPicker'
@@ -99,6 +102,7 @@ export type {
   ComposerImageTransferSource
 } from './FloatingComposerAttachments'
 import { useComposerDraft } from './use-composer-draft'
+import { useComposerInputHistory } from './use-composer-input-history'
 import { usePromptOptimizationSettings, useSpeechToTextSettings, useVoiceDictation } from './use-voice-dictation'
 import { VoiceRecordingStrip } from './VoiceRecordingStrip'
 import type { DesignComposerContext } from '../../design/design-composer-context'
@@ -118,6 +122,12 @@ import {
 export type { ComposerFileReference } from '../../lib/composer-file-references'
 export type { ComposerExecutionSettings } from './FloatingComposerExecutionPicker'
 
+export function shouldShowVoiceDictation(
+  speechToText: KunSpeechToTextSettingsV1 | null | undefined
+): boolean {
+  return speechToText != null && isSpeechToTextConfigured(speechToText)
+}
+
 export function returnQueuedMessageToComposer(
   message: QueuedComposerMessage,
   onRemove: (id: string) => void,
@@ -133,6 +143,18 @@ export function shouldSurfaceComposerUserInput(route: AppRoute, compact: boolean
   // Chat/Design surface and would duplicate the prompt if they rendered it.
   if (route === 'write') return true
   return !compact && (route === 'chat' || route === 'design')
+}
+
+export function shouldShowUsageHistory({
+  compact,
+  route,
+  runtimeReady
+}: {
+  compact: boolean
+  route: AppRoute
+  runtimeReady: boolean
+}): boolean {
+  return !compact && route === 'chat' && runtimeReady
 }
 export type { DesignComposerContext } from '../../design/design-composer-context'
 
@@ -216,12 +238,6 @@ type Props = {
    * Hide the `/btw` slash entry (e.g. inside a side conversation).
    */
   hideBtwCommand?: boolean
-  /** Active model's context window, for the 上下文容量 gauge. */
-  contextWindowTokens?: number
-  /** Tool definitions advertised to the model (built-ins are added on top). */
-  runtimeToolCount?: number
-  /** Skills in the always-injected catalog. */
-  runtimeSkillCount?: number
 }
 
 const EMPTY_MODEL_GROUPS: ModelProviderModelGroup[] = []
@@ -320,10 +336,7 @@ export function FloatingComposer({
   onReviewCommand,
   onExecutionSettingsChange,
   onBtwCommand,
-  hideBtwCommand = false,
-  contextWindowTokens,
-  runtimeToolCount,
-  runtimeSkillCount
+  hideBtwCommand = false
 }: Props): ReactElement {
   const { t, i18n } = useTranslation('common')
   const route = useChatStore((s) => s.route)
@@ -333,7 +346,6 @@ export function FloatingComposer({
     ? storeActiveThreadId
     : activeThreadIdOverride
   const usageRefreshKey = useChatStore((s) => s.usageRefreshKey)
-  const lastTurnUsage = useChatStore((s) => s.lastTurnUsage)
   const threads = useChatStore((s) => s.threads)
   const compactActiveThread = useChatStore((s) => s.compactActiveThread)
   const forkActiveThread = useChatStore((s) => s.forkActiveThread)
@@ -383,12 +395,7 @@ export function FloatingComposer({
       }
     }
   })
-  const showVoiceDictation = Boolean(
-    speechToTextSettings?.enabled &&
-    speechToTextSettings.model.trim() &&
-    (speechToTextSettings.protocol === 'local-whisper' ||
-      (speechToTextSettings.baseUrl.trim() && speechToTextSettings.apiKey.trim()))
-  )
+  const showVoiceDictation = shouldShowVoiceDictation(speechToTextSettings)
   const activeClawChannel = useMemo(
     () => clawChannels.find((channel) => channel.id === activeClawChannelId) ?? null,
     [activeClawChannelId, clawChannels]
@@ -400,10 +407,10 @@ export function FloatingComposer({
     ? threads.find((thread) => thread.id === activeThreadId) ?? null
     : null
   const activeThreadArchived = activeThread?.archived === true
-  const showThreadUsageFooter = !compact && route === 'chat' && Boolean(activeThreadId) && runtimeReady
+  const showUsageHistoryFooter = shouldShowUsageHistory({ compact, route, runtimeReady })
   const threadUsageState = useThreadUsageState(
     activeThreadId,
-    showThreadUsageFooter,
+    showUsageHistoryFooter && Boolean(activeThreadId),
     `${activeThread?.updatedAt ?? ''}:${busy ? 'busy' : 'idle'}:${usageRefreshKey}`
   )
   const threadUsage = threadUsageState.usage
@@ -455,6 +462,7 @@ export function FloatingComposer({
   const stretchModelPicker =
     compact && modelPickerMode === 'combobox' && !showToolbarStartControls && !hideModelPicker
   const draft = useComposerDraft({ input, canCompose: canEditComposer })
+  const inputHistory = useComposerInputHistory()
   const slashQuery = getSlashQuery(input)
   const [composerMenuOpen, setComposerMenuOpen] = useState(false)
   const [worktreeBranches, setWorktreeBranches] = useState<string[]>([])
@@ -502,10 +510,6 @@ export function FloatingComposer({
   const composerMenuButtonRef = useRef<HTMLButtonElement | null>(null)
   const composerMenuPanelRef = useRef<HTMLDivElement | null>(null)
   const goalPanelRef = useRef<HTMLDivElement | null>(null)
-  const lastTurnInputTokens =
-    lastTurnUsage && lastTurnUsage.threadId === activeThreadId
-      ? lastTurnUsage.snapshot.inputTokens
-      : null
   const goalRuntimeStartedAtRef = useRef<number | null>(null)
   const placeholder = !runtimeReady
     ? t('runtimeActionNeedsConnection')
@@ -536,12 +540,13 @@ export function FloatingComposer({
             : t('clawComposerHintNeedsInbound')
           : useWorktreePool
             ? t('composerWorktreeModeHint')
-            : null
+            : t('composerShortcut')
   const showTodoProgress = !compact
     && route === 'chat'
     && Boolean(activeThreadId)
     && activeThreadTodos?.threadId === activeThreadId
     && activeThreadTodos.items.length > 0
+    && activeThreadTodos.items.some((item) => item.status !== 'completed')
     && slashQuery == null
     && !composerMenuOpen
     && !goalPanelOpen
@@ -883,6 +888,7 @@ export function FloatingComposer({
       const trimmed = input.trim()
       if (!trimmed.startsWith('/')) {
         if (trimmed && userInput.submitTypedText(input)) {
+          inputHistory.push(input)
           setInput('')
           draft.focusComposer()
         }
@@ -951,10 +957,12 @@ export function FloatingComposer({
     // no real command (e.g. a free-form answer like "/usr/local/bin") still
     // answers the current question instead of leaking into chat via onSend.
     if (userInput.active && input.trim() && userInput.submitTypedText(input)) {
+      inputHistory.push(input)
       setInput('')
       draft.focusComposer()
       return
     }
+    inputHistory.push(input)
     onSend()
   }
   dictationPrimaryActionRef.current = primaryActionDisabled ? null : handlePrimaryAction
@@ -967,6 +975,8 @@ export function FloatingComposer({
     if (fileMentions.handleKeyDown(event, composing)) return
 
     if (slashCommandMenu.handleKeyDown(event, composing)) return
+
+    if (inputHistory.handleKeyDown(event, { input, setInput, composing })) return
 
     // Esc cancels a pending ask-user request. (Option picking is click-only:
     // a bare-digit accelerator would hijack the first character of a
@@ -1070,7 +1080,7 @@ export function FloatingComposer({
           data-composer-floaters
           className="pointer-events-none absolute inset-x-0 bottom-full z-30 mb-2 flex flex-col items-center gap-2"
         >
-          {runtimeReady ? <BackgroundShellOverlay /> : null}
+          {runtimeReady ? <BackgroundShellOverlay threadId={activeThreadId} /> : null}
           {showGoalFloater && activeThreadGoal && !pendingUserInputBlock ? (
             <div className="pointer-events-auto flex min-h-11 w-full max-w-[46rem] items-center gap-2 rounded-full border border-ds-border bg-white px-3 py-1.5 text-ds-muted shadow-[0_12px_34px_rgba(20,47,95,0.10)] backdrop-blur-xl dark:bg-ds-card">
               <Target className="h-3.5 w-3.5 shrink-0 text-ds-faint" strokeWidth={1.9} />
@@ -1503,7 +1513,7 @@ export function FloatingComposer({
             <input
               ref={fileInputRef}
               type="file"
-              accept="image/png,image/jpeg,image/webp,application/pdf,.pdf"
+              accept="image/png,image/jpeg,image/webp,application/pdf,.pdf,.docx,.xlsx,.pptx"
               multiple
               className="hidden"
               onChange={handleAttachmentInput}
@@ -1614,10 +1624,8 @@ export function FloatingComposer({
                       compact={compact}
                       route={route}
                       activeThreadId={activeThreadId}
-                      lastTurnInputTokens={lastTurnInputTokens}
-                      contextWindowTokens={contextWindowTokens}
-                      runtimeToolCount={runtimeToolCount}
-                      runtimeSkillCount={runtimeSkillCount}
+                      selectedModel={composerModel}
+                      selectedProviderId={composerProviderId}
                     />
                   )}
                   {hideModelPicker ? null : (
@@ -1735,9 +1743,8 @@ export function FloatingComposer({
                 </select>
               </label>
             ) : null}
-            {showThreadUsageFooter ? (
-              <div
-                className="ds-composer-usage ds-no-drag inline-flex min-h-7 max-w-full min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 overflow-visible rounded-lg border border-ds-border-muted bg-ds-card px-2.5 py-0.5 text-[12.5px] font-medium leading-5 text-ds-muted shadow-sm"
+            {showUsageHistoryFooter ? (
+              <FloatingComposerUsageHistory
                 title={
                   threadUsage
                     ? t(
@@ -1755,7 +1762,9 @@ export function FloatingComposer({
                         turns: threadUsage.turns
                         }
                       )
-                    : t('sessionUsageUnavailable')
+                    : activeThreadId
+                      ? t('sessionUsageUnavailable')
+                      : t('usageHistoryOpen')
                 }
               >
                 <BarChart3 className="h-3.5 w-3.5 shrink-0 text-ds-faint" strokeWidth={1.9} />
@@ -1802,14 +1811,18 @@ export function FloatingComposer({
                       {t('sessionUsageTurns', { turns: threadUsage.turns })}
                     </span>
                   </>
-                ) : (
+                ) : activeThreadId ? (
                   <span className="shrink-0 text-ds-faint">
                     {threadUsageState.loading
                       ? t('sessionUsageLoading')
                       : t('sessionUsageUnavailable')}
                   </span>
+                ) : (
+                  <span className="shrink-0 text-ds-muted">
+                    {t('usageHistoryTitle')}
+                  </span>
                 )}
-              </div>
+              </FloatingComposerUsageHistory>
             ) : null}
           </div>
           {footerHint ? (

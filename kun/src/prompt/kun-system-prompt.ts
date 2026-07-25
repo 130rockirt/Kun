@@ -49,6 +49,7 @@ type ToolPreferenceSpec = {
   name: string
   description: string
   providerKind?: string
+  inputSchema?: Record<string, unknown>
 }
 
 const SOURCE_EXPLORATION_PATTERN =
@@ -131,6 +132,37 @@ export function buildToolPreferenceInstruction(
     )
   }
 
+  if (names.has('delegate_task')) {
+    const delegateTool = sortedTools.find((tool) => tool.name === 'delegate_task')
+    const profileAdvertised = hasInputProperty(delegateTool, 'profile')
+    const customAgentAdvertised = hasInputProperty(delegateTool, 'custom_agent')
+    bullets.push(
+      'Use `delegate_task` when a substantial task benefits from specialist expertise, a fresh independent review, or parallel investigation of independent workstreams. Delegate a clear bounded outcome with enough context; keep integration and final verification in the parent agent.'
+    )
+    bullets.push(
+      'Do not delegate trivial work, tightly coupled sequential steps, or tasks the parent can complete faster directly. Issue multiple child calls together only when they are genuinely independent.'
+    )
+    if (names.has('list_subagent_profiles')) {
+      if (profileAdvertised) {
+        bullets.push(
+          'Use `list_subagent_profiles` only when exact roster knowledge would change task decomposition or profile selection. Pass an exact returned `profile` id, or omit `profile` for automatic routing over the effective reusable catalog.'
+        )
+      } else if (customAgentAdvertised) {
+        bullets.push(
+          'Use `list_subagent_profiles` only when the current one-run custom-role capability details would change task decomposition. Define the role with `custom_agent`; reusable profile selection and automatic catalog routing are unavailable in this mode.'
+        )
+      } else {
+        bullets.push(
+          'Use `list_subagent_profiles` only when the active subagent-mode details would change task decomposition or delegation.'
+        )
+      }
+    }
+  } else if (names.has('list_subagent_profiles')) {
+    bullets.push(
+      'Use `list_subagent_profiles` to inspect the active subagent mode while planning; the read-only discovery tool does not create a child run.'
+    )
+  }
+
   if (memoryTools.length > 0) {
     bullets.push(
       `Use ${formatToolNames(memoryTools)} only for durable user-approved facts or preferences, never for transient task state or content already available in the workspace.`
@@ -166,6 +198,17 @@ function presentNames(
   candidates: readonly string[]
 ): string[] {
   return candidates.filter((name) => available.has(name))
+}
+
+function hasInputProperty(
+  tool: ToolPreferenceSpec | undefined,
+  property: string
+): boolean {
+  const schema = tool?.inputSchema
+  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) return false
+  const properties = schema.properties
+  if (!properties || typeof properties !== 'object' || Array.isArray(properties)) return false
+  return Object.prototype.hasOwnProperty.call(properties, property)
 }
 
 function formatToolNames(names: readonly string[]): string {

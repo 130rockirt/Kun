@@ -71,6 +71,8 @@ export type GitCheckpointCleanupDueResult =
 
 type GitCheckpointCleanupState = {
   lastRunAt?: string
+  /** App version that last completed a cleanup pass (forces a run after upgrades). */
+  lastAppVersion?: string
 }
 
 const DAY_MS = 24 * 60 * 60 * 1_000
@@ -481,14 +483,42 @@ function isCheckpointCleanupDue(lastRunAt: string | undefined, intervalDays: num
 // disable it with graceMs: 0.
 const CHECKPOINT_CLEANUP_GRACE_MS = 10 * 60 * 1_000
 
+async function resolveCheckpointCreatedMs(root: string, checkpointId: string): Promise<number | null> {
+  const metadata = await readMetadata(root, checkpointId)
+  if (metadata) {
+    const createdMs = Date.parse(metadata.createdAt)
+    if (Number.isFinite(createdMs)) return createdMs
+  }
+  const named = checkpointNameTimestamp(checkpointId)
+  if (named > 0) return named
+  try {
+    const dirStat = await stat(join(root, checkpointId))
+    return dirStat.mtimeMs
+  } catch {
+    return null
+  }
+}
+
 export async function cleanupUnusedGitCheckpoints(params: {
   dataDir: string
   checkpointsRoot?: string
+  /** Delete checkpoints older than this many days (by createdAt / name / mtime). */
+  maxAgeDays?: number
+  /** Also enforce the per-thread cap across every thread in the store. */
+  maxPerThread?: number
   graceMs?: number
   now?: Date
 }): Promise<GitCheckpointCleanupResult> {
   const graceMs = params.graceMs ?? CHECKPOINT_CLEANUP_GRACE_MS
   const nowMs = (params.now ?? new Date()).getTime()
+  const maxAgeMs =
+    typeof params.maxAgeDays === 'number' && Number.isFinite(params.maxAgeDays) && params.maxAgeDays > 0
+      ? params.maxAgeDays * DAY_MS
+      : null
+  const maxPerThread =
+    typeof params.maxPerThread === 'number' && Number.isFinite(params.maxPerThread)
+      ? Math.max(1, Math.min(100, Math.floor(params.maxPerThread)))
+      : DEFAULT_MAX_CHECKPOINTS_PER_THREAD
   const root = resolveCheckpointsRoot(params.dataDir, params.checkpointsRoot)
   const referenced = await collectReferencedCheckpointIds(params.dataDir)
   const result: GitCheckpointCleanupResult = {
@@ -513,11 +543,16 @@ export async function cleanupUnusedGitCheckpoints(params: {
     if (!entry.isDirectory()) continue
     const checkpointId = entry.name
     result.scanned += 1
+    const createdMs = await resolveCheckpointCreatedMs(root, checkpointId)
+    const expiredByAge =
+      maxAgeMs != null && createdMs != null && nowMs - createdMs >= maxAgeMs
+    // A message may expose this checkpoint as its rollback target. Retain it
+    // regardless of its age so cleanup can never leave a broken rollback link.
     if (referenced.has(checkpointId)) {
       result.kept += 1
       continue
     }
-    if (graceMs > 0) {
+    if (!expiredByAge && graceMs > 0) {
       try {
         const dirStat = await stat(join(root, checkpointId))
         if (nowMs - dirStat.mtimeMs < graceMs) {
@@ -539,6 +574,17 @@ export async function cleanupUnusedGitCheckpoints(params: {
     }
   }
 
+  // Keep all checkpoints that remain reachable from thread history. The cap is
+  // deliberately a soft limit over unreferenced directories only: deleting a
+  // referenced checkpoint would turn an existing rollback action into data loss.
+  const pruned = await pruneAllThreadCheckpoints(root, maxPerThread, referenced)
+  for (const checkpointId of pruned.deleted) {
+    if (result.deletedIds.includes(checkpointId)) continue
+    result.deleted += 1
+    result.deletedIds.push(checkpointId)
+    result.kept = Math.max(0, result.kept - 1)
+  }
+
   return result
 }
 
@@ -548,22 +594,41 @@ export async function cleanupUnusedGitCheckpointsIfDue(params: {
   intervalDays: number
   now?: Date
   graceMs?: number
+  maxPerThread?: number
+  /**
+   * When true, skip the interval gate (used on app startup so retention always
+   * runs once per launch). Age pruning still uses `intervalDays`.
+   */
+  force?: boolean
+  /** When set and different from the last recorded version, force a cleanup pass. */
+  appVersion?: string
 }): Promise<GitCheckpointCleanupDueResult> {
   const now = params.now ?? new Date()
   const root = resolveCheckpointsRoot(params.dataDir, params.checkpointsRoot)
   const state = await readCleanupState(root)
   const lastRunAt = typeof state.lastRunAt === 'string' ? state.lastRunAt : undefined
-  if (!isCheckpointCleanupDue(lastRunAt, params.intervalDays, now)) {
+  const appVersion = typeof params.appVersion === 'string' ? params.appVersion.trim() : ''
+  const versionChanged = Boolean(appVersion) && state.lastAppVersion !== appVersion
+  if (!params.force && !versionChanged && !isCheckpointCleanupDue(lastRunAt, params.intervalDays, now)) {
     return { due: false, lastRunAt: lastRunAt ?? null }
   }
   const result = await cleanupUnusedGitCheckpoints({
     dataDir: params.dataDir,
     ...(params.checkpointsRoot ? { checkpointsRoot: params.checkpointsRoot } : {}),
+    maxAgeDays: params.intervalDays,
+    ...(params.maxPerThread !== undefined ? { maxPerThread: params.maxPerThread } : {}),
     now,
     ...(params.graceMs !== undefined ? { graceMs: params.graceMs } : {})
   })
   const nextLastRunAt = now.toISOString()
-  await writeCleanupState(root, { lastRunAt: nextLastRunAt })
+  await writeCleanupState(root, {
+    lastRunAt: nextLastRunAt,
+    ...(appVersion
+      ? { lastAppVersion: appVersion }
+      : typeof state.lastAppVersion === 'string'
+        ? { lastAppVersion: state.lastAppVersion }
+        : {})
+  })
   return { due: true, lastRunAt: nextLastRunAt, result }
 }
 
@@ -650,8 +715,11 @@ export async function createGitCheckpoint(params: {
     await writeFile(join(dir, 'metadata.json'), JSON.stringify(metadata, null, 2), 'utf-8')
     const manifest = await createCheckpointManifestV1({ metadata, workspaceRoot })
     await writeFile(manifestPath(root, checkpointId), JSON.stringify(manifest, null, 2), 'utf-8')
-    // Bound per-thread retention so an active thread cannot grow unboundedly.
-    await pruneThreadCheckpoints(root, params.threadId, maxPerThread, checkpointId).catch(() => undefined)
+    // Retention may only remove checkpoints that thread history no longer
+    // references. This keeps all visible rollback actions restorable.
+    const referenced = await collectReferencedCheckpointIds(params.dataDir)
+    await pruneThreadCheckpoints(root, params.threadId, maxPerThread, checkpointId, referenced)
+      .catch(() => undefined)
     return { ok: true, checkpointId, repositoryRoot, head, currentBranch }
   } catch (error) {
     const failure = checkpointFailure(error)
@@ -663,15 +731,18 @@ export async function createGitCheckpoint(params: {
 }
 
 /**
- * Keep at most `max` checkpoints for a thread (issue #651, per-thread cap).
- * Oldest checkpoints (by createdAt, falling back to the `gcp_<ts>_` name) are
- * removed first; `keepId` (the just-created checkpoint) is always retained.
+ * Keep at most `max` unreferenced checkpoints for a thread. Checkpoints still
+ * referenced by saved messages are never pruned: they are user-visible rollback
+ * targets, so the cap is intentionally soft when thread history needs them.
+ * Oldest eligible checkpoints (by createdAt, falling back to the
+ * `gcp_<ts>_` name) are removed first; `keepId` is always retained.
  */
 export async function pruneThreadCheckpoints(
   root: string,
   threadId: string,
   max: number,
-  keepId?: string
+  keepId?: string,
+  referencedIds: ReadonlySet<string> = new Set()
 ): Promise<{ deleted: string[] }> {
   if (max <= 0) return { deleted: [] }
   let entries: Dirent<string>[]
@@ -689,17 +760,70 @@ export async function pruneThreadCheckpoints(
     const order = Number.isFinite(createdMs) ? createdMs : checkpointNameTimestamp(entry.name)
     owned.push({ id: entry.name, order })
   }
-  // Newest first; keep the first `max`, delete the rest (never the keepId).
+  // Newest first; keep the first `max` unreferenced entries. Referenced
+  // checkpoints and the just-created checkpoint are always protected.
   owned.sort((a, b) => b.order - a.order)
   const deleted: string[] = []
-  for (let i = 0; i < owned.length; i += 1) {
-    const { id } = owned[i]
-    if (i < max || id === keepId) continue
+  const keepIdCountsTowardCap = Boolean(
+    keepId && !referencedIds.has(keepId) && owned.some(({ id }) => id === keepId)
+  )
+  let keptUnreferenced = keepIdCountsTowardCap ? 1 : 0
+  for (const { id } of owned) {
+    if (id === keepId || referencedIds.has(id)) continue
+    if (keptUnreferenced < max) {
+      keptUnreferenced += 1
+      continue
+    }
     try {
       await rm(checkpointDir(root, id), { recursive: true, force: true })
       deleted.push(id)
     } catch {
       // best-effort
+    }
+  }
+  return { deleted }
+}
+
+/** Enforce the unreferenced checkpoint cap for every thread under `root`. */
+export async function pruneAllThreadCheckpoints(
+  root: string,
+  max: number,
+  referencedIds: ReadonlySet<string> = new Set()
+): Promise<{ deleted: string[] }> {
+  if (max <= 0) return { deleted: [] }
+  let entries: Dirent<string>[]
+  try {
+    entries = await readdir(root, { withFileTypes: true })
+  } catch {
+    return { deleted: [] }
+  }
+  const byThread = new Map<string, Array<{ id: string; order: number }>>()
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue
+    const metadata = await readMetadata(root, entry.name)
+    if (!metadata?.threadId) continue
+    const createdMs = Date.parse(metadata.createdAt)
+    const order = Number.isFinite(createdMs) ? createdMs : checkpointNameTimestamp(entry.name)
+    const list = byThread.get(metadata.threadId) ?? []
+    list.push({ id: entry.name, order })
+    byThread.set(metadata.threadId, list)
+  }
+  const deleted: string[] = []
+  for (const owned of byThread.values()) {
+    owned.sort((a, b) => b.order - a.order)
+    let keptUnreferenced = 0
+    for (const { id } of owned) {
+      if (referencedIds.has(id)) continue
+      if (keptUnreferenced < max) {
+        keptUnreferenced += 1
+        continue
+      }
+      try {
+        await rm(checkpointDir(root, id), { recursive: true, force: true })
+        deleted.push(id)
+      } catch {
+        // best-effort
+      }
     }
   }
   return { deleted }

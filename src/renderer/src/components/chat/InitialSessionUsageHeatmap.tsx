@@ -1,5 +1,6 @@
 import type { ReactElement } from 'react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { AlertCircle, ChevronDown, ChevronUp, Loader2, RefreshCw, Sparkles } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import {
@@ -29,7 +30,7 @@ type UsageRangeKey = 'all' | '90d' | '30d' | '7d'
 type UsageTabKey = 'overview' | 'models'
 
 const USAGE_HEATMAP_PREVIEW_CELLS = 14 * 7
-const USAGE_HEATMAP_GRID_DAYS = 26 * 7
+const USAGE_HEATMAP_GRID_DAYS = 365
 const USAGE_RANGE_DAYS: Record<UsageRangeKey, number> = {
   all: 365,
   '90d': 90,
@@ -61,11 +62,18 @@ export const USAGE_HEATMAP_CONTRAST_COLORS = [
   { level: 4, light: '#1d4ed8', dark: '#60a5fa' }
 ] as const
 
-function calendarWeeks(buckets: CalendarCell[]): CalendarWeek[] {
+export function buildUsageCalendarWeeks(buckets: DailyUsageBucket[]): CalendarWeek[] {
+  if (buckets.length === 0) return []
+  const sorted = [...buckets].sort((left, right) => left.date.localeCompare(right.date))
+  const first = new Date(`${sorted[0].date}T00:00:00.000Z`)
+  const aligned: CalendarCell[] = [
+    ...Array.from({ length: Number.isNaN(first.getTime()) ? 0 : first.getUTCDay() }, () => null),
+    ...sorted
+  ]
+  while (aligned.length % 7 !== 0) aligned.push(null)
   const weeks: CalendarWeek[] = []
-  for (let index = 0; index < buckets.length; index += 7) {
-    const weekCells = buckets.slice(index, index + 7)
-    while (weekCells.length < 7) weekCells.push(null)
+  for (let index = 0; index < aligned.length; index += 7) {
+    const weekCells = aligned.slice(index, index + 7)
     weeks.push({
       key: weekCells.find((cell) => cell)?.date ?? `week-${index / 7}`,
       cells: weekCells
@@ -76,13 +84,15 @@ function calendarWeeks(buckets: CalendarCell[]): CalendarWeek[] {
 
 export function usageHeatmapIntensityLevel(
   bucket: Pick<DailyUsageBucket, 'totalTokens' | 'turns'>,
-  maxTokens: number,
-  maxTurns: number
+  positiveMetrics: number[],
+  useTurns = false
 ): number {
-  const metric = maxTokens > 0 ? bucket.totalTokens : bucket.turns
-  const max = maxTokens > 0 ? maxTokens : maxTurns
-  if (metric <= 0 || max <= 0) return 0
-  return Math.max(1, Math.min(4, Math.ceil((metric / max) * 4)))
+  const metric = useTurns ? bucket.turns : bucket.totalTokens
+  if (metric <= 0 || positiveMetrics.length === 0) return 0
+  const sorted = [...positiveMetrics].sort((left, right) => left - right)
+  let rank = 0
+  while (rank < sorted.length && sorted[rank] <= metric) rank += 1
+  return Math.max(1, Math.min(4, Math.ceil((rank / sorted.length) * 4)))
 }
 
 function usageHasBucketActivity(bucket: Pick<DailyUsageBucket, 'totalTokens' | 'turns'>): boolean {
@@ -199,61 +209,167 @@ function HeatmapGrid({
   onSelect: (bucket: DailyUsageBucket) => void
 }): ReactElement {
   const { t, i18n } = useTranslation('common')
-  const weeks = useMemo(() => calendarWeeks(buckets), [buckets])
-  const maxTokens = useMemo(() => Math.max(0, ...buckets.map((bucket) => bucket.totalTokens)), [buckets])
-  const maxTurns = useMemo(() => Math.max(0, ...buckets.map((bucket) => bucket.turns)), [buckets])
+  const containerRef = useRef<HTMLDivElement>(null)
+  const [containerWidth, setContainerWidth] = useState(760)
+  const [tooltip, setTooltip] = useState<{
+    bucket: DailyUsageBucket
+    left: number
+    top: number
+  } | null>(null)
+  const weeks = useMemo(() => buildUsageCalendarWeeks(buckets), [buckets])
+  const useTurns = !buckets.some((bucket) => bucket.totalTokens > 0)
+  const positiveMetrics = useMemo(
+    () => buckets
+      .map((bucket) => useTurns ? bucket.turns : bucket.totalTokens)
+      .filter((value) => value > 0),
+    [buckets, useTurns]
+  )
   const skeletonWeeks = Array.from({ length: Math.ceil(USAGE_HEATMAP_GRID_DAYS / 7) }, (_, week) =>
     Array.from({ length: 7 }, (_, day) => week * 7 + day)
   )
   const weekCount = loading ? skeletonWeeks.length : Math.max(weeks.length, 1)
+  const cellSize = Math.max(10, Math.min(14, Math.floor((containerWidth - 32 - (weekCount - 1) * 3) / weekCount)))
+  const gridWidth = weekCount * cellSize + (weekCount - 1) * 3
+  const monthLabels = weeks.map((week, index) => {
+    const bucket = week.cells.find((cell) => cell?.date.endsWith('-01'))
+      ?? (index === 0 ? week.cells.find((cell) => cell) : undefined)
+    if (!bucket) return ''
+    const parsed = new Date(`${bucket.date}T00:00:00.000Z`)
+    return Number.isNaN(parsed.getTime())
+      ? ''
+      : new Intl.DateTimeFormat(i18n.language, { month: 'short', timeZone: 'UTC' }).format(parsed)
+  })
+
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(([entry]) => {
+      if (entry?.contentRect.width > 0) setContainerWidth(entry.contentRect.width)
+    })
+    observer.observe(container)
+    return () => observer.disconnect()
+  }, [])
+
+  const showTooltip = (bucket: DailyUsageBucket, element: HTMLElement): void => {
+    onSelect(bucket)
+    const rect = element.getBoundingClientRect()
+    const width = 240
+    const left = Math.max(8, Math.min(rect.left + rect.width / 2 - width / 2, window.innerWidth - width - 8))
+    const top = Math.max(8, Math.min(rect.bottom + 8, window.innerHeight - 174))
+    setTooltip({ bucket, left, top })
+  }
 
   return (
-    <div className="w-full min-w-0">
-      <div className="max-w-full pb-1">
-        <div
-          className="grid w-full gap-1"
-          style={{ gridTemplateColumns: `repeat(${weekCount}, minmax(0, 1fr))` }}
-          aria-label={t('usageHeatmapGridLabel')}
-        >
+    <div ref={containerRef} className="w-full min-w-0">
+      <div className="max-w-full overflow-x-auto pb-1 [scrollbar-width:thin]">
+        <div className="min-w-max">
+          <div className="mb-1 grid pl-[28px] text-[10px] text-ds-faint" style={{
+            gridTemplateColumns: `repeat(${weekCount}, ${cellSize}px)`,
+            gap: '3px'
+          }}>
+            {(loading ? Array.from({ length: weekCount }, () => '') : monthLabels).map((label, index) => (
+              <span key={`month-${index}`} className="h-4 whitespace-nowrap">{label}</span>
+            ))}
+          </div>
+          <div className="flex gap-2">
+            <div
+              className="grid shrink-0 grid-rows-7 text-[9px] leading-none text-ds-faint"
+              style={{ rowGap: '3px' }}
+              aria-hidden
+            >
+              {['', t('usageHeatmapWeekdayMon', { defaultValue: 'M' }), '', t('usageHeatmapWeekdayWed', { defaultValue: 'W' }), '', t('usageHeatmapWeekdayFri', { defaultValue: 'F' }), ''].map((label, index) => (
+                <span key={`${label}-${index}`} className="flex w-5 items-center">{label}</span>
+              ))}
+            </div>
+            <div
+              className="grid"
+              style={{ gridTemplateColumns: `repeat(${weekCount}, ${cellSize}px)`, gap: '3px', width: gridWidth }}
+              role="grid"
+              aria-label={t('usageHeatmapGridLabel')}
+            >
           {loading
             ? skeletonWeeks.map((week) => (
-                <span key={week[0]} className="grid grid-rows-7 gap-1">
+                <span key={week[0]} className="grid grid-rows-7" style={{ rowGap: '3px' }}>
                   {week.map((cell) => (
                     <span
                       key={cell}
-                      className="aspect-square w-full animate-pulse rounded-[3px] border border-ds-border-muted bg-ds-subtle"
+                      className="animate-pulse rounded-[3px] border border-ds-border-muted bg-ds-subtle"
+                      style={{ width: cellSize, height: cellSize }}
                     />
                   ))}
                 </span>
               ))
             : weeks.map((week) => (
-                <span key={week.key} className="grid grid-rows-7 gap-1">
+                <span key={week.key} className="grid grid-rows-7" style={{ rowGap: '3px' }} role="row">
                   {week.cells.map((bucket, index) =>
                     bucket ? (
                       <button
                         key={bucket.date}
                         type="button"
+                        role="gridcell"
                         title={dailySummary(bucket, t, i18n.language)}
                         aria-label={dailySummary(bucket, t, i18n.language)}
-                        onMouseEnter={() => onSelect(bucket)}
-                        onFocus={() => onSelect(bucket)}
-                        onClick={() => onSelect(bucket)}
-                        className={`aspect-square w-full rounded-[3px] border transition focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-ds-bg ${USAGE_HEATMAP_INTENSITY_CLASSES[usageHeatmapIntensityLevel(bucket, maxTokens, maxTurns)]} ${
+                        onMouseEnter={(event) => showTooltip(bucket, event.currentTarget)}
+                        onMouseLeave={() => setTooltip(null)}
+                        onFocus={(event) => showTooltip(bucket, event.currentTarget)}
+                        onBlur={() => setTooltip(null)}
+                        onClick={(event) => showTooltip(bucket, event.currentTarget)}
+                        className={`rounded-[3px] border transition focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-1 focus:ring-offset-ds-bg ${USAGE_HEATMAP_INTENSITY_CLASSES[usageHeatmapIntensityLevel(bucket, positiveMetrics, useTurns)]} ${
                           selected?.date === bucket.date ? 'ring-2 ring-accent ring-offset-2 ring-offset-ds-bg' : ''
                         }`}
+                        style={{ width: cellSize, height: cellSize }}
                       />
                     ) : (
                       <span
                         key={`blank-${week.key}-${index}`}
-                        className="aspect-square w-full rounded-[3px] border border-ds-border-muted bg-ds-subtle"
+                        className="rounded-[3px]"
+                        style={{ width: cellSize, height: cellSize }}
                         aria-hidden
                       />
                     )
                   )}
                 </span>
               ))}
+            </div>
+          </div>
         </div>
       </div>
+      <div className="mt-2 flex items-center justify-center gap-2 text-[10px] text-ds-faint">
+        <span>{t('usageHeatmapLess', { defaultValue: 'Less' })}</span>
+        <span className="flex items-center gap-1">
+          {USAGE_HEATMAP_INTENSITY_CLASSES.map((className, index) => (
+            <span key={index} className={`h-2.5 w-2.5 rounded-[3px] border ${className}`} />
+          ))}
+        </span>
+        <span>{t('usageHeatmapMore', { defaultValue: 'More' })}</span>
+      </div>
+      {tooltip && typeof document !== 'undefined' ? createPortal(
+        <div
+          role="tooltip"
+          className="pointer-events-none fixed z-[12000] w-[240px] rounded-lg border border-ds-border bg-ds-card p-3 text-[11px] leading-5 text-ds-muted shadow-xl"
+          style={{ left: tooltip.left, top: tooltip.top }}
+        >
+          <div className="mb-1 font-semibold text-ds-ink">{tooltip.bucket.date}</div>
+          <div>{t('usageHeatmapTooltipTokens', {
+            defaultValue: 'Tokens: {{total}} ({{input}} in / {{output}} out)',
+            total: formatCompactNumber(tooltip.bucket.totalTokens),
+            input: formatCompactNumber(tooltip.bucket.inputTokens),
+            output: formatCompactNumber(tooltip.bucket.outputTokens)
+          })}</div>
+          <div>{t('usageHeatmapTooltipActivity', {
+            defaultValue: '{{turns}} turns · {{threads}} sessions · {{cache}} cache',
+            turns: tooltip.bucket.turns,
+            threads: tooltip.bucket.threadCount,
+            cache: formatPercent(tooltip.bucket.cacheHitRate)
+          })}</div>
+          <div>{t('usageHeatmapTooltipCost', {
+            defaultValue: 'Cost {{cost}} · {{saved}} cached tokens',
+            cost: formatCost(tooltip.bucket.costUsd, i18n.language, tooltip.bucket.costCny),
+            saved: formatCompactNumber(tooltip.bucket.cachedTokens)
+          })}</div>
+        </div>,
+        document.body
+      ) : null}
     </div>
   )
 }
@@ -729,9 +845,11 @@ function UsagePanelCard({ children }: { children: ReactElement }): ReactElement 
 }
 
 export function InitialSessionUsageHeatmap({
-  hideHero = false
+  hideHero = false,
+  embedded = false
 }: {
   hideHero?: boolean
+  embedded?: boolean
 } = {}): ReactElement {
   const [refreshKey, setRefreshKey] = useState(0)
   const [rangeKey, setRangeKey] = useState<UsageRangeKey>('all')
@@ -744,6 +862,7 @@ export function InitialSessionUsageHeatmap({
       modelState={modelState}
       rangeKey={rangeKey}
       hideHero={hideHero}
+      embedded={embedded}
       initialCollapsed={!hideHero}
       onRangeChange={setRangeKey}
       onRefresh={() => setRefreshKey((value) => value + 1)}
@@ -759,6 +878,7 @@ export function InitialSessionUsageHeatmapView({
   initialActiveTab = 'overview',
   initialModelHoverIndex = null,
   hideHero = false,
+  embedded = false,
   onRangeChange,
   onRefresh
 }: {
@@ -769,6 +889,7 @@ export function InitialSessionUsageHeatmapView({
   initialActiveTab?: UsageTabKey
   initialModelHoverIndex?: number | null
   hideHero?: boolean
+  embedded?: boolean
   onRangeChange?: (rangeKey: UsageRangeKey) => void
   onRefresh?: () => void
 }): ReactElement {
@@ -829,8 +950,10 @@ export function InitialSessionUsageHeatmapView({
   }, [])
 
   return (
-    <div className="ds-initial-usage-heatmap ds-no-drag mx-auto flex min-h-[min(620px,calc(100dvh-220px))] w-full items-center justify-center px-3 py-6 text-left sm:px-5 sm:py-8">
-      <div className="ds-chat-content-max-width flex w-full min-w-0 flex-col gap-5">
+    <div className={`ds-initial-usage-heatmap ds-no-drag mx-auto flex w-full items-center justify-center text-left ${
+      embedded ? 'min-h-0 p-0' : 'min-h-[min(620px,calc(100dvh-220px))] px-3 py-6 sm:px-5 sm:py-8'
+    }`}>
+      <div className={`${embedded ? 'max-w-none' : 'ds-chat-content-max-width'} flex w-full min-w-0 flex-col gap-5`}>
         {!hideHero ? (
           <UsageHeroSection
             title={heroTitle}
@@ -843,7 +966,7 @@ export function InitialSessionUsageHeatmapView({
         ) : (
           <UsagePanelCard>
             {mode === 'populated' ? (
-              <div className="mx-auto flex w-full max-w-[560px] min-w-0 flex-col gap-3">
+              <div className={`mx-auto flex w-full min-w-0 flex-col gap-3 ${embedded ? 'max-w-[860px]' : 'max-w-[560px]'}`}>
                 <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <div className="inline-flex w-fit max-w-full rounded-lg bg-ds-subtle p-1 text-[12.5px] font-medium text-ds-muted">
                     <button
@@ -884,7 +1007,7 @@ export function InitialSessionUsageHeatmapView({
                         </button>
                       ))}
                     </div>
-                    <UsageHeroToggle expanded onToggle={() => setCollapsed(true)} />
+                    {!embedded ? <UsageHeroToggle expanded onToggle={() => setCollapsed(true)} /> : null}
                   </div>
                 </div>
                 {activeTab === 'overview' ? (
@@ -930,7 +1053,7 @@ export function InitialSessionUsageHeatmapView({
                       <RefreshCw className={`h-3.5 w-3.5 ${state.loading ? 'animate-spin' : ''}`} strokeWidth={1.8} />
                       <span>{t('usageHeatmapRefresh')}</span>
                     </button>
-                    <UsageHeroToggle expanded onToggle={() => setCollapsed(true)} />
+                    {!embedded ? <UsageHeroToggle expanded onToggle={() => setCollapsed(true)} /> : null}
                   </div>
                 </div>
                 <WarmupStatePanel mode={mode} onRefresh={onRefresh} />

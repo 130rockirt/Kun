@@ -1,6 +1,7 @@
 import { createServer, get as httpGet, type Server } from 'node:http'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { startCodexBrowserAuth } from './codex-auth'
+import { CODEX_CLI_VERSION } from '../../kun/src/adapters/model/provider-cli-identity.js'
+import { codexRequestHeaders, codexUserAgent, startCodexBrowserAuth } from './codex-auth'
 
 const CODEX_OAUTH_PORTS = [1455, 1457] as const
 const CODEX_OAUTH_SCOPE = 'openid profile email offline_access api.connectors.read api.connectors.invoke'
@@ -135,6 +136,22 @@ describe('startCodexBrowserAuth', () => {
     if (!result.ok) {
       expect(result.message).toContain('1455/1457')
     }
+  })
+
+  it('builds Codex CLI-shaped request headers without Kun or DeepSeek-GUI branding', () => {
+    const headers = codexRequestHeaders({
+      kind: 'codex-oauth',
+      accessToken: 'access',
+      refreshToken: 'refresh',
+      expiresAt: Date.now() + 60_000,
+      accountId: 'acct_1'
+    })
+    expect(headers.originator).toBe('codex_cli_rs')
+    expect(headers['User-Agent']).toBe(codexUserAgent())
+    expect(headers['User-Agent']).toMatch(
+      new RegExp(`^codex_cli_rs\\/${CODEX_CLI_VERSION.replace(/\./g, '\\.')} \\(.+; .+\\)$`)
+    )
+    expect(headers['User-Agent']).not.toMatch(/deepseekgui|kun/i)
   })
 
   it('includes token endpoint error details when the exchange is rejected', async () => {

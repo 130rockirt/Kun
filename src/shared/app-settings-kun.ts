@@ -335,8 +335,16 @@ export function defaultKunStorageSettings(): KunStorageSettingsV1 {
   }
 }
 
+export const KUN_CONTEXT_COMPACTION_DEFAULTS_VERSION = 2
+
+const LEGACY_KUN_CONTEXT_COMPACTION_DEFAULTS = [
+  { soft: 16_000, hard: 24_000 },
+  { soft: 96_000, hard: 108_800 }
+] as const
+
 export function defaultKunContextCompactionSettings(): KunContextCompactionSettingsV1 {
   return {
+    defaultsVersion: KUN_CONTEXT_COMPACTION_DEFAULTS_VERSION,
     defaultSoftThreshold: 192_000,
     defaultHardThreshold: 217_600,
     // Default to model-generated summaries (codex-style): the model writes a
@@ -710,7 +718,11 @@ function normalizeKunSpeechToTextSettings(
 
 function normalizeKunSpeechToTextProtocol(value: unknown): SpeechToTextProtocol {
   if (value === 'local-whisper') return 'local-whisper'
-  return value === 'mimo-asr' ? 'mimo-asr' : DEFAULT_SPEECH_TO_TEXT_PROTOCOL
+  if (value === 'mimo-asr') return 'mimo-asr'
+  if (value === 'xai-stt') return 'xai-stt'
+  if (value === 'gemini-audio') return 'gemini-audio'
+  if (value === 'gemini-cli-audio') return 'gemini-cli-audio'
+  return DEFAULT_SPEECH_TO_TEXT_PROTOCOL
 }
 
 function normalizeKunTextToSpeechSettings(
@@ -938,12 +950,14 @@ function normalizeKunContextCompactionSettings(
   input: Partial<KunContextCompactionSettingsV1> | undefined
 ): KunContextCompactionSettingsV1 {
   const defaults = defaultKunContextCompactionSettings()
-  const defaultSoftThreshold = boundedPositiveInt(input?.defaultSoftThreshold, defaults.defaultSoftThreshold)
-  const defaultHardThreshold = input?.defaultSoftThreshold !== undefined && input?.defaultHardThreshold === undefined
+  const upgraded = migrateKunContextCompactionDefaults(input)
+  const defaultSoftThreshold = boundedPositiveInt(upgraded.defaultSoftThreshold, defaults.defaultSoftThreshold)
+  const defaultHardThreshold = upgraded.defaultSoftThreshold !== undefined && upgraded.defaultHardThreshold === undefined
     ? defaultSoftThreshold
     : defaults.defaultHardThreshold
-  const requestedHardThreshold = boundedPositiveInt(input?.defaultHardThreshold, defaultHardThreshold)
+  const requestedHardThreshold = boundedPositiveInt(upgraded.defaultHardThreshold, defaultHardThreshold)
   return {
+    defaultsVersion: KUN_CONTEXT_COMPACTION_DEFAULTS_VERSION,
     defaultSoftThreshold,
     defaultHardThreshold: Math.max(defaultSoftThreshold, requestedHardThreshold),
     // Compaction is always model-based now (the heuristic fold survives only as
@@ -951,11 +965,42 @@ function normalizeKunContextCompactionSettings(
     // longer a user-selectable mode, so any stored value coerces to 'model' —
     // this self-heals stale 'heuristic' configs from the removed UI toggle.
     summaryMode: 'model',
-    summaryTimeoutMs: boundedPositiveInt(input?.summaryTimeoutMs, defaults.summaryTimeoutMs, 120_000),
-    summaryMaxTokens: boundedPositiveInt(input?.summaryMaxTokens, defaults.summaryMaxTokens, 16_000),
-    summaryInputMaxBytes: boundedPositiveInt(input?.summaryInputMaxBytes, defaults.summaryInputMaxBytes, 8 * 1024 * 1024),
-    ...(typeof input?.summaryModel === 'string' && input.summaryModel.trim() ? { summaryModel: input.summaryModel.trim() } : {}),
-    ...(typeof input?.summaryProviderId === 'string' && input.summaryProviderId.trim() ? { summaryProviderId: input.summaryProviderId.trim() } : {})
+    summaryTimeoutMs: boundedPositiveInt(upgraded.summaryTimeoutMs, defaults.summaryTimeoutMs, 120_000),
+    summaryMaxTokens: boundedPositiveInt(upgraded.summaryMaxTokens, defaults.summaryMaxTokens, 16_000),
+    summaryInputMaxBytes: boundedPositiveInt(upgraded.summaryInputMaxBytes, defaults.summaryInputMaxBytes, 8 * 1024 * 1024),
+    ...(typeof upgraded.summaryModel === 'string' && upgraded.summaryModel.trim() ? { summaryModel: upgraded.summaryModel.trim() } : {}),
+    ...(typeof upgraded.summaryProviderId === 'string' && upgraded.summaryProviderId.trim() ? { summaryProviderId: upgraded.summaryProviderId.trim() } : {})
+  }
+}
+
+export function migrateKunContextCompactionDefaults(
+  input: KunContextCompactionSettingsV1
+): KunContextCompactionSettingsV1
+export function migrateKunContextCompactionDefaults(
+  input: Partial<KunContextCompactionSettingsV1> | undefined
+): Partial<KunContextCompactionSettingsV1>
+export function migrateKunContextCompactionDefaults(
+  input: Partial<KunContextCompactionSettingsV1> | undefined
+): Partial<KunContextCompactionSettingsV1> {
+  const current = input ?? {}
+  const defaultsVersion = boundedPositiveInt(current.defaultsVersion, 0)
+  if (defaultsVersion >= KUN_CONTEXT_COMPACTION_DEFAULTS_VERSION) return current
+
+  const matchesLegacyDefaults = LEGACY_KUN_CONTEXT_COMPACTION_DEFAULTS.some(
+    ({ soft, hard }) =>
+      current.defaultSoftThreshold === soft &&
+      current.defaultHardThreshold === hard
+  )
+  const defaults = defaultKunContextCompactionSettings()
+  return {
+    ...current,
+    defaultsVersion: KUN_CONTEXT_COMPACTION_DEFAULTS_VERSION,
+    ...(matchesLegacyDefaults
+      ? {
+          defaultSoftThreshold: defaults.defaultSoftThreshold,
+          defaultHardThreshold: defaults.defaultHardThreshold
+        }
+      : {})
   }
 }
 

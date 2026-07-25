@@ -29,7 +29,9 @@ import {
 } from './settings-controls'
 
 const SPEECH_LANGUAGE_OPTIONS: readonly string[] = ['', 'zh', 'en', 'ja', 'ko']
-const CUSTOM_SPEECH_PROTOCOLS = SPEECH_TO_TEXT_PROTOCOLS.filter((protocol) => protocol !== 'local-whisper')
+const CUSTOM_SPEECH_PROTOCOLS = SPEECH_TO_TEXT_PROTOCOLS.filter(
+  (protocol) => protocol !== 'local-whisper' && protocol !== 'gemini-cli-audio'
+)
 
 /**
  * 0.5s 440Hz mono 16kHz sine tone — enough for the ASR endpoint to accept the
@@ -103,8 +105,24 @@ function formatTransferRate(bytesPerSecond: number | undefined, pendingLabel: st
 
 function speechProtocolLabel(t: (key: string) => string, protocol: string): string {
   if (protocol === 'mimo-asr') return t('speechProtocolMimoAsr')
+  if (protocol === 'xai-stt') return t('speechProtocolXaiStt')
+  if (protocol === 'gemini-audio') return t('speechProtocolGeminiAudio')
+  if (protocol === 'gemini-cli-audio') return t('speechProtocolGeminiCliAudio')
   if (protocol === 'local-whisper') return t('speechProtocolLocalWhisper')
   return t('speechProtocolOpenAi')
+}
+
+function supportsSpeechProvider(item: {
+  kind?: string
+  speech?: { protocol?: string }
+}): boolean {
+  if (!item.speech) return false
+  if (item.speech.protocol === 'gemini-cli-audio') return item.kind === 'gemini-cli-api'
+  return (
+    item.kind !== 'cursor-sdk' &&
+    item.kind !== 'agent-sdk' &&
+    item.kind !== 'antigravity-cli'
+  )
 }
 
 function localWhisperQualityLabel(t: (key: string) => string, tier: string): string {
@@ -149,9 +167,7 @@ export function SpeechToTextSettingsSection({ ctx }: { ctx: Record<string, any> 
   const effectiveSpeechToText = form
     ? resolveKunSpeechToTextSettings(form)
     : speechToText
-  const speechProviders = (provider?.providers ?? []).filter((item: {
-    speech?: unknown
-  }) => Boolean(item.speech))
+  const speechProviders = (provider?.providers ?? []).filter(supportsSpeechProvider)
   const selectedProviderId = speechToText.protocol === 'local-whisper'
     ? LOCAL_WHISPER_PROVIDER_ID
     : speechToText.providerId || CUSTOM_SPEECH_TO_TEXT_PROVIDER_ID
@@ -416,7 +432,10 @@ export function SpeechToTextSettingsSection({ ctx }: { ctx: Record<string, any> 
                   ))}
                   <option value={CUSTOM_SPEECH_TO_TEXT_PROVIDER_ID}>{t('speechToTextProviderCustom')}</option>
                 </select>
-                {!usingLocalWhisper && !usingCustomProvider && !selectedSpeechProvider?.apiKey?.trim() ? (
+                {!usingLocalWhisper &&
+                !usingCustomProvider &&
+                selectedProviderSpeech?.protocol !== 'gemini-cli-audio' &&
+                !selectedSpeechProvider?.apiKey?.trim() ? (
                   <p className="mt-2 text-[12px] text-amber-700 dark:text-amber-300">
                     {t('speechToTextProviderMissingKey', { provider: selectedSpeechProvider?.name ?? selectedProviderId })}
                   </p>

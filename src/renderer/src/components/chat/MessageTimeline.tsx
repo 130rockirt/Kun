@@ -1,7 +1,7 @@
 import type { ReactElement, RefObject } from 'react'
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { CircleAlert, GitCommitHorizontal, Hash } from 'lucide-react'
+import { ChevronDown, CircleAlert, GitCommitHorizontal, Hash } from 'lucide-react'
 import type { ChatBlock, RuntimeConnectionStatus } from '../../agent/types'
 import { useChatStore } from '../../store/chat-store'
 import { threadHasPendingRuntimeWork } from '../../store/chat-store-runtime-helpers'
@@ -13,7 +13,10 @@ import { GeneratedFilesPanel, MessageBubble } from './message-timeline-bubbles'
 import { PresentationFilesPanel } from './PresentationFilesPanel'
 import { presentationFileArtifactsForTurn } from './presentation-file-artifacts'
 import { ReviewPlanCard, ReviewSummaryCard, TurnChangeSummary, WorkMetaRow } from './message-timeline-cards'
-import { ProcessSectionRow, groupProcessSections } from './message-timeline-process'
+import {
+  ProcessSectionRow,
+  groupProcessSections
+} from './message-timeline-process'
 import { ComponentPrototypeCard } from './ComponentPrototypeCard'
 import type { OpenChildThreadHandler } from './SubagentCallCard'
 import {
@@ -21,7 +24,9 @@ import {
   IKUN_WORK_LOGO_VARIANT_LABEL_KEYS,
   WORK_LOGO_SWIM_MODE_LABEL_KEYS,
   useIkunWorkLogoVariant,
-  useWorkLogoSwimMode
+  useWorkLogoSwimMode,
+  type IkunWorkLogoVariant,
+  type WorkLogoSwimMode
 } from './AnimatedWorkLogo'
 import type { UiPluginLabelKey } from '@shared/ui-plugin'
 import { useUiPluginWorkLabel } from '../../store/ui-plugin-store'
@@ -261,17 +266,6 @@ export function TimelineJumpPreviewTitle({
   )
 }
 
-function processBlockHasError(block: ChatBlock): boolean {
-  return (
-    (block.kind === 'tool' && block.status === 'error') ||
-    (block.kind === 'compaction' && block.status === 'error') ||
-    (block.kind === 'review' && block.status === 'error') ||
-    (block.kind === 'approval' && block.status === 'error') ||
-    (block.kind === 'user_input' && block.status === 'error') ||
-    (block.kind === 'system' && block.severity === 'error')
-  )
-}
-
 export function resultPreviewSourcesForTurn(turn: Turn): ExtensionResultPreviewSource[] {
   const sources: ExtensionResultPreviewSource[] = []
   const seen = new Set<string>()
@@ -366,8 +360,10 @@ function CompactionDivider({ block }: { block: CompactionTimelineBlock }): React
 
 /** Non-interactive runtime error rendered directly in the conversation flow. */
 export function TimelineRuntimeError({ block }: { block: TurnRuntimeErrorBlock }): ReactElement {
+  const { t } = useTranslation('common')
   const message = block.text.trim() || block.detail?.trim() || block.code?.trim() || ''
   const code = block.code?.trim() ?? ''
+  const detail = block.detail?.trim() ?? ''
   const showCode = Boolean(code && !message.toLowerCase().includes(code.toLowerCase()))
 
   return (
@@ -389,6 +385,21 @@ export function TimelineRuntimeError({ block }: { block: TurnRuntimeErrorBlock }
           <p className="mt-1 font-mono text-[11.5px] leading-5 text-orange-700/75 dark:text-orange-300/75">
             {code}
           </p>
+        ) : null}
+        {detail ? (
+          <details className="group/error-detail mt-2">
+            <summary className="inline-flex cursor-pointer list-none items-center gap-1 text-[12px] font-medium text-orange-700/80 hover:text-orange-900 dark:text-orange-300/80 dark:hover:text-orange-100">
+              <ChevronDown
+                aria-hidden="true"
+                className="h-3.5 w-3.5 -rotate-90 transition-transform group-open/error-detail:rotate-0"
+                strokeWidth={1.9}
+              />
+              {t('runtimeErrorDetails')}
+            </summary>
+            <pre className="mt-2 max-h-52 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-orange-300/50 bg-orange-50/70 px-3 py-2 font-mono text-[11.5px] leading-5 text-orange-950 dark:border-orange-800/50 dark:bg-orange-950/30 dark:text-orange-100">
+              {detail}
+            </pre>
+          </details>
         ) : null}
       </div>
     </div>
@@ -1034,19 +1045,15 @@ export function ConversationTurn({
     [processBlocks]
   )
   const onlyCompactionProcess = processBlocks.length > 0 && workProcessBlocks.length === 0
-  const hasProcessError = workProcessBlocks.some(processBlockHasError)
-  // Keep active process/tool failures visible while a turn is still running,
-  // then fold those execution details into the normal work summary.
-  const forceExpandForError = isProcessing && hasProcessError
-  const workExpanded = forceExpandForError || (workExpandedOverride ?? isProcessing)
+  const workExpanded = workExpandedOverride ?? false
   const reviewBlocks = useMemo(
     () => turn.blocks.filter((block) => block.kind === 'review'),
     [turn.blocks]
   )
 
   const processSections = useMemo(
-    () => (workExpanded ? groupProcessSections(workProcessBlocks) : []),
-    [workProcessBlocks, workExpanded]
+    () => (isProcessing || workExpanded ? groupProcessSections(workProcessBlocks) : []),
+    [isProcessing, workProcessBlocks, workExpanded]
   )
   const reasoningSectionCount = useMemo(
     () => processSections.filter((section) => section.kind === 'reasoning').length,
@@ -1054,8 +1061,8 @@ export function ConversationTurn({
   )
   // Show the live assistant bubble whenever the SSE has streamed any text
   // into `live`. We deliberately do NOT gate on `isProcessing`: the
-  // processing indicator (WorkMetaRow above) already covers "the agent is
-  // working", and hiding the streaming text here causes real-time updates
+  // live activity rows already cover "the agent is working", and hiding the
+  // streaming text here causes real-time updates
   // (Feishu bot streaming) to appear only after turn_completed, which the
   // user perceives as a long delay.
   // Note: `live` is the generic SSE sink output across ALL channels
@@ -1077,14 +1084,19 @@ export function ConversationTurn({
       ? assistantContentBlocks[assistantContentBlocks.length - 1]?.id
       : undefined
 
-  // Keep completed reasoning/tool work tucked away, but make the active turn's
-  // work visible unless the user explicitly collapses it.
+  // During a live turn, activity phases stay visible as one-line loading rows
+  // and intermediate assistant text remains readable between them. Completed
+  // work folds back into the turn-level summary.
 
   const hasProcess =
-    (isProcessing && !onlyCompactionProcess) ||
     workProcessBlocks.length > 0 ||
     (runtimeErrorBlocks.length > 0 && typeof durationMs === 'number')
-  const showLiveProgress = isProcessing && !onlyCompactionProcess
+  // Live thinking / running chrome is independent of process sections and
+  // always renders at the turn bottom so it cannot interleave above text
+  // or replace completed tool summaries.
+  const showLiveThinking = isProcessing && !!liveProcessText.trim()
+  const showLiveProgress =
+    isProcessing && !onlyCompactionProcess && !showLiveThinking
   const forkFromTurn = async (): Promise<void> => {
     if (!allowMainThreadActions || !forkTurnId || forking) return
     setForking(true)
@@ -1113,16 +1125,18 @@ export function ConversationTurn({
 
       {hasProcess ? (
         <div className="flex flex-col gap-1 pb-2">
-          <WorkMetaRow
-            processing={isProcessing}
-            stepCount={workProcessBlocks.length}
-            durationMs={durationMs}
-            reasoningDurationMs={reasoningDurationMs}
-            expanded={workExpanded}
-            collapsible={workProcessBlocks.length > 0 && !forceExpandForError}
-            onToggle={() => setWorkExpandedOverride((value) => !(value ?? isProcessing))}
-          />
-          {workExpanded && processSections.length > 0 ? (
+          {!isProcessing ? (
+            <WorkMetaRow
+              processing={false}
+              stepCount={workProcessBlocks.length}
+              durationMs={durationMs}
+              reasoningDurationMs={reasoningDurationMs}
+              expanded={workExpanded}
+              collapsible={workProcessBlocks.length > 0}
+              onToggle={() => setWorkExpandedOverride((value) => !(value ?? false))}
+            />
+          ) : null}
+          {processSections.length > 0 ? (
             <div className="flex flex-col gap-1">
               {processSections.map((section) => (
                 <ProcessSectionRow
@@ -1198,6 +1212,10 @@ export function ConversationTurn({
         <TimelineRuntimeError key={block.id} block={block} />
       ))}
 
+      {showLiveThinking ? (
+        <LiveTurnThinkingRow hasActiveGoal={showActiveGoal && Boolean(activeThreadGoal)} />
+      ) : null}
+
       {showLiveProgress ? (
         <LiveTurnProgressRow hasActiveGoal={showActiveGoal && Boolean(activeThreadGoal)} />
       ) : null}
@@ -1236,6 +1254,13 @@ export function ConversationTurn({
   )
 }
 
+function LiveTurnThinkingRow({ hasActiveGoal }: { hasActiveGoal: boolean }): ReactElement {
+  const { t } = useTranslation('common')
+  return (
+    <LiveTurnActivityRow hasActiveGoal={hasActiveGoal} label={t('thinkingNow')} />
+  )
+}
+
 function LiveTurnProgressRow({ hasActiveGoal }: { hasActiveGoal: boolean }): ReactElement {
   const { t, i18n } = useTranslation('common')
   const swimMode = useWorkLogoSwimMode(true)
@@ -1256,6 +1281,27 @@ function LiveTurnProgressRow({ hasActiveGoal }: { hasActiveGoal: boolean }): Rea
     ? t(IKUN_WORK_LOGO_VARIANT_LABEL_KEYS[ikunVariant])
     : pluginLabel ?? t(swimLabelKey)
 
+  return (
+    <LiveTurnActivityRow
+      hasActiveGoal={hasActiveGoal}
+      label={label}
+      ikunVariant={ikunVariant}
+      swimMode={swimMode}
+    />
+  )
+}
+
+function LiveTurnActivityRow({
+  hasActiveGoal,
+  label,
+  ikunVariant,
+  swimMode
+}: {
+  hasActiveGoal: boolean
+  label: string
+  ikunVariant?: IkunWorkLogoVariant
+  swimMode?: WorkLogoSwimMode
+}): ReactElement {
   return (
     <div className={liveTurnProgressClass(hasActiveGoal)}>
       <span className="ds-work-logo-slot ds-work-logo-slot-sm mr-0.5">

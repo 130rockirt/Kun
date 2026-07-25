@@ -1,4 +1,8 @@
-import type { TurnItem, UserMessageSource } from '../contracts/items.js'
+import type {
+  ToolCallProviderMetadata,
+  TurnItem,
+  UserMessageSource
+} from '../contracts/items.js'
 import type { ReviewOutput, ReviewTarget } from '../contracts/review.js'
 import type { UserInputQuestion } from '../ports/user-input-gate.js'
 import type { ComposerContextAttachmentJson } from '../contracts/composer-context.js'
@@ -92,6 +96,7 @@ export function makeToolCallItem(input: {
   toolName: string
   toolKind?: 'tool_call' | 'command_execution' | 'file_change'
   arguments: Record<string, unknown>
+  providerMetadata?: ToolCallProviderMetadata
   summary?: string
   status?: 'pending' | 'running' | 'completed' | 'failed'
 }): TurnItem {
@@ -107,6 +112,7 @@ export function makeToolCallItem(input: {
     callId: input.callId,
     toolKind: input.toolKind ?? 'tool_call',
     arguments: input.arguments,
+    ...(input.providerMetadata ? { providerMetadata: input.providerMetadata } : {}),
     summary: input.summary
   }
 }

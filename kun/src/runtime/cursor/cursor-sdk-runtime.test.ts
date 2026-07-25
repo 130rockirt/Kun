@@ -1,4 +1,7 @@
 import { describe, expect, test, vi } from 'vitest'
+import { mkdtemp } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type {
   AgentOptions,
   Run,
@@ -6,14 +9,24 @@ import type {
   SDKAgent,
   SDKMessage
 } from '@cursor/sdk'
+import type { TurnItem } from '../../contracts/items.js'
 import { LlmDebugRecorder } from '../../services/llm-debug-recorder.js'
 import {
   CursorSdkRuntime,
+  cursorSdkCapabilities,
   cursorAgentExecutionOptions,
   sanitizeCursorSdkError,
   type CursorSdkApi,
+  type CursorKunTurnContext,
   type CursorSdkRuntimeDeps
 } from './cursor-sdk-runtime.js'
+import {
+  DelegatedSessionCoordinator,
+  FileDelegatedSessionBindingStore,
+  delegatedCapabilityFingerprint,
+  delegatedCredentialIdentity,
+  delegatedHistoryDigest
+} from '../delegated-session-binding.js'
 
 function messages(values: SDKMessage[]): AsyncGenerator<SDKMessage, void> {
   return (async function* () {
@@ -67,12 +80,22 @@ function harness(input: {
   debugSink?: LlmDebugRecorder
   turnLimits?: { maxWallTimeMs?: number }
   loadError?: Error
+  sessionCoordinator?: CursorSdkRuntimeDeps['sessionCoordinator']
+  omitLocalStore?: boolean
+  kunContext?: CursorKunTurnContext
+  contextProfile?: CursorSdkRuntimeDeps['contextProfile']
+  streamLimits?: CursorSdkRuntimeDeps['streamLimits']
 }) {
   const applied: unknown[] = []
+  const updated: unknown[] = []
+  const materialized = new Map<string, TurnItem>()
   const recorded: unknown[] = []
   const finished: unknown[] = []
   const createOptions: AgentOptions[] = []
   const sentMessages: unknown[] = []
+  const resumedAgentIds: string[] = []
+  const resumedOptions: Array<Partial<AgentOptions> | undefined> = []
+  const kunContextSignals: AbortSignal[] = []
   const run = input.run ?? fakeRun()
   const agent = {
     agentId: 'agent_1',
@@ -92,8 +115,20 @@ function harness(input: {
       create: async (options) => {
         createOptions.push(options)
         return agent
+      },
+      resume: async (agentId, options) => {
+        resumedAgentIds.push(agentId)
+        resumedOptions.push(options)
+        return agent
       }
-    }
+    },
+    ...(input.sessionCoordinator && !input.omitLocalStore
+      ? {
+          JsonlLocalAgentStore: class {
+            constructor(readonly rootDir: string) {}
+          } as never
+        }
+      : {})
   }
   const thread = {
     id: 'thread_1',
@@ -132,7 +167,18 @@ function harness(input: {
       }]
     },
     turns: {
-      applyItem: async (_threadId: string, item: unknown) => { applied.push(item) },
+      applyItem: async (_threadId: string, item: TurnItem) => {
+        applied.push(item)
+        materialized.set(item.id, item)
+      },
+      updateItem: async (_threadId: string, itemId: string, patch: Partial<TurnItem>) => {
+        const existing = materialized.get(itemId)
+        if (!existing) return null
+        const item = { ...existing, ...patch } as TurnItem
+        updated.push(item)
+        materialized.set(itemId, item)
+        return item
+      },
       finishTurn: async (value: unknown) => { finished.push(value) }
     },
     events: { record: async (value: unknown) => { recorded.push(value) } },
@@ -143,15 +189,31 @@ function harness(input: {
     },
     debugSink: input.debugSink,
     attachmentStore: input.attachmentStore,
-    turnLimits: input.turnLimits
+    turnLimits: input.turnLimits,
+    sessionCoordinator: input.sessionCoordinator,
+    contextProfile: input.contextProfile,
+    streamLimits: input.streamLimits,
+    ...(input.kunContext
+      ? {
+          loadKunTurnContext: async ({ signal }: { signal: AbortSignal }) => {
+            kunContextSignals.push(signal)
+            return input.kunContext!
+          }
+        }
+      : {})
   } as unknown as CursorSdkRuntimeDeps
   return {
     runtime: new CursorSdkRuntime(deps),
     createOptions,
     applied,
+    updated,
+    materialized,
     recorded,
     finished,
     sentMessages,
+    kunContextSignals,
+    resumedAgentIds,
+    resumedOptions,
     agent
   }
 }
@@ -166,7 +228,33 @@ describe('CursorSdkRuntime', () => {
 
   test('runs a complete local SDK turn with isolated settings and an SDK trace', async () => {
     const debugSink = new LlmDebugRecorder()
-    const h = harness({ debugSink })
+    const h = harness({
+      debugSink,
+      run: fakeRun({
+        stream: [{
+          type: 'tool_call',
+          agent_id: 'agent_1',
+          run_id: 'run_1',
+          call_id: 'call_1',
+          name: 'shell',
+          status: 'running',
+          args: { command: 'pwd' }
+        }, {
+          type: 'tool_call',
+          agent_id: 'agent_1',
+          run_id: 'run_1',
+          call_id: 'call_1',
+          name: 'shell',
+          status: 'completed',
+          result: { stdout: '/tmp' }
+        }, {
+          type: 'assistant',
+          agent_id: 'agent_1',
+          run_id: 'run_1',
+          message: { role: 'assistant', content: [{ type: 'text', text: 'hello' }] }
+        }]
+      })
+    })
     await expect(h.runtime.runTurn(
       'thread_1',
       'turn_1',
@@ -194,9 +282,371 @@ describe('CursorSdkRuntime', () => {
     expect(trace).toMatchObject({
       transport: 'sdk',
       endpointFormat: 'cursor-sdk',
-      request: { method: 'SDK', url: 'cursor-sdk://local/agent' }
+      request: { method: 'SDK', url: 'cursor-sdk://local/agent' },
+      delegated: {
+        providerKind: 'cursor-sdk',
+        phase: 'rebased',
+        contextManagement: 'sdk-managed',
+        nativeHistory: 'none'
+      },
+      decoded: {
+        toolResults: [{
+          callId: 'call_1',
+          toolName: 'shell',
+          output: '{"stdout":"/tmp"}',
+          isError: false
+        }]
+      }
     })
     expect(JSON.stringify(trace)).not.toContain('cursor-secret')
+  })
+
+  test('materializes cumulative partial output before a stream failure', async () => {
+    const h = harness({
+      streamLimits: { maxToolCalls: 1 },
+      kunContext: {
+        instructionBlocks: [],
+        activeSkillIds: [],
+        tools: [],
+        customTools: {}
+      },
+      run: fakeRun({
+        stream: [{
+          type: 'assistant',
+          agent_id: 'agent_1',
+          run_id: 'run_1',
+          message: { role: 'assistant', content: [{ type: 'text', text: 'first part' }] }
+        }, {
+          type: 'assistant',
+          agent_id: 'agent_1',
+          run_id: 'run_1',
+          message: { role: 'assistant', content: [{ type: 'text', text: ' and second part' }] }
+        }, {
+          type: 'tool_call',
+          agent_id: 'agent_1',
+          run_id: 'run_1',
+          call_id: 'call_1',
+          name: 'shell',
+          status: 'running',
+          args: { command: 'pwd' }
+        }, {
+          type: 'tool_call',
+          agent_id: 'agent_1',
+          run_id: 'run_1',
+          call_id: 'call_2',
+          name: 'shell',
+          status: 'running',
+          args: { command: 'ls' }
+        }]
+      })
+    })
+
+    await expect(h.runtime.runTurn(
+      'thread_1',
+      'turn_1',
+      new AbortController().signal,
+      'cursor-subscription'
+    )).resolves.toBe('failed')
+
+    expect(h.applied).toContainEqual(expect.objectContaining({
+      kind: 'assistant_text',
+      text: 'first part',
+      status: 'running'
+    }))
+    expect(h.updated).toContainEqual(expect.objectContaining({
+      kind: 'assistant_text',
+      text: 'first part and second part',
+      status: 'running'
+    }))
+    expect([...h.materialized.values()]).toContainEqual(expect.objectContaining({
+      kind: 'assistant_text',
+      text: 'first part and second part'
+    }))
+    expect(h.finished).toContainEqual(expect.objectContaining({
+      status: 'failed',
+      code: 'cursor_sdk_stream_resource_limit'
+    }))
+    expect(h.kunContextSignals[0]?.aborted).toBe(true)
+  })
+
+  test('injects Kun instructions and custom tools into Cursor capabilities, context, and traces', async () => {
+    const debugSink = new LlmDebugRecorder()
+    const mcpExecute = vi.fn(async () => ({
+      content: [{ type: 'text' as const, text: 'mcp result' }]
+    }))
+    const h = harness({
+      debugSink,
+      contextProfile: () => ({
+        contextWindowTokens: 100_000,
+        softThresholdTokens: 80_000,
+        hardThresholdTokens: 90_000
+      }),
+      kunContext: {
+        instructionBlocks: ['Workspace AGENTS instructions', 'Active skill instructions'],
+        activeSkillIds: ['docs-skill'],
+        tools: [{
+          name: 'mcp_call_tool',
+          description: 'Call an MCP tool',
+          inputSchema: { type: 'object' },
+          providerId: 'mcp:facade',
+          providerKind: 'mcp'
+        }],
+        customTools: {
+          mcp_call_tool: {
+            description: 'Call an MCP tool',
+            inputSchema: { type: 'object' },
+            execute: mcpExecute
+          }
+        }
+      }
+    })
+
+    await expect(h.runtime.runTurn(
+      'thread_1',
+      'turn_1',
+      new AbortController().signal,
+      'cursor-subscription'
+    )).resolves.toBe('completed')
+
+    expect(h.createOptions[0]?.local?.customTools).toHaveProperty('mcp_call_tool')
+    expect(String(h.sentMessages[0])).toContain('Kun system prompt')
+    expect(String(h.sentMessages[0])).toContain('Workspace AGENTS instructions')
+    expect(String(h.sentMessages[0])).toContain('Active skill instructions')
+    expect(h.recorded).toContainEqual(expect.objectContaining({
+      kind: 'delegated_runtime',
+      capabilities: expect.objectContaining({
+        kunTools: true,
+        externalApproval: true
+      })
+    }))
+    expect(h.recorded).toContainEqual(expect.objectContaining({
+      kind: 'context_snapshot',
+      toolCount: 1,
+      activeSkillIds: ['docs-skill'],
+      breakdown: expect.objectContaining({ tools: expect.any(Number) })
+    }))
+    const trace = debugSink.snapshot()[0]?.exchanges[0]
+    expect(trace?.toolCatalog).toEqual([{
+      name: 'mcp_call_tool',
+      providerId: 'mcp:facade',
+      providerKind: 'mcp'
+    }])
+    const traceBody = JSON.parse(trace?.request.body.text ?? '{}') as Record<string, unknown>
+    expect(traceBody).toMatchObject({
+      instructions: expect.arrayContaining([
+        'Kun system prompt',
+        'Workspace AGENTS instructions'
+      ]),
+      tools: [{
+        name: 'mcp_call_tool',
+        description: 'Call an MCP tool'
+      }]
+    })
+    expect(JSON.stringify(traceBody)).not.toContain('mcpExecute')
+  })
+
+  test('resumes a compatible persisted agent and sends only the current request', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-cursor-resume-'))
+    const coordinator = new DelegatedSessionCoordinator(
+      new FileDelegatedSessionBindingStore(root)
+    )
+    const priorItems = [{
+      id: 'user_old',
+      threadId: 'thread_1',
+      turnId: 'turn_old',
+      role: 'user',
+      status: 'completed',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      kind: 'user_message',
+      text: 'portable old context'
+    }] as const
+    const route = {
+      providerKind: 'cursor-sdk' as const,
+      providerId: 'cursor-subscription',
+      credentialIdentity: delegatedCredentialIdentity({
+        providerId: 'cursor-subscription',
+        credentialSecret: 'cursor-secret'
+      }),
+      workspace: '/tmp/cursor-workspace',
+      model: 'auto',
+      capabilityFingerprint: delegatedCapabilityFingerprint({
+        systemPrompt: 'Kun system prompt',
+        threadPersona: '',
+        mode: 'agent',
+        sandbox: false,
+        settingSources: [],
+        capabilities: cursorSdkCapabilities()
+      }),
+      continuationMode: 'native' as const
+    }
+    const prepared = await coordinator.prepare({
+      threadId: 'thread_1',
+      route,
+      priorItems: []
+    })
+    await coordinator.commit({
+      preparation: prepared,
+      committedItems: priorItems as never,
+      lastCommittedTurnId: 'turn_old',
+      nativeSessionId: 'agent_persisted'
+    })
+    expect((await coordinator.store.load('thread_1'))?.synchronizedHistoryDigest)
+      .toBe(delegatedHistoryDigest(priorItems as never))
+    const h = harness({
+      sessionCoordinator: coordinator,
+      thread: {
+        turns: [{ id: 'turn_1', model: 'auto', mode: 'agent' }]
+      },
+      items: [
+        ...priorItems,
+        {
+          id: 'user_1',
+          threadId: 'thread_1',
+          turnId: 'turn_1',
+          role: 'user',
+          status: 'completed',
+          createdAt: '2026-01-01T00:01:00.000Z',
+          kind: 'user_message',
+          text: 'current only'
+        }
+      ]
+    })
+
+    await expect(h.runtime.runTurn(
+      'thread_1',
+      'turn_1',
+      new AbortController().signal,
+      'cursor-subscription'
+    )).resolves.toBe('completed')
+
+    expect(h.resumedAgentIds).toEqual(['agent_persisted'])
+    expect(
+      (h.resumedOptions[0]?.local?.store as unknown as { rootDir?: string })?.rootDir
+    ).toContain('provider-state')
+    expect(String(h.sentMessages[0])).toContain('current only')
+    expect(String(h.sentMessages[0])).not.toContain('portable old context')
+  })
+
+  test('rotates native continuation when the bridged Kun tool catalog changes', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-cursor-tool-rotation-'))
+    const coordinator = new DelegatedSessionCoordinator(
+      new FileDelegatedSessionBindingStore(root)
+    )
+    const priorItems = [{
+      id: 'user_old',
+      threadId: 'thread_1',
+      turnId: 'turn_old',
+      role: 'user',
+      status: 'completed',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      kind: 'user_message',
+      text: 'portable old context'
+    }] as const
+    const prepared = await coordinator.prepare({
+      threadId: 'thread_1',
+      route: {
+        providerKind: 'cursor-sdk',
+        providerId: 'cursor-subscription',
+        credentialIdentity: delegatedCredentialIdentity({
+          providerId: 'cursor-subscription',
+          credentialSecret: 'cursor-secret'
+        }),
+        workspace: '/tmp/cursor-workspace',
+        model: 'auto',
+        capabilityFingerprint: delegatedCapabilityFingerprint({
+          systemPrompt: 'Kun system prompt',
+          threadPersona: '',
+          mode: 'agent',
+          sandbox: false,
+          settingSources: [],
+          capabilities: cursorSdkCapabilities(true),
+          instructions: [],
+          tools: [{
+            name: 'old_mcp_tool',
+            description: 'Old MCP tool',
+            inputSchema: { type: 'object' },
+            providerId: 'mcp:old',
+            providerKind: 'mcp'
+          }]
+        }),
+        continuationMode: 'native'
+      },
+      priorItems: []
+    })
+    await coordinator.commit({
+      preparation: prepared,
+      committedItems: priorItems as never,
+      lastCommittedTurnId: 'turn_old',
+      nativeSessionId: 'agent_old_catalog'
+    })
+    const h = harness({
+      sessionCoordinator: coordinator,
+      kunContext: {
+        instructionBlocks: [],
+        activeSkillIds: [],
+        tools: [{
+          name: 'new_mcp_tool',
+          description: 'New MCP tool',
+          inputSchema: { type: 'object' },
+          providerId: 'mcp:new',
+          providerKind: 'mcp'
+        }],
+        customTools: {}
+      },
+      items: [
+        ...priorItems,
+        {
+          id: 'user_1',
+          threadId: 'thread_1',
+          turnId: 'turn_1',
+          role: 'user',
+          status: 'completed',
+          createdAt: '2026-01-01T00:01:00.000Z',
+          kind: 'user_message',
+          text: 'current request'
+        }
+      ]
+    })
+
+    await expect(h.runtime.runTurn(
+      'thread_1',
+      'turn_1',
+      new AbortController().signal,
+      'cursor-subscription'
+    )).resolves.toBe('completed')
+
+    expect(h.resumedAgentIds).toEqual([])
+    expect(h.createOptions).toHaveLength(1)
+    expect(String(h.sentMessages[0])).toContain('portable old context')
+    expect(h.recorded).toContainEqual(expect.objectContaining({
+      kind: 'delegated_runtime',
+      phase: 'rebased',
+      reason: 'capabilities_changed'
+    }))
+  })
+
+  test('fails closed when an SDK downgrade removes the isolated local store', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-cursor-store-missing-'))
+    const coordinator = new DelegatedSessionCoordinator(
+      new FileDelegatedSessionBindingStore(root)
+    )
+    const h = harness({
+      sessionCoordinator: coordinator,
+      omitLocalStore: true
+    })
+    await expect(h.runtime.runTurn(
+      'thread_1',
+      'turn_1',
+      new AbortController().signal,
+      'cursor-subscription'
+    )).resolves.toBe('failed')
+    expect(h.createOptions).toEqual([])
+    expect(h.recorded).toContainEqual(expect.objectContaining({
+      kind: 'delegated_runtime',
+      phase: 'portable',
+      reason: 'capabilities_changed',
+      capabilities: expect.objectContaining({ nativeResume: false })
+    }))
   })
 
   test('uses plan mode and sandbox when Kun cannot auto-approve mutation', () => {
@@ -298,6 +748,10 @@ describe('CursorSdkRuntime', () => {
   })
 
   test('cancels an active SDK run when the Kun turn aborts', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-cursor-abort-'))
+    const coordinator = new DelegatedSessionCoordinator(
+      new FileDelegatedSessionBindingStore(root)
+    )
     let release!: () => void
     const blocked = new Promise<void>((resolve) => { release = resolve })
     const cancel = vi.fn(async () => { release() })
@@ -306,7 +760,7 @@ describe('CursorSdkRuntime', () => {
       await blocked
       yield* []
     })()
-    const h = harness({ run })
+    const h = harness({ run, sessionCoordinator: coordinator })
     const controller = new AbortController()
     const outcome = h.runtime.runTurn('thread_1', 'turn_1', controller.signal, 'cursor-subscription')
     await vi.waitFor(() => expect(h.createOptions).toHaveLength(1))
@@ -314,6 +768,7 @@ describe('CursorSdkRuntime', () => {
     await expect(outcome).resolves.toBe('aborted')
     expect(cancel).toHaveBeenCalled()
     expect(h.finished).toContainEqual(expect.objectContaining({ status: 'aborted' }))
+    expect(await coordinator.store.load('thread_1')).toBeNull()
   })
 
   test('cancels and reports a stable failure when wall time expires', async () => {

@@ -201,6 +201,21 @@ export type MaintenanceActionDependencies = {
   requestCodeCanvasPanelOpen?: () => void
 }
 
+/**
+ * Checkpoint create/restore identity must follow the thread workspace, not the
+ * currently selected global workspace picker. Multi-project sidebars can keep
+ * one thread open under DeepSeek-GUI while `workspaceRoot` still points at
+ * another project (e.g. KunUIExtend).
+ */
+function resolveCheckpointExpectedWorkspaceRoot(state: {
+  activeThreadId: string | null
+  threads: Array<{ id: string; workspace?: string | null }>
+  workspaceRoot: string
+}): string {
+  const threadWorkspace = state.threads.find((thread) => thread.id === state.activeThreadId)?.workspace
+  return normalizeWorkspaceRoot(threadWorkspace) || normalizeWorkspaceRoot(state.workspaceRoot)
+}
+
 export function createMaintenanceActions(
   { set, get, sseAbortRef }: StoreActionContext,
   dependencies: MaintenanceActionDependencies = {}
@@ -395,23 +410,8 @@ export function createMaintenanceActions(
       const result = await p.compactThread(activeThreadId, reason)
       await get().refreshThreads()
       await get().selectThread(activeThreadId)
-      // Manual compaction may use a model request for the summary, but the
-      // chat context gauge is still based on the main turn's measured prompt.
-      // Drop the last turn's total by the folded amount so the UI reflects the
-      // compacted model-visible history immediately. The next real turn
-      // replaces this with a precise provider count.
       const replacedTokens = result && typeof result.replacedTokens === 'number' ? result.replacedTokens : 0
-      if (replacedTokens > 0) {
-        set((s) => {
-          const prev = s.lastTurnUsage
-          if (!prev || prev.threadId !== activeThreadId) return {}
-          const inputTokens = Math.max(0, prev.snapshot.inputTokens - replacedTokens)
-          return {
-            usageRefreshKey: s.usageRefreshKey + 1,
-            lastTurnUsage: { threadId: prev.threadId, snapshot: { ...prev.snapshot, inputTokens } }
-          }
-        })
-      } else {
+      if (replacedTokens <= 0) {
         // Nothing was folded (e.g. a near-empty thread). The compaction emits no
         // timeline row in that case, so surface a transient notice instead of
         // leaving the command silently doing nothing.
@@ -748,10 +748,11 @@ export function createMaintenanceActions(
     }
     const checkpointId = targetBlock.meta?.workspaceCheckpointId
     if (checkpointId) {
+      const expectedWorkspaceRoot = resolveCheckpointExpectedWorkspaceRoot(state)
       const restored = await window.kunGui.restoreGitCheckpoint({
         checkpointId,
         ...(state.activeThreadId ? { expectedThreadId: state.activeThreadId } : {}),
-        ...(state.workspaceRoot ? { expectedWorkspaceRoot: state.workspaceRoot } : {})
+        ...(expectedWorkspaceRoot ? { expectedWorkspaceRoot } : {})
       }).catch((error) => ({
         ok: false as const,
         reason: 'error' as const,
@@ -844,11 +845,13 @@ export function createMaintenanceActions(
       set({ error: i18n.t('common:rollbackWorkspaceBusyError') })
       return
     }
-    const { activeThreadId, workspaceRoot } = get()
+    const state = get()
+    const { activeThreadId } = state
+    const expectedWorkspaceRoot = resolveCheckpointExpectedWorkspaceRoot(state)
     let restored = await window.kunGui.restoreGitCheckpoint({
       checkpointId: targetCheckpointId,
       ...(activeThreadId ? { expectedThreadId: activeThreadId } : {}),
-      ...(workspaceRoot ? { expectedWorkspaceRoot: workspaceRoot } : {})
+      ...(expectedWorkspaceRoot ? { expectedWorkspaceRoot } : {})
     }).catch((error) => ({
       ok: false as const,
       reason: 'error' as const,
@@ -880,7 +883,7 @@ export function createMaintenanceActions(
           checkpointId: targetCheckpointId,
           allowPartialRestore: true,
           ...(activeThreadId ? { expectedThreadId: activeThreadId } : {}),
-          ...(workspaceRoot ? { expectedWorkspaceRoot: workspaceRoot } : {})
+          ...(expectedWorkspaceRoot ? { expectedWorkspaceRoot } : {})
         })
         .catch((error) => ({
           ok: false as const,
@@ -903,7 +906,7 @@ export function createMaintenanceActions(
       '[rollback] rescue checkpoint:',
       rescueId,
       'workspace:',
-      workspaceRoot,
+      expectedWorkspaceRoot,
       'thread:',
       activeThreadId
     )

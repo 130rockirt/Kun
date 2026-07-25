@@ -189,6 +189,20 @@ module.exports = {
       from: 'resources/whisper',
       to: 'whisper',
       filter: ['**/*']
+    },
+    {
+      from: 'resources/officecli/current',
+      to: 'officecli',
+      filter: ['officecli', 'officecli.exe', 'selected.json']
+    },
+    {
+      from: 'resources/officecli/manifest.json',
+      to: 'officecli/manifest.json'
+    },
+    {
+      from: 'resources/officecli/legal',
+      to: 'officecli/legal',
+      filter: ['LICENSE', 'NOTICE', 'THIRD-PARTY-NOTICES.txt']
     }
   ],
   artifactName: `Kun-${artifactVersion}-\${os}-\${arch}.\${ext}`,

@@ -396,6 +396,7 @@ function applyReasoningEffort(
   options: {
     includeThinking?: boolean
     nativeDeepSeekHost?: boolean
+    geminiOpenAiHost?: boolean
     reasoning?: ModelReasoningCapability
     maxReasoningEffort?: 'high' | 'max'
   } = {}
@@ -409,13 +410,17 @@ function applyReasoningEffort(
   // Third-party OpenAI-compat proxies (SiliconFlow, OpenRouter, llama.cpp, etc.) may
   // reject or mishandle it, causing 400 errors or empty responses. See issue #26.
   const nativeDeepSeek = options.nativeDeepSeekHost === true
+  if (options.geminiOpenAiHost === true) {
+    applyGeminiOpenAiReasoningEffort(body, normalized)
+    return
+  }
   if (options.reasoning) {
     applyProfileReasoningEffort(body, normalized, options.reasoning, includeThinking, nativeDeepSeek)
     return
   }
   switch (normalized) {
     case 'off':
-      if (includeThinking) body.thinking = { type: 'disabled' }
+      if (nativeDeepSeek) body.thinking = { type: 'disabled' }
       break
     case 'low':
     case 'medium':
@@ -427,6 +432,29 @@ function applyReasoningEffort(
       body.reasoning_effort = options.maxReasoningEffort ?? 'max'
       if (nativeDeepSeek) body.thinking = { type: 'enabled' }
       break
+  }
+}
+
+function applyGeminiOpenAiReasoningEffort(
+  body: Record<string, unknown>,
+  effort: NormalizedReasoningEffort
+): void {
+  switch (effort) {
+    case 'auto':
+      return
+    case 'off':
+      // Gemini 3 models cannot disable thinking. "minimal" is the closest
+      // compatible setting and is also accepted by Gemini 2.5.
+      body.reasoning_effort = 'minimal'
+      return
+    case 'low':
+    case 'medium':
+    case 'high':
+      body.reasoning_effort = effort
+      return
+    case 'max':
+      body.reasoning_effort = 'high'
+      return
   }
 }
 

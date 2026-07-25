@@ -236,7 +236,7 @@ describe('installGuiUpdate', () => {
     expect(setUpdateInstallQuitting.mock.invocationCallOrder[0]).toBeLessThan(
       updater.quitAndInstall.mock.invocationCallOrder[0]
     )
-    expect(updater.quitAndInstall).toHaveBeenCalledWith(false, true)
+    expect(updater.quitAndInstall).toHaveBeenCalledWith(true, true)
   })
 
   it('reuses the same cleanup when the native updater emits before-quit-for-update', async () => {
@@ -273,7 +273,7 @@ describe('installGuiUpdate', () => {
     await expect(installing).resolves.toEqual({ ok: true })
     expect(setUpdateInstallQuitting).toHaveBeenCalledTimes(2)
     expect(setUpdateInstallQuitting).toHaveBeenLastCalledWith(true)
-    expect(updater.quitAndInstall).toHaveBeenCalledWith(false, true)
+    expect(updater.quitAndInstall).toHaveBeenCalledWith(true, true)
   })
 
   it('clears the update quit marker when quitAndInstall throws synchronously', async () => {

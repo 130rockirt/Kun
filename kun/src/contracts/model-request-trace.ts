@@ -55,10 +55,44 @@ export const ModelRequestTraceToolCallSchema = z.object({
   arguments: z.record(z.string(), z.unknown())
 })
 
+export const ModelRequestTraceToolResultSchema = z.object({
+  callId: z.string(),
+  toolName: z.string(),
+  output: z.string(),
+  isError: z.boolean()
+})
+
+export const ModelRequestTraceDelegatedCapabilitiesSchema = z.object({
+  nativeResume: z.boolean(),
+  structuredStreaming: z.boolean(),
+  kunTools: z.boolean(),
+  externalApproval: z.boolean(),
+  liveSteering: z.boolean(),
+  nativeContextTelemetry: z.boolean(),
+  fork: z.boolean()
+})
+
+export const ModelRequestTraceDelegatedSchema = z.object({
+  providerKind: z.enum(['agent-sdk', 'cursor-sdk', 'antigravity-cli']),
+  phase: z.enum(['portable', 'resumed', 'rebased']),
+  reason: z.enum([
+    'new',
+    'route_changed',
+    'capabilities_changed',
+    'history_changed',
+    'native_state_unavailable'
+  ]).optional(),
+  contextManagement: z.literal('sdk-managed'),
+  nativeHistory: z.enum(['known', 'unknown', 'none']),
+  capabilities: ModelRequestTraceDelegatedCapabilitiesSchema
+})
+export type ModelRequestTraceDelegated = z.infer<typeof ModelRequestTraceDelegatedSchema>
+
 export const ModelRequestTraceDecodedSchema = z.object({
   text: z.string(),
   reasoning: z.string(),
   toolCalls: z.array(ModelRequestTraceToolCallSchema),
+  toolResults: z.array(ModelRequestTraceToolResultSchema).max(512).optional(),
   usage: UsageSnapshotSchema.optional(),
   stopReason: z.string().optional(),
   error: z.string().optional(),
@@ -90,6 +124,7 @@ export const ModelRequestTraceRecordSchema = z.object({
   timeToHeadersMs: z.number().nonnegative().optional(),
   durationMs: z.number().nonnegative().optional(),
   request: ModelRequestTraceRequestSchema,
+  delegated: ModelRequestTraceDelegatedSchema.optional(),
   toolCatalog: z.array(ModelRequestTraceToolCatalogEntrySchema)
     .max(MAX_MODEL_REQUEST_TRACE_TOOL_CATALOG_ENTRIES)
     .optional(),

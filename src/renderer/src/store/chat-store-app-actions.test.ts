@@ -38,7 +38,13 @@ function createMemoryStorage(): Storage {
 }
 
 type FetchModelsResult =
-  | { ok: true; modelIds: string[]; defaultModelId?: string; modelGroups?: ChatState['composerModelGroups'] }
+  | {
+      ok: true
+      modelIds: string[]
+      defaultModelId?: string
+      defaultModel?: { providerId: string; modelId: string }
+      modelGroups?: ChatState['composerModelGroups']
+    }
   | { ok: false; message: string }
 
 function buildHarness(fetchModelsResult: FetchModelsResult): {
@@ -48,6 +54,7 @@ function buildHarness(fetchModelsResult: FetchModelsResult): {
 } {
   let state = {
     activeThreadId: null,
+    blocks: [],
     threads: [],
     composerMode: 'agent',
     composerModel: '',
@@ -122,7 +129,7 @@ describe('chat-store app actions composer model loading', () => {
     vi.unstubAllGlobals()
   })
 
-  it('restores the previously selected custom model after the full model list loads', async () => {
+  it('prefers the configured default model over a stale global composer model', async () => {
     localStorage.setItem(COMPOSER_MODEL_STORAGE_KEY, 'MiniMax-M2')
     const { actions, state } = buildHarness({
       ok: true,
@@ -137,10 +144,36 @@ describe('chat-store app actions composer model loading', () => {
 
     await actions.loadComposerModels()
 
-    expect(state.composerModel).toBe('MiniMax-M2')
-    expect(state.composerProviderId).toBe('minimax')
+    expect(state.composerModel).toBe('deepseek-v4-pro')
+    expect(state.composerProviderId).toBe('')
     expect(localStorage.getItem(COMPOSER_MODEL_STORAGE_KEY)).toBe('MiniMax-M2')
-    expect(localStorage.getItem(COMPOSER_PROVIDER_STORAGE_KEY)).toBe('minimax')
+    expect(localStorage.getItem(COMPOSER_PROVIDER_STORAGE_KEY)).toBeNull()
+  })
+
+  it('uses the configured provider when the default model id exists in multiple groups', async () => {
+    const { actions, state } = buildHarness({
+      ok: true,
+      modelIds: ['shared-model'],
+      defaultModelId: 'shared-model',
+      defaultModel: { providerId: 'provider-b', modelId: 'shared-model' },
+      modelGroups: [
+        {
+          providerId: 'provider-a',
+          label: 'Provider A',
+          modelIds: ['shared-model']
+        },
+        {
+          providerId: 'provider-b',
+          label: 'Provider B',
+          modelIds: ['shared-model']
+        }
+      ]
+    })
+
+    await actions.loadComposerModels()
+
+    expect(state.composerModel).toBe('shared-model')
+    expect(state.composerProviderId).toBe('provider-b')
   })
 
   it('reloads the composer list after settings change during an in-flight model read', async () => {
@@ -302,7 +335,7 @@ describe('chat-store app actions composer model loading', () => {
     expect(localStorage.getItem(COMPOSER_MODEL_STORAGE_KEY)).toBeNull()
     expect(localStorage.getItem(COMPOSER_PROVIDER_STORAGE_KEY)).toBeNull()
     expect(JSON.parse(localStorage.getItem(THREAD_COMPOSER_SELECTION_STORAGE_KEY) ?? '{}')).toEqual({
-      'thread-a': { model: 'MiniMax-M2', providerId: 'minimax' }
+      'thread-a': { model: 'MiniMax-M2', providerId: 'minimax', source: 'user' }
     })
     expect(window.kunGui.saveSettingsSilent).not.toHaveBeenCalled()
   })
@@ -311,7 +344,9 @@ describe('chat-store app actions composer model loading', () => {
     localStorage.setItem(COMPOSER_MODEL_STORAGE_KEY, 'deepseek-v4-flash')
     localStorage.setItem(
       THREAD_COMPOSER_SELECTION_STORAGE_KEY,
-      JSON.stringify({ 'thread-a': { model: 'MiniMax-M2', providerId: 'minimax' } })
+      JSON.stringify({
+        'thread-a': { model: 'MiniMax-M2', providerId: 'minimax', source: 'user' }
+      })
     )
     const { actions, state } = buildHarness({
       ok: true,
@@ -339,6 +374,90 @@ describe('chat-store app actions composer model loading', () => {
     expect(state.composerModel).toBe('MiniMax-M2')
     expect(state.composerProviderId).toBe('minimax')
     expect(localStorage.getItem(COMPOSER_MODEL_STORAGE_KEY)).toBe('deepseek-v4-flash')
+  })
+
+  it('migrates a legacy empty-thread selection to the configured runtime default', async () => {
+    localStorage.setItem(
+      THREAD_COMPOSER_SELECTION_STORAGE_KEY,
+      JSON.stringify({
+        'thread-a': { model: 'deepseek-v4-flash', providerId: 'deepseek' }
+      })
+    )
+    const { actions, state } = buildHarness({
+      ok: true,
+      modelIds: ['deepseek-v4-flash', 'gemini-2.5-flash'],
+      defaultModelId: 'gemini-2.5-flash',
+      modelGroups: [
+        {
+          providerId: 'deepseek',
+          label: 'DeepSeek',
+          modelIds: ['deepseek-v4-flash']
+        },
+        {
+          providerId: 'gemini-cli-subscription',
+          label: 'Gemini CLI',
+          modelIds: ['gemini-2.5-flash']
+        }
+      ]
+    })
+    state.activeThreadId = 'thread-a'
+    state.threads = [{
+      id: 'thread-a',
+      title: '新会话',
+      workspace: '/tmp/project',
+      model: 'deepseek-v4-flash',
+      status: 'idle',
+      mode: 'agent',
+      updatedAt: '2026-07-25T00:00:00.000Z'
+    }]
+
+    await actions.loadComposerModels()
+
+    expect(state.composerModel).toBe('gemini-2.5-flash')
+    expect(state.composerProviderId).toBe('gemini-cli-subscription')
+    expect(JSON.parse(localStorage.getItem(THREAD_COMPOSER_SELECTION_STORAGE_KEY) ?? '{}')).toEqual({
+      'thread-a': {
+        model: 'gemini-2.5-flash',
+        providerId: 'gemini-cli-subscription',
+        source: 'default'
+      }
+    })
+  })
+
+  it('keeps the thread model for a conversation with history and no cached selection', async () => {
+    const { actions, state } = buildHarness({
+      ok: true,
+      modelIds: ['deepseek-v4-flash', 'gemini-2.5-flash'],
+      defaultModelId: 'gemini-2.5-flash',
+      modelGroups: [
+        {
+          providerId: 'deepseek',
+          label: 'DeepSeek',
+          modelIds: ['deepseek-v4-flash']
+        },
+        {
+          providerId: 'gemini-cli-subscription',
+          label: 'Gemini CLI',
+          modelIds: ['gemini-2.5-flash']
+        }
+      ]
+    })
+    state.activeThreadId = 'thread-a'
+    state.blocks = [{ kind: 'user', id: 'user-1', text: 'hello' }]
+    state.threads = [{
+      id: 'thread-a',
+      title: 'Existing conversation',
+      workspace: '/tmp/project',
+      model: 'deepseek-v4-flash',
+      status: 'idle',
+      mode: 'agent',
+      updatedAt: '2026-07-25T00:00:00.000Z'
+    }]
+
+    await actions.loadComposerModels()
+
+    expect(state.composerModel).toBe('deepseek-v4-flash')
+    expect(state.composerProviderId).toBe('deepseek')
   })
 
   it('does not restore a per-thread selection filtered out of the composer menu', async () => {
@@ -381,7 +500,7 @@ describe('chat-store app actions composer model loading', () => {
     expect(state.composerProviderId).toBe('')
   })
 
-  it('falls back to the first configured provider model when a thread selection was removed', async () => {
+  it('falls back to the configured runtime default when a thread selection was removed', async () => {
     localStorage.setItem(
       THREAD_COMPOSER_SELECTION_STORAGE_KEY,
       JSON.stringify({ 'thread-a': { model: 'deleted-model', providerId: 'old-provider' } })
@@ -409,10 +528,10 @@ describe('chat-store app actions composer model loading', () => {
 
     await actions.loadComposerModels()
 
-    expect(state.composerModel).toBe('MiniMax-M3')
-    expect(state.composerProviderId).toBe('minimax')
+    expect(state.composerModel).toBe('deepseek-v4-pro')
+    expect(state.composerProviderId).toBe('')
     expect(JSON.parse(localStorage.getItem(THREAD_COMPOSER_SELECTION_STORAGE_KEY) ?? '{}')).toEqual({
-      'thread-a': { model: 'MiniMax-M3', providerId: 'minimax' }
+      'thread-a': { model: 'deepseek-v4-pro', providerId: '', source: 'default' }
     })
   })
 
@@ -467,7 +586,7 @@ describe('chat-store app actions composer model loading', () => {
     expect(state.composerModel).toBe('text-model')
     expect(state.composerProviderId).toBe('test-provider')
     expect(JSON.parse(localStorage.getItem(THREAD_COMPOSER_SELECTION_STORAGE_KEY) ?? '{}')).toEqual({
-      'thread-a': { model: 'text-model', providerId: 'test-provider' }
+      'thread-a': { model: 'text-model', providerId: 'test-provider', source: 'user' }
     })
     expect(window.kunGui.saveSettingsSilent).not.toHaveBeenCalled()
   })

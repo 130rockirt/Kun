@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import type { ModelClient, ModelRequest, ModelStreamChunk } from '../../ports/model-client.js'
 import type { UsageSnapshot } from '../../contracts/usage.js'
 import type { ModelCapabilityMetadata } from '../../contracts/capabilities.js'
@@ -146,6 +147,10 @@ type StreamPayloadResult = {
 
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 45_000
 
+function isCodexEndpoint(baseUrl: string): boolean {
+  return baseUrl.includes('chatgpt.com/backend-api/codex')
+}
+
 /**
  * Multi-provider HTTP model client.
  *
@@ -162,11 +167,15 @@ export class CompatModelClient implements ModelClient {
 
   private readonly config: CompatModelClientConfig
   private readonly fetchImpl: typeof fetch
+  private readonly codexSessionId: string | undefined
 
   constructor(config: CompatModelClientConfig) {
     this.config = config
     this.model = config.model
     this.fetchImpl = config.fetchImpl ?? createProxyFetch(config.modelProxyUrl ?? '') ?? fetch
+    this.codexSessionId = isCodexEndpoint(config.baseUrl)
+      ? config.headers?.session_id?.trim() || randomUUID()
+      : undefined
   }
 
   /**
@@ -251,7 +260,7 @@ export class CompatModelClient implements ModelClient {
       }
       return
     }
-    const responsesLite = this.config.baseUrl.includes('chatgpt.com/backend-api/codex') &&
+    const responsesLite = isCodexEndpoint(this.config.baseUrl) &&
       this.capabilitiesForModel(requestModel).responsesMode === 'lite'
     let headers = this.buildHeaders(stream, endpointFormat, responsesLite, credentials)
     const retry = normalizeModelRequestRetryConfig(this.config.retry)
@@ -561,12 +570,17 @@ export class CompatModelClient implements ModelClient {
       headers: this.config.headers
     }
   ): Record<string, string> {
+    const configuredHeaders = {
+      ...(this.config.headers ?? {}),
+      ...(credentials.headers ?? {})
+    }
+    // Protected credentials are resolved before every request and may
+    // materialize a fresh session_id. Keep transport identity owned by this
+    // client so credential refresh cannot invalidate Codex prompt routing.
+    if (this.codexSessionId) configuredHeaders.session_id = this.codexSessionId
     return buildCompatRequestHeaders({
       apiKey: credentials.apiKey,
-      configuredHeaders: {
-        ...(this.config.headers ?? {}),
-        ...(credentials.headers ?? {})
-      },
+      configuredHeaders,
       stream,
       endpointFormat,
       responsesLite
@@ -615,7 +629,7 @@ export class CompatModelClient implements ModelClient {
     const endpointFormat = options.endpointFormat ?? this.endpointFormat()
     const tools = normalizeToolSpecs(request.tools)
     const reasoning = this.modelReasoningFor(model)
-    const isCodex = this.config.baseUrl.includes('chatgpt.com/backend-api/codex')
+    const isCodex = isCodexEndpoint(this.config.baseUrl)
     const isCodexLite = isCodex && this.capabilitiesForModel(model).responsesMode === 'lite'
     const codecs = createCompatRequestCodecs()
     return codecs.build({

@@ -1,5 +1,6 @@
 import type { SDKMessage, TokenUsage } from '@cursor/sdk'
 import { DEFAULT_MODEL_STREAM_LIMITS } from '../../adapters/model/model-stream-resource-budget.js'
+import type { TurnItem } from '../../contracts/items.js'
 import type { UsageSnapshot } from '../../contracts/usage.js'
 import {
   makeAssistantReasoningItem,
@@ -163,6 +164,28 @@ export class CursorSdkEventMapper {
 
   get text(): string {
     return this.textParts.join('')
+  }
+
+  get runningTextItem(): TurnItem | undefined {
+    if (!this.textItemId || this.textParts.length === 0) return undefined
+    return makeAssistantTextItem({
+      id: this.textItemId,
+      threadId: this.ctx.threadId,
+      turnId: this.ctx.turnId,
+      text: this.text,
+      status: 'running'
+    })
+  }
+
+  get runningReasoningItem(): TurnItem | undefined {
+    if (!this.reasoningItemId || this.reasoningParts.length === 0) return undefined
+    return makeAssistantReasoningItem({
+      id: this.reasoningItemId,
+      threadId: this.ctx.threadId,
+      turnId: this.ctx.turnId,
+      text: this.reasoningParts.join(''),
+      status: 'running'
+    })
   }
 
   map(message: SDKMessage): RuntimeEventDraft[] {

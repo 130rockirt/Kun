@@ -27,15 +27,26 @@ async function harness() {
   const threadStore = new InMemoryThreadStore()
   const sessionStore = new InMemorySessionStore()
   const maintenance = new ScopedMigrationMaintenanceLock()
+  const importedThreadIds: string[] = []
   const service = new RuntimeMigrationImportService({
     rootDir: join(root, 'imports'),
     threadStore,
     sessionStore,
     maintenance,
     attachmentStore: () => undefined,
-    memoryStore: () => undefined
+    memoryStore: () => undefined,
+    onThreadImported: async (threadId) => {
+      importedThreadIds.push(threadId)
+    }
   })
-  return { service, threadStore, sessionStore, maintenance, importRoot: join(root, 'imports') }
+  return {
+    service,
+    threadStore,
+    sessionStore,
+    maintenance,
+    importedThreadIds,
+    importRoot: join(root, 'imports')
+  }
 }
 
 function control(configuredProviderIds: string[] = []) {
@@ -81,6 +92,7 @@ describe('RuntimeMigrationImportService', () => {
 
     const committed = await h.service.commit(preflight.importId)
     expect(committed.status).toBe('committed')
+    expect(h.importedThreadIds).toEqual(['thread_source'])
     const imported = await h.threadStore.get('thread_source')
     expect(imported?.workspace).toBe('/Users/bob/Project')
     expect(imported?.providerId).toBeUndefined()
@@ -103,6 +115,7 @@ describe('RuntimeMigrationImportService', () => {
     expect(preflight.introducedThreadIds).toEqual([])
     const committed = await h.service.commit(preflight.importId)
     expect(committed.introducedThreadIds).toEqual([])
+    expect(h.importedThreadIds).toEqual([])
     expect((await h.threadStore.get('thread_source'))?.providerId).toBe('historical-provider')
   })
 

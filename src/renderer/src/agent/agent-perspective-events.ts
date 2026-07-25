@@ -91,13 +91,16 @@ const TITLE_TURN_SUFFIX = '_title'
 const STRUCTURAL_KEYS = new Set([
   'model', 'messages', 'input', 'instructions', 'system', 'tools'
 ])
+const GEMINI_STRUCTURAL_KEYS = new Set([
+  'contents', 'systemInstruction', 'thoughtSignature', 'tools'
+])
 
 export function projectAgentPerspectiveEvents(
   records: readonly ModelRequestTraceRecord[]
 ): AgentPerspectiveEvent[] {
   const ordered = [...records].sort(oldestRecordFirst)
   const semanticByRecord = new Map(ordered.map((record) => [record.id, parseSemanticRequest(record)]))
-  const toolResults = collectToolResults([...semanticByRecord.values()])
+  const toolResults = collectToolResults(ordered, [...semanticByRecord.values()])
   const events: AgentPerspectiveEvent[] = []
 
   for (const record of ordered) {
@@ -157,18 +160,23 @@ export function parseSemanticRequest(record: ModelRequestTraceRecord): SemanticR
     }
   }
 
-  const prompts = parsePrompts(body)
-  const messages = parseMessages(body)
+  const geminiRequest = geminiCodeAssistRequest(record, body)
+  const prompts = geminiRequest ? parseGeminiPrompts(geminiRequest) : parsePrompts(body)
+  const messages = geminiRequest ? parseGeminiMessages(geminiRequest) : parseMessages(body)
   return {
     body,
     model: stringValue(body.model) || record.model,
     prompts,
     skills: parseSkills(prompts),
-    tools: parseToolDefinitions(body, record.toolCatalog),
+    tools: geminiRequest
+      ? parseGeminiToolDefinitions(geminiRequest, record.toolCatalog)
+      : parseToolDefinitions(body, record.toolCatalog),
     messages,
-    parameters: Object.entries(body)
-      .filter(([key]) => !STRUCTURAL_KEYS.has(key))
-      .map(([name, value]) => ({ name, value }))
+    parameters: geminiRequest
+      ? parseGeminiParameters(body, geminiRequest)
+      : Object.entries(body)
+        .filter(([key]) => !STRUCTURAL_KEYS.has(key))
+        .map(([name, value]) => ({ name, value }))
   }
 }
 
@@ -203,6 +211,23 @@ function parsePrompts(body: Record<string, unknown>): SemanticPrompt[] {
     })
   }
   return prompts
+}
+
+function geminiCodeAssistRequest(
+  record: ModelRequestTraceRecord,
+  body: Record<string, unknown>
+): Record<string, unknown> | null {
+  if (record.endpointFormat !== 'gemini-cli-api') return null
+  return isRecord(body.request) ? body.request : null
+}
+
+function parseGeminiPrompts(request: Record<string, unknown>): SemanticPrompt[] {
+  const instruction = request.systemInstruction
+  if (!isRecord(instruction)) return []
+  const text = geminiPartsText(instruction.parts)
+  return text
+    ? [{ id: 'systemInstruction', source: 'system', text }]
+    : []
 }
 
 function pushPrompt(
@@ -256,6 +281,87 @@ function parseMessages(body: Record<string, unknown>): SemanticMessage[] {
   return messages
 }
 
+function parseGeminiMessages(request: Record<string, unknown>): SemanticMessage[] {
+  if (!Array.isArray(request.contents)) return []
+  const messages: SemanticMessage[] = []
+  request.contents.forEach((content, contentIndex) => {
+    if (!isRecord(content) || !Array.isArray(content.parts)) return
+    const role = stringValue(content.role) === 'model'
+      ? 'assistant'
+      : stringValue(content.role) || 'unknown'
+    let textParts: string[] = []
+    let textPartStart = 0
+    const flushText = (partIndex: number): void => {
+      if (!textParts.length) return
+      messages.push({
+        id: `gemini-content-${contentIndex}-part-${textPartStart}`,
+        role,
+        text: textParts.join('\n')
+      })
+      textParts = []
+      textPartStart = partIndex + 1
+    }
+
+    content.parts.forEach((part, partIndex) => {
+      if (!isRecord(part)) return
+      const functionCall = isRecord(part.functionCall) ? part.functionCall : null
+      const functionResponse = isRecord(part.functionResponse) ? part.functionResponse : null
+      if (functionCall) {
+        flushText(partIndex)
+        const callId = stringValue(functionCall.id)
+        const name = stringValue(functionCall.name)
+        messages.push({
+          id: `gemini-content-${contentIndex}-function-call-${partIndex}`,
+          role: 'assistant',
+          text: contentText(functionCall.args),
+          ...(callId ? { callId } : {}),
+          ...(name ? { name } : {}),
+          kind: 'function_call'
+        })
+        return
+      }
+      if (functionResponse) {
+        flushText(partIndex)
+        const callId = stringValue(functionResponse.id)
+        const name = stringValue(functionResponse.name)
+        messages.push({
+          id: `gemini-content-${contentIndex}-function-response-${partIndex}`,
+          role: 'tool',
+          text: contentText(functionResponse.response),
+          ...(callId ? { callId } : {}),
+          ...(name ? { name } : {}),
+          kind: 'function_call_output'
+        })
+        return
+      }
+      const text = geminiPartText(part)
+      if (text) textParts.push(text)
+    })
+    flushText(content.parts.length)
+  })
+  return messages
+}
+
+function geminiPartsText(value: unknown): string {
+  if (!Array.isArray(value)) return ''
+  return value
+    .map((part) => isRecord(part) ? geminiPartText(part) : '')
+    .filter(Boolean)
+    .join('\n')
+}
+
+function geminiPartText(part: Record<string, unknown>): string {
+  const text = stringValue(part.text)
+  if (text) return text
+  if (isRecord(part.inlineData)) {
+    return `[inline data: ${stringValue(part.inlineData.mimeType) || 'unknown MIME type'}]`
+  }
+  if (isRecord(part.fileData)) {
+    return `[file data: ${stringValue(part.fileData.mimeType) || 'unknown MIME type'}]`
+  }
+  return ''
+}
+
 function parseNestedToolResults(value: unknown, parentIndex: number): SemanticMessage[] {
   if (!Array.isArray(value)) return []
   return value.flatMap((block, index) => {
@@ -276,8 +382,23 @@ function roleForItemType(type: string): string {
   return ''
 }
 
-function collectToolResults(requests: readonly SemanticRequest[]): Map<string, SemanticMessage> {
+function collectToolResults(
+  records: readonly ModelRequestTraceRecord[],
+  requests: readonly SemanticRequest[]
+): Map<string, SemanticMessage> {
   const results = new Map<string, SemanticMessage>()
+  for (const record of records) {
+    for (const result of record.decoded?.toolResults ?? []) {
+      results.set(result.callId, {
+        id: `trace-tool-result-${record.id}-${result.callId}`,
+        role: 'tool',
+        text: result.output,
+        callId: result.callId,
+        name: result.toolName,
+        kind: result.isError ? 'tool_result_error' : 'tool_result'
+      })
+    }
+  }
   for (const request of requests) {
     for (const message of request.messages) {
       if (message.role === 'tool' && message.callId) results.set(message.callId, message)
@@ -313,6 +434,44 @@ function parseToolDefinitions(
     })
   }
   return [...tools.values()]
+}
+
+function parseGeminiToolDefinitions(
+  request: Record<string, unknown>,
+  catalog: ModelRequestTraceRecord['toolCatalog']
+): SemanticToolDefinition[] {
+  if (!Array.isArray(request.tools)) return []
+  const tools = new Map<string, SemanticToolDefinition>()
+  for (const group of request.tools) {
+    if (!isRecord(group) || !Array.isArray(group.functionDeclarations)) continue
+    for (const definition of group.functionDeclarations) {
+      if (!isRecord(definition)) continue
+      const name = stringValue(definition.name)
+      if (!name) continue
+      const schema = definition.parametersJsonSchema ??
+        definition.parameters ??
+        definition.inputSchema
+      tools.set(name, {
+        name,
+        description: stringValue(definition.description),
+        provenance: resolveToolProvenance(name, catalog),
+        ...(isRecord(schema) ? { inputSchema: schema } : {})
+      })
+    }
+  }
+  return [...tools.values()]
+}
+
+function parseGeminiParameters(
+  body: Record<string, unknown>,
+  request: Record<string, unknown>
+): SemanticParameter[] {
+  return [
+    ...Object.entries(body)
+      .filter(([key]) => key !== 'model' && key !== 'request'),
+    ...Object.entries(request)
+      .filter(([key]) => !GEMINI_STRUCTURAL_KEYS.has(key))
+  ].map(([name, value]) => ({ name, value }))
 }
 
 function parseSkills(prompts: readonly SemanticPrompt[]): SemanticSkill[] {

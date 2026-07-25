@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { AttachmentContent, AttachmentStore } from '../attachments/attachment-store.js'
+import type { ModelCapabilityMetadata } from '../contracts/capabilities.js'
 import {
   TurnAttachmentService,
   imageGenerationReferenceInstructions
@@ -31,6 +32,34 @@ function store(content: AttachmentContent): AttachmentStore {
       textFallbackPreferredMimeType: 'image/jpeg'
     })
   } as unknown as AttachmentStore
+}
+
+function officeDocumentAttachment(overrides: Partial<AttachmentContent> = {}): AttachmentContent {
+  return {
+    id: 'att_abcdef0123456789abcdef01',
+    name: 'book.xlsx',
+    kind: 'document',
+    mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    byteSize: 8,
+    hash: 'a'.repeat(64),
+    sourceSha256: 'a'.repeat(64),
+    documentFormat: 'xlsx',
+    documentText: 'Sheet1\nA1 = 42\nA2 = =SUM(A1:A1)',
+    visualPreview: {
+      dataBase64: Buffer.from('preview').toString('base64'),
+      mimeType: 'image/webp',
+      byteSize: 7,
+      width: 800,
+      height: 600,
+      wasCompressed: true
+    },
+    threadIds: ['thread_1'],
+    workspaces: ['/workspace'],
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    data: Buffer.from('workbook'),
+    ...overrides
+  }
 }
 
 describe('TurnAttachmentService', () => {
@@ -75,6 +104,57 @@ describe('TurnAttachmentService', () => {
         wasCompressed: false
       })],
       documents: []
+    })
+  })
+
+  it('sends Office semantics to every model and adds its preview only for visual models', async () => {
+    const content = officeDocumentAttachment()
+    const service = new TurnAttachmentService(store(content))
+    const textModel: ModelCapabilityMetadata = {
+      id: 'text',
+      inputModalities: ['text'],
+      outputModalities: ['text'],
+      supportsToolCalling: true,
+      messageParts: ['text']
+    }
+
+    await expect(service.resolveTurnAttachments({
+      attachmentIds: [content.id],
+      threadId: 'thread_1',
+      workspace: '/workspace',
+      modelCapabilities: textModel
+    })).resolves.toEqual({
+      imageAttachments: [],
+      textFallbacks: [],
+      documents: [expect.objectContaining({
+        id: content.id,
+        documentFormat: 'xlsx',
+        sourceSha256: content.sourceSha256,
+        text: expect.stringContaining('A1 = 42')
+      })]
+    })
+
+    await expect(service.resolveTurnAttachments({
+      attachmentIds: [content.id],
+      threadId: 'thread_1',
+      workspace: '/workspace',
+      modelCapabilities: {
+        ...textModel,
+        id: 'vision',
+        inputModalities: ['text', 'image'],
+        messageParts: ['text', 'image_url']
+      }
+    })).resolves.toEqual({
+      imageAttachments: [expect.objectContaining({
+        id: `${content.id}_preview`,
+        mimeType: 'image/webp',
+        dataBase64: content.visualPreview?.dataBase64
+      })],
+      textFallbacks: [],
+      documents: [expect.objectContaining({
+        id: content.id,
+        documentFormat: 'xlsx'
+      })]
     })
   })
 

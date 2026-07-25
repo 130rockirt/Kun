@@ -15,10 +15,13 @@ import {
   defaultModelProviderSettings,
   defaultScheduleSettings,
   defaultWorkflowSettings,
+  getModelProviderPreset,
+  modelProviderPresetProfile,
   resolveKunRuntimeSettings,
   defaultWriteSettings,
   defaultTerminalSettings,
-  type AppSettingsV1
+  type AppSettingsV1,
+  type ModelProviderModelProfileV1
 } from '../shared/app-settings'
 import { KunConfigSchema } from '../../kun/src/config/kun-config.js'
 
@@ -51,7 +54,7 @@ function createSettings(binaryPath: string): AppSettingsV1 {
     workspaceRoot: '/tmp/workspace',
     conversationWorkspaceRoot: '~/Documents/Kun',
     log: { enabled: false, retentionDays: 7 },
-    checkpointCleanup: { enabled: false, intervalDays: 3 },
+    checkpointCleanup: { createEnabled: false, enabled: false, intervalDays: 3 },
     notifications: { turnComplete: true },
     appBehavior: { openAtLogin: false, startMinimized: false, closeToTray: false },
     keyboardShortcuts: defaultKeyboardShortcuts(),
@@ -518,6 +521,101 @@ describe('parseListeningPidsFromNetstat', () => {
 })
 
 describe('syncGuiManagedKunConfig', () => {
+  it('exports provider model profiles even when the runtime snapshot is stale', async () => {
+    if (!tempRoot) throw new Error('temp root not initialized')
+    const configPath = join(tempRoot, 'config.json')
+    const module = await import('./kun-process')
+    const settings = createSettings('/tmp/fake-kun-child.js')
+    const preset = getModelProviderPreset('gemini-cli-subscription')
+    if (!preset) throw new Error('Gemini CLI subscription preset is missing')
+    const geminiProvider = modelProviderPresetProfile(preset, '')
+    settings.provider.providers.push(geminiProvider)
+    settings.agents.kun = {
+      ...settings.agents.kun,
+      providerId: geminiProvider.id,
+      model: 'gemini-2.5-flash',
+      modelProfiles: {}
+    }
+
+    await module.syncGuiManagedKunConfig(tempRoot, settings.agents.kun, {
+      scheduleMcp: {
+        settings,
+        launch: {
+          appPath: '/tmp/deepseek-gui-test-app',
+          execPath: '/tmp/electron',
+          isPackaged: false
+        }
+      }
+    })
+
+    const parsed = JSON.parse(readFileSync(configPath, 'utf8')) as any
+    expect(parsed.models.profiles['gemini-2.5-flash']).toMatchObject({
+      contextWindowTokens: 1_048_576
+    })
+  })
+
+  it('keeps same-id model profiles scoped to their provider in runtime config', async () => {
+    if (!tempRoot) throw new Error('temp root not initialized')
+    const configPath = join(tempRoot, 'config.json')
+    const module = await import('./kun-process')
+    const settings = createSettings('/tmp/fake-kun-child.js')
+    const profile = (
+      endpointFormat: 'messages' | 'responses',
+      contextWindowTokens: number
+    ): ModelProviderModelProfileV1 => ({
+      contextWindowTokens,
+      inputModalities: ['text'],
+      outputModalities: ['text'],
+      supportsToolCalling: true,
+      messageParts: ['text'],
+      endpointFormat
+    })
+    settings.provider.providers.push(
+      {
+        id: 'shared-a',
+        name: 'Shared A',
+        apiKey: 'sk-a',
+        baseUrl: 'https://a.example/v1',
+        endpointFormat: 'chat_completions',
+        models: ['shared-model'],
+        modelProfiles: { 'shared-model': profile('messages', 128_000) }
+      },
+      {
+        id: 'shared-b',
+        name: 'Shared B',
+        apiKey: 'sk-b',
+        baseUrl: 'https://b.example/v1',
+        endpointFormat: 'chat_completions',
+        models: ['shared-model'],
+        modelProfiles: { 'shared-model': profile('responses', 256_000) }
+      }
+    )
+    settings.agents.kun = {
+      ...settings.agents.kun,
+      providerId: 'shared-b',
+      model: 'shared-model'
+    }
+
+    await module.syncGuiManagedKunConfig(tempRoot, resolveKunRuntimeSettings(settings), {
+      appSettings: settings
+    })
+
+    const parsed = JSON.parse(readFileSync(configPath, 'utf8')) as any
+    expect(KunConfigSchema.safeParse(parsed).success).toBe(true)
+    expect(parsed.models.profiles['shared-model']).toMatchObject({
+      endpointFormat: 'responses',
+      contextWindowTokens: 256_000
+    })
+    expect(parsed.serve.providers['shared-a'].modelProfiles['shared-model']).toMatchObject({
+      endpointFormat: 'messages',
+      contextWindowTokens: 128_000
+    })
+    expect(parsed.serve.providers['shared-b'].modelProfiles['shared-model']).toMatchObject({
+      endpointFormat: 'responses',
+      contextWindowTokens: 256_000
+    })
+  })
+
   it('creates GUI-managed config with attachments enabled for image paste/upload', async () => {
     if (!tempRoot) throw new Error('temp root not initialized')
     const configPath = join(tempRoot, 'config.json')
@@ -818,7 +916,8 @@ describe('syncGuiManagedKunConfig', () => {
         'OpenAI-Beta': 'responses=experimental'
       }
     })
-    expect(parsed.capabilities.imageGen.headers['User-Agent']).toContain('codex_cli_rs')
+    expect(parsed.capabilities.imageGen.headers['User-Agent']).toMatch(/^codex_cli_rs\/0\.145\.0 \(.+; .+\)$/)
+    expect(parsed.capabilities.imageGen.headers['User-Agent']).not.toMatch(/deepseekgui|kun/i)
     expect(typeof parsed.capabilities.imageGen.headers.session_id).toBe('string')
     expect(KunConfigSchema.safeParse(parsed).success).toBe(true)
   })
@@ -864,7 +963,7 @@ describe('syncGuiManagedKunConfig', () => {
       expect(capability.apiKey).toBe('grok-access-token')
       expect(capability.headers).toMatchObject({
         'x-grok-client-version': expect.any(String),
-        'x-grok-client-identifier': 'kun'
+        'x-grok-client-identifier': 'grok-shell'
       })
       expect(capability.headers['X-XAI-Token-Auth']).toBeUndefined()
       expect(capability.headers['x-authenticateresponse']).toBeUndefined()

@@ -758,13 +758,16 @@ async function startBackgroundBashSession(
   let updateTimer: NodeJS.Timeout | undefined
   let lastUpdateAt = 0
   let liveUpdates = true
+  let liveToolUpdates = true
   let updateInFlight: Promise<void> | undefined
   const flushUpdate = async () => {
-    if (!liveUpdates || !onUpdate || !updateDirty) return
+    if (!liveUpdates || (!onUpdate && !hooks?.onSessionUpdated) || !updateDirty) return
     updateDirty = false
     lastUpdateAt = Date.now()
     const payload = await sessionPayload(session)
-    await onUpdate({ output: payload })
+    if (liveToolUpdates && onUpdate) {
+      await onUpdate({ output: payload })
+    }
     // Do not enqueue a stale "running" update after the process has reached
     // a terminal state and its completion notification is being published.
     if (liveUpdates) notifyUpdated()
@@ -781,7 +784,7 @@ async function startBackgroundBashSession(
       })
   }
   const scheduleUpdate = () => {
-    if (!liveUpdates || !onUpdate) return
+    if (!liveUpdates || (!onUpdate && !hooks?.onSessionUpdated)) return
     updateDirty = true
     const delay = 100 - (Date.now() - lastUpdateAt)
     if (delay <= 0) {
@@ -848,6 +851,11 @@ async function startBackgroundBashSession(
   await startedNotification
 
   if (input.detached) {
+    // The bash tool call is complete once the detached session has been
+    // handed off. Keep lifecycle hooks live for the background-shell API, but
+    // prevent later process output from updating the completed tool_result.
+    liveToolUpdates = false
+    await updateInFlight?.catch(() => undefined)
     const timeoutMs = input.timeoutSeconds * 1000
     const timeoutTimer = setTimeout(() => {
       if (session.status !== 'running') return

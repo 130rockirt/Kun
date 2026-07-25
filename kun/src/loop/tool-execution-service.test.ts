@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { makeToolResultItem } from '../domain/item.js'
+import type { TurnItem } from '../contracts/items.js'
 import type { ToolHost, ToolHostContext, ToolHostResult } from '../ports/tool-host.js'
 import type { RuntimeEventRecorder } from '../services/runtime-event-recorder.js'
 import type { TurnService } from '../services/turn-service.js'
@@ -127,5 +128,48 @@ describe('ToolExecutionService', () => {
     expect(events).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: 'tool_storm_suppressed', message: 'duplicate call' })
     ]))
+  })
+
+  it('drains in-flight progress and ignores updates after tool execution completes', async () => {
+    let emitUpdate: ((item: TurnItem) => Promise<void> | void) | undefined
+    const runningItem = makeToolResultItem({
+      id: 'item_call_1',
+      threadId: 'thread_1',
+      turnId: 'turn_1',
+      callId: 'call_1',
+      toolName: 'read',
+      output: { partial: true },
+      status: 'running'
+    })
+    const { service, lifecycle } = makeService({
+      execute: async (_call, _context, onUpdate) => {
+        emitUpdate = onUpdate
+        void onUpdate?.(runningItem)
+        return {
+          item: makeToolResultItem({
+            id: 'item_call_1',
+            threadId: 'thread_1',
+            turnId: 'turn_1',
+            callId: 'call_1',
+            toolName: 'read',
+            output: { completed: true }
+          }),
+          approved: true
+        }
+      }
+    })
+
+    const result = await service.executeSafely({
+      threadId: 'thread_1',
+      turnId: 'turn_1',
+      call,
+      context
+    })
+
+    expect(result.item).toMatchObject({ kind: 'tool_result', status: 'completed' })
+    expect(lifecycle).toEqual(['update', 'apply'])
+
+    await emitUpdate?.(runningItem)
+    expect(lifecycle).toEqual(['update', 'apply'])
   })
 })

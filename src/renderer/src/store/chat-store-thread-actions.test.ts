@@ -19,6 +19,8 @@ vi.mock('../agent/registry', () => ({
 
 import { createThreadActions } from './chat-store-thread-actions'
 
+const THREAD_COMPOSER_SELECTION_STORAGE_KEY = 'kun.threadComposerSelection.v1'
+
 class MemoryStorage implements BrowserStorageLike {
   private readonly values = new Map<string, string>()
 
@@ -174,6 +176,52 @@ describe('chat-store-thread-actions queued messages', () => {
         deliveryState: 'pending'
       })
     ])
+  })
+
+  it('uses the runtime model for an empty thread instead of a legacy cached selection', async () => {
+    const storage = new MemoryStorage()
+    storage.setItem(
+      THREAD_COMPOSER_SELECTION_STORAGE_KEY,
+      JSON.stringify({
+        thr_existing: { model: 'deepseek-v4-flash', providerId: 'deepseek' }
+      })
+    )
+    vi.stubGlobal('window', { localStorage: storage })
+    registryMock.getProvider.mockReturnValue({
+      getThreadDetail: vi.fn(async () => ({
+        blocks: [],
+        latestSeq: 0,
+        threadStatus: 'idle',
+        model: 'gemini-2.5-flash'
+      })),
+      subscribeThreadEvents: vi.fn(async () => undefined)
+    })
+    const { actions, state } = buildHarness()
+    state.busy = false
+    state.composerPickList = ['deepseek-v4-flash', 'gemini-2.5-flash']
+    state.composerModelGroups = [
+      {
+        providerId: 'deepseek',
+        label: 'DeepSeek',
+        modelIds: ['deepseek-v4-flash']
+      },
+      {
+        providerId: 'gemini-cli-subscription',
+        label: 'Gemini CLI',
+        modelIds: ['gemini-2.5-flash']
+      }
+    ]
+    state.threads = [{
+      ...thread('thr_existing'),
+      title: '新会话',
+      model: 'deepseek-v4-flash',
+      status: 'idle'
+    }]
+
+    await actions.selectThread('thr_existing')
+
+    expect(state.composerModel).toBe('gemini-2.5-flash')
+    expect(state.composerProviderId).toBe('gemini-cli-subscription')
   })
 
   it('reorders queued messages in the order they will be sent', () => {
@@ -492,16 +540,17 @@ describe('chat-store-thread-actions queued messages', () => {
     })
   })
 
-  it('guides an eligible queued message into the active turn before removing it', async () => {
+  it('guides an eligible plan-mode message into the active turn before removing it', async () => {
     const steerUserMessage = vi.fn(async () => undefined)
     registryMock.getProvider.mockReturnValue({ steerUserMessage })
     const { actions, state } = buildHarness()
     state.currentTurnId = 'turn_active'
+    state.currentTurnUserId = 'user-original'
     state.queuedMessages = [{
       id: 'q-guide',
       text: 'use the compact logo instead',
       displayText: 'Use the compact logo instead',
-      mode: 'agent'
+      mode: 'plan'
     }]
 
     await expect(actions.guideQueuedMessage('q-guide')).resolves.toBe(true)
@@ -513,7 +562,85 @@ describe('chat-store-thread-actions queued messages', () => {
       { displayText: 'Use the compact logo instead' }
     )
     expect(state.queuedMessages).toEqual([])
+    expect(state.blocks).toContainEqual(expect.objectContaining({
+      kind: 'user',
+      id: 'q-guide',
+      turnId: 'turn_active',
+      text: 'Use the compact logo instead',
+      meta: { displayText: 'Use the compact logo instead' }
+    }))
+    expect(state.currentTurnUserId).toBe('user-original')
     expect(state.error).toBeNull()
+  })
+
+  it('keeps guidance queued when the active delegated runtime cannot steer live', async () => {
+    const steerUserMessage = vi.fn(async () => undefined)
+    registryMock.getProvider.mockReturnValue({ steerUserMessage })
+    const { actions, state } = buildHarness()
+    state.currentTurnId = 'turn_active'
+    state.lastDelegatedRuntimeState = {
+      threadId: 'thr_existing',
+      turnId: 'turn_active',
+      providerKind: 'cursor-sdk',
+      providerId: 'cursor-subscription',
+      phase: 'resumed',
+      capabilities: {
+        nativeResume: true,
+        structuredStreaming: true,
+        kunTools: false,
+        externalApproval: false,
+        liveSteering: false,
+        nativeContextTelemetry: false,
+        fork: false
+      }
+    }
+    state.queuedMessages = [{
+      id: 'q-delegated',
+      text: 'apply this on the next turn',
+      mode: 'agent'
+    }]
+
+    await expect(actions.guideQueuedMessage('q-delegated')).resolves.toBe(false)
+
+    expect(steerUserMessage).not.toHaveBeenCalled()
+    expect(state.queuedMessages).toEqual([
+      expect.objectContaining({ id: 'q-delegated' })
+    ])
+    expect(state.error).toBeTruthy()
+  })
+
+  it('does not duplicate guided input when its SSE user message wins the request race', async () => {
+    const { actions, state } = buildHarness()
+    state.currentTurnId = 'turn_active'
+    state.currentTurnUserId = 'user-original'
+    state.queuedMessages = [{
+      id: 'q-guide-race',
+      text: 'use the compact logo instead',
+      displayText: 'Use the compact logo instead',
+      mode: 'agent'
+    }]
+    const steerUserMessage = vi.fn(async () => {
+      state.blocks = [
+        ...state.blocks,
+        {
+          kind: 'user',
+          id: 'item_guided_user',
+          turnId: 'turn_active',
+          createdAt: new Date().toISOString(),
+          text: 'use the compact logo instead',
+          meta: { displayText: 'Use the compact logo instead' }
+        }
+      ]
+    })
+    registryMock.getProvider.mockReturnValue({ steerUserMessage })
+
+    await expect(actions.guideQueuedMessage('q-guide-race')).resolves.toBe(true)
+
+    expect(state.queuedMessages).toEqual([])
+    expect(state.blocks.filter((block) => block.kind === 'user')).toEqual([
+      expect.objectContaining({ id: 'item_guided_user' })
+    ])
+    expect(state.currentTurnUserId).toBe('user-original')
   })
 
   it('keeps structured queued input when text-only guidance is ineligible', async () => {
@@ -553,6 +680,7 @@ describe('chat-store-thread-actions queued messages', () => {
     expect(state.queuedMessages).toEqual([
       expect.objectContaining({ id: 'q-race', text: 'do not lose this follow-up' })
     ])
+    expect(state.blocks).toEqual([])
     expect(state.error).toContain('turn is no longer accepting steering')
   })
 
@@ -1200,6 +1328,59 @@ describe('chat-store-thread-actions createThread conversation mode', () => {
     expect(state.blocks).toEqual([])
   })
 
+  it('resets a reused empty thread to the configured default model', async () => {
+    const storage = new MemoryStorage()
+    const createThreadProvider = vi.fn()
+    registryMock.getProvider.mockReturnValue({ createThread: createThreadProvider })
+    vi.stubGlobal('window', {
+      localStorage: storage,
+      kunGui: {
+        getSettings: vi.fn(async () => ({
+          workspaceRoot: '/workspace/deepseek-gui',
+          agents: {
+            kun: {
+              providerId: 'gemini-cli-subscription',
+              model: 'gemini-2.5-flash',
+              subagents: { profiles: [] }
+            }
+          }
+        })),
+        workspaceDirectoryExists: vi.fn(async () => true)
+      }
+    })
+    const { actions, state } = buildHarness()
+    state.activeThreadId = 'thr_existing'
+    state.blocks = []
+    state.busy = false
+    state.composerModel = 'deepseek-v4-flash'
+    state.composerProviderId = 'deepseek'
+    state.composerPickList = ['deepseek-v4-flash', 'gemini-2.5-flash']
+    state.composerModelGroups = [{
+      providerId: 'gemini-cli-subscription',
+      label: 'Gemini CLI',
+      modelIds: ['gemini-2.5-flash']
+    }]
+    state.threads = [{
+      ...thread('thr_existing'),
+      title: '新会话',
+      model: 'deepseek-v4-flash',
+      status: 'idle'
+    }]
+
+    await actions.createThread({ workspaceRoot: '/workspace/deepseek-gui' })
+
+    expect(createThreadProvider).not.toHaveBeenCalled()
+    expect(state.composerModel).toBe('gemini-2.5-flash')
+    expect(state.composerProviderId).toBe('gemini-cli-subscription')
+    expect(JSON.parse(storage.getItem(THREAD_COMPOSER_SELECTION_STORAGE_KEY) ?? '{}')).toEqual({
+      thr_existing: {
+        model: 'gemini-2.5-flash',
+        providerId: 'gemini-cli-subscription',
+        source: 'default'
+      }
+    })
+  })
+
   it('creates a conversation thread bound to the auto-created timestamped workspace', async () => {
     const createdPath = '/home/alice/.local/share/Kun/conversations/20260626-153012'
     const selectThread = vi.fn(async () => undefined)
@@ -1229,7 +1410,7 @@ describe('chat-store-thread-actions createThread conversation mode', () => {
           workspaceRoot: '/tmp/workspace',
           conversationWorkspaceRoot: '~/.local/share/Kun/conversations',
           log: { enabled: false, retentionDays: 7 },
-          checkpointCleanup: { enabled: false, intervalDays: 3 },
+          checkpointCleanup: { createEnabled: false, enabled: false, intervalDays: 3 },
           notifications: { turnComplete: true },
           appBehavior: { openAtLogin: false, startMinimized: false, closeToTray: false },
           keyboardShortcuts: { bindings: [] },

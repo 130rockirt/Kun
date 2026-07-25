@@ -13,7 +13,15 @@ import { existsSync, realpathSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { RuntimeEventDraft } from '../../services/runtime-event-recorder.js'
 import type { TurnItem } from '../../contracts/items.js'
+import type {
+  ModelRequestTraceDelegated,
+  ModelRequestTraceRecord
+} from '../../contracts/model-request-trace.js'
 import type { ApprovalPolicy, SandboxMode } from '../../contracts/policy.js'
+import type {
+  LlmDebugRound,
+  LlmDebugSink
+} from '../../services/llm-debug-recorder.js'
 import { makeAssistantReasoningItem, makeAssistantTextItem } from '../../domain/item.js'
 import { normalizeTurnLimits, type TurnLimitsConfig } from '../../loop/turn-limits.js'
 import { utf8PrefixWithinBytes } from '../../shared/utf8-text-blocks.js'
@@ -28,6 +36,7 @@ import {
   type ToolApprovalDecision
 } from './sdk-options-builder.js'
 import {
+  bridgedToolModelName,
   bridgedToolModelNames,
   buildBridgedToolSpecs,
   selectBridgeableTools,
@@ -37,6 +46,8 @@ import {
 } from './sdk-tool-bridge.js'
 import { composeSdkPromptText } from './sdk-context-assembler.js'
 import type { SdkApi, SdkMessage, SdkQueryResult } from './sdk-protocol.js'
+import type { DelegatedSessionPreparation } from '../delegated-session-binding.js'
+import type { DelegatedRuntimeCapabilities } from '../delegated-turn-runtime.js'
 
 export type TurnStatus = 'completed' | 'failed' | 'aborted'
 
@@ -66,6 +77,15 @@ export interface SdkTurnContext {
   model?: string
   /** Prior SDK session id for multi-turn continuity. */
   resumeSessionId?: string
+  /** Kun-owned local Claude state root for this thread. */
+  claudeConfigDir?: string
+  /** Opaque, non-secret coordinator token for committing a successful turn. */
+  sessionPreparation?: DelegatedSessionPreparation
+  contextProfile?: {
+    contextWindowTokens: number
+    softThresholdTokens: number
+    hardThresholdTokens: number
+  }
   /** Subscription OAuth token; absent => rely on the host's Claude Code login. */
   oauthToken?: string
   /** Image attachments to forward to the model (base64 + media type). */
@@ -73,8 +93,8 @@ export interface SdkTurnContext {
   /** kun tool catalog to consider bridging (overlap/excluded are filtered here). */
   bridgeableTools: BridgeableTool[]
   /**
-   * Prior-conversation transcript replayed each turn so the model has kun's
-   * canonical history (the SDK doesn't see it otherwise). '' / absent => none.
+   * Portable prior-conversation handoff used only when creating/rebasing a
+   * native session. Resumed turns send only their current delta.
    */
   historyTranscript?: string
   /**
@@ -83,6 +103,7 @@ export interface SdkTurnContext {
    * Mirrors the native loop's `contextInstructions`.
    */
   contextInstructions?: string[]
+  activeSkillIds?: string[]
 }
 
 /**
@@ -138,8 +159,10 @@ export interface SdkRuntimeDeps {
   applyItem(threadId: string, item: TurnItem): Promise<void>
   /** Finish the turn lifecycle (turns.finishTurn). */
   finishTurn(threadId: string, turnId: string, status: TurnStatus, error?: string): Promise<void>
-  /** Persist the SDK session id on the thread for next-turn resume. */
-  saveSessionId(threadId: string, sessionId: string): Promise<void>
+  /** Stage the SDK session id for commit after Kun finishes successfully. */
+  saveSessionId(threadId: string, turnId: string, sessionId: string): Promise<void>
+  /** Rotate an unusable native resume preparation before the portable retry. */
+  rejectResume?(threadId: string, turnId: string): Promise<void> | void
   /** Lazy-load the real `@anthropic-ai/claude-agent-sdk`. */
   loadSdk(): Promise<SdkApi>
   /** Base process env to scope for the Claude Code subprocess. */
@@ -152,8 +175,12 @@ export interface SdkRuntimeDeps {
   getTurnLimits?(): TurnLimitsConfig | undefined
   /** Optional SDK stream-budget overrides (primarily a focused-test seam). */
   getSdkStreamLimits?(): Partial<SdkStreamResourceLimits> | undefined
+  /** Existing Agent Perspective trace sink; observability must never affect execution. */
+  debugSink?: LlmDebugSink
   /** Optional explicit path to the bundled Claude Code binary (packaging). */
   pathToClaudeCodeExecutable?: string
+  /** Serialize native ownership for one Kun thread. */
+  runExclusive?<T>(threadId: string, operation: () => Promise<T>): Promise<T>
 }
 
 /** Persist an item only at milestones, not on every streaming delta. */
@@ -269,7 +296,23 @@ export class AgentSdkRuntime {
     return this.deps.handlesProvider(providerId)
   }
 
+  capabilities(providerId: string | undefined): DelegatedRuntimeCapabilities | undefined {
+    if (!this.handlesProvider(providerId)) return undefined
+    return agentSdkCapabilities()
+  }
+
   async runTurn(
+    threadId: string,
+    turnId: string,
+    signal: AbortSignal
+  ): Promise<'completed' | 'failed' | 'aborted'> {
+    const execute = () => this.runTurnOwned(threadId, turnId, signal)
+    return this.deps.runExclusive
+      ? this.deps.runExclusive(threadId, execute)
+      : execute()
+  }
+
+  private async runTurnOwned(
     threadId: string,
     turnId: string,
     signal: AbortSignal
@@ -375,10 +418,13 @@ export class AgentSdkRuntime {
       const sdk = await awaitAbortable(() => this.deps.loadSdk(), abort.signal)
 
       // Bridge kun-exclusive tools into an in-process MCP server.
-      const bridged = buildBridgedToolSpecs(selectBridgeableTools(ctx.bridgeableTools), (name, args) =>
+      const selectedKunTools = selectBridgeableTools(ctx.bridgeableTools)
+      const bridged = buildBridgedToolSpecs(selectedKunTools, (name, args) =>
         this.deps.executeKunTool(threadId, turnId, name, args, abort.signal)
       )
-      const buildOptions = (maxTurns: number) => assembleSdkOptions({
+      let resumeSessionId = ctx.resumeSessionId
+      let activeRebaseReason = ctx.sessionPreparation?.rebaseReason
+      const buildOptions = (maxTurns?: number) => assembleSdkOptions({
           cwd: ctx.workspace,
           kunSystemPrompt: this.deps.kunSystemPrompt(),
           threadPersona: ctx.threadPersona,
@@ -402,26 +448,72 @@ export class AgentSdkRuntime {
             if (sandboxDecision) return sandboxDecision
             return this.deps.decideToolApproval(threadId, turnId, name, input, abort.signal)
           }),
-          baseEnv: this.deps.baseEnv(),
+          baseEnv: {
+            ...this.deps.baseEnv(),
+            ...(ctx.claudeConfigDir ? { CLAUDE_CONFIG_DIR: ctx.claudeConfigDir } : {})
+          },
           oauthToken: ctx.oauthToken,
           abortController: abort,
-          maxTurns,
+          ...(maxTurns !== undefined ? { maxTurns } : {}),
           ...(ctx.model ? { model: ctx.model } : {}),
-          ...(ctx.resumeSessionId ? { resume: ctx.resumeSessionId } : {}),
+          ...(resumeSessionId ? { resume: resumeSessionId } : {}),
           ...(this.deps.pathToClaudeCodeExecutable
             ? { pathToClaudeCodeExecutable: this.deps.pathToClaudeCodeExecutable }
             : {})
         })
 
-      // kun owns canonical history, so each SDK turn is stateless: replay the
-      // prior conversation + per-turn instructions as text and end with the live
-      // request. (Deliberately NOT using the SDK's `resume` — it's lost on a
-      // provider switch or runtime restart; the transcript survives both.)
-      const composedText = composeSdkPromptText({
-        ...(ctx.historyTranscript ? { historyTranscript: ctx.historyTranscript } : {}),
+      // A compatible native session already owns prior context. Portable
+      // history is sent only when seeding a new generation.
+      const composeTurnText = (): string => composeSdkPromptText({
+        ...(!resumeSessionId && ctx.historyTranscript
+          ? { historyTranscript: ctx.historyTranscript }
+          : {}),
         userText: ctx.userText,
         ...(ctx.contextInstructions?.length ? { instructionBlocks: ctx.contextInstructions } : {})
       })
+      const capabilities = agentSdkCapabilities()
+      await this.deps.recordEvent({
+        kind: 'delegated_runtime',
+        threadId,
+        turnId,
+        providerKind: 'agent-sdk',
+        providerId: ctx.sessionPreparation?.route.providerId ?? 'default',
+        phase: resumeSessionId ? 'resumed' : 'rebased',
+        ...(ctx.sessionPreparation?.rebaseReason
+          ? { reason: ctx.sessionPreparation.rebaseReason }
+          : {}),
+        capabilities
+      })
+      const recordContextSnapshot = async (): Promise<void> => {
+        if (!ctx.contextProfile) return
+        const system = estimatedTokens([
+          this.deps.kunSystemPrompt(),
+          ctx.threadPersona ?? ''
+        ].join('\n'))
+        const tools = estimatedTokens(JSON.stringify(selectedKunTools))
+        const skills = estimatedTokens((ctx.contextInstructions ?? []).join('\n'))
+        const messages = estimatedTokens([
+          resumeSessionId ? '' : ctx.historyTranscript ?? '',
+          ctx.userText
+        ].join('\n'))
+        const other = (ctx.images?.length ?? 0) * 1_024
+        await this.deps.recordEvent({
+          kind: 'context_snapshot',
+          threadId,
+          turnId,
+          model: ctx.model ?? 'claude-default',
+          providerId: ctx.sessionPreparation?.route.providerId ?? 'default',
+          stepIndex: 0,
+          ...ctx.contextProfile,
+          estimatedInputTokens: tools + system + skills + messages + other,
+          breakdown: { tools, system, skills, messages, other },
+          toolCount: selectedKunTools.length,
+          activeSkillIds: [...(ctx.activeSkillIds ?? [])],
+          contextManagement: 'sdk-managed',
+          nativeHistory: resumeSessionId ? 'unknown' : 'none'
+        })
+      }
+      await recordContextSnapshot()
       const svgCompletion: SdkSvgCompletionState = {
         sequence: 0,
         lastMutation: -1,
@@ -432,11 +524,14 @@ export class AgentSdkRuntime {
       let stepLimitFailed = false
       let sdkTurnsUsed = 0
       for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-        const remainingTurns = limits.maxSteps - sdkTurnsUsed
-        if (remainingTurns <= 0) {
+        const remainingTurns = limits.maxSteps === undefined
+          ? undefined
+          : limits.maxSteps - sdkTurnsUsed
+        if (remainingTurns !== undefined && remainingTurns <= 0) {
           stepLimitFailed = true
           break
         }
+        const composedText = composeTurnText()
         const attemptText = attempt === 0
           ? composedText
           : `${composedText}\n\n${svgCompletionRecoveryInstruction(svgCompletion)}`
@@ -445,68 +540,147 @@ export class AgentSdkRuntime {
           : attemptText
         const options = buildOptions(remainingTurns)
         mapper.beginQuery()
-        const stream = sdk.query({ prompt, options })
-        activeStream = stream
-        activeStreamInterrupted = false
         let attemptFinalSeen = false
+        let attemptMessageSeen = false
         let attemptTurns = 0
-        const iterator = stream[Symbol.asyncIterator]()
-        for (;;) {
-          const next = await awaitAbortable(() => iterator.next(), abort.signal)
-          if (next.done) break
-          const message = next.value
-          if (signal.aborted || abort.signal.aborted) {
-            interruptActiveStream()
-            break
+        let trace = startAgentSdkTrace(this.deps.debugSink, {
+          threadId,
+          turnId,
+          provider: ctx.sessionPreparation?.route.providerId ?? 'default',
+          model: ctx.model ?? 'claude-default',
+          prompt: attemptText,
+          systemPrompt: this.deps.kunSystemPrompt(),
+          threadPersona: ctx.threadPersona,
+          contextInstructions: ctx.contextInstructions ?? [],
+          tools: selectedKunTools,
+          images: (ctx.images ?? []).map((image) => ({ mediaType: image.mediaType })),
+          approvalPolicy: ctx.approvalPolicy,
+          sandboxMode: ctx.sandboxMode,
+          oauthToken: ctx.oauthToken,
+          delegated: {
+            providerKind: 'agent-sdk',
+            phase: resumeSessionId ? 'resumed' : 'rebased',
+            ...(!resumeSessionId && activeRebaseReason
+              ? { reason: activeRebaseReason }
+              : {}),
+            contextManagement: 'sdk-managed',
+            nativeHistory: resumeSessionId ? 'unknown' : 'none',
+            capabilities
           }
-          if (message.type === 'result') {
-            attemptFinalSeen = true
-            attemptTurns = sdkResultTurnCount(message)
-          }
-          for (const draft of mapper.map(message)) {
-            const delta = assistantDeltaOf(draft)
-            if (delta) {
-              await deltaEvents.append(delta)
-              continue
+        })
+        try {
+          const stream = sdk.query({ prompt, options })
+          activeStream = stream
+          activeStreamInterrupted = false
+          const iterator = stream[Symbol.asyncIterator]()
+          for (;;) {
+            const next = await awaitAbortable(() => iterator.next(), abort.signal)
+            if (next.done) break
+            attemptMessageSeen = true
+            const message = next.value
+            if (signal.aborted || abort.signal.aborted) {
+              interruptActiveStream()
+              break
             }
-            // Preserve the mapper's exact event order: milestones, tools,
-            // usage, and errors may not overtake pending assistant deltas.
-            await deltaEvents.flush()
-            const item = itemOf(draft)
-            if (ctx.requireSvgCompletion && item) observeSvgToolResult(svgCompletion, item)
-            if (item && shouldPersist(item)) {
-              // applyItem persists the item AND records its own item_created event,
-              // so only ALSO record non-item_created signal events (tool_call_ready,
-              // tool_call_finished) — never the item_created draft itself, or the
-              // item would be published twice.
-              await this.deps.applyItem(threadId, item)
-              if (draft.kind !== 'item_created') await this.deps.recordEvent(draft)
-            } else {
-              await this.deps.recordEvent(draft)
+            if (message.type === 'result') {
+              attemptFinalSeen = true
+              attemptTurns = sdkResultTurnCount(message)
+            }
+            for (const draft of mapper.map(message)) {
+              captureAgentSdkTraceDraft(trace, draft)
+              const delta = assistantDeltaOf(draft)
+              if (delta) {
+                await deltaEvents.append(delta)
+                continue
+              }
+              // Preserve the mapper's exact event order: milestones, tools,
+              // usage, and errors may not overtake pending assistant deltas.
+              await deltaEvents.flush()
+              const item = itemOf(draft)
+              if (ctx.requireSvgCompletion && item) observeSvgToolResult(svgCompletion, item)
+              if (item && shouldPersist(item)) {
+                // applyItem persists the item AND records its own item_created event,
+                // so only ALSO record non-item_created signal events (tool_call_ready,
+                // tool_call_finished) — never the item_created draft itself, or the
+                // item would be published twice.
+                await this.deps.applyItem(threadId, item)
+                if (draft.kind !== 'item_created') await this.deps.recordEvent(draft)
+              } else {
+                await this.deps.recordEvent(draft)
+              }
+            }
+            // `result` is terminal and already carries usage/final status. Give
+            // the Query a bounded chance to clean up before an SVG retry starts.
+            if (attemptFinalSeen) {
+              const closed = await closeIterator(iterator, abort.signal)
+              if (!closed) interruptActiveStream()
+              break
             }
           }
-          // `result` is terminal and already carries usage/final status. Give
-          // the Query a bounded chance to clean up before an SVG retry starts.
-          if (attemptFinalSeen) {
-            const closed = await closeIterator(iterator, abort.signal)
-            if (!closed) interruptActiveStream()
-            break
+          if (!attemptFinalSeen && !signal.aborted && !abort.signal.aborted) {
+            const protocolError = new AgentSdkProtocolError(
+              'agent SDK stream ended without a terminal result'
+            )
+            await finishAgentSdkTrace(trace, { kind: 'error', error: protocolError })
+            trace = undefined
+            throw protocolError
           }
+          const attemptFinal = mapper.getFinal()
+          if (attemptFinalSeen && attemptFinal?.status === 'failed') {
+            await finishAgentSdkTrace(trace, {
+              kind: 'failed',
+              error: new Error(sanitizeAgentSdkError(
+                attemptFinal.message ?? 'agent SDK query failed',
+                ctx.oauthToken
+              ))
+            })
+          } else if (signal.aborted || abort.signal.aborted) {
+            await finishAgentSdkTrace(trace, {
+              kind: 'error',
+              error: abortError(abort.signal)
+            })
+          } else {
+            await finishAgentSdkTrace(trace, { kind: 'completed' })
+          }
+          trace = undefined
+        } catch (error) {
+          await finishAgentSdkTrace(trace, {
+            kind: 'error',
+            error: new Error(sanitizeAgentSdkError(error, ctx.oauthToken))
+          })
+          trace = undefined
+          if (resumeSessionId && !attemptMessageSeen && !abort.signal.aborted) {
+            resumeSessionId = undefined
+            activeRebaseReason = 'native_state_unavailable'
+            activeStream = undefined
+            await this.deps.rejectResume?.(threadId, turnId)
+            await this.deps.recordEvent({
+              kind: 'delegated_runtime',
+              threadId,
+              turnId,
+              providerKind: 'agent-sdk',
+              providerId: ctx.sessionPreparation?.route.providerId ?? 'default',
+              phase: 'rebased',
+              reason: 'native_state_unavailable',
+              capabilities
+            })
+            await recordContextSnapshot()
+            attempt -= 1
+            continue
+          }
+          throw error
         }
         if (timedOut) interruptActiveStream()
         activeStream = undefined
-        if (!attemptFinalSeen && !signal.aborted && !abort.signal.aborted) {
-          throw new AgentSdkProtocolError('agent SDK stream ended without a terminal result')
-        }
         // Starting a query consumes at least one native model step even if a
         // malformed/aborted SDK stream omits its terminal result message.
         sdkTurnsUsed += attemptFinalSeen ? Math.max(1, attemptTurns) : 1
-        if (sdkTurnsUsed > limits.maxSteps) stepLimitFailed = true
+        if (limits.maxSteps !== undefined && sdkTurnsUsed > limits.maxSteps) stepLimitFailed = true
         if (attemptFinalSeen && mapper.getFinal()?.status === 'failed') break
         if (signal.aborted || abort.signal.aborted || !ctx.requireSvgCompletion || svgCompletionSatisfied(svgCompletion)) {
           break
         }
-        if (sdkTurnsUsed >= limits.maxSteps) {
+        if (limits.maxSteps !== undefined && sdkTurnsUsed >= limits.maxSteps) {
           stepLimitFailed = true
           break
         }
@@ -525,8 +699,11 @@ export class AgentSdkRuntime {
       }
 
       await deltaEvents.flush()
-      const sessionId = mapper.getSessionId()
-      if (sessionId) await this.deps.saveSessionId(threadId, sessionId)
+      // Some SDK versions omit a fresh init/session message when resuming.
+      // A successful resumed query still advances the already validated native
+      // session, so retain that ID instead of downgrading the binding.
+      const sessionId = mapper.getSessionId() ?? resumeSessionId
+      if (sessionId) await this.deps.saveSessionId(threadId, turnId, sessionId)
 
       if (signal.aborted) {
         await this.deps.finishTurn(threadId, turnId, 'aborted')
@@ -536,7 +713,7 @@ export class AgentSdkRuntime {
         const message = `turn exceeded ${maxWallTimeMs}ms wall time`
         return await failWithLimit('turn_wall_time_limit', message)
       }
-      if (stepLimitFailed) {
+      if (stepLimitFailed && limits.maxSteps !== undefined) {
         return await failWithLimit('turn_step_limit', `turn exceeded ${limits.maxSteps} model steps`)
       }
       if (completionGateFailed) {
@@ -546,12 +723,17 @@ export class AgentSdkRuntime {
       }
 
       const final = mapper.getFinal()
-      if (final?.code === 'turn_step_limit') {
+      if (final?.code === 'turn_step_limit' && limits.maxSteps !== undefined) {
         return await failWithLimit('turn_step_limit', `turn exceeded ${limits.maxSteps} model steps`)
       }
       const status: 'completed' | 'failed' | 'aborted' =
         final?.status === 'failed' ? 'failed' : 'completed'
-      await this.deps.finishTurn(threadId, turnId, status, final?.message)
+      await this.deps.finishTurn(
+        threadId,
+        turnId,
+        status,
+        final?.message ? sanitizeAgentSdkError(final.message, ctx.oauthToken) : undefined
+      )
       return status
     } catch (err) {
       let failure = err
@@ -588,7 +770,7 @@ export class AgentSdkRuntime {
       }
       abort.abort(failure)
       interruptActiveStream()
-      const message = failure instanceof Error ? failure.message : String(failure)
+      const message = sanitizeAgentSdkError(failure, ctx.oauthToken)
       await this.deps.recordEvent({ kind: 'error', threadId, turnId, message })
       await this.deps.finishTurn(threadId, turnId, 'failed', message)
       return 'failed'
@@ -597,6 +779,245 @@ export class AgentSdkRuntime {
       clearTimeout(timeout)
       signal.removeEventListener('abort', onAbort)
     }
+  }
+}
+
+type AgentSdkTrace = {
+  sink: LlmDebugSink
+  round: LlmDebugRound
+  record: ModelRequestTraceRecord
+  currentText: string
+  currentReasoning: string
+}
+
+function startAgentSdkTrace(
+  sink: LlmDebugSink | undefined,
+  input: {
+    threadId: string
+    turnId: string
+    provider: string
+    model: string
+    prompt: string
+    systemPrompt: string
+    threadPersona?: string
+    contextInstructions: readonly string[]
+    tools: readonly BridgeableTool[]
+    images: ReadonlyArray<{ mediaType: string }>
+    approvalPolicy: ApprovalPolicy
+    sandboxMode?: SandboxMode
+    oauthToken?: string
+    delegated: ModelRequestTraceDelegated
+  }
+): AgentSdkTrace | undefined {
+  if (!sink?.beginSdkInvocation) return undefined
+  let round: LlmDebugRound | undefined
+  try {
+    round = sink.start({
+      threadId: input.threadId,
+      turnId: input.turnId,
+      provider: input.provider,
+      model: input.model,
+      toolCatalog: input.tools.map((tool) => ({
+        name: bridgedToolModelName(tool.name),
+        ...(tool.providerId ? { providerId: tool.providerId } : {}),
+        ...(tool.providerKind ? { providerKind: tool.providerKind } : {})
+      }))
+    })
+    const record = sink.beginSdkInvocation(round, {
+      endpointFormat: 'agent-sdk',
+      target: 'agent-sdk://local/query',
+      bodyText: JSON.stringify({
+        model: input.model,
+        system: [input.systemPrompt, input.threadPersona ?? ''].filter(Boolean).join('\n'),
+        instructions: input.contextInstructions,
+        input: input.prompt,
+        tools: input.tools.map((tool) => ({
+          name: bridgedToolModelName(tool.name),
+          description: tool.description,
+          input_schema: tool.inputSchema
+        })),
+        attachments: {
+          count: input.images.length,
+          images: input.images
+        },
+        approvalPolicy: input.approvalPolicy,
+        ...(input.sandboxMode ? { sandboxMode: input.sandboxMode } : {})
+      }),
+      ...(input.oauthToken ? { secretValues: [input.oauthToken] } : {}),
+      delegated: input.delegated
+    })
+    return {
+      sink,
+      round,
+      record,
+      currentText: '',
+      currentReasoning: ''
+    }
+  } catch {
+    if (round) void sink.finish(round).catch(() => undefined)
+    warnAgentSdkTraceFailure()
+    return undefined
+  }
+}
+
+function captureAgentSdkTraceDraft(
+  trace: AgentSdkTrace | undefined,
+  draft: RuntimeEventDraft
+): void {
+  if (!trace) return
+  try {
+    const item = itemOf(draft)
+    if (draft.kind === 'assistant_text_delta' && item?.kind === 'assistant_text') {
+      trace.currentText += item.text
+      trace.sink.captureChunk(trace.round, {
+        kind: 'assistant_text_delta',
+        text: item.text
+      })
+      return
+    }
+    if (
+      draft.kind === 'assistant_reasoning_delta' &&
+      item?.kind === 'assistant_reasoning'
+    ) {
+      trace.currentReasoning += item.text
+      trace.sink.captureChunk(trace.round, {
+        kind: 'assistant_reasoning_delta',
+        text: item.text
+      })
+      return
+    }
+    if (draft.kind === 'item_created' && item?.kind === 'assistant_text') {
+      const missing = item.text.startsWith(trace.currentText)
+        ? item.text.slice(trace.currentText.length)
+        : trace.currentText === item.text
+          ? ''
+          : item.text
+      if (missing) {
+        trace.sink.captureChunk(trace.round, {
+          kind: 'assistant_text_delta',
+          text: missing
+        })
+      }
+      trace.currentText = ''
+      return
+    }
+    if (draft.kind === 'item_created' && item?.kind === 'assistant_reasoning') {
+      const missing = item.text.startsWith(trace.currentReasoning)
+        ? item.text.slice(trace.currentReasoning.length)
+        : trace.currentReasoning === item.text
+          ? ''
+          : item.text
+      if (missing) {
+        trace.sink.captureChunk(trace.round, {
+          kind: 'assistant_reasoning_delta',
+          text: missing
+        })
+      }
+      trace.currentReasoning = ''
+      return
+    }
+    if (draft.kind === 'item_created' && item?.kind === 'tool_call') {
+      trace.sink.captureChunk(trace.round, {
+        kind: 'tool_call_complete',
+        callId: item.callId,
+        toolName: item.toolName,
+        arguments: item.arguments
+      })
+      return
+    }
+    if (draft.kind === 'tool_call_finished' && item?.kind === 'tool_result') {
+      trace.sink.captureToolResult?.(trace.round, {
+        callId: item.callId,
+        toolName: item.toolName,
+        output: traceOutputText(item.output),
+        isError: item.isError
+      })
+      return
+    }
+    if (draft.kind === 'usage') {
+      trace.sink.captureChunk(trace.round, {
+        kind: 'usage',
+        usage: draft.usage
+      })
+    }
+  } catch {
+    warnAgentSdkTraceFailure()
+  }
+}
+
+function traceOutputText(value: unknown): string {
+  if (typeof value === 'string') return value
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return String(value)
+  }
+}
+
+async function finishAgentSdkTrace(
+  trace: AgentSdkTrace | undefined,
+  result:
+    | { kind: 'completed' }
+    | { kind: 'failed'; error: unknown }
+    | { kind: 'error'; error: unknown }
+): Promise<void> {
+  if (!trace) return
+  try {
+    if (result.kind === 'completed') {
+      trace.sink.captureChunk(trace.round, { kind: 'completed', stopReason: 'stop' })
+    } else {
+      trace.sink.captureChunk(trace.round, {
+        kind: 'error',
+        message: result.error instanceof Error ? result.error.message : String(result.error)
+      })
+      if (result.kind === 'error') {
+        trace.sink.captureTransportError(trace.record, result.error)
+      } else {
+        trace.sink.captureChunk(trace.round, {
+          kind: 'completed',
+          stopReason: 'error'
+        })
+      }
+    }
+    await trace.sink.finish(trace.round)
+  } catch {
+    warnAgentSdkTraceFailure()
+  }
+}
+
+let agentSdkTraceFailureWarned = false
+
+function warnAgentSdkTraceFailure(): void {
+  if (agentSdkTraceFailureWarned) return
+  agentSdkTraceFailureWarned = true
+  console.warn(
+    '[kun:agent-sdk] model request observability capture failed; the SDK turn continues unchanged'
+  )
+}
+
+function estimatedTokens(text: string): number {
+  return text ? Math.ceil(Buffer.byteLength(text, 'utf8') / 4) : 0
+}
+
+const CLAUDE_CREDENTIAL_PATTERN = /sk-ant-(?:oat|api)[\w-]+/g
+
+function sanitizeAgentSdkError(error: unknown, oauthToken: string | undefined): string {
+  const message = error instanceof Error ? error.message : String(error)
+  const withoutKnownToken = oauthToken
+    ? message.split(oauthToken).join('[REDACTED]')
+    : message
+  return withoutKnownToken.replace(CLAUDE_CREDENTIAL_PATTERN, '[REDACTED]')
+}
+
+export function agentSdkCapabilities(): DelegatedRuntimeCapabilities {
+  return {
+    nativeResume: true,
+    structuredStreaming: true,
+    kunTools: true,
+    externalApproval: true,
+    liveSteering: false,
+    nativeContextTelemetry: false,
+    fork: false
   }
 }
 

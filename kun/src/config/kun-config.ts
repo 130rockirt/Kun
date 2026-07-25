@@ -175,7 +175,7 @@ export const RuntimeTuningConfigSchema = z
       .object({
         maxSteps: PositiveInt.max(1_000).optional(),
         maxWallTimeMs: PositiveInt.max(86_400_000).optional(),
-        maxToolCallsPerStep: PositiveInt.max(256).optional(),
+        maxToolCallsPerStep: PositiveInt.max(10_000).optional(),
         /** Global in-process admission cap for concurrently active turns. */
         maxConcurrentTurns: PositiveInt.max(256).optional()
       })
@@ -291,9 +291,17 @@ export const ServeProviderConfigSchema = z
      * existing Claude Code login). `antigravity-cli` delegates whole turns to
      * Google's official Antigravity CLI and uses its existing subscription login.
      * `cursor-sdk` delegates whole turns to the official Cursor SDK and requires
-     * the provider's Cursor API key.
+     * the provider's Cursor API key. `gemini-cli-api` reuses the official
+     * Gemini CLI OAuth login and calls Code Assist directly through Kun's
+     * model loop.
      */
-    kind: z.enum(['http', 'agent-sdk', 'antigravity-cli', 'cursor-sdk']).default('http').optional(),
+    kind: z.enum([
+      'http',
+      'agent-sdk',
+      'antigravity-cli',
+      'gemini-cli-api',
+      'cursor-sdk'
+    ]).default('http').optional(),
     apiKey: z.string().default(''),
     /** Opaque binding key resolved through the protected account store. */
     credentialSourceId: z.string().min(1).max(256).optional(),
@@ -304,6 +312,7 @@ export const ServeProviderConfigSchema = z
       .optional(),
     retry: ModelRequestRetryConfigSchema.optional(),
     modelProxyUrl: z.string().optional(),
+    modelProfiles: z.record(z.string().min(1), ModelContextProfileConfigSchema).optional(),
     headers: z.record(z.string(), z.string()).optional()
   })
   .strict()

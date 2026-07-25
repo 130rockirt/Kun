@@ -91,6 +91,7 @@ import {
   skillCapabilityConfigForRuntime
 } from './runtime/kun-runtime-mcp-config'
 import { availableBundledExtensionsDirectory } from './bundled-extension-resources'
+import { resolveOfficeCliBinary } from './officecli-resources'
 import { subagentProfilesForRuntime } from './runtime/kun-runtime-subagent-config'
 import { syncGuiManagedKunConfig } from './runtime/kun-runtime-config-service'
 
@@ -344,13 +345,20 @@ async function startKunChildOnce(
   // resolvable from kun/node_modules — the SDK auto-resolves it there.
   const claudeBinary = resolveClaudeBinary(app.getPath('userData'), [join(appRoot(), 'kun')])
   const antigravityBinary = resolveAntigravityCliBinary(app.getPath('userData'))
+  const officeCliBinary = resolveOfficeCliBinary({
+    isPackaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+    appRoot: root,
+    explicitPath: process.env.KUN_OFFICECLI_BINARY
+  })
   const childEnv: NodeJS.ProcessEnv = {
     ...process.env,
     KUN_RUNTIME_TOKEN: runtime.runtimeToken,
     DEEPSEEK_API_KEY: defaultClientApiKey || process.env.DEEPSEEK_API_KEY || '',
     ...(activeProviderKind ? { KUN_RUNTIME_PROVIDER_KIND: activeProviderKind } : {}),
     ...(claudeBinary ? { KUN_CLAUDE_BINARY: claudeBinary } : {}),
-    ...(antigravityBinary ? { KUN_ANTIGRAVITY_BINARY: antigravityBinary } : {})
+    ...(antigravityBinary ? { KUN_ANTIGRAVITY_BINARY: antigravityBinary } : {}),
+    ...(officeCliBinary ? { KUN_OFFICECLI_BINARY: officeCliBinary } : {})
   }
   const bundledExtensionsDirectory = availableBundledExtensionsDirectory({
     isPackaged: app.isPackaged,

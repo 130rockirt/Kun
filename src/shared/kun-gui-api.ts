@@ -59,13 +59,22 @@ import type {
   WorkspaceFileChangePayload,
   WorkspaceFileCreatePayload,
   WorkspaceFileCreateResult,
+  WorkspaceFileOpenResult,
   WorkspaceFileResolveResult,
   WorkspaceFileTarget,
   WorkspaceFileWatchPayload,
   WorkspaceFileWatchResult,
   WorkspaceFileWritePayload,
-  WorkspaceFileWriteResult
+  WorkspaceFileWriteResult,
+  WorkspacePreviewLeaseReleasePayload,
+  WorkspacePreviewLeaseReleaseResult,
+  WorkspacePreviewLeaseResult,
+  WorkspacePreviewLeaseTarget
 } from './workspace-file'
+import type {
+  LocalOfficeDocumentReadResult,
+  LocalOfficeDocumentTarget
+} from './office-document'
 
 export type ExtensionArtifactActionPayload = {
   artifactId: string
@@ -292,8 +301,19 @@ export type ClawChannelMirrorResult =
   | { ok: true }
   | { ok: false; message: string }
 export type UpstreamModelsResult =
-  | { ok: true; modelIds: string[]; defaultModelId?: string; modelGroups?: ModelProviderModelGroup[] }
+  | {
+      ok: true
+      modelIds: string[]
+      /** @deprecated Use defaultModel so the provider binding is not ambiguous. */
+      defaultModelId?: string
+      defaultModel?: ModelProviderModelSelection
+      modelGroups?: ModelProviderModelGroup[]
+    }
   | { ok: false; message: string }
+export type ModelProviderModelSelection = {
+  providerId: string
+  modelId: string
+}
 export type ModelProviderModelGroup = {
   providerId: string
   label: string
@@ -492,11 +512,17 @@ export type ComputerUsePermissions = {
 }
 
 export type ClaudeSubscriptionStatus = {
-  /** A Claude Code credentials file is present (positive signal; macOS Keychain absence is only a hint). */
   loggedIn: boolean
+  /** The official CLI is authoritative; file is an older-CLI compatibility fallback. */
+  source: 'cli' | 'credentials-file' | 'none'
+  /** Bounded diagnostic code only. Never contains account identity or credential values. */
+  message?: string
 }
 export type ClaudeSubscriptionLoginResult =
-  | { ok: true; token: string }
+  | { ok: true; mode: 'ambient' }
+  | { ok: false; message: string }
+export type ClaudeSubscriptionProbeResult =
+  | { ok: true; latencyMs: number }
   | { ok: false; message: string }
 
 export type SdkDownloadState = {
@@ -505,6 +531,12 @@ export type SdkDownloadState = {
   totalBytes: number
   message?: string
 }
+
+export const UNREADABLE_CREDENTIAL_KEY_ERROR_CODE = 'credential_key_unreadable'
+
+export type CredentialRecoveryResetResult =
+  | { reset: false }
+  | { reset: true; backupPath: string; movedItems: string[] }
 
 export type KunGuiApi = ExtensionIpcApi & {
   platform: string
@@ -538,10 +570,13 @@ export type KunGuiApi = ExtensionIpcApi & {
     respondRendererRequest: (response: DataMigrationRendererResponse) => Promise<void>
   }
   getSettings: () => Promise<AppSettingsV1>
+  resetUnreadableCredentials: () => Promise<CredentialRecoveryResetResult>
   /** Detect an existing local Claude Code login (subscription auth). */
   claudeSubscriptionStatus: () => Promise<ClaudeSubscriptionStatus>
-  /** Run `claude setup-token` (opens browser) and capture the OAuth token. */
+  /** Run the official ambient Claude subscription login flow. */
   claudeSubscriptionLogin: () => Promise<ClaudeSubscriptionLoginResult>
+  /** Make a bounded real request through the official Claude transport. */
+  claudeSubscriptionProbe: (token?: string) => Promise<ClaudeSubscriptionProbeResult>
   /** List Claude models available to the subscription (via the SDK's supportedModels). */
   claudeSubscriptionModels: (token?: string) => Promise<string[]>
   /** Whether the on-demand Claude Code binary is present + any in-flight download. */
@@ -566,6 +601,15 @@ export type KunGuiApi = ExtensionIpcApi & {
   onGeminiSubscriptionCliProgress: (handler: (state: SdkDownloadState) => void) => () => void
   /** Gemini models exposed by the user's current `agy` subscription login. */
   geminiSubscriptionModels: () => Promise<string[]>
+  /** Detect the official Gemini CLI binary and its local Google OAuth login. */
+  geminiCliSubscriptionStatus: () => Promise<{
+    installed: boolean
+    authenticated: boolean
+    path?: string
+    credentialSource?: 'keychain' | 'file'
+  }>
+  /** Concrete models routed through the Gemini CLI Code Assist API contract. */
+  geminiCliSubscriptionModels: () => Promise<string[]>
   /** Validate a Cursor API key and list models visible to that Cursor account. */
   cursorSubscriptionDiscover: (apiKey: string) => Promise<{
     account: {
@@ -583,6 +627,9 @@ export type KunGuiApi = ExtensionIpcApi & {
   uploadRuntimeImageAttachment: (
     request: RuntimeImageAttachmentUploadRequest
   ) => Promise<RuntimeImageAttachmentUploadResult>
+  readLocalOfficeDocument: (
+    options: LocalOfficeDocumentTarget
+  ) => Promise<LocalOfficeDocumentReadResult>
   resolveKunApproval: (request: KunProtectedApprovalRequest) => Promise<KunProtectedApprovalResult>
   restartRuntime: () => Promise<void>
   fetchUpstreamModels: () => Promise<UpstreamModelsResult>
@@ -720,10 +767,17 @@ export type KunGuiApi = ExtensionIpcApi & {
   openEditorPath: (options: OpenEditorPathOptions) => Promise<EditorOpenResult>
   listWorkspaceDirectory: (options: WorkspaceDirectoryTarget) => Promise<WorkspaceDirectoryListResult>
   resolveWorkspaceFile: (options: WorkspaceFileTarget) => Promise<WorkspaceFileResolveResult>
+  openWorkspaceFileInSystem: (options: WorkspaceFileTarget) => Promise<WorkspaceFileOpenResult>
   readWorkspaceFile: (options: WorkspaceFileTarget) => Promise<WorkspaceFileReadResult>
   lintProjectDesignMd: (content: string) => Promise<ProjectDesignMdOfficialLintResult>
   readWorkspaceImage: (options: WorkspaceFileTarget) => Promise<WorkspaceImageReadResult>
   readWorkspacePdf: (options: WorkspaceFileTarget) => Promise<WorkspacePdfReadResult>
+  openWorkspacePreviewResource: (
+    options: WorkspacePreviewLeaseTarget
+  ) => Promise<WorkspacePreviewLeaseResult>
+  releaseWorkspacePreviewResource: (
+    payload: WorkspacePreviewLeaseReleasePayload
+  ) => Promise<WorkspacePreviewLeaseReleaseResult>
   readLocalPdfText: (options: LocalPdfTextTarget) => Promise<LocalPdfTextReadResult>
   saveWorkspaceFileAs: (payload: WorkspaceFileSaveAsPayload) => Promise<WorkspaceFileSaveAsResult>
   openExtensionArtifact: (

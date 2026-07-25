@@ -20,6 +20,7 @@ export type CapabilityToolSpec = {
   description: string
   inputSchema: Record<string, unknown>
   toolKind?: 'tool_call' | 'command_execution' | 'file_change'
+  sideEffect?: 'read-only' | 'unknown'
   providerId: string
   providerKind: ToolProviderKind
 }
@@ -109,7 +110,7 @@ export class CapabilityRegistry {
     const specs: CapabilityToolSpec[] = []
     for (const record of this.tools.values()) {
       if (!this.canUseProvider(record.provider, context)) continue
-      if (!this.canUseTool(record.tool.name, context)) continue
+      if (!this.canUseTool(record.tool, context)) continue
       if (!isToolAdvertisedInSandbox(record.tool, context)) continue
       if (record.tool.shouldAdvertise) {
         if (!context || !record.tool.shouldAdvertise(context)) continue
@@ -119,6 +120,7 @@ export class CapabilityRegistry {
         description: record.tool.description,
         inputSchema: record.tool.inputSchema,
         toolKind: record.tool.toolKind,
+        ...(record.tool.sideEffect ? { sideEffect: record.tool.sideEffect } : {}),
         providerId: record.provider.id,
         providerKind: record.provider.kind
       })
@@ -137,7 +139,7 @@ export class CapabilityRegistry {
     if (!this.canUseProvider(record.provider, context)) {
       throw new Error(`tool ${toolName} is not advertised by provider ${record.provider.id}`)
     }
-    if (!this.canUseTool(toolName, context)) {
+    if (!this.canUseTool(record.tool, context)) {
       throw new Error(`tool ${toolName} is not advertised by active tool policy`)
     }
     if (record.tool.shouldAdvertise && !record.tool.shouldAdvertise(context)) {
@@ -158,8 +160,13 @@ export class CapabilityRegistry {
     return true
   }
 
-  private canUseTool(toolName: string, context?: ToolHostContext): boolean {
-    if (isPlanModeContext(context) && !PLAN_MODE_ALLOWED_TOOL_NAMES.has(toolName)) {
+  private canUseTool(tool: LocalTool, context?: ToolHostContext): boolean {
+    const toolName = tool.name
+    if (
+      isPlanModeContext(context) &&
+      !PLAN_MODE_ALLOWED_TOOL_NAMES.has(toolName) &&
+      tool.sideEffect !== 'read-only'
+    ) {
       return false
     }
     if (context?.blockedToolNames?.includes(toolName)) return false

@@ -403,10 +403,14 @@ export function WorkMetaRow({
     !processing &&
     typeof reasoningDurationMs === 'number' &&
     reasoningDurationMs >= 1000
+  const showStepSuffix = !expanded && stepCount > 0
 
   const content = (
     <>
       <span className={`tabular-nums ${processing ? 'ds-shiny-text' : ''}`}>{mainLabel}</span>
+      {showStepSuffix ? (
+        <span className="text-ds-faint">· {t('processStepCount', { count: stepCount })}</span>
+      ) : null}
       {showThoughtSuffix ? (
         <span className="text-ds-faint">
           · {t('thoughtFor', { duration: formatDuration(reasoningDurationMs!) })}

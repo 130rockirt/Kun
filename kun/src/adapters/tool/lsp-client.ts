@@ -415,7 +415,10 @@ async function createSession(workspaceRoot: string, serverKey: string): Promise<
   const proc = spawn(cmd.command, cmd.args, {
     stdio: ['pipe', 'pipe', 'pipe'],
     cwd: workspaceRoot,
-    env: shellSpawnEnv(),
+    env: {
+      ...shellSpawnEnv(),
+      ...cmd.env
+    },
     windowsHide: true
   })
 

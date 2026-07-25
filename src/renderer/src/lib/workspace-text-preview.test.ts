@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
+  isWorkspacePreviewPath,
   isWorkspaceRasterImagePreviewPath,
-  isWorkspaceTextPreviewPath
+  isWorkspaceTextPreviewPath,
+  workspaceFileKindLabel,
+  workspaceFilePreviewKind
 } from './workspace-text-preview'
 
 describe('isWorkspaceTextPreviewPath', () => {
@@ -29,5 +32,20 @@ describe('isWorkspaceRasterImagePreviewPath', () => {
   it('leaves SVG on the text-backed SVG preview path', () => {
     expect(isWorkspaceRasterImagePreviewPath('/tmp/app/image.svg')).toBe(false)
     expect(isWorkspaceRasterImagePreviewPath('/tmp/app/image.pdf')).toBe(false)
+  })
+})
+
+describe('workspaceFilePreviewKind', () => {
+  it('classifies the full workspace preview matrix', () => {
+    expect(workspaceFilePreviewKind('README.md')).toBe('markdown')
+    expect(workspaceFilePreviewKind('index.html')).toBe('html')
+    expect(workspaceFilePreviewKind('diagram.svg')).toBe('svg')
+    expect(workspaceFilePreviewKind('report.pdf')).toBe('pdf')
+    expect(workspaceFilePreviewKind('budget.xlsx')).toBe('office')
+    expect(workspaceFilePreviewKind('voice.mp3')).toBe('audio')
+    expect(workspaceFilePreviewKind('demo.webm')).toBe('video')
+    expect(workspaceFilePreviewKind('archive.zip')).toBe('unsupported')
+    expect(isWorkspacePreviewPath('photo.png')).toBe(true)
+    expect(workspaceFileKindLabel('budget.xlsx')).toBe('XLSX')
   })
 })

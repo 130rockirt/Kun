@@ -21,6 +21,21 @@ import { syncGuiManagedKunConfig } from './runtime/kun-runtime-config-service'
 import { JsonSettingsStore } from './settings-store'
 
 describe('LegacyProviderSettingsMigrationCoordinator', () => {
+  it('does not cache a failed credential runtime initialization', async () => {
+    const runtimeFactory = vi.fn()
+      .mockRejectedValueOnce(new Error('temporary DPAPI failure'))
+      .mockRejectedValueOnce(new Error('second initialization reached'))
+    const coordinator = new LegacyProviderSettingsMigrationCoordinator(runtimeFactory)
+    const input = {
+      provider: defaultModelProviderSettings(),
+      agents: { kun: { ...defaultKunRuntimeSettings(), dataDir: '/tmp/kun-credential-retry' } }
+    } as AppSettingsV1
+
+    await expect(coordinator.prepare(input)).rejects.toThrow('temporary DPAPI failure')
+    await expect(coordinator.prepare(input)).rejects.toThrow('second initialization reached')
+    expect(runtimeFactory).toHaveBeenCalledTimes(2)
+  })
+
   it('emits distinct protected credential bindings for numbered plan accounts', () => {
     const providerSettings = defaultModelProviderSettings()
     const kimi = getModelProviderPreset('kimi-code')!
@@ -62,6 +77,48 @@ describe('LegacyProviderSettingsMigrationCoordinator', () => {
     }))
     expect(runtimeProviders[cursor.id]?.baseUrl).toBeUndefined()
     expect(JSON.stringify(runtimeProviders)).not.toContain('cursor-secret')
+  })
+
+  it('projects legacy subscription profiles through their preset SDK transports', () => {
+    const providerSettings = defaultModelProviderSettings()
+    const legacySubscriptions = [
+      'claude-subscription',
+      'cursor-subscription',
+      'gemini-subscription',
+      'gemini-cli-subscription'
+    ].map((providerId) => {
+      const { kind: _removedKind, ...profile } = modelProviderPresetProfile(
+        getModelProviderPreset(providerId)!,
+        ''
+      )
+      return profile
+    })
+    const runtimeProviders = providersConfigForRuntime({
+      provider: {
+        ...providerSettings,
+        providers: [...providerSettings.providers, ...legacySubscriptions]
+      }
+    } as AppSettingsV1)
+
+    expect(runtimeProviders['claude-subscription']).toEqual(expect.objectContaining({
+      kind: 'agent-sdk',
+      credentialSourceId: 'settings:provider:claude-subscription'
+    }))
+    expect(runtimeProviders['cursor-subscription']).toEqual(expect.objectContaining({
+      kind: 'cursor-sdk',
+      credentialSourceId: 'settings:provider:cursor-subscription'
+    }))
+    expect(runtimeProviders['gemini-subscription']).toEqual(expect.objectContaining({
+      kind: 'antigravity-cli',
+      credentialSourceId: 'settings:provider:gemini-subscription'
+    }))
+    expect(runtimeProviders['gemini-cli-subscription']).toEqual(expect.objectContaining({
+      kind: 'gemini-cli-api',
+      credentialSourceId: 'settings:provider:gemini-cli-subscription'
+    }))
+    expect(runtimeProviders['cursor-subscription']?.baseUrl).toBeUndefined()
+    expect(runtimeProviders['gemini-subscription']?.baseUrl).toBeUndefined()
+    expect(runtimeProviders['gemini-cli-subscription']?.baseUrl).toBeUndefined()
   })
 
   it('backs up and removes plaintext while keeping secure bindings readable across restarts', async () => {

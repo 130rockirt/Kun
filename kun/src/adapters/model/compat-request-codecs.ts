@@ -1,11 +1,14 @@
 import type { ModelCapabilityMetadata } from '../../contracts/capabilities.js'
 import type { ModelEndpointFormat } from '../../contracts/model-endpoint-format.js'
 import type { ModelRequest, ModelToolSpec } from '../../ports/model-client.js'
-import { isDeepSeekHost } from './model-error-probe.js'
+import { isDeepSeekHost, isGeminiOpenAiHost } from './model-error-probe.js'
+
+export const COMPAT_HISTORY_CONTEXT = Symbol('compat-history-context')
 
 export type CompatChatMessage = {
   role: 'system' | 'user' | 'assistant' | 'tool'
   content: string | CompatChatMessageContentPart[] | null
+  [COMPAT_HISTORY_CONTEXT]?: true
   name?: string
   tool_call_id?: string
   reasoning_content?: string
@@ -50,7 +53,12 @@ export type CompatRequestCodecDeps = {
   applyChatReasoning: (
     body: Record<string, unknown>,
     effort: string | undefined,
-    input: { includeThinking: boolean; nativeDeepSeekHost: boolean; reasoning?: ReasoningCapability }
+    input: {
+      includeThinking: boolean
+      nativeDeepSeekHost: boolean
+      geminiOpenAiHost: boolean
+      reasoning?: ReasoningCapability
+    }
   ) => void
   responsesReasoning: (
     effort: string | undefined,
@@ -97,10 +105,12 @@ export class CompatRequestCodecs {
     if (input.request.responseFormat === 'json_object') body.response_format = { type: 'json_object' }
     if (input.stream && input.includeStreamUsage !== false) body.stream_options = { include_usage: true }
     const nativeDeepSeekHost = isDeepSeekHost(input.baseUrl)
-    const includeThinking = !isAzureOpenAiEndpoint(input.baseUrl)
+    const geminiOpenAiHost = isGeminiOpenAiHost(input.baseUrl)
+    const includeThinking = !isAzureOpenAiEndpoint(input.baseUrl) && !geminiOpenAiHost
     this.deps.applyChatReasoning(body, input.request.reasoningEffort, {
       includeThinking,
       nativeDeepSeekHost,
+      geminiOpenAiHost,
       reasoning: input.reasoning
     })
     if (
@@ -124,18 +134,31 @@ export class CompatRequestCodecs {
   }
 
   private responses(input: CompatRequestCodecInput): Record<string, unknown> {
-    const system = input.isCodex ? input.messages.filter((message) => message.role === 'system') : []
+    const system = input.isCodex
+      ? input.messages.filter(
+          (message) => message.role === 'system' && message[COMPAT_HISTORY_CONTEXT] !== true
+        )
+      : []
     const nonSystem = input.isCodex
-      ? input.messages.filter((message) => message.role !== 'system')
+      ? input.messages.filter(
+          (message) => message.role !== 'system' || message[COMPAT_HISTORY_CONTEXT] === true
+        )
       : input.messages
-    const instructions = system
+    let instructions = system
       .map((message) => this.deps.plainText(message.content).trim())
       .filter(Boolean)
       .join('\n\n')
     const responseTools = input.tools.map((tool) => ({
       type: 'function', name: tool.name, description: tool.description, parameters: tool.inputSchema
     }))
-    const responseInput = this.deps.responsesInput(this.deps.splitOpenAiMessages(nonSystem))
+    let responseInput = this.deps.responsesInput(this.deps.splitOpenAiMessages(nonSystem))
+    if (input.isCodex && !input.isCodexLite && responseInput.length === 0 && instructions) {
+      // The Responses endpoint requires input even when the request has only
+      // system context. Move (rather than duplicate) that context into a
+      // supported system-role input item so the wire request remains valid.
+      responseInput = [{ role: 'system', content: instructions }]
+      instructions = ''
+    }
     const litePrefix: Array<Record<string, unknown>> = input.isCodexLite
       ? [
           { type: 'additional_tools', role: 'developer', tools: responseTools },
@@ -151,7 +174,8 @@ export class CompatRequestCodecs {
       input: input.isCodexLite ? [...litePrefix, ...responseInput] : responseInput,
       ...(input.isCodexLite
         ? { store: false, tool_choice: 'auto', parallel_tool_calls: false }
-        : input.isCodex ? { instructions: instructions || ' ', store: false } : {})
+        : input.isCodex ? { instructions: instructions || ' ', store: false } : {}),
+      ...(input.isCodex ? { prompt_cache_key: input.request.threadId } : {})
     }
     if (input.maxTokens !== undefined && !input.isCodex) body.max_output_tokens = input.maxTokens
     if (input.request.temperature !== undefined) body.temperature = input.request.temperature

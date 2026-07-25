@@ -68,6 +68,7 @@ const PROFILE_MATCHES: Record<string, ModelsDevProviderMatch> = {
   codex: catalogMatch('openai', 'enrichment-only'),
   'claude-subscription': catalogMatch('anthropic', 'enrichment-only'),
   'gemini-subscription': catalogMatch('google', 'enrichment-only'),
+  'gemini-cli-subscription': catalogMatch('google', 'enrichment-only'),
   'grok-subscription': catalogMatch('xai', 'enrichment-only'),
   'vercel-ai-gateway': catalogMatch('vercel')
 }

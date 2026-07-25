@@ -3,6 +3,7 @@ import { createGuiPlanArtifact } from '../plan/plan-store'
 import {
   buildDraftGuiPlanTurnOverrides,
   buildGuiPlanTurnOverrides,
+  resolveAssociatedGuiPlan,
   resolvePlanTurnWorkspaceRoot,
   shouldAutoOpenPlanPanel
 } from './workbench-plan-controller'
@@ -37,6 +38,20 @@ describe('workbench plan controller helpers', () => {
     })
     expect(buildGuiPlanTurnOverrides(plan, '/Users/codex/app', 'thread-stale')).toBeUndefined()
     expect(buildGuiPlanTurnOverrides(plan, '/Users/codex/other', 'thread-current')).toBeUndefined()
+  })
+
+  it('restores a remembered thread plan when the panel state is empty', () => {
+    const remembered = createGuiPlanArtifact({
+      workspaceRoot: '/Users/codex/app',
+      threadId: 'thread-current',
+      relativePath: '.kunsdd/plan/checkout.md',
+      sourceRequest: 'Improve checkout',
+      now: 1
+    })
+
+    expect(resolveAssociatedGuiPlan(null, remembered, '/Users/codex/app', 'thread-current')).toBe(remembered)
+    expect(resolveAssociatedGuiPlan(null, remembered, '/Users/codex/app', 'thread-other')).toBeNull()
+    expect(resolveAssociatedGuiPlan(null, remembered, '/Users/codex/other', 'thread-current')).toBeNull()
   })
 
   it('auto-opens the plan panel only for a plan generated in the active thread', () => {

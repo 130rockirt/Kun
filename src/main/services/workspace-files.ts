@@ -71,21 +71,50 @@ const WORKSPACE_IMAGE_MIME_BY_EXT = new Map([
   ['.ico', 'image/x-icon']
 ])
 
+export function decodeWorkspaceTextPreview(bytes: Buffer): string | null {
+  if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) {
+    return bytes.subarray(3).toString('utf8')
+  }
+
+  if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) {
+    const body = bytes.subarray(2, bytes.length - ((bytes.length - 2) % 2))
+    return body.toString('utf16le')
+  }
+
+  if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) {
+    const body = Buffer.from(bytes.subarray(2, bytes.length - ((bytes.length - 2) % 2)))
+    for (let index = 0; index + 1 < body.length; index += 2) {
+      const first = body[index]
+      body[index] = body[index + 1]
+      body[index + 1] = first
+    }
+    return body.toString('utf16le')
+  }
+
+  return bytes.includes(0) ? null : bytes.toString('utf8')
+}
+
 export async function listWorkspaceDirectory(
   payload: WorkspaceDirectoryTarget
 ): Promise<WorkspaceDirectoryListResult> {
   try {
     const root = await resolveWorkspaceDirectory(payload)
     const entries = await readdir(root, { withFileTypes: true })
-    const normalized = entries
+    const normalized = await Promise.all(entries
       .filter((entry) => entry.name !== '.DS_Store')
-      .map((entry) => ({
+      .map(async (entry) => {
+        const entryPath = join(root, entry.name)
+        const metadata = await stat(entryPath).catch(() => null)
+        return {
         name: entry.name,
-        path: join(root, entry.name),
+        path: entryPath,
         type: entry.isDirectory() ? ('directory' as const) : ('file' as const),
-        ext: entry.isDirectory() ? '' : extensionFromName(entry.name)
+        ext: entry.isDirectory() ? '' : extensionFromName(entry.name),
+        ...(metadata ? { mtimeMs: metadata.mtimeMs } : {}),
+        ...(metadata?.isFile() ? { size: metadata.size } : {})
+        }
       }))
-      .sort(compareWorkspaceEntries)
+    normalized.sort(compareWorkspaceEntries)
 
     return { ok: true, root, entries: normalized }
   } catch (error) {
@@ -110,15 +139,17 @@ export async function readWorkspaceFile(payload: WorkspaceFileTarget): Promise<W
       const buffer = Buffer.alloc(maxBytes)
       const { bytesRead } = await handle.read(buffer, 0, maxBytes, 0)
       const bytes = buffer.subarray(0, bytesRead)
-      if (bytes.includes(0)) {
+      const content = decodeWorkspaceTextPreview(bytes)
+      if (content === null) {
         return { ok: false, message: 'This file appears to be binary and cannot be previewed.' }
       }
 
       return {
         ok: true,
         path: targetPath,
-        content: bytes.toString('utf8'),
+        content,
         size: fileInfo.size,
+        mtimeMs: fileInfo.mtimeMs,
         truncated: fileInfo.size > MAX_FILE_PREVIEW_BYTES,
         ...(payload.line ? { line: payload.line } : {}),
         ...(payload.column ? { column: payload.column } : {})
@@ -213,6 +244,17 @@ export async function writeWorkspaceFile(
   // previous version intact rather than producing a half-written file.
   try {
     const targetPath = await resolveTargetPathWithinWorkspace(payload.path, payload.workspaceRoot)
+    if (payload.expectedMtimeMs !== undefined && payload.force !== true) {
+      const current = await stat(targetPath).catch(() => null)
+      if (!current || current.mtimeMs !== payload.expectedMtimeMs) {
+        return {
+          ok: false,
+          code: 'modified_on_disk',
+          message: 'This file changed on disk after it was opened.',
+          ...(current ? { mtimeMs: current.mtimeMs } : {})
+        }
+      }
+    }
     await mkdir(dirname(targetPath), { recursive: true })
     const tmpPath = `${targetPath}.${randomUUID()}.tmp`
     try {
@@ -223,10 +265,12 @@ export async function writeWorkspaceFile(
       await unlink(tmpPath).catch(() => undefined)
       throw writeError
     }
+    const saved = await stat(targetPath)
     return {
       ok: true,
       path: targetPath,
-      savedAt: new Date().toISOString()
+      savedAt: new Date().toISOString(),
+      mtimeMs: saved.mtimeMs
     }
   } catch (error) {
     return {

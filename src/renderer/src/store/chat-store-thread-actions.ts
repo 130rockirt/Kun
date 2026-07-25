@@ -37,7 +37,8 @@ import {
 import {
   buildClawRuntimePrompt,
   buildCodeRuntimePrompt,
-  getActiveAgentApiKey
+  getActiveAgentApiKey,
+  getKunRuntimeSettings
 } from '@shared/app-settings'
 import type {
   ChatState,
@@ -130,6 +131,35 @@ import {
 import { GitCheckpointAvailabilityCache } from '../lib/git-checkpoint-availability'
 import type { ComposerContextAttachment } from '@kun/extension-api'
 
+const GUIDED_MESSAGE_RACE_WINDOW_MS = 5_000
+
+function hasRuntimeUserBlockForGuidance(
+  blocks: ChatBlock[],
+  message: { text: string; displayText?: string },
+  turnId: string,
+  requestStartedAt: number,
+  requestCompletedAt: number
+): boolean {
+  const expectedTexts = new Set(
+    [message.text, message.displayText]
+      .map((text) => text?.trim())
+      .filter((text): text is string => Boolean(text))
+  )
+  return blocks.some((block) => {
+    if (block.kind !== 'user' || block.id.startsWith('q-')) return false
+    const blockTurnId = block.turnId?.trim() || block.meta?.turnId?.trim()
+    if (blockTurnId !== turnId) return false
+    const blockTexts = [block.text, block.meta?.displayText]
+      .map((text) => text?.trim())
+      .filter((text): text is string => Boolean(text))
+    if (!blockTexts.some((text) => expectedTexts.has(text))) return false
+    const createdAt = block.createdAt ? Date.parse(block.createdAt) : Number.NaN
+    return Number.isFinite(createdAt) &&
+      createdAt >= requestStartedAt - GUIDED_MESSAGE_RACE_WINDOW_MS &&
+      createdAt <= requestCompletedAt + GUIDED_MESSAGE_RACE_WINDOW_MS
+  })
+}
+
 type SseAbortRef = { current: AbortController | null }
 
 type StoreActionContext = {
@@ -221,9 +251,22 @@ export function createThreadActions(
     try {
       const p = getProvider()
       const settings = await rendererRuntimeClient.getSettings()
+      const runtime = getKunRuntimeSettings(settings)
       const activeThread = get().activeThreadId
         ? get().threads.find((thread) => thread.id === get().activeThreadId)
         : null
+      const pickedAgentId = options.agentId?.trim() || get().composerAgentId?.trim() || ''
+      const personaProfile = pickedAgentId
+        ? settings.agents?.kun?.subagents?.profiles?.find(
+          (profile) => profile.id === pickedAgentId &&
+            profile.enabled &&
+            (profile.mode === 'primary' || profile.mode === 'all')
+        )
+        : undefined
+      const initialModel = personaProfile?.model?.trim() || runtime.model.trim()
+      const initialProviderId = personaProfile?.providerId?.trim() ||
+        (personaProfile?.model?.trim() ? '' : runtime.providerId.trim())
+      const initialSelectionSource = personaProfile ? 'user' as const : 'default' as const
 
       // 对话会话:不绑定项目文件夹,在 conversationWorkspaceRoot 下自动创建
       // 一个时间戳子目录作为工作目录(主进程负责实际建目录)。
@@ -239,25 +282,25 @@ export function createThreadActions(
           set({ error: created.error || i18n.t('common:worktreeAcquireFailed') })
           return
         }
-        const pickedAgentId = options.agentId?.trim() || get().composerAgentId?.trim() || ''
-        const personaProfile = pickedAgentId
-          ? settings.agents?.kun?.subagents?.profiles?.find(
-            (profile) => profile.id === pickedAgentId &&
-              profile.enabled &&
-              (profile.mode === 'primary' || profile.mode === 'all')
-          )
-          : undefined
         const t = await p.createThread({
           workspace: created.path,
           title: getDefaultThreadTitle(),
           mode: 'agent',
+          ...(initialProviderId ? { providerId: initialProviderId } : {}),
+          ...(initialModel ? { model: initialModel } : {}),
           ...(personaProfile ? {
             agentId: personaProfile.id,
-            ...(personaProfile.providerId ? { providerId: personaProfile.providerId } : {}),
-            ...(personaProfile.model ? { model: personaProfile.model } : {}),
             ...(personaProfile.systemPrompt ? { systemPrompt: personaProfile.systemPrompt } : {})
           } : {})
         })
+        if (initialModel) {
+          rememberThreadComposerSelection(
+            t.id,
+            initialModel,
+            initialProviderId,
+            initialSelectionSource
+          )
+        }
         set((s) => ({
           activeThreadId: t.id,
           threads: s.threads.some((thread) => thread.id === t.id) ? s.threads : [t, ...s.threads]
@@ -286,7 +329,7 @@ export function createThreadActions(
       set({ codeWorkspaceRoots })
       // Worktree pool mode always needs a fresh thread bound to a fresh pool
       // slot, so never reuse an existing main-workspace thread in that case.
-      const reusableThreadId = options.forceNew || options.useWorktreePool
+      const reusableThreadId = options.forceNew || options.useWorktreePool || personaProfile
         ? null
         : await findReusableEmptyThreadId(
             get(),
@@ -295,10 +338,31 @@ export function createThreadActions(
             (thread) => isCodeThread(thread, get().clawChannels)
           )
       if (reusableThreadId) {
+        if (initialModel) {
+          rememberThreadComposerSelection(
+            reusableThreadId,
+            initialModel,
+            initialProviderId,
+            'default'
+          )
+        }
         if (get().activeThreadId !== reusableThreadId) {
           await get().selectThread(reusableThreadId)
         } else {
-          set({ error: null })
+          set({
+            error: null,
+            ...(initialModel
+              ? {
+                  composerModel: initialModel,
+                  composerProviderId: initialProviderId,
+                  composerReasoningEffort: composerReasoningEffortForSelection(
+                    get().composerModelGroups,
+                    initialModel,
+                    initialProviderId
+                  )
+                }
+              : {})
+          })
         }
         return
       }
@@ -333,25 +397,25 @@ export function createThreadActions(
       // Primary-agent persona snapshot: bind this thread to the picked
       // subagent profile and freeze its providerId / model / systemPrompt
       // at create time so later agent edits don't drift the thread.
-      const pickedAgentId = options.agentId?.trim() || get().composerAgentId?.trim() || ''
-      const personaProfile = pickedAgentId
-        ? settings.agents?.kun?.subagents?.profiles?.find(
-            (profile) => profile.id === pickedAgentId &&
-              profile.enabled &&
-              (profile.mode === 'primary' || profile.mode === 'all')
-          )
-        : undefined
       const t = await p.createThread({
         workspace: workspaceRoot,
         title: getDefaultThreadTitle(),
         mode: 'agent',
+        ...(initialProviderId ? { providerId: initialProviderId } : {}),
+        ...(initialModel ? { model: initialModel } : {}),
         ...(personaProfile ? {
           agentId: personaProfile.id,
-          ...(personaProfile.providerId ? { providerId: personaProfile.providerId } : {}),
-          ...(personaProfile.model ? { model: personaProfile.model } : {}),
           ...(personaProfile.systemPrompt ? { systemPrompt: personaProfile.systemPrompt } : {})
         } : {})
       })
+      if (initialModel) {
+        rememberThreadComposerSelection(
+          t.id,
+          initialModel,
+          initialProviderId,
+          initialSelectionSource
+        )
+      }
       // Register + activate optimistically before refreshing. A freshly created
       // Kun thread may not be listed until the first message is written.
       // Setting it active first lets refreshThreads preserve it in the sidebar.
@@ -530,7 +594,10 @@ export function createThreadActions(
         ? latestUserMessageId ?? findLatestUserBlockId(blocks)
         : null
       const threadSnap = get().threads.find((thread) => thread.id === id) ?? null
-      const composerSelection = composerSelectionForThread(get(), threadSnap)
+      const composerSelection = composerSelectionForThread(get(), threadSnap, {
+        hasUserMessages: rawBlocks.some((block) => block.kind === 'user'),
+        runtimeModel: threadModel
+      })
       const composerMode = composerModeForThread(threadSnap, readThreadComposerMode(id))
       const queuedMessages = reconcileQueuedMessages(durableQueuedMessages, {
         busy,
@@ -781,6 +848,15 @@ export function createThreadActions(
       if (!state.busy) void get().drainQueuedMessages()
       return false
     }
+    const delegated = state.lastDelegatedRuntimeState
+    if (
+      delegated?.threadId === state.activeThreadId &&
+      delegated.turnId === state.currentTurnId &&
+      delegated.capabilities.liveSteering === false
+    ) {
+      set({ error: i18n.t('common:guideQueuedMessageUnsupported') })
+      return false
+    }
     const provider = getProvider()
     if (typeof provider.steerUserMessage !== 'function') {
       set({ error: i18n.t('common:guideQueuedMessageUnsupported') })
@@ -788,6 +864,7 @@ export function createThreadActions(
     }
 
     guidingQueuedMessageIds.add(id)
+    const requestStartedAt = Date.now()
     try {
       await provider.steerUserMessage(
         state.activeThreadId,
@@ -795,10 +872,39 @@ export function createThreadActions(
         message.text,
         message.displayText ? { displayText: message.displayText } : undefined
       )
-      set((current) => ({
-        queuedMessages: current.queuedMessages.filter((candidate) => candidate.id !== id),
-        error: null
-      }))
+      const requestCompletedAt = Date.now()
+      set((current) => {
+        const stillQueued = current.queuedMessages.some((candidate) => candidate.id === id)
+        if (!stillQueued) return { error: null }
+        const runtimeMessageAlreadyVisible = hasRuntimeUserBlockForGuidance(
+          current.blocks,
+          message,
+          state.currentTurnId!,
+          requestStartedAt,
+          requestCompletedAt
+        )
+        const displayText = message.displayText ?? message.text
+        return {
+          queuedMessages: current.queuedMessages.filter((candidate) => candidate.id !== id),
+          blocks: runtimeMessageAlreadyVisible
+            ? current.blocks
+            : [
+                ...current.blocks,
+                {
+                  kind: 'user' as const,
+                  id: message.id,
+                  turnId: state.currentTurnId!,
+                  createdAt: new Date(requestCompletedAt).toISOString(),
+                  text: displayText,
+                  ...(message.modelLabel ? { modelLabel: message.modelLabel } : {}),
+                  ...(message.displayText && message.displayText !== message.text
+                    ? { meta: { displayText: message.displayText } }
+                    : {})
+                }
+              ],
+          error: null
+        }
+      })
       persistActiveQueuedMessages()
       return true
     } catch (error) {
@@ -1154,6 +1260,7 @@ export function createThreadActions(
       const checkpointWorkspaceRoot = normalizeWorkspaceRoot(checkpointThread?.workspace) || normalizeWorkspaceRoot(settings.workspaceRoot)
       const checkpointWorkspaceKey = checkpointWorkspaceRoot.replaceAll('\\', '/').toLowerCase()
       if (
+        settings.checkpointCleanup?.createEnabled &&
         checkpointWorkspaceRoot &&
         checkpointGitAvailability.canAttempt(checkpointWorkspaceKey) &&
         typeof window.kunGui.createGitCheckpoint === 'function'
@@ -1168,7 +1275,11 @@ export function createThreadActions(
         }))
         if (checkpoint.ok) {
           workspaceCheckpointId = checkpoint.checkpointId
-        } else if (checkpoint.reason !== 'not_git_repo' && checkpoint.reason !== 'no_workspace') {
+        } else if (
+          checkpoint.reason !== 'not_git_repo' &&
+          checkpoint.reason !== 'no_workspace' &&
+          checkpoint.reason !== 'disabled'
+        ) {
           if (checkpoint.reason === 'git_unavailable') {
             checkpointGitAvailability.markUnavailable(checkpointWorkspaceKey)
           }

@@ -103,6 +103,10 @@ export async function syncGuiManagedKunConfig(
     )
   )
   const appSettings = options?.appSettings ?? options?.scheduleMcp?.settings
+  const modelProfiles = {
+    ...runtime.modelProfiles,
+    ...(appSettings ? resolveKunRuntimeSettings(appSettings).modelProfiles : {})
+  }
   const projectMcpServers = appSettings
     ? await approvedProjectMcpServers(appSettings)
     : {}
@@ -116,8 +120,8 @@ export async function syncGuiManagedKunConfig(
     objectValue(capabilities.skills),
     appSettings
   )
-  const providers = options?.scheduleMcp?.settings
-    ? providersConfigForRuntime(options.scheduleMcp.settings)
+  const providers = appSettings
+    ? providersConfigForRuntime(appSettings)
     : undefined
   const routePools = appSettings ? routePoolsConfigForRuntime(appSettings) : undefined
   const localModelGateway = appSettings ? localModelGatewayConfigForRuntime(appSettings) : undefined
@@ -147,7 +151,7 @@ export async function syncGuiManagedKunConfig(
       ...(routePools ? { routePools } : {}),
       ...(localModelGateway ? { localModelGateway } : {})
     },
-    models: modelConfigForRuntime(objectValue(existing?.models), runtime.modelProfiles),
+    models: modelConfigForRuntime(objectValue(existing?.models), modelProfiles),
     contextCompaction: contextCompactionConfigForRuntime(
       runtime.contextCompaction,
       objectValue(existing?.contextCompaction)

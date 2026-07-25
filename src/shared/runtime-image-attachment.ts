@@ -29,10 +29,13 @@ export type RuntimeImageAttachmentMetadata = {
   width?: number
   height?: number
   documentText?: string
+  documentFormat?: 'pdf' | 'docx' | 'xlsx' | 'pptx' | 'text' | 'csv' | 'json' | 'xml'
+  sourceSha256?: string
   pageCount?: number
   truncated?: boolean
   localFilePath?: string
   textFallback?: RuntimeImageAttachmentTextFallback
+  visualPreview?: RuntimeImageAttachmentTextFallback
   threadIds?: string[]
   workspaces?: string[]
   createdAt: string

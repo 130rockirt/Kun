@@ -97,7 +97,7 @@ function settings(): AppSettingsV1 {
     workspaceRoot: '/tmp/workspace',
     conversationWorkspaceRoot: '~/Documents/Kun',
     log: { enabled: false, retentionDays: 7 },
-    checkpointCleanup: { enabled: false, intervalDays: 3 },
+    checkpointCleanup: { createEnabled: false, enabled: false, intervalDays: 3 },
     notifications: { turnComplete: true },
     appBehavior: { openAtLogin: false, startMinimized: false, closeToTray: false },
     keyboardShortcuts: defaultKeyboardShortcuts(),
@@ -121,6 +121,11 @@ function registerOptions(overrides: Partial<Parameters<typeof import('./register
     getMainWindow: () => null,
     applySettingsPatch,
     saveSettingsPatch,
+    resetUnreadableCredentials: vi.fn(async () => ({
+      reset: true as const,
+      backupPath: '/tmp/credential-recovery',
+      movedItems: ['secret.key']
+    })),
     runtimeRequest: vi.fn() as never,
     getRuntimeSettingsSyncStatus: () => ({
       state: 'idle' as const,
@@ -143,6 +148,10 @@ function registerOptions(overrides: Partial<Parameters<typeof import('./register
     loadGuiUpdaterModule: vi.fn() as never,
     resolveLogDirectory: () => '/tmp/logs',
     logError: vi.fn(),
+    workspacePreviewProtocols: {
+      createLease: vi.fn(async () => ({ ok: false, message: 'unavailable' })),
+      release: vi.fn(() => ({ ok: true }))
+    } as never,
     ...overrides
   }
 }
@@ -170,6 +179,8 @@ describe('registerAppIpcHandlers', () => {
     registerAppIpcHandlers(registerOptions())
 
     expect(handlers.get('cursor-subscription:discover')).toBeTypeOf('function')
+    expect(handlers.get('gemini-cli-subscription:status')).toBeTypeOf('function')
+    expect(handlers.get('gemini-cli-subscription:models')).toBeTypeOf('function')
   })
 
   it('bypasses cache for development reload commands and keeps packaged reloads ordinary', async () => {
@@ -273,6 +284,35 @@ describe('registerAppIpcHandlers', () => {
       handler?.({}, { agents: { kun: { mysteryFlag: true } } })
     ).rejects.toThrow(/Invalid payload for settings:set/)
     expect(applySettingsPatch).not.toHaveBeenCalled()
+  })
+
+  it('requires trusted native confirmation before resetting unreadable credentials', async () => {
+    const mainFrame = { processId: 10, routingId: 20 }
+    const contents = { id: 7, mainFrame }
+    const mainWindow = { isDestroyed: () => false, webContents: contents }
+    const resetUnreadableCredentials = vi.fn(async () => ({
+      reset: true as const,
+      backupPath: '/tmp/credential-recovery',
+      movedItems: ['secret.key']
+    }))
+    registerAppIpcHandlers(registerOptions({
+      getMainWindow: () => mainWindow as never,
+      resetUnreadableCredentials
+    }))
+    const handler = handlers.get('credentials:reset-unreadable')
+
+    await expect(handler?.({
+      sender: { id: 99 },
+      senderFrame: { processId: 90, routingId: 91 }
+    })).rejects.toThrow(/trusted workbench frame/)
+
+    electronMock.showMessageBox.mockResolvedValueOnce({ response: 1 })
+    await expect(handler?.({ sender: contents, senderFrame: mainFrame })).resolves.toEqual({ reset: false })
+    expect(resetUnreadableCredentials).not.toHaveBeenCalled()
+
+    electronMock.showMessageBox.mockResolvedValueOnce({ response: 0 })
+    await expect(handler?.({ sender: contents, senderFrame: mainFrame })).resolves.toMatchObject({ reset: true })
+    expect(resetUnreadableCredentials).toHaveBeenCalledOnce()
   })
 
   it('reports whether a workspace directory currently exists', async () => {

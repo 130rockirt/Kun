@@ -16,6 +16,7 @@ import {
   DEFAULT_TOOL_OUTPUT_MAX_LINES,
   MIN_KUN_LOCAL_PORT,
   WRITE_INLINE_COMPLETION_MODEL_IDS,
+  defaultKunContextCompactionSettings,
   defaultModelProviderSettings,
   isKunRuntimeInsecure,
   kunToolPermissionModeFromSettings,
@@ -274,14 +275,7 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
     backend: 'hybrid',
     sqlitePath: ''
   }
-  const contextCompaction = kun.contextCompaction ?? {
-    defaultSoftThreshold: 16000,
-    defaultHardThreshold: 24000,
-    summaryMode: 'model',
-    summaryTimeoutMs: 15000,
-    summaryMaxTokens: 1200,
-    summaryInputMaxBytes: 98304
-  }
+  const contextCompaction = kun.contextCompaction ?? defaultKunContextCompactionSettings()
   const modelContext = modelContextProfileSummary({
     model: kun.model,
     fallbackSoftThreshold: contextCompaction.defaultSoftThreshold,

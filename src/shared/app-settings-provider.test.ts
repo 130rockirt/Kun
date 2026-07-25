@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  activeModelProviderNeedsApiKey,
   DEFAULT_DEEPSEEK_BASE_URL,
   defaultClawSettings,
   defaultKeyboardShortcuts,
@@ -14,6 +15,7 @@ import {
   isTextToSpeechModelId,
   isVideoGenerationModelId,
   modelProviderPresetProfile,
+  modelProviderRequiresApiKey,
   modelProviderPresetAccountCount,
   modelProviderPresetAccountProfile,
   modelProviderTokenPlanProfile,
@@ -29,7 +31,7 @@ import {
   listSpeechToTextProviderProfiles,
   listTextToSpeechProviderProfiles,
   listVideoGenerationProviderProfiles,
-  modelProviderModelProfilesForSettings,
+  modelProviderModelProfilesForProvider,
   listModelProviderModelIds,
   modelSupportsImageInput,
   defaultDesignSettings,
@@ -98,6 +100,41 @@ describe('Gemini subscription provider preset', () => {
     })
   })
 
+  it('keeps the Gemini CLI direct API transport and models separate from Antigravity', () => {
+    const preset = getModelProviderPreset('gemini-cli-subscription')
+    expect(preset).not.toBeNull()
+    const profile = modelProviderPresetProfile(preset!, 'must-not-be-stored')
+    const normalized = normalizeModelProviderSettings({ providers: [profile] })
+    expect(
+      normalized.providers.find((provider) => provider.id === 'gemini-cli-subscription')
+    ).toMatchObject({
+      name: 'Gemini CLI 订阅（API）',
+      kind: 'gemini-cli-api',
+      apiKey: '',
+      baseUrl: '',
+      endpointFormat: 'custom_endpoint',
+      retry: expect.objectContaining({
+        maxAttempts: 3,
+        httpStatusCodes: expect.arrayContaining([429, 503])
+      }),
+      speech: {
+        protocol: 'gemini-cli-audio',
+        baseUrl: '',
+        models: expect.arrayContaining(['gemini-2.5-flash'])
+      },
+      models: expect.arrayContaining([
+        'gemini-3.1-pro-preview',
+        'gemini-3-flash-preview',
+        'gemini-3.1-flash-lite',
+        'gemini-2.5-pro',
+        'gemini-2.5-flash'
+      ])
+    })
+    expect(
+      normalized.providers.find((provider) => provider.id === 'gemini-cli-subscription')?.models
+    ).not.toContain('gemini-3.6-flash')
+  })
+
   it('migrates the retired Code Assist transport to Antigravity CLI', () => {
     const normalized = normalizeModelProviderSettings({
       providers: [{
@@ -119,7 +156,7 @@ describe('Cursor subscription provider preset', () => {
   it('uses the official Cursor SDK transport with an auto fallback model', () => {
     const preset = getModelProviderPreset('cursor-subscription')
     expect(preset).not.toBeNull()
-    expect(preset?.apiKeyUrl).toBe('https://cursor.com/dashboard?tab=integrations')
+    expect(preset?.apiKeyUrl).toBe('https://cursor.com/dashboard/api?section=user-keys#user-api-keys')
     const profile = modelProviderPresetProfile(preset!, 'cursor-secret')
     const normalized = normalizeModelProviderSettings({ providers: [profile] })
     expect(normalized.providers.find((provider) => provider.id === profile.id)).toMatchObject({
@@ -138,6 +175,49 @@ describe('Cursor subscription provider preset', () => {
         }
       }
     })
+  })
+
+  it('removes stale speech capability metadata because Cursor has no transcription API', () => {
+    const profile = {
+      ...modelProviderPresetProfile(getModelProviderPreset('cursor-subscription')!, 'cursor-secret'),
+      speech: {
+        protocol: 'openai-transcriptions' as const,
+        baseUrl: '',
+        models: ['gemini-2.5-flash']
+      }
+    }
+    const normalized = normalizeModelProviderSettings({ providers: [profile] })
+
+    expect(
+      normalized.providers.find((provider) => provider.id === 'cursor-subscription')?.speech
+    ).toBeUndefined()
+  })
+})
+
+describe('legacy subscription transport migration', () => {
+  it.each([
+    ['claude-subscription', 'agent-sdk'],
+    ['cursor-subscription', 'cursor-sdk'],
+    ['gemini-subscription', 'antigravity-cli'],
+    ['gemini-cli-subscription', 'gemini-cli-api']
+  ] as const)('restores %s to its delegated transport when kind is missing', (providerId, kind) => {
+    const profile = modelProviderPresetProfile(getModelProviderPreset(providerId)!, '')
+    const { kind: _removedKind, ...legacyProfile } = profile
+    const normalized = normalizeModelProviderSettings({ providers: [legacyProfile] })
+
+    expect(normalized.providers.find((provider) => provider.id === providerId))
+      .toMatchObject({ kind })
+  })
+
+  it('drops a retired Gemini API credential when restoring Antigravity CLI', () => {
+    const profile = modelProviderPresetProfile(getModelProviderPreset('gemini-subscription')!, '')
+    const { kind: _removedKind, ...legacyProfile } = profile
+    const normalized = normalizeModelProviderSettings({
+      providers: [{ ...legacyProfile, apiKey: 'retired-code-assist-secret' }]
+    })
+
+    expect(normalized.providers.find((provider) => provider.id === 'gemini-subscription'))
+      .toMatchObject({ kind: 'antigravity-cli', apiKey: '' })
   })
 })
 
@@ -257,7 +337,7 @@ describe('ChatGPT subscription migration', () => {
 })
 
 describe('Grok subscription media capabilities', () => {
-  it('exposes the Grok Build image and video models on the subscription profile', () => {
+  it('exposes the Grok Build image, video, and speech models on the subscription profile', () => {
     const preset = getModelProviderPreset(GROK_SUBSCRIPTION_PROVIDER_ID)
     expect(preset).toBeDefined()
     const provider = modelProviderPresetProfile(preset!, 'grok-oauth-json')
@@ -271,6 +351,11 @@ describe('Grok subscription media capabilities', () => {
       protocol: 'grok-imagine-video',
       baseUrl: 'https://api.x.ai/v1',
       models: ['grok-imagine-video-1.5-preview', 'grok-imagine-video']
+    })
+    expect(provider.speech).toEqual({
+      protocol: 'xai-stt',
+      baseUrl: 'https://api.x.ai/v1',
+      models: ['grok-transcribe']
     })
 
     const defaults = defaultKunRuntimeSettings()
@@ -339,7 +424,7 @@ function settings(): AppSettingsV1 {
     workspaceRoot: '/tmp/workspace',
     conversationWorkspaceRoot: '~/Documents/Kun',
     log: { enabled: false, retentionDays: 7 },
-    checkpointCleanup: { enabled: false, intervalDays: 3 },
+    checkpointCleanup: { createEnabled: false, enabled: false, intervalDays: 3 },
     notifications: { turnComplete: true },
     appBehavior: { openAtLogin: false, startMinimized: false, closeToTray: false },
     keyboardShortcuts: defaultKeyboardShortcuts(),
@@ -354,6 +439,66 @@ function settings(): AppSettingsV1 {
     disabledSkillIds: []
   }
 }
+
+describe('active model provider API-key status', () => {
+  it('requires an API key when the active default provider has no effective key', () => {
+    const state = settings()
+    state.provider.providers = state.provider.providers.map((provider) =>
+      provider.id === 'deepseek' ? { ...provider, apiKey: '' } : provider
+    )
+    state.agents.kun.providerId = 'deepseek'
+    state.agents.kun.apiKey = ''
+
+    expect(modelProviderRequiresApiKey(
+      state.provider.providers.find((provider) => provider.id === 'deepseek')!
+    )).toBe(true)
+    expect(activeModelProviderNeedsApiKey(state)).toBe(true)
+  })
+
+  it('accepts the configured effective key for an active API-key provider', () => {
+    const state = settings()
+    state.provider.apiKey = 'sk-deepseek'
+    state.provider.providers = state.provider.providers.map((provider) =>
+      provider.id === 'deepseek' ? { ...provider, apiKey: 'sk-deepseek' } : provider
+    )
+    state.agents.kun.providerId = 'deepseek'
+
+    expect(activeModelProviderNeedsApiKey(state)).toBe(false)
+  })
+
+  it.each([
+    ['claude-subscription', 'agent-sdk'],
+    ['gemini-subscription', 'antigravity-cli'],
+    ['gemini-cli-subscription', 'gemini-cli-api']
+  ] as const)('accepts the keyless %s transport', (presetId, expectedKind) => {
+    const preset = getModelProviderPreset(presetId)
+    expect(preset).not.toBeNull()
+    const profile = modelProviderPresetProfile(preset!, '')
+    expect(profile.kind).toBe(expectedKind)
+    expect(modelProviderRequiresApiKey(profile)).toBe(false)
+
+    const state = settings()
+    state.provider.providers.push(profile)
+    state.agents.kun.providerId = profile.id
+    state.agents.kun.apiKey = ''
+
+    expect(activeModelProviderNeedsApiKey(state)).toBe(false)
+  })
+
+  it('still requires the Cursor dashboard key for the active Cursor SDK provider', () => {
+    const preset = getModelProviderPreset('cursor-subscription')
+    expect(preset).not.toBeNull()
+    const profile = modelProviderPresetProfile(preset!, '')
+    expect(modelProviderRequiresApiKey(profile)).toBe(true)
+
+    const state = settings()
+    state.provider.providers.push(profile)
+    state.agents.kun.providerId = profile.id
+    state.agents.kun.apiKey = ''
+
+    expect(activeModelProviderNeedsApiKey(state)).toBe(true)
+  })
+})
 
 describe('model provider settings', () => {
   it('resolves Kun runtime credentials from the selected provider', () => {
@@ -471,7 +616,35 @@ describe('model provider settings', () => {
         : provider
     )
 
-    expect(modelProviderModelProfilesForSettings(state)['custom-model'].contextWindowTokens).toBe(256_000)
+    expect(modelProviderModelProfilesForProvider(state, 'custom')['custom-model'].contextWindowTokens)
+      .toBe(256_000)
+  })
+
+  it('keeps same-id model profiles scoped to the selected provider', () => {
+    const state = settings()
+    state.provider.providers = state.provider.providers.map((provider) => ({
+      ...provider,
+      models: [...provider.models, 'shared-model'],
+      modelProfiles: {
+        ...provider.modelProfiles,
+        'shared-model': {
+          inputModalities: ['text'],
+          outputModalities: ['text'],
+          supportsToolCalling: true,
+          messageParts: ['text'],
+          endpointFormat: provider.id === 'custom' ? 'messages' : 'responses'
+        }
+      }
+    }))
+    state.agents.kun.providerId = 'custom'
+    state.agents.kun.model = 'shared-model'
+
+    expect(resolveKunRuntimeSettings(state).modelProfiles['shared-model']).toMatchObject({
+      endpointFormat: 'messages'
+    })
+    expect(modelProviderModelProfilesForProvider(state, 'deepseek')['shared-model']).toMatchObject({
+      endpointFormat: 'responses'
+    })
   })
 
   it('preserves per-model max output tokens in custom provider profiles', () => {
@@ -1131,6 +1304,13 @@ describe('model provider settings', () => {
             modelProfiles: {}
           }
         ]
+      },
+      agents: {
+        kun: {
+          ...base.agents.kun,
+          providerId: 'xiaomi-token-plan',
+          model: 'mimo-v2.5'
+        }
       }
     })
 
@@ -1211,6 +1391,62 @@ describe('model provider settings', () => {
       baseUrl: 'https://api.xiaomimimo.com/v1',
       apiKey: 'sk-xiaomi',
       model: 'mimo-v2.5-asr'
+    }))
+  })
+
+  it('resolves Grok and Gemini CLI subscription speech without mixing Cursor models', () => {
+    const grokProfile = modelProviderPresetProfile(
+      getModelProviderPreset('grok-subscription')!,
+      'grok-oauth-json'
+    )
+    const geminiCliProfile = modelProviderPresetProfile(
+      getModelProviderPreset('gemini-cli-subscription')!,
+      ''
+    )
+    const cursorProfile = {
+      ...modelProviderPresetProfile(
+        getModelProviderPreset('cursor-subscription')!,
+        'cursor-secret'
+      ),
+      speech: {
+        protocol: 'openai-transcriptions' as const,
+        baseUrl: '',
+        models: ['gemini-2.5-flash']
+      }
+    }
+    const appSettings = {
+      ...settings(),
+      provider: {
+        ...defaultModelProviderSettings(),
+        providers: [
+          ...defaultModelProviderSettings().providers,
+          grokProfile,
+          geminiCliProfile,
+          cursorProfile
+        ]
+      },
+      agents: {
+        kun: {
+          ...defaultKunRuntimeSettings(),
+          speechToText: {
+            ...defaultKunRuntimeSettings().speechToText,
+            enabled: true,
+            providerId: geminiCliProfile.id,
+            model: 'gemini-2.5-flash'
+          }
+        }
+      }
+    }
+
+    expect(listSpeechToTextProviderProfiles(appSettings).map((profile) => profile.id))
+      .toEqual(['grok-subscription', 'gemini-cli-subscription'])
+    expect(resolveKunSpeechToTextSettings(appSettings)).toEqual(expect.objectContaining({
+      enabled: true,
+      providerId: 'gemini-cli-subscription',
+      protocol: 'gemini-cli-audio',
+      baseUrl: '',
+      apiKey: '',
+      model: 'gemini-2.5-flash'
     }))
   })
 

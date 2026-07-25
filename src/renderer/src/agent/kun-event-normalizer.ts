@@ -2,7 +2,9 @@ import type { CoreChildRuntimeMetadataJson, CoreRuntimeEventJson, CoreTurnItemJs
 import type {
   ApprovalStatusPayload,
   CompactionEventPayload,
+  DelegatedRuntimeState,
   ReviewEventPayload,
+  RequestContextSnapshot,
   RuntimeErrorEventPayload,
   RuntimeStatusEventPayload,
   ThreadUsageSnapshot,
@@ -32,6 +34,8 @@ export type KunEventNormalizerDeps = {
   ) => RuntimeProjectionAction
   goalAction: (event: CoreRuntimeEventJson, cleared: boolean) => RuntimeProjectionAction
   todosAction: (event: CoreRuntimeEventJson, cleared: boolean) => RuntimeProjectionAction
+  contextSnapshot: (event: CoreRuntimeEventJson) => RequestContextSnapshot | null
+  delegatedRuntime: (event: CoreRuntimeEventJson) => DelegatedRuntimeState | null
   usage: (event: CoreRuntimeEventJson) => ThreadUsageSnapshot | null
   runtimeError: (event: CoreRuntimeEventJson, fallback: string) => RuntimeErrorEventPayload
   errorFromRuntime: (payload: RuntimeErrorEventPayload) => Error
@@ -114,8 +118,12 @@ export function normalizeKunRuntimeEvent(
       const status = deps.approvalStatus(event)
       return status ? [{ type: 'approval_status_changed', payload: status }] : []
     }
-    case 'user_input_requested':
-      return [{ type: 'user_input_requested', payload: deps.userInputRequest(event) }]
+    case 'user_input_requested': {
+      const payload = deps.userInputRequest(event)
+      return payload.questions.length > 0
+        ? [{ type: 'user_input_requested', payload }]
+        : []
+    }
     case 'user_input_resolved': {
       const answers = deps.userInputAnswers(event.answers)
       return [{
@@ -139,6 +147,14 @@ export function normalizeKunRuntimeEvent(
       return [deps.todosAction(event, false)]
     case 'todos_cleared':
       return [deps.todosAction(event, true)]
+    case 'context_snapshot': {
+      const snapshot = deps.contextSnapshot(event)
+      return snapshot ? [{ type: 'context_snapshot_received', payload: snapshot }] : []
+    }
+    case 'delegated_runtime': {
+      const state = deps.delegatedRuntime(event)
+      return state ? [{ type: 'delegated_runtime_received', payload: state }] : []
+    }
     case 'usage': {
       const usage = deps.usage(event)
       return usage ? [{ type: 'usage_received', payload: usage }] : []
@@ -166,10 +182,17 @@ export function normalizeKunRuntimeEvent(
         return tool ? [{ type: 'tool_updated', payload: tool }] : []
       }
       const payload = deps.runtimeError(event, 'Kun turn failed')
-      return [
-        { type: 'runtime_error_received', payload },
-        { type: 'turn_failed', error: deps.errorFromRuntime(payload), options: { terminal: true } }
-      ]
+      const terminal: RuntimeProjectionAction = {
+        type: 'turn_failed',
+        error: deps.errorFromRuntime(payload),
+        options: { terminal: true, scope: 'conversation' }
+      }
+      // A message-less terminal event normally follows a more useful
+      // structured `error` event. Settle the turn without adding a generic
+      // "Kun turn failed" duplicate to the conversation.
+      return event.message?.trim()
+        ? [{ type: 'runtime_error_received', payload }, terminal]
+        : [terminal]
     }
     case 'error':
       if (event.code === 'compaction_summary_fallback') {

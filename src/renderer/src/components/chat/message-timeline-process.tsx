@@ -39,6 +39,7 @@ import {
 } from './message-timeline-tools'
 import { SubagentGroup, type OpenChildThreadHandler } from './SubagentCallCard'
 import { InjectedMemoryMetaChip } from './injected-memory-meta-chip'
+import { AnimatedWorkLogo } from './AnimatedWorkLogo'
 
 export type ProcessSection = {
   id: string
@@ -95,6 +96,28 @@ export function groupProcessSections(blocks: ChatBlock[]): ProcessSection[] {
           ? 'output'
           : 'execution'
     const last = sections[sections.length - 1]
+
+    // Reasoning and tool calls between two visible assistant updates are one
+    // activity phase. Keeping them together prevents long-running turns from
+    // becoming an alternating "thinking / tool / thinking / tool" waterfall.
+    // Exception: live thinking after a completed tool batch must stay separate,
+    // otherwise the section title becomes "Thinking..." and eats the tool summary.
+    const liveReasoningAfterTools =
+      block.kind === 'reasoning' &&
+      block.id === 'live-reasoning' &&
+      last?.kind === 'execution' &&
+      last.blocks.some((entry) => entry.kind !== 'reasoning')
+    if (
+      last &&
+      !liveReasoningAfterTools &&
+      (last.kind === 'reasoning' || last.kind === 'execution') &&
+      (kind === 'reasoning' || kind === 'execution')
+    ) {
+      if (last.kind !== kind) last.kind = 'execution'
+      last.blocks.push(block)
+      continue
+    }
+
     if (last && last.kind === kind) {
       last.blocks.push(block)
       continue
@@ -137,7 +160,10 @@ function sectionHasDetails(
   return block ? getProcessDetail(block, describeProcessBlock(block, t)).kind !== 'none' : false
 }
 
-function isProcessSectionActive(section: ProcessSection, processing: boolean): boolean {
+export function processSectionHasActiveWork(
+  section: ProcessSection,
+  processing: boolean
+): boolean {
   if (!processing) return false
   if (section.kind === 'reasoning') {
     return section.blocks.some((block) => block.id === 'live-reasoning')
@@ -146,7 +172,10 @@ function isProcessSectionActive(section: ProcessSection, processing: boolean): b
     return section.blocks.some((block) => block.id === 'live-assistant')
   }
   return section.blocks.some(
-    (block) => block.id === 'live-assistant' || blockHasPendingRuntimeWork(block)
+    (block) =>
+      block.id === 'live-reasoning' ||
+      block.id === 'live-assistant' ||
+      blockHasPendingRuntimeWork(block)
   )
 }
 
@@ -232,13 +261,21 @@ export function ProcessSectionRow({
         )
       : []
   const hasDetails = sectionHasDetails(section, t)
-  const active = isProcessSectionActive(section, processing)
+  const active = processSectionHasActiveWork(section, processing)
   const errorTone = processSectionErrorTone(section.blocks)
   const hasError = errorTone !== null
+  // Ordinary tool execution loading chrome lives on the turn-bottom row.
+  // Keep in-section animation only for non-execution phases (e.g. live
+  // reasoning fallback); approvals / user-input expand in place without it.
+  const showActiveAnimation =
+    active &&
+    section.kind !== 'execution' &&
+    !hasError &&
+    !sectionHasPendingApproval(section) &&
+    !sectionHasRequestUserInput(section)
   const defaultExpanded =
     (processing && hasError) ||
     sectionHasPendingApproval(section) ||
-    (active && section.kind === 'reasoning') ||
     (processing && section.kind === 'execution' && sectionHasRequestUserInput(section))
   const forceExpanded = sectionHasPendingApproval(section)
   const expanded = hasDetails && (forceExpanded || (userExpanded ?? defaultExpanded))
@@ -262,7 +299,11 @@ export function ProcessSectionRow({
     return <SubagentGroup blocks={section.blocks} onOpenChildThread={onOpenChildThread} />
   }
 
-  if (section.kind === 'execution' && section.blocks.length === 1) {
+  if (
+    section.kind === 'execution' &&
+    section.blocks.length === 1 &&
+    section.blocks[0]?.kind !== 'reasoning'
+  ) {
     const [block] = section.blocks
     if (block) {
       return (
@@ -302,6 +343,7 @@ export function ProcessSectionRow({
         <button
           type="button"
           onClick={() => setUserExpanded(!(userExpanded ?? defaultExpanded))}
+          aria-expanded={expanded}
           className={`group flex w-fit max-w-full items-center gap-1.5 rounded-md py-0.5 text-left text-[14px] font-medium transition hover:opacity-85 ${
             hasError ? processErrorTextClass(errorTone) : 'text-ds-muted'
           }`}
@@ -311,7 +353,13 @@ export function ProcessSectionRow({
               <span className={`h-2 w-2 rounded-full ${processErrorDotClass(errorTone)}`} />
             </span>
           ) : null}
-          {SectionIcon ? <ProcessGlyph Icon={SectionIcon} /> : null}
+          {showActiveAnimation ? (
+            <span className="ds-work-logo-slot ds-work-logo-slot-sm mr-0.5">
+              <AnimatedWorkLogo active phase="trail" size="sm" />
+            </span>
+          ) : SectionIcon ? (
+            <ProcessGlyph Icon={SectionIcon} />
+          ) : null}
           <span className={active && !hasError ? 'ds-shiny-text' : ''}>{title}</span>
           {expanded ? (
             <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-45" strokeWidth={1.8} />
@@ -330,7 +378,13 @@ export function ProcessSectionRow({
               <span className={`h-2 w-2 rounded-full ${processErrorDotClass(errorTone)}`} />
             </span>
           ) : null}
-          {SectionIcon ? <ProcessGlyph Icon={SectionIcon} /> : null}
+          {showActiveAnimation ? (
+            <span className="ds-work-logo-slot ds-work-logo-slot-sm mr-0.5">
+              <AnimatedWorkLogo active phase="trail" size="sm" />
+            </span>
+          ) : SectionIcon ? (
+            <ProcessGlyph Icon={SectionIcon} />
+          ) : null}
           <span className={active && !hasError ? 'ds-shiny-text' : ''}>{title}</span>
         </div>
       )}
@@ -365,10 +419,6 @@ export function ProcessSectionRow({
   )
 }
 
-function processBlockIsRunningTool(block: ChatBlock, processing: boolean): boolean {
-  return processing && block.kind === 'tool' && block.status === 'running'
-}
-
 function processBlockIsAutoOpenPending(block: ChatBlock, processing: boolean): boolean {
   return (
     processing &&
@@ -379,8 +429,9 @@ function processBlockIsAutoOpenPending(block: ChatBlock, processing: boolean): b
 }
 
 function processBlockIsActive(block: ChatBlock, processing: boolean): boolean {
+  // Running tools stay visually quiet in the process timeline; ConversationTurn
+  // owns the bottom "thinking / running" loading row.
   return (
-    processBlockIsRunningTool(block, processing) ||
     processBlockIsAutoOpenPending(block, processing) ||
     (processing && block.kind === 'assistant' && block.id === 'live-assistant')
   )
@@ -410,7 +461,6 @@ function ProcessStackRows({
       {blocks.map((block) => {
         const summary = describeProcessBlock(block, t)
         const detail = getProcessDetail(block, summary)
-        const isRunningTool = processBlockIsRunningTool(block, processing)
         const canExpand = detail.kind !== 'none'
         const autoOpenRequestInput = processing && isRequestUserInputTool(block)
         const autoOpenPending = processBlockIsAutoOpenPending(block, processing) || isPendingApproval(block)
@@ -541,7 +591,6 @@ function ProcessEntryRow({
   const detail = getProcessDetail(block, summary)
   const canExpand = detail.kind !== 'none'
   const isAssistantProcessText = block.kind === 'assistant'
-  const isRunningTool = processBlockIsRunningTool(block, processing)
   const isAutoOpenPending = processBlockIsAutoOpenPending(block, processing) || isPendingApproval(block)
   const isStreamingAssistant = processing && block.kind === 'assistant' && block.id === 'live-assistant'
   const errorTone = processBlockErrorTone(block)
@@ -555,7 +604,12 @@ function ProcessEntryRow({
     (forceOpen || (userOpen ?? defaultOpen))
 
   const { verb, rest } = splitVerb(summary)
-  const rowActive = isRunningTool || isAutoOpenPending || isStreamingAssistant
+  const rowActive = isAutoOpenPending || isStreamingAssistant
+  const showActiveAnimation =
+    rowActive &&
+    !isError &&
+    !isPendingApproval(block) &&
+    !isRequestUserInputTool(block)
   const wrapSummary = (block.kind === 'system' && !canExpand) || isAssistantProcessText
   const canToggle = canExpand && !forceOpen
   const RowIcon = processBlockIcon(block)
@@ -592,7 +646,13 @@ function ProcessEntryRow({
             : 'cursor-default'
         }`}
       >
-        {RowIcon ? <ProcessGlyph Icon={RowIcon} className="mt-1" /> : null}
+        {showActiveAnimation ? (
+          <span className="ds-work-logo-slot ds-work-logo-slot-sm mr-0.5 mt-1">
+            <AnimatedWorkLogo active phase="trail" size="sm" />
+          </span>
+        ) : RowIcon ? (
+          <ProcessGlyph Icon={RowIcon} className="mt-1" />
+        ) : null}
         <span
           className={`min-w-0 flex-1 ${wrapSummary ? 'whitespace-pre-wrap break-words' : 'truncate'} ${
             rowActive && !isError ? 'ds-shiny-text' : ''
@@ -674,7 +734,7 @@ function describeProcessSection(
   }
 ): string {
   if (section.kind === 'reasoning') {
-    if (opts.processing && isProcessSectionActive(section, true)) {
+    if (opts.processing && processSectionHasActiveWork(section, true)) {
       return t('thinkingNow')
     }
     if (
@@ -693,6 +753,9 @@ function describeProcessSection(
     return t('processTextLabel')
   }
 
+  // Keep execution titles stable while the turn is live. Active thinking /
+  // running chrome is rendered at the turn bottom, not by replacing this
+  // summary with a single in-flight tool or "Thinking...".
   if (section.blocks.length === 1) {
     return describeProcessBlock(section.blocks[0], t)
   }

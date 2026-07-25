@@ -412,6 +412,9 @@ describe('HybridThreadStore', () => {
       inflight: new InflightTracker(),
       steering: new SteeringQueue(),
       compactor: new ContextCompactor(),
+      attachmentStore: () => ({
+        bindScopes: async () => []
+      } as unknown as import('../src/attachments/attachment-store.js').AttachmentStore),
       ids: new SequentialIdGenerator(),
       nowIso: () => '2026-06-04T00:00:02.000Z'
     })

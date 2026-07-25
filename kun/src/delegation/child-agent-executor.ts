@@ -10,7 +10,11 @@ import type { ApprovalPolicy, SandboxMode } from '../contracts/policy.js'
 import type { RuntimeTuningConfig } from '../config/kun-config.js'
 import { AgentLoop } from '../loop/agent-loop.js'
 import { normalizeRoleReasoningEffort } from '../loop/reasoning-effort.js'
-import type { ContextCompactionConfig, ModelConfig } from '../loop/model-context-profile.js'
+import type {
+  ContextCompactionConfig,
+  ModelConfig,
+  ModelContextProfile
+} from '../loop/model-context-profile.js'
 import { ContextCompactor } from '../loop/context-compactor.js'
 import { InflightTracker } from '../loop/inflight-tracker.js'
 import { SteeringQueue } from '../loop/steering-queue.js'
@@ -61,7 +65,10 @@ export type ChildAgentExecutorOptions = {
   tokenEconomy?: TokenEconomyConfig
   runtime?: RuntimeTuningConfig
   nowIso?: () => string
-  modelCapabilities?: (model: string) => ModelCapabilityMetadata
+  modelCapabilities?: (model: string, providerId?: string) => ModelCapabilityMetadata
+  profilesForProvider?: (
+    providerId: string | undefined
+  ) => readonly ModelContextProfile[]
   skillRuntime?: SkillRuntime
   instructionRuntime?: InstructionRuntime
   memoryStore?: MemoryStore
@@ -119,7 +126,8 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
     const steering = new SteeringQueue()
     const compactor = new ContextCompactor({
       contextCompaction: options.contextCompaction,
-      models: options.models
+      models: options.models,
+      profilesForProvider: options.profilesForProvider
     })
     const turns = new TurnService({
       threadStore,

@@ -13,6 +13,7 @@ import {
 import {
   createGuiPlanArtifact,
   guiPlanMatchesContext,
+  readRememberedGuiPlan,
   useGuiPlanStore,
   type GuiPlanArtifact
 } from '../plan/plan-store'
@@ -74,6 +75,17 @@ export function resolvePlanTurnWorkspaceRoot(
 
 function normalizePlanWorkspaceRoot(value: string | undefined): string {
   return normalizeWorkspaceRoot(value).replaceAll('\\', '/').replace(/\/+$/, '')
+}
+
+export function resolveAssociatedGuiPlan(
+  activePlan: GuiPlanArtifact | null,
+  rememberedPlan: GuiPlanArtifact | null,
+  workspaceRoot: string,
+  activeThreadId: string | null
+): GuiPlanArtifact | null {
+  if (activePlan && guiPlanMatchesContext(activePlan, workspaceRoot, activeThreadId)) return activePlan
+  if (rememberedPlan && guiPlanMatchesContext(rememberedPlan, workspaceRoot, activeThreadId)) return rememberedPlan
+  return null
 }
 
 export function buildGuiPlanTurnOverrides(
@@ -226,16 +238,21 @@ export function useWorkbenchPlanController({
       return false
     }
     const { workspaceRoot: _workspaceRoot, ...messageOverrides } = overrides ?? {}
-    // Default to draft: an explicit guiPlan override (e.g. from SDD upgrade)
-    // takes priority; otherwise we always start a fresh plan. Previously the
-    // active plan was auto-detected as operation: 'refine', which caused new
-    // composer requests to be treated as refinements of an old plan.
-    const guiPlan = messageOverrides.guiPlan ?? buildDraftGuiPlanTurnOverrides({
-      request: text,
-      workspaceRoot: targetWorkspaceRoot,
-      activeThreadId: currentChatState.activeThreadId,
-      existingRelativePaths: await readExistingPlanRelativePaths(targetWorkspaceRoot)
-    }).guiPlan
+    const activeThreadId = currentChatState.activeThreadId
+    const associatedPlan = resolveAssociatedGuiPlan(
+      currentPlan,
+      readRememberedGuiPlan(targetWorkspaceRoot, activeThreadId),
+      targetWorkspaceRoot,
+      activeThreadId
+    )
+    const guiPlan = messageOverrides.guiPlan
+      ?? buildGuiPlanTurnOverrides(associatedPlan, targetWorkspaceRoot, activeThreadId)?.guiPlan
+      ?? buildDraftGuiPlanTurnOverrides({
+        request: text,
+        workspaceRoot: targetWorkspaceRoot,
+        activeThreadId,
+        existingRelativePaths: await readExistingPlanRelativePaths(targetWorkspaceRoot)
+      }).guiPlan
     // Tag the in-flight plan turn with the thread it belongs to BEFORE awaiting
     // sendMessage. A fast response can land a create_plan block in `blocks`
     // before this Promise resolves; if we tagged only after the await, the

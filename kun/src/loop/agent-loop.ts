@@ -127,7 +127,7 @@ export type AgentLoopOptions = {
   ids: IdGenerator
   nowIso: () => string
   nowMs?: () => number
-  modelCapabilities?: (model: string) => ModelCapabilityMetadata
+  modelCapabilities?: (model: string, providerId?: string) => ModelCapabilityMetadata
   skillRuntime?: SkillRuntime
   instructionRuntime?: InstructionRuntime
   attachmentStore?: AttachmentStore
@@ -532,6 +532,10 @@ export class AgentLoop {
       }
       await this.drainSteering(threadId, turnId, signal)
       await this.recordPipelineStage(threadId, turnId, 'post_start')
+      // Fire-and-forget: start LLM title generation as soon as the first-turn
+      // user message is in place, in parallel with the main reply. Only uses
+      // user input; never blocks the agent loop.
+      void this.threadTitle.generateAfterTurn(threadId, turnId, signal).catch(() => {})
       if (delegatedSdkRuntime) {
         // The delegated SDK owns its model stream and cannot consume Kun's
         // native mid-turn queue. Drain anything that arrived before startup,
@@ -546,9 +550,6 @@ export class AgentLoop {
         const settlement = await finalizer.observeExternal({ threadId, turnId })
         finalStatus = statusFromSettlement(settlement, reportedStatus)
         finalError = errorFromSettlement(settlement)
-        if (finalStatus === 'completed') {
-          void this.threadTitle.generateAfterTurn(threadId, turnId, signal).catch(() => {})
-        }
         return finalStatus
       }
       const status = await this.loop(threadId, turnId, signal)
@@ -560,11 +561,6 @@ export class AgentLoop {
       })
       finalStatus = statusFromSettlement(settlement, status)
       finalError = errorFromSettlement(settlement)
-      if (finalStatus === 'completed') {
-        // Fire-and-forget: generate an LLM title after the FIRST assistant
-        // reply completes, only when the thread still has a default title.
-        void this.threadTitle.generateAfterTurn(threadId, turnId, signal).catch(() => {})
-      }
       return finalStatus
     } catch (error) {
       if (wallTimeExceeded) return failWallTimeLimit()
@@ -697,7 +693,9 @@ export class AgentLoop {
     const limits = thread?.extensionBudget
       ? {
           ...configuredLimits,
-          maxSteps: Math.min(configuredLimits.maxSteps, thread.extensionBudget.maxModelRequests),
+          maxSteps: configuredLimits.maxSteps === undefined
+            ? thread.extensionBudget.maxModelRequests
+            : Math.min(configuredLimits.maxSteps, thread.extensionBudget.maxModelRequests),
           maxWallTimeMs: Math.min(configuredLimits.maxWallTimeMs, thread.extensionBudget.maxElapsedMs)
         }
       : configuredLimits
@@ -707,10 +705,13 @@ export class AgentLoop {
         await this.drainAndSealSteering(threadId, turnId, signal)
         return 'aborted'
       }
-      if (step >= limits.maxSteps) {
+      if (limits.maxSteps !== undefined && step >= limits.maxSteps) {
         await this.drainAndSealSteering(threadId, turnId, signal)
         const extensionLimited = Boolean(
-          thread?.extensionBudget && thread.extensionBudget.maxModelRequests <= configuredLimits.maxSteps
+          thread?.extensionBudget && (
+            configuredLimits.maxSteps === undefined ||
+            thread.extensionBudget.maxModelRequests <= configuredLimits.maxSteps
+          )
         )
         await this.recordTurnLimitExceeded(
           threadId,

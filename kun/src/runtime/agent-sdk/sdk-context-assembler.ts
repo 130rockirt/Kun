@@ -5,17 +5,23 @@
  * mode instructions unless we feed them in. This module builds those pieces as
  * plain text so the runtime can splice them into the SDK prompt.
  *
- * Design: kun owns the canonical history, so every SDK turn is stateless from
- * kun's side — we replay the prior conversation as a transcript preamble each
- * turn instead of relying on the SDK's in-memory `resume` (which is lost on a
- * provider switch or runtime restart). All functions here are pure and
- * unit-tested; the runtime/factory do the impure data-loading and call these.
+ * Kun owns the canonical portable history. A provider-native session may carry
+ * the ordinary next turn, while this bounded handoff is used to seed a new
+ * native generation after a switch, compaction, import, or missing checkpoint.
  */
 import type { TurnItem } from '../../contracts/items.js'
+import { effectiveHistoryAfterLatestCompaction } from '../../loop/compaction-history.js'
 import { buildSessionTranscript } from '../../loop/session-summary.js'
 
 /** Default cap for the replayed history transcript (bytes). */
 export const DEFAULT_SDK_HISTORY_TRANSCRIPT_MAX_BYTES = 48 * 1024
+export const SDK_HISTORY_OMISSION_MARKER =
+  '...[older history omitted to fit delegated context]'
+
+type HistoryChunk = {
+  text: string
+  truncationSource?: string
+}
 
 /**
  * Render the prior conversation (everything BEFORE the current turn) as a
@@ -28,8 +34,156 @@ export function buildHistoryTranscript(
   maxBytes: number = DEFAULT_SDK_HISTORY_TRANSCRIPT_MAX_BYTES
 ): string {
   const priorItems = items.filter((item) => item.turnId !== currentTurnId)
-  if (priorItems.length === 0) return ''
-  return buildSessionTranscript(priorItems, maxBytes).trim()
+  const effective = effectiveHistoryAfterLatestCompaction(priorItems)
+  if (effective.length === 0) return ''
+
+  const limit = Math.max(1_024, Math.floor(maxBytes))
+  const summary = effective[0]?.kind === 'compaction' && effective[0].replacedTokens > 0
+    ? effective[0]
+    : undefined
+  const chunks = completeHistoryChunks(summary ? effective.slice(1) : effective)
+  const renderedSummary = summary ? renderChunk([summary]) : ''
+  const markerReserve = utf8Bytes(SDK_HISTORY_OMISSION_MARKER) + 1
+  const summaryWasTruncated = utf8Bytes(renderedSummary) > limit - markerReserve
+  const summaryText = summaryWasTruncated
+    ? fitUtf8(renderedSummary, Math.max(1, limit - markerReserve))
+    : renderedSummary
+  const selected: string[] = []
+  let used = utf8Bytes(summaryText)
+  let omitted = summaryWasTruncated
+
+  for (let index = chunks.length - 1; index >= 0; index -= 1) {
+    const chunk = chunks[index]
+    const separatorBytes = selected.length > 0 || summaryText ? 1 : 0
+    if (used + separatorBytes + utf8Bytes(chunk.text) > limit) {
+      omitted = true
+      // Keep a contiguous newest-first tail. Skipping an oversized recent
+      // exchange and then admitting older small messages would recreate the
+      // long-session bug this handoff is meant to prevent.
+      if (selected.length === 0 && chunk.truncationSource) {
+        const available = limit - used - separatorBytes - markerReserve
+        const recentTail = truncateRecentChunk(
+          chunk.truncationSource,
+          Math.max(0, available)
+        )
+        if (recentTail) {
+          selected.unshift(recentTail)
+          used += separatorBytes + utf8Bytes(recentTail)
+        }
+      }
+      break
+    }
+    selected.unshift(chunk.text)
+    used += separatorBytes + utf8Bytes(chunk.text)
+  }
+
+  const sections = [
+    ...(summaryText ? [summaryText] : []),
+    ...selected
+  ]
+  if (omitted) {
+    const markerBytes = utf8Bytes(SDK_HISTORY_OMISSION_MARKER)
+    const markerSeparator = sections.length > 0 ? 1 : 0
+    while (
+      sections.length > (summaryText ? 1 : 0) &&
+      utf8Bytes(sections.join('\n')) + markerSeparator + markerBytes > limit
+    ) {
+      sections.splice(summaryText ? 1 : 0, 1)
+    }
+    const markerIndex = summaryText ? 1 : 0
+    sections.splice(markerIndex, 0, SDK_HISTORY_OMISSION_MARKER)
+  }
+  return fitUtf8(sections.join('\n'), limit).trim()
+}
+
+function completeHistoryChunks(items: readonly TurnItem[]): HistoryChunk[] {
+  const turnOrder: string[] = []
+  const byTurn = new Map<string, TurnItem[]>()
+  for (const item of items) {
+    let turnItems = byTurn.get(item.turnId)
+    if (!turnItems) {
+      turnItems = []
+      byTurn.set(item.turnId, turnItems)
+      turnOrder.push(item.turnId)
+    }
+    turnItems.push(item)
+  }
+  const chunks: HistoryChunk[] = []
+  for (const turnId of turnOrder) {
+    const turnItems = byTurn.get(turnId) ?? []
+    const resultByCall = new Map<string, Extract<TurnItem, { kind: 'tool_result' }>>()
+    for (const item of turnItems) {
+      if (item.kind === 'tool_result' && isTerminal(item)) resultByCall.set(item.callId, item)
+    }
+    const included: TurnItem[] = []
+    let containsToolInteraction = false
+    for (const item of turnItems) {
+      if (!isTerminal(item) || item.kind === 'tool_result') continue
+      if (item.kind === 'tool_call') {
+        const result = resultByCall.get(item.callId)
+        if (!result) continue
+        containsToolInteraction = true
+        included.push(item, result)
+        continue
+      }
+      included.push(item)
+    }
+    const text = renderChunk(included)
+    if (!text) continue
+    const lastItem = included.at(-1)
+    const truncationSource = !containsToolInteraction && lastItem
+      ? renderChunk([lastItem])
+      : ''
+    chunks.push({
+      text,
+      ...(truncationSource ? { truncationSource } : {})
+    })
+  }
+  return chunks
+}
+
+function isTerminal(item: TurnItem): boolean {
+  return item.status === 'completed' || item.status === 'failed'
+}
+
+function renderChunk(items: readonly TurnItem[]): string {
+  return buildSessionTranscript(items, 16 * 1024 * 1024).trim()
+}
+
+function utf8Bytes(text: string): number {
+  return Buffer.byteLength(text, 'utf8')
+}
+
+function fitUtf8(text: string, maxBytes: number): string {
+  if (utf8Bytes(text) <= maxBytes) return text
+  let out = ''
+  let used = 0
+  for (const char of text) {
+    const bytes = utf8Bytes(char)
+    if (used + bytes > maxBytes) break
+    out += char
+    used += bytes
+  }
+  return out
+}
+
+function truncateRecentChunk(text: string, maxBytes: number): string {
+  if (maxBytes <= 0) return ''
+  if (utf8Bytes(text) <= maxBytes) return text
+  const labelEnd = text.indexOf(']')
+  const label = labelEnd >= 0 ? text.slice(0, labelEnd + 1) : '[recent history]'
+  const separator = ' … '
+  const contentBytes = maxBytes - utf8Bytes(label) - utf8Bytes(separator)
+  if (contentBytes <= 0) return ''
+  let out = ''
+  let used = 0
+  for (const char of [...text].reverse()) {
+    const bytes = utf8Bytes(char)
+    if (used + bytes > contentBytes) break
+    out = char + out
+    used += bytes
+  }
+  return `${label}${separator}${out}`
 }
 
 export interface SdkPromptParts {

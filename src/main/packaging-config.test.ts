@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { builtinModules, createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
@@ -10,6 +11,7 @@ const builderConfig = require('../../electron-builder.config.cjs')
 const afterPack = require('../../scripts/after-pack.cjs')
 const nativeBuildEnv = require('../../scripts/electron-native-build-env.cjs')
 const macNotarize = require('../../scripts/mac-notarize.cjs')
+const officeCliPrepare = require('../../scripts/prepare-officecli.cjs')
 
 const tempRoots: string[] = []
 
@@ -131,6 +133,20 @@ function createMacPackContext(root: string): {
   }
 }
 
+function createWindowsPackContext(root: string, signIf: (path: string) => Promise<boolean>) {
+  return {
+    appOutDir: join(root, 'win-unpacked'),
+    electronPlatformName: 'win32',
+    arch: 'x64',
+    packager: {
+      appInfo: {
+        productFilename: 'Kun'
+      },
+      signIf
+    }
+  }
+}
+
 afterEach(() => {
   while (tempRoots.length > 0) {
     const root = tempRoots.pop()
@@ -196,10 +212,121 @@ describe('electron-builder Kun packaging', () => {
       .toContain('Copyright (c) 2025 Addy Osmani')
   })
 
+  it('bundles one pinned OfficeCLI target with its manifests and legal notices', () => {
+    expect(builderConfig.extraResources).toEqual(expect.arrayContaining([
+      {
+        from: 'resources/officecli/current',
+        to: 'officecli',
+        filter: ['officecli', 'officecli.exe', 'selected.json']
+      },
+      {
+        from: 'resources/officecli/manifest.json',
+        to: 'officecli/manifest.json'
+      },
+      {
+        from: 'resources/officecli/legal',
+        to: 'officecli/legal',
+        filter: ['LICENSE', 'NOTICE', 'THIRD-PARTY-NOTICES.txt']
+      }
+    ]))
+    const manifest = JSON.parse(
+      readFileSync(join(process.cwd(), 'resources/officecli/manifest.json'), 'utf8')
+    )
+    expect(manifest).toMatchObject({
+      schemaVersion: 1,
+      version: '1.0.141',
+      releaseTag: 'v1.0.141',
+      schemaCrc: '2da9da05'
+    })
+    expect(Object.keys(manifest.assets).sort()).toEqual([
+      'darwin-arm64',
+      'darwin-x64',
+      'linux-x64',
+      'win32-x64'
+    ])
+    for (const asset of Object.values(manifest.assets) as Array<Record<string, unknown>>) {
+      expect(asset.sha256).toMatch(/^[a-f0-9]{64}$/)
+      expect(asset.size).toEqual(expect.any(Number))
+      expect(asset.url).toMatch(/^https:\/\/github\.com\/iOfficeAI\/OfficeCLI\/releases\/download\/v1\.0\.141\//)
+    }
+    expect(officeCliPrepare._internals.parseArgs(['--platform', 'mac', '--arch', 'x64']))
+      .toEqual({ platform: 'darwin', arch: 'x64' })
+  })
+
+  it('verifies the packaged OfficeCLI architecture selection, digest, mode, and notices', () => {
+    const root = tempRoot()
+    const context = createMacPackContext(root)
+    const officeRoot = join(afterPack._internals.packedResourcesDir(context), 'officecli')
+    const binary = Buffer.from('pinned officecli fixture')
+    const digest = createHash('sha256').update(binary).digest('hex')
+    const manifest = {
+      schemaVersion: 1,
+      version: '1.0.141',
+      releaseTag: 'v1.0.141',
+      schemaCrc: '2da9da05',
+      assets: {
+        'darwin-arm64': {
+          name: 'officecli-mac-arm64',
+          size: binary.length,
+          sha256: digest,
+          url: 'https://example.invalid/officecli'
+        }
+      }
+    }
+    const selected = {
+      schemaVersion: 1,
+      version: '1.0.141',
+      releaseTag: 'v1.0.141',
+      schemaCrc: '2da9da05',
+      platform: 'darwin',
+      arch: 'arm64',
+      asset: 'officecli-mac-arm64',
+      size: binary.length,
+      sha256: digest
+    }
+    mkdirSync(join(officeRoot, 'legal'), { recursive: true })
+    writeFileSync(join(officeRoot, 'manifest.json'), JSON.stringify(manifest))
+    writeFileSync(join(officeRoot, 'selected.json'), JSON.stringify(selected))
+    writeFileSync(join(officeRoot, 'officecli'), binary)
+    chmodSync(join(officeRoot, 'officecli'), 0o644)
+    for (const name of ['LICENSE', 'NOTICE', 'THIRD-PARTY-NOTICES.txt']) {
+      writeFileSync(join(officeRoot, 'legal', name), name)
+    }
+
+    expect(() => afterPack._internals.validateBundledOfficeCli(context)).not.toThrow()
+    expect(statSync(join(officeRoot, 'officecli')).mode & 0o111).not.toBe(0)
+
+    writeFileSync(join(officeRoot, 'officecli.exe'), 'wrong architecture')
+    expect(() => afterPack._internals.validateBundledOfficeCli(context)).toThrow(
+      /exactly one darwin-arm64/
+    )
+  })
+
+  it('passes the nested OfficeCLI executable through the Windows signing manager', async () => {
+    const root = tempRoot()
+    const signedPaths: string[] = []
+    const context = createWindowsPackContext(root, async (path) => {
+      signedPaths.push(path)
+      return true
+    })
+
+    await expect(afterPack._internals.maybeSignBundledOfficeCli(context)).resolves.toBe(true)
+    expect(signedPaths).toEqual([
+      join(context.appOutDir, 'resources', 'officecli', 'officecli.exe')
+    ])
+  })
+
   it('validates the unpacked Kun runtime before release artifacts are created', () => {
     const root = tempRoot()
     const context = createMacPackContext(root)
     const unpackedRoot = afterPack._internals.unpackedAppRoot(context)
+
+    expect(afterPack.KUN_RUNTIME_REQUIRED_PATHS).toEqual(expect.arrayContaining([
+      'kun/node_modules/typescript/package.json',
+      'kun/node_modules/typescript/lib/typescript.js',
+      'kun/node_modules/typescript-language-server/package.json',
+      'kun/node_modules/typescript-language-server/lib/cli.mjs'
+    ]))
 
     for (const relativePath of afterPack.KUN_RUNTIME_REQUIRED_PATHS) {
       touch(join(unpackedRoot, relativePath))
@@ -258,6 +385,9 @@ describe('electron-builder Kun packaging', () => {
     const installerScript = readFileSync(join(process.cwd(), 'build/installer.nsh'), 'utf8')
 
     expect(builderConfig.nsis.include).toBe('build/installer.nsh')
+    expect(installerScript).toContain('!macro customInit')
+    expect(installerScript).toContain('${if} ${isUpdated}')
+    expect(installerScript).toContain('SetSilent silent')
     expect(installerScript).toContain('customCheckAppRunning')
     expect(installerScript).toContain('customUnInstallCheck')
     expect(installerScript).toContain('customUnInstallCheckCurrentUser')

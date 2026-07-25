@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
-import { AttachmentPreviewLoader } from './attachment-preview-loader'
+import {
+  AttachmentPreviewLoader,
+  attachmentPreviewFailureStateForScope
+} from './attachment-preview-loader'
 
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void; reject: (reason?: unknown) => void } {
   let resolve!: (value: T) => void
@@ -61,6 +64,21 @@ describe('AttachmentPreviewLoader', () => {
     expect(loadA).toHaveBeenCalledTimes(2)
   })
 
+  it('keeps failures within one scope and clears them when a thread switch changes scope', () => {
+    const failed = {
+      scopeKey: '["thread-a","/workspace/a"]',
+      failedPreviewIds: { attachment: true as const }
+    }
+
+    expect(attachmentPreviewFailureStateForScope(failed, failed.scopeKey)).toBe(failed)
+    expect(attachmentPreviewFailureStateForScope(failed, '["thread-b","/workspace/b"]')).toEqual({
+      scopeKey: '["thread-b","/workspace/b"]',
+      failedPreviewIds: {}
+    })
+    expect(attachmentPreviewFailureStateForScope(failed, '["thread-a","/workspace/a"]'))
+      .toBe(failed)
+  })
+
   it('does not permanently cache failed preview requests', async () => {
     const loader = new AttachmentPreviewLoader()
     const run = vi.fn()
@@ -69,6 +87,18 @@ describe('AttachmentPreviewLoader', () => {
 
     await expect(loader.load('attachment', run)).rejects.toThrow('preview unavailable')
     await expect(loader.load('attachment', run)).resolves.toBe('data:image/png;base64,recovered')
+    expect(run).toHaveBeenCalledTimes(2)
+  })
+
+  it('reuses a successful preview after a failed request is retried on re-entry', async () => {
+    const loader = new AttachmentPreviewLoader()
+    const run = vi.fn()
+      .mockRejectedValueOnce(new Error('scope was not ready'))
+      .mockResolvedValueOnce('data:image/png;base64,recovered')
+
+    await expect(loader.load('thread-a:attachment', run)).rejects.toThrow('scope was not ready')
+    await expect(loader.load('thread-a:attachment', run)).resolves.toBe('data:image/png;base64,recovered')
+    await expect(loader.load('thread-a:attachment', run)).resolves.toBe('data:image/png;base64,recovered')
     expect(run).toHaveBeenCalledTimes(2)
   })
 })

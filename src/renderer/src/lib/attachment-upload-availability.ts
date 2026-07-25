@@ -11,7 +11,6 @@ export function isChatAttachmentUploadEnabled(input: AttachmentUploadAvailabilit
     input.runtimeConnection === 'ready' &&
     (input.route === 'chat' || input.route === 'write' || input.route === 'design') &&
     (input.mode === 'agent' || input.mode === 'plan') &&
-    input.attachmentStoreAvailable === true &&
-    input.modelSupportsImageInput === true
+    input.attachmentStoreAvailable === true
   )
 }

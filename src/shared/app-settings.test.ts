@@ -68,7 +68,7 @@ function settings(): AppSettingsV1 {
     workspaceRoot: '/tmp/workspace',
     conversationWorkspaceRoot: '~/Documents/Kun',
     log: { enabled: false, retentionDays: 7 },
-    checkpointCleanup: { enabled: false, intervalDays: 3 },
+    checkpointCleanup: { createEnabled: false, enabled: false, intervalDays: 3 },
     notifications: { turnComplete: true },
     appBehavior: { openAtLogin: false, startMinimized: false, closeToTray: false },
     keyboardShortcuts: defaultKeyboardShortcuts(),
@@ -92,6 +92,54 @@ describe('application locale settings', () => {
   it('falls back to English for an unsupported persisted locale', () => {
     const input = { ...settings(), locale: 'fr' } as unknown as AppSettingsV1
     expect(normalizeAppSettings(input).locale).toBe('en')
+  })
+})
+
+describe('initial setup completion', () => {
+  it('defaults a new keyless configuration to incomplete', () => {
+    expect(normalizeAppSettings(settings()).initialSetupCompleted).toBe(false)
+  })
+
+  it('keeps explicitly completed keyless configurations complete', () => {
+    expect(normalizeAppSettings({
+      ...settings(),
+      initialSetupCompleted: true
+    }).initialSetupCompleted).toBe(true)
+  })
+
+  it('migrates an existing configured API provider to complete', () => {
+    const current = settings()
+    const normalized = normalizeAppSettings({
+      ...current,
+      provider: {
+        ...current.provider,
+        apiKey: 'sk-existing'
+      }
+    })
+    expect(normalized.initialSetupCompleted).toBe(true)
+  })
+
+  it('migrates an existing keyless subscription provider to complete', () => {
+    const current = settings()
+    const preset = getModelProviderPreset('gemini-cli-subscription')
+    if (!preset) throw new Error('Gemini CLI subscription preset is missing')
+    const subscription = modelProviderPresetProfile(preset, '')
+    const normalized = normalizeAppSettings({
+      ...current,
+      provider: {
+        ...current.provider,
+        providers: [...current.provider.providers, subscription]
+      },
+      agents: {
+        kun: {
+          ...current.agents.kun,
+          providerId: subscription.id,
+          model: subscription.models[0]
+        }
+      }
+    })
+
+    expect(normalized.initialSetupCompleted).toBe(true)
   })
 })
 

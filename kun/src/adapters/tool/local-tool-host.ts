@@ -43,11 +43,15 @@ import {
  * A single registered tool. Tools are pure functions that observe the
  * abort signal and may be guarded by an approval policy.
  */
+export type ToolSideEffect = 'read-only' | 'unknown'
+
 export type LocalTool = {
   name: string
   description: string
   inputSchema: Record<string, unknown>
   toolKind: 'tool_call' | 'command_execution' | 'file_change'
+  /** Host-authored side-effect classification. Unknown is denied in Plan mode. */
+  sideEffect?: ToolSideEffect
   /**
    * Tool policy. `auto` runs the tool without asking. `on-request` and
    * `suggest` always ask the user. `never` blocks the tool. `untrusted`
@@ -511,6 +515,7 @@ export class LocalToolHost implements ToolHost {
       description: tool.description,
       inputSchema: tool.inputSchema,
       toolKind: tool.toolKind ?? 'tool_call',
+      ...(tool.sideEffect ? { sideEffect: tool.sideEffect } : {}),
       execute: tool.execute,
       ...(tool.shouldAdvertise ? { shouldAdvertise: tool.shouldAdvertise } : {}),
       ...(tool.requiresExplicitApproval ? { requiresExplicitApproval: true } : {}),
@@ -605,7 +610,8 @@ function createUserInputTool(name: string): LocalTool {
   }
   return LocalToolHost.defineTool({
     name,
-    description: 'Ask the GUI user a structured question and wait for the answer.',
+    description:
+      'Ask the GUI user a structured question and wait for the answer. Requires a non-empty prompt, question, message, or questions[].question (prompt/message aliases allowed).',
     toolKind: 'tool_call',
     inputSchema: {
       type: 'object',
@@ -642,6 +648,14 @@ function createUserInputTool(name: string): LocalTool {
               header: { type: 'string' },
               id: { type: 'string' },
               question: { type: 'string' },
+              prompt: {
+                type: 'string',
+                description: 'Alias for question used by delegated SDK tool callers.'
+              },
+              message: {
+                type: 'string',
+                description: 'Alias for question used by delegated SDK tool callers.'
+              },
               options: {
                 type: 'array',
                 items: optionSchema
@@ -658,8 +672,7 @@ function createUserInputTool(name: string): LocalTool {
                 type: 'integer',
                 minimum: 1
               }
-            },
-            required: ['question']
+            }
           }
         }
       },
@@ -675,8 +688,18 @@ function createUserInputTool(name: string): LocalTool {
       }
       const inputId = `in_${Math.random().toString(36).slice(2, 10)}`
       const itemId = `item_${inputId}`
-      const prompt = String(args.prompt ?? args.question ?? args.message ?? 'Input requested')
-      const questions = normalizeUserInputQuestions(args, inputId, prompt)
+      const explicitPrompt = firstNonEmptyString(args.prompt, args.question, args.message)
+      const questions = normalizeUserInputQuestions(args, inputId, explicitPrompt)
+      if (questions.length === 0) {
+        return {
+          output: {
+            error:
+              'user_input requires a non-empty prompt, question, message, or questions[].question'
+          },
+          isError: true
+        }
+      }
+      const prompt = explicitPrompt ?? questions[0]!.question
       const resolution = await context.awaitUserInput({ id: inputId, itemId, prompt, questions })
       return {
         output: resolution,
@@ -699,7 +722,7 @@ export const defaultLocalTools: LocalTool[] = [
 function normalizeUserInputQuestions(
   args: Record<string, unknown>,
   fallbackId: string,
-  fallbackPrompt: string
+  fallbackPrompt: string | undefined
 ): UserInputQuestion[] {
   const rawQuestions = Array.isArray(args.questions) ? args.questions : null
   if (rawQuestions && rawQuestions.length > 0) {
@@ -708,6 +731,7 @@ function normalizeUserInputQuestions(
       .filter((question): question is UserInputQuestion => question !== null)
     if (questions.length > 0) return questions
   }
+  if (!fallbackPrompt) return []
   const options = Array.isArray(args.options)
     ? args.options
         .map((option) => normalizeUserInputOption(option))
@@ -731,9 +755,7 @@ function normalizeUserInputQuestion(
 ): UserInputQuestion | null {
   if (!value || typeof value !== 'object') return null
   const raw = value as Record<string, unknown>
-  const question = typeof raw.question === 'string' && raw.question.trim()
-    ? raw.question.trim()
-    : null
+  const question = firstNonEmptyString(raw.question, raw.prompt, raw.message)
   if (!question) return null
   const options = Array.isArray(raw.options)
     ? raw.options
@@ -747,6 +769,15 @@ function normalizeUserInputQuestion(
     options,
     ...normalizeUserInputSelection(raw, options.length)
   }
+}
+
+function firstNonEmptyString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value !== 'string') continue
+    const normalized = value.trim()
+    if (normalized) return normalized
+  }
+  return undefined
 }
 
 function normalizeUserInputSelection(

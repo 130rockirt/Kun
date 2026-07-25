@@ -4,11 +4,20 @@ import {
   type KunSpeechToTextSettingsV1
 } from '../../shared/app-settings'
 import {
+  isSpeechToTextConfigured,
   SPEECH_TRANSCRIPTION_MAX_BASE64_CHARS,
   type SpeechTranscriptionRequest,
   type SpeechTranscriptionResult
 } from '../../shared/speech-to-text'
 import { describeNetworkError } from '../../../kun/src/adapters/tool/image-gen-tool-provider.js'
+import {
+  ensureFreshGrokCredentials,
+  resolveGrokMediaOAuthApiKey
+} from '../grok-auth'
+import {
+  speechTranscriptionPrompt,
+  transcribeViaGeminiCliAudio
+} from './gemini-cli-speech-to-text-service'
 import { transcribeViaLocalWhisper } from './local-whisper-service'
 
 const FILE_EXTENSION_BY_MIME: Record<string, string> = {
@@ -21,19 +30,10 @@ const FILE_EXTENSION_BY_MIME: Record<string, string> = {
   'audio/flac': 'flac'
 }
 
-export function isSpeechToTextConfigured(
-  speechToText: Pick<KunSpeechToTextSettingsV1, 'enabled' | 'protocol' | 'baseUrl' | 'apiKey' | 'model'>
-): boolean {
-  if (speechToText.protocol === 'local-whisper') {
-    return speechToText.enabled && Boolean(speechToText.model.trim())
-  }
-  return (
-    speechToText.enabled &&
-    Boolean(speechToText.baseUrl.trim()) &&
-    Boolean(speechToText.apiKey.trim()) &&
-    Boolean(speechToText.model.trim())
-  )
-}
+const XAI_FORMAT_LANGUAGE_CODES = new Set([
+  'ar', 'cs', 'da', 'nl', 'en', 'fil', 'fr', 'de', 'hi', 'id', 'it', 'ja', 'ko',
+  'mk', 'ms', 'fa', 'pl', 'pt', 'ro', 'ru', 'es', 'sv', 'th', 'tr', 'vi'
+])
 
 export async function requestSpeechTranscription(
   settings: AppSettingsV1,
@@ -44,11 +44,15 @@ export async function requestSpeechTranscription(
       request: SpeechTranscriptionRequest,
       speechToText: KunSpeechToTextSettingsV1
     ) => Promise<string>
+    geminiCliTranscriber?: (
+      speechToText: KunSpeechToTextSettingsV1,
+      request: SpeechTranscriptionRequest
+    ) => Promise<string>
   } = {}
 ): Promise<SpeechTranscriptionResult> {
   const speechToText = request.speechToText ?? resolveKunSpeechToTextSettings(settings)
   if (!isSpeechToTextConfigured(speechToText)) {
-    return { ok: false, message: 'speech-to-text provider is not configured' }
+    return { ok: false, message: describeSpeechConfigurationIssue(speechToText) }
   }
   if (!request.audioBase64 || request.audioBase64.length > SPEECH_TRANSCRIPTION_MAX_BASE64_CHARS) {
     return { ok: false, message: 'audio payload is empty or too large' }
@@ -56,17 +60,54 @@ export async function requestSpeechTranscription(
 
   const fetchImpl = options.fetchImpl ?? fetch
   try {
-    const text = speechToText.protocol === 'local-whisper'
-      ? await (options.localWhisperTranscriber ?? transcribeViaLocalWhisper)(request, speechToText)
-      : speechToText.protocol === 'mimo-asr'
-        ? await transcribeViaMimoAsr(speechToText, request, fetchImpl)
-        : await transcribeViaOpenAiTranscriptions(speechToText, request, fetchImpl)
+    let text: string
+    switch (speechToText.protocol) {
+      case 'local-whisper':
+        text = await (options.localWhisperTranscriber ?? transcribeViaLocalWhisper)(request, speechToText)
+        break
+      case 'mimo-asr':
+        text = await transcribeViaMimoAsr(speechToText, request, fetchImpl)
+        break
+      case 'xai-stt':
+        text = await transcribeViaXaiStt(speechToText, request, fetchImpl)
+        break
+      case 'gemini-audio':
+        text = await transcribeViaGeminiAudio(speechToText, request, fetchImpl)
+        break
+      case 'gemini-cli-audio':
+        text = await (options.geminiCliTranscriber ?? transcribeViaGeminiCliAudio)(speechToText, request)
+        break
+      default:
+        text = await transcribeViaOpenAiTranscriptions(speechToText, request, fetchImpl)
+        break
+    }
     const trimmed = text.trim()
     if (!trimmed) return { ok: false, message: 'transcription result is empty' }
     return { ok: true, text: trimmed }
   } catch (error) {
     return { ok: false, message: describeTranscriptionError(error, speechToText.timeoutMs) }
   }
+}
+
+function describeSpeechConfigurationIssue(
+  speechToText: Pick<KunSpeechToTextSettingsV1, 'enabled' | 'protocol' | 'baseUrl' | 'apiKey' | 'model'>
+): string {
+  if (!speechToText.enabled) return 'speech-to-text is disabled'
+  if (
+    speechToText.protocol !== 'xai-stt' &&
+    !speechToText.model.trim()
+  ) return 'speech-to-text model is not configured'
+  if (
+    speechToText.protocol !== 'local-whisper' &&
+    speechToText.protocol !== 'gemini-cli-audio' &&
+    !speechToText.baseUrl.trim()
+  ) return 'speech-to-text API base URL is not configured'
+  if (
+    speechToText.protocol !== 'local-whisper' &&
+    speechToText.protocol !== 'gemini-cli-audio' &&
+    !speechToText.apiKey.trim()
+  ) return 'speech-to-text API key is not configured'
+  return 'speech-to-text provider is not configured'
 }
 
 /**
@@ -122,6 +163,102 @@ async function transcribeViaMimoAsr(
       .join('')
   }
   throw new Error('speech response has no transcript content')
+}
+
+/**
+ * xAI's dedicated batch STT API accepts multipart audio at /v1/stt. It does
+ * not take a chat model; the stored `grok-transcribe` id is a capability label.
+ */
+async function transcribeViaXaiStt(
+  speechToText: KunSpeechToTextSettingsV1,
+  request: SpeechTranscriptionRequest,
+  fetchImpl: typeof fetch
+): Promise<string> {
+  const fresh = await ensureFreshGrokCredentials(speechToText.apiKey)
+  const credential = resolveGrokMediaOAuthApiKey(fresh.apiKey)
+  const url = joinSpeechApiUrl(speechToText.baseUrl, 'stt')
+  const audio = Buffer.from(request.audioBase64, 'base64')
+  const form = new FormData()
+  const language = speechToText.language.trim().toLowerCase()
+  if (XAI_FORMAT_LANGUAGE_CODES.has(language)) {
+    form.append('format', 'true')
+    form.append('language', language)
+  }
+  const extension = FILE_EXTENSION_BY_MIME[request.mimeType.toLowerCase()] ?? 'wav'
+  // xAI requires the file field to be appended after all option fields.
+  form.append('file', new Blob([new Uint8Array(audio)], { type: request.mimeType }), `recording.${extension}`)
+  const response = await fetchImpl(url, {
+    method: 'POST',
+    headers: {
+      ...credential.headers,
+      Authorization: `Bearer ${credential.apiKey}`
+    },
+    body: form,
+    signal: AbortSignal.timeout(speechToText.timeoutMs)
+  })
+  const body = await response.text()
+  if (!response.ok) throw new SpeechHttpError(response.status, body)
+  const parsed = JSON.parse(body) as { text?: unknown }
+  if (typeof parsed.text !== 'string') throw new Error('xAI speech response has no transcript text')
+  return parsed.text
+}
+
+/**
+ * Gemini's native GenerateContent API accepts small audio recordings inline.
+ * This path is for API-key providers; Gemini CLI subscription OAuth uses the
+ * separate Code Assist adapter above.
+ */
+async function transcribeViaGeminiAudio(
+  speechToText: KunSpeechToTextSettingsV1,
+  request: SpeechTranscriptionRequest,
+  fetchImpl: typeof fetch
+): Promise<string> {
+  const url = joinSpeechApiUrl(
+    speechToText.baseUrl,
+    `models/${encodeURIComponent(speechToText.model)}:generateContent`
+  )
+  const response = await fetchImpl(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${speechToText.apiKey}`,
+      'x-goog-api-key': speechToText.apiKey
+    },
+    body: JSON.stringify({
+      contents: [{
+        role: 'user',
+        parts: [
+          { text: speechTranscriptionPrompt(speechToText.language) },
+          {
+            inlineData: {
+              mimeType: request.mimeType,
+              data: request.audioBase64
+            }
+          }
+        ]
+      }],
+      generationConfig: {
+        temperature: 0,
+        maxOutputTokens: 2_048
+      }
+    }),
+    signal: AbortSignal.timeout(speechToText.timeoutMs)
+  })
+  const body = await response.text()
+  if (!response.ok) throw new SpeechHttpError(response.status, body)
+  const parsed = JSON.parse(body) as {
+    candidates?: Array<{
+      content?: {
+        parts?: Array<{ text?: unknown; thought?: unknown }>
+      }
+    }>
+  }
+  const text = parsed.candidates?.[0]?.content?.parts
+    ?.filter((part) => part.thought !== true && typeof part.text === 'string')
+    .map((part) => part.text as string)
+    .join('')
+  if (typeof text !== 'string') throw new Error('Gemini speech response has no transcript text')
+  return text
 }
 
 /** Standard OpenAI-style multipart upload to {baseUrl}/audio/transcriptions. */

@@ -3,6 +3,7 @@ import { FileText, ImagePlus, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { AttachmentReference } from '../../agent/types'
 import { ImagePreviewLightbox } from './ImagePreviewLightbox'
+import { isOfficeDocumentName } from '@shared/office-document'
 
 type ComposerTransferItem = {
   kind?: string
@@ -163,6 +164,10 @@ export function composerImageMimeTypeFromFileName(name: string | undefined): str
 
 export function isComposerPdfFile(file: File): boolean {
   return file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
+}
+
+export function isComposerOfficeFile(file: File): boolean {
+  return isOfficeDocumentName(file.name)
 }
 
 function normalizedImageFile(file: File, mimeTypeHint?: string): File | null {

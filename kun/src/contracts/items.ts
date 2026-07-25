@@ -99,9 +99,20 @@ export const ToolCallTurnItem = TurnItemBase.extend({
   callId: z.string().min(1),
   toolKind: z.enum(['tool_call', 'command_execution', 'file_change']),
   arguments: z.record(z.string(), z.unknown()),
+  /**
+   * Bounded provider-owned continuation data required to replay a tool call.
+   * It is persisted with canonical history but never sent to tools or
+   * providers other than the owning adapter.
+   */
+  providerMetadata: z.object({
+    gemini: z.object({
+      thoughtSignature: z.string().min(1).max(131_072)
+    }).strict().optional()
+  }).strict().optional(),
   summary: z.string().optional()
 })
 export type ToolCallTurnItem = z.infer<typeof ToolCallTurnItem>
+export type ToolCallProviderMetadata = NonNullable<ToolCallTurnItem['providerMetadata']>
 
 export const ToolResultTurnItem = TurnItemBase.extend({
   kind: z.literal('tool_result'),

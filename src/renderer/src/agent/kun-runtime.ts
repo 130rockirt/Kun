@@ -766,9 +766,12 @@ export class KunRuntimeProvider implements AgentProvider {
     mimeType?: string
     dataBase64: string
     documentText?: string
+    documentFormat?: 'pdf' | 'docx' | 'xlsx' | 'pptx' | 'text' | 'csv' | 'json' | 'xml'
+    sourceSha256?: string
     pageCount?: number
     localFilePath?: string
     textFallback?: CoreAttachmentTextFallbackJson
+    visualPreview?: CoreAttachmentTextFallbackJson
     threadId?: string
     workspace?: string
   }): Promise<CoreAttachmentMetadataJson> {

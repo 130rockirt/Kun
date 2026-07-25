@@ -1,3 +1,17 @@
+export type AttachmentPreviewFailureState = {
+  scopeKey: string
+  failedPreviewIds: Record<string, true>
+}
+
+export function attachmentPreviewFailureStateForScope(
+  current: AttachmentPreviewFailureState,
+  nextScopeKey: string
+): AttachmentPreviewFailureState {
+  return current.scopeKey === nextScopeKey
+    ? current
+    : { scopeKey: nextScopeKey, failedPreviewIds: {} }
+}
+
 type PreviewTask = () => Promise<string>
 
 type QueuedPreview = {

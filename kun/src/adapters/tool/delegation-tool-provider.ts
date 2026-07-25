@@ -22,18 +22,22 @@ type InlineProfile = {
   source?: 'builtin' | 'configured' | 'workspace' | 'custom' | 'generated'
 }
 
+const DEFAULT_PROFILE_PAGE_LIMIT = 50
+const MAX_PROFILE_PAGE_LIMIT = 50
+const MAX_PROFILE_NAME_LENGTH = 256
+const MAX_PROFILE_DESCRIPTION_LENGTH = 1_000
+
 export function buildDelegationToolProviders(
   runtime: DelegationRuntime | undefined,
   router?: SubagentRouter
 ): CapabilityToolProvider[] {
   if (!runtime?.enabled()) return []
-  const profiles = runtime.listProfiles().filter((profile) => profile.mode !== 'primary')
   const useExistingAgents = runtime.useExistingAgents !== false
   const modeProperties = useExistingAgents
     ? {
         profile: {
           type: 'string',
-          description: 'Optional exact existing agent profile id. Omit it to route over the configured agent catalog.'
+          description: 'Optional exact reusable profile id returned by list_subagent_profiles. Omit it to route over the effective catalog.'
         }
       }
     : { custom_agent: customAgentSchema() }
@@ -46,7 +50,7 @@ export function buildDelegationToolProviders(
     tools: [
       LocalToolHost.defineTool({
         name: 'delegate_task',
-        description: buildDelegateTaskDescription(runtime, profiles.length),
+        description: buildDelegateTaskDescription(runtime),
         inputSchema: {
           type: 'object',
           properties: {
@@ -69,6 +73,9 @@ export function buildDelegationToolProviders(
           let routing: ChildRoutingMetadata | undefined
           const agentSurface = context.agentSurface ?? 'code'
 
+          if (useExistingAgents && customAgentSupplied) {
+            return toolError('custom_agent is unavailable while "Use existing agents" is turned on; select a reusable profile or omit profile for automatic routing')
+          }
           if (!useExistingAgents) {
             if (requestedProfile) {
               return toolError('profile is unavailable while "Use existing agents" is turned off; define custom_agent instead')
@@ -76,19 +83,17 @@ export function buildDelegationToolProviders(
             if (!customAgentSupplied) {
               return toolError('custom_agent is required while "Use existing agents" is turned off')
             }
+          }
+          if (!useExistingAgents && customAgentSupplied) {
             const customDefinition = parseCustomAgent(args.custom_agent)
             if (customDefinition instanceof Error) return toolError(customDefinition.message)
-            if (!customDefinition) return toolError('custom_agent is required while "Use existing agents" is turned off')
+            if (!customDefinition) return toolError('custom_agent is required')
             inlineProfile = {
               id: customSubagentProfileId(customDefinition.name),
               profile: customSubagentProfile(customDefinition),
               source: 'custom'
             }
             routing = explicitCustomMetadata(inlineProfile, agentSurface)
-          } else {
-            if (customAgentSupplied) {
-              return toolError('custom_agent is unavailable while "Use existing agents" is turned on; select profile or omit it for automatic routing')
-            }
           }
 
           if (useExistingAgents && requestedProfile) {
@@ -105,7 +110,7 @@ export function buildDelegationToolProviders(
               agentSurface,
               candidates: []
             }
-          } else if (useExistingAgents) {
+          } else if (useExistingAgents && !inlineProfile) {
             const documents = await runtime.listRoutingProfiles(common.workspace, agentSurface)
             const route = router
               ? await router.route({
@@ -142,6 +147,74 @@ export function buildDelegationToolProviders(
             ...(routing ? { routing } : {})
           })
         }
+      }),
+      LocalToolHost.defineTool({
+        name: 'list_subagent_profiles',
+        description: buildListSubagentProfilesDescription(runtime),
+        inputSchema: {
+          type: 'object',
+          properties: {
+            offset: {
+              type: 'integer',
+              minimum: 0,
+              description: 'Zero-based reusable-profile offset.'
+            },
+            limit: {
+              type: 'integer',
+              minimum: 1,
+              maximum: MAX_PROFILE_PAGE_LIMIT,
+              description: `Reusable profiles to return, from 1 to ${MAX_PROFILE_PAGE_LIMIT}.`
+            }
+          },
+          additionalProperties: false
+        },
+        policy: 'auto',
+        sideEffect: 'read-only',
+        execute: async (args, context) => {
+          const offset = nonnegativeInteger(args.offset, 0)
+          const limit = boundedPositiveInteger(
+            args.limit,
+            DEFAULT_PROFILE_PAGE_LIMIT,
+            MAX_PROFILE_PAGE_LIMIT
+          )
+          const agentSurface = context.agentSurface ?? 'code'
+          const documents = useExistingAgents
+            ? await runtime.listRoutingProfiles(context.workspace, agentSurface)
+            : []
+          const page = documents.slice(offset, offset + limit)
+          const nextOffset = offset + page.length < documents.length
+            ? offset + page.length
+            : null
+          return {
+            output: {
+              mode: useExistingAgents ? 'profiles-only' : 'custom-only',
+              surface: agentSurface,
+              ...(!useExistingAgents ? { customAgent: customAgentCapability() } : {}),
+              profileCount: documents.length,
+              offset,
+              limit,
+              nextOffset,
+              profiles: page.map((document) => ({
+                id: document.id,
+                name: boundedText(
+                  document.profile.name ?? document.id,
+                  MAX_PROFILE_NAME_LENGTH
+                ),
+                description: boundedText(
+                  document.profile.description ?? 'No description provided.',
+                  MAX_PROFILE_DESCRIPTION_LENGTH
+                ),
+                toolPolicy: document.profile.toolPolicy,
+                access: document.profile.toolPolicy === 'readOnly'
+                  ? 'Read-only investigation; cannot modify the workspace.'
+                  : 'May use only tools allowed by the parent capability and approval boundary.'
+              })),
+              guidance: useExistingAgents
+                ? 'Pass an exact id as delegate_task.profile, or omit profile for automatic routing over the effective catalog.'
+                : 'Reusable profiles are disabled. Define a one-run role with delegate_task.custom_agent.'
+            }
+          }
+        }
       })
     ]
   }]
@@ -160,6 +233,38 @@ function customAgentSchema(): Record<string, unknown> {
     },
     required: ['name', 'description', 'system_prompt'],
     additionalProperties: false
+  }
+}
+
+function customAgentCapability(): Record<string, unknown> {
+  return {
+    id: 'custom',
+    name: 'Custom Subagent',
+    description: 'Define a focused one-run child role directly in delegate_task.custom_agent when no reusable profile is the right fit.',
+    argument: 'custom_agent',
+    lifetime: 'one-run',
+    requiredFields: ['name', 'description', 'system_prompt'],
+    optionalFields: ['tool_policy', 'blocked_tools'],
+    toolPolicyOptions: [
+      {
+        value: 'readOnly',
+        description: 'Restrict the child to host-approved read-only investigation tools.'
+      },
+      {
+        value: 'inherit',
+        description: 'Allow only the subset of parent-authorized tools that remains inside the child security boundary.'
+      }
+    ],
+    hostControlled: [
+      'model',
+      'provider',
+      'reasoning',
+      'approval',
+      'sandbox',
+      'concurrency',
+      'budget',
+      'timeout'
+    ]
   }
 }
 
@@ -380,9 +485,9 @@ function routingToolOutput(routing: ChildRoutingMetadata): Record<string, unknow
   }
 }
 
-function buildDelegateTaskDescription(runtime: DelegationRuntime, profileCount: number): string {
-  const modeDescription = runtime.useExistingAgents
-    ? `Reuse one of ${profileCount} existing agent profiles. Select an exact profile id only when it is known; otherwise omit profile so Kun can route the task. Never define a custom role in this mode.`
+function buildDelegateTaskDescription(runtime: DelegationRuntime): string {
+  const modeDescription = runtime.useExistingAgents !== false
+    ? 'Select an exact reusable profile id from list_subagent_profiles, or omit profile so Kun can route over the effective catalog.'
     : 'Define the best one-run role for this task in custom_agent. Do not select or recall an existing profile in this mode.'
   return [
     'Run a standalone child agent and return its result.',
@@ -391,6 +496,26 @@ function buildDelegateTaskDescription(runtime: DelegationRuntime, profileCount: 
     'Issue multiple calls in one message for independent parallel work.',
     `Children default to the "${runtime.defaultToolPolicy}" tool policy and can never recursively delegate.`
   ].join(' ')
+}
+
+function buildListSubagentProfilesDescription(runtime: DelegationRuntime): string {
+  return runtime.useExistingAgents !== false
+    ? 'List the effective reusable subagent profiles for the current workspace and product surface.'
+    : 'Describe the one-run custom subagent capability available while reusable profiles are disabled.'
+}
+
+function nonnegativeInteger(value: unknown, fallback: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback
+  return Math.max(0, Math.floor(value))
+}
+
+function boundedPositiveInteger(value: unknown, fallback: number, max: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback
+  return Math.min(max, Math.max(1, Math.floor(value)))
+}
+
+function boundedText(value: string, maxLength: number): string {
+  return value.length <= maxLength ? value : `${value.slice(0, maxLength - 1)}…`
 }
 
 function stringValue(value: unknown): string {

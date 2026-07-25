@@ -44,7 +44,7 @@ function settings(workspaceRoot: string, nestedRoot = workspaceRoot): AppSetting
     workspaceRoot,
     conversationWorkspaceRoot: workspaceRoot,
     log: { enabled: true, retentionDays: 7 },
-    checkpointCleanup: { enabled: true, intervalDays: 3 },
+    checkpointCleanup: { createEnabled: false, enabled: true, intervalDays: 3 },
     notifications: { turnComplete: true },
     appBehavior: { openAtLogin: false, startMinimized: false, closeToTray: false },
     keyboardShortcuts: defaultKeyboardShortcuts(),

@@ -111,7 +111,7 @@ function settings(): AppSettingsV1 {
     workspaceRoot: '~/.kun/default_workspace',
     conversationWorkspaceRoot: '~/Documents/Kun',
     log: { enabled: true, retentionDays: 2 },
-    checkpointCleanup: { enabled: false, intervalDays: 3 },
+    checkpointCleanup: { createEnabled: false, enabled: false, intervalDays: 3 },
     notifications: { turnComplete: true },
     appBehavior: { openAtLogin: false, startMinimized: false, closeToTray: false },
     keyboardShortcuts: defaultKeyboardShortcuts(),

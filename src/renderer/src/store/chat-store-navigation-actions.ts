@@ -41,7 +41,7 @@ import {
 } from '../lib/workspace-path'
 import { resolveProjectWorkspacePath } from '../lib/worktree-project-path'
 import { readThreadWorktreeRegistry } from '../lib/thread-worktree-registry'
-import { buildClawRuntimePrompt, getActiveAgentApiKey } from '@shared/app-settings'
+import { buildClawRuntimePrompt } from '@shared/app-settings'
 import type { ChatState, ChatStoreGet, ChatStoreSet } from './chat-store-types'
 import {
   activeClawChannel,
@@ -50,7 +50,6 @@ import {
   isClawThread,
   optimisticUserModelLabel,
   readCodeWorkspaceRoots,
-  readStoredComposerModel,
   rememberCodeWorkspaceRoots,
   rememberTurnModel,
   reconcileCodeWorkspaceRoots,
@@ -547,7 +546,7 @@ export function createNavigationActions(
           preservedWorkspaceRoots: [workspaceRoot]
         })
         saveCodeWorkspaceRoots(codeWorkspaceRoots)
-        const needsInitialSetup = !getActiveAgentApiKey(settings).trim()
+        const needsInitialSetup = settings.initialSetupCompleted !== true
         applyTheme(settings.theme)
         applyUiFontScale(settings.uiFontScale)
         applyChatContentMaxWidth(settings.chatContentMaxWidthPx)
@@ -637,11 +636,6 @@ export function createNavigationActions(
           runtimeErrorDetail: needsInitialSetup ? null : get().runtimeErrorDetail
         })
         if (needsInitialSetup) return
-        const initialPick = get().composerPickList
-        const fromStorage = readStoredComposerModel(initialPick)
-        if (fromStorage) {
-          set({ composerModel: fromStorage })
-        }
         scheduleStartupRuntimeProbe(get)
       } catch (e) {
         set({

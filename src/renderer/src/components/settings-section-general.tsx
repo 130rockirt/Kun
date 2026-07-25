@@ -583,6 +583,16 @@ export function GeneralSettingsSection({ ctx }: { ctx: Record<string, any> }): R
 
               <SettingsCard title={t('gitCheckpointTitle')} className="mt-6">
                 <SettingRow
+                  title={t('checkpointCreateEnabled')}
+                  description={t('checkpointCreateEnabledDesc')}
+                  control={
+                    <Toggle
+                      checked={form.checkpointCleanup.createEnabled}
+                      onChange={(v) => update({ checkpointCleanup: { createEnabled: v } })}
+                    />
+                  }
+                />
+                <SettingRow
                   title={t('checkpointCleanupEnabled')}
                   description={t('checkpointCleanupEnabledDesc')}
                   control={
@@ -625,6 +635,7 @@ export function GeneralSettingsSection({ ctx }: { ctx: Record<string, any> }): R
                       className={selectControlClass}
                       placeholder={t('checkpointDirectoryPlaceholder')}
                       value={form.checkpointCleanup.directory ?? ''}
+                      disabled={!form.checkpointCleanup.createEnabled}
                       onChange={(e) => update({ checkpointCleanup: { directory: e.target.value } })}
                     />
                   }
@@ -639,6 +650,7 @@ export function GeneralSettingsSection({ ctx }: { ctx: Record<string, any> }): R
                       max={100}
                       className={selectControlClass}
                       value={form.checkpointCleanup.maxPerThread ?? 5}
+                      disabled={!form.checkpointCleanup.createEnabled}
                       onChange={(e) => {
                         const n = Number(e.target.value)
                         update({ checkpointCleanup: { maxPerThread: Number.isFinite(n) ? Math.max(1, Math.min(100, Math.floor(n))) : 5 } })

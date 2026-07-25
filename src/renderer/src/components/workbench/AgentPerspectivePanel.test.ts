@@ -139,6 +139,72 @@ describe('AgentPerspectivePanel', () => {
     expect(renderedText).not.toContain('sk-secret')
   })
 
+  it('renders Gemini CLI Code Assist requests as semantic sections', () => {
+    const state = useTraces()
+    const requestBody = JSON.stringify({
+      model: 'gemini-3-flash-preview',
+      project: 'managed-project',
+      request: {
+        systemInstruction: {
+          role: 'user',
+          parts: [{ text: 'Kun Gemini system prompt.' }]
+        },
+        contents: [{
+          role: 'user',
+          parts: [
+            { text: 'Inspect Gemini semantics' },
+            { inlineData: { mimeType: 'image/png', data: 'secret-image-bytes' } }
+          ]
+        }],
+        tools: [{
+          functionDeclarations: [{
+            name: 'read_file',
+            description: 'Read a file',
+            parametersJsonSchema: { type: 'object' }
+          }]
+        }],
+        generationConfig: { maxOutputTokens: 256 },
+        thoughtSignature: 'secret-signature'
+      }
+    })
+    const record = {
+      ...state.records[0],
+      provider: 'gemini-cli-subscription',
+      model: 'gemini-3-flash-preview',
+      endpointFormat: 'gemini-cli-api',
+      request: {
+        ...state.records[0].request,
+        url: 'https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse',
+        body: {
+          text: requestBody,
+          capturedBytes: requestBody.length,
+          originalBytes: requestBody.length,
+          truncated: false
+        }
+      },
+      toolCatalog: [{ name: 'read_file', providerKind: 'built-in', providerId: 'builtin' }]
+    }
+    useTraces.mockReturnValue({ ...state, records: [record], selected: record })
+
+    let renderer!: ReactTestRenderer
+    act(() => {
+      renderer = create(createElement(AgentPerspectivePanel, {
+        threadId: 'thread-1',
+        active: true,
+        threadRunning: false
+      }))
+    })
+
+    const rendered = textContent(renderer.root)
+    expect(rendered).toContain('Kun Gemini system prompt.')
+    expect(rendered).toContain('Inspect Gemini semantics')
+    expect(rendered).toContain('[inline data: image/png]')
+    expect(rendered).toContain('read_file')
+    expect(rendered).toContain('generationConfig')
+    expect(rendered).not.toContain('secret-image-bytes')
+    expect(rendered).not.toContain('secret-signature')
+  })
+
   it('keeps the inspector interactive and long content keyboard scrollable', () => {
     let renderer!: ReactTestRenderer
     act(() => {
@@ -241,5 +307,57 @@ describe('AgentPerspectivePanel', () => {
     expect(rendered).toContain('MCP · gui_schedule')
     expect(rendered).toContain('Kun managed')
     expect(rendered).toContain('call-schedule')
+  })
+
+  it('shows delegated SDK continuity, context ownership, and capability limits', () => {
+    const state = useTraces()
+    const record = {
+      ...state.records[0],
+      provider: 'claude-subscription',
+      model: 'claude-sonnet-4-5',
+      transport: 'sdk',
+      endpointFormat: 'agent-sdk',
+      request: {
+        ...state.records[0].request,
+        method: 'SDK',
+        url: 'agent-sdk://local/query'
+      },
+      delegated: {
+        providerKind: 'agent-sdk',
+        phase: 'rebased',
+        reason: 'native_state_unavailable',
+        contextManagement: 'sdk-managed',
+        nativeHistory: 'none',
+        capabilities: {
+          nativeResume: true,
+          structuredStreaming: true,
+          kunTools: true,
+          externalApproval: true,
+          liveSteering: false,
+          nativeContextTelemetry: false,
+          fork: false
+        }
+      }
+    }
+    useTraces.mockReturnValue({ ...state, records: [record], selected: record })
+
+    let renderer!: ReactTestRenderer
+    act(() => {
+      renderer = create(createElement(AgentPerspectivePanel, {
+        threadId: 'thread-1',
+        active: true,
+        threadRunning: false
+      }))
+    })
+
+    const rendered = textContent(renderer.root)
+    expect(rendered).toContain('SDK execution')
+    expect(rendered).toContain('Claude Agent SDK')
+    expect(rendered).toContain('Rebased from Kun history')
+    expect(rendered).toContain('Native checkpoint unavailable')
+    expect(rendered).toContain('No provider-native history')
+    expect(rendered).toContain('Native resume')
+    expect(rendered).toContain('Live steering')
+    expect(renderer.root.findByProps({ 'aria-label': 'SDK execution' })).toBeDefined()
   })
 })

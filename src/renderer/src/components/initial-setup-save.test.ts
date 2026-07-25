@@ -112,6 +112,7 @@ describe('buildInitialSetupSettings', () => {
     const drafts = initialSetupDrafts(current)
     const next = buildInitialSetupSettings(current, drafts, { presetId: 'deepseek', mode: 'api' })
 
+    expect(next.initialSetupCompleted).toBe(true)
     expect(getKunRuntimeSettings(next).providerId).toBe('deepseek')
     expect(getActiveAgentApiKey(next)).toBe('sk-deepseek-key')
   })

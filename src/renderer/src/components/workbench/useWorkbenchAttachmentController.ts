@@ -1,7 +1,10 @@
 import { useTranslation } from 'react-i18next'
 import type { AttachmentReference } from '../../agent/types'
 import { getProvider } from '../../agent/registry'
-import type { ImageAttachmentUploadCapabilities } from '../../lib/image-attachment-upload'
+import {
+  DEFAULT_ATTACHMENT_TEXT_FALLBACK_MAX_BASE64_BYTES,
+  type ImageAttachmentUploadCapabilities
+} from '../../lib/image-attachment-upload'
 import {
   runtimeImagePreviewUrl,
   runtimeImageSourceForFile,
@@ -11,6 +14,12 @@ import type {
   ComposerAttachmentScope,
   ComposerAttachmentUpdater
 } from '../workbench-composer-attachments'
+import { isOfficeDocumentName } from '@shared/office-document'
+import {
+  composerFileReferenceFromPath,
+  type ComposerFileReference
+} from '../../lib/composer-file-references'
+import { uploadRuntimeAttachment } from '../../lib/runtime-attachment'
 
 export type WorkbenchAttachmentControllerOptions = {
   attachmentUploadEnabled: boolean
@@ -26,6 +35,7 @@ export type WorkbenchAttachmentControllerOptions = {
   setComposerAttachments: (updater: ComposerAttachmentUpdater) => void
   getAttachmentScope: () => ComposerAttachmentScope
   getActiveWorkspace: () => string | undefined
+  onFallbackToFileReference?: (reference: ComposerFileReference) => void
 }
 
 function fileNameFromPath(path: string): string {
@@ -34,6 +44,16 @@ function fileNameFromPath(path: string): string {
 
 function isPdfAttachmentFile(file: File): boolean {
   return file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
+}
+
+function isOfficeAttachmentFile(file: File): boolean {
+  return isOfficeDocumentName(file.name)
+}
+
+function previewDataUrl(
+  preview: { dataBase64: string; mimeType: string } | undefined
+): string | undefined {
+  return preview ? `data:${preview.mimeType};base64,${preview.dataBase64}` : undefined
 }
 
 function arrayBufferToBase64(buffer: ArrayBuffer): string {
@@ -55,7 +75,8 @@ export function useWorkbenchAttachmentController({
   setComposerAttachmentsForScope,
   setComposerAttachments,
   getAttachmentScope,
-  getActiveWorkspace
+  getActiveWorkspace,
+  onFallbackToFileReference
 }: WorkbenchAttachmentControllerOptions) {
   const { t } = useTranslation()
 
@@ -75,6 +96,66 @@ export function useWorkbenchAttachmentController({
         const localFilePath =
           options.localFilePaths?.[index] ||
           (typeof window.kunGui?.getPathForFile === 'function' ? window.kunGui.getPathForFile(file) : '')
+        if (isOfficeAttachmentFile(file)) {
+          const fallbackOfficeReference = (message: string): boolean => {
+            if (!localFilePath || !onFallbackToFileReference) return false
+            onFallbackToFileReference(composerFileReferenceFromPath(localFilePath, workspace || ''))
+            setAttachmentUploadError(`${message} The file was kept as a local tool reference.`)
+            return true
+          }
+          if (!localFilePath || typeof window.kunGui?.readLocalOfficeDocument !== 'function') {
+            if (fallbackOfficeReference(t('composerAttachmentUnavailable'))) continue
+            throw new Error(t('composerAttachmentUnavailable'))
+          }
+          if (!attachmentCapabilities || typeof provider.uploadAttachment !== 'function') {
+            if (fallbackOfficeReference(t('composerAttachmentUnavailable'))) continue
+            throw new Error(t('composerAttachmentUnavailable'))
+          }
+          const result = await window.kunGui.readLocalOfficeDocument({ path: localFilePath })
+          if (!result.ok) {
+            if (fallbackOfficeReference(result.message)) continue
+            throw new Error(result.message)
+          }
+          const visualPreview = result.visualPreview &&
+            result.visualPreview.dataBase64.length <= (
+              attachmentCapabilities.textFallbackMaxBase64Bytes ??
+              DEFAULT_ATTACHMENT_TEXT_FALLBACK_MAX_BASE64_BYTES
+            )
+            ? result.visualPreview
+            : undefined
+          const previewUnavailableReason = result.previewUnavailableReason ||
+            (result.visualPreview && !visualPreview
+              ? 'Visual preview exceeded the runtime attachment limit; semantic preview remains available.'
+              : undefined)
+          const attachment = await uploadRuntimeAttachment({
+            name: file.name || result.name,
+            mimeType: result.mimeType,
+            dataBase64: arrayBufferToBase64(await file.arrayBuffer()),
+            documentText: result.documentText,
+            documentFormat: result.format,
+            sourceSha256: result.sourceSha256,
+            pageCount: result.pageCount,
+            localFilePath,
+            visualPreview,
+            ...(activeThreadId ? { threadId: activeThreadId } : {}),
+            ...(workspace ? { workspace } : {})
+          }, provider)
+          uploaded.push({
+            id: attachment.id,
+            kind: 'document',
+            name: attachment.name,
+            mimeType: attachment.mimeType,
+            byteSize: attachment.byteSize,
+            documentFormat: result.format,
+            sourceSha256: result.sourceSha256,
+            pageCount: attachment.pageCount,
+            truncated: attachment.truncated,
+            textPreview: result.documentText.slice(0, 240),
+            previewUrl: previewDataUrl(visualPreview),
+            previewUnavailableReason
+          })
+          continue
+        }
         if (isPdfAttachmentFile(file)) {
           if (!localFilePath || typeof window.kunGui?.readLocalPdfText !== 'function') {
             throw new Error(t('composerPdfAttachmentUnavailable'))
@@ -86,7 +167,7 @@ export function useWorkbenchAttachmentController({
           if (!result.ok) throw new Error(result.message)
           const documentText = result.text.trim()
           if (!documentText) throw new Error(t('composerPdfAttachmentNoText'))
-          const attachment = await provider.uploadAttachment({
+          const attachment = await uploadRuntimeAttachment({
             name: file.name || fileNameFromPath(result.path),
             mimeType: 'application/pdf',
             dataBase64: arrayBufferToBase64(await file.arrayBuffer()),
@@ -95,7 +176,7 @@ export function useWorkbenchAttachmentController({
             localFilePath,
             ...(activeThreadId ? { threadId: activeThreadId } : {}),
             ...(workspace ? { workspace } : {})
-          })
+          }, provider)
           uploaded.push({
             id: attachment.id,
             kind: 'document',

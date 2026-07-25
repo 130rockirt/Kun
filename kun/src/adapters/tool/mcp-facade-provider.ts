@@ -49,6 +49,7 @@ function createListResourcesTool(connected: McpFacadeConnectionState[]): LocalTo
     // sensitive metadata, so facade RPCs use the same approval boundary as
     // direct MCP calls rather than treating server annotations as authority.
     policy: 'on-request',
+    sideEffect: 'read-only',
     toolKind: 'command_execution',
     inputSchema: {
       type: 'object',
@@ -75,6 +76,7 @@ function createReadResourceTool(connected: McpFacadeConnectionState[]): LocalToo
     name: 'mcp_read_resource',
     description: 'Read one MCP resource from a connected MCP server.',
     policy: 'on-request',
+    sideEffect: 'read-only',
     toolKind: 'command_execution',
     inputSchema: {
       type: 'object',
@@ -101,6 +103,7 @@ function createListResourceTemplatesTool(connected: McpFacadeConnectionState[]):
     name: 'mcp_list_resource_templates',
     description: 'List MCP resource templates exposed by currently connected MCP servers.',
     policy: 'on-request',
+    sideEffect: 'read-only',
     toolKind: 'command_execution',
     inputSchema: {
       type: 'object',
@@ -127,6 +130,7 @@ function createListPromptsTool(connected: McpFacadeConnectionState[]): LocalTool
     name: 'mcp_list_prompts',
     description: 'List MCP prompts exposed by currently connected MCP servers.',
     policy: 'on-request',
+    sideEffect: 'read-only',
     toolKind: 'command_execution',
     inputSchema: {
       type: 'object',
@@ -153,6 +157,7 @@ function createGetPromptTool(connected: McpFacadeConnectionState[]): LocalTool {
     name: 'mcp_get_prompt',
     description: 'Get one MCP prompt from a connected MCP server.',
     policy: 'on-request',
+    sideEffect: 'read-only',
     toolKind: 'command_execution',
     inputSchema: {
       type: 'object',

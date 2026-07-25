@@ -13,7 +13,9 @@ import {
   FolderOpen,
   Loader2,
   Plus,
-  RefreshCw
+  RefreshCw,
+  Search,
+  X
 } from 'lucide-react'
 import {
   useEffect,
@@ -32,7 +34,11 @@ import {
   formatComposerFileMentionToken,
   relativeWorkspacePath
 } from '../../lib/composer-file-references'
-import { isWorkspaceTextPreviewPath } from '../../lib/workspace-text-preview'
+import {
+  isWorkspacePreviewPath,
+  workspaceFileKindLabel,
+  workspaceFilePreviewKind
+} from '../../lib/workspace-text-preview'
 import {
   SidebarIconButton,
   SidebarSectionHeader,
@@ -183,11 +189,22 @@ export function isChatFileTreeIgnoredDirectory(name: string): boolean {
 }
 
 export function isChatFileTreePreviewableEntry(entry: WorkspaceEntry): boolean {
-  return entry.type === 'file' && isWorkspaceTextPreviewPath(entry.path || entry.name)
+  return entry.type === 'file' && isWorkspacePreviewPath(entry.path || entry.name)
 }
 
 export function formatChatFileTreeUnsupportedMessage(name: string): string {
-  return `${name} is not a supported text preview.`
+  return `${name} does not have an in-app preview.`
+}
+
+export function chatFileTreeEntryMatchesQuery(
+  entry: WorkspaceEntry,
+  workspaceRoot: string,
+  query: string
+): boolean {
+  const normalizedQuery = query.trim().toLocaleLowerCase()
+  if (!normalizedQuery) return true
+  const relativePath = relativeWorkspacePath(entry.path, workspaceRoot).toLocaleLowerCase()
+  return entry.name.toLocaleLowerCase().includes(normalizedQuery) || relativePath.includes(normalizedQuery)
 }
 
 export function ChatFileTreePanel({
@@ -202,6 +219,7 @@ export function ChatFileTreePanel({
   const [directories, setDirectories] = useState<Record<string, DirectoryState>>({})
   const [contextMenu, setContextMenu] = useState<ContextMenuState>(null)
   const [sortMode, setSortMode] = useState<FileTreeSortMode>('name')
+  const [query, setQuery] = useState('')
   const [recentScan, setRecentScan] = useState<RecentScanState>({ entries: [], loading: false, error: null })
   const [recentScanNonce, setRecentScanNonce] = useState(0)
   const menuRef = useRef<HTMLDivElement | null>(null)
@@ -212,6 +230,7 @@ export function ChatFileTreePanel({
     setExpanded(new Set([ROOT_PATH]))
     setDirectories({})
     setContextMenu(null)
+    setQuery('')
     setRecentScan({ entries: [], loading: false, error: null })
   }, [root])
 
@@ -310,7 +329,9 @@ export function ChatFileTreePanel({
   }, [contextMenu])
 
   const selectedKey = useMemo(() => pathKey(selectedPath ?? ''), [selectedPath])
-  const recentEntries = recentScan.entries
+  const recentEntries = recentScan.entries.filter((entry) =>
+    chatFileTreeEntryMatchesQuery(entry, root, query)
+  )
 
   if (!root) return null
 
@@ -409,13 +430,22 @@ export function ChatFileTreePanel({
         : []
     }
 
+    const hasMatchingLoadedDescendant = (entry: WorkspaceEntry): boolean => {
+      if (chatFileTreeEntryMatchesQuery(entry, root, query)) return true
+      if (entry.type !== 'directory') return false
+      const childState = directories[entry.path]
+      return Boolean(childState?.entries.some((child) => hasMatchingLoadedDescendant(child)))
+    }
+
     return sortChatFileTreeEntries(state.entries, sortMode)
       .filter((entry) => entry.type !== 'directory' || !isChatFileTreeIgnoredDirectory(entry.name))
+      .filter((entry) => hasMatchingLoadedDescendant(entry))
       .flatMap((entry) => {
         const isDirectory = entry.type === 'directory'
-        const entryExpanded = expanded.has(entry.path)
+        const entryExpanded = expanded.has(entry.path) || Boolean(query.trim() && directories[entry.path])
         const previewable = isChatFileTreePreviewableEntry(entry)
         const active = !isDirectory && selectedKey === pathKey(entry.path)
+        const previewKind = workspaceFilePreviewKind(entry.path || entry.name)
         const icon = isDirectory
           ? entryExpanded
             ? <FolderOpen className="h-3.5 w-3.5 shrink-0 text-ds-muted" strokeWidth={1.75} />
@@ -438,7 +468,7 @@ export function ChatFileTreePanel({
                 onPreviewFile(entry.path)
               }}
               onContextMenu={(event) => openContextMenu(event, entry)}
-              buttonClassName="items-center gap-1.5 py-1.5 pr-1.5 text-[12.5px]"
+              buttonClassName="h-7 items-center gap-1.5 py-0 pr-1.5 text-[12px]"
               buttonStyle={{ paddingLeft: depth * 14 + 8 }}
               trailing={
                 isDirectory ? (
@@ -447,7 +477,17 @@ export function ChatFileTreePanel({
                   ) : (
                     <ChevronRight className="h-3.5 w-3.5 text-ds-faint" strokeWidth={1.8} />
                   )
-                ) : null
+                ) : (
+                  <span
+                    className={`min-w-[28px] rounded-[4px] px-1 py-0.5 text-center text-[8.5px] font-semibold tracking-wide ${
+                      previewKind === 'unsupported'
+                        ? 'bg-ds-hover text-ds-faint'
+                        : 'bg-accent/10 text-accent'
+                    }`}
+                  >
+                    {workspaceFileKindLabel(entry.path || entry.name)}
+                  </span>
+                )
               }
             >
               {icon}
@@ -495,6 +535,28 @@ export function ChatFileTreePanel({
           </>
         }
       />
+      <div className="px-2 pb-2">
+        <label className="flex h-8 items-center gap-2 rounded-lg border border-ds-border-muted bg-ds-card/70 px-2.5 transition focus-within:border-accent/45 focus-within:bg-ds-card">
+          <Search className="h-3.5 w-3.5 shrink-0 text-ds-faint" strokeWidth={1.8} />
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder={t('fileTreeSearchPlaceholder', { defaultValue: 'Filter loaded files' })}
+            aria-label={t('fileTreeSearchPlaceholder', { defaultValue: 'Filter loaded files' })}
+            className="min-w-0 flex-1 bg-transparent text-[12px] text-ds-ink outline-none placeholder:text-ds-faint"
+          />
+          {query ? (
+            <button
+              type="button"
+              onClick={() => setQuery('')}
+              className="rounded p-0.5 text-ds-faint transition hover:bg-ds-hover hover:text-ds-ink"
+              aria-label={t('fileTreeClearSearch', { defaultValue: 'Clear file filter' })}
+            >
+              <X className="h-3 w-3" strokeWidth={2} />
+            </button>
+          ) : null}
+        </label>
+      </div>
       {recentEntries.length || recentScan.loading || recentScan.error ? (
         <div className="border-b border-ds-border-muted/60 px-1 pb-2">
           <div className="px-2.5 pb-1 text-[11px] font-medium text-ds-faint">
@@ -517,11 +579,14 @@ export function ChatFileTreePanel({
                 draggable
                 onDragStart={(event) => setEntryDragData(event, entry)}
                 onClick={() => onPreviewFile(entry.path)}
-                className="flex min-w-0 items-center gap-1.5 rounded-md px-2.5 py-1 text-left text-[12px] text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+                className="flex h-7 min-w-0 items-center gap-1.5 rounded-md px-2.5 text-left text-[12px] text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
                 title={entry.path}
               >
                 <FileText className="h-3.5 w-3.5 shrink-0" strokeWidth={1.7} />
                 <span className="min-w-0 truncate">{relativeWorkspacePath(entry.path, root)}</span>
+                <span className="ml-auto shrink-0 text-[9px] font-semibold text-ds-faint">
+                  {workspaceFileKindLabel(entry.path)}
+                </span>
               </button>
             ))}
           </div>

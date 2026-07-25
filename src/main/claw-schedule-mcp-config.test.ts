@@ -46,7 +46,7 @@ function createSettings(patch: Partial<AppSettingsV1['schedule']['internal']> = 
       enabled: true,
       retentionDays: 2
     },
-    checkpointCleanup: { enabled: false, intervalDays: 3 },
+    checkpointCleanup: { createEnabled: false, enabled: false, intervalDays: 3 },
     notifications: {
       turnComplete: true
     },

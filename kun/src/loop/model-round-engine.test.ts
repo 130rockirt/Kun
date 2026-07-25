@@ -208,6 +208,29 @@ describe('ModelRoundEngine', () => {
     expect(new Set(toolCallItems.map((item) => item.id)).size).toBe(2)
   })
 
+  it('persists provider-owned tool metadata without adding it to GUI runtime events', async () => {
+    const test = harness([
+      {
+        kind: 'tool_call_complete',
+        callId: 'call_1',
+        toolName: 'read',
+        arguments: { path: 'file.ts' },
+        providerMetadata: {
+          gemini: { thoughtSignature: 'opaque-provider-signature' }
+        }
+      },
+      { kind: 'completed', stopReason: 'tool_calls' }
+    ])
+
+    await expect(test.run()).resolves.toEqual(expect.objectContaining({ kind: 'tool_calls' }))
+    expect(test.appliedItems.find((item) => item.kind === 'tool_call')).toMatchObject({
+      providerMetadata: {
+        gemini: { thoughtSignature: 'opaque-provider-signature' }
+      }
+    })
+    expect(JSON.stringify(test.recordedEvents)).not.toContain('opaque-provider-signature')
+  })
+
   it('allocates distinct runtime ids when one model step repeats a provider call id', async () => {
     const test = harness([
       { kind: 'tool_call_complete', callId: 'call_shared', toolName: 'read', arguments: { path: 'a.ts' } },

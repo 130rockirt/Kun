@@ -218,6 +218,45 @@ describe('chat-store-maintenance-actions fork actions', () => {
   })
 })
 
+describe('chat-store-maintenance-actions compaction', () => {
+  beforeEach(() => {
+    registryMock.getProvider.mockReset()
+  })
+
+  it('does not mutate cumulative usage to simulate a smaller context', async () => {
+    const { actions, provider, state } = buildHarness()
+    const usage = {
+      threadId: 'thr_existing',
+      snapshot: {
+        inputTokens: 120_000,
+        outputTokens: 5_000,
+        reasoningTokens: 0,
+        cachedTokens: 80_000,
+        cacheMissTokens: 40_000,
+        cacheHitRate: 2 / 3,
+        totalTokens: 125_000,
+        costUsd: 1,
+        costCny: null,
+        tokenEconomySavingsTokens: 0,
+        turns: 4
+      }
+    }
+    Object.assign(provider, {
+      compactThread: vi.fn(async () => ({ replacedTokens: 50_000 }))
+    })
+    Object.assign(state, {
+      busy: false,
+      lastTurnUsage: usage,
+      usageRefreshKey: 7
+    })
+
+    await actions.compactActiveThread()
+
+    expect(state.lastTurnUsage).toBe(usage)
+    expect(state.usageRefreshKey).toBe(7)
+  })
+})
+
 describe('chat-store-maintenance-actions delete actions', () => {
   beforeEach(() => {
     registryMock.getProvider.mockReset()
@@ -288,6 +327,43 @@ describe('chat-store-maintenance-actions workspace rollback', () => {
       expect(provider.rewindThread).not.toHaveBeenCalled()
       expect(sendMessage).not.toHaveBeenCalled()
       expect(state.blocks).toHaveLength(2)
+      expect(state.error).toBeNull()
+    } finally {
+      ;(globalThis as { window?: unknown }).window = previousWindow
+    }
+  })
+
+  it('validates restore against the thread workspace when the global picker points elsewhere', async () => {
+    const previousWindow = globalThis.window
+    const restoreGitCheckpoint = vi.fn(async () => ({
+      ok: true,
+      checkpointId: 'gcp_1',
+      repositoryRoot: '/workspace/deepseek-gui',
+      head: 'abc123',
+      currentBranch: 'develop',
+      rescueCheckpointId: 'gcp_rescue'
+    }))
+    ;(globalThis as { window?: unknown }).window = {
+      confirm: vi.fn(() => true),
+      kunGui: {
+        restoreGitCheckpoint
+      }
+    }
+    try {
+      const { actions, state } = buildHarness()
+      state.workspaceRoot = '/workspace/kun-ui-extend'
+      state.blocks = [
+        { kind: 'user', id: 'user_1', turnId: 'turn_1', text: 'question', meta: { workspaceCheckpointId: 'gcp_1' } },
+        { kind: 'assistant', id: 'assistant_1', turnId: 'turn_1', text: 'answer' }
+      ]
+
+      await actions.rollbackWorkspaceToCheckpoint('gcp_1')
+
+      expect(restoreGitCheckpoint).toHaveBeenCalledWith({
+        checkpointId: 'gcp_1',
+        expectedThreadId: 'thr_existing',
+        expectedWorkspaceRoot: '/workspace/deepseek-gui'
+      })
       expect(state.error).toBeNull()
     } finally {
       ;(globalThis as { window?: unknown }).window = previousWindow
@@ -507,6 +583,63 @@ describe('chat-store-maintenance-actions rewind and resend', () => {
     expect(provider.rewindThread).toHaveBeenCalledWith('thr_existing', 'turn_1')
     expect(requestCodeCanvasPanelOpen).not.toHaveBeenCalled()
     expect(sendMessage).toHaveBeenCalledWith('Refactor this module')
+  })
+
+  it('restores checkpoints against the thread workspace when resending under another global picker root', async () => {
+    const previousWindow = globalThis.window
+    const restoreGitCheckpoint = vi.fn(async () => ({
+      ok: true,
+      checkpointId: 'gcp_1',
+      repositoryRoot: '/workspace/deepseek-gui',
+      head: 'abc123',
+      currentBranch: 'develop',
+      rescueCheckpointId: null
+    }))
+    ;(globalThis as { window?: unknown }).window = {
+      kunGui: {
+        restoreGitCheckpoint
+      }
+    }
+    try {
+      const prepareCodeCanvasResend = vi.fn(async () => null)
+      const { actions, provider, sendMessage, state } = buildHarness({
+        maintenanceDependencies: {
+          prepareCodeCanvasResend
+        }
+      })
+      Object.assign(state, {
+        route: 'chat',
+        busy: false,
+        workspaceRoot: '/workspace/kun-ui-extend',
+        blocks: [
+          {
+            kind: 'user',
+            id: 'user_1',
+            text: 'old prompt',
+            meta: { turnId: 'turn_1', workspaceCheckpointId: 'gcp_1' }
+          },
+          { kind: 'assistant', id: 'assistant_1', text: 'old answer' }
+        ],
+        queuedMessages: [],
+        turnStartedAtByUserId: {},
+        turnDurationByUserId: {},
+        turnReasoningFirstAtByUserId: {},
+        turnReasoningLastAtByUserId: {}
+      })
+
+      await actions.rewindAndResend('user_1', '  Retry release review  ')
+
+      expect(restoreGitCheckpoint).toHaveBeenCalledWith({
+        checkpointId: 'gcp_1',
+        expectedThreadId: 'thr_existing',
+        expectedWorkspaceRoot: '/workspace/deepseek-gui'
+      })
+      expect(provider.rewindThread).toHaveBeenCalledWith('thr_existing', 'turn_1')
+      expect(sendMessage).toHaveBeenCalledWith('Retry release review')
+      expect(state.error).toBeNull()
+    } finally {
+      ;(globalThis as { window?: unknown }).window = previousWindow
+    }
   })
 })
 

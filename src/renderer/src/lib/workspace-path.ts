@@ -116,7 +116,7 @@ export function isInternalDeepSeekGuiWorkspace(path?: string): boolean {
   )
 }
 
-export function normalizeWorkspaceRoot(path?: string): string {
+export function normalizeWorkspaceRoot(path?: string | null): string {
   const trimmed = path?.trim() ?? ''
   if (!trimmed) return ''
   if (isInternalTemporaryWorkspace(trimmed)) return ''

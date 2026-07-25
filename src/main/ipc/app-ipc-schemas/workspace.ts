@@ -62,6 +62,13 @@ export const localPdfTextTargetPayloadSchema = z
     path: rootPathSchema
   })
   .strict()
+export const localOfficeDocumentTargetPayloadSchema = z
+  .object({
+    path: rootPathSchema.refine(isAbsolutePath, {
+      message: 'Office document path must be absolute'
+    })
+  })
+  .strict()
 export const deepseekConfigContentSchema = z.string().max(MAX_CONFIG_FILE_BYTES)
 
 export const workspaceRootSchema = trimmedString(MAX_PATH_LENGTH)
@@ -194,7 +201,22 @@ export const workspaceFileWritePayloadSchema = z
   .object({
     path: trimmedString(MAX_PATH_LENGTH),
     workspaceRoot: optionalTrimmedString(MAX_PATH_LENGTH),
-    content: z.string().max(MAX_BODY_BYTES)
+    content: z.string().max(MAX_BODY_BYTES),
+    expectedMtimeMs: z.number().finite().nonnegative().optional(),
+    force: z.boolean().optional()
+  })
+  .strict()
+
+export const workspacePreviewLeaseTargetPayloadSchema = z
+  .object({
+    path: trimmedString(MAX_PATH_LENGTH),
+    workspaceRoot: trimmedString(MAX_PATH_LENGTH)
+  })
+  .strict()
+
+export const workspacePreviewLeaseReleasePayloadSchema = z
+  .object({
+    leaseId: z.string().trim().regex(/^[A-Za-z0-9_-]{32,128}$/)
   })
   .strict()
 

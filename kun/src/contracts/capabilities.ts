@@ -143,6 +143,8 @@ export const McpServerConfig = z
     oauth: McpOAuthConfig.optional(),
     trustScope: McpTrustScope.default('workspace'),
     trustedWorkspaceRoots: z.array(z.string().min(1)).default([]),
+    /** MCP tool names explicitly trusted by the host as read-only in Plan mode. */
+    planModeReadOnlyTools: z.array(z.string().min(1)).default([]),
     timeoutMs: z.number().int().positive().default(30_000)
   })
   .strict()
@@ -187,7 +189,10 @@ export const McpServerConfig = z
       })
     }
   })
-export type McpServerConfig = z.infer<typeof McpServerConfig>
+type ParsedMcpServerConfig = z.infer<typeof McpServerConfig>
+export type McpServerConfig = Omit<ParsedMcpServerConfig, 'planModeReadOnlyTools'> & {
+  planModeReadOnlyTools?: string[]
+}
 
 export const McpCapabilityConfig = CapabilityToggleConfig.extend({
   servers: z.record(z.string().min(1), McpServerConfig).default({}),
@@ -377,7 +382,13 @@ export const DEFAULT_ATTACHMENT_DOCUMENT_MIME_TYPES = [
   'text/plain',
   'text/markdown',
   'text/csv',
-  'application/json'
+  'text/tab-separated-values',
+  'application/json',
+  'application/xml',
+  'text/xml',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation'
 ]
 export const DEFAULT_ATTACHMENT_MAX_DOCUMENT_BYTES = 10 * 1024 * 1024
 export const DEFAULT_ATTACHMENT_MAX_DOCUMENT_TEXT_CHARS = 200_000

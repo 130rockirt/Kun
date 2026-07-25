@@ -3,6 +3,7 @@ import { CompatModelClient } from './compat-model-client.js'
 import type { ModelCapabilityMetadata } from '../../contracts/capabilities.js'
 import type { ModelEndpointFormat } from '../../contracts/model-endpoint-format.js'
 import type { ModelRequest, ModelStreamChunk } from '../../ports/model-client.js'
+import { makeCompactionItem } from '../../domain/item.js'
 import { createCompatRequestCodecs, normalizeToolSpecs } from './compat-request-builder.js'
 
 // A single provider (OpenCode Go) routes some models over chat completions
@@ -58,6 +59,59 @@ async function drain(iterable: AsyncIterable<ModelStreamChunk>): Promise<ModelSt
 }
 
 describe('CompatModelClient per-model endpointFormat', () => {
+  it('uses Gemini-compatible reasoning controls on the Google OpenAI endpoint', () => {
+    const codecs = createCompatRequestCodecs()
+    const expected = new Map([
+      ['auto', undefined],
+      ['off', 'minimal'],
+      ['low', 'low'],
+      ['medium', 'medium'],
+      ['high', 'high'],
+      ['max', 'high']
+    ])
+
+    for (const [reasoningEffort, wireEffort] of expected) {
+      const body = codecs.build({
+        request: { ...request('gemini-3.6-flash'), reasoningEffort },
+        model: 'gemini-3.6-flash',
+        messages: [],
+        tools: [],
+        stream: true,
+        endpointFormat: 'chat_completions',
+        baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/',
+        isCodex: false,
+        isCodexLite: false,
+        codexNativeImageGeneration: false
+      })
+
+      expect(body).not.toHaveProperty('thinking')
+      if (wireEffort === undefined) {
+        expect(body).not.toHaveProperty('reasoning_effort')
+      } else {
+        expect(body.reasoning_effort).toBe(wireEffort)
+      }
+    }
+  })
+
+  it('keeps DeepSeek thinking controls scoped to the official DeepSeek host', () => {
+    const codecs = createCompatRequestCodecs()
+    const build = (baseUrl: string) => codecs.build({
+      request: { ...request('custom-model'), reasoningEffort: 'off' },
+      model: 'custom-model',
+      messages: [],
+      tools: [],
+      stream: true,
+      endpointFormat: 'chat_completions',
+      baseUrl,
+      isCodex: false,
+      isCodexLite: false,
+      codexNativeImageGeneration: false
+    })
+
+    expect(build('https://api.deepseek.com').thinking).toEqual({ type: 'disabled' })
+    expect(build('https://openrouter.ai/api/v1')).not.toHaveProperty('thinking')
+  })
+
   it('excludes local tool provenance from every supported wire format', () => {
     const codecs = createCompatRequestCodecs()
     const tools = normalizeToolSpecs([{
@@ -86,7 +140,42 @@ describe('CompatModelClient per-model endpointFormat', () => {
       expect(serialized).not.toContain('providerKind')
       expect(serialized).not.toContain('providerId')
       expect(serialized).not.toContain('design-canvas')
+      if (endpointFormat === 'responses') {
+        expect(body).not.toHaveProperty('prompt_cache_key')
+      }
     }
+  })
+
+  it('uses stable thread-scoped prompt cache keys only for Codex Responses', () => {
+    const codecs = createCompatRequestCodecs()
+    const buildResponses = (threadId: string, isCodex: boolean, isCodexLite = false) =>
+      codecs.build({
+        request: { ...request('gpt-5.6-sol'), threadId },
+        model: 'gpt-5.6-sol',
+        messages: [],
+        tools: [],
+        stream: true,
+        endpointFormat: 'responses',
+        baseUrl: isCodex
+          ? 'https://chatgpt.com/backend-api/codex'
+          : 'https://provider.example/v1',
+        isCodex,
+        isCodexLite,
+        codexNativeImageGeneration: false
+      })
+
+    const first = buildResponses('thread-a', true)
+    const repeated = buildResponses('thread-a', true)
+    const isolated = buildResponses('thread-b', true)
+    const lite = buildResponses('thread-a', true, true)
+    const compatible = buildResponses('thread-a', false)
+
+    expect(first.prompt_cache_key).toBe('thread-a')
+    expect(repeated.prompt_cache_key).toBe(first.prompt_cache_key)
+    expect(isolated.prompt_cache_key).toBe('thread-b')
+    expect(isolated.prompt_cache_key).not.toBe(first.prompt_cache_key)
+    expect(lite.prompt_cache_key).toBe('thread-a')
+    expect(compatible).not.toHaveProperty('prompt_cache_key')
   })
 
   it('routes an override model to the Anthropic Messages endpoint while others use chat completions', async () => {
@@ -179,6 +268,72 @@ describe('CompatModelClient per-model endpointFormat', () => {
     expect(calls.every((call) => call.body.messages)).toBe(true)
   })
 
+  it('keeps compacted Codex history in Responses input while preserving stable instructions', async () => {
+    const calls: CapturedCall[] = []
+    const client = new CompatModelClient({
+      baseUrl: 'https://chatgpt.com/backend-api/codex/responses',
+      apiKey: 'oauth-access-token',
+      model: 'gpt-5.3-codex-spark',
+      endpointFormat: 'custom_endpoint',
+      nonStreaming: true,
+      fetchImpl: (async (url: string, init: { body: string }) => {
+        calls.push({ url: String(url), body: JSON.parse(init.body) as Record<string, unknown> })
+        return new Response(JSON.stringify({ output_text: 'ok' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' }
+        })
+      }) as unknown as typeof fetch,
+      modelCapabilities: modelCapabilities({})
+    })
+
+    await drain(client.stream({
+      ...request('gpt-5.3-codex-spark'),
+      history: [makeCompactionItem({
+        id: 'compaction_1',
+        threadId: 't1',
+        turnId: 'u1',
+        summary: 'Preserve the repository findings.',
+        replacedTokens: 80_000,
+        pinnedConstraints: []
+      })]
+    }))
+
+    expect(calls[0].body.instructions).toBe('You are a helpful assistant.')
+    expect(calls[0].body.input).toEqual([{
+      role: 'system',
+      content: 'Conversation summary from earlier turns:\nPreserve the repository findings.'
+    }])
+    expect(JSON.stringify(calls[0].body)).not.toContain('compat-history-context')
+  })
+
+  it('moves system-only Codex context into Responses input without duplicating it', async () => {
+    const calls: CapturedCall[] = []
+    const client = new CompatModelClient({
+      baseUrl: 'https://chatgpt.com/backend-api/codex/responses',
+      apiKey: 'oauth-access-token',
+      model: 'gpt-5.3-codex-spark',
+      endpointFormat: 'custom_endpoint',
+      nonStreaming: true,
+      fetchImpl: (async (url: string, init: { body: string }) => {
+        calls.push({ url: String(url), body: JSON.parse(init.body) as Record<string, unknown> })
+        return new Response(JSON.stringify({ output_text: 'ok' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' }
+        })
+      }) as unknown as typeof fetch,
+      modelCapabilities: modelCapabilities({})
+    })
+
+    await drain(client.stream(request('gpt-5.3-codex-spark')))
+
+    expect(calls[0].body.instructions).toBe(' ')
+    expect(calls[0].body.input).toEqual([{
+      role: 'system',
+      content: 'You are a helpful assistant.'
+    }])
+    expect(JSON.stringify(calls[0].body).match(/You are a helpful assistant\./g)).toHaveLength(1)
+  })
+
   it('uses the Codex Responses Lite shape for GPT-5.6 models', async () => {
     const calls: Array<{ headers: Record<string, string>; body: Record<string, unknown> }> = []
     const client = new CompatModelClient({
@@ -220,6 +375,7 @@ describe('CompatModelClient per-model endpointFormat', () => {
       model: 'gpt-5.6-sol',
       store: false,
       parallel_tool_calls: false,
+      prompt_cache_key: 't1',
       reasoning: { effort: 'xhigh', context: 'all_turns' }
     })
     expect(calls[0].body).not.toHaveProperty('instructions')

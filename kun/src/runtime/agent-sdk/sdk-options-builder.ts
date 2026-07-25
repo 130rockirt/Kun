@@ -59,6 +59,19 @@ const AUTH_OVERRIDE_ENV_KEYS: readonly string[] = [
   'CLAUDE_CODE_USE_ANTHROPIC_AWS'
 ]
 
+const CLAUDE_OAUTH_TOKEN_PATTERN = /^sk-ant-oat[\w-]+$/
+
+export function normalizeClaudeOAuthToken(raw: string | undefined): string | undefined {
+  const token = raw?.trim()
+  if (!token) return undefined
+  if (!CLAUDE_OAUTH_TOKEN_PATTERN.test(token)) {
+    throw new Error(
+      'Claude subscription token format is invalid. Paste only the complete sk-ant-oat token value.'
+    )
+  }
+  return token
+}
+
 /**
  * Produce a clean env for the SDK's Claude Code subprocess: strip anything that
  * would outrank the subscription token, then inject the token (when provided).
@@ -71,7 +84,7 @@ export function buildScopedEnv(
 ): Record<string, string | undefined> {
   const env: Record<string, string | undefined> = { ...baseEnv }
   for (const key of AUTH_OVERRIDE_ENV_KEYS) delete env[key]
-  const token = oauthToken?.trim()
+  const token = normalizeClaudeOAuthToken(oauthToken)
   if (token) env.CLAUDE_CODE_OAUTH_TOKEN = token
   return env
 }

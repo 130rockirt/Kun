@@ -1,5 +1,5 @@
 import type { ReactElement } from 'react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ChevronDown, ChevronUp, Loader2, SquareTerminal, X } from 'lucide-react'
 import {
@@ -31,8 +31,8 @@ type BackgroundShellListResponse = {
   running: number
 }
 
-async function fetchBackgroundShells(threadId?: string): Promise<BackgroundShellListResponse> {
-  const query = threadId ? `?thread_id=${encodeURIComponent(threadId)}` : ''
+async function fetchBackgroundShells(threadId: string): Promise<BackgroundShellListResponse> {
+  const query = `?thread_id=${encodeURIComponent(threadId)}`
   const result = await rendererRuntimeClient.runtimeRequest(`${KUN_BACKGROUND_SHELLS_PATH}${query}`)
   if (!result.ok) return { sessions: [], running: 0 }
   try {
@@ -47,39 +47,66 @@ async function stopBackgroundShell(sessionId: string): Promise<void> {
 }
 
 type BackgroundShellOverlayProps = {
+  threadId: string | null
   runtimeReady?: boolean
 }
 
 export function BackgroundShellOverlay({
+  threadId,
   runtimeReady = true
 }: BackgroundShellOverlayProps): ReactElement | null {
   const { t } = useTranslation('chat')
   const [open, setOpen] = useState(false)
   const [sessions, setSessions] = useState<BackgroundShellSession[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const requestIdRef = useRef(0)
+  const runtimeContextRef = useRef({ runtimeReady, threadId })
+  runtimeContextRef.current = { runtimeReady, threadId }
 
   const refresh = useCallback(async () => {
-    if (!runtimeReady) return
-    const data = await fetchBackgroundShells()
-    setSessions(data.sessions)
-  }, [runtimeReady])
+    if (!runtimeReady || !threadId) return
+    const requestContext = runtimeContextRef.current
+    if (!requestContext.runtimeReady || requestContext.threadId !== threadId) return
+    const requestId = ++requestIdRef.current
+    const data = await fetchBackgroundShells(threadId)
+    const currentContext = runtimeContextRef.current
+    if (
+      requestId !== requestIdRef.current ||
+      !currentContext.runtimeReady ||
+      currentContext.threadId !== threadId
+    ) {
+      return
+    }
+    setSessions(data.sessions.filter((session) => session.threadId === threadId))
+  }, [runtimeReady, threadId])
 
   useEffect(() => {
+    requestIdRef.current += 1
+    setOpen(false)
+    setSessions([])
+    setSelectedId(null)
     void refresh()
-    if (!runtimeReady) return
+    if (!runtimeReady || !threadId) return
     const timer = window.setInterval(() => {
       void refresh()
     }, 2000)
-    return () => window.clearInterval(timer)
-  }, [refresh, runtimeReady])
+    return () => {
+      requestIdRef.current += 1
+      window.clearInterval(timer)
+    }
+  }, [refresh, runtimeReady, threadId])
 
+  const scopedSessions = useMemo(
+    () => threadId ? sessions.filter((session) => session.threadId === threadId) : [],
+    [sessions, threadId]
+  )
   const runningCount = useMemo(
-    () => sessions.filter((session) => session.status === 'running').length,
-    [sessions]
+    () => scopedSessions.filter((session) => session.status === 'running').length,
+    [scopedSessions]
   )
   const selected = useMemo(
-    () => sessions.find((session) => session.id === selectedId) ?? sessions[0] ?? null,
-    [selectedId, sessions]
+    () => scopedSessions.find((session) => session.id === selectedId) ?? scopedSessions[0] ?? null,
+    [selectedId, scopedSessions]
   )
 
   if (runningCount <= 0 && !open) return null
@@ -115,12 +142,12 @@ export function BackgroundShellOverlay({
             </button>
           </div>
           <div className="max-h-72 overflow-y-auto">
-            {sessions.length === 0 ? (
+            {scopedSessions.length === 0 ? (
               <p className="px-3 py-4 text-[12px] text-ds-muted">
                 {t('backgroundShells.empty', { defaultValue: 'No background shells.' })}
               </p>
             ) : (
-              sessions.map((session) => {
+              scopedSessions.map((session) => {
                 const active = selected?.id === session.id
                 return (
                   <button

@@ -2,6 +2,8 @@ import type {
   AttachmentReference,
   ChatBlock,
   NormalizedThread,
+  RequestContextSnapshot,
+  DelegatedRuntimeState,
   RuntimeConnectionStatus,
   ReviewTarget,
   ThreadGoal,
@@ -225,10 +227,13 @@ export type ChatState = {
    */
   liveDeltaSeqFloor: number
   usageRefreshKey: number
+  /** Latest main-agent request context snapshot, tagged with its owning thread. */
+  lastContextSnapshot: RequestContextSnapshot | null
+  /** Latest truthful optional-capability snapshot for the active delegated route. */
+  lastDelegatedRuntimeState: DelegatedRuntimeState | null
   /**
-   * Latest turn's usage snapshot, tagged with the thread it belongs to. Used by
-   * the context-capacity gauge: the last turn's prompt tokens ≈ what currently
-   * occupies the window. Null until a live turn reports usage.
+   * Latest cumulative usage snapshot, tagged with the thread it belongs to.
+   * This is billing/cache telemetry and must not be used as context occupancy.
    */
   lastTurnUsage: { threadId: string; snapshot: ThreadUsageSnapshot } | null
   busy: boolean

@@ -172,7 +172,7 @@ export class RoutePoolModelClient implements ModelClient {
   constructor(
     private readonly direct: ModelClient,
     pools: readonly ModelRoutePoolConfig[],
-    private readonly capabilities: (model: string) => ModelCapabilityMetadata,
+    private readonly capabilities: (model: string, providerId?: string) => ModelCapabilityMetadata,
     readonly health: RoutePoolHealthStore = new RoutePoolHealthStore(),
     private readonly now: () => number = Date.now
   ) {
@@ -300,8 +300,12 @@ function shouldRouteRequest(pool: ModelRoutePoolConfig, request: ModelRequest): 
   return providerId === LOCAL_MODEL_GATEWAY_PROVIDER_ID || providerId === `route-pool:${pool.id}`.toLowerCase()
 }
 
-function targetSupportsRequest(target: ModelRouteTargetConfig, request: ModelRequest, resolve: (model: string) => ModelCapabilityMetadata): boolean {
-  const capability = resolve(target.modelId)
+function targetSupportsRequest(
+  target: ModelRouteTargetConfig,
+  request: ModelRequest,
+  resolve: (model: string, providerId?: string) => ModelCapabilityMetadata
+): boolean {
+  const capability = resolve(target.modelId, target.providerId)
   if (request.attachments?.length && !capability.inputModalities.includes('image')) return false
   if (request.tools.length > 0 && !capability.supportsToolCalling) return false
   if (request.reasoningEffort && request.reasoningEffort !== 'off' && !capability.reasoning) return false

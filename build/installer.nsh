@@ -1,3 +1,13 @@
+!macro customInit
+  ${if} ${isUpdated}
+    # electron-updater always passes --updated, including older Kun versions
+    # that launched the assisted installer without /S. Force only that path
+    # into silent mode so retry/cancel dialogs use their safe default while a
+    # manually launched installer remains interactive.
+    SetSilent silent
+  ${endif}
+!macroend
+
 !macro customCheckAppRunning
   Var /GLOBAL KunInstallerCurrentPid
   Var /GLOBAL KunInstallerStopAttempt

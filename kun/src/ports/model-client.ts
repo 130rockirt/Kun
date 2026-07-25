@@ -1,4 +1,4 @@
-import type { TurnItem } from '../contracts/items.js'
+import type { ToolCallProviderMetadata, TurnItem } from '../contracts/items.js'
 import type { UsageSnapshot } from '../contracts/usage.js'
 import type { ToolProviderKind } from './tool-host.js'
 import type { ModelFailureMetadata } from '../contracts/model-route-pool.js'
@@ -20,7 +20,13 @@ export type ModelStreamChunk = (
   | { kind: 'assistant_text_delta'; text: string }
   | { kind: 'assistant_reasoning_delta'; text: string }
   | { kind: 'tool_call_delta'; callId: string; toolName?: string; argumentsDelta?: string }
-  | { kind: 'tool_call_complete'; callId: string; toolName: string; arguments: Record<string, unknown> }
+  | {
+      kind: 'tool_call_complete'
+      callId: string
+      toolName: string
+      arguments: Record<string, unknown>
+      providerMetadata?: ToolCallProviderMetadata
+    }
   | { kind: 'retrying'; status: number; attempt: number; maxAttempts: number; delayMs: number }
   | { kind: 'image_generation_complete'; imageBase64: string; mimeType: string }
   | { kind: 'usage'; usage: UsageSnapshot }
@@ -125,6 +131,8 @@ export type ModelDocumentAttachment = {
   mimeType: string
   text: string
   byteSize: number
+  documentFormat?: 'pdf' | 'docx' | 'xlsx' | 'pptx' | 'text' | 'csv' | 'json' | 'xml'
+  sourceSha256?: string
   pageCount?: number
   truncated?: boolean
   localFilePath?: string
@@ -135,6 +143,8 @@ export type ModelToolSpec = {
   description: string
   inputSchema: Record<string, unknown>
   toolKind?: 'tool_call' | 'command_execution' | 'file_change'
+  /** Host-authored side-effect classification; never forwarded to model providers. */
+  sideEffect?: 'read-only' | 'unknown'
   /** Local execution provenance. Provider serializers must not forward it. */
   providerKind?: ToolProviderKind
   /** Stable local provider id (for example `builtin` or `mcp:filesystem`). */

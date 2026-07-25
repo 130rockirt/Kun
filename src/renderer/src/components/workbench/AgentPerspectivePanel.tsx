@@ -39,6 +39,7 @@ import {
 } from '../../agent/agent-tool-provenance'
 import type {
   ModelRequestTraceBody,
+  ModelRequestTraceDelegated,
   ModelRequestTraceHeaders,
   ModelRequestTraceRecord
 } from '../../agent/model-request-traces'
@@ -312,6 +313,11 @@ function TimelineItem({
         <span className="mt-0.5 block truncate text-[9px] text-ds-muted" title={eventSubtitle(event)}>
           {eventSubtitle(event)}
         </span>
+        {event.record.delegated ? (
+          <span className="mt-1 inline-flex rounded-full border border-violet-500/20 bg-violet-500/8 px-1.5 py-0.5 text-[8px] font-medium text-violet-700 dark:text-violet-300">
+            {t(delegatedPhaseKey(event.record.delegated.phase))}
+          </span>
+        ) : null}
         {event.kind === 'tool_call' ? (
           <span className="mt-1 flex min-w-0 flex-wrap gap-1">
             <ToolProvenanceBadges provenance={event.provenance} compact />
@@ -370,6 +376,12 @@ function EventHero({ event }: { event: AgentPerspectiveEvent }): ReactElement {
         ) : null}
         {totalTokens !== undefined ? <MetaChip>{t('agentPerspectiveTokens', { count: totalTokens })}</MetaChip> : null}
         {cacheHitRate !== undefined ? <MetaChip>{t('agentPerspectiveCacheHit', { rate: Math.round(cacheHitRate * 100) })}</MetaChip> : null}
+        {record.delegated ? (
+          <>
+            <MetaChip>{delegatedProviderLabel(record.delegated.providerKind)}</MetaChip>
+            <MetaChip>{t(delegatedPhaseKey(record.delegated.phase))}</MetaChip>
+          </>
+        ) : null}
         <MetaChip>{record.endpointFormat}</MetaChip>
       </div>
     </section>
@@ -400,6 +412,7 @@ function SemanticRequestDetail({
   return (
     <div className="space-y-3">
       {semantic.parseError ? <Notice text={semantic.parseError} warning /> : null}
+      {record.delegated ? <DelegatedTraceSummary delegated={record.delegated} /> : null}
       {!compact ? <CompositionBar items={composition} /> : null}
 
       <SemanticSection
@@ -493,6 +506,88 @@ function SemanticRequestDetail({
         )) : <SectionEmpty text="—" />}
       </SemanticSection>
     </div>
+  )
+}
+
+function DelegatedTraceSummary({
+  delegated
+}: {
+  delegated: ModelRequestTraceDelegated
+}): ReactElement {
+  const { t } = useTranslation('common')
+  const capabilities: Array<{
+    key: keyof ModelRequestTraceDelegated['capabilities']
+    label: string
+  }> = [
+    { key: 'nativeResume', label: 'agentPerspectiveCapabilityNativeResume' },
+    { key: 'structuredStreaming', label: 'agentPerspectiveCapabilityStructuredStreaming' },
+    { key: 'kunTools', label: 'agentPerspectiveCapabilityKunTools' },
+    { key: 'externalApproval', label: 'agentPerspectiveCapabilityExternalApproval' },
+    { key: 'liveSteering', label: 'agentPerspectiveCapabilityLiveSteering' },
+    { key: 'nativeContextTelemetry', label: 'agentPerspectiveCapabilityContextTelemetry' },
+    { key: 'fork', label: 'agentPerspectiveCapabilityFork' }
+  ]
+  return (
+    <section
+      className="rounded-xl border border-violet-500/20 bg-violet-500/5 p-3"
+      aria-label={t('agentPerspectiveSdkExecution')}
+    >
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="flex h-6 w-6 items-center justify-center rounded-md bg-violet-500/12 text-violet-700 dark:text-violet-300">
+          <Bot className="h-3.5 w-3.5" aria-hidden />
+        </span>
+        <span className="text-[10px] font-semibold">{t('agentPerspectiveSdkExecution')}</span>
+        <span className="rounded-full border border-violet-500/20 bg-violet-500/10 px-1.5 py-0.5 text-[8px] font-medium text-violet-700 dark:text-violet-300">
+          {delegatedProviderLabel(delegated.providerKind)}
+        </span>
+      </div>
+      <dl className="mt-2 grid grid-cols-[110px_minmax(0,1fr)] gap-x-2 gap-y-1.5 text-[9px]">
+        <dt className="text-ds-faint">{t('agentPerspectiveContinuity')}</dt>
+        <dd className="font-medium">{t(delegatedPhaseKey(delegated.phase))}</dd>
+        {delegated.reason ? (
+          <>
+            <dt className="text-ds-faint">{t('agentPerspectiveContinuityReason')}</dt>
+            <dd className="font-medium">{t(delegatedReasonKey(delegated.reason))}</dd>
+          </>
+        ) : null}
+        <dt className="text-ds-faint">{t('agentPerspectiveContextOwner')}</dt>
+        <dd className="font-medium">{t('agentPerspectiveSdkManaged')}</dd>
+        <dt className="text-ds-faint">{t('agentPerspectiveNativeHistory')}</dt>
+        <dd className="font-medium">
+          {t(delegated.nativeHistory === 'unknown'
+            ? 'agentPerspectiveNativeHistoryUnknown'
+            : delegated.nativeHistory === 'none'
+              ? 'agentPerspectiveNativeHistoryNone'
+              : 'agentPerspectiveNativeHistoryKnown')}
+        </dd>
+      </dl>
+      <div className="mt-3 border-t border-violet-500/15 pt-2">
+        <p className="mb-1.5 text-[8px] font-semibold uppercase tracking-wide text-ds-faint">
+          {t('agentPerspectiveCapabilities')}
+        </p>
+        <div className="flex flex-wrap gap-1">
+          {capabilities.map((capability) => {
+            const supported = delegated.capabilities[capability.key]
+            return (
+              <span
+                key={capability.key}
+                className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[8px] ${
+                  supported
+                    ? 'border-emerald-500/20 bg-emerald-500/8 text-emerald-700 dark:text-emerald-300'
+                    : 'border-ds-border-muted bg-ds-surface-subtle text-ds-faint'
+                }`}
+                title={t(supported
+                  ? 'agentPerspectiveCapabilitySupported'
+                  : 'agentPerspectiveCapabilityUnavailable')}
+              >
+                {supported ? <Check className="h-2.5 w-2.5" aria-hidden /> : <span aria-hidden>—</span>}
+                {t(capability.label)}
+              </span>
+            )
+          })}
+        </div>
+      </div>
+    </section>
   )
 }
 
@@ -1216,7 +1311,44 @@ function eventSearchText(event: AgentPerspectiveEvent): string {
   if (event.kind === 'tool_call') {
     return `${event.kind} ${event.toolName} ${event.callId} ${event.provenance.providerKind ?? ''} ${event.provenance.providerId ?? ''} ${JSON.stringify(event.arguments)}`
   }
-  return `${event.kind} ${event.record.model} ${event.record.provider} ${event.kind === 'title_generation' ? event.title : ''}`
+  const delegated = event.record.delegated
+  return [
+    event.kind,
+    event.record.model,
+    event.record.provider,
+    event.kind === 'title_generation' ? event.title : '',
+    delegated?.providerKind ?? '',
+    delegated?.phase ?? '',
+    delegated?.reason ?? ''
+  ].join(' ')
+}
+
+function delegatedProviderLabel(
+  providerKind: ModelRequestTraceDelegated['providerKind']
+): string {
+  if (providerKind === 'agent-sdk') return 'Claude Agent SDK'
+  if (providerKind === 'cursor-sdk') return 'Cursor Agent SDK'
+  return 'Google Antigravity CLI'
+}
+
+function delegatedPhaseKey(
+  phase: ModelRequestTraceDelegated['phase']
+): string {
+  if (phase === 'resumed') return 'agentPerspectivePhaseResumed'
+  if (phase === 'portable') return 'agentPerspectivePhasePortable'
+  return 'agentPerspectivePhaseRebased'
+}
+
+function delegatedReasonKey(
+  reason: NonNullable<ModelRequestTraceDelegated['reason']>
+): string {
+  if (reason === 'route_changed') return 'agentPerspectiveReasonRouteChanged'
+  if (reason === 'capabilities_changed') return 'agentPerspectiveReasonCapabilitiesChanged'
+  if (reason === 'history_changed') return 'agentPerspectiveReasonHistoryChanged'
+  if (reason === 'native_state_unavailable') {
+    return 'agentPerspectiveReasonNativeStateUnavailable'
+  }
+  return 'agentPerspectiveReasonNew'
 }
 
 function requestComposition(
@@ -1241,7 +1373,10 @@ function requestComposition(
 
 function requestFailed(record: ModelRequestTraceRecord): boolean {
   const status = record.response?.status
-  return record.status === 'transport_error' || record.status === 'capture_error' || (status !== undefined && status >= 400)
+  return record.status === 'transport_error' ||
+    record.status === 'capture_error' ||
+    Boolean(record.decoded?.error) ||
+    (status !== undefined && status >= 400)
 }
 
 function prettyJson(value: string): string | null {
@@ -1282,5 +1417,6 @@ function statusLabel(t: (key: string) => string, record: ModelRequestTraceRecord
   if (record.status === 'pending') return t('agentPerspectivePending')
   if (record.status === 'transport_error') return t('agentPerspectiveTransportError')
   if (record.status === 'capture_error') return t('agentPerspectiveCaptureError')
+  if (record.decoded?.error) return t('agentPerspectiveModelError')
   return `${t('agentPerspectiveCompleted')}${record.response ? ` · HTTP ${record.response.status}` : ''}`
 }

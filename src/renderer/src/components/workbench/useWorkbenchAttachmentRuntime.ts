@@ -18,6 +18,7 @@ import {
 import { useWorkbenchAttachmentController } from './useWorkbenchAttachmentController'
 import type { RightPanelMode } from '../chat/WorkbenchTopBar'
 import { BUILTIN_RIGHT_PANEL_IDS } from '../../extensions/contribution-ids'
+import type { ComposerFileReference } from '../chat/FloatingComposer'
 
 type WorkbenchAttachmentRuntimeOptions = {
   activeThreadId: string | null
@@ -32,6 +33,7 @@ type WorkbenchAttachmentRuntimeOptions = {
   selectedModelSupportsImageInput: boolean
   threads: NormalizedThread[]
   workspaceRoot: string
+  onFallbackToFileReference?: (reference: ComposerFileReference) => void
 }
 
 export function useWorkbenchAttachmentRuntime({
@@ -46,7 +48,8 @@ export function useWorkbenchAttachmentRuntime({
   runtimeInfo,
   selectedModelSupportsImageInput,
   threads,
-  workspaceRoot
+  workspaceRoot,
+  onFallbackToFileReference
 }: WorkbenchAttachmentRuntimeOptions) {
   const [composerAttachmentsByScope, setComposerAttachmentsByScope] = useState(
     createEmptyComposerAttachmentsByScope
@@ -144,7 +147,8 @@ export function useWorkbenchAttachmentRuntime({
     setComposerAttachmentsForScope,
     setComposerAttachments,
     getAttachmentScope: () => composerAttachmentScopeRef.current,
-    getActiveWorkspace: activeComposerWorkspace
+    getActiveWorkspace: activeComposerWorkspace,
+    onFallbackToFileReference
   })
 
   return {

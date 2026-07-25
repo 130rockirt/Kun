@@ -8,15 +8,11 @@ import {
 } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
-import type { ChatBlock } from '../../agent/types'
+import type { RequestContextSnapshot } from '../../agent/types'
 import type { AppRoute } from '../../store/chat-store-types'
 import { useChatStore } from '../../store/chat-store'
 import { formatPercent } from '../../hooks/use-thread-usage'
-import {
-  buildContextCapacity,
-  estimateBlockTokens,
-  type ContextCapacity
-} from '../../lib/context-capacity'
+import { buildContextCapacity, type ContextCapacity } from '../../lib/context-capacity'
 import { ContextCapacityPopover } from './ContextCapacityPopover'
 
 const RING_SIZE = 24
@@ -29,7 +25,6 @@ const POPOVER_MAX_HEIGHT = 360
 const POPOVER_ESTIMATED_HEIGHT = 252
 const POPOVER_MARGIN = 12
 const POPOVER_GAP = 8
-const EMPTY_CONTEXT_BLOCKS: ChatBlock[] = []
 
 type PopoverAnchorRect = Pick<DOMRect, 'bottom' | 'right' | 'top'>
 
@@ -50,9 +45,9 @@ function currentBodyZoom(): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 1
 }
 
-function capacityColor(usedRatio: number): string {
-  if (usedRatio >= 0.9) return '#d9544e'
-  if (usedRatio >= 0.75) return '#d9920f'
+function capacityColor(usedRatio: number, thresholdRatio: number): string {
+  if (usedRatio >= thresholdRatio) return '#d9544e'
+  if (usedRatio >= thresholdRatio * 0.85) return '#d9920f'
   return 'var(--ds-accent)'
 }
 
@@ -114,10 +109,8 @@ type Props = {
   compact: boolean
   route: AppRoute
   activeThreadId: string | null
-  lastTurnInputTokens: number | null
-  contextWindowTokens?: number
-  runtimeToolCount?: number
-  runtimeSkillCount?: number
+  selectedModel: string
+  selectedProviderId?: string
 }
 
 /** Owns context-capacity measurement, popover lifecycle, and accessible trigger UI. */
@@ -125,20 +118,16 @@ export function FloatingComposerContextCapacity({
   compact,
   route,
   activeThreadId,
-  lastTurnInputTokens,
-  contextWindowTokens,
-  runtimeToolCount,
-  runtimeSkillCount
+  selectedModel,
+  selectedProviderId
 }: Props): ReactElement | null {
   const { t } = useTranslation('common')
   const capacity = useComposerContextCapacity({
     compact,
     route,
     activeThreadId,
-    lastTurnInputTokens,
-    contextWindowTokens,
-    runtimeToolCount,
-    runtimeSkillCount
+    selectedModel,
+    selectedProviderId
   })
   const [open, setOpen] = useState(false)
   const [placement, setPlacement] = useState<ContextCapacityPopoverPlacement | null>(null)
@@ -235,6 +224,9 @@ export function FloatingComposerContextCapacity({
         visibility: 'hidden'
       }
   const percent = formatPercent(capacity.usedRatio)
+  const ariaLabel = capacity.nativeHistoryUnknown
+    ? t('contextCapacitySdkManagedChipAria', { tokens: capacity.usedTokens })
+    : t('contextCapacityChipAria', { percent })
 
   return (
     <>
@@ -266,7 +258,7 @@ export function FloatingComposerContextCapacity({
           onMouseEnter={openPreview}
           onMouseLeave={closePreviewSoon}
           className="ds-composer-context ds-no-drag inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-transparent text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
-          aria-label={t('contextCapacityChipAria', { percent })}
+          aria-label={ariaLabel}
           aria-expanded={open}
           aria-haspopup="dialog"
         >
@@ -275,25 +267,40 @@ export function FloatingComposerContextCapacity({
             viewBox={`0 0 ${RING_SIZE} ${RING_SIZE}`}
             aria-hidden="true"
           >
-            <circle
-              cx={RING_SIZE / 2}
-              cy={RING_SIZE / 2}
-              r={RING_RADIUS}
-              fill="none"
-              stroke="var(--ds-surface-subtle)"
-              strokeWidth={RING_STROKE}
-            />
-            <circle
-              cx={RING_SIZE / 2}
-              cy={RING_SIZE / 2}
-              r={RING_RADIUS}
-              fill="none"
-              stroke={capacityColor(capacity.usedRatio)}
-              strokeWidth={RING_STROKE}
-              strokeLinecap="round"
-              strokeDasharray={RING_CIRCUMFERENCE}
-              strokeDashoffset={RING_CIRCUMFERENCE * (1 - Math.min(1, Math.max(0, capacity.usedRatio)))}
-            />
+            {capacity.nativeHistoryUnknown ? (
+              <circle
+                cx={RING_SIZE / 2}
+                cy={RING_SIZE / 2}
+                r={RING_RADIUS}
+                fill="none"
+                stroke="var(--ds-muted)"
+                strokeWidth={RING_STROKE}
+                strokeLinecap="round"
+                strokeDasharray="2 3"
+              />
+            ) : (
+              <>
+                <circle
+                  cx={RING_SIZE / 2}
+                  cy={RING_SIZE / 2}
+                  r={RING_RADIUS}
+                  fill="none"
+                  stroke="var(--ds-surface-subtle)"
+                  strokeWidth={RING_STROKE}
+                />
+                <circle
+                  cx={RING_SIZE / 2}
+                  cy={RING_SIZE / 2}
+                  r={RING_RADIUS}
+                  fill="none"
+                  stroke={capacityColor(capacity.usedRatio, capacity.softThresholdRatio)}
+                  strokeWidth={RING_STROKE}
+                  strokeLinecap="round"
+                  strokeDasharray={RING_CIRCUMFERENCE}
+                  strokeDashoffset={RING_CIRCUMFERENCE * (1 - Math.min(1, Math.max(0, capacity.usedRatio)))}
+                />
+              </>
+            )}
           </svg>
         </button>
       </div>
@@ -305,70 +312,46 @@ function useComposerContextCapacity({
   compact,
   route,
   activeThreadId,
-  lastTurnInputTokens,
-  contextWindowTokens,
-  runtimeToolCount,
-  runtimeSkillCount
+  selectedModel,
+  selectedProviderId
 }: Props): ContextCapacity | null {
-  const messageTokenCacheRef = useRef<WeakMap<object, number>>(new WeakMap())
-  const lastKnownWindowRef = useRef(0)
-  if (typeof contextWindowTokens === 'number' && contextWindowTokens > 0) {
-    lastKnownWindowRef.current = contextWindowTokens
-  }
-  const lastKnownToolCountRef = useRef(0)
-  if (typeof runtimeToolCount === 'number') lastKnownToolCountRef.current = runtimeToolCount
-  const lastKnownSkillCountRef = useRef(0)
-  if (typeof runtimeSkillCount === 'number') lastKnownSkillCountRef.current = runtimeSkillCount
-
-  const effectiveWindow =
-    typeof contextWindowTokens === 'number' && contextWindowTokens > 0
-      ? contextWindowTokens
-      : lastKnownWindowRef.current
-  const effectiveToolCount =
-    typeof runtimeToolCount === 'number' ? runtimeToolCount : lastKnownToolCountRef.current
-  const effectiveSkillCount =
-    typeof runtimeSkillCount === 'number' ? runtimeSkillCount : lastKnownSkillCountRef.current
-  const enabled = !compact && route === 'chat' && Boolean(activeThreadId) && effectiveWindow > 0
-  const blocks = useChatStore((state) => (enabled ? state.blocks : EMPTY_CONTEXT_BLOCKS))
-  const conversationTokensRef = useRef(0)
-  const conversationTokens = useMemo(() => {
-    if (!enabled) return conversationTokensRef.current
-    let startIndex = 0
-    for (let index = blocks.length - 1; index >= 0; index -= 1) {
-      if (blocks[index]?.kind === 'compaction') {
-        startIndex = index
-        break
-      }
-    }
-    const cache = messageTokenCacheRef.current
-    let sum = 0
-    for (let index = startIndex; index < blocks.length; index += 1) {
-      const block = blocks[index]!
-      let cached = cache.get(block)
-      if (cached === undefined) {
-        cached = estimateBlockTokens(block)
-        cache.set(block, cached)
-      }
-      sum += cached
-    }
-    conversationTokensRef.current = sum
-    return sum
-  }, [blocks, enabled])
-
-  return useMemo(() => enabled
-    ? buildContextCapacity({
-        windowTokens: effectiveWindow,
-        lastTurnInputTokens,
-        messageTokens: conversationTokens,
-        toolCount: effectiveToolCount,
-        skillCount: effectiveSkillCount
+  const snapshot = useChatStore((state) => state.lastContextSnapshot)
+  const enabled = !compact && route === 'chat' && Boolean(activeThreadId)
+  return useMemo(() => {
+    if (
+      !enabled ||
+      !snapshot ||
+      !requestContextSnapshotMatchesSelection(snapshot, {
+        threadId: activeThreadId,
+        model: selectedModel,
+        providerId: selectedProviderId
       })
-    : null, [
-    conversationTokens,
-    effectiveSkillCount,
-    effectiveToolCount,
-    effectiveWindow,
-    enabled,
-    lastTurnInputTokens
-  ])
+    ) {
+      return null
+    }
+    return buildContextCapacity(snapshot)
+  }, [activeThreadId, enabled, selectedModel, selectedProviderId, snapshot])
+}
+
+function normalizedSelection(value: string | null | undefined): string {
+  return value?.trim().toLowerCase() ?? ''
+}
+
+export function requestContextSnapshotMatchesSelection(
+  snapshot: RequestContextSnapshot,
+  selection: {
+    threadId: string | null
+    model: string
+    providerId?: string
+  }
+): boolean {
+  if (!selection.threadId || snapshot.threadId !== selection.threadId) return false
+  const selectedModel = normalizedSelection(selection.model)
+  const snapshotModel = normalizedSelection(snapshot.model)
+  if (selectedModel && selectedModel !== 'auto' && selectedModel !== snapshotModel) return false
+  const selectedProvider = normalizedSelection(selection.providerId)
+  const snapshotProvider = normalizedSelection(snapshot.providerId)
+  return selectedProvider
+    ? selectedProvider === snapshotProvider
+    : !snapshotProvider || snapshotProvider === 'default'
 }

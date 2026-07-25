@@ -61,11 +61,12 @@ export function providersConfigForRuntime(
   for (const provider of getModelProviderSettings(settings).providers as ModelProviderProfileV1[]) {
     const id = provider.id?.trim()
     const baseUrl = provider.baseUrl?.trim()
-    const isDelegated =
+    const isKeylessTransport =
       provider.kind === 'agent-sdk' ||
       provider.kind === 'antigravity-cli' ||
+      provider.kind === 'gemini-cli-api' ||
       provider.kind === 'cursor-sdk'
-    if (!id || (!baseUrl && !isDelegated)) continue
+    if (!id || (!baseUrl && !isKeylessTransport)) continue
     out[id] = {
       // Provider secrets live in the protected account store. The runtime
       // resolves this opaque source binding after reading config.json.
@@ -75,6 +76,7 @@ export function providersConfigForRuntime(
       ...(provider.kind ? { kind: provider.kind } : {}),
       ...(provider.endpointFormat ? { endpointFormat: provider.endpointFormat } : {}),
       retry: provider.retry,
+      modelProfiles: modelConfigProfilesFromProviderProfiles(provider.modelProfiles),
       ...(proxyUrl ? { modelProxyUrl: proxyUrl } : {}),
       // Credential-derived transport headers are reconstructed in Kun from
       // the protected binding and are never persisted in config.json.

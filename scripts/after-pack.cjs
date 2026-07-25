@@ -27,6 +27,10 @@ const KUN_RUNTIME_REQUIRED_PATHS = [
   'kun/node_modules/semver/package.json',
   'kun/node_modules/yauzl/package.json',
   'kun/node_modules/yazl/package.json',
+  'kun/node_modules/typescript/package.json',
+  'kun/node_modules/typescript/lib/typescript.js',
+  'kun/node_modules/typescript-language-server/package.json',
+  'kun/node_modules/typescript-language-server/lib/cli.mjs',
   'kun/node_modules/@cursor/sdk/package.json',
   'kun/node_modules/@modelcontextprotocol/sdk/package.json',
   'kun/node_modules/@kun/extension-api/package.json',
@@ -54,6 +58,7 @@ const LINUX_SANDBOX_LAUNCHER_FLAG = '--disable-setuid-sandbox'
 const LINUX_REAL_EXECUTABLE_SUFFIX = '.electron-bin'
 const BUNDLED_EXTENSIONS_DIR = 'bundled-extensions'
 const BUNDLED_EXTENSION_CATALOG_FILE = 'catalog.json'
+const OFFICECLI_DIR = 'officecli'
 const REQUIRED_BUNDLED_EXTENSION_IDS = [
   'kun-examples.kun-video-editor',
   'kun-examples.presentation-studio',
@@ -213,6 +218,86 @@ function validateBundledExtensionResources(context) {
   }
 }
 
+function validateBundledOfficeCli(context) {
+  const platform = normalizePlatform(context.electronPlatformName)
+  const arch = normalizeArch(context.arch)
+  const root = join(packedResourcesDir(context), OFFICECLI_DIR)
+  const manifestPath = join(root, 'manifest.json')
+  const selectedPath = join(root, 'selected.json')
+  assertRegularNonSymlink(manifestPath, 'OfficeCLI manifest')
+  assertRegularNonSymlink(selectedPath, 'OfficeCLI selected target manifest')
+
+  let manifest
+  let selected
+  try {
+    manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+    selected = JSON.parse(readFileSync(selectedPath, 'utf8'))
+  } catch (error) {
+    throw new Error(`[after-pack] Invalid OfficeCLI manifest: ${error.message}`)
+  }
+  const targetKey = `${platform}-${arch}`
+  const expected = manifest?.assets?.[targetKey]
+  if (
+    manifest?.schemaVersion !== 1 ||
+    manifest?.version !== '1.0.141' ||
+    !expected ||
+    selected?.schemaVersion !== 1 ||
+    selected?.version !== manifest.version ||
+    selected?.schemaCrc !== manifest.schemaCrc ||
+    selected?.platform !== platform ||
+    selected?.arch !== arch ||
+    selected?.sha256 !== expected.sha256 ||
+    selected?.size !== expected.size
+  ) {
+    throw new Error(`[after-pack] OfficeCLI target manifest does not match ${targetKey}`)
+  }
+
+  const executableName = platform === 'win32' ? 'officecli.exe' : 'officecli'
+  const executablePath = join(root, executableName)
+  assertRegularNonSymlink(executablePath, `OfficeCLI ${targetKey} executable`)
+  const details = lstatSync(executablePath)
+  if (details.size !== expected.size) {
+    throw new Error(`[after-pack] OfficeCLI size mismatch for ${targetKey}`)
+  }
+  const digest = createHash('sha256').update(readFileSync(executablePath)).digest('hex')
+  if (digest !== expected.sha256) {
+    throw new Error(`[after-pack] OfficeCLI digest mismatch for ${targetKey}`)
+  }
+  if (platform !== 'win32') {
+    chmodSync(executablePath, 0o755)
+    if ((lstatSync(executablePath).mode & 0o111) === 0) {
+      throw new Error(`[after-pack] OfficeCLI is not executable for ${targetKey}`)
+    }
+  }
+
+  for (const legalFile of ['LICENSE', 'NOTICE', 'THIRD-PARTY-NOTICES.txt']) {
+    assertRegularNonSymlink(join(root, 'legal', legalFile), `OfficeCLI ${legalFile}`)
+  }
+  const binaryEntries = readdirSync(root).filter((entry) =>
+    entry === 'officecli' || entry === 'officecli.exe'
+  )
+  if (binaryEntries.length !== 1 || binaryEntries[0] !== executableName) {
+    throw new Error(`[after-pack] Expected exactly one ${targetKey} OfficeCLI executable`)
+  }
+}
+
+async function maybeSignBundledOfficeCli(context) {
+  const platform = normalizePlatform(context.electronPlatformName)
+  if (platform !== 'win32') return false
+  const signIf = context.packager?.signIf
+  if (typeof signIf !== 'function') {
+    throw new Error('[after-pack] Windows packager cannot sign the bundled OfficeCLI executable')
+  }
+  const executablePath = join(packedResourcesDir(context), OFFICECLI_DIR, 'officecli.exe')
+  const signed = await signIf.call(context.packager, executablePath)
+  console.log(
+    signed
+      ? '[after-pack] Signed bundled OfficeCLI executable.'
+      : '[after-pack] OfficeCLI signing was skipped because Windows signing is not configured.'
+  )
+  return signed
+}
+
 function assertRegularNonSymlink(path, label) {
   assertExists(path, label)
   const details = lstatSync(path)
@@ -350,7 +435,7 @@ function installLinuxElectronLauncher(context) {
 function normalizeArch(arch) {
   if (arch === 'x64' || arch === 1) return 'x64'
   if (arch === 'arm64' || arch === 3) return 'arm64'
-  throw new Error(`[after-pack] Unsupported Whisper runner arch: ${arch}`)
+  throw new Error(`[after-pack] Unsupported packaged resource arch: ${arch}`)
 }
 
 function prunePackedWhisperResources(context) {
@@ -370,6 +455,8 @@ async function afterPack(context) {
   materializePackedWorkspaceDependencies(context)
   validateBundledKunRuntime(context)
   validateBundledExtensionResources(context)
+  validateBundledOfficeCli(context)
+  await maybeSignBundledOfficeCli(context)
   prunePackedWhisperResources(context)
   ensureNodePtyHelpersExecutable(context)
   installLinuxElectronLauncher(context)
@@ -389,6 +476,8 @@ exports._internals = {
   materializePackedWorkspaceDependencies,
   validateBundledKunRuntime,
   validateBundledExtensionResources,
+  validateBundledOfficeCli,
+  maybeSignBundledOfficeCli,
   normalizeArch,
   prunePackedWhisperResources,
   ensureNodePtyHelpersExecutable,

@@ -680,8 +680,7 @@ export function Workbench(): ReactElement {
   ])
 
   const {
-    selectedModelSupportsImageInput,
-    selectedContextWindowTokens
+    selectedModelSupportsImageInput
   } = useWorkbenchComposerCapabilities({
     route,
     rightPanelMode,
@@ -721,7 +720,10 @@ export function Workbench(): ReactElement {
     runtimeInfo,
     selectedModelSupportsImageInput,
     threads,
-    workspaceRoot
+    workspaceRoot,
+    onFallbackToFileReference: route === 'chat' && !activeSddDraft
+      ? addComposerFileReference
+      : undefined
   })
 
   const {
@@ -811,7 +813,7 @@ export function Workbench(): ReactElement {
 
   const chatComposerProps = useWorkbenchChatComposerProps({
     input, setInput, composerMode, setComposerMode, busy, route, runtimeReady: runtimeConnection === 'ready',
-    activeThreadId, selectedContextWindowTokens, runtimeInfo, activeClawChannelId,
+    activeThreadId, activeClawChannelId,
     activeClawChannelModel: activeClawChannel?.model, composerModel, composerProviderId, composerPickList,
     composerModelGroups, composerReasoningEffort, setComposerReasoningEffort,
     setClawChannelModel, setComposerModel, openProvidersSettings: () => openSettings('providers'), handleSend,

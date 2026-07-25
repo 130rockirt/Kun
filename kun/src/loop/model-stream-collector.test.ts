@@ -46,7 +46,10 @@ describe('ModelStreamCollector', () => {
       kind: 'tool_call_complete',
       callId: 'call_1',
       toolName: 'edit',
-      arguments: { input: { path: 'src/a.ts' } }
+      arguments: { input: { path: 'src/a.ts' } },
+      providerMetadata: {
+        gemini: { thoughtSignature: 'opaque-provider-signature' }
+      }
     })
     const second = stream.reduce({
       kind: 'tool_call_complete',
@@ -58,6 +61,9 @@ describe('ModelStreamCollector', () => {
     expect(first.intents).toEqual([expect.objectContaining({
       kind: 'tool_call_ready',
       repairNotes: ['flattened input wrapper'],
+      providerMetadata: {
+        gemini: { thoughtSignature: 'opaque-provider-signature' }
+      },
       call: expect.objectContaining({
         callId: 'call_1',
         providerId: 'builtin',

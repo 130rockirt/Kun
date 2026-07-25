@@ -125,6 +125,73 @@ describe('buildToolPreferenceInstruction', () => {
     expect(buildToolPreferenceInstruction([...tools].reverse())).toBe(instruction)
   })
 
+  it('adds bounded delegation guidance only when the child-agent tool is available', () => {
+    const instruction = buildToolPreferenceInstruction([
+      { name: 'delegate_task', description: 'Run a standalone child agent' }
+    ])
+
+    expect(instruction).toContain('specialist expertise')
+    expect(instruction).toContain('fresh independent review')
+    expect(instruction).toContain('parallel investigation of independent workstreams')
+    expect(instruction).toContain('keep integration and final verification in the parent agent')
+    expect(instruction).toContain('Do not delegate trivial work')
+  })
+
+  it('explains only exact-profile and automatic routes in existing-profile mode', () => {
+    const instruction = buildToolPreferenceInstruction([
+      { name: 'list_subagent_profiles', description: 'List reusable roles' },
+      {
+        name: 'delegate_task',
+        description: 'Run a standalone child agent',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            prompt: { type: 'string' },
+            profile: { type: 'string' }
+          }
+        }
+      }
+    ])
+
+    expect(instruction).toContain('exact roster knowledge')
+    expect(instruction).toContain('exact returned `profile` id')
+    expect(instruction).toContain('omit `profile` for automatic routing')
+    expect(instruction).not.toContain('`custom_agent`')
+    expect(instruction).not.toContain('security-auditor')
+  })
+
+  it('explains only custom roles in custom-only mode', () => {
+    const instruction = buildToolPreferenceInstruction([
+      { name: 'list_subagent_profiles', description: 'Describe custom roles' },
+      {
+        name: 'delegate_task',
+        description: 'Run a standalone child agent',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            prompt: { type: 'string' },
+            custom_agent: { type: 'object' }
+          }
+        }
+      }
+    ])
+
+    expect(instruction).toContain('`custom_agent`')
+    expect(instruction).toContain('reusable profile selection and automatic catalog routing are unavailable')
+    expect(instruction).not.toContain('exact returned `profile` id')
+    expect(instruction).not.toContain('omit `profile` for automatic routing')
+  })
+
+  it('keeps read-only profile discovery useful when child execution is not advertised', () => {
+    const instruction = buildToolPreferenceInstruction([
+      { name: 'list_subagent_profiles', description: 'List custom and reusable roles' }
+    ])
+
+    expect(instruction).toContain('while planning')
+    expect(instruction).toContain('does not create a child run')
+    expect(instruction).not.toContain('Issue multiple child calls')
+  })
+
   it('prefers specialized MCP source navigation with available built-in fallback', () => {
     const instruction = buildToolPreferenceInstruction([
       { name: 'grep', description: 'Search file contents' },

@@ -38,7 +38,11 @@ import { configureAppIdentity } from './app-identity'
 import { shouldStartHidden, syncLoginItemSettings } from './desktop-behavior'
 import { resolveLogDirectory, resolveNamedPreloadPath, resolvePreloadPath } from './main-paths'
 import { runLegacyKunDataMigration } from './legacy-data-migration'
-import { LegacyProviderSettingsMigrationCoordinator } from './legacy-provider-settings-migration'
+import {
+  LegacyProviderSettingsMigrationCoordinator,
+  resolveSettingsDataDir
+} from './legacy-provider-settings-migration'
+import { resetUnreadableWindowsCredentials } from './credential-recovery'
 import {
   applyKunRuntimePatch,
   kunSettingsEnvelope,
@@ -91,6 +95,7 @@ import {
 } from './kun-process'
 import { expandHomePath } from './settings-store'
 import { KunRuntimeSupervisor, type KunRuntimeStatus } from './kun-runtime-supervisor'
+import { managedKunHostCanAutoStart } from './managed-runtime-startup-policy'
 import { configureLogger, logError, logInfo, logWarn, pruneOnStartup } from './logger'
 import { cleanupUnusedGitCheckpointsIfDue } from './services/git-checkpoint-service'
 import { resolveMainWindowCloseDecision } from './window-close-behavior'
@@ -171,6 +176,7 @@ import {
   startExtensionSecretRevealConsentPump,
   type RegisterExtensionIpcHandlersOptions
 } from './ipc/register-extension-ipc-handlers'
+import { WorkspacePreviewProtocolRegistry } from './services/workspace-preview-protocol'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 registerKunExtensionPlatformSchemesAsPrivileged(protocol)
@@ -321,34 +327,48 @@ function setUpdateInstallQuitting(active: boolean): void {
   runtimeShutdown.setUpdateInstallQuit(active)
 }
 
-async function runCheckpointCleanupIfDue(settings: AppSettingsV1): Promise<void> {
-  if (!settings.checkpointCleanup.enabled) return
+async function runCheckpointCleanup(
+  settings: AppSettingsV1,
+  options: { force?: boolean; reason?: string } = {}
+): Promise<void> {
+  const force = options.force === true
+  const reason = options.reason ?? (force ? 'forced' : 'interval')
+  // Startup / upgrade retention always runs. The settings toggle only gates the
+  // periodic background timer so a previous "cleanup off" cannot leave gigabytes
+  // of stale checkpoints behind after relaunch or app update.
+  if (!force && !settings.checkpointCleanup.enabled) return
   const runtime = resolveKunRuntimeSettings(settings)
   const dataDir = resolveKunDataDir(runtime)
   const intervalDays = settings.checkpointCleanup.intervalDays
   const checkpointsRoot = settings.checkpointCleanup.directory?.trim()
     ? expandHomePath(settings.checkpointCleanup.directory.trim())
     : undefined
+  const maxPerThread = settings.checkpointCleanup.maxPerThread
   try {
     const cleanup = await cleanupUnusedGitCheckpointsIfDue({
       dataDir,
       intervalDays,
-      ...(checkpointsRoot ? { checkpointsRoot } : {})
+      appVersion: app.getVersion(),
+      ...(force ? { force: true } : {}),
+      ...(checkpointsRoot ? { checkpointsRoot } : {}),
+      ...(maxPerThread !== undefined ? { maxPerThread } : {})
     })
     if (!cleanup.due) return
     const { result } = cleanup
     console.info(
-      `[kun-gui] git checkpoint cleanup scanned=${result.scanned} deleted=${result.deleted} kept=${result.kept} failed=${result.failed}`
+      `[kun-gui] git checkpoint cleanup reason=${reason} scanned=${result.scanned} deleted=${result.deleted} kept=${result.kept} failed=${result.failed}`
     )
     if (result.failed > 0) {
       logWarn('git-checkpoint-cleanup', 'failed to delete some unused checkpoints', {
         failed: result.failed,
-        failedIds: result.failedIds
+        failedIds: result.failedIds,
+        reason
       })
     }
   } catch (error) {
     logWarn('git-checkpoint-cleanup', 'failed to clean unused checkpoints', {
-      message: error instanceof Error ? error.message : String(error)
+      message: error instanceof Error ? error.message : String(error),
+      reason
     })
   }
 }
@@ -357,11 +377,11 @@ function syncCheckpointCleanupTimer(settings: AppSettingsV1): void {
   stopCheckpointCleanupTimer()
   if (!settings.checkpointCleanup.enabled) return
   const intervalMs = settings.checkpointCleanup.intervalDays * 24 * 60 * 60 * 1_000
-  const run = (): void => {
-    void runCheckpointCleanupIfDue(settings)
-  }
-  run()
-  checkpointCleanupTimer = setInterval(run, intervalMs)
+  // Interval / version-upgrade passes only. The forced startup pass is scheduled
+  // earlier in app.whenReady so retention does not wait on the interval gate.
+  checkpointCleanupTimer = setInterval(() => {
+    void runCheckpointCleanup(settings, { reason: 'interval' })
+  }, intervalMs)
   checkpointCleanupTimer.unref?.()
 }
 
@@ -813,9 +833,7 @@ function publishRuntimeSettingsSyncStatus(
 const runtimeSupervisor = new KunRuntimeSupervisor<AppSettingsV1>({
   deps: {
     loadSettings: () => store.load(),
-    canAutoRestart: (settings) => Boolean(
-      resolveConfiguredApiKey(settings) && getKunRuntimeSettings(settings).autoStart
-    ),
+    canAutoRestart: managedKunHostCanAutoStart,
     ensureRuntime: (settings) => ensureRuntime(settings),
     restartRuntime: (settings) => restartRuntime(settings),
     checkHealth: (settings, timeoutMs) => kunRuntimeHealthMonitor.waitForHealthy(settings, timeoutMs),
@@ -1028,7 +1046,6 @@ async function ensureKunRuntime(settings: AppSettingsV1): Promise<AppSettingsV1>
   }
 
   const runtime = getKunRuntimeSettings(currentSettings)
-  const hasApiKey = Boolean(resolveConfiguredApiKey(currentSettings))
 
   const healthy = await kunRuntimeHealthMonitor.waitForHealthy(currentSettings, 2_000)
   if (healthy) {
@@ -1040,12 +1057,6 @@ async function ensureKunRuntime(settings: AppSettingsV1): Promise<AppSettingsV1>
     throw runtimeJsonError(threadApi.error, threadApi.message)
   }
 
-  if (!hasApiKey) {
-    throw runtimeJsonError(
-      'missing_api_key',
-      'DeepSeek API Key is required before the GUI can start Kun.'
-    )
-  }
   if (!runtime.autoStart) {
     throw runtimeJsonError(
       'runtime_offline',
@@ -1121,12 +1132,6 @@ async function restartRuntimeOnce(settings: AppSettingsV1): Promise<void> {
   await waitForKunStartupSettled()
   const runtime = getKunRuntimeSettings(settings)
 
-  if (!resolveConfiguredApiKey(settings)) {
-    throw runtimeJsonError(
-      'missing_api_key',
-      'DeepSeek API Key is required before the GUI can start Kun.'
-    )
-  }
   if (!runtime.autoStart) {
     throw runtimeJsonError(
       'runtime_offline',
@@ -1459,33 +1464,13 @@ async function restartManagedRuntimeForSettingsChange(
 
   if (!wasRunning) return { state: 'unavailable', message: 'Kun Runtime is not running.' }
 
-  // Decide BEFORE stopping the child. Stranding a healthy runtime is exactly
-  // issue #329: a partial/transient save (e.g. the active providerId moved to
-  // a profile whose key lives elsewhere) can momentarily resolve to "no API
-  // key" even though the user clearly has one configured. If the runtime we
-  // are about to restart was healthy and the previous settings had a usable
-  // key, don't kill it on the strength of a key check the new settings fail —
-  // leave it running on its current config; the next save with a resolvable
-  // key restarts cleanly.
-  const nextHasApiKey = Boolean(resolveConfiguredApiKey(next))
-  if (!nextHasApiKey && Boolean(resolveConfiguredApiKey(prev))) {
-    logWarn(
-      'settings-apply',
-      'Skipping Kun restart: the new settings resolve to no API key but the running runtime had one — leaving the healthy runtime in place.'
-    )
-    return {
-      state: 'failed',
-      message: 'Kun Runtime kept the previous provider configuration because the new credentials are unavailable.'
-    }
-  }
-
   await waitForManagedRuntimeReadyBeforeStop(prev, 'settings-apply')
   await adapter.stopAndWait()
-  if (!nextHasApiKey || !runtime.autoStart) {
+  if (!runtime.autoStart) {
     publishRuntimeStatus({
       state: 'stopped',
       source: 'settings-apply',
-      message: 'Kun was stopped: the new settings have no API key or auto-start is disabled.'
+      message: 'Kun was stopped because automatic startup is disabled.'
     })
     return { state: 'unavailable', message: 'Kun Runtime is stopped by the current settings.' }
   }
@@ -1533,7 +1518,7 @@ async function rollbackRuntimeSettingsAfterFailedApply(
       message: error instanceof Error ? error.message : String(error)
     })
   }
-  if (!resolveConfiguredApiKey(base) || !getKunRuntimeSettings(base).autoStart) {
+  if (!getKunRuntimeSettings(base).autoStart) {
     publishRuntimeStatus({
       state: 'stopped',
       source: 'settings-apply',
@@ -1582,7 +1567,7 @@ async function restartManagedRuntimeForMcpConfigChange(
   if (!wasRunning) return { state: 'unavailable', message: 'Kun Runtime is not running.' }
   await waitForManagedRuntimeReadyBeforeStop(settings, 'mcp-config')
   await adapter.stopAndWait()
-  if (!resolveConfiguredApiKey(settings) || !runtime.autoStart) {
+  if (!runtime.autoStart) {
     return { state: 'unavailable', message: 'Kun Runtime is stopped by the current settings.' }
   }
 
@@ -1669,12 +1654,15 @@ app.whenReady().then(async () => {
     app.dock?.setIcon(macDockIcon.isEmpty() ? appIcon : macDockIcon)
   }
 
-  store = new JsonSettingsStore(app.getPath('userData'), {
-    credentialMigration: new LegacyProviderSettingsMigrationCoordinator()
-  })
+  const credentialMigration = new LegacyProviderSettingsMigrationCoordinator()
+  store = new JsonSettingsStore(app.getPath('userData'), { credentialMigration })
   traceStartup('settings load:start')
   const initial = await store.load()
   traceStartup('settings load:done')
+  // Retention always runs at startup (and again after version upgrades inside
+  // IfDue). Fire-and-forget: must not block window creation.
+  void runCheckpointCleanup(initial, { force: true, reason: 'startup' })
+  traceStartup('git checkpoint cleanup scheduled')
   const extensionDescriptors = new ExtensionDescriptorResolver(async (path, method, body) => {
     const settings = await store.load()
     return runtimeRequest(settings, path, { method, body })
@@ -1689,6 +1677,8 @@ app.whenReady().then(async () => {
     })
   }
   registerExtensionProtocol(protocol)
+  const workspacePreviewProtocols = new WorkspacePreviewProtocolRegistry()
+  workspacePreviewProtocols.register(protocol)
 
   const extensionProtocolForPartition = (partition: string) => session.fromPartition(partition).protocol
   const extensionMediaProtocols = new ExtensionMediaProtocolRegistry({
@@ -1893,6 +1883,12 @@ app.whenReady().then(async () => {
     getMainWindow: () => mainWindow,
     applySettingsPatch,
     saveSettingsPatch,
+    resetUnreadableCredentials: async () => {
+      const dataDir = resolveSettingsDataDir(await store.load())
+      const result = await resetUnreadableWindowsCredentials(dataDir)
+      credentialMigration.invalidateRuntime(dataDir)
+      return { reset: true as const, ...result }
+    },
     runtimeRequest: async (path, method, body, headers) => {
       const settings = await store.load()
       return runtimeRequest(settings, path, { method, body, headers })
@@ -1924,7 +1920,8 @@ app.whenReady().then(async () => {
     readGuiUpdateState,
     loadGuiUpdaterModule,
     resolveLogDirectory: () => resolveLogDirectory(app),
-    logError
+    logError,
+    workspacePreviewProtocols
   })
   const dataMigrationController = new DataMigrationController({
     userDataPath: app.getPath('userData'),
@@ -2040,7 +2037,7 @@ app.whenReady().then(async () => {
     console.warn('[kun-gui] prune logs:', err)
   })
 
-  if (resolveConfiguredApiKey(initial)) {
+  if (managedKunHostCanAutoStart(initial)) {
     setTimeout(() => {
       void kunRuntimeAdapter.resolveExecutable(initial).catch((err) => {
         console.warn('[kun-gui] prewarm Kun binary:', err)

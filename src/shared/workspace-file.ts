@@ -23,6 +23,8 @@ export type WorkspaceFileWritePayload = {
   path: string
   workspaceRoot?: string
   content: string
+  expectedMtimeMs?: number
+  force?: boolean
 }
 
 export type WorkspaceFileSaveAsPayload = {
@@ -152,6 +154,7 @@ export type WorkspaceFileReadResult =
       path: string
       content: string
       size: number
+      mtimeMs?: number
       truncated: boolean
       line?: number
       column?: number
@@ -205,6 +208,35 @@ export type WorkspaceFileResolveResult =
     }
   | { ok: false; message: string }
 
+export type WorkspaceFileOpenResult =
+  | { ok: true }
+  | { ok: false; message: string }
+
+export type WorkspacePreviewLeaseTarget = {
+  path: string
+  workspaceRoot: string
+}
+
+export type WorkspacePreviewLeaseResult =
+  | {
+      ok: true
+      leaseId: string
+      url: string
+      mimeType: string
+      size: number
+      mtimeMs: number
+      expiresAt: string
+    }
+  | { ok: false; message: string }
+
+export type WorkspacePreviewLeaseReleasePayload = {
+  leaseId: string
+}
+
+export type WorkspacePreviewLeaseReleaseResult =
+  | { ok: true }
+  | { ok: false; message: string }
+
 export type WorkspaceDirectoryListResult =
   | {
       ok: true
@@ -218,8 +250,14 @@ export type WorkspaceFileWriteResult =
       ok: true
       path: string
       savedAt: string
+      mtimeMs?: number
     }
-  | { ok: false; message: string }
+  | {
+      ok: false
+      code?: 'modified_on_disk'
+      message: string
+      mtimeMs?: number
+    }
 
 export type WorkspaceFileCreateResult =
   | {
