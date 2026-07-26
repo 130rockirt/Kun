@@ -24,7 +24,7 @@ import { openWorkspacePathInEditor } from '../../lib/open-workspace-path'
 import { previewWorkspaceFile } from '../../lib/workspace-file-preview'
 import { DiffView } from '../DiffView'
 import { AssistantMarkdown } from './AssistantMarkdown'
-import { MessageBubble } from './message-timeline-bubbles'
+import { GeneratedFilesPanel, MessageBubble } from './message-timeline-bubbles'
 import {
   blockHasPendingRuntimeWork,
   isBackgroundShellNoticeBlock,
@@ -59,6 +59,15 @@ export function isSubagentBlock(block: ChatBlock): boolean {
   return toolName === 'delegate_task' || toolName === 'generate_subagent'
 }
 
+function processBlockHasGeneratedMedia(block: ChatBlock): block is ToolBlock {
+  if (block.kind !== 'tool' || block.status !== 'success') return false
+  return (
+    Array.isArray(block.meta?.attachments) && block.meta.attachments.length > 0
+  ) || (
+    Array.isArray(block.meta?.generatedFiles) && block.meta.generatedFiles.length > 0
+  )
+}
+
 function subagentParentTurnId(block: ChatBlock): string {
   if (block.kind !== 'tool') return ''
   const child = block.meta?.child
@@ -89,6 +98,10 @@ export function groupProcessSections(blocks: ChatBlock[]): ProcessSection[] {
       sections.push({ id: `subagent-${block.id}`, kind: 'subagent', blocks: [block] })
       continue
     }
+    if (processBlockHasGeneratedMedia(block)) {
+      sections.push({ id: `execution-${block.id}`, kind: 'execution', blocks: [block] })
+      continue
+    }
     const kind =
       block.kind === 'reasoning'
         ? 'reasoning'
@@ -96,6 +109,7 @@ export function groupProcessSections(blocks: ChatBlock[]): ProcessSection[] {
           ? 'output'
           : 'execution'
     const last = sections[sections.length - 1]
+    const followsGeneratedMedia = last?.blocks.some(processBlockHasGeneratedMedia) === true
 
     // Reasoning and tool calls between two visible assistant updates are one
     // activity phase. Keeping them together prevents long-running turns from
@@ -109,6 +123,7 @@ export function groupProcessSections(blocks: ChatBlock[]): ProcessSection[] {
       last.blocks.some((entry) => entry.kind !== 'reasoning')
     if (
       last &&
+      !followsGeneratedMedia &&
       !liveReasoningAfterTools &&
       (last.kind === 'reasoning' || last.kind === 'execution') &&
       (kind === 'reasoning' || kind === 'execution')
@@ -118,7 +133,7 @@ export function groupProcessSections(blocks: ChatBlock[]): ProcessSection[] {
       continue
     }
 
-    if (last && last.kind === kind) {
+    if (last && !followsGeneratedMedia && last.kind === kind) {
       last.blocks.push(block)
       continue
     }
@@ -615,6 +630,7 @@ function ProcessEntryRow({
   const wrapSummary = (block.kind === 'system' && !canExpand) || isAssistantProcessText
   const canToggle = canExpand && !forceOpen
   const RowIcon = processBlockIcon(block)
+  const showInlineGeneratedMedia = processing && processBlockHasGeneratedMedia(block)
   const handleToggle = (): void => {
     if (!canToggle) return
     setUserOpen(!open)
@@ -711,6 +727,11 @@ function ProcessEntryRow({
             />
           </div>
         )
+      ) : null}
+      {showInlineGeneratedMedia ? (
+        <div className="ml-2 mt-2">
+          <GeneratedFilesPanel blocks={[block]} placement="timeline" />
+        </div>
       ) : null}
     </div>
   )

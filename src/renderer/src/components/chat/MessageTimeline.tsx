@@ -1193,7 +1193,9 @@ export function ConversationTurn({
         />
       ) : null}
 
-      <GeneratedFilesPanel blocks={generatedFileBlocks} />
+      {!isProcessing ? (
+        <GeneratedFilesPanel blocks={generatedFileBlocks} placement="turn" />
+      ) : null}
 
       <PresentationFilesPanel files={presentationFiles} workspaceRoot={filePreviewWorkspaceRoot} />
 

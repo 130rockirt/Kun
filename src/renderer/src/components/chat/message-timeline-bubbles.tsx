@@ -1239,7 +1239,13 @@ function MediaAttachmentGallery({
   )
 }
 
-export function GeneratedFilesPanel({ blocks }: { blocks: ToolBlock[] }): ReactElement | null {
+export function GeneratedFilesPanel({
+  blocks,
+  placement = 'turn'
+}: {
+  blocks: ToolBlock[]
+  placement?: 'timeline' | 'turn'
+}): ReactElement | null {
   const { t } = useTranslation('common')
   const media = useMemo(() => {
     const attachments: AttachmentReference[] = []
@@ -1256,7 +1262,10 @@ export function GeneratedFilesPanel({ blocks }: { blocks: ToolBlock[] }): ReactE
   if (media.length === 0) return null
 
   return (
-    <div className="flex min-w-0 flex-col gap-2">
+    <div
+      className="flex min-w-0 flex-col gap-2"
+      data-generated-files-placement={placement}
+    >
       <div className="flex items-center gap-1.5 text-[12px] font-semibold text-ds-faint">
         <ImageIcon className="h-3.5 w-3.5" strokeWidth={1.8} aria-hidden="true" />
         <span>{t('generatedFilesTitle')}</span>

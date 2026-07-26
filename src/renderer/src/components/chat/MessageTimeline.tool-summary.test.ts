@@ -380,6 +380,117 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
     expect(html).not.toContain('sm:grid-cols-2')
   })
 
+  it('keeps generated media tool results as distinct chronological process sections', () => {
+    const before = toolBlock({
+      id: 'tool_before_image',
+      summary: 'read: source',
+      meta: { toolName: 'read' }
+    })
+    const generated = toolBlock({
+      id: 'tool_generate_image',
+      summary: 'generate_image: skyline',
+      meta: {
+        toolName: 'generate_image',
+        generatedFiles: [{
+          name: 'skyline.png',
+          mimeType: 'image/png',
+          previewUrl: 'data:image/png;base64,skyline'
+        }]
+      }
+    })
+    const after = toolBlock({
+      id: 'tool_after_image',
+      summary: 'read: output',
+      meta: { toolName: 'read' }
+    })
+
+    expect(groupProcessSections([before, generated, after]).map((section) =>
+      section.blocks.map((block) => block.id)
+    )).toEqual([
+      ['tool_before_image'],
+      ['tool_generate_image'],
+      ['tool_after_image']
+    ])
+  })
+
+  it('renders an active generated image at its timeline position without a bottom duplicate', () => {
+    const html = renderToStaticMarkup(
+      createElement(ConversationTurn, {
+        turn: {
+          user: { kind: 'user', id: 'user_generate_image', text: 'Create a skyline' },
+          blocks: [
+            { kind: 'assistant', id: 'assistant_before_image', text: 'Preparing the image now.' },
+            toolBlock({
+              id: 'tool_generate_image',
+              summary: 'generate_image: skyline',
+              meta: {
+                toolName: 'generate_image',
+                generatedFiles: [{
+                  name: 'skyline.png',
+                  mimeType: 'image/png',
+                  previewUrl: 'data:image/png;base64,skyline'
+                }]
+              }
+            }),
+            { kind: 'assistant', id: 'assistant_after_image', text: 'Checking the rendered result.' }
+          ]
+        },
+        isProcessing: true,
+        liveReasoning: '',
+        live: '',
+        filePreviewWorkspaceRoot: '/tmp/project',
+        viewportRef: { current: null }
+      })
+    )
+
+    const placement = 'data-generated-files-placement="timeline"'
+    expect(html).toContain(placement)
+    expect(html).not.toContain('data-generated-files-placement="turn"')
+    expect((html.match(/data-generated-files-placement=/g) ?? []).length).toBe(1)
+    expect(html.indexOf('Preparing the image now.')).toBeLessThan(html.indexOf(placement))
+    expect(html.indexOf(placement)).toBeLessThan(html.indexOf('Checking the rendered result.'))
+  })
+
+  it('moves a completed generated image below the final assistant content', () => {
+    const html = renderToStaticMarkup(
+      createElement(ConversationTurn, {
+        turn: {
+          user: { kind: 'user', id: 'user_complete_image', text: 'Create a skyline' },
+          blocks: [
+            toolBlock({
+              id: 'tool_generate_image_complete',
+              summary: 'generate_image: skyline',
+              meta: {
+                toolName: 'generate_image',
+                generatedFiles: [{
+                  name: 'skyline.png',
+                  mimeType: 'image/png',
+                  previewUrl: 'data:image/png;base64,skyline'
+                }]
+              }
+            }),
+            {
+              kind: 'assistant',
+              id: 'assistant_image_complete',
+              text: 'The finished skyline is ready.'
+            }
+          ]
+        },
+        isProcessing: false,
+        liveReasoning: '',
+        live: '',
+        filePreviewWorkspaceRoot: '/tmp/project',
+        viewportRef: { current: null }
+      })
+    )
+
+    const placement = 'data-generated-files-placement="turn"'
+    expect(html).toContain(placement)
+    expect(html).not.toContain('data-generated-files-placement="timeline"')
+    expect((html.match(/data-generated-files-placement=/g) ?? []).length).toBe(1)
+    expect(html.indexOf('The finished skyline is ready.')).toBeLessThan(html.indexOf(placement))
+  })
+
   it('reports the available directions for the generated image strip', () => {
     expect(generatedMediaScrollAvailability({
       scrollLeft: 0,
