@@ -401,7 +401,7 @@ jobs:
           sudo apt-get update
           # build-essential + python3: node-pty ships no Linux prebuild, so it
           # must be compiled from source against Electron's ABI during dist.
-          sudo apt-get install -y --no-install-recommends libarchive-tools rpm build-essential python3 xvfb xauth util-linux ffmpeg
+          sudo apt-get install -y --no-install-recommends libarchive-tools rpm fakeroot dpkg build-essential python3 xvfb xauth util-linux ffmpeg
           ffmpeg -hide_banner -filters 2>&1 | grep -Eq '[[:space:]]drawtext[[:space:]]'
 
       - name: Install dependencies
@@ -460,6 +460,7 @@ jobs:
           path: |
             dist/Kun-*-linux-x86_64.AppImage
             dist/Kun-*-linux-x86_64.AppImage.blockmap
+            dist/Kun-*-linux-amd64.deb
             dist/latest-linux.yml
             dist/extension-native-evidence-linux.json
             dist/kun-video-editor-*.kunx
@@ -522,6 +523,7 @@ jobs:
             "Kun-*-mac-x64.zip"
             "Kun-*-win-x64.exe"
             "Kun-*-linux-x86_64.AppImage"
+            "Kun-*-linux-amd64.deb"
             "latest-mac.yml"
             "latest.yml"
             "latest-linux.yml"
@@ -561,7 +563,7 @@ jobs:
             echo "- Branch: \`master\`"
             echo "- Commit: \`${GITHUB_SHA::7}\`"
             echo "- macOS: Developer ID signed and notarized"
-            echo "- Platforms: macOS arm64/x64, Windows x64, Linux x64"
+            echo "- Platforms: macOS arm64/x64, Windows x64, Linux x64 AppImage/deb"
           } >> release-notes.md
 
       - name: Ensure release tag

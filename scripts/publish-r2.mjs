@@ -32,7 +32,8 @@ const PLATFORM_SPECS = {
   },
   linux: {
     updateFile: 'latest-linux.yml',
-    assetPattern: /^Kun-.+-linux-x86_64\.AppImage(\.blockmap)?$/
+    // Auto-update stays on AppImage; deb is a Debian-family installer sidecar.
+    assetPattern: /^Kun-.+-linux-(?:x86_64\.AppImage(\.blockmap)?|amd64\.deb)$/
   }
 }
 
@@ -303,6 +304,7 @@ function contentType(fileName) {
   if (fileName.endsWith('.zip')) return 'application/zip'
   if (fileName.endsWith('.dmg')) return 'application/x-apple-diskimage'
   if (fileName.endsWith('.exe')) return 'application/vnd.microsoft.portable-executable'
+  if (fileName.endsWith('.deb')) return 'application/vnd.debian.binary-package'
   return 'application/octet-stream'
 }
 
@@ -310,7 +312,7 @@ function cacheControlFor(key) {
   if (/\/latest\/latest(?:-[\w]+)?\.(?:json|yml)$/.test(key)) {
     return 'public, max-age=60, must-revalidate'
   }
-  if (/\/latest\/.+\.(?:dmg|zip|exe|AppImage|blockmap)$/.test(key)) {
+  if (/\/latest\/.+\.(?:dmg|zip|exe|AppImage|deb|blockmap)$/.test(key)) {
     return 'public, max-age=31536000, immutable'
   }
   return 'public, max-age=31536000, immutable'
@@ -319,13 +321,15 @@ function cacheControlFor(key) {
 function classifyDownload(fileName, platform) {
   const extension = fileName.endsWith('.AppImage')
     ? 'AppImage'
-    : fileName.endsWith('.dmg')
-      ? 'dmg'
-      : fileName.endsWith('.zip')
-        ? 'zip'
-        : fileName.endsWith('.exe')
-          ? 'exe'
-          : 'bin'
+    : fileName.endsWith('.deb')
+      ? 'deb'
+      : fileName.endsWith('.dmg')
+        ? 'dmg'
+        : fileName.endsWith('.zip')
+          ? 'zip'
+          : fileName.endsWith('.exe')
+            ? 'exe'
+            : 'bin'
 
   if (platform === 'mac') {
     const arch = fileName.includes('-arm64.') ? 'arm64' : 'x64'
@@ -338,6 +342,9 @@ function classifyDownload(fileName, platform) {
   }
   if (platform === 'win') {
     return { platform, arch: 'x64', format: extension, label: 'Windows x64 installer' }
+  }
+  if (extension === 'deb') {
+    return { platform, arch: 'x64', format: extension, label: 'Linux x64 deb' }
   }
   return { platform, arch: 'x64', format: extension, label: 'Linux x64 AppImage' }
 }
@@ -386,12 +393,13 @@ async function collectPlatformRelease({ distDir, platform, tag, channel, config 
       sha512,
       contentType: contentType(fileName),
       updateMetadata: fileName === spec.updateFile,
-      downloadable: downloadByName.has(fileName)
+      // deb is outside electron-updater metadata but is still a public installer.
+      downloadable: downloadByName.has(fileName) || fileName.endsWith('.deb')
     })
   }
 
   const filesByName = new Map(files.map((file) => [file.fileName, file]))
-  const downloads = updateMetadata.files.map((file) => {
+  const updateDownloads = updateMetadata.files.map((file) => {
     const fileName = basename(file.url)
     const local = filesByName.get(fileName)
     if (!local) throw new Error(`Missing collected file: ${fileName}`)
@@ -406,6 +414,23 @@ async function collectPlatformRelease({ distDir, platform, tag, channel, config 
       latestUrl: joinUrl(config.publicBaseUrl, config.prefix, 'channels', channel, 'latest', fileName)
     }
   })
+  const sidecarDownloads = assets
+    .filter((fileName) => fileName.endsWith('.deb') && !downloadByName.has(fileName))
+    .sort()
+    .map((fileName) => {
+      const local = filesByName.get(fileName)
+      if (!local) throw new Error(`Missing collected file: ${fileName}`)
+      return {
+        ...classifyDownload(fileName, platform),
+        fileName,
+        size: local.size,
+        sha256: local.sha256,
+        sha512: local.sha512,
+        archiveUrl: joinUrl(config.publicBaseUrl, config.prefix, 'channels', channel, 'releases', tag, fileName),
+        latestUrl: joinUrl(config.publicBaseUrl, config.prefix, 'channels', channel, 'latest', fileName)
+      }
+    })
+  const downloads = [...updateDownloads, ...sidecarDownloads]
 
   return {
     schemaVersion: 1,

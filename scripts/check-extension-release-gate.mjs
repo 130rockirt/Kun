@@ -1036,6 +1036,11 @@ check(
     !packagedDesktopSmoke.includes("'--disable-setuid-sandbox'"),
   'Linux packaging and native smokes must retain user namespace and seccomp sandboxing'
 )
+check(
+  electronBuilderConfig.includes("{ target: 'deb', arch: ['x64'] }") &&
+    String(rootPackage.scripts?.['dist:linux'] || '').includes('deb'),
+  'Linux packaging must ship both AppImage and deb for Debian-family installers'
+)
 
 const prWorkflow = await text('.github/workflows/pr-checks.yml')
 const prWorkflowDocument = parseYaml(prWorkflow)
@@ -1236,6 +1241,7 @@ for (const marker of [
   'ancillary',
   'Unexpected native ${platform} artifact',
   'linux-x86_64\\\\.AppImage',
+  'amd64\\\\.deb',
   'win-x64\\\\.exe',
   'mac-(arm64|x64)'
 ]) {

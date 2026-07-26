@@ -142,7 +142,7 @@ Kun 追求的是“完整能力 + 极致性价比”。需求先行的流程比�
 | --- | --- | --- |
 | macOS | `.dmg` 或 `.zip` | Intel / Apple Silicon |
 | Windows | `.exe`，NSIS 安装器 | x64 |
-| Linux | `.AppImage` | x64 |
+| Linux | `.AppImage` 或 `.deb`（Debian/openKylin 等） | x64 |
 
 首次启动时：
 
@@ -189,7 +189,7 @@ npm install --registry=https://registry.npmmirror.com
 | `npm run test` | 运行 Vitest 测试 |
 | `npm run dist:mac` | 构建 macOS `.dmg` 和 `.zip` |
 | `npm run dist:win` | 构建 Windows NSIS 安装器 |
-| `npm run dist:linux` | 构建 Linux AppImage |
+| `npm run dist:linux` | 构建 Linux AppImage 与 deb |
 
 ## 配置与数据
 

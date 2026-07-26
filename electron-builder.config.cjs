@@ -267,10 +267,17 @@ module.exports = {
   linux: {
     category: 'Development',
     icon: './src/asset/img/kun.png',
-    target: [{ target: 'AppImage', arch: ['x64'] }]
+    // AppImage covers generic Linux; deb covers Debian-family installers such as
+    // openKylin / Ubuntu that expect apt/software-store packages.
+    target: [
+      { target: 'AppImage', arch: ['x64'] },
+      { target: 'deb', arch: ['x64'] }
+    ]
   },
   // Override electron-builder's sandbox-disabling default desktop argument.
   // Linux uses user namespaces and seccomp; only the legacy SUID helper is disabled.
+  // afterPack also installs a product launcher that prepends the same flag for
+  // both AppImage and deb entrypoints (deb .desktop Exec hits that launcher).
   appImage: {
     executableArgs: ['--disable-setuid-sandbox', '--no-first-run']
   },

@@ -82,7 +82,7 @@ jobs:
       - name: Install Linux packaging dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libarchive-tools rpm build-essential python3 xvfb xauth util-linux ffmpeg
+          sudo apt-get install -y --no-install-recommends libarchive-tools rpm fakeroot dpkg build-essential python3 xvfb xauth util-linux ffmpeg
           ffmpeg -hide_banner -filters 2>&1 | grep -Eq '[[:space:]]drawtext[[:space:]]'
 
       - name: Install root dependencies
@@ -144,6 +144,7 @@ jobs:
           path: |
             dist/Kun-*-linux-x86_64.AppImage
             dist/Kun-*-linux-x86_64.AppImage.blockmap
+            dist/Kun-*-linux-amd64.deb
             dist/extension-native-evidence-linux.json
             dist/kun-video-editor-*.kunx
 

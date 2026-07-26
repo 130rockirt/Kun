@@ -29,9 +29,12 @@ export const ARTIFACT_RULES = {
   },
   linux: {
     platformLike: /^Kun-.*-linux-/i,
-    pattern: new RegExp(`^Kun-${VERSION_PART}-linux-x86_64\\.AppImage$`),
+    // AppImage uses Linux arch naming (x86_64); deb uses Debian arch (amd64).
+    pattern: new RegExp(
+      `^Kun-${VERSION_PART}-linux-(?:x86_64\\.AppImage|amd64\\.deb)$`
+    ),
     ancillary: new RegExp(`^Kun-${VERSION_PART}-linux-x86_64\\.AppImage\\.blockmap$`),
-    required: [/-linux-x86_64\.AppImage$/]
+    required: [/-linux-x86_64\.AppImage$/, /-linux-amd64\.deb$/]
   }
 }
 

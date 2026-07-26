@@ -316,7 +316,7 @@ jobs:
       - name: Install Linux packaging dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libarchive-tools rpm build-essential python3 xvfb xauth util-linux ffmpeg
+          sudo apt-get install -y --no-install-recommends libarchive-tools rpm fakeroot dpkg build-essential python3 xvfb xauth util-linux ffmpeg
           ffmpeg -hide_banner -filters 2>&1 | grep -Eq '[[:space:]]drawtext[[:space:]]'
 
       - name: Install dependencies
@@ -375,6 +375,7 @@ jobs:
           path: |
             dist/Kun-*-linux-x86_64.AppImage
             dist/Kun-*-linux-x86_64.AppImage.blockmap
+            dist/Kun-*-linux-amd64.deb
             dist/latest-linux.yml
             dist/extension-native-evidence-linux.json
             dist/kun-video-editor-*.kunx
@@ -427,6 +428,7 @@ jobs:
             "Kun-${DEV_VERSION}-mac-x64.zip"
             "Kun-${DEV_VERSION}-win-x64.exe"
             "Kun-${DEV_VERSION}-linux-x86_64.AppImage"
+            "Kun-${DEV_VERSION}-linux-amd64.deb"
             "extension-native-evidence-darwin.json"
             "extension-native-evidence-win32.json"
             "extension-native-evidence-linux.json"
@@ -456,7 +458,7 @@ jobs:
           - App version: \`0.0.0-dev-${DEV_VERSION//./-}\`
           - Branch: \`develop\`
           - Commit: \`${short_sha}\`
-          - Platforms: macOS arm64/x64, Windows x64, Linux x64
+          - Platforms: macOS arm64/x64, Windows x64, Linux x64 AppImage/deb
           EOF
 
       - name: Ensure prerelease tag

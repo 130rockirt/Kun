@@ -26,6 +26,7 @@ const ARTIFACTS = [
   'Kun-1.2.3-mac-x64.dmg',
   'Kun-1.2.3-mac-x64.zip',
   'Kun-1.2.3-win-x64.exe',
+  'Kun-1.2.3-linux-amd64.deb',
   'Kun-1.2.3-linux-x86_64.AppImage'
 ]
 
@@ -94,7 +95,7 @@ test('verifies the complete three-platform bundle and exact extension package', 
     }
   })
   assert.equal(result.commit, COMMIT)
-  assert.equal(result.native.artifacts.length, 6)
+  assert.equal(result.native.artifacts.length, 7)
   assert.deepEqual(verifiedPackages, [directory])
 })
 

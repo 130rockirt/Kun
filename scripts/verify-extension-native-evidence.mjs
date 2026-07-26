@@ -48,6 +48,13 @@ const FINAL_ARTIFACTS = [
     role: 'linux-x64-appimage',
     pattern: new RegExp(`^Kun-(${VERSION_PART})-linux-x86_64\\.AppImage$`),
     ancillaryPattern: new RegExp(`^Kun-(${VERSION_PART})-linux-x86_64\\.AppImage\\.blockmap$`)
+  },
+  {
+    platform: 'linux',
+    role: 'linux-x64-deb',
+    pattern: new RegExp(`^Kun-(${VERSION_PART})-linux-amd64\\.deb$`),
+    // electron-builder does not emit blockmaps for deb installers.
+    ancillaryPattern: new RegExp(`^Kun-(${VERSION_PART})-linux-amd64\\.deb\\.blockmap$`)
   }
 ]
 

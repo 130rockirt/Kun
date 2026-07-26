@@ -23,6 +23,7 @@ const ARTIFACTS = [
   'Kun-1.2.3-mac-x64.dmg',
   'Kun-1.2.3-mac-x64.zip',
   'Kun-1.2.3-win-x64.exe',
+  'Kun-1.2.3-linux-amd64.deb',
   'Kun-1.2.3-linux-x86_64.AppImage'
 ]
 
@@ -150,7 +151,7 @@ test('rejects missing, duplicate, and symlinked downloaded release files', async
   }), /must not contain symlinks/)
 })
 
-test('rejects every extra native-looking release asset outside the six-file allowlist', async (t) => {
+test('rejects every extra native-looking release asset outside the seven-file allowlist', async (t) => {
   for (const name of [
     'Kun-1.2.3-linux-arm64.AppImage',
     'Kun-1.2.3-win-arm64.exe',

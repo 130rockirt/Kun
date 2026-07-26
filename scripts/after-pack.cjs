@@ -426,8 +426,9 @@ function installLinuxElectronLauncher(context) {
   renameSync(executable, realExecutable)
   chmodSync(realExecutable, 0o755)
   // The running Electron process reports the renamed payload as process.execPath.
-  // Any future app.relaunch()/new Linux target must re-enter this launcher or
-  // explicitly preserve LINUX_SANDBOX_LAUNCHER_FLAG.
+  // AppImage and deb both enter through this launcher today; any future
+  // app.relaunch()/rpm/other Linux target must re-enter it or explicitly
+  // preserve LINUX_SANDBOX_LAUNCHER_FLAG.
   writeFileSync(executable, launcherContent, { encoding: 'utf8', flag: 'wx', mode: 0o755 })
   chmodSync(executable, 0o755)
 }
