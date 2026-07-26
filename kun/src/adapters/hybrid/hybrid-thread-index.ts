@@ -32,6 +32,21 @@ export class HybridThreadIndexRepository {
     catch (error) { this.warn('find row', error); return null }
   }
 
+  repairPaths(threadId: string): void {
+    try {
+      const paths = this.paths(threadId)
+      this.db.prepare(`
+        UPDATE threads
+        SET metadata_path = @metadataPath,
+            messages_path = @messagesPath,
+            events_path = @eventsPath
+        WHERE id = @id
+      `).run({ id: threadId, ...paths })
+    } catch (error) {
+      this.warn('repair row paths', error)
+    }
+  }
+
   upsert(record: ThreadIndexRecord): void {
     try {
       const row = rowFromIndexRecord(record, this.paths(record.thread.id))

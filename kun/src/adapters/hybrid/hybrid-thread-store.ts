@@ -588,11 +588,23 @@ export class HybridThreadStore implements ThreadStore {
 
   private async rowHasReadableJsonl(row: ThreadRow): Promise<boolean> {
     if (!isSafeThreadId(row.id)) return false
-    if (row.metadata_path !== this.metadataPath(row.id)) return false
-    if (row.messages_path !== this.messagesPath(row.id)) return false
-    if (row.events_path !== this.eventsPath(row.id)) return false
     if (!(await pathExists(this.threadDir(row.id)))) return false
-    return (await pathExists(this.metadataPath(row.id))) || (await pathExists(this.legacyThreadPath(row.id)))
+    const readable =
+      (await pathExists(this.metadataPath(row.id))) ||
+      (await pathExists(this.legacyThreadPath(row.id)))
+    if (!readable) return false
+    if (
+      row.metadata_path !== this.metadataPath(row.id) ||
+      row.messages_path !== this.messagesPath(row.id) ||
+      row.events_path !== this.eventsPath(row.id)
+    ) {
+      // JSONL is canonical and the SQLite paths are derived. Moving a Runtime
+      // data directory (including the GUI's legacy migration) must not make a
+      // valid thread disappear merely because its cached absolute paths still
+      // point at the previous root.
+      this.index?.repairPaths(row.id)
+    }
+    return true
   }
 
   private threadDir(threadId: string): string {
