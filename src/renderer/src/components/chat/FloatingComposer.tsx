@@ -147,6 +147,18 @@ export function shouldSurfaceComposerUserInput(route: AppRoute, compact: boolean
   return !compact && (route === 'chat' || route === 'design')
 }
 
+export function shouldShowWorkspaceControls({
+  compact,
+  route,
+  hasActiveThread
+}: {
+  compact: boolean
+  route: AppRoute
+  hasActiveThread: boolean
+}): boolean {
+  return !compact && route === 'chat' && !hasActiveThread
+}
+
 export function shouldShowUsageHistory({
   compact,
   route,
@@ -411,6 +423,7 @@ export function FloatingComposer({
     : null
   const activeThreadArchived = activeThread?.archived === true
   const showUsageHistoryFooter = shouldShowUsageHistory({ compact, route, runtimeReady })
+  const showWorkspaceControls = shouldShowWorkspaceControls({ compact, route, hasActiveThread })
   const threadUsageState = useThreadUsageState(
     activeThreadId,
     showUsageHistoryFooter && Boolean(activeThreadId),
@@ -1402,6 +1415,33 @@ export function FloatingComposer({
           <FloatingComposerUserInputPanel controller={userInput} t={t} />
         ) : null}
 
+        {showWorkspaceControls ? (
+          <div
+            className="ds-composer-workspace-controls ds-no-drag flex min-h-8 min-w-0 flex-wrap items-center gap-2 px-3 pb-1"
+            data-composer-workspace-controls
+          >
+            <WorkspaceProjectPicker currentWorkspaceRoot={effectiveWorkspaceRoot} />
+            <GitBranchPicker workspaceRoot={effectiveWorkspaceRoot} />
+            {useWorktreePool && worktreeBranches.length > 0 ? (
+              <label className="ds-no-drag inline-flex min-h-7 max-w-[220px] items-center gap-1.5 rounded-lg border border-ds-border-muted bg-ds-card px-2 py-0.5 text-[12.5px] font-medium text-ds-muted shadow-sm">
+                <GitBranch className="h-3.5 w-3.5 shrink-0" strokeWidth={1.8} />
+                <select
+                  value={worktreeBranch || worktreeBranches[0]}
+                  onChange={(event) => onWorktreeBranchChange?.(event.target.value)}
+                  className="min-w-0 bg-transparent text-ds-muted outline-none"
+                  title={t('composerWorktreeBranch')}
+                >
+                  {worktreeBranches.map((branch) => (
+                    <option key={branch} value={branch}>
+                      {branch}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+          </div>
+        ) : null}
+
         <div
           className={`ds-composer-shell ds-chat-composer ds-frosted ds-no-drag flex flex-col gap-1 px-3 pb-2 pt-2 transition ${
             draft.focused ? 'ds-chat-composer-focus' : ''
@@ -1726,27 +1766,6 @@ export function FloatingComposer({
       {compact ? null : (
         <div className="ds-composer-footer mt-1 flex min-h-7 flex-wrap items-center justify-between gap-x-2.5 gap-y-1.5 px-3">
           <div className="ds-composer-footer-left flex min-w-0 flex-1 flex-wrap items-center gap-2">
-            {route === 'chat' ? (
-              <WorkspaceProjectPicker currentWorkspaceRoot={effectiveWorkspaceRoot} />
-            ) : null}
-            <GitBranchPicker workspaceRoot={effectiveWorkspaceRoot} />
-            {useWorktreePool && worktreeBranches.length > 0 ? (
-              <label className="ds-no-drag inline-flex min-h-7 max-w-[220px] items-center gap-1.5 rounded-lg border border-ds-border-muted bg-ds-card px-2 py-0.5 text-[12.5px] font-medium text-ds-muted shadow-sm">
-                <GitBranch className="h-3.5 w-3.5 shrink-0" strokeWidth={1.8} />
-                <select
-                  value={worktreeBranch || worktreeBranches[0]}
-                  onChange={(event) => onWorktreeBranchChange?.(event.target.value)}
-                  className="min-w-0 bg-transparent text-ds-muted outline-none"
-                  title={t('composerWorktreeBranch')}
-                >
-                  {worktreeBranches.map((branch) => (
-                    <option key={branch} value={branch}>
-                      {branch}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            ) : null}
             {showUsageHistoryFooter ? (
               <FloatingComposerUsageHistory
                 title={

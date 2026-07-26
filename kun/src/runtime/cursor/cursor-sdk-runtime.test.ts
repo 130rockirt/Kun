@@ -74,6 +74,7 @@ function fakeRun(input: {
 function harness(input: {
   apiKey?: string
   run?: Run
+  sendResults?: Array<Run | Error>
   thread?: Record<string, unknown>
   items?: Array<Record<string, unknown>>
   attachmentStore?: CursorSdkRuntimeDeps['attachmentStore']
@@ -93,22 +94,30 @@ function harness(input: {
   const finished: unknown[] = []
   const createOptions: AgentOptions[] = []
   const sentMessages: unknown[] = []
+  const sentOptions: unknown[] = []
   const resumedAgentIds: string[] = []
   const resumedOptions: Array<Partial<AgentOptions> | undefined> = []
   const kunContextSignals: AbortSignal[] = []
-  const run = input.run ?? fakeRun()
+  const sendResults = input.sendResults ?? [input.run ?? fakeRun()]
+  let sendIndex = 0
+  const reload = vi.fn(async () => undefined)
+  const dispose = vi.fn(async () => undefined)
   const agent = {
     agentId: 'agent_1',
     model: { id: 'auto' },
-    send: async (message: unknown) => {
+    send: async (message: unknown, options: unknown) => {
       sentMessages.push(message)
-      return run
+      sentOptions.push(options)
+      const result = sendResults[Math.min(sendIndex, sendResults.length - 1)]
+      sendIndex += 1
+      if (result instanceof Error) throw result
+      return result
     },
     close: vi.fn(),
-    reload: async () => undefined,
+    reload,
     listArtifacts: async () => [],
     downloadArtifact: async () => Buffer.alloc(0),
-    [Symbol.asyncDispose]: async () => undefined
+    [Symbol.asyncDispose]: dispose
   } as SDKAgent
   const sdk: CursorSdkApi = {
     Agent: {
@@ -211,10 +220,13 @@ function harness(input: {
     recorded,
     finished,
     sentMessages,
+    sentOptions,
     kunContextSignals,
     resumedAgentIds,
     resumedOptions,
-    agent
+    agent,
+    reload,
+    dispose
   }
 }
 
@@ -367,6 +379,144 @@ describe('CursorSdkRuntime', () => {
       code: 'cursor_sdk_stream_resource_limit'
     }))
     expect(h.kunContextSignals[0]?.aborted).toBe(true)
+  })
+
+  test('rebuilds the SDK session once and continues an accepted run after authentication expires', async () => {
+    const h = harness({
+      sendResults: [
+        fakeRun({
+          stream: [{
+            type: 'tool_call',
+            agent_id: 'agent_1',
+            run_id: 'run_1',
+            call_id: 'call_1',
+            name: 'shell',
+            status: 'running',
+            args: { command: 'pwd' }
+          }, {
+            type: 'tool_call',
+            agent_id: 'agent_1',
+            run_id: 'run_1',
+            call_id: 'call_1',
+            name: 'shell',
+            status: 'completed',
+            result: { stdout: '/tmp' }
+          }, {
+            type: 'assistant',
+            agent_id: 'agent_1',
+            run_id: 'run_1',
+            message: { role: 'assistant', content: [{ type: 'text', text: 'partial result' }] }
+          }],
+          result: {
+            status: 'error',
+            error: {
+              code: 'unauthenticated',
+              message: 'Authentication error If you are logged in, try logging out and back in.'
+            }
+          }
+        }),
+        fakeRun({
+          stream: [{
+            type: 'assistant',
+            agent_id: 'agent_1',
+            run_id: 'run_2',
+            message: { role: 'assistant', content: [{ type: 'text', text: ' completed' }] }
+          }],
+          result: { id: 'run_2', result: ' completed' }
+        })
+      ]
+    })
+
+    await expect(h.runtime.runTurn(
+      'thread_1',
+      'turn_1',
+      new AbortController().signal,
+      'cursor-subscription'
+    )).resolves.toBe('completed')
+
+    expect(h.dispose).toHaveBeenCalledOnce()
+    expect(h.resumedAgentIds).toEqual(['agent_1'])
+    expect(h.createOptions[0]?.local?.enableAgentRetries).toBe(true)
+    expect(h.sentMessages).toHaveLength(2)
+    expect(String(h.sentMessages[1])).toContain('Continue the interrupted request')
+    expect(String(h.sentMessages[1])).toContain('Do not repeat tool calls')
+    expect(h.sentOptions[1]).toMatchObject({ local: { force: true } })
+    expect(h.recorded).toContainEqual(expect.objectContaining({
+      kind: 'pipeline_stage',
+      stage: 'pre_send',
+      details: expect.objectContaining({
+        reason: 'cursor_sdk_authentication_failed',
+        attempt: 2,
+        maxAttempts: 2,
+        requestAccepted: true
+      })
+    }))
+    expect(h.recorded).not.toContainEqual(expect.objectContaining({
+      kind: 'error',
+      code: 'cursor_sdk_authentication_failed'
+    }))
+    expect(h.finished).toContainEqual(expect.objectContaining({ status: 'completed' }))
+  })
+
+  test('resends the original request when authentication fails before the SDK accepts it', async () => {
+    const authenticationError = new Error('authentication transport expired')
+    authenticationError.name = 'unauthenticated'
+    const h = harness({
+      sendResults: [authenticationError, fakeRun()]
+    })
+
+    await expect(h.runtime.runTurn(
+      'thread_1',
+      'turn_1',
+      new AbortController().signal,
+      'cursor-subscription'
+    )).resolves.toBe('completed')
+
+    expect(h.dispose).toHaveBeenCalledOnce()
+    expect(h.resumedAgentIds).toEqual(['agent_1'])
+    expect(h.sentMessages).toHaveLength(2)
+    expect(h.sentMessages[1]).toEqual(h.sentMessages[0])
+    expect(h.sentOptions[1]).toMatchObject({ local: { force: true } })
+    expect(h.recorded).toContainEqual(expect.objectContaining({
+      kind: 'pipeline_stage',
+      details: expect.objectContaining({ requestAccepted: false })
+    }))
+  })
+
+  test('reports a service-side authentication failure only after the automatic retry also fails', async () => {
+    const authenticationFailure = () => fakeRun({
+      stream: [],
+      result: {
+        status: 'error',
+        error: {
+          code: 'unauthenticated',
+          message: 'Authentication error If you are logged in, try logging out and back in.'
+        }
+      }
+    })
+    const h = harness({
+      sendResults: [authenticationFailure(), authenticationFailure()]
+    })
+
+    await expect(h.runtime.runTurn(
+      'thread_1',
+      'turn_1',
+      new AbortController().signal,
+      'cursor-subscription'
+    )).resolves.toBe('failed')
+
+    expect(h.dispose).toHaveBeenCalledOnce()
+    expect(h.resumedAgentIds).toEqual(['agent_1'])
+    expect(h.sentMessages).toHaveLength(2)
+    expect(h.finished).toContainEqual(expect.objectContaining({
+      status: 'failed',
+      code: 'cursor_sdk_authentication_failed',
+      error: expect.stringContaining('automatically rebuilt the SDK session')
+    }))
+    expect(h.finished).toContainEqual(expect.objectContaining({
+      error: expect.stringContaining('Cursor SDK/service authentication failure')
+    }))
+    expect(JSON.stringify(h.finished)).not.toContain('logging out')
   })
 
   test('injects Kun instructions and custom tools into Cursor capabilities, context, and traces', async () => {

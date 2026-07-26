@@ -58,6 +58,11 @@ import type { CursorBridgeTool } from './cursor-sdk-tool-bridge.js'
 
 const DEFAULT_CURSOR_MODEL = 'auto'
 const MAX_CURSOR_ERROR_LENGTH = 2_000
+const CURSOR_AUTH_RECOVERY_PROMPT = [
+  'Continue the interrupted request from the current persisted agent state.',
+  'Do not repeat tool calls that already completed or duplicate their side effects.',
+  'Use the existing results and finish the pending response.'
+].join('\n')
 
 export interface CursorSdkApi {
   Agent: {
@@ -146,6 +151,9 @@ export function cursorAgentExecutionOptions(input: {
       // plugins. Kun's canonical prompt and policy are the sole ambient input.
       settingSources: [],
       autoReview: false,
+      // Keep the SDK's own transport and stalled-run recovery enabled even if
+      // a future SDK release changes the headless default.
+      enableAgentRetries: true,
       sandboxOptions: {
         enabled: input.enforceReadOnly === true || input.sandboxMode !== 'danger-full-access'
       }
@@ -519,6 +527,7 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
     let agent: SDKAgent | undefined
     let run: Run | undefined
     let timedOut = false
+    let authenticationRecoveryAttempted = false
     let rejectInterruption: ((error: CursorTurnInterruptedError) => void) | undefined
     const interrupted = new Promise<never>((_resolve, reject) => {
       rejectInterruption = reject
@@ -613,58 +622,115 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
       } else {
         agent = await Promise.race([sdk.Agent.create(options), interrupted])
       }
-      trace = startCursorTrace(this.deps.debugSink, {
-        threadId,
-        turnId,
-        provider: resolvedProviderId,
-        model,
-        prompt,
-        instructions: instructionBlocks,
-        tools: kunContext.tools,
-        images: resolvedImages.summaries,
-        mode: options.mode ?? 'plan',
-        sandboxEnabled: options.local?.sandboxOptions?.enabled !== false,
-        delegated: {
-          providerKind: 'cursor-sdk',
-          phase: preparation?.resumed ? 'resumed' : 'rebased',
-          ...(preparation?.rebaseReason ? { reason: preparation.rebaseReason } : {}),
-          contextManagement: 'sdk-managed',
-          nativeHistory: preparation?.resumed ? 'unknown' : 'none',
-          capabilities
-        }
-      })
-      run = await Promise.race([
-        agent.send(sdkMessage, { mode: options.mode }),
-        interrupted
-      ])
-
-      if (run.supports('stream')) {
-        const iterator = run.stream()[Symbol.asyncIterator]()
-        for (;;) {
-          const next = await Promise.race([iterator.next(), interrupted])
-          if (next.done) break
-          await this.consumeMessage(mapper, next.value, trace, materializedOutputItemIds)
-        }
-      }
-      const result = await Promise.race([run.wait(), interrupted])
-      if (result.status === 'cancelled' || signal.aborted) {
-        await finishCursorTrace(trace, {
-          kind: 'error',
-          error: new CursorTurnInterruptedError('aborted')
+      let attemptPrompt = prompt
+      let attemptMessage = sdkMessage
+      let forceRecoveryRun = false
+      let recoveryContinuesAcceptedRun = false
+      for (;;) {
+        trace = startCursorTrace(this.deps.debugSink, {
+          threadId,
+          turnId,
+          provider: resolvedProviderId,
+          model,
+          prompt: attemptPrompt,
+          instructions: instructionBlocks,
+          tools: kunContext.tools,
+          images: recoveryContinuesAcceptedRun ? [] : resolvedImages.summaries,
+          mode: options.mode ?? 'plan',
+          sandboxEnabled: options.local?.sandboxOptions?.enabled !== false,
+          delegated: {
+            providerKind: 'cursor-sdk',
+            phase: preparation?.resumed || recoveryContinuesAcceptedRun ? 'resumed' : 'rebased',
+            ...(preparation?.rebaseReason ? { reason: preparation.rebaseReason } : {}),
+            contextManagement: 'sdk-managed',
+            nativeHistory: preparation?.resumed || recoveryContinuesAcceptedRun
+              ? 'unknown'
+              : 'none',
+            capabilities
+          }
         })
-        trace = undefined
-        await this.deps.turns.finishTurn({ threadId, turnId, status: 'aborted' })
-        return 'aborted'
+        let runAccepted = false
+        try {
+          run = await Promise.race([
+            agent.send(attemptMessage, {
+              mode: options.mode,
+              ...(forceRecoveryRun ? { local: { force: true } } : {})
+            }),
+            interrupted
+          ])
+          runAccepted = true
+
+          if (run.supports('stream')) {
+            const iterator = run.stream()[Symbol.asyncIterator]()
+            for (;;) {
+              const next = await Promise.race([iterator.next(), interrupted])
+              if (next.done) break
+              await this.consumeMessage(mapper, next.value, trace, materializedOutputItemIds)
+            }
+          }
+          const result = await Promise.race([run.wait(), interrupted])
+          if (result.status === 'cancelled' || signal.aborted) {
+            await finishCursorTrace(trace, {
+              kind: 'error',
+              error: new CursorTurnInterruptedError('aborted')
+            })
+            trace = undefined
+            await this.deps.turns.finishTurn({ threadId, turnId, status: 'aborted' })
+            return 'aborted'
+          }
+          if (result.status === 'error') {
+            throw cursorRunError(result)
+          }
+          for (const draft of mapper.finalize(result.result, result.usage)) {
+            await this.emitDraft(threadId, draft)
+          }
+          finishCursorTraceChunks(trace, mapper.text, result.usage, resolvedProviderId, model)
+          await finishCursorTrace(trace, { kind: 'completed' })
+          trace = undefined
+          break
+        } catch (error) {
+          if (
+            authenticationRecoveryAttempted
+            || error instanceof CursorTurnInterruptedError
+            || cursorSdkErrorCode(error) !== 'cursor_sdk_authentication_failed'
+          ) {
+            throw error
+          }
+          authenticationRecoveryAttempted = true
+          const safeAttemptError = new Error(sanitizeCursorSdkError(error, apiKey))
+          safeAttemptError.name = error instanceof Error ? error.name : 'CursorSdkError'
+          await finishCursorTrace(trace, { kind: 'error', error: safeAttemptError })
+          trace = undefined
+          await this.deps.events.record({
+            kind: 'pipeline_stage',
+            threadId,
+            turnId,
+            stage: 'pre_send',
+            label: 'Cursor SDK authentication expired; rebuilding the SDK session and retrying once',
+            details: {
+              reason: 'cursor_sdk_authentication_failed',
+              attempt: 2,
+              maxAttempts: 2,
+              requestAccepted: runAccepted
+            }
+          })
+          const recoveryAgentId: string = agent.agentId
+          await Promise.race([agent[Symbol.asyncDispose](), interrupted])
+          agent = await Promise.race([
+            sdk.Agent.resume(recoveryAgentId, options),
+            interrupted
+          ])
+          forceRecoveryRun = true
+          recoveryContinuesAcceptedRun = runAccepted
+          if (runAccepted) {
+            attemptPrompt = CURSOR_AUTH_RECOVERY_PROMPT
+            attemptMessage = CURSOR_AUTH_RECOVERY_PROMPT
+          } else {
+            attemptPrompt = prompt
+            attemptMessage = sdkMessage
+          }
+        }
       }
-      if (result.status === 'error') {
-        throw cursorRunError(result)
-      }
-      for (const draft of mapper.finalize(result.result, result.usage)) {
-        await this.emitDraft(threadId, draft)
-      }
-      finishCursorTraceChunks(trace, mapper.text, result.usage, resolvedProviderId, model)
-      await finishCursorTrace(trace, { kind: 'completed' })
-      trace = undefined
       await this.deps.turns.finishTurn({ threadId, turnId, status: 'completed' })
       if (preparation && this.deps.sessionCoordinator) {
         try {
@@ -684,7 +750,13 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
       const abortedBeforeFailure = signal.aborted
       abortRuntime()
       cancelRun()
-      const safeTraceError = new Error(sanitizeCursorSdkError(error, apiKey))
+      const code = timedOut ? 'turn_wall_time_limit' : cursorSdkErrorCode(error)
+      const message = timedOut
+        ? `Cursor SDK turn exceeded ${limits.maxWallTimeMs}ms wall time`
+        : code === 'cursor_sdk_authentication_failed' && authenticationRecoveryAttempted
+          ? cursorAuthenticationFailureMessage()
+          : sanitizeCursorSdkError(error, apiKey)
+      const safeTraceError = new Error(message)
       safeTraceError.name = error instanceof Error ? error.name : 'CursorSdkError'
       await finishCursorTrace(trace, { kind: 'error', error: safeTraceError })
       trace = undefined
@@ -695,15 +767,12 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
         await this.deps.turns.finishTurn({ threadId, turnId, status: 'aborted' })
         return 'aborted'
       }
-      const message = timedOut
-        ? `Cursor SDK turn exceeded ${limits.maxWallTimeMs}ms wall time`
-        : sanitizeCursorSdkError(error, apiKey)
       await this.deps.events.record({
         kind: 'error',
         threadId,
         turnId,
         message,
-        code: timedOut ? 'turn_wall_time_limit' : cursorSdkErrorCode(error),
+        code,
         severity: 'error'
       })
       await this.deps.turns.finishTurn({
@@ -711,7 +780,7 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
         turnId,
         status: 'failed',
         error: message,
-        code: timedOut ? 'turn_wall_time_limit' : cursorSdkErrorCode(error),
+        code,
         severity: 'error'
       })
       return 'failed'
@@ -827,6 +896,16 @@ function cursorRunError(result: RunResult): Error {
   const error = new Error(result.error?.message || 'Cursor SDK run failed')
   error.name = result.error?.code || 'CursorSdkRunError'
   return error
+}
+
+function cursorAuthenticationFailureMessage(): string {
+  return [
+    'Cursor SDK authentication failed again after Kun automatically rebuilt the SDK session',
+    'and retried once with the configured API Key.',
+    'This SDK path does not use the Cursor desktop login.',
+    'If the key is active in the Cursor dashboard, this is a',
+    'Cursor SDK/service authentication failure.'
+  ].join(' ')
 }
 
 type CursorTrace = {

@@ -21,6 +21,7 @@ import {
   shouldShowVoiceDictation,
   shouldShowGoalFloater,
   shouldShowUsageHistory,
+  shouldShowWorkspaceControls,
   shouldSurfaceComposerUserInput
 } from './FloatingComposer'
 import { COMPOSER_INPUT_HISTORY_STORAGE_KEY } from './use-composer-input-history'
@@ -97,6 +98,67 @@ describe('FloatingComposer usage history visibility', () => {
       route: 'write',
       runtimeReady: true
     })).toBe(false)
+  })
+})
+
+describe('FloatingComposer workspace controls visibility', () => {
+  it('only shows workspace and branch controls before entering a chat session', () => {
+    expect(shouldShowWorkspaceControls({
+      compact: false,
+      route: 'chat',
+      hasActiveThread: false
+    })).toBe(true)
+    expect(shouldShowWorkspaceControls({
+      compact: false,
+      route: 'chat',
+      hasActiveThread: true
+    })).toBe(false)
+    expect(shouldShowWorkspaceControls({
+      compact: true,
+      route: 'chat',
+      hasActiveThread: false
+    })).toBe(false)
+    expect(shouldShowWorkspaceControls({
+      compact: false,
+      route: 'write',
+      hasActiveThread: false
+    })).toBe(false)
+  })
+
+  it('renders the workspace and branch controls above the input shell', () => {
+    useChatStore.setState({
+      activeThreadId: null,
+      activeThreadGoal: null,
+      activeThreadTodos: null,
+      route: 'chat',
+      workspaceRoot: '/Users/test/code/acme-project',
+      threads: []
+    })
+
+    const html = renderToStaticMarkup(createElement(FloatingComposer, {
+      input: '',
+      setInput: () => undefined,
+      mode: 'agent',
+      setMode: () => undefined,
+      busy: false,
+      runtimeReady: false,
+      hasActiveThread: false,
+      workspaceRootOverride: '/Users/test/code/acme-project',
+      composerModel: '',
+      composerPickList: [],
+      onComposerModelChange: () => undefined,
+      queuedMessages: [],
+      onRemoveQueuedMessage: () => undefined,
+      onSend: () => undefined,
+      onInterrupt: () => undefined
+    }))
+
+    const controlsIndex = html.indexOf('data-composer-workspace-controls')
+    const composerIndex = html.indexOf('ds-composer-shell')
+    expect(controlsIndex).toBeGreaterThanOrEqual(0)
+    expect(html.slice(controlsIndex, composerIndex)).toContain('ds-workspace-project-picker')
+    expect(html.slice(controlsIndex, composerIndex)).toContain('ds-git-branch-picker')
+    expect(composerIndex).toBeGreaterThan(controlsIndex)
   })
 })
 
