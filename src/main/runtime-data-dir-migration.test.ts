@@ -18,13 +18,20 @@ import { afterEach, describe, expect, it } from 'vitest'
 import {
   markCanonicalKunRuntimeMigrationRuntimeVerified,
   retryRuntimeMigrationMutation,
-  runCanonicalKunRuntimeDataMigration
+  runCanonicalKunRuntimeDataMigration as runCanonicalKunRuntimeDataMigrationWithPreservation
 } from './runtime-data-dir-migration'
 
 const tempRoots: string[] = []
 const TEST_EXTENSION_ID = 'acme.demo'
 const TEST_EXTENSION_VERSION = '1.0.0'
 const TEST_TIMESTAMP = '2026-07-26T00:00:00.000Z'
+
+const runCanonicalKunRuntimeDataMigration = (
+  input: Parameters<typeof runCanonicalKunRuntimeDataMigrationWithPreservation>[0]
+) => runCanonicalKunRuntimeDataMigrationWithPreservation({
+  ...input,
+  skipHistoryPreservationForTests: true
+})
 
 async function fixture(dataDir = '~/.deepseekgui/kun'): Promise<{
   root: string
@@ -804,10 +811,12 @@ describe('canonical Kun Runtime data migration', () => {
     expect(result.status).toBe('completed')
     expect(JSON.parse(await readFile(join(test.current, 'config.json'), 'utf8')).source)
       .toBe('current')
-    expect(await isLinkTo(test.legacy, test.current)).toBe(true)
+    expect((await lstat(test.legacy)).isDirectory()).toBe(true)
+    expect(JSON.parse(await readFile(join(test.legacy, 'config.json'), 'utf8')).source)
+      .toBe('legacy')
     const quarantined = (await readdir(join(test.home, '.deepseekgui')))
       .find((name) => name.startsWith('kun.post-migration-'))
-    expect(quarantined).toBeTruthy()
+    expect(quarantined).toBeUndefined()
   })
 
   it.skipIf(process.platform === 'win32')(
@@ -896,7 +905,7 @@ describe('canonical Kun Runtime data migration', () => {
     expect((await lstat(test.current)).isDirectory()).toBe(true)
   })
 
-  it('quarantines a reappearing legacy directory when settings already select the new store', async () => {
+  it('leaves a real legacy directory untouched when settings already select the new store', async () => {
     const test = await fixture('~/.kun/data')
     await mkdir(test.legacy, { recursive: true })
     await mkdir(test.current, { recursive: true })
@@ -910,15 +919,13 @@ describe('canonical Kun Runtime data migration', () => {
     })
 
     expect(result.status).toBe('completed')
-    expect(await isLinkTo(test.legacy, test.current)).toBe(true)
+    expect((await lstat(test.legacy)).isDirectory()).toBe(true)
     expect(JSON.parse(await readFile(join(test.current, 'config.json'), 'utf8')).source).toBe('current')
     const legacyParentEntries = await readdir(join(test.home, '.deepseekgui'))
     const quarantine = legacyParentEntries.find((name) => name.startsWith('kun.post-migration-'))
-    expect(quarantine).toBeTruthy()
-    expect(JSON.parse(await readFile(
-      join(test.home, '.deepseekgui', quarantine!, 'config.json'),
-      'utf8'
-    )).source).toBe('stale')
+    expect(quarantine).toBeUndefined()
+    expect(JSON.parse(await readFile(join(test.legacy, 'config.json'), 'utf8')).source)
+      .toBe('stale')
   })
 
   it.each([

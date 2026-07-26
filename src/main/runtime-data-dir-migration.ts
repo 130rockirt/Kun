@@ -8,17 +8,21 @@ import {
   lstatSync,
   mkdirSync,
   openSync,
+  readlinkSync,
+  readSync,
   readFileSync,
   readdirSync,
   realpathSync,
   renameSync,
+  statfsSync,
   statSync,
   symlinkSync,
   unlinkSync,
+  utimesSync,
   writeFileSync
 } from 'node:fs'
-import { randomUUID } from 'node:crypto'
-import { basename, dirname, join } from 'node:path'
+import { createHash, randomUUID } from 'node:crypto'
+import { basename, dirname, join, relative, resolve, sep } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import {
   CURRENT_KUN_DATA_DIR_TILDE,
@@ -34,6 +38,8 @@ import { validateRegistryDocument } from '../../kun/src/extensions/registry.js'
 
 const JOURNAL_FILE_NAME = 'kun-runtime-data-migration-v2.json'
 const REPORT_FILE_NAME = 'kun-runtime-data-migration-v2-report.json'
+const PRESERVATION_JOURNAL_FILE_NAME = 'kun-runtime-data-migration-v3.json'
+const PRESERVATION_REPORT_FILE_NAME = 'kun-runtime-data-migration-v3-report.json'
 const SALVAGE_ROOTS = [
   'threads',
   'attachments',
@@ -63,6 +69,8 @@ const PROTECTED_EXTENSION_ENTRY_NAMES = new Set(
 )
 const RETRYABLE_WINDOWS_CODES = new Set(['EPERM', 'EBUSY', 'EACCES'])
 const MIGRATION_SCHEMA_VERSION = 2 as const
+const PRESERVATION_SCHEMA_VERSION = 3 as const
+const COPY_CAPACITY_RESERVE_BYTES = 1024 * 1024 * 1024
 
 type PathState = 'missing' | 'symlink' | 'dir' | 'other' | 'inaccessible'
 type MigrationPhase =
@@ -150,7 +158,14 @@ type RuntimeDataDirMigrationOptions = {
   statDevice?: (path: string) => string | number | bigint
   assertLegacyRuntimeInactive?: (sourcePath: string) => void
   afterPhase?: (phase: MigrationPhase) => void
+  afterPreservationPhase?: (phase: PreservationPhase) => void
   beforeCompatibilityLink?: () => void
+  availableCopyBytes?: (path: string) => number
+  /**
+   * Keeps version-2 recovery coverage available without exposing rename-based
+   * migration to production startup. New callers must never set this flag.
+   */
+  skipHistoryPreservationForTests?: boolean
 }
 
 type RuntimeStoreInventory = {
@@ -158,6 +173,63 @@ type RuntimeStoreInventory = {
   directories: number
   symlinks: number
   bytes: number
+}
+
+type PreservationPhase =
+  | 'prepared'
+  | 'settings-backed-up'
+  | 'candidate-copied'
+  | 'candidate-verified'
+  | 'candidate-rebased'
+  | 'destination-backed-up'
+  | 'destination-salvaged'
+  | 'target-activated'
+  | 'settings-rewritten'
+  | 'legacy-link-backed-up'
+  | 'completed'
+
+const PRESERVATION_PHASES = new Set<PreservationPhase>([
+  'prepared',
+  'settings-backed-up',
+  'candidate-copied',
+  'candidate-verified',
+  'candidate-rebased',
+  'destination-backed-up',
+  'destination-salvaged',
+  'target-activated',
+  'settings-rewritten',
+  'legacy-link-backed-up',
+  'completed'
+])
+
+type PreservationProvenance = 'original-legacy-source' | 'reconstructed-from-current'
+
+type PreservationJournal = {
+  schemaVersion: typeof PRESERVATION_SCHEMA_VERSION
+  phase: PreservationPhase
+  provenance: PreservationProvenance
+  sourcePath: string
+  targetPath: string
+  stagingPath: string
+  destinationBackupPath?: string
+  compatibilityLinkBackupPath?: string
+  settingsSourcePath?: string
+  settingsWritePath?: string
+  settingsBackupPaths: string[]
+  sourceThreadIds: string[]
+  sourceInventory: RuntimeStoreInventory
+  sourceFingerprint?: string
+  candidateFingerprint?: string
+  extensionRegistryRebasedRecords?: number
+  salvaged: number
+  conflicts: string[]
+  targetInventory?: RuntimeStoreInventory
+  sqliteQuickCheck?: 'missing' | 'ok' | 'invalid'
+  startedAt: string
+  updatedAt: string
+  completedAt?: string
+  runtimeVerifiedAt?: string
+  error?: string
 }
 
 type SettingsSelection = {
@@ -518,6 +590,177 @@ function validateJournalForRecovery(
   return null
 }
 
+function readPreservationJournal(path: string): PreservationJournal | null {
+  if (pathState(path) !== 'other') return null
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf8')) as Partial<PreservationJournal>
+    const stringArray = (value: unknown): value is string[] =>
+      Array.isArray(value) && value.every((entry) => typeof entry === 'string')
+    const inventory = parsed.sourceInventory
+    if (
+      parsed.schemaVersion !== PRESERVATION_SCHEMA_VERSION ||
+      typeof parsed.phase !== 'string' ||
+      !PRESERVATION_PHASES.has(parsed.phase as PreservationPhase) ||
+      (
+        parsed.provenance !== 'original-legacy-source' &&
+        parsed.provenance !== 'reconstructed-from-current'
+      ) ||
+      typeof parsed.sourcePath !== 'string' ||
+      typeof parsed.targetPath !== 'string' ||
+      typeof parsed.stagingPath !== 'string' ||
+      (parsed.destinationBackupPath !== undefined && typeof parsed.destinationBackupPath !== 'string') ||
+      (
+        parsed.compatibilityLinkBackupPath !== undefined &&
+        typeof parsed.compatibilityLinkBackupPath !== 'string'
+      ) ||
+      (parsed.settingsSourcePath !== undefined && typeof parsed.settingsSourcePath !== 'string') ||
+      (parsed.settingsWritePath !== undefined && typeof parsed.settingsWritePath !== 'string') ||
+      !stringArray(parsed.settingsBackupPaths) ||
+      !stringArray(parsed.sourceThreadIds) ||
+      !inventory ||
+      !Number.isSafeInteger(inventory.files) ||
+      inventory.files < 0 ||
+      !Number.isSafeInteger(inventory.directories) ||
+      inventory.directories < 0 ||
+      !Number.isSafeInteger(inventory.symlinks) ||
+      inventory.symlinks < 0 ||
+      !Number.isSafeInteger(inventory.bytes) ||
+      inventory.bytes < 0 ||
+      (parsed.sourceFingerprint !== undefined && typeof parsed.sourceFingerprint !== 'string') ||
+      (parsed.candidateFingerprint !== undefined && typeof parsed.candidateFingerprint !== 'string') ||
+      (
+        parsed.extensionRegistryRebasedRecords !== undefined &&
+        (
+          !Number.isSafeInteger(parsed.extensionRegistryRebasedRecords) ||
+          parsed.extensionRegistryRebasedRecords < 0
+        )
+      ) ||
+      !Number.isSafeInteger(parsed.salvaged) ||
+      (parsed.salvaged ?? -1) < 0 ||
+      !stringArray(parsed.conflicts) ||
+      typeof parsed.startedAt !== 'string' ||
+      typeof parsed.updatedAt !== 'string' ||
+      (parsed.completedAt !== undefined && typeof parsed.completedAt !== 'string') ||
+      (parsed.runtimeVerifiedAt !== undefined && typeof parsed.runtimeVerifiedAt !== 'string') ||
+      (parsed.error !== undefined && typeof parsed.error !== 'string')
+    ) {
+      return null
+    }
+    return parsed as PreservationJournal
+  } catch {
+    return null
+  }
+}
+
+function validatePreservationJournalForRecovery(
+  journal: PreservationJournal,
+  input: {
+    userDataPath: string
+    homeDir: string
+    platform: NodeJS.Platform
+  }
+): string | null {
+  const expectedLegacy = canonicalLegacyKunDataDir(input.homeDir, input.platform)
+  const expectedCurrent = canonicalCurrentKunDataDir(input.homeDir, input.platform)
+  const expectedSource =
+    journal.provenance === 'original-legacy-source' ? expectedLegacy : expectedCurrent
+  const stagingOriginal =
+    journal.provenance === 'original-legacy-source' ? expectedCurrent : expectedLegacy
+  if (
+    !sameFilesystemPath(journal.sourcePath, expectedSource, input.platform) ||
+    !sameFilesystemPath(journal.targetPath, expectedCurrent, input.platform)
+  ) {
+    return 'the Runtime preservation journal contains non-canonical source or target paths'
+  }
+  if (
+    !isMigrationOwnedSiblingBackup(
+      journal.stagingPath,
+      stagingOriginal,
+      'history-preserving-staging',
+      input.platform
+    )
+  ) {
+    return 'the Runtime preservation journal contains an unsafe staging path'
+  }
+  if (
+    journal.destinationBackupPath &&
+    !isMigrationOwnedSiblingBackup(
+      journal.destinationBackupPath,
+      expectedCurrent,
+      'pre-history-preserving-migration',
+      input.platform
+    )
+  ) {
+    return 'the Runtime preservation journal contains an unsafe destination backup path'
+  }
+  if (
+    journal.compatibilityLinkBackupPath &&
+    !isMigrationOwnedSiblingBackup(
+      journal.compatibilityLinkBackupPath,
+      expectedLegacy,
+      'pre-preservation-compatibility-link',
+      input.platform
+    )
+  ) {
+    return 'the Runtime preservation journal contains an unsafe compatibility-link backup path'
+  }
+  if (journal.settingsSourcePath) {
+    const candidates = settingsReadCandidates(input.userDataPath)
+    if (!candidates.some((candidate) =>
+      sameFilesystemPath(candidate, journal.settingsSourcePath, input.platform))) {
+      return 'the Runtime preservation journal contains an unknown settings source path'
+    }
+  }
+  if (journal.settingsWritePath && !journal.settingsSourcePath) {
+    return 'the Runtime preservation journal has a settings write path without a source path'
+  }
+  if (journal.settingsBackupPaths.some((backupPath) => {
+    if (!journal.settingsWritePath) return true
+    return !isMigrationOwnedSiblingBackup(
+      backupPath,
+      journal.settingsWritePath,
+      'pre-runtime-data-migration',
+      input.platform
+    )
+  })) {
+    return 'the Runtime preservation journal contains an unsafe settings backup path'
+  }
+  if (journal.phase === 'completed' && !journal.completedAt) {
+    return 'the Runtime preservation journal completed phase has no completion timestamp'
+  }
+  if (
+    (
+      journal.phase === 'candidate-verified' ||
+      journal.phase === 'candidate-rebased' ||
+      journal.phase === 'destination-backed-up' ||
+      journal.phase === 'destination-salvaged' ||
+      journal.phase === 'target-activated' ||
+      journal.phase === 'settings-rewritten' ||
+      journal.phase === 'legacy-link-backed-up' ||
+      journal.phase === 'completed'
+    ) &&
+    (!journal.sourceFingerprint || !journal.candidateFingerprint)
+  ) {
+    return 'the Runtime preservation journal phase has no verified source fingerprint'
+  }
+  return null
+}
+
+function updatePreservationJournal(
+  path: string,
+  journal: PreservationJournal,
+  patch: Partial<PreservationJournal>,
+  now: () => Date
+): PreservationJournal {
+  const next: PreservationJournal = {
+    ...journal,
+    ...patch,
+    updatedAt: now().toISOString()
+  }
+  writeDurableJson(path, next)
+  return next
+}
+
 function updateJournal(
   path: string,
   journal: RuntimeMigrationJournal,
@@ -658,6 +901,207 @@ function runtimeStoreInventory(dataDir: string): RuntimeStoreInventory {
     }
   }
   return inventory
+}
+
+type RuntimeTreeFingerprint = {
+  fingerprint: string
+  inventory: RuntimeStoreInventory
+  threadIds: string[]
+}
+
+function hashRegularFile(path: string): string {
+  const hash = createHash('sha256')
+  const handle = openSync(path, 'r')
+  const buffer = Buffer.allocUnsafe(1024 * 1024)
+  try {
+    while (true) {
+      const bytesRead = readSync(handle, buffer, 0, buffer.length, null)
+      if (bytesRead === 0) break
+      hash.update(buffer.subarray(0, bytesRead))
+    }
+  } finally {
+    closeSync(handle)
+  }
+  return hash.digest('hex')
+}
+
+function canonicalRelativePath(rootPath: string, entryPath: string): string {
+  const value = relative(rootPath, entryPath)
+  return value === '' ? '.' : value.split(sep).join('/')
+}
+
+function runtimeTreeFingerprint(rootPath: string): RuntimeTreeFingerprint {
+  if (pathState(rootPath) !== 'dir') {
+    throw new Error(`Runtime fingerprint root is not a directory: ${rootPath}`)
+  }
+  const hash = createHash('sha256')
+  const inventory: RuntimeStoreInventory = {
+    files: 0,
+    directories: 0,
+    symlinks: 0,
+    bytes: 0
+  }
+  const visit = (entryPath: string): void => {
+    const metadata = lstatSync(entryPath)
+    const relativePath = canonicalRelativePath(rootPath, entryPath)
+    if (metadata.isSymbolicLink()) {
+      const target = readlinkSync(entryPath)
+      inventory.symlinks += 1
+      inventory.bytes += metadata.size
+      hash.update(`link\0${relativePath}\0${target}\0`)
+      return
+    }
+    if (metadata.isDirectory()) {
+      inventory.directories += 1
+      hash.update(
+        `dir\0${relativePath}\0${metadata.mode & 0o7777}\0`
+      )
+      for (const name of readdirSync(entryPath).sort()) {
+        visit(join(entryPath, name))
+      }
+      return
+    }
+    if (metadata.isFile()) {
+      inventory.files += 1
+      inventory.bytes += metadata.size
+      hash.update(
+        `file\0${relativePath}\0${metadata.mode & 0o7777}\0${metadata.size}\0` +
+        `${hashRegularFile(entryPath)}\0`
+      )
+      return
+    }
+    throw new Error(`Runtime tree contains an unsupported entry: ${entryPath}`)
+  }
+  visit(rootPath)
+  return {
+    fingerprint: hash.digest('hex'),
+    inventory,
+    threadIds: threadIds(rootPath)
+  }
+}
+
+function availableFilesystemBytes(path: string): number {
+  const stats = statfsSync(path, { bigint: true })
+  const bytes = stats.bavail * stats.bsize
+  return bytes > BigInt(Number.MAX_SAFE_INTEGER)
+    ? Number.MAX_SAFE_INTEGER
+    : Number(bytes)
+}
+
+function assertCandidateCopyCapacity(
+  sourceInventory: RuntimeStoreInventory,
+  stagingPath: string,
+  availableBytes: (path: string) => number = availableFilesystemBytes
+): void {
+  mkdirSync(dirname(stagingPath), { recursive: true, mode: 0o700 })
+  const required = sourceInventory.bytes + COPY_CAPACITY_RESERVE_BYTES
+  const available = availableBytes(dirname(stagingPath))
+  if (available < required) {
+    throw new Error(
+      `insufficient capacity for history-preserving Runtime copy: ` +
+      `requires at least ${required} bytes, ${available} bytes available`
+    )
+  }
+}
+
+function sameRegularFileContent(left: string, right: string): boolean {
+  const leftMetadata = lstatSync(left)
+  const rightMetadata = lstatSync(right)
+  return leftMetadata.isFile() &&
+    rightMetadata.isFile() &&
+    leftMetadata.size === rightMetadata.size &&
+    hashRegularFile(left) === hashRegularFile(right)
+}
+
+function copyRegularFilePreservingMetadata(sourcePath: string, targetPath: string): void {
+  const sourceMetadata = lstatSync(sourcePath)
+  const targetState = pathState(targetPath)
+  if (targetState !== 'missing') {
+    if (targetState === 'other' && sameRegularFileContent(sourcePath, targetPath)) {
+      chmodSync(targetPath, sourceMetadata.mode & 0o7777)
+      utimesSync(targetPath, sourceMetadata.atime, sourceMetadata.mtime)
+      return
+    }
+    if (targetState === 'other' && lstatSync(targetPath).isFile()) {
+      // The staging directory is migration-owned. A mismatched partial file
+      // cannot be user authority and must not prevent deterministic resume.
+      unlinkSync(targetPath)
+    } else {
+      throw new Error(`candidate copy target has an unexpected entry: ${targetPath}`)
+    }
+  }
+
+  const partialPath = join(
+    dirname(targetPath),
+    `.${basename(targetPath)}.kun-copy-partial-${randomUUID()}`
+  )
+  try {
+    copyFileSync(
+      sourcePath,
+      partialPath,
+      constants.COPYFILE_EXCL | constants.COPYFILE_FICLONE
+    )
+    chmodSync(partialPath, sourceMetadata.mode & 0o7777)
+    utimesSync(partialPath, sourceMetadata.atime, sourceMetadata.mtime)
+    const handle = openSync(partialPath, 'r+')
+    try {
+      fsyncSync(handle)
+    } finally {
+      closeSync(handle)
+    }
+    renameSync(partialPath, targetPath)
+  } catch (error) {
+    if (pathState(partialPath) === 'other') unlinkSync(partialPath)
+    throw error
+  }
+}
+
+function copyRuntimeTreePreservingSource(sourcePath: string, targetPath: string): void {
+  const sourceMetadata = lstatSync(sourcePath)
+  if (!sourceMetadata.isDirectory()) {
+    throw new Error(`Runtime copy source is not a directory: ${sourcePath}`)
+  }
+  const targetState = pathState(targetPath)
+  if (targetState === 'missing') {
+    mkdirSync(targetPath, { recursive: false, mode: sourceMetadata.mode & 0o7777 })
+  } else if (targetState !== 'dir') {
+    throw new Error(`Runtime copy target is not a directory: ${targetPath}`)
+  }
+
+  for (const targetName of readdirSync(targetPath)) {
+    if (!/^\..+\.kun-copy-partial-[0-9a-f-]+$/i.test(targetName)) continue
+    const partialPath = join(targetPath, targetName)
+    if (pathState(partialPath) === 'other' && lstatSync(partialPath).isFile()) {
+      unlinkSync(partialPath)
+    }
+  }
+
+  for (const name of readdirSync(sourcePath).sort()) {
+    const sourceEntry = join(sourcePath, name)
+    const targetEntry = join(targetPath, name)
+    const metadata = lstatSync(sourceEntry)
+    if (metadata.isDirectory()) {
+      copyRuntimeTreePreservingSource(sourceEntry, targetEntry)
+      continue
+    }
+    if (metadata.isSymbolicLink()) {
+      const linkTarget = readlinkSync(sourceEntry)
+      const state = pathState(targetEntry)
+      if (state === 'missing') {
+        symlinkSync(linkTarget, targetEntry)
+      } else if (state !== 'symlink' || readlinkSync(targetEntry) !== linkTarget) {
+        throw new Error(`candidate copy contains a different symbolic link: ${targetEntry}`)
+      }
+      continue
+    }
+    if (metadata.isFile()) {
+      copyRegularFilePreservingMetadata(sourceEntry, targetEntry)
+      continue
+    }
+    throw new Error(`Runtime source contains an unsupported entry: ${sourceEntry}`)
+  }
+  chmodSync(targetPath, sourceMetadata.mode & 0o7777)
+  utimesSync(targetPath, sourceMetadata.atime, sourceMetadata.mtime)
 }
 
 function inventoryContains(
@@ -880,9 +1324,10 @@ type ExtensionRegistryRebaseInspection =
 function inspectExtensionRegistryForRebase(
   sourcePath: string,
   targetPath: string,
-  platform: NodeJS.Platform
+  platform: NodeJS.Platform,
+  registryDataPath = targetPath
 ): ExtensionRegistryRebaseInspection {
-  const registryPath = join(targetPath, 'extensions', 'registry.json')
+  const registryPath = join(registryDataPath, 'extensions', 'registry.json')
   const state = pathState(registryPath)
   if (state === 'missing') return { kind: 'missing' }
   if (state !== 'other' || !lstatSync(registryPath).isFile()) {
@@ -1875,28 +2320,32 @@ function maintainCompletedMigration(
     if (pathState(journal.targetPath) !== 'dir') {
       throw new Error('committed Kun Runtime target is missing')
     }
-    if (pathState(journal.sourcePath) === 'dir') {
-      options.assertLegacyRuntimeInactive(journal.sourcePath)
-      const quarantinePath = uniqueSiblingBackup(
-        journal.sourcePath,
-        'post-migration',
-        options.now
-      )
-      retryRuntimeMigrationMutation(
-        () => renameSync(journal.sourcePath, quarantinePath),
-        { platform: options.platform, sleep: options.sleep }
-      )
-      options.log('legacy-migration: quarantined reappearing legacy Runtime directory', {
-        legacyPath: journal.sourcePath,
-        quarantinePath
+    const sourceState = pathState(journal.sourcePath)
+    if (sourceState === 'dir') {
+      options.log('legacy-migration: retained real legacy Runtime history without mutation', {
+        legacyPath: journal.sourcePath
       })
+    } else if (
+      sourceState === 'symlink' &&
+      !linkResolvesToTarget(journal.sourcePath, journal.targetPath, options.platform)
+    ) {
+      throw new Error('legacy Runtime compatibility link no longer resolves to the current store')
+    } else if (
+      sourceState !== 'symlink' &&
+      sourceState !== 'missing'
+    ) {
+      throw new Error('legacy Runtime history path has an unexpected filesystem type')
     }
-    createAndVerifyCompatibilityLink(
-      journal.sourcePath,
-      journal.targetPath,
-      options.platform,
-      options.sleep
+    const currentThreadIds = new Set(threadIds(journal.targetPath))
+    const missingSourceThreads = journal.sourceThreadIds.filter(
+      (threadId) => !currentThreadIds.has(threadId)
     )
+    if (missingSourceThreads.length > 0) {
+      throw new Error(
+        `current Runtime store is missing ${missingSourceThreads.length} ` +
+        `threads recorded before the rename migration`
+      )
+    }
     journal = repairCompletedExtensionRegistry(journalPath, journal, options)
     if (selection.authority === 'legacy') {
       const settingsBackupPaths = backUpSettingsFile(selection.writePath, options.now)
@@ -1926,6 +2375,251 @@ function maintainCompletedMigration(
         ? { destinationBackupPath: journal.destinationBackupPath }
         : {}),
       journalPath,
+      reportPath,
+      ...(sourceState === 'symlink'
+        ? {
+            message:
+              'history is present but the completed version-2 migration did not preserve ' +
+              'an independent legacy source'
+          }
+        : {})
+    }
+  } catch (error) {
+    return {
+      status: 'blocked',
+      authority: 'current',
+      sourcePath: journal.sourcePath,
+      targetPath: journal.targetPath,
+      ...(journal.destinationBackupPath
+        ? { destinationBackupPath: journal.destinationBackupPath }
+        : {}),
+      journalPath,
+      message: error instanceof Error ? error.message : String(error)
+    }
+  }
+}
+
+type PreservationMigrationOptions = Required<
+  Pick<RuntimeDataDirMigrationOptions, 'userDataPath' | 'homeDir'>
+> & {
+  platform: NodeJS.Platform
+  log: MigrationLogger
+  now: () => Date
+  sleep: (milliseconds: number) => void
+  assertLegacyRuntimeInactive: (sourcePath: string) => void
+  afterPhase: (phase: PreservationPhase) => void
+  availableCopyBytes: (path: string) => number
+}
+
+function assertPreservationSettingsSelectionStable(
+  journal: PreservationJournal,
+  options: Pick<PreservationMigrationOptions, 'userDataPath' | 'homeDir' | 'platform'>
+): void {
+  const current = readSettingsSelection(
+    options.userDataPath,
+    options.homeDir,
+    options.platform,
+    pathState(journal.sourcePath)
+  )
+  if (
+    !sameFilesystemPath(current.sourcePath, journal.settingsSourcePath, options.platform) ||
+    !sameFilesystemPath(current.writePath, journal.settingsWritePath, options.platform)
+  ) {
+    throw new Error(
+      'the active settings source changed while history-preserving Runtime migration was in progress'
+    )
+  }
+}
+
+function writePreservationReport(
+  userDataPath: string,
+  journal: PreservationJournal,
+  extra: Record<string, unknown> = {}
+): string {
+  const reportPath = join(userDataPath, PRESERVATION_REPORT_FILE_NAME)
+  writeDurableJson(reportPath, {
+    schemaVersion: PRESERVATION_SCHEMA_VERSION,
+    status: journal.phase,
+    provenance: journal.provenance,
+    sourcePath: journal.sourcePath,
+    targetPath: journal.targetPath,
+    stagingPath: journal.stagingPath,
+    destinationBackupPath: journal.destinationBackupPath,
+    compatibilityLinkBackupPath: journal.compatibilityLinkBackupPath,
+    settingsSourcePath: journal.settingsSourcePath,
+    settingsBackupPaths: journal.settingsBackupPaths,
+    sourceThreadCount: journal.sourceThreadIds.length,
+    sourceInventory: journal.sourceInventory,
+    sourceFingerprint: journal.sourceFingerprint,
+    candidateFingerprint: journal.candidateFingerprint,
+    extensionRegistryRebasedRecords: journal.extensionRegistryRebasedRecords,
+    salvaged: journal.salvaged,
+    conflicts: journal.conflicts,
+    targetInventory: journal.targetInventory,
+    sqliteQuickCheck: journal.sqliteQuickCheck,
+    completedAt: journal.completedAt,
+    runtimeVerifiedAt: journal.runtimeVerifiedAt,
+    ...extra
+  })
+  return reportPath
+}
+
+function validateHistoryPreservingTarget(
+  journal: PreservationJournal
+): {
+  targetInventory: RuntimeStoreInventory
+  sqliteQuickCheck: 'missing' | 'ok' | 'invalid'
+} {
+  if (pathState(journal.targetPath) !== 'dir') {
+    throw new Error(`history-preserving Runtime target is unavailable: ${journal.targetPath}`)
+  }
+  const migratedThreadIds = new Set(threadIds(journal.targetPath))
+  const missing = journal.sourceThreadIds.filter((threadId) => !migratedThreadIds.has(threadId))
+  if (missing.length > 0) {
+    throw new Error(
+      `history-preserving Runtime target is missing ${missing.length} source thread directories`
+    )
+  }
+  const configPath = join(journal.targetPath, 'config.json')
+  const configState = pathState(configPath)
+  if (configState === 'other' || configState === 'symlink') {
+    JSON.parse(readFileSync(configPath, 'utf8'))
+  } else if (configState !== 'missing') {
+    throw new Error(`history-preserving Runtime config is not a readable file: ${configPath}`)
+  }
+  const targetInventory = runtimeStoreInventory(journal.targetPath)
+  if (
+    targetInventory.files < journal.sourceInventory.files ||
+    targetInventory.directories < journal.sourceInventory.directories ||
+    targetInventory.symlinks < journal.sourceInventory.symlinks
+  ) {
+    throw new Error('history-preserving Runtime target inventory is missing source entries')
+  }
+  return {
+    targetInventory,
+    sqliteQuickCheck: validateSqliteIndex(journal.targetPath)
+  }
+}
+
+function maintainCompletedPreservationMigration(
+  initialJournal: PreservationJournal,
+  options: PreservationMigrationOptions
+): RuntimeDataDirMigrationResult {
+  const journalPath = join(options.userDataPath, PRESERVATION_JOURNAL_FILE_NAME)
+  let journal = initialJournal
+  try {
+    if (pathState(journal.targetPath) !== 'dir') {
+      throw new Error('committed history-preserving Runtime target is missing')
+    }
+    if (journal.provenance === 'original-legacy-source') {
+      if (pathState(journal.sourcePath) !== 'dir') {
+        throw new Error('preserved legacy Runtime source is no longer a real directory')
+      }
+      const currentSource = runtimeTreeFingerprint(journal.sourcePath)
+      if (
+        journal.sourceFingerprint &&
+        currentSource.fingerprint !== journal.sourceFingerprint
+      ) {
+        options.log('legacy-migration: preserved Runtime source fingerprint changed', {
+          sourcePath: journal.sourcePath,
+          recordedFingerprint: journal.sourceFingerprint,
+          currentFingerprint: currentSource.fingerprint
+        })
+      }
+    } else {
+      const reconstructedPath = canonicalLegacyKunDataDir(
+        options.homeDir,
+        options.platform
+      )
+      if (pathState(reconstructedPath) !== 'dir') {
+        throw new Error('reconstructed legacy Runtime history is no longer a real directory')
+      }
+      const reconstructed = runtimeTreeFingerprint(reconstructedPath)
+      if (
+        journal.candidateFingerprint &&
+        reconstructed.fingerprint !== journal.candidateFingerprint
+      ) {
+        options.log('legacy-migration: reconstructed Runtime history fingerprint changed', {
+          reconstructedPath,
+          recordedFingerprint: journal.candidateFingerprint,
+          currentFingerprint: reconstructed.fingerprint
+        })
+      }
+      const v2JournalPath = join(options.userDataPath, JOURNAL_FILE_NAME)
+      const v2Journal = readJournal(v2JournalPath)
+      if (v2Journal?.phase === 'completed') {
+        const repairedV2 = repairCompletedExtensionRegistry(
+          v2JournalPath,
+          v2Journal,
+          options
+        )
+        writeReport(options.userDataPath, repairedV2)
+      }
+    }
+    const selection = readSettingsSelection(
+      options.userDataPath,
+      options.homeDir,
+      options.platform,
+      pathState(journal.sourcePath)
+    )
+    if (selection.authority === 'custom') {
+      return {
+        status: 'not-needed',
+        authority: 'custom',
+        sourcePath: journal.sourcePath,
+        targetPath: journal.targetPath,
+        ...(journal.destinationBackupPath
+          ? { destinationBackupPath: journal.destinationBackupPath }
+          : {}),
+        journalPath
+      }
+    }
+    if (selection.authority === 'unknown') {
+      throw new Error('could not determine Runtime data authority from the active settings source')
+    }
+    if (selection.authority === 'legacy') {
+      const settingsBackupPaths = backUpSettingsFile(selection.writePath, options.now)
+      journal = updatePreservationJournal(
+        journalPath,
+        journal,
+        {
+          settingsSourcePath: selection.sourcePath,
+          settingsWritePath: selection.writePath,
+          settingsBackupPaths: [
+            ...journal.settingsBackupPaths,
+            ...settingsBackupPaths
+          ],
+          error: undefined
+        },
+        options.now
+      )
+      rewriteSettingsToCurrent(selection.writePath)
+    }
+    const reportPath = writePreservationReport(
+      options.userDataPath,
+      journal,
+      journal.provenance === 'reconstructed-from-current'
+        ? {
+            exactPreMigrationSnapshot: false,
+            reconstructedPath: canonicalLegacyKunDataDir(
+              options.homeDir,
+              options.platform
+            ),
+            warning:
+              'The version-2 migration did not retain an independent original; ' +
+              'this directory was reconstructed from the current store.'
+          }
+        : { exactPreMigrationSnapshot: true }
+    )
+    return {
+      status: 'completed',
+      authority: 'current',
+      sourcePath: journal.sourcePath,
+      targetPath: journal.targetPath,
+      ...(journal.destinationBackupPath
+        ? { destinationBackupPath: journal.destinationBackupPath }
+        : {}),
+      journalPath,
       reportPath
     }
   } catch (error) {
@@ -1943,10 +2637,703 @@ function maintainCompletedMigration(
   }
 }
 
+function continuePreservationMigration(
+  initialJournal: PreservationJournal,
+  options: PreservationMigrationOptions
+): RuntimeDataDirMigrationResult {
+  const journalPath = join(options.userDataPath, PRESERVATION_JOURNAL_FILE_NAME)
+  let journal = initialJournal
+  try {
+    if (journal.phase === 'prepared') {
+      assertPreservationSettingsSelectionStable(journal, options)
+      journal = updatePreservationJournal(
+        journalPath,
+        journal,
+        {
+          phase: 'settings-backed-up',
+          settingsBackupPaths: backUpSettingsFile(
+            journal.settingsWritePath,
+            options.now
+          ),
+          error: undefined
+        },
+        options.now
+      )
+      options.afterPhase('settings-backed-up')
+    }
+
+    if (journal.phase === 'settings-backed-up') {
+      options.assertLegacyRuntimeInactive(journal.sourcePath)
+      if (pathState(journal.stagingPath) === 'missing') {
+        assertCandidateCopyCapacity(
+          journal.sourceInventory,
+          journal.stagingPath,
+          options.availableCopyBytes
+        )
+      }
+      copyRuntimeTreePreservingSource(journal.sourcePath, journal.stagingPath)
+      journal = updatePreservationJournal(
+        journalPath,
+        journal,
+        { phase: 'candidate-copied', error: undefined },
+        options.now
+      )
+      options.afterPhase('candidate-copied')
+    }
+
+    if (journal.phase === 'candidate-copied') {
+      options.assertLegacyRuntimeInactive(journal.sourcePath)
+      const source = runtimeTreeFingerprint(journal.sourcePath)
+      const candidate = runtimeTreeFingerprint(journal.stagingPath)
+      if (
+        source.fingerprint !== journal.sourceFingerprint ||
+        candidate.fingerprint !== source.fingerprint
+      ) {
+        throw new Error(
+          'history-preserving Runtime candidate or source fingerprint changed during copy'
+        )
+      }
+      journal = updatePreservationJournal(
+        journalPath,
+        journal,
+        {
+          phase: 'candidate-verified',
+          candidateFingerprint: candidate.fingerprint,
+          error: undefined
+        },
+        options.now
+      )
+      options.afterPhase('candidate-verified')
+    }
+
+    if (journal.phase === 'candidate-verified') {
+      const inspection = inspectExtensionRegistryForRebase(
+        journal.sourcePath,
+        journal.targetPath,
+        options.platform,
+        journal.stagingPath
+      )
+      if (inspection.kind === 'registry' && inspection.rebasedRecords > 0) {
+        writeDurableJson(inspection.path, inspection.document)
+      }
+      journal = updatePreservationJournal(
+        journalPath,
+        journal,
+        {
+          phase: 'candidate-rebased',
+          extensionRegistryRebasedRecords:
+            inspection.kind === 'registry' ? inspection.rebasedRecords : 0,
+          error: undefined
+        },
+        options.now
+      )
+      options.afterPhase('candidate-rebased')
+    }
+
+    if (journal.phase === 'candidate-rebased') {
+      const targetState = pathState(journal.targetPath)
+      if (journal.destinationBackupPath) {
+        const backupState = pathState(journal.destinationBackupPath)
+        if (targetState === 'dir' && backupState === 'missing') {
+          retryRuntimeMigrationMutation(
+            () => renameSync(journal.targetPath, journal.destinationBackupPath!),
+            { platform: options.platform, sleep: options.sleep }
+          )
+        } else if (!(targetState === 'missing' && backupState === 'dir')) {
+          throw new Error(
+            'destination preservation state is inconsistent with the copy migration journal'
+          )
+        }
+      } else if (targetState !== 'missing') {
+        throw new Error('unexpected Runtime destination appeared before candidate activation')
+      }
+      journal = updatePreservationJournal(
+        journalPath,
+        journal,
+        { phase: 'destination-backed-up', error: undefined },
+        options.now
+      )
+      options.afterPhase('destination-backed-up')
+    }
+
+    if (journal.phase === 'destination-backed-up') {
+      const salvage = salvageDestinationBackup(
+        journal.destinationBackupPath,
+        journal.stagingPath,
+        {
+          platform: options.platform,
+          sleep: options.sleep
+        }
+      )
+      journal = updatePreservationJournal(
+        journalPath,
+        journal,
+        {
+          phase: 'destination-salvaged',
+          salvaged: salvage.salvaged,
+          conflicts: salvage.conflicts,
+          error: undefined
+        },
+        options.now
+      )
+      options.afterPhase('destination-salvaged')
+    }
+
+    if (journal.phase === 'destination-salvaged') {
+      options.assertLegacyRuntimeInactive(journal.sourcePath)
+      const source = runtimeTreeFingerprint(journal.sourcePath)
+      if (source.fingerprint !== journal.sourceFingerprint) {
+        throw new Error('legacy Runtime source changed before candidate activation')
+      }
+      const stagingState = pathState(journal.stagingPath)
+      const targetState = pathState(journal.targetPath)
+      if (stagingState === 'dir' && targetState === 'missing') {
+        retryRuntimeMigrationMutation(
+          () => renameSync(journal.stagingPath, journal.targetPath),
+          { platform: options.platform, sleep: options.sleep }
+        )
+      } else if (!(stagingState === 'missing' && targetState === 'dir')) {
+        throw new Error('verified Runtime candidate activation state is inconsistent')
+      }
+      journal = updatePreservationJournal(
+        journalPath,
+        journal,
+        { phase: 'target-activated', error: undefined },
+        options.now
+      )
+      options.afterPhase('target-activated')
+    }
+
+    if (journal.phase === 'target-activated') {
+      assertPreservationSettingsSelectionStable(journal, options)
+      rewriteSettingsToCurrent(journal.settingsWritePath)
+      journal = updatePreservationJournal(
+        journalPath,
+        journal,
+        { phase: 'settings-rewritten', error: undefined },
+        options.now
+      )
+      options.afterPhase('settings-rewritten')
+    }
+
+    if (journal.phase === 'settings-rewritten') {
+      const validation = validateHistoryPreservingTarget(journal)
+      const completedAt = options.now().toISOString()
+      journal = updatePreservationJournal(
+        journalPath,
+        journal,
+        {
+          phase: 'completed',
+          completedAt,
+          targetInventory: validation.targetInventory,
+          sqliteQuickCheck: validation.sqliteQuickCheck,
+          error: undefined
+        },
+        options.now
+      )
+      options.afterPhase('completed')
+      options.log('legacy-migration: committed history-preserving Runtime data migration', {
+        sourcePath: journal.sourcePath,
+        targetPath: journal.targetPath,
+        sourceThreadCount: journal.sourceThreadIds.length,
+        sourceFingerprint: journal.sourceFingerprint,
+        destinationBackupPath: journal.destinationBackupPath,
+        salvaged: journal.salvaged,
+        conflicts: journal.conflicts.length
+      })
+    }
+
+    const reportPath = writePreservationReport(options.userDataPath, journal)
+    return {
+      status: 'completed',
+      authority: 'current',
+      sourcePath: journal.sourcePath,
+      targetPath: journal.targetPath,
+      ...(journal.destinationBackupPath
+        ? { destinationBackupPath: journal.destinationBackupPath }
+        : {}),
+      journalPath,
+      reportPath
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    try {
+      const persisted = readPreservationJournal(journalPath)
+      if (persisted) journal = persisted
+      journal = updatePreservationJournal(
+        journalPath,
+        journal,
+        { error: message },
+        options.now
+      )
+    } catch {
+      // The original error remains authoritative.
+    }
+    options.log('legacy-migration: history-preserving Runtime migration is blocked', {
+      phase: journal.phase,
+      message,
+      sourcePath: journal.sourcePath,
+      targetPath: journal.targetPath,
+      stagingPath: journal.stagingPath
+    })
+    return {
+      status: 'blocked',
+      authority: 'legacy',
+      sourcePath: journal.sourcePath,
+      targetPath: journal.targetPath,
+      ...(journal.destinationBackupPath
+        ? { destinationBackupPath: journal.destinationBackupPath }
+        : {}),
+      journalPath,
+      message
+    }
+  }
+}
+
+function continueV2ReconstructionMigration(
+  initialJournal: PreservationJournal,
+  options: PreservationMigrationOptions
+): RuntimeDataDirMigrationResult {
+  const journalPath = join(options.userDataPath, PRESERVATION_JOURNAL_FILE_NAME)
+  const reconstructedPath = canonicalLegacyKunDataDir(
+    options.homeDir,
+    options.platform
+  )
+  let journal = initialJournal
+  try {
+    if (journal.phase === 'prepared') {
+      journal = updatePreservationJournal(
+        journalPath,
+        journal,
+        {
+          phase: 'settings-backed-up',
+          settingsBackupPaths: backUpSettingsFile(
+            journal.settingsWritePath,
+            options.now
+          ),
+          error: undefined
+        },
+        options.now
+      )
+      options.afterPhase('settings-backed-up')
+    }
+
+    if (journal.phase === 'settings-backed-up') {
+      options.assertLegacyRuntimeInactive(journal.sourcePath)
+      if (pathState(journal.stagingPath) === 'missing') {
+        assertCandidateCopyCapacity(
+          journal.sourceInventory,
+          journal.stagingPath,
+          options.availableCopyBytes
+        )
+      }
+      copyRuntimeTreePreservingSource(journal.sourcePath, journal.stagingPath)
+      journal = updatePreservationJournal(
+        journalPath,
+        journal,
+        { phase: 'candidate-copied', error: undefined },
+        options.now
+      )
+      options.afterPhase('candidate-copied')
+    }
+
+    if (journal.phase === 'candidate-copied') {
+      options.assertLegacyRuntimeInactive(journal.sourcePath)
+      const source = runtimeTreeFingerprint(journal.sourcePath)
+      const candidate = runtimeTreeFingerprint(journal.stagingPath)
+      if (
+        source.fingerprint !== journal.sourceFingerprint ||
+        candidate.fingerprint !== source.fingerprint
+      ) {
+        throw new Error(
+          'version-2 history reconstruction source or candidate fingerprint changed'
+        )
+      }
+      const currentThreadIds = new Set(source.threadIds)
+      const missing = journal.sourceThreadIds.filter(
+        (threadId) => !currentThreadIds.has(threadId)
+      )
+      if (missing.length > 0) {
+        throw new Error(
+          `current Runtime store is missing ${missing.length} ` +
+          `threads recorded before the rename migration`
+        )
+      }
+      journal = updatePreservationJournal(
+        journalPath,
+        journal,
+        {
+          phase: 'candidate-verified',
+          candidateFingerprint: candidate.fingerprint,
+          error: undefined
+        },
+        options.now
+      )
+      options.afterPhase('candidate-verified')
+    }
+
+    if (journal.phase === 'candidate-verified') {
+      options.assertLegacyRuntimeInactive(journal.sourcePath)
+      const source = runtimeTreeFingerprint(journal.sourcePath)
+      if (source.fingerprint !== journal.sourceFingerprint) {
+        throw new Error('current Runtime store changed before history reconstruction activation')
+      }
+      const legacyState = pathState(reconstructedPath)
+      const backupState = journal.compatibilityLinkBackupPath
+        ? pathState(journal.compatibilityLinkBackupPath)
+        : 'missing'
+      if (
+        legacyState === 'symlink' &&
+        backupState === 'missing' &&
+        journal.compatibilityLinkBackupPath
+      ) {
+        if (!linkResolvesToTarget(reconstructedPath, journal.targetPath, options.platform)) {
+          throw new Error('version-2 compatibility link no longer resolves to the current store')
+        }
+        retryRuntimeMigrationMutation(
+          () => renameSync(reconstructedPath, journal.compatibilityLinkBackupPath!),
+          { platform: options.platform, sleep: options.sleep }
+        )
+      } else if (!(legacyState === 'missing' && backupState === 'symlink')) {
+        throw new Error('version-2 compatibility-link preservation state is inconsistent')
+      }
+      journal = updatePreservationJournal(
+        journalPath,
+        journal,
+        { phase: 'legacy-link-backed-up', error: undefined },
+        options.now
+      )
+      options.afterPhase('legacy-link-backed-up')
+    }
+
+    if (journal.phase === 'legacy-link-backed-up') {
+      const stagingState = pathState(journal.stagingPath)
+      const legacyState = pathState(reconstructedPath)
+      if (stagingState === 'dir' && legacyState === 'missing') {
+        retryRuntimeMigrationMutation(
+          () => renameSync(journal.stagingPath, reconstructedPath),
+          { platform: options.platform, sleep: options.sleep }
+        )
+      } else if (!(stagingState === 'missing' && legacyState === 'dir')) {
+        throw new Error('reconstructed legacy Runtime activation state is inconsistent')
+      }
+      const reconstructed = runtimeTreeFingerprint(reconstructedPath)
+      if (reconstructed.fingerprint !== journal.candidateFingerprint) {
+        throw new Error('activated reconstructed legacy Runtime fingerprint is inconsistent')
+      }
+      const completedAt = options.now().toISOString()
+      journal = updatePreservationJournal(
+        journalPath,
+        journal,
+        {
+          phase: 'completed',
+          completedAt,
+          targetInventory: runtimeStoreInventory(journal.targetPath),
+          sqliteQuickCheck: validateSqliteIndex(journal.targetPath),
+          error: undefined
+        },
+        options.now
+      )
+      options.afterPhase('completed')
+    }
+
+    return maintainCompletedPreservationMigration(journal, options)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    try {
+      const persisted = readPreservationJournal(journalPath)
+      if (persisted) journal = persisted
+      journal = updatePreservationJournal(
+        journalPath,
+        journal,
+        { error: message },
+        options.now
+      )
+    } catch {
+      // The original failure remains authoritative.
+    }
+    return {
+      status: 'blocked',
+      authority: 'current',
+      sourcePath: reconstructedPath,
+      targetPath: journal.targetPath,
+      journalPath,
+      message
+    }
+  }
+}
+
+function runPreservationMigrationIfNeeded(
+  input: RuntimeDataDirMigrationOptions
+): RuntimeDataDirMigrationResult | null {
+  const platform = input.platform ?? process.platform
+  const log = input.log ?? (() => undefined)
+  const now = input.now ?? (() => new Date())
+  const sleep = input.sleep ?? defaultSleep
+  const assertLegacyRuntimeInactive = input.assertLegacyRuntimeInactive ?? (() => undefined)
+  const sourcePath = canonicalLegacyKunDataDir(input.homeDir, platform)
+  const targetPath = canonicalCurrentKunDataDir(input.homeDir, platform)
+  const journalPath = join(input.userDataPath, PRESERVATION_JOURNAL_FILE_NAME)
+  const journalState = pathState(journalPath)
+  const existingJournal = readPreservationJournal(journalPath)
+  const options: PreservationMigrationOptions = {
+    userDataPath: input.userDataPath,
+    homeDir: input.homeDir,
+    platform,
+    log,
+    now,
+    sleep,
+    assertLegacyRuntimeInactive,
+    afterPhase: input.afterPreservationPhase ?? (() => undefined),
+    availableCopyBytes: input.availableCopyBytes ?? availableFilesystemBytes
+  }
+
+  if (journalState === 'inaccessible' || (journalState === 'other' && !existingJournal)) {
+    return {
+      status: 'blocked',
+      authority: 'unknown',
+      sourcePath,
+      targetPath,
+      journalPath,
+      message: 'the Runtime preservation journal is inaccessible or invalid'
+    }
+  }
+  if (existingJournal) {
+    const journalError = validatePreservationJournalForRecovery(existingJournal, {
+      userDataPath: input.userDataPath,
+      homeDir: input.homeDir,
+      platform
+    })
+    if (journalError) {
+      return {
+        status: 'blocked',
+        authority: 'unknown',
+        sourcePath,
+        targetPath,
+        journalPath,
+        message: journalError
+      }
+    }
+    return existingJournal.phase === 'completed'
+      ? maintainCompletedPreservationMigration(existingJournal, options)
+      : existingJournal.provenance === 'reconstructed-from-current'
+        ? continueV2ReconstructionMigration(existingJournal, options)
+        : continuePreservationMigration(existingJournal, options)
+  }
+
+  // A version-2 journal represents a migration that already started under the
+  // rename/link state machine. Preserve its evidence and reconstruct an
+  // independent history only after the old migration has completed.
+  const v2JournalPath = join(input.userDataPath, JOURNAL_FILE_NAME)
+  if (pathState(v2JournalPath) !== 'missing') {
+    const v2Journal = readJournal(v2JournalPath)
+    if (
+      v2Journal?.phase === 'completed' &&
+      pathState(sourcePath) === 'symlink' &&
+      pathState(targetPath) === 'dir' &&
+      linkResolvesToTarget(sourcePath, targetPath, platform)
+    ) {
+      const currentThreadIds = new Set(threadIds(targetPath))
+      const missing = v2Journal.sourceThreadIds.filter(
+        (threadId) => !currentThreadIds.has(threadId)
+      )
+      if (missing.length > 0) {
+        return {
+          status: 'blocked',
+          authority: 'current',
+          sourcePath,
+          targetPath,
+          journalPath: v2JournalPath,
+          message:
+            `current Runtime store is missing ${missing.length} ` +
+            `threads recorded before the rename migration`
+        }
+      }
+      try {
+        assertLegacyRuntimeInactive(targetPath)
+        const source = runtimeTreeFingerprint(targetPath)
+        const selection = readSettingsSelection(
+          input.userDataPath,
+          input.homeDir,
+          platform,
+          pathState(sourcePath)
+        )
+        const startedAt = now().toISOString()
+        const reconstruction: PreservationJournal = {
+          schemaVersion: PRESERVATION_SCHEMA_VERSION,
+          phase: 'prepared',
+          provenance: 'reconstructed-from-current',
+          sourcePath: targetPath,
+          targetPath,
+          stagingPath: uniqueSiblingBackup(
+            sourcePath,
+            'history-preserving-staging',
+            now
+          ),
+          compatibilityLinkBackupPath: uniqueSiblingBackup(
+            sourcePath,
+            'pre-preservation-compatibility-link',
+            now
+          ),
+          settingsSourcePath: selection.sourcePath,
+          settingsWritePath: selection.writePath,
+          settingsBackupPaths: [],
+          sourceThreadIds: v2Journal.sourceThreadIds,
+          sourceInventory: source.inventory,
+          sourceFingerprint: source.fingerprint,
+          salvaged: 0,
+          conflicts: [],
+          startedAt,
+          updatedAt: startedAt
+        }
+        writeDurableJson(journalPath, reconstruction)
+        options.afterPhase('prepared')
+        return continueV2ReconstructionMigration(reconstruction, options)
+      } catch (error) {
+        return {
+          status: 'blocked',
+          authority: 'current',
+          sourcePath,
+          targetPath,
+          journalPath,
+          message: error instanceof Error ? error.message : String(error)
+        }
+      }
+    }
+    return null
+  }
+
+  const sourceState = pathState(sourcePath)
+  const targetState = pathState(targetPath)
+  const selection = readSettingsSelection(
+    input.userDataPath,
+    input.homeDir,
+    platform,
+    sourceState
+  )
+  if (selection.authority === 'custom' || selection.authority === 'unknown') return null
+
+  if (
+    selection.authority === 'current' &&
+    sourceState === 'dir' &&
+    targetState === 'dir'
+  ) {
+    const source = runtimeTreeFingerprint(sourcePath)
+    const targetThreadIds = new Set(threadIds(targetPath))
+    const missing = source.threadIds.filter((threadId) => !targetThreadIds.has(threadId))
+    if (missing.length > 0) {
+      return {
+        status: 'blocked',
+        authority: 'current',
+        sourcePath,
+        targetPath,
+        journalPath,
+        message:
+          `current Runtime store is missing ${missing.length} preserved legacy thread directories`
+      }
+    }
+    const completedAt = now().toISOString()
+    const journal: PreservationJournal = {
+      schemaVersion: PRESERVATION_SCHEMA_VERSION,
+      phase: 'completed',
+      provenance: 'original-legacy-source',
+      sourcePath,
+      targetPath,
+      stagingPath: uniqueSiblingBackup(
+        targetPath,
+        'history-preserving-staging',
+        now
+      ),
+      settingsSourcePath: selection.sourcePath,
+      settingsWritePath: selection.writePath,
+      settingsBackupPaths: [],
+      sourceThreadIds: source.threadIds,
+      sourceInventory: source.inventory,
+      sourceFingerprint: source.fingerprint,
+      candidateFingerprint: source.fingerprint,
+      salvaged: 0,
+      conflicts: [],
+      targetInventory: runtimeStoreInventory(targetPath),
+      sqliteQuickCheck: validateSqliteIndex(targetPath),
+      startedAt: completedAt,
+      updatedAt: completedAt,
+      completedAt
+    }
+    writeDurableJson(journalPath, journal)
+    return maintainCompletedPreservationMigration(journal, options)
+  }
+
+  if (selection.authority !== 'legacy' || sourceState !== 'dir') return null
+  if (targetState !== 'missing' && targetState !== 'dir') {
+    return {
+      status: 'blocked',
+      authority: 'legacy',
+      sourcePath,
+      targetPath,
+      journalPath,
+      message: 'canonical Runtime destination is not a regular directory or missing path'
+    }
+  }
+
+  try {
+    assertLegacyRuntimeInactive(sourcePath)
+    if (targetState === 'dir') assertLegacyRuntimeInactive(targetPath)
+    const source = runtimeTreeFingerprint(sourcePath)
+    const startedAt = now().toISOString()
+    const journal: PreservationJournal = {
+      schemaVersion: PRESERVATION_SCHEMA_VERSION,
+      phase: 'prepared',
+      provenance: 'original-legacy-source',
+      sourcePath,
+      targetPath,
+      stagingPath: uniqueSiblingBackup(
+        targetPath,
+        'history-preserving-staging',
+        now
+      ),
+      ...(targetState === 'dir'
+        ? {
+            destinationBackupPath: uniqueSiblingBackup(
+              targetPath,
+              'pre-history-preserving-migration',
+              now
+            )
+          }
+        : {}),
+      settingsSourcePath: selection.sourcePath,
+      settingsWritePath: selection.writePath,
+      settingsBackupPaths: [],
+      sourceThreadIds: source.threadIds,
+      sourceInventory: source.inventory,
+      sourceFingerprint: source.fingerprint,
+      salvaged: 0,
+      conflicts: [],
+      startedAt,
+      updatedAt: startedAt
+    }
+    writeDurableJson(journalPath, journal)
+    options.afterPhase('prepared')
+    return continuePreservationMigration(journal, options)
+  } catch (error) {
+    return {
+      status: 'blocked',
+      authority: 'legacy',
+      sourcePath,
+      targetPath,
+      journalPath,
+      message: error instanceof Error ? error.message : String(error)
+    }
+  }
+}
+
 export function runCanonicalKunRuntimeDataMigration(
   input: RuntimeDataDirMigrationOptions
 ): RuntimeDataDirMigrationResult {
   try {
+    if (!input.skipHistoryPreservationForTests) {
+      const preservation = runPreservationMigrationIfNeeded(input)
+      if (preservation) return preservation
+    }
     return runCanonicalKunRuntimeDataMigrationUnsafe(input)
   } catch (error) {
     const platform = input.platform ?? process.platform
@@ -2382,6 +3769,24 @@ export function markCanonicalKunRuntimeMigrationRuntimeVerified(
   userDataPath: string,
   now: () => Date = () => new Date()
 ): boolean {
+  const preservationJournalPath = join(userDataPath, PRESERVATION_JOURNAL_FILE_NAME)
+  const preservationJournal = readPreservationJournal(preservationJournalPath)
+  if (
+    preservationJournal?.phase === 'completed' &&
+    !preservationJournal.runtimeVerifiedAt
+  ) {
+    const verified = updatePreservationJournal(
+      preservationJournalPath,
+      preservationJournal,
+      {
+        runtimeVerifiedAt: now().toISOString(),
+        error: undefined
+      },
+      now
+    )
+    writePreservationReport(userDataPath, verified)
+    return true
+  }
   const journalPath = join(userDataPath, JOURNAL_FILE_NAME)
   const journal = readJournal(journalPath)
   if (!journal || journal.phase !== 'completed' || journal.runtimeVerifiedAt) return false

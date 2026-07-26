@@ -83,7 +83,7 @@ async function main() {
   ].map((path) => mkdir(path, { recursive: true })))
   await seedThread(legacyDataDir, LEGACY_THREAD_ID, 'pre-upgrade legacy history', workspaceRoot)
   await seedThread(currentDataDir, DISPLACED_THREAD_ID, 'pre-existing new history', workspaceRoot)
-  await seedLegacyExtensionRegistry(legacyDataDir)
+  const seededLegacyRegistry = await seedLegacyExtensionRegistry(legacyDataDir)
   await writeFile(
     join(legacyDataDir, 'config.json'),
     `${JSON.stringify({
@@ -167,7 +167,7 @@ async function main() {
     assertThreadIds(threads, [LEGACY_THREAD_ID, DISPLACED_THREAD_ID])
 
     const activeUserData = userDataCandidates.find((directory) =>
-      existsSync(join(directory, 'kun-runtime-data-migration-v2.json'))
+      existsSync(join(directory, 'kun-runtime-data-migration-v3.json'))
     )
     if (!activeUserData) {
       throw new Error('Packaged GUI did not create a Runtime migration journal')
@@ -176,12 +176,13 @@ async function main() {
       activeUserData,
       legacyDataDir,
       currentDataDir,
+      seededLegacyRegistry,
       timeoutMs: Math.min(timeoutMs, 10_000)
     })
 
     process.stdout.write(
       `Packaged Runtime data migration smoke OK (${process.platform}/${process.arch}): ` +
-      'legacy authority promoted, displaced history salvaged, compatibility link verified, ' +
+      'legacy history preserved independently, displaced history salvaged, ' +
       'extension paths rebased, new settings/config authority committed, Runtime healthy, ' +
       'and both histories enumerated.\n'
     )
@@ -323,10 +324,9 @@ async function seedLegacyExtensionRegistry(dataDir) {
   await mkdir(join(packagePath, 'dist'), { recursive: true })
   await writeFile(join(packagePath, 'kun-extension.json'), `${JSON.stringify(manifest, null, 2)}\n`)
   await writeFile(join(packagePath, 'dist', 'extension.js'), 'export async function activate() {}\n')
-  await writeFile(
-    join(dataDir, 'extensions', 'registry.json'),
-    `${JSON.stringify(registry, null, 2)}\n`
-  )
+  const raw = `${JSON.stringify(registry, null, 2)}\n`
+  await writeFile(join(dataDir, 'extensions', 'registry.json'), raw)
+  return raw
 }
 
 async function waitForMigratedHistory({ port, token, timeoutMs, processState: readProcessState }) {
@@ -369,9 +369,10 @@ async function assertMigratedFilesystem({
   activeUserData,
   legacyDataDir,
   currentDataDir,
+  seededLegacyRegistry,
   timeoutMs
 }) {
-  const journalPath = join(activeUserData, 'kun-runtime-data-migration-v2.json')
+  const journalPath = join(activeUserData, 'kun-runtime-data-migration-v3.json')
   const journal = await waitForRuntimeVerification(journalPath, timeoutMs)
   if (journal.phase !== 'completed') {
     throw new Error(`Runtime migration journal did not complete: ${String(journal.phase)}`)
@@ -387,27 +388,28 @@ async function assertMigratedFilesystem({
       `Expected one migrated extension path, found ${String(journal.extensionRegistryRebasedRecords)}`
     )
   }
-  if (
-    !Array.isArray(journal.extensionRegistryBackupPaths) ||
-    journal.extensionRegistryBackupPaths.length !== 1
-  ) {
-    throw new Error('Migrated extension registry was not retained as exactly one backup')
-  }
   const settings = JSON.parse(await readFile(join(activeUserData, 'kun-settings.json'), 'utf8'))
   if (settings?.agents?.kun?.dataDir !== '~/.kun/data') {
     throw new Error(`Packaged settings still select ${String(settings?.agents?.kun?.dataDir)}`)
   }
   const legacyStats = await lstat(legacyDataDir)
-  if (!legacyStats.isSymbolicLink()) {
-    throw new Error('Legacy Runtime path is not a compatibility link/junction')
+  if (!legacyStats.isDirectory() || legacyStats.isSymbolicLink()) {
+    throw new Error('Legacy Runtime history was not preserved as a real directory')
   }
   const legacyRealPath = await realpath(legacyDataDir)
   const currentRealPath = await realpath(currentDataDir)
   const sameRealPath = process.platform === 'win32'
     ? legacyRealPath.toLocaleLowerCase('en-US') === currentRealPath.toLocaleLowerCase('en-US')
     : legacyRealPath === currentRealPath
-  if (!sameRealPath) {
-    throw new Error('Legacy Runtime compatibility path does not resolve to the canonical store')
+  if (sameRealPath) {
+    throw new Error('Legacy Runtime history still aliases the writable canonical store')
+  }
+  const preservedLegacyRegistry = await readFile(
+    join(legacyDataDir, 'extensions', 'registry.json'),
+    'utf8'
+  )
+  if (preservedLegacyRegistry !== seededLegacyRegistry) {
+    throw new Error('Legacy extension registry bytes changed during migration')
   }
   const activeConfig = JSON.parse(await readFile(join(currentDataDir, 'config.json'), 'utf8'))
   if (!activeConfig?.models?.profiles?.legacy_authority_model) {
@@ -437,10 +439,7 @@ async function assertMigratedFilesystem({
       `Migrated extension path is not canonical: ${String(installed?.packagePath)}`
     )
   }
-  const originalRegistry = JSON.parse(await readFile(
-    journal.extensionRegistryBackupPaths[0],
-    'utf8'
-  ))
+  const originalRegistry = JSON.parse(preservedLegacyRegistry)
   const originalPath = originalRegistry?.extensions?.[MIGRATED_EXTENSION_ID]
     ?.versions?.[MIGRATED_EXTENSION_VERSION]?.packagePath
   if (originalPath !== join(
@@ -449,7 +448,7 @@ async function assertMigratedFilesystem({
     MIGRATED_EXTENSION_ID,
     MIGRATED_EXTENSION_VERSION
   )) {
-    throw new Error(`Extension registry backup did not preserve the legacy path: ${String(originalPath)}`)
+    throw new Error(`Preserved extension registry lost the legacy path: ${String(originalPath)}`)
   }
 }
 
