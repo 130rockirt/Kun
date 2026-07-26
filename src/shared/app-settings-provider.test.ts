@@ -458,6 +458,154 @@ describe('Grok subscription media capabilities', () => {
   })
 })
 
+describe('Volcano Ark media provider presets', () => {
+  it('keeps standard API, Agent Plan, and Coding Plan gateways and catalogs distinct', () => {
+    const standard = getModelProviderPreset('volcengine')
+    const agentPlan = getModelProviderPreset('volcengine-agent-plan')
+    const codingPlan = getModelProviderPreset('volcengine-coding-plan')
+
+    expect(standard).toMatchObject({
+      id: 'volcengine',
+      name: 'Volcano Ark API',
+      baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+      endpointFormat: 'chat_completions',
+      image: {
+        protocol: 'volcengine-ark-image',
+        baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+        models: [
+          'doubao-seedream-5-0-pro-260628',
+          'doubao-seedream-5-0-260128',
+          'doubao-seedream-5-0-lite-260128'
+        ]
+      },
+      video: {
+        protocol: 'volcengine-ark-video',
+        baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+        models: [
+          'doubao-seedance-2-0-260128',
+          'doubao-seedance-2-0-fast-260128',
+          'doubao-seedance-2-0-mini-260615'
+        ]
+      }
+    })
+    expect(standard?.category).toBeUndefined()
+    expect(standard?.apiKeyUrl).toContain('/apiKey')
+
+    expect(agentPlan).toMatchObject({
+      id: 'volcengine-agent-plan',
+      name: 'Volcano Ark Agent Plan',
+      category: 'subscription',
+      baseUrl: 'https://ark.cn-beijing.volces.com/api/plan/v3',
+      endpointFormat: 'chat_completions',
+      image: {
+        protocol: 'volcengine-ark-image',
+        baseUrl: 'https://ark.cn-beijing.volces.com/api/plan/v3',
+        models: ['doubao-seedream-5.0-lite']
+      },
+      video: {
+        protocol: 'volcengine-ark-video',
+        baseUrl: 'https://ark.cn-beijing.volces.com/api/plan/v3',
+        models: [
+          'doubao-seedance-2.0',
+          'doubao-seedance-2.0-fast',
+          'doubao-seedance-2.0-mini'
+        ]
+      }
+    })
+    expect(agentPlan?.apiKeyUrl).toContain('advancedActiveKey=agentPlan')
+
+    expect(codingPlan).toMatchObject({
+      id: 'volcengine-coding-plan',
+      name: 'Volcano Ark Coding Plan',
+      category: 'subscription',
+      baseUrl: 'https://ark.cn-beijing.volces.com/api/coding/v3',
+      models: ['doubao-seed-1-6-250615', 'doubao-seed-1-6-flash-250828']
+    })
+    expect(codingPlan?.image).toBeUndefined()
+    expect(codingPlan?.video).toBeUndefined()
+  })
+
+  it('resolves Agent Plan image and video settings with only its dedicated key', () => {
+    const standard = modelProviderPresetProfile(
+      getModelProviderPreset('volcengine')!,
+      'standard-ark-key'
+    )
+    const agentPlan = modelProviderPresetProfile(
+      getModelProviderPreset('volcengine-agent-plan')!,
+      'agent-plan-key'
+    )
+    const codingPlan = modelProviderPresetProfile(
+      getModelProviderPreset('volcengine-coding-plan')!,
+      'coding-plan-key'
+    )
+    const defaults = defaultKunRuntimeSettings()
+    const appSettings: AppSettingsV1 = {
+      ...settings(),
+      provider: {
+        ...defaultModelProviderSettings(),
+        providers: [
+          ...defaultModelProviderSettings().providers,
+          standard,
+          agentPlan,
+          codingPlan
+        ]
+      },
+      agents: {
+        kun: {
+          ...defaults,
+          imageGeneration: {
+            ...defaults.imageGeneration,
+            enabled: true,
+            providerId: agentPlan.id,
+            defaultResolution: '1K'
+          },
+          videoGeneration: {
+            ...defaults.videoGeneration,
+            enabled: true,
+            providerId: agentPlan.id,
+            defaultDuration: 30,
+            defaultResolution: '768P'
+          }
+        }
+      }
+    }
+
+    expect(resolveKunImageGenerationSettings(appSettings)).toMatchObject({
+      enabled: true,
+      providerId: 'volcengine-agent-plan',
+      protocol: 'volcengine-ark-image',
+      baseUrl: 'https://ark.cn-beijing.volces.com/api/plan/v3',
+      apiKey: 'agent-plan-key',
+      model: 'doubao-seedream-5.0-lite',
+      defaultResolution: '2K'
+    })
+    expect(resolveKunVideoGenerationSettings(appSettings)).toMatchObject({
+      enabled: true,
+      providerId: 'volcengine-agent-plan',
+      protocol: 'volcengine-ark-video',
+      baseUrl: 'https://ark.cn-beijing.volces.com/api/plan/v3',
+      apiKey: 'agent-plan-key',
+      model: 'doubao-seedance-2.0',
+      defaultDuration: 15,
+      defaultResolution: '720P'
+    })
+    expect(resolveKunImageGenerationSettings({
+      ...appSettings,
+      agents: {
+        kun: {
+          ...appSettings.agents.kun,
+          imageGeneration: {
+            ...appSettings.agents.kun.imageGeneration,
+            providerId: '',
+            protocol: 'openai-images',
+            defaultResolution: '4K'
+          }
+        }
+      }
+    }).defaultResolution).toBe('1K')
+  })
+})
+
 function settings(): AppSettingsV1 {
   return {
     version: 1,

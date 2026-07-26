@@ -27,6 +27,8 @@ export type ModelProviderPresetId =
   | 'zhipu-coding-plan'
   | 'zai-coding-plan'
   | 'kimi-code'
+  | 'volcengine'
+  | 'volcengine-agent-plan'
   | 'volcengine-coding-plan'
   | 'opencode-go'
   | 'codex'
@@ -327,6 +329,33 @@ const MOONSHOT_CHAT_MODELS = [
   'moonshot-v1-8k'
 ]
 
+const VOLCENGINE_CHAT_MODELS = [
+  'doubao-seed-2-1-pro-260628',
+  'doubao-seed-2-1-turbo-260628',
+  'doubao-seed-evolving',
+  'doubao-seed-2-0-lite-260428',
+  'doubao-seed-2-0-mini-260428'
+]
+
+const VOLCENGINE_AGENT_PLAN_CHAT_MODELS = [
+  'doubao-seed-2.1-turbo',
+  'doubao-seed-evolving',
+  'doubao-seed-2.0-lite',
+  'doubao-seed-2.0-mini'
+]
+
+const VOLCENGINE_IMAGE_MODELS = [
+  'doubao-seedream-5-0-pro-260628',
+  'doubao-seedream-5-0-260128',
+  'doubao-seedream-5-0-lite-260128'
+]
+
+const VOLCENGINE_VIDEO_MODELS = [
+  'doubao-seedance-2-0-260128',
+  'doubao-seedance-2-0-fast-260128',
+  'doubao-seedance-2-0-mini-260615'
+]
+
 export const MODEL_PROVIDER_PRESETS: ModelProviderPreset[] = [
   {
     id: 'litellm',
@@ -505,6 +534,61 @@ export const MODEL_PROVIDER_PRESETS: ModelProviderPreset[] = [
     },
     docsUrl: 'https://www.kimi.com/code/docs/en/',
     apiKeyUrl: 'https://www.kimi.com/code'
+  },
+  {
+    id: 'volcengine',
+    name: 'Volcano Ark API',
+    subscriptionRegion: 'china',
+    baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+    endpointFormat: 'chat_completions',
+    models: [...VOLCENGINE_CHAT_MODELS],
+    modelProfiles: {
+      'doubao-seed-2-1-pro-260628': visionChatProfile(256_000, DOUBAO_REASONING),
+      'doubao-seed-2-1-turbo-260628': visionChatProfile(256_000, DOUBAO_REASONING),
+      'doubao-seed-evolving': visionChatProfile(1_024_000, DOUBAO_REASONING),
+      'doubao-seed-2-0-lite-260428': visionChatProfile(256_000, DOUBAO_REASONING),
+      'doubao-seed-2-0-mini-260428': visionChatProfile(256_000, DOUBAO_REASONING)
+    },
+    image: {
+      protocol: 'volcengine-ark-image',
+      baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+      models: [...VOLCENGINE_IMAGE_MODELS]
+    },
+    video: {
+      protocol: 'volcengine-ark-video',
+      baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+      models: [...VOLCENGINE_VIDEO_MODELS]
+    },
+    docsUrl: 'https://www.volcengine.com/docs/82379/1330310',
+    apiKeyUrl: 'https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey'
+  },
+  {
+    id: 'volcengine-agent-plan',
+    name: 'Volcano Ark Agent Plan',
+    category: 'subscription',
+    subscriptionRegion: 'china',
+    baseUrl: 'https://ark.cn-beijing.volces.com/api/plan/v3',
+    endpointFormat: 'chat_completions',
+    models: [...VOLCENGINE_AGENT_PLAN_CHAT_MODELS],
+    modelProfiles: {
+      'doubao-seed-2.1-turbo': visionChatProfile(256_000, DOUBAO_REASONING),
+      'doubao-seed-evolving': visionChatProfile(1_024_000, DOUBAO_REASONING),
+      'doubao-seed-2.0-lite': visionChatProfile(256_000, DOUBAO_REASONING),
+      'doubao-seed-2.0-mini': visionChatProfile(256_000, DOUBAO_REASONING)
+    },
+    image: {
+      protocol: 'volcengine-ark-image',
+      baseUrl: 'https://ark.cn-beijing.volces.com/api/plan/v3',
+      models: ['doubao-seedream-5.0-lite']
+    },
+    video: {
+      protocol: 'volcengine-ark-video',
+      baseUrl: 'https://ark.cn-beijing.volces.com/api/plan/v3',
+      models: ['doubao-seedance-2.0', 'doubao-seedance-2.0-fast', 'doubao-seedance-2.0-mini']
+    },
+    docsUrl: 'https://www.volcengine.com/docs/82379/2366394',
+    apiKeyUrl:
+      'https://console.volcengine.com/ark/region:ark+cn-beijing/openManagement?LLM=%7B%7D&OpenModelVisible=false&advancedActiveKey=agentPlan'
   },
   {
     id: 'volcengine-coding-plan',

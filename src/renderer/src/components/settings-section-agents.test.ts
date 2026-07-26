@@ -2360,6 +2360,9 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       ['zhipu-coding-plan', 'Zhipu Coding Plan', 'https://open.bigmodel.cn/api/coding/paas/v4/chat/completions', 'custom_endpoint'],
       ['zai-coding-plan', 'Z.ai Coding Plan', 'https://api.z.ai/api/coding/paas/v4/chat/completions', 'custom_endpoint'],
       ['kimi-code', 'Kimi Code', 'https://api.kimi.com/coding/v1'],
+      ['volcengine', 'Volcano Ark API', 'https://ark.cn-beijing.volces.com/api/v3'],
+      ['volcengine-agent-plan', 'Volcano Ark Agent Plan', 'https://ark.cn-beijing.volces.com/api/plan/v3'],
+      ['volcengine-coding-plan', 'Volcano Ark Coding Plan', 'https://ark.cn-beijing.volces.com/api/coding/v3'],
       ['moonshot-cn', 'Moonshot CN', 'https://api.moonshot.cn/v1'],
       ['moonshot-global', 'Moonshot Global', 'https://api.moonshot.ai/v1']
     ] as const

@@ -754,6 +754,7 @@ function normalizeKunImageGenerationProtocol(value: unknown): ImageGenerationPro
   if (value === 'minimax-image') return 'minimax-image'
   if (value === 'codex-responses-image') return 'codex-responses-image'
   if (value === 'grok-imagine-image') return 'grok-imagine-image'
+  if (value === 'volcengine-ark-image') return 'volcengine-ark-image'
   return DEFAULT_IMAGE_GENERATION_PROTOCOL
 }
 
@@ -868,6 +869,7 @@ function normalizeKunVideoGenerationSettings(
 
 function normalizeKunVideoGenerationProtocol(value: unknown): VideoGenerationProtocol {
   if (value === 'grok-imagine-video') return 'grok-imagine-video'
+  if (value === 'volcengine-ark-video') return 'volcengine-ark-video'
   return value === 'minimax-video' ? 'minimax-video' : DEFAULT_VIDEO_GENERATION_PROTOCOL
 }
 

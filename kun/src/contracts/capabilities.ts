@@ -416,12 +416,13 @@ export const ImageGenerationProtocol = z.enum([
   'openai-images',
   'minimax-image',
   'codex-responses-image',
-  'grok-imagine-image'
+  'grok-imagine-image',
+  'volcengine-ark-image'
 ])
 export type ImageGenerationProtocol = z.infer<typeof ImageGenerationProtocol>
 export const ImageGenerationQuality = z.enum(['auto', 'low', 'medium', 'high'])
 export type ImageGenerationQuality = z.infer<typeof ImageGenerationQuality>
-export const ImageGenerationResolution = z.enum(['auto', '1K', '2K'])
+export const ImageGenerationResolution = z.enum(['auto', '1K', '2K', '3K', '4K'])
 export type ImageGenerationResolution = z.infer<typeof ImageGenerationResolution>
 
 export const ImageGenCapabilityConfig = CapabilityToggleConfig.extend({
@@ -465,7 +466,11 @@ export const MusicGenCapabilityConfig = CapabilityToggleConfig.extend({
 }).strict()
 export type MusicGenCapabilityConfig = z.infer<typeof MusicGenCapabilityConfig>
 
-export const VideoGenerationProtocol = z.enum(['minimax-video', 'grok-imagine-video'])
+export const VideoGenerationProtocol = z.enum([
+  'minimax-video',
+  'grok-imagine-video',
+  'volcengine-ark-video'
+])
 export type VideoGenerationProtocol = z.infer<typeof VideoGenerationProtocol>
 
 export const VideoGenCapabilityConfig = CapabilityToggleConfig.extend({

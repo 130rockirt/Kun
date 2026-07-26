@@ -1037,6 +1037,60 @@ describe('syncGuiManagedKunConfig', () => {
     expect(KunConfigSchema.safeParse(parsed).success).toBe(true)
   })
 
+  it('forwards the selected Volcano Ark media gateway and dedicated key to Kun', async () => {
+    if (!tempRoot) throw new Error('temp root not initialized')
+    const configPath = join(tempRoot, 'config.json')
+    const module = await import('./kun-process')
+    const defaults = defaultKunRuntimeSettings()
+
+    await module.syncGuiManagedKunConfig(tempRoot, {
+      ...defaults,
+      imageGeneration: {
+        ...defaults.imageGeneration,
+        enabled: true,
+        providerId: 'volcengine-agent-plan',
+        protocol: 'volcengine-ark-image',
+        baseUrl: 'https://ark.cn-beijing.volces.com/api/plan/v3',
+        apiKey: 'agent-plan-key',
+        model: 'doubao-seedream-5.0-lite',
+        defaultResolution: '4K'
+      },
+      videoGeneration: {
+        ...defaults.videoGeneration,
+        enabled: true,
+        providerId: 'volcengine-agent-plan',
+        protocol: 'volcengine-ark-video',
+        baseUrl: 'https://ark.cn-beijing.volces.com/api/plan/v3',
+        apiKey: 'agent-plan-key',
+        model: 'doubao-seedance-2.0',
+        defaultDuration: 15,
+        defaultResolution: '4K'
+      }
+    })
+
+    const parsed = JSON.parse(readFileSync(configPath, 'utf8')) as any
+    expect(parsed.capabilities.imageGen).toMatchObject({
+      enabled: true,
+      protocol: 'volcengine-ark-image',
+      baseUrl: 'https://ark.cn-beijing.volces.com/api/plan/v3',
+      apiKey: 'agent-plan-key',
+      model: 'doubao-seedream-5.0-lite',
+      defaultResolution: '4K'
+    })
+    expect(parsed.capabilities.videoGen).toMatchObject({
+      enabled: true,
+      protocol: 'volcengine-ark-video',
+      baseUrl: 'https://ark.cn-beijing.volces.com/api/plan/v3',
+      apiKey: 'agent-plan-key',
+      model: 'doubao-seedance-2.0',
+      defaultDuration: 15,
+      defaultResolution: '4K'
+    })
+    expect(parsed.capabilities.imageGen.headers).toBeUndefined()
+    expect(parsed.capabilities.videoGen.headers).toBeUndefined()
+    expect(KunConfigSchema.safeParse(parsed).success).toBe(true)
+  })
+
   it('replaces stale GUI-managed model profile fields while preserving compaction overrides', async () => {
     if (!tempRoot) throw new Error('temp root not initialized')
     const configPath = join(tempRoot, 'config.json')

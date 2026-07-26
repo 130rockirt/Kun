@@ -566,8 +566,11 @@ describe('app-ipc-schemas', () => {
     expect(payload.agents?.kun?.imageGeneration?.quality).toBe('high')
     expect(payload.schedule?.model).toBe(longModelId)
     expect(payload.workflow?.model).toBe(longModelId)
-    expect(() => settingsPatchSchema.parse({
+    expect(settingsPatchSchema.parse({
       agents: { kun: { imageGeneration: { defaultResolution: '4K' } } }
+    }).agents?.kun?.imageGeneration?.defaultResolution).toBe('4K')
+    expect(() => settingsPatchSchema.parse({
+      agents: { kun: { imageGeneration: { defaultResolution: '8K' } } }
     })).toThrow()
   })
 

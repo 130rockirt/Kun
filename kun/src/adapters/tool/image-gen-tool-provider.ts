@@ -32,7 +32,14 @@ const GROK_IMAGINE_ASPECT_RATIOS = [
   '9:20'
 ] as const
 const KNOWN_ASPECT_RATIOS = new Set([...ASPECT_RATIOS, ...GROK_IMAGINE_ASPECT_RATIOS])
-const SIZE_TIERS: Record<string, number> = { '1K': 1024, '2K': 2048 }
+const SIZE_TIERS: Record<string, number> = {
+  '1K': 1024,
+  '2K': 2048,
+  '3K': 3072,
+  '4K': 4096
+}
+const DEFAULT_IMAGE_SIZE_TIERS = ['1K', '2K'] as const
+const VOLCENGINE_IMAGE_SIZE_TIERS = ['2K', '3K', '4K'] as const
 const COMPATIBLE_SIZE_FALLBACK = SIZE_TIERS['1K']
 const SIZE_STEP = 64
 const MIN_EDGE = 256
@@ -213,7 +220,10 @@ function parseRatio(aspectRatio: string | undefined): { w: number; h: number } |
  * default factory path (OpenAI-compat /images/edits).
  */
 export function protocolSupportsImageEdit(protocol: string | undefined): boolean {
-  return protocol === undefined || protocol === 'openai-images' || protocol === 'codex-responses-image'
+  return protocol === undefined ||
+    protocol === 'openai-images' ||
+    protocol === 'codex-responses-image' ||
+    protocol === 'volcengine-ark-image'
 }
 
 export function buildImageGenToolProviders(
@@ -246,6 +256,22 @@ export function buildImageGenToolProviders(
   // the provider would silently mishandle.
   const supportsEdit = protocolSupportsImageEdit(config.protocol)
   const isGrokImagine = config.protocol === 'grok-imagine-image'
+  const isVolcengineArk = config.protocol === 'volcengine-ark-image'
+  const imageSizeTiers = isVolcengineArk
+    ? VOLCENGINE_IMAGE_SIZE_TIERS
+    : DEFAULT_IMAGE_SIZE_TIERS
+  const imageSizeTierDescription = isVolcengineArk
+    ? '2K, 3K, or 4K'
+    : '1K or 2K'
+  const effectiveDefaultResolution: ImageGenerationResolution = isVolcengineArk
+    ? config.defaultResolution === '3K' || config.defaultResolution === '4K'
+      ? config.defaultResolution
+      : '2K'
+    : config.defaultResolution === 'auto' ||
+        config.defaultResolution === '1K' ||
+        config.defaultResolution === '2K'
+      ? config.defaultResolution
+      : '1K'
 
   const tool = LocalToolHost.defineTool({
     name: 'generate_image',
@@ -271,8 +297,8 @@ export function buildImageGenToolProviders(
         },
         image_size: {
           type: 'string',
-          enum: Object.keys(SIZE_TIERS),
-          description: 'Optional resolution override. Set it only when the user explicitly requests 1K or 2K; otherwise omit it so the Settings default resolution is used. Resolution is independent of image quality.'
+          enum: [...imageSizeTiers],
+          description: `Optional resolution override. Set it only when the user explicitly requests ${imageSizeTierDescription}; otherwise omit it so the Settings default resolution is used. Resolution is independent of image quality.`
         },
         ...(supportsEdit
           ? {
@@ -300,7 +326,7 @@ export function buildImageGenToolProviders(
         aspectRatio,
         imageSize,
         isGrokImagine ? undefined : config.defaultSize,
-        config.defaultResolution
+        effectiveDefaultResolution
       )
 
       const references = await collectReferenceImages(
@@ -468,6 +494,10 @@ async function collectReferenceImages(
 }
 
 type ImagesApiPayload = { data?: { b64_json?: string; url?: string }[] }
+type VolcengineArkImagesPayload = {
+  data?: { b64_json?: string; url?: string }[]
+  error?: { code?: string; message?: string }
+}
 type CodexResponsesImageEvent = {
   type?: string
   partial_image_b64?: string
@@ -515,6 +545,9 @@ export function createImageGenClient(config: {
   if (config.protocol === 'grok-imagine-image') {
     return new GrokImagineImageClient(config.baseUrl!, config.apiKey!, config.headers)
   }
+  if (config.protocol === 'volcengine-ark-image') {
+    return new VolcengineArkImageClient(config.baseUrl!, config.apiKey!)
+  }
   return new OpenAiCompatImageClient(config.baseUrl!, config.apiKey!)
 }
 
@@ -551,6 +584,13 @@ export function codexResponsesImageUrl(baseUrl: string): string {
   if (!normalized) return '/responses'
   if (normalized.toLowerCase().endsWith('/responses')) return normalized
   return `${normalized}/responses`
+}
+
+export function volcengineArkImageUrl(baseUrl: string): string {
+  const normalized = trimTrailingSlashes(baseUrl.trim())
+  if (!normalized) return '/images/generations'
+  if (normalized.toLowerCase().endsWith('/images/generations')) return normalized
+  return `${normalized}/images/generations`
 }
 
 function imageDataUrl(image: { mimeType: string; data: Buffer }): string {
@@ -814,6 +854,80 @@ export class OpenAiCompatImageClient implements ImageGenClient {
       return { data: Buffer.from(await download.arrayBuffer()), mimeType }
     }
     throw new Error('image provider returned no image data')
+  }
+}
+
+export class VolcengineArkImageClient implements ImageGenClient {
+  readonly id = 'volcengine-ark-image'
+  private readonly endpointUrl: string
+
+  constructor(
+    baseUrl: string,
+    private readonly apiKey: string
+  ) {
+    this.endpointUrl = volcengineArkImageUrl(baseUrl)
+  }
+
+  generate(request: ImageGenRequest): Promise<GeneratedImage> {
+    return this.requestImage(request)
+  }
+
+  edit(request: ImageGenEditRequest): Promise<GeneratedImage> {
+    return this.requestImage(request, request.images)
+  }
+
+  private async requestImage(
+    request: ImageGenRequest,
+    images: ImageGenEditRequest['images'] = []
+  ): Promise<GeneratedImage> {
+    const signal = withTimeout(request.signal, request.timeoutMs)
+    let response: Response
+    try {
+      response = await fetch(this.endpointUrl, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model: request.model,
+          prompt: request.prompt,
+          ...(images.length > 0 ? { image: images.map(imageDataUrl) } : {}),
+          ...(request.size ? { size: request.size } : { size: '2K' }),
+          output_format: 'png',
+          response_format: 'b64_json',
+          sequential_image_generation: 'disabled',
+          stream: false,
+          watermark: false
+        }),
+        signal
+      })
+    } catch (error) {
+      throw imageFetchFailure(this.endpointUrl, error, request)
+    }
+    if (!response.ok) {
+      throw new ImageGenHttpError(response.status, await response.text())
+    }
+    const payload = (await response.json()) as VolcengineArkImagesPayload
+    const entry = payload.data?.[0]
+    if (entry?.b64_json) {
+      return { data: Buffer.from(entry.b64_json, 'base64'), mimeType: 'image/png' }
+    }
+    if (entry?.url) {
+      let download: Response
+      try {
+        download = await fetch(entry.url, { signal })
+      } catch (error) {
+        throw imageFetchFailure(entry.url, error, request)
+      }
+      if (!download.ok) throw new ImageGenHttpError(download.status, await download.text())
+      const mimeType = download.headers.get('content-type')?.split(';')[0] || 'image/png'
+      return { data: Buffer.from(await download.arrayBuffer()), mimeType }
+    }
+    const detail = payload.error?.message?.trim() || payload.error?.code?.trim()
+    throw new Error(detail
+      ? `Volcano Ark image provider returned no image data: ${detail}`
+      : 'Volcano Ark image provider returned no image data')
   }
 }
 

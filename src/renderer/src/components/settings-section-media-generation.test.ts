@@ -55,6 +55,7 @@ const labels: Record<string, string> = {
   videoGenerationTimeoutDesc: 'Video timeout desc',
   videoGenerationPollInterval: 'Poll interval',
   videoGenerationPollIntervalDesc: 'Poll interval desc',
+  videoGenerationProtocolVolcengineArk: 'Volcano Ark Seedance',
   modelSelectDefaultOption: 'Default {{model}}'
 }
 
@@ -139,5 +140,61 @@ describe('MediaGenerationSettingsSection', () => {
     expect(html).toContain('music-2.6')
     expect(html).toContain('Video generation')
     expect(html).toContain('MiniMax-Hailuo-2.3')
+  })
+
+  it('shows Agent Plan Seedance models with Volcano duration and resolution bounds', () => {
+    const html = renderToStaticMarkup(createElement(MediaGenerationSettingsSection, {
+      ctx: {
+        t,
+        selectControlClass: 'select',
+        updateKun: vi.fn(),
+        provider: {
+          providers: [{
+            id: 'volcengine-agent-plan',
+            name: 'Volcano Ark Agent Plan',
+            apiKey: 'agent-plan-key',
+            video: {
+              protocol: 'volcengine-ark-video',
+              baseUrl: 'https://ark.cn-beijing.volces.com/api/plan/v3',
+              models: [
+                'doubao-seedance-2.0',
+                'doubao-seedance-2.0-fast',
+                'doubao-seedance-2.0-mini'
+              ]
+            }
+          }]
+        },
+        kun: {
+          imageGeneration: { enabled: false },
+          textToSpeech: { enabled: false },
+          musicGeneration: { enabled: false },
+          videoGeneration: {
+            enabled: true,
+            providerId: 'volcengine-agent-plan',
+            protocol: 'volcengine-ark-video',
+            baseUrl: '',
+            apiKey: '',
+            model: '',
+            defaultDuration: 30,
+            defaultResolution: '768P',
+            timeoutMs: 900000,
+            pollIntervalMs: 10000
+          }
+        }
+      }
+    }))
+
+    expect(html).toContain('Volcano Ark Agent Plan')
+    expect(html).toContain('doubao-seedance-2.0')
+    expect(html).toContain('doubao-seedance-2.0-fast')
+    expect(html).toContain('doubao-seedance-2.0-mini')
+    expect(html).toContain('min="4"')
+    expect(html).toContain('max="15"')
+    expect(html).toContain('value="15"')
+    expect(html).toContain('value="480P"')
+    expect(html).toContain('value="720P" selected=""')
+    expect(html).toContain('value="1080P"')
+    expect(html).toContain('value="4K"')
+    expect(html).not.toContain('value="768P"')
   })
 })

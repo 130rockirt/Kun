@@ -113,7 +113,8 @@ const IMAGE_GENERATION_PROTOCOL_LABEL_KEYS: Record<ImageGenerationProtocol, stri
   'openai-images': 'imageGenProtocolOpenAi',
   'minimax-image': 'imageGenProtocolMiniMax',
   'codex-responses-image': 'imageGenProtocolCodex',
-  'grok-imagine-image': 'imageGenProtocolGrok'
+  'grok-imagine-image': 'imageGenProtocolGrok',
+  'volcengine-ark-image': 'imageGenProtocolVolcengineArk'
 }
 
 const SPEECH_TO_TEXT_PROTOCOL_LABEL_KEYS: Partial<Record<SpeechToTextProtocol, string>> = {
@@ -136,7 +137,8 @@ const MUSIC_GENERATION_PROTOCOL_LABEL_KEYS: Record<MusicGenerationProtocol, stri
 
 const VIDEO_GENERATION_PROTOCOL_LABEL_KEYS: Record<VideoGenerationProtocol, string> = {
   'minimax-video': 'videoGenerationProtocolMiniMax',
-  'grok-imagine-video': 'videoGenerationProtocolGrok'
+  'grok-imagine-video': 'videoGenerationProtocolGrok',
+  'volcengine-ark-video': 'videoGenerationProtocolVolcengineArk'
 }
 
 type ProviderTaskTab = 'connection' | 'models' | 'capabilities' | 'advanced'

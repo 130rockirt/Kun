@@ -17,6 +17,7 @@ const AUDIO_FORMATS = ['mp3', 'wav', 'flac'] as const
 const VIDEO_RESOLUTIONS = ['768P', '1080P'] as const
 const GROK_VIDEO_RESOLUTIONS = ['480P', '720P'] as const
 const GROK_VIDEO_DURATIONS = [6, 10] as const
+const VOLCENGINE_VIDEO_RESOLUTIONS = ['480P', '720P', '1080P', '4K'] as const
 
 const DEFAULT_TEXT_TO_SPEECH = {
   enabled: false,
@@ -146,17 +147,22 @@ export function MediaGenerationSettingsSection({ ctx }: { ctx: Record<string, an
   })
   const effectiveVideoProtocol = selectedVideo.capability?.protocol ?? videoGeneration.protocol
   const isGrokVideo = effectiveVideoProtocol === 'grok-imagine-video'
-  const videoResolutionOptions: readonly string[] = effectiveVideoProtocol === 'grok-imagine-video'
+  const isVolcengineVideo = effectiveVideoProtocol === 'volcengine-ark-video'
+  const videoResolutionOptions: readonly string[] = isGrokVideo
     ? GROK_VIDEO_RESOLUTIONS
-    : VIDEO_RESOLUTIONS
+    : isVolcengineVideo
+      ? VOLCENGINE_VIDEO_RESOLUTIONS
+      : VIDEO_RESOLUTIONS
   const effectiveVideoResolution = videoResolutionOptions.includes(videoGeneration.defaultResolution)
     ? videoGeneration.defaultResolution
-    : videoResolutionOptions[0]
+    : isVolcengineVideo ? '720P' : videoResolutionOptions[0]
   const effectiveVideoDuration = isGrokVideo && !GROK_VIDEO_DURATIONS.includes(
     videoGeneration.defaultDuration as 6 | 10
   )
     ? GROK_VIDEO_DURATIONS[0]
-    : videoGeneration.defaultDuration
+    : isVolcengineVideo
+      ? Math.min(15, Math.max(4, videoGeneration.defaultDuration))
+      : videoGeneration.defaultDuration
 
   return (
     <div className="grid gap-6">
@@ -404,11 +410,11 @@ export function MediaGenerationSettingsSection({ ctx }: { ctx: Record<string, an
                 ) : (
                   <input
                     type="number"
-                    min={1}
-                    max={30}
+                    min={isVolcengineVideo ? 4 : 1}
+                    max={isVolcengineVideo ? 15 : 30}
                     step={1}
                     className={compactInputClass}
-                    value={videoGeneration.defaultDuration}
+                    value={effectiveVideoDuration}
                     onChange={(e) => updateVideoGeneration({ defaultDuration: Number(e.target.value) })}
                   />
                 )
@@ -700,6 +706,7 @@ function videoGenerationProtocolLabel(
   t: (key: string) => string,
   protocol: string
 ): string {
+  if (protocol === 'volcengine-ark-video') return t('videoGenerationProtocolVolcengineArk')
   return protocol === 'grok-imagine-video'
     ? t('videoGenerationProtocolGrok')
     : t('videoGenerationProtocolMiniMax')

@@ -15,6 +15,8 @@ import {
   MiniMaxMusicClient,
   MiniMaxSpeechClient,
   MiniMaxVideoClient,
+  VolcengineArkVideoClient,
+  volcengineArkVideoTasksUrl,
   type MusicGenClient,
   type SpeechGenClient,
   type VideoGenClient
@@ -382,6 +384,285 @@ describe('Media gen tool provider', () => {
       { output: { status: 'submitted', taskId: 'task-1', provider: 'minimax-video' } },
       { output: { status: 'success', taskId: 'task-1', provider: 'minimax-video' } }
     ])
+  })
+
+  it('exposes native Seedance controls and builds API or Agent Plan task endpoints', () => {
+    expect(volcengineArkVideoTasksUrl('https://ark.cn-beijing.volces.com/api/v3'))
+      .toBe('https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks')
+    expect(volcengineArkVideoTasksUrl('https://ark.cn-beijing.volces.com/api/plan/v3/'))
+      .toBe('https://ark.cn-beijing.volces.com/api/plan/v3/contents/generations/tasks')
+    expect(volcengineArkVideoTasksUrl(
+      'https://ark.cn-beijing.volces.com/api/plan/v3/contents/generations/tasks'
+    )).toBe('https://ark.cn-beijing.volces.com/api/plan/v3/contents/generations/tasks')
+    expect(createVideoGenClient({
+      protocol: 'volcengine-ark-video',
+      baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+      apiKey: 'ark-access'
+    }).id).toBe('volcengine-ark-video')
+
+    const config = KunCapabilitiesConfig.parse({
+      videoGen: {
+        enabled: true,
+        protocol: 'volcengine-ark-video',
+        baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+        apiKey: 'ark-access',
+        model: 'doubao-seedance-2-0-260128',
+        defaultDuration: 8,
+        defaultResolution: '1080P'
+      }
+    })
+    const tool = buildVideoGenToolProviders(config.videoGen, {
+      videoClient: {
+        id: 'fake-seedance',
+        async generate() {
+          return { data: Buffer.from('video'), mimeType: 'video/mp4', extension: 'mp4' }
+        }
+      }
+    }).providers[0].tools[0]
+    const properties = tool.inputSchema.properties as Record<string, {
+      enum?: Array<string | number>
+      minimum?: number
+      maximum?: number
+    }>
+
+    expect(properties.duration).toMatchObject({ minimum: 4, maximum: 15 })
+    expect(properties.resolution.enum).toEqual(['480P', '720P', '1080P', '4K'])
+    expect(properties.aspect_ratio.enum).toEqual([
+      'adaptive',
+      '21:9',
+      '16:9',
+      '4:3',
+      '1:1',
+      '3:4',
+      '9:16'
+    ])
+    expect(properties.last_frame_image_path).toBeDefined()
+  })
+
+  it('creates, polls, and downloads a native Seedance video task', async () => {
+    const requests: Array<{
+      url: string
+      method?: string
+      headers: Headers
+      body?: Record<string, unknown>
+    }> = []
+    let pollCount = 0
+    vi.stubGlobal('fetch', vi.fn(async (url: string | URL, init?: RequestInit) => {
+      const href = String(url)
+      requests.push({
+        url: href,
+        method: init?.method,
+        headers: new Headers(init?.headers),
+        ...(init?.body ? { body: JSON.parse(String(init.body)) as Record<string, unknown> } : {})
+      })
+      if (init?.method === 'POST') {
+        return new Response(JSON.stringify({ id: 'seedance-task-1' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' }
+        })
+      }
+      if (href.endsWith('/seedance-task-1')) {
+        pollCount += 1
+        return new Response(JSON.stringify(pollCount === 1
+          ? { id: 'seedance-task-1', status: 'queued' }
+          : {
+              id: 'seedance-task-1',
+              status: 'succeeded',
+              content: { video_url: 'https://cdn.example.test/seedance.mp4' }
+            }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' }
+        })
+      }
+      expect(href).toBe('https://cdn.example.test/seedance.mp4')
+      return new Response(new Uint8Array(Buffer.from('seedance-video')), {
+        status: 200,
+        headers: { 'content-type': 'video/mp4' }
+      })
+    }))
+    const updates: ToolExecutionUpdate[] = []
+    const client = new VolcengineArkVideoClient(
+      'https://ark.cn-beijing.volces.com/api/plan/v3',
+      'agent-plan-key'
+    )
+
+    const media = await client.generate({
+      prompt: '镜头缓慢推进，海浪拍打礁石',
+      model: 'doubao-seedance-2.0',
+      duration: 8,
+      resolution: '1080P',
+      aspectRatio: '16:9',
+      firstFrameImage: { mimeType: 'image/png', data: Buffer.from('first-frame') },
+      lastFrameImage: { mimeType: 'image/jpeg', data: Buffer.from('last-frame') },
+      timeoutMs: 1_000,
+      pollIntervalMs: 1,
+      signal: new AbortController().signal,
+      onUpdate: (update) => {
+        updates.push(update)
+      }
+    })
+
+    expect(media).toMatchObject({
+      data: Buffer.from('seedance-video'),
+      mimeType: 'video/mp4',
+      extension: 'mp4'
+    })
+    expect(requests[0].url).toBe(
+      'https://ark.cn-beijing.volces.com/api/plan/v3/contents/generations/tasks'
+    )
+    expect(requests[0].headers.get('authorization')).toBe('Bearer agent-plan-key')
+    expect(requests[0].body).toEqual({
+      model: 'doubao-seedance-2.0',
+      content: [
+        { type: 'text', text: '镜头缓慢推进，海浪拍打礁石' },
+        {
+          type: 'image_url',
+          image_url: {
+            url: `data:image/png;base64,${Buffer.from('first-frame').toString('base64')}`
+          },
+          role: 'first_frame'
+        },
+        {
+          type: 'image_url',
+          image_url: {
+            url: `data:image/jpeg;base64,${Buffer.from('last-frame').toString('base64')}`
+          },
+          role: 'last_frame'
+        }
+      ],
+      generate_audio: true,
+      ratio: '16:9',
+      duration: 8,
+      resolution: '1080p',
+      watermark: false
+    })
+    expect(requests[1].url).toBe(
+      'https://ark.cn-beijing.volces.com/api/plan/v3/contents/generations/tasks/seedance-task-1'
+    )
+    expect(requests[2].url).toBe(requests[1].url)
+    expect(requests[3].headers.get('authorization')).toBeNull()
+    expect(updates).toEqual([
+      { output: { status: 'submitted', taskId: 'seedance-task-1', provider: 'volcengine-ark-video' } },
+      { output: { status: 'queued', taskId: 'seedance-task-1', provider: 'volcengine-ark-video' } },
+      { output: { status: 'succeeded', taskId: 'seedance-task-1', provider: 'volcengine-ark-video' } }
+    ])
+  })
+
+  it('surfaces Seedance task failure details and obeys its timeout', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (_url: string | URL, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        return new Response(JSON.stringify({ id: 'seedance-failed' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' }
+        })
+      }
+      return new Response(JSON.stringify({
+        id: 'seedance-failed',
+        status: 'failed',
+        error: { code: 'ContentRisk', message: 'prompt rejected' }
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      })
+    }))
+    const client = new VolcengineArkVideoClient(
+      'https://ark.cn-beijing.volces.com/api/v3',
+      'ark-key'
+    )
+    const baseRequest = {
+      prompt: 'test',
+      model: 'doubao-seedance-2-0-260128',
+      duration: 6,
+      resolution: '720P',
+      pollIntervalMs: 1,
+      signal: new AbortController().signal
+    }
+
+    await expect(client.generate({
+      ...baseRequest,
+      timeoutMs: 1_000
+    })).rejects.toThrow(
+      /Volcano Ark video generation failed \(task_id=seedance-failed\): prompt rejected/
+    )
+
+    vi.stubGlobal('fetch', vi.fn(async (_url: string | URL, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        return new Response(JSON.stringify({ id: 'seedance-running' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' }
+        })
+      }
+      return new Response(JSON.stringify({
+        id: 'seedance-running',
+        status: 'running'
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      })
+    }))
+    await expect(client.generate({
+      ...baseRequest,
+      timeoutMs: 20
+    })).rejects.toThrow(
+      /timed out after 20ms \(last status: running\)/
+    )
+  })
+
+  it('rejects a successful Seedance task without an output URL and stops on caller abort', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (_url: string | URL, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        return new Response(JSON.stringify({ id: 'seedance-no-url' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' }
+        })
+      }
+      return new Response(JSON.stringify({
+        id: 'seedance-no-url',
+        status: 'succeeded',
+        content: {}
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      })
+    }))
+    const client = new VolcengineArkVideoClient(
+      'https://ark.cn-beijing.volces.com/api/v3',
+      'ark-key'
+    )
+    const request = {
+      prompt: 'test',
+      model: 'doubao-seedance-2-0-260128',
+      duration: 6,
+      resolution: '720P',
+      timeoutMs: 1_000,
+      pollIntervalMs: 1
+    }
+
+    await expect(client.generate({
+      ...request,
+      signal: new AbortController().signal
+    })).rejects.toThrow(
+      /finished without content\.video_url/
+    )
+
+    let fetchCount = 0
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      fetchCount += 1
+      return new Response(JSON.stringify({ id: 'seedance-aborted' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      })
+    }))
+    const controller = new AbortController()
+    const generation = client.generate({
+      ...request,
+      pollIntervalMs: 1_000,
+      signal: controller.signal
+    })
+    setTimeout(() => controller.abort(), 5)
+
+    await expect(generation).rejects.toThrow(/Aborted/)
+    expect(fetchCount).toBe(1)
   })
 
   it('polls Grok Imagine video generation and downloads the finished file', async () => {

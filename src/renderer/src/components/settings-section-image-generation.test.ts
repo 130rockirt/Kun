@@ -17,6 +17,13 @@ const labels: Record<string, string> = {
   imageGen: 'Image generation',
   imageGenEnabled: 'Enable image generation',
   imageGenEnabledDesc: 'Enables agent chats and Write infographics',
+  imageGenProvider: 'Image provider',
+  imageGenProviderDesc: 'Choose image provider',
+  imageGenProviderCustom: 'Custom image API',
+  imageGenProviderMissingKey: '{{provider}} missing key',
+  imageGenProtocol: 'Image protocol',
+  imageGenProtocolDesc: 'Image protocol description',
+  imageGenProtocolVolcengineArk: 'Volcano Ark Seedream',
   imageGenBaseUrl: 'API base URL',
   imageGenBaseUrlDesc: 'OpenAI-compatible endpoint root',
   imageGenBaseUrlPlaceholder: 'https://api.example.com/v1',
@@ -37,6 +44,8 @@ const labels: Record<string, string> = {
   imageGenDefaultResolution_auto: 'Auto',
   imageGenDefaultResolution_1K: '1K',
   imageGenDefaultResolution_2K: '2K',
+  imageGenDefaultResolution_3K: '3K',
+  imageGenDefaultResolution_4K: '4K',
   imageGenDefaultSize: 'Custom default dimensions',
   imageGenDefaultSizeDesc: 'Overrides the default resolution when set',
   imageGenTimeout: 'Timeout (ms)',
@@ -45,8 +54,9 @@ const labels: Record<string, string> = {
   hideSecret: 'Hide'
 }
 
-function t(key: string): string {
-  return labels[key] ?? key
+function t(key: string, params?: Record<string, unknown>): string {
+  const template = labels[key] ?? key
+  return template.replace(/\{\{(\w+)\}\}/g, (_, name: string) => String(params?.[name] ?? ''))
 }
 
 describe('ImageGenerationSettingsSection', () => {
@@ -84,6 +94,8 @@ describe('ImageGenerationSettingsSection', () => {
     expect(html).toContain('value="image-model"')
     expect(html).toContain('value="high" selected=""')
     expect(html).toContain('value="2K" selected=""')
+    expect(html).not.toContain('value="3K"')
+    expect(html).not.toContain('value="4K"')
     expect(html).toContain('value="1536x1024"')
     expect(html).toContain('value="240000"')
   })
@@ -104,5 +116,56 @@ describe('ImageGenerationSettingsSection', () => {
     expect(mediaIndex).toBeGreaterThan(writeIndex)
     expect(imageIndex).toBe(-1)
     expect(agentsIndex).toBeGreaterThan(mediaIndex)
+  })
+
+  it('shows Agent Plan Seedream models and only its native 2K through 4K resolutions', () => {
+    const html = renderToStaticMarkup(createElement(ImageGenerationSettingsSection, {
+      ctx: {
+        t,
+        selectControlClass: 'select',
+        provider: {
+          providers: [
+            {
+              id: 'volcengine',
+              name: 'Volcano Ark API',
+              apiKey: 'standard-key',
+              image: {
+                protocol: 'volcengine-ark-image',
+                models: ['doubao-seedream-5-0-pro-260628']
+              }
+            },
+            {
+              id: 'volcengine-agent-plan',
+              name: 'Volcano Ark Agent Plan',
+              apiKey: 'agent-plan-key',
+              image: {
+                protocol: 'volcengine-ark-image',
+                models: ['doubao-seedream-5.0-lite']
+              }
+            }
+          ]
+        },
+        kun: {
+          ...defaultKunRuntimeSettings(),
+          imageGeneration: {
+            ...defaultKunRuntimeSettings().imageGeneration,
+            enabled: true,
+            providerId: 'volcengine-agent-plan',
+            protocol: 'volcengine-ark-image',
+            model: '',
+            defaultResolution: '1K'
+          }
+        },
+        updateKun: () => undefined
+      }
+    }))
+
+    expect(html).toContain('Volcano Ark API')
+    expect(html).toContain('Volcano Ark Agent Plan')
+    expect(html).toContain('doubao-seedream-5.0-lite')
+    expect(html).toContain('value="2K" selected=""')
+    expect(html).toContain('value="3K"')
+    expect(html).toContain('value="4K"')
+    expect(html).not.toContain('value="1K"')
   })
 })

@@ -1167,7 +1167,7 @@ describe('mergeKunRuntimeSettings', () => {
 
     const invalidSize = mergeKunRuntimeSettings(sized, {
       imageGeneration: {
-        defaultResolution: '4K' as never,
+        defaultResolution: '8K' as never,
         defaultSize: 'huge',
         quality: 'maximum' as never,
         timeoutMs: -5

@@ -17,6 +17,8 @@ import {
   OpenAiCompatImageClient,
   openAiCompatImageUrl,
   protocolSupportsImageEdit,
+  VolcengineArkImageClient,
+  volcengineArkImageUrl,
   type ImageGenClient
 } from '../src/adapters/tool/image-gen-tool-provider.js'
 import { FileAttachmentStore } from '../src/attachments/attachment-store.js'
@@ -123,6 +125,8 @@ describe('Image gen tool provider', () => {
   it('maps aspect ratio and size tier to provider sizes', () => {
     expect(mapImageSize(undefined, undefined, undefined, '1K')).toBe('1024x1024')
     expect(mapImageSize(undefined, undefined, undefined, '2K')).toBe('2048x2048')
+    expect(mapImageSize('16:9', undefined, undefined, '3K')).toBe('3072x1728')
+    expect(mapImageSize('9:16', undefined, undefined, '4K')).toBe('2304x4096')
     expect(mapImageSize(undefined, undefined, undefined, 'auto')).toBe('auto')
     expect(mapImageSize('16:9', undefined, undefined, 'auto')).toBe('1024x576')
     expect(mapImageSize(undefined, undefined, '1536x1024', '2K')).toBe('1536x1024')
@@ -146,7 +150,9 @@ describe('Image gen tool provider', () => {
     expect(imageGenConfig().defaultResolution).toBe('1K')
     expect(imageGenConfig({ defaultResolution: 'auto' }).defaultResolution).toBe('auto')
     expect(imageGenConfig({ defaultResolution: '2K' }).defaultResolution).toBe('2K')
-    expect(() => imageGenConfig({ defaultResolution: '4K' })).toThrow()
+    expect(imageGenConfig({ defaultResolution: '3K' }).defaultResolution).toBe('3K')
+    expect(imageGenConfig({ defaultResolution: '4K' }).defaultResolution).toBe('4K')
+    expect(() => imageGenConfig({ defaultResolution: '8K' })).toThrow()
   })
 
   it('advertises settings-backed quality and resolution semantics without dynamic values', () => {
@@ -192,6 +198,18 @@ describe('Image gen tool provider', () => {
       '9:20'
     ])
     expect(properties.image_size.enum).toEqual(['1K', '2K'])
+  })
+
+  it('advertises only the native Seedream resolution tiers', () => {
+    const tool = buildImageGenToolProviders(imageGenConfig({
+      protocol: 'volcengine-ark-image',
+      defaultResolution: '3K'
+    }), { client: fakeClient() }).providers[0].tools[0]
+    const properties = tool.inputSchema.properties as Record<string, { enum?: string[]; description?: string }>
+
+    expect(properties.image_size.enum).toEqual(['2K', '3K', '4K'])
+    expect(properties.image_size.description).toContain('2K, 3K, or 4K')
+    expect(properties.reference_image_paths).toBeDefined()
   })
 
   it('keeps explicit width/height for MiniMax image-01 only', () => {
@@ -271,6 +289,122 @@ describe('Image gen tool provider', () => {
     // A fully-qualified generations URL still routes the edits call.
     expect(openAiCompatImageUrl('https://x.test/v1/images/generations', 'edits'))
       .toBe('https://x.test/v1/images/edits')
+  })
+
+  it('builds Volcano Ark image endpoints from API and Agent Plan roots', () => {
+    expect(volcengineArkImageUrl('https://ark.cn-beijing.volces.com/api/v3'))
+      .toBe('https://ark.cn-beijing.volces.com/api/v3/images/generations')
+    expect(volcengineArkImageUrl('https://ark.cn-beijing.volces.com/api/plan/v3/'))
+      .toBe('https://ark.cn-beijing.volces.com/api/plan/v3/images/generations')
+    expect(volcengineArkImageUrl(
+      'https://ark.cn-beijing.volces.com/api/plan/v3/images/generations'
+    )).toBe('https://ark.cn-beijing.volces.com/api/plan/v3/images/generations')
+    expect(createImageGenClient({
+      protocol: 'volcengine-ark-image',
+      baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+      apiKey: 'ark-access'
+    }).id).toBe('volcengine-ark-image')
+  })
+
+  it('posts native Seedream generation and reference-image requests', async () => {
+    const requests: Array<{ url: string; headers: Headers; body: Record<string, unknown> }> = []
+    const generated = png(8, 8)
+    vi.stubGlobal('fetch', vi.fn(async (url: string | URL, init?: RequestInit) => {
+      requests.push({
+        url: String(url),
+        headers: new Headers(init?.headers),
+        body: JSON.parse(String(init?.body)) as Record<string, unknown>
+      })
+      return new Response(JSON.stringify({
+        data: [{ b64_json: generated.toString('base64') }]
+      }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }))
+    const client = new VolcengineArkImageClient(
+      'https://ark.cn-beijing.volces.com/api/plan/v3',
+      'agent-plan-key'
+    )
+    const signal = new AbortController().signal
+
+    const generatedImage = await client.generate({
+      prompt: '一只站在山顶的雪豹',
+      model: 'doubao-seedream-5.0-lite',
+      size: '3072x1728',
+      timeoutMs: 1_000,
+      signal
+    })
+    const editedImage = await client.edit({
+      prompt: '把天空改成日落',
+      model: 'doubao-seedream-5.0-lite',
+      images: [
+        { name: 'first.png', mimeType: 'image/png', data: Buffer.from('first') },
+        { name: 'second.webp', mimeType: 'image/webp', data: Buffer.from('second') }
+      ],
+      timeoutMs: 1_000,
+      signal
+    })
+
+    expect(generatedImage.data).toEqual(generated)
+    expect(editedImage.data).toEqual(generated)
+    expect(requests).toHaveLength(2)
+    expect(requests[0].url).toBe(
+      'https://ark.cn-beijing.volces.com/api/plan/v3/images/generations'
+    )
+    expect(requests[0].headers.get('authorization')).toBe('Bearer agent-plan-key')
+    expect(requests[0].body).toEqual({
+      model: 'doubao-seedream-5.0-lite',
+      prompt: '一只站在山顶的雪豹',
+      size: '3072x1728',
+      output_format: 'png',
+      response_format: 'b64_json',
+      sequential_image_generation: 'disabled',
+      stream: false,
+      watermark: false
+    })
+    expect(requests[1].body).toMatchObject({
+      model: 'doubao-seedream-5.0-lite',
+      prompt: '把天空改成日落',
+      size: '2K',
+      image: [
+        `data:image/png;base64,${Buffer.from('first').toString('base64')}`,
+        `data:image/webp;base64,${Buffer.from('second').toString('base64')}`
+      ]
+    })
+  })
+
+  it('downloads a URL result from Seedream and surfaces provider errors', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string | URL) => {
+      if (String(url).endsWith('/images/generations')) {
+        return new Response(JSON.stringify({
+          data: [{ url: 'https://cdn.example.test/seedream.png' }]
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      return new Response(new Uint8Array(Buffer.from('seedream-image')), {
+        status: 200,
+        headers: { 'content-type': 'image/png' }
+      })
+    }))
+    const client = new VolcengineArkImageClient(
+      'https://ark.cn-beijing.volces.com/api/v3',
+      'ark-key'
+    )
+    const request = {
+      prompt: 'a paper sculpture',
+      model: 'doubao-seedream-5-0-lite-260128',
+      timeoutMs: 1_000,
+      signal: new AbortController().signal
+    }
+
+    await expect(client.generate(request)).resolves.toMatchObject({
+      data: Buffer.from('seedream-image'),
+      mimeType: 'image/png'
+    })
+
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      error: { code: 'InvalidParameter', message: 'unsupported size' }
+    }), { status: 200, headers: { 'content-type': 'application/json' } })))
+    await expect(client.generate(request)).rejects.toThrow(
+      /Volcano Ark image provider returned no image data: unsupported size/
+    )
   })
 
   it('posts Codex subscription image requests through responses image_generation SSE', async () => {
@@ -640,6 +774,41 @@ describe('Image gen tool provider', () => {
     expect(client.generateCalls[1]).toMatchObject({ size: '1024x576' })
   })
 
+  it('keeps Seedream-only resolution defaults from leaking across protocols', async () => {
+    const genericClient = fakeClient()
+    const seedreamClient = fakeClient()
+    const genericHost = new LocalToolHost({
+      registry: new CapabilityRegistry(
+        buildImageGenToolProviders(imageGenConfig({
+          protocol: 'openai-images',
+          defaultResolution: '4K'
+        }), { client: genericClient }).providers
+      )
+    })
+    const seedreamHost = new LocalToolHost({
+      registry: new CapabilityRegistry(
+        buildImageGenToolProviders(imageGenConfig({
+          protocol: 'volcengine-ark-image',
+          defaultResolution: '1K'
+        }), { client: seedreamClient }).providers
+      )
+    })
+
+    await genericHost.execute({
+      callId: 'call_generic_stale_4k',
+      toolName: 'generate_image',
+      arguments: { prompt: 'generic image' }
+    }, buildContext())
+    await seedreamHost.execute({
+      callId: 'call_seedream_stale_1k',
+      toolName: 'generate_image',
+      arguments: { prompt: 'Seedream image' }
+    }, buildContext())
+
+    expect(genericClient.generateCalls[0]).toMatchObject({ size: '1024x1024' })
+    expect(seedreamClient.generateCalls[0]).toMatchObject({ size: '2048x2048' })
+  })
+
   it('lets the provider choose dimensions when default resolution is auto and no ratio is requested', async () => {
     const client = fakeClient()
     const host = new LocalToolHost({
@@ -871,6 +1040,7 @@ describe('Image gen tool provider', () => {
   it('allowlists only real-edit protocols in protocolSupportsImageEdit', () => {
     expect(protocolSupportsImageEdit('openai-images')).toBe(true)
     expect(protocolSupportsImageEdit('codex-responses-image')).toBe(true)
+    expect(protocolSupportsImageEdit('volcengine-ark-image')).toBe(true)
     expect(protocolSupportsImageEdit(undefined)).toBe(true)
     expect(protocolSupportsImageEdit('minimax-image')).toBe(false)
     expect(protocolSupportsImageEdit('grok-imagine-image')).toBe(false)

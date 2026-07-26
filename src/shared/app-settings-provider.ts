@@ -990,7 +990,7 @@ export function resolveKunVideoGenerationSettings(settings: AppSettingsV1): KunV
   const videoGeneration = runtime.videoGeneration
   const providerId = normalizeModelProviderId(videoGeneration.providerId)
   if (!providerId || providerId === CUSTOM_VIDEO_GENERATION_PROVIDER_ID) {
-    return normalizeResolvedGrokVideoDefaults({
+    return normalizeResolvedVideoDefaults({
       ...videoGeneration,
       providerId,
       protocol: normalizeVideoGenerationProtocol(videoGeneration.protocol)
@@ -1005,7 +1005,7 @@ export function resolveKunVideoGenerationSettings(settings: AppSettingsV1): KunV
       protocol: normalizeVideoGenerationProtocol(videoGeneration.protocol)
     }
   }
-  return normalizeResolvedGrokVideoDefaults({
+  return normalizeResolvedVideoDefaults({
     ...videoGeneration,
     providerId: provider.id,
     protocol: capability.protocol,
@@ -1031,11 +1031,19 @@ function resolveVideoProviderCapabilityModel(
     : fallback || model
 }
 
-function normalizeResolvedGrokVideoDefaults(
+function normalizeResolvedVideoDefaults(
   value: KunVideoGenerationSettingsV1
 ): KunVideoGenerationSettingsV1 {
-  if (value.protocol !== 'grok-imagine-video') return value
   const resolution = value.defaultResolution.trim().toUpperCase()
+  if (value.protocol === 'volcengine-ark-video') {
+    const allowedResolutions = new Set(['480P', '720P', '1080P', '4K'])
+    return {
+      ...value,
+      defaultDuration: Math.min(15, Math.max(4, value.defaultDuration)),
+      defaultResolution: allowedResolutions.has(resolution) ? resolution : '720P'
+    }
+  }
+  if (value.protocol !== 'grok-imagine-video') return value
   return {
     ...value,
     defaultDuration: value.defaultDuration === 10 ? 10 : 6,
@@ -1095,11 +1103,11 @@ export function resolveKunImageGenerationSettings(settings: AppSettingsV1): KunI
   const imageGeneration = runtime.imageGeneration
   const providerId = normalizeModelProviderId(imageGeneration.providerId)
   if (!providerId || providerId === CUSTOM_IMAGE_GENERATION_PROVIDER_ID) {
-    return {
+    return normalizeResolvedImageDefaults({
       ...imageGeneration,
       providerId,
       protocol: normalizeImageGenerationProtocol(imageGeneration.protocol)
-    }
+    })
   }
   const provider = getModelProviderProfile(settings, providerId)
   const image = provider.image
@@ -1110,14 +1118,30 @@ export function resolveKunImageGenerationSettings(settings: AppSettingsV1): KunI
       protocol: normalizeImageGenerationProtocol(imageGeneration.protocol)
     }
   }
-  return {
+  return normalizeResolvedImageDefaults({
     ...imageGeneration,
     providerId: provider.id,
     protocol: image.protocol,
     baseUrl: resolveProviderCapabilityBaseUrl(provider, image, 'image'),
     apiKey: provider.apiKey.trim(),
     model: resolveImageProviderCapabilityModel(imageGeneration.model, image)
+  })
+}
+
+function normalizeResolvedImageDefaults(
+  value: KunImageGenerationSettingsV1
+): KunImageGenerationSettingsV1 {
+  if (value.protocol === 'volcengine-ark-image') {
+    return {
+      ...value,
+      defaultResolution: value.defaultResolution === '3K' || value.defaultResolution === '4K'
+        ? value.defaultResolution
+        : '2K'
+    }
   }
+  return value.defaultResolution === '3K' || value.defaultResolution === '4K'
+    ? { ...value, defaultResolution: '1K' }
+    : value
 }
 
 export function resolveKunRuntimeSettings(settings: AppSettingsV1): KunRuntimeSettingsV1 {
@@ -1527,6 +1551,7 @@ export function normalizeImageGenerationProtocol(value: unknown): ImageGeneratio
   if (value === 'minimax-image') return 'minimax-image'
   if (value === 'codex-responses-image') return 'codex-responses-image'
   if (value === 'grok-imagine-image') return 'grok-imagine-image'
+  if (value === 'volcengine-ark-image') return 'volcengine-ark-image'
   return DEFAULT_IMAGE_GENERATION_PROTOCOL
 }
 
@@ -1615,6 +1640,7 @@ function normalizeModelProviderVideoCapability(
 
 export function normalizeVideoGenerationProtocol(value: unknown): VideoGenerationProtocol {
   if (value === 'grok-imagine-video') return 'grok-imagine-video'
+  if (value === 'volcengine-ark-video') return 'volcengine-ark-video'
   return value === 'minimax-video' ? 'minimax-video' : DEFAULT_VIDEO_GENERATION_PROTOCOL
 }
 

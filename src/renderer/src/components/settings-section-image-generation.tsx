@@ -27,6 +27,7 @@ function imageGenerationProtocolLabelKey(protocol: string): string {
   if (protocol === 'minimax-image') return 'imageGenProtocolMiniMax'
   if (protocol === 'codex-responses-image') return 'imageGenProtocolCodex'
   if (protocol === 'grok-imagine-image') return 'imageGenProtocolGrok'
+  if (protocol === 'volcengine-ark-image') return 'imageGenProtocolVolcengineArk'
   return 'imageGenProtocolOpenAi'
 }
 
@@ -58,6 +59,18 @@ export function ImageGenerationSettingsSection({ ctx }: { ctx: Record<string, an
   const selectedImageProvider = imageProviders.find((item: { id: string }) => item.id === selectedProviderId)
   const usingCustomProvider = selectedProviderId === CUSTOM_IMAGE_GENERATION_PROVIDER_ID || !selectedImageProvider
   const selectedProviderImage = selectedImageProvider?.image
+  const effectiveImageProtocol = selectedProviderImage?.protocol ?? imageGeneration.protocol
+  const isVolcengineArkImage = effectiveImageProtocol === 'volcengine-ark-image'
+  const imageResolutionOptions = isVolcengineArkImage
+    ? IMAGE_GENERATION_RESOLUTIONS.filter((resolution) => (
+        resolution === '2K' || resolution === '3K' || resolution === '4K'
+      ))
+    : IMAGE_GENERATION_RESOLUTIONS.filter((resolution) => (
+        resolution === 'auto' || resolution === '1K' || resolution === '2K'
+      ))
+  const effectiveImageResolution = imageResolutionOptions.includes(imageGeneration.defaultResolution)
+    ? imageGeneration.defaultResolution
+    : imageResolutionOptions[0]
   const imageModelOptions = usingCustomProvider
     ? []
     : selectedProviderImage?.models ?? []
@@ -229,10 +242,10 @@ export function ImageGenerationSettingsSection({ ctx }: { ctx: Record<string, an
             control={
               <select
                 className={selectControlClass}
-                value={imageGeneration.defaultResolution}
+                value={effectiveImageResolution}
                 onChange={(e) => updateImageGeneration({ defaultResolution: e.target.value })}
               >
-                {IMAGE_GENERATION_RESOLUTIONS.map((resolution) => (
+                {imageResolutionOptions.map((resolution) => (
                   <option key={resolution} value={resolution}>
                     {t(`imageGenDefaultResolution_${resolution}`)}
                   </option>
