@@ -28,6 +28,29 @@ function catalogBody(): string {
         }
       }
     },
+    'ollama-cloud': {
+      id: 'ollama-cloud',
+      name: 'Ollama Cloud',
+      api: 'https://ollama.com/v1',
+      models: {
+        'gpt-oss:120b': {
+          id: 'gpt-oss:120b',
+          name: 'gpt-oss:120b',
+          reasoning: true,
+          tool_call: true,
+          modalities: { input: ['text'], output: ['text'] },
+          limit: { context: 131_072, output: 32_768 }
+        },
+        'catalog-only': {
+          id: 'catalog-only',
+          name: 'Catalog only',
+          reasoning: false,
+          tool_call: true,
+          modalities: { input: ['text'], output: ['text'] },
+          limit: { context: 64_000, output: 8_000 }
+        }
+      }
+    },
     openai: {
       id: 'openai',
       name: 'OpenAI',
@@ -153,6 +176,7 @@ describe('resolveModelsDevProvider', () => {
     ['claude-subscription', 'https://api.anthropic.com', 'anthropic', 'enrichment-only'],
     ['gemini-subscription', '', 'google', 'enrichment-only'],
     ['gemini-cli-subscription', '', 'google', 'enrichment-only'],
+    ['ollama', 'https://ollama.com/v1', 'ollama-cloud', 'enrichment-only'],
     ['grok-subscription', 'https://cli-chat-proxy.grok.com/v1', 'xai', 'enrichment-only'],
     ['vercel-ai-gateway', 'https://ai-gateway.vercel.sh/v1', 'vercel', 'catalog']
   ])('maps %s deterministically', (providerId, baseUrl, providerKey, matchMode) => {
@@ -165,6 +189,10 @@ describe('resolveModelsDevProvider', () => {
       baseUrl: 'https://api.moonshot.cn/v1/'
     })).toEqual({ providerKey: 'moonshotai-cn', matchMode: 'catalog' })
     expect(resolveModelsDevProvider({
+      providerId: 'my-ollama-cloud-account',
+      baseUrl: 'https://ollama.com/v1/'
+    })).toEqual({ providerKey: 'ollama-cloud', matchMode: 'enrichment-only' })
+    expect(resolveModelsDevProvider({
       providerId: 'looks-like-minimax',
       baseUrl: 'https://proxy.example/minimax'
     })).toBeNull()
@@ -176,6 +204,31 @@ describe('resolveModelsDevProvider', () => {
 })
 
 describe('ModelsDevCatalogService', () => {
+  it('uses the Ollama Cloud catalog only to enrich provider-confirmed models', async () => {
+    const fetcher = vi.fn(async () => new Response(catalogBody(), { status: 200 }))
+    const service = new ModelsDevCatalogService(fetcher)
+
+    await expect(service.fetch({
+      providerId: 'ollama',
+      baseUrl: 'https://ollama.com/v1'
+    })).resolves.toMatchObject({
+      status: 'ok',
+      providerKey: 'ollama-cloud',
+      providerName: 'Ollama Cloud',
+      matchMode: 'enrichment-only',
+      models: [
+        {
+          id: 'gpt-oss:120b',
+          reasoning: true,
+          toolCalling: true,
+          contextWindowTokens: 131_072,
+          maxOutputTokens: 32_768
+        },
+        { id: 'catalog-only' }
+      ]
+    })
+  })
+
   it('enriches Cursor models only from deterministic original providers', async () => {
     const fetcher = vi.fn(async () => new Response(catalogBody(), { status: 200 }))
     const service = new ModelsDevCatalogService(fetcher)

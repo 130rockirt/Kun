@@ -799,6 +799,48 @@ describe('syncGuiManagedKunConfig', () => {
     expect(KunConfigSchema.safeParse(parsed).success).toBe(true)
   })
 
+  it('projects Ollama Cloud through the protected HTTP Chat Completions provider path', async () => {
+    if (!tempRoot) throw new Error('temp root not initialized')
+    const configPath = join(tempRoot, 'config.json')
+    const module = await import('./kun-process')
+    const settings = createSettings('/tmp/fake-kun-child.js')
+    const preset = getModelProviderPreset('ollama')
+    if (!preset) throw new Error('Ollama Cloud preset is missing')
+    const ollama = modelProviderPresetProfile(preset, 'ollama-secret')
+    settings.provider.providers.push(ollama)
+    settings.agents.kun = {
+      ...settings.agents.kun,
+      providerId: ollama.id,
+      model: 'gpt-oss:120b'
+    }
+
+    await module.syncGuiManagedKunConfig(tempRoot, resolveKunRuntimeSettings(settings), {
+      scheduleMcp: {
+        settings,
+        launch: {
+          appPath: '/tmp/deepseek-gui-test-app',
+          execPath: '/tmp/electron',
+          isPackaged: false
+        }
+      }
+    })
+
+    const parsed = JSON.parse(readFileSync(configPath, 'utf8')) as any
+    expect(parsed.serve).toMatchObject({
+      baseUrl: 'https://ollama.com/v1',
+      endpointFormat: 'chat_completions',
+      model: 'gpt-oss:120b'
+    })
+    expect(parsed.serve.providers.ollama).toMatchObject({
+      apiKey: '',
+      credentialSourceId: 'settings:provider:ollama',
+      baseUrl: 'https://ollama.com/v1',
+      endpointFormat: 'chat_completions'
+    })
+    expect(JSON.stringify(parsed)).not.toContain('ollama-secret')
+    expect(KunConfigSchema.safeParse(parsed).success).toBe(true)
+  })
+
   it('writes the memory capability from the GUI memory toggle', async () => {
     if (!tempRoot) throw new Error('temp root not initialized')
     const configPath = join(tempRoot, 'config.json')

@@ -1588,6 +1588,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       expect(regionTab('United States').props['aria-selected']).toBe(true)
       expect(instanceText(renderer.root.findByProps({ role: 'dialog' }))).toContain('Claude (Pro/Max 订阅)')
       expect(instanceText(renderer.root.findByProps({ role: 'dialog' }))).toContain('ChatGPT 订阅')
+      expect(instanceText(renderer.root.findByProps({ role: 'dialog' }))).toContain('Ollama Cloud')
       expect(instanceText(renderer.root.findByProps({ role: 'dialog' }))).not.toContain('Kimi Code')
 
       await act(async () => regionTab('All').props.onClick())
@@ -1636,6 +1637,102 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
         }
       })
       expect(rendererText(renderer)).not.toContain('Unsaved')
+    })
+
+    it('configures Ollama Cloud and imports only provider-confirmed models with catalog metadata', async () => {
+      const settings = defaultModelProviderSettings()
+      const preset = getModelProviderPreset('ollama')
+      expect(preset).not.toBeNull()
+      const target = {
+        ...modelProviderPresetProfile(preset!, 'ollama-secret'),
+        models: [],
+        modelProfiles: {}
+      }
+      const update = vi.fn()
+      probeModelProvider.mockResolvedValueOnce({
+        ok: true,
+        latencyMs: 12,
+        modelIds: ['gpt-oss:120b', 'ollama-new:model']
+      })
+      fetchModelsDevCatalog.mockResolvedValueOnce({
+        status: 'ok',
+        providerKey: 'ollama-cloud',
+        providerName: 'Ollama Cloud',
+        matchMode: 'enrichment-only',
+        stale: false,
+        models: [
+          {
+            id: 'gpt-oss:120b',
+            reasoning: true,
+            toolCalling: true,
+            inputModalities: ['text'],
+            outputModalities: ['text'],
+            contextWindowTokens: 131_072,
+            maxOutputTokens: 32_768
+          },
+          {
+            id: 'catalog-only',
+            inputModalities: ['text'],
+            outputModalities: ['text']
+          }
+        ]
+      })
+      const renderer = await mountProviders({
+        ...baseCtx(),
+        provider: { ...settings, providers: [...settings.providers, target] },
+        kun: {
+          ...defaultKunRuntimeSettings(),
+          providerId: target.id
+        },
+        update
+      })
+
+      expect(rendererText(renderer)).toContain('Ollama Cloud')
+      expect(renderer.root.findAllByType('input')
+        .some((input) => input.props.value === 'Ollama Cloud')).toBe(true)
+      expect(renderer.root.findAllByType('input')
+        .some((input) => input.props.value === 'https://ollama.com/v1')).toBe(true)
+      expect(renderer.root.findAllByType('input')
+        .some((input) => input.props.value === 'ollama-secret')).toBe(true)
+
+      await clickProviderTab(renderer, 'Models')
+      await act(async () => {
+        findButton(renderer, 'Fetch models').props.onClick()
+        await Promise.resolve()
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+
+      expect(probeModelProvider).toHaveBeenCalledWith({
+        baseUrl: 'https://ollama.com/v1',
+        apiKey: 'ollama-secret',
+        endpointFormat: 'chat_completions'
+      })
+      expect(fetchModelsDevCatalog).toHaveBeenCalledWith({
+        providerId: 'ollama',
+        baseUrl: 'https://ollama.com/v1',
+        forceRefresh: true
+      })
+      const importDialog = renderer.root.findByProps({ role: 'dialog' })
+      expect(instanceText(importDialog)).toContain('gpt-oss:120b')
+      expect(instanceText(importDialog)).toContain('ollama-new:model')
+      expect(instanceText(importDialog)).not.toContain('catalog-only')
+
+      await act(async () => findButton(renderer, 'Import 2').props.onClick())
+      const updatedProviders = update.mock.calls[0]?.[0]?.provider?.providers as ModelProviderProfileV1[]
+      const updatedOllama = updatedProviders.find((provider) => provider.id === 'ollama')
+      expect(updatedOllama?.models).toEqual(['gpt-oss:120b', 'ollama-new:model'])
+      expect(updatedOllama?.modelProfiles['gpt-oss:120b']).toMatchObject({
+        contextWindowTokens: 131_072,
+        maxOutputTokens: 32_768,
+        supportsToolCalling: true,
+        reasoning: {
+          supportedEfforts: ['auto'],
+          defaultEffort: 'auto',
+          requestProtocol: 'none'
+        }
+      })
+      expect(updatedOllama?.modelProfiles['ollama-new:model']).toBeUndefined()
     })
 
     it('adds repeated Token Plan accounts with independent numbered identities', async () => {

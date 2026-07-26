@@ -27,6 +27,7 @@ import {
   defaultModelRequestRetrySettings,
   CHATGPT_SUBSCRIPTION_MODEL_IDS,
   GROK_SUBSCRIPTION_PROVIDER_ID,
+  OLLAMA_CLOUD_MODEL_IDS,
   listMusicGenerationProviderProfiles,
   listSpeechToTextProviderProfiles,
   listTextToSpeechProviderProfiles,
@@ -1696,6 +1697,39 @@ describe('model provider settings', () => {
 })
 
 describe('multi-account provider presets', () => {
+  it('defines Ollama Cloud as a key-backed United States subscription with stable accounts', () => {
+    const ollama = getModelProviderPreset('ollama')
+    expect(ollama).toMatchObject({
+      id: 'ollama',
+      name: 'Ollama Cloud',
+      category: 'subscription',
+      subscriptionRegion: 'united-states',
+      baseUrl: 'https://ollama.com/v1',
+      endpointFormat: 'chat_completions',
+      models: [...OLLAMA_CLOUD_MODEL_IDS],
+      docsUrl: 'https://docs.ollama.com/cloud',
+      apiKeyUrl: 'https://ollama.com/settings/keys'
+    })
+
+    const first = modelProviderPresetAccountProfile(ollama!, 'api', [])!
+    const second = modelProviderPresetAccountProfile(ollama!, 'api', [first])!
+    expect(first).toMatchObject({
+      id: 'ollama',
+      name: 'Ollama Cloud',
+      presetSource: { presetId: 'ollama', mode: 'api' },
+      baseUrl: 'https://ollama.com/v1',
+      endpointFormat: 'chat_completions',
+      models: [...OLLAMA_CLOUD_MODEL_IDS]
+    })
+    expect(first.models).toContain('gpt-oss:120b')
+    expect(modelProviderRequiresApiKey(first)).toBe(true)
+    expect(second).toMatchObject({
+      id: 'ollama-2',
+      name: 'Ollama Cloud 2',
+      presetSource: { presetId: 'ollama', mode: 'api' }
+    })
+  })
+
   it('allocates stable numbered identities for repeated subscription accounts', () => {
     const kimi = getModelProviderPreset('kimi-code')
     expect(kimi).not.toBeNull()

@@ -34,6 +34,7 @@ export type ModelProviderPresetId =
   | 'gemini-subscription'
   | 'gemini-cli-subscription'
   | 'cursor-subscription'
+  | 'ollama'
   | 'grok-subscription'
   | 'moonshot-cn'
   | 'moonshot-global'
@@ -57,6 +58,30 @@ export const GEMINI_CLI_SUBSCRIPTION_NAME = 'Gemini CLI 订阅（API）'
 export const CURSOR_SUBSCRIPTION_PROVIDER_ID = 'cursor-subscription'
 export const CURSOR_SUBSCRIPTION_NAME = 'Cursor 订阅'
 export const CURSOR_SUBSCRIPTION_MODEL_IDS = ['auto'] as const
+export const OLLAMA_CLOUD_PROVIDER_ID = 'ollama'
+export const OLLAMA_CLOUD_PROVIDER_NAME = 'Ollama Cloud'
+// Bootstrap snapshot from Ollama Cloud's official GET /v1/models response.
+// The live endpoint remains authoritative and Settings can import additions.
+export const OLLAMA_CLOUD_MODEL_IDS = [
+  'deepseek-v4-flash',
+  'deepseek-v4-pro',
+  'gemma4:31b',
+  'glm-5.1',
+  'glm-5.2',
+  'gpt-oss:120b',
+  'gpt-oss:20b',
+  'kimi-k2.5',
+  'kimi-k2.6',
+  'kimi-k2.7-code',
+  'minimax-m2.5',
+  'minimax-m2.7',
+  'minimax-m3',
+  'mistral-large-3:675b',
+  'nemotron-3-nano:30b',
+  'nemotron-3-super',
+  'nemotron-3-ultra',
+  'qwen3.5:397b'
+] as const
 export const GEMINI_SUBSCRIPTION_MODEL_IDS = [
   'gemini-3.6-flash',
   'gemini-3.5-flash',
@@ -415,6 +440,20 @@ export const MODEL_PROVIDER_PRESETS: ModelProviderPreset[] = [
     },
     docsUrl: 'https://cursor.com/docs/api/sdk/typescript',
     apiKeyUrl: 'https://cursor.com/dashboard/api?section=user-keys#user-api-keys'
+  },
+  {
+    id: OLLAMA_CLOUD_PROVIDER_ID,
+    name: OLLAMA_CLOUD_PROVIDER_NAME,
+    category: 'subscription',
+    subscriptionRegion: 'united-states',
+    // Ollama Cloud documents an OpenAI-compatible surface, so Kun can retain
+    // its single HTTP model loop (streaming, tools, images, and usage) instead
+    // of adding a parallel native /api/chat transport.
+    baseUrl: 'https://ollama.com/v1',
+    endpointFormat: 'chat_completions',
+    models: [...OLLAMA_CLOUD_MODEL_IDS],
+    docsUrl: 'https://docs.ollama.com/cloud',
+    apiKeyUrl: 'https://ollama.com/settings/keys'
   },
   {
     id: 'zhipu-coding-plan',

@@ -97,6 +97,73 @@ describe('provider model import merging', () => {
     expect(entries[0]?.sources).toEqual(['provider-api', 'models-dev'])
   })
 
+  it('imports Ollama Cloud API models while using its catalog only for matching metadata', () => {
+    const ollama = provider({
+      id: 'ollama',
+      name: 'Ollama Cloud',
+      baseUrl: 'https://ollama.com/v1'
+    })
+    const entries = buildProviderModelImportEntries(
+      ollama,
+      ['gpt-oss:120b', 'ollama-new:model'],
+      {
+        status: 'ok',
+        providerKey: 'ollama-cloud',
+        providerName: 'Ollama Cloud',
+        matchMode: 'enrichment-only',
+        stale: false,
+        models: [
+          {
+            id: 'gpt-oss:120b',
+            reasoning: true,
+            toolCalling: true,
+            inputModalities: ['text'],
+            outputModalities: ['text'],
+            contextWindowTokens: 131_072,
+            maxOutputTokens: 32_768
+          },
+          {
+            id: 'catalog-only',
+            inputModalities: ['text'],
+            outputModalities: ['text']
+          }
+        ]
+      }
+    )
+
+    expect(entries.map((entry) => entry.modelId)).toEqual([
+      'gpt-oss:120b',
+      'ollama-new:model'
+    ])
+    expect(entries[0]).toMatchObject({
+      sources: ['provider-api', 'models-dev'],
+      catalog: {
+        id: 'gpt-oss:120b',
+        contextWindowTokens: 131_072,
+        maxOutputTokens: 32_768
+      }
+    })
+    expect(entries[1]?.sources).toEqual(['provider-api'])
+
+    const picked = providerModelImportResult(
+      entries,
+      defaultSelectedProviderModelImportKeys(entries)
+    )
+    const profiles = enrichProviderModelProfiles(ollama, picked.chat, picked.catalogModels)
+    expect(picked.chat).toEqual(['gpt-oss:120b', 'ollama-new:model'])
+    expect(profiles['gpt-oss:120b']).toMatchObject({
+      contextWindowTokens: 131_072,
+      maxOutputTokens: 32_768,
+      supportsToolCalling: true,
+      reasoning: {
+        supportedEfforts: ['auto'],
+        defaultEffort: 'auto',
+        requestProtocol: 'none'
+      }
+    })
+    expect(profiles['ollama-new:model']).toBeUndefined()
+  })
+
   it('can preselect existing ids when the provider list is authoritative', () => {
     const entries = buildProviderModelImportEntries(
       provider({ models: ['old-model', 'current-model'] }),
