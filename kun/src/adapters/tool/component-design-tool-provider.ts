@@ -17,29 +17,17 @@ const MAX_EXISTING_IMPLEMENTATION_CHARS = 50_000
 const MAX_SOURCE_FILES = 12
 const MAX_SOURCE_FILE_CHARS = 16_000
 const MAX_SOURCE_CONTEXT_CHARS = 64_000
-const MAX_PROTOTYPE_BYTES = 768 * 1024
 const DEFAULT_VIEWPORT = { width: 720, height: 460 }
-const OFFLINE_CSP = [
-  "default-src 'none'",
-  "style-src 'unsafe-inline'",
-  "script-src 'unsafe-inline'",
-  'img-src data: blob:',
-  'font-src data:',
-  'media-src data: blob:',
-  "connect-src 'none'",
-  "frame-src 'none'",
-  "object-src 'none'",
-  "worker-src 'none'",
-  "base-uri 'none'",
-  "form-action 'none'"
-].join('; ')
 
 const FORBIDDEN_EMBED_RE = /<\s*(?:iframe|webview|object|embed|base)\b/i
-const REMOTE_ATTRIBUTE_RE = /\b(?:src|href|action)\s*=\s*["']?\s*(?:https?:)?\/\//i
-const REMOTE_CSS_RE = /(?:@import\s+(?:url\()?\s*["']?(?:https?:)?\/\/|url\(\s*["']?(?:https?:)?\/\/)/i
 const NETWORK_SCRIPT_RE = /\b(?:fetch|XMLHttpRequest|WebSocket|EventSource)\s*\(/i
 const BROWSER_STORAGE_RE = /\b(?:localStorage|sessionStorage|indexedDB|caches|navigator\.storage)\b/i
 const CSP_META_RE = /<meta\b[^>]*http-equiv\s*=\s*(?:(["'])content-security-policy\1|content-security-policy)[^>]*>\s*/gi
+const REMOTE_URL_RE = /https?:\/\/[^\s"'<>`)}\]]+/gi
+const REMOTE_SCRIPT_SRC_RE = /<script\b[^>]*\bsrc\s*=\s*(["'])(https?:\/\/[^"']+)\1[^>]*>/gi
+const REMOTE_FORM_ACTION_RE = /<form\b[^>]*\baction\s*=\s*(["'])https?:\/\/[^"']+\1/i
+const COMPONENT_ARTIFACT_PATH_RE =
+  /^\.kun-design\/component-prototypes\/[^/]+\/prototype\.html$/i
 
 type ComponentDesignRuntime = Pick<DelegationRuntime, 'enabled' | 'runChild'>
 
@@ -47,12 +35,20 @@ type ComponentDesignArgs = {
   title: string
   request?: string
   html?: string
+  artifactPath?: string
   existingImplementation?: string
   sourceFiles: string[]
   viewport: { width: number; height: number }
+  resourcePolicy: ComponentPrototypeResourcePolicy
 }
 
 export type ComponentPrototypeProducer = 'main-agent' | 'component-designer'
+
+export type ComponentPrototypeResourcePolicy = {
+  assetOrigins: string[]
+  scriptOrigins: string[]
+  connectOrigins: string[]
+}
 
 export type ComponentPrototypePayload = {
   version: 1
@@ -68,6 +64,7 @@ export type ComponentPrototypePayload = {
   contentHash?: string
   summary?: string
   error?: string
+  resourcePolicy?: ComponentPrototypeResourcePolicy
 }
 
 export function buildComponentDesignToolProviders(
@@ -82,7 +79,9 @@ export function buildComponentDesignToolProviders(
       name: COMPONENT_DESIGN_TOOL_NAME,
       description: [
         'Publish one interactive UI component prototype inline in the current conversation.',
-        'Prefer passing complete standalone HTML in `html`; this direct path does not start a child agent and works even when subagents are disabled.',
+        'Prefer passing complete standalone HTML in `html`, or `artifactPath` for an existing large or multi-file artifact; direct publication does not start a child agent.',
+        'The document must start with <!doctype html>, contain complete html/head/body elements, and have no more than one data-kun-component-root; Kun adds missing platform markers.',
+        'Relative local scripts, styles, images, fonts, and media are supported. Remote resources require exact HTTPS origins in resourcePolicy.',
         'If HTML is not ready, pass `request` plus optional existing implementation/sourceFiles to ask the component-designer child agent to generate it.',
         'Do not use for complete pages, multi-page flows, production implementation, or non-UI tasks.'
       ].join(' '),
@@ -106,8 +105,38 @@ export function buildComponentDesignToolProviders(
           html: {
             type: 'string',
             minLength: 1,
-            maxLength: MAX_PROTOTYPE_BYTES,
-            description: 'Complete standalone component HTML to validate, persist, and display directly without a child agent.'
+            description: 'Complete standalone component HTML. Use artifactPath instead for large or multi-file prototypes.'
+          },
+          artifactPath: {
+            type: 'string',
+            minLength: 1,
+            maxLength: 1_024,
+            description: 'Existing workspace-relative .kun-design/component-prototypes/<id>/prototype.html to validate and publish in place.'
+          },
+          resourcePolicy: {
+            type: 'object',
+            properties: {
+              assetOrigins: {
+                type: 'array',
+                maxItems: 24,
+                items: { type: 'string', minLength: 1, maxLength: 256 },
+                description: 'Exact HTTPS origins allowed for remote styles, images, fonts, and media.'
+              },
+              scriptOrigins: {
+                type: 'array',
+                maxItems: 12,
+                items: { type: 'string', minLength: 1, maxLength: 256 },
+                description: 'Exact HTTPS origins explicitly trusted for remote scripts.'
+              },
+              connectOrigins: {
+                type: 'array',
+                maxItems: 24,
+                items: { type: 'string', minLength: 1, maxLength: 256 },
+                description: 'Exact HTTPS origins allowed for fetch, XHR, WebSocket, and EventSource.'
+              }
+            },
+            additionalProperties: false,
+            description: 'Optional least-privilege remote resource policy. Local bundled resources need no policy.'
           },
           existingImplementation: {
             type: 'string',
@@ -135,19 +164,23 @@ export function buildComponentDesignToolProviders(
       execute: async (rawArgs, context, onUpdate) => withToolBoundary(async () => {
         const args = normalizeComponentDesignArgs(rawArgs)
         const artifactId = `component_${randomUUID().replaceAll('-', '')}`
-        const relativePath = componentPrototypeRelativePath(args.title, artifactId)
+        const relativePath = args.artifactPath
+          ? normalizeComponentArtifactPath(args.artifactPath)
+          : componentPrototypeRelativePath(args.title, artifactId)
         const target = await resolveWorkspacePath(relativePath, context, {
           enforceWorkspaceBoundary: true
         })
         assertCanWritePath(target.absolutePath, context)
-        await mkdir(dirname(target.absolutePath), { recursive: true, mode: 0o700 })
-        await writeFile(
-          target.absolutePath,
-          buildPreparingComponentPrototype(args.title),
-          { encoding: 'utf8', mode: 0o600 }
-        )
+        if (!args.artifactPath) {
+          await mkdir(dirname(target.absolutePath), { recursive: true, mode: 0o700 })
+          await writeFile(
+            target.absolutePath,
+            buildPreparingComponentPrototype(args.title),
+            { encoding: 'utf8', mode: 0o600 }
+          )
+        }
 
-        const direct = Boolean(args.html)
+        const direct = Boolean(args.html || args.artifactPath)
         const basePayload: Omit<ComponentPrototypePayload, 'status'> = {
           version: COMPONENT_PROTOTYPE_CONTRACT_VERSION,
           artifactId,
@@ -155,13 +188,21 @@ export function buildComponentDesignToolProviders(
           relativePath: target.relativePath,
           viewport: args.viewport,
           producer: direct ? 'main-agent' : 'component-designer',
-          ...(!direct ? { profile: COMPONENT_DESIGN_PROFILE_NAME } : {})
+          ...(!direct ? { profile: COMPONENT_DESIGN_PROFILE_NAME } : {}),
+          ...(hasRemoteResourcePolicy(args.resourcePolicy) ? { resourcePolicy: args.resourcePolicy } : {})
         }
         await emitComponentPrototypeUpdate(onUpdate, { ...basePayload, status: 'preparing' })
 
-        if (args.html) {
+        if (args.html || args.artifactPath) {
           try {
-            const artifact = await persistComponentPrototypeHtml(target.absolutePath, args.html)
+            const content = args.artifactPath
+              ? await readFile(target.absolutePath, 'utf8')
+              : args.html!
+            const artifact = await persistComponentPrototypeHtml(
+              target.absolutePath,
+              content,
+              args.resourcePolicy
+            )
             return {
               output: componentPrototypeOutput({
                 ...basePayload,
@@ -264,7 +305,11 @@ export function buildComponentDesignToolProviders(
             throw new Error(`component designer wrote unexpected files: ${unexpectedEntries.slice(0, 8).join(', ')}`)
           }
           const generated = await readFile(target.absolutePath, 'utf8')
-          const artifact = await persistComponentPrototypeHtml(target.absolutePath, generated)
+          const artifact = await persistComponentPrototypeHtml(
+            target.absolutePath,
+            generated,
+            args.resourcePolicy
+          )
           return {
             output: componentPrototypeOutput({
               ...basePayload,
@@ -292,8 +337,9 @@ export function buildComponentDesignToolProviders(
 
 function normalizeComponentDesignArgs(raw: Record<string, unknown>): ComponentDesignArgs {
   const request = boundedString(raw.request, 'request', MAX_REQUEST_CHARS, false)
-  const html = boundedString(raw.html, 'html', MAX_PROTOTYPE_BYTES, false)
-  if (!request && !html) throw new Error('either html or request is required')
+  const html = boundedString(raw.html, 'html', Number.MAX_SAFE_INTEGER, false)
+  const artifactPath = boundedString(raw.artifactPath, 'artifactPath', 1_024, false)
+  if (!request && !html && !artifactPath) throw new Error('html, artifactPath, or request is required')
   const title = boundedString(raw.title, 'title', 120, false) || 'UI component'
   const existingImplementation = boundedString(
     raw.existingImplementation,
@@ -312,13 +358,16 @@ function normalizeComponentDesignArgs(raw: Record<string, unknown>): ComponentDe
     : {}
   const width = boundedInteger(viewportRaw.width, DEFAULT_VIEWPORT.width, 280, 1_200, 'viewport.width')
   const height = boundedInteger(viewportRaw.height, DEFAULT_VIEWPORT.height, 240, 900, 'viewport.height')
+  const resourcePolicy = normalizeResourcePolicy(raw.resourcePolicy)
   return {
     title,
     ...(request ? { request } : {}),
     ...(html ? { html } : {}),
+    ...(artifactPath ? { artifactPath } : {}),
     ...(existingImplementation ? { existingImplementation } : {}),
     sourceFiles,
-    viewport: { width, height }
+    viewport: { width, height },
+    resourcePolicy
   }
 }
 
@@ -378,7 +427,7 @@ export function componentPrototypeRelativePath(title: string, artifactId: string
   return `.kun-design/component-prototypes/${slug}-${suffix}/prototype.html`
 }
 
-export function buildComponentDesignerPrompt(input: ComponentDesignArgs & {
+export function buildComponentDesignerPrompt(input: Omit<ComponentDesignArgs, 'resourcePolicy'> & {
   request: string
   relativePath: string
   sourceContext: string
@@ -430,12 +479,11 @@ export function buildComponentDesignerPrompt(input: ComponentDesignArgs & {
   return lines.join('\n')
 }
 
-export function hardenComponentPrototypeHtml(content: string): string {
-  const byteSize = Buffer.byteLength(content, 'utf8')
-  if (byteSize > MAX_PROTOTYPE_BYTES) {
-    throw new Error(`component prototype exceeds ${MAX_PROTOTYPE_BYTES} bytes`)
-  }
-  const trimmed = content.trim()
+export function hardenComponentPrototypeHtml(
+  content: string,
+  resourcePolicy: ComponentPrototypeResourcePolicy = emptyResourcePolicy()
+): string {
+  let trimmed = content.trim()
   if (!trimmed || trimmed.startsWith('```')) throw new Error('component prototype must be raw standalone HTML')
   if (!/^<!doctype\s+html\b/i.test(trimmed)) throw new Error('component prototype must start with <!doctype html>')
   if (!/<html\b[^>]*>/i.test(trimmed) || !/<\/html\s*>\s*$/i.test(trimmed)) {
@@ -448,27 +496,32 @@ export function hardenComponentPrototypeHtml(content: string): string {
     throw new Error('component prototype must contain a complete body element')
   }
   if (!/<meta\b[^>]*name\s*=\s*(["'])kun-component-prototype\1[^>]*>/i.test(trimmed)) {
-    throw new Error('component prototype is missing the kun-component-prototype marker')
+    trimmed = trimmed.replace(
+      /<head\b([^>]*)>/i,
+      '<head$1>\n  <meta name="kun-component-prototype" content="1">'
+    )
   }
-  const roots = trimmed.match(/<[a-z][^>]*\sdata-kun-component-root(?:\s*=\s*(?:["'][^"']*["']|[^\s>]+))?[^>]*>/gi) ?? []
-  if (roots.length !== 1) throw new Error('component prototype must contain exactly one data-kun-component-root')
+  let roots = trimmed.match(/<[a-z][^>]*\sdata-kun-component-root(?:\s*=\s*(?:["'][^"']*["']|[^\s>]+))?[^>]*>/gi) ?? []
+  if (roots.length === 0) {
+    trimmed = trimmed.replace(/<body\b([^>]*)>/i, '<body$1 data-kun-component-root>')
+    roots = ['body']
+  }
+  if (roots.length !== 1) throw new Error('component prototype must contain no more than one data-kun-component-root')
   if (FORBIDDEN_EMBED_RE.test(trimmed)) throw new Error('component prototype contains a forbidden embedded document')
-  if (REMOTE_ATTRIBUTE_RE.test(trimmed) || REMOTE_CSS_RE.test(trimmed)) {
-    throw new Error('component prototype must not load remote resources')
-  }
-  if (NETWORK_SCRIPT_RE.test(trimmed)) throw new Error('component prototype must not perform network requests')
+  validateRemoteResources(trimmed, resourcePolicy)
   if (BROWSER_STORAGE_RE.test(trimmed)) throw new Error('component prototype must not use browser storage')
 
   const withoutExistingCsp = trimmed.replace(CSP_META_RE, '')
-  const csp = `<meta http-equiv="Content-Security-Policy" content="${OFFLINE_CSP}">`
+  const csp = `<meta http-equiv="Content-Security-Policy" content="${componentPrototypeCsp(resourcePolicy)}">`
   return `${withoutExistingCsp.replace(/<head\b([^>]*)>/i, `<head$1>\n  ${csp}`)}\n`
 }
 
 async function persistComponentPrototypeHtml(
   absolutePath: string,
-  content: string
+  content: string,
+  resourcePolicy: ComponentPrototypeResourcePolicy = emptyResourcePolicy()
 ): Promise<{ byteSize: number; contentHash: string }> {
-  const hardened = hardenComponentPrototypeHtml(content)
+  const hardened = hardenComponentPrototypeHtml(content, resourcePolicy)
   await writeFile(absolutePath, hardened, { encoding: 'utf8', mode: 0o600 })
   const info = await stat(absolutePath)
   return {
@@ -537,4 +590,121 @@ function escapeHtml(value: string): string {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;')
+}
+
+function emptyResourcePolicy(): ComponentPrototypeResourcePolicy {
+  return { assetOrigins: [], scriptOrigins: [], connectOrigins: [] }
+}
+
+function hasRemoteResourcePolicy(policy: ComponentPrototypeResourcePolicy): boolean {
+  return policy.assetOrigins.length + policy.scriptOrigins.length + policy.connectOrigins.length > 0
+}
+
+function normalizeResourcePolicy(value: unknown): ComponentPrototypeResourcePolicy {
+  if (value === undefined || value === null) return emptyResourcePolicy()
+  if (typeof value !== 'object' || Array.isArray(value)) throw new Error('resourcePolicy must be an object')
+  const record = value as Record<string, unknown>
+  return {
+    assetOrigins: normalizeOrigins(record.assetOrigins, 'resourcePolicy.assetOrigins', 24),
+    scriptOrigins: normalizeOrigins(record.scriptOrigins, 'resourcePolicy.scriptOrigins', 12),
+    connectOrigins: normalizeOrigins(record.connectOrigins, 'resourcePolicy.connectOrigins', 24)
+  }
+}
+
+function normalizeOrigins(value: unknown, field: string, maxItems: number): string[] {
+  if (value === undefined) return []
+  if (!Array.isArray(value)) throw new Error(`${field} must be an array`)
+  if (value.length > maxItems) throw new Error(`${field} may contain at most ${maxItems} origins`)
+  return [...new Set(value.map((entry, index) => {
+    if (typeof entry !== 'string') throw new Error(`${field}[${index}] must be a string`)
+    let url: URL
+    try {
+      url = new URL(entry.trim())
+    } catch {
+      throw new Error(`${field}[${index}] must be an exact HTTPS origin`)
+    }
+    const host = url.hostname.toLowerCase()
+    if (
+      url.protocol !== 'https:'
+      || url.username
+      || url.password
+      || url.pathname !== '/'
+      || url.search
+      || url.hash
+      || isLocalOrPrivateHost(host)
+    ) {
+      throw new Error(`${field}[${index}] must be a public exact HTTPS origin`)
+    }
+    return url.origin
+  }))]
+}
+
+function isLocalOrPrivateHost(host: string): boolean {
+  if (host === 'localhost' || host.endsWith('.localhost') || host === '::1' || host === '[::1]') return true
+  const parts = host.split('.').map(Number)
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return false
+  return parts[0] === 10
+    || parts[0] === 127
+    || (parts[0] === 169 && parts[1] === 254)
+    || (parts[0] === 172 && (parts[1] ?? 0) >= 16 && (parts[1] ?? 0) <= 31)
+    || (parts[0] === 192 && parts[1] === 168)
+}
+
+function normalizeComponentArtifactPath(path: string): string {
+  const normalized = path.trim().replaceAll('\\', '/')
+  if (!COMPONENT_ARTIFACT_PATH_RE.test(normalized) || normalized.split('/').includes('..')) {
+    throw new Error('artifactPath must match .kun-design/component-prototypes/<id>/prototype.html')
+  }
+  return normalized
+}
+
+function componentPrototypeCsp(policy: ComponentPrototypeResourcePolicy): string {
+  const sources = (base: string[], origins: string[]): string => [...base, ...origins].join(' ')
+  return [
+    "default-src 'none'",
+    `style-src ${sources(["'unsafe-inline'", "'self'"], policy.assetOrigins)}`,
+    `script-src ${sources(["'unsafe-inline'", "'self'"], policy.scriptOrigins)}`,
+    `img-src ${sources(["'self'", 'data:', 'blob:'], policy.assetOrigins)}`,
+    `font-src ${sources(["'self'", 'data:'], policy.assetOrigins)}`,
+    `media-src ${sources(["'self'", 'data:', 'blob:'], policy.assetOrigins)}`,
+    policy.connectOrigins.length > 0 ? `connect-src ${policy.connectOrigins.join(' ')}` : "connect-src 'none'",
+    "frame-src 'none'",
+    "object-src 'none'",
+    "worker-src 'none'",
+    "base-uri 'none'",
+    "form-action 'none'"
+  ].join('; ')
+}
+
+function validateRemoteResources(
+  html: string,
+  policy: ComponentPrototypeResourcePolicy
+): void {
+  if (REMOTE_FORM_ACTION_RE.test(html)) throw new Error('component prototype must not submit remote forms')
+  const allowed = new Set([
+    ...policy.assetOrigins,
+    ...policy.scriptOrigins,
+    ...policy.connectOrigins
+  ])
+  const urls = html.match(REMOTE_URL_RE) ?? []
+  for (const raw of urls) {
+    let origin = ''
+    try {
+      origin = new URL(raw).origin
+    } catch {
+      throw new Error(`component prototype contains an invalid remote URL: ${raw.slice(0, 120)}`)
+    }
+    if (!allowed.has(origin)) {
+      throw new Error(`component prototype uses undeclared remote origin: ${origin}`)
+    }
+  }
+  for (const match of html.matchAll(REMOTE_SCRIPT_SRC_RE)) {
+    const origin = new URL(match[2]!).origin
+    if (!policy.scriptOrigins.includes(origin)) {
+      throw new Error(`component prototype remote script origin is not explicitly trusted: ${origin}`)
+    }
+  }
+  if (NETWORK_SCRIPT_RE.test(html) && policy.connectOrigins.length === 0) {
+    throw new Error('component prototype network requests require resourcePolicy.connectOrigins')
+  }
 }

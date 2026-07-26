@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { TurnItem } from '../contracts/items.js'
 import { applyRequestHistoryHygiene } from './request-history-hygiene.js'
 
-function toolResult(id: string, output: string): TurnItem {
+function toolResult(id: string, output: string, isError = false): TurnItem {
   return {
     id: `item_${id}`,
     turnId: 'turn_1',
@@ -15,7 +15,23 @@ function toolResult(id: string, output: string): TurnItem {
     callId: id,
     toolKind: 'tool_call',
     output,
-    isError: false
+    isError
+  } as TurnItem
+}
+
+function toolCall(id: string, argument: string): TurnItem {
+  return {
+    id: `call_${id}`,
+    turnId: 'turn_1',
+    threadId: 'thread_1',
+    role: 'assistant',
+    status: 'completed',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    kind: 'tool_call',
+    toolName: 'design_component',
+    callId: id,
+    toolKind: 'file_change',
+    arguments: { html: argument }
   } as TurnItem
 }
 
@@ -67,5 +83,36 @@ describe('applyRequestHistoryHygiene cumulative tool-result budget', () => {
       maxToolResultLines: 100_000
     })
     expect(out).toBe(items)
+  })
+
+  it('preserves large arguments for failed tool calls so the next model step can repair them', () => {
+    const html = `<!doctype html>${'x'.repeat(12_000)}`
+    const items = [
+      toolCall('failed', html),
+      toolResult('failed', 'component prototype is invalid', true)
+    ]
+
+    const out = applyRequestHistoryHygiene(items, {
+      maxToolArgumentStringBytes: 512,
+      maxToolArgumentStringTokens: 128
+    })
+
+    expect(out[0]?.kind === 'tool_call' ? out[0].arguments.html : '').toBe(html)
+  })
+
+  it('still compacts large arguments after a successful tool result', () => {
+    const html = `<!doctype html>${'x'.repeat(12_000)}`
+    const items = [
+      toolCall('completed', html),
+      toolResult('completed', 'published')
+    ]
+
+    const out = applyRequestHistoryHygiene(items, {
+      maxToolArgumentStringBytes: 512,
+      maxToolArgumentStringTokens: 128
+    })
+
+    expect(out[0]?.kind === 'tool_call' ? out[0].arguments.html : '')
+      .toContain('cache hygiene: omitted completed design_component.html argument')
   })
 })

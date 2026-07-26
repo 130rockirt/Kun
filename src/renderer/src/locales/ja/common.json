@@ -2801,6 +2801,8 @@
   "componentPrototypeDesktop": "デスクトップ",
   "componentPrototypeMobile": "モバイル",
   "componentPrototypeRefresh": "プロトタイプを更新する",
+  "componentPrototypeResize": "プロトタイプの高さを変更",
+  "componentPrototypeResetSize": "プレビューサイズをリセット",
   "componentPrototypeCopyCode": "プロトタイプコードをコピーする",
   "componentPrototypeLoadFailed": "プロトタイプをロードできませんでした。",
   "componentPrototypeMainAgent": "クン",

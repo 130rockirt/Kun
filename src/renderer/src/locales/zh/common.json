@@ -2801,6 +2801,8 @@
   "componentPrototypeDesktop": "桌面端",
   "componentPrototypeMobile": "移动端",
   "componentPrototypeRefresh": "刷新交互稿",
+  "componentPrototypeResize": "调整交互稿高度",
+  "componentPrototypeResetSize": "重置预览尺寸",
   "componentPrototypeCopyCode": "复制交互稿代码",
   "componentPrototypeLoadFailed": "交互稿无法加载。",
   "componentPrototypeMainAgent": "Kun",

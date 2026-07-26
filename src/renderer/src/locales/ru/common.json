@@ -2801,6 +2801,8 @@
   "componentPrototypeDesktop": "Рабочий стол",
   "componentPrototypeMobile": "мобильный",
   "componentPrototypeRefresh": "Обновить прототип",
+  "componentPrototypeResize": "Изменить высоту прототипа",
+  "componentPrototypeResetSize": "Сбросить размер предпросмотра",
   "componentPrototypeCopyCode": "Скопировать код прототипа",
   "componentPrototypeLoadFailed": "Прототип не удалось загрузить.",
   "componentPrototypeMainAgent": "Кун",

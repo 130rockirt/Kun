@@ -2801,6 +2801,8 @@
   "componentPrototypeDesktop": "เดสก์ท็อป",
   "componentPrototypeMobile": "มือถือ",
   "componentPrototypeRefresh": "รีเฟรชต้นแบบ",
+  "componentPrototypeResize": "ปรับความสูงต้นแบบ",
+  "componentPrototypeResetSize": "รีเซ็ตขนาดตัวอย่าง",
   "componentPrototypeCopyCode": "คัดลอกรหัสต้นแบบ",
   "componentPrototypeLoadFailed": "ไม่สามารถโหลดต้นแบบได้",
   "componentPrototypeMainAgent": "คุน",

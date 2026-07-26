@@ -2801,6 +2801,8 @@
   "componentPrototypeDesktop": "데스크탑",
   "componentPrototypeMobile": "모바일",
   "componentPrototypeRefresh": "프로토타입 새로 고침",
+  "componentPrototypeResize": "프로토타입 높이 조절",
+  "componentPrototypeResetSize": "미리보기 크기 재설정",
   "componentPrototypeCopyCode": "프로토타입 코드 복사",
   "componentPrototypeLoadFailed": "프로토타입을 로드할 수 없습니다.",
   "componentPrototypeMainAgent": "쿤",

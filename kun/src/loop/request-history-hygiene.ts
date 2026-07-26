@@ -71,10 +71,10 @@ export function applyRequestHistoryHygiene(
   scope: RequestHistoryHygieneScope = {}
 ): TurnItem[] {
   const limits = normalizeOptions(options)
-  const pairedToolCallIds = new Set(
+  const compactableToolCallIds = new Set(
     items
       .flatMap((item) =>
-        shouldCleanItem(item, scope) && item.kind === 'tool_result'
+        shouldCleanItem(item, scope) && item.kind === 'tool_result' && item.isError !== true
           ? [item.callId]
           : []
       )
@@ -92,7 +92,7 @@ export function applyRequestHistoryHygiene(
       changed = true
       return { ...item, output: output.value }
     }
-    if (item.kind === 'tool_call' && pairedToolCallIds.has(item.callId)) {
+    if (item.kind === 'tool_call' && compactableToolCallIds.has(item.callId)) {
       const args = compactCompletedToolArguments(item.arguments, {
         toolName: item.toolName,
         maxStringBytes: limits.maxToolArgumentStringBytes,

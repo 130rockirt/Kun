@@ -2801,6 +2801,8 @@
   "componentPrototypeDesktop": "डेस्कटॉप",
   "componentPrototypeMobile": "मोबाइल",
   "componentPrototypeRefresh": "प्रोटोटाइप ताज़ा करें",
+  "componentPrototypeResize": "प्रोटोटाइप की ऊंचाई बदलें",
+  "componentPrototypeResetSize": "पूर्वावलोकन आकार रीसेट करें",
   "componentPrototypeCopyCode": "प्रोटोटाइप कोड कॉपी करें",
   "componentPrototypeLoadFailed": "प्रोटोटाइप लोड नहीं किया जा सका.",
   "componentPrototypeMainAgent": "कुं",

@@ -2801,6 +2801,8 @@
   "componentPrototypeDesktop": "Desktop",
   "componentPrototypeMobile": "Mobile",
   "componentPrototypeRefresh": "Refresh prototype",
+  "componentPrototypeResize": "Resize prototype height",
+  "componentPrototypeResetSize": "Reset preview size",
   "componentPrototypeCopyCode": "Copy prototype code",
   "componentPrototypeLoadFailed": "The prototype could not be loaded.",
   "componentPrototypeMainAgent": "Kun",
