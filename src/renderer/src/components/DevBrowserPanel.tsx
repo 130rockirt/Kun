@@ -101,6 +101,15 @@ type LoadOptions = {
   keepAutoFollow?: boolean
 }
 
+export type DevBrowserPanelProps = {
+  blocks: ChatBlock[]
+  preferredUrl?: string | null
+  className?: string
+  onCollapse: () => void
+  embedded?: boolean
+  onTitleChange?: (title: string) => void
+}
+
 export function resolveInitialDevBrowserUrl(input: {
   normalizedPreferredUrl?: string | null
   storedUrl?: string | null
@@ -116,21 +125,18 @@ export function canUseElectronWebviewEnvironment(input: {
   return input.openExternalAvailable && /\bElectron\//.test(input.userAgent)
 }
 
-export function DevBrowserPanel({
+export function DevBrowserPanel(props: DevBrowserPanelProps): ReactElement {
+  return <DevPreviewPanel {...props} />
+}
+
+function DevPreviewPanel({
   blocks,
   preferredUrl,
   className,
   onCollapse,
   embedded = false,
   onTitleChange
-}: {
-  blocks: ChatBlock[]
-  preferredUrl?: string | null
-  className?: string
-  onCollapse: () => void
-  embedded?: boolean
-  onTitleChange?: (title: string) => void
-}): ReactElement {
+}: DevBrowserPanelProps): ReactElement {
   const { t } = useTranslation('common')
   const webviewRef = useRef<DevWebviewTag | null>(null)
   const iframeLoadedUrlRef = useRef<string | null>(null)

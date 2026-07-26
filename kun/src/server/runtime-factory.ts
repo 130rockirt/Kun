@@ -66,6 +66,7 @@ import { buildComponentDesignToolProviders } from '../adapters/tool/component-de
 import { buildWebToolProviders } from '../adapters/tool/web-tool-provider.js'
 import { buildImageGenToolProviders } from '../adapters/tool/image-gen-tool-provider.js'
 import { buildComputerUseToolProviders } from '../adapters/tool/computer-use-tool-provider.js'
+import { buildBrowserUseToolProviders } from '../adapters/tool/browser-use-tool-provider.js'
 import { buildOfficeCliToolProviders } from '../adapters/tool/office-cli-tool-provider.js'
 import {
   buildMusicGenToolProviders,
@@ -822,6 +823,7 @@ export async function createKunServeRuntime(
 	  let musicGenProviders = buildMusicGenToolProviders(activeOptions.capabilities?.musicGen, { nowIso })
 	  let videoGenProviders = buildVideoGenToolProviders(activeOptions.capabilities?.videoGen, { nowIso })
 	  let computerUseProviders = await buildComputerUseToolProviders(activeOptions.capabilities?.computerUse)
+	  let browserUseProviders = buildBrowserUseToolProviders(activeOptions.capabilities?.browserUse)
   const designCanvasProvider = {
     id: 'design-canvas',
     kind: 'gui' as const,
@@ -878,8 +880,8 @@ export async function createKunServeRuntime(
     pptMasterProvider,
     designCanvasProvider,
     // NOTE: computer_use is intentionally NOT in baseToolProviders — host
-    // control must not be delegable to subagents. It is added to the main
-    // registry only (below).
+    // control must not be delegable to subagents. browser_use follows the
+    // same primary-only rule and is added to the main registry below.
   ]
   // Builtin hooks are first-party and always assembled before config hooks.
   // The design-quality linter folds findings into write/edit results so the
@@ -1105,6 +1107,11 @@ export async function createKunServeRuntime(
     computerUse: {
       available: computerUseProviders.available,
       reason: computerUseProviders.diagnostics.find((diagnostic) => diagnostic.reason)?.reason
+    },
+    browserUse: {
+      available: browserUseProviders.available,
+      interactionRequired: browserUseProviders.interactionRequired,
+      reason: browserUseProviders.reason
     }
   })
 	  let registry = new CapabilityRegistry([
@@ -1112,6 +1119,7 @@ export async function createKunServeRuntime(
     // Host control is available to the top-level agent only, never to
     // delegated subagents (which use childRegistry/baseToolProviders).
     ...computerUseProviders.providers,
+    ...browserUseProviders.providers,
     {
       id: 'goal',
       kind: 'built-in' as const,
@@ -1834,6 +1842,11 @@ export async function createKunServeRuntime(
 	    computerUse: {
 	      available: computerUseProviders.available,
 	      reason: computerUseProviders.diagnostics.find((diagnostic) => diagnostic.reason)?.reason
+	    },
+	    browserUse: {
+	      available: browserUseProviders.available,
+	      interactionRequired: browserUseProviders.interactionRequired,
+	      reason: browserUseProviders.reason
 	    }
 	  })
 	  let applyConfigQueue: Promise<RuntimeConfigApplyResponse> = Promise.resolve({ ok: true })
@@ -1925,6 +1938,7 @@ export async function createKunServeRuntime(
 	    const nextMusicGenProviders = buildMusicGenToolProviders(nextOptions.capabilities?.musicGen, { nowIso })
 	    const nextVideoGenProviders = buildVideoGenToolProviders(nextOptions.capabilities?.videoGen, { nowIso })
 	    const nextComputerUseProviders = await buildComputerUseToolProviders(nextOptions.capabilities?.computerUse)
+	    const nextBrowserUseProviders = buildBrowserUseToolProviders(nextOptions.capabilities?.browserUse)
 	    const nextPptMasterProvider = {
 	      id: 'ppt-master',
 	      kind: 'skill' as const,
@@ -1975,6 +1989,7 @@ export async function createKunServeRuntime(
 	    const nextRegistry = new CapabilityRegistry([
 	      ...nextBaseToolProviders,
 	      ...nextComputerUseProviders.providers,
+	      ...nextBrowserUseProviders.providers,
 	      {
 	        id: 'goal',
 	        kind: 'built-in' as const,
@@ -2087,6 +2102,7 @@ export async function createKunServeRuntime(
 	    musicGenProviders = nextMusicGenProviders
 	    videoGenProviders = nextVideoGenProviders
 	    computerUseProviders = nextComputerUseProviders
+	    browserUseProviders = nextBrowserUseProviders
 	    resolvedHooks = nextResolvedHooks
 	    baseToolProviders = nextBaseToolProviders
 	    childRegistry = nextChildRegistry

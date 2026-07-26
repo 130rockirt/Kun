@@ -84,6 +84,11 @@ import {
   videoGenConfigForRuntime
 } from './runtime/kun-runtime-capability-config'
 import {
+  KUN_BROWSER_USE_BRIDGE_TOKEN_ENV,
+  KUN_BROWSER_USE_BRIDGE_URL_ENV
+} from '../../kun/src/contracts/browser-use.js'
+import { prepareBrowserUseHostForKunLaunch } from './browser-use/browser-use-host'
+import {
   buildGuiScheduleKunMcpServer,
   GUI_SCHEDULE_MCP_SERVER_NAME,
   readGuiManagedMcpServers,
@@ -406,13 +411,26 @@ async function prepareKunLaunch(
     appRoot: root,
     explicitPath: process.env.KUN_OFFICECLI_BINARY
   })
+  const browserUseBridge = runtime.browserUse.enabled
+    ? await prepareBrowserUseHostForKunLaunch()
+    : undefined
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     DEEPSEEK_API_KEY: defaultClientApiKey || process.env.DEEPSEEK_API_KEY || '',
     ...(activeProviderKind ? { KUN_RUNTIME_PROVIDER_KIND: activeProviderKind } : {}),
     ...(claudeBinary ? { KUN_CLAUDE_BINARY: claudeBinary } : {}),
     ...(antigravityBinary ? { KUN_ANTIGRAVITY_BINARY: antigravityBinary } : {}),
-    ...(officeCliBinary ? { KUN_OFFICECLI_BINARY: officeCliBinary } : {})
+    ...(officeCliBinary ? { KUN_OFFICECLI_BINARY: officeCliBinary } : {}),
+    ...(browserUseBridge
+      ? {
+          [KUN_BROWSER_USE_BRIDGE_URL_ENV]: browserUseBridge.url,
+          [KUN_BROWSER_USE_BRIDGE_TOKEN_ENV]: browserUseBridge.token
+        }
+      : {})
+  }
+  if (!browserUseBridge) {
+    delete env[KUN_BROWSER_USE_BRIDGE_URL_ENV]
+    delete env[KUN_BROWSER_USE_BRIDGE_TOKEN_ENV]
   }
   const bundledExtensionsDirectory = availableBundledExtensionsDirectory({
     isPackaged: app.isPackaged,

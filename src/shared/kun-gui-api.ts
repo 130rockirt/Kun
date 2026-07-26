@@ -35,6 +35,13 @@ import type {
   GuiUpdateState
 } from './gui-update'
 import type {
+  BrowserUseControlInput,
+  BrowserUseDecisionInput,
+  BrowserUseMountInput,
+  BrowserUseNavigationInput,
+  BrowserUseViewState
+} from './browser-use'
+import type {
   ClipboardImageReadResult,
   LocalPdfTextReadResult,
   LocalPdfTextTarget,
@@ -903,6 +910,15 @@ export type KunGuiApi = ExtensionIpcApi & {
   requestComputerUsePermission: (
     kind: ComputerUsePermissionKind
   ) => Promise<ComputerUsePermissions>
+  getBrowserUseState: (threadId: string) => Promise<BrowserUseViewState>
+  mountBrowserUse: (input: BrowserUseMountInput) => Promise<BrowserUseViewState>
+  decideBrowserUseOrigin: (input: BrowserUseDecisionInput) => Promise<BrowserUseViewState>
+  decideBrowserUseAction: (input: BrowserUseDecisionInput) => Promise<BrowserUseViewState>
+  setBrowserUseControl: (input: BrowserUseControlInput) => Promise<BrowserUseViewState>
+  navigateBrowserUse: (input: BrowserUseNavigationInput) => Promise<BrowserUseViewState>
+  stopBrowserUse: (threadId: string) => Promise<BrowserUseViewState>
+  clearBrowserUse: (threadId: string) => Promise<BrowserUseViewState>
+  onBrowserUseState: (handler: (state: BrowserUseViewState) => void) => () => void
   showTurnCompleteNotification: (
     payload: TurnCompleteNotificationPayload
   ) => Promise<SystemNotificationResult>

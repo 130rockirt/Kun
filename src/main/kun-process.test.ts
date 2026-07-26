@@ -165,6 +165,44 @@ describe('startKunChild', () => {
     expect(logText).toContain(`ready marker received on port ${testKunPort}`)
   })
 
+  it('removes inherited Browser Use bridge authority when the feature is disabled', async () => {
+    const previousUrl = process.env.KUN_BROWSER_USE_BRIDGE_URL
+    const previousToken = process.env.KUN_BROWSER_USE_BRIDGE_TOKEN
+    process.env.KUN_BROWSER_USE_BRIDGE_URL = 'http://127.0.0.1:65535'
+    process.env.KUN_BROWSER_USE_BRIDGE_TOKEN = 'inherited-secret-token'
+    const script = writeScript(
+      'disabled-browser-use-env-child.js',
+      [
+        "const http = require('node:http')",
+        `const port = ${testKunPort}`,
+        "process.stdout.write('BRIDGE_URL=' + String(process.env.KUN_BROWSER_USE_BRIDGE_URL) + '\\n')",
+        "process.stdout.write('BRIDGE_TOKEN=' + String(process.env.KUN_BROWSER_USE_BRIDGE_TOKEN) + '\\n')",
+        "const server = http.createServer((_req, res) => {",
+        "  res.setHeader('content-type', 'application/json')",
+        "  res.end(JSON.stringify({ service: 'kun', mode: 'serve', status: 'ok' }))",
+        "})",
+        "server.listen(port, '127.0.0.1', () => {",
+        "  process.stdout.write('KUN_READY ' + JSON.stringify({ service: 'kun', mode: 'serve', port }) + '\\n')",
+        "})",
+        "setInterval(() => {}, 1_000)"
+      ].join('\n')
+    )
+    try {
+      const module = await import('./kun-process')
+      await module.startKunChild(createSettings(script))
+      await module.stopKunChildAndWait()
+      const logText = await readKunLog()
+      expect(logText).toContain('BRIDGE_URL=undefined')
+      expect(logText).toContain('BRIDGE_TOKEN=undefined')
+      expect(logText).not.toContain('inherited-secret-token')
+    } finally {
+      if (previousUrl === undefined) delete process.env.KUN_BROWSER_USE_BRIDGE_URL
+      else process.env.KUN_BROWSER_USE_BRIDGE_URL = previousUrl
+      if (previousToken === undefined) delete process.env.KUN_BROWSER_USE_BRIDGE_TOKEN
+      else process.env.KUN_BROWSER_USE_BRIDGE_TOKEN = previousToken
+    }
+  })
+
   it('does not settle on the ready marker until the /health endpoint responds', async () => {
     if (!tempRoot) throw new Error('temp root not initialized')
     const healthSignalPath = join(tempRoot, 'allow-health')
@@ -720,6 +758,18 @@ describe('syncGuiManagedKunConfig', () => {
     expect(parsed.capabilities.attachments).toMatchObject({ enabled: true })
     expect(parsed.capabilities.memory).toMatchObject({ enabled: false })
     expect(parsed.capabilities.instructions).toMatchObject({ enabled: true })
+    expect(parsed.capabilities.browserUse).toEqual({
+      enabled: true,
+      mode: 'public',
+      approvalMode: 'auto-safe',
+      maxTabs: 2,
+      maxObservationActionsPerTurn: 30,
+      maxInteractionActionsPerTurn: 12,
+      maxSnapshotNodes: 250,
+      maxSnapshotTextChars: 20000,
+      maxImageDimension: 1280,
+      idleTimeoutMs: 300000
+    })
     // Subagents have no GUI enable toggle: they default ON so delegate_task + the
     // built-in profiles are always offered. maxParallel/maxChildRuns must be >=1 or
     // DelegationRuntime can never run a child. This locks the default against regressions.

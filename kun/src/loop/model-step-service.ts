@@ -69,6 +69,7 @@ import type { RoundOutcomeCoordinator } from './round-outcome-coordinator.js'
 import { svgArtifactCompletionState } from './svg-artifact-completion.js'
 import {
   rehydrateGeneratedImagesForForward,
+  rehydrateTransientBrowserUseOutputsForForward,
   MAX_FORWARDED_GENERATED_IMAGES
 } from './tool-result-image.js'
 import {
@@ -483,7 +484,7 @@ export class ModelStepService {
     // already-persisted attachment/file; the persisted tool output keeps NO base64
     // (only this transient request copy carries it).
     const forwardHistory = await rehydrateGeneratedImagesForForward(
-      history,
+      rehydrateTransientBrowserUseOutputsForForward(history),
       (output) => this.deps.turnAttachments.resolveGeneratedImageForForward(output, threadId, thread?.workspace),
       MAX_FORWARDED_GENERATED_IMAGES
     )

@@ -412,6 +412,18 @@ const kunRuntimePatchSchema = z.object({
     maxImageDimension: z.number().int().positive().max(4096).optional(),
     maxActionsPerTurn: z.number().int().positive().max(1000).optional()
   }).strict().optional(),
+  browserUse: z.object({
+    enabled: z.boolean().optional(),
+    mode: z.enum(['public', 'local-development']).optional(),
+    approvalMode: z.enum(['auto-safe', 'always-ask']).optional(),
+    maxTabs: z.number().int().min(1).max(3).optional(),
+    maxObservationActionsPerTurn: z.number().int().min(1).max(100).optional(),
+    maxInteractionActionsPerTurn: z.number().int().min(1).max(50).optional(),
+    maxSnapshotNodes: z.number().int().min(10).max(500).optional(),
+    maxSnapshotTextChars: z.number().int().min(1000).max(50_000).optional(),
+    maxImageDimension: z.number().int().min(320).max(2048).optional(),
+    idleTimeoutMs: z.number().int().min(30_000).max(1_800_000).optional()
+  }).strict().optional(),
   // 兼容旧版保存的独立视觉识别设置。当前能力已经迁移到 provider modelProfiles。
   imageRecognition: z.unknown().optional(),
   modelProfiles: z.record(

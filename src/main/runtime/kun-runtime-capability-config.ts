@@ -31,6 +31,25 @@ export function computerUseConfigForRuntime(
   }
 }
 
+export function browserUseConfigForRuntime(
+  value: Pick<KunRuntimeSettingsV1, 'browserUse'>['browserUse'],
+  existing: Record<string, unknown>
+): Record<string, unknown> {
+  return {
+    ...existing,
+    enabled: value.enabled,
+    mode: value.mode,
+    approvalMode: value.approvalMode,
+    maxTabs: value.maxTabs,
+    maxObservationActionsPerTurn: value.maxObservationActionsPerTurn,
+    maxInteractionActionsPerTurn: value.maxInteractionActionsPerTurn,
+    maxSnapshotNodes: value.maxSnapshotNodes,
+    maxSnapshotTextChars: value.maxSnapshotTextChars,
+    maxImageDimension: value.maxImageDimension,
+    idleTimeoutMs: value.idleTimeoutMs
+  }
+}
+
 export function imageGenConfigForRuntime(
   value: Pick<KunRuntimeSettingsV1, 'imageGeneration'>['imageGeneration'],
   existing: Record<string, unknown>

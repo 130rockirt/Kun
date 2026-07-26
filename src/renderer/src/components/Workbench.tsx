@@ -27,6 +27,7 @@ import { useWorkbenchUiRuntime } from './workbench/useWorkbenchUiRuntime'
 import { useWorkbenchAttachmentRuntime } from './workbench/useWorkbenchAttachmentRuntime'
 import { useWorkbenchDesignAgentRuntime } from './workbench/useWorkbenchDesignAgentRuntime'
 import { WorkbenchImageAnnotationHost } from './workbench/WorkbenchImageAnnotationHost'
+import { AgentBrowserFloatingPreview } from './AgentBrowserFloatingPreview'
 import { isWriteThreadId } from '../write/write-thread-registry'
 import { useSddDraftStore } from '../sdd/sdd-draft-store'
 import {
@@ -996,6 +997,7 @@ export function Workbench(): ReactElement {
       },
       extensionItems: extensionRightRailItems,
       extensionViews: extensionRightPanelItems,
+      onOpen: openRightPanelTab,
       onActivate: activateRightPanelTab,
       onClose: closeCodeRightTool,
       onNewSideConversation: openSideConversationDraft
@@ -1230,6 +1232,7 @@ export function Workbench(): ReactElement {
         }}
       />
       )}
+      <AgentBrowserFloatingPreview activeThreadId={activeThreadId} />
       {activeExtensionAuxiliaryPanel ? (
         <div className="ds-no-drag h-[min(38vh,360px)] min-h-48 shrink-0 border-t border-ds-border-muted">
           <ExtensionViewOutlet

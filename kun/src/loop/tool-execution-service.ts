@@ -5,6 +5,7 @@ import type { ToolCallLike, ToolHost, ToolHostContext, ToolHostResult } from '..
 import type { RuntimeEventRecorder } from '../services/runtime-event-recorder.js'
 import type { TurnService } from '../services/turn-service.js'
 import { InflightTracker } from './inflight-tracker.js'
+import { prepareBrowserUseToolResultForPersistence } from './tool-result-image.js'
 
 export type PlanWrittenCallback = (input: {
   threadId: string
@@ -83,7 +84,10 @@ export class ToolExecutionService {
       status: result.item.kind === 'tool_result' && result.item.isError ? 'failed' : 'completed',
       finishedAt: this.deps.nowIso()
     } as Partial<TurnItem>)
-    await this.deps.turns.applyItem(threadId, result.item)
+    await this.deps.turns.applyItem(
+      threadId,
+      prepareBrowserUseToolResultForPersistence(result.item)
+    )
     await this.afterResultPersisted(threadId, turnId, call, result)
   }
 

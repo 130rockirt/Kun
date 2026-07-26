@@ -26,6 +26,7 @@ import {
   normalizeModelEndpointFormat,
   type AppSettingsV1,
   type KunComputerUseSettingsV1,
+  type KunBrowserUseSettingsV1,
   type KunContextCompactionSettingsV1,
   type KunDesignQualitySettingsV1,
   type KunDesignQualityStrictness,
@@ -184,6 +185,7 @@ export function defaultKunRuntimeSettings(
     memoryEnabled: false,
     instructions: defaultKunInstructionSettings(),
     computerUse: defaultKunComputerUseSettings(),
+    browserUse: defaultKunBrowserUseSettings(),
     quality: defaultKunQualitySettings(),
     graph: defaultKunGraphSettings()
   }
@@ -218,6 +220,21 @@ export function defaultKunComputerUseSettings(): KunComputerUseSettingsV1 {
     mode: 'auto',
     maxImageDimension: 1280,
     maxActionsPerTurn: 40
+  }
+}
+
+export function defaultKunBrowserUseSettings(): KunBrowserUseSettingsV1 {
+  return {
+    enabled: true,
+    mode: 'public',
+    approvalMode: 'auto-safe',
+    maxTabs: 2,
+    maxObservationActionsPerTurn: 30,
+    maxInteractionActionsPerTurn: 12,
+    maxSnapshotNodes: 250,
+    maxSnapshotTextChars: 20_000,
+    maxImageDimension: 1280,
+    idleTimeoutMs: 5 * 60_000
   }
 }
 
@@ -504,6 +521,11 @@ export function mergeKunRuntimeSettings(
     ...currentComputerUse,
     ...(patch?.computerUse ?? {})
   })
+  const currentBrowserUse = normalizeKunBrowserUseSettings(current.browserUse)
+  const nextBrowserUse = normalizeKunBrowserUseSettings({
+    ...currentBrowserUse,
+    ...(patch?.browserUse ?? {})
+  })
   const currentQuality = normalizeKunQualitySettings(current.quality)
   const nextQuality = normalizeKunQualitySettings({
     ...currentQuality,
@@ -622,6 +644,7 @@ export function mergeKunRuntimeSettings(
     memoryEnabled: patch?.memoryEnabled ?? current.memoryEnabled ?? false,
     instructions: nextInstructions,
     computerUse: nextComputerUse,
+    browserUse: nextBrowserUse,
     quality: nextQuality,
     graph: nextGraph,
     ...(nextSubagents !== undefined ? { subagents: nextSubagents } : {})
@@ -885,6 +908,42 @@ function normalizeKunComputerUseSettings(
     mode,
     maxImageDimension: boundedPositiveInt(input?.maxImageDimension, defaults.maxImageDimension, 4096),
     maxActionsPerTurn: boundedPositiveInt(input?.maxActionsPerTurn, defaults.maxActionsPerTurn, 1000)
+  }
+}
+
+function normalizeKunBrowserUseSettings(
+  input: Partial<KunBrowserUseSettingsV1> | undefined
+): KunBrowserUseSettingsV1 {
+  const defaults = defaultKunBrowserUseSettings()
+  return {
+    enabled: input?.enabled !== false,
+    mode: input?.mode === 'local-development' ? 'local-development' : 'public',
+    approvalMode: input?.approvalMode === 'always-ask' ? 'always-ask' : 'auto-safe',
+    maxTabs: boundedPositiveInt(input?.maxTabs, defaults.maxTabs, 3),
+    maxObservationActionsPerTurn: boundedPositiveInt(
+      input?.maxObservationActionsPerTurn,
+      defaults.maxObservationActionsPerTurn,
+      100
+    ),
+    maxInteractionActionsPerTurn: boundedPositiveInt(
+      input?.maxInteractionActionsPerTurn,
+      defaults.maxInteractionActionsPerTurn,
+      50
+    ),
+    maxSnapshotNodes: boundedPositiveInt(input?.maxSnapshotNodes, defaults.maxSnapshotNodes, 500),
+    maxSnapshotTextChars: boundedPositiveInt(
+      input?.maxSnapshotTextChars,
+      defaults.maxSnapshotTextChars,
+      50_000
+    ),
+    maxImageDimension: Math.max(
+      320,
+      boundedPositiveInt(input?.maxImageDimension, defaults.maxImageDimension, 2048)
+    ),
+    idleTimeoutMs: Math.max(
+      30_000,
+      boundedPositiveInt(input?.idleTimeoutMs, defaults.idleTimeoutMs, 30 * 60_000)
+    )
   }
 }
 

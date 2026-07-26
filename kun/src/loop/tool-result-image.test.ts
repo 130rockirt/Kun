@@ -1,10 +1,13 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import type { TurnItem } from '../contracts/items.js'
 import {
   capToolResultImages,
+  clearTransientBrowserUseOutputsForTest,
   extractToolResultImages,
   isModelVisibleImageOutput,
+  prepareBrowserUseToolResultForPersistence,
   rehydrateGeneratedImagesForForward,
+  rehydrateTransientBrowserUseOutputsForForward,
   toolResultTextWithoutImages,
   type ToolResultImage
 } from './tool-result-image.js'
@@ -50,6 +53,10 @@ const fakeResolve = async (): Promise<ToolResultImage> => ({
   dataBase64: 'ZZZ',
   width: 24,
   height: 24
+})
+
+afterEach(() => {
+  clearTransientBrowserUseOutputsForTest()
 })
 
 describe('rehydrateGeneratedImagesForForward', () => {
@@ -104,10 +111,67 @@ describe('extractToolResultImages', () => {
     ])
   })
 
+  it('forwards bounded browser_use screenshots as model-visible images', () => {
+    expect(extractToolResultImages({
+      kind: 'browser_screenshot',
+      code: 'screenshot',
+      images: [{ mime_type: 'image/png', data_base64: 'BROWSER' }]
+    })).toEqual([
+      { mimeType: 'image/png', dataBase64: 'BROWSER' }
+    ])
+  })
+
   it('ignores non-image kinds and base64 from other tools', () => {
     expect(extractToolResultImages({ kind: 'generated', data_base64: 'CCC', mime_type: 'image/png' })).toEqual([])
     expect(extractToolResultImages({ note: 'hi' })).toEqual([])
     expect(isModelVisibleImageOutput({ kind: 'image', note: 'omitted' })).toBe(false)
+  })
+})
+
+describe('Browser Use transient output redaction', () => {
+  it('keeps screenshots out of persistence while forwarding them once in memory', () => {
+    const original = {
+      ...toolResult('browser-shot', {
+        kind: 'browser_screenshot',
+        images: [{ mime_type: 'image/png', data_base64: 'SECRET_SCREENSHOT' }]
+      }),
+      toolName: 'browser_use'
+    }
+    const persisted = prepareBrowserUseToolResultForPersistence(original)
+    if (persisted.kind !== 'tool_result') throw new Error('expected tool result')
+    expect(JSON.stringify(persisted.output)).not.toContain('SECRET_SCREENSHOT')
+    expect(persisted.output).toMatchObject({ images_omitted: 1 })
+
+    const forwarded = rehydrateTransientBrowserUseOutputsForForward([persisted])
+    expect(JSON.stringify((forwarded[0] as { output: unknown }).output))
+      .toContain('SECRET_SCREENSHOT')
+    expect(rehydrateTransientBrowserUseOutputsForForward([persisted])).toBeInstanceOf(Array)
+    expect(JSON.stringify(rehydrateTransientBrowserUseOutputsForForward([persisted])))
+      .not.toContain('SECRET_SCREENSHOT')
+  })
+
+  it('removes all untrusted DOM content from the durable snapshot projection', () => {
+    const original = {
+      ...toolResult('browser-snapshot', {
+        kind: 'browser_snapshot',
+        snapshot: {
+          nodes: [{
+            ref: 'opaque-reference-1234',
+            role: 'textbox',
+            name: 'Search',
+            value: 'private value'
+          }]
+        }
+      }),
+      toolName: 'browser_use'
+    }
+    const persisted = prepareBrowserUseToolResultForPersistence(original)
+    if (persisted.kind !== 'tool_result') throw new Error('expected tool result')
+    expect(JSON.stringify(persisted.output)).not.toContain('private value')
+    expect(persisted.output).toMatchObject({
+      snapshot: { title: '[redacted]', nodes: [], truncated: true },
+      snapshot_nodes_omitted: 1
+    })
   })
 })
 

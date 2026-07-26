@@ -188,6 +188,13 @@ import {
   type RegisterExtensionIpcHandlersOptions
 } from './ipc/register-extension-ipc-handlers'
 import { WorkspacePreviewProtocolRegistry } from './services/workspace-preview-protocol'
+import {
+  configureBrowserUseHost,
+  stopBrowserUseHost,
+  updateBrowserUseHostSettings
+} from './browser-use/browser-use-host'
+import { registerBrowserUseIpc } from './browser-use/register-browser-use-ipc'
+import { browserUseCleanupForRuntimeRequest } from './browser-use/thread-lifecycle'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 registerKunExtensionPlatformSchemesAsPrivileged(protocol)
@@ -410,6 +417,7 @@ const runtimeShutdown = new ManagedRuntimeShutdownCoordinator(async () => {
     const settings = await store.load()
     await kunRuntimeAdapter.stopSharedAndWait(settings)
   }
+  await stopBrowserUseHost()
 })
 
 function stopManagedRuntimesForQuit(): Promise<void> {
@@ -934,6 +942,7 @@ function noteRuntimeHealthy(source: string): void {
 }
 
 function handleUnexpectedKunExit(info: KunUnexpectedExitInfo): void {
+  void stopBrowserUseHost()
   runtimeSupervisor.handleUnexpectedExit(info)
 }
 
@@ -1706,6 +1715,10 @@ app.whenReady().then(async () => {
       })
   traceStartup('settings load:start')
   const initial = await store.load()
+  const browserUseManager = configureBrowserUseHost({
+    settings: initial,
+    getMainWindow: () => mainWindow
+  })
   traceStartup('settings load:done')
   // Retention always runs at startup (and again after version upgrades inside
   // IfDue). Fire-and-forget: must not block window creation.
@@ -1890,6 +1903,7 @@ app.whenReady().then(async () => {
       throw new Error(`Invalid runtime settings: ${runtimeValidationError}`)
     }
     const saved = await store.patch(effectivePartial)
+    updateBrowserUseHostSettings(saved)
     await syncClawScheduleMcpConfig(saved, getClawScheduleMcpLaunchConfig()).catch((error) => {
       console.error('[claw-schedule-mcp] failed to sync config after settings change:', error)
     })
@@ -1949,7 +1963,12 @@ app.whenReady().then(async () => {
     },
     runtimeRequest: async (path, method, body, headers) => {
       const settings = await store.load()
-      return runtimeRequest(settings, path, { method, body, headers })
+      const result = await runtimeRequest(settings, path, { method, body, headers })
+      const cleanup = result.ok
+        ? browserUseCleanupForRuntimeRequest({ path, method, body })
+        : undefined
+      if (cleanup) await browserUseManager.clear(cleanup.threadId, cleanup.reason)
+      return result
     },
     getRuntimeSettingsSyncStatus: () => runtimeSettingsSyncStatus,
     restartRuntime: async () => {
@@ -1980,6 +1999,11 @@ app.whenReady().then(async () => {
     resolveLogDirectory: () => resolveLogDirectory(app),
     logError,
     workspacePreviewProtocols
+  })
+  const disposeBrowserUseIpc = registerBrowserUseIpc({
+    ipcMain,
+    manager: browserUseManager,
+    getMainWindow: () => mainWindow
   })
   const dataMigrationController = new DataMigrationController({
     userDataPath: app.getPath('userData'),
@@ -2060,6 +2084,7 @@ app.whenReady().then(async () => {
     extensionIpcOptions
   )
   app.once('before-quit', () => {
+    disposeBrowserUseIpc()
     stopSecretRevealConsentPump()
     stopExtensionNotificationPump()
     extensionIpcRegistration.dispose()
