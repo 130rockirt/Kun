@@ -53,6 +53,7 @@ import {
   calculateQueuedMessageMenuPlacement,
   canEditQueuedComposerMessage
 } from './FloatingComposerQueuedMessages'
+import { FloatingComposerAboveInputStack } from './FloatingComposerAboveInputStack'
 import { requestContextSnapshotMatchesSelection } from './FloatingComposerContextCapacity'
 import { getGoalPanelDraftObjective } from './floating-composer-commands'
 import { useChatStore } from '../../store/chat-store'
@@ -368,52 +369,23 @@ describe('FloatingComposer queued guidance', () => {
     expect(html).toContain('send this next')
   })
 
-  it('anchors todo progress above the queue instead of over it', () => {
-    useChatStore.setState({
-      activeThreadId: 'thread-layout',
-      activeThreadGoal: null,
-      activeThreadTodos: {
-        threadId: 'thread-layout',
-        items: [{
-          id: 'todo-layout',
-          content: 'Keep the queue readable',
-          status: 'in_progress',
-          createdAt: '2026-07-19T00:00:00.000Z',
-          updatedAt: '2026-07-19T00:00:00.000Z'
-        }],
-        updatedAt: '2026-07-19T00:00:00.000Z'
-      },
-      route: 'chat',
-      workspaceRoot: '/workspace/deepseek-gui',
-      threads: []
-    })
-
-    const html = renderToStaticMarkup(createElement(FloatingComposer, {
-      input: '',
-      setInput: () => undefined,
-      mode: 'agent',
-      setMode: () => undefined,
-      busy: true,
-      runtimeReady: false,
-      hasActiveThread: true,
-      composerModel: '',
-      composerPickList: [],
-      onComposerModelChange: () => undefined,
-      queuedMessages: [{ id: 'q-layout', text: 'Continue with the layout' }],
-      onRemoveQueuedMessage: () => undefined,
-      onSend: () => undefined,
-      onInterrupt: () => undefined
+  it('keeps todo, incoming work, and the active goal in one ordered stack', () => {
+    const html = renderToStaticMarkup(createElement(FloatingComposerAboveInputStack, {
+      todo: createElement('div', { 'data-composer-stack-item': 'todo' }),
+      incoming: createElement('div', { 'data-composer-queue': true }),
+      goal: createElement('div', { 'data-composer-stack-item': 'goal' })
     }))
 
-    const stackIndex = html.indexOf('data-composer-stack')
-    const floatersIndex = html.indexOf('data-composer-floaters')
+    const stackIndex = html.indexOf('data-composer-above-input-stack')
+    const todoIndex = html.indexOf('data-composer-stack-item="todo"')
     const queueIndex = html.indexOf('data-composer-queue')
-    const composerIndex = html.indexOf('ds-composer-shell')
+    const goalIndex = html.indexOf('data-composer-stack-item="goal"')
     expect(stackIndex).toBeGreaterThanOrEqual(0)
-    expect(floatersIndex).toBeGreaterThan(stackIndex)
-    expect(queueIndex).toBeGreaterThan(floatersIndex)
-    expect(composerIndex).toBeGreaterThan(queueIndex)
-    expect(html.slice(floatersIndex, queueIndex)).toContain('bottom-full')
+    expect(todoIndex).toBeGreaterThan(stackIndex)
+    expect(queueIndex).toBeGreaterThan(todoIndex)
+    expect(goalIndex).toBeGreaterThan(queueIndex)
+    expect(html).not.toContain('bottom-full')
+    expect(html).not.toContain('absolute')
   })
 })
 

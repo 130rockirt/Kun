@@ -109,14 +109,12 @@ const TIMELINE_JUMP_RAIL_PREVIEW_WIDTH_PX = 416
 const TIMELINE_JUMP_RAIL_PREVIEW_MARGIN_PX = 16
 const TIMELINE_JUMP_RAIL_PREVIEW_CONTAINER_GUTTER_PX = 88
 
-export function goalTimelinePaddingClass(route: 'chat' | 'claw', hasActiveGoal: boolean): string {
-  return route === 'chat' && hasActiveGoal ? 'pb-32 md:pb-40' : 'pb-10'
+export function timelineBottomPaddingClass(): string {
+  return 'pb-10'
 }
 
-export function liveTurnProgressClass(hasActiveGoal: boolean): string {
-  return hasActiveGoal
-    ? 'flex w-fit max-w-full items-center gap-2 py-0.5 text-[14px] font-medium text-ds-muted mb-16 md:mb-20'
-    : 'flex w-fit max-w-full items-center gap-2 py-0.5 text-[14px] font-medium text-ds-muted'
+export function liveTurnProgressClass(): string {
+  return 'flex w-fit max-w-full items-center gap-2 py-0.5 text-[14px] font-medium text-ds-muted'
 }
 
 export function activeTimelineTurnKey(
@@ -446,7 +444,6 @@ export function MessageTimeline({
     turnDurationByUserId,
     turnReasoningFirstAtByUserId,
     turnReasoningLastAtByUserId,
-    activeThreadGoal,
     activeThread
   } = useTimelineStores(activeThreadId)
   const extensionWorkspaceRoot = resolveActiveExtensionWorkspaceRoot(
@@ -724,7 +721,7 @@ export function MessageTimeline({
         </div>
       ) : null}
       <div className={`ds-message-timeline-content ds-chat-column-inset ds-chat-content-max-width mx-auto flex w-full min-w-0 flex-col gap-8 pt-8 ${
-        goalTimelinePaddingClass(heroRoute, Boolean(activeThreadGoal))
+        timelineBottomPaddingClass()
       }`}>
         {!hasContent || !activeThreadId ? (
           <MessageTimelineEmptyHero
@@ -961,8 +958,6 @@ export type ConversationTurnProps = {
   compactCards?: boolean
   /** Main-thread actions must stay disabled for isolated side conversations. */
   allowMainThreadActions?: boolean
-  /** Side conversations must not inherit the active main thread's goal spacing. */
-  showActiveGoal?: boolean
 }
 
 export function ConversationTurn({
@@ -984,10 +979,8 @@ export function ConversationTurn({
   filePreviewWorkspaceRoot,
   viewportRef,
   compactCards = false,
-  allowMainThreadActions = true,
-  showActiveGoal = true
+  allowMainThreadActions = true
 }: ConversationTurnProps): ReactElement {
-  const activeThreadGoal = useChatStore((s) => s.activeThreadGoal)
   const forkThreadFromTurn = useChatStore((s) => s.forkThreadFromTurn)
   const rollbackWorkspaceToCheckpoint = useChatStore((s) => s.rollbackWorkspaceToCheckpoint)
   const [forking, setForking] = useState(false)
@@ -1213,11 +1206,11 @@ export function ConversationTurn({
       ))}
 
       {showLiveThinking ? (
-        <LiveTurnThinkingRow hasActiveGoal={showActiveGoal && Boolean(activeThreadGoal)} />
+        <LiveTurnThinkingRow />
       ) : null}
 
       {showLiveProgress ? (
-        <LiveTurnProgressRow hasActiveGoal={showActiveGoal && Boolean(activeThreadGoal)} />
+        <LiveTurnProgressRow />
       ) : null}
 
       {!isProcessing && devPreviewCard ? devPreviewCard : null}
@@ -1254,14 +1247,12 @@ export function ConversationTurn({
   )
 }
 
-function LiveTurnThinkingRow({ hasActiveGoal }: { hasActiveGoal: boolean }): ReactElement {
+function LiveTurnThinkingRow(): ReactElement {
   const { t } = useTranslation('common')
-  return (
-    <LiveTurnActivityRow hasActiveGoal={hasActiveGoal} label={t('thinkingNow')} />
-  )
+  return <LiveTurnActivityRow label={t('thinkingNow')} />
 }
 
-function LiveTurnProgressRow({ hasActiveGoal }: { hasActiveGoal: boolean }): ReactElement {
+function LiveTurnProgressRow(): ReactElement {
   const { t, i18n } = useTranslation('common')
   const swimMode = useWorkLogoSwimMode(true)
   const ikunVariant = useIkunWorkLogoVariant(true)
@@ -1283,7 +1274,6 @@ function LiveTurnProgressRow({ hasActiveGoal }: { hasActiveGoal: boolean }): Rea
 
   return (
     <LiveTurnActivityRow
-      hasActiveGoal={hasActiveGoal}
       label={label}
       ikunVariant={ikunVariant}
       swimMode={swimMode}
@@ -1292,18 +1282,16 @@ function LiveTurnProgressRow({ hasActiveGoal }: { hasActiveGoal: boolean }): Rea
 }
 
 function LiveTurnActivityRow({
-  hasActiveGoal,
   label,
   ikunVariant,
   swimMode
 }: {
-  hasActiveGoal: boolean
   label: string
   ikunVariant?: IkunWorkLogoVariant
   swimMode?: WorkLogoSwimMode
 }): ReactElement {
   return (
-    <div className={liveTurnProgressClass(hasActiveGoal)}>
+    <div className={liveTurnProgressClass()}>
       <span className="ds-work-logo-slot ds-work-logo-slot-sm mr-0.5">
         <AnimatedWorkLogo active ikunVariant={ikunVariant} mode={swimMode} phase="trail" size="sm" />
       </span>
@@ -1331,6 +1319,5 @@ const MemoMessageTurn = memo(ConversationTurn, (prev, next) => (
   prev.filePreviewWorkspaceRoot === next.filePreviewWorkspaceRoot &&
   prev.compactCards === next.compactCards &&
   prev.allowMainThreadActions === next.allowMainThreadActions &&
-  prev.showActiveGoal === next.showActiveGoal &&
   prev.viewportRef === next.viewportRef
 ))

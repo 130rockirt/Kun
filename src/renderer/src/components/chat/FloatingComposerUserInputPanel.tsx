@@ -37,7 +37,8 @@ export function FloatingComposerUserInputPanel({
     <div
       role="group"
       aria-label={t('userInputPanelTitle')}
-      className="ds-no-drag absolute inset-x-2 bottom-full z-30 mb-3 overflow-hidden rounded-[26px] border border-accent/30 bg-ds-card/95 p-3.5 shadow-[0_18px_52px_rgba(20,47,95,0.14)] backdrop-blur-xl dark:bg-ds-card/90"
+      data-composer-stack-item="user-input"
+      className="ds-no-drag relative z-30 w-[calc(100%_-_1rem)] overflow-hidden rounded-[26px] border border-accent/30 bg-ds-card/95 p-3.5 shadow-[0_18px_52px_rgba(20,47,95,0.14)] backdrop-blur-xl dark:bg-ds-card/90"
     >
       {multi ? (
         <div className="mb-2.5">

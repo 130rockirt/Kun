@@ -256,7 +256,11 @@ export function FloatingComposerTodoProgress({
             document.body
           )
         : null}
-      <div ref={rootRef} className="pointer-events-auto relative shrink-0">
+      <div
+        ref={rootRef}
+        data-composer-stack-item="todo"
+        className="pointer-events-auto relative shrink-0"
+      >
         <button
           ref={buttonRef}
           type="button"

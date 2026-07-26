@@ -113,6 +113,7 @@ import { FloatingComposerFileMentionMenu } from './FloatingComposerFileMentionMe
 import { useComposerSlashCommandMenu } from './use-composer-slash-command-menu'
 import { FloatingComposerSlashCommandMenu } from './FloatingComposerSlashCommandMenu'
 import { FloatingComposerTodoProgress } from './FloatingComposerTodoProgress'
+import { FloatingComposerAboveInputStack } from './FloatingComposerAboveInputStack'
 import {
   canAcceptComposerFileDrop,
   routeComposerFileDrop,
@@ -1093,13 +1094,33 @@ export function FloatingComposer({
         : 'ds-floating-composer ds-no-drag ds-chat-column-inset ds-chat-content-max-width pointer-events-auto w-full pb-3 pt-0'}
     >
       <div className="relative" data-composer-stack>
-        <div
-          data-composer-floaters
-          className="pointer-events-none absolute inset-x-0 bottom-full z-30 mb-2 flex flex-col items-center gap-2"
-        >
-          {runtimeReady ? <BackgroundShellOverlay threadId={activeThreadId} /> : null}
-          {showGoalFloater && activeThreadGoal && !pendingUserInputBlock ? (
-            <div className="pointer-events-auto flex min-h-11 w-full max-w-[46rem] items-center gap-2 rounded-full border border-ds-border bg-white px-3 py-1.5 text-ds-muted shadow-[0_12px_34px_rgba(20,47,95,0.10)] backdrop-blur-xl dark:bg-ds-card">
+        <FloatingComposerAboveInputStack
+          todo={showTodoProgress && activeThreadTodos ? (
+            <FloatingComposerTodoProgress todos={activeThreadTodos} />
+          ) : null}
+          incoming={(
+            <>
+              {runtimeReady ? <BackgroundShellOverlay threadId={activeThreadId} /> : null}
+              <FloatingComposerQueuedMessages
+                messages={queuedMessages}
+                onRemove={onRemoveQueuedMessage}
+                onGuide={onGuideQueuedMessage}
+                onReorder={reorderQueuedMessage}
+                onEdit={(message) => {
+                  returnQueuedMessageToComposer(message, onRemoveQueuedMessage, setInput)
+                  draft.focusComposer()
+                }}
+              />
+              {userInput.active ? (
+                <FloatingComposerUserInputPanel controller={userInput} t={t} />
+              ) : null}
+            </>
+          )}
+          goal={showGoalFloater && activeThreadGoal && !pendingUserInputBlock ? (
+            <div
+              data-composer-stack-item="goal"
+              className="pointer-events-auto flex min-h-11 w-full max-w-[46rem] items-center gap-2 rounded-full border border-ds-border bg-white px-3 py-1.5 text-ds-muted shadow-[0_12px_34px_rgba(20,47,95,0.10)] backdrop-blur-xl dark:bg-ds-card"
+            >
               <Target className="h-3.5 w-3.5 shrink-0 text-ds-faint" strokeWidth={1.9} />
               <div className="flex min-w-0 flex-1 items-center gap-1.5 text-[13px] leading-5">
                 <span className="shrink-0 font-semibold text-ds-ink">
@@ -1154,20 +1175,6 @@ export function FloatingComposer({
               </div>
             </div>
           ) : null}
-          {showTodoProgress && activeThreadTodos ? (
-            <FloatingComposerTodoProgress todos={activeThreadTodos} />
-          ) : null}
-        </div>
-
-        <FloatingComposerQueuedMessages
-          messages={queuedMessages}
-          onRemove={onRemoveQueuedMessage}
-          onGuide={onGuideQueuedMessage}
-          onReorder={reorderQueuedMessage}
-          onEdit={(message) => {
-            returnQueuedMessageToComposer(message, onRemoveQueuedMessage, setInput)
-            draft.focusComposer()
-          }}
         />
 
         {composerMenuOpen && slashQuery == null ? (
@@ -1409,10 +1416,6 @@ export function FloatingComposer({
               </button>
             </div>
           </div>
-        ) : null}
-
-        {userInput.active ? (
-          <FloatingComposerUserInputPanel controller={userInput} t={t} />
         ) : null}
 
         {showWorkspaceControls ? (

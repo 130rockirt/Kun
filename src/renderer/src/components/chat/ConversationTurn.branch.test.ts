@@ -30,8 +30,7 @@ function renderTurn(allowMainThreadActions: boolean): string {
     live: '',
     filePreviewWorkspaceRoot: '/workspace',
     viewportRef: { current: null },
-    allowMainThreadActions,
-    showActiveGoal: false
+    allowMainThreadActions
   }))
 }
 

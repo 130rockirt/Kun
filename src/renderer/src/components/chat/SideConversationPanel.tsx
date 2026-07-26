@@ -128,7 +128,6 @@ function SideConversationTimeline({
                   viewportRef={viewportRef}
                   compactCards
                   allowMainThreadActions={false}
-                  showActiveGoal={false}
                 />
               )
             })}
@@ -143,7 +142,6 @@ function SideConversationTimeline({
                 viewportRef={viewportRef}
                 compactCards
                 allowMainThreadActions={false}
-                showActiveGoal={false}
               />
             ) : null}
 

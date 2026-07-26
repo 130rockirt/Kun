@@ -7,8 +7,8 @@ import {
   ConversationTurn,
   MessageTimeline,
   TimelineRuntimeError,
-  goalTimelinePaddingClass,
   liveTurnProgressClass,
+  timelineBottomPaddingClass,
   resultPreviewSourcesForTurn,
   summarizeToolBlock
 } from './MessageTimeline'
@@ -1299,15 +1299,12 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
     expect(html).toContain('Invalid API key')
   })
 
-  it('adds extra bottom padding only for chat timelines with an active goal banner', () => {
-    expect(goalTimelinePaddingClass('chat', true)).toBe('pb-32 md:pb-40')
-    expect(goalTimelinePaddingClass('chat', false)).toBe('pb-10')
-    expect(goalTimelinePaddingClass('claw', true)).toBe('pb-10')
+  it('keeps timeline spacing independent from composer status surfaces', () => {
+    expect(timelineBottomPaddingClass()).toBe('pb-10')
   })
 
-  it('pushes the live progress row above the goal banner when a goal is active', () => {
-    expect(liveTurnProgressClass(true)).toContain('mb-16 md:mb-20')
-    expect(liveTurnProgressClass(false)).not.toContain('mb-16 md:mb-20')
+  it('lets the composer stack reserve space without moving the live progress row', () => {
+    expect(liveTurnProgressClass()).not.toContain('mb-16 md:mb-20')
   })
 
   it('renders the fork action before copy in completed assistant response actions', () => {

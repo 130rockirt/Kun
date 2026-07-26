@@ -289,7 +289,7 @@ export function FloatingComposerQueuedMessages({
       <div
         ref={rootRef}
         data-composer-queue
-        className="mb-2 space-y-2"
+        className="w-full space-y-2"
         aria-label={t('queuedMessagesTitle', { count: visibleMessages.length })}
       >
         {visibleMessages.map((message, messageIndex) => {
