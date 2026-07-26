@@ -272,6 +272,84 @@ describe('app-ipc-schemas', () => {
     })).toThrow(/runtime request path is not allowed/)
   })
 
+  it('accepts only the modeled Kun Graph workbench endpoints', () => {
+    for (const payload of [
+      { path: '/v1/graphs?thread_id=thread_1', method: 'GET' },
+      { path: '/v1/graphs/run%201', method: 'GET' },
+      { path: '/v1/graphs/run_1/events?since_seq=3', method: 'GET' },
+      { path: '/v1/graphs/run_1/artifacts/artifact%201?offset=0', method: 'GET' },
+      { path: '/v1/graphs/run_1/start', method: 'POST', body: '{}' },
+      { path: '/v1/graphs/run_1/pause', method: 'POST', body: '{}' },
+      { path: '/v1/graphs/run_1/resume', method: 'POST', body: '{}' },
+      { path: '/v1/graphs/run_1/cleanup', method: 'POST', body: '{}' },
+      { path: '/v1/graphs/run_1/cancel', method: 'POST', body: '{}' },
+      { path: '/v1/graphs/run_1/retry', method: 'POST', body: '{}' },
+      { path: '/v1/graphs/run_1/steer', method: 'POST', body: '{}' },
+      { path: '/v1/graphs/run_1/patch', method: 'POST', body: '{}' },
+      { path: '/v1/graphs/run_1/reviews', method: 'POST', body: '{}' },
+      {
+        path: '/v1/graph-projects/identity?workspace=%2Ftmp%2Fproject',
+        method: 'GET'
+      },
+      {
+        path: '/v1/graph-projects/project_1/agents?include_archived=true',
+        method: 'GET'
+      },
+      { path: '/v1/graph-projects/project_1/evidence', method: 'GET' },
+      { path: '/v1/graph-projects/project_1/scores', method: 'GET' },
+      { path: '/v1/graph-projects/project_1/audit', method: 'GET' },
+      { path: '/v1/graph-projects/project_1/candidates', method: 'GET' },
+      { path: '/v1/graph-projects/project_1/jobs', method: 'GET' },
+      {
+        path: '/v1/graph-projects/project_1/agents/profile_1/lifecycle',
+        method: 'POST',
+        body: '{}'
+      },
+      {
+        path: '/v1/graph-projects/project_1/agents/profile_1/export',
+        method: 'GET'
+      },
+      {
+        path: '/v1/graph-projects/project_1/agents/import',
+        method: 'POST',
+        body: '{}'
+      },
+      {
+        path: '/v1/graph-projects/project_1/agents/merge',
+        method: 'POST',
+        body: '{}'
+      },
+      {
+        path: '/v1/graph-projects/project_1/candidates/candidate_1/action',
+        method: 'POST',
+        body: '{}'
+      },
+      {
+        path: '/v1/graph-projects/project_1/consolidate',
+        method: 'POST',
+        body: '{}'
+      }
+    ] as const) {
+      expect(runtimeRequestPayloadSchema.parse(payload).path).toBe(payload.path)
+    }
+
+    for (const payload of [
+      { path: '/v1/graphs', method: 'POST' },
+      { path: '/v1/graphs/run_1/start', method: 'DELETE' },
+      { path: '/v1/graph-projects/identity', method: 'POST' },
+      {
+        path: '/v1/graph-projects/project_1/agents/profile_1/lifecycle',
+        method: 'GET'
+      },
+      { path: '/v1/graphs/run_1/secrets', method: 'GET' },
+      { path: '/v1/graph-projects/project_1/admin', method: 'GET' }
+    ] as const) {
+      expect(() => runtimeRequestPayloadSchema.parse(payload)).toThrow(
+        /runtime request path is not allowed/
+      )
+    }
+  })
+
   it('accepts the Kun thread review endpoint', () => {
     expect(runtimeRequestPayloadSchema.parse({
       path: '/v1/threads/thr_1/review',

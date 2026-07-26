@@ -215,7 +215,11 @@ import { ExtensionMediaArchiveJobService } from '../services/extension-media-arc
 import { ExtensionVisualAnalysisService } from '../services/extension-visual-analysis-service.js'
 import { RuntimeMigrationService } from '../services/runtime-migration-service.js'
 import { RuntimeMigrationImportService } from '../services/runtime-migration-import-service.js'
-import { ModelConnectionRegistry } from '../services/model-connection-registry.js'
+import {
+  isModelConnectionCredentialSourceId,
+  ModelConnectionRegistry,
+  type ModelConnectionSeed
+} from '../services/model-connection-registry.js'
 import { ModelConnectionOAuthService } from '../services/model-connection-oauth.js'
 import { ClaudeConnectionService } from '../services/claude-connection-service.js'
 import type { LocalModelGatewayConfig, ModelRoutePoolConfig } from '../contracts/model-route-pool.js'
@@ -501,11 +505,22 @@ export async function createKunServeRuntime(
     credentials: extensionCredentials,
     nowIso
   })
+  let modelConnections!: ModelConnectionRegistry
+  const requestCredentialStore = {
+    resolveApiKey: (sourceId: string) =>
+      isModelConnectionCredentialSourceId(sourceId)
+        ? modelConnections.resolveApiKey(sourceId)
+        : legacyCredentialMigration.resolveApiKey(sourceId),
+    updateResolvedApiKey: (sourceId: string, apiKey: string) =>
+      isModelConnectionCredentialSourceId(sourceId)
+        ? modelConnections.updateResolvedApiKey(sourceId, apiKey)
+        : legacyCredentialMigration.updateResolvedApiKey(sourceId, apiKey)
+  }
   const grokCredentialRefresher = new GrokOAuthCredentialRefresher(
-    legacyCredentialMigration
+    requestCredentialStore
   )
   const codexCredentialRefresher = new CodexOAuthCredentialRefresher(
-    legacyCredentialMigration
+    requestCredentialStore
   )
   const resolveLegacyRequestCredentials = async (
     sourceId: string,
@@ -604,7 +619,7 @@ export async function createKunServeRuntime(
     directModelClient.replace(next)
     modelClient.replacePools(activeOptions.routePools ?? [])
   }
-  const modelConnections = new ModelConnectionRegistry({
+  modelConnections = new ModelConnectionRegistry({
     dataDir: activeOptions.dataDir,
     credentials: extensionCredentials,
     modelCapabilities: registryModelCapabilities,
@@ -617,9 +632,11 @@ export async function createKunServeRuntime(
           ? {
               model: selected.model,
               apiKey: selected.config.apiKey,
+              credentialSourceId: selected.config.credentialSourceId,
               baseUrl: selected.config.baseUrl ?? activeOptions.baseUrl,
               endpointFormat: selected.config.endpointFormat ?? activeOptions.endpointFormat,
-              headers: selected.config.headers
+              headers: selected.config.headers,
+              geminiAuth: selected.config.geminiAuth
             }
           : {
               // Disconnecting the last provider must also retire its decrypted
@@ -2032,9 +2049,11 @@ export async function createKunServeRuntime(
 	          ? {
 	              model: selected.model,
 	              apiKey: selected.config.apiKey,
+	              credentialSourceId: selected.config.credentialSourceId,
 	              baseUrl: selected.config.baseUrl ?? nextOptions.baseUrl,
 	              endpointFormat: selected.config.endpointFormat ?? nextOptions.endpointFormat,
-	              headers: selected.config.headers
+	              headers: selected.config.headers,
+	              geminiAuth: selected.config.geminiAuth
 	            }
 	          : {}),
 	        providers: Object.fromEntries(materializedConnections.providers.entries()),
@@ -3071,7 +3090,7 @@ function activeModelConnectionProviderId(options: KunServeRuntimeOptions): strin
 
 function modelConnectionSeedsForOptions(
   options: KunServeRuntimeOptions
-): ModelConnectionConnectRequest[] {
+): ModelConnectionSeed[] {
   const activeConnectionId = activeModelConnectionProviderId(options)
   const activeProvider = options.providers?.[activeConnectionId]
   const activeKind = activeProvider?.kind ?? 'http'
@@ -3094,6 +3113,9 @@ function modelConnectionSeedsForOptions(
           ? { baseUrl: options.baseUrl }
           : {}),
       endpointFormat: options.endpointFormat ?? DEFAULT_MODEL_ENDPOINT_FORMAT,
+      ...(options.credentialSourceId
+        ? { credentialSourceId: options.credentialSourceId }
+        : {}),
       credential: modelConnectionSeedCredential(
         activeKind,
         options.apiKey,
@@ -3121,6 +3143,9 @@ function modelConnectionSeedsForOptions(
             ? { baseUrl: provider.baseUrl }
             : {}),
         endpointFormat: provider.endpointFormat ?? DEFAULT_MODEL_ENDPOINT_FORMAT,
+        ...(provider.credentialSourceId
+          ? { credentialSourceId: provider.credentialSourceId }
+          : {}),
         credential: modelConnectionSeedCredential(provider.kind ?? 'http', provider.apiKey, provider.geminiAuth),
         models: uniqueModelCatalog([
           ...(provider.models ?? []),

@@ -19,6 +19,7 @@ import type { ExtensionCredentialStore } from './extension-credential-store.js'
 
 const StoredProfileSchema = ModelConnectionSnapshotSchema.shape.providers.element.extend({
   credentialRef: z.string().min(1).max(256).optional(),
+  credentialSourceId: z.string().min(1).max(256).optional(),
   headers: z.record(z.string(), z.string()).optional()
 })
 const RegistryDocumentSchema = z.object({
@@ -34,6 +35,27 @@ const RegistryDocumentSchema = z.object({
 }).strict()
 type RegistryDocument = z.infer<typeof RegistryDocumentSchema>
 type StoredProfile = z.infer<typeof StoredProfileSchema>
+
+export type ModelConnectionSeed = ModelConnectionConnectRequest & {
+  /** Trusted runtime-only binding; never accepted by public connection APIs. */
+  credentialSourceId?: string
+}
+
+const MODEL_CONNECTION_CREDENTIAL_SOURCE_PREFIX = 'model-connection:'
+
+export function isModelConnectionCredentialSourceId(sourceId: string): boolean {
+  return sourceId.startsWith(MODEL_CONNECTION_CREDENTIAL_SOURCE_PREFIX) &&
+    sourceId.length > MODEL_CONNECTION_CREDENTIAL_SOURCE_PREFIX.length
+}
+
+function modelConnectionCredentialSourceId(providerId: string): string {
+  return `${MODEL_CONNECTION_CREDENTIAL_SOURCE_PREFIX}${providerId}`
+}
+
+function providerIdFromCredentialSource(sourceId: string): string | null {
+  if (!isModelConnectionCredentialSourceId(sourceId)) return null
+  return sourceId.slice(MODEL_CONNECTION_CREDENTIAL_SOURCE_PREFIX.length)
+}
 
 export class ModelConnectionConflictError extends Error {
   constructor(readonly snapshot: ModelConnectionSnapshot) {
@@ -72,7 +94,7 @@ export class ModelConnectionRegistry {
   }
 
   async initialize(
-    seed: readonly ModelConnectionConnectRequest[] = [],
+    seed: readonly ModelConnectionSeed[] = [],
     globals?: {
       proxy?: RegistryDocument['proxy']
       routePools?: RegistryDocument['routePools']
@@ -83,8 +105,10 @@ export class ModelConnectionRegistry {
     const newRegistry = Object.keys(current.profiles).length === 0
     if (seed.length > 0) {
       for (const input of seed) {
+        const credentialSourceId = input.credentialSourceId?.trim() || undefined
+        const { credentialSourceId: _credentialSourceId, ...publicInput } = input
         const request = ModelConnectionConnectRequestSchema.parse({
-          ...input,
+          ...publicInput,
           expectedRevision: current.revision,
           probe: false
         })
@@ -93,16 +117,23 @@ export class ModelConnectionRegistry {
           // A non-empty registry is authoritative for the current default, but
           // GUI-managed providers that were never imported must still become
           // visible to standalone TUI clients.
-          await this.connect({ ...request, select: newRegistry ? request.select : false })
+          await this.connectInternal(
+            { ...request, select: newRegistry ? request.select : false },
+            credentialSourceId
+          )
         } else {
           const preserveSelection = !newRegistry && current.defaultProviderId === existing.id
-          const reconciled = reconcileSeedProfile(existing, request, { preserveSelection })
+          const reconciled = reconcileSeedProfile(existing, request, {
+            preserveSelection,
+            credentialSourceId
+          })
           if (!sameStoredProfile(existing, reconciled)) {
             current = await this.file.update(emptyDocument, (document) => {
               assertRevision(document, current.revision, this.options.modelCapabilities)
               const profile = requireProfile(document, existing.id)
               const nextProfile = reconcileSeedProfile(profile, request, {
-                preserveSelection: document.defaultProviderId === profile.id
+                preserveSelection: document.defaultProviderId === profile.id,
+                credentialSourceId
               })
               return {
                 ...document,
@@ -187,12 +218,20 @@ export class ModelConnectionRegistry {
   }
 
   async connect(raw: unknown): Promise<ModelConnectionSnapshot> {
+    return this.connectInternal(raw)
+  }
+
+  private async connectInternal(
+    raw: unknown,
+    credentialSourceId?: string
+  ): Promise<ModelConnectionSnapshot> {
     const input = ModelConnectionConnectRequestSchema.parse(raw)
     if (input.kind === 'http' && !input.baseUrl) throw new Error('baseUrl is required for HTTP providers')
     const models = input.probe && input.kind === 'http'
       ? await this.probeInput(input)
       : uniqueModels(input.models)
-    const credential = input.credential?.trim() ?? ''
+    const usesRequestTimeCredential = input.kind === 'http' && Boolean(credentialSourceId)
+    const credential = usesRequestTimeCredential ? '' : input.credential?.trim() ?? ''
     const credentialRef = credential
       ? await this.options.credentials.create({ apiKey: credential })
       : undefined
@@ -212,7 +251,7 @@ export class ModelConnectionRegistry {
           authType: input.authType,
           baseUrl: input.baseUrl,
           endpointFormat: input.endpointFormat,
-          configured: Boolean(credentialRef) ||
+          configured: Boolean(credentialRef || credentialSourceId) ||
             input.kind === 'agent-sdk' ||
             input.kind === 'antigravity-cli' ||
             input.kind === 'gemini-cli-api',
@@ -221,7 +260,8 @@ export class ModelConnectionRegistry {
             ? { modelCapabilities: capabilitiesForModels(input.modelCapabilities, models) }
             : {}),
           selectedModel,
-          credentialRef
+          credentialRef,
+          credentialSourceId
         })
         return {
           ...current,
@@ -299,7 +339,12 @@ export class ModelConnectionRegistry {
           revision: current.revision + 1,
           profiles: {
             ...current.profiles,
-            [providerId]: { ...profile, credentialRef: nextRef, configured: true }
+            [providerId]: {
+              ...profile,
+              credentialRef: nextRef,
+              credentialSourceId: undefined,
+              configured: true
+            }
           }
         }
       })
@@ -330,6 +375,7 @@ export class ModelConnectionRegistry {
         [providerId]: {
           ...profile,
           credentialRef: undefined,
+          credentialSourceId: undefined,
           configured
         }
       }
@@ -514,6 +560,33 @@ export class ModelConnectionRegistry {
     return credential?.apiKey?.trim() || null
   }
 
+  /** Resolves a Registry-owned protected credential for request-time refresh. */
+  async resolveApiKey(sourceId: string): Promise<{ apiKey: string } | null> {
+    const providerId = providerIdFromCredentialSource(sourceId)
+    if (!providerId) return null
+    const profile = (await this.file.read(emptyDocument)).profiles[providerId]
+    if (!profile?.credentialRef) return null
+    const credential = await this.options.credentials.get(profile.credentialRef)
+    const apiKey = credential?.apiKey?.trim() ?? ''
+    return apiKey ? { apiKey } : null
+  }
+
+  /** Atomically rotates a Registry-owned protected credential in place. */
+  async updateResolvedApiKey(sourceId: string, apiKey: string): Promise<boolean> {
+    const providerId = providerIdFromCredentialSource(sourceId)
+    const trimmed = apiKey.trim()
+    if (!providerId || !trimmed) return false
+    const profile = (await this.file.read(emptyDocument)).profiles[providerId]
+    if (!profile?.credentialRef) return false
+    const credential = await this.options.credentials.get(profile.credentialRef)
+    if (!credential) return false
+    await this.options.credentials.set(profile.credentialRef, {
+      ...credential,
+      apiKey: trimmed
+    })
+    return true
+  }
+
   async materialize(): Promise<MaterializedModelConnections> {
     return this.materializeDocument(await this.file.read(emptyDocument))
   }
@@ -528,13 +601,22 @@ export class ModelConnectionRegistry {
         ? await this.options.credentials.get(profile.credentialRef)
         : null
       const material = materializeLegacyProviderCredential(credential?.apiKey ?? '')
+      const credentialSourceId = profile.credentialSourceId ??
+        (profile.credentialRef ? modelConnectionCredentialSourceId(profile.id) : undefined)
+      // A managed source is authoritative and may already have rotated beyond
+      // the Registry's pre-migration credential copy. Never expose that stale
+      // copy as a fallback client key.
+      const usesRequestTimeCredential = profile.kind === 'http' && Boolean(profile.credentialSourceId)
+      const apiKey = usesRequestTimeCredential ? '' : material.apiKey
+      const materialHeaders = usesRequestTimeCredential ? undefined : material.headers
       const config: ServeProviderConfig =
         profile.kind === 'agent-sdk' ||
         profile.kind === 'antigravity-cli' ||
         profile.kind === 'cursor-sdk'
         ? {
             kind: profile.kind,
-            apiKey: material.apiKey,
+            apiKey,
+            ...(credentialSourceId ? { credentialSourceId } : {}),
             models: [...profile.models],
             ...(profile.modelCapabilities ? { modelCapabilities: profile.modelCapabilities } : {}),
             ...(profile.selectedModel ? { selectedModel: profile.selectedModel } : {})
@@ -542,7 +624,8 @@ export class ModelConnectionRegistry {
         : profile.kind === 'gemini-code-assist'
           ? {
               kind: 'gemini-code-assist',
-              apiKey: material.apiKey,
+              apiKey,
+              ...(credentialSourceId ? { credentialSourceId } : {}),
               baseUrl: profile.baseUrl!,
               endpointFormat: profile.endpointFormat,
               models: [...profile.models],
@@ -552,14 +635,15 @@ export class ModelConnectionRegistry {
             }
           : {
               kind: 'http',
-              apiKey: material.apiKey,
+              apiKey,
+              ...(credentialSourceId ? { credentialSourceId } : {}),
               baseUrl: profile.baseUrl!,
               endpointFormat: profile.endpointFormat,
               models: [...profile.models],
               ...(profile.modelCapabilities ? { modelCapabilities: profile.modelCapabilities } : {}),
               ...(profile.selectedModel ? { selectedModel: profile.selectedModel } : {}),
-              ...(material.headers || profile.headers
-                ? { headers: { ...(profile.headers ?? {}), ...(material.headers ?? {}) } }
+              ...(materialHeaders || profile.headers
+                ? { headers: { ...(profile.headers ?? {}), ...(materialHeaders ?? {}) } }
                 : {})
             }
       providers.set(profile.id, config)
@@ -652,7 +736,10 @@ function configuredFallback(
 function reconcileSeedProfile(
   existing: StoredProfile,
   request: ModelConnectionConnectRequest,
-  options: { preserveSelection?: boolean } = {}
+  options: {
+    preserveSelection?: boolean
+    credentialSourceId?: string
+  } = {}
 ): StoredProfile {
   const incomingModels = uniqueModels([
     ...request.models,
@@ -692,6 +779,9 @@ function reconcileSeedProfile(
 
   return StoredProfileSchema.parse({
     ...existing,
+    ...(options.credentialSourceId
+      ? { credentialSourceId: options.credentialSourceId, configured: true }
+      : {}),
     ...(migrateGeminiSubscription
       ? {
           kind: request.kind,
@@ -720,6 +810,7 @@ function sameStoredProfile(left: StoredProfile, right: StoredProfile): boolean {
     left.configured === right.configured &&
     left.selectedModel === right.selectedModel &&
     left.credentialRef === right.credentialRef &&
+    left.credentialSourceId === right.credentialSourceId &&
     sameModels(left.models, right.models) &&
     sameCapabilities(left.modelCapabilities, right.modelCapabilities)
 }
@@ -735,7 +826,12 @@ function project(
     schemaVersion: 1,
     revision: document.revision,
     providers: Object.values(document.profiles)
-      .map(({ credentialRef: _credentialRef, headers: _headers, ...profile }) => {
+      .map(({
+        credentialRef: _credentialRef,
+        credentialSourceId: _credentialSourceId,
+        headers: _headers,
+        ...profile
+      }) => {
         const modelCapabilities = Object.fromEntries(profile.models.flatMap((model) => {
           const stored = profile.modelCapabilities?.[model] ??
             profile.modelCapabilities?.[model.trim().toLowerCase()]

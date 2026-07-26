@@ -86,6 +86,91 @@ export function kunDelegationProfilesPath(workspace?: string): string {
   return `${KUN_DELEGATION_PROFILES_PATH}?workspace=${encodeURIComponent(workspace.trim())}`
 }
 
+export const KUN_GRAPHS_PATH = '/v1/graphs'
+export const KUN_GRAPHS_TEMPLATE = '/v1/graphs'
+export const KUN_GRAPH_TEMPLATE = '/v1/graphs/{id}'
+export function kunGraphPath(runId: string): string {
+  return `${KUN_GRAPHS_PATH}/${encodeURIComponent(runId)}`
+}
+export const KUN_GRAPH_EVENTS_TEMPLATE = '/v1/graphs/{id}/events'
+export function kunGraphEventsPath(runId: string): string {
+  return `${kunGraphPath(runId)}/events`
+}
+export const KUN_GRAPH_ARTIFACT_TEMPLATE = '/v1/graphs/{id}/artifacts/{id}'
+export function kunGraphArtifactPath(runId: string, artifactId: string): string {
+  return `${kunGraphPath(runId)}/artifacts/${encodeURIComponent(artifactId)}`
+}
+export const KUN_GRAPH_START_TEMPLATE = '/v1/graphs/{id}/start'
+export const KUN_GRAPH_PAUSE_TEMPLATE = '/v1/graphs/{id}/pause'
+export const KUN_GRAPH_RESUME_TEMPLATE = '/v1/graphs/{id}/resume'
+export const KUN_GRAPH_CLEANUP_TEMPLATE = '/v1/graphs/{id}/cleanup'
+export const KUN_GRAPH_CANCEL_TEMPLATE = '/v1/graphs/{id}/cancel'
+export const KUN_GRAPH_RETRY_TEMPLATE = '/v1/graphs/{id}/retry'
+export const KUN_GRAPH_STEER_TEMPLATE = '/v1/graphs/{id}/steer'
+export const KUN_GRAPH_PATCH_TEMPLATE = '/v1/graphs/{id}/patch'
+export const KUN_GRAPH_REVIEWS_TEMPLATE = '/v1/graphs/{id}/reviews'
+export function kunGraphActionPath(
+  runId: string,
+  action: 'start' | 'pause' | 'resume' | 'cleanup' | 'cancel' | 'retry' | 'steer' | 'patch' | 'reviews'
+): string {
+  return `${kunGraphPath(runId)}/${action}`
+}
+
+export const KUN_GRAPH_PROJECT_IDENTITY_PATH = '/v1/graph-projects/identity'
+export const KUN_GRAPH_PROJECT_IDENTITY_TEMPLATE = '/v1/graph-projects/identity'
+export function kunGraphProjectPath(projectId: string): string {
+  return `/v1/graph-projects/${encodeURIComponent(projectId)}`
+}
+export const KUN_GRAPH_PROJECT_AGENTS_TEMPLATE = '/v1/graph-projects/{id}/agents'
+export function kunGraphProjectAgentsPath(projectId: string): string {
+  return `${kunGraphProjectPath(projectId)}/agents`
+}
+export const KUN_GRAPH_PROJECT_EVIDENCE_TEMPLATE = '/v1/graph-projects/{id}/evidence'
+export const KUN_GRAPH_PROJECT_SCORES_TEMPLATE = '/v1/graph-projects/{id}/scores'
+export const KUN_GRAPH_PROJECT_AUDIT_TEMPLATE = '/v1/graph-projects/{id}/audit'
+export const KUN_GRAPH_PROJECT_CANDIDATES_TEMPLATE = '/v1/graph-projects/{id}/candidates'
+export const KUN_GRAPH_PROJECT_JOBS_TEMPLATE = '/v1/graph-projects/{id}/jobs'
+export function kunGraphProjectCollectionPath(
+  projectId: string,
+  collection: 'evidence' | 'scores' | 'audit' | 'candidates' | 'jobs'
+): string {
+  return `${kunGraphProjectPath(projectId)}/${collection}`
+}
+export const KUN_GRAPH_PROJECT_AGENT_LIFECYCLE_TEMPLATE =
+  '/v1/graph-projects/{id}/agents/{id}/lifecycle'
+export const KUN_GRAPH_PROJECT_AGENT_EXPORT_TEMPLATE =
+  '/v1/graph-projects/{id}/agents/{id}/export'
+export function kunGraphProjectAgentActionPath(
+  projectId: string,
+  profileId: string,
+  action: 'lifecycle' | 'export'
+): string {
+  return `${kunGraphProjectAgentsPath(projectId)}/${encodeURIComponent(profileId)}/${action}`
+}
+export const KUN_GRAPH_PROJECT_AGENTS_IMPORT_TEMPLATE =
+  '/v1/graph-projects/{id}/agents/import'
+export const KUN_GRAPH_PROJECT_AGENTS_MERGE_TEMPLATE =
+  '/v1/graph-projects/{id}/agents/merge'
+export function kunGraphProjectAgentsActionPath(
+  projectId: string,
+  action: 'import' | 'merge'
+): string {
+  return `${kunGraphProjectAgentsPath(projectId)}/${action}`
+}
+export const KUN_GRAPH_PROJECT_CANDIDATE_ACTION_TEMPLATE =
+  '/v1/graph-projects/{id}/candidates/{id}/action'
+export function kunGraphProjectCandidateActionPath(
+  projectId: string,
+  candidateId: string
+): string {
+  return `${kunGraphProjectPath(projectId)}/candidates/${encodeURIComponent(candidateId)}/action`
+}
+export const KUN_GRAPH_PROJECT_CONSOLIDATE_TEMPLATE =
+  '/v1/graph-projects/{id}/consolidate'
+export function kunGraphProjectConsolidatePath(projectId: string): string {
+  return `${kunGraphProjectPath(projectId)}/consolidate`
+}
+
 export const KUN_THREADS_PATH = '/v1/threads'
 export const KUN_THREADS_TEMPLATE = '/v1/threads'
 

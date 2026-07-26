@@ -4,9 +4,11 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ExtensionCredentialStore } from './extension-credential-store.js'
 import {
+  isModelConnectionCredentialSourceId,
   ModelConnectionConflictError,
   ModelConnectionRegistry
 } from './model-connection-registry.js'
+import { CodexOAuthCredentialRefresher } from './codex-oauth-credential-refresher.js'
 
 const roots: string[] = []
 
@@ -32,6 +34,159 @@ async function registry(modelCapabilities?: ConstructorParameters<typeof ModelCo
 }
 
 describe('ModelConnectionRegistry', () => {
+  it('keeps managed credential sources internal and authoritative across reconciliation', async () => {
+    const { dataDir, value } = await registry()
+    const direct = await value.connect({
+      expectedRevision: 0,
+      id: 'codex',
+      name: 'Codex',
+      kind: 'http',
+      authType: 'subscription',
+      baseUrl: 'https://chatgpt.com/backend-api/codex',
+      endpointFormat: 'responses',
+      credential: 'stale-expanded-access-token',
+      models: ['gpt-5.6-sol'],
+      selectedModel: 'gpt-5.6-sol',
+      probe: false,
+      select: true
+    })
+
+    const sourceId = 'settings:provider:codex'
+    const reconciled = await value.initialize([{
+      expectedRevision: direct.revision,
+      id: 'codex',
+      name: 'Codex',
+      kind: 'http',
+      authType: 'subscription',
+      baseUrl: 'https://chatgpt.com/backend-api/codex',
+      endpointFormat: 'responses',
+      credentialSourceId: sourceId,
+      models: ['gpt-5.6-sol'],
+      selectedModel: 'gpt-5.6-sol',
+      probe: false,
+      select: true
+    }])
+
+    expect(JSON.stringify(reconciled)).not.toContain(sourceId)
+    const stored = await readFile(join(dataDir, 'model-connections.v1.json'), 'utf8')
+    expect(stored).toContain(sourceId)
+    const materialized = await value.materialize()
+    expect(materialized.providers.get('codex')).toMatchObject({
+      apiKey: '',
+      credentialSourceId: sourceId
+    })
+  })
+
+  it('refreshes Registry-owned Codex OAuth credentials through their protected source', async () => {
+    const { value } = await registry()
+    const credentials = JSON.stringify({
+      kind: 'codex-oauth',
+      accessToken: 'expired-access',
+      refreshToken: 'refresh-one',
+      expiresAt: 1,
+      accountId: 'account-one'
+    })
+    await value.connect({
+      expectedRevision: 0,
+      id: 'codex',
+      name: 'Codex',
+      kind: 'http',
+      authType: 'subscription',
+      baseUrl: 'https://chatgpt.com/backend-api/codex',
+      endpointFormat: 'responses',
+      credential: credentials,
+      models: ['gpt-5.6-sol'],
+      selectedModel: 'gpt-5.6-sol',
+      probe: false,
+      select: true
+    })
+    const config = (await value.materialize()).providers.get('codex')
+    expect(config?.credentialSourceId).toSatisfy(isModelConnectionCredentialSourceId)
+    expect(config?.apiKey).toBe('expired-access')
+
+    let refreshOrdinal = 0
+    const fetchImpl = vi.fn<typeof fetch>(async () => {
+      refreshOrdinal += 1
+      return new Response(JSON.stringify({
+        access_token: `rotated-access-${refreshOrdinal}`,
+        refresh_token: `refresh-${refreshOrdinal + 1}`,
+        expires_in: 3600
+      }), { status: 200 })
+    })
+    const refresher = new CodexOAuthCredentialRefresher(value, {
+      fetchImpl,
+      nowMs: () => 10_000
+    })
+    const resolved = await refresher.resolve(config!.credentialSourceId!)
+    expect(resolved.refreshable).toBe(true)
+    expect(JSON.parse(resolved.rawApiKey)).toMatchObject({
+      accessToken: 'rotated-access-1',
+      refreshToken: 'refresh-2'
+    })
+    const afterRejectedBearer = await refresher.resolve(
+      config!.credentialSourceId!,
+      'rotated-access-1'
+    )
+    expect(JSON.parse(afterRejectedBearer.rawApiKey)).toMatchObject({
+      accessToken: 'rotated-access-2',
+      refreshToken: 'refresh-3'
+    })
+    expect(JSON.parse((await value.resolveApiKey(config!.credentialSourceId!))!.apiKey))
+      .toMatchObject({ accessToken: 'rotated-access-2' })
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps direct Registry API keys request-resolvable but non-refreshable', async () => {
+    const { value } = await registry()
+    await value.connect({
+      expectedRevision: 0,
+      id: 'custom',
+      name: 'Custom',
+      kind: 'http',
+      authType: 'api-key',
+      baseUrl: 'https://example.test/v1',
+      endpointFormat: 'chat_completions',
+      credential: 'plain-secret',
+      models: ['model-a'],
+      selectedModel: 'model-a',
+      probe: false,
+      select: true
+    })
+    const config = (await value.materialize()).providers.get('custom')
+    const fetchImpl = vi.fn<typeof fetch>()
+    const refresher = new CodexOAuthCredentialRefresher(value, { fetchImpl })
+
+    await expect(refresher.resolve(config!.credentialSourceId!)).resolves.toEqual({
+      rawApiKey: 'plain-secret',
+      refreshable: false
+    })
+    expect(fetchImpl).not.toHaveBeenCalled()
+  })
+
+  it('keeps managed non-HTTP subscription material available to its delegated runtime', async () => {
+    const { value } = await registry()
+    await value.initialize([{
+      expectedRevision: 0,
+      id: 'claude-subscription',
+      name: 'Claude subscription',
+      kind: 'agent-sdk',
+      authType: 'subscription',
+      endpointFormat: 'messages',
+      credential: 'claude-setup-token',
+      credentialSourceId: 'settings:provider:claude-subscription',
+      models: ['claude-opus'],
+      selectedModel: 'claude-opus',
+      probe: false,
+      select: true
+    }])
+
+    expect((await value.materialize()).providers.get('claude-subscription')).toMatchObject({
+      kind: 'agent-sdk',
+      apiKey: 'claude-setup-token',
+      credentialSourceId: 'settings:provider:claude-subscription'
+    })
+  })
+
   it('applies concurrent GUI/TUI revisions to the live runtime in durable order', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'kun-model-connections-'))
     roots.push(dataDir)

@@ -152,13 +152,15 @@ export function shouldSurfaceComposerUserInput(route: AppRoute, compact: boolean
 export function shouldShowWorkspaceControls({
   compact,
   route,
-  hasActiveThread
+  hasActiveThread,
+  hasConversationStarted
 }: {
   compact: boolean
   route: AppRoute
   hasActiveThread: boolean
+  hasConversationStarted: boolean
 }): boolean {
-  return !compact && route === 'chat' && !hasActiveThread
+  return !compact && route === 'chat' && (!hasActiveThread || !hasConversationStarted)
 }
 
 export function shouldShowUsageHistory({
@@ -431,7 +433,13 @@ export function FloatingComposer({
     : null
   const activeThreadArchived = activeThread?.archived === true
   const showUsageHistoryFooter = shouldShowUsageHistory({ compact, route, runtimeReady })
-  const showWorkspaceControls = shouldShowWorkspaceControls({ compact, route, hasActiveThread })
+  const hasConversationStarted = blocks.some((block) => block.kind === 'user')
+  const showWorkspaceControls = shouldShowWorkspaceControls({
+    compact,
+    route,
+    hasActiveThread,
+    hasConversationStarted
+  })
   const threadUsageState = useThreadUsageState(
     activeThreadId,
     showUsageHistoryFooter && Boolean(activeThreadId),

@@ -103,37 +103,55 @@ describe('FloatingComposer usage history visibility', () => {
 })
 
 describe('FloatingComposer workspace controls visibility', () => {
-  it('only shows workspace and branch controls before entering a chat session', () => {
+  it('shows workspace and branch controls until the conversation starts', () => {
     expect(shouldShowWorkspaceControls({
       compact: false,
       route: 'chat',
-      hasActiveThread: false
+      hasActiveThread: false,
+      hasConversationStarted: false
     })).toBe(true)
     expect(shouldShowWorkspaceControls({
       compact: false,
       route: 'chat',
-      hasActiveThread: true
+      hasActiveThread: true,
+      hasConversationStarted: false
+    })).toBe(true)
+    expect(shouldShowWorkspaceControls({
+      compact: false,
+      route: 'chat',
+      hasActiveThread: true,
+      hasConversationStarted: true
     })).toBe(false)
     expect(shouldShowWorkspaceControls({
       compact: true,
       route: 'chat',
-      hasActiveThread: false
+      hasActiveThread: false,
+      hasConversationStarted: false
     })).toBe(false)
     expect(shouldShowWorkspaceControls({
       compact: false,
       route: 'write',
-      hasActiveThread: false
+      hasActiveThread: false,
+      hasConversationStarted: false
     })).toBe(false)
   })
 
-  it('renders the workspace and branch controls above the input shell', () => {
+  it('renders the workspace and branch controls above the input shell for an empty active thread', () => {
     useChatStore.setState({
-      activeThreadId: null,
+      activeThreadId: 'thr_empty',
       activeThreadGoal: null,
       activeThreadTodos: null,
+      blocks: [],
       route: 'chat',
       workspaceRoot: '/Users/test/code/acme-project',
-      threads: []
+      threads: [{
+        id: 'thr_empty',
+        title: 'New chat',
+        updatedAt: '2026-07-27T00:00:00.000Z',
+        model: 'test-model',
+        mode: 'agent',
+        workspace: '/Users/test/code/acme-project'
+      }]
     })
 
     const html = renderToStaticMarkup(createElement(FloatingComposer, {
@@ -143,7 +161,7 @@ describe('FloatingComposer workspace controls visibility', () => {
       setMode: () => undefined,
       busy: false,
       runtimeReady: false,
-      hasActiveThread: false,
+      hasActiveThread: true,
       workspaceRootOverride: '/Users/test/code/acme-project',
       composerModel: '',
       composerPickList: [],

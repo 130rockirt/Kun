@@ -1,4 +1,18 @@
 import { rendererRuntimeClient } from '../agent/runtime-client'
+import {
+  KUN_GRAPHS_PATH,
+  KUN_GRAPH_PROJECT_IDENTITY_PATH,
+  kunGraphActionPath,
+  kunGraphArtifactPath,
+  kunGraphEventsPath,
+  kunGraphPath,
+  kunGraphProjectAgentActionPath,
+  kunGraphProjectAgentsActionPath,
+  kunGraphProjectAgentsPath,
+  kunGraphProjectCandidateActionPath,
+  kunGraphProjectCollectionPath,
+  kunGraphProjectConsolidatePath
+} from '@shared/kun-endpoints'
 import type {
   GraphAgentEvidence,
   GraphAgentProfile,
@@ -51,16 +65,16 @@ async function request<T>(
 export const graphRuntimeClient = {
   async listRuns(threadId?: string): Promise<GraphRun[]> {
     const query = threadId ? `?thread_id=${encodeURIComponent(threadId)}` : ''
-    return (await request<{ runs: GraphRun[] }>(`/v1/graphs${query}`)).runs
+    return (await request<{ runs: GraphRun[] }>(`${KUN_GRAPHS_PATH}${query}`)).runs
   },
 
   getRun(runId: string): Promise<GraphRun> {
-    return request(`/v1/graphs/${encodeURIComponent(runId)}`)
+    return request(kunGraphPath(runId))
   },
 
   async listEvents(runId: string, sinceSeq = 0): Promise<GraphEventEnvelope[]> {
     return (await request<{ events: GraphEventEnvelope[] }>(
-      `/v1/graphs/${encodeURIComponent(runId)}/events?since_seq=${sinceSeq}`
+      `${kunGraphEventsPath(runId)}?since_seq=${sinceSeq}`
     )).events
   },
 
@@ -72,14 +86,12 @@ export const graphRuntimeClient = {
     const query = new URLSearchParams()
     if (cursor?.startLine !== undefined) query.set('start_line', String(cursor.startLine))
     else query.set('offset', String(cursor?.offset ?? 0))
-    return request(
-      `/v1/graphs/${encodeURIComponent(runId)}/artifacts/${encodeURIComponent(artifactId)}?${query}`
-    )
+    return request(`${kunGraphArtifactPath(runId, artifactId)}?${query}`)
   },
 
   command(runId: string, action: 'start' | 'pause' | 'resume' | 'cleanup'): Promise<GraphRun> {
     const commandId = graphId(`user_${action}`)
-    return request(`/v1/graphs/${encodeURIComponent(runId)}/${action}`, 'POST', {
+    return request(kunGraphActionPath(runId, action), 'POST', {
       commandId,
       idempotencyKey: commandId
     })
@@ -87,7 +99,7 @@ export const graphRuntimeClient = {
 
   async cancel(runId: string, reason: string): Promise<GraphRun> {
     const commandId = graphId('user_cancel')
-    return request(`/v1/graphs/${encodeURIComponent(runId)}/cancel`, 'POST', {
+    return request(kunGraphActionPath(runId, 'cancel'), 'POST', {
       commandId,
       idempotencyKey: commandId,
       reason
@@ -96,7 +108,7 @@ export const graphRuntimeClient = {
 
   async retry(runId: string, nodeId: string): Promise<GraphRun> {
     const commandId = graphId('user_retry')
-    return request(`/v1/graphs/${encodeURIComponent(runId)}/retry`, 'POST', {
+    return request(kunGraphActionPath(runId, 'retry'), 'POST', {
       commandId,
       idempotencyKey: commandId,
       nodeId
@@ -110,7 +122,7 @@ export const graphRuntimeClient = {
     outcome: 'pass' | 'fail'
   ): Promise<GraphRun> {
     const commandId = graphId('human_review')
-    return request(`/v1/graphs/${encodeURIComponent(run.id)}/reviews`, 'POST', {
+    return request(kunGraphActionPath(run.id, 'reviews'), 'POST', {
       commandId,
       idempotencyKey: commandId,
       expectedSeq: run.lastEventSeq,
@@ -142,7 +154,7 @@ export const graphRuntimeClient = {
   ): Promise<GraphRun> {
     const commandId = graphId('user_patch')
     const patchId = graphId('graph_patch')
-    return request(`/v1/graphs/${encodeURIComponent(run.id)}/patch`, 'POST', {
+    return request(kunGraphActionPath(run.id, 'patch'), 'POST', {
       commandId,
       idempotencyKey: patchId,
       expectedSeq: run.lastEventSeq,
@@ -169,7 +181,7 @@ export const graphRuntimeClient = {
       { kind: 'attempt'; nodeId: string; attemptId: string }
   ): Promise<GraphRun> {
     const commandId = graphId('user_steer')
-    return request(`/v1/graphs/${encodeURIComponent(runId)}/steer`, 'POST', {
+    return request(kunGraphActionPath(runId, 'steer'), 'POST', {
       commandId,
       idempotencyKey: commandId,
       target,
@@ -178,42 +190,42 @@ export const graphRuntimeClient = {
   },
 
   identity(workspace: string): Promise<ProjectIdentity> {
-    return request(`/v1/graph-projects/identity?workspace=${encodeURIComponent(workspace)}`)
+    return request(`${KUN_GRAPH_PROJECT_IDENTITY_PATH}?workspace=${encodeURIComponent(workspace)}`)
   },
 
   async listProfiles(projectId: string, includeArchived = true): Promise<GraphAgentProfile[]> {
     return (await request<{ profiles: GraphAgentProfile[] }>(
-      `/v1/graph-projects/${encodeURIComponent(projectId)}/agents?include_archived=${includeArchived}`
+      `${kunGraphProjectAgentsPath(projectId)}?include_archived=${includeArchived}`
     )).profiles
   },
 
   async listEvidence(projectId: string): Promise<GraphAgentEvidence[]> {
     return (await request<{ evidence: GraphAgentEvidence[] }>(
-      `/v1/graph-projects/${encodeURIComponent(projectId)}/evidence`
+      kunGraphProjectCollectionPath(projectId, 'evidence')
     )).evidence
   },
 
   async listScores(projectId: string): Promise<GraphAgentScore[]> {
     return (await request<{ scores: GraphAgentScore[] }>(
-      `/v1/graph-projects/${encodeURIComponent(projectId)}/scores`
+      kunGraphProjectCollectionPath(projectId, 'scores')
     )).scores
   },
 
   async listAudit(projectId: string): Promise<GraphGovernanceAudit[]> {
     return (await request<{ audit: GraphGovernanceAudit[] }>(
-      `/v1/graph-projects/${encodeURIComponent(projectId)}/audit`
+      kunGraphProjectCollectionPath(projectId, 'audit')
     )).audit
   },
 
   async listCandidates(projectId: string): Promise<GraphLearningCandidate[]> {
     return (await request<{ candidates: GraphLearningCandidate[] }>(
-      `/v1/graph-projects/${encodeURIComponent(projectId)}/candidates`
+      kunGraphProjectCollectionPath(projectId, 'candidates')
     )).candidates
   },
 
   async listJobs(projectId: string): Promise<GraphLearningJob[]> {
     return (await request<{ jobs: GraphLearningJob[] }>(
-      `/v1/graph-projects/${encodeURIComponent(projectId)}/jobs`
+      kunGraphProjectCollectionPath(projectId, 'jobs')
     )).jobs
   },
 
@@ -225,7 +237,7 @@ export const graphRuntimeClient = {
     reason: string
   ): Promise<GraphAgentProfile> {
     return request(
-      `/v1/graph-projects/${encodeURIComponent(projectId)}/agents/${encodeURIComponent(profileId)}/lifecycle`,
+      kunGraphProjectAgentActionPath(projectId, profileId, 'lifecycle'),
       'POST',
       { workspace, lifecycle, reason }
     )
@@ -238,7 +250,7 @@ export const graphRuntimeClient = {
     profile: GraphAgentProfile
   }> {
     return request(
-      `/v1/graph-projects/${encodeURIComponent(projectId)}/agents/${encodeURIComponent(profileId)}/export`
+      kunGraphProjectAgentActionPath(projectId, profileId, 'export')
     )
   },
 
@@ -248,7 +260,7 @@ export const graphRuntimeClient = {
     profile: GraphAgentProfile
   ): Promise<GraphAgentProfile> {
     return request(
-      `/v1/graph-projects/${encodeURIComponent(projectId)}/agents/import`,
+      kunGraphProjectAgentsActionPath(projectId, 'import'),
       'POST',
       {
         workspace,
@@ -266,7 +278,7 @@ export const graphRuntimeClient = {
     name: string
   ): Promise<GraphAgentProfile> {
     return request(
-      `/v1/graph-projects/${encodeURIComponent(projectId)}/agents/merge`,
+      kunGraphProjectAgentsActionPath(projectId, 'merge'),
       'POST',
       {
         workspace,
@@ -286,7 +298,7 @@ export const graphRuntimeClient = {
     reason: string
   ): Promise<GraphLearningCandidate> {
     return request(
-      `/v1/graph-projects/${encodeURIComponent(projectId)}/candidates/${encodeURIComponent(candidateId)}/action`,
+      kunGraphProjectCandidateActionPath(projectId, candidateId),
       'POST',
       { workspace, action, reason }
     )
@@ -294,7 +306,7 @@ export const graphRuntimeClient = {
 
   async consolidate(projectId: string, workspace: string): Promise<GraphLearningJob | null> {
     return (await request<{ job: GraphLearningJob | null }>(
-      `/v1/graph-projects/${encodeURIComponent(projectId)}/consolidate`,
+      kunGraphProjectConsolidatePath(projectId),
       'POST',
       { workspace, idempotencyKey: graphId('manual_consolidation') }
     )).job
