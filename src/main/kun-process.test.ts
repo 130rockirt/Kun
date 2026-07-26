@@ -1374,6 +1374,7 @@ describe('syncGuiManagedKunConfig', () => {
           summaryInputMaxBytes: 131072
         },
         runtimeTuning: {
+          defaultsVersion: 1,
           maxConcurrentTurns: 32,
           maxWallTimeMs: 7_200_000,
           streamIdleTimeoutMs: 120000,

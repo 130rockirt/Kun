@@ -6,6 +6,7 @@ import {
   kunSettingsPatch,
   DEFAULT_KUN_DATA_DIR,
   DEFAULT_KUN_MODEL,
+  DEFAULT_KUN_STREAM_IDLE_TIMEOUT_MS,
   DEFAULT_LOG_RETENTION_DAYS,
   DEFAULT_CURSOR_SPOTLIGHT_COLOR,
   DEFAULT_GIT_BRANCH_PREFIX,
@@ -37,6 +38,7 @@ import {
   isKunRuntimeInsecure,
   migrateLegacyAppSettings,
   normalizeAppSettings,
+  KUN_RUNTIME_TUNING_DEFAULTS_VERSION,
   normalizeChatContentMaxWidth,
   normalizeComposerSendKey,
   isComposerSendHotkey,
@@ -374,6 +376,7 @@ describe('kun defaults', () => {
         summaryInputMaxBytes: 98304
       },
       runtimeTuning: {
+        defaultsVersion: KUN_RUNTIME_TUNING_DEFAULTS_VERSION,
         maxConcurrentTurns: 256,
         maxWallTimeMs: 86400000,
         streamIdleTimeoutMs: 450000,
@@ -1058,6 +1061,70 @@ describe('mergeKunRuntimeSettings', () => {
       mergeKunRuntimeSettings(current, { runtimeTuning: { streamIdleTimeoutMs: 999_999_999 } })
         .runtimeTuning.streamIdleTimeoutMs
     ).toBe(3_600_000)
+  })
+
+  it('migrates the unversioned stream idle default exactly once', () => {
+    const current = settings()
+    const { defaultsVersion: _defaultsVersion, ...legacyRuntimeTuning } =
+      current.agents.kun.runtimeTuning
+    void _defaultsVersion
+
+    const migrated = normalizeAppSettings({
+      ...current,
+      agents: {
+        kun: {
+          ...current.agents.kun,
+          runtimeTuning: {
+            ...legacyRuntimeTuning,
+            streamIdleTimeoutMs: 45_000
+          }
+        }
+      }
+    } as AppSettingsV1)
+
+    expect(migrated.agents.kun.runtimeTuning).toMatchObject({
+      defaultsVersion: KUN_RUNTIME_TUNING_DEFAULTS_VERSION,
+      streamIdleTimeoutMs: DEFAULT_KUN_STREAM_IDLE_TIMEOUT_MS
+    })
+    expect(normalizeAppSettings(migrated).agents.kun.runtimeTuning).toEqual(
+      migrated.agents.kun.runtimeTuning
+    )
+  })
+
+  it('preserves custom, disabled, and already-versioned stream idle timeouts', () => {
+    const current = settings()
+    const { defaultsVersion: _defaultsVersion, ...legacyRuntimeTuning } =
+      current.agents.kun.runtimeTuning
+    void _defaultsVersion
+    const normalizeTimeout = (
+      streamIdleTimeoutMs: number,
+      defaultsVersion?: number
+    ) => normalizeAppSettings({
+      ...current,
+      agents: {
+        kun: {
+          ...current.agents.kun,
+          runtimeTuning: {
+            ...legacyRuntimeTuning,
+            ...(defaultsVersion !== undefined ? { defaultsVersion } : {}),
+            streamIdleTimeoutMs
+          }
+        }
+      }
+    } as AppSettingsV1).agents.kun.runtimeTuning
+
+    expect(normalizeTimeout(120_000)).toMatchObject({
+      defaultsVersion: KUN_RUNTIME_TUNING_DEFAULTS_VERSION,
+      streamIdleTimeoutMs: 120_000
+    })
+    expect(normalizeTimeout(0)).toMatchObject({
+      defaultsVersion: KUN_RUNTIME_TUNING_DEFAULTS_VERSION,
+      streamIdleTimeoutMs: 0
+    })
+    expect(normalizeTimeout(45_000, KUN_RUNTIME_TUNING_DEFAULTS_VERSION)).toMatchObject({
+      defaultsVersion: KUN_RUNTIME_TUNING_DEFAULTS_VERSION,
+      streamIdleTimeoutMs: 45_000
+    })
   })
 
   it('deep-merges image generation settings and normalizes invalid values', () => {

@@ -14,6 +14,7 @@ import {
   MIN_WRITE_AUTOSAVE_DELAY_MS,
   MIN_KUN_LOCAL_PORT,
   KUN_CONTEXT_COMPACTION_DEFAULTS_VERSION,
+  KUN_RUNTIME_TUNING_DEFAULTS_VERSION,
   SCHEDULE_MODEL_IDS,
   SCHEDULE_REASONING_EFFORT_IDS,
   SPEECH_TO_TEXT_PROTOCOLS,
@@ -321,6 +322,7 @@ const kunRuntimePatchSchema = z.object({
     summaryProviderId: z.string().trim().max(64).optional()
   }).strict().optional(),
   runtimeTuning: z.object({
+    defaultsVersion: z.number().int().positive().max(KUN_RUNTIME_TUNING_DEFAULTS_VERSION).optional(),
     maxConcurrentTurns: z.number().int().positive().max(256).optional(),
     maxWallTimeMs: z.number().int().positive().max(86_400_000).optional(),
     streamIdleTimeoutMs: z.number().int().min(0).max(3_600_000).optional(),

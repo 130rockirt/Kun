@@ -284,7 +284,7 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
   const runtimeTuning = kun.runtimeTuning ?? {
     maxConcurrentTurns: 256,
     maxWallTimeMs: 86400000,
-    streamIdleTimeoutMs: 45000,
+    streamIdleTimeoutMs: 450000,
     toolStorm: {
       enabled: true,
       windowSize: 8,

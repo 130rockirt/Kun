@@ -20,6 +20,7 @@ import {
   defaultScheduleSettings,
   defaultWorkflowSettings,
   getKunRuntimeSettings,
+  kunRuntimeTuningDefaultsMigrationNeeded,
   mergeModelProviderSettings,
   defaultWriteSettings,
   mergeClawSettings,
@@ -41,7 +42,8 @@ import {
   type AppSettingsPatch,
   type AppSettingsV1,
   type ClawImChannelV1,
-  type ClawImConversationV1
+  type ClawImConversationV1,
+  type KunRuntimeTuningSettingsV1
 } from '../shared/app-settings'
 
 export type { AppSettingsV1 }
@@ -291,6 +293,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+function storedKunRuntimeTuning(
+  settings: Record<string, unknown>
+): Partial<KunRuntimeTuningSettingsV1> | undefined {
+  const agents = isRecord(settings.agents) ? settings.agents : undefined
+  const kun = agents && isRecord(agents.kun) ? agents.kun : undefined
+  const runtimeTuning = kun && isRecord(kun.runtimeTuning) ? kun.runtimeTuning : undefined
+  return runtimeTuning as Partial<KunRuntimeTuningSettingsV1> | undefined
+}
+
 async function loadDefaultSettings(): Promise<AppSettingsV1> {
   const defaults = normalizeStoredSettings(defaultSettings())
   await ensureManagedWorkspaceRootsExist(defaults)
@@ -439,6 +450,11 @@ export class JsonSettingsStore {
       return replaceInvalidSettingsWithDefaults(this, sourcePath, raw, 'top-level value is not an object')
     }
 
+    const persistRuntimeTuningDefaultsMigration = (() => {
+      const runtimeTuning = storedKunRuntimeTuning(parsed)
+      return runtimeTuning !== undefined &&
+        kunRuntimeTuningDefaultsMigrationNeeded(runtimeTuning)
+    })()
     const normalized = normalizeStoredSettings(buildMergedSettings(parsed as Partial<AppSettingsV1>))
     await ensureManagedWorkspaceRootsExist(normalized)
     const prepared = normalized
@@ -453,7 +469,7 @@ export class JsonSettingsStore {
     const migration = await this.prepareCredentialMigration(prepared, false)
     if (migration === undefined) {
       this.cache = prepared
-      if (sourcePath !== this.path) {
+      if (sourcePath !== this.path || persistRuntimeTuningDefaultsMigration) {
         await this.save(prepared)
       }
       return this.cache
@@ -463,7 +479,10 @@ export class JsonSettingsStore {
       return this.cache
     }
 
-    const shouldPersist = sourcePath !== this.path || migration.removedPlaintext
+    const shouldPersist =
+      sourcePath !== this.path ||
+      migration.removedPlaintext ||
+      persistRuntimeTuningDefaultsMigration
     if (shouldPersist) {
       try {
         await this.persistSettings(migration.persistedSettings)

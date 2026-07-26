@@ -145,7 +145,7 @@ type StreamPayloadResult = {
   usage: UsageSnapshot | null
 }
 
-const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 45_000
+export const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 450_000
 
 function isCodexEndpoint(baseUrl: string): boolean {
   return baseUrl.includes('chatgpt.com/backend-api/codex')

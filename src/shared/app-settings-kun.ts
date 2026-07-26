@@ -75,6 +75,7 @@ import {
 
 const LEGACY_COREAGENT_DATA_DIR = '~/.deepseekgui/coreagent'
 const LEGACY_KUN_DEFAULT_MODEL = 'deepseek-chat'
+const LEGACY_KUN_STREAM_IDLE_TIMEOUT_MS = 45_000
 // 旧版真实落盘默认值, 用于把升级前配置迁移到当前 Kun 默认端口。
 const LEGACY_LOCAL_HTTP_DEFAULT_PORT = 7878
 const PREVIOUS_KUN_DEFAULT_PORT = 8899
@@ -336,6 +337,8 @@ export function defaultKunStorageSettings(): KunStorageSettingsV1 {
 }
 
 export const KUN_CONTEXT_COMPACTION_DEFAULTS_VERSION = 2
+export const KUN_RUNTIME_TUNING_DEFAULTS_VERSION = 1
+export const DEFAULT_KUN_STREAM_IDLE_TIMEOUT_MS = 450_000
 
 const LEGACY_KUN_CONTEXT_COMPACTION_DEFAULTS = [
   { soft: 16_000, hard: 24_000 },
@@ -359,9 +362,10 @@ export function defaultKunContextCompactionSettings(): KunContextCompactionSetti
 
 export function defaultKunRuntimeTuningSettings(): KunRuntimeTuningSettingsV1 {
   return {
+    defaultsVersion: KUN_RUNTIME_TUNING_DEFAULTS_VERSION,
     maxConcurrentTurns: 256,
     maxWallTimeMs: 86_400_000,
-    streamIdleTimeoutMs: 450_000,
+    streamIdleTimeoutMs: DEFAULT_KUN_STREAM_IDLE_TIMEOUT_MS,
     toolStorm: {
       enabled: true,
       windowSize: 8,
@@ -377,7 +381,15 @@ export function getKunRuntimeSettings(
   settings: AppSettingsV1
 ): KunRuntimeSettingsV1 {
   const raw = (settings as { agents?: { kun?: Partial<KunRuntimeSettingsV1> } }).agents?.kun
-  return mergeKunRuntimeSettings(defaultKunRuntimeSettings(), raw)
+  return mergeKunRuntimeSettings(
+    defaultKunRuntimeSettings(),
+    raw
+      ? {
+          ...raw,
+          runtimeTuning: migrateKunRuntimeTuningDefaults(raw.runtimeTuning)
+        }
+      : raw
+  )
 }
 
 export function kunSettingsEnvelope(
@@ -1008,34 +1020,56 @@ function normalizeKunRuntimeTuningSettings(
   input: Partial<KunRuntimeTuningSettingsV1> | undefined
 ): KunRuntimeTuningSettingsV1 {
   const defaults = defaultKunRuntimeTuningSettings()
+  const migrated = migrateKunRuntimeTuningDefaults(input)
   return {
+    defaultsVersion: KUN_RUNTIME_TUNING_DEFAULTS_VERSION,
     maxConcurrentTurns: boundedPositiveInt(
-      input?.maxConcurrentTurns,
+      migrated.maxConcurrentTurns,
       defaults.maxConcurrentTurns,
       256
     ),
     maxWallTimeMs: boundedPositiveInt(
-      input?.maxWallTimeMs,
+      migrated.maxWallTimeMs,
       defaults.maxWallTimeMs,
       86_400_000
     ),
     streamIdleTimeoutMs: boundedNonNegativeInt(
-      input?.streamIdleTimeoutMs,
+      migrated.streamIdleTimeoutMs,
       defaults.streamIdleTimeoutMs,
       3_600_000
     ),
     toolStorm: {
-      enabled: input?.toolStorm?.enabled !== false,
-      windowSize: boundedPositiveInt(input?.toolStorm?.windowSize, defaults.toolStorm.windowSize, 128),
-      threshold: Math.max(2, boundedPositiveInt(input?.toolStorm?.threshold, defaults.toolStorm.threshold, 128))
+      enabled: migrated.toolStorm?.enabled !== false,
+      windowSize: boundedPositiveInt(migrated.toolStorm?.windowSize, defaults.toolStorm.windowSize, 128),
+      threshold: Math.max(2, boundedPositiveInt(migrated.toolStorm?.threshold, defaults.toolStorm.threshold, 128))
     },
     toolArgumentRepair: {
       maxStringBytes: boundedPositiveInt(
-        input?.toolArgumentRepair?.maxStringBytes,
+        migrated.toolArgumentRepair?.maxStringBytes,
         defaults.toolArgumentRepair.maxStringBytes,
         16 * 1024 * 1024
       )
     }
+  }
+}
+
+export function kunRuntimeTuningDefaultsMigrationNeeded(
+  input: Partial<KunRuntimeTuningSettingsV1> | undefined
+): boolean {
+  return boundedPositiveInt(input?.defaultsVersion, 0) < KUN_RUNTIME_TUNING_DEFAULTS_VERSION
+}
+
+export function migrateKunRuntimeTuningDefaults(
+  input: Partial<KunRuntimeTuningSettingsV1> | undefined
+): Partial<KunRuntimeTuningSettingsV1> {
+  const current = input ?? {}
+  if (!kunRuntimeTuningDefaultsMigrationNeeded(current)) return current
+  return {
+    ...current,
+    defaultsVersion: KUN_RUNTIME_TUNING_DEFAULTS_VERSION,
+    ...(current.streamIdleTimeoutMs === LEGACY_KUN_STREAM_IDLE_TIMEOUT_MS
+      ? { streamIdleTimeoutMs: DEFAULT_KUN_STREAM_IDLE_TIMEOUT_MS }
+      : {})
   }
 }
 

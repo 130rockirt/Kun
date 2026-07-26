@@ -577,6 +577,47 @@ describe('JsonSettingsStore', () => {
     expect(await readFile(join(userDataDir, 'deepseek-gui-settings.json'), 'utf8')).toContain('sk-migrated')
   })
 
+  it('persists the versioned stream idle timeout migration for existing users', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'ds-gui-settings-'))
+    const settingsPath = join(userDataDir, 'kun-settings.json')
+    await writeFile(
+      settingsPath,
+      JSON.stringify({
+        version: 1,
+        agents: {
+          kun: {
+            runtimeTuning: {
+              maxConcurrentTurns: 256,
+              maxWallTimeMs: 86_400_000,
+              streamIdleTimeoutMs: 45_000
+            }
+          }
+        }
+      }),
+      'utf8'
+    )
+
+    const loaded = await new JsonSettingsStore(userDataDir).load()
+    expect(loaded.agents.kun.runtimeTuning).toMatchObject({
+      defaultsVersion: 1,
+      streamIdleTimeoutMs: 450_000
+    })
+
+    const persisted = JSON.parse(await readFile(settingsPath, 'utf8')) as {
+      agents: { kun: { runtimeTuning: { defaultsVersion: number; streamIdleTimeoutMs: number } } }
+    }
+    expect(persisted.agents.kun.runtimeTuning).toMatchObject({
+      defaultsVersion: 1,
+      streamIdleTimeoutMs: 450_000
+    })
+
+    const reloaded = await new JsonSettingsStore(userDataDir).load()
+    expect(reloaded.agents.kun.runtimeTuning).toMatchObject({
+      defaultsVersion: 1,
+      streamIdleTimeoutMs: 450_000
+    })
+  })
+
   it('throws for non-recoverable read errors', async () => {
     const userDataDir = await mkdtemp(join(tmpdir(), 'ds-gui-settings-'))
     const settingsPath = join(userDataDir, 'deepseek-gui-settings.json')

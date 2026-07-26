@@ -774,6 +774,8 @@ export type KunToolArgumentRepairSettingsV1 = {
 }
 
 export type KunRuntimeTuningSettingsV1 = {
+  /** Tracks one-time migrations when runtime tuning defaults change. */
+  defaultsVersion: number
   /** Global admission cap for concurrently active turns in one Kun runtime. */
   maxConcurrentTurns: number
   /**
@@ -803,6 +805,7 @@ export type KunSettingsEnvelopeV1 = {
 export type AgentRuntimeSettingsMapV1 = KunSettingsEnvelopeV1
 
 export type KunRuntimeTuningSettingsPatchV1 = {
+  defaultsVersion?: number
   maxConcurrentTurns?: number
   maxWallTimeMs?: number
   streamIdleTimeoutMs?: number

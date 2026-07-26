@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
-import { CompatModelClient } from '../src/adapters/model/compat-model-client.js'
+import {
+  CompatModelClient,
+  DEFAULT_STREAM_IDLE_TIMEOUT_MS
+} from '../src/adapters/model/compat-model-client.js'
 import {
   makeAssistantReasoningItem,
   makeAssistantTextItem,
@@ -95,6 +98,10 @@ function sseStream(payloads: Array<Record<string, unknown> | '[DONE]'>): Readabl
 }
 
 describe('CompatModelClient', () => {
+  it('uses the current 7.5 minute stream idle timeout by default', () => {
+    expect(DEFAULT_STREAM_IDLE_TIMEOUT_MS).toBe(450_000)
+  })
+
   it('uses request.model over client default model', async () => {
     const response = {
       id: 'r2',
