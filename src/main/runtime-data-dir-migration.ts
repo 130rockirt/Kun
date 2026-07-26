@@ -29,6 +29,8 @@ import {
 } from './kun-data-dir-paths'
 import type { MigrationLogger } from './legacy-data-migration'
 import { settingsReadCandidates } from './settings-file-paths'
+import { ExtensionPaths } from '../../kun/src/extensions/paths.js'
+import { validateRegistryDocument } from '../../kun/src/extensions/registry.js'
 
 const JOURNAL_FILE_NAME = 'kun-runtime-data-migration-v2.json'
 const REPORT_FILE_NAME = 'kun-runtime-data-migration-v2-report.json'
@@ -73,6 +75,8 @@ type MigrationPhase =
   | 'rollback-source-restored'
   | 'link-created'
   | 'salvaged'
+  | 'extension-registry-backed-up'
+  | 'extension-registry-rebased'
   | 'settings-rewritten'
   | 'completed'
 const MIGRATION_PHASES = new Set<MigrationPhase>([
@@ -85,6 +89,8 @@ const MIGRATION_PHASES = new Set<MigrationPhase>([
   'rollback-source-restored',
   'link-created',
   'salvaged',
+  'extension-registry-backed-up',
+  'extension-registry-rebased',
   'settings-rewritten',
   'completed'
 ])
@@ -105,6 +111,9 @@ type RuntimeMigrationJournal = {
   settingsWritePath?: string
   settingsBackupPaths: string[]
   settingsBackedUp?: boolean
+  extensionRegistryBackupPaths?: string[]
+  extensionRegistryRebasedRecords?: number
+  extensionRegistryRebasedAt?: string
   sourceWasMissing?: boolean
   sourceThreadIds: string[]
   sourceInventory?: RuntimeStoreInventory
@@ -238,6 +247,7 @@ function readJournal(path: string): RuntimeMigrationJournal | null {
       Array.isArray(value) && value.every((entry) => typeof entry === 'string')
     const inventory = parsed.sourceInventory
     const cutoverConflictBackupPaths = parsed.cutoverConflictBackupPaths ?? []
+    const extensionRegistryBackupPaths = parsed.extensionRegistryBackupPaths ?? []
     if (
       parsed.schemaVersion !== MIGRATION_SCHEMA_VERSION ||
       typeof parsed.phase !== 'string' ||
@@ -250,6 +260,21 @@ function readJournal(path: string): RuntimeMigrationJournal | null {
       (parsed.settingsWritePath !== undefined && typeof parsed.settingsWritePath !== 'string') ||
       !stringArray(parsed.settingsBackupPaths) ||
       (parsed.settingsBackedUp !== undefined && typeof parsed.settingsBackedUp !== 'boolean') ||
+      !stringArray(extensionRegistryBackupPaths) ||
+      (
+        parsed.extensionRegistryRebasedRecords !== undefined &&
+        (
+          !Number.isSafeInteger(parsed.extensionRegistryRebasedRecords) ||
+          parsed.extensionRegistryRebasedRecords < 0
+        )
+      ) ||
+      (
+        parsed.extensionRegistryRebasedAt !== undefined &&
+        (
+          typeof parsed.extensionRegistryRebasedAt !== 'string' ||
+          Number.isNaN(Date.parse(parsed.extensionRegistryRebasedAt))
+        )
+      ) ||
       (parsed.sourceWasMissing !== undefined && typeof parsed.sourceWasMissing !== 'boolean') ||
       !stringArray(parsed.sourceThreadIds) ||
       (
@@ -315,6 +340,7 @@ function readJournal(path: string): RuntimeMigrationJournal | null {
       return null
     }
     parsed.cutoverConflictBackupPaths = cutoverConflictBackupPaths
+    parsed.extensionRegistryBackupPaths = extensionRegistryBackupPaths
     return parsed as RuntimeMigrationJournal
   } catch {
     return null
@@ -448,16 +474,40 @@ function validateJournalForRecovery(
   })) {
     return 'the Runtime migration journal contains an unsafe settings backup path'
   }
+  const extensionRegistryPath = join(expectedTarget, 'extensions', 'registry.json')
+  if ((journal.extensionRegistryBackupPaths ?? []).some((backupPath) =>
+    !isMigrationOwnedSiblingBackup(
+      backupPath,
+      extensionRegistryPath,
+      'pre-runtime-extension-path-migration',
+      input.platform
+    ))) {
+    return 'the Runtime migration journal contains an unsafe extension registry backup path'
+  }
   if (journal.phase === 'completed' && !journal.completedAt) {
     return 'the Runtime migration journal completed phase has no completion timestamp'
   }
   if (
     (journal.phase === 'salvaged' ||
+      journal.phase === 'extension-registry-backed-up' ||
+      journal.phase === 'extension-registry-rebased' ||
       journal.phase === 'settings-rewritten' ||
       journal.phase === 'completed') &&
     journal.settingsBackedUp !== true
   ) {
     return 'the Runtime migration journal phase is inconsistent with settings backup state'
+  }
+  if (
+    journal.phase === 'extension-registry-backed-up' &&
+    (journal.extensionRegistryBackupPaths ?? []).length === 0
+  ) {
+    return 'the Runtime migration journal has no extension registry backup'
+  }
+  if (
+    journal.phase === 'extension-registry-rebased' &&
+    !journal.extensionRegistryRebasedAt
+  ) {
+    return 'the Runtime migration journal has no extension registry repair timestamp'
   }
   if (
     journal.phase === 'rollback-conflict-planned' &&
@@ -744,22 +794,47 @@ function backUpSettingsFile(
   now: () => Date
 ): string[] {
   if (!settingsWritePath) return []
-  const state = pathState(settingsWritePath)
-  if (state !== 'other') {
-    throw new Error(`active settings file is unavailable: ${settingsWritePath}`)
-  }
-  const backupPath = uniqueSiblingBackup(
+  return [backUpRegularFile(
     settingsWritePath,
     'pre-runtime-data-migration',
-    now
-  )
-  copyFileSync(settingsWritePath, backupPath, constants.COPYFILE_EXCL)
+    now,
+    'active settings file'
+  )]
+}
+
+function backUpRegularFile(
+  path: string,
+  label: string,
+  now: () => Date,
+  description: string
+): string {
+  if (pathState(path) !== 'other' || !lstatSync(path).isFile()) {
+    throw new Error(`${description} is unavailable: ${path}`)
+  }
+  const backupPath = uniqueSiblingBackup(path, label, now)
+  copyFileSync(path, backupPath, constants.COPYFILE_EXCL)
   try {
     chmodSync(backupPath, 0o600)
   } catch {
     // Windows ACLs are not represented by POSIX mode bits.
   }
-  return [backupPath]
+  const backupHandle = openSync(backupPath, 'r+')
+  try {
+    fsyncSync(backupHandle)
+  } finally {
+    closeSync(backupHandle)
+  }
+  try {
+    const directoryHandle = openSync(dirname(backupPath), 'r')
+    try {
+      fsyncSync(directoryHandle)
+    } finally {
+      closeSync(directoryHandle)
+    }
+  } catch {
+    // Windows does not consistently allow opening directories for fsync.
+  }
+  return backupPath
 }
 
 function rewriteSettingsToCurrent(settingsWritePath: string | undefined): void {
@@ -791,6 +866,283 @@ function rewriteSettingsToCurrent(settingsWritePath: string | undefined): void {
     }
   }
   writeDurableJson(settingsWritePath, next)
+}
+
+type ExtensionRegistryRebaseInspection =
+  | { kind: 'missing' }
+  | {
+      kind: 'registry'
+      path: string
+      document: Record<string, unknown>
+      rebasedRecords: number
+    }
+
+function inspectExtensionRegistryForRebase(
+  sourcePath: string,
+  targetPath: string,
+  platform: NodeJS.Platform
+): ExtensionRegistryRebaseInspection {
+  const registryPath = join(targetPath, 'extensions', 'registry.json')
+  const state = pathState(registryPath)
+  if (state === 'missing') return { kind: 'missing' }
+  if (state !== 'other' || !lstatSync(registryPath).isFile()) {
+    throw new Error(`extension registry is not a regular file: ${registryPath}`)
+  }
+
+  let document: unknown
+  try {
+    document = JSON.parse(readFileSync(registryPath, 'utf8'))
+  } catch (error) {
+    throw new Error(
+      `extension registry is not valid JSON at ${registryPath}: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    )
+  }
+  if (!isObjectRecord(document) || !isObjectRecord(document.extensions)) {
+    throw new Error(`extension registry has an invalid root shape: ${registryPath}`)
+  }
+
+  const legacyPaths = new ExtensionPaths({ packageRoot: join(sourcePath, 'extensions') })
+  const currentPaths = new ExtensionPaths({ packageRoot: join(targetPath, 'extensions') })
+  let rebasedRecords = 0
+
+  for (const [extensionId, rawEntry] of Object.entries(document.extensions)) {
+    if (!isObjectRecord(rawEntry) || rawEntry.id !== extensionId || !isObjectRecord(rawEntry.versions)) {
+      throw new Error(`extension registry entry has an invalid shape: ${extensionId}`)
+    }
+    for (const [version, rawVersion] of Object.entries(rawEntry.versions)) {
+      if (!isObjectRecord(rawVersion) || rawVersion.version !== version) {
+        throw new Error(`extension registry version has an invalid shape: ${extensionId}@${version}`)
+      }
+      let legacyPackagePath: string
+      let currentPackagePath: string
+      try {
+        legacyPackagePath = legacyPaths.packageVersion(extensionId, version)
+        currentPackagePath = currentPaths.packageVersion(extensionId, version)
+      } catch (error) {
+        throw new Error(
+          `extension registry identity is unsafe: ${extensionId}@${version}: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        )
+      }
+      if (typeof rawVersion.packagePath !== 'string') {
+        throw new Error(`extension registry packagePath is missing: ${extensionId}@${version}`)
+      }
+      if (
+        !sameFilesystemPath(rawVersion.packagePath, legacyPackagePath, platform) &&
+        !sameFilesystemPath(rawVersion.packagePath, currentPackagePath, platform)
+      ) {
+        throw new Error(
+          `extension registry packagePath is outside the canonical migration roots: ` +
+          `${extensionId}@${version} (${rawVersion.packagePath})`
+        )
+      }
+      if (rawVersion.packagePath !== currentPackagePath) {
+        rawVersion.packagePath = currentPackagePath
+        rebasedRecords += 1
+      }
+    }
+  }
+
+  try {
+    // The Runtime validator normalizes a narrow legacy manifest shape while
+    // validating. Validate a clone so this migration changes packagePath only.
+    validateRegistryDocument(structuredClone(document), currentPaths)
+  } catch (error) {
+    throw new Error(
+      `extension registry remains invalid after canonical path rebasing at ${registryPath}: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    )
+  }
+
+  return {
+    kind: 'registry',
+    path: registryPath,
+    document,
+    rebasedRecords
+  }
+}
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function prepareExtensionRegistryRebase(
+  journalPath: string,
+  initialJournal: RuntimeMigrationJournal,
+  options: {
+    platform: NodeJS.Platform
+    now: () => Date
+    afterPhase: (phase: MigrationPhase) => void
+  }
+): RuntimeMigrationJournal {
+  let journal = initialJournal
+  const inspection = inspectExtensionRegistryForRebase(
+    journal.sourcePath,
+    journal.targetPath,
+    options.platform
+  )
+  if (inspection.kind === 'missing' || inspection.rebasedRecords === 0) {
+    journal = updateJournal(
+      journalPath,
+      journal,
+      {
+        phase: 'extension-registry-rebased',
+        extensionRegistryRebasedRecords: 0,
+        extensionRegistryRebasedAt: options.now().toISOString(),
+        error: undefined
+      },
+      options.now
+    )
+    options.afterPhase('extension-registry-rebased')
+    return journal
+  }
+
+  const existingBackups = journal.extensionRegistryBackupPaths ?? []
+  const backupPath = existingBackups.length > 0
+    ? undefined
+    : backUpRegularFile(
+        inspection.path,
+        'pre-runtime-extension-path-migration',
+        options.now,
+        'extension registry'
+      )
+  journal = updateJournal(
+    journalPath,
+    journal,
+    {
+      phase: 'extension-registry-backed-up',
+      extensionRegistryBackupPaths: backupPath
+        ? [...existingBackups, backupPath]
+        : existingBackups,
+      // Persist the intended count before rewriting. If the process exits
+      // after the atomic rename but before the next journal update, recovery
+      // sees a canonical registry and can still report the completed work.
+      extensionRegistryRebasedRecords: inspection.rebasedRecords,
+      error: undefined
+    },
+    options.now
+  )
+  options.afterPhase('extension-registry-backed-up')
+  return journal
+}
+
+function commitExtensionRegistryRebase(
+  journalPath: string,
+  initialJournal: RuntimeMigrationJournal,
+  options: {
+    platform: NodeJS.Platform
+    now: () => Date
+    afterPhase: (phase: MigrationPhase) => void
+  }
+): RuntimeMigrationJournal {
+  const inspection = inspectExtensionRegistryForRebase(
+    initialJournal.sourcePath,
+    initialJournal.targetPath,
+    options.platform
+  )
+  if (inspection.kind === 'missing') {
+    throw new Error('extension registry disappeared after its migration backup was recorded')
+  }
+  if (inspection.rebasedRecords > 0) {
+    writeDurableJson(inspection.path, inspection.document)
+  }
+  const rebasedRecords =
+    inspection.rebasedRecords > 0
+      ? inspection.rebasedRecords
+      : initialJournal.extensionRegistryRebasedRecords ?? 0
+  const journal = updateJournal(
+    journalPath,
+    initialJournal,
+    {
+      phase: 'extension-registry-rebased',
+      extensionRegistryRebasedRecords: rebasedRecords,
+      extensionRegistryRebasedAt: options.now().toISOString(),
+      error: undefined
+    },
+    options.now
+  )
+  options.afterPhase('extension-registry-rebased')
+  return journal
+}
+
+function repairCompletedExtensionRegistry(
+  journalPath: string,
+  initialJournal: RuntimeMigrationJournal,
+  options: {
+    platform: NodeJS.Platform
+    now: () => Date
+  }
+): RuntimeMigrationJournal {
+  let journal = initialJournal
+  const inspection = inspectExtensionRegistryForRebase(
+    journal.sourcePath,
+    journal.targetPath,
+    options.platform
+  )
+  if (inspection.kind === 'missing') {
+    if (journal.extensionRegistryRebasedAt) return journal
+    return updateJournal(
+      journalPath,
+      journal,
+      {
+        extensionRegistryRebasedRecords: 0,
+        extensionRegistryRebasedAt: options.now().toISOString(),
+        error: undefined
+      },
+      options.now
+    )
+  }
+  if (inspection.rebasedRecords === 0) {
+    if (journal.extensionRegistryRebasedAt) return journal
+    return updateJournal(
+      journalPath,
+      journal,
+      {
+        extensionRegistryRebasedRecords: journal.extensionRegistryRebasedRecords ?? 0,
+        extensionRegistryRebasedAt: options.now().toISOString(),
+        error: undefined
+      },
+      options.now
+    )
+  }
+
+  const existingBackups = journal.extensionRegistryBackupPaths ?? []
+  if (existingBackups.length === 0) {
+    const backupPath = backUpRegularFile(
+      inspection.path,
+      'pre-runtime-extension-path-migration',
+      options.now,
+      'extension registry'
+    )
+    journal = updateJournal(
+      journalPath,
+      journal,
+      {
+        extensionRegistryBackupPaths: [backupPath],
+        extensionRegistryRebasedRecords: inspection.rebasedRecords,
+        error: undefined
+      },
+      options.now
+    )
+  }
+  writeDurableJson(inspection.path, inspection.document)
+  return updateJournal(
+    journalPath,
+    journal,
+    {
+      extensionRegistryRebasedRecords:
+        inspection.rebasedRecords > 0
+          ? inspection.rebasedRecords
+          : journal.extensionRegistryRebasedRecords ?? 0,
+      extensionRegistryRebasedAt: options.now().toISOString(),
+      error: undefined
+    },
+    options.now
+  )
 }
 
 function salvageDestinationBackup(
@@ -1000,6 +1352,9 @@ function writeReport(
     settingsSourcePath: journal.settingsSourcePath,
     settingsBackupPaths: journal.settingsBackupPaths,
     settingsBackedUp: journal.settingsBackedUp === true,
+    extensionRegistryBackupPaths: journal.extensionRegistryBackupPaths ?? [],
+    extensionRegistryRebasedRecords: journal.extensionRegistryRebasedRecords,
+    extensionRegistryRebasedAt: journal.extensionRegistryRebasedAt,
     sourceThreadCount: journal.sourceThreadIds.length,
     sourceInventory: journal.sourceInventory,
     destinationInventory: journal.destinationInventory,
@@ -1387,6 +1742,14 @@ function continueMigration(
     }
 
     if (journal.phase === 'salvaged') {
+      journal = prepareExtensionRegistryRebase(journalPath, journal, options)
+    }
+
+    if (journal.phase === 'extension-registry-backed-up') {
+      journal = commitExtensionRegistryRebase(journalPath, journal, options)
+    }
+
+    if (journal.phase === 'extension-registry-rebased') {
       assertSettingsSelectionStable(journal, options)
       rewriteSettingsToCurrent(journal.settingsWritePath)
       journal = updateJournal(
@@ -1420,7 +1783,8 @@ function continueMigration(
         destinationBackupPath: journal.destinationBackupPath,
         sourceThreadCount: journal.sourceThreadIds.length,
         salvaged: journal.salvaged,
-        conflicts: journal.conflicts.length
+        conflicts: journal.conflicts.length,
+        extensionRegistryRebasedRecords: journal.extensionRegistryRebasedRecords ?? 0
       })
     }
 
@@ -1533,6 +1897,7 @@ function maintainCompletedMigration(
       options.platform,
       options.sleep
     )
+    journal = repairCompletedExtensionRegistry(journalPath, journal, options)
     if (selection.authority === 'legacy') {
       const settingsBackupPaths = backUpSettingsFile(selection.writePath, options.now)
       journal = updateJournal(
@@ -1767,9 +2132,8 @@ function runCanonicalKunRuntimeDataMigrationUnsafe(
           message: 'legacy Runtime path is an unexpected symbolic link'
         }
       }
-      return { status: 'completed', authority, sourcePath, targetPath, journalPath }
     }
-    if (sourceState !== 'dir') {
+    if (sourceState !== 'dir' && sourceState !== 'symlink') {
       return {
         status: 'blocked',
         authority,
@@ -1790,6 +2154,7 @@ function runCanonicalKunRuntimeDataMigrationUnsafe(
       settingsWritePath: settingsSelection.writePath,
       settingsBackupPaths: [],
       settingsBackedUp: true,
+      extensionRegistryBackupPaths: [],
       sourceThreadIds: [],
       salvaged: 0,
       conflicts: [],
@@ -1831,6 +2196,7 @@ function runCanonicalKunRuntimeDataMigrationUnsafe(
       settingsWritePath: settingsSelection.writePath,
       settingsBackupPaths: [],
       settingsBackedUp: false,
+      extensionRegistryBackupPaths: [],
       sourceWasMissing: true,
       sourceThreadIds: threadIds(targetPath),
       sourceInventory: runtimeStoreInventory(targetPath),
@@ -1866,6 +2232,7 @@ function runCanonicalKunRuntimeDataMigrationUnsafe(
         settingsWritePath: settingsSelection.writePath,
         settingsBackupPaths: [],
         settingsBackedUp: false,
+        extensionRegistryBackupPaths: [],
         sourceWasMissing: true,
         sourceThreadIds: threadIds(targetPath),
         sourceInventory: runtimeStoreInventory(targetPath),
@@ -1899,6 +2266,7 @@ function runCanonicalKunRuntimeDataMigrationUnsafe(
         settingsWritePath: settingsSelection.writePath,
         settingsBackupPaths: [],
         settingsBackedUp: false,
+        extensionRegistryBackupPaths: [],
         sourceWasMissing: true,
         sourceThreadIds: [],
         sourceInventory: {
@@ -1969,6 +2337,7 @@ function runCanonicalKunRuntimeDataMigrationUnsafe(
       settingsWritePath: settingsSelection.writePath,
       settingsBackupPaths: [],
       settingsBackedUp: false,
+      extensionRegistryBackupPaths: [],
       sourceThreadIds: threadIds(sourcePath),
       sourceInventory: runtimeStoreInventory(sourcePath),
       ...(targetState === 'dir'

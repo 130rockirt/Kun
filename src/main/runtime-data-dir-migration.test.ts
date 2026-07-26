@@ -22,6 +22,9 @@ import {
 } from './runtime-data-dir-migration'
 
 const tempRoots: string[] = []
+const TEST_EXTENSION_ID = 'acme.demo'
+const TEST_EXTENSION_VERSION = '1.0.0'
+const TEST_TIMESTAMP = '2026-07-26T00:00:00.000Z'
 
 async function fixture(dataDir = '~/.deepseekgui/kun'): Promise<{
   root: string
@@ -68,6 +71,88 @@ async function isLinkTo(path: string, target: string): Promise<boolean> {
   if (!stats.isSymbolicLink()) return false
   // POSIX readlink preserves the absolute target supplied by the migrator.
   return process.platform === 'win32' || (await readlink(path)) === target
+}
+
+function testExtensionManifest() {
+  return {
+    publisher: 'acme',
+    name: 'demo',
+    displayName: 'Demo',
+    version: TEST_EXTENSION_VERSION,
+    manifestVersion: 1,
+    apiVersion: '1.0.0',
+    engines: { kun: '*' },
+    main: 'dist/main.mjs',
+    activationEvents: ['onStartup'],
+    contributes: {},
+    permissions: [],
+    stateSchemaVersion: 0
+  }
+}
+
+function testExtensionRegistry(packagePath: string, developmentPath?: string) {
+  const manifest = testExtensionManifest()
+  return {
+    schemaVersion: 1,
+    revision: 7,
+    updatedAt: TEST_TIMESTAMP,
+    extensions: {
+      [TEST_EXTENSION_ID]: {
+        id: TEST_EXTENSION_ID,
+        selectedVersion: TEST_EXTENSION_VERSION,
+        globallyEnabled: false,
+        workspaceEnablement: {},
+        workspacePermissionGrants: {},
+        versions: {
+          [TEST_EXTENSION_VERSION]: {
+            version: TEST_EXTENSION_VERSION,
+            packagePath,
+            archiveSha256: 'a'.repeat(64),
+            integrity: { algorithm: 'sha256', files: {} },
+            source: { type: 'local', locator: 'fixture.kunx' },
+            signatureStatus: 'unsigned',
+            requestedPermissions: [],
+            grantedPermissions: [],
+            installedAt: TEST_TIMESTAMP,
+            manifest,
+            mutable: false
+          }
+        },
+        ...(developmentPath
+          ? {
+              development: {
+                path: developmentPath,
+                source: { type: 'development', locator: developmentPath },
+                digest: 'b'.repeat(64),
+                manifest,
+                requestedPermissions: [],
+                grantedPermissions: [],
+                registeredAt: TEST_TIMESTAMP,
+                reloadedAt: TEST_TIMESTAMP,
+                generation: 1,
+                mutable: true
+              }
+            }
+          : {}),
+        useDevelopment: false
+      }
+    }
+  }
+}
+
+async function writeExtensionRegistry(
+  dataDir: string,
+  packagePath: string,
+  developmentPath?: string
+): Promise<{ path: string; document: ReturnType<typeof testExtensionRegistry>; raw: string }> {
+  const registryPath = join(dataDir, 'extensions', 'registry.json')
+  const document = testExtensionRegistry(packagePath, developmentPath)
+  const raw = `${JSON.stringify(document, null, 2)}\n`
+  await mkdir(join(dataDir, 'extensions', TEST_EXTENSION_ID, TEST_EXTENSION_VERSION), {
+    recursive: true
+  })
+  await writeFile(registryPath, raw, 'utf8')
+  return { path: registryPath, document, raw }
 }
 
 afterEach(async () => {
@@ -117,6 +202,354 @@ describe('canonical Kun Runtime data migration', () => {
     expect(journal.settingsBackedUp).toBe(true)
     expect(journal.settingsBackupPaths).toHaveLength(1)
     expect(await readSettingsDataDir(journal.settingsBackupPaths[0])).toBe('~/.deepseekgui/kun')
+  })
+
+  it('durably rebases installed extension paths and preserves all unrelated registry state', async () => {
+    const test = await fixture()
+    const legacyPackagePath = join(
+      test.legacy,
+      'extensions',
+      TEST_EXTENSION_ID,
+      TEST_EXTENSION_VERSION
+    )
+    const currentPackagePath = join(
+      test.current,
+      'extensions',
+      TEST_EXTENSION_ID,
+      TEST_EXTENSION_VERSION
+    )
+    const developmentPath = join(test.root, 'development-extension')
+    const seeded = await writeExtensionRegistry(
+      test.legacy,
+      legacyPackagePath,
+      developmentPath
+    )
+
+    const result = runCanonicalKunRuntimeDataMigration({
+      userDataPath: test.userData,
+      homeDir: test.home,
+      sleep: () => undefined
+    })
+
+    expect(result.status).toBe('completed')
+    const migratedRegistryPath = join(test.current, 'extensions', 'registry.json')
+    const migrated = JSON.parse(await readFile(migratedRegistryPath, 'utf8'))
+    const expected = structuredClone(seeded.document)
+    expected.extensions[TEST_EXTENSION_ID].versions[TEST_EXTENSION_VERSION].packagePath =
+      currentPackagePath
+    expect(migrated).toEqual(expected)
+    expect(migrated.extensions[TEST_EXTENSION_ID].development.path).toBe(developmentPath)
+
+    const journal = JSON.parse(await readFile(result.journalPath, 'utf8'))
+    expect(journal.extensionRegistryRebasedRecords).toBe(1)
+    expect(journal.extensionRegistryRebasedAt).toEqual(expect.any(String))
+    expect(journal.extensionRegistryBackupPaths).toHaveLength(1)
+    expect(await readFile(journal.extensionRegistryBackupPaths[0], 'utf8')).toBe(seeded.raw)
+
+    const registryBeforeRepeat = await readFile(migratedRegistryPath, 'utf8')
+    const repeated = runCanonicalKunRuntimeDataMigration({
+      userDataPath: test.userData,
+      homeDir: test.home,
+      sleep: () => undefined
+    })
+    expect(repeated.status).toBe('completed')
+    expect(await readFile(migratedRegistryPath, 'utf8')).toBe(registryBeforeRepeat)
+    expect(JSON.parse(await readFile(result.journalPath, 'utf8')).extensionRegistryBackupPaths)
+      .toEqual(journal.extensionRegistryBackupPaths)
+  })
+
+  it('does not rewrite or back up an already-canonical extension registry', async () => {
+    const test = await fixture()
+    const currentPackagePath = join(
+      test.current,
+      'extensions',
+      TEST_EXTENSION_ID,
+      TEST_EXTENSION_VERSION
+    )
+    const seeded = await writeExtensionRegistry(test.legacy, currentPackagePath)
+
+    const result = runCanonicalKunRuntimeDataMigration({
+      userDataPath: test.userData,
+      homeDir: test.home,
+      sleep: () => undefined
+    })
+
+    expect(result.status).toBe('completed')
+    expect(await readFile(join(test.current, 'extensions', 'registry.json'), 'utf8'))
+      .toBe(seeded.raw)
+    const journal = JSON.parse(await readFile(result.journalPath, 'utf8'))
+    expect(journal.extensionRegistryBackupPaths).toEqual([])
+    expect(journal.extensionRegistryRebasedRecords).toBe(0)
+  })
+
+  it('blocks without rewriting an extension record outside the canonical migration roots', async () => {
+    const test = await fixture()
+    const unexpectedPackagePath = join(
+      test.root,
+      'unrelated-extension-store',
+      TEST_EXTENSION_ID,
+      TEST_EXTENSION_VERSION
+    )
+    const seeded = await writeExtensionRegistry(test.legacy, unexpectedPackagePath)
+
+    const result = runCanonicalKunRuntimeDataMigration({
+      userDataPath: test.userData,
+      homeDir: test.home,
+      sleep: () => undefined
+    })
+
+    expect(result.status).toBe('blocked')
+    expect(result.message).toContain(
+      `packagePath is outside the canonical migration roots: ` +
+      `${TEST_EXTENSION_ID}@${TEST_EXTENSION_VERSION}`
+    )
+    expect(await readSettingsDataDir(test.settingsPath)).toBe('~/.deepseekgui/kun')
+    expect(await readFile(join(test.current, 'extensions', 'registry.json'), 'utf8'))
+      .toBe(seeded.raw)
+    const journal = JSON.parse(await readFile(result.journalPath, 'utf8'))
+    expect(journal.phase).toBe('salvaged')
+    expect(journal.extensionRegistryBackupPaths).toEqual([])
+  })
+
+  it('blocks on an unsafe extension registry identity without creating a backup', async () => {
+    const test = await fixture()
+    const unsafeId = '../escape'
+    const registry = testExtensionRegistry(join(test.legacy, 'extensions', 'escape', '1.0.0'))
+    registry.extensions = {
+      [unsafeId]: {
+        ...registry.extensions[TEST_EXTENSION_ID],
+        id: unsafeId
+      }
+    } as unknown as typeof registry.extensions
+    const registryPath = join(test.legacy, 'extensions', 'registry.json')
+    await mkdir(join(test.legacy, 'extensions'), { recursive: true })
+    const raw = `${JSON.stringify(registry, null, 2)}\n`
+    await writeFile(registryPath, raw, 'utf8')
+
+    const result = runCanonicalKunRuntimeDataMigration({
+      userDataPath: test.userData,
+      homeDir: test.home,
+      sleep: () => undefined
+    })
+
+    expect(result.status).toBe('blocked')
+    expect(result.message).toContain(`extension registry identity is unsafe: ${unsafeId}`)
+    expect(await readFile(join(test.current, 'extensions', 'registry.json'), 'utf8')).toBe(raw)
+    expect(JSON.parse(await readFile(result.journalPath, 'utf8')).extensionRegistryBackupPaths)
+      .toEqual([])
+  })
+
+  it.each([
+    'extension-registry-backed-up',
+    'extension-registry-rebased'
+  ] as const)('resumes extension registry repair after interruption in phase %s', async (phase) => {
+    const test = await fixture()
+    const legacyPackagePath = join(
+      test.legacy,
+      'extensions',
+      TEST_EXTENSION_ID,
+      TEST_EXTENSION_VERSION
+    )
+    await writeExtensionRegistry(test.legacy, legacyPackagePath)
+    let interrupted = false
+
+    const first = runCanonicalKunRuntimeDataMigration({
+      userDataPath: test.userData,
+      homeDir: test.home,
+      sleep: () => undefined,
+      afterPhase: (currentPhase) => {
+        if (!interrupted && currentPhase === phase) {
+          interrupted = true
+          throw new Error(`simulated interruption after ${phase}`)
+        }
+      }
+    })
+
+    expect(first.status).toBe('blocked')
+    const interruptedJournal = JSON.parse(await readFile(first.journalPath, 'utf8'))
+    expect(interruptedJournal.phase).toBe(phase)
+    expect(interruptedJournal.extensionRegistryBackupPaths).toHaveLength(1)
+
+    const resumed = runCanonicalKunRuntimeDataMigration({
+      userDataPath: test.userData,
+      homeDir: test.home,
+      sleep: () => undefined
+    })
+    expect(resumed.status).toBe('completed')
+    const registry = JSON.parse(await readFile(
+      join(test.current, 'extensions', 'registry.json'),
+      'utf8'
+    ))
+    expect(
+      registry.extensions[TEST_EXTENSION_ID].versions[TEST_EXTENSION_VERSION].packagePath
+    ).toBe(join(test.current, 'extensions', TEST_EXTENSION_ID, TEST_EXTENSION_VERSION))
+    expect(JSON.parse(await readFile(first.journalPath, 'utf8')).extensionRegistryBackupPaths)
+      .toEqual(interruptedJournal.extensionRegistryBackupPaths)
+  })
+
+  it('finishes recovery when the registry rewrite landed before its journal update', async () => {
+    const test = await fixture()
+    const legacyPackagePath = join(
+      test.legacy,
+      'extensions',
+      TEST_EXTENSION_ID,
+      TEST_EXTENSION_VERSION
+    )
+    await writeExtensionRegistry(test.legacy, legacyPackagePath)
+
+    const first = runCanonicalKunRuntimeDataMigration({
+      userDataPath: test.userData,
+      homeDir: test.home,
+      sleep: () => undefined,
+      afterPhase: (phase) => {
+        if (phase === 'extension-registry-backed-up') {
+          throw new Error('simulated interruption before the registry rewrite')
+        }
+      }
+    })
+    expect(first.status).toBe('blocked')
+    const interruptedJournal = JSON.parse(await readFile(first.journalPath, 'utf8'))
+    expect(interruptedJournal.extensionRegistryRebasedRecords).toBe(1)
+
+    // Simulate an atomic registry rename that completed immediately before
+    // the process exited and therefore before the journal phase advanced.
+    const currentPackagePath = join(
+      test.current,
+      'extensions',
+      TEST_EXTENSION_ID,
+      TEST_EXTENSION_VERSION
+    )
+    await writeExtensionRegistry(test.current, currentPackagePath)
+
+    const resumed = runCanonicalKunRuntimeDataMigration({
+      userDataPath: test.userData,
+      homeDir: test.home,
+      sleep: () => undefined
+    })
+    expect(resumed.status).toBe('completed')
+
+    const completedJournal = JSON.parse(await readFile(first.journalPath, 'utf8'))
+    expect(completedJournal.extensionRegistryRebasedRecords).toBe(1)
+    expect(completedJournal.extensionRegistryRebasedAt).toEqual(expect.any(String))
+    expect(completedJournal.extensionRegistryBackupPaths)
+      .toEqual(interruptedJournal.extensionRegistryBackupPaths)
+  })
+
+  it('repairs a legacy extension path left by an already-completed version-2 migration', async () => {
+    const test = await fixture()
+    await writeThread(test.legacy, 'thr_legacy', 'legacy')
+    const first = runCanonicalKunRuntimeDataMigration({
+      userDataPath: test.userData,
+      homeDir: test.home,
+      sleep: () => undefined
+    })
+    expect(first.status).toBe('completed')
+
+    const legacyPackagePath = join(
+      test.legacy,
+      'extensions',
+      TEST_EXTENSION_ID,
+      TEST_EXTENSION_VERSION
+    )
+    const seeded = await writeExtensionRegistry(test.current, legacyPackagePath)
+    const oldJournal = JSON.parse(await readFile(first.journalPath, 'utf8'))
+    delete oldJournal.extensionRegistryBackupPaths
+    delete oldJournal.extensionRegistryRebasedRecords
+    delete oldJournal.extensionRegistryRebasedAt
+    await writeFile(first.journalPath, `${JSON.stringify(oldJournal, null, 2)}\n`, 'utf8')
+
+    const repaired = runCanonicalKunRuntimeDataMigration({
+      userDataPath: test.userData,
+      homeDir: test.home,
+      sleep: () => undefined
+    })
+
+    expect(repaired.status).toBe('completed')
+    const registry = JSON.parse(await readFile(seeded.path, 'utf8'))
+    expect(
+      registry.extensions[TEST_EXTENSION_ID].versions[TEST_EXTENSION_VERSION].packagePath
+    ).toBe(join(test.current, 'extensions', TEST_EXTENSION_ID, TEST_EXTENSION_VERSION))
+    const repairedJournal = JSON.parse(await readFile(first.journalPath, 'utf8'))
+    expect(repairedJournal.phase).toBe('completed')
+    expect(repairedJournal.extensionRegistryRebasedRecords).toBe(1)
+    expect(repairedJournal.extensionRegistryBackupPaths).toHaveLength(1)
+    expect(await readFile(repairedJournal.extensionRegistryBackupPaths[0], 'utf8'))
+      .toBe(seeded.raw)
+  })
+
+  it('adopts and repairs a verified canonical layout that predates the migration journal', async () => {
+    const test = await fixture('~/.kun/data')
+    await mkdir(test.current, { recursive: true })
+    await mkdir(join(test.home, '.deepseekgui'), { recursive: true })
+    await symlink(test.current, test.legacy, process.platform === 'win32' ? 'junction' : 'dir')
+    const legacyPackagePath = join(
+      test.legacy,
+      'extensions',
+      TEST_EXTENSION_ID,
+      TEST_EXTENSION_VERSION
+    )
+    const seeded = await writeExtensionRegistry(test.current, legacyPackagePath)
+
+    const result = runCanonicalKunRuntimeDataMigration({
+      userDataPath: test.userData,
+      homeDir: test.home,
+      sleep: () => undefined
+    })
+
+    expect(result.status).toBe('completed')
+    expect((await lstat(result.journalPath)).isFile()).toBe(true)
+    const registry = JSON.parse(await readFile(seeded.path, 'utf8'))
+    expect(
+      registry.extensions[TEST_EXTENSION_ID].versions[TEST_EXTENSION_VERSION].packagePath
+    ).toBe(join(test.current, 'extensions', TEST_EXTENSION_ID, TEST_EXTENSION_VERSION))
+    const journal = JSON.parse(await readFile(result.journalPath, 'utf8'))
+    expect(journal.extensionRegistryRebasedRecords).toBe(1)
+    expect(journal.extensionRegistryBackupPaths).toHaveLength(1)
+  })
+
+  it('keeps a completed migration blocked when its extension registry is malformed', async () => {
+    const test = await fixture()
+    await writeThread(test.legacy, 'thr_legacy', 'legacy')
+    const first = runCanonicalKunRuntimeDataMigration({
+      userDataPath: test.userData,
+      homeDir: test.home,
+      sleep: () => undefined
+    })
+    expect(first.status).toBe('completed')
+
+    const registryPath = join(test.current, 'extensions', 'registry.json')
+    const malformed = `${JSON.stringify({
+      schemaVersion: 1,
+      revision: 1,
+      updatedAt: TEST_TIMESTAMP,
+      extensions: {
+        [TEST_EXTENSION_ID]: {
+          id: TEST_EXTENSION_ID,
+          versions: []
+        }
+      }
+    }, null, 2)}\n`
+    await mkdir(join(test.current, 'extensions'), { recursive: true })
+    await writeFile(registryPath, malformed, 'utf8')
+    const oldJournal = JSON.parse(await readFile(first.journalPath, 'utf8'))
+    delete oldJournal.extensionRegistryBackupPaths
+    delete oldJournal.extensionRegistryRebasedRecords
+    delete oldJournal.extensionRegistryRebasedAt
+    await writeFile(first.journalPath, `${JSON.stringify(oldJournal, null, 2)}\n`, 'utf8')
+
+    const result = runCanonicalKunRuntimeDataMigration({
+      userDataPath: test.userData,
+      homeDir: test.home,
+      sleep: () => undefined
+    })
+
+    expect(result.status).toBe('blocked')
+    expect(result.authority).toBe('current')
+    expect(result.message).toContain(`extension registry entry has an invalid shape: ${TEST_EXTENSION_ID}`)
+    expect(await readFile(registryPath, 'utf8')).toBe(malformed)
+    expect(
+      JSON.parse(await readFile(first.journalPath, 'utf8')).extensionRegistryBackupPaths ?? []
+    ).toEqual([])
   })
 
   it('runs SQLite quick_check against a promoted Runtime index', async () => {
@@ -758,6 +1191,33 @@ describe('canonical Kun Runtime data migration', () => {
     expect(await readFile(join(victim, 'keep.txt'), 'utf8')).toBe('untouched')
     expect((await lstat(test.legacy)).isDirectory()).toBe(true)
     expect((await lstat(test.current)).isDirectory()).toBe(true)
+  })
+
+  it('rejects an unsafe extension registry backup path in a completed journal', async () => {
+    const test = await fixture()
+    await writeThread(test.legacy, 'thr_legacy', 'legacy')
+    const first = runCanonicalKunRuntimeDataMigration({
+      userDataPath: test.userData,
+      homeDir: test.home,
+      sleep: () => undefined
+    })
+    expect(first.status).toBe('completed')
+
+    const victim = join(test.root, 'unrelated-registry-backup.json')
+    await writeFile(victim, '{"keep":true}\n', 'utf8')
+    const journal = JSON.parse(await readFile(first.journalPath, 'utf8'))
+    journal.extensionRegistryBackupPaths = [victim]
+    await writeFile(first.journalPath, `${JSON.stringify(journal, null, 2)}\n`, 'utf8')
+
+    const result = runCanonicalKunRuntimeDataMigration({
+      userDataPath: test.userData,
+      homeDir: test.home,
+      sleep: () => undefined
+    })
+
+    expect(result.status).toBe('blocked')
+    expect(result.message).toMatch(/unsafe extension registry backup path/)
+    expect(await readFile(victim, 'utf8')).toBe('{"keep":true}\n')
   })
 
   it('blocks before mutation while an active Runtime owns the destination directory', async () => {

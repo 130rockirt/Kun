@@ -743,7 +743,10 @@ function assertDevelopmentRecord(extensionId: string, record: DevelopmentExtensi
   validatePermissionSnapshot(manifest.permissions, record.requestedPermissions, record.grantedPermissions)
 }
 
-function validateRegistryDocument(value: unknown, paths: ExtensionPaths): ExtensionRegistryDocument {
+export function validateRegistryDocument(
+  value: unknown,
+  paths: ExtensionPaths
+): ExtensionRegistryDocument {
   if (!isRecord(value)) {
     throw extensionError('EXTENSION_REGISTRY_INVALID', 'Extension registry must be an object')
   }

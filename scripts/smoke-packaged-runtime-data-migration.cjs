@@ -35,6 +35,9 @@ const PROCESS_OUTPUT_LIMIT = 128 * 1024
 const LEGACY_THREAD_ID = 'thr_packaged_upgrade_legacy'
 const DISPLACED_THREAD_ID = 'thr_packaged_upgrade_displaced'
 const RUNTIME_TOKEN = 'packaged-runtime-data-migration-smoke-token'
+const MIGRATED_EXTENSION_ID = 'kun-smoke.migrated'
+const MIGRATED_EXTENSION_VERSION = '1.0.0'
+const FIXTURE_TIMESTAMP = '2026-07-26T00:00:00.000Z'
 
 async function main() {
   const timeoutMs = positiveIntegerArgument('--timeout-ms', DEFAULT_TIMEOUT_MS)
@@ -80,6 +83,7 @@ async function main() {
   ].map((path) => mkdir(path, { recursive: true })))
   await seedThread(legacyDataDir, LEGACY_THREAD_ID, 'pre-upgrade legacy history', workspaceRoot)
   await seedThread(currentDataDir, DISPLACED_THREAD_ID, 'pre-existing new history', workspaceRoot)
+  await seedLegacyExtensionRegistry(legacyDataDir)
   await writeFile(
     join(legacyDataDir, 'config.json'),
     `${JSON.stringify({
@@ -178,7 +182,8 @@ async function main() {
     process.stdout.write(
       `Packaged Runtime data migration smoke OK (${process.platform}/${process.arch}): ` +
       'legacy authority promoted, displaced history salvaged, compatibility link verified, ' +
-      'new settings/config authority committed, Runtime healthy, and both histories enumerated.\n'
+      'extension paths rebased, new settings/config authority committed, Runtime healthy, ' +
+      'and both histories enumerated.\n'
     )
   } catch (error) {
     primaryError = error
@@ -236,7 +241,7 @@ function packagedUpgradeSettings(runtimePort, workspaceRoot, legacyDataDir) {
 
 async function seedThread(dataDir, id, title, workspace) {
   const threadDirectory = join(dataDir, 'threads', id)
-  const timestamp = '2026-07-26T00:00:00.000Z'
+  const timestamp = FIXTURE_TIMESTAMP
   const thread = {
     id,
     title,
@@ -262,6 +267,66 @@ async function seedThread(dataDir, id, title, workspace) {
     })}\n`
   )
   await writeFile(join(threadDirectory, 'messages.jsonl'), '')
+}
+
+async function seedLegacyExtensionRegistry(dataDir) {
+  const packagePath = join(
+    dataDir,
+    'extensions',
+    MIGRATED_EXTENSION_ID,
+    MIGRATED_EXTENSION_VERSION
+  )
+  const manifest = {
+    publisher: 'kun-smoke',
+    name: 'migrated',
+    displayName: 'Migrated Extension Fixture',
+    version: MIGRATED_EXTENSION_VERSION,
+    manifestVersion: 1,
+    apiVersion: '1.0.0',
+    engines: { kun: '*' },
+    main: 'dist/extension.js',
+    activationEvents: ['onStartup'],
+    contributes: {},
+    permissions: [],
+    stateSchemaVersion: 0
+  }
+  const registry = {
+    schemaVersion: 1,
+    revision: 1,
+    updatedAt: FIXTURE_TIMESTAMP,
+    extensions: {
+      [MIGRATED_EXTENSION_ID]: {
+        id: MIGRATED_EXTENSION_ID,
+        selectedVersion: MIGRATED_EXTENSION_VERSION,
+        globallyEnabled: false,
+        workspaceEnablement: {},
+        workspacePermissionGrants: {},
+        versions: {
+          [MIGRATED_EXTENSION_VERSION]: {
+            version: MIGRATED_EXTENSION_VERSION,
+            packagePath,
+            archiveSha256: 'a'.repeat(64),
+            integrity: { algorithm: 'sha256', files: {} },
+            source: { type: 'local', locator: 'packaged-migration-smoke.kunx' },
+            signatureStatus: 'unsigned',
+            requestedPermissions: [],
+            grantedPermissions: [],
+            installedAt: FIXTURE_TIMESTAMP,
+            manifest,
+            mutable: false
+          }
+        },
+        useDevelopment: false
+      }
+    }
+  }
+  await mkdir(join(packagePath, 'dist'), { recursive: true })
+  await writeFile(join(packagePath, 'kun-extension.json'), `${JSON.stringify(manifest, null, 2)}\n`)
+  await writeFile(join(packagePath, 'dist', 'extension.js'), 'export async function activate() {}\n')
+  await writeFile(
+    join(dataDir, 'extensions', 'registry.json'),
+    `${JSON.stringify(registry, null, 2)}\n`
+  )
 }
 
 async function waitForMigratedHistory({ port, token, timeoutMs, processState: readProcessState }) {
@@ -317,6 +382,17 @@ async function assertMigratedFilesystem({
   if (typeof journal.destinationBackupPath !== 'string') {
     throw new Error('Populated destination was not retained as a migration backup')
   }
+  if (journal.extensionRegistryRebasedRecords !== 1) {
+    throw new Error(
+      `Expected one migrated extension path, found ${String(journal.extensionRegistryRebasedRecords)}`
+    )
+  }
+  if (
+    !Array.isArray(journal.extensionRegistryBackupPaths) ||
+    journal.extensionRegistryBackupPaths.length !== 1
+  ) {
+    throw new Error('Migrated extension registry was not retained as exactly one backup')
+  }
   const settings = JSON.parse(await readFile(join(activeUserData, 'kun-settings.json'), 'utf8'))
   if (settings?.agents?.kun?.dataDir !== '~/.kun/data') {
     throw new Error(`Packaged settings still select ${String(settings?.agents?.kun?.dataDir)}`)
@@ -343,6 +419,37 @@ async function assertMigratedFilesystem({
   ))
   if (!displacedConfig?.models?.profiles?.displaced_destination_model) {
     throw new Error('The displaced destination config was not preserved in its backup')
+  }
+  const registry = JSON.parse(await readFile(
+    join(currentDataDir, 'extensions', 'registry.json'),
+    'utf8'
+  ))
+  const installed = registry?.extensions?.[MIGRATED_EXTENSION_ID]
+    ?.versions?.[MIGRATED_EXTENSION_VERSION]
+  const expectedPackagePath = join(
+    currentDataDir,
+    'extensions',
+    MIGRATED_EXTENSION_ID,
+    MIGRATED_EXTENSION_VERSION
+  )
+  if (installed?.packagePath !== expectedPackagePath) {
+    throw new Error(
+      `Migrated extension path is not canonical: ${String(installed?.packagePath)}`
+    )
+  }
+  const originalRegistry = JSON.parse(await readFile(
+    journal.extensionRegistryBackupPaths[0],
+    'utf8'
+  ))
+  const originalPath = originalRegistry?.extensions?.[MIGRATED_EXTENSION_ID]
+    ?.versions?.[MIGRATED_EXTENSION_VERSION]?.packagePath
+  if (originalPath !== join(
+    legacyDataDir,
+    'extensions',
+    MIGRATED_EXTENSION_ID,
+    MIGRATED_EXTENSION_VERSION
+  )) {
+    throw new Error(`Extension registry backup did not preserve the legacy path: ${String(originalPath)}`)
   }
 }
 
