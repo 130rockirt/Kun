@@ -241,7 +241,7 @@ export function FloatingComposerTodoProgress({
               ref={popoverRef}
               role="dialog"
               aria-label={t('todoProgressDetails')}
-              className="ds-no-drag fixed z-[1000] overflow-y-auto rounded-[22px] border border-ds-border bg-white/98 p-2.5 text-ds-ink shadow-[0_18px_48px_rgba(20,47,95,0.16)] backdrop-blur-xl dark:bg-ds-card/98"
+              className="ds-no-drag fixed z-[1000] overflow-y-auto rounded-[22px] border border-ds-border bg-white p-2.5 text-ds-ink shadow-[0_18px_48px_rgba(20,47,95,0.16)] dark:bg-ds-card"
               style={popoverStyle}
               data-todo-progress-popover
               onMouseEnter={cancelClose}
