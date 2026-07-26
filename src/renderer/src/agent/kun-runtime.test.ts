@@ -104,6 +104,37 @@ describe('KunRuntimeProvider', () => {
     )
   })
 
+  it('does not impose a hidden limit when listing the full thread inventory', async () => {
+    const runtimeRequest = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      body: JSON.stringify({ threads: [] })
+    }))
+    installDsGui({ runtimeRequest })
+    const provider = new KunRuntimeProvider()
+
+    await provider.listThreads({ includeArchived: true })
+
+    expect(runtimeRequest).toHaveBeenCalledWith(
+      '/v1/threads?include_archived=true',
+      'GET'
+    )
+  })
+
+  it('preserves an explicit thread list limit for bounded callers', async () => {
+    const runtimeRequest = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      body: JSON.stringify({ threads: [] })
+    }))
+    installDsGui({ runtimeRequest })
+    const provider = new KunRuntimeProvider()
+
+    await provider.listThreads({ limit: 25 })
+
+    expect(runtimeRequest).toHaveBeenCalledWith('/v1/threads?limit=25', 'GET')
+  })
+
   it('rejects thread creation before the runtime request when the workspace is missing', async () => {
     const runtimeRequest = vi.fn(async () => ({ ok: true, status: 200, body: '{}' }))
     const alertDialog = vi.fn(async () => undefined)

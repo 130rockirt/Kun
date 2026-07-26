@@ -95,6 +95,10 @@ export class HybridThreadStore implements ThreadStore {
 
   async list(options: ThreadStoreListOptions = {}): Promise<ThreadSummary[]> {
     await this.ready()
+    // Missing or intentionally discarded SQLite indexes are rebuilt from the
+    // canonical JSONL metadata before the first list response. Usage/event
+    // backfill remains in the background so large histories stay responsive.
+    await this.backfill?.waitForIndex()
     if (this.db) {
       try {
         const rows = this.queryThreadRows(options)

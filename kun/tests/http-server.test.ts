@@ -609,6 +609,27 @@ describe('HTTP server', () => {
     expect(limitedBody.threads).toHaveLength(1)
   })
 
+  it('returns the complete history when the caller omits a limit', async () => {
+    const h = buildHarness()
+    await Promise.all(Array.from({ length: 501 }, (_, index) =>
+      h.threadService.create(
+        { workspace: `/tmp/history-${index}`, model: 'deepseek-chat', mode: 'agent' },
+        { id: `thr_history_${index}`, title: `History ${index}` }
+      )
+    ))
+
+    const response = await dispatchRequest(
+      h.router,
+      new Request('http://localhost/v1/threads?include_archived=true', {
+        headers: { authorization: 'Bearer tok-1' }
+      })
+    )
+    expect(response.status).toBe(200)
+    const body = (await readJson(response)) as { threads: Array<{ id: string }> }
+    expect(body.threads).toHaveLength(501)
+    expect(new Set(body.threads.map((thread) => thread.id)).size).toBe(501)
+  })
+
   it('deletes threads through the HTTP layer', async () => {
     const h = buildHarness()
     const create = await dispatchRequest(

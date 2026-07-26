@@ -1279,9 +1279,28 @@ describe('canonical Kun Runtime data migration', () => {
 
     expect(markCanonicalKunRuntimeMigrationRuntimeVerified(
       test.userData,
+      [],
       () => new Date('2026-07-26T04:00:00.000Z')
-    )).toBe(true)
-    expect(markCanonicalKunRuntimeMigrationRuntimeVerified(test.userData)).toBe(false)
+    )).toMatchObject({
+      status: 'incomplete',
+      missingThreadIds: ['thr_legacy']
+    })
+    expect(JSON.parse(await readFile(result.journalPath, 'utf8')).runtimeVerifiedAt)
+      .toBeUndefined()
+
+    expect(markCanonicalKunRuntimeMigrationRuntimeVerified(
+      test.userData,
+      ['thr_legacy'],
+      () => new Date('2026-07-26T04:00:00.000Z')
+    )).toMatchObject({
+      status: 'verified',
+      expectedThreadCount: 1,
+      visibleThreadCount: 1
+    })
+    expect(markCanonicalKunRuntimeMigrationRuntimeVerified(
+      test.userData,
+      ['thr_legacy']
+    ).status).toBe('not-needed')
     expect(JSON.parse(await readFile(result.journalPath, 'utf8')).runtimeVerifiedAt)
       .toBe('2026-07-26T04:00:00.000Z')
     expect(JSON.parse(await readFile(result.reportPath!, 'utf8')).runtimeVerifiedAt)

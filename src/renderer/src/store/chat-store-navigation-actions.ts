@@ -853,7 +853,10 @@ export function createNavigationActions(
       const p = getProvider()
       let rawThreads: NormalizedThread[]
       try {
-        rawThreads = await p.listThreads({ limit: 200, includeArchived: true })
+        // Omitting `limit` is intentional: migrated and long-lived profiles
+        // must expose the complete inventory instead of silently hiding older
+        // conversations after an arbitrary client-side cutoff.
+        rawThreads = await p.listThreads({ includeArchived: true })
       } catch {
         rawThreads = await p.listThreads()
       }

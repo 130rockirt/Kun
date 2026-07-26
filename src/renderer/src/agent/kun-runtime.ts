@@ -205,7 +205,7 @@ export class KunRuntimeProvider implements AgentProvider {
 
   async listThreads(options: ThreadListOptions = {}): Promise<NormalizedThread[]> {
     const query = buildQuery({
-      limit: options.limit ?? 50,
+      limit: options.limit,
       search: options.search,
       include_archived: options.includeArchived,
       archived_only: options.archivedOnly

@@ -16,6 +16,7 @@ const {
 const { createServer } = require('node:net')
 const { tmpdir } = require('node:os')
 const { join, resolve } = require('node:path')
+const { DatabaseSync } = require('node:sqlite')
 const {
   createDesktopLaunchPlan,
   createIsolatedEnvironment,
@@ -83,6 +84,11 @@ async function main() {
   ].map((path) => mkdir(path, { recursive: true })))
   await seedThread(legacyDataDir, LEGACY_THREAD_ID, 'pre-upgrade legacy history', workspaceRoot)
   await seedThread(currentDataDir, DISPLACED_THREAD_ID, 'pre-existing new history', workspaceRoot)
+  seedLegacyThreadIndex(legacyDataDir, [{
+    id: LEGACY_THREAD_ID,
+    title: 'pre-upgrade legacy history',
+    workspace: workspaceRoot
+  }])
   const seededLegacyRegistry = await seedLegacyExtensionRegistry(legacyDataDir)
   await writeFile(
     join(legacyDataDir, 'config.json'),
@@ -279,6 +285,77 @@ async function seedThread(dataDir, id, title, workspace) {
   await writeFile(join(threadDirectory, 'messages.jsonl'), '')
 }
 
+function seedLegacyThreadIndex(dataDir, threads) {
+  const database = new DatabaseSync(join(dataDir, 'index.sqlite3'))
+  try {
+    database.exec(`
+      CREATE TABLE threads (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        workspace TEXT NOT NULL,
+        model TEXT NOT NULL,
+        mode TEXT NOT NULL,
+        status TEXT NOT NULL,
+        approval_policy TEXT NOT NULL,
+        sandbox_mode TEXT NOT NULL,
+        cost_budget_usd REAL,
+        cost_budget_warning_sent INTEGER,
+        relation TEXT NOT NULL,
+        parent_thread_id TEXT,
+        forked_from_thread_id TEXT,
+        forked_from_title TEXT,
+        forked_at TEXT,
+        forked_from_message_count INTEGER,
+        forked_from_turn_count INTEGER,
+        goal_json TEXT,
+        todos_json TEXT,
+        extension_metadata_json TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        created_at_ms INTEGER NOT NULL,
+        updated_at_ms INTEGER NOT NULL,
+        preview TEXT,
+        message_count INTEGER NOT NULL DEFAULT 0,
+        event_seq_high_water INTEGER NOT NULL DEFAULT 0,
+        metadata_path TEXT NOT NULL,
+        messages_path TEXT NOT NULL,
+        events_path TEXT NOT NULL,
+        search_text TEXT NOT NULL,
+        usage_backfilled INTEGER NOT NULL DEFAULT 0
+      );
+    `)
+    const insert = database.prepare(`
+      INSERT INTO threads (
+        id, title, workspace, model, mode, status, approval_policy, sandbox_mode,
+        relation, created_at, updated_at, created_at_ms, updated_at_ms, preview,
+        message_count, event_seq_high_water, metadata_path, messages_path,
+        events_path, search_text, usage_backfilled
+      ) VALUES (
+        @id, @title, @workspace, 'deepseek-chat', 'agent', 'idle',
+        'on-request', 'workspace-write', 'primary', @createdAt, @updatedAt,
+        @createdAtMs, @updatedAtMs, '', 0, 0, @metadataPath, @messagesPath,
+        @eventsPath, @searchText, 1
+      )
+    `)
+    for (const thread of threads) {
+      const threadDirectory = join(dataDir, 'threads', thread.id)
+      insert.run({
+        ...thread,
+        createdAt: FIXTURE_TIMESTAMP,
+        updatedAt: FIXTURE_TIMESTAMP,
+        createdAtMs: Date.parse(FIXTURE_TIMESTAMP),
+        updatedAtMs: Date.parse(FIXTURE_TIMESTAMP),
+        metadataPath: join(threadDirectory, 'metadata.jsonl'),
+        messagesPath: join(threadDirectory, 'messages.jsonl'),
+        eventsPath: join(threadDirectory, 'events.jsonl'),
+        searchText: `${thread.title} ${thread.workspace}`.toLowerCase()
+      })
+    }
+  } finally {
+    database.close()
+  }
+}
+
 async function seedLegacyExtensionRegistry(dataDir) {
   const packagePath = join(
     dataDir,
@@ -445,7 +522,7 @@ async function waitForMigratedHistory({
       const health = await fetch(`http://127.0.0.1:${port}/health`)
       if (health.ok) {
         const response = await fetch(
-          `http://127.0.0.1:${port}/v1/threads?limit=500&include_archived=true&include=side`,
+          `http://127.0.0.1:${port}/v1/threads?include_archived=true&include=side`,
           { headers: { authorization: `Bearer ${token}` } }
         )
         const text = await response.text()
@@ -553,6 +630,32 @@ async function assertMigratedFilesystem({
     MIGRATED_EXTENSION_VERSION
   )) {
     throw new Error(`Preserved extension registry lost the legacy path: ${String(originalPath)}`)
+  }
+
+  const database = new DatabaseSync(join(currentDataDir, 'index.sqlite3'), {
+    readOnly: true
+  })
+  try {
+    const row = database.prepare(
+      'SELECT metadata_path, messages_path, events_path FROM threads WHERE id = ?'
+    ).get(LEGACY_THREAD_ID)
+    const expectedThreadDirectory = join(currentDataDir, 'threads', LEGACY_THREAD_ID)
+    const expectedPaths = {
+      metadata_path: join(expectedThreadDirectory, 'metadata.jsonl'),
+      messages_path: join(expectedThreadDirectory, 'messages.jsonl'),
+      events_path: join(expectedThreadDirectory, 'events.jsonl')
+    }
+    if (
+      row?.metadata_path !== expectedPaths.metadata_path ||
+      row?.messages_path !== expectedPaths.messages_path ||
+      row?.events_path !== expectedPaths.events_path
+    ) {
+      throw new Error(
+        `Migrated thread index paths were not repaired: ${JSON.stringify(row)}`
+      )
+    }
+  } finally {
+    database.close()
   }
 }
 

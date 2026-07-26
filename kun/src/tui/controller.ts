@@ -263,8 +263,7 @@ export class TuiController {
     try {
       const threads = await this.client.listThreads({
         search,
-        archivedOnly: mode === 'archived',
-        limit: 200
+        archivedOnly: mode === 'archived'
       })
       threads.sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || b.updatedAt.localeCompare(a.updatedAt))
       this.patch({

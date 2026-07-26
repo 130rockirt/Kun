@@ -4,6 +4,7 @@ import {
   mkdtemp,
   readFile,
   readdir,
+  realpath,
   rm,
   stat,
   symlink,
@@ -176,10 +177,74 @@ describe('history-preserving Kun Runtime migration', () => {
     expect(await readSettingsDataDir(test.settingsPath)).toBe('~/.kun/data')
   })
 
-  it('does not mutate or block an explicitly selected current store when preserved history differs', async () => {
+  it('recovers preserved history when settings select a missing current store', async () => {
+    const test = await fixture('~/.kun/data')
+    await writeThread(test.legacy, 'thr_history', 'preserved history')
+    const sourceBytes = await readFile(
+      join(test.legacy, 'threads', 'thr_history', 'metadata.jsonl'),
+      'utf8'
+    )
+
+    const result = runCanonicalKunRuntimeDataMigration({
+      userDataPath: test.userData,
+      homeDir: test.home,
+      sleep: () => undefined
+    })
+
+    expect(result.status).toBe('completed')
+    expect(result.authority).toBe('current')
+    expect((await lstat(test.legacy)).isDirectory()).toBe(true)
+    expect((await lstat(test.legacy)).isSymbolicLink()).toBe(false)
+    expect((await lstat(test.current)).isDirectory()).toBe(true)
+    expect(await readFile(
+      join(test.current, 'threads', 'thr_history', 'metadata.jsonl'),
+      'utf8'
+    )).toBe(sourceBytes)
+    expect(await readFile(
+      join(test.legacy, 'threads', 'thr_history', 'metadata.jsonl'),
+      'utf8'
+    )).toBe(sourceBytes)
+    expect(await readSettingsDataDir(test.settingsPath)).toBe('~/.kun/data')
+  })
+
+  it('reconstructs an independent legacy directory from an unjournaled compatibility link', async () => {
+    const test = await fixture('~/.kun/data')
+    await writeThread(test.current, 'thr_history', 'linked history')
+    await mkdir(join(test.home, '.deepseekgui'), { recursive: true })
+    await symlink(test.current, test.legacy)
+
+    const result = runCanonicalKunRuntimeDataMigration({
+      userDataPath: test.userData,
+      homeDir: test.home,
+      sleep: () => undefined
+    })
+
+    expect(result.status).toBe('completed')
+    expect((await lstat(test.legacy)).isDirectory()).toBe(true)
+    expect((await lstat(test.legacy)).isSymbolicLink()).toBe(false)
+    expect(await realpath(test.legacy)).not.toBe(await realpath(test.current))
+    expect(await readFile(
+      join(test.legacy, 'threads', 'thr_history', 'metadata.jsonl'),
+      'utf8'
+    )).toContain('linked history')
+    expect(await readFile(
+      join(test.current, 'threads', 'thr_history', 'metadata.jsonl'),
+      'utf8'
+    )).toContain('linked history')
+  })
+
+  it('adds missing preserved history without overwriting the explicitly selected current store', async () => {
     const test = await fixture('~/.kun/data')
     await writeThread(test.legacy, 'thr_preserved_only', 'preserved')
     await writeThread(test.current, 'thr_current_only', 'current')
+    const legacyBytes = await readFile(
+      join(test.legacy, 'threads', 'thr_preserved_only', 'metadata.jsonl'),
+      'utf8'
+    )
+    const currentBytes = await readFile(
+      join(test.current, 'threads', 'thr_current_only', 'metadata.jsonl'),
+      'utf8'
+    )
 
     const result = runCanonicalKunRuntimeDataMigration({
       userDataPath: test.userData,
@@ -189,7 +254,93 @@ describe('history-preserving Kun Runtime migration', () => {
 
     expect(result.status).toBe('completed')
     expect((await readdir(join(test.legacy, 'threads')))).toEqual(['thr_preserved_only'])
-    expect((await readdir(join(test.current, 'threads')))).toEqual(['thr_current_only'])
+    expect((await readdir(join(test.current, 'threads'))).sort()).toEqual([
+      'thr_current_only',
+      'thr_preserved_only'
+    ])
+    expect(await readFile(
+      join(test.legacy, 'threads', 'thr_preserved_only', 'metadata.jsonl'),
+      'utf8'
+    )).toBe(legacyBytes)
+    expect(await readFile(
+      join(test.current, 'threads', 'thr_current_only', 'metadata.jsonl'),
+      'utf8'
+    )).toBe(currentBytes)
+  })
+
+  it.each([
+    'prepared',
+    'settings-backed-up',
+    'destination-salvaged'
+  ] as const)(
+    'resumes an interrupted additive history merge after phase %s',
+    async (interruptedPhase) => {
+      const test = await fixture('~/.kun/data')
+      await writeThread(test.legacy, 'thr_preserved_only', 'preserved')
+      await writeThread(test.current, 'thr_current_only', 'current')
+      const sourceBytes = await readFile(
+        join(test.legacy, 'threads', 'thr_preserved_only', 'metadata.jsonl'),
+        'utf8'
+      )
+
+      const interrupted = runCanonicalKunRuntimeDataMigration({
+        userDataPath: test.userData,
+        homeDir: test.home,
+        sleep: () => undefined,
+        afterPreservationPhase: (phase) => {
+          if (phase === interruptedPhase) throw new Error(`interrupt after ${phase}`)
+        }
+      })
+      expect(interrupted.status).toBe('blocked')
+      expect(await readFile(
+        join(test.legacy, 'threads', 'thr_preserved_only', 'metadata.jsonl'),
+        'utf8'
+      )).toBe(sourceBytes)
+
+      const resumed = runCanonicalKunRuntimeDataMigration({
+        userDataPath: test.userData,
+        homeDir: test.home,
+        sleep: () => undefined
+      })
+      expect(resumed.status).toBe('completed')
+      expect((await readdir(join(test.current, 'threads'))).sort()).toEqual([
+        'thr_current_only',
+        'thr_preserved_only'
+      ])
+      expect(await readFile(
+        join(test.legacy, 'threads', 'thr_preserved_only', 'metadata.jsonl'),
+        'utf8'
+      )).toBe(sourceBytes)
+    }
+  )
+
+  it('stops an interrupted migration when the user selects a custom Runtime store', async () => {
+    const test = await fixture()
+    await writeThread(test.legacy, 'thr_history', 'history')
+    const customDataDir = join(test.root, 'custom-runtime')
+
+    const interrupted = runCanonicalKunRuntimeDataMigration({
+      userDataPath: test.userData,
+      homeDir: test.home,
+      sleep: () => undefined,
+      afterPreservationPhase: (phase) => {
+        if (phase !== 'prepared') return
+        writeFileSync(
+          test.settingsPath,
+          JSON.stringify({
+            version: 1,
+            agents: { kun: { dataDir: customDataDir } }
+          }),
+          'utf8'
+        )
+      }
+    })
+
+    expect(interrupted.status).toBe('blocked')
+    expect(interrupted.message).toContain('active settings source changed')
+    expect(await readSettingsDataDir(test.settingsPath)).toBe(customDataDir)
+    expect((await lstat(test.legacy)).isDirectory()).toBe(true)
+    await expect(lstat(test.current)).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
   it('keeps the legacy store real and byte-independent after migration', async () => {
@@ -467,6 +618,50 @@ describe('history-preserving Kun Runtime migration', () => {
     expect(await readSettingsDataDir(test.settingsPath)).toBe('~/.deepseekgui/kun')
   })
 
+  it('keeps at least five GiB free after creating the independent history copy', async () => {
+    const test = await fixture()
+    await writeThread(test.legacy, 'thr_history', 'history')
+    const oneGiB = 1024 * 1024 * 1024
+
+    const result = runCanonicalKunRuntimeDataMigration({
+      userDataPath: test.userData,
+      homeDir: test.home,
+      sleep: () => undefined,
+      availableCopyBytes: () => oneGiB * 5
+    })
+
+    expect(result.status).toBe('blocked')
+    expect(result.message).toContain('safety reserve')
+    expect((await lstat(test.legacy)).isDirectory()).toBe(true)
+    await expect(lstat(test.current)).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(await readSettingsDataDir(test.settingsPath)).toBe('~/.deepseekgui/kun')
+  })
+
+  it('budgets space for displaced destination history before copying either store', async () => {
+    const test = await fixture()
+    await writeThread(test.legacy, 'thr_history', 'history')
+    await writeThread(test.current, 'thr_displaced', 'displaced')
+    await mkdir(join(test.current, 'attachments'), { recursive: true })
+    await writeFile(
+      join(test.current, 'attachments', 'large.bin'),
+      Buffer.alloc(2 * 1024 * 1024)
+    )
+    const oneGiB = 1024 * 1024 * 1024
+
+    const result = runCanonicalKunRuntimeDataMigration({
+      userDataPath: test.userData,
+      homeDir: test.home,
+      sleep: () => undefined,
+      availableCopyBytes: () => oneGiB * 5 + 1024 * 1024
+    })
+
+    expect(result.status).toBe('blocked')
+    expect(result.message).toContain('authoritative and displaced history')
+    expect((await lstat(test.legacy)).isDirectory()).toBe(true)
+    expect((await lstat(test.current)).isDirectory()).toBe(true)
+    expect(await readSettingsDataDir(test.settingsPath)).toBe('~/.deepseekgui/kun')
+  })
+
   it('rejects an unsafe preservation staging path before mutation', async () => {
     const test = await fixture()
     await writeThread(test.legacy, 'thr_history', 'history')
@@ -526,11 +721,55 @@ describe('history-preserving Kun Runtime migration', () => {
     expect(result.status).toBe('completed')
     expect(markCanonicalKunRuntimeMigrationRuntimeVerified(
       test.userData,
+      [],
       () => new Date('2026-07-26T01:00:00.000Z')
-    )).toBe(true)
-    expect(markCanonicalKunRuntimeMigrationRuntimeVerified(test.userData)).toBe(false)
+    )).toMatchObject({
+      status: 'incomplete',
+      missingThreadIds: ['thr_history']
+    })
+    expect(JSON.parse(await readFile(result.journalPath, 'utf8')).runtimeVerifiedAt)
+      .toBeUndefined()
+
+    expect(markCanonicalKunRuntimeMigrationRuntimeVerified(
+      test.userData,
+      ['thr_history'],
+      () => new Date('2026-07-26T01:00:00.000Z')
+    )).toMatchObject({
+      status: 'verified',
+      expectedThreadCount: 1,
+      visibleThreadCount: 1
+    })
+    expect(markCanonicalKunRuntimeMigrationRuntimeVerified(
+      test.userData,
+      ['thr_history']
+    ).status).toBe('not-needed')
     expect(JSON.parse(await readFile(result.journalPath, 'utf8')).runtimeVerifiedAt)
       .toBe('2026-07-26T01:00:00.000Z')
+  })
+
+  it('revokes stale verification evidence when migrated history disappears from the API', async () => {
+    const test = await fixture()
+    await writeThread(test.legacy, 'thr_history', 'history')
+    const result = runCanonicalKunRuntimeDataMigration({
+      userDataPath: test.userData,
+      homeDir: test.home,
+      sleep: () => undefined
+    })
+    expect(result.status).toBe('completed')
+    expect(markCanonicalKunRuntimeMigrationRuntimeVerified(
+      test.userData,
+      ['thr_history']
+    ).status).toBe('verified')
+
+    expect(markCanonicalKunRuntimeMigrationRuntimeVerified(
+      test.userData,
+      []
+    )).toMatchObject({
+      status: 'incomplete',
+      missingThreadIds: ['thr_history']
+    })
+    expect(JSON.parse(await readFile(result.journalPath, 'utf8')).runtimeVerifiedAt)
+      .toBeUndefined()
   })
 
   it('reconstructs an explicitly labeled independent snapshot for a version-2 profile', async () => {

@@ -929,15 +929,69 @@ function publishRuntimeStatus(status: Omit<KunRuntimeStatus, 'at'>): void {
   runtimeSupervisor.publish(status)
 }
 
+let runtimeMigrationVerificationPromise: Promise<void> | null = null
+let runtimeMigrationVerificationCompleted = false
+
+async function verifyRuntimeMigrationHistory(): Promise<void> {
+  const settings = await store.load()
+  const headers = runtimeAuthHeaders(settings)
+  headers.set('Accept', 'application/json')
+  const response = await fetch(
+    `${getRuntimeBaseUrlForSettings(settings)}/v1/threads?include_archived=true&include=side`,
+    {
+      headers,
+      signal: AbortSignal.timeout(15_000)
+    }
+  )
+  if (!response.ok) {
+    throw new Error(`Runtime thread inventory returned HTTP ${response.status}`)
+  }
+  const payload = JSON.parse(await response.text()) as { threads?: unknown }
+  if (!Array.isArray(payload.threads)) {
+    throw new Error('Runtime thread inventory response has no threads array')
+  }
+  const visibleThreadIds = payload.threads.flatMap((thread) =>
+    thread &&
+    typeof thread === 'object' &&
+    typeof (thread as { id?: unknown }).id === 'string'
+      ? [(thread as { id: string }).id]
+      : []
+  )
+  const result = markCanonicalKunRuntimeMigrationRuntimeVerified(
+    app.getPath('userData'),
+    visibleThreadIds
+  )
+  runtimeMigrationVerificationCompleted = result.status !== 'incomplete'
+  if (result.status === 'incomplete') {
+    logWarn(
+      'runtime-data-migration',
+      'Runtime is healthy but its thread API does not expose every migrated thread; verification remains pending.',
+      {
+        expectedThreadCount: result.expectedThreadCount,
+        visibleThreadCount: result.visibleThreadCount,
+        missingThreadCount: result.missingThreadIds.length,
+        missingThreadIds: result.missingThreadIds.slice(0, 20)
+      }
+    )
+  }
+}
+
+function scheduleRuntimeMigrationHistoryVerification(): void {
+  if (runtimeMigrationVerificationCompleted || runtimeMigrationVerificationPromise) return
+  runtimeMigrationVerificationPromise = verifyRuntimeMigrationHistory()
+    .catch((error) => {
+      logWarn('runtime-data-migration', 'Could not verify migrated Runtime history through the thread API.', {
+        message: error instanceof Error ? error.message : String(error)
+      })
+    })
+    .finally(() => {
+      runtimeMigrationVerificationPromise = null
+    })
+}
+
 /** Record a healthy runtime: reset the crash budget and watchdog, announce recovery. */
 function noteRuntimeHealthy(source: string): void {
-  try {
-    markCanonicalKunRuntimeMigrationRuntimeVerified(app.getPath('userData'))
-  } catch (error) {
-    logWarn('runtime-data-migration', 'Could not persist Runtime migration health evidence.', {
-      message: error instanceof Error ? error.message : String(error)
-    })
-  }
+  scheduleRuntimeMigrationHistoryVerification()
   runtimeSupervisor.noteHealthy(source)
 }
 
