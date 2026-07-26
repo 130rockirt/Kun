@@ -177,20 +177,31 @@ describe('Cursor subscription provider preset', () => {
     })
   })
 
-  it('removes stale speech capability metadata because Cursor has no transcription API', () => {
+  it('removes stale media capabilities that are absent from the current subscription preset', () => {
     const profile = {
       ...modelProviderPresetProfile(getModelProviderPreset('cursor-subscription')!, 'cursor-secret'),
+      image: {
+        protocol: 'openai-images' as const,
+        baseUrl: 'https://stale-images.example/v1',
+        models: ['stale-image']
+      },
       speech: {
         protocol: 'openai-transcriptions' as const,
         baseUrl: '',
         models: ['gemini-2.5-flash']
+      },
+      video: {
+        protocol: 'minimax-video' as const,
+        baseUrl: 'https://stale-video.example/v1',
+        models: ['stale-video']
       }
     }
     const normalized = normalizeModelProviderSettings({ providers: [profile] })
+    const cursor = normalized.providers.find((provider) => provider.id === 'cursor-subscription')
 
-    expect(
-      normalized.providers.find((provider) => provider.id === 'cursor-subscription')?.speech
-    ).toBeUndefined()
+    expect(cursor?.image).toBeUndefined()
+    expect(cursor?.speech).toBeUndefined()
+    expect(cursor?.video).toBeUndefined()
   })
 })
 
@@ -389,6 +400,60 @@ describe('Grok subscription media capabilities', () => {
       defaultDuration: 6,
       defaultResolution: '480P'
     })
+  })
+
+  it('upgrades stale stored Grok image and video protocols from the current preset', () => {
+    const preset = getModelProviderPreset(GROK_SUBSCRIPTION_PROVIDER_ID)!
+    const current = modelProviderPresetProfile(preset, 'grok-oauth-json')
+    const normalized = normalizeModelProviderSettings({
+      providers: [{
+        ...current,
+        image: {
+          protocol: 'openai-images',
+          baseUrl: 'https://api.x.ai/v1',
+          models: ['grok-imagine-image', 'grok-imagine-image-quality']
+        },
+        video: {
+          protocol: 'minimax-video',
+          baseUrl: 'https://api.x.ai/v1',
+          models: ['grok-imagine-video', 'grok-imagine-video-1.5-preview']
+        }
+      }]
+    })
+    const grok = normalized.providers.find((provider) => provider.id === GROK_SUBSCRIPTION_PROVIDER_ID)
+
+    expect(grok?.image).toEqual(current.image)
+    expect(grok?.video).toEqual(current.video)
+  })
+
+  it('preserves explicit media capabilities on a custom provider', () => {
+    const image = {
+      protocol: 'openai-images' as const,
+      baseUrl: 'https://images.example/v1',
+      models: ['custom-image']
+    }
+    const video = {
+      protocol: 'minimax-video' as const,
+      baseUrl: 'https://video.example/v1',
+      models: ['custom-video']
+    }
+    const normalized = normalizeModelProviderSettings({
+      providers: [{
+        id: 'custom-media',
+        name: 'Custom Media',
+        apiKey: 'sk-custom',
+        baseUrl: 'https://chat.example/v1',
+        endpointFormat: 'chat_completions',
+        models: ['custom-chat'],
+        modelProfiles: {},
+        image,
+        video
+      }]
+    })
+    const custom = normalized.providers.find((provider) => provider.id === 'custom-media')
+
+    expect(custom?.image).toEqual(image)
+    expect(custom?.video).toEqual(video)
   })
 })
 

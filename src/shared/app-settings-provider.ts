@@ -697,23 +697,35 @@ function providerWithPresetCapabilities(provider: ModelProviderProfileV1): Model
   // preset transport during normalization so blank-base-URL subscriptions are
   // retained in serve.providers and reach DelegatedTurnRuntime.
   const kind = provider.kind ?? presetProfile.kind
-  const image = mergePresetCapability(provider.image, presetProfile.image)
   const presetSource = resolveModelProviderPresetSource(provider)
   const hasFixedSubscriptionCapabilities =
     presetSource?.mode === 'api' && presetSource.preset.category === 'subscription'
-  // Subscription/SDK credentials are tied to documented transports. Do not
-  // let a stale hand-authored speech block turn Cursor, Codex, Claude, or
-  // Antigravity into an OpenAI transcription endpoint.
+  // Subscription/SDK credentials are tied to documented transports. Do not let
+  // stale hand-authored media blocks route those credentials through a generic
+  // or unrelated protocol. This also upgrades profiles saved before a dedicated
+  // subscription image/video transport was introduced.
+  const image = hasFixedSubscriptionCapabilities
+    ? presetProfile.image
+    : mergePresetCapability(provider.image, presetProfile.image)
   const speech = hasFixedSubscriptionCapabilities
     ? presetProfile.speech
     : mergePresetCapability(provider.speech, presetProfile.speech)
   const textToSpeech = mergePresetCapability(provider.textToSpeech, presetProfile.textToSpeech)
   const music = mergePresetCapability(provider.music, presetProfile.music)
-  const video = mergePresetCapability(provider.video, presetProfile.video)
-  const { speech: _storedSpeech, ...providerWithoutSpeech } = provider
+  const video = hasFixedSubscriptionCapabilities
+    ? presetProfile.video
+    : mergePresetCapability(provider.video, presetProfile.video)
+  const {
+    image: _storedImage,
+    speech: _storedSpeech,
+    video: _storedVideo,
+    ...providerWithoutFixedMedia
+  } = provider
+  void _storedImage
   void _storedSpeech
+  void _storedVideo
   return {
-    ...(hasFixedSubscriptionCapabilities ? providerWithoutSpeech : provider),
+    ...(hasFixedSubscriptionCapabilities ? providerWithoutFixedMedia : provider),
     ...(kind ? { kind } : {}),
     ...(image ? { image } : {}),
     ...(speech ? { speech } : {}),

@@ -16,7 +16,22 @@ const GENERATED_IMAGE_DIR = '.deepseekgui-images'
 const MAX_REFERENCE_IMAGE_BYTES = 10 * 1024 * 1024
 const REFERENCE_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp'])
 const ASPECT_RATIOS = new Set(['1:1', '4:3', '3:4', '16:9', '9:16', '3:2', '2:3', '21:9'])
-const GROK_IMAGINE_ASPECT_RATIOS = ['1:1', '16:9', '9:16', '3:2', '2:3'] as const
+const GROK_IMAGINE_ASPECT_RATIOS = [
+  '1:1',
+  '16:9',
+  '9:16',
+  '4:3',
+  '3:4',
+  '3:2',
+  '2:3',
+  '2:1',
+  '1:2',
+  '19.5:9',
+  '9:19.5',
+  '20:9',
+  '9:20'
+] as const
+const KNOWN_ASPECT_RATIOS = new Set([...ASPECT_RATIOS, ...GROK_IMAGINE_ASPECT_RATIOS])
 const SIZE_TIERS: Record<string, number> = { '1K': 1024, '2K': 2048 }
 const COMPATIBLE_SIZE_FALLBACK = SIZE_TIERS['1K']
 const SIZE_STEP = 64
@@ -180,7 +195,7 @@ function parseSizeLongEdge(size: string): number | undefined {
 }
 
 function parseRatio(aspectRatio: string | undefined): { w: number; h: number } | null {
-  if (!aspectRatio || !ASPECT_RATIOS.has(aspectRatio)) return null
+  if (!aspectRatio || !KNOWN_ASPECT_RATIOS.has(aspectRatio)) return null
   const [w, h] = aspectRatio.split(':').map(Number)
   if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return null
   return { w, h }
@@ -256,7 +271,7 @@ export function buildImageGenToolProviders(
         },
         image_size: {
           type: 'string',
-          enum: isGrokImagine ? ['1K'] : Object.keys(SIZE_TIERS),
+          enum: Object.keys(SIZE_TIERS),
           description: 'Optional resolution override. Set it only when the user explicitly requests 1K or 2K; otherwise omit it so the Settings default resolution is used. Resolution is independent of image quality.'
         },
         ...(supportsEdit
@@ -281,12 +296,11 @@ export function buildImageGenToolProviders(
 
       const aspectRatio = pickString(args.aspect_ratio)
       const imageSize = pickString(args.image_size)
-      // Grok Build's verified Imagine wire contract currently requests 1k.
       const size = mapImageSize(
         aspectRatio,
-        isGrokImagine ? '1K' : imageSize,
+        imageSize,
         isGrokImagine ? undefined : config.defaultSize,
-        isGrokImagine ? '1K' : config.defaultResolution
+        config.defaultResolution
       )
 
       const references = await collectReferenceImages(
@@ -831,7 +845,7 @@ export class GrokImagineImageClient implements ImageGenClient {
           prompt: request.prompt,
           n: 1,
           aspect_ratio: request.aspectRatio ?? 'auto',
-          resolution: '1k',
+          resolution: grokImagineResolution(request.size),
           response_format: 'b64_json'
         }),
         signal
@@ -855,6 +869,11 @@ export class GrokImagineImageClient implements ImageGenClient {
   async edit(_request: ImageGenEditRequest): Promise<GeneratedImage> {
     throw new Error('Grok Imagine image editing is not supported by this tool')
   }
+}
+
+function grokImagineResolution(size: string | undefined): '1k' | '2k' {
+  const longEdge = size ? parseSizeLongEdge(size) : undefined
+  return longEdge && longEdge >= SIZE_TIERS['2K'] ? '2k' : '1k'
 }
 
 export class CodexResponsesImageClient implements ImageGenClient {

@@ -170,6 +170,30 @@ describe('Image gen tool provider', () => {
     expect(twoKTool.inputSchema).toEqual(oneKTool.inputSchema)
   })
 
+  it('advertises the verified Grok aspect ratios and both resolution tiers', () => {
+    const tool = buildImageGenToolProviders(imageGenConfig({
+      protocol: 'grok-imagine-image'
+    }), { client: fakeClient() }).providers[0].tools[0]
+    const properties = tool.inputSchema.properties as Record<string, { enum?: string[] }>
+
+    expect(properties.aspect_ratio.enum).toEqual([
+      '1:1',
+      '16:9',
+      '9:16',
+      '4:3',
+      '3:4',
+      '3:2',
+      '2:3',
+      '2:1',
+      '1:2',
+      '19.5:9',
+      '9:19.5',
+      '20:9',
+      '9:20'
+    ])
+    expect(properties.image_size.enum).toEqual(['1K', '2K'])
+  })
+
   it('keeps explicit width/height for MiniMax image-01 only', () => {
     expect(minimaxImageDimensionFields('image-01', '768x1024')).toEqual({ width: 768, height: 1024 })
     expect(minimaxImageDimensionFields(' image-01 ', '1024x576')).toEqual({ width: 1024, height: 576 })
@@ -327,7 +351,7 @@ describe('Image gen tool provider', () => {
     })
   })
 
-  it('posts Grok subscription image requests with the Grok Build Imagine contract', async () => {
+  it('posts Grok subscription image requests with native ratios and 1K/2K resolutions', async () => {
     expect(createImageGenClient({
       protocol: 'grok-imagine-image',
       baseUrl: 'https://api.x.ai/v1',
@@ -350,7 +374,7 @@ describe('Image gen tool provider', () => {
       'x-grok-client-identifier': 'grok-shell'
     })
 
-    const image = await client.generate({
+    const oneKImage = await client.generate({
       prompt: 'cinematic mountain lake',
       model: 'grok-imagine-image-quality',
       aspectRatio: '16:9',
@@ -358,8 +382,18 @@ describe('Image gen tool provider', () => {
       timeoutMs: 1_000,
       signal: new AbortController().signal
     })
+    const twoKImage = await client.generate({
+      prompt: 'ultra-wide city skyline',
+      model: 'grok-imagine-image-quality',
+      aspectRatio: '20:9',
+      size: '2048x896',
+      timeoutMs: 1_000,
+      signal: new AbortController().signal
+    })
 
-    expect(image.data.byteLength).toBeGreaterThan(0)
+    expect(oneKImage.data.byteLength).toBeGreaterThan(0)
+    expect(twoKImage.data.byteLength).toBeGreaterThan(0)
+    expect(requests).toHaveLength(2)
     expect(requests[0].url).toBe('https://api.x.ai/v1/images/generations')
     expect(requests[0].headers.get('authorization')).toBe('Bearer grok-access')
     expect(requests[0].headers.get('x-grok-client-version')).toBe('0.2.112')
@@ -372,6 +406,16 @@ describe('Image gen tool provider', () => {
       resolution: '1k',
       response_format: 'b64_json'
     })
+    expect(requests[0].body).not.toHaveProperty('size')
+    expect(requests[1].body).toEqual({
+      model: 'grok-imagine-image-quality',
+      prompt: 'ultra-wide city skyline',
+      n: 1,
+      aspect_ratio: '20:9',
+      resolution: '2k',
+      response_format: 'b64_json'
+    })
+    expect(requests[1].body).not.toHaveProperty('size')
   })
 
   it('posts Codex subscription image edits with input images and edit action', async () => {
