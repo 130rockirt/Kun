@@ -1,5 +1,6 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { act, create as createRenderer, type ReactTestRenderer } from 'react-test-renderer'
 import { describe, expect, it, vi } from 'vitest'
 import type { NormalizedThread } from '../../agent/types'
 import type { SddDraftHistoryItem } from '../../sdd/sdd-draft-history'
@@ -791,11 +792,19 @@ describe('SidebarProjectsSection drag ordering', () => {
     const folderStorageValue = JSON.stringify({
       version: 1,
       foldersByScope: {
-        '/users/zxy/project-a': [{
-          id: 'folder-research',
-          name: 'Research',
-          threadIds: ['thread-a']
-        }]
+        '/users/zxy/project-a': [
+          {
+            id: 'folder-research',
+            name: 'Research',
+            threadIds: ['thread-a']
+          },
+          {
+            id: 'folder-notes',
+            name: 'Notes',
+            parentId: 'folder-research',
+            threadIds: ['thread-c']
+          }
+        ]
       }
     })
     vi.stubGlobal('localStorage', {
@@ -814,6 +823,11 @@ describe('SidebarProjectsSection drag ordering', () => {
             thread({
               id: 'thread-b',
               title: 'Root thread',
+              workspace: '/Users/zxy/project-a'
+            }),
+            thread({
+              id: 'thread-c',
+              title: 'Nested thread',
               workspace: '/Users/zxy/project-a'
             })
           ],
@@ -845,10 +859,86 @@ describe('SidebarProjectsSection drag ordering', () => {
       )
 
       expect(html).toContain('title="Research"')
-      expect(html.indexOf('Folder thread')).toBeGreaterThan(html.indexOf('title="Research"'))
+      expect(html).toContain('title="Notes"')
+      expect(html.indexOf('title="Notes"')).toBeGreaterThan(html.indexOf('title="Research"'))
+      expect(html.indexOf('Nested thread')).toBeGreaterThan(html.indexOf('title="Notes"'))
+      expect(html.indexOf('Folder thread')).toBeGreaterThan(html.indexOf('Nested thread'))
       expect(html.indexOf('Root thread')).toBeGreaterThan(html.indexOf('Folder thread'))
-      expect(html).toContain('sidebarFolderCreate')
+      expect(html).toContain('sidebarFolderCreateChild')
     } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('assigns a newly created thread directly to the selected folder', async () => {
+    const folderStorageValue = JSON.stringify({
+      version: 1,
+      foldersByScope: {
+        '/users/zxy/project-a': [{
+          id: 'folder-research',
+          name: 'Research',
+          threadIds: []
+        }]
+      }
+    })
+    const setItem = vi.fn()
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => key === SIDEBAR_FOLDERS_STORAGE_KEY ? folderStorageValue : null,
+      setItem
+    })
+    const onCreateThreadInWorkspace = vi.fn(async () => 'thread-new')
+    let renderer: ReactTestRenderer | null = null
+    try {
+      await act(async () => {
+        renderer = createRenderer(createElement(SidebarProjectsSection, {
+          threads: [],
+          activeView: 'chat',
+          activeThreadId: null,
+          runtimeReady: true,
+          searchQuery: '',
+          showArchived: false,
+          workspaceRoot: '/Users/zxy/project-a',
+          workspaceRoots: ['/Users/zxy/project-a'],
+          conversationRoot: '/Users/zxy/Documents/Kun',
+          busy: false,
+          watchTurnCompletion: {},
+          unreadThreadIds: {},
+          locale: 'en-US',
+          onPickWorkspace: vi.fn(),
+          onRemoveWorkspace: vi.fn(async () => undefined),
+          onCreateThreadInWorkspace,
+          onOpenRequirementDraft: vi.fn(),
+          onSelectThread: vi.fn(),
+          onRenameThread: vi.fn(async () => undefined),
+          onPinThread: vi.fn(async () => undefined),
+          onArchiveThread: vi.fn(async () => undefined),
+          onDeleteThread: vi.fn(async () => undefined),
+          onRestoreThread: vi.fn(async () => undefined),
+          onSearchQueryChange: vi.fn(),
+          t: (key: string) => key
+        }))
+      })
+
+      const newThreadButtons = renderer!.root.findAll((node) =>
+        node.type === 'button' && node.props.title === 'sidebarWorkspaceNewThread'
+      )
+      expect(newThreadButtons).toHaveLength(2)
+      await act(async () => {
+        newThreadButtons[1]?.props.onClick({ stopPropagation: vi.fn() })
+        await Promise.resolve()
+      })
+
+      expect(onCreateThreadInWorkspace).toHaveBeenCalledWith(
+        '/Users/zxy/project-a',
+        { forceNew: true }
+      )
+      const saved = setItem.mock.calls
+        .filter(([key]) => key === SIDEBAR_FOLDERS_STORAGE_KEY)
+        .at(-1)?.[1]
+      expect(JSON.parse(String(saved)).foldersByScope['/users/zxy/project-a'][0].threadIds)
+        .toEqual(['thread-new'])
+    } finally {
+      ;(renderer as ReactTestRenderer | null)?.unmount()
       vi.unstubAllGlobals()
     }
   })

@@ -2175,6 +2175,7 @@
   "sidebarWorkspaceEmpty": "まだスレッドがありません",
   "sidebarWorkspaceNewThread": "新しいスレッド",
   "sidebarFolderCreate": "新しいフォルダー",
+  "sidebarFolderCreateChild": "新しいサブフォルダー",
   "sidebarFolderCreatePrompt": "フォルダー名を入力してください。サイドバーの整理専用で、ディスク上には作成されません。",
   "sidebarFolderRename": "フォルダー名を変更",
   "sidebarFolderRenamePrompt": "新しいフォルダー名を入力",

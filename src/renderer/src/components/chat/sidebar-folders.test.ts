@@ -12,6 +12,7 @@ import {
   saveSidebarFolderRegistry,
   sidebarFolderIdForThread,
   sidebarFolderNameExists,
+  sidebarFolderThreadCount,
   sidebarFoldersForWorkspace
 } from './sidebar-folders'
 
@@ -50,8 +51,8 @@ describe('sidebar virtual folder registry', () => {
       version: 1,
       foldersByScope: {
         '/tmp/app': [
-          { id: 'one', name: 'One', threadIds: ['thread-a'] },
-          { id: 'two', name: 'Two', threadIds: ['thread-b'] }
+          { id: 'one', name: 'One', parentId: null, threadIds: ['thread-a'] },
+          { id: 'two', name: 'Two', parentId: null, threadIds: ['thread-b'] }
         ]
       }
     })
@@ -70,7 +71,7 @@ describe('sidebar virtual folder registry', () => {
 
     expect(storage.getItem(SIDEBAR_FOLDERS_STORAGE_KEY)).toBeTruthy()
     expect(sidebarFoldersForWorkspace(readSidebarFolderRegistry(), '/Users/zxy/project-a')).toEqual([
-      { id: 'folder-one', name: 'Research', threadIds: [] }
+      { id: 'folder-one', name: 'Research', parentId: null, threadIds: [] }
     ])
   })
 
@@ -84,7 +85,7 @@ describe('sidebar virtual folder registry', () => {
     registry = renameSidebarFolder(registry, '/tmp/app', 'folder-one', 'References')
 
     expect(sidebarFoldersForWorkspace(registry, '/tmp/app')).toEqual([
-      { id: 'folder-one', name: 'References', threadIds: ['thread-a'] }
+      { id: 'folder-one', name: 'References', parentId: null, threadIds: ['thread-a'] }
     ])
 
     registry = deleteSidebarFolder(registry, '/tmp/app', 'folder-one')
@@ -130,8 +131,8 @@ describe('sidebar virtual folder registry', () => {
     )
 
     expect(sidebarFoldersForWorkspace(registry, '/tmp/app')).toEqual([
-      { id: 'folder-one', name: 'One', threadIds: [] },
-      { id: 'folder-two', name: 'Two', threadIds: ['thread-a', 'thread-b'] }
+      { id: 'folder-one', name: 'One', parentId: null, threadIds: [] },
+      { id: 'folder-two', name: 'Two', parentId: null, threadIds: ['thread-a', 'thread-b'] }
     ])
 
     registry = moveThreadToSidebarFolder(registry, '/tmp/app', 'thread-a', null)
@@ -139,6 +140,61 @@ describe('sidebar virtual folder registry', () => {
       sidebarFoldersForWorkspace(registry, '/tmp/app'),
       'thread-a'
     )).toBeNull()
+  })
+
+  it('creates nested folders with sibling-scoped names and promotes children when deleting a parent', () => {
+    let registry = createSidebarFolder(
+      emptySidebarFolderRegistry(),
+      '/tmp/app',
+      { id: 'parent', name: 'Research' }
+    )
+    registry = createSidebarFolder(
+      registry,
+      '/tmp/app',
+      { id: 'child', name: 'Research', parentId: 'parent' }
+    )
+    registry = createSidebarFolder(
+      registry,
+      '/tmp/app',
+      { id: 'grandchild', name: 'Notes', parentId: 'child' }
+    )
+    registry = moveThreadToSidebarFolder(registry, '/tmp/app', 'thread-a', 'child')
+    registry = moveThreadToSidebarFolder(registry, '/tmp/app', 'thread-b', 'grandchild')
+
+    let folders = sidebarFoldersForWorkspace(registry, '/tmp/app')
+    expect(sidebarFolderNameExists(folders, 'Research', undefined, 'parent')).toBe(true)
+    expect(sidebarFolderThreadCount(folders, 'parent')).toBe(2)
+    expect(folders).toEqual([
+      { id: 'parent', name: 'Research', parentId: null, threadIds: [] },
+      { id: 'child', name: 'Research', parentId: 'parent', threadIds: ['thread-a'] },
+      { id: 'grandchild', name: 'Notes', parentId: 'child', threadIds: ['thread-b'] }
+    ])
+
+    registry = deleteSidebarFolder(registry, '/tmp/app', 'child')
+    folders = sidebarFoldersForWorkspace(registry, '/tmp/app')
+    expect(folders).toEqual([
+      { id: 'parent', name: 'Research', parentId: null, threadIds: [] },
+      { id: 'grandchild', name: 'Notes', parentId: 'parent', threadIds: ['thread-b'] }
+    ])
+  })
+
+  it('repairs missing and cyclic parent references while preserving v1 folders', () => {
+    expect(normalizeSidebarFolderRegistry({
+      version: 1,
+      foldersByScope: {
+        '/tmp/app': [
+          { id: 'legacy', name: 'Legacy', threadIds: [] },
+          { id: 'orphan', name: 'Orphan', parentId: 'missing', threadIds: [] },
+          { id: 'cycle-a', name: 'A', parentId: 'cycle-b', threadIds: [] },
+          { id: 'cycle-b', name: 'B', parentId: 'cycle-a', threadIds: [] }
+        ]
+      }
+    }).foldersByScope['/tmp/app']).toEqual([
+      { id: 'legacy', name: 'Legacy', parentId: null, threadIds: [] },
+      { id: 'orphan', name: 'Orphan', parentId: null, threadIds: [] },
+      { id: 'cycle-a', name: 'A', parentId: null, threadIds: [] },
+      { id: 'cycle-b', name: 'B', parentId: null, threadIds: [] }
+    ])
   })
 
   it('removes stale assignments across every workspace', () => {

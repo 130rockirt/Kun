@@ -2175,6 +2175,7 @@
   "sidebarWorkspaceEmpty": "अभी तक कोई सूत्र नहीं",
   "sidebarWorkspaceNewThread": "नया सूत्र",
   "sidebarFolderCreate": "नया फ़ोल्डर",
+  "sidebarFolderCreateChild": "नया सबफ़ोल्डर",
   "sidebarFolderCreatePrompt": "फ़ोल्डर का नाम दें। यह केवल साइडबार व्यवस्थित करता है और डिस्क पर फ़ोल्डर नहीं बनाता।",
   "sidebarFolderRename": "फ़ोल्डर का नाम बदलें",
   "sidebarFolderRenamePrompt": "फ़ोल्डर का नया नाम दर्ज करें",

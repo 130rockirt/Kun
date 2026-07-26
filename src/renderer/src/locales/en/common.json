@@ -2175,6 +2175,7 @@
   "sidebarWorkspaceEmpty": "No threads yet",
   "sidebarWorkspaceNewThread": "New thread",
   "sidebarFolderCreate": "New folder",
+  "sidebarFolderCreateChild": "New subfolder",
   "sidebarFolderCreatePrompt": "Name this folder. It only organizes the sidebar and does not create a folder on disk.",
   "sidebarFolderRename": "Rename folder",
   "sidebarFolderRenamePrompt": "Enter a new folder name",

@@ -340,7 +340,7 @@ export type ChatState = {
      * 自动创建一个时间戳子目录作为工作目录。
      */
     conversation?: boolean
-  }) => Promise<void>
+  }) => Promise<string | null>
   createConversation: () => Promise<void>
   selectThread: (id: string) => Promise<void>
   /**

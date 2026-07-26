@@ -2175,6 +2175,7 @@
   "sidebarWorkspaceEmpty": "ยังไม่มีกระทู้",
   "sidebarWorkspaceNewThread": "กระทู้ใหม่",
   "sidebarFolderCreate": "โฟลเดอร์ใหม่",
+  "sidebarFolderCreateChild": "โฟลเดอร์ย่อยใหม่",
   "sidebarFolderCreatePrompt": "ตั้งชื่อโฟลเดอร์ โฟลเดอร์นี้ใช้จัดระเบียบแถบด้านข้างเท่านั้นและจะไม่ถูกสร้างบนดิสก์",
   "sidebarFolderRename": "เปลี่ยนชื่อโฟลเดอร์",
   "sidebarFolderRenamePrompt": "ป้อนชื่อโฟลเดอร์ใหม่",

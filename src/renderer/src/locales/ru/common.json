@@ -2175,6 +2175,7 @@
   "sidebarWorkspaceEmpty": "Пока нет тем",
   "sidebarWorkspaceNewThread": "Новая тема",
   "sidebarFolderCreate": "Новая папка",
+  "sidebarFolderCreateChild": "Новая вложенная папка",
   "sidebarFolderCreatePrompt": "Назовите папку. Она служит только для организации боковой панели и не создаётся на диске.",
   "sidebarFolderRename": "Переименовать папку",
   "sidebarFolderRenamePrompt": "Введите новое имя папки",

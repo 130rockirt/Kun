@@ -68,6 +68,7 @@ export type RenameThreadDialogState = {
 export type SidebarFolderDialogState = {
   mode: 'create' | 'rename'
   workspacePath: string
+  parentId?: string | null
   folder?: SidebarVirtualFolder
   value: string
   error?: string
@@ -404,12 +405,16 @@ export function WorkspaceContextMenu({
 export function FolderContextMenu({
   state,
   onClose,
+  onNewThread,
+  onNewFolder,
   onRename,
   onDelete,
   t
 }: {
   state: FolderContextMenuState
   onClose: () => void
+  onNewThread: () => void
+  onNewFolder: () => void
   onRename: () => void
   onDelete: () => void
   t: Translate
@@ -426,6 +431,19 @@ export function FolderContextMenu({
       style={{ left: state.x, top: state.y }}
       onPointerDown={(event) => event.stopPropagation()}
     >
+      <MenuItem
+        icon={<Plus className="h-3.5 w-3.5" strokeWidth={1.9} />}
+        label={t('sidebarWorkspaceNewThread')}
+        disabled={false}
+        onClick={() => run(onNewThread)}
+      />
+      <MenuItem
+        icon={<FolderPlus className="h-3.5 w-3.5" strokeWidth={1.9} />}
+        label={t('sidebarFolderCreateChild')}
+        disabled={false}
+        onClick={() => run(onNewFolder)}
+      />
+      <div className="my-1 h-px bg-ds-border-muted" />
       <MenuItem
         icon={<PencilLine className="h-3.5 w-3.5" strokeWidth={1.9} />}
         label={t('sidebarFolderRename')}

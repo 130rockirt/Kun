@@ -246,7 +246,7 @@ export function createThreadActions(
   createThread: async (options = {}) => {
     if (get().runtimeConnection !== 'ready') {
       set({ error: i18n.t('common:runtimeActionNeedsConnection') })
-      return
+      return null
     }
     try {
       const p = getProvider()
@@ -273,14 +273,14 @@ export function createThreadActions(
       if (options.conversation) {
         if (typeof window.kunGui === 'undefined' || typeof window.kunGui.createConversationWorkspace !== 'function') {
           set({ error: i18n.t('common:workspacePickerUnavailable') })
-          return
+          return null
         }
         const created = await window.kunGui.createConversationWorkspace(
           settings.conversationWorkspaceRoot || undefined
         )
         if (!created.ok || !created.path) {
           set({ error: created.error || i18n.t('common:worktreeAcquireFailed') })
-          return
+          return null
         }
         const t = await p.createThread({
           workspace: created.path,
@@ -307,7 +307,7 @@ export function createThreadActions(
         }))
         await get().selectThread(t.id)
         await get().refreshThreads()
-        return
+        return t.id
       }
 
       let workspaceRoot =
@@ -318,12 +318,12 @@ export function createThreadActions(
         normalizeWorkspaceRoot(settings.workspaceRoot)
       if (!workspaceRoot) {
         await get().chooseWorkspace({ createThreadAfter: true })
-        return
+        return null
       }
       if (!(await workspaceDirectoryExists(workspaceRoot))) {
         set({ error: workspaceMissingError() })
         await showWorkspaceMissingDialog(workspaceRoot)
-        return
+        return null
       }
       const codeWorkspaceRoots = rememberCodeWorkspaceRoots(get().codeWorkspaceRoots, [workspaceRoot])
       set({ codeWorkspaceRoots })
@@ -364,7 +364,7 @@ export function createThreadActions(
               : {})
           })
         }
-        return
+        return reusableThreadId
       }
       // Worktree mode: checkout the selected branch into an isolated worktree
       // and bind the new thread to that workspace.
@@ -391,7 +391,7 @@ export function createThreadActions(
           workspaceRoot = wt.worktreePath
         } catch (err) {
           set({ error: err instanceof Error ? err.message : i18n.t('common:worktreeAcquireFailed') })
-          return
+          return null
         }
       }
       // Primary-agent persona snapshot: bind this thread to the picked
@@ -439,6 +439,7 @@ export function createThreadActions(
         )
       }
       await get().refreshThreads()
+      return t.id
     } catch (e) {
       set({
         error: formatRuntimeError(e),
@@ -446,6 +447,7 @@ export function createThreadActions(
           ? { route: 'settings' as const, settingsSection: 'agents' as const }
           : {})
       })
+      return null
     }
   },
 

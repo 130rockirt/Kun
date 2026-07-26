@@ -2175,6 +2175,7 @@
   "sidebarWorkspaceEmpty": "아직 스레드가 없습니다.",
   "sidebarWorkspaceNewThread": "새 스레드",
   "sidebarFolderCreate": "새 폴더",
+  "sidebarFolderCreateChild": "새 하위 폴더",
   "sidebarFolderCreatePrompt": "폴더 이름을 입력하세요. 사이드바 정리에만 사용되며 디스크에는 폴더가 생성되지 않습니다.",
   "sidebarFolderRename": "폴더 이름 바꾸기",
   "sidebarFolderRenamePrompt": "새 폴더 이름 입력",

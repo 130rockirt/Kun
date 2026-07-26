@@ -7,6 +7,7 @@ export const SIDEBAR_FOLDERS_STORAGE_KEY = 'kun.sidebarFolders.v1'
 export type SidebarVirtualFolder = {
   id: string
   name: string
+  parentId: string | null
   threadIds: string[]
 }
 
@@ -42,8 +43,7 @@ function normalizeFolderName(value: unknown): string {
 function normalizeWorkspaceFolders(value: unknown): SidebarVirtualFolder[] {
   if (!Array.isArray(value)) return []
   const folderIds = new Set<string>()
-  const assignedThreadIds = new Set<string>()
-  const result: SidebarVirtualFolder[] = []
+  const candidates: Array<SidebarVirtualFolder & { parentId: string | null }> = []
 
   for (const item of value) {
     if (!item || typeof item !== 'object') continue
@@ -52,16 +52,40 @@ function normalizeWorkspaceFolders(value: unknown): SidebarVirtualFolder[] {
     const name = normalizeFolderName(raw.name)
     if (!id || !name || folderIds.has(id)) continue
     folderIds.add(id)
-    const threadIds = compactStrings(Array.isArray(raw.threadIds) ? raw.threadIds : [])
-      .filter((threadId) => {
-        if (assignedThreadIds.has(threadId)) return false
-        assignedThreadIds.add(threadId)
-        return true
-      })
-    result.push({ id, name, threadIds })
+    candidates.push({
+      id,
+      name,
+      parentId: typeof raw.parentId === 'string' ? raw.parentId.trim() || null : null,
+      threadIds: compactStrings(Array.isArray(raw.threadIds) ? raw.threadIds : [])
+    })
   }
 
-  return result
+  const foldersById = new Map(candidates.map((folder) => [folder.id, folder] as const))
+  const assignedThreadIds = new Set<string>()
+  return candidates.map((folder) => {
+    const requestedParentId = folder.parentId
+    let validParent = requestedParentId !== null && foldersById.has(requestedParentId)
+    let parentId = requestedParentId
+    const ancestors = new Set<string>()
+    while (validParent && parentId) {
+      if (parentId === folder.id) {
+        validParent = false
+        break
+      }
+      if (ancestors.has(parentId)) break
+      ancestors.add(parentId)
+      const parent = foldersById.get(parentId)
+      if (!parent) break
+      parentId = parent.parentId
+    }
+    const normalizedParentId = validParent ? requestedParentId : null
+    const threadIds = folder.threadIds.filter((threadId) => {
+      if (assignedThreadIds.has(threadId)) return false
+      assignedThreadIds.add(threadId)
+      return true
+    })
+    return { ...folder, parentId: normalizedParentId, threadIds }
+  })
 }
 
 export function sidebarFolderScope(workspacePath: string): string {
@@ -134,20 +158,27 @@ function updateWorkspaceFolders(
 export function createSidebarFolder(
   registry: SidebarFolderRegistry,
   workspacePath: string,
-  folder: Pick<SidebarVirtualFolder, 'id' | 'name'>
+  folder: Pick<SidebarVirtualFolder, 'id' | 'name'> & Partial<Pick<SidebarVirtualFolder, 'parentId'>>
 ): SidebarFolderRegistry {
   const id = folder.id.trim()
   const name = folder.name.trim()
+  const requestedParentId = folder.parentId?.trim() || null
   if (!id || !name) return normalizeSidebarFolderRegistry(registry)
   return updateWorkspaceFolders(registry, workspacePath, (folders) => {
+    const parentId = requestedParentId && folders.some((item) => item.id === requestedParentId)
+      ? requestedParentId
+      : null
     if (
       folders.some((item) =>
-        item.id === id || item.name.localeCompare(name, undefined, { sensitivity: 'accent' }) === 0
+        item.id === id || (
+          item.parentId === parentId
+          && item.name.localeCompare(name, undefined, { sensitivity: 'accent' }) === 0
+        )
       )
     ) {
       return folders
     }
-    return [...folders, { id, name, threadIds: [] }]
+    return [...folders, { id, name, parentId, threadIds: [] }]
   })
 }
 
@@ -161,9 +192,12 @@ export function renameSidebarFolder(
   const normalizedName = name.trim()
   if (!normalizedId || !normalizedName) return normalizeSidebarFolderRegistry(registry)
   return updateWorkspaceFolders(registry, workspacePath, (folders) => {
+    const currentFolder = folders.find((item) => item.id === normalizedId)
+    if (!currentFolder) return folders
     if (
       folders.some((item) =>
         item.id !== normalizedId
+        && item.parentId === currentFolder.parentId
         && item.name.localeCompare(normalizedName, undefined, { sensitivity: 'accent' }) === 0
       )
     ) {
@@ -182,11 +216,15 @@ export function deleteSidebarFolder(
 ): SidebarFolderRegistry {
   const normalizedId = folderId.trim()
   if (!normalizedId) return normalizeSidebarFolderRegistry(registry)
-  return updateWorkspaceFolders(
-    registry,
-    workspacePath,
-    (folders) => folders.filter((folder) => folder.id !== normalizedId)
-  )
+  return updateWorkspaceFolders(registry, workspacePath, (folders) => {
+    const deleting = folders.find((folder) => folder.id === normalizedId)
+    if (!deleting) return folders
+    return folders
+      .filter((folder) => folder.id !== normalizedId)
+      .map((folder) => folder.parentId === normalizedId
+        ? { ...folder, parentId: deleting.parentId }
+        : folder)
+  })
 }
 
 export function sidebarFolderIdForThread(
@@ -253,15 +291,45 @@ export function removeSidebarThreadAssignments(
   })
 }
 
+export function sidebarChildFolders(
+  folders: readonly SidebarVirtualFolder[],
+  parentId: string | null
+): SidebarVirtualFolder[] {
+  return folders.filter((folder) => folder.parentId === parentId)
+}
+
+export function sidebarFolderThreadCount(
+  folders: readonly SidebarVirtualFolder[],
+  folderId: string
+): number {
+  const descendantIds = new Set([folderId])
+  let changed = true
+  while (changed) {
+    changed = false
+    for (const folder of folders) {
+      if (folder.parentId && descendantIds.has(folder.parentId) && !descendantIds.has(folder.id)) {
+        descendantIds.add(folder.id)
+        changed = true
+      }
+    }
+  }
+  return folders.reduce(
+    (count, folder) => count + (descendantIds.has(folder.id) ? folder.threadIds.length : 0),
+    0
+  )
+}
+
 export function sidebarFolderNameExists(
   folders: readonly SidebarVirtualFolder[],
   name: string,
-  excludingFolderId?: string
+  excludingFolderId?: string,
+  parentId: string | null = null
 ): boolean {
   const normalizedName = name.trim()
   if (!normalizedName) return false
   return folders.some((folder) =>
     folder.id !== excludingFolderId
+    && folder.parentId === parentId
     && folder.name.localeCompare(normalizedName, undefined, { sensitivity: 'accent' }) === 0
   )
 }

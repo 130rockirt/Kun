@@ -2175,6 +2175,7 @@
   "sidebarWorkspaceEmpty": "还没有会话",
   "sidebarWorkspaceNewThread": "新建会话",
   "sidebarFolderCreate": "新建目录",
+  "sidebarFolderCreateChild": "新建下级目录",
   "sidebarFolderCreatePrompt": "为目录命名。它只用于整理侧边栏，不会在磁盘上创建真实目录。",
   "sidebarFolderRename": "重命名目录",
   "sidebarFolderRenamePrompt": "输入新的目录名称",

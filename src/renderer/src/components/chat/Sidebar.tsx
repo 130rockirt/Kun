@@ -55,7 +55,10 @@ type Props = {
   onDeleteThread: (id: string) => Promise<void>
   onRestoreThread: (id: string) => Promise<void>
   onNewChat: () => void
-  onNewChatInWorkspace: (workspaceRoot: string) => void
+  onNewChatInWorkspace: (
+    workspaceRoot: string,
+    options?: { forceNew?: boolean }
+  ) => Promise<string | null>
   onNewRequirement: () => void
   onOpenRequirementDraft: (draft: SddDraft) => void
   onOpenSettings: (section?: SettingsRouteSection) => void

@@ -12,7 +12,9 @@ export type DesignCodeRoundtripWriteApi = {
   readWorkspaceFile?: (payload: WorkspaceFileTarget) => Promise<WorkspaceFileReadResult>
 }
 
-export type DesignCodeRoundtripCreateThread = (options: { workspaceRoot: string }) => Promise<void>
+export type DesignCodeRoundtripCreateThread = (
+  options: { workspaceRoot: string }
+) => Promise<unknown>
 
 export type DesignCodeRoundtripSendMessage = (
   text: string,

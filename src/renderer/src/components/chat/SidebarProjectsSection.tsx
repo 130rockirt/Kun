@@ -101,8 +101,10 @@ import {
   removeSidebarThreadAssignments,
   renameSidebarFolder,
   saveSidebarFolderRegistry,
+  sidebarChildFolders,
   sidebarFolderIdForThread,
   sidebarFolderNameExists,
+  sidebarFolderThreadCount,
   sidebarFoldersForWorkspace,
   type SidebarFolderRegistry,
   type SidebarVirtualFolder
@@ -137,7 +139,10 @@ type SidebarProjectsSectionProps = {
   locale: string
   onPickWorkspace: () => void
   onRemoveWorkspace: (workspacePath: string) => Promise<void>
-  onCreateThreadInWorkspace: (workspacePath: string) => void
+  onCreateThreadInWorkspace: (
+    workspacePath: string,
+    options?: { forceNew?: boolean }
+  ) => Promise<string | null>
   onOpenRequirementDraft: (draft: SddDraft) => void
   onSelectThread: (threadId: string) => void
   onRenameThread: (threadId: string, title: string) => Promise<void>
@@ -687,13 +692,18 @@ export function SidebarProjectsSection({
     setSidebarFolders(next)
   }
 
-  const openCreateFolderDialog = (workspacePath: string): void => {
+  const openCreateFolderDialog = (
+    workspacePath: string,
+    parentId: string | null = null
+  ): void => {
     setFolderDialog({
       mode: 'create',
       workspacePath,
+      parentId,
       value: ''
     })
     setWorkspaceContextMenu(null)
+    setFolderContextMenu(null)
   }
 
   const openRenameFolderDialog = (
@@ -715,7 +725,10 @@ export function SidebarProjectsSection({
     const name = dialog?.value.trim() ?? ''
     if (!dialog || !name) return
     const folders = sidebarFoldersForWorkspace(sidebarFolders, dialog.workspacePath)
-    if (sidebarFolderNameExists(folders, name, dialog.folder?.id)) {
+    const parentId = dialog.mode === 'create'
+      ? dialog.parentId ?? null
+      : dialog.folder?.parentId ?? null
+    if (sidebarFolderNameExists(folders, name, dialog.folder?.id, parentId)) {
       setFolderDialog((current) => current ? {
         ...current,
         value: name,
@@ -728,7 +741,11 @@ export function SidebarProjectsSection({
         ? crypto.randomUUID()
         : `folder-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
       persistSidebarFolders((current) =>
-        createSidebarFolder(current, dialog.workspacePath, { id: folderId, name })
+        createSidebarFolder(current, dialog.workspacePath, {
+          id: folderId,
+          name,
+          parentId
+        })
       )
     } else if (dialog.folder) {
       persistSidebarFolders((current) =>
@@ -736,6 +753,18 @@ export function SidebarProjectsSection({
       )
     }
     setFolderDialog(null)
+  }
+
+  const handleCreateThreadInFolder = async (
+    workspacePath: string,
+    folderId: string
+  ): Promise<void> => {
+    setCollapsedFolders((current) => ({ ...current, [folderId]: false }))
+    const threadId = await onCreateThreadInWorkspace(workspacePath, { forceNew: true })
+    if (!threadId) return
+    persistSidebarFolders((current) =>
+      moveThreadToSidebarFolder(current, workspacePath, threadId, folderId)
+    )
   }
 
   const handleDeleteFolder = (
@@ -1378,16 +1407,12 @@ export function SidebarProjectsSection({
           )
           const rootThreads = sortedThreads.filter((thread) => !assignedThreadIds.has(thread.id))
           const threadsById = new Map(sortedThreads.map((thread) => [thread.id, thread] as const))
-          const folderEntries = workspaceFolders.map((folder) => ({
-            folder,
-            threads: folder.threadIds.flatMap((threadId) => {
-              const thread = threadsById.get(threadId)
-              return thread ? [thread] : []
-            })
-          }))
-          const visibleFolderEntries = searchQuery.trim() || showArchived
-            ? folderEntries.filter((entry) => entry.threads.length > 0)
-            : folderEntries
+          const visibleFolder = (folder: SidebarVirtualFolder): boolean => {
+            if (!searchQuery.trim() && !showArchived) return true
+            if (folder.threadIds.some((threadId) => threadsById.has(threadId))) return true
+            return sidebarChildFolders(workspaceFolders, folder.id).some(visibleFolder)
+          }
+          const rootFolders = sidebarChildFolders(workspaceFolders, null).filter(visibleFolder)
           const workspaceExpanded = expandedWorkspaces[workspacePath] === true
           const hasOverflow = rootThreads.length > 5
           const visibleThreads = workspaceExpanded
@@ -1476,64 +1501,96 @@ export function SidebarProjectsSection({
                     onDelete={(draft) => void handleDeleteRequirementDraft(draft)}
                     t={t}
                   />
-                  {visibleFolderEntries.map(({ folder, threads: folderThreads }) => {
-                    const folderCollapsed = collapsedFolders[folder.id] === true
-                    const isFolderDragOver =
-                      folderDropTarget?.folderId === folder.id
-                      && workspaceRootIdentityKey(folderDropTarget.workspacePath) === workspaceRootIdentityKey(workspacePath)
-                    return (
-                      <div key={folder.id}>
-                        <SidebarTreeRow
-                          title={folder.name}
-                          ariaLabel={t('sidebarFolderAriaLabel', {
-                            name: folder.name,
-                            count: folderThreads.length
-                          })}
-                          onClick={() =>
-                            setCollapsedFolders((current) => ({
-                              ...current,
-                              [folder.id]: !current[folder.id]
-                            }))
-                          }
-                          onContextMenu={(event) => openFolderContextMenu(event, workspacePath, folder)}
-                          onDragOver={(event) => handleFolderDragOver(event, workspacePath, folder.id)}
-                          onDragLeave={(event) => handleFolderDragLeave(event, workspacePath, folder.id)}
-                          onDrop={(event) => handleFolderDrop(event, workspacePath, folder.id)}
-                          className={`min-h-[32px] ${
-                            isFolderDragOver
-                              ? 'bg-accent/10 shadow-[inset_0_0_0_1px_rgba(79,124,255,0.32)]'
-                              : ''
-                          }`}
-                          buttonClassName="items-center gap-1.5 px-2 py-1.5"
-                        >
-                          {folderCollapsed
-                            ? <ChevronRight className="h-3 w-3 shrink-0 text-ds-faint" strokeWidth={2} />
-                            : <ChevronDown className="h-3 w-3 shrink-0 text-ds-faint" strokeWidth={2} />}
-                          {folderCollapsed
-                            ? <Folder className="h-3.5 w-3.5 shrink-0 text-ds-muted" strokeWidth={1.8} />
-                            : <FolderOpen className="h-3.5 w-3.5 shrink-0 text-ds-muted" strokeWidth={1.8} />}
-                          <span className="min-w-0 flex-1 truncate text-[13px] text-ds-ink">
-                            {folder.name}
-                          </span>
-                          <span className="shrink-0 rounded-md bg-ds-card/70 px-1.5 py-0.5 text-[10.5px] text-ds-faint tabular-nums">
-                            {folderThreads.length}
-                          </span>
-                        </SidebarTreeRow>
-                        {!folderCollapsed ? (
-                          <div className="space-y-[3px] pl-4 pt-[3px]">
-                            {folderThreads.length > 0
-                              ? folderThreads.map((thread) => renderThreadRow(thread, workspacePath, folder.id))
-                              : (
-                                  <div className="px-2.5 py-1.5 text-[12px] leading-5 text-ds-faint">
-                                    {t('sidebarFolderEmpty')}
-                                  </div>
-                                )}
-                          </div>
-                        ) : null}
-                      </div>
-                    )
+                  {rootFolders.map((folder) => {
+                    const renderFolder = (item: SidebarVirtualFolder): ReactElement => {
+                      const folderCollapsed = collapsedFolders[item.id] === true
+                      const folderThreads = item.threadIds.flatMap((threadId) => {
+                        const thread = threadsById.get(threadId)
+                        return thread ? [thread] : []
+                      })
+                      const childFolders = sidebarChildFolders(workspaceFolders, item.id).filter(visibleFolder)
+                      const isFolderDragOver =
+                        folderDropTarget?.folderId === item.id
+                        && workspaceRootIdentityKey(folderDropTarget.workspacePath) === workspaceRootIdentityKey(workspacePath)
+                      return (
+                        <div key={item.id}>
+                          <SidebarTreeRow
+                            title={item.name}
+                            ariaLabel={t('sidebarFolderAriaLabel', {
+                              name: item.name,
+                              count: sidebarFolderThreadCount(workspaceFolders, item.id)
+                            })}
+                            onClick={() =>
+                              setCollapsedFolders((current) => ({
+                                ...current,
+                                [item.id]: !current[item.id]
+                              }))
+                            }
+                            onContextMenu={(event) => openFolderContextMenu(event, workspacePath, item)}
+                            onDragOver={(event) => handleFolderDragOver(event, workspacePath, item.id)}
+                            onDragLeave={(event) => handleFolderDragLeave(event, workspacePath, item.id)}
+                            onDrop={(event) => handleFolderDrop(event, workspacePath, item.id)}
+                            className={`min-h-[32px] ${
+                              isFolderDragOver
+                                ? 'bg-accent/10 shadow-[inset_0_0_0_1px_rgba(79,124,255,0.32)]'
+                                : ''
+                            }`}
+                            buttonClassName="items-center gap-1.5 px-2 py-1.5"
+                            actionsVisibility="hidden"
+                            actionsLayout="overlay"
+                            actions={
+                              <>
+                                <SidebarIconButton
+                                  onClick={() => openCreateFolderDialog(workspacePath, item.id)}
+                                  title={t('sidebarFolderCreateChild')}
+                                  ariaLabel={t('sidebarFolderCreateChild')}
+                                  className="h-6 w-6"
+                                  stopPropagation
+                                >
+                                  <FolderPlus className="h-3.5 w-3.5" strokeWidth={1.8} />
+                                </SidebarIconButton>
+                                <SidebarIconButton
+                                  onClick={() => void handleCreateThreadInFolder(workspacePath, item.id)}
+                                  title={t('sidebarWorkspaceNewThread')}
+                                  ariaLabel={t('sidebarWorkspaceNewThread')}
+                                  className="h-6 w-6"
+                                  stopPropagation
+                                >
+                                  <Plus className="h-3.5 w-3.5" strokeWidth={1.9} />
+                                </SidebarIconButton>
+                              </>
+                            }
+                          >
+                            {folderCollapsed
+                              ? <ChevronRight className="h-3 w-3 shrink-0 text-ds-faint" strokeWidth={2} />
+                              : <ChevronDown className="h-3 w-3 shrink-0 text-ds-faint" strokeWidth={2} />}
+                            {folderCollapsed
+                              ? <Folder className="h-3.5 w-3.5 shrink-0 text-ds-muted" strokeWidth={1.8} />
+                              : <FolderOpen className="h-3.5 w-3.5 shrink-0 text-ds-muted" strokeWidth={1.8} />}
+                            <span className="min-w-0 flex-1 truncate text-[13px] text-ds-ink">
+                              {item.name}
+                            </span>
+                            <span className="shrink-0 rounded-md bg-ds-card/70 px-1.5 py-0.5 text-[10.5px] text-ds-faint tabular-nums transition group-hover:opacity-0 group-focus-within:opacity-0">
+                              {sidebarFolderThreadCount(workspaceFolders, item.id)}
+                            </span>
+                          </SidebarTreeRow>
+                          {!folderCollapsed ? (
+                            <div className="space-y-[3px] pl-4 pt-[3px]">
+                              {childFolders.map(renderFolder)}
+                              {folderThreads.map((thread) => renderThreadRow(thread, workspacePath, item.id))}
+                              {folderThreads.length === 0 && childFolders.length === 0 ? (
+                                <div className="px-2.5 py-1.5 text-[12px] leading-5 text-ds-faint">
+                                  {t('sidebarFolderEmpty')}
+                                </div>
+                              ) : null}
+                            </div>
+                          ) : null}
+                        </div>
+                      )
+                    }
+                    return renderFolder(folder)
                   })}
-                  {rootThreads.length === 0 && visibleFolderEntries.length === 0 && draftHistory.length === 0 ? (
+                  {rootThreads.length === 0 && rootFolders.length === 0 && draftHistory.length === 0 ? (
                     <div className="flex items-center justify-between gap-2 px-2.5 py-1.5">
                       <div className="text-[12.5px] leading-5 text-ds-faint">
                         {searchQuery.trim()
@@ -1616,6 +1673,18 @@ export function SidebarProjectsSection({
         <FolderContextMenu
           state={folderContextMenu}
           onClose={() => setFolderContextMenu(null)}
+          onNewThread={() =>
+            void handleCreateThreadInFolder(
+              folderContextMenu.workspacePath,
+              folderContextMenu.folder.id
+            )
+          }
+          onNewFolder={() =>
+            openCreateFolderDialog(
+              folderContextMenu.workspacePath,
+              folderContextMenu.folder.id
+            )
+          }
           onRename={() =>
             openRenameFolderDialog(folderContextMenu.workspacePath, folderContextMenu.folder)
           }
