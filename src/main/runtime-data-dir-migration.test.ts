@@ -168,6 +168,13 @@ describe('canonical Kun Runtime data migration', () => {
     await writeThread(test.current, 'thr_new', 'new')
     await mkdir(join(test.current, 'attachments'), { recursive: true })
     await writeFile(join(test.current, 'attachments', 'att_new.json'), '{"id":"att_new"}', 'utf8')
+    await mkdir(join(test.current, 'extensions'), { recursive: true })
+    await writeFile(join(test.current, 'extensions', 'accounts.json'), '{"accounts":["new"]}', 'utf8')
+    await mkdir(join(test.current, 'credentials'), { recursive: true })
+    await writeFile(join(test.current, 'credentials', 'credentials.enc.json'), '{"encrypted":"new"}', 'utf8')
+    await writeFile(join(test.current, 'secret.key'), 'new-secret-key', 'utf8')
+    await mkdir(join(test.current, 'memory'), { recursive: true })
+    await writeFile(join(test.current, 'memory', 'mem_new.json'), '{"id":"mem_new"}', 'utf8')
     await writeFile(join(test.legacy, 'config.json'), '{"source":"legacy"}', 'utf8')
     await writeFile(join(test.current, 'config.json'), '{"source":"new"}', 'utf8')
 
@@ -183,6 +190,12 @@ describe('canonical Kun Runtime data migration', () => {
     expect(JSON.parse(await readFile(join(result.destinationBackupPath!, 'config.json'), 'utf8')).source).toBe('new')
     expect((await readdir(join(test.current, 'threads'))).sort()).toEqual(['thr_legacy', 'thr_new'])
     expect(await readFile(join(test.current, 'attachments', 'att_new.json'), 'utf8')).toContain('att_new')
+    expect(await readFile(join(test.current, 'extensions', 'accounts.json'), 'utf8'))
+      .toContain('"new"')
+    expect(await readFile(join(test.current, 'credentials', 'credentials.enc.json'), 'utf8'))
+      .toContain('"new"')
+    expect(await readFile(join(test.current, 'secret.key'), 'utf8')).toBe('new-secret-key')
+    expect(await readFile(join(test.current, 'memory', 'mem_new.json'), 'utf8')).toContain('mem_new')
     expect((await lstat(result.destinationBackupPath!)).isDirectory()).toBe(true)
     const journal = JSON.parse(await readFile(result.journalPath, 'utf8'))
     expect(journal.destinationInventory).toMatchObject({
@@ -222,6 +235,41 @@ describe('canonical Kun Runtime data migration', () => {
     )).toContain('alternate new')
     const report = JSON.parse(await readFile(result.reportPath!, 'utf8'))
     expect(report.conflicts).toContain('threads/thr_same')
+  })
+
+  it('does not mix protected identity records from different Runtime stores', async () => {
+    const test = await fixture()
+    await mkdir(join(test.legacy, 'credentials'), { recursive: true })
+    await mkdir(join(test.current, 'credentials'), { recursive: true })
+    await writeFile(join(test.legacy, 'secret.key'), 'legacy-key', 'utf8')
+    await writeFile(
+      join(test.legacy, 'credentials', 'credentials.enc.json'),
+      '{"encrypted":"legacy"}',
+      'utf8'
+    )
+    await writeFile(join(test.current, 'secret.key'), 'current-key', 'utf8')
+    await writeFile(
+      join(test.current, 'credentials', 'credentials.enc.json'),
+      '{"encrypted":"current"}',
+      'utf8'
+    )
+
+    const result = runCanonicalKunRuntimeDataMigration({
+      userDataPath: test.userData,
+      homeDir: test.home,
+      sleep: () => undefined
+    })
+
+    expect(result.status).toBe('completed')
+    expect(await readFile(join(test.current, 'secret.key'), 'utf8')).toBe('legacy-key')
+    expect(await readFile(
+      join(test.current, 'credentials', 'credentials.enc.json'),
+      'utf8'
+    )).toContain('"legacy"')
+    const journal = JSON.parse(await readFile(result.journalPath, 'utf8'))
+    expect(journal.conflicts).toEqual(expect.arrayContaining(['credentials', 'secret.key']))
+    expect(await readFile(join(result.destinationBackupPath!, 'secret.key'), 'utf8'))
+      .toBe('current-key')
   })
 
   it.skipIf(process.platform === 'win32')(
@@ -521,6 +569,43 @@ describe('canonical Kun Runtime data migration', () => {
     expect(JSON.parse(await readFile(result.journalPath, 'utf8')).phase).toBe('completed')
   })
 
+  it('recovers the legacy store before invalid active settings are replaced with defaults', async () => {
+    const test = await fixture()
+    await writeThread(test.legacy, 'thr_legacy', 'legacy')
+    await writeFile(test.settingsPath, '{broken', 'utf8')
+
+    const result = runCanonicalKunRuntimeDataMigration({
+      userDataPath: test.userData,
+      homeDir: test.home,
+      sleep: () => undefined
+    })
+
+    expect(result.status).toBe('completed')
+    expect(result.authority).toBe('current')
+    expect(await readFile(test.settingsPath, 'utf8')).toBe('{broken')
+    expect(await isLinkTo(test.legacy, test.current)).toBe(true)
+    expect(await readFile(join(test.current, 'threads', 'thr_legacy', 'metadata.jsonl'), 'utf8'))
+      .toContain('legacy')
+  })
+
+  it('recovers an available legacy store when repaired settings already select a missing target', async () => {
+    const test = await fixture('~/.kun/data')
+    await writeThread(test.legacy, 'thr_legacy', 'legacy')
+
+    const result = runCanonicalKunRuntimeDataMigration({
+      userDataPath: test.userData,
+      homeDir: test.home,
+      sleep: () => undefined
+    })
+
+    expect(result.status).toBe('completed')
+    expect(result.authority).toBe('current')
+    expect(await readSettingsDataDir(test.settingsPath)).toBe('~/.kun/data')
+    expect(await isLinkTo(test.legacy, test.current)).toBe(true)
+    expect(await readFile(join(test.current, 'threads', 'thr_legacy', 'metadata.jsonl'), 'utf8'))
+      .toContain('legacy')
+  })
+
   it('blocks before mutation while an active Runtime owns the legacy directory', async () => {
     const test = await fixture()
     await writeThread(test.legacy, 'thr_legacy', 'legacy')
@@ -671,6 +756,29 @@ describe('canonical Kun Runtime data migration', () => {
     expect(result.status).toBe('blocked')
     expect(result.message).toMatch(/unsafe destination backup path/)
     expect(await readFile(join(victim, 'keep.txt'), 'utf8')).toBe('untouched')
+    expect((await lstat(test.legacy)).isDirectory()).toBe(true)
+    expect((await lstat(test.current)).isDirectory()).toBe(true)
+  })
+
+  it('blocks before mutation while an active Runtime owns the destination directory', async () => {
+    const test = await fixture()
+    await writeThread(test.legacy, 'thr_legacy', 'legacy')
+    await writeThread(test.current, 'thr_current', 'current')
+    const inspected: string[] = []
+
+    const result = runCanonicalKunRuntimeDataMigration({
+      userDataPath: test.userData,
+      homeDir: test.home,
+      sleep: () => undefined,
+      assertLegacyRuntimeInactive: (dataDir) => {
+        inspected.push(dataDir)
+        if (dataDir === test.current) throw new Error('simulated active destination owner')
+      }
+    })
+
+    expect(result.status).toBe('blocked')
+    expect(result.message).toMatch(/active destination owner/)
+    expect(inspected).toEqual([test.legacy, test.current])
     expect((await lstat(test.legacy)).isDirectory()).toBe(true)
     expect((await lstat(test.current)).isDirectory()).toBe(true)
   })

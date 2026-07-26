@@ -37,8 +37,28 @@ const SALVAGE_ROOTS = [
   'attachments',
   'artifacts',
   'child-runs',
-  'delegated-sessions'
+  'delegated-sessions',
+  'extensions',
+  'extension-data',
+  'memory',
+  'task-graphs',
+  'model-routing',
+  'observability'
 ] as const
+const PROTECTED_IDENTITY_ENTRIES = [
+  'credentials',
+  'mcp-oauth',
+  'extensions/providers.json',
+  'extensions/accounts.json',
+  'extensions/provider-bindings.json',
+  'extensions/legacy-credential-migrations.json',
+  'secret.key'
+] as const
+const PROTECTED_EXTENSION_ENTRY_NAMES = new Set(
+  PROTECTED_IDENTITY_ENTRIES
+    .filter((entry) => entry.startsWith('extensions/'))
+    .map((entry) => entry.slice('extensions/'.length))
+)
 const RETRYABLE_WINDOWS_CODES = new Set(['EPERM', 'EBUSY', 'EACCES'])
 const MIGRATION_SCHEMA_VERSION = 2 as const
 
@@ -513,10 +533,13 @@ function readSettingsSelection(
     try {
       parsed = JSON.parse(raw)
     } catch {
-      return { authority: 'unknown', sourcePath, writePath }
+      // JsonSettingsStore will back up and replace invalid settings after this
+      // startup migration. Prefer the only existing canonical Runtime store so
+      // that repair does not strand historical data behind the new default.
+      return { authority: legacyState === 'dir' ? 'legacy' : 'current' }
     }
     if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-      return { authority: 'unknown', sourcePath, writePath }
+      return { authority: legacyState === 'dir' ? 'legacy' : 'current' }
     }
     const agents = (parsed as Record<string, unknown>).agents
     const kun = typeof agents === 'object' && agents !== null && !Array.isArray(agents)
@@ -783,6 +806,63 @@ function salvageDestinationBackup(
   }
   let salvaged = 0
   const conflicts: string[] = []
+  const protectedSources = PROTECTED_IDENTITY_ENTRIES
+    .map((relativePath) => ({
+      relativePath,
+      source: join(backupPath, ...relativePath.split('/')),
+      target: join(targetPath, ...relativePath.split('/'))
+    }))
+    .filter(({ source }) => pathState(source) !== 'missing')
+  if (protectedSources.length > 0) {
+    const protectedSourcePaths = new Set(
+      protectedSources.map(({ relativePath }) => relativePath)
+    )
+    const targetHasUnpairedProtectedIdentity = PROTECTED_IDENTITY_ENTRIES.some(
+      (relativePath) =>
+        !protectedSourcePaths.has(relativePath) &&
+        pathState(join(targetPath, ...relativePath.split('/'))) !== 'missing'
+    )
+    const targetHasDifferentProtectedIdentity = protectedSources.some(
+      ({ source, target }) =>
+        pathState(target) !== 'missing' &&
+        !salvageTreesEqual(source, target)
+    )
+    const protectedSourcesAreSafe = protectedSources.every(
+      ({ source }) => isSafeSalvageTree(source)
+    )
+    if (
+      targetHasUnpairedProtectedIdentity ||
+      targetHasDifferentProtectedIdentity ||
+      !protectedSourcesAreSafe
+    ) {
+      conflicts.push(...protectedSources.map(({ relativePath }) => relativePath))
+    } else {
+      for (const { relativePath, source, target } of protectedSources) {
+        if (pathState(target) !== 'missing') continue
+        const stagingRoot = join(
+          targetPath,
+          '.kun-runtime-migration-staging',
+          'protected-identity'
+        )
+        mkdirSync(dirname(target), { recursive: true, mode: 0o700 })
+        mkdirSync(stagingRoot, { recursive: true, mode: 0o700 })
+        const temporary = join(stagingRoot, `${basename(relativePath)}-${randomUUID()}.tmp`)
+        const metadata = lstatSync(source)
+        cpSync(source, temporary, {
+          recursive: metadata.isDirectory(),
+          preserveTimestamps: true,
+          errorOnExist: true,
+          force: false,
+          verbatimSymlinks: true
+        })
+        retryRuntimeMigrationMutation(
+          () => renameSync(temporary, target),
+          options
+        )
+        salvaged += 1
+      }
+    }
+  }
   for (const rootName of SALVAGE_ROOTS) {
     const sourceRoot = join(backupPath, rootName)
     if (pathState(sourceRoot) !== 'dir') continue
@@ -790,6 +870,9 @@ function salvageDestinationBackup(
     mkdirSync(targetRoot, { recursive: true, mode: 0o700 })
     for (const entry of readdirSync(sourceRoot, { withFileTypes: true })) {
       if (rootName === 'threads' && !entry.isDirectory()) continue
+      if (rootName === 'extensions' && PROTECTED_EXTENSION_ENTRY_NAMES.has(entry.name)) {
+        continue
+      }
       const source = join(sourceRoot, entry.name)
       const target = join(targetRoot, entry.name)
       if (pathState(target) !== 'missing') {
@@ -831,6 +914,27 @@ function isSafeSalvageTree(path: string): boolean {
   if (metadata.isFile()) return true
   if (!metadata.isDirectory()) return false
   return readdirSync(path).every((name) => isSafeSalvageTree(join(path, name)))
+}
+
+function salvageTreesEqual(left: string, right: string): boolean {
+  try {
+    const leftMetadata = lstatSync(left)
+    const rightMetadata = lstatSync(right)
+    if (leftMetadata.isFile() && rightMetadata.isFile()) {
+      return leftMetadata.size === rightMetadata.size &&
+        readFileSync(left).equals(readFileSync(right))
+    }
+    if (!leftMetadata.isDirectory() || !rightMetadata.isDirectory()) return false
+    const leftNames = readdirSync(left).sort()
+    const rightNames = readdirSync(right).sort()
+    return leftNames.length === rightNames.length &&
+      leftNames.every((name, index) =>
+        name === rightNames[index] &&
+        salvageTreesEqual(join(left, name), join(right, name))
+      )
+  } catch {
+    return false
+  }
 }
 
 function validatePromotedStore(
@@ -1134,6 +1238,9 @@ function continueMigration(
     if (journal.phase === 'settings-backed-up') {
       if (journal.sourceWasMissing !== true) {
         options.assertLegacyRuntimeInactive(journal.sourcePath)
+      }
+      if (journal.destinationBackupPath && pathState(journal.targetPath) === 'dir') {
+        options.assertLegacyRuntimeInactive(journal.targetPath)
       }
       mkdirSync(dirname(journal.targetPath), { recursive: true, mode: 0o700 })
       if (journal.destinationBackupPath) {
@@ -1613,7 +1720,7 @@ function runCanonicalKunRuntimeDataMigrationUnsafe(
       message: 'a canonical Runtime path is inaccessible'
     }
   }
-  const authority = settingsSelection.authority
+  let authority = settingsSelection.authority
 
   if (authority === 'unknown') {
     return {
@@ -1624,6 +1731,14 @@ function runCanonicalKunRuntimeDataMigrationUnsafe(
       journalPath,
       ...(sourceState === 'missing' ? {} : { message: 'could not determine Runtime data authority from settings' })
     }
+  }
+
+  if (authority === 'current' && targetState === 'missing' && sourceState === 'dir') {
+    // A previous settings repair can select the new default before legacy
+    // Runtime data has been promoted. The existing legacy store is the only
+    // available canonical authority, so recover it instead of blocking every
+    // subsequent startup.
+    authority = 'legacy'
   }
 
   if (authority === 'current') {
@@ -1832,6 +1947,7 @@ function runCanonicalKunRuntimeDataMigrationUnsafe(
 
   try {
     assertLegacyRuntimeInactive(sourcePath)
+    if (targetState === 'dir') assertLegacyRuntimeInactive(targetPath)
     assertSameVolume(
       sourcePath,
       targetPath,

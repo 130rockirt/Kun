@@ -1726,7 +1726,9 @@ app.whenReady().then(async () => {
     : new LegacyProviderSettingsMigrationCoordinator()
   store = credentialMigration
     ? new JsonSettingsStore(app.getPath('userData'), { credentialMigration })
-    : new JsonSettingsStore(app.getPath('userData'))
+    : new JsonSettingsStore(app.getPath('userData'), {
+        rejectPlaintextCredentials: canonicalRuntimeMigration?.status === 'blocked'
+      })
   traceStartup('settings load:start')
   const initial = await store.load()
   traceStartup('settings load:done')

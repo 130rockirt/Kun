@@ -13,6 +13,7 @@ import {
 } from '../server/event-loop-monitor.js'
 import { installServeCrashHandlers } from './serve-crash-handlers.js'
 import { runExtensionCommand } from './extension-cli.js'
+import { acquireRuntimeDataDirLease } from '../server/runtime-data-dir-lease.js'
 
 export const KUN_READY_PREFIX = 'KUN_READY '
 
@@ -35,7 +36,14 @@ async function serveMain(argv: readonly string[]): Promise<number> {
   }
   let handle: KunServeHandle | null = null
   installServeCrashHandlers(() => handle)
-  const server = await startKunServe(parsed.options)
+  const dataDirLease = await acquireRuntimeDataDirLease(parsed.options.dataDir)
+  let server: KunServeHandle
+  try {
+    server = await startKunServe(parsed.options)
+  } catch (error) {
+    await dataDirLease.release()
+    throw error
+  }
   handle = server
   await selfVerifyHealth(server.host, server.port)
   const info = server.runtime.info()
@@ -64,7 +72,9 @@ async function serveMain(argv: readonly string[]): Promise<number> {
   await new Promise<void>((resolve) => {
     const stop = () => {
       loopMonitor.stop()
-      void server.close().finally(resolve)
+      void server.close()
+        .finally(() => dataDirLease.release())
+        .finally(resolve)
     }
     process.once('SIGTERM', stop)
     process.once('SIGINT', stop)

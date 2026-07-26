@@ -534,6 +534,22 @@ describe('JsonSettingsStore', () => {
     expect(replaced.version).toBe(1)
   })
 
+  it('never persists plaintext credentials when protected storage is unavailable', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'ds-gui-settings-'))
+    const store = new JsonSettingsStore(userDataDir, {
+      rejectPlaintextCredentials: true
+    })
+
+    const settingsWithSecret = await store.load()
+    settingsWithSecret.provider.apiKey = 'plaintext-secret'
+    settingsWithSecret.provider.providers[0].apiKey = 'plaintext-secret'
+    await expect(store.save(settingsWithSecret))
+      .rejects.toThrow(/plaintext credentials were not written/)
+
+    const settingsPath = join(userDataDir, 'kun-settings.json')
+    await expect(readFile(settingsPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
   it('ignores null entries in persisted Claw channels and schedule tasks', async () => {
     const userDataDir = await mkdtemp(join(tmpdir(), 'ds-gui-settings-'))
 

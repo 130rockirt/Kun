@@ -68,6 +68,16 @@ export type SettingsCredentialMigration = {
   ) => Promise<SettingsCredentialMigrationResult>
 }
 
+type JsonSettingsStoreOptions = {
+  credentialMigration?: SettingsCredentialMigration
+  /**
+   * Fail closed when Runtime migration prevents access to protected credential
+   * storage. Existing plaintext compatibility settings may still be read, but
+   * they must never be copied or rewritten by an ordinary settings save.
+   */
+  rejectPlaintextCredentials?: boolean
+}
+
 // 数据默认根目录从 ~/.deepseekgui 升级为 ~/.kun。老安装的既有目录由
 // legacy-data-migration.ts 在启动期搬迁并留兼容链接;settings 里存的旧
 // 绝对路径也在那里按迁移结果重写,这里只负责“新值”。
@@ -383,7 +393,7 @@ export class JsonSettingsStore {
 
   constructor(
     userDataPath: string,
-    private readonly options: { credentialMigration?: SettingsCredentialMigration } = {}
+    private readonly options: JsonSettingsStoreOptions = {}
   ) {
     this.path = join(userDataPath, SETTINGS_FILE_NAME)
   }
@@ -441,7 +451,13 @@ export class JsonSettingsStore {
     if (migration === undefined) {
       this.cache = prepared
       if (sourcePath !== this.path || persistRuntimeTuningDefaultsMigration) {
-        await this.save(prepared)
+        if (this.rejectsPlaintextCredentials(prepared)) {
+          console.warn(
+            '[kun-gui] Settings compatibility rewrite deferred because protected credential storage is unavailable.'
+          )
+        } else {
+          await this.save(prepared)
+        }
       }
       return this.cache
     }
@@ -479,6 +495,11 @@ export class JsonSettingsStore {
     const normalized = normalizeStoredSettings(data)
     await ensureManagedWorkspaceRootsExist(normalized)
     const prepared = normalized
+    if (this.rejectsPlaintextCredentials(prepared)) {
+      throw new Error(
+        'Protected credential storage is unavailable while Kun Runtime data migration is blocked; settings containing plaintext credentials were not written'
+      )
+    }
     if (this.options.credentialMigration && hasLegacyProviderPlaintext(prepared)) {
       const currentRaw = await readFile(this.path, 'utf8').catch((error) => {
         if (isErrnoException(error) && error.code === 'ENOENT') return serializeSettingsForDisk(prepared)
@@ -556,6 +577,12 @@ export class JsonSettingsStore {
       })
       return null
     }
+  }
+
+  private rejectsPlaintextCredentials(settings: AppSettingsV1): boolean {
+    return this.options.rejectPlaintextCredentials === true &&
+      !this.options.credentialMigration &&
+      hasLegacyProviderPlaintext(settings)
   }
 
   private async persistSettings(settings: AppSettingsV1): Promise<void> {
