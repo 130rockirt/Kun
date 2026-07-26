@@ -1,3 +1,5 @@
+import type { AttachmentReference } from '../../agent/types'
+
 export type AttachmentPreviewFailureState = {
   scopeKey: string
   failedPreviewIds: Record<string, true>
@@ -12,11 +14,16 @@ export function attachmentPreviewFailureStateForScope(
     : { scopeKey: nextScopeKey, failedPreviewIds: {} }
 }
 
-type PreviewTask = () => Promise<string>
+export type AttachmentPreview = {
+  previewUrl: string
+  attachment?: AttachmentReference
+}
+
+type PreviewTask = () => Promise<AttachmentPreview>
 
 type QueuedPreview = {
   run: PreviewTask
-  resolve: (value: string) => void
+  resolve: (value: AttachmentPreview) => void
   reject: (reason?: unknown) => void
 }
 
@@ -24,7 +31,7 @@ export type AttachmentPreviewLoaderOptions = {
   maxConcurrent?: number
   maxQueued?: number
   maxCacheBytes?: number
-  measureBytes?: (value: string) => number
+  measureBytes?: (value: AttachmentPreview) => number
 }
 
 const DEFAULT_MAX_CONCURRENT = 2
@@ -42,9 +49,9 @@ export class AttachmentPreviewLoader {
   private readonly maxConcurrent: number
   private readonly maxQueued: number
   private readonly maxCacheBytes: number
-  private readonly measureBytes: (value: string) => number
-  private readonly inFlight = new Map<string, Promise<string>>()
-  private readonly cache = new Map<string, { value: string; bytes: number }>()
+  private readonly measureBytes: (value: AttachmentPreview) => number
+  private readonly inFlight = new Map<string, Promise<AttachmentPreview>>()
+  private readonly cache = new Map<string, { value: AttachmentPreview; bytes: number }>()
   private readonly queue: QueuedPreview[] = []
   private activeCount = 0
   private cacheBytes = 0
@@ -53,10 +60,10 @@ export class AttachmentPreviewLoader {
     this.maxConcurrent = positiveInteger(options.maxConcurrent, DEFAULT_MAX_CONCURRENT)
     this.maxQueued = positiveInteger(options.maxQueued, DEFAULT_MAX_QUEUED)
     this.maxCacheBytes = nonNegativeInteger(options.maxCacheBytes, DEFAULT_MAX_CACHE_BYTES)
-    this.measureBytes = options.measureBytes ?? ((value) => value.length)
+    this.measureBytes = options.measureBytes ?? ((value) => value.previewUrl.length)
   }
 
-  load(key: string, run: PreviewTask): Promise<string> {
+  load(key: string, run: PreviewTask): Promise<AttachmentPreview> {
     const normalizedKey = key.trim()
     if (!normalizedKey) return Promise.reject(new Error('attachment preview key is required'))
 
@@ -90,11 +97,11 @@ export class AttachmentPreviewLoader {
     this.cacheBytes = 0
   }
 
-  private enqueue(run: PreviewTask): Promise<string> {
+  private enqueue(run: PreviewTask): Promise<AttachmentPreview> {
     if (this.queue.length >= this.maxQueued) {
       return Promise.reject(new Error('attachment preview queue is full'))
     }
-    return new Promise<string>((resolve, reject) => {
+    return new Promise<AttachmentPreview>((resolve, reject) => {
       this.queue.push({ run, resolve, reject })
       this.drain()
     })
@@ -115,7 +122,7 @@ export class AttachmentPreviewLoader {
     }
   }
 
-  private remember(key: string, value: string): void {
+  private remember(key: string, value: AttachmentPreview): void {
     const measured = this.measureBytes(value)
     const bytes = Number.isFinite(measured) ? Math.max(0, Math.floor(measured)) : 0
     const previous = this.cache.get(key)

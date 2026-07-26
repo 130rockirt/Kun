@@ -31,6 +31,7 @@ import { useTimelineFilePreviewWorkspaceRoot } from './timeline-file-preview-wor
 import {
   attachmentPreviewFailureStateForScope,
   attachmentPreviewLoader,
+  type AttachmentPreview,
   type AttachmentPreviewFailureState
 } from './attachment-preview-loader'
 import { useDeferredRender } from '../../hooks/use-deferred-render'
@@ -721,10 +722,27 @@ function isMediaPreviewRequest(entry: MediaPreviewRequest | null): entry is Medi
   return entry !== null
 }
 
-function useMediaPreviewUrls(
+function attachmentReferenceFromPreview(
+  attachment: AttachmentReference
+): AttachmentReference {
+  return {
+    id: attachment.id,
+    ...(attachment.kind ? { kind: attachment.kind } : {}),
+    ...(attachment.name ? { name: attachment.name } : {}),
+    ...(attachment.mimeType ? { mimeType: attachment.mimeType } : {}),
+    ...(attachment.byteSize ? { byteSize: attachment.byteSize } : {}),
+    ...(attachment.width ? { width: attachment.width } : {}),
+    ...(attachment.height ? { height: attachment.height } : {})
+  }
+}
+
+function useMediaPreviews(
   media: TimelineMediaReference[],
   enabled: boolean
-): Record<string, string> {
+): {
+  resolvedPreviews: Record<string, AttachmentPreview>
+  failedPreviewIds: Record<string, true>
+} {
   const activeThreadId = useChatStore((s) => s.activeThreadId)
   const globalWorkspaceRoot = useChatStore((s) => s.workspaceRoot)
   const timelineWorkspaceRoot = useTimelineFilePreviewWorkspaceRoot()
@@ -740,13 +758,13 @@ function useMediaPreviewUrls(
       : {},
     [previewFailures, scopeKey]
   )
-  const [resolvedPreviewUrls, setResolvedPreviewUrls] = useState<Record<string, string>>({})
+  const [resolvedPreviews, setResolvedPreviews] = useState<Record<string, AttachmentPreview>>({})
   const previewRequests = useMemo(
     () =>
       media
         .map((item) => {
           const key = mediaKey(item)
-          if (item.previewUrl || resolvedPreviewUrls[key] || failedPreviewIds[key]) return null
+          if (item.previewUrl || resolvedPreviews[key] || failedPreviewIds[key]) return null
           if (item.id && !item.artifactId && (mediaIsImage(item) || mediaIsVideo(item) || !item.mimeType)) {
             return { key, id: item.id, mode: 'attachment' } satisfies MediaPreviewRequest
           }
@@ -755,7 +773,7 @@ function useMediaPreviewUrls(
           return null
         })
         .filter(isMediaPreviewRequest),
-    [failedPreviewIds, media, resolvedPreviewUrls]
+    [failedPreviewIds, media, resolvedPreviews]
   )
   const missingPreviewKey = previewRequests
     .map((request) =>
@@ -779,22 +797,25 @@ function useMediaPreviewUrls(
               ...(activeThreadId ? { threadId: activeThreadId } : {}),
               ...(workspaceRoot ? { workspace: workspaceRoot } : {})
             }
-            const previewUrl = await attachmentPreviewLoader.load(
+            const preview = await attachmentPreviewLoader.load(
               JSON.stringify(['attachment', attachmentId, activeThreadId ?? '', workspaceRoot]),
               async () => {
                 const content = await getAttachmentContent(attachmentId, scope)
-                return `data:${content.attachment.mimeType};base64,${content.dataBase64}`
+                return {
+                  previewUrl: `data:${content.attachment.mimeType};base64,${content.dataBase64}`,
+                  attachment: attachmentReferenceFromPreview(content.attachment)
+                }
               }
             )
             return {
               key: request.key,
-              previewUrl
+              preview
             }
           }
           if (request.mode === 'workspace-image' && request.path && typeof window.kunGui?.readWorkspaceImage === 'function') {
             const imagePath = request.path
             const readImage = window.kunGui.readWorkspaceImage
-            const previewUrl = await attachmentPreviewLoader.load(
+            const preview = await attachmentPreviewLoader.load(
               JSON.stringify(['workspace-image', imagePath, workspaceRoot]),
               async () => {
                 const resolved = await readGeneratedWorkspaceImagePreview({
@@ -803,10 +824,10 @@ function useMediaPreviewUrls(
                   readImage
                 })
                 if (!resolved) throw new Error(`workspace image preview is unavailable: ${imagePath}`)
-                return resolved
+                return { previewUrl: resolved }
               }
             )
-            if (previewUrl) return { key: request.key, previewUrl }
+            if (preview.previewUrl) return { key: request.key, preview }
           }
           return { key: request.key, failed: true as const }
         } catch {
@@ -815,11 +836,11 @@ function useMediaPreviewUrls(
       })
     ).then((results) => {
       if (cancelled) return
-      setResolvedPreviewUrls((current) => {
+      setResolvedPreviews((current) => {
         const next = { ...current }
         for (const result of results) {
-          if ('previewUrl' in result && typeof result.previewUrl === 'string') {
-            next[result.key] = result.previewUrl
+          if ('preview' in result && result.preview?.previewUrl) {
+            next[result.key] = result.preview
           }
         }
         return next
@@ -838,16 +859,18 @@ function useMediaPreviewUrls(
     }
   }, [activeThreadId, enabled, missingPreviewKey, previewRequests, scopeKey, workspaceRoot])
 
-  return resolvedPreviewUrls
+  return { resolvedPreviews, failedPreviewIds }
 }
 
 function MediaPreviewTile({
   media,
   previewUrl,
+  previewState,
   variant
 }: {
   media: TimelineMediaReference
   previewUrl?: string
+  previewState?: 'loading' | 'failed'
   variant: 'user' | 'tool' | 'conversation'
 }): ReactElement {
   const { t } = useTranslation('common')
@@ -1005,7 +1028,12 @@ function MediaPreviewTile({
 
   const Icon = mediaIsVideo(media) ? Video : mediaIsImage(media) ? ImageIcon : File
   return (
-    <div className={`${tileClass} flex flex-col justify-between p-3`} title={title} {...extensionAttachmentContext}>
+    <div
+      className={`${tileClass} flex flex-col justify-between p-3`}
+      title={title}
+      data-attachment-preview-state={previewState}
+      {...extensionAttachmentContext}
+    >
       <div className="flex min-w-0 items-start gap-2">
         <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-ds-border-muted bg-ds-subtle text-ds-muted">
           <Icon className="h-4 w-4" strokeWidth={1.8} />
@@ -1015,9 +1043,11 @@ function MediaPreviewTile({
             {title}
           </div>
           <div className="mt-0.5 truncate text-[11px] text-ds-faint">
-            {unavailable
+            {unavailable || previewState === 'failed'
               ? t('generatedFilePreviewUnavailable')
-              : [mimeType, byteSize].filter(Boolean).join(' · ') || t('generatedFilePreviewUnavailable')}
+              : previewState === 'loading'
+                ? t('filePreviewLoading')
+                : [mimeType, byteSize].filter(Boolean).join(' · ') || t('generatedFilePreviewUnavailable')}
           </div>
         </div>
       </div>
@@ -1078,7 +1108,7 @@ function MediaAttachmentGallery({
     debounceMs: 50,
     idleTimeoutMs: 250
   })
-  const resolvedPreviewUrls = useMediaPreviewUrls(media, shouldLoadPreviews)
+  const { resolvedPreviews, failedPreviewIds } = useMediaPreviews(media, shouldLoadPreviews)
   const conversationScrollerRef = useRef<HTMLDivElement>(null)
   const [scrollAvailability, setScrollAvailability] = useState<GeneratedMediaScrollAvailability>({
     canScrollBackward: false,
@@ -1126,11 +1156,29 @@ function MediaAttachmentGallery({
 
   const tiles = media.map((item) => {
     const key = mediaKey(item)
+    const resolved = resolvedPreviews[key]
+    const resolvedMedia = resolved?.attachment
+      ? { ...item, ...resolved.attachment }
+      : item
+    const previewUrl = item.previewUrl ?? resolved?.previewUrl
+    const expectsPreview = Boolean(
+      (item.id && !item.artifactId && (mediaIsImage(item) || mediaIsVideo(item) || !item.mimeType)) ||
+      (mediaIsImage(item) && mediaPath(item))
+    )
     return (
       <MediaPreviewTile
         key={key}
-        media={item}
-        previewUrl={item.previewUrl ?? resolvedPreviewUrls[key]}
+        media={resolvedMedia}
+        previewUrl={previewUrl}
+        previewState={
+          previewUrl
+            ? undefined
+            : failedPreviewIds[key]
+              ? 'failed'
+              : expectsPreview
+                ? 'loading'
+                : undefined
+        }
         variant={variant}
       />
     )
