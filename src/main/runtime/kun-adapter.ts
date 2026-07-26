@@ -14,12 +14,21 @@ import {
   isKunChildRunning,
   reclaimKunPort,
   resolveAvailableKunPort,
-  startKunChild,
+  startKunSharedRuntime,
   stopKunChildAndWait
 } from '../kun-process'
 import { getKunBaseUrl } from '../kun-base-url'
+import { RuntimeInfoResponse } from '../../../kun/src/contracts/runtime-info.js'
+import { isLoopbackHost } from '../../../kun/src/server/loopback-host.js'
+import {
+  readRuntimeDiscovery,
+  type RuntimeDiscoveryRecord
+} from '../../../kun/src/server/runtime-discovery.js'
+import { stopSharedRuntime } from '../../../kun/src/cli/shared-runtime.js'
 
 const KUN_RUNTIME_ID = 'kun' as const
+let resolvedConnection: RuntimeDiscoveryRecord | null = null
+let resolvedDataDir: string | null = null
 
 function appRoot(): string {
   return app.isPackaged
@@ -43,20 +52,34 @@ export const kunRuntimeAdapter = {
   },
 
   ensureRunning(settings: AppSettingsV1): Promise<void> {
-    return startKunChild(settings)
+    return ensureResolvedKunRuntime(settings)
   },
 
-  stopAndWait(): Promise<void> {
-    return stopKunChildAndWait()
+  async stopAndWait(): Promise<void> {
+    if (resolvedDataDir) await stopSharedRuntime(resolvedDataDir).catch(() => undefined)
+    resolvedConnection = null
+    await stopKunChildAndWait()
   },
 
   isChildRunning(): boolean {
-    return isKunChildRunning()
+    return Boolean(resolvedConnection) || isKunChildRunning()
   },
 
   getBaseUrl(settings: AppSettingsV1): string {
+    if (resolvedConnection) return resolvedConnection.baseUrl
     const runtime = getKunRuntimeSettings(settings)
     return getKunBaseUrl(runtime.port)
+  },
+
+  resolveConnection(settings: AppSettingsV1): Promise<boolean> {
+    return refreshResolvedKunRuntime(settings)
+  },
+
+  async stopSharedAndWait(settings: AppSettingsV1): Promise<void> {
+    const dataDir = expandDataDir(getKunRuntimeSettings(settings).dataDir)
+    await stopSharedRuntime(dataDir).catch(() => undefined)
+    resolvedConnection = null
+    await stopKunChildAndWait()
   },
 
   reclaimPort(port: number): Promise<{ ok: true } | { ok: false; message: string }> {
@@ -76,10 +99,64 @@ export function getRuntimeBaseUrlForSettings(settings: AppSettingsV1): string {
 export function runtimeAuthHeaders(settings: AppSettingsV1): Headers {
   const runtime = getKunRuntimeSettings(settings)
   const headers = new Headers()
-  if (runtime.runtimeToken.trim()) {
-    headers.set('Authorization', `Bearer ${runtime.runtimeToken.trim()}`)
+  const token = resolvedConnection?.runtimeToken ?? runtime.runtimeToken.trim()
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`)
   }
   return headers
+}
+
+async function ensureResolvedKunRuntime(settings: AppSettingsV1): Promise<void> {
+  if (await refreshResolvedKunRuntime(settings)) return
+  const connection = await startKunSharedRuntime(settings)
+  resolvedConnection = connection?.discovery ?? null
+  resolvedDataDir = expandDataDir(getKunRuntimeSettings(settings).dataDir)
+}
+
+async function refreshResolvedKunRuntime(settings: AppSettingsV1): Promise<boolean> {
+  const dataDir = expandDataDir(getKunRuntimeSettings(settings).dataDir)
+  resolvedDataDir = dataDir
+  const discovery = await readRuntimeDiscovery(dataDir).catch(() => null)
+  if (!discovery || !safeLoopbackDiscovery(discovery)) {
+    resolvedConnection = null
+    return false
+  }
+  try {
+    const response = await fetch(`${discovery.baseUrl}/v1/runtime/info`, {
+      headers: discovery.runtimeToken
+        ? { authorization: `Bearer ${discovery.runtimeToken}` }
+        : {},
+      signal: AbortSignal.timeout(2_000)
+    })
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    const info = RuntimeInfoResponse.parse(await response.json())
+    if (
+      info.instanceId !== discovery.instanceId ||
+      info.pid !== discovery.pid ||
+      info.startedAt !== discovery.startedAt
+    ) throw new Error('runtime identity mismatch')
+    resolvedConnection = discovery
+    return true
+  } catch {
+    resolvedConnection = null
+    return false
+  }
+}
+
+function safeLoopbackDiscovery(record: RuntimeDiscoveryRecord): boolean {
+  try {
+    const url = new URL(record.baseUrl)
+    return url.protocol === 'http:' &&
+      isLoopbackHost(url.hostname) &&
+      isLoopbackHost(record.host) &&
+      Number(url.port || '80') === record.port
+  } catch {
+    return false
+  }
+}
+
+function expandDataDir(value: string): string {
+  return value.replace(/^~(?=$|[\\/])/, homedir())
 }
 
 export type RuntimeRequestInit = {

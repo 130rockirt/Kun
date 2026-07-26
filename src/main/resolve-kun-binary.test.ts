@@ -112,6 +112,7 @@ describe('buildKunServeArgs', () => {
     expect(args).not.toContain('--model-proxy-url')
     expect(args).not.toContain('--endpoint-format')
     expect(args).not.toContain('--model')
+    expect(args).toContain('serve')
     expect(args).toContain('--token-economy-mode')
     expect(args).toContain('false')
   })

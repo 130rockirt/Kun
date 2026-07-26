@@ -63,6 +63,7 @@ class AgentSdkProtocolError extends Error {
 export interface SdkTurnContext {
   /** Workspace root the SDK runs in (cwd). */
   workspace: string
+  additionalWorkspaces?: readonly string[]
   /** The user's prompt for this turn. */
   userText: string
   /** Thread-level persona appended to the system prompt. */
@@ -75,6 +76,8 @@ export interface SdkTurnContext {
   /** Enforce structured SVG mutation followed by a later successful validation. */
   requireSvgCompletion?: boolean
   model?: string
+  /** Per-turn Claude adaptive-thinking effort selected by the shared client. */
+  reasoningEffort?: string
   /** Prior SDK session id for multi-turn continuity. */
   resumeSessionId?: string
   /** Kun-owned local Claude state root for this thread. */
@@ -456,6 +459,7 @@ export class AgentSdkRuntime {
           abortController: abort,
           ...(maxTurns !== undefined ? { maxTurns } : {}),
           ...(ctx.model ? { model: ctx.model } : {}),
+          ...(ctx.reasoningEffort ? { reasoningEffort: ctx.reasoningEffort } : {}),
           ...(resumeSessionId ? { resume: resumeSessionId } : {}),
           ...(this.deps.pathToClaudeCodeExecutable
             ? { pathToClaudeCodeExecutable: this.deps.pathToClaudeCodeExecutable }
@@ -1190,7 +1194,7 @@ const KUN_BRIDGED_TOOL_PREFIX = 'mcp__kun__'
 export function decideSdkBuiltinSandbox(
   toolName: string,
   input: Record<string, unknown>,
-  context: Pick<SdkTurnContext, 'workspace' | 'sandboxMode'>
+  context: Pick<SdkTurnContext, 'workspace' | 'additionalWorkspaces' | 'sandboxMode'>
 ): ToolApprovalDecision | null {
   const mode = context.sandboxMode ?? 'danger-full-access'
   if (!isKnownSdkTool(toolName)) {
@@ -1209,7 +1213,7 @@ export function decideSdkBuiltinSandbox(
     }
     const path = sdkInputPath(input)
     if (!path) return denySandbox(`tool ${toolName} is blocked because no workspace path was provided`)
-    if (!isPathInsideWorkspace(path, context.workspace)) {
+    if (!isPathInsideAnyWorkspace(path, context.workspace, context.additionalWorkspaces)) {
       return denySandbox(`tool ${toolName} is limited to the workspace sandbox: ${path}`)
     }
   }
@@ -1225,12 +1229,25 @@ export function decideSdkBuiltinSandbox(
     if (!path && toolName === 'Read') {
       return denySandbox(`tool ${toolName} is blocked because no workspace path was provided`)
     }
-    if (path && !isPathInsideWorkspace(path, context.workspace)) {
+    if (path && !isPathInsideAnyWorkspace(path, context.workspace, context.additionalWorkspaces)) {
       return denySandbox(`tool ${toolName} is limited to workspace paths: ${path}`)
     }
   }
 
   return null
+}
+
+function isPathInsideAnyWorkspace(
+  path: string,
+  workspace: string,
+  additionalWorkspaces: readonly string[] | undefined
+): boolean {
+  if (isPathInsideWorkspace(path, workspace)) return true
+  return (additionalWorkspaces ?? []).some((root) => existsSync(workspaceAbsoluteRoot(root)) && isPathInsideWorkspace(path, root))
+}
+
+function workspaceAbsoluteRoot(workspace: string): string {
+  return isAbsolute(workspace) ? resolve(workspace) : resolve(process.cwd(), workspace)
 }
 
 function denySandbox(message: string): ToolApprovalDecision {

@@ -464,6 +464,7 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
       guiDesignMode?: boolean
       guiDesignArtifact?: GuiDesignArtifactContext
       activeSkillIds?: readonly string[]
+      additionalWorkspaces?: readonly string[]
       allowedToolNames?: readonly string[]
       sandboxMode?: SandboxMode
       approvalPolicy?: ApprovalPolicy
@@ -480,6 +481,7 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
       threadId,
       turnId,
       workspace,
+      ...(opts?.additionalWorkspaces?.length ? { additionalWorkspaces: opts.additionalWorkspaces } : {}),
       approvalPolicy: opts?.approvalPolicy ?? deps.defaultApprovalPolicy,
       sandboxMode: opts?.sandboxMode ?? deps.defaultSandboxMode ?? DEFAULT_SANDBOX_MODE,
       abortSignal: opts?.signal ?? new AbortController().signal,
@@ -587,6 +589,7 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
         ? { planMode: false as const }
         : resolveTurnPlanContext(thread, turnId)
       const ctx = toolContext(threadId, turnId, thread.workspace, {
+        additionalWorkspaces: thread.additionalWorkspaces,
         ...plan,
         ...(turn?.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
         ...(turn?.guiDesignMode ? { guiDesignMode: true } : {}),
@@ -611,6 +614,7 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
           )
         : activeSkillIds
       const bridgeListingContext = toolContext(threadId, turnId, thread.workspace, {
+        additionalWorkspaces: thread.additionalWorkspaces,
         ...plan,
         ...(turn?.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
         ...(turn?.guiDesignMode ? { guiDesignMode: true } : {}),
@@ -673,6 +677,9 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
       }
 
       const contextInstructions = [
+        ...(thread.additionalWorkspaces?.length
+          ? [`Additional workspace roots explicitly added by the user:\n${thread.additionalWorkspaces.map((path) => `- ${JSON.stringify(path)}`).join('\n')}`]
+          : []),
         ...(planMode ? [PLAN_MODE_INSTRUCTION] : []),
         ...(turn?.guiDesignArtifact?.kind === 'svg'
           ? [SVG_ARTIFACT_MODE_INSTRUCTION]
@@ -739,6 +746,7 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
 
       return {
         workspace: thread.workspace,
+        additionalWorkspaces: thread.additionalWorkspaces,
         userText: modelUserText,
         threadPersona: thread.systemPrompt?.trim() || undefined,
         approvalPolicy,
@@ -753,6 +761,7 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
         // model (e.g. an old deepseek thread now routed to the subscription) to
         // the runtime default so the turn doesn't fail "model may not exist".
         model,
+        ...(turn?.reasoningEffort ? { reasoningEffort: turn.reasoningEffort } : {}),
         ...(preparation?.nativeSessionId
           ? { resumeSessionId: preparation.nativeSessionId }
           : {}),
@@ -789,6 +798,7 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
       const activeSkillIds = await resolveActiveSkillIds(thread, turn)
       // Real per-call signal so an interactive user_input cancels on turn abort.
       const ctx = toolContext(threadId, turnId, thread.workspace, {
+        additionalWorkspaces: thread.additionalWorkspaces,
         ...(plan ?? {}),
         ...(turn?.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
         ...(turn?.guiDesignMode ? { guiDesignMode: true } : {}),

@@ -805,6 +805,8 @@ describe('syncGuiManagedKunConfig', () => {
       credentialSourceId: 'settings:provider:custom',
       baseUrl: 'https://newapi.example/v1',
       endpointFormat: 'chat_completions',
+      models: ['glm-5.2'],
+      selectedModel: 'glm-5.2',
       modelProxyUrl: 'socks5://127.0.0.1:1080'
     })
     expect(JSON.stringify(parsed)).not.toContain('sk-newapi')

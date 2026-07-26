@@ -20,6 +20,7 @@ import {
   normalizeUiFontScale
 } from '@shared/app-settings'
 import type { SkillRootId } from '../lib/skill-root-preference'
+import type { CliInstallAction, CliInstallStatus } from '@shared/cli-install'
 import { FolderOpen, Loader2, PencilLine, RefreshCw, Settings } from 'lucide-react'
 import {
   InlineNoticeView,
@@ -31,6 +32,73 @@ import {
 import { LegacySessionImportCard } from './settings-section-general-legacy-import'
 
 type Rgb = { r: number; g: number; b: number }
+
+function CliCommandSettingsCard({ locale }: { locale: string }): ReactElement {
+  const zh = locale.toLowerCase().startsWith('zh')
+  const [status, setStatus] = useState<CliInstallStatus | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState('')
+  const refresh = (): void => {
+    void window.kunGui.cliInstallStatus().then(setStatus).catch((error) => {
+      setMessage(error instanceof Error ? error.message : String(error))
+    })
+  }
+  useEffect(refresh, [])
+  const act = (action: CliInstallAction): void => {
+    setBusy(true)
+    setMessage('')
+    void window.kunGui.cliInstallAction(action).then((result) => {
+      setStatus(result.status)
+      setMessage(result.message ?? (result.ok
+        ? (zh ? '终端命令已更新。请新开一个终端后输入 kun。' : 'Terminal command updated. Open a new terminal and run kun.')
+        : (zh ? '终端命令更新失败。' : 'Could not update the terminal command.')))
+    }).finally(() => setBusy(false))
+  }
+  const stateLabel = status?.state === 'installed'
+    ? (zh ? '已安装' : 'Installed')
+    : status?.state === 'stale'
+      ? (zh ? '需要修复' : 'Needs repair')
+      : status?.state === 'conflict'
+        ? (zh ? '存在冲突' : 'Conflict')
+        : (zh ? '未安装' : 'Not installed')
+  return (
+    <SettingsCard title={zh ? '终端命令' : 'Terminal command'}>
+      <SettingRow
+        title="kun"
+        description={zh
+          ? `安装后可在系统终端直接输入 kun 进入 TUI。当前状态：${stateLabel}`
+          : `Run kun in a system terminal to open the TUI. Current status: ${stateLabel}`}
+        wideControl
+        control={
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              disabled={busy || status?.state === 'installed' || status?.state === 'conflict'}
+              onClick={() => act(status?.state === 'stale' ? 'repair' : 'install')}
+              className="rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[13px] font-medium text-ds-ink disabled:opacity-50"
+            >
+              {busy ? <Loader2 className="mr-1 inline h-4 w-4 animate-spin" /> : null}
+              {status?.state === 'stale' ? (zh ? '修复' : 'Repair') : (zh ? '安装' : 'Install')}
+            </button>
+            <button
+              type="button"
+              disabled={busy || status?.state === 'not-installed' || status?.state === 'conflict'}
+              onClick={() => act('uninstall')}
+              className="rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[13px] text-ds-muted disabled:opacity-50"
+            >
+              {zh ? '卸载' : 'Uninstall'}
+            </button>
+            <button type="button" disabled={busy} onClick={refresh} className="p-2 text-ds-muted" title={zh ? '刷新' : 'Refresh'}>
+              <RefreshCw className="h-4 w-4" />
+            </button>
+            {status?.commandPath ? <code className="break-all text-[11px] text-ds-faint">{status.commandPath}</code> : null}
+            {message ? <div className="w-full text-[12px] text-ds-muted">{message}</div> : null}
+          </div>
+        }
+      />
+    </SettingsCard>
+  )
+}
 
 function normalizeHexColor(value: unknown): string {
   if (typeof value !== 'string') return DEFAULT_CURSOR_SPOTLIGHT_COLOR
@@ -256,6 +324,7 @@ export function GeneralSettingsSection({ ctx }: { ctx: Record<string, any> }): R
 
   return (
             <>
+              <CliCommandSettingsCard locale={form.locale} />
               <SettingsCard title={t('sectionGeneral')}>
                 <SettingRow
                   title={t('language')}

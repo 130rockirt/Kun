@@ -186,6 +186,7 @@ export function buildCanUseTool(decide: ToolApprovalDecider): SdkCanUseTool {
 
 export interface AssembleSdkOptionsParams {
   model?: string
+  reasoningEffort?: string
   cwd: string
   kunSystemPrompt: string
   threadPersona?: string
@@ -233,6 +234,7 @@ export function assembleSdkOptions(params: AssembleSdkOptionsParams): SdkQueryOp
     // Only load kun-provided config; don't auto-absorb the host's ~/.claude.
     settingSources: params.settingSources ?? [],
     ...(params.model ? { model: params.model } : {}),
+    ...sdkReasoningOptions(params.reasoningEffort),
     ...(params.mcpServers ? { mcpServers: params.mcpServers } : {}),
     ...(params.canUseTool ? { canUseTool: params.canUseTool } : {}),
     ...(params.hooks ? { hooks: params.hooks } : {}),
@@ -249,4 +251,21 @@ export function assembleSdkOptions(params: AssembleSdkOptionsParams): SdkQueryOp
       : {})
   }
   return options
+}
+
+function sdkReasoningOptions(
+  effort: string | undefined
+): Pick<SdkQueryOptions, 'effort' | 'thinking'> {
+  switch (effort?.trim().toLowerCase()) {
+    case 'low':
+    case 'medium':
+    case 'high':
+    case 'max':
+      return { effort: effort.trim().toLowerCase() as 'low' | 'medium' | 'high' | 'max', thinking: { type: 'adaptive' } }
+    case 'auto':
+    case 'adaptive':
+      return { thinking: { type: 'adaptive' } }
+    default:
+      return {}
+  }
 }

@@ -29,6 +29,7 @@ export function createThreadRecord(input: {
   title: string
   titleAuto?: boolean
   workspace: string
+  additionalWorkspaces?: string[]
   model: string
   providerId?: string
   ownerExtensionId?: string
@@ -64,6 +65,9 @@ export function createThreadRecord(input: {
     title: input.title,
     ...(input.titleAuto !== undefined ? { titleAuto: input.titleAuto } : {}),
     workspace: input.workspace,
+    additionalWorkspaces: [...new Set(
+      (input.additionalWorkspaces ?? []).map((entry) => entry.trim()).filter((entry) => entry && entry !== input.workspace)
+    )],
     model: input.model,
     ...(input.providerId ? { providerId: input.providerId } : {}),
     ...(input.ownerExtensionId ? { ownerExtensionId: input.ownerExtensionId } : {}),
@@ -105,7 +109,7 @@ export function toThreadSummary(
   thread: ThreadEntity
 ): Pick<
   ThreadEntity,
-  'id' | 'title' | 'titleAuto' | 'summary' | 'workspace' | 'model' | 'providerId' | 'agentId' | 'systemPrompt' | 'mode' | 'status' | 'approvalPolicy' | 'sandboxMode' | 'pinned' | 'createdAt' | 'updatedAt'
+  'id' | 'title' | 'titleAuto' | 'summary' | 'workspace' | 'additionalWorkspaces' | 'model' | 'providerId' | 'agentId' | 'systemPrompt' | 'mode' | 'status' | 'approvalPolicy' | 'sandboxMode' | 'pinned' | 'createdAt' | 'updatedAt'
   | 'ownerExtensionId' | 'ownerExtensionVersion' | 'accountId' | 'extensionVisibility'
   | 'extensionProfile' | 'extensionBudget' | 'toolCatalogEpoch'
   | 'costBudgetUsd' | 'costBudgetWarningSent'
@@ -119,6 +123,7 @@ export function toThreadSummary(
     ...(thread.titleAuto !== undefined ? { titleAuto: thread.titleAuto } : {}),
     ...(thread.summary ? { summary: thread.summary } : {}),
     workspace: thread.workspace,
+    additionalWorkspaces: thread.additionalWorkspaces,
     model: thread.model,
     ...(thread.providerId ? { providerId: thread.providerId } : {}),
     ...(thread.ownerExtensionId ? { ownerExtensionId: thread.ownerExtensionId } : {}),

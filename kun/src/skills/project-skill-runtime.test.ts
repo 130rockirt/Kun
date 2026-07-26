@@ -93,6 +93,18 @@ describe('SkillRuntime project config', () => {
     await expect(runtime.availableSkillIdsForWorkspace(workspace)).resolves.toEqual(['global'])
   })
 
+  it('returns the workspace-visible catalog used by TUI skill browsing and autocomplete', async () => {
+    await writeSkill(join(workspace, '.kun', 'skills'), 'local', 'local instructions')
+    await writeProjectConfig({ skills: {} })
+    const runtime = await createRuntime()
+
+    const diagnostics = await runtime.diagnosticsForWorkspace(workspace)
+
+    expect(diagnostics.skills.map((skill) => skill.id)).toEqual(['global', 'local'])
+    expect(diagnostics.roots).toContain(join(workspace, '.kun', 'skills', 'local'))
+    expect(diagnostics.globalRoots).toContain(join(globalRoot, 'global'))
+  })
+
   it('invalidates the workspace cache when project policy changes', async () => {
     await writeSkill(join(workspace, 'first-skills'), 'first', 'first instructions')
     await writeSkill(join(workspace, 'second-skills'), 'second', 'second instructions')

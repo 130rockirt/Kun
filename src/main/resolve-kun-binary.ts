@@ -120,6 +120,7 @@ export function buildKunServeArgs(input: {
 }): string[] {
   return [
     ...input.resolution.args,
+    'serve',
     '--host',
     input.host,
     '--port',

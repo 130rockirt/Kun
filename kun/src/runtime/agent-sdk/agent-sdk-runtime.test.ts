@@ -1,4 +1,5 @@
 import { mkdtemp, mkdir, rm, symlink } from 'node:fs/promises'
+import { realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, test, vi } from 'vitest'
@@ -237,6 +238,18 @@ describe('AgentSdkRuntime.runTurn', () => {
       workspace: '/ws',
       sandboxMode: 'workspace-write'
     })).toBeNull()
+    const existingExtra = realpathSync(tmpdir())
+    expect(decideSdkBuiltinSandbox('Write', { file_path: join(existingExtra, 'kun-shared-inside.txt') }, {
+      workspace: '/ws',
+      additionalWorkspaces: [existingExtra],
+      sandboxMode: 'workspace-write'
+    })).toBeNull()
+    const missingExtra = `/kun-missing-extra-${process.pid}`
+    expect(decideSdkBuiltinSandbox('Write', { file_path: `${missingExtra}/inside.txt` }, {
+      workspace: '/ws',
+      additionalWorkspaces: [missingExtra],
+      sandboxMode: 'workspace-write'
+    })).toMatchObject({ allow: false })
   })
 
   test('rejects SDK Glob patterns that select paths outside the workspace', () => {

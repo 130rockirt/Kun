@@ -33,6 +33,24 @@ import { usageJsonResponse } from './usage.js'
 import { llmDebugRoundsResponse } from './debug-llm.js'
 import { modelRequestsResponse } from './model-requests.js'
 import { runtimeInfoJsonResponse, runtimeToolDiagnosticsJsonResponse } from './runtime-info.js'
+import { shutdownRuntime } from './runtime-shutdown.js'
+import {
+  cancelModelConnectionOAuth,
+  claudeSdkStatus,
+  connectModelConnection,
+  deleteModelConnection,
+  listModelConnections,
+  modelConnectionEvents,
+  patchModelConnection,
+  probeModelConnection,
+  replaceModelCredential,
+  selectModelConnection,
+  startModelConnectionOAuth,
+  modelConnectionOAuthStatus,
+  submitModelConnectionOAuth,
+  installClaudeSdk,
+  updateModelConnectionGlobals
+} from './model-connections.js'
 import { applyRuntimeConfig } from './runtime-config.js'
 import { listSkills } from './skills.js'
 import {
@@ -227,6 +245,70 @@ export function buildRouter(runtime: ServerRuntime): Router {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
     return runtimeToolDiagnosticsJsonResponse(runtime)
   })
+  router.add('POST', '/v1/runtime/shutdown', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return shutdownRuntime(runtime, request)
+  })
+  router.add('GET', '/v1/model-connections', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return listModelConnections(runtime.modelConnections)
+  })
+  router.add('PATCH', '/v1/model-connections', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return updateModelConnectionGlobals(runtime.modelConnections, request)
+  })
+  router.add('POST', '/v1/model-connections/connect', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return connectModelConnection(runtime.modelConnections, request)
+  })
+  router.add('POST', '/v1/model-connections/oauth/start', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return startModelConnectionOAuth(runtime.modelConnectionOAuth, request)
+  })
+  router.add('GET', '/v1/model-connections/oauth/:sessionId', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return modelConnectionOAuthStatus(runtime.modelConnectionOAuth, ctx.params.sessionId)
+  })
+  router.add('POST', '/v1/model-connections/oauth/:sessionId/submit', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return submitModelConnectionOAuth(runtime.modelConnectionOAuth, ctx.params.sessionId, request)
+  })
+  router.add('DELETE', '/v1/model-connections/oauth/:sessionId', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return cancelModelConnectionOAuth(runtime.modelConnectionOAuth, ctx.params.sessionId)
+  })
+  router.add('GET', '/v1/model-connections/claude/sdk', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return claudeSdkStatus(runtime.modelConnectionOAuth)
+  })
+  router.add('POST', '/v1/model-connections/claude/sdk/install', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return installClaudeSdk(runtime.modelConnectionOAuth)
+  })
+  router.add('POST', '/v1/model-connections/select', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return selectModelConnection(runtime.modelConnections, request)
+  })
+  router.add('GET', '/v1/model-connections/events', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return modelConnectionEvents(runtime.modelConnections, request)
+  })
+  router.add('PATCH', '/v1/model-connections/:providerId', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return patchModelConnection(runtime.modelConnections, ctx.params.providerId, request)
+  })
+  router.add('PUT', '/v1/model-connections/:providerId/credential', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return replaceModelCredential(runtime.modelConnections, ctx.params.providerId, request)
+  })
+  router.add('DELETE', '/v1/model-connections/:providerId', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return deleteModelConnection(runtime.modelConnections, ctx.params.providerId, request)
+  })
+  router.add('POST', '/v1/model-connections/:providerId/probe', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return probeModelConnection(runtime.modelConnections, ctx.params.providerId)
+  })
   router.add('POST', '/v1/runtime/config/apply', async (request) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
     return applyRuntimeConfig(runtime, request)
@@ -249,7 +331,7 @@ export function buildRouter(runtime: ServerRuntime): Router {
   })
   router.add('GET', '/v1/skills', async (request) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
-    return listSkills(runtime)
+    return listSkills(runtime, request)
   })
   router.add('POST', '/v1/graphs/validate', async (request) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()

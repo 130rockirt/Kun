@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import {
   defaultKunRuntimeSettings,
   defaultModelProviderSettings,
@@ -15,7 +18,8 @@ import type { ServerRuntime } from '../../../kun/src/server/routes/server-runtim
 import type { AppSettingsV1 } from '../../shared/app-settings'
 import {
   buildManagedRuntimeHotApplyBody,
-  classifyManagedRuntimeHotApplyResponse
+  classifyManagedRuntimeHotApplyResponse,
+  syncGuiManagedKunConfig
 } from './kun-runtime-config-service'
 
 describe('Kun runtime config service', () => {
@@ -118,5 +122,52 @@ describe('Kun runtime config service', () => {
     expect(classifyManagedRuntimeHotApplyResponse(500, false, 'broken')).toEqual({
       result: 'failed', message: 'broken'
     })
+  })
+
+  it('projects provider catalogs when callers pass appSettings without schedule MCP', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'kun-runtime-config-providers-'))
+    const base = normalizeAppSettings({} as AppSettingsV1)
+    const defaultProvider = defaultModelProviderSettings().providers[0]!
+    const settings = normalizeAppSettings({
+      ...base,
+      provider: {
+        ...defaultModelProviderSettings(),
+        providers: [
+          { ...defaultProvider, models: ['deepseek-v4-pro', 'deepseek-v4-flash'] },
+          {
+            ...defaultProvider,
+            id: 'kimi-code',
+            name: 'Kimi Code',
+            baseUrl: 'https://api.kimi.com/coding/v1',
+            models: ['kimi-for-coding', 'kimi-for-coding-highspeed']
+          }
+        ]
+      },
+      agents: {
+        kun: {
+          ...defaultKunRuntimeSettings(),
+          providerId: 'kimi-code',
+          model: 'kimi-for-coding'
+        }
+      }
+    })
+    try {
+      await syncGuiManagedKunConfig(dataDir, resolveKunRuntimeSettings(settings), { appSettings: settings })
+      const config = JSON.parse(await readFile(join(dataDir, 'config.json'), 'utf8'))
+      expect(config.serve.providers.deepseek.models).toEqual(['deepseek-v4-flash', 'deepseek-v4-pro'])
+      expect(config.serve.providers['kimi-code'].models).toEqual([
+        'k3',
+        'kimi-for-coding',
+        'kimi-for-coding-highspeed'
+      ])
+      expect(config.serve.providers['kimi-code'].modelCapabilities.k3.reasoning).toEqual({
+        supportedEfforts: ['low', 'high', 'max'],
+        defaultEffort: 'high',
+        requestProtocol: 'openai-chat-completions'
+      })
+      expect(config.serve.credentialSourceId).toBe('settings:provider:kimi-code')
+    } finally {
+      await rm(dataDir, { recursive: true, force: true })
+    }
   })
 })

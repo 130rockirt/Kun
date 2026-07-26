@@ -100,4 +100,36 @@ describe('resolveUserInput', () => {
     await expect(responsePromise).resolves.toMatchObject({ status: 200 })
     await expect(pending).resolves.toEqual({ status: 'submitted', answers: [] })
   })
+
+  it('accepts a non-empty typed Other answer for an option question', async () => {
+    const gate = new InMemoryUserInputGate()
+    const pending = gate.request({
+      id: 'input_other',
+      threadId: 'thread_1',
+      turnId: 'turn_1',
+      itemId: 'item_input_other',
+      prompt: 'Choose a target',
+      questions: [{
+        header: 'Target',
+        id: 'target',
+        question: 'Choose a target',
+        options: [{ label: 'Web', description: '' }]
+      }]
+    })
+    const events = { record: vi.fn(async (event) => event) } as unknown as RuntimeEventRecorder
+    const answers = [{ id: 'target', label: 'Other', value: 'Terminal' }]
+
+    const response = await resolveUserInput({
+      inputId: 'input_other',
+      request: new Request('http://127.0.0.1/v1/user-inputs/input_other', {
+        method: 'POST',
+        body: JSON.stringify({ answers })
+      }),
+      gate,
+      events
+    })
+
+    expect(response.status).toBe(200)
+    await expect(pending).resolves.toEqual({ status: 'submitted', answers })
+  })
 })

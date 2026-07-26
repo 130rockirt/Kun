@@ -167,6 +167,7 @@ import type {
   RuntimeImageAttachmentUploadRequest,
   RuntimeImageAttachmentUploadResult
 } from './runtime-image-attachment'
+import type { CliInstallAction, CliInstallResult, CliInstallStatus } from './cli-install'
 
 export type KunRuntimeStatusPayload = {
   state: 'starting' | 'running' | 'restarting' | 'crashed' | 'failed' | 'stopped'
@@ -582,6 +583,8 @@ export type KunGuiApi = ExtensionIpcApi & {
   }
   getSettings: () => Promise<AppSettingsV1>
   resetUnreadableCredentials: () => Promise<CredentialRecoveryResetResult>
+  cliInstallStatus: () => Promise<CliInstallStatus>
+  cliInstallAction: (action: CliInstallAction) => Promise<CliInstallResult>
   /** Detect an existing local Claude Code login (subscription auth). */
   claudeSubscriptionStatus: () => Promise<ClaudeSubscriptionStatus>
   /** Run the official ambient Claude subscription login flow. */

@@ -73,6 +73,7 @@ import {
   CHATGPT_SUBSCRIPTION_PROVIDER_ID,
   GEMINI_SUBSCRIPTION_MODEL_IDS,
   TOKEN_PLAN_PROVIDER_ID_SUFFIX,
+  getModelProviderPreset,
   modelProviderPresetProfile,
   modelProviderTokenPlanProfile,
   resolveModelProviderPresetSource,
@@ -1225,7 +1226,9 @@ function normalizeModelProviderProfile(
     presetSource?.presetId === 'gemini-subscription' && input?.kind === 'gemini-code-assist'
       ? [...GEMINI_SUBSCRIPTION_MODEL_IDS]
       : savedModels
-  const { name, models } = migrateChatGptSubscriptionProfile(id, rawName, rawModels)
+  const migrated = migrateChatGptSubscriptionProfile(id, rawName, rawModels)
+  const name = migrated.name
+  const models = migrateProviderPresetModelCatalog(id, migrated.models)
   const modelProfiles = withPresetModelProfiles(
     { id, presetSource },
     models,
@@ -1291,6 +1294,14 @@ function migrateChatGptSubscriptionProfile(
       ? [...CHATGPT_SUBSCRIPTION_MODEL_IDS]
       : models
   }
+}
+
+function migrateProviderPresetModelCatalog(id: string, models: string[]): string[] {
+  if (id !== 'kimi-code') return models
+  const legacyModels = new Set(['kimi-for-coding', 'kimi-for-coding-highspeed'])
+  if (models.length === 0 || models.some((model) => !legacyModels.has(model))) return models
+  const preset = getModelProviderPreset('kimi-code')
+  return preset ? [...preset.models] : models
 }
 
 export function defaultModelRequestRetrySettings(): ModelRequestRetrySettingsV1 {
@@ -1368,9 +1379,18 @@ function withPresetModelProfiles(
   const profiles = { ...stored }
   for (const [modelId, presetProfile] of Object.entries(merged)) {
     const storedProfile = stored[modelId]
+    const usePresetReasoning = shouldUpgradeGeneratedPresetReasoning(
+      provider.id,
+      modelId,
+      storedProfile?.reasoning,
+      presetProfile.reasoning
+    )
     profiles[modelId] = {
       ...presetProfile,
       ...(storedProfile ?? {}),
+      ...(usePresetReasoning && presetProfile.reasoning
+        ? { reasoning: presetProfile.reasoning }
+        : {}),
       // Responses Lite is a required transport contract for its matching
       // Codex models, not a user-editable profile choice. Older manually
       // added profiles should inherit it from the preset.
@@ -1380,6 +1400,39 @@ function withPresetModelProfiles(
     }
   }
   return profiles
+}
+
+function shouldUpgradeGeneratedPresetReasoning(
+  providerId: string,
+  modelId: string,
+  stored: ModelProviderReasoningCapabilityV1 | undefined,
+  preset: ModelProviderReasoningCapabilityV1 | undefined
+): boolean {
+  if (!stored || !preset) return false
+  const presetId = providerId.endsWith(TOKEN_PLAN_PROVIDER_ID_SUFFIX)
+    ? providerId.slice(0, -TOKEN_PLAN_PROVIDER_ID_SUFFIX.length)
+    : providerId
+  if (
+    presetId === 'kimi-code' &&
+    modelId === 'k3' &&
+    stored.requestProtocol === 'openai-responses' &&
+    preset.requestProtocol === 'openai-chat-completions'
+  ) {
+    return true
+  }
+  const generatedPlaceholderProviders = new Set([
+    'opencode-go',
+    'zhipu-coding-plan',
+    'zai-coding-plan',
+    'aliyun',
+    'tencentcloud',
+    'volcengine-coding-plan'
+  ])
+  if (!generatedPlaceholderProviders.has(presetId)) return false
+  return stored.requestProtocol === 'none' &&
+    preset.requestProtocol !== 'none' &&
+    stored.defaultEffort === 'auto' &&
+    stored.supportedEfforts.every((effort) => effort === 'auto' || effort === 'off')
 }
 
 function presetModelProfilesForProvider(

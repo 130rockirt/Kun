@@ -141,12 +141,14 @@ Kun can also run as a standalone agent without the GUI:
 ```bash
 kun run --data-dir ~/.kun/data --workspace "$PWD" "summarize this repo"
 kun chat --data-dir ~/.kun/data --workspace "$PWD"
+kun --data-dir ~/.kun/data --workspace "$PWD"
 kun exec --data-dir ~/.kun/data --workspace "$PWD" --list-tools
 kun exec --data-dir ~/.kun/data --workspace "$PWD" read --args '{"path":"README.md"}'
 ```
 
 - `kun run` creates a thread, runs one turn, streams assistant text, and exits.
 - `kun chat` starts a line-oriented REPL. Use `/exit`, `/quit`, or an empty line to stop.
+- Bare `kun` (or its `kun tui` alias) attaches to or starts the shared background runtime. Its inline pi-tui interface preserves terminal scrollback and shares live HTTP/SSE state with the GUI. See [the TUI guide](../docs/kun-tui.en.md).
 - `kun exec --list-tools` prints the effective dynamic tool registry for the chosen config/workspace.
 - `kun exec <tool> --args <json>` invokes one tool directly. Use `--json` on `run` or `exec` for machine-readable output.
 
@@ -459,9 +461,9 @@ The HTTP server exposes the following routes under `/v1/*`:
 | GET | `/v1/threads?include=side` | list threads (most recently updated first); side threads are hidden unless `include=side` is passed |
 | POST | `/v1/threads` | create a thread |
 | GET | `/v1/threads/{id}` | read a thread with its turns |
-| PATCH | `/v1/threads/{id}` | update title/status/approval/sandbox/relation (promote a side thread by setting `relation: "primary"`) |
+| PATCH | `/v1/threads/{id}` | update title/status/mode/approval/sandbox/relation and `additionalWorkspaces` (promote a side thread by setting `relation: "primary"`) |
 | DELETE | `/v1/threads/{id}` | delete a thread |
-| POST | `/v1/threads/{id}/fork` | fork the thread. Optional JSON body: `{ "relation": "fork" \| "side", "title"?: string }` (defaults to `fork` when omitted). `relation: "side"` marks the result as a side conversation and tags `parentThreadId`. |
+| POST | `/v1/threads/{id}/fork` | fork the thread. Optional JSON body: `{ "relation": "fork" \| "side", "title"?: string, "turnId"?: string, "beforeTurn"?: boolean }` (defaults to `fork` when omitted). `turnId` limits the snapshot to one turn and `beforeTurn` excludes that turn for non-destructive undo. `relation: "side"` marks the result as a side conversation and tags `parentThreadId`. |
 | POST | `/v1/threads/{id}/turns` | start a turn |
 | GET | `/v1/threads/{id}/turns/{turnId}` | read a single turn |
 | POST | `/v1/threads/{id}/turns/{turnId}/steer` | queue steering text |

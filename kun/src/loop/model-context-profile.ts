@@ -81,6 +81,14 @@ export type ModelProfileConfigSource = {
   contextCompaction?: ContextCompactionConfig
 }
 
+export type ProviderModelCapabilityInput = {
+  providerId?: string
+  presetSource?: string
+  baseUrl?: string
+  kind?: 'http' | 'agent-sdk' | 'antigravity-cli' | 'cursor-sdk' | 'gemini-code-assist'
+  model?: string
+}
+
 export const DEFAULT_CONTEXT_WINDOW_TOKENS = 256_000
 
 export const DEFAULT_CONTEXT_THRESHOLDS: ModelContextThresholds = {
@@ -101,6 +109,16 @@ const DEEPSEEK_V4_CONTEXT_WINDOW_TOKENS = 1_000_000
 // coding agents and leaves room for the post-compaction request to fit.
 const DEEPSEEK_V4_SOFT_THRESHOLD_RATIO = 0.75
 const DEEPSEEK_V4_HARD_THRESHOLD_RATIO = 0.85
+const GLM_REASONING: ModelReasoningCapabilityMetadata = {
+  supportedEfforts: ['off', 'high', 'max'],
+  defaultEffort: 'max',
+  requestProtocol: 'glm-chat-completions'
+}
+const CODEX_RESPONSES_REASONING: ModelReasoningCapabilityMetadata = {
+  supportedEfforts: ['low', 'medium', 'high', 'max'],
+  defaultEffort: 'high',
+  requestProtocol: 'openai-responses'
+}
 const DEFAULT_MODEL_INPUT_MODALITIES: readonly ModelInputModality[] = ['text']
 const DEFAULT_MODEL_OUTPUT_MODALITIES: readonly ModelInputModality[] = ['text']
 const DEFAULT_MODEL_MESSAGE_PARTS: readonly ModelMessagePartSupport[] = ['text']
@@ -112,7 +130,20 @@ export const MODEL_CONTEXT_PROFILES: readonly ModelContextProfile[] = [
     // Back-compat aliases currently routed by DeepSeek to v4-flash modes.
     'deepseek-chat',
     'deepseek-reasoner'
-  ])
+  ]),
+  glmReasoningProfile('glm-5.2', 1_000_000),
+  glmReasoningProfile('glm-5.1', 200_000),
+  glmReasoningProfile('glm-5', 200_000),
+  glmReasoningProfile('glm-5-turbo', 200_000),
+  glmReasoningProfile('glm-4.7', 200_000),
+  glmReasoningProfile('glm-4.5-air', 200_000),
+  codexReasoningProfile('gpt-5.6-sol', 372_000, true),
+  codexReasoningProfile('gpt-5.6-terra', 372_000, true),
+  codexReasoningProfile('gpt-5.6-luna', 372_000, true),
+  codexReasoningProfile('gpt-5.5', 1_000_000),
+  codexReasoningProfile('gpt-5.4', 1_000_000),
+  codexReasoningProfile('gpt-5.4-mini', 1_000_000),
+  codexReasoningProfile('gpt-5.3-codex-spark', 128_000, false, false)
 ]
 
 export function resolveModelContextProfile(
@@ -168,6 +199,127 @@ export function modelCapabilitiesForModel(
   }
 }
 
+/**
+ * Compatibility capabilities for provider catalogs written before
+ * `modelCapabilities` became part of the shared runtime config. Explicit
+ * provider profiles must be applied by the caller before this fallback.
+ *
+ * Keep this allowlist provider-aware: identical model ids can use different
+ * reasoning fields when they are served by a first-party API or an aggregator.
+ */
+export function modelCapabilitiesForProviderModel(
+  input: ProviderModelCapabilityInput,
+  profiles: readonly ModelContextProfile[] = MODEL_CONTEXT_PROFILES
+): ModelCapabilityMetadata {
+  const model = input.model?.trim()
+  const builtIn = modelCapabilitiesForModel(model, profiles)
+  const reasoning = providerReasoningCapability(input)
+  return reasoning
+    ? { ...builtIn, reasoning: copyReasoningCapability(reasoning) }
+    : builtIn
+}
+
+function providerReasoningCapability(
+  input: ProviderModelCapabilityInput
+): ModelReasoningCapabilityMetadata | undefined {
+  const provider = `${input.providerId ?? ''} ${input.presetSource ?? ''}`.trim().toLowerCase()
+  const model = normalizeModelId(input.model)
+  const baseUrl = input.baseUrl?.trim().toLowerCase() ?? ''
+
+  if (
+    (input.kind === 'agent-sdk' || provider.includes('claude-subscription')) &&
+    (model.includes('claude-opus-4-8') || model.includes('claude-sonnet-4-6'))
+  ) {
+    return reasoning(['low', 'medium', 'high', 'max'], 'high', 'anthropic-thinking')
+  }
+  if (provider.includes('kimi-code') && (model === 'k3' || model.endsWith('/k3'))) {
+    return reasoning(['low', 'high', 'max'], 'high', 'openai-chat-completions')
+  }
+  if (
+    (provider.includes('grok-subscription') || baseUrl.includes('cli-chat-proxy.grok.com')) &&
+    (model === 'grok-4.5' || model.endsWith('/grok-4.5'))
+  ) {
+    return reasoning(['low', 'medium', 'high'], 'high', 'openai-responses')
+  }
+  if (
+    (provider.includes('opencode-go') || baseUrl.includes('opencode.ai/zen/go/')) &&
+    (model === 'grok-4.5' || model.endsWith('/grok-4.5'))
+  ) {
+    return reasoning(['low', 'medium', 'high'], 'medium', 'openai-chat-completions')
+  }
+  if (
+    (provider.includes('xiaomi') || baseUrl.includes('xiaomimimo.com')) &&
+    model.includes('mimo-')
+  ) {
+    return reasoning(['off', 'low', 'medium', 'high'], 'high', 'mimo-chat-completions')
+  }
+  if (
+    (provider.includes('minimax') || baseUrl.includes('minimaxi.com') || baseUrl.includes('minimax.io')) &&
+    model.includes('minimax-m3')
+  ) {
+    return reasoning(['auto', 'off'], 'auto', 'anthropic-thinking')
+  }
+  if (
+    (provider.includes('aliyun') || baseUrl.includes('dashscope.aliyuncs.com') ||
+      baseUrl.includes('.maas.aliyuncs.com')) &&
+    (model.includes('qwq') || model.includes('qwen3-vl'))
+  ) {
+    return reasoning(['auto', 'off'], 'auto', 'qwen-chat-completions')
+  }
+  if (
+    (provider.includes('tencentcloud') || baseUrl.includes('hunyuan.cloud.tencent.com') ||
+      baseUrl.includes('lkeap.cloud.tencent.com')) &&
+    model.includes('hunyuan-t1')
+  ) {
+    return reasoning(['auto', 'off'], 'auto', 'thinking-toggle-chat-completions')
+  }
+  if (
+    (provider.includes('volcengine') || baseUrl.includes('volces.com')) &&
+    model.includes('doubao-')
+  ) {
+    return reasoning(['auto', 'off'], 'auto', 'thinking-toggle-chat-completions')
+  }
+  if (
+    (provider === 'zenmux' || provider.includes('zenmux') || baseUrl.includes('zenmux.ai')) &&
+    isKnownZenMuxReasoningModel(model)
+  ) {
+    return reasoning(['low', 'medium', 'high'], 'medium', 'openai-chat-completions')
+  }
+  return undefined
+}
+
+function reasoning(
+  supportedEfforts: ModelReasoningCapabilityMetadata['supportedEfforts'],
+  defaultEffort: ModelReasoningCapabilityMetadata['defaultEffort'],
+  requestProtocol: ModelReasoningCapabilityMetadata['requestProtocol']
+): ModelReasoningCapabilityMetadata {
+  return { supportedEfforts, defaultEffort, requestProtocol }
+}
+
+function isKnownZenMuxReasoningModel(model: string): boolean {
+  if (model.includes('non-reasoning')) return false
+  return [
+    'deepseek-chat',
+    'deepseek-reasoner',
+    'deepseek-r1',
+    'deepseek-v3.2',
+    'deepseek-v4',
+    'glm-4.5',
+    'glm-4.6',
+    'glm-4.7',
+    'glm-5',
+    'grok-3-mini',
+    'grok-4',
+    'kimi-k2',
+    'qwen3',
+    'qwq',
+    'o1',
+    'o3',
+    'o4',
+    'gpt-5'
+  ].some((needle) => model.includes(needle))
+}
+
 export function modelContextProfilesFromConfig(
   config?: ContextCompactionConfig | ModelConfig | ModelProfileConfigSource
 ): readonly ModelContextProfile[] {
@@ -208,6 +360,45 @@ function deepseekV4Profile(
       defaultEffort: 'max',
       requestProtocol: 'deepseek-chat-completions'
     }
+  }
+}
+
+function glmReasoningProfile(
+  canonicalModel: string,
+  contextWindowTokens: number
+): ModelContextProfile {
+  return {
+    canonicalModel,
+    modelIds: [canonicalModel],
+    contextWindowTokens,
+    softThreshold: Math.floor(contextWindowTokens * DEEPSEEK_V4_SOFT_THRESHOLD_RATIO),
+    hardThreshold: Math.floor(contextWindowTokens * DEEPSEEK_V4_HARD_THRESHOLD_RATIO),
+    inputModalities: DEFAULT_MODEL_INPUT_MODALITIES,
+    outputModalities: DEFAULT_MODEL_OUTPUT_MODALITIES,
+    supportsToolCalling: true,
+    messageParts: DEFAULT_MODEL_MESSAGE_PARTS,
+    reasoning: copyReasoningCapability(GLM_REASONING)
+  }
+}
+
+function codexReasoningProfile(
+  canonicalModel: string,
+  contextWindowTokens: number,
+  responsesLite = false,
+  imageInput = true
+): ModelContextProfile {
+  return {
+    canonicalModel,
+    modelIds: [canonicalModel],
+    contextWindowTokens,
+    softThreshold: Math.floor(contextWindowTokens * DEEPSEEK_V4_SOFT_THRESHOLD_RATIO),
+    hardThreshold: Math.floor(contextWindowTokens * DEEPSEEK_V4_HARD_THRESHOLD_RATIO),
+    inputModalities: imageInput ? ['text', 'image'] : DEFAULT_MODEL_INPUT_MODALITIES,
+    outputModalities: DEFAULT_MODEL_OUTPUT_MODALITIES,
+    supportsToolCalling: true,
+    messageParts: imageInput ? ['text', 'image_url'] : DEFAULT_MODEL_MESSAGE_PARTS,
+    reasoning: copyReasoningCapability(CODEX_RESPONSES_REASONING),
+    ...(responsesLite ? { responsesMode: 'lite' as const } : {})
   }
 }
 

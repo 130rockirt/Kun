@@ -1,0 +1,30 @@
+{
+  "name": "@kun/provider-catalog",
+  "version": "0.1.0",
+  "description": "Framework-neutral Kun model provider connection catalog",
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run --root ."
+  },
+  "devDependencies": {
+    "typescript": "^5.8.2",
+    "vitest": "^4.1.7"
+  },
+  "license": "PolyForm-Noncommercial-1.0.0"
+}

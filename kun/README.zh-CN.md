@@ -80,12 +80,14 @@ Kun 也可以在无 GUI 的情况下独立运行：
 ```bash
 kun run --data-dir ~/.kun/data --workspace "$PWD" "summarize this repo"
 kun chat --data-dir ~/.kun/data --workspace "$PWD"
+kun --data-dir ~/.kun/data --workspace "$PWD"
 kun exec --data-dir ~/.kun/data --workspace "$PWD" --list-tools
 kun exec --data-dir ~/.kun/data --workspace "$PWD" read --args '{"path":"README.md"}'
 ```
 
 - `kun run` 会创建一个线程，执行一个回合并流式输出助手文本后退出。
 - `kun chat` 启动行式 REPL。使用 `/exit`、`/quit` 或空行退出。
+- 裸 `kun`（或别名 `kun tui`）连接或自动启动共享后台运行时，提供可与 GUI 同时使用、保留终端 scrollback 的 pi-tui 内联界面。参见 [TUI 指南](../docs/kun-tui.md)。
 - `kun exec --list-tools` 打印当前配置 / 工作区下生效的动态工具列表。
 - `kun exec <tool> --args <json>` 直接调用单个工具。`run` 或 `exec` 上可配合 `--json` 获取机器可读输出。
 
@@ -362,9 +364,9 @@ HTTP 服务在 `/v1/*` 提供以下路由：
 | GET | `/v1/threads?include=side` | 列表线程（按最近更新）；未传 `include=side` 时会隐藏 side 线程 |
 | POST | `/v1/threads` | 创建线程 |
 | GET | `/v1/threads/{id}` | 获取线程 |
-| PATCH | `/v1/threads/{id}` | 更新标题/状态/审批/副线程关系（`relation: "primary"`） |
+| PATCH | `/v1/threads/{id}` | 更新标题/状态/mode/审批/sandbox/副线程关系和 `additionalWorkspaces`（`relation: "primary"`） |
 | DELETE | `/v1/threads/{id}` | 删除线程 |
-| POST | `/v1/threads/{id}/fork` | 复制线程。可选 body：`{ "relation": "fork" \| "side", "title"?: string }`。默认 `fork`；`relation: "side"` 会将结果标记为 side 并写入 `parentThreadId` |
+| POST | `/v1/threads/{id}/fork` | 复制线程。可选 body：`{ "relation": "fork" \| "side", "title"?: string, "turnId"?: string, "beforeTurn"?: boolean }`。`turnId` 限制快照终点，`beforeTurn` 会排除该 turn，用于不改写源线程的 undo；默认 relation 为 `fork`，`side` 会写入 `parentThreadId` |
 | POST | `/v1/threads/{id}/turns` | 发起一个回合 |
 | GET | `/v1/threads/{id}/turns/{turnId}` | 获取回合 |
 | POST | `/v1/threads/{id}/turns/{turnId}/steer` | 追加 steering 文本 |

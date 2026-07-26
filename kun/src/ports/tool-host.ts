@@ -77,6 +77,10 @@ export type ToolHostContext = {
   workspace: string
   orchestration?: 'direct' | 'graph'
   messageSource?: 'background_shell' | 'background_subagent' | 'graph_runtime'
+  /** Additional explicitly trusted workspace roots for this persisted thread. */
+  additionalWorkspaces?: readonly string[]
+  /** Initiating client surface used to hide desktop-only providers from TUI turns. */
+  clientSurface?: TurnClientSurface
   /**
    * Thread mode advertised by the GUI. Kun restricts plan tools
    * to `plan` threads plus `planDraft`/`planRefine` turn kinds. The

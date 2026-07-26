@@ -1,0 +1,800 @@
+import { describe, expect, it, vi } from 'vitest'
+import { mkdtemp, realpath, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { ThreadSchema } from '../contracts/threads.js'
+import type { RuntimeEvent } from '../contracts/events.js'
+import type { KunTuiClient, ThreadDetail, TuiConnection } from './client.js'
+import { TuiClientError } from './client.js'
+import { TuiController } from './controller.js'
+import type { TuiOptions } from './options.js'
+
+function detail(overrides: Partial<ThreadDetail> = {}): ThreadDetail {
+  return {
+    ...ThreadSchema.parse({
+      id: 'thr_1',
+      title: 'Shared',
+      workspace: '/tmp/project',
+      model: 'model-a',
+      mode: 'agent',
+      status: 'idle',
+      approvalPolicy: 'on-request',
+      sandboxMode: 'workspace-write',
+      relation: 'primary',
+      createdAt: '2026-07-22T00:00:00.000Z',
+      updatedAt: '2026-07-22T00:00:00.000Z',
+      turns: []
+    }),
+    latestSeq: 0,
+    pendingUserInputIds: [],
+    ...overrides
+  }
+}
+
+function options(): TuiOptions {
+  return {
+    runtimeToken: 'secret',
+    dataDir: '/tmp/data',
+    workspace: '/tmp/project',
+    continueLatest: true,
+    noStart: false,
+    help: false
+  }
+}
+
+const runtime = {
+  baseUrl: 'http://127.0.0.1:18899',
+  runtimeToken: 'secret',
+  discovered: true,
+  runtimeInfo: {
+    model: 'model-a',
+    approvalPolicy: 'on-request',
+    sandboxMode: 'workspace-write'
+  }
+} as unknown as TuiConnection
+
+describe('TuiController', () => {
+  it('starts on the guided composer and only opens the thread picker on request', async () => {
+    const client = {
+      listThreads: vi.fn(async () => [detail()])
+    } as unknown as KunTuiClient
+    const controller = new TuiController(client, { ...options(), continueLatest: false }, runtime)
+
+    await controller.start()
+    expect(controller.state.view).toBe('chat')
+    expect(controller.state.projection).toBeUndefined()
+
+    controller.showThreads()
+    expect(controller.state.view).toBe('threads')
+    controller.showChat()
+    expect(controller.state.view).toBe('chat')
+    expect(controller.state.projection).toBeUndefined()
+    await controller.stop()
+  })
+
+  it('publishes an immediate sending phase before start-turn acknowledges the request', async () => {
+    const source = detail()
+    let resolveStart!: (value: { turnId: string }) => void
+    const startTurn = vi.fn(() => new Promise<{ turnId: string }>((resolve) => {
+      resolveStart = resolve
+    }))
+    const client = {
+      listThreads: vi.fn(async () => [source]),
+      getThread: vi.fn(async () => source),
+      subscribeThreadEvents: vi.fn(async (input: { signal: AbortSignal }) => {
+        await new Promise<void>((resolve) => input.signal.addEventListener('abort', () => resolve(), { once: true }))
+      }),
+      startTurn
+    } as unknown as KunTuiClient
+    const controller = new TuiController(client, options(), runtime)
+
+    await controller.start()
+    const submission = controller.submit('slow request')
+
+    expect(controller.state).toMatchObject({
+      busy: true,
+      busyLabel: 'Sending message'
+    })
+    expect(controller.state.busyStartedAt).toBeTruthy()
+    expect(controller.state.projection?.runningTurnId).toBeUndefined()
+
+    resolveStart({ turnId: 'turn_slow' })
+    await submission
+    expect(controller.state).toMatchObject({
+      busy: false,
+      projection: {
+        runningTurnId: 'turn_slow',
+        activity: {
+          phase: 'starting',
+          label: 'Sending message'
+        }
+      }
+    })
+    expect(controller.state.busyLabel).toBeUndefined()
+    expect(controller.state.busyStartedAt).toBeUndefined()
+    await controller.stop()
+  })
+
+  it('selects from a legacy GUI model catalog locally without calling unavailable runtime routes', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'kun-tui-legacy-model-'))
+    const selectModel = vi.fn()
+    const client = { selectModel } as unknown as KunTuiClient
+    const legacyRuntime = { ...runtime, legacyGui: true }
+    const controller = new TuiController(client, { ...options(), dataDir }, legacyRuntime)
+    try {
+      controller.applyModelSelection({
+        schemaVersion: 1,
+        revision: 0,
+        providers: [{
+          id: 'codex', accountId: 'account:codex', name: 'Codex', kind: 'http',
+          authType: 'subscription', baseUrl: 'https://chatgpt.com/backend-api',
+          endpointFormat: 'responses', configured: true,
+          models: ['gpt-5.6-luna', 'gpt-5.6-sol'], selectedModel: 'gpt-5.6-luna'
+        }],
+        defaultProviderId: 'codex', defaultAccountId: 'account:codex', defaultModel: 'gpt-5.6-luna',
+        proxy: { enabled: false, url: '' }, routePools: [], localModelGateway: { enabled: false }
+      }, false)
+
+      const selected = await controller.selectModel({
+        providerId: 'codex', accountId: 'account:codex', model: 'gpt-5.6-sol'
+      })
+      expect(selected).toMatchObject({ revision: 1, defaultModel: 'gpt-5.6-sol' })
+      expect(controller.options).toMatchObject({
+        providerId: 'codex', accountId: 'account:codex', model: 'gpt-5.6-sol'
+      })
+      expect(selectModel).not.toHaveBeenCalled()
+    } finally {
+      await controller.stop()
+      await rm(dataDir, { recursive: true, force: true })
+    }
+  })
+
+  it('shows a verified legacy GUI session as connected while its idle SSE long poll is pending', async () => {
+    const source = detail()
+    const client = {
+      listThreads: vi.fn(async () => [source]),
+      getThread: vi.fn(async () => source),
+      subscribeThreadEvents: vi.fn(async (input: {
+        signal: AbortSignal
+        onConnection?: (state: 'connecting' | 'connected' | 'reconnecting') => void
+      }) => {
+        input.onConnection?.('connecting')
+        await new Promise<void>((resolve) => input.signal.addEventListener('abort', () => resolve(), { once: true }))
+      })
+    } as unknown as KunTuiClient
+    const controller = new TuiController(client, options(), { ...runtime, legacyGui: true })
+    await controller.start()
+    expect(controller.state.projection?.thread.id).toBe(source.id)
+    expect(controller.state.connection).toBe('connected')
+    await controller.stop()
+  })
+
+  it('refreshes a stale model catalog after another client wins the revision race', async () => {
+    const initial = {
+      schemaVersion: 1 as const,
+      revision: 2,
+      providers: [{
+        id: 'deepseek', accountId: 'account:deepseek', name: 'DeepSeek', kind: 'http' as const,
+        authType: 'api-key' as const, endpointFormat: 'chat_completions' as const,
+        configured: true, models: ['deepseek-chat'], selectedModel: 'deepseek-chat'
+      }],
+      defaultProviderId: 'deepseek', defaultAccountId: 'account:deepseek', defaultModel: 'deepseek-chat',
+      proxy: { enabled: false, url: '' }, routePools: [], localModelGateway: { enabled: false }
+    }
+    const refreshed = {
+      ...initial,
+      revision: 3,
+      providers: [...initial.providers, {
+        id: 'kimi-code', accountId: 'account:kimi-code', name: 'Kimi Code', kind: 'http' as const,
+        authType: 'subscription' as const, endpointFormat: 'chat_completions' as const,
+        configured: true, models: ['kimi-k2.5'], selectedModel: 'kimi-k2.5'
+      }]
+    }
+    const client = {
+      selectModel: vi.fn(async () => { throw new TuiClientError('revision conflict', 409, 'revision_conflict') }),
+      modelConnections: vi.fn(async () => refreshed)
+    } as unknown as KunTuiClient
+    const controller = new TuiController(client, options(), runtime)
+    controller.applyModelSelection(initial, false)
+
+    await expect(controller.selectModel({
+      providerId: 'deepseek', accountId: 'account:deepseek', model: 'deepseek-chat'
+    })).rejects.toThrow(/selector was refreshed/i)
+    expect(controller.state.modelConnections).toEqual(refreshed)
+    expect(client.modelConnections).toHaveBeenCalledOnce()
+    await controller.stop()
+  })
+
+  it('cycles supported reasoning efforts and sends the selected effort with the turn', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'kun-tui-effort-'))
+    const source = detail({ providerId: 'provider-a', accountId: 'account-a', model: 'reasoning-model' })
+    const startTurn = vi.fn(async () => ({ turnId: 'turn_reasoning' }))
+    const client = {
+      listThreads: vi.fn(async () => [source]),
+      getThread: vi.fn(async () => source),
+      subscribeThreadEvents: vi.fn(async (input: { signal: AbortSignal }) => {
+        await new Promise<void>((resolve) => input.signal.addEventListener('abort', () => resolve(), { once: true }))
+      }),
+      startTurn
+    } as unknown as KunTuiClient
+    const controller = new TuiController(client, { ...options(), dataDir }, runtime)
+    try {
+      await controller.start()
+      controller.applyModelSelection({
+        schemaVersion: 1,
+        revision: 1,
+        defaultProviderId: 'provider-a',
+        defaultAccountId: 'account-a',
+        defaultModel: 'reasoning-model',
+        proxy: { enabled: false, url: '' },
+        routePools: [],
+        localModelGateway: { enabled: false },
+        providers: [{
+          id: 'provider-a', accountId: 'account-a', name: 'Provider A', kind: 'http',
+          authType: 'api-key', endpointFormat: 'chat_completions', configured: true,
+          models: ['reasoning-model'], selectedModel: 'reasoning-model',
+          modelCapabilities: {
+            'reasoning-model': {
+              id: 'reasoning-model', inputModalities: ['text'], outputModalities: ['text'],
+              supportsToolCalling: true, messageParts: ['text'],
+              reasoning: {
+                supportedEfforts: ['off', 'low', 'high'], defaultEffort: 'low',
+                requestProtocol: 'deepseek-chat-completions'
+              }
+            }
+          }
+        }]
+      }, false)
+
+      expect(controller.state.reasoningEffort).toBe('low')
+      expect(controller.cycleReasoningEffort()).toBe(true)
+      expect(controller.state.reasoningEffort).toBe('high')
+      await controller.submit('stream this answer')
+      expect(startTurn).toHaveBeenCalledWith(source.id, expect.objectContaining({
+        model: 'reasoning-model', providerId: 'provider-a', accountId: 'account-a',
+        reasoningEffort: 'high', prompt: 'stream this answer'
+      }))
+    } finally {
+      await controller.stop()
+      await rm(dataDir, { recursive: true, force: true })
+    }
+  })
+
+  it('cycles audited GLM variants from a legacy catalog without capability metadata', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'kun-tui-legacy-glm-effort-'))
+    const source = detail({
+      providerId: 'opencode-go',
+      accountId: 'account:opencode-go',
+      model: 'glm-5.2'
+    })
+    const startTurn = vi.fn(async () => ({ turnId: 'turn_glm_reasoning' }))
+    const client = {
+      listThreads: vi.fn(async () => [source]),
+      getThread: vi.fn(async () => source),
+      subscribeThreadEvents: vi.fn(async (input: { signal: AbortSignal }) => {
+        await new Promise<void>((resolve) => input.signal.addEventListener('abort', () => resolve(), { once: true }))
+      }),
+      startTurn
+    } as unknown as KunTuiClient
+    const controller = new TuiController(client, {
+      ...options(),
+      dataDir,
+      providerId: 'opencode-go',
+      accountId: 'account:opencode-go',
+      model: 'glm-5.2'
+    }, { ...runtime, legacyGui: true })
+    try {
+      await controller.start()
+      controller.applyModelSelection({
+        schemaVersion: 1,
+        revision: 0,
+        defaultProviderId: 'opencode-go',
+        defaultAccountId: 'account:opencode-go',
+        defaultModel: 'glm-5.2',
+        proxy: { enabled: false, url: '' },
+        routePools: [],
+        localModelGateway: { enabled: false },
+        providers: [{
+          id: 'opencode-go',
+          accountId: 'account:opencode-go',
+          name: 'OpenCode Go',
+          kind: 'http',
+          authType: 'subscription',
+          endpointFormat: 'chat_completions',
+          configured: true,
+          models: ['glm-5.2'],
+          selectedModel: 'glm-5.2',
+          modelCapabilities: {
+            'glm-5.2': {
+              id: 'glm-5.2',
+              inputModalities: ['text'],
+              outputModalities: ['text'],
+              supportsToolCalling: true,
+              messageParts: ['text'],
+              reasoning: {
+                supportedEfforts: ['auto'],
+                defaultEffort: 'auto',
+                requestProtocol: 'none'
+              }
+            }
+          }
+        }]
+      }, false)
+
+      expect(controller.reasoningOptions()).toEqual(['off', 'high', 'max'])
+      expect(controller.state.reasoningEffort).toBe('max')
+      expect(controller.cycleReasoningEffort()).toBe(true)
+      expect(controller.state.reasoningEffort).toBe('off')
+      await controller.submit('use the selected effort')
+      expect(startTurn).toHaveBeenCalledWith(source.id, expect.objectContaining({
+        providerId: 'opencode-go',
+        accountId: 'account:opencode-go',
+        model: 'glm-5.2',
+        reasoningEffort: 'off'
+      }))
+    } finally {
+      await controller.stop()
+      await rm(dataDir, { recursive: true, force: true })
+    }
+  })
+
+  it('cycles audited Codex variants from a legacy catalog without capability metadata', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'kun-tui-legacy-codex-effort-'))
+    const source = detail({
+      providerId: 'codex',
+      accountId: 'account:codex',
+      model: 'gpt-5.6-luna'
+    })
+    const startTurn = vi.fn(async () => ({ turnId: 'turn_codex_reasoning' }))
+    const client = {
+      listThreads: vi.fn(async () => [source]),
+      getThread: vi.fn(async () => source),
+      subscribeThreadEvents: vi.fn(async (input: { signal: AbortSignal }) => {
+        await new Promise<void>((resolve) => input.signal.addEventListener('abort', () => resolve(), { once: true }))
+      }),
+      startTurn
+    } as unknown as KunTuiClient
+    const controller = new TuiController(client, {
+      ...options(),
+      dataDir,
+      providerId: 'codex',
+      accountId: 'account:codex',
+      model: 'gpt-5.6-luna'
+    }, { ...runtime, legacyGui: true })
+    try {
+      await controller.start()
+      controller.applyModelSelection({
+        schemaVersion: 1,
+        revision: 0,
+        defaultProviderId: 'codex',
+        defaultAccountId: 'account:codex',
+        defaultModel: 'gpt-5.6-luna',
+        proxy: { enabled: false, url: '' },
+        routePools: [],
+        localModelGateway: { enabled: false },
+        providers: [{
+          id: 'codex',
+          accountId: 'account:codex',
+          name: 'ChatGPT subscription',
+          kind: 'http',
+          authType: 'subscription',
+          endpointFormat: 'custom_endpoint',
+          configured: true,
+          models: ['gpt-5.6-luna'],
+          selectedModel: 'gpt-5.6-luna'
+        }]
+      }, false)
+
+      expect(controller.reasoningOptions()).toEqual(['low', 'medium', 'high', 'max'])
+      expect(controller.state.reasoningEffort).toBe('high')
+      expect(controller.cycleReasoningEffort()).toBe(true)
+      expect(controller.state.reasoningEffort).toBe('max')
+      await controller.submit('use the selected Codex effort')
+      expect(startTurn).toHaveBeenCalledWith(source.id, expect.objectContaining({
+        providerId: 'codex',
+        accountId: 'account:codex',
+        model: 'gpt-5.6-luna',
+        reasoningEffort: 'max'
+      }))
+    } finally {
+      await controller.stop()
+      await rm(dataDir, { recursive: true, force: true })
+    }
+  })
+
+  it('opens the latest thread, projects external events, and steers a GUI-started turn', async () => {
+    let onEvent: ((event: RuntimeEvent) => void) | undefined
+    const steerTurn = vi.fn(async () => ({ ok: true }))
+    const client = {
+      listThreads: vi.fn(async () => [detail()]),
+      getThread: vi.fn(async () => detail()),
+      subscribeThreadEvents: vi.fn(async (input: {
+        signal: AbortSignal
+        onEvent: (event: RuntimeEvent) => void
+      }) => {
+        onEvent = input.onEvent
+        await new Promise<void>((resolve) => input.signal.addEventListener('abort', () => resolve(), { once: true }))
+      }),
+      steerTurn,
+      startTurn: vi.fn()
+    } as unknown as KunTuiClient
+    const controller = new TuiController(client, options(), runtime)
+    await controller.start()
+    expect(controller.state).toMatchObject({ view: 'chat', projection: { thread: { id: 'thr_1' } } })
+
+    onEvent?.({
+      kind: 'turn_started',
+      seq: 1,
+      timestamp: '2026-07-22T00:00:00.000Z',
+      threadId: 'thr_1',
+      turnId: 'turn_gui',
+      status: 'running'
+    })
+    await controller.submit('focus on tests')
+    expect(steerTurn).toHaveBeenCalledWith('thr_1', 'turn_gui', 'focus on tests')
+    await controller.stop()
+  })
+
+  it('returns to the welcome screen when another client deletes the active session', async () => {
+    let onError: ((error: Error) => void) | undefined
+    let threads = [detail()]
+    const client = {
+      listThreads: vi.fn(async () => threads),
+      getThread: vi.fn(async () => detail()),
+      subscribeThreadEvents: vi.fn(async (input: { signal: AbortSignal; onError?: (error: Error) => void }) => {
+        onError = input.onError
+        await new Promise<void>((resolve) => input.signal.addEventListener('abort', () => resolve(), { once: true }))
+      })
+    } as unknown as KunTuiClient
+    const controller = new TuiController(client, options(), runtime)
+    await controller.start()
+    threads = []
+    onError?.(new TuiClientError('gone', 410, 'gone'))
+    await vi.waitFor(() => expect(controller.state.threads).toEqual([]))
+    expect(controller.state.projection).toBeUndefined()
+    expect(controller.state.notification?.message).toMatch(/removed by another client/i)
+    await controller.stop()
+  })
+
+  it('refreshes authoritative state when another client wins an approval race', async () => {
+    let onEvent: ((event: RuntimeEvent) => void) | undefined
+    let detailCalls = 0
+    const decideApproval = vi.fn(async () => {
+      throw new TuiClientError('already resolved', 409, 'conflict')
+    })
+    const client = {
+      listThreads: vi.fn(async () => [detail()]),
+      getThread: vi.fn(async () => {
+        detailCalls += 1
+        return detail()
+      }),
+      subscribeThreadEvents: vi.fn(async (input: {
+        signal: AbortSignal
+        onEvent: (event: RuntimeEvent) => void
+      }) => {
+        onEvent = input.onEvent
+        await new Promise<void>((resolve) => input.signal.addEventListener('abort', () => resolve(), { once: true }))
+      }),
+      decideApproval
+    } as unknown as KunTuiClient
+    const controller = new TuiController(client, options(), runtime)
+    await controller.start()
+    onEvent?.({
+      kind: 'approval_requested',
+      seq: 1,
+      timestamp: '2026-07-22T00:00:00.000Z',
+      threadId: 'thr_1',
+      turnId: 'turn_1',
+      approvalId: 'appr_1',
+      toolName: 'bash',
+      status: 'pending',
+      summary: 'Run tests'
+    })
+    expect(controller.state.projection?.pendingApproval?.approvalId).toBe('appr_1')
+
+    await controller.decideApproval('allow')
+    expect(detailCalls).toBeGreaterThanOrEqual(2)
+    expect(controller.state.projection?.pendingApproval).toBeUndefined()
+    await controller.stop()
+  })
+
+  it('creates a source-preserving undo fork before the latest user turn', async () => {
+    const source = detail()
+    source.turns = [{
+      id: 'turn_first', threadId: source.id, status: 'completed', prompt: 'first', steering: [],
+      createdAt: source.createdAt, attachmentIds: [], activeSkillIds: [],
+      injectedMemoryIds: [], injectedMemorySummaries: [], injectedInstructionSources: [],
+      items: [{
+        id: 'item_user', turnId: 'turn_first', threadId: source.id, role: 'user',
+        createdAt: source.createdAt, kind: 'user_message', status: 'completed', text: 'first'
+      }]
+    }]
+    const branch = detail({ id: 'thr_undo', title: 'Shared undo', turns: [] })
+    const forkThread = vi.fn(async () => branch)
+    const client = {
+      listThreads: vi.fn(async () => [source, branch]),
+      getThread: vi.fn(async (id: string) => id === branch.id ? branch : source),
+      subscribeThreadEvents: vi.fn(async (input: { signal: AbortSignal }) => {
+        await new Promise<void>((resolve) => input.signal.addEventListener('abort', () => resolve(), { once: true }))
+      }),
+      forkThread
+    } as unknown as KunTuiClient
+    const controller = new TuiController(client, options(), runtime)
+    await controller.start()
+    await controller.undoLastTurn()
+
+    expect(forkThread).toHaveBeenCalledWith('thr_1', {
+      relation: 'fork', turnId: 'turn_first', beforeTurn: true, title: 'Shared undo'
+    })
+    expect(controller.state.projection?.thread.id).toBe('thr_undo')
+    await controller.stop()
+  })
+
+  it('executes session lifecycle mutations through authoritative runtime routes', async () => {
+    let threads = [detail()]
+    const compactThread = vi.fn(async () => ({ ok: true }))
+    const updateThread = vi.fn(async (id: string, patch: Partial<ThreadDetail>) => {
+      const index = threads.findIndex((thread) => thread.id === id)
+      const updated = { ...threads[index]!, ...patch, updatedAt: '2026-07-22T00:01:00.000Z' }
+      threads[index] = updated
+      return updated
+    })
+    const forkThread = vi.fn(async (id: string, input: { title?: string; relation: 'fork'; turnId?: string }) => {
+      const source = threads.find((thread) => thread.id === id)!
+      const branch = detail({
+        id: 'thr_branch',
+        title: input.title ?? `${source.title} fork`,
+        parentThreadId: source.id,
+        relation: 'fork',
+        createdAt: '2026-07-22T00:02:00.000Z',
+        updatedAt: '2026-07-22T00:02:00.000Z'
+      })
+      threads.push(branch)
+      return branch
+    })
+    const deleteThread = vi.fn(async (id: string) => {
+      threads = threads.filter((thread) => thread.id !== id)
+      return { deleted: true }
+    })
+    const client = {
+      listThreads: vi.fn(async () => threads.filter((thread) => thread.status !== 'archived')),
+      getThread: vi.fn(async (id: string) => threads.find((thread) => thread.id === id)!),
+      subscribeThreadEvents: vi.fn(async (input: { signal: AbortSignal }) => {
+        await new Promise<void>((resolve) => input.signal.addEventListener('abort', () => resolve(), { once: true }))
+      }),
+      compactThread,
+      updateThread,
+      forkThread,
+      deleteThread
+    } as unknown as KunTuiClient
+    const controller = new TuiController(client, options(), runtime)
+    await controller.start()
+
+    await controller.toggleSelectedThreadPin()
+    expect(updateThread).toHaveBeenCalledWith('thr_1', { pinned: true })
+
+    await controller.compact()
+    expect(compactThread).toHaveBeenCalledWith('thr_1')
+    expect(controller.state.projection?.thread.id).toBe('thr_1')
+
+    await controller.rename('Renamed session')
+    expect(updateThread).toHaveBeenCalledWith('thr_1', { title: 'Renamed session', titleAuto: false })
+    expect(controller.state.projection?.thread.title).toBe('Renamed session')
+
+    await controller.forkAtTurn('turn_anchor', 'Review branch')
+    expect(forkThread).toHaveBeenCalledWith('thr_1', {
+      relation: 'fork', turnId: 'turn_anchor', title: 'Review branch'
+    })
+    expect(controller.state.projection?.thread.id).toBe('thr_branch')
+
+    await controller.openThread('thr_1')
+    await controller.redoBranch()
+    expect(controller.state.projection?.thread.id).toBe('thr_branch')
+
+    await controller.archive()
+    expect(updateThread).toHaveBeenCalledWith('thr_branch', { status: 'archived' })
+    expect(controller.state).toMatchObject({ view: 'threads', projection: undefined })
+    expect(controller.state.threads.map((thread) => thread.id)).toEqual(['thr_1'])
+
+    await controller.deleteSelectedThread()
+    expect(deleteThread).toHaveBeenCalledWith('thr_1')
+    expect(controller.state.threads).toEqual([])
+    await controller.stop()
+  })
+
+  it('persists permissions, plan mode, and an additional workspace root', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-tui-controller-'))
+    const extra = await mkdtemp(join(tmpdir(), 'kun-tui-controller-extra-'))
+    let current = detail({ workspace: root })
+    const updateThread = vi.fn(async (_id: string, patch: Partial<ThreadDetail>) => {
+      current = { ...current, ...patch }
+      return current
+    })
+    const client = {
+      listThreads: vi.fn(async () => [current]),
+      getThread: vi.fn(async () => current),
+      subscribeThreadEvents: vi.fn(async (input: { signal: AbortSignal }) => {
+        await new Promise<void>((resolve) => input.signal.addEventListener('abort', () => resolve(), { once: true }))
+      }),
+      updateThread
+    } as unknown as KunTuiClient
+    const controller = new TuiController(client, { ...options(), workspace: root }, runtime)
+    try {
+      await controller.start()
+      await expect(controller.setPermissions('never', 'read-only')).resolves.toBe(true)
+      await controller.setPlanMode('plan')
+      await controller.addDirectory(extra)
+      const canonicalExtra = await realpath(extra)
+      expect(controller.state.projection?.thread).toMatchObject({
+        approvalPolicy: 'never', sandboxMode: 'read-only', mode: 'plan', additionalWorkspaces: [canonicalExtra]
+      })
+      expect(updateThread).toHaveBeenCalledWith('thr_1', { additionalWorkspaces: [canonicalExtra] })
+    } finally {
+      await controller.stop()
+      await rm(root, { recursive: true, force: true })
+      await rm(extra, { recursive: true, force: true })
+    }
+  })
+
+  it('exposes runtime diagnostics and invokes workspace-visible skills through real turns', async () => {
+    const source = detail()
+    const startTurn = vi.fn(async () => ({ turnId: 'turn_skill' }))
+    const client = {
+      listThreads: vi.fn(async () => [source]),
+      getThread: vi.fn(async () => source),
+      subscribeThreadEvents: vi.fn(async (input: { signal: AbortSignal }) => {
+        await new Promise<void>((resolve) => input.signal.addEventListener('abort', () => resolve(), { once: true }))
+      }),
+      runtimeTools: vi.fn(async () => ({
+        providers: [],
+        mcpServers: [{
+          id: 'git', enabled: true, transport: 'stdio', trustScope: 'workspace', available: true,
+          status: 'connected', toolCount: 3, toolNames: ['diff', 'log', 'status']
+        }]
+      })),
+      skills: vi.fn(async () => ({
+        enabled: true, roots: [], validationErrors: [],
+        skills: [{
+          id: 'review', name: 'Review', version: '1', root: '/tmp/skill', source: 'project',
+          legacy: false, allowedTools: [], description: 'Review code'
+        }]
+      })),
+      startTurn
+    } as unknown as KunTuiClient
+    const controller = new TuiController(client, options(), runtime)
+    await controller.start()
+
+    await controller.showMcp()
+    expect(controller.state.inspection?.lines).toEqual(expect.arrayContaining([
+      'git: connected · 3 tools · stdio',
+      '  Tools: diff, log, status'
+    ]))
+    controller.dismissInspection()
+    await controller.invokeSkill('review', 'check the diff')
+    expect(startTurn).toHaveBeenCalledWith('thr_1', expect.objectContaining({
+      prompt: '/skill:review check the diff'
+    }))
+    await controller.stop()
+  })
+
+  it('aggregates plan, goal, task, context, and queue state from shared runtime APIs', async () => {
+    const source = detail()
+    source.status = 'running'
+    source.turns = [{
+      id: 'turn_queued', threadId: source.id, status: 'running', prompt: 'work', steering: ['check packaging'],
+      createdAt: source.createdAt, items: [], attachmentIds: [], activeSkillIds: [],
+      injectedMemoryIds: [], injectedMemorySummaries: [], injectedInstructionSources: []
+    }]
+    const todo = {
+      id: 'todo_1', content: 'Ship tests', status: 'in_progress' as const,
+      createdAt: source.createdAt, updatedAt: source.updatedAt
+    }
+    const setThreadGoal = vi.fn(async () => ({ goal: null }))
+    const client = {
+      listThreads: vi.fn(async () => [source]),
+      getThread: vi.fn(async () => source),
+      subscribeThreadEvents: vi.fn(async (input: { signal: AbortSignal }) => {
+        await new Promise<void>((resolve) => input.signal.addEventListener('abort', () => resolve(), { once: true }))
+      }),
+      threadTodos: vi.fn(async () => ({
+        todos: { threadId: source.id, items: [todo], updatedAt: source.updatedAt }
+      })),
+      threadGoal: vi.fn(async () => ({ goal: {
+        threadId: source.id, objective: 'Ship all P0/P1 commands', status: 'active',
+        tokensUsed: 10, timeUsedSeconds: 5, createdAt: source.createdAt, updatedAt: source.updatedAt
+      } })),
+      setThreadGoal,
+      delegationDiagnostics: vi.fn(async () => ({
+        enabled: true, active: 1, childRuns: [{
+          id: 'child_1', parentThreadId: source.id, parentTurnId: 'turn_1', prompt: 'Review',
+          status: 'running', createdAt: source.createdAt, updatedAt: source.updatedAt
+        }], aggregates: []
+      })),
+      backgroundShells: vi.fn(async () => ({
+        threadId: source.id, running: 1, sessions: [{
+          id: 'shell_1', threadId: source.id, turnId: 'turn_1', command: 'npm test', cwd: source.workspace,
+          shell: 'sh', status: 'running', startedAt: source.createdAt, detached: true, output: ''
+        }]
+      })),
+      runtimeTools: vi.fn(async () => ({
+        providers: [], mcpServers: [], extensions: { jobs: {
+          activeCount: 1, subscriptionCount: 0, recent: [{
+            jobId: 'job_1', ownerExtensionId: 'ext', kind: 'task', state: 'running',
+            executionAttempt: 1, action: 'sync'
+          }]
+        } }
+      })),
+      usage: vi.fn(async () => ({ buckets: [{
+        thread_id: source.id, input_tokens: 100, output_tokens: 20, reasoning_tokens: 5,
+        cached_tokens: 50, total_tokens: 125, turns: 2
+      }] }))
+    } as unknown as KunTuiClient
+    const controller = new TuiController(client, options(), runtime)
+    await controller.start()
+
+    await controller.showPlan()
+    expect(controller.state.inspection?.lines).toContain('1. [in_progress] Ship tests')
+    controller.dismissInspection()
+    await controller.showTasks()
+    expect(controller.state.inspection?.lines).toEqual(expect.arrayContaining([
+      'Subagents: 1 active / 1 total',
+      'Background shells: 1 active / 1 total',
+      'Goal: active · Ship all P0/P1 commands',
+      'Extension jobs: 1 active / 1 recent'
+    ]))
+    controller.dismissInspection()
+    await controller.showContext()
+    expect(controller.state.inspection?.lines).toContain('Total: 125 tokens')
+    controller.dismissInspection()
+    controller.showQueue()
+    expect(controller.state.inspection?.lines).toContain('1. check packaging')
+    await controller.manageGoal('Ship the TUI')
+    expect(setThreadGoal).toHaveBeenCalledWith(source.id, { objective: 'Ship the TUI', status: 'active' })
+    await controller.stop()
+  })
+
+  it('runs /init guidance as a normal authoritative turn', async () => {
+    const source = detail()
+    const startTurn = vi.fn(async () => ({ turnId: 'turn_init' }))
+    const client = {
+      listThreads: vi.fn(async () => [source]),
+      getThread: vi.fn(async () => source),
+      subscribeThreadEvents: vi.fn(async (input: { signal: AbortSignal }) => {
+        await new Promise<void>((resolve) => input.signal.addEventListener('abort', () => resolve(), { once: true }))
+      }),
+      startTurn
+    } as unknown as KunTuiClient
+    const controller = new TuiController(client, options(), runtime)
+    await controller.start()
+    await controller.initializeWorkspace('Use the repository package manager.')
+
+    expect(startTurn).toHaveBeenCalledWith(source.id, expect.objectContaining({
+      prompt: expect.stringMatching(/create or update.*AGENTS\.md[\s\S]*Use the repository package manager\./i)
+    }))
+    await controller.stop()
+  })
+
+  it('starts by-the-way questions in an isolated side thread', async () => {
+    const source = detail()
+    const side = detail({ id: 'thr_side', title: 'Shared · side', relation: 'side', parentThreadId: source.id })
+    const forkThread = vi.fn(async () => side)
+    const startTurn = vi.fn(async () => ({ turnId: 'turn_side' }))
+    const client = {
+      listThreads: vi.fn(async () => [source]),
+      getThread: vi.fn(async (id: string) => id === side.id ? side : source),
+      subscribeThreadEvents: vi.fn(async (input: { signal: AbortSignal }) => {
+        await new Promise<void>((resolve) => input.signal.addEventListener('abort', () => resolve(), { once: true }))
+      }),
+      forkThread,
+      startTurn
+    } as unknown as KunTuiClient
+    const controller = new TuiController(client, options(), runtime)
+    await controller.start()
+    await controller.askSideQuestion('What does this API do?')
+
+    expect(forkThread).toHaveBeenCalledWith(source.id, { relation: 'side', title: 'Shared · side' })
+    expect(startTurn).toHaveBeenCalledWith(side.id, expect.objectContaining({ prompt: 'What does this API do?' }))
+    expect(controller.state.projection?.thread.id).toBe(side.id)
+    await controller.stop()
+  })
+})

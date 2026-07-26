@@ -150,6 +150,9 @@ export function buildHarness(): Harness {
     nowIso,
     applyConfig: async () => ({ ok: true }),
     info: () => ({
+      instanceId: 'test-runtime-instance',
+      serviceVersion: '0.1.0',
+      launchMode: 'foreground',
       host: '127.0.0.1',
       port: 0,
       dataDir: '/tmp/kun',

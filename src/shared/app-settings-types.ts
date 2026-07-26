@@ -215,6 +215,9 @@ export const MODEL_REASONING_REQUEST_PROTOCOLS = [
   'deepseek-chat-completions',
   'glm-chat-completions',
   'mimo-chat-completions',
+  'openai-chat-completions',
+  'qwen-chat-completions',
+  'thinking-toggle-chat-completions',
   'openai-responses',
   'anthropic-thinking'
 ] as const

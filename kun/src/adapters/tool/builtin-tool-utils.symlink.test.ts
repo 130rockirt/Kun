@@ -117,6 +117,26 @@ describe('resolveWorkspacePath sandbox mode', () => {
     ).rejects.toThrow(/escapes the workspace root/)
   })
 
+  it('allows absolute paths inside an explicitly added workspace root', async () => {
+    const target = join(outside, 'shared.txt')
+    await writeFile(target, 'shared')
+    const resolved = await resolveWorkspacePath(target, {
+      ...context(workspace),
+      additionalWorkspaces: [outside]
+    })
+    expect(resolved).toMatchObject({ absolutePath: target, workspaceRoot: outside, relativePath: 'shared.txt' })
+  })
+
+  it('keeps the primary workspace usable when a persisted additional root disappears', async () => {
+    const target = join(workspace, 'primary.txt')
+    await writeFile(target, 'primary')
+    const resolved = await resolveWorkspacePath(target, {
+      ...context(workspace),
+      additionalWorkspaces: [join(base, 'removed-root')]
+    })
+    expect(resolved.absolutePath).toBe(target)
+  })
+
   it('allows background shell output files outside the workspace in read-only sandbox', async () => {
     const runtimeDataDir = join(base, 'runtime-data')
     const { outputFilePath } = resolveBackgroundShellOutputPaths(runtimeDataDir, 'thr_1', 'abcd1234')

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   contextThresholdsForModel,
   modelCapabilitiesForModel,
+  modelCapabilitiesForProviderModel,
   modelContextProfilesFromConfig
 } from './model-context-profile.js'
 
@@ -108,5 +109,108 @@ describe('per-model endpointFormat', () => {
 
     expect(model.contextWindowTokens).toBe(256_000)
     expect(model.endpointFormat).toBeUndefined()
+  })
+})
+
+describe('built-in reasoning compatibility profiles', () => {
+  it('keeps audited Codex Responses variants available for legacy snapshots', () => {
+    expect(modelCapabilitiesForModel('gpt-5.6-luna')).toMatchObject({
+      contextWindowTokens: 372_000,
+      inputModalities: ['text', 'image'],
+      responsesMode: 'lite',
+      reasoning: {
+        supportedEfforts: ['low', 'medium', 'high', 'max'],
+        defaultEffort: 'high',
+        requestProtocol: 'openai-responses'
+      }
+    })
+  })
+
+  it('keeps audited GLM variants available when provider metadata is missing', () => {
+    expect(modelCapabilitiesForModel('glm-5.2')).toMatchObject({
+      contextWindowTokens: 1_000_000,
+      reasoning: {
+        supportedEfforts: ['off', 'high', 'max'],
+        defaultEffort: 'max',
+        requestProtocol: 'glm-chat-completions'
+      }
+    })
+
+    const configured = modelContextProfilesFromConfig({
+      models: {
+        profiles: {
+          'glm-5.2': {
+            contextWindowTokens: 131_072,
+            inputModalities: ['text', 'image']
+          }
+        }
+      }
+    })
+    expect(modelCapabilitiesForModel('opencode-go/glm-5.2', configured)).toMatchObject({
+      contextWindowTokens: 131_072,
+      inputModalities: ['text', 'image'],
+      reasoning: {
+        supportedEfforts: ['off', 'high', 'max'],
+        requestProtocol: 'glm-chat-completions'
+      }
+    })
+  })
+
+  it('does not invent reasoning variants for unknown custom models', () => {
+    expect(modelCapabilitiesForModel('my-private-model').reasoning).toBeUndefined()
+  })
+
+  it.each([
+    ['kimi-code', 'k3', 'https://api.kimi.com/coding/v1', 'openai-chat-completions', ['low', 'high', 'max']],
+    ['grok-subscription', 'grok-4.5', 'https://cli-chat-proxy.grok.com/v1', 'openai-responses', ['low', 'medium', 'high']],
+    ['opencode-go', 'grok-4.5', 'https://opencode.ai/zen/go/v1', 'openai-chat-completions', ['low', 'medium', 'high']],
+    ['claude-subscription', 'claude-sonnet-4-6', 'https://api.anthropic.com', 'anthropic-thinking', ['low', 'medium', 'high', 'max']],
+    ['xiaomi-token-plan', 'mimo-v2.5-pro', 'https://token-plan-cn.xiaomimimo.com/v1', 'mimo-chat-completions', ['off', 'low', 'medium', 'high']],
+    ['minimax', 'MiniMax-M3', 'https://api.minimaxi.com/anthropic', 'anthropic-thinking', ['auto', 'off']],
+    ['aliyun', 'qwq-plus', 'https://dashscope.aliyuncs.com/compatible-mode/v1', 'qwen-chat-completions', ['auto', 'off']],
+    ['tencentcloud-token-plan', 'hunyuan-t1-latest', 'https://api.lkeap.cloud.tencent.com/plan/v3', 'thinking-toggle-chat-completions', ['auto', 'off']],
+    ['volcengine-coding-plan', 'doubao-seed-1-6-250615', 'https://ark.cn-beijing.volces.com/api/coding/v3', 'thinking-toggle-chat-completions', ['auto', 'off']],
+    ['zenmux', 'openai/gpt-5.4', 'https://zenmux.ai/api/v1', 'openai-chat-completions', ['low', 'medium', 'high']]
+  ])('restores %s/%s provider-scoped variants', (
+    providerId,
+    model,
+    baseUrl,
+    requestProtocol,
+    supportedEfforts
+  ) => {
+    expect(modelCapabilitiesForProviderModel({
+      providerId,
+      baseUrl,
+      kind: providerId === 'claude-subscription' ? 'agent-sdk' : 'http',
+      model
+    }).reasoning).toEqual({
+      supportedEfforts,
+      defaultEffort: providerId === 'minimax' || providerId.startsWith('aliyun') ||
+        providerId.startsWith('tencentcloud') || providerId.startsWith('volcengine')
+        ? 'auto'
+        : providerId === 'zenmux' || providerId === 'opencode-go' ? 'medium' : 'high',
+      requestProtocol
+    })
+  })
+
+  it('does not apply aggregator variants to an unknown custom endpoint', () => {
+    expect(modelCapabilitiesForProviderModel({
+      providerId: 'private',
+      baseUrl: 'https://private.example/v1',
+      model: 'private-reasoning-model'
+    }).reasoning).toBeUndefined()
+  })
+
+  it('uses ZenMux chat reasoning for routed DeepSeek models and excludes non-reasoning ids', () => {
+    expect(modelCapabilitiesForProviderModel({
+      providerId: 'zenmux',
+      baseUrl: 'https://zenmux.ai/api/v1',
+      model: 'deepseek/deepseek-v4-pro'
+    }).reasoning?.requestProtocol).toBe('openai-chat-completions')
+    expect(modelCapabilitiesForProviderModel({
+      providerId: 'zenmux',
+      baseUrl: 'https://zenmux.ai/api/v1',
+      model: 'x-ai/grok-4.2-fast-non-reasoning'
+    }).reasoning).toBeUndefined()
   })
 })

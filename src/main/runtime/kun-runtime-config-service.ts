@@ -129,10 +129,10 @@ export async function syncGuiManagedKunConfig(
     : undefined
   const routePools = appSettings ? routePoolsConfigForRuntime(appSettings) : undefined
   const localModelGateway = appSettings ? localModelGatewayConfigForRuntime(appSettings) : undefined
-  const defaultModelProxyUrl = options?.scheduleMcp?.settings
-    ? resolveModelProviderProxyUrl(options.scheduleMcp.settings)
+  const defaultModelProxyUrl = appSettings
+    ? resolveModelProviderProxyUrl(appSettings)
     : undefined
-  const workflowHooks = buildWorkflowHookEntries(options?.scheduleMcp?.settings.workflow)
+  const workflowHooks = buildWorkflowHookEntries(appSettings?.workflow)
   const roles = rolesConfigForRuntime(runtime)
   const next = {
     serve: {
@@ -141,8 +141,8 @@ export async function syncGuiManagedKunConfig(
       // Secrets and credential-derived headers are process-local only.
       apiKey: undefined,
       headers: undefined,
-      credentialSourceId: options?.scheduleMcp?.settings
-        ? defaultCredentialSourceId(options.scheduleMcp.settings)
+      credentialSourceId: appSettings
+        ? defaultCredentialSourceId(appSettings)
         : undefined,
       baseUrl: runtime.baseUrl.trim() || undefined,
       endpointFormat: runtime.endpointFormat,

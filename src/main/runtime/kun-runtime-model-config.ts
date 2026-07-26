@@ -75,6 +75,9 @@ export function providersConfigForRuntime(
       ...(baseUrl ? { baseUrl } : {}),
       ...(provider.kind ? { kind: provider.kind } : {}),
       ...(provider.endpointFormat ? { endpointFormat: provider.endpointFormat } : {}),
+      models: [...provider.models],
+      modelCapabilities: modelCapabilitiesForProviderConfig(provider),
+      ...(provider.models[0] ? { selectedModel: provider.models[0] } : {}),
       retry: provider.retry,
       modelProfiles: modelConfigProfilesFromProviderProfiles(provider.modelProfiles),
       ...(proxyUrl ? { modelProxyUrl: proxyUrl } : {}),
@@ -83,6 +86,36 @@ export function providersConfigForRuntime(
     }
   }
   return out
+}
+
+function modelCapabilitiesForProviderConfig(
+  provider: Pick<ModelProviderProfileV1, 'models' | 'modelProfiles'>
+): Record<string, unknown> {
+  return Object.fromEntries(provider.models.flatMap((model) => {
+    const profile = provider.modelProfiles[model] ??
+      provider.modelProfiles[model.trim().toLowerCase()]
+    if (!profile) return []
+    return [[model, {
+      id: model,
+      ...(profile.contextWindowTokens ? { contextWindowTokens: profile.contextWindowTokens } : {}),
+      ...(profile.maxOutputTokens ? { maxOutputTokens: profile.maxOutputTokens } : {}),
+      inputModalities: [...profile.inputModalities],
+      outputModalities: [...profile.outputModalities],
+      supportsToolCalling: profile.supportsToolCalling,
+      messageParts: [...profile.messageParts],
+      ...(profile.reasoning
+        ? {
+            reasoning: {
+              supportedEfforts: [...profile.reasoning.supportedEfforts],
+              defaultEffort: profile.reasoning.defaultEffort,
+              requestProtocol: profile.reasoning.requestProtocol
+            }
+          }
+        : {}),
+      ...(profile.endpointFormat ? { endpointFormat: profile.endpointFormat } : {}),
+      ...(profile.responsesMode ? { responsesMode: profile.responsesMode } : {})
+    }]]
+  }))
 }
 
 export function routePoolsConfigForRuntime(settings: AppSettingsV1) {

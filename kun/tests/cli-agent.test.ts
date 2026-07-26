@@ -120,10 +120,10 @@ describe('Kun agent CLI commands', () => {
     await rm(dataDir, { recursive: true, force: true })
   })
 
-  it('splits explicit commands and keeps legacy serve flags compatible', () => {
+  it('splits explicit commands and uses flags for the default TUI', () => {
     expect(splitKunCliCommand(['run', 'hello'])).toEqual({ command: 'run', args: ['hello'] })
     expect(splitKunCliCommand(['--port', '9999'])).toEqual({
-      command: 'serve',
+      command: 'tui',
       args: ['--port', '9999']
     })
     expect(splitKunCliCommand(['nope']).error).toMatch(/unknown command/)

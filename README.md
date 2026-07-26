@@ -161,7 +161,7 @@ Kun 追求的是“完整能力 + 极致性价比”。需求先行的流程比�
 
 | 依赖 | 版本 |
 | --- | --- |
-| Node.js | 20+ |
+| Node.js | 22.19+ |
 | npm | 随 Node.js 安装 |
 | 模型服务凭据 | DeepSeek / Xiaomi MiMo / MiniMax / 自定义 Provider 至少一个 |
 
@@ -204,6 +204,7 @@ npm install --registry=https://registry.npmmirror.com
 | --- | --- |
 | [docs/extensions/README.md](docs/extensions/README.md) | Kun Extension 开放平台：工作台应用、Agent、工具、自定义模型 Provider、账号、打包与版本兼容 |
 | [kun/README.zh-CN.md](kun/README.zh-CN.md) | Kun 运行时、CLI、环境变量、HTTP API |
+| [docs/kun-tui.md](docs/kun-tui.md) | 安装后直接运行 `kun`、可与 GUI 同时使用的 pi-tui 内联终端客户端 |
 | [docs/kun-architecture.md](docs/kun-architecture.md) | 单运行时架构与 GUI 集成 |
 | [docs/project-mcp-skills.md](docs/project-mcp-skills.md) | 项目级 `.kun/project.json`、MCP 摘要授权与 Skill 发现规则 |
 | [docs/kun-cache-optimization.md](docs/kun-cache-optimization.md) | 缓存优化、token economy 与可观测性 |

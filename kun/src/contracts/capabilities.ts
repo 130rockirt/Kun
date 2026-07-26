@@ -30,6 +30,9 @@ export const ModelReasoningRequestProtocol = z.enum([
   'deepseek-chat-completions',
   'glm-chat-completions',
   'mimo-chat-completions',
+  'openai-chat-completions',
+  'qwen-chat-completions',
+  'thinking-toggle-chat-completions',
   'openai-responses',
   'anthropic-thinking'
 ])

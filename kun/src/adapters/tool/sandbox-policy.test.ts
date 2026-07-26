@@ -25,6 +25,17 @@ describe('sandbox policy', () => {
     })
   })
 
+  it('treats explicitly added workspace roots as workspace-write boundaries', () => {
+    const context = {
+      workspace: '/repo/workspace',
+      additionalWorkspaces: ['/repo/shared'],
+      sandboxMode: 'workspace-write' as const
+    }
+
+    expect(canWritePath('/repo/shared/src/app.ts', context)).toEqual({ ok: true })
+    expect(canWritePath('/repo/other/app.ts', context)).toMatchObject({ ok: false })
+  })
+
   it('resolves only explicitly declared external write targets for approval', async () => {
     const parent = await mkdtemp(join(tmpdir(), 'kun-sandbox-policy-'))
     const workspace = join(parent, 'workspace')

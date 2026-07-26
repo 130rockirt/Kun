@@ -111,6 +111,7 @@ module.exports = {
     '**/kun/package*.json',
     '**/kun/node_modules/**/*',
     '**/packages/extension-api/**/*',
+    '**/packages/provider-catalog/**/*',
     '**/packages/create-kun-extension/**/*',
     '**/node_modules/better-sqlite3/**/*',
     '**/node_modules/node-pty/**/*',
@@ -156,6 +157,8 @@ module.exports = {
     'packages/extension-api/dist/**/*',
     'packages/extension-api/schema/**/*',
     'packages/extension-api/fixtures/**/*',
+    'packages/provider-catalog/package.json',
+    'packages/provider-catalog/dist/**/*',
     'packages/create-kun-extension/package.json',
     'packages/create-kun-extension/src/**/*',
     // The Agent SDK ships a ~222MB per-platform Claude Code binary as an optional

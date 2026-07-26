@@ -425,6 +425,8 @@ export class RoundOutcomeCoordinator {
       workspace: prepared.workspace,
       orchestration: prepared.orchestration,
       messageSource: prepared.messageSource,
+      additionalWorkspaces: prepared.additionalWorkspaces,
+      clientSurface: prepared.clientSurface,
       threadMode: prepared.mode,
       activePlanContext: prepared.activePlanContext,
       guiDesignCanvas: input.turn.guiDesignCanvas === true,

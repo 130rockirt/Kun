@@ -500,6 +500,13 @@ export class ModelStepService {
       ...(runtimeContextInstruction
         ? [kunContextBlock('runtime-context', 'runtime', runtimeContextInstruction)]
         : []),
+      ...(thread?.additionalWorkspaces?.length
+        ? [kunContextBlock(
+            'additional-workspaces',
+            'workspace',
+            `Additional workspace roots explicitly added by the user:\n${thread.additionalWorkspaces.map((path) => `- ${JSON.stringify(path)}`).join('\n')}`
+          )]
+        : []),
       ...(thread.extensionProfile?.instructionOverlay?.trim()
         ? [kunContextBlock(
             'extension-profile',

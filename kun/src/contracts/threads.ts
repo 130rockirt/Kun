@@ -182,6 +182,7 @@ export const ThreadSchema = z.object({
    */
   summary: z.string().optional(),
   workspace: z.string(),
+  additionalWorkspaces: z.array(z.string().min(1)).max(32).optional(),
   model: z.string(),
   /**
    * Optional provider id. When set, every turn on this thread routes its
@@ -241,6 +242,7 @@ export const ThreadSummarySchema = ThreadSchema.pick({
   titleAuto: true,
   summary: true,
   workspace: true,
+  additionalWorkspaces: true,
   model: true,
   providerId: true,
   ownerExtensionId: true,
@@ -278,6 +280,7 @@ export const CreateThreadRequest = z.object({
   /** Marks the provided title as an auto/provisional title (see ThreadSchema.titleAuto). */
   titleAuto: z.boolean().optional(),
   workspace: z.string().min(1),
+  additionalWorkspaces: z.array(z.string().min(1)).max(32).optional(),
   model: z.string().min(1),
   /**
    * Optional provider id. The runtime keeps using its default provider
@@ -310,7 +313,12 @@ export const ForkThreadRequest = z
   .object({
     relation: ThreadRelation.default('fork'),
     title: z.string().optional(),
-    turnId: z.string().trim().min(1).optional()
+    turnId: z.string().trim().min(1).optional(),
+    /** Exclude turnId itself, allowing a faithful undo branch before turn one. */
+    beforeTurn: z.boolean().optional()
+  })
+  .refine((value) => !value.beforeTurn || value.turnId !== undefined, {
+    message: 'beforeTurn requires turnId'
   })
   .optional()
 export type ForkThreadRequest = z.infer<typeof ForkThreadRequest>
@@ -377,6 +385,8 @@ export const UpdateThreadRequest = z
     /** Marks the new title as auto/provisional (true) or user-set/locked (false). */
     titleAuto: z.boolean().optional(),
     workspace: z.string().min(1).optional(),
+    additionalWorkspaces: z.array(z.string().min(1)).max(32).optional(),
+    mode: ThreadMode.optional(),
     status: ThreadUpdateStatus.optional(),
     approvalPolicy: ApprovalPolicySchema.optional(),
     sandboxMode: SandboxModeSchema.optional(),
@@ -390,6 +400,8 @@ export const UpdateThreadRequest = z
       value.title !== undefined ||
       value.titleAuto !== undefined ||
       value.workspace !== undefined ||
+      value.additionalWorkspaces !== undefined ||
+      value.mode !== undefined ||
       value.status !== undefined ||
       value.approvalPolicy !== undefined ||
       value.sandboxMode !== undefined ||

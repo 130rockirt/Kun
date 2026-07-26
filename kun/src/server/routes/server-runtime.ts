@@ -83,6 +83,8 @@ import type { ExtensionMediaHandleService } from '../../services/extension-media
 import type { RuntimeMigrationService } from '../../services/runtime-migration-service.js'
 import type { RuntimeMigrationImportService } from '../../services/runtime-migration-import-service.js'
 import type { ArtifactStore } from '../../artifacts/artifact-store.js'
+import type { ModelConnectionRegistry } from '../../services/model-connection-registry.js'
+import type { ModelConnectionOAuthService } from '../../services/model-connection-oauth.js'
 
 export type RuntimeToolDiagnostics = {
   providers: ToolProviderPolicy[]
@@ -196,6 +198,8 @@ export type ServerRuntime = {
    * scaffolds can omit it.
    */
   modelClient?: ModelClient
+  modelConnections?: ModelConnectionRegistry
+  modelConnectionOAuth?: ModelConnectionOAuthService
   modelGateway?: {
     enabled(): boolean
     pools(): ModelRoutePoolConfig[]
@@ -235,11 +239,12 @@ export type ServerRuntime = {
   allocateSeq: (threadId: string) => number
   nowIso: () => string
   info(): RuntimeInfoResponse
+  requestShutdown?(instanceId: string): Promise<boolean>
   applyConfig(request: RuntimeConfigApplyRequest): Promise<RuntimeConfigApplyResponse>
   toolDiagnostics?(): RuntimeToolDiagnostics | Promise<RuntimeToolDiagnostics>
   mcpOAuth?(): McpOAuthDiagnostic[] | Promise<McpOAuthDiagnostic[]>
   clearMcpOAuth?(serverId?: string): Promise<McpOAuthClearResult>
   authorizeMcpOAuth?(serverId: string): Promise<McpOAuthAuthorizeResult>
-  skills?(): SkillRuntimeDiagnostics | Promise<SkillRuntimeDiagnostics>
+  skills?(workspace?: string): SkillRuntimeDiagnostics | Promise<SkillRuntimeDiagnostics>
   shutdown?(): Promise<void>
 }

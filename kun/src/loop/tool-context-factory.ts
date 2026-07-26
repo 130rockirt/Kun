@@ -32,6 +32,8 @@ export function createToolExecutionContext(
     workspace: input.workspace,
     ...(input.orchestration ? { orchestration: input.orchestration } : {}),
     ...(input.messageSource ? { messageSource: input.messageSource } : {}),
+    ...(input.additionalWorkspaces?.length ? { additionalWorkspaces: input.additionalWorkspaces } : {}),
+    clientSurface: input.clientSurface,
     threadMode: input.threadMode,
     ...(input.activePlanContext ? { guiPlan: input.activePlanContext } : {}),
     ...(input.guiDesignCanvas ? { guiDesignCanvas: true } : {}),

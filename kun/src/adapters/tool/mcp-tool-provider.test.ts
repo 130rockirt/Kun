@@ -144,6 +144,7 @@ describe('mcp tool provider reliability', () => {
       clientFactory,
       nowIso: () => '2026-06-29T00:00:00.000Z'
     })
+    expect(built.diagnostics[0]?.toolNames).toEqual(['lookup'])
     const tool = built.providers[0]?.tools.find((item) => item.name === 'mcp_call')
     expect(tool).toBeTruthy()
 

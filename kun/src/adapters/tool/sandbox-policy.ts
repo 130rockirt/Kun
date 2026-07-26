@@ -33,7 +33,7 @@ export type SandboxBlock = {
 export async function externalWriteTargetsForApproval(
   tool: Pick<LocalTool, 'toolKind' | 'externalWritePathArguments'>,
   call: Pick<ToolCallLike, 'arguments'>,
-  context: Pick<ToolHostContext, 'workspace' | 'sandboxMode'>
+  context: Pick<ToolHostContext, 'workspace' | 'additionalWorkspaces' | 'sandboxMode'>
 ): Promise<ApprovedExternalWriteTarget[]> {
   if (
     tool.toolKind !== 'file_change' ||
@@ -43,7 +43,8 @@ export async function externalWriteTargetsForApproval(
     return []
   }
 
-  const { lexicalRoot, physicalRoot } = await resolveExistingWorkspaceRoot(context.workspace)
+  const roots = await resolvedWorkspaceRoots(context)
+  const lexicalRoot = roots[0]!.lexicalRoot
   const externalTargets: ApprovedExternalWriteTarget[] = []
   for (const argumentName of tool.externalWritePathArguments) {
     const value = call.arguments[argumentName]
@@ -51,7 +52,7 @@ export async function externalWriteTargetsForApproval(
     const lexicalTarget = isAbsolute(value) ? resolve(value) : resolve(lexicalRoot, value)
     const physicalTarget = await resolvePathThroughSymlinks(lexicalTarget)
     if (
-      !isPathInsideOrEqual(physicalRoot, physicalTarget) &&
+      !roots.some((root) => isPathInsideOrEqual(root.physicalRoot, physicalTarget)) &&
       !externalTargets.some((target) => sameFilesystemPath(target.path, physicalTarget))
     ) {
       let targetStats: BigIntStats
@@ -160,7 +161,11 @@ export function canWritePath(
   absolutePath: string,
   context: Pick<
     ToolHostContext,
-    'workspace' | 'sandboxMode' | 'approvedExternalWriteTargets' | 'allowedWritePaths'
+    | 'workspace'
+    | 'additionalWorkspaces'
+    | 'sandboxMode'
+    | 'approvedExternalWriteTargets'
+    | 'allowedWritePaths'
   >
 ): { ok: true } | { ok: false; block: SandboxBlock } {
   if (
@@ -196,9 +201,9 @@ export function canWritePath(
     }
   }
 
-  const root = workspaceRoot(context.workspace)
-  const resolvedPath = isAbsolute(absolutePath) ? resolve(absolutePath) : resolve(root, absolutePath)
-  if (isPathInsideOrEqual(root, resolvedPath)) return { ok: true }
+  const roots = lexicalWorkspaceRoots(context)
+  const resolvedPath = isAbsolute(absolutePath) ? resolve(absolutePath) : resolve(roots[0]!, absolutePath)
+  if (roots.some((root) => isPathInsideOrEqual(root, resolvedPath))) return { ok: true }
   if (context.approvedExternalWriteTargets?.some((target) =>
     sameFilesystemPath(target.path, resolvedPath)
   )) {
@@ -217,7 +222,11 @@ export function assertCanWritePath(
   absolutePath: string,
   context: Pick<
     ToolHostContext,
-    'workspace' | 'sandboxMode' | 'approvedExternalWriteTargets' | 'allowedWritePaths'
+    | 'workspace'
+    | 'additionalWorkspaces'
+    | 'sandboxMode'
+    | 'approvedExternalWriteTargets'
+    | 'allowedWritePaths'
   >
 ): void {
   const decision = canWritePath(absolutePath, context)
@@ -250,6 +259,23 @@ function hasNarrowPathBoundary(
   const write = context.allowedWritePaths
   if (!read && !write) return false
   return !read?.includes('.') || !write?.includes('.')
+}
+
+function lexicalWorkspaceRoots(
+  context: Pick<ToolHostContext, 'workspace' | 'additionalWorkspaces'>
+): string[] {
+  return [...new Set([context.workspace, ...(context.additionalWorkspaces ?? [])].map(workspaceRoot))]
+}
+
+async function resolvedWorkspaceRoots(
+  context: Pick<ToolHostContext, 'workspace' | 'additionalWorkspaces'>
+): Promise<Array<{ lexicalRoot: string; physicalRoot: string }>> {
+  const roots = lexicalWorkspaceRoots(context)
+  const primary = await resolveExistingWorkspaceRoot(roots[0]!)
+  const additional = await Promise.all(roots.slice(1).map((root) =>
+    resolveExistingWorkspaceRoot(root).catch(() => null)
+  ))
+  return [primary, ...additional.filter((entry) => entry !== null)]
 }
 
 function isInteractiveGuiGateTool(toolName: string): boolean {

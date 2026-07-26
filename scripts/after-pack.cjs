@@ -32,9 +32,14 @@ const KUN_RUNTIME_REQUIRED_PATHS = [
   'kun/node_modules/typescript-language-server/package.json',
   'kun/node_modules/typescript-language-server/lib/cli.mjs',
   'kun/node_modules/@cursor/sdk/package.json',
+  'kun/node_modules/@earendil-works/pi-tui/package.json',
+  'kun/node_modules/marked/package.json',
+  'kun/node_modules/get-east-asian-width/package.json',
   'kun/node_modules/@modelcontextprotocol/sdk/package.json',
   'kun/node_modules/@kun/extension-api/package.json',
   'kun/node_modules/@kun/extension-api/dist/index.js',
+  'kun/node_modules/@kun/provider-catalog/package.json',
+  'kun/node_modules/@kun/provider-catalog/dist/index.js',
   'kun/node_modules/create-kun-extension/package.json',
   'kun/node_modules/create-kun-extension/src/cli.mjs',
   'node_modules/better-sqlite3/package.json',
@@ -44,6 +49,8 @@ const KUN_RUNTIME_REQUIRED_PATHS = [
   'packages/extension-api/schema/kun-extension.schema.json',
   'packages/extension-api/fixtures/api-major-negotiation.json',
   'packages/extension-api/fixtures/api-minor-negotiation.json',
+  'packages/provider-catalog/package.json',
+  'packages/provider-catalog/dist/index.js',
   'packages/create-kun-extension/src/cli.mjs',
   'packages/create-kun-extension/src/scaffold.mjs',
   'packages/create-kun-extension/templates/node/kun-extension.json',
@@ -146,6 +153,7 @@ function materializePackedWorkspaceDependencies(context) {
   const root = unpackedAppRoot(context)
   for (const [sourceRelative, targetRelative] of [
     ['packages/extension-api', 'kun/node_modules/@kun/extension-api'],
+    ['packages/provider-catalog', 'kun/node_modules/@kun/provider-catalog'],
     ['packages/create-kun-extension', 'kun/node_modules/create-kun-extension']
   ]) {
     const source = join(root, sourceRelative)
@@ -381,12 +389,47 @@ launcher_dir=\${launcher_path%/*}
 launcher_dir=$(CDPATH= cd -P "$launcher_dir" && pwd -P)
 real_executable="$launcher_dir/${realExecutableName}"
 
+if [ "\${KUN_CLI_ENTRY:-}" = "1" ]; then
+  cli_entry="$launcher_dir/resources/app.asar.unpacked/kun/dist/cli/serve-entry.js"
+  ELECTRON_RUN_AS_NODE=1 exec "$real_executable" "$cli_entry" "$@"
+fi
+
 if [ "\${ELECTRON_RUN_AS_NODE:-}" = "1" ]; then
   exec "$real_executable" "$@"
 fi
 
 exec "$real_executable" ${LINUX_SANDBOX_LAUNCHER_FLAG} "$@"
 `
+}
+
+function installCliLaunchers(context) {
+  const platform = normalizePlatform(context.electronPlatformName)
+  const entryRelative = 'app.asar.unpacked/kun/dist/cli/serve-entry.js'
+  if (platform === 'darwin') {
+    const resources = packedResourcesDir(context)
+    const binDir = join(resources, 'bin')
+    const launcher = join(binDir, 'kun')
+    require('node:fs').mkdirSync(binDir, { recursive: true, mode: 0o755 })
+    writeFileSync(launcher, `#!/bin/sh
+set -eu
+self_dir=$(CDPATH= cd -P "$(dirname "$0")" && pwd -P)
+resources_dir=$(CDPATH= cd -P "$self_dir/.." && pwd -P)
+app_exec="$resources_dir/../MacOS/${context.packager.appInfo.productFilename}"
+cli_entry="$resources_dir/${entryRelative}"
+ELECTRON_RUN_AS_NODE=1 exec "$app_exec" "$cli_entry" "$@"
+`, { encoding: 'utf8', mode: 0o755 })
+    chmodSync(launcher, 0o755)
+    return
+  }
+  if (platform === 'win32') {
+    const binDir = join(context.appOutDir, 'bin')
+    require('node:fs').mkdirSync(binDir, { recursive: true })
+    writeFileSync(join(binDir, 'kun.cmd'), `@echo off\r
+setlocal\r
+set "ELECTRON_RUN_AS_NODE=1"\r
+"%~dp0..\\${context.packager.appInfo.productFilename}.exe" "%~dp0..\\resources\\${entryRelative.replaceAll('/', '\\')}" %*\r
+`, 'utf8')
+  }
 }
 
 function assertElfExecutable(path) {
@@ -460,6 +503,7 @@ async function afterPack(context) {
   await maybeSignBundledOfficeCli(context)
   prunePackedWhisperResources(context)
   ensureNodePtyHelpersExecutable(context)
+  installCliLaunchers(context)
   installLinuxElectronLauncher(context)
   maybeAdhocSignMacApp(context)
 }
@@ -484,6 +528,7 @@ exports._internals = {
   ensureNodePtyHelpersExecutable,
   assertElfExecutable,
   installLinuxElectronLauncher,
+  installCliLaunchers,
   linuxElectronLauncherContent,
   linuxRealExecutableName
 }

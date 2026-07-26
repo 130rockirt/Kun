@@ -258,12 +258,12 @@ describe('upstream model picker list', () => {
         expect.objectContaining({
           providerId: 'kimi-code',
           label: 'Kimi Code',
-          modelIds: ['kimi-for-coding']
+          modelIds: expect.arrayContaining(['kimi-for-coding'])
         }),
         expect.objectContaining({
           providerId: 'kimi-code-2',
           label: 'Kimi Code 2',
-          modelIds: ['kimi-for-coding']
+          modelIds: expect.arrayContaining(['kimi-for-coding'])
         })
       ]))
     }

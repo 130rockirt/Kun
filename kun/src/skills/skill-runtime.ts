@@ -339,6 +339,30 @@ export class SkillRuntime {
     }
   }
 
+  /** Return the catalog visible to one workspace, including conventional project roots. */
+  async diagnosticsForWorkspace(workspace: string): Promise<SkillRuntimeDiagnostics> {
+    const skills = skillsRuntimeEnabled(this.config)
+      ? await this.skillsForWorkspace(workspace)
+      : []
+    const base = this.diagnostics()
+    return {
+      ...base,
+      roots: uniqueRoots(skills.filter((skill) => skill.source === 'project').map((skill) => skill.root)),
+      globalRoots: uniqueRoots(skills.filter((skill) => skill.source === 'global').map((skill) => skill.root)),
+      skills: skills.map((skill) => ({
+        id: skill.id,
+        name: skill.name,
+        ...(skill.description ? { description: skill.description } : {}),
+        version: skill.version,
+        root: skill.root,
+        source: skill.source,
+        legacy: skill.legacy,
+        triggers: skill.triggers,
+        allowedTools: skill.allowedTools
+      }))
+    }
+  }
+
   count(): number {
     return this.skills.length
   }

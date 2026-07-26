@@ -88,6 +88,68 @@ import {
   Toggle,
   type InlineNotice
 } from './settings-controls'
+
+type SharedModelConnection = {
+  id: string
+  accountId: string
+  name: string
+  kind: 'http' | 'agent-sdk' | 'antigravity-cli' | 'cursor-sdk' | 'gemini-code-assist'
+  configured: boolean
+  models: string[]
+  modelCapabilities?: Record<string, {
+    id: string
+    contextWindowTokens?: number
+    reasoning?: {
+      supportedEfforts: Array<'auto' | 'off' | 'low' | 'medium' | 'high' | 'max'>
+      defaultEffort: 'auto' | 'off' | 'low' | 'medium' | 'high' | 'max'
+    }
+  }>
+  selectedModel?: string
+}
+
+type SharedModelConnectionsSnapshot = {
+  schemaVersion: 1
+  revision: number
+  providers: SharedModelConnection[]
+  defaultProviderId?: string
+  defaultAccountId?: string
+  defaultModel?: string
+  proxy?: { enabled: boolean; url: string }
+  routePools?: unknown[]
+  localModelGateway?: { enabled: boolean }
+}
+
+function validateSharedModelConnections(value: unknown): SharedModelConnectionsSnapshot {
+  const snapshot = value as SharedModelConnectionsSnapshot
+  if (snapshot?.schemaVersion !== 1 || !Number.isInteger(snapshot.revision) || !Array.isArray(snapshot.providers)) {
+    throw new Error('Invalid shared model connection response')
+  }
+  return snapshot
+}
+
+function parseSharedModelConnections(body: string): SharedModelConnectionsSnapshot {
+  const value = JSON.parse(body) as unknown
+  return validateSharedModelConnections(value)
+}
+
+function parseSharedModelConnectionEvent(body: string): SharedModelConnectionsSnapshot {
+  const value = JSON.parse(body) as { snapshot?: unknown }
+  return validateSharedModelConnections(value?.snapshot)
+}
+
+async function requestSharedModelConnections(
+  path: string,
+  method = 'GET',
+  body?: unknown
+): Promise<SharedModelConnectionsSnapshot> {
+  const result = await window.kunGui.runtimeRequest(
+    path,
+    method,
+    body === undefined ? undefined : JSON.stringify(body)
+  )
+  if (!result.ok) throw new Error(`Shared model connection request failed (HTTP ${result.status})`)
+  return parseSharedModelConnections(result.body)
+}
 import { classifyProviderModelIds, providerModelListEntries } from './provider-model-editor'
 import { ProviderModelsManager } from './settings-section-provider-models'
 import { ModelRoutesSettings } from './settings-section-model-routes'
@@ -1484,8 +1546,12 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
     saveError,
     retrySave
   } = ctx
+  const zh = form.locale === 'zh'
   const provider = providerFromContext ?? defaultModelProviderSettings()
   const modelProviders = provider.providers as ModelProviderProfileV1[]
+  const [sharedConnections, setSharedConnections] = useState<SharedModelConnectionsSnapshot | null>(null)
+  const [sharedConnectionsError, setSharedConnectionsError] = useState('')
+  const sharedSyncFingerprint = useRef('')
   const [selectedProviderId, setSelectedProviderId] = useState<string>(
     kun.providerId?.trim() || modelProviders[0]?.id || DEFAULT_MODEL_PROVIDER_ID
   )
@@ -1552,6 +1618,153 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
   )
   const activeKunProviderId: string = kun.providerId?.trim() || DEFAULT_MODEL_PROVIDER_ID
   const providerProxy = provider.proxy ?? { enabled: false, url: '' }
+
+  useEffect(() => {
+    let disposed = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let revision = 0
+    const refresh = async (): Promise<void> => {
+      try {
+        const snapshot = revision === 0
+          ? await requestSharedModelConnections('/v1/model-connections')
+          : await window.kunGui.runtimeRequest(
+              `/v1/model-connections/events?since_revision=${revision}&wait_ms=25000`,
+              'GET'
+            ).then((result) => {
+              if (!result.ok) throw new Error(`Shared model connection event failed (HTTP ${result.status})`)
+              return parseSharedModelConnectionEvent(result.body)
+            })
+        if (!disposed) {
+          revision = snapshot.revision
+          setSharedConnections(snapshot)
+          setSharedConnectionsError('')
+        }
+      } catch (error) {
+        if (!disposed) setSharedConnectionsError(error instanceof Error ? error.message : String(error))
+      } finally {
+        if (!disposed) timer = setTimeout(refresh, revision === 0 ? 2_000 : 0)
+      }
+    }
+    void refresh()
+    return () => {
+      disposed = true
+      if (timer !== undefined) clearTimeout(timer)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (saveStatus !== 'saved') return
+    const fingerprint = JSON.stringify({
+      providers: modelProviders.map((item) => ({
+        id: item.id,
+        name: item.name,
+        apiKey: item.apiKey,
+        baseUrl: item.baseUrl,
+        endpointFormat: item.endpointFormat,
+        kind: item.kind,
+        models: item.models
+      })),
+      providerId: kun.providerId,
+      model: kun.model,
+      proxy: provider.proxy,
+      routePools: provider.routePools,
+      localGateway: provider.localGateway
+    })
+    if (fingerprint === sharedSyncFingerprint.current) return
+    let disposed = false
+    const sync = async (): Promise<void> => {
+      let snapshot = await requestSharedModelConnections('/v1/model-connections')
+      for (const item of modelProviders) {
+        const baseUrlOptional =
+          item.kind === 'agent-sdk' ||
+          item.kind === 'antigravity-cli' ||
+          item.kind === 'cursor-sdk'
+        if (!baseUrlOptional && !item.baseUrl.trim()) continue
+        const existing = snapshot.providers.find((entry) => entry.id === item.id)
+        const selectedModel = item.models.includes(kun.model) ? kun.model : item.models[0]
+        if (!existing) {
+          snapshot = await requestSharedModelConnections('/v1/model-connections/connect', 'POST', {
+            expectedRevision: snapshot.revision,
+            id: item.id,
+            name: item.name.trim() || item.id,
+            kind: item.kind ?? 'http',
+            authType: isSubscriptionProvider(item) ? 'subscription' : 'api-key',
+            ...(baseUrlOptional ? {} : { baseUrl: item.baseUrl }),
+            endpointFormat: item.endpointFormat,
+            ...(item.apiKey.trim() ? { credential: item.apiKey } : {}),
+            models: item.models,
+            ...(selectedModel ? { selectedModel } : {}),
+            probe: false,
+            select: false
+          })
+        } else {
+          snapshot = await requestSharedModelConnections(
+            `/v1/model-connections/${encodeURIComponent(item.id)}`,
+            'PATCH',
+            {
+              expectedRevision: snapshot.revision,
+              name: item.name.trim() || item.id,
+              ...(item.kind === 'agent-sdk' ? {} : { baseUrl: item.baseUrl }),
+              endpointFormat: item.endpointFormat,
+              models: item.models,
+              ...(selectedModel ? { selectedModel } : {})
+            }
+          )
+          if (item.apiKey.trim()) {
+            snapshot = await requestSharedModelConnections(
+              `/v1/model-connections/${encodeURIComponent(item.id)}/credential`,
+              'PUT',
+              { expectedRevision: snapshot.revision, credential: item.apiKey }
+            )
+          }
+        }
+      }
+      snapshot = await requestSharedModelConnections('/v1/model-connections', 'PATCH', {
+        expectedRevision: snapshot.revision,
+        proxy: provider.proxy ?? { enabled: false, url: '' },
+        routePools: provider.routePools ?? [],
+        localModelGateway: { enabled: provider.localGateway?.enabled === true }
+      })
+      const active = snapshot.providers.find((entry) => entry.id === kun.providerId)
+      const model = active && (active.models.includes(kun.model) ? kun.model : active.models[0])
+      if (active?.configured && model && (
+        snapshot.defaultProviderId !== active.id || snapshot.defaultModel !== model
+      )) {
+        snapshot = await requestSharedModelConnections('/v1/model-connections/select', 'POST', {
+          expectedRevision: snapshot.revision,
+          providerId: active.id,
+          accountId: active.accountId,
+          model
+        })
+      }
+      if (!disposed) {
+        sharedSyncFingerprint.current = fingerprint
+        setSharedConnections(snapshot)
+        setSharedConnectionsError('')
+      }
+    }
+    void sync().catch((error) => {
+      if (!disposed) setSharedConnectionsError(error instanceof Error ? error.message : String(error))
+    })
+    return () => { disposed = true }
+  }, [kun.model, kun.providerId, modelProviders, provider.localGateway, provider.proxy, provider.routePools, saveStatus])
+
+  const selectSharedModel = async (connection: SharedModelConnection, model: string): Promise<void> => {
+    if (!sharedConnections) return
+    try {
+      const snapshot = await requestSharedModelConnections('/v1/model-connections/select', 'POST', {
+        expectedRevision: sharedConnections.revision,
+        providerId: connection.id,
+        accountId: connection.accountId,
+        model
+      })
+      setSharedConnections(snapshot)
+      setSharedConnectionsError('')
+      update({ agents: { kun: { providerId: connection.id, model } } })
+    } catch (error) {
+      setSharedConnectionsError(error instanceof Error ? error.message : String(error))
+    }
+  }
 
   const updateProviderProxy = (patch: Partial<typeof providerProxy>): void => {
     update({
@@ -2749,6 +2962,54 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
           </button> : null}
           </div>
         </header>
+        <div className="border-b border-ds-border-muted bg-ds-main/20 px-5 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <div className="text-[12.5px] font-semibold text-ds-ink">
+                {zh ? 'GUI / TUI 共享连接' : 'Shared GUI / TUI connections'}
+              </div>
+              <p className="mt-0.5 text-[11.5px] text-ds-faint">
+                {zh
+                  ? '在终端通过 /connect 添加的账号会在这里出现；默认模型对新 GUI 和 TUI 会话同时生效。'
+                  : 'Accounts added with /connect appear here; the default model applies to new GUI and TUI sessions.'}
+              </p>
+            </div>
+            <StatusPill tone={sharedConnectionsError ? 'warning' : sharedConnections ? 'success' : 'muted'}>
+              {sharedConnectionsError
+                ? (zh ? '等待运行时' : 'Waiting for runtime')
+                : sharedConnections
+                  ? `revision ${sharedConnections.revision}`
+                  : (zh ? '正在连接' : 'Connecting')}
+            </StatusPill>
+          </div>
+          {sharedConnections?.providers.length ? (
+            <div className="mt-2 flex flex-wrap gap-2">
+              {sharedConnections.providers.map((connection) => {
+                const model = connection.selectedModel ?? connection.models[0]
+                const selected = sharedConnections.defaultProviderId === connection.id &&
+                  sharedConnections.defaultModel === model
+                return (
+                  <button
+                    key={connection.id}
+                    type="button"
+                    disabled={!connection.configured || !model}
+                    onClick={() => model && void selectSharedModel(connection, model)}
+                    className={`rounded-full border px-3 py-1 text-[11.5px] transition disabled:cursor-not-allowed disabled:opacity-55 ${
+                      selected
+                        ? 'border-accent/50 bg-accent/10 font-semibold text-accent'
+                        : 'border-ds-border bg-ds-card text-ds-muted hover:bg-ds-hover hover:text-ds-ink'
+                    }`}
+                  >
+                    {connection.configured ? '●' : '○'} {connection.name}{model ? ` · ${model}` : ''}
+                  </button>
+                )
+              })}
+            </div>
+          ) : null}
+          {sharedConnectionsError ? (
+            <p className="mt-2 text-[11.5px] text-amber-600 dark:text-amber-400">{sharedConnectionsError}</p>
+          ) : null}
+        </div>
         {workspaceMode === 'routes' ? (
           <ModelRoutesSettings
             settings={provider}

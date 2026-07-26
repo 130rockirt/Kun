@@ -60,6 +60,8 @@ const api = {
   },
   getSettings: () => ipcRenderer.invoke('settings:get'),
   resetUnreadableCredentials: () => ipcRenderer.invoke('credentials:reset-unreadable'),
+  cliInstallStatus: () => ipcRenderer.invoke('cli-install:status'),
+  cliInstallAction: (action) => ipcRenderer.invoke('cli-install:action', action),
   claudeSubscriptionStatus: () => ipcRenderer.invoke('claude-subscription:status'),
   claudeSubscriptionLogin: () => ipcRenderer.invoke('claude-subscription:login'),
   claudeSubscriptionProbe: (token) => ipcRenderer.invoke('claude-subscription:probe', token),

@@ -1,10 +1,16 @@
 import { mkdir } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
 import { basename, isAbsolute, join } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { buildRouter } from './routes/index.js'
 import type { ServerRuntime } from './routes/server-runtime.js'
 import { startNodeHttpServer, type NodeHttpServerHandle } from './node-http-server.js'
 import { isLoopbackHost } from './loopback-host.js'
+import {
+  KUN_SERVICE_VERSION,
+  publishRuntimeDiscovery,
+  removeRuntimeDiscovery
+} from './runtime-discovery.js'
 import { ThreadEventStreamRegistry } from './thread-event-stream-registry.js'
 import { FileAttachmentStore } from '../attachments/attachment-store.js'
 import { InMemoryApprovalGate } from '../adapters/in-memory-approval-gate.js'
@@ -14,6 +20,7 @@ import { FileSessionStore, FileThreadStore } from '../adapters/file/index.js'
 import { HybridSessionStore, HybridThreadStore } from '../adapters/hybrid/index.js'
 import { CompatModelClient } from '../adapters/model/compat-model-client.js'
 import { GeminiCliApiModelClient } from '../adapters/model/gemini-cli-api-model-client.js'
+import { GeminiCodeAssistModelClient } from '../adapters/model/gemini-code-assist-model-client.js'
 import { ExtensionModelProviderRegistry } from '../adapters/model/extension-model-provider.js'
 import { MultiProviderModelClient } from '../adapters/model/multi-provider-model-client.js'
 import { RoutePoolHealthStore, RoutePoolModelClient } from '../adapters/model/route-pool-model-client.js'
@@ -75,6 +82,7 @@ import type { TokenEconomyConfig } from '../loop/token-economy.js'
 import {
   DEFAULT_CONTEXT_THRESHOLDS,
   modelCapabilitiesForModel,
+  modelCapabilitiesForProviderModel,
   modelContextProfilesFromConfig,
   contextThresholdsForModel,
   type ContextCompactionConfig,
@@ -127,6 +135,7 @@ import type {
   RuntimeConfigApplyRequest,
   RuntimeConfigApplyResponse
 } from '../contracts/runtime-config.js'
+import type { ModelConnectionConnectRequest } from '../contracts/model-connections.js'
 import {
   DEFAULT_MODEL_ENDPOINT_FORMAT,
   type ModelEndpointFormat
@@ -201,7 +210,11 @@ import { ExtensionMediaArchiveJobService } from '../services/extension-media-arc
 import { ExtensionVisualAnalysisService } from '../services/extension-visual-analysis-service.js'
 import { RuntimeMigrationService } from '../services/runtime-migration-service.js'
 import { RuntimeMigrationImportService } from '../services/runtime-migration-import-service.js'
+import { ModelConnectionRegistry } from '../services/model-connection-registry.js'
+import { ModelConnectionOAuthService } from '../services/model-connection-oauth.js'
+import { ClaudeConnectionService } from '../services/claude-connection-service.js'
 import type { LocalModelGatewayConfig, ModelRoutePoolConfig } from '../contracts/model-route-pool.js'
+import type { GeminiCodeAssistCredential } from '../contracts/gemini-code-assist.js'
 
 export type KunServeRuntimeOptions = {
   host: string
@@ -213,6 +226,8 @@ export type KunServeRuntimeOptions = {
   runtimeToken: string
   apiKey: string
   credentialSourceId?: string
+  /** Decrypted runtime-only OAuth material; never persisted in config.json. */
+  geminiAuth?: GeminiCodeAssistCredential
   baseUrl: string
   modelProxyUrl?: string
   endpointFormat?: ModelEndpointFormat
@@ -256,6 +271,9 @@ export type KunServeRuntimeOptions = {
   /** Design-quality linter config; drives the builtin PostToolUse hook. */
   quality?: QualityConfig
   startedAt?: string
+  instanceId?: string
+  launchMode?: 'foreground' | 'shared' | 'gui'
+  logPath?: string
   /** Test-only fault injection; absent in normal production startup. */
   faultInjection?: FaultInjectionController
   /** Test/embedding override; production uses the bundled Host runner. */
@@ -264,6 +282,8 @@ export type KunServeRuntimeOptions = {
 
 export type KunServeHandle = NodeHttpServerHandle & {
   runtime: ServerRuntime
+  instanceId: string
+  shutdownRequested: Promise<void>
 }
 
 /**
@@ -398,6 +418,14 @@ export async function createKunServeRuntime(
     model,
     profilesForProvider(providerId)
   )
+  const registryModelCapabilities: ConstructorParameters<typeof ModelConnectionRegistry>[0]['modelCapabilities'] =
+    (model, profile) => modelCapabilitiesForProviderModel({
+      providerId: profile?.id,
+      presetSource: profile?.presetSource,
+      baseUrl: profile?.baseUrl,
+      kind: profile?.kind,
+      model
+    }, modelProfiles)
   const delegatedContextProfile = (model: string) => {
     const thresholds = contextThresholdsForModel(model, {
       softThreshold:
@@ -418,7 +446,7 @@ export async function createKunServeRuntime(
   const agentSdkProviderIds = agentSdkProviderIdsForOptions(activeOptions)
   const antigravityProviderIds = antigravityProviderIdsForOptions(activeOptions)
   const cursorSdkProviderIds = cursorSdkProviderIdsForOptions(activeOptions)
-  let delegatedProviderSignature = delegatedProviderSignatureForOptions(activeOptions)
+  let refreshModelConnectionDelegatedDeps = (): void => undefined
   const extensionProviderAccounts = new ExtensionProviderAccountStore({
     dataDir: activeOptions.dataDir,
     nowIso
@@ -553,6 +581,52 @@ export async function createKunServeRuntime(
     directModelClient.replace(next)
     modelClient.replacePools(activeOptions.routePools ?? [])
   }
+  const modelConnections = new ModelConnectionRegistry({
+    dataDir: activeOptions.dataDir,
+    credentials: extensionCredentials,
+    modelCapabilities: registryModelCapabilities,
+    onChanged: (connections) => {
+      const selected = connections.selected
+      if (!selected) return
+      const providers = Object.fromEntries(connections.providers.entries())
+      activeOptions = {
+        ...activeOptions,
+        model: selected.model,
+        apiKey: selected.config.apiKey,
+        baseUrl: selected.config.baseUrl ?? activeOptions.baseUrl,
+        endpointFormat: selected.config.endpointFormat ?? activeOptions.endpointFormat,
+        headers: selected.config.headers,
+        providers,
+        modelProxyUrl: connections.proxy.enabled ? connections.proxy.url : undefined,
+        routePools: connections.routePools,
+        localModelGateway: connections.localModelGateway
+      }
+      agentSdkProviderIds.clear()
+      for (const providerId of agentSdkProviderIdsForOptions(activeOptions)) {
+        agentSdkProviderIds.add(providerId)
+      }
+      antigravityProviderIds.clear()
+      for (const providerId of antigravityProviderIdsForOptions(activeOptions)) {
+        antigravityProviderIds.add(providerId)
+      }
+      cursorSdkProviderIds.clear()
+      for (const providerId of cursorSdkProviderIdsForOptions(activeOptions)) {
+        cursorSdkProviderIds.add(providerId)
+      }
+      replaceRoutedModelClients()
+      refreshModelConnectionDelegatedDeps()
+    }
+  })
+  await modelConnections.initialize(modelConnectionSeedsForOptions(activeOptions), {
+    proxy: { enabled: Boolean(activeOptions.modelProxyUrl), url: activeOptions.modelProxyUrl ?? '' },
+    routePools: activeOptions.routePools ?? [],
+    localModelGateway: activeOptions.localModelGateway ?? { enabled: false }
+  })
+  const claudeConnections = new ClaudeConnectionService({ dataDir: activeOptions.dataDir })
+  const modelConnectionOAuth = new ModelConnectionOAuthService({
+    registry: modelConnections,
+    claude: claudeConnections
+  })
   const stopExtensionModelListener = extensionModelProviders.onDidChange(replaceRoutedModelClients)
   const hasMcpOAuth = Object.values(activeOptions.capabilities?.mcp?.servers ?? {}).some((server) =>
     server.oauth?.enabled !== false && Boolean(server.oauth) && server.transport !== 'stdio'
@@ -1024,92 +1098,103 @@ export async function createKunServeRuntime(
     }
   })
   // Provider-native subscription engines own whole turns and share the same
-  // narrow delegated runtime boundary.
-	  let sdkRuntimeDeps: AgentSdkRuntimeFactoryDeps | undefined
-	  if (agentSdkProviderIds.size > 0 || defaultIsAgentSdk) {
-	    sdkRuntimeDeps = {
-	      registry,
-	      toolHost,
-	      turns: turnService,
-	      sessionStore,
-	      threadStore,
-	      events,
-	      debugSink: llmDebug,
-	      ids,
-	      prefix,
-	      providerConfigs: activeOptions.providers ?? {},
-	      agentSdkProviderIds,
-	      defaultApprovalPolicy: activeOptions.approvalPolicy,
-	      defaultSandboxMode: activeOptions.sandboxMode,
-	      defaultModel: activeOptions.model,
-	      defaultIsAgentSdk,
-	      defaultToken: activeOptions.apiKey,
-	      turnLimits: activeOptions.runtime?.turnLimits,
-	      approvalGate,
-	      skillRuntime,
-	      instructionRuntime,
-	      userInputGate,
-	      nowIso,
-	      ...(attachmentStore ? { attachmentStore } : {}),
-	      ...(memoryStore ? { memoryStore } : {}),
-	      ...(process.env.KUN_CLAUDE_BINARY
-	        ? { pathToClaudeCodeExecutable: process.env.KUN_CLAUDE_BINARY }
-	        : {}),
-	      sessionCoordinator: delegatedSessions,
-	      contextProfile: delegatedContextProfile
-	    }
-	  }
-	  let antigravityRuntimeDeps: AntigravityCliRuntimeDeps | undefined
-	  if (antigravityProviderIds.size > 0 || defaultIsAntigravity) {
-	    antigravityRuntimeDeps = {
-	      providerConfigs: activeOptions.providers ?? {},
-	      providerIds: antigravityProviderIds,
-	      defaultIsAntigravity,
-	      defaultModel: activeOptions.model,
-        systemPrompt: prefix.systemPrompt,
-	      binaryPath: process.env.KUN_ANTIGRAVITY_BINARY,
-	      threadStore,
-	      sessionStore,
-	      turns: turnService,
-	      events,
-	      ids,
-	      debugSink: llmDebug,
-	      turnLimits: activeOptions.runtime?.turnLimits,
-	      sessionCoordinator: delegatedSessions,
-	      contextProfile: delegatedContextProfile
-	    }
-	  }
-	  let cursorRuntimeDeps: CursorSdkRuntimeFactoryDeps | undefined
-	  if (cursorSdkProviderIds.size > 0 || defaultIsCursorSdk) {
-	    cursorRuntimeDeps = {
-	      registry,
-	      toolHost,
-	      providerConfigs: activeOptions.providers ?? {},
-	      providerIds: cursorSdkProviderIds,
-	      defaultIsCursor: defaultIsCursorSdk,
-	      defaultApiKey: activeOptions.apiKey,
-	      defaultModel: activeOptions.model,
-	      defaultApprovalPolicy: activeOptions.approvalPolicy,
-	      defaultSandboxMode: activeOptions.sandboxMode,
-	      systemPrompt: prefix.systemPrompt,
-	      threadStore,
-	      sessionStore,
-	      turns: turnService,
-	      events,
-	      ids,
-	      debugSink: llmDebug,
-	      approvalGate,
-	      userInputGate,
-	      skillRuntime,
-	      instructionRuntime,
-	      nowIso,
-	      ...(memoryStore ? { memoryStore } : {}),
-	      ...(attachmentStore ? { attachmentStore } : {}),
-	      turnLimits: activeOptions.runtime?.turnLimits,
-	      sessionCoordinator: delegatedSessions,
-	      contextProfile: delegatedContextProfile
-	    }
-	  }
+  // narrow delegated runtime boundary. Keep the runtime objects alive even
+  // with an initially empty provider set so /connect can add an account
+  // without requiring the standalone TUI runtime to restart.
+  const sdkRuntimeDeps: AgentSdkRuntimeFactoryDeps = {
+    registry,
+    toolHost,
+    turns: turnService,
+    sessionStore,
+    threadStore,
+    events,
+    debugSink: llmDebug,
+    ids,
+    prefix,
+    providerConfigs: activeOptions.providers ?? {},
+    agentSdkProviderIds,
+    defaultApprovalPolicy: activeOptions.approvalPolicy,
+    defaultSandboxMode: activeOptions.sandboxMode,
+    defaultModel: activeOptions.model,
+    defaultIsAgentSdk,
+    defaultToken: activeOptions.apiKey,
+    turnLimits: activeOptions.runtime?.turnLimits,
+    approvalGate,
+    skillRuntime,
+    instructionRuntime,
+    userInputGate,
+    nowIso,
+    ...(attachmentStore ? { attachmentStore } : {}),
+    ...(memoryStore ? { memoryStore } : {}),
+    ...(process.env.KUN_CLAUDE_BINARY
+      ? { pathToClaudeCodeExecutable: process.env.KUN_CLAUDE_BINARY }
+      : {}),
+    sessionCoordinator: delegatedSessions,
+    contextProfile: delegatedContextProfile
+  }
+  const antigravityRuntimeDeps: AntigravityCliRuntimeDeps = {
+    providerConfigs: activeOptions.providers ?? {},
+    providerIds: antigravityProviderIds,
+    defaultIsAntigravity,
+    defaultModel: activeOptions.model,
+    systemPrompt: prefix.systemPrompt,
+    binaryPath: process.env.KUN_ANTIGRAVITY_BINARY,
+    threadStore,
+    sessionStore,
+    turns: turnService,
+    events,
+    ids,
+    debugSink: llmDebug,
+    turnLimits: activeOptions.runtime?.turnLimits,
+    sessionCoordinator: delegatedSessions,
+    contextProfile: delegatedContextProfile
+  }
+  let cursorRuntimeDeps: CursorSdkRuntimeFactoryDeps | undefined
+  if (cursorSdkProviderIds.size > 0 || defaultIsCursorSdk) {
+    cursorRuntimeDeps = {
+      registry,
+      toolHost,
+      providerConfigs: activeOptions.providers ?? {},
+      providerIds: cursorSdkProviderIds,
+      defaultIsCursor: defaultIsCursorSdk,
+      defaultApiKey: activeOptions.apiKey,
+      defaultModel: activeOptions.model,
+      defaultApprovalPolicy: activeOptions.approvalPolicy,
+      defaultSandboxMode: activeOptions.sandboxMode,
+      systemPrompt: prefix.systemPrompt,
+      threadStore,
+      sessionStore,
+      turns: turnService,
+      events,
+      ids,
+      debugSink: llmDebug,
+      approvalGate,
+      userInputGate,
+      skillRuntime,
+      instructionRuntime,
+      nowIso,
+      ...(memoryStore ? { memoryStore } : {}),
+      ...(attachmentStore ? { attachmentStore } : {}),
+      turnLimits: activeOptions.runtime?.turnLimits,
+      sessionCoordinator: delegatedSessions,
+      contextProfile: delegatedContextProfile
+    }
+  }
+  refreshModelConnectionDelegatedDeps = () => {
+    sdkRuntimeDeps.providerConfigs = activeOptions.providers ?? {}
+    sdkRuntimeDeps.defaultModel = activeOptions.model
+    sdkRuntimeDeps.defaultToken = activeOptions.apiKey
+    if (process.env.KUN_CLAUDE_BINARY) {
+      sdkRuntimeDeps.pathToClaudeCodeExecutable = process.env.KUN_CLAUDE_BINARY
+    }
+    antigravityRuntimeDeps.providerConfigs = activeOptions.providers ?? {}
+    antigravityRuntimeDeps.defaultModel = activeOptions.model
+    if (cursorRuntimeDeps) {
+      cursorRuntimeDeps.providerConfigs = activeOptions.providers ?? {}
+      cursorRuntimeDeps.defaultApiKey = activeOptions.apiKey
+      cursorRuntimeDeps.defaultModel = activeOptions.model
+    }
+  }
 
   // The main turn abort signal already reaches foreground children. Detached
   // children and background shells intentionally have independent lifetimes,
@@ -1122,11 +1207,11 @@ export async function createKunServeRuntime(
       Promise.resolve(delegationRuntime?.abortDetachedChildrenForThread(threadId) ?? 0)
     ])
   }
-	  const sdkRuntime = composeDelegatedTurnRuntimes([
-	    ...(sdkRuntimeDeps ? [createAgentSdkRuntime(sdkRuntimeDeps)] : []),
-	    ...(antigravityRuntimeDeps ? [new AntigravityCliRuntime(antigravityRuntimeDeps)] : []),
-	    ...(cursorRuntimeDeps ? [createCursorSdkRuntime(cursorRuntimeDeps)] : [])
-	  ])
+  const sdkRuntime = composeDelegatedTurnRuntimes([
+    createAgentSdkRuntime(sdkRuntimeDeps),
+    new AntigravityCliRuntime(antigravityRuntimeDeps),
+    ...(cursorRuntimeDeps ? [createCursorSdkRuntime(cursorRuntimeDeps)] : [])
+  ])
 	  const loopOptions: AgentLoopOptions = {
 	    threadStore,
 	    sessionStore,
@@ -1709,14 +1794,6 @@ export async function createKunServeRuntime(
 	        message: 'unauthenticated local model gateway requires a loopback serve host'
 	      }
 	    }
-	    const nextDelegatedProviderSignature = delegatedProviderSignatureForOptions(nextOptions)
-	    if (nextDelegatedProviderSignature !== delegatedProviderSignature) {
-	      return {
-	        ok: false,
-	        code: 'restart_required',
-	        message: 'delegated subscription provider routing changed and requires a runtime restart'
-	      }
-	    }
 	    const nextSubagentsEnabled = nextOptions.capabilities?.subagents.enabled === true
 	    if (nextSubagentsEnabled && !delegationRuntime) {
 	      return {
@@ -1852,9 +1929,9 @@ export async function createKunServeRuntime(
 	    modelProfiles = nextModelProfiles
 	    providerModelProfiles = nextProviderModelProfiles
 	    tokenEconomy = nextTokenEconomy
-	    delegatedProviderSignature = nextDelegatedProviderSignature
 	    replaceRoutedModelClients()
 	    await migrateLegacyProviderCredentials()
+	    await modelConnections.initialize(modelConnectionSeedsForOptions(activeOptions))
 	    skillRuntime.replaceWith(nextSkillRuntime)
 	    instructionRuntime.replaceConfig(activeOptions.capabilities?.instructions)
 	    mcpProviders = nextMcpProviders
@@ -2031,6 +2108,8 @@ export async function createKunServeRuntime(
 	      health: routeHealth,
 	      tests: routePoolTests
 	    },
+	    modelConnections,
+	    modelConnectionOAuth,
 	    get defaultModel() {
 	      return activeOptions.model
 	    },
@@ -2056,6 +2135,9 @@ export async function createKunServeRuntime(
 	      const memory = process.memoryUsage()
 	      const peakRssBytes = Math.max(memory.rss, process.resourceUsage().maxRSS * 1024)
 	      return {
+	        instanceId: activeOptions.instanceId ?? 'embedded',
+	        serviceVersion: KUN_SERVICE_VERSION,
+	        launchMode: activeOptions.launchMode ?? 'foreground',
 	        host: activeOptions.host,
 	        port: activeOptions.port,
 	        configPath: activeOptions.configPath,
@@ -2118,11 +2200,14 @@ export async function createKunServeRuntime(
     mcpOAuth: async () => mcpProviders.oauth,
     clearMcpOAuth: async (serverId) => mcpProviders.clearOAuthCredentials(serverId),
     authorizeMcpOAuth: async (serverId) => mcpProviders.authorizeOAuth(serverId),
-    skills: () => skillRuntime.diagnostics(),
+    skills: (workspace) => workspace
+      ? skillRuntime.diagnosticsForWorkspace(workspace)
+      : skillRuntime.diagnostics(),
     shutdown: async () => {
       try {
         shuttingDown = true
         await graphRuntime.stop()
+        modelConnectionOAuth.close()
         eventStreamRegistry.closeAll()
         loop.shutdownGoalResume()
 	        await backgroundShellRuntime.shutdown()
@@ -2144,6 +2229,7 @@ export async function createKunServeRuntime(
 	        await mcpProviders.close()
 	        await migrationService.shutdown()
 	        await migrationImportService.shutdown()
+	        await routeHealth.flush()
       } finally {
         try {
           await llmDebug.shutdown()
@@ -2179,11 +2265,13 @@ async function hydrateLegacyCredentialOptions(
 ): Promise<KunServeRuntimeOptions> {
   let apiKey = options.apiKey
   let headers = options.headers
+  let geminiAuth = options.geminiAuth
   if (options.credentialSourceId) {
     const resolved = await migration.resolveApiKey(options.credentialSourceId).catch(() => null)
     if (resolved) {
       const material = materializeLegacyProviderCredential(resolved.apiKey)
       apiKey = material.apiKey
+      geminiAuth = material.geminiAuth ?? geminiAuth
       headers = material.headers
         ? { ...(headers ?? {}), ...material.headers }
         : headers
@@ -2200,6 +2288,7 @@ async function hydrateLegacyCredentialOptions(
         nextProvider = {
           ...provider,
           apiKey: material.apiKey,
+          ...(material.geminiAuth ? { geminiAuth: material.geminiAuth } : {}),
           ...(material.headers
             ? { headers: { ...(provider.headers ?? {}), ...material.headers } }
             : {})
@@ -2211,6 +2300,7 @@ async function hydrateLegacyCredentialOptions(
   return {
     ...options,
     apiKey,
+    ...(geminiAuth ? { geminiAuth } : {}),
     ...(headers ? { headers } : {}),
     ...(options.providers ? { providers } : {})
   }
@@ -2236,8 +2326,23 @@ function buildModelClientRouterInput(
     options.runtime?.streamIdleTimeoutMs !== undefined
       ? { streamIdleTimeoutMs: options.runtime.streamIdleTimeoutMs }
       : {}
+  const activeProviderId = activeModelConnectionProviderId(options)
+  const activeProvider = options.providers?.[activeProviderId]
+  const defaultModelCapabilities = providerScopedModelCapabilities(
+    activeProviderId,
+    activeProvider,
+    modelCapabilities
+  )
   const defaultClient: ModelClient =
-    process.env.KUN_RUNTIME_PROVIDER_KIND === 'gemini-cli-api'
+    process.env.KUN_RUNTIME_PROVIDER_KIND === 'gemini-code-assist'
+      ? new GeminiCodeAssistModelClient({
+          baseUrl: options.baseUrl,
+          auth: options.geminiAuth,
+          modelProxyUrl: options.modelProxyUrl,
+          model: options.model,
+          modelCapabilities: defaultModelCapabilities
+        })
+      : process.env.KUN_RUNTIME_PROVIDER_KIND === 'gemini-cli-api'
       ? new GeminiCliApiModelClient({
           model: options.model,
           modelProxyUrl: options.modelProxyUrl,
@@ -2251,7 +2356,7 @@ function buildModelClientRouterInput(
           endpointFormat: options.endpointFormat ?? DEFAULT_MODEL_ENDPOINT_FORMAT,
           retry: options.retry,
           model: options.model,
-          modelCapabilities: (model) => modelCapabilities(model),
+          modelCapabilities: defaultModelCapabilities,
           headers: options.headers,
           ...(options.credentialSourceId && credentialResolver
             ? {
@@ -2267,8 +2372,21 @@ function buildModelClientRouterInput(
     const trimmedId = providerId.trim()
     if (!trimmedId) continue
     const kind = provider.kind ?? 'http'
-    if (kind !== 'http' && kind !== 'gemini-cli-api') continue
-    const client: ModelClient = kind === 'gemini-cli-api'
+    if (kind !== 'http' && kind !== 'gemini-cli-api' && kind !== 'gemini-code-assist') continue
+    const scopedModelCapabilities = providerScopedModelCapabilities(
+      trimmedId,
+      provider,
+      modelCapabilities
+    )
+    const client: ModelClient = kind === 'gemini-code-assist'
+      ? new GeminiCodeAssistModelClient({
+          baseUrl: provider.baseUrl ?? options.baseUrl,
+          auth: provider.geminiAuth,
+          modelProxyUrl: provider.modelProxyUrl ?? options.modelProxyUrl,
+          model: options.model,
+          modelCapabilities: scopedModelCapabilities
+        })
+      : kind === 'gemini-cli-api'
       ? new GeminiCliApiModelClient({
           model: options.model,
           modelProxyUrl: provider.modelProxyUrl ?? options.modelProxyUrl,
@@ -2282,7 +2400,7 @@ function buildModelClientRouterInput(
           endpointFormat: provider.endpointFormat ?? options.endpointFormat ?? DEFAULT_MODEL_ENDPOINT_FORMAT,
           retry: provider.retry ?? options.retry,
           model: options.model,
-          modelCapabilities: (model) => modelCapabilities(model, trimmedId),
+          modelCapabilities: scopedModelCapabilities,
           headers: provider.headers,
           ...(provider.credentialSourceId && credentialResolver
             ? {
@@ -2312,6 +2430,71 @@ function modelContextProfilesByProvider(
   return out
 }
 
+function providerScopedModelCapabilities(
+  providerId: string,
+  provider: ServeProviderConfig | undefined,
+  fallback: (
+    model: string,
+    providerId?: string
+  ) => ReturnType<typeof modelCapabilitiesForModel>
+): (model: string) => ReturnType<typeof modelCapabilitiesForModel> {
+  return (model) => {
+    const explicit = provider?.modelCapabilities?.[model] ??
+      provider?.modelCapabilities?.[model.trim().toLowerCase()]
+    const providerFallback = modelCapabilitiesForProviderModel({
+      providerId,
+      presetSource: providerId,
+      baseUrl: provider?.baseUrl,
+      kind: provider?.kind,
+      model
+    })
+    if (explicit) {
+      const reasoning = shouldUpgradeProviderReasoning(
+        providerId,
+        provider?.endpointFormat,
+        model,
+        explicit.reasoning,
+        providerFallback.reasoning
+      )
+        ? providerFallback.reasoning
+        : explicit.reasoning ?? providerFallback.reasoning
+      return {
+        ...explicit,
+        id: model,
+        ...(reasoning ? { reasoning } : {})
+      }
+    }
+    const base = fallback(model, providerId)
+    return providerFallback.reasoning
+      ? { ...base, reasoning: providerFallback.reasoning }
+      : base
+  }
+}
+
+function shouldUpgradeProviderReasoning(
+  providerId: string,
+  endpointFormat: ModelEndpointFormat | undefined,
+  model: string,
+  configured: ReturnType<typeof modelCapabilitiesForModel>['reasoning'],
+  fallback: ReturnType<typeof modelCapabilitiesForModel>['reasoning']
+): boolean {
+  if (!configured || !fallback) return false
+  const placeholder = configured.requestProtocol === 'none' &&
+    fallback.requestProtocol !== 'none' &&
+    configured.defaultEffort === 'auto' &&
+    configured.supportedEfforts.every((effort) => effort === 'auto' || effort === 'off')
+  const chatResponsesMismatch =
+    endpointFormat === 'chat_completions' &&
+    configured.requestProtocol === 'openai-responses' &&
+    fallback.requestProtocol === 'openai-chat-completions' &&
+    (
+      (providerId.toLowerCase().includes('kimi-code') && model.trim().toLowerCase() === 'k3') ||
+      (providerId.toLowerCase().includes('opencode-go') &&
+        model.trim().toLowerCase().endsWith('grok-4.5'))
+    )
+  return placeholder || chatResponsesMismatch
+}
+
 function agentSdkProviderIdsForOptions(options: KunServeRuntimeOptions): Set<string> {
   const out = new Set<string>()
   for (const [providerId, provider] of Object.entries(options.providers ?? {})) {
@@ -2337,14 +2520,6 @@ function cursorSdkProviderIdsForOptions(options: KunServeRuntimeOptions): Set<st
     if (trimmedId && (provider.kind ?? 'http') === 'cursor-sdk') out.add(trimmedId)
   }
   return out
-}
-
-function delegatedProviderSignatureForOptions(options: KunServeRuntimeOptions): string {
-  return [
-    ...[...agentSdkProviderIdsForOptions(options)].map((id) => `agent-sdk:${id}`),
-    ...[...antigravityProviderIdsForOptions(options)].map((id) => `antigravity-cli:${id}`),
-    ...[...cursorSdkProviderIdsForOptions(options)].map((id) => `cursor-sdk:${id}`)
-  ].sort().join('\n')
 }
 
 function mergeRuntimeConfigApplyOptions(
@@ -2478,14 +2653,53 @@ export async function startKunServe(
   if (options.insecure && !isLoopbackHost(options.host)) {
     throw new Error('insecure serve requires a loopback host')
   }
-  const runtime = await createKunServeRuntime(options)
+  // Generate this once so the authenticated live-info endpoint and the
+  // discovery rendezvous identify the exact same process incarnation.
+  const startedAt = options.startedAt ?? new Date().toISOString()
+  const instanceId = options.instanceId ?? randomUUID()
+  const serveOptions = { ...options, startedAt, instanceId }
+  const runtime = await createKunServeRuntime(serveOptions)
+  let requestShutdown!: () => void
+  const shutdownRequested = new Promise<void>((resolve) => { requestShutdown = resolve })
+  runtime.requestShutdown = async (requestedInstanceId) => {
+    if (requestedInstanceId !== instanceId) return false
+    const timer = setTimeout(requestShutdown, 25)
+    timer.unref?.()
+    return true
+  }
   const router = buildRouter(runtime)
-  const server = await startNodeHttpServer({
-    router,
-    host: options.host,
-    port: options.port,
-    ...(options.faultInjection ? { faultInjection: options.faultInjection } : {})
-  })
+  let server: NodeHttpServerHandle
+  try {
+    server = await startNodeHttpServer({
+      router,
+      host: options.host,
+      port: options.port,
+      ...(options.faultInjection ? { faultInjection: options.faultInjection } : {})
+    })
+  } catch (error) {
+    await runtime.shutdown?.().catch(() => undefined)
+    throw error
+  }
+  let discovery: Awaited<ReturnType<typeof publishRuntimeDiscovery>>
+  try {
+    discovery = await publishRuntimeDiscovery(options.dataDir, {
+      pid: process.pid,
+      startedAt,
+      host: server.host,
+      port: server.port,
+      baseUrl: runtimeBaseUrl(server.host, server.port),
+      runtimeToken: options.runtimeToken,
+      insecure: options.insecure,
+      serviceVersion: KUN_SERVICE_VERSION,
+      launchMode: options.launchMode ?? 'foreground',
+      ...(options.logPath ? { logPath: options.logPath } : {}),
+      instanceId
+    })
+  } catch (error) {
+    await server.close().catch(() => undefined)
+    await runtime.shutdown?.().catch(() => undefined)
+    throw error
+  }
   // Background sweep after listen: settle turns orphaned by a crash so
   // clients stop spinning on them, without delaying readiness. Then resume
   // goals that were interrupted mid-run so an active goal doesn't sit "in
@@ -2521,12 +2735,128 @@ export async function startKunServe(
   return {
     ...server,
     runtime,
+    instanceId,
+    shutdownRequested,
     close: async () => {
       try {
         await server.close()
       } finally {
-        await runtime.shutdown?.()
+        try {
+          await runtime.shutdown?.()
+        } finally {
+          await removeRuntimeDiscovery(options.dataDir, discovery.instanceId).catch(() => undefined)
+        }
       }
     }
   }
+}
+
+function runtimeBaseUrl(host: string, port: number): string {
+  const urlHost = host.includes(':') && !host.startsWith('[') ? `[${host}]` : host
+  return `http://${urlHost}:${port}`
+}
+
+function activeModelConnectionProviderId(options: KunServeRuntimeOptions): string {
+  const prefix = 'settings:provider:'
+  const source = options.credentialSourceId?.trim() ?? ''
+  const candidate = source.startsWith(prefix) ? source.slice(prefix.length).trim() : ''
+  return candidate && options.providers?.[candidate] ? candidate : 'default'
+}
+
+function modelConnectionSeedsForOptions(
+  options: KunServeRuntimeOptions
+): ModelConnectionConnectRequest[] {
+  const activeConnectionId = activeModelConnectionProviderId(options)
+  const activeProvider = options.providers?.[activeConnectionId]
+  const activeKind = activeProvider?.kind ?? 'http'
+  const activeModels = uniqueModelCatalog([
+    ...(activeProvider?.models ?? []),
+    activeProvider?.selectedModel,
+    options.model
+  ])
+  return [
+    {
+      expectedRevision: 0,
+      id: activeConnectionId,
+      name: activeConnectionId === 'default' ? 'Default provider' : activeConnectionId,
+      ...(activeConnectionId === 'default' ? {} : { presetSource: activeConnectionId }),
+      kind: activeKind,
+      authType: modelConnectionAuthType(activeKind, options.apiKey),
+      ...(activeKind === 'http'
+        ? { baseUrl: options.baseUrl || 'https://api.deepseek.com' }
+        : activeKind === 'gemini-code-assist' && options.baseUrl
+          ? { baseUrl: options.baseUrl }
+          : {}),
+      endpointFormat: options.endpointFormat ?? DEFAULT_MODEL_ENDPOINT_FORMAT,
+      credential: modelConnectionSeedCredential(
+        activeKind,
+        options.apiKey,
+        activeProvider?.geminiAuth ?? options.geminiAuth
+      ),
+      models: activeModels,
+      ...(activeProvider?.modelCapabilities
+        ? { modelCapabilities: activeProvider.modelCapabilities }
+        : {}),
+      selectedModel: options.model,
+      probe: false,
+      select: true
+    },
+    ...Object.entries(options.providers ?? {})
+      .filter(([providerId]) => providerId !== activeConnectionId)
+      .map(([providerId, provider]): ModelConnectionConnectRequest => ({
+        expectedRevision: 0,
+        id: providerId,
+        name: providerId,
+        kind: provider.kind ?? 'http',
+        authType: modelConnectionAuthType(provider.kind ?? 'http', provider.apiKey),
+        ...((provider.kind ?? 'http') === 'http'
+          ? { baseUrl: provider.baseUrl || options.baseUrl || 'https://api.deepseek.com' }
+          : (provider.kind ?? 'http') === 'gemini-code-assist' && provider.baseUrl
+            ? { baseUrl: provider.baseUrl }
+            : {}),
+        endpointFormat: provider.endpointFormat ?? DEFAULT_MODEL_ENDPOINT_FORMAT,
+        credential: modelConnectionSeedCredential(provider.kind ?? 'http', provider.apiKey, provider.geminiAuth),
+        models: uniqueModelCatalog([
+          ...(provider.models ?? []),
+          provider.selectedModel
+        ]),
+        ...(provider.modelCapabilities ? { modelCapabilities: provider.modelCapabilities } : {}),
+        ...(provider.selectedModel ? { selectedModel: provider.selectedModel } : {}),
+        probe: false,
+        select: false
+      }))
+  ]
+}
+
+function uniqueModelCatalog(models: readonly (string | undefined)[]): string[] {
+  return [...new Set(models.map((model) => model?.trim()).filter((model): model is string => Boolean(model)))]
+}
+
+function modelConnectionSeedCredential(
+  kind: 'http' | 'agent-sdk' | 'antigravity-cli' | 'cursor-sdk' | 'gemini-code-assist',
+  apiKey: string,
+  geminiAuth?: GeminiCodeAssistCredential
+): string {
+  return kind === 'gemini-code-assist' && geminiAuth
+    ? JSON.stringify(geminiAuth)
+    : apiKey
+}
+
+function modelConnectionAuthType(
+  kind: 'http' | 'agent-sdk' | 'antigravity-cli' | 'cursor-sdk' | 'gemini-code-assist',
+  credential: string
+): 'api-key' | 'oauth' | 'subscription' {
+  if (
+    kind === 'agent-sdk' ||
+    kind === 'antigravity-cli' ||
+    kind === 'cursor-sdk' ||
+    kind === 'gemini-code-assist'
+  ) return 'subscription'
+  try {
+    const parsed = JSON.parse(credential) as { kind?: unknown }
+    if (parsed.kind === 'codex-oauth' || parsed.kind === 'grok-oauth') return 'oauth'
+  } catch {
+    // Plain API keys are intentionally not JSON.
+  }
+  return 'api-key'
 }

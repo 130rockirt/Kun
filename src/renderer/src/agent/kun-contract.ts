@@ -696,6 +696,12 @@ export type CoreRuntimeEventJson = {
     fork?: boolean
   }
   status?: string | number
+  /** turn_started: the effective routing and reasoning configuration. */
+  model?: string
+  providerId?: string
+  accountId?: string
+  reasoningEffort?: 'auto' | 'off' | 'low' | 'medium' | 'high' | 'max'
+  mode?: 'agent' | 'plan'
   /** thread_created / thread_updated: the thread's (possibly upgraded) title. */
   title?: string
   /** thread_created / thread_updated: whether that title is auto/provisional. */

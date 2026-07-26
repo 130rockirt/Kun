@@ -13,7 +13,8 @@ import {
 } from '../server/event-loop-monitor.js'
 import { installServeCrashHandlers } from './serve-crash-handlers.js'
 import { runExtensionCommand } from './extension-cli.js'
-import { acquireRuntimeDataDirLease } from '../server/runtime-data-dir-lease.js'
+import { resolveSharedRuntime, runRuntimeCommand } from './shared-runtime.js'
+import { withRuntimeStartLock } from '../server/runtime-discovery.js'
 
 export const KUN_READY_PREFIX = 'KUN_READY '
 
@@ -22,7 +23,7 @@ export const KUN_READY_PREFIX = 'KUN_READY '
  * still has the exact same KUN_READY handshake behavior.
  */
 async function serveMain(argv: readonly string[]): Promise<number> {
-  if (argv.length === 0 || argv.includes('--help') || argv.includes('-h')) {
+  if (argv.includes('--help') || argv.includes('-h')) {
     process.stdout.write(SERVE_USAGE)
     return ServeExitCode.ok
   }
@@ -34,16 +35,37 @@ async function serveMain(argv: readonly string[]): Promise<number> {
     }
     return parsed.exitCode
   }
+  const launchMode = process.env.KUN_RUNTIME_LAUNCH_MODE === 'shared' ? 'shared' : 'foreground'
+  const start = async (): Promise<
+    { kind: 'existing'; existing: NonNullable<Awaited<ReturnType<typeof resolveSharedRuntime>>> } |
+    { kind: 'started'; server: KunServeHandle }
+  > => {
+    const existing = await resolveSharedRuntime(parsed.options.dataDir)
+    if (existing) return { kind: 'existing', existing }
+    return {
+      kind: 'started',
+      server: await startKunServe({
+        ...parsed.options,
+        launchMode,
+        ...(process.env.KUN_RUNTIME_LOG_PATH ? { logPath: process.env.KUN_RUNTIME_LOG_PATH } : {})
+      })
+    }
+  }
+  // Detached startup is already elected by the parent shared-runtime manager.
+  // Foreground `kun serve` performs the same data-dir election itself.
+  const elected = launchMode === 'foreground'
+    ? await withRuntimeStartLock(parsed.options.dataDir, start)
+    : await start()
+  if (elected.kind === 'existing') {
+    process.stderr.write(
+      `kun serve: runtime already running at ${elected.existing.discovery.baseUrl} (PID ${elected.existing.discovery.pid}); ` +
+      'use `kun runtime stop` first or choose another --data-dir.\n'
+    )
+    return ServeExitCode.runtime
+  }
   let handle: KunServeHandle | null = null
   installServeCrashHandlers(() => handle)
-  const dataDirLease = await acquireRuntimeDataDirLease(parsed.options.dataDir)
-  let server: KunServeHandle
-  try {
-    server = await startKunServe(parsed.options)
-  } catch (error) {
-    await dataDirLease.release()
-    throw error
-  }
+  const server = elected.server
   handle = server
   await selfVerifyHealth(server.host, server.port)
   const info = server.runtime.info()
@@ -70,7 +92,10 @@ async function serveMain(argv: readonly string[]): Promise<number> {
     stallThresholdMs: resolveEventLoopStallThresholdMs(process.env)
   })
   await new Promise<void>((resolve) => {
+    let stopping = false
     const stop = () => {
+      if (stopping) return
+      stopping = true
       loopMonitor.stop()
       void server.close()
         .finally(() => dataDirLease.release())
@@ -78,6 +103,7 @@ async function serveMain(argv: readonly string[]): Promise<number> {
     }
     process.once('SIGTERM', stop)
     process.once('SIGINT', stop)
+    void server.shutdownRequested.then(stop)
   })
   return ServeExitCode.ok
 }
@@ -152,6 +178,17 @@ export async function main(argv: readonly string[]): Promise<number> {
   }
   if (command.command === 'serve') {
     return serveMain(command.args)
+  }
+  if (command.command === 'version') {
+    process.stdout.write('kun 0.1.0\n')
+    return ServeExitCode.ok
+  }
+  if (command.command === 'runtime') {
+    return runRuntimeCommand(command.args, {
+      stdout: process.stdout,
+      stderr: process.stderr,
+      env: process.env
+    })
   }
   return runAgentCommand(command.command, command.args, {
     stdin: process.stdin,

@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { z } from 'zod'
+import type { GeminiCodeAssistCredential } from '../contracts/gemini-code-assist.js'
 import {
   ApprovalPolicySchema,
   DEFAULT_APPROVAL_POLICY,
@@ -9,12 +10,25 @@ import {
   SandboxModeSchema
 } from '../contracts/policy.js'
 import {
+  AttachmentsCapabilityConfig,
+  ComputerUseCapabilityConfig,
   DEFAULT_KUN_CAPABILITIES_CONFIG,
+  ImageGenCapabilityConfig,
+  InstructionsCapabilityConfig,
   KunCapabilitiesConfig,
+  McpCapabilityConfig,
+  MemoryCapabilityConfig,
+  ModelCapabilityMetadata,
   ModelInputModality,
   ModelMessagePartSupport,
   ModelReasoningCapabilityMetadata,
-  ModelReasoningEffort
+  ModelReasoningEffort,
+  MusicGenCapabilityConfig,
+  SkillsCapabilityConfig,
+  SpeechGenCapabilityConfig,
+  SubagentsCapabilityConfig,
+  VideoGenCapabilityConfig,
+  WebCapabilityConfig
 } from '../contracts/capabilities.js'
 import {
   DEFAULT_MODEL_ENDPOINT_FORMAT,
@@ -483,6 +497,7 @@ export const ServeProviderConfigSchema = z
       'agent-sdk',
       'antigravity-cli',
       'gemini-cli-api',
+      'gemini-code-assist',
       'cursor-sdk'
     ]).default('http').optional(),
     apiKey: z.string().default(''),
@@ -496,7 +511,12 @@ export const ServeProviderConfigSchema = z
     retry: ModelRequestRetryConfigSchema.optional(),
     modelProxyUrl: z.string().optional(),
     modelProfiles: z.record(z.string().min(1), ModelContextProfileConfigSchema).optional(),
-    headers: z.record(z.string(), z.string()).optional()
+    headers: z.record(z.string(), z.string()).optional(),
+    /** Secret-free catalog metadata used to seed the shared model registry. */
+    models: z.array(z.string().min(1).max(512)).max(500).optional(),
+    /** Provider-scoped, secret-free capability metadata for the model catalog. */
+    modelCapabilities: z.record(z.string().min(1).max(512), ModelCapabilityMetadata).optional(),
+    selectedModel: z.string().min(1).max(512).optional()
   })
   .strict()
   .superRefine((cfg, ctx) => {
@@ -508,7 +528,10 @@ export const ServeProviderConfigSchema = z
       })
     }
   })
-export type ServeProviderConfig = z.infer<typeof ServeProviderConfigSchema>
+export type ServeProviderConfig = z.infer<typeof ServeProviderConfigSchema> & {
+  /** Legacy protected Code Assist material retained for forward migration. */
+  geminiAuth?: GeminiCodeAssistCredential
+}
 
 export const KunServeConfigSchema = z
   .object({
@@ -627,11 +650,83 @@ export function readKunConfigFile(path: string): LoadedKunConfig {
   }
   const parsed = KunConfigSchema.safeParse(json)
   if (!parsed.success) {
+    const compatible = parseForwardCompatibleKunConfig(json)
+    if (compatible) {
+      return { path: resolvedPath, config: compatible }
+    }
     throw new Error(
       `Invalid Kun config at ${resolvedPath}: ${JSON.stringify(parsed.error.issues, null, 2)}`
     )
   }
   return { path: resolvedPath, config: parsed.data }
+}
+
+const FORWARD_COMPATIBLE_TOP_LEVEL_SECTIONS = [
+  ['models', ModelConfigSchema],
+  ['contextCompaction', ContextCompactionConfigSchema],
+  ['runtime', RuntimeTuningConfigSchema],
+  ['roles', RolesConfigSchema],
+  ['hooks', HooksConfigSchema],
+  ['quality', QualityConfigSchema]
+] as const
+
+const FORWARD_COMPATIBLE_CAPABILITY_SECTIONS = [
+  ['mcp', McpCapabilityConfig],
+  ['web', WebCapabilityConfig],
+  ['instructions', InstructionsCapabilityConfig],
+  ['skills', SkillsCapabilityConfig],
+  ['subagents', SubagentsCapabilityConfig],
+  ['attachments', AttachmentsCapabilityConfig],
+  ['memory', MemoryCapabilityConfig],
+  ['imageGen', ImageGenCapabilityConfig],
+  ['speechGen', SpeechGenCapabilityConfig],
+  ['musicGen', MusicGenCapabilityConfig],
+  ['videoGen', VideoGenCapabilityConfig],
+  ['computerUse', ComputerUseCapabilityConfig]
+] as const
+
+/**
+ * A newer GUI may write capability metadata that an older bundled TUI does
+ * not know yet. Keep startup fail-closed for the connection-critical `serve`
+ * section, while preserving every independently valid section and falling
+ * back to this runtime's defaults for only the newer capability fragments.
+ */
+function parseForwardCompatibleKunConfig(json: unknown): KunConfig | null {
+  if (!isRecord(json)) return null
+
+  const compatible: Record<string, unknown> = {}
+  if (json.serve !== undefined) {
+    const serve = KunServeConfigSchema.safeParse(json.serve)
+    if (!serve.success) return null
+    compatible.serve = serve.data
+  }
+
+  for (const [key, schema] of FORWARD_COMPATIBLE_TOP_LEVEL_SECTIONS) {
+    if (json[key] === undefined) continue
+    const section = schema.safeParse(json[key])
+    // Known runtime sections are executable configuration, not display-only
+    // metadata. Never hide a typo or unsupported override in one of them while
+    // recovering from unrelated newer GUI fields.
+    if (!section.success) return null
+    compatible[key] = section.data
+  }
+
+  if (isRecord(json.capabilities)) {
+    const capabilities: Record<string, unknown> = {}
+    for (const [key, schema] of FORWARD_COMPATIBLE_CAPABILITY_SECTIONS) {
+      if (json.capabilities[key] === undefined) continue
+      const section = schema.safeParse(json.capabilities[key])
+      if (section.success) capabilities[key] = section.data
+    }
+    compatible.capabilities = capabilities
+  }
+
+  const parsed = KunConfigSchema.safeParse(compatible)
+  return parsed.success ? parsed.data : null
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
 export function readOptionalKunConfigFile(path: string | undefined): LoadedKunConfig | null {

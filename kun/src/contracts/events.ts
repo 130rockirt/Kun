@@ -11,6 +11,11 @@ import { RuntimeErrorSeverity } from './errors.js'
 import { ApprovalPolicySchema, SandboxModeSchema } from './policy.js'
 import { SubagentToolPolicy } from './capabilities.js'
 import { GraphEventEnvelopeV1Schema } from './graph.js'
+import {
+  SteeringEntrySchema,
+  TurnClientSurfaceSchema,
+  TurnReasoningEffortSchema
+} from './turns.js'
 
 /**
  * Persisted runtime events. Every event has a per-thread `seq` so the
@@ -108,6 +113,12 @@ const RuntimeEventBase = z.object({
   }).optional()
 })
 
+/**
+ * For assistant_*_delta events, item.text is the newly emitted fragment and
+ * consumers MUST append it once by stable item id after applying the seq
+ * idempotency gate. item_created/item_updated/item_completed and tool item
+ * events carry authoritative snapshots and replace the projected item.
+ */
 export const ItemEvent = RuntimeEventBase.extend({
   kind: z.enum([
     'item_created',
@@ -126,7 +137,12 @@ export const ThreadLifecycleEvent = RuntimeEventBase.extend({
   kind: z.enum(['thread_created', 'thread_updated']),
   title: z.string().optional(),
   titleAuto: z.boolean().optional(),
-  status: z.string().optional()
+  status: z.string().optional(),
+  mode: z.enum(['agent', 'plan']).optional(),
+  workspace: z.string().optional(),
+  additionalWorkspaces: z.array(z.string()).optional(),
+  approvalPolicy: ApprovalPolicySchema.optional(),
+  sandboxMode: SandboxModeSchema.optional()
 })
 export type ThreadLifecycleEvent = z.infer<typeof ThreadLifecycleEvent>
 
@@ -145,7 +161,12 @@ export const TurnLifecycleEvent = RuntimeEventBase.extend({
   message: z.string().optional(),
   code: z.string().optional(),
   details: z.unknown().optional(),
-  severity: RuntimeErrorSeverity.optional()
+  severity: RuntimeErrorSeverity.optional(),
+  model: z.string().min(1).optional(),
+  providerId: z.string().min(1).optional(),
+  accountId: z.string().min(1).optional(),
+  reasoningEffort: TurnReasoningEffortSchema.optional(),
+  mode: z.enum(['agent', 'plan']).optional()
 })
 export type TurnLifecycleEvent = z.infer<typeof TurnLifecycleEvent>
 

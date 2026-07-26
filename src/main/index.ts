@@ -144,6 +144,7 @@ import {
 } from './claw-platform-install'
 import { registerRuntimeSseIpc } from './runtime-sse-ipc'
 import { registerTerminalPtyIpc } from './terminal/terminal-pty-ipc'
+import { maybePromptCliInstall, registerCliInstallIpc } from './cli-install-service'
 import {
   configureWeixinBridgeRuntimeContextProvider,
   ensureWeixinBridgeRpcUrl,
@@ -403,7 +404,12 @@ const runtimeShutdown = new ManagedRuntimeShutdownCoordinator(async () => {
   ])
   await stopWeixinBridgeRuntime()
   await shutdownLocalWhisperService()
-  await kunRuntimeAdapter.stopAndWait()
+  // The shared Kun service outlives ordinary GUI/TUI clients. Only an update
+  // install must stop it so old application files can be replaced safely.
+  if (runtimeShutdown.isUpdateInstallQuit) {
+    const settings = await store.load()
+    await kunRuntimeAdapter.stopSharedAndWait(settings)
+  }
 })
 
 function stopManagedRuntimesForQuit(): Promise<void> {
@@ -1105,6 +1111,7 @@ async function ensureManagedKunRuntimeToken(
 async function ensureKunRuntime(settings: AppSettingsV1): Promise<AppSettingsV1> {
   const tokenResult = await ensureManagedKunRuntimeToken(settings, 'runtime-start')
   const currentSettings = tokenResult.settings
+  await kunRuntimeAdapter.resolveConnection(currentSettings)
   if (tokenResult.generated && kunRuntimeAdapter.isChildRunning()) {
     logWarn('runtime-start', 'Restarting managed Kun to apply the generated runtime token.')
     await kunRuntimeAdapter.stopAndWait()
@@ -2090,6 +2097,7 @@ app.whenReady().then(async () => {
   })
 
   registerRuntimeSseIpc({ ipcMain, store, ensureRuntime, logError })
+  registerCliInstallIpc(ipcMain)
 
   registerTerminalPtyIpc({
     ipcMain,
@@ -2100,6 +2108,9 @@ app.whenReady().then(async () => {
   traceStartup('ipc registration:done')
 
   createWindow({ suppressInitialShow: shouldStartHidden(initial) })
+  void maybePromptCliInstall(() => mainWindow).catch((error) => {
+    console.warn('[kun-gui] CLI install prompt failed:', error)
+  })
   traceStartup('createWindow:returned')
   void loadGuiUpdaterModule()
     .then((module) => module.showPostUpdateReleaseNotes())

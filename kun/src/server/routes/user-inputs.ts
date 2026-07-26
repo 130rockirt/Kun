@@ -99,6 +99,10 @@ function validateAnswers(questions: readonly UserInputQuestion[], answers: reado
     if (seen.has(answer.id)) return `duplicate answer for question: ${answer.id}`
     seen.add(answer.id)
     if (question.options.length === 0) continue
+    // Interactive clients expose a typed "Other" escape hatch alongside
+    // suggested options. It is intentionally represented as a synthetic label
+    // plus a non-empty free-form value, matching the GUI contract.
+    if (answer.label === 'Other' && answer.value.trim()) continue
     const selected = answer.labels?.length ? answer.labels : [answer.label]
     if (selected.some((label) => !question.options.some((option) => option.label === label))) {
       return `answer contains an invalid option for question: ${answer.id}`

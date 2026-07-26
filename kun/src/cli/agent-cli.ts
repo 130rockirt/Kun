@@ -14,6 +14,7 @@ import {
   ServeExitCode
 } from './serve.js'
 import type { ServeOptions } from './cli-options.js'
+import { runTuiCommand } from '../tui/index.js'
 
 type WritableLike = {
   write(chunk: string): unknown
@@ -30,10 +31,14 @@ export type CliIo = {
 
 export const KUN_CLI_USAGE = `kun <command> [options]
 
+Run \`kun\` without a command to open the inline terminal UI.
+
 Commands:
   serve [options]            Start the local HTTP/SSE runtime
   run [options] <prompt>     Run one agent turn without the GUI
   chat [options]             Start a line-oriented terminal chat
+  tui [options]              Open the inline terminal UI (same as bare kun)
+  runtime <command>          Inspect, stop, or restart the shared runtime
   exec [options] <tool>      List or invoke tools directly
   extension <command>        Create, validate, pack, install, and manage extensions
 
@@ -78,7 +83,7 @@ const VALUE_FLAGS = new Set([
   'title'
 ])
 
-export type KunCliCommand = 'serve' | 'run' | 'chat' | 'exec' | 'help'
+export type KunCliCommand = 'serve' | 'run' | 'chat' | 'tui' | 'exec' | 'runtime' | 'version' | 'help'
 
 export function splitKunCliCommand(argv: readonly string[]): {
   command: KunCliCommand
@@ -86,20 +91,24 @@ export function splitKunCliCommand(argv: readonly string[]): {
   error?: string
 } {
   const first = argv[0]
-  if (!first || first === '--help' || first === '-h' || first === 'help') {
+  if (!first) return { command: 'tui', args: [] }
+  if (first === '--help' || first === '-h' || first === 'help') {
     return { command: 'help', args: [] }
   }
-  if (first === 'serve' || first === 'run' || first === 'chat' || first === 'exec') {
+  if (first === '--version' || first === '-V' || first === 'version') {
+    return { command: 'version', args: [] }
+  }
+  if (first === 'serve' || first === 'run' || first === 'chat' || first === 'tui' || first === 'exec' || first === 'runtime') {
     return { command: first, args: [...argv.slice(1)] }
   }
-  if (first.startsWith('--')) {
-    return { command: 'serve', args: [...argv] }
+  if (first.startsWith('-')) {
+    return { command: 'tui', args: [...argv] }
   }
   return { command: 'help', args: [], error: `unknown command: ${first}` }
 }
 
 export async function runAgentCommand(
-  command: Exclude<KunCliCommand, 'serve' | 'help'>,
+  command: Exclude<KunCliCommand, 'serve' | 'runtime' | 'version' | 'help'>,
   argv: readonly string[],
   io: CliIo
 ): Promise<number> {
@@ -108,6 +117,8 @@ export async function runAgentCommand(
       return runOneShot(argv, io)
     case 'chat':
       return runChat(argv, io)
+    case 'tui':
+      return runTuiCommand(argv, io)
     case 'exec':
       return runExec(argv, io)
   }

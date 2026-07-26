@@ -107,6 +107,9 @@ function toFetchRequest(incoming: IncomingMessage, outgoing: ServerResponse): {
       headers.set(key, raw)
     }
   }
+  // This value is derived from the socket and deliberately overwrites any
+  // client-supplied header. Runtime lifecycle routes use it to stay local-only.
+  headers.set('x-kun-remote-address', incoming.socket.remoteAddress ?? '')
   const hasBody = method !== 'GET' && method !== 'HEAD'
   const abort = new AbortController()
   const abortRequest = () => abort.abort()

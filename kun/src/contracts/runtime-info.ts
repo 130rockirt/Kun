@@ -15,6 +15,9 @@ export const RuntimeInfoResponse = z
     sandboxMode: SandboxModeSchema.optional(),
     tokenEconomyMode: z.boolean().optional(),
     insecure: z.boolean().optional(),
+    instanceId: z.string().min(1),
+    serviceVersion: z.string().min(1),
+    launchMode: z.enum(['foreground', 'shared', 'gui']),
     startedAt: z.string(),
     pid: z.number().int().positive().optional(),
     memoryUsage: z.object({

@@ -181,4 +181,16 @@ describe('assembleSdkOptions', () => {
     expect(assembleSdkOptions({ ...base, maxTurns: 2.9 }).maxTurns).toBe(2)
     expect(assembleSdkOptions(base).maxTurns).toBeUndefined()
   })
+
+  test('maps Claude subscription effort to adaptive-thinking SDK options', () => {
+    expect(assembleSdkOptions({ ...base, reasoningEffort: 'low' })).toMatchObject({
+      effort: 'low',
+      thinking: { type: 'adaptive' }
+    })
+    expect(assembleSdkOptions({ ...base, reasoningEffort: 'max' })).toMatchObject({
+      effort: 'max',
+      thinking: { type: 'adaptive' }
+    })
+    expect(assembleSdkOptions({ ...base, reasoningEffort: 'off' })).not.toHaveProperty('effort')
+  })
 })

@@ -71,6 +71,7 @@ export type ForkThreadOptions = {
   relation?: ThreadRelation
   title?: string
   turnId?: string
+  beforeTurn?: boolean
 }
 
 export type ResumeSessionOptions = {
@@ -172,6 +173,7 @@ export class ThreadService {
       title: options.title ?? (request.title?.trim() || 'New chat'),
       ...(request.titleAuto !== undefined ? { titleAuto: request.titleAuto } : {}),
       workspace: request.workspace,
+      additionalWorkspaces: request.additionalWorkspaces,
       model: request.model,
       ...(request.providerId?.trim() ? { providerId: request.providerId.trim() } : {}),
       ...(request.accountId?.trim() ? { accountId: request.accountId.trim() } : {}),
@@ -209,6 +211,8 @@ export class ThreadService {
     titleAuto?: boolean
     summary?: string
     workspace?: string
+    additionalWorkspaces?: string[]
+    mode?: ThreadMode
     /** Archive or unarchive only; execution and deletion states are internal. */
     status?: ThreadUpdateStatus
     approvalPolicy?: ApprovalPolicy
@@ -229,6 +233,11 @@ export class ThreadService {
         throw new Error(`thread status is managed by the runtime: ${patch.status}`)
       }
       const { costBudgetUsd, costBudgetWarningSent, status, ...standardPatch } = patch
+      if (standardPatch.additionalWorkspaces) {
+        standardPatch.additionalWorkspaces = [...new Set(
+          standardPatch.additionalWorkspaces.map((entry) => entry.trim()).filter(Boolean)
+        )].filter((entry) => entry !== (standardPatch.workspace ?? current.workspace))
+      }
       const merged: ThreadRecord = { ...current, ...standardPatch }
       if (status === 'archived') {
         // Archival is a visibility overlay: an already-active turn can settle
@@ -263,7 +272,12 @@ export class ThreadService {
       threadId,
       title: updated.title,
       ...(updated.titleAuto !== undefined ? { titleAuto: updated.titleAuto } : {}),
-      status: updated.status
+      status: updated.status,
+      mode: updated.mode,
+      workspace: updated.workspace,
+      additionalWorkspaces: updated.additionalWorkspaces,
+      approvalPolicy: updated.approvalPolicy,
+      sandboxMode: updated.sandboxMode
     })
     await this.onStatusChanged?.(threadId, updated.status)
     return updated
@@ -558,7 +572,7 @@ export class ThreadService {
       throw new Error(`turn not found: ${targetTurnId}`)
     }
     const sourceTurns = targetTurnId
-      ? current.turns.slice(0, targetTurnIndex + 1)
+      ? current.turns.slice(0, targetTurnIndex + (options.beforeTurn ? 0 : 1))
       : current.turns
     // Snapshot semantics: clone each turn as it stands now. The parent
     // loop keeps mutating its own record; we copy, never borrow.
@@ -572,7 +586,12 @@ export class ThreadService {
       id: forkId,
       title: options.title?.trim() || defaultTitle,
       workspace: current.workspace,
+      additionalWorkspaces: current.additionalWorkspaces,
       model: current.model,
+      ...(current.providerId ? { providerId: current.providerId } : {}),
+      ...(current.accountId ? { accountId: current.accountId } : {}),
+      ...(current.agentId ? { agentId: current.agentId } : {}),
+      ...(current.systemPrompt ? { systemPrompt: current.systemPrompt } : {}),
       // A fork is a fresh conversation branch, not a continuation of the
       // parent's plan workflow — the plan artifact and its workspace belong to
       // the source thread. Inheriting `mode: 'plan'` made a forked "new

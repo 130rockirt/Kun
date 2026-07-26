@@ -323,7 +323,12 @@ describe('ChatGPT subscription migration', () => {
         inputModalities: ['text', 'image'],
         outputModalities: ['text'],
         supportsToolCalling: true,
-        responsesMode: 'lite'
+        responsesMode: 'lite',
+        reasoning: {
+          supportedEfforts: ['low', 'medium', 'high', 'max'],
+          defaultEffort: 'high',
+          requestProtocol: 'openai-responses'
+        }
       })
     }
   })
@@ -1534,7 +1539,7 @@ describe('model provider settings', () => {
     expect(resolved.modelProfiles['mimo-v2.5-pro']).toBeDefined()
   })
 
-  it('preserves user-edited profiles for preset provider models', () => {
+  it('preserves user-edited fields while filling newly added preset capabilities', () => {
     const codex = getModelProviderPreset('codex')
     expect(codex).not.toBeNull()
     const codexProfile = modelProviderPresetProfile(codex!, 'sk-codex')
@@ -1570,7 +1575,14 @@ describe('model provider settings', () => {
       }
     })
 
-    expect(resolved.modelProfiles['gpt-5.5']).toEqual(editedProfile)
+    expect(resolved.modelProfiles['gpt-5.5']).toMatchObject({
+      ...editedProfile,
+      reasoning: {
+        supportedEfforts: ['low', 'medium', 'high', 'max'],
+        defaultEffort: 'high',
+        requestProtocol: 'openai-responses'
+      }
+    })
   })
 
   it('resolves Xiaomi speech-to-text through provider speech capability', () => {
@@ -1982,7 +1994,7 @@ describe('multi-account provider presets', () => {
     expect(resolveKunRuntimeSettings(state)).toMatchObject({
       apiKey: 'sk-second',
       baseUrl: 'https://api.kimi.com/coding/v1',
-      model: 'kimi-for-coding'
+      model: 'k3'
     })
   })
 
@@ -2111,8 +2123,17 @@ describe('provider presets', () => {
       name: 'Kimi Code',
       baseUrl: 'https://api.kimi.com/coding/v1',
       endpointFormat: 'chat_completions',
-      models: ['kimi-for-coding'],
+      models: ['k3', 'kimi-for-coding', 'kimi-for-coding-highspeed'],
       modelProfiles: {
+        k3: expect.objectContaining({
+          supportsToolCalling: true,
+          inputModalities: ['text', 'image'],
+          reasoning: {
+            supportedEfforts: ['low', 'high', 'max'],
+            defaultEffort: 'high',
+            requestProtocol: 'openai-chat-completions'
+          }
+        }),
         'kimi-for-coding': expect.objectContaining({
           supportsToolCalling: true,
           inputModalities: ['text']
@@ -2221,6 +2242,109 @@ describe('provider presets', () => {
     })
     expect(resolved.modelProfiles['minimax-m3'].endpointFormat).toBe('messages')
     expect(resolved.modelProfiles['glm-5.1'].endpointFormat).toBeUndefined()
+  })
+
+  it('keeps current OpenCode Go GLM models reasoning-selectable', () => {
+    const preset = getModelProviderPreset('opencode-go')
+    expect(preset).not.toBeNull()
+    const profile = modelProviderPresetProfile(preset!, 'sk-opencode')
+
+    expect(profile.models).toContain('glm-5.2')
+    for (const modelId of ['glm-5.2', 'glm-5.1', 'glm-5']) {
+      expect(profile.modelProfiles[modelId]?.reasoning).toEqual({
+        supportedEfforts: ['off', 'high', 'max'],
+        defaultEffort: 'max',
+        requestProtocol: 'glm-chat-completions'
+      })
+    }
+  })
+
+  it('upgrades the obsolete generated single-auto GLM capability', () => {
+    const preset = getModelProviderPreset('opencode-go')!
+    const profile = modelProviderPresetProfile(preset, 'sk-opencode')
+    profile.modelProfiles['glm-5.2'] = {
+      ...profile.modelProfiles['glm-5.2']!,
+      reasoning: {
+        supportedEfforts: ['auto'],
+        defaultEffort: 'auto',
+        requestProtocol: 'none'
+      }
+    }
+
+    const normalized = normalizeModelProviderSettings({
+      providers: [profile]
+    }).providers.find((provider) => provider.id === 'opencode-go')
+
+    expect(normalized?.modelProfiles['glm-5.2']?.reasoning).toEqual({
+      supportedEfforts: ['off', 'high', 'max'],
+      defaultEffort: 'max',
+      requestProtocol: 'glm-chat-completions'
+    })
+  })
+
+  it('upgrades old placeholder reasoning protocols and the Kimi K3 transport', () => {
+    const aliyun = modelProviderPresetProfile(getModelProviderPreset('aliyun')!, 'sk-aliyun')
+    aliyun.modelProfiles['qwq-plus'] = {
+      ...aliyun.modelProfiles['qwq-plus']!,
+      reasoning: {
+        supportedEfforts: ['auto', 'off'],
+        defaultEffort: 'auto',
+        requestProtocol: 'none'
+      }
+    }
+    const kimi = modelProviderPresetProfile(getModelProviderPreset('kimi-code')!, 'sk-kimi')
+    kimi.modelProfiles.k3 = {
+      ...kimi.modelProfiles.k3!,
+      reasoning: {
+        supportedEfforts: ['off', 'low', 'medium', 'high', 'max'],
+        defaultEffort: 'high',
+        requestProtocol: 'openai-responses'
+      }
+    }
+
+    const normalized = normalizeModelProviderSettings({ providers: [aliyun, kimi] }).providers
+    expect(normalized.find((provider) => provider.id === 'aliyun')
+      ?.modelProfiles['qwq-plus']?.reasoning?.requestProtocol).toBe('qwen-chat-completions')
+    expect(normalized.find((provider) => provider.id === 'kimi-code')
+      ?.modelProfiles.k3?.reasoning).toEqual({
+        supportedEfforts: ['low', 'high', 'max'],
+        defaultEffort: 'high',
+        requestProtocol: 'openai-chat-completions'
+      })
+  })
+
+  it('adds K3 when normalizing the legacy Kimi Code model catalog', () => {
+    const normalized = normalizeModelProviderSettings({
+      providers: [{
+        ...modelProviderPresetProfile(getModelProviderPreset('kimi-code')!, 'sk-kimi'),
+        models: ['kimi-for-coding', 'kimi-for-coding-highspeed']
+      }]
+    }).providers.find((provider) => provider.id === 'kimi-code')
+
+    expect(normalized?.models).toEqual(['k3', 'kimi-for-coding', 'kimi-for-coding-highspeed'])
+    expect(normalized?.modelProfiles.k3?.reasoning?.requestProtocol)
+      .toBe('openai-chat-completions')
+  })
+
+  it.each([
+    ['claude-subscription', 'claude-sonnet-4-6', 'anthropic-thinking'],
+    ['kimi-code', 'k3', 'openai-chat-completions'],
+    ['volcengine-coding-plan', 'doubao-seed-1-6-250615', 'thinking-toggle-chat-completions'],
+    ['xiaomi', 'mimo-v2.5-pro', 'mimo-chat-completions'],
+    ['minimax', 'MiniMax-M3', 'anthropic-thinking'],
+    ['aliyun', 'qwq-plus', 'qwen-chat-completions'],
+    ['tencentcloud', 'hunyuan-t1-latest', 'thinking-toggle-chat-completions'],
+    ['codex', 'gpt-5.6-luna', 'openai-responses'],
+    ['grok-subscription', 'grok-4.5', 'openai-responses']
+  ])('publishes the audited %s/%s reasoning protocol', (
+    presetId,
+    model,
+    requestProtocol
+  ) => {
+    const preset = getModelProviderPreset(presetId)
+    expect(preset).not.toBeNull()
+    expect(modelProviderPresetProfile(preset!).modelProfiles[model]?.reasoning?.requestProtocol)
+      .toBe(requestProtocol)
   })
 
   it('keeps OpenCode Go DeepSeek v4 profiles aligned with DeepSeek defaults (#658)', () => {

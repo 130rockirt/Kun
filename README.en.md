@@ -162,7 +162,7 @@ Requirements:
 
 | Dependency | Version |
 | --- | --- |
-| Node.js | 20+ |
+| Node.js | 22.19+ |
 | npm | Ships with Node.js |
 | Model credentials | At least one of DeepSeek / Xiaomi MiMo / MiniMax / custom provider |
 
@@ -205,6 +205,7 @@ npm install --registry=https://registry.npmmirror.com
 | --- | --- |
 | [docs/extensions/README.en.md](docs/extensions/README.en.md) | Kun Extension platform: workbench apps, Agent runs, tools, custom model providers, accounts, packaging, and compatibility |
 | [kun/README.md](kun/README.md) | Kun runtime, CLI, environment variables, HTTP API |
+| [docs/kun-tui.en.md](docs/kun-tui.en.md) | Inline pi-tui client launched with bare `kun` and designed to coexist with the GUI |
 | [docs/kun-architecture.en.md](docs/kun-architecture.en.md) | Runtime architecture and GUI integration |
 | [docs/kun-cache-optimization.en.md](docs/kun-cache-optimization.en.md) | Cache optimization and token economy |
 | [docs/DESIGN_MODE.md](docs/DESIGN_MODE.md) | Design mode, canvas, prototypes, design systems, and the Design -> Code loop |

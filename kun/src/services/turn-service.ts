@@ -222,6 +222,7 @@ export class TurnService {
             workspaceCheckpointId: input.request.workspaceCheckpointId
           })
           const controller = new AbortController()
+          const startedTurn = startTurnRecord(appendTurnItem(turn, userItem))
           const next = {
             ...touchThread(thread, this.deps.nowIso()),
             status: 'running' as const,
@@ -231,13 +232,13 @@ export class TurnService {
             ...(input.request.sandboxMode !== undefined
               ? { sandboxMode: input.request.sandboxMode }
               : {}),
-            turns: [...thread.turns, startTurnRecord(appendTurnItem(turn, userItem))]
+            turns: [...thread.turns, startedTurn]
           }
           await this.deps.threadStore.upsert({ ...next, updatedAt: this.deps.nowIso() })
           await this.deps.sessionStore.appendItem(input.threadId, userItem)
           this.inflightTurns.set(turnId, controller)
           this.deps.inflight.begin({ id: turnId, kind: 'model', threadId: input.threadId, turnId })
-          return { turnId, userItem }
+          return { turnId, userItem, turn: startedTurn }
         } catch (error) {
           // A failed start has no loop to perform lifecycle cleanup. Release
           // its slot immediately; the outer catch best-effort marks any
@@ -249,7 +250,12 @@ export class TurnService {
       await this.deps.events.record({
         kind: 'turn_started',
         threadId: input.threadId,
-        turnId: started.turnId
+        turnId: started.turnId,
+        ...(started.turn.model ? { model: started.turn.model } : {}),
+        ...(started.turn.providerId ? { providerId: started.turn.providerId } : {}),
+        ...(started.turn.accountId ? { accountId: started.turn.accountId } : {}),
+        ...(input.request.reasoningEffort ? { reasoningEffort: input.request.reasoningEffort } : {}),
+        ...(started.turn.mode ? { mode: started.turn.mode } : {})
       })
       await this.deps.events.record({
         kind: 'item_created',
