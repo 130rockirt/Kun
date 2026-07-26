@@ -18,13 +18,17 @@ import {
   type ModelProviderProfileV1
 } from '@shared/app-settings'
 import type {
+  AntigravitySubscriptionModelCatalog,
   ClaudeSubscriptionProbeResult,
   CursorSubscriptionModel,
   ModelsDevCatalogResult,
   ModelProviderProbeResult
 } from '@shared/kun-gui-api'
 import { AgentsSettingsSection, modelProvidersSettingsPatch } from './settings-section-agents'
-import { ProvidersSettingsSection } from './settings-section-providers'
+import {
+  ProvidersSettingsSection,
+  antigravityProviderCatalogPatch
+} from './settings-section-providers'
 
 const labels: Record<string, string> = {
   agentsQuickBase: 'Base',
@@ -77,6 +81,9 @@ const labels: Record<string, string> = {
   modelProviderIdentityHint: 'Manage the provider ID under Advanced.',
   modelProviderSectionBasics: 'Provider basics',
   modelProviderSectionConnection: 'Provider connection',
+  geminiCliReady: 'Antigravity CLI is ready',
+  geminiSyncModels: 'Sync Antigravity models',
+  geminiModelsSynced: 'Synced {{count}} Antigravity models.',
   modelProviderSectionDanger: 'Danger zone',
   modelProviderTestConnection: 'Test connection',
   modelProviderTesting: 'Testing connection…',
@@ -744,6 +751,25 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
   })
 
   describe('provider settings workspace', () => {
+    const antigravityCatalog: AntigravitySubscriptionModelCatalog = {
+      models: [
+        {
+          id: 'gemini-3.6-flash',
+          supportedEfforts: ['low', 'medium', 'high'],
+          defaultEffort: 'medium'
+        },
+        {
+          id: 'claude-sonnet-4-6',
+          supportedEfforts: ['medium'],
+          defaultEffort: 'medium'
+        },
+        {
+          id: 'gpt-oss-120b',
+          supportedEfforts: ['medium'],
+          defaultEffort: 'medium'
+        }
+      ]
+    }
     const probeModelProvider = vi.fn(async (): Promise<ModelProviderProbeResult> => ({
       ok: true as const,
       latencyMs: 18,
@@ -795,6 +821,11 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       'gemini-2.5-pro',
       'gemini-2.5-flash'
     ])
+    const geminiSubscriptionCliStatus = vi.fn(async () => ({
+      installed: true,
+      path: '/Applications/Kun.app/Contents/Resources/agy'
+    }))
+    const geminiSubscriptionModels = vi.fn(async () => antigravityCatalog)
     const cursorSubscriptionDiscover = vi.fn(async (): Promise<{
       account: {
         apiKeyName: string
@@ -819,6 +850,8 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       claudeSubscriptionProbe.mockResolvedValue({ ok: true, latencyMs: 23 })
       geminiCliSubscriptionStatus.mockClear()
       geminiCliSubscriptionModels.mockClear()
+      geminiSubscriptionCliStatus.mockClear()
+      geminiSubscriptionModels.mockClear()
       cursorSubscriptionDiscover.mockReset()
       cursorSubscriptionDiscover.mockResolvedValue({
         account: { apiKeyName: 'test-key', userEmail: 'cursor@example.com' },
@@ -833,6 +866,9 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
           cursorSubscriptionDiscover,
           geminiCliSubscriptionStatus,
           geminiCliSubscriptionModels,
+          geminiSubscriptionCliStatus,
+          geminiSubscriptionModels,
+          onGeminiSubscriptionCliProgress: vi.fn(() => () => undefined),
           openExternal,
           claudeSubscriptionStatus,
           claudeSubscriptionProbe,
@@ -919,6 +955,142 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       await act(async () => findButton(renderer, 'Models').props.onClick())
       expect(rendererText(renderer)).toContain('gemini-3-flash-preview')
       expect(rendererText(renderer)).not.toContain('gemini-3.6-flash')
+    })
+
+    it('maps the authoritative Antigravity catalog to model-specific reasoning profiles', () => {
+      const patch = antigravityProviderCatalogPatch(antigravityCatalog)
+
+      expect(patch.models).toEqual([
+        'gemini-3.6-flash',
+        'claude-sonnet-4-6',
+        'gpt-oss-120b'
+      ])
+      expect(patch.modelProfiles['gemini-3.6-flash']).toMatchObject({
+        inputModalities: ['text', 'image'],
+        reasoning: {
+          supportedEfforts: ['low', 'medium', 'high'],
+          defaultEffort: 'medium',
+          requestProtocol: 'none'
+        }
+      })
+      expect(patch.modelProfiles['claude-sonnet-4-6'].inputModalities).toEqual(['text', 'image'])
+      expect(patch.modelProfiles['gpt-oss-120b']).toMatchObject({
+        inputModalities: ['text'],
+        reasoning: {
+          supportedEfforts: ['medium'],
+          defaultEffort: 'medium'
+        }
+      })
+    })
+
+    it('synchronizes all Antigravity model families and profiles into provider settings', async () => {
+      const settings = defaultModelProviderSettings()
+      const antigravity = modelProviderPresetProfile(
+        getModelProviderPreset('gemini-subscription')!,
+        ''
+      )
+      const update = vi.fn()
+      const renderer = await mountProviders({
+        ...baseCtx(),
+        update,
+        provider: { ...settings, providers: [...settings.providers, antigravity] },
+        kun: {
+          ...defaultKunRuntimeSettings(),
+          providerId: antigravity.id,
+          model: 'gemini-3.6-flash'
+        }
+      })
+      await act(async () => {
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+
+      await act(async () => findButton(renderer, 'Sync Antigravity models').props.onClick())
+
+      expect(geminiSubscriptionModels).toHaveBeenCalledOnce()
+      const lastPatch = update.mock.calls.at(-1)?.[0] as {
+        provider?: { providers?: ModelProviderProfileV1[] }
+      }
+      const saved = lastPatch.provider?.providers?.find((provider) => provider.id === antigravity.id)
+      expect(saved?.models).toEqual([
+        'gemini-3.6-flash',
+        'claude-sonnet-4-6',
+        'gpt-oss-120b'
+      ])
+      expect(saved?.modelProfiles['claude-sonnet-4-6']?.reasoning?.supportedEfforts)
+        .toEqual(['medium'])
+      expect(saved?.modelProfiles['gpt-oss-120b']?.reasoning?.supportedEfforts)
+        .toEqual(['medium'])
+    })
+
+    it('preserves Antigravity discovery profiles through the model import flow', async () => {
+      fetchModelsDevCatalog.mockResolvedValueOnce({
+        status: 'ok',
+        providerKey: 'google',
+        providerName: 'Google',
+        matchMode: 'enrichment-only',
+        stale: false,
+        models: [
+          {
+            id: 'gemini-3.6-flash',
+            inputModalities: ['text', 'image'],
+            outputModalities: ['text'],
+            contextWindowTokens: 1_048_576,
+            toolCalling: true
+          },
+          {
+            id: 'claude-sonnet-4-6',
+            inputModalities: ['text', 'image'],
+            outputModalities: ['text'],
+            contextWindowTokens: 200_000,
+            toolCalling: true
+          }
+        ]
+      })
+      const settings = defaultModelProviderSettings()
+      const antigravity = modelProviderPresetProfile(
+        getModelProviderPreset('gemini-subscription')!,
+        ''
+      )
+      const update = vi.fn()
+      const renderer = await mountProviders({
+        ...baseCtx(),
+        update,
+        provider: { ...settings, providers: [...settings.providers, antigravity] },
+        kun: {
+          ...defaultKunRuntimeSettings(),
+          providerId: antigravity.id,
+          model: 'gemini-3.6-flash'
+        }
+      })
+
+      await clickProviderTab(renderer, 'Models')
+      await act(async () => {
+        findButton(renderer, 'Fetch models').props.onClick()
+        await Promise.resolve()
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+      expect(findButton(renderer, 'Import 3').props.disabled).toBe(false)
+      await act(async () => findButton(renderer, 'Import 3').props.onClick())
+
+      const updatedProviders = update.mock.calls[0]?.[0]?.provider?.providers as ModelProviderProfileV1[]
+      const saved = updatedProviders.find((provider) => provider.id === antigravity.id)
+      expect(saved?.models).toEqual([
+        'gemini-3.6-flash',
+        'claude-sonnet-4-6',
+        'gpt-oss-120b'
+      ])
+      expect(saved?.modelProfiles['gemini-3.6-flash']).toMatchObject({
+        contextWindowTokens: 1_048_576,
+        reasoning: {
+          supportedEfforts: ['low', 'medium', 'high'],
+          defaultEffort: 'medium'
+        }
+      })
+      expect(saved?.modelProfiles['claude-sonnet-4-6']?.reasoning?.supportedEfforts)
+        .toEqual(['medium'])
+      expect(saved?.modelProfiles['claude-sonnet-4-6']?.contextWindowTokens).toBe(200_000)
     })
 
     it('turns a stale Cursor discovery handler error into restart guidance', async () => {

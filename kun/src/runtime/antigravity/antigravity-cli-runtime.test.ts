@@ -18,11 +18,90 @@ import {
 } from './antigravity-cli-runtime.js'
 
 describe('AntigravityCliRuntime', () => {
-  it('passes base model ids and supported effort values to agy', () => {
+  it('passes safe mixed-family base model ids and supported effort values to agy', () => {
     expect(normalizeAntigravityModel('gemini-3.6-flash-high')).toBe('gemini-3.6-flash')
     expect(normalizeAntigravityModel('models/gemini-3.5-flash')).toBe('gemini-3.5-flash')
+    expect(normalizeAntigravityModel('claude-sonnet-4-6')).toBe('claude-sonnet-4-6')
+    expect(normalizeAntigravityModel('gpt-oss-120b-medium')).toBe('gpt-oss-120b')
+    expect(() => normalizeAntigravityModel('../unsafe')).toThrow('Invalid Antigravity model id')
     expect(normalizeAntigravityEffort('max')).toBe('high')
     expect(normalizeAntigravityEffort('off')).toBe('medium')
+
+    expect(buildAntigravityArgs({
+      prompt: 'inspect',
+      model: 'claude-opus-4-6-thinking',
+      effort: 'high',
+      timeoutMs: 60_000,
+      planMode: true,
+      approvalPolicy: 'auto',
+      sandboxMode: 'workspace-write'
+    })).toEqual(expect.arrayContaining([
+      '--model',
+      'claude-opus-4-6-thinking',
+      '--effort',
+      'high'
+    ]))
+  })
+
+  it('fails an invalid persisted model before launching the CLI', async () => {
+    const threadStore = new InMemoryThreadStore()
+    const sessionStore = new InMemorySessionStore()
+    const turn = TurnSchema.parse({
+      id: 'turn-invalid-model',
+      threadId: 'thread-invalid-model',
+      status: 'running',
+      prompt: 'hello',
+      model: '../unsafe',
+      createdAt: '2026-07-23T00:00:00.000Z'
+    })
+    await threadStore.upsert({
+      ...createThreadRecord({
+        id: turn.threadId,
+        title: 'Invalid model',
+        workspace: '/tmp',
+        model: '../unsafe',
+        providerId: 'gemini-subscription',
+        status: 'running'
+      }),
+      turns: [turn]
+    })
+    await sessionStore.appendItem(
+      turn.threadId,
+      makeUserItem({
+        id: 'item-user',
+        threadId: turn.threadId,
+        turnId: turn.id,
+        text: 'hello'
+      })
+    )
+    const finishTurn = vi.fn(async () => undefined)
+    const spawnFn = vi.fn()
+    const runtime = new AntigravityCliRuntime({
+      providerConfigs: {},
+      providerIds: new Set(['gemini-subscription']),
+      defaultIsAntigravity: false,
+      threadStore,
+      sessionStore,
+      turns: {
+        applyItem: vi.fn(async () => undefined),
+        finishTurn
+      } as unknown as TurnService,
+      events: { record: vi.fn(async () => undefined) } as unknown as RuntimeEventRecorder,
+      ids: { next: () => 'item-assistant' },
+      spawnFn: spawnFn as unknown as typeof spawn
+    })
+
+    await expect(runtime.runTurn(
+      turn.threadId,
+      turn.id,
+      new AbortController().signal,
+      'gemini-subscription'
+    )).resolves.toBe('failed')
+    expect(spawnFn).not.toHaveBeenCalled()
+    expect(finishTurn).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'failed',
+      error: expect.stringContaining('Invalid Antigravity model id')
+    }))
   })
 
   it('keeps read-only turns in plan+sandbox mode', () => {

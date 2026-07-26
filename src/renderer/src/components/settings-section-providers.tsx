@@ -55,6 +55,7 @@ import type {
   ModelProviderSubscriptionRegion
 } from '@shared/model-provider-presets'
 import type {
+  AntigravitySubscriptionModelCatalog,
   CursorSubscriptionModel,
   ModelsDevCatalogResult,
   ModelProviderProbeResult
@@ -141,6 +142,37 @@ const VIDEO_GENERATION_PROTOCOL_LABEL_KEYS: Record<VideoGenerationProtocol, stri
 type ProviderTaskTab = 'connection' | 'models' | 'capabilities' | 'advanced'
 type ProviderCapability = 'image' | 'speech' | 'tts' | 'music' | 'video'
 type SubscriptionRegionFilter = 'all' | ModelProviderSubscriptionRegion
+
+export function antigravityProviderCatalogPatch(
+  catalog: AntigravitySubscriptionModelCatalog,
+  existingProfiles: Readonly<Record<string, ModelProviderModelProfileV1>> = {}
+): Pick<ModelProviderProfileV1, 'models' | 'modelProfiles'> {
+  const models = catalog.models.map((model) => model.id)
+  const modelProfiles = Object.fromEntries(catalog.models.map((model) => {
+    const existing = existingProfiles[model.id]
+    const supportsImageInput = /^(?:gemini|claude)-/i.test(model.id)
+    return [
+      model.id,
+      {
+        ...existing,
+        inputModalities: existing?.inputModalities ?? (
+          supportsImageInput ? ['text', 'image'] : ['text']
+        ),
+        outputModalities: existing?.outputModalities ?? ['text'],
+        supportsToolCalling: existing?.supportsToolCalling ?? true,
+        messageParts: existing?.messageParts ?? (
+          supportsImageInput ? ['text', 'image_url'] : ['text']
+        ),
+        reasoning: {
+          supportedEfforts: [...model.supportedEfforts],
+          defaultEffort: model.defaultEffort,
+          requestProtocol: 'none'
+        }
+      } satisfies ModelProviderModelProfileV1
+    ]
+  }))
+  return { models, modelProfiles }
+}
 
 const PROVIDER_TASK_TABS: Array<{ id: ProviderTaskTab; labelKey: string }> = [
   { id: 'connection', labelKey: 'modelProviderTabConnection' },
@@ -887,7 +919,7 @@ function GeminiSubscriptionSection({
   onModelsChange,
   t
 }: {
-  onModelsChange: (models: string[]) => void
+  onModelsChange: (catalog: AntigravitySubscriptionModelCatalog) => void
   t: (key: string, params?: Record<string, unknown>) => string
 }): ReactElement {
   const [state, setState] = useState<GeminiCliState>('checking')
@@ -962,11 +994,11 @@ function GeminiSubscriptionSection({
     setState('syncing')
     setNotice(null)
     try {
-      const models = await window.kunGui.geminiSubscriptionModels()
-      onModelsChange(models)
+      const catalog = await window.kunGui.geminiSubscriptionModels()
+      onModelsChange(catalog)
       setNotice({
         tone: 'success',
-        message: t('geminiModelsSynced', { count: models.length })
+        message: t('geminiModelsSynced', { count: catalog.models.length })
       })
     } catch (error) {
       setNotice({
@@ -1495,6 +1527,7 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
         providerId: string
         providerModelIds: string[]
         modelAliases?: Record<string, string[]>
+        discoveredModelProfiles?: Record<string, ModelProviderModelProfileV1>
         catalogResult: ModelsDevCatalogResult
         providerError?: string
         authoritative?: boolean
@@ -2025,6 +2058,7 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
     fingerprint: string
     providerModelIds: string[]
     modelAliases?: Record<string, string[]>
+    discoveredModelProfiles?: Record<string, ModelProviderModelProfileV1>
     catalogResult: ModelsDevCatalogResult
     providerError?: string
     latencyMs?: number
@@ -2068,6 +2102,9 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
       providerId: input.target.id,
       providerModelIds: input.providerModelIds,
       ...(input.modelAliases ? { modelAliases: input.modelAliases } : {}),
+      ...(input.discoveredModelProfiles
+        ? { discoveredModelProfiles: input.discoveredModelProfiles }
+        : {}),
       catalogResult: input.catalogResult,
       ...(input.providerError ? { providerError: input.providerError } : {}),
       ...(input.authoritative ? { authoritative: true } : {})
@@ -2166,18 +2203,26 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
       }))
       const [providerResult, catalogResult] = await Promise.all([
         window.kunGui.geminiSubscriptionModels()
-          .then((modelIds) => ({ modelIds, error: undefined as string | undefined }))
+          .then((catalog) => ({
+            catalog,
+            error: undefined as string | undefined
+          }))
           .catch((error: unknown) => ({
-            modelIds: [] as string[],
+            catalog: { models: [] } satisfies AntigravitySubscriptionModelCatalog,
             error: error instanceof Error ? error.message : String(error)
           })),
         fetchModelsDevCatalogFor(target)
       ])
+      const providerPatch = antigravityProviderCatalogPatch(
+        providerResult.catalog,
+        target.modelProfiles
+      )
       if (mode === 'fetch') {
         openModelImport({
           target,
           fingerprint,
-          providerModelIds: providerResult.modelIds,
+          providerModelIds: providerPatch.models,
+          discoveredModelProfiles: providerPatch.modelProfiles,
           catalogResult,
           providerError: providerResult.error,
           latencyMs: 0,
@@ -2189,7 +2234,7 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
         ...previous,
         [target.id]: providerResult.error
           ? { fingerprint, mode, status: 'error', message: providerResult.error }
-          : { fingerprint, mode, status: 'ok', latencyMs: 0, total: providerResult.modelIds.length }
+          : { fingerprint, mode, status: 'ok', latencyMs: 0, total: providerPatch.models.length }
       }))
       return
     }
@@ -2376,7 +2421,8 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
     target: ModelProviderProfileV1,
     picked: ProviderModelImportResult,
     authoritative = false,
-    modelAliases: Readonly<Record<string, readonly string[]>> = {}
+    modelAliases: Readonly<Record<string, readonly string[]>> = {},
+    discoveredModelProfiles: Readonly<Record<string, ModelProviderModelProfileV1>> = {}
   ): void => {
     const nextChatModels = authoritative
       ? [...picked.chat]
@@ -2396,7 +2442,7 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
     const nextVideoModels = target.video
       ? mergeProviderModelIds(target.video.models, picked.video)
       : picked.video
-    const nextModelProfiles = isCursorSubscriptionProvider(target)
+    const enrichedModelProfiles = isCursorSubscriptionProvider(target)
       ? enrichCursorProviderModelProfiles(
           target,
           nextChatModels,
@@ -2409,6 +2455,16 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
           picked.catalogModels,
           modelAliases
         )
+    const nextModelProfiles = Object.keys(discoveredModelProfiles).length > 0
+      ? Object.fromEntries(nextChatModels.flatMap((modelId) => {
+          const discoveredProfile = discoveredModelProfiles[modelId]
+          const enrichedProfile = enrichedModelProfiles[modelId]
+          const profile = discoveredProfile
+            ? { ...enrichedProfile, ...discoveredProfile }
+            : enrichedProfile
+          return profile ? [[modelId, profile]] : []
+        }))
+      : enrichedModelProfiles
     const added =
       addedModelCount(target.models, nextChatModels)
       + addedModelCount(target.image?.models ?? [], nextImageModels)
@@ -2867,7 +2923,10 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                     />
                   ) : isGeminiSubscriptionProvider(activeProvider) ? (
                     <GeminiSubscriptionSection
-                      onModelsChange={(models) => updateModelProvider(activeProvider.id, { models })}
+                      onModelsChange={(catalog) => updateModelProvider(
+                        activeProvider.id,
+                        antigravityProviderCatalogPatch(catalog, activeProvider.modelProfiles)
+                      )}
                       t={t}
                     />
                   ) : isGeminiCliApiSubscriptionProvider(activeProvider) ? (
@@ -3785,7 +3844,8 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
             pendingImportProvider,
             picked,
             pendingImport.authoritative,
-            pendingImport.modelAliases
+            pendingImport.modelAliases,
+            pendingImport.discoveredModelProfiles
           )
           setPendingImport(null)
         }}

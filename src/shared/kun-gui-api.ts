@@ -6,6 +6,7 @@ import type {
   ClawRuntimeStatus,
   ModelEndpointFormat,
   ModelProviderModelProfileV1,
+  ModelReasoningEffort,
   ScheduleRunResult,
   ScheduleRuntimeStatus,
   ScheduleTaskFromTextResult,
@@ -532,6 +533,16 @@ export type SdkDownloadState = {
   message?: string
 }
 
+export type AntigravityReasoningEffort = Extract<ModelReasoningEffort, 'low' | 'medium' | 'high'>
+export type AntigravitySubscriptionModel = {
+  id: string
+  supportedEfforts: AntigravityReasoningEffort[]
+  defaultEffort: AntigravityReasoningEffort
+}
+export type AntigravitySubscriptionModelCatalog = {
+  models: AntigravitySubscriptionModel[]
+}
+
 export const UNREADABLE_CREDENTIAL_KEY_ERROR_CODE = 'credential_key_unreadable'
 
 export type CredentialRecoveryResetResult =
@@ -599,8 +610,8 @@ export type KunGuiApi = ExtensionIpcApi & {
   geminiSubscriptionCliInstall: () => Promise<SdkDownloadState>
   /** Subscribe to Antigravity CLI download progress. */
   onGeminiSubscriptionCliProgress: (handler: (state: SdkDownloadState) => void) => () => void
-  /** Gemini models exposed by the user's current `agy` subscription login. */
-  geminiSubscriptionModels: () => Promise<string[]>
+  /** Models and reasoning efforts exposed by the user's current `agy` subscription login. */
+  geminiSubscriptionModels: () => Promise<AntigravitySubscriptionModelCatalog>
   /** Detect the official Gemini CLI binary and its local Google OAuth login. */
   geminiCliSubscriptionStatus: () => Promise<{
     installed: boolean

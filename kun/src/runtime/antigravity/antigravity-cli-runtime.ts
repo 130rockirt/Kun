@@ -32,9 +32,10 @@ import {
   type DelegatedSessionCoordinator
 } from '../delegated-session-binding.js'
 
-const DEFAULT_MODEL = 'gemini-3.6-flash'
 const MAX_STDOUT_BYTES = 8 * 1024 * 1024
 const MAX_STDERR_BYTES = 256 * 1024
+const ANTIGRAVITY_MODEL_ID_PATTERN = /^[a-z0-9]+(?:[.-][a-z0-9]+)+$/i
+const ANTIGRAVITY_MODEL_ID_MAX_LENGTH = 128
 
 export interface AntigravityCliRuntimeDeps {
   providerConfigs: Record<string, ServeProviderConfig>
@@ -64,9 +65,14 @@ export interface AntigravityCliRuntimeDeps {
 
 export function normalizeAntigravityModel(model: string | undefined): string {
   const normalized = model?.trim().replace(/^models\//, '').replace(/-(?:low|medium|high)$/i, '')
-  return normalized && /^gemini-[a-z0-9][a-z0-9.-]*$/i.test(normalized)
-    ? normalized
-    : DEFAULT_MODEL
+  if (
+    !normalized
+    || normalized.length > ANTIGRAVITY_MODEL_ID_MAX_LENGTH
+    || !ANTIGRAVITY_MODEL_ID_PATTERN.test(normalized)
+  ) {
+    throw new Error(`Invalid Antigravity model id: ${model?.trim() || '(empty)'}`)
+  }
+  return normalized
 }
 
 export function normalizeAntigravityEffort(
@@ -182,7 +188,18 @@ export class AntigravityCliRuntime implements DelegatedTurnRuntime {
     })
     const limits = normalizeTurnLimits(this.deps.turnLimits)
     const binaryPath = this.deps.binaryPath?.trim() || process.env.KUN_ANTIGRAVITY_BINARY?.trim() || 'agy'
-    const model = normalizeAntigravityModel(turn.model || thread.model || this.deps.defaultModel)
+    let model: string
+    try {
+      model = normalizeAntigravityModel(turn.model || thread.model || this.deps.defaultModel)
+    } catch (error) {
+      await this.deps.turns.finishTurn({
+        threadId,
+        turnId,
+        status: 'failed',
+        error: error instanceof Error ? error.message : String(error)
+      })
+      return 'failed'
+    }
     const effort = normalizeAntigravityEffort(turn.reasoningEffort)
     const planMode = this.deps.enforceReadOnly === true || (turn.mode ?? thread.mode) === 'plan'
     const sandboxMode = this.deps.enforceReadOnly === true ? 'read-only' : thread.sandboxMode
