@@ -17,6 +17,24 @@ export const KUN_RUNTIME_INFO_TEMPLATE = '/v1/runtime/info'
 export const KUN_RUNTIME_TOOLS_PATH = '/v1/runtime/tools'
 export const KUN_RUNTIME_TOOLS_TEMPLATE = '/v1/runtime/tools'
 
+export const KUN_MODEL_CONNECTIONS_PATH = '/v1/model-connections'
+export const KUN_MODEL_CONNECTIONS_TEMPLATE = '/v1/model-connections'
+export const KUN_MODEL_CONNECTION_EVENTS_TEMPLATE = '/v1/model-connections/events'
+export const KUN_MODEL_CONNECTION_CONNECT_TEMPLATE = '/v1/model-connections/connect'
+export const KUN_MODEL_CONNECTION_SELECT_TEMPLATE = '/v1/model-connections/select'
+export const KUN_MODEL_CONNECTION_OAUTH_START_TEMPLATE = '/v1/model-connections/oauth/start'
+export const KUN_MODEL_CONNECTION_OAUTH_TEMPLATE = '/v1/model-connections/oauth/{id}'
+export const KUN_MODEL_CONNECTION_OAUTH_SUBMIT_TEMPLATE =
+  '/v1/model-connections/oauth/{id}/submit'
+export const KUN_MODEL_CONNECTION_CLAUDE_SDK_TEMPLATE =
+  '/v1/model-connections/claude/sdk'
+export const KUN_MODEL_CONNECTION_CLAUDE_SDK_INSTALL_TEMPLATE =
+  '/v1/model-connections/claude/sdk/install'
+export const KUN_MODEL_CONNECTION_PROVIDER_TEMPLATE = '/v1/model-connections/{id}'
+export const KUN_MODEL_CONNECTION_CREDENTIAL_TEMPLATE =
+  '/v1/model-connections/{id}/credential'
+export const KUN_MODEL_CONNECTION_PROBE_TEMPLATE = '/v1/model-connections/{id}/probe'
+
 export const KUN_MODEL_ROUTES_PATH = '/v1/model-routes'
 export const KUN_MODEL_ROUTES_TEMPLATE = '/v1/model-routes'
 export const KUN_MODEL_ROUTE_TEST_TEMPLATE = '/v1/model-routes/{id}/test'

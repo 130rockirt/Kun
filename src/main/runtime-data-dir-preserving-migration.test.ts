@@ -11,7 +11,7 @@ import {
   utimes,
   writeFile
 } from 'node:fs/promises'
-import { writeFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -140,6 +140,58 @@ afterEach(async () => {
 })
 
 describe('history-preserving Kun Runtime migration', () => {
+  it('performs an empty cutover without creating a legacy compatibility link', async () => {
+    const test = await fixture()
+
+    const result = runCanonicalKunRuntimeDataMigration({
+      userDataPath: test.userData,
+      homeDir: test.home,
+      sleep: () => undefined
+    })
+
+    expect(result.status).toBe('completed')
+    expect((await lstat(test.current)).isDirectory()).toBe(true)
+    await expect(lstat(test.legacy)).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(await readSettingsDataDir(test.settingsPath)).toBe('~/.kun/data')
+    expect(JSON.parse(await readFile(result.journalPath, 'utf8')).provenance)
+      .toBe('no-legacy-source')
+  })
+
+  it('adopts the only existing current store without creating a legacy link', async () => {
+    const test = await fixture()
+    await writeThread(test.current, 'thr_current', 'current')
+
+    const result = runCanonicalKunRuntimeDataMigration({
+      userDataPath: test.userData,
+      homeDir: test.home,
+      sleep: () => undefined
+    })
+
+    expect(result.status).toBe('completed')
+    await expect(lstat(test.legacy)).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(await readFile(
+      join(test.current, 'threads', 'thr_current', 'metadata.jsonl'),
+      'utf8'
+    )).toContain('current')
+    expect(await readSettingsDataDir(test.settingsPath)).toBe('~/.kun/data')
+  })
+
+  it('does not mutate or block an explicitly selected current store when preserved history differs', async () => {
+    const test = await fixture('~/.kun/data')
+    await writeThread(test.legacy, 'thr_preserved_only', 'preserved')
+    await writeThread(test.current, 'thr_current_only', 'current')
+
+    const result = runCanonicalKunRuntimeDataMigration({
+      userDataPath: test.userData,
+      homeDir: test.home,
+      sleep: () => undefined
+    })
+
+    expect(result.status).toBe('completed')
+    expect((await readdir(join(test.legacy, 'threads')))).toEqual(['thr_preserved_only'])
+    expect((await readdir(join(test.current, 'threads')))).toEqual(['thr_current_only'])
+  })
+
   it('keeps the legacy store real and byte-independent after migration', async () => {
     const test = await fixture()
     await writeThread(test.legacy, 'thr_history', 'immutable history')
@@ -202,6 +254,33 @@ describe('history-preserving Kun Runtime migration', () => {
     expect(Math.trunc(targetMetadata.mtimeMs)).toBe(Math.trunc(sourceMetadata.mtimeMs))
   })
 
+  it('copies immutable package directories before restoring their read-only mode', async () => {
+    const test = await fixture()
+    const sourcePackage = join(test.legacy, 'extensions', 'acme.demo', '1.0.0')
+    const targetPackage = join(test.current, 'extensions', 'acme.demo', '1.0.0')
+    await mkdir(sourcePackage, { recursive: true })
+    const sourceLicense = join(sourcePackage, 'LICENSE')
+    const targetLicense = join(targetPackage, 'LICENSE')
+    await writeFile(sourceLicense, 'immutable package', 'utf8')
+    await chmod(sourceLicense, 0o444)
+    await chmod(sourcePackage, 0o555)
+
+    const result = runCanonicalKunRuntimeDataMigration({
+      userDataPath: test.userData,
+      homeDir: test.home,
+      sleep: () => undefined
+    })
+
+    expect(result.status).toBe('completed')
+    expect(await readFile(targetLicense, 'utf8')).toBe('immutable package')
+    expect((await stat(sourcePackage)).mode & 0o777).toBe(0o555)
+    expect((await stat(targetPackage)).mode & 0o777).toBe(0o555)
+    expect((await stat(sourceLicense)).mode & 0o777).toBe(0o444)
+    expect((await stat(targetLicense)).mode & 0o777).toBe(0o444)
+    await chmod(sourcePackage, 0o755)
+    await chmod(targetPackage, 0o755)
+  })
+
   it('rebases only the candidate extension registry', async () => {
     const test = await fixture()
     const sourceRaw = await writeLegacyExtensionRegistry(test.legacy)
@@ -243,6 +322,31 @@ describe('history-preserving Kun Runtime migration', () => {
     expect(result.status).toBe('blocked')
     expect(result.message).toContain('packagePath is outside the canonical migration roots')
     expect(await readFile(registryPath, 'utf8')).toBe(unexpectedRaw)
+    await expect(lstat(test.current)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('rejects a corrupted verified candidate before activation', async () => {
+    const test = await fixture()
+    await writeThread(test.legacy, 'thr_history', 'history')
+    await writeFile(join(test.legacy, 'config.json'), '{"valid":true}', 'utf8')
+
+    const result = runCanonicalKunRuntimeDataMigration({
+      userDataPath: test.userData,
+      homeDir: test.home,
+      sleep: () => undefined,
+      afterPreservationPhase: (phase) => {
+        if (phase !== 'candidate-rebased') return
+        const journal = JSON.parse(readFileSync(
+          join(test.userData, 'kun-runtime-data-migration-v3.json'),
+          'utf8'
+        ))
+        writeFileSync(join(journal.stagingPath, 'config.json'), '{', 'utf8')
+      }
+    })
+
+    expect(result.status).toBe('blocked')
+    expect(result.message).toContain('candidate config is not valid JSON')
+    expect(await readFile(join(test.legacy, 'config.json'), 'utf8')).toBe('{"valid":true}')
     await expect(lstat(test.current)).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
@@ -473,6 +577,57 @@ describe('history-preserving Kun Runtime migration', () => {
     )).toBe('')
   })
 
+  it('replaces an incomplete pre-cutover version-2 migration with a preserving copy', async () => {
+    const test = await fixture()
+    await writeThread(test.legacy, 'thr_history', 'history')
+    const v2Journal = completedV2Journal(test.legacy, test.current, ['thr_history'])
+    v2Journal.phase = 'prepared'
+    await writeFile(
+      join(test.userData, 'kun-runtime-data-migration-v2.json'),
+      `${JSON.stringify(v2Journal, null, 2)}\n`,
+      'utf8'
+    )
+
+    const result = runCanonicalKunRuntimeDataMigration({
+      userDataPath: test.userData,
+      homeDir: test.home,
+      sleep: () => undefined
+    })
+
+    expect(result.status).toBe('completed')
+    expect((await lstat(test.legacy)).isDirectory()).toBe(true)
+    expect(await readFile(
+      join(test.current, 'threads', 'thr_history', 'metadata.jsonl'),
+      'utf8'
+    )).toContain('history')
+    expect(JSON.parse(await readFile(result.journalPath, 'utf8')).provenance)
+      .toBe('original-legacy-source')
+  })
+
+  it('reconstructs history after version-2 already promoted the source but created no link', async () => {
+    const test = await fixture()
+    await writeThread(test.current, 'thr_history', 'history')
+    const v2Journal = completedV2Journal(test.legacy, test.current, ['thr_history'])
+    v2Journal.phase = 'source-promoted'
+    await writeFile(
+      join(test.userData, 'kun-runtime-data-migration-v2.json'),
+      `${JSON.stringify(v2Journal, null, 2)}\n`,
+      'utf8'
+    )
+
+    const result = runCanonicalKunRuntimeDataMigration({
+      userDataPath: test.userData,
+      homeDir: test.home,
+      sleep: () => undefined
+    })
+
+    expect(result.status).toBe('completed')
+    expect((await lstat(test.legacy)).isDirectory()).toBe(true)
+    const journal = JSON.parse(await readFile(result.journalPath, 'utf8'))
+    expect(journal.provenance).toBe('reconstructed-from-current')
+    expect(journal.compatibilityLinkBackupPath).toBeUndefined()
+  })
+
   it.each([
     'prepared',
     'settings-backed-up',
@@ -523,6 +678,41 @@ describe('history-preserving Kun Runtime migration', () => {
       )).toContain('history')
     }
   )
+
+  it('does not reconstruct version-2 history after the user selects a custom store', async () => {
+    const test = await fixture()
+    const customDataDir = join(test.root, 'custom-runtime')
+    await writeFile(
+      test.settingsPath,
+      JSON.stringify({ version: 1, agents: { kun: { dataDir: customDataDir } } }),
+      'utf8'
+    )
+    await mkdir(customDataDir, { recursive: true })
+    await writeThread(test.current, 'thr_history', 'history')
+    await mkdir(join(test.home, '.deepseekgui'), { recursive: true })
+    await symlink(test.current, test.legacy)
+    await writeFile(
+      join(test.userData, 'kun-runtime-data-migration-v2.json'),
+      `${JSON.stringify(completedV2Journal(
+        test.legacy,
+        test.current,
+        ['thr_history']
+      ), null, 2)}\n`,
+      'utf8'
+    )
+
+    const result = runCanonicalKunRuntimeDataMigration({
+      userDataPath: test.userData,
+      homeDir: test.home,
+      sleep: () => undefined
+    })
+
+    expect(result.status).toBe('not-needed')
+    expect(result.authority).toBe('custom')
+    expect((await lstat(test.legacy)).isSymbolicLink()).toBe(true)
+    await expect(lstat(join(test.userData, 'kun-runtime-data-migration-v3.json')))
+      .rejects.toMatchObject({ code: 'ENOENT' })
+  })
 
   it('blocks an affected version-2 profile when recorded history is missing', async () => {
     const test = await fixture('~/.kun/data')

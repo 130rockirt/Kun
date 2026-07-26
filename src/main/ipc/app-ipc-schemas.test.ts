@@ -101,6 +101,41 @@ describe('app-ipc-schemas', () => {
     expect(payload.path).toBe('/v1/runtime/tools')
   })
 
+  it('accepts only the modeled Kun model connection operations', () => {
+    for (const payload of [
+      { path: '/v1/model-connections', method: 'GET' },
+      { path: '/v1/model-connections', method: 'PATCH', body: '{}' },
+      { path: '/v1/model-connections/events?since_revision=1', method: 'GET' },
+      { path: '/v1/model-connections/connect', method: 'POST', body: '{}' },
+      { path: '/v1/model-connections/select', method: 'POST', body: '{}' },
+      { path: '/v1/model-connections/oauth/start', method: 'POST', body: '{}' },
+      { path: '/v1/model-connections/oauth/session_1', method: 'GET' },
+      { path: '/v1/model-connections/oauth/session_1', method: 'DELETE' },
+      {
+        path: '/v1/model-connections/oauth/session_1/submit',
+        method: 'POST',
+        body: '{}'
+      },
+      { path: '/v1/model-connections/claude/sdk', method: 'GET' },
+      { path: '/v1/model-connections/claude/sdk/install', method: 'POST', body: '{}' },
+      { path: '/v1/model-connections/provider-a', method: 'PATCH', body: '{}' },
+      { path: '/v1/model-connections/provider-a', method: 'DELETE' },
+      {
+        path: '/v1/model-connections/provider-a/credential',
+        method: 'PUT',
+        body: '{}'
+      },
+      { path: '/v1/model-connections/provider-a/credential', method: 'DELETE' },
+      { path: '/v1/model-connections/provider-a/probe', method: 'POST', body: '{}' }
+    ] as const) {
+      expect(runtimeRequestPayloadSchema.parse(payload).path).toBe(payload.path)
+    }
+    expect(() => runtimeRequestPayloadSchema.parse({
+      path: '/v1/model-connections/events',
+      method: 'DELETE'
+    })).toThrow(/runtime request path is not allowed/)
+  })
+
   it('accepts only the modeled Kun route diagnostics operations', () => {
     expect(runtimeRequestPayloadSchema.parse({
       path: '/v1/model-routes',

@@ -15,6 +15,7 @@ import {
   KUN_MEMORY_DIAGNOSTICS_PATH,
   KUN_MEMORY_PATH,
   KUN_MCP_OAUTH_PATH,
+  KUN_MODEL_CONNECTIONS_PATH,
   KUN_RUNTIME_INFO_PATH,
   KUN_RUNTIME_TOOLS_PATH,
   KUN_SKILLS_PATH,
@@ -126,7 +127,7 @@ async function sharedDefaultModelSelection(): Promise<{
     models: string[]
   }>
 }> {
-  const response = await rendererRuntimeClient.runtimeRequest('/v1/model-connections', 'GET')
+  const response = await rendererRuntimeClient.runtimeRequest(KUN_MODEL_CONNECTIONS_PATH, 'GET')
   if (!response.ok) return { registryAvailable: false }
   try {
     const value = JSON.parse(response.body) as {

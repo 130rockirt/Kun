@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect } from 'react'
 import { AppErrorBoundary } from './components/AppErrorBoundary'
 import { installIssue781DocumentUsability } from './lib/issue-781-document-usability'
 import { useChatStore } from './store/chat-store'
+import { KUN_MODEL_CONNECTIONS_PATH } from '@shared/kun-endpoints'
 
 const AppShell = lazy(() => import('./AppShell'))
 
@@ -22,8 +23,8 @@ function SharedModelConnectionsLifecycle(): null {
         const previousRevision = revision
         const result = await window.kunGui.runtimeRequest(
           revision === 0
-            ? '/v1/model-connections'
-            : `/v1/model-connections/events?since_revision=${revision}&wait_ms=25000`,
+            ? KUN_MODEL_CONNECTIONS_PATH
+            : `${KUN_MODEL_CONNECTIONS_PATH}/events?since_revision=${revision}&wait_ms=25000`,
           'GET'
         )
         if (!result.ok) throw new Error(`model connection sync failed (HTTP ${result.status})`)

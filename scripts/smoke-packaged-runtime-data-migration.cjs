@@ -2,7 +2,7 @@
 
 'use strict'
 
-const { spawn } = require('node:child_process')
+const { spawn, spawnSync } = require('node:child_process')
 const { existsSync } = require('node:fs')
 const {
   lstat,
@@ -140,6 +140,7 @@ async function main() {
   })
 
   let desktopProcess
+  let electedRuntimeConnection
   let output = ''
   let primaryError
   const cleanupErrors = []
@@ -159,9 +160,11 @@ async function main() {
     desktopProcess.once('error', (error) => appendOutput(`\nlaunch error: ${String(error)}\n`))
 
     const threads = await waitForMigratedHistory({
-      port: runtimePort,
-      token: RUNTIME_TOKEN,
+      dataDir: currentDataDir,
       timeoutMs,
+      onConnection: (connection) => {
+        electedRuntimeConnection = connection
+      },
       processState: () => processState(desktopProcess)
     })
     assertThreadIds(threads, [LEGACY_THREAD_ID, DISPLACED_THREAD_ID])
@@ -194,6 +197,12 @@ async function main() {
         timeoutMs: 15_000,
         ports: [runtimePort]
       }).catch((error) => cleanupErrors.push(error))
+    }
+    const latestRuntimeConnection = await readRuntimeConnection(currentDataDir)
+      .catch(() => electedRuntimeConnection)
+    if (latestRuntimeConnection) {
+      await stopElectedRuntime(latestRuntimeConnection, process.platform)
+        .catch((error) => cleanupErrors.push(error))
     }
     if (process.env.KUN_KEEP_PACKAGED_RUNTIME_MIGRATION_SMOKE === '1') {
       process.stderr.write(`Preserved packaged Runtime migration profile: ${temporaryRoot}\n`)
@@ -329,7 +338,99 @@ async function seedLegacyExtensionRegistry(dataDir) {
   return raw
 }
 
-async function waitForMigratedHistory({ port, token, timeoutMs, processState: readProcessState }) {
+function runtimeConnectionFromDocument(document) {
+  const port = document?.port
+  const pid = document?.pid
+  const token = document?.runtimeToken
+  const instanceId = document?.instanceId
+  if (!Number.isSafeInteger(port) || port < 1 || port > 65_535) {
+    throw new Error('shared Runtime discovery has an invalid port')
+  }
+  if (typeof token !== 'string' || !token) {
+    throw new Error('shared Runtime discovery has no bearer token')
+  }
+  if (typeof instanceId !== 'string' || !instanceId) {
+    throw new Error('shared Runtime discovery has no instance id')
+  }
+  if (!Number.isSafeInteger(pid) || pid <= 0) {
+    throw new Error('shared Runtime discovery has an invalid process id')
+  }
+  return { instanceId, pid, port, token }
+}
+
+async function readRuntimeConnection(dataDir) {
+  return runtimeConnectionFromDocument(JSON.parse(
+    await readFile(join(dataDir, 'runtime.json'), 'utf8')
+  ))
+}
+
+async function stopElectedRuntime(connection, platform) {
+  const { instanceId, pid, port, token } = connection
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/v1/runtime/shutdown`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${token}`,
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({ instanceId }),
+      signal: AbortSignal.timeout(5_000)
+    })
+    if (!response.ok) {
+      throw new Error(`shared Runtime shutdown returned ${response.status}`)
+    }
+  } catch {
+    if (!processIsAlive(pid)) return
+    // The isolated discovery record still gives us the exact elected PID.
+    // Continue with bounded process-tree cleanup if its HTTP shutdown path
+    // disappeared before returning a response.
+  }
+  if (await waitForProcessIdExit(pid, 3_000)) return
+  if (platform === 'win32') {
+    const result = spawnSync('taskkill', ['/pid', String(pid), '/t', '/f'], {
+      stdio: 'ignore',
+      timeout: 5_000,
+      windowsHide: true
+    })
+    if (result.error || result.status !== 0) {
+      throw new Error(`could not terminate elected shared Runtime PID ${pid}`)
+    }
+  } else {
+    try {
+      process.kill(-pid, 'SIGKILL')
+    } catch (error) {
+      if (processIsAlive(pid)) throw error
+    }
+  }
+  if (!await waitForProcessIdExit(pid, 5_000)) {
+    throw new Error(`elected shared Runtime PID ${pid} survived cleanup`)
+  }
+}
+
+function processIsAlive(pid) {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return error?.code === 'EPERM'
+  }
+}
+
+async function waitForProcessIdExit(pid, timeoutMs) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (!processIsAlive(pid)) return true
+    await delay(100)
+  }
+  return !processIsAlive(pid)
+}
+
+async function waitForMigratedHistory({
+  dataDir,
+  timeoutMs,
+  onConnection = () => undefined,
+  processState: readProcessState
+}) {
   const deadline = Date.now() + timeoutMs
   let lastFailure = 'Runtime has not answered yet'
   while (Date.now() < deadline) {
@@ -338,6 +439,9 @@ async function waitForMigratedHistory({ port, token, timeoutMs, processState: re
       throw new Error(`Packaged GUI exited before migration validation (${state})`)
     }
     try {
+      const connection = await readRuntimeConnection(dataDir)
+      onConnection(connection)
+      const { port, token } = connection
       const health = await fetch(`http://127.0.0.1:${port}/health`)
       if (health.ok) {
         const response = await fetch(
@@ -533,7 +637,8 @@ module.exports = {
   RUNTIME_TOKEN,
   assertThreadIds,
   packagedUpgradeSettings,
-  processState
+  processState,
+  runtimeConnectionFromDocument
 }
 
 if (require.main === module) {
