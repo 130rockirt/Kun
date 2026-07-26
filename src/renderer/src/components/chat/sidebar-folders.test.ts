@@ -178,6 +178,31 @@ describe('sidebar virtual folder registry', () => {
     ])
   })
 
+  it('renames promoted child folders when deletion would create sibling collisions', () => {
+    let registry = createSidebarFolder(
+      emptySidebarFolderRegistry(),
+      '/tmp/app',
+      { id: 'existing', name: 'Notes' }
+    )
+    registry = createSidebarFolder(
+      registry,
+      '/tmp/app',
+      { id: 'parent', name: 'Research' }
+    )
+    registry = createSidebarFolder(
+      registry,
+      '/tmp/app',
+      { id: 'child', name: 'notes', parentId: 'parent' }
+    )
+
+    registry = deleteSidebarFolder(registry, '/tmp/app', 'parent')
+
+    expect(sidebarFoldersForWorkspace(registry, '/tmp/app')).toEqual([
+      { id: 'existing', name: 'Notes', parentId: null, threadIds: [] },
+      { id: 'child', name: 'notes (2)', parentId: null, threadIds: [] }
+    ])
+  })
+
   it('repairs missing and cyclic parent references while preserving v1 folders', () => {
     expect(normalizeSidebarFolderRegistry({
       version: 1,

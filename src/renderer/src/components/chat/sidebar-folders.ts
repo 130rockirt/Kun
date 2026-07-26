@@ -40,6 +40,20 @@ function normalizeFolderName(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
 }
 
+function sidebarFolderNamesEqual(left: string, right: string): boolean {
+  return left.localeCompare(right, undefined, { sensitivity: 'accent' }) === 0
+}
+
+function uniqueSidebarFolderName(name: string, reservedNames: readonly string[]): string {
+  if (!reservedNames.some((reserved) => sidebarFolderNamesEqual(reserved, name))) return name
+  for (let ordinal = 2; ; ordinal += 1) {
+    const candidate = `${name} (${ordinal})`
+    if (!reservedNames.some((reserved) => sidebarFolderNamesEqual(reserved, candidate))) {
+      return candidate
+    }
+  }
+}
+
 function normalizeWorkspaceFolders(value: unknown): SidebarVirtualFolder[] {
   if (!Array.isArray(value)) return []
   const folderIds = new Set<string>()
@@ -172,7 +186,7 @@ export function createSidebarFolder(
       folders.some((item) =>
         item.id === id || (
           item.parentId === parentId
-          && item.name.localeCompare(name, undefined, { sensitivity: 'accent' }) === 0
+          && sidebarFolderNamesEqual(item.name, name)
         )
       )
     ) {
@@ -198,7 +212,7 @@ export function renameSidebarFolder(
       folders.some((item) =>
         item.id !== normalizedId
         && item.parentId === currentFolder.parentId
-        && item.name.localeCompare(normalizedName, undefined, { sensitivity: 'accent' }) === 0
+        && sidebarFolderNamesEqual(item.name, normalizedName)
       )
     ) {
       return folders
@@ -219,11 +233,21 @@ export function deleteSidebarFolder(
   return updateWorkspaceFolders(registry, workspacePath, (folders) => {
     const deleting = folders.find((folder) => folder.id === normalizedId)
     if (!deleting) return folders
+    const reservedNames = folders
+      .filter((folder) =>
+        folder.id !== normalizedId &&
+        folder.parentId === deleting.parentId &&
+        folder.parentId !== normalizedId
+      )
+      .map((folder) => folder.name)
     return folders
       .filter((folder) => folder.id !== normalizedId)
-      .map((folder) => folder.parentId === normalizedId
-        ? { ...folder, parentId: deleting.parentId }
-        : folder)
+      .map((folder) => {
+        if (folder.parentId !== normalizedId) return folder
+        const name = uniqueSidebarFolderName(folder.name, reservedNames)
+        reservedNames.push(name)
+        return { ...folder, name, parentId: deleting.parentId }
+      })
   })
 }
 
@@ -330,6 +354,6 @@ export function sidebarFolderNameExists(
   return folders.some((folder) =>
     folder.id !== excludingFolderId
     && folder.parentId === parentId
-    && folder.name.localeCompare(normalizedName, undefined, { sensitivity: 'accent' }) === 0
+    && sidebarFolderNamesEqual(folder.name, normalizedName)
   )
 }
