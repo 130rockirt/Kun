@@ -17,6 +17,7 @@ import {
 import { HooksConfigSchema } from '../../../kun/src/hooks/hook-config.js'
 import {
   AttachmentsCapabilityConfig,
+  BrowserUseCapabilityConfig,
   ComputerUseCapabilityConfig,
   ImageGenCapabilityConfig,
   InstructionsCapabilityConfig,
@@ -43,6 +44,7 @@ import {
   type ClawScheduleMcpLaunchConfig
 } from '../claw-schedule-mcp-config'
 import {
+  browserUseConfigForRuntime,
   computerUseConfigForRuntime,
   imageGenConfigForRuntime,
   musicGenConfigForRuntime,
@@ -174,6 +176,7 @@ export async function syncGuiManagedKunConfig(
       musicGen: musicGenConfigForRuntime(runtime.musicGeneration, objectValue(capabilities.musicGen)),
       videoGen: videoGenConfigForRuntime(runtime.videoGeneration, objectValue(capabilities.videoGen)),
       computerUse: computerUseConfigForRuntime(runtime.computerUse, objectValue(capabilities.computerUse)),
+      browserUse: browserUseConfigForRuntime(runtime.browserUse, objectValue(capabilities.browserUse)),
       memory: { ...objectValue(capabilities.memory), enabled: runtime.memoryEnabled },
       instructions: {
         ...objectValue(capabilities.instructions),
@@ -226,7 +229,7 @@ type KunRuntimeConfigSettings = Pick<KunRuntimeSettingsV1,
   'apiKey' | 'baseUrl' | 'endpointFormat' | 'model' | 'mcpSearch' | 'retry' |
   'tokenEconomy' | 'toolOutputLimits' | 'storage' | 'contextCompaction' |
   'runtimeTuning' | 'imageGeneration' | 'textToSpeech' | 'musicGeneration' |
-  'videoGeneration' | 'computerUse' | 'modelProfiles' | 'memoryEnabled' |
+  'videoGeneration' | 'computerUse' | 'browserUse' | 'modelProfiles' | 'memoryEnabled' |
   'instructions' | 'quality' | 'subagents' | 'smallModel' |
   'smallModelProviderId' | 'smallModelAccountId' |
   'titleModel' | 'titleProviderId' | 'titleAccountId' |
@@ -342,7 +345,8 @@ function sanitizeCapabilities(value: unknown): Record<string, unknown> {
     speechGen: SpeechGenCapabilityConfig,
     musicGen: MusicGenCapabilityConfig,
     videoGen: VideoGenCapabilityConfig,
-    computerUse: ComputerUseCapabilityConfig
+    computerUse: ComputerUseCapabilityConfig,
+    browserUse: BrowserUseCapabilityConfig
   }
   const next: Record<string, unknown> = {}
   for (const [key, schema] of Object.entries(schemas)) {

@@ -436,6 +436,30 @@ const api = {
   getComputerUsePermissions: () => ipcRenderer.invoke('computer-use:permissions'),
   requestComputerUsePermission: (kind) =>
     ipcRenderer.invoke('computer-use:request-permission', kind),
+  getBrowserUseState: (threadId) =>
+    ipcRenderer.invoke('browser-use:state:get', { threadId }),
+  mountBrowserUse: (input) =>
+    ipcRenderer.invoke('browser-use:mount', input),
+  decideBrowserUseOrigin: (input) =>
+    ipcRenderer.invoke('browser-use:origin:decide', input),
+  decideBrowserUseAction: (input) =>
+    ipcRenderer.invoke('browser-use:action:decide', input),
+  setBrowserUseControl: (input) =>
+    ipcRenderer.invoke('browser-use:control', input),
+  navigateBrowserUse: (input) =>
+    ipcRenderer.invoke('browser-use:navigate', input),
+  stopBrowserUse: (threadId) =>
+    ipcRenderer.invoke('browser-use:stop', { threadId }),
+  clearBrowserUse: (threadId) =>
+    ipcRenderer.invoke('browser-use:clear', { threadId }),
+  onBrowserUseState: (handler) => {
+    const wrapped = (
+      _: Electron.IpcRendererEvent,
+      payload: Parameters<typeof handler>[0]
+    ) => handler(payload)
+    ipcRenderer.on('browser-use:state', wrapped)
+    return () => ipcRenderer.removeListener('browser-use:state', wrapped)
+  },
   showTurnCompleteNotification: (payload) => ipcRenderer.invoke('notification:turn-complete', payload),
   getAppVersion: () => ipcRenderer.invoke('app:version'),
   getGuiUpdateState: () => ipcRenderer.invoke('gui:update-state'),

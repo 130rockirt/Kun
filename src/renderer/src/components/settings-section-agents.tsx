@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactElement, type ReactNode } from 'react'
 import type {
   AppSettingsV1,
+  KunBrowserUseSettingsV1,
   KunToolPermissionMode,
   ModelProviderProfileV1
 } from '@shared/app-settings'
@@ -17,6 +18,7 @@ import {
   MIN_KUN_LOCAL_PORT,
   WRITE_INLINE_COMPLETION_MODEL_IDS,
   defaultKunContextCompactionSettings,
+  defaultKunBrowserUseSettings,
   defaultModelProviderSettings,
   isKunRuntimeInsecure,
   kunToolPermissionModeFromSettings,
@@ -69,7 +71,11 @@ import {
   summarizeSkillPermissionSources,
   type TokenEconomySavingsState
 } from './settings-section-agents-utils'
-import { ComputerUseSettingsPanel, DesignQualitySettingsPanel } from './settings-section-agent-panels'
+import {
+  BrowserUseSettingsPanel,
+  ComputerUseSettingsPanel,
+  DesignQualitySettingsPanel
+} from './settings-section-agent-panels'
 
 export { modelProvidersSettingsPatch } from './settings-section-providers'
 
@@ -381,6 +387,7 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
     maxImageDimension: 1280,
     maxActionsPerTurn: 40
   }
+  const browserUse = kun.browserUse ?? defaultKunBrowserUseSettings()
   const instructions = kun.instructions ?? {
     enabled: true
   }
@@ -396,6 +403,14 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
     updateKun({
       computerUse: {
         ...computerUse,
+        ...patch
+      }
+    })
+  }
+  const updateBrowserUse = (patch: Partial<KunBrowserUseSettingsV1>): void => {
+    updateKun({
+      browserUse: {
+        ...browserUse,
         ...patch
       }
     })
@@ -800,6 +815,13 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
                 selectControlClass={selectControlClass}
                 permissionRow={<ComputerUsePermissionRow t={t} />}
                 onChange={updateComputerUse}
+              />
+
+              <BrowserUseSettingsPanel
+                t={t}
+                value={browserUse}
+                selectControlClass={selectControlClass}
+                onChange={updateBrowserUse}
               />
 
               <DesignQualitySettingsPanel

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { UsageSnapshot } from '../contracts/usage.js'
+import { redactBrowserUseActionForPersistence } from '../contracts/browser-use.js'
 import {
   MAX_MODEL_REQUEST_TRACE_PROVIDER_ID_LENGTH,
   MAX_MODEL_REQUEST_TRACE_PROVIDER_KIND_LENGTH,
@@ -275,7 +276,10 @@ export class LlmDebugRecorder implements LlmDebugSink {
   ): ModelRequestTraceRecord {
     const state = this.stateFor(round)
     const sanitizedUrl = sanitizeModelTraceUrl(meta.target)
-    const body = boundedModelTraceText(meta.bodyText, this.limits.maxRequestBodyBytes)
+    const body = boundedModelTraceText(
+      redactBrowserUseDebugContent(meta.bodyText),
+      this.limits.maxRequestBodyBytes
+    )
     const record: ModelRequestTraceRecord = {
       schemaVersion: MODEL_REQUEST_TRACE_SCHEMA_VERSION,
       id: randomUUID(),
@@ -381,6 +385,9 @@ export class LlmDebugRecorder implements LlmDebugSink {
 
   captureToolResult(round: LlmDebugRound, result: LlmDebugToolResult): void {
     const state = this.stateFor(round)
+    const safeOutput = result.toolName === 'browser_use'
+      ? redactBrowserUseDebugContent(result.output)
+      : result.output
     const base = {
       callId: result.callId,
       toolName: result.toolName,
@@ -388,7 +395,7 @@ export class LlmDebugRecorder implements LlmDebugSink {
       isError: result.isError
     }
     const available = Math.max(0, this.remainingOutputBytes(state) - jsonBytes(base))
-    const output = truncateJsonStringContent(result.output, available)
+    const output = truncateJsonStringContent(safeOutput, available)
     const retained = { ...base, output }
     const bytes = jsonBytes(retained)
     if (bytes <= this.remainingOutputBytes(state)) {
@@ -398,7 +405,7 @@ export class LlmDebugRecorder implements LlmDebugSink {
       markTruncated(round.output, 'toolResults')
       return
     }
-    if (output !== result.output) markTruncated(round.output, 'toolResults')
+    if (output !== safeOutput) markTruncated(round.output, 'toolResults')
   }
 
   async finish(round: LlmDebugRound): Promise<void> {
@@ -566,12 +573,18 @@ export class LlmDebugRecorder implements LlmDebugSink {
   }
 
   private captureToolCall(round: LlmDebugRound, state: CaptureState, call: LlmDebugToolCall): void {
-    const bytes = jsonBytes(call)
+    const safeCall = call.toolName === 'browser_use'
+      ? {
+          ...call,
+          arguments: redactBrowserUseActionForPersistence(call.arguments) as Record<string, unknown>
+        }
+      : call
+    const bytes = jsonBytes(safeCall)
     if (bytes > this.remainingOutputBytes(state)) {
       markTruncated(round.output, 'toolCalls')
       return
     }
-    round.output.toolCalls.push(call)
+    round.output.toolCalls.push(safeCall)
     state.outputBytes += bytes
   }
 
@@ -768,6 +781,84 @@ function safeStringPrefix(value: string, length: number): string {
     if (last >= 0xd800 && last <= 0xdbff) end -= 1
   }
   return value.slice(0, end)
+}
+
+export function redactBrowserUseDebugContent(value: string): string {
+  const withoutImages = value.replace(
+    /data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/=_-]+/gi,
+    'data:image/[redacted];base64,[redacted]'
+  )
+  try {
+    const parsed = JSON.parse(withoutImages)
+    return JSON.stringify(redactBrowserUseDebugValue(parsed, 0))
+  } catch {
+    return withoutImages
+  }
+}
+
+function redactBrowserUseDebugValue(value: unknown, depth: number): unknown {
+  if (depth > 64) return '[redacted:depth-limit]'
+  if (typeof value === 'string') {
+    const withoutImages = value.replace(
+      /data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/=_-]+/gi,
+      'data:image/[redacted];base64,[redacted]'
+    )
+    if (
+      withoutImages.includes('browser_snapshot') ||
+      withoutImages.includes('browser_screenshot') ||
+      withoutImages.includes('"browser_use"')
+    ) {
+      try {
+        const nested = JSON.parse(withoutImages)
+        if (nested !== withoutImages) {
+          return JSON.stringify(redactBrowserUseDebugValue(nested, depth + 1))
+        }
+      } catch {
+        // Plain untrusted page text is retained only within the normal trace limit.
+      }
+    }
+    return withoutImages
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => redactBrowserUseDebugValue(entry, depth + 1))
+  }
+  if (!value || typeof value !== 'object') return value
+  const record = value as Record<string, unknown>
+  const output: Record<string, unknown> = {}
+  for (const [key, child] of Object.entries(record)) {
+    output[key] = redactBrowserUseDebugValue(child, depth + 1)
+  }
+  if (record.kind === 'browser_screenshot') {
+    delete output.images
+    delete output.data_base64
+    output.images_omitted = Array.isArray(record.images) ? record.images.length : 1
+  }
+  if (record.kind === 'browser_snapshot' && output.snapshot && typeof output.snapshot === 'object') {
+    const snapshot = output.snapshot as Record<string, unknown>
+    output.snapshot = {
+      ...snapshot,
+      title: '[redacted]',
+      nodes: [],
+      truncated: true
+    }
+  }
+  if (record.name === 'browser_use' || record.toolName === 'browser_use') {
+    if (typeof record.arguments === 'string') {
+      try {
+        output.arguments = JSON.stringify(
+          redactBrowserUseActionForPersistence(JSON.parse(record.arguments))
+        )
+      } catch {
+        output.arguments = '{"action":"invalid"}'
+      }
+    } else if (record.arguments !== undefined) {
+      output.arguments = redactBrowserUseActionForPersistence(record.arguments)
+    }
+    if (record.input !== undefined) {
+      output.input = redactBrowserUseActionForPersistence(record.input)
+    }
+  }
+  return output
 }
 
 function safeError(error: unknown): string {

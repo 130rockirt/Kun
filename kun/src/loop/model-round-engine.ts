@@ -11,6 +11,7 @@ import {
   makeAssistantTextItem,
   makeToolCallItem
 } from '../domain/item.js'
+import { redactBrowserUseActionForPersistence } from '../contracts/browser-use.js'
 import {
   ModelStreamCollector,
   type ModelStreamSnapshot,
@@ -235,7 +236,9 @@ export class ModelRoundEngine {
                   callId: intent.call.callId,
                   toolName: intent.call.toolName,
                   toolKind: intent.call.toolKind,
-                  arguments: intent.call.arguments,
+                  arguments: intent.call.toolName === 'browser_use'
+                    ? redactBrowserUseActionForPersistence(intent.call.arguments) as Record<string, unknown>
+                    : intent.call.arguments,
                   ...(intent.providerMetadata
                     ? { providerMetadata: intent.providerMetadata }
                     : {}),

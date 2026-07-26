@@ -106,6 +106,7 @@
     "extract-zip": "^2.0.1",
     "html-to-docx": "^1.8.0",
     "i18next": "^25.4.2",
+    "ipaddr.js": "^2.4.0",
     "jimp": "^1.6.1",
     "lucide-react": "^0.544.0",
     "node-pty": "^1.1.0",

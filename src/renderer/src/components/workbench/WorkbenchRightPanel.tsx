@@ -78,6 +78,7 @@ export type WorkbenchCodeRightWorkspaceProps = {
   files: WorkbenchFileTreeSidePanelProps
   extensionItems: readonly ExtensionRightRailViewEntry[]
   extensionViews: readonly RegisteredContribution<'views.rightSidebar'>[]
+  onOpen: (id: RightPanelContributionId) => void
   onActivate: (id: RightPanelContributionId) => void
   onClose: (id: RightPanelContributionId) => void
   onNewSideConversation: () => void

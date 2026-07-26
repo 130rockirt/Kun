@@ -184,7 +184,7 @@ export type CoreMemoryDiagnosticsJson = {
 }
 
 export type CoreRuntimeCapabilityStateJson = {
-  status: 'available' | 'disabled' | 'unavailable'
+  status: 'available' | 'disabled' | 'unavailable' | 'interaction-required'
   enabled: boolean
   available: boolean
   reason?: string
@@ -265,6 +265,9 @@ export type CoreRuntimeCapabilityManifestJson = {
   }
   computerUse?: CoreRuntimeCapabilityStateJson & {
     mode?: 'auto' | 'always' | 'off'
+  }
+  browserUse?: CoreRuntimeCapabilityStateJson & {
+    mode?: 'public' | 'local-development'
   }
 }
 

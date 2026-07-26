@@ -4,6 +4,7 @@ import type { KeyboardShortcutsConfigV1 } from './keyboard-shortcuts'
 import type { LocalWhisperDownloadSourceId } from './local-whisper'
 import type { ApprovalPolicy, SandboxMode } from '../../kun/src/contracts/policy.js'
 import type { ComputerUseMode } from '../../kun/src/contracts/capabilities.js'
+import type { BrowserUseMode } from './browser-use'
 import type { ModelEndpointFormat } from '../../kun/src/contracts/model-endpoint-format.js'
 import type { ToolOutputLimitsConfig } from '../../kun/src/contracts/tool-output-limits.js'
 export {
@@ -489,6 +490,8 @@ export type KunRuntimeSettingsV1 = {
   instructions: KunInstructionSettingsV1
   /** Host computer-use (screenshot + mouse/keyboard control) settings. */
   computerUse: KunComputerUseSettingsV1
+  /** Supervised temporary first-party browser automation settings. */
+  browserUse: KunBrowserUseSettingsV1
   /** First-party design-quality linter applied to frontend output. */
   quality: KunDesignQualitySettingsV1
   /** GUI-managed subagent profiles written into kun SubagentsCapabilityConfig. */
@@ -600,6 +603,25 @@ export type KunComputerUseSettingsV1 = {
   maxImageDimension: number
   /** Hard cap on computer_use actions per turn. */
   maxActionsPerTurn: number
+}
+
+export type KunBrowserUseSettingsV1 = {
+  /** Master switch. Enabled by default; disabling removes browser_use. */
+  enabled: boolean
+  /** Public internet and exact-loopback development sessions never mix. */
+  mode: BrowserUseMode
+  /**
+   * `auto-safe` automatically grants public origins and executes validated
+   * low-risk interactions. `always-ask` preserves per-origin/per-action consent.
+   */
+  approvalMode: 'auto-safe' | 'always-ask'
+  maxTabs: number
+  maxObservationActionsPerTurn: number
+  maxInteractionActionsPerTurn: number
+  maxSnapshotNodes: number
+  maxSnapshotTextChars: number
+  maxImageDimension: number
+  idleTimeoutMs: number
 }
 
 export type KunImageGenerationSettingsV1 = {
@@ -822,7 +844,7 @@ export type KunTokenEconomySettingsPatchV1 = Partial<
 export type KunRuntimeSettingsPatchV1 = Partial<
   Omit<
     KunRuntimeSettingsV1,
-    'mcpSearch' | 'projectConfig' | 'storage' | 'contextCompaction' | 'runtimeTuning' | 'tokenEconomy' | 'toolOutputLimits' | 'imageGeneration' | 'speechToText' | 'textToSpeech' | 'promptOptimization' | 'musicGeneration' | 'videoGeneration' | 'instructions' | 'computerUse' | 'quality' | 'modelProfiles' | 'subagents'
+    'mcpSearch' | 'projectConfig' | 'storage' | 'contextCompaction' | 'runtimeTuning' | 'tokenEconomy' | 'toolOutputLimits' | 'imageGeneration' | 'speechToText' | 'textToSpeech' | 'promptOptimization' | 'musicGeneration' | 'videoGeneration' | 'instructions' | 'computerUse' | 'browserUse' | 'quality' | 'modelProfiles' | 'subagents'
   >
 > & {
   mcpSearch?: Partial<KunMcpSearchSettingsV1>
@@ -840,6 +862,7 @@ export type KunRuntimeSettingsPatchV1 = Partial<
   videoGeneration?: Partial<KunVideoGenerationSettingsV1>
   instructions?: Partial<KunInstructionSettingsV1>
   computerUse?: Partial<KunComputerUseSettingsV1>
+  browserUse?: Partial<KunBrowserUseSettingsV1>
   quality?: Partial<KunDesignQualitySettingsV1>
   modelProfiles?: Record<string, ModelProviderModelProfilePatchV1 | null>
   subagents?: KunSubagentsSettingsPatchV1

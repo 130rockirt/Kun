@@ -398,6 +398,15 @@ describe('runtimeSettingsApplyMode', () => {
         }
       }
     })).toBe('restart')
+    expect(runtimeSettingsApplyMode(prev, {
+      ...prev,
+      agents: {
+        kun: {
+          ...prev.agents.kun,
+          browserUse: { ...prev.agents.kun.browserUse, enabled: false }
+        }
+      }
+    })).toBe('restart')
   })
 
   it('requires restart when the active default provider switches between http and agent-sdk', () => {
