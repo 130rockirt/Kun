@@ -319,6 +319,53 @@ describe('chat-store navigation workspace selection', () => {
     }
   })
 
+  it('hydrates Graph availability during boot but starts the composer in Direct mode', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.stubGlobal('window', {
+        kunGui: {
+          getSettings: vi.fn(async () => ({
+            version: 1,
+            initialSetupCompleted: true,
+            workspaceRoot: '~/.kun/default_workspace',
+            conversationWorkspaceRoot: '~/Documents/Kun',
+            write: {
+              defaultWorkspaceRoot: '~/.kun/write_workspace',
+              activeWorkspaceRoot: '~/.kun/write_workspace',
+              workspaces: []
+            },
+            claw: { channels: [] },
+            theme: 'dark',
+            uiFontScale: 1,
+            chatContentMaxWidthPx: 896,
+            locale: 'en',
+            agents: {
+              kun: {
+                apiKey: 'test-key',
+                model: 'deepseek-v4-pro',
+                baseUrl: '',
+                graph: {
+                  enabled: true,
+                  defaultStrategy: 'graph'
+                }
+              }
+            },
+            disabledSkillIds: []
+          }))
+        }
+      })
+      const harness = buildHarness()
+      harness.state.composerOrchestration = 'graph'
+
+      await harness.actions.boot()
+
+      expect(harness.state.graphEnabled).toBe(true)
+      expect(harness.state.composerOrchestration).toBe('direct')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('warns when creating Write or Design threads for a missing workspace', async () => {
     const alertDialog = vi.fn(async () => undefined)
     vi.stubGlobal('window', {

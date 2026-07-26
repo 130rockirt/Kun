@@ -34,29 +34,13 @@ export function GraphModeSettingsPanel({
               checked={value.enabled}
               onChange={(enabled) => onChange({
                 enabled,
-                ...(!enabled ? { defaultStrategy: 'direct' as const } : {})
+                defaultStrategy: 'direct'
               })}
             />
           }
         />
         {value.enabled ? (
           <>
-            <SettingRow
-              title={t('graphSettingsDefaultStrategy')}
-              description={t('graphSettingsDefaultStrategyDesc')}
-              control={
-                <select
-                  className={selectControlClass}
-                  value={value.defaultStrategy}
-                  onChange={(event) => onChange({
-                    defaultStrategy: event.target.value as 'direct' | 'graph'
-                  })}
-                >
-                  <option value="direct">{t('graphSettingsDirect')}</option>
-                  <option value="graph">{t('graphSettingsGraph')}</option>
-                </select>
-              }
-            />
             <SettingRow
               title={t('graphSettingsRollout')}
               description={t('graphSettingsRolloutDesc')}

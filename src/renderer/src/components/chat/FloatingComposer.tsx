@@ -481,12 +481,14 @@ export function FloatingComposer({
   const showIntentToolbar = !compact && route === 'chat'
   const showComposerMenuButton = showIntentToolbar
   const canTogglePlanMode = canCompose && Boolean(onPlanCommand)
+  const showGraphMenuOption = Boolean(onOrchestrationChange)
+  const canToggleGraphMode = canCompose && graphEnabled && !busy && showGraphMenuOption
   const canCreateNewThread = runtimeReady && route !== 'claw' && Boolean(effectiveWorkspaceRoot) && Boolean(onNewCommand)
   const canOpenGoalPanel = canCompose && route !== 'claw'
   const canRunReview = canCompose && route !== 'claw' && Boolean(onReviewCommand)
   const canToggleWorktreeMode = canCompose && route !== 'claw' && Boolean(onToggleWorktreeMode)
   const canOpenComposerMenu = showComposerMenuButton
-    && (canPickFileReference || canPickDesignReference || canPickLocalFileReference || canTogglePlanMode || canCreateNewThread || canOpenGoalPanel || canRunReview || canToggleWorktreeMode)
+    && (canPickFileReference || canPickDesignReference || canPickLocalFileReference || canTogglePlanMode || showGraphMenuOption || canCreateNewThread || canOpenGoalPanel || canRunReview || canToggleWorktreeMode)
   const showToolbarStartControls = showComposerMenuButton
   const showExecutionSettingsPicker = showIntentToolbar
     && Boolean(executionSettings)
@@ -859,8 +861,21 @@ export function FloatingComposer({
     if (mode === 'plan') {
       setMode('agent')
     } else {
+      onOrchestrationChange?.('direct')
       setMode('plan')
       onPlanCommand?.()
+    }
+    draft.focusComposer()
+  }
+
+  const handleGraphToolbarClick = (): void => {
+    if (!canToggleGraphMode || !onOrchestrationChange) return
+    setComposerMenuOpen(false)
+    if (mode === 'agent' && orchestration === 'graph') {
+      onOrchestrationChange('direct')
+    } else {
+      setMode('agent')
+      onOrchestrationChange('graph')
     }
     draft.focusComposer()
   }
@@ -1273,6 +1288,44 @@ export function FloatingComposer({
                 />
               </span>
             </button>
+            {showGraphMenuOption ? (
+              <button
+                type="button"
+                data-composer-graph-menu-item
+                disabled={!canToggleGraphMode}
+                onClick={handleGraphToolbarClick}
+                title={graphEnabled
+                  ? t('graphModeGraphHint', {
+                      defaultValue: 'Graph: plan, delegate, supervise, review, and synthesize'
+                    })
+                  : t('graphModeDisabledHint', {
+                      defaultValue: 'Enable experimental Graph Mode in Settings → Agents'
+                    })}
+                className="ds-no-drag flex h-8 w-full items-center gap-2 px-3 text-left transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent disabled:hover:text-ds-muted"
+              >
+                <Share2 className="h-3.5 w-3.5 shrink-0" strokeWidth={1.9} />
+                <span className="min-w-0 flex-1 truncate">
+                  {t('graphModeGraph', { defaultValue: 'Graph' })}
+                </span>
+                <span
+                  role="switch"
+                  aria-checked={mode === 'agent' && orchestration === 'graph'}
+                  className={`relative h-5 w-9 shrink-0 rounded-full ring-1 transition ${
+                    mode === 'agent' && orchestration === 'graph'
+                      ? 'bg-accent ring-accent/35 shadow-[inset_0_1px_0_rgba(255,255,255,0.24)]'
+                      : 'bg-ds-border-muted ring-ds-border-muted'
+                  }`}
+                >
+                  <span
+                    className={`absolute top-0.5 h-4 w-4 rounded-full bg-white ring-1 ring-black/5 transition ${
+                      mode === 'agent' && orchestration === 'graph'
+                        ? 'translate-x-[17px]'
+                        : 'translate-x-0.5'
+                    } shadow-[0_1px_4px_rgba(20,47,95,0.28)]`}
+                  />
+                </span>
+              </button>
+            ) : null}
             <button
               type="button"
               disabled={!canOpenGoalPanel}
@@ -1626,6 +1679,18 @@ export function FloatingComposer({
                         <span>{t('slashCommandPlanTitle')}</span>
                       </span>
                     ) : null}
+                    {mode === 'agent' && orchestration === 'graph' ? (
+                      <span
+                        data-composer-graph-active
+                        className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full bg-indigo-500/10 px-2.5 text-[13px] font-medium text-indigo-700 dark:text-indigo-200"
+                        title={t('graphModeGraphHint', {
+                          defaultValue: 'Graph: plan, delegate, supervise, review, and synthesize'
+                        })}
+                      >
+                        <Share2 className="h-3.5 w-3.5" strokeWidth={1.9} />
+                        <span>{t('graphModeGraph', { defaultValue: 'Graph' })}</span>
+                      </span>
+                    ) : null}
                     {activeThreadGoal?.status === 'active' ? (
                       <span
                         className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full bg-ds-hover px-2.5 text-[13px] font-medium text-ds-muted"
@@ -1644,48 +1709,6 @@ export function FloatingComposer({
                     disabled={!canCompose || busy}
                     onChange={onExecutionSettingsChange}
                   />
-                ) : null}
-                {!compact && route === 'chat' && mode === 'agent' && onOrchestrationChange ? (
-                  <div
-                    className="ds-no-drag inline-flex h-8 shrink-0 items-center rounded-full border border-ds-border-muted bg-ds-card p-0.5"
-                    aria-label={t('graphModeSelector', { defaultValue: 'Orchestration mode' })}
-                  >
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() => onOrchestrationChange('direct')}
-                      className={`inline-flex h-7 items-center rounded-full px-2.5 text-[11px] font-semibold transition ${
-                        orchestration === 'direct'
-                          ? 'bg-ds-hover text-ds-ink shadow-sm'
-                          : 'text-ds-faint hover:text-ds-muted'
-                      }`}
-                      title={t('graphModeDirectHint', {
-                        defaultValue: 'Direct: the main agent executes the task itself'
-                      })}
-                    >
-                      {t('graphModeDirect', { defaultValue: 'Direct' })}
-                    </button>
-                    <button
-                      type="button"
-                      disabled={busy || !graphEnabled}
-                      onClick={() => onOrchestrationChange('graph')}
-                      className={`inline-flex h-7 items-center gap-1 rounded-full px-2.5 text-[11px] font-semibold transition ${
-                        orchestration === 'graph'
-                          ? 'bg-indigo-500/14 text-indigo-700 shadow-sm dark:text-indigo-200'
-                          : 'text-ds-faint hover:text-ds-muted'
-                      } disabled:cursor-not-allowed disabled:opacity-45`}
-                      title={graphEnabled
-                        ? t('graphModeGraphHint', {
-                            defaultValue: 'Graph: plan, delegate, supervise, review, and synthesize'
-                          })
-                        : t('graphModeDisabledHint', {
-                            defaultValue: 'Enable experimental Graph Mode in Settings → Agents'
-                          })}
-                    >
-                      <Share2 className="h-3 w-3" strokeWidth={2} />
-                      {t('graphModeGraph', { defaultValue: 'Graph' })}
-                    </button>
-                  </div>
                 ) : null}
               </div>
             ) : null}

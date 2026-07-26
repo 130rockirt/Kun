@@ -181,6 +181,134 @@ describe('FloatingComposer workspace controls visibility', () => {
   })
 })
 
+describe('FloatingComposer Graph entry', () => {
+  it('keeps Graph inside the plus menu and selects it explicitly', async () => {
+    useChatStore.setState({
+      activeThreadId: null,
+      activeThreadGoal: null,
+      activeThreadTodos: null,
+      blocks: [{ kind: 'user', id: 'user-graph', text: 'Use Graph' }],
+      route: 'chat',
+      workspaceRoot: '/Users/test/code/acme-project',
+      threads: []
+    })
+    vi.stubGlobal('document', { activeElement: null })
+    vi.stubGlobal('HTMLElement', class {})
+    vi.stubGlobal('window', {
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      requestAnimationFrame: vi.fn(() => 1),
+      cancelAnimationFrame: vi.fn(),
+      kunGui: {
+        getSettings: vi.fn(async () => ({ composerSendKey: 'enter' }))
+      }
+    })
+    const setMode = vi.fn()
+    const setOrchestration = vi.fn()
+    let renderer!: ReturnType<typeof createRenderer>
+
+    try {
+      await act(async () => {
+        renderer = createRenderer(createElement(FloatingComposer, {
+          input: '',
+          setInput: () => undefined,
+          mode: 'agent',
+          setMode,
+          orchestration: 'direct',
+          graphEnabled: true,
+          onOrchestrationChange: setOrchestration,
+          busy: false,
+          runtimeReady: true,
+          hasActiveThread: true,
+          composerModel: 'test-model',
+          composerPickList: ['test-model'],
+          onComposerModelChange: () => undefined,
+          queuedMessages: [],
+          onRemoveQueuedMessage: () => undefined,
+          onSend: () => undefined,
+          onInterrupt: () => undefined,
+          onPlanCommand: () => undefined
+        }))
+      })
+
+      expect(renderer!.root.findAllByProps({ 'data-composer-graph-menu-item': true }))
+        .toHaveLength(0)
+      expect(renderer!.root.findAllByProps({ 'data-composer-graph-active': true }))
+        .toHaveLength(0)
+
+      const plusButton = renderer!.root.findAllByType('button').find(
+        (button) => String(button.props.className).includes('ds-composer-menu-button')
+      )
+      expect(plusButton).toBeDefined()
+      await act(async () => {
+        plusButton!.props.onClick()
+      })
+
+      const graphMenuItem = renderer!.root.findByProps({
+        'data-composer-graph-menu-item': true
+      })
+      expect(graphMenuItem.props.disabled).toBe(false)
+      await act(async () => {
+        graphMenuItem.props.onClick()
+      })
+
+      expect(setMode).toHaveBeenCalledWith('agent')
+      expect(setOrchestration).toHaveBeenCalledWith('graph')
+    } finally {
+      if (renderer) {
+        await act(async () => {
+          renderer.unmount()
+        })
+      }
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('shows only a compact Graph state after explicit selection', () => {
+    useChatStore.setState({
+      activeThreadId: 'thr_graph_active',
+      activeThreadGoal: null,
+      activeThreadTodos: null,
+      blocks: [],
+      route: 'chat',
+      workspaceRoot: '/Users/test/code/acme-project',
+      threads: [{
+        id: 'thr_graph_active',
+        title: 'Graph chat',
+        updatedAt: '2026-07-27T00:00:00.000Z',
+        model: 'test-model',
+        mode: 'agent',
+        workspace: '/Users/test/code/acme-project'
+      }]
+    })
+
+    const html = renderToStaticMarkup(createElement(FloatingComposer, {
+      input: '',
+      setInput: () => undefined,
+      mode: 'agent',
+      setMode: () => undefined,
+      orchestration: 'graph',
+      graphEnabled: true,
+      onOrchestrationChange: () => undefined,
+      busy: false,
+      runtimeReady: true,
+      hasActiveThread: true,
+      composerModel: 'test-model',
+      composerPickList: ['test-model'],
+      onComposerModelChange: () => undefined,
+      queuedMessages: [],
+      onRemoveQueuedMessage: () => undefined,
+      onSend: () => undefined,
+      onInterrupt: () => undefined,
+      onPlanCommand: () => undefined
+    }))
+
+    expect(html).toContain('data-composer-graph-active')
+    expect(html).not.toContain('data-composer-graph-menu-item')
+    expect(html).not.toContain('graphModeSelector')
+  })
+})
+
 describe('FloatingComposer queued guidance', () => {
   it('renders compact Guide rows and disables structured payload guidance', async () => {
     const previousLanguage = i18n.language

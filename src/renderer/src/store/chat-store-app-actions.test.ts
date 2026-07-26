@@ -18,6 +18,7 @@ const COMPOSER_PROVIDER_STORAGE_KEY = 'kun.composerProviderId'
 const THREAD_COMPOSER_SELECTION_STORAGE_KEY = 'kun.threadComposerSelection.v1'
 const THREAD_COMPOSER_MODE_STORAGE_KEY = 'kun.threadComposerMode.v1'
 const COMPOSER_MODE_STORAGE_KEY = 'kun.composerMode'
+const LEGACY_GRAPH_ORCHESTRATION_STORAGE_KEY = 'kun.graphOrchestration.v1'
 
 function createMemoryStorage(): Storage {
   const items = new Map<string, string>()
@@ -299,6 +300,20 @@ describe('chat-store app actions composer model loading', () => {
     expect(JSON.parse(localStorage.getItem(THREAD_COMPOSER_MODE_STORAGE_KEY) ?? '{}')).toEqual({
       'thread-a': 'plan'
     })
+  })
+
+  it('keeps Graph selection session-local instead of restoring it as a default', () => {
+    const { actions, state } = buildHarness({
+      ok: true,
+      modelIds: ['deepseek-v4-pro'],
+      defaultModelId: 'deepseek-v4-pro',
+      modelGroups: []
+    })
+
+    actions.setComposerOrchestration('graph')
+
+    expect(state.composerOrchestration).toBe('graph')
+    expect(localStorage.getItem(LEGACY_GRAPH_ORCHESTRATION_STORAGE_KEY)).toBeNull()
   })
 
   it('keeps active-thread model changes out of the global Kun default', () => {

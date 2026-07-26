@@ -2,7 +2,6 @@ import {
   mergeComposerPickList,
   readStoredComposerMode
 } from './chat-store-helpers'
-import { readStoredGraphOrchestration } from './chat-store-graph-orchestration'
 import { defaultConversationWorkspaceRoot } from '../lib/workspace-path'
 import { readProtectedSurfaceRestore } from '../extensions/protected-surface-session'
 
@@ -48,7 +47,7 @@ export function createInitialChatStoreState(workingDirectoryLabel: string) {
     turnReasoningLastAtByUserId: {},
     inspectorSelectedId: null,
     composerMode: readStoredComposerMode(),
-    composerOrchestration: readStoredGraphOrchestration(),
+    composerOrchestration: 'direct' as const,
     graphEnabled: false,
     composerModel: '',
     composerProviderId: '',

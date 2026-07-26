@@ -19,8 +19,7 @@ const GRAPH_ENTRY_FILES = [
   resolve(REPOSITORY_ROOT, 'src/shared/app-settings-graph.ts'),
   resolve(REPOSITORY_ROOT, 'src/shared/app-settings-graph.test.ts'),
   resolve(REPOSITORY_ROOT, 'src/main/ipc/app-ipc-schemas/settings-graph.ts'),
-  resolve(REPOSITORY_ROOT, 'src/renderer/src/components/settings-section-graph-panel.tsx'),
-  resolve(REPOSITORY_ROOT, 'src/renderer/src/store/chat-store-graph-orchestration.ts')
+  resolve(REPOSITORY_ROOT, 'src/renderer/src/components/settings-section-graph-panel.tsx')
 ]
 const SOURCE_FILE_PATTERN = /\.(?:test\.)?[cm]?[tj]sx?$/
 
