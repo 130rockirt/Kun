@@ -1,0 +1,98 @@
+import { describe, expect, it } from 'vitest'
+import type { ProjectAgentRegistry } from './project-agent-registry.js'
+import { GraphAssignmentResolver, type GraphParentAuthority } from './graph-assignment.js'
+import { testGraphPlan } from './graph-test-fixtures.test-support.js'
+
+const parent: GraphParentAuthority = {
+  workspaceRoot: '/workspace',
+  model: 'parent-model',
+  providerId: 'parent-provider',
+  reasoningEffort: 'medium',
+  approvalPolicy: 'on-request',
+  sandboxMode: 'workspace-write',
+  allowedTools: ['read', 'write'],
+  blockedTools: ['bash'],
+  allowedSkills: ['safe-skill'],
+  blockedSkills: [],
+  allowedMcpServers: ['safe-mcp', 'other-mcp'],
+  blockedMcpServers: [],
+  readScopes: ['src'],
+  writeScopes: ['src/generated'],
+  networkAllowed: false
+}
+
+const registry = {
+  getProfile: async () => null
+} as unknown as ProjectAgentRegistry
+
+describe('GraphAssignmentResolver', () => {
+  it('freezes a least-authority assignment and blocks worker delegation controls', async () => {
+    const source = testGraphPlan().nodes[0]!
+    const node = {
+      ...source,
+      writeScopes: ['src/generated'],
+      assignment: {
+        kind: 'ephemeral' as const,
+        name: 'Scoped worker',
+        systemPrompt: 'Perform the bounded task.',
+        toolPolicy: 'inherit' as const,
+        allowedTools: ['read', 'write', 'bash', 'delegate_task'],
+        blockedTools: [],
+        allowedSkills: ['safe-skill', 'unknown-skill'],
+        blockedSkills: [],
+        allowedMcpServers: ['safe-mcp', 'unknown-mcp'],
+        blockedMcpServers: []
+      }
+    }
+    const assignment = await new GraphAssignmentResolver({ registry }).resolve({
+      projectId: 'project_1',
+      node,
+      reference: node.assignment,
+      parent,
+      maxWallTimeMs: 60_000,
+      maxTokens: 10_000
+    })
+
+    expect(assignment).toMatchObject({
+      model: 'parent-model',
+      providerId: 'parent-provider',
+      allowedTools: ['read', 'write'],
+      allowedSkills: ['safe-skill'],
+      allowedMcpServers: ['safe-mcp'],
+      blockedMcpServers: ['other-mcp'],
+      readScopes: ['src'],
+      writeScopes: ['src/generated'],
+      networkAllowed: false
+    })
+    expect(assignment.blockedTools).toEqual(expect.arrayContaining([
+      'bash',
+      'delegate_task',
+      'generate_subagent',
+      'graph_control_run'
+    ]))
+  })
+
+  it('rejects node scopes that expand the parent authority', async () => {
+    const node = {
+      ...testGraphPlan().nodes[0]!,
+      readScopes: ['secrets'],
+      assignment: {
+        kind: 'ephemeral' as const,
+        name: 'Escalating worker',
+        systemPrompt: 'Read outside scope.',
+        toolPolicy: 'readOnly' as const,
+        blockedTools: [],
+        blockedSkills: [],
+        blockedMcpServers: []
+      }
+    }
+    await expect(new GraphAssignmentResolver({ registry }).resolve({
+      projectId: 'project_1',
+      node,
+      reference: node.assignment,
+      parent,
+      maxWallTimeMs: 60_000,
+      maxTokens: 10_000
+    })).rejects.toThrow('expands parent authority')
+  })
+})

@@ -55,6 +55,14 @@ export type ThreadServiceOptions = {
   /** Abort in-process work after the fence starts rejecting new writes. */
   onDeleting?: (threadId: string) => Promise<void> | void
   onDeleted?: (threadId: string) => Promise<void> | void
+  onStatusChanged?: (
+    threadId: string,
+    status: ThreadStatus
+  ) => Promise<void> | void
+  onForked?: (
+    sourceThreadId: string,
+    targetThreadId: string
+  ) => Promise<void> | void
 }
 
 export type ListThreadsOptions = ThreadStoreListOptions
@@ -96,6 +104,8 @@ export class ThreadService {
   private readonly lifecycleFence?: ThreadLifecycleFence
   private readonly onDeleting?: (threadId: string) => Promise<void> | void
   private readonly onDeleted?: (threadId: string) => Promise<void> | void
+  private readonly onStatusChanged?: ThreadServiceOptions['onStatusChanged']
+  private readonly onForked?: ThreadServiceOptions['onForked']
 
   constructor(options: ThreadServiceOptions) {
     this.threadStore = options.threadStore
@@ -109,6 +119,8 @@ export class ThreadService {
     this.lifecycleFence = options.lifecycleFence
     this.onDeleting = options.onDeleting
     this.onDeleted = options.onDeleted
+    this.onStatusChanged = options.onStatusChanged
+    this.onForked = options.onForked
   }
 
   updateRuntimeDefaults(input: { approvalPolicy: ApprovalPolicy; sandboxMode: SandboxMode }): void {
@@ -253,6 +265,7 @@ export class ThreadService {
       ...(updated.titleAuto !== undefined ? { titleAuto: updated.titleAuto } : {}),
       status: updated.status
     })
+    await this.onStatusChanged?.(threadId, updated.status)
     return updated
   }
 
@@ -595,6 +608,7 @@ export class ThreadService {
       threadId: record.id,
       title: record.title
     })
+    await this.onForked?.(threadId, record.id)
     return record
   }
 
@@ -942,6 +956,7 @@ function rebuildTurnsFromItems(input: {
       threadId: input.threadId,
       status: 'completed',
       prompt: input.fallbackPrompt,
+      orchestration: 'direct',
       steering: [],
       attachmentIds: [],
       activeSkillIds: [],
@@ -962,6 +977,7 @@ function rebuildTurnsFromItems(input: {
       threadId: input.threadId,
       status: 'completed',
       prompt,
+      orchestration: 'direct',
       steering: [],
       attachmentIds: attachmentIdsFromItems(items),
       activeSkillIds: [],

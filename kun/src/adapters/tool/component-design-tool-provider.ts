@@ -265,6 +265,7 @@ export function buildComponentDesignToolProviders(
             security: {
               sandboxRoot: childWorkspace,
               ...(context.allowedProviderIds ? { allowedProviderIds: [...context.allowedProviderIds] } : {}),
+              ...(context.allowedSkillIds ? { allowedSkillIds: [...context.allowedSkillIds] } : {}),
               ...(context.blockedProviderIds ? { blockedProviderIds: [...context.blockedProviderIds] } : {}),
               ...(context.blockedSkillIds ? { blockedSkillIds: [...context.blockedSkillIds] } : {}),
               memoryEnabled: false

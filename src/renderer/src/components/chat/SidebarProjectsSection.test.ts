@@ -24,6 +24,7 @@ import {
 } from './SidebarProjectsSection'
 import { SIDEBAR_ORDER_STORAGE_KEY } from './sidebar-order'
 import { SIDEBAR_FOLDERS_STORAGE_KEY } from './sidebar-folders'
+import { SIDEBAR_COLLAPSE_STORAGE_KEY } from './sidebar-collapse'
 
 vi.mock('react-i18next', async (importOriginal) => ({
   ...(await importOriginal<typeof import('react-i18next')>()),
@@ -64,6 +65,148 @@ function draft(overrides: Partial<SddDraftHistoryItem> & Pick<SddDraftHistoryIte
     ...(overrides.searchText ? { searchText: overrides.searchText } : {})
   }
 }
+
+function createSidebarTestStorage(initial: Record<string, string> = {}): Storage {
+  const items = new Map(Object.entries(initial))
+  return {
+    get length() {
+      return items.size
+    },
+    clear: () => items.clear(),
+    getItem: (key) => items.get(key) ?? null,
+    key: (index) => [...items.keys()][index] ?? null,
+    removeItem: (key) => items.delete(key),
+    setItem: (key, value) => items.set(key, value)
+  }
+}
+
+function sidebarProjectProps(overrides: Record<string, unknown> = {}) {
+  return {
+    threads: [],
+    activeView: 'chat' as const,
+    activeThreadId: null,
+    runtimeReady: true,
+    searchQuery: '',
+    showArchived: false,
+    workspaceRoot: '/Users/zxy/project-a',
+    workspaceRoots: ['/Users/zxy/project-a'],
+    conversationRoot: '/Users/zxy/Documents/Kun',
+    busy: false,
+    watchTurnCompletion: {},
+    unreadThreadIds: {},
+    locale: 'en-US',
+    onPickWorkspace: vi.fn(),
+    onRemoveWorkspace: vi.fn(async () => undefined),
+    onCreateThreadInWorkspace: vi.fn(),
+    onOpenRequirementDraft: vi.fn(),
+    onSelectThread: vi.fn(),
+    onRenameThread: vi.fn(async () => undefined),
+    onPinThread: vi.fn(async () => undefined),
+    onArchiveThread: vi.fn(async () => undefined),
+    onDeleteThread: vi.fn(async () => undefined),
+    onRestoreThread: vi.fn(async () => undefined),
+    onSearchQueryChange: vi.fn(),
+    t: (key: string) => key,
+    ...overrides
+  }
+}
+
+describe('SidebarProjectsSection collapse memory', () => {
+  it('restores collapsed projects and project-scoped folders from storage', () => {
+    const storage = createSidebarTestStorage({
+      [SIDEBAR_COLLAPSE_STORAGE_KEY]: JSON.stringify({
+        version: 1,
+        collapsedWorkspaceScopes: ['/users/zxy/project-a'],
+        collapsedFolderIdsByScope: {
+          '/users/zxy/project-b': ['folder-research']
+        }
+      }),
+      [SIDEBAR_FOLDERS_STORAGE_KEY]: JSON.stringify({
+        version: 1,
+        foldersByScope: {
+          '/users/zxy/project-b': [{
+            id: 'folder-research',
+            name: 'Research',
+            parentId: null,
+            threadIds: ['thread-folder']
+          }]
+        }
+      })
+    })
+    vi.stubGlobal('localStorage', storage)
+    try {
+      const html = renderToStaticMarkup(createElement(SidebarProjectsSection, sidebarProjectProps({
+        threads: [
+          thread({ id: 'thread-collapsed-project', title: 'Hidden project thread', workspace: '/Users/zxy/project-a' }),
+          thread({ id: 'thread-folder', title: 'Hidden folder thread', workspace: '/Users/zxy/project-b' }),
+          thread({ id: 'thread-root', title: 'Visible root thread', workspace: '/Users/zxy/project-b' })
+        ],
+        workspaceRoots: ['/Users/zxy/project-a', '/Users/zxy/project-b']
+      })))
+
+      expect(html).toContain('title="/Users/zxy/project-a"')
+      expect(html).not.toContain('Hidden project thread')
+      expect(html).toContain('title="Research"')
+      expect(html).not.toContain('Hidden folder thread')
+      expect(html).toContain('Visible root thread')
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('persists project and folder collapse when their rows are clicked', async () => {
+    const storage = createSidebarTestStorage({
+      [SIDEBAR_FOLDERS_STORAGE_KEY]: JSON.stringify({
+        version: 1,
+        foldersByScope: {
+          '/users/zxy/project-a': [{
+            id: 'folder-research',
+            name: 'Research',
+            parentId: null,
+            threadIds: []
+          }]
+        }
+      })
+    })
+    vi.stubGlobal('localStorage', storage)
+    let renderer: ReactTestRenderer | null = null
+    try {
+      await act(async () => {
+        renderer = createRenderer(createElement(SidebarProjectsSection, sidebarProjectProps()))
+      })
+      const projectRow = renderer!.root.find((node) =>
+        node.type === 'div' && node.props.title === '/Users/zxy/project-a'
+      )
+
+      await act(async () => {
+        projectRow.findAllByType('button')[0]?.props.onClick()
+      })
+      await act(async () => {
+        const currentProjectRow = renderer!.root.find((node) =>
+          node.type === 'div' && node.props.title === '/Users/zxy/project-a'
+        )
+        currentProjectRow.findAllByType('button')[0]?.props.onClick()
+      })
+      await act(async () => {
+        const currentFolderRow = renderer!.root.find((node) =>
+          node.type === 'div' && node.props.title === 'Research'
+        )
+        currentFolderRow.findAllByType('button')[0]?.props.onClick()
+      })
+
+      expect(JSON.parse(storage.getItem(SIDEBAR_COLLAPSE_STORAGE_KEY) ?? '{}')).toEqual({
+        version: 1,
+        collapsedWorkspaceScopes: [],
+        collapsedFolderIdsByScope: {
+          '/users/zxy/project-a': ['folder-research']
+        }
+      })
+    } finally {
+      ;(renderer as ReactTestRenderer | null)?.unmount()
+      vi.unstubAllGlobals()
+    }
+  })
+})
 
 describe('SidebarProjectsSection groups', () => {
   it('keeps remembered code workspaces visible even when the runtime lists only one workspace', () => {

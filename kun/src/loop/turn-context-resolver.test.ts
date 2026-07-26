@@ -38,6 +38,7 @@ function turn(overrides: Partial<Turn> = {}): Turn {
   return {
     id: 'turn_1',
     threadId: 'thread_1',
+    orchestration: 'direct',
     status: 'running',
     prompt: 'Implement the requested plan',
     createdAt: '2026-01-01T00:00:00.000Z',

@@ -1767,6 +1767,9 @@ export async function dispatchKunRuntimeEvent(
   sink: ThreadEventSink,
   handleApprovalRequest: (event: CoreRuntimeEventJson, sink: ThreadEventSink) => Promise<void>
 ): Promise<void> {
+  if (event.kind === 'graph_event' && event.graph !== undefined) {
+    sink.onGraphEvent?.(event.graph)
+  }
   const actions = runtimeProjectionActionsFromEvent(event)
   for (const action of actions) {
     await applyRuntimeProjectionAction(action, sink, handleApprovalRequest)

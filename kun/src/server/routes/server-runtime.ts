@@ -42,7 +42,19 @@ import type { ModelClient } from '../../ports/model-client.js'
 import type { ModelRoutePoolConfig } from '../../contracts/model-route-pool.js'
 import type { RoutePoolHealthStore } from '../../adapters/model/route-pool-model-client.js'
 import type { RoutePoolTestService } from '../../services/route-pool-test-service.js'
-import type { RolesConfig } from '../../config/kun-config.js'
+import type { GraphRuntimeConfig, RolesConfig } from '../../config/kun-config.js'
+import type {
+  FileGraphWriteCoordinator,
+  FileGraphThreadReferenceStore,
+  GraphControlService,
+  GraphLearningService,
+  GraphMailbox,
+  GraphRecoveryService,
+  GraphRunStore,
+  GraphScheduler,
+  GraphSupervisor,
+  ProjectAgentRegistry
+} from '../../graph/index.js'
 import type { ImmutablePrefix } from '../../cache/immutable-prefix.js'
 import type { PublisherTrustStore } from '../../supplychain/publisher-trust-store.js'
 import type { ThreadEventStreamRegistry } from '../thread-event-stream-registry.js'
@@ -70,6 +82,7 @@ import type { ExtensionArtifactService } from '../../services/extension-artifact
 import type { ExtensionMediaHandleService } from '../../services/extension-media-handle-service.js'
 import type { RuntimeMigrationService } from '../../services/runtime-migration-service.js'
 import type { RuntimeMigrationImportService } from '../../services/runtime-migration-import-service.js'
+import type { ArtifactStore } from '../../artifacts/artifact-store.js'
 
 export type RuntimeToolDiagnostics = {
   providers: ToolProviderPolicy[]
@@ -159,6 +172,20 @@ export type ServerRuntime = {
    * listing. Optional so test scaffolds can omit it.
    */
   delegationRuntime?: DelegationRuntime
+  graph?: {
+    control: GraphControlService
+    store: GraphRunStore
+    config(): GraphRuntimeConfig
+    scheduler: GraphScheduler
+    supervisor: GraphSupervisor
+    mailbox: GraphMailbox
+    writes: FileGraphWriteCoordinator
+    recovery: GraphRecoveryService
+    registry: ProjectAgentRegistry
+    learning: GraphLearningService
+    references: FileGraphThreadReferenceStore
+    artifacts: ArtifactStore
+  }
   backgroundShellRuntime?: BackgroundShellRuntime
   supplyChainTrust?: PublisherTrustStore
   /** Single extension platform instance shared by HTTP, CLI-style services, tools, and model routing. */

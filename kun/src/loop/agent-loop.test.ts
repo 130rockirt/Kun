@@ -139,6 +139,28 @@ class CapturingCompleteModel implements ModelClient {
   }
 }
 
+class ScriptedGraphModel implements ModelClient {
+  readonly provider = 'test'
+  readonly model = 'scripted-graph-model'
+  readonly requests: ModelRequest[] = []
+
+  async *stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
+    this.requests.push(request)
+    if (this.requests.length === 1) {
+      yield {
+        kind: 'tool_call_complete',
+        callId: 'graph_create_call',
+        toolName: 'graph_create_run',
+        arguments: {}
+      }
+      yield { kind: 'completed', stopReason: 'tool_calls' }
+      return
+    }
+    yield { kind: 'assistant_text_delta', text: 'GraphRun started.' }
+    yield { kind: 'completed', stopReason: 'stop' }
+  }
+}
+
 class FinalResponseGateModel implements ModelClient {
   readonly provider = 'test'
   readonly model = 'final-response-gate-model'
@@ -452,6 +474,123 @@ describe('AgentLoop interruption', () => {
     expect(model.requests[0]?.contextInstructions?.[1]).toContain(
       'Current opened project absolute path: `/tmp/workspace`'
     )
+  })
+
+  it('forces one GraphRun creation before final response and leaves direct turns unchanged', async () => {
+    const sessionStore = new InMemorySessionStore()
+    const threadStore = new InMemoryThreadStore()
+    const eventBus = new InMemoryEventBus()
+    const inflight = new InflightTracker()
+    const steering = new SteeringQueue()
+    const ids = new SequentialIdGenerator()
+    const nowIso = () => '2026-07-26T00:00:00.000Z'
+    const events = new RuntimeEventRecorder({
+      eventBus,
+      sessionStore,
+      allocateSeq: (threadId) => eventBus.allocateSeq(threadId),
+      nowIso
+    })
+    const model = new ScriptedGraphModel()
+    const turns = new TurnService({
+      threadStore,
+      sessionStore,
+      events,
+      inflight,
+      steering,
+      compactor: new ContextCompactor(),
+      ids,
+      nowIso
+    })
+    const graphTool = LocalToolHost.defineTool({
+      name: 'graph_create_run',
+      description: 'Create a validated GraphRun.',
+      inputSchema: { type: 'object', additionalProperties: false },
+      toolKind: 'tool_call',
+      policy: 'auto',
+      shouldAdvertise: (context) => context.orchestration === 'graph',
+      execute: async () => ({ output: { run: { id: 'graph_run_1', status: 'running' } } })
+    })
+    const loop = new AgentLoop({
+      threadStore,
+      sessionStore,
+      approvalGate: new AllowApprovalGate(),
+      userInputGate: new NoopUserInputGate(),
+      model,
+      toolHost: new LocalToolHost({ tools: [graphTool] }),
+      usage: new UsageService(),
+      events,
+      turns,
+      inflight,
+      steering,
+      compactor: new ContextCompactor(),
+      prefix: createImmutablePrefix({ systemPrompt: 'test system prompt' }),
+      ids,
+      nowIso
+    })
+    await threadStore.upsert(createThreadRecord({
+      id: 'thr_graph_mode',
+      title: 'Graph mode',
+      workspace: '/tmp/workspace',
+      model: model.model
+    }))
+    const graphTurn = await turns.startTurn({
+      threadId: 'thr_graph_mode',
+      request: {
+        prompt: 'Implement and verify the feature.',
+        model: model.model,
+        orchestration: 'graph'
+      }
+    })
+
+    await expect(loop.runTurn('thr_graph_mode', graphTurn.turnId)).resolves.toBe('completed')
+    expect(model.requests).toHaveLength(2)
+    expect(model.requests[0]?.requiredToolName).toBe('graph_create_run')
+    expect(model.requests[0]?.modeInstruction).toContain('Graph Mode is active')
+    expect(model.requests[1]?.requiredToolName).toBeUndefined()
+    expect(model.requests[1]?.history).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'tool_result',
+        toolName: 'graph_create_run'
+      })
+    ]))
+
+    const directModel = new CapturingCompleteModel()
+    const directLoop = new AgentLoop({
+      threadStore,
+      sessionStore,
+      approvalGate: new AllowApprovalGate(),
+      userInputGate: new NoopUserInputGate(),
+      model: directModel,
+      toolHost: new LocalToolHost({ tools: [graphTool] }),
+      usage: new UsageService(),
+      events,
+      turns,
+      inflight,
+      steering,
+      compactor: new ContextCompactor(),
+      prefix: createImmutablePrefix({ systemPrompt: 'test system prompt' }),
+      ids,
+      nowIso
+    })
+    await threadStore.upsert(createThreadRecord({
+      id: 'thr_direct_mode',
+      title: 'Direct mode',
+      workspace: '/tmp/workspace',
+      model: directModel.model
+    }))
+    const directTurn = await turns.startTurn({
+      threadId: 'thr_direct_mode',
+      request: {
+        prompt: 'Answer directly.',
+        model: directModel.model,
+        orchestration: 'direct'
+      }
+    })
+    await expect(directLoop.runTurn('thr_direct_mode', directTurn.turnId))
+      .resolves.toBe('completed')
+    expect(directModel.requests[0]?.requiredToolName).toBeUndefined()
+    expect(directModel.requests[0]?.tools.map((tool) => tool.name))
+      .not.toContain('graph_create_run')
   })
 
   it('recovers a dedicated SVG turn until mutation and matching validation succeed', async () => {

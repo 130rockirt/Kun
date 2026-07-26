@@ -75,6 +75,23 @@ function runStoreContract(name: string, make: () => Promise<{ store: ArtifactSto
         await cleanup?.()
       }
     })
+
+    it('tracks every deduplicated origin so retention cannot delete shared content', async () => {
+      const { store, cleanup } = await make()
+      try {
+        const first = await store.put({ content: 'shared', origin: 'graph:run_1' })
+        await store.put({ content: 'shared', origin: 'web_fetch' })
+        expect(await store.stat(first.meta.id)).toMatchObject({
+          origins: ['graph:run_1', 'web_fetch'],
+          originHistoryComplete: true
+        })
+        expect(await store.list?.()).toEqual(expect.arrayContaining([
+          expect.objectContaining({ id: first.meta.id })
+        ]))
+      } finally {
+        await cleanup?.()
+      }
+    })
   })
 }
 

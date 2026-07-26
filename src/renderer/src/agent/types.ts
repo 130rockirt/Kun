@@ -578,6 +578,8 @@ export type ThreadEventSink = {
   /** Optional: request-local context accounting for the main agent. */
   onContextSnapshot?(snapshot: RequestContextSnapshot): void
   onDelegatedRuntimeState?(state: DelegatedRuntimeState): void
+  /** Raw versioned Graph envelope; the Graph projection owns validation/reconciliation. */
+  onGraphEvent?(event: unknown): void
 }
 
 export interface AgentProvider {
@@ -612,6 +614,7 @@ export interface AgentProvider {
     text: string,
     options?: {
       mode?: string
+      orchestration?: 'direct' | 'graph'
       model?: string
       providerId?: string
       accountId?: string

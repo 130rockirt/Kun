@@ -423,6 +423,8 @@ export class RoundOutcomeCoordinator {
       threadId: input.threadId,
       turnId: input.turnId,
       workspace: prepared.workspace,
+      orchestration: prepared.orchestration,
+      messageSource: prepared.messageSource,
       threadMode: prepared.mode,
       activePlanContext: prepared.activePlanContext,
       guiDesignCanvas: input.turn.guiDesignCanvas === true,

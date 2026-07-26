@@ -46,6 +46,10 @@ export type ChildDelegatedRuntimeFactory = (input: {
   toolPolicy: 'readOnly' | 'inherit'
   allowedToolNames?: readonly string[]
   allowedProviderIds?: readonly string[]
+  allowedSkillIds?: readonly string[]
+  allowedReadPaths?: readonly string[]
+  allowedWritePaths?: readonly string[]
+  allowedArtifactIds?: readonly string[]
   blockedToolNames?: readonly string[]
   blockedProviderIds?: readonly string[]
   blockedSkillIds?: readonly string[]
@@ -190,6 +194,18 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
       ...(input.security?.allowedProviderIds
         ? { allowedProviderIds: input.security.allowedProviderIds }
         : {}),
+      ...(input.security?.allowedSkillIds
+        ? { allowedSkillIds: input.security.allowedSkillIds }
+        : {}),
+      ...(input.security?.allowedReadPaths
+        ? { allowedReadPaths: input.security.allowedReadPaths }
+        : {}),
+      ...(input.security?.allowedWritePaths
+        ? { allowedWritePaths: input.security.allowedWritePaths }
+        : {}),
+      ...(input.security?.allowedArtifactIds
+        ? { allowedArtifactIds: input.security.allowedArtifactIds }
+        : {}),
       ...(blockedToolNames.length ? { blockedToolNames } : {}),
       ...(blockedProviderIds.length ? { blockedProviderIds } : {}),
       ...(blockedSkillIds.length ? { blockedSkillIds } : {}),
@@ -215,6 +231,16 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
       nowIso,
       ...(forcedAllowedToolNames ? { forcedAllowedToolNames } : {}),
       ...(input.security?.allowedProviderIds ? { allowedProviderIds: input.security.allowedProviderIds } : {}),
+      ...(input.security?.allowedSkillIds ? { allowedSkillIds: input.security.allowedSkillIds } : {}),
+      ...(input.security?.allowedReadPaths
+        ? { allowedReadPaths: input.security.allowedReadPaths }
+        : {}),
+      ...(input.security?.allowedWritePaths
+        ? { allowedWritePaths: input.security.allowedWritePaths }
+        : {}),
+      ...(input.security?.allowedArtifactIds
+        ? { allowedArtifactIds: input.security.allowedArtifactIds }
+        : {}),
       ...(blockedToolNames.length ? { blockedToolNames } : {}),
       ...(blockedProviderIds.length ? { blockedProviderIds } : {}),
       ...(blockedSkillIds.length ? { blockedSkillIds } : {}),

@@ -141,6 +141,30 @@ describe('SkillRuntime project config', () => {
     await expect(runtime.availableSkillIdsForWorkspace(workspace)).resolves.toEqual(['project-only'])
   })
 
+  it('enforces a delegated skill allow-list for discovery, activation, and load_skill', async () => {
+    await writeSkill(join(workspace, '.kun', 'skills'), 'allowed', 'allowed instructions')
+    await writeSkill(join(workspace, '.kun', 'skills'), 'later-added', 'must stay hidden')
+    const runtime = await createRuntime()
+
+    await expect(runtime.availableSkillIdsForWorkspace(
+      workspace,
+      undefined,
+      ['allowed']
+    )).resolves.toEqual(['allowed'])
+    await expect(runtime.resolveTurn({
+      prompt: '/later-added',
+      workspace,
+      allowedSkillIds: ['allowed']
+    })).resolves.toMatchObject({ activeSkillIds: [] })
+    await expect(runtime.loadSkillById(
+      'later-added',
+      workspace,
+      undefined,
+      undefined,
+      ['allowed']
+    )).resolves.toMatchObject({ error: expect.stringContaining('unknown skill id') })
+  })
+
   async function createRuntime(): Promise<SkillRuntime> {
     await writeSkill(globalRoot, 'global', 'global instructions')
     const config = KunCapabilitiesConfig.parse({

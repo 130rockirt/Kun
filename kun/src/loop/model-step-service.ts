@@ -97,6 +97,16 @@ import { buildToolCatalogFingerprint } from '../cache/tool-catalog-fingerprint.j
 import { rewriteItemHistoryWithRetry } from '../services/history-commit-coordinator.js'
 import { TurnToolCatalogFreezer } from './turn-tool-catalog.js'
 
+const GRAPH_CREATE_RUN_TOOL_NAME = 'graph_create_run'
+const GRAPH_MODE_INSTRUCTION = [
+  'Graph Mode is active for this turn.',
+  'First understand the complete user outcome and decompose it into a durable, bounded GraphPlan.',
+  'Use graph_create_run exactly once before giving a final response.',
+  'Give each node a focused objective, explicit acceptance criteria, least-privilege scopes, review policy, and a suitable existing or ephemeral project agent.',
+  'Use typed dependencies and only bounded LoopGates; do not encode an unbounded cycle.',
+  'After creation, the host scheduler and Graph workers execute the plan while the Lead supervises through validated Graph tools.'
+].join(' ')
+
 export type ModelStepServiceDeps = {
   threadStore: ThreadStore
   sessionStore: SessionStore
@@ -397,11 +407,18 @@ export class ModelStepService {
     const createPlanSatisfied = planTurnActive
       ? hasSuccessfulCreatePlanResult(historyItems, turnId)
       : false
+    const graphCreateSatisfied = turn.orchestration === 'graph'
+      ? hasSuccessfulToolResult(historyItems, turnId, GRAPH_CREATE_RUN_TOOL_NAME)
+      : false
     const svgCompletion = turn?.guiDesignArtifact?.kind === 'svg'
       ? svgArtifactCompletionState(historyItems, turnId)
       : null
     const requiredToolName =
-      planTurnActive &&
+      turn.orchestration === 'graph' &&
+      !graphCreateSatisfied &&
+      toolSpecs.some((tool) => tool.name === GRAPH_CREATE_RUN_TOOL_NAME)
+        ? GRAPH_CREATE_RUN_TOOL_NAME
+        : planTurnActive &&
       !createPlanSatisfied &&
       toolSpecs.some((tool) => tool.name === CREATE_PLAN_TOOL_NAME)
         ? CREATE_PLAN_TOOL_NAME
@@ -551,6 +568,7 @@ export class ModelStepService {
       contextInstructionCount: contextInstructions.length
     })
     const modeInstruction = [
+      ...(turn.orchestration === 'graph' ? [GRAPH_MODE_INSTRUCTION] : []),
       ...(planTurnActive ? [PLAN_MODE_INSTRUCTION] : []),
       ...(turn.guiDesignArtifact?.kind === 'svg'
         ? [SVG_ARTIFACT_MODE_INSTRUCTION]
@@ -704,6 +722,19 @@ export class ModelStepService {
       svgCompletion
     })
   }
+}
+
+function hasSuccessfulToolResult(
+  items: readonly TurnItem[],
+  turnId: string,
+  toolName: string
+): boolean {
+  return items.some((item) =>
+    item.turnId === turnId &&
+    item.kind === 'tool_result' &&
+    item.toolName === toolName &&
+    item.status === 'completed' &&
+    item.isError !== true)
 }
 
 export function buildExtensionProfileInstruction(extensionId: string, profileId: string, overlay: string): string {

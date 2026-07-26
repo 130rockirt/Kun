@@ -1,0 +1,302 @@
+import { rendererRuntimeClient } from '../agent/runtime-client'
+import type {
+  GraphAgentEvidence,
+  GraphAgentProfile,
+  GraphAgentScore,
+  GraphArtifactPage,
+  GraphEventEnvelope,
+  GraphGovernanceAudit,
+  GraphLearningCandidate,
+  GraphLearningJob,
+  GraphPatchOperation,
+  GraphRun,
+  ProjectIdentity
+} from './graph-types'
+
+type RuntimeResponse = { ok: boolean; status: number; body: string }
+
+function graphId(prefix: string): string {
+  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`
+}
+
+function parse<T>(response: RuntimeResponse, fallback: string): T {
+  let value: unknown
+  try {
+    value = response.body ? JSON.parse(response.body) : {}
+  } catch {
+    throw new Error(`${fallback}: runtime returned invalid JSON`)
+  }
+  if (!response.ok) {
+    const detail = value && typeof value === 'object'
+      ? String((value as { message?: unknown }).message ?? fallback)
+      : fallback
+    throw new Error(detail)
+  }
+  return value as T
+}
+
+async function request<T>(
+  path: string,
+  method: 'GET' | 'POST' = 'GET',
+  body?: Record<string, unknown>
+): Promise<T> {
+  const response = await rendererRuntimeClient.runtimeRequest(
+    path,
+    method,
+    body ? JSON.stringify(body) : undefined
+  )
+  return parse<T>(response, `Graph request failed (${response.status})`)
+}
+
+export const graphRuntimeClient = {
+  async listRuns(threadId?: string): Promise<GraphRun[]> {
+    const query = threadId ? `?thread_id=${encodeURIComponent(threadId)}` : ''
+    return (await request<{ runs: GraphRun[] }>(`/v1/graphs${query}`)).runs
+  },
+
+  getRun(runId: string): Promise<GraphRun> {
+    return request(`/v1/graphs/${encodeURIComponent(runId)}`)
+  },
+
+  async listEvents(runId: string, sinceSeq = 0): Promise<GraphEventEnvelope[]> {
+    return (await request<{ events: GraphEventEnvelope[] }>(
+      `/v1/graphs/${encodeURIComponent(runId)}/events?since_seq=${sinceSeq}`
+    )).events
+  },
+
+  readArtifact(
+    runId: string,
+    artifactId: string,
+    cursor?: { offset?: number; startLine?: number }
+  ): Promise<GraphArtifactPage> {
+    const query = new URLSearchParams()
+    if (cursor?.startLine !== undefined) query.set('start_line', String(cursor.startLine))
+    else query.set('offset', String(cursor?.offset ?? 0))
+    return request(
+      `/v1/graphs/${encodeURIComponent(runId)}/artifacts/${encodeURIComponent(artifactId)}?${query}`
+    )
+  },
+
+  command(runId: string, action: 'start' | 'pause' | 'resume' | 'cleanup'): Promise<GraphRun> {
+    const commandId = graphId(`user_${action}`)
+    return request(`/v1/graphs/${encodeURIComponent(runId)}/${action}`, 'POST', {
+      commandId,
+      idempotencyKey: commandId
+    })
+  },
+
+  async cancel(runId: string, reason: string): Promise<GraphRun> {
+    const commandId = graphId('user_cancel')
+    return request(`/v1/graphs/${encodeURIComponent(runId)}/cancel`, 'POST', {
+      commandId,
+      idempotencyKey: commandId,
+      reason
+    })
+  },
+
+  async retry(runId: string, nodeId: string): Promise<GraphRun> {
+    const commandId = graphId('user_retry')
+    return request(`/v1/graphs/${encodeURIComponent(runId)}/retry`, 'POST', {
+      commandId,
+      idempotencyKey: commandId,
+      nodeId
+    })
+  },
+
+  async review(
+    run: GraphRun,
+    nodeId: string,
+    attemptId: string,
+    outcome: 'pass' | 'fail'
+  ): Promise<GraphRun> {
+    const commandId = graphId('human_review')
+    return request(`/v1/graphs/${encodeURIComponent(run.id)}/reviews`, 'POST', {
+      commandId,
+      idempotencyKey: commandId,
+      expectedSeq: run.lastEventSeq,
+      expectedRevision: run.currentRevision,
+      review: {
+        version: 1,
+        reviewId: graphId('review'),
+        nodeId,
+        attemptId,
+        reviewerKind: 'human',
+        outcome,
+        summary: outcome === 'pass'
+          ? 'Approved by the user from the Graph panel.'
+          : 'Rejected by the user from the Graph panel.',
+        evidence: [],
+        artifactRefs: [],
+        ...(outcome === 'fail'
+          ? { repairInstructions: 'Address the user rejection before resubmitting.' }
+          : {}),
+        createdAt: new Date().toISOString()
+      }
+    })
+  },
+
+  async patch(
+    run: GraphRun,
+    operations: GraphPatchOperation[],
+    reason: string
+  ): Promise<GraphRun> {
+    const commandId = graphId('user_patch')
+    const patchId = graphId('graph_patch')
+    return request(`/v1/graphs/${encodeURIComponent(run.id)}/patch`, 'POST', {
+      commandId,
+      idempotencyKey: patchId,
+      expectedSeq: run.lastEventSeq,
+      expectedRevision: run.currentRevision,
+      patch: {
+        version: 1,
+        patchId,
+        commandId,
+        runId: run.id,
+        baseRevision: run.currentRevision,
+        requester: { kind: 'user', id: 'graph_workbench' },
+        reason,
+        operations,
+        createdAt: new Date().toISOString()
+      }
+    })
+  },
+
+  async steer(
+    runId: string,
+    text: string,
+    target: { kind: 'run' | 'lead' } | { kind: 'phase'; phaseId: string } |
+      { kind: 'node'; nodeId: string } |
+      { kind: 'attempt'; nodeId: string; attemptId: string }
+  ): Promise<GraphRun> {
+    const commandId = graphId('user_steer')
+    return request(`/v1/graphs/${encodeURIComponent(runId)}/steer`, 'POST', {
+      commandId,
+      idempotencyKey: commandId,
+      target,
+      text
+    })
+  },
+
+  identity(workspace: string): Promise<ProjectIdentity> {
+    return request(`/v1/graph-projects/identity?workspace=${encodeURIComponent(workspace)}`)
+  },
+
+  async listProfiles(projectId: string, includeArchived = true): Promise<GraphAgentProfile[]> {
+    return (await request<{ profiles: GraphAgentProfile[] }>(
+      `/v1/graph-projects/${encodeURIComponent(projectId)}/agents?include_archived=${includeArchived}`
+    )).profiles
+  },
+
+  async listEvidence(projectId: string): Promise<GraphAgentEvidence[]> {
+    return (await request<{ evidence: GraphAgentEvidence[] }>(
+      `/v1/graph-projects/${encodeURIComponent(projectId)}/evidence`
+    )).evidence
+  },
+
+  async listScores(projectId: string): Promise<GraphAgentScore[]> {
+    return (await request<{ scores: GraphAgentScore[] }>(
+      `/v1/graph-projects/${encodeURIComponent(projectId)}/scores`
+    )).scores
+  },
+
+  async listAudit(projectId: string): Promise<GraphGovernanceAudit[]> {
+    return (await request<{ audit: GraphGovernanceAudit[] }>(
+      `/v1/graph-projects/${encodeURIComponent(projectId)}/audit`
+    )).audit
+  },
+
+  async listCandidates(projectId: string): Promise<GraphLearningCandidate[]> {
+    return (await request<{ candidates: GraphLearningCandidate[] }>(
+      `/v1/graph-projects/${encodeURIComponent(projectId)}/candidates`
+    )).candidates
+  },
+
+  async listJobs(projectId: string): Promise<GraphLearningJob[]> {
+    return (await request<{ jobs: GraphLearningJob[] }>(
+      `/v1/graph-projects/${encodeURIComponent(projectId)}/jobs`
+    )).jobs
+  },
+
+  transitionProfile(
+    projectId: string,
+    profileId: string,
+    workspace: string,
+    lifecycle: GraphAgentProfile['lifecycle'],
+    reason: string
+  ): Promise<GraphAgentProfile> {
+    return request(
+      `/v1/graph-projects/${encodeURIComponent(projectId)}/agents/${encodeURIComponent(profileId)}/lifecycle`,
+      'POST',
+      { workspace, lifecycle, reason }
+    )
+  },
+
+  exportProfile(projectId: string, profileId: string): Promise<{
+    format: 'kun.graph-agent-profile'
+    formatVersion: 1
+    exportedAt: string
+    profile: GraphAgentProfile
+  }> {
+    return request(
+      `/v1/graph-projects/${encodeURIComponent(projectId)}/agents/${encodeURIComponent(profileId)}/export`
+    )
+  },
+
+  importProfile(
+    projectId: string,
+    workspace: string,
+    profile: GraphAgentProfile
+  ): Promise<GraphAgentProfile> {
+    return request(
+      `/v1/graph-projects/${encodeURIComponent(projectId)}/agents/import`,
+      'POST',
+      {
+        workspace,
+        profile,
+        reason: 'User imported a portable Graph project-agent profile.'
+      }
+    )
+  },
+
+  mergeProfiles(
+    projectId: string,
+    workspace: string,
+    sourceProfileIds: string[],
+    targetProfileId: string,
+    name: string
+  ): Promise<GraphAgentProfile> {
+    return request(
+      `/v1/graph-projects/${encodeURIComponent(projectId)}/agents/merge`,
+      'POST',
+      {
+        workspace,
+        sourceProfileIds,
+        targetProfileId,
+        name,
+        reason: 'User merged project-agent profiles from the Graph panel.'
+      }
+    )
+  },
+
+  governCandidate(
+    projectId: string,
+    candidateId: string,
+    workspace: string,
+    action: 'approve' | 'reject' | 'start_probation' | 'promote' | 'rollback' | 'delete',
+    reason: string
+  ): Promise<GraphLearningCandidate> {
+    return request(
+      `/v1/graph-projects/${encodeURIComponent(projectId)}/candidates/${encodeURIComponent(candidateId)}/action`,
+      'POST',
+      { workspace, action, reason }
+    )
+  },
+
+  async consolidate(projectId: string, workspace: string): Promise<GraphLearningJob | null> {
+    return (await request<{ job: GraphLearningJob | null }>(
+      `/v1/graph-projects/${encodeURIComponent(projectId)}/consolidate`,
+      'POST',
+      { workspace, idempotencyKey: graphId('manual_consolidation') }
+    )).job
+  }
+}

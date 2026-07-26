@@ -65,6 +65,14 @@ import {
   type SandboxMode
 } from './app-settings-types'
 import {
+  defaultKunGraphSettings,
+  normalizeKunGraphSettings
+} from './app-settings-graph'
+export {
+  defaultKunGraphSettings,
+  normalizeKunGraphSettings
+} from './app-settings-graph'
+import {
   normalizeModelProviderSettings,
   resolveKunRuntimeSettings
 } from './app-settings-provider'
@@ -176,7 +184,8 @@ export function defaultKunRuntimeSettings(
     memoryEnabled: false,
     instructions: defaultKunInstructionSettings(),
     computerUse: defaultKunComputerUseSettings(),
-    quality: defaultKunQualitySettings()
+    quality: defaultKunQualitySettings(),
+    graph: defaultKunGraphSettings()
   }
 }
 
@@ -500,6 +509,42 @@ export function mergeKunRuntimeSettings(
     ...currentQuality,
     ...(patch?.quality ?? {})
   })
+  const nextGraph = normalizeKunGraphSettings({
+    ...current.graph,
+    ...(patch?.graph ?? {}),
+    scheduler: {
+      ...current.graph?.scheduler,
+      ...(patch?.graph?.scheduler ?? {})
+    },
+    context: {
+      ...current.graph?.context,
+      ...(patch?.graph?.context ?? {})
+    },
+    mailbox: {
+      ...current.graph?.mailbox,
+      ...(patch?.graph?.mailbox ?? {})
+    },
+    supervision: {
+      ...current.graph?.supervision,
+      ...(patch?.graph?.supervision ?? {})
+    },
+    writeIsolation: {
+      ...current.graph?.writeIsolation,
+      ...(patch?.graph?.writeIsolation ?? {})
+    },
+    routing: {
+      ...current.graph?.routing,
+      ...(patch?.graph?.routing ?? {})
+    },
+    learning: {
+      ...current.graph?.learning,
+      ...(patch?.graph?.learning ?? {})
+    },
+    retention: {
+      ...current.graph?.retention,
+      ...(patch?.graph?.retention ?? {})
+    }
+  })
   const currentRuntimeTuning = normalizeKunRuntimeTuningSettings(current.runtimeTuning)
   const nextRuntimeTuning = normalizeKunRuntimeTuningSettings({
     ...currentRuntimeTuning,
@@ -541,10 +586,12 @@ export function mergeKunRuntimeSettings(
   const {
     subagents: _subagentsPatch,
     projectConfig: _projectConfigPatch,
+    graph: _graphPatch,
     ...flatPatch
   } = patch ?? {}
   void _subagentsPatch
   void _projectConfigPatch
+  void _graphPatch
   // NOTE: approvalPolicy/sandboxMode are merged through verbatim from the patch.
   // The unified 6-mode UI selector already resolves a mode to its concrete
   // {approvalPolicy, sandboxMode} pair via kunToolPermissionModeSettings before
@@ -576,6 +623,7 @@ export function mergeKunRuntimeSettings(
     instructions: nextInstructions,
     computerUse: nextComputerUse,
     quality: nextQuality,
+    graph: nextGraph,
     ...(nextSubagents !== undefined ? { subagents: nextSubagents } : {})
   }
   // Optional model slots are authoritative from mergeOptionalModelSlot: strip any
@@ -944,6 +992,12 @@ function boundedPositiveInt(value: unknown, fallback: number, max = Number.MAX_S
 function boundedNonNegativeInt(value: unknown, fallback: number, max = Number.MAX_SAFE_INTEGER): number {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return fallback
   return Math.min(Math.floor(value), max)
+}
+
+function boundedRatio(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1
+    ? value
+    : fallback
 }
 
 function normalizeKunStorageSettings(

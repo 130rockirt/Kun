@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import {
   ContextCompactionConfigSchema,
+  GraphRuntimeConfigSchema,
   KunServeConfigSchema,
   ModelConfigSchema,
   QualityConfigSchema,
@@ -28,6 +29,7 @@ export const RuntimeConfigApplyRequest = z
     models: ModelConfigSchema.optional(),
     contextCompaction: ContextCompactionConfigSchema.optional(),
     runtime: RuntimeTuningConfigSchema.optional(),
+    graph: GraphRuntimeConfigSchema.optional(),
     roles: RolesConfigSchema.optional(),
     capabilities: KunCapabilitiesConfig.optional(),
     hooks: HooksConfigSchema.optional(),

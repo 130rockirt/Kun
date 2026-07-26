@@ -1,6 +1,13 @@
-import type { GuiDesignArtifactContextJson, GuiPlanContextJson, Turn, TurnReasoningEffort, TurnStatus } from '../contracts/turns.js'
+import type {
+  GuiDesignArtifactContextJson,
+  GuiPlanContextJson,
+  Turn,
+  TurnReasoningEffort,
+  TurnStatus
+} from '../contracts/turns.js'
+import type { GraphOrchestrationStrategy } from '../contracts/graph.js'
 import type { ThreadMode } from '../contracts/threads.js'
-import type { TurnItem } from '../contracts/items.js'
+import type { TurnItem, UserMessageSource } from '../contracts/items.js'
 import type { ComposerContextAttachmentJson } from '../contracts/composer-context.js'
 
 export type TurnEntity = Turn
@@ -9,6 +16,7 @@ export function createTurnRecord(input: {
   id: string
   threadId: string
   prompt: string
+  messageSource?: UserMessageSource
   model?: string
   providerId?: string
   accountId?: string
@@ -21,6 +29,7 @@ export function createTurnRecord(input: {
   agentSurface?: 'code' | 'write' | 'design'
   guiDesignArtifact?: GuiDesignArtifactContextJson
   mode?: ThreadMode
+  orchestration?: GraphOrchestrationStrategy
   disableUserInput?: boolean
   imContext?: boolean
   workspaceCheckpointId?: string
@@ -37,6 +46,8 @@ export function createTurnRecord(input: {
     threadId: input.threadId,
     status: input.status ?? 'queued',
     prompt: input.prompt,
+    ...(input.messageSource ? { messageSource: input.messageSource } : {}),
+    orchestration: input.orchestration ?? 'direct',
     steering: [],
     items: [],
     attachmentIds: [...(input.attachmentIds ?? [])],

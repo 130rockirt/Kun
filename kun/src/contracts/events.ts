@@ -10,6 +10,7 @@ import { UsageSnapshotSchema } from './usage.js'
 import { RuntimeErrorSeverity } from './errors.js'
 import { ApprovalPolicySchema, SandboxModeSchema } from './policy.js'
 import { SubagentToolPolicy } from './capabilities.js'
+import { GraphEventEnvelopeV1Schema } from './graph.js'
 
 /**
  * Persisted runtime events. Every event has a per-thread `seq` so the
@@ -50,6 +51,7 @@ export const RuntimeEventKind = z.enum([
   'bash_session_completed',
   'pipeline_stage',
   'delegated_runtime',
+  'graph_event',
   'context_snapshot',
   'usage',
   'error',
@@ -310,6 +312,12 @@ export const DelegatedRuntimeEvent = RuntimeEventBase.extend({
 })
 export type DelegatedRuntimeEvent = z.infer<typeof DelegatedRuntimeEvent>
 
+export const GraphRuntimeEvent = RuntimeEventBase.extend({
+  kind: z.literal('graph_event'),
+  graph: GraphEventEnvelopeV1Schema
+})
+export type GraphRuntimeEvent = z.infer<typeof GraphRuntimeEvent>
+
 export const UsageEvent = RuntimeEventBase.extend({
   kind: z.literal('usage'),
   model: z.string().optional(),
@@ -356,6 +364,7 @@ export const RuntimeEvent = z.discriminatedUnion('kind', [
   BashSessionEvent,
   PipelineStageEvent,
   DelegatedRuntimeEvent,
+  GraphRuntimeEvent,
   ContextSnapshotEvent,
   UsageEvent,
   ErrorEvent,

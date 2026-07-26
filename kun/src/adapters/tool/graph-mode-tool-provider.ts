@@ -1,0 +1,673 @@
+import { createHash } from 'node:crypto'
+import type { ArtifactStore } from '../../artifacts/artifact-store.js'
+import {
+  GRAPH_CONTRACT_VERSION,
+  GraphPatchV1Schema,
+  GraphPlanV1Schema,
+  GraphReviewResultV1Schema,
+  GraphWorkerResultV1Schema,
+  type GraphArtifactReferenceV1,
+  type GraphNodeAttemptV1,
+  type GraphRunV1
+} from '../../contracts/index.js'
+import type { ToolHostContext } from '../../ports/tool-host.js'
+import type { LocalTool } from './local-tool-host.js'
+import { LocalToolHost } from './local-tool-host.js'
+import {
+  GraphControlService,
+  GraphMailbox,
+  GraphWorkerSessionRegistry,
+  canonicalWorkerArtifactRefs,
+  type GraphRunStore,
+  type ProjectAgentRegistry
+} from '../../graph/index.js'
+
+export function buildGraphModeLocalTools(options: {
+  control: GraphControlService
+  store: GraphRunStore
+  mailbox: GraphMailbox
+  registry: ProjectAgentRegistry
+  artifactStore: ArtifactStore
+  workerSessions: GraphWorkerSessionRegistry
+  enabled: () => boolean
+  signalSupervision?: (input: {
+    runId: string
+    reason: 'help' | 'user_steering' | 'submitted'
+    nodeIds: string[]
+    digest: string
+  }) => Promise<void> | void
+  nowIso?: () => string
+  nextId?: (prefix: string) => string
+}): LocalTool[] {
+  const nowIso = options.nowIso ?? (() => new Date().toISOString())
+  let next = 0
+  const nextId = options.nextId ?? ((prefix: string) => `${prefix}_${Date.now()}_${++next}`)
+  const graphLeadOnly = (context: ToolHostContext) =>
+    options.enabled() &&
+    !options.workerSessions.has(context.threadId) &&
+    (context.orchestration === 'graph' || context.messageSource === 'graph_runtime')
+  const graphCreatorOnly = (context: ToolHostContext) =>
+    options.enabled() &&
+    !options.workerSessions.has(context.threadId) &&
+    context.orchestration === 'graph'
+  const graphWorkerOnly = (context: ToolHostContext) =>
+    options.enabled() && options.workerSessions.has(context.threadId)
+
+  return [
+    LocalToolHost.defineTool({
+      name: 'graph_create_run',
+      description:
+        'Create and start a durable GraphRun after thinking through the user request. ' +
+        'The plan must define phases, bounded nodes, typed edges, budgets, completion nodes, ' +
+        'acceptance criteria, review policy, explicit read/write scopes, and bounded LoopGates. ' +
+        'Use this exactly once for a Graph-mode user turn; the host validates all authority and graph invariants.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          plan: { type: 'object' },
+          start: { type: 'boolean' }
+        },
+        required: ['plan'],
+        additionalProperties: false
+      },
+      policy: 'auto',
+      toolKind: 'tool_call',
+      sideEffect: 'unknown',
+      shouldAdvertise: graphCreatorOnly,
+      execute: async (args, context) => {
+        try {
+          const raw = GraphPlanV1Schema.parse(args.plan)
+          const identity = await options.registry.identify(context.workspace)
+          const plan = GraphPlanV1Schema.parse({
+            ...raw,
+            workspaceRoot: identity.canonicalWorkspaceRoot,
+            createdBy: 'lead'
+          })
+          const runId = options.control.allocateId('graph_run')
+          const result = await options.control.create({
+            runId,
+            threadId: context.threadId,
+            projectId: identity.projectId,
+            sourceTurnId: context.turnId,
+            plan,
+            commandId: nextId('graph_command'),
+            idempotencyKey: `graph-create:${context.turnId}`,
+            start: args.start !== false
+          })
+          return { output: { run: result.run, validation: result.validation } }
+        } catch (error) {
+          return { output: { error: errorMessage(error) }, isError: true }
+        }
+      }
+    }),
+    LocalToolHost.defineTool({
+      name: 'graph_control_run',
+      description:
+        'Inspect or control one durable GraphRun. Actions: inspect, pause, resume, cancel, retry_node, or steer. ' +
+        'Every mutation is host-validated, idempotent, and revision/sequence checked.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          action: {
+            type: 'string',
+            enum: ['inspect', 'pause', 'resume', 'cancel', 'retry_node', 'steer']
+          },
+          runId: { type: 'string' },
+          nodeId: { type: 'string' },
+          text: { type: 'string' },
+          expectedSeq: { type: 'number' },
+          expectedRevision: { type: 'number' }
+        },
+        required: ['action', 'runId'],
+        additionalProperties: false
+      },
+      policy: 'auto',
+      toolKind: 'tool_call',
+      sideEffect: 'unknown',
+      shouldAdvertise: graphLeadOnly,
+      execute: async (args, context) => {
+        try {
+          const action = stringArg(args.action)
+          const runId = stringArg(args.runId)
+          await authorizedLead(options.store, options.registry, runId, context)
+          if (action === 'inspect') return { output: await options.control.get(runId) }
+          const command = {
+            commandId: nextId('graph_command'),
+            idempotencyKey: `graph-control:${runId}:${action}:${stringArg(args.nodeId) || 'run'}:${Number(args.expectedSeq ?? -1)}`,
+            ...(numberArg(args.expectedSeq) !== undefined
+              ? { expectedSeq: numberArg(args.expectedSeq) }
+              : {}),
+            ...(numberArg(args.expectedRevision) !== undefined
+              ? { expectedRevision: numberArg(args.expectedRevision) }
+              : {})
+          }
+          if (action === 'pause') return { output: await options.control.pause(runId, command) }
+          if (action === 'resume') return { output: await options.control.resume(runId, command) }
+          if (action === 'cancel') return {
+            output: await options.control.cancel(runId, {
+              ...command,
+              ...(stringArg(args.text) ? { reason: stringArg(args.text) } : {})
+            })
+          }
+          if (action === 'retry_node') {
+            const nodeId = stringArg(args.nodeId)
+            if (!nodeId) throw new Error('nodeId is required for retry_node')
+            return { output: await options.control.retryNode(runId, nodeId, command) }
+          }
+          if (action === 'steer') {
+            const text = stringArg(args.text)
+            if (!text) throw new Error('text is required for steer')
+            const steeringId = nextId('graph_steering')
+            const output = await options.control.steer(runId, {
+              version: GRAPH_CONTRACT_VERSION,
+              steeringId,
+              runId,
+              target: stringArg(args.nodeId)
+                ? { kind: 'node', nodeId: stringArg(args.nodeId) }
+                : { kind: 'run' },
+              text,
+              status: 'persisted',
+              createdAt: nowIso()
+            }, command)
+            await options.signalSupervision?.({
+              runId,
+              reason: 'user_steering',
+              nodeIds: stringArg(args.nodeId) ? [stringArg(args.nodeId)] : [],
+              digest: text
+            })
+            return { output }
+          }
+          throw new Error(`unsupported Graph control action: ${action}`)
+        } catch (error) {
+          return { output: { error: errorMessage(error) }, isError: true }
+        }
+      }
+    }),
+    LocalToolHost.defineTool({
+      name: 'graph_patch_run',
+      description:
+        'Apply a validated compare-and-swap GraphPatch. Accepted history cannot be rewritten; ' +
+        'replacement work must use a distinct superseding node.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          patch: { type: 'object' },
+          expectedSeq: { type: 'number' }
+        },
+        required: ['patch', 'expectedSeq'],
+        additionalProperties: false
+      },
+      policy: 'auto',
+      toolKind: 'tool_call',
+      sideEffect: 'unknown',
+      shouldAdvertise: graphLeadOnly,
+      execute: async (args, context) => {
+        try {
+          const patch = GraphPatchV1Schema.parse(args.patch)
+          await authorizedLead(options.store, options.registry, patch.runId, context)
+          return {
+            output: await options.control.applyPatch(patch.runId, patch, {
+              commandId: patch.commandId,
+              idempotencyKey: `graph-patch:${patch.patchId}`,
+              ...(numberArg(args.expectedSeq) !== undefined
+                ? { expectedSeq: numberArg(args.expectedSeq) }
+                : {}),
+              expectedRevision: patch.baseRevision
+            })
+          }
+        } catch (error) {
+          return { output: { error: errorMessage(error) }, isError: true }
+        }
+      }
+    }),
+    LocalToolHost.defineTool({
+      name: 'graph_review_node',
+      description:
+        'Record a Lead or human review decision for a submitted Graph node. ' +
+        'Use pass, fail, revise, or needs_human with bounded evidence.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          runId: { type: 'string' },
+          review: { type: 'object' },
+          expectedSeq: { type: 'number' },
+          expectedRevision: { type: 'number' }
+        },
+        required: ['runId', 'review', 'expectedSeq', 'expectedRevision'],
+        additionalProperties: false
+      },
+      policy: 'auto',
+      toolKind: 'tool_call',
+      sideEffect: 'unknown',
+      shouldAdvertise: graphLeadOnly,
+      execute: async (args, context) => {
+        try {
+          const runId = stringArg(args.runId)
+          await authorizedLead(options.store, options.registry, runId, context)
+          const review = GraphReviewResultV1Schema.parse(args.review)
+          return {
+            output: await options.control.recordReview(runId, review, {
+              commandId: nextId('graph_command'),
+              idempotencyKey: `graph-review:${review.reviewId}`,
+              ...(numberArg(args.expectedSeq) !== undefined
+                ? { expectedSeq: numberArg(args.expectedSeq) }
+                : {}),
+              ...(numberArg(args.expectedRevision) !== undefined
+                ? { expectedRevision: numberArg(args.expectedRevision) }
+                : {})
+            }, 'lead')
+          }
+        } catch (error) {
+          return { output: { error: errorMessage(error) }, isError: true }
+        }
+      }
+    }),
+    LocalToolHost.defineTool({
+      name: 'graph_worker_progress',
+      description:
+        'Report bounded progress for the Graph worker attempt associated with this child session.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          runId: { type: 'string' },
+          summary: { type: 'string' },
+          percent: { type: 'number' },
+          phase: { type: 'string' }
+        },
+        required: ['runId', 'summary'],
+        additionalProperties: false
+      },
+      policy: 'auto',
+      toolKind: 'tool_call',
+      sideEffect: 'unknown',
+      shouldAdvertise: graphWorkerOnly,
+      execute: async (args, context) => {
+        try {
+          const located = await authorizedWorker(options.store, stringArg(args.runId), context)
+          const run = (await options.store.append(located.run.id, {
+            expectedSeq: located.run.lastEventSeq,
+            graphRevision: located.run.currentRevision,
+            commandId: nextId('graph_worker'),
+            idempotencyKey: `progress:${located.attempt.id}:${hash(JSON.stringify(args)).slice(0, 16)}`,
+            event: {
+              type: 'progress_reported',
+              payload: {
+                progress: {
+                  version: GRAPH_CONTRACT_VERSION,
+                  nodeId: located.nodeId,
+                  attemptId: located.attempt.id,
+                  ...(numberArg(args.percent) !== undefined
+                    ? { percent: numberArg(args.percent) }
+                    : {}),
+                  summary: stringArg(args.summary).slice(0, 4_096),
+                  ...(stringArg(args.phase)
+                    ? { phase: stringArg(args.phase).slice(0, 128) }
+                    : {}),
+                  createdAt: nowIso()
+                }
+              }
+            }
+          })).state
+          return { output: { accepted: true, runSeq: run.lastEventSeq } }
+        } catch (error) {
+          return { output: { error: errorMessage(error) }, isError: true }
+        }
+      }
+    }),
+    LocalToolHost.defineTool({
+      name: 'graph_worker_message',
+      description:
+        'Send a typed bounded Graph mailbox message. The host verifies worker identity, graph edges, recipients, artifacts, quotas, expiry, and deduplication.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          runId: { type: 'string' },
+          recipientNodeIds: { type: 'array', items: { type: 'string' } },
+          toLead: { type: 'boolean' },
+          type: {
+            type: 'string',
+            enum: ['handoff', 'finding', 'question', 'answer', 'warning', 'help']
+          },
+          priority: { type: 'string', enum: ['low', 'normal', 'high', 'blocking'] },
+          summary: { type: 'string' },
+          replyRequired: { type: 'boolean' },
+          artifactIds: { type: 'array', items: { type: 'string' } }
+        },
+        required: ['runId', 'type', 'summary'],
+        additionalProperties: false
+      },
+      policy: 'auto',
+      toolKind: 'tool_call',
+      sideEffect: 'unknown',
+      shouldAdvertise: graphWorkerOnly,
+      execute: async (args, context) => {
+        try {
+          const located = await authorizedWorker(options.store, stringArg(args.runId), context)
+          const recipients = [
+            ...stringArray(args.recipientNodeIds).map((nodeId) => ({
+              kind: 'worker' as const,
+              nodeId
+            })),
+            ...(args.toLead === true || stringArg(args.type) === 'help'
+              ? [{ kind: 'lead' as const }]
+              : [])
+          ]
+          if (!recipients.length) throw new Error('at least one recipient is required')
+          const messageId = nextId('graph_message')
+          const artifactIds = new Set(stringArray(args.artifactIds))
+          const artifactRefs = located.run.artifacts.filter((artifact) =>
+            artifactIds.has(artifact.artifactId))
+          if (artifactRefs.length !== artifactIds.size) {
+            throw new Error('one or more message artifacts are not authorized for this GraphRun')
+          }
+          const sent = await options.mailbox.send({
+            id: messageId,
+            runId: located.run.id,
+            sender: {
+              kind: 'worker',
+              nodeId: located.nodeId,
+              attemptId: located.attempt.id
+            },
+            recipients,
+            type: stringArg(args.type) as 'handoff' | 'finding' | 'question' | 'answer' | 'warning' | 'help',
+            priority: (stringArg(args.priority) || 'normal') as 'low' | 'normal' | 'high' | 'blocking',
+            summary: stringArg(args.summary).slice(0, 4_096),
+            artifactRefs,
+            replyRequired: args.replyRequired === true
+          }, {
+            commandId: nextId('graph_worker'),
+            idempotencyKey: `message:${located.attempt.id}:${hash(JSON.stringify(args)).slice(0, 16)}`
+          })
+          if (stringArg(args.type) === 'help') {
+            await options.signalSupervision?.({
+              runId: located.run.id,
+              reason: 'help',
+              nodeIds: [located.nodeId],
+              digest: stringArg(args.summary)
+            })
+          }
+          return { output: { message: sent.message, runSeq: sent.run.lastEventSeq } }
+        } catch (error) {
+          return { output: { error: errorMessage(error) }, isError: true }
+        }
+      }
+    }),
+    LocalToolHost.defineTool({
+      name: 'graph_worker_receive_messages',
+      description:
+        'Receive Graph mailbox messages addressed to this worker and optionally acknowledge messages already handled.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          runId: { type: 'string' },
+          acknowledgeMessageIds: { type: 'array', items: { type: 'string' } }
+        },
+        required: ['runId'],
+        additionalProperties: false
+      },
+      policy: 'auto',
+      toolKind: 'tool_call',
+      sideEffect: 'read-only',
+      shouldAdvertise: graphWorkerOnly,
+      execute: async (args, context) => {
+        try {
+          const located = await authorizedWorker(options.store, stringArg(args.runId), context)
+          let run = located.run
+          const recipient = { kind: 'worker' as const, nodeId: located.nodeId }
+          for (const messageId of stringArray(args.acknowledgeMessageIds)) {
+            run = await options.mailbox.acknowledge(run.id, messageId, recipient, {
+              commandId: nextId('graph_worker'),
+              idempotencyKey: `message-ack:${located.attempt.id}:${messageId}`
+            })
+          }
+          const received = await options.mailbox.receive(
+            run.id,
+            recipient,
+            `worker_receive_${located.attempt.id}`
+          )
+          return {
+            output: {
+              messages: received.messages.map((message) => ({
+                id: message.id,
+                sender: message.sender,
+                type: message.type,
+                priority: message.priority,
+                summary: message.summary,
+                artifactRefs: message.artifactRefs,
+                replyRequired: message.replyRequired,
+                createdAt: message.createdAt,
+                expiresAt: message.expiresAt
+              })),
+              runSeq: received.run.lastEventSeq
+            }
+          }
+        } catch (error) {
+          return { output: { error: errorMessage(error) }, isError: true }
+        }
+      }
+    }),
+    LocalToolHost.defineTool({
+      name: 'graph_worker_publish_artifact',
+      description:
+        'Publish bounded worker output to the content-addressed ArtifactStore and GraphRun. ' +
+        'Use this for evidence or outputs too large for the structured result.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          runId: { type: 'string' },
+          content: { type: 'string' },
+          mimeType: { type: 'string' },
+          summary: { type: 'string' },
+          artifactNames: { type: 'array', items: { type: 'string' } },
+          visibility: { type: 'string', enum: ['run', 'dependency', 'lead', 'user'] }
+        },
+        required: ['runId', 'content', 'mimeType', 'summary'],
+        additionalProperties: false
+      },
+      policy: 'auto',
+      toolKind: 'tool_call',
+      sideEffect: 'unknown',
+      shouldAdvertise: graphWorkerOnly,
+      execute: async (args, context) => {
+        try {
+          const located = await authorizedWorker(options.store, stringArg(args.runId), context)
+          const content = stringArg(args.content)
+          const contentBytes = Buffer.byteLength(content, 'utf8')
+          if (located.run.budget.artifactBytes + contentBytes >
+              located.run.budget.limits.maxArtifactBytes) {
+            throw new Error('Graph artifact budget would be exceeded')
+          }
+          const artifactNames = stringArray(args.artifactNames)
+          const allowedNames = new Set(located.run.plans.at(-1)!.edges
+            .flatMap((edge) =>
+              edge.kind === 'data' && edge.from === located.nodeId
+                ? [edge.artifactName]
+                : []))
+          const invalidName = artifactNames.find((name) => !allowedNames.has(name))
+          if (invalidName) throw new Error(`undeclared Graph data artifact name: ${invalidName}`)
+          const stored = await options.artifactStore.put({
+            content,
+            mimeType: stringArg(args.mimeType).slice(0, 256),
+            source: 'other',
+            origin: `graph-worker:${located.attempt.id}`,
+            maxInlineChars: 2_048
+          })
+          const artifact: GraphArtifactReferenceV1 = {
+            version: GRAPH_CONTRACT_VERSION,
+            artifactId: stored.meta.id,
+            contentHash: createHash('sha256').update(content).digest('hex'),
+            mimeType: stored.meta.mimeType ?? stringArg(args.mimeType),
+            byteLength: stored.meta.byteSize,
+            summary: stringArg(args.summary).slice(0, 4_096),
+            ...(artifactNames.length ? { logicalNames: artifactNames } : {}),
+            producerNodeId: located.nodeId,
+            producerAttemptId: located.attempt.id,
+            visibility: (stringArg(args.visibility) || 'dependency') as GraphArtifactReferenceV1['visibility'],
+            retention: 'run',
+            createdAt: stored.meta.createdAt
+          }
+          let run = (await options.store.append(located.run.id, {
+            expectedSeq: located.run.lastEventSeq,
+            graphRevision: located.run.currentRevision,
+            commandId: nextId('graph_worker'),
+            idempotencyKey: `artifact:${located.attempt.id}:${artifact.contentHash}`,
+            event: {
+              type: 'artifact_published',
+              payload: { artifact, consumerNodeIds: [] }
+            }
+          })).state
+          run = (await options.store.append(run.id, {
+            expectedSeq: run.lastEventSeq,
+            graphRevision: run.currentRevision,
+            commandId: nextId('graph_worker'),
+            idempotencyKey: `artifact-budget:${located.attempt.id}:${artifact.contentHash}`,
+            event: {
+              type: 'budget_updated',
+              payload: {
+                ledger: {
+                  ...run.budget,
+                  artifactBytes: run.budget.artifactBytes + artifact.byteLength
+                },
+                reason: 'worker artifact published'
+              }
+            }
+          })).state
+          return { output: { artifact, runSeq: run.lastEventSeq } }
+        } catch (error) {
+          return { output: { error: errorMessage(error) }, isError: true }
+        }
+      }
+    }),
+    LocalToolHost.defineTool({
+      name: 'graph_worker_submit_result',
+      description:
+        'Submit the structured Graph worker result for the attempt associated with this child session. ' +
+        'The scheduler still owns validation, review, acceptance, retry, and completion.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          runId: { type: 'string' },
+          result: { type: 'object' }
+        },
+        required: ['runId', 'result'],
+        additionalProperties: false
+      },
+      policy: 'auto',
+      toolKind: 'tool_call',
+      sideEffect: 'unknown',
+      shouldAdvertise: graphWorkerOnly,
+      execute: async (args, context) => {
+        try {
+          const located = await authorizedWorker(options.store, stringArg(args.runId), context)
+          const parsed = GraphWorkerResultV1Schema.parse(args.result)
+          const result = {
+            ...parsed,
+            artifactRefs: canonicalWorkerArtifactRefs(
+              located.run,
+              located.nodeId,
+              located.attempt.id,
+              parsed.artifactRefs
+            )
+          }
+          const run = (await options.store.append(located.run.id, {
+            expectedSeq: located.run.lastEventSeq,
+            graphRevision: located.run.currentRevision,
+            commandId: nextId('graph_worker'),
+            idempotencyKey: `worker-result:${located.attempt.id}`,
+            event: {
+              type: 'result_submitted',
+              payload: {
+                nodeId: located.nodeId,
+                attemptId: located.attempt.id,
+                result,
+                validation: {
+                  version: GRAPH_CONTRACT_VERSION,
+                  valid: true,
+                  issues: [],
+                  normalizedNodeCount: 1,
+                  normalizedEdgeCount: 0
+                },
+                tokenUsage: 0,
+                elapsedMs: 0
+              }
+            }
+          })).state
+          await options.signalSupervision?.({
+            runId: run.id,
+            reason: 'submitted',
+            nodeIds: [located.nodeId],
+            digest: result.summary
+          })
+          return { output: { accepted: true, runSeq: run.lastEventSeq } }
+        } catch (error) {
+          return { output: { error: errorMessage(error) }, isError: true }
+        }
+      }
+    })
+  ]
+}
+
+async function authorizedLead(
+  store: GraphRunStore,
+  registry: ProjectAgentRegistry,
+  runId: string,
+  context: ToolHostContext
+): Promise<GraphRunV1> {
+  const run = await store.get(runId)
+  if (!run) throw new Error(`GraphRun not found: ${runId}`)
+  if (run.threadId !== context.threadId) {
+    throw new Error('current thread does not own this GraphRun')
+  }
+  const identity = await registry.identify(context.workspace)
+  const planIdentity = await registry.identify(run.plans.at(-1)!.workspaceRoot)
+  if (
+    identity.projectId !== run.projectId ||
+    identity.projectId !== planIdentity.projectId ||
+    identity.canonicalWorkspaceRoot !== planIdentity.canonicalWorkspaceRoot
+  ) {
+    throw new Error('current workspace does not own this GraphRun')
+  }
+  return run
+}
+
+async function authorizedWorker(
+  store: GraphRunStore,
+  runId: string,
+  context: ToolHostContext
+): Promise<{ run: GraphRunV1; nodeId: string; attempt: GraphNodeAttemptV1 }> {
+  // Visibility is narrowed before execution; this durable lookup is the
+  // authorization backstop and does not trust the model-supplied node id.
+  const run = await store.get(runId)
+  if (!run) throw new Error(`GraphRun not found: ${runId}`)
+  for (const [nodeId, node] of Object.entries(run.nodes)) {
+    const attempt = node.attempts.find((entry) => entry.childThreadId === context.threadId)
+    if (!attempt) continue
+    if (!['running', 'waiting', 'submitted'].includes(attempt.status)) {
+      throw new Error(`Graph worker attempt is not active: ${attempt.status}`)
+    }
+    return { run, nodeId, attempt }
+  }
+  throw new Error('current child session is not authorized for this GraphRun')
+}
+
+function stringArg(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function numberArg(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string').map((item) => item.trim()).filter(Boolean)
+    : []
+}
+
+function hash(value: string): string {
+  return createHash('sha256').update(value).digest('hex')
+}
+
+function errorMessage(error: unknown): string {
+  return (error instanceof Error ? error.message : String(error)).slice(0, 2_048)
+}

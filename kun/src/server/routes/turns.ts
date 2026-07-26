@@ -18,13 +18,17 @@ export async function startTurn(
   turns: TurnService,
   threadId: string,
   request: Request,
-  onStarted?: (response: StartTurnResponse) => void
+  onStarted?: (response: StartTurnResponse) => void,
+  graphModeEnabled?: () => boolean
 ): Promise<JsonResponse | Response> {
   const body = await readJsonBody(request)
   if (!body.ok) return body.response
   const parsed = StartTurnRequest.safeParse(body.value)
   if (!parsed.success) {
     return ERRORS.validation('invalid start turn body', parsed.error.issues)
+  }
+  if (parsed.data.orchestration === 'graph' && graphModeEnabled && !graphModeEnabled()) {
+    return ERRORS.unavailable('Graph Mode is disabled; submit this turn with direct orchestration')
   }
   try {
     const response: StartTurnResponse = await turns.startTurn({

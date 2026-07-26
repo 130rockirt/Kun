@@ -55,6 +55,7 @@ import {
   terminalFailureProjectionEffects,
   type ChatProjectionEffect
 } from './chat-projection-effects'
+import { receiveGraphRuntimeEvent } from '../graph/graph-store'
 import {
   armBusyWatchdog as armBusyWatchdogImpl,
   clearBusyWatchdog,
@@ -1055,6 +1056,10 @@ export function buildThreadEventSink(
         type: 'delegated_runtime_received',
         payload: runtimeState
       }))
+    },
+    onGraphEvent: (event) => {
+      if (!isCurrentStream()) return
+      receiveGraphRuntimeEvent(event)
     }
   }
 }

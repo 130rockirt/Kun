@@ -1012,6 +1012,10 @@ export function createThreadActions(
       const composerContexts = get().route === 'chat'
         ? overrides?.composerContexts ?? pendingComposerContexts(get())
         : []
+      const orchestration = overrides?.orchestration ??
+        (mode === 'agent' && get().route === 'chat' && get().graphEnabled
+          ? get().composerOrchestration
+          : 'direct')
       set((s) => ({
         queuedMessages: [
           ...s.queuedMessages,
@@ -1021,6 +1025,7 @@ export function createThreadActions(
             deliveryState: 'pending' as const,
             ...(displayText ? { displayText } : {}),
             ...(mode ? { mode } : {}),
+            orchestration,
             ...(composerModel ? { model: composerModel } : {}),
             ...(composerProviderId ? { providerId: composerProviderId } : {}),
             ...(composerAccountId ? { accountId: composerAccountId } : {}),
@@ -1097,6 +1102,11 @@ export function createThreadActions(
     const reasoningEffort = queued?.reasoningEffort ?? overrides?.reasoningEffort?.trim()
     const guiDesignCanvas = (queued?.guiDesignCanvas ?? overrides?.guiDesignCanvas) === true
     const guiDesignMode = (queued?.guiDesignMode ?? overrides?.guiDesignMode) === true
+    const orchestration = queued?.orchestration ??
+      overrides?.orchestration ??
+      (mode === 'agent' && get().route === 'chat' && get().graphEnabled
+        ? get().composerOrchestration
+        : 'direct')
     const userModelChip =
       queued?.modelLabel ?? overrides?.modelLabel ?? optimisticUserModelLabel(composerModel, threadSnap?.model)
     const previousBlocks = get().blocks
@@ -1307,6 +1317,7 @@ export function createThreadActions(
       const runtimeDisplayText = channel ? displayText : (userDisplayText ?? trimmedText)
       const { turnId, userMessageItemId } = await p.sendUserMessage(activeThreadId, runtimeText, {
         mode,
+        orchestration,
         agentSurface: queued?.agentSurface ?? overrides?.agentSurface ??
           (writeContext || get().route === 'write' ? 'write' : guiDesignMode || get().route === 'design' ? 'design' : 'code'),
         ...(composerModel ? { model: composerModel } : {}),

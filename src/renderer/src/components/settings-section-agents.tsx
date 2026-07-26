@@ -17,6 +17,7 @@ import {
   MIN_KUN_LOCAL_PORT,
   WRITE_INLINE_COMPLETION_MODEL_IDS,
   defaultKunContextCompactionSettings,
+  defaultKunGraphSettings,
   defaultModelProviderSettings,
   isKunRuntimeInsecure,
   kunToolPermissionModeFromSettings,
@@ -69,7 +70,11 @@ import {
   summarizeSkillPermissionSources,
   type TokenEconomySavingsState
 } from './settings-section-agents-utils'
-import { ComputerUseSettingsPanel, DesignQualitySettingsPanel } from './settings-section-agent-panels'
+import {
+  ComputerUseSettingsPanel,
+  DesignQualitySettingsPanel
+} from './settings-section-agent-panels'
+import { GraphModeSettingsPanel } from './settings-section-graph-panel'
 
 export { modelProvidersSettingsPatch } from './settings-section-providers'
 
@@ -276,6 +281,7 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
     sqlitePath: ''
   }
   const contextCompaction = kun.contextCompaction ?? defaultKunContextCompactionSettings()
+  const graph = kun.graph ?? defaultKunGraphSettings()
   const modelContext = modelContextProfileSummary({
     model: kun.model,
     fallbackSoftThreshold: contextCompaction.defaultSoftThreshold,
@@ -807,6 +813,13 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
                 value={quality}
                 selectControlClass={selectControlClass}
                 onChange={updateQuality}
+              />
+
+              <GraphModeSettingsPanel
+                t={t}
+                value={graph}
+                selectControlClass={selectControlClass}
+                onChange={(patch) => updateKun({ graph: patch })}
               />
 
               <div className="mt-6">

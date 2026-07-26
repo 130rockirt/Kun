@@ -283,6 +283,7 @@ export class KunRuntimeProvider implements AgentProvider {
     text: string,
     options?: {
       mode?: KunThreadMode
+      orchestration?: 'direct' | 'graph'
       model?: string
       providerId?: string
       accountId?: string
@@ -321,6 +322,7 @@ export class KunRuntimeProvider implements AgentProvider {
       (mode === 'plan' ? runtime.planAccountId?.trim() : '')
     const body: Record<string, unknown> = {
       prompt: text,
+      ...(options?.orchestration === 'graph' ? { orchestration: 'graph' } : {}),
       ...(selectedModel ? { model: selectedModel } : {}),
       ...(selectedProviderId ? { providerId: selectedProviderId } : {}),
       ...(selectedAccountId ? { accountId: selectedAccountId } : {}),

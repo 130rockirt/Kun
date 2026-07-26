@@ -12,6 +12,7 @@ import {
   FileEdit,
   Files,
   Globe2,
+  GitBranch,
   MessageCircleMore,
   PanelRightClose,
   Plus,
@@ -84,6 +85,11 @@ export function CodeRightPanelTabs({
     { id: BUILTIN_RIGHT_PANEL_IDS.plan, label: t('rightPanelPlan'), icon: ClipboardList },
     { id: BUILTIN_RIGHT_PANEL_IDS.changes, label: t('rightPanelChangesReview'), icon: FileEdit },
     { id: BUILTIN_RIGHT_PANEL_IDS.canvas, label: t('rightPanelWhiteboard'), icon: Shapes },
+    {
+      id: BUILTIN_RIGHT_PANEL_IDS.graph,
+      label: t('rightPanelGraph', { defaultValue: 'Graph' }),
+      icon: GitBranch
+    },
     { id: BUILTIN_RIGHT_PANEL_IDS.subagents, label: t('rightPanelSubagents'), icon: Bot },
     { id: BUILTIN_RIGHT_PANEL_IDS.mcpSkills, label: t('rightPanelMcpSkills'), icon: Blocks },
     {

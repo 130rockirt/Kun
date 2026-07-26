@@ -81,10 +81,12 @@ import {
   type ModelConfig
 } from '../loop/model-context-profile.js'
 import {
+  DEFAULT_GRAPH_RUNTIME_CONFIG,
   DEFAULT_QUALITY_CONFIG,
   DEFAULT_STORAGE_CONFIG,
   DEFAULT_TOOL_OUTPUT_LIMITS_CONFIG,
   expandHomePath,
+  type GraphRuntimeConfig,
   type ObservabilityConfig,
   type QualityConfig,
   type RolesConfig,
@@ -107,6 +109,8 @@ import type { ToolHostContext } from '../ports/tool-host.js'
 import { ScopedMigrationMaintenanceLock } from '../ports/migration-maintenance-lock.js'
 import { KUN_SYSTEM_PROMPT } from '../prompt/kun-system-prompt.js'
 import { RuntimeEventRecorder } from '../services/runtime-event-recorder.js'
+import { GraphRuntimeComposition } from './graph-runtime-factory.js'
+import { createGraphRuntimeStartOptions } from './graph-runtime-bootstrap.js'
 import {
   LifecycleFencedSessionStore,
   LifecycleFencedThreadStore,
@@ -245,6 +249,7 @@ export type KunServeRuntimeOptions = {
   roles?: RolesConfig
   storage?: StorageConfig
   observability?: ObservabilityConfig
+  graph?: GraphRuntimeConfig
   capabilities?: KunCapabilitiesConfig
   /** Command hooks from config.json; resolved and wired into tool hosts and the loop. */
   hooks?: HooksConfig
@@ -334,6 +339,12 @@ export async function createKunServeRuntime(
   })
   let abortThreadExecution: ((threadId: string) => number) | undefined
   let stopThreadAuxiliaryWork: ((threadId: string) => Promise<void>) | undefined
+  let handleGraphThreadStatus:
+    ((threadId: string, status: import('../contracts/threads.js').ThreadStatus) => Promise<void>) |
+    undefined
+  let handleGraphThreadFork:
+    ((sourceThreadId: string, targetThreadId: string) => Promise<void>) |
+    undefined
   const delegatedSessions = new DelegatedSessionCoordinator(
     new FileDelegatedSessionBindingStore(delegatedSessionRoot(activeOptions.dataDir)),
     nowIso
@@ -361,9 +372,28 @@ export async function createKunServeRuntime(
         llmDebug.deleteThread(threadId),
         delegatedSessions.invalidate(threadId)
       ])
-    }
+    },
+    onStatusChanged: (threadId, status) => handleGraphThreadStatus?.(threadId, status),
+    onForked: (sourceThreadId, targetThreadId) =>
+      handleGraphThreadFork?.(sourceThreadId, targetThreadId)
   })
   const artifactStore = new FileArtifactStore(join(activeOptions.dataDir, 'artifacts'), nowIso)
+  const graphConfig = (): GraphRuntimeConfig =>
+    activeOptions.graph ?? DEFAULT_GRAPH_RUNTIME_CONFIG
+  const graphRuntime = new GraphRuntimeComposition({
+    dataDir: activeOptions.dataDir,
+    config: graphConfig,
+    artifactStore,
+    runtimeEvents: events,
+    threadStore,
+    ids,
+    nowIso
+  })
+  handleGraphThreadFork = (sourceThreadId, targetThreadId) =>
+    graphRuntime.handleThreadFork(sourceThreadId, targetThreadId)
+  handleGraphThreadStatus = (threadId, status) =>
+    graphRuntime.handleThreadStatus(threadId, status)
+  const graphToolsProvider = graphRuntime.toolsProvider
   const modelCapabilities = (model: string, providerId?: string) => modelCapabilitiesForModel(
     model,
     profilesForProvider(providerId)
@@ -699,6 +729,7 @@ export async function createKunServeRuntime(
       available: true,
       tools: [createReadArtifactTool()]
     },
+    graphToolsProvider,
     ...mcpProviders.providers,
     ...webProviders.providers,
     ...buildMemoryToolProviders(memoryStore),
@@ -757,6 +788,10 @@ export async function createKunServeRuntime(
           toolContextBoundary: {
             ...(child.allowedProviderIds ? { allowedProviderIds: child.allowedProviderIds } : {}),
             ...(child.allowedToolNames ? { allowedToolNames: child.allowedToolNames } : {}),
+            ...(child.allowedSkillIds ? { allowedSkillIds: child.allowedSkillIds } : {}),
+            ...(child.allowedReadPaths ? { allowedReadPaths: child.allowedReadPaths } : {}),
+            ...(child.allowedWritePaths ? { allowedWritePaths: child.allowedWritePaths } : {}),
+            ...(child.allowedArtifactIds ? { allowedArtifactIds: child.allowedArtifactIds } : {}),
             ...(child.blockedProviderIds ? { blockedProviderIds: child.blockedProviderIds } : {}),
             ...(child.blockedToolNames ? { blockedToolNames: child.blockedToolNames } : {}),
             ...(child.blockedSkillIds ? { blockedSkillIds: child.blockedSkillIds } : {})
@@ -772,7 +807,9 @@ export async function createKunServeRuntime(
           contextProfile: delegatedContextProfile
         })]
       : []),
-    ...(antigravityProviderIds.size > 0 || defaultIsAntigravity
+    ...((antigravityProviderIds.size > 0 || defaultIsAntigravity) &&
+      !child.allowedReadPaths &&
+      !child.allowedWritePaths
       ? [new AntigravityCliRuntime({
           providerConfigs: activeOptions.providers ?? {},
           providerIds: antigravityProviderIds,
@@ -818,6 +855,10 @@ export async function createKunServeRuntime(
           toolContextBoundary: {
             ...(child.allowedProviderIds ? { allowedProviderIds: child.allowedProviderIds } : {}),
             ...(child.allowedToolNames ? { allowedToolNames: child.allowedToolNames } : {}),
+            ...(child.allowedSkillIds ? { allowedSkillIds: child.allowedSkillIds } : {}),
+            ...(child.allowedReadPaths ? { allowedReadPaths: child.allowedReadPaths } : {}),
+            ...(child.allowedWritePaths ? { allowedWritePaths: child.allowedWritePaths } : {}),
+            ...(child.allowedArtifactIds ? { allowedArtifactIds: child.allowedArtifactIds } : {}),
             ...(child.blockedProviderIds ? { blockedProviderIds: child.blockedProviderIds } : {}),
             ...(child.blockedToolNames ? { blockedToolNames: child.blockedToolNames } : {}),
             ...(child.blockedSkillIds ? { blockedSkillIds: child.blockedSkillIds } : {})
@@ -1075,6 +1116,7 @@ export async function createKunServeRuntime(
   // so a destructive thread delete must cancel them explicitly before the
   // lifecycle fence drains and removes the thread directory.
   stopThreadAuxiliaryWork = async (threadId) => {
+    await graphRuntime.cancelThreadRuns(threadId)
     await Promise.allSettled([
       backgroundShellRuntime.stopThread(threadId),
       Promise.resolve(delegationRuntime?.abortDetachedChildrenForThread(threadId) ?? 0)
@@ -1146,6 +1188,26 @@ export async function createKunServeRuntime(
 	  }
 	  const runReview = (input: Parameters<typeof reviewService.runReview>[0]) =>
 	    trackRuntimeRun(reviewService.runReview(input))
+	  await graphRuntime.start(createGraphRuntimeStartOptions({
+	    delegation: () => delegationRuntime,
+	    threads: threadStore,
+	    startTurn: (input) => turnService.startTurn(input),
+	    runAgentTurn,
+	    defaults: () => ({
+	      model: activeOptions.model,
+	      approvalPolicy: activeOptions.approvalPolicy,
+	      sandboxMode: activeOptions.sandboxMode,
+	      allowedMcpServers: Object.entries(activeOptions.capabilities?.mcp.servers ?? {})
+	        .filter(([, server]) => server.enabled !== false)
+	        .map(([serverId]) => serverId),
+	      disabledSkillIds: [...(activeOptions.capabilities?.skills.disabledIds ?? [])],
+	      networkAllowed:
+	        activeOptions.capabilities?.web.fetchEnabled === true ||
+	        activeOptions.capabilities?.web.searchEnabled === true
+	    }),
+	    toolNames: () => registry.listTools().map((tool) => tool.name),
+	    skillIds: () => skillRuntime.diagnostics().skills.map((skill) => skill.id)
+	  }))
 	  const extensionProfiles = new ExtensionAgentProfileRegistry()
 	  const extensionAgent = new ExtensionAgentService({
 	    threads: threadService,
@@ -1739,6 +1801,7 @@ export async function createKunServeRuntime(
 	        available: true,
 	        tools: [createReadArtifactTool()]
 	      },
+	      graphToolsProvider,
 	      ...nextMcpProviders.providers,
 	      ...nextWebProviders.providers,
 	      ...buildMemoryToolProviders(nextMemoryStore),
@@ -1785,6 +1848,7 @@ export async function createKunServeRuntime(
 
 	    const previousMcpProviders = mcpProviders
 	    activeOptions = nextOptions
+	    await graphRuntime.reconfigureBackgroundServices()
 	    modelProfiles = nextModelProfiles
 	    providerModelProfiles = nextProviderModelProfiles
 	    tokenEconomy = nextTokenEconomy
@@ -1922,6 +1986,20 @@ export async function createKunServeRuntime(
 	    get delegationRuntime() {
 	      return delegationRuntime
 	    },
+	    graph: {
+	      control: graphRuntime.control,
+	      store: graphRuntime.store,
+	      config: graphConfig,
+	      scheduler: graphRuntime.scheduler,
+	      supervisor: graphRuntime.supervisor,
+	      mailbox: graphRuntime.mailbox,
+	      writes: graphRuntime.writes,
+	      recovery: graphRuntime.recovery,
+	      registry: graphRuntime.registry,
+	      learning: graphRuntime.learning,
+	      references: graphRuntime.references,
+	      artifacts: artifactStore
+	    },
 	    backgroundShellRuntime,
 	    supplyChainTrust,
 	    extensionPlatform: {
@@ -2044,6 +2122,7 @@ export async function createKunServeRuntime(
     shutdown: async () => {
       try {
         shuttingDown = true
+        await graphRuntime.stop()
         eventStreamRegistry.closeAll()
         loop.shutdownGoalResume()
 	        await backgroundShellRuntime.shutdown()
@@ -2294,6 +2373,7 @@ function mergeRuntimeConfigApplyOptions(
     models: request.models ?? current.models,
     contextCompaction: request.contextCompaction ?? current.contextCompaction,
     runtime: request.runtime ?? current.runtime,
+    graph: request.graph ?? current.graph,
     roles: request.roles ?? current.roles,
     capabilities: request.capabilities ?? current.capabilities,
     hooks: request.hooks ?? current.hooks,

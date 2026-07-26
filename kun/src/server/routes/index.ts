@@ -83,6 +83,41 @@ import {
   routePoolStatus,
   testRoutePool
 } from './openai-model-gateway.js'
+import {
+  cancelGraphRun,
+  createGraphRun,
+  getGraphRun,
+  graphRunCommand,
+  graphRunEvents,
+  listGraphRuns,
+  patchGraphRun,
+  readGraphArtifact,
+  retryGraphNode,
+  reviewGraphNode,
+  steerGraphRun,
+  validateGraphPlan
+} from './graphs.js'
+import {
+  consolidateLearning,
+  exportProjectAgent,
+  exploreGraphCapability,
+  governLearningCandidate,
+  graphDiagnostics,
+  graphProjectIdentity,
+  listGraphGovernanceAudit,
+  listLearningCandidates,
+  listLearningEpisodes,
+  listLearningJobs,
+  listProjectAgentEvidence,
+  listProjectAgentScores,
+  listProjectAgents,
+  listProjectRoutingExplanations,
+  listThreadGraphReferences,
+  importProjectAgent,
+  mergeProjectAgents,
+  routeProjectAgent,
+  transitionProjectAgent
+} from './graph-agents.js'
 
 /**
  * Build the full router used by the HTTP server. The router exposes:
@@ -216,6 +251,148 @@ export function buildRouter(runtime: ServerRuntime): Router {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
     return listSkills(runtime)
   })
+  router.add('POST', '/v1/graphs/validate', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return validateGraphPlan(runtime.graph?.control, request)
+  })
+  router.add('GET', '/v1/graphs/diagnostics', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return graphDiagnostics(runtime)
+  })
+  router.add('GET', '/v1/graphs', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return listGraphRuns(runtime.graph?.control, request)
+  })
+  router.add('POST', '/v1/graphs', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return createGraphRun(runtime.graph?.control, request)
+  })
+  router.add('GET', '/v1/graphs/:id', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return getGraphRun(runtime.graph?.control, ctx.params.id)
+  })
+  router.add('GET', '/v1/graphs/:id/events', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return graphRunEvents(
+      runtime.graph?.control,
+      runtime.graph ? (runId, sinceSeq) => runtime.graph!.store.events(runId, sinceSeq) : undefined,
+      ctx.params.id,
+      request
+    )
+  })
+  router.add('GET', '/v1/graphs/:id/artifacts/:artifactId', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return readGraphArtifact(
+      runtime.graph?.control,
+      runtime.graph?.artifacts,
+      ctx.params.id,
+      ctx.params.artifactId,
+      request
+    )
+  })
+  for (const action of ['start', 'pause', 'resume', 'cleanup'] as const) {
+    router.add('POST', `/v1/graphs/:id/${action}`, async (request, ctx) => {
+      if (!authorize(request, runtime)) return ERRORS.unauthorized()
+      return graphRunCommand(runtime.graph?.control, ctx.params.id, action, request)
+    })
+  }
+  router.add('POST', '/v1/graphs/:id/cancel', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return cancelGraphRun(runtime.graph?.control, ctx.params.id, request)
+  })
+  router.add('POST', '/v1/graphs/:id/retry', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return retryGraphNode(runtime.graph?.control, ctx.params.id, request)
+  })
+  router.add('POST', '/v1/graphs/:id/steer', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return steerGraphRun(runtime.graph?.control, ctx.params.id, request)
+  })
+  router.add('POST', '/v1/graphs/:id/patch', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return patchGraphRun(runtime.graph?.control, ctx.params.id, request)
+  })
+  router.add('POST', '/v1/graphs/:id/reviews', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return reviewGraphNode(runtime.graph?.control, ctx.params.id, request)
+  })
+  router.add('GET', '/v1/graph-projects/identity', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return graphProjectIdentity(runtime, request)
+  })
+  router.add('GET', '/v1/graph-projects/:projectId/agents', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return listProjectAgents(runtime, ctx.params.projectId, request)
+  })
+  router.add('POST', '/v1/graph-projects/:projectId/agents/route', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return routeProjectAgent(runtime, ctx.params.projectId, request)
+  })
+  router.add('POST', '/v1/graph-projects/:projectId/agents/import', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return importProjectAgent(runtime, ctx.params.projectId, request)
+  })
+  router.add('POST', '/v1/graph-projects/:projectId/agents/merge', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return mergeProjectAgents(runtime, ctx.params.projectId, request)
+  })
+  router.add('GET', '/v1/graph-projects/:projectId/agents/:profileId/export', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return exportProjectAgent(runtime, ctx.params.projectId, ctx.params.profileId, request)
+  })
+  router.add('POST', '/v1/graph-projects/:projectId/agents/:profileId/lifecycle', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return transitionProjectAgent(runtime, ctx.params.projectId, ctx.params.profileId, request)
+  })
+  router.add('GET', '/v1/graph-projects/:projectId/evidence', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return listProjectAgentEvidence(runtime, ctx.params.projectId, request)
+  })
+  router.add('GET', '/v1/graph-projects/:projectId/scores', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return listProjectAgentScores(runtime, ctx.params.projectId)
+  })
+  router.add('GET', '/v1/graph-projects/:projectId/routing', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return listProjectRoutingExplanations(runtime, ctx.params.projectId)
+  })
+  router.add('GET', '/v1/graph-projects/:projectId/candidates', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return listLearningCandidates(runtime, ctx.params.projectId)
+  })
+  router.add('POST', '/v1/graph-projects/:projectId/candidates/:candidateId/action', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return governLearningCandidate(
+      runtime,
+      ctx.params.projectId,
+      ctx.params.candidateId,
+      request
+    )
+  })
+  router.add('POST', '/v1/graph-projects/:projectId/consolidate', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return consolidateLearning(runtime, ctx.params.projectId, request)
+  })
+  router.add('POST', '/v1/graph-projects/:projectId/explore', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return exploreGraphCapability(runtime, ctx.params.projectId, request)
+  })
+  router.add('GET', '/v1/graph-projects/:projectId/episodes', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return listLearningEpisodes(runtime, ctx.params.projectId)
+  })
+  router.add('GET', '/v1/graph-projects/:projectId/jobs', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return listLearningJobs(runtime, ctx.params.projectId)
+  })
+  router.add('GET', '/v1/graph-projects/:projectId/audit', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return listGraphGovernanceAudit(runtime, ctx.params.projectId)
+  })
+  router.add('GET', '/v1/threads/:id/graph-references', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return listThreadGraphReferences(runtime, ctx.params.id)
+  })
   router.add('POST', '/v1/supply-chain/audit', async (request) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
     return auditSupplyChainPackage(runtime, request)
@@ -348,9 +525,15 @@ export function buildRouter(runtime: ServerRuntime): Router {
   })
   router.add('POST', '/v1/threads/:id/turns', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
-    return startTurn(runtime.turnService, ctx.params.id, request, ({ threadId, turnId }) => {
-      runtime.runTurn(threadId, turnId)
-    })
+    return startTurn(
+      runtime.turnService,
+      ctx.params.id,
+      request,
+      ({ threadId, turnId }) => {
+        runtime.runTurn(threadId, turnId)
+      },
+      () => runtime.graph?.config().enabled === true
+    )
   })
   router.add('POST', '/v1/threads/:id/rewind', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()

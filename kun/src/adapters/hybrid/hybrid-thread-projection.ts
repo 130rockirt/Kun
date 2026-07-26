@@ -119,7 +119,7 @@ function turnFromItems(threadId: string, turnId: string, items: TurnItem[], fall
   return {
     id: turnId, threadId,
     status: hasOpenItem ? 'running' : hasFailedItem ? 'failed' : 'completed',
-    prompt, steering: [], attachmentIds: attachmentIdsFromItems(items), activeSkillIds: [],
+    prompt, orchestration: 'direct', steering: [], attachmentIds: attachmentIdsFromItems(items), activeSkillIds: [],
     injectedMemoryIds: [], injectedMemorySummaries: [], injectedInstructionSources: [],
     createdAt,
     finishedAt: hasOpenItem ? undefined : items[items.length - 1]?.finishedAt ?? fallbackTime,

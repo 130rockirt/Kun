@@ -6,6 +6,10 @@ import type { InteractiveToolBridge } from './interactive-tool-bridge.js'
 export type ToolExecutionContextFactoryDeps = {
   memoryEnabled: boolean
   allowedProviderIds?: readonly string[]
+  allowedSkillIds?: readonly string[]
+  allowedReadPaths?: readonly string[]
+  allowedWritePaths?: readonly string[]
+  allowedArtifactIds?: readonly string[]
   blockedProviderIds?: readonly string[]
   blockedToolNames?: readonly string[]
   blockedSkillIds?: readonly string[]
@@ -26,6 +30,8 @@ export function createToolExecutionContext(
     threadId: input.threadId,
     turnId: input.turnId,
     workspace: input.workspace,
+    ...(input.orchestration ? { orchestration: input.orchestration } : {}),
+    ...(input.messageSource ? { messageSource: input.messageSource } : {}),
     threadMode: input.threadMode,
     ...(input.activePlanContext ? { guiPlan: input.activePlanContext } : {}),
     ...(input.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
@@ -44,6 +50,10 @@ export function createToolExecutionContext(
       ? { extensionToolCatalogEpoch: input.extensionToolCatalogEpoch }
       : {}),
     ...(deps.allowedProviderIds ? { allowedProviderIds: deps.allowedProviderIds } : {}),
+    ...(deps.allowedSkillIds ? { allowedSkillIds: deps.allowedSkillIds } : {}),
+    ...(deps.allowedReadPaths ? { allowedReadPaths: deps.allowedReadPaths } : {}),
+    ...(deps.allowedWritePaths ? { allowedWritePaths: deps.allowedWritePaths } : {}),
+    ...(deps.allowedArtifactIds ? { allowedArtifactIds: deps.allowedArtifactIds } : {}),
     ...(deps.blockedProviderIds ? { blockedProviderIds: deps.blockedProviderIds } : {}),
     ...(deps.blockedToolNames ? { blockedToolNames: deps.blockedToolNames } : {}),
     ...(deps.blockedSkillIds ? { blockedSkillIds: deps.blockedSkillIds } : {}),

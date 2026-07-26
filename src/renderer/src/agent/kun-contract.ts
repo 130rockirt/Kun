@@ -658,6 +658,8 @@ export type CoreRuntimeEventJson = {
   callId?: string
   readyCount?: number
   toolResultCount?: number
+  /** Durable Graph domain event projected through the existing thread SSE. */
+  graph?: unknown
   attempt?: number
   maxAttempts?: number
   delayMs?: number

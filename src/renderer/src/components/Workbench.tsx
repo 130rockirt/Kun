@@ -117,7 +117,8 @@ export function Workbench(): ReactElement {
     extensionComposerContexts, attachExtensionComposerContext, removeExtensionComposerContext,
     removeQueuedMessage, guideQueuedMessage, interrupt, probeRuntime, composerModel, composerProviderId,
     composerPickList, composerModelGroups, composerReasoningEffort, disabledSkillIds,
-    composerMode, setComposerMode, setComposerModel, setComposerReasoningEffort,
+    composerMode, composerOrchestration, graphEnabled, setComposerMode,
+    setComposerOrchestration, setComposerModel, setComposerReasoningEffort,
     setThreadSearch, renameThread, pinThread, archiveThread, deleteThread,
     clearActiveThreadSelection, spawnSideConversation, openSideConversationDraft, selectSideConversation, setSidePanelOpen,
     sideConversations, sidePanel
@@ -812,7 +813,12 @@ export function Workbench(): ReactElement {
   })
 
   const chatComposerProps = useWorkbenchChatComposerProps({
-    input, setInput, composerMode, setComposerMode, busy, route, runtimeReady: runtimeConnection === 'ready',
+    input, setInput, composerMode, setComposerMode, composerOrchestration, graphEnabled,
+    setComposerOrchestration: (nextMode) => {
+      setComposerOrchestration(nextMode)
+      if (nextMode === 'graph') openRightPanelTab(BUILTIN_RIGHT_PANEL_IDS.graph)
+    },
+    busy, route, runtimeReady: runtimeConnection === 'ready',
     activeThreadId, activeClawChannelId,
     activeClawChannelModel: activeClawChannel?.model, composerModel, composerProviderId, composerPickList,
     composerModelGroups, composerReasoningEffort, setComposerReasoningEffort,

@@ -10,6 +10,9 @@ type UseWorkbenchChatComposerPropsInput = {
   setInput: ComposerProps['setInput']
   composerMode: ComposerProps['mode']
   setComposerMode: ComposerProps['setMode']
+  composerOrchestration: NonNullable<ComposerProps['orchestration']>
+  graphEnabled: boolean
+  setComposerOrchestration: NonNullable<ComposerProps['onOrchestrationChange']>
   busy: boolean
   route: string
   runtimeReady: boolean
@@ -70,6 +73,9 @@ export function useWorkbenchChatComposerProps({
   setInput,
   composerMode,
   setComposerMode,
+  composerOrchestration,
+  graphEnabled,
+  setComposerOrchestration,
   busy,
   route,
   runtimeReady,
@@ -129,6 +135,9 @@ export function useWorkbenchChatComposerProps({
     setInput,
     mode: composerMode,
     setMode: setComposerMode,
+    orchestration: composerOrchestration,
+    graphEnabled,
+    onOrchestrationChange: setComposerOrchestration,
     busy,
     runtimeReady,
     hasActiveThread: Boolean(activeThreadId),
@@ -216,6 +225,7 @@ export function useWorkbenchChatComposerProps({
     extraFileMentionCandidates,
     composerFileReferences,
     composerMode,
+    composerOrchestration,
     composerModel,
     composerModelGroups,
     composerPickList,
@@ -228,6 +238,7 @@ export function useWorkbenchChatComposerProps({
     handlePickAttachments,
     handleSend,
     guideQueuedMessage,
+    graphEnabled,
     input,
     interrupt,
     openDesignFileTreeSidePanel,
@@ -246,6 +257,7 @@ export function useWorkbenchChatComposerProps({
     runtimeSkills,
     setClawChannelModel,
     setComposerMode,
+    setComposerOrchestration,
     setComposerModel,
     setComposerReasoningEffort,
     setInput,

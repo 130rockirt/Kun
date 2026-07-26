@@ -8,6 +8,7 @@ import {
 import {
   ContextCompactionConfigSchema,
   DEFAULT_KUN_MODEL,
+  DEFAULT_GRAPH_RUNTIME_CONFIG,
   DEFAULT_STORAGE_CONFIG,
   DEFAULT_TOOL_OUTPUT_LIMITS_CONFIG,
   ModelRequestRetryConfigSchema,
@@ -16,6 +17,7 @@ import {
   QualityConfigSchema,
   RolesConfigSchema,
   RuntimeTuningConfigSchema,
+  GraphRuntimeConfigSchema,
   ServeProviderConfigSchema,
   StorageConfigSchema,
   TokenEconomyConfigSchema,
@@ -74,6 +76,7 @@ export const ServeOptionsSchema = z.object({
   models: ModelConfigSchema.optional(),
   contextCompaction: ContextCompactionConfigSchema.optional(),
   runtime: RuntimeTuningConfigSchema.optional(),
+  graph: GraphRuntimeConfigSchema.default(DEFAULT_GRAPH_RUNTIME_CONFIG),
   roles: RolesConfigSchema.optional(),
   capabilities: KunCapabilitiesConfig.default(DEFAULT_KUN_CAPABILITIES_CONFIG),
   hooks: HooksConfigSchema.optional(),
@@ -112,5 +115,6 @@ export const DEFAULT_SERVE_OPTIONS: ServeOptions = {
   toolOutputLimits: DEFAULT_TOOL_OUTPUT_LIMITS_CONFIG,
   insecure: false,
   storage: DEFAULT_STORAGE_CONFIG,
+  graph: DEFAULT_GRAPH_RUNTIME_CONFIG,
   capabilities: DEFAULT_KUN_CAPABILITIES_CONFIG
 }

@@ -147,4 +147,24 @@ describe('sandbox policy', () => {
       code: 'sandbox_command_blocked'
     })
   })
+
+  it('enforces delegated write scopes and blocks shell escape for narrow scopes', () => {
+    const context = {
+      workspace: '/repo/workspace',
+      sandboxMode: 'danger-full-access' as const,
+      allowedReadPaths: ['src'],
+      allowedWritePaths: ['src/generated']
+    }
+    expect(canWritePath('/repo/workspace/src/generated/app.ts', context)).toEqual({ ok: true })
+    expect(canWritePath('/repo/workspace/src/other.ts', context)).toMatchObject({
+      ok: false,
+      block: { code: 'sandbox_write_blocked' }
+    })
+    expect(sandboxBlockForTool(
+      { name: 'bash', toolKind: 'command_execution' },
+      context
+    )).toMatchObject({
+      code: 'sandbox_command_blocked'
+    })
+  })
 })

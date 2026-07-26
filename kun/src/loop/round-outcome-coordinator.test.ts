@@ -40,6 +40,7 @@ function prepared(overrides: Partial<PreparedTurnContext> = {}): PreparedTurnCon
     threadId,
     turnId,
     workspace: '/workspace',
+    orchestration: 'direct',
     model: 'test-model',
     mode: 'agent',
     dedicatedSvgTurn: false,

@@ -19,6 +19,10 @@ import {
   rememberThreadComposerSelection,
   readStoredComposerProviderId
 } from './chat-store-helpers'
+import {
+  hasStoredGraphOrchestration,
+  persistGraphOrchestration
+} from './chat-store-graph-orchestration'
 
 type CreateAppActionsOptions = {
   set: ChatStoreSet
@@ -56,6 +60,7 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
   ChatState,
   | 'setError'
   | 'setComposerMode'
+  | 'setComposerOrchestration'
   | 'setComposerModel'
   | 'setComposerReasoningEffort'
   | 'setComposerAgentId'
@@ -113,6 +118,11 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
         persistComposerMode(mode)
       }
       set({ composerMode: mode })
+    },
+
+    setComposerOrchestration: (mode) => {
+      persistGraphOrchestration(mode)
+      set({ composerOrchestration: mode })
     },
 
     setComposerModel: (modelId, providerId) => {
@@ -378,6 +388,12 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
         workspaceLabel: workspaceLabelFromPath(workspaceRoot),
         conversationWorkspaceRoot: settings.conversationWorkspaceRoot || '',
         disabledSkillIds: settings.disabledSkillIds,
+        graphEnabled: settings.agents.kun.graph.enabled,
+        composerOrchestration: settings.agents.kun.graph.enabled
+          ? hasStoredGraphOrchestration()
+            ? get().composerOrchestration
+            : settings.agents.kun.graph.defaultStrategy
+          : 'direct',
         clawChannels: settings.claw.channels,
         activeClawChannelId: settings.claw.channels.some(
           (channel) => channel.id === get().activeClawChannelId && channel.enabled

@@ -6,6 +6,9 @@ Kun 改造。结论先说清楚：GUI 只保留一个 agent，唯一 ID 是
 HTTP/SSE 边界工作；历史运行时、旧绘画/设计 starter、运行时诊断面板、
 agent 切换都不再是产品表面。
 
+Graph 编排、自进化项目 Agent、恢复与治理仍运行在同一个 Kun 边界内，完整设计与
+运维说明见 [`docs/graph-mode.md`](./graph-mode.md)。
+
 ## 目标边界
 
 ```text

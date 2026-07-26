@@ -72,6 +72,10 @@ export type TurnContextResolverDeps = {
   interactiveToolBridge: Pick<InteractiveToolBridge, 'awaitUserInput'>
   forcedAllowedToolNames?: readonly string[]
   allowedProviderIds?: readonly string[]
+  allowedSkillIds?: readonly string[]
+  allowedReadPaths?: readonly string[]
+  allowedWritePaths?: readonly string[]
+  allowedArtifactIds?: readonly string[]
   blockedProviderIds?: readonly string[]
   blockedToolNames?: readonly string[]
   blockedSkillIds?: readonly string[]
@@ -104,6 +108,7 @@ export class TurnContextResolver {
       workspace,
       threadId: input.threadId,
       turnId: input.turnId,
+      ...(this.deps.allowedSkillIds ? { allowedSkillIds: this.deps.allowedSkillIds } : {}),
       ...(this.deps.blockedSkillIds ? { blockedSkillIds: this.deps.blockedSkillIds } : {})
     }) ?? EMPTY_SKILL_RESOLUTION
     const instructionResolution = await this.deps.instructionRuntime?.resolveTurn({ workspace }) ??
@@ -143,6 +148,8 @@ export class TurnContextResolver {
       threadId: input.threadId,
       turnId: input.turnId,
       workspace,
+      orchestration: input.turn.orchestration,
+      ...(input.turn.messageSource ? { messageSource: input.turn.messageSource } : {}),
       threadMode: input.mode.effectiveMode,
       ...(input.mode.activePlanContext ? { activePlanContext: input.mode.activePlanContext } : {}),
       ...(input.turn.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
@@ -163,6 +170,10 @@ export class TurnContextResolver {
     }, {
       memoryEnabled: Boolean(memoryStore),
       ...(this.deps.allowedProviderIds ? { allowedProviderIds: this.deps.allowedProviderIds } : {}),
+      ...(this.deps.allowedSkillIds ? { allowedSkillIds: this.deps.allowedSkillIds } : {}),
+      ...(this.deps.allowedReadPaths ? { allowedReadPaths: this.deps.allowedReadPaths } : {}),
+      ...(this.deps.allowedWritePaths ? { allowedWritePaths: this.deps.allowedWritePaths } : {}),
+      ...(this.deps.allowedArtifactIds ? { allowedArtifactIds: this.deps.allowedArtifactIds } : {}),
       ...(this.deps.blockedProviderIds ? { blockedProviderIds: this.deps.blockedProviderIds } : {}),
       ...(this.deps.blockedToolNames ? { blockedToolNames: this.deps.blockedToolNames } : {}),
       ...(this.deps.blockedSkillIds ? { blockedSkillIds: this.deps.blockedSkillIds } : {}),
@@ -174,6 +185,8 @@ export class TurnContextResolver {
       threadId: input.threadId,
       turnId: input.turnId,
       workspace,
+      orchestration: input.turn.orchestration,
+      ...(input.turn.messageSource ? { messageSource: input.turn.messageSource } : {}),
       model: input.model,
       mode: input.mode.effectiveMode,
       dedicatedSvgTurn: input.mode.dedicatedSvgTurn,

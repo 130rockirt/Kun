@@ -13,6 +13,60 @@ import type { JsonResponse } from '../response.js'
 import { rewindThread, startTurn } from './turns.js'
 
 describe('POST /v1/threads/:id/turns admission', () => {
+  it('rejects stale Graph submissions after safe disable while direct turns remain available', async () => {
+    const threadStore = new InMemoryThreadStore()
+    const sessionStore = new InMemorySessionStore()
+    const eventBus = new InMemoryEventBus()
+    const nowIso = () => '2026-07-26T00:00:00.000Z'
+    const turns = new TurnService({
+      threadStore,
+      sessionStore,
+      events: new RuntimeEventRecorder({
+        eventBus,
+        sessionStore,
+        allocateSeq: (threadId) => eventBus.allocateSeq(threadId),
+        nowIso
+      }),
+      inflight: new InflightTracker(),
+      steering: new SteeringQueue(),
+      compactor: new ContextCompactor(),
+      ids: new SequentialIdGenerator(),
+      nowIso
+    })
+    const threadId = 'thr_graph_disabled'
+    await threadStore.upsert(createThreadRecord({
+      id: threadId,
+      title: 'Safe disable',
+      workspace: '/tmp/workspace',
+      model: 'deepseek-v4-pro'
+    }))
+
+    const graphResponse = await startTurn(
+      turns,
+      threadId,
+      new Request(`http://kun.local/v1/threads/${threadId}/turns`, {
+        method: 'POST',
+        body: JSON.stringify({ prompt: 'graph task', orchestration: 'graph' })
+      }),
+      undefined,
+      () => false
+    ) as JsonResponse
+    expect(graphResponse.status).toBe(503)
+    expect((await threadStore.get(threadId))?.turns).toEqual([])
+
+    const directResponse = await startTurn(
+      turns,
+      threadId,
+      new Request(`http://kun.local/v1/threads/${threadId}/turns`, {
+        method: 'POST',
+        body: JSON.stringify({ prompt: 'direct task' })
+      }),
+      undefined,
+      () => false
+    ) as JsonResponse
+    expect(directResponse.status).toBe(202)
+  })
+
   it('maps an archived thread to a conflict without creating a turn', async () => {
     const threadStore = new InMemoryThreadStore()
     const sessionStore = new InMemorySessionStore()

@@ -15,6 +15,7 @@ import {
   Folders,
   FolderOpen,
   Globe2,
+  GitBranch,
   LockKeyhole,
   Loader2,
   MessageCircleMore,
@@ -409,6 +410,11 @@ export function WorkbenchSideRail({
     { mode: BUILTIN_RIGHT_PANEL_IDS.changes, label: t('rightPanelChanges'), icon: FileEdit },
     { mode: BUILTIN_RIGHT_PANEL_IDS.browser, label: t('rightPanelBrowser'), icon: Globe2 },
     ...(canvasEnabled ? [{ mode: BUILTIN_RIGHT_PANEL_IDS.canvas, label: t('rightPanelWhiteboard'), icon: Shapes }] : []),
+    {
+      mode: BUILTIN_RIGHT_PANEL_IDS.graph,
+      label: t('rightPanelGraph', { defaultValue: 'Graph' }),
+      icon: GitBranch
+    },
     { mode: BUILTIN_RIGHT_PANEL_IDS.subagents, label: t('rightPanelSubagents'), icon: Bot },
     { mode: BUILTIN_RIGHT_PANEL_IDS.mcpSkills, label: t('rightPanelMcpSkills'), icon: Blocks }
   ]

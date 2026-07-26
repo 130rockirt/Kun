@@ -129,7 +129,7 @@ describe('RoutePoolModelClient', () => {
     const file = join(root, 'health.json')
     const first = new RoutePoolHealthStore(file)
     first.failure(pool(), pool().targets[0], 500, { category: 'rate_limit', httpStatus: 429, retryAfterMs: 60_000, failoverAllowed: true }, 'limited')
-    await new Promise((resolve) => setTimeout(resolve, 25))
+    await first.flush()
     expect(JSON.parse(await readFile(file, 'utf8')).metrics['kimi-pool:a'].failures).toBe(1)
     const restored = new RoutePoolHealthStore(file)
     await restored.load()

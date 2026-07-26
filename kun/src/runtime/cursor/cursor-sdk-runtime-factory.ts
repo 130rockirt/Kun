@@ -71,6 +71,10 @@ export interface CursorSdkRuntimeFactoryDeps extends Omit<
     ToolHostContext,
     | 'allowedProviderIds'
     | 'allowedToolNames'
+    | 'allowedSkillIds'
+    | 'allowedReadPaths'
+    | 'allowedWritePaths'
+    | 'allowedArtifactIds'
     | 'blockedProviderIds'
     | 'blockedToolNames'
     | 'blockedSkillIds'
@@ -109,6 +113,9 @@ export function createCursorSdkRuntime(
       workspace: thread.workspace,
       threadId: thread.id,
       turnId: turn.id,
+      ...(toolContextBoundary?.allowedSkillIds
+        ? { allowedSkillIds: toolContextBoundary.allowedSkillIds }
+        : {}),
       ...(toolContextBoundary?.blockedSkillIds
         ? { blockedSkillIds: toolContextBoundary.blockedSkillIds }
         : {})
@@ -290,6 +297,9 @@ export function createCursorSdkRuntime(
             workspace: thread.workspace,
             threadId,
             turnId,
+            ...(toolContextBoundary?.allowedSkillIds
+              ? { allowedSkillIds: toolContextBoundary.allowedSkillIds }
+              : {}),
             ...(toolContextBoundary?.blockedSkillIds
               ? { blockedSkillIds: toolContextBoundary.blockedSkillIds }
               : {})
@@ -298,8 +308,11 @@ export function createCursorSdkRuntime(
       const activeSkillIds = skillResolution?.activeSkillIds ?? []
       activeSkillIdsByTurn.set(turnKey(threadId, turnId), activeSkillIds)
       const availableSkillIds = typeof skillRuntime?.availableSkillIdsForWorkspace === 'function'
-        ? (await skillRuntime.availableSkillIdsForWorkspace(thread.workspace))
-            .filter((id) => !toolContextBoundary?.blockedSkillIds?.includes(id))
+        ? await skillRuntime.availableSkillIdsForWorkspace(
+            thread.workspace,
+            toolContextBoundary?.blockedSkillIds,
+            toolContextBoundary?.allowedSkillIds
+          )
         : activeSkillIds
       const listingSkillIds = [...new Set([...activeSkillIds, ...availableSkillIds])]
       const listingContext = toolContext({

@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { APP_LOCALES, type AppLocale } from '@shared/app-locales'
 import { BUILTIN_AGENT_CATALOG } from '../../../../kun/src/delegation/builtin-agent-catalog'
-import i18n from '../i18n'
+import i18n, {
+  withGraphCommonFallback,
+  withGraphSettingsFallback
+} from '../i18n'
 import enCommon from './en/common.json'
 import enSettings from './en/settings.json'
 import hiCommon from './hi/common.json'
@@ -22,11 +25,26 @@ type LocaleTree = Record<string, unknown>
 const resources: Record<AppLocale, { common: LocaleTree; settings: LocaleTree }> = {
   en: { common: enCommon, settings: enSettings },
   zh: { common: zhCommon, settings: zhSettings },
-  ru: { common: ruCommon, settings: ruSettings },
-  hi: { common: hiCommon, settings: hiSettings },
-  th: { common: thCommon, settings: thSettings },
-  ja: { common: jaCommon, settings: jaSettings },
-  ko: { common: koCommon, settings: koSettings }
+  ru: {
+    common: withGraphCommonFallback(ruCommon),
+    settings: withGraphSettingsFallback(ruSettings)
+  },
+  hi: {
+    common: withGraphCommonFallback(hiCommon),
+    settings: withGraphSettingsFallback(hiSettings)
+  },
+  th: {
+    common: withGraphCommonFallback(thCommon),
+    settings: withGraphSettingsFallback(thSettings)
+  },
+  ja: {
+    common: withGraphCommonFallback(jaCommon),
+    settings: withGraphSettingsFallback(jaSettings)
+  },
+  ko: {
+    common: withGraphCommonFallback(koCommon),
+    settings: withGraphSettingsFallback(koSettings)
+  }
 }
 
 function flattenStrings(

@@ -12,7 +12,8 @@ export const BUILTIN_RIGHT_PANEL_IDS = {
   canvas: 'builtin:right-panel-canvas',
   subagents: 'builtin:right-panel-subagents',
   mcpSkills: 'builtin:right-panel-mcp-skills',
-  agentPerspective: 'builtin:right-panel-agent-perspective'
+  agentPerspective: 'builtin:right-panel-agent-perspective',
+  graph: 'builtin:right-panel-graph'
 } as const
 
 export type BuiltinRightPanelId = (typeof BUILTIN_RIGHT_PANEL_IDS)[keyof typeof BUILTIN_RIGHT_PANEL_IDS]
@@ -34,7 +35,8 @@ const LEGACY_RIGHT_PANEL_IDS: Readonly<Record<string, BuiltinRightPanelId>> = {
   canvas: BUILTIN_RIGHT_PANEL_IDS.canvas,
   subagents: BUILTIN_RIGHT_PANEL_IDS.subagents,
   'mcp-skills': BUILTIN_RIGHT_PANEL_IDS.mcpSkills,
-  'agent-perspective': BUILTIN_RIGHT_PANEL_IDS.agentPerspective
+  'agent-perspective': BUILTIN_RIGHT_PANEL_IDS.agentPerspective,
+  graph: BUILTIN_RIGHT_PANEL_IDS.graph
 }
 
 export function isExtensionContributionId(value: string): value is ExtensionContributionId {

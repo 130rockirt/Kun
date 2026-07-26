@@ -138,6 +138,10 @@ export interface AgentSdkRuntimeFactoryDeps {
     ToolHostContext,
     | 'allowedProviderIds'
     | 'allowedToolNames'
+    | 'allowedSkillIds'
+    | 'allowedReadPaths'
+    | 'allowedWritePaths'
+    | 'allowedArtifactIds'
     | 'blockedProviderIds'
     | 'blockedToolNames'
     | 'blockedSkillIds'
@@ -241,6 +245,9 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
       workspace: thread.workspace,
       threadId: thread.id,
       turnId: turn.id,
+      ...(deps.toolContextBoundary?.allowedSkillIds
+        ? { allowedSkillIds: deps.toolContextBoundary.allowedSkillIds }
+        : {}),
       ...(deps.toolContextBoundary?.blockedSkillIds
         ? { blockedSkillIds: deps.toolContextBoundary.blockedSkillIds }
         : {})
@@ -559,6 +566,9 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
             workspace: thread.workspace,
             threadId,
             turnId,
+            ...(deps.toolContextBoundary?.allowedSkillIds
+              ? { allowedSkillIds: deps.toolContextBoundary.allowedSkillIds }
+              : {}),
             ...(deps.toolContextBoundary?.blockedSkillIds
               ? { blockedSkillIds: deps.toolContextBoundary.blockedSkillIds }
               : {})
@@ -594,8 +604,11 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
       // the real active ids for every call, so schema visibility is not
       // execution authority.
       const availableSkillIds = typeof deps.skillRuntime?.availableSkillIdsForWorkspace === 'function'
-        ? (await deps.skillRuntime.availableSkillIdsForWorkspace(thread.workspace))
-            .filter((id) => !deps.toolContextBoundary?.blockedSkillIds?.includes(id))
+        ? await deps.skillRuntime.availableSkillIdsForWorkspace(
+            thread.workspace,
+            deps.toolContextBoundary?.blockedSkillIds,
+            deps.toolContextBoundary?.allowedSkillIds
+          )
         : activeSkillIds
       const bridgeListingContext = toolContext(threadId, turnId, thread.workspace, {
         ...plan,

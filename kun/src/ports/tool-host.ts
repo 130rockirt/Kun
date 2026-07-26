@@ -75,6 +75,8 @@ export type ToolHostContext = {
   threadId: string
   turnId: string
   workspace: string
+  orchestration?: 'direct' | 'graph'
+  messageSource?: 'background_shell' | 'background_subagent' | 'graph_runtime'
   /**
    * Thread mode advertised by the GUI. Kun restricts plan tools
    * to `plan` threads plus `planDraft`/`planRefine` turn kinds. The
@@ -116,6 +118,14 @@ export type ToolHostContext = {
   allowedProviderIds?: readonly string[]
   /** Optional tool-name allow-list. When set, other tools are not advertised or executed. */
   allowedToolNames?: readonly string[]
+  /** Optional skill-id allow-list. When set, other skills are hidden and cannot be loaded. */
+  allowedSkillIds?: readonly string[]
+  /** Workspace-relative read scopes captured at a delegated child boundary. */
+  allowedReadPaths?: readonly string[]
+  /** Workspace-relative write scopes captured at a delegated child boundary. */
+  allowedWritePaths?: readonly string[]
+  /** Immutable artifact capability set captured at a delegated child boundary. */
+  allowedArtifactIds?: readonly string[]
   /** Immutable extension-tool catalog snapshot pinned to this thread boundary. */
   extensionToolCatalogEpoch?: ExtensionToolCatalogEpoch
   /** Optional provider deny-list. Providers listed here are never advertised or executed (deny-list layered on inherit). */

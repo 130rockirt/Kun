@@ -52,6 +52,16 @@ const SIGNAL_LINE_RE =
   /\b(error|failed?|fatal|panic|exception|traceback|warning|warn|denied|timeout|timed out|not found|cannot|invalid)\b/i
 const BASE64_KEY_RE = /(?:^|_)(?:data_)?base64$/i
 const DATA_URL_RE = /^data:[^;,]+;base64,/i
+const FAILURE_SAFE_ARGUMENT_COMPACTION_TOOLS = new Set([
+  'bash',
+  'exec_command',
+  'shell',
+  'read',
+  'grep',
+  'rg',
+  'find',
+  'ls'
+])
 
 type JsonRecord = Record<string, unknown>
 
@@ -71,10 +81,20 @@ export function applyRequestHistoryHygiene(
   scope: RequestHistoryHygieneScope = {}
 ): TurnItem[] {
   const limits = normalizeOptions(options)
+  const failureSafeCallIds = new Set(
+    items.flatMap((item) =>
+      shouldCleanItem(item, scope) &&
+      item.kind === 'tool_call' &&
+      FAILURE_SAFE_ARGUMENT_COMPACTION_TOOLS.has(item.toolName)
+        ? [item.callId]
+        : [])
+  )
   const compactableToolCallIds = new Set(
     items
       .flatMap((item) =>
-        shouldCleanItem(item, scope) && item.kind === 'tool_result' && item.isError !== true
+        shouldCleanItem(item, scope) &&
+        item.kind === 'tool_result' &&
+        (item.isError !== true || failureSafeCallIds.has(item.callId))
           ? [item.callId]
           : []
       )

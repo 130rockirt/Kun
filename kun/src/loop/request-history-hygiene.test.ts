@@ -100,6 +100,23 @@ describe('applyRequestHistoryHygiene cumulative tool-result budget', () => {
     expect(out[0]?.kind === 'tool_call' ? out[0].arguments.html : '').toBe(html)
   })
 
+  it('compacts failed shell transcripts when the error result carries repair evidence', () => {
+    const items = [
+      {
+        ...toolCall('failed-shell', 'ignored'),
+        toolName: 'bash',
+        arguments: { command: 'npm test', transcript: 'x'.repeat(12_000) }
+      } as TurnItem,
+      {
+        ...toolResult('failed-shell', 'ERROR test failed', true),
+        toolName: 'bash'
+      } as TurnItem
+    ]
+    const out = applyRequestHistoryHygiene(items)
+    expect(out[0]?.kind === 'tool_call' ? out[0].arguments.transcript : '')
+      .toContain('cache hygiene')
+  })
+
   it('still compacts large arguments after a successful tool result', () => {
     const html = `<!doctype html>${'x'.repeat(12_000)}`
     const items = [

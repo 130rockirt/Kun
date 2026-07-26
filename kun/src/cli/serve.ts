@@ -210,6 +210,7 @@ export function parseServeOptions(
     models: loadedConfig?.config.models,
     contextCompaction: loadedConfig?.config.contextCompaction,
     runtime: loadedConfig?.config.runtime,
+    graph: loadedConfig?.config.graph ?? DEFAULT_SERVE_OPTIONS.graph,
     roles: loadedConfig?.config.roles,
     capabilities: loadedConfig?.config.capabilities ?? DEFAULT_SERVE_OPTIONS.capabilities,
     hooks: loadedConfig?.config.hooks,

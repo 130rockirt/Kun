@@ -53,6 +53,8 @@ export type PreparedTurnContext = Readonly<{
   threadId: string
   turnId: string
   workspace: string
+  orchestration: 'direct' | 'graph'
+  messageSource?: 'background_shell' | 'background_subagent' | 'graph_runtime'
   model: string
   mode: 'agent' | 'plan'
   dedicatedSvgTurn: boolean
@@ -87,6 +89,8 @@ export type ToolTurnContextInput = {
   threadId: string
   turnId: string
   workspace: string
+  orchestration?: 'direct' | 'graph'
+  messageSource?: 'background_shell' | 'background_subagent' | 'graph_runtime'
   threadMode?: 'agent' | 'plan'
   activePlanContext?: GuiPlanContext
   guiDesignCanvas?: boolean

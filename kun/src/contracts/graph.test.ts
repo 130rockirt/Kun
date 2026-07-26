@@ -1,0 +1,181 @@
+import { describe, expect, test } from 'vitest'
+import {
+  GRAPH_CONTRACT_VERSION,
+  GRAPH_EVENT_VERSION,
+  GraphEventEnvelopeV1Schema,
+  GraphPatchV1Schema,
+  GraphPlanV1Schema,
+  GraphWorkerResultV1Schema
+} from './graph.js'
+import { RuntimeEvent } from './events.js'
+import { StartTurnRequest } from './turns.js'
+
+const now = '2026-07-26T00:00:00.000Z'
+
+function plan() {
+  return {
+    version: GRAPH_CONTRACT_VERSION,
+    revision: 1,
+    title: 'Implement and verify',
+    goal: 'Implement one bounded change and verify it.',
+    workspaceRoot: '/workspace',
+    phases: [{ id: 'implementation', title: 'Implementation', order: 0 }],
+    nodes: [{
+      id: 'implement',
+      phaseId: 'implementation',
+      kind: 'work',
+      title: 'Implement',
+      objective: 'Make the requested change.',
+      priority: 0,
+      required: true,
+      riskClass: 'low',
+      assignment: {
+        kind: 'ephemeral',
+        name: 'Implementer',
+        systemPrompt: 'Implement only the assigned objective.',
+        toolPolicy: 'readOnly',
+        blockedTools: [],
+        blockedSkills: [],
+        blockedMcpServers: []
+      },
+      completion: {
+        requiredResultFields: ['summary', 'checks'],
+        acceptanceCriteria: ['Tests pass'],
+        review: {
+          kinds: ['deterministic'],
+          requireAll: true,
+          deterministicChecks: ['npm test']
+        }
+      },
+      readScopes: ['src'],
+      writeScopes: [],
+      metadata: {}
+    }],
+    edges: [],
+    budget: {
+      maxNodes: 8,
+      maxEdges: 16,
+      maxConcurrentNodes: 2,
+      maxAttemptsPerNode: 3,
+      maxRevisions: 4,
+      maxLoopIterations: 0,
+      maxWallTimeMs: 60_000,
+      maxNodeWallTimeMs: 30_000,
+      maxTotalTokens: 10_000,
+      maxMessages: 32,
+      maxArtifactBytes: 1_000_000,
+      warningRatio: 0.8
+    },
+    autoStart: false,
+    completionNodeIds: ['implement'],
+    createdBy: 'lead',
+    createdAt: now
+  } as const
+}
+
+describe('Graph Mode contracts', () => {
+  test('parses a versioned plan and rejects unsafe paths', () => {
+    expect(GraphPlanV1Schema.parse(plan())).toMatchObject({
+      revision: 1,
+      nodes: [{ id: 'implement' }]
+    })
+    expect(() => GraphPlanV1Schema.parse({
+      ...plan(),
+      nodes: [{ ...plan().nodes[0], writeScopes: ['../outside'] }]
+    })).toThrow(/repository relative/)
+  })
+
+  test('defaults old turn requests to direct and accepts explicit graph turns', () => {
+    expect(StartTurnRequest.parse({ prompt: 'hello' }).orchestration).toBe('direct')
+    expect(StartTurnRequest.parse({ prompt: 'hello', orchestration: 'graph' }).orchestration).toBe('graph')
+  })
+
+  test('parses a strict structured worker result', () => {
+    expect(GraphWorkerResultV1Schema.parse({
+      version: GRAPH_CONTRACT_VERSION,
+      summary: 'Implemented and tested.',
+      changedFiles: ['src/example.ts'],
+      checks: [{
+        name: 'unit',
+        status: 'passed',
+        summary: 'All tests passed.',
+        artifactRefs: []
+      }],
+      artifactRefs: [],
+      evidence: [],
+      risks: [],
+      suggestedMessages: []
+    })).toMatchObject({ summary: 'Implemented and tested.' })
+    expect(() => GraphWorkerResultV1Schema.parse({
+      version: GRAPH_CONTRACT_VERSION,
+      summary: 'Invalid',
+      unexpected: true
+    })).toThrow()
+  })
+
+  test('requires compare-and-swap metadata for graph patches', () => {
+    expect(GraphPatchV1Schema.parse({
+      version: GRAPH_CONTRACT_VERSION,
+      patchId: 'patch_1',
+      commandId: 'command_1',
+      runId: 'run_1',
+      baseRevision: 1,
+      requester: { kind: 'lead', id: 'lead_1' },
+      reason: 'Add independent verification.',
+      operations: [{
+        op: 'update_review',
+        nodeId: 'implement',
+        review: {
+          kinds: ['deterministic', 'peer'],
+          requireAll: true,
+          deterministicChecks: [],
+          peerCapability: 'code-review'
+        }
+      }],
+      createdAt: now
+    })).toMatchObject({ baseRevision: 1 })
+  })
+
+  test('projects graph events through the existing runtime event contract', () => {
+    const graph = GraphEventEnvelopeV1Schema.parse({
+      version: GRAPH_EVENT_VERSION,
+      eventId: 'event_1',
+      runId: 'run_1',
+      threadId: 'thread_1',
+      graphSeq: 1,
+      graphRevision: 1,
+      timestamp: now,
+      event: {
+        type: 'run_status_changed',
+        payload: { from: 'ready', to: 'running', reason: 'started' }
+      }
+    })
+    expect(RuntimeEvent.parse({
+      kind: 'graph_event',
+      seq: 10,
+      timestamp: now,
+      threadId: 'thread_1',
+      graph
+    })).toMatchObject({
+      kind: 'graph_event',
+      graph: { event: { type: 'run_status_changed' } }
+    })
+  })
+
+  test('rejects unsupported future contract versions', () => {
+    expect(() => GraphPlanV1Schema.parse({ ...plan(), version: 2 })).toThrow()
+    expect(() => GraphEventEnvelopeV1Schema.parse({
+      version: 2,
+      eventId: 'event_1',
+      runId: 'run_1',
+      threadId: 'thread_1',
+      graphSeq: 1,
+      graphRevision: 1,
+      timestamp: now,
+      event: {
+        type: 'run_status_changed',
+        payload: { from: 'ready', to: 'running' }
+      }
+    })).toThrow()
+  })
+})

@@ -94,6 +94,17 @@ import {
   type SidebarOrderRegistry
 } from './sidebar-order'
 import {
+  isSidebarFolderCollapsed,
+  isSidebarWorkspaceCollapsed,
+  readSidebarCollapseRegistry,
+  removeSidebarFolderCollapse,
+  saveSidebarCollapseRegistry,
+  setSidebarFolderCollapsed,
+  setSidebarWorkspaceCollapsed,
+  setSidebarWorkspacesCollapsed,
+  type SidebarCollapseRegistry
+} from './sidebar-collapse'
+import {
   createSidebarFolder,
   deleteSidebarFolder,
   moveThreadToSidebarFolder,
@@ -198,7 +209,9 @@ export function SidebarProjectsSection({
   onSearchQueryChange,
   t
 }: SidebarProjectsSectionProps): ReactElement {
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
+  const [sidebarCollapse, setSidebarCollapse] = useState<SidebarCollapseRegistry>(
+    () => readSidebarCollapseRegistry()
+  )
   const [expandedWorkspaces, setExpandedWorkspaces] = useState<Record<string, boolean>>({})
   const [deletingThreadIds, setDeletingThreadIds] = useState<Record<string, boolean>>({})
   const [deletingDraftIds, setDeletingDraftIds] = useState<Record<string, boolean>>({})
@@ -214,7 +227,6 @@ export function SidebarProjectsSection({
   const [folderDialog, setFolderDialog] = useState<SidebarFolderDialogState | null>(null)
   const [sidebarOrder, setSidebarOrder] = useState<SidebarOrderRegistry>(() => readSidebarOrderRegistry())
   const [sidebarFolders, setSidebarFolders] = useState<SidebarFolderRegistry>(() => readSidebarFolderRegistry())
-  const [collapsedFolders, setCollapsedFolders] = useState<Record<string, boolean>>({})
   const [draggingWorkspacePath, setDraggingWorkspacePath] = useState<string | null>(null)
   const [workspaceOrderDropTarget, setWorkspaceOrderDropTarget] = useState<WorkspaceOrderDropTarget | null>(null)
   const [draggingThreadId, setDraggingThreadId] = useState<string | null>(null)
@@ -320,7 +332,9 @@ export function SidebarProjectsSection({
   ), [allProjectGroups, sidebarOrder.workspacePaths, unorderedDisplayGroups])
 
   const searchVisible = searchOpen || searchQuery.trim().length > 0
-  const allGroupsCollapsed = displayGroups.length > 0 && displayGroups.every(([workspacePath]) => collapsed[workspacePath] === true)
+  const allGroupsCollapsed = displayGroups.length > 0 && displayGroups.every(([workspacePath]) =>
+    isSidebarWorkspaceCollapsed(sidebarCollapse, workspacePath)
+  )
   const workspaceHistoryKey = draftHistoryWorkspacePaths.join('\n')
   const projectWorkspaceGroups = displayGroups.filter(([workspacePath]) => isSidebarProjectWorkspacePath(workspacePath))
 
@@ -380,11 +394,11 @@ export function SidebarProjectsSection({
 
   const toggleAllGroups = (): void => {
     if (displayGroups.length === 0) return
-    if (allGroupsCollapsed) {
-      setCollapsed({})
-      return
-    }
-    setCollapsed(Object.fromEntries(displayGroups.map(([workspacePath]) => [workspacePath, true])))
+    persistSidebarCollapse((current) => setSidebarWorkspacesCollapsed(
+      current,
+      displayGroups.map(([workspacePath]) => workspacePath),
+      !allGroupsCollapsed
+    ))
   }
 
   const openActionDialog = (dialog: Omit<SidebarActionDialogState, 'submitting'>): void => {
@@ -692,6 +706,14 @@ export function SidebarProjectsSection({
     setSidebarFolders(next)
   }
 
+  const persistSidebarCollapse = (
+    update: (current: SidebarCollapseRegistry) => SidebarCollapseRegistry
+  ): void => {
+    const next = update(readSidebarCollapseRegistry())
+    saveSidebarCollapseRegistry(next)
+    setSidebarCollapse(next)
+  }
+
   const openCreateFolderDialog = (
     workspacePath: string,
     parentId: string | null = null
@@ -759,7 +781,9 @@ export function SidebarProjectsSection({
     workspacePath: string,
     folderId: string
   ): Promise<void> => {
-    setCollapsedFolders((current) => ({ ...current, [folderId]: false }))
+    persistSidebarCollapse((current) =>
+      setSidebarFolderCollapsed(current, workspacePath, folderId, false)
+    )
     const threadId = await onCreateThreadInWorkspace(workspacePath, { forceNew: true })
     if (!threadId) return
     persistSidebarFolders((current) =>
@@ -780,6 +804,9 @@ export function SidebarProjectsSection({
       onConfirm: async () => {
         persistSidebarFolders((current) =>
           deleteSidebarFolder(current, workspacePath, folder.id)
+        )
+        persistSidebarCollapse((current) =>
+          removeSidebarFolderCollapse(current, workspacePath, folder.id)
         )
       }
     })
@@ -1097,7 +1124,9 @@ export function SidebarProjectsSection({
     persistSidebarFolders((current) =>
       moveThreadToSidebarFolder(current, workspacePath, threadId, folderId)
     )
-    setCollapsedFolders((current) => ({ ...current, [folderId]: false }))
+    persistSidebarCollapse((current) =>
+      setSidebarFolderCollapsed(current, workspacePath, folderId, false)
+    )
     setDraggingThreadId(null)
     setThreadOrderDropTarget(null)
     setDragOverWorkspace(null)
@@ -1386,7 +1415,7 @@ export function SidebarProjectsSection({
         {displayGroups.map(([workspacePath, list]) => {
           const folderName = workspaceLabelFromPath(workspacePath)
           const workspaceContext = workspaceContextLabel(workspacePath, folderName)
-          const isCollapsed = collapsed[workspacePath] === true
+          const isCollapsed = isSidebarWorkspaceCollapsed(sidebarCollapse, workspacePath)
           const isDragOver =
             dragOverWorkspace !== null
             && workspaceRootIdentityKey(dragOverWorkspace) === workspaceRootIdentityKey(workspacePath)
@@ -1432,7 +1461,9 @@ export function SidebarProjectsSection({
               <SidebarTreeRow
                 title={workspacePath}
                 onClick={() =>
-                  setCollapsed((current) => ({ ...current, [workspacePath]: !current[workspacePath] }))
+                  persistSidebarCollapse((current) =>
+                    setSidebarWorkspaceCollapsed(current, workspacePath, !isCollapsed)
+                  )
                 }
                 onContextMenu={(event) => openWorkspaceContextMenu(event, workspacePath)}
                 draggable
@@ -1503,7 +1534,11 @@ export function SidebarProjectsSection({
                   />
                   {rootFolders.map((folder) => {
                     const renderFolder = (item: SidebarVirtualFolder): ReactElement => {
-                      const folderCollapsed = collapsedFolders[item.id] === true
+                      const folderCollapsed = isSidebarFolderCollapsed(
+                        sidebarCollapse,
+                        workspacePath,
+                        item.id
+                      )
                       const folderThreads = item.threadIds.flatMap((threadId) => {
                         const thread = threadsById.get(threadId)
                         return thread ? [thread] : []
@@ -1521,10 +1556,14 @@ export function SidebarProjectsSection({
                               count: sidebarFolderThreadCount(workspaceFolders, item.id)
                             })}
                             onClick={() =>
-                              setCollapsedFolders((current) => ({
-                                ...current,
-                                [item.id]: !current[item.id]
-                              }))
+                              persistSidebarCollapse((current) =>
+                                setSidebarFolderCollapsed(
+                                  current,
+                                  workspacePath,
+                                  item.id,
+                                  !folderCollapsed
+                                )
+                              )
                             }
                             onContextMenu={(event) => openFolderContextMenu(event, workspacePath, item)}
                             onDragOver={(event) => handleFolderDragOver(event, workspacePath, item.id)}

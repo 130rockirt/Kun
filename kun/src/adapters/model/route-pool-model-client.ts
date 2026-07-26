@@ -133,6 +133,10 @@ export class RoutePoolHealthStore {
     this.persist()
   }
 
+  flush(): Promise<void> {
+    return this.writeChain
+  }
+
   private event(pool: ModelRoutePoolConfig, target: ModelRouteTargetConfig, latencyMs: number, result: ModelRouteEvent['result'], category?: string, message?: string, testId?: string): void {
     this.events_.push({
       at: new Date(this.now()).toISOString(),

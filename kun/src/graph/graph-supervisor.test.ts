@@ -1,0 +1,280 @@
+import { describe, expect, it, vi } from 'vitest'
+import type {
+  GraphNodeAttemptV1,
+  GraphRunV1
+} from '../contracts/graph.js'
+import { applyGraphEvent } from './graph-reducer.js'
+import { GraphSupervisor } from './graph-supervisor.js'
+import {
+  testAssignmentSnapshot,
+  testGraphConfig,
+  testGraphEnvelope,
+  testGraphPlan
+} from './graph-test-fixtures.test-support.js'
+
+function baseRun(): GraphRunV1 {
+  return applyGraphEvent(undefined, testGraphEnvelope(1, {
+    type: 'run_created',
+    payload: {
+      plan: testGraphPlan(),
+      projectId: 'project_1',
+      sourceTurnId: 'turn_1'
+    }
+  }))
+}
+
+function failedAttempt(id: string, attemptNumber: number, failure: string): GraphNodeAttemptV1 {
+  return {
+    version: 1,
+    id,
+    runId: 'run_1',
+    nodeId: 'research',
+    revision: 1,
+    attemptNumber,
+    iteration: 0,
+    commandId: `command_${id}`,
+    idempotencyKey: `attempt_${id}`,
+    status: 'failed',
+    assignment: testAssignmentSnapshot(),
+    queuedAt: '2026-07-26T00:00:00.000Z',
+    finishedAt: '2026-07-26T00:00:01.000Z',
+    normalizedFailure: failure,
+    failureClass: 'retryable',
+    tokenUsage: 10,
+    elapsedMs: 1_000
+  }
+}
+
+describe('GraphSupervisor', () => {
+  it('coalesces material signals and pauses repeated non-progress failures', async () => {
+    const original = baseRun()
+    let current: GraphRunV1 = {
+      ...original,
+      status: 'running',
+      nodes: {
+        ...original.nodes,
+        research: {
+          ...original.nodes.research,
+          status: 'failed',
+          attempts: [
+            failedAttempt('attempt_1', 1, 'HTTP 500 while validating'),
+            failedAttempt('attempt_2', 2, 'HTTP 503 while validating')
+          ]
+        }
+      }
+    }
+    const leadTurn = vi.fn(async () => undefined)
+    const store = {
+      get: vi.fn(async () => current),
+      list: vi.fn(async () => [current]),
+      append: vi.fn(async (_runId: string, input: {
+        event: { type: string; payload?: { to?: GraphRunV1['status'] } }
+      }) => {
+        current = {
+          ...current,
+          ...(input.event.type === 'run_status_changed' && input.event.payload?.to
+            ? { status: input.event.payload.to }
+            : {}),
+          lastEventSeq: current.lastEventSeq + 1
+        }
+        return { state: current, envelope: {}, duplicate: false }
+      })
+    }
+    const supervisor = new GraphSupervisor({
+      store: store as never,
+      config: () => testGraphConfig({
+        supervision: {
+          coalesceWindowMs: 60_000,
+          repeatedFailureThreshold: 2
+        }
+      }),
+      delegation: () => undefined,
+      leadTurn
+    })
+    await supervisor.signal({
+      runId: 'run_1',
+      reason: 'failure',
+      nodeIds: ['research'],
+      digest: 'first failure'
+    })
+    await supervisor.signal({
+      runId: 'run_1',
+      reason: 'help',
+      nodeIds: ['finish'],
+      digest: 'worker requested help'
+    })
+    await supervisor.flush('run_1')
+    await supervisor.stop()
+
+    expect(current.status).toBe('paused')
+    expect(leadTurn).toHaveBeenCalledOnce()
+    expect(leadTurn).toHaveBeenCalledWith(expect.objectContaining({
+      reasons: expect.arrayContaining(['failure', 'help']),
+      nodeIds: expect.arrayContaining(['research', 'finish'])
+    }))
+  })
+
+  it('conservatively requests a human when an independent reviewer is unavailable', async () => {
+    const run = baseRun()
+    const attempt = failedAttempt('attempt_review', 1, 'not relevant')
+    const supervisor = new GraphSupervisor({
+      store: {} as never,
+      config: () => testGraphConfig(),
+      delegation: () => undefined
+    })
+    await expect(supervisor.review({
+      run,
+      node: run.nodes.research,
+      attempt,
+      kind: 'peer'
+    })).resolves.toMatchObject({
+      reviewerKind: 'peer',
+      outcome: 'needs_human',
+      summary: 'Independent reviewer runtime is unavailable.'
+    })
+  })
+
+  it('allows a Lead turn to emit a new supervision signal without deadlocking', async () => {
+    let current: GraphRunV1 = { ...baseRun(), status: 'running' }
+    const store = {
+      get: vi.fn(async () => current),
+      list: vi.fn(async () => [current]),
+      append: vi.fn(async () => {
+        current = { ...current, lastEventSeq: current.lastEventSeq + 1 }
+        return { state: current, envelope: {}, duplicate: false }
+      })
+    }
+    let supervisor: GraphSupervisor
+    supervisor = new GraphSupervisor({
+      store: store as never,
+      config: () => testGraphConfig({ supervision: { coalesceWindowMs: 60_000 } }),
+      delegation: () => undefined,
+      leadTurn: async () => {
+        await supervisor.signal({
+          runId: 'run_1',
+          reason: 'user_steering',
+          nodeIds: [],
+          digest: 'Lead persisted follow-up steering.'
+        })
+      }
+    })
+    await supervisor.signal({
+      runId: 'run_1',
+      reason: 'help',
+      nodeIds: ['research'],
+      digest: 'Initial signal.'
+    })
+    await expect(Promise.race([
+      supervisor.flush('run_1'),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('supervisor flush deadlocked')), 1_000))
+    ])).resolves.toBeUndefined()
+    await supervisor.stop()
+    expect(store.append).toHaveBeenCalledTimes(2)
+  })
+
+  it('hot-reconfigures automatic Lead turns without dropping durable signals', async () => {
+    let config = testGraphConfig({
+      supervision: { autoStart: false, coalesceWindowMs: 60_000 }
+    })
+    let current: GraphRunV1 = { ...baseRun(), status: 'running' }
+    const leadTurn = vi.fn(async () => undefined)
+    const store = {
+      get: vi.fn(async () => current),
+      list: vi.fn(async () => [current]),
+      append: vi.fn(async () => {
+        current = { ...current, lastEventSeq: current.lastEventSeq + 1 }
+        return { state: current, envelope: {}, duplicate: false }
+      })
+    }
+    const supervisor = new GraphSupervisor({
+      store: store as never,
+      config: () => config,
+      delegation: () => undefined,
+      leadTurn
+    })
+
+    await supervisor.signal({
+      runId: current.id,
+      reason: 'help',
+      nodeIds: ['research'],
+      digest: 'Manual supervision signal.'
+    })
+    await supervisor.flush(current.id)
+    expect(store.append).toHaveBeenCalledOnce()
+    expect(leadTurn).not.toHaveBeenCalled()
+
+    config = testGraphConfig({
+      supervision: { autoStart: true, coalesceWindowMs: 60_000 }
+    })
+    supervisor.reconfigure()
+    await supervisor.signal({
+      runId: current.id,
+      reason: 'help',
+      nodeIds: ['research'],
+      digest: 'Automatic supervision signal.'
+    })
+    await supervisor.flush(current.id)
+    expect(leadTurn).toHaveBeenCalledOnce()
+
+    config = testGraphConfig({ enabled: false })
+    supervisor.reconfigure()
+    await supervisor.signal({
+      runId: current.id,
+      reason: 'help',
+      nodeIds: [],
+      digest: 'Disabled signal.'
+    })
+    expect(store.append).toHaveBeenCalledTimes(2)
+    await supervisor.stop()
+  })
+
+  it('builds a bounded deterministic synthesis with evidence and risks', async () => {
+    const original = baseRun()
+    const attempt: GraphNodeAttemptV1 = {
+      ...failedAttempt('attempt_ok', 1, 'none'),
+      status: 'accepted',
+      normalizedFailure: undefined,
+      failureClass: undefined,
+      result: {
+        version: 1,
+        summary: 'Completed the requested implementation.',
+        changedFiles: ['src/example.ts', 'src/example.ts'],
+        checks: [{
+          name: 'test',
+          status: 'passed',
+          summary: 'Passed.',
+          artifactRefs: []
+        }],
+        evidence: ['test passed'],
+        artifactRefs: [],
+        risks: ['One documented residual risk.'],
+        suggestedMessages: []
+      }
+    }
+    const run: GraphRunV1 = {
+      ...original,
+      nodes: {
+        ...original.nodes,
+        finish: {
+          ...original.nodes.finish,
+          status: 'accepted',
+          acceptedAttemptId: attempt.id,
+          attempts: [attempt]
+        }
+      }
+    }
+    const supervisor = new GraphSupervisor({
+      store: {} as never,
+      config: () => testGraphConfig(),
+      delegation: () => undefined,
+      nowIso: () => '2026-07-26T12:00:00.000Z'
+    })
+    await expect(supervisor.synthesize(run)).resolves.toMatchObject({
+      finalAnswer: 'Completed the requested implementation.',
+      changedFiles: ['src/example.ts'],
+      unresolvedRisks: ['One documented residual risk.'],
+      completedAt: '2026-07-26T12:00:00.000Z'
+    })
+  })
+})

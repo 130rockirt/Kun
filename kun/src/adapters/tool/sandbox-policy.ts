@@ -106,7 +106,7 @@ export function effectiveSandboxMode(
 
 export function isToolAdvertisedInSandbox(
   tool: Pick<LocalTool, 'toolKind' | 'name'>,
-  context?: Pick<ToolHostContext, 'sandboxMode'>
+  context?: Pick<ToolHostContext, 'sandboxMode' | 'allowedReadPaths' | 'allowedWritePaths'>
 ): boolean {
   if (!context) return true
   return sandboxBlockForTool(tool, context) === null
@@ -114,11 +114,23 @@ export function isToolAdvertisedInSandbox(
 
 export function sandboxBlockForTool(
   tool: Pick<LocalTool, 'toolKind' | 'name'>,
-  context: Pick<ToolHostContext, 'sandboxMode'>
+  context: Pick<ToolHostContext, 'sandboxMode' | 'allowedReadPaths' | 'allowedWritePaths'>
 ): SandboxBlock | null {
   const mode = effectiveSandboxMode(context)
-  if (mode === 'danger-full-access') return null
   if (isInteractiveGuiGateTool(tool.name)) return null
+
+  if (
+    tool.toolKind === 'command_execution' &&
+    hasNarrowPathBoundary(context)
+  ) {
+    return {
+      code: 'sandbox_command_blocked',
+      message:
+        `tool ${tool.name} is blocked because shell commands cannot be safely confined ` +
+        'to the delegated child path scopes'
+    }
+  }
+  if (mode === 'danger-full-access') return null
 
   if (tool.toolKind === 'file_change') {
     if (mode === 'workspace-write') return null
@@ -146,8 +158,23 @@ export function sandboxBlockForTool(
 
 export function canWritePath(
   absolutePath: string,
-  context: Pick<ToolHostContext, 'workspace' | 'sandboxMode' | 'approvedExternalWriteTargets'>
+  context: Pick<
+    ToolHostContext,
+    'workspace' | 'sandboxMode' | 'approvedExternalWriteTargets' | 'allowedWritePaths'
+  >
 ): { ok: true } | { ok: false; block: SandboxBlock } {
+  if (
+    context.allowedWritePaths &&
+    !pathAllowedByScopes(absolutePath, context.workspace, context.allowedWritePaths)
+  ) {
+    return {
+      ok: false,
+      block: {
+        code: 'sandbox_write_blocked',
+        message: `writing is outside the delegated child write scopes: ${absolutePath}`
+      }
+    }
+  }
   const mode = effectiveSandboxMode(context)
   if (mode === 'danger-full-access') return { ok: true }
   if (mode === 'read-only') {
@@ -188,10 +215,41 @@ export function canWritePath(
 
 export function assertCanWritePath(
   absolutePath: string,
-  context: Pick<ToolHostContext, 'workspace' | 'sandboxMode' | 'approvedExternalWriteTargets'>
+  context: Pick<
+    ToolHostContext,
+    'workspace' | 'sandboxMode' | 'approvedExternalWriteTargets' | 'allowedWritePaths'
+  >
 ): void {
   const decision = canWritePath(absolutePath, context)
   if (!decision.ok) throw new Error(decision.block.message)
+}
+
+export function pathAllowedByScopes(
+  absolutePath: string,
+  workspace: string,
+  scopes: readonly string[]
+): boolean {
+  const root = workspaceRoot(workspace)
+  const target = isAbsolute(absolutePath) ? resolve(absolutePath) : resolve(root, absolutePath)
+  if (!isPathInsideOrEqual(root, target)) return false
+  const relativePath = target === root
+    ? '.'
+    : target.slice(root.length + 1).replaceAll('\\', '/')
+  return scopes.some((scope) => {
+    const normalized = scope.trim().replaceAll('\\', '/').replace(/^\.\/+/, '').replace(/\/+$/, '') || '.'
+    return normalized === '.' ||
+      relativePath === normalized ||
+      relativePath.startsWith(`${normalized}/`)
+  })
+}
+
+function hasNarrowPathBoundary(
+  context: Pick<ToolHostContext, 'allowedReadPaths' | 'allowedWritePaths'>
+): boolean {
+  const read = context.allowedReadPaths
+  const write = context.allowedWritePaths
+  if (!read && !write) return false
+  return !read?.includes('.') || !write?.includes('.')
 }
 
 function isInteractiveGuiGateTool(toolName: string): boolean {

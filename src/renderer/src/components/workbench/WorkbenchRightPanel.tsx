@@ -61,6 +61,9 @@ const McpSkillsPanel = lazy(() =>
 const AgentPerspectivePanel = lazy(() =>
   import('./AgentPerspectivePanel').then((module) => ({ default: module.AgentPerspectivePanel }))
 )
+const GraphModePanel = lazy(() =>
+  import('../graph/GraphModePanel').then((module) => ({ default: module.GraphModePanel }))
+)
 
 type WriteAssistantPanelProps = ComponentProps<typeof WriteAssistantPanel>
 type SddAssistantPanelProps = ComponentProps<typeof SddAssistantPanel>
@@ -180,6 +183,8 @@ export function WorkbenchRightPanel({
             <WorkspaceFilePreviewPanel {...file} className="h-full max-h-full w-full" />
           ) : rightPanelMode === BUILTIN_RIGHT_PANEL_IDS.mcpSkills ? (
             <McpSkillsPanel workspaceRoot={workspaceRoot} onOpenSettings={mcpSkills.onOpenSettings} />
+          ) : rightPanelMode === BUILTIN_RIGHT_PANEL_IDS.graph ? (
+            <GraphModePanel className="h-full max-h-full w-full" onCollapse={onCollapse} />
           ) : rightPanelMode && isExtensionContributionId(rightPanelMode) && extensionView?.id === rightPanelMode ? (
             <ExtensionViewOutlet contribution={extensionView} workspaceRoot={workspaceRoot} onClose={onCollapse} />
           ) : (
@@ -290,6 +295,9 @@ function CodeRightPanelWorkspace({
     }
     if (id === BUILTIN_RIGHT_PANEL_IDS.mcpSkills) {
       return <McpSkillsPanel workspaceRoot={workspaceRoot} onOpenSettings={mcpSkills.onOpenSettings} />
+    }
+    if (id === BUILTIN_RIGHT_PANEL_IDS.graph) {
+      return <GraphModePanel className="h-full max-h-full w-full" onCollapse={onCollapse} />
     }
     if (id === BUILTIN_RIGHT_PANEL_IDS.agentPerspective) {
       return (

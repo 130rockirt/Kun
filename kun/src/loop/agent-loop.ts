@@ -164,6 +164,14 @@ export type AgentLoopOptions = {
   forcedAllowedToolNames?: readonly string[]
   /** Provider allow-list inherited from the parent turn for delegated loops. */
   allowedProviderIds?: readonly string[]
+  /** Skill allow-list captured at the delegated child boundary. */
+  allowedSkillIds?: readonly string[]
+  /** Workspace-relative read scopes captured at the delegated child boundary. */
+  allowedReadPaths?: readonly string[]
+  /** Workspace-relative write scopes captured at the delegated child boundary. */
+  allowedWritePaths?: readonly string[]
+  /** Artifact capability set captured at the delegated child boundary. */
+  allowedArtifactIds?: readonly string[]
   /**
    * Provider ids hard-blocked for this loop (e.g. a subagent profile's blocked
    * MCP servers, as `mcp:<serverId>`). Deny-list layered on top of inherit and
@@ -346,6 +354,10 @@ export class AgentLoop {
       interactiveToolBridge: this.interactiveToolBridge,
       ...(opts.forcedAllowedToolNames ? { forcedAllowedToolNames: opts.forcedAllowedToolNames } : {}),
       ...(opts.allowedProviderIds ? { allowedProviderIds: opts.allowedProviderIds } : {}),
+      ...(opts.allowedSkillIds ? { allowedSkillIds: opts.allowedSkillIds } : {}),
+      ...(opts.allowedReadPaths ? { allowedReadPaths: opts.allowedReadPaths } : {}),
+      ...(opts.allowedWritePaths ? { allowedWritePaths: opts.allowedWritePaths } : {}),
+      ...(opts.allowedArtifactIds ? { allowedArtifactIds: opts.allowedArtifactIds } : {}),
       ...(opts.blockedProviderIds ? { blockedProviderIds: opts.blockedProviderIds } : {}),
       ...(opts.blockedToolNames ? { blockedToolNames: opts.blockedToolNames } : {}),
       ...(opts.blockedSkillIds ? { blockedSkillIds: opts.blockedSkillIds } : {}),
@@ -779,6 +791,10 @@ export class AgentLoop {
     const context = createToolExecutionContext(input, {
       memoryEnabled: Boolean(this.opts.memoryStore),
       ...(this.opts.allowedProviderIds ? { allowedProviderIds: this.opts.allowedProviderIds } : {}),
+      ...(this.opts.allowedSkillIds ? { allowedSkillIds: this.opts.allowedSkillIds } : {}),
+      ...(this.opts.allowedReadPaths ? { allowedReadPaths: this.opts.allowedReadPaths } : {}),
+      ...(this.opts.allowedWritePaths ? { allowedWritePaths: this.opts.allowedWritePaths } : {}),
+      ...(this.opts.allowedArtifactIds ? { allowedArtifactIds: this.opts.allowedArtifactIds } : {}),
       ...(this.opts.blockedProviderIds ? { blockedProviderIds: this.opts.blockedProviderIds } : {}),
       ...(this.opts.blockedToolNames ? { blockedToolNames: this.opts.blockedToolNames } : {}),
       ...(this.opts.blockedSkillIds ? { blockedSkillIds: this.opts.blockedSkillIds } : {}),

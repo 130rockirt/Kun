@@ -432,6 +432,133 @@ export type KunSubagentsSettingsPatchV1 = Partial<
   profiles?: KunSubagentProfileV1[]
 }
 
+export const KUN_GRAPH_ROLLOUT_STAGES = [
+  'experimental',
+  'alpha',
+  'beta',
+  'learning-preview',
+  'stable'
+] as const
+export type KunGraphRolloutStage = (typeof KUN_GRAPH_ROLLOUT_STAGES)[number]
+
+export const KUN_GRAPH_LEARNING_MODES = ['off', 'suggest', 'auto_candidate'] as const
+export type KunGraphLearningMode = (typeof KUN_GRAPH_LEARNING_MODES)[number]
+
+export type KunGraphSchedulerSettingsV1 = {
+  maxNodes: number
+  maxEdges: number
+  maxConcurrentRuns: number
+  maxConcurrentNodes: number
+  maxConcurrentNodesPerRun: number
+  maxAttemptsPerNode: number
+  maxRevisions: number
+  maxLoopIterations: number
+  maxRunWallTimeMs: number
+  maxNodeWallTimeMs: number
+  maxTotalTokens: number
+  maxArtifactBytes: number
+  budgetWarningRatio: number
+}
+
+export type KunGraphContextSettingsV1 = {
+  maxWorkerContextBytes: number
+  maxDependencySummaryBytes: number
+  maxInputArtifacts: number
+  maxInputMessages: number
+  maxInlineEventBytes: number
+}
+
+export type KunGraphMailboxSettingsV1 = {
+  maxMessagesPerNode: number
+  maxMessagesPerRun: number
+  maxMessageBytes: number
+  maxArtifactRefsPerMessage: number
+  maxMessagesPerMinute: number
+  defaultTtlMs: number
+  blockingReplyTimeoutMs: number
+}
+
+export type KunGraphSupervisionSettingsV1 = {
+  enabled: boolean
+  autoStart: boolean
+  coalesceWindowMs: number
+  stallTimeoutMs: number
+  repeatedFailureThreshold: number
+  requireFinalReview: boolean
+  requireHumanForCriticalRisk: boolean
+}
+
+export type KunGraphWriteIsolationSettingsV1 = {
+  mode: 'serialize' | 'lease' | 'worktree'
+  allowWorktrees: boolean
+  leaseTtlMs: number
+  preserveFailedWorktrees: boolean
+}
+
+export type KunGraphRoutingSettingsV1 = {
+  recallLimit: number
+  minTaskFit: number
+  minConfidence: number
+  explorationRatio: number
+  dormantMissedOpportunityThreshold: number
+}
+
+export type KunGraphLearningSettingsV1 = {
+  mode: KunGraphLearningMode
+  minimumDistinctSessions: number
+  minimumVerifiedEpisodes: number
+  consolidationIntervalMs: number
+  maxEpisodesPerJob: number
+  probationMinimumRuns: number
+  allowReadOnlyExploration: boolean
+}
+
+export type KunGraphRetentionSettingsV1 = {
+  graphDays: number
+  artifactDays: number
+  episodeDays: number
+  auditDays: number
+  snapshotEveryEvents: number
+  compactAfterEvents: number
+}
+
+export type KunGraphSettingsV1 = {
+  enabled: boolean
+  defaultStrategy: 'direct' | 'graph'
+  rolloutStage: KunGraphRolloutStage
+  scheduler: KunGraphSchedulerSettingsV1
+  context: KunGraphContextSettingsV1
+  mailbox: KunGraphMailboxSettingsV1
+  supervision: KunGraphSupervisionSettingsV1
+  writeIsolation: KunGraphWriteIsolationSettingsV1
+  routing: KunGraphRoutingSettingsV1
+  learning: KunGraphLearningSettingsV1
+  retention: KunGraphRetentionSettingsV1
+}
+
+export type KunGraphSettingsPatchV1 = Partial<
+  Omit<
+    KunGraphSettingsV1,
+    | 'scheduler'
+    | 'context'
+    | 'mailbox'
+    | 'supervision'
+    | 'writeIsolation'
+    | 'routing'
+    | 'learning'
+    | 'retention'
+  >
+> & {
+  scheduler?: Partial<KunGraphSchedulerSettingsV1>
+  context?: Partial<KunGraphContextSettingsV1>
+  mailbox?: Partial<KunGraphMailboxSettingsV1>
+  supervision?: Partial<KunGraphSupervisionSettingsV1>
+  writeIsolation?: Partial<KunGraphWriteIsolationSettingsV1>
+  routing?: Partial<KunGraphRoutingSettingsV1>
+  learning?: Partial<KunGraphLearningSettingsV1>
+  retention?: Partial<KunGraphRetentionSettingsV1>
+}
+
 export type KunRuntimeSettingsV1 = {
   binaryPath: string
   port: number
@@ -493,6 +620,8 @@ export type KunRuntimeSettingsV1 = {
   quality: KunDesignQualitySettingsV1
   /** GUI-managed subagent profiles written into kun SubagentsCapabilityConfig. */
   subagents?: KunSubagentsSettingsV1
+  /** Host-owned Graph orchestration, project-agent routing, and learning policy. */
+  graph: KunGraphSettingsV1
   /** Global small-model slot. Title & Summary default to this. Empty = follow main model. */
   smallModel?: string
   /** Provider id paired with smallModel for per-provider routing. */
@@ -822,7 +951,7 @@ export type KunTokenEconomySettingsPatchV1 = Partial<
 export type KunRuntimeSettingsPatchV1 = Partial<
   Omit<
     KunRuntimeSettingsV1,
-    'mcpSearch' | 'projectConfig' | 'storage' | 'contextCompaction' | 'runtimeTuning' | 'tokenEconomy' | 'toolOutputLimits' | 'imageGeneration' | 'speechToText' | 'textToSpeech' | 'promptOptimization' | 'musicGeneration' | 'videoGeneration' | 'instructions' | 'computerUse' | 'quality' | 'modelProfiles' | 'subagents'
+    'mcpSearch' | 'projectConfig' | 'storage' | 'contextCompaction' | 'runtimeTuning' | 'tokenEconomy' | 'toolOutputLimits' | 'imageGeneration' | 'speechToText' | 'textToSpeech' | 'promptOptimization' | 'musicGeneration' | 'videoGeneration' | 'instructions' | 'computerUse' | 'quality' | 'modelProfiles' | 'subagents' | 'graph'
   >
 > & {
   mcpSearch?: Partial<KunMcpSearchSettingsV1>
@@ -843,6 +972,7 @@ export type KunRuntimeSettingsPatchV1 = Partial<
   quality?: Partial<KunDesignQualitySettingsV1>
   modelProfiles?: Record<string, ModelProviderModelProfilePatchV1 | null>
   subagents?: KunSubagentsSettingsPatchV1
+  graph?: KunGraphSettingsPatchV1
 }
 
 export type KunSettingsEnvelopePatchV1 = {

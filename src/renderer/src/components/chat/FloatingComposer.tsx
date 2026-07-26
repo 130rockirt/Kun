@@ -27,6 +27,7 @@ import {
   Puzzle,
   PlayCircle,
   Send,
+  Share2,
   Sparkles,
   Square,
   Target,
@@ -182,6 +183,9 @@ type Props = {
   setInput: (v: string) => void
   mode: 'plan' | 'agent'
   setMode: (m: 'plan' | 'agent') => void
+  orchestration?: 'direct' | 'graph'
+  graphEnabled?: boolean
+  onOrchestrationChange?: (mode: 'direct' | 'graph') => void
   busy: boolean
   runtimeReady: boolean
   hasActiveThread: boolean
@@ -302,6 +306,9 @@ export function FloatingComposer({
   setInput,
   mode,
   setMode,
+  orchestration = 'direct',
+  graphEnabled = false,
+  onOrchestrationChange,
   busy,
   runtimeReady,
   hasActiveThread,
@@ -1629,6 +1636,48 @@ export function FloatingComposer({
                     disabled={!canCompose || busy}
                     onChange={onExecutionSettingsChange}
                   />
+                ) : null}
+                {!compact && route === 'chat' && mode === 'agent' && onOrchestrationChange ? (
+                  <div
+                    className="ds-no-drag inline-flex h-8 shrink-0 items-center rounded-full border border-ds-border-muted bg-ds-card p-0.5"
+                    aria-label={t('graphModeSelector', { defaultValue: 'Orchestration mode' })}
+                  >
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => onOrchestrationChange('direct')}
+                      className={`inline-flex h-7 items-center rounded-full px-2.5 text-[11px] font-semibold transition ${
+                        orchestration === 'direct'
+                          ? 'bg-ds-hover text-ds-ink shadow-sm'
+                          : 'text-ds-faint hover:text-ds-muted'
+                      }`}
+                      title={t('graphModeDirectHint', {
+                        defaultValue: 'Direct: the main agent executes the task itself'
+                      })}
+                    >
+                      {t('graphModeDirect', { defaultValue: 'Direct' })}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy || !graphEnabled}
+                      onClick={() => onOrchestrationChange('graph')}
+                      className={`inline-flex h-7 items-center gap-1 rounded-full px-2.5 text-[11px] font-semibold transition ${
+                        orchestration === 'graph'
+                          ? 'bg-indigo-500/14 text-indigo-700 shadow-sm dark:text-indigo-200'
+                          : 'text-ds-faint hover:text-ds-muted'
+                      } disabled:cursor-not-allowed disabled:opacity-45`}
+                      title={graphEnabled
+                        ? t('graphModeGraphHint', {
+                            defaultValue: 'Graph: plan, delegate, supervise, review, and synthesize'
+                          })
+                        : t('graphModeDisabledHint', {
+                            defaultValue: 'Enable experimental Graph Mode in Settings → Agents'
+                          })}
+                    >
+                      <Share2 className="h-3 w-3" strokeWidth={2} />
+                      {t('graphModeGraph', { defaultValue: 'Graph' })}
+                    </button>
+                  </div>
                 ) : null}
               </div>
             ) : null}

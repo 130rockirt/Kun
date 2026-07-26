@@ -38,6 +38,7 @@ export type QueuedUserMessage = {
   deliveryUserMessageItemId?: string
   displayText?: string
   mode?: string
+  orchestration?: 'direct' | 'graph'
   model?: string
   providerId?: string
   accountId?: string
@@ -108,6 +109,7 @@ export type SendMessageOverrides = {
   modelLabel?: string
   reasoningEffort?: string
   displayText?: string
+  orchestration?: 'direct' | 'graph'
   guiPlan?: GuiPlanMessageContext
   guiDesignCanvas?: boolean
   guiDesignMode?: boolean
@@ -247,6 +249,8 @@ export type ChatState = {
   turnReasoningLastAtByUserId: Record<string, number>
   inspectorSelectedId: string | null
   composerMode: 'plan' | 'agent'
+  composerOrchestration: 'direct' | 'graph'
+  graphEnabled: boolean
   composerModel: string
   composerProviderId: string
   composerReasoningEffort: ModelReasoningEffort
@@ -274,6 +278,7 @@ export type ChatState = {
   appendLocalClawTurn: (userText: string, replyText: string) => void
   setError: (message: string | null) => void
   setComposerMode: (mode: 'plan' | 'agent') => void
+  setComposerOrchestration: (mode: 'direct' | 'graph') => void
   setComposerModel: (modelId: string, providerId?: string) => void
   setComposerReasoningEffort: (effort: ModelReasoningEffort) => void
   setComposerAgentId: (agentId: string) => void

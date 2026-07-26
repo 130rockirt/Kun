@@ -2,6 +2,22 @@ import type { KunRuntimeSettingsV1 } from '../../shared/app-settings'
 import { resolveCodexOAuthApiKey } from '../codex-auth'
 import { resolveGrokMediaOAuthApiKey } from '../grok-auth'
 
+export function graphConfigForRuntime(
+  value: Pick<KunRuntimeSettingsV1, 'graph'>['graph']
+): KunRuntimeSettingsV1['graph'] {
+  return {
+    ...value,
+    scheduler: { ...value.scheduler },
+    context: { ...value.context },
+    mailbox: { ...value.mailbox },
+    supervision: { ...value.supervision },
+    writeIsolation: { ...value.writeIsolation },
+    routing: { ...value.routing },
+    learning: { ...value.learning },
+    retention: { ...value.retention }
+  }
+}
+
 export function computerUseConfigForRuntime(
   value: Pick<KunRuntimeSettingsV1, 'computerUse'>['computerUse'],
   existing: Record<string, unknown>

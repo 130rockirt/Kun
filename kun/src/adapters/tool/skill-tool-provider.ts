@@ -54,7 +54,8 @@ export function buildSkillToolProviders(
             skillId,
             context.workspace,
             context.blockedSkillIds,
-            turn
+            turn,
+            context.allowedSkillIds
           )
           if ('error' in result) return { output: result, isError: true }
           return { output: result }

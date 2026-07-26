@@ -137,4 +137,21 @@ describe('resolveWorkspacePath sandbox mode', () => {
     const resolved = await resolveWorkspacePath(target, fullAccessContext(missingWs))
     expect(resolved.absolutePath).toBe(target)
   })
+
+  it('enforces delegated read scopes even under danger-full-access', async () => {
+    const scoped = {
+      ...fullAccessContext(workspace),
+      allowedReadPaths: ['src']
+    }
+    await mkdir(join(workspace, 'src'), { recursive: true })
+    await expect(resolveWorkspacePath('src/app.ts', scoped)).resolves.toMatchObject({
+      relativePath: 'src/app.ts'
+    })
+    await expect(resolveWorkspacePath('secrets/key.txt', scoped)).rejects.toThrow(
+      /outside the delegated child read scopes/
+    )
+    await expect(resolveWorkspacePath(join(outside, 'sys.txt'), scoped)).rejects.toThrow(
+      /outside the delegated child read scopes/
+    )
+  })
 })

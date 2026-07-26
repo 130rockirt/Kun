@@ -129,6 +129,21 @@ describe('chat-store-thread-actions queued messages', () => {
     expect(state.queuedMessages[0]?.model).toBe('deepseek-v4-flash')
   })
 
+  it('snapshots Graph orchestration into queued work and preserves it when the preference changes', async () => {
+    const { actions, state } = buildHarness()
+    state.graphEnabled = true
+    state.composerOrchestration = 'graph'
+
+    await expect(actions.sendMessage('run this as a graph', 'agent')).resolves.toBe(true)
+
+    expect(state.queuedMessages[0]).toMatchObject({
+      text: 'run this as a graph',
+      orchestration: 'graph'
+    })
+    state.composerOrchestration = 'direct'
+    expect(state.queuedMessages[0]?.orchestration).toBe('graph')
+  })
+
   it('persists queued messages and their reordered send order for the active thread', async () => {
     const storage = new MemoryStorage()
     vi.stubGlobal('localStorage', storage)
@@ -725,6 +740,49 @@ describe('chat-store-thread-actions queued messages', () => {
       'thr_existing',
       'hello',
       expect.objectContaining({ model: 'mimo-v2.5', providerId: 'xiaomi-token-plan' })
+    )
+  })
+
+  it('sends Graph only while Graph is enabled and otherwise stays direct', async () => {
+    const provider = {
+      sendUserMessage: vi.fn(async () => ({
+        threadId: 'thr_existing',
+        turnId: 'turn_1',
+        userMessageItemId: 'user_1'
+      })),
+      subscribeThreadEvents: vi.fn(async () => undefined)
+    }
+    registryMock.getProvider.mockReturnValue(provider)
+    vi.stubGlobal('window', {
+      kunGui: {
+        getSettings: vi.fn(async () => ({
+          agents: { kun: { providerId: 'deepseek', model: 'deepseek-v4-pro' } },
+          codePromptPrefix: ''
+        })),
+        logError: vi.fn(async () => undefined)
+      }
+    })
+    const { actions, state } = buildHarness()
+    state.busy = false
+    state.graphEnabled = true
+    state.composerOrchestration = 'graph'
+
+    await expect(actions.sendMessage('orchestrate this', 'agent')).resolves.toBe(true)
+    expect(provider.sendUserMessage).toHaveBeenLastCalledWith(
+      'thr_existing',
+      'orchestrate this',
+      expect.objectContaining({ orchestration: 'graph' })
+    )
+
+    const { actions: directActions, state: directState } = buildHarness()
+    directState.busy = false
+    directState.graphEnabled = false
+    directState.composerOrchestration = 'graph'
+    await expect(directActions.sendMessage('run directly', 'agent')).resolves.toBe(true)
+    expect(provider.sendUserMessage).toHaveBeenLastCalledWith(
+      'thr_existing',
+      'run directly',
+      expect.objectContaining({ orchestration: 'direct' })
     )
   })
 

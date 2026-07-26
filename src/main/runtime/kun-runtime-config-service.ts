@@ -2,6 +2,7 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import {
   ContextCompactionConfigSchema,
+  GraphRuntimeConfigSchema,
   KunConfigSchema,
   KunServeConfigSchema,
   ModelConfigSchema,
@@ -44,6 +45,7 @@ import {
 } from '../claw-schedule-mcp-config'
 import {
   computerUseConfigForRuntime,
+  graphConfigForRuntime,
   imageGenConfigForRuntime,
   musicGenConfigForRuntime,
   qualityConfigForRuntime,
@@ -159,6 +161,7 @@ export async function syncGuiManagedKunConfig(
       objectValue(existing?.contextCompaction)
     ),
     runtime: runtimeTuningConfigForRuntime(runtime.runtimeTuning, objectValue(existing?.runtime)),
+    graph: graphConfigForRuntime(runtime.graph),
     quality: qualityConfigForRuntime(runtime.quality, objectValue(existing?.quality)),
     ...(Object.keys(roles).length ? { roles } : {}),
     capabilities: {
@@ -227,7 +230,7 @@ type KunRuntimeConfigSettings = Pick<KunRuntimeSettingsV1,
   'tokenEconomy' | 'toolOutputLimits' | 'storage' | 'contextCompaction' |
   'runtimeTuning' | 'imageGeneration' | 'textToSpeech' | 'musicGeneration' |
   'videoGeneration' | 'computerUse' | 'modelProfiles' | 'memoryEnabled' |
-  'instructions' | 'quality' | 'subagents' | 'smallModel' |
+  'instructions' | 'quality' | 'subagents' | 'graph' | 'smallModel' |
   'smallModelProviderId' | 'smallModelAccountId' |
   'titleModel' | 'titleProviderId' | 'titleAccountId' |
   'summaryModel' | 'summaryProviderId' | 'summaryAccountId' |
@@ -321,6 +324,7 @@ function sanitizeKunConfigSections(
     models: parseKunConfigSection(ModelConfigSchema, existing.models),
     contextCompaction: parseKunConfigSection(ContextCompactionConfigSchema, existing.contextCompaction),
     runtime: parseKunConfigSection(RuntimeTuningConfigSchema, existing.runtime),
+    graph: parseKunConfigSection(GraphRuntimeConfigSchema, existing.graph),
     quality: parseKunConfigSection(QualityConfigSchema, existing.quality),
     capabilities: sanitizeCapabilities(existing.capabilities),
     ...('roles' in existing ? { roles: parseKunConfigSection(RolesConfigSchema, existing.roles) } : {}),

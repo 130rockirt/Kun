@@ -7,6 +7,7 @@ import {
   ComposerContextAttachmentSchema,
   MAX_COMPOSER_CONTEXT_ATTACHMENTS
 } from './composer-context.js'
+import { GraphOrchestrationStrategySchema } from './graph.js'
 
 /**
  * Mode enum, inlined here (instead of importing `ThreadMode` from
@@ -87,6 +88,7 @@ export const TurnSchema = z.object({
   threadId: z.string().min(1),
   status: TurnStatus,
   prompt: z.string(),
+  messageSource: UserMessageSource.optional(),
   model: z.string().optional(),
   providerId: z.string().optional(),
   accountId: z.string().min(1).optional(),
@@ -132,6 +134,8 @@ export const TurnSchema = z.object({
    * otherwise agent thread, or a Build turn that runs as agent).
    */
   mode: TurnModeSchema.optional(),
+  /** Per-turn orchestration strategy. Missing legacy values behave as direct. */
+  orchestration: GraphOrchestrationStrategySchema.default('direct'),
   /**
    * True when no interactive user is attached to this turn (IM bridges,
    * headless runs). Kun hides `user_input`/`request_user_input` and
@@ -164,6 +168,11 @@ export const StartTurnRequest = z.object({
    * mode Kun advertises `create_plan` for the whole conversation.
    */
   mode: TurnModeSchema.optional(),
+  /**
+   * Explicitly selects host-owned Graph orchestration for this turn.
+   * Missing values preserve the existing direct agent loop.
+   */
+  orchestration: GraphOrchestrationStrategySchema.default('direct'),
   attachments: z
     .array(
       z.object({

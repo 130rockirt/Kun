@@ -69,6 +69,7 @@ describe('ThreadTitleService', () => {
       turns: [{
         id: turnId,
         threadId,
+        orchestration: 'direct',
         status: 'running',
         prompt: '帮我做发版前最后review',
         createdAt: new Date().toISOString(),
@@ -137,6 +138,7 @@ describe('ThreadTitleService', () => {
         {
           id: 'turn_1',
           threadId,
+          orchestration: 'direct',
           status: 'completed',
           prompt: 'first message',
           createdAt: new Date().toISOString(),
@@ -153,6 +155,7 @@ describe('ThreadTitleService', () => {
         {
           id: turnId,
           threadId,
+          orchestration: 'direct',
           status: 'running',
           prompt: 'second message',
           createdAt: new Date().toISOString(),
