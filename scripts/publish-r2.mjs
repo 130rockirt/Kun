@@ -349,6 +349,20 @@ function classifyDownload(fileName, platform) {
   return { platform, arch: 'x64', format: extension, label: 'Linux x64 AppImage' }
 }
 
+export function collectRequiredSidecarAssets({ entries, platform, tagVersion }) {
+  if (platform !== 'linux') return []
+
+  const expected = `Kun-${tagVersion}-linux-amd64.deb`
+  const candidates = entries.filter((name) => /^Kun-.+-linux-amd64\.deb$/.test(name)).sort()
+  if (candidates.length !== 1 || candidates[0] !== expected) {
+    throw new Error(
+      `Expected exactly one Linux deb sidecar named ${expected}, ` +
+      `found ${candidates.length}: ${candidates.join(', ') || '(none)'}`
+    )
+  }
+  return candidates
+}
+
 async function collectPlatformRelease({ distDir, platform, tag, channel, config }) {
   const spec = PLATFORM_SPECS[platform]
   if (!spec) throw new Error(`Unsupported platform: ${platform}`)
@@ -365,6 +379,7 @@ async function collectPlatformRelease({ distDir, platform, tag, channel, config 
   }
 
   const referenced = new Set(updateMetadata.files.map((file) => basename(file.url)))
+  const sidecarAssets = collectRequiredSidecarAssets({ entries, platform, tagVersion })
   const assets = entries.filter((name) => spec.assetPattern.test(name))
   for (const name of referenced) {
     if (!entries.includes(name)) {
@@ -414,8 +429,8 @@ async function collectPlatformRelease({ distDir, platform, tag, channel, config 
       latestUrl: joinUrl(config.publicBaseUrl, config.prefix, 'channels', channel, 'latest', fileName)
     }
   })
-  const sidecarDownloads = assets
-    .filter((fileName) => fileName.endsWith('.deb') && !downloadByName.has(fileName))
+  const sidecarDownloads = sidecarAssets
+    .filter((fileName) => !downloadByName.has(fileName))
     .sort()
     .map((fileName) => {
       const local = filesByName.get(fileName)
@@ -705,7 +720,9 @@ async function main() {
   throw new Error(`Unknown command: ${command}`)
 }
 
-main().catch((error) => {
-  console.error(`[publish-r2] ${error instanceof Error ? error.message : String(error)}`)
-  process.exitCode = 1
-})
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    console.error(`[publish-r2] ${error instanceof Error ? error.message : String(error)}`)
+    process.exitCode = 1
+  })
+}
