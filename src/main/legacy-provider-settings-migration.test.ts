@@ -1,5 +1,5 @@
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import {
@@ -21,6 +21,23 @@ import { syncGuiManagedKunConfig } from './runtime/kun-runtime-config-service'
 import { JsonSettingsStore } from './settings-store'
 
 describe('LegacyProviderSettingsMigrationCoordinator', () => {
+  it('does not initialize protected stores in the canonical legacy directory', async () => {
+    const runtimeFactory = vi.fn()
+    const coordinator = new LegacyProviderSettingsMigrationCoordinator(runtimeFactory)
+    const input = {
+      provider: defaultModelProviderSettings(),
+      agents: {
+        kun: {
+          ...defaultKunRuntimeSettings(),
+          dataDir: join(homedir(), '.deepseekgui', 'kun')
+        }
+      }
+    } as AppSettingsV1
+
+    await expect(coordinator.prepare(input)).rejects.toThrow(/migration is required/)
+    expect(runtimeFactory).not.toHaveBeenCalled()
+  })
+
   it('does not cache a failed credential runtime initialization', async () => {
     const runtimeFactory = vi.fn()
       .mockRejectedValueOnce(new Error('temporary DPAPI failure'))

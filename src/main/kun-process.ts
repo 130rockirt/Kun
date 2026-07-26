@@ -94,6 +94,7 @@ import { availableBundledExtensionsDirectory } from './bundled-extension-resourc
 import { resolveOfficeCliBinary } from './officecli-resources'
 import { subagentProfilesForRuntime } from './runtime/kun-runtime-subagent-config'
 import { syncGuiManagedKunConfig } from './runtime/kun-runtime-config-service'
+import { assertManagedKunDataDirIsCurrent } from './kun-data-dir-paths'
 
 export { subagentProfilesForRuntime } from './runtime/kun-runtime-subagent-config'
 export { syncGuiManagedKunConfig } from './runtime/kun-runtime-config-service'
@@ -230,8 +231,9 @@ function resolveNodeScriptCommand(command: string): string {
 
 export function resolveKunDataDir(runtime: { dataDir: string }): string {
   const trimmed = runtime.dataDir?.trim()
-  if (trimmed) return expandHomePath(trimmed)
-  return defaultKunDataDir()
+  const dataDir = trimmed ? expandHomePath(trimmed) : defaultKunDataDir()
+  assertManagedKunDataDirIsCurrent(dataDir)
+  return dataDir
 }
 
 function expandHomePath(path: string): string {

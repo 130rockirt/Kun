@@ -486,6 +486,18 @@ describe('resolveKunDataDir', () => {
 
     expect(module.resolveKunDataDir({ dataDir: '~other\\kun' })).toBe('~other\\kun')
   })
+
+  it('rejects the canonical legacy directory before managed config writes', async () => {
+    const module = await import('./kun-process')
+    const legacyDataDir = join(homedir(), '.deepseekgui', 'kun')
+
+    expect(() => module.resolveKunDataDir({ dataDir: legacyDataDir }))
+      .toThrow(/migration is required/)
+    await expect(module.syncGuiManagedKunConfig(
+      legacyDataDir,
+      defaultKunRuntimeSettings()
+    )).rejects.toThrow(/migration is required/)
+  })
 })
 
 describe('parseListeningPidsFromNetstat', () => {

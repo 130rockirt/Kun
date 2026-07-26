@@ -19,6 +19,7 @@ import type {
   ModelProviderModelGroup,
   ModelProviderModelSelection
 } from '../shared/kun-gui-api'
+import { assertManagedKunDataDirIsCurrent } from './kun-data-dir-paths'
 
 export type FetchUpstreamModelsResult =
   | {
@@ -73,7 +74,9 @@ export async function fetchUpstreamModelIds(
 
 export async function readConfiguredKunModelIds(settings: AppSettingsV1): Promise<string[]> {
   const runtime = resolveKunRuntimeSettings(settings)
-  const configPath = join(expandHome(runtime.dataDir), 'config.json')
+  const dataDir = expandHome(runtime.dataDir)
+  assertManagedKunDataDirIsCurrent(dataDir)
+  const configPath = join(dataDir, 'config.json')
   const nonTextModelIds = listNonTextModelIds(settings)
   const ids = [
     ...(isComposerChatModelId(runtime.model, nonTextModelIds) ? [runtime.model] : []),

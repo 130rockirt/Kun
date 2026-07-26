@@ -139,6 +139,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Test Runtime data migration on native macOS
+        run: npx vitest run src/main/kun-data-dir-paths.test.ts src/main/legacy-data-migration.test.ts src/main/runtime-data-dir-migration.test.ts src/main/runtime-data-dir-ownership.test.ts --reporter=dot
+
       - name: Check Extension public release gate
         run: npm run check:extension-release-gate
 
@@ -209,6 +212,9 @@ jobs:
 
       - name: Smoke packaged Kun Video Editor native workflow
         run: npm run smoke:packaged-video-editor-native
+
+      - name: Smoke packaged Runtime data migration
+        run: npm run smoke:packaged-runtime-migration
 
       - name: Smoke packaged Extension desktop Chromium (host-native macOS)
         run: npm run smoke:packaged-extension-desktop
@@ -332,6 +338,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Test Runtime data migration on native Windows
+        run: npx vitest run src/main/kun-data-dir-paths.test.ts src/main/legacy-data-migration.test.ts src/main/runtime-data-dir-migration.test.ts src/main/runtime-data-dir-ownership.test.ts --reporter=dot
+
       - name: Check Extension public release gate
         run: npm run check:extension-release-gate
 
@@ -348,6 +357,9 @@ jobs:
 
       - name: Smoke packaged Kun Video Editor native workflow
         run: npm run smoke:packaged-video-editor-native
+
+      - name: Smoke packaged Runtime data migration
+        run: npm run smoke:packaged-runtime-migration
 
       - name: Smoke packaged Extension desktop Chromium
         run: npm run smoke:packaged-extension-desktop
@@ -407,6 +419,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Test Runtime data migration on native Linux
+        run: npx vitest run src/main/kun-data-dir-paths.test.ts src/main/legacy-data-migration.test.ts src/main/runtime-data-dir-migration.test.ts src/main/runtime-data-dir-ownership.test.ts --reporter=dot
+
       - name: Check Extension public release gate
         run: npm run check:extension-release-gate
 
@@ -438,6 +453,9 @@ jobs:
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           fi
           unshare --user --map-root-user /bin/true
+
+      - name: Smoke packaged Runtime data migration
+        run: npm run smoke:packaged-runtime-migration
 
       - name: Smoke packaged Extension desktop Chromium
         run: npm run smoke:packaged-extension-desktop

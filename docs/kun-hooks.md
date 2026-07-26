@@ -40,7 +40,7 @@ GUI 通过 `--data-dir` 启动 Kun，`{dataDir}/config.json` 自动加载，
 所以 GUI 用户的 hook 配置路径默认是：
 
 ```text
-~/.deepseekgui/kun/config.json
+~/.kun/data/config.json
 ```
 
 ## 六个阶段

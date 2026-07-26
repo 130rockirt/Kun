@@ -78,6 +78,7 @@ import {
   approvedProjectMcpServers,
   stripGeneratedProjectMcpServers
 } from '../services/project-config-service'
+import { assertManagedKunDataDirIsCurrent } from '../kun-data-dir-paths'
 
 export type ManagedRuntimeHotApplyResult = 'applied' | 'restart_required' | 'failed'
 
@@ -95,6 +96,7 @@ export async function syncGuiManagedKunConfig(
     appSettings?: AppSettingsV1
   }
 ): Promise<KunConfig> {
+  assertManagedKunDataDirIsCurrent(dataDir)
   const configPath = join(dataDir, 'config.json')
   const existing = sanitizeKunConfigSections(await readJsonObjectIfExists(configPath))
   const importedMcpServers = stripGeneratedProjectMcpServers(

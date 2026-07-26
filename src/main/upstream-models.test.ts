@@ -1,6 +1,6 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { mkdtempSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
 import {
@@ -71,6 +71,12 @@ function settings(dataDir: string, model = 'settings-model'): AppSettingsV1 {
 }
 
 describe('upstream model picker list', () => {
+  it('never reads the canonical legacy config as a model source', async () => {
+    await expect(readConfiguredKunModelIds(
+      settings(join(homedir(), '.deepseekgui', 'kun'))
+    )).rejects.toThrow(/migration is required/)
+  })
+
   it('includes Kun config model profiles, aliases, and the configured agent model', async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'deepseek-gui-models-'))
     await mkdir(dataDir, { recursive: true })

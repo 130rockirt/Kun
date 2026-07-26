@@ -42,6 +42,44 @@ GUI 启动 Kun 时会按下面的顺序合并配置。
 4. CLI 参数和环境变量会覆盖 `serve` 里的基础启动字段，例如 `--model`、`--port`、`KUN_MODEL`、`KUN_PORT`。
 5. AgentLoop、review loop 和子 Agent 都从同一份模型配置加载模型能力与上下文压缩阈值。
 
+## 从旧目录升级
+
+旧版本可能把 GUI 管理的 Runtime 数据放在 `~/.deepseekgui/kun`。新版 GUI
+取得单实例锁后、加载设置和启动 Runtime 前，会执行可恢复迁移：
+
+- 如果设置仍选择旧目录，整份旧 Runtime 存储会以同卷原子改名迁到
+  `~/.kun/data`，包括线程、事件、附件、凭据、索引和 `config.json`。
+- 如果新目录已经有数据，它会先被改名为相邻的
+  `data.pre-deepseekgui-migration-<timestamp>.bak`。其中不冲突的线程和身份
+  数据会补入迁移后的存储；发生冲突的版本继续完整保留在备份中。
+- 旧路径随后成为指向新目录的符号链接（macOS/Linux）或目录联接
+  （Windows），仅用于旧版本兼容。当前 GUI 只使用新路径。
+- 设置文件会先生成
+  `kun-settings.json.pre-runtime-data-migration-<timestamp>.bak`，再把
+  `agents.kun.dataDir` 改为 `~/.kun/data`。
+- 迁移器与 GUI 使用完全相同的 settings 查找顺序；如果当前设置仍位于
+  旧 Electron userData 目录，或 settings 文件是符号链接，会备份并改写
+  实际生效的那一份，不会让旁边的过期设置抢占配置权威。
+- 迁移前会检查是否仍有 Kun Runtime 进程使用旧目录。发现活跃写入者时
+  会在任何目录改名前停止迁移；如果写入者恰好在切换窗口重新创建旧
+  目录，该目录会完整保留为冲突备份，并回滚两个标准目录的名称。
+
+迁移日志 `kun-runtime-data-migration-v2.json` 和报告
+`kun-runtime-data-migration-v2-report.json` 位于上方列出的 GUI settings
+目录。迁移可在下次启动续跑；如果遇到文件占用、权限、跨卷或链接创建
+失败，GUI 会保留所有原目录和备份，并阻止 Runtime、配置同步、凭据迁移
+及清理任务继续写旧目录。
+
+迁移完成后，`~/.kun/data/config.json` 是唯一自动生效的 Runtime 配置。
+当前 GUI 不会再发现、复制或回退读取独立的
+`~/.deepseekgui/kun/config.json`。兼容链接下看到的同名文件只是新配置的
+同一个文件。若真实旧目录在后续升级中再次出现，它会被隔离为
+`kun.post-migration-<timestamp>.bak`，其中的配置不会覆盖新配置。用户
+显式选择的自定义 `dataDir` 不参与这次标准目录迁移。
+这也适用于迁移完成后的后续版本：用户后来改成自定义目录时，完成态
+迁移日志不会再把它强制改回 `~/.kun/data`。若旧设置仍在但新旧目录都
+不存在，则执行空存储切换并在新目录开始，不会永久阻止 Runtime 启动。
+
 ## 推荐的 config.json 结构
 
 ```json

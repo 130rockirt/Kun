@@ -66,10 +66,10 @@ kun/
 
 ```bash
 kun serve \
-  --config ~/.deepseekgui/kun/config.json \
+  --config ~/.kun/data/config.json \
   --host 127.0.0.1 \
   --port 18899 \
-  --data-dir ~/.deepseekgui/kun \
+  --data-dir ~/.kun/data \
   --runtime-token dev-token \
   --api-key "$DEEPSEEK_API_KEY" \
   --model deepseek-v4-pro
@@ -78,10 +78,10 @@ kun serve \
 Kun 也可以在无 GUI 的情况下独立运行：
 
 ```bash
-kun run --data-dir ~/.deepseekgui/kun --workspace "$PWD" "summarize this repo"
-kun chat --data-dir ~/.deepseekgui/kun --workspace "$PWD"
-kun exec --data-dir ~/.deepseekgui/kun --workspace "$PWD" --list-tools
-kun exec --data-dir ~/.deepseekgui/kun --workspace "$PWD" read --args '{"path":"README.md"}'
+kun run --data-dir ~/.kun/data --workspace "$PWD" "summarize this repo"
+kun chat --data-dir ~/.kun/data --workspace "$PWD"
+kun exec --data-dir ~/.kun/data --workspace "$PWD" --list-tools
+kun exec --data-dir ~/.kun/data --workspace "$PWD" read --args '{"path":"README.md"}'
 ```
 
 - `kun run` 会创建一个线程，执行一个回合并流式输出助手文本后退出。
@@ -119,7 +119,7 @@ Kun 使用 JSON 配置文件管理运行时行为，避免重建后重配或硬�
 `{data-dir}/config.json`（若存在）。GUI 默认路径是：
 
 ```text
-~/.deepseekgui/kun/config.json
+~/.kun/data/config.json
 ```
 
 示例结构：
@@ -129,7 +129,7 @@ Kun 使用 JSON 配置文件管理运行时行为，避免重建后重配或硬�
   "serve": {
     "host": "127.0.0.1",
     "port": 18899,
-    "dataDir": "~/.deepseekgui/kun",
+    "dataDir": "~/.kun/data",
     "runtimeToken": "",
     "apiKey": "",
     "baseUrl": "https://api.deepseek.com/beta",
@@ -275,7 +275,7 @@ agent 都有自包含 system prompt，不通过 Skill id 加载，即使关闭 S
 
 Hooks 允许外部命令观察并干预 agent 生命周期，无需重新编译 Kun。在
 `config.json` 顶层 `hooks` 键下配置（GUI 默认的
-`~/.deepseekgui/kun/config.json` 直接生效），主循环、子代理和 CLI
+`~/.kun/data/config.json` 直接生效），主循环、子代理和 CLI
 共用同一套 hook。
 
 ```json

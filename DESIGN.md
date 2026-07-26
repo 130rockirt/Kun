@@ -1046,7 +1046,7 @@ Persistence is layered:
   fork registry).
 - `electron-store` (main) — settings, Connect phone config (internal Claw key), write
   workspace config.
-- `~/.deepseekgui/kun` (Kun) — threads,
+- `~/.kun/data` (Kun) — threads,
   events, sessions, usage.
 
 ### 7.3 The AgentProvider interface
@@ -1124,18 +1124,18 @@ the runtime contract, only which renderer and local workflow state the store pul
 | Design artifacts | workspace `.kun-design/` | HTML / PNG / JSON / Markdown | Renderer + Kun |
 | Write thread registry | `localStorage` | JSON | Renderer |
 | Connect phone channels | OS app-data dir | JSON | `JsonSettingsStore` |
-| Threads / turns / events | `~/.deepseekgui/kun` | JSON + JSONL | Kun |
+| Threads / turns / events | `~/.kun/data` | JSON + JSONL | Kun |
 | Usage counters | Kun data dir | JSON | Kun |
 | Skill / MCP files | Kun data dir + workspace | Markdown / JSON | Kun + renderer |
 | GUI logs | OS app-data dir / `log/` | NDJSON | `logger.ts` |
 | Inline completion debug | OS app-data dir | NDJSON | `write-inline-completion-service.ts` |
 
 Default OS app-data paths (derived from the Electron `productName`,
-which current builds still ship as `DeepSeek GUI`):
+which current builds ship as `Kun`):
 
-- macOS: `~/Library/Application Support/DeepSeek GUI`
-- Windows: `%APPDATA%\DeepSeek GUI`
-- Linux: `~/.config/DeepSeek GUI`
+- macOS: `~/Library/Application Support/Kun`
+- Windows: `%APPDATA%\Kun`
+- Linux: `~/.config/Kun`
 
 Uninstalling the app does not remove app data. Documented in
 the README and respected by the install script.

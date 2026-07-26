@@ -37,7 +37,17 @@ import {
 import { configureAppIdentity } from './app-identity'
 import { shouldStartHidden, syncLoginItemSettings } from './desktop-behavior'
 import { resolveLogDirectory, resolveNamedPreloadPath, resolvePreloadPath } from './main-paths'
-import { runLegacyKunDataMigration } from './legacy-data-migration'
+import {
+  HOME_DATA_MIGRATION_MAPPINGS,
+  migrateLegacyHomeDataDirs,
+  migrateLegacyUserDataDir,
+  rewriteLegacyPathsInSettingsFile
+} from './legacy-data-migration'
+import {
+  markCanonicalKunRuntimeMigrationRuntimeVerified,
+  runCanonicalKunRuntimeDataMigration
+} from './runtime-data-dir-migration'
+import { assertNoActiveKunRuntimeUsingDataDir } from './runtime-data-dir-ownership'
 import {
   LegacyProviderSettingsMigrationCoordinator,
   resolveSettingsDataDir
@@ -262,19 +272,17 @@ configureAppIdentity()
 // 紧跟在身份设置之后、requestSingleInstanceLock() 之前做旧数据迁移:
 // 单实例锁文件就放在 userData 里,必须先把目录定下来。rename 失败
 // (典型场景:老版本还在运行)时退回旧目录,功能不受影响,下次再迁。
-const legacyMigration = runLegacyKunDataMigration({
+const legacyUserDataMigration = migrateLegacyUserDataDir({
   userDataPath: app.getPath('userData'),
-  homeDir: homedir(),
   log: (message, detail) => console.warn(`[kun-gui] ${message}`, detail ?? '')
 })
-if (legacyMigration.userData.usedLegacyFallback) {
-  app.setPath('userData', legacyMigration.userData.userDataPath)
+if (legacyUserDataMigration.usedLegacyFallback) {
+  app.setPath('userData', legacyUserDataMigration.userDataPath)
 }
-traceStartup('legacy data migration checked', {
-  userDataPath: legacyMigration.userData.userDataPath,
-  migratedUserData: legacyMigration.userData.migrated,
-  usedLegacyFallback: legacyMigration.userData.usedLegacyFallback,
-  settingsRewritten: legacyMigration.settingsRewritten
+traceStartup('legacy userData migration checked', {
+  userDataPath: legacyUserDataMigration.userDataPath,
+  migratedUserData: legacyUserDataMigration.migrated,
+  usedLegacyFallback: legacyUserDataMigration.usedLegacyFallback
 })
 
 configureLinuxWaylandImeSwitches()
@@ -331,20 +339,21 @@ async function runCheckpointCleanup(
   settings: AppSettingsV1,
   options: { force?: boolean; reason?: string } = {}
 ): Promise<void> {
-  const force = options.force === true
-  const reason = options.reason ?? (force ? 'forced' : 'interval')
-  // Startup / upgrade retention always runs. The settings toggle only gates the
-  // periodic background timer so a previous "cleanup off" cannot leave gigabytes
-  // of stale checkpoints behind after relaunch or app update.
-  if (!force && !settings.checkpointCleanup.enabled) return
-  const runtime = resolveKunRuntimeSettings(settings)
-  const dataDir = resolveKunDataDir(runtime)
-  const intervalDays = settings.checkpointCleanup.intervalDays
-  const checkpointsRoot = settings.checkpointCleanup.directory?.trim()
-    ? expandHomePath(settings.checkpointCleanup.directory.trim())
-    : undefined
-  const maxPerThread = settings.checkpointCleanup.maxPerThread
   try {
+    assertCanonicalRuntimeMigrationReady()
+    const force = options.force === true
+    const reason = options.reason ?? (force ? 'forced' : 'interval')
+    // Startup / upgrade retention always runs. The settings toggle only gates the
+    // periodic background timer so a previous "cleanup off" cannot leave gigabytes
+    // of stale checkpoints behind after relaunch or app update.
+    if (!force && !settings.checkpointCleanup.enabled) return
+    const runtime = resolveKunRuntimeSettings(settings)
+    const dataDir = resolveKunDataDir(runtime)
+    const intervalDays = settings.checkpointCleanup.intervalDays
+    const checkpointsRoot = settings.checkpointCleanup.directory?.trim()
+      ? expandHomePath(settings.checkpointCleanup.directory.trim())
+      : undefined
+    const maxPerThread = settings.checkpointCleanup.maxPerThread
     const cleanup = await cleanupUnusedGitCheckpointsIfDue({
       dataDir,
       intervalDays,
@@ -368,7 +377,7 @@ async function runCheckpointCleanup(
   } catch (error) {
     logWarn('git-checkpoint-cleanup', 'failed to clean unused checkpoints', {
       message: error instanceof Error ? error.message : String(error),
-      reason
+      reason: options.reason ?? (options.force ? 'forced' : 'interval')
     })
   }
 }
@@ -475,6 +484,54 @@ traceStartup('single instance lock checked', {
   gotSingleInstanceLock,
   skippedForClawScheduleMcpServer: runningClawScheduleMcpServer
 })
+const startupMigrationLog = (message: string, detail?: unknown): void => {
+  console.warn(`[kun-gui] ${message}`, detail ?? '')
+}
+const canonicalRuntimeMigration = gotSingleInstanceLock && !runningClawScheduleMcpServer
+  ? runCanonicalKunRuntimeDataMigration({
+      userDataPath: app.getPath('userData'),
+      homeDir: homedir(),
+      log: startupMigrationLog,
+      assertLegacyRuntimeInactive: (sourcePath) =>
+        assertNoActiveKunRuntimeUsingDataDir(sourcePath)
+    })
+  : null
+const remainingHomeMappings = HOME_DATA_MIGRATION_MAPPINGS.filter(
+  (mapping) => mapping.legacySegments.join('/') !== '.deepseekgui/kun'
+)
+const remainingHomeMigration = gotSingleInstanceLock && !runningClawScheduleMcpServer
+  ? migrateLegacyHomeDataDirs({
+      homeDir: homedir(),
+      mappings: remainingHomeMappings,
+      log: startupMigrationLog
+    })
+  : []
+const remainingSettingsRewritten = gotSingleInstanceLock && !runningClawScheduleMcpServer
+  ? rewriteLegacyPathsInSettingsFile({
+      userDataPath: app.getPath('userData'),
+      homeDir: homedir(),
+      mappings: remainingHomeMigration
+        .filter((entry) => entry.rewriteSafe)
+        .map((entry) => entry.mapping),
+      log: startupMigrationLog
+    })
+  : false
+traceStartup('post-lock legacy home migration checked', {
+  runtimeStatus: canonicalRuntimeMigration?.status ?? 'skipped',
+  runtimeBackupPath: canonicalRuntimeMigration?.destinationBackupPath,
+  runtimeMessage: canonicalRuntimeMigration?.message,
+  remainingSettingsRewritten
+})
+
+function assertCanonicalRuntimeMigrationReady(): void {
+  if (canonicalRuntimeMigration?.status !== 'blocked') return
+  throw runtimeJsonError(
+    'policy_blocked',
+    `Kun Runtime data migration could not finish safely. Historical data was preserved and ` +
+    `managed Runtime writes are blocked until recovery succeeds. ` +
+    `${canonicalRuntimeMigration.message ?? `See ${canonicalRuntimeMigration.journalPath}.`}`
+  )
+}
 
 function windowCloseLabels(locale: AppSettingsV1['locale']): {
   title: string
@@ -856,6 +913,13 @@ function publishRuntimeStatus(status: Omit<KunRuntimeStatus, 'at'>): void {
 
 /** Record a healthy runtime: reset the crash budget and watchdog, announce recovery. */
 function noteRuntimeHealthy(source: string): void {
+  try {
+    markCanonicalKunRuntimeMigrationRuntimeVerified(app.getPath('userData'))
+  } catch (error) {
+    logWarn('runtime-data-migration', 'Could not persist Runtime migration health evidence.', {
+      message: error instanceof Error ? error.message : String(error)
+    })
+  }
   runtimeSupervisor.noteHealthy(source)
 }
 
@@ -980,6 +1044,7 @@ function runtimeFingerprint(settings: AppSettingsV1): string {
 }
 
 async function ensureRuntime(settings: AppSettingsV1): Promise<AppSettingsV1> {
+  assertCanonicalRuntimeMigrationReady()
   try {
     if (await runtimeSupervisor.waitForRestart()) {
       return store.load()
@@ -1125,6 +1190,7 @@ async function restartRuntime(settings: AppSettingsV1): Promise<void> {
 }
 
 async function restartRuntimeOnce(settings: AppSettingsV1): Promise<void> {
+  assertCanonicalRuntimeMigrationReady()
   await waitForQueuedRuntimeSettingsApply()
   // Don't tear down a child that is still completing its startup; wait for it
   // to settle so a restart trigger that races a boot doesn't reset the clock
@@ -1401,6 +1467,7 @@ async function applyManagedRuntimeSettingsHot(
   settings: AppSettingsV1,
   source: string
 ): Promise<ManagedRuntimeHotApplyResult> {
+  assertCanonicalRuntimeMigrationReady()
   await waitForKunStartupSettled()
   const adapter = kunRuntimeAdapter
   if (!adapter.isChildRunning()) return 'skipped'
@@ -1654,8 +1721,12 @@ app.whenReady().then(async () => {
     app.dock?.setIcon(macDockIcon.isEmpty() ? appIcon : macDockIcon)
   }
 
-  const credentialMigration = new LegacyProviderSettingsMigrationCoordinator()
-  store = new JsonSettingsStore(app.getPath('userData'), { credentialMigration })
+  const credentialMigration = canonicalRuntimeMigration?.status === 'blocked'
+    ? undefined
+    : new LegacyProviderSettingsMigrationCoordinator()
+  store = credentialMigration
+    ? new JsonSettingsStore(app.getPath('userData'), { credentialMigration })
+    : new JsonSettingsStore(app.getPath('userData'))
   traceStartup('settings load:start')
   const initial = await store.load()
   traceStartup('settings load:done')
@@ -1884,9 +1955,10 @@ app.whenReady().then(async () => {
     applySettingsPatch,
     saveSettingsPatch,
     resetUnreadableCredentials: async () => {
+      assertCanonicalRuntimeMigrationReady()
       const dataDir = resolveSettingsDataDir(await store.load())
       const result = await resetUnreadableWindowsCredentials(dataDir)
-      credentialMigration.invalidateRuntime(dataDir)
+      credentialMigration?.invalidateRuntime(dataDir)
       return { reset: true as const, ...result }
     },
     runtimeRequest: async (path, method, body, headers) => {

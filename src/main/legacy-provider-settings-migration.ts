@@ -15,6 +15,7 @@ import {
   type AppSettingsV1,
   type ModelProviderProfileV1
 } from '../shared/app-settings'
+import { assertManagedKunDataDirIsCurrent } from './kun-data-dir-paths'
 
 export const LEGACY_PROVIDER_SOURCE_PREFIX = 'settings:provider:'
 export const LEGACY_RUNTIME_OVERRIDE_SOURCE_ID = 'settings:runtime:override'
@@ -52,6 +53,7 @@ export class LegacyProviderSettingsMigrationCoordinator {
     options: { replaceCommitted?: boolean } = {}
   ): Promise<PreparedLegacyProviderSettingsMigration> {
     const dataDir = resolveSettingsDataDir(settings)
+    assertManagedKunDataDirIsCurrent(dataDir)
     const { service } = await this.runtime(dataDir)
     // Save path only: an empty apiKey means the caller intentionally cleared
     // credentials (disconnect / revoke). Drop the secure binding so hydrate
