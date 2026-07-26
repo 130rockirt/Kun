@@ -36,6 +36,7 @@ function dispatchInput(calls: ToolCallLike[]): ToolDispatchInput {
     threadId: 'thread_1',
     turnId: 'turn_1',
     workspace: '/workspace',
+    clientSurface: 'api',
     modelCapabilities: {
       id: 'model_1',
       inputModalities: ['text'],

@@ -56,4 +56,14 @@ describe('SteeringQueue', () => {
     expect(queue.isSealed('turn_a')).toBe(false)
     expect(queue.enqueue('turn_a', { text: 'new lifecycle' })).toBe(true)
   })
+
+  it('atomically replaces a pending queue and rejects invalid replacements', () => {
+    const queue = new SteeringQueue({ maxEntriesPerTurn: 2, maxBytesPerTurn: 8 })
+    queue.enqueue('turn_a', { text: 'old' })
+
+    expect(queue.replace('turn_a', [{ text: 'new' }, { text: 'next' }])).toBe(true)
+    expect(queue.peek('turn_a')).toEqual([{ text: 'new' }, { text: 'next' }])
+    expect(queue.replace('turn_a', [{ text: 'too-long!' }])).toBe(false)
+    expect(queue.peek('turn_a')).toEqual([{ text: 'new' }, { text: 'next' }])
+  })
 })

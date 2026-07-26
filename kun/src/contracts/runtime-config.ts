@@ -23,10 +23,17 @@ const RuntimeConfigApplyServeConfig = KunServeConfigSchema.omit({
   tokenEconomy: TokenEconomyConfigSchema.optional()
 })
 
+export const RuntimeConfigModelSelection = z.object({
+  providerId: z.string().min(1).max(128),
+  accountId: z.string().min(1).max(128).optional(),
+  model: z.string().min(1).max(512)
+}).strict()
+
 export const RuntimeConfigApplyRequest = z
   .object({
     serve: RuntimeConfigApplyServeConfig.optional(),
     models: ModelConfigSchema.optional(),
+    modelSelection: RuntimeConfigModelSelection.optional(),
     contextCompaction: ContextCompactionConfigSchema.optional(),
     runtime: RuntimeTuningConfigSchema.optional(),
     graph: GraphRuntimeConfigSchema.optional(),

@@ -2,6 +2,7 @@ import type {
   GuiDesignArtifactContextJson,
   GuiPlanContextJson,
   Turn,
+  TurnClientSurface,
   TurnReasoningEffort,
   TurnStatus
 } from '../contracts/turns.js'
@@ -21,6 +22,7 @@ export function createTurnRecord(input: {
   providerId?: string
   accountId?: string
   reasoningEffort?: TurnReasoningEffort
+  clientSurface?: TurnClientSurface
   attachmentIds?: string[]
   composerContexts?: ComposerContextAttachmentJson[]
   guiPlan?: GuiPlanContextJson
@@ -60,6 +62,7 @@ export function createTurnRecord(input: {
     ...(providerId ? { providerId } : {}),
     ...(accountId ? { accountId } : {}),
     ...(reasoningEffort ? { reasoningEffort } : {}),
+    ...(input.clientSurface ? { clientSurface: input.clientSurface } : {}),
     ...(input.guiPlan ? { guiPlan: input.guiPlan } : {}),
     ...(input.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
     ...(input.guiDesignMode ? { guiDesignMode: true } : {}),

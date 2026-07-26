@@ -2,6 +2,7 @@ import type { ModelCapabilityMetadata } from '../contracts/capabilities.js'
 import type { MemoryRecord } from '../contracts/memory.js'
 import type { ThreadRecord } from '../contracts/threads.js'
 import type { Turn } from '../contracts/turns.js'
+import type { TurnClientSurface } from '../contracts/turns.js'
 import { DEFAULT_APPROVAL_POLICY, DEFAULT_SANDBOX_MODE } from '../contracts/policy.js'
 import type { InstructionRuntime, InstructionTurnResolution } from '../instructions/instruction-runtime.js'
 import type { MemoryStore } from '../memory/memory-store.js'
@@ -92,6 +93,7 @@ export class TurnContextResolver {
 
   async resolve(input: TurnContextResolverInput): Promise<PreparedTurnContext> {
     const workspace = input.thread.workspace
+    const clientSurface = resolveTurnClientSurface(input.turn)
     const approvalPolicy = normalizeApprovalPolicy(input.thread.approvalPolicy)
     const sandboxMode = normalizeSandboxMode(input.thread.sandboxMode)
     // Keep the legacy dependency/read order. Besides making failures and
@@ -218,6 +220,28 @@ export class TurnContextResolver {
       tools
     }
   }
+}
+
+export function resolveTurnClientSurface(turn: Pick<
+  Turn,
+  | 'clientSurface'
+  | 'imContext'
+  | 'guiPlan'
+  | 'guiDesignCanvas'
+  | 'guiDesignMode'
+  | 'guiDesignArtifact'
+  | 'agentSurface'
+>): TurnClientSurface {
+  if (turn.clientSurface) return turn.clientSurface
+  if (turn.imContext) return 'im'
+  if (
+    turn.guiPlan ||
+    turn.guiDesignCanvas ||
+    turn.guiDesignMode ||
+    turn.guiDesignArtifact ||
+    turn.agentSurface
+  ) return 'gui'
+  return 'api'
 }
 
 /**

@@ -1,13 +1,16 @@
 import { describe, expect, it, vi } from 'vitest'
-import { mkdtemp, realpath, rm } from 'node:fs/promises'
+import { mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ThreadSchema } from '../contracts/threads.js'
 import type { RuntimeEvent } from '../contracts/events.js'
+import type { ModelConnectionSnapshot } from '../contracts/model-connections.js'
 import type { KunTuiClient, ThreadDetail, TuiConnection } from './client.js'
 import { TuiClientError } from './client.js'
 import { TuiController } from './controller.js'
 import type { TuiOptions } from './options.js'
+import { buildRuntimeCapabilityManifest } from '../contracts/capabilities.js'
+import { modelCapabilitiesForModel } from '../loop/model-context-profile.js'
 
 function detail(overrides: Partial<ThreadDetail> = {}): ThreadDetail {
   return {
@@ -54,6 +57,158 @@ const runtime = {
 } as unknown as TuiConnection
 
 describe('TuiController', () => {
+  it('hydrates the shared default before first render and publishes it through the compatibility callback', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'kun-tui-default-model-'))
+    const snapshot: ModelConnectionSnapshot = {
+      schemaVersion: 1,
+      revision: 7,
+      providers: [{
+        id: 'codex',
+        accountId: 'account:codex',
+        name: 'Codex',
+        kind: 'http',
+        authType: 'subscription',
+        baseUrl: 'https://example.test/codex',
+        endpointFormat: 'responses',
+        configured: true,
+        models: ['gpt-next'],
+        selectedModel: 'gpt-next'
+      }],
+      defaultProviderId: 'codex',
+      defaultAccountId: 'account:codex',
+      defaultModel: 'gpt-next',
+      proxy: { enabled: false, url: '' },
+      routePools: [],
+      localModelGateway: { enabled: false }
+    }
+    const client = {
+      modelConnections: vi.fn(async () => snapshot),
+      listThreads: vi.fn(async () => [])
+    } as unknown as KunTuiClient
+    const persistSelection = vi.fn(async () => undefined)
+    const tuiOptions = { ...options(), dataDir, continueLatest: false }
+    const tuiRuntime = {
+      ...runtime,
+      runtimeInfo: { ...runtime.runtimeInfo, model: 'stale-model' }
+    } as TuiConnection
+    const controller = new TuiController(client, tuiOptions, tuiRuntime, persistSelection)
+
+    try {
+      const initialized = await controller.initializeModelConnections()
+      expect(initialized).toBe(snapshot)
+      expect(controller.state.modelConnections).toBe(snapshot)
+      expect(tuiOptions).toMatchObject({
+        providerId: 'codex',
+        accountId: 'account:codex',
+        model: 'gpt-next'
+      })
+      expect(tuiRuntime.runtimeInfo.model).toBe('gpt-next')
+      expect(persistSelection).toHaveBeenCalledWith(snapshot)
+    } finally {
+      await controller.stop()
+      await rm(dataDir, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps an open session pinned while new sessions follow a changed shared default', async () => {
+    const oldThread = detail({
+      providerId: 'codex',
+      accountId: 'account:codex',
+      model: 'gpt-old'
+    })
+    const newThread = detail({
+      id: 'thr_new',
+      providerId: 'minimax',
+      accountId: 'account:minimax',
+      model: 'MiniMax-M3'
+    })
+    let threads = [oldThread]
+    const createThread = vi.fn(async () => {
+      threads = [oldThread, newThread]
+      return newThread
+    })
+    const client = {
+      listThreads: vi.fn(async () => threads),
+      getThread: vi.fn(async (id: string) => threads.find((thread) => thread.id === id)!),
+      createThread,
+      subscribeThreadEvents: vi.fn(async (input: { signal: AbortSignal }) => {
+        await new Promise<void>((resolve) =>
+          input.signal.addEventListener('abort', () => resolve(), { once: true }))
+      })
+    } as unknown as KunTuiClient
+    const tuiOptions = options()
+    const controller = new TuiController(client, tuiOptions, runtime)
+
+    await controller.start()
+    expect(tuiOptions).toMatchObject({
+      providerId: 'codex',
+      accountId: 'account:codex',
+      model: 'gpt-old'
+    })
+    controller.applyModelSelection({
+      schemaVersion: 1,
+      revision: 8,
+      providers: [{
+        id: 'minimax',
+        accountId: 'account:minimax',
+        name: 'MiniMax',
+        kind: 'http',
+        authType: 'api-key',
+        baseUrl: 'https://example.test/minimax',
+        endpointFormat: 'chat_completions',
+        configured: true,
+        models: ['MiniMax-M3'],
+        selectedModel: 'MiniMax-M3'
+      }],
+      defaultProviderId: 'minimax',
+      defaultAccountId: 'account:minimax',
+      defaultModel: 'MiniMax-M3',
+      proxy: { enabled: false, url: '' },
+      routePools: [],
+      localModelGateway: { enabled: false }
+    }, false)
+
+    expect(tuiOptions).toMatchObject({
+      providerId: 'codex',
+      accountId: 'account:codex',
+      model: 'gpt-old'
+    })
+    await controller.createThread()
+    expect(createThread).toHaveBeenCalledWith(expect.objectContaining({
+      providerId: 'minimax',
+      accountId: 'account:minimax',
+      model: 'MiniMax-M3'
+    }))
+    await controller.stop()
+  })
+
+  it('does not create a fallback session after the last shared provider is disconnected', async () => {
+    const createThread = vi.fn()
+    const client = {
+      createThread
+    } as unknown as KunTuiClient
+    const tuiRuntime = {
+      ...runtime,
+      runtimeInfo: { ...runtime.runtimeInfo, model: 'stale-model' }
+    } as TuiConnection
+    const controller = new TuiController(client, options(), tuiRuntime)
+    controller.applyModelSelection({
+      schemaVersion: 1,
+      revision: 9,
+      providers: [],
+      proxy: { enabled: false, url: '' },
+      routePools: [],
+      localModelGateway: { enabled: false }
+    }, false)
+
+    await controller.createThread()
+
+    expect(createThread).not.toHaveBeenCalled()
+    expect(tuiRuntime.runtimeInfo.model).toBe('')
+    expect(controller.state.busy).toBe(false)
+    expect(controller.state.notification?.message).toContain('/connect')
+  })
+
   it('starts on the guided composer and only opens the thread picker on request', async () => {
     const client = {
       listThreads: vi.fn(async () => [detail()])
@@ -112,6 +267,77 @@ describe('TuiController', () => {
     })
     expect(controller.state.busyLabel).toBeUndefined()
     expect(controller.state.busyStartedAt).toBeUndefined()
+    expect(startTurn).toHaveBeenCalledWith(source.id, expect.objectContaining({
+      prompt: 'slow request',
+      clientSurface: 'tui'
+    }))
+    await controller.stop()
+  })
+
+  it('hydrates attachment metadata for persisted user messages', async () => {
+    const createdAt = '2026-07-22T00:00:00.000Z'
+    const source = detail({
+      turns: [{
+        id: 'turn_attachment',
+        threadId: 'thr_1',
+        status: 'completed',
+        prompt: 'What is in this image?',
+        steering: [],
+        createdAt,
+        startedAt: createdAt,
+        finishedAt: createdAt,
+        items: [{
+          id: 'item_attachment',
+          turnId: 'turn_attachment',
+          threadId: 'thr_1',
+          role: 'user',
+          status: 'completed',
+          createdAt,
+          finishedAt: createdAt,
+          kind: 'user_message',
+          text: 'What is in this image?',
+          attachmentIds: ['att_image']
+        }],
+        attachmentIds: ['att_image'],
+        activeSkillIds: [],
+        injectedMemoryIds: [],
+        injectedMemorySummaries: [],
+        injectedInstructionSources: []
+      }]
+    })
+    const getAttachment = vi.fn(async () => ({
+      attachment: {
+        id: 'att_image',
+        name: 'clipboard.png',
+        kind: 'image' as const,
+        mimeType: 'image/png',
+        byteSize: 2048,
+        hash: 'hash-image',
+        width: 640,
+        height: 480,
+        threadIds: ['thr_1'],
+        workspaces: ['/tmp/project'],
+        createdAt,
+        updatedAt: createdAt
+      }
+    }))
+    const client = {
+      listThreads: vi.fn(async () => [source]),
+      getThread: vi.fn(async () => source),
+      getAttachment,
+      subscribeThreadEvents: vi.fn(async (input: { signal: AbortSignal }) => {
+        await new Promise<void>((resolve) => input.signal.addEventListener('abort', () => resolve(), { once: true }))
+      })
+    } as unknown as KunTuiClient
+    const controller = new TuiController(client, options(), runtime)
+
+    await controller.start()
+    await vi.waitFor(() => expect(controller.state.attachmentMetadata.att_image).toMatchObject({
+      name: 'clipboard.png',
+      width: 640,
+      height: 480
+    }))
+    expect(getAttachment).toHaveBeenCalledWith('att_image')
     await controller.stop()
   })
 
@@ -636,6 +862,103 @@ describe('TuiController', () => {
     }
   })
 
+  it('activates a persistent goal as an agent turn and keeps it visible in the shared thread', async () => {
+    let current = detail({ mode: 'plan' })
+    const updateThread = vi.fn(async (_id: string, patch: Partial<ThreadDetail>) => {
+      current = { ...current, ...patch }
+      return current
+    })
+    const setThreadGoal = vi.fn(async (_id: string, request: { objective?: string; status?: string }) => {
+      const now = '2026-07-22T00:00:01.000Z'
+      current = {
+        ...current,
+        goal: {
+          threadId: current.id,
+          objective: request.objective ?? current.goal?.objective ?? '',
+          status: request.status === 'active' ? 'active' : current.goal?.status ?? 'active',
+          tokensUsed: 0,
+          timeUsedSeconds: 0,
+          createdAt: now,
+          updatedAt: now
+        }
+      }
+      return { goal: current.goal }
+    })
+    const startTurn = vi.fn(async () => ({ turnId: 'turn_goal' }))
+    const client = {
+      listThreads: vi.fn(async () => [current]),
+      getThread: vi.fn(async () => current),
+      subscribeThreadEvents: vi.fn(async (input: { signal: AbortSignal }) => {
+        await new Promise<void>((resolve) => input.signal.addEventListener('abort', () => resolve(), { once: true }))
+      }),
+      updateThread,
+      setThreadGoal,
+      startTurn
+    } as unknown as KunTuiClient
+    const controller = new TuiController(client, options(), runtime)
+    await controller.start()
+
+    await expect(controller.activateGoal('Ship the complete TUI')).resolves.toBe(true)
+    expect(updateThread).toHaveBeenCalledWith(current.id, { mode: 'agent' })
+    expect(setThreadGoal).toHaveBeenCalledWith(current.id, {
+      objective: 'Ship the complete TUI',
+      status: 'active'
+    })
+    expect(startTurn).toHaveBeenCalledWith(current.id, expect.objectContaining({
+      prompt: 'Ship the complete TUI',
+      mode: 'agent'
+    }))
+    expect(controller.state.projection?.thread.goal?.objective).toBe('Ship the complete TUI')
+    expect(controller.state.projection?.runningTurnId).toBe('turn_goal')
+    await controller.stop()
+  })
+
+  it('pauses an active goal when the user explicitly switches to Plan mode', async () => {
+    const now = '2026-07-22T00:00:00.000Z'
+    let current = detail({
+      goal: {
+        threadId: 'thr_1',
+        objective: 'Finish everything',
+        status: 'active',
+        tokensUsed: 10,
+        timeUsedSeconds: 5,
+        createdAt: now,
+        updatedAt: now
+      }
+    })
+    const setThreadGoal = vi.fn(async (_id: string, request: { status?: string }) => {
+      current = {
+        ...current,
+        goal: current.goal ? { ...current.goal, status: request.status === 'paused' ? 'paused' : current.goal.status } : undefined
+      }
+      return { goal: current.goal ?? null }
+    })
+    const updateThread = vi.fn(async (_id: string, patch: Partial<ThreadDetail>) => {
+      current = { ...current, ...patch }
+      return current
+    })
+    const client = {
+      listThreads: vi.fn(async () => [current]),
+      getThread: vi.fn(async () => current),
+      subscribeThreadEvents: vi.fn(async (input: { signal: AbortSignal }) => {
+        await new Promise<void>((resolve) => input.signal.addEventListener('abort', () => resolve(), { once: true }))
+      }),
+      setThreadGoal,
+      updateThread
+    } as unknown as KunTuiClient
+    const controller = new TuiController(client, options(), runtime)
+    await controller.start()
+
+    await controller.setPlanMode('plan')
+    expect(setThreadGoal).toHaveBeenCalledWith(current.id, { status: 'paused' })
+    expect(updateThread).toHaveBeenCalledWith(current.id, { mode: 'plan' })
+    expect(controller.state.projection?.thread).toMatchObject({
+      mode: 'plan',
+      goal: { status: 'paused' }
+    })
+    await controller.stop()
+  })
+
   it('exposes runtime diagnostics and invokes workspace-visible skills through real turns', async () => {
     const source = detail()
     const startTurn = vi.fn(async () => ({ turnId: 'turn_skill' }))
@@ -690,6 +1013,7 @@ describe('TuiController', () => {
       createdAt: source.createdAt, updatedAt: source.updatedAt
     }
     const setThreadGoal = vi.fn(async () => ({ goal: null }))
+    const steerTurn = vi.fn(async () => ({ ok: true }))
     const client = {
       listThreads: vi.fn(async () => [source]),
       getThread: vi.fn(async () => source),
@@ -704,6 +1028,12 @@ describe('TuiController', () => {
         tokensUsed: 10, timeUsedSeconds: 5, createdAt: source.createdAt, updatedAt: source.updatedAt
       } })),
       setThreadGoal,
+      steerTurn,
+      steeringQueue: vi.fn(async () => ({
+        threadId: source.id,
+        turnId: 'turn_queued',
+        entries: [{ id: 'steer_1', text: 'check packaging', queuedAt: source.updatedAt }]
+      })),
       delegationDiagnostics: vi.fn(async () => ({
         enabled: true, active: 1, childRuns: [{
           id: 'child_1', parentThreadId: source.id, parentTurnId: 'turn_1', prompt: 'Review',
@@ -746,10 +1076,11 @@ describe('TuiController', () => {
     await controller.showContext()
     expect(controller.state.inspection?.lines).toContain('Total: 125 tokens')
     controller.dismissInspection()
-    controller.showQueue()
+    await controller.showQueue()
     expect(controller.state.inspection?.lines).toContain('1. check packaging')
     await controller.manageGoal('Ship the TUI')
     expect(setThreadGoal).toHaveBeenCalledWith(source.id, { objective: 'Ship the TUI', status: 'active' })
+    expect(steerTurn).toHaveBeenCalledWith(source.id, 'turn_queued', 'Ship the TUI')
     await controller.stop()
   })
 
@@ -793,8 +1124,311 @@ describe('TuiController', () => {
     await controller.askSideQuestion('What does this API do?')
 
     expect(forkThread).toHaveBeenCalledWith(source.id, { relation: 'side', title: 'Shared · side' })
-    expect(startTurn).toHaveBeenCalledWith(side.id, expect.objectContaining({ prompt: 'What does this API do?' }))
+    expect(startTurn).toHaveBeenCalledWith(side.id, expect.objectContaining({
+      prompt: 'What does this API do?',
+      clientSurface: 'tui'
+    }))
     expect(controller.state.projection?.thread.id).toBe(side.id)
     await controller.stop()
+  })
+
+  it('hot-enables local attachment storage and sends uploaded files with the next turn', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-tui-attachment-'))
+    const file = join(root, 'notes.txt')
+    await writeFile(file, 'hello')
+    const source = detail({ workspace: root })
+    const setLocalCapabilityEnabled = vi.fn(async () => ({ id: 'attachments' as const, enabled: true }))
+    const uploadAttachment = vi.fn(async () => ({
+      attachment: {
+        id: 'attachment_1',
+        name: 'notes.txt',
+        kind: 'document' as const,
+        mimeType: 'text/plain',
+        byteSize: 5,
+        hash: 'hash',
+        localFilePath: file,
+        threadIds: [source.id],
+        workspaces: [root],
+        createdAt: source.createdAt,
+        updatedAt: source.updatedAt
+      }
+    }))
+    const startTurn = vi.fn(async () => ({ turnId: 'turn_attachment' }))
+    const client = {
+      listThreads: vi.fn(async () => [source]),
+      getThread: vi.fn(async () => source),
+      subscribeThreadEvents: vi.fn(async (input: { signal: AbortSignal }) => {
+        await new Promise<void>((resolve) => input.signal.addEventListener('abort', () => resolve(), { once: true }))
+      }),
+      setLocalCapabilityEnabled,
+      uploadAttachment,
+      startTurn
+    } as unknown as KunTuiClient
+    const attachmentRuntime = {
+      ...runtime,
+      runtimeInfo: {
+        ...runtime.runtimeInfo,
+        capabilities: buildRuntimeCapabilityManifest({
+          model: modelCapabilitiesForModel('model-a')
+        })
+      }
+    } as TuiConnection
+    const controller = new TuiController(client, {
+      ...options(),
+      dataDir: join(root, 'data'),
+      workspace: root
+    }, attachmentRuntime)
+    try {
+      await controller.start()
+      await controller.manageAttachments(file)
+      expect(setLocalCapabilityEnabled).toHaveBeenCalledWith('attachments', true)
+      expect(controller.state.pendingAttachments).toHaveLength(1)
+      await controller.submit('read this')
+      expect(startTurn).toHaveBeenCalledWith(source.id, expect.objectContaining({
+        prompt: 'read this',
+        attachmentIds: ['attachment_1']
+      }))
+      expect(controller.state.pendingAttachments).toEqual([])
+    } finally {
+      await controller.stop()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('uploads a system clipboard image without requiring a local file path', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-tui-clipboard-image-'))
+    const source = detail({ workspace: root })
+    const bytes = Buffer.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+      0, 0, 0, 0, 0x49, 0x48, 0x44, 0x52
+    ])
+    const setLocalCapabilityEnabled = vi.fn(async () => ({ id: 'attachments' as const, enabled: true }))
+    const uploadAttachment = vi.fn(async (input: {
+      name: string
+      mimeType?: string
+      dataBase64?: string
+      localFilePath?: string
+    }) => ({
+      attachment: {
+        id: 'attachment_clipboard',
+        name: input.name,
+        kind: 'image' as const,
+        mimeType: input.mimeType ?? 'image/png',
+        byteSize: bytes.length,
+        hash: 'clipboard-hash',
+        threadIds: [source.id],
+        workspaces: [root],
+        createdAt: source.createdAt,
+        updatedAt: source.updatedAt
+      }
+    }))
+    const client = {
+      listThreads: vi.fn(async () => [source]),
+      getThread: vi.fn(async () => source),
+      subscribeThreadEvents: vi.fn(async (input: { signal: AbortSignal }) => {
+        await new Promise<void>((resolve) => input.signal.addEventListener('abort', () => resolve(), { once: true }))
+      }),
+      setLocalCapabilityEnabled,
+      uploadAttachment
+    } as unknown as KunTuiClient
+    const attachmentRuntime = {
+      ...runtime,
+      runtimeInfo: {
+        ...runtime.runtimeInfo,
+        capabilities: buildRuntimeCapabilityManifest({
+          model: modelCapabilitiesForModel('model-a')
+        })
+      }
+    } as TuiConnection
+    const controller = new TuiController(client, {
+      ...options(),
+      dataDir: join(root, 'data'),
+      workspace: root
+    }, attachmentRuntime)
+    try {
+      await controller.start()
+      expect(await controller.attachClipboardImage({
+        bytes,
+        mimeType: 'image/png',
+        source: 'macos'
+      })).toBe(true)
+      expect(setLocalCapabilityEnabled).toHaveBeenCalledWith('attachments', true)
+      expect(uploadAttachment).toHaveBeenCalledWith(expect.objectContaining({
+        name: expect.stringMatching(/^clipboard-\d{14}\.png$/u),
+        mimeType: 'image/png',
+        dataBase64: bytes.toString('base64'),
+        threadId: source.id,
+        workspace: root
+      }))
+      expect(uploadAttachment.mock.calls[0]?.[0]).not.toHaveProperty('localFilePath')
+      expect(controller.state.pendingAttachments).toHaveLength(1)
+      expect(controller.state.notification?.message).toContain('Pasted clipboard image')
+      expect(controller.removeLastPendingAttachment()).toBe(true)
+      expect(controller.state.pendingAttachments).toEqual([])
+      expect(controller.state.notification?.message).toContain('Removed clipboard-')
+      expect(controller.removeLastPendingAttachment()).toBe(false)
+
+      expect(await controller.attachClipboardImage({
+        bytes,
+        mimeType: 'image/png',
+        source: 'macos'
+      })).toBe(true)
+      expect(controller.clearPendingAttachments()).toBe(true)
+      expect(controller.state.pendingAttachments).toEqual([])
+      expect(controller.state.notification?.message).toBe('Pending attachments cleared.')
+      expect(controller.clearPendingAttachments()).toBe(false)
+    } finally {
+      await controller.stop()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('turns a pasted image path into a queued attachment and keeps it when the model is text-only', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-tui-pasted-image-'))
+    const file = join(root, 'screen shot.png')
+    await writeFile(file, Buffer.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+      0, 0, 0, 0, 0x49, 0x48, 0x44, 0x52,
+      0, 0, 0, 1, 0, 0, 0, 1
+    ]))
+    const source = detail({ workspace: root, model: 'text-only', providerId: 'custom' })
+    const setLocalCapabilityEnabled = vi.fn(async () => ({ id: 'attachments' as const, enabled: true }))
+    const uploadAttachment = vi.fn(async (input: { name: string; mimeType?: string; localFilePath?: string }) => ({
+      attachment: {
+        id: 'attachment_image',
+        name: input.name,
+        kind: 'image' as const,
+        mimeType: input.mimeType ?? 'image/png',
+        byteSize: 24,
+        hash: 'image-hash',
+        localFilePath: input.localFilePath,
+        threadIds: [source.id],
+        workspaces: [root],
+        createdAt: source.createdAt,
+        updatedAt: source.updatedAt
+      }
+    }))
+    const startTurn = vi.fn(async () => ({ turnId: 'turn_image' }))
+    const client = {
+      listThreads: vi.fn(async () => [source]),
+      getThread: vi.fn(async () => source),
+      subscribeThreadEvents: vi.fn(async (input: { signal: AbortSignal }) => {
+        await new Promise<void>((resolve) => input.signal.addEventListener('abort', () => resolve(), { once: true }))
+      }),
+      setLocalCapabilityEnabled,
+      uploadAttachment,
+      startTurn
+    } as unknown as KunTuiClient
+    const attachmentRuntime = {
+      ...runtime,
+      runtimeInfo: {
+        ...runtime.runtimeInfo,
+        capabilities: buildRuntimeCapabilityManifest({
+          model: modelCapabilitiesForModel('text-only')
+        })
+      }
+    } as TuiConnection
+    const textOnly: ModelConnectionSnapshot = {
+      schemaVersion: 1,
+      revision: 1,
+      providers: [{
+        id: 'custom',
+        accountId: 'account:custom',
+        name: 'Custom',
+        kind: 'http',
+        authType: 'api-key',
+        endpointFormat: 'chat_completions',
+        configured: true,
+        models: ['text-only'],
+        selectedModel: 'text-only',
+        modelCapabilities: {
+          'text-only': {
+            id: 'text-only',
+            inputModalities: ['text'],
+            outputModalities: ['text'],
+            supportsToolCalling: true,
+            messageParts: ['text']
+          }
+        }
+      }],
+      defaultProviderId: 'custom',
+      defaultAccountId: 'account:custom',
+      defaultModel: 'text-only',
+      proxy: { enabled: false, url: '' },
+      routePools: [],
+      localModelGateway: { enabled: false }
+    }
+    const controller = new TuiController(client, {
+      ...options(),
+      dataDir: join(root, 'data'),
+      workspace: root
+    }, attachmentRuntime)
+    try {
+      await controller.start()
+      controller.applyModelSelection(textOnly, false)
+      expect(await controller.attachPastedPaths(`'${file}'`)).toBe(true)
+      expect(uploadAttachment).toHaveBeenCalledWith(expect.objectContaining({
+        name: 'screen shot.png',
+        mimeType: 'image/png',
+        localFilePath: await realpath(file)
+      }))
+      expect(controller.state.pendingAttachments).toHaveLength(1)
+      expect(controller.validatePendingAttachmentsForCurrentModel()).toBe(false)
+      expect(controller.state.notification?.message).toContain('does not support image input')
+      expect(controller.state.notification?.message).toContain('still attached')
+      expect(controller.state.pendingAttachments).toHaveLength(1)
+
+      controller.applyModelSelection({
+        ...textOnly,
+        revision: 2,
+        providers: [{
+          ...textOnly.providers[0]!,
+          models: ['vision'],
+          selectedModel: 'vision',
+          modelCapabilities: {
+            vision: {
+              id: 'vision',
+              inputModalities: ['text', 'image'],
+              outputModalities: ['text'],
+              supportsToolCalling: true,
+              messageParts: ['text', 'image_url']
+            }
+          }
+        }],
+        defaultModel: 'vision'
+      }, false)
+      // Registry events update the shared default for future sessions. The
+      // current session changes only after an explicit model choice.
+      controller.options.model = 'vision'
+      expect(controller.validatePendingAttachmentsForCurrentModel()).toBe(true)
+      await controller.submit('What is in this screenshot?')
+      expect(startTurn).toHaveBeenCalledWith(source.id, expect.objectContaining({
+        prompt: 'What is in this screenshot?',
+        model: 'vision',
+        attachmentIds: ['attachment_image']
+      }))
+      expect(controller.state.pendingAttachments).toEqual([])
+    } finally {
+      await controller.stop()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps ordinary text and unsupported video paths in the composer paste flow', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-tui-pasted-video-'))
+    const video = join(root, 'demo clip.mp4')
+    await writeFile(video, 'not-a-real-video')
+    const controller = new TuiController({} as KunTuiClient, {
+      ...options(),
+      workspace: root
+    }, runtime)
+    try {
+      expect(await controller.attachPastedPaths('please inspect /tmp/example.png')).toBe(false)
+      expect(await controller.attachPastedPaths(`'${video}'`)).toBe(false)
+      expect(controller.state.notification?.message).toContain('does not support video input yet')
+      expect(controller.state.notification?.message).toContain('kept in the composer')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
   })
 })

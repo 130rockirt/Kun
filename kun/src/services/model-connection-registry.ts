@@ -53,6 +53,8 @@ export type MaterializedModelConnections = {
 export class ModelConnectionRegistry {
   private readonly file: AtomicJsonFile<RegistryDocument>
   private listeners = new Set<(snapshot: ModelConnectionSnapshot) => void>()
+  private changeOperation: Promise<void> = Promise.resolve()
+  private lastAppliedRevision = -1
 
   constructor(private readonly options: {
     dataDir: string
@@ -93,12 +95,15 @@ export class ModelConnectionRegistry {
           // visible to standalone TUI clients.
           await this.connect({ ...request, select: newRegistry ? request.select : false })
         } else {
-          const reconciled = reconcileSeedProfile(existing, request)
+          const preserveSelection = !newRegistry && current.defaultProviderId === existing.id
+          const reconciled = reconcileSeedProfile(existing, request, { preserveSelection })
           if (!sameStoredProfile(existing, reconciled)) {
             current = await this.file.update(emptyDocument, (document) => {
               assertRevision(document, current.revision, this.options.modelCapabilities)
               const profile = requireProfile(document, existing.id)
-              const nextProfile = reconcileSeedProfile(profile, request)
+              const nextProfile = reconcileSeedProfile(profile, request, {
+                preserveSelection: document.defaultProviderId === profile.id
+              })
               return {
                 ...document,
                 revision: document.revision + 1,
@@ -133,7 +138,7 @@ export class ModelConnectionRegistry {
         localModelGateway: globals.localModelGateway ?? document.localModelGateway
       }))
     }
-    await this.apply(current)
+    await this.applyLatest()
     return this.project(current)
   }
 
@@ -191,8 +196,9 @@ export class ModelConnectionRegistry {
     const credentialRef = credential
       ? await this.options.credentials.create({ apiKey: credential })
       : undefined
+    let document: RegistryDocument
     try {
-      const document = await this.file.update(emptyDocument, (current) => {
+      document = await this.file.update(emptyDocument, (current) => {
         assertRevision(current, input.expectedRevision, this.options.modelCapabilities)
         const id = allocateId(current, input.id ?? input.name)
         const accountId = `account:${id}`
@@ -227,12 +233,15 @@ export class ModelConnectionRegistry {
           } : {})
         }
       })
-      await this.changed(document)
-      return this.project(document)
     } catch (error) {
       if (credentialRef) await this.options.credentials.delete(credentialRef).catch(() => undefined)
       throw error
     }
+    // The durable document now owns credentialRef. If live application fails,
+    // retain the referenced secret so a restart or subsequent reconciliation
+    // can recover; deleting it here would corrupt the committed registry.
+    await this.changed(document)
+    return this.project(document)
   }
 
   async patch(providerId: string, raw: unknown): Promise<ModelConnectionSnapshot> {
@@ -241,6 +250,9 @@ export class ModelConnectionRegistry {
     const document = await this.file.update(emptyDocument, (current) => {
       assertRevision(current, input.expectedRevision, this.options.modelCapabilities)
       const profile = requireProfile(current, providerId)
+      const kind = input.kind ?? profile.kind
+      const baseUrl = input.baseUrl ?? profile.baseUrl
+      if (kind === 'http' && !baseUrl) throw new Error('baseUrl is required for HTTP providers')
       const models = input.models ? uniqueModels(input.models) : profile.models
       const modelCapabilities = input.modelCapabilities
         ? capabilitiesForModels(input.modelCapabilities, models)
@@ -275,8 +287,9 @@ export class ModelConnectionRegistry {
     const input = ModelConnectionCredentialRequestSchema.parse(raw)
     const nextRef = await this.options.credentials.create({ apiKey: input.credential.trim() })
     let previousRef: string | undefined
+    let document: RegistryDocument
     try {
-      const document = await this.file.update(emptyDocument, (current) => {
+      document = await this.file.update(emptyDocument, (current) => {
         assertRevision(current, input.expectedRevision, this.options.modelCapabilities)
         const profile = requireProfile(current, providerId)
         previousRef = profile.credentialRef
@@ -289,13 +302,62 @@ export class ModelConnectionRegistry {
           }
         }
       })
-      await this.changed(document)
-      if (previousRef) await this.options.credentials.delete(previousRef).catch(() => undefined)
-      return this.project(document)
     } catch (error) {
       await this.options.credentials.delete(nextRef).catch(() => undefined)
       throw error
     }
+    await this.changed(document)
+    if (previousRef) await this.options.credentials.delete(previousRef).catch(() => undefined)
+    return this.project(document)
+  }
+
+  async clearCredential(
+    providerId: string,
+    expectedRevision: number
+  ): Promise<ModelConnectionSnapshot> {
+    let previousRef: string | undefined
+    const document = await this.file.update(emptyDocument, (current) => {
+      assertRevision(current, expectedRevision, this.options.modelCapabilities)
+      const profile = requireProfile(current, providerId)
+      previousRef = profile.credentialRef
+      const configured =
+        profile.kind === 'agent-sdk' ||
+        profile.kind === 'antigravity-cli' ||
+        profile.kind === 'cursor-sdk'
+      const profiles = {
+        ...current.profiles,
+        [providerId]: {
+          ...profile,
+          credentialRef: undefined,
+          configured
+        }
+      }
+      const fallback = !configured && current.defaultProviderId === providerId
+        ? configuredFallback(Object.values(profiles).filter((candidate) => candidate.id !== providerId))
+        : undefined
+      return {
+        schemaVersion: 1,
+        revision: current.revision + 1,
+        profiles,
+        proxy: current.proxy,
+        routePools: current.routePools,
+        localModelGateway: current.localModelGateway,
+        ...(!configured && current.defaultProviderId === providerId
+          ? fallback ? {
+              defaultProviderId: fallback.profile.id,
+              defaultAccountId: fallback.profile.accountId,
+              defaultModel: fallback.model
+            } : {}
+          : {
+              defaultProviderId: current.defaultProviderId,
+              defaultAccountId: current.defaultAccountId,
+              defaultModel: current.defaultModel
+            })
+      }
+    })
+    await this.changed(document)
+    if (previousRef) await this.options.credentials.delete(previousRef).catch(() => undefined)
+    return this.project(document)
   }
 
   async delete(providerId: string, expectedRevision: number): Promise<ModelConnectionSnapshot> {
@@ -306,9 +368,7 @@ export class ModelConnectionRegistry {
       credentialRef = profile.credentialRef
       const profiles = { ...current.profiles }
       delete profiles[providerId]
-      const remaining = Object.values(profiles)
-      const fallback = remaining.find((candidate) => candidate.configured && candidate.selectedModel) ??
-        remaining.find((candidate) => candidate.configured && candidate.models.length > 0)
+      const fallback = configuredFallback(Object.values(profiles))
       return {
         schemaVersion: 1,
         revision: current.revision + 1,
@@ -317,10 +377,10 @@ export class ModelConnectionRegistry {
         routePools: current.routePools,
         localModelGateway: current.localModelGateway,
         ...(current.defaultProviderId === providerId
-          ? fallback?.selectedModel ? {
-              defaultProviderId: fallback.id,
-              defaultAccountId: fallback.accountId,
-              defaultModel: fallback.selectedModel
+          ? fallback ? {
+              defaultProviderId: fallback.profile.id,
+              defaultAccountId: fallback.profile.accountId,
+              defaultModel: fallback.model
             } : {}
           : {
               defaultProviderId: current.defaultProviderId,
@@ -340,6 +400,9 @@ export class ModelConnectionRegistry {
       assertRevision(current, input.expectedRevision, this.options.modelCapabilities)
       const profile = requireProfile(current, input.providerId)
       if (!profile.configured) throw new Error('provider is not connected')
+      if (input.accountId && input.accountId !== profile.accountId) {
+        throw new Error('account does not belong to the selected provider')
+      }
       if (profile.models.length > 0 && !profile.models.includes(input.model)) {
         throw new Error('model is not available for this provider')
       }
@@ -354,6 +417,56 @@ export class ModelConnectionRegistry {
       }
     })
     await this.changed(document)
+    return this.project(document)
+  }
+
+  /**
+   * Reconcile an explicit, authenticated configuration selection after its
+   * provider catalog has been imported. Ordinary initialize() calls do not use
+   * this path, so a daemon restart cannot replace a newer registry selection
+   * with a stale config.json value.
+   */
+  async synchronizeDefaultSelection(raw: {
+    providerId: string
+    accountId?: string
+    model: string
+  }): Promise<ModelConnectionSnapshot> {
+    const input = ModelConnectionSelectRequestSchema
+      .omit({ expectedRevision: true })
+      .parse(raw)
+    let changed = false
+    const document = await this.file.update(emptyDocument, (current) => {
+      const profile = requireProfile(current, input.providerId)
+      if (!profile.configured) throw new Error('provider is not connected')
+      if (input.accountId && input.accountId !== profile.accountId) {
+        throw new Error('account does not belong to the selected provider')
+      }
+      if (profile.models.length > 0 && !profile.models.includes(input.model)) {
+        throw new Error('model is not available for this provider')
+      }
+      const accountId = input.accountId ?? profile.accountId
+      if (
+        current.defaultProviderId === profile.id &&
+        current.defaultAccountId === accountId &&
+        current.defaultModel === input.model &&
+        profile.selectedModel === input.model
+      ) {
+        return current
+      }
+      changed = true
+      return {
+        ...current,
+        revision: current.revision + 1,
+        profiles: {
+          ...current.profiles,
+          [profile.id]: { ...profile, selectedModel: input.model }
+        },
+        defaultProviderId: profile.id,
+        defaultAccountId: accountId,
+        defaultModel: input.model
+      }
+    })
+    if (changed) await this.changed(document)
     return this.project(document)
   }
 
@@ -401,7 +514,12 @@ export class ModelConnectionRegistry {
   }
 
   async materialize(): Promise<MaterializedModelConnections> {
-    const document = await this.file.read(emptyDocument)
+    return this.materializeDocument(await this.file.read(emptyDocument))
+  }
+
+  private async materializeDocument(
+    document: RegistryDocument
+  ): Promise<MaterializedModelConnections> {
     const providers = new Map<string, ServeProviderConfig>()
     let selected: MaterializedModelConnections['selected']
     for (const profile of Object.values(document.profiles)) {
@@ -465,14 +583,32 @@ export class ModelConnectionRegistry {
     })
   }
 
-  private async apply(_document: RegistryDocument): Promise<void> {
-    await this.options.onChanged?.(await this.materialize())
+  private async apply(document: RegistryDocument): Promise<void> {
+    await this.options.onChanged?.(await this.materializeDocument(document))
   }
 
-  private async changed(document: RegistryDocument): Promise<void> {
-    await this.apply(document)
-    const snapshot = this.project(document)
-    for (const listener of this.listeners) listener(snapshot)
+  private async changed(_document: RegistryDocument): Promise<void> {
+    await this.applyLatest()
+  }
+
+  /**
+   * Registry file updates are already serialized by AtomicJsonFile, but live
+   * application can include slower asynchronous model-runtime construction.
+   * Serialize that second phase as well and always read the newest durable
+   * document when a queued application begins. This prevents an older GUI/TUI
+   * write from finishing late and replacing a newer runtime generation.
+   */
+  private async applyLatest(): Promise<void> {
+    const operation = this.changeOperation.then(async () => {
+      const document = await this.file.read(emptyDocument)
+      if (document.revision <= this.lastAppliedRevision) return
+      await this.apply(document)
+      this.lastAppliedRevision = document.revision
+      const snapshot = this.project(document)
+      for (const listener of this.listeners) listener(snapshot)
+    })
+    this.changeOperation = operation.catch(() => undefined)
+    await operation
   }
 
   private project(document: RegistryDocument): ModelConnectionSnapshot {
@@ -501,9 +637,21 @@ function emptyDocument(): RegistryDocument {
   }
 }
 
+function configuredFallback(
+  profiles: readonly StoredProfile[]
+): { profile: StoredProfile; model: string } | undefined {
+  for (const profile of profiles) {
+    if (!profile.configured) continue
+    const model = profile.selectedModel ?? profile.models[0]
+    if (model) return { profile, model }
+  }
+  return undefined
+}
+
 function reconcileSeedProfile(
   existing: StoredProfile,
-  request: ModelConnectionConnectRequest
+  request: ModelConnectionConnectRequest,
+  options: { preserveSelection?: boolean } = {}
 ): StoredProfile {
   const incomingModels = uniqueModels([
     ...request.models,
@@ -514,6 +662,7 @@ function reconcileSeedProfile(
   // provider's real GUI catalog; otherwise only add missing models so
   // registry-owned edits are not discarded.
   const repairLegacySeed = incomingModels.length > 0 &&
+    request.select === false &&
     existing.models.length === 1 &&
     !incomingModels.includes(existing.models[0]!) &&
     existing.selectedModel === existing.models[0]
@@ -524,11 +673,16 @@ function reconcileSeedProfile(
       : uniqueModels([...existing.models, ...incomingModels])
   const selectedModel = repairLegacySeed
     ? request.selectedModel ?? models[0]
+    : options.preserveSelection
+      ? existing.selectedModel ?? request.selectedModel ?? models[0]
     : request.select && request.selectedModel
       ? request.selectedModel
       : existing.selectedModel ?? request.selectedModel ?? models[0]
   const modelCapabilities = request.modelCapabilities
-    ? capabilitiesForModels(request.modelCapabilities, models)
+    ? {
+        ...(existing.modelCapabilities ?? {}),
+        ...capabilitiesForModels(request.modelCapabilities, models)
+      }
     : existing.modelCapabilities
   const migrateGeminiSubscription =
     existing.id === 'gemini-subscription' &&

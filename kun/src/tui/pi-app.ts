@@ -25,10 +25,12 @@ import {
   type ProviderCatalogKind
 } from '@kun/provider-catalog'
 import { spawn } from 'node:child_process'
+import { mkdir, unlink, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { basename, sep } from 'node:path'
+import { basename, join, sep } from 'node:path'
 import { stdin as processStdin, stdout as processStdout } from 'node:process'
 import { redactSecrets, redactSecretText } from '../config/secret-redaction.js'
+import type { AttachmentMetadata } from '../contracts/attachments.js'
 import type { TurnItem } from '../contracts/items.js'
 import type { ModelReasoningEffort } from '../contracts/capabilities.js'
 import {
@@ -71,6 +73,7 @@ import {
   editTextInExternalEditor,
   lastAssistantText,
   osc52ClipboardSequence,
+  renderThreadMarkdown,
   writeThreadExport
 } from './operations.js'
 import {
@@ -94,6 +97,12 @@ import {
   toggleCurrentUserInputOption,
   type UserInputSession
 } from './user-input.js'
+import {
+  ClipboardImageError,
+  clipboardImageEmptyHint,
+  readClipboardImage,
+  type ClipboardImage
+} from './clipboard-image.js'
 
 const bold = visual.strong
 const dim = visual.muted
@@ -115,6 +124,8 @@ const isCancelInput = (data: string): boolean =>
 
 const EXIT_CONFIRM_WINDOW_MS = 1_500
 const UNDO_ESCAPE_WINDOW_MS = 600
+const BRACKETED_PASTE_START = '\x1b[200~'
+const BRACKETED_PASTE_END = '\x1b[201~'
 
 const ENABLE_MOUSE_TRACKING = '\x1b[?1000h\x1b[?1006h'
 const DISABLE_MOUSE_TRACKING = '\x1b[?1000l\x1b[?1006l'
@@ -145,6 +156,9 @@ const DIRECT_SEMANTIC_ACTIONS: readonly TuiKeyAction[] = [
   'session_status', 'session_undo', 'session_redo', 'session_child_first', 'session_parent',
   'session_sibling_next', 'session_sibling_previous', 'messages_copy', 'model_list',
   'agent_list', 'thinking_toggle', 'pointer_mode_toggle', 'tool_details_toggle', 'input_editor', 'input_steer',
+  'input_paste',
+  'sidebar_toggle', 'theme_list', 'session_share', 'session_unshare', 'share',
+  'plugin_list', 'console_toggle', 'diff_toggle', 'terminal_toggle',
   'session_quick_1', 'session_quick_2', 'session_quick_3',
   'session_quick_4', 'session_quick_5', 'session_quick_6', 'session_quick_7',
   'session_quick_8', 'session_quick_9'
@@ -213,6 +227,7 @@ export class PiTuiApplication {
   private commandOverlay?: { component: CommandPaletteDialog; handle: ExclusiveRouteHandle }
   private variantOverlay?: { component: VariantDialog; handle: ExclusiveRouteHandle }
   private agentOverlay?: { component: AgentModeDialog; handle: ExclusiveRouteHandle }
+  private goalOverlay?: { component: GoalDialog; handle: ExclusiveRouteHandle }
   private inspectionOverlay?: { value: TuiControllerState['inspection']; component: InspectionDialog; handle: ExclusiveRouteHandle }
   private permissionOverlay?: { component: PermissionDialog; handle: ExclusiveRouteHandle }
   private timelineOverlay?: { component: TimelineDialog; handle: ExclusiveRouteHandle }
@@ -226,16 +241,21 @@ export class PiTuiApplication {
   private pendingExit?: { key: 'ctrl+c' | 'ctrl+d'; timer: ReturnType<typeof setTimeout> }
   private pendingUndoTimer?: ReturnType<typeof setTimeout>
   private terminalActive = false
-  private pointerModeEnabled = false
-  private mouseTrackingWanted = false
+  // Match OpenCode's direct-manipulation model: transcript targets are
+  // clickable immediately. Users who need native drag-selection can toggle
+  // mouse handling off with Ctrl+X P or /mouse off.
+  private pointerModeEnabled = true
+  private mouseTrackingWanted = true
   private mouseTrackingEnabled = false
+  private clipboardPastePending = false
   private readonly signalHandler = () => this.requestQuit()
 
   constructor(
     readonly controller: TuiController,
     input: TerminalInput,
     output: TerminalOutput,
-    private readonly keymap: TuiKeymap = parseTuiKeymapConfig({}).keymap
+    private readonly keymap: TuiKeymap = parseTuiKeymapConfig({}).keymap,
+    private readonly clipboardImageReader: () => Promise<ClipboardImage | null> = readClipboardImage
   ) {
     const baseTerminal = input === processStdin && output === processStdout
       ? new ProcessTerminal()
@@ -246,6 +266,7 @@ export class PiTuiApplication {
       onConnect: () => { void this.showConnect() },
       onModel: () => { void this.showModels() },
       onVariants: () => this.showVariants(),
+      onGoal: () => this.showGoal(),
       onPermission: () => this.showPermissions(),
       onTimeline: (query, target) => this.showTimeline(query, target),
       onSubagents: () => this.showSubagents(),
@@ -253,8 +274,22 @@ export class PiTuiApplication {
       onEditor: (initial) => this.editExternal(initial),
       onCopy: () => { void this.copyLastResponse() },
       onExport: (path) => { void this.exportThread(path) },
-      onPointerMode: (action) => this.setPointerModeFromCommand(action)
+      onPointerMode: (action) => this.setPointerModeFromCommand(action),
+      onTheme: (name) => this.controller.setTheme(name),
+      onShare: () => { void this.shareThread() },
+      onUnshare: () => { void this.unshareThread() },
+      onConsole: () => { void this.controller.showRuntimeConsole() },
+      onDiff: () => { void this.controller.showWorkspaceDiff() },
+      onTerminal: () => { void this.openInteractiveTerminal() },
+      onSessions: () => this.controller.showThreads(),
+      onExtensions: () => { void this.controller.manageExtensions() },
+      onPasteImage: () => this.pasteClipboardImage(),
+      onClear: () => {
+        this.terminal.clearScreen()
+        this.tui.requestRender(true)
+      }
     })
+    this.root.setPointerMode(true)
   }
 
   run(): Promise<void> {
@@ -262,10 +297,11 @@ export class PiTuiApplication {
     this.started = true
     this.tui.addChild(this.root)
     this.tui.setFocus(this.root)
-    this.removeInputListener = this.tui.addInputListener((data) => this.handleGlobalInput(data))
+    this.removeInputListener = this.tui.addInputListener((data) => this.handleTerminalInput(data))
     this.unsubscribeController = this.controller.subscribe((state) => {
       this.subagentRoute?.updateParentProjection(state.projection)
       this.subagentPopup?.component.updateParentProjection(state.projection)
+      this.goalOverlay?.component.update(state)
       this.root.update(state)
       this.syncMouseTracking(state)
       this.syncAnimation(state)
@@ -310,8 +346,8 @@ export class PiTuiApplication {
     this.writeMouseTracking(enabled)
     if (notify) {
       this.controller.notify(enabled
-        ? 'Pointer mode enabled · click Thinking/Subagent · Esc or Ctrl+C returns to text selection.'
-        : 'Text selection enabled · drag to select, then use your terminal copy shortcut.')
+        ? 'Mouse clicks enabled · click Thinking or a Subagent directly. Shift+drag selects in supported terminals.'
+        : `Text selection mode · drag to select; ${this.keymap.display('pointer_mode_toggle')} restores clicks.`)
     }
     this.tui.requestRender()
   }
@@ -365,6 +401,27 @@ export class PiTuiApplication {
     }
   }
 
+  /**
+   * Real PTYs are allowed to coalesce consecutive writes into one data event.
+   * In particular, a Leader chord can arrive as "\x18n" instead of two
+   * callbacks. pi-tui forwards the raw chunk, so recognize a complete combined
+   * Leader sequence before it can fall through into the editor as text.
+   */
+  private handleTerminalInput(data: string): { consume?: boolean } | undefined {
+    if (data.length > 1) {
+      for (let leaderEnd = 1; leaderEnd < data.length; leaderEnd += 1) {
+        const leader = data.slice(0, leaderEnd)
+        if (!this.keymap.matchesLeader(leader)) continue
+        const actionKey = data.slice(leaderEnd)
+        if (!this.keymap.leaderMatch(actionKey)) continue
+        this.handleGlobalInput(leader)
+        this.handleGlobalInput(actionKey)
+        return { consume: true }
+      }
+    }
+    return this.handleGlobalInput(data)
+  }
+
   private handleGlobalInput(data: string): { consume?: boolean } | undefined {
     const mouse = parseSgrMouseEvent(data)
     if (mouse) {
@@ -401,11 +458,6 @@ export class PiTuiApplication {
       this.clearPendingGestures()
       return undefined
     }
-    if (this.pointerModeEnabled && isCancelInput(data)) {
-      this.clearPendingGestures()
-      this.setPointerMode(false)
-      return { consume: true }
-    }
     this.cancelPendingGesturesForDifferentInput(data)
     if (this.leaderPending) {
       this.cancelLeader()
@@ -429,17 +481,42 @@ export class PiTuiApplication {
       this.controller.cycleReasoningEffort()
       return this.keyConsumption('variant_cycle', data)
     }
+    if (this.keymap.matches('subagent_detach', data)) {
+      const child = [...(this.controller.state.projection?.childRuns ?? [])].reverse().find((run) =>
+        !run.detached && isActiveChildRun(run)
+      )
+      // Match Kimi's contextual Ctrl+B: it backgrounds a live foreground
+      // agent, but remains the editor's normal cursor-left key otherwise.
+      if (child) {
+        void this.controller.manageSubagents(`background ${child.childId}`)
+        return this.keyConsumption('subagent_detach', data)
+      }
+      return undefined
+    }
     if (this.keymap.matches('input_newline', data)) {
       this.root.insertNewline()
       return this.keyConsumption('input_newline', data)
     }
-    if (this.keymap.matches('input_clear', data) && !this.root.editorEmpty()) {
+    if (
+      this.root.editorEmpty() &&
+      this.controller.state.pendingAttachments.length > 0 &&
+      (
+        matchesKey(data, 'backspace') ||
+        matchesKey(data, 'ctrl+backspace') ||
+        matchesKey(data, 'delete')
+      )
+    ) {
       this.clearPendingGestures()
-      this.root.clearEditor()
+      this.controller.removeLastPendingAttachment()
+      return { consume: true }
+    }
+    if (this.keymap.matches('input_clear', data) && !this.root.composerEmpty()) {
+      this.clearPendingGestures()
+      this.root.clearComposer()
       return this.keyConsumption('input_clear', data)
     }
     if (this.keymap.matches('app_exit', data)) {
-      if (this.root.editorEmpty()) {
+      if (this.root.composerEmpty()) {
         const key = matchesKey(data, 'ctrl+c')
           ? 'ctrl+c'
           : matchesKey(data, 'ctrl+d')
@@ -472,7 +549,7 @@ export class PiTuiApplication {
         void this.controller.interrupt()
         return this.keyConsumption('session_interrupt', data)
       }
-      if (matchesKey(data, 'escape') && this.root.editorEmpty() && this.controller.state.projection) {
+      if (matchesKey(data, 'escape') && this.root.composerEmpty() && this.controller.state.projection) {
         if (this.pendingUndoTimer) {
           this.clearPendingUndo()
           void this.controller.undoLastTurn()
@@ -483,7 +560,7 @@ export class PiTuiApplication {
       }
       return undefined
     }
-    if (this.root.editorEmpty() && this.controller.state.projection) {
+    if (this.root.composerEmpty() && this.controller.state.projection) {
       if (matchesKey(data, 'left')) {
         void this.controller.navigateSessionRelation('previous-sibling')
         return { consume: true }
@@ -497,7 +574,7 @@ export class PiTuiApplication {
         return { consume: true }
       }
     }
-    if (this.keymap.matches('session_rename', data) && this.root.editorEmpty()) {
+    if (this.keymap.matches('session_rename', data) && this.root.composerEmpty()) {
       this.root.setEditorText('/rename ')
       return this.keyConsumption('session_rename', data)
     }
@@ -623,12 +700,55 @@ export class PiTuiApplication {
       case 'thinking_toggle': void this.root.executeSlash('thinking'); break
       case 'pointer_mode_toggle': this.setPointerModeFromCommand(); break
       case 'tool_details_toggle': this.root.toggleToolDetails(); break
+      case 'subagent_detach': {
+        const child = [...(this.controller.state.projection?.childRuns ?? [])].reverse().find((run) =>
+          !run.detached && isActiveChildRun(run)
+        )
+        if (child) void this.controller.manageSubagents(`background ${child.childId}`)
+        else this.controller.notify('No foreground subagent is available to move into the background.', 'error')
+        break
+      }
       case 'input_editor': void this.root.openExternalEditor(); break
       case 'input_steer': void this.root.steerEditor(); break
+      case 'input_paste': void this.pasteClipboardImage(); break
       case 'app_exit': this.requestQuit(); break
       case 'command_list': this.showCommandPalette(); break
       case 'variant_cycle': this.controller.cycleReasoningEffort(); break
+      case 'sidebar_toggle': this.controller.showThreads(); break
+      case 'theme_list': this.controller.setTheme(); break
+      case 'session_share':
+      case 'share': void this.shareThread(); break
+      case 'session_unshare': void this.unshareThread(); break
+      case 'plugin_list': void this.controller.manageExtensions(); break
+      case 'console_toggle': void this.controller.showRuntimeConsole(); break
+      case 'diff_toggle': void this.controller.showWorkspaceDiff(); break
+      case 'terminal_toggle': void this.openInteractiveTerminal(); break
       default: this.controller.notify(`Action ${action} is unavailable in this context.`, 'error')
+    }
+  }
+
+  private async pasteClipboardImage(): Promise<void> {
+    if (this.clipboardPastePending) {
+      this.controller.notify('Kun is already reading the clipboard.')
+      return
+    }
+    this.clipboardPastePending = true
+    this.controller.notify('Reading image from the system clipboard…')
+    try {
+      const image = await this.clipboardImageReader()
+      if (!image) {
+        this.controller.notify(clipboardImageEmptyHint(), 'error')
+        return
+      }
+      await this.controller.attachClipboardImage(image)
+    } catch (error) {
+      this.controller.notify(
+        error instanceof ClipboardImageError ? error.message : safeError(error),
+        'error'
+      )
+    } finally {
+      this.clipboardPastePending = false
+      this.tui.requestRender()
     }
   }
 
@@ -637,7 +757,6 @@ export class PiTuiApplication {
       this.controller.notify('Process suspend is only available on Unix terminals.', 'error')
       return
     }
-    this.setPointerMode(false, false)
     this.writeMouseTracking(false)
     this.tui.stop()
     this.terminalActive = false
@@ -784,7 +903,7 @@ export class PiTuiApplication {
       this.timelineOverlay?.handle.hide()
       this.timelineOverlay = undefined
       this.tui.setFocus(this.root)
-    })
+    }, () => this.terminal.rows)
     this.timelineOverlay = {
       component,
       handle: this.showExclusiveRoute('timeline', component)
@@ -794,13 +913,27 @@ export class PiTuiApplication {
   private async showSkills(query?: string): Promise<void> {
     this.skillsOverlay?.handle.hide()
     try {
+      if (await this.controller.manageSkills(query, (initial) => this.editExternal(initial))) {
+        this.autocompleteWorkspace = undefined
+        await this.refreshSkillAutocomplete(
+          this.controller.state.projection?.thread.workspace ?? this.controller.options.workspace
+        )
+        return
+      }
       const workspace = this.controller.state.projection?.thread.workspace ?? this.controller.options.workspace
       const snapshot = await this.controller.client.skills(workspace)
-      const component = new SkillsDialog(this.controller, snapshot, query, () => {
+      const component = new SkillsDialog(
+        this.controller,
+        snapshot,
+        query,
+        (initial) => this.editExternal(initial),
+        () => this.reloadSkillAutocomplete(),
+        () => {
         this.skillsOverlay?.handle.hide()
         this.skillsOverlay = undefined
         this.tui.setFocus(this.root)
-      })
+        }
+      )
       this.skillsOverlay = {
         component,
         handle: this.showExclusiveRoute('skills', component)
@@ -827,8 +960,14 @@ export class PiTuiApplication {
     return request
   }
 
+  private async reloadSkillAutocomplete(): Promise<void> {
+    this.autocompleteWorkspace = undefined
+    await this.refreshSkillAutocomplete(
+      this.controller.state.projection?.thread.workspace ?? this.controller.options.workspace
+    )
+  }
+
   private async editExternal(initial: string): Promise<string> {
-    this.setPointerMode(false, false)
     this.writeMouseTracking(false)
     this.tui.stop()
     this.terminalActive = false
@@ -871,6 +1010,72 @@ export class PiTuiApplication {
       this.controller.notify(code === 'EEXIST'
         ? 'Export target already exists; choose a new path so Kun does not overwrite it.'
         : safeError(error), 'error')
+    }
+  }
+
+  private sharePath(threadId: string): string {
+    return join(this.controller.options.dataDir, 'tui', 'shares', `${threadId}.md`)
+  }
+
+  private async shareThread(): Promise<void> {
+    const projection = this.controller.state.projection
+    if (!projection) {
+      this.controller.notify('Open or create a session first.', 'error')
+      return
+    }
+    try {
+      const path = this.sharePath(projection.thread.id)
+      await mkdir(join(this.controller.options.dataDir, 'tui', 'shares'), { recursive: true, mode: 0o700 })
+      await writeFile(path, renderThreadMarkdown(projection.thread), { encoding: 'utf8', mode: 0o600 })
+      this.controller.notify(`Local share snapshot updated: ${path}`)
+    } catch (error) {
+      this.controller.notify(safeError(error), 'error')
+    }
+  }
+
+  private async unshareThread(): Promise<void> {
+    const projection = this.controller.state.projection
+    if (!projection) {
+      this.controller.notify('Open or create a session first.', 'error')
+      return
+    }
+    try {
+      await unlink(this.sharePath(projection.thread.id))
+      this.controller.notify('Local share snapshot removed.')
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') this.controller.notify('No local share snapshot exists.')
+      else this.controller.notify(safeError(error), 'error')
+    }
+  }
+
+  private async openInteractiveTerminal(): Promise<void> {
+    const shell = process.platform === 'win32'
+      ? process.env.COMSPEC || 'cmd.exe'
+      : process.env.SHELL || '/bin/sh'
+    this.writeMouseTracking(false)
+    this.tui.stop()
+    this.terminalActive = false
+    try {
+      await new Promise<void>((resolvePromise, reject) => {
+        const child = spawn(shell, [], {
+          cwd: this.controller.state.projection?.thread.workspace ?? this.controller.options.workspace,
+          stdio: 'inherit',
+          windowsHide: false
+        })
+        child.once('error', reject)
+        child.once('close', () => resolvePromise())
+      })
+    } catch (error) {
+      this.controller.notify(safeError(error), 'error')
+    } finally {
+      if (!this.stopped) {
+        this.tui.start()
+        this.terminalActive = true
+        this.writeMouseTracking(this.mouseTrackingWanted)
+        this.terminal.setTitle('Kun')
+        this.tui.setFocus(this.root)
+        this.tui.requestRender(true)
+      }
     }
   }
 
@@ -980,7 +1185,6 @@ export class PiTuiApplication {
     this.subagentPopup = undefined
     popup.component.dispose()
     popup.handle.hide()
-    this.setPointerMode(false, false)
     this.tui.setFocus(this.root)
     this.syncMouseTracking(this.controller.state)
     this.tui.requestRender()
@@ -1032,14 +1236,32 @@ export class PiTuiApplication {
 
   private showAgentModes(): void {
     if (this.agentOverlay) return
-    const component = new AgentModeDialog(this.controller, () => {
+    const close = () => {
       this.agentOverlay?.handle.hide()
       this.agentOverlay = undefined
       this.tui.setFocus(this.root)
+    }
+    const component = new AgentModeDialog(this.controller, close, () => {
+      close()
+      this.showGoal()
     })
     this.agentOverlay = {
       component,
       handle: this.showExclusiveRoute('mode', component)
+    }
+  }
+
+  private showGoal(): void {
+    if (this.goalOverlay) return
+    const close = () => {
+      this.goalOverlay?.handle.hide()
+      this.goalOverlay = undefined
+      this.tui.setFocus(this.root)
+    }
+    const component = new GoalDialog(this.tui, this.controller, close)
+    this.goalOverlay = {
+      component,
+      handle: this.showExclusiveRoute('goal', component)
     }
   }
 
@@ -1048,7 +1270,7 @@ export class PiTuiApplication {
     for (const entry of [
       this.threadOverlay, this.helpOverlay, this.approvalOverlay, this.inputOverlay,
       this.inspectionOverlay, this.permissionOverlay, this.timelineOverlay, this.skillsOverlay,
-      this.commandOverlay, this.variantOverlay, this.agentOverlay
+      this.commandOverlay, this.variantOverlay, this.agentOverlay, this.goalOverlay
     ]) {
       entry?.handle.hide()
     }
@@ -1063,6 +1285,7 @@ export class PiTuiApplication {
     this.commandOverlay = undefined
     this.variantOverlay = undefined
     this.agentOverlay = undefined
+    this.goalOverlay = undefined
     this.closeConnectRoute()
     this.closeModelRoute()
     this.closeSubagentRoute()
@@ -1097,6 +1320,9 @@ class ChatRoot implements Component, Focusable {
   private animationFrame = 0
   private transcriptStartRow?: number
   private lastRenderedLineCount = 0
+  private pasteBuffer?: string
+  private pasteProcessing = false
+  private deferredPasteInput = ''
 
   constructor(
     private readonly tui: TUI,
@@ -1106,6 +1332,7 @@ class ChatRoot implements Component, Focusable {
       onConnect: () => void
       onModel: () => void
       onVariants: () => void
+      onGoal: () => void
       onPermission: () => void
       onTimeline: (query?: string, target?: string) => void
       onSubagents: () => void
@@ -1114,6 +1341,16 @@ class ChatRoot implements Component, Focusable {
       onCopy: () => void
       onExport: (path?: string) => void
       onPointerMode: (action?: string) => void
+      onTheme: (name?: string) => void
+      onShare: () => void
+      onUnshare: () => void
+      onConsole: () => void
+      onDiff: () => void
+      onTerminal: () => void
+      onSessions: () => void
+      onExtensions: () => void
+      onPasteImage: () => Promise<void>
+      onClear: () => void
     }
   ) {
     this.state = controller.state
@@ -1130,7 +1367,13 @@ class ChatRoot implements Component, Focusable {
 
   update(state: TuiControllerState): void {
     this.state = state
-    this.transcript.update(state.projection, this.showReasoning, this.showToolDetails, this.controller.runtime.legacyGui === true)
+    this.transcript.update(
+      state.projection,
+      this.showReasoning,
+      this.showToolDetails,
+      this.controller.runtime.legacyGui === true,
+      state.attachmentMetadata
+    )
   }
 
   tickAnimation(): void {
@@ -1139,7 +1382,17 @@ class ChatRoot implements Component, Focusable {
 
   editorEmpty(): boolean { return this.editor.getText().length === 0 }
 
+  composerEmpty(): boolean {
+    return this.editorEmpty() && this.state.pendingAttachments.length === 0
+  }
+
   clearEditor(): void { this.editor.setText(''); this.tui.requestRender() }
+
+  clearComposer(): void {
+    this.editor.setText('')
+    this.controller.clearPendingAttachments()
+    this.tui.requestRender()
+  }
 
   insertNewline(): void { this.editor.handleInput('\x0a'); this.tui.requestRender() }
 
@@ -1160,7 +1413,8 @@ class ChatRoot implements Component, Focusable {
       this.state.projection,
       this.showReasoning,
       this.showToolDetails,
-      this.controller.runtime.legacyGui === true
+      this.controller.runtime.legacyGui === true,
+      this.state.attachmentMetadata
     )
     this.controller.notify(`Tool details ${this.showToolDetails ? 'expanded' : 'collapsed'}.`)
     this.tui.requestRender()
@@ -1186,6 +1440,13 @@ class ChatRoot implements Component, Focusable {
     const text = raw.trim()
     if (!text) {
       this.controller.notify('Type guidance before pressing Ctrl+S.', 'error')
+      return
+    }
+    if (this.state.pendingAttachments.length) {
+      this.controller.notify(
+        'Attachments cannot be added to queued guidance. They remain attached for the next new turn.',
+        'error'
+      )
       return
     }
     this.editor.addToHistory(raw)
@@ -1302,7 +1563,23 @@ class ChatRoot implements Component, Focusable {
   }
 
   handleInput(data: string): void {
-    this.editor.handleInput(data)
+    if (this.pasteProcessing) {
+      this.deferredPasteInput += data
+      return
+    }
+    if (this.pasteBuffer !== undefined) {
+      this.consumePasteChunk(data)
+      return
+    }
+    const startIndex = data.indexOf(BRACKETED_PASTE_START)
+    if (startIndex < 0) {
+      this.editor.handleInput(data)
+      return
+    }
+    const prefix = data.slice(0, startIndex)
+    if (prefix) this.editor.handleInput(prefix)
+    this.pasteBuffer = ''
+    this.consumePasteChunk(data.slice(startIndex + BRACKETED_PASTE_START.length))
   }
 
   invalidate(): void {
@@ -1315,6 +1592,14 @@ class ChatRoot implements Component, Focusable {
     if (!text) return
     const command = parseTuiCommand(text)
     if (!command) {
+      if (!this.controller.validatePendingAttachmentsForCurrentModel()) {
+        // pi-tui clears the editor before invoking onSubmit. Restore the exact
+        // expanded prompt so a capability rejection never discards the
+        // user's message while the queued attachment waits for /model.
+        this.editor.setText(raw)
+        this.tui.requestRender()
+        return
+      }
       // Match Kimi's perceived-latency behavior: consume the prompt and let
       // the controller publish its local "preparing/sending" phase before
       // waiting for thread creation or the start-turn HTTP acknowledgement.
@@ -1332,14 +1617,54 @@ class ChatRoot implements Component, Focusable {
     this.tui.requestRender()
   }
 
+  private consumePasteChunk(data: string): void {
+    if (this.pasteBuffer === undefined) return
+    this.pasteBuffer += data
+    const endIndex = this.pasteBuffer.indexOf(BRACKETED_PASTE_END)
+    if (endIndex < 0) return
+    const pastedText = this.pasteBuffer.slice(0, endIndex)
+    const trailing = this.pasteBuffer.slice(endIndex + BRACKETED_PASTE_END.length)
+    this.pasteBuffer = undefined
+    this.pasteProcessing = true
+    void this.processCompletedPaste(pastedText).finally(() => {
+      this.pasteProcessing = false
+      const deferred = trailing + this.deferredPasteInput
+      this.deferredPasteInput = ''
+      if (deferred) this.handleInput(deferred)
+    })
+  }
+
+  private async processCompletedPaste(pastedText: string): Promise<void> {
+    // Some terminal hosts wrap an image-only platform paste in bracketed-paste
+    // markers but have no text payload to place between them. Treat that exact
+    // empty gesture as the semantic clipboard-image action. Whitespace remains
+    // ordinary composer text.
+    if (pastedText.length === 0) {
+      await this.actions.onPasteImage()
+      this.tui.requestRender()
+      return
+    }
+    const attached = await this.controller.attachPastedPaths(pastedText)
+    if (!attached) {
+      // Let pi-tui preserve its normal multiline-paste marker behavior when
+      // the clipboard content is prose, a missing path, or an unsupported
+      // file. Replaying the bracket markers keeps undo/history semantics.
+      this.editor.handleInput(`${BRACKETED_PASTE_START}${pastedText}${BRACKETED_PASTE_END}`)
+    }
+    this.tui.requestRender()
+  }
+
   async execute(command: TuiCommand): Promise<void> {
     switch (command.kind) {
       case 'help': this.controller.showHelp(); break
       case 'threads': this.controller.showThreads(command.search); break
+      case 'resume': await this.controller.resumeLatest(command.search); break
+      case 'clear': this.actions.onClear(); break
       case 'new': await this.controller.createThread(command.title); break
       case 'open': await this.controller.openThread(command.threadId); break
       case 'rename': await this.controller.rename(command.title); break
       case 'archive': await this.controller.archive(); break
+      case 'archives': this.controller.showThreads(command.search, 'archived'); break
       case 'fork': await this.controller.fork(command.title); break
       case 'compact': await this.controller.compact(); break
       case 'connect': this.actions.onConnect(); break
@@ -1348,7 +1673,13 @@ class ChatRoot implements Component, Focusable {
       case 'reasoning':
         this.showReasoning = !this.showReasoning
         this.transcript.clearReasoningOverrides()
-        this.transcript.update(this.state.projection, this.showReasoning, this.showToolDetails, this.controller.runtime.legacyGui === true)
+        this.transcript.update(
+          this.state.projection,
+          this.showReasoning,
+          this.showToolDetails,
+          this.controller.runtime.legacyGui === true,
+          this.state.attachmentMetadata
+        )
         this.controller.notify(this.showReasoning
           ? 'Thinking is expanded.'
           : 'Thinking is collapsed.')
@@ -1364,19 +1695,37 @@ class ChatRoot implements Component, Focusable {
       case 'undo': await this.controller.undoLastTurn(); break
       case 'redo': await this.controller.redoBranch(); break
       case 'init': await this.controller.initializeWorkspace(command.instructions); break
-      case 'mcp': await this.controller.showMcp(); break
+      case 'mcp': await this.controller.showMcp(command.action); break
       case 'timeline': this.actions.onTimeline(command.query); break
       case 'jump': this.actions.onTimeline(undefined, command.target); break
-      case 'subagents': this.actions.onSubagents(); break
-      case 'tasks': await this.controller.showTasks(); break
+      case 'subagents':
+        if (!(await this.controller.manageSubagents(command.action))) this.actions.onSubagents()
+        break
+      case 'tasks': await this.controller.manageTodos(command.action); break
+      case 'attach': await this.controller.manageAttachments(command.path); break
+      case 'paste': await this.actions.onPasteImage(); break
+      case 'memory': await this.controller.manageMemory(command.action); break
+      case 'shells': await this.controller.manageShells(command.action); break
+      case 'extensions': await this.controller.manageExtensions(command.action); break
+      case 'theme': this.actions.onTheme(command.name); break
+      case 'share': this.actions.onShare(); break
+      case 'unshare': this.actions.onUnshare(); break
+      case 'console': this.actions.onConsole(); break
+      case 'diff': this.actions.onDiff(); break
+      case 'terminal': this.actions.onTerminal(); break
       case 'plan': {
         const action = command.action?.trim().toLowerCase()
-        if (action === 'plan' || action === 'on') await this.controller.setPlanMode('plan')
+        if (!action || action === 'plan' || action === 'on') await this.controller.setPlanMode('plan')
         else if (action === 'agent' || action === 'off' || action === 'build') await this.controller.setPlanMode('agent')
-        else await this.controller.showPlan()
+        else if (action === 'status' || action === 'tasks') await this.controller.showPlan()
+        else this.controller.notify('Usage: /plan [status|tasks|off]', 'error')
         break
       }
-      case 'goal': await this.controller.manageGoal(command.action); break
+      case 'agent': await this.controller.setPlanMode('agent'); break
+      case 'goal':
+        if (command.action?.trim()) await this.controller.manageGoal(command.action)
+        else this.actions.onGoal()
+        break
       case 'skills': this.actions.onSkills(command.query); break
       case 'skill': await this.controller.invokeSkill(command.name, command.prompt); break
       case 'editor': {
@@ -1388,7 +1737,8 @@ class ChatRoot implements Component, Focusable {
       case 'add-dir': await this.controller.addDirectory(command.path); break
       case 'btw': await this.controller.askSideQuestion(command.question); break
       case 'context': await this.controller.showContext(); break
-      case 'queue': this.controller.showQueue(); break
+      case 'capabilities': this.controller.showCapabilities(); break
+      case 'queue': await this.controller.showQueue(command.action); break
       case 'quit': this.controller.requestQuit(); break
       case 'usage': this.controller.notify(`Usage: ${command.usage}`, 'error'); break
       case 'unknown': this.controller.notify(`Unknown command: /${command.name}`, 'error'); break
@@ -1413,6 +1763,7 @@ export class TranscriptComponent implements Component {
   private order: string[] = []
   private readonly items = new Map<string, ItemComponent>()
   private readonly children = new Map<string, ChildRunComponent>()
+  private readonly childGroups = new Map<string, ChildRunGroupComponent>()
   private readonly reasoningOverrides = new Map<string, boolean>()
   private showReasoning = false
   private projection?: ThreadProjection
@@ -1423,7 +1774,8 @@ export class TranscriptComponent implements Component {
     projection: ThreadProjection | undefined,
     showReasoning: boolean,
     showToolDetails: boolean,
-    legacyGui = false
+    legacyGui = false,
+    attachmentMetadata: Readonly<Record<string, AttachmentMetadata>> = {}
   ): void {
     this.projection = projection
     this.showReasoning = showReasoning
@@ -1435,6 +1787,9 @@ export class TranscriptComponent implements Component {
     const toolResults = new Map(
       all.filter((item): item is Extract<TurnItem, { kind: 'tool_result' }> => item.kind === 'tool_result')
         .map((item) => [item.callId, item])
+    )
+    const attachmentIdsByTurn = new Map(
+      (projection?.thread.turns ?? []).map((turn) => [turn.id, turn.attachmentIds] as const)
     )
     const visible = all.filter((item) => item.kind !== 'tool_result' || !toolCalls.has(item.callId))
     const nextIds = new Set(visible.map((item) => item.id))
@@ -1455,6 +1810,11 @@ export class TranscriptComponent implements Component {
       const reasoningEndedAt = item.kind === 'assistant_reasoning' && !reasoningRunning
         ? resolveReasoningEndAt(item, all, projection)
         : undefined
+      const userAttachmentIds = item.kind === 'user_message'
+        ? item.attachmentIds?.length
+          ? item.attachmentIds
+          : attachmentIdsByTurn.get(item.turnId) ?? []
+        : []
       if (current?.kind === item.kind) {
         current.update(
           item,
@@ -1464,7 +1824,9 @@ export class TranscriptComponent implements Component {
           turnRunning,
           legacyGui,
           reasoningRunning,
-          reasoningEndedAt
+          reasoningEndedAt,
+          attachmentMetadata,
+          userAttachmentIds
         )
       } else {
         this.items.set(item.id, new ItemComponent(
@@ -1475,23 +1837,50 @@ export class TranscriptComponent implements Component {
           turnRunning,
           legacyGui,
           reasoningRunning,
-          reasoningEndedAt
+          reasoningEndedAt,
+          attachmentMetadata,
+          userAttachmentIds
         ))
       }
     }
 
+    const childRunsByTurn = new Map<string, ProjectedChildRun[]>()
+    for (const child of projection?.childRuns ?? []) {
+      const current = childRunsByTurn.get(child.parentTurnId) ?? []
+      current.push(child)
+      childRunsByTurn.set(child.parentTurnId, current)
+    }
     const childIds = new Set((projection?.childRuns ?? []).map((run) => `child:${run.childId}`))
     for (const id of this.children.keys()) if (!childIds.has(id)) this.children.delete(id)
     for (const child of projection?.childRuns ?? []) {
       const id = `child:${child.childId}`
       const current = this.children.get(id)
-      if (current) current.update(child)
-      else this.children.set(id, new ChildRunComponent(child))
+      if (current) current.update(child, showToolDetails)
+      else this.children.set(id, new ChildRunComponent(child, showToolDetails))
+    }
+    const groupIds = new Set(
+      [...childRunsByTurn.entries()]
+        .filter(([, children]) => children.length > 1)
+        .map(([turnId]) => `child-group:${turnId}`)
+    )
+    for (const id of this.childGroups.keys()) if (!groupIds.has(id)) this.childGroups.delete(id)
+    for (const [turnId, children] of childRunsByTurn) {
+      if (children.length < 2) continue
+      const id = `child-group:${turnId}`
+      const current = this.childGroups.get(id)
+      if (current) current.update(children, showToolDetails)
+      else this.childGroups.set(id, new ChildRunGroupComponent(children, showToolDetails))
     }
 
     const placedChildren = new Set<string>()
     const labeledTurns = new Set<string>()
     const order: string[] = []
+    const lastDelegationItemByTurn = new Map<string, string>()
+    for (const item of visible) {
+      if (item.kind === 'tool_call' && item.toolName === 'delegate_task') {
+        lastDelegationItemByTurn.set(item.turnId, item.id)
+      }
+    }
     const addKunReplyLabel = (turnId: string): void => {
       if (labeledTurns.has(turnId)) return
       labeledTurns.add(turnId)
@@ -1501,6 +1890,15 @@ export class TranscriptComponent implements Component {
       if (isKunReplyItem(item)) addKunReplyLabel(item.turnId)
       order.push(item.id)
       if (item.kind !== 'tool_call' || item.toolName !== 'delegate_task') continue
+      const groupedChildren = childRunsByTurn.get(item.turnId) ?? []
+      if (groupedChildren.length > 1) {
+        if (lastDelegationItemByTurn.get(item.turnId) === item.id) {
+          addKunReplyLabel(item.turnId)
+          order.push(`child-group:${item.turnId}`)
+          for (const child of groupedChildren) placedChildren.add(`child:${child.childId}`)
+        }
+        continue
+      }
       const resultChildId = childIdFromToolResult(toolResults.get(item.callId))
       const label = typeof item.arguments.label === 'string' ? item.arguments.label.trim() : ''
       for (const child of projection?.childRuns ?? []) {
@@ -1516,7 +1914,14 @@ export class TranscriptComponent implements Component {
       if (placedChildren.has(id)) continue
       const child = this.children.get(id)?.value
       if (child) addKunReplyLabel(child.parentTurnId)
-      order.push(id)
+      const siblings = child ? childRunsByTurn.get(child.parentTurnId) ?? [] : []
+      if (child && siblings.length > 1) {
+        const groupId = `child-group:${child.parentTurnId}`
+        if (!order.includes(groupId)) order.push(groupId)
+        for (const sibling of siblings) placedChildren.add(`child:${sibling.childId}`)
+      } else {
+        order.push(id)
+      }
     }
     this.order = order
   }
@@ -1529,15 +1934,19 @@ export class TranscriptComponent implements Component {
       const replyGroup = id.startsWith(KUN_REPLY_GROUP_PREFIX)
       const rendered = replyGroup
         ? [cyan(bold(' Kun'))]
+        : id.startsWith('child-group:')
+          ? this.childGroups.get(id)?.render(width, animationFrame) ?? []
         : id.startsWith('child:')
           ? this.children.get(id)?.render(width, animationFrame) ?? []
           : this.items.get(id)?.render(width, animationFrame) ?? []
       const kind = replyGroup
         ? 'kun_reply'
+        : id.startsWith('child-group:')
+          ? 'child_group'
         : id.startsWith('child:')
           ? 'child'
           : this.items.get(id)?.kind
-      const compact = kind === 'child' || kind === 'assistant_text' ||
+      const compact = kind === 'child' || kind === 'child_group' || kind === 'assistant_text' ||
         kind === 'assistant_reasoning' || kind === 'tool_call' ||
         kind === 'tool_result' || kind === 'approval' ||
         kind === 'user_input' || kind === 'review' || kind === 'error' ||
@@ -1551,6 +1960,14 @@ export class TranscriptComponent implements Component {
       if (id.startsWith('child:') && rendered.length) {
         const child = this.children.get(id)?.value
         if (child) this.renderedChildRows.push({ start, end: lines.length - 1, child })
+      } else if (id.startsWith('child-group:') && rendered.length) {
+        for (const entry of this.childGroups.get(id)?.childRows() ?? []) {
+          this.renderedChildRows.push({
+            start: start + entry.start,
+            end: start + entry.end,
+            child: entry.child
+          })
+        }
       }
     })
     return lines
@@ -1593,6 +2010,8 @@ class ItemComponent implements Component {
   private legacyGui: boolean
   private reasoningRunning: boolean
   private reasoningEndedAt?: string
+  private attachmentMetadata: Readonly<Record<string, AttachmentMetadata>>
+  private userAttachmentIds: readonly string[]
 
   constructor(
     item: TurnItem,
@@ -1602,7 +2021,9 @@ class ItemComponent implements Component {
     turnRunning = false,
     legacyGui = false,
     reasoningRunning = false,
-    reasoningEndedAt?: string
+    reasoningEndedAt?: string,
+    attachmentMetadata: Readonly<Record<string, AttachmentMetadata>> = {},
+    userAttachmentIds: readonly string[] = []
   ) {
     this.kind = item.kind
     this.item = item
@@ -1613,6 +2034,8 @@ class ItemComponent implements Component {
     this.legacyGui = legacyGui
     this.reasoningRunning = reasoningRunning
     this.reasoningEndedAt = reasoningEndedAt
+    this.attachmentMetadata = attachmentMetadata
+    this.userAttachmentIds = userAttachmentIds
     if (item.kind === 'assistant_text') {
       this.markdown = new Markdown(
         `${sanitizeTerminalText(item.text)}${turnRunning && item.status === 'running' ? ' ▍' : ''}`,
@@ -1631,7 +2054,9 @@ class ItemComponent implements Component {
     turnRunning = false,
     legacyGui = false,
     reasoningRunning = false,
-    reasoningEndedAt?: string
+    reasoningEndedAt?: string,
+    attachmentMetadata: Readonly<Record<string, AttachmentMetadata>> = {},
+    userAttachmentIds: readonly string[] = []
   ): void {
     this.item = item
     this.showReasoning = showReasoning
@@ -1641,6 +2066,8 @@ class ItemComponent implements Component {
     this.legacyGui = legacyGui
     this.reasoningRunning = reasoningRunning
     this.reasoningEndedAt = reasoningEndedAt
+    this.attachmentMetadata = attachmentMetadata
+    this.userAttachmentIds = userAttachmentIds
     if (item.kind === 'assistant_text') {
       this.markdown?.setText(`${sanitizeTerminalText(item.text)}${turnRunning && item.status === 'running' ? ' ▍' : ''}`)
     }
@@ -1656,9 +2083,13 @@ class ItemComponent implements Component {
     switch (item.kind) {
       case 'user_message': {
         const body = plainLines(item.displayText ?? item.text, Math.max(8, contentWidth - 2), 0)
+        const attachments = this.userAttachmentIds.map((attachmentId) =>
+          renderUserAttachment(this.attachmentMetadata[attachmentId], contentWidth)
+        )
         return [
           `${yellow(bold(' › You'))}${body[0] ? `  ${yellow(body[0])}` : ''}`,
-          ...body.slice(1).map((line) => yellow(`   ${line}`))
+          ...body.slice(1).map((line) => yellow(`   ${line}`)),
+          ...attachments
         ]
       }
       case 'assistant_text': {
@@ -1785,10 +2216,116 @@ export function renderKunThinking(
   ]
 }
 
-class ChildRunComponent {
-  constructor(private child: ProjectedChildRun) {}
+type RenderedChildRow = {
+  start: number
+  end: number
+  child: ProjectedChildRun
+}
 
-  update(child: ProjectedChildRun): void { this.child = child }
+class ChildRunGroupComponent {
+  private children: ProjectedChildRun[]
+  private expanded: boolean
+  private rows: RenderedChildRow[] = []
+
+  constructor(children: ProjectedChildRun[], expanded: boolean) {
+    this.children = sortChildRuns(children)
+    this.expanded = expanded
+  }
+
+  update(children: ProjectedChildRun[], expanded: boolean): void {
+    this.children = sortChildRuns(children)
+    this.expanded = expanded
+  }
+
+  childRows(): readonly RenderedChildRow[] {
+    return this.rows
+  }
+
+  render(width: number, animationFrame = 0): string[] {
+    const lines: string[] = []
+    this.rows = []
+    const counts = childStatusCounts(this.children)
+    const active = counts.running + counts.waiting + counts.background > 0
+    const failed = counts.failed > 0
+    const icon = active
+      ? cyan(activityFrame('subagent', animationFrame))
+      : failed
+        ? red('✗')
+        : green('●')
+    const breakdown = [
+      counts.completed ? `${counts.completed} done` : undefined,
+      counts.failed ? `${counts.failed} failed` : undefined,
+      counts.running ? `${counts.running} running` : undefined,
+      counts.waiting ? `${counts.waiting} waiting` : undefined,
+      counts.background ? `${counts.background} background` : undefined
+    ].filter(Boolean).join(', ')
+    const totalTools = this.children.reduce((sum, child) => sum + (child.toolInvocations ?? 0), 0)
+    const totalTokens = this.children.reduce((sum, child) => sum + (child.totalTokens ?? 0), 0)
+    const maxElapsed = Math.max(0, ...this.children.map((child) =>
+      child.durationMs ?? elapsedMilliseconds(child.startedAt, child.updatedAt, isActiveChildRun(child))
+    ))
+    const metrics = [
+      totalTools ? `${totalTools} tools` : undefined,
+      totalTokens ? `${formatTokenCount(totalTokens)} tok` : undefined,
+      maxElapsed ? formatDurationMs(maxElapsed) : undefined
+    ].filter(Boolean).join(' · ')
+    lines.push(truncateToWidth(
+      `   ${icon} ${bold(active ? `Running ${this.children.length} agents` : `${this.children.length} agents finished`)}${breakdown ? ` ${dim(`(${breakdown})`)}` : ''}${metrics ? ` ${dim(`· ${metrics}`)}` : ''}`,
+      Math.max(8, width)
+    ))
+
+    this.children.forEach((child, index) => {
+      const start = lines.length
+      const last = index === this.children.length - 1
+      const branch = last ? '└─' : '├─'
+      const continuation = last ? '  ' : '│ '
+      const label = sanitizeTerminalText(child.profileName || child.profile || 'agent')
+      const description = sanitizeTerminalText(child.label || child.prompt || child.childId)
+      const status = childStatusLabel(child)
+      lines.push(truncateToWidth(
+        `   ${dim(branch)} ${cyan(label)} ${dim(`· ${description}`)}${childMetrics(child) ? ` ${dim(`· ${childMetrics(child)}`)}` : ''} ${childStatusColor(child, status)}`,
+        Math.max(8, width)
+      ))
+      if (isActiveChildRun(child) && child.activity) {
+        const elapsed = elapsedDuration(child.activity.startedAt, undefined, true)
+        lines.push(truncateToWidth(
+          `   ${continuation}   ${cyan(activityFrame(childActivityVisualKind(child), animationFrame))} ${sanitizeTerminalText(child.activity.label)}${elapsed ? ` ${dim(`· ${elapsed}`)}` : ''}`,
+          Math.max(8, width)
+        ))
+      } else {
+        const preview = child.text || (isActiveChildRun(child)
+          ? child.status === 'queued' ? 'Waiting to start…' : 'Working independently…'
+          : child.prompt)
+        if (preview) {
+          const previewLines = plainLines(preview, Math.max(8, width - 10), 0)
+            .slice(0, this.expanded ? 6 : isActiveChildRun(child) ? 1 : 0)
+          for (const line of previewLines) lines.push(dim(`   ${continuation}   ${line}`))
+        }
+      }
+      if (
+        this.expanded &&
+        child.prompt &&
+        (isActiveChildRun(child) || Boolean(child.text && child.prompt !== child.text))
+      ) {
+        lines.push(dim(`   ${continuation}   Task: ${truncateToWidth(sanitizeTerminalText(child.prompt), Math.max(8, width - 12))}`))
+      }
+      this.rows.push({ start, end: Math.max(start, lines.length - 1), child })
+    })
+    lines.push(dim(`     ${this.expanded ? 'Ctrl+O collapse' : 'Ctrl+O expand'} · click an agent to open its live session · Ctrl+B background`))
+    return lines
+  }
+}
+
+class ChildRunComponent {
+  constructor(
+    private child: ProjectedChildRun,
+    private expanded: boolean
+  ) {}
+
+  update(child: ProjectedChildRun, expanded: boolean): void {
+    this.child = child
+    this.expanded = expanded
+  }
 
   get value(): ProjectedChildRun { return this.child }
 
@@ -1803,23 +2340,125 @@ class ChildRunComponent {
         : green('●')
     const label = child.label || child.profile || 'Subagent'
     const role = child.profile && child.profile !== label ? ` · ${child.profile}` : ''
-    const metrics = [
-      child.detached ? 'background' : undefined,
-      child.toolInvocations !== undefined ? `${child.toolInvocations} tools` : undefined,
-      child.durationMs !== undefined ? formatDurationMs(child.durationMs) : elapsedDuration(child.startedAt, undefined, active)
-    ].filter(Boolean).join(' · ')
+    const metrics = childMetrics(child)
+    const previewLimit = this.expanded ? 8 : failed ? 5 : 2
+    const liveActivity = active && child.activity
+      ? truncateToWidth(
+          `     ${cyan(activityFrame(childActivityVisualKind(child), animationFrame))} ${sanitizeTerminalText(child.activity.label)}${elapsedDuration(child.activity.startedAt, undefined, true) ? ` ${dim(`· ${elapsedDuration(child.activity.startedAt, undefined, true)}`)}` : ''}`,
+          Math.max(8, width)
+        )
+      : undefined
     return [
-      `   ${icon} ${bold('Subagent')} · ${sanitizeTerminalText(label)}${dim(role)}${metrics ? ` ${dim(`· ${metrics}`)}` : ''}`,
-      ...(child.text
-        ? plainLines(child.text, Math.max(8, width - 5), 5).slice(0, failed ? 5 : 2).map((line) => `${failed ? red('     ') : dim('     ')}${failed ? red(line) : dim(line)}`)
+      `   ${icon} ${bold('Subagent')} · ${sanitizeTerminalText(label)}${dim(role)}${metrics ? ` ${dim(`· ${metrics}`)}` : ''} ${childStatusColor(child, childStatusLabel(child))}`,
+      ...(liveActivity
+        ? [liveActivity]
+        : child.text
+        ? plainLines(child.text, Math.max(8, width - 5), 5).slice(0, previewLimit).map((line) => `${failed ? red('     ') : dim('     ')}${failed ? red(line) : dim(line)}`)
         : active ? [dim(`     ${child.status === 'queued' ? 'Waiting for an execution slot…' : 'Working independently…'}`)] : []),
-      dim('     Click to open · keyboard: /subagents')
+      ...(this.expanded && child.prompt
+        ? [dim(`     Task: ${truncateToWidth(sanitizeTerminalText(child.prompt), Math.max(8, width - 11))}`)]
+        : []),
+      dim(`     ${this.expanded ? 'Ctrl+O collapse' : 'Ctrl+O expand'} · click to open · keyboard: /subagents${isForegroundChildRun(child) ? ' · Ctrl+B background' : ''}`)
     ]
   }
 }
 
+function sortChildRuns(children: readonly ProjectedChildRun[]): ProjectedChildRun[] {
+  return [...children].sort((left, right) =>
+    (left.childSeq ?? Number.MAX_SAFE_INTEGER) - (right.childSeq ?? Number.MAX_SAFE_INTEGER) ||
+    left.startedAt.localeCompare(right.startedAt) ||
+    left.childId.localeCompare(right.childId)
+  )
+}
+
+function childStatusCounts(children: readonly ProjectedChildRun[]): {
+  completed: number
+  failed: number
+  running: number
+  waiting: number
+  background: number
+} {
+  let completed = 0
+  let failed = 0
+  let running = 0
+  let waiting = 0
+  let background = 0
+  for (const child of children) {
+    if (child.detached && isActiveChildRun(child)) {
+      background += 1
+      continue
+    }
+    if (child.status === 'completed') completed += 1
+    else if (child.status === 'failed' || child.status === 'aborted') failed += 1
+    else if (child.status === 'queued') waiting += 1
+    else if (child.status === 'running') running += 1
+  }
+  return { completed, failed, running, waiting, background }
+}
+
+function childStatusLabel(child: ProjectedChildRun): string {
+  if (child.detached && isActiveChildRun(child)) return '◐ Background'
+  switch (child.status) {
+    case 'queued': return 'Waiting'
+    case 'running': return 'Running'
+    case 'completed': return '✓ Completed'
+    case 'failed': return '✗ Failed'
+    case 'aborted': return '✗ Stopped'
+  }
+}
+
+function childStatusColor(child: ProjectedChildRun, label: string): string {
+  if (child.status === 'failed' || child.status === 'aborted') return red(label)
+  if (child.status === 'completed') return green(label)
+  return cyan(label)
+}
+
+function childMetrics(child: ProjectedChildRun): string {
+  const active = isActiveChildRun(child)
+  return [
+    child.detached ? 'background' : undefined,
+    child.toolInvocations !== undefined ? `${child.toolInvocations} tools` : undefined,
+    child.totalTokens ? `${formatTokenCount(child.totalTokens)} tok` : undefined,
+    child.cacheHitRate !== undefined && child.cacheHitRate !== null
+      ? `${Math.round(child.cacheHitRate * 100)}% cache`
+      : undefined,
+    child.durationMs !== undefined
+      ? formatDurationMs(child.durationMs)
+      : elapsedDuration(child.startedAt, undefined, active)
+  ].filter(Boolean).join(' · ')
+}
+
+function elapsedMilliseconds(startedAt: string, updatedAt: string, active: boolean): number {
+  const started = Date.parse(startedAt)
+  const ended = active ? Date.now() : Date.parse(updatedAt)
+  if (!Number.isFinite(started) || !Number.isFinite(ended)) return 0
+  return Math.max(0, ended - started)
+}
+
+function isActiveChildRun(child: ProjectedChildRun): boolean {
+  return child.status === 'queued' || child.status === 'running'
+}
+
+function isForegroundChildRun(child: ProjectedChildRun): boolean {
+  return !child.detached && isActiveChildRun(child)
+}
+
+function childActivityVisualKind(child: ProjectedChildRun): ActivityVisualKind {
+  switch (child.activity?.phase) {
+    case 'thinking': return 'thinking'
+    case 'responding': return 'responding'
+    case 'tool': return 'tool'
+    case 'retrying': return 'retrying'
+    case 'waiting':
+    case 'compacting':
+    case 'starting':
+    default:
+      return 'waiting'
+  }
+}
+
 /**
- * Exclusive subagent browser and read-only child transcript. ChildRunExecutor
+ * Exclusive subagent browser and controllable child transcript. ChildRunExecutor
  * persists side threads with id === childId, so the route opens that
  * authoritative id and never guesses from a display label.
  */
@@ -1896,6 +2535,18 @@ class SubagentDialog implements Component, Focusable {
         this.tui.requestRender()
         return
       }
+      if (data.toLowerCase() === 'a' && this.isSelectedChildActive()) {
+        void this.runChildAction('abort')
+        return
+      }
+      if (data.toLowerCase() === 'b' && this.isSelectedChildForeground()) {
+        void this.runChildAction('background')
+        return
+      }
+      if (data.toLowerCase() === 'r' && !this.isSelectedChildActive()) {
+        void this.runChildAction('retry')
+        return
+      }
       if (matchesKey(data, 'up') || data.toLowerCase() === 'k') this.scrollDetail(-1)
       else if (matchesKey(data, 'down') || data.toLowerCase() === 'j') this.scrollDetail(1)
       else if (matchesKey(data, 'pageUp') || matchesKey(data, 'ctrl+u')) this.scrollDetail(-this.detailPageSize)
@@ -1916,6 +2567,13 @@ class SubagentDialog implements Component, Focusable {
     else if (matchesKey(data, 'home')) this.index = 0
     else if (matchesKey(data, 'end')) this.index = Math.max(0, children.length - 1)
     else if (matchesKey(data, 'enter') && children[this.index]) void this.openChild(children[this.index]!)
+    else if (data.toLowerCase() === 'a' && children[this.index] && isActiveChildRun(children[this.index]!)) {
+      void this.runListChildAction(children[this.index]!, 'abort')
+    } else if (data.toLowerCase() === 'b' && children[this.index] && isForegroundChildRun(children[this.index]!)) {
+      void this.runListChildAction(children[this.index]!, 'background')
+    } else if (data.toLowerCase() === 'r' && children[this.index] && !isActiveChildRun(children[this.index]!)) {
+      void this.runListChildAction(children[this.index]!, 'retry')
+    }
     else {
       this.input.handleInput(data)
       this.index = 0
@@ -1973,10 +2631,14 @@ class SubagentDialog implements Component, Focusable {
       const right = [
         child.model,
         child.detached ? 'background' : undefined,
+        child.toolInvocations !== undefined ? `${child.toolInvocations} tools` : undefined,
+        child.totalTokens ? `${formatTokenCount(child.totalTokens)} tok` : undefined,
         child.durationMs !== undefined ? formatDurationMs(child.durationMs) : elapsedDuration(child.startedAt, undefined, running)
       ].filter(Boolean).join(' · ')
       const line = selectionRow(`${icon} ${label}  ${dim(child.profile ?? '')}`, right, inner, selected)
-      const summary = child.text || child.prompt
+      const summary = isActiveChildRun(child) && child.activity
+        ? child.activity.label
+        : child.text || child.prompt
       return [
         line,
         ...(summary
@@ -1995,6 +2657,9 @@ class SubagentDialog implements Component, Focusable {
       ],
       footer: [
         { key: 'Enter', label: 'open transcript' },
+        { key: 'A', label: 'abort active' },
+        { key: 'B', label: 'background active' },
+        { key: 'R', label: 'retry finished' },
         { key: 'PgUp/PgDn', label: 'navigate' },
         { key: 'Esc', label: 'back' }
       ],
@@ -2039,6 +2704,7 @@ class SubagentDialog implements Component, Focusable {
     const beforeTranscript = [
       ` ${dim('Parent')}  ${sanitizeTerminalText(this.parentProjection.thread.title || this.parentProjection.thread.id)}`,
       ` ${dim('Child')}   ${dim(child.childId)}${child.model ? `  ${dim('·')}  ${sanitizeTerminalText(child.model)}` : ''}`,
+      ` ${dim('Status')}  ${status}${childMetrics(child) ? `  ${dim('·')}  ${dim(childMetrics(child))}` : ''}`,
       ...(child.prompt
         ? [` ${dim('Task')}    ${truncateToWidth(sanitizeTerminalText(child.prompt).replace(/\s+/gu, ' '), Math.max(8, width - 14))}`]
         : []),
@@ -2056,25 +2722,35 @@ class SubagentDialog implements Component, Focusable {
         Math.max(12, width - 4)
       )
     ]
+    const actionFooter = running
+      ? { key: 'A', label: 'abort' }
+      : { key: 'R', label: 'retry' }
+    const backgroundFooter = this.isSelectedChildForeground()
+      ? [{ key: 'B', label: 'run in background' }]
+      : []
     const rendered = this.detailOnly
       ? popupFrame(`Subagent · ${label}`, [
-          joinSides(status, dim('read-only'), Math.max(12, width - 4)),
+          joinSides(status, dim('live child session'), Math.max(12, width - 4)),
           ...body,
           '',
           contextualFooter([
+            actionFooter,
+            ...backgroundFooter,
+            { key: 'Esc', label: 'close' },
             { key: 'T', label: `${this.showReasoning ? 'collapse' : 'expand'} Thinking` },
-            { key: '↑/↓', label: 'scroll' },
-            { key: 'Esc', label: 'close' }
+            { key: '↑/↓', label: 'scroll' }
           ], Math.max(12, width - 4))
         ], width)
       : pageFrame({
           path: ['KUN', 'Subagents', label],
-          right: `${status} · read-only`,
+          right: `${status} · child session`,
           body,
           footer: [
+            actionFooter,
+            ...backgroundFooter,
+            { key: 'Esc', label: 'back to list' },
             { key: 'T', label: `${this.showReasoning ? 'collapse' : 'expand'} Thinking` },
-            { key: '↑/↓', label: 'scroll' },
-            { key: 'Esc', label: 'back to list' }
+            { key: '↑/↓', label: 'scroll' }
           ],
           width
         })
@@ -2174,6 +2850,34 @@ class SubagentDialog implements Component, Focusable {
     this.detailOffset = 0
     this.followDetailTail = true
     this.input.focused = this._focused
+    this.tui.requestRender()
+  }
+
+  private isSelectedChildActive(): boolean {
+    return this.selectedChild !== undefined && isActiveChildRun(this.selectedChild)
+  }
+
+  private isSelectedChildForeground(): boolean {
+    return this.selectedChild !== undefined && isForegroundChildRun(this.selectedChild)
+  }
+
+  private async runListChildAction(
+    child: ProjectedChildRun,
+    action: 'abort' | 'background' | 'retry'
+  ): Promise<void> {
+    await this.controller.manageSubagents(`${action} ${child.childId}`)
+    this.tui.requestRender()
+  }
+
+  private async runChildAction(action: 'abort' | 'background' | 'retry'): Promise<void> {
+    const child = this.selectedChild
+    if (!child) return
+    await this.controller.manageSubagents(`${action} ${child.childId}`)
+    if (action === 'abort') {
+      this.selectedChild = { ...child, status: 'aborted', updatedAt: new Date().toISOString() }
+    } else if (action === 'background') {
+      this.selectedChild = { ...child, detached: true, updatedAt: new Date().toISOString() }
+    }
     this.tui.requestRender()
   }
 
@@ -2333,12 +3037,19 @@ class VariantDialog implements Component, Focusable {
 }
 
 class AgentModeDialog implements Component, Focusable {
-  private readonly modes = ['agent', 'plan'] as const
+  private readonly modes = ['agent', 'plan', 'goal'] as const
   private index: number
   private _focused = false
 
-  constructor(private readonly controller: TuiController, private readonly close: () => void) {
-    const current = controller.state.projection?.thread.mode ?? controller.state.composerMode
+  constructor(
+    private readonly controller: TuiController,
+    private readonly close: () => void,
+    private readonly openGoal: () => void
+  ) {
+    const thread = controller.state.projection?.thread
+    const current = thread?.goal?.status === 'active'
+      ? 'goal'
+      : thread?.mode ?? controller.state.composerMode
     this.index = this.modes.indexOf(current)
   }
 
@@ -2348,10 +3059,15 @@ class AgentModeDialog implements Component, Focusable {
   render(width: number): string[] {
     return pageFrame({
       path: ['KUN', 'Mode'],
-      description: 'Choose how Kun approaches the next turn.',
-      body: this.modes.map((mode, index) =>
-        selectionRow(mode, mode === 'agent' ? 'Build and act' : 'Plan before acting', width - 2, index === this.index)
-      ),
+      description: 'Choose how Kun approaches the work. Goal mode persists across turns.',
+      body: this.modes.map((mode, index) => {
+        const description = mode === 'agent'
+          ? 'Build and act on the next request'
+          : mode === 'plan'
+            ? 'Analyze and plan before making changes'
+            : 'Keep pursuing a durable objective until complete'
+        return selectionRow(mode, description, width - 2, index === this.index)
+      }),
       footer: [
         { key: '↑/↓', label: 'choose' },
         { key: 'Enter', label: 'select' },
@@ -2368,12 +3084,254 @@ class AgentModeDialog implements Component, Focusable {
     else if (matchesKey(data, 'home') || matchesKey(data, 'pageUp')) this.index = 0
     else if (matchesKey(data, 'end') || matchesKey(data, 'pageDown')) this.index = this.modes.length - 1
     else if (matchesKey(data, 'enter')) {
-      void this.controller.setPlanMode(this.modes[this.index]!)
-      this.close()
+      const mode = this.modes[this.index]!
+      if (mode === 'goal') this.openGoal()
+      else {
+        void this.controller.setPlanMode(mode)
+        this.close()
+      }
     }
   }
 
   invalidate(): void {}
+}
+
+type GoalDialogMode = 'menu' | 'objective' | 'budget' | 'confirm-clear'
+
+class GoalDialog implements Component, Focusable {
+  private readonly input = new Input()
+  private state: TuiControllerState
+  private mode: GoalDialogMode
+  private index = 0
+  private _focused = false
+  private saving = false
+  private error = ''
+
+  constructor(
+    private readonly tui: TUI,
+    private readonly controller: TuiController,
+    private readonly close: () => void
+  ) {
+    this.state = controller.state
+    this.mode = this.state.projection?.thread.goal ? 'menu' : 'objective'
+  }
+
+  get focused(): boolean { return this._focused }
+  set focused(value: boolean) {
+    this._focused = value
+    this.input.focused = value && (this.mode === 'objective' || this.mode === 'budget')
+  }
+
+  update(state: TuiControllerState): void {
+    this.state = state
+    this.tui.requestRender()
+  }
+
+  private actions(): Array<{ id: 'pause' | 'resume' | 'edit' | 'budget' | 'clear'; label: string; detail: string }> {
+    const goal = this.state.projection?.thread.goal
+    if (!goal) return []
+    const canPause = goal.status === 'active'
+    return [
+      canPause
+        ? { id: 'pause', label: 'Pause goal', detail: 'Stop automatic continuation; keep progress' }
+        : { id: 'resume', label: 'Resume goal', detail: 'Continue working in agent mode now' },
+      { id: 'edit', label: 'Edit objective', detail: 'Replace the objective and start pursuing it' },
+      { id: 'budget', label: 'Token budget', detail: goal.tokenBudget ? goal.tokenBudget.toLocaleString() : 'unlimited' },
+      { id: 'clear', label: 'Clear goal', detail: 'Remove objective and accumulated goal state' }
+    ]
+  }
+
+  render(width: number): string[] {
+    const inner = Math.max(12, width - 2)
+    const goal = this.state.projection?.thread.goal
+    const summary = goal
+      ? [
+          `${dim('Status')}     ${goal.status === 'active' ? green(bold('active')) : yellow(goal.status)}`,
+          `${dim('Objective')}  ${sanitizeTerminalText(goal.objective)}`,
+          `${dim('Usage')}      ${goal.tokensUsed.toLocaleString()} tokens${goal.tokenBudget ? ` / ${goal.tokenBudget.toLocaleString()}` : ''} · ${formatGoalDuration(goal.timeUsedSeconds)}`
+        ]
+      : [
+          `${yellow(bold('No active goal'))}`,
+          dim('Set an objective and Kun will keep working across turns until it is complete, paused, or blocked.')
+        ]
+
+    let body: string[]
+    let footer: Array<{ key: string; label: string; tone?: 'danger' }>
+    if (this.mode === 'objective') {
+      body = [
+        ...summary,
+        '',
+        sectionLabel(goal ? 'Edit objective' : 'Start Goal mode', inner),
+        this.input.render(Math.max(10, inner)).join(' '),
+        this.error ? red(this.error) : dim('Enter starts an agent turn immediately.')
+      ]
+      footer = [
+        { key: 'Enter', label: goal ? 'save and pursue' : 'start goal' },
+        { key: 'Esc', label: goal ? 'actions' : 'back' }
+      ]
+    } else if (this.mode === 'budget') {
+      body = [
+        ...summary,
+        '',
+        sectionLabel('Token budget', inner),
+        this.input.render(Math.max(10, inner)).join(' '),
+        this.error ? red(this.error) : dim('Enter a positive token count, or “none” for no limit.')
+      ]
+      footer = [
+        { key: 'Enter', label: 'save budget' },
+        { key: 'Esc', label: 'actions' }
+      ]
+    } else if (this.mode === 'confirm-clear') {
+      body = [
+        ...summary,
+        '',
+        red(bold('Clear this goal and its accumulated usage state?'))
+      ]
+      footer = [
+        { key: 'Enter', label: 'clear permanently', tone: 'danger' },
+        { key: 'Esc', label: 'cancel' }
+      ]
+    } else {
+      const actions = this.actions()
+      this.index = Math.min(this.index, Math.max(0, actions.length - 1))
+      body = [
+        ...summary,
+        '',
+        sectionLabel('Actions', inner),
+        ...actions.map((action, index) =>
+          selectionRow(action.label, action.detail, inner, index === this.index)
+        )
+      ]
+      footer = [
+        { key: '↑/↓', label: 'choose' },
+        { key: 'Enter', label: 'run' },
+        { key: 'Esc', label: 'back' }
+      ]
+    }
+
+    return pageFrame({
+      path: ['KUN', 'Goal mode'],
+      description: 'A persistent objective with automatic continuation and shared GUI/TUI state.',
+      right: this.saving ? 'saving…' : goal?.status ?? 'not configured',
+      body,
+      footer,
+      width
+    })
+  }
+
+  handleInput(data: string): void {
+    if (this.saving) return
+    if (isCancelInput(data)) {
+      if (this.mode === 'menu' || (this.mode === 'objective' && !this.state.projection?.thread.goal)) {
+        this.close()
+      } else {
+        this.mode = 'menu'
+        this.input.setValue('')
+        this.error = ''
+        this.input.focused = false
+        this.tui.requestRender()
+      }
+      return
+    }
+
+    if (this.mode === 'menu') {
+      const actions = this.actions()
+      if (matchesKey(data, 'up') || matchesKey(data, 'ctrl+p')) this.index = Math.max(0, this.index - 1)
+      else if (matchesKey(data, 'down') || matchesKey(data, 'ctrl+n')) this.index = Math.min(actions.length - 1, this.index + 1)
+      else if (matchesKey(data, 'home') || matchesKey(data, 'pageUp')) this.index = 0
+      else if (matchesKey(data, 'end') || matchesKey(data, 'pageDown')) this.index = Math.max(0, actions.length - 1)
+      else if (matchesKey(data, 'enter')) void this.runAction(actions[this.index]?.id)
+      this.tui.requestRender()
+      return
+    }
+
+    if (this.mode === 'confirm-clear') {
+      if (matchesKey(data, 'enter') || data.toLowerCase() === 'y') void this.clearGoal()
+      return
+    }
+
+    if (matchesKey(data, 'enter')) {
+      if (this.mode === 'objective') void this.saveObjective()
+      else void this.saveBudget()
+      return
+    }
+    this.input.handleInput(data)
+    this.error = ''
+    this.tui.requestRender()
+  }
+
+  private async runAction(action?: 'pause' | 'resume' | 'edit' | 'budget' | 'clear'): Promise<void> {
+    if (!action) return
+    if (action === 'edit') {
+      this.mode = 'objective'
+      this.input.setValue(this.state.projection?.thread.goal?.objective ?? '')
+      this.input.focused = this._focused
+      return
+    }
+    if (action === 'budget') {
+      this.mode = 'budget'
+      this.input.setValue(this.state.projection?.thread.goal?.tokenBudget?.toString() ?? '')
+      this.input.focused = this._focused
+      return
+    }
+    if (action === 'clear') {
+      this.mode = 'confirm-clear'
+      return
+    }
+    this.saving = true
+    const ok = await this.controller.setGoalStatus(action === 'pause' ? 'paused' : 'active')
+    this.saving = false
+    if (ok && action === 'resume') this.close()
+    this.tui.requestRender()
+  }
+
+  private async saveObjective(): Promise<void> {
+    const objective = this.input.getValue().trim()
+    if (!objective) {
+      this.error = 'Enter an objective before starting Goal mode.'
+      this.tui.requestRender()
+      return
+    }
+    this.saving = true
+    const ok = await this.controller.activateGoal(
+      objective,
+      this.state.projection?.thread.goal?.tokenBudget
+    )
+    this.saving = false
+    if (ok) this.close()
+    this.tui.requestRender()
+  }
+
+  private async saveBudget(): Promise<void> {
+    const value = this.input.getValue().trim().toLowerCase()
+    const budget = value === '' || value === 'none' || value === 'unlimited'
+      ? null
+      : Number(value.replace(/[, _]/gu, ''))
+    if (budget !== null && (!Number.isSafeInteger(budget) || budget <= 0)) {
+      this.error = 'Use a positive whole number, or “none”.'
+      this.tui.requestRender()
+      return
+    }
+    this.saving = true
+    const ok = await this.controller.setGoalBudget(budget)
+    this.saving = false
+    if (ok) {
+      this.mode = 'menu'
+      this.input.setValue('')
+      this.input.focused = false
+    }
+    this.tui.requestRender()
+  }
+
+  private async clearGoal(): Promise<void> {
+    this.saving = true
+    const ok = await this.controller.clearGoal()
+    this.saving = false
+    if (ok) this.close()
+    this.tui.requestRender()
+  }
+
+  invalidate(): void { this.input.invalidate() }
 }
 
 class ThreadPickerDialog implements Component, Focusable {
@@ -2421,7 +3379,7 @@ class ThreadPickerDialog implements Component, Focusable {
       : ''
     return pageFrame({
       path: ['KUN', 'Sessions'],
-      right: `${this.state.threads.length} saved`,
+      right: `${this.state.threads.length} ${this.state.threadListMode === 'archived' ? 'archived' : 'saved'}`,
       body: [
         ` ${dim('Search')}  ${this.input.render(Math.max(8, inner - 10)).join(' ')}`,
         '',
@@ -2436,6 +3394,9 @@ class ThreadPickerDialog implements Component, Focusable {
         : [
             { key: 'Enter', label: 'open' },
             { key: this.keymap.display('session_pin'), label: 'pin' },
+            ...(this.state.threadListMode === 'archived'
+              ? [{ key: 'u', label: 'restore' }]
+              : [{ key: 'a', label: 'archives' }]),
             { key: this.keymap.display('session_delete'), label: 'delete' },
             { key: 'Esc', label: 'back' }
           ],
@@ -2462,6 +3423,14 @@ class ThreadPickerDialog implements Component, Focusable {
     if (matchesKey(data, 'pageDown')) { this.controller.selectThread(10); return }
     if (matchesKey(data, 'home')) { this.controller.selectThread(-Number.MAX_SAFE_INTEGER); return }
     if (matchesKey(data, 'end')) { this.controller.selectThread(Number.MAX_SAFE_INTEGER); return }
+    if (data.toLowerCase() === 'a' && this.state.threadListMode === 'active') {
+      this.controller.showThreads('', 'archived')
+      return
+    }
+    if (data.toLowerCase() === 'u' && this.state.threadListMode === 'archived') {
+      void this.controller.restoreSelectedThread()
+      return
+    }
     if (this.keymap.matches('session_pin', data)) { void this.controller.toggleSelectedThreadPin(); return }
     if (this.keymap.matches('session_delete', data)) {
       this.deleteConfirmId = this.state.threads[this.state.selectedThreadIndex]?.id
@@ -2491,10 +3460,11 @@ class HelpDialog implements Component, Focusable {
         '',
         sectionLabel('Start and switch', width - 2),
         ` ${cyan(bold('/connect'))} ${dim('providers')}  ·  ${cyan(bold('/model'))} ${dim('model')}  ·  ${cyan(bold('/sessions'))} ${dim('previous work')}`,
+        ` ${cyan(bold(this.keymap.display('agent_list')))} ${dim('Agent / Plan / Goal mode')}  ·  ${cyan(bold('/goal'))} ${dim('persistent objective')}`,
         '',
         sectionLabel('Terminal', width - 2),
-        ` ${dim('Drag to select text; use the terminal copy shortcut.')}`,
-        ` ${cyan(bold(this.keymap.display('pointer_mode_toggle')))} ${dim('Pointer mode for Thinking/Subagent clicks')}`,
+        ` ${dim('Click Thinking or a Subagent directly; Esc closes the opened view.')}`,
+        ` ${cyan(bold(this.keymap.display('pointer_mode_toggle')))} ${dim('toggle native text selection; Shift+drag also works in supported terminals')}`,
         ` ${dim('Shift+PgUp/PgDn uses native scrollback. Ctrl+C acts as back in routes.')}`
       ],
       footer: [
@@ -2704,6 +3674,9 @@ type TimelineEntry = {
 class TimelineDialog implements Component, Focusable {
   private _focused = true
   private index = 0
+  private expanded = false
+  private readonly openedFromJump: boolean
+  private detailOffset = 0
   private readonly entries: TimelineEntry[]
 
   constructor(
@@ -2711,8 +3684,10 @@ class TimelineDialog implements Component, Focusable {
     projection: ThreadProjection,
     query: string | undefined,
     target: string | undefined,
-    private readonly close: () => void
+    private readonly close: () => void,
+    private readonly height: () => number
   ) {
+    this.openedFromJump = Boolean(target)
     const needle = query?.trim().toLowerCase()
     this.entries = projection.thread.turns.flatMap((turn, turnIndex) => {
       const user = turn.items.find((item): item is Extract<TurnItem, { kind: 'user_message' }> => item.kind === 'user_message')
@@ -2733,6 +3708,7 @@ class TimelineDialog implements Component, Focusable {
         ? this.entries.findIndex((entry) => `${entry.turnId} ${entry.label}`.toLowerCase().includes(target.toLowerCase()))
         : -1
     if (selected >= 0) this.index = selected
+    if (target && selected >= 0) this.expanded = true
   }
 
   get focused(): boolean { return this._focused }
@@ -2740,6 +3716,23 @@ class TimelineDialog implements Component, Focusable {
 
   render(width: number): string[] {
     const selected = this.entries[this.index]
+    if (this.expanded && selected) {
+      const bodyHeight = Math.max(6, this.height() - 8)
+      const lines = selected.preview.length ? selected.preview : ['No text was recorded for this turn.']
+      const maxOffset = Math.max(0, lines.length - bodyHeight)
+      this.detailOffset = Math.min(this.detailOffset, maxOffset)
+      return pageFrame({
+        path: ['KUN', 'Timeline', `Turn ${selected.ordinal}`],
+        right: `${selected.turnId} · ${this.detailOffset + 1}-${Math.min(lines.length, this.detailOffset + bodyHeight)}/${lines.length}`,
+        body: lines.slice(this.detailOffset, this.detailOffset + bodyHeight),
+        footer: [
+          { key: '↑/↓ PgUp/PgDn', label: 'scroll' },
+          { key: 'f', label: 'fork here' },
+          { key: 'Esc', label: 'turn list' }
+        ],
+        width
+      })
+    }
     const start = Math.max(0, this.index - 4)
     const visible = this.entries.slice(start, start + 9)
     return pageFrame({
@@ -2761,6 +3754,7 @@ class TimelineDialog implements Component, Focusable {
       ],
       footer: [
         { key: '↑/↓', label: 'choose' },
+        { key: 'Enter', label: 'open turn' },
         { key: 'f', label: 'fork here' },
         { key: 'Esc', label: 'back' }
       ],
@@ -2769,6 +3763,24 @@ class TimelineDialog implements Component, Focusable {
   }
 
   handleInput(data: string): void {
+    if (this.expanded) {
+      if (isCancelInput(data)) {
+        if (this.openedFromJump) {
+          this.close()
+          return
+        }
+        this.expanded = false
+        this.detailOffset = 0
+        return
+      }
+      if (matchesKey(data, 'up') || data.toLowerCase() === 'k') this.detailOffset = Math.max(0, this.detailOffset - 1)
+      else if (matchesKey(data, 'down') || data.toLowerCase() === 'j') this.detailOffset += 1
+      else if (matchesKey(data, 'pageUp')) this.detailOffset = Math.max(0, this.detailOffset - 10)
+      else if (matchesKey(data, 'pageDown')) this.detailOffset += 10
+      else if (matchesKey(data, 'home')) this.detailOffset = 0
+      else if (data.toLowerCase() === 'f' && this.entries[this.index]) this.forkSelected()
+      return
+    }
     if (isCancelInput(data)) { this.close(); return }
     if (matchesKey(data, 'up') || matchesKey(data, 'ctrl+p')) this.index = Math.max(0, this.index - 1)
     else if (matchesKey(data, 'down') || matchesKey(data, 'ctrl+n')) this.index = Math.min(Math.max(0, this.entries.length - 1), this.index + 1)
@@ -2776,25 +3788,35 @@ class TimelineDialog implements Component, Focusable {
     else if (matchesKey(data, 'pageDown')) this.index = Math.min(Math.max(0, this.entries.length - 1), this.index + 8)
     else if (matchesKey(data, 'home')) this.index = 0
     else if (matchesKey(data, 'end')) this.index = Math.max(0, this.entries.length - 1)
-    else if (data.toLowerCase() === 'f' && this.entries[this.index]) {
-      const entry = this.entries[this.index]!
-      this.close()
-      void this.controller.forkAtTurn(entry.turnId, `Fork at turn ${entry.ordinal}`)
-    }
+    else if (matchesKey(data, 'enter') && this.entries[this.index]) {
+      this.expanded = true
+      this.detailOffset = 0
+    } else if (data.toLowerCase() === 'f' && this.entries[this.index]) this.forkSelected()
   }
 
   invalidate(): void {}
+
+  private forkSelected(): void {
+    const entry = this.entries[this.index]
+    if (!entry) return
+    this.close()
+    void this.controller.forkAtTurn(entry.turnId, `Fork at turn ${entry.ordinal}`)
+  }
+
 }
 
 class SkillsDialog implements Component, Focusable {
   private _focused = true
   private index = 0
   private readonly entries: SkillsSnapshot['skills']
+  private deleteConfirm = false
 
   constructor(
     private readonly controller: TuiController,
     private readonly snapshot: SkillsSnapshot,
     query: string | undefined,
+    private readonly editText: (initial: string) => Promise<string>,
+    private readonly changed: () => Promise<void>,
     private readonly close: () => void
   ) {
     const needle = query?.trim().toLowerCase()
@@ -2828,6 +3850,9 @@ class SkillsDialog implements Component, Focusable {
       footer: [
         { key: '↑/↓', label: 'choose' },
         { key: 'Enter', label: 'invoke' },
+        { key: 'e', label: 'edit' },
+        { key: 'd', label: 'disable' },
+        { key: 'x', label: this.deleteConfirm ? 'Enter confirms delete' : 'delete managed' },
         { key: 'Esc', label: 'back' }
       ],
       width
@@ -2835,6 +3860,18 @@ class SkillsDialog implements Component, Focusable {
   }
 
   handleInput(data: string): void {
+    if (this.deleteConfirm) {
+      if (isCancelInput(data)) {
+        this.deleteConfirm = false
+        return
+      }
+      if (matchesKey(data, 'enter') && this.entries[this.index]) {
+        const skill = this.entries[this.index]!
+        this.close()
+        void this.runMutation(`delete ${skill.id} --yes`)
+      }
+      return
+    }
     if (isCancelInput(data)) { this.close(); return }
     if (matchesKey(data, 'up') || matchesKey(data, 'ctrl+p')) this.index = Math.max(0, this.index - 1)
     else if (matchesKey(data, 'down') || matchesKey(data, 'ctrl+n')) this.index = Math.min(Math.max(0, this.entries.length - 1), this.index + 1)
@@ -2846,10 +3883,25 @@ class SkillsDialog implements Component, Focusable {
       const skill = this.entries[this.index]!
       this.close()
       void this.controller.invokeSkill(skill.id)
+    } else if (data.toLowerCase() === 'e' && this.entries[this.index]) {
+      const skill = this.entries[this.index]!
+      this.close()
+      void this.runMutation(`edit ${skill.id}`)
+    } else if (data.toLowerCase() === 'd' && this.entries[this.index]) {
+      const skill = this.entries[this.index]!
+      this.close()
+      void this.runMutation(`disable ${skill.id}`)
+    } else if (data.toLowerCase() === 'x' && this.entries[this.index]) {
+      this.deleteConfirm = true
     }
   }
 
   invalidate(): void {}
+
+  private async runMutation(action: string): Promise<void> {
+    await this.controller.manageSkills(action, this.editText)
+    await this.changed()
+  }
 }
 
 class ApprovalDialog implements Component, Focusable {
@@ -4364,6 +5416,26 @@ function formatBytes(value: number): string {
   return `${(value / 1024 / 1024).toFixed(1)} MiB`
 }
 
+function renderUserAttachment(
+  attachment: AttachmentMetadata | undefined,
+  width: number
+): string {
+  if (!attachment) {
+    return truncateToWidth(`   └ ${cyan('Attachment')} ${dim('· attached')}`, width)
+  }
+  const kind = attachment.kind === 'image' ? 'Image' : 'File'
+  const dimensions = attachment.width && attachment.height
+    ? `${attachment.width}×${attachment.height}`
+    : undefined
+  const details = [
+    sanitizeTerminalText(attachment.name),
+    attachment.mimeType,
+    formatBytes(attachment.byteSize),
+    dimensions
+  ].filter(Boolean).join(' · ')
+  return truncateToWidth(`   └ ${cyan(kind)}  ${dim(details)}`, width)
+}
+
 function safeError(error: unknown): string {
   return sanitizeTerminalText(error instanceof Error ? error.message : String(error)).slice(0, 300)
 }
@@ -4437,10 +5509,11 @@ export function renderKunWelcome(
     '',
     ` ${cyan('›')} ${bold('Type a task')} ${dim('and press Enter')}`,
     ` ${cyan('›')} ${bold('/connect')} ${dim('add or manage a provider')}`,
-    ` ${cyan('›')} ${bold('/sessions')} ${dim(threadCount ? `resume previous work · ${threadCount} saved` : 'resume previous work')}`
+    ` ${cyan('›')} ${bold('/sessions')} ${dim(threadCount ? `resume previous work · ${threadCount} saved` : 'resume previous work')}`,
+    ` ${cyan('›')} ${bold(imagePasteShortcutLabel())} ${dim('paste a screenshot · /paste also works')}`
   ]
   const padding = ' '.repeat(Math.max(0, Math.floor((width - contentWidth) / 2)))
-  return body.map((line) => `${padding}${line}`)
+  return body.map((line) => `${padding}${truncateToWidth(line, contentWidth)}`)
 }
 
 export function renderActivityRow(
@@ -4581,6 +5654,7 @@ export function renderKunComposerFrame(
   const dividerLabel = borderIndex >= 0 ? editorRuleLabel(editorLines[borderIndex]) : ''
   const lines = [
     composerRule('┌', '┐', safeWidth, topLabel),
+    ...renderPendingAttachmentChips(state.pendingAttachments, safeWidth),
     ...content.map((line, index) => composerContent(line, safeWidth, index === 0 ? ` ${yellow('›')} ` : '   ')),
     composerRule('├', '┤', safeWidth, dividerLabel),
     ...autocomplete.map((line) => composerContent(line, safeWidth, '   '))
@@ -4591,6 +5665,26 @@ export function renderKunComposerFrame(
     composerRule('└', '┘', safeWidth)
   )
   return lines
+}
+
+function renderPendingAttachmentChips(
+  attachments: readonly AttachmentMetadata[],
+  width: number
+): string[] {
+  return attachments.map((attachment, index) => {
+    const kind = attachment.kind === 'image' ? 'Image' : 'File'
+    const left = [
+      cyan(`Attachment ${index + 1}/${attachments.length}`),
+      cyan(`[${kind}]`),
+      sanitizeTerminalText(attachment.name),
+      dim(`· ${formatBytes(attachment.byteSize)}`)
+    ].join(' ')
+    const last = index === attachments.length - 1
+    const right = last
+      ? dim(width >= 72 ? 'Backspace/Del remove' : 'Del remove')
+      : ''
+    return composerContent(joinSides(left, right, Math.max(8, width - 4)), width, ' ')
+  })
 }
 
 function editorRuleLabel(line: string | undefined): string {
@@ -4623,7 +5717,11 @@ function renderComposerMetadata(
     dim('·'),
     cyan(state.reasoningEffort ?? 'default'),
     dim('·'),
-    mode === 'plan' ? yellow(bold(mode)) : dim(mode)
+    mode === 'goal'
+      ? green(bold(mode))
+      : mode === 'plan'
+        ? yellow(bold(mode))
+        : dim(mode)
   ].join(' ')
   return truncateToWidth(` ${metadata}`, width)
 }
@@ -4650,18 +5748,21 @@ function renderShortcutFooter(
     return ` ${yellow(bold('Leader'))}  ${text}`
   }
   if (pointerMode) {
-    return truncateToWidth(
-      ` ${cyan(bold('Pointer mode'))}  ${dim('click Thinking/Subagent · Esc/Ctrl+C text selection')}`,
-      width
-    )
+    const running = Boolean(state.projection?.runningTurnId)
+    const clickableSubagent = Boolean(state.projection?.childRuns.length)
+    const actions = [
+      `${cyan(bold(running ? 'Esc' : 'Enter'))} ${dim(running ? 'stop' : 'send')}`,
+      ...(running && width >= 54 ? [`${cyan(bold(keymap.display('input_steer')))} ${dim('steer')}`] : []),
+      ...(clickableSubagent && width >= 72 ? [`${cyan(bold('Click'))} ${dim('open subagent')}`] : []),
+      ...(width >= 88 ? [`${cyan(bold(imagePasteShortcutLabel()))} ${dim('image')}`] : []),
+      `${cyan(bold(keymap.display('command_list')))} ${dim('commands')}`
+    ]
+    return truncateToWidth(` ${actions.join(dim('  ·  '))}`, width)
   }
-  const running = Boolean(state.projection?.runningTurnId)
-  const actions = [
-    `${cyan(bold(running ? 'Esc' : 'Enter'))} ${dim(running ? 'stop' : 'send')}`,
-    ...(running && width >= 54 ? [`${cyan(bold(keymap.display('input_steer')))} ${dim('steer')}`] : []),
-    `${cyan(bold(keymap.display('command_list')))} ${dim('commands')}`
-  ]
-  return truncateToWidth(` ${actions.join(dim('  ·  '))}`, width)
+  return truncateToWidth(
+    ` ${cyan(bold('Text selection'))}  ${dim(`drag to copy · ${keymap.display('pointer_mode_toggle')} restore clicks`)}`,
+    width
+  )
 }
 
 export function renderKunWordmark(width: number, version: string): string[] {
@@ -4669,6 +5770,12 @@ export function renderKunWordmark(width: number, version: string): string[] {
     ` ${blue(bold('KUN'))}  ${dim(`terminal agent · v${version}`)}`,
     Math.max(1, width)
   )]
+}
+
+export function imagePasteShortcutLabel(platform = process.platform): string {
+  if (platform === 'darwin') return '⌘V / Ctrl+X V'
+  if (platform === 'win32') return 'Ctrl+V / Alt+V'
+  return 'Ctrl+V / Ctrl+X V'
 }
 
 function currentWorkspace(state: TuiControllerState, controller: TuiController): string {
@@ -4693,9 +5800,12 @@ function currentModel(state: TuiControllerState, controller: TuiController): str
   return sanitizeTerminalText(provider ? `${provider} / ${model}` : model)
 }
 
-function currentMode(state: TuiControllerState): 'agent' | 'plan' {
-  const latestTurn = [...(state.projection?.thread.turns ?? [])].reverse().find((turn) => turn.mode)
-  return latestTurn?.mode ?? state.projection?.thread.mode ?? state.composerMode
+function currentMode(state: TuiControllerState): 'agent' | 'plan' | 'goal' {
+  const thread = state.projection?.thread
+  if (thread?.goal?.status === 'active') return 'goal'
+  // This label describes what the next submission will do. A previous turn's
+  // mode is history and must not hide a mode change that has not sent yet.
+  return thread?.mode ?? state.composerMode
 }
 
 function joinSides(left: string, right: string, width: number): string {
@@ -4755,6 +5865,10 @@ function formatDurationMs(durationMs: number): string {
   const minutes = Math.floor(durationMs / 60_000)
   const seconds = Math.floor((durationMs % 60_000) / 1_000)
   return `${minutes}m ${seconds}s`
+}
+
+function formatGoalDuration(seconds: number): string {
+  return formatDurationMs(Math.max(0, seconds) * 1_000)
 }
 
 function itemDuration(item: TurnItem, live: boolean, inferredEnd?: string): string {

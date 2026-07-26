@@ -11,6 +11,7 @@ import {
   type GoalResumeCoordinatorDeps
 } from './goal-resume-coordinator.js'
 import type { TurnExecutionStatus } from './turn-execution-types.js'
+import { resolveTurnClientSurface } from './turn-context-resolver.js'
 
 const GOAL_RESUME_PROMPT = [
   'Continue working toward the active goal.',
@@ -217,6 +218,7 @@ export class GoalTurnCoordinator {
         request: {
           prompt: GOAL_RESUME_PROMPT,
           mode: 'agent',
+          ...(lastTurn ? { clientSurface: resolveTurnClientSurface(lastTurn) } : {}),
           ...(lastTurn?.disableUserInput ? { disableUserInput: true } : {})
         }
       })

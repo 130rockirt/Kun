@@ -127,11 +127,11 @@ Timeline、Skills、Help、Status、Context、Queue、MCP、Permissions、Approv
 连接流程每次只展示当前步骤；只读检查页按字段与状态组织，不复用笨重的通用弹窗。
 
 如果 `/model` 只显示 DeepSeek，先运行 `kun runtime status` 检查输出的 data-dir 是否
-与 GUI 设置一致。升级前的 GUI runtime 没有共享 discovery 或模型连接接口时，Kun
-会先验证并附加到该进程，而不会在同一 data-dir 启动第二个写入者。聊天和会话继续
-共享；`/connect` 直接复用同一个受保护凭据库和模型 registry，只向 GUI 设置写入
-无密钥兼容投影，并热更新当前 runtime；`/model` 随 registry 刷新。只有无法安全
-兼容的旧 runtime 才会被拒绝。
+与 GUI 设置一致。升级前的 GUI 私有 runtime 没有共享 discovery 或模型连接接口时，
+Kun 不会附加到该旧进程，也不会在同一 data-dir 启动第二个写入者；请先关闭或更新
+一次旧 GUI。之后无论先启动 GUI 还是 TUI，都会选举同一个 UI 无关后台服务。
+`/connect` 复用 data-dir 中的受保护凭据库和模型 registry，只向 GUI 设置写入无密钥
+兼容投影；`/model` 随 registry 刷新。
 
 ## 操作
 
@@ -147,12 +147,14 @@ Timeline、Skills、Help、Status、Context、Queue、MCP、Permissions、Approv
 | `Ctrl+T` | 循环当前模型支持的推理强度 |
 | `F2` / `Shift+F2` | 正向/反向切换最近使用模型 |
 | `Tab` / `Shift+Tab` | 无补全弹窗时切换 Agent/Plan 模式 |
-| `Ctrl+C` | 弹窗/确认/模型或连接页中等同 Esc；composer 非空时清空；空闲且输入为空时连续按两次退出 |
+| `Ctrl+C` | 弹窗/确认/模型或连接页中等同 Esc；composer 有文字或附件时清空整个草稿；空闲且完全为空时连续按两次退出 |
 | `Ctrl+D` | composer 非空时向前删除；空闲且输入为空时连续按两次退出；会话列表中打开永久删除确认 |
+| `Backspace` / `Delete` | composer 文字为空且有待发送附件时，删除最后加入的附件；有文字时保持正常文字编辑 |
 | `Esc` | 依次关闭补全/当前页面，或中止运行中的 turn；空闲时连续按两次安全撤销上一轮 |
 | `Ctrl+O` | 展开/折叠 transcript 中的工具调用详情 |
 | `Ctrl+G` | 用 `$VISUAL`/`$EDITOR` 编辑当前 composer 草稿 |
 | `Ctrl+S` | turn 运行中立即 steer 当前非空草稿 |
+| macOS `Cmd+V` / `Ctrl+X V`；Windows/Linux `Ctrl+V` | 从系统剪贴板读取截图并加入当前 composer；也接受 `Alt+V`、终端转发的 `Ctrl+Shift+V` / `Super+V` |
 | `Ctrl+L` | 强制重绘 |
 | `Shift+PgUp/PgDn` | 使用终端原生 scrollback（应用不会截获） |
 
@@ -160,6 +162,23 @@ Timeline、Skills、Help、Status、Context、Queue、MCP、Permissions、Approv
 文本，再使用终端自己的复制快捷键。Codex/VS Code 集成终端通常会在已有选区时让
 `Ctrl+C` 复制；macOS Terminal/iTerm2 通常使用 `Cmd+C`，Linux/Windows 终端通常使用
 `Ctrl+Shift+C`。没有选区时，`Ctrl+C` 仍执行 Kun 的返回、清空、中止或退出语义。
+
+终端宿主会先于 TUI 处理 `Cmd+V` 等平台粘贴键，而纯图片剪贴板通常不会产生可发送给
+进程的文本字节，因此 Kun 无法截获被宿主完全吞掉的按键。macOS 上欢迎区会按平台显示
+`Cmd+V`，终端若转发 `Super+V` 或发送空的 bracketed-paste 手势，Kun 会直接读取系统
+剪贴板图片；若宿主不转发，则使用一定会由 Kun 处理的 Leader 组合 `Ctrl+X`、再按
+`V`。`Ctrl+V`、`Alt+V`、`Ctrl+Shift+V` 只要被终端转发，也会执行同一条图片读取与
+上传路径。`/paste` 是等价的键盘无关备用入口。
+
+待发送图片或文件会作为有序的 `Attachment 1/n` 条目显示在 composer 内，而不是游离在
+输入框之外。macOS、Windows 和 Linux 上，文字编辑器为空时按 `Backspace` 或物理
+`Delete`，都可从最后一项开始逐个移除；输入框中仍有文字时，这两个按键只编辑文字，
+不会误删附件。也可使用
+`/attach remove <n>` 删除指定项，或 `/attach clear` 清空全部附件。
+
+图片或文件发送后不会只剩提示文字：持久化会话中的 `You` 消息下会显示
+`Image/File`、文件名、类型、大小以及可用的图片尺寸。旧运行时暂时无法返回元数据时，
+仍显示通用的 `Attachment · attached` 标记，避免用户误以为附件没有随消息发送。
 
 需要单击 Thinking 或 Subagent 时，按 `Ctrl+X P` 或执行 `/mouse on` 进入 Pointer
 模式；状态栏会明确显示当前模式。Esc/Ctrl+C 或 `/mouse off` 会立即恢复终端原生
@@ -177,6 +196,8 @@ Timeline、Skills、Help、Status、Context、Queue、MCP、Permissions、Approv
 | `/subagents` | 浏览当前会话委派出的子代理；Pointer 模式下也可单击可见 Subagent 块，在弹窗中查看实时子会话 |
 | `/copy`、`/export [path]` | 复制最后一条 Kun 回复，或以 Markdown 安全导出完整线程；导出不会覆盖已有文件 |
 | `/details`、`/thinking` | 切换 tool 详情或 reasoning 文本显示；`/reasoning` 是兼容别名 |
+| `/paste` | 从系统剪贴板读取截图并加入 composer；macOS 等价于被转发的 `Cmd+V`，并始终可用 `Ctrl+X V` |
+| `/attach <path>`、`/attach list`、`/attach remove <n>`、`/attach clear` | 添加文件、查看待发送附件、删除指定附件或清空附件 |
 | `/mouse [on\|off]` | 切换可点击 Pointer 模式；关闭后由终端负责框选和复制 |
 | `/variants` | 选择推理强度；与 `Ctrl+T` 使用同一状态，并随 turn 请求发送 |
 | `/compact` | 请求共享运行时压缩长上下文 |

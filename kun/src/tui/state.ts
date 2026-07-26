@@ -43,15 +43,34 @@ export type ProjectedTurnActivity = {
 export type ProjectedChildRun = {
   childId: string
   parentTurnId: string
+  childSeq?: number
   label?: string
   prompt?: string
   profile?: string
+  profileName?: string
   model?: string
+  providerId?: string
+  reasoningEffort?: string
+  toolPolicy?: 'readOnly' | 'inherit'
   status: 'queued' | 'running' | 'completed' | 'failed' | 'aborted'
   text?: string
   detached?: boolean
+  prefixReused?: boolean
+  inheritedHistoryItems?: number
   toolInvocations?: number
+  activity?: {
+    phase: 'starting' | 'thinking' | 'responding' | 'tool' | 'retrying' | 'compacting' | 'waiting'
+    label: string
+    toolName?: string
+    startedAt: string
+    updatedAt: string
+  }
   durationMs?: number
+  queuedMs?: number
+  totalTokens?: number
+  cacheHitRate?: number | null
+  costUsd?: number
+  costCny?: number
   startedAt: string
   updatedAt: string
 }
@@ -120,13 +139,26 @@ export function hydrateProjectedChildRuns(
       ...(run.label ? { label: run.label } : {}),
       ...(run.prompt ? { prompt: run.prompt } : {}),
       ...(run.profile ? { profile: run.profile } : {}),
+      ...(run.profileSnapshot?.name ? { profileName: run.profileSnapshot.name } : {}),
       ...(typeof run.model === 'string' && run.model ? { model: run.model } : {}),
+      ...(typeof run.providerId === 'string' && run.providerId ? { providerId: run.providerId } : {}),
+      ...(typeof run.reasoningEffort === 'string' && run.reasoningEffort ? { reasoningEffort: run.reasoningEffort } : {}),
+      ...(run.toolPolicy ? { toolPolicy: run.toolPolicy } : {}),
       status: run.status,
       ...(run.summary || run.error ? { text: run.summary ?? run.error } : {}),
       ...(run.detached ? { detached: true } : {}),
+      ...(run.prefixReused !== undefined ? { prefixReused: run.prefixReused } : {}),
+      ...(typeof run.inheritedHistoryItems === 'number' ? { inheritedHistoryItems: run.inheritedHistoryItems } : {}),
       ...(typeof run.toolInvocations === 'number' ? { toolInvocations: run.toolInvocations } : {}),
+      ...(run.activity ? { activity: run.activity } : {}),
       ...(typeof run.durationMs === 'number' ? { durationMs: run.durationMs } : {}),
-      startedAt: run.createdAt,
+      ...(typeof run.queuedMs === 'number' ? { queuedMs: run.queuedMs } : {}),
+      ...(typeof run.childSeq === 'number' ? { childSeq: run.childSeq } : {}),
+      ...(run.usage?.totalTokens > 0 ? { totalTokens: run.usage.totalTokens } : {}),
+      ...(run.usage?.cacheHitRate !== undefined ? { cacheHitRate: run.usage.cacheHitRate } : {}),
+      ...(run.usage?.costUsd !== undefined ? { costUsd: run.usage.costUsd } : {}),
+      ...(run.usage?.costCny !== undefined ? { costCny: run.usage.costCny } : {}),
+      startedAt: run.startedAt ?? run.createdAt,
       updatedAt: run.updatedAt
     }))
   }
@@ -375,6 +407,20 @@ export function applyRuntimeEvent(
         }
       }
       break
+    case 'turn_steering_updated':
+      if (event.turnId) {
+        const thread = ensureTurn(next.thread, event.turnId, 'running', event.timestamp)
+        next = {
+          ...next,
+          thread: {
+            ...thread,
+            turns: thread.turns.map((turn) => turn.id === event.turnId
+              ? { ...turn, steering: event.entries.map((entry) => entry.text) }
+              : turn)
+          }
+        }
+      }
+      break
     case 'goal_updated':
     case 'goal_cleared':
       next = { ...next, thread: replaceGoal(next.thread, event.goal ?? undefined) }
@@ -480,7 +526,7 @@ export function setProjectionRunningTurn(
   turnId: string,
   prompt = '',
   timestamp = new Date().toISOString(),
-  metadata: Pick<Turn, 'model' | 'providerId' | 'accountId' | 'reasoningEffort' | 'mode'> = {}
+  metadata: Partial<Pick<Turn, 'model' | 'providerId' | 'accountId' | 'reasoningEffort' | 'mode' | 'attachmentIds'>> = {}
 ): ThreadProjection {
   return {
     ...current,
@@ -578,12 +624,24 @@ function projectChildLifecycle(
     parentTurnId: child.parentTurnId,
     ...(child.childLabel ? { label: child.childLabel } : {}),
     ...(child.childProfile ? { profile: child.childProfile } : {}),
+    ...(child.childProfileName ? { profileName: child.childProfileName } : {}),
     ...(child.childModel ? { model: child.childModel } : {}),
+    ...(child.childProviderId ? { providerId: child.childProviderId } : {}),
+    ...(child.childToolPolicy ? { toolPolicy: child.childToolPolicy } : {}),
     status: child.childStatus,
     ...(event.text ? { text: event.text } : {}),
     ...(child.detached ? { detached: true } : {}),
+    ...(child.prefixReused !== undefined ? { prefixReused: child.prefixReused } : {}),
+    ...(child.inheritedHistoryItems !== undefined ? { inheritedHistoryItems: child.inheritedHistoryItems } : {}),
     ...(child.toolInvocations !== undefined ? { toolInvocations: child.toolInvocations } : {}),
+    ...(child.activity ? { activity: child.activity } : {}),
     ...(child.durationMs !== undefined ? { durationMs: child.durationMs } : {}),
+    ...(child.queuedMs !== undefined ? { queuedMs: child.queuedMs } : {}),
+    ...(child.totalTokens !== undefined ? { totalTokens: child.totalTokens } : {}),
+    ...(child.cacheHitRate !== undefined ? { cacheHitRate: child.cacheHitRate } : {}),
+    ...(child.costUsd !== undefined ? { costUsd: child.costUsd } : {}),
+    ...(child.costCny !== undefined ? { costCny: child.costCny } : {}),
+    childSeq: child.childSeq,
     startedAt: existing?.startedAt ?? event.timestamp,
     updatedAt: event.timestamp
   }
@@ -664,7 +722,7 @@ function updateTurnStatus(
   threadStatus: ThreadDetail['status'],
   timestamp: string,
   prompt = '',
-  metadata: Pick<Turn, 'model' | 'providerId' | 'accountId' | 'reasoningEffort' | 'mode'> = {}
+  metadata: Partial<Pick<Turn, 'model' | 'providerId' | 'accountId' | 'reasoningEffort' | 'mode' | 'attachmentIds'>> = {}
 ): ThreadDetail {
   if (!turnId) return { ...thread, status: threadStatus }
   const withTurn = ensureTurn(thread, turnId, status, timestamp, prompt, metadata)
@@ -690,7 +748,7 @@ function ensureTurn(
   status: Turn['status'],
   timestamp: string,
   prompt = '',
-  metadata: Pick<Turn, 'model' | 'providerId' | 'accountId' | 'reasoningEffort' | 'mode'> = {}
+  metadata: Partial<Pick<Turn, 'model' | 'providerId' | 'accountId' | 'reasoningEffort' | 'mode' | 'attachmentIds'>> = {}
 ): ThreadDetail {
   if (thread.turns.some((turn) => turn.id === turnId)) {
     if (Object.keys(metadata).length === 0) return thread
@@ -731,6 +789,9 @@ function upsertTurnItem(thread: ThreadDetail, item: TurnItem): ThreadDetail {
       ? {
           ...turn,
           ...(item.kind === 'user_message' ? { prompt: item.text } : {}),
+          ...(item.kind === 'user_message' && item.attachmentIds
+            ? { attachmentIds: item.attachmentIds }
+            : {}),
           items: upsertItem(turn.items, item)
         }
       : turn)

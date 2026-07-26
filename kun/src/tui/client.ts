@@ -1,8 +1,14 @@
 import { z, type ZodType } from 'zod'
 import {
   ApprovalDecisionResponse,
+  AttachmentReleaseResponse,
+  AttachmentUploadRequest,
+  AttachmentUploadResponse,
   BackgroundShellListResponse,
+  BackgroundShellRecord,
+  BackgroundShellStopResponse,
   ClearThreadGoalResponse,
+  ClearThreadTodosResponse,
   CompactResponse,
   ClaudeSdkInstallStatusSchema,
   CreateThreadRequest,
@@ -17,12 +23,19 @@ import {
   ModelConnectionPatchRequestSchema,
   ModelConnectionSelectRequestSchema,
   ModelConnectionSnapshotSchema,
+  McpServerConfig,
+  MemoryCreateRequest,
+  MemoryRecord,
+  MemoryUpdateRequest,
   RuntimeInfoResponse,
   RuntimeConfigApplyRequest,
   RuntimeConfigApplyResponse,
+  ReplaceSteeringRequest,
   SetThreadGoalRequest,
+  SetThreadTodosRequest,
   StartTurnRequest,
   StartTurnResponse,
+  SteeringQueueResponse,
   ThreadGoalResponse,
   ThreadSchema,
   ThreadTodosResponse,
@@ -104,11 +117,193 @@ const DelegationDiagnosticsResponse = z.object({
   childRuns: z.array(z.object({
     id: z.string(), parentThreadId: z.string(), parentTurnId: z.string(),
     label: z.string().optional(), prompt: z.string(), profile: z.string().optional(),
+    profileSnapshot: z.object({ name: z.string().optional() }).passthrough().optional(),
+    model: z.string().optional(), providerId: z.string().optional(),
+    reasoningEffort: z.string().optional(), toolPolicy: z.enum(['readOnly', 'inherit']).optional(),
     status: z.enum(['queued', 'running', 'completed', 'failed', 'aborted']),
     summary: z.string().optional(), error: z.string().optional(), detached: z.boolean().optional(),
-    createdAt: z.string(), updatedAt: z.string()
+    usage: z.object({
+      promptTokens: z.number().int().nonnegative().default(0),
+      completionTokens: z.number().int().nonnegative().default(0),
+      totalTokens: z.number().int().nonnegative().default(0),
+      cacheHitRate: z.number().min(0).max(1).nullable().optional(),
+      costUsd: z.number().nonnegative().optional(),
+      costCny: z.number().nonnegative().optional()
+    }).passthrough().default({ promptTokens: 0, completionTokens: 0, totalTokens: 0 }),
+    prefixReused: z.boolean().optional(),
+    inheritedHistoryItems: z.number().int().nonnegative().optional(),
+    toolInvocations: z.number().int().nonnegative().optional(),
+    activity: z.object({
+      phase: z.enum(['starting', 'thinking', 'responding', 'tool', 'retrying', 'compacting', 'waiting']),
+      label: z.string(),
+      toolName: z.string().optional(),
+      startedAt: z.string(),
+      updatedAt: z.string()
+    }).optional(),
+    durationMs: z.number().int().nonnegative().optional(),
+    queuedMs: z.number().int().nonnegative().optional(),
+    childSeq: z.number().int().nonnegative().optional(),
+    createdAt: z.string(), startedAt: z.string().optional(), updatedAt: z.string()
   }).passthrough()),
-  aggregates: z.array(z.unknown()).default([])
+  aggregates: z.array(z.object({
+    key: z.string(),
+    label: z.string().optional(),
+    model: z.string().optional(),
+    runs: z.number().int().nonnegative(),
+    completed: z.number().int().nonnegative(),
+    failed: z.number().int().nonnegative(),
+    aborted: z.number().int().nonnegative(),
+    promptTokens: z.number().int().nonnegative(),
+    completionTokens: z.number().int().nonnegative(),
+    totalTokens: z.number().int().nonnegative(),
+    costUsd: z.number().nonnegative().optional(),
+    costCny: z.number().nonnegative().optional(),
+    averageTotalTokens: z.number().nonnegative(),
+    averageCostUsd: z.number().nonnegative().optional(),
+    averageCostCny: z.number().nonnegative().optional()
+  }).passthrough()).default([])
+})
+
+const MemoryListResponse = z.object({
+  memories: z.array(MemoryRecord)
+})
+
+const MemoryResponse = z.object({
+  memory: MemoryRecord
+})
+
+const DelegationAbortResponse = z.object({
+  childId: z.string().min(1),
+  aborted: z.boolean()
+})
+
+const DelegationDetachResponse = z.object({
+  childId: z.string().min(1),
+  detached: z.boolean()
+})
+
+const McpOAuthServer = z.object({
+  serverId: z.string().min(1),
+  enabled: z.boolean(),
+  configured: z.boolean(),
+  transport: z.string(),
+  url: z.string().optional(),
+  status: z.enum(['disabled', 'empty', 'partial', 'authorized', 'expired', 'error']),
+  hasClientInformation: z.boolean(),
+  hasTokens: z.boolean(),
+  hasRefreshToken: z.boolean(),
+  hasCodeVerifier: z.boolean(),
+  hasDiscoveryState: z.boolean(),
+  grantedScopes: z.array(z.string()).optional(),
+  expiresAt: z.string().optional(),
+  lastError: z.string().optional(),
+  lastErrorAt: z.string().optional()
+}).passthrough()
+
+const McpOAuthDiagnosticsResponse = z.object({ servers: z.array(McpOAuthServer) })
+const McpOAuthAuthorizeResponse = z.object({
+  serverId: z.string(),
+  status: z.enum(['disabled', 'empty', 'partial', 'authorized', 'expired', 'error']),
+  authorized: z.boolean()
+})
+const McpOAuthClearResponse = z.object({ cleared: z.array(z.string()) })
+const McpConfigResponse = z.object({
+  enabled: z.boolean(),
+  servers: z.array(z.object({
+    id: z.string(),
+    enabled: z.boolean(),
+    transport: z.enum(['stdio', 'streamable-http', 'sse']),
+    target: z.string(),
+    trustScope: z.enum(['user', 'workspace']),
+    oauth: z.boolean(),
+    timeoutMs: z.number().int().positive()
+  }))
+})
+
+const ExtensionVersion = z.object({
+  id: z.string(),
+  version: z.string(),
+  displayName: z.string(),
+  description: z.string().optional(),
+  requestedPermissions: z.array(z.string()).default([]),
+  grantedPermissions: z.array(z.string()).default([])
+}).passthrough()
+
+const ExtensionEntry = z.object({
+  id: z.string(),
+  selectedVersion: z.string().optional(),
+  globallyEnabled: z.boolean(),
+  effectiveEnabled: z.boolean().optional(),
+  versions: z.array(ExtensionVersion).default([]),
+  development: ExtensionVersion.optional()
+}).passthrough()
+
+const ExtensionListResponse = z.object({
+  schemaVersion: z.literal(1),
+  revision: z.number().int().nonnegative(),
+  extensions: z.array(ExtensionEntry),
+  nextCursor: z.string().optional()
+})
+
+const ExtensionChangedResponse = z.object({
+  schemaVersion: z.literal(1),
+  extension: ExtensionEntry
+})
+
+const ExtensionVersionMutationResponse = z.object({
+  schemaVersion: z.literal(1),
+  extension: ExtensionVersion
+}).passthrough()
+
+const ExtensionInspectionResponse = z.object({
+  schemaVersion: z.literal(1),
+  inspection: z.object({
+    manifest: z.object({
+      publisher: z.string(),
+      name: z.string(),
+      version: z.string(),
+      displayName: z.string().optional(),
+      description: z.string().optional(),
+      permissions: z.array(z.string()).default([])
+    }).passthrough(),
+  }).passthrough()
+})
+
+const ExtensionDiagnosticResponse = z.object({
+  schemaVersion: z.literal(1),
+  diagnostic: z.object({
+    extensionId: z.string(),
+    state: z.string().optional(),
+    lastError: z.string().optional()
+  }).passthrough()
+}).passthrough()
+
+const ExtensionJob = z.object({
+  id: z.string(),
+  kind: z.string(),
+  ownerExtensionId: z.string(),
+  state: z.string(),
+  executionAttempt: z.number().int().nonnegative(),
+  initiatingOperation: z.string(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  progress: z.object({
+    message: z.string().optional(),
+    completed: z.number().optional(),
+    total: z.number().optional()
+  }).passthrough().optional(),
+  error: z.object({ message: z.string() }).passthrough().optional()
+}).passthrough()
+
+const ExtensionJobsResponse = z.object({
+  schemaVersion: z.literal(1),
+  jobs: z.array(ExtensionJob)
+})
+
+const ExtensionJobCancelResponse = z.object({
+  schemaVersion: z.literal(1),
+  accepted: z.boolean(),
+  job: ExtensionJob
 })
 
 export type ThreadDetail = z.infer<typeof ThreadDetailResponse>
@@ -116,6 +311,8 @@ export type UserInputAnswer = z.infer<typeof UserInputAnswerSchema>
 export type RuntimeTools = z.infer<typeof RuntimeToolsResponse>
 export type SkillsSnapshot = z.infer<typeof SkillsResponse>
 export type DelegationDiagnostics = z.infer<typeof DelegationDiagnosticsResponse>
+export type McpOAuthSnapshot = z.infer<typeof McpOAuthDiagnosticsResponse>
+export type ExtensionSnapshot = z.infer<typeof ExtensionListResponse>
 
 export type TuiConnection = {
   baseUrl: string
@@ -201,7 +398,7 @@ export async function resolveTuiConnection(
         }
       }
       throw new TuiClientError(
-        `Kun runtime discovery is stale or unavailable in ${options.dataDir}. Start the GUI or run kun serve, then retry.`,
+        `Kun runtime discovery is stale or unavailable in ${options.dataDir}. Run \`kun runtime restart\`, or remove --no-start so this client can start the shared runtime.`,
         error instanceof TuiClientError ? error.status : undefined,
         'stale_runtime_discovery'
       )
@@ -270,22 +467,30 @@ function assertSafeDiscovery(record: RuntimeDiscoveryRecord): void {
 }
 
 export class KunTuiClient {
-  readonly baseUrl: string
-  readonly runtimeToken: string
+  private endpoint: { baseUrl: string; runtimeToken: string }
   private readonly fetchImpl: typeof fetch
   private readonly modelConnectionTransport?: ModelConnectionTransport
+  private readonly connectionResolver?: () => Promise<{ baseUrl: string; runtimeToken: string }>
+  private connectionRefresh?: Promise<boolean>
 
   constructor(input: {
     baseUrl: string
     runtimeToken?: string
     fetch?: typeof fetch
     modelConnectionTransport?: ModelConnectionTransport
+    resolveConnection?: () => Promise<{ baseUrl: string; runtimeToken: string }>
   }) {
-    this.baseUrl = input.baseUrl.replace(/\/$/, '')
-    this.runtimeToken = input.runtimeToken ?? ''
+    this.endpoint = {
+      baseUrl: input.baseUrl.replace(/\/$/, ''),
+      runtimeToken: input.runtimeToken ?? ''
+    }
     this.fetchImpl = input.fetch ?? fetch
     this.modelConnectionTransport = input.modelConnectionTransport
+    this.connectionResolver = input.resolveConnection
   }
+
+  get baseUrl(): string { return this.endpoint.baseUrl }
+  get runtimeToken(): string { return this.endpoint.runtimeToken }
 
   runtimeInfo() {
     return this.request('/v1/runtime/info', RuntimeInfoResponse)
@@ -307,6 +512,29 @@ export class KunTuiClient {
     return this.request(`/v1/skills${query}`, SkillsResponse)
   }
 
+  refreshSkills() {
+    return this.request('/v1/skills/refresh', z.object({ refreshed: z.boolean(), message: z.string().optional() }), {
+      method: 'POST'
+    })
+  }
+
+  setSkillsEnabled(enabled: boolean) {
+    return this.request('/v1/skills/config', z.object({ enabled: z.boolean() }), {
+      method: 'PATCH',
+      body: { enabled }
+    })
+  }
+
+  setLocalCapabilityEnabled(id: 'attachments' | 'memory', enabled: boolean) {
+    return this.request(`/v1/runtime/capabilities/${id}`, z.object({
+      id: z.enum(['attachments', 'memory']),
+      enabled: z.boolean()
+    }), {
+      method: 'PATCH',
+      body: { enabled }
+    })
+  }
+
   delegationDiagnostics(parentThreadId?: string) {
     const query = parentThreadId ? `?parent_thread_id=${encodeURIComponent(parentThreadId)}` : ''
     return this.request(`/v1/delegation/diagnostics${query}`, DelegationDiagnosticsResponse)
@@ -315,6 +543,183 @@ export class KunTuiClient {
   backgroundShells(threadId?: string) {
     const query = threadId ? `?thread_id=${encodeURIComponent(threadId)}` : ''
     return this.request(`/v1/background-shells${query}`, BackgroundShellListResponse)
+  }
+
+  backgroundShell(sessionId: string) {
+    return this.request(`/v1/background-shells/${segment(sessionId)}`, BackgroundShellRecord)
+  }
+
+  stopBackgroundShell(sessionId: string) {
+    return this.request(`/v1/background-shells/${segment(sessionId)}/stop`, BackgroundShellStopResponse, {
+      method: 'POST'
+    })
+  }
+
+  abortDelegation(childId: string) {
+    return this.request(`/v1/delegation/abort/${segment(childId)}`, DelegationAbortResponse, {
+      method: 'POST'
+    })
+  }
+
+  detachDelegation(childId: string) {
+    return this.request(`/v1/delegation/detach/${segment(childId)}`, DelegationDetachResponse, {
+      method: 'POST'
+    })
+  }
+
+  uploadAttachment(input: z.input<typeof AttachmentUploadRequest>) {
+    return this.request('/v1/attachments', AttachmentUploadResponse, {
+      method: 'POST',
+      body: AttachmentUploadRequest.parse(input)
+    })
+  }
+
+  releaseAttachment(attachmentId: string, leaseId: string) {
+    return this.request(`/v1/attachments/${segment(attachmentId)}`, AttachmentReleaseResponse, {
+      method: 'DELETE',
+      body: { leaseId }
+    })
+  }
+
+  getAttachment(attachmentId: string) {
+    return this.request(`/v1/attachments/${segment(attachmentId)}`, AttachmentUploadResponse)
+  }
+
+  listMemories(input: { workspace?: string; includeDeleted?: boolean; all?: boolean } = {}) {
+    const query = new URLSearchParams()
+    if (input.workspace) query.set('workspace', input.workspace)
+    if (input.includeDeleted) query.set('include_deleted', 'true')
+    if (input.all) query.set('all', 'true')
+    return this.request(`/v1/memory${query.size ? `?${query}` : ''}`, MemoryListResponse)
+  }
+
+  createMemory(input: z.input<typeof MemoryCreateRequest>) {
+    return this.request('/v1/memory', MemoryResponse, {
+      method: 'POST',
+      body: MemoryCreateRequest.parse(input)
+    })
+  }
+
+  updateMemory(id: string, workspace: string | undefined, input: z.input<typeof MemoryUpdateRequest>) {
+    const query = workspace ? `?workspace=${encodeURIComponent(workspace)}` : ''
+    return this.request(`/v1/memory/${segment(id)}${query}`, MemoryResponse, {
+      method: 'PATCH',
+      body: MemoryUpdateRequest.parse(input)
+    })
+  }
+
+  deleteMemory(id: string, workspace?: string) {
+    const query = workspace ? `?workspace=${encodeURIComponent(workspace)}` : ''
+    return this.request(`/v1/memory/${segment(id)}${query}`, MemoryResponse, { method: 'DELETE' })
+  }
+
+  mcpOAuth() {
+    return this.request('/v1/mcp/oauth', McpOAuthDiagnosticsResponse)
+  }
+
+  authorizeMcp(serverId: string) {
+    return this.request(`/v1/mcp/oauth/${segment(serverId)}`, McpOAuthAuthorizeResponse, { method: 'POST' })
+  }
+
+  clearMcpOAuth(serverId?: string) {
+    return this.request(serverId ? `/v1/mcp/oauth/${segment(serverId)}` : '/v1/mcp/oauth', McpOAuthClearResponse, {
+      method: 'DELETE'
+    })
+  }
+
+  mcpConfig() {
+    return this.request('/v1/mcp/config', McpConfigResponse)
+  }
+
+  putMcpServer(serverId: string, input: z.input<typeof McpServerConfig>) {
+    return this.request(`/v1/mcp/config/${segment(serverId)}`, McpConfigResponse, {
+      method: 'PUT',
+      body: McpServerConfig.parse(input)
+    })
+  }
+
+  deleteMcpServer(serverId: string) {
+    return this.request(`/v1/mcp/config/${segment(serverId)}`, McpConfigResponse, { method: 'DELETE' })
+  }
+
+  setMcpServerEnabled(serverId: string, enabled: boolean) {
+    return this.request(`/v1/mcp/config/${segment(serverId)}`, McpConfigResponse, {
+      method: 'PATCH',
+      body: { enabled }
+    })
+  }
+
+  extensions(workspaceRoot?: string) {
+    const query = workspaceRoot ? `?workspace_root=${encodeURIComponent(workspaceRoot)}` : ''
+    return this.request(`/v1/extensions${query}`, ExtensionListResponse)
+  }
+
+  inspectExtension(path: string) {
+    return this.request('/v1/extensions/inspect', ExtensionInspectionResponse, {
+      method: 'POST',
+      body: { path }
+    })
+  }
+
+  installExtension(input:
+    | { source: 'archive' | 'development'; path: string; grantedPermissions: string[]; select?: boolean; enable?: boolean }
+    | { source: 'index'; indexUrl: string; extensionId: string; version: string; grantedPermissions: string[]; select?: boolean; enable?: boolean }
+  ) {
+    return this.request('/v1/extensions/install', ExtensionVersionMutationResponse, {
+      method: 'POST',
+      body: { select: true, enable: true, ...input }
+    })
+  }
+
+  selectExtensionVersion(id: string, version: string) {
+    return this.request(`/v1/extensions/${segment(id)}/select`, ExtensionChangedResponse, {
+      method: 'POST',
+      body: { version }
+    })
+  }
+
+  setExtensionEnabled(id: string, enabled: boolean, workspaceRoot?: string) {
+    return this.request(`/v1/extensions/${segment(id)}/${enabled ? 'enable' : 'disable'}`, ExtensionChangedResponse, {
+      method: 'POST',
+      body: workspaceRoot ? { workspaceRoot } : {}
+    })
+  }
+
+  setExtensionPermissions(id: string, workspaceRoot: string, expectedVersion: string, permissions: string[] | null) {
+    return this.request(`/v1/extensions/${segment(id)}/permissions`, ExtensionChangedResponse, {
+      method: 'PUT',
+      body: { workspaceRoot, expectedVersion, permissions }
+    })
+  }
+
+  rollbackExtension(id: string) {
+    return this.request(`/v1/extensions/${segment(id)}/rollback`, ExtensionChangedResponse, { method: 'POST' })
+  }
+
+  reloadExtension(id: string) {
+    return this.request(`/v1/extensions/${segment(id)}/reload`, ExtensionVersionMutationResponse, { method: 'POST' })
+  }
+
+  retryExtension(id: string) {
+    return this.request(`/v1/extensions/${segment(id)}/retry`, ExtensionDiagnosticResponse, { method: 'POST' })
+  }
+
+  extensionJobs(limit = 100) {
+    return this.request(`/v1/extensions/jobs?limit=${Math.max(1, Math.min(500, Math.floor(limit)))}`, ExtensionJobsResponse)
+  }
+
+  cancelExtensionJob(jobId: string) {
+    return this.request(`/v1/extensions/jobs/${segment(jobId)}/cancel`, ExtensionJobCancelResponse, {
+      method: 'POST'
+    })
+  }
+
+  uninstallExtension(id: string) {
+    return this.request(`/v1/extensions/${segment(id)}`, z.object({
+      schemaVersion: z.literal(1),
+      removed: z.object({ extensionId: z.string() }),
+      dataPreserved: z.boolean()
+    }), { method: 'DELETE' })
   }
 
   modelConnections() {
@@ -335,6 +740,7 @@ export class KunTuiClient {
     const sleep = input.sleep ?? abortableDelay
     while (!input.signal.aborted) {
       try {
+        await this.refreshConnection()
         const response = await this.fetchImpl(
           `${this.baseUrl}/v1/model-connections/events?since_revision=${revision}`,
           {
@@ -541,6 +947,19 @@ export class KunTuiClient {
     return this.request(`/v1/threads/${segment(threadId)}/todos`, ThreadTodosResponse)
   }
 
+  setThreadTodos(threadId: string, input: z.input<typeof SetThreadTodosRequest>) {
+    return this.request(`/v1/threads/${segment(threadId)}/todos`, ThreadTodosResponse, {
+      method: 'POST',
+      body: SetThreadTodosRequest.parse(input)
+    })
+  }
+
+  clearThreadTodos(threadId: string) {
+    return this.request(`/v1/threads/${segment(threadId)}/todos`, ClearThreadTodosResponse, {
+      method: 'DELETE'
+    })
+  }
+
   startTurn(threadId: string, input: StartTurnRequestValue) {
     return this.request(`/v1/threads/${segment(threadId)}/turns`, StartTurnResponse, {
       method: 'POST',
@@ -553,6 +972,25 @@ export class KunTuiClient {
       method: 'POST',
       body: { text }
     })
+  }
+
+  steeringQueue(threadId: string, turnId: string) {
+    return this.request(
+      `/v1/threads/${segment(threadId)}/turns/${segment(turnId)}/steering`,
+      SteeringQueueResponse
+    )
+  }
+
+  replaceSteeringQueue(
+    threadId: string,
+    turnId: string,
+    input: z.input<typeof ReplaceSteeringRequest>
+  ) {
+    return this.request(
+      `/v1/threads/${segment(threadId)}/turns/${segment(turnId)}/steering`,
+      SteeringQueueResponse,
+      { method: 'PATCH', body: ReplaceSteeringRequest.parse(input) }
+    )
   }
 
   interruptTurn(threadId: string, turnId: string, discard = false) {
@@ -620,6 +1058,7 @@ export class KunTuiClient {
     while (!input.signal.aborted) {
       input.onConnection?.(failures === 0 ? 'connecting' : 'reconnecting')
       try {
+        await this.refreshConnection()
         const response = await this.fetchImpl(
           `${this.baseUrl}/v1/threads/${segment(input.threadId)}/events?since_seq=${cursor}`,
           {
@@ -674,16 +1113,28 @@ export class KunTuiClient {
     schema: ZodType<T>,
     init: { method?: string; body?: unknown; headers?: Record<string, string> } = {}
   ): Promise<T> {
+    const method = init.method ?? 'GET'
+    const initialEndpoint = this.endpoint
     let response: Response
     try {
-      response = await this.fetchImpl(`${this.baseUrl}${path}`, {
-        method: init.method ?? 'GET',
+      response = await this.fetchImpl(`${initialEndpoint.baseUrl}${path}`, {
+        method,
         headers: this.headers(init.headers),
         ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
         signal: AbortSignal.timeout(30_000)
       })
     } catch {
+      const changed = await this.refreshConnection().catch(() => false)
+      if (changed && (method === 'GET' || method === 'HEAD')) {
+        return this.request(path, schema, init)
+      }
       throw new TuiClientError(`Kun runtime request failed for ${safePath(path)}`, undefined, 'connection_failed', safePath(path))
+    }
+    if (response.status === 401) {
+      const changed = await this.refreshConnection().catch(() => false)
+      if (changed && (method === 'GET' || method === 'HEAD')) {
+        return this.request(path, schema, init)
+      }
     }
     if (!response.ok) throw await responseError(response, safePath(path), this.runtimeToken)
     let body: unknown
@@ -697,6 +1148,27 @@ export class KunTuiClient {
       throw new TuiClientError(`Kun runtime response did not match the client contract for ${safePath(path)}`, response.status, 'invalid_response', safePath(path))
     }
     return parsed.data
+  }
+
+  private refreshConnection(): Promise<boolean> {
+    if (!this.connectionResolver) return Promise.resolve(false)
+    if (this.connectionRefresh) return this.connectionRefresh
+    const previous = this.endpoint
+    let refresh: Promise<boolean>
+    refresh = this.connectionResolver()
+      .then((connection) => {
+        const next = {
+          baseUrl: connection.baseUrl.replace(/\/$/, ''),
+          runtimeToken: connection.runtimeToken
+        }
+        this.endpoint = next
+        return next.baseUrl !== previous.baseUrl || next.runtimeToken !== previous.runtimeToken
+      })
+      .finally(() => {
+        if (this.connectionRefresh === refresh) this.connectionRefresh = undefined
+      })
+    this.connectionRefresh = refresh
+    return refresh
   }
 
   private headers(extra: Record<string, string> = {}): Headers {

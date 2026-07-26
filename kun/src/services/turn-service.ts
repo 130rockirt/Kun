@@ -5,6 +5,7 @@ import type {
   RewindThreadResponse,
   StartTurnRequest,
   StartTurnResponse,
+  SteeringEntry,
   Turn,
   TurnStatus
 } from '../contracts/turns.js'
@@ -193,6 +194,7 @@ export class TurnService {
             providerId: input.request.providerId,
             accountId: input.request.accountId,
             reasoningEffort: input.request.reasoningEffort,
+            clientSurface: input.request.clientSurface,
             attachmentIds,
             composerContexts,
             guiPlan: input.request.guiPlan,
@@ -255,6 +257,7 @@ export class TurnService {
         ...(started.turn.providerId ? { providerId: started.turn.providerId } : {}),
         ...(started.turn.accountId ? { accountId: started.turn.accountId } : {}),
         ...(input.request.reasoningEffort ? { reasoningEffort: input.request.reasoningEffort } : {}),
+        ...(started.turn.clientSurface ? { clientSurface: started.turn.clientSurface } : {}),
         ...(started.turn.mode ? { mode: started.turn.mode } : {})
       })
       await this.deps.events.record({
@@ -363,6 +366,40 @@ export class TurnService {
       ...(input.displayText ? { displayText: input.displayText } : {}),
       ...(input.messageSource ? { messageSource: input.messageSource } : {})
     })
+  }
+
+  async steeringQueue(input: { threadId: string; turnId: string }): Promise<SteeringEntry[]> {
+    const current = await this.deps.threadStore.get(input.threadId)
+    const turn = current?.turns.find((candidate) => candidate.id === input.turnId)
+    if (!turn) throw new Error(`turn not found: ${input.turnId}`)
+    return this.deps.steering.peek(input.turnId)
+  }
+
+  async replaceSteering(input: {
+    threadId: string
+    turnId: string
+    entries: readonly SteeringEntry[]
+  }): Promise<SteeringEntry[]> {
+    let entries: SteeringEntry[] = []
+    await this.withThreadMutation(input.threadId, async () => {
+      const current = await this.deps.threadStore.get(input.threadId)
+      const turn = current?.turns.find((candidate) => candidate.id === input.turnId)
+      if (!turn) throw new Error(`turn not found: ${input.turnId}`)
+      if (turn.status !== 'running' || !this.inflightTurns.has(input.turnId)) {
+        throw new TurnConflictError(`turn is not active: ${input.turnId}`)
+      }
+      if (!this.deps.steering.replace(input.turnId, input.entries)) {
+        throw new TurnConflictError(`turn is no longer accepting steering or the replacement exceeds its capacity: ${input.turnId}`)
+      }
+      entries = this.deps.steering.peek(input.turnId)
+    })
+    await this.deps.events.record({
+      kind: 'turn_steering_updated',
+      threadId: input.threadId,
+      turnId: input.turnId,
+      entries
+    })
+    return entries
   }
 
   async interruptTurn(input: { threadId: string; turnId: string; discard?: boolean }): Promise<{ status: TurnStatus }> {

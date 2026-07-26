@@ -328,6 +328,7 @@ async function runChild(
     ...(common.inheritedReasoningEffort ? { inheritedReasoningEffort: common.inheritedReasoningEffort } : {}),
     approvalPolicy: context.approvalPolicy,
     ...(context.sandboxMode ? { sandboxMode: context.sandboxMode } : {}),
+    ...(context.clientSurface ? { clientSurface: context.clientSurface } : {}),
     ...(context.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
     ...(common.detach ? { detach: true } : {}),
     ...(common.returnFormat ? { returnFormat: common.returnFormat } : {}),

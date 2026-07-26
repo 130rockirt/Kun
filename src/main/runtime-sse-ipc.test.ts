@@ -230,6 +230,60 @@ describe('runtime-sse-ipc', () => {
     expect(allEvents.map((event: any) => event.seq)).toEqual([7, 8])
   })
 
+  it('re-resolves the shared runtime URL and token before reconnecting', async () => {
+    registerRuntimeSseIpc({
+      ipcMain: mockIpcMain,
+      store: mockStore,
+      ensureRuntime: mockEnsureRuntime,
+      logError: mockLogError
+    })
+    const startHandler = handlers.get('runtime:sse:start')
+    expect(startHandler).toBeDefined()
+
+    const first = {
+      agents: { kun: { port: 18899, runtimeToken: 'first-token' } }
+    }
+    const second = {
+      agents: { kun: { port: 18900, runtimeToken: 'second-token' } }
+    }
+    mockStore.load
+      .mockResolvedValueOnce(first)
+      .mockResolvedValueOnce(first)
+      .mockResolvedValueOnce(second)
+      .mockResolvedValue(second)
+    mockEnsureRuntime.mockImplementation(async (settings: unknown) => settings)
+    mockFetch.mockImplementation(async () => {
+      if (mockFetch.mock.calls.length === 1) {
+        return {
+          ok: true,
+          status: 200,
+          body: mockReadableStream([
+            'id: 4\ndata: {"text": "before restart"}\n\n',
+            '__ERROR__'
+          ])
+        }
+      }
+      return { ok: false, status: 400, body: null }
+    })
+
+    const started = await startHandler!(mockEvent, {
+      threadId: 'thread-runtime-restart',
+      sinceSeq: 0
+    })
+    await vi.advanceTimersByTimeAsync(750)
+
+    expect(mockFetch).toHaveBeenCalledTimes(2)
+    expect(mockFetch.mock.calls[0][0].toString()).toContain('127.0.0.1:18899')
+    expect(mockFetch.mock.calls[1][0].toString()).toContain('127.0.0.1:18900')
+    expect(new Headers(mockFetch.mock.calls[0][1].headers).get('authorization'))
+      .toBe('Bearer first-token')
+    expect(new Headers(mockFetch.mock.calls[1][1].headers).get('authorization'))
+      .toBe('Bearer second-token')
+    expect(mockFetch.mock.calls[1][0].toString()).toContain('since_seq=4')
+
+    await handlers.get('runtime:sse:stop')!(mockEvent, started.streamId)
+  })
+
   it('does not advance the reconnect cursor until the renderer acknowledges a batch', async () => {
     registerRuntimeSseIpc({
       ipcMain: mockIpcMain,

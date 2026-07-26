@@ -3,9 +3,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { buildRuntimeCapabilityManifest } from '../contracts/capabilities.js'
+import { publishRuntimeDiscovery } from '../server/runtime-discovery.js'
 import {
   hasUnpublishedGuiRuntime,
   modelConnectionSnapshotFromGuiSettings,
+  projectModelSelectionToGuiSettings,
   readGuiSharedSettings,
   resolveLegacyGuiRuntime,
   syncGuiProviderCatalogToConfig
@@ -155,11 +157,41 @@ describe('GUI settings bridge', () => {
     expect(config.capabilities.futureGuiCapability).toEqual({ enabled: true, protocol: 'future-v2' })
     expect((await stat(configPath)).mode & 0o777).toBe(0o600)
     expect(result?.applyRequest.serve?.providers?.codex?.models).toEqual(['gpt-5.6-luna', 'gpt-5.6-sol'])
+    expect(result?.applyRequest.modelSelection).toEqual({
+      providerId: 'codex',
+      model: 'gpt-5.6-luna'
+    })
     expect(result?.applyRequest.models?.profiles?.['gpt-5.6-luna']?.reasoning).toEqual({
       supportedEfforts: ['low', 'high'],
       defaultEffort: 'low',
       requestProtocol: 'openai-responses'
     })
+  })
+
+  it('projects only the shared default back to GUI settings and preserves secrets and unrelated fields', async () => {
+    const fixture = await createFixture()
+    const settings = await readGuiSharedSettings({
+      env: { KUN_GUI_SETTINGS_PATH: fixture.settingsPath },
+      platform: 'darwin',
+      homeDir: fixture.home
+    })
+    const projected = await projectModelSelectionToGuiSettings(settings!, {
+      defaultProviderId: 'kimi-code',
+      defaultModel: 'kimi-for-coding-highspeed'
+    })
+    const raw = JSON.parse(await readFile(fixture.settingsPath, 'utf8'))
+
+    expect(projected).toMatchObject({
+      defaultProviderId: 'kimi-code',
+      defaultModel: 'kimi-for-coding-highspeed'
+    })
+    expect(raw.agents.kun).toMatchObject({
+      providerId: 'kimi-code',
+      model: 'kimi-for-coding-highspeed',
+      runtimeToken: 'legacy-runtime-secret'
+    })
+    expect(raw.provider.providers.find((provider: { id: string }) => provider.id === 'codex')?.apiKey)
+      .toBe('gui-secret-codex')
   })
 
   it('does not import GUI metadata into an unrelated explicit data dir', async () => {
@@ -186,6 +218,32 @@ describe('GUI settings bridge', () => {
       headers: { 'content-type': 'application/json' }
     })
     expect(await hasUnpublishedGuiRuntime(settings!, fetchImpl as typeof fetch)).toBe(true)
+  })
+
+  it('does not let stale discovery hide an older GUI-private writer', async () => {
+    const fixture = await createFixture()
+    const settings = await readGuiSharedSettings({
+      env: { KUN_GUI_SETTINGS_PATH: fixture.settingsPath },
+      platform: 'darwin',
+      homeDir: fixture.home
+    })
+    await publishRuntimeDiscovery(fixture.dataDir, {
+      instanceId: 'stale-shared',
+      pid: process.pid,
+      startedAt: '2026-07-20T00:00:00.000Z',
+      host: '127.0.0.1',
+      port: 19998,
+      baseUrl: 'http://127.0.0.1:19998',
+      runtimeToken: 'stale-token',
+      insecure: false
+    })
+    const fetchImpl = vi.fn(async (url: string | URL | Request) => {
+      if (String(url).includes(':19998/')) return new Response('', { status: 404 })
+      return Response.json({ dataDir: fixture.dataDir })
+    }) as unknown as typeof fetch
+
+    expect(await hasUnpublishedGuiRuntime(settings!, fetchImpl)).toBe(true)
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
   })
 
   it('normalizes and attaches to a verified legacy GUI runtime without exposing credentials', async () => {

@@ -18,6 +18,7 @@ import type {
   ToolHostContext,
   ToolProviderKind
 } from '../ports/tool-host.js'
+import type { TurnClientSurface } from '../contracts/turns.js'
 
 /** Terminal status exposed by the public AgentLoop turn boundary. */
 export type TurnExecutionStatus = 'completed' | 'failed' | 'aborted'
@@ -59,6 +60,7 @@ export type PreparedTurnContext = Readonly<{
   clientSurface: TurnClientSurface
   model: string
   mode: 'agent' | 'plan'
+  clientSurface: TurnClientSurface
   dedicatedSvgTurn: boolean
   planContextStale: boolean
   activePlanContext?: GuiPlanContext

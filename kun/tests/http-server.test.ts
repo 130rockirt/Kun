@@ -38,7 +38,7 @@ describe('HTTP server', () => {
     expect(body).toEqual({ status: 'ok', service: 'kun', mode: 'serve' })
   })
 
-  it('returns runtime info with disabled capability defaults', async () => {
+  it('returns runtime info with accurate CLI and disabled provider capability defaults', async () => {
     const h = buildHarness()
     const response = await dispatchRequest(
       h.router,
@@ -55,7 +55,12 @@ describe('HTTP server', () => {
         mcp?: { available?: boolean; reason?: string }
         web?: { available?: boolean; fetch?: { available?: boolean } }
         attachments?: { available?: boolean; allowedMimeTypes?: string[] }
-        cli?: { serve?: { available?: boolean }; run?: { available?: boolean; reason?: string } }
+        cli?: {
+          serve?: { available?: boolean }
+          run?: { available?: boolean; reason?: string }
+          chat?: { available?: boolean; reason?: string }
+          exec?: { available?: boolean; reason?: string }
+        }
         model?: { inputModalities?: string[]; supportsToolCalling?: boolean; contextWindowTokens?: number }
       }
     }
@@ -69,7 +74,9 @@ describe('HTTP server', () => {
     expect(body.capabilities?.web?.fetch?.available).toBe(false)
     expect(body.capabilities?.attachments?.allowedMimeTypes).toContain('image/png')
     expect(body.capabilities?.cli?.serve?.available).toBe(true)
-    expect(body.capabilities?.cli?.run?.available).toBe(false)
+    expect(body.capabilities?.cli?.run?.available).toBe(true)
+    expect(body.capabilities?.cli?.chat?.available).toBe(true)
+    expect(body.capabilities?.cli?.exec?.available).toBe(true)
   })
 
   it('requires auth for runtime info', async () => {

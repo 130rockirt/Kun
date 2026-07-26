@@ -7,6 +7,7 @@ import {
   backgroundShellNoticeDisplayText,
   formatBackgroundShellCompletionNotice
 } from './background-shell-notice.js'
+import { resolveTurnClientSurface } from '../loop/turn-context-resolver.js'
 
 export type BackgroundShellRuntimeDeps = {
   events: RuntimeEventRecorder
@@ -199,10 +200,13 @@ export class BackgroundShellRuntime {
       }
     }
     if (!this.runTurn) return
+    const sourceTurn = thread.turns.find((turn) => turn.id === record.turnId) ?? thread.turns.at(-1)
     const started = await this.deps.turns.startTurn({
       threadId: record.threadId,
       request: {
         prompt: notice,
+        ...(sourceTurn ? { clientSurface: resolveTurnClientSurface(sourceTurn) } : {}),
+        ...(sourceTurn?.disableUserInput ? { disableUserInput: true } : {}),
         ...noticeMeta
       }
     })

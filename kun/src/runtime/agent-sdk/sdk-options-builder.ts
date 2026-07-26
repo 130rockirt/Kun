@@ -39,7 +39,7 @@ export const DEFAULT_SDK_BUILTIN_TOOLS: readonly string[] = [
 /**
  * Claude Code built-in tools we suppress on the kun-driven SDK path.
  * AskUserQuestion has no UI in this embedding (the model would ask and get no
- * answer); kun's own bridged `user_input` panel handles interactive questions.
+ * answer); kun's own bridged `user_input` gate handles interactive questions.
  */
 export const DEFAULT_SDK_DISALLOWED_TOOLS: readonly string[] = ['AskUserQuestion']
 
@@ -157,8 +157,8 @@ export type ToolApprovalDecider = (
 
 /**
  * Bridge kun's approval engine to the SDK `canUseTool` callback. Every tool the
- * SDK is about to run is adjudicated by kun (which can route to the GUI
- * approval panel). A throwing decider denies closed (fail-safe).
+ * SDK is about to run is adjudicated by kun (which can route to the initiating
+ * client's approval UI). A throwing decider denies closed (fail-safe).
  */
 export function buildCanUseTool(decide: ToolApprovalDecider): SdkCanUseTool {
   return async (toolName, input): Promise<SdkPermissionResult> => {

@@ -33,6 +33,7 @@ function activeThread() {
       id: turnId,
       threadId,
       prompt: 'work',
+      clientSurface: 'tui',
       status: 'completed',
       createdAt
     })]
@@ -154,6 +155,13 @@ describe('GoalTurnCoordinator', () => {
       timer: null
     })
     expect(progressing.timers.filter((entry) => !entry.cancelled)).toHaveLength(1)
+    progressing.timers.find((entry) => !entry.cancelled)?.fn()
+    await vi.waitFor(() => {
+      expect(progressing.startTurn).toHaveBeenCalledWith(expect.objectContaining({
+        threadId,
+        request: expect.objectContaining({ clientSurface: 'tui' })
+      }))
+    })
 
     const suppressed = harness()
     await suppressed.threadStore.upsert(activeThread())

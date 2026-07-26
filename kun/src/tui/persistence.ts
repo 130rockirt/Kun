@@ -13,14 +13,23 @@ const TuiPersistentStateSchema = z.object({
   schemaVersion: z.literal(1),
   recentModels: z.array(RecentModelSchema).max(20).default([]),
   favoriteModels: z.array(z.string().min(1)).max(500).default([]),
-  reasoningByModel: z.record(z.string(), ModelReasoningEffort).default({})
+  reasoningByModel: z.record(z.string(), ModelReasoningEffort).default({}),
+  redoTargets: z.record(z.string().min(1), z.string().min(1)).default({}),
+  theme: z.enum(['kun', 'ocean', 'mono']).default('kun')
 }).strict()
 
 export type TuiRecentModel = z.infer<typeof RecentModelSchema>
 export type TuiPersistentState = z.infer<typeof TuiPersistentStateSchema>
 
 export function emptyTuiPersistentState(): TuiPersistentState {
-  return { schemaVersion: 1, recentModels: [], favoriteModels: [], reasoningByModel: {} }
+  return {
+    schemaVersion: 1,
+    recentModels: [],
+    favoriteModels: [],
+    reasoningByModel: {},
+    redoTargets: {},
+    theme: 'kun'
+  }
 }
 
 export function tuiStatePath(dataDir: string): string {

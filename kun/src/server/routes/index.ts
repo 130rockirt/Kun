@@ -18,11 +18,13 @@ import {
 import { summarizeThread } from './threads-summarize.js'
 import {
   compactTurn,
+  getSteeringQueue,
   getTurn,
   interruptTurn,
   rewindThread,
   startTurn,
-  steerTurn
+  steerTurn,
+  replaceSteeringQueue
 } from './turns.js'
 import { startReview } from './review.js'
 import { buildEventStreamResponse, parseEventCursor } from './events.js'
@@ -36,6 +38,7 @@ import { runtimeInfoJsonResponse, runtimeToolDiagnosticsJsonResponse } from './r
 import { shutdownRuntime } from './runtime-shutdown.js'
 import {
   cancelModelConnectionOAuth,
+  clearModelCredential,
   claudeSdkStatus,
   connectModelConnection,
   deleteModelConnection,
@@ -52,11 +55,13 @@ import {
   updateModelConnectionGlobals
 } from './model-connections.js'
 import { applyRuntimeConfig } from './runtime-config.js'
-import { listSkills } from './skills.js'
+import { listSkills, refreshSkills, setSkillsEnabled } from './skills.js'
+import { setLocalRuntimeCapability } from './runtime-capabilities.js'
 import {
   attachmentDiagnostics,
   getAttachmentContent,
   getAttachmentMetadata,
+  releaseAttachment,
   uploadAttachment
 } from './attachments.js'
 import {
@@ -68,6 +73,7 @@ import {
 } from './memory.js'
 import {
   delegationAbort,
+  delegationDetach,
   delegationDiagnostics,
   delegationProfiles
 } from './delegation.js'
@@ -77,6 +83,7 @@ import {
   backgroundShellStop
 } from './background-shells.js'
 import { authorizeMcpOAuth, clearMcpOAuth, mcpOAuthDiagnostics } from './mcp-oauth.js'
+import { deleteMcpConfig, listMcpConfig, patchMcpConfig, putMcpConfig } from './mcp-config.js'
 import { auditSupplyChainPackage, checkSupplyChainUpdate } from './supply-chain.js'
 import { isAuthorized, bearerToken } from '../auth.js'
 import { ApprovalConsentVerifier } from '../approval-consent.js'
@@ -200,6 +207,7 @@ export function buildRouter(runtime: ServerRuntime): Router {
       validation: runtime.extensionPlatform.validation,
       runtimeToken: runtime.runtimeToken,
       insecure: runtime.insecure,
+      ...(runtime.extensionPlatform.jobs ? { jobs: runtime.extensionPlatform.jobs } : {}),
       ...(runtime.extensionPlatform.bundledSeedResults
         ? { bundledSeedResults: runtime.extensionPlatform.bundledSeedResults }
         : {})
@@ -301,6 +309,10 @@ export function buildRouter(runtime: ServerRuntime): Router {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
     return replaceModelCredential(runtime.modelConnections, ctx.params.providerId, request)
   })
+  router.add('DELETE', '/v1/model-connections/:providerId/credential', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return clearModelCredential(runtime.modelConnections, ctx.params.providerId, request)
+  })
   router.add('DELETE', '/v1/model-connections/:providerId', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
     return deleteModelConnection(runtime.modelConnections, ctx.params.providerId, request)
@@ -316,6 +328,22 @@ export function buildRouter(runtime: ServerRuntime): Router {
   router.add('GET', '/v1/mcp/oauth', async (request) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
     return mcpOAuthDiagnostics(runtime)
+  })
+  router.add('GET', '/v1/mcp/config', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return listMcpConfig(runtime)
+  })
+  router.add('PUT', '/v1/mcp/config/:id', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return putMcpConfig(runtime, ctx.params.id, request)
+  })
+  router.add('PATCH', '/v1/mcp/config/:id', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return patchMcpConfig(runtime, ctx.params.id, request)
+  })
+  router.add('DELETE', '/v1/mcp/config/:id', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return deleteMcpConfig(runtime, ctx.params.id)
   })
   router.add('DELETE', '/v1/mcp/oauth', async (request) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
@@ -475,6 +503,18 @@ export function buildRouter(runtime: ServerRuntime): Router {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
     return listThreadGraphReferences(runtime, ctx.params.id)
   })
+  router.add('POST', '/v1/skills/refresh', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return refreshSkills(runtime)
+  })
+  router.add('PATCH', '/v1/skills/config', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return setSkillsEnabled(runtime, request)
+  })
+  router.add('PATCH', '/v1/runtime/capabilities/:id', async (request, context) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return setLocalRuntimeCapability(runtime, context.params.id, request)
+  })
   router.add('POST', '/v1/supply-chain/audit', async (request) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
     return auditSupplyChainPackage(runtime, request)
@@ -486,6 +526,10 @@ export function buildRouter(runtime: ServerRuntime): Router {
   router.add('POST', '/v1/attachments', async (request) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
     return uploadAttachment(runtime.attachmentStore, request)
+  })
+  router.add('DELETE', '/v1/attachments/:id', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return releaseAttachment(runtime, ctx.params.id, request)
   })
   router.add('GET', '/v1/attachments/diagnostics', async (request) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
@@ -530,6 +574,10 @@ export function buildRouter(runtime: ServerRuntime): Router {
   router.add('POST', '/v1/delegation/abort/:childId', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
     return delegationAbort(runtime.delegationRuntime, ctx.params.childId)
+  })
+  router.add('POST', '/v1/delegation/detach/:childId', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return delegationDetach(runtime.delegationRuntime, ctx.params.childId)
   })
   router.add('GET', '/v1/background-shells', async (request) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
@@ -642,6 +690,14 @@ export function buildRouter(runtime: ServerRuntime): Router {
   router.add('POST', '/v1/threads/:id/turns/:turnId/steer', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
     return steerTurn(runtime.turnService, ctx.params.id, ctx.params.turnId, request)
+  })
+  router.add('GET', '/v1/threads/:id/turns/:turnId/steering', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return getSteeringQueue(runtime.turnService, ctx.params.id, ctx.params.turnId)
+  })
+  router.add('PATCH', '/v1/threads/:id/turns/:turnId/steering', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return replaceSteeringQueue(runtime.turnService, ctx.params.id, ctx.params.turnId, request)
   })
   router.add('POST', '/v1/threads/:id/turns/:turnId/interrupt', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()

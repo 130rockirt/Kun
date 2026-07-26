@@ -51,6 +51,7 @@ export const AttachmentUploadRequest = z.object({
   localFilePath: z.string().min(1).optional(),
   textFallback: AttachmentTextFallback.optional(),
   visualPreview: AttachmentVisualPreview.optional(),
+  leaseId: z.string().min(8).max(128).optional(),
   threadId: z.string().min(1).optional(),
   workspace: z.string().min(1).optional()
 }).strict()
@@ -60,6 +61,11 @@ export const AttachmentUploadResponse = z.object({
   attachment: AttachmentMetadata
 }).strict()
 export type AttachmentUploadResponse = z.infer<typeof AttachmentUploadResponse>
+
+export const AttachmentReleaseResponse = z.object({
+  released: z.boolean()
+}).strict()
+export type AttachmentReleaseResponse = z.infer<typeof AttachmentReleaseResponse>
 
 export const AttachmentDiagnostics = z.object({
   enabled: z.boolean(),

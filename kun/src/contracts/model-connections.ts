@@ -89,6 +89,14 @@ export const ModelConnectionCredentialRequestSchema = z.object({
 export const ModelConnectionPatchRequestSchema = z.object({
   expectedRevision: z.number().int().nonnegative(),
   name: z.string().min(1).max(120).optional(),
+  kind: z.enum([
+    'http',
+    'agent-sdk',
+    'antigravity-cli',
+    'cursor-sdk',
+    'gemini-code-assist'
+  ]).optional(),
+  authType: z.enum(['api-key', 'oauth', 'subscription']).optional(),
   baseUrl: z.string().url().optional(),
   endpointFormat: z.enum(MODEL_ENDPOINT_FORMATS).optional(),
   models: z.array(z.string().min(1).max(512)).max(500).optional(),

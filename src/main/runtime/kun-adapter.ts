@@ -18,17 +18,14 @@ import {
   stopKunChildAndWait
 } from '../kun-process'
 import { getKunBaseUrl } from '../kun-base-url'
-import { RuntimeInfoResponse } from '../../../kun/src/contracts/runtime-info.js'
-import { isLoopbackHost } from '../../../kun/src/server/loopback-host.js'
+import type { RuntimeDiscoveryRecord } from '../../../kun/src/server/runtime-discovery.js'
 import {
-  readRuntimeDiscovery,
-  type RuntimeDiscoveryRecord
-} from '../../../kun/src/server/runtime-discovery.js'
-import { stopSharedRuntime } from '../../../kun/src/cli/shared-runtime.js'
+  resolveSharedRuntime,
+  stopSharedRuntime
+} from '../../../kun/src/cli/shared-runtime.js'
 
 const KUN_RUNTIME_ID = 'kun' as const
 let resolvedConnection: RuntimeDiscoveryRecord | null = null
-let resolvedDataDir: string | null = null
 
 function appRoot(): string {
   return app.isPackaged
@@ -55,8 +52,12 @@ export const kunRuntimeAdapter = {
     return ensureResolvedKunRuntime(settings)
   },
 
+  /**
+   * Release GUI-local runtime state only. The detached shared daemon belongs
+   * to the data directory, not to this Electron process, so ordinary client
+   * shutdown must never stop it.
+   */
   async stopAndWait(): Promise<void> {
-    if (resolvedDataDir) await stopSharedRuntime(resolvedDataDir).catch(() => undefined)
     resolvedConnection = null
     await stopKunChildAndWait()
   },
@@ -77,7 +78,7 @@ export const kunRuntimeAdapter = {
 
   async stopSharedAndWait(settings: AppSettingsV1): Promise<void> {
     const dataDir = expandDataDir(getKunRuntimeSettings(settings).dataDir)
-    await stopSharedRuntime(dataDir).catch(() => undefined)
+    await stopSharedRuntime(dataDir)
     resolvedConnection = null
     await stopKunChildAndWait()
   },
@@ -110,49 +111,17 @@ async function ensureResolvedKunRuntime(settings: AppSettingsV1): Promise<void> 
   if (await refreshResolvedKunRuntime(settings)) return
   const connection = await startKunSharedRuntime(settings)
   resolvedConnection = connection?.discovery ?? null
-  resolvedDataDir = expandDataDir(getKunRuntimeSettings(settings).dataDir)
 }
 
 async function refreshResolvedKunRuntime(settings: AppSettingsV1): Promise<boolean> {
   const dataDir = expandDataDir(getKunRuntimeSettings(settings).dataDir)
-  resolvedDataDir = dataDir
-  const discovery = await readRuntimeDiscovery(dataDir).catch(() => null)
-  if (!discovery || !safeLoopbackDiscovery(discovery)) {
+  const connection = await resolveSharedRuntime(dataDir).catch(() => null)
+  if (!connection) {
     resolvedConnection = null
     return false
   }
-  try {
-    const response = await fetch(`${discovery.baseUrl}/v1/runtime/info`, {
-      headers: discovery.runtimeToken
-        ? { authorization: `Bearer ${discovery.runtimeToken}` }
-        : {},
-      signal: AbortSignal.timeout(2_000)
-    })
-    if (!response.ok) throw new Error(`HTTP ${response.status}`)
-    const info = RuntimeInfoResponse.parse(await response.json())
-    if (
-      info.instanceId !== discovery.instanceId ||
-      info.pid !== discovery.pid ||
-      info.startedAt !== discovery.startedAt
-    ) throw new Error('runtime identity mismatch')
-    resolvedConnection = discovery
-    return true
-  } catch {
-    resolvedConnection = null
-    return false
-  }
-}
-
-function safeLoopbackDiscovery(record: RuntimeDiscoveryRecord): boolean {
-  try {
-    const url = new URL(record.baseUrl)
-    return url.protocol === 'http:' &&
-      isLoopbackHost(url.hostname) &&
-      isLoopbackHost(record.host) &&
-      Number(url.port || '80') === record.port
-  } catch {
-    return false
-  }
+  resolvedConnection = connection.discovery
+  return true
 }
 
 function expandDataDir(value: string): string {

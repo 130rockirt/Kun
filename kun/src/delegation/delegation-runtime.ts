@@ -17,12 +17,20 @@ import {
 } from '../contracts/policy.js'
 import type { RuntimeEventRecorder } from '../services/runtime-event-recorder.js'
 import type { UsageSnapshot } from '../contracts/usage.js'
+import type { TurnClientSurface } from '../contracts/turns.js'
+import {
+  ChildRunActivity,
+  type ChildRunActivity as ChildRunActivityValue,
+  type RuntimeEvent
+} from '../contracts/events.js'
+import type { EventBus } from '../ports/event-bus.js'
 import type { ThreadStore } from '../ports/thread-store.js'
 import type { TurnService } from '../services/turn-service.js'
 import { loadWorkspaceAgentProfiles } from './workspace-agents.js'
 import type { SubagentRoutingDocument } from './subagent-router.js'
 import { BUILTIN_SUBAGENT_PROFILES } from './builtin-profiles.js'
 import { BUILTIN_AGENT_CATALOG_BY_ID } from './builtin-agent-catalog.js'
+import { resolveTurnClientSurface } from '../loop/turn-context-resolver.js'
 
 const ChildRunUsage = z.object({
   promptTokens: z.number().int().nonnegative().default(0),
@@ -156,6 +164,8 @@ export const ChildRunRecord = z.object({
   inheritedHistoryItems: z.number().int().nonnegative().optional(),
   /** Tool calls the child executed during its run. */
   toolInvocations: z.number().int().nonnegative().optional(),
+  /** Latest safe activity label mirrored from the child thread. */
+  activity: ChildRunActivity.optional(),
   /** Wall-clock spent running (after leaving the queue). */
   durationMs: z.number().int().nonnegative().optional(),
   /** Wall-clock spent waiting for a parallel slot before starting. */
@@ -188,6 +198,7 @@ export type ChildRunExecutor = (input: {
   workspace?: string
   model?: string
   providerId?: string
+  clientSurface?: TurnClientSurface
   systemPrompt?: string
   /** When true with a non-empty systemPrompt, skip prepending the Kun base prefix. */
   omitBasePrompt?: boolean
@@ -277,6 +288,19 @@ type SlotWaiter = {
 
 type RunTurnFn = (threadId: string, turnId: string) => Promise<unknown>
 
+type ChildExecutionState = {
+  record: ChildRunRecord
+  commits: Promise<void>
+}
+
+type ForegroundChildControl = {
+  state: ChildExecutionState
+  controller: AbortController
+  parentThreadId: string
+  unlinkParent: () => void
+  resolveDetached: () => void
+}
+
 export class DelegationRuntime {
   private active = 0
   private childSeq = 0
@@ -295,12 +319,20 @@ export class DelegationRuntime {
   private readonly detachedAborts = new Map<string, AbortController>()
   /** Parent thread for each live detached child, used by thread deletion. */
   private readonly detachedParentThreads = new Map<string, string>()
+  /**
+   * Foreground children are executed through an independently-owned signal
+   * that is linked to the parent until the user presses Ctrl+B. Keeping this
+   * bridge in the runtime (rather than the TUI) makes dynamic backgrounding
+   * safe for every client and lets the pending delegate_task return.
+   */
+  private readonly foregroundChildren = new Map<string, ForegroundChildControl>()
   private runTurn: RunTurnFn | null = null
 
   constructor(private options: {
     config: SubagentsCapabilityConfig
     store: FileDelegationStore
     events?: RuntimeEventRecorder
+    eventBus?: EventBus
     threadStore?: ThreadStore
     turns?: TurnService
     nowIso?: () => string
@@ -332,6 +364,7 @@ export class DelegationRuntime {
     workspace?: string
     model?: string
     providerId?: string
+    clientSurface?: TurnClientSurface
     /** Effective parent turn/thread model inherited together with inheritedProviderId. */
     inheritedModel?: string
     /** Parent turn/thread provider id inherited by delegate_task when no profile overrides it. */
@@ -536,10 +569,11 @@ export class DelegationRuntime {
       if (input.signal.aborted) logIgnoredParentAbort()
       else input.signal.addEventListener('abort', logIgnoredParentAbort, { once: true })
       console.warn(`[kun] detached subagent started with independent abort signal child=${record.id} parentThread=${input.parentThreadId} parentTurn=${input.parentTurnId}`)
+      const state: ChildExecutionState = { record, commits: Promise.resolve() }
       // Surface ChildRunExecutor's resolved fields via the closure shared with
       // the synchronous path. The same executor block runs inside executeChild.
       void this.executeChild({
-        record,
+        state,
         queuedAt,
         profileName,
         toolPolicy,
@@ -555,6 +589,7 @@ export class DelegationRuntime {
         promptPreamble,
         approvalPolicy: input.approvalPolicy,
         sandboxMode: input.sandboxMode,
+        clientSurface: input.clientSurface,
         guiDesignCanvas: input.guiDesignCanvas === true,
         resolvedReasoningEffort,
         returnFormat,
@@ -578,91 +613,73 @@ export class DelegationRuntime {
       return record
     }
 
-    try {
-      await this.acquireSlot(input.signal)
-    } catch (error) {
-      // Aborted while still queued — never started, so no slot to release.
-      record = ChildRunRecord.parse({
-        ...record,
-        status: 'aborted',
-        error: errorMessage(error),
-        updatedAt: this.now()
-      })
-      await this.options.store.upsert(record)
-      await this.recordChildEvent(record)
-      return record
+    const state: ChildExecutionState = { record, commits: Promise.resolve() }
+    const controller = new AbortController()
+    const abortFromParent = (): void => controller.abort()
+    if (input.signal.aborted) controller.abort()
+    else input.signal.addEventListener('abort', abortFromParent, { once: true })
+    let resolveDetached = (): void => undefined
+    const detached = new Promise<void>((resolve) => { resolveDetached = resolve })
+    const control: ForegroundChildControl = {
+      state,
+      controller,
+      parentThreadId: input.parentThreadId,
+      unlinkParent: () => input.signal.removeEventListener('abort', abortFromParent),
+      resolveDetached
+    }
+    this.foregroundChildren.set(record.id, control)
+    const execution = this.executeChild({
+      state,
+      queuedAt,
+      profileName,
+      toolPolicy,
+      resolvedModel,
+      resolvedProviderId,
+      resolvedSystemPrompt,
+      resolvedOmitBasePrompt,
+      resolvedAllowedTools,
+      resolvedBlockedTools,
+      resolvedBlockedMcpServers,
+      resolvedBlockedSkills,
+      skillsEnabled: resolvedSkillsEnabled,
+      promptPreamble,
+      approvalPolicy: input.approvalPolicy,
+      sandboxMode: input.sandboxMode,
+      clientSurface: input.clientSurface,
+      guiDesignCanvas: input.guiDesignCanvas === true,
+      resolvedReasoningEffort,
+      returnFormat,
+      workspace,
+      security,
+      onRunning: input.onRunning,
+      label: input.label,
+      parentThreadId: input.parentThreadId,
+      parentTurnId: input.parentTurnId,
+      prompt: input.prompt,
+      signal: controller.signal
+    })
+    const first = await Promise.race([
+      execution.then((settled) => ({ kind: 'settled' as const, settled })),
+      detached.then(() => ({ kind: 'detached' as const }))
+    ])
+    if (first.kind === 'settled') {
+      control.unlinkParent()
+      this.foregroundChildren.delete(record.id)
+      return first.settled
     }
 
-    const startedAt = this.now()
-    const queuedMs = elapsedMs(queuedAt, startedAt)
-    record = ChildRunRecord.parse({ ...record, status: 'running', startedAt, queuedMs, updatedAt: startedAt })
-    await this.options.store.upsert(record)
-    await this.recordChildEvent(record)
-    await notifyLifecycle(input.onRunning, record)
-    try {
-      const executor: ChildRunExecutor = this.options.executor ?? defaultExecutor
-      const result = await executeWithParentSignal(input.signal, (signal) => executor({
-        childId: id,
-        parentThreadId: input.parentThreadId,
-        parentTurnId: input.parentTurnId,
-        ...(input.label ? { label: input.label } : {}),
-        ...(profileName ? { profile: profileName } : {}),
-        prompt: input.prompt,
-        workspace,
-        model: resolvedModel,
-        ...(resolvedProviderId ? { providerId: resolvedProviderId } : {}),
-        ...(resolvedSystemPrompt ? { systemPrompt: resolvedSystemPrompt } : {}),
-        ...(resolvedOmitBasePrompt ? { omitBasePrompt: true } : {}),
-        ...(resolvedAllowedTools ? { allowedTools: resolvedAllowedTools } : {}),
-        ...(security ? { security } : {}),
-        ...(resolvedBlockedTools ? { blockedTools: resolvedBlockedTools } : {}),
-        ...(resolvedBlockedMcpServers ? { blockedMcpServers: resolvedBlockedMcpServers } : {}),
-        ...(resolvedBlockedSkills ? { blockedSkills: resolvedBlockedSkills } : {}),
-        skillsEnabled: resolvedSkillsEnabled,
-        toolPolicy,
-        ...(input.approvalPolicy ? { approvalPolicy: input.approvalPolicy } : {}),
-        ...(input.sandboxMode ? { sandboxMode: input.sandboxMode } : {}),
-        ...(promptPreamble ? { promptPreamble } : {}),
-        ...(input.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
-        ...(resolvedReasoningEffort ? { reasoningEffort: resolvedReasoningEffort } : {}),
-        returnFormat,
-        signal
-      }))
-      const finishedAt = this.now()
-      const usage = result.usage ?? record.usage
-      const contractError = childContractError(returnFormat, result.evidence)
-      record = ChildRunRecord.parse({
-        ...record,
-        status: contractError ? 'failed' : 'completed',
-        summary: result.summary,
-        evidence: result.evidence,
-        usage,
-        toolInvocations: result.toolInvocations,
-        prefixReused: result.prefixReused,
-        inheritedHistoryItems: result.inheritedHistoryItems,
-        ...(contractError ? { error: contractError } : {}),
-        durationMs: elapsedMs(startedAt, finishedAt),
-        updatedAt: finishedAt
+    // The tool call is released immediately, while the same child execution
+    // continues under the detached controller and reports back on completion.
+    control.unlinkParent()
+    this.foregroundChildren.delete(record.id)
+    void execution
+      .then((settled) => this.notifyDetachedChild(settled))
+      .catch(() => undefined)
+      .finally(() => {
+        this.detachedAborts.delete(record.id)
+        this.detachedParentThreads.delete(record.id)
       })
-      await this.options.store.upsert(record)
-      await this.recordChildEvent(record)
-      this.recordExternalUsage(record)
-      return record
-    } catch (error) {
-      const finishedAt = this.now()
-      record = ChildRunRecord.parse({
-        ...record,
-        status: input.signal.aborted ? 'aborted' : 'failed',
-        error: errorMessage(error),
-        durationMs: elapsedMs(startedAt, finishedAt),
-        updatedAt: finishedAt
-      })
-      await this.options.store.upsert(record)
-      await this.recordChildEvent(record)
-      return record
-    } finally {
-      this.releaseSlot()
-    }
+    return state.record
   }
 
   /**
@@ -673,7 +690,7 @@ export class DelegationRuntime {
    * detached runs nobody is awaiting them anyway.
    */
   private async executeChild(args: {
-    record: ChildRunRecord
+    state: ChildExecutionState
     queuedAt: string
     profileName: string | undefined
     toolPolicy: SubagentToolPolicy
@@ -689,6 +706,7 @@ export class DelegationRuntime {
     promptPreamble: string | undefined
     approvalPolicy: ApprovalPolicy | undefined
     sandboxMode: SandboxMode | undefined
+    clientSurface: TurnClientSurface | undefined
     guiDesignCanvas: boolean
     resolvedReasoningEffort: string | undefined
     returnFormat: ChildReturnFormat
@@ -701,27 +719,32 @@ export class DelegationRuntime {
     prompt: string
     signal: AbortSignal
   }): Promise<ChildRunRecord> {
-    let record = args.record
+    let record = args.state.record
     try {
       await this.acquireSlot(args.signal)
     } catch (error) {
-      record = ChildRunRecord.parse({
-        ...record,
+      record = await this.commitChildState(args.state, (current) => ChildRunRecord.parse({
+        ...current,
         status: 'aborted',
         error: errorMessage(error),
         updatedAt: this.now()
-      })
-      await this.options.store.upsert(record)
-      await this.recordChildEvent(record)
+      }))
       return record
     }
 
     const startedAt = this.now()
     const queuedMs = elapsedMs(args.queuedAt, startedAt)
-    record = ChildRunRecord.parse({ ...record, status: 'running', startedAt, queuedMs, updatedAt: startedAt })
-    await this.options.store.upsert(record)
-    await this.recordChildEvent(record)
+    record = await this.commitChildState(args.state, (current) => ChildRunRecord.parse({
+      ...current,
+      status: 'running',
+      startedAt,
+      queuedMs,
+      updatedAt: startedAt
+    }))
     await notifyLifecycle(args.onRunning, record)
+    const unsubscribeActivity = this.options.eventBus?.subscribe(record.id, (event) => {
+      void this.projectChildActivity(args.state, event)
+    })
     try {
       const executor: ChildRunExecutor = this.options.executor ?? defaultExecutor
       const result = await executeWithParentSignal(args.signal, (signal) => executor({
@@ -745,6 +768,7 @@ export class DelegationRuntime {
         toolPolicy: args.toolPolicy,
         ...(args.approvalPolicy ? { approvalPolicy: args.approvalPolicy } : {}),
         ...(args.sandboxMode ? { sandboxMode: args.sandboxMode } : {}),
+        ...(args.clientSurface ? { clientSurface: args.clientSurface } : {}),
         ...(args.promptPreamble ? { promptPreamble: args.promptPreamble } : {}),
         ...(args.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
         ...(args.resolvedReasoningEffort ? { reasoningEffort: args.resolvedReasoningEffort } : {}),
@@ -752,40 +776,101 @@ export class DelegationRuntime {
         signal
       }))
       const finishedAt = this.now()
-      const usage = result.usage ?? record.usage
       const contractError = childContractError(args.returnFormat, result.evidence)
-      record = ChildRunRecord.parse({
-        ...record,
+      record = await this.commitChildState(args.state, (current) => ChildRunRecord.parse({
+        ...current,
         status: contractError ? 'failed' : 'completed',
         summary: result.summary,
         evidence: result.evidence,
-        usage,
+        usage: result.usage ?? current.usage,
         toolInvocations: result.toolInvocations,
         prefixReused: result.prefixReused,
         inheritedHistoryItems: result.inheritedHistoryItems,
         ...(contractError ? { error: contractError } : {}),
         durationMs: elapsedMs(startedAt, finishedAt),
         updatedAt: finishedAt
-      })
-      await this.options.store.upsert(record)
-      await this.recordChildEvent(record)
+      }))
       this.recordExternalUsage(record)
       return record
     } catch (error) {
       const finishedAt = this.now()
-      record = ChildRunRecord.parse({
-        ...record,
+      record = await this.commitChildState(args.state, (current) => ChildRunRecord.parse({
+        ...current,
         status: args.signal.aborted ? 'aborted' : 'failed',
         error: errorMessage(error),
         durationMs: elapsedMs(startedAt, finishedAt),
         updatedAt: finishedAt
-      })
-      await this.options.store.upsert(record)
-      await this.recordChildEvent(record)
+      }))
       return record
     } finally {
+      unsubscribeActivity?.()
       this.releaseSlot()
     }
+  }
+
+  private async projectChildActivity(state: ChildExecutionState, event: RuntimeEvent): Promise<void> {
+    const nextActivity = childActivityFromEvent(event, state.record.activity)
+    if (!nextActivity) return
+    await this.commitChildState(state, (current) => {
+      if (current.status !== 'running') return undefined
+      if (sameChildActivity(current.activity, nextActivity)) return undefined
+      return ChildRunRecord.parse({
+        ...current,
+        activity: nextActivity,
+        updatedAt: nextActivity.updatedAt
+      })
+    })
+  }
+
+  /**
+   * Move a queued/running foreground child into the background. The child
+   * keeps its current process, thread, and event stream; only the parent abort
+   * bridge is removed and the waiting delegate_task is released.
+   */
+  async detachChild(childId: string): Promise<boolean> {
+    const control = this.foregroundChildren.get(childId)
+    if (!control || control.controller.signal.aborted) return false
+    let changed = false
+    await this.commitChildState(control.state, (current) => {
+      if (current.detached || (current.status !== 'queued' && current.status !== 'running')) return undefined
+      changed = true
+      return ChildRunRecord.parse({
+        ...current,
+        detached: true,
+        updatedAt: this.now()
+      })
+    })
+    if (!changed) return false
+    control.unlinkParent()
+    this.detachedAborts.set(childId, control.controller)
+    this.detachedParentThreads.set(childId, control.parentThreadId)
+    control.resolveDetached()
+    return true
+  }
+
+  /**
+   * Serialize mutations for one child so a completion racing a Ctrl+B
+   * background request cannot be overwritten by an older running snapshot.
+   */
+  private async commitChildState(
+    state: ChildExecutionState,
+    mutate: (current: ChildRunRecord) => ChildRunRecord | undefined
+  ): Promise<ChildRunRecord> {
+    let committed = state.record
+    const operation = state.commits.catch(() => undefined).then(async () => {
+      const next = mutate(state.record)
+      if (!next) {
+        committed = state.record
+        return
+      }
+      state.record = next
+      committed = next
+      await this.options.store.upsert(next)
+      await this.recordChildEvent(next)
+    })
+    state.commits = operation
+    await operation
+    return committed
   }
 
   /**
@@ -1082,7 +1167,8 @@ export class DelegationRuntime {
         ...(usage.totalTokens > 0 ? { totalTokens: usage.totalTokens } : {}),
         ...(usage.cacheHitRate !== undefined && usage.cacheHitRate !== null ? { cacheHitRate: usage.cacheHitRate } : {}),
         ...(usage.costUsd !== undefined ? { costUsd: usage.costUsd } : {}),
-        ...(usage.costCny !== undefined ? { costCny: usage.costCny } : {})
+        ...(usage.costCny !== undefined ? { costCny: usage.costCny } : {}),
+        ...(record.activity ? { activity: record.activity } : {})
       }
     })
   }
@@ -1130,10 +1216,13 @@ export class DelegationRuntime {
         return
       }
     }
+    const sourceTurn = thread.turns.find((turn) => turn.id === record.parentTurnId) ?? thread.turns.at(-1)
     const started = await this.options.turns.startTurn({
       threadId: record.parentThreadId,
       request: {
         prompt: notice,
+        ...(sourceTurn ? { clientSurface: resolveTurnClientSurface(sourceTurn) } : {}),
+        ...(sourceTurn?.disableUserInput ? { disableUserInput: true } : {}),
         displayText,
         messageSource: 'background_subagent'
       }
@@ -1329,6 +1418,110 @@ function escapeXml(text: string): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
+}
+
+function childActivityFromEvent(
+  event: RuntimeEvent,
+  previous?: ChildRunActivityValue
+): ChildRunActivityValue | undefined {
+  let phase: ChildRunActivityValue['phase'] | undefined
+  let label: string | undefined
+  let toolName: string | undefined
+  switch (event.kind) {
+    case 'turn_started':
+      phase = 'starting'
+      label = 'Waiting for model'
+      break
+    case 'assistant_reasoning_delta':
+      phase = 'thinking'
+      label = 'Thinking'
+      break
+    case 'assistant_text_delta':
+      phase = 'responding'
+      label = 'Writing response'
+      break
+    case 'tool_call_started':
+      if (event.item.kind !== 'tool_call') break
+      phase = 'tool'
+      toolName = event.item.toolName
+      label = event.item.summary?.trim() || `Running ${event.item.toolName}`
+      break
+    case 'tool_call_finished':
+      phase = 'starting'
+      label = 'Processing tool result'
+      break
+    case 'model_request_retry':
+      phase = 'retrying'
+      label = `Retrying model request ${event.attempt}/${event.maxAttempts}`
+      break
+    case 'tool_result_upload_wait':
+      phase = 'waiting'
+      label = 'Waiting for tool results'
+      break
+    case 'compaction_started':
+      phase = 'compacting'
+      label = event.summary?.trim() || 'Compacting context'
+      break
+    case 'compaction_completed':
+      phase = 'starting'
+      label = 'Continuing'
+      break
+    case 'approval_requested':
+      phase = 'waiting'
+      toolName = event.toolName
+      label = 'Waiting for approval'
+      break
+    case 'pipeline_stage':
+      if (event.stage !== 'pre_send') break
+      phase = 'starting'
+      label = event.label?.trim() || 'Calling model'
+      break
+    case 'item_created':
+    case 'item_updated':
+    case 'item_completed':
+      if (event.item.kind === 'assistant_reasoning' && event.item.status === 'running') {
+        phase = 'thinking'
+        label = 'Thinking'
+      } else if (event.item.kind === 'assistant_text' && event.item.status === 'running') {
+        phase = 'responding'
+        label = 'Writing response'
+      } else if (event.item.kind === 'tool_call' && event.item.status === 'running') {
+        phase = 'tool'
+        toolName = event.item.toolName
+        label = event.item.summary?.trim() || `Running ${event.item.toolName}`
+      }
+      break
+    default:
+      break
+  }
+  if (!phase || !label) return undefined
+  const normalizedLabel = label.replace(/\s+/gu, ' ').trim().slice(0, 500)
+  if (!normalizedLabel) return undefined
+  if (
+    previous?.phase === phase &&
+    previous.label === normalizedLabel &&
+    previous.toolName === toolName
+  ) {
+    return undefined
+  }
+  return ChildRunActivity.parse({
+    phase,
+    label: normalizedLabel,
+    ...(toolName ? { toolName: toolName.slice(0, 256) } : {}),
+    startedAt: event.timestamp,
+    updatedAt: event.timestamp
+  })
+}
+
+function sameChildActivity(
+  left: ChildRunActivityValue | undefined,
+  right: ChildRunActivityValue
+): boolean {
+  return left?.phase === right.phase &&
+    left.label === right.label &&
+    left.toolName === right.toolName &&
+    left.startedAt === right.startedAt &&
+    left.updatedAt === right.updatedAt
 }
 
 const defaultExecutor: ChildRunExecutor = async (input) => {

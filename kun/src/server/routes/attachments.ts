@@ -3,6 +3,7 @@ import type { AttachmentStore } from '../../attachments/attachment-store.js'
 import { jsonResponse, type JsonResponse } from '../response.js'
 import { readJsonBody } from '../read-json-body.js'
 import { ERRORS } from './runtime-error.js'
+import type { ServerRuntime } from './server-runtime.js'
 
 /**
  * A 10 MiB decoded file is the largest built-in attachment allowance. Keep a
@@ -66,6 +67,7 @@ export async function uploadAttachment(
       localFilePath: parsed.data.localFilePath,
       textFallback: parsed.data.textFallback,
       visualPreview: parsed.data.visualPreview,
+      leaseId: parsed.data.leaseId,
       threadId: parsed.data.threadId,
       workspace: parsed.data.workspace
     })
@@ -75,6 +77,35 @@ export async function uploadAttachment(
   } finally {
     release()
   }
+}
+
+export async function releaseAttachment(
+  runtime: Pick<ServerRuntime, 'attachmentStore' | 'threadService'>,
+  id: string,
+  request: Request
+): Promise<JsonResponse> {
+  const store = runtime.attachmentStore
+  if (!store) return ERRORS.unavailable('attachment store is unavailable')
+  if (!store.releaseLease) return ERRORS.unavailable('attachment lease release is unavailable')
+  let leaseId = ''
+  try {
+    const value = await request.json() as { leaseId?: unknown }
+    leaseId = typeof value.leaseId === 'string' ? value.leaseId.trim() : ''
+  } catch {
+    // Validation below returns the stable public error.
+  }
+  if (!leaseId) return ERRORS.validation('leaseId is required')
+  const summaries = await runtime.threadService.list({
+    includeArchived: true,
+    includeSide: true
+  })
+  const threads = await Promise.all(summaries.map((thread) => runtime.threadService.get(thread.id)))
+  const referenced = threads.some((thread) =>
+    thread?.turns.some((turn) => turn.attachmentIds.includes(id)) === true
+  )
+  return jsonResponse({
+    released: await store.releaseLease(id, leaseId, referenced)
+  })
 }
 
 function reserveUpload(store: AttachmentStore): UploadLease | null {

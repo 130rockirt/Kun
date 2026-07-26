@@ -61,7 +61,7 @@ export const DEFAULT_OVERLAP_TOOL_NAMES: ReadonlySet<string> = new Set([
 /**
  * kun tools better handled by the SDK's own surfaces or meaningless here.
  * NOTE: user_input/request_user_input are intentionally NOT excluded — they are
- * bridged so the model uses kun's own GUI input panel (wired via the tool
+ * bridged so the model uses kun's own client-neutral input gate (wired via the tool
  * context's awaitUserInput). The SDK's native AskUserQuestion is suppressed
  * (disallowedTools) because it has no UI in this embedding.
  */

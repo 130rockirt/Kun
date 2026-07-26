@@ -4,8 +4,8 @@ import { TuiController } from './controller.js'
 import { KUN_TUI_USAGE, parseTuiOptions } from './options.js'
 import {
   hasUnpublishedGuiRuntime,
+  projectModelConnectionsToGuiSettings,
   readGuiSharedSettings,
-  resolveLegacyGuiRuntime,
   syncGuiProviderCatalogToConfig,
   type GuiConfigSyncResult
 } from '../cli/gui-settings-bridge.js'
@@ -50,7 +50,7 @@ export async function runTuiCommand(argv: readonly string[], io: TuiCommandIo): 
   let app: import('./pi-app.js').PiTuiApplication | undefined
   try {
     assertSupportedNodeVersion()
-    const guiSettings = parsed.options.url
+    let guiSettings = parsed.options.url
       ? null
       : await readGuiSharedSettings({ env: io.env ?? process.env })
     if (parsed.options.dataDirSource === 'default' && guiSettings) {
@@ -59,22 +59,18 @@ export async function runTuiCommand(argv: readonly string[], io: TuiCommandIo): 
     const matchingGuiDataDir = Boolean(
       guiSettings && parsed.options.dataDir === guiSettings.dataDir
     )
-    const legacyGuiConnection = matchingGuiDataDir && guiSettings
-      ? await resolveLegacyGuiRuntime(guiSettings, io.fetch ?? fetch)
-      : null
     if (
       matchingGuiDataDir &&
       guiSettings &&
-      !legacyGuiConnection &&
       await hasUnpublishedGuiRuntime(guiSettings, io.fetch ?? fetch)
     ) {
       throw new Error(
-        'the active GUI runtime is too old for safe TUI attachment; update or close that GUI, then run `kun` again'
+        'an older GUI-private runtime is writing this data directory without shared discovery; update or close that GUI once, then run `kun` again. Current GUI and TUI releases start the same UI-independent background runtime.'
       )
     }
     let guiConfigSync: GuiConfigSyncResult | null = null
     let guiConfigWarning = ''
-    if (guiSettings && !parsed.options.url && !legacyGuiConnection) {
+    if (guiSettings && !parsed.options.url) {
       try {
         guiConfigSync = await syncGuiProviderCatalogToConfig(parsed.options.dataDir, guiSettings)
       } catch (error) {
@@ -87,34 +83,34 @@ export async function runTuiCommand(argv: readonly string[], io: TuiCommandIo): 
       import('./keymap.js')
     ])
     const keymapConfig = await loadTuiKeymap()
-    const connection = legacyGuiConnection
-      ? { ...legacyGuiConnection, discovered: false, legacyGui: true }
-      : await resolveTuiConnection(parsed.options, io.fetch ?? fetch)
-    let client = new KunTuiClient({
+    const connection = await resolveTuiConnection(parsed.options, io.fetch ?? fetch)
+    const client = new KunTuiClient({
       baseUrl: connection.baseUrl,
       runtimeToken: connection.runtimeToken,
-      fetch: io.fetch ?? fetch
+      fetch: io.fetch ?? fetch,
+      ...(connection.discovered
+        ? {
+            resolveConnection: async () => {
+              const refreshed = await resolveTuiConnection(parsed.options, io.fetch ?? fetch)
+              return {
+                baseUrl: refreshed.baseUrl,
+                runtimeToken: refreshed.runtimeToken
+              }
+            }
+          }
+        : {})
     })
-    if (legacyGuiConnection && guiSettings) {
-      const { createLegacyModelConnectionTransport } = await import('./legacy-model-connections.js')
-      const runtimeClient = client
-      const modelConnectionTransport = await createLegacyModelConnectionTransport({
-        dataDir: parsed.options.dataDir,
-        guiSettings,
-        fetch: io.fetch ?? fetch,
-        applyRuntimeConfig: (input) => runtimeClient.applyRuntimeConfig(input),
-        notify: (message, kind) => controller?.notify(message, kind)
-      })
-      client = new KunTuiClient({
-        baseUrl: connection.baseUrl,
-        runtimeToken: connection.runtimeToken,
-        fetch: io.fetch ?? fetch,
-        modelConnectionTransport
-      })
-    }
     if (guiConfigSync) {
       try {
-        const result = await client.applyRuntimeConfig(guiConfigSync.applyRequest)
+        const registryBeforeImport = await client.modelConnections()
+        const applyRequest = registryBeforeImport.providers.length === 0
+          ? guiConfigSync.applyRequest
+          : (() => {
+              const { modelSelection: _staleCompatibilitySelection, ...catalogOnly } = guiConfigSync.applyRequest
+              void _staleCompatibilitySelection
+              return catalogOnly
+            })()
+        const result = await client.applyRuntimeConfig(applyRequest)
         if (!result.ok) {
           guiConfigWarning = result.message
           io.stderr.write(`kun tui: GUI model catalog requires a runtime restart: ${result.message}\n`)
@@ -124,14 +120,18 @@ export async function runTuiCommand(argv: readonly string[], io: TuiCommandIo): 
         io.stderr.write(`kun tui: ${guiConfigWarning}\n`)
       }
     }
-    controller = new TuiController(client, parsed.options, connection)
-    if (legacyGuiConnection && guiSettings) {
-      controller.applyModelSelection(await client.modelConnections(), false)
-      controller.notify(
-        'Attached to the existing GUI runtime. Chat, sessions, /connect, and protected provider credentials are shared.',
-        'info'
-      )
-    }
+    controller = new TuiController(
+      client,
+      parsed.options,
+      connection,
+      guiSettings && matchingGuiDataDir
+        ? async (snapshot) => {
+            if (!guiSettings) return
+            guiSettings = await projectModelConnectionsToGuiSettings(guiSettings, snapshot)
+          }
+        : undefined
+    )
+    const initialModelConnections = await controller.initializeModelConnections()
     if (keymapConfig.warnings.length) {
       for (const warning of keymapConfig.warnings) io.stderr.write(`kun tui: ${warning}\n`)
       controller.notify(keymapConfig.warnings.join(' '), 'error')
@@ -140,7 +140,7 @@ export async function runTuiCommand(argv: readonly string[], io: TuiCommandIo): 
     app = new PiTuiApplication(controller, input, output, keymapConfig.keymap)
     const running = app.run()
     await controller.start()
-    controller.watchModelConnections()
+    controller.watchModelConnections(initialModelConnections)
     await running
     return 0
   } catch (error) {

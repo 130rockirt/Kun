@@ -1,11 +1,89 @@
 import { lazy, Suspense, useEffect } from 'react'
 import { AppErrorBoundary } from './components/AppErrorBoundary'
 import { installIssue781DocumentUsability } from './lib/issue-781-document-usability'
+import { useChatStore } from './store/chat-store'
 
 const AppShell = lazy(() => import('./AppShell'))
 
 function DocumentUsabilityLifecycle(): null {
   useEffect(() => installIssue781DocumentUsability(), [])
+  return null
+}
+
+function SharedModelConnectionsLifecycle(): null {
+  useEffect(() => {
+    if (typeof window.kunGui?.runtimeRequest !== 'function') return
+    let disposed = false
+    let revision = 0
+    let initialized = false
+    let timer: ReturnType<typeof window.setTimeout> | undefined
+    const poll = async (): Promise<void> => {
+      try {
+        const previousRevision = revision
+        const result = await window.kunGui.runtimeRequest(
+          revision === 0
+            ? '/v1/model-connections'
+            : `/v1/model-connections/events?since_revision=${revision}&wait_ms=25000`,
+          'GET'
+        )
+        if (!result.ok) throw new Error(`model connection sync failed (HTTP ${result.status})`)
+        const parsed = JSON.parse(result.body) as {
+          revision?: unknown
+          snapshot?: { revision?: unknown; defaultProviderId?: unknown; defaultModel?: unknown }
+        }
+        const snapshot = (parsed.snapshot ?? parsed) as {
+          revision?: unknown
+          defaultProviderId?: unknown
+          defaultModel?: unknown
+        }
+        if (!Number.isInteger(snapshot.revision)) throw new Error('invalid model connection revision')
+        revision = Number(snapshot.revision)
+        const changed = !initialized || revision > previousRevision
+        initialized = true
+        if (!disposed && changed) {
+          const state = useChatStore.getState()
+          await state.loadComposerModels()
+          if (
+            !useChatStore.getState().activeThreadId &&
+            typeof snapshot.defaultProviderId === 'string' &&
+            typeof snapshot.defaultModel === 'string' &&
+            snapshot.defaultProviderId.trim() &&
+            snapshot.defaultModel.trim()
+          ) {
+            const latest = useChatStore.getState()
+            const model = snapshot.defaultModel.trim()
+            const providerId = snapshot.defaultProviderId.trim()
+            if (latest.composerModel !== model || latest.composerProviderId !== providerId) {
+              latest.setComposerModel(model, providerId)
+            }
+          } else if (
+            !useChatStore.getState().activeThreadId &&
+            (
+              typeof snapshot.defaultProviderId !== 'string' ||
+              !snapshot.defaultProviderId.trim() ||
+              typeof snapshot.defaultModel !== 'string' ||
+              !snapshot.defaultModel.trim()
+            )
+          ) {
+            const latest = useChatStore.getState()
+            if (latest.composerModel || latest.composerProviderId) {
+              latest.setComposerModel('', '')
+            }
+          }
+        }
+      } catch {
+        // The runtime lifecycle has its own connection UI. Keep this watcher
+        // quiet and retry so a crash/replacement does not break the renderer.
+      } finally {
+        if (!disposed) timer = window.setTimeout(poll, revision === 0 ? 2_000 : 0)
+      }
+    }
+    void poll()
+    return () => {
+      disposed = true
+      if (timer !== undefined) window.clearTimeout(timer)
+    }
+  }, [])
   return null
 }
 
@@ -24,6 +102,7 @@ export default function App(): React.ReactElement {
   return (
     <AppErrorBoundary>
       <DocumentUsabilityLifecycle />
+      <SharedModelConnectionsLifecycle />
       <Suspense fallback={<StartupShell />}>
         <AppShell />
       </Suspense>

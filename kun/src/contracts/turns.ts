@@ -18,6 +18,8 @@ import { GraphOrchestrationStrategySchema } from './graph.js'
 const TurnModeSchema = z.enum(['agent', 'plan'])
 export const TurnReasoningEffortSchema = z.enum(['auto', 'off', 'low', 'medium', 'high', 'max'])
 export type TurnReasoningEffort = z.infer<typeof TurnReasoningEffortSchema>
+export const TurnClientSurfaceSchema = z.enum(['gui', 'tui', 'cli', 'api', 'im', 'extension'])
+export type TurnClientSurface = z.infer<typeof TurnClientSurfaceSchema>
 
 /**
  * Plan operation kinds the renderer can advertise on a plan turn.
@@ -93,6 +95,8 @@ export const TurnSchema = z.object({
   providerId: z.string().optional(),
   accountId: z.string().min(1).optional(),
   reasoningEffort: TurnReasoningEffortSchema.optional(),
+  /** Client that initiated this turn. Used only for per-turn capability and prompt scoping. */
+  clientSurface: TurnClientSurfaceSchema.optional(),
   /** Steered text queued by the user mid-turn. Cleared on completion. */
   steering: z.array(z.string()).default([]),
   createdAt: z.string(),
@@ -160,6 +164,8 @@ export const StartTurnRequest = z.object({
   providerId: z.string().optional(),
   accountId: z.string().min(1).optional(),
   reasoningEffort: TurnReasoningEffortSchema.optional(),
+  /** Initiating client surface. It does not grant authority beyond the advertised tool policy. */
+  clientSurface: TurnClientSurfaceSchema.optional(),
   approvalPolicy: ApprovalPolicySchema.optional(),
   sandboxMode: SandboxModeSchema.optional(),
   /**
@@ -238,6 +244,25 @@ export const SteerTurnRequest = z.object({
   messageSource: UserMessageSource.optional()
 })
 export type SteerTurnRequest = z.infer<typeof SteerTurnRequest>
+
+export const SteeringEntrySchema = z.object({
+  text: z.string().trim().min(1),
+  displayText: z.string().trim().min(1).optional(),
+  messageSource: UserMessageSource.optional()
+}).strict()
+export type SteeringEntry = z.infer<typeof SteeringEntrySchema>
+
+export const ReplaceSteeringRequest = z.object({
+  entries: z.array(SteeringEntrySchema).max(32)
+}).strict()
+export type ReplaceSteeringRequest = z.infer<typeof ReplaceSteeringRequest>
+
+export const SteeringQueueResponse = z.object({
+  threadId: z.string().min(1),
+  turnId: z.string().min(1),
+  entries: z.array(SteeringEntrySchema)
+}).strict()
+export type SteeringQueueResponse = z.infer<typeof SteeringQueueResponse>
 
 export const InterruptTurnRequest = z.object({
   /**

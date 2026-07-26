@@ -70,6 +70,8 @@ import { shellSpawnEnv } from '../../adapters/tool/builtin-tool-utils.js'
 import type { TurnLimitsConfig } from '../../loop/turn-limits.js'
 import { userMessageTextWithComposerContexts } from '../../domain/composer-context.js'
 import { mkdir } from 'node:fs/promises'
+import { resolveTurnClientSurface } from '../../loop/turn-context-resolver.js'
+import { buildClientSurfaceInstruction } from '../../prompt/kun-prompt-context.js'
 import {
   delegatedCapabilityFingerprint,
   delegatedCredentialIdentity,
@@ -120,9 +122,9 @@ export interface AgentSdkRuntimeFactoryDeps {
   instructionRuntime?: InstructionRuntime
   /** Long-term memory store — injects relevant memories per turn. */
   memoryStore?: MemoryStore
-  /** Interactive-input gate — lets the bridged `user_input` tool surface kun's GUI panel. */
+  /** Interactive-input gate rendered by whichever supported client initiated the turn. */
   userInputGate?: UserInputGate
-  /** GUI approval gate shared with native tool execution. Missing means deny closed. */
+  /** Approval gate shared with native tool execution. Missing means deny closed. */
   approvalGate?: ApprovalGate
   /** Clock for stamping item timestamps (falls back to Date when absent). */
   nowIso?: () => string
@@ -229,7 +231,7 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
   const sessionPreparationsByTurn = new Map<string, DelegatedSessionPreparation>()
   // Skill activation is turn-scoped. Keep the exact result used for the SDK
   // tool catalog so bridged execution sees the same skill-gated tools after a
-  // GUI input pause/resume.
+  // Client-neutral structured input pause/resume.
   const activeSkillIdsByTurn = new Map<string, readonly string[]>()
   const skillPromptByTurn = new Map<string, string>()
   const skillTurnKey = (threadId: string, turnId: string): string => `${threadId}\u0000${turnId}`
@@ -259,8 +261,8 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
   const nowIso = (): string => (deps.nowIso ? deps.nowIso() : new Date().toISOString())
 
   /**
-   * Bridge kun's `user_input` tool to its GUI panel: persist the request item +
-   * publish the events the renderer renders the panel from, wait on the gate,
+   * Bridge kun's `user_input` tool to the active client: persist the request item,
+   * publish the events clients render, wait on the gate,
    * then mark it resolved. Returns undefined when no gate is wired (the tool then
    * stays unadvertised — its shouldAdvertise checks for awaitUserInput).
    */
@@ -471,6 +473,7 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
       signal?: AbortSignal
       awaitUserInput?: ToolHostContext['awaitUserInput']
       awaitApproval?: ToolHostContext['awaitApproval']
+      clientSurface?: ToolHostContext['clientSurface']
     }
   ): ToolHostContext => {
     const allowedToolNames = intersectAllowedToolNames(
@@ -494,10 +497,11 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
       ...(opts?.guiDesignMode ? { guiDesignMode: true } : {}),
       ...(opts?.guiDesignArtifact ? { guiDesignArtifact: opts.guiDesignArtifact } : {}),
       ...(opts?.activeSkillIds ? { activeSkillIds: opts.activeSkillIds } : {}),
+      ...(opts?.clientSurface ? { clientSurface: opts.clientSurface } : {}),
       ...(allowedToolNames ? { allowedToolNames } : {}),
-      // Wire interactive input to kun's GUI panel (advertises `user_input`).
+      // Presence advertises `user_input`; the active client renders the gate.
       ...(opts?.awaitUserInput ? { awaitUserInput: opts.awaitUserInput } : {}),
-      // Execution supplies the real GUI approval callback; listing contexts stay
+      // Execution supplies the real client approval callback; listing contexts stay
       // deny-closed because no tool may execute through them.
       awaitApproval: opts?.awaitApproval ?? (async () => 'deny')
     }
@@ -585,6 +589,10 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
       // awaitUserInput presence is what advertises `user_input` (the signal here
       // is only for advertisement; the real per-call signal is set on execution).
       const dedicatedSvgTurn = turn.guiDesignArtifact?.kind === 'svg'
+      const clientSurface = resolveTurnClientSurface(turn)
+      const awaitUserInput = turn.disableUserInput === true
+        ? undefined
+        : makeAwaitUserInput(threadId, turnId, new AbortController().signal)
       const plan = dedicatedSvgTurn
         ? { planMode: false as const }
         : resolveTurnPlanContext(thread, turnId)
@@ -598,8 +606,9 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
           ? { allowedToolNames: SVG_ARTIFACT_ALLOWED_TOOL_NAMES }
           : {}),
         activeSkillIds,
+        clientSurface,
         sandboxMode: thread.sandboxMode ?? deps.defaultSandboxMode,
-        awaitUserInput: makeAwaitUserInput(threadId, turnId, new AbortController().signal)
+        ...(awaitUserInput ? { awaitUserInput } : {})
       })
       // An Agent SDK query pins its in-process MCP schemas at startup and
       // cannot add tools after `load_skill` returns. Pre-bridge schemas gated
@@ -623,8 +632,9 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
           ? { allowedToolNames: SVG_ARTIFACT_ALLOWED_TOOL_NAMES }
           : {}),
         activeSkillIds: [...new Set([...activeSkillIds, ...availableSkillIds])],
+        clientSurface,
         sandboxMode: thread.sandboxMode ?? deps.defaultSandboxMode,
-        awaitUserInput: makeAwaitUserInput(threadId, turnId, new AbortController().signal)
+        ...(awaitUserInput ? { awaitUserInput } : {})
       })
       if (deps.toolHost) {
         // Activate turn-scoped extension contributions before taking the
@@ -677,6 +687,7 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
       }
 
       const contextInstructions = [
+        buildClientSurfaceInstruction(clientSurface),
         ...(thread.additionalWorkspaces?.length
           ? [`Additional workspace roots explicitly added by the user:\n${thread.additionalWorkspaces.map((path) => `- ${JSON.stringify(path)}`).join('\n')}`]
           : []),
@@ -796,6 +807,7 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
       const sandboxMode = thread.sandboxMode ?? deps.defaultSandboxMode
       const toolSignal = signal ?? new AbortController().signal
       const activeSkillIds = await resolveActiveSkillIds(thread, turn)
+      const clientSurface = resolveTurnClientSurface(turn)
       // Real per-call signal so an interactive user_input cancels on turn abort.
       const ctx = toolContext(threadId, turnId, thread.workspace, {
         additionalWorkspaces: thread.additionalWorkspaces,
@@ -807,11 +819,14 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
           ? { allowedToolNames: SVG_ARTIFACT_ALLOWED_TOOL_NAMES }
           : {}),
         ...(activeSkillIds ? { activeSkillIds } : {}),
+        clientSurface,
         ...(sandboxMode ? { sandboxMode } : {}),
         approvalPolicy,
         signal: toolSignal,
         awaitApproval: makeAwaitApproval(approvalPolicy, sandboxMode, toolSignal),
-        awaitUserInput: makeAwaitUserInput(threadId, turnId, toolSignal)
+        ...(turn.disableUserInput === true
+          ? {}
+          : { awaitUserInput: makeAwaitUserInput(threadId, turnId, toolSignal) })
       })
       try {
         // The SDK's MCP handler must cross the same LocalToolHost boundary as

@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import process from 'node:process'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { parseServeOptionsSafe, SERVE_USAGE, ServeExitCode } from './serve.js'
 import {
   KUN_CLI_USAGE,
@@ -47,6 +49,7 @@ async function serveMain(argv: readonly string[]): Promise<number> {
       server: await startKunServe({
         ...parsed.options,
         launchMode,
+        sharedMcpConfigPath: process.env.KUN_MCP_CONFIG_PATH || join(homedir(), '.kun', 'mcp.json'),
         ...(process.env.KUN_RUNTIME_LOG_PATH ? { logPath: process.env.KUN_RUNTIME_LOG_PATH } : {})
       })
     }

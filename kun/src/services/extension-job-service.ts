@@ -404,6 +404,21 @@ export class ExtensionJobService {
     }
   }
 
+  /** Runtime-owner view used by authenticated first-party management clients. */
+  async listAll(limit = 100): Promise<ExtensionJobSnapshot[]> {
+    const safeLimit = Math.min(500, Math.max(1, Math.floor(limit)))
+    return (await this.store.list()).slice(0, safeLimit)
+  }
+
+  /** Runtime-owner cancellation; extension ownership is not required here. */
+  async cancelAdmin(jobId: string, reason = 'runtime_owner_request'): Promise<ExtensionJobCancelResult> {
+    const snapshot = await this.store.get(jobId)
+    if (snapshot === undefined) throw this.notFound()
+    if (isExtensionJobTerminal(snapshot.state)) return { accepted: false, snapshot }
+    this.assertMutationAllowed(snapshot)
+    return { accepted: true, snapshot: await this.cancelInternal(jobId, reason) }
+  }
+
   async cancel(
     caller: ExtensionJobCaller,
     jobId: string,

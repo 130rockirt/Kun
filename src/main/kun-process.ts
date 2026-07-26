@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { homedir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import {
   isKunRuntimeInsecure,
@@ -97,6 +97,7 @@ import { syncGuiManagedKunConfig } from './runtime/kun-runtime-config-service'
 import { assertManagedKunDataDirIsCurrent } from './kun-data-dir-paths'
 import {
   ensureSharedRuntime,
+  resolveSharedRuntime,
   type SharedRuntimeConnection
 } from '../../kun/src/cli/shared-runtime.js'
 
@@ -290,7 +291,17 @@ export async function startKunSharedRuntime(
 ): Promise<SharedRuntimeConnection | null> {
   const runtime = resolveKunRuntimeSettings(settings)
   if (!runtime.autoStart) return null
-  const launch = await prepareKunLaunch(settings, runtime)
+  const dataDir = resolveKunDataDir(runtime)
+  if (await hasUnpublishedKunWriter(runtime, dataDir)) {
+    throw new Error(
+      'An older GUI-private Kun runtime is already writing this data directory without shared discovery. Close or update that GUI once before starting the shared runtime.'
+    )
+  }
+  // A shared runtime is elected under the data-directory start lock. Let the
+  // elected server bind an ephemeral loopback port and publish the real
+  // port/token through discovery instead of treating the GUI preference as a
+  // live connection contract.
+  const launch = await prepareKunLaunch(settings, runtime, { port: 0 })
   return ensureSharedRuntime({
     dataDir: launch.dataDir,
     launch: {
@@ -300,6 +311,36 @@ export async function startKunSharedRuntime(
       runAsNode: launch.runAsNode
     }
   })
+}
+
+async function hasUnpublishedKunWriter(
+  runtime: KunRuntimeSettingsV1,
+  dataDir: string
+): Promise<boolean> {
+  if (await resolveSharedRuntime(dataDir).catch(() => null)) return false
+  try {
+    const headers = new Headers()
+    if (runtime.runtimeToken.trim()) {
+      headers.set('authorization', `Bearer ${runtime.runtimeToken.trim()}`)
+    }
+    const response = await fetch(`http://127.0.0.1:${runtime.port}/v1/runtime/info`, {
+      headers,
+      signal: AbortSignal.timeout(2_000)
+    })
+    if (!response.ok) return false
+    const body = await response.json() as { dataDir?: unknown }
+    return typeof body.dataDir === 'string' && sameRuntimePath(body.dataDir, dataDir)
+  } catch {
+    return false
+  }
+}
+
+function sameRuntimePath(left: string, right: string): boolean {
+  const normalizedLeft = resolve(left)
+  const normalizedRight = resolve(right)
+  return process.platform === 'win32'
+    ? normalizedLeft.toLowerCase() === normalizedRight.toLowerCase()
+    : normalizedLeft === normalizedRight
 }
 
 type PreparedKunLaunch = {
@@ -312,7 +353,8 @@ type PreparedKunLaunch = {
 
 async function prepareKunLaunch(
   settings: AppSettingsV1,
-  runtime: KunRuntimeSettingsV1
+  runtime: KunRuntimeSettingsV1,
+  options: { port?: number } = {}
 ): Promise<PreparedKunLaunch> {
   const root = appRoot()
   const resolution = resolveKunExecutable(root, runtime.binaryPath)
@@ -338,7 +380,7 @@ async function prepareKunLaunch(
   const args = buildKunServeArgs({
     resolution,
     host: '127.0.0.1',
-    port: runtime.port,
+    port: options.port ?? runtime.port,
     dataDir,
     approvalPolicy: runtime.approvalPolicy,
     sandboxMode: runtime.sandboxMode,

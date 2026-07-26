@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { chmod, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { z } from 'zod'
 import type { AttachmentsCapabilityConfig } from '../contracts/capabilities.js'
 import type {
   AttachmentDiagnostics,
@@ -11,6 +12,15 @@ import type {
 import { AttachmentMetadata as AttachmentMetadataSchema } from '../contracts/attachments.js'
 
 const ATTACHMENT_ID_PATTERN = /^att_[0-9a-f]{24}$/
+const PendingAttachmentLeaseSchema = z.object({
+  id: z.string().min(8).max(128),
+  createdAt: z.string()
+}).strict()
+const StoredAttachmentMetadataSchema = AttachmentMetadataSchema.extend({
+  pendingLeases: z.array(PendingAttachmentLeaseSchema).default([]),
+  leaseManaged: z.boolean().default(false)
+}).strict()
+type StoredAttachmentMetadata = z.infer<typeof StoredAttachmentMetadataSchema>
 
 export type AttachmentContent = AttachmentMetadata & {
   data: Buffer
@@ -28,6 +38,7 @@ export interface AttachmentStore {
     localFilePath?: string
     textFallback?: AttachmentTextFallback
     visualPreview?: AttachmentVisualPreview
+    leaseId?: string
     threadId?: string
     workspace?: string
   }): Promise<AttachmentMetadata>
@@ -35,6 +46,11 @@ export interface AttachmentStore {
   bindScope(id: string, scope: { threadId?: string; workspace?: string }): Promise<AttachmentMetadata>
   bindScopes(ids: readonly string[], scope: { threadId?: string; workspace?: string }): Promise<AttachmentMetadata[]>
   delete?(id: string): Promise<void>
+  releaseLease?(id: string, leaseId: string, referenced: boolean): Promise<boolean>
+  pruneExpiredLeases?(
+    referencedIds: ReadonlySet<string>,
+    expiresBeforeIso: string
+  ): Promise<{ deleted: number; released: number }>
   replaceMetadata?(metadata: AttachmentMetadata): Promise<void>
   resolveContent(id: string, scope: { threadId?: string; workspace?: string }): Promise<AttachmentContent>
   textFallbackPolicy(): Pick<
@@ -45,6 +61,8 @@ export interface AttachmentStore {
 }
 
 export class FileAttachmentStore implements AttachmentStore {
+  private readonly mutations = new Map<string, Promise<void>>()
+
   constructor(
     private readonly options: {
       rootDir: string
@@ -64,6 +82,7 @@ export class FileAttachmentStore implements AttachmentStore {
     localFilePath?: string
     textFallback?: AttachmentTextFallback
     visualPreview?: AttachmentVisualPreview
+    leaseId?: string
     threadId?: string
     workspace?: string
   }): Promise<AttachmentMetadata> {
@@ -80,51 +99,55 @@ export class FileAttachmentStore implements AttachmentStore {
     const contentPath = this.contentPath(id)
     const metadataPath = this.metadataPath(id)
     const now = this.options.nowIso?.() ?? new Date().toISOString()
-    const existing = await this.get(id)
-    if (existing) {
-      const next = mergeScope({
-        ...existing,
+    return this.mutate(id, async () => {
+      const existing = await this.getStored(id)
+      if (existing) {
+        const next = mergeScope(mergeLease({
+          ...existing,
+          kind: descriptor.kind,
+          mimeType: descriptor.mimeType,
+          ...(input.localFilePath ? { localFilePath: input.localFilePath } : {}),
+          ...(input.textFallback ? { textFallback: input.textFallback } : {}),
+          ...(input.visualPreview ? { visualPreview: input.visualPreview } : {}),
+          ...(descriptor.documentText !== undefined ? { documentText: descriptor.documentText } : {}),
+          ...(input.documentFormat ? { documentFormat: input.documentFormat } : {}),
+          sourceSha256: hash,
+          ...(descriptor.pageCount ? { pageCount: descriptor.pageCount } : {}),
+          ...(descriptor.truncated !== undefined ? { truncated: descriptor.truncated } : {}),
+          updatedAt: now
+        }, input.leaseId, now), input)
+        await writeFile(contentPath, input.data, { mode: 0o600 })
+        await writeFile(metadataPath, JSON.stringify(next, null, 2), { encoding: 'utf8', mode: 0o600 })
+        return publicMetadata(next)
+      }
+      const metadata = StoredAttachmentMetadataSchema.parse(mergeScope(mergeLease({
+        id,
+        name: input.name,
         kind: descriptor.kind,
         mimeType: descriptor.mimeType,
-        ...(input.localFilePath ? { localFilePath: input.localFilePath } : {}),
-        ...(input.textFallback ? { textFallback: input.textFallback } : {}),
-        ...(input.visualPreview ? { visualPreview: input.visualPreview } : {}),
+        byteSize: input.data.byteLength,
+        hash,
+        ...(descriptor.width ? { width: descriptor.width } : {}),
+        ...(descriptor.height ? { height: descriptor.height } : {}),
         ...(descriptor.documentText !== undefined ? { documentText: descriptor.documentText } : {}),
         ...(input.documentFormat ? { documentFormat: input.documentFormat } : {}),
         sourceSha256: hash,
         ...(descriptor.pageCount ? { pageCount: descriptor.pageCount } : {}),
         ...(descriptor.truncated !== undefined ? { truncated: descriptor.truncated } : {}),
+        ...(input.localFilePath ? { localFilePath: input.localFilePath } : {}),
+        ...(input.textFallback ? { textFallback: input.textFallback } : {}),
+        ...(input.visualPreview ? { visualPreview: input.visualPreview } : {}),
+        pendingLeases: [],
+        leaseManaged: false,
+        threadIds: [],
+        workspaces: [],
+        createdAt: now,
         updatedAt: now
-      }, input)
+      }, input.leaseId, now), input))
       await writeFile(contentPath, input.data, { mode: 0o600 })
-      await writeFile(metadataPath, JSON.stringify(next, null, 2), { encoding: 'utf8', mode: 0o600 })
-      return next
-    }
-    const metadata: AttachmentMetadata = AttachmentMetadataSchema.parse(mergeScope({
-      id,
-      name: input.name,
-      kind: descriptor.kind,
-      mimeType: descriptor.mimeType,
-      byteSize: input.data.byteLength,
-      hash,
-      ...(descriptor.width ? { width: descriptor.width } : {}),
-      ...(descriptor.height ? { height: descriptor.height } : {}),
-      ...(descriptor.documentText !== undefined ? { documentText: descriptor.documentText } : {}),
-      ...(input.documentFormat ? { documentFormat: input.documentFormat } : {}),
-      sourceSha256: hash,
-      ...(descriptor.pageCount ? { pageCount: descriptor.pageCount } : {}),
-      ...(descriptor.truncated !== undefined ? { truncated: descriptor.truncated } : {}),
-      ...(input.localFilePath ? { localFilePath: input.localFilePath } : {}),
-      ...(input.textFallback ? { textFallback: input.textFallback } : {}),
-      ...(input.visualPreview ? { visualPreview: input.visualPreview } : {}),
-      threadIds: [],
-      workspaces: [],
-      createdAt: now,
-      updatedAt: now
-    }, input))
-    await writeFile(contentPath, input.data, { mode: 0o600 })
-    await writeFile(metadataPath, JSON.stringify(metadata, null, 2), { encoding: 'utf8', mode: 0o600 })
-    return metadata
+      await writeFile(metadataPath, JSON.stringify(metadata, null, 2), { encoding: 'utf8', mode: 0o600 })
+      return publicMetadata(metadata)
+    })
   }
 
   private describeImage(
@@ -171,9 +194,14 @@ export class FileAttachmentStore implements AttachmentStore {
   }
 
   async get(id: string): Promise<AttachmentMetadata | null> {
+    const stored = await this.getStored(id)
+    return stored ? publicMetadata(stored) : null
+  }
+
+  private async getStored(id: string): Promise<StoredAttachmentMetadata | null> {
     if (!ATTACHMENT_ID_PATTERN.test(id)) return null
     try {
-      return AttachmentMetadataSchema.parse(JSON.parse(await readFile(this.metadataPath(id), 'utf8')))
+      return StoredAttachmentMetadataSchema.parse(JSON.parse(await readFile(this.metadataPath(id), 'utf8')))
     } catch {
       return null
     }
@@ -241,23 +269,91 @@ export class FileAttachmentStore implements AttachmentStore {
 
   async delete(id: string): Promise<void> {
     if (!ATTACHMENT_ID_PATTERN.test(id)) throw new Error(`invalid attachment id: ${id}`)
+    await this.mutate(id, () => this.deleteFiles(id))
+  }
+
+  private async deleteFiles(id: string): Promise<void> {
     await Promise.all([
       rm(this.contentPath(id), { force: true }),
       rm(this.metadataPath(id), { force: true })
     ])
   }
 
+  async releaseLease(id: string, leaseId: string, referenced: boolean): Promise<boolean> {
+    return this.mutate(id, async () => {
+      const metadata = await this.getStored(id)
+      if (!metadata) return false
+      if (!metadata.pendingLeases.some((candidate) => candidate.id === leaseId)) return false
+      const pendingLeases = metadata.pendingLeases.filter((candidate) => candidate.id !== leaseId)
+      if (!referenced && pendingLeases.length === 0) {
+        await this.deleteFiles(id)
+        return true
+      }
+      await this.writeStored({
+        ...metadata,
+        pendingLeases,
+        updatedAt: this.options.nowIso?.() ?? new Date().toISOString()
+      })
+      return true
+    })
+  }
+
+  async pruneExpiredLeases(
+    referencedIds: ReadonlySet<string>,
+    expiresBeforeIso: string
+  ): Promise<{ deleted: number; released: number }> {
+    await this.ensureRoot()
+    const entries = await readdir(this.options.rootDir).catch(() => [])
+    const ids = entries
+      .filter((entry) => entry.endsWith('.json'))
+      .map((entry) => entry.slice(0, -'.json'.length))
+      .filter((id) => ATTACHMENT_ID_PATTERN.test(id))
+    let deleted = 0
+    let released = 0
+    for (const id of ids) {
+      await this.mutate(id, async () => {
+        const metadata = await this.getStored(id)
+        if (!metadata?.leaseManaged) return
+        const pendingLeases = metadata.pendingLeases.filter(
+          (lease) => lease.createdAt >= expiresBeforeIso
+        )
+        released += metadata.pendingLeases.length - pendingLeases.length
+        if (pendingLeases.length === 0 && !referencedIds.has(id)) {
+          await this.deleteFiles(id)
+          deleted += 1
+          return
+        }
+        if (pendingLeases.length !== metadata.pendingLeases.length) {
+          await this.writeStored({
+            ...metadata,
+            pendingLeases,
+            updatedAt: this.options.nowIso?.() ?? new Date().toISOString()
+          })
+        }
+      })
+    }
+    return { deleted, released }
+  }
+
   async replaceMetadata(metadata: AttachmentMetadata): Promise<void> {
     const parsed = AttachmentMetadataSchema.parse(metadata)
     if (!ATTACHMENT_ID_PATTERN.test(parsed.id)) throw new Error(`invalid attachment id: ${parsed.id}`)
     await this.ensureRoot()
-    await readFile(this.contentPath(parsed.id))
-    await writeFile(this.metadataPath(parsed.id), JSON.stringify(parsed, null, 2), { encoding: 'utf8', mode: 0o600 })
+    await this.mutate(parsed.id, async () => {
+      await readFile(this.contentPath(parsed.id))
+      const existing = await this.getStored(parsed.id)
+      await this.writeStored(StoredAttachmentMetadataSchema.parse({
+        ...parsed,
+        pendingLeases: existing?.pendingLeases ?? [],
+        leaseManaged: existing?.leaseManaged ?? false
+      }))
+    })
   }
 
   async resolveContent(id: string, scope: { threadId?: string; workspace?: string }): Promise<AttachmentContent> {
     if (!ATTACHMENT_ID_PATTERN.test(id)) throw new Error(`invalid attachment id: ${id}`)
-    const metadata = await this.get(id)
+    const stored = await this.getStored(id)
+    const metadata = stored ? publicMetadata(stored) : null
     if (!metadata) throw new Error(`attachment not found: ${id}`)
     if (!isAuthorized(metadata, scope)) throw new Error(`attachment is not authorized for this turn: ${id}`)
     return {
@@ -273,7 +369,7 @@ export class FileAttachmentStore implements AttachmentStore {
       entries
         .filter((entry) => entry.endsWith('.json'))
         .map((entry) => readFile(join(this.options.rootDir, entry), 'utf8')
-          .then((text) => AttachmentMetadataSchema.parse(JSON.parse(text)))
+          .then((text) => publicMetadata(StoredAttachmentMetadataSchema.parse(JSON.parse(text))))
           .catch(() => null))
     )
     const records = metadata.filter((record): record is AttachmentMetadata => Boolean(record))
@@ -302,6 +398,26 @@ export class FileAttachmentStore implements AttachmentStore {
 
   private metadataPath(id: string): string {
     return join(this.options.rootDir, `${id}.json`)
+  }
+
+  private async writeStored(metadata: StoredAttachmentMetadata): Promise<void> {
+    const parsed = StoredAttachmentMetadataSchema.parse(metadata)
+    await writeFile(this.metadataPath(parsed.id), JSON.stringify(parsed, null, 2), {
+      encoding: 'utf8',
+      mode: 0o600
+    })
+  }
+
+  private async mutate<T>(id: string, operation: () => Promise<T>): Promise<T> {
+    const previous = this.mutations.get(id) ?? Promise.resolve()
+    const result = previous.then(operation, operation)
+    const settled = result.then(() => undefined, () => undefined)
+    this.mutations.set(id, settled)
+    try {
+      return await result
+    } finally {
+      if (this.mutations.get(id) === settled) this.mutations.delete(id)
+    }
   }
 
   private async ensureRoot(): Promise<void> {
@@ -335,6 +451,24 @@ function mergeScope<T extends AttachmentMetadata>(metadata: T, input: { threadId
     threadIds: mergeUnique(metadata.threadIds, input.threadId),
     workspaces: mergeUnique(metadata.workspaces, input.workspace)
   }
+}
+
+function mergeLease<T extends StoredAttachmentMetadata>(
+  metadata: T,
+  leaseId: string | undefined,
+  createdAt: string
+): T {
+  if (!leaseId || metadata.pendingLeases.some((lease) => lease.id === leaseId)) return metadata
+  return {
+    ...metadata,
+    leaseManaged: true,
+    pendingLeases: [...metadata.pendingLeases, { id: leaseId, createdAt }]
+  }
+}
+
+function publicMetadata(metadata: StoredAttachmentMetadata): AttachmentMetadata {
+  const { pendingLeases: _pendingLeases, leaseManaged: _leaseManaged, ...value } = metadata
+  return AttachmentMetadataSchema.parse(value)
 }
 
 function mergeUnique(values: string[], value: string | undefined): string[] {

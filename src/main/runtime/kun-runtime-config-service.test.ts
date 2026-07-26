@@ -67,6 +67,7 @@ describe('Kun runtime config service', () => {
       sandboxMode: 'read-only',
       providers: {}
     })
+    expect(body.modelSelection).toBeUndefined()
     expect(body.serve).not.toHaveProperty('host')
     expect(body.serve).not.toHaveProperty('port')
     expect(body.serve).not.toHaveProperty('dataDir')
@@ -107,6 +108,37 @@ describe('Kun runtime config service', () => {
     expect(applied.serve).not.toHaveProperty('runtimeToken')
     expect(applied.serve).not.toHaveProperty('insecure')
     expect(applied.serve).not.toHaveProperty('storage')
+  })
+
+  it('does not let ordinary GUI hot apply overwrite the registry-owned shared default', () => {
+    const provider = defaultModelProviderSettings()
+    const deepseek = provider.providers.find((candidate) => candidate.id === 'deepseek')!
+    const model = deepseek.models[1]!
+    const base = normalizeAppSettings({} as AppSettingsV1)
+    const settings = normalizeAppSettings({
+      ...base,
+      provider,
+      agents: {
+        kun: {
+          ...defaultKunRuntimeSettings(),
+          providerId: deepseek.id,
+          model
+        }
+      }
+    })
+    const body = buildManagedRuntimeHotApplyBody(settings, KunConfigSchema.parse({
+      serve: {
+        host: '127.0.0.1',
+        port: 18899,
+        dataDir: '/tmp/kun-data',
+        runtimeToken: 'runtime-token',
+        insecure: false,
+        storage: { backend: 'hybrid' },
+        providers: {}
+      }
+    }))
+
+    expect(body.modelSelection).toBeUndefined()
   })
 
   it('classifies compatibility fallback, success, restart, and failure responses', () => {

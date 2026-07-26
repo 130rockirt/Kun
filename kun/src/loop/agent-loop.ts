@@ -458,8 +458,10 @@ export class AgentLoop {
     if (sdkRuntime) {
       const turn = owningThread?.turns.find((candidate) => candidate.id === turnId)
       const providerId = turn?.providerId?.trim() || owningThread?.providerId?.trim()
-      if (sdkRuntime.handlesProvider(providerId)) {
-        delegatedSdkRuntime = sdkRuntime
+      const resolvedRuntime = sdkRuntime.resolveProvider?.(providerId) ??
+        (sdkRuntime.handlesProvider(providerId) ? sdkRuntime : undefined)
+      if (resolvedRuntime) {
+        delegatedSdkRuntime = resolvedRuntime
         delegatedProviderId = providerId
       }
     }

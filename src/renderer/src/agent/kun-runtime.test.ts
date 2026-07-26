@@ -121,6 +121,87 @@ describe('KunRuntimeProvider', () => {
     expect(alertDialog).not.toHaveBeenCalled()
   })
 
+  it('does not fall back to stale GUI settings when the shared registry has no connected default', async () => {
+    const runtimeRequest = vi.fn(async (path: string) => {
+      expect(path).toBe('/v1/model-connections')
+      return {
+        ok: true,
+        status: 200,
+        body: JSON.stringify({
+          schemaVersion: 1,
+          revision: 3,
+          providers: [],
+          proxy: { enabled: false, url: '' },
+          routePools: [],
+          localModelGateway: { enabled: false }
+        })
+      }
+    })
+    installDsGui({
+      runtimeRequest,
+      workspaceDirectoryExists: vi.fn(async () => true)
+    })
+
+    await expect(new KunRuntimeProvider().createThread({ workspace: '/tmp/workspace' }))
+      .rejects.toThrow(/connected model/i)
+    expect(runtimeRequest).toHaveBeenCalledTimes(1)
+  })
+
+  it('creates a new GUI session from the live shared default rather than stale local settings', async () => {
+    const runtimeRequest = vi.fn(async (path: string, method?: string, body?: string) => {
+      if (path === '/v1/model-connections') {
+        return {
+          ok: true,
+          status: 200,
+          body: JSON.stringify({
+            schemaVersion: 1,
+            revision: 4,
+            providers: [{
+              id: 'codex',
+              accountId: 'account:codex',
+              configured: true,
+              models: ['gpt-live']
+            }],
+            defaultProviderId: 'codex',
+            defaultAccountId: 'account:codex',
+            defaultModel: 'gpt-live'
+          })
+        }
+      }
+      expect(path).toBe('/v1/threads')
+      expect(method).toBe('POST')
+      expect(JSON.parse(body ?? '{}')).toMatchObject({
+        providerId: 'codex',
+        accountId: 'account:codex',
+        model: 'gpt-live'
+      })
+      return {
+        ok: true,
+        status: 201,
+        body: JSON.stringify({
+          id: 'thr_live',
+          title: 'Live',
+          workspace: '/tmp/workspace',
+          model: 'gpt-live',
+          providerId: 'codex',
+          accountId: 'account:codex',
+          mode: 'agent',
+          status: 'idle',
+          createdAt: 't0',
+          updatedAt: 't0',
+          turns: []
+        })
+      }
+    })
+    installDsGui({
+      runtimeRequest,
+      workspaceDirectoryExists: vi.fn(async () => true)
+    })
+
+    await expect(new KunRuntimeProvider().createThread({ workspace: '/tmp/workspace' }))
+      .resolves.toMatchObject({ id: 'thr_live', model: 'gpt-live' })
+  })
+
   it('starts MCP OAuth authorization through the authenticated runtime bridge', async () => {
     const runtimeRequest = vi.fn(async () => ({
       ok: true,
@@ -384,6 +465,7 @@ describe('KunRuntimeProvider', () => {
       'POST',
       JSON.stringify({
         prompt: 'hello',
+        clientSurface: 'gui',
         approvalPolicy: 'on-request',
         sandboxMode: 'workspace-write'
       })
@@ -408,6 +490,7 @@ describe('KunRuntimeProvider', () => {
       'POST',
       JSON.stringify({
         prompt: 'hello',
+        clientSurface: 'gui',
         model: 'mimo-v2.5',
         providerId: 'xiaomi-token-plan',
         approvalPolicy: 'on-request',
@@ -442,6 +525,7 @@ describe('KunRuntimeProvider', () => {
       'POST',
       JSON.stringify({
         prompt: 'draft a plan',
+        clientSurface: 'gui',
         model: 'reasoning-pro',
         providerId: 'provider-pro',
         approvalPolicy: 'on-request',
@@ -465,6 +549,7 @@ describe('KunRuntimeProvider', () => {
       'POST',
       JSON.stringify({
         prompt: 'hello',
+        clientSurface: 'gui',
         approvalPolicy: 'on-request',
         sandboxMode: 'workspace-write',
         workspaceCheckpointId: 'gcp_1'
@@ -504,6 +589,7 @@ describe('KunRuntimeProvider', () => {
       'POST',
       JSON.stringify({
         prompt: 'Use the selection',
+        clientSurface: 'gui',
         approvalPolicy: 'on-request',
         sandboxMode: 'workspace-write',
         composerContexts: [composerContext]
@@ -528,6 +614,7 @@ describe('KunRuntimeProvider', () => {
       'POST',
       JSON.stringify({
         prompt: 'design a screen',
+        clientSurface: 'gui',
         approvalPolicy: 'on-request',
         sandboxMode: 'workspace-write',
         guiDesignCanvas: true,
@@ -557,6 +644,7 @@ describe('KunRuntimeProvider', () => {
       'POST',
       JSON.stringify({
         prompt: 'animate the mark',
+        clientSurface: 'gui',
         approvalPolicy: 'on-request',
         sandboxMode: 'workspace-write',
         guiDesignMode: true,
@@ -597,6 +685,7 @@ describe('KunRuntimeProvider', () => {
       'POST',
       JSON.stringify({
         prompt: 'describe this',
+        clientSurface: 'gui',
         approvalPolicy: 'on-request',
         sandboxMode: 'workspace-write',
         attachmentIds: ['att_1']
@@ -635,6 +724,7 @@ describe('KunRuntimeProvider', () => {
       'POST',
       JSON.stringify({
         prompt: 'explain these files',
+        clientSurface: 'gui',
         approvalPolicy: 'on-request',
         sandboxMode: 'workspace-write',
         fileReferences: [
@@ -674,6 +764,7 @@ describe('KunRuntimeProvider', () => {
       'POST',
       JSON.stringify({
         prompt: 'think harder',
+        clientSurface: 'gui',
         model: 'auto',
         approvalPolicy: 'on-request',
         sandboxMode: 'workspace-write',
@@ -709,6 +800,7 @@ describe('KunRuntimeProvider', () => {
       'POST',
       JSON.stringify({
         prompt: 'refine the plan',
+        clientSurface: 'gui',
         approvalPolicy: 'on-request',
         sandboxMode: 'workspace-write',
         displayText: 'Generate implementation plan',

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
@@ -8,6 +8,7 @@ import { modelCapabilitiesForModel } from '../loop/model-context-profile.js'
 import {
   ensureSharedRuntime,
   probeRuntimeDiscovery,
+  resolveSharedRuntime,
   runRuntimeCommand,
   stopSharedRuntime
 } from './shared-runtime.js'
@@ -75,7 +76,7 @@ describe('shared runtime discovery validation', () => {
     expect(fetchImpl).not.toHaveBeenCalled()
   })
 
-  it('supports a GUI-prepared custom detached launch and graceful shutdown', async () => {
+  it('elects one GUI/TUI-independent custom launch and shuts it down explicitly', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'kun-custom-shared-runtime-'))
     const capabilities = JSON.stringify(buildRuntimeCapabilityManifest({
       model: modelCapabilitiesForModel('fixture')
@@ -100,6 +101,11 @@ const server = http.createServer((req, res) => {
     setTimeout(() => server.close(() => { try { fs.unlinkSync(path.join(dataDir, 'runtime.json')); } catch {} process.exit(0); }), 10);
     return;
   }
+  if (req.url === '/crash' && req.method === 'POST') {
+    res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ ok: true }));
+    setTimeout(() => process.exit(23), 10);
+    return;
+  }
   res.statusCode = 404; res.end();
 });
 server.listen(0, '127.0.0.1', () => {
@@ -110,12 +116,35 @@ server.listen(0, '127.0.0.1', () => {
 });
 `
     try {
-      const connection = await ensureSharedRuntime({
+      const launch = {
         dataDir,
         launch: { command: process.execPath, args: ['-e', fixture, dataDir], runAsNode: false }
-      })
+      }
+      const [connection, concurrentClient] = await Promise.all([
+        ensureSharedRuntime(launch),
+        ensureSharedRuntime(launch)
+      ])
       expect(connection.discovery.launchMode).toBe('shared')
+      expect(concurrentClient.discovery.instanceId).toBe(connection.discovery.instanceId)
+      expect(concurrentClient.discovery.pid).toBe(connection.discovery.pid)
       expect(connection.discovery.logPath).toContain('runtime.log')
+      const config = JSON.parse(await readFile(join(dataDir, 'config.json'), 'utf8')) as {
+        capabilities: Record<string, { enabled: boolean }>
+      }
+      expect(config.capabilities).toMatchObject({
+        skills: { enabled: true },
+        attachments: { enabled: true },
+        memory: { enabled: true },
+        subagents: { enabled: true }
+      })
+      await fetch(`${connection.discovery.baseUrl}/crash`, { method: 'POST' })
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        if (!await resolveSharedRuntime(dataDir)) break
+        await new Promise((resolve) => setTimeout(resolve, 20))
+      }
+      const recovered = await ensureSharedRuntime(launch)
+      expect(recovered.discovery.instanceId).not.toBe(connection.discovery.instanceId)
+      expect(recovered.discovery.pid).not.toBe(connection.discovery.pid)
       expect(await stopSharedRuntime(dataDir)).toBe(true)
     } finally {
       await stopSharedRuntime(dataDir).catch(() => undefined)

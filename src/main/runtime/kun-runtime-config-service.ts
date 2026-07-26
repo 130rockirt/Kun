@@ -414,6 +414,7 @@ function buildWorkflowHookEntries(workflow: AppSettingsV1['workflow'] | undefine
     .map((trigger) => ({
       phase: trigger.phase,
       ...(trigger.toolNames.length ? { toolNames: trigger.toolNames } : {}),
+      clientSurfaces: ['gui'],
       workflow: trigger.workflowId,
       mode: trigger.mode,
       baseUrl,

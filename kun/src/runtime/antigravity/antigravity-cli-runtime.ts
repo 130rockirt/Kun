@@ -3,9 +3,11 @@ import type { ServeProviderConfig } from '../../config/kun-config.js'
 import type { TurnReasoningEffort } from '../../contracts/turns.js'
 import { userMessageTextWithComposerContexts } from '../../domain/composer-context.js'
 import { makeAssistantTextItem } from '../../domain/item.js'
+import { resolveTurnClientSurface } from '../../loop/turn-context-resolver.js'
 import { normalizeTurnLimits, type TurnLimitsConfig } from '../../loop/turn-limits.js'
 import type { SessionStore } from '../../ports/session-store.js'
 import type { ThreadStore } from '../../ports/thread-store.js'
+import { buildClientSurfaceInstruction } from '../../prompt/kun-prompt-context.js'
 import type {
   ModelRequestTraceDelegated,
   ModelRequestTraceRecord
@@ -110,6 +112,10 @@ export function buildAntigravityArgs(input: {
   } else if (input.approvalPolicy === 'auto') {
     args.push('--dangerously-skip-permissions')
     if (input.sandboxMode !== 'danger-full-access') args.push('--sandbox')
+  } else if (input.sandboxMode !== 'danger-full-access') {
+    // Headless Antigravity cannot surface Kun's interactive approval gate. Preserve the
+    // requested sandbox and let the official CLI soft-deny interactive actions.
+    args.push('--sandbox')
   }
   return args
 }
@@ -173,6 +179,7 @@ export class AntigravityCliRuntime implements DelegatedTurnRuntime {
 
     const instructionBlocks = [
       this.deps.systemPrompt?.trim(),
+      buildClientSurfaceInstruction(resolveTurnClientSurface(turn)),
       thread.systemPrompt?.trim()
     ].filter((value, index, all): value is string =>
       Boolean(value) && all.indexOf(value) === index

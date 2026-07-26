@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -93,17 +94,14 @@ type SharedModelConnection = {
   id: string
   accountId: string
   name: string
+  presetSource?: string
   kind: 'http' | 'agent-sdk' | 'antigravity-cli' | 'cursor-sdk' | 'gemini-code-assist'
+  authType: 'api-key' | 'oauth' | 'subscription'
+  baseUrl?: string
+  endpointFormat: ModelEndpointFormat
   configured: boolean
   models: string[]
-  modelCapabilities?: Record<string, {
-    id: string
-    contextWindowTokens?: number
-    reasoning?: {
-      supportedEfforts: Array<'auto' | 'off' | 'low' | 'medium' | 'high' | 'max'>
-      defaultEffort: 'auto' | 'off' | 'low' | 'medium' | 'high' | 'max'
-    }
-  }>
+  modelCapabilities?: Record<string, Omit<ModelProviderModelProfileV1, 'aliases'> & { id: string }>
   selectedModel?: string
 }
 
@@ -115,7 +113,7 @@ type SharedModelConnectionsSnapshot = {
   defaultAccountId?: string
   defaultModel?: string
   proxy?: { enabled: boolean; url: string }
-  routePools?: unknown[]
+  routePools?: ModelProviderSettingsV1['routePools']
   localModelGateway?: { enabled: boolean }
 }
 
@@ -137,6 +135,13 @@ function parseSharedModelConnectionEvent(body: string): SharedModelConnectionsSn
   return validateSharedModelConnections(value?.snapshot)
 }
 
+class SharedModelConnectionConflictError extends Error {
+  constructor(readonly snapshot: SharedModelConnectionsSnapshot) {
+    super('The shared model configuration changed in another client.')
+    this.name = 'SharedModelConnectionConflictError'
+  }
+}
+
 async function requestSharedModelConnections(
   path: string,
   method = 'GET',
@@ -147,8 +152,158 @@ async function requestSharedModelConnections(
     method,
     body === undefined ? undefined : JSON.stringify(body)
   )
-  if (!result.ok) throw new Error(`Shared model connection request failed (HTTP ${result.status})`)
+  if (!result.ok) {
+    if (result.status === 409) {
+      try {
+        const conflict = JSON.parse(result.body) as { snapshot?: unknown }
+        throw new SharedModelConnectionConflictError(
+          validateSharedModelConnections(conflict.snapshot)
+        )
+      } catch (error) {
+        if (error instanceof SharedModelConnectionConflictError) throw error
+      }
+    }
+    let message = ''
+    try {
+      const value = JSON.parse(result.body) as { message?: unknown }
+      if (typeof value.message === 'string') message = value.message.trim()
+    } catch {
+      // Keep the HTTP fallback below.
+    }
+    throw new Error(message || `Shared model connection request failed (HTTP ${result.status})`)
+  }
   return parseSharedModelConnections(result.body)
+}
+
+function sharedModelProfiles(
+  connection: SharedModelConnection,
+  existing: ModelProviderProfileV1 | undefined
+): Record<string, ModelProviderModelProfileV1> {
+  return Object.fromEntries(connection.models.map((model) => {
+    const previous = existing?.modelProfiles[model] ??
+      existing?.modelProfiles[model.trim().toLowerCase()]
+    const capability = connection.modelCapabilities?.[model] ??
+      connection.modelCapabilities?.[model.trim().toLowerCase()]
+    return [model, {
+      ...(previous?.aliases ? { aliases: [...previous.aliases] } : {}),
+      inputModalities: capability?.inputModalities ?? previous?.inputModalities ?? ['text'],
+      outputModalities: capability?.outputModalities ?? previous?.outputModalities ?? ['text'],
+      supportsToolCalling: capability?.supportsToolCalling ?? previous?.supportsToolCalling ?? true,
+      messageParts: capability?.messageParts ?? previous?.messageParts ?? ['text'],
+      ...(capability?.contextWindowTokens ?? previous?.contextWindowTokens
+        ? { contextWindowTokens: capability?.contextWindowTokens ?? previous?.contextWindowTokens }
+        : {}),
+      ...(capability?.maxOutputTokens ?? previous?.maxOutputTokens
+        ? { maxOutputTokens: capability?.maxOutputTokens ?? previous?.maxOutputTokens }
+        : {}),
+      ...(capability?.reasoning ?? previous?.reasoning
+        ? { reasoning: capability?.reasoning ?? previous?.reasoning }
+        : {}),
+      ...(capability?.endpointFormat ?? previous?.endpointFormat
+        ? { endpointFormat: capability?.endpointFormat ?? previous?.endpointFormat }
+        : {}),
+      ...(capability?.responsesMode ?? previous?.responsesMode
+        ? { responsesMode: capability?.responsesMode ?? previous?.responsesMode }
+        : {})
+    }]
+  }))
+}
+
+export function projectSharedModelConnections(
+  current: ModelProviderSettingsV1,
+  snapshot: SharedModelConnectionsSnapshot
+): {
+  provider: Pick<ModelProviderSettingsV1, 'providers' | 'proxy' | 'routePools' | 'localGateway'>
+  kun: Pick<KunRuntimeSettingsV1, 'providerId' | 'model'>
+} {
+  const existingById = new Map(current.providers.map((item) => [item.id, item]))
+  const projectedProviders = snapshot.providers.map((connection): ModelProviderProfileV1 => {
+    const existing = existingById.get(connection.id)
+    return {
+      ...(existing ?? {
+        id: connection.id,
+        name: connection.name,
+        apiKey: '',
+        baseUrl: connection.baseUrl ?? '',
+        endpointFormat: connection.endpointFormat,
+        retry: defaultModelRequestRetrySettings(),
+        models: [],
+        modelProfiles: {}
+      }),
+      id: connection.id,
+      name: connection.name,
+      // Current clients resolve this provider through its protected registry
+      // binding. Keeping a cached plaintext value in renderer settings would
+      // let an unrelated save overwrite a credential changed by the TUI.
+      apiKey: '',
+      baseUrl: connection.baseUrl ?? '',
+      endpointFormat: connection.endpointFormat,
+      kind: connection.kind,
+      models: [...connection.models],
+      modelProfiles: sharedModelProfiles(connection, existing)
+    }
+  })
+  // AppSettings keeps a normalized DeepSeek editor as its legacy fallback.
+  // When the canonical registry intentionally has no DeepSeek profile, retain
+  // that local placeholder without treating it as a connected profile.
+  const compatibilityDefault = !snapshot.providers.some((entry) => entry.id === DEFAULT_MODEL_PROVIDER_ID)
+    ? existingById.get(DEFAULT_MODEL_PROVIDER_ID)
+    : undefined
+  const providers = compatibilityDefault
+    ? [{ ...compatibilityDefault, apiKey: '' }, ...projectedProviders]
+    : projectedProviders
+  return {
+    provider: {
+      providers,
+      proxy: snapshot.proxy ?? current.proxy,
+      routePools: snapshot.routePools ?? current.routePools,
+      localGateway: {
+        ...current.localGateway,
+        enabled: snapshot.localModelGateway?.enabled ?? current.localGateway.enabled
+      }
+    },
+    kun: {
+      providerId: snapshot.defaultProviderId ?? '',
+      model: snapshot.defaultModel ?? ''
+    }
+  }
+}
+
+function sharedSettingsFingerprint(input: {
+  providers: readonly ModelProviderProfileV1[]
+  providerId: string
+  model: string
+  proxy: ModelProviderSettingsV1['proxy']
+  routePools: ModelProviderSettingsV1['routePools']
+  localGateway: ModelProviderSettingsV1['localGateway']
+}): string {
+  return JSON.stringify({
+    providers: input.providers.map((item) => ({
+      id: item.id,
+      name: item.name,
+      apiKey: item.apiKey,
+      baseUrl: item.baseUrl,
+      endpointFormat: item.endpointFormat,
+      kind: item.kind,
+      models: item.models,
+      modelProfiles: item.modelProfiles
+    })),
+    providerId: input.providerId,
+    model: input.model,
+    proxy: input.proxy,
+    routePools: input.routePools,
+    localGateway: input.localGateway
+  })
+}
+
+function sharedCapabilitiesFromProvider(
+  provider: ModelProviderProfileV1
+): SharedModelConnection['modelCapabilities'] {
+  return Object.fromEntries(provider.models.flatMap((model) => {
+    const profile = provider.modelProfiles[model] ??
+      provider.modelProfiles[model.trim().toLowerCase()]
+    return profile ? [[model, { id: model, ...profile }]] : []
+  }))
 }
 import { classifyProviderModelIds, providerModelListEntries } from './provider-model-editor'
 import { ProviderModelsManager } from './settings-section-provider-models'
@@ -1552,6 +1707,11 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
   const [sharedConnections, setSharedConnections] = useState<SharedModelConnectionsSnapshot | null>(null)
   const [sharedConnectionsError, setSharedConnectionsError] = useState('')
   const sharedSyncFingerprint = useRef('')
+  const sharedProjectionPending = useRef(false)
+  const dirtyCredentialProviderIds = useRef(new Set<string>())
+  const deletedSharedProviderIds = useRef(new Set<string>())
+  const sharedProjectionInput = useRef({ provider, kun, update })
+  sharedProjectionInput.current = { provider, kun, update }
   const [selectedProviderId, setSelectedProviderId] = useState<string>(
     kun.providerId?.trim() || modelProviders[0]?.id || DEFAULT_MODEL_PROVIDER_ID
   )
@@ -1605,15 +1765,28 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
   const cursorMetadataRepairAttempts = useRef(new Set<string>())
   // 新增供应商先停留在本地草稿,点「添加」才写入设置,避免半配置状态被持久化。
   const [draftProvider, setDraftProvider] = useState<ModelProviderProfileV1 | null>(null)
-  const displayProviders = draftProvider ? [...modelProviders, draftProvider] : modelProviders
+  const displayProviders = useMemo(
+    () => draftProvider ? [...modelProviders, draftProvider] : modelProviders,
+    [draftProvider, modelProviders]
+  )
   const activeProvider =
     displayProviders.find((item) => item.id === selectedProviderId) ??
     modelProviders[0]
+  useEffect(() => {
+    if (displayProviders.some((item) => item.id === selectedProviderId)) return
+    setSelectedProviderId(
+      sharedConnections?.defaultProviderId &&
+      displayProviders.some((item) => item.id === sharedConnections.defaultProviderId)
+        ? sharedConnections.defaultProviderId
+        : displayProviders[0]?.id ?? DEFAULT_MODEL_PROVIDER_ID
+    )
+  }, [displayProviders, selectedProviderId, sharedConnections?.defaultProviderId])
   const activeRetry = activeProvider ? providerRetrySettings(activeProvider) : defaultModelRequestRetrySettings()
   const isDraftActive = Boolean(draftProvider && activeProvider?.id === draftProvider.id)
   const canEditActiveProviderId = Boolean(
     activeProvider &&
     activeProvider.id !== DEFAULT_MODEL_PROVIDER_ID &&
+    !sharedConnections?.providers.some((connection) => connection.id === activeProvider.id) &&
     !resolveModelProviderPresetSource(activeProvider)
   )
   const activeKunProviderId: string = kun.providerId?.trim() || DEFAULT_MODEL_PROVIDER_ID
@@ -1638,6 +1811,32 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
           revision = snapshot.revision
           setSharedConnections(snapshot)
           setSharedConnectionsError('')
+          const current = sharedProjectionInput.current
+          const projected = projectSharedModelConnections(current.provider, snapshot)
+          const fingerprint = sharedSettingsFingerprint({
+            providers: projected.provider.providers,
+            providerId: projected.kun.providerId,
+            model: projected.kun.model,
+            proxy: projected.provider.proxy,
+            routePools: projected.provider.routePools,
+            localGateway: projected.provider.localGateway
+          })
+          sharedSyncFingerprint.current = fingerprint
+          const currentFingerprint = sharedSettingsFingerprint({
+            providers: current.provider.providers,
+            providerId: current.kun.providerId,
+            model: current.kun.model,
+            proxy: current.provider.proxy,
+            routePools: current.provider.routePools,
+            localGateway: current.provider.localGateway
+          })
+          if (fingerprint !== currentFingerprint) {
+            sharedProjectionPending.current = true
+            current.update({
+              provider: projected.provider,
+              agents: { kun: projected.kun }
+            })
+          }
         }
       } catch (error) {
         if (!disposed) setSharedConnectionsError(error instanceof Error ? error.message : String(error))
@@ -1653,28 +1852,33 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
   }, [])
 
   useEffect(() => {
-    if (saveStatus !== 'saved') return
-    const fingerprint = JSON.stringify({
-      providers: modelProviders.map((item) => ({
-        id: item.id,
-        name: item.name,
-        apiKey: item.apiKey,
-        baseUrl: item.baseUrl,
-        endpointFormat: item.endpointFormat,
-        kind: item.kind,
-        models: item.models
-      })),
+    if (saveStatus !== 'saved' || !sharedConnections) return
+    const fingerprint = sharedSettingsFingerprint({
+      providers: modelProviders,
       providerId: kun.providerId,
       model: kun.model,
       proxy: provider.proxy,
       routePools: provider.routePools,
       localGateway: provider.localGateway
     })
+    if (sharedProjectionPending.current) {
+      if (fingerprint === sharedSyncFingerprint.current) {
+        sharedProjectionPending.current = false
+      }
+      return
+    }
     if (fingerprint === sharedSyncFingerprint.current) return
     let disposed = false
-    const sync = async (): Promise<void> => {
+    const syncOnce = async (): Promise<void> => {
       let snapshot = await requestSharedModelConnections('/v1/model-connections')
-      for (const item of modelProviders) {
+      const desiredProviders = modelProviders.filter((item) =>
+        item.id !== DEFAULT_MODEL_PROVIDER_ID ||
+        snapshot.providers.some((entry) => entry.id === item.id) ||
+        dirtyCredentialProviderIds.current.has(item.id) ||
+        kun.providerId === item.id
+      )
+      const desiredProviderIds = new Set(desiredProviders.map((item) => item.id))
+      for (const item of desiredProviders) {
         const baseUrlOptional =
           item.kind === 'agent-sdk' ||
           item.kind === 'antigravity-cli' ||
@@ -1693,38 +1897,76 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
             endpointFormat: item.endpointFormat,
             ...(item.apiKey.trim() ? { credential: item.apiKey } : {}),
             models: item.models,
+            modelCapabilities: sharedCapabilitiesFromProvider(item),
             ...(selectedModel ? { selectedModel } : {}),
             probe: false,
             select: false
           })
         } else {
-          snapshot = await requestSharedModelConnections(
-            `/v1/model-connections/${encodeURIComponent(item.id)}`,
-            'PATCH',
-            {
-              expectedRevision: snapshot.revision,
-              name: item.name.trim() || item.id,
-              ...(item.kind === 'agent-sdk' ? {} : { baseUrl: item.baseUrl }),
-              endpointFormat: item.endpointFormat,
-              models: item.models,
-              ...(selectedModel ? { selectedModel } : {})
-            }
-          )
-          if (item.apiKey.trim()) {
+          const modelCapabilities = sharedCapabilitiesFromProvider(item)
+          const needsPatch =
+            existing.name !== (item.name.trim() || item.id) ||
+            (existing.baseUrl ?? '') !== item.baseUrl ||
+            existing.endpointFormat !== item.endpointFormat ||
+            existing.kind !== (item.kind ?? 'http') ||
+            JSON.stringify(existing.models) !== JSON.stringify(item.models) ||
+            JSON.stringify(existing.modelCapabilities ?? {}) !== JSON.stringify(modelCapabilities ?? {}) ||
+            existing.selectedModel !== selectedModel
+          if (needsPatch) {
             snapshot = await requestSharedModelConnections(
-              `/v1/model-connections/${encodeURIComponent(item.id)}/credential`,
-              'PUT',
-              { expectedRevision: snapshot.revision, credential: item.apiKey }
+              `/v1/model-connections/${encodeURIComponent(item.id)}`,
+              'PATCH',
+              {
+                expectedRevision: snapshot.revision,
+                name: item.name.trim() || item.id,
+                kind: item.kind ?? 'http',
+                authType: isSubscriptionProvider(item) ? 'subscription' : 'api-key',
+                ...(baseUrlOptional ? {} : { baseUrl: item.baseUrl }),
+                endpointFormat: item.endpointFormat,
+                models: item.models,
+                modelCapabilities,
+                ...(selectedModel ? { selectedModel } : {})
+              }
             )
+          }
+          if (dirtyCredentialProviderIds.current.has(item.id)) {
+            snapshot = item.apiKey.trim()
+              ? await requestSharedModelConnections(
+                  `/v1/model-connections/${encodeURIComponent(item.id)}/credential`,
+                  'PUT',
+                  { expectedRevision: snapshot.revision, credential: item.apiKey }
+                )
+              : await requestSharedModelConnections(
+                  `/v1/model-connections/${encodeURIComponent(item.id)}/credential?expected_revision=${snapshot.revision}`,
+                  'DELETE'
+                )
+            dirtyCredentialProviderIds.current.delete(item.id)
           }
         }
       }
-      snapshot = await requestSharedModelConnections('/v1/model-connections', 'PATCH', {
-        expectedRevision: snapshot.revision,
-        proxy: provider.proxy ?? { enabled: false, url: '' },
-        routePools: provider.routePools ?? [],
-        localModelGateway: { enabled: provider.localGateway?.enabled === true }
-      })
+      for (const existing of [...snapshot.providers]) {
+        if (
+          desiredProviderIds.has(existing.id) ||
+          !deletedSharedProviderIds.current.has(existing.id)
+        ) continue
+        snapshot = await requestSharedModelConnections(
+          `/v1/model-connections/${encodeURIComponent(existing.id)}?expected_revision=${snapshot.revision}`,
+          'DELETE'
+        )
+        deletedSharedProviderIds.current.delete(existing.id)
+      }
+      const globalsChanged =
+        JSON.stringify(snapshot.proxy) !== JSON.stringify(provider.proxy ?? { enabled: false, url: '' }) ||
+        JSON.stringify(snapshot.routePools) !== JSON.stringify(provider.routePools ?? []) ||
+        snapshot.localModelGateway?.enabled !== (provider.localGateway?.enabled === true)
+      if (globalsChanged) {
+        snapshot = await requestSharedModelConnections('/v1/model-connections', 'PATCH', {
+          expectedRevision: snapshot.revision,
+          proxy: provider.proxy ?? { enabled: false, url: '' },
+          routePools: provider.routePools ?? [],
+          localModelGateway: { enabled: provider.localGateway?.enabled === true }
+        })
+      }
       const active = snapshot.providers.find((entry) => entry.id === kun.providerId)
       const model = active && (active.models.includes(kun.model) ? kun.model : active.models[0])
       if (active?.configured && model && (
@@ -1743,21 +1985,55 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
         setSharedConnectionsError('')
       }
     }
+    const sync = async (): Promise<void> => {
+      try {
+        await syncOnce()
+      } catch (error) {
+        if (error instanceof SharedModelConnectionConflictError && !disposed) {
+          setSharedConnections(error.snapshot)
+          throw new Error('Model settings changed in another client. The latest revision was loaded; review and save again.')
+        }
+        throw error
+      }
+    }
     void sync().catch((error) => {
       if (!disposed) setSharedConnectionsError(error instanceof Error ? error.message : String(error))
     })
     return () => { disposed = true }
-  }, [kun.model, kun.providerId, modelProviders, provider.localGateway, provider.proxy, provider.routePools, saveStatus])
+  }, [
+    kun.model,
+    kun.providerId,
+    modelProviders,
+    provider.localGateway,
+    provider.proxy,
+    provider.routePools,
+    saveStatus,
+    sharedConnections
+  ])
 
   const selectSharedModel = async (connection: SharedModelConnection, model: string): Promise<void> => {
     if (!sharedConnections) return
     try {
-      const snapshot = await requestSharedModelConnections('/v1/model-connections/select', 'POST', {
-        expectedRevision: sharedConnections.revision,
-        providerId: connection.id,
-        accountId: connection.accountId,
-        model
-      })
+      let expectedRevision = sharedConnections.revision
+      let snapshot: SharedModelConnectionsSnapshot | undefined
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          snapshot = await requestSharedModelConnections('/v1/model-connections/select', 'POST', {
+            expectedRevision,
+            providerId: connection.id,
+            accountId: connection.accountId,
+            model
+          })
+          break
+        } catch (error) {
+          if (!(error instanceof SharedModelConnectionConflictError) || attempt === 1) throw error
+          const latest = error.snapshot.providers.find((entry) => entry.id === connection.id)
+          if (!latest?.models.includes(model)) throw error
+          expectedRevision = error.snapshot.revision
+          setSharedConnections(error.snapshot)
+        }
+      }
+      if (!snapshot) return
       setSharedConnections(snapshot)
       setSharedConnectionsError('')
       update({ agents: { kun: { providerId: connection.id, model } } })
@@ -1892,6 +2168,13 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
   const updateModelProvider = (id: string, patch: Partial<ModelProviderProfileV1>): void => {
     const target = displayProviders.find((item) => item.id === id)
     if (!target) return
+    if (
+      !draftProvider &&
+      Object.prototype.hasOwnProperty.call(patch, 'apiKey') &&
+      patch.apiKey !== target.apiKey
+    ) {
+      dirtyCredentialProviderIds.current.add(id)
+    }
     patchProviderProfile(target, (item) => ({ ...item, ...patch }))
   }
 
@@ -2164,6 +2447,9 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
       cancelLabel: t('modelProviderCancel')
     })
     if (!confirmed) return
+    if (sharedConnections?.providers.some((connection) => connection.id === id)) {
+      deletedSharedProviderIds.current.add(id)
+    }
     const nextProviders = modelProviders.filter((item) => item.id !== id)
     const kunPatch: KunRuntimeSettingsPatchV1 | undefined =
       usedByChat || usedByImage || usedBySpeech || usedByTextToSpeech || usedByMusic || usedByVideo

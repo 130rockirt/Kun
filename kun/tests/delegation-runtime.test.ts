@@ -1266,6 +1266,146 @@ describe('DelegationRuntime', () => {
     expect(diagnostics.childRuns[0]?.summary).toBe('background done')
   })
 
+  it('moves a live foreground child into the background without restarting it', async () => {
+    const start = deferred<void>()
+    const release = deferred<void>()
+    let childSignal: AbortSignal | undefined
+    let executions = 0
+    const runtime = createRuntime({
+      executor: async ({ signal }) => {
+        executions += 1
+        childSignal = signal
+        start.resolve()
+        await release.promise
+        if (signal.aborted) throw new Error('unexpected abort')
+        return {
+          summary: 'continued in background',
+          usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 }
+        }
+      }
+    })
+    const parent = new AbortController()
+    const foreground = runtime.runChild({
+      parentThreadId: 'thr_dynamic_detach',
+      parentTurnId: 'turn_dynamic_detach',
+      prompt: 'long foreground task',
+      signal: parent.signal
+    })
+    await start.promise
+    const diagnostics = await runtime.diagnostics('thr_dynamic_detach')
+    const childId = diagnostics.childRuns[0]!.id
+
+    expect(await runtime.detachChild(childId)).toBe(true)
+    const released = await foreground
+    expect(released).toMatchObject({ id: childId, status: 'running', detached: true })
+    expect(await runtime.detachChild(childId)).toBe(false)
+    parent.abort()
+    expect(childSignal?.aborted).toBe(false)
+    expect(executions).toBe(1)
+
+    release.resolve()
+    await waitFor(async () => {
+      const latest = await runtime.diagnostics('thr_dynamic_detach')
+      return latest.childRuns[0]?.status === 'completed'
+    })
+    const completed = (await runtime.diagnostics('thr_dynamic_detach')).childRuns[0]
+    expect(completed).toMatchObject({
+      id: childId,
+      status: 'completed',
+      detached: true,
+      summary: 'continued in background',
+      usage: { totalTokens: 15 }
+    })
+    expect(runtime.abortChild(childId)).toBe(false)
+    expect(await runtime.detachChild('child_unknown')).toBe(false)
+  })
+
+  it('mirrors safe child activity phases onto the parent without reasoning text', async () => {
+    const bus = new InMemoryEventBus()
+    const sessionStore = new InMemorySessionStore()
+    const started = deferred<string>()
+    const release = deferred<void>()
+    const runtime = createRuntime({
+      eventBus: bus,
+      sessionStore,
+      executor: async ({ childId }) => {
+        started.resolve(childId)
+        await release.promise
+        return { summary: 'activity complete' }
+      }
+    })
+    const running = runtime.runChild({
+      parentThreadId: 'thr_activity',
+      parentTurnId: 'turn_activity',
+      prompt: 'inspect activity',
+      signal: new AbortController().signal
+    })
+    const childId = await started.promise
+    bus.publish({
+      kind: 'assistant_reasoning_delta',
+      seq: 1,
+      timestamp: '2026-06-03T00:00:01.000Z',
+      threadId: childId,
+      turnId: 'turn_child',
+      itemId: 'reason_child',
+      item: {
+        id: 'reason_child',
+        threadId: childId,
+        turnId: 'turn_child',
+        role: 'assistant',
+        status: 'running',
+        kind: 'assistant_reasoning',
+        text: 'private chain of thought',
+        createdAt: '2026-06-03T00:00:01.000Z'
+      }
+    })
+    await waitFor(async () => {
+      const child = (await runtime.diagnostics('thr_activity')).childRuns[0]
+      return child?.activity?.phase === 'thinking'
+    })
+    bus.publish({
+      kind: 'tool_call_started',
+      seq: 2,
+      timestamp: '2026-06-03T00:00:02.000Z',
+      threadId: childId,
+      turnId: 'turn_child',
+      itemId: 'tool_child',
+      item: {
+        id: 'tool_child',
+        threadId: childId,
+        turnId: 'turn_child',
+        role: 'assistant',
+        status: 'running',
+        kind: 'tool_call',
+        toolName: 'search',
+        callId: 'call_child',
+        toolKind: 'tool_call',
+        arguments: { query: 'secret query' },
+        summary: 'Searching the workspace',
+        createdAt: '2026-06-03T00:00:02.000Z'
+      }
+    })
+    await waitFor(async () => {
+      const child = (await runtime.diagnostics('thr_activity')).childRuns[0]
+      return child?.activity?.phase === 'tool'
+    })
+
+    const child = (await runtime.diagnostics('thr_activity')).childRuns[0]
+    expect(child?.activity).toMatchObject({
+      phase: 'tool',
+      label: 'Searching the workspace',
+      toolName: 'search'
+    })
+    const parentEvents = await sessionStore.loadEventsSince('thr_activity', 0)
+    const progress = parentEvents.filter((event) => event.child?.childId === childId && event.child.activity)
+    expect(progress.map((event) => event.child?.activity?.phase)).toEqual(['thinking', 'tool'])
+    expect(JSON.stringify(progress)).not.toContain('private chain of thought')
+    expect(JSON.stringify(progress)).not.toContain('secret query')
+
+    release.resolve()
+    await expect(running).resolves.toMatchObject({ status: 'completed' })
+  })
+
   it('abortChild signals a detached run and false-returns for unknown ids', async () => {
     const start = deferred<void>()
     const runtime = createRuntime({
@@ -1396,11 +1536,12 @@ describe('DelegationRuntime', () => {
     defaultProfile?: string
     profiles?: Record<string, Partial<SubagentProfileConfig>>
     sessionStore?: InMemorySessionStore
+    eventBus?: InMemoryEventBus
     executor?: ConstructorParameters<typeof DelegationRuntime>[0]['executor']
     recordExternalUsage?: ConstructorParameters<typeof DelegationRuntime>[0]['recordExternalUsage']
   } = {}) {
     const sessionStore = options.sessionStore ?? new InMemorySessionStore()
-    const bus = new InMemoryEventBus()
+    const bus = options.eventBus ?? new InMemoryEventBus()
     const recorder = new RuntimeEventRecorder({
       eventBus: bus,
       sessionStore,
@@ -1427,6 +1568,7 @@ describe('DelegationRuntime', () => {
       config,
       store: new FileDelegationStore(join(dir, 'children')),
       events: recorder,
+      eventBus: bus,
       nowIso: () => '2026-06-03T00:00:00.000Z',
       idGenerator: () => `child_${++idSeq}_${Math.random().toString(36).slice(2, 6)}`,
       recordExternalUsage: options.recordExternalUsage,

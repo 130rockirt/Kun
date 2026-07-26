@@ -4,8 +4,10 @@ import {
   InterruptTurnResponse,
   RewindThreadRequest,
   RewindThreadResponse,
+  ReplaceSteeringRequest,
   StartTurnRequest,
   StartTurnResponse,
+  SteeringQueueResponse,
   SteerTurnRequest,
   TurnSchema
 } from '../../contracts/turns.js'
@@ -75,6 +77,43 @@ export async function steerTurn(
     throw error
   }
   return jsonResponse({ ok: true })
+}
+
+export async function getSteeringQueue(
+  turns: TurnService,
+  threadId: string,
+  turnId: string
+): Promise<JsonResponse> {
+  try {
+    return jsonResponse(SteeringQueueResponse.parse({
+      threadId,
+      turnId,
+      entries: await turns.steeringQueue({ threadId, turnId })
+    }))
+  } catch (error) {
+    if (error instanceof Error && /not found/i.test(error.message)) return ERRORS.notFound(error.message)
+    throw error
+  }
+}
+
+export async function replaceSteeringQueue(
+  turns: TurnService,
+  threadId: string,
+  turnId: string,
+  request: Request
+): Promise<JsonResponse | Response> {
+  const body = await readJsonBody(request)
+  if (!body.ok) return body.response
+  const parsed = ReplaceSteeringRequest.safeParse(body.value)
+  if (!parsed.success) return ERRORS.validation('invalid steering queue body', parsed.error.issues)
+  try {
+    const entries = await turns.replaceSteering({ threadId, turnId, entries: parsed.data.entries })
+    return jsonResponse(SteeringQueueResponse.parse({ threadId, turnId, entries }))
+  } catch (error) {
+    if (error instanceof TurnConflictError) return ERRORS.conflict(error.message)
+    if (error instanceof Error && /not found/i.test(error.message)) return ERRORS.notFound(error.message)
+    throw error
+  }
 }
 
 export async function interruptTurn(

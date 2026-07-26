@@ -714,9 +714,9 @@ export function buildRuntimeCapabilityManifest(input: {
     model: input.model,
     cli: {
       serve: available(),
-      run: unavailable('not implemented'),
-      chat: unavailable('not implemented'),
-      exec: unavailable('not implemented')
+      run: available(),
+      chat: available(),
+      exec: available()
     },
     mcp: {
       ...mcpState,

@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import process from 'node:process'
 import * as pty from 'node-pty'
 import { afterEach, describe, expect, it } from 'vitest'
+import { resolveSharedRuntime, stopSharedRuntime } from '../cli/shared-runtime.js'
 import { startKunServe, type KunServeHandle } from '../server/runtime-factory.js'
 import { KunTuiClient } from './client.js'
 import { sanitizeTerminalText } from './layout.js'
@@ -16,6 +17,7 @@ const servers: KunServeHandle[] = []
 
 afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => server.close().catch(() => undefined)))
+  await Promise.all(roots.map((root) => stopSharedRuntime(root).catch(() => false)))
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })))
 })
 
@@ -29,7 +31,7 @@ describe.skipIf(process.platform === 'win32' || !existsSync(cliEntry))('kun tui 
       port: 0,
       dataDir: root,
       runtimeToken,
-      apiKey: '',
+      apiKey: 'pty-test-key',
       baseUrl: 'http://127.0.0.1:9',
       model: 'gpt-5.6-luna',
       models: {
@@ -93,7 +95,12 @@ describe.skipIf(process.platform === 'win32' || !existsSync(cliEntry))('kun tui 
       await waitFor(() => sanitizeTerminalText(output).includes('gpt-5.6-luna · max'))
 
       terminal.write('\x18n') // Ctrl+X N
-      const thread = await waitForValue(async () => (await client.listThreads()).find((item) => item.title === 'Terminal chat'))
+      const thread = await waitForValue(async () =>
+        (await client.listThreads()).find((item) => item.title === 'Terminal chat')
+      ).catch((error) => {
+        const visibleTail = sanitizeTerminalText(output).slice(-2_000)
+        throw new Error(`${error instanceof Error ? error.message : String(error)}\nPTY output tail:\n${visibleTail}`)
+      })
       await waitFor(() => output.includes('Terminal chat'))
 
       terminal.write('/rename PTY smoke\r')
@@ -130,17 +137,18 @@ describe.skipIf(process.platform === 'win32' || !existsSync(cliEntry))('kun tui 
       })
       await waitFor(() => output.includes('/thinking expand'))
       expect(output).not.toContain('Inspect the active model capability.')
-      expect(output).not.toContain('\x1b[?1000h\x1b[?1006h')
+      expect(output).toContain('\x1b[?1000h\x1b[?1006h')
 
-      terminal.write('\x18p') // Ctrl+X P enters explicit Pointer mode.
+      terminal.write('\x18p') // Ctrl+X P temporarily restores native selection.
       await waitFor(() =>
-        output.includes('Pointer mode enabled') &&
-        output.includes('\x1b[?1000h\x1b[?1006h')
-      )
-      terminal.write('\x03') // Ctrl+C leaves Pointer mode without aborting the turn.
-      await waitFor(() =>
-        output.includes('Text selection enabled') &&
+        output.includes('Text selection mode') &&
         output.includes('\x1b[?1000l\x1b[?1006l')
+      )
+      terminal.write('\x18p') // The same binding restores direct clicks.
+      await waitFor(() =>
+        output.includes('Mouse clicks enabled') &&
+        output.lastIndexOf('\x1b[?1000h\x1b[?1006h') >
+          output.lastIndexOf('\x1b[?1000l\x1b[?1006l')
       )
       expect((await client.getThread(thread.id)).turns.find((candidate) => candidate.id === turn.turnId)?.status).toBe('running')
 
@@ -188,6 +196,57 @@ describe.skipIf(process.platform === 'win32' || !existsSync(cliEntry))('kun tui 
       expect(output).toContain('\x1b[?2004l')
       expect(output).not.toContain('\x1b[?1049l')
       expect(output).not.toContain('\x1b[3J')
+    } finally {
+      dataSubscription.dispose()
+      try { terminal.kill() } catch { /* already exited */ }
+    }
+  }, 30_000)
+
+  it('starts its own shared runtime and leaves it alive after the standalone TUI exits', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-tui-standalone-'))
+    roots.push(root)
+    const terminal = pty.spawn(process.execPath, [
+      cliEntry,
+      '--data-dir', root,
+      '--workspace', root
+    ], {
+      name: 'xterm-256color',
+      cols: 88,
+      rows: 26,
+      cwd: worktreeRoot,
+      env: stringEnvironment(process.env)
+    })
+    let output = ''
+    const dataSubscription = terminal.onData((data) => { output += data })
+    const exited = new Promise<{ exitCode: number; signal?: number }>((accept) => {
+      terminal.onExit(accept)
+    })
+
+    try {
+      await waitFor(
+        () =>
+          output.includes('Welcome to Kun') &&
+          output.includes('/connect') &&
+          output.includes('/sessions'),
+        15_000
+      )
+      const connection = await waitForValue(
+        async () => (await resolveSharedRuntime(root)) ?? undefined,
+        15_000
+      )
+      expect(connection.discovery.launchMode).toBe('shared')
+
+      terminal.write('\x03')
+      await new Promise((resolve) => setTimeout(resolve, 80))
+      terminal.write('\x03')
+      const exit = await withTimeout(exited, 5_000, 'standalone TUI process did not exit')
+      expect(exit.exitCode).toBe(0)
+      expect(output).not.toContain('\x1b[?1049h')
+      expect(output).not.toContain('\x1b[?1049l')
+      expect(await resolveSharedRuntime(root)).not.toBeNull()
+
+      expect(await stopSharedRuntime(root)).toBe(true)
+      expect(await resolveSharedRuntime(root)).toBeNull()
     } finally {
       dataSubscription.dispose()
       try { terminal.kill() } catch { /* already exited */ }

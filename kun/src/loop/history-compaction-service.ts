@@ -1,5 +1,6 @@
 import type { ImmutablePrefix } from '../cache/immutable-prefix.js'
 import type { TurnItem } from '../contracts/items.js'
+import type { TurnClientSurface } from '../contracts/turns.js'
 import type { IdGenerator } from '../ports/id-generator.js'
 import type { ModelClient, ModelToolSpec } from '../ports/model-client.js'
 import type { SessionStore } from '../ports/session-store.js'
@@ -58,6 +59,7 @@ export class HistoryCompactionService {
     signal: AbortSignal
     threadId: string
     turnId: string
+    clientSurface?: TurnClientSurface
     toolSpecs?: readonly ModelToolSpec[]
     reserveModelRequest?: () => Promise<{ allowed: boolean; reason?: string }>
   }): Promise<TurnItem[]> {
@@ -83,7 +85,8 @@ export class HistoryCompactionService {
         threadId: input.threadId,
         turnId: input.turnId,
         reason: String(plan.reason),
-        mode: String(plan.mode)
+        mode: String(plan.mode),
+        ...(input.clientSurface ? { clientSurface: input.clientSurface } : {})
       })
       await recordLifecycleHookWarnings(
         this.deps.events,

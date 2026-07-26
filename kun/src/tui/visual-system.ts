@@ -4,18 +4,41 @@ import { sanitizeTerminalText } from './layout.js'
 const RESET = '\x1b[0m'
 const ansi = (code: number) => (value: string): string => `\x1b[${code}m${value}${RESET}`
 
+export type TuiThemeName = 'kun' | 'ocean' | 'mono'
+
+let activeTheme: TuiThemeName = 'kun'
+
+const palettes: Record<TuiThemeName, Record<'brand' | 'focus' | 'user' | 'success' | 'danger' | 'warning', number | null>> = {
+  kun: { brand: 36, focus: 36, user: 33, success: 32, danger: 31, warning: 33 },
+  ocean: { brand: 34, focus: 36, user: 35, success: 32, danger: 31, warning: 33 },
+  mono: { brand: 1, focus: 4, user: 1, success: 1, danger: 1, warning: 1 }
+}
+
+const tone = (name: keyof (typeof palettes)['kun']) => (value: string): string => {
+  const code = palettes[activeTheme][name]
+  return code === null ? value : ansi(code)(value)
+}
+
+export function setVisualTheme(theme: TuiThemeName): void {
+  activeTheme = theme
+}
+
+export function visualTheme(): TuiThemeName {
+  return activeTheme
+}
+
 export const visual = {
   strong: ansi(1),
   muted: ansi(2),
   italic: ansi(3),
   underline: ansi(4),
   strikethrough: ansi(9),
-  brand: ansi(36),
-  focus: ansi(36),
-  user: ansi(33),
-  success: ansi(32),
-  danger: ansi(31),
-  warning: ansi(33)
+  brand: tone('brand'),
+  focus: tone('focus'),
+  user: tone('user'),
+  success: tone('success'),
+  danger: tone('danger'),
+  warning: tone('warning')
 } as const
 
 export type VisualDensity = 'wide' | 'compact' | 'narrow'

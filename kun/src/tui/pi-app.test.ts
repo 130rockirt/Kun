@@ -5,10 +5,12 @@ import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { visibleWidth } from '@earendil-works/pi-tui'
 import { ThreadSchema } from '../contracts/threads.js'
+import { buildRuntimeCapabilityManifest } from '../contracts/capabilities.js'
 import type { RuntimeEvent } from '../contracts/events.js'
 import type { TurnItem } from '../contracts/items.js'
 import type { ModelConnectionSnapshot } from '../contracts/model-connections.js'
 import { emptyUsageSnapshot } from '../contracts/usage.js'
+import { modelCapabilitiesForModel } from '../loop/model-context-profile.js'
 import { TuiClientError, type KunTuiClient, type ThreadDetail, type TuiConnection } from './client.js'
 import { TuiController } from './controller.js'
 import { parseTuiKeymapConfig } from './keymap.js'
@@ -16,6 +18,7 @@ import { sanitizeTerminalText } from './layout.js'
 import type { TuiOptions } from './options.js'
 import {
   parseSgrMouseEvent,
+  imagePasteShortcutLabel,
   PiTuiApplication,
   renderActivityRow,
   renderKunComposerFrame,
@@ -288,6 +291,60 @@ describe('PiTuiApplication command overlays', () => {
     expect(transcript.toggleReasoningAtRenderedRow(titleRow + 1)).toBeUndefined()
     expect(transcript.toggleReasoningAtRenderedRow(titleRow)).toBe('reason_click')
     expect(transcript.render(90).join('\n')).not.toContain('Inspect exactly one disclosure.')
+  })
+
+  it('renders persisted image attachments beneath their user message', () => {
+    const current = detail()
+    current.turns = [{
+      id: 'turn_image',
+      threadId: current.id,
+      status: 'completed',
+      prompt: 'What is this?',
+      steering: [],
+      createdAt: current.createdAt,
+      startedAt: current.createdAt,
+      finishedAt: current.createdAt,
+      items: [{
+        id: 'user_image',
+        threadId: current.id,
+        turnId: 'turn_image',
+        role: 'user',
+        status: 'completed',
+        createdAt: current.createdAt,
+        finishedAt: current.createdAt,
+        kind: 'user_message',
+        text: 'What is this?'
+      }],
+      attachmentIds: ['att_image'],
+      activeSkillIds: [],
+      injectedMemoryIds: [],
+      injectedMemorySummaries: [],
+      injectedInstructionSources: []
+    }]
+    const transcript = new TranscriptComponent()
+    transcript.update(projectThreadSnapshot(current), false, false, false, {
+      att_image: {
+        id: 'att_image',
+        name: 'clipboard.png',
+        kind: 'image',
+        mimeType: 'image/png',
+        byteSize: 2048,
+        hash: 'image-hash',
+        width: 640,
+        height: 480,
+        threadIds: [current.id],
+        workspaces: [current.workspace],
+        createdAt: current.createdAt,
+        updatedAt: current.createdAt
+      }
+    })
+
+    const rendered = sanitizeTerminalText(transcript.render(90).join('\n'))
+    expect(rendered).toContain('You  What is this?')
+    expect(rendered).toContain('Image  clipboard.png · image/png · 2.0 KiB · 640×480')
+
+    transcript.update(projectThreadSnapshot(current), false, false)
+    expect(sanitizeTerminalText(transcript.render(90).join('\n'))).toContain('Attachment · attached')
   })
 
   it('advances Thinking only during the reasoning phase and freezes it when the reply starts', () => {
@@ -617,8 +674,7 @@ describe('PiTuiApplication command overlays', () => {
       for (const character of 'preserved draft') input.emit('data', character)
       await waitFor(() => outputText.includes('preserved draft'))
       const beforeDraftRoute = outputText.length
-      input.emit('data', '\x18') // Ctrl+X Leader
-      input.emit('data', 'm')
+      input.emit('data', '\x18m') // A real PTY may coalesce Ctrl+X M.
       await waitFor(() => outputText.slice(beforeDraftRoute).includes('Kimi Code'))
       const modelFrame = outputText.slice(beforeDraftRoute)
       expect(modelFrame).toContain('Models')
@@ -717,6 +773,290 @@ describe('PiTuiApplication command overlays', () => {
     }
   })
 
+  it('intercepts complete and split bracketed path pastes while preserving ordinary pasted text', async () => {
+    const current = detail()
+    const startTurn = vi.fn(async () => ({ turnId: 'turn_after_paste' }))
+    const client = {
+      listThreads: vi.fn(async () => [current]),
+      getThread: vi.fn(async () => current),
+      subscribeThreadEvents: vi.fn(async (input: { signal: AbortSignal }) => {
+        await new Promise<void>((resolve) => input.signal.addEventListener('abort', () => resolve(), { once: true }))
+      }),
+      skills: vi.fn(async () => ({ enabled: true, roots: [], skills: [], validationErrors: [] })),
+      modelConnections: vi.fn(async () => modelSnapshot()),
+      startTurn
+    } as unknown as KunTuiClient
+    const attachmentRuntime = {
+      ...runtime,
+      runtimeInfo: {
+        ...runtime.runtimeInfo,
+        capabilities: buildRuntimeCapabilityManifest({
+          model: modelCapabilitiesForModel('model-a')
+        })
+      }
+    } as TuiConnection
+    const controller = new TuiController(client, options, attachmentRuntime)
+    await controller.start()
+    const attachPastedPaths = vi.spyOn(controller, 'attachPastedPaths')
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false)
+    const input = Object.assign(new EventEmitter(), {
+      isRaw: false,
+      setRawMode: vi.fn(),
+      setEncoding: vi.fn(),
+      resume: vi.fn(),
+      pause: vi.fn()
+    }) as unknown as TerminalInput
+    let outputText = ''
+    const output = Object.assign(new EventEmitter(), {
+      columns: 92,
+      rows: 28,
+      write: (chunk: string) => { outputText += chunk }
+    }) as unknown as TerminalOutput
+    const app = new PiTuiApplication(controller, input, output)
+    const running = app.run()
+    try {
+      input.emit('data', "\x1b[200~'/tmp/screen")
+      input.emit('data', " shot.png'\x1b[201~")
+      await waitFor(() => attachPastedPaths.mock.calls.length === 1)
+      expect(attachPastedPaths).toHaveBeenNthCalledWith(1, "'/tmp/screen shot.png'")
+
+      input.emit('data', '\x1b[200~ordinary pasted text\x1b[201~')
+      await waitFor(() => attachPastedPaths.mock.calls.length === 2)
+      await waitFor(() => outputText.includes('ordinary pasted text'))
+      expect(attachPastedPaths).toHaveBeenNthCalledWith(2, 'ordinary pasted text')
+
+      const validate = vi.spyOn(controller, 'validatePendingAttachmentsForCurrentModel')
+        .mockImplementationOnce(() => {
+          controller.notify('custom/text-only does not support image input; attachment remains queued.', 'error')
+          return false
+        })
+        .mockReturnValue(true)
+      input.emit('data', '\r')
+      await waitFor(() => validate.mock.calls.length === 1)
+      expect(controller.state.notification?.message).toContain('does not support image input')
+
+      for (const character of ' suffix') input.emit('data', character)
+      input.emit('data', '\r')
+      await waitFor(() => startTurn.mock.calls.length === 1)
+      expect(startTurn).toHaveBeenCalledWith(current.id, expect.objectContaining({
+        prompt: 'ordinary pasted text suffix'
+      }))
+    } finally {
+      controller.requestQuit()
+      await running
+      await app.stop()
+      await controller.stop()
+    }
+  })
+
+  it('reads a system clipboard image on forwarded paste keys, empty bracketed paste, Leader V, and /paste', async () => {
+    const current = detail()
+    const client = {
+      listThreads: vi.fn(async () => [current]),
+      getThread: vi.fn(async () => current),
+      subscribeThreadEvents: vi.fn(async (input: { signal: AbortSignal }) => {
+        await new Promise<void>((resolve) => input.signal.addEventListener('abort', () => resolve(), { once: true }))
+      }),
+      skills: vi.fn(async () => ({ enabled: true, roots: [], skills: [], validationErrors: [] })),
+      modelConnections: vi.fn(async () => modelSnapshot())
+    } as unknown as KunTuiClient
+    const controller = new TuiController(client, options, runtime)
+    await controller.start()
+    const image = {
+      bytes: Buffer.from([
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+        0, 0, 0, 0, 0x49, 0x48, 0x44, 0x52
+      ]),
+      mimeType: 'image/png' as const,
+      source: 'macos' as const
+    }
+    const clipboardImageReader = vi.fn(async () => image)
+    const attachClipboardImage = vi.spyOn(controller, 'attachClipboardImage').mockResolvedValue(true)
+    const input = Object.assign(new EventEmitter(), {
+      isRaw: false,
+      setRawMode: vi.fn(),
+      setEncoding: vi.fn(),
+      resume: vi.fn(),
+      pause: vi.fn()
+    }) as unknown as TerminalInput
+    const output = Object.assign(new EventEmitter(), {
+      columns: 92,
+      rows: 28,
+      write: vi.fn()
+    }) as unknown as TerminalOutput
+    const app = new PiTuiApplication(
+      controller,
+      input,
+      output,
+      parseTuiKeymapConfig({}).keymap,
+      clipboardImageReader
+    )
+    const running = app.run()
+    try {
+      input.emit('data', '\x16')
+      await waitFor(() => attachClipboardImage.mock.calls.length === 1)
+      expect(clipboardImageReader).toHaveBeenCalledTimes(1)
+      expect(attachClipboardImage).toHaveBeenNthCalledWith(1, image)
+
+      input.emit('data', '\x1bv')
+      await waitFor(() => attachClipboardImage.mock.calls.length === 2)
+      expect(clipboardImageReader).toHaveBeenCalledTimes(2)
+      expect(attachClipboardImage).toHaveBeenNthCalledWith(2, image)
+
+      input.emit('data', '\x1b[118;9u')
+      await waitFor(() => attachClipboardImage.mock.calls.length === 3)
+      expect(clipboardImageReader).toHaveBeenCalledTimes(3)
+      expect(attachClipboardImage).toHaveBeenNthCalledWith(3, image)
+
+      input.emit('data', '\x1b[200~\x1b[201~')
+      await waitFor(() => attachClipboardImage.mock.calls.length === 4)
+      expect(clipboardImageReader).toHaveBeenCalledTimes(4)
+      expect(attachClipboardImage).toHaveBeenNthCalledWith(4, image)
+
+      input.emit('data', '\x18')
+      input.emit('data', 'v')
+      await waitFor(() => attachClipboardImage.mock.calls.length === 5)
+      expect(clipboardImageReader).toHaveBeenCalledTimes(5)
+      expect(attachClipboardImage).toHaveBeenNthCalledWith(5, image)
+
+      type(input as unknown as EventEmitter, '/paste')
+      await waitFor(() => attachClipboardImage.mock.calls.length === 6)
+      expect(clipboardImageReader).toHaveBeenCalledTimes(6)
+      expect(attachClipboardImage).toHaveBeenNthCalledWith(6, image)
+    } finally {
+      controller.requestQuit()
+      await running
+      await app.stop()
+      await controller.stop()
+    }
+  })
+
+  it('advertises the platform-native screenshot paste key with a reliable fallback', () => {
+    expect(imagePasteShortcutLabel('darwin')).toBe('⌘V / Ctrl+X V')
+    expect(imagePasteShortcutLabel('win32')).toBe('Ctrl+V / Alt+V')
+    expect(imagePasteShortcutLabel('linux')).toBe('Ctrl+V / Ctrl+X V')
+  })
+
+  it('renders pending attachment chips and removes them only from an empty text editor', async () => {
+    const current = detail()
+    let attachmentNumber = 0
+    const uploadAttachment = vi.fn(async (input: { name: string; mimeType?: string }) => {
+      attachmentNumber += 1
+      return {
+        attachment: {
+          id: `attachment_${attachmentNumber}`,
+          name: input.name,
+          kind: 'image' as const,
+          mimeType: input.mimeType ?? 'image/png',
+          byteSize: 2048 * attachmentNumber,
+          hash: `hash-${attachmentNumber}`,
+          threadIds: [current.id],
+          workspaces: [current.workspace],
+          createdAt: current.createdAt,
+          updatedAt: current.updatedAt
+        }
+      }
+    })
+    const client = {
+      listThreads: vi.fn(async () => [current]),
+      getThread: vi.fn(async () => current),
+      subscribeThreadEvents: vi.fn(async (input: { signal: AbortSignal }) => {
+        await new Promise<void>((resolve) => input.signal.addEventListener('abort', () => resolve(), { once: true }))
+      }),
+      skills: vi.fn(async () => ({ enabled: true, roots: [], skills: [], validationErrors: [] })),
+      modelConnections: vi.fn(async () => modelSnapshot()),
+      setLocalCapabilityEnabled: vi.fn(async () => ({ id: 'attachments' as const, enabled: true })),
+      uploadAttachment
+    } as unknown as KunTuiClient
+    const attachmentRuntime = {
+      ...runtime,
+      runtimeInfo: {
+        ...runtime.runtimeInfo,
+        capabilities: buildRuntimeCapabilityManifest({
+          model: modelCapabilitiesForModel('model-a')
+        })
+      }
+    } as TuiConnection
+    const controller = new TuiController(client, options, attachmentRuntime)
+    await controller.start()
+    const image = {
+      bytes: Buffer.from([
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+        0, 0, 0, 0, 0x49, 0x48, 0x44, 0x52
+      ]),
+      mimeType: 'image/png' as const,
+      source: 'macos' as const
+    }
+    expect(await controller.attachClipboardImage(image)).toBe(true)
+    expect(await controller.attachClipboardImage(image)).toBe(true)
+    expect(controller.state.pendingAttachments).toHaveLength(2)
+    const input = Object.assign(new EventEmitter(), {
+      isRaw: false,
+      setRawMode: vi.fn(),
+      setEncoding: vi.fn(),
+      resume: vi.fn(),
+      pause: vi.fn()
+    }) as unknown as TerminalInput
+    let outputText = ''
+    const output = Object.assign(new EventEmitter(), {
+      columns: 100,
+      rows: 30,
+      write: (chunk: string) => { outputText += chunk }
+    }) as unknown as TerminalOutput
+    const app = new PiTuiApplication(controller, input, output)
+    const running = app.run()
+    try {
+      const rule = '─'.repeat(95)
+      const composer = sanitizeTerminalText(
+        renderKunComposerFrame([rule, '', rule], controller.state, controller, 100).join('\n')
+      )
+      expect(composer).toContain('Attachment 1/2 [Image]')
+      expect(composer).toContain('Attachment 2/2 [Image]')
+      expect(composer).toContain('Backspace/Del remove')
+
+      input.emit('data', 'x')
+      input.emit('data', '\x7f')
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(controller.state.pendingAttachments.map((attachment) => attachment.id)).toEqual([
+        'attachment_1',
+        'attachment_2'
+      ])
+
+      input.emit('data', '\x7f')
+      await waitFor(() => controller.state.pendingAttachments.length === 1)
+      expect(controller.state.pendingAttachments[0]?.id).toBe('attachment_1')
+      expect(controller.state.notification?.message).toContain('Removed clipboard-')
+
+      input.emit('data', '\x1b[3~')
+      await waitFor(() => controller.state.pendingAttachments.length === 0)
+      expect(controller.state.quitRequested).toBe(false)
+
+      await controller.attachClipboardImage(image)
+      const previousWindowsTerminalSession = process.env.WT_SESSION
+      process.env.WT_SESSION = 'kun-tui-test'
+      try {
+        input.emit('data', '\x08')
+        await waitFor(() => controller.state.pendingAttachments.length === 0)
+      } finally {
+        if (previousWindowsTerminalSession === undefined) delete process.env.WT_SESSION
+        else process.env.WT_SESSION = previousWindowsTerminalSession
+      }
+      expect(controller.state.quitRequested).toBe(false)
+
+      await controller.attachClipboardImage(image)
+      input.emit('data', '\x03')
+      await waitFor(() => controller.state.pendingAttachments.length === 0)
+      expect(controller.state.notification?.message).toBe('Pending attachments cleared.')
+      expect(controller.state.quitRequested).toBe(false)
+    } finally {
+      controller.requestQuit()
+      await running
+      await app.stop()
+      await controller.stop()
+    }
+  })
+
   it('renders assistant fragments before the turn completes and keeps the final text intact', async () => {
     const current = detail()
     current.status = 'running'
@@ -783,13 +1123,7 @@ describe('PiTuiApplication command overlays', () => {
       await waitFor(() => outputText.includes('Thinking'))
       await waitFor(() => outputText.includes('/thinking expand'))
       expect(outputText).not.toContain('private thought')
-      expect(outputText).not.toContain('\x1b[?1000h\x1b[?1006h')
-
-      const beforePointerMode = outputText.length
-      input.emit('data', '\x18')
-      input.emit('data', 'p')
-      await waitFor(() => outputText.slice(beforePointerMode).includes('Pointer mode enabled'))
-      expect(outputText.slice(beforePointerMode)).toContain('\x1b[?1000h\x1b[?1006h')
+      expect(outputText).toContain('\x1b[?1000h\x1b[?1006h')
 
       const beforeMouseExpand = outputText.length
       for (let row = 1; row <= output.rows!; row += 1) {
@@ -805,10 +1139,17 @@ describe('PiTuiApplication command overlays', () => {
       expect(outputText.slice(beforeMouseCollapse)).not.toContain('private thought')
 
       const beforeTextSelection = outputText.length
-      input.emit('data', '\x03')
-      await waitFor(() => outputText.slice(beforeTextSelection).includes('Text selection enabled'))
+      input.emit('data', '\x18')
+      input.emit('data', 'p')
+      await waitFor(() => outputText.slice(beforeTextSelection).includes('Text selection mode'))
       expect(outputText.slice(beforeTextSelection)).toContain('\x1b[?1000l\x1b[?1006l')
       expect(controller.state.projection?.runningTurnId).toBe('turn_stream')
+
+      const beforeClicksRestored = outputText.length
+      input.emit('data', '\x18')
+      input.emit('data', 'p')
+      await waitFor(() => outputText.slice(beforeClicksRestored).includes('Mouse clicks enabled'))
+      expect(outputText.slice(beforeClicksRestored)).toContain('\x1b[?1000h\x1b[?1006h')
 
       const beforeExpand = outputText.length
       type(input, '/thinking')
@@ -994,7 +1335,65 @@ describe('PiTuiApplication command overlays', () => {
     }
   })
 
-  it('opens a delegated child as a live read-only transcript and returns to the parent', async () => {
+  it('groups parallel subagents with Kimi-style status and expands them with Ctrl+O state', () => {
+    const projection = projectThreadSnapshot(detail())
+    projection.childRuns = [
+      {
+        childId: 'child_research',
+        parentTurnId: 'turn_parallel',
+        childSeq: 1,
+        label: 'Inspect runtime',
+        prompt: 'Inspect the runtime event flow in detail',
+        profile: 'researcher',
+        profileName: 'Researcher',
+        status: 'running',
+        toolInvocations: 2,
+        totalTokens: 2048,
+        activity: {
+          phase: 'tool',
+          label: 'Searching the workspace',
+          toolName: 'search',
+          startedAt: '2026-07-22T00:00:01.000Z',
+          updatedAt: '2026-07-22T00:00:01.000Z'
+        },
+        startedAt: '2026-07-22T00:00:00.000Z',
+        updatedAt: '2026-07-22T00:00:01.000Z'
+      },
+      {
+        childId: 'child_tests',
+        parentTurnId: 'turn_parallel',
+        childSeq: 2,
+        label: 'Run tests',
+        prompt: 'Run the focused regression tests',
+        profile: 'tester',
+        profileName: 'Test Engineer',
+        status: 'queued',
+        startedAt: '2026-07-22T00:00:00.000Z',
+        updatedAt: '2026-07-22T00:00:00.000Z'
+      }
+    ]
+    const transcript = new TranscriptComponent()
+    transcript.update(projection, false, false)
+    const compact = transcript.render(100, 1)
+    const compactText = sanitizeTerminalText(compact.join('\n'))
+    expect(compactText).toContain('Running 2 agents')
+    expect(compactText).toContain('1 running')
+    expect(compactText).toContain('1 waiting')
+    expect(compactText).toContain('2 tools')
+    expect(compactText).toContain('2.0k tok')
+    expect(compactText).toContain('Searching the workspace')
+    expect(compactText).toContain('Ctrl+O expand')
+    expect(compactText).not.toContain('Inspect the runtime event flow in detail')
+    const researcherRow = compact.findIndex((line) => sanitizeTerminalText(line).includes('Researcher'))
+    expect(transcript.childAtRenderedRow(researcherRow)?.childId).toBe('child_research')
+
+    transcript.update(projection, false, true)
+    const expandedText = sanitizeTerminalText(transcript.render(100, 2).join('\n'))
+    expect(expandedText).toContain('Inspect the runtime event flow in detail')
+    expect(expandedText).toContain('Ctrl+O collapse')
+  })
+
+  it('opens a delegated child as a live controllable transcript and returns to the parent', async () => {
     const parent = detail()
     parent.title = 'Parent investigation'
     parent.turns = [{
@@ -1069,21 +1468,15 @@ describe('PiTuiApplication command overlays', () => {
       type(input, '/subagents')
       await waitFor(() => outputText.includes('Subagents') && outputText.includes('Inspect streaming'))
       expect(sanitizeTerminalText(outputText)).toContain('Enter open transcript')
-      expect(outputText).not.toContain('\x1b[?1000h\x1b[?1006h')
+      expect(outputText).toContain('\x1b[?1000h\x1b[?1006h')
 
       input.emit('data', '\x03')
       await waitFor(() => outputText.includes('Parent investigation'))
-      const beforePointerMode = outputText.length
-      input.emit('data', '\x18')
-      input.emit('data', 'p')
-      await waitFor(() => outputText.slice(beforePointerMode).includes('Pointer mode enabled'))
-      expect(outputText.slice(beforePointerMode)).toContain('\x1b[?1000h\x1b[?1006h')
-      type(input, '/subagents')
-      await waitFor(() => outputText.slice(beforePointerMode).includes('Subagents'))
-
       const beforeOpen = outputText.length
-      input.emit('data', '\r')
-      await waitFor(() => outputText.slice(beforeOpen).includes('read-only') && Boolean(childOnEvent))
+      for (let row = 1; row <= output.rows!; row += 1) {
+        input.emit('data', `\x1b[<0;8;${row}M`)
+      }
+      await waitFor(() => outputText.slice(beforeOpen).includes('child session') && Boolean(childOnEvent))
       const childFrame = outputText.slice(beforeOpen)
       expect(childFrame).toContain('Find the event bug')
       expect(childFrame).toContain('Thinking')
@@ -1123,18 +1516,16 @@ describe('PiTuiApplication command overlays', () => {
       input.emit('data', 't')
       await waitFor(() => outputText.slice(beforeExpand).includes('private child reasoning'))
 
-      const beforeList = outputText.length
+      const beforeParent = outputText.length
       input.emit('data', '\x03')
       await waitFor(() =>
         childSubscriptionAborted &&
-        sanitizeTerminalText(outputText.slice(beforeList)).includes('Enter open transcript')
+        controller.state.projection?.thread.id === parent.id
       )
-
-      const beforeParent = outputText.length
-      input.emit('data', '\x03')
-      await waitFor(() => outputText.slice(beforeParent).includes('Parent investigation'))
       expect(controller.state.projection?.thread.id).toBe(parent.id)
-      expect(outputText.slice(beforeParent)).toContain('Delegate this')
+      expect(outputText).toContain('Parent investigation')
+      expect(outputText).toContain('Delegate this')
+      expect(outputText.length).toBeGreaterThan(beforeParent)
 
       childSubscriptionAborted = false
       childOnEvent = undefined
@@ -1148,7 +1539,7 @@ describe('PiTuiApplication command overlays', () => {
       )
       const popupFrame = outputText.slice(beforePopup)
       expect(popupFrame).toContain('Subagent · Inspect streaming')
-      expect(popupFrame).toContain('read-only')
+      expect(popupFrame).toContain('live child session')
       expect(popupFrame).toContain('Thinking')
       expect(popupFrame).toContain('collapsed')
       expect(popupFrame.indexOf('Kun')).toBeLessThan(popupFrame.indexOf('Thinking'))
@@ -1182,7 +1573,7 @@ describe('PiTuiApplication command overlays', () => {
       input.emit('data', '\x03')
       await waitFor(() => childSubscriptionAborted)
       expect(controller.state.projection?.thread.id).toBe(parent.id)
-      await waitFor(() => outputText.includes('\x1b[?1000l\x1b[?1006l'))
+      expect(outputText).toContain('\x1b[?1000h\x1b[?1006h')
       const beforeRestoredComposer = outputText.length
       type(input, '/status')
       await waitFor(() => outputText.slice(beforeRestoredComposer).includes('Permissions'))
@@ -1264,6 +1655,9 @@ describe('PiTuiApplication command overlays', () => {
 
   it('keeps every major keyboard dialog operable and restores the composer on a narrow terminal', async () => {
     const current = detail()
+    current.providerId = 'deepseek'
+    current.accountId = 'account:deepseek'
+    current.model = 'deepseek-v4-pro'
     const startTurn = vi.fn(async () => ({ turnId: 'turn_focus' }))
     const catalog: ModelConnectionSnapshot = {
       ...modelSnapshot(),
@@ -1328,6 +1722,8 @@ describe('PiTuiApplication command overlays', () => {
       input.emit('data', '\x18')
       input.emit('data', 'a')
       await waitFor(() => sanitizeTerminalText(outputText.slice(before)).includes('KUN / Mode'))
+      expect(sanitizeTerminalText(outputText.slice(before))).toContain('Goal')
+      expect(sanitizeTerminalText(outputText.slice(before))).toContain('Keep pursuing')
       input.emit('data', '\x03')
 
       before = outputText.length
@@ -2117,6 +2513,65 @@ describe('PiTuiApplication command overlays', () => {
 
       input.emit('data', '\x0f')
       await waitFor(() => outputText.includes('Tool details expanded'))
+    } finally {
+      controller.requestQuit()
+      await running
+      await app.stop()
+      await controller.stop()
+    }
+  })
+
+  it('uses contextual Ctrl+B to background the latest foreground subagent', async () => {
+    const current = detail()
+    const childRun = {
+      id: 'child_foreground',
+      parentThreadId: current.id,
+      parentTurnId: 'turn_parent',
+      label: 'Inspect runtime',
+      prompt: 'Inspect the runtime',
+      profile: 'researcher',
+      status: 'running' as const,
+      usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+      createdAt: current.createdAt,
+      startedAt: current.createdAt,
+      updatedAt: current.updatedAt
+    }
+    const detachDelegation = vi.fn(async () => ({ childId: childRun.id, detached: true }))
+    const client = {
+      listThreads: vi.fn(async () => [current]),
+      getThread: vi.fn(async () => current),
+      delegationDiagnostics: vi.fn(async () => ({
+        enabled: true,
+        active: 1,
+        childRuns: [childRun],
+        aggregates: []
+      })),
+      detachDelegation,
+      subscribeThreadEvents: vi.fn(async (input: {
+        signal: AbortSignal
+        onConnection: (state: 'connecting' | 'connected' | 'reconnecting' | 'disconnected') => void
+      }) => {
+        input.onConnection('connected')
+        await new Promise<void>((resolve) => input.signal.addEventListener('abort', () => resolve(), { once: true }))
+      }),
+      skills: vi.fn(async () => ({ enabled: true, roots: [], skills: [], validationErrors: [] }))
+    } as unknown as KunTuiClient
+    const controller = new TuiController(client, options, runtime)
+    await controller.start()
+    const input = Object.assign(new EventEmitter(), {
+      isRaw: false, setRawMode: vi.fn(), setEncoding: vi.fn(), resume: vi.fn(), pause: vi.fn()
+    }) as unknown as TerminalInput
+    let outputText = ''
+    const output = Object.assign(new EventEmitter(), {
+      columns: 88, rows: 24, write: (chunk: string) => { outputText += chunk }
+    }) as unknown as TerminalOutput
+    const app = new PiTuiApplication(controller, input, output)
+    const running = app.run()
+    try {
+      input.emit('data', '\x02')
+      await waitFor(() => detachDelegation.mock.calls.length === 1)
+      expect(detachDelegation).toHaveBeenCalledWith(childRun.id)
+      await waitFor(() => controller.state.notification?.message.includes('continuing in the background') === true)
     } finally {
       controller.requestQuit()
       await running

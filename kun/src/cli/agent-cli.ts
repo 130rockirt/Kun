@@ -153,7 +153,13 @@ async function runOneShot(argv: readonly string[], io: CliIo): Promise<number> {
     if (jsonl) writeJsonLine(io.stdout, { type: 'run_started', threadId: thread.id })
     const turn = await runtime.turnService.startTurn({
       threadId: thread.id,
-      request: { prompt, model: parsed.options.model, mode: 'agent' }
+      request: {
+        prompt,
+        model: parsed.options.model,
+        mode: 'agent',
+        clientSurface: 'cli',
+        disableUserInput: true
+      }
     })
     let streamed = false
     const unsubscribe = runtime.eventBus.subscribe(thread.id, (event) => {
@@ -258,7 +264,13 @@ async function runChatTurn(input: {
   if (!prompt || prompt === '/exit' || prompt === '/quit') return false
   const turn = await input.runtime.turnService.startTurn({
     threadId: input.threadId,
-    request: { prompt, model: input.model, mode: 'agent' }
+    request: {
+      prompt,
+      model: input.model,
+      mode: 'agent',
+      clientSurface: 'cli',
+      disableUserInput: true
+    }
   })
   let streamed = false
   const unsubscribe = input.runtime.eventBus.subscribe(input.threadId, (event) => {
@@ -382,6 +394,7 @@ function buildExecContext(options: ServeOptions, workspace: string): ToolHostCon
     threadId: 'cli_exec',
     turnId: 'cli_exec',
     workspace,
+    clientSurface: 'cli',
     threadMode: 'agent',
     model: modelCapabilitiesForModel(options.model, modelProfiles),
     memoryPolicy: { enabled: false },

@@ -4,7 +4,11 @@ import type { Turn } from '../contracts/turns.js'
 import type { MemoryRecord } from '../contracts/memory.js'
 import type { ModelCapabilityMetadata } from '../contracts/capabilities.js'
 import type { MemoryStore } from '../memory/memory-store.js'
-import { TurnContextResolver, resolveTurnModeContext } from './turn-context-resolver.js'
+import {
+  TurnContextResolver,
+  resolveTurnClientSurface,
+  resolveTurnModeContext
+} from './turn-context-resolver.js'
 
 function capabilities(inputModalities: ModelCapabilityMetadata['inputModalities']): ModelCapabilityMetadata {
   return {
@@ -54,6 +58,13 @@ function turn(overrides: Partial<Turn> = {}): Turn {
 }
 
 describe('TurnContextResolver', () => {
+  it('uses an explicit client surface and preserves legacy GUI/IM inference', () => {
+    expect(resolveTurnClientSurface(turn({ clientSurface: 'tui', agentSurface: 'code' }))).toBe('tui')
+    expect(resolveTurnClientSurface(turn({ imContext: { channel: 'lark' } as never }))).toBe('im')
+    expect(resolveTurnClientSurface(turn({ guiDesignCanvas: true }))).toBe('gui')
+    expect(resolveTurnClientSurface(turn())).toBe('api')
+  })
+
   it('snapshots plan, policy, attachments, memory, skills, instructions, and discovered tools', async () => {
     const resolutionOrder: string[] = []
     const listTools = vi.fn(async (context) => {

@@ -430,6 +430,7 @@ export type CoreTurnJson = {
   prompt: string
   model?: string
   providerId?: string
+  clientSurface?: 'gui' | 'tui' | 'cli' | 'api' | 'im' | 'extension'
   createdAt: string
   startedAt?: string
   finishedAt?: string

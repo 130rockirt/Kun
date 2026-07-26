@@ -608,7 +608,11 @@ describe('createAgentSdkRuntime turn context', () => {
       })),
       availableSkillIdsForWorkspace: vi.fn(async () => ['safe-skill', 'blocked-skill'])
     }
-    const sdkTurn = { id: 'tn', prompt: 'inspect' } as ThreadRecord['turns'][number]
+    const sdkTurn = {
+      id: 'tn',
+      prompt: 'inspect',
+      clientSurface: 'tui'
+    } as ThreadRecord['turns'][number]
     const runtime = createAgentSdkRuntime({
       registry,
       toolHost: host,
@@ -655,6 +659,7 @@ describe('createAgentSdkRuntime turn context', () => {
         loadTurnContext(threadId: string, turnId: string): Promise<{
           bridgeableTools: Array<{ name: string }>
           allowSdkBuiltins?: boolean
+          contextInstructions?: string[]
         } | null>
         executeKunTool(
           threadId: string,
@@ -670,6 +675,7 @@ describe('createAgentSdkRuntime turn context', () => {
       allowSdkBuiltins: false,
       bridgeableTools: [{ name: 'read' }]
     })
+    expect(context?.contextInstructions?.join('\n')).toContain('Kun terminal TUI')
     await expect(deps.executeKunTool('th', 'tn', 'read', {})).resolves.toEqual({
       output: 'safe',
       isError: false
@@ -683,7 +689,8 @@ describe('createAgentSdkRuntime turn context', () => {
         allowedToolNames: ['read'],
         blockedProviderIds: ['mcp:private'],
         blockedToolNames: ['write'],
-        blockedSkillIds: ['blocked-skill']
+        blockedSkillIds: ['blocked-skill'],
+        clientSurface: 'tui'
       })
     ])
     expect(skillRuntime.resolveTurn).toHaveBeenCalledWith(expect.objectContaining({

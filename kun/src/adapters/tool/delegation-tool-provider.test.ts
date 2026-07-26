@@ -293,6 +293,7 @@ describe('delegate_task observability output', () => {
       reasoningEffort: 'high'
     })
     expect(runChild).toHaveBeenCalledWith(expect.objectContaining({
+      clientSurface: 'tui',
       inheritedModel: 'gpt-5.6-luna',
       inheritedProviderId: 'openai',
       inheritedReasoningEffort: 'high'
@@ -373,6 +374,7 @@ function context(): ToolHostContext {
     },
     modelProviderId: 'openai',
     reasoningEffort: 'high',
+    clientSurface: 'tui',
     abortSignal: new AbortController().signal,
     awaitApproval: async () => 'allow'
   }

@@ -1,4 +1,4 @@
-import type { UserMessageSource } from '../contracts/items.js'
+import type { SteeringEntry } from '../contracts/turns.js'
 
 /**
  * Mid-turn steering queue. The renderer posts steering text while a
@@ -6,11 +6,7 @@ import type { UserMessageSource } from '../contracts/items.js'
  * as user inputs at the next safe loop boundary. The queue is cleared
  * on turn completion or interruption.
  */
-export type SteeringEntry = {
-  text: string
-  displayText?: string
-  messageSource?: UserMessageSource
-}
+export type { SteeringEntry } from '../contracts/turns.js'
 
 type SteeringBuffer = {
   entries: SteeringEntry[]
@@ -88,6 +84,25 @@ export class SteeringQueue {
    */
   peek(turnId: string): SteeringEntry[] {
     return (this.buffers.get(turnId)?.entries ?? []).map((entry) => ({ ...entry }))
+  }
+
+  /** Atomically replace the pending queue after validating the same bounds as enqueue. */
+  replace(turnId: string, entries: readonly SteeringEntry[]): boolean {
+    if (this.sealedTurns.has(turnId)) return false
+    const normalized = entries.flatMap((entry) => {
+      const text = entry.text.trim()
+      if (!text) return []
+      return [{
+        text,
+        ...(entry.displayText?.trim() ? { displayText: entry.displayText.trim() } : {}),
+        ...(entry.messageSource ? { messageSource: entry.messageSource } : {})
+      }]
+    })
+    const bytes = normalized.reduce((total, entry) => total + steeringEntryBytes(entry), 0)
+    if (normalized.length > this.maxEntriesPerTurn || bytes > this.maxBytesPerTurn) return false
+    if (normalized.length === 0) this.buffers.delete(turnId)
+    else this.buffers.set(turnId, { entries: normalized, bytes })
+    return true
   }
 
   /**

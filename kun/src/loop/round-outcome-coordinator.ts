@@ -220,7 +220,7 @@ export class RoundOutcomeCoordinator {
           toolName: CREATE_PLAN_TOOL_NAME,
           toolKind,
           arguments: argumentsForFallback,
-          summary: 'Materialized assistant plan text into the required GUI plan.'
+          summary: 'Materialized assistant plan text into the required Kun plan.'
         })
       )
       await this.deps.events.record({
@@ -241,7 +241,7 @@ export class RoundOutcomeCoordinator {
       return 'continue'
     }
 
-    const message = `Model did not call the required \`${input.requiredToolName}\` tool for this GUI plan turn.`
+    const message = `Model did not call the required \`${input.requiredToolName}\` tool for this Plan-mode turn.`
     await this.deps.events.record({
       kind: 'error',
       threadId: input.threadId,

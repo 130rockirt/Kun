@@ -19,6 +19,11 @@ export class MultiProviderModelClient implements ModelClient {
 
   private default_: ModelClient
   private providers: Map<string, ModelClient>
+  private readonly turnPins = new Map<string, {
+    client: ModelClient
+    providerId: string
+    touchedAt: number
+  }>()
 
   constructor(input: { default: ModelClient; providers?: Map<string, ModelClient> }) {
     this.default_ = input.default
@@ -64,7 +69,17 @@ export class MultiProviderModelClient implements ModelClient {
   }
 
   stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
-    return this.resolve(request.providerId).stream(request)
+    const providerId = request.providerId?.trim().toLowerCase() || 'default'
+    const pinned = this.turnPins.get(request.turnId)
+    if (pinned && pinned.providerId !== providerId) {
+      throw new Error(
+        `model provider changed within turn ${request.turnId}: ${pinned.providerId} -> ${providerId}`
+      )
+    }
+    const client = pinned?.client ?? this.resolve(request.providerId)
+    this.turnPins.set(request.turnId, { client, providerId, touchedAt: Date.now() })
+    this.pruneTurnPins()
+    return client.stream(request)
   }
 
   /**
@@ -84,6 +99,16 @@ export class MultiProviderModelClient implements ModelClient {
    */
   configFor(providerId?: string): unknown {
     return (this.resolve(providerId) as { config?: unknown }).config
+  }
+
+  private pruneTurnPins(): void {
+    if (this.turnPins.size <= 2_000) return
+    const cutoff = Date.now() - 6 * 60 * 60 * 1_000
+    for (const [turnId, pin] of this.turnPins) {
+      if (pin.touchedAt < cutoff || this.turnPins.size > 4_000) {
+        this.turnPins.delete(turnId)
+      }
+    }
   }
 }
 

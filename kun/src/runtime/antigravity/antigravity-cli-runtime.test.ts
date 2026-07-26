@@ -162,6 +162,7 @@ describe('AntigravityCliRuntime', () => {
       status: 'running',
       prompt: 'inspect only',
       model: 'gemini-3.6-flash',
+      clientSurface: 'tui',
       createdAt: '2026-07-23T00:00:00.000Z'
     })
     await threadStore.upsert({
@@ -215,6 +216,7 @@ describe('AntigravityCliRuntime', () => {
     expect(spawnedArgs).toEqual(expect.arrayContaining(['--mode', 'plan', '--sandbox']))
     expect(spawnedArgs).not.toContain('--dangerously-skip-permissions')
     expect(spawnedArgs[1]).toContain('You are a scoped read-only child.')
+    expect(spawnedArgs[1]).toContain('Kun terminal TUI')
   })
 
   it('publishes delegated Gemini CLI turns to the Agent Perspective trace store', async () => {

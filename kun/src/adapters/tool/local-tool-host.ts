@@ -125,6 +125,14 @@ export class LocalToolHost implements ToolHost {
   private readonly readTracker: ReadTracker
   private readonly operationJournal: ToolOperationJournal
   private prepare?: (context?: ToolHostContext) => Promise<void> | void
+  private generation = 0
+  private readonly turnComponents = new Map<string, {
+    registry: CapabilityRegistry
+    hooks: readonly ResolvedHook[]
+    prepare?: (context?: ToolHostContext) => Promise<void> | void
+    generation: number
+    touchedAt: number
+  }>()
 
   constructor(options: LocalToolHostOptions) {
     this.registry = options.registry ?? CapabilityRegistry.fromLocalTools(options.tools ?? [])
@@ -143,16 +151,19 @@ export class LocalToolHost implements ToolHost {
     if (input.registry) this.registry = input.registry
     if (input.hooks) this.hooks = input.hooks
     if (input.prepare) this.prepare = input.prepare
+    this.generation += 1
+    this.pruneTurnComponents()
   }
 
   listTools(context?: ToolHostContext) {
-    const prepared = this.prepare?.(context)
+    const components = this.componentsFor(context)
+    const prepared = components.prepare?.(context)
     if (prepared && typeof (prepared as PromiseLike<void>).then === 'function') {
-      return Promise.resolve(prepared).then(() => this.registry.listTools(context))
+      return Promise.resolve(prepared).then(() => components.registry.listTools(context))
     }
     // Evaluate before Promise.resolve so existing callers retain synchronous
     // catalog-drift validation when no lazy preparation is configured.
-    return Promise.resolve(this.registry.listTools(context))
+    return Promise.resolve(components.registry.listTools(context))
   }
 
   diagnostics() {
@@ -164,11 +175,12 @@ export class LocalToolHost implements ToolHost {
     context: ToolHostContext,
     onUpdate?: (item: TurnItem) => Promise<void> | void
   ): Promise<ToolHostResult> {
-    await this.prepare?.(context)
+    const components = this.componentsFor(context)
+    await components.prepare?.(context)
     if (context.abortSignal.aborted) {
       throw new Error('tool call aborted before start')
     }
-    const { tool } = this.registry.resolveTool(call.toolName, context, call.providerId)
+    const { tool } = components.registry.resolveTool(call.toolName, context, call.providerId)
     if (tool.policy === 'never') {
       throw new Error(`tool ${call.toolName} is disabled by policy`)
     }
@@ -181,7 +193,7 @@ export class LocalToolHost implements ToolHost {
     }
     let preHooks: PreToolUseOutcome
     try {
-      preHooks = await runPreToolUseHooks(this.hooks, {
+      preHooks = await runPreToolUseHooks(components.hooks, {
         call,
         context: hookContext(context)
       })
@@ -380,7 +392,7 @@ export class LocalToolHost implements ToolHost {
     }
     let hookedResult: PostToolUseOutcome
     try {
-      hookedResult = await runPostToolUseHooks(this.hooks, {
+      hookedResult = await runPostToolUseHooks(components.hooks, {
         call: activeCall,
         context: hookContext(context),
         result
@@ -409,6 +421,53 @@ export class LocalToolHost implements ToolHost {
 
   clearReadTracker(threadId?: string): void {
     this.readTracker.clear(threadId)
+  }
+
+  private componentsFor(context?: ToolHostContext): {
+    registry: CapabilityRegistry
+    hooks: readonly ResolvedHook[]
+    prepare?: (context?: ToolHostContext) => Promise<void> | void
+    generation: number
+    touchedAt: number
+  } {
+    const turnId = context?.turnId
+    const now = Date.now()
+    if (!turnId) {
+      return {
+        registry: this.registry,
+        hooks: this.hooks,
+        ...(this.prepare ? { prepare: this.prepare } : {}),
+        generation: this.generation,
+        touchedAt: now
+      }
+    }
+    const existing = this.turnComponents.get(turnId)
+    if (existing) {
+      existing.touchedAt = now
+      return existing
+    }
+    const pinned = {
+      registry: this.registry,
+      hooks: this.hooks,
+      ...(this.prepare ? { prepare: this.prepare } : {}),
+      generation: this.generation,
+      touchedAt: now
+    }
+    this.turnComponents.set(turnId, pinned)
+    this.pruneTurnComponents(now)
+    return pinned
+  }
+
+  private pruneTurnComponents(now = Date.now()): void {
+    const staleBefore = now - 6 * 60 * 60 * 1_000
+    for (const [turnId, components] of this.turnComponents) {
+      if (components.touchedAt < staleBefore) this.turnComponents.delete(turnId)
+    }
+    if (this.turnComponents.size <= 4_000) return
+    const oldest = [...this.turnComponents.entries()]
+      .sort((left, right) => left[1].touchedAt - right[1].touchedAt)
+      .slice(0, this.turnComponents.size - 2_000)
+    for (const [turnId] of oldest) this.turnComponents.delete(turnId)
   }
 
   private runtimePolicyBlock(
@@ -561,12 +620,22 @@ async function offloadLargeToolOutput(
 
 function hookContext(
   context: ToolHostContext
-): Pick<ToolHostContext, 'threadId' | 'turnId' | 'workspace' | 'threadMode' | 'approvalPolicy' | 'sandboxMode'> {
+): Pick<
+  ToolHostContext,
+  | 'threadId'
+  | 'turnId'
+  | 'workspace'
+  | 'threadMode'
+  | 'approvalPolicy'
+  | 'sandboxMode'
+  | 'clientSurface'
+> {
   return {
     threadId: context.threadId,
     turnId: context.turnId,
     workspace: context.workspace,
     approvalPolicy: context.approvalPolicy,
+    ...(context.clientSurface ? { clientSurface: context.clientSurface } : {}),
     ...(context.sandboxMode ? { sandboxMode: context.sandboxMode } : {}),
     ...(context.threadMode ? { threadMode: context.threadMode } : {})
   }
@@ -610,8 +679,7 @@ function createUserInputTool(name: string): LocalTool {
   }
   return LocalToolHost.defineTool({
     name,
-    description:
-      'Ask the GUI user a structured question and wait for the answer. Requires a non-empty prompt, question, message, or questions[].question (prompt/message aliases allowed).',
+    description: 'Ask the user a structured question through the current interactive client and wait for the answer.',
     toolKind: 'tool_call',
     inputSchema: {
       type: 'object',
@@ -682,7 +750,7 @@ function createUserInputTool(name: string): LocalTool {
     execute: async (args, context) => {
       if (!context.awaitUserInput) {
         return {
-          output: { error: 'GUI user input is not available in this runtime context' },
+          output: { error: 'structured user input is not available in this client context' },
           isError: true
         }
       }

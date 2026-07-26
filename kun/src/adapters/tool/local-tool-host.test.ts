@@ -8,8 +8,46 @@ import { InMemoryArtifactStore } from '../../artifacts/artifact-store.js'
 import { createEditLocalTool, createWriteLocalTool } from './builtin-file-tools.js'
 import { createReadLocalTool } from './builtin-read-tool.js'
 import { resolveWorkspacePath, withToolBoundary } from './builtin-tool-utils.js'
+import { CapabilityRegistry } from './capability-registry.js'
 
 describe('LocalToolHost approval policy', () => {
+  it('pins tool registries and hooks for the lifetime of a running turn', async () => {
+    const tool = (name: string) => LocalToolHost.defineTool({
+      name,
+      description: name,
+      inputSchema: { type: 'object' },
+      policy: 'auto',
+      execute: async () => ({ output: name })
+    })
+    const oldTool = tool('old_tool')
+    const newTool = tool('new_tool')
+    const host = new LocalToolHost({ tools: [oldTool] })
+    const context = (turnId: string): ToolHostContext => ({
+      threadId: 'thread_1',
+      turnId,
+      workspace: '/tmp/workspace',
+      approvalPolicy: 'auto',
+      sandboxMode: 'danger-full-access',
+      abortSignal: new AbortController().signal,
+      awaitApproval: vi.fn(async () => 'allow' as const)
+    })
+
+    expect((await host.listTools(context('turn_old'))).map((entry) => entry.name)).toEqual(['old_tool'])
+    host.replaceRuntimeComponents({
+      registry: CapabilityRegistry.fromLocalTools([newTool])
+    })
+    const oldResult = await host.execute(
+      { callId: 'call_old', toolName: 'old_tool', arguments: {} },
+      context('turn_old')
+    )
+    expect(oldResult.item).toMatchObject({ kind: 'tool_result', output: 'old_tool' })
+    expect((await host.listTools(context('turn_new'))).map((entry) => entry.name)).toEqual(['new_tool'])
+    await expect(host.execute(
+      { callId: 'call_missing', toolName: 'old_tool', arguments: {} },
+      context('turn_new')
+    )).rejects.toThrow(/unknown tool/i)
+  })
+
   it('asks before auto tools when approval policy is always', async () => {
     const host = new LocalToolHost({ tools: [echoTool] })
     const awaitApproval = vi.fn(async () => 'allow' as const)
@@ -884,7 +922,7 @@ describe('LocalToolHost approval policy', () => {
       kind: 'tool_result',
       toolName: 'user_input',
       isError: true,
-      output: { error: 'GUI user input is not available in this runtime context' }
+      output: { error: 'structured user input is not available in this client context' }
     })
   })
 

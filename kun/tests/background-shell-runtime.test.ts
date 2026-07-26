@@ -80,7 +80,7 @@ describe('BackgroundShellRuntime', () => {
         get: vi.fn(async () => ({
           id: 'thr_1',
           status: 'idle',
-          turns: [{ id: 'turn_1', status: 'completed' }]
+          turns: [{ id: 'turn_1', status: 'completed', clientSurface: 'tui' }]
         }))
       } as unknown as ThreadStore,
       turns: { steerTurn, startTurn } as unknown as TurnService,
@@ -105,6 +105,7 @@ describe('BackgroundShellRuntime', () => {
       threadId: 'thr_1',
       request: {
         prompt: expect.stringContaining('<background_shell_completed>'),
+        clientSurface: 'tui',
         displayText: 'Background shell abcd1234 completed',
         messageSource: 'background_shell'
       }

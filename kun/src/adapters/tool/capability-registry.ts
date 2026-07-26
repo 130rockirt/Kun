@@ -154,6 +154,13 @@ export class CapabilityRegistry {
 
   private canUseProvider(provider: ToolProviderPolicy, context?: ToolHostContext): boolean {
     if (!provider.enabled || !provider.available) return false
+    // `gui` is reserved for capabilities that require a live desktop
+    // workbench or control the local desktop. Diagnostics may list every
+    // provider without a context, but a concrete non-GUI turn must never see
+    // or execute these tools.
+    if (context && provider.kind === 'gui' && effectiveClientSurface(context) !== 'gui') {
+      return false
+    }
     if (context?.blockedProviderIds?.includes(provider.id)) return false
     const allowed = context?.allowedProviderIds
     if (allowed && !allowed.includes(provider.id)) return false
@@ -176,6 +183,19 @@ export class CapabilityRegistry {
     const allowed = context?.allowedToolNames
     return !allowed || allowed.includes(toolName)
   }
+}
+
+function effectiveClientSurface(context: ToolHostContext): NonNullable<ToolHostContext['clientSurface']> {
+  if (context.clientSurface) return context.clientSurface
+  if (
+    context.guiPlan ||
+    context.guiDesignCanvas ||
+    context.guiDesignMode ||
+    context.guiDesignArtifact ||
+    context.agentSurface
+  ) return 'gui'
+  if (context.imContext) return 'im'
+  return 'api'
 }
 
 function isPlanModeContext(context: ToolHostContext | undefined): boolean {

@@ -398,6 +398,7 @@ async function runReplayTask(input: {
     const startedAt = performance.now()
     const turn = await client.startTurn(threadId, {
       prompt: task.prompt,
+      clientSurface: 'api',
       reasoningEffort: task.reasoningEffort ?? suite.defaults.reasoningEffort ?? 'off',
       approvalPolicy: 'auto',
       sandboxMode: 'read-only',

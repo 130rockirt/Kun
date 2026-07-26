@@ -8,6 +8,7 @@ function turnContextInput(signal: AbortSignal): ToolTurnContextInput {
     threadId: 'thread_1',
     turnId: 'turn_1',
     workspace: '/workspace',
+    clientSurface: 'gui',
     threadMode: 'plan',
     activePlanContext: {
       operation: 'draft', workspaceRoot: '/workspace', relativePath: 'plan.md', planId: 'plan_1'

@@ -12,6 +12,10 @@ import type { RuntimeEventRecorder } from '../../services/runtime-event-recorder
 import type { LlmDebugRecorder } from '../../services/llm-debug-recorder.js'
 import type { RuntimeInfoResponse } from '../../contracts/runtime-info.js'
 import type {
+  McpCapabilityConfig,
+  McpServerConfig
+} from '../../contracts/capabilities.js'
+import type {
   RuntimeConfigApplyRequest,
   RuntimeConfigApplyResponse
 } from '../../contracts/runtime-config.js'
@@ -80,6 +84,7 @@ import type { ExtensionSecretRevealConsentService } from '../../services/extensi
 import type { ExtensionConfigurationService } from '../../services/extension-configuration-service.js'
 import type { ExtensionArtifactService } from '../../services/extension-artifact-service.js'
 import type { ExtensionMediaHandleService } from '../../services/extension-media-handle-service.js'
+import type { ExtensionJobService } from '../../services/extension-job-service.js'
 import type { RuntimeMigrationService } from '../../services/runtime-migration-service.js'
 import type { RuntimeMigrationImportService } from '../../services/runtime-migration-import-service.js'
 import type { ArtifactStore } from '../../artifacts/artifact-store.js'
@@ -141,6 +146,7 @@ export type ExtensionPlatformRuntime = {
   artifacts: ExtensionArtifactService
   viewSessions: ExtensionViewSessionService
   secretReveals: ExtensionSecretRevealConsentService
+  jobs?: ExtensionJobService
   bundledSeedResults?: readonly BundledExtensionSeedResult[]
 }
 
@@ -245,6 +251,14 @@ export type ServerRuntime = {
   mcpOAuth?(): McpOAuthDiagnostic[] | Promise<McpOAuthDiagnostic[]>
   clearMcpOAuth?(serverId?: string): Promise<McpOAuthClearResult>
   authorizeMcpOAuth?(serverId: string): Promise<McpOAuthAuthorizeResult>
+  mcpConfig?(): McpCapabilityConfig
+  setMcpServer?(serverId: string, server: McpServerConfig | null): Promise<RuntimeConfigApplyResponse>
   skills?(workspace?: string): SkillRuntimeDiagnostics | Promise<SkillRuntimeDiagnostics>
+  refreshSkills?(): Promise<void>
+  setSkillsEnabled?(enabled: boolean): Promise<RuntimeConfigApplyResponse>
+  setLocalCapabilityEnabled?(
+    id: 'attachments' | 'memory',
+    enabled: boolean
+  ): Promise<RuntimeConfigApplyResponse>
   shutdown?(): Promise<void>
 }

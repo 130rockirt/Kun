@@ -15,7 +15,7 @@ import {
   type ContextMenuParams,
   type MenuItemConstructorOptions
 } from 'electron'
-import { createHash, randomBytes } from 'node:crypto'
+import { createHash } from 'node:crypto'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -87,7 +87,7 @@ import type {
 } from '../shared/kun-gui-api'
 import { isAllowedDevPreviewUrl } from '../shared/dev-preview-url'
 import { isAuthorizedPrototypeFileUrl } from './services/prototype-embed-registry'
-import { fetchUpstreamModelIds } from './upstream-models'
+import { fetchUpstreamModelIds, modelListFromSharedConnections } from './upstream-models'
 import {
   kunRuntimeAdapter,
   getRuntimeBaseUrlForSettings,
@@ -646,6 +646,7 @@ function createTrayMenu(settings: AppSettingsV1, threads: TrayThreadSummary[]): 
 
 async function loadTrayThreads(settings: AppSettingsV1): Promise<TrayThreadSummary[]> {
   try {
+    await kunRuntimeAdapter.resolveConnection(settings)
     const response = await fetch(`${getRuntimeBaseUrlForSettings(settings)}/v1/threads?limit=20`, {
       headers: runtimeAuthHeaders(settings),
       signal: AbortSignal.timeout(1_000)
@@ -899,7 +900,10 @@ const runtimeSupervisor = new KunRuntimeSupervisor<AppSettingsV1>({
     canAutoRestart: managedKunHostCanAutoStart,
     ensureRuntime: (settings) => ensureRuntime(settings),
     restartRuntime: (settings) => restartRuntime(settings),
-    checkHealth: (settings, timeoutMs) => kunRuntimeHealthMonitor.waitForHealthy(settings, timeoutMs),
+    checkHealth: async (settings, timeoutMs) => {
+      await kunRuntimeAdapter.resolveConnection(settings)
+      return kunRuntimeHealthMonitor.waitForHealthy(settings, timeoutMs)
+    },
     isChildRunning: () => kunRuntimeAdapter.isChildRunning(),
     isStopped: () => runtimeShutdown.isStoppedForQuit || isAppQuitInProgress(),
     publish: (full) => {
@@ -1069,53 +1073,17 @@ async function ensureRuntimeOnce(settings: AppSettingsV1): Promise<AppSettingsV1
 
 async function resolveManagedKunLaunchSettings(
   settings: AppSettingsV1,
-  source: string
+  _source: string
 ): Promise<AppSettingsV1> {
-  const tokenResult = await ensureManagedKunRuntimeToken(settings, source)
-  const launchSettings = tokenResult.settings
-  const runtime = getKunRuntimeSettings(launchSettings)
-  const resolved = await kunRuntimeAdapter.resolveAvailablePort(runtime.port)
-  if (!resolved.changed) return launchSettings
-
-  const next = await store.patch({ agents: { kun: { port: resolved.port } } })
-  runtimeSupervisor.noteLatest(next)
-  logWarn(source, `Kun port ${runtime.port} is unavailable; using ${resolved.port} for the managed runtime`, {
-    previousPort: runtime.port,
-    port: resolved.port,
-    message: resolved.message
-  })
-  return next
-}
-
-function generateKunRuntimeToken(): string {
-  return randomBytes(32).toString('base64url')
-}
-
-async function ensureManagedKunRuntimeToken(
-  settings: AppSettingsV1,
-  source: string
-): Promise<{ settings: AppSettingsV1; generated: boolean }> {
-  const runtime = getKunRuntimeSettings(settings)
-  if (runtime.runtimeToken.trim()) {
-    return { settings, generated: false }
-  }
-
-  const next = await store.patch({
-    agents: { kun: { runtimeToken: generateKunRuntimeToken() } }
-  })
-  runtimeSupervisor.noteLatest(next)
-  logWarn(source, 'Generated a runtime token for the managed Kun runtime because none was configured.')
-  return { settings: next, generated: true }
+  // Shared runtimes bind an ephemeral loopback port while holding the
+  // data-directory election lock. The configured port is a legacy preference,
+  // not the address or bearer token of the currently resolved daemon.
+  return settings
 }
 
 async function ensureKunRuntime(settings: AppSettingsV1): Promise<AppSettingsV1> {
-  const tokenResult = await ensureManagedKunRuntimeToken(settings, 'runtime-start')
-  const currentSettings = tokenResult.settings
+  const currentSettings = settings
   await kunRuntimeAdapter.resolveConnection(currentSettings)
-  if (tokenResult.generated && kunRuntimeAdapter.isChildRunning()) {
-    logWarn('runtime-start', 'Restarting managed Kun to apply the generated runtime token.')
-    await kunRuntimeAdapter.stopAndWait()
-  }
 
   const runtime = getKunRuntimeSettings(currentSettings)
 
@@ -1164,7 +1132,7 @@ async function ensureKunRuntime(settings: AppSettingsV1): Promise<AppSettingsV1>
         'runtime-start',
         `managed Kun child stopped responding on port ${runtime.port}; restarting it in place`
       )
-      await kunRuntimeAdapter.stopAndWait()
+      await kunRuntimeAdapter.stopSharedAndWait(currentSettings)
     }
   }
 
@@ -1213,7 +1181,7 @@ async function restartRuntimeOnce(settings: AppSettingsV1): Promise<void> {
   }
 
   const adapter = kunRuntimeAdapter
-  await adapter.stopAndWait()
+  await adapter.stopSharedAndWait(settings)
   const launchSettings = await resolveManagedKunLaunchSettings(settings, 'runtime-restart')
 
   try {
@@ -1539,7 +1507,7 @@ async function restartManagedRuntimeForSettingsChange(
   if (!wasRunning) return { state: 'unavailable', message: 'Kun Runtime is not running.' }
 
   await waitForManagedRuntimeReadyBeforeStop(prev, 'settings-apply')
-  await adapter.stopAndWait()
+  await adapter.stopSharedAndWait(prev)
   if (!runtime.autoStart) {
     publishRuntimeStatus({
       state: 'stopped',
@@ -1640,7 +1608,7 @@ async function restartManagedRuntimeForMcpConfigChange(
 
   if (!wasRunning) return { state: 'unavailable', message: 'Kun Runtime is not running.' }
   await waitForManagedRuntimeReadyBeforeStop(settings, 'mcp-config')
-  await adapter.stopAndWait()
+  await adapter.stopSharedAndWait(settings)
   if (!runtime.autoStart) {
     return { state: 'unavailable', message: 'Kun Runtime is stopped by the current settings.' }
   }
@@ -1948,6 +1916,15 @@ app.whenReady().then(async () => {
 
   const fetchModels = async () => {
     const settings = await store.load()
+    const shared = await runtimeRequest(settings, '/v1/model-connections', { method: 'GET' })
+    if (shared.ok) {
+      try {
+        const live = modelListFromSharedConnections(JSON.parse(shared.body) as unknown)
+        if (live) return live
+      } catch {
+        // Fall back to the compatibility settings projection below.
+      }
+    }
     const key = resolveConfiguredApiKey(settings)
     return fetchUpstreamModelIds(settings, key)
   }
@@ -2124,10 +2101,22 @@ app.whenReady().then(async () => {
 
   if (managedKunHostCanAutoStart(initial)) {
     setTimeout(() => {
-      void kunRuntimeAdapter.resolveExecutable(initial).catch((err) => {
-        console.warn('[kun-gui] prewarm Kun binary:', err)
-      })
+      void ensureRuntime(initial)
+        .then(async (current) => {
+          const applied = await applyManagedRuntimeSettingsHot(current, 'startup-settings')
+          if (applied === 'restart_required') {
+            logWarn(
+              'startup-settings',
+              'Kun attached successfully, but the configured default model could not be hot-applied.'
+            )
+          }
+        })
+        .catch((err) => {
+          console.warn('[kun-gui] failed to start, attach, or configure the shared Kun runtime:', err)
+        })
     }, 1500)
+  } else {
+    void kunRuntimeAdapter.resolveConnection(initial)
   }
 
   app.on('second-instance', () => {

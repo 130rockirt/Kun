@@ -1,13 +1,30 @@
 # Kun GUI 单运行时方案
 
-本文记录 Kun 桌面应用现在应该如何围绕一个专门服务 GUI 的
-Kun 改造。结论先说清楚：GUI 只保留一个 agent，唯一 ID 是
-`kun`；Code、Design、Write、连接手机都通过同一条 `kun serve`
-HTTP/SSE 边界工作；历史运行时、旧绘画/设计 starter、运行时诊断面板、
+本文记录 Kun 桌面应用和独立 TUI 如何共同使用同一个 Kun 运行时。
+结论先说清楚：GUI 只保留一个 agent，唯一 ID 是 `kun`；GUI、TUI、
+脚本、扩展和连接手机都通过同一条 `kun serve` HTTP/SSE 边界工作；
+GUI 与 TUI 可以独立启动并同时使用，任何一个客户端退出都不应关闭或
+重置共享运行时。历史运行时、旧绘画/设计 starter、运行时诊断面板、
 agent 切换都不再是产品表面。
 
 Graph 编排、自进化项目 Agent、恢复与治理仍运行在同一个 Kun 边界内，完整设计与
 运维说明见 [`docs/graph-mode.md`](./graph-mode.md)。
+
+## 客户端能力边界
+
+每个 turn 持久化发起端 `clientSurface`，取值为 `gui`、`tui`、`cli`、
+`api`、`im` 或 `extension`。自动续跑、后台任务和子代理必须继承来源，
+不能根据“最近连接的是 GUI 还是 TUI”修改进程全局状态。
+
+- `gui` 类型的 Tool Provider 只用于真正依赖桌面工作台的能力，例如
+  Design Canvas 和 Computer Use；非 GUI turn 在工具发现和执行两层都
+  必须拒绝这些 Provider。
+- goal、todo、plan、Skill、MCP、附件、审批、结构化用户输入和 subagent
+  都属于运行时能力，GUI/TUI 只负责各自的呈现，不应被误分类为 GUI 工具。
+- 稳定 system prompt 必须保持客户端中立，以便共享缓存前缀；当前客户端、
+  可用交互和禁止假设的界面能力，通过每个 turn 的动态 context 注入。
+- GUI、TUI、CLI、订阅 SDK 和 HTTP 模型路径必须使用同一条能力过滤规则，
+  不能只在某个前端隐藏菜单。
 
 ## 目标边界
 

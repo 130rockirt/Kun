@@ -19,6 +19,10 @@ import {
   type ExtensionRegistryEntry,
   type InstalledExtensionVersion
 } from '../../extensions/index.js'
+import {
+  ExtensionJobServiceError,
+  type ExtensionJobService
+} from '../../services/extension-job-service.js'
 import { isRuntimeTokenAuthorized } from '../auth.js'
 import { readJsonBody } from '../read-json-body.js'
 import { jsonResponse, type JsonResponse } from '../response.js'
@@ -88,6 +92,7 @@ export type ExtensionManagementRoutes = {
   validation: ArchiveValidationOptions
   runtimeToken: string
   insecure: boolean
+  jobs?: ExtensionJobService
   bundledSeedResults?: readonly BundledExtensionSeedResult[]
 }
 
@@ -118,6 +123,9 @@ export function registerExtensionManagementRoutes(
   router.add('POST', '/v1/extensions/install', authenticated((request) => installExtension(runtime, request)))
   // Static paths must be registered before `:id` because the router uses first-match ordering.
   router.add('GET', '/v1/extensions/diagnostics', authenticated((request) => listExtensionDiagnostics(runtime, request)))
+  router.add('GET', '/v1/extensions/jobs', authenticated((request) => listExtensionJobs(runtime, request)))
+  router.add('POST', '/v1/extensions/jobs/:jobId/cancel', authenticated((_request, context) =>
+    cancelExtensionJob(runtime, context)))
   router.add('GET', '/v1/extensions/:id', authenticated((_request, context) => getExtension(runtime, context)))
   router.add('GET', '/v1/extensions/:id/diagnostics', authenticated((_request, context) => getExtensionDiagnostic(runtime, context)))
   router.add('POST', '/v1/extensions/:id/select', authenticated((request, context) => selectExtensionVersion(runtime, request, context)))
@@ -129,6 +137,29 @@ export function registerExtensionManagementRoutes(
   router.add('POST', '/v1/extensions/:id/retry', authenticated((_request, context) => retryExtension(runtime, context)))
   router.add('DELETE', '/v1/extensions/:id/versions/:version', authenticated((_request, context) => uninstallExtensionVersion(runtime, context)))
   router.add('DELETE', '/v1/extensions/:id', authenticated((_request, context) => uninstallExtension(runtime, context)))
+}
+
+async function listExtensionJobs(
+  runtime: ExtensionManagementRoutes,
+  request: Request
+): Promise<JsonResponse> {
+  if (!runtime.jobs) return ERRORS.unavailable('extension job management is unavailable')
+  const rawLimit = new URL(request.url).searchParams.get('limit')
+  const limit = rawLimit === null ? 100 : Number(rawLimit)
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) {
+    return ERRORS.validation('extension job limit must be an integer between 1 and 500')
+  }
+  return jsonResponse({ schemaVersion: 1, jobs: await runtime.jobs.listAll(limit) })
+}
+
+async function cancelExtensionJob(
+  runtime: ExtensionManagementRoutes,
+  context: RouteContext
+): Promise<JsonResponse> {
+  if (!runtime.jobs) return ERRORS.unavailable('extension job management is unavailable')
+  const jobId = z.string().trim().min(1).max(256).parse(context.params.jobId)
+  const result = await runtime.jobs.cancelAdmin(jobId)
+  return jsonResponse({ schemaVersion: 1, accepted: result.accepted, job: result.snapshot })
 }
 
 /** Convenience builder used by focused tests and non-standard embedders. */
@@ -580,6 +611,22 @@ function projectInspection(inspection: Awaited<ReturnType<typeof inspectKunxArch
 function extensionRouteError(error: unknown): JsonResponse {
   if (error instanceof z.ZodError) {
     return ERRORS.validation('invalid extension route parameter', error.issues)
+  }
+  if (error instanceof ExtensionJobServiceError) {
+    const status = error.code === 'not_found'
+      ? 404
+      : error.code === 'unauthorized'
+        ? 403
+        : error.code === 'invalid_transition' || error.code === 'lifecycle_fenced'
+          ? 409
+          : error.code === 'quota_exceeded' || error.code === 'executor_unavailable'
+            ? 503
+            : 400
+    return jsonResponse({
+      code: `EXTENSION_JOB_${error.code.toUpperCase()}`,
+      message: redactSecretText(error.message).slice(0, 4_096),
+      details: redactSecrets(error.details)
+    }, status)
   }
   if (!(error instanceof ExtensionError)) {
     return jsonResponse({

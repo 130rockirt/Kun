@@ -2,6 +2,7 @@ import type { ApprovalPolicy, SandboxMode } from '../contracts/policy.js'
 import type { ApprovalRequest, ApprovalResolution } from '../domain/approval.js'
 import type { TurnItem } from '../contracts/items.js'
 import type { ModelCapabilityMetadata } from '../contracts/capabilities.js'
+import type { TurnClientSurface } from '../contracts/turns.js'
 import type { ArtifactStore } from '../artifacts/artifact-store.js'
 import type { ExtensionToolCatalogEpoch } from '../contracts/threads.js'
 import type {
@@ -79,7 +80,7 @@ export type ToolHostContext = {
   messageSource?: 'background_shell' | 'background_subagent' | 'graph_runtime'
   /** Additional explicitly trusted workspace roots for this persisted thread. */
   additionalWorkspaces?: readonly string[]
-  /** Initiating client surface used to hide desktop-only providers from TUI turns. */
+  /** Initiating client surface used to hide providers that require a desktop workbench. */
   clientSurface?: TurnClientSurface
   /**
    * Thread mode advertised by the GUI. Kun restricts plan tools
@@ -152,7 +153,7 @@ export type ToolHostContext = {
   awaitApproval: (
     approval: ApprovalRequest
   ) => Promise<'allow' | 'deny' | ApprovalResolution>
-  /** Resolves structured GUI input requested by a tool call. */
+  /** Resolves structured input through the initiating interactive client. */
   awaitUserInput?: (
     input: Omit<UserInputRequest, 'threadId' | 'turnId'>
   ) => Promise<UserInputResolution>
@@ -186,7 +187,7 @@ export interface ToolHost {
   readonly id: string
   /**
    * List tools available for the current turn. Tool hosts MAY scope
-   * the list by mode/GUI plan context (e.g. only expose `create_plan`
+   * the list by mode/client context (e.g. only expose `create_plan`
    * during plan turns) so the model is not tempted to call gated
    * tools in normal agent turns.
    */

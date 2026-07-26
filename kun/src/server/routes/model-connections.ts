@@ -38,6 +38,18 @@ export async function replaceModelCredential(
   return mutate(registry, async () => registry!.replaceCredential(providerId, await readJson(request)))
 }
 
+export async function clearModelCredential(
+  registry: ModelConnectionRegistry | undefined,
+  providerId: string,
+  request: Request
+): Promise<JsonResponse> {
+  const revision = Number(new URL(request.url).searchParams.get('expected_revision'))
+  if (!Number.isInteger(revision) || revision < 0) {
+    return ERRORS.validation('expected_revision query parameter is required')
+  }
+  return mutate(registry, () => registry!.clearCredential(providerId, revision))
+}
+
 export async function deleteModelConnection(
   registry: ModelConnectionRegistry | undefined,
   providerId: string,

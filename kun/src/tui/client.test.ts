@@ -184,6 +184,54 @@ describe('KunTuiClient', () => {
     expect(calls[2].headers.get('x-kun-approval-consent')).toMatch(/^v1\./)
   })
 
+  it('accepts attachment metadata produced by the current GUI runtime', async () => {
+    const sourceSha256 = 'a'.repeat(64)
+    const fetchImpl = vi.fn(async () => Response.json({
+      attachment: {
+        id: 'att_current_gui',
+        name: 'clipboard.png',
+        kind: 'image',
+        mimeType: 'image/png',
+        byteSize: 16,
+        hash: sourceSha256,
+        width: 1,
+        height: 1,
+        sourceSha256,
+        threadIds: [],
+        workspaces: ['/tmp/project'],
+        createdAt: '2026-07-26T00:00:00.000Z',
+        updatedAt: '2026-07-26T00:00:00.000Z'
+      }
+    }, { status: 201 })) as unknown as typeof fetch
+    const client = new KunTuiClient({
+      baseUrl: 'http://127.0.0.1:18899',
+      runtimeToken: 'runtime-secret',
+      fetch: fetchImpl
+    })
+
+    await expect(client.uploadAttachment({
+      name: 'clipboard.png',
+      mimeType: 'image/png',
+      dataBase64: 'iVBORw0KGgo='
+    })).resolves.toMatchObject({
+      attachment: {
+        id: 'att_current_gui',
+        sourceSha256
+      }
+    })
+
+    await expect(client.getAttachment('att_current_gui')).resolves.toMatchObject({
+      attachment: {
+        id: 'att_current_gui',
+        name: 'clipboard.png'
+      }
+    })
+    expect(fetchImpl).toHaveBeenLastCalledWith(
+      'http://127.0.0.1:18899/v1/attachments/att_current_gui',
+      expect.objectContaining({ method: 'GET' })
+    )
+  })
+
   it('redacts the known runtime token from structured server errors', async () => {
     const client = new KunTuiClient({
       baseUrl: 'http://127.0.0.1:18899',
@@ -193,6 +241,43 @@ describe('KunTuiClient', () => {
     const error = await client.runtimeInfo().catch((value) => value)
     expect(String(error)).toContain('[REDACTED]')
     expect(String(error)).not.toContain('runtime-secret')
+  })
+
+  it('follows refreshed discovery after the shared runtime address changes', async () => {
+    const calls: Array<{ url: string; token: string | null }> = []
+    const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const value = String(url)
+      calls.push({
+        url: value,
+        token: new Headers(init?.headers).get('authorization')
+      })
+      if (value.includes(':18899/')) throw new Error('ECONNREFUSED')
+      return Response.json({ threads: [] })
+    }) as unknown as typeof fetch
+    const resolveConnection = vi.fn(async () => ({
+      baseUrl: 'http://127.0.0.1:18900',
+      runtimeToken: 'second-token'
+    }))
+    const client = new KunTuiClient({
+      baseUrl: 'http://127.0.0.1:18899',
+      runtimeToken: 'first-token',
+      fetch: fetchImpl,
+      resolveConnection
+    })
+
+    await expect(client.listThreads()).resolves.toEqual([])
+
+    expect(resolveConnection).toHaveBeenCalledOnce()
+    expect(calls).toEqual([
+      {
+        url: 'http://127.0.0.1:18899/v1/threads',
+        token: 'Bearer first-token'
+      },
+      {
+        url: 'http://127.0.0.1:18900/v1/threads',
+        token: 'Bearer second-token'
+      }
+    ])
   })
 
   it('reconnects from the last applied SSE sequence and ignores duplicates', async () => {

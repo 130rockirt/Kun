@@ -72,6 +72,79 @@ export async function fetchUpstreamModelIds(
   )
 }
 
+/**
+ * Project the runtime's revisioned, secret-free model registry into the
+ * composer's existing picker contract. This is the live authority used when
+ * GUI and TUI are open together; settings remain a startup fallback only.
+ */
+export function modelListFromSharedConnections(value: unknown): FetchUpstreamModelsResult | null {
+  const root = objectValue(value)
+  if (root.schemaVersion !== 1 || !Array.isArray(root.providers)) return null
+  const groups: ModelProviderModelGroup[] = root.providers.flatMap((raw) => {
+    const profile = objectValue(raw)
+    if (profile.configured !== true || typeof profile.id !== 'string' || !Array.isArray(profile.models)) {
+      return []
+    }
+    const modelIds = profile.models.flatMap((model) =>
+      typeof model === 'string' && model.trim() ? [model.trim()] : []
+    )
+    if (modelIds.length === 0) return []
+    const capabilities = objectValue(profile.modelCapabilities)
+    const modelProfiles = Object.fromEntries(modelIds.flatMap((model) => {
+      const capability = objectValue(capabilities[model] ?? capabilities[model.toLowerCase()])
+      const inputModalities = stringValues(capability.inputModalities)
+        .filter((item): item is 'text' | 'image' => item === 'text' || item === 'image')
+      const outputModalities = stringValues(capability.outputModalities)
+        .filter((item): item is 'text' | 'image' => item === 'text' || item === 'image')
+      const messageParts = stringValues(capability.messageParts)
+        .filter((item): item is 'text' | 'image_url' | 'input_image' =>
+          item === 'text' || item === 'image_url' || item === 'input_image'
+        )
+      const reasoning = sharedReasoningProfile(capability.reasoning)
+      return [[model, {
+        inputModalities: inputModalities.length ? inputModalities : ['text'],
+        outputModalities: outputModalities.length ? outputModalities : ['text'],
+        supportsToolCalling: capability.supportsToolCalling !== false,
+        messageParts: messageParts.length ? messageParts : ['text'],
+        ...(positiveInteger(capability.contextWindowTokens)
+          ? { contextWindowTokens: positiveInteger(capability.contextWindowTokens) }
+          : {}),
+        ...(positiveInteger(capability.maxOutputTokens)
+          ? { maxOutputTokens: positiveInteger(capability.maxOutputTokens) }
+          : {}),
+        ...(reasoning ? { reasoning } : {}),
+        ...(isModelEndpointFormat(capability.endpointFormat)
+          ? { endpointFormat: capability.endpointFormat }
+          : {}),
+        ...(capability.responsesMode === 'lite' ? { responsesMode: 'lite' as const } : {})
+      } satisfies ModelProviderModelProfileV1]]
+    }))
+    return [{
+      providerId: profile.id,
+      label: typeof profile.name === 'string' && profile.name.trim() ? profile.name.trim() : profile.id,
+      modelIds,
+      modelProfiles,
+      ...(typeof profile.accountId === 'string' && profile.accountId.trim()
+        ? { accountId: profile.accountId.trim() }
+        : {})
+    }]
+  })
+  const modelIds = groups.flatMap((group) => group.modelIds)
+  if (modelIds.length === 0) {
+    return {
+      ok: false,
+      message: 'No connected provider has a usable text model yet.'
+    }
+  }
+  const defaultModelId = typeof root.defaultModel === 'string' ? root.defaultModel.trim() : ''
+  return {
+    ok: true,
+    modelIds: sortComposerModelIds(modelIds),
+    ...(defaultModelId ? { defaultModelId } : {}),
+    modelGroups: mergeModelGroups(groups)
+  }
+}
+
 export async function readConfiguredKunModelIds(settings: AppSettingsV1): Promise<string[]> {
   const runtime = resolveKunRuntimeSettings(settings)
   const dataDir = expandHome(runtime.dataDir)
@@ -184,7 +257,13 @@ function mergeModelGroups(groups: readonly ModelProviderModelGroup[]): ModelProv
       modelProfiles: {
         ...(existing?.modelProfiles ?? {}),
         ...(group.modelProfiles ?? {})
-      }
+      },
+      ...(group.accountId ?? existing?.accountId
+        ? { accountId: group.accountId ?? existing?.accountId }
+        : {}),
+      ...(group.extensionProvider ?? existing?.extensionProvider
+        ? { extensionProvider: group.extensionProvider ?? existing?.extensionProvider }
+        : {})
     })
   }
   return [...byProvider.values()].filter((group) => group.modelIds.length > 0)
@@ -237,4 +316,59 @@ function expandHome(path: string): string {
 
 function objectValue(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+}
+
+function stringValues(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.flatMap((item) => typeof item === 'string' ? [item] : [])
+    : []
+}
+
+function positiveInteger(value: unknown): number | undefined {
+  return Number.isInteger(value) && Number(value) > 0 ? Number(value) : undefined
+}
+
+function isModelEndpointFormat(
+  value: unknown
+): value is ModelProviderModelProfileV1['endpointFormat'] {
+  return value === 'chat_completions' ||
+    value === 'responses' ||
+    value === 'messages' ||
+    value === 'custom_endpoint'
+}
+
+function sharedReasoningProfile(
+  value: unknown
+): ModelProviderModelProfileV1['reasoning'] | undefined {
+  const reasoning = objectValue(value)
+  const supportedEfforts = stringValues(reasoning.supportedEfforts).filter((effort) =>
+    effort === 'auto' ||
+    effort === 'off' ||
+    effort === 'low' ||
+    effort === 'medium' ||
+    effort === 'high' ||
+    effort === 'max'
+  ) as NonNullable<ModelProviderModelProfileV1['reasoning']>['supportedEfforts']
+  const defaultEffort = reasoning.defaultEffort
+  const requestProtocol = reasoning.requestProtocol
+  if (
+    supportedEfforts.length === 0 ||
+    !supportedEfforts.includes(defaultEffort as never) ||
+    (
+      requestProtocol !== 'none' &&
+      requestProtocol !== 'deepseek-chat-completions' &&
+      requestProtocol !== 'glm-chat-completions' &&
+      requestProtocol !== 'mimo-chat-completions' &&
+      requestProtocol !== 'openai-chat-completions' &&
+      requestProtocol !== 'qwen-chat-completions' &&
+      requestProtocol !== 'thinking-toggle-chat-completions' &&
+      requestProtocol !== 'openai-responses' &&
+      requestProtocol !== 'anthropic-thinking'
+    )
+  ) return undefined
+  return {
+    supportedEfforts,
+    defaultEffort: defaultEffort as NonNullable<ModelProviderModelProfileV1['reasoning']>['defaultEffort'],
+    requestProtocol
+  }
 }

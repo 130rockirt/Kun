@@ -293,11 +293,12 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
       request: {
         prompt,
         model,
+        clientSurface: input.guiDesignCanvas ? 'gui' : input.clientSurface ?? 'api',
         ...(input.providerId ? { providerId: input.providerId } : {}),
         mode: 'agent',
         reasoningEffort: normalizeRoleReasoningEffort(input.reasoningEffort),
         ...(input.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
-        // Children have no GUI surface to answer structured input prompts.
+        // Child runs have no independent interactive surface for structured prompts.
         disableUserInput: true
       }
     })

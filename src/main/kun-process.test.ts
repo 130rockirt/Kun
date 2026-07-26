@@ -282,6 +282,40 @@ describe('startKunChild', () => {
   })
 })
 
+describe('startKunSharedRuntime', () => {
+  it('refuses to start a second writer beside an unpublished GUI-private runtime', async () => {
+    if (!tempRoot) throw new Error('temp root not initialized')
+    const body = JSON.stringify({ dataDir: tempRoot })
+    const server = createServer((socket) => {
+      socket.once('data', () => {
+        socket.end([
+          'HTTP/1.1 200 OK',
+          'Content-Type: application/json',
+          `Content-Length: ${Buffer.byteLength(body)}`,
+          'Connection: close',
+          '',
+          body
+        ].join('\r\n'))
+      })
+    })
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(testKunPort, '127.0.0.1', resolve)
+    })
+    try {
+      const module = await import('./kun-process')
+      const settings = createSettings('/tmp/unused-kun-entry.js')
+      settings.agents.kun.dataDir = tempRoot
+
+      await expect(module.startKunSharedRuntime(settings)).rejects.toThrow(
+        'older GUI-private Kun runtime'
+      )
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+    }
+  })
+})
+
 describe('resolveKunStartupTimeoutMs', () => {
   it('gives Windows the larger default and other platforms a smaller one', async () => {
     const { resolveKunStartupTimeoutMs } = await import('./kun-process')

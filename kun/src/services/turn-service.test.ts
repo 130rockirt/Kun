@@ -371,7 +371,7 @@ describe('TurnService startTurn', () => {
         threadId,
         request: {
           prompt: 'first', model: 'm', providerId: 'provider-a', accountId: 'account-a',
-          reasoningEffort: 'high', mode: 'plan'
+          reasoningEffort: 'high', mode: 'plan', clientSurface: 'tui'
         }
       }),
       service.startTurn({ threadId, request: { prompt: 'second', model: 'm' } })
@@ -384,8 +384,9 @@ describe('TurnService startTurn', () => {
     expect(thread?.turns[0]?.status).toBe('running')
     expect(eventBus.snapshotSince(threadId, 0).find((event) => event.kind === 'turn_started')).toMatchObject({
       kind: 'turn_started', model: 'm', providerId: 'provider-a', accountId: 'account-a',
-      reasoningEffort: 'high', mode: 'plan'
+      reasoningEffort: 'high', mode: 'plan', clientSurface: 'tui'
     })
+    expect(thread?.turns[0]?.clientSurface).toBe('tui')
     expect(await service.interruptActiveTurns()).toBe(1)
     expect((await threadStore.get(threadId))?.turns[0]?.status).toBe('aborted')
   })

@@ -43,10 +43,21 @@ export type TuiKeyAction =
   | 'thinking_toggle'
   | 'pointer_mode_toggle'
   | 'tool_details_toggle'
+  | 'subagent_detach'
   | 'input_editor'
   | 'input_steer'
+  | 'input_paste'
   | 'input_newline'
   | 'input_clear'
+  | 'sidebar_toggle'
+  | 'theme_list'
+  | 'session_share'
+  | 'session_unshare'
+  | 'share'
+  | 'plugin_list'
+  | 'console_toggle'
+  | 'diff_toggle'
+  | 'terminal_toggle'
   | 'session_quick_1'
   | 'session_quick_2'
   | 'session_quick_3'
@@ -116,10 +127,28 @@ const DEFAULT_BINDINGS: Record<TuiKeyAction, string | readonly string[]> = {
   thinking_toggle: 'none',
   pointer_mode_toggle: '<leader>p',
   tool_details_toggle: 'ctrl+o',
+  subagent_detach: 'ctrl+b',
   input_editor: 'ctrl+g',
   input_steer: 'ctrl+s',
+  // Terminal emulators frequently reserve their platform paste shortcut
+  // before a TUI can see it. Keep Kimi's Ctrl+V/Windows Alt+V behavior, while
+  // accepting the common terminal alternatives whenever they are forwarded.
+  input_paste: process.platform === 'darwin'
+    ? ['super+v', 'ctrl+v', 'alt+v', 'ctrl+shift+v', '<leader>v']
+    : process.platform === 'win32'
+      ? ['ctrl+v', 'alt+v', 'ctrl+shift+v', 'super+v', '<leader>v']
+      : ['ctrl+v', 'ctrl+shift+v', 'alt+v', 'super+v', '<leader>v'],
   input_newline: ['shift+return', 'ctrl+return', 'alt+return', 'ctrl+j'],
   input_clear: 'ctrl+c',
+  sidebar_toggle: 'none',
+  theme_list: 'none',
+  session_share: 'none',
+  session_unshare: 'none',
+  share: 'none',
+  plugin_list: 'none',
+  console_toggle: 'none',
+  diff_toggle: 'none',
+  terminal_toggle: 'none',
   session_quick_1: '<leader>1',
   session_quick_2: '<leader>2',
   session_quick_3: '<leader>3',
@@ -133,12 +162,11 @@ const DEFAULT_BINDINGS: Record<TuiKeyAction, string | readonly string[]> = {
 
 const ACTIONS = new Set<TuiKeyAction>(Object.keys(DEFAULT_BINDINGS) as TuiKeyAction[])
 
-// OpenCode exposes these names, but Kun intentionally has no matching product
-// surface. Accepting them keeps a shared tui.json portable without pretending
-// that a no-op sidebar/share/plugin/theme command exists.
+// Kun intentionally leaves chat paging to the terminal's native scrollback in
+// inline mode. Accept the OpenCode names so a shared tui.json stays portable,
+// but report these two actions as unavailable instead of installing no-ops.
 const UNAVAILABLE_OPENCODE_ACTIONS = new Set([
-  'sidebar_toggle', 'theme_list', 'session_share', 'session_unshare', 'share',
-  'plugin_list', 'console_toggle', 'diff_toggle', 'terminal_toggle'
+  'messages_page_up', 'messages_page_down'
 ])
 
 const VALID_SYMBOL_KEYS = new Set([

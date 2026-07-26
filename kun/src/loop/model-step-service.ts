@@ -27,6 +27,7 @@ import { resolveWorkspacePath, shellRuntimeInstruction } from '../adapters/tool/
 import { VERIFY_CHANGES_TOOL_NAME } from '../adapters/tool/builtin-verify-tool.js'
 import { buildToolPreferenceInstruction } from '../prompt/kun-system-prompt.js'
 import {
+  buildClientSurfaceInstruction,
   buildKunTurnContextInstructions,
   type KunTurnContextAuthority,
   type KunTurnContextBlock
@@ -448,6 +449,7 @@ export class ModelStepService {
       signal,
       threadId,
       turnId,
+      clientSurface: prepared.clientSurface,
       toolSpecs: requestToolSpecs,
       reserveModelRequest: () => this.deps.budgetGate.reserveAdditionalModelRequest(threadId, turnId)
     })
@@ -497,6 +499,11 @@ export class ModelStepService {
       : null
     const toolPreferenceInstruction = buildToolPreferenceInstruction(requestToolSpecs)
     const contextBlocks: KunTurnContextBlock[] = [
+      kunContextBlock(
+        'client-surface',
+        'runtime',
+        buildClientSurfaceInstruction(prepared.clientSurface)
+      ),
       ...(runtimeContextInstruction
         ? [kunContextBlock('runtime-context', 'runtime', runtimeContextInstruction)]
         : []),

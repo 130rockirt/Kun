@@ -5,6 +5,7 @@ import {
 } from './kun-system-prompt.js'
 import {
   appendKunTurnContextBlock,
+  buildClientSurfaceInstruction,
   buildKunTurnContextInstructions,
   buildThreadProfileInstruction
 } from './kun-prompt-context.js'
@@ -23,6 +24,7 @@ describe('KUN_SYSTEM_PROMPT', () => {
     }
 
     for (const volatileOrInternalValue of [
+      'GUI-native',
       'HTTP/SSE',
       'prompt_cache_hit_tokens',
       'agents.kun',
@@ -35,6 +37,25 @@ describe('KUN_SYSTEM_PROMPT', () => {
     ]) {
       expect(KUN_SYSTEM_PROMPT).not.toContain(volatileOrInternalValue)
     }
+  })
+})
+
+describe('buildClientSurfaceInstruction', () => {
+  it('keeps terminal turns away from desktop-only affordances without disabling runtime interaction', () => {
+    const instruction = buildClientSurfaceInstruction('tui')
+
+    expect(instruction).toContain('Kun terminal TUI')
+    expect(instruction).toContain('Do not claim to click')
+    expect(instruction).toContain('structured questions can still be shown in the terminal')
+    expect(instruction).toContain('only the tools advertised for this turn')
+  })
+
+  it('describes GUI tools as advertised capabilities rather than ambient authority', () => {
+    const instruction = buildClientSurfaceInstruction('gui')
+
+    expect(instruction).toContain('Kun desktop GUI')
+    expect(instruction).toContain('only when their matching tools are advertised')
+    expect(instruction).toContain('not extra authorization')
   })
 })
 

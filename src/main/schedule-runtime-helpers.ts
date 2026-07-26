@@ -389,6 +389,7 @@ export async function runPromptViaRuntime(
   const turnBody: Record<string, unknown> = {
     prompt: options.prompt,
     mode: options.mode,
+    clientSurface: 'api',
     // Headless turns — nobody can answer a user_input prompt; a turn that asks
     // one hangs until the response timeout.
     disableUserInput: true

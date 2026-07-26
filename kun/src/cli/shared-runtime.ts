@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import { closeSync, openSync } from 'node:fs'
-import { mkdir, rename, stat } from 'node:fs/promises'
+import { chmod, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
@@ -160,6 +160,7 @@ export async function ensureSharedRuntime(input: {
     if (elected) return elected
     const stale = await readRuntimeDiscovery(input.dataDir).catch(() => null)
     if (stale) await removeRuntimeDiscovery(input.dataDir, stale.instanceId).catch(() => undefined)
+    await prepareFreshSharedRuntimeCapabilities(input.dataDir)
 
     const logsDir = join(input.dataDir, 'logs')
     await mkdir(logsDir, { recursive: true, mode: 0o700 })
@@ -209,6 +210,50 @@ export async function ensureSharedRuntime(input: {
     }
     throw new Error(`Kun shared runtime did not become ready; inspect ${logPath}`)
   })
+}
+
+async function prepareFreshSharedRuntimeCapabilities(dataDir: string): Promise<void> {
+  const target = join(dataDir, 'config.json')
+  let current: Record<string, unknown> = {}
+  try {
+    const parsed = JSON.parse(await readFile(target, 'utf8')) as unknown
+    if (!isRecord(parsed)) return
+    current = parsed
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      current = {}
+    } else {
+      // Let the normal config loader report malformed or unreadable files.
+      return
+    }
+  }
+  const capabilities = isRecord(current.capabilities) ? current.capabilities : {}
+  const defaults: Record<string, unknown> = {
+    skills: { enabled: true, projectConfigEnabled: true },
+    instructions: { enabled: true },
+    attachments: { enabled: true },
+    memory: { enabled: true },
+    subagents: { enabled: true }
+  }
+  let changed = false
+  const nextCapabilities = { ...capabilities }
+  for (const [id, value] of Object.entries(defaults)) {
+    if (Object.prototype.hasOwnProperty.call(nextCapabilities, id)) continue
+    nextCapabilities[id] = value
+    changed = true
+  }
+  if (!changed) return
+  const next = { ...current, capabilities: nextCapabilities }
+  await mkdir(dataDir, { recursive: true, mode: 0o700 })
+  const temporary = `${target}.${process.pid}.shared.tmp`
+  await writeFile(temporary, `${JSON.stringify(next, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
+  await chmod(temporary, 0o600).catch(() => undefined)
+  await rename(temporary, target)
+  await chmod(target, 0o600).catch(() => undefined)
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 export async function stopSharedRuntime(

@@ -150,13 +150,13 @@ Connection pages show one current step, while read-only inspection pages group
 fields and statuses instead of reusing a heavy generic modal.
 
 If `/model` shows only DeepSeek, run `kun runtime status` and verify that its
-data directory matches the GUI. When an older GUI runtime has no shared
-discovery or model-connection routes, Kun verifies and attaches to it instead
-of starting a second agent or thread-store writer. Chat and sessions remain
-shared; `/connect` uses the same protected credential/registry files, writes
-only a secret-free GUI compatibility projection, and hot-applies the existing
-runtime. `/model` refreshes from that registry. An incompatible legacy runtime
-is still rejected.
+data directory matches the GUI. Kun never attaches to an older GUI-private
+runtime that lacks shared discovery, and it never starts a second writer for
+that data directory. Close or update that old GUI once; after that, whichever
+current GUI or TUI starts first elects the same UI-independent background
+service. `/connect` uses the protected credential/registry files in that data
+directory, writes only a secret-free GUI compatibility projection, and
+`/model` refreshes from the registry.
 
 ## Interaction
 
@@ -172,12 +172,14 @@ is still rejected.
 | `Ctrl+T` | Cycle the current model's supported reasoning efforts |
 | `F2` / `Shift+F2` | Cycle recent models forward/backward |
 | `Tab` / `Shift+Tab` | Cycle Agent/Plan when autocomplete is not active |
-| `Ctrl+C` | Act like Escape in dialogs, confirmations, and model/connect routes; clear a non-empty composer; press twice to exit while idle and empty |
+| `Ctrl+C` | Act like Escape in dialogs, confirmations, and model/connect routes; clear all text and attachments in a non-empty composer; press twice to exit while idle and completely empty |
 | `Ctrl+D` | Forward-delete when non-empty; press twice to exit while idle and empty; request confirmation in Sessions |
+| `Backspace` / `Delete` | Remove the most recently queued attachment when composer text is empty; retain normal text editing while text is present |
 | `Esc` | Close autocomplete/the current page or interrupt the active turn; press twice while idle to safely undo the previous turn |
 | `Ctrl+O` | Expand or collapse tool-call details in the transcript |
 | `Ctrl+G` | Edit the current composer draft with `$VISUAL`/`$EDITOR` |
 | `Ctrl+S` | Immediately steer a non-empty draft into the running turn |
+| macOS `Cmd+V` / `Ctrl+X V`; Windows/Linux `Ctrl+V` | Read a screenshot from the system clipboard and queue it; `Alt+V` and forwarded `Ctrl+Shift+V` / `Super+V` are also accepted |
 | `Ctrl+L` | Redraw |
 | `Shift+PgUp/PgDn` | Native terminal scrollback; not captured by Kun |
 
@@ -187,6 +189,28 @@ Codex/VS Code integrated terminals commonly let `Ctrl+C` copy an existing
 selection; macOS Terminal/iTerm2 normally use `Cmd+C`, while Linux and Windows
 terminals commonly use `Ctrl+Shift+C`. Without a selection, `Ctrl+C` keeps its
 Kun back, clear, interrupt, or exit behavior.
+
+The terminal host handles platform paste shortcuts such as `Cmd+V` before a
+TUI process can see them, and an image-only clipboard usually produces no text
+bytes for the terminal to forward. Kun advertises `Cmd+V` on macOS and handles
+forwarded `Super+V` or an empty bracketed-paste gesture as a clipboard-image
+action. If the host consumes the shortcut completely, press `Ctrl+X` and then
+`V`, which Kun handles as a reliable Leader sequence. Forwarded `Ctrl+V`,
+`Alt+V`, and `Ctrl+Shift+V` run the same image-read/upload path. `/paste`
+remains the keyboard-independent fallback.
+
+Queued images and files appear as ordered `Attachment 1/n` rows inside the
+composer instead of floating outside the input. On macOS, Windows, and Linux,
+press Backspace or the physical Delete key while the text editor is empty to
+remove attachments in reverse order. While text is present, those keys edit
+only the text and cannot accidentally remove an attachment.
+`/attach remove <n>` removes a specific item, and `/attach clear` clears the
+attachment draft.
+
+After a file or image is sent, the persisted `You` message shows an
+`Image/File` row with its name, media type, size, and image dimensions when
+available. If an older runtime cannot return metadata, Kun still renders an
+`Attachment · attached` marker so the message never looks text-only.
 
 Press `Ctrl+X P` or run `/mouse on` when you want to click a Thinking or
 Subagent row. The footer clearly identifies Pointer mode. Esc/Ctrl+C or
@@ -205,6 +229,8 @@ conversation text never requires holding Shift.
 | `/subagents` | Browse delegated children and open a selected child as a read-only live transcript; Pointer mode can open a visible Subagent block in the same popup |
 | `/copy`, `/export [path]` | Copy the latest Kun response or safely export the complete thread as Markdown; existing files are not overwritten |
 | `/details`, `/thinking` | Toggle expanded tool details or reasoning text; `/reasoning` remains an alias |
+| `/paste` | Read a screenshot from the system clipboard and queue it; equivalent to forwarded `Cmd+V` on macOS, with `Ctrl+X V` always available |
+| `/attach <path>`, `/attach list`, `/attach remove <n>`, `/attach clear` | Add a file, inspect queued attachments, remove one item, or clear them all |
 | `/mouse [on\|off]` | Toggle clickable Pointer mode; when off, the terminal owns selection and copy |
 | `/variants` | Select reasoning effort using the same state as `Ctrl+T` and the turn request |
 | `/compact` | Ask the shared runtime to compact long context |

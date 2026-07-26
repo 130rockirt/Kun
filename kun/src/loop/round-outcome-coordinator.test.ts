@@ -43,6 +43,7 @@ function prepared(overrides: Partial<PreparedTurnContext> = {}): PreparedTurnCon
     orchestration: 'direct',
     model: 'test-model',
     mode: 'agent',
+    clientSurface: 'api',
     dedicatedSvgTurn: false,
     planContextStale: false,
     approvalPolicy: 'on-request',

@@ -176,7 +176,7 @@ export function latestUserMessageText(items: readonly TurnItem[], turnId: string
 
 export function userInputUnavailableInstruction(): string {
   return [
-    'The `user_input` and `request_user_input` tools are unavailable for this turn because the user cannot answer GUI prompts.',
+    'The `user_input` and `request_user_input` tools are unavailable for this turn because the initiating client cannot answer structured prompts.',
     'Do not call either tool. If information is missing, ask the question in your normal response and end the turn so the user can answer in their next message.'
   ].join(' ')
 }

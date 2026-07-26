@@ -1,6 +1,6 @@
-import { mkdir } from 'node:fs/promises'
+import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
-import { basename, isAbsolute, join } from 'node:path'
+import { basename, dirname, isAbsolute, join } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { buildRouter } from './routes/index.js'
 import type { ServerRuntime } from './routes/server-runtime.js'
@@ -12,7 +12,7 @@ import {
   removeRuntimeDiscovery
 } from './runtime-discovery.js'
 import { ThreadEventStreamRegistry } from './thread-event-stream-registry.js'
-import { FileAttachmentStore } from '../attachments/attachment-store.js'
+import { FileAttachmentStore, type AttachmentStore } from '../attachments/attachment-store.js'
 import { InMemoryApprovalGate } from '../adapters/in-memory-approval-gate.js'
 import { InMemoryUserInputGate } from '../adapters/in-memory-user-input-gate.js'
 import { InMemoryEventBus } from '../adapters/in-memory-event-bus.js'
@@ -37,7 +37,10 @@ import {
   createCursorSdkRuntime,
   type CursorSdkRuntimeFactoryDeps
 } from '../runtime/cursor/cursor-sdk-runtime-factory.js'
-import { composeDelegatedTurnRuntimes } from '../runtime/delegated-turn-runtime.js'
+import {
+  composeDelegatedTurnRuntimes,
+  ReplaceableDelegatedTurnRuntime
+} from '../runtime/delegated-turn-runtime.js'
 import {
   DelegatedSessionCoordinator,
   FileDelegatedSessionBindingStore,
@@ -73,6 +76,7 @@ import { LocalWorkspaceInspector } from '../adapters/workspace/local-workspace-i
 import { createImmutablePrefix } from '../cache/immutable-prefix.js'
 import {
   buildRuntimeCapabilityManifest,
+  DEFAULT_KUN_CAPABILITIES_CONFIG,
   type KunCapabilitiesConfig
 } from '../contracts/capabilities.js'
 import type { ApprovalPolicy, SandboxMode } from '../contracts/policy.js'
@@ -221,6 +225,8 @@ export type KunServeRuntimeOptions = {
   port: number
   configPath?: string
   dataDir: string
+  /** Canonical GUI/TUI-shared MCP file; omitted by embedded/test runtimes. */
+  sharedMcpConfigPath?: string
   /** Product-owned catalog of default local .kunx packages. */
   bundledExtensionsDir?: string
   runtimeToken: string
@@ -353,7 +359,7 @@ export async function createKunServeRuntime(
     systemPrompt: KUN_SYSTEM_PROMPT,
     pinnedConstraints: [
       'system: preserve user intent across compaction',
-      'system: keep the HTTP/SSE contract stable for the GUI',
+      'system: keep the HTTP/SSE contract stable for every Kun client',
       'system: keep the stable Kun prefix byte-stable for prompt-cache reuse'
     ]
   })
@@ -446,6 +452,20 @@ export async function createKunServeRuntime(
   const agentSdkProviderIds = agentSdkProviderIdsForOptions(activeOptions)
   const antigravityProviderIds = antigravityProviderIdsForOptions(activeOptions)
   const cursorSdkProviderIds = cursorSdkProviderIdsForOptions(activeOptions)
+  const refreshDelegatedProviderIds = (): void => {
+    agentSdkProviderIds.clear()
+    for (const providerId of agentSdkProviderIdsForOptions(activeOptions)) {
+      agentSdkProviderIds.add(providerId)
+    }
+    antigravityProviderIds.clear()
+    for (const providerId of antigravityProviderIdsForOptions(activeOptions)) {
+      antigravityProviderIds.add(providerId)
+    }
+    cursorSdkProviderIds.clear()
+    for (const providerId of cursorSdkProviderIdsForOptions(activeOptions)) {
+      cursorSdkProviderIds.add(providerId)
+    }
+  }
   let refreshModelConnectionDelegatedDeps = (): void => undefined
   const extensionProviderAccounts = new ExtensionProviderAccountStore({
     dataDir: activeOptions.dataDir,
@@ -504,16 +524,18 @@ export async function createKunServeRuntime(
       refreshable: resolved.refreshable
     }
   }
-  const migrateLegacyProviderCredentials = async (): Promise<void> => {
+  const migrateLegacyProviderCredentials = async (
+    options: KunServeRuntimeOptions = activeOptions
+  ): Promise<void> => {
     const sources = [
-      ...(activeOptions.apiKey.trim() && !activeOptions.credentialSourceId ? [{
+      ...(options.apiKey.trim() && !options.credentialSourceId ? [{
         sourceId: 'runtime:default',
         providerId: 'default',
         providerName: 'Kun default provider',
         label: 'Migrated runtime credential',
-        apiKey: activeOptions.apiKey
+        apiKey: options.apiKey
       }] : []),
-      ...Object.entries(activeOptions.providers ?? {})
+      ...Object.entries(options.providers ?? {})
         .filter(([, provider]) => provider.apiKey.trim() && !provider.credentialSourceId)
         .map(([providerId, provider]) => ({
           sourceId: `runtime:provider:${providerId}`,
@@ -587,33 +609,43 @@ export async function createKunServeRuntime(
     modelCapabilities: registryModelCapabilities,
     onChanged: (connections) => {
       const selected = connections.selected
-      if (!selected) return
       const providers = Object.fromEntries(connections.providers.entries())
-      activeOptions = {
+      const nextOptions: KunServeRuntimeOptions = {
         ...activeOptions,
-        model: selected.model,
-        apiKey: selected.config.apiKey,
-        baseUrl: selected.config.baseUrl ?? activeOptions.baseUrl,
-        endpointFormat: selected.config.endpointFormat ?? activeOptions.endpointFormat,
-        headers: selected.config.headers,
+        ...(selected
+          ? {
+              model: selected.model,
+              apiKey: selected.config.apiKey,
+              baseUrl: selected.config.baseUrl ?? activeOptions.baseUrl,
+              endpointFormat: selected.config.endpointFormat ?? activeOptions.endpointFormat,
+              headers: selected.config.headers
+            }
+          : {
+              // Disconnecting the last provider must also retire its decrypted
+              // credential from the live router. Keep only a harmless model
+              // identifier for diagnostics until a new default is selected.
+              apiKey: '',
+              headers: undefined,
+              geminiAuth: undefined
+            }),
         providers,
         modelProxyUrl: connections.proxy.enabled ? connections.proxy.url : undefined,
         routePools: connections.routePools,
         localModelGateway: connections.localModelGateway
       }
-      agentSdkProviderIds.clear()
-      for (const providerId of agentSdkProviderIdsForOptions(activeOptions)) {
-        agentSdkProviderIds.add(providerId)
+      const nextClients = buildModelClientRouterInput(
+        nextOptions,
+        modelCapabilities,
+        llmDebug,
+        resolveLegacyRequestCredentials
+      )
+      for (const [providerId, client] of extensionModelProviders.clientMap()) {
+        nextClients.providers.set(providerId, client)
       }
-      antigravityProviderIds.clear()
-      for (const providerId of antigravityProviderIdsForOptions(activeOptions)) {
-        antigravityProviderIds.add(providerId)
-      }
-      cursorSdkProviderIds.clear()
-      for (const providerId of cursorSdkProviderIdsForOptions(activeOptions)) {
-        cursorSdkProviderIds.add(providerId)
-      }
-      replaceRoutedModelClients()
+      activeOptions = nextOptions
+      refreshDelegatedProviderIds()
+      directModelClient.replace(nextClients)
+      modelClient.replacePools(activeOptions.routePools ?? [])
       refreshModelConnectionDelegatedDeps()
     }
   })
@@ -643,7 +675,7 @@ export async function createKunServeRuntime(
     SkillRuntime.create(activeOptions.capabilities?.skills),
     seedUsageCarryover({ threadStore, sessionStore, usageService })
   ])
-  const instructionRuntime = new InstructionRuntime(activeOptions.capabilities?.instructions)
+  let instructionRuntime = new InstructionRuntime(activeOptions.capabilities?.instructions)
   const migrationMaintenance = new ScopedMigrationMaintenanceLock()
   let attachmentStore: FileAttachmentStore | undefined
   const turnService = new TurnService({
@@ -723,6 +755,36 @@ export async function createKunServeRuntime(
 	        nowIso
 	      })
 	    : undefined
+	  const pruneUnsentAttachments = async (store: AttachmentStore | undefined): Promise<void> => {
+	    if (!store?.pruneExpiredLeases) return
+	    const now = Date.parse(nowIso())
+	    if (!Number.isFinite(now)) return
+	    const summaries = await threadService.list({ includeArchived: true, includeSide: true })
+	    const threads = await Promise.all(summaries.map((thread) => threadService.get(thread.id)))
+	    const referencedIds = new Set(
+	      threads.flatMap((thread) =>
+	        thread?.turns.flatMap((turn) => turn.attachmentIds) ?? []
+	      )
+	    )
+	    await store.pruneExpiredLeases(
+	      referencedIds,
+	      new Date(now - 24 * 60 * 60 * 1_000).toISOString()
+	    )
+	  }
+	  await pruneUnsentAttachments(attachmentStore)
+	  let attachmentPruneRunning = false
+	  const attachmentPruneTimer = setInterval(() => {
+	    if (attachmentPruneRunning) return
+	    attachmentPruneRunning = true
+	    void pruneUnsentAttachments(attachmentStore)
+	      .catch((error) => {
+	        console.warn('[kun] expired attachment lease pruning failed:', error)
+	      })
+	      .finally(() => {
+	        attachmentPruneRunning = false
+	      })
+	  }, 60 * 60 * 1_000)
+	  attachmentPruneTimer.unref()
 	  let memoryStore = activeOptions.capabilities?.memory.enabled
 	    ? new FileMemoryStore({
 	        rootDir: join(activeOptions.dataDir, 'memory'),
@@ -950,6 +1012,7 @@ export async function createKunServeRuntime(
 	        config: mergeBuiltinSubagentProfiles(activeOptions.capabilities.subagents),
 	        store: new FileDelegationStore(join(activeOptions.dataDir, 'child-runs')),
 	        events,
+	        eventBus,
 	        threadStore,
 	        turns: turnService,
 	        nowIso,
@@ -1051,14 +1114,14 @@ export async function createKunServeRuntime(
     ...computerUseProviders.providers,
     {
       id: 'goal',
-      kind: 'gui' as const,
+      kind: 'built-in' as const,
       enabled: true,
       available: true,
       tools: buildGoalLocalTools(threadService)
     },
     {
       id: 'todo',
-      kind: 'gui' as const,
+      kind: 'built-in' as const,
       enabled: true,
       available: true,
       tools: buildTodoLocalTools(threadService)
@@ -1101,66 +1164,74 @@ export async function createKunServeRuntime(
   // narrow delegated runtime boundary. Keep the runtime objects alive even
   // with an initially empty provider set so /connect can add an account
   // without requiring the standalone TUI runtime to restart.
-  const sdkRuntimeDeps: AgentSdkRuntimeFactoryDeps = {
-    registry,
-    toolHost,
-    turns: turnService,
-    sessionStore,
-    threadStore,
-    events,
-    debugSink: llmDebug,
-    ids,
-    prefix,
-    providerConfigs: activeOptions.providers ?? {},
-    agentSdkProviderIds,
-    defaultApprovalPolicy: activeOptions.approvalPolicy,
-    defaultSandboxMode: activeOptions.sandboxMode,
-    defaultModel: activeOptions.model,
-    defaultIsAgentSdk,
-    defaultToken: activeOptions.apiKey,
-    turnLimits: activeOptions.runtime?.turnLimits,
-    approvalGate,
-    skillRuntime,
-    instructionRuntime,
-    userInputGate,
-    nowIso,
-    ...(attachmentStore ? { attachmentStore } : {}),
-    ...(memoryStore ? { memoryStore } : {}),
-    ...(process.env.KUN_CLAUDE_BINARY
-      ? { pathToClaudeCodeExecutable: process.env.KUN_CLAUDE_BINARY }
-      : {}),
-    sessionCoordinator: delegatedSessions,
-    contextProfile: delegatedContextProfile
-  }
-  const antigravityRuntimeDeps: AntigravityCliRuntimeDeps = {
-    providerConfigs: activeOptions.providers ?? {},
-    providerIds: antigravityProviderIds,
-    defaultIsAntigravity,
-    defaultModel: activeOptions.model,
-    systemPrompt: prefix.systemPrompt,
-    binaryPath: process.env.KUN_ANTIGRAVITY_BINARY,
-    threadStore,
-    sessionStore,
-    turns: turnService,
-    events,
-    ids,
-    debugSink: llmDebug,
-    turnLimits: activeOptions.runtime?.turnLimits,
-    sessionCoordinator: delegatedSessions,
-    contextProfile: delegatedContextProfile
-  }
-  let cursorRuntimeDeps: CursorSdkRuntimeFactoryDeps | undefined
-  if (cursorSdkProviderIds.size > 0 || defaultIsCursorSdk) {
-    cursorRuntimeDeps = {
-      registry,
+  const buildMainDelegatedRuntime = (input: {
+    options: KunServeRuntimeOptions
+    registry: CapabilityRegistry
+    skillRuntime: SkillRuntime
+    instructionRuntime: InstructionRuntime
+    attachmentStore?: AttachmentStore
+    memoryStore?: FileMemoryStore
+  }) => {
+    const providerConfigs = Object.fromEntries(
+      Object.entries(input.options.providers ?? {}).map(([id, provider]) => [id, { ...provider }])
+    )
+    const sdkRuntimeDeps: AgentSdkRuntimeFactoryDeps = {
+      registry: input.registry,
       toolHost,
-      providerConfigs: activeOptions.providers ?? {},
-      providerIds: cursorSdkProviderIds,
+      turns: turnService,
+      sessionStore,
+      threadStore,
+      events,
+      ids,
+      prefix,
+      providerConfigs,
+      agentSdkProviderIds: new Set(agentSdkProviderIdsForOptions(input.options)),
+      defaultApprovalPolicy: input.options.approvalPolicy,
+      defaultSandboxMode: input.options.sandboxMode,
+      defaultModel: input.options.model,
+      defaultIsAgentSdk,
+      defaultToken: input.options.apiKey,
+      turnLimits: input.options.runtime?.turnLimits,
+      approvalGate,
+      skillRuntime: input.skillRuntime,
+      instructionRuntime: input.instructionRuntime,
+      userInputGate,
+      nowIso,
+      ...(input.attachmentStore ? { attachmentStore: input.attachmentStore } : {}),
+      ...(input.memoryStore ? { memoryStore: input.memoryStore } : {}),
+      ...(process.env.KUN_CLAUDE_BINARY
+        ? { pathToClaudeCodeExecutable: process.env.KUN_CLAUDE_BINARY }
+        : {}),
+      sessionCoordinator: delegatedSessions,
+      contextProfile: delegatedContextProfile
+    }
+    const antigravityRuntimeDeps: AntigravityCliRuntimeDeps = {
+      providerConfigs,
+      providerIds: new Set(antigravityProviderIdsForOptions(input.options)),
+      defaultIsAntigravity,
+      defaultModel: input.options.model,
+      systemPrompt: prefix.systemPrompt,
+      binaryPath: process.env.KUN_ANTIGRAVITY_BINARY,
+      threadStore,
+      sessionStore,
+      turns: turnService,
+      events,
+      ids,
+      debugSink: llmDebug,
+      turnLimits: input.options.runtime?.turnLimits,
+      sessionCoordinator: delegatedSessions,
+      contextProfile: delegatedContextProfile
+    }
+    const cursorRuntimeDeps: CursorSdkRuntimeFactoryDeps = {
+      registry: input.registry,
+      toolHost,
+      providerConfigs,
+      providerIds: new Set(cursorSdkProviderIdsForOptions(input.options)),
       defaultIsCursor: defaultIsCursorSdk,
-      defaultApiKey: activeOptions.apiKey,
-      defaultModel: activeOptions.model,
-      defaultApprovalPolicy: activeOptions.approvalPolicy,
-      defaultSandboxMode: activeOptions.sandboxMode,
+      defaultApiKey: input.options.apiKey,
+      defaultModel: input.options.model,
+      defaultApprovalPolicy: input.options.approvalPolicy,
+      defaultSandboxMode: input.options.sandboxMode,
       systemPrompt: prefix.systemPrompt,
       threadStore,
       sessionStore,
@@ -1170,30 +1241,20 @@ export async function createKunServeRuntime(
       debugSink: llmDebug,
       approvalGate,
       userInputGate,
-      skillRuntime,
-      instructionRuntime,
+      skillRuntime: input.skillRuntime,
+      instructionRuntime: input.instructionRuntime,
       nowIso,
-      ...(memoryStore ? { memoryStore } : {}),
-      ...(attachmentStore ? { attachmentStore } : {}),
-      turnLimits: activeOptions.runtime?.turnLimits,
+      ...(input.memoryStore ? { memoryStore: input.memoryStore } : {}),
+      ...(input.attachmentStore ? { attachmentStore: input.attachmentStore } : {}),
+      turnLimits: input.options.runtime?.turnLimits,
       sessionCoordinator: delegatedSessions,
       contextProfile: delegatedContextProfile
     }
-  }
-  refreshModelConnectionDelegatedDeps = () => {
-    sdkRuntimeDeps.providerConfigs = activeOptions.providers ?? {}
-    sdkRuntimeDeps.defaultModel = activeOptions.model
-    sdkRuntimeDeps.defaultToken = activeOptions.apiKey
-    if (process.env.KUN_CLAUDE_BINARY) {
-      sdkRuntimeDeps.pathToClaudeCodeExecutable = process.env.KUN_CLAUDE_BINARY
-    }
-    antigravityRuntimeDeps.providerConfigs = activeOptions.providers ?? {}
-    antigravityRuntimeDeps.defaultModel = activeOptions.model
-    if (cursorRuntimeDeps) {
-      cursorRuntimeDeps.providerConfigs = activeOptions.providers ?? {}
-      cursorRuntimeDeps.defaultApiKey = activeOptions.apiKey
-      cursorRuntimeDeps.defaultModel = activeOptions.model
-    }
+    return composeDelegatedTurnRuntimes([
+      createAgentSdkRuntime(sdkRuntimeDeps),
+      new AntigravityCliRuntime(antigravityRuntimeDeps),
+      createCursorSdkRuntime(cursorRuntimeDeps)
+    ])
   }
 
   // The main turn abort signal already reaches foreground children. Detached
@@ -1207,19 +1268,32 @@ export async function createKunServeRuntime(
       Promise.resolve(delegationRuntime?.abortDetachedChildrenForThread(threadId) ?? 0)
     ])
   }
-  const sdkRuntime = composeDelegatedTurnRuntimes([
-    createAgentSdkRuntime(sdkRuntimeDeps),
-    new AntigravityCliRuntime(antigravityRuntimeDeps),
-    ...(cursorRuntimeDeps ? [createCursorSdkRuntime(cursorRuntimeDeps)] : [])
-  ])
-	  const loopOptions: AgentLoopOptions = {
+  const sdkRuntime = new ReplaceableDelegatedTurnRuntime(buildMainDelegatedRuntime({
+    options: activeOptions,
+    registry,
+    skillRuntime,
+    instructionRuntime,
+    attachmentStore,
+    memoryStore
+  }))
+  refreshModelConnectionDelegatedDeps = () => {
+    sdkRuntime.replace(buildMainDelegatedRuntime({
+      options: activeOptions,
+      registry,
+      skillRuntime,
+      instructionRuntime,
+      attachmentStore,
+      memoryStore
+    }))
+  }
+	  let loopOptions: AgentLoopOptions = {
 	    threadStore,
 	    sessionStore,
 	    approvalGate,
     userInputGate,
     model: modelClient,
     toolHost,
-    ...(sdkRuntime ? { sdkRuntime } : {}),
+    sdkRuntime,
     usage: usageService,
     events,
     turns: turnService,
@@ -1252,7 +1326,7 @@ export async function createKunServeRuntime(
 	      })
 	    }
 	  }
-	  const loop = new AgentLoop(loopOptions)
+	  let loop = new AgentLoop(loopOptions)
 	  const activeRuntimeRuns = new Set<Promise<'completed' | 'failed' | 'aborted'>>()
 	  let shuttingDown = false
 	  const trackRuntimeRun = <T extends 'completed' | 'failed' | 'aborted'>(run: Promise<T>): Promise<T> => {
@@ -1783,7 +1857,7 @@ export async function createKunServeRuntime(
 	        message: 'observability exporter changes require a runtime restart'
 	      }
 	    }
-	    const nextOptions = await hydrateLegacyCredentialOptions(
+	    let nextOptions = await hydrateLegacyCredentialOptions(
 	      mergeRuntimeConfigApplyOptions(activeOptions, request),
 	      legacyCredentialMigration
 	    )
@@ -1822,6 +1896,11 @@ export async function createKunServeRuntime(
 	      }),
 	      SkillRuntime.create(nextOptions.capabilities?.skills)
 	    ])
+	    let stagedGenerationCommitted = false
+	    try {
+	    const nextInstructionRuntime = new InstructionRuntime(
+	      nextOptions.capabilities?.instructions
+	    )
 	    const nextAttachmentStore = nextOptions.capabilities?.attachments.enabled
 	      ? new FileAttachmentStore({
 	          rootDir: join(activeOptions.dataDir, 'attachments'),
@@ -1829,6 +1908,7 @@ export async function createKunServeRuntime(
 	          nowIso
 	        })
 	      : undefined
+	    await pruneUnsentAttachments(nextAttachmentStore)
 	    const nextMemoryStore = nextOptions.capabilities?.memory.enabled
 	      ? new FileMemoryStore({
 	          rootDir: join(activeOptions.dataDir, 'memory'),
@@ -1892,22 +1972,19 @@ export async function createKunServeRuntime(
 	      designCanvasProvider
 	    ]
 	    const nextChildRegistry = new CapabilityRegistry(nextBaseToolProviders)
-	    if (delegationRuntime && nextOptions.capabilities?.subagents) {
-	      delegationRuntime.replaceConfig(mergeBuiltinSubagentProfiles(nextOptions.capabilities.subagents))
-	    }
 	    const nextRegistry = new CapabilityRegistry([
 	      ...nextBaseToolProviders,
 	      ...nextComputerUseProviders.providers,
 	      {
 	        id: 'goal',
-	        kind: 'gui' as const,
+	        kind: 'built-in' as const,
 	        enabled: true,
 	        available: true,
 	        tools: buildGoalLocalTools(threadService)
 	      },
 	      {
 	        id: 'todo',
-	        kind: 'gui' as const,
+	        kind: 'built-in' as const,
 	        enabled: true,
 	        available: true,
 	        tools: buildTodoLocalTools(threadService)
@@ -1923,17 +2000,84 @@ export async function createKunServeRuntime(
 	      ...buildComponentDesignToolProviders(delegationRuntime)
 	    ])
 
+	    // Import provider catalogs for rolling GUI compatibility, but preserve
+	    // the registry-owned default. Current GUI/TUI clients use revisioned
+	    // registry writes directly; this path only adds/reconciles catalogs.
+	    const registryBeforeApply = await modelConnections.snapshot()
+	    await modelConnections.initialize(modelConnectionSeedsForOptions(nextOptions))
+	    if (registryBeforeApply.providers.length === 0 && request.modelSelection) {
+	      await modelConnections.synchronizeDefaultSelection(request.modelSelection)
+	    }
+	    const materializedConnections = await modelConnections.materialize()
+	    if (materializedConnections.providers.size > 0) {
+	      const selected = materializedConnections.selected
+	      nextOptions = {
+	        ...nextOptions,
+	        ...(selected
+	          ? {
+	              model: selected.model,
+	              apiKey: selected.config.apiKey,
+	              baseUrl: selected.config.baseUrl ?? nextOptions.baseUrl,
+	              endpointFormat: selected.config.endpointFormat ?? nextOptions.endpointFormat,
+	              headers: selected.config.headers
+	            }
+	          : {}),
+	        providers: Object.fromEntries(materializedConnections.providers.entries()),
+	        modelProxyUrl: materializedConnections.proxy.enabled
+	          ? materializedConnections.proxy.url
+	          : undefined,
+	        routePools: materializedConnections.routePools,
+	        localModelGateway: materializedConnections.localModelGateway
+	      }
+	    }
+	    await migrateLegacyProviderCredentials(nextOptions)
+
+	    const nextModelClients = buildModelClientRouterInput(
+	      nextOptions,
+	      (model) => modelCapabilitiesForModel(model, nextModelProfiles),
+	      llmDebug,
+	      resolveLegacyRequestCredentials
+	    )
+	    for (const [providerId, client] of extensionModelProviders.clientMap()) {
+	      nextModelClients.providers.set(providerId, client)
+	    }
+	    const nextDelegatedRuntime = buildMainDelegatedRuntime({
+	      options: nextOptions,
+	      registry: nextRegistry,
+	      skillRuntime: nextSkillRuntime,
+	      instructionRuntime: nextInstructionRuntime,
+	      attachmentStore: nextAttachmentStore,
+	      memoryStore: nextMemoryStore
+	    })
+	    const nextLoopOptions: AgentLoopOptions = {
+	      ...loopOptions,
+	      skillRuntime: nextSkillRuntime,
+	      instructionRuntime: nextInstructionRuntime,
+	      tokenEconomy: nextTokenEconomy,
+	      contextCompaction: nextOptions.contextCompaction,
+	      roles: nextOptions.roles,
+	      toolStorm: nextOptions.runtime?.toolStorm,
+	      turnLimits: nextOptions.runtime?.turnLimits,
+	      toolArgumentRepair: nextOptions.runtime?.toolArgumentRepair,
+	      hooks: nextResolvedHooks,
+	      attachmentStore: nextAttachmentStore,
+	      memoryStore: nextMemoryStore
+	    }
+	    const nextLoop = new AgentLoop(nextLoopOptions)
 	    const previousMcpProviders = mcpProviders
 	    activeOptions = nextOptions
 	    await graphRuntime.reconfigureBackgroundServices()
 	    modelProfiles = nextModelProfiles
 	    providerModelProfiles = nextProviderModelProfiles
 	    tokenEconomy = nextTokenEconomy
-	    replaceRoutedModelClients()
-	    await migrateLegacyProviderCredentials()
-	    await modelConnections.initialize(modelConnectionSeedsForOptions(activeOptions))
-	    skillRuntime.replaceWith(nextSkillRuntime)
-	    instructionRuntime.replaceConfig(activeOptions.capabilities?.instructions)
+	    refreshDelegatedProviderIds()
+	    directModelClient.replace(nextModelClients)
+	    modelClient.replacePools(activeOptions.routePools ?? [])
+	    if (delegationRuntime && activeOptions.capabilities?.subagents) {
+	      delegationRuntime.replaceConfig(mergeBuiltinSubagentProfiles(activeOptions.capabilities.subagents))
+	    }
+	    skillRuntime = nextSkillRuntime
+	    instructionRuntime = nextInstructionRuntime
 	    mcpProviders = nextMcpProviders
 	    webProviders = nextWebProviders
 	    attachmentStore = nextAttachmentStore
@@ -1950,43 +2094,7 @@ export async function createKunServeRuntime(
 	    extensionTools.rebindRegistry(registry)
 	    childToolHost.replaceRuntimeComponents({ registry: childRegistry, hooks: resolvedHooks })
 	    toolHost.replaceRuntimeComponents({ registry, hooks: resolvedHooks })
-	    if (sdkRuntimeDeps) {
-	      sdkRuntimeDeps.registry = registry
-	      sdkRuntimeDeps.providerConfigs = activeOptions.providers ?? {}
-	      sdkRuntimeDeps.defaultApprovalPolicy = activeOptions.approvalPolicy
-	      sdkRuntimeDeps.defaultSandboxMode = activeOptions.sandboxMode
-	      sdkRuntimeDeps.defaultModel = activeOptions.model
-	      sdkRuntimeDeps.defaultToken = activeOptions.apiKey
-	      sdkRuntimeDeps.turnLimits = activeOptions.runtime?.turnLimits
-	      sdkRuntimeDeps.skillRuntime = skillRuntime
-	      sdkRuntimeDeps.instructionRuntime = instructionRuntime
-	      if (attachmentStore) {
-	        sdkRuntimeDeps.attachmentStore = attachmentStore
-	      } else {
-	        delete sdkRuntimeDeps.attachmentStore
-	      }
-	      if (memoryStore) {
-	        sdkRuntimeDeps.memoryStore = memoryStore
-	      } else {
-	        delete sdkRuntimeDeps.memoryStore
-	      }
-	    }
-	    if (antigravityRuntimeDeps) {
-	      antigravityRuntimeDeps.providerConfigs = activeOptions.providers ?? {}
-	      antigravityRuntimeDeps.defaultModel = activeOptions.model
-	      antigravityRuntimeDeps.turnLimits = activeOptions.runtime?.turnLimits
-	    }
-	    if (cursorRuntimeDeps) {
-	      cursorRuntimeDeps.providerConfigs = activeOptions.providers ?? {}
-	      cursorRuntimeDeps.defaultApiKey = activeOptions.apiKey
-	      cursorRuntimeDeps.defaultModel = activeOptions.model
-	      cursorRuntimeDeps.turnLimits = activeOptions.runtime?.turnLimits
-	      if (attachmentStore) {
-	        cursorRuntimeDeps.attachmentStore = attachmentStore
-	      } else {
-	        delete cursorRuntimeDeps.attachmentStore
-	      }
-	    }
+	    sdkRuntime.replace(nextDelegatedRuntime)
 	    turnService.updateRuntimeConfig({
 	      defaultModel: activeOptions.model,
 	      contextCompaction: activeOptions.contextCompaction,
@@ -2012,16 +2120,8 @@ export async function createKunServeRuntime(
 	      roleProviderId: activeOptions.roles?.codeReviewProviderId,
 	      roleAccountId: activeOptions.roles?.codeReviewAccountId
 	    })
-	    loopOptions.tokenEconomy = tokenEconomy
-	    loopOptions.contextCompaction = activeOptions.contextCompaction
-	    loopOptions.roles = activeOptions.roles
-	    loopOptions.instructionRuntime = instructionRuntime
-	    loopOptions.toolStorm = activeOptions.runtime?.toolStorm
-	    loopOptions.turnLimits = activeOptions.runtime?.turnLimits
-	    loopOptions.toolArgumentRepair = activeOptions.runtime?.toolArgumentRepair
-	    loopOptions.hooks = resolvedHooks
-	    loopOptions.attachmentStore = attachmentStore
-	    loopOptions.memoryStore = memoryStore
+	    loopOptions = nextLoopOptions
+	    loop = nextLoop
 	    capabilities = rebuildCapabilities()
 	    void mcpProviders.startBackgroundReconnect((provider) => {
 	      try {
@@ -2036,7 +2136,19 @@ export async function createKunServeRuntime(
 	      }
 	    })
 	    void previousMcpProviders.close().catch(() => undefined)
+	    stagedGenerationCommitted = true
 	    return { ok: true }
+	    } catch (error) {
+	      return {
+	        ok: false,
+	        code: 'invalid_config',
+	        message: error instanceof Error ? error.message : String(error)
+	      }
+	    } finally {
+	      if (!stagedGenerationCommitted) {
+	        await nextMcpProviders.close().catch(() => undefined)
+	      }
+	    }
 	  }
 	  return {
     threadService,
@@ -2099,6 +2211,7 @@ export async function createKunServeRuntime(
 	      artifacts: extensionArtifacts,
 	      viewSessions: extensionViewSessions,
 	      secretReveals: extensionSecretReveals,
+	      jobs: extensionJobs,
 	      bundledSeedResults
 	    },
 	    modelClient,
@@ -2200,12 +2313,73 @@ export async function createKunServeRuntime(
     mcpOAuth: async () => mcpProviders.oauth,
     clearMcpOAuth: async (serverId) => mcpProviders.clearOAuthCredentials(serverId),
     authorizeMcpOAuth: async (serverId) => mcpProviders.authorizeOAuth(serverId),
+    mcpConfig: () => structuredClone(
+      (activeOptions.capabilities ?? DEFAULT_KUN_CAPABILITIES_CONFIG).mcp
+    ),
+    setMcpServer: async (serverId, server) => {
+      const capabilities = activeOptions.capabilities ?? DEFAULT_KUN_CAPABILITIES_CONFIG
+      const mcp = capabilities.mcp
+      const servers = { ...mcp.servers }
+      if (server) servers[serverId] = server
+      else delete servers[serverId]
+      const result = await applyConfig({
+        capabilities: {
+          ...capabilities,
+          mcp: { ...mcp, enabled: Object.keys(servers).length > 0, servers }
+        }
+      })
+      if (result.ok) {
+        const updatedMcp = (activeOptions.capabilities ?? DEFAULT_KUN_CAPABILITIES_CONFIG).mcp
+        await Promise.all([
+          persistRuntimeMcpConfig(activeOptions.dataDir, updatedMcp),
+          ...(activeOptions.sharedMcpConfigPath
+            ? [persistSharedMcpConfig(activeOptions.sharedMcpConfigPath, updatedMcp)]
+            : [])
+        ])
+      }
+      return result
+    },
     skills: (workspace) => workspace
       ? skillRuntime.diagnosticsForWorkspace(workspace)
       : skillRuntime.diagnostics(),
+    refreshSkills: async () => skillRuntime.refresh(),
+    setSkillsEnabled: async (enabled) => {
+      const capabilities = activeOptions.capabilities ?? DEFAULT_KUN_CAPABILITIES_CONFIG
+      const result = await applyConfig({
+        capabilities: {
+          ...capabilities,
+          skills: { ...capabilities.skills, enabled }
+        }
+      })
+      if (result.ok) {
+        await persistRuntimeSkillsConfig(
+          activeOptions.dataDir,
+          (activeOptions.capabilities ?? DEFAULT_KUN_CAPABILITIES_CONFIG).skills
+        )
+      }
+      return result
+    },
+    setLocalCapabilityEnabled: async (id, enabled) => {
+      const capabilities = activeOptions.capabilities ?? DEFAULT_KUN_CAPABILITIES_CONFIG
+      const result = await applyConfig({
+        capabilities: {
+          ...capabilities,
+          [id]: { ...capabilities[id], enabled }
+        }
+      })
+      if (result.ok) {
+        await persistRuntimeCapabilitySection(
+          activeOptions.dataDir,
+          id,
+          (activeOptions.capabilities ?? DEFAULT_KUN_CAPABILITIES_CONFIG)[id]
+        )
+      }
+      return result
+    },
     shutdown: async () => {
       try {
         shuttingDown = true
+        clearInterval(attachmentPruneTimer)
         await graphRuntime.stop()
         modelConnectionOAuth.close()
         eventStreamRegistry.closeAll()
@@ -2554,6 +2728,117 @@ function mergeRuntimeConfigApplyOptions(
     hooks: request.hooks ?? current.hooks,
     quality: request.quality ?? current.quality
   }
+}
+
+async function persistRuntimeMcpConfig(
+  dataDir: string,
+  mcp: KunCapabilitiesConfig['mcp']
+): Promise<void> {
+  const target = join(dataDir, 'config.json')
+  let current: Record<string, unknown> = {}
+  try {
+    const parsed = JSON.parse(await readFile(target, 'utf8')) as unknown
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      current = parsed as Record<string, unknown>
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error
+  }
+  const rawCapabilities = current.capabilities
+  const capabilities = rawCapabilities && typeof rawCapabilities === 'object' && !Array.isArray(rawCapabilities)
+    ? rawCapabilities as Record<string, unknown>
+    : {}
+  const next = {
+    ...current,
+    capabilities: {
+      ...capabilities,
+      mcp
+    }
+  }
+  await mkdir(dataDir, { recursive: true, mode: 0o700 })
+  const temporary = `${target}.${process.pid}.tmp`
+  await writeFile(temporary, `${JSON.stringify(next, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
+  await chmod(temporary, 0o600).catch(() => undefined)
+  await rename(temporary, target)
+  await chmod(target, 0o600).catch(() => undefined)
+}
+
+async function persistRuntimeSkillsConfig(
+  dataDir: string,
+  skills: KunCapabilitiesConfig['skills']
+): Promise<void> {
+  const target = join(dataDir, 'config.json')
+  let current: Record<string, unknown> = {}
+  try {
+    const parsed = JSON.parse(await readFile(target, 'utf8')) as unknown
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) current = parsed as Record<string, unknown>
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error
+  }
+  const rawCapabilities = current.capabilities
+  const capabilities = rawCapabilities && typeof rawCapabilities === 'object' && !Array.isArray(rawCapabilities)
+    ? rawCapabilities as Record<string, unknown>
+    : {}
+  const next = { ...current, capabilities: { ...capabilities, skills } }
+  await mkdir(dataDir, { recursive: true, mode: 0o700 })
+  const temporary = `${target}.${process.pid}.${randomUUID()}.tmp`
+  await writeFile(temporary, `${JSON.stringify(next, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
+  await chmod(temporary, 0o600).catch(() => undefined)
+  await rename(temporary, target)
+  await chmod(target, 0o600).catch(() => undefined)
+}
+
+async function persistRuntimeCapabilitySection(
+  dataDir: string,
+  id: 'attachments' | 'memory',
+  value: KunCapabilitiesConfig[typeof id]
+): Promise<void> {
+  const target = join(dataDir, 'config.json')
+  let current: Record<string, unknown> = {}
+  try {
+    const parsed = JSON.parse(await readFile(target, 'utf8')) as unknown
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) current = parsed as Record<string, unknown>
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error
+  }
+  const rawCapabilities = current.capabilities
+  const capabilities = rawCapabilities && typeof rawCapabilities === 'object' && !Array.isArray(rawCapabilities)
+    ? rawCapabilities as Record<string, unknown>
+    : {}
+  const next = { ...current, capabilities: { ...capabilities, [id]: value } }
+  await mkdir(dataDir, { recursive: true, mode: 0o700 })
+  const temporary = `${target}.${process.pid}.${randomUUID()}.tmp`
+  await writeFile(temporary, `${JSON.stringify(next, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
+  await chmod(temporary, 0o600).catch(() => undefined)
+  await rename(temporary, target)
+  await chmod(target, 0o600).catch(() => undefined)
+}
+
+async function persistSharedMcpConfig(
+  target: string,
+  mcp: KunCapabilitiesConfig['mcp']
+): Promise<void> {
+  const directory = dirname(target)
+  let current: Record<string, unknown> = {}
+  try {
+    const parsed = JSON.parse(await readFile(target, 'utf8')) as unknown
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      current = parsed as Record<string, unknown>
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error
+  }
+  const next = {
+    ...current,
+    servers: structuredClone(mcp.servers)
+  }
+  await mkdir(directory, { recursive: true, mode: 0o700 })
+  await chmod(directory, 0o700).catch(() => undefined)
+  const temporary = `${target}.${process.pid}.${randomUUID()}.tmp`
+  await writeFile(temporary, `${JSON.stringify(next, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
+  await chmod(temporary, 0o600).catch(() => undefined)
+  await rename(temporary, target)
+  await chmod(target, 0o600).catch(() => undefined)
 }
 
 function tokenEconomyConfigForOptions(

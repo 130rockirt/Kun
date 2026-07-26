@@ -25,7 +25,7 @@ import { canWritePath } from './sandbox-policy.js'
 export const CREATE_PLAN_TOOL_NAME = 'create_plan'
 
 const TOOL_DESCRIPTION = [
-  'Create or replace a GUI-owned implementation plan.',
+  'Create or replace a Kun implementation plan.',
   'Available throughout a Plan-mode conversation: investigate first, then',
   'call this once you understand the task to save the full Markdown plan.',
   'Writes the supplied Markdown to a reserved plan artifact under',
@@ -58,7 +58,7 @@ export const CREATE_PLAN_INPUT_SCHEMA: Record<string, unknown> = {
     },
     plan_id: {
       type: 'string',
-      description: 'Optional reserved plan id; when supplied, must match the GUI plan context.'
+      description: 'Optional reserved plan id; when supplied, must match the active plan context.'
     },
     plan_relative_path: {
       type: 'string',
@@ -252,7 +252,7 @@ export async function executeCreatePlanTool(
 ): Promise<{ output: unknown; isError?: boolean }> {
   if (!isPlanToolContextActive(context)) {
     return {
-      output: { error: 'create_plan requires Plan mode or an active GUI plan context' },
+      output: { error: 'create_plan requires Plan mode or an active reserved plan context' },
       isError: true
     }
   }
@@ -334,7 +334,7 @@ export async function executeCreatePlanTool(
     return { output: { error: 'plan write aborted' }, isError: true }
   }
   const output: CreatePlanToolOutput = {
-    summary: `${resolved.operation === 'refine' ? 'Refined' : 'Created'} GUI plan at ${resolved.relativePath}.`,
+    summary: `${resolved.operation === 'refine' ? 'Refined' : 'Created'} Kun plan at ${resolved.relativePath}.`,
     plan_id: resolved.planId,
     workspace_root: resolvedWorkspace,
     relative_path: resolved.relativePath,
@@ -360,13 +360,13 @@ function resolveReservedTarget(
 ): ResolvedPlanTarget | { error: string } {
   const contextPlan = context.guiPlan
   if (!contextPlan) {
-    return { error: 'create_plan requires an active GUI plan context' }
+    return { error: 'create_plan requires an active reserved plan context' }
   }
   if (input.operation !== contextPlan.operation) {
-    return { error: 'operation does not match the active GUI plan operation' }
+    return { error: 'operation does not match the active plan operation' }
   }
   if (!guiPlanWorkspaceMatches(context.workspace, contextPlan.workspaceRoot)) {
-    return { error: 'tool workspace does not match the active GUI plan workspace' }
+    return { error: 'tool workspace does not match the active plan workspace' }
   }
   const relativePath = toRelativePath(contextPlan.relativePath)
   if (!relativePath || !isGuiPlanRelativePath(relativePath)) {
@@ -376,10 +376,10 @@ function resolveReservedTarget(
     return { error: 'legacy .deepseekgui/plan paths can only be refined' }
   }
   if (input.plan_relative_path && toRelativePath(input.plan_relative_path) !== contextPlan.relativePath) {
-    return { error: 'plan_relative_path does not match the reserved GUI plan path' }
+    return { error: 'plan_relative_path does not match the reserved plan path' }
   }
   if (input.plan_id && input.plan_id !== contextPlan.planId) {
-    return { error: 'plan_id does not match the reserved GUI plan id' }
+    return { error: 'plan_id does not match the reserved plan id' }
   }
   const workspaceRoot = contextPlan.workspaceRoot ?? context.workspace
   if (!workspaceRoot) {

@@ -148,7 +148,7 @@ export interface SdkRuntimeDeps {
     args: Record<string, unknown>,
     signal?: AbortSignal
   ): Promise<KunToolResult>
-  /** kun's per-call permission decision (routes to the GUI approval panel). */
+  /** kun's per-call permission decision (routes to the initiating client's approval UI). */
   decideToolApproval(
     threadId: string,
     turnId: string,

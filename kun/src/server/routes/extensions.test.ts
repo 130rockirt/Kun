@@ -57,6 +57,49 @@ describe('extension management routes', () => {
     expect(oversized.status).toBe(413)
   })
 
+  it('lists and cancels extension jobs through the authenticated owner control plane', async () => {
+    const runtime = await createRuntime()
+    const job = {
+      schemaVersion: 1,
+      id: 'job_12345678',
+      kind: 'media',
+      kindSchemaVersion: 1,
+      ownerExtensionId: 'acme.demo',
+      ownerExtensionVersion: '1.0.0',
+      workspaceId: 'workspace',
+      initiatingOperation: 'render',
+      state: 'running',
+      executionAttempt: 1,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:01.000Z',
+      latestCursor: Buffer.from('cursor').toString('base64url')
+    }
+    const listAll = vi.fn(async () => [job])
+    const cancelAdmin = vi.fn(async () => ({
+      accepted: true,
+      snapshot: { ...job, state: 'cancelled', terminalAt: '2026-01-01T00:00:02.000Z' }
+    }))
+    runtime.jobs = { listAll, cancelAdmin } as unknown as NonNullable<ExtensionManagementRoutes['jobs']>
+    const router = buildExtensionManagementRouter(runtime)
+
+    expect((await dispatch(router, 'GET', '/v1/extensions/jobs')).status).toBe(401)
+    const listed = await dispatch(router, 'GET', '/v1/extensions/jobs?limit=20', undefined, true)
+    expect(listed.status).toBe(200)
+    expect(listed.body.jobs).toEqual([job])
+    expect(listAll).toHaveBeenCalledWith(20)
+
+    const cancelled = await dispatch(
+      router,
+      'POST',
+      `/v1/extensions/jobs/${job.id}/cancel`,
+      undefined,
+      true
+    )
+    expect(cancelled.status).toBe(200)
+    expect(cancelled.body).toMatchObject({ accepted: true, job: { state: 'cancelled' } })
+    expect(cancelAdmin).toHaveBeenCalledWith(job.id)
+  })
+
   it('projects launchable view metadata before workspace trust is granted', async () => {
     const runtime = await createRuntime()
     const router = buildExtensionManagementRouter(runtime)

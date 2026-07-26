@@ -23,9 +23,11 @@ import type {
 import type { TurnItem } from '../../contracts/items.js'
 import type { UsageSnapshot } from '../../contracts/usage.js'
 import { userMessageTextWithComposerContexts } from '../../domain/composer-context.js'
+import { resolveTurnClientSurface } from '../../loop/turn-context-resolver.js'
 import { normalizeTurnLimits, type TurnLimitsConfig } from '../../loop/turn-limits.js'
 import type { SessionStore } from '../../ports/session-store.js'
 import type { ThreadStore } from '../../ports/thread-store.js'
+import { buildClientSurfaceInstruction } from '../../prompt/kun-prompt-context.js'
 import type {
   LlmDebugRound,
   LlmDebugSink
@@ -392,6 +394,7 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
     }
     const instructionBlocks = [
       this.deps.systemPrompt?.trim(),
+      buildClientSurfaceInstruction(resolveTurnClientSurface(turn)),
       thread.systemPrompt?.trim(),
       ...kunContext.instructionBlocks
     ].filter((value, index, all): value is string =>

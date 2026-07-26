@@ -34,6 +34,7 @@ import {
 } from '../contracts/runtime-info.js'
 import { modelCapabilitiesForProviderModel } from '../loop/model-context-profile.js'
 import { readRuntimeDiscovery } from '../server/runtime-discovery.js'
+import { isLoopbackHost } from '../server/loopback-host.js'
 
 const MAX_GUI_SETTINGS_BYTES = 32 * 1024 * 1024
 const LEGACY_PROVIDER_SOURCE_PREFIX = 'settings:provider:'
@@ -168,8 +169,39 @@ export async function hasUnpublishedGuiRuntime(
   settings: GuiSharedSettings,
   fetchImpl: typeof fetch = fetch
 ): Promise<boolean> {
-  if (await readRuntimeDiscovery(settings.dataDir).catch(() => null)) return false
+  const discovery = await readRuntimeDiscovery(settings.dataDir).catch(() => null)
+  if (discovery && await publishedRuntimeIsLive(discovery, fetchImpl)) return false
   return Boolean(await fetchLegacyGuiRuntimeInfo(settings, fetchImpl))
+}
+
+async function publishedRuntimeIsLive(
+  discovery: Awaited<ReturnType<typeof readRuntimeDiscovery>>,
+  fetchImpl: typeof fetch
+): Promise<boolean> {
+  if (!discovery) return false
+  try {
+    const url = new URL(discovery.baseUrl)
+    if (
+      url.protocol !== 'http:' ||
+      !isLoopbackHost(url.hostname) ||
+      !isLoopbackHost(discovery.host) ||
+      Number(url.port || '80') !== discovery.port
+    ) return false
+    const response = await fetchImpl(`${discovery.baseUrl.replace(/\/$/u, '')}/v1/runtime/info`, {
+      headers: discovery.runtimeToken
+        ? { authorization: `Bearer ${discovery.runtimeToken}` }
+        : {},
+      signal: AbortSignal.timeout(2_000)
+    })
+    if (!response.ok) return false
+    const info = RuntimeInfoResponse.parse(await response.json())
+    return info.instanceId === discovery.instanceId &&
+      info.pid === discovery.pid &&
+      info.startedAt === discovery.startedAt &&
+      info.serviceVersion === discovery.serviceVersion
+  } catch {
+    return false
+  }
 }
 
 export async function resolveLegacyGuiRuntime(
@@ -440,6 +472,49 @@ export async function projectModelConnectionsToGuiSettings(
   }
 }
 
+/**
+ * Keep GUI-compatible defaults aligned with the registry without projecting
+ * catalogs or touching provider credential fields.
+ */
+export async function projectModelSelectionToGuiSettings(
+  settings: GuiSharedSettings,
+  snapshot: Pick<ModelConnectionSnapshot, 'defaultProviderId' | 'defaultModel'>
+): Promise<GuiSharedSettings> {
+  const providerId = snapshot.defaultProviderId ?? ''
+  const model = snapshot.defaultModel ?? ''
+  if (settings.defaultProviderId === providerId && settings.defaultModel === model) {
+    return settings
+  }
+  const metadata = await stat(settings.settingsPath)
+  if (!metadata.isFile() || metadata.size > MAX_GUI_SETTINGS_BYTES) {
+    throw new Error(`GUI settings file is unavailable: ${settings.settingsPath}`)
+  }
+  const parsed = JSON.parse(await readFile(settings.settingsPath, 'utf8')) as unknown
+  if (!isRecordValue(parsed)) throw new Error('GUI settings must be a JSON object')
+  const agents = isRecordValue(parsed.agents) ? { ...parsed.agents } : {}
+  const kun = isRecordValue(agents.kun) ? { ...agents.kun } : {}
+  const currentProviderId = typeof kun.providerId === 'string' ? kun.providerId : ''
+  const currentModel = typeof kun.model === 'string' ? kun.model : ''
+  if (currentProviderId !== providerId || currentModel !== model) {
+    await writeAtomicOwnerOnly(settings.settingsPath, `${JSON.stringify({
+      ...parsed,
+      agents: {
+        ...agents,
+        kun: {
+          ...kun,
+          providerId,
+          model
+        }
+      }
+    }, null, 2)}\n`)
+  }
+  return {
+    ...settings,
+    defaultProviderId: providerId,
+    defaultModel: model
+  }
+}
+
 async function fetchLegacyGuiRuntimeInfo(
   settings: GuiSharedSettings,
   fetchImpl: typeof fetch
@@ -562,7 +637,13 @@ export async function syncGuiProviderCatalogToConfig(
   return {
     changed,
     config: { serve: nextServe, models: nextModels },
-    applyRequest: runtimeApplyRequest(nextServe, nextModels)
+    applyRequest: runtimeApplyRequest(
+      nextServe,
+      nextModels,
+      inferredDefaultProviderId && defaultModel
+        ? { providerId: inferredDefaultProviderId, model: defaultModel }
+        : undefined
+    )
   }
 }
 
@@ -688,7 +769,11 @@ function samePath(left: string, right: string): boolean {
 
 function runtimeApplyRequest(
   serve: KunServeConfig,
-  models: ModelConfig
+  models: ModelConfig,
+  modelSelection?: {
+    providerId: string
+    model: string
+  }
 ): RuntimeConfigApplyPayload {
   const {
     host: _host,
@@ -705,7 +790,11 @@ function runtimeApplyRequest(
   void _runtimeToken
   void _insecure
   void _storage
-  return RuntimeConfigApplyRequest.parse({ serve: hotServe, models })
+  return RuntimeConfigApplyRequest.parse({
+    serve: hotServe,
+    models,
+    ...(modelSelection ? { modelSelection } : {})
+  })
 }
 
 async function readConfigDocument(path: string): Promise<Record<string, unknown>> {

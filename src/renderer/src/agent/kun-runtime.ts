@@ -114,6 +114,62 @@ function readRuntimeJson<T>(body: string, fallback: string): T {
   }
 }
 
+async function sharedDefaultModelSelection(): Promise<{
+  registryAvailable: boolean
+  providerId?: string
+  accountId?: string
+  model?: string
+  providers?: Array<{
+    id: string
+    accountId?: string
+    configured: boolean
+    models: string[]
+  }>
+}> {
+  const response = await rendererRuntimeClient.runtimeRequest('/v1/model-connections', 'GET')
+  if (!response.ok) return { registryAvailable: false }
+  try {
+    const value = JSON.parse(response.body) as {
+      defaultProviderId?: unknown
+      defaultAccountId?: unknown
+      defaultModel?: unknown
+      providers?: unknown
+    }
+    return {
+      registryAvailable: true,
+      ...(typeof value.defaultProviderId === 'string' && value.defaultProviderId.trim()
+        ? { providerId: value.defaultProviderId.trim() }
+        : {}),
+      ...(typeof value.defaultAccountId === 'string' && value.defaultAccountId.trim()
+        ? { accountId: value.defaultAccountId.trim() }
+        : {}),
+      ...(typeof value.defaultModel === 'string' && value.defaultModel.trim()
+        ? { model: value.defaultModel.trim() }
+        : {}),
+      providers: Array.isArray(value.providers)
+        ? value.providers.flatMap((entry) => {
+            if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return []
+            const profile = entry as Record<string, unknown>
+            if (typeof profile.id !== 'string' || !profile.id.trim()) return []
+            return [{
+              id: profile.id.trim(),
+              ...(typeof profile.accountId === 'string' && profile.accountId.trim()
+                ? { accountId: profile.accountId.trim() }
+                : {}),
+              configured: profile.configured === true,
+              models: Array.isArray(profile.models)
+                ? profile.models.filter((model): model is string =>
+                    typeof model === 'string' && Boolean(model.trim()))
+                : []
+            }]
+          })
+        : []
+    }
+  } catch {
+    return { registryAvailable: false }
+  }
+}
+
 /**
  * GUI-side adapter for the Kun HTTP/SSE contract.
  *
@@ -181,6 +237,24 @@ export class KunRuntimeProvider implements AgentProvider {
     if (!workspace || !(await workspaceDirectoryExists(workspace))) {
       throw new Error(workspaceMissingError())
     }
+    const sharedDefault = await sharedDefaultModelSelection()
+    const requestedProviderId = input.providerId?.trim() || sharedDefault.providerId
+    const requestedModel = input.model?.trim() ||
+      (requestedProviderId === sharedDefault.providerId ? sharedDefault.model : undefined)
+    const requestedProfile = sharedDefault.providers?.find((profile) =>
+      profile.id === requestedProviderId
+    )
+    if (
+      sharedDefault.registryAvailable &&
+      (
+        !requestedProviderId ||
+        !requestedModel ||
+        !requestedProfile?.configured ||
+        (requestedProfile.models.length > 0 && !requestedProfile.models.includes(requestedModel))
+      )
+    ) {
+      throw new Error('No connected model is selected. Connect a provider or choose an available shared model first.')
+    }
     const response = await rendererRuntimeClient.runtimeRequest(
       '/v1/threads',
       'POST',
@@ -188,12 +262,16 @@ export class KunRuntimeProvider implements AgentProvider {
         workspace,
         title: input.title,
         ...(input.titleAuto !== undefined ? { titleAuto: input.titleAuto } : {}),
-        model: input.model?.trim() || runtime.model,
+        model: requestedModel || runtime.model,
         mode: normalizeThreadMode(input.mode),
         approvalPolicy: runtime.approvalPolicy,
         sandboxMode: runtime.sandboxMode,
-        ...(input.providerId?.trim() ? { providerId: input.providerId.trim() } : {}),
-        ...(input.accountId?.trim() ? { accountId: input.accountId.trim() } : {}),
+        ...(requestedProviderId
+          ? { providerId: requestedProviderId }
+          : {}),
+        ...(input.accountId?.trim() || requestedProfile?.accountId || sharedDefault.accountId
+          ? { accountId: input.accountId?.trim() || requestedProfile?.accountId || sharedDefault.accountId }
+          : {}),
         ...(input.agentId?.trim() ? { agentId: input.agentId.trim() } : {}),
         ...(input.systemPrompt?.trim() ? { systemPrompt: input.systemPrompt.trim() } : {})
       })
@@ -323,6 +401,7 @@ export class KunRuntimeProvider implements AgentProvider {
     const body: Record<string, unknown> = {
       prompt: text,
       ...(options?.orchestration === 'graph' ? { orchestration: 'graph' } : {}),
+      clientSurface: 'gui',
       ...(selectedModel ? { model: selectedModel } : {}),
       ...(selectedProviderId ? { providerId: selectedProviderId } : {}),
       ...(selectedAccountId ? { accountId: selectedAccountId } : {}),

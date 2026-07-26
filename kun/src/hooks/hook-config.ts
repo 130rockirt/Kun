@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { HOOK_PHASES, type HookInvocation, type HookResult, type ResolvedHook } from './hook-engine.js'
+import { TurnClientSurfaceSchema } from '../contracts/turns.js'
 
 /**
  * Command hook entry as written in `config.json` under the top-level
@@ -13,6 +14,8 @@ export const HookCommandConfigSchema = z
     matcher: z.string().min(1).optional(),
     /** Exact tool-name list; matches when either this or `matcher` matches. Tool phases only. */
     toolNames: z.array(z.string().min(1)).optional(),
+    /** Optional client surfaces on which this hook is active. */
+    clientSurfaces: z.array(TurnClientSurfaceSchema).min(1).optional(),
     /** Shell command. Receives the invocation as JSON on stdin. */
     command: z.string().min(1),
     /** Working directory; defaults to the active workspace. */
@@ -31,6 +34,7 @@ export const HookWorkflowConfigSchema = z
     phase: z.enum(HOOK_PHASES),
     matcher: z.string().min(1).optional(),
     toolNames: z.array(z.string().min(1)).optional(),
+    clientSurfaces: z.array(TurnClientSurfaceSchema).min(1).optional(),
     /** Workflow id to run when the phase fires. */
     workflow: z.string().min(1),
     /** observe = run only; block = deny on failure/DENY; rewrite = fold output back. */
@@ -125,6 +129,7 @@ export function resolveConfiguredHooks(config: HooksConfig | undefined): Resolve
         phase: entry.phase,
         ...(entry.matcher ? { matcher: entry.matcher } : {}),
         ...(entry.toolNames ? { toolNames: entry.toolNames } : {}),
+        ...(entry.clientSurfaces ? { clientSurfaces: entry.clientSurfaces } : {}),
         ...(entry.timeoutMs ? { timeoutMs: entry.timeoutMs } : {}),
         run: buildWorkflowHookRun(entry)
       }
@@ -133,6 +138,7 @@ export function resolveConfiguredHooks(config: HooksConfig | undefined): Resolve
       phase: entry.phase,
       ...(entry.matcher ? { matcher: entry.matcher } : {}),
       ...(entry.toolNames ? { toolNames: entry.toolNames } : {}),
+      ...(entry.clientSurfaces ? { clientSurfaces: entry.clientSurfaces } : {}),
       ...(entry.timeoutMs ? { timeoutMs: entry.timeoutMs } : {}),
       command: entry.command,
       ...(entry.cwd ? { cwd: entry.cwd } : {})

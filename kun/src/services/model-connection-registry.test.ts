@@ -32,6 +32,67 @@ async function registry(modelCapabilities?: ConstructorParameters<typeof ModelCo
 }
 
 describe('ModelConnectionRegistry', () => {
+  it('applies concurrent GUI/TUI revisions to the live runtime in durable order', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'kun-model-connections-'))
+    roots.push(dataDir)
+    const credentials = new ExtensionCredentialStore({ dataDir, profileId: 'test' })
+    const applied: string[] = []
+    let releaseFirst!: () => void
+    const firstBlocked = new Promise<void>((resolve) => {
+      releaseFirst = resolve
+    })
+    let markFirstStarted!: () => void
+    const firstStarted = new Promise<void>((resolve) => {
+      markFirstStarted = resolve
+    })
+    const value = new ModelConnectionRegistry({
+      dataDir,
+      credentials,
+      onChanged: async (connections) => {
+        const model = connections.selected?.model
+        if (!model) return
+        if (model === 'model-a') {
+          markFirstStarted()
+          await firstBlocked
+        }
+        applied.push(model)
+      }
+    })
+    await value.initialize()
+
+    const first = value.connect({
+      expectedRevision: 0,
+      id: 'shared',
+      name: 'Shared provider',
+      kind: 'http',
+      authType: 'api-key',
+      baseUrl: 'https://provider.example/v1',
+      endpointFormat: 'chat_completions',
+      credential: 'secret',
+      models: ['model-a', 'model-b'],
+      selectedModel: 'model-a',
+      probe: false,
+      select: true
+    })
+    await firstStarted
+    const revisionOne = await value.snapshot()
+    const second = value.select({
+      expectedRevision: revisionOne.revision,
+      providerId: 'shared',
+      accountId: 'account:shared',
+      model: 'model-b'
+    })
+    await vi.waitFor(async () => {
+      expect((await value.snapshot()).revision).toBe(2)
+    })
+
+    releaseFirst()
+    await Promise.all([first, second])
+
+    expect(applied).toEqual(['model-a', 'model-b'])
+    expect((await value.snapshot()).defaultModel).toBe('model-b')
+  })
+
   it('stores secrets only in protected storage and allocates stable account names', async () => {
     const { dataDir, value } = await registry()
     const first = await value.connect({
@@ -66,6 +127,149 @@ describe('ModelConnectionRegistry', () => {
     expect(JSON.stringify(second)).not.toContain('sk-secret')
     expect(await readFile(join(dataDir, 'model-connections.v1.json'), 'utf8')).not.toContain('sk-secret')
     expect(await readFile(join(dataDir, 'credentials', 'credentials.enc.json'), 'utf8')).not.toContain('sk-secret')
+  })
+
+  it('rejects a provider selection carrying another account identifier', async () => {
+    const { value } = await registry()
+    const connected = await value.connect({
+      expectedRevision: 0,
+      id: 'provider-a',
+      name: 'Provider A',
+      baseUrl: 'https://provider.example/v1',
+      credential: 'secret',
+      models: ['model-a'],
+      selectedModel: 'model-a',
+      probe: false,
+      select: true
+    })
+
+    await expect(value.select({
+      expectedRevision: connected.revision,
+      providerId: 'provider-a',
+      accountId: 'account:provider-b',
+      model: 'model-a'
+    })).rejects.toThrow('account does not belong')
+  })
+
+  it('clears a disconnected HTTP credential without deleting the provider catalog', async () => {
+    const { value } = await registry()
+    const connected = await value.connect({
+      expectedRevision: 0,
+      id: 'custom',
+      name: 'Custom',
+      baseUrl: 'https://example.test/v1',
+      credential: 'secret',
+      models: ['model-a'],
+      selectedModel: 'model-a',
+      probe: false,
+      select: true
+    })
+
+    const cleared = await value.clearCredential('custom', connected.revision)
+    expect(cleared.providers[0]).toMatchObject({
+      id: 'custom',
+      configured: false,
+      models: ['model-a']
+    })
+    expect(cleared.defaultProviderId).toBeUndefined()
+    expect(cleared.defaultModel).toBeUndefined()
+    expect((await value.materialize()).providers.get('custom')?.apiKey).toBe('')
+  })
+
+  it('moves the shared default to another connected provider when its credential is cleared', async () => {
+    const { value } = await registry()
+    const fallback = await value.connect({
+      expectedRevision: 0,
+      id: 'fallback',
+      name: 'Fallback',
+      baseUrl: 'https://fallback.example/v1',
+      credential: 'fallback-secret',
+      models: ['model-f'],
+      selectedModel: 'model-f',
+      probe: false,
+      select: false
+    })
+    const selected = await value.connect({
+      expectedRevision: fallback.revision,
+      id: 'selected',
+      name: 'Selected',
+      baseUrl: 'https://selected.example/v1',
+      credential: 'selected-secret',
+      models: ['model-s'],
+      selectedModel: 'model-s',
+      probe: false,
+      select: true
+    })
+
+    const cleared = await value.clearCredential('selected', selected.revision)
+    expect(cleared).toMatchObject({
+      defaultProviderId: 'fallback',
+      defaultAccountId: 'account:fallback',
+      defaultModel: 'model-f'
+    })
+    expect(cleared.providers.find((provider) => provider.id === 'selected')).toMatchObject({
+      configured: false
+    })
+  })
+
+  it('synchronizes an explicit configured default without changing it during ordinary catalog initialization', async () => {
+    const { value, applied } = await registry()
+    const first = await value.connect({
+      expectedRevision: 0,
+      id: 'deepseek',
+      name: 'DeepSeek',
+      baseUrl: 'https://api.deepseek.com',
+      credential: 'deepseek-secret',
+      models: ['deepseek-chat'],
+      selectedModel: 'deepseek-chat',
+      probe: false,
+      select: true
+    })
+    const second = await value.connect({
+      expectedRevision: first.revision,
+      id: 'codex',
+      name: 'Codex',
+      baseUrl: 'https://example.test/codex',
+      credential: 'codex-secret',
+      models: ['gpt-next'],
+      selectedModel: 'gpt-next',
+      probe: false,
+      select: false
+    })
+
+    const imported = await value.initialize([{
+      expectedRevision: second.revision,
+      id: 'codex',
+      name: 'Codex',
+      kind: 'http',
+      authType: 'subscription',
+      baseUrl: 'https://example.test/codex',
+      endpointFormat: 'responses',
+      models: ['gpt-next'],
+      selectedModel: 'gpt-next',
+      probe: false,
+      select: true
+    }])
+    expect(imported).toMatchObject({
+      defaultProviderId: 'deepseek',
+      defaultModel: 'deepseek-chat'
+    })
+
+    const synchronized = await value.synchronizeDefaultSelection({
+      providerId: 'codex',
+      model: 'gpt-next'
+    })
+    expect(synchronized).toMatchObject({
+      revision: imported.revision + 1,
+      defaultProviderId: 'codex',
+      defaultAccountId: 'account:codex',
+      defaultModel: 'gpt-next'
+    })
+    expect(applied.at(-1)).toBe('codex/gpt-next')
+    await expect(value.synchronizeDefaultSelection({
+      providerId: 'codex',
+      model: 'gpt-next'
+    })).resolves.toMatchObject({ revision: synchronized.revision })
   })
 
   it('does not commit a custom provider when model discovery fails and can explicitly use supplied models', async () => {
@@ -531,7 +735,7 @@ describe('ModelConnectionRegistry', () => {
     })
   })
 
-  it('moves the shared default when a hot-applied active provider selects another model', async () => {
+  it('preserves the shared default when a hot-applied catalog carries a stale active model', async () => {
     const { value } = await registry()
     const initial = await value.connect({
       expectedRevision: 0,
@@ -561,10 +765,10 @@ describe('ModelConnectionRegistry', () => {
 
     expect(snapshot).toMatchObject({
       defaultProviderId: 'provider-a',
-      defaultModel: 'model-after',
+      defaultModel: 'model-before',
       providers: [expect.objectContaining({
         id: 'provider-a',
-        selectedModel: 'model-after'
+        selectedModel: 'model-before'
       })]
     })
   })

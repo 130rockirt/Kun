@@ -2,6 +2,7 @@ import {
   defaultKunTokenEconomySettings,
   getModelProviderSettings,
   projectExecutableModelRoutePools,
+  resolveKunRuntimeSettings,
   resolveModelProviderProxyUrl,
   type AppSettingsV1,
   type KunRuntimeSettingsV1,
@@ -58,6 +59,7 @@ export function providersConfigForRuntime(
 ): Record<string, Record<string, unknown>> {
   const out: Record<string, Record<string, unknown>> = {}
   const proxyUrl = resolveModelProviderProxyUrl(settings)
+  const runtime = resolveKunRuntimeSettings(settings)
   for (const provider of getModelProviderSettings(settings).providers as ModelProviderProfileV1[]) {
     const id = provider.id?.trim()
     const baseUrl = provider.baseUrl?.trim()
@@ -67,6 +69,9 @@ export function providersConfigForRuntime(
       provider.kind === 'gemini-cli-api' ||
       provider.kind === 'cursor-sdk'
     if (!id || (!baseUrl && !isKeylessTransport)) continue
+    const selectedModel = id === runtime.providerId && provider.models.includes(runtime.model)
+      ? runtime.model
+      : provider.models[0]
     out[id] = {
       // Provider secrets live in the protected account store. The runtime
       // resolves this opaque source binding after reading config.json.
@@ -77,7 +82,7 @@ export function providersConfigForRuntime(
       ...(provider.endpointFormat ? { endpointFormat: provider.endpointFormat } : {}),
       models: [...provider.models],
       modelCapabilities: modelCapabilitiesForProviderConfig(provider),
-      ...(provider.models[0] ? { selectedModel: provider.models[0] } : {}),
+      ...(selectedModel ? { selectedModel } : {}),
       retry: provider.retry,
       modelProfiles: modelConfigProfilesFromProviderProfiles(provider.modelProfiles),
       ...(proxyUrl ? { modelProxyUrl: proxyUrl } : {}),

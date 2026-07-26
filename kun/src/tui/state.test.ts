@@ -177,14 +177,34 @@ describe('thread projection', () => {
     const child = {
       parentThreadId: 'thr_1', parentTurnId: 'turn_parent', childId: 'child_1',
       childLabel: 'Inspect streaming', childStatus: 'running' as const, childSeq: 1,
-      childProfile: 'researcher'
+      childProfile: 'researcher',
+      activity: {
+        phase: 'tool' as const,
+        label: 'Searching the workspace',
+        toolName: 'search',
+        startedAt: '2026-07-22T00:00:00.000Z',
+        updatedAt: '2026-07-22T00:00:00.000Z'
+      }
     }
     state = applyRuntimeEvent(state, event({
       kind: 'turn_started', seq: 2, turnId: 'turn_parent', status: 'running', child
     }))
     state = applyRuntimeEvent(state, event({
       kind: 'turn_completed', seq: 3, turnId: 'turn_parent', status: 'completed', text: 'Found the cause',
-      child: { ...child, childStatus: 'completed', childSeq: 2, durationMs: 1250, toolInvocations: 3 }
+      child: {
+        ...child,
+        childStatus: 'completed',
+        childSeq: 2,
+        childProfileName: 'Researcher',
+        childProviderId: 'deepseek',
+        childToolPolicy: 'readOnly',
+        durationMs: 1250,
+        queuedMs: 250,
+        toolInvocations: 3,
+        totalTokens: 4096,
+        cacheHitRate: 0.75,
+        costUsd: 0.01
+      }
     }))
 
     expect(state.runningTurnId).toBe('turn_parent')
@@ -192,7 +212,10 @@ describe('thread projection', () => {
     expect(state.childRuns).toEqual([
       expect.objectContaining({
         childId: 'child_1', label: 'Inspect streaming', profile: 'researcher',
-        status: 'completed', text: 'Found the cause', durationMs: 1250, toolInvocations: 3
+        profileName: 'Researcher', providerId: 'deepseek', toolPolicy: 'readOnly',
+        status: 'completed', text: 'Found the cause', durationMs: 1250, queuedMs: 250,
+        toolInvocations: 3, totalTokens: 4096, cacheHitRate: 0.75, costUsd: 0.01,
+        activity: expect.objectContaining({ phase: 'tool', label: 'Searching the workspace' })
       })
     ])
   })
@@ -283,26 +306,33 @@ describe('thread projection', () => {
     let state = projectThreadSnapshot(source)
     state = applyRuntimeEvent(state, event({ kind: 'turn_steered', seq: 1, turnId: 'turn_1', text: 'focus tests' }))
     expect(state.thread.turns[0]?.steering).toEqual(['focus tests'])
+    state = applyRuntimeEvent(state, event({
+      kind: 'turn_steering_updated',
+      seq: 2,
+      turnId: 'turn_1',
+      entries: [{ text: 'ship first' }, { text: 'then document' }]
+    }))
+    expect(state.thread.turns[0]?.steering).toEqual(['ship first', 'then document'])
 
     state = applyRuntimeEvent(state, event({
-      kind: 'goal_updated', seq: 2, goal: {
+      kind: 'goal_updated', seq: 3, goal: {
         threadId: 'thr_1', objective: 'ship', status: 'active', tokensUsed: 0,
         timeUsedSeconds: 0, createdAt: source.createdAt, updatedAt: source.updatedAt
       }
     }))
     expect(state.thread.goal?.objective).toBe('ship')
-    state = applyRuntimeEvent(state, event({ kind: 'goal_cleared', seq: 3, goal: null, cleared: true }))
+    state = applyRuntimeEvent(state, event({ kind: 'goal_cleared', seq: 4, goal: null, cleared: true }))
     expect(state.thread.goal).toBeUndefined()
 
     state = applyRuntimeEvent(state, event({
-      kind: 'todos_updated', seq: 4, todos: {
+      kind: 'todos_updated', seq: 5, todos: {
         threadId: 'thr_1', updatedAt: source.updatedAt,
         items: [{ id: 'todo_1', content: 'test', status: 'pending', createdAt: source.createdAt, updatedAt: source.updatedAt }]
       }
     }))
     expect(state.thread.todos?.items[0]?.content).toBe('test')
     state = applyRuntimeEvent(state, event({
-      kind: 'thread_updated', seq: 5, mode: 'plan', additionalWorkspaces: ['/tmp/extra'],
+      kind: 'thread_updated', seq: 6, mode: 'plan', additionalWorkspaces: ['/tmp/extra'],
       approvalPolicy: 'never', sandboxMode: 'read-only'
     }))
     expect(state.thread).toMatchObject({

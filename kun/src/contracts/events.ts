@@ -29,6 +29,7 @@ export const RuntimeEventKind = z.enum([
   'turn_failed',
   'turn_aborted',
   'turn_steered',
+  'turn_steering_updated',
   'item_created',
   'item_updated',
   'item_completed',
@@ -79,6 +80,23 @@ export const PipelineStage = z.enum([
 ])
 export type PipelineStage = z.infer<typeof PipelineStage>
 
+/**
+ * Safe, compact progress projected from a child thread onto its parent.
+ *
+ * This intentionally carries only a phase label, never reasoning text or
+ * tool output. A parent client can therefore show Kimi-style live activity
+ * without subscribing to every child transcript or duplicating private
+ * child-session content in the parent event log.
+ */
+export const ChildRunActivity = z.object({
+  phase: z.enum(['starting', 'thinking', 'responding', 'tool', 'retrying', 'compacting', 'waiting']),
+  label: z.string().min(1).max(500),
+  toolName: z.string().min(1).max(256).optional(),
+  startedAt: z.string(),
+  updatedAt: z.string()
+}).strict()
+export type ChildRunActivity = z.infer<typeof ChildRunActivity>
+
 const RuntimeEventBase = z.object({
   seq: z.number().int().nonnegative(),
   timestamp: z.string(),
@@ -109,7 +127,8 @@ const RuntimeEventBase = z.object({
     totalTokens: z.number().int().nonnegative().optional(),
     cacheHitRate: z.number().min(0).max(1).nullable().optional(),
     costUsd: z.number().nonnegative().optional(),
-    costCny: z.number().nonnegative().optional()
+    costCny: z.number().nonnegative().optional(),
+    activity: ChildRunActivity.optional()
   }).optional()
 })
 
@@ -166,9 +185,16 @@ export const TurnLifecycleEvent = RuntimeEventBase.extend({
   providerId: z.string().min(1).optional(),
   accountId: z.string().min(1).optional(),
   reasoningEffort: TurnReasoningEffortSchema.optional(),
+  clientSurface: TurnClientSurfaceSchema.optional(),
   mode: z.enum(['agent', 'plan']).optional()
 })
 export type TurnLifecycleEvent = z.infer<typeof TurnLifecycleEvent>
+
+export const SteeringEvent = RuntimeEventBase.extend({
+  kind: z.literal('turn_steering_updated'),
+  entries: z.array(SteeringEntrySchema)
+})
+export type SteeringEvent = z.infer<typeof SteeringEvent>
 
 export const ApprovalEvent = RuntimeEventBase.extend({
   kind: z.enum(['approval_requested', 'approval_resolved']),
@@ -372,6 +398,7 @@ export const RuntimeEvent = z.discriminatedUnion('kind', [
   ItemEvent,
   ThreadLifecycleEvent,
   TurnLifecycleEvent,
+  SteeringEvent,
   ApprovalEvent,
   UserInputEvent,
   ToolCallReadyEvent,

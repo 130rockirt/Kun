@@ -468,12 +468,10 @@ describe('AgentLoop interruption', () => {
     expect(model.requests[0]?.contextInstructions?.[0]).toContain(
       'Kun assembled the following dynamic context'
     )
-    expect(model.requests[0]?.contextInstructions?.[1]).toContain(
-      '<kun_context_block kind="runtime-context" authority="runtime">'
-    )
-    expect(model.requests[0]?.contextInstructions?.[1]).toContain(
-      'Current opened project absolute path: `/tmp/workspace`'
-    )
+    expect(model.requests[0]?.contextInstructions).toEqual(expect.arrayContaining([
+      expect.stringContaining('<kun_context_block kind="runtime-context" authority="runtime">'),
+      expect.stringContaining('Current opened project absolute path: `/tmp/workspace`')
+    ]))
   })
 
   it('forces one GraphRun creation before final response and leaves direct turns unchanged', async () => {
