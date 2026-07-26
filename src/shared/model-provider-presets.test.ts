@@ -19,13 +19,13 @@ describe('shared model provider preset catalog', () => {
       const gui = MODEL_PROVIDER_PRESETS.find((preset) => preset.id === source.id)
       expect(gui).toMatchObject({
         name: source.name,
-        category: source.category,
         baseUrl: source.baseUrl,
         endpointFormat: source.endpointFormat,
         models: [...source.models],
         docsUrl: source.docsUrl,
         apiKeyUrl: source.credentialUrl
       })
+      expect(gui?.category ?? 'api').toBe(source.category)
       expect(gui?.kind ?? 'http').toBe(source.kind)
       if (source.tokenPlan) {
         expect(gui?.tokenPlan).toMatchObject({

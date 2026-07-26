@@ -100,9 +100,7 @@ async function serveMain(argv: readonly string[]): Promise<number> {
       if (stopping) return
       stopping = true
       loopMonitor.stop()
-      void server.close()
-        .finally(() => dataDirLease.release())
-        .finally(resolve)
+      void server.close().finally(resolve)
     }
     process.once('SIGTERM', stop)
     process.once('SIGINT', stop)

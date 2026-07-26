@@ -2320,7 +2320,12 @@ export async function createKunServeRuntime(
       const capabilities = activeOptions.capabilities ?? DEFAULT_KUN_CAPABILITIES_CONFIG
       const mcp = capabilities.mcp
       const servers = { ...mcp.servers }
-      if (server) servers[serverId] = server
+      if (server) {
+        servers[serverId] = {
+          ...server,
+          planModeReadOnlyTools: server.planModeReadOnlyTools ?? []
+        }
+      }
       else delete servers[serverId]
       const result = await applyConfig({
         capabilities: {
@@ -3118,7 +3123,13 @@ function uniqueModelCatalog(models: readonly (string | undefined)[]): string[] {
 }
 
 function modelConnectionSeedCredential(
-  kind: 'http' | 'agent-sdk' | 'antigravity-cli' | 'cursor-sdk' | 'gemini-code-assist',
+  kind:
+    | 'http'
+    | 'agent-sdk'
+    | 'antigravity-cli'
+    | 'cursor-sdk'
+    | 'gemini-cli-api'
+    | 'gemini-code-assist',
   apiKey: string,
   geminiAuth?: GeminiCodeAssistCredential
 ): string {
@@ -3128,13 +3139,20 @@ function modelConnectionSeedCredential(
 }
 
 function modelConnectionAuthType(
-  kind: 'http' | 'agent-sdk' | 'antigravity-cli' | 'cursor-sdk' | 'gemini-code-assist',
+  kind:
+    | 'http'
+    | 'agent-sdk'
+    | 'antigravity-cli'
+    | 'cursor-sdk'
+    | 'gemini-cli-api'
+    | 'gemini-code-assist',
   credential: string
 ): 'api-key' | 'oauth' | 'subscription' {
   if (
     kind === 'agent-sdk' ||
     kind === 'antigravity-cli' ||
     kind === 'cursor-sdk' ||
+    kind === 'gemini-cli-api' ||
     kind === 'gemini-code-assist'
   ) return 'subscription'
   try {

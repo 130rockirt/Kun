@@ -254,6 +254,30 @@ const GLM_REASONING: ModelProviderReasoningCapabilityV1 = {
   requestProtocol: 'glm-chat-completions'
 }
 
+const CODEX_RESPONSES_REASONING: ModelProviderReasoningCapabilityV1 = {
+  supportedEfforts: ['low', 'medium', 'high', 'max'],
+  defaultEffort: 'high',
+  requestProtocol: 'openai-responses'
+}
+
+const GROK_RESPONSES_REASONING: ModelProviderReasoningCapabilityV1 = {
+  supportedEfforts: ['low', 'medium', 'high'],
+  defaultEffort: 'high',
+  requestProtocol: 'openai-responses'
+}
+
+const KIMI_K3_REASONING: ModelProviderReasoningCapabilityV1 = {
+  supportedEfforts: ['low', 'high', 'max'],
+  defaultEffort: 'high',
+  requestProtocol: 'openai-chat-completions'
+}
+
+const CLAUDE_ADAPTIVE_REASONING: ModelProviderReasoningCapabilityV1 = {
+  supportedEfforts: ['low', 'medium', 'high', 'max'],
+  defaultEffort: 'high',
+  requestProtocol: 'anthropic-thinking'
+}
+
 const DEEPSEEK_REASONING: ModelProviderReasoningCapabilityV1 = {
   supportedEfforts: ['off', 'high', 'max'],
   defaultEffort: 'max',
@@ -283,24 +307,24 @@ export const CURSOR_SDK_ADAPTIVE_REASONING: ModelProviderReasoningCapabilityV1 =
   requestProtocol: 'none'
 }
 
-// 通义千问 / 混元 / 豆包的「思考」开关各家用私有 body 字段,无法用现有 requestProtocol 精确映射,
-// 这里统一按「内置推理」建模(requestProtocol: 'none'):只展示 effort 开关、不向上游发送特定协议字段,避免请求被拒。
+// Mixed-thinking Qwen models use the DashScope-compatible enable_thinking flag.
 const QWEN_REASONING: ModelProviderReasoningCapabilityV1 = {
   supportedEfforts: ['auto', 'off'],
   defaultEffort: 'auto',
-  requestProtocol: 'none'
+  requestProtocol: 'qwen-chat-completions'
 }
 
+// Tencent and Volcano OpenAI-compatible endpoints expose the thinking object.
 const HUNYUAN_REASONING: ModelProviderReasoningCapabilityV1 = {
   supportedEfforts: ['auto', 'off'],
   defaultEffort: 'auto',
-  requestProtocol: 'none'
+  requestProtocol: 'thinking-toggle-chat-completions'
 }
 
 const DOUBAO_REASONING: ModelProviderReasoningCapabilityV1 = {
   supportedEfforts: ['auto', 'off'],
   defaultEffort: 'auto',
-  requestProtocol: 'none'
+  requestProtocol: 'thinking-toggle-chat-completions'
 }
 
 const ZHIPU_CODING_PLAN_MODELS = [
@@ -398,8 +422,8 @@ export const MODEL_PROVIDER_PRESETS: ModelProviderPreset[] = [
     // the agent-sdk path (the SDK enforces the real limit); preset profiles are
     // authoritative, so edit them here.
     modelProfiles: {
-      'claude-opus-4-8': visionChatProfile(1_000_000),
-      'claude-sonnet-4-6': visionChatProfile(1_000_000),
+      'claude-opus-4-8': visionChatProfile(1_000_000, CLAUDE_ADAPTIVE_REASONING),
+      'claude-sonnet-4-6': visionChatProfile(1_000_000, CLAUDE_ADAPTIVE_REASONING),
       'claude-haiku-4-5': visionChatProfile(200_000)
     },
     docsUrl: 'https://code.claude.com/docs/en/authentication',
@@ -528,9 +552,11 @@ export const MODEL_PROVIDER_PRESETS: ModelProviderPreset[] = [
     subscriptionRegion: 'china',
     baseUrl: 'https://api.kimi.com/coding/v1',
     endpointFormat: 'chat_completions',
-    models: ['kimi-for-coding'],
+    models: ['k3', 'kimi-for-coding', 'kimi-for-coding-highspeed'],
     modelProfiles: {
-      'kimi-for-coding': textChatProfile()
+      k3: visionChatProfile(1_000_000, KIMI_K3_REASONING),
+      'kimi-for-coding': textChatProfile(262_144),
+      'kimi-for-coding-highspeed': textChatProfile(262_144)
     },
     docsUrl: 'https://www.kimi.com/code/docs/en/',
     apiKeyUrl: 'https://www.kimi.com/code'
@@ -618,6 +644,7 @@ export const MODEL_PROVIDER_PRESETS: ModelProviderPreset[] = [
     baseUrl: 'https://opencode.ai/zen/go/v1',
     endpointFormat: 'chat_completions',
     models: [
+      'glm-5.2',
       'glm-5.1',
       'glm-5',
       'kimi-k2.7',
@@ -638,8 +665,9 @@ export const MODEL_PROVIDER_PRESETS: ModelProviderPreset[] = [
       'qwen3.5-plus'
     ],
     modelProfiles: {
-      'glm-5.1': visionChatProfile(131_072),
-      'glm-5': visionChatProfile(131_072),
+      'glm-5.2': visionChatProfile(1_000_000, GLM_REASONING),
+      'glm-5.1': visionChatProfile(131_072, GLM_REASONING),
+      'glm-5': visionChatProfile(131_072, GLM_REASONING),
       'kimi-k2.7': textChatProfile(131_072),
       'kimi-k2.7-code': textChatProfile(131_072),
       'kimi-k2.6': textChatProfile(131_072),
@@ -946,13 +974,13 @@ export const MODEL_PROVIDER_PRESETS: ModelProviderPreset[] = [
     endpointFormat: 'custom_endpoint',
     models: [...CHATGPT_SUBSCRIPTION_MODEL_IDS],
     modelProfiles: {
-      'gpt-5.5': visionChatProfile(1_000_000),
+      'gpt-5.5': visionChatProfile(1_000_000, CODEX_RESPONSES_REASONING),
       'gpt-5.6-sol': codexLiteVisionChatProfile(372_000),
       'gpt-5.6-terra': codexLiteVisionChatProfile(372_000),
       'gpt-5.6-luna': codexLiteVisionChatProfile(372_000),
-      'gpt-5.4': visionChatProfile(1_000_000),
-      'gpt-5.4-mini': visionChatProfile(1_000_000),
-      'gpt-5.3-codex-spark': textChatProfile(128_000)
+      'gpt-5.4': visionChatProfile(1_000_000, CODEX_RESPONSES_REASONING),
+      'gpt-5.4-mini': visionChatProfile(1_000_000, CODEX_RESPONSES_REASONING),
+      'gpt-5.3-codex-spark': textChatProfile(128_000, CODEX_RESPONSES_REASONING)
     },
     image: {
       protocol: 'codex-responses-image',
@@ -973,7 +1001,7 @@ export const MODEL_PROVIDER_PRESETS: ModelProviderPreset[] = [
     endpointFormat: 'responses',
     models: [...GROK_SUBSCRIPTION_MODEL_IDS],
     modelProfiles: {
-      'grok-4.5': visionChatProfile(500_000),
+      'grok-4.5': visionChatProfile(500_000, GROK_RESPONSES_REASONING),
       'grok-4-1-fast-reasoning': visionChatProfile(2_000_000),
       'grok-4-1-fast-non-reasoning': visionChatProfile(2_000_000),
       'grok-code-fast-1': textChatProfile(256_000)
@@ -1294,7 +1322,7 @@ function visionChatProfile(
 
 function codexLiteVisionChatProfile(contextWindowTokens: number): ModelProviderModelProfileV1 {
   return {
-    ...visionChatProfile(contextWindowTokens),
+    ...visionChatProfile(contextWindowTokens, CODEX_RESPONSES_REASONING),
     responsesMode: 'lite'
   }
 }

@@ -762,6 +762,7 @@ function ensureTurn(
     threadId: thread.id,
     status,
     prompt,
+    orchestration: 'direct',
     model: thread.model,
     ...(thread.providerId ? { providerId: thread.providerId } : {}),
     ...(thread.accountId ? { accountId: thread.accountId } : {}),

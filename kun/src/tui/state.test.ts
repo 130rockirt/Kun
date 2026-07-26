@@ -270,6 +270,7 @@ describe('thread projection', () => {
       id: 'turn_1',
       threadId: 'thr_1',
       status: 'running',
+      orchestration: 'direct',
       prompt: 'question',
       steering: [],
       createdAt: source.createdAt,
@@ -299,7 +300,7 @@ describe('thread projection', () => {
   it('projects queued guidance, goal, todos, and thread policy changes from other clients', () => {
     const source = detail()
     source.turns = [{
-      id: 'turn_1', threadId: 'thr_1', status: 'running', prompt: 'work', steering: [],
+      id: 'turn_1', threadId: 'thr_1', status: 'running', orchestration: 'direct', prompt: 'work', steering: [],
       createdAt: source.createdAt, items: [], attachmentIds: [], activeSkillIds: [],
       injectedMemoryIds: [], injectedMemorySummaries: [], injectedInstructionSources: []
     }]

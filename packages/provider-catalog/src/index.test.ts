@@ -8,13 +8,17 @@ import {
 describe('provider catalog', () => {
   it('publishes every GUI base preset and Token Plan as stable entries', () => {
     const entries = providerCatalogEntries()
-    expect(PROVIDER_CATALOG).toHaveLength(19)
-    expect(entries).toHaveLength(23)
-    expect(entries.filter((entry) => entry.category === 'subscription')).toHaveLength(14)
-    expect(entries.filter((entry) => entry.category === 'api')).toHaveLength(9)
+    expect(PROVIDER_CATALOG).toHaveLength(23)
+    expect(entries).toHaveLength(27)
+    expect(entries.filter((entry) => entry.category === 'subscription')).toHaveLength(17)
+    expect(entries.filter((entry) => entry.category === 'api')).toHaveLength(10)
     expect(entries.map((entry) => entry.profileId)).toEqual(expect.arrayContaining([
       'gemini-subscription',
+      'gemini-cli-subscription',
       'cursor-subscription',
+      'ollama',
+      'volcengine',
+      'volcengine-agent-plan',
       'xiaomi-token-plan',
       'minimax-token-plan',
       'aliyun-token-plan',

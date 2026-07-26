@@ -7,6 +7,15 @@ import {
 function runtime(label: string): DelegatedTurnRuntime {
   return {
     handlesProvider: (providerId) => providerId === 'subscription',
+    capabilities: () => ({
+      nativeResume: false,
+      structuredStreaming: true,
+      kunTools: true,
+      externalApproval: true,
+      liveSteering: false,
+      nativeContextTelemetry: false,
+      fork: false
+    }),
     async runTurn(_threadId, turnId) {
       expect(turnId).toBe('turn-1')
       return label === 'old' ? 'completed' : 'failed'

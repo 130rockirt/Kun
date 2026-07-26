@@ -214,7 +214,8 @@ export class ModelConnectionRegistry {
           endpointFormat: input.endpointFormat,
           configured: Boolean(credentialRef) ||
             input.kind === 'agent-sdk' ||
-            input.kind === 'antigravity-cli',
+            input.kind === 'antigravity-cli' ||
+            input.kind === 'gemini-cli-api',
           models,
           ...(input.modelCapabilities
             ? { modelCapabilities: capabilitiesForModels(input.modelCapabilities, models) }

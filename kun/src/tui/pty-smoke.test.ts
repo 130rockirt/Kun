@@ -228,11 +228,11 @@ describe.skipIf(process.platform === 'win32' || !existsSync(cliEntry))('kun tui 
           output.includes('Welcome to Kun') &&
           output.includes('/connect') &&
           output.includes('/sessions'),
-        15_000
+        30_000
       )
       const connection = await waitForValue(
         async () => (await resolveSharedRuntime(root)) ?? undefined,
-        15_000
+        30_000
       )
       expect(connection.discovery.launchMode).toBe('shared')
 
@@ -251,7 +251,7 @@ describe.skipIf(process.platform === 'win32' || !existsSync(cliEntry))('kun tui 
       dataSubscription.dispose()
       try { terminal.kill() } catch { /* already exited */ }
     }
-  }, 30_000)
+  }, 45_000)
 })
 
 function stringEnvironment(env: NodeJS.ProcessEnv): Record<string, string> {

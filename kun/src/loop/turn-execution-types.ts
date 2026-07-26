@@ -60,7 +60,6 @@ export type PreparedTurnContext = Readonly<{
   clientSurface: TurnClientSurface
   model: string
   mode: 'agent' | 'plan'
-  clientSurface: TurnClientSurface
   dedicatedSvgTurn: boolean
   planContextStale: boolean
   activePlanContext?: GuiPlanContext

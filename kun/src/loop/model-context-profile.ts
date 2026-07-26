@@ -85,7 +85,13 @@ export type ProviderModelCapabilityInput = {
   providerId?: string
   presetSource?: string
   baseUrl?: string
-  kind?: 'http' | 'agent-sdk' | 'antigravity-cli' | 'cursor-sdk' | 'gemini-code-assist'
+  kind?:
+    | 'http'
+    | 'agent-sdk'
+    | 'antigravity-cli'
+    | 'cursor-sdk'
+    | 'gemini-cli-api'
+    | 'gemini-code-assist'
   model?: string
 }
 

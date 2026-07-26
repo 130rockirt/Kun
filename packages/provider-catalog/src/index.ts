@@ -1,13 +1,19 @@
 export const TOKEN_PLAN_PROVIDER_ID_SUFFIX = '-token-plan'
 
 export type ProviderCatalogCategory = 'api' | 'subscription'
-export type ProviderCatalogKind = 'http' | 'agent-sdk' | 'antigravity-cli' | 'cursor-sdk'
+export type ProviderCatalogKind =
+  | 'http'
+  | 'agent-sdk'
+  | 'antigravity-cli'
+  | 'gemini-cli-api'
+  | 'cursor-sdk'
 export type ProviderCatalogAuthFlow =
   | 'api-key'
   | 'chatgpt-oauth'
   | 'grok-oauth'
   | 'claude-subscription'
   | 'gemini-subscription'
+  | 'gemini-cli-subscription'
   | 'cursor-api-key'
 export type ProviderCatalogAuthType = 'api-key' | 'oauth' | 'subscription'
 export type ProviderCatalogEndpointFormat =
@@ -63,7 +69,51 @@ const GEMINI_SUBSCRIPTION_MODELS = [
   'gemini-3.1-pro'
 ] as const
 
+const GEMINI_CLI_SUBSCRIPTION_MODELS = [
+  'gemini-3.1-pro-preview',
+  'gemini-3-flash-preview',
+  'gemini-3.1-flash-lite',
+  'gemini-2.5-pro',
+  'gemini-2.5-flash'
+] as const
+
 const CURSOR_SUBSCRIPTION_MODELS = ['auto'] as const
+
+const OLLAMA_CLOUD_MODELS = [
+  'deepseek-v4-flash',
+  'deepseek-v4-pro',
+  'gemma4:31b',
+  'glm-5.1',
+  'glm-5.2',
+  'gpt-oss:120b',
+  'gpt-oss:20b',
+  'kimi-k2.5',
+  'kimi-k2.6',
+  'kimi-k2.7-code',
+  'minimax-m2.5',
+  'minimax-m2.7',
+  'minimax-m3',
+  'mistral-large-3:675b',
+  'nemotron-3-nano:30b',
+  'nemotron-3-super',
+  'nemotron-3-ultra',
+  'qwen3.5:397b'
+] as const
+
+const VOLCENGINE_CHAT_MODELS = [
+  'doubao-seed-2-1-pro-260628',
+  'doubao-seed-2-1-turbo-260628',
+  'doubao-seed-evolving',
+  'doubao-seed-2-0-lite-260428',
+  'doubao-seed-2-0-mini-260428'
+] as const
+
+const VOLCENGINE_AGENT_PLAN_CHAT_MODELS = [
+  'doubao-seed-2.1-turbo',
+  'doubao-seed-evolving',
+  'doubao-seed-2.0-lite',
+  'doubao-seed-2.0-mini'
+] as const
 
 const CHATGPT_SUBSCRIPTION_MODELS = [
   'gpt-5.5',
@@ -165,7 +215,7 @@ export const PROVIDER_CATALOG = [
   },
   {
     id: 'gemini-subscription',
-    name: 'Gemini 订阅',
+    name: 'Google Antigravity 订阅',
     category: 'subscription',
     kind: 'antigravity-cli',
     authFlow: 'gemini-subscription',
@@ -175,6 +225,19 @@ export const PROVIDER_CATALOG = [
     models: GEMINI_SUBSCRIPTION_MODELS,
     docsUrl: 'https://github.com/google-antigravity/antigravity-cli',
     credentialUrl: 'https://antigravity.google'
+  },
+  {
+    id: 'gemini-cli-subscription',
+    name: 'Gemini CLI 订阅（API）',
+    category: 'subscription',
+    kind: 'gemini-cli-api',
+    authFlow: 'gemini-cli-subscription',
+    authType: 'subscription',
+    baseUrl: '',
+    endpointFormat: 'custom_endpoint',
+    models: GEMINI_CLI_SUBSCRIPTION_MODELS,
+    docsUrl: 'https://github.com/google-gemini/gemini-cli',
+    credentialUrl: 'https://github.com/google-gemini/gemini-cli#authentication-options'
   },
   {
     id: 'cursor-subscription',
@@ -187,7 +250,20 @@ export const PROVIDER_CATALOG = [
     endpointFormat: 'custom_endpoint',
     models: CURSOR_SUBSCRIPTION_MODELS,
     docsUrl: 'https://cursor.com/docs/api/sdk/typescript',
-    credentialUrl: 'https://cursor.com/dashboard?tab=integrations'
+    credentialUrl: 'https://cursor.com/dashboard/api?section=user-keys#user-api-keys'
+  },
+  {
+    id: 'ollama',
+    name: 'Ollama Cloud',
+    category: 'subscription',
+    kind: 'http',
+    authFlow: 'api-key',
+    authType: 'subscription',
+    baseUrl: 'https://ollama.com/v1',
+    endpointFormat: 'chat_completions',
+    models: OLLAMA_CLOUD_MODELS,
+    docsUrl: 'https://docs.ollama.com/cloud',
+    credentialUrl: 'https://ollama.com/settings/keys'
   },
   {
     id: 'zhipu-coding-plan',
@@ -227,6 +303,33 @@ export const PROVIDER_CATALOG = [
     models: ['k3', 'kimi-for-coding', 'kimi-for-coding-highspeed'],
     docsUrl: 'https://www.kimi.com/code/docs/en/',
     credentialUrl: 'https://www.kimi.com/code'
+  },
+  {
+    id: 'volcengine',
+    name: 'Volcano Ark API',
+    category: 'api',
+    kind: 'http',
+    authFlow: 'api-key',
+    authType: 'api-key',
+    baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+    endpointFormat: 'chat_completions',
+    models: VOLCENGINE_CHAT_MODELS,
+    docsUrl: 'https://www.volcengine.com/docs/82379/1330310',
+    credentialUrl: 'https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey'
+  },
+  {
+    id: 'volcengine-agent-plan',
+    name: 'Volcano Ark Agent Plan',
+    category: 'subscription',
+    kind: 'http',
+    authFlow: 'api-key',
+    authType: 'subscription',
+    baseUrl: 'https://ark.cn-beijing.volces.com/api/plan/v3',
+    endpointFormat: 'chat_completions',
+    models: VOLCENGINE_AGENT_PLAN_CHAT_MODELS,
+    docsUrl: 'https://www.volcengine.com/docs/82379/2366394',
+    credentialUrl:
+      'https://console.volcengine.com/ark/region:ark+cn-beijing/openManagement?LLM=%7B%7D&OpenModelVisible=false&advancedActiveKey=agentPlan'
   },
   {
     id: 'volcengine-coding-plan',

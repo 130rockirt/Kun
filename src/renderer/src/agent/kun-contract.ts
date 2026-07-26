@@ -698,8 +698,6 @@ export type CoreRuntimeEventJson = {
   }
   status?: string | number
   /** turn_started: the effective routing and reasoning configuration. */
-  model?: string
-  providerId?: string
   accountId?: string
   reasoningEffort?: 'auto' | 'off' | 'low' | 'medium' | 'high' | 'max'
   mode?: 'agent' | 'plan'

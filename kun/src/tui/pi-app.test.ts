@@ -168,6 +168,7 @@ describe('PiTuiApplication command overlays', () => {
       id: 'turn_grouped',
       threadId: current.id,
       status: 'running',
+      orchestration: 'direct',
       prompt: 'Say hello',
       steering: [],
       createdAt: current.createdAt,
@@ -232,6 +233,7 @@ describe('PiTuiApplication command overlays', () => {
       id: 'turn_click',
       threadId: current.id,
       status: 'completed',
+      orchestration: 'direct',
       prompt: 'Explain',
       steering: [],
       createdAt: current.createdAt,
@@ -299,6 +301,7 @@ describe('PiTuiApplication command overlays', () => {
       id: 'turn_image',
       threadId: current.id,
       status: 'completed',
+      orchestration: 'direct',
       prompt: 'What is this?',
       steering: [],
       createdAt: current.createdAt,
@@ -360,6 +363,7 @@ describe('PiTuiApplication command overlays', () => {
         id: 'turn_timed',
         threadId: current.id,
         status: 'running',
+        orchestration: 'direct',
         prompt: 'Think briefly',
         steering: [],
         createdAt: startedAt,
@@ -433,7 +437,7 @@ describe('PiTuiApplication command overlays', () => {
     const current = detail()
     current.status = 'running'
     current.turns = [{
-      id: 'turn_reconnect', threadId: current.id, status: 'running', prompt: 'Wait', steering: [],
+      id: 'turn_reconnect', threadId: current.id, status: 'running', orchestration: 'direct', prompt: 'Wait', steering: [],
       createdAt: new Date().toISOString(), startedAt: new Date().toISOString(), items: [],
       attachmentIds: [], activeSkillIds: [], injectedMemoryIds: [], injectedMemorySummaries: [],
       injectedInstructionSources: []
@@ -481,6 +485,7 @@ describe('PiTuiApplication command overlays', () => {
       id: 'turn_loading',
       threadId: current.id,
       status: 'running',
+      orchestration: 'direct',
       prompt: 'Stream a response',
       steering: [],
       createdAt: now,
@@ -526,6 +531,7 @@ describe('PiTuiApplication command overlays', () => {
       id: 'turn_tools',
       threadId: current.id,
       status: 'completed',
+      orchestration: 'direct',
       prompt: 'Inspect the file',
       steering: [],
       createdAt: current.createdAt,
@@ -1061,7 +1067,7 @@ describe('PiTuiApplication command overlays', () => {
     const current = detail()
     current.status = 'running'
     current.turns = [{
-      id: 'turn_stream', threadId: current.id, status: 'running', prompt: 'Say hello', steering: [],
+      id: 'turn_stream', threadId: current.id, status: 'running', orchestration: 'direct', prompt: 'Say hello', steering: [],
       createdAt: current.createdAt, startedAt: current.createdAt, items: [], attachmentIds: [], activeSkillIds: [],
       injectedMemoryIds: [], injectedMemorySummaries: [], injectedInstructionSources: []
     }]
@@ -1202,7 +1208,7 @@ describe('PiTuiApplication command overlays', () => {
     const current = detail()
     current.status = 'running'
     current.turns = [{
-      id: 'turn_auth', threadId: current.id, status: 'running', prompt: 'Hello', steering: [],
+      id: 'turn_auth', threadId: current.id, status: 'running', orchestration: 'direct', prompt: 'Hello', steering: [],
       createdAt: current.createdAt, startedAt: current.createdAt,
       items: [{
         id: 'user_auth', threadId: current.id, turnId: 'turn_auth', role: 'user', status: 'completed',
@@ -1260,7 +1266,7 @@ describe('PiTuiApplication command overlays', () => {
     const current = detail()
     current.status = 'running'
     current.turns = [{
-      id: 'turn_parent', threadId: current.id, status: 'running', prompt: 'Investigate', steering: [],
+      id: 'turn_parent', threadId: current.id, status: 'running', orchestration: 'direct', prompt: 'Investigate', steering: [],
       createdAt: current.createdAt, startedAt: current.createdAt,
       items: [{
         id: 'call_delegate', threadId: current.id, turnId: 'turn_parent', role: 'assistant', status: 'running',
@@ -1397,7 +1403,7 @@ describe('PiTuiApplication command overlays', () => {
     const parent = detail()
     parent.title = 'Parent investigation'
     parent.turns = [{
-      id: 'turn_parent', threadId: parent.id, status: 'running', prompt: 'Delegate this', steering: [],
+      id: 'turn_parent', threadId: parent.id, status: 'running', orchestration: 'direct', prompt: 'Delegate this', steering: [],
       createdAt: parent.createdAt, startedAt: parent.createdAt,
       items: [{
         id: 'user_parent', threadId: parent.id, turnId: 'turn_parent', role: 'user', status: 'completed',
@@ -1413,7 +1419,7 @@ describe('PiTuiApplication command overlays', () => {
       parentThreadId: parent.id,
       status: 'running',
       turns: [{
-        id: 'turn_child', threadId: 'child_1', status: 'running', prompt: 'Find the event bug', steering: [],
+        id: 'turn_child', threadId: 'child_1', status: 'running', orchestration: 'direct', prompt: 'Find the event bug', steering: [],
         createdAt: parent.createdAt, startedAt: parent.createdAt,
         items: [{
           id: 'reason_child', threadId: 'child_1', turnId: 'turn_child', role: 'assistant', status: 'running',
@@ -1870,9 +1876,9 @@ describe('PiTuiApplication command overlays', () => {
       await waitFor(() => sanitizeTerminalText(outputText).includes('KUN / Connect'))
       input.emit('data', '\r')
       await waitFor(() =>
-        outputText.includes('14 subscriptions') &&
-        outputText.includes('9 APIs') &&
-        outputText.includes('Gemini 订阅') &&
+        outputText.includes('17 subscriptions') &&
+        outputText.includes('10 APIs') &&
+        outputText.includes('Google Antigravity 订阅') &&
         outputText.includes('Cursor 订阅')
       )
       type(input, 'grok')
@@ -2587,6 +2593,7 @@ describe('PiTuiApplication command overlays', () => {
       id: 'turn_running',
       threadId: current.id,
       status: 'running',
+      orchestration: 'direct',
       prompt: 'initial task',
       steering: [],
       createdAt: current.createdAt,
@@ -2642,6 +2649,7 @@ describe('PiTuiApplication command overlays', () => {
       id: 'turn_running',
       threadId: current.id,
       status: 'running',
+      orchestration: 'direct',
       prompt: 'initial task',
       steering: [],
       createdAt: current.createdAt,
@@ -2695,7 +2703,7 @@ describe('PiTuiApplication command overlays', () => {
     const exportPath = join(directory, 'thread.md')
     const current = detail()
     current.turns = [{
-      id: 'turn_live', threadId: current.id, status: 'completed', prompt: 'inspect live state', steering: [],
+      id: 'turn_live', threadId: current.id, status: 'completed', orchestration: 'direct', prompt: 'inspect live state', steering: [],
       createdAt: current.createdAt, finishedAt: current.updatedAt, attachmentIds: [], activeSkillIds: [],
       injectedMemoryIds: [], injectedMemorySummaries: [], injectedInstructionSources: [],
       items: [{

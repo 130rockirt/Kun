@@ -106,7 +106,7 @@ describe('runtime factory usage carryover', () => {
     })
   })
 
-  it('hot-applies model and tool capabilities into runtime info and diagnostics', async () => {
+  it('hot-applies tool capabilities without overriding the registry-owned default model', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'kun-runtime-apply-'))
     tempDirs.push(dataDir)
     const runtime = await createKunServeRuntime({
@@ -143,7 +143,7 @@ describe('runtime factory usage carryover', () => {
       })
 
       expect(applied).toEqual({ ok: true })
-      expect(runtime.info().model).toBe('model-after')
+      expect(runtime.info().model).toBe('model-before')
       expect(runtime.info().capabilities.web.fetch.available).toBe(true)
       expect(runtime.info().capabilities.instructions).toMatchObject({ enabled: false, status: 'disabled' })
       const diagnostics = await runtime.toolDiagnostics?.()
@@ -246,7 +246,7 @@ describe('runtime factory usage carryover', () => {
     }
   })
 
-  it('hot-applies Cursor credentials but restarts when Cursor routing ownership changes', async () => {
+  it('hot-applies Cursor credentials and routing ownership through a new runtime generation', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'kun-runtime-cursor-apply-'))
     tempDirs.push(dataDir)
     const baseOptions = {
@@ -297,15 +297,11 @@ describe('runtime factory usage carryover', () => {
             }
           }
         }
-      })).resolves.toEqual({
-        ok: false,
-        code: 'restart_required',
-        message: 'delegated subscription provider routing changed and requires a runtime restart'
-      })
+      })).resolves.toEqual({ ok: true })
     } finally {
       await runtime.shutdown?.()
     }
-  })
+  }, 15_000)
 
   it('clears per-thread runtime memory when a thread is deleted', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'kun-runtime-delete-'))

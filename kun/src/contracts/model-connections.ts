@@ -21,6 +21,7 @@ export const ModelConnectionProfileSchema = z.object({
     'agent-sdk',
     'antigravity-cli',
     'cursor-sdk',
+    'gemini-cli-api',
     'gemini-code-assist'
   ]),
   authType: z.enum(['api-key', 'oauth', 'subscription']),
@@ -61,6 +62,7 @@ export const ModelConnectionConnectRequestSchema = z.object({
     'agent-sdk',
     'antigravity-cli',
     'cursor-sdk',
+    'gemini-cli-api',
     'gemini-code-assist'
   ]).default('http'),
   authType: z.enum(['api-key', 'oauth', 'subscription']).default('api-key'),
@@ -94,6 +96,7 @@ export const ModelConnectionPatchRequestSchema = z.object({
     'agent-sdk',
     'antigravity-cli',
     'cursor-sdk',
+    'gemini-cli-api',
     'gemini-code-assist'
   ]).optional(),
   authType: z.enum(['api-key', 'oauth', 'subscription']).optional(),

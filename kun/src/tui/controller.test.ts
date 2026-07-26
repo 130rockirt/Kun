@@ -281,6 +281,7 @@ describe('TuiController', () => {
         id: 'turn_attachment',
         threadId: 'thr_1',
         status: 'completed',
+        orchestration: 'direct',
         prompt: 'What is in this image?',
         steering: [],
         createdAt,
@@ -727,7 +728,7 @@ describe('TuiController', () => {
   it('creates a source-preserving undo fork before the latest user turn', async () => {
     const source = detail()
     source.turns = [{
-      id: 'turn_first', threadId: source.id, status: 'completed', prompt: 'first', steering: [],
+      id: 'turn_first', threadId: source.id, status: 'completed', orchestration: 'direct', prompt: 'first', steering: [],
       createdAt: source.createdAt, attachmentIds: [], activeSkillIds: [],
       injectedMemoryIds: [], injectedMemorySummaries: [], injectedInstructionSources: [],
       items: [{
@@ -1004,7 +1005,7 @@ describe('TuiController', () => {
     const source = detail()
     source.status = 'running'
     source.turns = [{
-      id: 'turn_queued', threadId: source.id, status: 'running', prompt: 'work', steering: ['check packaging'],
+      id: 'turn_queued', threadId: source.id, status: 'running', orchestration: 'direct', prompt: 'work', steering: ['check packaging'],
       createdAt: source.createdAt, items: [], attachmentIds: [], activeSkillIds: [],
       injectedMemoryIds: [], injectedMemorySummaries: [], injectedInstructionSources: []
     }]

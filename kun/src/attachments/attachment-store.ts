@@ -225,9 +225,9 @@ export class FileAttachmentStore implements AttachmentStore {
         const metadataText = await readFile(this.metadataPath(id), 'utf8')
           .catch(() => null)
         if (metadataText === null) throw new Error(`attachment not found: ${id}`)
-        let metadata: AttachmentMetadata
+        let metadata: StoredAttachmentMetadata
         try {
-          metadata = AttachmentMetadataSchema.parse(JSON.parse(metadataText))
+          metadata = StoredAttachmentMetadataSchema.parse(JSON.parse(metadataText))
         } catch {
           throw new Error(`attachment not found: ${id}`)
         }
@@ -239,7 +239,7 @@ export class FileAttachmentStore implements AttachmentStore {
       }))
       const now = this.options.nowIso?.() ?? new Date().toISOString()
       const nextRecords = records.map(({ metadata }) =>
-        AttachmentMetadataSchema.parse(mergeScope({
+        StoredAttachmentMetadataSchema.parse(mergeScope({
           ...metadata,
           updatedAt: now
         }, scope))
@@ -263,7 +263,7 @@ export class FileAttachmentStore implements AttachmentStore {
         ))
         throw error
       }
-      return nextRecords
+      return nextRecords.map(publicMetadata)
     })
   }
 

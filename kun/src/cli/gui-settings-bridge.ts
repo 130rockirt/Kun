@@ -43,6 +43,7 @@ const GUI_PROVIDER_KINDS = [
   'agent-sdk',
   'antigravity-cli',
   'cursor-sdk',
+  'gemini-cli-api',
   'gemini-code-assist'
 ] as const
 
