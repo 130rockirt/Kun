@@ -173,7 +173,24 @@ describe('FloatingComposerGraphProgress', () => {
     expect(layout.nodes.find((node) => node.id === 'implement')?.agentName).toBe('Builder')
     expect(layout.edges).toHaveLength(2)
     expect(layout.edges[0]?.path).toMatch(/^M .+ C .+/)
+    expect(layout.edges.map((edge) => [edge.id, edge.flowing])).toEqual([
+      ['edge_audit_build', true],
+      ['edge_build_review', false]
+    ])
   })
+
+  it.each(['submitted', 'reviewing', 'repair_required'] as const)(
+    'flows into a %s node but not out toward waiting downstream work',
+    (status) => {
+      const run = graphRun()
+      run.nodes.implement!.status = status
+
+      expect(layoutComposerGraph(run).edges.map((edge) => [edge.id, edge.flowing])).toEqual([
+        ['edge_audit_build', true],
+        ['edge_build_review', false]
+      ])
+    }
+  )
 
   it('separates zero accepted completion from an actively running node', () => {
     const run = graphRun()
@@ -214,6 +231,7 @@ describe('FloatingComposerGraphProgress', () => {
 
     expect(getComposerGraphProgress(run)).toMatchObject({ activeCount: 0 })
     expect(html).not.toContain('ds-subagent-dot-pulse')
+    expect(html).not.toContain('data-graph-preview-edge-flow')
     expect(html).not.toContain('Writing response')
     expect(html).toContain('cancelled')
   })
@@ -257,9 +275,53 @@ describe('FloatingComposerGraphProgress', () => {
     }))
     expect(html).toContain('Directed Graph preview with 3 phases and 3 nodes')
     expect(html).toContain('data-graph-preview-edge="edge_audit_build"')
+    expect(html).toContain('data-graph-preview-edge-flow="edge_audit_build"')
+    expect(html).not.toContain('data-graph-preview-edge-flow="edge_build_review"')
     expect(html).toContain('marker-end="url(#graph-composer-arrow-run_1)"')
+    expect(html).toContain('marker-end="url(#graph-composer-active-arrow-run_1)"')
     expect(html).toContain('Builder')
     act(() => renderer!.unmount())
+  })
+
+  it('fits and clips long node copy while preserving full accessible text', () => {
+    const run = graphRun()
+    const longTitle = '摸清文档顶部页与官网设计语言'
+    const longAgent = 'work-inspect-document-header-and-official-site-language'
+    run.plans[0]!.phases[0]!.title = '现状与设计语言摸底及完整证据检查'
+    run.plans[0]!.nodes[0]!.title = longTitle
+    run.plans[0]!.nodes[0]!.assignment = {
+      kind: 'ephemeral',
+      name: longAgent,
+      systemPrompt: 'Inspect.'
+    }
+
+    const html = renderToStaticMarkup(createElement(FloatingComposerGraphPreview, {
+      run,
+      onOpenGraph: vi.fn()
+    }))
+
+    expect(html).toContain(longTitle)
+    expect(html).toContain(longAgent)
+    expect(html).toContain('data-graph-preview-node-title')
+    expect(html).toContain('data-graph-preview-node-agent')
+    expect(html).toContain('data-graph-preview-node-status')
+    expect(html).toContain('data-label-truncated="true"')
+    expect(html).toMatch(/clip-path="url\(#graph-preview-node-[^"]+-title\)"/)
+    expect(html).toMatch(/clip-path="url\(#graph-preview-node-[^"]+-agent\)"/)
+    expect(html).toMatch(/clip-path="url\(#graph-preview-node-[^"]+-status\)"/)
+  })
+
+  it('replaces flowing motion with a static highlighted incoming edge', () => {
+    const html = renderToStaticMarkup(createElement(FloatingComposerGraphPreview, {
+      run: graphRun(),
+      reducedMotion: true,
+      onOpenGraph: vi.fn()
+    }))
+
+    expect(html).toContain('data-graph-preview-edge-flow="edge_audit_build"')
+    expect(html).toContain('class="graph-composer-edge-flow is-static"')
+    expect(html).toContain('opacity="0.72"')
+    expect(html).not.toContain('stroke-dasharray="7 9"')
   })
 
   it('refreshes durable truth and opens the preview on hover', async () => {

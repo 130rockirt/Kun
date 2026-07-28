@@ -5,6 +5,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 export const RUNTIME_BUILD_MANIFEST_VERSION = 1
 export const RUNTIME_BUILD_MANIFEST_FILENAME = 'runtime-build.json'
+const SEMVER_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/
+const ARTIFACT_VERSION = /^[0-9A-Za-z][0-9A-Za-z._-]*$/
 
 export async function computeRuntimeBuildId(distDirectory) {
   const root = resolve(distDirectory)
@@ -17,7 +19,10 @@ export async function computeRuntimeBuildId(distDirectory) {
   const hash = createHash('sha256')
   hash.update('kun-runtime-build-v1\0')
   for (const file of files) {
-    const content = await readFile(file.path)
+    const content = Buffer.from(
+      (await readFile(file.path, 'utf8')).replaceAll('\r\n', '\n'),
+      'utf8'
+    )
     hash.update(String(Buffer.byteLength(file.relativePath)))
     hash.update(':')
     hash.update(file.relativePath)
@@ -33,15 +38,49 @@ export async function computeRuntimeBuildId(distDirectory) {
 export async function writeRuntimeBuildManifest(distDirectory) {
   const root = resolve(distDirectory)
   const buildId = await computeRuntimeBuildId(root)
+  const packageManifest = JSON.parse(
+    await readFile(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8')
+  )
+  const serviceVersion = (
+    process.env.KUN_APP_VERSION ||
+    process.env.KUN_RELEASE_VERSION ||
+    packageManifest.version ||
+    ''
+  ).trim()
+  if (!SEMVER_VERSION.test(serviceVersion)) {
+    throw new Error(`Kun service version must be semver, got: ${serviceVersion}`)
+  }
+  const channel = (process.env.KUN_UPDATE_CHANNEL || process.env.RELEASE_CHANNEL || 'stable').trim()
+  if (channel !== 'stable' && channel !== 'frontier') {
+    throw new Error(`Kun release channel must be stable or frontier, got: ${channel}`)
+  }
+  const artifactVersion = (
+    process.env.KUN_ARTIFACT_VERSION ||
+    serviceVersion
+  ).trim()
+  if (!ARTIFACT_VERSION.test(artifactVersion)) {
+    throw new Error(`Kun artifact version is invalid: ${artifactVersion}`)
+  }
   const target = join(root, RUNTIME_BUILD_MANIFEST_FILENAME)
   const temporary = `${target}.${process.pid}.tmp`
   await mkdir(dirname(target), { recursive: true })
   await writeFile(temporary, `${JSON.stringify({
     version: RUNTIME_BUILD_MANIFEST_VERSION,
-    buildId
+    buildId,
+    serviceVersion,
+    channel,
+    artifactVersion,
+    nodeVersion: process.versions.node
   }, null, 2)}\n`, { encoding: 'utf8', mode: 0o644 })
   await rename(temporary, target)
-  return { version: RUNTIME_BUILD_MANIFEST_VERSION, buildId }
+  return {
+    version: RUNTIME_BUILD_MANIFEST_VERSION,
+    buildId,
+    serviceVersion,
+    channel,
+    artifactVersion,
+    nodeVersion: process.versions.node
+  }
 }
 
 async function javascriptFiles(directory) {

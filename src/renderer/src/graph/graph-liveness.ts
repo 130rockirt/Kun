@@ -29,6 +29,18 @@ export type GraphNodeLiveness = {
   quiet: boolean
 }
 
+const PROCESSING_GRAPH_LIVENESS_KINDS = new Set<GraphLivenessKind>([
+  'working',
+  'reviewing',
+  'retrying'
+])
+
+export function graphLivenessIsProcessing(
+  liveness: GraphNodeLiveness | null | undefined
+): boolean {
+  return Boolean(liveness && PROCESSING_GRAPH_LIVENESS_KINDS.has(liveness.kind))
+}
+
 function parsedTimestamp(value: string | undefined): number | undefined {
   if (!value) return undefined
   const parsed = Date.parse(value)

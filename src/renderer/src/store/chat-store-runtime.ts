@@ -485,7 +485,13 @@ function notifyWriteWorkspaceFileRefresh(
   })
 }
 
-function runtimeStatusText(event: RuntimeStatusEventPayload): string {
+function compactGraphGateFailureSummary(value: string | undefined): string {
+  const normalized = value?.replace(/\s+/g, ' ').trim() ?? ''
+  if (!normalized) return ''
+  return normalized.length > 180 ? `${normalized.slice(0, 179)}…` : normalized
+}
+
+export function runtimeStatusText(event: RuntimeStatusEventPayload): string {
   if (event.kind === 'tool_result_upload_wait') {
     return i18n.t('common:toolUploadWaitStatus', { count: event.toolResultCount ?? 0 })
   }
@@ -519,11 +525,17 @@ function runtimeStatusText(event: RuntimeStatusEventPayload): string {
         : event.phase === 'failed'
           ? 'common:graphCreateFailedStatus'
           : 'common:graphCreatePreparingStatus'
-    return i18n.t(key, {
+    const base = i18n.t(key, {
       tool: event.toolName ?? 'tool',
       attempt: event.attempt ?? 0,
-      max: event.maxAttempts ?? 0
+      max: event.maxAttempts ?? 0,
+      retry: Math.max(1, (event.attempt ?? 1) - 1),
+      retryMax: Math.max(1, (event.maxAttempts ?? 1) - 1)
     })
+    const reason = compactGraphGateFailureSummary(event.failureSummary)
+    return reason && (event.phase === 'retrying' || event.phase === 'failed')
+      ? `${base} · ${i18n.t('common:graphCreateFailureReason', { reason })}`
+      : base
   }
   return event.message?.trim() || ''
 }

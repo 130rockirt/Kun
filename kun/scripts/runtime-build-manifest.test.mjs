@@ -17,11 +17,31 @@ test('runtime build identity is stable for identical output and changes with emi
     const second = await computeRuntimeBuildId(root)
     assert.equal(second, first)
 
+    await writeFile(join(root, 'a.js'), 'export const a = 1\r\n', 'utf8')
+    assert.equal(
+      await computeRuntimeBuildId(root),
+      first,
+      'platform-native CRLF/LF output must share one build identity'
+    )
+
     await writeFile(join(root, 'b.js'), 'export const b = 3\n', 'utf8')
     assert.notEqual(await computeRuntimeBuildId(root), first)
 
     const manifest = await writeRuntimeBuildManifest(root)
     assert.equal(manifest.buildId, await computeRuntimeBuildId(root))
+    assert.equal(
+      manifest.serviceVersion,
+      process.env.KUN_APP_VERSION || process.env.KUN_RELEASE_VERSION || '0.1.0'
+    )
+    assert.equal(
+      manifest.channel,
+      process.env.KUN_UPDATE_CHANNEL || process.env.RELEASE_CHANNEL || 'stable'
+    )
+    assert.equal(
+      manifest.artifactVersion,
+      process.env.KUN_ARTIFACT_VERSION || manifest.serviceVersion
+    )
+    assert.equal(manifest.nodeVersion, process.versions.node)
     assert.deepEqual(
       JSON.parse(await readFile(join(root, 'runtime-build.json'), 'utf8')),
       manifest

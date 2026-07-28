@@ -6,7 +6,10 @@ import type {
   GraphNodeStatus,
   GraphPlanNode
 } from './graph-types'
-import { graphNodeLiveness } from './graph-liveness'
+import {
+  graphLivenessIsProcessing,
+  graphNodeLiveness
+} from './graph-liveness'
 
 const NOW = Date.parse('2026-07-28T00:01:00.000Z')
 
@@ -98,6 +101,21 @@ describe('Graph node liveness projection', () => {
     expect(graphNodeLiveness(projection(status), {}, NOW).kind).toBe(kind)
   })
 
+  it.each([
+    ['running', true],
+    ['submitted', true],
+    ['reviewing', true],
+    ['repair_required', true],
+    ['blocked', false],
+    ['queued', false],
+    ['accepted', false],
+    ['failed', false]
+  ] as const)('treats %s processing state as %s', (status, processing) => {
+    expect(graphLivenessIsProcessing(
+      graphNodeLiveness(projection(status), {}, NOW)
+    )).toBe(processing)
+  })
+
   it('surfaces the second attempt explicitly', () => {
     const live = graphNodeLiveness(
       projection('running', [attempt(1), attempt(2, 'child_2')]),
@@ -122,6 +140,19 @@ describe('Graph node liveness projection', () => {
       lastActivityAgeMs: 40_000,
       elapsedMs: 60_000
     })
+  })
+
+  it('does not classify a running child waiting for human input as processing', () => {
+    const waitingChild = child('running', '2026-07-28T00:00:50.000Z')
+    waitingChild.activity!.phase = 'waiting'
+    const live = graphNodeLiveness(
+      projection('running', [attempt(1)]),
+      { child_1: waitingChild },
+      NOW
+    )
+
+    expect(live.kind).toBe('waiting_human')
+    expect(graphLivenessIsProcessing(live)).toBe(false)
   })
 
   it('lets terminal node state override stale running child activity', () => {

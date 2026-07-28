@@ -11,6 +11,7 @@ import {
   publishRuntimeDiscovery,
   removeRuntimeDiscovery
 } from './runtime-discovery.js'
+import { KUN_VERSION } from '../version.js'
 import { ThreadEventStreamRegistry } from './thread-event-stream-registry.js'
 import { FileAttachmentStore, type AttachmentStore } from '../attachments/attachment-store.js'
 import { InMemoryApprovalGate } from '../adapters/in-memory-approval-gate.js'
@@ -1538,7 +1539,7 @@ export async function createKunServeRuntime(
 	    capability !== 'media' && capability !== 'jobs')
 	  const extensionValidation = {
 	    compatibility: {
-	      kunVersion: '0.1.0',
+	      kunVersion: KUN_VERSION,
 	      supportedManifestVersions: [CURRENT_MANIFEST_VERSION],
 	      supportedApiVersions: SUPPORTED_EXTENSION_API_VERSIONS,
 	      capabilitiesByApiVersion: Object.fromEntries(

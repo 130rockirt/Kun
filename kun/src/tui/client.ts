@@ -15,6 +15,7 @@ import {
   CreateThreadRequest,
   DeleteThreadResponse,
   ForkThreadRequest,
+  GraphRunStatusSchema,
   GraphRunV1Schema,
   ListThreadsResponse,
   ModelConnectionConnectRequestSchema,
@@ -314,8 +315,24 @@ const GraphAvailabilityResponse = z.object({
   enabled: z.boolean()
 }).passthrough()
 
+const GraphRunSummary = z.object({
+  id: z.string().min(1),
+  threadId: z.string().min(1),
+  projectId: z.string().min(1),
+  sourceTurnId: z.string().min(1),
+  status: GraphRunStatusSchema,
+  currentRevision: z.number().int().nonnegative(),
+  lastEventSeq: z.number().int().nonnegative(),
+  title: z.string(),
+  goal: z.string(),
+  nodeCount: z.number().int().nonnegative(),
+  createdAt: z.string(),
+  updatedAt: z.string()
+})
+
 const GraphRunsResponse = z.object({
-  runs: z.array(GraphRunV1Schema)
+  runs: z.array(GraphRunSummary),
+  nextCursor: z.string().optional()
 })
 
 export type ThreadDetail = z.infer<typeof ThreadDetailResponse>
@@ -1008,10 +1025,29 @@ export class KunTuiClient {
   }
 
   async listGraphRuns(threadId: string) {
-    return (await this.request(
-      `/v1/graphs?thread_id=${encodeURIComponent(threadId)}`,
-      GraphRunsResponse
-    )).runs
+    const summaries: z.infer<typeof GraphRunSummary>[] = []
+    const seenCursors = new Set<string>()
+    let cursor: string | undefined
+    do {
+      const page = await this.request(
+        `/v1/graphs?thread_id=${encodeURIComponent(threadId)}&limit=100${
+          cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''
+        }`,
+        GraphRunsResponse
+      )
+      summaries.push(...page.runs)
+      cursor = page.nextCursor
+      if (cursor && seenCursors.has(cursor)) {
+        throw new Error('Kun runtime repeated a Graph list cursor')
+      }
+      if (cursor) seenCursors.add(cursor)
+    } while (cursor)
+    const selected = summaries.sort((left, right) =>
+      Number(isTerminalGraphStatus(left.status)) - Number(isTerminalGraphStatus(right.status)) ||
+      right.updatedAt.localeCompare(left.updatedAt) ||
+      left.id.localeCompare(right.id)
+    )[0]
+    return selected ? [await this.getGraphRun(selected.id)] : []
   }
 
   getGraphRun(runId: string) {
@@ -1245,6 +1281,10 @@ export class KunTuiClient {
     if (!headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
     return headers
   }
+}
+
+function isTerminalGraphStatus(status: z.infer<typeof GraphRunStatusSchema>): boolean {
+  return status === 'completed' || status === 'failed' || status === 'cancelled'
 }
 
 async function responseError(response: Response, path: string, runtimeToken = ''): Promise<TuiClientError> {

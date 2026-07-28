@@ -4,9 +4,10 @@ import { join } from 'node:path'
 import { z } from 'zod'
 import { atomicWriteFile } from '../adapters/file/atomic-write.js'
 import { RuntimeBuildIdSchema } from '../contracts/runtime-info.js'
+import { KUN_VERSION } from '../version.js'
 
 export const RUNTIME_DISCOVERY_VERSION = 2 as const
-export const KUN_SERVICE_VERSION = '0.1.0'
+export const KUN_SERVICE_VERSION = KUN_VERSION
 export const RUNTIME_DISCOVERY_FILENAME = 'runtime.json'
 const RUNTIME_DISCOVERY_LOCK_FILENAME = '.runtime-discovery.lock'
 const RUNTIME_START_LOCK_FILENAME = '.runtime-start.lock'

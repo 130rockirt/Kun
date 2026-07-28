@@ -19,6 +19,7 @@ import { sanitizeTerminalText } from './layout.js'
 import type { TuiOptions } from './options.js'
 import {
   parseSgrMouseEvent,
+  GraphBoardDialog,
   imagePasteShortcutLabel,
   PermissionDialog,
   PiTuiApplication,
@@ -246,9 +247,245 @@ describe('PiTuiApplication command overlays', () => {
     expect(progress).toContain('GRAPH')
     expect(progress).toContain('Test graph')
     expect(progress).toContain('agents')
+    expect(progress).toContain('/graph status')
     expect(visibleWidth(progress)).toBeLessThanOrEqual(80)
-    expect(renderGraphProgressRow(state, 36)).not.toHaveLength(0)
+    expect(renderGraphProgressRow(state, 36)).toContain('/graph status')
     expect(visibleWidth(renderGraphProgressRow(state, 36))).toBeLessThanOrEqual(36)
+  })
+
+  it('renders a responsive Graph board and drills into the selected worker', () => {
+    const controller = new TuiController({} as KunTuiClient, options, runtime)
+    const projection = projectThreadSnapshot(detail())
+    projection.childRuns = [{
+      childId: 'child_research',
+      parentTurnId: 'turn_source',
+      label: 'Research',
+      prompt: 'Inspect the relevant code.',
+      profile: 'profile_1',
+      status: 'running',
+      startedAt: '2026-07-26T00:00:00.000Z',
+      updatedAt: '2026-07-26T00:00:04.000Z'
+    }]
+    const run = testTuiGraphRun({ threadId: projection.thread.id })
+    const state = {
+      ...controller.state,
+      projection,
+      graphRuns: [run],
+      graphBoard: { runId: run.id }
+    }
+    const openWorker = vi.fn()
+    const dialog = new GraphBoardDialog({
+      tui: { requestRender: vi.fn() } as never,
+      controller,
+      state,
+      runId: run.id,
+      terminalRows: () => 36,
+      close: vi.fn(),
+      openWorker
+    })
+
+    const wide = sanitizeTerminalText(dialog.render(120).join('\n'))
+    expect(wide).toContain('GRAPH · running')
+    expect(wide).toContain('research ─control→ finish')
+    expect(wide).toContain('Node research')
+    expect(wide).toContain('Researcher (profile_1)')
+
+    dialog.handleInput('\r')
+    expect(openWorker).toHaveBeenCalledWith(run.id, 'research', 'child_research')
+
+    dialog.handleInput('\x1b[B')
+    const narrow = sanitizeTerminalText(dialog.render(72).join('\n'))
+    expect(dialog.selectedNodeId()).toBe('finish')
+    expect(narrow).toContain('Phase 1 · Implementation')
+    expect(narrow).toContain('Waiting for research.')
+    expect(narrow.split('\n').every((line) => visibleWidth(line) <= 72)).toBe(true)
+  })
+
+  it('keeps Graph inline until an opt-in click opens the board and mandatory input temporarily preempts it', async () => {
+    const current = detail()
+    const run = testTuiGraphRun({ threadId: current.id })
+    const child: ThreadDetail = {
+      ...detail(),
+      id: 'child_research',
+      title: 'Graph worker · Research',
+      relation: 'side',
+      parentThreadId: current.id,
+      status: 'running'
+    }
+    let parentOnEvent: ((event: RuntimeEvent) => void) | undefined
+    let childSubscriptionAborted = false
+    const client = {
+      graphAvailability: vi.fn(async () => ({ enabled: true })),
+      listGraphRuns: vi.fn(async () => [run]),
+      listThreads: vi.fn(async () => [current]),
+      getThread: vi.fn(async (threadId: string) => threadId === child.id ? child : current),
+      delegationDiagnostics: vi.fn(async (threadId: string) => ({
+        enabled: true,
+        active: threadId === current.id ? 1 : 0,
+        aggregates: [],
+        childRuns: threadId === current.id
+          ? [{
+              id: child.id,
+              parentThreadId: current.id,
+              parentTurnId: 'turn_source',
+              label: 'Research',
+              prompt: 'Inspect the relevant code.',
+              profile: 'profile_1',
+              status: 'running' as const,
+              createdAt: current.createdAt,
+              updatedAt: current.updatedAt
+            }]
+          : []
+      })),
+      subscribeThreadEvents: vi.fn(async (input: {
+        threadId: string
+        signal: AbortSignal
+        onEvent: (event: RuntimeEvent) => void
+        onConnection: (state: 'connecting' | 'connected') => void
+      }) => {
+        if (input.threadId === current.id) parentOnEvent = input.onEvent
+        input.onConnection('connected')
+        await new Promise<void>((resolve) =>
+          input.signal.addEventListener('abort', () => {
+            if (input.threadId === child.id) childSubscriptionAborted = true
+            resolve()
+          }, { once: true }))
+      }),
+      skills: vi.fn(async () => ({ enabled: true, roots: [], skills: [], validationErrors: [] }))
+    } as unknown as KunTuiClient
+    const controller = new TuiController(client, options, runtime)
+    await controller.start()
+
+    const input = Object.assign(new EventEmitter(), {
+      isRaw: false,
+      setRawMode: vi.fn(),
+      setEncoding: vi.fn(),
+      resume: vi.fn(),
+      pause: vi.fn()
+    }) as unknown as TerminalInput
+    let outputText = ''
+    const terminalRows = 32
+    const output = Object.assign(new EventEmitter(), {
+      columns: 110,
+      rows: terminalRows,
+      write: (chunk: string) => { outputText += chunk }
+    }) as unknown as TerminalOutput
+    const app = new PiTuiApplication(controller, input, output)
+    const running = app.run()
+    try {
+      await waitFor(() => outputText.includes('/graph status'))
+      expect(controller.state.graphBoard).toBeUndefined()
+      expect(sanitizeTerminalText(outputText)).not.toContain('GRAPH · running')
+
+      type(input, '/mouse on')
+      await waitFor(() => outputText.includes('Mouse clicks enabled'))
+      const internals = app as unknown as {
+        root: { graphProgressAtTerminalRow: (row: number) => boolean }
+      }
+      const graphRow = Array.from(
+        { length: terminalRows },
+        (_, index) => index + 1
+      ).find((row) => internals.root.graphProgressAtTerminalRow(row))
+      expect(graphRow).toBeDefined()
+      input.emit('data', `\x1b[<0;2;${graphRow}M`)
+
+      await waitFor(() => controller.state.graphBoard?.runId === run.id)
+      await waitFor(() => sanitizeTerminalText(outputText).includes('GRAPH · running'))
+
+      const beforeWorker = outputText.length
+      input.emit('data', '\r')
+      await waitFor(() =>
+        sanitizeTerminalText(outputText.slice(beforeWorker)).includes('live child session'))
+      expect(client.getThread).toHaveBeenCalledWith(child.id)
+      const beforeWorkerClose = outputText.length
+      input.emit('data', '\x1b')
+      await waitFor(() =>
+        childSubscriptionAborted &&
+        sanitizeTerminalText(outputText.slice(beforeWorkerClose)).includes('Node research'))
+      expect(controller.state.graphBoard).toEqual({ runId: run.id })
+
+      const eventBase = {
+        timestamp: '2026-07-26T00:00:05.000Z',
+        threadId: current.id,
+        turnId: 'turn_gate'
+      }
+      const beforeApproval = outputText.length
+      parentOnEvent?.({
+        ...eventBase,
+        kind: 'approval_requested',
+        seq: 1,
+        approvalId: 'approval_graph',
+        toolName: 'bash',
+        status: 'pending',
+        summary: 'Run Graph validation'
+      })
+      await waitFor(() => sanitizeTerminalText(outputText.slice(beforeApproval)).includes('Approval required'))
+      expect(controller.state.graphBoard).toEqual({ runId: run.id })
+
+      const beforeResolve = outputText.length
+      parentOnEvent?.({
+        ...eventBase,
+        kind: 'approval_resolved',
+        seq: 2,
+        approvalId: 'approval_graph',
+        toolName: 'bash',
+        status: 'allowed',
+        summary: 'Run Graph validation'
+      })
+      await waitFor(() =>
+        sanitizeTerminalText(outputText.slice(beforeResolve)).includes('GRAPH · running'))
+
+      input.emit('data', '\x1b')
+      await waitFor(() => controller.state.graphBoard === undefined)
+    } finally {
+      controller.requestQuit()
+      await running
+      await app.stop()
+      await controller.stop()
+    }
+  })
+
+  it('keeps a startup Graph requirement in the composer when Graph is unavailable', async () => {
+    const client = {
+      graphAvailability: vi.fn(async () => ({ enabled: false })),
+      listThreads: vi.fn(async () => []),
+      skills: vi.fn(async () => ({ enabled: true, roots: [], skills: [], validationErrors: [] })),
+      startTurn: vi.fn()
+    } as unknown as KunTuiClient
+    const controller = new TuiController(
+      client,
+      { ...options, continueLatest: false },
+      runtime
+    )
+    await controller.start()
+
+    const input = Object.assign(new EventEmitter(), {
+      isRaw: false,
+      setRawMode: vi.fn(),
+      setEncoding: vi.fn(),
+      resume: vi.fn(),
+      pause: vi.fn()
+    }) as unknown as TerminalInput
+    let outputText = ''
+    const output = Object.assign(new EventEmitter(), {
+      columns: 90,
+      rows: 28,
+      write: (chunk: string) => { outputText += chunk }
+    }) as unknown as TerminalOutput
+    const app = new PiTuiApplication(controller, input, output)
+    const running = app.run()
+    try {
+      await expect(app.submitStartupGraphPrompt('保留这个 Graph 草稿')).resolves.toBe(false)
+      await waitFor(() => outputText.includes('保留这个 Graph 草稿'))
+      expect(controller.state.composerOrchestration).toBe('direct')
+      expect(client.startTurn).not.toHaveBeenCalled()
+      expect(controller.state.notification?.message).toContain('disabled')
+    } finally {
+      controller.requestQuit()
+      await running
+      await app.stop()
+      await controller.stop()
+    }
   })
 
   it('renders Thinking collapsed by default and expands its muted content on request', () => {

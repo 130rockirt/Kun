@@ -16,6 +16,7 @@ const { tmpdir } = require('node:os')
 const { dirname, join, resolve } = require('node:path')
 
 const CLI_HELP_SENTINEL = 'kun <command> [options]'
+const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/
 const CLI_ENTRY_RELATIVE = join(
   'app.asar.unpacked',
   'kun',
@@ -37,7 +38,8 @@ function inspectResources(resourcesDirectory) {
 
 function packagedCliInvocation(resourcesDirectory, {
   platform = process.platform,
-  commandPath
+  commandPath,
+  cliArgs = ['--help']
 } = {}) {
   const resources = inspectResources(resourcesDirectory)
   const appRoot = dirname(resources)
@@ -48,7 +50,7 @@ function packagedCliInvocation(resourcesDirectory, {
     if (!existsSync(launcher)) throw new Error(`Missing macOS Kun CLI command: ${launcher}`)
     return {
       command: launcher,
-      args: ['--help'],
+      args: [...cliArgs],
       options: { env: { ...process.env }, shell: false }
     }
   }
@@ -57,7 +59,7 @@ function packagedCliInvocation(resourcesDirectory, {
     inspectExecutable(launcher, 'Linux Kun product launcher')
     return {
       command: launcher,
-      args: ['--help'],
+      args: [...cliArgs],
       options: {
         env: { ...process.env, KUN_CLI_ENTRY: '1' },
         shell: false
@@ -74,7 +76,7 @@ function packagedCliInvocation(resourcesDirectory, {
     )
     return {
       command,
-      args: ['/d', '/s', '/c', `""${launcher}" --help"`],
+      args: ['/d', '/s', '/c', `""${launcher}" ${cliArgs.join(' ')}"`],
       options: { env: { ...process.env }, shell: false }
     }
   }
@@ -91,19 +93,34 @@ function runPackagedCliSmoke(resourcesDirectory, options = {}) {
       commandPath = join(temporaryDirectory, 'kun')
       symlinkSync(join(resolve(resourcesDirectory), 'bin', 'kun'), commandPath)
     }
-    const invocation = packagedCliInvocation(resourcesDirectory, { platform, commandPath })
-    const result = (options.spawnSyncCommand ?? spawnSync)(
-      invocation.command,
-      invocation.args,
-      {
-        ...invocation.options,
-        encoding: 'utf8',
-        windowsHide: true,
-        timeout: 30_000
-      }
-    )
-    assertSuccessfulHelp(result, `${platform} packaged Kun CLI`)
-    return result.stdout
+    const run = (cliArgs) => {
+      const invocation = packagedCliInvocation(resourcesDirectory, {
+        platform,
+        commandPath,
+        cliArgs
+      })
+      return (options.spawnSyncCommand ?? spawnSync)(
+        invocation.command,
+        invocation.args,
+        {
+          ...invocation.options,
+          encoding: 'utf8',
+          windowsHide: true,
+          timeout: 30_000
+        }
+      )
+    }
+    const help = run(['--help'])
+    assertSuccessfulHelp(help, `${platform} packaged Kun CLI`)
+    if (options.expectedVersion) {
+      const version = run(['--version'])
+      assertSuccessfulVersion(
+        version,
+        `${platform} packaged Kun CLI`,
+        options.expectedVersion
+      )
+    }
+    return help.stdout
   } finally {
     if (temporaryDirectory) {
       rmSync(temporaryDirectory, { recursive: true, force: true })
@@ -138,7 +155,8 @@ function runDebCliSmoke(debPath, options = {}) {
       findExtractedResources(extractionDirectory),
       {
         platform: 'linux',
-        spawnSyncCommand: options.spawnSyncCommand
+        spawnSyncCommand: options.spawnSyncCommand,
+        expectedVersion: options.expectedVersion
       }
     )
   } finally {
@@ -184,6 +202,22 @@ function assertSuccessfulHelp(result, label) {
   }
 }
 
+function assertSuccessfulVersion(result, label, expectedVersion) {
+  if (!SEMVER.test(expectedVersion)) {
+    throw new Error(`Invalid expected Kun version: ${expectedVersion}`)
+  }
+  if (result.error || result.status !== 0) {
+    throw new Error(
+      `${label} --version failed: ${result.error?.message ?? result.stderr ?? `exit ${result.status}`}`
+    )
+  }
+  if (String(result.stdout).trim() !== `kun ${expectedVersion}`) {
+    throw new Error(
+      `${label} reported ${JSON.stringify(String(result.stdout).trim())}, expected "kun ${expectedVersion}".`
+    )
+  }
+}
+
 function inspectExecutable(path, label) {
   inspectRegularFile(path, label)
   if ((lstatSync(path).mode & 0o111) === 0) {
@@ -203,7 +237,7 @@ function parseArgs(argv) {
   const options = {}
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index]
-    if (argument === '--resources' || argument === '--deb') {
+    if (argument === '--resources' || argument === '--deb' || argument === '--expected-version') {
       const value = argv[index + 1]
       if (!value || value.startsWith('--')) throw new Error(`Missing value for ${argument}`)
       options[argument.slice(2)] = value
@@ -213,14 +247,23 @@ function parseArgs(argv) {
     throw new Error(`Unknown argument: ${argument}`)
   }
   if (!options.resources) throw new Error('--resources is required')
+  if (options['expected-version'] && !SEMVER.test(options['expected-version'])) {
+    throw new Error(`Invalid expected Kun version: ${options['expected-version']}`)
+  }
+  if (options['expected-version']) {
+    options.expectedVersion = options['expected-version']
+    delete options['expected-version']
+  }
   return options
 }
 
 if (require.main === module) {
   try {
     const options = parseArgs(process.argv.slice(2))
-    runPackagedCliSmoke(options.resources)
-    if (options.deb) runDebCliSmoke(options.deb)
+    runPackagedCliSmoke(options.resources, { expectedVersion: options.expectedVersion })
+    if (options.deb) {
+      runDebCliSmoke(options.deb, { expectedVersion: options.expectedVersion })
+    }
     process.stdout.write(
       `Packaged Kun CLI smoke OK: ${resolve(options.resources)}${options.deb ? `; ${resolve(options.deb)}` : ''}\n`
     )

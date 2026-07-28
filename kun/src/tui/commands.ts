@@ -54,7 +54,7 @@ export type TuiCommand =
   | { kind: 'diff' }
   | { kind: 'terminal' }
   | { kind: 'plan'; action?: string }
-  | { kind: 'graph'; action?: string }
+  | { kind: 'graph'; action?: string; prompt?: string }
   | { kind: 'agent' }
   | { kind: 'goal'; action?: string }
   | { kind: 'skills'; query?: string }
@@ -65,6 +65,7 @@ export type TuiCommand =
   | { kind: 'context' }
   | { kind: 'capabilities' }
   | { kind: 'queue'; action?: string }
+  | { kind: 'update'; confirm: boolean }
   | { kind: 'quit' }
   | { kind: 'usage'; usage: string }
   | { kind: 'unknown'; name: string }
@@ -119,8 +120,9 @@ export const TUI_SLASH_COMMANDS: SlashCommand[] = [
   { name: 'console', description: 'Show recent shared-runtime log output' },
   { name: 'diff', description: 'Inspect the current workspace Git diff' },
   { name: 'terminal', description: 'Open an interactive shell and return to Kun on exit' },
+  { name: 'update', description: 'Check or install the shared stable Kun release', argumentHint: '[yes]' },
   { name: 'plan', description: 'Enter plan mode for the next turn', argumentHint: '[status|tasks|off]' },
-  { name: 'graph', description: 'Enter Graph mode, inspect its run, or return to Direct', argumentHint: '[status|off]' },
+  { name: 'graph', description: 'Start a Graph requirement, inspect its run, or return to Direct', argumentHint: '[status|off|requirement]' },
   { name: 'agent', description: 'Enter normal agent mode' },
   { name: 'goal', description: 'View or manage the persistent goal', argumentHint: '[objective|pause|resume|clear]' },
   { name: 'skills', description: 'Browse workspace-visible skills', argumentHint: '[search]' },
@@ -168,7 +170,7 @@ export const TUI_COMMAND_DEFINITIONS: readonly TuiCommandDefinition[] = [
   { id: 'permission', title: 'Change permissions', category: 'Session', slash: 'permission', available: true },
   { id: 'mode', title: 'Choose Agent, Plan, or Goal mode', category: 'Session', keyAction: 'agent_list', available: true },
   { id: 'plan', title: 'Enter Plan mode', category: 'Session', slash: 'plan', available: true },
-  { id: 'graph', title: 'Enter or inspect Graph mode', category: 'Session', slash: 'graph', available: true },
+  { id: 'graph', title: 'Open Graph board', category: 'Session', slash: 'graph', available: true },
   { id: 'agent', title: 'Enter Agent mode', category: 'Session', slash: 'agent', available: true },
   { id: 'subagents', title: 'Manage subagent sessions', category: 'Session', slash: 'subagents', available: true },
   { id: 'tasks', title: 'Manage plan tasks', category: 'Session', slash: 'tasks', available: true },
@@ -183,6 +185,7 @@ export const TUI_COMMAND_DEFINITIONS: readonly TuiCommandDefinition[] = [
   { id: 'console', title: 'Show runtime console', category: 'Workspace', slash: 'console', keyAction: 'console_toggle', available: true },
   { id: 'diff', title: 'Show workspace diff', category: 'Workspace', slash: 'diff', keyAction: 'diff_toggle', available: true },
   { id: 'terminal', title: 'Open interactive terminal', category: 'Workspace', slash: 'terminal', keyAction: 'terminal_toggle', available: true },
+  { id: 'update', title: 'Update standalone Kun TUI', category: 'Global', slash: 'update', available: true },
   { id: 'goal', title: 'Manage persistent goal', category: 'Session', slash: 'goal', available: true },
   { id: 'queue', title: 'Show queued guidance', category: 'Session', slash: 'queue', available: true },
   { id: 'skills', title: 'Browse skills', category: 'Workspace', slash: 'skills', available: true },
@@ -264,8 +267,15 @@ export function parseTuiCommand(text: string): TuiCommand | null {
     case 'console': return { kind: 'console' }
     case 'diff': return { kind: 'diff' }
     case 'terminal': return { kind: 'terminal' }
+    case 'update': return { kind: 'update', confirm: rest.toLowerCase() === 'yes' }
     case 'plan': return { kind: 'plan', ...(rest ? { action: rest } : {}) }
-    case 'graph': return { kind: 'graph', ...(rest ? { action: rest } : {}) }
+    case 'graph': {
+      if (!rest) return { kind: 'graph' }
+      const action = rest.toLowerCase()
+      return GRAPH_COMMAND_ACTIONS.has(action)
+        ? { kind: 'graph', action }
+        : { kind: 'graph', prompt: rest }
+    }
     case 'agent': return { kind: 'agent' }
     case 'goal': return { kind: 'goal', ...(rest ? { action: rest } : {}) }
     case 'skills': return { kind: 'skills', ...(rest ? { query: rest } : {}) }
@@ -293,3 +303,13 @@ export function parseTuiCommand(text: string): TuiCommand | null {
     }
   }
 }
+
+const GRAPH_COMMAND_ACTIONS = new Set([
+  'status',
+  'list',
+  'off',
+  'direct',
+  'agent',
+  'on',
+  'start'
+])

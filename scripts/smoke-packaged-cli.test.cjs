@@ -52,7 +52,7 @@ function packagedFixture(t, platform) {
 function writeHelpExecutable(path) {
   writeFileSync(
     path,
-    `#!/usr/bin/env node\nprocess.stdout.write(${JSON.stringify(`${CLI_HELP_SENTINEL}\n`)})\n`
+    `#!/usr/bin/env node\nprocess.stdout.write(process.argv.includes('--version') ? 'kun 1.2.3\\n' : ${JSON.stringify(`${CLI_HELP_SENTINEL}\n`)})\n`
   )
   chmodSync(path, 0o755)
 }
@@ -61,10 +61,22 @@ test('executes packaged macOS and Linux CLI launchers and verifies their help ba
   skip: process.platform === 'win32' && 'requires POSIX executable modes and symlinks'
 }, (t) => {
   const mac = packagedFixture(t, 'darwin')
-  assert.match(runPackagedCliSmoke(mac.resources, { platform: 'darwin' }), /kun <command>/)
+  assert.match(
+    runPackagedCliSmoke(mac.resources, {
+      platform: 'darwin',
+      expectedVersion: '1.2.3'
+    }),
+    /kun <command>/
+  )
 
   const linux = packagedFixture(t, 'linux')
-  assert.match(runPackagedCliSmoke(linux.resources, { platform: 'linux' }), /kun <command>/)
+  assert.match(
+    runPackagedCliSmoke(linux.resources, {
+      platform: 'linux',
+      expectedVersion: '1.2.3'
+    }),
+    /kun <command>/
+  )
 })
 
 test('builds a shell-free Windows cmd invocation relative to packaged resources', (t) => {
@@ -85,6 +97,7 @@ test('extracts a deb and executes its packaged product launcher in CLI mode', (t
 
   const output = runDebCliSmoke(deb, {
     platform: 'linux',
+    expectedVersion: '1.2.3',
     spawnSyncCommand(command, args, options) {
       calls.push({ command, args, options })
       if (command === 'dpkg-deb') {
@@ -103,7 +116,11 @@ test('extracts a deb and executes its packaged product launcher in CLI mode', (t
         writeHelpExecutable(join(extractedRoot, 'opt', 'Kun', 'kun-gui'))
         return { status: 0, stdout: '', stderr: '' }
       }
-      return { status: 0, stdout: `${CLI_HELP_SENTINEL}\n`, stderr: '' }
+      return {
+        status: 0,
+        stdout: args.includes('--version') ? 'kun 1.2.3\n' : `${CLI_HELP_SENTINEL}\n`,
+        stderr: ''
+      }
     }
   })
 
@@ -111,6 +128,7 @@ test('extracts a deb and executes its packaged product launcher in CLI mode', (t
   assert.equal(calls[0].command, 'dpkg-deb')
   assert.equal(calls[1].options.env.KUN_CLI_ENTRY, '1')
   assert.equal(calls[1].options.shell, false)
+  assert.deepEqual(calls[2].args, ['--version'])
 })
 
 test('requires explicit resources and rejects unknown arguments', () => {
@@ -118,6 +136,14 @@ test('requires explicit resources and rejects unknown arguments', () => {
     parseArgs(['--resources', '/app/resources', '--deb', '/release/Kun.deb']),
     { resources: '/app/resources', deb: '/release/Kun.deb' }
   )
+  assert.deepEqual(
+    parseArgs(['--resources', '/app/resources', '--expected-version', '1.2.3']),
+    { resources: '/app/resources', expectedVersion: '1.2.3' }
+  )
   assert.throws(() => parseArgs([]), /--resources is required/)
+  assert.throws(
+    () => parseArgs(['--resources', '/app/resources', '--expected-version', 'daily']),
+    /Invalid expected Kun version/
+  )
   assert.throws(() => parseArgs(['--wat']), /Unknown argument/)
 })

@@ -15,6 +15,7 @@ import type {
 } from './compat-request-codecs.js'
 import { normalizeToolSpecs } from './compat-request-builder.js'
 import { IncrementalSseFrameBuffer } from './incremental-sse-frame-buffer.js'
+import { KUN_VERSION } from '../../version.js'
 
 const DEFAULT_CODE_ASSIST_BASE_URL = 'https://cloudcode-pa.googleapis.com'
 const GOOGLE_OAUTH_TOKEN_URL = 'https://oauth2.googleapis.com/token'
@@ -270,7 +271,7 @@ export class GeminiCodeAssistModelClient implements ModelClient {
           headers: {
             Authorization: `Bearer ${accessToken}`,
             'Content-Type': 'application/json',
-            'User-Agent': 'Kun/0.1.0 (gemini-code-assist)'
+            'User-Agent': `Kun/${KUN_VERSION} (gemini-code-assist)`
           },
           body: JSON.stringify(body),
           signal

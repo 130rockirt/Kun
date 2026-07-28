@@ -23,6 +23,7 @@ import {
   planFeatureNameFromRequest
 } from '../plan/plan-path'
 import { extractPlanMetadataFromBlock } from '../plan/plan-tool'
+import type { PlanBuildOrchestration } from '../plan/plan-build'
 import type { RightPanelMode } from './chat/WorkbenchTopBar'
 import { BUILTIN_RIGHT_PANEL_IDS } from '../extensions/contribution-ids'
 import type { GuiPlanMessageContext, SendMessageOverrides } from '../store/chat-store-types'
@@ -306,20 +307,32 @@ export function useWorkbenchPlanController({
     if (shouldOpen) openGuiPlanPanel()
   }, [openGuiPlanPanel])
 
-  const buildGuiPlan = async (): Promise<void> => {
+  const buildGuiPlan = async (orchestration: PlanBuildOrchestration): Promise<void> => {
     const snapshot = useGuiPlanStore.getState()
     const plan = snapshot.activePlan
     if (!plan) return
-    if (useChatStore.getState().busy) {
+    const chatState = useChatStore.getState()
+    if (chatState.runtimeConnection !== 'ready') {
+      setError(t('runtimeActionNeedsConnection'))
+      return
+    }
+    if (chatState.busy) {
       setError(t('composerQueuePlaceholder'))
+      return
+    }
+    if (snapshot.saveStatus === 'saving') return
+    if (orchestration === 'graph' && !chatState.graphEnabled) {
+      setError(t('graphModeDisabledHint'))
       return
     }
     const saved = await savePlanContentToDisk(plan, snapshot.content)
     if (!saved) return
     setComposerMode('agent')
     const prompt = buildPlanBuildPrompt(plan.relativePath)
+    const labelKey = orchestration === 'graph' ? 'planBuildGraph' : 'planBuildDirect'
     const sent = await sendMessage(prompt, 'agent', {
-      displayText: `${t('planBuild')}: ${plan.relativePath}`
+      displayText: `${t(labelKey)}: ${plan.relativePath}`,
+      orchestration
     })
     if (sent) {
       await onPlanBuildStarted?.(plan)

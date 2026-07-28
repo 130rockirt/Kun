@@ -1,6 +1,9 @@
 import { MarkerType, type Edge, type Node } from '@xyflow/react'
 import { ExternalLink } from 'lucide-react'
-import { graphNodeLiveness } from '../../graph/graph-liveness'
+import {
+  graphLivenessIsProcessing,
+  graphNodeLiveness
+} from '../../graph/graph-liveness'
 import type {
   GraphChildRuntime,
   GraphPlanNode,
@@ -11,7 +14,7 @@ import {
   SubagentLiveAvatar,
   SubagentLivenessLane
 } from '../subagents/SubagentLiveness'
-import { StatusPill } from './graph-panel-shared'
+import { StatusPill, terminalRunStatuses } from './graph-panel-shared'
 
 export function graphElements(
   run: GraphRun,
@@ -36,6 +39,21 @@ export function graphElements(
   )
   const critical = criticalPathNodeIds(run)
   const rows = new Map<string, number>()
+  const livenessByNodeId = new Map(plan.nodes.map((node) => {
+    const projection = run.nodes[node.id]
+    return [
+      node.id,
+      projection
+        ? graphNodeLiveness(projection, options.childRuns ?? {}, options.now)
+        : null
+    ] as const
+  }))
+  const runTerminal = terminalRunStatuses.has(run.status)
+  const processingNodeIds = new Set(plan.nodes
+    .filter((node) => (
+      !runTerminal && graphLivenessIsProcessing(livenessByNodeId.get(node.id))
+    ))
+    .map((node) => node.id))
   const nodes: Node[] = plan.nodes.map((node) => {
     const phase = phaseIndex.get(node.phaseId) ?? 0
     const row = rows.get(node.phaseId) ?? 0
@@ -43,9 +61,7 @@ export function graphElements(
     const projection = run.nodes[node.id]
     const status = projection?.status ?? 'pending'
     const attempt = projection?.attempts.at(-1)
-    const liveness = projection
-      ? graphNodeLiveness(projection, options.childRuns ?? {}, options.now)
-      : null
+    const liveness = livenessByNodeId.get(node.id) ?? null
     const selected = selectedNodeId === node.id
     const phaseTitle = plan.phases.find((item) => item.id === node.phaseId)?.title ?? node.phaseId
     const effectiveAssignment = attempt?.assignment.name ?? plannedAssignmentLabel(node)
@@ -174,6 +190,17 @@ export function graphElements(
   const edges: Edge[] = plan.edges.map((edge) => {
     const isLoop = loopTargets.has(`${edge.from}->${edge.to}`)
     const isCritical = critical.has(edge.from) && critical.has(edge.to) && !isLoop
+    const targetProcessing = processingNodeIds.has(edge.to)
+    const stroke = isLoop
+      ? '#f59e0b'
+      : edge.kind === 'message'
+        ? '#8b5cf6'
+        : edge.kind === 'data'
+          ? '#0ea5e9'
+          : isCritical
+            ? '#f59e0b'
+            : '#94a3b8'
+    const strokeWidth = isCritical || isLoop ? 2 : 1.25
     return {
       id: edge.id,
       source: edge.from,
@@ -181,19 +208,13 @@ export function graphElements(
       type: 'smoothstep',
       label: edge.label ??
         (isLoop ? 'loop' : edge.kind === 'data' ? edge.artifactName : undefined),
-      animated: !reducedMotion && run.nodes[edge.from]?.status === 'running',
+      animated: !reducedMotion && targetProcessing,
+      className: targetProcessing ? 'graph-flow-edge-processing' : undefined,
       interactionWidth: 18,
       style: {
-        stroke: isLoop
-          ? '#f59e0b'
-          : edge.kind === 'message'
-            ? '#8b5cf6'
-            : edge.kind === 'data'
-              ? '#0ea5e9'
-              : isCritical
-                ? '#f59e0b'
-                : '#94a3b8',
-        strokeWidth: isCritical || isLoop ? 2 : 1.25,
+        stroke,
+        strokeWidth: targetProcessing ? Math.max(strokeWidth, 1.8) : strokeWidth,
+        opacity: targetProcessing ? 1 : 0.88,
         strokeDasharray: edge.kind === 'message' || isLoop ? '5 5' : undefined
       },
       markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14 }

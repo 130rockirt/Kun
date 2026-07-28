@@ -1,6 +1,8 @@
 import type {
+  GraphEdgeV1,
   GraphNodeProjectionV1,
   GraphNodeStatus,
+  GraphNodeV1,
   GraphRunStatus,
   GraphRunV1
 } from '../contracts/graph.js'
@@ -43,6 +45,11 @@ const NODE_MARKERS: Record<GraphNodeStatus, string> = {
   superseded: '≈'
 }
 
+export const TUI_GRAPH_TOPOLOGY_MIN_WIDTH = 96
+export const TUI_GRAPH_TOPOLOGY_MIN_HEIGHT = 20
+export const TUI_GRAPH_TOPOLOGY_MAX_NODES = 24
+export const TUI_GRAPH_TOPOLOGY_MAX_PHASES = 6
+
 export type TuiGraphProgress = {
   runId: string
   title: string
@@ -53,6 +60,55 @@ export type TuiGraphProgress = {
   active: number
   activeAgents: number
   total: number
+}
+
+export type TuiGraphBoardEdge = {
+  id: string
+  kind: GraphEdgeV1['kind']
+  from: string
+  to: string
+  label: string
+}
+
+export type TuiGraphBoardNode = {
+  id: string
+  phaseId: string
+  phaseTitle: string
+  phaseOrder: number
+  title: string
+  objective: string
+  kind: GraphNodeV1['kind']
+  status: GraphNodeStatus
+  marker: string
+  assignment: string
+  attemptNumber?: number
+  attemptStatus?: string
+  childThreadId?: string
+  dependencies: TuiGraphBoardEdge[]
+  dependents: TuiGraphBoardEdge[]
+  lastTransitionReason?: string
+  progressSummary?: string
+}
+
+export type TuiGraphBoardPhase = {
+  id: string
+  title: string
+  order: number
+  nodes: TuiGraphBoardNode[]
+}
+
+export type TuiGraphBoardProjection = {
+  runId: string
+  title: string
+  goal: string
+  status: GraphRunStatus
+  revision: number
+  lastEventSeq: number
+  progress: TuiGraphProgress
+  phases: TuiGraphBoardPhase[]
+  nodes: TuiGraphBoardNode[]
+  selectedNodeId: string
+  renderMode: 'topology' | 'list'
 }
 
 export function isTerminalGraphRun(run: GraphRunV1): boolean {
@@ -146,6 +202,110 @@ export function renderTuiGraphStatus(
   return lines
 }
 
+export function projectTuiGraphBoard(
+  run: GraphRunV1,
+  input: {
+    selectedNodeId?: string
+    width?: number
+    height?: number
+  } = {}
+): TuiGraphBoardProjection {
+  const plan = currentPlan(run)
+  const phases = [...plan.phases].sort((left, right) =>
+    left.order - right.order || left.id.localeCompare(right.id)
+  )
+  const phaseById = new Map(phases.map((phase) => [phase.id, phase]))
+  const nodeOrder = new Map(plan.nodes.map((node, index) => [node.id, index]))
+  const incoming = new Map<string, TuiGraphBoardEdge[]>()
+  const outgoing = new Map<string, TuiGraphBoardEdge[]>()
+  for (const edge of plan.edges) {
+    const projected = graphBoardEdge(edge)
+    incoming.set(edge.to, [...(incoming.get(edge.to) ?? []), projected])
+    outgoing.set(edge.from, [...(outgoing.get(edge.from) ?? []), projected])
+  }
+  const nodes = plan.nodes.map((node) => {
+    const projection = run.nodes[node.id]
+    const status = projection?.status ?? 'pending'
+    const attempt = projection ? latestAttempt(projection) : undefined
+    const phase = phaseById.get(node.phaseId)
+    return {
+      id: node.id,
+      phaseId: node.phaseId,
+      phaseTitle: phase?.title ?? node.phaseId,
+      phaseOrder: phase?.order ?? Number.MAX_SAFE_INTEGER,
+      title: node.title,
+      objective: node.objective,
+      kind: node.kind,
+      status,
+      marker: NODE_MARKERS[status],
+      assignment: projection
+        ? graphNodeAssignmentLabel(projection)
+        : plannedAssignmentLabel(node.assignment),
+      ...(attempt ? {
+        attemptNumber: attempt.attemptNumber,
+        attemptStatus: attempt.status,
+        ...(attempt.childThreadId ? { childThreadId: attempt.childThreadId } : {})
+      } : {}),
+      dependencies: incoming.get(node.id) ?? [],
+      dependents: outgoing.get(node.id) ?? [],
+      ...(projection?.lastTransitionReason
+        ? { lastTransitionReason: projection.lastTransitionReason }
+        : {}),
+      ...(projection?.lastProgress?.summary
+        ? { progressSummary: projection.lastProgress.summary }
+        : {})
+    } satisfies TuiGraphBoardNode
+  }).sort((left, right) =>
+    left.phaseOrder - right.phaseOrder ||
+    (nodeOrder.get(left.id) ?? Number.MAX_SAFE_INTEGER) -
+      (nodeOrder.get(right.id) ?? Number.MAX_SAFE_INTEGER) ||
+    left.id.localeCompare(right.id)
+  )
+  const requested = input.selectedNodeId
+    ? nodes.find((node) => node.id === input.selectedNodeId)
+    : undefined
+  const selected = requested ??
+    nodes.find((node) => ACTIVE_NODE_STATUSES.has(node.status)) ??
+    nodes.find((node) => !SETTLED_NODE_STATUSES.has(node.status)) ??
+    nodes[0]!
+  const projectedPhases = phases.map((phase) => ({
+    id: phase.id,
+    title: phase.title,
+    order: phase.order,
+    nodes: nodes.filter((node) => node.phaseId === phase.id)
+  })).filter((phase) => phase.nodes.length > 0)
+  const width = input.width ?? 120
+  const height = input.height ?? 40
+  const renderMode = width >= TUI_GRAPH_TOPOLOGY_MIN_WIDTH &&
+    height >= TUI_GRAPH_TOPOLOGY_MIN_HEIGHT &&
+    nodes.length <= TUI_GRAPH_TOPOLOGY_MAX_NODES &&
+    projectedPhases.length <= TUI_GRAPH_TOPOLOGY_MAX_PHASES
+    ? 'topology'
+    : 'list'
+  return {
+    runId: run.id,
+    title: plan.title,
+    goal: plan.goal,
+    status: run.status,
+    revision: run.currentRevision,
+    lastEventSeq: run.lastEventSeq,
+    progress: summarizeTuiGraphRun(run),
+    phases: projectedPhases,
+    nodes,
+    selectedNodeId: selected.id,
+    renderMode
+  }
+}
+
+export function moveTuiGraphBoardSelection(
+  board: TuiGraphBoardProjection,
+  delta: number
+): string {
+  const current = Math.max(0, board.nodes.findIndex((node) => node.id === board.selectedNodeId))
+  const next = Math.max(0, Math.min(board.nodes.length - 1, current + delta))
+  return board.nodes[next]?.id ?? board.selectedNodeId
+}
+
 export function graphNodeAssignmentLabel(
   projection: GraphNodeProjectionV1
 ): string {
@@ -170,6 +330,17 @@ function latestAttempt(projection: GraphNodeProjectionV1) {
 function currentPlan(run: GraphRunV1) {
   return run.plans.find((plan) => plan.revision === run.currentRevision) ??
     run.plans.at(-1)!
+}
+
+function graphBoardEdge(edge: GraphEdgeV1): TuiGraphBoardEdge {
+  return {
+    id: edge.id,
+    kind: edge.kind,
+    from: edge.from,
+    to: edge.to,
+    label: edge.label?.trim() ||
+      (edge.kind === 'data' ? edge.artifactName : edge.kind)
+  }
 }
 
 function dependencyMap(

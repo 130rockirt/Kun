@@ -61,6 +61,31 @@
   z-index: 0;
 }
 
+.graph-flow .react-flow__edge.graph-flow-edge-processing .react-flow__edge-path {
+  opacity: 1;
+}
+
+.graph-composer-edge-flow {
+  stroke-linecap: round;
+  animation: graph-composer-edge-flow 1.1s linear infinite;
+  will-change: stroke-dashoffset;
+}
+
+.graph-composer-edge-flow.is-static {
+  animation: none;
+  stroke-dasharray: none;
+  will-change: auto;
+}
+
+@keyframes graph-composer-edge-flow {
+  from {
+    stroke-dashoffset: 0;
+  }
+  to {
+    stroke-dashoffset: -32;
+  }
+}
+
 .graph-flow .react-flow__node {
   z-index: 1;
   transition:
@@ -126,5 +151,16 @@
   .graph-run-canvas .react-flow__pane,
   .graph-flow .react-flow__node {
     transition: none;
+  }
+
+  .graph-composer-edge-flow,
+  .graph-flow .react-flow__edge.animated .react-flow__edge-path {
+    animation: none !important;
+  }
+
+  .graph-composer-edge-flow {
+    stroke-dasharray: none;
+    opacity: 0.72;
+    will-change: auto;
   }
 }

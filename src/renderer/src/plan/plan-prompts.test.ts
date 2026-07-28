@@ -64,9 +64,12 @@ describe('plan-prompts', () => {
   })
 
   it('builds execution prompts that point at the plan file', () => {
-    expect(buildPlanBuildPrompt('.deepseekgui/plan/add-auth.md')).toContain(
+    const prompt = buildPlanBuildPrompt('.deepseekgui/plan/add-auth.md')
+    expect(prompt).toContain(
       'Please read and execute the GUI plan file at `.deepseekgui/plan/add-auth.md`'
     )
+    expect(prompt).toContain('orchestration selected for this turn')
+    expect(prompt).not.toContain('normal agent execution mode')
   })
 
   it('extracts tagged and fenced plan markdown', () => {

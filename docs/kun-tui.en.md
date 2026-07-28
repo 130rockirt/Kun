@@ -5,6 +5,39 @@ TUI. `kun tui` is an exact alias. The interface uses
 `@earendil-works/pi-tui` in inline mode and never switches to the terminal's
 alternate screen, so the transcript remains in native scrollback after exit.
 
+## Installation and release forms
+
+Every Kun GUI package continues to include the complete TUI and runtime. A
+desktop installation does not need a second TUI download. The standalone TUI
+archive is an additional headless distribution for developer machines and
+servers without a graphical environment. It includes a pinned Node.js runtime,
+does not require a system Node.js installation, and is not published through
+npm.
+
+Each Stable or Daily release builds the GUI and TUI from the same commit. They
+share one application version, tag, runtime build ID, and release cadence;
+there is no independently versioned TUI release line. If any required GUI or
+TUI target fails, the joint release is not promoted to R2 latest and the
+GitHub Release is not made public.
+
+| Platform | Standalone TUI archive | Architecture |
+| --- | --- | --- |
+| macOS | `.tar.gz` | arm64 / x64 |
+| Windows | `.zip` | x64 |
+| Linux | `.tar.gz` | x64 |
+
+GitHub Releases and R2 receive the same archives, SHA-256 files, and
+machine-readable manifests. The website can consume R2 `latest.json` and
+`latest-tui.json` for its download flow; this repository does not ship an npm
+package or curl/PowerShell installer.
+
+A Stable standalone TUI checks for updates at most once every 24 hours on
+startup and only displays a notice. Run `/update` to review it, then
+`/update yes` to confirm; non-interactive callers can use `kun update --check`
+or `kun update --yes`. A GUI-bundled TUI must be updated with the desktop app
+and directs the user there. Daily/frontier archives are downloadable but
+self-update is disabled.
+
 The GUI and TUI are clients of one persistent local HTTP/SSE runtime. They
 share threads, turns, approvals, structured input, event sequence numbers,
 usage, and model connections. Closing one GUI or TUI does not stop other
@@ -259,6 +292,7 @@ conversation text never requires holding Shift.
 | `/editor [draft]` | Edit the composer in `$VISUAL`/`$EDITOR`, with TUI pause, terminal/focus restoration, and the edited draft preserved |
 | `/btw <question>` | Ask in a snapshot-inheriting side thread without mutating the main thread |
 | `/connect`, `/model` | Manage shared model connections or select the shared default model |
+| `/update`, `/update yes` | Check a Stable standalone TUI update or explicitly confirm installation; the GUI-bundled build directs updates to the GUI |
 | `/help`, `/quit` | Open help or exit the TUI |
 
 Compatibility aliases: `/threads`, `/resume`, and `/continue` → `/sessions`, `/clear` →

@@ -35,6 +35,7 @@ import {
 } from '../sdd/sdd-thread-registry'
 import { useWorkbenchLayout } from './workbench-layout'
 import { useWorkbenchPlanController } from './workbench-plan-controller'
+import { useGuiPlanStore } from '../plan/plan-store'
 import { normalizeWorkspaceRoot, workspaceRootScopeKey } from '../lib/workspace-path'
 import {
   relativeWorkspacePath,
@@ -134,6 +135,7 @@ export function Workbench(): ReactElement {
   const graphChildReturnTarget = useGraphStore((state) => state.childReturnTarget)
   const graphRuns = useGraphStore((state) => state.runs)
   const graphChildRuns = useGraphStore((state) => state.childRuns)
+  const guiPlanSaveStatus = useGuiPlanStore((state) => state.saveStatus)
   const [graphChildNow, setGraphChildNow] = useState(() => Date.now())
   useEffect(() => {
     if (!graphChildReturnTarget || activeThreadId !== graphChildReturnTarget.childThreadId) return
@@ -982,13 +984,14 @@ export function Workbench(): ReactElement {
     activeSkillWorkspace,
     activeThreadId,
     runtimeReady: runtimeConnection === 'ready',
+    graphEnabled,
     busy,
     title: t('planPanelTitle'),
     cancelLabel: t('cancel'),
     onClose: route === 'chat'
       ? () => closeRightPanelTab(BUILTIN_RIGHT_PANEL_IDS.plan)
       : closeRightPanel,
-    onBuildPlan: () => void buildGuiPlan(),
+    onBuildPlan: (orchestration) => void buildGuiPlan(orchestration),
     onVerifyPlan: () => void verifyGuiPlan(),
     onReplanChanged: (ids) => void replanChangedRequirements(ids),
     setRightPanelMode
@@ -1264,7 +1267,11 @@ export function Workbench(): ReactElement {
             activeThreadId,
             runtimeConnection,
             runtimeError: error,
-            planActionsBusy: busy,
+            planActionsBusy:
+              busy ||
+              runtimeConnection !== 'ready' ||
+              guiPlanSaveStatus === 'saving',
+            graphEnabled,
             devPreviewVisible: showDevPreviewCard,
             devPreviewUrl: latestDevPreviewUrl,
             devPreviewOpened: rightPanelMode === BUILTIN_RIGHT_PANEL_IDS.browser,
@@ -1281,7 +1288,7 @@ export function Workbench(): ReactElement {
             onRetryConnection: () => void probeRuntime('user', { restart: true }),
             onOpenSettings: () => openSettings('agents'),
             onSelectSuggestion: (text) => setInput(text),
-            onBuildPlan: () => void buildGuiPlan(),
+            onBuildPlan: (orchestration) => void buildGuiPlan(orchestration),
             onOpenPlan: openGuiPlanPanel,
             onOpenChanges: () => setRightPanelMode(BUILTIN_RIGHT_PANEL_IDS.changes),
             onReviewChanges: () => void reviewActiveThread({ kind: 'uncommittedChanges' }),

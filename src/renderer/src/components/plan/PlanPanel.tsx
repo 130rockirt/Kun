@@ -2,7 +2,6 @@ import { useEffect, type ReactElement } from 'react'
 import {
   ClipboardList,
   ExternalLink,
-  Hammer,
   Loader2,
   PanelRightClose,
   RefreshCw,
@@ -24,15 +23,18 @@ import {
 import { openWorkspacePathInEditor } from '../../lib/open-workspace-path'
 import { sddDraftRelativePathForPlanPath } from '@shared/sdd'
 import { useSddTrace } from '../../sdd/use-sdd-trace'
+import type { PlanBuildOrchestration } from '../../plan/plan-build'
+import { PlanBuildActions } from './PlanBuildActions'
 
 type Props = {
   workspaceRoot: string
   activeThreadId: string | null
   runtimeReady: boolean
+  graphEnabled: boolean
   busy: boolean
   className?: string
   onCollapse: () => void
-  onBuildPlan: () => void
+  onBuildPlan: (orchestration: PlanBuildOrchestration) => void
   onVerifyPlan?: () => void
   onReplanChanged?: (changedIds: string[]) => void
 }
@@ -55,6 +57,7 @@ export function PlanPanel({
   workspaceRoot,
   activeThreadId,
   runtimeReady,
+  graphEnabled,
   busy,
   className = '',
   onCollapse,
@@ -210,7 +213,12 @@ export function PlanPanel({
     operationStatus === 'refining' ||
     operationStatus === 'building'
   const hasPlan = Boolean(activePlan)
-  const canUseAgent = runtimeReady && !busy && hasPlan && !readOnly
+  const canUseAgent =
+    runtimeReady &&
+    !busy &&
+    saveStatus !== 'saving' &&
+    hasPlan &&
+    !readOnly
   const statusKey = statusLabelKey(saveStatus, operationStatus)
 
   const sddDraftRelativePath = activePlan
@@ -414,15 +422,12 @@ export function PlanPanel({
             </div>
           ) : null}
           <p className="mb-2 text-[12px] leading-5 text-ds-muted">{t('planRefineHint')}</p>
-          <button
-            type="button"
+          <PlanBuildActions
             disabled={!canUseAgent}
-            onClick={onBuildPlan}
-            className="inline-flex h-9 w-full items-center justify-center gap-2 rounded-lg bg-accent px-3 text-[13px] font-semibold text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <Hammer className="h-3.5 w-3.5" strokeWidth={1.9} />
-            {t('planBuild')}
-          </button>
+            graphEnabled={graphEnabled}
+            variant="panel"
+            onBuild={onBuildPlan}
+          />
         </div>
       ) : null}
     </aside>

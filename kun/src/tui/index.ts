@@ -10,6 +10,7 @@ import {
   type GuiConfigSyncResult
 } from '../cli/gui-settings-bridge.js'
 import type { TerminalInput, TerminalOutput } from './pi-terminal.js'
+import { checkStandaloneTuiUpdateOnce } from '../cli/self-update.js'
 
 type WritableLike = { write(chunk: string): unknown }
 
@@ -140,6 +141,20 @@ export async function runTuiCommand(argv: readonly string[], io: TuiCommandIo): 
     app = new PiTuiApplication(controller, input, output, keymapConfig.keymap)
     const running = app.run()
     await controller.start()
+    void checkStandaloneTuiUpdateOnce({
+      env: io.env ?? process.env,
+      fetch: io.fetch ?? fetch,
+      dataDir: parsed.options.dataDir
+    }).then((update) => {
+      if (update?.available) {
+        controller?.notify(
+          `Kun ${update.latest.version} is available with the matching GUI release. Run /update to review it.`
+        )
+      }
+    }).catch(() => undefined)
+    if (parsed.options.graphPrompt) {
+      await app.submitStartupGraphPrompt(parsed.options.graphPrompt)
+    }
     controller.watchModelConnections(initialModelConnections)
     await running
     return 0

@@ -142,6 +142,12 @@ smoke_macos_extensions() {
     *) die "Unsupported host architecture for desktop Extension smoke: ${host_arch}" ;;
   esac
 
+  cyan "Smoking GUI-bundled Kun terminal command and shared version (macOS ${host_arch})..."
+  npm run smoke:packaged-cli -- \
+    --resources "${host_resources}" \
+    --expected-version "${RELEASE_VERSION}" \
+    || die "macOS packaged Kun terminal command smoke failed"
+
   cyan "Smoking packaged OCR dependencies (host-native macOS ${host_arch})..."
   KUN_PACKAGED_RESOURCES_DIR="${host_resources}" node scripts/smoke-packaged-ocr.cjs \
     || die "macOS packaged OCR dependency smoke failed"

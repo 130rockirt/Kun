@@ -50,6 +50,7 @@ import type {
 } from '../contracts/model-connections.js'
 import type { TuiCommand, TuiCommandDefinition } from './commands.js'
 import { parseTuiCommand, TUI_COMMAND_DEFINITIONS, TUI_SLASH_COMMANDS } from './commands.js'
+import { runSelfUpdateCommand } from '../cli/self-update.js'
 import {
   activityFrame,
   formatContextGauge,
@@ -60,7 +61,10 @@ import { parseTuiKeymapConfig, type TuiKeyAction, type TuiKeymap } from './keyma
 import { TuiClientError, type KunTuiClient, type SkillsSnapshot } from './client.js'
 import type { TuiControllerState } from './controller.js'
 import { TuiController } from './controller.js'
-import { sanitizeTerminalText as stripTerminalControls } from './layout.js'
+import {
+  sanitizeTerminalText as stripTerminalControls,
+  wrapText
+} from './layout.js'
 import { codeFenceLanguage, highlightTerminalCode, terminalAssistantMarkdown } from './markdown-code.js'
 import {
   contextualFooter,
@@ -93,6 +97,10 @@ import {
 import type { TerminalInput, TerminalOutput } from './pi-terminal.js'
 import {
   latestTuiGraphRun,
+  moveTuiGraphBoardSelection,
+  projectTuiGraphBoard,
+  type TuiGraphBoardNode,
+  type TuiGraphBoardProjection,
   summarizeTuiGraphRun
 } from './graph-mode.js'
 import {
@@ -243,6 +251,9 @@ export class PiTuiApplication {
   private quotaRoute?: ProviderQuotaDialog
   private subagentRoute?: SubagentDialog
   private subagentPopup?: { component: SubagentDialog; handle: OverlayHandle }
+  private subagentPopupReturn?: () => void
+  private graphPopup?: { runId: string; component: GraphBoardDialog; handle: OverlayHandle }
+  private pendingGraphSelection?: { runId: string; nodeId: string }
   private commandOverlay?: { component: CommandPaletteDialog; handle: ExclusiveRouteHandle }
   private variantOverlay?: { component: VariantDialog; handle: ExclusiveRouteHandle }
   private agentOverlay?: { component: AgentModeDialog; handle: ExclusiveRouteHandle }
@@ -322,11 +333,13 @@ export class PiTuiApplication {
     this.unsubscribeController = this.controller.subscribe((state) => {
       this.subagentRoute?.updateParentProjection(state.projection)
       this.subagentPopup?.component.updateParentProjection(state.projection)
+      this.graphPopup?.component.update(state)
       this.goalOverlay?.component.update(state)
       this.root.update(state)
       this.syncMouseTracking(state)
       this.syncAnimation(state)
       this.syncOverlays(state)
+      this.syncGraphBoard(state)
       void this.refreshSkillAutocomplete(state.projection?.thread.workspace ?? this.controller.options.workspace)
       if (state.quitRequested) this.resolveRun?.()
       this.tui.requestRender()
@@ -343,6 +356,13 @@ export class PiTuiApplication {
 
   requestQuit(): void {
     this.controller.requestQuit()
+  }
+
+  async submitStartupGraphPrompt(prompt: string): Promise<boolean> {
+    this.root.setEditorText(prompt)
+    const submitted = await this.controller.submitGraphRequirement(prompt)
+    if (submitted) this.root.setEditorText('')
+    return submitted
   }
 
   private setPointerModeFromCommand(action?: string): void {
@@ -367,7 +387,7 @@ export class PiTuiApplication {
     this.writeMouseTracking(enabled)
     if (notify) {
       this.controller.notify(enabled
-        ? 'Mouse clicks enabled · click Thinking or a Subagent directly. Shift+drag selects in supported terminals.'
+        ? 'Mouse clicks enabled · click Graph, Thinking, or a Subagent directly. Shift+drag selects in supported terminals.'
         : `Text selection mode · drag to select; ${this.keymap.display('pointer_mode_toggle')} restores clicks.`)
     }
     this.tui.requestRender()
@@ -452,12 +472,20 @@ export class PiTuiApplication {
         this.subagentPopup.component.handleMouse(mouse)
         return { consume: true }
       }
+      if (this.graphPopup) {
+        this.graphPopup.component.handleMouse(mouse)
+        return { consume: true }
+      }
       if (this.tui.hasOverlay()) return { consume: true }
       if (this.subagentRoute) {
         this.subagentRoute.handleMouse(mouse)
         return { consume: true }
       }
       if (mouse.pressed && (mouse.button & 3) === 0) {
+        if (this.root.graphProgressAtTerminalRow(mouse.y)) {
+          void this.controller.showGraphStatus()
+          return { consume: true }
+        }
         if (this.root.toggleThinkingAtTerminalRow(mouse.y)) return { consume: true }
         const child = this.root.childAtTerminalRow(mouse.y)
         if (child) this.showSubagentPopup(child)
@@ -897,6 +925,89 @@ export class PiTuiApplication {
     }
   }
 
+  private syncGraphBoard(state: TuiControllerState): void {
+    const target = state.graphBoard
+    const mandatory = Boolean(
+      state.projection?.pendingApproval || state.projection?.pendingUserInput
+    )
+    if (!target || mandatory || this.subagentPopup) {
+      this.closeGraphPopup(false, Boolean(target))
+      return
+    }
+    const run = state.graphRuns.find((candidate) => candidate.id === target.runId)
+    if (!run) {
+      this.closeGraphPopup(false)
+      return
+    }
+    if (this.graphPopup?.runId === run.id) {
+      this.graphPopup.component.update(state)
+      return
+    }
+    this.closeGraphPopup(false)
+    const initialNodeId = this.pendingGraphSelection?.runId === run.id
+      ? this.pendingGraphSelection.nodeId
+      : undefined
+    this.pendingGraphSelection = undefined
+    const component = new GraphBoardDialog({
+      tui: this.tui,
+      controller: this.controller,
+      state,
+      runId: run.id,
+      terminalRows: () => this.terminal.rows,
+      ...(initialNodeId ? { initialNodeId } : {}),
+      close: () => this.controller.dismissGraphBoard(),
+      openWorker: (runId, nodeId, childThreadId) =>
+        this.openGraphWorker(runId, nodeId, childThreadId)
+    })
+    const handle = this.tui.showOverlay(component, {
+      width: '90%',
+      minWidth: 48,
+      maxHeight: '85%',
+      anchor: 'center',
+      margin: 1
+    })
+    this.graphPopup = { runId: run.id, component, handle }
+    this.tui.setFocus(component)
+    this.tui.requestRender()
+  }
+
+  private closeGraphPopup(dismiss = false, preserveSelection = false): void {
+    const popup = this.graphPopup
+    if (!popup) {
+      if (dismiss) this.controller.dismissGraphBoard()
+      return
+    }
+    if (preserveSelection) {
+      this.pendingGraphSelection = {
+        runId: popup.runId,
+        nodeId: popup.component.selectedNodeId()
+      }
+    }
+    this.graphPopup = undefined
+    popup.handle.hide()
+    if (dismiss) this.controller.dismissGraphBoard()
+    this.tui.setFocus(this.root.activePrimaryRoute() ?? this.root)
+    this.tui.requestRender()
+  }
+
+  private openGraphWorker(runId: string, nodeId: string, childThreadId: string): void {
+    const child = this.controller.state.projection?.childRuns.find(
+      (candidate) => candidate.childId === childThreadId
+    )
+    if (!child) {
+      this.controller.notify('This Graph worker session is not available yet.', 'error')
+      return
+    }
+    this.pendingGraphSelection = { runId, nodeId }
+    this.closeGraphPopup(false)
+    this.controller.dismissGraphBoard()
+    this.showSubagentPopup(child, () => {
+      if (!this.controller.openGraphBoard(runId)) {
+        this.controller.notify('The parent GraphRun is no longer available.', 'error')
+      }
+    })
+  }
+
   private showPermissions(): void {
     if (this.permissionOverlay) return
     const thread = this.controller.state.projection?.thread
@@ -1203,10 +1314,11 @@ export class PiTuiApplication {
     this.tui.requestRender()
   }
 
-  private showSubagentPopup(child: ProjectedChildRun): void {
-    this.closeSubagentPopup()
+  private showSubagentPopup(child: ProjectedChildRun, onClose?: () => void): void {
+    this.closeSubagentPopup(false)
     const projection = this.controller.state.projection
     if (!projection) return
+    this.subagentPopupReturn = onClose
     const component = new SubagentDialog(
       this.tui,
       this.controller,
@@ -1226,15 +1338,18 @@ export class PiTuiApplication {
     void component.open(child)
   }
 
-  private closeSubagentPopup(): void {
+  private closeSubagentPopup(restore = true): void {
     if (!this.subagentPopup) return
     const popup = this.subagentPopup
+    const onClose = this.subagentPopupReturn
     this.subagentPopup = undefined
+    this.subagentPopupReturn = undefined
     popup.component.dispose()
     popup.handle.hide()
     this.tui.setFocus(this.root)
     this.syncMouseTracking(this.controller.state)
     this.tui.requestRender()
+    if (restore) onClose?.()
   }
 
   private closeSubagentRoute(): void {
@@ -1255,6 +1370,7 @@ export class PiTuiApplication {
       this.tui.setFocus(this.root)
       if (!entry?.slash) return
       if (entry.argumentRequired) this.root.setEditorText(`/${entry.slash} `)
+      else if (entry.id === 'graph') void this.root.executeSlash('graph status')
       else void this.root.executeSlash(entry.slash)
     })
     this.commandOverlay = {
@@ -1313,7 +1429,8 @@ export class PiTuiApplication {
   }
 
   private hideAllOverlays(): void {
-    this.closeSubagentPopup()
+    this.closeSubagentPopup(false)
+    this.closeGraphPopup(false)
     for (const entry of [
       this.threadOverlay, this.helpOverlay, this.approvalOverlay, this.inputOverlay,
       this.inspectionOverlay, this.permissionOverlay, this.timelineOverlay, this.skillsOverlay,
@@ -1368,6 +1485,7 @@ class ChatRoot implements Component, Focusable {
   private _focused = false
   private animationFrame = 0
   private transcriptStartRow?: number
+  private graphProgressContentRow?: number
   private lastRenderedLineCount = 0
   private pasteBuffer?: string
   private pasteProcessing = false
@@ -1525,6 +1643,13 @@ class ChatRoot implements Component, Focusable {
     return renderedRow === undefined ? undefined : this.transcript.childAtRenderedRow(renderedRow)
   }
 
+  graphProgressAtTerminalRow(terminalRow: number): boolean {
+    if (this.graphProgressContentRow === undefined || terminalRow < 1) return false
+    const viewportStart = Math.max(0, this.lastRenderedLineCount - this.tui.terminal.rows)
+    const contentRow = viewportStart + terminalRow - 1
+    return contentRow === this.graphProgressContentRow
+  }
+
   toggleThinkingAtTerminalRow(terminalRow: number): boolean {
     const renderedRow = this.transcriptRenderedRowAtTerminalRow(terminalRow)
     if (renderedRow === undefined || !this.transcript.toggleReasoningAtRenderedRow(renderedRow)) return false
@@ -1571,6 +1696,7 @@ class ChatRoot implements Component, Focusable {
     const projection = this.state.projection
     const primaryRoute = this.primaryRoutes.at(-1)
     this.transcriptStartRow = undefined
+    this.graphProgressContentRow = undefined
     const lines: string[] = []
     if (primaryRoute) {
       lines.push(...primaryRoute.component.render(safeWidth))
@@ -1609,6 +1735,9 @@ class ChatRoot implements Component, Focusable {
     // Once the transcript grows, the spacer naturally disappears and the
     // normal terminal scrollback takes over.
     const spacer = Math.max(1, this.tui.terminal.rows - lines.length - bottom.length)
+    if (graphProgress) {
+      this.graphProgressContentRow = lines.length + spacer + (activity ? 1 : 0)
+    }
     lines.push(...Array.from({ length: spacer }, () => ''), ...bottom)
     this.lastRenderedLineCount = lines.length
     return lines.map((line) => truncateToWidth(line, safeWidth))
@@ -1766,6 +1895,28 @@ class ChatRoot implements Component, Focusable {
       case 'console': this.actions.onConsole(); break
       case 'diff': this.actions.onDiff(); break
       case 'terminal': this.actions.onTerminal(); break
+      case 'update': {
+        let output = ''
+        let errorOutput = ''
+        const code = await runSelfUpdateCommand(command.confirm ? ['--yes'] : ['--check'], {
+          stdout: { write: (chunk) => { output += chunk } },
+          stderr: { write: (chunk) => { errorOutput += chunk } },
+          env: process.env
+        })
+        if (!command.confirm && code === 10) {
+          output += '\nRun /update yes to confirm download and installation.'
+        }
+        const isInformational = code === 0 || code === 10
+        const message = (isInformational ? output : errorOutput).trim()
+        this.controller.notify(
+          message || `Kun update exited with code ${code}.`,
+          isInformational ? 'info' : 'error'
+        )
+        if (code === 0 && (output.includes('installed') || output.includes('staged'))) {
+          this.controller.requestQuit()
+        }
+        break
+      }
       case 'plan': {
         const action = command.action?.trim().toLowerCase()
         if (!action || action === 'plan' || action === 'on') await this.controller.setPlanMode('plan')
@@ -1774,7 +1925,10 @@ class ChatRoot implements Component, Focusable {
         else this.controller.notify('Usage: /plan [status|tasks|off]', 'error')
         break
       }
-      case 'graph': await this.controller.manageGraphMode(command.action); break
+      case 'graph':
+        if (command.prompt) await this.controller.submitGraphRequirement(command.prompt)
+        else await this.controller.manageGraphMode(command.action)
+        break
       case 'agent': await this.controller.setPlanMode('agent'); break
       case 'goal':
         if (command.action?.trim()) await this.controller.manageGoal(command.action)
@@ -3642,6 +3796,358 @@ class GoalDialog implements Component, Focusable {
   }
 
   invalidate(): void { this.input.invalidate() }
+}
+
+type GraphBoardRenderedLine = {
+  text: string
+  nodeId?: string
+}
+
+export class GraphBoardDialog implements Component, Focusable {
+  private state: TuiControllerState
+  private selectedId?: string
+  private currentBoard?: TuiGraphBoardProjection
+  private readonly nodeRows = new Map<number, string>()
+  private lastRenderedHeight = 0
+  private _focused = false
+
+  constructor(private readonly input: {
+    tui: TUI
+    controller: TuiController
+    state: TuiControllerState
+    runId: string
+    terminalRows: () => number
+    initialNodeId?: string
+    close: () => void
+    openWorker: (runId: string, nodeId: string, childThreadId: string) => void
+  }) {
+    this.state = input.state
+    this.selectedId = input.initialNodeId
+  }
+
+  get focused(): boolean { return this._focused }
+  set focused(value: boolean) { this._focused = value }
+
+  selectedNodeId(): string {
+    return this.currentBoard?.selectedNodeId ?? this.selectedId ?? ''
+  }
+
+  update(state: TuiControllerState): void {
+    this.state = state
+    this.input.tui.requestRender()
+  }
+
+  render(width: number): string[] {
+    const run = this.state.graphRuns.find((candidate) => candidate.id === this.input.runId)
+    if (!run) {
+      const lines = popupFrame('GRAPH', [
+        '',
+        ` ${red('GraphRun is no longer available.')}`,
+        '',
+        contextualFooter([{ key: 'Esc', label: 'back' }], Math.max(12, width - 4))
+      ], width)
+      this.lastRenderedHeight = lines.length
+      return lines
+    }
+
+    const safeWidth = Math.max(48, width)
+    const inner = safeWidth - 4
+    const board = projectTuiGraphBoard(run, {
+      ...(this.selectedId ? { selectedNodeId: this.selectedId } : {}),
+      width: inner,
+      height: this.input.terminalRows()
+    })
+    this.currentBoard = board
+    this.selectedId = board.selectedNodeId
+    const selected = board.nodes.find((node) => node.id === board.selectedNodeId)!
+    const summary = joinSides(
+      ` ${graphRunStatusText(board.status)}  ${sanitizeTerminalText(board.title)}`,
+      `${board.progress.accepted}/${board.progress.total} accepted · ${board.progress.activeAgents} agents · r${board.revision}`,
+      inner
+    )
+    const goal = truncateToWidth(` ${dim('Goal')}  ${sanitizeTerminalText(board.goal)}`, inner)
+    const availableRows = Math.max(7, Math.floor(this.input.terminalRows() * 0.78) - 7)
+    const body: GraphBoardRenderedLine[] = [
+      { text: summary },
+      { text: goal },
+      { text: '' }
+    ]
+
+    if (board.renderMode === 'topology') {
+      const inspectorWidth = Math.max(30, Math.min(42, Math.floor(inner * 0.36)))
+      const graphWidth = Math.max(28, inner - inspectorWidth - 3)
+      const graphRows = visibleGraphBoardRows(
+        graphBoardRows(board, graphWidth, true),
+        board.selectedNodeId,
+        availableRows
+      )
+      const inspectorRows = graphInspectorRows(selected, inspectorWidth)
+      const rowCount = Math.max(graphRows.length, Math.min(availableRows, inspectorRows.length))
+      for (let index = 0; index < rowCount; index += 1) {
+        const graphLine = graphRows[index]
+        const detailLine = inspectorRows[index] ?? ''
+        body.push({
+          text: joinGraphColumns(graphLine?.text ?? '', detailLine, graphWidth, inspectorWidth),
+          ...(graphLine?.nodeId ? { nodeId: graphLine.nodeId } : {})
+        })
+      }
+    } else {
+      const compactInspector = graphCompactInspectorRows(selected, inner)
+      const listRows = visibleGraphBoardRows(
+        graphBoardRows(board, inner, false),
+        board.selectedNodeId,
+        Math.max(4, availableRows - compactInspector.length)
+      )
+      body.push(...listRows)
+      body.push(...compactInspector.map((text) => ({ text })))
+    }
+
+    body.push({
+      text: contextualFooter([
+        { key: '↑/↓', label: 'select' },
+        { key: 'Enter', label: selected.childThreadId ? 'worker session' : 'worker unavailable' },
+        { key: 'Esc', label: 'back' }
+      ], inner)
+    })
+    const lines = popupFrame(`GRAPH · ${board.status}`, body.map((line) => line.text), safeWidth)
+    this.nodeRows.clear()
+    body.forEach((line, index) => {
+      if (line.nodeId) this.nodeRows.set(index + 1, line.nodeId)
+    })
+    this.lastRenderedHeight = lines.length
+    return lines
+  }
+
+  handleInput(data: string): void {
+    const mouse = parseSgrMouseEvent(data)
+    if (mouse) {
+      this.handleMouse(mouse)
+      return
+    }
+    if (isCancelInput(data)) {
+      this.input.close()
+      return
+    }
+    const board = this.currentBoard
+    if (!board) return
+    if (matchesKey(data, 'up') || data.toLowerCase() === 'k') {
+      this.selectedId = moveTuiGraphBoardSelection(board, -1)
+    } else if (matchesKey(data, 'down') || data.toLowerCase() === 'j') {
+      this.selectedId = moveTuiGraphBoardSelection(board, 1)
+    } else if (matchesKey(data, 'pageUp')) {
+      this.selectedId = moveTuiGraphBoardSelection(board, -5)
+    } else if (matchesKey(data, 'pageDown')) {
+      this.selectedId = moveTuiGraphBoardSelection(board, 5)
+    } else if (matchesKey(data, 'home') || data === 'g') {
+      this.selectedId = board.nodes[0]?.id
+    } else if (matchesKey(data, 'end') || data === 'G') {
+      this.selectedId = board.nodes.at(-1)?.id
+    } else if (matchesKey(data, 'enter')) {
+      this.openSelectedWorker(board)
+      return
+    } else {
+      return
+    }
+    this.input.tui.requestRender()
+  }
+
+  handleMouse(mouse: SgrMouseEvent): void {
+    if (!mouse.pressed) return
+    const board = this.currentBoard
+    if (!board) return
+    if ((mouse.button & 64) !== 0) {
+      this.selectedId = moveTuiGraphBoardSelection(
+        board,
+        (mouse.button & 1) === 0 ? -3 : 3
+      )
+      this.input.tui.requestRender()
+      return
+    }
+    if ((mouse.button & 3) !== 0) return
+    const row = centeredOverlayRow(
+      mouse.y,
+      this.lastRenderedHeight,
+      this.input.terminalRows()
+    )
+    const nodeId = row === undefined ? undefined : this.nodeRows.get(row)
+    if (!nodeId) return
+    this.selectedId = nodeId
+    this.input.tui.requestRender()
+  }
+
+  invalidate(): void {}
+
+  private openSelectedWorker(board: TuiGraphBoardProjection): void {
+    const node = board.nodes.find((candidate) => candidate.id === board.selectedNodeId)
+    if (!node?.childThreadId) {
+      this.input.controller.notify('This Graph node does not have an available worker session yet.', 'error')
+      return
+    }
+    this.input.openWorker(board.runId, node.id, node.childThreadId)
+  }
+}
+
+function graphBoardRows(
+  board: TuiGraphBoardProjection,
+  width: number,
+  topology: boolean
+): GraphBoardRenderedLine[] {
+  const rows: GraphBoardRenderedLine[] = []
+  for (const phase of board.phases) {
+    rows.push({ text: sectionLabel(`Phase ${phase.order + 1} · ${phase.title}`, width) })
+    for (const node of phase.nodes) {
+      if (topology && node.dependencies.length) {
+        const dependencies = node.dependencies.map((edge) =>
+          `${edge.from} ─${edge.label}→ ${node.id}`
+        ).join('  ')
+        rows.push({ text: truncateToWidth(`   ${dim(dependencies)}`, width) })
+      }
+      rows.push({
+        text: selectionRow(
+          `${graphNodeMarker(node)} ${sanitizeTerminalText(node.id)}  ${sanitizeTerminalText(node.title)}`,
+          `${node.status} · ${sanitizeTerminalText(node.assignment)}`,
+          width,
+          node.id === board.selectedNodeId,
+          0
+        ),
+        nodeId: node.id
+      })
+      if (topology && node.dependents.length) {
+        const outgoing = node.dependents.map((edge) =>
+          `${node.id} ─${edge.label}→ ${edge.to}`
+        ).join('  ')
+        rows.push({ text: truncateToWidth(`   ${dim(outgoing)}`, width) })
+      }
+    }
+  }
+  return rows
+}
+
+function graphInspectorRows(node: TuiGraphBoardNode, width: number): string[] {
+  const dependencies = node.dependencies.length
+    ? node.dependencies.map((edge) => `${edge.from} (${edge.label})`).join(', ')
+    : 'none'
+  const rows = [
+    sectionLabel(`Node ${node.id}`, width),
+    ` ${graphNodeMarker(node)} ${bold(sanitizeTerminalText(node.title))}`,
+    ` ${dim('Status')}   ${graphNodeStatusText(node.status)}`,
+    ` ${dim('Phase')}    ${sanitizeTerminalText(node.phaseTitle)}`,
+    ` ${dim('Agent')}    ${sanitizeTerminalText(node.assignment)}`,
+    ` ${dim('Attempt')}  ${node.attemptNumber
+      ? `${node.attemptNumber}${node.attemptStatus ? ` · ${node.attemptStatus}` : ''}`
+      : 'not started'}`,
+    ` ${dim('Depends')}  ${sanitizeTerminalText(dependencies)}`,
+    '',
+    ` ${dim('Objective')}`,
+    ...wrapText(sanitizeTerminalText(node.objective), Math.max(8, width - 2))
+      .slice(0, 4)
+      .map((line) => ` ${line}`),
+    ...(node.progressSummary
+      ? ['', ` ${dim('Progress')}`, ...wrapText(
+          sanitizeTerminalText(node.progressSummary),
+          Math.max(8, width - 2)
+        ).slice(0, 2).map((line) => ` ${line}`)]
+      : []),
+    ...(node.lastTransitionReason
+      ? ['', ` ${dim('Latest')}`, ...wrapText(
+          sanitizeTerminalText(node.lastTransitionReason),
+          Math.max(8, width - 2)
+        ).slice(0, 2).map((line) => ` ${line}`)]
+      : []),
+    ...(node.childThreadId
+      ? ['', ` ${dim('Worker')}   ${sanitizeTerminalText(node.childThreadId)}`]
+      : [])
+  ]
+  return rows.map((line) => truncateToWidth(line, width))
+}
+
+function graphCompactInspectorRows(node: TuiGraphBoardNode, width: number): string[] {
+  const dependencies = node.dependencies.length
+    ? node.dependencies.map((edge) => `${edge.from} (${edge.label})`).join(', ')
+    : 'none'
+  const rows = [
+    sectionLabel(`Node ${node.id}`, width),
+    ` ${graphNodeMarker(node)} ${bold(sanitizeTerminalText(node.title))} · ${graphNodeStatusText(node.status)}`,
+    ` ${dim('Agent')} ${sanitizeTerminalText(node.assignment)} · ${dim('Attempt')} ${
+      node.attemptNumber
+        ? `${node.attemptNumber}${node.attemptStatus ? ` (${node.attemptStatus})` : ''}`
+        : 'not started'
+    }`,
+    ` ${dim('Depends')} ${sanitizeTerminalText(dependencies)}`,
+    ` ${dim('Latest')} ${sanitizeTerminalText(node.lastTransitionReason ?? 'No transition reason recorded.')}`,
+    ` ${dim('Worker')} ${sanitizeTerminalText(node.childThreadId ?? 'not available')}`
+  ]
+  return rows.map((line) => truncateToWidth(line, width))
+}
+
+function visibleGraphBoardRows(
+  rows: GraphBoardRenderedLine[],
+  selectedNodeId: string,
+  limit: number
+): GraphBoardRenderedLine[] {
+  if (rows.length <= limit) return rows
+  const selectedRow = Math.max(0, rows.findIndex((row) => row.nodeId === selectedNodeId))
+  const start = Math.max(0, Math.min(
+    selectedRow - Math.floor(limit / 2),
+    rows.length - limit
+  ))
+  return rows.slice(start, start + limit)
+}
+
+function joinGraphColumns(
+  left: string,
+  right: string,
+  leftWidth: number,
+  rightWidth: number
+): string {
+  const clippedLeft = truncateToWidth(left, leftWidth)
+  const paddedLeft = `${clippedLeft}${' '.repeat(Math.max(0, leftWidth - visibleWidth(clippedLeft)))}`
+  return `${paddedLeft} ${dim('│')} ${truncateToWidth(right, rightWidth)}`
+}
+
+function graphNodeMarker(node: TuiGraphBoardNode): string {
+  switch (node.status) {
+    case 'accepted': return green(node.marker)
+    case 'failed':
+    case 'blocked': return red(node.marker)
+    case 'queued':
+    case 'repair_required': return yellow(node.marker)
+    case 'running':
+    case 'submitted':
+    case 'reviewing': return cyan(node.marker)
+    default: return dim(node.marker)
+  }
+}
+
+function graphNodeStatusText(status: TuiGraphBoardNode['status']): string {
+  if (status === 'accepted') return green(status)
+  if (status === 'failed' || status === 'blocked') return red(status)
+  if (status === 'queued' || status === 'repair_required') return yellow(status)
+  if (status === 'running' || status === 'submitted' || status === 'reviewing') {
+    return cyan(status)
+  }
+  return dim(status)
+}
+
+function graphRunStatusText(status: TuiGraphBoardProjection['status']): string {
+  if (status === 'completed') return green(status)
+  if (status === 'failed' || status === 'cancelled') return red(status)
+  if (status === 'paused' || status === 'awaiting_human') return yellow(status)
+  return cyan(status)
+}
+
+function centeredOverlayRow(
+  terminalRow: number,
+  renderedHeight: number,
+  terminalHeight: number
+): number | undefined {
+  if (terminalRow < 1 || renderedHeight < 1) return undefined
+  const availableHeight = Math.max(1, terminalHeight - 2)
+  const maxHeight = Math.max(1, Math.min(Math.floor(terminalHeight * 0.85), availableHeight))
+  const effectiveHeight = Math.min(renderedHeight, maxHeight)
+  const overlayTop = 1 + Math.floor((availableHeight - effectiveHeight) / 2)
+  const row = terminalRow - 1 - overlayTop
+  return row >= 0 && row < effectiveHeight ? row : undefined
 }
 
 class ThreadPickerDialog implements Component, Focusable {
@@ -5936,7 +6442,7 @@ export function renderKunWelcome(
     ...metadata,
     '',
     ` ${cyan('›')} ${bold('Type a task')} ${dim('and press Enter')}`,
-    ` ${cyan('›')} ${bold('/graph')} ${dim('enter Graph mode, then type the requirement')}`,
+    ` ${cyan('›')} ${bold('/graph <requirement>')} ${dim('start or steer a Graph run')}`,
     ` ${cyan('›')} ${bold('/connect')} ${dim('add or manage a provider')}`,
     ` ${cyan('›')} ${bold('/sessions')} ${dim(threadCount ? `resume previous work · ${threadCount} saved` : 'resume previous work')}`,
     ` ${cyan('›')} ${bold(imagePasteShortcutLabel())} ${dim('paste a screenshot · /paste also works')}`
@@ -6076,13 +6582,18 @@ export function renderGraphProgressRow(
     : progress.status === 'failed' || progress.status === 'cancelled'
       ? red(progress.status)
       : yellow(progress.status)
-  const left = ` ${magenta(bold('GRAPH'))}  ${sanitizeTerminalText(progress.title)}`
-  const right = [
-    `${progress.accepted}/${progress.total} accepted`,
-    `${progress.activeAgents} agents`,
-    `r${progress.revision}`,
-    status
-  ].join(dim(' · '))
+  const left = width < 64
+    ? ` ${magenta(bold('GRAPH'))}  ${status}`
+    : ` ${magenta(bold('GRAPH'))}  ${sanitizeTerminalText(progress.title)}`
+  const right = (width < 64
+    ? ['/graph status']
+    : [
+        '/graph status',
+        `${progress.accepted}/${progress.total} accepted`,
+        `${progress.activeAgents} agents`,
+        ...(width >= 96 ? [`r${progress.revision}`] : []),
+        status
+      ]).join(dim(' · '))
   return joinSides(left, right, width)
 }
 
@@ -6286,8 +6797,9 @@ function joinSides(left: string, right: string, width: number): string {
   return `${clippedLeft}${gap}${clippedRight}`
 }
 
-// The only outlined container left in Kun is the explicitly requested,
-// centered child-transcript popup. Full-page routes use pageFrame instead.
+// Outlined containers are reserved for the explicitly requested centered
+// detail popups: child transcripts and the Graph board. Full-page routes use
+// pageFrame instead.
 function popupFrame(title: string, body: string[], width: number): string[] {
   const safeWidth = Math.max(12, width)
   const inner = safeWidth - 4

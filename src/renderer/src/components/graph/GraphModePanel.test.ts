@@ -1,7 +1,12 @@
 import { type ReactElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import type { GraphPlanNode, GraphRun } from '../../graph/graph-types'
+import type {
+  GraphAttempt,
+  GraphChildRuntime,
+  GraphPlanNode,
+  GraphRun
+} from '../../graph/graph-types'
 import {
   criticalPathNodeIds,
   filterGraphElementsByPhases,
@@ -132,21 +137,97 @@ describe('Graph Mode panel projection', () => {
       from: 'start',
       to: 'finish'
     }])
-    run.nodes.start!.status = 'running'
+    run.nodes.finish!.status = 'running'
 
     const animated = graphElements(run, false)
     const reduced = graphElements(run, true)
 
     expect(animated.edges[0]?.animated).toBe(true)
+    expect(animated.edges[0]?.className).toBe('graph-flow-edge-processing')
     expect(reduced.edges[0]?.animated).toBe(false)
+    expect(reduced.edges[0]?.className).toBe('graph-flow-edge-processing')
     expect(reduced.nodes.map((item) => item.ariaLabel)).toEqual([
-      'start: running; Kun auto route',
-      'finish: pending; Kun auto route'
+      'start: accepted; Kun auto route',
+      'finish: running; Kun auto route'
     ])
-    expect(renderToStaticMarkup(animated.nodes[0]?.data.label as ReactElement))
+    expect(renderToStaticMarkup(animated.nodes[1]?.data.label as ReactElement))
       .toContain('ds-subagent-lane-sweep')
-    expect(renderToStaticMarkup(reduced.nodes[0]?.data.label as ReactElement))
+    expect(renderToStaticMarkup(reduced.nodes[1]?.data.label as ReactElement))
       .not.toContain('ds-subagent-lane-sweep')
+  })
+
+  it('animates only edges flowing into processing nodes', () => {
+    const nodes = [
+      node('start', 'phase_1'),
+      node('side', 'phase_1'),
+      node('working', 'phase_2'),
+      node('waiting', 'phase_3')
+    ]
+    const run = graphRun(nodes, [
+      { id: 'into_working', kind: 'control', from: 'start', to: 'working' },
+      { id: 'side_into_working', kind: 'data', from: 'side', to: 'working' },
+      { id: 'out_of_working', kind: 'control', from: 'working', to: 'waiting' }
+    ])
+    run.nodes.working!.status = 'reviewing'
+
+    const projected = graphElements(run)
+
+    expect(projected.edges.map((edge) => [edge.id, edge.animated])).toEqual([
+      ['into_working', true],
+      ['side_into_working', true],
+      ['out_of_working', false]
+    ])
+  })
+
+  it('keeps all edges static after the Graph run becomes terminal', () => {
+    const nodes = [node('start', 'phase_1'), node('finish', 'phase_2')]
+    const run = graphRun(nodes, [{
+      id: 'edge_1',
+      kind: 'control',
+      from: 'start',
+      to: 'finish'
+    }])
+    run.nodes.finish!.status = 'running'
+    run.status = 'completed'
+
+    expect(graphElements(run).edges[0]).toMatchObject({
+      animated: false,
+      className: undefined
+    })
+  })
+
+  it('animates into a ready node when its correlated child is already running', () => {
+    const nodes = [node('start', 'phase_1'), node('finish', 'phase_2')]
+    const run = graphRun(nodes, [{
+      id: 'edge_1',
+      kind: 'control',
+      from: 'start',
+      to: 'finish'
+    }])
+    run.nodes.finish!.status = 'ready'
+    run.nodes.finish!.attempts = [{
+      id: 'attempt_1',
+      attemptNumber: 1,
+      status: 'running',
+      childThreadId: 'child_1',
+      tokenUsage: 0,
+      elapsedMs: 0,
+      assignment: { name: 'Builder' } as GraphAttempt['assignment']
+    }]
+    const childRuns: Record<string, GraphChildRuntime> = {
+      child_1: {
+        childId: 'child_1',
+        parentThreadId: 'thread_1',
+        parentTurnId: 'turn_1',
+        status: 'running',
+        updatedAt: '2026-07-29T00:00:00.000Z'
+      }
+    }
+
+    expect(graphElements(run, false, null, { childRuns }).edges[0]).toMatchObject({
+      animated: true,
+      className: 'graph-flow-edge-processing'
+    })
   })
 
   it('uses neutral styling for ordinary dependency waiting', () => {

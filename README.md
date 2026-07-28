@@ -144,6 +144,11 @@ Kun 追求的是“完整能力 + 极致性价比”。需求先行的流程比�
 | Windows | `.exe`，NSIS 安装器 | x64 |
 | Linux | `.AppImage` 或 `.deb`（Debian/openKylin 等） | x64 |
 
+GUI 安装包已经包含 `kun` TUI。没有图形化界面的开发机也可以从同一个 Release
+下载独立、自包含的 TUI 压缩包：macOS arm64/x64、Windows x64 和 Linux x64。
+GUI 与独立 TUI 始终由同一次发布产生并共用同一个版本号；独立 TUI 不通过 npm
+发布。详细说明见 [Kun TUI 文档](docs/kun-tui.md)。
+
 首次启动时：
 
 1. 选择界面语言。

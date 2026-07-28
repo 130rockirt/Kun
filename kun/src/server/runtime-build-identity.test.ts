@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
+  readRuntimeBuildManifestForEntry,
   readRuntimeBuildIdForEntry,
   runtimeBuildManifestPathForEntry
 } from './runtime-build-identity.js'
@@ -23,7 +24,14 @@ describe('runtime build identity', () => {
     await writeFile(entry, '', 'utf8')
     await writeFile(
       join(root, 'dist', 'runtime-build.json'),
-      JSON.stringify({ version: 1, buildId }),
+      JSON.stringify({
+        version: 1,
+        buildId,
+        serviceVersion: '1.2.3',
+        channel: 'stable',
+        artifactVersion: '1.2.3',
+        nodeVersion: '22.23.1'
+      }),
       'utf8'
     )
 
@@ -31,6 +39,14 @@ describe('runtime build identity', () => {
       join(root, 'dist', 'runtime-build.json')
     )
     await expect(readRuntimeBuildIdForEntry(entry)).resolves.toBe(buildId)
+    await expect(readRuntimeBuildManifestForEntry(entry)).resolves.toEqual({
+      version: 1,
+      buildId,
+      serviceVersion: '1.2.3',
+      channel: 'stable',
+      artifactVersion: '1.2.3',
+      nodeVersion: '22.23.1'
+    })
   })
 
   it('returns undefined for missing, malformed, or invalid manifests', async () => {

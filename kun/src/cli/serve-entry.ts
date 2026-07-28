@@ -19,6 +19,8 @@ import { resolveSharedRuntime, runRuntimeCommand } from './shared-runtime.js'
 import { withRuntimeStartLock } from '../server/runtime-discovery.js'
 import { RuntimeBuildIdSchema } from '../contracts/runtime-info.js'
 import { readRuntimeBuildIdForEntry } from '../server/runtime-build-identity.js'
+import { KUN_VERSION } from '../version.js'
+import { runSelfUpdateCommand } from './self-update.js'
 
 export const KUN_READY_PREFIX = 'KUN_READY '
 
@@ -191,11 +193,18 @@ export async function main(argv: readonly string[]): Promise<number> {
     return serveMain(command.args)
   }
   if (command.command === 'version') {
-    process.stdout.write('kun 0.1.0\n')
+    process.stdout.write(`kun ${KUN_VERSION}\n`)
     return ServeExitCode.ok
   }
   if (command.command === 'runtime') {
     return runRuntimeCommand(command.args, {
+      stdout: process.stdout,
+      stderr: process.stderr,
+      env: process.env
+    })
+  }
+  if (command.command === 'update') {
+    return runSelfUpdateCommand(command.args, {
       stdout: process.stdout,
       stderr: process.stderr,
       env: process.env

@@ -88,7 +88,7 @@ export function buildPlanBuildPrompt(planRelativePath: string): string {
   return [
     `${BUILD_PLAN_INTRO} \`${planRelativePath}\` in this workspace.`,
     'Treat that Markdown file as the source of truth for the implementation.',
-    'Use normal agent execution mode. Do not regenerate the plan unless the plan file explicitly asks for it.'
+    'Execute it using the orchestration selected for this turn. Do not regenerate the plan unless the plan file explicitly asks for it.'
   ].join('\n')
 }
 

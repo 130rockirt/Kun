@@ -1,4 +1,5 @@
 import { lazy, Suspense, type ReactElement } from 'react'
+import type { PlanBuildOrchestration } from '../../plan/plan-build'
 
 const PlanPanel = lazy(() =>
   import('../plan/PlanPanel').then((module) => ({ default: module.PlanPanel }))
@@ -8,10 +9,11 @@ export type WorkbenchPlanPanelProps = {
   workspaceRoot: string
   activeThreadId: string | null
   runtimeReady: boolean
+  graphEnabled: boolean
   busy: boolean
   className: string
   onCollapse: () => void
-  onBuildPlan: () => void
+  onBuildPlan: (orchestration: PlanBuildOrchestration) => void
   onVerifyPlan: () => void
   onReplanChanged: (ids: string[]) => void
 }

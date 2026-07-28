@@ -1,0 +1,178 @@
+#!/usr/bin/env node
+
+import { execFileSync, spawn } from 'node:child_process'
+import { once } from 'node:events'
+import { mkdtemp, readFile, rm, stat } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
+
+async function main() {
+  const flags = readFlags(process.argv.slice(2))
+  const artifact = resolve(required(flags, 'artifact'))
+  const expectedVersion = required(flags, 'version')
+  const expectedTarget = required(flags, 'target')
+  const temporary = await mkdtemp(join(tmpdir(), 'kun-tui-smoke-'))
+  try {
+    execFileSync('tar', ['-xf', artifact, '-C', temporary], { stdio: 'inherit' })
+    const root = join(temporary, 'kun')
+    const release = JSON.parse(await readFile(join(root, 'release.json'), 'utf8'))
+    if (release.version !== expectedVersion || release.target !== expectedTarget) {
+      throw new Error(
+        `release metadata mismatch: ${release.version}/${release.target}, ` +
+        `expected ${expectedVersion}/${expectedTarget}`
+      )
+    }
+    const node = join(root, 'runtime', process.platform === 'win32' ? 'node.exe' : 'node')
+    const entry = join(root, 'app', 'kun', 'dist', 'cli', 'serve-entry.js')
+    await stat(node)
+    await stat(entry)
+    const environment = {
+      ...process.env,
+      KUN_STANDALONE_ROOT: root
+    }
+    if (process.platform === 'linux') {
+      delete environment.DISPLAY
+      delete environment.WAYLAND_DISPLAY
+    }
+    expectOutput(node, ['-p', 'process.versions.node'], environment, release.nodeVersion)
+    expectOutput(node, [entry, '--version'], environment, `kun ${expectedVersion}`)
+    expectContains(node, [entry, '--help'], environment, 'kun <command> [options]')
+    expectContains(node, [entry, 'tui', '--help'], environment, 'kun [tui options]')
+    expectContains(
+      node,
+      [entry, 'runtime', 'status', '--data-dir', join(temporary, 'data')],
+      environment,
+      'Kun runtime: stopped'
+    )
+    await smokeHeadlessRuntime(
+      node,
+      entry,
+      environment,
+      join(temporary, 'headless-runtime')
+    )
+    execFileSync(
+      node,
+      ['--input-type=module', '-e', "await import('better-sqlite3'); process.stdout.write('sqlite-ok')"],
+      {
+        cwd: join(root, 'app', 'kun'),
+        env: environment,
+        encoding: 'utf8',
+        timeout: 15_000,
+        stdio: ['ignore', 'pipe', 'pipe']
+      }
+    )
+    process.stdout.write(`Standalone TUI smoke passed: ${expectedTarget} ${expectedVersion}\n`)
+  } finally {
+    await rm(temporary, { recursive: true, force: true })
+  }
+}
+
+async function smokeHeadlessRuntime(node, entry, env, dataDir) {
+  const child = spawn(node, [
+    entry,
+    'serve',
+    '--host',
+    '127.0.0.1',
+    '--port',
+    '0',
+    '--data-dir',
+    dataDir
+  ], {
+    env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true
+  })
+  let stdout = ''
+  let stderr = ''
+  child.stdout.setEncoding('utf8')
+  child.stderr.setEncoding('utf8')
+  child.stderr.on('data', (chunk) => { stderr += chunk })
+  try {
+    const ready = await new Promise((resolvePromise, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error(`headless runtime did not become ready: ${stderr.slice(-4_000)}`))
+      }, 30_000)
+      child.once('error', (error) => {
+        clearTimeout(timer)
+        reject(error)
+      })
+      child.once('exit', (code, signal) => {
+        clearTimeout(timer)
+        reject(new Error(
+          `headless runtime exited before ready (${signal ?? code}): ${stderr.slice(-4_000)}`
+        ))
+      })
+      child.stdout.on('data', (chunk) => {
+        stdout += chunk
+        const match = stdout.match(/KUN_READY (\{[^\r\n]+\})/)
+        if (!match) return
+        clearTimeout(timer)
+        try {
+          resolvePromise(JSON.parse(match[1]))
+        } catch (error) {
+          reject(error)
+        }
+      })
+    })
+    const response = await fetch(`http://127.0.0.1:${ready.port}/health`, {
+      signal: AbortSignal.timeout(5_000)
+    })
+    const health = await response.json()
+    if (!response.ok || health?.status !== 'ok') {
+      throw new Error(`headless runtime health check failed: HTTP ${response.status}`)
+    }
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) {
+      const exited = once(child, 'exit')
+      child.kill()
+      await Promise.race([
+        exited,
+        new Promise((resolvePromise) => setTimeout(resolvePromise, 5_000))
+      ])
+    }
+  }
+}
+
+function expectOutput(command, args, env, expected) {
+  const output = execFileSync(command, args, {
+    env,
+    encoding: 'utf8',
+    timeout: 15_000
+  }).trim()
+  if (output !== expected) {
+    throw new Error(`${args.join(' ')} returned ${JSON.stringify(output)}, expected ${JSON.stringify(expected)}`)
+  }
+}
+
+function expectContains(command, args, env, expected) {
+  const output = execFileSync(command, args, {
+    env,
+    encoding: 'utf8',
+    timeout: 15_000
+  })
+  if (!output.includes(expected)) {
+    throw new Error(`${args.join(' ')} output does not contain ${JSON.stringify(expected)}`)
+  }
+}
+
+function readFlags(argv) {
+  const flags = new Map()
+  for (let index = 0; index < argv.length; index += 2) {
+    const name = argv[index]
+    const value = argv[index + 1]
+    if (!name?.startsWith('--') || !value) throw new Error(`Invalid argument near ${name}`)
+    flags.set(name.slice(2), value)
+  }
+  return flags
+}
+
+function required(flags, name) {
+  const value = flags.get(name)
+  if (!value) throw new Error(`Missing --${name}`)
+  return value
+}
+
+main().catch((error) => {
+  process.stderr.write(`[smoke-standalone-tui] ${error instanceof Error ? error.message : String(error)}\n`)
+  process.exitCode = 1
+})

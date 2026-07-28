@@ -97,6 +97,9 @@ jobs:
       - name: Test Kun runtime
         run: npm --prefix kun run test
 
+      - name: Test joint GUI/TUI release contracts
+        run: npm run test:tui-release
+
   build-macos:
     name: Build macOS
     runs-on: macos-latest
@@ -198,7 +201,9 @@ jobs:
           else
             resources="dist/mac/Kun.app/Contents/Resources"
           fi
-          npm run smoke:packaged-cli -- --resources "$resources"
+          npm run smoke:packaged-cli -- \
+            --resources "$resources" \
+            --expected-version "${KUN_APP_VERSION}"
 
       - name: Verify packaged macOS x64 native architecture
         run: npm run verify:packaged-macos-native -- --resources dist/mac/Kun.app/Contents/Resources --arch x64
@@ -360,7 +365,10 @@ jobs:
         run: npm run dist:win
 
       - name: Smoke packaged Kun terminal command
-        run: npm run smoke:packaged-cli -- --resources dist/win-unpacked/resources
+        run: >-
+          npm run smoke:packaged-cli --
+          --resources dist/win-unpacked/resources
+          --expected-version "${env:KUN_APP_VERSION}"
 
       - name: Smoke packaged Extension Node runtime
         run: npm run smoke:packaged-extensions -- --resources dist/win-unpacked/resources
@@ -452,7 +460,8 @@ jobs:
           fi
           npm run smoke:packaged-cli -- \
             --resources dist/linux-unpacked/resources \
-            --deb "${deb_packages[0]}"
+            --deb "${deb_packages[0]}" \
+            --expected-version "${KUN_APP_VERSION}"
 
       - name: Smoke packaged Extension Node runtime
         run: npm run smoke:packaged-extensions -- --resources dist/linux-unpacked/resources
@@ -500,6 +509,103 @@ jobs:
             dist/latest-linux.yml
             dist/extension-native-evidence-linux.json
 
+  build-tui:
+    name: Build standalone TUI (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    needs:
+      - prepare
+      - validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: darwin-arm64
+          - runner: macos-15-intel
+            target: darwin-x64
+          - runner: windows-2025
+            target: win32-x64
+          - runner: ubuntu-22.04
+            target: linux-x64
+    env:
+      KUN_APP_VERSION: ${{ needs.prepare.outputs.version }}
+      KUN_ARTIFACT_VERSION: ${{ needs.prepare.outputs.version }}
+      KUN_UPDATE_CHANNEL: stable
+      RELEASE_CHANNEL: stable
+      TAG_NAME: ${{ needs.prepare.outputs.tag }}
+      R2_PUBLIC_BASE_URL: ${{ secrets.R2_PUBLIC_BASE_URL }}
+      R2_RELEASE_PREFIX: ${{ secrets.R2_RELEASE_PREFIX }}
+    steps:
+      - name: Check out merge commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+
+      - name: Set up packaged Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.1'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            kun/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          npm ci
+          npm --prefix kun ci
+
+      - name: Test joint GUI/TUI release contracts
+        run: npm run test:tui-release
+
+      - name: Build shared Kun runtime
+        run: npm run build:kun
+
+      - name: Package standalone TUI
+        run: >-
+          npm run package:tui --
+          --version "${{ needs.prepare.outputs.version }}"
+          --artifact-version "${{ needs.prepare.outputs.version }}"
+          --tag "${{ needs.prepare.outputs.tag }}"
+          --channel stable
+          --commit "${{ github.event.pull_request.merge_commit_sha }}"
+          --target "${{ matrix.target }}"
+          --output dist
+
+      - name: Smoke standalone TUI
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifacts=(dist/Kun-TUI-*)
+          archive=""
+          for candidate in "${artifacts[@]}"; do
+            case "$candidate" in
+              *.tar.gz|*.zip) archive="$candidate" ;;
+            esac
+          done
+          if [[ -z "$archive" ]]; then
+            echo "::error::Standalone TUI archive was not produced"
+            exit 1
+          fi
+          npm run smoke:standalone-tui -- \
+            --artifact "$archive" \
+            --version "${{ needs.prepare.outputs.version }}" \
+            --target "${{ matrix.target }}"
+
+      - name: Upload standalone TUI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-tui-${{ matrix.target }}
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            dist/Kun-TUI-*.tar.gz
+            dist/Kun-TUI-*.zip
+            dist/Kun-TUI-*.sha256
+            dist/Kun-TUI-*.json
+
   publish:
     name: Publish GitHub Release and R2
     runs-on: ubuntu-latest
@@ -509,6 +615,7 @@ jobs:
       - verify-macos-x64
       - build-windows
       - build-linux
+      - build-tui
     env:
       GH_TOKEN: ${{ github.token }}
       TAG_NAME: ${{ needs.prepare.outputs.tag }}
@@ -548,6 +655,13 @@ jobs:
           path: release-artifacts
           merge-multiple: true
 
+      - name: Rebuild shared GUI/TUI runtime identity
+        env:
+          KUN_APP_VERSION: ${{ needs.prepare.outputs.version }}
+          KUN_ARTIFACT_VERSION: ${{ needs.prepare.outputs.version }}
+          KUN_UPDATE_CHANNEL: stable
+        run: npm run build:kun
+
       - name: Verify release artifacts
         run: |
           set -euo pipefail
@@ -565,6 +679,10 @@ jobs:
             "extension-native-evidence-darwin.json"
             "extension-native-evidence-win32.json"
             "extension-native-evidence-linux.json"
+            "Kun-TUI-${RELEASE_VERSION}-mac-arm64.tar.gz"
+            "Kun-TUI-${RELEASE_VERSION}-mac-x64.tar.gz"
+            "Kun-TUI-${RELEASE_VERSION}-win-x64.zip"
+            "Kun-TUI-${RELEASE_VERSION}-linux-x64.tar.gz"
           )
 
           for pattern in "${required[@]}"; do
@@ -576,6 +694,19 @@ jobs:
           done
 
           find release-artifacts -maxdepth 2 -type f -print | sort
+
+      - name: Assemble standalone TUI release contract
+        run: >-
+          npm run assemble:tui-release --
+          --directory release-artifacts
+          --version "${RELEASE_VERSION}"
+          --artifact-version "${RELEASE_VERSION}"
+          --tag "${TAG_NAME}"
+          --channel "${RELEASE_CHANNEL}"
+          --commit "$(git rev-parse HEAD)"
+          --expected-build-id "$(node -p "require('./kun/dist/runtime-build.json').buildId")"
+          --public-base-url "${R2_PUBLIC_BASE_URL}"
+          --release-prefix "${R2_RELEASE_PREFIX:-deepseek-gui}"
 
       - name: Generate release notes
         run: |
@@ -598,6 +729,7 @@ jobs:
             echo "- Commit: \`${GITHUB_SHA::7}\`"
             echo "- macOS: Developer ID signed and notarized"
             echo "- Platforms: macOS arm64/x64, Windows x64, Linux x64 AppImage/deb"
+            echo "- Standalone TUI: macOS arm64/x64, Windows x64, Linux x64"
           } >> release-notes.md
 
       - name: Ensure release tag
@@ -647,7 +779,7 @@ jobs:
           set -euo pipefail
           mapfile -d '' assets < <(
             find release-artifacts -type f \
-              \( -name 'Kun-*' -o -name 'latest*.yml' -o -name 'extension-native-evidence-*.json' \) \
+              \( -name 'Kun-*' -o -name 'latest*.yml' -o -name 'extension-native-evidence-*.json' -o -name 'release-tui.json' -o -name 'SHA256SUMS-tui.txt' \) \
               -print0
           )
 
@@ -664,6 +796,7 @@ jobs:
           node ./scripts/publish-r2.mjs upload --platform mac --dist release-artifacts --tag "${TAG_NAME}" --channel "${RELEASE_CHANNEL}"
           node ./scripts/publish-r2.mjs upload --platform win --dist release-artifacts --tag "${TAG_NAME}" --channel "${RELEASE_CHANNEL}"
           node ./scripts/publish-r2.mjs upload --platform linux --dist release-artifacts --tag "${TAG_NAME}" --channel "${RELEASE_CHANNEL}"
+          node ./scripts/publish-r2.mjs upload-tui --dist release-artifacts --tag "${TAG_NAME}" --channel "${RELEASE_CHANNEL}"
 
       - name: Promote R2 latest
         run: >
@@ -671,6 +804,7 @@ jobs:
           --tag "${TAG_NAME}"
           --channel "${RELEASE_CHANNEL}"
           --platforms mac,win,linux
+          --require-tui
 
       - name: Publish GitHub Release
         run: gh release edit "${TAG_NAME}" --draft=false --prerelease=false --latest

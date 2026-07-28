@@ -25,6 +25,7 @@ import { SidebarTitlebarToggleButton } from '../sidebar/SidebarPrimitives'
 import type { JsonValue } from '@kun/extension-api'
 import type { RegisteredContribution } from '../../extensions/contribution-registry'
 import { DeclarativeActionBar } from '../../extensions/ControlledContributionSurfaces'
+import type { PlanBuildOrchestration } from '../../plan/plan-build'
 
 const TerminalPanel = lazy(() =>
   import('../terminal/TerminalPanel').then((module) => ({ default: module.TerminalPanel }))
@@ -45,6 +46,7 @@ export type WorkbenchChatStageProps = {
   runtimeConnection: RuntimeConnectionStatus
   runtimeError?: string | null
   planActionsBusy: boolean
+  graphEnabled: boolean
   devPreviewVisible: boolean
   devPreviewUrl: string | null
   devPreviewOpened: boolean
@@ -61,7 +63,7 @@ export type WorkbenchChatStageProps = {
   onRetryConnection: () => void
   onOpenSettings: () => void
   onSelectSuggestion: (text: string) => void
-  onBuildPlan: () => void
+  onBuildPlan: (orchestration: PlanBuildOrchestration) => void
   onOpenPlan: () => void
   onOpenChanges: () => void
   onReviewChanges: () => void
@@ -98,6 +100,7 @@ export function WorkbenchChatStage({
   runtimeConnection,
   runtimeError,
   planActionsBusy,
+  graphEnabled,
   devPreviewVisible,
   devPreviewUrl,
   devPreviewOpened,
@@ -223,6 +226,7 @@ export function WorkbenchChatStage({
             onSelectSuggestion={onSelectSuggestion}
             focusModeEnabled={focusModeEnabled}
             planActionsBusy={planActionsBusy}
+            graphEnabled={graphEnabled}
             onBuildPlan={onBuildPlan}
             onOpenPlan={onOpenPlan}
             onOpenChanges={onOpenChanges}

@@ -5,7 +5,11 @@ import type {
   GraphPlanNode,
   GraphRun
 } from '../../graph/graph-types'
-import { getComposerGraphProgress } from './composer-graph-preview'
+import {
+  fitComposerGraphLabel,
+  getComposerGraphProgress,
+  layoutComposerGraph
+} from './composer-graph-preview'
 
 function graphRun(node: GraphNodeProjection): GraphRun {
   return {
@@ -123,6 +127,29 @@ function child(status: GraphChildRuntime['status']): GraphChildRuntime {
   }
 }
 
+function graphRunWithIncomingEdge(target: GraphNodeProjection): GraphRun {
+  const run = graphRun(target)
+  const upstream: GraphPlanNode = {
+    ...target.node,
+    id: 'node_upstream',
+    title: 'Prepare input'
+  }
+  run.plans[0]!.nodes.unshift(upstream)
+  run.plans[0]!.edges.push({
+    id: 'edge_upstream_target',
+    kind: 'control',
+    from: upstream.id,
+    to: target.node.id
+  })
+  run.nodes[upstream.id] = {
+    node: upstream,
+    status: 'accepted',
+    attempts: [],
+    loopIteration: 0
+  }
+  return run
+}
+
 describe('composer Graph progress', () => {
   it('counts a correlated running child while the durable node is still ready', () => {
     const progress = getComposerGraphProgress(
@@ -155,5 +182,66 @@ describe('composer Graph progress', () => {
 
     expect(progress.activeCount).toBe(0)
     expect(progress.activeAgents).toEqual([])
+  })
+
+  it('flows incoming edges when a correlated child runs before durable node status catches up', () => {
+    const run = graphRunWithIncomingEdge(readyNode())
+    const layout = layoutComposerGraph(run, { child_1: child('running') })
+
+    expect(layout.nodes.find((node) => node.id === 'node_1')?.processing).toBe(true)
+    expect(layout.edges).toEqual([
+      expect.objectContaining({
+        id: 'edge_upstream_target',
+        flowing: true
+      })
+    ])
+  })
+
+  it('keeps incoming edges static for waiting and terminal runs', () => {
+    const waitingRun = graphRunWithIncomingEdge(readyNode())
+    expect(layoutComposerGraph(waitingRun, { child_1: child('completed') }).edges[0]?.flowing)
+      .toBe(false)
+
+    waitingRun.status = 'completed'
+    expect(layoutComposerGraph(waitingRun, { child_1: child('running') }).edges[0]?.flowing)
+      .toBe(false)
+  })
+})
+
+describe('composer Graph SVG label fitting', () => {
+  it('keeps short labels at their preferred font size', () => {
+    expect(fitComposerGraphLabel('Kun', 80, 11, 8)).toEqual({
+      text: 'Kun',
+      fontSize: 11,
+      estimatedWidth: expect.any(Number),
+      truncated: false
+    })
+  })
+
+  it('shrinks mixed labels before truncating them', () => {
+    const fitted = fitComposerGraphLabel('work-优化-docs', 70, 11, 8)
+
+    expect(fitted.fontSize).toBeGreaterThanOrEqual(8)
+    expect(fitted.fontSize).toBeLessThan(11)
+    expect(fitted.estimatedWidth).toBeLessThanOrEqual(70)
+    expect(fitted.truncated).toBe(false)
+  })
+
+  it('uses the minimum readable size and ellipsis for long CJK labels', () => {
+    const fitted = fitComposerGraphLabel('摸清文档顶部页与官网设计语言', 110, 11, 8)
+
+    expect(fitted.fontSize).toBe(8)
+    expect(fitted.text).toMatch(/…$/)
+    expect(fitted.estimatedWidth).toBeLessThanOrEqual(110)
+    expect(fitted.truncated).toBe(true)
+  })
+
+  it('bounds extremely long labels without returning an undersized font', () => {
+    const fitted = fitComposerGraphLabel('A'.repeat(200), 44, 9, 7)
+
+    expect(fitted.fontSize).toBe(7)
+    expect(fitted.text.length).toBeLessThan(200)
+    expect(fitted.text).toMatch(/…$/)
+    expect(fitted.estimatedWidth).toBeLessThanOrEqual(44)
   })
 })

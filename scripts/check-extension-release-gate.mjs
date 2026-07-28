@@ -215,7 +215,8 @@ function requirePublishDependencies(document, workflowLabel) {
     'build-macos',
     'verify-macos-x64',
     'build-windows',
-    'build-linux'
+    'build-linux',
+    'build-tui'
   ]) {
     check(
       needs.includes(dependency),
@@ -1340,6 +1341,20 @@ requireStepRunMarkers(releasePublishJob, 'release publish', 'Upload GitHub Relea
   'extension-native-evidence-*.json',
   'gh release upload'
 ])
+for (const marker of [
+  'node-version: \'22.23.1\'',
+  'darwin-arm64',
+  'darwin-x64',
+  'linux-x64',
+  'win32-x64',
+  'npm run package:tui',
+  'npm run assemble:tui-release',
+  'publish-r2.mjs upload-tui',
+  '--require-tui',
+  '--expected-build-id'
+]) {
+  check(releaseWorkflow.includes(marker), `Release workflow omits joint GUI/TUI gate: ${marker}`)
+}
 
 const dailyWorkflow = await text('.github/workflows/daily-dev-prerelease.yml')
 const dailyWorkflowDocument = parseYaml(dailyWorkflow)
@@ -1458,6 +1473,20 @@ requireStepRunMarkers(dailyPublishJob, 'daily publish', 'Upload GitHub prereleas
   'extension-native-evidence-*.json',
   'gh release upload'
 ])
+for (const marker of [
+  'node-version: \'22.23.1\'',
+  'darwin-arm64',
+  'darwin-x64',
+  'linux-x64',
+  'win32-x64',
+  'npm run package:tui',
+  'npm run assemble:tui-release',
+  'publish-r2.mjs upload-tui',
+  '--require-tui',
+  '--expected-build-id'
+]) {
+  check(dailyWorkflow.includes(marker), `Daily workflow omits joint GUI/TUI gate: ${marker}`)
+}
 
 const releaseMacScript = await text('scripts/release-mac.sh')
 requireOrderedSourceMarkers(releaseMacScript, 'scripts/release-mac.sh execution path', [
@@ -1488,6 +1517,7 @@ for (const marker of [
   '|| die "macOS arm64 packaged Extension Node runtime smoke failed"',
   '|| die "macOS x64 packaged native architecture verification failed"',
   '|| die "macOS arm64 packaged native architecture verification failed"',
+  '|| die "macOS packaged Kun terminal command smoke failed"',
   '|| die "macOS packaged OCR dependency smoke failed"',
   '|| die "macOS packaged Extension desktop Chromium smoke failed"',
   'verify:manual-extension-release',
@@ -1539,9 +1569,12 @@ requireSourceMarkersAfter(
 )
 for (const marker of [
   '|| die "Windows packaged Extension Node runtime smoke failed"',
+  '|| die "Windows packaged Kun terminal command smoke failed"',
   '|| die "Windows packaged Extension desktop Chromium smoke failed"',
   'Downloading and verifying the complete three-platform release bundle',
-  'verify:manual-extension-release'
+  'verify:manual-extension-release',
+  'verify_tui_github_assets',
+  '--require-tui'
 ]) {
   check(releaseWinScript.includes(marker), `scripts/release-win.sh does not fail closed: ${marker}`)
 }
@@ -1578,9 +1611,12 @@ requireSourceMarkersAfter(
 for (const marker of [
   "Write-Err 'Extension public release gate failed.'",
   "Write-Err 'Windows packaged Extension Node runtime smoke failed.'",
+  "Write-Err 'Windows packaged Kun terminal command smoke failed.'",
   "Write-Err 'Windows packaged Extension desktop Chromium smoke failed.'",
   "Write-Err 'Complete three-platform release verification failed.'",
-  'verify:manual-extension-release'
+  'verify:manual-extension-release',
+  '$requiredTuiAssets',
+  '--require-tui'
 ]) {
   check(releaseWinPowerShell.includes(marker), `scripts/release-win.ps1 does not fail closed: ${marker}`)
 }

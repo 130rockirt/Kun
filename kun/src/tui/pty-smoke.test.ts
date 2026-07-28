@@ -8,6 +8,10 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { resolveSharedRuntime, stopSharedRuntime } from '../cli/shared-runtime.js'
 import { readRuntimeBuildIdForEntry } from '../server/runtime-build-identity.js'
 import { startKunServe, type KunServeHandle } from '../server/runtime-factory.js'
+import {
+  testGraphConfig,
+  testGraphPlan
+} from '../graph/graph-test-fixtures.test-support.js'
 import { KunTuiClient } from './client.js'
 import { sanitizeTerminalText } from './layout.js'
 
@@ -256,6 +260,105 @@ describe.skipIf(process.platform === 'win32' || !existsSync(cliEntry))('kun tui 
       try { terminal.kill() } catch { /* already exited */ }
     }
   }, 45_000)
+
+  it('submits --graph after startup and opens a narrow Graph board through opt-in mouse input', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-tui-graph-pty-'))
+    roots.push(root)
+    const runtimeToken = 'pty-graph-runtime-token'
+    const buildId = await readRuntimeBuildIdForEntry(cliEntry)
+    const server = await startKunServe({
+      host: '127.0.0.1',
+      port: 0,
+      dataDir: root,
+      runtimeToken,
+      apiKey: 'pty-graph-test-key',
+      baseUrl: 'http://127.0.0.1:9',
+      model: 'gpt-5.6-luna',
+      approvalPolicy: 'on-request',
+      sandboxMode: 'workspace-write',
+      tokenEconomyMode: false,
+      insecure: false,
+      graph: testGraphConfig(),
+      ...(buildId ? { buildId } : {})
+    })
+    servers.push(server)
+    const client = new KunTuiClient({
+      baseUrl: `http://${server.host}:${server.port}`,
+      runtimeToken
+    })
+    const requirement = 'Build the PTY Graph board'
+    const terminal = pty.spawn(process.execPath, [
+      cliEntry,
+      '--data-dir', root,
+      '--workspace', root,
+      '--graph', requirement
+    ], {
+      name: 'xterm-256color',
+      cols: 88,
+      rows: 26,
+      cwd: worktreeRoot,
+      env: stringEnvironment(process.env)
+    })
+    let output = ''
+    const dataSubscription = terminal.onData((data) => { output += data })
+    const exited = new Promise<{ exitCode: number; signal?: number }>((accept) => {
+      terminal.onExit(accept)
+    })
+
+    try {
+      const source = await waitForValue(async () => {
+        const thread = (await client.listThreads())[0]
+        if (!thread) return undefined
+        const detail = await client.getThread(thread.id)
+        const turn = detail.turns.find((candidate) =>
+          candidate.orchestration === 'graph' && candidate.prompt === requirement
+        )
+        return turn ? { thread, turn } : undefined
+      }, 15_000)
+      expect(source.turn.orchestration).toBe('graph')
+
+      const graph = server.runtime.graph
+      expect(graph).toBeDefined()
+      const identity = await graph!.registry.identify(root)
+      await graph!.control.create({
+        runId: 'run_pty_graph',
+        threadId: source.thread.id,
+        projectId: identity.projectId,
+        sourceTurnId: source.turn.id,
+        plan: testGraphPlan({ workspaceRoot: root }),
+        commandId: 'command_pty_graph',
+        idempotencyKey: 'create_pty_graph'
+      })
+
+      await waitFor(() => sanitizeTerminalText(output).includes('/graph status'), 10_000)
+      terminal.resize(52, 16)
+      const beforePointer = output.length
+      terminal.write('/mouse on\r')
+      await waitFor(() => output.slice(beforePointer).includes('Mouse clicks enabled'))
+
+      const beforeBoard = output.length
+      for (let row = 1; row <= 16; row += 1) {
+        terminal.write(`\x1b[<0;4;${row}M`)
+      }
+      await waitFor(() => {
+        const visible = sanitizeTerminalText(output.slice(beforeBoard))
+        return visible.includes('GRAPH ·') && visible.includes('Phase 1 · Implementation')
+      })
+      expect(sanitizeTerminalText(output.slice(beforeBoard))).toContain('Node')
+
+      const beforeClose = output.length
+      terminal.write('\x1b')
+      await waitFor(() => output.length > beforeClose)
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      terminal.write('/quit\r')
+      const exit = await withTimeout(exited, 5_000, 'Graph PTY process did not exit')
+      expect(exit.exitCode).toBe(0)
+      expect(output).not.toContain('\x1b[?1049h')
+    } finally {
+      dataSubscription.dispose()
+      try { terminal.kill() } catch { /* already exited */ }
+    }
+  }, 30_000)
 })
 
 function stringEnvironment(env: NodeJS.ProcessEnv): Record<string, string> {

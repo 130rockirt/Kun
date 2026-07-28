@@ -402,7 +402,22 @@ describe('KunTuiClient', () => {
         return Response.json({ enabled: true })
       }
       if (parsed.pathname === '/v1/graphs') {
-        return Response.json({ runs: [run] })
+        return Response.json({
+          runs: [{
+            id: run.id,
+            threadId: run.threadId,
+            projectId: run.projectId,
+            sourceTurnId: run.sourceTurnId,
+            status: run.status,
+            currentRevision: run.currentRevision,
+            lastEventSeq: run.lastEventSeq,
+            title: run.plans.at(-1)?.title ?? '',
+            goal: run.plans.at(-1)?.goal ?? '',
+            nodeCount: Object.keys(run.nodes).length,
+            createdAt: run.createdAt,
+            updatedAt: run.updatedAt
+          }]
+        })
       }
       return Response.json(run)
     }) as unknown as typeof fetch
@@ -421,14 +436,64 @@ describe('KunTuiClient', () => {
       ['GET', '/v1/graphs/diagnostics'],
       ['GET', '/v1/graphs'],
       ['GET', '/v1/graphs/run_1'],
+      ['GET', '/v1/graphs/run_1'],
       ['POST', '/v1/graphs/run_1/steer']
     ])
     expect(calls[1]?.url.searchParams.get('thread_id')).toBe('thr_1')
-    expect(calls[3]?.body).toMatchObject({
+    expect(calls[4]?.body).toMatchObject({
       target: { kind: 'run' },
       text: 'Focus on Windows parity.'
     })
-    expect(String(calls[3]?.body?.commandId)).toMatch(/^tui_steer_/u)
+    expect(String(calls[4]?.body?.commandId)).toMatch(/^tui_steer_/u)
+  })
+
+  it('hydrates the newest non-terminal Graph summary before a newer terminal run', async () => {
+    const active = testTuiGraphRun({
+      id: 'run_active',
+      updatedAt: '2026-07-26T00:00:04.000Z'
+    })
+    const terminal = testTuiGraphRun({
+      id: 'run_terminal',
+      status: 'completed',
+      updatedAt: '2026-07-26T00:00:08.000Z'
+    })
+    const hydrated: string[] = []
+    const summary = (run: typeof active) => ({
+      id: run.id,
+      threadId: run.threadId,
+      projectId: run.projectId,
+      sourceTurnId: run.sourceTurnId,
+      status: run.status,
+      currentRevision: run.currentRevision,
+      lastEventSeq: run.lastEventSeq,
+      title: run.plans.at(-1)?.title ?? '',
+      goal: run.plans.at(-1)?.goal ?? '',
+      nodeCount: Object.keys(run.nodes).length,
+      createdAt: run.createdAt,
+      updatedAt: run.updatedAt
+    })
+    const fetchImpl = vi.fn(async (url: string | URL | Request) => {
+      const parsed = new URL(String(url))
+      if (parsed.pathname === '/v1/graphs') {
+        return parsed.searchParams.has('cursor')
+          ? Response.json({ runs: [summary(active)] })
+          : Response.json({ runs: [summary(terminal)], nextCursor: 'page_2' })
+      }
+      hydrated.push(parsed.pathname)
+      return Response.json(active)
+    }) as unknown as typeof fetch
+    const client = new KunTuiClient({
+      baseUrl: 'http://127.0.0.1:18899',
+      runtimeToken: 'runtime-secret',
+      fetch: fetchImpl
+    })
+
+    await expect(client.listGraphRuns(active.threadId)).resolves.toEqual([active])
+    expect(hydrated).toEqual(['/v1/graphs/run_active'])
+    expect(fetchImpl).toHaveBeenCalledWith(
+      expect.stringContaining('cursor=page_2'),
+      expect.anything()
+    )
   })
 
   it('redacts the known runtime token from structured server errors', async () => {

@@ -64,7 +64,6 @@ import type { ClipboardImage } from './clipboard-image.js'
 import {
   isTerminalGraphRun,
   latestTuiGraphRun,
-  renderTuiGraphStatus,
   summarizeTuiGraphRun
 } from './graph-mode.js'
 
@@ -93,6 +92,7 @@ export type TuiControllerState = {
   graphAvailable?: boolean
   graphUnavailableReason?: string
   graphRuns: GraphRunV1[]
+  graphBoard?: { runId: string }
   pendingAttachments: AttachmentMetadata[]
   attachmentMetadata: Record<string, AttachmentMetadata>
   theme: TuiThemeName
@@ -395,7 +395,8 @@ export class TuiController {
         busy: false,
         connection: 'connecting',
         notification: undefined,
-        inspection: undefined
+        inspection: undefined,
+        graphBoard: undefined
       })
       void this.hydrateAttachmentMetadata(
         attachmentIdsFromProjection(projection),
@@ -836,20 +837,20 @@ export class TuiController {
     }
   }
 
-  async manageGraphMode(action?: string): Promise<void> {
+  async manageGraphMode(action?: string): Promise<boolean> {
     const requested = action?.trim().toLowerCase() ?? ''
     if (requested === 'status' || requested === 'list') {
       await this.showGraphStatus()
-      return
+      return true
     }
     if (requested === 'off' || requested === 'direct' || requested === 'agent') {
       this.patch({ composerOrchestration: 'direct' })
       this.notify('Graph mode off · subsequent turns use Direct orchestration.')
-      return
+      return true
     }
     if (requested && requested !== 'on' && requested !== 'start') {
-      this.notify('Usage: /graph [status|off]', 'error')
-      return
+      this.notify('Usage: /graph [status|off|requirement]', 'error')
+      return false
     }
     if (!await this.refreshGraphAvailability(false)) {
       this.patch({ composerOrchestration: 'direct' })
@@ -858,7 +859,7 @@ export class TuiController {
           'Graph Mode is disabled in the shared Kun runtime.',
         'error'
       )
-      return
+      return false
     }
     const current = this.stateValue.projection
     if (
@@ -873,7 +874,7 @@ export class TuiController {
     if (active && (
       active.thread.mode !== 'agent' ||
       active.thread.goal?.status === 'active'
-    )) return
+    )) return false
     this.patch({
       composerMode: 'agent',
       composerOrchestration: 'graph',
@@ -882,6 +883,15 @@ export class TuiController {
         message: 'Graph mode active · type a requirement and press Enter.'
       }
     })
+    return true
+  }
+
+  async submitGraphRequirement(prompt: string): Promise<boolean> {
+    const requirement = prompt.trim()
+    if (!requirement) return false
+    if (!await this.manageGraphMode('on')) return false
+    await this.submit(requirement)
+    return true
   }
 
   async showGraphStatus(): Promise<void> {
@@ -898,17 +908,25 @@ export class TuiController {
       }
     }
     const run = latestTuiGraphRun(this.stateValue.graphRuns, threadId)
-    this.inspect('Graph', [
-      `Composer: ${this.stateValue.composerOrchestration === 'graph' ? 'Graph' : 'Direct'}`,
-      `Availability: ${this.stateValue.graphAvailable === true
-        ? 'enabled'
-        : this.stateValue.graphAvailable === false
-          ? 'disabled'
-          : 'unknown'}`,
-      ...(run
-        ? ['', ...renderTuiGraphStatus(run)]
-        : ['', 'No GraphRun is attached to this session.', 'Use /graph, then type a requirement and press Enter.'])
-    ])
+    if (!run) {
+      this.notify(
+        'No GraphRun is attached to this session. Use /graph <requirement> to start one.',
+        'error'
+      )
+      return
+    }
+    this.patch({ graphBoard: { runId: run.id }, inspection: undefined })
+  }
+
+  dismissGraphBoard(): void {
+    this.patch({ graphBoard: undefined })
+  }
+
+  openGraphBoard(runId: string): boolean {
+    const run = this.stateValue.graphRuns.find((candidate) => candidate.id === runId)
+    if (!run) return false
+    this.patch({ graphBoard: { runId }, inspection: undefined })
+    return true
   }
 
   reasoningOptions(): readonly ModelReasoningEffort[] {

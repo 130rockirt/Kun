@@ -39,6 +39,7 @@ Commands:
   chat [options]             Start a line-oriented terminal chat
   tui [options]              Open the inline terminal UI (same as bare kun)
   runtime <command>          Inspect, stop, or restart the shared runtime
+  update [--check|--yes]     Check or update a stable standalone TUI archive
   exec [options] <tool>      List or invoke tools directly
   extension <command>        Create, validate, pack, install, and manage extensions
 
@@ -83,7 +84,7 @@ const VALUE_FLAGS = new Set([
   'title'
 ])
 
-export type KunCliCommand = 'serve' | 'run' | 'chat' | 'tui' | 'exec' | 'runtime' | 'version' | 'help'
+export type KunCliCommand = 'serve' | 'run' | 'chat' | 'tui' | 'exec' | 'runtime' | 'update' | 'version' | 'help'
 
 export function splitKunCliCommand(argv: readonly string[]): {
   command: KunCliCommand
@@ -98,7 +99,15 @@ export function splitKunCliCommand(argv: readonly string[]): {
   if (first === '--version' || first === '-V' || first === 'version') {
     return { command: 'version', args: [] }
   }
-  if (first === 'serve' || first === 'run' || first === 'chat' || first === 'tui' || first === 'exec' || first === 'runtime') {
+  if (
+    first === 'serve' ||
+    first === 'run' ||
+    first === 'chat' ||
+    first === 'tui' ||
+    first === 'exec' ||
+    first === 'runtime' ||
+    first === 'update'
+  ) {
     return { command: first, args: [...argv.slice(1)] }
   }
   if (first.startsWith('-')) {
@@ -108,7 +117,7 @@ export function splitKunCliCommand(argv: readonly string[]): {
 }
 
 export async function runAgentCommand(
-  command: Exclude<KunCliCommand, 'serve' | 'runtime' | 'version' | 'help'>,
+  command: Exclude<KunCliCommand, 'serve' | 'runtime' | 'update' | 'version' | 'help'>,
   argv: readonly string[],
   io: CliIo
 ): Promise<number> {

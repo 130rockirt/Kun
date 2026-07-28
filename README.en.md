@@ -145,6 +145,12 @@ Download the latest build from [GitHub Releases](https://github.com/KunAgent/Kun
 | Windows | `.exe`, NSIS installer | x64 |
 | Linux | `.AppImage` | x64 |
 
+The GUI packages already contain the `kun` TUI. Headless developer machines
+can also download a self-contained standalone TUI archive for macOS arm64/x64,
+Windows x64, or Linux x64 from the same Release. The GUI and standalone TUI
+always ship together under one version; the TUI is not published through npm.
+See the [Kun TUI documentation](docs/kun-tui.en.md) for details.
+
 On first launch:
 
 1. Choose a UI language.

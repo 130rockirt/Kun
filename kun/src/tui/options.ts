@@ -18,6 +18,8 @@ Options:
   --workspace <path>        Workspace for new terminal threads (default cwd)
   --thread <id>             Open a specific thread
   --continue, -c            Open the most recently updated thread
+  --graph <requirement>     Start or steer a Graph requirement after opening
+  -graph <requirement>      Compatibility alias for --graph
   --model <model>           Model for newly created threads
   --provider-id <id>        Provider for newly created threads
   --account-id <id>         Provider account for newly created threads
@@ -40,6 +42,7 @@ export type TuiOptions = {
   workspace: string
   threadId?: string
   continueLatest: boolean
+  graphPrompt?: string
   noStart: boolean
   model?: string
   providerId?: string
@@ -59,6 +62,7 @@ const VALUE_OPTIONS = new Set([
   'data-dir',
   'workspace',
   'thread',
+  'graph',
   'model',
   'provider-id',
   'account-id',
@@ -90,6 +94,7 @@ export function parseTuiOptions(
   let continueLatest = false
   let noStart = false
   let help = false
+  let graphOptionSeen = false
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index]
     if (token === '--help' || token === '-h') {
@@ -104,13 +109,35 @@ export function parseTuiOptions(
       noStart = true
       continue
     }
-    if (!token.startsWith('--')) return { ok: false, message: `unknown argument: ${token}` }
+    if (token === '-graph') {
+      const value = argv[++index]
+      if (!value || isTuiOptionToken(value)) {
+        return { ok: false, message: graphPromptUsageError() }
+      }
+      values.set('graph', value)
+      graphOptionSeen = true
+      continue
+    }
+    if (!token.startsWith('--')) {
+      return {
+        ok: false,
+        message: graphOptionSeen
+          ? 'graph requirement must be one quoted argument; usage: kun --graph "<requirement>"'
+          : `unknown argument: ${token}`
+      }
+    }
     const equalAt = token.indexOf('=')
     const key = equalAt >= 0 ? token.slice(2, equalAt) : token.slice(2)
     if (!VALUE_OPTIONS.has(key)) return { ok: false, message: `unknown option: --${key}` }
     const value = equalAt >= 0 ? token.slice(equalAt + 1) : argv[++index]
-    if (!value || value.startsWith('--')) return { ok: false, message: `missing value for --${key}` }
+    if (!value || value.startsWith('--') || (key === 'graph' && isTuiOptionToken(value))) {
+      return {
+        ok: false,
+        message: key === 'graph' ? graphPromptUsageError() : `missing value for --${key}`
+      }
+    }
     values.set(key, value)
+    if (key === 'graph') graphOptionSeen = true
   }
 
   const approvalPolicy = nonEmpty(values.get('approval-policy')) as ApprovalPolicy | undefined
@@ -141,6 +168,7 @@ export function parseTuiOptions(
       workspace,
       ...(nonEmpty(values.get('thread')) ? { threadId: nonEmpty(values.get('thread')) } : {}),
       continueLatest,
+      ...(nonEmpty(values.get('graph')) ? { graphPrompt: nonEmpty(values.get('graph')) } : {}),
       noStart,
       ...(nonEmpty(values.get('model')) ? { model: nonEmpty(values.get('model')) } : {}),
       ...(nonEmpty(values.get('provider-id')) ? { providerId: nonEmpty(values.get('provider-id')) } : {}),
@@ -165,6 +193,17 @@ export function normalizeBaseUrl(value: string): string {
 
 function nonEmpty(value: string | undefined): string | undefined {
   return value?.trim() || undefined
+}
+
+function isTuiOptionToken(value: string): boolean {
+  return value === '-graph' ||
+    value === '-c' ||
+    value === '-h' ||
+    value.startsWith('--')
+}
+
+function graphPromptUsageError(): string {
+  return 'missing Graph requirement; usage: kun --graph "<requirement>"'
 }
 
 function expandHome(path: string): string {

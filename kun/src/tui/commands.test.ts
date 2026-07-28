@@ -42,8 +42,15 @@ describe('TUI slash commands', () => {
     expect(parseTuiCommand('/goal pause')).toEqual({ kind: 'goal', action: 'pause' })
     expect(parseTuiCommand('/graph')).toEqual({ kind: 'graph' })
     expect(parseTuiCommand('/graph status')).toEqual({ kind: 'graph', action: 'status' })
+    expect(parseTuiCommand('/graph list')).toEqual({ kind: 'graph', action: 'list' })
     expect(parseTuiCommand('/graph off')).toEqual({ kind: 'graph', action: 'off' })
+    expect(parseTuiCommand('/graph 实现 TUI Graph 看板')).toEqual({
+      kind: 'graph',
+      prompt: '实现 TUI Graph 看板'
+    })
     expect(parseTuiCommand('/agent')).toEqual({ kind: 'agent' })
+    expect(parseTuiCommand('/update')).toEqual({ kind: 'update', confirm: false })
+    expect(parseTuiCommand('/update yes')).toEqual({ kind: 'update', confirm: true })
     expect(parseTuiCommand('/skill:pdf inspect this')).toEqual({ kind: 'skill', name: 'pdf', prompt: 'inspect this' })
     expect(parseTuiCommand('/editor draft prompt')).toEqual({ kind: 'editor', initial: 'draft prompt' })
     expect(parseTuiCommand('/add-dir')).toEqual({ kind: 'usage', usage: '/add-dir <path>' })
@@ -103,7 +110,7 @@ describe('TUI slash commands', () => {
       'usage',
       'variants', 'thinking', 'mouse', 'details', 'permission', 'plan', 'graph', 'agent', 'subagents', 'tasks', 'goal',
       'attach', 'paste', 'memory', 'shells', 'extensions', 'queue', 'skills', 'mcp', 'init', 'editor', 'add-dir', 'btw', 'context',
-      'capabilities', 'theme', 'share', 'unshare', 'console', 'diff', 'terminal', 'help', 'quit'
+      'capabilities', 'theme', 'share', 'unshare', 'console', 'diff', 'terminal', 'update', 'help', 'quit'
     ]))
   })
 })

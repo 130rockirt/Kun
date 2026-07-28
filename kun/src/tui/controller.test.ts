@@ -393,6 +393,31 @@ describe('TuiController', () => {
     await controller.stop()
   })
 
+  it('enables and submits a one-step Graph requirement', async () => {
+    const source = detail()
+    const startTurn = vi.fn(async () => ({ turnId: 'turn_graph_one_step' }))
+    const client = {
+      graphAvailability: vi.fn(async () => ({ enabled: true })),
+      listGraphRuns: vi.fn(async () => []),
+      listThreads: vi.fn(async () => [source]),
+      getThread: vi.fn(async () => source),
+      subscribeThreadEvents: vi.fn(async (input: { signal: AbortSignal }) => {
+        await new Promise<void>((resolve) =>
+          input.signal.addEventListener('abort', () => resolve(), { once: true }))
+      }),
+      startTurn
+    } as unknown as KunTuiClient
+    const controller = new TuiController(client, options(), runtime)
+
+    await controller.start()
+    await expect(controller.submitGraphRequirement('构建实时看板')).resolves.toBe(true)
+    expect(startTurn).toHaveBeenCalledWith(source.id, expect.objectContaining({
+      prompt: '构建实时看板',
+      orchestration: 'graph'
+    }))
+    await controller.stop()
+  })
+
   it('refuses disabled Graph entry without changing Direct mode', async () => {
     const client = {
       graphAvailability: vi.fn(async () => ({ enabled: false })),
@@ -406,12 +431,64 @@ describe('TuiController', () => {
 
     await controller.start()
     await controller.manageGraphMode()
+    await expect(controller.submitGraphRequirement('Keep this draft')).resolves.toBe(false)
 
     expect(controller.state.composerOrchestration).toBe('direct')
     expect(controller.state.graphAvailable).toBe(false)
     expect(controller.state.notification).toMatchObject({
       kind: 'error',
       message: expect.stringContaining('disabled')
+    })
+    await controller.stop()
+  })
+
+  it('explains an older runtime without Graph diagnostics and keeps Direct mode', async () => {
+    const client = {
+      graphAvailability: vi.fn(async () => {
+        throw new TuiClientError('not found', 404, 'not_found')
+      }),
+      listThreads: vi.fn(async () => [])
+    } as unknown as KunTuiClient
+    const controller = new TuiController(
+      client,
+      { ...options(), continueLatest: false },
+      runtime
+    )
+
+    await controller.start()
+    await expect(controller.manageGraphMode()).resolves.toBe(false)
+    expect(controller.state).toMatchObject({
+      composerOrchestration: 'direct',
+      graphAvailable: false,
+      graphUnavailableReason: expect.stringContaining('does not support')
+    })
+    await controller.stop()
+  })
+
+  it('does not open a stale Graph board when the requested refresh fails', async () => {
+    const source = detail()
+    const run = testTuiGraphRun()
+    const listGraphRuns = vi.fn()
+      .mockResolvedValueOnce([run])
+      .mockRejectedValueOnce(new Error('refresh failed'))
+    const client = {
+      graphAvailability: vi.fn(async () => ({ enabled: true })),
+      listGraphRuns,
+      listThreads: vi.fn(async () => [source]),
+      getThread: vi.fn(async () => source),
+      subscribeThreadEvents: vi.fn(async (input: { signal: AbortSignal }) => {
+        await new Promise<void>((resolve) =>
+          input.signal.addEventListener('abort', () => resolve(), { once: true }))
+      })
+    } as unknown as KunTuiClient
+    const controller = new TuiController(client, options(), runtime)
+
+    await controller.start()
+    await controller.showGraphStatus()
+    expect(controller.state.graphBoard).toBeUndefined()
+    expect(controller.state.notification).toMatchObject({
+      kind: 'error',
+      message: expect.stringContaining('Could not load Graph status')
     })
     await controller.stop()
   })
@@ -462,8 +539,7 @@ describe('TuiController', () => {
     const controller = new TuiController(client, options(), runtime)
 
     await controller.start()
-    await controller.manageGraphMode()
-    await controller.submit('Prioritize the Windows validation node.')
+    await controller.submitGraphRequirement('Prioritize the Windows validation node.')
 
     expect(steerGraphRun).toHaveBeenCalledWith(
       run.id,
@@ -473,7 +549,9 @@ describe('TuiController', () => {
     expect(controller.state.notification?.message).toContain('Guidance persisted')
 
     await controller.showGraphStatus()
-    expect(controller.state.inspection?.lines.join('\n')).toContain('child_research')
+    expect(controller.state.graphBoard).toEqual({ runId: run.id })
+    controller.dismissGraphBoard()
+    expect(controller.state.graphBoard).toBeUndefined()
     await controller.stop()
   })
 

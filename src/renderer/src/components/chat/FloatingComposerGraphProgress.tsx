@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useId,
   useRef,
   useState,
   type CSSProperties,
@@ -22,9 +23,11 @@ import {
   useSubagentReducedMotion
 } from '../subagents/SubagentLiveness'
 import {
+  fitComposerGraphLabel,
   getComposerGraphProgress,
   layoutComposerGraph,
   selectComposerGraphRun,
+  type ComposerGraphLayout,
   type ComposerGraphLayoutNode
 } from './composer-graph-preview'
 import {
@@ -36,6 +39,11 @@ import {
 const GRAPH_POPOVER_WIDTH = 680
 const GRAPH_POPOVER_MAX_HEIGHT = 420
 const GRAPH_POPOVER_ESTIMATED_HEIGHT = 390
+const NODE_TEXT_LEFT_PADDING = 13
+const NODE_TEXT_RIGHT_PADDING = 8
+const NODE_TITLE_RIGHT_PADDING = 21
+const NODE_STATUS_WIDTH = 44
+const NODE_METADATA_GAP = 7
 const TERMINAL_GRAPH_RUN_STATUSES = new Set<GraphRun['status']>([
   'completed',
   'failed',
@@ -58,8 +66,9 @@ const nodeTone: Record<GraphNodeStatus, { fill: string; stroke: string; accent: 
   superseded: { fill: 'var(--ds-surface-card)', stroke: '#94a3b8', accent: '#94a3b8' }
 }
 
-function truncateLabel(value: string, limit: number): string {
-  return value.length > limit ? `${value.slice(0, limit - 1)}…` : value
+function useSvgFragmentId(prefix: string): string {
+  const reactId = useId().replace(/[^a-zA-Z0-9_-]/g, '')
+  return `${prefix}-${reactId}`
 }
 
 function AgentStack({ names }: { names: string[] }): ReactElement {
@@ -89,6 +98,45 @@ function AgentStack({ names }: { names: string[] }): ReactElement {
   )
 }
 
+function GraphPreviewPhase({
+  phase
+}: {
+  phase: ComposerGraphLayout['phases'][number]
+}): ReactElement {
+  const clipId = useSvgFragmentId('graph-preview-phase')
+  const label = fitComposerGraphLabel(phase.title, phase.width - 20, 10, 8)
+  return (
+    <g>
+      <title>{phase.title}</title>
+      <defs>
+        <clipPath id={clipId} clipPathUnits="userSpaceOnUse">
+          <rect x={phase.x} y={12} width={phase.width - 20} height={15} />
+        </clipPath>
+      </defs>
+      <text
+        x={phase.x}
+        y={24}
+        fill="var(--ds-text-muted)"
+        fontSize={label.fontSize}
+        fontWeight={650}
+        clipPath={`url(#${clipId})`}
+        data-graph-preview-phase-label
+        data-label-truncated={label.truncated || undefined}
+      >
+        {label.text}
+      </text>
+      <line
+        x1={phase.x}
+        x2={phase.x + phase.width - 20}
+        y1={34}
+        y2={34}
+        stroke="var(--ds-border)"
+        strokeDasharray="3 4"
+      />
+    </g>
+  )
+}
+
 function GraphPreviewNode({
   node,
   terminal,
@@ -102,6 +150,26 @@ function GraphPreviewNode({
 }): ReactElement {
   const { t } = useTranslation('common')
   const tone = nodeTone[node.status]
+  const clipId = useSvgFragmentId('graph-preview-node')
+  const titleWidth = node.width - NODE_TEXT_LEFT_PADDING - NODE_TITLE_RIGHT_PADDING
+  const agentWidth = node.width
+    - NODE_TEXT_LEFT_PADDING
+    - NODE_TEXT_RIGHT_PADDING
+    - NODE_STATUS_WIDTH
+    - NODE_METADATA_GAP
+  const statusLabel = t(`graphStatus_${node.status}`, { defaultValue: node.status })
+  const title = fitComposerGraphLabel(node.title, titleWidth, 11, 8)
+  const agent = fitComposerGraphLabel(
+    node.attemptNumber
+      ? `${node.agentName} · #${node.attemptNumber}`
+      : node.agentName,
+    agentWidth,
+    9,
+    7
+  )
+  const status = fitComposerGraphLabel(statusLabel, NODE_STATUS_WIDTH, 8, 7)
+  const statusX = node.x + node.width - NODE_TEXT_RIGHT_PADDING
+  const statusClipX = statusX - NODE_STATUS_WIDTH
   const openFromKeyboard = (event: KeyboardEvent<SVGGElement>): void => {
     if (event.key !== 'Enter' && event.key !== ' ') return
     event.preventDefault()
@@ -124,6 +192,32 @@ function GraphPreviewNode({
       onFocus={() => onInspect(node)}
     >
       <title>{`${node.title} · ${node.agentName} · ${node.status}`}</title>
+      <defs>
+        <clipPath id={`${clipId}-title`} clipPathUnits="userSpaceOnUse">
+          <rect
+            x={node.x + NODE_TEXT_LEFT_PADDING}
+            y={node.y + 8}
+            width={titleWidth}
+            height={16}
+          />
+        </clipPath>
+        <clipPath id={`${clipId}-agent`} clipPathUnits="userSpaceOnUse">
+          <rect
+            x={node.x + NODE_TEXT_LEFT_PADDING}
+            y={node.y + 29}
+            width={agentWidth}
+            height={14}
+          />
+        </clipPath>
+        <clipPath id={`${clipId}-status`} clipPathUnits="userSpaceOnUse">
+          <rect
+            x={statusClipX}
+            y={node.y + 29}
+            width={NODE_STATUS_WIDTH}
+            height={14}
+          />
+        </clipPath>
+      </defs>
       <rect
         x={node.x}
         y={node.y}
@@ -132,9 +226,9 @@ function GraphPreviewNode({
         rx={11}
         fill={tone.fill}
         stroke={tone.stroke}
-        strokeWidth={node.status === 'running' ? 2 : 1.25}
+        strokeWidth={node.processing ? 2 : 1.25}
       />
-      {node.status === 'running' && !terminal ? (
+      {node.processing && !terminal ? (
         <circle
           cx={node.x + node.width - 10}
           cy={node.y + 11}
@@ -151,30 +245,39 @@ function GraphPreviewNode({
         fill={tone.accent}
       />
       <text
-        x={node.x + 13}
+        x={node.x + NODE_TEXT_LEFT_PADDING}
         y={node.y + 21}
         fill="var(--ds-text)"
-        fontSize={11}
+        fontSize={title.fontSize}
         fontWeight={650}
+        clipPath={`url(#${clipId}-title)`}
+        data-graph-preview-node-title
+        data-label-truncated={title.truncated || undefined}
       >
-        {truncateLabel(node.title, 19)}
-      </text>
-      <text x={node.x + 13} y={node.y + 39} fill="var(--ds-text-muted)" fontSize={9}>
-        {truncateLabel(
-          node.attemptNumber
-            ? `${node.agentName} · #${node.attemptNumber}`
-            : node.agentName,
-          17
-        )}
+        {title.text}
       </text>
       <text
-        x={node.x + node.width - 8}
+        x={node.x + NODE_TEXT_LEFT_PADDING}
+        y={node.y + 39}
+        fill="var(--ds-text-muted)"
+        fontSize={agent.fontSize}
+        clipPath={`url(#${clipId}-agent)`}
+        data-graph-preview-node-agent
+        data-label-truncated={agent.truncated || undefined}
+      >
+        {agent.text}
+      </text>
+      <text
+        x={statusX}
         y={node.y + 39}
         fill={tone.accent}
-        fontSize={8}
+        fontSize={status.fontSize}
         textAnchor="end"
+        clipPath={`url(#${clipId}-status)`}
+        data-graph-preview-node-status
+        data-label-truncated={status.truncated || undefined}
       >
-        {truncateLabel(t(`graphStatus_${node.status}`, { defaultValue: node.status }), 10)}
+        {status.text}
       </text>
     </g>
   )
@@ -184,12 +287,14 @@ export function FloatingComposerGraphPreview({
   run,
   childRuns = {},
   now = Date.now(),
+  reducedMotion = false,
   onOpenGraph,
   onOpenChild
 }: {
   run: GraphRun
   childRuns?: Readonly<Record<string, GraphChildRuntime>>
   now?: number
+  reducedMotion?: boolean
   onOpenGraph: (runId: string, nodeId?: string) => void
   onOpenChild?: (
     runId: string,
@@ -239,40 +344,48 @@ export function FloatingComposerGraphPreview({
           >
             <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--ds-text-faint)" />
           </marker>
+          <marker
+            id={`graph-composer-active-arrow-${run.id}`}
+            viewBox="0 0 10 10"
+            refX="9"
+            refY="5"
+            markerWidth="5.5"
+            markerHeight="5.5"
+            orient="auto-start-reverse"
+          >
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--ds-accent)" />
+          </marker>
         </defs>
         {layout.phases.map((phase) => (
-          <g key={phase.id}>
-            <text
-              x={phase.x}
-              y={24}
-              fill="var(--ds-text-muted)"
-              fontSize={10}
-              fontWeight={650}
-            >
-              {truncateLabel(phase.title, 21)}
-            </text>
-            <line
-              x1={phase.x}
-              x2={phase.x + phase.width - 20}
-              y1={34}
-              y2={34}
-              stroke="var(--ds-border)"
-              strokeDasharray="3 4"
-            />
-          </g>
+          <GraphPreviewPhase key={phase.id} phase={phase} />
         ))}
         {layout.edges.map((edge) => (
-          <path
-            key={edge.id}
-            d={edge.path}
-            fill="none"
-            stroke="var(--ds-text-faint)"
-            strokeWidth={edge.kind === 'control' ? 1.35 : 1}
-            strokeDasharray={edge.kind === 'message' ? '4 4' : undefined}
-            markerEnd={`url(#graph-composer-arrow-${run.id})`}
-            opacity={0.75}
-            data-graph-preview-edge={edge.id}
-          />
+          <g key={edge.id}>
+            <path
+              d={edge.path}
+              fill="none"
+              stroke="var(--ds-text-faint)"
+              strokeWidth={edge.kind === 'control' ? 1.35 : 1}
+              strokeDasharray={edge.kind === 'message' ? '4 4' : undefined}
+              markerEnd={`url(#graph-composer-arrow-${run.id})`}
+              opacity={0.75}
+              data-graph-preview-edge={edge.id}
+            />
+            {edge.flowing ? (
+              <path
+                d={edge.path}
+                fill="none"
+                stroke="var(--ds-accent)"
+                strokeWidth={edge.kind === 'control' ? 1.8 : 1.5}
+                strokeDasharray={reducedMotion ? undefined : '7 9'}
+                markerEnd={`url(#graph-composer-active-arrow-${run.id})`}
+                opacity={reducedMotion ? 0.72 : 0.92}
+                className={`graph-composer-edge-flow${reducedMotion ? ' is-static' : ''}`}
+                aria-hidden
+                data-graph-preview-edge-flow={edge.id}
+              />
+            ) : null}
+          </g>
         ))}
         {layout.nodes.map((node) => (
           <GraphPreviewNode
@@ -555,6 +668,7 @@ export function FloatingComposerGraphProgress({
                 run={run}
                 childRuns={childRuns}
                 now={now}
+                reducedMotion={reducedMotion}
                 onOpenGraph={openFullGraph}
                 onOpenChild={onOpenChild}
               />

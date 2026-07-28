@@ -23,9 +23,10 @@ import {
   type ExtensionRegistryEntry
 } from '../extensions/index.js'
 import { ServeExitCode } from './serve.js'
+import { KUN_VERSION } from '../version.js'
 
 const KUN_EXTENSION_CLI_SCHEMA_VERSION = 1
-const DEFAULT_KUN_VERSION = '0.1.0'
+const DEFAULT_KUN_VERSION = KUN_VERSION
 const DEFAULT_LOG_BYTES = 256 * 1024
 const MAX_LOG_BYTES = 1024 * 1024
 

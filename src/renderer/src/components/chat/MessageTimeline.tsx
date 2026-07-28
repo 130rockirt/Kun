@@ -63,6 +63,7 @@ import {
 } from '../../extensions/ControlledContributionSurfaces'
 import { resolveActiveExtensionWorkspaceRoot } from '../../extensions/active-extension-workspace'
 import { extractDiffFilePath, extractUnifiedDiffText } from '../../lib/diff-stats'
+import type { PlanBuildOrchestration } from '../../plan/plan-build'
 
 export { summarizeToolBlock } from './message-timeline-process'
 
@@ -80,8 +81,10 @@ type Props = {
   devPreviewCard?: ReactElement | null
   /** Disables the inline Review Plan card's Build action while a turn runs. */
   planActionsBusy?: boolean
+  /** Whether Graph can be selected for a new plan build turn. */
+  graphEnabled?: boolean
   /** Runs the active plan (Build button on the inline Review Plan card). */
-  onBuildPlan?: () => void
+  onBuildPlan?: (orchestration: PlanBuildOrchestration) => void
   /** Opens/focuses the Plan panel (Open button on the inline card). */
   onOpenPlan?: () => void
   /** Opens the current workspace changes panel from a turn summary. */
@@ -419,6 +422,7 @@ export function MessageTimeline({
   focusModeEnabled = false,
   devPreviewCard,
   planActionsBusy,
+  graphEnabled = false,
   onBuildPlan,
   onOpenPlan,
   onOpenChanges,
@@ -831,6 +835,7 @@ export function MessageTimeline({
                 reasoningDurationMs={reasoningDurationMs}
                 devPreviewCard={isLatestTurn ? devPreviewCard : null}
                 planActionsBusy={planActionsBusy}
+                graphEnabled={graphEnabled}
                 onBuildPlan={onBuildPlan}
                 onOpenPlan={onOpenPlan}
                 onOpenChanges={onOpenChanges}
@@ -948,7 +953,8 @@ export type ConversationTurnProps = {
   reasoningDurationMs?: number
   devPreviewCard?: ReactElement | null
   planActionsBusy?: boolean
-  onBuildPlan?: () => void
+  graphEnabled?: boolean
+  onBuildPlan?: (orchestration: PlanBuildOrchestration) => void
   onOpenPlan?: () => void
   onOpenChanges?: () => void
   onReviewChanges?: () => void
@@ -971,6 +977,7 @@ export function ConversationTurn({
   reasoningDurationMs,
   devPreviewCard,
   planActionsBusy,
+  graphEnabled = false,
   onBuildPlan,
   onOpenPlan,
   onOpenChanges,
@@ -1205,6 +1212,7 @@ export function ConversationTurn({
           title={planResult.title?.trim() || planDisplayNameFromRelativePath(planResult.relativePath)}
           relativePath={planResult.relativePath}
           busy={planActionsBusy === true}
+          graphEnabled={graphEnabled}
           onOpen={onOpenPlan}
           onBuild={onBuildPlan}
         />
@@ -1302,6 +1310,7 @@ const MemoMessageTurn = memo(ConversationTurn, (prev, next) => (
   prev.reasoningDurationMs === next.reasoningDurationMs &&
   prev.devPreviewCard === next.devPreviewCard &&
   prev.planActionsBusy === next.planActionsBusy &&
+  prev.graphEnabled === next.graphEnabled &&
   prev.onBuildPlan === next.onBuildPlan &&
   prev.onOpenPlan === next.onOpenPlan &&
   prev.onOpenChanges === next.onOpenChanges &&
