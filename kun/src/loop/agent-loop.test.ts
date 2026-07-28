@@ -169,6 +169,30 @@ class ScriptedGraphModel implements ModelClient {
   }
 }
 
+class ScriptedInvalidGraphModel implements ModelClient {
+  readonly provider = 'test'
+  readonly model = 'scripted-invalid-graph-model'
+  readonly requests: ModelRequest[] = []
+
+  async *stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
+    this.requests.push(request)
+    if (this.requests.length <= 2) {
+      yield {
+        kind: 'tool_call_complete',
+        callId: `graph_create_call_${this.requests.length}`,
+        toolName: 'graph_create_run',
+        arguments: this.requests.length === 1
+          ? { plan: {} }
+          : { plan: { valid: true } }
+      }
+      yield { kind: 'completed', stopReason: 'tool_calls' }
+      return
+    }
+    yield { kind: 'assistant_text_delta', text: 'GraphRun started after correction.' }
+    yield { kind: 'completed', stopReason: 'stop' }
+  }
+}
+
 class FinalResponseGateModel implements ModelClient {
   readonly provider = 'test'
   readonly model = 'final-response-gate-model'
@@ -561,13 +585,10 @@ describe('AgentLoop interruption', () => {
     expect(model.requests).toHaveLength(3)
     expect(model.requests[0]?.requiredToolName).toBe('graph_create_run')
     expect(model.requests[0]?.modeInstruction).toContain('Graph Mode is active')
-    expect(model.requests[0]?.tools.map((tool) => tool.name)).toEqual(expect.arrayContaining([
-      'graph_create_run',
-      'graph_control_run'
-    ]))
+    expect(model.requests[0]?.tools.map((tool) => tool.name)).toEqual(['graph_create_run'])
     expect(model.requests[1]?.requiredToolName).toBe('graph_create_run')
     expect(model.requests[1]?.tools.map((tool) => tool.name)).toEqual(['graph_create_run'])
-    expect(model.requests[1]?.modeInstruction).toContain('Graph creation recovery 1/2')
+    expect(model.requests[1]?.modeInstruction).toContain('Graph creation attempt 2/3')
     expect(model.requests[2]?.requiredToolName).toBeUndefined()
     expect(model.requests[2]?.history).toEqual(expect.arrayContaining([
       expect.objectContaining({
@@ -615,8 +636,222 @@ describe('AgentLoop interruption', () => {
       .not.toContain('graph_create_run')
   })
 
+  it('persists failed Graph gate progress when the model cannot call tools', async () => {
+    const sessionStore = new InMemorySessionStore()
+    const threadStore = new InMemoryThreadStore()
+    const eventBus = new InMemoryEventBus()
+    const inflight = new InflightTracker()
+    const steering = new SteeringQueue()
+    const ids = new SequentialIdGenerator()
+    const nowIso = () => '2026-07-28T00:00:00.000Z'
+    const events = new RuntimeEventRecorder({
+      eventBus,
+      sessionStore,
+      allocateSeq: (threadId) => eventBus.allocateSeq(threadId),
+      nowIso
+    })
+    const model = new CapturingCompleteModel()
+    const turns = new TurnService({
+      threadStore,
+      sessionStore,
+      events,
+      inflight,
+      steering,
+      compactor: new ContextCompactor(),
+      ids,
+      nowIso
+    })
+    const graphTool = LocalToolHost.defineTool({
+      name: 'graph_create_run',
+      description: 'Create a validated GraphRun.',
+      inputSchema: { type: 'object', additionalProperties: false },
+      toolKind: 'tool_call',
+      policy: 'auto',
+      shouldAdvertise: (context) => context.orchestration === 'graph',
+      execute: async () => ({ output: { run: { id: 'graph_run_unsupported' } } })
+    })
+    const loop = new AgentLoop({
+      threadStore,
+      sessionStore,
+      approvalGate: new AllowApprovalGate(),
+      userInputGate: new NoopUserInputGate(),
+      model,
+      toolHost: new LocalToolHost({ tools: [graphTool] }),
+      usage: new UsageService(),
+      events,
+      turns,
+      inflight,
+      steering,
+      compactor: new ContextCompactor(),
+      prefix: createImmutablePrefix({ systemPrompt: 'test system prompt' }),
+      ids,
+      nowIso,
+      modelCapabilities: (modelId) => ({
+        id: modelId,
+        inputModalities: ['text'],
+        outputModalities: ['text'],
+        supportsToolCalling: false,
+        messageParts: ['text']
+      })
+    })
+    const threadId = 'thr_graph_unsupported'
+    await threadStore.upsert(createThreadRecord({
+      id: threadId,
+      title: 'Unsupported Graph mode',
+      workspace: '/tmp/workspace',
+      model: model.model
+    }))
+    const started = await turns.startTurn({
+      threadId,
+      request: {
+        prompt: 'Create a graph.',
+        model: model.model,
+        orchestration: 'graph'
+      }
+    })
+
+    await expect(loop.runTurn(threadId, started.turnId)).resolves.toBe('failed')
+    expect(model.requests).toHaveLength(0)
+    const turn = await turns.getTurn(threadId, started.turnId)
+    expect(turn?.requiredToolGate).toMatchObject({
+      toolName: 'graph_create_run',
+      attempt: 1,
+      maxAttempts: 3,
+      phase: 'failed'
+    })
+    const recorded = await sessionStore.loadEventsSince(threadId, 0)
+    expect(recorded).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'required_tool_gate',
+        toolName: 'graph_create_run',
+        phase: 'failed',
+        attempt: 1,
+        maxAttempts: 3
+      })
+    ]))
+  })
+
+  it('recovers retryable invalid Graph creation through a single-tool correction round', async () => {
+    const sessionStore = new InMemorySessionStore()
+    const threadStore = new InMemoryThreadStore()
+    const eventBus = new InMemoryEventBus()
+    const inflight = new InflightTracker()
+    const steering = new SteeringQueue()
+    const ids = new SequentialIdGenerator()
+    const nowIso = () => '2026-07-27T00:00:00.000Z'
+    const events = new RuntimeEventRecorder({
+      eventBus,
+      sessionStore,
+      allocateSeq: (threadId) => eventBus.allocateSeq(threadId),
+      nowIso
+    })
+    const model = new ScriptedInvalidGraphModel()
+    const turns = new TurnService({
+      threadStore,
+      sessionStore,
+      events,
+      inflight,
+      steering,
+      compactor: new ContextCompactor(),
+      ids,
+      nowIso
+    })
+    const graphTool = LocalToolHost.defineTool({
+      name: 'graph_create_run',
+      description: 'Create a validated GraphRun.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          plan: {
+            type: 'object',
+            properties: { valid: { type: 'boolean' } },
+            required: ['valid'],
+            additionalProperties: false
+          }
+        },
+        required: ['plan'],
+        additionalProperties: false
+      },
+      toolKind: 'tool_call',
+      policy: 'auto',
+      shouldAdvertise: (context) => context.orchestration === 'graph',
+      execute: async (args) => {
+        const plan = args.plan as { valid?: unknown } | undefined
+        return plan?.valid === true
+          ? { output: { run: { id: 'graph_run_1', status: 'running' } } }
+          : {
+              output: {
+                code: 'graph_create_run_schema_invalid',
+                error: 'plan.valid is required',
+                issues: [{ path: ['plan', 'valid'], code: 'invalid_type', message: 'Required' }],
+                guidance: 'Correct the advertised schema.',
+                retryable: true
+              },
+              isError: true
+            }
+      }
+    })
+    const graphControlTool = LocalToolHost.defineTool({
+      name: 'graph_control_run',
+      description: 'Control an existing GraphRun.',
+      inputSchema: { type: 'object', additionalProperties: false },
+      toolKind: 'tool_call',
+      policy: 'auto',
+      shouldAdvertise: (context) => context.orchestration === 'graph',
+      execute: async () => ({ output: { ok: true } })
+    })
+    const loop = new AgentLoop({
+      threadStore,
+      sessionStore,
+      approvalGate: new AllowApprovalGate(),
+      userInputGate: new NoopUserInputGate(),
+      model,
+      toolHost: new LocalToolHost({ tools: [graphTool, graphControlTool] }),
+      usage: new UsageService(),
+      events,
+      turns,
+      inflight,
+      steering,
+      compactor: new ContextCompactor(),
+      prefix: createImmutablePrefix({ systemPrompt: 'test system prompt' }),
+      ids,
+      nowIso
+    })
+    await threadStore.upsert(createThreadRecord({
+      id: 'thr_invalid_graph_mode',
+      title: 'Invalid Graph mode',
+      workspace: '/tmp/workspace',
+      model: model.model
+    }))
+    const graphTurn = await turns.startTurn({
+      threadId: 'thr_invalid_graph_mode',
+      request: {
+        prompt: 'Implement and verify the feature.',
+        model: model.model,
+        orchestration: 'graph'
+      }
+    })
+
+    await expect(loop.runTurn('thr_invalid_graph_mode', graphTurn.turnId))
+      .resolves.toBe('completed')
+    expect(model.requests).toHaveLength(3)
+    expect(model.requests[1]?.requiredToolName).toBe('graph_create_run')
+    expect(model.requests[1]?.tools.map((tool) => tool.name)).toEqual(['graph_create_run'])
+    expect(model.requests[1]?.modeInstruction).toContain('failed validation')
+    expect(model.requests[1]?.modeInstruction).toContain('structured issues')
+    expect(model.requests[1]?.history).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'tool_result',
+        toolName: 'graph_create_run',
+        isError: true,
+        output: expect.objectContaining({ retryable: true })
+      })
+    ]))
+    expect(model.requests[2]?.requiredToolName).toBeUndefined()
+  })
+
   it('recovers a dedicated SVG turn until mutation and matching validation succeed', async () => {
-    const model = new ScriptedSvgModel(['stop', 'edit', 'stop', 'validate', 'stop'])
+    const model = new ScriptedSvgModel(['stop', 'edit', 'validate', 'stop'])
     const harness = await svgLoopHarness({
       model,
       tools: [
@@ -636,7 +871,7 @@ describe('AgentLoop interruption', () => {
     })
 
     await expect(harness.loop.runTurn(harness.threadId, harness.turnId)).resolves.toBe('completed')
-    expect(model.requests).toHaveLength(5)
+    expect(model.requests).toHaveLength(4)
     expect(model.requests[0].modeInstruction).toContain('dedicated Kun SVG artifact turn')
     expect(model.requests[0].modeInstruction).not.toContain('PLAN MODE')
     expect(model.requests[0].tools.map((tool) => tool.name)).toEqual([
@@ -645,8 +880,7 @@ describe('AgentLoop interruption', () => {
     expect(model.requests[2].requiredToolName).toBe('design_svg_validate')
     const items = await harness.sessionStore.loadItems(harness.threadId)
     expect(items).toEqual(expect.arrayContaining([
-      expect.objectContaining({ kind: 'error', code: 'required_svg_mutation_missing' }),
-      expect.objectContaining({ kind: 'error', code: 'required_svg_validation_missing' })
+      expect.objectContaining({ kind: 'error', code: 'required_svg_mutation_missing' })
     ]))
   })
 

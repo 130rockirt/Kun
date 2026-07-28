@@ -350,7 +350,11 @@ export async function createKunServeRuntime(
   // by default. Advanced configurations can explicitly opt out when local
   // sensitive-content retention or request-path overhead is undesirable.
   const llmDebug = llmDebugCaptureEnabled(activeOptions)
-    ? new LlmDebugRecorder({ dataDir: activeOptions.dataDir })
+    ? new LlmDebugRecorder({
+        dataDir: activeOptions.dataDir,
+        shouldCapture: async (threadId) =>
+          (await threadStore.get(threadId))?.modelRequestCaptureEnabled === true
+      })
     : undefined
   const agentObservability = createAgentObservabilityRecorder({
     config: activeOptions.observability,
@@ -393,6 +397,7 @@ export async function createKunServeRuntime(
     nowIso,
     defaultApprovalPolicy: activeOptions.approvalPolicy,
     defaultSandboxMode: activeOptions.sandboxMode,
+    defaultModelRequestCaptureEnabled: modelRequestCaptureDefaultEnabled(activeOptions),
     lifecycleFence,
     onDeleting: async (threadId) => {
       abortThreadExecution?.(threadId)
@@ -2184,7 +2189,8 @@ export async function createKunServeRuntime(
 	    extensionPreparations.clear()
 	    threadService.updateRuntimeDefaults({
 	      approvalPolicy: activeOptions.approvalPolicy,
-	      sandboxMode: activeOptions.sandboxMode
+	      sandboxMode: activeOptions.sandboxMode,
+	      modelRequestCaptureEnabled: modelRequestCaptureDefaultEnabled(activeOptions)
 	    })
 	    reviewService.updateRuntimeConfig({
 	      defaultModel: activeOptions.model,
@@ -2816,6 +2822,12 @@ function llmDebugCaptureEnabled(
   options: Pick<KunServeRuntimeOptions, 'runtime'>
 ): boolean {
   return options.runtime?.llmDebug?.enabled !== false
+}
+
+function modelRequestCaptureDefaultEnabled(
+  options: Pick<KunServeRuntimeOptions, 'runtime'>
+): boolean {
+  return options.runtime?.llmDebug?.defaultThreadCaptureEnabled === true
 }
 
 async function persistRuntimeMcpConfig(

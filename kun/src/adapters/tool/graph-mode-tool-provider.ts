@@ -3,7 +3,6 @@ import type { ArtifactStore } from '../../artifacts/artifact-store.js'
 import {
   GRAPH_CONTRACT_VERSION,
   GraphPatchV1Schema,
-  GraphPlanV1Schema,
   GraphReviewResultV1Schema,
   GraphWorkerResultV1Schema,
   type GraphArtifactReferenceV1,
@@ -26,6 +25,13 @@ import {
   GRAPH_LEAD_TOOL_NAMES,
   GRAPH_WORKER_TOOL_NAMES
 } from '../../graph/graph-tool-boundary.js'
+import { buildGraphCreateRunTool } from './graph-create-run-tool.js'
+
+export {
+  GRAPH_CREATE_RUN_INPUT_JSON_SCHEMA,
+  GraphCreateRunInputSchema,
+  GraphCreateRunPlanInputSchema
+} from './graph-create-run-tool.js'
 
 export function buildGraphModeLocalTools(options: {
   control: GraphControlService
@@ -59,51 +65,12 @@ export function buildGraphModeLocalTools(options: {
     options.enabled() && options.workerSessions.has(context.threadId)
 
   return [
-    LocalToolHost.defineTool({
-      name: GRAPH_LEAD_TOOL_NAMES[0],
-      description:
-        'Create and start a durable GraphRun after thinking through the user request. ' +
-        'The plan must define phases, bounded nodes, typed edges, budgets, completion nodes, ' +
-        'acceptance criteria, review policy, explicit read/write scopes, and bounded LoopGates. ' +
-        'Use this exactly once for a Graph-mode user turn; the host validates all authority and graph invariants.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          plan: { type: 'object' },
-          start: { type: 'boolean' }
-        },
-        required: ['plan'],
-        additionalProperties: false
-      },
-      policy: 'auto',
-      toolKind: 'tool_call',
-      sideEffect: 'unknown',
+    buildGraphCreateRunTool({
+      control: options.control,
+      registry: options.registry,
       shouldAdvertise: graphCreatorOnly,
-      execute: async (args, context) => {
-        try {
-          const raw = GraphPlanV1Schema.parse(args.plan)
-          const identity = await options.registry.identify(context.workspace)
-          const plan = GraphPlanV1Schema.parse({
-            ...raw,
-            workspaceRoot: identity.canonicalWorkspaceRoot,
-            createdBy: 'lead'
-          })
-          const runId = options.control.allocateId('graph_run')
-          const result = await options.control.create({
-            runId,
-            threadId: context.threadId,
-            projectId: identity.projectId,
-            sourceTurnId: context.turnId,
-            plan,
-            commandId: nextId('graph_command'),
-            idempotencyKey: `graph-create:${context.turnId}`,
-            start: args.start !== false
-          })
-          return { output: { run: result.run, validation: result.validation } }
-        } catch (error) {
-          return { output: { error: errorMessage(error) }, isError: true }
-        }
-      }
+      nowIso,
+      nextId
     }),
     LocalToolHost.defineTool({
       name: GRAPH_LEAD_TOOL_NAMES[1],

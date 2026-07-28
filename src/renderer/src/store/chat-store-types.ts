@@ -259,6 +259,7 @@ export type ChatState = {
   error: string | null
   runtimeErrorDetail: string | null
   currentTurnId: string | null
+  currentTurnOrchestration: 'direct' | 'graph' | null
   currentTurnUserId: string | null
   turnStartedAtByUserId: Record<string, number>
   turnDurationByUserId: Record<string, number>

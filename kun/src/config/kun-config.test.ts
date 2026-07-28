@@ -43,13 +43,13 @@ describe('RuntimeTuningConfigSchema Agent Perspective capture', () => {
     }).llmDebug).toEqual({ enabled: true })
   })
 
-  it('preserves explicit enabled and disabled capture policies', () => {
+  it('preserves explicit facility and new-thread capture defaults', () => {
     expect(RuntimeTuningConfigSchema.parse({
-      llmDebug: { enabled: true }
-    }).llmDebug).toEqual({ enabled: true })
+      llmDebug: { enabled: true, defaultThreadCaptureEnabled: true }
+    }).llmDebug).toEqual({ enabled: true, defaultThreadCaptureEnabled: true })
     expect(RuntimeTuningConfigSchema.parse({
-      llmDebug: { enabled: false }
-    }).llmDebug).toEqual({ enabled: false })
+      llmDebug: { enabled: false, defaultThreadCaptureEnabled: false }
+    }).llmDebug).toEqual({ enabled: false, defaultThreadCaptureEnabled: false })
   })
 })
 

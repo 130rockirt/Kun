@@ -85,6 +85,20 @@ export const InjectedInstructionSourceSchema = z.object({
 })
 export type InjectedInstructionSource = z.infer<typeof InjectedInstructionSourceSchema>
 
+/**
+ * Durable state for a hard named-tool gate. It is deliberately optional so
+ * legacy turns remain valid, while an interrupted Graph creation turn cannot
+ * restart its bounded retry window after a runtime restart.
+ */
+export const RequiredToolGateSchema = z.object({
+  toolName: z.string().min(1).max(256),
+  attempt: z.number().int().positive(),
+  maxAttempts: z.number().int().positive(),
+  phase: z.enum(['preparing', 'retrying', 'succeeded', 'failed']),
+  lastError: z.string().min(1).max(2_048).optional()
+}).strict()
+export type RequiredToolGate = z.infer<typeof RequiredToolGateSchema>
+
 export const TurnSchema = z.object({
   id: z.string().min(1),
   threadId: z.string().min(1),
@@ -117,6 +131,8 @@ export const TurnSchema = z.object({
   toolCatalogFingerprint: z.string().optional(),
   toolCatalogToolCount: z.number().int().nonnegative().optional(),
   toolCatalogDrift: z.boolean().optional(),
+  /** Optional persisted hard-tool gate. Missing legacy values mean inactive. */
+  requiredToolGate: RequiredToolGateSchema.optional(),
   /** Extension-run budget accounting persisted across runtime restarts. */
   extensionBudgetTokenBaseline: z.number().int().nonnegative().optional(),
   extensionModelRequests: z.number().int().nonnegative().optional(),

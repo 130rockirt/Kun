@@ -267,6 +267,7 @@ export class KunRuntimeProvider implements AgentProvider {
         mode: normalizeThreadMode(input.mode),
         approvalPolicy: runtime.approvalPolicy,
         sandboxMode: runtime.sandboxMode,
+        modelRequestCaptureEnabled: runtime.llmDebug.defaultThreadCaptureEnabled,
         ...(requestedProviderId
           ? { providerId: requestedProviderId }
           : {}),
@@ -291,6 +292,7 @@ export class KunRuntimeProvider implements AgentProvider {
     latestSeq: number
     threadStatus?: string
     latestTurnId?: string
+    latestTurnOrchestration?: 'direct' | 'graph'
     latestUserMessageId?: string
     turnDurationByUserId?: Record<string, number>
     usage?: ThreadUsageSnapshot
@@ -348,6 +350,9 @@ export class KunRuntimeProvider implements AgentProvider {
       latestSeq: thread.latestSeq ?? 0,
       threadStatus: thread.status ?? latestTurn?.status,
       latestTurnId: latestTurn?.id,
+      latestTurnOrchestration: latestTurn
+        ? latestTurn.orchestration === 'graph' ? 'graph' : 'direct'
+        : undefined,
       latestUserMessageId,
       relation: thread.relation,
       ...(thread.parentThreadId ? { parentThreadId: thread.parentThreadId } : {}),

@@ -12,9 +12,10 @@ import type {
   ModelRequestTraceDelegated,
   ModelRequestTraceRecord
 } from '../../contracts/model-request-trace.js'
-import type {
-  LlmDebugRound,
-  LlmDebugSink
+import {
+  startLlmDebugRoundIfEnabled,
+  type LlmDebugRound,
+  type LlmDebugSink
 } from '../../services/llm-debug-recorder.js'
 import type { RuntimeEventRecorder } from '../../services/runtime-event-recorder.js'
 import type { TurnService } from '../../services/turn-service.js'
@@ -287,7 +288,7 @@ export class AntigravityCliRuntime implements DelegatedTurnRuntime {
         nativeHistory: 'none'
       })
     }
-    let trace = startAntigravityTrace(this.deps.debugSink, {
+    let trace = await startAntigravityTrace(this.deps.debugSink, {
       threadId,
       turnId,
       provider: providerId?.trim() || 'antigravity-cli',
@@ -483,7 +484,7 @@ type AntigravityTrace = {
   record: ModelRequestTraceRecord
 }
 
-function startAntigravityTrace(
+async function startAntigravityTrace(
   sink: LlmDebugSink | undefined,
   input: {
     threadId: string
@@ -497,16 +498,17 @@ function startAntigravityTrace(
     sandboxMode: string
     delegated: ModelRequestTraceDelegated
   }
-): AntigravityTrace | undefined {
+): Promise<AntigravityTrace | undefined> {
   if (!sink) return undefined
   let round: LlmDebugRound | undefined
   try {
-    round = sink.start({
+    round = await startLlmDebugRoundIfEnabled(sink, {
       threadId: input.threadId,
       turnId: input.turnId,
       provider: input.provider,
       model: input.model
     })
+    if (!round) return undefined
     const record = sink.beginCliInvocation(round, {
       endpointFormat: 'antigravity-cli',
       target: 'antigravity-cli://local/print',

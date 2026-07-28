@@ -33,6 +33,7 @@ import {
   type KunHistoryHygieneSettingsV1,
   type KunImageGenerationSettingsV1,
   type KunInstructionSettingsV1,
+  type KunLlmDebugSettingsV1,
   type ImageGenerationQuality,
   type ImageGenerationResolution,
   type KunMcpSearchSettingsV1,
@@ -175,6 +176,7 @@ export function defaultKunRuntimeSettings(
     storage: defaultKunStorageSettings(),
     contextCompaction: defaultKunContextCompactionSettings(),
     runtimeTuning: defaultKunRuntimeTuningSettings(),
+    llmDebug: defaultKunLlmDebugSettings(),
     imageGeneration: defaultKunImageGenerationSettings(),
     speechToText: defaultKunSpeechToTextSettings(),
     textToSpeech: defaultKunTextToSpeechSettings(),
@@ -194,6 +196,12 @@ export function defaultKunRuntimeSettings(
 export function defaultKunInstructionSettings(): KunInstructionSettingsV1 {
   return {
     enabled: true
+  }
+}
+
+export function defaultKunLlmDebugSettings(): KunLlmDebugSettingsV1 {
+  return {
+    defaultThreadCaptureEnabled: false
   }
 }
 
@@ -592,6 +600,10 @@ export function mergeKunRuntimeSettings(
         }
       : {})
   })
+  const nextLlmDebug = normalizeKunLlmDebugSettings({
+    ...current.llmDebug,
+    ...(patch?.llmDebug ?? {})
+  })
   const nextModelProfiles = normalizeKunModelProfiles(current.modelProfiles, patch?.modelProfiles)
   const nextInstructions = {
     enabled: patch?.instructions?.enabled ?? current.instructions?.enabled ?? true
@@ -609,11 +621,13 @@ export function mergeKunRuntimeSettings(
     subagents: _subagentsPatch,
     projectConfig: _projectConfigPatch,
     graph: _graphPatch,
+    llmDebug: _llmDebugPatch,
     ...flatPatch
   } = patch ?? {}
   void _subagentsPatch
   void _projectConfigPatch
   void _graphPatch
+  void _llmDebugPatch
   // NOTE: approvalPolicy/sandboxMode are merged through verbatim from the patch.
   // The unified 6-mode UI selector already resolves a mode to its concrete
   // {approvalPolicy, sandboxMode} pair via kunToolPermissionModeSettings before
@@ -634,6 +648,7 @@ export function mergeKunRuntimeSettings(
     storage: nextStorage,
     contextCompaction: nextContextCompaction,
     runtimeTuning: nextRuntimeTuning,
+    llmDebug: nextLlmDebug,
     imageGeneration: nextImageGeneration,
     speechToText: nextSpeechToText,
     textToSpeech: nextTextToSpeech,
@@ -1168,6 +1183,14 @@ function normalizeKunRuntimeTuningSettings(
   }
 }
 
+function normalizeKunLlmDebugSettings(
+  input: Partial<KunLlmDebugSettingsV1> | undefined
+): KunLlmDebugSettingsV1 {
+  return {
+    defaultThreadCaptureEnabled: input?.defaultThreadCaptureEnabled === true
+  }
+}
+
 export function kunRuntimeTuningDefaultsMigrationNeeded(
   input: Partial<KunRuntimeTuningSettingsV1> | undefined
 ): boolean {
@@ -1526,6 +1549,7 @@ export function migrateLegacyAppSettings(parsed: LegacyAppSettingsShape): Partia
     storage: normalizeKunStorageSettings(explicitKun.storage),
     contextCompaction: normalizeKunContextCompactionSettings(explicitKun.contextCompaction),
     runtimeTuning: normalizeKunRuntimeTuningSettings(explicitKun.runtimeTuning),
+    llmDebug: normalizeKunLlmDebugSettings(explicitKun.llmDebug),
     imageGeneration: normalizeKunImageGenerationSettings(explicitKun.imageGeneration),
     speechToText: normalizeKunSpeechToTextSettings(explicitKun.speechToText),
     textToSpeech: normalizeKunTextToSpeechSettings(explicitKun.textToSpeech),

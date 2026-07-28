@@ -1,12 +1,20 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { ToolHostContext } from '../../ports/tool-host.js'
+import {
+  GRAPH_CONTRACT_VERSION,
+  GraphValidationResultV1Schema
+} from '../../contracts/index.js'
+import { GraphPlanValidationError } from '../../graph/graph-validator.js'
 import { GraphWorkerSessionRegistry } from '../../graph/graph-worker-sessions.js'
 import { replayGraphEvents } from '../../graph/graph-reducer.js'
 import {
   testGraphEnvelope,
   testGraphPlan
 } from '../../graph/graph-test-fixtures.test-support.js'
-import { buildGraphModeLocalTools } from './graph-mode-tool-provider.js'
+import {
+  buildGraphModeLocalTools,
+  GRAPH_CREATE_RUN_INPUT_JSON_SCHEMA
+} from './graph-mode-tool-provider.js'
 
 function context(
   threadId: string,
@@ -26,6 +34,226 @@ function context(
 }
 
 describe('Graph Mode tool visibility boundaries', () => {
+  it('advertises the complete model-owned Graph creation schema without host fields', () => {
+    const properties = GRAPH_CREATE_RUN_INPUT_JSON_SCHEMA.properties as Record<string, unknown>
+    const plan = properties.plan as {
+      properties: Record<string, unknown>
+      required: string[]
+    }
+    expect(plan.required).toEqual(expect.arrayContaining([
+      'title',
+      'goal',
+      'phases',
+      'nodes',
+      'edges',
+      'budget',
+      'completionNodeIds'
+    ]))
+    expect(plan.properties).not.toHaveProperty('version')
+    expect(plan.properties).not.toHaveProperty('revision')
+    expect(plan.properties).not.toHaveProperty('workspaceRoot')
+    expect(plan.properties).not.toHaveProperty('autoStart')
+    expect(plan.properties).not.toHaveProperty('createdBy')
+    expect(plan.properties).not.toHaveProperty('createdAt')
+
+    const nodes = plan.properties.nodes as {
+      items: { properties: Record<string, unknown>; required: string[] }
+    }
+    expect(nodes.items.required).toEqual(expect.arrayContaining([
+      'id',
+      'phaseId',
+      'kind',
+      'title',
+      'objective',
+      'completion'
+    ]))
+    expect(nodes.items.properties).toHaveProperty('readScopes')
+    expect(nodes.items.properties).toHaveProperty('writeScopes')
+    expect(nodes.items.properties.kind).toMatchObject({
+      enum: ['work', 'review', 'integration', 'loop_gate']
+    })
+    expect(JSON.stringify(GRAPH_CREATE_RUN_INPUT_JSON_SCHEMA)).not.toContain('"$schema"')
+  })
+
+  it('materializes host-owned creation fields and starts by default', async () => {
+    const create = vi.fn(async (input: { plan: ReturnType<typeof testGraphPlan> }) => ({
+      run: { id: 'graph_run_1', plan: input.plan },
+      validation: { valid: true }
+    }))
+    const tools = buildGraphModeLocalTools({
+      control: {
+        allocateId: () => 'graph_run_1',
+        create
+      } as never,
+      store: {} as never,
+      mailbox: {} as never,
+      registry: {
+        identify: async () => ({
+          projectId: 'project_1',
+          canonicalWorkspaceRoot: '/canonical/workspace'
+        })
+      } as never,
+      artifactStore: {} as never,
+      workerSessions: new GraphWorkerSessionRegistry(),
+      enabled: () => true,
+      nowIso: () => '2026-07-27T00:00:00.000Z',
+      nextId: () => 'graph_command_1'
+    })
+    const graphCreate = tools.find((tool) => tool.name === 'graph_create_run')!
+    const {
+      version: _version,
+      revision: _revision,
+      workspaceRoot: _workspaceRoot,
+      autoStart: _autoStart,
+      createdBy: _createdBy,
+      createdAt: _createdAt,
+      ...modelPlan
+    } = testGraphPlan()
+
+    const result = await graphCreate.execute(
+      { plan: modelPlan },
+      context('lead_thread', 'graph')
+    )
+
+    expect(result.isError).not.toBe(true)
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      runId: 'graph_run_1',
+      projectId: 'project_1',
+      start: true,
+      plan: expect.objectContaining({
+        version: GRAPH_CONTRACT_VERSION,
+        revision: 1,
+        workspaceRoot: '/canonical/workspace',
+        autoStart: true,
+        createdBy: 'lead',
+        createdAt: '2026-07-27T00:00:00.000Z'
+      })
+    }))
+  })
+
+  it('returns structured retryable issues for guessed or host-owned fields', async () => {
+    const tools = buildGraphModeLocalTools({
+      control: {} as never,
+      store: {} as never,
+      mailbox: {} as never,
+      registry: {} as never,
+      artifactStore: {} as never,
+      workerSessions: new GraphWorkerSessionRegistry(),
+      enabled: () => true
+    })
+    const graphCreate = tools.find((tool) => tool.name === 'graph_create_run')!
+    const result = await graphCreate.execute(
+      {
+        plan: {
+          version: '1.0',
+          title: 'Guessed graph',
+          objective: 'Wrong field names',
+          phases: [{ id: 'phase', title: 'Phase', nodeIds: ['task'] }],
+          nodes: [{ id: 'task', type: 'task' }]
+        }
+      },
+      context('lead_thread', 'graph')
+    )
+
+    expect(result).toMatchObject({
+      isError: true,
+      output: {
+        code: 'graph_create_run_schema_invalid',
+        error: 'Graph creation arguments do not match the advertised schema.',
+        retryable: true,
+        guidance: expect.stringContaining('graph_create_run schema')
+      }
+    })
+    const output = result.output as { issues: Array<{ path: unknown[]; code: string; message: string }> }
+    expect(output.issues.length).toBeGreaterThan(0)
+    expect(output.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: ['plan'], code: 'unrecognized_keys' })
+    ]))
+    expect(typeof output.issues[0]?.message).toBe('string')
+  })
+
+  it('distinguishes retryable Graph validation from non-retryable host failure', async () => {
+    const modelPlan = (() => {
+      const {
+        version: _version,
+        revision: _revision,
+        workspaceRoot: _workspaceRoot,
+        autoStart: _autoStart,
+        createdBy: _createdBy,
+        createdAt: _createdAt,
+        ...plan
+      } = testGraphPlan()
+      return plan
+    })()
+    const validation = GraphValidationResultV1Schema.parse({
+      version: GRAPH_CONTRACT_VERSION,
+      valid: false,
+      issues: [{
+        code: 'cycle_detected',
+        path: ['edges'],
+        message: 'cycle is not bounded',
+        severity: 'error'
+      }],
+      normalizedNodeCount: 2,
+      normalizedEdgeCount: 2
+    })
+    const validationTools = buildGraphModeLocalTools({
+      control: {
+        allocateId: () => 'graph_run_1',
+        create: async () => {
+          throw new GraphPlanValidationError(validation)
+        }
+      } as never,
+      store: {} as never,
+      mailbox: {} as never,
+      registry: {
+        identify: async () => ({
+          projectId: 'project_1',
+          canonicalWorkspaceRoot: '/workspace'
+        })
+      } as never,
+      artifactStore: {} as never,
+      workerSessions: new GraphWorkerSessionRegistry(),
+      enabled: () => true
+    })
+    const validationResult = await validationTools
+      .find((tool) => tool.name === 'graph_create_run')!
+      .execute({ plan: modelPlan }, context('lead_thread', 'graph'))
+    expect(validationResult).toMatchObject({
+      isError: true,
+      output: {
+        code: 'graph_create_run_validation_failed',
+        retryable: true,
+        issues: [{ path: ['edges'], code: 'cycle_detected' }]
+      }
+    })
+
+    const hostFailureTools = buildGraphModeLocalTools({
+      control: {} as never,
+      store: {} as never,
+      mailbox: {} as never,
+      registry: {
+        identify: async () => {
+          throw new Error('workspace identity unavailable')
+        }
+      } as never,
+      artifactStore: {} as never,
+      workerSessions: new GraphWorkerSessionRegistry(),
+      enabled: () => true
+    })
+    const hostResult = await hostFailureTools
+      .find((tool) => tool.name === 'graph_create_run')!
+      .execute({ plan: modelPlan }, context('lead_thread', 'graph'))
+    expect(hostResult).toMatchObject({
+      isError: true,
+      output: {
+        code: 'graph_create_run_failed',
+        error: 'workspace identity unavailable',
+        retryable: false
+      }
+    })
+  })
+
   it('separates Lead, Worker, and ordinary direct-turn tools', () => {
     const workerSessions = new GraphWorkerSessionRegistry()
     workerSessions.bind('worker_thread', {

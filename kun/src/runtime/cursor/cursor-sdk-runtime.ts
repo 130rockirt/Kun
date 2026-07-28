@@ -29,9 +29,10 @@ import { normalizeTurnLimits, type TurnLimitsConfig } from '../../loop/turn-limi
 import type { SessionStore } from '../../ports/session-store.js'
 import type { ThreadStore } from '../../ports/thread-store.js'
 import { buildClientSurfaceInstruction } from '../../prompt/kun-prompt-context.js'
-import type {
-  LlmDebugRound,
-  LlmDebugSink
+import {
+  startLlmDebugRoundIfEnabled,
+  type LlmDebugRound,
+  type LlmDebugSink
 } from '../../services/llm-debug-recorder.js'
 import type { RuntimeEventDraft, RuntimeEventRecorder } from '../../services/runtime-event-recorder.js'
 import type { TurnService } from '../../services/turn-service.js'
@@ -634,7 +635,7 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
       let forceRecoveryRun = false
       let recoveryContinuesAcceptedRun = false
       for (;;) {
-        trace = startCursorTrace(this.deps.debugSink, {
+        trace = await startCursorTrace(this.deps.debugSink, {
           threadId,
           turnId,
           provider: resolvedProviderId,
@@ -945,7 +946,7 @@ type CursorTrace = {
   record: ModelRequestTraceRecord
 }
 
-function startCursorTrace(
+async function startCursorTrace(
   sink: LlmDebugSink | undefined,
   input: {
     threadId: string
@@ -960,11 +961,11 @@ function startCursorTrace(
     sandboxEnabled: boolean
     delegated: ModelRequestTraceDelegated
   }
-): CursorTrace | undefined {
+): Promise<CursorTrace | undefined> {
   if (!sink?.beginSdkInvocation) return undefined
   let round: LlmDebugRound | undefined
   try {
-    round = sink.start({
+    round = await startLlmDebugRoundIfEnabled(sink, {
       threadId: input.threadId,
       turnId: input.turnId,
       provider: input.provider,
@@ -975,6 +976,7 @@ function startCursorTrace(
         providerId: tool.providerId
       }))
     })
+    if (!round) return undefined
     const record = sink.beginSdkInvocation(round, {
       endpointFormat: 'cursor-sdk',
       target: 'cursor-sdk://local/agent',

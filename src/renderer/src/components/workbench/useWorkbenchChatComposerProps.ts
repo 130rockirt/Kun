@@ -15,6 +15,7 @@ type UseWorkbenchChatComposerPropsInput = {
   setComposerOrchestration: NonNullable<ComposerProps['onOrchestrationChange']>
   openGraph: NonNullable<ComposerProps['onOpenGraph']>
   busy: boolean
+  currentTurnOrchestration: ComposerProps['currentTurnOrchestration']
   route: string
   runtimeReady: boolean
   activeThreadId: string | null
@@ -79,6 +80,7 @@ export function useWorkbenchChatComposerProps({
   setComposerOrchestration,
   openGraph,
   busy,
+  currentTurnOrchestration,
   route,
   runtimeReady,
   activeThreadId,
@@ -142,6 +144,7 @@ export function useWorkbenchChatComposerProps({
     onOrchestrationChange: setComposerOrchestration,
     onOpenGraph: openGraph,
     busy,
+    currentTurnOrchestration,
     runtimeReady,
     hasActiveThread: Boolean(activeThreadId),
     composerModel: route === 'claw' ? activeClawChannelModel ?? 'auto' : composerModel,
@@ -235,6 +238,7 @@ export function useWorkbenchChatComposerProps({
     composerProviderId,
     composerReasoningEffort,
     createThread,
+    currentTurnOrchestration,
     disabledSkillIds,
     handleGuiPlanCommand,
     handlePasteClipboardImage,

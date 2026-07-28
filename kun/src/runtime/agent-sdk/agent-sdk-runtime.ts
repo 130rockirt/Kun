@@ -18,9 +18,10 @@ import type {
   ModelRequestTraceRecord
 } from '../../contracts/model-request-trace.js'
 import type { ApprovalPolicy, SandboxMode } from '../../contracts/policy.js'
-import type {
-  LlmDebugRound,
-  LlmDebugSink
+import {
+  startLlmDebugRoundIfEnabled,
+  type LlmDebugRound,
+  type LlmDebugSink
 } from '../../services/llm-debug-recorder.js'
 import { makeAssistantReasoningItem, makeAssistantTextItem } from '../../domain/item.js'
 import { normalizeTurnLimits, type TurnLimitsConfig } from '../../loop/turn-limits.js'
@@ -547,7 +548,7 @@ export class AgentSdkRuntime {
         let attemptFinalSeen = false
         let attemptMessageSeen = false
         let attemptTurns = 0
-        let trace = startAgentSdkTrace(this.deps.debugSink, {
+        let trace = await startAgentSdkTrace(this.deps.debugSink, {
           threadId,
           turnId,
           provider: ctx.sessionPreparation?.route.providerId ?? 'default',
@@ -794,7 +795,7 @@ type AgentSdkTrace = {
   currentReasoning: string
 }
 
-function startAgentSdkTrace(
+async function startAgentSdkTrace(
   sink: LlmDebugSink | undefined,
   input: {
     threadId: string
@@ -812,11 +813,11 @@ function startAgentSdkTrace(
     oauthToken?: string
     delegated: ModelRequestTraceDelegated
   }
-): AgentSdkTrace | undefined {
+): Promise<AgentSdkTrace | undefined> {
   if (!sink?.beginSdkInvocation) return undefined
   let round: LlmDebugRound | undefined
   try {
-    round = sink.start({
+    round = await startLlmDebugRoundIfEnabled(sink, {
       threadId: input.threadId,
       turnId: input.turnId,
       provider: input.provider,
@@ -827,6 +828,7 @@ function startAgentSdkTrace(
         ...(tool.providerKind ? { providerKind: tool.providerKind } : {})
       }))
     })
+    if (!round) return undefined
     const record = sink.beginSdkInvocation(round, {
       endpointFormat: 'agent-sdk',
       target: 'agent-sdk://local/query',

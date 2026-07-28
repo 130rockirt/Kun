@@ -204,7 +204,8 @@ describe('KunRuntimeProvider', () => {
       expect(JSON.parse(body ?? '{}')).toMatchObject({
         providerId: 'codex',
         accountId: 'account:codex',
-        model: 'gpt-live'
+        model: 'gpt-live',
+        modelRequestCaptureEnabled: false
       })
       return {
         ok: true,
@@ -307,6 +308,43 @@ describe('KunRuntimeProvider', () => {
     expect(detail.latestSeq).toBe(9)
     expect(detail.latestTurnId).toBe('turn_1')
     expect(detail.latestUserMessageId).toBe('item_user')
+  })
+
+  it.each([
+    ['graph', 'graph', 'graph'],
+    ['direct', 'direct', 'direct'],
+    ['legacy missing', undefined, 'direct']
+  ] as const)('normalizes %s latest-turn orchestration', async (_label, orchestration, expected) => {
+    installDsGui({
+      runtimeRequest: vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        body: JSON.stringify({
+          id: 'thr_orchestration',
+          title: 'Orchestration',
+          workspace: '/tmp',
+          model: 'deepseek-chat',
+          mode: 'agent',
+          status: 'running',
+          createdAt: 't0',
+          updatedAt: 't1',
+          latestSeq: 1,
+          turns: [{
+            id: 'turn_orchestration',
+            threadId: 'thr_orchestration',
+            status: 'running',
+            prompt: 'continue',
+            createdAt: 't0',
+            ...(orchestration ? { orchestration } : {}),
+            items: []
+          }]
+        })
+      }))
+    })
+
+    const detail = await new KunRuntimeProvider().getThreadDetail('thr_orchestration')
+
+    expect(detail.latestTurnOrchestration).toBe(expected)
   })
 
   it('rehydrates persisted partial assistant output for a running turn', async () => {

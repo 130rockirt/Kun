@@ -20,6 +20,7 @@ export function useWorkbenchChatStoreState() {
       runtimeErrorDetail: s.runtimeErrorDetail,
       runtimeStatus: s.runtimeStatus,
       busy: s.busy,
+      currentTurnOrchestration: s.currentTurnOrchestration,
       route: s.route,
       pluginHostRoute: s.pluginHostRoute,
       workspaceRoot: s.workspaceRoot,

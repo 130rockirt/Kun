@@ -40,6 +40,7 @@ export function createInitialChatStoreState(workingDirectoryLabel: string) {
     error: null,
     runtimeErrorDetail: null,
     currentTurnId: null,
+    currentTurnOrchestration: null,
     currentTurnUserId: null,
     turnStartedAtByUserId: {},
     turnDurationByUserId: {},

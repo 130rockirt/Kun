@@ -67,7 +67,8 @@ import {
 } from './runtime-context.js'
 import {
   GRAPH_CREATE_RUN_TOOL_NAME,
-  MAX_GRAPH_CREATE_RUN_RECOVERY_STEPS,
+  MAX_GRAPH_CREATE_RUN_ATTEMPTS,
+  type GraphCreateRunRecoveryReason,
   type RoundOutcomeCoordinator
 } from './round-outcome-coordinator.js'
 import { svgArtifactCompletionState } from './svg-artifact-completion.js'
@@ -113,10 +114,22 @@ const GRAPH_MODE_INSTRUCTION = [
   'After creation, the host scheduler and Graph workers execute the plan while the Lead supervises through validated Graph tools.'
 ].join(' ')
 
-function graphCreateRunRecoveryInstruction(step: number): string {
+function graphCreateRunRecoveryInstruction(
+  attempt: number,
+  reason: GraphCreateRunRecoveryReason
+): string {
+  const correction = reason === 'invalid'
+    ? [
+        `The previous \`${GRAPH_CREATE_RUN_TOOL_NAME}\` call failed validation, so no GraphRun exists.`,
+        'Use the advertised nested schema and the structured issues in the latest tool result to correct the arguments.',
+        'Do not repeat the same invalid arguments or use legacy task-graph field names.'
+      ]
+    : [
+        `The previous response did not call \`${GRAPH_CREATE_RUN_TOOL_NAME}\`, so no GraphRun exists.`
+      ]
   return [
-    `Graph creation recovery ${step}/${MAX_GRAPH_CREATE_RUN_RECOVERY_STEPS}.`,
-    `The previous response did not call \`${GRAPH_CREATE_RUN_TOOL_NAME}\`, so no GraphRun exists.`,
+    `Graph creation attempt ${attempt}/${MAX_GRAPH_CREATE_RUN_ATTEMPTS}.`,
+    ...correction,
     `Call the only available tool, \`${GRAPH_CREATE_RUN_TOOL_NAME}\`, now with a complete schema-valid GraphPlan.`,
     'Do not answer with prose and do not claim that validation ran unless the tool result says so.'
   ].join(' ')
@@ -433,20 +446,22 @@ export class ModelStepService {
     const svgCompletion = turn?.guiDesignArtifact?.kind === 'svg'
       ? svgArtifactCompletionState(historyItems, turnId)
       : null
-    const requiredToolName =
-      turn.orchestration === 'graph' &&
-      !graphCreateSatisfied &&
-      toolSpecs.some((tool) => tool.name === GRAPH_CREATE_RUN_TOOL_NAME)
+    const hardRequiredToolName =
+      turn.orchestration === 'graph' && !graphCreateSatisfied
         ? GRAPH_CREATE_RUN_TOOL_NAME
-        : planTurnActive &&
+        : svgCompletion?.mutationSucceeded &&
+            !svgCompletion.validationAfterMutation
+          ? DESIGN_SVG_VALIDATE_TOOL_NAME
+          : undefined
+    // Plan creation is deliberately a soft completion condition. A Plan turn
+    // may investigate, ask for user input, or stop on a genuine clarification
+    // before its prose is materialized through create_plan.
+    const softRequiredToolName =
+      planTurnActive &&
       !createPlanSatisfied &&
       toolSpecs.some((tool) => tool.name === CREATE_PLAN_TOOL_NAME)
         ? CREATE_PLAN_TOOL_NAME
-        : svgCompletion?.mutationSucceeded &&
-            !svgCompletion.validationAfterMutation &&
-            toolSpecs.some((tool) => tool.name === DESIGN_SVG_VALIDATE_TOOL_NAME)
-          ? DESIGN_SVG_VALIDATE_TOOL_NAME
-          : undefined
+        : undefined
     const suggestVerification =
       !planTurnActive &&
       toolSpecs.some((tool) => tool.name === VERIFY_CHANGES_TOOL_NAME) &&
@@ -457,17 +472,56 @@ export class ModelStepService {
       stepIndex
     })
     const emptyPostToolRecoveryStep = this.deps.roundOutcome.emptyPostToolRecoverySteps(turnId)
-    const graphCreateRunRecoveryStep =
-      requiredToolName === GRAPH_CREATE_RUN_TOOL_NAME
-        ? this.deps.roundOutcome.graphCreateRunRecoverySteps(turnId)
-        : 0
+    const graphCreateRunGate = hardRequiredToolName === GRAPH_CREATE_RUN_TOOL_NAME
+      ? turn.requiredToolGate
+      : undefined
+    const graphCreateRunRecoveryReason =
+      (graphCreateRunGate?.lastError ? 'invalid' : undefined) ??
+      this.deps.roundOutcome.graphCreateRunRecoveryReason(turnId) ??
+      'missing'
+    const graphCreateRunAttempt = hardRequiredToolName === GRAPH_CREATE_RUN_TOOL_NAME
+      ? graphCreateRunGate?.attempt ?? 1
+      : 0
     const forceFinalAnswerRecovery =
       emptyPostToolRecoveryStep >= EMPTY_POST_TOOL_FINAL_ANSWER_RECOVERY_STEP
-    const requestToolSpecs = forceFinalAnswerRecovery
-      ? []
-      : graphCreateRunRecoveryStep > 0
-        ? effectiveToolSpecs.filter((tool) => tool.name === GRAPH_CREATE_RUN_TOOL_NAME)
+    const requestToolSpecs = hardRequiredToolName
+      ? effectiveToolSpecs.filter((tool) => tool.name === hardRequiredToolName)
+      : forceFinalAnswerRecovery
+        ? []
         : effectiveToolSpecs
+    if (hardRequiredToolName && (
+      requestToolSpecs.length !== 1 ||
+      requestToolSpecs[0]?.name !== hardRequiredToolName ||
+      !modelCapabilities.supportsToolCalling
+    )) {
+      return this.failRequiredToolConstraint({
+        threadId,
+        turnId,
+        code: modelCapabilities.supportsToolCalling
+          ? 'required_tool_unavailable'
+          : 'required_tool_unsupported',
+        message: modelCapabilities.supportsToolCalling
+          ? `The required tool \`${hardRequiredToolName}\` is unavailable for this turn.`
+          : `The selected model does not support the required tool \`${hardRequiredToolName}\`.`,
+        ...(hardRequiredToolName === GRAPH_CREATE_RUN_TOOL_NAME
+          ? { graphGateFailureAttempt: graphCreateRunAttempt }
+          : {})
+      })
+    }
+    if (
+      hardRequiredToolName === GRAPH_CREATE_RUN_TOOL_NAME &&
+      (graphCreateRunGate?.phase === 'failed' || graphCreateRunAttempt > MAX_GRAPH_CREATE_RUN_ATTEMPTS)
+    ) {
+      return this.failRequiredToolConstraint({
+        threadId,
+        turnId,
+        code: 'graph_create_run_failed',
+        message: `Graph creation exhausted its ${MAX_GRAPH_CREATE_RUN_ATTEMPTS} allowed attempts.`,
+        ...(graphCreateRunGate?.phase !== 'failed'
+          ? { graphGateFailureAttempt: graphCreateRunAttempt }
+          : {})
+      })
+    }
     const history = await this.deps.historyCompaction.compactIfNeeded({
       items,
       model,
@@ -610,8 +664,11 @@ export class ModelStepService {
     })
     const modeInstruction = [
       ...(turn.orchestration === 'graph' ? [GRAPH_MODE_INSTRUCTION] : []),
-      ...(graphCreateRunRecoveryStep > 0
-        ? [graphCreateRunRecoveryInstruction(graphCreateRunRecoveryStep)]
+      ...(hardRequiredToolName === GRAPH_CREATE_RUN_TOOL_NAME && graphCreateRunAttempt > 1
+        ? [graphCreateRunRecoveryInstruction(
+            graphCreateRunAttempt,
+            graphCreateRunRecoveryReason
+          )]
         : []),
       ...(planTurnActive ? [PLAN_MODE_INSTRUCTION] : []),
       ...(turn.guiDesignArtifact?.kind === 'svg'
@@ -620,6 +677,15 @@ export class ModelStepService {
           ? [DESIGN_MODE_INSTRUCTION]
           : [])
     ].join('\n\n')
+    if (hardRequiredToolName === GRAPH_CREATE_RUN_TOOL_NAME) {
+      await this.persistGraphCreateGate({
+        threadId,
+        turnId,
+        attempt: graphCreateRunAttempt,
+        phase: 'preparing',
+        ...(graphCreateRunGate?.lastError ? { failureSummary: graphCreateRunGate.lastError } : {})
+      })
+    }
     const composedRequest = composeModelRequest({
       threadId,
       turnId,
@@ -634,7 +700,7 @@ export class ModelStepService {
       history: forwardHistory,
       attachments,
       tools: requestToolSpecs,
-      ...(!forceFinalAnswerRecovery && requiredToolName ? { requiredToolName } : {}),
+      ...(hardRequiredToolName ? { requiredToolName: hardRequiredToolName } : {}),
       ...(this.deps.tokenEconomy ? { tokenEconomy: this.deps.tokenEconomy } : {}),
       signal
     })
@@ -762,6 +828,7 @@ export class ModelStepService {
       turnId,
       streamed,
       ...(request.requiredToolName ? { requiredToolName: request.requiredToolName } : {}),
+      ...(softRequiredToolName ? { softRequiredToolName } : {}),
       turn,
       prepared,
       ...(providerId ? { modelProviderId: providerId } : {}),
@@ -771,6 +838,71 @@ export class ModelStepService {
       toolProviderKinds,
       svgCompletion
     })
+  }
+
+  private async persistGraphCreateGate(input: {
+    threadId: string
+    turnId: string
+    attempt: number
+    phase: 'preparing' | 'retrying' | 'succeeded' | 'failed'
+    failureSummary?: string
+  }): Promise<void> {
+    const failureSummary = input.failureSummary?.trim().slice(0, 2_048)
+    await this.deps.turns.updateTurnMetadata(input.threadId, input.turnId, {
+      requiredToolGate: {
+        toolName: GRAPH_CREATE_RUN_TOOL_NAME,
+        attempt: input.attempt,
+        maxAttempts: MAX_GRAPH_CREATE_RUN_ATTEMPTS,
+        phase: input.phase,
+        ...(failureSummary ? { lastError: failureSummary } : {})
+      }
+    })
+    await this.deps.events.record({
+      kind: 'required_tool_gate',
+      threadId: input.threadId,
+      turnId: input.turnId,
+      toolName: GRAPH_CREATE_RUN_TOOL_NAME,
+      phase: input.phase,
+      attempt: input.attempt,
+      maxAttempts: MAX_GRAPH_CREATE_RUN_ATTEMPTS,
+      ...(failureSummary ? { failureSummary } : {})
+    })
+  }
+
+  private async failRequiredToolConstraint(input: {
+    threadId: string
+    turnId: string
+    code: 'required_tool_unavailable' | 'required_tool_unsupported' | 'graph_create_run_failed'
+    message: string
+    graphGateFailureAttempt?: number
+  }): Promise<'failed'> {
+    if (input.graphGateFailureAttempt !== undefined) {
+      await this.persistGraphCreateGate({
+        threadId: input.threadId,
+        turnId: input.turnId,
+        attempt: Math.max(1, Math.min(input.graphGateFailureAttempt, MAX_GRAPH_CREATE_RUN_ATTEMPTS)),
+        phase: 'failed',
+        failureSummary: input.message
+      })
+    }
+    this.deps.rememberFailure(input.turnId, { error: input.message, code: input.code, severity: 'error' })
+    await this.deps.events.record({
+      kind: 'error',
+      threadId: input.threadId,
+      turnId: input.turnId,
+      message: input.message,
+      code: input.code,
+      severity: 'error'
+    })
+    await this.deps.turns.applyItem(input.threadId, makeErrorItem({
+      id: this.deps.ids.next('item_error'),
+      threadId: input.threadId,
+      turnId: input.turnId,
+      message: input.message,
+      code: input.code,
+      severity: 'error'
+    }))
+    return 'failed'
   }
 
   private async ensureWorkspaceCheckpoint(

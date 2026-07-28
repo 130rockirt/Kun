@@ -86,6 +86,12 @@ Thinking 默认折叠，工具与 Subagent 使用紧凑的状态/对象/耗时�
 `├ input` / `└ output` 展开为树状详情。执行中、完成、失败分别使用动画、实心圆点和
 错误标记，颜色只承担状态语义。所有这些展示继续使用内联模式和终端原生 scrollback。
 
+同一阶段连续发生的只读发现调用会聚合成 `Exploring` / `Explored` 摘要。Read、View、
+Search、Grep、Find、List、Fetch 和 Web Search 可以跨越中间折叠的 Thinking 进入同一
+组；回答、命令、编辑、委派、审批或结构化输入会结束该组。默认显示前 12 个精简动作
+和剩余数量，`Ctrl+O` 展开全部动作及各自的 input/output；失败动作留在组内并计入标题。
+这个分组只改变 TUI 展示，不改变工具执行顺序、事件记录或导出内容。
+
 ## 模型连接
 
 在 composer 输入 `/connect` 可打开共享连接向导：

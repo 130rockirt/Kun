@@ -57,8 +57,11 @@ function buildHarness(): {
     clawChannels: [],
     codeWorkspaceRoots: [],
     composerModel: '',
+    composerMode: 'agent',
+    composerOrchestration: 'direct',
     composerProviderId: '',
     currentTurnId: null,
+    currentTurnOrchestration: null,
     currentTurnUserId: null,
     error: 'previous error',
     extensionComposerContexts: [],
@@ -133,6 +136,7 @@ describe('chat-store-thread-actions queued messages', () => {
     const { actions, state } = buildHarness()
     state.graphEnabled = true
     state.composerOrchestration = 'graph'
+    state.currentTurnOrchestration = 'direct'
 
     await expect(actions.sendMessage('run this as a graph', 'agent')).resolves.toBe(true)
 
@@ -142,6 +146,7 @@ describe('chat-store-thread-actions queued messages', () => {
     })
     state.composerOrchestration = 'direct'
     expect(state.queuedMessages[0]?.orchestration).toBe('graph')
+    expect(state.currentTurnOrchestration).toBe('direct')
   })
 
   it('persists queued messages and their reordered send order for the active thread', async () => {
@@ -173,6 +178,7 @@ describe('chat-store-thread-actions queued messages', () => {
         latestSeq: 2,
         threadStatus: 'running',
         latestTurnId: 'turn-running',
+        latestTurnOrchestration: 'graph',
         latestUserMessageId: 'u-running'
       })),
       subscribeThreadEvents: vi.fn(async () => ({ streamId: 'stream-restored' }))
@@ -191,6 +197,8 @@ describe('chat-store-thread-actions queued messages', () => {
         deliveryState: 'pending'
       })
     ])
+    expect(state.currentTurnOrchestration).toBe('graph')
+    expect(state.composerOrchestration).not.toBe('graph')
   })
 
   it('uses the runtime model for an empty thread instead of a legacy cached selection', async () => {
@@ -841,6 +849,7 @@ describe('chat-store-thread-actions queued messages', () => {
       'orchestrate this',
       expect.objectContaining({ orchestration: 'graph' })
     )
+    expect(state.currentTurnOrchestration).toBe('graph')
 
     const { actions: directActions, state: directState } = buildHarness()
     directState.busy = false
@@ -852,6 +861,7 @@ describe('chat-store-thread-actions queued messages', () => {
       'run directly',
       expect.objectContaining({ orchestration: 'direct' })
     )
+    expect(directState.currentTurnOrchestration).toBe('direct')
   })
 
   it('keeps a rejected send visible as a non-interactive conversation error', async () => {
@@ -875,6 +885,7 @@ describe('chat-store-thread-actions queued messages', () => {
 
     await expect(actions.sendMessage('hello', 'agent')).resolves.toBe(false)
 
+    expect(state.currentTurnOrchestration).toBeNull()
     expect(state.blocks).toContainEqual(expect.objectContaining({
       kind: 'user',
       text: 'hello'
@@ -1343,7 +1354,10 @@ describe('chat-store-thread-actions recoverActiveTurn settles interrupted work',
     vi.unstubAllGlobals()
   })
 
-  function providerWith(threadStatus: string) {
+  function providerWith(
+    threadStatus: string,
+    latestTurnOrchestration: 'direct' | 'graph' = 'direct'
+  ) {
     return {
       getThreadDetail: vi.fn(async () => ({
         blocks: [
@@ -1353,6 +1367,7 @@ describe('chat-store-thread-actions recoverActiveTurn settles interrupted work',
         latestSeq: 3,
         threadStatus,
         latestTurnId: 'turn_1',
+        latestTurnOrchestration,
         latestUserMessageId: 'u1'
       })),
       subscribeThreadEvents: vi.fn(async () => ({ streamId: 'stream_recover' }))
@@ -1371,6 +1386,7 @@ describe('chat-store-thread-actions recoverActiveTurn settles interrupted work',
 
     expect(busy).toBe(false)
     expect(state.busy).toBe(false)
+    expect(state.currentTurnOrchestration).toBeNull()
     // The interrupted delegate_task block is settled, so hasPendingRuntimeWork
     // is no longer true and queued/new messages can actually send.
     const tool = state.blocks.find((block) => block.kind === 'tool')
@@ -1391,6 +1407,23 @@ describe('chat-store-thread-actions recoverActiveTurn settles interrupted work',
     // A genuinely live turn must keep its running block so the GUI reconnects.
     const tool = state.blocks.find((block) => block.kind === 'tool')
     expect(tool?.status).toBe('running')
+  })
+
+  it('restores a running Graph turn without changing the next-turn Direct selection', async () => {
+    const provider = providerWith('running', 'graph')
+    registryMock.getProvider.mockReturnValue(provider)
+
+    const { actions, state } = buildHarness()
+    state.activeThreadId = 'thr_existing'
+    state.busy = true
+    state.composerOrchestration = 'direct'
+    state.currentTurnOrchestration = null
+
+    const busy = await actions.recoverActiveTurn()
+
+    expect(busy).toBe(true)
+    expect(state.currentTurnOrchestration).toBe('graph')
+    expect(state.composerOrchestration).toBe('direct')
   })
 })
 

@@ -1172,7 +1172,7 @@ describe('CompatModelClient', () => {
     expect(sentHeaders[0]?.Accept).toBeUndefined()
   })
 
-  it('keeps requiredToolName as loop metadata instead of sending provider tool_choice', async () => {
+  it('serializes requiredToolName as an exact provider-native tool choice', async () => {
     const response = {
       id: 'required-tool-metadata',
       model: 'deepseek-chat',
@@ -1205,7 +1205,10 @@ describe('CompatModelClient', () => {
       // drain
     }
     expect(sentBodies[0]).toHaveProperty('tools')
-    expect(sentBodies[0]).not.toHaveProperty('tool_choice')
+    expect(sentBodies[0]).toHaveProperty('tool_choice', {
+      type: 'function',
+      function: { name: 'echo' }
+    })
   })
 
   it('passes the request abort signal to fetch', async () => {

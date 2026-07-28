@@ -34,7 +34,8 @@ describe('Kun runtime config service', () => {
       runtimeTuning: {
         ...defaultKunRuntimeSettings().runtimeTuning,
         maxConcurrentTurns: 32
-      }
+      },
+      llmDebug: { defaultThreadCaptureEnabled: true }
     }
     const base = normalizeAppSettings({} as AppSettingsV1)
     const settings = normalizeAppSettings({
@@ -55,6 +56,10 @@ describe('Kun runtime config service', () => {
       runtime: {
         turnLimits: {
           maxConcurrentTurns: runtime.runtimeTuning.maxConcurrentTurns
+        },
+        llmDebug: {
+          enabled: false,
+          defaultThreadCaptureEnabled: true
         }
       }
     }))
@@ -77,6 +82,10 @@ describe('Kun runtime config service', () => {
     expect(body.serve?.localModelGateway).toEqual({ enabled: false })
     expect(body.serve?.localModelGateway).not.toHaveProperty('name')
     expect(body.runtime?.turnLimits?.maxConcurrentTurns).toBe(32)
+    expect(body.runtime?.llmDebug).toEqual({
+      enabled: false,
+      defaultThreadCaptureEnabled: true
+    })
     expect(RuntimeConfigApplyRequest.safeParse(body).success).toBe(true)
 
     const received: RuntimeConfigApplyPayload[] = []
@@ -139,6 +148,24 @@ describe('Kun runtime config service', () => {
     }))
 
     expect(body.modelSelection).toBeUndefined()
+  })
+
+  it('persists the GUI new-thread capture default while keeping the facility available', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'kun-runtime-config-llm-debug-'))
+    const runtime = {
+      ...defaultKunRuntimeSettings(),
+      llmDebug: { defaultThreadCaptureEnabled: true }
+    }
+    try {
+      await syncGuiManagedKunConfig(dataDir, runtime)
+      const config = JSON.parse(await readFile(join(dataDir, 'config.json'), 'utf8'))
+      expect(config.runtime.llmDebug).toEqual({
+        enabled: true,
+        defaultThreadCaptureEnabled: true
+      })
+    } finally {
+      await rm(dataDir, { recursive: true, force: true })
+    }
   })
 
   it('classifies compatibility fallback, success, restart, and failure responses', () => {

@@ -197,7 +197,10 @@ export const RuntimeTuningConfigSchema = z
       .optional(),
     /** Sensitive local Agent Perspective capture; explicitly set false to disable. */
     llmDebug: z
-      .object({ enabled: z.boolean().default(true) })
+      .object({
+        enabled: z.boolean().default(true),
+        defaultThreadCaptureEnabled: z.boolean().optional()
+      })
       .strict()
       .optional(),
     toolArgumentRepair: z

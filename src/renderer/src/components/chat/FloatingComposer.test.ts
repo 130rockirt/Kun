@@ -304,8 +304,96 @@ describe('FloatingComposer Graph entry', () => {
     }))
 
     expect(html).toContain('data-composer-graph-active')
+    expect(html).toContain('ds-composer-mode-badge')
+    expect(html).toContain('ds-composer-mode-label')
     expect(html).not.toContain('data-composer-graph-menu-item')
     expect(html).not.toContain('graphModeSelector')
+  })
+
+  it('shows restored running Graph truth while the disabled switch remains Direct for the next turn', async () => {
+    const previousLanguage = i18n.language
+    await i18n.changeLanguage('en')
+    useChatStore.setState({
+      activeThreadId: null,
+      activeThreadGoal: null,
+      activeThreadTodos: null,
+      blocks: [{ kind: 'user', id: 'user-graph-running', text: 'Run Graph' }],
+      route: 'chat',
+      workspaceRoot: '/Users/test/code/acme-project',
+      threads: []
+    })
+    vi.stubGlobal('document', { activeElement: null })
+    vi.stubGlobal('HTMLElement', class {})
+    vi.stubGlobal('window', {
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      requestAnimationFrame: vi.fn(() => 1),
+      cancelAnimationFrame: vi.fn(),
+      kunGui: {
+        getSettings: vi.fn(async () => ({ composerSendKey: 'enter' }))
+      }
+    })
+    let renderer!: ReturnType<typeof createRenderer>
+
+    try {
+      await act(async () => {
+        renderer = createRenderer(createElement(FloatingComposer, {
+          input: '',
+          setInput: () => undefined,
+          mode: 'agent',
+          setMode: () => undefined,
+          orchestration: 'direct',
+          graphEnabled: true,
+          onOrchestrationChange: () => undefined,
+          busy: true,
+          currentTurnOrchestration: 'graph',
+          runtimeReady: true,
+          hasActiveThread: true,
+          composerModel: 'test-model',
+          composerPickList: ['test-model'],
+          onComposerModelChange: () => undefined,
+          queuedMessages: [],
+          onRemoveQueuedMessage: () => undefined,
+          onSend: () => undefined,
+          onInterrupt: () => undefined,
+          onPlanCommand: () => undefined
+        }))
+      })
+
+      const runningBadge = renderer.root.findByProps({
+        'data-composer-graph-running': true
+      })
+      expect(runningBadge.props['aria-label']).toBe('Running: Graph')
+      expect(String(runningBadge.props.className)).toContain('ds-composer-mode-badge')
+      expect(renderer.root.findAllByProps({ 'data-composer-graph-active': true })).toHaveLength(0)
+
+      const plusButton = renderer.root.findAllByType('button').find(
+        (button) => String(button.props.className).includes('ds-composer-menu-button')
+      )
+      expect(plusButton).toBeDefined()
+      await act(async () => {
+        plusButton!.props.onClick()
+      })
+
+      const graphMenuItem = renderer.root.findByProps({
+        'data-composer-graph-menu-item': true
+      })
+      expect(graphMenuItem.props.disabled).toBe(true)
+      expect(graphMenuItem.props['aria-label']).toBe('Next turn: Graph')
+      expect(graphMenuItem.props.title).toBe(
+        'Controls the next turn and cannot change the turn already running'
+      )
+      const graphSwitch = graphMenuItem.findByProps({ role: 'switch' })
+      expect(graphSwitch.props['aria-checked']).toBe(false)
+    } finally {
+      if (renderer) {
+        await act(async () => {
+          renderer.unmount()
+        })
+      }
+      await i18n.changeLanguage(previousLanguage)
+      vi.unstubAllGlobals()
+    }
   })
 })
 
@@ -1412,6 +1500,25 @@ describe('FloatingComposer image transfer helpers', () => {
 })
 
 describe('FloatingComposer capability controls', () => {
+  it('declares progressive container-width fallbacks for secondary toolbar controls', async () => {
+    const nodeFs = 'node:fs/promises'
+    const { readFile } = await import(/* @vite-ignore */ nodeFs)
+    const [composerSource, css] = await Promise.all([
+      readFile(new URL('./FloatingComposer.tsx', import.meta.url), 'utf8'),
+      readFile(new URL('../../styles/base-shell.css', import.meta.url), 'utf8')
+    ])
+
+    expect(composerSource).toContain('ds-composer-voice-action')
+    expect(composerSource).toContain('ds-composer-prompt-optimize-action')
+    expect(css).toContain('@container (max-width: 760px)')
+    expect(css).toContain('.ds-composer-optional-action')
+    expect(css).toContain('@container (max-width: 700px)')
+    expect(css).toContain('.ds-composer-mode-label,')
+    expect(css).toContain('.ds-composer-permission-label,')
+    expect(css).toContain('.ds-composer-context-control,')
+    expect(css).toContain('.ds-composer-agent-picker')
+  })
+
   it('shows voice dictation for every runnable speech configuration', () => {
     expect(shouldShowVoiceDictation({
       enabled: true,
@@ -1520,6 +1627,8 @@ describe('FloatingComposer capability controls', () => {
       expect(html).toContain('aria-label="工具权限"')
       expect(html).toContain('data-permission-mode="bypass"')
       expect(html).toContain('lucide-lock-keyhole-open')
+      expect(html).toContain('ds-composer-permission-label')
+      expect(html).toContain('ds-composer-permission-chevron')
       expect(html).not.toContain('Full access')
       expect(html).not.toContain('Auto')
       expect(html).not.toContain('Bypass')

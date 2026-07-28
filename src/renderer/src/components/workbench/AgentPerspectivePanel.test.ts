@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import i18n from '../../i18n'
 
 const useTraces = vi.hoisted(() => vi.fn())
+const runtimeRequest = vi.hoisted(() => vi.fn())
 vi.mock('./useModelRequestTraces', () => ({ useModelRequestTraces: useTraces }))
 
 import { AgentPerspectivePanel } from './AgentPerspectivePanel'
@@ -15,6 +16,19 @@ function textContent(node: ReactTestInstance): string {
 describe('AgentPerspectivePanel', () => {
   beforeEach(async () => {
     await i18n.changeLanguage('en')
+    runtimeRequest.mockReset()
+    runtimeRequest.mockImplementation(async (_path: string, method?: string, body?: string) => ({
+      ok: true,
+      status: 200,
+      body: JSON.stringify({
+        id: 'thread-1',
+        modelRequestCaptureEnabled:
+          method === 'PATCH'
+            ? JSON.parse(body ?? '{}').modelRequestCaptureEnabled === true
+            : false
+      })
+    }))
+    vi.stubGlobal('window', { kunGui: { runtimeRequest } })
     useTraces.mockReturnValue({
       records: [{
         schemaVersion: 1,
@@ -106,6 +120,48 @@ describe('AgentPerspectivePanel', () => {
     const state = useTraces.getMockImplementation()?.()
     state.selected = state.records[0]
     useTraces.mockReturnValue(state)
+  })
+
+  it('persists the independent conversation capture switch and explains the disabled empty state', async () => {
+    const state = useTraces()
+    useTraces.mockReturnValue({
+      ...state,
+      records: [],
+      selected: null,
+      selectedId: null
+    })
+
+    let renderer!: ReactTestRenderer
+    await act(async () => {
+      renderer = create(createElement(AgentPerspectivePanel, {
+        threadId: 'thread-1',
+        active: true,
+        threadRunning: false
+      }))
+      await Promise.resolve()
+    })
+
+    const capture = renderer.root.findByProps({
+      role: 'switch',
+      'aria-label': 'Capture model requests for this conversation'
+    })
+    expect(capture.props['aria-checked']).toBe(false)
+    expect(textContent(renderer.root)).toContain('Capture is off for this conversation')
+
+    await act(async () => {
+      capture.props.onClick()
+      await Promise.resolve()
+    })
+
+    expect(runtimeRequest).toHaveBeenCalledWith(
+      '/v1/threads/thread-1',
+      'PATCH',
+      JSON.stringify({ modelRequestCaptureEnabled: true })
+    )
+    expect(renderer.root.findByProps({
+      role: 'switch',
+      'aria-label': 'Capture model requests for this conversation'
+    }).props['aria-checked']).toBe(true)
   })
 
   it('renders the semantic inspector and preserves access to already-redacted raw data', () => {

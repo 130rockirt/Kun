@@ -11,12 +11,32 @@ type MaterializedResponses = {
   usage: UsageSnapshot | null
 }
 
+/**
+ * Tracks output/content identities across delta, output-item completion, and
+ * response.completed fallback forms. Deltas are streamed incrementally, so
+ * they only suppress a later full-item copy; they never suppress later delta
+ * fragments for the same content block.
+ */
+export type ResponsesContentTracker = {
+  completedIdentities: Set<string>
+  /** Text already emitted for each content block, used to stream only a done-item suffix. */
+  deltaTextByIdentity: Map<string, string>
+}
+
+export function createResponsesContentTracker(): ResponsesContentTracker {
+  return {
+    completedIdentities: new Set(),
+    deltaTextByIdentity: new Map()
+  }
+}
+
 export function decodeResponsesStreamPayload(input: {
   payload: Record<string, unknown>
   pendingArguments: Map<string, PendingToolCall>
   pendingByIndex: Map<number, string>
   completedToolCalls: Set<string>
   sawTextDelta: boolean
+  contentTracker: ResponsesContentTracker
   budget: ModelStreamResourceBudget
   parseToolArguments: (raw: string) => Record<string, unknown>
   normalizeUsage: (usage: Record<string, unknown>) => UsageSnapshot
@@ -60,12 +80,22 @@ export function decodeResponsesStreamPayload(input: {
         input.budget.removePendingCall(input.pendingArguments, callId)
         if (pending.index !== undefined) input.pendingByIndex.delete(pending.index)
       }
+    } else if (type === 'response.output_item.done') {
+      const contentChunks = materializeResponsesItemContent({
+        item,
+        outputIndex,
+        tracker: input.contentTracker,
+        source: 'done'
+      })
+      if (contentChunks.some((chunk) => chunk.kind === 'assistant_text_delta')) sawText = true
+      chunks.push(...contentChunks)
     }
   }
   if (type === 'response.output_text.delta') {
     const delta = recordString(input.payload, 'delta')
     if (delta) {
       sawText = true
+      appendResponsesDelta(input.contentTracker, responseContentIdentityAliases(input.payload, 'text'), delta)
       chunks.push({ kind: 'assistant_text_delta', text: delta })
     }
   } else if (
@@ -74,7 +104,10 @@ export function decodeResponsesStreamPayload(input: {
     type === 'response.reasoning.delta'
   ) {
     const delta = recordString(input.payload, 'delta')
-    if (delta) chunks.push({ kind: 'assistant_reasoning_delta', text: delta })
+    if (delta) {
+      appendResponsesDelta(input.contentTracker, responseContentIdentityAliases(input.payload, 'reasoning'), delta)
+      chunks.push({ kind: 'assistant_reasoning_delta', text: delta })
+    }
   } else if (type === 'response.function_call_arguments.delta') {
     const callId = responseStreamCallId(input.payload, input.pendingArguments, input.pendingByIndex)
     const pending = input.budget.pendingCall(input.pendingArguments, callId, outputIndex)
@@ -93,6 +126,7 @@ export function decodeResponsesStreamPayload(input: {
     const response = recordValue(input.payload, 'response') ?? input.payload
     const materialized = materializeResponsesOutput(response, {
       skipText: sawText,
+      contentTracker: input.contentTracker,
       pendingArguments: input.pendingArguments,
       completedToolCalls: input.completedToolCalls,
       budget: input.budget,
@@ -114,6 +148,7 @@ function materializeResponsesOutput(
   payload: Record<string, unknown>,
   options: {
     skipText: boolean
+    contentTracker: ResponsesContentTracker
     pendingArguments: Map<string, PendingToolCall>
     completedToolCalls: Set<string>
     budget: ModelStreamResourceBudget
@@ -123,17 +158,22 @@ function materializeResponsesOutput(
 ): MaterializedResponses {
   const chunks: ModelStreamChunk[] = []
   let sawToolCall = options.completedToolCalls.size > 0
-  if (!options.skipText) {
-    const outputText = recordString(payload, 'output_text') || responsesOutputText(payload.output)
-    if (outputText) chunks.push({ kind: 'assistant_text_delta', text: outputText })
-  }
   const output = Array.isArray(payload.output) ? payload.output : []
-  for (const value of output) {
+  let materializedText = false
+  for (const [outputIndex, value] of output.entries()) {
     const item = value && typeof value === 'object' && !Array.isArray(value)
       ? value as Record<string, unknown>
       : null
     if (!item) continue
     const itemType = recordString(item, 'type')
+    const contentChunks = materializeResponsesItemContent({
+      item,
+      outputIndex,
+      tracker: options.contentTracker,
+      source: 'completed'
+    })
+    if (contentChunks.some((chunk) => chunk.kind === 'assistant_text_delta')) materializedText = true
+    chunks.push(...contentChunks)
     if (itemType !== 'function_call' && itemType !== 'custom_tool_call') continue
     const callId = recordString(item, 'call_id') || recordString(item, 'id')
     const toolName = recordString(item, 'name')
@@ -152,6 +192,14 @@ function materializeResponsesOutput(
       arguments: options.parseToolArguments(argsRaw)
     })
   }
+  if (!options.skipText && !materializedText) {
+    const outputText = recordString(payload, 'output_text')
+    const identity = 'text:response:output_text'
+    if (outputText && !options.contentTracker.completedIdentities.has(identity)) {
+      options.contentTracker.completedIdentities.add(identity)
+      chunks.push({ kind: 'assistant_text_delta', text: outputText })
+    }
+  }
   const usagePayload = recordValue(payload, 'usage')
   const usage = usagePayload ? options.normalizeUsage(usagePayload) : null
   let finishReason: MaterializedResponses['finishReason'] = sawToolCall ? 'tool_calls' : 'stop'
@@ -165,26 +213,144 @@ function materializeResponsesOutput(
   return { chunks, finishReason, usage }
 }
 
-function responsesOutputText(value: unknown): string {
-  if (!Array.isArray(value)) return ''
-  const texts: string[] = []
-  for (const outputValue of value) {
-    const item = outputValue && typeof outputValue === 'object' && !Array.isArray(outputValue)
-      ? outputValue as Record<string, unknown>
-      : null
-    if (!item || recordString(item, 'type') !== 'message' || !Array.isArray(item.content)) continue
-    for (const contentValue of item.content) {
-      const block = contentValue && typeof contentValue === 'object' && !Array.isArray(contentValue)
-        ? contentValue as Record<string, unknown>
+function materializeResponsesItemContent(input: {
+  item: Record<string, unknown>
+  outputIndex: number | undefined
+  tracker: ResponsesContentTracker
+  source: 'done' | 'completed'
+}): ModelStreamChunk[] {
+  const chunks: ModelStreamChunk[] = []
+  const itemType = recordString(input.item, 'type')
+  const itemIdentity = recordString(input.item, 'id') ||
+    recordString(input.item, 'item_id') ||
+    `output:${input.outputIndex ?? 'unknown'}`
+  const contentGroups: Array<{ kind: 'content' | 'summary'; values: unknown[] }> = []
+  if (Array.isArray(input.item.content)) contentGroups.push({ kind: 'content', values: input.item.content })
+  if (Array.isArray(input.item.summary)) contentGroups.push({ kind: 'summary', values: input.item.summary })
+  if (contentGroups.length === 0 && recordString(input.item, 'text')) {
+    contentGroups.push({ kind: 'content', values: [input.item] })
+  }
+  for (const group of contentGroups) {
+    for (const [contentIndex, value] of group.values.entries()) {
+      const block = value && typeof value === 'object' && !Array.isArray(value)
+        ? value as Record<string, unknown>
         : null
       if (!block) continue
-      const type = recordString(block, 'type')
-      if (type !== 'output_text' && type !== 'text') continue
-      const text = recordString(block, 'text')
-      if (text) texts.push(text)
+      const text = recordString(block, 'text') || recordString(block, 'summary')
+      if (!text) continue
+      const blockType = recordString(block, 'type')
+      const kind = responseContentKind(itemType, blockType, group.kind)
+      if (!kind) continue
+      const identities = responseItemContentIdentityAliases({
+        kind,
+        itemIdentity,
+        outputIndex: input.outputIndex,
+        group: group.kind,
+        contentIndex
+      })
+      const anonymousIdentity = responseAnonymousContentIdentity(kind, group.kind, contentIndex)
+      if (
+        identities.some((identity) => input.tracker.completedIdentities.has(identity)) ||
+        input.tracker.completedIdentities.has(anonymousIdentity)
+      ) continue
+      const exactDeltaText = identities
+        .map((identity) => input.tracker.deltaTextByIdentity.get(identity))
+        .find((value): value is string => value !== undefined)
+      const anonymousDeltaText = exactDeltaText === undefined
+        ? input.tracker.deltaTextByIdentity.get(anonymousIdentity)
+        : undefined
+      const deltaText = exactDeltaText ?? anonymousDeltaText
+      const textToEmit = deltaText === undefined ? text : text.slice(overlapLength(deltaText, text))
+      for (const identity of identities) input.tracker.completedIdentities.add(identity)
+      if (anonymousDeltaText !== undefined || identities.includes(anonymousIdentity)) {
+        input.tracker.completedIdentities.add(anonymousIdentity)
+      }
+      if (textToEmit) {
+        chunks.push(kind === 'text'
+          ? { kind: 'assistant_text_delta', text: textToEmit }
+          : { kind: 'assistant_reasoning_delta', text: textToEmit })
+      }
     }
   }
-  return texts.join('')
+  return chunks
+}
+
+function responseContentKind(
+  itemType: string,
+  blockType: string,
+  group: 'content' | 'summary'
+): 'text' | 'reasoning' | null {
+  if (
+    itemType === 'reasoning' ||
+    group === 'summary' ||
+    blockType === 'reasoning' ||
+    blockType === 'reasoning_text' ||
+    blockType === 'reasoning_summary' ||
+    blockType === 'reasoning_summary_text' ||
+    blockType === 'summary_text' ||
+    blockType === 'thinking'
+  ) return 'reasoning'
+  if (blockType === 'output_text' || blockType === 'text' || !blockType) return 'text'
+  return null
+}
+
+function responseContentIdentityAliases(
+  payload: Record<string, unknown>,
+  kind: 'text' | 'reasoning'
+): string[] {
+  const outputIndex = numericIndex(payload.output_index)
+  const itemId = recordString(payload, 'item_id') || `output:${outputIndex ?? 'unknown'}`
+  const contentIndex = numericIndex(payload.content_index) ?? 0
+  const type = recordString(payload, 'type')
+  const group = kind === 'reasoning' && type.includes('summary') ? 'summary' : 'content'
+  return responseItemContentIdentityAliases({
+    kind,
+    itemIdentity: itemId,
+    outputIndex,
+    group,
+    contentIndex
+  })
+}
+
+function appendResponsesDelta(
+  tracker: ResponsesContentTracker,
+  identities: readonly string[],
+  delta: string
+): void {
+  for (const identity of identities) {
+    tracker.deltaTextByIdentity.set(identity, `${tracker.deltaTextByIdentity.get(identity) ?? ''}${delta}`)
+  }
+}
+
+function responseAnonymousContentIdentity(
+  kind: 'text' | 'reasoning',
+  group: 'content' | 'summary',
+  contentIndex: number
+): string {
+  return `${kind}:output:unknown:${group}:${contentIndex}`
+}
+
+function responseItemContentIdentityAliases(input: {
+  kind: 'text' | 'reasoning'
+  itemIdentity: string
+  outputIndex: number | undefined
+  group: 'content' | 'summary'
+  contentIndex: number
+}): string[] {
+  const primary = `${input.kind}:${input.itemIdentity}:${input.group}:${input.contentIndex}`
+  if (!input.itemIdentity.startsWith('output:') && input.outputIndex !== undefined) {
+    return [primary, `${input.kind}:output:${input.outputIndex}:${input.group}:${input.contentIndex}`]
+  }
+  return [primary]
+}
+
+/** Longest suffix of already-streamed text that is a prefix of the final item. */
+function overlapLength(previous: string, finalText: string): number {
+  const max = Math.min(previous.length, finalText.length)
+  for (let length = max; length > 0; length -= 1) {
+    if (previous.slice(-length) === finalText.slice(0, length)) return length
+  }
+  return 0
 }
 
 function responseStreamCallId(

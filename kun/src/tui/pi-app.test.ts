@@ -44,6 +44,59 @@ function detail(): ThreadDetail {
   }
 }
 
+function testToolCall(input: {
+  id: string
+  turnId: string
+  toolName: string
+  createdAt: string
+  status?: 'pending' | 'running' | 'completed' | 'failed' | 'aborted'
+  toolKind?: 'tool_call' | 'command_execution' | 'file_change'
+  arguments?: Record<string, unknown>
+  finishedAt?: string
+}): Extract<TurnItem, { kind: 'tool_call' }> {
+  return {
+    id: input.id,
+    threadId: 'thr_pi',
+    turnId: input.turnId,
+    role: 'assistant',
+    status: input.status ?? 'completed',
+    createdAt: input.createdAt,
+    ...(input.finishedAt ? { finishedAt: input.finishedAt } : {}),
+    kind: 'tool_call',
+    toolName: input.toolName,
+    callId: input.id,
+    toolKind: input.toolKind ?? 'tool_call',
+    arguments: input.arguments ?? {}
+  }
+}
+
+function testToolResult(input: {
+  id: string
+  turnId: string
+  toolName: string
+  createdAt: string
+  output?: unknown
+  isError?: boolean
+  toolKind?: 'tool_call' | 'command_execution' | 'file_change'
+  finishedAt?: string
+}): Extract<TurnItem, { kind: 'tool_result' }> {
+  return {
+    id: `result_${input.id}`,
+    threadId: 'thr_pi',
+    turnId: input.turnId,
+    role: 'tool',
+    status: 'completed',
+    createdAt: input.createdAt,
+    ...(input.finishedAt ? { finishedAt: input.finishedAt } : {}),
+    kind: 'tool_result',
+    toolName: input.toolName,
+    callId: input.id,
+    toolKind: input.toolKind ?? 'tool_call',
+    output: input.output ?? 'ok',
+    isError: input.isError ?? false
+  }
+}
+
 const runtime = {
   baseUrl: 'http://127.0.0.1:18899', runtimeToken: 'secret', discovered: true,
   runtimeInfo: {
@@ -630,6 +683,249 @@ describe('PiTuiApplication command overlays', () => {
     expect(expanded.every((line) => visibleWidth(line) <= 80)).toBe(true)
   })
 
+  it('groups multi-round exploration across collapsed Thinking and stops at execution boundaries', () => {
+    const current = detail()
+    const turnId = 'turn_exploration'
+    const startedAt = '2026-07-22T00:00:00.000Z'
+    const search = testToolCall({
+      id: 'call_search',
+      turnId,
+      toolName: 'grep',
+      createdAt: '2026-07-22T00:00:01.000Z',
+      finishedAt: '2026-07-22T00:00:02.000Z',
+      arguments: { pattern: 'modelCapabilities', path: 'loop.test.ts' }
+    })
+    const read = testToolCall({
+      id: 'call_read',
+      turnId,
+      toolName: 'read',
+      createdAt: '2026-07-22T00:00:03.000Z',
+      finishedAt: '2026-07-22T00:00:04.000Z',
+      arguments: { path: 'loop.test.ts' }
+    })
+    const edit = testToolCall({
+      id: 'call_edit',
+      turnId,
+      toolName: 'edit',
+      toolKind: 'file_change',
+      createdAt: '2026-07-22T00:00:05.000Z',
+      finishedAt: '2026-07-22T00:00:06.000Z',
+      arguments: { path: 'src/app.ts' }
+    })
+    const run = testToolCall({
+      id: 'call_run',
+      turnId,
+      toolName: 'bash',
+      toolKind: 'command_execution',
+      createdAt: '2026-07-22T00:00:07.000Z',
+      finishedAt: '2026-07-22T00:00:08.000Z',
+      arguments: { command: 'rg modelCapabilities' }
+    })
+    const singleRead = testToolCall({
+      id: 'call_single_read',
+      turnId,
+      toolName: 'read_file',
+      createdAt: '2026-07-22T00:00:09.000Z',
+      finishedAt: '2026-07-22T00:00:10.000Z',
+      arguments: { path: 'README.md' }
+    })
+    current.turns = [{
+      id: turnId,
+      threadId: current.id,
+      status: 'completed',
+      orchestration: 'direct',
+      prompt: 'Explore and update',
+      steering: [],
+      createdAt: startedAt,
+      startedAt,
+      finishedAt: '2026-07-22T00:00:11.000Z',
+      items: [
+        {
+          id: 'user_exploration',
+          threadId: current.id,
+          turnId,
+          role: 'user',
+          status: 'completed',
+          createdAt: startedAt,
+          kind: 'user_message',
+          text: 'Explore and update'
+        },
+        {
+          id: 'reasoning_before_search',
+          threadId: current.id,
+          turnId,
+          role: 'assistant',
+          status: 'completed',
+          createdAt: '2026-07-22T00:00:00.500Z',
+          kind: 'assistant_reasoning',
+          text: 'Find the relevant tests.'
+        },
+        search,
+        testToolResult({
+          id: search.id,
+          turnId,
+          toolName: search.toolName,
+          createdAt: '2026-07-22T00:00:02.000Z',
+          finishedAt: '2026-07-22T00:00:02.000Z',
+          output: 'loop.test.ts:319'
+        }),
+        {
+          id: 'reasoning_between_tools',
+          threadId: current.id,
+          turnId,
+          role: 'assistant',
+          status: 'completed',
+          createdAt: '2026-07-22T00:00:02.500Z',
+          kind: 'assistant_reasoning',
+          text: 'Read the matching test.'
+        },
+        read,
+        testToolResult({
+          id: read.id,
+          turnId,
+          toolName: read.toolName,
+          createdAt: '2026-07-22T00:00:04.000Z',
+          finishedAt: '2026-07-22T00:00:04.000Z',
+          output: 'supportsToolCalling: true'
+        }),
+        edit,
+        testToolResult({
+          id: edit.id,
+          turnId,
+          toolName: edit.toolName,
+          toolKind: edit.toolKind,
+          createdAt: '2026-07-22T00:00:06.000Z',
+          output: 'updated src/app.ts'
+        }),
+        run,
+        testToolResult({
+          id: run.id,
+          turnId,
+          toolName: run.toolName,
+          toolKind: run.toolKind,
+          createdAt: '2026-07-22T00:00:08.000Z',
+          output: 'src/app.ts:1'
+        }),
+        singleRead,
+        testToolResult({
+          id: singleRead.id,
+          turnId,
+          toolName: singleRead.toolName,
+          createdAt: '2026-07-22T00:00:10.000Z',
+          output: 'Kun'
+        }),
+        {
+          id: 'answer_exploration',
+          threadId: current.id,
+          turnId,
+          role: 'assistant',
+          status: 'completed',
+          createdAt: '2026-07-22T00:00:11.000Z',
+          kind: 'assistant_text',
+          text: 'Done.'
+        }
+      ],
+      attachmentIds: [],
+      activeSkillIds: [],
+      injectedMemoryIds: [],
+      injectedMemorySummaries: [],
+      injectedInstructionSources: []
+    }]
+
+    const transcript = new TranscriptComponent()
+    transcript.update(projectThreadSnapshot(current), false, false)
+    const rendered = sanitizeTerminalText(transcript.render(96).join('\n'))
+
+    expect(rendered.match(/Explored/g)).toHaveLength(1)
+    expect(rendered).toContain('Explored · 2 actions · 3.0s')
+    expect(rendered).toContain('Search modelCapabilities')
+    expect(rendered).toContain('Read loop.test.ts')
+    expect(rendered).toContain('Thinking')
+    expect(rendered.indexOf('Thinking')).toBeLessThan(rendered.indexOf('Explored'))
+    expect(rendered.indexOf('Explored')).toBeLessThan(rendered.indexOf('Edit'))
+    expect(rendered).toContain('Run · rg modelCapabilities')
+    expect(rendered).toContain('Read · README.md')
+  })
+
+  it('shows live, failed, capped, expanded, and narrow exploration group states', () => {
+    const current = detail()
+    const turnId = 'turn_live_exploration'
+    const startedAt = new Date().toISOString()
+    const items: TurnItem[] = [{
+      id: 'user_live_exploration',
+      threadId: current.id,
+      turnId,
+      role: 'user',
+      status: 'completed',
+      createdAt: startedAt,
+      kind: 'user_message',
+      text: 'Inspect many files'
+    }]
+    for (let index = 0; index < 14; index += 1) {
+      const createdAt = new Date(Date.parse(startedAt) + (index + 1) * 1_000).toISOString()
+      const call = testToolCall({
+        id: `call_search_${index}`,
+        turnId,
+        toolName: index % 2 === 0 ? 'grep' : 'read_file',
+        createdAt,
+        status: index === 13 ? 'running' : 'completed',
+        ...(index === 13 ? {} : { finishedAt: createdAt }),
+        arguments: index % 2 === 0
+          ? { pattern: `needle-${index}`, path: `src/file-${index}.ts` }
+          : { path: `src/file-${index}.ts` }
+      })
+      items.push(call)
+      if (index !== 13) {
+        items.push(testToolResult({
+          id: call.id,
+          turnId,
+          toolName: call.toolName,
+          createdAt,
+          finishedAt: createdAt,
+          output: `result-${index}`,
+          isError: index === 2
+        }))
+      }
+    }
+    current.status = 'running'
+    current.turns = [{
+      id: turnId,
+      threadId: current.id,
+      status: 'running',
+      orchestration: 'direct',
+      prompt: 'Inspect many files',
+      steering: [],
+      createdAt: startedAt,
+      startedAt,
+      items,
+      attachmentIds: [],
+      activeSkillIds: [],
+      injectedMemoryIds: [],
+      injectedMemorySummaries: [],
+      injectedInstructionSources: []
+    }]
+
+    const transcript = new TranscriptComponent()
+    const projection = projectThreadSnapshot(current)
+    transcript.update(projection, false, false)
+    const compactLines = transcript.render(52, 1)
+    const compact = sanitizeTerminalText(compactLines.join('\n'))
+
+    expect(compact).toContain('Exploring · 14 actions · 1 failed')
+    expect(compact).toContain('… +2 more')
+    expect(compact).not.toContain('input ·')
+    expect(compactLines.every((line) => visibleWidth(line) <= 52)).toBe(true)
+
+    transcript.update(projection, false, true)
+    const expandedLines = transcript.render(52, 2)
+    const expanded = sanitizeTerminalText(expandedLines.join('\n'))
+    expect(expanded).not.toContain('+2 more')
+    expect(expanded).toContain('src/file-13.ts')
+    expect(expanded).toContain('input ·')
+    expect(expanded).toContain('output ·')
+    expect(expandedLines.every((line) => visibleWidth(line) <= 52)).toBe(true)
+  })
+
   it('renders a guided welcome layout and turns the focused composer into the first conversation', async () => {
     let current: ThreadDetail | undefined
     let resolveStart!: (value: { turnId: string }) => void
@@ -797,6 +1093,67 @@ describe('PiTuiApplication command overlays', () => {
       expect(conversationModelFrame).not.toContain('Explain this repository')
       expect(conversationModelFrame).not.toContain(' Prompt')
       input.emit('data', '\x1b')
+    } finally {
+      controller.requestQuit()
+      await running
+      await app.stop()
+      await controller.stop()
+    }
+  })
+
+  it('uses ArrowUp and ArrowDown to browse submitted composer input history', async () => {
+    const current = detail()
+    const startTurn = vi.fn(async () => ({ turnId: 'turn_history' }))
+    const listThreads = vi.fn(async () => [current])
+    const client = {
+      listThreads,
+      getThread: vi.fn(async () => current),
+      subscribeThreadEvents: vi.fn(async (input: { signal: AbortSignal }) => {
+        await new Promise<void>((resolve) => input.signal.addEventListener('abort', () => resolve(), { once: true }))
+      }),
+      skills: vi.fn(async () => ({ enabled: true, roots: [], skills: [], validationErrors: [] })),
+      modelConnections: vi.fn(async () => modelSnapshot()),
+      startTurn
+    } as unknown as KunTuiClient
+    const controller = new TuiController(client, options, runtime)
+    await controller.start()
+
+    const input = Object.assign(new EventEmitter(), {
+      isRaw: false,
+      setRawMode: vi.fn(),
+      setEncoding: vi.fn(),
+      resume: vi.fn(),
+      pause: vi.fn()
+    }) as unknown as TerminalInput
+    let outputText = ''
+    const output = Object.assign(new EventEmitter(), {
+      columns: 92,
+      rows: 28,
+      write: (chunk: string) => { outputText += chunk }
+    }) as unknown as TerminalOutput
+    const app = new PiTuiApplication(controller, input, output)
+    const root = (app as unknown as {
+      root: {
+        editor: { getText: () => string }
+        render: (width: number) => string[]
+      }
+    }).root
+    const running = app.run()
+    try {
+      type(input as unknown as EventEmitter, 'previous prompt')
+      await waitFor(() => startTurn.mock.calls.length === 1)
+
+      const listCallsBeforeHistory = listThreads.mock.calls.length
+      input.emit('data', '\x1b[A')
+      await waitFor(() => root.editor.getText() === 'previous prompt')
+      expect(sanitizeTerminalText(root.render(92).join('\n'))).toContain('previous prompt')
+      expect(listThreads).toHaveBeenCalledTimes(listCallsBeforeHistory)
+      expect(controller.state.notification?.message ?? '').not.toContain('No parent session')
+
+      input.emit('data', '\x1b[B')
+      await waitFor(() => root.editor.getText() === '')
+      for (const character of 'next prompt') input.emit('data', character)
+      await waitFor(() => root.editor.getText() === 'next prompt')
     } finally {
       controller.requestQuit()
       await running

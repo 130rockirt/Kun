@@ -45,6 +45,7 @@ export function createThreadRecord(input: {
   status?: ThreadStatus
   approvalPolicy?: ApprovalPolicy
   sandboxMode?: SandboxMode
+  modelRequestCaptureEnabled?: boolean
   pinned?: boolean
   costBudgetUsd?: number
   costBudgetWarningSent?: boolean
@@ -83,6 +84,7 @@ export function createThreadRecord(input: {
     status: input.status ?? 'idle',
     approvalPolicy: input.approvalPolicy ?? DEFAULT_APPROVAL_POLICY,
     sandboxMode: input.sandboxMode ?? DEFAULT_SANDBOX_MODE,
+    modelRequestCaptureEnabled: input.modelRequestCaptureEnabled ?? false,
     ...(input.pinned !== undefined ? { pinned: input.pinned } : {}),
     ...(input.costBudgetUsd !== undefined ? { costBudgetUsd: input.costBudgetUsd } : {}),
     ...(input.costBudgetWarningSent !== undefined ? { costBudgetWarningSent: input.costBudgetWarningSent } : {}),
@@ -109,7 +111,7 @@ export function toThreadSummary(
   thread: ThreadEntity
 ): Pick<
   ThreadEntity,
-  'id' | 'title' | 'titleAuto' | 'summary' | 'workspace' | 'additionalWorkspaces' | 'model' | 'providerId' | 'agentId' | 'systemPrompt' | 'mode' | 'status' | 'approvalPolicy' | 'sandboxMode' | 'pinned' | 'createdAt' | 'updatedAt'
+  'id' | 'title' | 'titleAuto' | 'summary' | 'workspace' | 'additionalWorkspaces' | 'model' | 'providerId' | 'agentId' | 'systemPrompt' | 'mode' | 'status' | 'approvalPolicy' | 'sandboxMode' | 'modelRequestCaptureEnabled' | 'pinned' | 'createdAt' | 'updatedAt'
   | 'ownerExtensionId' | 'ownerExtensionVersion' | 'accountId' | 'extensionVisibility'
   | 'extensionProfile' | 'extensionBudget' | 'toolCatalogEpoch'
   | 'costBudgetUsd' | 'costBudgetWarningSent'
@@ -139,6 +141,7 @@ export function toThreadSummary(
     status: thread.status,
     approvalPolicy: thread.approvalPolicy,
     sandboxMode: thread.sandboxMode,
+    modelRequestCaptureEnabled: thread.modelRequestCaptureEnabled,
     ...(thread.pinned !== undefined ? { pinned: thread.pinned } : {}),
     ...(thread.costBudgetUsd !== undefined ? { costBudgetUsd: thread.costBudgetUsd } : {}),
     ...(thread.costBudgetWarningSent !== undefined ? { costBudgetWarningSent: thread.costBudgetWarningSent } : {}),

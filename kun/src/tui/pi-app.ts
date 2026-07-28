@@ -573,10 +573,6 @@ export class PiTuiApplication {
         void this.controller.navigateSessionRelation('next-sibling')
         return { consume: true }
       }
-      if (matchesKey(data, 'up')) {
-        void this.controller.navigateSessionRelation('parent')
-        return { consume: true }
-      }
     }
     if (this.keymap.matches('session_rename', data) && this.root.composerEmpty()) {
       this.root.setEditorText('/rename ')
@@ -1754,6 +1750,24 @@ class ChatRoot implements Component, Focusable {
 }
 
 const KUN_REPLY_GROUP_PREFIX = 'kun-reply:'
+const EXPLORE_GROUP_PREFIX = 'explore-group:'
+const EXPLORE_GROUP_COMPACT_LIMIT = 12
+
+type ToolCallItem = Extract<TurnItem, { kind: 'tool_call' }>
+type ToolResultItem = Extract<TurnItem, { kind: 'tool_result' }>
+
+type ExplorationEntry = {
+  call: ToolCallItem
+  result?: ToolResultItem
+}
+
+type ExplorationStage = {
+  id: string
+  turnId: string
+  entries: ExplorationEntry[]
+  insertAfterItemId: string
+  active: boolean
+}
 
 function isKunReplyItem(item: TurnItem): boolean {
   return item.kind === 'assistant_text' ||
@@ -1771,6 +1785,7 @@ export class TranscriptComponent implements Component {
   private readonly items = new Map<string, ItemComponent>()
   private readonly children = new Map<string, ChildRunComponent>()
   private readonly childGroups = new Map<string, ChildRunGroupComponent>()
+  private readonly explorationGroups = new Map<string, ExplorationGroupComponent>()
   private readonly reasoningOverrides = new Map<string, boolean>()
   private showReasoning = false
   private projection?: ThreadProjection
@@ -1799,6 +1814,26 @@ export class TranscriptComponent implements Component {
       (projection?.thread.turns ?? []).map((turn) => [turn.id, turn.attachmentIds] as const)
     )
     const visible = all.filter((item) => item.kind !== 'tool_result' || !toolCalls.has(item.callId))
+    const explorationStages = deriveExplorationStages(
+      visible,
+      toolResults,
+      projection?.runningTurnId
+    )
+    const explorationGroupIds = new Set(explorationStages.map((stage) => stage.id))
+    for (const id of this.explorationGroups.keys()) {
+      if (!explorationGroupIds.has(id)) this.explorationGroups.delete(id)
+    }
+    for (const stage of explorationStages) {
+      const current = this.explorationGroups.get(stage.id)
+      if (current) current.update(stage, showToolDetails)
+      else this.explorationGroups.set(stage.id, new ExplorationGroupComponent(stage, showToolDetails))
+    }
+    const explorationGroupAfterItem = new Map(
+      explorationStages.map((stage) => [stage.insertAfterItemId, stage.id] as const)
+    )
+    const groupedExplorationItemIds = new Set(
+      explorationStages.flatMap((stage) => stage.entries.map((entry) => entry.call.id))
+    )
     const nextIds = new Set(visible.map((item) => item.id))
     for (const id of this.items.keys()) if (!nextIds.has(id)) this.items.delete(id)
     for (const id of this.reasoningOverrides.keys()) if (!nextIds.has(id)) this.reasoningOverrides.delete(id)
@@ -1895,7 +1930,7 @@ export class TranscriptComponent implements Component {
     }
     for (const item of visible) {
       if (isKunReplyItem(item)) addKunReplyLabel(item.turnId)
-      order.push(item.id)
+      if (!groupedExplorationItemIds.has(item.id)) order.push(item.id)
       if (item.kind !== 'tool_call' || item.toolName !== 'delegate_task') continue
       const groupedChildren = childRunsByTurn.get(item.turnId) ?? []
       if (groupedChildren.length > 1) {
@@ -1916,6 +1951,24 @@ export class TranscriptComponent implements Component {
         order.push(id)
         placedChildren.add(id)
       }
+    }
+    for (const [itemId, groupId] of explorationGroupAfterItem) {
+      const itemIndex = order.indexOf(itemId)
+      if (itemIndex >= 0) {
+        order.splice(itemIndex + 1, 0, groupId)
+        continue
+      }
+      const lastGroupedCall = explorationStages
+        .find((stage) => stage.id === groupId)
+        ?.entries.at(-1)?.call.id
+      const callIndex = lastGroupedCall ? visible.findIndex((item) => item.id === lastGroupedCall) : -1
+      if (callIndex < 0) continue
+      const nextVisibleId = visible.slice(callIndex + 1)
+        .map((item) => item.id)
+        .find((id) => order.includes(id))
+      const nextOrderIndex = nextVisibleId ? order.indexOf(nextVisibleId) : -1
+      if (nextOrderIndex >= 0) order.splice(nextOrderIndex, 0, groupId)
+      else order.push(groupId)
     }
     for (const id of childIds) {
       if (placedChildren.has(id)) continue
@@ -1941,6 +1994,8 @@ export class TranscriptComponent implements Component {
       const replyGroup = id.startsWith(KUN_REPLY_GROUP_PREFIX)
       const rendered = replyGroup
         ? [cyan(bold(' Kun'))]
+        : id.startsWith(EXPLORE_GROUP_PREFIX)
+          ? this.explorationGroups.get(id)?.render(width, animationFrame) ?? []
         : id.startsWith('child-group:')
           ? this.childGroups.get(id)?.render(width, animationFrame) ?? []
         : id.startsWith('child:')
@@ -1948,6 +2003,8 @@ export class TranscriptComponent implements Component {
           : this.items.get(id)?.render(width, animationFrame) ?? []
       const kind = replyGroup
         ? 'kun_reply'
+        : id.startsWith(EXPLORE_GROUP_PREFIX)
+          ? 'exploration_group'
         : id.startsWith('child-group:')
           ? 'child_group'
         : id.startsWith('child:')
@@ -1957,7 +2014,7 @@ export class TranscriptComponent implements Component {
         kind === 'assistant_reasoning' || kind === 'tool_call' ||
         kind === 'tool_result' || kind === 'approval' ||
         kind === 'user_input' || kind === 'review' || kind === 'error' ||
-        kind === 'compaction'
+        kind === 'compaction' || kind === 'exploration_group'
       if (index !== 0 && !compact) lines.push('')
       const start = lines.length
       lines.push(...rendered)
@@ -2003,6 +2060,106 @@ export class TranscriptComponent implements Component {
 
   invalidate(): void {
     for (const item of this.items.values()) item.invalidate()
+  }
+}
+
+class ExplorationGroupComponent implements Component {
+  constructor(
+    private stage: ExplorationStage,
+    private showToolDetails: boolean
+  ) {}
+
+  update(stage: ExplorationStage, showToolDetails: boolean): void {
+    this.stage = stage
+    this.showToolDetails = showToolDetails
+  }
+
+  invalidate(): void {}
+
+  render(width: number, animationFrame = 0): string[] {
+    const contentWidth = Math.max(8, width - 2)
+    const entries = this.showToolDetails
+      ? this.stage.entries
+      : this.stage.entries.slice(0, EXPLORE_GROUP_COMPACT_LIMIT)
+    const omitted = this.stage.entries.length - entries.length
+    const failedCount = this.stage.entries.filter(explorationEntryFailed).length
+    const icon = this.stage.active
+      ? cyan(activityFrame('tool', animationFrame))
+      : failedCount > 0
+        ? red('✗')
+        : dim('●')
+    const title = this.stage.active ? 'Exploring' : 'Explored'
+    const duration = explorationStageDuration(this.stage)
+    const metadata = [
+      `${this.stage.entries.length} ${this.stage.entries.length === 1 ? 'action' : 'actions'}`,
+      ...(failedCount > 0 ? [`${failedCount} failed`] : []),
+      ...(duration ? [duration] : [])
+    ].join(' · ')
+    const lines = [
+      truncateToWidth(` ${icon} ${bold(title)}${metadata ? ` ${dim(`· ${metadata}`)}` : ''}`, contentWidth)
+    ]
+
+    entries.forEach((entry, index) => {
+      const last = index === entries.length - 1 && omitted === 0
+      lines.push(...this.renderEntry(entry, last, contentWidth, animationFrame))
+    })
+    if (omitted > 0) {
+      lines.push(truncateToWidth(`   └ ${dim(`… +${omitted} more`)}`, contentWidth))
+    }
+    return lines
+  }
+
+  private renderEntry(
+    entry: ExplorationEntry,
+    last: boolean,
+    width: number,
+    animationFrame: number
+  ): string[] {
+    const failed = explorationEntryFailed(entry)
+    const running = this.stage.active &&
+      !entry.result &&
+      entry.call.status !== 'failed' &&
+      entry.call.status !== 'aborted'
+    const branch = last ? '└' : '├'
+    const continuation = last ? ' ' : '│'
+    const status = failed
+      ? `${red('✗')} `
+      : running
+        ? `${cyan(activityFrame('tool', animationFrame))} `
+        : ''
+    const action = explorationToolAction(entry.call) ?? toolAction(entry.call)
+    const duration = elapsedDuration(
+      entry.call.createdAt,
+      entry.result?.finishedAt ?? entry.call.finishedAt,
+      running
+    )
+    const summary = truncateToWidth(
+      `   ${branch} ${status}${cyan(bold(action.verb))}${action.subject ? ` ${sanitizeTerminalText(action.subject)}` : ''}${duration ? ` ${dim(`· ${duration}`)}` : ''}`,
+      width
+    )
+    if (!this.showToolDetails) return [summary]
+
+    const details = [
+      ...renderExplorationDetail(
+        'input',
+        outputText(entry.call.arguments),
+        width,
+        20,
+        continuation,
+        dim
+      ),
+      ...(entry.result
+        ? renderExplorationDetail(
+            'output',
+            outputText(entry.result.output),
+            width,
+            40,
+            continuation,
+            entry.result.isError ? red : dim
+          )
+        : [])
+    ]
+    return [summary, ...details]
   }
 }
 
@@ -5963,6 +6120,133 @@ function childIdFromToolResult(
 function humanizeToolName(name: string): string {
   const normalized = sanitizeTerminalText(name).replaceAll('_', ' ').trim()
   return normalized ? `${normalized[0]!.toUpperCase()}${normalized.slice(1)}` : 'Tool'
+}
+
+function deriveExplorationStages(
+  items: readonly TurnItem[],
+  toolResults: ReadonlyMap<string, ToolResultItem>,
+  runningTurnId: string | undefined
+): ExplorationStage[] {
+  const stages: ExplorationStage[] = []
+  const stageIndexes = new Map<string, number>()
+  let turnId = ''
+  let entries: ExplorationEntry[] = []
+  let insertAfterItemId = ''
+
+  const flush = (closed: boolean): void => {
+    if (entries.length >= 2 && turnId && insertAfterItemId) {
+      const index = stageIndexes.get(turnId) ?? 0
+      stageIndexes.set(turnId, index + 1)
+      stages.push({
+        id: `${EXPLORE_GROUP_PREFIX}${turnId}:${index}`,
+        turnId,
+        entries,
+        insertAfterItemId,
+        active: !closed && runningTurnId === turnId
+      })
+    }
+    entries = []
+    insertAfterItemId = ''
+  }
+
+  for (const item of items) {
+    if (turnId && item.turnId !== turnId) flush(true)
+    turnId = item.turnId
+
+    if (item.kind === 'tool_call' && explorationToolAction(item)) {
+      entries.push({ call: item, result: toolResults.get(item.callId) })
+      insertAfterItemId = item.id
+      continue
+    }
+    if (item.kind === 'assistant_reasoning' && entries.length > 0) {
+      insertAfterItemId = item.id
+      continue
+    }
+    flush(true)
+  }
+  flush(false)
+  return stages
+}
+
+function explorationToolAction(item: ToolCallItem): { verb: string; subject: string } | undefined {
+  if (item.toolKind !== 'tool_call') return undefined
+  const name = item.toolName.toLowerCase()
+  if (
+    name.includes('browser_use') ||
+    name.includes('computer_use') ||
+    name.includes('delegate') ||
+    name.includes('write') ||
+    name.includes('edit') ||
+    name.includes('patch')
+  ) {
+    return undefined
+  }
+
+  const tokens = name.split(/[^a-z0-9]+/u).filter(Boolean)
+  const action = toolAction(item)
+  if (
+    name === 'rg' ||
+    tokens.some((token) => token === 'search' || token === 'grep' || token === 'find' || token === 'glob')
+  ) {
+    return { ...action, verb: 'Search' }
+  }
+  if (tokens.includes('list')) return { ...action, verb: 'List' }
+  if (
+    name === 'open_url' ||
+    tokens.some((token) => token === 'fetch' || token === 'download')
+  ) {
+    return { ...action, verb: 'Fetch' }
+  }
+  if (
+    name === 'repo_map' ||
+    tokens.some((token) => token === 'read' || token === 'view' || token === 'inspect')
+  ) {
+    return { ...action, verb: 'Read' }
+  }
+  return undefined
+}
+
+function explorationEntryFailed(entry: ExplorationEntry): boolean {
+  return Boolean(
+    entry.result?.isError ||
+    entry.call.status === 'failed' ||
+    entry.call.status === 'aborted'
+  )
+}
+
+function explorationStageDuration(stage: ExplorationStage): string {
+  const start = stage.entries[0]?.call.createdAt
+  const end = stage.active
+    ? undefined
+    : [...stage.entries]
+        .reverse()
+        .map((entry) =>
+          entry.result?.finishedAt ??
+          entry.call.finishedAt ??
+          entry.result?.createdAt ??
+          entry.call.createdAt
+        )
+        .find(Boolean)
+  return elapsedDuration(start, end, stage.active)
+}
+
+function renderExplorationDetail(
+  label: string,
+  value: string,
+  width: number,
+  maxLines: number,
+  continuation: string,
+  tone: (value: string) => string
+): string[] {
+  const safeLabel = sanitizeTerminalText(label).slice(0, 12)
+  const prefix = `   ${continuation}  `
+  const available = Math.max(1, width - visibleWidth(prefix) - safeLabel.length - 3)
+  const values = plainLines(value, available, 0).slice(0, maxLines)
+  return values.map((line, index) => {
+    const marker = index === values.length - 1 ? '└' : '├'
+    const renderedLabel = index === 0 ? `${safeLabel} · ` : ' '.repeat(safeLabel.length + 3)
+    return truncateToWidth(`${prefix}${tone(`${marker} ${renderedLabel}${line}`)}`, width)
+  })
 }
 
 function toolAction(item: Extract<TurnItem, { kind: 'tool_call' }>): { verb: string; subject: string } {

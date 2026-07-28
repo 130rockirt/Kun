@@ -45,7 +45,7 @@ function withId(item: TurnItem, id: string): TurnItem {
 }
 
 describe('ThreadService runtime defaults', () => {
-  it('uses the runtime approval and sandbox defaults when an HTTP create request omits them', async () => {
+  it('uses runtime defaults for policy and Agent Perspective capture on new threads only', async () => {
     const bus = new InMemoryEventBus()
     const threadStore = new InMemoryThreadStore()
     const sessionStore = new InMemorySessionStore()
@@ -61,11 +61,36 @@ describe('ThreadService runtime defaults', () => {
       ids: new SequentialIdGenerator(),
       nowIso: () => '2026-07-10T00:00:00.000Z',
       defaultApprovalPolicy: 'never',
-      defaultSandboxMode: 'read-only'
+      defaultSandboxMode: 'read-only',
+      defaultModelRequestCaptureEnabled: true
     })
 
     const thread = await service.create({ workspace: '/tmp', model: 'm', mode: 'agent' })
-    expect(thread).toMatchObject({ approvalPolicy: 'never', sandboxMode: 'read-only' })
+    expect(thread).toMatchObject({
+      approvalPolicy: 'never',
+      sandboxMode: 'read-only',
+      modelRequestCaptureEnabled: true
+    })
+
+    const explicitlyDisabled = await service.create({
+      workspace: '/tmp',
+      model: 'm',
+      mode: 'agent',
+      modelRequestCaptureEnabled: false
+    })
+    expect(explicitlyDisabled.modelRequestCaptureEnabled).toBe(false)
+
+    service.updateRuntimeDefaults({
+      approvalPolicy: 'never',
+      sandboxMode: 'read-only',
+      modelRequestCaptureEnabled: false
+    })
+    const later = await service.create({ workspace: '/tmp', model: 'm', mode: 'agent' })
+    expect(later.modelRequestCaptureEnabled).toBe(false)
+    expect((await service.get(thread.id))?.modelRequestCaptureEnabled).toBe(true)
+
+    const toggled = await service.update(thread.id, { modelRequestCaptureEnabled: false })
+    expect(toggled.modelRequestCaptureEnabled).toBe(false)
   })
 })
 

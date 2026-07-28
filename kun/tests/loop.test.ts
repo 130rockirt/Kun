@@ -2226,7 +2226,7 @@ describe('AgentLoop', () => {
       const status = await h.loop.runTurn(h.threadId, h.turnId)
       expect(status).toBe('completed')
       expect(observedToolLists[0]).toContain(CREATE_PLAN_TOOL_NAME)
-      expect(observedRequiredToolNames).toEqual([CREATE_PLAN_TOOL_NAME, undefined])
+      expect(observedRequiredToolNames).toEqual([undefined, undefined])
       await expect(readFile(join(workspace, '.kunsdd/plan/auth.md'), 'utf8')).resolves.toBe('# Generated plan')
       const turn = await h.turns.getTurn(h.threadId, h.turnId)
       expect(turn?.guiPlan?.relativePath).toBe('.kunsdd/plan/auth.md')
@@ -2542,7 +2542,7 @@ describe('AgentLoop', () => {
     }
   })
 
-  it('keeps requiring create_plan after unrelated tool calls in a GUI plan turn', async () => {
+  it('keeps create_plan as a soft completion condition after unrelated tool calls', async () => {
     const workspace = await mkdtemp(join(tmpdir(), 'kun-loop-plan-other-tool-'))
     const observedRequiredToolNames: Array<string | undefined> = []
     let calls = 0
@@ -2587,7 +2587,7 @@ describe('AgentLoop', () => {
       const status = await h.loop.runTurn(h.threadId, h.turnId)
 
       expect(status).toBe('completed')
-      expect(observedRequiredToolNames).toEqual([CREATE_PLAN_TOOL_NAME, CREATE_PLAN_TOOL_NAME, undefined])
+      expect(observedRequiredToolNames).toEqual([undefined, undefined, undefined])
       await expect(readFile(join(workspace, '.kunsdd/plan/auth.md'), 'utf8')).resolves.toBe(
         '## Plan\nImplement auth after checking context.'
       )
@@ -2675,9 +2675,9 @@ describe('AgentLoop', () => {
       await expect(run).resolves.toBe('completed')
       expect(requests).toHaveLength(4)
       expect(requests[2]).toMatchObject({
-        model: model.model,
-        requiredToolName: CREATE_PLAN_TOOL_NAME
+        model: model.model
       })
+      expect(requests[2]?.requiredToolName).toBeUndefined()
       expect(requests[2]?.modeInstruction).toContain('You are in Plan mode.')
       expect(requests[2]?.history).toEqual(expect.arrayContaining([
         expect.objectContaining({

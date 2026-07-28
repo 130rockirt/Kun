@@ -99,6 +99,15 @@ tree. Running, completed, and failed tools use motion, a solid dot, and an
 error mark respectively, with color reserved for status meaning. These
 presentational changes retain inline mode and native terminal scrollback.
 
+Consecutive read-only discovery calls in one phase are grouped into an
+`Exploring` / `Explored` summary. Read, View, Search, Grep, Find, List, Fetch,
+and Web Search may stay in one group across collapsed Thinking rows; an
+answer, command, edit, delegation, approval, or structured input ends the
+group. The compact view shows the first 12 actions and the remaining count.
+`Ctrl+O` expands every action and its input/output. Failed actions remain in
+the group and contribute to its title. Grouping changes only the TUI
+presentation, not execution order, event history, or exports.
+
 ## Model connections
 
 `/connect` opens the shared connection wizard:

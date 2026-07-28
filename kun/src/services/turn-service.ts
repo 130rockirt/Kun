@@ -853,7 +853,7 @@ export class TurnService {
   async updateTurnMetadata(
     threadId: string,
     turnId: string,
-    patch: Pick<
+    patch: Omit<Pick<
       Partial<Turn>,
       | 'activeSkillIds'
       | 'injectedMemoryIds'
@@ -864,10 +864,12 @@ export class TurnService {
       | 'toolCatalogFingerprint'
       | 'toolCatalogToolCount'
       | 'toolCatalogDrift'
+      | 'requiredToolGate'
       | 'extensionModelRequests'
       | 'extensionToolInvocations'
       | 'workspaceCheckpointId'
-    >
+    >, 'requiredToolGate'>
+      & { requiredToolGate?: Turn['requiredToolGate'] | null }
   ): Promise<void> {
     await this.upsertThread(threadId, (current) => ({
       ...current,
@@ -890,6 +892,11 @@ export class TurnService {
               ...(patch.toolCatalogFingerprint ? { toolCatalogFingerprint: patch.toolCatalogFingerprint } : {}),
               ...(patch.toolCatalogToolCount !== undefined ? { toolCatalogToolCount: patch.toolCatalogToolCount } : {}),
               ...(patch.toolCatalogDrift !== undefined ? { toolCatalogDrift: patch.toolCatalogDrift } : {}),
+              ...(patch.requiredToolGate === null
+                ? { requiredToolGate: undefined }
+                : patch.requiredToolGate
+                  ? { requiredToolGate: patch.requiredToolGate }
+                  : {}),
               ...(patch.extensionModelRequests !== undefined
                 ? { extensionModelRequests: patch.extensionModelRequests }
                 : {}),

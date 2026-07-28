@@ -143,7 +143,8 @@ export function videoGenConfigForRuntime(
 
 export function runtimeTuningConfigForRuntime(
   value: Pick<KunRuntimeSettingsV1, 'runtimeTuning'>['runtimeTuning'],
-  existing: Record<string, unknown>
+  existing: Record<string, unknown>,
+  llmDebug: Pick<KunRuntimeSettingsV1, 'llmDebug'>['llmDebug']
 ): Record<string, unknown> {
   return {
     ...existing,
@@ -153,6 +154,11 @@ export function runtimeTuningConfigForRuntime(
       maxWallTimeMs: value.maxWallTimeMs
     },
     streamIdleTimeoutMs: value.streamIdleTimeoutMs,
+    llmDebug: {
+      ...objectValue(existing.llmDebug),
+      enabled: objectValue(existing.llmDebug).enabled !== false,
+      defaultThreadCaptureEnabled: llmDebug.defaultThreadCaptureEnabled
+    },
     toolStorm: {
       ...objectValue(existing.toolStorm),
       enabled: value.toolStorm.enabled,

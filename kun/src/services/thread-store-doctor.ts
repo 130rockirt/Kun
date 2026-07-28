@@ -929,6 +929,7 @@ const REQUIRED_SQLITE_COLUMNS: Readonly<Record<string, readonly SqliteColumnExpe
     sqliteColumn('status', 'TEXT', true),
     sqliteColumn('approval_policy', 'TEXT', true),
     sqliteColumn('sandbox_mode', 'TEXT', true),
+    sqliteColumn('model_request_capture_enabled', 'INTEGER', true, 0, '0'),
     sqliteColumn('cost_budget_usd', 'REAL', false),
     sqliteColumn('cost_budget_warning_sent', 'INTEGER', false),
     sqliteColumn('relation', 'TEXT', true),
@@ -1256,6 +1257,7 @@ function probeHybridThreadStoreWrites(db: BetterSqliteDatabase): boolean {
     const threadUpsert = db.prepare(`
       INSERT INTO threads (
         id, title, workspace, model, mode, status, approval_policy, sandbox_mode,
+        model_request_capture_enabled,
         cost_budget_usd, cost_budget_warning_sent, relation, parent_thread_id,
         forked_from_thread_id, forked_from_title, forked_at, forked_from_message_count,
         forked_from_turn_count, goal_json, todos_json, extension_metadata_json,
@@ -1263,6 +1265,7 @@ function probeHybridThreadStoreWrites(db: BetterSqliteDatabase): boolean {
         event_seq_high_water, metadata_path, messages_path, events_path, search_text
       ) VALUES (
         @id, @title, @workspace, @model, @mode, @status, @approval_policy, @sandbox_mode,
+        @model_request_capture_enabled,
         @cost_budget_usd, @cost_budget_warning_sent, @relation, @parent_thread_id,
         @forked_from_thread_id, @forked_from_title, @forked_at, @forked_from_message_count,
         @forked_from_turn_count, @goal_json, @todos_json, @extension_metadata_json,
@@ -1272,6 +1275,7 @@ function probeHybridThreadStoreWrites(db: BetterSqliteDatabase): boolean {
         title=excluded.title, workspace=excluded.workspace, model=excluded.model,
         mode=excluded.mode, status=excluded.status,
         approval_policy=excluded.approval_policy, sandbox_mode=excluded.sandbox_mode,
+        model_request_capture_enabled=excluded.model_request_capture_enabled,
         cost_budget_usd=excluded.cost_budget_usd,
         cost_budget_warning_sent=excluded.cost_budget_warning_sent,
         relation=excluded.relation, parent_thread_id=excluded.parent_thread_id,
@@ -1304,12 +1308,18 @@ function probeHybridThreadStoreWrites(db: BetterSqliteDatabase): boolean {
     threadUpsert.run(threadWriteProbeRow(firstId, 'Kun doctor schema probe updated'))
     threadUpsert.run(threadWriteProbeRow(secondId, 'KUN DOCTOR SCHEMA PROBE'))
     const defaults = db.prepare(`
-      SELECT id, usage_backfilled FROM threads WHERE id IN (?, ?)
-    `).all(firstId, secondId) as Array<{ id?: unknown; usage_backfilled?: unknown }>
+      SELECT id, model_request_capture_enabled, usage_backfilled
+      FROM threads WHERE id IN (?, ?)
+    `).all(firstId, secondId) as Array<{
+      id?: unknown
+      model_request_capture_enabled?: unknown
+      usage_backfilled?: unknown
+    }>
     if (
       defaults.length !== 2
+      || defaults.some((row) => row.model_request_capture_enabled !== 0)
       || defaults.some((row) => row.usage_backfilled !== 0)
-    ) throw new Error('unexpected usage_backfilled default')
+    ) throw new Error('unexpected thread index default')
 
     const timestamp = '2099-01-01T00:00:00.000Z'
     const usageJson = JSON.stringify({
@@ -1380,6 +1390,7 @@ function threadWriteProbeRow(id: string, title: string): Record<string, string |
     status: 'idle',
     approval_policy: 'on-request',
     sandbox_mode: 'workspace-write',
+    model_request_capture_enabled: 0,
     cost_budget_usd: null,
     cost_budget_warning_sent: null,
     relation: 'primary',

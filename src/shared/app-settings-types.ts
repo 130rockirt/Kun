@@ -604,6 +604,8 @@ export type KunRuntimeSettingsV1 = {
   contextCompaction: KunContextCompactionSettingsV1
   /** Low-level loop guards and model argument repair tuning. */
   runtimeTuning: KunRuntimeTuningSettingsV1
+  /** Local Agent Perspective capture defaults. */
+  llmDebug: KunLlmDebugSettingsV1
   /** OpenAI-compatible image generation provider shared by chat agents and Write image tools. */
   imageGeneration: KunImageGenerationSettingsV1
   /** Speech-to-text provider used for voice input in the composer. */
@@ -950,6 +952,11 @@ export type KunRuntimeTuningSettingsV1 = {
   toolArgumentRepair: KunToolArgumentRepairSettingsV1
 }
 
+export type KunLlmDebugSettingsV1 = {
+  /** Initial Agent Perspective capture state for newly created conversations. */
+  defaultThreadCaptureEnabled: boolean
+}
+
 /**
  * Compatibility shell kept because persisted settings still use the
  * `agents.kun` envelope. Prefer operating on the contained
@@ -980,7 +987,7 @@ export type KunTokenEconomySettingsPatchV1 = Partial<
 export type KunRuntimeSettingsPatchV1 = Partial<
   Omit<
     KunRuntimeSettingsV1,
-    'mcpSearch' | 'projectConfig' | 'storage' | 'contextCompaction' | 'runtimeTuning' | 'tokenEconomy' | 'toolOutputLimits' | 'imageGeneration' | 'speechToText' | 'textToSpeech' | 'promptOptimization' | 'musicGeneration' | 'videoGeneration' | 'instructions' | 'computerUse' | 'browserUse' | 'quality' | 'modelProfiles' | 'subagents' | 'graph'
+    'mcpSearch' | 'projectConfig' | 'storage' | 'contextCompaction' | 'runtimeTuning' | 'llmDebug' | 'tokenEconomy' | 'toolOutputLimits' | 'imageGeneration' | 'speechToText' | 'textToSpeech' | 'promptOptimization' | 'musicGeneration' | 'videoGeneration' | 'instructions' | 'computerUse' | 'browserUse' | 'quality' | 'modelProfiles' | 'subagents' | 'graph'
   >
 > & {
   mcpSearch?: Partial<KunMcpSearchSettingsV1>
@@ -990,6 +997,7 @@ export type KunRuntimeSettingsPatchV1 = Partial<
   storage?: Partial<KunStorageSettingsV1>
   contextCompaction?: Partial<KunContextCompactionSettingsV1>
   runtimeTuning?: KunRuntimeTuningSettingsPatchV1
+  llmDebug?: Partial<KunLlmDebugSettingsV1>
   imageGeneration?: Partial<KunImageGenerationSettingsV1>
   speechToText?: Partial<KunSpeechToTextSettingsV1>
   textToSpeech?: Partial<KunTextToSpeechSettingsV1>

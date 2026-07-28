@@ -36,6 +36,7 @@ export const RuntimeEventKind = z.enum([
   'assistant_text_delta',
   'assistant_reasoning_delta',
   'tool_call_ready',
+  'required_tool_gate',
   'model_request_retry',
   'tool_result_upload_wait',
   'tool_storm_suppressed',
@@ -161,7 +162,8 @@ export const ThreadLifecycleEvent = RuntimeEventBase.extend({
   workspace: z.string().optional(),
   additionalWorkspaces: z.array(z.string()).optional(),
   approvalPolicy: ApprovalPolicySchema.optional(),
-  sandboxMode: SandboxModeSchema.optional()
+  sandboxMode: SandboxModeSchema.optional(),
+  modelRequestCaptureEnabled: z.boolean().optional()
 })
 export type ThreadLifecycleEvent = z.infer<typeof ThreadLifecycleEvent>
 
@@ -225,6 +227,17 @@ export const ToolCallReadyEvent = RuntimeEventBase.extend({
   readyCount: z.number().int().positive()
 })
 export type ToolCallReadyEvent = z.infer<typeof ToolCallReadyEvent>
+
+/** Structured progress for a hard named-tool gate; never assistant text. */
+export const RequiredToolGateEvent = RuntimeEventBase.extend({
+  kind: z.literal('required_tool_gate'),
+  toolName: z.string().min(1).max(256),
+  phase: z.enum(['preparing', 'retrying', 'succeeded', 'failed']),
+  attempt: z.number().int().positive(),
+  maxAttempts: z.number().int().positive(),
+  failureSummary: z.string().min(1).max(2_048).optional()
+})
+export type RequiredToolGateEvent = z.infer<typeof RequiredToolGateEvent>
 
 export const ModelRequestRetryEvent = RuntimeEventBase.extend({
   kind: z.literal('model_request_retry'),
@@ -403,6 +416,7 @@ export const RuntimeEvent = z.discriminatedUnion('kind', [
   ApprovalEvent,
   UserInputEvent,
   ToolCallReadyEvent,
+  RequiredToolGateEvent,
   ModelRequestRetryEvent,
   ToolUploadStatusEvent,
   ToolStormSuppressedEvent,

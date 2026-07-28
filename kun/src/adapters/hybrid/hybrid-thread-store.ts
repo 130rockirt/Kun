@@ -328,6 +328,7 @@ export class HybridThreadStore implements ThreadStore {
         status TEXT NOT NULL,
         approval_policy TEXT NOT NULL,
         sandbox_mode TEXT NOT NULL,
+        model_request_capture_enabled INTEGER NOT NULL DEFAULT 0,
         cost_budget_usd REAL,
         cost_budget_warning_sent INTEGER,
         relation TEXT NOT NULL,
@@ -376,6 +377,7 @@ export class HybridThreadStore implements ThreadStore {
     `)
     addColumnIfMissing(this.db, 'threads', 'todos_json TEXT')
     addColumnIfMissing(this.db, 'threads', 'extension_metadata_json TEXT')
+    addColumnIfMissing(this.db, 'threads', 'model_request_capture_enabled INTEGER NOT NULL DEFAULT 0')
     addColumnIfMissing(this.db, 'threads', 'usage_backfilled INTEGER NOT NULL DEFAULT 0')
   }
 

@@ -341,7 +341,9 @@ export class ModelRoundEngine {
     const snapshot = collector.snapshot()
     await this.deps.recordPipelineStage(input.threadId, input.turnId, 'response_received', {
       stopReason: snapshot.stopReason,
-      toolCallCount: snapshot.toolCalls.length
+      toolCallCount: snapshot.toolCalls.length,
+      textBytes: Buffer.byteLength(snapshot.text, 'utf8'),
+      reasoningBytes: Buffer.byteLength(snapshot.reasoning, 'utf8')
     })
     await persistAccumulatedResponse()
     if (snapshot.stopReason === 'error') return { kind: 'failed' }

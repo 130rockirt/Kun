@@ -3521,6 +3521,44 @@ body.ds-workbench-resizing webview {
   white-space: nowrap;
 }
 
+/*
+ * Keep the composer useful while split panes narrow it. Lower-priority actions
+ * leave first, then verbose state controls collapse to their recognizable icon.
+ * Container queries follow the composer itself, not the application window.
+ */
+@container (max-width: 760px) {
+  .ds-composer-optional-action {
+    display: none;
+  }
+}
+
+@container (max-width: 700px) {
+  .ds-composer-mode-badge {
+    gap: 0;
+    padding-inline: 0;
+    width: 2rem;
+  }
+
+  .ds-composer-mode-label,
+  .ds-composer-permission-label,
+  .ds-composer-permission-chevron {
+    display: none;
+  }
+
+  .ds-floating-composer
+    .ds-composer-toolbar
+    .ds-composer-permission-control
+    .ds-composer-permission-button {
+    border-radius: 9999px;
+    gap: 0;
+    height: 2rem;
+    justify-content: center;
+    min-height: 2rem;
+    padding: 0;
+    width: 2rem;
+  }
+}
+
 @container (max-width: 640px) {
   .ds-composer-toolbar {
     align-items: center;
@@ -3582,9 +3620,16 @@ body.ds-workbench-resizing webview {
   }
 }
 
+@container (max-width: 520px) {
+  .ds-composer-context-control,
+  .ds-composer-agent-picker {
+    display: none;
+  }
+}
+
 @container (max-width: 420px) {
   .ds-composer-toolbar-start {
-    max-width: 38%;
+    max-width: 46%;
   }
 
   .ds-composer-toolbar-actions .ds-composer-model-picker {

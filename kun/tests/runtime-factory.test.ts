@@ -10,6 +10,7 @@ import { createKunServeRuntime, seedUsageCarryover } from '../src/server/runtime
 import type { UsageSnapshot } from '../src/contracts/usage.js'
 import type { SessionStore } from '../src/ports/session-store.js'
 import { KunCapabilitiesConfig } from '../src/contracts/capabilities.js'
+import { startLlmDebugRoundIfEnabled } from '../src/services/llm-debug-recorder.js'
 
 function usage(overrides: Partial<UsageSnapshot>): UsageSnapshot {
   const promptTokens = overrides.promptTokens ?? 10
@@ -155,11 +156,13 @@ describe('runtime factory usage carryover', () => {
     }
   })
 
-  it('enables Agent Perspective capture by default while preserving explicit opt-out', async () => {
-    for (const [name, runtimeOptions] of [
-      ['omitted', undefined],
-      ['disabled', { llmDebug: { enabled: false } }],
-      ['enabled', { llmDebug: { enabled: true } }]
+  it('keeps the recorder available while gating capture by each thread state', async () => {
+    for (const [name, runtimeOptions, expectedCapture] of [
+      ['omitted', undefined, false],
+      ['disabled', { llmDebug: { enabled: false } }, false],
+      ['enabled-default', {
+        llmDebug: { enabled: true, defaultThreadCaptureEnabled: true }
+      }, true]
     ] as const) {
       const dataDir = await mkdtemp(join(tmpdir(), `kun-runtime-llm-debug-${name}-`))
       tempDirs.push(dataDir)
@@ -188,12 +191,25 @@ describe('runtime factory usage carryover', () => {
         }
         expect(recorder).toBeDefined()
         if (!recorder) throw new Error('expected Agent Perspective recorder')
-        const round = recorder.start({
-          threadId: `thread-${name}`,
+        const thread = await runtime.threadService.create({
+          workspace: dataDir,
+          model: 'model-before',
+          mode: 'agent'
+        })
+        expect(thread.modelRequestCaptureEnabled).toBe(expectedCapture)
+        const round = await startLlmDebugRoundIfEnabled(recorder, {
+          threadId: thread.id,
           turnId: 'turn-1',
           provider: 'compat',
           model: 'model-before'
         })
+        if (!expectedCapture) {
+          expect(round).toBeUndefined()
+          await expect(recorder.listThread(thread.id)).resolves.toMatchObject({ records: [] })
+          continue
+        }
+        expect(round).toBeDefined()
+        if (!round) throw new Error('expected enabled thread trace')
         recorder.beginHttpAttempt(round, {
           endpointFormat: 'chat_completions',
           attempt: 1,
@@ -203,7 +219,7 @@ describe('runtime factory usage carryover', () => {
           bodyText: JSON.stringify({ model: 'model-before' })
         })
         await recorder.finish(round)
-        await expect(recorder.listThread(`thread-${name}`)).resolves.toMatchObject({
+        await expect(recorder.listThread(thread.id)).resolves.toMatchObject({
           records: [expect.objectContaining({
             provider: 'compat',
             model: 'model-before',
@@ -214,6 +230,54 @@ describe('runtime factory usage carryover', () => {
       } finally {
         await runtime.shutdown?.()
       }
+    }
+  })
+
+  it('hot-applies the new-thread capture default without changing existing threads', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'kun-runtime-llm-debug-default-'))
+    tempDirs.push(dataDir)
+    const runtime = await createKunServeRuntime({
+      host: '127.0.0.1',
+      port: 0,
+      dataDir,
+      runtimeToken: 'tok',
+      apiKey: 'sk-default',
+      baseUrl: 'https://api.example.test/v1',
+      model: 'model-before',
+      approvalPolicy: 'auto',
+      sandboxMode: 'danger-full-access',
+      tokenEconomyMode: false,
+      insecure: false,
+      storage: { backend: 'file' },
+      capabilities: KunCapabilitiesConfig.parse({})
+    })
+
+    try {
+      const existing = await runtime.threadService.create({
+        workspace: dataDir,
+        model: 'model-before',
+        mode: 'agent'
+      })
+      expect(existing.modelRequestCaptureEnabled).toBe(false)
+
+      await expect(runtime.applyConfig({
+        runtime: {
+          llmDebug: {
+            enabled: true,
+            defaultThreadCaptureEnabled: true
+          }
+        }
+      })).resolves.toEqual({ ok: true })
+
+      const later = await runtime.threadService.create({
+        workspace: dataDir,
+        model: 'model-before',
+        mode: 'agent'
+      })
+      expect(later.modelRequestCaptureEnabled).toBe(true)
+      expect((await runtime.threadService.get(existing.id))?.modelRequestCaptureEnabled).toBe(false)
+    } finally {
+      await runtime.shutdown?.()
     }
   })
 

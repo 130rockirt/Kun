@@ -336,6 +336,9 @@ const kunRuntimePatchSchema = z.object({
       maxStringBytes: z.number().int().positive().max(16 * 1024 * 1024).optional()
     }).strict().optional()
   }).strict().optional(),
+  llmDebug: z.object({
+    defaultThreadCaptureEnabled: z.boolean().optional()
+  }).strict().optional(),
   quality: z.object({
     enabled: z.boolean().optional(),
     strictness: z.enum(['relaxed', 'standard', 'strict']).optional(),

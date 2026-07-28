@@ -476,6 +476,7 @@ export function createThreadActions(
         latestSeq,
         threadStatus,
         latestTurnId,
+        latestTurnOrchestration,
         latestUserMessageId,
         turnDurationByUserId = {},
         goal,
@@ -512,6 +513,7 @@ export function createThreadActions(
         error: busy ? runtimeStreamRecoveringMessage() : null,
         busy,
         currentTurnId,
+        currentTurnOrchestration: busy ? latestTurnOrchestration ?? 'direct' : null,
         currentTurnUserId,
         turnDurationByUserId,
         queuedMessages
@@ -572,6 +574,7 @@ export function createThreadActions(
         latestSeq,
         threadStatus,
         latestTurnId,
+        latestTurnOrchestration,
         latestUserMessageId,
         turnDurationByUserId = {},
         usage: threadUsage,
@@ -628,6 +631,7 @@ export function createThreadActions(
         error: null,
         busy,
         currentTurnId: busy ? latestTurnId ?? null : null,
+        currentTurnOrchestration: busy ? latestTurnOrchestration ?? 'direct' : null,
         currentTurnUserId,
         turnStartedAtByUserId: {},
         turnDurationByUserId,
@@ -708,6 +712,8 @@ export function createThreadActions(
       unreadThreadIds: { ...prevState.unreadThreadIds, [targetThreadId]: false },
       busy: true,
       currentTurnId: null,
+      currentTurnOrchestration:
+        keepExistingBlocks && prevState.busy ? prevState.currentTurnOrchestration : null,
       currentTurnUserId: null,
       turnStartedAtByUserId: {},
       turnDurationByUserId: {},
@@ -732,6 +738,7 @@ export function createThreadActions(
         latestSeq,
         threadStatus,
         latestTurnId,
+        latestTurnOrchestration,
         latestUserMessageId,
         turnDurationByUserId = {},
         goal,
@@ -760,6 +767,7 @@ export function createThreadActions(
         lastSeq: Math.max(latestSeq, s.lastSeq),
         busy,
         currentTurnId: busy ? latestTurnId ?? null : null,
+        currentTurnOrchestration: busy ? latestTurnOrchestration ?? 'direct' : null,
         currentTurnUserId,
         turnDurationByUserId,
         queuedMessages
@@ -1119,6 +1127,7 @@ export function createThreadActions(
     const previousActiveThreadId = get().activeThreadId
     const previousLastSeq = get().lastSeq
     const previousCurrentTurnId = get().currentTurnId
+    const previousCurrentTurnOrchestration = get().currentTurnOrchestration
     const previousCurrentTurnUserId = get().currentTurnUserId
     const previousTurnStartedAtByUserId = get().turnStartedAtByUserId
     const previousTurnDurationByUserId = get().turnDurationByUserId
@@ -1154,6 +1163,7 @@ export function createThreadActions(
       liveReasoning: '',
       liveAssistant: '',
       error: null,
+      currentTurnOrchestration: orchestration,
       currentTurnUserId: userBlockId,
       turnStartedAtByUserId: { ...s.turnStartedAtByUserId, [userBlockId]: now },
       queuedMessages: queued
@@ -1172,6 +1182,7 @@ export function createThreadActions(
             blocks: previousBlocks,
             busy: false,
             currentTurnId: previousCurrentTurnId,
+            currentTurnOrchestration: previousCurrentTurnOrchestration,
             currentTurnUserId: previousCurrentTurnUserId,
             turnStartedAtByUserId: previousTurnStartedAtByUserId,
             turnDurationByUserId: previousTurnDurationByUserId,
@@ -1243,6 +1254,7 @@ export function createThreadActions(
           lastSeq: previousLastSeq,
           busy: false,
           currentTurnId: previousCurrentTurnId,
+          currentTurnOrchestration: previousCurrentTurnOrchestration,
           currentTurnUserId: previousCurrentTurnUserId,
           turnStartedAtByUserId: previousTurnStartedAtByUserId,
           turnDurationByUserId: previousTurnDurationByUserId,
@@ -1474,6 +1486,7 @@ export function createThreadActions(
           blocks: previousBlocks,
           busy: false,
           currentTurnId: previousCurrentTurnId,
+          currentTurnOrchestration: previousCurrentTurnOrchestration,
           currentTurnUserId: previousCurrentTurnUserId,
           turnStartedAtByUserId: previousTurnStartedAtByUserId,
           turnDurationByUserId: previousTurnDurationByUserId,
@@ -1495,6 +1508,7 @@ export function createThreadActions(
         error: view.summary,
         busy: false,
         currentTurnId: null,
+        currentTurnOrchestration: null,
         queuedMessages: previousQueuedMessages,
         ...(shouldOpenSettingsForError(e)
           ? { route: 'settings' as const, settingsSection: 'agents' as const }
@@ -1581,6 +1595,7 @@ export function createThreadActions(
         liveAssistant: '',
         error: null,
         currentTurnId: null,
+        currentTurnOrchestration: 'direct',
         currentTurnUserId: null
       })
       await ensureRuntimeProviderForSend({
@@ -1611,6 +1626,7 @@ export function createThreadActions(
         error: formatRuntimeError(e),
         busy: false,
         currentTurnId: null,
+        currentTurnOrchestration: null,
         currentTurnUserId: null,
         ...(shouldOpenSettingsForError(e)
           ? { route: 'settings' as const, settingsSection: 'agents' as const }

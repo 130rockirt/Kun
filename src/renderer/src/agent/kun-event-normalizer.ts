@@ -125,7 +125,8 @@ export function normalizeKunRuntimeEvent(
     }
     case 'tool_result_upload_wait':
     case 'model_request_retry':
-    case 'tool_storm_suppressed': {
+    case 'tool_storm_suppressed':
+    case 'required_tool_gate': {
       const status = deps.runtimeStatus(event)
       return status ? [{ type: 'runtime_status_received', payload: status }] : []
     }

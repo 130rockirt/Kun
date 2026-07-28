@@ -51,6 +51,7 @@ export type ThreadServiceOptions = {
   nowIso: () => string
   defaultApprovalPolicy?: ApprovalPolicy
   defaultSandboxMode?: SandboxMode
+  defaultModelRequestCaptureEnabled?: boolean
   lifecycleFence?: ThreadLifecycleFence
   /** Abort in-process work after the fence starts rejecting new writes. */
   onDeleting?: (threadId: string) => Promise<void> | void
@@ -102,6 +103,7 @@ export class ThreadService {
   private readonly nowIso: () => string
   private defaultApprovalPolicy: ApprovalPolicy | undefined
   private defaultSandboxMode: SandboxMode | undefined
+  private defaultModelRequestCaptureEnabled: boolean
   private readonly lifecycleFence?: ThreadLifecycleFence
   private readonly onDeleting?: (threadId: string) => Promise<void> | void
   private readonly onDeleted?: (threadId: string) => Promise<void> | void
@@ -117,6 +119,7 @@ export class ThreadService {
     this.nowIso = options.nowIso
     this.defaultApprovalPolicy = options.defaultApprovalPolicy
     this.defaultSandboxMode = options.defaultSandboxMode
+    this.defaultModelRequestCaptureEnabled = options.defaultModelRequestCaptureEnabled ?? false
     this.lifecycleFence = options.lifecycleFence
     this.onDeleting = options.onDeleting
     this.onDeleted = options.onDeleted
@@ -124,9 +127,14 @@ export class ThreadService {
     this.onForked = options.onForked
   }
 
-  updateRuntimeDefaults(input: { approvalPolicy: ApprovalPolicy; sandboxMode: SandboxMode }): void {
+  updateRuntimeDefaults(input: {
+    approvalPolicy: ApprovalPolicy
+    sandboxMode: SandboxMode
+    modelRequestCaptureEnabled: boolean
+  }): void {
     this.defaultApprovalPolicy = input.approvalPolicy
     this.defaultSandboxMode = input.sandboxMode
+    this.defaultModelRequestCaptureEnabled = input.modelRequestCaptureEnabled
   }
 
   async list(options: ListThreadsOptions = {}): Promise<ThreadSummary[]> {
@@ -183,6 +191,8 @@ export class ThreadService {
       mode: request.mode,
       approvalPolicy: request.approvalPolicy ?? this.defaultApprovalPolicy,
       sandboxMode: request.sandboxMode ?? this.defaultSandboxMode,
+      modelRequestCaptureEnabled:
+        request.modelRequestCaptureEnabled ?? this.defaultModelRequestCaptureEnabled,
       ...(request.costBudgetUsd !== undefined ? { costBudgetUsd: request.costBudgetUsd } : {}),
       ...(options.relation ? { relation: options.relation } : {}),
       ...(options.parentThreadId ? { parentThreadId: options.parentThreadId } : {}),
@@ -217,6 +227,7 @@ export class ThreadService {
     status?: ThreadUpdateStatus
     approvalPolicy?: ApprovalPolicy
     sandboxMode?: SandboxMode
+    modelRequestCaptureEnabled?: boolean
     pinned?: boolean
     costBudgetUsd?: number | null
     costBudgetWarningSent?: boolean
@@ -277,7 +288,8 @@ export class ThreadService {
       workspace: updated.workspace,
       additionalWorkspaces: updated.additionalWorkspaces,
       approvalPolicy: updated.approvalPolicy,
-      sandboxMode: updated.sandboxMode
+      sandboxMode: updated.sandboxMode,
+      modelRequestCaptureEnabled: updated.modelRequestCaptureEnabled
     })
     await this.onStatusChanged?.(threadId, updated.status)
     return updated
@@ -603,6 +615,7 @@ export class ThreadService {
       status: 'idle',
       approvalPolicy: current.approvalPolicy,
       sandboxMode: current.sandboxMode,
+      modelRequestCaptureEnabled: this.defaultModelRequestCaptureEnabled,
       relation,
       parentThreadId: current.id,
       forkedFromThreadId: current.id,
@@ -669,6 +682,7 @@ export class ThreadService {
       status: 'idle',
       approvalPolicy: sourceThread?.approvalPolicy,
       sandboxMode: sourceThread?.sandboxMode,
+      modelRequestCaptureEnabled: this.defaultModelRequestCaptureEnabled,
       forkedFromThreadId: sourceThread?.id,
       forkedFromTitle: sourceThread?.title,
       forkedAt: now,

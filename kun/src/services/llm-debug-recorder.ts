@@ -111,6 +111,7 @@ export type LlmSdkInvocationMeta = {
 
 /** Narrow sink used by model clients to retain bounded debug data. */
 export interface LlmDebugSink {
+  shouldCapture?(threadId: string): boolean | Promise<boolean>
   start(meta: LlmDebugRoundMeta): LlmDebugRound
   beginHttpAttempt(round: LlmDebugRound, meta: LlmHttpAttemptMeta): ModelRequestTraceRecord
   beginCliInvocation(round: LlmDebugRound, meta: LlmCliInvocationMeta): ModelRequestTraceRecord
@@ -143,6 +144,7 @@ export const DEFAULT_LLM_DEBUG_RECORDER_LIMITS: LlmDebugRecorderLimits = {
 
 export type LlmDebugRecorderOptions = Partial<LlmDebugRecorderLimits> & {
   dataDir?: string
+  shouldCapture?: (threadId: string) => boolean | Promise<boolean>
 }
 
 type CaptureState = {
@@ -169,6 +171,7 @@ export class LlmDebugRecorder implements LlmDebugSink {
   private readonly activeByThread = new Map<string, Set<LlmDebugRound>>()
   private readonly limits: LlmDebugRecorderLimits
   private readonly store?: ModelRequestTraceStore
+  private readonly capturePolicy?: LlmDebugRecorderOptions['shouldCapture']
   private nextId = 1
   private nextTraceSequence = 1
   private totalRetainedBytes = 0
@@ -190,6 +193,11 @@ export class LlmDebugRecorder implements LlmDebugSink {
       maxPageSize: positiveInteger(options.maxPageSize, DEFAULT_LLM_DEBUG_RECORDER_LIMITS.maxPageSize)
     }
     if (options.dataDir) this.store = new ModelRequestTraceStore(options.dataDir)
+    this.capturePolicy = options.shouldCapture
+  }
+
+  shouldCapture(threadId: string): boolean | Promise<boolean> {
+    return this.capturePolicy?.(threadId) ?? true
   }
 
   start(meta: LlmDebugRoundMeta): LlmDebugRound {
@@ -625,6 +633,26 @@ export class LlmDebugRecorder implements LlmDebugSink {
     this.states.set(round, created)
     this.activeCaptureCountValue += 1
     return created
+  }
+}
+
+/**
+ * Fail-closed trace preflight shared by every model transport. The policy is
+ * checked exactly once at request start so a mid-stream toggle cannot produce
+ * a partial record.
+ */
+export async function startLlmDebugRoundIfEnabled(
+  sink: LlmDebugSink | undefined,
+  meta: LlmDebugRoundMeta,
+  onError?: () => void
+): Promise<LlmDebugRound | undefined> {
+  if (!sink) return undefined
+  try {
+    if (sink.shouldCapture && !(await sink.shouldCapture(meta.threadId))) return undefined
+    return sink.start(meta)
+  } catch {
+    onError?.()
+    return undefined
   }
 }
 

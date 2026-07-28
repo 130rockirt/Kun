@@ -229,6 +229,12 @@ describe('kun defaults', () => {
     expect(defaultKunRuntimeSettings().sandboxMode).toBe('workspace-write')
   })
 
+  it('defaults Agent Perspective capture off for newly created conversations', () => {
+    expect(defaultKunRuntimeSettings().llmDebug).toEqual({
+      defaultThreadCaptureEnabled: false
+    })
+  })
+
   it('maps unified tool permission modes to approval and sandbox settings', () => {
     expect(kunToolPermissionModeSettings('always-ask')).toEqual({
       approvalPolicy: 'always',
@@ -752,6 +758,16 @@ describe('isKunRuntimeInsecure', () => {
 })
 
 describe('mergeKunRuntimeSettings', () => {
+  it('merges the new-conversation Agent Perspective capture default', () => {
+    const current = defaultKunRuntimeSettings()
+    const next = mergeKunRuntimeSettings(current, {
+      llmDebug: { defaultThreadCaptureEnabled: true }
+    })
+
+    expect(next.llmDebug).toEqual({ defaultThreadCaptureEnabled: true })
+    expect(current.llmDebug).toEqual({ defaultThreadCaptureEnabled: false })
+  })
+
   it('normalizes bounded digest-bound project config grants and replaces the grant roster', () => {
     const digestA = 'a'.repeat(64)
     const digestB = 'B'.repeat(64)

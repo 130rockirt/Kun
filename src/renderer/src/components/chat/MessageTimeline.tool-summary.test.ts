@@ -920,6 +920,36 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
     expect(html).not.toContain('&lt;!-- --&gt;')
   })
 
+  it('uses the latest completed tool as the live fallback action', () => {
+    const html = renderToStaticMarkup(
+      createElement(ConversationTurn, {
+        turn: {
+          user: {
+            kind: 'user',
+            id: 'user_latest_tool',
+            text: 'inspect the current file'
+          },
+          blocks: [
+            toolBlock({
+              id: 'tool_latest_read',
+              summary: 'read: current file',
+              status: 'success',
+              meta: { toolName: 'read' },
+              filePath: '/tmp/project/src/current.ts'
+            })
+          ]
+        },
+        isProcessing: true,
+        liveReasoning: '',
+        live: '',
+        filePreviewWorkspaceRoot: '/tmp/project',
+        viewportRef: { current: null }
+      })
+    )
+
+    expect((html.match(/\/tmp\/project\/src\/current\.ts/g) ?? [])).toHaveLength(2)
+  })
+
   it('keeps same-batch tool calls collapsed by default', () => {
     const readBlock: ChatBlock = toolBlock({
       id: 'tool_read',

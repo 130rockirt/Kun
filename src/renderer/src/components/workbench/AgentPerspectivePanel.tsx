@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactElement, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react'
 import {
   AlertTriangle,
   Bot,
@@ -19,6 +19,8 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
+import { kunThreadPath } from '@shared/kun-endpoints'
+import { parseRuntimeErrorBody, runtimeErrorToError } from '@shared/runtime-error'
 import {
   groupAgentPerspectiveEvents,
   projectAgentPerspectiveEvents,
@@ -80,6 +82,70 @@ export function AgentPerspectivePanel({
   const [query, setQuery] = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null)
+  const [captureEnabled, setCaptureEnabled] = useState<boolean | null>(null)
+  const [captureUpdating, setCaptureUpdating] = useState(false)
+  const [captureError, setCaptureError] = useState<string | null>(null)
+  const captureGeneration = useRef(0)
+
+  useEffect(() => {
+    captureGeneration.current += 1
+    const generation = captureGeneration.current
+    setCaptureEnabled(null)
+    setCaptureUpdating(false)
+    setCaptureError(null)
+    if (!threadId || !active) return
+    void window.kunGui.runtimeRequest(kunThreadPath(threadId), 'GET')
+      .then((response) => {
+        if (generation !== captureGeneration.current) return
+        if (!response.ok) {
+          throw runtimeErrorToError(parseRuntimeErrorBody(
+            response.body,
+            'failed to load Agent Perspective capture state'
+          ))
+        }
+        const thread = JSON.parse(response.body) as { modelRequestCaptureEnabled?: boolean }
+        setCaptureEnabled(thread.modelRequestCaptureEnabled === true)
+      })
+      .catch((error) => {
+        if (generation !== captureGeneration.current) return
+        setCaptureEnabled(false)
+        setCaptureError(error instanceof Error ? error.message : String(error))
+      })
+  }, [active, threadId])
+
+  const toggleCapture = useCallback(async (): Promise<void> => {
+    if (!threadId || captureEnabled === null || captureUpdating) return
+    const generation = captureGeneration.current
+    const previous = captureEnabled
+    const next = !previous
+    setCaptureEnabled(next)
+    setCaptureUpdating(true)
+    setCaptureError(null)
+    try {
+      const response = await window.kunGui.runtimeRequest(
+        kunThreadPath(threadId),
+        'PATCH',
+        JSON.stringify({ modelRequestCaptureEnabled: next })
+      )
+      if (!response.ok) {
+        throw runtimeErrorToError(parseRuntimeErrorBody(
+          response.body,
+          'failed to update Agent Perspective capture state'
+        ))
+      }
+      const thread = JSON.parse(response.body) as { modelRequestCaptureEnabled?: boolean }
+      if (generation === captureGeneration.current) {
+        setCaptureEnabled(thread.modelRequestCaptureEnabled === true)
+      }
+    } catch (error) {
+      if (generation === captureGeneration.current) {
+        setCaptureEnabled(previous)
+        setCaptureError(error instanceof Error ? error.message : String(error))
+      }
+    } finally {
+      if (generation === captureGeneration.current) setCaptureUpdating(false)
+    }
+  }, [captureEnabled, captureUpdating, threadId])
 
   const visibleRounds = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase()
@@ -130,6 +196,30 @@ export function AgentPerspectivePanel({
           ) : null}
           <button
             type="button"
+            role="switch"
+            aria-checked={captureEnabled === true}
+            aria-label={t('agentPerspectiveCaptureToggle')}
+            title={t(captureEnabled ? 'agentPerspectiveCaptureOnHint' : 'agentPerspectiveCaptureOffHint')}
+            disabled={!threadId || captureEnabled === null || captureUpdating}
+            onClick={() => void toggleCapture()}
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-md px-1.5 py-1 text-[9px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:opacity-45"
+          >
+            <span>{t('agentPerspectiveCapture')}</span>
+            <span
+              className={`relative h-4 w-7 rounded-full transition ${
+                captureEnabled ? 'bg-accent' : 'bg-ds-border'
+              }`}
+              aria-hidden
+            >
+              <span
+                className={`absolute top-0.5 h-3 w-3 rounded-full bg-white shadow-sm transition-transform ${
+                  captureEnabled ? 'translate-x-3.5' : 'translate-x-0.5'
+                }`}
+              />
+            </span>
+          </button>
+          <button
+            type="button"
             onClick={() => setSearchOpen((open) => !open)}
             className={`rounded-md p-1.5 transition ${searchOpen ? 'bg-ds-hover text-ds-ink' : 'text-ds-muted hover:bg-ds-hover hover:text-ds-ink'}`}
             aria-label={t('agentPerspectiveSearch')}
@@ -177,6 +267,11 @@ export function AgentPerspectivePanel({
             />
           </label>
         ) : null}
+        {captureError ? (
+          <p role="alert" className="mt-1.5 truncate text-[9px] text-ds-danger" title={captureError}>
+            {t('agentPerspectiveCaptureError', { error: captureError })}
+          </p>
+        ) : null}
       </header>
 
       {!threadId ? (
@@ -186,7 +281,9 @@ export function AgentPerspectivePanel({
       ) : traces.error && traces.records.length === 0 ? (
         <EmptyState text={t('agentPerspectiveLoadError', { error: traces.error })} warning />
       ) : traces.records.length === 0 ? (
-        <EmptyState text={t('agentPerspectiveEmpty')} />
+        <EmptyState text={t(captureEnabled === false
+          ? 'agentPerspectiveCaptureDisabledEmpty'
+          : 'agentPerspectiveEmpty')} />
       ) : (
         <div className="grid min-h-0 flex-1 grid-cols-[220px_minmax(0,1fr)]">
           {visibleRounds.length ? (

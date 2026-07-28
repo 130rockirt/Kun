@@ -933,6 +933,20 @@ describe('app-ipc-schemas', () => {
     expect(payload.agents?.kun?.runtimeTuning?.maxConcurrentTurns).toBe(256)
   })
 
+  it('accepts the Agent Perspective capture default', () => {
+    const payload = settingsPatchSchema.parse({
+      agents: {
+        kun: {
+          llmDebug: {
+            defaultThreadCaptureEnabled: true
+          }
+        }
+      }
+    })
+
+    expect(payload.agents?.kun?.llmDebug?.defaultThreadCaptureEnabled).toBe(true)
+  })
+
   it('rejects an out-of-range maximum turn duration', () => {
     expect(() =>
       settingsPatchSchema.parse({

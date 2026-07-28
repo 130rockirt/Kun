@@ -31,6 +31,36 @@ function makeSink(): ThreadEventSink {
 }
 
 describe('runtime projection action normalization', () => {
+  it('normalizes a required-tool gate as a stable runtime status, not assistant text', () => {
+    const actions = runtimeProjectionActionsFromEvent({
+      kind: 'required_tool_gate',
+      seq: 42,
+      timestamp: '2026-07-27T00:00:00.000Z',
+      threadId: 'thread_1',
+      turnId: 'turn_1',
+      toolName: 'graph_create_run',
+      phase: 'retrying',
+      attempt: 2,
+      maxAttempts: 3,
+      failureSummary: 'plan.nodes.0: Required'
+    })
+
+    expect(actions).toEqual([{
+      type: 'runtime_status_received',
+      payload: {
+        kind: 'required_tool_gate',
+        itemId: 'runtime_status_turn_1_required_tool_graph_create_run',
+        turnId: 'turn_1',
+        createdAt: '2026-07-27T00:00:00.000Z',
+        toolName: 'graph_create_run',
+        phase: 'retrying',
+        attempt: 2,
+        maxAttempts: 3,
+        failureSummary: 'plan.nodes.0: Required'
+      }
+    }])
+  })
+
   it('normalizes the same goal event to a stable action transcript', () => {
     const event: CoreRuntimeEventJson = {
       kind: 'goal_updated',

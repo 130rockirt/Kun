@@ -206,7 +206,7 @@ export function FloatingComposerExecutionPicker({
     <>
       <div
         ref={rootRef}
-        className="ds-no-drag relative inline-flex shrink-0 items-center gap-1"
+        className="ds-composer-permission-control ds-no-drag relative inline-flex shrink-0 items-center gap-1"
         title={title}
       >
         <button
@@ -230,11 +230,18 @@ export function FloatingComposerExecutionPicker({
         >
           <PermissionIcon className="h-3.5 w-3.5 shrink-0" strokeWidth={1.8} />
           {applying ? (
-            <span className="max-w-[120px] truncate">{t('composerExecutionApplying')}</span>
+            <span className="ds-composer-permission-label max-w-[120px] truncate">
+              {t('composerExecutionApplying')}
+            </span>
           ) : (
-            <span className="max-w-[112px] truncate">{t(permissionLabelKey(permissionMode))}</span>
+            <span className="ds-composer-permission-label max-w-[112px] truncate">
+              {t(permissionLabelKey(permissionMode))}
+            </span>
           )}
-          <ChevronDown className="h-3.5 w-3.5 shrink-0" strokeWidth={1.8} />
+          <ChevronDown
+            className="ds-composer-permission-chevron h-3.5 w-3.5 shrink-0"
+            strokeWidth={1.8}
+          />
         </button>
       </div>
       {menu ? createPortal(menu, document.body) : null}

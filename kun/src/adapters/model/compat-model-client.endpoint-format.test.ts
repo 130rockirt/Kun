@@ -4,6 +4,7 @@ import type { ModelCapabilityMetadata } from '../../contracts/capabilities.js'
 import type { ModelEndpointFormat } from '../../contracts/model-endpoint-format.js'
 import type { ModelRequest, ModelStreamChunk } from '../../ports/model-client.js'
 import { makeCompactionItem } from '../../domain/item.js'
+import { GRAPH_CREATE_RUN_INPUT_JSON_SCHEMA } from '../tool/graph-mode-tool-provider.js'
 import { createCompatRequestCodecs, normalizeToolSpecs } from './compat-request-builder.js'
 
 // A single provider (OpenCode Go) routes some models over chat completions
@@ -143,6 +144,94 @@ describe('CompatModelClient per-model endpointFormat', () => {
       if (endpointFormat === 'responses') {
         expect(body).not.toHaveProperty('prompt_cache_key')
       }
+    }
+  })
+
+  it('uses protocol-native named tool choice for every compatible endpoint', () => {
+    const codecs = createCompatRequestCodecs()
+    const tools = normalizeToolSpecs([{
+      name: 'graph_create_run',
+      description: 'Create a Graph run',
+      inputSchema: { type: 'object', additionalProperties: false }
+    }])
+    const build = (endpointFormat: 'chat_completions' | 'responses' | 'messages', isCodexLite = false) =>
+      codecs.build({
+        request: { ...request('test-model'), requiredToolName: 'graph_create_run' },
+        model: 'test-model',
+        messages: [],
+        tools,
+        stream: true,
+        endpointFormat,
+        baseUrl: 'https://provider.example/v1',
+        isCodex: isCodexLite,
+        isCodexLite,
+        codexNativeImageGeneration: false
+      })
+
+    expect(build('chat_completions').tool_choice).toEqual({
+      type: 'function', function: { name: 'graph_create_run' }
+    })
+    expect(build('responses').tool_choice).toEqual({ type: 'function', name: 'graph_create_run' })
+    expect(build('responses').parallel_tool_calls).toBe(false)
+    expect(build('messages').tool_choice).toEqual({ type: 'tool', name: 'graph_create_run' })
+    expect(build('responses', true).tool_choice).toEqual({ type: 'function', name: 'graph_create_run' })
+
+    expect(() => codecs.build({
+      request: { ...request('test-model'), requiredToolName: 'missing_tool' },
+      model: 'test-model',
+      messages: [],
+      tools,
+      stream: true,
+      endpointFormat: 'responses',
+      baseUrl: 'https://provider.example/v1',
+      isCodex: false,
+      isCodexLite: false,
+      codexNativeImageGeneration: false
+    })).toThrow(/required_tool_unsupported/)
+  })
+
+  it('preserves the complete graph_create_run schema in OpenAI and Anthropic wire formats', () => {
+    const codecs = createCompatRequestCodecs()
+    const tools = normalizeToolSpecs([{
+      name: 'graph_create_run',
+      description: 'Create a Graph run',
+      inputSchema: GRAPH_CREATE_RUN_INPUT_JSON_SCHEMA
+    }])
+
+    for (const endpointFormat of ['chat_completions', 'responses', 'messages'] as const) {
+      const body = codecs.build({
+        request: request('test-model'),
+        model: 'test-model',
+        messages: [],
+        tools,
+        stream: true,
+        endpointFormat,
+        baseUrl: 'https://provider.example/v1',
+        isCodex: false,
+        isCodexLite: false,
+        codexNativeImageGeneration: false
+      })
+      const wireTools = body.tools as Array<Record<string, unknown>>
+      const wireSchema = endpointFormat === 'chat_completions'
+        ? (wireTools[0]?.function as Record<string, unknown>)?.parameters
+        : endpointFormat === 'messages'
+          ? wireTools[0]?.input_schema
+          : wireTools[0]?.parameters
+      const schema = wireSchema as {
+        properties: {
+          plan: {
+            properties: Record<string, unknown>
+          }
+        }
+      }
+
+      expect(schema.properties.plan.properties).toHaveProperty('phases')
+      expect(schema.properties.plan.properties).toHaveProperty('nodes')
+      expect(schema.properties.plan.properties).toHaveProperty('edges')
+      expect(schema.properties.plan.properties).toHaveProperty('budget')
+      expect(schema.properties.plan.properties).toHaveProperty('completionNodeIds')
+      expect(schema.properties.plan.properties).not.toHaveProperty('version')
+      expect(schema.properties.plan.properties).not.toHaveProperty('workspaceRoot')
     }
   })
 

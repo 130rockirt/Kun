@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { TurnItem } from '../contracts/items.js'
-import { makeToolCallItem } from '../domain/item.js'
+import { makeToolCallItem, makeToolResultItem } from '../domain/item.js'
 import { createTurnRecord } from '../domain/turn.js'
 import { SequentialIdGenerator } from '../ports/id-generator.js'
 import type { ToolHostContext } from '../ports/tool-host.js'
@@ -79,24 +79,66 @@ function prepared(overrides: Partial<PreparedTurnContext> = {}): PreparedTurnCon
   }
 }
 
-function harness(options: { madeProgress?: boolean; latestItems?: TurnItem[] } = {}) {
+function harness(options: {
+  madeProgress?: boolean
+  latestItems?: TurnItem[]
+  graphResults?: Array<{ output: unknown; isError: boolean }>
+} = {}) {
   const effects: string[] = []
   const items: TurnItem[] = []
+  const sessionItems = [...(options.latestItems ?? [])]
+  const graphResults = [...(options.graphResults ?? [])]
+  let requiredToolGate: {
+    toolName: string
+    attempt: number
+    maxAttempts: number
+    phase: 'preparing' | 'retrying' | 'succeeded' | 'failed'
+    lastError?: string
+  } | undefined
   const eventDrafts: Array<{ kind?: string; code?: string; message?: string }> = []
   const dispatches: ToolDispatchInput[] = []
+  const updatedItemPatches: Array<{ itemId: string; patch: unknown }> = []
   const failures: unknown[] = []
   const suppressGoalResume = vi.fn()
   const dispatchToolCalls = vi.fn(async (input: ToolDispatchInput) => {
     effects.push('dispatch')
     dispatches.push(input)
+    for (const call of input.calls) {
+      if (call.toolName !== GRAPH_CREATE_RUN_TOOL_NAME) continue
+      const result = graphResults.shift()
+      if (!result) continue
+      sessionItems.push(makeToolResultItem({
+        id: `item_${call.callId}`,
+        threadId: input.threadId,
+        turnId: input.turnId,
+        callId: call.callId,
+        toolName: call.toolName,
+        output: result.output,
+        isError: result.isError
+      }))
+    }
     return 'continue' as const
   })
   const turns = {
     applyItem: vi.fn(async (_threadId: string, item: TurnItem) => {
       effects.push(`item:${item.kind}`)
       items.push(item)
+    }),
+    updateItem: vi.fn(async (_threadId: string, itemId: string, patch: unknown) => {
+      updatedItemPatches.push({ itemId, patch })
+      return null
+    }),
+    getTurn: vi.fn(async () => requiredToolGate ? { requiredToolGate } : {}),
+    updateTurnMetadata: vi.fn(async (
+      _threadId: string,
+      _turnId: string,
+      patch: { requiredToolGate?: typeof requiredToolGate | null }
+    ) => {
+      requiredToolGate = patch.requiredToolGate === null
+        ? undefined
+        : patch.requiredToolGate ?? requiredToolGate
     })
-  } as Pick<TurnService, 'applyItem'>
+  } as unknown as Pick<TurnService, 'applyItem' | 'updateItem' | 'getTurn' | 'updateTurnMetadata'>
   const events = {
     record: vi.fn(async (draft: { kind?: string; code?: string; message?: string }) => {
       effects.push(`event:${draft.kind}`)
@@ -105,7 +147,7 @@ function harness(options: { madeProgress?: boolean; latestItems?: TurnItem[] } =
     })
   } as unknown as Pick<RuntimeEventRecorder, 'record'>
   const coordinator = new RoundOutcomeCoordinator({
-    sessionStore: { loadItems: async () => options.latestItems ?? [] },
+    sessionStore: { loadItems: async () => sessionItems },
     turns,
     events,
     ids: new SequentialIdGenerator(),
@@ -121,6 +163,8 @@ function harness(options: { madeProgress?: boolean; latestItems?: TurnItem[] } =
     eventDrafts,
     dispatches,
     failures,
+    updatedItemPatches,
+    sessionItems,
     suppressGoalResume,
     dispatchToolCalls
   }
@@ -164,7 +208,7 @@ describe('RoundOutcomeCoordinator', () => {
       title: 'Example'
     }
     const outcome = await h.coordinator.resolve(input(completed({ text: '# Plan\nDo it.' }), {
-      requiredToolName: CREATE_PLAN_TOOL_NAME,
+      softRequiredToolName: CREATE_PLAN_TOOL_NAME,
       prepared: prepared({
         mode: 'plan',
         planTurnActive: true,
@@ -218,8 +262,10 @@ describe('RoundOutcomeCoordinator', () => {
     expect(h.items[0]).toMatchObject({ kind: 'error', code: 'required_tool_missing' })
   })
 
-  it('recovers a missing Graph creation call and clears recovery state on progress or cleanup', async () => {
-    const h = harness()
+  it('recovers a missing Graph creation call and clears recovery state only on success or cleanup', async () => {
+    const h = harness({
+      graphResults: [{ output: { run: { id: 'graph_run_1' } }, isError: false }]
+    })
     const graphTurn = createTurnRecord({
       id: turnId,
       threadId,
@@ -235,7 +281,9 @@ describe('RoundOutcomeCoordinator', () => {
 
     await expect(h.coordinator.resolve(missing)).resolves.toBe('continue')
     expect(h.coordinator.graphCreateRunRecoverySteps(turnId)).toBe(1)
-    expect(h.effects).toEqual([])
+    expect(h.eventDrafts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'required_tool_gate' })
+    ]))
 
     const graphCall = {
       callId: 'call_graph_create',
@@ -249,12 +297,154 @@ describe('RoundOutcomeCoordinator', () => {
       prepared: prepared({ orchestration: 'graph' })
     }))).resolves.toBe('continue')
     expect(h.coordinator.graphCreateRunRecoverySteps(turnId)).toBe(0)
+    expect(h.coordinator.graphCreateRunRecoveryReason(turnId)).toBeUndefined()
     expect(h.dispatches[0]?.calls).toEqual([graphCall])
 
     await expect(h.coordinator.resolve(missing)).resolves.toBe('continue')
     expect(h.coordinator.graphCreateRunRecoverySteps(turnId)).toBe(1)
     h.coordinator.clearTurn(turnId)
     expect(h.coordinator.graphCreateRunRecoverySteps(turnId)).toBe(0)
+  })
+
+  it('suppresses extra tools when a hard Graph tool call is present', async () => {
+    const h = harness({
+      graphResults: [{ output: { run: { id: 'graph_run_1' } }, isError: false }]
+    })
+    const graphTurn = createTurnRecord({
+      id: turnId,
+      threadId,
+      prompt: 'run this as a graph',
+      status: 'running',
+      orchestration: 'graph'
+    })
+    const readCall = {
+      callId: 'call_read', toolName: 'read', toolKind: 'tool_call' as const, arguments: { path: 'secret.txt' }
+    }
+    const graphCall = {
+      callId: 'call_graph', toolName: GRAPH_CREATE_RUN_TOOL_NAME, toolKind: 'tool_call' as const, arguments: {}
+    }
+
+    await expect(h.coordinator.resolve(input(completed({ toolCalls: [readCall, graphCall] }), {
+      requiredToolName: GRAPH_CREATE_RUN_TOOL_NAME,
+      turn: graphTurn,
+      prepared: prepared({ orchestration: 'graph' })
+    }))).resolves.toBe('continue')
+
+    expect(h.dispatches[0]?.calls).toEqual([graphCall])
+    expect(h.updatedItemPatches).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        itemId: `item_tool_${turnId}_call_read`,
+        patch: expect.objectContaining({ status: 'failed', summary: expect.stringContaining('Suppressed') })
+      })
+    ]))
+    expect(h.eventDrafts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'required_tool_mismatch' })
+    ]))
+  })
+
+  it('shares recovery across missing and retryable invalid Graph creation rounds', async () => {
+    const h = harness({
+      graphResults: [{
+        output: {
+          code: 'graph_create_run_schema_invalid',
+          error: 'invalid graph arguments',
+          retryable: true
+        },
+        isError: true
+      }]
+    })
+    const graphTurn = createTurnRecord({
+      id: turnId,
+      threadId,
+      prompt: 'run this as a graph',
+      status: 'running',
+      orchestration: 'graph'
+    })
+    const base = {
+      requiredToolName: GRAPH_CREATE_RUN_TOOL_NAME,
+      turn: graphTurn,
+      prepared: prepared({ orchestration: 'graph' })
+    }
+
+    await expect(h.coordinator.resolve(input(completed({ text: 'No call.' }), base)))
+      .resolves.toBe('continue')
+    expect(h.coordinator.graphCreateRunRecoverySteps(turnId)).toBe(1)
+    expect(h.coordinator.graphCreateRunRecoveryReason(turnId)).toBe('missing')
+
+    await expect(h.coordinator.resolve(input(completed({
+      toolCalls: [{
+        callId: 'call_invalid',
+        toolName: GRAPH_CREATE_RUN_TOOL_NAME,
+        toolKind: 'tool_call',
+        arguments: { plan: {} }
+      }]
+    }), base))).resolves.toBe('continue')
+    expect(h.coordinator.graphCreateRunRecoverySteps(turnId)).toBe(2)
+    expect(h.coordinator.graphCreateRunRecoveryReason(turnId)).toBe('invalid')
+
+    await expect(h.coordinator.resolve(input(completed({ text: 'Still no call.' }), base)))
+      .resolves.toBe('failed')
+    expect(h.eventDrafts.at(-1)).toMatchObject({ code: 'graph_create_run_failed' })
+  })
+
+  it('bounds retryable invalid Graph creation and fails non-retryable errors immediately', async () => {
+    const retryableResult = {
+      output: {
+        code: 'graph_create_run_validation_failed',
+        error: 'invalid graph',
+        retryable: true
+      },
+      isError: true
+    }
+    const h = harness({
+      graphResults: [retryableResult, retryableResult, retryableResult]
+    })
+    const graphTurn = createTurnRecord({
+      id: turnId,
+      threadId,
+      prompt: 'run this as a graph',
+      status: 'running',
+      orchestration: 'graph'
+    })
+    const base = {
+      requiredToolName: GRAPH_CREATE_RUN_TOOL_NAME,
+      turn: graphTurn,
+      prepared: prepared({ orchestration: 'graph' })
+    }
+    const invalidRound = (callId: string) => input(completed({
+      toolCalls: [{
+        callId,
+        toolName: GRAPH_CREATE_RUN_TOOL_NAME,
+        toolKind: 'tool_call',
+        arguments: { plan: {} }
+      }]
+    }), base)
+
+    await expect(h.coordinator.resolve(invalidRound('call_invalid_1'))).resolves.toBe('continue')
+    await expect(h.coordinator.resolve(invalidRound('call_invalid_2'))).resolves.toBe('continue')
+    await expect(h.coordinator.resolve(invalidRound('call_invalid_3'))).resolves.toBe('failed')
+    expect(h.eventDrafts.at(-1)).toMatchObject({
+      code: 'graph_create_run_failed',
+      message: expect.stringContaining('Graph turn could not start')
+    })
+
+    const nonRetryable = harness({
+      graphResults: [{
+        output: {
+          code: 'graph_create_run_failed',
+          error: 'workspace identity unavailable',
+          retryable: false
+        },
+        isError: true
+      }]
+    })
+    await expect(nonRetryable.coordinator.resolve(invalidRound('call_host_failure')))
+      .resolves.toBe('failed')
+    expect(nonRetryable.eventDrafts.at(-1)).toMatchObject({
+      code: 'graph_create_run_failed',
+      message: expect.stringContaining('workspace identity unavailable')
+    })
+    expect(nonRetryable.coordinator.graphCreateRunRecoverySteps(turnId)).toBe(0)
   })
 
   it('bounds Graph creation recovery and reports a Graph-specific terminal error', async () => {
@@ -276,13 +466,13 @@ describe('RoundOutcomeCoordinator', () => {
     }
     await expect(h.coordinator.resolve(round)).resolves.toBe('failed')
 
-    expect(h.effects).toEqual(['event:error', 'item:error'])
-    expect(h.eventDrafts[0]).toMatchObject({
-      code: 'required_tool_missing',
+    expect(h.effects.slice(-2)).toEqual(['event:error', 'item:error'])
+    expect(h.eventDrafts.at(-1)).toMatchObject({
+      code: 'graph_create_run_failed',
       message: expect.stringContaining('Graph turn could not start')
     })
-    expect(h.eventDrafts[0]?.message).toContain('graph_create_run')
-    expect(h.eventDrafts[0]?.message).not.toContain('Plan-mode')
+    expect(h.eventDrafts.at(-1)?.message).toContain('graph_create_run')
+    expect(h.eventDrafts.at(-1)?.message).not.toContain('Plan-mode')
   })
 
   it('allows continuation and final-answer recovery before failing in event-then-item order', async () => {

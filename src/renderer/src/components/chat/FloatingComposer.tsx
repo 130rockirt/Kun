@@ -191,6 +191,7 @@ type Props = {
   onOrchestrationChange?: (mode: 'direct' | 'graph') => void
   onOpenGraph?: (runId: string, nodeId?: string) => void
   busy: boolean
+  currentTurnOrchestration?: 'direct' | 'graph' | null
   runtimeReady: boolean
   hasActiveThread: boolean
   composerModel: string
@@ -315,6 +316,7 @@ export function FloatingComposer({
   onOrchestrationChange,
   onOpenGraph,
   busy,
+  currentTurnOrchestration = null,
   runtimeReady,
   hasActiveThread,
   composerModel,
@@ -486,6 +488,7 @@ export function FloatingComposer({
   const canTogglePlanMode = canCompose && Boolean(onPlanCommand)
   const showGraphMenuOption = Boolean(onOrchestrationChange)
   const canToggleGraphMode = canCompose && graphEnabled && !busy && showGraphMenuOption
+  const runningGraphTurn = busy && currentTurnOrchestration === 'graph'
   const canCreateNewThread = runtimeReady && route !== 'claw' && Boolean(effectiveWorkspaceRoot) && Boolean(onNewCommand)
   const canOpenGoalPanel = canCompose && route !== 'claw'
   const canRunReview = canCompose && route !== 'claw' && Boolean(onReviewCommand)
@@ -1312,21 +1315,33 @@ export function FloatingComposer({
                 data-composer-graph-menu-item
                 disabled={!canToggleGraphMode}
                 onClick={handleGraphToolbarClick}
-                title={graphEnabled
-                  ? t('graphModeGraphHint', {
-                      defaultValue: 'Graph: plan, delegate, supervise, review, and synthesize'
-                    })
-                  : t('graphModeDisabledHint', {
-                      defaultValue: 'Enable experimental Graph Mode in Settings → Agents'
-                    })}
+                aria-label={busy
+                  ? t('graphModeNextTurnGraph', { defaultValue: 'Next turn: Graph' })
+                  : t('graphModeGraph', { defaultValue: 'Graph' })}
+                title={busy
+                  ? t('graphModeNextTurnHint', {
+                        defaultValue: 'Controls the next turn and cannot change the turn already running'
+                      })
+                  : !graphEnabled
+                    ? t('graphModeDisabledHint', {
+                        defaultValue: 'Enable experimental Graph Mode in Settings → Agents'
+                      })
+                    : t('graphModeGraphHint', {
+                        defaultValue: 'Graph: plan, delegate, supervise, review, and synthesize'
+                      })}
                 className="ds-no-drag flex h-8 w-full items-center gap-2 px-3 text-left transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent disabled:hover:text-ds-muted"
               >
                 <Share2 className="h-3.5 w-3.5 shrink-0" strokeWidth={1.9} />
                 <span className="min-w-0 flex-1 truncate">
-                  {t('graphModeGraph', { defaultValue: 'Graph' })}
+                  {busy
+                    ? t('graphModeNextTurnGraph', { defaultValue: 'Next turn: Graph' })
+                    : t('graphModeGraph', { defaultValue: 'Graph' })}
                 </span>
                 <span
                   role="switch"
+                  aria-label={busy
+                    ? t('graphModeNextTurnGraph', { defaultValue: 'Next turn: Graph' })
+                    : t('graphModeGraph', { defaultValue: 'Graph' })}
                   aria-checked={mode === 'agent' && orchestration === 'graph'}
                   className={`relative h-5 w-9 shrink-0 rounded-full ring-1 transition ${
                     mode === 'agent' && orchestration === 'graph'
@@ -1690,32 +1705,49 @@ export function FloatingComposer({
                     </button>
                     {mode === 'plan' ? (
                       <span
-                        className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full bg-ds-hover px-2.5 text-[13px] font-medium text-ds-muted"
+                        className="ds-composer-mode-badge inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-full bg-ds-hover px-2.5 text-[13px] font-medium text-ds-muted"
                         title={t('slashCommandPlanTitle')}
+                        aria-label={t('slashCommandPlanTitle')}
                       >
                         <ListTodo className="h-3.5 w-3.5" strokeWidth={1.9} />
-                        <span>{t('slashCommandPlanTitle')}</span>
+                        <span className="ds-composer-mode-label">{t('slashCommandPlanTitle')}</span>
                       </span>
                     ) : null}
-                    {mode === 'agent' && orchestration === 'graph' ? (
+                    {runningGraphTurn ? (
+                      <span
+                        data-composer-graph-running
+                        className="ds-composer-mode-badge inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-full bg-indigo-500/10 px-2.5 text-[13px] font-medium text-indigo-700 dark:text-indigo-200"
+                        title={t('graphModeRunning', { defaultValue: 'Running: Graph' })}
+                        aria-label={t('graphModeRunning', { defaultValue: 'Running: Graph' })}
+                      >
+                        <Share2 className="h-3.5 w-3.5" strokeWidth={1.9} />
+                        <span className="ds-composer-mode-label">
+                          {t('graphModeRunning', { defaultValue: 'Running: Graph' })}
+                        </span>
+                      </span>
+                    ) : !busy && mode === 'agent' && orchestration === 'graph' ? (
                       <span
                         data-composer-graph-active
-                        className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full bg-indigo-500/10 px-2.5 text-[13px] font-medium text-indigo-700 dark:text-indigo-200"
+                        className="ds-composer-mode-badge inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-full bg-indigo-500/10 px-2.5 text-[13px] font-medium text-indigo-700 dark:text-indigo-200"
                         title={t('graphModeGraphHint', {
                           defaultValue: 'Graph: plan, delegate, supervise, review, and synthesize'
                         })}
+                        aria-label={t('graphModeGraph', { defaultValue: 'Graph' })}
                       >
                         <Share2 className="h-3.5 w-3.5" strokeWidth={1.9} />
-                        <span>{t('graphModeGraph', { defaultValue: 'Graph' })}</span>
+                        <span className="ds-composer-mode-label">
+                          {t('graphModeGraph', { defaultValue: 'Graph' })}
+                        </span>
                       </span>
                     ) : null}
                     {activeThreadGoal?.status === 'active' ? (
                       <span
-                        className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full bg-ds-hover px-2.5 text-[13px] font-medium text-ds-muted"
+                        className="ds-composer-mode-badge inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-full bg-ds-hover px-2.5 text-[13px] font-medium text-ds-muted"
                         title={t('slashCommandGoalTitle')}
+                        aria-label={t('slashCommandGoalTitle')}
                       >
                         <Target className="h-3.5 w-3.5" strokeWidth={1.9} />
-                        <span>{t('slashCommandGoalTitle')}</span>
+                        <span className="ds-composer-mode-label">{t('slashCommandGoalTitle')}</span>
                       </span>
                     ) : null}
                   </>
@@ -1798,7 +1830,7 @@ export function FloatingComposer({
                       type="button"
                       disabled={dictation.status === 'transcribing' || !canEditComposer}
                       onClick={dictation.toggle}
-                      className="ds-no-drag flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-60"
+                      className="ds-composer-optional-action ds-composer-voice-action ds-no-drag flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-60"
                       aria-label={
                         dictation.status === 'transcribing'
                           ? t('composerVoiceTranscribing')
@@ -1822,7 +1854,7 @@ export function FloatingComposer({
                       type="button"
                       disabled={!canOptimizePrompt}
                       onClick={handlePromptOptimizationClick}
-                      className="ds-no-drag flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-60"
+                      className="ds-composer-optional-action ds-composer-prompt-optimize-action ds-no-drag flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-60"
                       aria-label={promptOptimizationBusy ? t('composerPromptOptimizing') : t('composerPromptOptimize')}
                       title={promptOptimizationBusy ? t('composerPromptOptimizing') : t('composerPromptOptimize')}
                     >

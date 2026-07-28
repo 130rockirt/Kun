@@ -2,7 +2,11 @@ import { randomUUID } from 'node:crypto'
 import type { ModelClient, ModelRequest, ModelStreamChunk } from '../../ports/model-client.js'
 import type { UsageSnapshot } from '../../contracts/usage.js'
 import type { ModelCapabilityMetadata } from '../../contracts/capabilities.js'
-import type { LlmDebugRound, LlmDebugSink } from '../../services/llm-debug-recorder.js'
+import {
+  startLlmDebugRoundIfEnabled,
+  type LlmDebugRound,
+  type LlmDebugSink
+} from '../../services/llm-debug-recorder.js'
 import { repairToolArguments } from './tool-argument-repair.js'
 import type { ModelRequestRetryConfig } from '../../config/kun-config.js'
 import {
@@ -44,7 +48,10 @@ import {
   requiresReasoningRoundTrip
 } from './compat-request-builder.js'
 import { decodeChatCompletionsStreamPayload } from './chat-completions-stream-decoder.js'
-import { decodeResponsesStreamPayload } from './responses-stream-decoder.js'
+import {
+  createResponsesContentTracker,
+  decodeResponsesStreamPayload
+} from './responses-stream-decoder.js'
 import { decodeAnthropicMessagesStreamPayload } from './anthropic-messages-stream-decoder.js'
 import { decodeCompatNonStreamingResponse } from './compat-non-streaming-decoder.js'
 import { IncrementalSseFrameBuffer } from './incremental-sse-frame-buffer.js'
@@ -202,7 +209,7 @@ export class CompatModelClient implements ModelClient {
       yield* this.streamInner(request, null)
       return
     }
-    const round = ignoreModelTraceFailure(() => sink.start({
+    const round = await startLlmDebugRoundIfEnabled(sink, {
       threadId: request.threadId,
       turnId: request.turnId,
       provider: this.provider,
@@ -212,7 +219,7 @@ export class CompatModelClient implements ModelClient {
         ...(tool.providerKind ? { providerKind: tool.providerKind } : {}),
         ...(tool.providerId ? { providerId: tool.providerId } : {})
       }))
-    })) ?? null
+    }, warnModelTraceFailure)
     if (!round) {
       yield* this.streamInner(request, null)
       return
@@ -894,6 +901,7 @@ export class CompatModelClient implements ModelClient {
     const pendingArguments = new Map<string, PendingToolCall>()
     const pendingByIndex = new Map<number, string>()
     const completedToolCalls = new Set<string>()
+    const responsesContentTracker = createResponsesContentTracker()
     let usage: UsageSnapshot | null = null
     // The Responses protocol may repeat final output in response.completed;
     // a boolean is sufficient to suppress that duplicate. Retaining the full
@@ -982,6 +990,7 @@ export class CompatModelClient implements ModelClient {
             pendingByIndex,
             completedToolCalls,
             sawTextDelta,
+            responsesContentTracker,
             endpointFormat,
             model,
             budget
@@ -1086,6 +1095,7 @@ export class CompatModelClient implements ModelClient {
     pendingByIndex: Map<number, string>,
     completedToolCalls: Set<string>,
     sawTextDelta: boolean,
+    responsesContentTracker: import('./responses-stream-decoder.js').ResponsesContentTracker,
     endpointFormat: ModelEndpointFormat,
     model: string,
     budget: ModelStreamResourceBudget
@@ -1110,6 +1120,7 @@ export class CompatModelClient implements ModelClient {
         pendingByIndex,
         completedToolCalls,
         sawTextDelta,
+        responsesContentTracker,
         model,
         budget
       )
@@ -1142,6 +1153,7 @@ export class CompatModelClient implements ModelClient {
     pendingByIndex: Map<number, string>,
     completedToolCalls: Set<string>,
     sawTextDelta: boolean,
+    responsesContentTracker: import('./responses-stream-decoder.js').ResponsesContentTracker,
     model: string,
     budget: ModelStreamResourceBudget
   ): StreamPayloadResult {
@@ -1151,6 +1163,7 @@ export class CompatModelClient implements ModelClient {
       pendingByIndex,
       completedToolCalls,
       sawTextDelta,
+      contentTracker: responsesContentTracker,
       budget,
       parseToolArguments: (raw) => this.parseToolArguments(raw),
       normalizeUsage: (usage) => this.mapUsage(usage, model)

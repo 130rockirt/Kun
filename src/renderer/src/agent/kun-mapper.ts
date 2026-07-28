@@ -76,6 +76,7 @@ export function threadFromCore(thread: CoreThreadSummaryJson): NormalizedThread 
     status: thread.status,
     approvalPolicy: normalizeApprovalPolicy(thread.approvalPolicy),
     sandboxMode: normalizeSandboxMode(thread.sandboxMode),
+    modelRequestCaptureEnabled: thread.modelRequestCaptureEnabled === true,
     archived: thread.status === 'archived',
     pinned: thread.pinned === true,
     ...(thread.providerId ? { providerId: thread.providerId } : {}),
@@ -1653,6 +1654,35 @@ function runtimeStatusFromEvent(event: CoreRuntimeEventJson): RuntimeStatusEvent
       message: event.message,
       toolName,
       callId
+    }
+  }
+  if (event.kind === 'required_tool_gate') {
+    const toolName = typeof event.toolName === 'string' && event.toolName.trim() ? event.toolName.trim() : ''
+    const phase = event.phase
+    const attempt = typeof event.attempt === 'number' && event.attempt > 0 ? event.attempt : undefined
+    const maxAttempts = typeof event.maxAttempts === 'number' && event.maxAttempts > 0
+      ? event.maxAttempts
+      : undefined
+    if (
+      !toolName ||
+      (phase !== 'preparing' && phase !== 'retrying' && phase !== 'succeeded' && phase !== 'failed') ||
+      attempt === undefined ||
+      maxAttempts === undefined
+    ) return null
+    const turnKey = event.turnId ?? event.threadId ?? event.seq ?? Date.now()
+    return {
+      kind: 'required_tool_gate',
+      itemId: `runtime_status_${turnKey}_required_tool_${toolName}`,
+      turnId: event.turnId,
+      createdAt: event.timestamp,
+      toolName,
+      phase,
+      attempt,
+      maxAttempts,
+      ...(typeof event.failureSummary === 'string' && event.failureSummary.trim()
+        ? { failureSummary: redactSecretText(event.failureSummary.trim()) }
+        : {}),
+      ...(typeof event.code === 'string' && event.code.trim() ? { code: event.code.trim() } : {})
     }
   }
   return null

@@ -248,7 +248,7 @@ export function FloatingComposerContextCapacity({
             document.body
           )
         : null}
-      <div className="relative shrink-0" ref={rootRef}>
+      <div className="ds-composer-context-control relative shrink-0" ref={rootRef}>
         <button
           ref={buttonRef}
           type="button"

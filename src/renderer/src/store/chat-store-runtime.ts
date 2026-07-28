@@ -508,6 +508,20 @@ function runtimeStatusText(event: RuntimeStatusEventPayload): string {
   if (event.kind === 'compaction_summary_fallback') {
     return event.message?.trim() || i18n.t('common:compactionSummaryFallbackStatus')
   }
+  if (event.kind === 'required_tool_gate') {
+    const key = event.phase === 'retrying'
+      ? 'common:graphCreateRetryingStatus'
+      : event.phase === 'succeeded'
+        ? 'common:graphCreateSucceededStatus'
+        : event.phase === 'failed'
+          ? 'common:graphCreateFailedStatus'
+          : 'common:graphCreatePreparingStatus'
+    return i18n.t(key, {
+      tool: event.toolName ?? 'tool',
+      attempt: event.attempt ?? 0,
+      max: event.maxAttempts ?? 0
+    })
+  }
   return event.message?.trim() || ''
 }
 

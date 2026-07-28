@@ -162,7 +162,11 @@ export async function syncGuiManagedKunConfig(
       runtime.contextCompaction,
       objectValue(existing?.contextCompaction)
     ),
-    runtime: runtimeTuningConfigForRuntime(runtime.runtimeTuning, objectValue(existing?.runtime)),
+    runtime: runtimeTuningConfigForRuntime(
+      runtime.runtimeTuning,
+      objectValue(existing?.runtime),
+      runtime.llmDebug
+    ),
     graph: graphConfigForRuntime(runtime.graph),
     quality: qualityConfigForRuntime(runtime.quality, objectValue(existing?.quality)),
     ...(Object.keys(roles).length ? { roles } : {}),
@@ -231,7 +235,7 @@ function defaultCredentialSourceId(settings: AppSettingsV1): string {
 type KunRuntimeConfigSettings = Pick<KunRuntimeSettingsV1,
   'apiKey' | 'baseUrl' | 'endpointFormat' | 'model' | 'mcpSearch' | 'retry' |
   'tokenEconomy' | 'toolOutputLimits' | 'storage' | 'contextCompaction' |
-  'runtimeTuning' | 'imageGeneration' | 'textToSpeech' | 'musicGeneration' |
+  'runtimeTuning' | 'llmDebug' | 'imageGeneration' | 'textToSpeech' | 'musicGeneration' |
   'videoGeneration' | 'computerUse' | 'browserUse' | 'modelProfiles' | 'memoryEnabled' |
   'instructions' | 'quality' | 'subagents' | 'graph' | 'smallModel' |
   'smallModelProviderId' | 'smallModelAccountId' |

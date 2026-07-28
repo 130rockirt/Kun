@@ -79,7 +79,10 @@ export const ModelProviderRequestSchema = z.strictObject({
       maxOutputTokens: z.number().int().positive().optional(),
       stop: z.array(z.string()).max(16).optional(),
       reasoningEffort: z.enum(['low', 'medium', 'high']).optional(),
-      toolChoice: z.enum(['auto', 'none', 'required']).optional()
+      toolChoice: z.union([
+        z.enum(['auto', 'none', 'required']),
+        z.strictObject({ type: z.literal('tool'), name: z.string().min(1).max(256) })
+      ]).optional()
     })
     .default({}),
   metadata: JsonObjectSchema.optional()

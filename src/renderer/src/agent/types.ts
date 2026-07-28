@@ -179,6 +179,8 @@ export type NormalizedThread = {
   status?: string
   approvalPolicy?: ApprovalPolicy
   sandboxMode?: SandboxMode
+  /** Whether future model requests are retained for Agent Perspective. */
+  modelRequestCaptureEnabled?: boolean
   /** Optional provider id when this thread is pinned to a non-default provider. */
   providerId?: string
   /** Optional subagent profile id this thread is bound to (primary-agent persona). */
@@ -416,6 +418,7 @@ export type RuntimeStatusEventPayload = {
     | 'tool_catalog_changed'
     | 'tool_storm_suppressed'
     | 'compaction_summary_fallback'
+    | 'required_tool_gate'
   itemId: string
   turnId?: string
   createdAt?: string
@@ -429,6 +432,9 @@ export type RuntimeStatusEventPayload = {
   changeKind?: 'additive' | 'breaking'
   toolName?: string
   callId?: string
+  phase?: 'preparing' | 'retrying' | 'succeeded' | 'failed'
+  failureSummary?: string
+  code?: string
 }
 
 export type RuntimeErrorEventPayload = {
@@ -626,6 +632,7 @@ export interface AgentProvider {
     latestSeq: number
     threadStatus?: string
     latestTurnId?: string
+    latestTurnOrchestration?: 'direct' | 'graph'
     latestUserMessageId?: string
     turnDurationByUserId?: Record<string, number>
     usage?: ThreadUsageSnapshot

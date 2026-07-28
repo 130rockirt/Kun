@@ -29,6 +29,7 @@ export type CoreThreadSummaryJson = {
   status: CoreThreadStatus
   approvalPolicy?: string
   sandboxMode?: string
+  modelRequestCaptureEnabled?: boolean
   pinned?: boolean
   providerId?: string
   agentId?: string
@@ -434,6 +435,7 @@ export type CoreTurnJson = {
   model?: string
   providerId?: string
   clientSurface?: 'gui' | 'tui' | 'cli' | 'api' | 'im' | 'extension'
+  orchestration?: 'direct' | 'graph'
   createdAt: string
   startedAt?: string
   finishedAt?: string
@@ -690,7 +692,8 @@ export type CoreRuntimeEventJson = {
   contextManagement?: 'kun-managed' | 'sdk-managed'
   nativeHistory?: 'known' | 'unknown' | 'none'
   providerKind?: 'agent-sdk' | 'cursor-sdk' | 'antigravity-cli'
-  phase?: 'portable' | 'resumed' | 'rebased'
+  phase?: 'portable' | 'resumed' | 'rebased' | 'preparing' | 'retrying' | 'succeeded' | 'failed'
+  failureSummary?: string
   capabilities?: {
     nativeResume?: boolean
     structuredStreaming?: boolean
@@ -722,6 +725,7 @@ export type CoreRuntimeEventJson = {
     | 'post_send'
     | 'response_received'
   label?: string
+  code?: string
   details?: unknown
   summary?: string
   reason?: string
@@ -756,7 +760,6 @@ export type CoreRuntimeEventJson = {
   todos?: CoreThreadTodoListJson | null
   cleared?: boolean
   message?: string
-  code?: string
   severity?: 'info' | 'warning' | 'error'
   child?: CoreChildRuntimeMetadataJson
 }

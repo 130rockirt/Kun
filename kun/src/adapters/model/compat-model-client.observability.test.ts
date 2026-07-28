@@ -40,6 +40,29 @@ function okJson(text = 'ok'): Response {
 }
 
 describe('CompatModelClient request observability', () => {
+  it('skips trace creation when the thread capture policy is disabled', async () => {
+    const recorder = new LlmDebugRecorder({ shouldCapture: () => false })
+    let calls = 0
+    const client = new CompatModelClient({
+      baseUrl: 'https://provider.example/v1',
+      apiKey: 'sk-test',
+      model: 'test-model',
+      endpointFormat: 'chat_completions',
+      nonStreaming: true,
+      debugSink: recorder,
+      fetchImpl: (async () => {
+        calls += 1
+        return okJson('not traced')
+      }) as unknown as typeof fetch
+    })
+
+    const chunks = await drain(client.stream(request()))
+
+    expect(calls).toBe(1)
+    expect(chunks).toContainEqual({ kind: 'assistant_text_delta', text: 'not traced' })
+    expect(recorder.snapshot()).toEqual([])
+  })
+
   it('captures exact request JSON, redacted headers, raw SSE, response headers, and decoded output', async () => {
     const recorder = new LlmDebugRecorder()
     let transmittedBody = ''

@@ -421,7 +421,12 @@ export function reduceChatProjection(
         id: event.itemId,
         turnId: event.turnId,
         createdAt: event.createdAt ?? new Date(context.now).toISOString(),
-        text: context.runtimeStatusText(event)
+        text: context.runtimeStatusText(event),
+        ...(event.failureSummary ? { detail: event.failureSummary } : {}),
+        ...(event.code ? { code: event.code } : {}),
+        ...(event.kind === 'required_tool_gate' && event.phase === 'failed'
+          ? { severity: 'error' as const }
+          : {})
       }
       const index = state.blocks.findIndex(
         (candidate) => candidate.kind === 'system' && candidate.id === event.itemId
@@ -646,6 +651,7 @@ export function reduceChatProjection(
         ...finalizeTurnTimingAt(state, context.now),
         error: null,
         currentTurnId: null,
+        currentTurnOrchestration: null,
         ...(state.busy ? { busy: false } : {})
       })
       const threadId = state.activeThreadId
@@ -671,6 +677,7 @@ export function reduceChatProjection(
       if (!shouldSettle) return patch
       patch.busy = false
       patch.currentTurnId = null
+      patch.currentTurnOrchestration = null
       patch.currentTurnUserId = null
       patch.blocks = context.settlePendingRuntimeWork(patch.blocks ?? state.blocks)
       if (terminal && state.activeThreadId) {

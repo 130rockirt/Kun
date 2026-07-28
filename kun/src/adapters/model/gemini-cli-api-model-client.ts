@@ -2,9 +2,10 @@ import { randomUUID } from 'node:crypto'
 import type { ToolCallProviderMetadata } from '../../contracts/items.js'
 import type { UsageSnapshot } from '../../contracts/usage.js'
 import type { ModelClient, ModelRequest, ModelStreamChunk } from '../../ports/model-client.js'
-import type {
-  LlmDebugRound,
-  LlmDebugSink
+import {
+  startLlmDebugRoundIfEnabled,
+  type LlmDebugRound,
+  type LlmDebugSink
 } from '../../services/llm-debug-recorder.js'
 import type {
   CompatChatMessage,
@@ -140,7 +141,7 @@ export class GeminiCliApiModelClient implements ModelClient {
   }
 
   async *stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
-    const round = this.startDebugRound(request)
+    const round = await this.startDebugRound(request)
     try {
       for await (const chunk of this.streamInner(request, round)) {
         safeDebug(() => this.debugSink?.captureChunk(round!, chunk))
@@ -401,9 +402,9 @@ export class GeminiCliApiModelClient implements ModelClient {
     }
   }
 
-  private startDebugRound(request: ModelRequest): LlmDebugRound | null {
+  private async startDebugRound(request: ModelRequest): Promise<LlmDebugRound | null> {
     if (!this.debugSink) return null
-    return safeDebug(() => this.debugSink!.start({
+    return await startLlmDebugRoundIfEnabled(this.debugSink, {
       threadId: request.threadId,
       turnId: request.turnId,
       provider: this.provider,
@@ -413,7 +414,7 @@ export class GeminiCliApiModelClient implements ModelClient {
         ...(tool.providerKind ? { providerKind: tool.providerKind } : {}),
         ...(tool.providerId ? { providerId: tool.providerId } : {})
       }))
-    })) ?? null
+    }) ?? null
   }
 
   private async loadProject(accessToken: string, signal: AbortSignal): Promise<string> {

@@ -88,9 +88,13 @@ export type ModelRequest = {
   attachmentDocuments?: ModelDocumentAttachment[]
   tools: ModelToolSpec[]
   /**
-   * Optional loop-level requirement. The agent loop uses this to keep
-   * GUI-owned workflows, such as plan creation, tied to a concrete tool
-   * result even when a provider ignores tool-use instructions.
+   * Hard named-tool constraint. The caller MUST expose this tool alone and
+   * the adapter MUST serialize the protocol's named tool-choice form. A
+   * provider that cannot enforce the exact name must fail closed rather than
+   * falling back to generic/automatic tool selection.
+   *
+   * This is intentionally not a soft post-condition for workflows that can
+   * legitimately ask questions or answer in prose (for example Plan mode).
    */
   requiredToolName?: string
   /** Optional per-request streaming override. Defaults to adapter configuration. */

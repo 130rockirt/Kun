@@ -10,6 +10,8 @@ import {
   RefreshCw,
   X
 } from 'lucide-react'
+import type { KunRuntimeSettingsPatchV1, KunRuntimeSettingsV1 } from '@shared/app-settings'
+import { SettingsCard, SettingRow, Toggle } from './settings-controls'
 
 export type LlmDebugToolCall = {
   callId: string
@@ -538,7 +540,11 @@ export function LlmDebugRequestBrowser({
 }
 
 export function LlmDebugSettingsSection({ ctx }: { ctx: Record<string, any> }): ReactElement {
-  const { t } = ctx as { t: Translate }
+  const { t, kun, updateKun } = ctx as {
+    t: Translate
+    kun: KunRuntimeSettingsV1
+    updateKun: (patch: KunRuntimeSettingsPatchV1) => void
+  }
   const [rounds, setRounds] = useState<LlmDebugRound[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -567,6 +573,24 @@ export function LlmDebugSettingsSection({ ctx }: { ctx: Record<string, any> }): 
 
   return (
     <div className="space-y-4">
+      <SettingsCard
+        title={t('llmDebugCaptureSettings')}
+        description={t('llmDebugCaptureSettingsDesc')}
+      >
+        <SettingRow
+          title={t('llmDebugDefaultCapture')}
+          description={t('llmDebugDefaultCaptureDesc')}
+          control={
+            <Toggle
+              checked={kun.llmDebug.defaultThreadCaptureEnabled}
+              onChange={(defaultThreadCaptureEnabled) =>
+                updateKun({ llmDebug: { defaultThreadCaptureEnabled } })}
+              ariaLabel={t('llmDebugDefaultCapture')}
+            />
+          }
+        />
+      </SettingsCard>
+
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-ds-border-muted bg-ds-card/55 px-4 py-3 backdrop-blur">
         <div className="min-w-0">
           <h2 className="text-[14px] font-semibold text-ds-ink">{t('sectionLlmDebug')}</h2>

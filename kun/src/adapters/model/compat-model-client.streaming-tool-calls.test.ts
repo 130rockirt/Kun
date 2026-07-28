@@ -147,7 +147,113 @@ function makeClient(
   })
 }
 
+function makeResponsesClient(frames: string[]): CompatModelClient {
+  return new CompatModelClient({
+    baseUrl: 'https://provider.example/v1/responses',
+    apiKey: 'sk-test',
+    model: 'test-model',
+    endpointFormat: 'responses',
+    fetchImpl: streamingFetch(frames)
+  })
+}
+
 describe('CompatModelClient streaming tool-call finalization', () => {
+  it('keeps done-only Responses text and reasoning without duplicating completed output', async () => {
+    const message = {
+      id: 'msg_1',
+      type: 'message',
+      content: [{ type: 'output_text', text: 'Done-only answer.' }]
+    }
+    const reasoning = {
+      id: 'reason_1',
+      type: 'reasoning',
+      summary: [{ type: 'summary_text', text: 'Done-only reasoning.' }]
+    }
+    const chunks = await drain(makeResponsesClient([
+      frame({ type: 'response.output_item.done', output_index: 0, item: message }),
+      frame({ type: 'response.output_item.done', output_index: 1, item: reasoning }),
+      frame({ type: 'response.completed', response: { status: 'completed', output: [message, reasoning] } })
+    ]).stream(request()))
+
+    expect(chunks.filter((chunk) => chunk.kind === 'assistant_text_delta')).toEqual([
+      { kind: 'assistant_text_delta', text: 'Done-only answer.' }
+    ])
+    expect(chunks.filter((chunk) => chunk.kind === 'assistant_reasoning_delta')).toEqual([
+      { kind: 'assistant_reasoning_delta', text: 'Done-only reasoning.' }
+    ])
+    expect(completed(chunks).stopReason).toBe('stop')
+  })
+
+  it('keeps Responses text and a function call from the same response exactly once', async () => {
+    const message = {
+      id: 'msg_1',
+      type: 'message',
+      content: [{ type: 'output_text', text: 'Hello world.' }]
+    }
+    const call = {
+      id: 'call_1',
+      call_id: 'call_1',
+      type: 'function_call',
+      name: 'edit',
+      arguments: '{"path":"a.txt"}'
+    }
+    const chunks = await drain(makeResponsesClient([
+      frame({
+        type: 'response.output_text.delta',
+        output_index: 0,
+        content_index: 0,
+        delta: 'Hello '
+      }),
+      frame({ type: 'response.output_item.done', output_index: 0, item: message }),
+      frame({ type: 'response.output_item.done', output_index: 1, item: call }),
+      frame({ type: 'response.completed', response: { status: 'completed', output: [message, call] } })
+    ]).stream(request()))
+
+    expect(chunks.filter((chunk) => chunk.kind === 'assistant_text_delta')).toEqual([
+      { kind: 'assistant_text_delta', text: 'Hello ' },
+      { kind: 'assistant_text_delta', text: 'world.' }
+    ])
+    expect(toolCallCompletes(chunks)).toEqual([{
+      kind: 'tool_call_complete', callId: 'call_1', toolName: 'edit', arguments: { path: 'a.txt' }
+    }])
+    expect(completed(chunks).stopReason).toBe('tool_calls')
+  })
+
+  it('deduplicates anonymous Responses deltas against identified completed output', async () => {
+    const message = {
+      id: 'msg_1',
+      type: 'message',
+      content: [{ type: 'output_text', text: 'Hello world.' }]
+    }
+    const chunks = await drain(makeResponsesClient([
+      frame({
+        type: 'response.output_text.delta',
+        content_index: 0,
+        delta: 'Hello '
+      }),
+      frame({
+        type: 'response.completed',
+        response: { status: 'completed', output: [message] }
+      })
+    ]).stream(request()))
+
+    expect(chunks.filter((chunk) => chunk.kind === 'assistant_text_delta')).toEqual([
+      { kind: 'assistant_text_delta', text: 'Hello ' },
+      { kind: 'assistant_text_delta', text: 'world.' }
+    ])
+    expect(completed(chunks).stopReason).toBe('stop')
+  })
+
+  it('uses response.completed.output_text as a final Responses fallback', async () => {
+    const chunks = await drain(makeResponsesClient([
+      frame({ type: 'response.completed', response: { status: 'completed', output_text: 'Completed fallback.' } })
+    ]).stream(request()))
+    expect(chunks).toEqual([
+      { kind: 'assistant_text_delta', text: 'Completed fallback.' },
+      { kind: 'completed', stopReason: 'stop' }
+    ])
+  })
+
   it('accepts CRLF-delimited SSE frames', async () => {
     const frames = [
       `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: 'hello' }, finish_reason: 'stop' }] })}\r\n\r\n`
@@ -166,7 +272,11 @@ describe('CompatModelClient streaming tool-call finalization', () => {
     ])).stream(request()))
     expect(truncated).toEqual([
       { kind: 'assistant_text_delta', text: 'partial' },
-      { kind: 'error', message: 'model stream ended before a terminal frame', code: 'stream_truncated' }
+      expect.objectContaining({
+        kind: 'error',
+        message: 'model stream ended before a terminal frame',
+        code: 'stream_truncated'
+      })
     ])
   })
 

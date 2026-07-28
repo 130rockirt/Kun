@@ -15,7 +15,8 @@ import { presentationFileArtifactsForTurn } from './presentation-file-artifacts'
 import { ReviewPlanCard, ReviewSummaryCard, TurnChangeSummary, WorkMetaRow } from './message-timeline-cards'
 import {
   ProcessSectionRow,
-  groupProcessSections
+  groupProcessSections,
+  summarizeToolBlock
 } from './message-timeline-process'
 import { ComponentPrototypeCard } from './ComponentPrototypeCard'
 import type { OpenChildThreadHandler } from './SubagentCallCard'
@@ -1090,6 +1091,13 @@ export function ConversationTurn({
   const showLiveThinking = isProcessing && !!liveProcessText.trim()
   const showLiveProgress =
     isProcessing && !onlyCompactionProcess && !showLiveThinking
+  const liveToolBlock = useMemo(
+    () => [...workProcessBlocks].reverse().find(
+      (block): block is Extract<ChatBlock, { kind: 'tool' }> =>
+        block.kind === 'tool'
+    ),
+    [workProcessBlocks]
+  )
   const forkFromTurn = async (): Promise<void> => {
     if (!allowMainThreadActions || !forkTurnId || forking) return
     setForking(true)
@@ -1212,7 +1220,7 @@ export function ConversationTurn({
       ) : null}
 
       {showLiveProgress ? (
-        <LiveTurnProgressRow />
+        <LiveTurnProgressRow tool={liveToolBlock} />
       ) : null}
 
       {!isProcessing && devPreviewCard ? devPreviewCard : null}
@@ -1254,7 +1262,11 @@ function LiveTurnThinkingRow(): ReactElement {
   return <LiveTurnActivityRow label={t('thinkingNow')} />
 }
 
-function LiveTurnProgressRow(): ReactElement {
+function LiveTurnProgressRow({
+  tool
+}: {
+  tool?: Extract<ChatBlock, { kind: 'tool' }>
+}): ReactElement {
   const { t, i18n } = useTranslation('common')
   const swimMode = useWorkLogoSwimMode(true)
   const ikunVariant = useIkunWorkLogoVariant(true)
@@ -1270,9 +1282,11 @@ function LiveTurnProgressRow(): ReactElement {
     swimLabelKey as UiPluginLabelKey,
     i18n.language ?? 'zh'
   )
-  const label = ikunModeOn
-    ? t(IKUN_WORK_LOGO_VARIANT_LABEL_KEYS[ikunVariant])
-    : pluginLabel ?? t(swimLabelKey)
+  const label = tool
+    ? t('workingToolAction', { action: summarizeToolBlock(tool, t) })
+    : ikunModeOn
+      ? t(IKUN_WORK_LOGO_VARIANT_LABEL_KEYS[ikunVariant])
+      : pluginLabel ?? t(swimLabelKey)
 
   return (
     <LiveTurnActivityRow

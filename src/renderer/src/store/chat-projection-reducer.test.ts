@@ -51,6 +51,62 @@ function project(initial: ChatState, actions: RuntimeProjectionAction[]): ChatSt
 }
 
 describe('chat projection reducer', () => {
+  it('renders a failed required-tool gate as an expandable runtime status, not an assistant block', () => {
+    const projected = project(state(), [{
+      type: 'runtime_status_received',
+      payload: {
+        kind: 'required_tool_gate',
+        itemId: 'graph_gate_1',
+        turnId: 'turn_graph',
+        toolName: 'graph_create_run',
+        phase: 'failed',
+        attempt: 3,
+        maxAttempts: 3,
+        failureSummary: 'plan.nodes.0: Required'
+      }
+    }])
+
+    expect(projected.blocks).toEqual([expect.objectContaining({
+      kind: 'system',
+      id: 'graph_gate_1',
+      turnId: 'turn_graph',
+      text: 'Runtime status',
+      detail: 'plan.nodes.0: Required',
+      severity: 'error'
+    })])
+    expect(projected.blocks.some((block) => block.kind === 'assistant')).toBe(false)
+  })
+
+  it('clears current-turn orchestration when a Graph turn completes', () => {
+    const projected = project({
+      ...state(),
+      busy: true,
+      currentTurnId: 'turn_graph',
+      currentTurnOrchestration: 'graph'
+    }, [{ type: 'turn_completed' }])
+
+    expect(projected.busy).toBe(false)
+    expect(projected.currentTurnId).toBeNull()
+    expect(projected.currentTurnOrchestration).toBeNull()
+  })
+
+  it('clears current-turn orchestration when a Graph turn fails terminally', () => {
+    const projected = project({
+      ...state(),
+      busy: true,
+      currentTurnId: 'turn_graph',
+      currentTurnOrchestration: 'graph'
+    }, [{
+      type: 'turn_failed',
+      error: new Error('stopped'),
+      options: { terminal: true }
+    }])
+
+    expect(projected.busy).toBe(false)
+    expect(projected.currentTurnId).toBeNull()
+    expect(projected.currentTurnOrchestration).toBeNull()
+  })
+
   it('produces identical state for live and replayed normalized actions', () => {
     const actions: RuntimeProjectionAction[] = [
       {
