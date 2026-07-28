@@ -365,7 +365,7 @@ function CodeRightPanelWorkspace({
                   role="tabpanel"
                   aria-labelledby={tabId}
                   hidden={!active}
-                  className="absolute inset-0 min-h-0"
+                  className="absolute inset-0 min-h-0 overflow-hidden"
                 >
                   {renderPanel(id)}
                 </div>

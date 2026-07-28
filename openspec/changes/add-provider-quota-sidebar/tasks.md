@@ -20,3 +20,17 @@
 
 - [x] 4.1 Run focused provider quota, right-panel, preload/IPC, and locale tests.
 - [x] 4.2 Run typecheck, the relevant test suite, build, and `git diff --check`; separate any baseline failures.
+
+## 5. Subscription quota probes
+
+- [x] 5.1 Add credential-aware Claude subscription and ChatGPT/Codex OAuth quota probes and parsers.
+- [x] 5.2 Add Cursor.app subscription usage and Google Antigravity/Gemini CLI quota probes using existing local login state.
+- [x] 5.3 Cover subscription classification, fixed endpoints, request headers, response normalization, missing credentials, and isolated failures.
+
+## 6. Quota panel scrolling
+
+- [x] 6.1 Make the quota tab body an explicit wheel/touch scroll owner and cover its overflow behavior.
+
+## 7. Verification
+
+- [x] 7.1 Run focused tests, typecheck, build, and diff checks; separate any unrelated baseline failures.

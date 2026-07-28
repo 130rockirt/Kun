@@ -10,6 +10,12 @@ import type {
   ProviderQuotaMetric
 } from '../shared/provider-quota'
 import { fetchWithOptionalProxy } from './proxy-fetch'
+import {
+  ProviderQuotaMissingCredentialError,
+  runSubscriptionQuotaProbe,
+  type SubscriptionQuotaProbeKind,
+  type SubscriptionQuotaRuntime
+} from './provider-subscription-quota'
 
 const PROVIDER_QUOTA_TIMEOUT_MS = 12_000
 const PROVIDER_QUOTA_MAX_RESPONSE_BYTES = 256 * 1024
@@ -26,6 +32,7 @@ type ProviderQuotaProbeKind =
   | 'minimax-global'
   | 'minimax-cn'
   | 'openai'
+  | SubscriptionQuotaProbeKind
 
 type ProviderQuotaProbe = {
   kind: ProviderQuotaProbeKind
@@ -53,7 +60,8 @@ class ProviderQuotaRequestError extends Error {
 
 export async function listProviderQuotas(
   settings: AppSettingsV1,
-  fetcher: ProviderQuotaFetch = fetchWithOptionalProxy
+  fetcher: ProviderQuotaFetch = fetchWithOptionalProxy,
+  subscriptionRuntime: Partial<SubscriptionQuotaRuntime> = {}
 ): Promise<ProviderQuotaListResult> {
   const refreshedAt = new Date().toISOString()
   const providers = getModelProviderSettings(settings).providers
@@ -61,7 +69,7 @@ export async function listProviderQuotas(
   const entries = await mapWithConcurrency(
     providers,
     PROVIDER_QUOTA_CONCURRENCY,
-    async (provider) => refreshProviderQuota(provider, proxyUrl, fetcher)
+    async (provider) => refreshProviderQuota(provider, proxyUrl, fetcher, subscriptionRuntime)
   )
   return { entries, refreshedAt }
 }
@@ -69,6 +77,43 @@ export async function listProviderQuotas(
 export function classifyProviderQuotaProbe(
   provider: ModelProviderProfileV1
 ): ProviderQuotaProbe | null {
+  const presetId = provider.presetSource?.presetId
+  const stableId = presetId || provider.id
+  if (stableId === 'claude-subscription' && provider.kind === 'agent-sdk') {
+    return {
+      kind: 'claude-subscription',
+      source: 'Claude OAuth usage API',
+      dashboardUrl: 'https://claude.ai/settings/usage'
+    }
+  }
+  if (stableId === 'codex' && provider.kind === 'http') {
+    return {
+      kind: 'codex-subscription',
+      source: 'ChatGPT Codex usage API',
+      dashboardUrl: 'https://chatgpt.com/codex/settings/usage'
+    }
+  }
+  if (stableId === 'cursor-subscription' && provider.kind === 'cursor-sdk') {
+    return {
+      kind: 'cursor-subscription',
+      source: 'Cursor usage summary API',
+      dashboardUrl: 'https://cursor.com/dashboard?tab=usage'
+    }
+  }
+  if (stableId === 'gemini-subscription' && provider.kind === 'antigravity-cli') {
+    return {
+      kind: 'antigravity-subscription',
+      source: 'Google Antigravity quota API',
+      dashboardUrl: 'https://antigravity.google'
+    }
+  }
+  if (stableId === 'gemini-cli-subscription' && provider.kind === 'gemini-cli-api') {
+    return {
+      kind: 'gemini-cli-subscription',
+      source: 'Google Gemini CLI quota API',
+      dashboardUrl: 'https://aistudio.google.com/usage'
+    }
+  }
   const hostname = exactHostname(provider.baseUrl)
 
   if (hostname === 'api.deepseek.com') {
@@ -320,7 +365,8 @@ export function parseOpenAiQuota(payload: unknown): ProviderQuotaMetric[] {
 async function refreshProviderQuota(
   provider: ModelProviderProfileV1,
   proxyUrl: string,
-  fetcher: ProviderQuotaFetch
+  fetcher: ProviderQuotaFetch,
+  subscriptionRuntime: Partial<SubscriptionQuotaRuntime>
 ): Promise<ProviderQuotaEntry> {
   const baseEntry = {
     providerId: provider.id,
@@ -337,7 +383,7 @@ async function refreshProviderQuota(
     }
   }
   const apiKey = provider.apiKey.trim()
-  if (!apiKey) {
+  if (!isSubscriptionQuotaProbe(probe.kind) && !apiKey) {
     return {
       ...baseEntry,
       status: 'missing_credentials',
@@ -349,7 +395,12 @@ async function refreshProviderQuota(
   }
 
   try {
-    const result = await runProbe(probe.kind, { fetcher, proxyUrl, apiKey })
+    const result = await runProbe(
+      probe.kind,
+      provider,
+      { fetcher, proxyUrl, apiKey },
+      subscriptionRuntime
+    )
     return {
       ...baseEntry,
       status: 'available',
@@ -360,6 +411,16 @@ async function refreshProviderQuota(
       updatedAt: new Date().toISOString()
     }
   } catch (error) {
+    if (error instanceof ProviderQuotaMissingCredentialError) {
+      return {
+        ...baseEntry,
+        status: 'missing_credentials',
+        source: probe.source,
+        dashboardUrl: probe.dashboardUrl,
+        metrics: [],
+        message: error.message
+      }
+    }
     return {
       ...baseEntry,
       status: 'error',
@@ -374,8 +435,13 @@ async function refreshProviderQuota(
 
 async function runProbe(
   kind: ProviderQuotaProbeKind,
-  context: ProbeContext
+  provider: ModelProviderProfileV1,
+  context: ProbeContext,
+  subscriptionRuntime: Partial<SubscriptionQuotaRuntime>
 ): Promise<{ metrics: ProviderQuotaMetric[]; summary?: string }> {
+  if (isSubscriptionQuotaProbe(kind)) {
+    return runSubscriptionQuotaProbe(kind, provider, context, subscriptionRuntime)
+  }
   if (kind === 'deepseek') {
     return {
       metrics: parseDeepSeekQuota(
@@ -423,6 +489,16 @@ async function runProbe(
     }
   }
   return probeMiniMax(kind, context)
+}
+
+function isSubscriptionQuotaProbe(
+  kind: ProviderQuotaProbeKind
+): kind is SubscriptionQuotaProbeKind {
+  return kind === 'claude-subscription' ||
+    kind === 'codex-subscription' ||
+    kind === 'cursor-subscription' ||
+    kind === 'antigravity-subscription' ||
+    kind === 'gemini-cli-subscription'
 }
 
 async function probeMiniMax(

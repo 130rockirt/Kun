@@ -26,6 +26,14 @@ The system SHALL query recognized provider balance or quota APIs from the Electr
 - **WHEN** a custom provider uses a hostname not recognized by the quota registry
 - **THEN** the provider is marked unsupported and the system does not derive or request a quota URL from that custom base URL
 
+#### Scenario: Configured subscription provider
+- **WHEN** a configured Claude, ChatGPT/Codex, Cursor, Antigravity, or Gemini CLI subscription profile has usable existing login state
+- **THEN** the main process calls only that provider's canonical read-only quota endpoint and returns normalized subscription windows
+
+#### Scenario: Subscription provider without local login
+- **WHEN** a recognized subscription profile has no usable protected or official-client login state
+- **THEN** the provider is returned with a missing-credentials status without launching an interactive login
+
 ### Requirement: Quota results are normalized
 The system SHALL normalize provider-specific balance and quota payloads into provider entries containing zero or more display metrics with units, ratios, remaining values, and reset times when supplied.
 
@@ -85,3 +93,14 @@ The quota panel SHALL show loading, manual refresh, provider status, available m
 #### Scenario: Unsupported provider
 - **WHEN** a provider entry is unsupported
 - **THEN** the panel still shows that provider with an explanation that its quota API is not available in this phase
+
+### Requirement: Long quota lists remain scrollable
+The quota surface SHALL own vertical overflow inside the fixed right workspace and SHALL support mouse-wheel, trackpad, touch, and scrollbar navigation.
+
+#### Scenario: Provider cards exceed panel height
+- **WHEN** the rendered provider cards are taller than the available right-panel body
+- **THEN** the header remains visible and the body can scroll independently to the final provider card
+
+#### Scenario: Wheel input over quota cards
+- **WHEN** the user scrolls over a provider card
+- **THEN** the quota body consumes the vertical scroll without a parent workbench gesture preventing movement

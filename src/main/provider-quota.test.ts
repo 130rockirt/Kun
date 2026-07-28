@@ -10,6 +10,13 @@ import {
   parseOpenRouterQuota,
   parseZaiQuota
 } from './provider-quota'
+import {
+  decodeAntigravityUnifiedOAuth,
+  parseClaudeSubscriptionQuota,
+  parseCodexSubscriptionQuota,
+  parseCursorSubscriptionQuota,
+  parseGoogleCodeAssistQuota
+} from './provider-subscription-quota'
 
 function provider(
   id: string,
@@ -47,6 +54,21 @@ function settings(providers: ModelProviderProfileV1[], proxyUrl = ''): AppSettin
       proxy: { enabled: Boolean(proxyUrl), url: proxyUrl }
     }
   } as unknown as AppSettingsV1
+}
+
+function subscriptionProvider(
+  id: string,
+  kind: 'agent-sdk' | 'cursor-sdk' | 'antigravity-cli' | 'gemini-cli-api' | 'http'
+): ModelProviderProfileV1 {
+  return {
+    ...provider(id, id, id === 'codex'
+      ? 'https://chatgpt.com/backend-api/codex/responses'
+      : id === 'claude-subscription'
+        ? 'https://api.anthropic.com'
+        : '', '', id),
+    kind,
+    endpointFormat: 'custom_endpoint'
+  }
 }
 
 describe('provider quota parsers', () => {
@@ -229,6 +251,131 @@ describe('provider quota parsers', () => {
       usedPercent: 20
     })
   })
+
+  it('normalizes Claude and Codex subscription usage windows', () => {
+    expect(parseClaudeSubscriptionQuota({
+      five_hour: { utilization: 35, resets_at: '2027-01-15T09:00:00Z' },
+      seven_day: { utilization: 20, resets_at: '2027-01-20T09:00:00Z' }
+    })).toEqual([
+      {
+        id: 'five-hour',
+        label: '5-hour usage',
+        unit: 'percent',
+        usedPercent: 35,
+        resetsAt: '2027-01-15T09:00:00.000Z'
+      },
+      {
+        id: 'seven-day',
+        label: '7-day usage',
+        unit: 'percent',
+        usedPercent: 20,
+        resetsAt: '2027-01-20T09:00:00.000Z'
+      }
+    ])
+
+    expect(parseCodexSubscriptionQuota({
+      plan_type: 'plus',
+      rate_limit: {
+        primary_window: {
+          used_percent: 45,
+          reset_at: 1_800_000_000,
+          limit_window_seconds: 18_000
+        },
+        secondary_window: {
+          used_percent: 12,
+          reset_at: 1_800_086_400,
+          limit_window_seconds: 604_800
+        }
+      }
+    })).toMatchObject({
+      summary: 'plus',
+      metrics: [
+        { id: 'primary', label: '5-hour usage', usedPercent: 45 },
+        { id: 'secondary', label: '1-week usage', usedPercent: 12 }
+      ]
+    })
+  })
+
+  it('normalizes Cursor and Google subscription allowances', () => {
+    expect(parseCursorSubscriptionQuota({
+      billingCycleEnd: '2027-02-01T00:00:00Z',
+      membershipType: 'pro',
+      individualUsage: {
+        plan: {
+          enabled: true,
+          used: 750,
+          limit: 2_000,
+          remaining: 1_250,
+          totalPercentUsed: 37.5
+        },
+        onDemand: { enabled: true, used: 125, limit: 1_000, remaining: 875 }
+      }
+    })).toMatchObject({
+      summary: 'pro',
+      metrics: [
+        {
+          id: 'included-plan',
+          unit: 'USD',
+          used: 7.5,
+          limit: 20,
+          remaining: 12.5,
+          usedPercent: 37.5
+        },
+        {
+          id: 'on-demand',
+          used: 1.25,
+          limit: 10,
+          remaining: 8.75
+        }
+      ]
+    })
+
+    expect(parseGoogleCodeAssistQuota({
+      buckets: [{
+        modelId: 'gemini-pro',
+        remainingFraction: 0.65,
+        resetTime: '2027-01-16T00:00:00Z'
+      }]
+    })).toEqual([{
+      id: 'bucket-0',
+      label: 'gemini-pro',
+      unit: 'percent',
+      usedPercent: 35,
+      resetsAt: '2027-01-16T00:00:00.000Z'
+    }])
+  })
+
+  it('decodes the official Antigravity unified OAuth protobuf without exposing it', () => {
+    const field = (number: number, value: string | Buffer): Buffer => {
+      const bytes = Buffer.isBuffer(value) ? value : Buffer.from(value)
+      const varint = (input: number): Buffer => {
+        const output: number[] = []
+        let remaining = input
+        do {
+          const byte = remaining & 0x7f
+          remaining = Math.floor(remaining / 128)
+          output.push(remaining ? byte | 0x80 : byte)
+        } while (remaining)
+        return Buffer.from(output)
+      }
+      return Buffer.concat([varint((number << 3) | 2), varint(bytes.length), bytes])
+    }
+    const tokenInfo = Buffer.concat([
+      field(1, 'ya29.test-access-token'),
+      field(3, '1//test-refresh-token')
+    ]).toString('base64')
+    const wrapper = field(1, tokenInfo)
+    const entry = Buffer.concat([
+      field(1, 'oauthTokenInfoSentinelKey'),
+      field(2, wrapper)
+    ])
+    const encoded = field(1, entry).toString('base64')
+
+    expect(decodeAntigravityUnifiedOAuth(encoded)).toEqual({
+      accessToken: 'ya29.test-access-token',
+      refreshToken: '1//test-refresh-token'
+    })
+  })
 })
 
 describe('provider quota registry and refresh', () => {
@@ -242,6 +389,29 @@ describe('provider quota registry and refresh', () => {
     expect(classifyProviderQuotaProbe(
       provider('deepseek-proxy', 'DeepSeek proxy', 'https://gateway.example/v1', 'gateway-key', 'deepseek')
     )).toBeNull()
+  })
+
+  it('recognizes subscription probes only by their stable preset identity and expected kind', () => {
+    expect(classifyProviderQuotaProbe(
+      subscriptionProvider('claude-subscription', 'agent-sdk')
+    )?.kind).toBe('claude-subscription')
+    expect(classifyProviderQuotaProbe(
+      subscriptionProvider('codex', 'http')
+    )?.kind).toBe('codex-subscription')
+    expect(classifyProviderQuotaProbe(
+      subscriptionProvider('cursor-subscription', 'cursor-sdk')
+    )?.kind).toBe('cursor-subscription')
+    expect(classifyProviderQuotaProbe(
+      subscriptionProvider('gemini-subscription', 'antigravity-cli')
+    )?.kind).toBe('antigravity-subscription')
+    expect(classifyProviderQuotaProbe({
+      ...subscriptionProvider('claude-subscription', 'agent-sdk'),
+      kind: 'http'
+    })).toBeNull()
+    expect(classifyProviderQuotaProbe({
+      ...subscriptionProvider('codex', 'http'),
+      kind: 'agent-sdk'
+    })).toBeNull()
   })
 
   it('keeps every configured provider separate and does not request unsupported or keyless entries', async () => {
@@ -288,5 +458,98 @@ describe('provider quota registry and refresh', () => {
       message: 'The provider quota endpoint returned HTTP 500.'
     })
     expect(JSON.stringify(result)).not.toContain('sensitive upstream body')
+  })
+
+  it('uses existing subscription login state and fixed read-only endpoints', async () => {
+    const fetcher = vi.fn(async (url: string | URL, init?: RequestInit) => {
+      const requestUrl = url.toString()
+      const headers = new Headers(init?.headers)
+      if (requestUrl.endsWith('/api/oauth/usage')) {
+        expect(headers.get('authorization')).toBe('Bearer claude-secret')
+        expect(headers.get('anthropic-beta')).toBe('oauth-2025-04-20')
+        return new Response(JSON.stringify({
+          five_hour: { utilization: 10, resets_at: '2027-01-15T10:00:00Z' }
+        }))
+      }
+      if (requestUrl.endsWith('/wham/usage')) {
+        expect(headers.get('authorization')).toBe('Bearer codex-secret')
+        expect(headers.get('chatgpt-account-id')).toBe('acct-test')
+        return new Response(JSON.stringify({
+          plan_type: 'plus',
+          rate_limit: {
+            primary_window: {
+              used_percent: 20,
+              reset_at: 1_800_000_000,
+              limit_window_seconds: 18_000
+            }
+          }
+        }))
+      }
+      if (requestUrl.endsWith('/api/usage-summary')) {
+        expect(headers.get('cookie')).toBe('WorkosCursorSessionToken=session-secret')
+        return new Response(JSON.stringify({
+          membershipType: 'pro',
+          individualUsage: {
+            plan: { enabled: true, used: 100, limit: 2_000, remaining: 1_900 }
+          }
+        }))
+      }
+      if (requestUrl.endsWith(':loadCodeAssist')) {
+        expect(headers.get('authorization')).toBe('Bearer google-secret')
+        return new Response(JSON.stringify({
+          currentTier: { id: 'standard-tier', name: 'standard' },
+          cloudaicompanionProject: 'project-test'
+        }))
+      }
+      if (requestUrl.endsWith(':retrieveUserQuota')) {
+        return new Response(JSON.stringify({
+          buckets: [{ modelId: 'gemini-pro', remainingFraction: 0.8 }]
+        }))
+      }
+      throw new Error(`Unexpected URL: ${requestUrl}`)
+    })
+    const result = await listProviderQuotas(settings([
+      subscriptionProvider('claude-subscription', 'agent-sdk'),
+      subscriptionProvider('codex', 'http'),
+      subscriptionProvider('cursor-subscription', 'cursor-sdk'),
+      subscriptionProvider('gemini-subscription', 'antigravity-cli')
+    ]), fetcher, {
+      resolveClaudeToken: async () => 'claude-secret',
+      resolveCodexCredential: async () => ({
+        accessToken: 'codex-secret',
+        accountId: 'acct-test'
+      }),
+      resolveCursorSession: async () => ({
+        cookieHeader: 'WorkosCursorSessionToken=session-secret'
+      }),
+      resolveAntigravityCredential: async () => ({
+        accessToken: 'google-secret',
+        accountEmail: 'account@example.test'
+      })
+    })
+
+    expect(result.entries
+      .filter((entry) => entry.providerId !== 'deepseek')
+      .map((entry) => [entry.providerId, entry.status])).toEqual([
+      ['claude-subscription', 'available'],
+      ['codex', 'available'],
+      ['cursor-subscription', 'available'],
+      ['gemini-subscription', 'available']
+    ])
+    expect(JSON.stringify(result)).not.toMatch(/claude-secret|codex-secret|session-secret|google-secret/)
+  })
+
+  it('reports a missing subscription login without making a request', async () => {
+    const fetcher = vi.fn()
+    const result = await listProviderQuotas(settings([
+      subscriptionProvider('claude-subscription', 'agent-sdk')
+    ]), fetcher, {
+      resolveClaudeToken: async () => undefined
+    })
+    expect(result.entries.find((entry) => entry.providerId === 'claude-subscription')).toMatchObject({
+      providerId: 'claude-subscription',
+      status: 'missing_credentials'
+    })
+    expect(fetcher).not.toHaveBeenCalled()
   })
 })

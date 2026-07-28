@@ -84,7 +84,7 @@ export function ProviderQuotaPanel(): ReactElement {
   return (
     <section
       aria-label={t('providerQuotaTitle')}
-      className="flex h-full min-h-0 flex-col bg-ds-sidebar"
+      className="ds-no-drag flex h-full min-h-0 flex-col overflow-hidden bg-ds-sidebar"
     >
       <header className="shrink-0 border-b border-ds-border-muted px-4 py-3.5">
         <div className="flex items-start gap-3">
@@ -120,7 +120,11 @@ export function ProviderQuotaPanel(): ReactElement {
         ) : null}
       </header>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+      <div
+        data-provider-quota-scroller
+        className="h-0 min-h-0 flex-1 touch-pan-y overscroll-contain overflow-y-auto overflow-x-hidden px-3 py-3 [scrollbar-gutter:stable]"
+        onWheel={(event) => event.stopPropagation()}
+      >
         {loading && !result ? (
           <div role="status" className="flex h-full min-h-48 flex-col items-center justify-center gap-3 text-ds-muted">
             <Loader2 className="h-5 w-5 animate-spin" strokeWidth={1.8} />
