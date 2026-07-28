@@ -182,6 +182,53 @@ describe('GraphScheduler', () => {
     ]))
   }, 15_000)
 
+  it('allows the final admitted attempt to finish at the global attempt limit', async () => {
+    const source = {
+      ...testGraphPlan().nodes[0]!,
+      maxAttempts: 1
+    }
+    const plan = testGraphPlan({
+      nodes: [source],
+      edges: [],
+      budget: {
+        ...testGraphPlan().budget,
+        maxAttemptsPerNode: 1
+      },
+      completionNodeIds: [source.id],
+      autoStart: true
+    })
+    const delegation = {
+      enabled: () => true,
+      runChild: async (input: {
+        onQueued?: (id: string) => Promise<void> | void
+        onRunning?: (id: string) => Promise<void> | void
+        signal?: AbortSignal
+      }) => {
+        await input.onQueued?.('child_final_attempt')
+        await input.onRunning?.('child_final_attempt')
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(resolve, 50)
+          input.signal?.addEventListener('abort', () => {
+            clearTimeout(timer)
+            reject(input.signal?.reason ?? new Error('aborted'))
+          }, { once: true })
+        })
+        return testCompletedChild('child_final_attempt', 'PASS')
+      }
+    } as unknown as DelegationRuntime
+    const harness = await schedulerHarness(plan, () => delegation)
+    harness.scheduler.start()
+    const completed = await waitFor(async () => {
+      const run = await harness.store.get('run_harness')
+      return run?.status === 'completed' ? run : null
+    })
+
+    expect(completed.budget.attempts).toBe(1)
+    expect(completed.nodes.research.status).toBe('accepted')
+    expect(completed.nodes.research.attempts[0]?.status).toBe('accepted')
+    await harness.scheduler.stop()
+  }, 15_000)
+
   it('resumes an awaiting-human run after a durable user review', async () => {
     const source = testGraphPlan().nodes[0]!
     const plan = testGraphPlan({

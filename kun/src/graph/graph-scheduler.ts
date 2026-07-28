@@ -23,8 +23,7 @@ import {
   maxBudgetRatio,
   outcomeOf,
   rotate,
-  terminalRequiredFailure,
-  totalAttemptLimit
+  terminalRequiredFailure
 } from './graph-scheduler-policy.js'
 import type {
   GraphSchedulerOptions,
@@ -409,8 +408,11 @@ export class GraphScheduler extends GraphAttemptScheduler {
     }
     const exhausted =
       run.budget.elapsedMs >= run.budget.limits.maxWallTimeMs ||
-      run.budget.attempts >= totalAttemptLimit(run) ||
       run.budget.artifactBytes >= run.budget.limits.maxArtifactBytes
+    // Creating an attempt consumes one slot, but reaching the exact attempt
+    // limit must not abort that in-flight worker. scheduleNode fences any
+    // subsequent attempt before creation, and terminalRequiredFailure handles
+    // a node that finishes unsuccessfully without retry capacity.
     if (exhausted) return this.failForBudget(run, 'GraphRun hard budget exhausted')
     const ratio = maxBudgetRatio(run)
     if (ratio >= run.budget.limits.warningRatio) {
