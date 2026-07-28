@@ -13,6 +13,7 @@ import {
   activeSideConversationOrdinal,
   SideConversationPanel
 } from './SideConversationPanel'
+import { FloatingComposer } from './FloatingComposer'
 
 const firstSide: SideConversation = {
   threadId: 'side-1',
@@ -45,6 +46,7 @@ const firstSide: SideConversation = {
   lastSeq: 4,
   input: 'independent branch draft',
   model: 'gpt-5.6',
+  providerId: 'codex',
   reasoningEffort: 'low',
   busy: false,
   turnId: null,
@@ -89,6 +91,7 @@ describe('SideConversationPanel', () => {
       runtimeConnection: 'ready',
       busy: false,
       composerModel: 'gpt-5.6',
+      composerProviderId: 'codex',
       composerPickList: ['gpt-5.6'],
       composerModelGroups: [],
       composerReasoningEffort: 'low',
@@ -128,6 +131,29 @@ describe('SideConversationPanel', () => {
     expect(activeSideConversationOrdinal([firstSide, secondSide], 'side-1')).toBe(1)
     expect(activeSideConversationOrdinal([firstSide, secondSide], 'side-2')).toBe(2)
     expect(activeSideConversationOrdinal([firstSide, secondSide], null)).toBe(3)
+  })
+
+  it('keeps provider and model changes local to the active branch conversation', () => {
+    let renderer: ReactTestRenderer
+    act(() => {
+      renderer = create(createElement(SideConversationPanel, { variant: 'docked' }))
+    })
+
+    const composer = renderer!.root.findByType(FloatingComposer)
+    expect(composer.props.composerProviderId).toBe('codex')
+
+    act(() => {
+      composer.props.onComposerModelChange('composer-2.5', 'cursor-subscription')
+    })
+
+    expect(useChatStore.getState().sideConversations['side-1']).toMatchObject({
+      model: 'composer-2.5',
+      providerId: 'cursor-subscription'
+    })
+    expect(useChatStore.getState().composerModel).toBe('gpt-5.6')
+    expect(useChatStore.getState().composerProviderId).toBe('codex')
+
+    act(() => renderer!.unmount())
   })
 
   it('can return from a new-branch draft to the only existing branch', () => {

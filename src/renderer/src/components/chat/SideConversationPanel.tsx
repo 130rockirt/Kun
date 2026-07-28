@@ -171,6 +171,7 @@ export function SideConversationPanel({
   const { t, i18n } = useTranslation('common')
   const [draftInput, setDraftInput] = useState('')
   const [draftModel, setDraftModel] = useState('')
+  const [draftProviderId, setDraftProviderId] = useState('')
   const [draftReasoningEffort, setDraftReasoningEffort] = useState('max')
   const [minimized, setMinimized] = useState(false)
   const [switchMenuOpen, setSwitchMenuOpen] = useState(false)
@@ -189,6 +190,7 @@ export function SideConversationPanel({
       workspaceRoot: s.workspaceRoot,
       runtimeConnection: s.runtimeConnection,
       composerModel: s.composerModel,
+      composerProviderId: s.composerProviderId,
       composerPickList: s.composerPickList,
       composerModelGroups: s.composerModelGroups,
       composerReasoningEffort: s.composerReasoningEffort,
@@ -231,6 +233,9 @@ export function SideConversationPanel({
     ? t('sidePanelTabTitle', { index: ordinal })
     : t('sidePanelNewTabTitle')
   const effectiveDraftModel = draftModel || sideData.composerModel
+  const effectiveDraftProviderId = draftModel
+    ? draftProviderId
+    : sideData.composerProviderId
   const effectiveDraftReasoningEffort =
     draftReasoningEffort || sideData.composerReasoningEffort || 'max'
 
@@ -239,8 +244,14 @@ export function SideConversationPanel({
     previousParentRef.current = sideData.parentThreadId
     setDraftInput('')
     setDraftModel(sideData.composerModel)
+    setDraftProviderId(sideData.composerProviderId)
     setDraftReasoningEffort(sideData.composerReasoningEffort || 'max')
-  }, [sideData.composerModel, sideData.composerReasoningEffort, sideData.parentThreadId])
+  }, [
+    sideData.composerModel,
+    sideData.composerProviderId,
+    sideData.composerReasoningEffort,
+    sideData.parentThreadId
+  ])
 
   useEffect(() => {
     const previous = previousActiveRef.current
@@ -248,8 +259,15 @@ export function SideConversationPanel({
     if (!showDraft || previous === undefined || previous === null) return
     setDraftInput('')
     setDraftModel(sideData.composerModel)
+    setDraftProviderId(sideData.composerProviderId)
     setDraftReasoningEffort(sideData.composerReasoningEffort || 'max')
-  }, [activeId, showDraft, sideData.composerModel, sideData.composerReasoningEffort])
+  }, [
+    activeId,
+    showDraft,
+    sideData.composerModel,
+    sideData.composerProviderId,
+    sideData.composerReasoningEffort
+  ])
 
   useEffect(() => {
     onTitleChange?.(reportedTitle)
@@ -309,6 +327,7 @@ export function SideConversationPanel({
     setDraftInput('')
     void sideData.spawnSideConversation(text, {
       model: effectiveDraftModel,
+      providerId: effectiveDraftProviderId,
       reasoningEffort: effectiveDraftReasoningEffort
     })
   }
@@ -348,6 +367,7 @@ export function SideConversationPanel({
 
   const composerInput = activeSide?.input ?? draftInput
   const composerModel = activeSide?.model ?? effectiveDraftModel
+  const composerProviderId = activeSide?.providerId ?? effectiveDraftProviderId
   const composerReasoningEffort =
     activeSide?.reasoningEffort ?? effectiveDraftReasoningEffort
   const runtimeReady = sideData.runtimeConnection === 'ready'
@@ -514,13 +534,18 @@ export function SideConversationPanel({
           runtimeReady={runtimeReady}
           hasActiveThread={Boolean(sideData.parentThreadId)}
           composerModel={composerModel}
+          composerProviderId={composerProviderId}
           composerPickList={sideData.composerPickList}
           composerModelGroups={sideData.composerModelGroups}
           composerReasoningEffort={composerReasoningEffort}
           modelControlVariant="split"
-          onComposerModelChange={(model) => {
-            if (activeSide) sideData.setSideModel(activeSide.threadId, model)
-            else setDraftModel(model)
+          onComposerModelChange={(model, providerId) => {
+            if (activeSide) {
+              sideData.setSideModel(activeSide.threadId, model, providerId)
+            } else {
+              setDraftModel(model)
+              setDraftProviderId(providerId?.trim() ?? '')
+            }
           }}
           onComposerReasoningEffortChange={(effort) => {
             if (activeSide) sideData.setSideReasoningEffort(activeSide.threadId, effort)

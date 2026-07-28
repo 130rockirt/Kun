@@ -42,7 +42,12 @@ class FakeProvider implements AgentProvider {
   async sendUserMessage(
     threadId: string,
     text: string,
-    options?: { model?: string; reasoningEffort?: string }
+    options?: {
+      model?: string
+      providerId?: string
+      accountId?: string
+      reasoningEffort?: string
+    }
   ) {
     this.sendMock(threadId, text, options)
     return { threadId, turnId: `turn_${threadId}_${Date.now()}` }
@@ -140,7 +145,9 @@ function buildHarness(overrides: Partial<ChatState> = {}): Harness {
     turnReasoningLastAtByUserId: {},
     inspectorSelectedId: null,
     composerModel: 'deepseek-chat',
+    composerProviderId: 'deepseek',
     composerPickList: ['deepseek-chat'],
+    composerModelGroups: [],
     queuedMessages: [],
     watchTurnCompletion: {},
     unreadThreadIds: {},
@@ -294,12 +301,14 @@ describe('chat-store-side-actions', () => {
     const { actions, state, provider } = buildHarness()
     const id = await actions.spawnSideConversation('use the draft controls', {
       model: 'custom-side-model',
+      providerId: 'custom-side-provider',
       reasoningEffort: 'low'
     })
 
     expect(id).toBe('side_thr_main')
     expect(state.sideConversations[id!]).toMatchObject({
       model: 'custom-side-model',
+      providerId: 'custom-side-provider',
       reasoningEffort: 'low'
     })
     expect(provider.sendMock).toHaveBeenCalledWith(
@@ -307,7 +316,44 @@ describe('chat-store-side-actions', () => {
       'use the draft controls',
       expect.objectContaining({
         model: 'custom-side-model',
+        providerId: 'custom-side-provider',
         reasoningEffort: 'low'
+      })
+    )
+  })
+
+  it('keeps the selected provider bound to the side model without changing the main composer', async () => {
+    const { actions, state, provider } = buildHarness({
+      composerModel: 'gpt-5.6-sol',
+      composerProviderId: 'codex',
+      composerPickList: ['gpt-5.6-sol', 'composer-2.5'],
+      composerModelGroups: [{
+        providerId: 'cursor-subscription',
+        accountId: 'cursor-account',
+        label: 'Cursor subscription',
+        modelIds: ['composer-2.5']
+      }]
+    })
+
+    const id = await actions.spawnSideConversation()
+    actions.setSideModel(id!, 'composer-2.5', 'cursor-subscription')
+    const sent = await actions.sendSideMessage(id!, 'route through Cursor')
+
+    expect(id).toBe('side_thr_main')
+    expect(sent).toBe(true)
+    expect(state.sideConversations[id!]).toMatchObject({
+      model: 'composer-2.5',
+      providerId: 'cursor-subscription'
+    })
+    expect(state.composerModel).toBe('gpt-5.6-sol')
+    expect(state.composerProviderId).toBe('codex')
+    expect(provider.sendMock).toHaveBeenCalledWith(
+      id,
+      'route through Cursor',
+      expect.objectContaining({
+        model: 'composer-2.5',
+        providerId: 'cursor-subscription',
+        accountId: 'cursor-account'
       })
     )
   })

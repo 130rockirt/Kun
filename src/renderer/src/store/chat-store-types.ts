@@ -175,6 +175,8 @@ export type SideConversation = {
   lastSeq: number
   input: string
   model: string
+  /** Provider paired with `model`; kept local to this side conversation. */
+  providerId: string
   reasoningEffort: string
   busy: boolean
   turnId: string | null
@@ -189,6 +191,7 @@ export type SidePanelState = {
 
 export type SideConversationDraftOptions = {
   model?: string
+  providerId?: string
   reasoningEffort?: string
 }
 
@@ -418,7 +421,7 @@ export type ChatState = {
   sendSideMessage: (sideId: string, text: string) => Promise<boolean>
   interruptSide: (sideId: string) => Promise<void>
   setSideInput: (sideId: string, text: string) => void
-  setSideModel: (sideId: string, model: string) => void
+  setSideModel: (sideId: string, model: string, providerId?: string) => void
   setSideReasoningEffort: (sideId: string, effort: string) => void
   selectSideConversation: (sideId: string) => void
   setSidePanelOpen: (open: boolean) => void

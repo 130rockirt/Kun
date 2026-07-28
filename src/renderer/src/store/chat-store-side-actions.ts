@@ -13,6 +13,10 @@ import type {
   SideConversationDraftOptions,
   SidePanelState
 } from './chat-store-types'
+import {
+  accountIdForComposerSelection,
+  providerIdForComposerModel
+} from './chat-store-helpers'
 import { upsertUserBlock } from './chat-store-runtime-helpers'
 
 type SideContext = {
@@ -47,6 +51,28 @@ function defaultSideModel(state: ChatState, parentThreadId: string): string {
   if (parent?.model) return parent.model
   if (state.composerModel) return state.composerModel
   return DEFAULT_KUN_MODEL
+}
+
+function defaultSideProviderId(
+  state: ChatState,
+  parentThreadId: string,
+  model: string
+): string {
+  const normalizedModel = model.trim().toLowerCase()
+  const parent = state.threads.find((thread) => thread.id === parentThreadId)
+  if (
+    parent?.providerId?.trim() &&
+    parent.model.trim().toLowerCase() === normalizedModel
+  ) {
+    return parent.providerId.trim()
+  }
+  if (
+    state.composerProviderId.trim() &&
+    state.composerModel.trim().toLowerCase() === normalizedModel
+  ) {
+    return state.composerProviderId.trim()
+  }
+  return providerIdForComposerModel(state.composerModelGroups, model)
 }
 
 function sideReasoningEffortRequestValue(value: string): string | undefined {
@@ -558,6 +584,10 @@ export function createSideActions(ctx: SideContext): Pick<
       const now = new Date().toISOString()
       const inheritedAt = new Date().toISOString()
       const draftModel = options?.model?.trim() || defaultSideModel(state, parentId)
+      const draftProviderId =
+        options && Object.prototype.hasOwnProperty.call(options, 'providerId')
+          ? options.providerId?.trim() ?? ''
+          : defaultSideProviderId(state, parentId, draftModel)
       const draftReasoningEffort =
         sideReasoningEffortRequestValue(options?.reasoningEffort ?? '') ?? 'max'
       const side: SideConversation = {
@@ -572,6 +602,7 @@ export function createSideActions(ctx: SideContext): Pick<
         lastSeq: 0,
         input: '',
         model: draftModel,
+        providerId: draftProviderId,
         reasoningEffort: draftReasoningEffort,
         busy: false,
         turnId: null,
@@ -610,9 +641,17 @@ export function createSideActions(ctx: SideContext): Pick<
       if (!trimmed) return false
       const provider = ctx.getProvider()
       const reasoningEffort = sideReasoningEffortRequestValue(side.reasoningEffort)
+      const providerId = side.providerId.trim()
+      const accountId = accountIdForComposerSelection(
+        state.composerModelGroups,
+        providerId,
+        side.model
+      )
       try {
         const { turnId } = await provider.sendUserMessage(sideId, trimmed, {
           model: side.model,
+          ...(providerId ? { providerId } : {}),
+          ...(accountId ? { accountId } : {}),
           ...(reasoningEffort ? { reasoningEffort } : {})
         })
         ctx.set((s) =>
@@ -662,8 +701,14 @@ export function createSideActions(ctx: SideContext): Pick<
       ctx.set((s) => patchSide(s, sideId, (cur) => ({ ...cur, input: text })))
     },
 
-    setSideModel: (sideId, model) => {
-      ctx.set((s) => patchSide(s, sideId, (cur) => ({ ...cur, model })))
+    setSideModel: (sideId, model, providerId) => {
+      ctx.set((s) =>
+        patchSide(s, sideId, (cur) => ({
+          ...cur,
+          model,
+          providerId: providerId?.trim() ?? ''
+        }))
+      )
     },
 
     setSideReasoningEffort: (sideId, effort) => {
