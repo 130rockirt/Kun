@@ -164,7 +164,12 @@ export function validateWorkerResult(
     const value = field === 'checks'
       ? (result.reportedChecks?.length ? result.reportedChecks : result.checks)
       : result[field]
-    if (value === undefined || value === '' || (Array.isArray(value) && value.length === 0)) {
+    const emptyArrayIsValid = field === 'changedFiles' || field === 'risks'
+    if (
+      value === undefined ||
+      value === '' ||
+      (Array.isArray(value) && value.length === 0 && !emptyArrayIsValid)
+    ) {
       issues.push({
         code: 'required_result_field',
         path: [field],
@@ -265,6 +270,15 @@ function parseJsonObject(text: string): Record<string, unknown> | null {
 function normalizeChecks(value: unknown): GraphCheckResultV1[] {
   if (!Array.isArray(value)) return []
   return value.slice(0, 128).flatMap((entry, index) => {
+    if (typeof entry === 'string' && entry.trim()) {
+      const summary = entry.trim().slice(0, 4_096)
+      return [{
+        name: summary.slice(0, 256),
+        status: 'not_run',
+        summary: `Unstructured worker-reported check: ${summary}`.slice(0, 4_096),
+        artifactRefs: []
+      }]
+    }
     if (!entry || typeof entry !== 'object') return []
     const item = entry as Record<string, unknown>
     const status = ['passed', 'failed', 'skipped', 'not_run'].includes(String(item.status))

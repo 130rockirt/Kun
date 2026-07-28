@@ -8,10 +8,12 @@ import { applyGraphEvent } from './graph-reducer.js'
 import {
   dependencyDecision,
   deterministicReview,
+  parseWorkerResult,
   validateWorkerResult
 } from './graph-scheduler-policy.js'
 import {
   testAssignmentSnapshot,
+  testCompletedChild,
   testGraphEnvelope,
   testGraphPlan
 } from './graph-test-fixtures.test-support.js'
@@ -178,5 +180,43 @@ describe('Graph deterministic evidence', () => {
     expect(result.issues).toContainEqual(expect.objectContaining({
       code: 'missing_required_artifact'
     }))
+  })
+
+  it('accepts explicit empty change/risk arrays and normalizes string checks', () => {
+    const allFieldsProjection: GraphNodeProjectionV1 = {
+      ...projection,
+      node: {
+        ...projection.node,
+        completion: {
+          ...projection.node.completion,
+          requiredResultFields: [
+            'summary',
+            'changedFiles',
+            'checks',
+            'evidence',
+            'risks'
+          ]
+        }
+      }
+    }
+    const child = {
+      ...testCompletedChild('child_no_tools', 'unused'),
+      summary: JSON.stringify({
+        summary: 'PASS',
+        changedFiles: [],
+        checks: ['PASS'],
+        evidence: ['No tools or files were used.'],
+        risks: []
+      }),
+      evidence: undefined
+    }
+    const result = parseWorkerResult(child)
+    expect(result.reportedChecks).toEqual([
+      expect.objectContaining({
+        name: 'PASS',
+        status: 'not_run'
+      })
+    ])
+    expect(validateWorkerResult(allFieldsProjection, result).valid).toBe(true)
   })
 })

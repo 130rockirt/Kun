@@ -292,7 +292,11 @@ export abstract class GraphAttemptScheduler {
         },
         security: graphWorkerSecuritySnapshot(attempt.assignment, context.artifactRefs),
         toolPolicyCeiling: attempt.assignment.toolPolicy === 'readOnly' ? 'readOnly' : undefined,
-        returnFormat: 'evidence',
+        // Graph owns its structured result and evidence validation. The
+        // delegation runtime's `evidence` format derives evidence only from
+        // successful tool calls, which incorrectly rejects valid no-tool
+        // workers even when their JSON result contains explicit evidence.
+        returnFormat: 'summary',
         onQueued: (childId) => {
           boundChildId = childId
           this.options.workerSessions.bind(childId, {

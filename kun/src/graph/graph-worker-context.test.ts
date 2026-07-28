@@ -177,6 +177,8 @@ describe('buildGraphWorkerContext', () => {
     expect(context.prompt).not.toContain('artifact_lead_only')
     expect(context.prompt).toContain('Phase guidance is visible.')
     expect(context.prompt).not.toContain('LEAD-ONLY GUIDANCE')
+    expect(context.prompt).toContain('checks ({ name, status:')
+    expect(context.prompt).toContain('Empty changedFiles and risks arrays')
   })
 
   it('keeps host boundary instructions when untrusted content is truncated', () => {
