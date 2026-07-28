@@ -38,6 +38,13 @@ describe('ProviderQuotaService', () => {
       baseUrl: undefined
     }))?.kind).toBe('claude-subscription')
     expect(classifyProviderQuotaProbe(profile({
+      id: 'opencode-go',
+      name: 'OpenCode Go',
+      presetId: 'opencode-go',
+      baseUrl: 'https://opencode.ai/zen/go/v1',
+      apiKey: ''
+    }))?.kind).toBe('opencode-go-local')
+    expect(classifyProviderQuotaProbe(profile({
       id: 'lookalike',
       presetId: undefined,
       baseUrl: 'https://api.deepseek.com.attacker.example'
@@ -109,6 +116,48 @@ describe('ProviderQuotaService', () => {
     expect(JSON.stringify(result)).not.toContain('quota-secret')
     expect(fetcher).toHaveBeenCalledTimes(2)
     expect(fetcher.mock.calls.every((call) => call[2] === 'http://127.0.0.1:7890')).toBe(true)
+  })
+
+  it('shows OpenCode Go local usage in the TUI quota service without an API key', async () => {
+    const fetcher = vi.fn()
+    const service = new ProviderQuotaService({
+      loadSource: async () => ({
+        profiles: [profile({
+          id: 'opencode-go',
+          name: 'OpenCode Go',
+          presetId: 'opencode-go',
+          baseUrl: 'https://opencode.ai/zen/go/v1',
+          apiKey: ''
+        })],
+        proxyUrl: ''
+      }),
+      fetcher,
+      nowIso: () => '2026-07-28T01:31:00.000Z',
+      subscriptionRuntime: {
+        resolveOpenCodeGoQuota: async () => ({
+          summary: 'Local estimate · $12 / $30 / $60 plan limits',
+          metrics: [{
+            id: 'five-hour',
+            label: '5-hour usage',
+            unit: 'USD',
+            used: 3,
+            limit: 12,
+            remaining: 9,
+            usedPercent: 25
+          }]
+        })
+      }
+    })
+
+    await expect(service.list()).resolves.toMatchObject({
+      entries: [{
+        providerId: 'opencode-go',
+        status: 'available',
+        source: 'OpenCode Go local usage estimate',
+        metrics: [expect.objectContaining({ id: 'five-hour', usedPercent: 25 })]
+      }]
+    })
+    expect(fetcher).not.toHaveBeenCalled()
   })
 })
 

@@ -31,7 +31,8 @@ function resolveElectronExecutable() {
 const vitest = join(dirname(fileURLToPath(import.meta.url)), '..', 'node_modules', 'vitest', 'vitest.mjs')
 const doctorFiles = [
   'tests/thread-store-doctor.test.ts',
-  'tests/thread-store-doctor-race.test.ts'
+  'tests/thread-store-doctor-race.test.ts',
+  'src/services/opencode-go-local-quota.test.ts'
 ]
 
 function runVitest(executable, args, env = process.env) {

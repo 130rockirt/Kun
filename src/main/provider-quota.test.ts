@@ -479,6 +479,13 @@ describe('provider quota registry and refresh', () => {
     expect(classifyProviderQuotaProbe(
       subscriptionProvider('codex', 'http')
     )?.kind).toBe('codex-subscription')
+    expect(classifyProviderQuotaProbe(provider(
+      'opencode-go',
+      'OpenCode Go',
+      'https://opencode.ai/zen/go/v1',
+      '',
+      'opencode-go'
+    ))?.kind).toBe('opencode-go-local')
     expect(classifyProviderQuotaProbe(
       provider(
         'codex',
@@ -741,5 +748,59 @@ describe('provider quota registry and refresh', () => {
       status: 'missing_credentials'
     })
     expect(fetcher).not.toHaveBeenCalled()
+  })
+
+  it('reads OpenCode Go local usage without requiring an API key or network request', async () => {
+    const fetcher = vi.fn()
+    const result = await listProviderQuotas(settings([
+      provider(
+        'opencode-go',
+        'OpenCode Go',
+        'https://opencode.ai/zen/go/v1',
+        '',
+        'opencode-go'
+      )
+    ]), fetcher, {
+      resolveOpenCodeGoQuota: async () => ({
+        summary: 'Local estimate · $12 / $30 / $60 plan limits',
+        metrics: [{
+          id: 'weekly',
+          label: 'Weekly usage',
+          unit: 'USD',
+          used: 9,
+          limit: 30,
+          remaining: 21,
+          usedPercent: 30
+        }]
+      })
+    })
+
+    expect(result.entries.find((entry) => entry.providerId === 'opencode-go')).toMatchObject({
+      providerId: 'opencode-go',
+      status: 'available',
+      source: 'OpenCode Go local usage estimate',
+      summary: 'Local estimate · $12 / $30 / $60 plan limits',
+      metrics: [expect.objectContaining({ id: 'weekly', usedPercent: 30 })]
+    })
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+
+  it('explains when OpenCode Go has no local usage history yet', async () => {
+    const result = await listProviderQuotas(settings([
+      provider(
+        'opencode-go',
+        'OpenCode Go',
+        'https://opencode.ai/zen/go/v1',
+        '',
+        'opencode-go'
+      )
+    ]), vi.fn(), {
+      resolveOpenCodeGoQuota: async () => undefined
+    })
+
+    expect(result.entries.find((entry) => entry.providerId === 'opencode-go')).toMatchObject({
+      status: 'missing_credentials',
+      message: 'Use OpenCode Go locally first so its local usage database contains history.'
+    })
   })
 })

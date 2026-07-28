@@ -125,6 +125,17 @@ export function classifyProviderQuotaProbe(
   const hostname = exactHostname(provider.baseUrl)
 
   if (
+    stableId === 'opencode-go' &&
+    isHttpQuotaPresetKind(provider.kind) &&
+    hostname === 'opencode.ai'
+  ) {
+    return {
+      kind: 'opencode-go-local',
+      source: 'OpenCode Go local usage estimate',
+      dashboardUrl: 'https://opencode.ai'
+    }
+  }
+  if (
     stableId === 'kimi-code' &&
     isHttpQuotaPresetKind(provider.kind) &&
     hostname === 'api.kimi.com'
@@ -550,7 +561,8 @@ function isSubscriptionQuotaProbe(
     kind === 'grok-subscription' ||
     kind === 'cursor-subscription' ||
     kind === 'antigravity-subscription' ||
-    kind === 'gemini-cli-subscription'
+    kind === 'gemini-cli-subscription' ||
+    kind === 'opencode-go-local'
 }
 
 async function probeMiniMax(

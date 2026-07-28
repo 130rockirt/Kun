@@ -117,7 +117,7 @@ The popover SHALL remain visually clear on Windows without requiring macOS-style
 - **THEN** the popover uses system colors and visible control outlines without relying on gradients, transparency, or status color alone
 
 ### Requirement: Configured subscription providers use supported read-only quota sources
-The quota service SHALL recognize configured ChatGPT/Codex, Kimi Code, and Grok subscription presets and query their fixed read-only quota endpoints with existing provider or CLI credentials.
+The quota service SHALL recognize configured ChatGPT/Codex, Kimi Code, Grok, and OpenCode Go subscription presets and query their supported read-only sources with existing provider or local CLI state.
 
 #### Scenario: ChatGPT preset omits HTTP kind
 - **WHEN** a configured ChatGPT/Codex preset has no explicit provider `kind`
@@ -134,3 +134,11 @@ The quota service SHALL recognize configured ChatGPT/Codex, Kimi Code, and Grok 
 #### Scenario: Grok billing rejects bearer-only access
 - **WHEN** grok.com requires a browser session that is not available to Kun
 - **THEN** the service reports an actionable provider authentication error instead of marking Grok unsupported
+
+#### Scenario: OpenCode Go has local usage history
+- **WHEN** the OpenCode database contains assistant cost rows for the `opencode-go` provider
+- **THEN** the service returns locally estimated 5-hour, weekly, and monthly usage windows and labels their local source
+
+#### Scenario: OpenCode Go has no local usage history
+- **WHEN** the OpenCode database is missing or has no `opencode-go` usage rows
+- **THEN** the service reports that OpenCode Go must be used locally first instead of marking the provider unsupported

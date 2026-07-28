@@ -31,3 +31,10 @@
 - [x] 5.2 Add and test Kimi Code weekly and five-hour quota parsing from the official usages endpoint.
 - [x] 5.3 Add and test Grok bearer-authenticated gRPC-web billing parsing with Grok CLI auth fallback and actionable upstream errors.
 - [x] 5.4 Run focused tests, typecheck, build, lint, and `git diff --check`; commit the compatibility follow-up to local `develop`.
+
+## 6. OpenCode Go local quota compatibility
+
+- [x] 6.1 Add a shared, cross-platform, read-only OpenCode SQLite quota reader matching CodexBar's local cost windows.
+- [x] 6.2 Register OpenCode Go in both Electron GUI and Kun/TUI quota services with an actionable missing-history state.
+- [x] 6.3 Add focused local-reader, GUI-service, and Kun-service regression tests.
+- [x] 6.4 Run focused tests, typecheck, build, lint, and `git diff --check`; commit only the OpenCode Go follow-up to local `develop`.

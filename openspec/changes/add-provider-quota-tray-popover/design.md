@@ -79,6 +79,13 @@ cookies. If xAI rejects bearer-only billing, the provider remains recognized and
 returns an actionable request/authentication error instead of an inaccurate
 unsupported state.
 
+OpenCode Go has no API-key quota endpoint. Kun follows CodexBar's safe local-first
+path by opening the existing OpenCode SQLite database read-only and deriving the
+5-hour, weekly, and monthly plan windows from `opencode-go` assistant costs. The
+source is labeled as a local estimate, supports XDG/macOS/Linux locations plus the
+Windows user-profile `.local/share` location, and never imports browser cookies or mutates the
+OpenCode database.
+
 ### Refresh on every show while retaining stale data
 
 The main process emits a refresh event after showing an already-loaded popover. The renderer also loads on mount and supports manual refresh. A refresh failure leaves the previous result visible with an inline error. Duplicate refreshes are coalesced in the component.
@@ -105,6 +112,9 @@ Windows normally reports the notification-area icon at the bottom edge of a disp
 - [Grok billing may require a grok.com browser session] → Reuse only existing OAuth
   state in this phase and report the upstream authentication limitation explicitly;
   do not read browser cookies without a separate opt-in design.
+- [OpenCode Go local costs are not an authoritative server snapshot] → Label the
+  source and summary as a local estimate, keep the database read-only, and report
+  missing local history instead of inventing usage.
 
 ## Migration Plan
 

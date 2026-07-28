@@ -6,6 +6,10 @@ import { promisify } from 'node:util'
 import type { ProviderQuotaMetric } from '../contracts/provider-quota.js'
 import { GeminiCliOAuthSource } from '../adapters/model/gemini-cli-oauth.js'
 import { parseStoredCodexOAuthCredentials } from './codex-oauth-credential-refresher.js'
+import {
+  readOpenCodeGoLocalQuota,
+  type OpenCodeGoLocalQuotaResult
+} from './opencode-go-local-quota.js'
 
 const execFileAsync = promisify(execFile)
 const QUOTA_TIMEOUT_MS = 12_000
@@ -27,6 +31,7 @@ export type SubscriptionQuotaProbeKind =
   | 'cursor-subscription'
   | 'antigravity-subscription'
   | 'gemini-cli-subscription'
+  | 'opencode-go-local'
 
 export type ProviderQuotaFetch = (
   input: string | URL,
@@ -59,6 +64,7 @@ export type SubscriptionQuotaRuntime = {
   resolveCursorSession(): Promise<CursorSession | undefined>
   resolveAntigravityCredential(context: ProbeContext): Promise<GoogleCredential | undefined>
   resolveGeminiCliToken(context: ProbeContext): Promise<string | undefined>
+  resolveOpenCodeGoQuota(): Promise<OpenCodeGoLocalQuotaResult | undefined>
 }
 
 export class ProviderQuotaMissingCredentialError extends Error {
@@ -138,6 +144,15 @@ export async function runSubscriptionQuotaProbe(
       )
     }
     return probeGoogleCodeAssistQuota(credential, context)
+  }
+  if (kind === 'opencode-go-local') {
+    const quota = await runtime.resolveOpenCodeGoQuota()
+    if (!quota) {
+      throw new ProviderQuotaMissingCredentialError(
+        'Use OpenCode Go locally first so its local usage database contains history.'
+      )
+    }
+    return quota
   }
   const accessToken = await runtime.resolveGeminiCliToken(context)
   if (!accessToken) {
@@ -308,6 +323,7 @@ const defaultRuntime: SubscriptionQuotaRuntime = {
   resolveCodexCredential,
   resolveCursorSession,
   resolveAntigravityCredential,
+  resolveOpenCodeGoQuota: readOpenCodeGoLocalQuota,
   async resolveGeminiCliToken(context) {
     const fetchImpl = ((input: string | URL | Request, init?: RequestInit) =>
       context.fetcher(

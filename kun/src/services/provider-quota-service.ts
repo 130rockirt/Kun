@@ -192,6 +192,17 @@ export function classifyProviderQuotaProbe(
     }
   }
   const hostname = exactHostname(provider.baseUrl)
+  if (
+    stableId === 'opencode-go' &&
+    provider.kind === 'http' &&
+    hostname === 'opencode.ai'
+  ) {
+    return {
+      kind: 'opencode-go-local',
+      source: 'OpenCode Go local usage estimate',
+      dashboardUrl: 'https://opencode.ai'
+    }
+  }
   if (hostname === 'api.deepseek.com') {
     return {
       kind: 'deepseek',
@@ -454,7 +465,8 @@ function isSubscriptionQuotaProbe(
     kind === 'codex-subscription' ||
     kind === 'cursor-subscription' ||
     kind === 'antigravity-subscription' ||
-    kind === 'gemini-cli-subscription'
+    kind === 'gemini-cli-subscription' ||
+    kind === 'opencode-go-local'
 }
 
 async function probeMiniMax(

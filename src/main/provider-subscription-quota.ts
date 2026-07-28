@@ -9,6 +9,10 @@ import type { ProviderQuotaMetric } from '../shared/provider-quota'
 import {
   GeminiCliOAuthSource
 } from '../../kun/src/adapters/model/gemini-cli-oauth.js'
+import {
+  readOpenCodeGoLocalQuota,
+  type OpenCodeGoLocalQuotaResult
+} from '../../kun/src/services/opencode-go-local-quota.js'
 import { parseCodexCredentials } from './codex-auth'
 import { parseGrokCredentials } from './grok-auth'
 
@@ -23,6 +27,7 @@ export type SubscriptionQuotaProbeKind =
   | 'cursor-subscription'
   | 'antigravity-subscription'
   | 'gemini-cli-subscription'
+  | 'opencode-go-local'
 
 type SubscriptionQuotaFetch = (
   input: string | URL,
@@ -63,6 +68,7 @@ export type SubscriptionQuotaRuntime = {
     context: SubscriptionProbeContext
   ): Promise<GoogleQuotaCredential | undefined>
   resolveGeminiCliToken(context: SubscriptionProbeContext): Promise<string | undefined>
+  resolveOpenCodeGoQuota(): Promise<OpenCodeGoLocalQuotaResult | undefined>
 }
 
 export class ProviderQuotaMissingCredentialError extends Error {
@@ -162,6 +168,15 @@ export async function runSubscriptionQuotaProbe(
       )
     }
     return probeGoogleCodeAssistQuota(credential, context)
+  }
+  if (kind === 'opencode-go-local') {
+    const quota = await runtime.resolveOpenCodeGoQuota()
+    if (!quota) {
+      throw new ProviderQuotaMissingCredentialError(
+        'Use OpenCode Go locally first so its local usage database contains history.'
+      )
+    }
+    return quota
   }
   const accessToken = await runtime.resolveGeminiCliToken(context)
   if (!accessToken) {
@@ -398,6 +413,7 @@ const defaultSubscriptionQuotaRuntime: SubscriptionQuotaRuntime = {
   resolveGrokCredential,
   resolveCursorSession,
   resolveAntigravityCredential,
+  resolveOpenCodeGoQuota: readOpenCodeGoLocalQuota,
   async resolveGeminiCliToken(context) {
     const fetchImpl = ((input: string | URL | Request, init?: RequestInit) =>
       context.fetcher(
