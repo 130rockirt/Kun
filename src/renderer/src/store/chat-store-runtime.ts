@@ -38,7 +38,11 @@ import {
   isWriteAssistantThread,
   type WriteThreadRegistry
 } from '../write/write-thread-registry'
-import { isSddAssistantThread } from '../sdd/sdd-thread-registry'
+import {
+  isSddAssistantThread,
+  isSddThreadVisibleInSidebar,
+  type SddThreadRegistry
+} from '../sdd/sdd-thread-registry'
 import { isDesignThreadId, type DesignThreadRegistry } from '../design/design-thread-registry'
 import { readThreadWorktreeRegistry, saveThreadWorktreeRegistry, forgetThreadWorktree } from '../lib/thread-worktree-registry'
 import { notifySddChatTranscriptMirror } from '../sdd/sdd-chat-transcript'
@@ -414,25 +418,30 @@ export function isCodeThread(
   thread: NormalizedThread,
   clawChannels: ClawImChannelV1[] = [],
   writeRegistry?: WriteThreadRegistry,
-  designRegistry?: DesignThreadRegistry
+  designRegistry?: DesignThreadRegistry,
+  sddRegistry?: SddThreadRegistry
 ): boolean {
-  return thread.archived !== true && isCodeSidebarThread(thread, clawChannels, writeRegistry, designRegistry)
+  return thread.archived !== true &&
+    !isSddAssistantThread(thread, sddRegistry) &&
+    isCodeSidebarThread(thread, clawChannels, writeRegistry, designRegistry, sddRegistry)
 }
 
 export function isCodeSidebarThread(
   thread: NormalizedThread,
   clawChannels: ClawImChannelV1[] = [],
   writeRegistry?: WriteThreadRegistry,
-  designRegistry?: DesignThreadRegistry
+  designRegistry?: DesignThreadRegistry,
+  sddRegistry?: SddThreadRegistry
 ): boolean {
   const workspace = normalizeWorkspaceRoot(thread.workspace)
+  const isRequirementThread = isSddAssistantThread(thread, sddRegistry)
   return Boolean(workspace) &&
     !isInternalTemporaryWorkspace(thread.workspace) &&
     !isInternalDeepSeekGuiWorkspace(thread.workspace) &&
     !isClawWorkspacePath(thread.workspace) &&
     !isClawThread(thread, clawChannels) &&
     !isWriteAssistantThread(thread, writeRegistry) &&
-    !isSddAssistantThread(thread) &&
+    (!isRequirementThread || isSddThreadVisibleInSidebar(thread.id, sddRegistry)) &&
     !isDesignThreadId(thread.id, designRegistry)
 }
 

@@ -42,6 +42,8 @@ describe('Graph Lead mode system contract', () => {
     expect(GRAPH_LEAD_MODE_INSTRUCTION).toContain(
       'Explanatory prose such as "I added the field" is not a correction'
     )
+    expect(GRAPH_LEAD_MODE_INSTRUCTION).toContain('GUI-only plan path')
+    expect(GRAPH_LEAD_MODE_INSTRUCTION).toContain('pending condition source')
   })
 
   it('delegates mechanical budgets to host defaults', () => {

@@ -197,6 +197,7 @@ export function SideConversationPanel({
       spawnSideConversation: s.spawnSideConversation,
       sendSideMessage: s.sendSideMessage,
       interruptSide: s.interruptSide,
+      resolveSideUserInput: s.resolveSideUserInput,
       setSideInput: s.setSideInput,
       setSideModel: s.setSideModel,
       setSideReasoningEffort: s.setSideReasoningEffort,
@@ -523,6 +524,11 @@ export function SideConversationPanel({
           variant="side"
           workspaceRootOverride={sideData.workspaceRoot}
           activeThreadIdOverride={activeSide?.threadId ?? null}
+          userInputBlocksOverride={activeSide?.blocks ?? []}
+          onResolveUserInput={async (blockId, action) => {
+            if (!activeSide) return
+            await sideData.resolveSideUserInput(activeSide.threadId, blockId, action)
+          }}
           input={composerInput}
           setInput={(value) => {
             if (activeSide) sideData.setSideInput(activeSide.threadId, value)

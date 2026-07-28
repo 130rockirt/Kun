@@ -1090,7 +1090,7 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
     )
   })
 
-  it('auto-expands pending request_user_input while keeping other tool details tucked away', () => {
+  it('keeps pending request_user_input compact while other tool details stay tucked away', () => {
     const readBlock: ChatBlock = toolBlock({
       id: 'tool_read',
       summary: 'read: file',
@@ -1103,6 +1103,7 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
       id: 'ui_1',
       requestId: 'input_1',
       status: 'pending',
+      live: true,
       questions: [
         {
           header: 'Dinner',
@@ -1130,7 +1131,8 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
 
     expect(html).toContain('ds-work-stack')
     expect(html).toContain('What should we eat tonight?')
-    expect(html).toContain('Noodles')
+    expect(html).not.toContain('Noodles')
+    expect(html).toContain('Complete this above the input box')
     expect(html).not.toContain('read detail should stay tucked away')
   })
 
@@ -1197,11 +1199,11 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
     )
 
     expect(html).toContain('你更想去南方还是北方？')
-    // Answering moved to the composer-docked panel; the bubble is now the
-    // record, so it no longer hosts interactive inputs — only a pointer + cancel.
+    // Answering and cancelling moved to the composer-docked panel; the bubble
+    // is now only a compact record pointing to that actionable surface.
     expect(html).not.toContain('<textarea')
-    expect(html).toContain('Answer below the input box')
-    expect(html).toContain('Cancel')
+    expect(html).toContain('Complete this above the input box')
+    expect(html).not.toContain('Cancel')
   })
 
   it('renders a stale pending request_user_input from history as a non-actionable record (issue #606)', () => {
@@ -1234,9 +1236,8 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
 
     // The record still shows what was asked…
     expect(html).toContain('你更想去南方还是北方？')
-    // …but offers no live affordances (the "answer below" hint and the Cancel
-    // button share one `pending` branch), so it can't fire a dead resolve.
-    expect(html).not.toContain('Answer below the input box')
+    // …but offers no live affordances, so it cannot fire a dead resolve.
+    expect(html).not.toContain('Complete this above the input box')
     // It reads as an ended record rather than an active prompt.
     expect(html).toContain('Cancelled')
   })

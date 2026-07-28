@@ -425,6 +425,11 @@ export type ChatState = {
   openSideConversationDraft: () => void
   sendSideMessage: (sideId: string, text: string) => Promise<boolean>
   interruptSide: (sideId: string) => Promise<void>
+  resolveSideUserInput: (
+    sideId: string,
+    blockId: string,
+    action: { kind: 'submit'; answers: UserInputAnswer[] } | { kind: 'cancel' }
+  ) => Promise<void>
   setSideInput: (sideId: string, text: string) => void
   setSideModel: (sideId: string, model: string, providerId?: string) => void
   setSideReasoningEffort: (sideId: string, effort: string) => void

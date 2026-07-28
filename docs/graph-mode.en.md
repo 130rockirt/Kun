@@ -59,6 +59,7 @@ Graph round retains the full Lead identity and obligations.
 
 ```text
 Graph turn
+  -> a Plan-sidebar launch embeds the complete saved Markdown in the source request
   -> Lead calls graph_create_run
   -> host validates and journals GraphPlan
   -> scheduler computes ready nodes
@@ -81,8 +82,17 @@ remains owned by its source Lead turn. While nodes run, the host parks only the
 process-local execution and releases model concurrency; the durable turn stays
 `running`. Material events resume that exact `sourceTurnId`. The turn becomes
 terminal only after the GraphRun is terminal and the Lead has delivered the
-final outcome. On reconnect the renderer reconciles an HTTP snapshot, then
-resumes SSE after its acknowledged cursor.
+final outcome. Native Graph Lead turns use the GraphRun wall-time and resource
+ledger rather than ordinary direct-turn step and wall-time limits; explicit
+extension budgets still apply. On reconnect the renderer reconciles an HTTP
+snapshot, then resumes SSE after its acknowledged cursor.
+
+GUI Plan files under `.kunsdd/plan` may be untracked and therefore absent from
+isolated Git worktrees. Graph creation also requires `graph_create_run` before
+ordinary read tools. The Plan sidebar consequently embeds the exact saved
+Markdown in the source request. The Lead builds from that copy and gives every
+executor a self-contained objective instead of assigning a snapshot node to
+reread the GUI-only path.
 
 ## Contracts and state
 
@@ -126,7 +136,10 @@ A LoopGate declares a condition source, continuation, exit and exhaustion
 targets, and maximum iterations. Every continuation
 writes `loop_iteration_advanced`, resets only the host-computed cycle nodes,
 preserves prior attempts, creates attempts at a new iteration, and increments
-the run ledger. Exhaustion can never create another attempt. Repeated identical
+the run ledger. Unfinished lifecycle states have no outcome: a pending,
+blocked, ready, queued, running, submitted, or reviewing condition source
+cannot trigger a failed branch or evaluate a LoopGate. Exhaustion can never
+create another attempt. Repeated identical
 normalized failures pause or escalate.
 
 ## Scheduling, limits, and cancellation

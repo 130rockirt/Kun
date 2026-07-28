@@ -178,9 +178,9 @@ export function SddAssistantPanel({
         </div>
       </div>
 
-      <div className="sdd-assistant-body min-h-0 flex-1 overflow-y-auto overflow-x-hidden bg-ds-main/45 dark:bg-transparent">
+      <div className="sdd-assistant-body flex min-h-0 flex-1 flex-col overflow-hidden bg-ds-main/45 dark:bg-transparent">
         {hasTimeline ? (
-          <div className="sdd-assistant-timeline">
+          <div className="sdd-assistant-timeline flex min-h-0 flex-1 flex-col overflow-hidden">
             <LazyMessageTimeline
               blocks={blocks}
               liveReasoning={liveReasoning}
@@ -193,7 +193,7 @@ export function SddAssistantPanel({
             />
           </div>
         ) : (
-          <div className="sdd-assistant-empty flex min-h-full flex-col justify-end px-5 py-5">
+          <div className="sdd-assistant-empty flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden px-5 py-5">
             <div className="sdd-assistant-empty-card mb-auto rounded-[20px] border border-ds-border bg-ds-card/95 p-4 shadow-sm">
               <div className="sdd-assistant-empty-icon flex h-11 w-11 items-center justify-center rounded-2xl bg-accent/10 text-accent">
                 <FileQuestion className="h-5 w-5" strokeWidth={1.9} />

@@ -7,6 +7,7 @@ import { applyGraphEvent } from './graph-reducer.js'
 import {
   dependencyDecision,
   deterministicReview,
+  outcomeOf,
   parseWorkerResult,
   validateWorkerResult
 } from './graph-scheduler-policy.js'
@@ -40,6 +41,40 @@ describe('Graph scheduler data dependencies', () => {
 
     run.nodes.research.status = 'accepted'
     expect(dependencyDecision(run, edge)).toBe('ready')
+  })
+
+  it('does not invent a failed outcome for unfinished control predecessors', () => {
+    const plan = testGraphPlan({
+      edges: [{
+        id: 'repair_on_failure',
+        kind: 'control',
+        from: 'research',
+        to: 'finish',
+        requiredOutcomes: ['failed']
+      }]
+    })
+    const run = structuredClone(applyGraphEvent(undefined, testGraphEnvelope(1, {
+      type: 'run_created',
+      payload: { plan, projectId: 'project_1', sourceTurnId: 'turn_1' }
+    })))
+
+    for (const status of [
+      'pending',
+      'blocked',
+      'ready',
+      'queued',
+      'running',
+      'submitted',
+      'reviewing'
+    ] as const) {
+      run.nodes.research.status = status
+      expect(outcomeOf(run.nodes.research)).toBeUndefined()
+      expect(dependencyDecision(run, plan.edges)).toBe('blocked')
+    }
+
+    run.nodes.research.status = 'failed'
+    expect(outcomeOf(run.nodes.research)).toBe('failed')
+    expect(dependencyDecision(run, plan.edges)).toBe('ready')
   })
 })
 

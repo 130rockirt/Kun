@@ -24,6 +24,10 @@ import {
   markWriteThread
 } from '../write/write-thread-registry'
 import { useWriteWorkspaceStore } from '../write/write-workspace-store'
+import {
+  markSddAssistantThread,
+  normalizeSddThreadRegistry
+} from '../sdd/sdd-thread-registry'
 
 function makeSinkHarness(overrides: Partial<ChatState> = {}): {
   getState: () => ChatState
@@ -133,6 +137,49 @@ describe('code thread classification', () => {
 
     expect(isCodeSidebarThread(designWorkspaceThread)).toBe(false)
     expect(isCodeThread(designWorkspaceThread)).toBe(false)
+  })
+
+  it('shows a visible requirement thread in the project sidebar without classifying it as Code', () => {
+    const requirement = makeThread({
+      id: 'thr_requirement',
+      title: 'Requirement draft'
+    })
+    const hiddenRegistry = markSddAssistantThread({
+      id: 'draft-1',
+      workspaceRoot: '/workspace/deepseek-gui',
+      relativePath: '.kunsdd/requirements/draft-1/requirement.md'
+    }, requirement.id, null)
+    const visibleRegistry = normalizeSddThreadRegistry({
+      ...hiddenRegistry,
+      drafts: Object.fromEntries(
+        Object.entries(hiddenRegistry.drafts).map(([draftId, record]) => [
+          draftId,
+          { ...record, visibleThreadIds: [requirement.id] }
+        ])
+      )
+    })
+
+    expect(isCodeSidebarThread(
+      requirement,
+      [],
+      undefined,
+      undefined,
+      hiddenRegistry
+    )).toBe(false)
+    expect(isCodeSidebarThread(
+      requirement,
+      [],
+      undefined,
+      undefined,
+      visibleRegistry
+    )).toBe(true)
+    expect(isCodeThread(
+      requirement,
+      [],
+      undefined,
+      undefined,
+      visibleRegistry
+    )).toBe(false)
   })
 })
 

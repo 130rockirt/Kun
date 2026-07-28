@@ -1,7 +1,7 @@
 import type { ReactElement } from 'react'
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ArrowDown, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, Download, File, FileEdit, GitFork, ImageIcon, Loader2, MessageSquareQuote, PencilLine, RotateCcw, Terminal, Video, Wrench } from 'lucide-react'
+import { Check, ChevronDown, ChevronLeft, ChevronRight, Copy, Download, File, FileEdit, GitFork, ImageIcon, Loader2, MessageSquareQuote, PencilLine, RotateCcw, Terminal, Video, Wrench } from 'lucide-react'
 import type { AttachmentReference, ChatBlock, GeneratedFileReference, RuntimeDisclosureMetadata, ToolBlock, UserFileReference, UserInputAnswer } from '../../agent/types'
 import { extractUnifiedDiffText } from '../../lib/diff-stats'
 import { useChatStore } from '../../store/chat-store'
@@ -21,8 +21,7 @@ import { ModelMetaTag, WritePromptMetaDisclosure } from './message-timeline-card
 import { readNumber, formatDuration, formatToolTitle, summarizeBackgroundShellToolBlock } from './message-timeline-tools'
 import {
   answerDisplayValues,
-  answersByQuestionId,
-  shouldShowQuestionHeader
+  answersByQuestionId
 } from './user-input-panel-logic'
 import { InjectedMemoryMetaChip } from './injected-memory-meta-chip'
 import { isPresentationArtifactPath } from './presentation-file-artifacts'
@@ -1599,37 +1598,24 @@ function AssistantExportButton({
 
 function UserInputBubble({
   block,
-  nested = false,
-  allowThreadActions = true
+  nested = false
 }: {
   block: Extract<ChatBlock, { kind: 'user_input' }>
   nested?: boolean
-  allowThreadActions?: boolean
 }): ReactElement {
   const { t } = useTranslation('common')
-  const resolveUserInput = useChatStore((s) => s.resolveUserInput)
   const [answers, setAnswers] = useState<Record<string, UserInputAnswer>>(() =>
     answersByQuestionId(block.answers)
   )
-  // A `pending` block is only actionable while the live runtime is awaiting it.
-  // One rehydrated from a finished thread keeps its stored `pending` status but
-  // is not live, so it renders as a read-only ended record rather than a live
-  // prompt — and crucially never offers cancel, which would hit a dead gate and
-  // raise "user input not found" (issue #606).
-  const pending = allowThreadActions && block.status === 'pending' && block.live === true
+  // The timeline is the durable record; answering lives in the composer panel.
+  // Only a live request appears active. A stale persisted `pending` block is
+  // rendered as ended so reopening history never advertises a dead action.
+  const pending = block.status === 'pending' && block.live === true
   const done = block.status !== 'pending'
 
   useEffect(() => {
     setAnswers(answersByQuestionId(block.answers))
   }, [block.id, block.answers])
-
-  // Answering moved to the composer-docked panel (FloatingComposerUserInputPanel);
-  // this bubble is now the read-only record of what was asked and answered. It
-  // keeps only the cancel affordance while pending.
-  const cancel = (): void => {
-    if (!pending) return
-    void resolveUserInput(block.id, { kind: 'cancel' })
-  }
 
   const statusLabel =
     block.status === 'submitted'
@@ -1638,7 +1624,7 @@ function UserInputBubble({
         ? t('userInputCancelled')
         : block.status === 'error'
           ? t('userInputFailed')
-          : pending || (!allowThreadActions && block.status === 'pending')
+          : pending
             ? t('userInputPending')
             : t('userInputCancelled')
   const tone =
@@ -1653,23 +1639,23 @@ function UserInputBubble({
             : 'muted'
   const questionCount = block.questions.length
   const containerClass = nested
-    ? `overflow-hidden rounded-[14px] border px-3.5 py-3 text-[13px] leading-5 shadow-[0_8px_22px_rgba(20,47,95,0.035)] ${
+    ? `overflow-hidden rounded-[14px] border px-3.5 py-3 text-[13px] leading-5 ${
         tone === 'error'
-          ? 'border-red-300/65 bg-ds-card/88 dark:border-red-800/55 dark:bg-red-950/20'
+          ? 'border-red-300/65 bg-red-500/[0.025] dark:border-red-800/55 dark:bg-red-950/20'
           : tone === 'success'
-            ? 'border-emerald-500/22 bg-ds-card/88 dark:border-emerald-600/30 dark:bg-ds-card/82'
+            ? 'border-emerald-500/22 bg-emerald-500/[0.025] dark:border-emerald-600/30'
             : tone === 'muted'
-              ? 'border-ds-border-muted bg-ds-card/78'
-              : 'border-accent/22 bg-ds-card/90'
+              ? 'border-ds-border-muted bg-ds-card/75'
+              : 'border-accent/25 bg-accent/[0.025]'
       }`
-    : `overflow-hidden rounded-[16px] border px-4 py-4 text-[13px] leading-6 shadow-[0_14px_36px_rgba(20,47,95,0.055)] ${
+    : `overflow-hidden rounded-[16px] border px-4 py-4 text-[13px] leading-6 shadow-[0_10px_28px_rgba(20,47,95,0.04)] ${
         tone === 'error'
-          ? 'border-red-300/70 bg-ds-card/90 dark:border-red-800/60 dark:bg-red-950/20'
+          ? 'border-red-300/70 bg-red-500/[0.025] dark:border-red-800/60 dark:bg-red-950/20'
           : tone === 'success'
-            ? 'border-emerald-500/24 bg-ds-card/90 dark:border-emerald-600/32 dark:bg-ds-card/84'
+            ? 'border-emerald-500/24 bg-emerald-500/[0.025] dark:border-emerald-600/32'
             : tone === 'muted'
               ? 'border-ds-border bg-ds-card/82'
-              : 'border-accent/24 bg-ds-card/95 text-ds-ink'
+              : 'border-accent/26 bg-ds-card text-ds-ink'
       }`
   const iconFrameClass =
     tone === 'error'
@@ -1702,131 +1688,65 @@ function UserInputBubble({
 
   return (
     <div className={containerClass}>
-      <div className="flex min-w-0 items-start justify-between gap-3">
-        <div className="flex min-w-0 items-start gap-2.5">
+      <div className="flex min-w-0 items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-2.5">
           <span
             className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px] border ${iconFrameClass}`}
           >
             {statusIcon}
           </span>
-          <div className="min-w-0 pt-0.5">
+          <div className="min-w-0">
             <div className="font-semibold text-ds-ink">{t('userInputTitle')}</div>
-            <div className={`mt-0.5 text-[12px] font-medium ${statusClass}`}>{statusLabel}</div>
           </div>
         </div>
-        {questionCount > 1 ? (
-          <span className="shrink-0 rounded-full border border-ds-border-muted bg-ds-subtle px-2 py-0.5 text-[11.5px] font-medium text-ds-muted">
-            {questionCount}
-          </span>
-        ) : null}
+        <span className={`shrink-0 rounded-full border border-current/15 px-2 py-0.5 text-[11.5px] font-semibold ${statusClass}`}>
+          {statusLabel}
+        </span>
       </div>
 
-      <div className={nested ? 'mt-3 flex flex-col gap-2.5' : 'mt-3.5 flex flex-col gap-3'}>
-        {block.questions.map((question, index) => {
-          const answer = answers[question.id]
-          const hasOptions = question.options.length > 0
-          const submittedValues = done ? answerDisplayValues(answer) : []
-          const submittedAnswer = submittedValues.join(', ')
-          const showProgress = questionCount > 1
-          const showHeader = shouldShowQuestionHeader(question, questionCount)
-          return (
-            <div
-              key={question.id}
-              className={`min-w-0 rounded-[12px] border px-3 py-3 ${
-                submittedAnswer
-                  ? 'border-ds-border-muted bg-ds-main/35'
-                  : 'border-ds-border-muted bg-ds-main/45'
-              }`}
-            >
-              {showHeader || showProgress ? (
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="min-w-0">
-                    {showHeader ? (
-                      <div className="min-w-0 text-[12px] font-semibold text-ds-muted">
-                        {question.header}
-                      </div>
-                    ) : null}
-                  </div>
-                  {showProgress ? (
-                    <div className="rounded-full bg-ds-card/70 px-2 py-0.5 text-[11.5px] font-medium text-ds-faint">
-                      {t('userInputQuestionProgress', {
-                        current: index + 1,
-                        total: block.questions.length
-                      })}
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
-              <p
-                className={`whitespace-pre-wrap break-words text-[14px] font-semibold leading-6 text-ds-ink [overflow-wrap:anywhere] ${
-                  showHeader || showProgress ? 'mt-2' : ''
-                }`}
-              >
-                {question.question}
-              </p>
-
-              {submittedValues.length > 0 ? (
-                <div className="mt-3 flex min-w-0 items-start gap-2 rounded-[10px] border border-emerald-500/14 bg-ds-card/78 px-3 py-2.5">
-                  <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-500/12 text-emerald-700 dark:text-emerald-300">
-                    <Check className="h-3.5 w-3.5" strokeWidth={2.1} />
-                  </span>
-                  {submittedValues.length > 1 ? (
-                    <span className="flex min-w-0 flex-1 flex-wrap gap-1.5">
-                      {submittedValues.map((value) => (
-                        <span
-                          key={value}
-                          className="max-w-full rounded-full border border-emerald-500/16 bg-emerald-500/8 px-2 py-0.5 text-[12.5px] font-medium leading-5 text-ds-ink"
-                        >
-                          <span className="block truncate">{value}</span>
-                        </span>
-                      ))}
-                    </span>
-                  ) : (
-                    <span className="min-w-0 flex-1 break-words text-[13.5px] font-medium leading-5 text-ds-ink [overflow-wrap:anywhere]">
-                      {submittedAnswer}
-                    </span>
-                  )}
-                </div>
-              ) : done ? (
-                <div className="mt-3 rounded-[10px] border border-ds-border-muted bg-ds-card/70 px-3 py-2 text-[12.5px] font-medium text-ds-muted">
-                  {statusLabel}
-                </div>
-              ) : hasOptions ? (
-                <div className="mt-2.5 flex flex-wrap gap-1.5">
-                  {question.options.map((option) => (
-                    <span
-                      key={option.label}
-                      title={option.description || undefined}
-                      className="inline-flex min-w-0 max-w-full items-center rounded-full border border-ds-border-muted bg-ds-card/70 px-2.5 py-1 text-[12px] text-ds-muted"
-                    >
-                      <span className="truncate">{option.label}</span>
-                    </span>
-                  ))}
-                </div>
+      {block.status === 'pending' ? (
+        <div className="mt-3 border-t border-ds-border-muted pt-3">
+          {block.questions[0] ? (
+            <p className="line-clamp-2 whitespace-pre-wrap break-words text-[13px] font-medium leading-5 text-ds-ink [overflow-wrap:anywhere]">
+              {block.questions[0].question}
+            </p>
+          ) : null}
+          {pending ? (
+            <div className="mt-2 flex items-center justify-between gap-3 text-[11.5px] text-ds-faint">
+              <span>{t('userInputCompleteAboveComposer')}</span>
+              {questionCount > 1 ? (
+                <span className="shrink-0 font-semibold tabular-nums">
+                  {t('userInputQuestionCount', { count: questionCount })}
+                </span>
               ) : null}
             </div>
-          )
-        })}
-      </div>
+          ) : null}
+        </div>
+      ) : done && block.questions.length > 0 ? (
+        <div className="mt-3 overflow-hidden rounded-[11px] border border-ds-border-muted bg-ds-card/65">
+          {block.questions.map((question) => {
+            const submittedValues = answerDisplayValues(answers[question.id])
+            return (
+              <div
+                key={question.id}
+                className="grid min-w-0 gap-1 border-b border-ds-border-muted px-3 py-2.5 last:border-b-0 sm:grid-cols-[minmax(0,1fr)_minmax(8rem,0.7fr)] sm:items-center sm:gap-4"
+              >
+                <span className="min-w-0 truncate text-[12px] text-ds-muted" title={question.question}>
+                  {question.question}
+                </span>
+                <span className={`min-w-0 break-words text-[12.5px] font-semibold [overflow-wrap:anywhere] ${
+                  submittedValues.length > 0 ? 'text-ds-ink' : 'text-ds-faint'
+                }`}>
+                  {submittedValues.length > 0 ? submittedValues.join(', ') : statusLabel}
+                </span>
+              </div>
+            )
+          })}
+        </div>
+      ) : null}
 
       {block.errorMessage ? (
         <p className="mt-3 text-[12px] text-red-700 dark:text-red-300">{block.errorMessage}</p>
-      ) : null}
-
-      {pending ? (
-        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-ds-border-muted pt-3">
-          <span className="inline-flex min-w-0 items-center gap-1.5 text-[12px] font-medium text-accent">
-            <ArrowDown className="h-3.5 w-3.5 shrink-0" strokeWidth={2} />
-            <span className="min-w-0">{t('userInputAnswerBelowHint')}</span>
-          </span>
-          <button
-            type="button"
-            className="min-h-8 rounded-[9px] border border-ds-border-muted bg-ds-card/80 px-3 py-1.5 text-[13px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
-            onClick={cancel}
-          >
-            {t('userInputCancel')}
-          </button>
-        </div>
       ) : null}
     </div>
   )
@@ -1948,7 +1868,6 @@ function MessageBubbleImpl({
       <UserInputBubble
         block={block}
         nested={nested}
-        allowThreadActions={allowThreadActions}
       />
     )
   }

@@ -11,6 +11,7 @@ const REFINE_PLAN_INTRO = 'Kun is asking you to revise an existing GUI-owned imp
 const LEGACY_DRAFT_PLAN_INTRO = 'DeepSeek GUI is asking you to draft a GUI-owned implementation plan.'
 const LEGACY_REFINE_PLAN_INTRO = 'DeepSeek GUI is asking you to revise an existing GUI-owned implementation plan.'
 const BUILD_PLAN_INTRO = 'Please read and execute the GUI plan file at'
+const BUILD_GRAPH_PLAN_INTRO = 'Execute the GUI plan saved at'
 const DRAFT_PLAN_DISPLAY_PREFIX = 'Create plan:'
 const REFINE_PLAN_DISPLAY_PREFIX = 'Revise plan:'
 const BUILD_PLAN_DISPLAY_PREFIX = 'Build plan:'
@@ -84,12 +85,32 @@ export function buildRefinePlanPrompt(options: {
   ].join('\n')
 }
 
-export function buildPlanBuildPrompt(planRelativePath: string): string {
+export function buildPlanBuildPrompt(
+  planRelativePath: string,
+  planMarkdown?: string,
+  orchestration: 'direct' | 'graph' = 'direct'
+): string {
+  const normalizedPlan = planMarkdown?.trim() ?? ''
   return [
-    `${BUILD_PLAN_INTRO} \`${planRelativePath}\` in this workspace.`,
-    'Treat that Markdown file as the source of truth for the implementation.',
-    'Execute it using the orchestration selected for this turn. Do not regenerate the plan unless the plan file explicitly asks for it.'
-  ].join('\n')
+    orchestration === 'graph'
+      ? `${BUILD_GRAPH_PLAN_INTRO} \`${planRelativePath}\` using Graph orchestration.`
+      : `${BUILD_PLAN_INTRO} \`${planRelativePath}\` in this workspace.`,
+    normalizedPlan
+      ? 'The verbatim Markdown embedded below is the authoritative implementation plan.'
+      : 'Treat that Markdown file as the source of truth for the implementation.',
+    orchestration === 'graph'
+      ? 'The GUI plan file may be absent from isolated executor worktrees. Build the Graph directly from the embedded plan, make every executor objective self-contained, and do not create a snapshot node whose job is to reread this GUI-only plan path.'
+      : '',
+    'Execute it using the orchestration selected for this turn. Do not regenerate the plan unless the plan explicitly asks for it.',
+    ...(normalizedPlan
+      ? [
+          '',
+          `<implementation_plan path=${JSON.stringify(planRelativePath)}>`,
+          normalizedPlan,
+          '</implementation_plan>'
+        ]
+      : [])
+  ].filter(Boolean).join('\n')
 }
 
 export function isGuiPlanInternalPrompt(text: string): boolean {
@@ -121,6 +142,7 @@ export function getGuiPlanPromptKind(text: string): GuiPlanPromptKind | null {
   }
   if (
     normalized.includes(BUILD_PLAN_INTRO) ||
+    normalized.includes(BUILD_GRAPH_PLAN_INTRO) ||
     normalized.startsWith(BUILD_PLAN_DISPLAY_PREFIX) ||
     normalized === 'Build GUI plan'
   ) {
@@ -139,7 +161,10 @@ export function formatGuiPlanPromptForDisplay(text: string): string | null {
     const feedback = readSectionBetween(normalized, 'User feedback:', 'Current plan:')
     return feedback ? `Revise plan: ${feedback}` : 'Revise GUI plan'
   }
-  if (normalized.includes(BUILD_PLAN_INTRO)) {
+  if (
+    normalized.includes(BUILD_PLAN_INTRO) ||
+    normalized.includes(BUILD_GRAPH_PLAN_INTRO)
+  ) {
     const path = normalized.match(/`([^`]+\.md)`/)?.[1]
     return path ? `Build plan: ${path}` : 'Build GUI plan'
   }

@@ -388,6 +388,22 @@ describe('electron-builder Kun packaging', () => {
     })
   })
 
+  it('ships compact 1x and 2x macOS menu-bar artwork', async () => {
+    const icon1xPath = join(process.cwd(), 'src/asset/img/kun_tray_mac.png')
+    const icon2xPath = join(process.cwd(), 'src/asset/img/kun_tray_mac@2x.png')
+
+    await expect(sharp(icon1xPath).metadata()).resolves.toMatchObject({
+      width: 16,
+      height: 16,
+      hasAlpha: true
+    })
+    await expect(sharp(icon2xPath).metadata()).resolves.toMatchObject({
+      width: 32,
+      height: 32,
+      hasAlpha: true
+    })
+  })
+
   it('uses a process-tree shutdown guard for Windows overwrite installs', () => {
     const installerScript = readFileSync(join(process.cwd(), 'build/installer.nsh'), 'utf8')
 

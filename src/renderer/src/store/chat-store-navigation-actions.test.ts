@@ -16,6 +16,14 @@ import {
   saveWriteThreadRegistry
 } from '../write/write-thread-registry'
 import { useWriteWorkspaceStore } from '../write/write-workspace-store'
+import {
+  isSddAssistantThread,
+  markSddAssistantThread,
+  readSddThreadRegistry,
+  releaseSddAssistantThread,
+  showSddAssistantThreadInSidebar
+} from '../sdd/sdd-thread-registry'
+import type { SddDraft } from '../sdd/sdd-draft-store'
 
 const registryMock = vi.hoisted(() => ({
   getProvider: vi.fn()
@@ -36,7 +44,10 @@ const applyThemeLibMock = vi.hoisted(() => ({
 
 vi.mock('../lib/apply-theme', () => applyThemeLibMock)
 
-import { createNavigationActions } from './chat-store-navigation-actions'
+import {
+  createNavigationActions,
+  shouldIncludeThreadInSidebarInventory
+} from './chat-store-navigation-actions'
 
 function thread(overrides: Partial<NormalizedThread> & Pick<NormalizedThread, 'id' | 'workspace'>): NormalizedThread {
   return {
@@ -62,6 +73,39 @@ class MemoryStorage implements BrowserStorageLike {
     this.values.set(key, value)
   }
 }
+
+describe('requirement thread sidebar inventory', () => {
+  const draft: SddDraft = {
+    id: 'draft-1',
+    workspaceRoot: '/tmp/app',
+    relativePath: '.kunsdd/requirements/draft-1/requirement.md',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z'
+  }
+  const requirementThread = thread({
+    id: 'thread-sdd-1',
+    title: 'Requirement draft',
+    workspace: '/tmp/app'
+  })
+
+  it('becomes visible after the first accepted turn without switching to Code routing', () => {
+    const storage = new MemoryStorage()
+    markSddAssistantThread(draft, requirementThread.id, storage)
+
+    let registry = readSddThreadRegistry(storage)
+    expect(shouldIncludeThreadInSidebarInventory(requirementThread, registry)).toBe(false)
+
+    showSddAssistantThreadInSidebar(requirementThread.id, storage)
+    registry = readSddThreadRegistry(storage)
+    expect(shouldIncludeThreadInSidebarInventory(requirementThread, registry)).toBe(true)
+    expect(isSddAssistantThread(requirementThread, registry)).toBe(true)
+
+    releaseSddAssistantThread(requirementThread.id, storage)
+    registry = readSddThreadRegistry(storage)
+    expect(shouldIncludeThreadInSidebarInventory(requirementThread, registry)).toBe(true)
+    expect(isSddAssistantThread(requirementThread, registry)).toBe(false)
+  })
+})
 
 function buildHarness(overrides?: {
   subscribeThreadEventsLive?: ReturnType<typeof vi.fn>

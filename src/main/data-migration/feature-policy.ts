@@ -3,17 +3,18 @@ export type DataMigrationFeatureEnvironment = {
 }
 
 /**
- * Data migration is a released desktop capability. Packaged applications are
- * normally launched without the environment from the machine that built them,
- * so absence of the override must keep the feature enabled.
+ * Data migration remains an internal dogfood capability until the packaged-app
+ * cross-platform, security, and recovery gates are complete. Packaged public
+ * builds do not inherit release-runner environment variables, so absence of an
+ * explicit opt-in must keep new exports/imports disabled.
  *
- * Managed or diagnostic launches can still set the override to `0` to stop new
- * exports/imports while leaving interrupted-operation recovery available.
+ * Internal or diagnostic launches can set the override to `1`. Disabling new
+ * operations does not hide interrupted-operation recovery.
  */
 export function resolveDataMigrationFeatureEnabled(
   environment: DataMigrationFeatureEnvironment = {
     KUN_DATA_MIGRATION_ENABLED: process.env.KUN_DATA_MIGRATION_ENABLED
   }
 ): boolean {
-  return environment.KUN_DATA_MIGRATION_ENABLED !== '0'
+  return environment.KUN_DATA_MIGRATION_ENABLED === '1'
 }

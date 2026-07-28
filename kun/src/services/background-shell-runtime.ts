@@ -169,7 +169,11 @@ export class BackgroundShellRuntime {
       ...this.sessionEventOutput(record),
       ...(record.error ? { error: record.error } : {})
     })
-    if (!this.shuttingDown && record.detached && record.status === 'completed' && record.exitCode === 0) {
+    // A detached shell owns unfinished work even when it exits unsuccessfully
+    // or is stopped. Always wake the agent for a terminal result so it can
+    // inspect the output and report the real outcome without asking the user
+    // to send a manual "continue" message (KunAgent/Kun#1031).
+    if (!this.shuttingDown && record.detached && record.status !== 'running') {
       await this.notifyAgent(record)
     }
     if (record.status !== 'running') {

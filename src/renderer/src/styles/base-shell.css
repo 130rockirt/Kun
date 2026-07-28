@@ -1199,10 +1199,6 @@ pre {
   animation: sdd-sparkle-tilt 1.4s ease-in-out infinite;
 }
 
-.sdd-assistant-body {
-  scroll-behavior: smooth;
-}
-
 .sdd-assistant-timeline {
   animation: sdd-soft-enter 180ms ease-out;
 }

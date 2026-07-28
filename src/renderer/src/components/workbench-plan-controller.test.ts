@@ -215,7 +215,7 @@ describe('workbench plan build orchestration', () => {
     })
 
     expect(sendMessage).toHaveBeenCalledWith(
-      expect.any(String),
+      expect.stringContaining('# Latest plan'),
       'agent',
       {
         displayText: 'planBuildGraph: .kunsdd/plan/checkout.md',

@@ -1,25 +1,25 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22">
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
   <path
-    d="M6.25 3.4V18.6"
+    d="M4.55 2.47V13.53"
     fill="none"
     stroke="#000"
     stroke-linecap="round"
-    stroke-width="4.2"
+    stroke-width="3.05"
   />
   <path
-    d="M8.55 10.55 16.05 3.65"
+    d="M6.22 7.67 11.67 2.65"
     fill="none"
     stroke="#000"
     stroke-linecap="round"
     stroke-linejoin="round"
-    stroke-width="4.2"
+    stroke-width="3.05"
   />
   <path
-    d="m8.55 11.45 7.5 6.9"
+    d="m6.22 8.33 5.45 5.02"
     fill="none"
     stroke="#000"
     stroke-linecap="round"
     stroke-linejoin="round"
-    stroke-width="4.2"
+    stroke-width="3.05"
   />
 </svg>

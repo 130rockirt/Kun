@@ -2,8 +2,37 @@ import { describe, expect, it } from 'vitest'
 import {
   deriveTimelineRenderedTurnCount,
   deriveTimelineVisibleTurnCount,
+  isTimelineNearBottom,
   shouldCollapseTimelineHistory
 } from './use-timeline-scroll'
+
+describe('isTimelineNearBottom', () => {
+  it('keeps automatic bottom following while the reader remains near the latest content', () => {
+    expect(isTimelineNearBottom({
+      scrollHeight: 2_000,
+      scrollTop: 1_500,
+      clientHeight: 500
+    })).toBe(true)
+    expect(isTimelineNearBottom({
+      scrollHeight: 2_000,
+      scrollTop: 1_405,
+      clientHeight: 500
+    })).toBe(true)
+  })
+
+  it('stops automatic bottom following after the reader scrolls up', () => {
+    expect(isTimelineNearBottom({
+      scrollHeight: 2_000,
+      scrollTop: 1_404,
+      clientHeight: 500
+    })).toBe(false)
+    expect(isTimelineNearBottom({
+      scrollHeight: 2_000,
+      scrollTop: 900,
+      clientHeight: 500
+    })).toBe(false)
+  })
+})
 
 describe('deriveTimelineVisibleTurnCount', () => {
   it('keeps long conversations on the latest page instead of expanding all turns', () => {

@@ -90,7 +90,9 @@ import {
 import { persistDesignChatMetaForDoc } from '../design/design-chat-transcript'
 import {
   isSddAssistantThread,
-  readSddThreadRegistry
+  isSddThreadVisibleInSidebar,
+  readSddThreadRegistry,
+  type SddThreadRegistry
 } from '../sdd/sdd-thread-registry'
 import {
   clearBusyWatchdog,
@@ -121,6 +123,14 @@ import {
 } from './chat-store-runtime'
 
 type SseAbortRef = { current: AbortController | null }
+
+export function shouldIncludeThreadInSidebarInventory(
+  thread: NormalizedThread,
+  registry: SddThreadRegistry
+): boolean {
+  return !isSddAssistantThread(thread, registry) ||
+    isSddThreadVisibleInSidebar(thread.id, registry)
+}
 
 type StoreActionContext = {
   set: ChatStoreSet
@@ -869,7 +879,7 @@ export function createNavigationActions(
       const sddThreadRegistry = readSddThreadRegistry()
       const designRegistry = readDesignThreadRegistry()
       const sidebarThreads = (await filterThreadsForSidebar(threads, p))
-        .filter((thread) => !isSddAssistantThread(thread, sddThreadRegistry))
+        .filter((thread) => shouldIncludeThreadInSidebarInventory(thread, sddThreadRegistry))
       const forkRegistry = hydrateThreadForkRegistry(sidebarThreads, readThreadForkRegistry())
       saveThreadForkRegistry(forkRegistry)
       const enrichedThreads = enrichThreadsWithForkInfo(sidebarThreads, forkRegistry)

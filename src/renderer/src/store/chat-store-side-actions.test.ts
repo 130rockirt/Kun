@@ -24,6 +24,8 @@ class FakeProvider implements AgentProvider {
   patchMock = vi.fn()
   interruptMock = vi.fn()
   subscribeMock = vi.fn()
+  submitUserInputMock = vi.fn()
+  cancelUserInputMock = vi.fn()
   refreshThreadsMock = vi.fn()
   closeSideMock = vi.fn()
   getCapabilities() {
@@ -100,8 +102,12 @@ class FakeProvider implements AgentProvider {
     })
   }
   async submitApprovalDecision() {}
-  async submitUserInputResponse() {}
-  async cancelUserInput() {}
+  async submitUserInputResponse(inputId: string, answers: unknown[]) {
+    this.submitUserInputMock(inputId, answers)
+  }
+  async cancelUserInput(inputId: string) {
+    this.cancelUserInputMock(inputId)
+  }
 }
 
 function buildHarness(overrides: Partial<ChatState> = {}): Harness {
@@ -205,6 +211,7 @@ function buildHarness(overrides: Partial<ChatState> = {}): Harness {
     openSideConversationDraft: () => undefined,
     sendSideMessage: async () => false,
     interruptSide: async () => undefined,
+    resolveSideUserInput: async () => undefined,
     setSideInput: () => undefined,
     setSideModel: () => undefined,
     setSideReasoningEffort: () => undefined,
@@ -280,6 +287,56 @@ describe('chat-store-side-actions', () => {
     expect(state.sidePanel.activeSideId).toBeNull()
     expect(state.sideConversations).toEqual({})
     expect(provider.forkMock).not.toHaveBeenCalled()
+  })
+
+  it('keeps side user input live and resolves it against the side block', async () => {
+    const { actions, state, provider } = buildHarness()
+    const sideId = await actions.spawnSideConversation()
+    const sink = provider.subscribeMock.mock.calls.at(-1)?.[2] as ThreadEventSink
+
+    sink.onUserInput({
+      requestId: 'request-side-1',
+      itemId: 'item-side-1',
+      turnId: 'turn-side-1',
+      questions: [{
+        id: 'scope',
+        header: 'Scope',
+        question: 'Where should this be available?',
+        options: [
+          { label: 'Side only', description: 'Keep it in the side conversation.' },
+          { label: 'Everywhere', description: 'Share it with the main conversation.' }
+        ]
+      }]
+    })
+
+    expect(state.sideConversations[sideId!].blocks).toContainEqual(
+      expect.objectContaining({
+        kind: 'user_input',
+        id: 'item-side-1',
+        requestId: 'request-side-1',
+        status: 'pending',
+        live: true
+      })
+    )
+
+    await actions.resolveSideUserInput(sideId!, 'item-side-1', {
+      kind: 'submit',
+      answers: [{ id: 'scope', label: 'Side only', value: 'Side only' }]
+    })
+
+    expect(provider.submitUserInputMock).toHaveBeenCalledWith(
+      'request-side-1',
+      [{ id: 'scope', label: 'Side only', value: 'Side only' }]
+    )
+    expect(state.sideConversations[sideId!].blocks).toContainEqual(
+      expect.objectContaining({
+        kind: 'user_input',
+        id: 'item-side-1',
+        status: 'submitted',
+        live: false,
+        answers: [{ id: 'scope', label: 'Side only', value: 'Side only' }]
+      })
+    )
   })
 
   it('spawnSideConversation with seedText immediately sends the first turn', async () => {

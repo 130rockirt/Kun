@@ -844,6 +844,22 @@ export class TurnService {
   }
 
   /**
+   * Return true only while this exact durable source turn owns a nonterminal
+   * GraphRun. AgentLoop uses this at ordinary direct-turn limit boundaries so
+   * a live Graph is governed by its own ledger without granting an unlimited
+   * pre-creation or post-terminal turn.
+   */
+  async graphRunOwnsLeadLimits(input: {
+    threadId: string
+    turnId: string
+  }): Promise<boolean> {
+    const turn = await this.getTurn(input.threadId, input.turnId)
+    if (!turn || turn.status !== 'running' || turn.orchestration !== 'graph') return false
+    const attached = await this.deps.resolveGraphLeadRun?.(input)
+    return attached?.terminal === false
+  }
+
+  /**
    * Reacquire a process-local execution lease for an already-running Graph
    * source turn. Duplicate wake-ups share the active execution instead of
    * admitting a second model loop.

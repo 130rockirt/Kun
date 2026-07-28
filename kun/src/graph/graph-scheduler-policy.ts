@@ -25,7 +25,7 @@ export function dependencyDecision(
     if (!source) return 'blocked'
     if (edge.kind === 'control') {
       const outcome = outcomeOf(source)
-      if (!edge.requiredOutcomes.includes(outcome)) {
+      if (!outcome || !edge.requiredOutcomes.includes(outcome)) {
         if (isTerminalNodeStatus(source.status)) return 'unsatisfiable'
         return 'blocked'
       }
@@ -107,12 +107,13 @@ export function steeringTargetsNode(
 }
 
 export function outcomeOf(node: GraphNodeProjectionV1):
-  'accepted' | 'repair_required' | 'failed' | 'cancelled' | 'skipped' {
+  'accepted' | 'repair_required' | 'failed' | 'cancelled' | 'skipped' | undefined {
   if (node.status === 'accepted' || node.status === 'superseded') return 'accepted'
   if (node.status === 'repair_required') return 'repair_required'
+  if (node.status === 'failed') return 'failed'
   if (node.status === 'cancelled') return 'cancelled'
   if (node.status === 'skipped') return 'skipped'
-  return 'failed'
+  return undefined
 }
 
 export function deterministicReview(

@@ -58,11 +58,58 @@ jobs:
           echo "App version: ${app_version}"
           echo "Commit: ${head_sha}"
 
+  validate:
+    name: Validate dev commit
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: prepare
+    steps:
+      - name: Check out develop commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare.outputs.head_sha }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            kun/package-lock.json
+
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Install Kun runtime dependencies
+        run: npm --prefix kun ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Audit production dependencies
+        run: npm run audit:production
+
+      - name: Validate Extension release contracts
+        run: npm run check:extensions
+
+      - name: Test
+        run: npm run test
+
+      - name: Test joint GUI/TUI release contracts
+        run: npm run test:tui-release
+
   build-macos:
     name: Build macOS
     runs-on: macos-latest
     timeout-minutes: 90
-    needs: prepare
+    needs:
+      - prepare
+      - validate
     env:
       KUN_APP_VERSION: ${{ needs.prepare.outputs.app_version }}
       KUN_ARTIFACT_VERSION: ${{ needs.prepare.outputs.dev_version }}
@@ -227,7 +274,9 @@ jobs:
     name: Build Windows
     runs-on: windows-latest
     timeout-minutes: 90
-    needs: prepare
+    needs:
+      - prepare
+      - validate
     env:
       KUN_APP_VERSION: ${{ needs.prepare.outputs.app_version }}
       KUN_ARTIFACT_VERSION: ${{ needs.prepare.outputs.dev_version }}
@@ -319,7 +368,9 @@ jobs:
     name: Build Linux
     runs-on: ubuntu-latest
     timeout-minutes: 90
-    needs: prepare
+    needs:
+      - prepare
+      - validate
     env:
       KUN_APP_VERSION: ${{ needs.prepare.outputs.app_version }}
       KUN_ARTIFACT_VERSION: ${{ needs.prepare.outputs.dev_version }}
@@ -425,7 +476,9 @@ jobs:
     name: Build standalone TUI prerelease (${{ matrix.target }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
-    needs: prepare
+    needs:
+      - prepare
+      - validate
     strategy:
       fail-fast: false
       matrix:

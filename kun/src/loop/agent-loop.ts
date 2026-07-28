@@ -489,8 +489,17 @@ export class AgentLoop {
     let deadline: ReturnType<typeof setTimeout> | undefined
     if (!delegatedSdkRuntime && this.opts.disableWallTimeLimit !== true) {
       deadline = setTimeout(() => {
-        wallTimeExceeded = true
-        this.opts.turns.abortTurnExecution(turnId)
+        void (async () => {
+          const graphRunOwnsLimit =
+            owningThread?.extensionBudget === undefined &&
+            await this.opts.turns.graphRunOwnsLeadLimits({ threadId, turnId })
+          if (graphRunOwnsLimit) return
+          wallTimeExceeded = true
+          this.opts.turns.abortTurnExecution(turnId)
+        })().catch(() => {
+          wallTimeExceeded = true
+          this.opts.turns.abortTurnExecution(turnId)
+        })
       }, maxWallTimeMs)
       if (typeof (deadline as { unref?: () => void }).unref === 'function') {
         ;(deadline as { unref: () => void }).unref()
@@ -761,13 +770,20 @@ export class AgentLoop {
           maxWallTimeMs: Math.min(configuredLimits.maxWallTimeMs, thread.extensionBudget.maxElapsedMs)
         }
       : configuredLimits
+    const graphRunOwnsLimits = async (): Promise<boolean> =>
+      thread?.extensionBudget === undefined &&
+      await this.opts.turns.graphRunOwnsLeadLimits({ threadId, turnId })
     const startedAt = this.opts.nowMs?.() ?? Date.now()
     for (let step = 0; ; step += 1) {
       if (signal.aborted) {
         await this.drainAndSealSteering(threadId, turnId, signal)
         return 'aborted'
       }
-      if (limits.maxSteps !== undefined && step >= limits.maxSteps) {
+      if (
+        limits.maxSteps !== undefined &&
+        step >= limits.maxSteps &&
+        !await graphRunOwnsLimits()
+      ) {
         await this.drainAndSealSteering(threadId, turnId, signal)
         const extensionLimited = Boolean(
           thread?.extensionBudget && (
@@ -787,7 +803,8 @@ export class AgentLoop {
       }
       if (
         this.opts.disableWallTimeLimit !== true &&
-        (this.opts.nowMs?.() ?? Date.now()) - startedAt >= limits.maxWallTimeMs
+        (this.opts.nowMs?.() ?? Date.now()) - startedAt >= limits.maxWallTimeMs &&
+        !await graphRunOwnsLimits()
       ) {
         await this.drainAndSealSteering(threadId, turnId, signal)
         const extensionLimited = Boolean(

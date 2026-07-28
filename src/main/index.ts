@@ -33,6 +33,7 @@ import kunTrayMacRetinaPng from '../asset/img/kun_tray_mac@2x.png?url'
 import {
   createAppIcon,
   createMultiScaleIcon,
+  notificationIconOptions,
   pickTrayIcon,
   prepareTrayIcon
 } from './app-icon'
@@ -968,7 +969,7 @@ async function showTurnCompleteNotification(
     const notification = new Notification({
       title,
       body,
-      icon: appIcon.isEmpty() ? undefined : appIcon
+      ...notificationIconOptions(appIcon)
     })
     notification.on('click', () => {
       revealMainWindow()

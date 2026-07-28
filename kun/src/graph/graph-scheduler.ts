@@ -216,9 +216,9 @@ export class GraphScheduler extends GraphAttemptScheduler {
       if (projection.node.kind !== 'loop_gate' || projection.status !== 'ready') continue
       const gate = projection.node.loopGate!
       const source = run.nodes[gate.condition.sourceNodeId]
-      const continues = Boolean(
-        source && new Set<string>(gate.condition.outcomeIn).has(outcomeOf(source))
-      )
+      const sourceOutcome = source ? outcomeOf(source) : undefined
+      if (!sourceOutcome) continue // Unfinished sources have no outcome.
+      const continues = new Set<string>(gate.condition.outcomeIn).has(sourceOutcome)
       const iterationExhausted = projection.loopIteration >= Math.min(
         gate.maxIterations,
         run.budget.limits.maxLoopIterations

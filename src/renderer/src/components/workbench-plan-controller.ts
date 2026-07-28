@@ -328,7 +328,7 @@ export function useWorkbenchPlanController({
     const saved = await savePlanContentToDisk(plan, snapshot.content)
     if (!saved) return
     setComposerMode('agent')
-    const prompt = buildPlanBuildPrompt(plan.relativePath)
+    const prompt = buildPlanBuildPrompt(plan.relativePath, snapshot.content, orchestration)
     const labelKey = orchestration === 'graph' ? 'planBuildGraph' : 'planBuildDirect'
     const sent = await sendMessage(prompt, 'agent', {
       displayText: `${t(labelKey)}: ${plan.relativePath}`,

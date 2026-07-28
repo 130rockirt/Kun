@@ -74,7 +74,7 @@ describe('SideConversationPanel', () => {
       innerWidth: 1400,
       kunGui: {
         platform: 'darwin',
-        runtimeRequest: vi.fn(async () => ({ ok: true, status: 200, body: '{"shells":[]}' }))
+        runtimeRequest: vi.fn(async () => ({ ok: true, status: 200, body: '{"sessions":[]}' }))
       }
     }
     useChatStore.setState({
@@ -101,7 +101,7 @@ describe('SideConversationPanel', () => {
   })
 
   it('uses the shared main timeline and composer inside the docked branch workspace', () => {
-    let renderer: ReactTestRenderer
+    let renderer: ReactTestRenderer | undefined
     act(() => {
       renderer = create(createElement(SideConversationPanel, { variant: 'docked' }))
     })
@@ -154,6 +154,80 @@ describe('SideConversationPanel', () => {
     expect(useChatStore.getState().composerProviderId).toBe('codex')
 
     act(() => renderer!.unmount())
+  })
+
+  it('renders and submits live structured input inside the side composer', async () => {
+    const originalResolveSideUserInput = useChatStore.getState().resolveSideUserInput
+    const resolveSideUserInput = vi.fn(async () => undefined)
+    const sideWithInput: SideConversation = {
+      ...firstSide,
+      busy: true,
+      blocks: [
+        ...firstSide.blocks,
+        {
+          kind: 'user_input',
+          id: 'side-input-item',
+          requestId: 'side-input-request',
+          status: 'pending',
+          live: true,
+          questions: [{
+            id: 'scope',
+            header: 'Scope',
+            question: 'Where should this be available?',
+            options: [
+              { label: 'Side only', description: 'Keep it in this branch.' },
+              { label: 'Everywhere', description: 'Share it with the main conversation.' }
+            ]
+          }]
+        }
+      ]
+    }
+    useChatStore.setState({
+      sideConversations: { [sideWithInput.threadId]: sideWithInput },
+      resolveSideUserInput
+    })
+
+    let renderer: ReactTestRenderer | undefined
+    try {
+      await act(async () => {
+        renderer = create(createElement(SideConversationPanel, { variant: 'docked' }))
+      })
+
+      expect(renderer!.root.findByProps({
+        'data-user-input-variant': 'compact'
+      })).toBeDefined()
+
+      const option = renderer!.root.findAllByType('button').find((button) =>
+        textContent(button).includes('Side only')
+      )
+      expect(option).toBeDefined()
+      await act(async () => {
+        option!.props.onClick()
+      })
+
+      const submit = renderer!.root.findAllByType('button').find((button) =>
+        textContent(button).includes('Submit answers')
+      )
+      expect(submit).toBeDefined()
+      await act(async () => {
+        submit!.props.onClick()
+      })
+
+      expect(resolveSideUserInput).toHaveBeenCalledWith(
+        'side-1',
+        'side-input-item',
+        {
+          kind: 'submit',
+          answers: [{ id: 'scope', label: 'Side only', value: 'Side only' }]
+        }
+      )
+    } finally {
+      const mountedRenderer = renderer
+      if (mountedRenderer) {
+        act(() => mountedRenderer.unmount())
+      }
+      useChatStore.setState({ resolveSideUserInput: originalResolveSideUserInput })
+    }
   })
 
   it('can return from a new-branch draft to the only existing branch', () => {

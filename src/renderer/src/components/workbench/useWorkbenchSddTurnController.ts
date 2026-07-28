@@ -33,7 +33,10 @@ import {
 } from '../../sdd/sdd-draft-images'
 import { forgetRememberedSddDraft, useSddDraftStore, type SddDraft } from '../../sdd/sdd-draft-store'
 import { saveActiveSddDraftToDisk } from '../../sdd/sdd-draft-actions'
-import { releaseSddAssistantThreadsForDraft } from '../../sdd/sdd-thread-registry'
+import {
+  releaseSddAssistantThreadsForDraft,
+  showSddAssistantThreadInSidebar
+} from '../../sdd/sdd-thread-registry'
 import { composeSddAssistantPrompt } from '../../sdd/sdd-assistant-prompt'
 import { frameworkById } from '../../sdd/pm-skill-frameworks'
 import { buildSddDraftToPlanPrompt } from '../../sdd/sdd-plan-prompt'
@@ -317,6 +320,9 @@ export function useWorkbenchSddTurnController({
       ...(publicAttachments.length ? { attachments: publicAttachments } : {})
     })
     if (sent) {
+      if (showSddAssistantThreadInSidebar(threadId)) {
+        void useChatStore.getState().refreshThreads()
+      }
       pendingSddFrameworkRef.current = null
       pendingSddFrameworkPromptRef.current = null
       if (attachments.length > 0) clearComposerAttachments(attachmentScope)
@@ -409,12 +415,16 @@ export function useWorkbenchSddTurnController({
     const model = assistantSelection.assistantModel.trim()
     const providerId =
       assistantSelection.assistantProviderId.trim() || providerIdForComposerModel(composerModelGroups, model)
-    return sendMessage(payload.prompt, 'agent', {
+    const sent = await sendMessage(payload.prompt, 'agent', {
       displayText: payload.displayText,
       ...(model ? { model } : {}),
       ...(providerId ? { providerId } : {}),
       ...(attachmentIds.length ? { attachmentIds } : {})
     })
+    if (sent && showSddAssistantThreadInSidebar(threadId)) {
+      void useChatStore.getState().refreshThreads()
+    }
+    return sent
   }, [
     composerModelGroups,
     ensureSddAssistantThreadForDraft,
@@ -549,6 +559,9 @@ export function useWorkbenchSddTurnController({
       sddUpgradeTargetRef.current = null
       useSddDraftStore.getState().setOperationStatus('idle')
       return
+    }
+    if (showSddAssistantThreadInSidebar(threadId)) {
+      void useChatStore.getState().refreshThreads()
     }
     const tracePath = sddDraftTraceRelativePath(draft.relativePath)
     if (tracePath) {

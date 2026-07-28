@@ -39,7 +39,7 @@ import { useTranslation } from 'react-i18next'
 import type { ModelProviderModelGroup } from '@shared/kun-gui-api'
 import type { KunSpeechToTextSettingsV1 } from '@shared/app-settings'
 import { isSpeechToTextConfigured } from '@shared/speech-to-text'
-import type { AttachmentReference, ReviewTarget } from '../../agent/types'
+import type { AttachmentReference, ChatBlock, ReviewTarget } from '../../agent/types'
 import { useChatStore } from '../../store/chat-store'
 import type { AppRoute } from '../../store/chat-store-types'
 import { normalizeWorkspaceRoot } from '../../lib/workspace-path'
@@ -79,7 +79,11 @@ import {
 import { FloatingComposerAgentPicker } from './FloatingComposerAgentPicker'
 import { FloatingComposerUserInputPanel } from './FloatingComposerUserInputPanel'
 import { BackgroundShellOverlay } from './BackgroundShellOverlay'
-import { useComposerUserInput, type PendingUserInputBlock } from './use-composer-user-input'
+import {
+  useComposerUserInput,
+  type PendingUserInputBlock,
+  type ResolveUserInput
+} from './use-composer-user-input'
 import { selectLivePendingUserInput } from './user-input-panel-logic'
 import {
   FloatingComposerQueuedMessages,
@@ -182,6 +186,10 @@ type Props = {
   workspaceRootOverride?: string
   /** Use a non-active thread for compact side-conversation usage. */
   activeThreadIdOverride?: string | null
+  /** Blocks owned by a non-active thread, such as a side conversation. */
+  userInputBlocksOverride?: ChatBlock[]
+  /** Resolver paired with userInputBlocksOverride. */
+  onResolveUserInput?: ResolveUserInput
   input: string
   setInput: (v: string) => void
   mode: 'plan' | 'agent'
@@ -313,6 +321,8 @@ export function FloatingComposer({
   variant = 'default',
   workspaceRootOverride,
   activeThreadIdOverride,
+  userInputBlocksOverride,
+  onResolveUserInput,
   input,
   setInput,
   mode,
@@ -399,19 +409,24 @@ export function FloatingComposer({
   const reorderQueuedMessage = useChatStore((s) => s.reorderQueuedMessage)
   const compact = variant !== 'default'
   const side = variant === 'side'
-  // The pending ask-user request for the active thread, surfaced as a panel
-  // docked above this composer. The main Chat and Design composers host it, as
-  // does Write's only (compact) composer. Other compact side composers would
-  // otherwise mirror the active thread's prompt. The timeline bubble remains
-  // the record in every surface.
+  // The pending ask-user request for this composer's thread, surfaced as a
+  // panel docked above the input. Side conversations provide their own blocks
+  // and resolver so they never mirror or mutate the active main thread.
+  const userInputBlocks = userInputBlocksOverride ?? blocks
+  const canSurfaceUserInput = side
+    ? userInputBlocksOverride !== undefined && onResolveUserInput !== undefined
+    : shouldSurfaceComposerUserInput(route, compact)
   const pendingUserInputBlock = useMemo<PendingUserInputBlock | null>(() => {
-    if (!shouldSurfaceComposerUserInput(route, compact)) return null
+    if (!canSurfaceUserInput) return null
     // Only surface a request the live runtime is actively awaiting. A stale
     // `pending` block rehydrated from a finished thread must not re-prompt the
     // user (issue #606) — resolving it would hit a dead gate.
-    return selectLivePendingUserInput(blocks)
-  }, [blocks, compact, route])
-  const userInput = useComposerUserInput(pendingUserInputBlock, resolveUserInput)
+    return selectLivePendingUserInput(userInputBlocks)
+  }, [canSurfaceUserInput, userInputBlocks])
+  const userInput = useComposerUserInput(
+    pendingUserInputBlock,
+    onResolveUserInput ?? resolveUserInput
+  )
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const speechToTextSettings = useSpeechToTextSettings()
   const promptOptimizationSettings = usePromptOptimizationSettings()
@@ -1171,7 +1186,11 @@ export function FloatingComposer({
                 }}
               />
               {userInput.active ? (
-                <FloatingComposerUserInputPanel controller={userInput} t={t} />
+                <FloatingComposerUserInputPanel
+                  controller={userInput}
+                  t={t}
+                  variant={compact ? 'compact' : 'main'}
+                />
               ) : null}
             </>
           )}

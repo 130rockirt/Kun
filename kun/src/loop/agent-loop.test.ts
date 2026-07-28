@@ -506,7 +506,7 @@ describe('AgentLoop interruption', () => {
     ]))
   })
 
-  it('recovers an omitted GraphRun creation before final response and leaves direct turns unchanged', async () => {
+  it('keeps the source turn active until its GraphRun is terminal (#1031)', async () => {
     const sessionStore = new InMemorySessionStore()
     const threadStore = new InMemoryThreadStore()
     const eventBus = new InMemoryEventBus()
@@ -582,6 +582,7 @@ describe('AgentLoop interruption', () => {
       steering,
       compactor: new ContextCompactor(),
       prefix: createImmutablePrefix({ systemPrompt: 'test system prompt' }),
+      turnLimits: { maxSteps: 2, maxWallTimeMs: 60_000 },
       ids,
       nowIso
     })
@@ -603,6 +604,10 @@ describe('AgentLoop interruption', () => {
     await expect(loop.runTurn('thr_graph_mode', graphTurn.turnId)).resolves.toBe('suspended')
     expect((await turns.getTurn('thr_graph_mode', graphTurn.turnId))?.status).toBe('running')
     expect(turns.isTurnExecutionActive(graphTurn.turnId)).toBe(false)
+    expect(eventBus.snapshotSince('thr_graph_mode', 0)
+      .some((event) => event.kind === 'turn_completed')).toBe(false)
+    expect(eventBus.snapshotSince('thr_graph_mode', 0)
+      .some((event) => event.kind === 'error' && event.code === 'turn_step_limit')).toBe(false)
     expect(model.requests).toHaveLength(3)
     expect(model.requests[0]?.requiredToolName).toBe('graph_create_run')
     expect(model.requests[0]?.modeInstruction).toContain('Graph Mode is active')
@@ -652,6 +657,8 @@ describe('AgentLoop interruption', () => {
     })
     await expect(loop.runTurn('thr_graph_mode', graphTurn.turnId)).resolves.toBe('completed')
     expect((await turns.getTurn('thr_graph_mode', graphTurn.turnId))?.status).toBe('completed')
+    expect(eventBus.snapshotSince('thr_graph_mode', 0)
+      .some((event) => event.kind === 'turn_completed')).toBe(true)
 
     const directModel = new CapturingCompleteModel()
     const directLoop = new AgentLoop({

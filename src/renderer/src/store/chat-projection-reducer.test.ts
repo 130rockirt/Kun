@@ -82,12 +82,17 @@ describe('chat projection reducer', () => {
       ...state(),
       busy: true,
       currentTurnId: 'turn_graph',
-      currentTurnOrchestration: 'graph'
+      currentTurnOrchestration: 'graph',
+      threads: [{ ...state().threads[0]!, status: 'running' }]
     }, [{ type: 'turn_completed' }])
 
     expect(projected.busy).toBe(false)
     expect(projected.currentTurnId).toBeNull()
     expect(projected.currentTurnOrchestration).toBeNull()
+    expect(projected.threads[0]).toMatchObject({
+      status: 'idle',
+      latestTurnStatus: 'completed'
+    })
   })
 
   it('clears current-turn orchestration when a Graph turn fails terminally', () => {
@@ -105,6 +110,41 @@ describe('chat projection reducer', () => {
     expect(projected.busy).toBe(false)
     expect(projected.currentTurnId).toBeNull()
     expect(projected.currentTurnOrchestration).toBeNull()
+  })
+
+  it('settles a stale running sidebar status when a terminal event is replayed (#1028)', () => {
+    const projected = project({
+      ...state(),
+      busy: false,
+      currentTurnId: null,
+      activeThreadGoal: {
+        threadId: 'thread_1',
+        objective: 'Finish the goal',
+        status: 'complete',
+        tokensUsed: 10,
+        timeUsedSeconds: 30,
+        createdAt: '2026-07-11T00:00:00.000Z',
+        updatedAt: '2026-07-11T00:00:30.000Z'
+      },
+      threads: [{ ...state().threads[0]!, status: 'running' }]
+    }, [{ type: 'turn_completed' }])
+
+    expect(projected.threads[0]).toMatchObject({
+      status: 'idle',
+      latestTurnStatus: 'completed'
+    })
+  })
+
+  it('applies status-only thread metadata updates', () => {
+    const projected = project({
+      ...state(),
+      threads: [{ ...state().threads[0]!, status: 'running' }]
+    }, [{
+      type: 'thread_metadata_changed',
+      payload: { threadId: 'thread_1', status: 'idle' }
+    }])
+
+    expect(projected.threads[0]?.status).toBe('idle')
   })
 
   it('produces identical state for live and replayed normalized actions', () => {

@@ -29,6 +29,18 @@ export function shouldCollapseTimelineHistory(totalTurns: number, pageSize: numb
   return totalTurns > pageSize
 }
 
+export function isTimelineNearBottom({
+  scrollHeight,
+  scrollTop,
+  clientHeight
+}: {
+  scrollHeight: number
+  scrollTop: number
+  clientHeight: number
+}): boolean {
+  return scrollHeight - scrollTop - clientHeight < STICK_TO_BOTTOM_PX
+}
+
 export function deriveTimelineRenderedTurnCount({
   visibleTurnCount,
   totalTurns,
@@ -149,8 +161,7 @@ export function useTimelineScroll({
     const el = containerRef.current
     if (!el) return
     const onScroll = (): void => {
-      const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight
-      stickToBottomRef.current = distanceToBottom < STICK_TO_BOTTOM_PX
+      stickToBottomRef.current = isTimelineNearBottom(el)
       if (hiddenTurnCount > 0 && el.scrollTop <= TOP_LOAD_TRIGGER_PX) {
         loadEarlierTurns({ userInitiated: true })
       }

@@ -121,4 +121,5 @@
 - [x] 12.7 Run `npm run typecheck`, relevant Vitest suites, `npm run build:kun`, `npm run build`, and `git diff --check`, separating new failures from baseline failures
 - [ ] 12.8 Execute packaged-app manual smoke tests for all nine same/cross-OS directions covering new target, Keep both, Merge, collision, encryption, cancel, crash recovery, and rollback
 - [ ] 12.9 Release behind a feature flag to internal dogfood, retain v1 fixture packages permanently, and enable broader channels only after security review and recovery gates pass
+  - 2026-07-29 release-safety gate: public/default launches keep new migration operations disabled; internal dogfood requires the explicit `KUN_DATA_MIGRATION_ENABLED=1` opt-in. The task remains open until internal release, security/recovery sign-off, and broader-channel approval are recorded.
 - [x] 12.10 Document the user migration guide, no-password-recovery warning, exclusion policy, cross-platform limitations, and support report workflow

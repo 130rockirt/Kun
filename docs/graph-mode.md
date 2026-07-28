@@ -53,6 +53,7 @@ Graph 不是在普通 Agent 上临时多挂几个工具。只要 turn 选择了 
 ```text
 用户选择 Graph 并发送请求
   -> Lead 理解目标、边界、风险与验收条件
+  -> 若从右侧计划面板启动，GUI 把已保存的完整 Markdown 直接嵌入本次请求
   -> 模型必须先调用 graph_create_run
   -> 宿主校验 GraphPlan 并写入 journal/snapshot
   -> Scheduler 计算 ready set
@@ -73,8 +74,14 @@ Graph 不是在普通 Agent 上临时多挂几个工具。只要 turn 选择了 
 GraphRun 独立于单次模型请求和网络流，但不脱离创建它的源 Lead turn。等待节点期间，
 宿主只暂停该 turn 的进程内执行并释放模型并发槽，持久化 turn 仍是 `running`；
 重要事件到来时恢复同一个 `sourceTurnId`。只有 GraphRun 已进入终态且 Lead 完成最后
-交付后，源 turn 才结束。GUI 重连时先读取 HTTP snapshot，再从已确认的 sequence
-继续 SSE replay。
+交付后，源 turn 才结束。原生 Graph Lead 不受普通 direct turn 的模型步数和墙钟上限
+终止，而由 GraphRun 默认七天的墙钟和资源账本治理；显式 extension budget 仍然生效。
+GUI 重连时先读取 HTTP snapshot，再从已确认的 sequence 继续 SSE replay。
+
+从计划面板启动时，`.kunsdd/plan/*.md` 可能是未纳入 Git 的 GUI 文件，隔离 worktree
+不会天然包含它。Graph 创建回合又必须先调用 `graph_create_run`，不能先用读取工具。
+因此请求会携带保存后的完整计划正文；Lead 必须直接据此建图，并把每个 executor 的
+目标写成自包含任务，不得创建一个只负责在 worktree 中重读该计划路径的 snapshot 节点。
 
 ## 3. 核心契约
 
@@ -162,6 +169,11 @@ exhaustion target 和最大 iteration。每次继续都会：
 2. 只重置宿主计算出的 cycle nodes。
 3. 保留旧 attempt history，并为新 attempt 写入新的 iteration。
 4. 增加全局 loop ledger。
+
+`pending`、`blocked`、`ready`、`queued`、`running`、`submitted` 和 `reviewing`
+都不是失败 outcome。condition source 尚未形成真实结果时，LoopGate 不求值，
+依赖 `failed` 的 control edge 也保持 blocked；不能提前启动 repair、quality-gate
+或 final。
 
 达到 gate 或 run 的非 Token 资源上限时只能走 exhaustion path，不允许再创建 attempt。
 重复相同的 normalized failure 达到阈值时不会自动进入持久化 `paused`。
@@ -553,6 +565,9 @@ Episode/Artifact。
 - Graph 不创建：检查 `enabled`、turn 的 `orchestration`、rollout settings 和
   `graph_create_run` validation error。`readScopes`/`writeScopes` 必须是仓库相对
   路径；机械 `budget` 字段可省略并交给宿主补齐，不应靠模型复写配置默认值。
+- 计划面板 Graph 的首节点报计划文件 `ENOENT`：确认构建请求中包含
+  `<implementation_plan>`；节点目标应自包含，不应在隔离 worktree 重读
+  `.kunsdd/plan`。
 - Node 永久 blocked：检查 required outcome、data Artifact、LoopGate back edge
   和前驱 terminal failure。
 - Worker 不退出：cancel Graph；确认 child 收到 abort；查看 cleanup 中 worker/

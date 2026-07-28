@@ -613,6 +613,10 @@ describe('TurnService startTurn', () => {
       request: { prompt: 'run graph', orchestration: 'graph' }
     })
     expect(source.turnId).toBe('turn_1')
+    expect(await service.graphRunOwnsLeadLimits({
+      threadId: 'thr_graph_lead',
+      turnId: source.turnId
+    })).toBe(true)
     expect(await service.suspendGraphLeadTurn({
       threadId: 'thr_graph_lead',
       turnId: source.turnId
@@ -661,6 +665,10 @@ describe('TurnService startTurn', () => {
     })).toBe('pending_steering')
     expect(steering.drain(source.turnId)).toHaveLength(1)
     await service.interruptTurn({ threadId: 'thr_graph_lead', turnId: source.turnId })
+    expect(await service.graphRunOwnsLeadLimits({
+      threadId: 'thr_graph_lead',
+      turnId: source.turnId
+    })).toBe(false)
   })
 
   it('preserves an orphaned running Graph source turn when its run is nonterminal', async () => {

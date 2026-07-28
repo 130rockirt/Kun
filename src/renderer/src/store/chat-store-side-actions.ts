@@ -416,7 +416,8 @@ function buildSideSink(sideId: string, ctx: SideContext, sinceSeq = 0): ThreadEv
               createdAt: req.createdAt ?? new Date().toISOString(),
               requestId: req.requestId,
               questions: req.questions,
-              status: 'pending'
+              status: 'pending',
+              live: true
             }
           ]
         }))
@@ -428,7 +429,12 @@ function buildSideSink(sideId: string, ctx: SideContext, sinceSeq = 0): ThreadEv
           ...side,
           blocks: side.blocks.map((block) =>
             block.kind === 'user_input' && block.id === ev.itemId
-              ? { ...block, status: ev.status }
+              ? {
+                  ...block,
+                  status: ev.status,
+                  live: false,
+                  ...(ev.answers ? { answers: ev.answers } : {})
+                }
               : block
           )
         }))
@@ -527,6 +533,7 @@ export function createSideActions(ctx: SideContext): Pick<
   | 'openSideConversationDraft'
   | 'sendSideMessage'
   | 'interruptSide'
+  | 'resolveSideUserInput'
   | 'setSideInput'
   | 'setSideModel'
   | 'setSideReasoningEffort'
@@ -542,6 +549,7 @@ export function createSideActions(ctx: SideContext): Pick<
     | 'openSideConversationDraft'
     | 'sendSideMessage'
     | 'interruptSide'
+    | 'resolveSideUserInput'
     | 'setSideInput'
     | 'setSideModel'
     | 'setSideReasoningEffort'
@@ -692,6 +700,91 @@ export function createSideActions(ctx: SideContext): Pick<
           patchSide(s, sideId, (cur) => ({
             ...cur,
             error: ctx.formatRuntimeError(e)
+          }))
+        )
+      }
+    },
+
+    resolveSideUserInput: async (sideId, blockId, action) => {
+      const side = ctx.get().sideConversations[sideId]
+      const block = side?.blocks.find((candidate) => candidate.id === blockId)
+      if (
+        !side ||
+        !block ||
+        block.kind !== 'user_input' ||
+        block.status !== 'pending' ||
+        block.live !== true
+      ) {
+        return
+      }
+
+      const provider = ctx.getProvider()
+      try {
+        if (action.kind === 'submit') {
+          if (typeof provider.submitUserInputResponse !== 'function') {
+            throw new Error(ctx.t('common:runtimeUserInputUnsupported'))
+          }
+          await provider.submitUserInputResponse(block.requestId, action.answers)
+          ctx.set((state) =>
+            patchSide(state, sideId, (current) => ({
+              ...current,
+              blocks: current.blocks.map((candidate) =>
+                candidate.id === blockId && candidate.kind === 'user_input'
+                  ? {
+                      ...candidate,
+                      status: 'submitted',
+                      answers: action.answers,
+                      live: false,
+                      errorMessage: undefined
+                    }
+                  : candidate
+              )
+            }))
+          )
+          return
+        }
+
+        if (typeof provider.cancelUserInput !== 'function') {
+          throw new Error(ctx.t('common:runtimeUserInputUnsupported'))
+        }
+        await provider.cancelUserInput(block.requestId)
+        ctx.set((state) =>
+          patchSide(state, sideId, (current) => ({
+            ...current,
+            blocks: current.blocks.map((candidate) =>
+              candidate.id === blockId && candidate.kind === 'user_input'
+                ? {
+                    ...candidate,
+                    status: 'cancelled',
+                    live: false,
+                    errorMessage: undefined
+                  }
+                : candidate
+            )
+          }))
+        )
+      } catch (error) {
+        const message = ctx.formatRuntimeError(error)
+        void window.kunGui?.logError?.('side-user-input', 'Failed to resolve side user input', {
+          message,
+          sideId,
+          blockId
+        }).catch(() => undefined)
+        ctx.set((state) =>
+          patchSide(state, sideId, (current) => ({
+            ...current,
+            error: message,
+            blocks: current.blocks.map((candidate) =>
+              candidate.id === blockId && candidate.kind === 'user_input'
+                ? {
+                    ...candidate,
+                    status: 'error',
+                    live: false,
+                    errorMessage: message,
+                    ...(action.kind === 'submit' ? { answers: action.answers } : {})
+                  }
+                : candidate
+            )
           }))
         )
       }

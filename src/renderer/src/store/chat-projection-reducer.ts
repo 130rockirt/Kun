@@ -584,11 +584,17 @@ export function reduceChatProjection(
     case 'thread_metadata_changed': {
       const event = action.payload
       const title = event.title?.trim()
-      if (!event.threadId || !title) return {}
+      const status = event.status?.trim()
+      if (!event.threadId || (!title && !status && event.titleAuto === undefined)) return {}
       return {
         threads: state.threads.map((thread) =>
           thread.id === event.threadId
-            ? { ...thread, title, ...(event.titleAuto !== undefined ? { titleAuto: event.titleAuto } : {}) }
+            ? {
+                ...thread,
+                ...(title ? { title } : {}),
+                ...(status ? { status } : {}),
+                ...(event.titleAuto !== undefined ? { titleAuto: event.titleAuto } : {})
+              }
             : thread
         )
       }
@@ -610,6 +616,9 @@ export function reduceChatProjection(
       const snapshot = action.payload
       if (state.activeThreadId !== snapshot.threadId) return {}
       const busy = context.threadSnapshotLooksRunning(snapshot.blocks, snapshot.threadStatus)
+      const threads = snapshot.threadStatus
+        ? updateProjectedThreadStatus(state.threads, snapshot.threadId, snapshot.threadStatus)
+        : state.threads
       const canonicalBlocks = busy
         ? snapshot.blocks
         : context.settlePendingRuntimeWork(snapshot.blocks)
@@ -642,19 +651,26 @@ export function reduceChatProjection(
           : {}),
         activeThreadGoal: snapshot.goal ?? state.activeThreadGoal,
         activeThreadTodos: snapshot.todos ?? state.activeThreadTodos,
+        ...(threads !== state.threads ? { threads } : {}),
         error: context.clearRecoveringError(state.error)
       }
     }
     case 'turn_completed': {
-      if (!state.busy && !state.currentTurnId) return {}
+      const threadId = state.activeThreadId
+      const threads = threadId
+        ? settleProjectedThreadStatus(state.threads, threadId, 'completed')
+        : state.threads
+      if (!state.busy && !state.currentTurnId) {
+        return threads === state.threads ? {} : { threads }
+      }
       const patch = flushLiveProjection(state, context.now, {
         ...finalizeTurnTimingAt(state, context.now),
         error: null,
         currentTurnId: null,
         currentTurnOrchestration: null,
-        ...(state.busy ? { busy: false } : {})
+        ...(state.busy ? { busy: false } : {}),
+        ...(threads !== state.threads ? { threads } : {})
       })
-      const threadId = state.activeThreadId
       if (!threadId) return patch
       const watchTurnCompletion = { ...state.watchTurnCompletion }
       const unreadThreadIds = { ...state.unreadThreadIds }
@@ -680,6 +696,14 @@ export function reduceChatProjection(
       patch.currentTurnOrchestration = null
       patch.currentTurnUserId = null
       patch.blocks = context.settlePendingRuntimeWork(patch.blocks ?? state.blocks)
+      if (state.activeThreadId) {
+        const threads = settleProjectedThreadStatus(
+          state.threads,
+          state.activeThreadId,
+          interrupted ? 'aborted' : 'failed'
+        )
+        if (threads !== state.threads) patch.threads = threads
+      }
       if (terminal && state.activeThreadId) {
         const watchTurnCompletion = { ...state.watchTurnCompletion }
         const unreadThreadIds = { ...state.unreadThreadIds }
@@ -693,6 +717,40 @@ export function reduceChatProjection(
     default:
       return {}
   }
+}
+
+function updateProjectedThreadStatus(
+  threads: ChatState['threads'],
+  threadId: string,
+  status: string,
+  latestTurnStatus?: string
+): ChatState['threads'] {
+  let changed = false
+  const next = threads.map((thread) => {
+    if (thread.id !== threadId) return thread
+    if (thread.status === status && (
+      latestTurnStatus === undefined || thread.latestTurnStatus === latestTurnStatus
+    )) {
+      return thread
+    }
+    changed = true
+    return {
+      ...thread,
+      status,
+      ...(latestTurnStatus ? { latestTurnStatus } : {})
+    }
+  })
+  return changed ? next : threads
+}
+
+function settleProjectedThreadStatus(
+  threads: ChatState['threads'],
+  threadId: string,
+  latestTurnStatus: 'completed' | 'failed' | 'aborted'
+): ChatState['threads'] {
+  const thread = threads.find((candidate) => candidate.id === threadId)
+  if (!thread || thread.status?.trim().toLowerCase() !== 'running') return threads
+  return updateProjectedThreadStatus(threads, threadId, 'idle', latestTurnStatus)
 }
 
 function runtimeEventStartedAt(createdAt: string | undefined, now: number): number {

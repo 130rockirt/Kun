@@ -179,6 +179,27 @@ describe('app icon loader', () => {
     })
   })
 
+  describe('notificationIconOptions', () => {
+    function fakeImage(empty: boolean): Electron.NativeImage {
+      return { isEmpty: () => empty } as unknown as Electron.NativeImage
+    }
+
+    it('omits the content icon on macOS to avoid a duplicate app logo', () => {
+      expect(mod.notificationIconOptions(fakeImage(false), 'darwin')).toEqual({})
+    })
+
+    it('keeps an explicit notification icon on Windows and Linux', () => {
+      const image = fakeImage(false)
+
+      expect(mod.notificationIconOptions(image, 'win32')).toEqual({ icon: image })
+      expect(mod.notificationIconOptions(image, 'linux')).toEqual({ icon: image })
+    })
+
+    it('omits an empty image on every platform', () => {
+      expect(mod.notificationIconOptions(fakeImage(true), 'win32')).toEqual({})
+    })
+  })
+
   describe('pickTrayIcon', () => {
     function fakeImage(empty: boolean): Electron.NativeImage {
       return { isEmpty: () => empty } as unknown as Electron.NativeImage
@@ -235,8 +256,8 @@ describe('app icon loader', () => {
       } as unknown as FakeNativeImage
     }
 
-    it('uses a 22px tray icon target on macOS', () => {
-      expect(mod.trayIconSize('darwin')).toBe(22)
+    it('uses a compact 16px tray icon target on macOS', () => {
+      expect(mod.trayIconSize('darwin')).toBe(16)
     })
 
     it('uses a 16px tray icon target outside macOS', () => {
@@ -265,7 +286,7 @@ describe('app icon loader', () => {
     })
 
     it('preserves an already-sized macOS image and its Retina representation', () => {
-      const source = fakeImage(false, undefined, { width: 22, height: 22 })
+      const source = fakeImage(false, undefined, { width: 16, height: 16 })
 
       expect(mod.prepareTrayIcon(source, 'darwin')).toBe(source)
       expect(source.resize).not.toHaveBeenCalled()

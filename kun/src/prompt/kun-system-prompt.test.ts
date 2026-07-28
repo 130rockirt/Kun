@@ -48,6 +48,8 @@ describe('KUN_SYSTEM_PROMPT', () => {
     expect(KUN_SYSTEM_PROMPT).toContain('Progress updates are not stopping points')
     expect(KUN_SYSTEM_PROMPT).toContain('continue without waiting for confirmation')
     expect(KUN_SYSTEM_PROMPT).toContain('make the final response self-contained')
+    expect(KUN_SYSTEM_PROMPT).toContain('do not ask the user to send "continue"')
+    expect(KUN_SYSTEM_PROMPT).toContain('resume automatically when the shell settles')
     expect(KUN_SYSTEM_PROMPT).toContain('do not expose private chain-of-thought')
   })
 })
