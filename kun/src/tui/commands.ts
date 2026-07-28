@@ -86,7 +86,8 @@ export const TUI_SLASH_COMMANDS: SlashCommand[] = [
   { name: 'summarize', description: 'Alias for /compact' },
   { name: 'connect', description: 'Configure a shared model connection' },
   { name: 'provider', description: 'Alias for /connect' },
-  { name: 'quota', description: 'Show provider account balances and rate limits' },
+  { name: 'usage', description: 'Show provider account balances and rate limits' },
+  { name: 'quota', description: 'Alias for /usage' },
   { name: 'model', description: 'Select the shared provider and model' },
   { name: 'models', description: 'Alias for /model' },
   { name: 'variants', description: 'Choose the model reasoning effort' },
@@ -157,7 +158,7 @@ export const TUI_COMMAND_DEFINITIONS: readonly TuiCommandDefinition[] = [
   { id: 'undo', title: 'Undo in a safe branch', category: 'Session', slash: 'undo', keyAction: 'session_undo', available: true },
   { id: 'redo', title: 'Redo to preserved branch', category: 'Session', slash: 'redo', keyAction: 'session_redo', available: true },
   { id: 'connect', title: 'Connect model provider', category: 'Model', slash: 'connect', available: true },
-  { id: 'quota', title: 'Show provider quota', category: 'Model', slash: 'quota', available: true },
+  { id: 'quota', title: 'Show provider quota', category: 'Model', slash: 'usage', available: true },
   { id: 'model', title: 'Select model', category: 'Model', slash: 'model', keyAction: 'model_list', available: true },
   { id: 'variants', title: 'Select reasoning effort', category: 'Model', slash: 'variants', keyAction: 'variant_cycle', available: true },
   { id: 'thinking', title: 'Expand or collapse Thinking', category: 'Display', slash: 'thinking', keyAction: 'thinking_toggle', available: true },
@@ -225,6 +226,7 @@ export function parseTuiCommand(text: string): TuiCommand | null {
         ? { kind: 'quota' }
         : { kind: 'connect' }
     case 'connect': return { kind: 'connect' }
+    case 'usage':
     case 'quota': return { kind: 'quota' }
     case 'models':
     case 'model': return { kind: 'model' }

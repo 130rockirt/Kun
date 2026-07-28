@@ -92,6 +92,17 @@ source, update time, and dashboard action while keeping the common high-volume
 failure and unsupported states from dominating the sidebar. The groups use
 native disclosure semantics and do not change the normalized quota contract.
 
+### Use `/usage` as the TUI provider-quota command
+
+The Kun TUI exposes `/usage` as the canonical command for opening the provider
+quota view. `/quota`, `/provider usage`, and `/provider quota` remain accepted
+compatibility aliases so existing scripts and user habits continue to work.
+Autocomplete, help, and the command palette advertise `/usage`.
+
+This command is deliberately scoped to provider balances and subscription rate
+limits. It does not restore the removed runtime-control usage panel or replace
+the separate `/context` command for active-session token context.
+
 ### Match CodexBar's read-only subscription sources
 
 The quota service recognizes the actual preset profile shape, where ordinary HTTP

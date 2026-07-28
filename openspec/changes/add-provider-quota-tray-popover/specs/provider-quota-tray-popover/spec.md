@@ -172,3 +172,18 @@ The workbench provider-quota sidebar SHALL place non-available providers into co
 #### Scenario: Inspect an unavailable provider
 - **WHEN** the user expands a provider inside an opened non-available status group
 - **THEN** the sidebar reveals that provider's actionable explanation, source, update time, and dashboard action
+
+### Requirement: TUI exposes a concise provider quota command
+The Kun TUI SHALL use `/usage` as the canonical command for opening normalized provider quota while retaining existing quota command forms as compatibility aliases.
+
+#### Scenario: Open provider quota with the canonical command
+- **WHEN** the user enters `/usage`
+- **THEN** the TUI opens the provider quota view
+
+#### Scenario: Use an existing quota command
+- **WHEN** the user enters `/quota`, `/provider usage`, or `/provider quota`
+- **THEN** the TUI opens the same provider quota view
+
+#### Scenario: Discover the command
+- **WHEN** the user opens slash autocomplete, help, or the command palette
+- **THEN** `/usage` is presented as the canonical provider quota command

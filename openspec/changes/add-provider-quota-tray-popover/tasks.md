@@ -52,3 +52,9 @@
 - [x] 8.2 Make populated status groups accessible disclosures that default to collapsed and show their provider counts.
 - [x] 8.3 Add focused renderer tests for classification, default collapse, independent group expansion, and nested provider details.
 - [x] 8.4 Run focused tests, typecheck, build, lint, and `git diff --check`; commit only the status-group follow-up to local `develop`.
+
+## 9. Concise TUI quota command
+
+- [x] 9.1 Make `/usage` the canonical TUI provider-quota command while retaining `/quota` and `/provider ...` aliases.
+- [x] 9.2 Update command autocomplete, palette metadata, and parser regression coverage.
+- [x] 9.3 Run focused Kun tests, typecheck, build, lint, and `git diff --check`; commit only this command follow-up to local `develop`.
