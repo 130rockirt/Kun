@@ -37,6 +37,7 @@ import { UsageService } from '../services/usage-service.js'
 import type { ChildRunExecutor } from './delegation-runtime.js'
 
 export type ChildDelegatedRuntimeFactory = (input: {
+  threads: ThreadService
   turns: TurnService
   sessionStore: SessionStore
   threadStore: ThreadStore
@@ -183,6 +184,7 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
     const approvalPolicy = input.approvalPolicy ?? options.approvalPolicy ?? 'auto'
     const sandboxMode = input.sandboxMode ?? options.sandboxMode
     const delegatedRuntime = options.createDelegatedRuntime?.({
+      threads,
       turns,
       sessionStore,
       threadStore,

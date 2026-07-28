@@ -86,6 +86,7 @@ function harness(input: {
   kunContext?: CursorKunTurnContext
   contextProfile?: CursorSdkRuntimeDeps['contextProfile']
   streamLimits?: CursorSdkRuntimeDeps['streamLimits']
+  todoSyncError?: Error
 }) {
   const applied: unknown[] = []
   const updated: unknown[] = []
@@ -98,6 +99,7 @@ function harness(input: {
   const resumedAgentIds: string[] = []
   const resumedOptions: Array<Partial<AgentOptions> | undefined> = []
   const kunContextSignals: AbortSignal[] = []
+  const syncedTodos: unknown[] = []
   const sendResults = input.sendResults ?? [input.run ?? fakeRun()]
   let sendIndex = 0
   const reload = vi.fn(async () => undefined)
@@ -192,6 +194,10 @@ function harness(input: {
     },
     events: { record: async (value: unknown) => { recorded.push(value) } },
     ids: { next: (prefix: string) => `${prefix}_1` },
+    setThreadTodos: async (threadId: string, request: unknown) => {
+      if (input.todoSyncError) throw input.todoSyncError
+      syncedTodos.push({ threadId, request })
+    },
     loadSdk: async () => {
       if (input.loadError) throw input.loadError
       return sdk
@@ -224,6 +230,7 @@ function harness(input: {
     kunContextSignals,
     resumedAgentIds,
     resumedOptions,
+    syncedTodos,
     agent,
     reload,
     dispose
@@ -311,6 +318,91 @@ describe('CursorSdkRuntime', () => {
       }
     })
     expect(JSON.stringify(trace)).not.toContain('cursor-secret')
+  })
+
+  test('syncs successful Cursor updateTodos results without redispatching the tool', async () => {
+    const h = harness({
+      run: fakeRun({
+        stream: [{
+          type: 'tool_call',
+          agent_id: 'agent_1',
+          run_id: 'run_1',
+          call_id: 'call_todos',
+          name: 'updateTodos',
+          status: 'completed',
+          result: {
+            status: 'success',
+            value: {
+              todos: [
+                { content: 'Finished step', status: 'completed' },
+                { content: 'Current step', status: 'inProgress' },
+                { content: 'Later step', status: 'pending' }
+              ],
+              totalCount: 3
+            }
+          }
+        }]
+      })
+    })
+
+    await expect(h.runtime.runTurn(
+      'thread_1',
+      'turn_1',
+      new AbortController().signal,
+      'cursor-subscription'
+    )).resolves.toBe('completed')
+
+    expect(h.syncedTodos).toEqual([{
+      threadId: 'thread_1',
+      request: {
+        todos: [
+          { content: 'Finished step', status: 'completed' },
+          { content: 'Current step', status: 'in_progress' },
+          { content: 'Later step', status: 'pending' }
+        ]
+      }
+    }])
+    expect(h.recorded).not.toContainEqual(expect.objectContaining({
+      kind: 'tool_call_ready',
+      toolName: 'updateTodos'
+    }))
+  })
+
+  test('keeps a Cursor turn successful when todo mirroring fails', async () => {
+    const h = harness({
+      todoSyncError: new Error('todo store unavailable'),
+      run: fakeRun({
+        stream: [{
+          type: 'tool_call',
+          agent_id: 'agent_1',
+          run_id: 'run_1',
+          call_id: 'call_todos',
+          name: 'updateTodos',
+          status: 'completed',
+          result: {
+            status: 'success',
+            value: {
+              todos: [{ content: 'Current step', status: 'inProgress' }],
+              totalCount: 1
+            }
+          }
+        }]
+      })
+    })
+
+    await expect(h.runtime.runTurn(
+      'thread_1',
+      'turn_1',
+      new AbortController().signal,
+      'cursor-subscription'
+    )).resolves.toBe('completed')
+    expect(h.recorded).toContainEqual(expect.objectContaining({
+      kind: 'error',
+      code: 'cursor_sdk_todo_sync_failed',
+      severity: 'warning',
+      message: expect.stringContaining('todo store unavailable')
+    }))
+    expect(h.finished).toContainEqual(expect.objectContaining({ status: 'completed' }))
   })
 
   test('materializes cumulative partial output before a stream failure', async () => {

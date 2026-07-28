@@ -21,6 +21,7 @@ import type {
   ModelRequestTraceRecord
 } from '../../contracts/model-request-trace.js'
 import type { TurnItem } from '../../contracts/items.js'
+import type { SetThreadTodosRequest } from '../../contracts/threads.js'
 import type { UsageSnapshot } from '../../contracts/usage.js'
 import { userMessageTextWithComposerContexts } from '../../domain/composer-context.js'
 import { resolveTurnClientSurface } from '../../loop/turn-context-resolver.js'
@@ -53,6 +54,7 @@ import {
 import {
   CursorSdkEventMapper,
   CursorSdkResourceLimitError,
+  cursorTodosRequestFromMessage,
   mapCursorUsage,
   type CursorSdkStreamLimits
 } from './cursor-sdk-event-mapper.js'
@@ -91,6 +93,8 @@ export interface CursorSdkRuntimeDeps {
   turnLimits?: TurnLimitsConfig
   streamLimits?: Partial<CursorSdkStreamLimits>
   loadSdk?: () => Promise<CursorSdkApi>
+  /** Mirrors successful Cursor-owned updateTodos calls into Kun thread state. */
+  setThreadTodos?: (threadId: string, request: SetThreadTodosRequest) => Promise<unknown>
   /** Delegated read-only children must deny mutation regardless of parent defaults. */
   enforceReadOnly?: boolean
   sessionCoordinator?: DelegatedSessionCoordinator
@@ -668,7 +672,14 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
             for (;;) {
               const next = await Promise.race([iterator.next(), interrupted])
               if (next.done) break
-              await this.consumeMessage(mapper, next.value, trace, materializedOutputItemIds)
+              await this.consumeMessage(
+                threadId,
+                turnId,
+                mapper,
+                next.value,
+                trace,
+                materializedOutputItemIds
+              )
             }
           }
           const result = await Promise.race([run.wait(), interrupted])
@@ -799,6 +810,8 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
   }
 
   private async consumeMessage(
+    threadId: string,
+    turnId: string,
     mapper: CursorSdkEventMapper,
     message: SDKMessage,
     trace: CursorTrace | undefined,
@@ -829,6 +842,21 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
     for (const draft of drafts) {
       captureCursorTraceDraft(trace, draft)
       await this.emitDraft(draft.threadId, draft)
+    }
+    const todosRequest = cursorTodosRequestFromMessage(message)
+    if (todosRequest && this.deps.setThreadTodos) {
+      try {
+        await this.deps.setThreadTodos(threadId, todosRequest)
+      } catch (error) {
+        await this.deps.events.record({
+          kind: 'error',
+          threadId,
+          turnId,
+          message: `Failed to sync Cursor SDK todos: ${sanitizeCursorSdkError(error, '')}`,
+          code: 'cursor_sdk_todo_sync_failed',
+          severity: 'warning'
+        })
+      }
     }
   }
 

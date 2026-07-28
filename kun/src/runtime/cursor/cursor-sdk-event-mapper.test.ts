@@ -1,6 +1,11 @@
 import { describe, expect, test } from 'vitest'
 import type { SDKMessage, TokenUsage } from '@cursor/sdk'
-import { CursorSdkEventMapper, CursorSdkResourceLimitError, mapCursorUsage } from './cursor-sdk-event-mapper.js'
+import {
+  CursorSdkEventMapper,
+  CursorSdkResourceLimitError,
+  cursorTodosRequestFromMessage,
+  mapCursorUsage
+} from './cursor-sdk-event-mapper.js'
 
 function mapper(limits?: ConstructorParameters<typeof CursorSdkEventMapper>[0]['limits']) {
   let id = 0
@@ -94,6 +99,48 @@ describe('CursorSdkEventMapper', () => {
       })
     ])
     expect([...started, ...finished].some((event) => event.kind === 'tool_call_ready')).toBe(false)
+  })
+
+  test('extracts successful Cursor updateTodos results for Kun thread state', () => {
+    expect(cursorTodosRequestFromMessage({
+      type: 'tool_call',
+      agent_id: 'agent',
+      run_id: 'run',
+      call_id: 'call_todos',
+      name: 'updateTodos',
+      status: 'completed',
+      result: {
+        status: 'success',
+        value: {
+          todos: [
+            { content: 'Finished', status: 'completed' },
+            { content: 'Current', status: 'inProgress' },
+            { content: 'Extra active item', status: 'inProgress' },
+            { content: 'Skipped', status: 'cancelled' }
+          ],
+          totalCount: 4
+        }
+      }
+    })).toEqual({
+      todos: [
+        { content: 'Finished', status: 'completed' },
+        { content: 'Current', status: 'in_progress' },
+        { content: 'Extra active item', status: 'pending' },
+        { content: 'Skipped', status: 'completed' }
+      ]
+    })
+    expect(cursorTodosRequestFromMessage({
+      type: 'tool_call',
+      agent_id: 'agent',
+      run_id: 'run',
+      call_id: 'call_todos',
+      name: 'updateTodos',
+      status: 'error',
+      result: {
+        status: 'error',
+        error: 'failed'
+      }
+    })).toBeUndefined()
   })
 
   test('maps Cursor cache and reasoning usage with provider attribution', () => {

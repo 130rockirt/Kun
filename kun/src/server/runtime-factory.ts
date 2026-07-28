@@ -1028,6 +1028,8 @@ export async function createKunServeRuntime(
           turns: child.turns,
           events: child.events,
           ids: child.ids,
+          setThreadTodos: (threadId, request) =>
+            child.threads.setTodosFromTool(threadId, request),
           ...(llmDebug ? { debugSink: llmDebug } : {}),
           ...(attachmentStore ? { attachmentStore } : {}),
           turnLimits: activeOptions.runtime?.turnLimits,
@@ -1290,6 +1292,8 @@ export async function createKunServeRuntime(
       turns: turnService,
       events,
       ids,
+      setThreadTodos: (threadId, request) =>
+        threadService.setTodosFromTool(threadId, request),
       ...(llmDebug ? { debugSink: llmDebug } : {}),
       approvalGate,
       userInputGate,

@@ -1,6 +1,10 @@
 import type { SDKMessage, TokenUsage } from '@cursor/sdk'
 import { DEFAULT_MODEL_STREAM_LIMITS } from '../../adapters/model/model-stream-resource-budget.js'
 import type { TurnItem } from '../../contracts/items.js'
+import {
+  SetThreadTodosRequest as SetThreadTodosRequestSchema,
+  type SetThreadTodosRequest
+} from '../../contracts/threads.js'
 import type { UsageSnapshot } from '../../contracts/usage.js'
 import {
   makeAssistantReasoningItem,
@@ -104,6 +108,57 @@ function boundedOutput(value: unknown, maxBytes: number): unknown {
     truncated: true,
     preview: serialized.slice(0, prefix.end)
   }
+}
+
+/**
+ * Extract Cursor's authoritative built-in `updateTodos` result for Kun.
+ * Cursor uses `inProgress` while Kun's public thread contract uses
+ * `in_progress`. Cursor's `cancelled` state is terminal, so it is represented
+ * as completed until Kun exposes a distinct cancelled todo state.
+ */
+export function cursorTodosRequestFromMessage(
+  message: SDKMessage
+): SetThreadTodosRequest | undefined {
+  if (
+    message.type !== 'tool_call'
+    || message.status !== 'completed'
+    || message.name.replace(/[^a-z0-9]/gi, '').toLowerCase() !== 'updatetodos'
+  ) {
+    return undefined
+  }
+  const result = recordOf(message.result)
+  if (result.status !== 'success') return undefined
+  const rawTodos = recordOf(result.value).todos
+  if (!Array.isArray(rawTodos)) return undefined
+
+  let activeSeen = false
+  const todos: SetThreadTodosRequest['todos'] = []
+  for (const rawTodo of rawTodos) {
+    const todo = recordOf(rawTodo)
+    if (typeof todo.content !== 'string' || typeof todo.status !== 'string') {
+      return undefined
+    }
+    let status: SetThreadTodosRequest['todos'][number]['status']
+    switch (todo.status) {
+      case 'pending':
+        status = 'pending'
+        break
+      case 'inProgress':
+        status = activeSeen ? 'pending' : 'in_progress'
+        activeSeen = true
+        break
+      case 'completed':
+      case 'cancelled':
+        status = 'completed'
+        break
+      default:
+        return undefined
+    }
+    todos.push({ content: todo.content, status })
+  }
+
+  const parsed = SetThreadTodosRequestSchema.safeParse({ todos })
+  return parsed.success ? parsed.data : undefined
 }
 
 export function mapCursorUsage(
