@@ -222,7 +222,8 @@ export class ModelRoundEngine {
                 status: intent.status,
                 attempt: intent.attempt,
                 maxAttempts: intent.maxAttempts,
-                delayMs: intent.delayMs
+                delayMs: intent.delayMs,
+                ...(intent.reason ? { reason: intent.reason } : {})
               })
               break
             case 'tool_call_ready': {

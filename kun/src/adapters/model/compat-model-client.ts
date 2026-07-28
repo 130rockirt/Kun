@@ -144,8 +144,16 @@ type StreamPayloadResult = {
   finishReason: string | null
   usage: UsageSnapshot | null
 }
+type CompatPostResult =
+  | { kind: 'response'; response: Response }
+  | {
+      kind: 'error'
+      message: string
+      failure: import('../../contracts/model-route-pool.js').ModelFailureMetadata
+    }
 
 export const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 450_000
+const MIN_SAFE_STREAM_RECOVERY_ATTEMPTS = 1
 
 function isCodexEndpoint(baseUrl: string): boolean {
   return baseUrl.includes('chatgpt.com/backend-api/codex')
@@ -344,12 +352,12 @@ export class CompatModelClient implements ModelClient {
       const text = errorBody.text
       if (usesChatCompletionsShape(endpointFormat) && shouldRetryWithoutStreamUsage(response.status, text, body)) {
         const retryBody = this.buildRequestBody(request, stream, { endpointFormat, includeStreamUsage: false })
-        const retry = await post(retryBody, 'stream_options_fallback')
-        if (retry.kind === 'error') {
-          yield { kind: 'error', message: retry.message, failure: retry.failure }
+        const fallbackResult = await post(retryBody, 'stream_options_fallback')
+        if (fallbackResult.kind === 'error') {
+          yield { kind: 'error', message: fallbackResult.message, failure: fallbackResult.failure }
           return
         }
-        response = retry.response
+        response = fallbackResult.response
         if (response.ok) {
           if (this.config.nonStreaming || response.headers.get('content-type')?.includes('application/json')) {
             const json = await readLimitedResponseJson(response, modelStreamLimits.maxTotalBytes)
@@ -377,7 +385,19 @@ export class CompatModelClient implements ModelClient {
             yield { kind: 'error', message: 'model response had no body' }
             return
           }
-          yield* this.streamSse(response.body, request.abortSignal, endpointFormat, requestModel)
+          yield* this.streamSseWithRecovery({
+            response,
+            request,
+            endpointFormat,
+            configuredEndpointFormat,
+            model: requestModel,
+            retry,
+            usedRetryAttempts: transportRetryAttempt,
+            post: () => post(retryBody, 'transport_retry'),
+            url,
+            maxErrorBodyBytes,
+            streamLimits: modelStreamLimits
+          })
           return
         }
         const retryErrorBody = await readLimitedResponseText(response, maxErrorBodyBytes)
@@ -450,7 +470,19 @@ export class CompatModelClient implements ModelClient {
       yield { kind: 'error', message: 'model response had no body' }
       return
     }
-    yield* this.streamSse(response.body, request.abortSignal, endpointFormat, requestModel)
+    yield* this.streamSseWithRecovery({
+      response,
+      request,
+      endpointFormat,
+      configuredEndpointFormat,
+      model: requestModel,
+      retry,
+      usedRetryAttempts: transportRetryAttempt,
+      post: () => post(body, 'transport_retry'),
+      url,
+      maxErrorBodyBytes,
+      streamLimits: modelStreamLimits
+    })
   }
 
   private endpointFormat(): ModelEndpointFormat {
@@ -508,7 +540,7 @@ export class CompatModelClient implements ModelClient {
       reason: 'initial' | 'transport_retry' | 'credential_refresh' | 'stream_options_fallback'
       apiKey: string
     }
-  ): Promise<{ kind: 'response'; response: Response } | { kind: 'error'; message: string; failure: import('../../contracts/model-route-pool.js').ModelFailureMetadata }> {
+  ): Promise<CompatPostResult> {
     const bodyText = JSON.stringify(body)
     const traceRound = trace.round
     const traceSink = this.config.debugSink
@@ -673,6 +705,183 @@ export class CompatModelClient implements ModelClient {
     return this.capabilitiesForModel(model).supportsVision
   }
 
+  /**
+   * Replays a response only while doing so is transactionally safe. Reasoning
+   * may already be visible, but final assistant text, tool calls, and generated
+   * images are commit points: once any of those arrive, replaying the request
+   * could append a different answer or duplicate an action.
+   *
+   * A retry suppresses reasoning from later attempts when an earlier attempt
+   * already emitted reasoning. The final answer still streams normally, while
+   * the workbench avoids showing the same thought prefix more than once.
+   */
+  private async *streamSseWithRecovery(input: {
+    response: Response
+    request: ModelRequest
+    endpointFormat: ModelEndpointFormat
+    configuredEndpointFormat: ModelEndpointFormat
+    model: string
+    retry: ReturnType<typeof normalizeModelRequestRetryConfig>
+    usedRetryAttempts: number
+    post: () => Promise<CompatPostResult>
+    url: string
+    maxErrorBodyBytes: number
+    streamLimits: ModelStreamLimits
+  }): AsyncIterable<ModelStreamChunk> {
+    let response = input.response
+    let usedRetryAttempts = input.usedRetryAttempts
+    let emittedReasoning = false
+    let committedOutput = false
+    const maxRetryAttempts = Math.max(
+      MIN_SAFE_STREAM_RECOVERY_ATTEMPTS,
+      input.retry.maxAttempts
+    )
+
+    while (true) {
+      if (!response.body) {
+        yield { kind: 'error', message: 'model response had no body' }
+        return
+      }
+
+      let recoverableError: Extract<ModelStreamChunk, { kind: 'error' }> | null = null
+      const suppressReasoning = emittedReasoning
+      for await (const chunk of this.streamSse(
+        response.body,
+        input.request.abortSignal,
+        input.endpointFormat,
+        input.model
+      )) {
+        if (isRecoverableStreamTransportError(chunk)) {
+          recoverableError = chunk
+          continue
+        }
+        if (chunk.kind === 'assistant_reasoning_delta') {
+          if (suppressReasoning) continue
+          emittedReasoning = true
+        }
+        if (isCommittedStreamOutput(chunk)) committedOutput = true
+        yield chunk
+      }
+
+      if (!recoverableError) return
+      if (
+        input.request.abortSignal.aborted ||
+        committedOutput ||
+        usedRetryAttempts >= maxRetryAttempts
+      ) {
+        yield recoverableError
+        return
+      }
+
+      const nextAttempt = usedRetryAttempts + 1
+      const delayMs = retryDelayMs(response, input.retry.initialDelayMs, usedRetryAttempts)
+      yield {
+        kind: 'retrying',
+        status: response.status,
+        attempt: nextAttempt,
+        maxAttempts: maxRetryAttempts,
+        delayMs,
+        reason: 'stream_transport'
+      }
+      const aborted = await sleepWithAbort(delayMs, input.request.abortSignal)
+      if (aborted || input.request.abortSignal.aborted) {
+        yield { kind: 'error', message: 'request was aborted during stream retry backoff' }
+        return
+      }
+      usedRetryAttempts = nextAttempt
+
+      while (true) {
+        const retried = await input.post()
+        if (retried.kind === 'error') {
+          yield { kind: 'error', message: retried.message, failure: retried.failure }
+          return
+        }
+        response = retried.response
+        if (response.ok) break
+
+        if (
+          usedRetryAttempts < maxRetryAttempts &&
+          input.retry.httpStatusCodes.includes(response.status)
+        ) {
+          const httpRetryAttempt = usedRetryAttempts + 1
+          const httpDelayMs = retryDelayMs(response, input.retry.initialDelayMs, usedRetryAttempts)
+          const status = response.status
+          await response.body?.cancel().catch(() => {})
+          yield {
+            kind: 'retrying',
+            status,
+            attempt: httpRetryAttempt,
+            maxAttempts: maxRetryAttempts,
+            delayMs: httpDelayMs
+          }
+          const httpRetryAborted = await sleepWithAbort(httpDelayMs, input.request.abortSignal)
+          if (httpRetryAborted || input.request.abortSignal.aborted) {
+            yield { kind: 'error', message: 'request was aborted during retry backoff' }
+            return
+          }
+          usedRetryAttempts = httpRetryAttempt
+          continue
+        }
+
+        const errorBody = await readLimitedResponseText(response, input.maxErrorBodyBytes)
+        if (errorBody.exceeded) {
+          yield {
+            kind: 'error',
+            message: `model error response exceeded ${input.maxErrorBodyBytes} bytes`,
+            code: 'response_body_too_large'
+          }
+          return
+        }
+        this.logHttpFailure({
+          url: input.url,
+          status: response.status,
+          body: errorBody.text,
+          endpointFormat: input.endpointFormat,
+          configuredEndpointFormat: input.configuredEndpointFormat,
+          model: input.model
+        })
+        const classified = await this.classifyHttpError(
+          response.status,
+          errorBody.text,
+          response.headers.get('retry-after')
+        )
+        yield {
+          kind: 'error',
+          message: classified.message,
+          code: classified.code,
+          failure: classified.failure
+        }
+        return
+      }
+
+      if (
+        this.config.nonStreaming ||
+        response.headers.get('content-type')?.includes('application/json')
+      ) {
+        const json = await readLimitedResponseJson(response, input.streamLimits.maxTotalBytes)
+        if (json.kind === 'limit') {
+          yield {
+            kind: 'error',
+            message: `model response exceeded ${json.maxBytes} bytes`,
+            code: 'stream_resource_limit'
+          }
+          return
+        }
+        if (json.kind === 'invalid_json') {
+          yield { kind: 'error', message: `model response contained invalid JSON: ${json.message}` }
+          return
+        }
+        yield* this.materializeNonStreaming(
+          json.value as ChatCompletionResponse,
+          input.endpointFormat,
+          input.model,
+          input.streamLimits
+        )
+        return
+      }
+    }
+  }
+
   private async *streamSse(
     body: ReadableStream<Uint8Array>,
     signal: AbortSignal,
@@ -712,13 +921,19 @@ export class CompatModelClient implements ModelClient {
           yield {
             kind: 'error',
             message: `model stream stalled for ${idleTimeoutMs}ms without data`,
-            code: 'stream_idle_timeout'
+            code: 'stream_idle_timeout',
+            failure: { category: 'timeout', failoverAllowed: true }
           }
           return
         }
         if (read.kind === 'aborted') break
         if (read.kind === 'error') {
-          yield { kind: 'error', message: read.message, code: 'stream_read_error' }
+          yield {
+            kind: 'error',
+            message: read.message,
+            code: 'stream_read_error',
+            failure: { category: 'network', failoverAllowed: true }
+          }
           return
         }
         const { value, done } = read
@@ -811,7 +1026,8 @@ export class CompatModelClient implements ModelClient {
       yield {
         kind: 'error',
         message: 'model stream ended before a terminal frame',
-        code: 'stream_truncated'
+        code: 'stream_truncated',
+        failure: { category: 'network', failoverAllowed: true }
       }
       return
     }
@@ -1262,6 +1478,25 @@ function* enforceNonStreamingLimits(
     }
     throw error
   }
+}
+
+function isRecoverableStreamTransportError(
+  chunk: ModelStreamChunk
+): chunk is Extract<ModelStreamChunk, { kind: 'error' }> {
+  return chunk.kind === 'error' && (
+    chunk.code === 'stream_read_error' ||
+    chunk.code === 'stream_truncated' ||
+    chunk.code === 'stream_idle_timeout'
+  )
+}
+
+function isCommittedStreamOutput(chunk: ModelStreamChunk): boolean {
+  return (
+    chunk.kind === 'assistant_text_delta' ||
+    chunk.kind === 'tool_call_delta' ||
+    chunk.kind === 'tool_call_complete' ||
+    chunk.kind === 'image_generation_complete'
+  )
 }
 
 async function readStreamChunk(

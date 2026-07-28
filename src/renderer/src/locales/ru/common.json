@@ -1975,6 +1975,7 @@
   "runtimeStreamRecovering": "Восстановление потока событий времени выполнения…",
   "toolUploadWaitStatus": "Ожидание модели после результатов инструмента ({{count}})…",
   "modelRequestRetryStatus": "Model request returned HTTP {{status}}; retrying {{attempt}}/{{max}} in about {{seconds}}s…",
+  "modelStreamRetryStatus": "Model response transport was interrupted; retrying {{attempt}}/{{max}} in about {{seconds}}s…",
   "toolCatalogChangedStatus": "Изменен каталог инструментов; Кун обновил список активных инструментов.",
   "toolStormSuppressedStatus": "{{tool}} повторил один и тот же вызов слишком много раз; Кун подавил дубликат и попросил модель изменить подход.",
   "compactionSummaryFallbackStatus": "Сводная информация по уплотнению модели недоступна; Кун использовал эвристическое резюме.",

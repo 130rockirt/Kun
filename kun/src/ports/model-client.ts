@@ -27,7 +27,14 @@ export type ModelStreamChunk = (
       arguments: Record<string, unknown>
       providerMetadata?: ToolCallProviderMetadata
     }
-  | { kind: 'retrying'; status: number; attempt: number; maxAttempts: number; delayMs: number }
+  | {
+      kind: 'retrying'
+      status: number
+      attempt: number
+      maxAttempts: number
+      delayMs: number
+      reason?: 'stream_transport'
+    }
   | { kind: 'image_generation_complete'; imageBase64: string; mimeType: string }
   | { kind: 'usage'; usage: UsageSnapshot }
   | { kind: 'completed'; stopReason: 'stop' | 'tool_calls' | 'length' | 'error' }

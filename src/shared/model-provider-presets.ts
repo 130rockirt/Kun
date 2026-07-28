@@ -1060,11 +1060,12 @@ export function modelProviderPresetProfile(
     apiKey: apiKey.trim(),
     baseUrl: preset.baseUrl,
     endpointFormat: preset.endpointFormat,
-    retry: preset.kind === 'gemini-cli-api'
+    retry: preset.kind === 'gemini-cli-api' || preset.id === CHATGPT_SUBSCRIPTION_PROVIDER_ID
       ? {
           ...defaultPresetRetrySettings(),
-          // The official Gemini CLI retries transient Code Assist capacity and
-          // server failures. Preserve that behavior for multi-step tool turns.
+          // Subscription transports are long-lived and routinely cross
+          // gateways. Keep their transient retries bounded for multi-step
+          // tool turns and interrupted response streams.
           maxAttempts: 3
         }
       : defaultPresetRetrySettings(),

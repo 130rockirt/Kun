@@ -1626,7 +1626,8 @@ function runtimeStatusFromEvent(event: CoreRuntimeEventJson): RuntimeStatusEvent
       status: typeof event.status === 'number' ? event.status : undefined,
       attempt: typeof event.attempt === 'number' ? event.attempt : undefined,
       maxAttempts: typeof event.maxAttempts === 'number' ? event.maxAttempts : undefined,
-      delayMs: typeof event.delayMs === 'number' ? event.delayMs : undefined
+      delayMs: typeof event.delayMs === 'number' ? event.delayMs : undefined,
+      retryReason: event.reason === 'stream_transport' ? event.reason : undefined
     }
   }
   if (event.kind === 'tool_catalog_changed') {

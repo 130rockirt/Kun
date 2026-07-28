@@ -58,6 +58,16 @@ describe('model provider retry settings', () => {
     expect(settings.providers[0].retry).toEqual(defaultModelRequestRetrySettings())
   })
 
+  it('enables bounded retries for new ChatGPT subscription profiles', () => {
+    const preset = getModelProviderPreset('codex')
+    expect(preset).not.toBeNull()
+
+    expect(modelProviderPresetProfile(preset!, '').retry).toMatchObject({
+      maxAttempts: 3,
+      httpStatusCodes: expect.arrayContaining([429, 503])
+    })
+  })
+
   it('normalizes retry attempts, delay, and HTTP status codes', () => {
     const settings = normalizeModelProviderSettings({
       providers: [

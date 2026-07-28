@@ -26,7 +26,14 @@ export type ModelStreamCollectorConfig = {
 export type ModelStreamIntent =
   | { kind: 'assistant_text_delta'; text: string }
   | { kind: 'assistant_reasoning_delta'; text: string }
-  | { kind: 'retrying'; status: number; attempt: number; maxAttempts: number; delayMs: number }
+  | {
+      kind: 'retrying'
+      status: number
+      attempt: number
+      maxAttempts: number
+      delayMs: number
+      reason?: 'stream_transport'
+    }
   | {
       kind: 'tool_call_ready'
       call: ToolCallLike
@@ -81,7 +88,8 @@ export class ModelStreamCollector {
             status: chunk.status,
             attempt: chunk.attempt,
             maxAttempts: chunk.maxAttempts,
-            delayMs: chunk.delayMs
+            delayMs: chunk.delayMs,
+            ...(chunk.reason ? { reason: chunk.reason } : {})
           }]
         }
       case 'tool_call_complete':

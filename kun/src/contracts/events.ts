@@ -231,7 +231,8 @@ export const ModelRequestRetryEvent = RuntimeEventBase.extend({
   status: z.number().int().min(100).max(599),
   attempt: z.number().int().positive(),
   maxAttempts: z.number().int().positive(),
-  delayMs: z.number().int().nonnegative()
+  delayMs: z.number().int().nonnegative(),
+  reason: z.literal('stream_transport').optional()
 })
 export type ModelRequestRetryEvent = z.infer<typeof ModelRequestRetryEvent>
 
