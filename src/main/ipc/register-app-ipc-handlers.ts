@@ -158,6 +158,7 @@ import {
 } from '../agent-sdk-installer'
 import type { JsonSettingsStore } from '../settings-store'
 import { probeModelProvider } from '../provider-connection'
+import { listProviderQuotas } from '../provider-quota'
 import { fetchModelsDevCatalog } from '../models-dev-catalog'
 import type { ClawRuntime } from '../claw-runtime'
 import type { ScheduleRuntime } from '../schedule-runtime'
@@ -972,6 +973,11 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   ipcMain.handle('provider:probe', async (_, payload: unknown) => {
     const request = parseIpcPayload('provider:probe', providerProbePayloadSchema, payload)
     return probeModelProvider(request, await store.load())
+  })
+
+  ipcMain.handle('provider:quota:list', async (event) => {
+    assertTrustedWorkbenchSender(event, getMainWindow)
+    return listProviderQuotas(await store.load())
   })
 
   ipcMain.handle('provider:models-dev-catalog', async (_, payload: unknown) => {

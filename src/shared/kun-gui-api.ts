@@ -175,6 +175,7 @@ import type {
   RuntimeImageAttachmentUploadResult
 } from './runtime-image-attachment'
 import type { CliInstallAction, CliInstallResult, CliInstallStatus } from './cli-install'
+import type { ProviderQuotaListResult } from './provider-quota'
 
 export type KunRuntimeStatusPayload = {
   state: 'starting' | 'running' | 'restarting' | 'crashed' | 'failed' | 'stopped'
@@ -655,6 +656,7 @@ export type KunGuiApi = ExtensionIpcApi & {
   restartRuntime: () => Promise<void>
   fetchUpstreamModels: () => Promise<UpstreamModelsResult>
   probeModelProvider: (payload: ModelProviderProbeRequest) => Promise<ModelProviderProbeResult>
+  listProviderQuotas: () => Promise<ProviderQuotaListResult>
   fetchModelsDevCatalog: (payload: ModelsDevCatalogRequest) => Promise<ModelsDevCatalogResult>
   optimizePrompt: (payload: PromptOptimizationRequest) => Promise<PromptOptimizationResult>
   getClawStatus: () => Promise<ClawRuntimeStatus>

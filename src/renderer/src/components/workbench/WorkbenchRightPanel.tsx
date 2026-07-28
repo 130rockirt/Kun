@@ -58,6 +58,9 @@ const SideConversationPanel = lazy(() =>
 const McpSkillsPanel = lazy(() =>
   import('./McpSkillsPanel').then((module) => ({ default: module.McpSkillsPanel }))
 )
+const ProviderQuotaPanel = lazy(() =>
+  import('./ProviderQuotaPanel').then((module) => ({ default: module.ProviderQuotaPanel }))
+)
 const AgentPerspectivePanel = lazy(() =>
   import('./AgentPerspectivePanel').then((module) => ({ default: module.AgentPerspectivePanel }))
 )
@@ -296,6 +299,9 @@ function CodeRightPanelWorkspace({
     }
     if (id === BUILTIN_RIGHT_PANEL_IDS.mcpSkills) {
       return <McpSkillsPanel workspaceRoot={workspaceRoot} onOpenSettings={mcpSkills.onOpenSettings} />
+    }
+    if (id === BUILTIN_RIGHT_PANEL_IDS.providerQuotas) {
+      return <ProviderQuotaPanel />
     }
     if (id === BUILTIN_RIGHT_PANEL_IDS.graph) {
       return <GraphModePanel className="h-full max-h-full w-full" onCollapse={onCollapse} />

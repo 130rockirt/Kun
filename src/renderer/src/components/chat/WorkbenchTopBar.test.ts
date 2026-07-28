@@ -103,6 +103,7 @@ describe('WorkbenchSideRail', () => {
       'Preview',
       'Whiteboard',
       'Subagents',
+      'Provider quota',
       'Files'
     ]) {
       expect(html).toContain(`data-tooltip="${label}"`)
@@ -125,6 +126,9 @@ describe('WorkbenchSideRail', () => {
       html.indexOf('data-contribution-id="extension:acme.issues/issues"')
     )
     expect(html.indexOf('data-tooltip="MCP &amp; Skills"')).toBeLessThan(
+      html.indexOf('data-tooltip="Provider quota"')
+    )
+    expect(html.indexOf('data-tooltip="Provider quota"')).toBeLessThan(
       html.indexOf('data-contribution-id="extension:acme.issues/summary"')
     )
     expect(html.indexOf('data-tooltip="MCP &amp; Skills"')).toBeLessThan(

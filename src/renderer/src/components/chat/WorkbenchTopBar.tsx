@@ -15,6 +15,7 @@ import {
   Folders,
   FolderOpen,
   Globe2,
+  Gauge,
   GitBranch,
   LockKeyhole,
   Loader2,
@@ -416,7 +417,12 @@ export function WorkbenchSideRail({
       icon: GitBranch
     },
     { mode: BUILTIN_RIGHT_PANEL_IDS.subagents, label: t('rightPanelSubagents'), icon: Bot },
-    { mode: BUILTIN_RIGHT_PANEL_IDS.mcpSkills, label: t('rightPanelMcpSkills'), icon: Blocks }
+    { mode: BUILTIN_RIGHT_PANEL_IDS.mcpSkills, label: t('rightPanelMcpSkills'), icon: Blocks },
+    {
+      mode: BUILTIN_RIGHT_PANEL_IDS.providerQuotas,
+      label: t('rightPanelProviderQuotas'),
+      icon: Gauge
+    }
   ]
 
   return (

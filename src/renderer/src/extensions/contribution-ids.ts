@@ -12,6 +12,7 @@ export const BUILTIN_RIGHT_PANEL_IDS = {
   canvas: 'builtin:right-panel-canvas',
   subagents: 'builtin:right-panel-subagents',
   mcpSkills: 'builtin:right-panel-mcp-skills',
+  providerQuotas: 'builtin:right-panel-provider-quotas',
   agentPerspective: 'builtin:right-panel-agent-perspective',
   graph: 'builtin:right-panel-graph'
 } as const
@@ -35,6 +36,7 @@ const LEGACY_RIGHT_PANEL_IDS: Readonly<Record<string, BuiltinRightPanelId>> = {
   canvas: BUILTIN_RIGHT_PANEL_IDS.canvas,
   subagents: BUILTIN_RIGHT_PANEL_IDS.subagents,
   'mcp-skills': BUILTIN_RIGHT_PANEL_IDS.mcpSkills,
+  'provider-quotas': BUILTIN_RIGHT_PANEL_IDS.providerQuotas,
   'agent-perspective': BUILTIN_RIGHT_PANEL_IDS.agentPerspective,
   graph: BUILTIN_RIGHT_PANEL_IDS.graph
 }

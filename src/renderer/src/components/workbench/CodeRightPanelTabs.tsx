@@ -11,6 +11,7 @@ import {
   ClipboardList,
   FileEdit,
   Files,
+  Gauge,
   Globe2,
   GitBranch,
   MessageCircleMore,
@@ -92,6 +93,11 @@ export function CodeRightPanelTabs({
     },
     { id: BUILTIN_RIGHT_PANEL_IDS.subagents, label: t('rightPanelSubagents'), icon: Bot },
     { id: BUILTIN_RIGHT_PANEL_IDS.mcpSkills, label: t('rightPanelMcpSkills'), icon: Blocks },
+    {
+      id: BUILTIN_RIGHT_PANEL_IDS.providerQuotas,
+      label: t('rightPanelProviderQuotas'),
+      icon: Gauge
+    },
     {
       id: BUILTIN_RIGHT_PANEL_IDS.agentPerspective,
       label: t('rightPanelAgentPerspective'),

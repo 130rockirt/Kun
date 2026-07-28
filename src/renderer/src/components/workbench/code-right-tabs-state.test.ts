@@ -71,6 +71,11 @@ describe('code right tab state', () => {
     expect(migrateLegacyRightPanelMode(BUILTIN_RIGHT_PANEL_IDS.files).tabs).toEqual([
       BUILTIN_RIGHT_PANEL_IDS.files
     ])
+    expect(migrateLegacyRightPanelMode('provider-quotas')).toMatchObject({
+      tabs: [BUILTIN_RIGHT_PANEL_IDS.providerQuotas],
+      activeId: BUILTIN_RIGHT_PANEL_IDS.providerQuotas,
+      expanded: true
+    })
     expect(migrateLegacyRightPanelMode('removed-mode')).toEqual(emptyCodeRightTabsState())
     expect(migrateLegacyRightPanelMode('sdd-ai')).toEqual(emptyCodeRightTabsState())
     expect(migrateLegacyRightPanelMode('terminal')).toEqual(emptyCodeRightTabsState())
