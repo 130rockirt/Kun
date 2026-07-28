@@ -147,4 +147,13 @@ describe('composer Graph progress', () => {
 
     expect(progress.activeCount).toBe(0)
   })
+
+  it('treats terminal run state as authoritative over stale running child state', () => {
+    const run = graphRun(readyNode())
+    run.status = 'cancelled'
+    const progress = getComposerGraphProgress(run, { child_1: child('running') })
+
+    expect(progress.activeCount).toBe(0)
+    expect(progress.activeAgents).toEqual([])
+  })
 })

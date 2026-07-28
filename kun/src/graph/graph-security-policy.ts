@@ -31,17 +31,24 @@ const SCOPED_WORKSPACE_TOOL_NAMES = new Set([
 /**
  * Tools backed by an unconstrained process or whole-workspace index cannot
  * honor a narrow Graph assignment. Keep only adapters that cross the shared
- * path resolver/write guard plus Graph's identity-bound worker tools.
+ * path resolver/write guard; Graph executors receive no workflow tools.
  */
 export function graphPathScopedToolNames(
   tools: readonly string[],
   readScopes: readonly string[],
   writeScopes: readonly string[]
 ): string[] {
+  const graphTools = new Set<string>([
+    ...GRAPH_LEAD_TOOL_NAMES,
+    ...GRAPH_WORKER_TOOL_NAMES
+  ])
+  const executorTools = tools.filter((tool) => !graphTools.has(tool))
   if (readScopes.includes('.') && (writeScopes.length === 0 || writeScopes.includes('.'))) {
-    return [...tools]
+    return executorTools
   }
-  return tools.filter((tool) =>
-    SCOPED_WORKSPACE_TOOL_NAMES.has(tool) ||
-    tool.startsWith('graph_worker_'))
+  return executorTools.filter((tool) => SCOPED_WORKSPACE_TOOL_NAMES.has(tool))
 }
+import {
+  GRAPH_LEAD_TOOL_NAMES,
+  GRAPH_WORKER_TOOL_NAMES
+} from './graph-tool-boundary.js'

@@ -56,12 +56,7 @@ describe('GraphAssignmentResolver', () => {
       requestedProfileId: 'explore',
       name: 'Research fallback',
       toolPolicy: 'readOnly',
-      allowedTools: [
-        'graph_worker_progress',
-        'graph_worker_submit_result',
-        'read',
-        'write'
-      ],
+      allowedTools: ['read', 'write'],
       readScopes: ['src'],
       writeScopes: []
     })
@@ -99,12 +94,7 @@ describe('GraphAssignmentResolver', () => {
     expect(assignment).toMatchObject({
       model: 'parent-model',
       providerId: 'parent-provider',
-      allowedTools: [
-        'graph_worker_progress',
-        'graph_worker_submit_result',
-        'read',
-        'write'
-      ],
+      allowedTools: ['read', 'write'],
       allowedSkills: ['safe-skill'],
       allowedMcpServers: ['safe-mcp'],
       allowedProviderIds: ['builtin', 'mcp:facade', 'extension:com.example.tools'],
@@ -118,6 +108,9 @@ describe('GraphAssignmentResolver', () => {
       'delegate_task',
       'generate_subagent',
       'graph_control_run',
+      'graph_supervise_node',
+      'graph_worker_progress',
+      'graph_worker_submit_result',
       'list_subagent_profiles',
       'task_graph'
     ]))

@@ -34,14 +34,6 @@ export function dependencyDecision(
         if (isTerminalNodeStatus(source.status)) return 'unsatisfiable'
         return 'blocked'
       }
-      if (
-        edge.required &&
-        !run.artifacts.some((artifact) =>
-          artifact.producerNodeId === edge.from &&
-          artifact.visibility !== 'lead' &&
-          artifact.visibility !== 'user' &&
-          artifact.logicalNames?.includes(edge.artifactName))
-      ) return 'unsatisfiable'
     }
   }
   return 'ready'
@@ -161,8 +153,7 @@ export function deterministicReview(
 
 export function validateWorkerResult(
   node: GraphNodeProjectionV1,
-  result: GraphWorkerResultV1,
-  missingRequiredArtifactNames: readonly string[] = []
+  result: GraphWorkerResultV1
 ) {
   const issues: Array<{
     code: string
@@ -174,7 +165,10 @@ export function validateWorkerResult(
     const value = field === 'checks'
       ? (result.reportedChecks?.length ? result.reportedChecks : result.checks)
       : result[field]
-    const emptyArrayIsValid = field === 'changedFiles' || field === 'risks'
+    const emptyArrayIsValid =
+      field === 'artifactRefs' ||
+      field === 'changedFiles' ||
+      field === 'risks'
     if (
       value === undefined ||
       value === '' ||
@@ -187,14 +181,6 @@ export function validateWorkerResult(
         severity: 'error'
       })
     }
-  }
-  for (const artifactName of missingRequiredArtifactNames) {
-    issues.push({
-      code: 'missing_required_artifact',
-      path: ['artifactRefs'],
-      message: `required downstream artifact ${artifactName} was not published`,
-      severity: 'error'
-    })
   }
   for (const changedFile of result.changedFiles) {
     if (!node.node.writeScopes.some((scope) =>
@@ -218,6 +204,11 @@ export function validateWorkerResult(
 
 export function parseWorkerResult(child: ChildRunRecord): GraphWorkerResultV1 {
   const parsed = parseJsonObject(child.summary ?? '')
+  const fallbackEvidence = child.evidence?.length
+    ? child.evidence
+    : child.summary?.trim()
+      ? [`Executor final response: ${child.summary.slice(0, 4_096)}`]
+      : []
   const candidate = parsed
     ? {
         version: GRAPH_CONTRACT_VERSION,
@@ -228,7 +219,7 @@ export function parseWorkerResult(child: ChildRunRecord): GraphWorkerResultV1 {
         verifiedChecks: [],
         evidence: stringArray(parsed.evidence).length
           ? stringArray(parsed.evidence)
-          : child.evidence ?? [],
+          : fallbackEvidence,
         risks: stringArray(parsed.risks),
         suggestedMessages: []
       }
@@ -239,7 +230,7 @@ export function parseWorkerResult(child: ChildRunRecord): GraphWorkerResultV1 {
         changedFiles: [],
         reportedChecks: [],
         verifiedChecks: [],
-        evidence: child.evidence ?? [],
+        evidence: fallbackEvidence,
         risks: [],
         suggestedMessages: []
       }
@@ -252,7 +243,7 @@ export function parseWorkerResult(child: ChildRunRecord): GraphWorkerResultV1 {
     changedFiles: [],
     reportedChecks: [],
     verifiedChecks: [],
-    evidence: child.evidence ?? [],
+    evidence: fallbackEvidence,
     risks: ['Worker output did not satisfy the structured result schema.'],
     suggestedMessages: []
   })
@@ -358,25 +349,59 @@ function reachableNodeIds(start: string, edges: ReadonlyMap<string, readonly str
 export function effectiveReviewKinds(
   node: GraphNodeProjectionV1,
   config: GraphRuntimeConfig,
-  isCompletionNode: boolean
+  _isCompletionNode: boolean
 ): Array<'deterministic' | 'peer' | 'lead' | 'human'> {
   const kinds = [...node.node.completion.review.kinds]
-  if (
-    (
-      (config.supervision.requireFinalReview && isCompletionNode) ||
-      (
-        node.node.writeScopes.length > 0 &&
-        (node.node.riskClass === 'high' || node.node.riskClass === 'critical')
-      )
-    ) &&
-    !kinds.includes('lead')
-  ) kinds.push('lead')
+  // Every executor result is returned to the durable source Lead. No worker,
+  // peer reviewer, or scheduler transition can accept a node on its behalf.
+  if (!kinds.includes('lead')) kinds.push('lead')
   if (
     config.supervision.requireHumanForCriticalRisk &&
     node.node.riskClass === 'critical' &&
     !kinds.includes('human')
   ) kinds.push('human')
   return kinds
+}
+
+export function reviewDisposition(input: {
+  requiredKinds: Array<'deterministic' | 'peer' | 'lead' | 'human'>
+  requireAll: boolean
+  validationValid: boolean
+  reviews: readonly GraphReviewResultV1[]
+}):
+  | { kind: 'accept' }
+  | { kind: 'awaiting_lead' | 'invalid' | 'awaiting_human' | 'awaiting_evidence' }
+  | { kind: 'repair'; reason: string } {
+  const lead = input.reviews.find((review) => review.reviewerKind === 'lead')
+  if (!lead) return { kind: 'awaiting_lead' }
+  if (lead.outcome === 'fail' || lead.outcome === 'revise') {
+    return { kind: 'repair', reason: lead.summary }
+  }
+  if (!input.validationValid) return { kind: 'invalid' }
+  const passed = (kind: typeof input.requiredKinds[number]) =>
+    input.reviews.some((review) =>
+      review.reviewerKind === kind && review.outcome === 'pass')
+  const mandatory = input.requiredKinds.filter((kind) =>
+    kind === 'lead' || kind === 'human')
+  const evidence = input.requiredKinds.filter((kind) =>
+    kind !== 'lead' && kind !== 'human')
+  const sufficient =
+    mandatory.every(passed) &&
+    (
+      evidence.length === 0 ||
+      (input.requireAll ? evidence.every(passed) : evidence.some(passed))
+    )
+  if (
+    input.reviews.some((review) => review.outcome === 'needs_human') ||
+    (!sufficient && input.requiredKinds.includes('human') && !passed('human'))
+  ) return { kind: 'awaiting_human' }
+  const negative = !sufficient
+    ? input.reviews.find((review) =>
+        review.reviewerKind !== 'lead' &&
+        (review.outcome === 'fail' || review.outcome === 'revise'))
+    : undefined
+  if (negative) return { kind: 'repair', reason: negative.summary }
+  return sufficient ? { kind: 'accept' } : { kind: 'awaiting_evidence' }
 }
 
 export function hasPendingExternalReview(run: GraphRunV1): boolean {

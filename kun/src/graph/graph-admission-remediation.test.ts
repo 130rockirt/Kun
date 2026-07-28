@@ -19,9 +19,9 @@ import { GraphWorkerSessionRegistry } from './graph-worker-sessions.js'
 import { FileGraphWriteCoordinator } from './graph-write-coordinator.js'
 import { FileProjectAgentRegistry } from './project-agent-registry.js'
 import {
-  GRAPH_WORKER_TOOL_NAMES,
   graphParentAuthorityToolNames
 } from './graph-tool-boundary.js'
+import { autoLeadSupervision } from '../../tests/graph-scheduler-test-harness.js'
 
 const roots: string[] = []
 
@@ -126,6 +126,7 @@ describe('Graph admission remediation', () => {
         networkAllowed: false
       }),
       artifactStore: artifacts,
+      supervision: () => autoLeadSupervision(store, control, nextId),
       nextId,
       tickIntervalMs: 5
     })
@@ -141,16 +142,15 @@ describe('Graph admission remediation', () => {
       source: 'custom'
     })
     expect(runChild.mock.calls[0]?.[0].security).toMatchObject({
-      allowedToolNames: expect.arrayContaining([
-        'read',
-        ...GRAPH_WORKER_TOOL_NAMES
-      ]),
+      allowedToolNames: ['read'],
       blockedToolNames: expect.arrayContaining([
         'delegate_task',
         'list_subagent_profiles',
         'task_graph',
         'design_component',
-        'graph_control_run'
+        'graph_control_run',
+        'graph_supervise_node',
+        'graph_worker_submit_result'
       ])
     })
     expect(attempt.assignment).toMatchObject({

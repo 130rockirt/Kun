@@ -238,8 +238,9 @@ describe('buildToolPreferenceInstruction', () => {
     expect(instruction).toContain('Creating or dispatching a Graph is not completion')
     expect(instruction).toContain('inspect their bounded live sessions')
     expect(instruction).toContain('wait and recheck')
-    expect(instruction).toContain('guide drift, missing artifacts')
-    expect(instruction).toContain('suspend only after the current supervision episode is handled')
+    expect(instruction).toContain('guide drift, missing evidence')
+    expect(instruction).toContain('Executors do not manage Graph flow')
+    expect(instruction).toContain('explicitly pass or revise every node')
   })
 
   it('prefers specialized MCP source navigation with available built-in fallback', () => {

@@ -123,4 +123,20 @@ describe('Graph node liveness projection', () => {
       elapsedMs: 60_000
     })
   })
+
+  it('lets terminal node state override stale running child activity', () => {
+    const live = graphNodeLiveness(
+      projection('cancelled', [attempt(1)]),
+      { child_1: child('running', '2026-07-28T00:00:50.000Z') },
+      NOW
+    )
+
+    expect(live).toMatchObject({
+      kind: 'failed',
+      quiet: false,
+      elapsedMs: 0
+    })
+    expect(live.activityLabel).toBeUndefined()
+    expect(live.activityToolName).toBeUndefined()
+  })
 })

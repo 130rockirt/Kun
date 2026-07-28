@@ -20,6 +20,21 @@ describe('GraphPlan host validation', () => {
     expect(validation.result.issues).toContainEqual(expect.objectContaining({ code: 'graph_disabled' }))
   })
 
+  it('rejects worker-to-worker message flow in favor of Lead-approved data handoff', () => {
+    const plan = testGraphPlan({
+      edges: [{
+        id: 'legacy_worker_message',
+        kind: 'message',
+        from: 'research',
+        to: 'finish',
+        allowedTypes: ['finding']
+      }]
+    })
+    expect(validateGraphPlan(plan, testGraphConfig()).result.issues).toContainEqual(
+      expect.objectContaining({ code: 'executor_message_edge_unsupported' })
+    )
+  })
+
   it('reports schema, identity, reference, reachability, and terminal errors', () => {
     const base = testGraphPlan()
     const input = {

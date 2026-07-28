@@ -11,8 +11,9 @@ import type { ApprovalPolicy, SandboxMode } from '../contracts/policy.js'
 import type { ModelReasoningEffort } from '../contracts/capabilities.js'
 import type { ProjectAgentRegistry } from './project-agent-registry.js'
 import {
+  GRAPH_LEAD_TOOL_NAMES,
   GRAPH_INCOMPATIBLE_TOOL_NAMES,
-  graphWorkerToolNamesWithin
+  GRAPH_WORKER_TOOL_NAMES
 } from './graph-tool-boundary.js'
 import { graphHostRelativePathCovers } from './graph-platform-path.js'
 
@@ -86,18 +87,18 @@ export class GraphAssignmentResolver {
       throw new Error(`profile ${profile.profileId} cannot satisfy node write scope`)
     }
     const toolPolicy = caps.toolPolicy === 'readOnly' ? 'readOnly' : 'inherit'
-    const allowedTools = union(
-      intersect(input.parent.allowedTools, caps.allowedTools),
-      graphWorkerToolNamesWithin(input.parent.allowedTools)
-    )
+    const graphControlTools = new Set<string>([
+      ...GRAPH_LEAD_TOOL_NAMES,
+      ...GRAPH_WORKER_TOOL_NAMES
+    ])
+    const allowedTools = intersect(input.parent.allowedTools, caps.allowedTools)
+      .filter((tool) => !graphControlTools.has(tool))
     const allowedSkills = intersect(input.parent.allowedSkills, caps.allowedSkills)
     const allowedMcpServers = intersect(input.parent.allowedMcpServers, caps.allowedMcpServers)
     const blockedTools = union(input.parent.blockedTools, caps.blockedTools, [
       ...GRAPH_INCOMPATIBLE_TOOL_NAMES,
-      'graph_create_run',
-      'graph_patch_run',
-      'graph_control_run',
-      'graph_review_node',
+      ...GRAPH_LEAD_TOOL_NAMES,
+      ...GRAPH_WORKER_TOOL_NAMES,
       'graph_agent_governance'
     ])
     const blockedSkills = union(input.parent.blockedSkills, caps.blockedSkills)
@@ -183,11 +184,11 @@ function missingProfileFallback(
       `Graph-scoped replacement for unavailable project profile ${requested.profileId}.`
         .slice(0, 1_024),
     systemPrompt: [
-      'You are a graph-scoped specialist created because the requested project profile is unavailable.',
-      'Do not expand the parent authority, delegate recursively, or work outside the assigned node.',
-      `Node objective:\n${node.objective}`,
+      'You are a task executor created because the requested project profile is unavailable.',
+      'Complete only the assigned task. Do not delegate, coordinate other agents, or manage any workflow.',
+      `Task objective:\n${node.objective}`,
       `Acceptance criteria:\n${criteria}`,
-      'Return the required structured result with concrete evidence and explicit risks.'
+      'Finish with a concise normal response describing the result, changed files, checks, evidence, and risks.'
     ].join('\n\n'),
     toolPolicy: node.writeScopes.length ? 'inherit' : 'readOnly',
     blockedTools: [],
@@ -212,7 +213,7 @@ function ephemeralProfile(
     origin: 'ephemeral',
     lifecycle: 'trusted',
     name: reference.name,
-    description: reference.description ?? 'Graph-scoped ephemeral specialist',
+    description: reference.description ?? 'Bounded ephemeral task executor',
     systemPrompt: reference.systemPrompt,
     model: reference.model ?? parent.model,
     providerId: reference.providerId ?? parent.providerId,

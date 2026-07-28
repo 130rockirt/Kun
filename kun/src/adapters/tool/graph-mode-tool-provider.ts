@@ -88,8 +88,9 @@ export function buildGraphModeLocalTools(options: {
     options.enabled() &&
     !options.workerSessions.has(context.threadId) &&
     context.orchestration === 'graph'
-  const graphWorkerOnly = (context: ToolHostContext) =>
-    options.enabled() && options.workerSessions.has(context.threadId)
+  // Legacy handlers stay readable for persisted history, but new Graph
+  // children are ordinary executors and never receive Graph protocol tools.
+  const graphWorkerOnly = (_context: ToolHostContext) => false
 
   return [
     buildGraphCreateRunTool({

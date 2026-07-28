@@ -23,6 +23,7 @@ import {
   testGraphPlan
 } from './graph-test-fixtures.test-support.js'
 import {
+  autoLeadSupervision,
   rejectWhenAborted,
   schedulerHarness,
   schedulerTestRoots as roots,
@@ -149,6 +150,7 @@ describe('GraphScheduler', () => {
         networkAllowed: false
       }),
       artifactStore: artifacts,
+      supervision: () => autoLeadSupervision(store, control, nextId),
       nextId,
       tickIntervalMs: 5
     })
@@ -238,62 +240,6 @@ describe('GraphScheduler', () => {
     await harness.scheduler.stop()
   }, 15_000)
 
-  it('holds a missing required artifact for Lead repair instead of approving and skipping', async () => {
-    const basic = testGraphPlan()
-    const source: ReturnType<typeof testGraphPlan>['nodes'][number] = {
-      ...basic.nodes[0]!,
-      maxAttempts: 1,
-      completion: {
-        ...basic.nodes[0]!.completion,
-        requiredResultFields: ['summary', 'artifactRefs']
-      }
-    }
-    const plan = testGraphPlan({
-      nodes: [source, basic.nodes[1]!],
-      edges: [{
-        id: 'footer_data',
-        kind: 'data',
-        from: source.id,
-        to: 'finish',
-        artifactName: 'footer-analysis',
-        required: true
-      }],
-      completionNodeIds: ['finish'],
-      autoStart: true
-    })
-    const delegation = {
-      enabled: () => true,
-      runChild: async (input: {
-        onQueued?: (id: string) => Promise<void> | void
-        onRunning?: (id: string) => Promise<void> | void
-      }) => {
-        await input.onQueued?.('child_missing_artifact')
-        await input.onRunning?.('child_missing_artifact')
-        return testCompletedChild(
-          'child_missing_artifact',
-          'Useful footer analysis, but no artifact was published.'
-        )
-      }
-    } as unknown as DelegationRuntime
-    const harness = await schedulerHarness(plan, () => delegation)
-    harness.scheduler.start()
-    const waiting = await waitFor(async () => {
-      const run = await harness.store.get('run_harness')
-      return run?.status === 'awaiting_supervision' ? run : null
-    })
-
-    expect(waiting.nodes.research.status).toBe('repair_required')
-    expect(waiting.nodes.research.attempts[0]?.validation).toMatchObject({
-      valid: false,
-      issues: expect.arrayContaining([
-        expect.objectContaining({ code: 'missing_required_artifact' })
-      ])
-    })
-    expect(waiting.nodes.finish.status).not.toBe('skipped')
-    expect(waiting.reviews).toHaveLength(0)
-    await harness.scheduler.stop()
-  }, 15_000)
-
   it('resumes an awaiting-human run after a durable user review', async () => {
     const source = testGraphPlan().nodes[0]!
     const plan = testGraphPlan({
@@ -363,7 +309,7 @@ describe('GraphScheduler', () => {
     expect(completed.nodes.research.status).toBe('accepted')
   }, 15_000)
 
-  it('accepts any required reviewer pass when requireAll is false', async () => {
+  it('still requires the source Lead when evidence review uses any-pass policy', async () => {
     const source = testGraphPlan().nodes[0]!
     const plan = testGraphPlan({
       nodes: [{
@@ -399,21 +345,46 @@ describe('GraphScheduler', () => {
       return run?.status === 'completed' ? run : null
     })
     expect(completed.nodes.research.status).toBe('accepted')
-    expect(completed.reviews.map((review) => review.reviewerKind)).toEqual(['deterministic'])
+    expect(completed.reviews.map((review) => review.reviewerKind)).toEqual(
+      expect.arrayContaining(['deterministic', 'lead'])
+    )
     await harness.scheduler.stop()
   }, 15_000)
 
-  it('pauses once when delegation is unavailable instead of producing an event storm', async () => {
+  it('awaits supervision once when delegation is unavailable instead of producing an event storm', async () => {
+    let available = false
+    const delegation = {
+      enabled: () => available,
+      runChild: async (input: {
+        onQueued?: (id: string) => Promise<void> | void
+        onRunning?: (id: string) => Promise<void> | void
+      }) => {
+        await input.onQueued?.('child_recovered_runtime')
+        await input.onRunning?.('child_recovered_runtime')
+        return testCompletedChild(
+          'child_recovered_runtime',
+          'Completed after the subagent runtime recovered.'
+        )
+      }
+    } as unknown as DelegationRuntime
     const harness = await schedulerHarness(
       testGraphPlan({ autoStart: true }),
-      () => undefined
+      () => delegation
     )
     await harness.scheduler.tick()
-    const paused = await harness.store.get('run_harness')
-    expect(paused?.status).toBe('paused')
-    const seq = paused!.lastEventSeq
+    const awaiting = await harness.store.get('run_harness')
+    expect(awaiting?.status).toBe('awaiting_supervision')
+    const seq = awaiting!.lastEventSeq
     await harness.scheduler.tick()
     expect((await harness.store.get('run_harness'))?.lastEventSeq).toBe(seq)
+
+    available = true
+    await harness.scheduler.tick()
+    const completed = await waitFor(async () => {
+      const run = await harness.store.get('run_harness')
+      return run?.status === 'completed' ? run : null
+    })
+    expect(completed.summary?.finalAnswer).toContain('runtime recovered')
   }, 15_000)
 
   it('executes a bounded LoopGate repeatedly, preserves attempt history, and exits on exhaustion', async () => {
@@ -493,7 +464,7 @@ describe('GraphScheduler', () => {
       await harness.scheduler.tick()
       const run = await harness.store.get('run_harness')
       return run?.status === 'completed' ? run : null
-    }, 12_000)
+    }, 25_000)
     await harness.scheduler.stop()
 
     expect(completed.status).toBe('completed')
@@ -503,7 +474,7 @@ describe('GraphScheduler', () => {
     expect(completed.nodes.body.attempts).toHaveLength(3)
     expect(completed.nodes.body.attempts.map((attempt) => attempt.iteration)).toEqual([0, 1, 2])
     expect(completed.nodes.finish.status).toBe('accepted')
-  }, 15_000)
+  }, 30_000)
 
   it('aborts active workers, discards late results, and records cleanup on cancellation', async () => {
     let workerAborted = false

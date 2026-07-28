@@ -95,13 +95,14 @@ export function selectComposerGraphRun(
 ): GraphRun | null {
   const selected = runs.find((run) => run.id === selectedRunId)
   if (selected && !terminalRunStatuses.has(selected.status)) return selected
-  return runs.find((run) => !terminalRunStatuses.has(run.status)) ?? selected ?? runs[0] ?? null
+  return runs.find((run) => !terminalRunStatuses.has(run.status)) ?? null
 }
 
 export function getComposerGraphProgress(
   run: GraphRun,
   childRuns: Readonly<Record<string, GraphChildRuntime>> = {}
 ): ComposerGraphProgress {
+  const runTerminal = terminalRunStatuses.has(run.status)
   const plan = currentPlan(run)
   const projections = (plan?.nodes ?? [])
     .map((node) => run.nodes[node.id])
@@ -114,8 +115,10 @@ export function getComposerGraphProgress(
     return childThreadId ? childRuns[childThreadId] ?? null : null
   }
   const projectionIsActive = (projection: GraphNodeProjection): boolean =>
-    activeNodeStatuses.has(projection.status) ||
-    activeChildStatuses.has(childForProjection(projection)?.status ?? 'completed')
+    !runTerminal && (
+      activeNodeStatuses.has(projection.status) ||
+      activeChildStatuses.has(childForProjection(projection)?.status ?? 'completed')
+    )
   const active = projections.filter(projectionIsActive)
   const current = projections.find(projectionIsActive) ??
     projections.find((projection) => currentNodeStatuses.has(projection.status))

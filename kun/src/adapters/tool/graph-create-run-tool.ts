@@ -76,8 +76,9 @@ export function buildGraphCreateRunTool(options: {
       'Provide only the model-owned plan fields described by the schema; the host supplies identity, provenance, revision, and timestamps. ' +
       'Omit the budget or any individual budget field unless the user or project explicitly asks for a narrower limit; the host supplies all omitted defaults, including seven days per run, 24 hours per node, and the warning ratio. ' +
       'Use normalized repository-relative read/write scopes, never absolute workspace paths. ' +
-      'The plan must define phases, bounded nodes, typed edges, completion nodes, ' +
+      'The plan must define phases, bounded nodes, control edges or named data-result handoffs, completion nodes, ' +
       'acceptance criteria, review policy, explicit read/write scopes, and bounded LoopGates. ' +
+      'Executors finish normally; they never publish Graph artifacts or submit Graph state. Every node waits for an explicit source Lead review before its result can reach successors. ' +
       'Omit node.assignment by default for host routing; use an existing assignment only with an exact Graph registry profile id. ' +
       'Create exactly one successful GraphRun for a Graph-mode user turn; retry only when a structured tool result explicitly says the failure is retryable. The host validates all authority and graph invariants.',
     inputSchema: GRAPH_CREATE_RUN_INPUT_JSON_SCHEMA,
@@ -142,7 +143,7 @@ export function buildGraphCreateRunTool(options: {
                 : null
             },
             nextAction:
-              'The Lead remains responsible after dispatch. Inspect active workers with graph_supervise_node, wait and recheck at a risk-appropriate cadence, and guide drift or missing deliverables before accepting results.'
+              'The Lead remains responsible after dispatch. Inspect active executors with graph_supervise_node, wait and recheck at a risk-appropriate cadence, guide drift, and explicitly pass or revise every completed node with graph_review_node before any successor receives its result.'
           }
         }
       } catch (error) {

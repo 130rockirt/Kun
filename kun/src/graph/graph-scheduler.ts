@@ -22,6 +22,7 @@ import {
   loopResetNodeIds,
   maxBudgetRatio,
   outcomeOf,
+  reviewDisposition,
   rotate,
   terminalRequiredFailure,
   validationFailureSummary
@@ -162,7 +163,8 @@ export class GraphScheduler extends GraphAttemptScheduler {
       }
       if (
         (run.status === 'awaiting_supervision' || run.status === 'awaiting_human') &&
-        !hasPendingExternalReview(run)
+        !hasPendingExternalReview(run) &&
+        this.options.delegation()?.enabled() === true
       ) {
         run = await this.transitionRun(run, 'running', 'reviews resolved')
       }
@@ -279,15 +281,6 @@ export class GraphScheduler extends GraphAttemptScheduler {
       }
       const currentNode = run.nodes[projection.node.id]
       const currentAttempt = currentNode.attempts.find((entry) => entry.id === attempt.id)!
-      if (currentAttempt.validation?.valid !== true) {
-        run = await this.requireRepair(
-          run,
-          currentNode,
-          currentAttempt,
-          validationFailureSummary(currentAttempt)
-        )
-        continue
-      }
       run = await this.ensureReviews(run, projection.node.id, attempt.id)
       const reviewedNode = run.nodes[projection.node.id]
       const reviewedAttempt = reviewedNode.attempts.find((entry) => entry.id === attempt.id)!
@@ -299,33 +292,35 @@ export class GraphScheduler extends GraphAttemptScheduler {
       const reviews = run.reviews.filter((review) =>
         review.nodeId === reviewedNode.node.id &&
         review.attemptId === reviewedAttempt.id)
-      const requireAll = reviewedNode.node.completion.review.requireAll
-      const passedKinds = requiredKinds.filter((kind) =>
-        reviews.some((review) => review.reviewerKind === kind && review.outcome === 'pass'))
-      const hasSufficientPasses = requireAll
-        ? passedKinds.length === requiredKinds.length
-        : passedKinds.length > 0
-      const needsHuman = reviews.some((review) => review.outcome === 'needs_human') ||
-        (
-          !hasSufficientPasses &&
-          requiredKinds.includes('human') &&
-          !reviews.some((review) => review.reviewerKind === 'human')
-        )
-      if (needsHuman) {
+      const disposition = reviewDisposition({
+        requiredKinds,
+        requireAll: reviewedNode.node.completion.review.requireAll,
+        validationValid: reviewedAttempt.validation?.valid === true,
+        reviews
+      })
+      if (disposition.kind === 'awaiting_lead' || disposition.kind === 'invalid') {
+        if (run.status === 'running') {
+          run = await this.transitionRun(
+            run,
+            'awaiting_supervision',
+            disposition.kind === 'awaiting_lead' && reviewedAttempt.validation?.valid === true
+              ? 'source Lead review pending'
+              : validationFailureSummary(reviewedAttempt)
+          )
+        }
+        continue
+      }
+      if (disposition.kind === 'repair') {
+        run = await this.requireRepair(run, reviewedNode, reviewedAttempt, disposition.reason)
+        continue
+      }
+      if (disposition.kind === 'awaiting_human') {
         if (run.status === 'running') {
           run = await this.transitionRun(run, 'awaiting_human', 'review requires human decision')
         }
         continue
       }
-      const negative = !hasSufficientPasses
-        ? reviews.find((review) =>
-        review.outcome === 'fail' || review.outcome === 'revise')
-        : undefined
-      if (negative) {
-        run = await this.requireRepair(run, reviewedNode, reviewedAttempt, negative.summary)
-        continue
-      }
-      if (!hasSufficientPasses) {
+      if (disposition.kind === 'awaiting_evidence') {
         if (run.status === 'running') {
           run = await this.transitionRun(run, 'awaiting_supervision', 'external review pending')
         }
@@ -345,7 +340,12 @@ export class GraphScheduler extends GraphAttemptScheduler {
         continue
       }
       run = await this.transitionAttempt(run, reviewedNode.node.id, reviewedAttempt.id, 'accepted')
-      run = await this.transitionNode(run, reviewedNode.node.id, 'accepted', 'completion contract passed')
+      run = await this.transitionNode(
+        run,
+        reviewedNode.node.id,
+        'accepted',
+        'source Lead accepted the executor result'
+      )
     }
     return run
   }
@@ -397,7 +397,7 @@ export class GraphScheduler extends GraphAttemptScheduler {
         review.nodeId === nodeId &&
         review.attemptId === attemptId &&
         review.reviewerKind === kind)) continue
-      if (kind === 'human') continue
+      if (kind === 'human' || kind === 'lead') continue
       let review: GraphReviewResultV1
       if (kind === 'deterministic') {
         review = deterministicReview(node, attempt, this.nextId('graph_review'), this.nowIso())

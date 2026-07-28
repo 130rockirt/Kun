@@ -1328,6 +1328,57 @@ describe('AgentLoop', () => {
 	    })
 	  })
 
+  it('does not suppress repeated Graph run inspections within a turn', async () => {
+    let executions = 0
+    const inspectTool = LocalToolHost.defineTool({
+      name: 'graph_control_run',
+      description: 'Inspect a durable Graph run.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          action: { type: 'string' },
+          runId: { type: 'string' }
+        },
+        required: ['action', 'runId']
+      },
+      policy: 'auto',
+      execute: async () => {
+        executions += 1
+        return { output: { seq: executions } }
+      }
+    })
+    let calls = 0
+    const h = makeHarness(
+      {
+        provider: 'graph-inspect-model',
+        model: 'graph-inspect-model',
+        async *stream(): AsyncIterable<ModelStreamChunk> {
+          calls += 1
+          if (calls <= 4) {
+            yield {
+              kind: 'tool_call_complete',
+              callId: `call_graph_inspect_${calls}`,
+              toolName: 'graph_control_run',
+              arguments: { action: 'inspect', runId: 'run_1' }
+            }
+            yield { kind: 'completed', stopReason: 'tool_calls' }
+            return
+          }
+          yield { kind: 'completed', stopReason: 'stop' }
+        }
+      },
+      { tools: [inspectTool] }
+    )
+    await bootstrapThread(h)
+
+    const status = await h.loop.runTurn(h.threadId, h.turnId)
+    const events = await h.sessionStore.loadEventsSince(h.threadId, 0)
+
+    expect(status).toBe('completed')
+    expect(executions).toBe(4)
+    expect(events.some((event) => event.kind === 'tool_storm_suppressed')).toBe(false)
+  })
+
 	  it('can disable the storm breaker through loop config', async () => {
 	    let executions = 0
 	    const echoTool = LocalToolHost.defineTool({

@@ -36,6 +36,11 @@ import {
 const GRAPH_POPOVER_WIDTH = 680
 const GRAPH_POPOVER_MAX_HEIGHT = 420
 const GRAPH_POPOVER_ESTIMATED_HEIGHT = 390
+const TERMINAL_GRAPH_RUN_STATUSES = new Set<GraphRun['status']>([
+  'completed',
+  'failed',
+  'cancelled'
+])
 
 const nodeTone: Record<GraphNodeStatus, { fill: string; stroke: string; accent: string }> = {
   pending: { fill: 'var(--ds-surface-card)', stroke: 'var(--ds-border)', accent: '#94a3b8' },
@@ -86,10 +91,12 @@ function AgentStack({ names }: { names: string[] }): ReactElement {
 
 function GraphPreviewNode({
   node,
+  terminal,
   onInspect,
   onOpen
 }: {
   node: ComposerGraphLayoutNode
+  terminal: boolean
   onInspect: (node: ComposerGraphLayoutNode) => void
   onOpen: (nodeId: string) => void
 }): ReactElement {
@@ -127,7 +134,7 @@ function GraphPreviewNode({
         stroke={tone.stroke}
         strokeWidth={node.status === 'running' ? 2 : 1.25}
       />
-      {node.status === 'running' ? (
+      {node.status === 'running' && !terminal ? (
         <circle
           cx={node.x + node.width - 10}
           cy={node.y + 11}
@@ -192,6 +199,7 @@ export function FloatingComposerGraphPreview({
   ) => void
 }): ReactElement {
   const { t } = useTranslation('common')
+  const terminal = TERMINAL_GRAPH_RUN_STATUSES.has(run.status)
   const layout = layoutComposerGraph(run, childRuns)
   const [inspectedNodeId, setInspectedNodeId] = useState<string | null>(
     layout.nodes.find((node) => node.status === 'running')?.id ?? layout.nodes[0]?.id ?? null
@@ -270,6 +278,7 @@ export function FloatingComposerGraphPreview({
           <GraphPreviewNode
             key={node.id}
             node={node}
+            terminal={terminal}
             onInspect={(next) => setInspectedNodeId(next.id)}
             onOpen={(nodeId) => onOpenGraph(run.id, nodeId)}
           />
@@ -284,7 +293,9 @@ export function FloatingComposerGraphPreview({
             <SubagentLiveAvatar
               poseId={inspectedLiveness?.child?.profile ?? inspectedNode.agentName}
               status={
-                inspectedNode.status === 'failed' || inspectedNode.status === 'cancelled'
+                terminal
+                  ? run.status === 'completed' ? 'done' : 'failed'
+                  : inspectedNode.status === 'failed' || inspectedNode.status === 'cancelled'
                   ? 'failed'
                   : inspectedNode.status === 'accepted'
                     ? 'done'
@@ -296,7 +307,7 @@ export function FloatingComposerGraphPreview({
                         : 'running'
               }
               compact
-              animate={inspectedNode.status === 'running'}
+              animate={!terminal && inspectedNode.status === 'running'}
             />
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2 text-[11px]">
@@ -308,7 +319,9 @@ export function FloatingComposerGraphPreview({
                 </span>
               </div>
               <div className="mt-0.5 truncate text-[10px] text-ds-muted">
-                {inspectedLiveness?.quiet
+                {terminal
+                  ? t(`graphStatus_${run.status}`, { defaultValue: run.status })
+                  : inspectedLiveness?.quiet
                   ? t('graphStillWaiting', {
                       seconds: Math.floor((inspectedLiveness.lastActivityAgeMs ?? 0) / 1_000)
                     })

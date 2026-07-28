@@ -1472,7 +1472,12 @@ export async function createKunServeRuntime(
 	        .then(() => 'aborted' as const)
 	        .catch(() => 'aborted' as const)
 	    }
-	    return trackRuntimeRun(loop.runTurn(threadId, turnId))
+	    return trackRuntimeRun(loop.runTurn(threadId, turnId).then(async (outcome) => {
+	      if (outcome !== 'suspended') {
+	        await graphRuntime.handleSourceTurnTerminal(threadId, turnId, outcome)
+	      }
+	      return outcome
+	    }))
 	  }
 	  const runReview = (input: Parameters<typeof reviewService.runReview>[0]) =>
 	    trackRuntimeRun(reviewService.runReview(input))

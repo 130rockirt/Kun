@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
 import type {
-  GraphArtifactReferenceV1,
   GraphNodeAttemptV1,
   GraphNodeProjectionV1
 } from '../contracts/graph.js'
@@ -19,7 +18,7 @@ import {
 } from './graph-test-fixtures.test-support.js'
 
 describe('Graph scheduler data dependencies', () => {
-  it('requires an accepted source and the exact declared artifact name', () => {
+  it('requires source Lead acceptance but not worker artifact publication', () => {
     const plan = testGraphPlan({
       edges: [{
         id: 'research_output',
@@ -36,30 +35,10 @@ describe('Graph scheduler data dependencies', () => {
     }))
     const run = structuredClone(created)
     const edge = plan.edges
-    const artifact: GraphArtifactReferenceV1 = {
-      version: 1,
-      artifactId: 'artifact_research',
-      contentHash: 'a'.repeat(64),
-      mimeType: 'application/json',
-      byteLength: 10,
-      summary: 'Research result.',
-      logicalNames: ['research-result'],
-      producerNodeId: 'research',
-      producerAttemptId: 'attempt_research',
-      visibility: 'dependency',
-      retention: 'run',
-      createdAt: '2026-07-26T00:00:00.000Z'
-    }
-
     run.nodes.research.status = 'running'
-    run.artifacts = [artifact]
     expect(dependencyDecision(run, edge)).toBe('blocked')
 
     run.nodes.research.status = 'accepted'
-    run.artifacts = [{ ...artifact, logicalNames: ['some-other-result'] }]
-    expect(dependencyDecision(run, edge)).toBe('unsatisfiable')
-
-    run.artifacts = [artifact]
     expect(dependencyDecision(run, edge)).toBe('ready')
   })
 })
@@ -165,7 +144,7 @@ describe('Graph deterministic evidence', () => {
     ).outcome).toBe('pass')
   })
 
-  it('marks a missing required downstream artifact as invalid', () => {
+  it('treats an empty optional artifact list as valid executor output', () => {
     const result = validateWorkerResult(projection, {
       version: 1,
       summary: 'Done.',
@@ -176,10 +155,9 @@ describe('Graph deterministic evidence', () => {
       evidence: ['evidence'],
       risks: [],
       suggestedMessages: []
-    }, ['required-output'])
-    expect(result.issues).toContainEqual(expect.objectContaining({
-      code: 'missing_required_artifact'
-    }))
+    })
+    expect(result.valid).toBe(true)
+    expect(result.issues).toEqual([])
   })
 
   it('accepts explicit empty change/risk arrays and normalizes string checks', () => {

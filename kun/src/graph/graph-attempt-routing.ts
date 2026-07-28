@@ -69,9 +69,10 @@ async function routeOrCreateEphemeral(
     name: `${projection.node.kind}-${projection.node.id}`,
     description: projection.node.title,
     systemPrompt: [
-      `You are a Graph worker specialized for: ${projection.node.title}.`,
+      `You are a task executor specialized for: ${projection.node.title}.`,
       projection.node.objective,
-      'Work only on this node. Communicate bounded evidence and never delegate.'
+      'Complete only this assignment. Do not manage the workflow or other agents.',
+      'Finish with a concise normal response containing result, changed files, checks, evidence, and risks.'
     ].join('\n\n'),
     model: parent.model,
     providerId: parent.providerId,

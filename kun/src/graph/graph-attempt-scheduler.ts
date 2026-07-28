@@ -82,19 +82,23 @@ export abstract class GraphAttemptScheduler {
   protected async scheduleNode(runId: string, nodeId: string): Promise<boolean> {
     const delegation = this.options.delegation()
     if (!delegation?.enabled()) {
-      let paused = false
+      let awaitingSupervision = false
       await this.withRunQueue(runId, async () => {
         const run = await this.requireRun(runId)
         if (run.status !== 'running') return
-        await this.transitionRun(run, 'paused', 'Subagent runtime is unavailable.')
-        paused = true
+        await this.transitionRun(
+          run,
+          'awaiting_supervision',
+          'Subagent runtime is temporarily unavailable.'
+        )
+        awaitingSupervision = true
       })
-      if (paused) {
+      if (awaitingSupervision) {
         await this.requestSupervision(
           runId,
           'failure',
           [nodeId],
-          'Subagent runtime is unavailable; the GraphRun was paused safely.'
+          'Subagent runtime is unavailable; the GraphRun is awaiting remediation.'
         )
       }
       return false
@@ -401,13 +405,6 @@ export abstract class GraphAttemptScheduler {
           result.artifactRefs
         )
       }
-      const downstreamDataEdges = run.plans.at(-1)!.edges.filter((edge) =>
-        edge.kind === 'data' && edge.from === nodeId)
-      const missingRequiredArtifactNames = [...new Set(downstreamDataEdges
-        .filter((edge) => edge.kind === 'data' && edge.required)
-        .flatMap((edge) => edge.kind === 'data' ? [edge.artifactName] : [])
-        .filter((name) => !result.artifactRefs.some((artifact) =>
-          artifact.logicalNames?.includes(name))))]
       const checkNames = projection.node.completion.review.deterministicChecks
       const verifiedChecks = this.options.verifyChecks
         ? await this.options.verifyChecks({ run, node: projection, attempt, checkNames })
@@ -422,11 +419,7 @@ export abstract class GraphAttemptScheduler {
             outputSummary: 'No host verifier was configured.'
           }))
       result = { ...result, verifiedChecks }
-      const validation = validateWorkerResult(
-        projection,
-        result,
-        missingRequiredArtifactNames
-      )
+      const validation = validateWorkerResult(projection, result)
       run = (await this.options.store.append(run.id, {
         expectedSeq: run.lastEventSeq,
         graphRevision: run.currentRevision,
@@ -453,7 +446,12 @@ export abstract class GraphAttemptScheduler {
         undefined,
         child.id
       )
-      run = await this.transitionNode(run, nodeId, 'submitted', 'worker result submitted')
+      run = await this.transitionNode(
+        run,
+        nodeId,
+        'submitted',
+        'executor result captured for source Lead review'
+      )
       run = await this.updateBudget(run, {
         totalTokens: run.budget.totalTokens + child.usage.totalTokens,
         elapsedMs: Math.max(run.budget.elapsedMs, Date.now() - Date.parse(run.createdAt)),

@@ -98,10 +98,21 @@ describe('GraphRuntimeComposition creation authority', () => {
       runId: 'run_valid'
     })).resolves.toMatchObject({ run: { status: 'ready' } })
 
+    await runtime.handleSourceTurnTerminal(thread.id, 'turn_1', 'aborted')
+    await expect(runtime.control.get('run_valid')).resolves.toMatchObject({
+      status: 'cancelled'
+    })
+
+    await runtime.control.create({
+      ...base,
+      runId: 'run_archived',
+      commandId: 'command_create_archived',
+      idempotencyKey: 'create_archived'
+    })
     await runtime.handleThreadStatus(thread.id, 'archived')
-    const archived = await runtime.control.get('run_valid')
+    const archived = await runtime.control.get('run_archived')
     expect(archived.status).toBe('paused')
-    await runtime.control.resume('run_valid', {
+    await runtime.control.resume('run_archived', {
       commandId: 'command_resume',
       idempotencyKey: 'resume_after_archive',
       expectedSeq: archived.lastEventSeq
@@ -109,13 +120,13 @@ describe('GraphRuntimeComposition creation authority', () => {
 
     config = testGraphConfig({ enabled: false })
     await runtime.reconfigureBackgroundServices()
-    await expect(runtime.control.get('run_valid')).resolves.toMatchObject({
+    await expect(runtime.control.get('run_archived')).resolves.toMatchObject({
       status: 'paused'
     })
     await runtime.stop()
   })
 
-  it('records legacy source-turn ambiguity without fabricating a replacement Lead', async () => {
+  it('cancels a legacy nonterminal run owned by an already-terminal source turn', async () => {
     const root = await mkdtemp(join(tmpdir(), 'kun-graph-runtime-recovery-'))
     const workspace = join(root, 'workspace')
     await mkdir(workspace)
@@ -184,16 +195,10 @@ describe('GraphRuntimeComposition creation authority', () => {
       })
     })
 
-    const events = await runtime.store.events('run_legacy')
-    expect(events).toContainEqual(expect.objectContaining({
-      event: expect.objectContaining({
-        type: 'supervision_requested',
-        payload: expect.objectContaining({
-          reason: 'recovery',
-          digest: expect.stringContaining('already-terminal source turn')
-        })
-      })
-    }))
+    await expect(runtime.control.get('run_legacy')).resolves.toMatchObject({
+      status: 'cancelled'
+    })
+    expect(leadTurn).not.toHaveBeenCalled()
     expect(await threadStore.get(thread.id)).toMatchObject({
       turns: [expect.objectContaining({
         id: 'turn_legacy',

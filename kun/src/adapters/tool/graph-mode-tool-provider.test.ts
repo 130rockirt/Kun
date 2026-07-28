@@ -348,7 +348,7 @@ describe('Graph Mode tool visibility boundaries', () => {
     })
   })
 
-  it('separates Lead, Worker, and ordinary direct-turn tools', () => {
+  it('advertises Graph controls only to the owning Lead, never to executors', () => {
     const workerSessions = new GraphWorkerSessionRegistry()
     workerSessions.bind('worker_thread', {
       runId: 'run_1',
@@ -371,10 +371,6 @@ describe('Graph Mode tool visibility boundaries', () => {
       'graph_review_node',
       'graph_supervise_node'
     ])
-    const workerNames = new Set(tools
-      .map((tool) => tool.name)
-      .filter((name) => name.startsWith('graph_worker_')))
-
     for (const tool of tools) {
       expect(tool.shouldAdvertise?.(context('direct_thread'))).toBe(false)
       expect(tool.shouldAdvertise?.(context('lead_thread', 'graph'))).toBe(
@@ -383,9 +379,7 @@ describe('Graph Mode tool visibility boundaries', () => {
       expect(tool.shouldAdvertise?.(context('runtime_thread', 'direct', 'graph_runtime'))).toBe(
         leadNames.has(tool.name) && tool.name !== 'graph_create_run'
       )
-      expect(tool.shouldAdvertise?.(context('worker_thread', 'graph'))).toBe(
-        workerNames.has(tool.name)
-      )
+      expect(tool.shouldAdvertise?.(context('worker_thread', 'graph'))).toBe(false)
     }
   })
 

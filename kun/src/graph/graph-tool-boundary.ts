@@ -30,6 +30,7 @@ export const GRAPH_INCOMPATIBLE_TOOL_NAMES = [
 ] as const
 
 const INCOMPATIBLE_TOOL_NAMES = new Set<string>(GRAPH_INCOMPATIBLE_TOOL_NAMES)
+const LEAD_TOOL_NAMES = new Set<string>(GRAPH_LEAD_TOOL_NAMES)
 const WORKER_TOOL_NAMES = new Set<string>(GRAPH_WORKER_TOOL_NAMES)
 
 export function isGraphLeadContext(
@@ -55,19 +56,22 @@ export function isToolAllowedInOrchestration(
 }
 
 /**
- * Capture only capabilities that a Graph worker can actually receive. Graph
- * worker coordination is host-owned and mandatory; ordinary orchestration is
- * never copied into an assignment snapshot.
+ * Capture only ordinary capabilities that a Graph executor can receive.
+ * Graph lifecycle and worker-protocol tools are host/Lead-owned and are never
+ * copied into an assignment snapshot.
  */
 export function graphParentAuthorityToolNames(toolNames: readonly string[]): string[] {
-  return [...new Set([
-    ...toolNames.filter((name) => !INCOMPATIBLE_TOOL_NAMES.has(name)),
-    ...GRAPH_WORKER_TOOL_NAMES
-  ])].sort()
+  return [...new Set(toolNames.filter((name) =>
+    !INCOMPATIBLE_TOOL_NAMES.has(name) &&
+    !LEAD_TOOL_NAMES.has(name) &&
+    !WORKER_TOOL_NAMES.has(name)
+  ))].sort()
 }
 
 export function graphWorkerToolNamesWithin(
-  allowedToolNames: readonly string[]
+  _allowedToolNames: readonly string[]
 ): string[] {
-  return [...new Set(allowedToolNames.filter((name) => WORKER_TOOL_NAMES.has(name)))].sort()
+  // Retained as a compatibility export for callers compiled against the old
+  // boundary. New Graph children are ordinary executors and receive none.
+  return []
 }

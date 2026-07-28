@@ -121,6 +121,13 @@ export function validateGraphPlan(
     if (!nodes.has(edge.to)) {
       error('missing_edge_target', ['edges', index, 'to'], `edge ${edge.id} has missing target ${edge.to}`)
     }
+    if (edge.kind === 'message') {
+      error(
+        'executor_message_edge_unsupported',
+        ['edges', index, 'kind'],
+        'Graph executors do not communicate peer-to-peer; use a named data edge for a source-Lead-approved result handoff'
+      )
+    }
   }
 
   validateBudget(plan, config, error)

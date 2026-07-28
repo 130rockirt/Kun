@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { CapabilityToolSpec } from '../adapters/tool/capability-registry.js'
 import type { GraphRunV1 } from '../contracts/graph.js'
-import { GRAPH_WORKER_TOOL_NAMES } from '../graph/graph-tool-boundary.js'
 import type { TurnRunOutcome } from '../loop/turn-execution-types.js'
 import { createGraphRuntimeStartOptions } from './graph-runtime-bootstrap.js'
 
@@ -107,7 +106,7 @@ const run = {
 } as GraphRunV1
 
 describe('Graph runtime bootstrap capability boundary', () => {
-  it('captures Graph-only worker authority while preserving source model routing', async () => {
+  it('captures ordinary executor authority while preserving source model routing', async () => {
     const { options } = runtimeOptions()
     const authority = await options.authorityForRun(run)
 
@@ -120,11 +119,7 @@ describe('Graph runtime bootstrap capability boundary', () => {
       reasoningEffort: 'high',
       allowedSkills: ['safe-skill']
     })
-    expect(authority.allowedTools).toEqual([
-      ...GRAPH_WORKER_TOOL_NAMES,
-      'mcp_read',
-      'read'
-    ].sort())
+    expect(authority.allowedTools).toEqual(['mcp_read', 'read'])
     expect(authority.allowedTools).not.toEqual(expect.arrayContaining([
       'delegate_task',
       'list_subagent_profiles',

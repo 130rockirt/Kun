@@ -63,17 +63,26 @@ export function graphNodeLiveness(
     attempt?.queuedAt
   const startMs = parsedTimestamp(startedAt)
   const lastActivityMs = parsedTimestamp(activity?.updatedAt ?? child?.updatedAt)
-  const activelyRunning = node.status === 'running' ||
+  const nodeTerminal =
+    node.status === 'accepted' ||
+    node.status === 'skipped' ||
+    node.status === 'superseded' ||
+    node.status === 'failed' ||
+    node.status === 'cancelled'
+  const activelyRunning = !nodeTerminal && (
+    node.status === 'running' ||
     node.status === 'reviewing' ||
     node.status === 'submitted' ||
     child?.status === 'running'
+  )
   const elapsedMs = activelyRunning && startMs !== undefined
     ? Math.max(child?.durationMs ?? 0, attempt?.elapsedMs ?? 0, now - startMs)
     : child?.durationMs ?? attempt?.elapsedMs ?? 0
   const lastActivityAgeMs = lastActivityMs !== undefined
     ? Math.max(0, now - lastActivityMs)
     : undefined
-  const quiet = child?.status === 'running' &&
+  const quiet = !nodeTerminal &&
+    child?.status === 'running' &&
     lastActivityAgeMs !== undefined &&
     lastActivityAgeMs >= GRAPH_ACTIVITY_QUIET_MS
 
@@ -103,8 +112,8 @@ export function graphNodeLiveness(
     ...(child ? { child } : {}),
     ...(attempt?.childThreadId ? { childThreadId: attempt.childThreadId } : {}),
     ...(attempt ? { attemptNumber: attempt.attemptNumber } : {}),
-    ...(activity?.label ? { activityLabel: activity.label } : {}),
-    ...(activity?.toolName ? { activityToolName: activity.toolName } : {}),
+    ...(!nodeTerminal && activity?.label ? { activityLabel: activity.label } : {}),
+    ...(!nodeTerminal && activity?.toolName ? { activityToolName: activity.toolName } : {}),
     ...(startedAt ? { startedAt } : {}),
     elapsedMs,
     ...(lastActivityAgeMs !== undefined ? { lastActivityAgeMs } : {}),

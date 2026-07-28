@@ -80,7 +80,7 @@ function runningRun(startedAt: string): GraphRunV1 {
 }
 
 describe('GraphSupervisor', () => {
-  it('coalesces material signals and pauses repeated non-progress failures', async () => {
+  it('coalesces material signals without pausing repeated non-progress failures', async () => {
     const original = baseRun()
     let current: GraphRunV1 = {
       ...original,
@@ -140,7 +140,15 @@ describe('GraphSupervisor', () => {
     await supervisor.flush('run_1')
     await supervisor.stop()
 
-    expect(current.status).toBe('paused')
+    expect(current.status).toBe('running')
+    expect(store.append).not.toHaveBeenCalledWith(
+      'run_1',
+      expect.objectContaining({
+        event: expect.objectContaining({
+          type: 'run_status_changed'
+        })
+      })
+    )
     expect(leadTurn).toHaveBeenCalledOnce()
     expect(leadTurn).toHaveBeenCalledWith(expect.objectContaining({
       reasons: expect.arrayContaining(['failure', 'help']),

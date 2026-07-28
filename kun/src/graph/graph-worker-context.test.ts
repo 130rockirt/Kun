@@ -49,7 +49,7 @@ function acceptedAttempt(
 }
 
 describe('buildGraphWorkerContext', () => {
-  it('includes only explicit dependencies, addressed messages, and authorized artifacts', () => {
+  it('includes only Lead-approved data packets and optional authorized artifacts', () => {
     const basic = testGraphPlan()
     const secretNode = {
       ...basic.nodes[0]!,
@@ -171,14 +171,16 @@ describe('buildGraphWorkerContext', () => {
     expect(context.dependencyNodeIds).toEqual(['research'])
     expect(context.prompt).toContain('Allowed dependency result.')
     expect(context.prompt).not.toContain('DO NOT LEAK THIS WHOLE RESULT.')
-    expect(context.prompt).toContain('Explicit bounded finding.')
+    expect(context.prompt).not.toContain('Explicit bounded finding.')
     expect(context.prompt).toContain('artifact_dependency')
-    expect(context.prompt).toContain('artifact_explicit_message')
+    expect(context.prompt).not.toContain('artifact_explicit_message')
     expect(context.prompt).not.toContain('artifact_lead_only')
     expect(context.prompt).toContain('Phase guidance is visible.')
     expect(context.prompt).not.toContain('LEAD-ONLY GUIDANCE')
-    expect(context.prompt).toContain('reportedChecks ({ name, status:')
-    expect(context.prompt).toContain('Empty arrays explicitly mean none')
+    expect(context.prompt).toContain('Main-agent-approved inputs')
+    expect(context.prompt).toContain('Use a normal final response')
+    expect(context.prompt).toContain('do not manage a graph')
+    expect(context.messages).toEqual([])
   })
 
   it('keeps host boundary instructions when untrusted content is truncated', () => {
@@ -201,7 +203,7 @@ describe('buildGraphWorkerContext', () => {
     expect(Buffer.byteLength(context.prompt, 'utf8')).toBeLessThanOrEqual(1_024)
   })
 
-  it('requires named artifact publication and carries repair feedback into retries', () => {
+  it('keeps actionable repair feedback but drops obsolete worker protocol failures', () => {
     const basic = testGraphPlan()
     const plan = testGraphPlan({
       nodes: basic.nodes,
@@ -259,11 +261,10 @@ describe('buildGraphWorkerContext', () => {
     }
 
     const context = buildGraphWorkerContext(run, 'research', testGraphConfig())
-    expect(context.prompt).toContain(
-      'MUST call graph_worker_publish_artifact for "footer-analysis"'
-    )
-    expect(context.prompt).toContain('missing_required_artifact')
-    expect(context.prompt).toContain('Publish the named artifact before submitting.')
-    expect(context.prompt).toContain('include the returned artifact reference in artifactRefs')
+    expect(context.prompt).not.toContain('missing_required_artifact')
+    expect(context.prompt).not.toContain('Publish the named artifact before submitting.')
+    expect(context.prompt).not.toContain('graph_worker_publish_artifact')
+    expect(context.prompt).not.toContain('Required output artifact names')
+    expect(context.prompt).toContain('The host will collect your response for the main agent.')
   })
 })

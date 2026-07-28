@@ -52,6 +52,11 @@ export class ToolStormBreaker {
       }
       return { suppress: false }
     }
+    if (isGraphRunInspection(call)) {
+      // Graph state is durable and may advance between identical reads. The
+      // Lead must be able to inspect again while supervising an active run.
+      return { suppress: false }
+    }
     const name = call.toolName
     const args = stableStringify(call.arguments)
     const readOnly = !isMutatingToolCall(call)
@@ -93,6 +98,14 @@ export class ToolStormBreaker {
 function isMutatingToolCall(call: ToolCallLike): boolean {
   if (call.toolKind === 'file_change') return true
   return MUTATING_TOOL_NAMES.has(call.toolName)
+}
+
+function isGraphRunInspection(call: ToolCallLike): boolean {
+  if (call.toolName !== 'graph_control_run') return false
+  if (!call.arguments || typeof call.arguments !== 'object' || Array.isArray(call.arguments)) {
+    return false
+  }
+  return (call.arguments as Record<string, unknown>).action === 'inspect'
 }
 
 function stableStringify(value: unknown): string {

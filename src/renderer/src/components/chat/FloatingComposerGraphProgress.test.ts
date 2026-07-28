@@ -141,12 +141,12 @@ describe('FloatingComposerGraphProgress', () => {
     })
   })
 
-  it('selects an active run and keeps the selected terminal run readable as fallback', () => {
+  it('selects only active runs for the composer progress surface', () => {
     const failed = graphRun({ id: 'failed', status: 'failed' })
     const active = graphRun({ id: 'active' })
 
     expect(selectComposerGraphRun([failed, active], 'failed')?.id).toBe('active')
-    expect(selectComposerGraphRun([failed], 'failed')?.id).toBe('failed')
+    expect(selectComposerGraphRun([failed], 'failed')).toBeNull()
     expect(selectComposerGraphRun([], null)).toBeNull()
   })
 
@@ -203,6 +203,19 @@ describe('FloatingComposerGraphProgress', () => {
       fraction: 1 / 3,
       activeCount: 0
     })
+  })
+
+  it('does not animate or surface stale child activity for a terminal run', () => {
+    const run = graphRun({ status: 'cancelled' })
+    const html = renderToStaticMarkup(createElement(FloatingComposerGraphPreview, {
+      run,
+      onOpenGraph: vi.fn()
+    }))
+
+    expect(getComposerGraphProgress(run)).toMatchObject({ activeCount: 0 })
+    expect(html).not.toContain('ds-subagent-dot-pulse')
+    expect(html).not.toContain('Writing response')
+    expect(html).toContain('cancelled')
   })
 
   it('places the bounded Graph preview above the composer when room is available', () => {

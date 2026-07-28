@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
 import {
-  GRAPH_WORKER_TOOL_NAMES,
   graphParentAuthorityToolNames,
   graphWorkerToolNamesWithin,
   isGraphLeadContext,
@@ -35,21 +34,18 @@ describe('Graph tool boundary', () => {
     }, { orchestration: 'direct' })).toBe(true)
   })
 
-  it('builds worker authority without ordinary orchestration and with coordination tools', () => {
+  it('builds executor authority without ordinary or Graph orchestration tools', () => {
     const names = graphParentAuthorityToolNames([
       'read',
+      'graph_create_run',
+      'graph_worker_submit_result',
       'delegate_task',
       'list_subagent_profiles',
       'task_graph',
       'design_component'
     ])
 
-    expect(names).toEqual([
-      ...GRAPH_WORKER_TOOL_NAMES,
-      'read'
-    ].sort())
-    expect(graphWorkerToolNamesWithin(names)).toEqual(
-      [...GRAPH_WORKER_TOOL_NAMES].sort()
-    )
+    expect(names).toEqual(['read'])
+    expect(graphWorkerToolNamesWithin(names)).toEqual([])
   })
 })

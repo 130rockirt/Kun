@@ -155,10 +155,7 @@ export class GraphSupervisor implements GraphSupervisionPort {
     if (pending.timer) clearTimeout(pending.timer)
     this.pending.delete(runId)
     await this.withLeadQueue(runId, async () => {
-      const run = await this.withRunQueue(runId, async () => {
-        const current = await this.options.store.get(runId)
-        return current ? this.detectRepeatedFailure(current) : null
-      })
+      const run = await this.withRunQueue(runId, () => this.options.store.get(runId))
       if (!run) return
       if (
         !this.options.leadTurn ||
@@ -450,47 +447,6 @@ export class GraphSupervisor implements GraphSupervisionPort {
       if (pending.timer) clearTimeout(pending.timer)
     }
     this.pending.clear()
-  }
-
-  private async detectRepeatedFailure(run: GraphRunV1): Promise<GraphRunV1> {
-    if (run.status !== 'running' && run.status !== 'awaiting_supervision') return run
-    const threshold = this.options.config().supervision.repeatedFailureThreshold
-    for (const node of Object.values(run.nodes)) {
-      const failures = node.attempts
-        .filter((attempt) => attempt.normalizedFailure)
-        .slice(-threshold)
-      if (
-        failures.length >= threshold &&
-        new Set(failures.map((attempt) => normalizeFailure(attempt.normalizedFailure!))).size === 1
-      ) {
-        let current = run
-        if (current.status === 'running') {
-          current = await this.transitionRun(current, 'pausing', 'repeated non-progress failure')
-        }
-        if (current.status === 'pausing' || current.status === 'awaiting_supervision') {
-          current = await this.transitionRun(current, 'paused', 'repeated non-progress failure')
-        }
-        return current
-      }
-    }
-    return run
-  }
-
-  private async transitionRun(
-    run: GraphRunV1,
-    to: GraphRunV1['status'],
-    reason: string
-  ): Promise<GraphRunV1> {
-    return (await this.options.store.append(run.id, {
-      expectedSeq: run.lastEventSeq,
-      graphRevision: run.currentRevision,
-      commandId: this.nextId('graph_supervision'),
-      idempotencyKey: `supervisor:${run.id}:${run.status}:${to}:${run.lastEventSeq + 1}`,
-      event: {
-        type: 'run_status_changed',
-        payload: { from: run.status, to, reason }
-      }
-    })).state
   }
 
   private withRunQueue<T>(runId: string, operation: () => Promise<T>): Promise<T> {

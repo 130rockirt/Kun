@@ -292,6 +292,29 @@ export class GraphRuntimeComposition {
     }
   }
 
+  async handleSourceTurnTerminal(
+    threadId: string,
+    sourceTurnId: string,
+    status: 'completed' | 'failed' | 'aborted'
+  ): Promise<void> {
+    const runs = await this.store.list({ threadId })
+    for (const run of runs) {
+      if (
+        run.sourceTurnId !== sourceTurnId ||
+        run.status === 'completed' ||
+        run.status === 'failed' ||
+        run.status === 'cancelled'
+      ) {
+        continue
+      }
+      await this.control.cancel(run.id, {
+        commandId: this.options.ids.next('graph_source_turn_terminal'),
+        idempotencyKey: `source-turn-terminal:${threadId}:${sourceTurnId}:${run.id}:${status}`,
+        reason: `owning source turn ended with status ${status}`
+      })
+    }
+  }
+
   async start(options: GraphRuntimeStartOptions): Promise<void> {
     const nextId = (prefix: string): string => this.options.ids.next(prefix)
     this.delegation = options.delegation
@@ -394,16 +417,11 @@ export class GraphRuntimeComposition {
             sourceTurn.status === 'failed' ||
             sourceTurn.status === 'aborted')
         ) {
-          await this.supervisor.signal({
-            runId: run.id,
-            reason: 'recovery',
-            nodeIds: [],
-            digest: [
-              `Recovery ambiguity: nonterminal GraphRun ${run.id}`,
-              `references already-terminal source turn ${sourceTurn.id}`,
-              `with status ${sourceTurn.status}. Preserving immutable turn history.`
-            ].join(' ')
-          })
+          await this.handleSourceTurnTerminal(
+            run.threadId,
+            run.sourceTurnId,
+            sourceTurn.status
+          )
         }
         continue
       }

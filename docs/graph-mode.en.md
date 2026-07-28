@@ -15,8 +15,9 @@ The detailed Chinese guide is [graph-mode.md](./graph-mode.md).
 
 Graph Mode has three separable planes:
 
-1. Execution: plans, runs, nodes, attempts, typed edges, resource accounting, mailbox,
-   artifacts, reviews, scheduling, and recovery.
+1. Execution: plans, runs, nodes, attempts, typed edges, resource accounting,
+   captured results, reviews, scheduling, and recovery. Legacy mailbox and
+   artifact events remain readable for persisted runs.
 2. Project capability: versioned Agent profiles, Skill and Graph Recipe
    candidates, routing, scores, and evidence.
 3. Governance: candidates, probation, promotion, dormancy, archival, merge,
@@ -47,8 +48,8 @@ supervision, event-driven resumes, and terminal delivery. The contract:
   for drift, and a later check that the correction actually happened;
 - distinguishes dispatch, milestone prose, and claimed argument fixes from
   persisted Graph and tool truth; and
-- permits final delivery only after terminal state, required nodes and
-  artifacts, integration, and checks are satisfied.
+- permits final delivery only after terminal state, required nodes,
+  Lead-approved handoffs, integration, and checks are satisfied.
 
 The contract is a separate mode system instruction after the stable Kun
 system prompt. Direct turns therefore remain direct, while every resumed
@@ -62,12 +63,12 @@ Graph turn
   -> host validates and journals GraphPlan
   -> scheduler computes ready nodes
   -> immutable least-authority assignment snapshot
-  -> DelegationRuntime child worker
+  -> DelegationRuntime child executor
   -> the source Lead uses graph_supervise_node to inspect, wait 1-60 seconds and recheck, or guide
   -> only after the current episode is handled may the Lead release its execution slot and park
-  -> bounded progress/artifact/message/structured result
-  -> deterministic, peer, Lead, or human review
-  -> dependency release, bounded retry, GraphPatch, or LoopGate
+  -> executor finishes normally; host captures its response and durable child session
+  -> deterministic/peer evidence plus mandatory source Lead pass or revise
+  -> a Lead pass releases the bounded data-result packet; otherwise repair, retry, GraphPatch, or LoopGate
   -> material signals resume the same Lead for inspection, reporting, remediation, or reassignment
   -> final gates and resource disposition
   -> completed, failed, or cancelled GraphRun
@@ -90,14 +91,16 @@ explicit versions. `GraphPlanV1` describes topology and policy;
 `GraphRunV1` is the durable projection; `GraphNodeAttemptV1` records an
 immutable execution snapshot; `GraphEventEnvelopeV1` supplies monotonic
 sequence, revision, command, and idempotency metadata. `GraphPatchV1`,
-structured worker results, reviews, messages, artifacts, cleanup, profile
+captured executor results, reviews, legacy messages/artifacts, cleanup, profile
 versions, evidence, Episodes, candidates, and audit records are strict schemas.
 
 Edge kinds are:
 
 - `control`: outcome-gated scheduling;
-- `data`: authorized artifact/result flow;
-- `message`: explicit non-default direct communication.
+- `data`: a named result packet exposed to the successor only after the source
+  Lead accepts the predecessor;
+- `message`: a legacy persisted edge shape. New executors have no peer mailbox
+  tools; cross-node information must use a Lead-approved data handoff.
 
 Run states progress from `draft -> validating -> ready -> running`, with
 pause, supervision, and human-review branches, then
@@ -165,29 +168,32 @@ system instructions, tools, Skills, MCP servers, approval, sandbox, workspace,
 read/write scopes, network, and time limits. Effective authority is the
 intersection of parent, graph, profile, node, and host policy.
 
-Workers never receive delegation, Graph creation/control/patch/review/supervision,
-or governance tools. They receive only bounded progress, artifact, mailbox,
-help/result functions. Their context contains the objective, completion
-contract, authorized dependency summaries and artifacts, addressed messages,
-and bounded project context. It excludes the full Lead history, unrelated
-nodes, and Lead/user-private artifacts.
-Retries also receive bounded host-validation errors and revise/fail feedback
-from the preceding attempt. Every required named data output is an explicit
-instruction to call `graph_worker_publish_artifact` and return the resulting
-reference in `artifactRefs`.
+Executors never receive delegation, Graph
+creation/control/patch/review/supervision, governance, or any
+`graph_worker_*` tool. They receive ordinary tools authorized by the frozen
+assignment. Their context contains the objective, acceptance criteria, scopes,
+bounded repair feedback, prerequisite status, and only the named result
+packets that the source Lead has already approved for this node. Control edges
+convey readiness only. It excludes the full Lead history, peer mailbox
+content, unrelated node results, and Lead/user-private artifacts.
 
-Mailbox delivery validates membership, recipients, edge authorization,
-artifact visibility, size, rate, count, TTL, and idempotency. Workers may
-contact the Lead and dependency neighbors; all other direct communication
-needs a message edge. Unresolved blocking messages prevent completion.
+An executor is not told the run, node, attempt, edge, mailbox, or artifact-store
+protocol. It simply does the task and finishes with a normal concise response
+covering result, changed files, checks, evidence, and risks. Kun automatically
+captures that response and retains the canonical child session. Retries receive
+bounded host-validation errors and Lead repair feedback, but never an
+instruction to publish or submit Graph state.
 
 ## Review, writes, and completion
 
-Review policies can require deterministic, peer, Lead, human, or combined
-approval. A peer is a different child instance. Risky writes add Lead review;
-critical risk can require a human. A pass vote cannot override
-`validation.valid === false`; deterministic missing-artifact and structured
-result errors must be repaired before review can accept an attempt.
+Review policies can add deterministic, peer, human, or combined evidence, but
+every executable node always requires an explicit review from the owning
+source Lead. Kun never synthesizes that Lead vote through a worker, peer
+reviewer, or scheduler transition. A peer is a different child instance and
+critical risk can additionally require a human. A pass vote cannot override
+`validation.valid === false`; genuine missing evidence, failed checks, and
+scope errors must be repaired before the Lead can accept an attempt. Absence
+of a worker Graph-tool call is not a validation error.
 
 Supervision is event driven for submission, failure, stall, conflict, resource-limit,
 help, recovery, completion, and user steering. Normal progress does not poll a
@@ -199,7 +205,15 @@ bounded, sanitized, cursor-based child transcript; `wait` performs an abortable
 attempt-targeted guidance before steering the active child turn when possible.
 Each continuation inspects durable truth and relevant live sessions, chooses
 an activity-appropriate cadence such as a 30-second recheck, guides drift, and
-verifies corrections before parking again.
+verifies corrections before parking again. When an executor finishes, the
+same Lead inspects the captured result and child session and calls
+`graph_review_node` with pass or revise. Until a valid Lead pass exists, the
+node stays under supervision and every successor remains blocked.
+
+The Lead pass is also the data handoff. The host projects a bounded packet
+under the data edge's semantic name, including the accepted summary, changed
+files, checks, evidence, risks, and optional artifact references. Workers
+never relay results directly to peers or advance edges themselves.
 
 When required or completion work exhausts automatic attempts, the scheduler
 keeps dependants blocked, moves the run to `awaiting_supervision`, and wakes the
@@ -216,7 +230,8 @@ with stale/dirty/conflict checks. Unknown user changes require human
 disposition. Unaccepted, conflicted, or orphaned worktrees are preserved.
 
 Completion requires accepted required/completion nodes, no active or
-review-pending nodes, all required reviews, no mailbox blocker, safe write
+review-pending nodes, all required reviews including the source Lead, no
+unresolved legacy mailbox blocker, safe write
 integration, settled resource accounting, durable cleanup disposition, and one
 persisted synthesis with evidence, changed files, checks, risks, and cost.
 
@@ -375,8 +390,8 @@ Start with `GET /v1/graphs/diagnostics`; it exposes sanitized aggregates, not
 paths, prompts, secrets, or raw patches.
 
 - Creation failure: check enablement, orchestration, and plan validation.
-- Stuck blocked node: inspect required outcomes, data artifacts, loop back-edge,
-  and terminal predecessor failure.
+- Stuck blocked node: inspect required outcomes, the predecessor's source-Lead
+  review, approved data-result packets, loop back-edge, and terminal failure.
 - Worker does not stop: cancel and inspect worker/lease/worktree cleanup state.
 - Write conflict: preserve the worktree and resolve through review/human merge.
 - Corrupt journal: preserve the directory and restore a trusted snapshot plus
