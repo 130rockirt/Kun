@@ -9,7 +9,9 @@ import {
   Notification,
   powerSaveBlocker,
   protocol,
+  screen,
   session,
+  shell,
   systemPreferences,
   Tray,
   type ContextMenuParams,
@@ -28,6 +30,10 @@ import kunMacLogoPng from '../asset/img/kun_mac.png?url'
 import kunTrayPng from '../asset/img/kun_tray.png?url'
 import { createAppIcon, pickTrayIcon, prepareTrayIcon } from './app-icon'
 import { buildTrayMenuTemplate, parseTrayThreads, type TrayThreadSummary } from './tray-session-menu'
+import { listProviderQuotas } from './provider-quota'
+import { registerTrayQuotaIpc } from './tray-quota-ipc'
+import { resolveTrayQuotaPopoverPosition } from './tray-quota-position'
+import { TRAY_PROVIDER_QUOTA_CHANNELS } from '../shared/tray-provider-quota'
 import { configureLinuxWaylandImeSwitches } from './app-command-line'
 import {
   clearDevelopmentRendererHttpCache,
@@ -311,6 +317,10 @@ let appBehavior: AppBehaviorConfigV1 = normalizeAppBehaviorSettings()
 let tray: Tray | null = null
 let trayMenu: Menu | null = null
 let trayMenuOpenPromise: Promise<void> | null = null
+let trayQuotaWindow: BrowserWindow | null = null
+let trayQuotaWindowReady: Promise<void> | null = null
+let trayQuotaToggleGeneration = 0
+let disposeTrayQuotaIpc: (() => void) | null = null
 let closeWindowPromptOpen = false
 let checkpointCleanupTimer: ReturnType<typeof setInterval> | null = null
 const extensionViewSessions = new ExtensionViewSessionRegistry()
@@ -652,6 +662,140 @@ function createTrayMenu(settings: AppSettingsV1, threads: TrayThreadSummary[]): 
   }))
 }
 
+const TRAY_QUOTA_WINDOW_WIDTH = 420
+const TRAY_QUOTA_WINDOW_HEIGHT = 660
+const TRAY_QUOTA_WINDOW_MARGIN = 8
+
+function positionTrayQuotaWindow(window: BrowserWindow): void {
+  if (!tray || tray.isDestroyed() || window.isDestroyed()) return
+  const trayBounds = tray.getBounds()
+  const display = screen.getDisplayNearestPoint({
+    x: Math.round(trayBounds.x + trayBounds.width / 2),
+    y: Math.round(trayBounds.y + trayBounds.height / 2)
+  })
+  const width = Math.max(1, Math.min(
+    TRAY_QUOTA_WINDOW_WIDTH,
+    display.workArea.width - TRAY_QUOTA_WINDOW_MARGIN * 2
+  ))
+  const height = Math.max(1, Math.min(
+    TRAY_QUOTA_WINDOW_HEIGHT,
+    display.workArea.height - TRAY_QUOTA_WINDOW_MARGIN * 2
+  ))
+  window.setSize(width, height, false)
+  const position = resolveTrayQuotaPopoverPosition({
+    trayBounds,
+    windowSize: { width, height },
+    workArea: display.workArea,
+    margin: TRAY_QUOTA_WINDOW_MARGIN
+  })
+  window.setPosition(position.x, position.y, false)
+}
+
+async function ensureTrayQuotaWindow(): Promise<BrowserWindow> {
+  if (trayQuotaWindow && !trayQuotaWindow.isDestroyed()) {
+    await trayQuotaWindowReady
+    return trayQuotaWindow
+  }
+
+  const window = new BrowserWindow({
+    width: TRAY_QUOTA_WINDOW_WIDTH,
+    height: TRAY_QUOTA_WINDOW_HEIGHT,
+    show: false,
+    frame: false,
+    transparent: true,
+    backgroundColor: '#00000000',
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    skipTaskbar: true,
+    alwaysOnTop: true,
+    hasShadow: true,
+    roundedCorners: true,
+    ...(process.platform === 'darwin' ? { type: 'panel' as const } : {}),
+    webPreferences: {
+      preload: resolveNamedPreloadPath(__dirname, 'tray-quota'),
+      contextIsolation: true,
+      sandbox: true
+    }
+  })
+  trayQuotaWindow = window
+  positionTrayQuotaWindow(window)
+  window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
+  window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  window.webContents.on('will-navigate', (event) => event.preventDefault())
+  window.webContents.on('preload-error', (_event, preloadPath, error) => {
+    logError('tray-quota', 'Failed to load tray quota preload.', {
+      preloadPath,
+      message: error instanceof Error ? error.message : String(error)
+    })
+  })
+  window.on('blur', () => {
+    if (!window.webContents.isDevToolsOpened()) window.hide()
+  })
+  window.on('closed', () => {
+    if (trayQuotaWindow === window) {
+      trayQuotaWindow = null
+      trayQuotaWindowReady = null
+    }
+  })
+
+  const devUrl = devServerHintUrl()
+  trayQuotaWindowReady = devUrl
+    ? (() => {
+        const target = new URL(devUrl)
+        target.pathname = '/tray-quota.html'
+        target.search = ''
+        target.hash = ''
+        return window.loadURL(target.toString())
+      })()
+    : window.loadFile(join(__dirname, '../renderer/tray-quota.html'))
+  try {
+    await trayQuotaWindowReady
+  } catch (error) {
+    if (!window.isDestroyed()) window.destroy()
+    throw error
+  }
+  return window
+}
+
+function hideTrayQuotaPopover(): void {
+  trayQuotaToggleGeneration += 1
+  if (trayQuotaWindow && !trayQuotaWindow.isDestroyed()) trayQuotaWindow.hide()
+}
+
+function destroyTrayQuotaPopover(): void {
+  trayQuotaToggleGeneration += 1
+  if (trayQuotaWindow && !trayQuotaWindow.isDestroyed()) trayQuotaWindow.destroy()
+  trayQuotaWindow = null
+  trayQuotaWindowReady = null
+}
+
+function notifyTrayQuotaRefresh(): void {
+  const window = trayQuotaWindow
+  if (!window || window.isDestroyed() || window.webContents.isLoadingMainFrame()) return
+  window.webContents.send(TRAY_PROVIDER_QUOTA_CHANNELS.refresh)
+}
+
+async function toggleTrayQuotaPopover(): Promise<void> {
+  if (trayQuotaWindow?.isVisible()) {
+    hideTrayQuotaPopover()
+    return
+  }
+  const generation = ++trayQuotaToggleGeneration
+  const window = await ensureTrayQuotaWindow()
+  if (
+    generation !== trayQuotaToggleGeneration ||
+    window.isDestroyed() ||
+    !tray ||
+    tray.isDestroyed()
+  ) return
+  positionTrayQuotaWindow(window)
+  window.webContents.send(TRAY_PROVIDER_QUOTA_CHANNELS.refresh)
+  window.show()
+  window.focus()
+}
+
 async function loadTrayThreads(settings: AppSettingsV1): Promise<TrayThreadSummary[]> {
   try {
     await kunRuntimeAdapter.resolveConnection(settings)
@@ -670,6 +814,7 @@ async function loadTrayThreads(settings: AppSettingsV1): Promise<TrayThreadSumma
 
 function showTrayMenu(): void {
   if (!tray || trayMenuOpenPromise) return
+  hideTrayQuotaPopover()
   const currentTray = tray
   trayMenuOpenPromise = (async () => {
     const settings = await store.load()
@@ -685,6 +830,7 @@ function showTrayMenu(): void {
 function syncTray(settings: AppSettingsV1): void {
   appBehavior = settings.appBehavior
   if (appBehavior.closeAction === 'quit') {
+    destroyTrayQuotaPopover()
     if (tray) {
       tray.destroy()
       tray = null
@@ -698,14 +844,24 @@ function syncTray(settings: AppSettingsV1): void {
     // 托盘图加载失败时回退到主应用图,这样不会看到 electron 默认占位。
     const traySource = prepareTrayIcon(pickTrayIcon(trayIcon, appIcon))
     tray = new Tray(traySource.isEmpty() ? nativeImage.createEmpty() : traySource)
-    tray.on('click', showTrayMenu)
-    tray.on('double-click', revealMainWindow)
+    tray.on('click', () => {
+      void toggleTrayQuotaPopover().catch((error) => {
+        logWarn('tray-quota', 'Failed to toggle tray quota popover.', {
+          message: error instanceof Error ? error.message : String(error)
+        })
+      })
+    })
+    tray.on('double-click', () => {
+      hideTrayQuotaPopover()
+      revealMainWindow()
+    })
     tray.on('right-click', showTrayMenu)
   }
 
   tray.setToolTip('Kun')
   trayMenu = createTrayMenu(settings, [])
   tray.setContextMenu(null)
+  notifyTrayQuotaRefresh()
 }
 
 async function saveWindowCloseActionPreference(closeAction: WindowCloseAction): Promise<void> {
@@ -1769,6 +1925,27 @@ app.whenReady().then(async () => {
       })
   traceStartup('settings load:start')
   const initial = await store.load()
+  disposeTrayQuotaIpc = registerTrayQuotaIpc({
+    ipcMain,
+    getWindow: () => trayQuotaWindow,
+    list: async () => listProviderQuotas(await store.load()),
+    context: async () => {
+      const settings = await store.load()
+      return {
+        locale: settings.locale,
+        colorMode: settings.theme === 'dark' ||
+          (settings.theme === 'system' && nativeTheme.shouldUseDarkColors)
+          ? 'dark'
+          : 'light'
+      }
+    },
+    action: (action) => {
+      hideTrayQuotaPopover()
+      if (action === 'new-chat') dispatchTrayAction({ type: 'new-chat' })
+      else if (action === 'open-app') revealMainWindow()
+    },
+    openExternal: (url) => shell.openExternal(url)
+  })
   const browserUseManager = configureBrowserUseHost({
     settings: initial,
     getMainWindow: () => mainWindow
@@ -2121,6 +2298,7 @@ app.whenReady().then(async () => {
     extensionIpcRegistration.publishWorkbenchEnvironmentChanged()
   const onNativeThemeUpdated = (): void => {
     requestExtensionWorkbenchEnvironmentPublish()
+    notifyTrayQuotaRefresh()
   }
   const onWorkbenchZoomChanged = (): void => {
     requestExtensionWorkbenchEnvironmentPublish()
@@ -2138,6 +2316,9 @@ app.whenReady().then(async () => {
     extensionIpcOptions
   )
   app.once('before-quit', () => {
+    disposeTrayQuotaIpc?.()
+    disposeTrayQuotaIpc = null
+    destroyTrayQuotaPopover()
     disposeBrowserUseIpc()
     stopSecretRevealConsentPump()
     stopExtensionNotificationPump()
@@ -2203,7 +2384,7 @@ app.whenReady().then(async () => {
   })
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    if (!mainWindow || mainWindow.isDestroyed()) createWindow()
     else revealMainWindow()
   })
 }).catch((error) => {

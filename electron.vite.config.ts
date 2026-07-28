@@ -21,7 +21,8 @@ export default defineConfig({
         input: {
           index: resolve('src/preload/index.ts'),
           'extension-view': resolve('src/preload/extension-view.ts'),
-          'extension-protected-surface': resolve('src/preload/extension-protected-surface.ts')
+          'extension-protected-surface': resolve('src/preload/extension-protected-surface.ts'),
+          'tray-quota': resolve('src/preload/tray-quota.ts')
         },
         output: {
           format: 'cjs',
@@ -39,6 +40,14 @@ export default defineConfig({
     },
     server: {
       host: '127.0.0.1'
+    },
+    build: {
+      rollupOptions: {
+        input: {
+          index: resolve('src/renderer/index.html'),
+          'tray-quota': resolve('src/renderer/tray-quota.html')
+        }
+      }
     },
     plugins: [react()]
   }
