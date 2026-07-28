@@ -24,6 +24,16 @@ export const GraphIdempotencyKeySchema = z.string().trim().min(1).max(256).regex
   /^[A-Za-z0-9][A-Za-z0-9._:,@=-]*$/,
   'idempotency key contains unsupported characters'
 )
+/**
+ * Tool provider ids are opaque capability-registry keys, not filesystem-safe
+ * Graph entity ids. Core providers use simple names while MCP and extension
+ * providers legitimately use qualified forms such as `mcp:facade` and
+ * `extension:com.example.tools`.
+ */
+export const GraphToolProviderIdSchema = z.string().trim().min(1).max(256).refine(
+  (value) => !/[\u0000-\u001F\u007F]/.test(value),
+  'tool provider id contains control characters'
+)
 export const GraphTimestampSchema = z.string().datetime({ offset: true })
 const BoundedText = z.string().max(32_768)
 export const GraphBoundedSummarySchema = z.string().max(4_096)
@@ -308,7 +318,7 @@ const GraphAssignmentSnapshotV1CompatibilitySchema = z.object({
   providerId: z.string().trim().min(1).max(128),
   allowedModelProviderIds: z.array(Identifier).min(1).max(128),
   allowedModels: z.array(z.string().trim().min(1).max(256)).min(1).max(256),
-  allowedProviderIds: z.array(Identifier).max(128),
+  allowedProviderIds: z.array(GraphToolProviderIdSchema).max(128),
   reasoningEffort: ModelReasoningEffort,
   toolPolicy: SubagentToolPolicy,
   allowedTools: z.array(Identifier).max(256),

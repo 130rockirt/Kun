@@ -16,7 +16,11 @@ vi.mock('electron', () => ({
   dialog: { showMessageBox: vi.fn() }
 }))
 
-import { cliInstallStatus, runCliInstallAction } from './cli-install-service'
+import {
+  cliInstallStatus,
+  runCliInstallAction,
+  terminalCommandPromptOptions
+} from './cli-install-service'
 
 const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')!
 
@@ -104,6 +108,17 @@ describe('CLI install service on Linux', () => {
     const uninstall = await runCliInstallAction('uninstall')
     expect(uninstall).toMatchObject({ ok: true, status: { state: 'conflict' } })
     expect(await readFile(commandPath, 'utf8')).toBe('#!/bin/sh\necho external\n')
+  })
+})
+
+describe('terminal command prompt copy', () => {
+  it('explains that enabling the command does not install the bundled TUI', () => {
+    expect(terminalCommandPromptOptions()).toMatchObject({
+      title: 'Enable Kun terminal command',
+      message: 'Enable the `kun` command?',
+      detail: expect.stringContaining('TUI is already included'),
+      buttons: ['Enable', 'Later']
+    })
   })
 })
 

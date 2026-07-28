@@ -38,7 +38,8 @@ function input(overrides: Partial<Parameters<typeof publishRuntimeDiscovery>[1]>
 
 describe('runtime discovery', () => {
   it('creates a validated versioned record', () => {
-    expect(createRuntimeDiscoveryRecord(input({ instanceId: 'server-a' }))).toEqual({
+    const buildId = 'a'.repeat(64)
+    expect(createRuntimeDiscoveryRecord(input({ instanceId: 'server-a', buildId }))).toEqual({
       version: 2,
       instanceId: 'server-a',
       pid: process.pid,
@@ -49,8 +50,17 @@ describe('runtime discovery', () => {
       runtimeToken: 'secret-token',
       insecure: false,
       serviceVersion: '0.1.0',
+      buildId,
       launchMode: 'foreground'
     })
+  })
+
+  it('continues to parse legacy records without a build identity', async () => {
+    const root = await tempRoot()
+    const record = await publishRuntimeDiscovery(root, input({ instanceId: 'legacy-server' }))
+
+    expect(record.buildId).toBeUndefined()
+    expect((await readRuntimeDiscovery(root))?.instanceId).toBe('legacy-server')
   })
 
   it('atomically publishes an owner-only record', async () => {

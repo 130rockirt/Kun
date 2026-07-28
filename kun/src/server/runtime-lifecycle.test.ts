@@ -28,6 +28,7 @@ describe('runtime lifecycle API', () => {
       sandboxMode: 'workspace-write',
       tokenEconomyMode: false,
       insecure: false,
+      buildId: 'b'.repeat(64),
       launchMode: 'shared'
     })
     servers.push(server)
@@ -37,6 +38,7 @@ describe('runtime lifecycle API', () => {
     expect(info).toMatchObject({
       instanceId: server.instanceId,
       serviceVersion: '0.1.0',
+      buildId: 'b'.repeat(64),
       launchMode: 'shared'
     })
 

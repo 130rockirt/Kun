@@ -3,6 +3,7 @@ import { chmod, mkdir, open, readFile, rm, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
 import { atomicWriteFile } from '../adapters/file/atomic-write.js'
+import { RuntimeBuildIdSchema } from '../contracts/runtime-info.js'
 
 export const RUNTIME_DISCOVERY_VERSION = 2 as const
 export const KUN_SERVICE_VERSION = '0.1.0'
@@ -28,6 +29,7 @@ export const RuntimeDiscoveryRecordSchema = z.object({
   runtimeToken: z.string().max(16_384),
   insecure: z.boolean(),
   serviceVersion: z.string().min(1).max(128),
+  buildId: RuntimeBuildIdSchema.optional(),
   launchMode: z.enum(['foreground', 'shared', 'gui']),
   logPath: z.string().min(1).max(4_096).optional()
 })

@@ -30,6 +30,7 @@ import {
   Toggle
 } from './settings-controls'
 import { LegacySessionImportCard } from './settings-section-general-legacy-import'
+import { terminalCommandCopy } from './terminal-command-copy'
 
 type Rgb = { r: number; g: number; b: number }
 
@@ -54,20 +55,12 @@ function CliCommandSettingsCard({ locale }: { locale: string }): ReactElement {
         : (zh ? '终端命令更新失败。' : 'Could not update the terminal command.')))
     }).finally(() => setBusy(false))
   }
-  const stateLabel = status?.state === 'installed'
-    ? (zh ? '已安装' : 'Installed')
-    : status?.state === 'stale'
-      ? (zh ? '需要修复' : 'Needs repair')
-      : status?.state === 'conflict'
-        ? (zh ? '存在冲突' : 'Conflict')
-        : (zh ? '未安装' : 'Not installed')
+  const copy = terminalCommandCopy(locale, status?.state)
   return (
     <SettingsCard title={zh ? '终端命令' : 'Terminal command'}>
       <SettingRow
         title="kun"
-        description={zh
-          ? `安装后可在系统终端直接输入 kun 进入 TUI。当前状态：${stateLabel}`
-          : `Run kun in a system terminal to open the TUI. Current status: ${stateLabel}`}
+        description={copy.description}
         wideControl
         control={
           <div className="flex flex-wrap items-center gap-2">
@@ -78,7 +71,7 @@ function CliCommandSettingsCard({ locale }: { locale: string }): ReactElement {
               className="rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[13px] font-medium text-ds-ink disabled:opacity-50"
             >
               {busy ? <Loader2 className="mr-1 inline h-4 w-4 animate-spin" /> : null}
-              {status?.state === 'stale' ? (zh ? '修复' : 'Repair') : (zh ? '安装' : 'Install')}
+              {copy.primaryAction}
             </button>
             <button
               type="button"
@@ -86,7 +79,7 @@ function CliCommandSettingsCard({ locale }: { locale: string }): ReactElement {
               onClick={() => act('uninstall')}
               className="rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[13px] text-ds-muted disabled:opacity-50"
             >
-              {zh ? '卸载' : 'Uninstall'}
+              {copy.removeAction}
             </button>
             <button type="button" disabled={busy} onClick={refresh} className="p-2 text-ds-muted" title={zh ? '刷新' : 'Refresh'}>
               <RefreshCw className="h-4 w-4" />

@@ -220,7 +220,15 @@ describe('CompatModelClient per-model endpointFormat', () => {
       const schema = wireSchema as {
         properties: {
           plan: {
-            properties: Record<string, unknown>
+            properties: Record<string, unknown> & {
+              budget?: {
+                properties?: {
+                  maxNodes?: {
+                    exclusiveMinimum?: unknown
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -232,6 +240,10 @@ describe('CompatModelClient per-model endpointFormat', () => {
       expect(schema.properties.plan.properties).toHaveProperty('completionNodeIds')
       expect(schema.properties.plan.properties).not.toHaveProperty('version')
       expect(schema.properties.plan.properties).not.toHaveProperty('workspaceRoot')
+      expect(
+        schema.properties.plan.properties.budget?.properties?.maxNodes?.exclusiveMinimum
+      ).toBe(0)
+      expect(JSON.stringify(wireSchema)).not.toContain('"exclusiveMinimum":true')
     }
   })
 

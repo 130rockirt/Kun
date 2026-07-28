@@ -116,7 +116,7 @@ describe('Graph Mode contracts', () => {
       providerId: 'test-provider',
       allowedModelProviderIds: ['test-provider'],
       allowedModels: ['test-model'],
-      allowedProviderIds: ['builtin'],
+      allowedProviderIds: ['builtin', 'mcp:facade', 'extension:com.example.tools'],
       reasoningEffort: 'off',
       toolPolicy: 'readOnly',
       allowedTools: ['read'],
@@ -136,6 +136,16 @@ describe('Graph Mode contracts', () => {
       capturedAt: now
     })
     expect(assignment).not.toHaveProperty('maxTokens')
+    expect(assignment.allowedProviderIds).toEqual([
+      'builtin',
+      'mcp:facade',
+      'extension:com.example.tools'
+    ])
+
+    expect(() => GraphAssignmentSnapshotV1Schema.parse({
+      ...assignment,
+      allowedProviderIds: ['extension:valid', 'invalid\u0000provider']
+    })).toThrow(/control characters/)
 
     const ledger = GraphBudgetLedgerV1Schema.parse({
       version: GRAPH_CONTRACT_VERSION,

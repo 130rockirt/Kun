@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import {
   buildKunServeArgs,
   resolveKunExecutable,
+  resolveKunRuntimeBuildId,
   shouldRunKunServeAsElectronChild,
   type KunBinaryResolution
 } from './resolve-kun-binary'
@@ -83,6 +84,37 @@ describe('resolveKunExecutable', () => {
       args: [],
       dataDir: ''
     })
+  })
+})
+
+describe('resolveKunRuntimeBuildId', () => {
+  it('reads the manifest adjacent to the resolved dist entry', async () => {
+    const root = tempRoot()
+    const entry = join(root, 'kun/dist/cli/serve-entry.js')
+    const buildId = 'a'.repeat(64)
+    touch(entry)
+    writeFileSync(
+      join(root, 'kun/dist/runtime-build.json'),
+      `${JSON.stringify({ version: 1, buildId })}\n`,
+      'utf8'
+    )
+
+    await expect(resolveKunRuntimeBuildId(
+      resolveKunExecutable(root, '')
+    )).resolves.toBe(buildId)
+  })
+
+  it('keeps custom native executables and missing manifests compatible', async () => {
+    const root = tempRoot()
+    const entry = join(root, 'kun/dist/cli/serve-entry.js')
+    touch(entry)
+
+    await expect(resolveKunRuntimeBuildId(
+      resolveKunExecutable(root, '')
+    )).resolves.toBeUndefined()
+    await expect(resolveKunRuntimeBuildId(
+      resolveKunExecutable('/app', '/usr/local/bin/kun')
+    )).resolves.toBeUndefined()
   })
 })
 

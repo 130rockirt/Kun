@@ -32,14 +32,20 @@ export const GraphCreateRunInputSchema = z.object({
   )
 }).strict()
 
-export const GRAPH_CREATE_RUN_INPUT_JSON_SCHEMA = z.toJSONSchema(
-  GraphCreateRunInputSchema,
-  {
+export const GRAPH_CREATE_RUN_INPUT_JSON_SCHEMA = (() => {
+  const schema = z.toJSONSchema(GraphCreateRunInputSchema, {
     io: 'input',
-    target: 'openapi-3.0',
+    // Model providers accept JSON Schema, where exclusive bounds are numeric.
+    // OpenAPI 3.0 emits the legacy boolean form (`exclusiveMinimum: true`),
+    // which the OpenAI Responses API rejects before the model can run.
+    target: 'draft-07',
     reused: 'inline'
-  }
-) as Record<string, unknown>
+  }) as Record<string, unknown>
+  // Function-tool parameter objects are embedded schemas, not standalone
+  // documents. Keep the dialect marker out of every provider wire format.
+  delete schema.$schema
+  return schema
+})()
 
 export function buildGraphCreateRunTool(options: {
   control: GraphControlService

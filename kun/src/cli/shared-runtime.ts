@@ -18,6 +18,7 @@ import {
   readGuiSharedSettings,
   syncGuiProviderCatalogToConfig
 } from './gui-settings-bridge.js'
+import { readRuntimeBuildIdForEntry } from '../server/runtime-build-identity.js'
 
 const START_TIMEOUT_MS = 30_000
 const STOP_TIMEOUT_MS = 15_000
@@ -124,7 +125,8 @@ export async function probeRuntimeDiscovery(
       info.instanceId !== record.instanceId ||
       info.pid !== record.pid ||
       info.startedAt !== record.startedAt ||
-      info.serviceVersion !== record.serviceVersion
+      info.serviceVersion !== record.serviceVersion ||
+      info.buildId !== record.buildId
     ) return null
     return { discovery: record, info }
   } catch {
@@ -142,6 +144,7 @@ export async function resolveSharedRuntime(
 
 export async function ensureSharedRuntime(input: {
   dataDir: string
+  expectedBuildId?: string
   env?: Record<string, string | undefined>
   fetch?: typeof fetch
   timeoutMs?: number
@@ -153,11 +156,16 @@ export async function ensureSharedRuntime(input: {
   }
 }): Promise<SharedRuntimeConnection> {
   const fetchImpl = input.fetch ?? fetch
+  const expectedBuildId = input.expectedBuildId ??
+    await readRuntimeBuildIdForEntry(import.meta.url)
   const existing = await resolveSharedRuntime(input.dataDir, fetchImpl)
-  if (existing) return existing
+  if (existing && runtimeMatchesExpectedBuild(existing, expectedBuildId)) return existing
   return withRuntimeStartLock(input.dataDir, async () => {
     const elected = await resolveSharedRuntime(input.dataDir, fetchImpl)
-    if (elected) return elected
+    if (elected && runtimeMatchesExpectedBuild(elected, expectedBuildId)) return elected
+    if (elected) {
+      await stopSharedRuntime(input.dataDir, fetchImpl)
+    }
     const stale = await readRuntimeDiscovery(input.dataDir).catch(() => null)
     if (stale) await removeRuntimeDiscovery(input.dataDir, stale.instanceId).catch(() => undefined)
     await prepareFreshSharedRuntimeCapabilities(input.dataDir)
@@ -183,7 +191,8 @@ export async function ensureSharedRuntime(input: {
       ...(input.launch?.env ?? {}),
       KUN_RUNTIME_TOKEN: runtimeToken,
       KUN_RUNTIME_LAUNCH_MODE: 'shared',
-      KUN_RUNTIME_LOG_PATH: logPath
+      KUN_RUNTIME_LOG_PATH: logPath,
+      ...(expectedBuildId ? { KUN_RUNTIME_BUILD_ID: expectedBuildId } : {})
     }
     const runAsNode = input.launch?.runAsNode ?? Boolean(process.versions.electron)
     if (runAsNode) env.ELECTRON_RUN_AS_NODE = '1'
@@ -204,12 +213,23 @@ export async function ensureSharedRuntime(input: {
     const deadline = Date.now() + (input.timeoutMs ?? START_TIMEOUT_MS)
     while (Date.now() < deadline) {
       const connection = await resolveSharedRuntime(input.dataDir, fetchImpl)
-      if (connection) return connection
+      if (connection && runtimeMatchesExpectedBuild(connection, expectedBuildId)) {
+        return connection
+      }
       if (child.exitCode !== null) break
       await delay(POLL_MS)
     }
     throw new Error(`Kun shared runtime did not become ready; inspect ${logPath}`)
   })
+}
+
+export function runtimeMatchesExpectedBuild(
+  connection: SharedRuntimeConnection,
+  expectedBuildId: string | undefined
+): boolean {
+  if (!expectedBuildId) return true
+  return connection.discovery.buildId === expectedBuildId &&
+    connection.info.buildId === expectedBuildId
 }
 
 async function prepareFreshSharedRuntimeCapabilities(dataDir: string): Promise<void> {

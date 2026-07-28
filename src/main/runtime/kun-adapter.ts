@@ -8,7 +8,8 @@ import {
 } from '../../shared/app-settings'
 import {
   buildKunServeArgs,
-  resolveKunExecutable
+  resolveKunExecutable,
+  resolveKunRuntimeBuildId
 } from '../resolve-kun-binary'
 import {
   isKunChildRunning,
@@ -21,6 +22,7 @@ import { getKunBaseUrl } from '../kun-base-url'
 import type { RuntimeDiscoveryRecord } from '../../../kun/src/server/runtime-discovery.js'
 import {
   resolveSharedRuntime,
+  runtimeMatchesExpectedBuild,
   stopSharedRuntime
 } from '../../../kun/src/cli/shared-runtime.js'
 
@@ -114,9 +116,13 @@ async function ensureResolvedKunRuntime(settings: AppSettingsV1): Promise<void> 
 }
 
 async function refreshResolvedKunRuntime(settings: AppSettingsV1): Promise<boolean> {
-  const dataDir = expandDataDir(getKunRuntimeSettings(settings).dataDir)
+  const runtime = getKunRuntimeSettings(settings)
+  const dataDir = expandDataDir(runtime.dataDir)
+  const expectedBuildId = await resolveKunRuntimeBuildId(
+    resolveKunExecutable(runtime.binaryPath.trim() ? '' : appRoot(), runtime.binaryPath)
+  )
   const connection = await resolveSharedRuntime(dataDir).catch(() => null)
-  if (!connection) {
+  if (!connection || !runtimeMatchesExpectedBuild(connection, expectedBuildId)) {
     resolvedConnection = null
     return false
   }

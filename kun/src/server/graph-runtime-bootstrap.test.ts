@@ -58,6 +58,18 @@ function runtimeOptions() {
         guiAutomation: false
       }
     })), {
+      name: 'mcp_read',
+      description: 'Read-only MCP capability',
+      inputSchema: {},
+      providerId: 'mcp:facade',
+      providerKind: 'mcp' as const,
+      effects: {
+        network: false,
+        externalWrite: false,
+        processExecution: false,
+        guiAutomation: false
+      }
+    }, {
       name: 'unknown_remote',
       description: 'Unclassified remote capability',
       inputSchema: {},
@@ -99,12 +111,13 @@ describe('Graph runtime bootstrap capability boundary', () => {
       providerId: 'source-provider',
       allowedModelProviderIds: ['source-provider'],
       allowedModels: ['source-model'],
-      allowedProviderIds: ['builtin'],
+      allowedProviderIds: ['builtin', 'mcp:facade'],
       reasoningEffort: 'high',
       allowedSkills: ['safe-skill']
     })
     expect(authority.allowedTools).toEqual([
       ...GRAPH_WORKER_TOOL_NAMES,
+      'mcp_read',
       'read'
     ].sort())
     expect(authority.allowedTools).not.toEqual(expect.arrayContaining([

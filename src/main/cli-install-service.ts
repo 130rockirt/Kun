@@ -30,6 +30,18 @@ const LINUX_MARKER = '# Kun CLI launcher — managed by Kun'
 const PATH_BLOCK_START = '# >>> Kun CLI >>>'
 const PATH_BLOCK_END = '# <<< Kun CLI <<<'
 
+export function terminalCommandPromptOptions(): MessageBoxOptions {
+  return {
+    type: 'question',
+    title: 'Enable Kun terminal command',
+    message: 'Enable the `kun` command?',
+    detail: 'The TUI is already included with Kun. Enable the terminal command to launch it by running `kun` in a new terminal.',
+    buttons: ['Enable', 'Later'],
+    defaultId: 0,
+    cancelId: 1
+  }
+}
+
 export function registerCliInstallIpc(ipcMain: IpcMain): void {
   ipcMain.handle('cli-install:status', () => cliInstallStatus())
   ipcMain.handle('cli-install:action', (_event, action: CliInstallAction) =>
@@ -50,15 +62,7 @@ export async function maybePromptCliInstall(getWindow: () => BrowserWindow | nul
   if (status.state === 'installed' || status.state === 'conflict') return
   await writeFile(marker, `${new Date().toISOString()}\n`, { mode: 0o600 }).catch(() => undefined)
   const parent = getWindow()
-  const options: MessageBoxOptions = {
-    type: 'question',
-    title: 'Install Kun terminal command',
-    message: 'Use Kun from your terminal?',
-    detail: 'Install the `kun` command so a new terminal can open the Kun TUI directly.',
-    buttons: ['Install', 'Later'],
-    defaultId: 0,
-    cancelId: 1
-  }
+  const options = terminalCommandPromptOptions()
   const result = parent
     ? await dialog.showMessageBox(parent, options)
     : await dialog.showMessageBox(options)

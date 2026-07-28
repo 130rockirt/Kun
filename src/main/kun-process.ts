@@ -19,6 +19,7 @@ import {
 import {
   buildKunServeArgs,
   resolveKunExecutable,
+  resolveKunRuntimeBuildId,
   shouldRunKunServeAsElectronChild
 } from './resolve-kun-binary'
 import { resolveCodexOAuthApiKey } from './codex-auth'
@@ -309,6 +310,7 @@ export async function startKunSharedRuntime(
   const launch = await prepareKunLaunch(settings, runtime, { port: 0 })
   return ensureSharedRuntime({
     dataDir: launch.dataDir,
+    ...(launch.expectedBuildId ? { expectedBuildId: launch.expectedBuildId } : {}),
     launch: {
       command: launch.command,
       args: launch.args,
@@ -354,6 +356,7 @@ type PreparedKunLaunch = {
   env: NodeJS.ProcessEnv
   dataDir: string
   runAsNode: boolean
+  expectedBuildId?: string
 }
 
 async function prepareKunLaunch(
@@ -368,6 +371,7 @@ async function prepareKunLaunch(
       `Kun runtime build is missing at ${resolution.args[0]}. Run \`npm run build:kun\` before starting the GUI.`
     )
   }
+  const expectedBuildId = await resolveKunRuntimeBuildId(resolution)
   const dataDir = resolveKunDataDir(runtime)
   await syncGuiManagedKunConfig(dataDir, runtime, {
     scheduleMcp: {
@@ -440,7 +444,14 @@ async function prepareKunLaunch(
   if (bundledExtensionsDirectory) env.KUN_BUNDLED_EXTENSIONS_DIR = bundledExtensionsDirectory
   if (!runAsElectron) env.ELECTRON_RUN_AS_NODE = '1'
   else delete env.ELECTRON_RUN_AS_NODE
-  return { command, args, env, dataDir, runAsNode: !runAsElectron }
+  return {
+    command,
+    args,
+    env,
+    dataDir,
+    runAsNode: !runAsElectron,
+    ...(expectedBuildId ? { expectedBuildId } : {})
+  }
 }
 
 async function startKunChildOnce(

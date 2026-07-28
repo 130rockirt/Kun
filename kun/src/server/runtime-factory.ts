@@ -284,6 +284,7 @@ export type KunServeRuntimeOptions = {
   quality?: QualityConfig
   startedAt?: string
   instanceId?: string
+  buildId?: string
   launchMode?: 'foreground' | 'shared' | 'gui'
   logPath?: string
   /** Test-only fault injection; absent in normal production startup. */
@@ -2333,6 +2334,7 @@ export async function createKunServeRuntime(
 	      return {
 	        instanceId: activeOptions.instanceId ?? 'embedded',
 	        serviceVersion: KUN_SERVICE_VERSION,
+	        ...(activeOptions.buildId ? { buildId: activeOptions.buildId } : {}),
 	        launchMode: activeOptions.launchMode ?? 'foreground',
 	        host: activeOptions.host,
 	        port: activeOptions.port,
@@ -3076,6 +3078,7 @@ export async function startKunServe(
       runtimeToken: options.runtimeToken,
       insecure: options.insecure,
       serviceVersion: KUN_SERVICE_VERSION,
+      ...(options.buildId ? { buildId: options.buildId } : {}),
       launchMode: options.launchMode ?? 'foreground',
       ...(options.logPath ? { logPath: options.logPath } : {}),
       instanceId

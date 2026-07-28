@@ -17,6 +17,8 @@ import { installServeCrashHandlers } from './serve-crash-handlers.js'
 import { runExtensionCommand } from './extension-cli.js'
 import { resolveSharedRuntime, runRuntimeCommand } from './shared-runtime.js'
 import { withRuntimeStartLock } from '../server/runtime-discovery.js'
+import { RuntimeBuildIdSchema } from '../contracts/runtime-info.js'
+import { readRuntimeBuildIdForEntry } from '../server/runtime-build-identity.js'
 
 export const KUN_READY_PREFIX = 'KUN_READY '
 
@@ -38,6 +40,13 @@ async function serveMain(argv: readonly string[]): Promise<number> {
     return parsed.exitCode
   }
   const launchMode = process.env.KUN_RUNTIME_LAUNCH_MODE === 'shared' ? 'shared' : 'foreground'
+  const manifestBuildId = await readRuntimeBuildIdForEntry(import.meta.url)
+  const environmentBuildId = RuntimeBuildIdSchema.safeParse(
+    process.env.KUN_RUNTIME_BUILD_ID?.trim()
+  )
+  const buildId = manifestBuildId ?? (
+    environmentBuildId.success ? environmentBuildId.data : undefined
+  )
   const start = async (): Promise<
     { kind: 'existing'; existing: NonNullable<Awaited<ReturnType<typeof resolveSharedRuntime>>> } |
     { kind: 'started'; server: KunServeHandle }
@@ -49,6 +58,7 @@ async function serveMain(argv: readonly string[]): Promise<number> {
       server: await startKunServe({
         ...parsed.options,
         launchMode,
+        ...(buildId ? { buildId } : {}),
         sharedMcpConfigPath: process.env.KUN_MCP_CONFIG_PATH || join(homedir(), '.kun', 'mcp.json'),
         ...(process.env.KUN_RUNTIME_LOG_PATH ? { logPath: process.env.KUN_RUNTIME_LOG_PATH } : {})
       })

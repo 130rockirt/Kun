@@ -1,5 +1,6 @@
 import { existsSync, statSync } from 'node:fs'
 import { join } from 'node:path'
+import { readRuntimeBuildIdForEntry } from '../../kun/src/server/runtime-build-identity.js'
 
 /**
  * Resolve the Kun executable. Kun ships as a TypeScript
@@ -101,6 +102,14 @@ export function resolveKunExecutable(
     args: [join(appRoot, DIST_ENTRY_CANDIDATES[0])],
     dataDir: ''
   }
+}
+
+export async function resolveKunRuntimeBuildId(
+  resolution: KunBinaryResolution
+): Promise<string | undefined> {
+  if (resolution.kind !== 'node-script') return undefined
+  const entry = resolution.args[0]
+  return entry ? readRuntimeBuildIdForEntry(entry) : undefined
 }
 
 /**
