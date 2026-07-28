@@ -25,6 +25,7 @@ describe('KUN_SYSTEM_PROMPT', () => {
 
     for (const volatileOrInternalValue of [
       'GUI-native',
+      'Codex',
       'HTTP/SSE',
       'prompt_cache_hit_tokens',
       'agents.kun',
@@ -37,6 +38,17 @@ describe('KUN_SYSTEM_PROMPT', () => {
     ]) {
       expect(KUN_SYSTEM_PROMPT).not.toContain(volatileOrInternalValue)
     }
+  })
+
+  it('requires concise progress communication around tool-assisted work', () => {
+    expect(KUN_SYSTEM_PROMPT).toContain('Before the first tool call for a user request')
+    expect(KUN_SYSTEM_PROMPT).toContain('Skip this pre-action update only when answering immediately without tools')
+    expect(KUN_SYSTEM_PROMPT).toContain('meaningful phase changes')
+    expect(KUN_SYSTEM_PROMPT).toContain('Do not narrate every routine tool call')
+    expect(KUN_SYSTEM_PROMPT).toContain('Progress updates are not stopping points')
+    expect(KUN_SYSTEM_PROMPT).toContain('continue without waiting for confirmation')
+    expect(KUN_SYSTEM_PROMPT).toContain('make the final response self-contained')
+    expect(KUN_SYSTEM_PROMPT).toContain('do not expose private chain-of-thought')
   })
 })
 
