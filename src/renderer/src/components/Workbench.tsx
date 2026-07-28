@@ -823,10 +823,7 @@ export function Workbench(): ReactElement {
 
   const chatComposerProps = useWorkbenchChatComposerProps({
     input, setInput, composerMode, setComposerMode, composerOrchestration, graphEnabled,
-    setComposerOrchestration: (nextMode) => {
-      setComposerOrchestration(nextMode)
-      if (nextMode === 'graph') openRightPanelTab(BUILTIN_RIGHT_PANEL_IDS.graph)
-    },
+    setComposerOrchestration,
     openGraph: openComposerGraph,
     busy, route, runtimeReady: runtimeConnection === 'ready',
     activeThreadId, activeClawChannelId,
