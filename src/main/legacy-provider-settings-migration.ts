@@ -8,6 +8,8 @@ import {
 import { ExtensionCredentialStore } from '../../kun/src/services/extension-credential-store.js'
 import { LegacyProviderCredentialMigrationService } from '../../kun/src/services/legacy-provider-credential-migration.js'
 import { ExtensionProviderAccountStore } from '../../kun/src/services/extension-provider-account-store.js'
+import { parseStoredCodexOAuthCredentials } from '../../kun/src/services/codex-oauth-credential-refresher.js'
+import { parseStoredGrokOAuthCredentials } from '../../kun/src/services/grok-oauth-credential-refresher.js'
 import {
   DEFAULT_MODEL_PROVIDER_ID,
   getKunRuntimeSettings,
@@ -88,6 +90,42 @@ export class LegacyProviderSettingsMigrationCoordinator {
     }
   }
 
+  /**
+   * Older Registry seeding could persist only an OAuth access token back into
+   * a settings-owned protected source. Recover the complete refreshable value
+   * from the one-time pre-migration backup, but only when the source still
+   * exists and its protected static value is either that OAuth access token or
+   * a rotated OpenAI token for the same issuer and ChatGPT account. A cleared
+   * source or an unrelated replacement API key is never resurrected.
+   */
+  async repairRefreshableCredentialsFromBackup(
+    settings: AppSettingsV1,
+    backupSettings: AppSettingsV1
+  ): Promise<string[]> {
+    const dataDir = resolveSettingsDataDir(settings)
+    assertManagedKunDataDirIsCurrent(dataDir)
+    const { service } = await this.runtime(dataDir)
+    const bindings = new Set((await service.listBindings()).map((entry) => entry.sourceId))
+    const repaired: string[] = []
+
+    for (const source of collectRefreshableOAuthRecoverySources(settings, backupSettings)) {
+      if (!bindings.has(source.sourceId)) continue
+      const current = await service.resolveApiKey(source.sourceId, {
+        includeUnavailable: true
+      }).catch(() => null)
+      if (!current) continue
+      if (isRefreshableOAuthCredential(current.apiKey)) continue
+      if (!staticCredentialMatchesRefreshableBackup(current.apiKey, source.apiKey)) continue
+
+      const migrations = await service.migrate([source], { replaceCommitted: true })
+      if (!migrations.some((entry) => entry.sourceId === source.sourceId)) continue
+      await service.markSettingsCommitted([source.sourceId])
+      repaired.push(source.sourceId)
+    }
+
+    return repaired.sort()
+  }
+
   private runtime(dataDir: string): Promise<MigrationRuntime> {
     let pending = this.runtimes.get(dataDir)
     if (!pending) {
@@ -138,6 +176,81 @@ function collectLegacyCredentialSources(settings: AppSettingsV1) {
     })
   }
   return sources
+}
+
+function collectRefreshableOAuthRecoverySources(
+  settings: AppSettingsV1,
+  backupSettings: AppSettingsV1
+) {
+  const currentProviders = new Map(
+    getModelProviderSettings(settings).providers.map((provider) => [provider.id, provider])
+  )
+  const runtime = getKunRuntimeSettings(settings)
+  return getModelProviderSettings(backupSettings).providers.flatMap((backupProvider) => {
+    const current = currentProviders.get(backupProvider.id)
+    if (!current || !isRefreshableOAuthCredential(backupProvider.apiKey)) return []
+    return [{
+      sourceId: legacyProviderCredentialSourceId(current.id),
+      providerId: current.id,
+      providerName: current.name,
+      label: `${current.name} recovered OAuth credential`,
+      apiKey: backupProvider.apiKey,
+      ...(preferredProviderModel(current, runtime.model) ? {
+        modelId: preferredProviderModel(current, runtime.model)
+      } : {})
+    }]
+  })
+}
+
+function isRefreshableOAuthCredential(rawApiKey: string): boolean {
+  return parseStoredCodexOAuthCredentials(rawApiKey) !== null ||
+    parseStoredGrokOAuthCredentials(rawApiKey) !== null
+}
+
+function staticCredentialMatchesRefreshableBackup(
+  staticApiKey: string,
+  rawBackup: string
+): boolean {
+  const value = staticApiKey.trim()
+  const codex = parseStoredCodexOAuthCredentials(rawBackup)
+  if (codex) {
+    if (value === codex.accessToken) return true
+    const claims = parseJwtClaims(value)
+    return claims?.iss === 'https://auth.openai.com' &&
+      codexAccountIdFromClaims(claims) === codex.accountId
+  }
+  const grok = parseStoredGrokOAuthCredentials(rawBackup)
+  return grok !== null && value === grok.accessToken
+}
+
+function parseJwtClaims(token: string): Record<string, unknown> | null {
+  const payload = token.split('.')[1]
+  if (!payload) return null
+  try {
+    const parsed = JSON.parse(Buffer.from(payload, 'base64url').toString()) as unknown
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null
+  } catch {
+    return null
+  }
+}
+
+function codexAccountIdFromClaims(claims: Record<string, unknown>): string {
+  if (typeof claims.chatgpt_account_id === 'string') return claims.chatgpt_account_id
+  const auth = claims['https://api.openai.com/auth']
+  if (auth && typeof auth === 'object' && !Array.isArray(auth)) {
+    const accountId = (auth as Record<string, unknown>).chatgpt_account_id
+    if (typeof accountId === 'string') return accountId
+  }
+  if (Array.isArray(claims.organizations)) {
+    const organization = claims.organizations[0]
+    if (organization && typeof organization === 'object' && !Array.isArray(organization)) {
+      const accountId = (organization as Record<string, unknown>).id
+      if (typeof accountId === 'string') return accountId
+    }
+  }
+  return ''
 }
 
 /** Source ids whose plaintext is empty and should be forgotten on save. */

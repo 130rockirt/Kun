@@ -66,6 +66,15 @@ export type SettingsCredentialMigration = {
     settings: AppSettingsV1,
     options?: { replaceCommitted?: boolean }
   ) => Promise<SettingsCredentialMigrationResult>
+  /**
+   * Repairs an already-migrated OAuth source whose protected value was
+   * previously flattened to an access token. Implementations must only use
+   * the backup as a recovery candidate and must not restore cleared sources.
+   */
+  repairRefreshableCredentialsFromBackup?: (
+    settings: AppSettingsV1,
+    backupSettings: AppSettingsV1
+  ) => Promise<string[]>
 }
 
 type JsonSettingsStoreOptions = {
@@ -328,7 +337,7 @@ async function writeInvalidSettingsBackup(path: string, raw: string): Promise<st
 }
 
 async function writeLegacyCredentialSettingsBackup(path: string, raw: string): Promise<string | null> {
-  const backupPath = join(dirname(path), `${basename(path, '.json')}.pre-extension-credential-migration.json`)
+  const backupPath = legacyCredentialSettingsBackupPath(path)
   try {
     await writeFile(backupPath, raw, { encoding: 'utf8', flag: 'wx', mode: 0o600 })
     await chmod(backupPath, 0o600).catch(() => undefined)
@@ -344,6 +353,27 @@ async function writeLegacyCredentialSettingsBackup(path: string, raw: string): P
         return null
       }
     }
+    return null
+  }
+}
+
+function legacyCredentialSettingsBackupPath(path: string): string {
+  return join(dirname(path), `${basename(path, '.json')}.pre-extension-credential-migration.json`)
+}
+
+async function readLegacyCredentialSettingsBackup(path: string): Promise<AppSettingsV1 | null> {
+  const backupPath = legacyCredentialSettingsBackupPath(path)
+  try {
+    const metadata = await lstat(backupPath)
+    if (!metadata.isFile() || metadata.isSymbolicLink()) return null
+    const parsed = JSON.parse(await readFile(backupPath, 'utf8')) as unknown
+    if (!isRecord(parsed)) return null
+    return normalizeStoredSettings(buildMergedSettings(parsed as Partial<AppSettingsV1>))
+  } catch (error) {
+    if (isErrnoException(error) && error.code === 'ENOENT') return null
+    console.warn('[kun-gui] Pre-migration credential backup could not be read for OAuth recovery.', {
+      message: error instanceof Error ? error.message : String(error)
+    })
     return null
   }
 }
@@ -439,6 +469,7 @@ export class JsonSettingsStore {
     const normalized = normalizeStoredSettings(buildMergedSettings(parsed as Partial<AppSettingsV1>))
     await ensureManagedWorkspaceRootsExist(normalized)
     const prepared = normalized
+    await this.repairRefreshableCredentialsFromBackup(prepared, sourcePath)
     if (this.options.credentialMigration && hasLegacyProviderPlaintext(prepared)) {
       const backupPath = await writeLegacyCredentialSettingsBackup(sourcePath, raw)
       if (!backupPath) {
@@ -576,6 +607,29 @@ export class JsonSettingsStore {
         message: error instanceof Error ? error.message : String(error)
       })
       return null
+    }
+  }
+
+  private async repairRefreshableCredentialsFromBackup(
+    settings: AppSettingsV1,
+    sourcePath: string
+  ): Promise<void> {
+    const credentialMigration = this.options.credentialMigration
+    const repair = credentialMigration?.repairRefreshableCredentialsFromBackup
+    if (!repair || hasLegacyProviderPlaintext(settings)) return
+    const backup = await readLegacyCredentialSettingsBackup(sourcePath)
+    if (!backup) return
+    try {
+      const repairedSourceIds = await repair.call(credentialMigration, settings, backup)
+      if (repairedSourceIds.length > 0) {
+        console.info('[kun-gui] Recovered refreshable OAuth credentials from the protected migration backup.', {
+          sourceIds: repairedSourceIds
+        })
+      }
+    } catch (error) {
+      console.warn('[kun-gui] Refreshable OAuth credential recovery was skipped.', {
+        message: error instanceof Error ? error.message : String(error)
+      })
     }
   }
 
