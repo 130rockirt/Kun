@@ -33,12 +33,14 @@ import {
 } from '../../sdd/sdd-draft-images'
 import { forgetRememberedSddDraft, useSddDraftStore, type SddDraft } from '../../sdd/sdd-draft-store'
 import { saveActiveSddDraftToDisk } from '../../sdd/sdd-draft-actions'
+import { releaseSddAssistantThreadsForDraft } from '../../sdd/sdd-thread-registry'
 import { composeSddAssistantPrompt } from '../../sdd/sdd-assistant-prompt'
 import { frameworkById } from '../../sdd/pm-skill-frameworks'
 import { buildSddDraftToPlanPrompt } from '../../sdd/sdd-plan-prompt'
 import type { GuiPlanArtifact } from '../../plan/plan-store'
 
 type PendingSddPlanTarget = {
+  draft: SddDraft
   planId: string
   relativePath: string
   workspaceRoot: string
@@ -198,12 +200,19 @@ export function useWorkbenchSddTurnController({
     ) {
       return
     }
+    const completedTarget = sddUpgradeTargetRef.current
     sddUpgradeInFlightRef.current = false
     sddUpgradeTargetRef.current = null
     useSddDraftStore.getState().setOperationStatus('idle')
-    const completedDraft = useSddDraftStore.getState().activeDraft
+    const completedDraft = completedTarget?.draft ?? null
+    const releasedCompletedThreads = completedDraft
+      ? releaseSddAssistantThreadsForDraft(completedDraft)
+      : false
     if (completedDraft) forgetRememberedSddDraft(completedDraft)
-    useSddDraftStore.getState().clearActiveDraft()
+    if (completedDraft && useSddDraftStore.getState().activeDraft?.id === completedDraft.id) {
+      useSddDraftStore.getState().clearActiveDraft()
+    }
+    if (releasedCompletedThreads) void useChatStore.getState().refreshThreads()
   }, [activeGuiPlan])
 
   useEffect(() => {
@@ -511,6 +520,7 @@ export function useWorkbenchSddTurnController({
       ...(draft.designContext ? { designContext: draft.designContext } : {})
     })
     sddUpgradeTargetRef.current = {
+      draft,
       planId,
       relativePath: planRelativePath,
       workspaceRoot: draft.workspaceRoot

@@ -6,6 +6,7 @@ import {
   markSddAssistantThread,
   normalizeSddThreadRegistry,
   releaseSddAssistantThread,
+  releaseSddAssistantThreadsForDraft,
   readSddThreadRegistry,
   sddAssistantThreadIdForDraft
 } from './sdd-thread-registry'
@@ -87,6 +88,25 @@ describe('sdd-thread-registry', () => {
 
     expect(isSddAssistantThread({ id: 'thread-sdd-1' }, registry)).toBe(true)
     expect(isSddAssistantThread({ id: 'thread-sdd-2' }, registry)).toBe(false)
+  })
+
+  it('releases every Requirement AI conversation when the requirement is completed', () => {
+    const storage = createMemoryStorage()
+    const activeDraft = draft()
+
+    markSddAssistantThread(activeDraft, 'thread-sdd-1', storage)
+    markSddAssistantThread(activeDraft, 'thread-sdd-2', storage)
+    expect(releaseSddAssistantThreadsForDraft(activeDraft, storage)).toBe(true)
+    const registry = readSddThreadRegistry(storage)
+
+    expect(registry.drafts[activeDraft.id]?.publicThreadIds).toEqual([
+      'thread-sdd-2',
+      'thread-sdd-1'
+    ])
+    expect(sddAssistantThreadIdForDraft(activeDraft, registry)).toBe('')
+    expect(isSddAssistantThread({ id: 'thread-sdd-1' }, registry)).toBe(false)
+    expect(isSddAssistantThread({ id: 'thread-sdd-2' }, registry)).toBe(false)
+    expect(releaseSddAssistantThreadsForDraft(activeDraft, storage)).toBe(false)
   })
 
   it('recognizes legacy SDD threads by draft paths even without registry data', () => {

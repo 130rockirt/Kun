@@ -235,6 +235,33 @@ export function releaseSddAssistantThread(
   return true
 }
 
+export function releaseSddAssistantThreadsForDraft(
+  draft: Pick<SddDraft, 'id' | 'workspaceRoot' | 'relativePath'>,
+  storage: BrowserStorageLike | null = browserStorage()
+): boolean {
+  const draftId = sddDraftKey(draft)
+  if (!draftId) return false
+  const registry = readSddThreadRegistry(storage)
+  const record = registry.drafts[draftId]
+  if (!record) return false
+  const publicThreadIds = [...record.threadIds]
+  const changed = publicThreadIds.length !== record.publicThreadIds.length ||
+    publicThreadIds.some((id, index) => id !== record.publicThreadIds[index])
+  if (!changed) return false
+  saveSddThreadRegistry({
+    version: 1,
+    drafts: {
+      ...registry.drafts,
+      [draftId]: {
+        ...record,
+        publicThreadIds,
+        updatedAt: new Date().toISOString()
+      }
+    }
+  }, storage)
+  return true
+}
+
 export function isSddAssistantThreadId(
   threadId: string | null | undefined,
   registry: SddThreadRegistry = readSddThreadRegistry()
