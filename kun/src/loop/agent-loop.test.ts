@@ -970,7 +970,7 @@ const ALL_TOOLS: ModelToolSpec[] = [
 ]
 
 const READ_ONLY_TOOLS = new Set([
-  'read', 'ls', 'find', 'grep', 'web_search', 'web_fetch'
+  'read', 'write', 'edit', 'ls', 'find', 'grep', 'web_search', 'web_fetch'
 ])
 
 describe('isStalePlanContext', () => {
@@ -992,7 +992,7 @@ describe('isStalePlanContext', () => {
 })
 
 describe('resolvePlanModeToolSpecs', () => {
-  it('step 0: read-only tools + create_plan only', () => {
+  it('keeps read-only and Markdown tools available while the plan is unsaved', () => {
     const result = resolvePlanModeToolSpecs(ALL_TOOLS, {
       planTurnActive: true,
       createPlanSatisfied: false,
@@ -1007,8 +1007,8 @@ describe('resolvePlanModeToolSpecs', () => {
     expect(names).toContain('web_search')
     expect(names).toContain('web_fetch')
     expect(names).toContain('create_plan')
-    expect(names).not.toContain('write')
-    expect(names).not.toContain('edit')
+    expect(names).toContain('write')
+    expect(names).toContain('edit')
     expect(names).not.toContain('bash')
   })
 
@@ -1028,15 +1028,24 @@ describe('resolvePlanModeToolSpecs', () => {
     expect(result.map((tool) => tool.name)).toEqual(['mcp_read_resource', 'create_plan'])
   })
 
-  it('step > 0: only create_plan', () => {
+  it('step > 0: preserves investigation tools instead of forcing create_plan immediately', () => {
     const result = resolvePlanModeToolSpecs(ALL_TOOLS, {
       planTurnActive: true,
       createPlanSatisfied: false,
       stepIndex: 1,
       readOnlyToolNames: READ_ONLY_TOOLS
     })
-    expect(result).toHaveLength(1)
-    expect(result[0].name).toBe('create_plan')
+    expect(result.map((tool) => tool.name)).toEqual([
+      'read',
+      'write',
+      'edit',
+      'ls',
+      'find',
+      'grep',
+      'web_search',
+      'web_fetch',
+      'create_plan'
+    ])
   })
 
   it('plan satisfied: returns all tools unchanged (pass-through)', () => {
@@ -1078,8 +1087,7 @@ describe('resolvePlanModeToolSpecs', () => {
       createPlanSatisfied: false,
       stepIndex: 1
     })
-    expect(result).toHaveLength(1)
-    expect(result[0].name).toBe('create_plan')
+    expect(result.map((tool) => tool.name)).toContain('create_plan')
   })
 
   it('custom readOnlyToolNames and planToolName', () => {
@@ -1122,17 +1130,23 @@ describe('resolvePlanModeToolSpecs', () => {
     expect(names).toContain('user_input')
     expect(names).toContain('request_user_input')
     expect(names).toContain('create_plan')
-    expect(names).not.toContain('write')
+    expect(names).toContain('write')
   })
 
-  it('step > 0: drops the user-input tools, leaving only create_plan', () => {
+  it('step > 0: keeps investigation and user-input tools available', () => {
     const result = resolvePlanModeToolSpecs(WITH_INPUT_TOOLS, {
       planTurnActive: true,
       createPlanSatisfied: false,
       stepIndex: 1,
       readOnlyToolNames: READ_ONLY_TOOLS
     })
-    expect(result.map((t) => t.name)).toEqual(['create_plan'])
+    expect(result.map((t) => t.name)).toEqual([
+      'read',
+      'write',
+      'create_plan',
+      'user_input',
+      'request_user_input'
+    ])
   })
 
   it('custom interactiveToolNames overrides the default user-input set', () => {

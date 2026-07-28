@@ -39,6 +39,7 @@ import {
   createToolOperationIdentity,
   ToolOperationJournal
 } from '../../reliability/operation-journal.js'
+import { planModeToolBlock } from './plan-mode-tool-policy.js'
 
 /**
  * A single registered tool. Tools are pure functions that observe the
@@ -220,6 +221,19 @@ export class LocalToolHost implements ToolHost {
       }
     }
     const activeCall = preHooks.call
+    const planModeBlock = await planModeToolBlock(tool, activeCall, context)
+    if (planModeBlock) {
+      return {
+        item: this.errorToolResult(
+          context,
+          activeCall,
+          tool,
+          planModeBlock.message,
+          planModeBlock.code
+        ),
+        approved: false
+      }
+    }
     const readValidation = this.readTracker.validateBeforeTool({ context, call: activeCall })
     if (!readValidation.ok) {
       return {

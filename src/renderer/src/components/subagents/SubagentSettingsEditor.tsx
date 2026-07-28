@@ -50,6 +50,7 @@ const BUILTIN_TOOL_NAMES = [
   'find',
   'ls',
   'repo_map',
+  'git_inspect',
   'edit',
   'write',
   'bash',

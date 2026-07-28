@@ -11,6 +11,7 @@ import { createLspLocalTool } from './builtin-lsp-tool.js'
 import { createReadLocalTool } from './builtin-read-tool.js'
 import { createFindLocalTool, createGrepLocalTool, createLsLocalTool } from './builtin-search-tools.js'
 import { createRepoMapLocalTool } from './builtin-repo-map-tool.js'
+import { createGitInspectLocalTool } from './builtin-git-inspect-tool.js'
 import { createVerifyChangesLocalTool } from './builtin-verify-tool.js'
 import { createSendImAttachmentLocalTool } from './im-attachment-tool.js'
 
@@ -20,6 +21,7 @@ export * from './builtin-read-tool.js'
 export * from './builtin-file-tools.js'
 export * from './builtin-search-tools.js'
 export * from './builtin-repo-map-tool.js'
+export * from './builtin-git-inspect-tool.js'
 export * from './builtin-bash-tool.js'
 export * from './builtin-verify-tool.js'
 export * from './im-attachment-tool.js'
@@ -47,6 +49,8 @@ export function createBuiltinLocalTool(
       return createLspLocalTool()
     case 'repo_map':
       return createRepoMapLocalTool()
+    case 'git_inspect':
+      return createGitInspectLocalTool()
     case 'verify_changes':
       return createVerifyChangesLocalTool()
     case 'send_im_attachment':
@@ -73,6 +77,7 @@ export function buildBuiltinLocalTools(options: BuiltinLocalToolsOptions = {}): 
     createLsLocalTool(options.ls),
     createLspLocalTool(),
     createRepoMapLocalTool(),
+    createGitInspectLocalTool(),
     createVerifyChangesLocalTool(),
     createSendImAttachmentLocalTool()
   ]
@@ -101,7 +106,8 @@ export function buildReadOnlyBuiltinLocalTools(options: BuiltinLocalToolsOptions
     createGrepLocalTool(options.grep),
     createFindLocalTool(options.find),
     createLsLocalTool(options.ls),
-    createRepoMapLocalTool()
+    createRepoMapLocalTool(),
+    createGitInspectLocalTool()
   ]
 }
 
@@ -122,6 +128,7 @@ export function buildBuiltinLocalToolRecord(
     ls: createLsLocalTool(options.ls),
     lsp: createLspLocalTool(),
     repo_map: createRepoMapLocalTool(),
+    git_inspect: createGitInspectLocalTool(),
     verify_changes: createVerifyChangesLocalTool(),
     send_im_attachment: createSendImAttachmentLocalTool()
   }

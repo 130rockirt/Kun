@@ -2433,15 +2433,12 @@ describe('AgentLoop', () => {
       const writeResult = items.find((item) => item.kind === 'tool_result' && item.toolName === 'write')
 
       expect(status).toBe('completed')
-      expect(observedToolLists[0]).not.toEqual(expect.arrayContaining(['write', 'edit', 'bash']))
+      expect(observedToolLists[0]).toEqual(expect.arrayContaining(['write', 'edit', 'git_inspect']))
+      expect(observedToolLists[0]).not.toContain('bash')
       expect(writeCall).toMatchObject({ kind: 'tool_call', status: 'failed' })
       expect(writeResult).toMatchObject({ kind: 'tool_result', isError: true })
       expect(writeResult?.kind === 'tool_result' ? JSON.stringify(writeResult.output) : '')
-        .toContain('not advertised by active tool policy')
-      // Plan-mode rejection steers the model to create_plan rather than the
-      // generic "use advertised tools" note.
-      expect(writeResult?.kind === 'tool_result' ? JSON.stringify(writeResult.output) : '')
-        .toContain('create_plan')
+        .toContain('plan_mode_write_blocked')
       await expect(readFile(join(workspace, 'forbidden.txt'), 'utf8')).rejects.toThrow()
       await expect(readFile(join(workspace, '.kunsdd/plan/plan-a-safe-change.md'), 'utf8')).resolves.toBe(
         '## Plan\nStay read-only until build mode.'
