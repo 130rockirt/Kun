@@ -24,6 +24,14 @@ type StatusPresentation = {
   icon: typeof Gauge
 }
 
+type UnavailableProviderQuotaStatus = Exclude<ProviderQuotaStatus, 'available'>
+
+const UNAVAILABLE_STATUS_ORDER: UnavailableProviderQuotaStatus[] = [
+  'missing_credentials',
+  'error',
+  'unsupported'
+]
+
 const STATUS_PRESENTATION: Record<ProviderQuotaStatus, StatusPresentation> = {
   available: {
     labelKey: 'providerQuotaAvailable',
@@ -53,6 +61,8 @@ export function ProviderQuotaPanel(): ReactElement {
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState('')
+  const availableEntries = result?.entries.filter((entry) => entry.status === 'available') ?? []
+  const unavailableEntries = result?.entries.filter((entry) => entry.status !== 'available') ?? []
 
   const refresh = useCallback(async (manual = false): Promise<void> => {
     if (manual) setRefreshing(true)
@@ -152,7 +162,7 @@ export function ProviderQuotaPanel(): ReactElement {
                 {error}
               </div>
             ) : null}
-            {result?.entries.map((entry) => (
+            {availableEntries.map((entry) => (
               <ProviderQuotaCard
                 key={entry.providerId}
                 entry={entry}
@@ -160,9 +170,94 @@ export function ProviderQuotaPanel(): ReactElement {
                 onOpenDashboard={openDashboard}
               />
             ))}
+            {UNAVAILABLE_STATUS_ORDER.map((status) => {
+              const entries = unavailableEntries.filter((entry) => entry.status === status)
+              return entries.length > 0 ? (
+                <UnavailableProviderGroup
+                  key={status}
+                  status={status}
+                  entries={entries}
+                  locale={i18n.resolvedLanguage}
+                  onOpenDashboard={openDashboard}
+                />
+              ) : null
+            })}
           </div>
         )}
       </div>
+    </section>
+  )
+}
+
+function UnavailableProviderGroup({
+  status,
+  entries,
+  locale,
+  onOpenDashboard
+}: {
+  status: UnavailableProviderQuotaStatus
+  entries: ProviderQuotaEntry[]
+  locale?: string
+  onOpenDashboard: (url: string) => void
+}): ReactElement {
+  const { t } = useTranslation('common')
+  const [expanded, setExpanded] = useState(false)
+  const detailsId = useId()
+  const presentation = STATUS_PRESENTATION[status]
+  const StatusIcon = presentation.icon
+  const statusLabel = t(presentation.labelKey)
+
+  return (
+    <section
+      data-provider-quota-status-group={status}
+      className="rounded-[14px] border border-ds-border-muted bg-ds-surface-subtle/45 p-1.5"
+    >
+      <button
+        type="button"
+        data-provider-quota-status-group-toggle={status}
+        aria-expanded={expanded}
+        aria-controls={detailsId}
+        aria-label={t(
+          expanded ? 'providerQuotaCollapseStatusGroup' : 'providerQuotaExpandStatusGroup',
+          { status: statusLabel, count: entries.length }
+        )}
+        onClick={() => setExpanded((value) => !value)}
+        className="group flex w-full items-center gap-2 rounded-xl px-2 py-2 text-left outline-none transition hover:bg-ds-hover focus-visible:ring-2 focus-visible:ring-accent/45"
+      >
+        <ChevronRight
+          aria-hidden="true"
+          className={`h-3.5 w-3.5 shrink-0 text-ds-faint transition-transform ${
+            expanded ? 'rotate-90 text-ds-muted' : ''
+          }`}
+          strokeWidth={1.9}
+        />
+        <span className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg border ${presentation.className}`}>
+          <StatusIcon className="h-3 w-3" strokeWidth={2} />
+        </span>
+        <span className="min-w-0 flex-1 truncate text-[11.5px] font-semibold text-ds-ink">
+          {statusLabel}
+        </span>
+        <span className="inline-flex min-w-6 shrink-0 items-center justify-center rounded-full border border-ds-border-muted bg-ds-card px-1.5 py-0.5 text-[9.5px] font-semibold tabular-nums text-ds-muted">
+          {entries.length}
+        </span>
+      </button>
+
+      {expanded ? (
+        <div
+          id={detailsId}
+          data-provider-quota-status-group-details={status}
+          className="space-y-2 px-0.5 pb-0.5 pt-1.5"
+        >
+          {entries.map((entry) => (
+            <ProviderQuotaCard
+              key={entry.providerId}
+              entry={entry}
+              locale={locale}
+              onOpenDashboard={onOpenDashboard}
+            />
+          ))}
+        </div>
+      ) : null}
     </section>
   )
 }

@@ -45,3 +45,10 @@
 - [x] 7.2 Keep status, primary quota/error summary, dashboard action, and accessible disclosure semantics visible in collapsed rows.
 - [x] 7.3 Add focused renderer tests for default collapse, independent expansion, and dashboard action behavior.
 - [x] 7.4 Run focused tests, typecheck, build, lint, and `git diff --check`; commit only the accordion follow-up to local `develop`.
+
+## 8. Group unavailable workbench providers
+
+- [x] 8.1 Partition missing-credential, request-error, and unsupported providers into separate status groups while leaving available quota rows directly visible.
+- [x] 8.2 Make populated status groups accessible disclosures that default to collapsed and show their provider counts.
+- [x] 8.3 Add focused renderer tests for classification, default collapse, independent group expansion, and nested provider details.
+- [x] 8.4 Run focused tests, typecheck, build, lint, and `git diff --check`; commit only the status-group follow-up to local `develop`.

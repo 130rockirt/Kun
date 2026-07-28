@@ -79,6 +79,19 @@ The dashboard action remains a separate button so opening it cannot accidentally
 toggle the row. Native disclosure semantics (`aria-expanded` and
 `aria-controls`) keep the interaction keyboard and screen-reader accessible.
 
+### Group workbench providers that cannot currently show quota
+
+The workbench keeps providers with `available` quota visible as ordinary compact
+rows. Providers in `missing_credentials`, `error`, or `unsupported` states are
+partitioned into separate status disclosure groups. Each group starts collapsed,
+shows its localized status and provider count, and is omitted when empty.
+
+Opening a status group reveals its provider rows without automatically expanding
+their details. This preserves access to the provider-specific explanation,
+source, update time, and dashboard action while keeping the common high-volume
+failure and unsupported states from dominating the sidebar. The groups use
+native disclosure semantics and do not change the normalized quota contract.
+
 ### Match CodexBar's read-only subscription sources
 
 The quota service recognizes the actual preset profile shape, where ordinary HTTP
@@ -121,6 +134,7 @@ Windows normally reports the notification-area icon at the bottom edge of a disp
 - [A blur event can fire while opening a provider dashboard] → Treat this as expected popover behavior and launch the dashboard through main-process IPC.
 - [Many providers can overflow the switcher] → Allow the switcher to wrap to a bounded grid and keep the detail region independently scrollable.
 - [Collapsed rows can hide important failures] → Keep status and a truncated actionable error summary visible even while details are collapsed.
+- [Collapsed status groups can conceal which providers need attention] → Keep the localized status and provider count visible, and preserve each provider's actionable summary after the group is opened.
 - [Provider names may be long or contain unsafe text] → Truncate visual labels, preserve accessible titles, and rely on React escaping plus the normalized bounded contract.
 - [Retained windows can show stale data] → Refresh on every show and retain old data only as an explicit fallback on error.
 - [The same quota service may perform several provider requests] → Keep the existing bounded concurrency and request timeouts; do not introduce background polling.

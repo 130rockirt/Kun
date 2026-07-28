@@ -157,3 +157,18 @@ The workbench provider-quota sidebar SHALL keep every provider's detail region c
 #### Scenario: Open provider dashboard from a collapsed row
 - **WHEN** the user activates the dashboard action
 - **THEN** the application opens the provider dashboard without changing the row's disclosure state
+
+### Requirement: Workbench groups quota states that cannot currently be viewed
+The workbench provider-quota sidebar SHALL place non-available providers into compact, collapsed groups according to their normalized status.
+
+#### Scenario: Sidebar contains mixed provider states
+- **WHEN** refreshed quota contains available, missing-credential, request-error, or unsupported providers
+- **THEN** available providers remain directly visible while each populated non-available status is represented by one collapsed group with its provider count
+
+#### Scenario: Expand one unavailable status group
+- **WHEN** the user activates a non-available status disclosure
+- **THEN** only that status group's provider rows are revealed and their individual detail regions remain collapsed
+
+#### Scenario: Inspect an unavailable provider
+- **WHEN** the user expands a provider inside an opened non-available status group
+- **THEN** the sidebar reveals that provider's actionable explanation, source, update time, and dashboard action

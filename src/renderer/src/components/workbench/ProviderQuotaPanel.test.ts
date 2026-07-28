@@ -39,6 +39,18 @@ describe('ProviderQuotaPanel', () => {
         dashboardUrl: 'https://models.example.com/dashboard',
         metrics: [],
         message: 'This provider does not expose a supported quota API in this version.'
+      }, {
+        providerId: 'needs-login',
+        providerName: 'Needs login',
+        status: 'missing_credentials' as const,
+        metrics: [],
+        message: 'Sign in before refreshing quota.'
+      }, {
+        providerId: 'request-failed',
+        providerName: 'Request failed',
+        status: 'error' as const,
+        metrics: [],
+        message: 'The provider rejected the quota request.'
       }]
     }))
     vi.stubGlobal('window', {
@@ -55,7 +67,18 @@ describe('ProviderQuotaPanel', () => {
 
     expect(listProviderQuotas).toHaveBeenCalledTimes(1)
     expect(renderer.root.findAllByProps({ 'data-provider-quota-status': 'available' })).toHaveLength(1)
-    expect(renderer.root.findAllByProps({ 'data-provider-quota-status': 'unsupported' })).toHaveLength(1)
+    expect(renderer.root.findAllByProps({ 'data-provider-quota-status': 'unsupported' })).toHaveLength(0)
+    expect(renderer.root.findAllByProps({ 'data-provider-quota-status': 'missing_credentials' })).toHaveLength(0)
+    expect(renderer.root.findAllByProps({ 'data-provider-quota-status': 'error' })).toHaveLength(0)
+    expect(renderer.root.findAllByProps({
+      'data-provider-quota-status-group': 'missing_credentials'
+    })).toHaveLength(1)
+    expect(renderer.root.findAllByProps({
+      'data-provider-quota-status-group': 'error'
+    })).toHaveLength(1)
+    expect(renderer.root.findAllByProps({
+      'data-provider-quota-status-group': 'unsupported'
+    })).toHaveLength(1)
     expect(renderer.root.findByProps({ 'aria-label': 'Refresh' })).toBeTruthy()
     const scroller = renderer.root.findByProps({ 'data-provider-quota-scroller': true })
     expect(scroller.props.className).toContain('h-0')
@@ -68,11 +91,19 @@ describe('ProviderQuotaPanel', () => {
     const deepSeekToggle = renderer.root.findByProps({
       'data-provider-quota-toggle': 'deepseek-work'
     })
-    const customToggle = renderer.root.findByProps({
-      'data-provider-quota-toggle': 'custom'
-    })
     expect(deepSeekToggle.props['aria-expanded']).toBe(false)
-    expect(customToggle.props['aria-expanded']).toBe(false)
+    expect(renderer.root.findByProps({
+      'data-provider-quota-status-group-toggle': 'missing_credentials'
+    }).props['aria-expanded']).toBe(false)
+    expect(renderer.root.findByProps({
+      'data-provider-quota-status-group-toggle': 'error'
+    }).props['aria-expanded']).toBe(false)
+    expect(renderer.root.findByProps({
+      'data-provider-quota-status-group-toggle': 'unsupported'
+    }).props['aria-expanded']).toBe(false)
+    expect(renderer.root.findAllByProps({
+      'data-provider-quota-status-group-details': 'unsupported'
+    })).toHaveLength(0)
     expect(renderer.root.findAllByProps({
       'data-provider-quota-details': 'deepseek-work'
     })).toHaveLength(0)
@@ -84,12 +115,28 @@ describe('ProviderQuotaPanel', () => {
       'data-provider-quota-toggle': 'deepseek-work'
     }).props['aria-expanded']).toBe(true)
     expect(renderer.root.findByProps({
-      'data-provider-quota-toggle': 'custom'
+      'data-provider-quota-status-group-toggle': 'unsupported'
     }).props['aria-expanded']).toBe(false)
     expect(renderer.root.findAllByProps({
       'data-provider-quota-details': 'deepseek-work'
     })).toHaveLength(1)
     expect(renderer.root.findAllByProps({ role: 'progressbar' })).toHaveLength(1)
+
+    act(() => renderer.root.findByProps({
+      'data-provider-quota-status-group-toggle': 'unsupported'
+    }).props.onClick())
+    expect(renderer.root.findByProps({
+      'data-provider-quota-status-group-toggle': 'unsupported'
+    }).props['aria-expanded']).toBe(true)
+    expect(renderer.root.findByProps({
+      'data-provider-quota-status-group-toggle': 'error'
+    }).props['aria-expanded']).toBe(false)
+    expect(renderer.root.findAllByProps({
+      'data-provider-quota-status': 'unsupported'
+    })).toHaveLength(1)
+    expect(renderer.root.findByProps({
+      'data-provider-quota-toggle': 'custom'
+    }).props['aria-expanded']).toBe(false)
 
     act(() => renderer.root.findByProps({
       'aria-label': 'Open Custom provider dashboard'
@@ -108,6 +155,19 @@ describe('ProviderQuotaPanel', () => {
     expect(renderer.root.findAllByProps({
       'data-provider-quota-details': 'custom'
     })).toHaveLength(1)
+
+    act(() => renderer.root.findByProps({
+      'data-provider-quota-status-group-toggle': 'error'
+    }).props.onClick())
+    expect(renderer.root.findByProps({
+      'data-provider-quota-status-group-toggle': 'unsupported'
+    }).props['aria-expanded']).toBe(true)
+    expect(renderer.root.findByProps({
+      'data-provider-quota-status-group-toggle': 'error'
+    }).props['aria-expanded']).toBe(true)
+    expect(renderer.root.findByProps({
+      'data-provider-quota-toggle': 'request-failed'
+    }).props['aria-expanded']).toBe(false)
     act(() => renderer.unmount())
   })
 
