@@ -110,7 +110,10 @@ export function GraphModePanel({
   }
 
   return (
-    <section className={`${className} flex min-h-0 flex-col bg-ds-sidebar`}>
+    <section
+      className={`${className} graph-mode-panel ds-no-drag flex min-h-0 flex-col bg-ds-sidebar`}
+      data-graph-mode-panel
+    >
       <header className="flex shrink-0 items-center justify-between border-b border-ds-border-muted px-3 py-2.5">
         <div className="flex min-w-0 items-center gap-2">
           <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-indigo-500/12 text-indigo-600 dark:text-indigo-200">

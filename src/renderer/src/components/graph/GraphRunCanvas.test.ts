@@ -67,18 +67,32 @@ describe('GraphRunCanvas', () => {
         nodes: original,
         edges: [],
         selectedNodeId: null,
-        onSelectNode
+        onSelectNode,
+        onOpenInspector: vi.fn()
       }))
     })
     let flow = renderer!.root.find((instance) =>
       instance.props['aria-label'] === 'Directed Graph run' &&
       typeof instance.props.onNodesChange === 'function')
 
-    expect(flow.props.nodesDraggable).toBe(true)
-    expect(flow.props.panOnDrag).toBe(true)
+    expect(flow.props.nodesDraggable).toBe(false)
+    expect(flow.props.panOnDrag).toEqual([0, 1, 2])
     expect(flow.props.zoomOnScroll).toBe(true)
-    expect(flow.props.fitViewOptions.minZoom).toBeGreaterThanOrEqual(0.7)
+    expect(flow.props.fitViewOptions.minZoom).toBeGreaterThanOrEqual(0.6)
     expect(flow.props.onNodesChange).toEqual(expect.any(Function))
+    const interactionRoot = renderer!.root.find((instance) =>
+      instance.props['data-graph-interaction-root'] === true)
+    expect(interactionRoot.props.className).toContain('ds-no-drag')
+
+    const selectTool = renderer!.root.find((instance) =>
+      instance.props['aria-label'] === 'Select and move nodes')
+    act(() => selectTool.props.onClick())
+    flow = renderer!.root.find((instance) =>
+      instance.props['aria-label'] === 'Directed Graph run' &&
+      typeof instance.props.onNodesChange === 'function')
+    expect(flow.props.nodesDraggable).toBe(true)
+    expect(flow.props.panOnDrag).toEqual([1, 2])
+    expect(flow.props.selectionOnDrag).toBe(true)
 
     act(() => {
       flow.props.onNodeClick({}, { id: 'audit' })
@@ -103,7 +117,8 @@ describe('GraphRunCanvas', () => {
         }],
         edges: [],
         selectedNodeId: 'audit',
-        onSelectNode
+        onSelectNode,
+        onOpenInspector: vi.fn()
       }))
     })
     flow = renderer!.root.find((instance) =>

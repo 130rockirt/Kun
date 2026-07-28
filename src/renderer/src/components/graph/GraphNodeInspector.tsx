@@ -1,5 +1,12 @@
 import { useState, type ReactElement } from 'react'
-import { FileText, Loader2, RotateCcw } from 'lucide-react'
+import {
+  Activity,
+  FileCheck2,
+  FileText,
+  LayoutDashboard,
+  Loader2,
+  RotateCcw
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type {
   GraphArtifactPage,
@@ -42,6 +49,7 @@ export function GraphNodeInspector({
   onCloseArtifact: () => void
 }): ReactElement {
   const { t } = useTranslation('common')
+  const [activeTab, setActiveTab] = useState<'overview' | 'execution' | 'evidence'>('overview')
   const [rebindProfileId, setRebindProfileId] = useState('')
   const attempt = node.attempts.at(-1)
   const plannedAssignment = plannedAssignmentLabel(node.node)
@@ -84,6 +92,31 @@ export function GraphNodeInspector({
         <StatusPill status={node.status} />
       </div>
       <p className="text-[11px] leading-5 text-ds-muted">{node.node.objective}</p>
+      <nav
+        aria-label={t('graphInspectorSections')}
+        className="grid grid-cols-3 rounded-xl border border-ds-border-muted bg-ds-main p-1"
+      >
+        {([
+          ['overview', LayoutDashboard, t('graphInspectorOverview')],
+          ['execution', Activity, t('graphInspectorExecution')],
+          ['evidence', FileCheck2, t('graphInspectorEvidence')]
+        ] as const).map(([id, Icon, label]) => (
+          <button
+            key={id}
+            type="button"
+            aria-current={activeTab === id ? 'page' : undefined}
+            onClick={() => setActiveTab(id)}
+            className={`inline-flex h-7 min-w-0 items-center justify-center gap-1 rounded-lg px-1 text-[9px] font-semibold transition ${
+              activeTab === id
+                ? 'bg-ds-card text-ds-ink shadow-sm'
+                : 'text-ds-faint hover:text-ds-muted'
+            }`}
+          >
+            <Icon className="h-3 w-3 shrink-0" />
+            <span className="truncate">{label}</span>
+          </button>
+        ))}
+      </nav>
       <div className="grid grid-cols-2 gap-2 text-[10px]">
         <Metric label={t('graphPlannedAssignment')} value={plannedAssignment} />
         <Metric label={t('graphDispatchState')} value={dispatchState} />
@@ -104,7 +137,39 @@ export function GraphNodeInspector({
           value={node.node.maxAttempts?.toLocaleString() ?? t('graphInheritedValue')}
         />
       </div>
-      {attempt ? (
+      {activeTab === 'overview' && attempt ? (
+        <>
+          <div className="grid grid-cols-2 gap-2 text-[10px]">
+            <Metric label={t('graphMetricAgent')} value={attempt.assignment.name} />
+            <Metric
+              label={t('graphRequestedProfile')}
+              value={attempt.assignment.requestedProfileId ?? attempt.assignment.profileId}
+            />
+            <Metric label={t('graphMetricModel')} value={attempt.assignment.model} />
+            <Metric
+              label={t('graphMetricChildSession')}
+              value={attempt.childThreadId ?? t('graphChildSessionPending')}
+            />
+          </div>
+          {attempt.assignment.routingReason ? (
+            <div className="rounded-lg border border-amber-400/30 bg-amber-500/8 px-2.5 py-2 text-[10px] leading-4 text-amber-800 dark:text-amber-100">
+              <div className="mb-0.5 font-semibold">{t('graphRoutingDecision')}</div>
+              {attempt.assignment.routingReason}
+            </div>
+          ) : null}
+          {attempt.childThreadId ? (
+            <div className="flex flex-wrap gap-1.5">
+              <SmallAction onClick={() => onOpenChild(attempt.childThreadId!)}>
+                {t('graphOpenChildSession')}
+              </SmallAction>
+              <SmallAction onClick={() => onOpenChild(attempt.childThreadId!)}>
+                {t('graphOpenAttemptSession', { number: attempt.attemptNumber })}
+              </SmallAction>
+            </div>
+          ) : null}
+        </>
+      ) : null}
+      {activeTab === 'execution' && attempt ? (
         <>
           <div className="grid grid-cols-2 gap-2 text-[10px]">
             <Metric label={t('graphMetricAgent')} value={attempt.assignment.name} />
@@ -191,7 +256,8 @@ export function GraphNodeInspector({
           ) : null}
         </>
       ) : null}
-      {['pending', 'blocked', 'ready', 'failed', 'repair_required'].includes(node.status) ? (
+      {activeTab === 'overview' &&
+      ['pending', 'blocked', 'ready', 'failed', 'repair_required'].includes(node.status) ? (
         <div className="flex items-center gap-1.5">
           <input
             value={rebindProfileId}
@@ -211,7 +277,7 @@ export function GraphNodeInspector({
           </SmallAction>
         </div>
       ) : null}
-      {node.attempts.length ? (
+      {activeTab === 'execution' && node.attempts.length ? (
         <details className="text-[10px] text-ds-muted">
           <summary className="cursor-pointer font-semibold">
             {t('graphAttemptHistory', { count: node.attempts.length })}
@@ -235,17 +301,17 @@ export function GraphNodeInspector({
           </div>
         </details>
       ) : null}
-      {node.lastProgress ? (
+      {activeTab === 'overview' && node.lastProgress ? (
         <div className="rounded-lg border border-ds-border-muted bg-ds-card px-2.5 py-2 text-[10px] leading-4 text-ds-muted">
           {node.lastProgress.summary}
         </div>
       ) : null}
-      {attempt?.normalizedFailure ? (
+      {activeTab === 'overview' && attempt?.normalizedFailure ? (
         <div role="alert" className="rounded-lg border border-red-400/25 bg-red-500/7 px-2.5 py-2 text-[10px] leading-4 text-red-700 dark:text-red-200">
           {attempt.normalizedFailure}
         </div>
       ) : null}
-      {node.lastTransitionReason ? (
+      {activeTab === 'overview' && node.lastTransitionReason ? (
         <div
           role={transitionIsError ? 'alert' : 'status'}
           className={`rounded-lg border px-2.5 py-2 text-[10px] leading-4 ${
@@ -258,6 +324,8 @@ export function GraphNodeInspector({
           {node.lastTransitionReason}
         </div>
       ) : null}
+      {activeTab === 'evidence' ? (
+        <>
       {attempt?.validation?.issues.length ? (
         <InspectorList
           title={t('graphValidationIssues')}
@@ -358,6 +426,8 @@ export function GraphNodeInspector({
           values={reviews.map((review) =>
             `${review.reviewerKind}: ${review.outcome} — ${review.summary}`)}
         />
+      ) : null}
+        </>
       ) : null}
       {needsHuman && attempt ? (
         <div className="flex gap-1.5">

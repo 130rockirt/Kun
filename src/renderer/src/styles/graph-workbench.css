@@ -1,0 +1,130 @@
+/* Graph Mode is mounted below the window-wide Electron drag region. Every
+ * interactive graph surface must explicitly opt back into pointer input. */
+.graph-mode-panel,
+.graph-run-workspace,
+.graph-run-canvas,
+.graph-run-inspector,
+.graph-canvas-toolbar {
+  -webkit-app-region: no-drag;
+}
+
+.graph-mode-panel {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--ds-bg-sidebar) 98%, #eef2ff) 0, var(--ds-bg-sidebar) 14rem);
+}
+
+.graph-run-overview {
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--ds-border) 60%, transparent);
+}
+
+.graph-phase-nav {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--ds-text-muted) 25%, transparent) transparent;
+}
+
+.graph-run-workspace {
+  isolation: isolate;
+  background:
+    radial-gradient(circle at 50% 44%, color-mix(in srgb, var(--ds-accent) 4%, transparent), transparent 52%),
+    var(--ds-bg-main);
+}
+
+.graph-run-canvas .react-flow__pane {
+  transition: background-color 120ms ease;
+}
+
+.graph-run-canvas[data-mode='pan'] .react-flow__pane {
+  cursor: grab;
+}
+
+.graph-run-canvas[data-mode='pan'] .react-flow__pane.dragging {
+  cursor: grabbing;
+}
+
+.graph-run-canvas[data-mode='select'] .react-flow__pane {
+  cursor: crosshair;
+}
+
+.graph-run-canvas[data-mode='select'] .react-flow__node {
+  cursor: grab;
+}
+
+.graph-run-canvas[data-mode='select'] .react-flow__node.dragging {
+  cursor: grabbing;
+}
+
+.graph-run-canvas[data-mode='pan'] .react-flow__node {
+  cursor: pointer;
+}
+
+.graph-flow .react-flow__edge {
+  z-index: 0;
+}
+
+.graph-flow .react-flow__node {
+  z-index: 1;
+  transition:
+    filter 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.graph-flow .react-flow__node:hover {
+  filter: brightness(1.015);
+}
+
+.graph-flow .react-flow__edge-textbg {
+  fill: var(--ds-bg-main);
+}
+
+.graph-flow .react-flow__edge-text {
+  fill: var(--ds-text-muted);
+  font-size: 9px;
+}
+
+.graph-flow .react-flow__minimap.ds-workflow-minimap {
+  background: color-mix(in srgb, var(--ds-surface-card) 94%, transparent);
+  backdrop-filter: blur(12px);
+}
+
+.graph-canvas-toolbar {
+  box-shadow:
+    0 10px 30px rgb(15 23 42 / 0.08),
+    0 1px 3px rgb(15 23 42 / 0.08);
+}
+
+.graph-inspector-divider {
+  background:
+    linear-gradient(
+      90deg,
+      transparent 0 2px,
+      color-mix(in srgb, var(--ds-border) 85%, transparent) 2px 3px,
+      transparent 3px
+    );
+}
+
+.graph-inspector-divider:hover,
+.graph-inspector-divider:focus {
+  background:
+    linear-gradient(
+      90deg,
+      transparent 0 1px,
+      color-mix(in srgb, var(--ds-accent) 75%, transparent) 1px 4px,
+      transparent 4px
+    );
+}
+
+.graph-run-inspector {
+  box-shadow: -8px 0 30px rgb(15 23 42 / 0.035);
+}
+
+.graph-run-inspector > div {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--ds-text-muted) 25%, transparent) transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .graph-run-canvas .react-flow__pane,
+  .graph-flow .react-flow__node {
+    transition: none;
+  }
+}

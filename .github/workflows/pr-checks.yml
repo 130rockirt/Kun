@@ -100,6 +100,9 @@ jobs:
       - name: Build Linux AppImage
         run: npm run dist:linux
 
+      - name: Smoke Graph workbench pointer interactions on native Linux
+        run: xvfb-run -a npm run smoke:development-graph-workbench
+
       - name: Smoke packaged OCR dependencies
         run: node scripts/smoke-packaged-ocr.cjs
 
@@ -202,6 +205,9 @@ jobs:
 
       - name: Build ad-hoc macOS packages (x64 and arm64)
         run: npm run dist:mac
+
+      - name: Smoke Graph workbench pointer interactions on native macOS
+        run: npm run smoke:development-graph-workbench
 
       - name: Verify packaged macOS x64 native architecture
         run: npm run verify:packaged-macos-native -- --resources dist/mac/Kun.app/Contents/Resources --arch x64
@@ -352,6 +358,9 @@ jobs:
 
       - name: Build Windows NSIS installer
         run: npm run dist:win
+
+      - name: Smoke Graph workbench pointer interactions on native Windows
+        run: npm run smoke:development-graph-workbench
 
       - name: Smoke packaged Extension Node runtime (win-unpacked)
         run: npm run smoke:packaged-extensions -- --resources dist/win-unpacked/resources

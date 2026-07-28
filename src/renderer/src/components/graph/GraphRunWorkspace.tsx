@@ -7,7 +7,7 @@ import {
   type ReactElement
 } from 'react'
 import type { Edge, Node } from '@xyflow/react'
-import { Send } from 'lucide-react'
+import { PanelRightClose, Send, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type {
   GraphArtifactPage,
@@ -24,6 +24,7 @@ import { plannedAssignmentLabel } from './graph-elements'
 import {
   clampGraphInspectorWidth,
   DEFAULT_GRAPH_INSPECTOR_WIDTH,
+  GRAPH_INSPECTOR_OVERLAY_BREAKPOINT,
   MAX_GRAPH_INSPECTOR_WIDTH,
   MIN_GRAPH_INSPECTOR_WIDTH
 } from './graph-workspace-layout'
@@ -78,6 +79,7 @@ export function GraphRunWorkspace({
   const workspaceRef = useRef<HTMLDivElement>(null)
   const [containerWidth, setContainerWidth] = useState(900)
   const [inspectorWidth, setInspectorWidth] = useState(DEFAULT_GRAPH_INSPECTOR_WIDTH)
+  const [inspectorOpen, setInspectorOpen] = useState(Boolean(selectedNode))
 
   useEffect(() => {
     const target = workspaceRef.current
@@ -94,6 +96,10 @@ export function GraphRunWorkspace({
     observer.observe(target)
     return () => observer.disconnect()
   }, [])
+
+  useEffect(() => {
+    if (selectedNodeId) setInspectorOpen(true)
+  }, [selectedNodeId])
 
   const resizeInspector = (requested: number): void => {
     setInspectorWidth(clampGraphInspectorWidth(requested, containerWidth))
@@ -139,9 +145,19 @@ export function GraphRunWorkspace({
   const visibleNodeIds = new Set(elements.nodes.map((node) => node.id))
   const minimum = clampGraphInspectorWidth(MIN_GRAPH_INSPECTOR_WIDTH, containerWidth)
   const maximum = clampGraphInspectorWidth(MAX_GRAPH_INSPECTOR_WIDTH, containerWidth)
+  const inspectorIsOverlay = containerWidth < GRAPH_INSPECTOR_OVERLAY_BREAKPOINT
+  const selectNode = (nodeId: string | null): void => {
+    onSelectNode(nodeId)
+    if (nodeId) setInspectorOpen(true)
+  }
 
   return (
-    <div ref={workspaceRef} className="flex min-h-[260px] min-w-0 flex-1 overflow-hidden bg-ds-main">
+    <div
+      ref={workspaceRef}
+      className="graph-run-workspace ds-no-drag relative flex min-h-[320px] min-w-0 flex-1 overflow-hidden bg-ds-main"
+      data-inspector-layout={inspectorIsOverlay ? 'overlay' : 'split'}
+      data-inspector-open={inspectorOpen}
+    >
       <div className="min-w-0 flex-1">
         {listFallback ? (
           <div role="list" aria-label={t('graphListFallback')} className="h-full overflow-y-auto p-3">
@@ -151,7 +167,7 @@ export function GraphRunWorkspace({
                 type="button"
                 role="listitem"
                 aria-current={selectedNodeId === node.id}
-                onClick={() => onSelectNode(node.id)}
+                onClick={() => selectNode(node.id)}
                 className={`mb-1.5 flex w-full items-center justify-between gap-3 rounded-lg border bg-ds-card px-3 py-2 text-left ${
                   selectedNodeId === node.id
                     ? 'border-indigo-500 ring-2 ring-indigo-500/15'
@@ -177,72 +193,116 @@ export function GraphRunWorkspace({
             nodes={elements.nodes}
             edges={elements.edges}
             selectedNodeId={selectedNodeId}
-            onSelectNode={onSelectNode}
+            onSelectNode={selectNode}
+            onOpenInspector={() => setInspectorOpen(true)}
           />
         )}
       </div>
 
-      <div
-        role="separator"
-        aria-label={t('graphResizeInspector')}
-        aria-orientation="vertical"
-        aria-valuemin={minimum}
-        aria-valuemax={maximum}
-        aria-valuenow={Math.round(inspectorWidth)}
-        tabIndex={0}
-        title={t('graphResizeInspector')}
-        className="ds-workbench-divider ds-no-drag relative z-20 shrink-0 cursor-col-resize focus:outline-none focus:ring-2 focus:ring-inset focus:ring-indigo-500"
-        onPointerDown={beginResize}
-        onKeyDown={resizeWithKeyboard}
-        onDoubleClick={() => resizeInspector(DEFAULT_GRAPH_INSPECTOR_WIDTH)}
-      />
+      {inspectorOpen && !inspectorIsOverlay ? (
+        <div
+          role="separator"
+          aria-label={t('graphResizeInspector')}
+          aria-orientation="vertical"
+          aria-valuemin={minimum}
+          aria-valuemax={maximum}
+          aria-valuenow={Math.round(inspectorWidth)}
+          tabIndex={0}
+          title={t('graphResizeInspector')}
+          className="graph-inspector-divider ds-no-drag relative z-20 w-1.5 shrink-0 cursor-col-resize focus:outline-none focus:ring-2 focus:ring-inset focus:ring-indigo-500"
+          onPointerDown={beginResize}
+          onKeyDown={resizeWithKeyboard}
+          onDoubleClick={() => resizeInspector(DEFAULT_GRAPH_INSPECTOR_WIDTH)}
+        />
+      ) : null}
 
-      <aside
-        aria-label={selectedNode ? t('graphNodeDetails') : t('graphRunDetails')}
-        className="flex min-h-0 shrink-0 flex-col bg-ds-sidebar"
-        style={{ width: inspectorWidth }}
-      >
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          {selectedNode ? (
-            <GraphNodeInspector
-              run={run}
-              node={selectedNode}
-              onRetry={() => onRetry(selectedNode.node.id)}
-              onReview={(outcome) => onReview(selectedNode.node.id, outcome)}
-              onRebind={(profileId) => onRebind(selectedNode.node.id, profileId)}
-              onOpenChild={onOpenChild}
-              artifactPage={artifactPage}
-              artifactContent={artifactContent}
-              artifactLoading={artifactLoading}
-              onOpenArtifact={onOpenArtifact}
-              onNextArtifactPage={onNextArtifactPage}
-              onCloseArtifact={onCloseArtifact}
+      {inspectorOpen ? (
+        <>
+          {inspectorIsOverlay ? (
+            <button
+              type="button"
+              className="absolute inset-0 z-20 bg-slate-950/10 backdrop-blur-[1px]"
+              aria-label={t('graphCloseInspector')}
+              onClick={() => setInspectorOpen(false)}
             />
-          ) : (
-            <GraphRunInspector run={run} onPatch={onPatch} />
-          )}
-        </div>
-        <div className="flex shrink-0 items-end gap-2 border-t border-ds-border-muted p-3">
-          <textarea
-            value={steering}
-            onChange={(event) => onSteeringChange(event.target.value)}
-            rows={2}
-            placeholder={selectedNodeId
-              ? t('graphSteerNodePlaceholder')
-              : t('graphSteerRunPlaceholder')}
-            className="min-w-0 flex-1 resize-none rounded-lg border border-ds-border-muted bg-ds-card px-2.5 py-2 text-[11px] text-ds-ink outline-none focus:border-indigo-400"
-          />
-          <button
-            type="button"
-            disabled={!steering.trim()}
-            onClick={onSendSteering}
-            className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-600 text-white disabled:opacity-40"
-            aria-label={t('graphSendSteering')}
+          ) : null}
+          <aside
+            aria-label={selectedNode ? t('graphNodeDetails') : t('graphRunDetails')}
+            className={`graph-run-inspector ds-no-drag flex min-h-0 shrink-0 flex-col bg-ds-sidebar ${
+              inspectorIsOverlay
+                ? 'absolute inset-y-2 right-2 z-30 rounded-2xl border border-ds-border-muted shadow-2xl'
+                : ''
+            }`}
+            style={{
+              width: inspectorIsOverlay
+                ? Math.max(280, Math.min(380, containerWidth - 24))
+                : inspectorWidth
+            }}
           >
-            <Send className="h-3.5 w-3.5" />
-          </button>
-        </div>
-      </aside>
+            <header className="flex h-11 shrink-0 items-center justify-between border-b border-ds-border-muted px-3">
+              <div className="min-w-0">
+                <div className="truncate text-[11px] font-semibold text-ds-ink">
+                  {selectedNode?.node.title ?? t('graphRunDetails')}
+                </div>
+                <div className="text-[9px] text-ds-faint">
+                  {selectedNode ? t('graphNodeDetails') : t('graphInspectorRunOverview')}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setInspectorOpen(false)}
+                className="flex h-7 w-7 items-center justify-center rounded-lg text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+                aria-label={t('graphCloseInspector')}
+                title={t('graphCloseInspector')}
+              >
+                {inspectorIsOverlay
+                  ? <X className="h-3.5 w-3.5" />
+                  : <PanelRightClose className="h-3.5 w-3.5" />}
+              </button>
+            </header>
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              {selectedNode ? (
+                <GraphNodeInspector
+                  run={run}
+                  node={selectedNode}
+                  onRetry={() => onRetry(selectedNode.node.id)}
+                  onReview={(outcome) => onReview(selectedNode.node.id, outcome)}
+                  onRebind={(profileId) => onRebind(selectedNode.node.id, profileId)}
+                  onOpenChild={onOpenChild}
+                  artifactPage={artifactPage}
+                  artifactContent={artifactContent}
+                  artifactLoading={artifactLoading}
+                  onOpenArtifact={onOpenArtifact}
+                  onNextArtifactPage={onNextArtifactPage}
+                  onCloseArtifact={onCloseArtifact}
+                />
+              ) : (
+                <GraphRunInspector run={run} onPatch={onPatch} />
+              )}
+            </div>
+            <div className="flex shrink-0 items-end gap-2 border-t border-ds-border-muted bg-ds-card/50 p-3">
+              <textarea
+                value={steering}
+                onChange={(event) => onSteeringChange(event.target.value)}
+                rows={2}
+                placeholder={selectedNodeId
+                  ? t('graphSteerNodePlaceholder')
+                  : t('graphSteerRunPlaceholder')}
+                className="min-w-0 flex-1 resize-none rounded-xl border border-ds-border-muted bg-ds-card px-2.5 py-2 text-[11px] text-ds-ink outline-none focus:border-indigo-400"
+              />
+              <button
+                type="button"
+                disabled={!steering.trim()}
+                onClick={onSendSteering}
+                className="flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-600 text-white shadow-sm transition hover:bg-indigo-500 disabled:opacity-40"
+                aria-label={t('graphSendSteering')}
+              >
+                <Send className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </aside>
+        </>
+      ) : null}
     </div>
   )
 }

@@ -199,9 +199,9 @@ describe('Graph Mode panel projection', () => {
   })
 
   it('bounds the inspector while reserving usable canvas space', () => {
-    expect(clampGraphInspectorWidth(520, 900)).toBe(520)
-    expect(clampGraphInspectorWidth(800, 900)).toBe(522)
-    expect(clampGraphInspectorWidth(100, 900)).toBe(260)
-    expect(clampGraphInspectorWidth(360, 560)).toBe(320)
+    expect(clampGraphInspectorWidth(360, 900)).toBe(360)
+    expect(clampGraphInspectorWidth(800, 900)).toBe(378)
+    expect(clampGraphInspectorWidth(100, 900)).toBe(280)
+    expect(clampGraphInspectorWidth(360, 760)).toBe(319)
   })
 })

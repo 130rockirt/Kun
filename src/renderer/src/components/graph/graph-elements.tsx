@@ -22,54 +22,70 @@ export function graphElements(
     const status = projection?.status ?? 'pending'
     const attempt = projection?.attempts.at(-1)
     const selected = selectedNodeId === node.id
+    const phaseTitle = plan.phases.find((item) => item.id === node.phaseId)?.title ?? node.phaseId
+    const effectiveAssignment = attempt?.assignment.name ?? plannedAssignmentLabel(node)
     return {
       id: node.id,
       ariaLabel: `${node.title}: ${status.replaceAll('_', ' ')}; ${plannedAssignmentLabel(node)}`,
-      position: { x: phase * 300 + 36, y: row * 148 + 40 },
+      position: { x: phase * 292 + 56, y: row * 172 + 64 },
       selected,
       data: {
         label: (
-          <div className="w-[210px] space-y-2 p-1 text-left">
-            <div className="flex items-start justify-between gap-2">
-              <span className="line-clamp-2 text-[12px] font-semibold text-ds-ink">{node.title}</span>
+          <article className="graph-node-card w-[220px] text-left">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <span className="truncate text-[8px] font-semibold uppercase tracking-[0.08em] text-ds-faint">
+                {phaseTitle}
+              </span>
               <StatusPill status={status} />
             </div>
-            <div className="line-clamp-2 text-[10px] leading-4 text-ds-muted">{node.objective}</div>
-            <div className="flex items-center justify-between gap-2 text-[9px] text-ds-faint">
-              <span>{node.kind.replaceAll('_', ' ')}</span>
-              <span className="truncate">
-                {attempt?.assignment.name ?? plannedAssignmentLabel(node)}
+            <div className="flex items-start justify-between gap-2">
+              <span className="line-clamp-2 text-[12px] font-semibold leading-4 text-ds-ink">{node.title}</span>
+              <span className="shrink-0 rounded-md bg-ds-hover px-1.5 py-0.5 text-[8px] text-ds-muted">
+                {node.kind.replaceAll('_', ' ')}
+              </span>
+            </div>
+            <div className="mt-1.5 line-clamp-2 min-h-8 text-[9px] leading-4 text-ds-muted">
+              {node.objective}
+            </div>
+            <div className="mt-2 flex items-center gap-1.5 border-t border-ds-border-muted pt-2">
+              <span className="shrink-0 text-[8px] text-ds-faint">Agent</span>
+              <span
+                className="min-w-0 flex-1 truncate rounded-md bg-indigo-500/8 px-1.5 py-0.5 text-[8px] font-semibold text-indigo-700 dark:text-indigo-200"
+                title={effectiveAssignment}
+              >
+                {effectiveAssignment}
               </span>
             </div>
             {projection?.lastProgress?.percent !== undefined ? (
-              <div className="h-1 overflow-hidden rounded-full bg-ds-hover">
+              <div className="mt-2 h-1 overflow-hidden rounded-full bg-ds-hover">
                 <div
                   className="h-full rounded-full bg-indigo-500"
                   style={{ width: `${projection.lastProgress.percent}%` }}
                 />
               </div>
             ) : null}
-          </div>
+          </article>
         )
       },
       style: {
-        width: 232,
-        borderRadius: 14,
+        width: 244,
+        padding: 11,
+        borderRadius: 16,
         border: selected
-          ? '2px solid rgb(79 70 229 / 0.9)'
+          ? '1.5px solid rgb(79 70 229 / 0.95)'
           : status === 'running'
-          ? '1px solid rgb(99 102 241 / 0.65)'
+          ? '1px solid rgb(99 102 241 / 0.55)'
           : critical.has(node.id)
-            ? '1px solid rgb(245 158 11 / 0.65)'
+            ? '1px solid rgb(245 158 11 / 0.5)'
             : '1px solid var(--ds-border-muted)',
-        background: 'var(--ds-card)',
+        background: 'color-mix(in srgb, var(--ds-card) 96%, transparent)',
         boxShadow: selected
-          ? '0 0 0 4px rgb(79 70 229 / 0.16), 0 12px 28px rgb(15 23 42 / 0.10)'
+          ? '0 0 0 4px rgb(79 70 229 / 0.12), 0 14px 32px rgb(15 23 42 / 0.12)'
           : status === 'running'
-          ? '0 0 0 3px rgb(99 102 241 / 0.10)'
+          ? '0 0 0 3px rgb(99 102 241 / 0.08), 0 10px 25px rgb(15 23 42 / 0.08)'
           : critical.has(node.id)
-            ? '0 0 0 2px rgb(245 158 11 / 0.08)'
-            : '0 8px 24px rgb(15 23 42 / 0.06)'
+            ? '0 0 0 2px rgb(245 158 11 / 0.06), 0 8px 22px rgb(15 23 42 / 0.06)'
+            : '0 8px 22px rgb(15 23 42 / 0.055)'
       }
     }
   })
@@ -82,9 +98,11 @@ export function graphElements(
       id: edge.id,
       source: edge.from,
       target: edge.to,
+      type: 'smoothstep',
       label: edge.label ??
         (isLoop ? 'loop' : edge.kind === 'data' ? edge.artifactName : undefined),
       animated: !reducedMotion && run.nodes[edge.from]?.status === 'running',
+      interactionWidth: 18,
       style: {
         stroke: isLoop
           ? '#f59e0b'
@@ -95,10 +113,10 @@ export function graphElements(
               : isCritical
                 ? '#f59e0b'
                 : '#94a3b8',
-        strokeWidth: isCritical || isLoop ? 2 : 1,
+        strokeWidth: isCritical || isLoop ? 2 : 1.25,
         strokeDasharray: edge.kind === 'message' || isLoop ? '5 5' : undefined
       },
-      markerEnd: { type: MarkerType.ArrowClosed }
+      markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14 }
     }
   })
   return { nodes, edges }
