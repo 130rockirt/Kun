@@ -850,7 +850,7 @@ export function SubagentSettingsEditor({
             />
           </div>
 
-          <div className="grid min-h-[420px] lg:grid-cols-[minmax(0,1fr)_310px]">
+          <div className="grid min-h-[360px] lg:grid-cols-[minmax(0,1fr)_310px]">
             <div className="min-w-0 border-b border-ds-border-muted px-4 py-3 lg:border-b-0 lg:border-r">
               {groupedCatalogAgents.length > 0 ? groupedCatalogAgents.map(({ category, agents }) => {
                 const expanded = normalizedQuery.length > 0
@@ -1372,16 +1372,19 @@ function EditorSettingsCard({
   children: ReactNode
 }): ReactElement {
   return (
-    <section className="overflow-visible rounded-2xl border border-ds-border bg-ds-card/95 shadow-sm shadow-black/5 dark:shadow-black/25">
-      <div className="flex flex-col gap-3 border-b border-ds-border-muted px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+    <details className="group overflow-visible rounded-2xl border border-ds-border bg-ds-card/95 shadow-sm shadow-black/5 dark:shadow-black/25">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-5 py-3.5 transition hover:bg-ds-hover/55 group-open:border-b group-open:border-ds-border-muted [&::-webkit-details-marker]:hidden">
         <div className="min-w-0">
           <h2 className="text-[16px] font-semibold text-ds-ink">{title}</h2>
           {description ? <p className="mt-1 text-[13px] leading-5 text-ds-muted">{description}</p> : null}
         </div>
-        {action ? <div className="shrink-0">{action}</div> : null}
-      </div>
+        <div className="flex shrink-0 items-center gap-2">
+          {action}
+          <ChevronDown className="h-4 w-4 text-ds-faint transition group-open:rotate-180" />
+        </div>
+      </summary>
       <div className="divide-y divide-ds-border-muted px-2 py-1">{children}</div>
-    </section>
+    </details>
   )
 }
 

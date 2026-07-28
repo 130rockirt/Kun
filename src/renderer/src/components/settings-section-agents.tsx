@@ -174,7 +174,6 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
     effectiveWriteInlineModel,
     setWriteDebugModalOpen,
     loadWriteDebugEntries,
-    scrollToAgentSection,
     agentsSectionRef,
     skillSectionRef,
     mcpSectionRef,
@@ -255,6 +254,9 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
   const [tokenEconomySavingsState, setTokenEconomySavingsState] =
     useState<TokenEconomySavingsState>(EMPTY_TOKEN_ECONOMY_SAVINGS_STATE)
   const [mcpRawMode, setMcpRawMode] = useState(false)
+  const [activePanel, setActivePanel] = useState<
+    'assistant' | 'permissions' | 'skills' | 'tools' | 'project' | 'runtime'
+  >('assistant')
   const skillPermissionSummary = summarizeSkillPermissionSources(skillRoots, form.disabledSkillIds)
   const mcpPermissionSummary = useMemo(
     () => summarizeMcpPermissionSources(mcpConfigText),
@@ -476,17 +478,55 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
 
   return (
             <>
-              <div className="mb-6 flex flex-wrap gap-2">
-                <SectionJumpButton label={t('agentsQuickBase')} onClick={() => scrollToAgentSection('agents')} />
-                <SectionJumpButton label={t('agentsQuickSkill')} onClick={() => scrollToAgentSection('skill')} />
-                <SectionJumpButton label={t('agentsQuickMcp')} onClick={() => scrollToAgentSection('mcp')} />
+              <div
+                className="ds-settings-panel-tabs mb-4 flex flex-wrap gap-1.5 rounded-2xl border border-ds-border bg-ds-card/70 p-1.5 shadow-sm"
+                role="tablist"
+                aria-label={t('agents')}
+              >
+                <SectionJumpButton
+                  label={t('agentsQuickBase')}
+                  active={activePanel === 'assistant'}
+                  controls="agents-panel-assistant"
+                  onClick={() => setActivePanel('assistant')}
+                />
                 <SectionJumpButton
                   label={t('agentsQuickPermissions')}
-                  onClick={() => scrollToAgentSection('permissions')}
+                  active={activePanel === 'permissions'}
+                  controls="agents-panel-permissions"
+                  onClick={() => setActivePanel('permissions')}
+                />
+                <SectionJumpButton
+                  label={t('agentsQuickSkill')}
+                  active={activePanel === 'skills'}
+                  controls="agents-panel-skills"
+                  onClick={() => setActivePanel('skills')}
+                />
+                <SectionJumpButton
+                  label={t('agentsQuickMcp')}
+                  active={activePanel === 'tools'}
+                  controls="agents-panel-tools"
+                  onClick={() => setActivePanel('tools')}
+                />
+                <SectionJumpButton
+                  label={t('projectConfigTitle')}
+                  active={activePanel === 'project'}
+                  controls="agents-panel-project"
+                  onClick={() => setActivePanel('project')}
+                />
+                <SectionJumpButton
+                  label={t('kunAdvanced')}
+                  active={activePanel === 'runtime'}
+                  controls="agents-panel-runtime"
+                  onClick={() => setActivePanel('runtime')}
                 />
               </div>
 
-              <div ref={agentsSectionRef}>
+              <div
+                id="agents-panel-assistant"
+                ref={agentsSectionRef}
+                role="tabpanel"
+                className={activePanel === 'assistant' ? '' : 'hidden'}
+              >
                 <SettingsCard title={t('agents')}>
                   <SettingRow
                     title={t('autoStart')}
@@ -757,7 +797,14 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
                 </SettingsCard>
               </div>
 
-              <div className="mt-6" ref={permissionsSectionRef}>
+              <div
+                id="agents-panel-permissions"
+                role="tabpanel"
+                className={activePanel === 'permissions'
+                  ? 'grid items-start gap-4 xl:grid-cols-2'
+                  : 'hidden'}
+              >
+              <div ref={permissionsSectionRef}>
                 <SettingsCard title={t('permissions')}>
                   <div className="px-3 py-4">
                     <InlineNoticeView notice={{ tone: 'info', message: t('permissionsBehaviorHint') }} />
@@ -840,8 +887,13 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
                 selectControlClass={selectControlClass}
                 onChange={(patch) => updateKun({ graph: patch })}
               />
+              </div>
 
-              <div className="mt-6">
+              <div
+                id="agents-panel-project"
+                role="tabpanel"
+                className={activePanel === 'project' ? '' : 'hidden'}
+              >
                 <SettingsCard title={t('projectConfigTitle')}>
                   <div className="space-y-3 px-3 py-4">
                     <InlineNoticeView notice={{ tone: 'info', message: t('projectConfigDescription') }} />
@@ -1013,7 +1065,12 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
                 </SettingsCard>
               </div>
 
-              <div ref={skillSectionRef} className="mt-6">
+              <div
+                id="agents-panel-skills"
+                ref={skillSectionRef}
+                role="tabpanel"
+                className={activePanel === 'skills' ? '' : 'hidden'}
+              >
                 <SettingsCard title={t('skill')}>
                   <SettingRow
                     title={t('skillsDetectedDirs')}
@@ -1151,7 +1208,12 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
                 </SettingsCard>
               </div>
 
-              <div ref={mcpSectionRef} className="mt-6">
+              <div
+                id="agents-panel-tools"
+                ref={mcpSectionRef}
+                role="tabpanel"
+                className={activePanel === 'tools' ? '' : 'hidden'}
+              >
                 <SettingsCard title={t('mcp')}>
                   <SettingRow
                     title={t('mcpSearchEnabled')}
@@ -1382,8 +1444,12 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
                 </SettingsCard>
               </div>
 
-
-              <div className="mt-6">
+              <div
+                id="agents-panel-runtime"
+                role="tabpanel"
+                className={activePanel === 'runtime' ? 'grid items-start gap-4 xl:grid-cols-2' : 'hidden'}
+              >
+              <div>
                 <SettingsCard title={t('kunAdvanced')}>
                   <div className="px-3 py-4">
                     <AdvancedSettingsDisclosure
@@ -1802,7 +1868,7 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
                 </SettingsCard>
               </div>
 
-              <div className="mt-6">
+              <div>
                 <SettingsCard title={t('kunDiagnostics')}>
                   <div className="px-3 py-4">
                     <AdvancedSettingsDisclosure
@@ -1963,6 +2029,7 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
                     </AdvancedSettingsDisclosure>
                   </div>
                 </SettingsCard>
+              </div>
               </div>
             </>
   )

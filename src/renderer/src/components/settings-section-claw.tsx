@@ -340,8 +340,8 @@ export function ClawSettingsSection({ ctx }: { ctx: ClawSettingsContext }): Reac
           }
         />
         <SettingRow
-          title={t('clawRecentThreadListLimit')}
-          description={t('clawRecentThreadListLimitDesc')}
+          title={tCommon('clawRecentThreadListLimit')}
+          description={tCommon('clawRecentThreadListLimitDesc')}
           control={
             <input
               type="number"

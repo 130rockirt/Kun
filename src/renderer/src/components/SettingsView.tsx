@@ -1358,9 +1358,9 @@ export function SettingsView(): ReactElement {
       />
 
       <div className="ds-settings-stage relative min-h-0 min-w-0 flex-1 overflow-hidden">
-        <div className="ds-no-drag h-full min-h-0 overflow-y-auto px-6 py-8 lg:px-10 lg:py-10">
-          <div className={`mx-auto ${category === 'providers' ? 'max-w-6xl' : 'max-w-3xl'}`}>
-          {category !== 'providers' ? <div className="mb-6 flex items-start justify-between gap-5">
+        <div className="ds-settings-scroller ds-no-drag h-full min-h-0 overflow-y-auto px-5 py-6 lg:px-8 lg:py-8">
+          <div className="ds-settings-content mx-auto max-w-6xl">
+          {category !== 'providers' ? <div className="ds-settings-page-header mb-5 flex items-start justify-between gap-5">
             <div className="min-w-0">
               <h1 className="truncate text-2xl font-semibold tracking-tight text-ds-ink">
                 {categoryTitle}
@@ -1411,35 +1411,40 @@ export function SettingsView(): ReactElement {
             </div>
           ) : null}
 
-          {category === 'general' ? <GeneralSettingsSection ctx={settingsSectionContext} /> : null}
-          {category === 'extensions' && extensionSettingsService ? (
-            <ExtensionDeclarativeSettingsPane
-              contributions={extensionSettingsContributions}
-              workspaceRoot={extensionWorkspaceRoot}
-              service={extensionSettingsService}
-            />
-          ) : null}
-          <Suspense fallback={<SettingsSectionFallback />}>
-            {category === 'providers' ? <ProvidersSettingsSection ctx={settingsSectionContext} /> : null}
-            {category === 'write' ? <WriteSettingsSection ctx={settingsSectionContext} /> : null}
-            {category === 'design' ? <DesignSettingsSection ctx={settingsSectionContext} /> : null}
-            {category === 'mediaGeneration' ? <MediaGenerationSettingsSection ctx={settingsSectionContext} /> : null}
-            {category === 'speechToText' ? <SpeechToTextSettingsSection ctx={settingsSectionContext} /> : null}
-            {category === 'agents' ? (
-              <LoadedAgentsSettingsSection ctx={settingsSectionContext} onReady={markAgentsSectionReady} />
+          <div
+            className={`ds-settings-page ds-settings-page--${category}`}
+            data-settings-category-view={category}
+          >
+            {category === 'general' ? <GeneralSettingsSection ctx={settingsSectionContext} /> : null}
+            {category === 'extensions' && extensionSettingsService ? (
+              <ExtensionDeclarativeSettingsPane
+                contributions={extensionSettingsContributions}
+                workspaceRoot={extensionWorkspaceRoot}
+                service={extensionSettingsService}
+              />
             ) : null}
-            {category === 'subagents' ? <SubagentsSettingsSection ctx={settingsSectionContext} /> : null}
-            {category === 'archives' ? <ArchivedThreadsSettingsSection ctx={settingsSectionContext} /> : null}
-            {category === 'worktree' ? <WorktreeSettingsSection ctx={settingsSectionContext} /> : null}
-            {category === 'memory' ? <MemorySettingsSection ctx={settingsSectionContext} /> : null}
-            {category === 'shortcuts' ? <KeyboardShortcutsSettingsSection ctx={settingsSectionContext} /> : null}
-            {category === 'easterEgg' ? <EasterEggSettingsSection ctx={settingsSectionContext} /> : null}
-            {category === 'claw' ? <ClawSettingsSection ctx={settingsSectionContext} /> : null}
-            {category === 'updates' ? <UpdatesSettingsSection ctx={settingsSectionContext} /> : null}
-            {category === 'terminal' ? <TerminalSettingsSection ctx={settingsSectionContext} /> : null}
-            {category === 'debug' ? <LlmDebugSettingsSection ctx={settingsSectionContext} /> : null}
-            {category === 'dataMigration' ? <DataMigrationSettingsSection /> : null}
-          </Suspense>
+            <Suspense fallback={<SettingsSectionFallback />}>
+              {category === 'providers' ? <ProvidersSettingsSection ctx={settingsSectionContext} /> : null}
+              {category === 'write' ? <WriteSettingsSection ctx={settingsSectionContext} /> : null}
+              {category === 'design' ? <DesignSettingsSection ctx={settingsSectionContext} /> : null}
+              {category === 'mediaGeneration' ? <MediaGenerationSettingsSection ctx={settingsSectionContext} /> : null}
+              {category === 'speechToText' ? <SpeechToTextSettingsSection ctx={settingsSectionContext} /> : null}
+              {category === 'agents' ? (
+                <LoadedAgentsSettingsSection ctx={settingsSectionContext} onReady={markAgentsSectionReady} />
+              ) : null}
+              {category === 'subagents' ? <SubagentsSettingsSection ctx={settingsSectionContext} /> : null}
+              {category === 'archives' ? <ArchivedThreadsSettingsSection ctx={settingsSectionContext} /> : null}
+              {category === 'worktree' ? <WorktreeSettingsSection ctx={settingsSectionContext} /> : null}
+              {category === 'memory' ? <MemorySettingsSection ctx={settingsSectionContext} /> : null}
+              {category === 'shortcuts' ? <KeyboardShortcutsSettingsSection ctx={settingsSectionContext} /> : null}
+              {category === 'easterEgg' ? <EasterEggSettingsSection ctx={settingsSectionContext} /> : null}
+              {category === 'claw' ? <ClawSettingsSection ctx={settingsSectionContext} /> : null}
+              {category === 'updates' ? <UpdatesSettingsSection ctx={settingsSectionContext} /> : null}
+              {category === 'terminal' ? <TerminalSettingsSection ctx={settingsSectionContext} /> : null}
+              {category === 'debug' ? <LlmDebugSettingsSection ctx={settingsSectionContext} /> : null}
+              {category === 'dataMigration' ? <DataMigrationSettingsSection /> : null}
+            </Suspense>
+          </div>
           </div>
         </div>
       </div>

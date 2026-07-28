@@ -60,16 +60,27 @@ export function SecretInput({
 
 export function SectionJumpButton({
   label,
-  onClick
+  onClick,
+  active = false,
+  controls
 }: {
   label: string
   onClick: () => void
+  active?: boolean
+  controls?: string
 }): ReactElement {
   return (
     <button
       type="button"
+      role="tab"
+      aria-selected={active}
+      aria-controls={controls}
       onClick={onClick}
-      className="rounded-full border border-ds-border bg-ds-card px-3 py-1.5 text-[12px] font-medium text-ds-muted shadow-sm transition hover:bg-ds-hover hover:text-ds-ink"
+      className={`rounded-xl border px-3 py-1.5 text-[12px] font-medium shadow-sm transition ${
+        active
+          ? 'border-accent/35 bg-accent/12 text-accent'
+          : 'border-ds-border bg-ds-card text-ds-muted hover:bg-ds-hover hover:text-ds-ink'
+      }`}
     >
       {label}
     </button>
@@ -104,20 +115,49 @@ export function InlineNoticeView({
 export function SettingsCard({
   title,
   children,
-  className = ''
+  className = '',
+  collapsible = false,
+  defaultOpen = false,
+  description
 }: {
   title: string
   children: ReactNode
   className?: string
+  collapsible?: boolean
+  defaultOpen?: boolean
+  description?: string
 }): ReactElement {
+  if (collapsible) {
+    return (
+      <details
+        className={`ds-settings-card ds-settings-card--collapsible group overflow-hidden rounded-2xl border border-ds-border bg-ds-card/95 shadow-sm shadow-black/5 dark:shadow-black/25 ${className}`}
+        open={defaultOpen || undefined}
+      >
+        <summary className="ds-settings-card-header flex cursor-pointer list-none items-center justify-between gap-4 border-b border-transparent px-5 py-3 transition hover:bg-ds-hover/55 group-open:border-ds-border-muted [&::-webkit-details-marker]:hidden">
+          <span className="min-w-0">
+            <h2 className="text-[16px] font-semibold text-ds-ink">{title}</h2>
+            {description ? (
+              <span className="mt-0.5 block text-[12px] leading-5 text-ds-faint">{description}</span>
+            ) : null}
+          </span>
+          <ChevronDown
+            className="h-4 w-4 shrink-0 text-ds-faint transition group-open:rotate-180"
+            strokeWidth={1.9}
+          />
+        </summary>
+        <div className="ds-settings-card-body divide-y divide-ds-border-muted px-2 py-1">{children}</div>
+      </details>
+    )
+  }
+
   return (
     <section
-      className={`rounded-2xl border border-ds-border bg-ds-card/95 shadow-sm shadow-black/5 dark:shadow-black/25 ${className}`}
+      className={`ds-settings-card rounded-2xl border border-ds-border bg-ds-card/95 shadow-sm shadow-black/5 dark:shadow-black/25 ${className}`}
     >
-      <div className="border-b border-ds-border-muted px-5 py-3">
+      <div className="ds-settings-card-header border-b border-ds-border-muted px-5 py-3">
         <h2 className="text-[16px] font-semibold text-ds-ink">{title}</h2>
       </div>
-      <div className="divide-y divide-ds-border-muted px-2 py-1">{children}</div>
+      <div className="ds-settings-card-body divide-y divide-ds-border-muted px-2 py-1">{children}</div>
     </section>
   )
 }
@@ -140,9 +180,9 @@ export function SettingRow({
 
   return (
     <div
-      className={`flex gap-3 px-3 py-4 ${
+      className={`ds-setting-row flex gap-3 px-3 py-4 ${
         wideControl
-          ? 'flex-col sm:gap-3.5'
+          ? 'ds-setting-row--wide flex-col sm:gap-3.5'
           : 'flex-col sm:flex-row sm:items-start sm:justify-between sm:gap-8'
       }`}
     >
@@ -284,7 +324,7 @@ export function AdvancedSettingsDisclosure({
   children: ReactNode
 }): ReactElement {
   return (
-    <details className="group overflow-hidden rounded-xl border border-ds-border-muted bg-ds-main/35">
+    <details className="ds-settings-disclosure group overflow-hidden rounded-xl border border-ds-border-muted bg-ds-main/35">
       <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-left transition hover:bg-ds-hover/70 [&::-webkit-details-marker]:hidden">
         <span className="min-w-0">
           <span className="block text-[13px] font-semibold text-ds-ink">{title}</span>

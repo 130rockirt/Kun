@@ -565,6 +565,7 @@ export function GeneralSettingsSection({ ctx }: { ctx: Record<string, any> }): R
                 <SettingRow
                   title={t('cursorSpotlight')}
                   description={t('cursorSpotlightDesc')}
+                  wideControl
                   control={
                     <div className="grid w-full min-w-0 gap-3 md:max-w-md">
                       <div className="flex justify-end">
@@ -584,7 +585,12 @@ export function GeneralSettingsSection({ ctx }: { ctx: Record<string, any> }): R
                 />
               </SettingsCard>
 
-              <SettingsCard title={t('desktopBehavior')} className="mt-6">
+              <SettingsCard
+                title={t('desktopBehavior')}
+                description={t('desktopCloseActionDesc')}
+                className="mt-6"
+                collapsible
+              >
                 <SettingRow
                   title={t('desktopOpenAtLogin')}
                   description={
@@ -669,7 +675,12 @@ export function GeneralSettingsSection({ ctx }: { ctx: Record<string, any> }): R
 
               <LegacySessionImportCard t={t} tCommon={tCommon} />
 
-              <SettingsCard title={t('gitCheckpointTitle')} className="mt-6">
+              <SettingsCard
+                title={t('gitCheckpointTitle')}
+                description={t('checkpointCreateEnabledDesc')}
+                className="mt-6"
+                collapsible
+              >
                 <SettingRow
                   title={t('checkpointCreateEnabled')}
                   description={t('checkpointCreateEnabledDesc')}
@@ -748,7 +759,12 @@ export function GeneralSettingsSection({ ctx }: { ctx: Record<string, any> }): R
                 />
               </SettingsCard>
 
-              <SettingsCard title={t('logTitle')} className="mt-6">
+              <SettingsCard
+                title={t('logTitle')}
+                description={t('logEnabledDesc')}
+                className="mt-6"
+                collapsible
+              >
                 <SettingRow
                   title={t('logEnabled')}
                   description={t('logEnabledDesc')}

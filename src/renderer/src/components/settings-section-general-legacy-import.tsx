@@ -114,7 +114,12 @@ export function LegacySessionImportCard({
         : t('legacyImportNoneFound')
 
   return (
-    <SettingsCard title={t('legacyImportTitle')} className="mt-6">
+    <SettingsCard
+      title={t('legacyImportTitle')}
+      description={t('legacyImportDesc')}
+      className="mt-6"
+      collapsible
+    >
       <SettingRow
         title={t('legacyImportTitle')}
         description={t('legacyImportDesc')}

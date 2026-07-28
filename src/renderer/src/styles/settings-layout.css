@@ -1,0 +1,191 @@
+.ds-settings-content {
+  width: min(100%, 1180px);
+}
+
+.ds-settings-page {
+  min-width: 0;
+}
+
+.ds-settings-page :is(.ds-settings-card, .ds-settings-disclosure) {
+  min-width: 0;
+}
+
+.ds-settings-card {
+  container-type: inline-size;
+}
+
+.ds-settings-card-header {
+  padding-block: 0.7rem;
+}
+
+.ds-setting-row {
+  padding-block: 0.8rem;
+}
+
+.ds-setting-row p {
+  line-height: 1.45;
+}
+
+.ds-settings-page :is(.mt-5, .mt-6):has(> .ds-settings-card),
+.ds-settings-page > :is(.mt-5, .mt-6).ds-settings-card,
+.ds-settings-page > .ds-settings-card:is(.mt-5, .mt-6) {
+  margin-top: 0;
+}
+
+.ds-settings-page--general,
+.ds-settings-page--write,
+.ds-settings-page--claw {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-auto-flow: row dense;
+  align-items: start;
+  gap: 1rem;
+}
+
+.ds-settings-page--general > :nth-child(2),
+.ds-settings-page--write > :nth-child(1),
+.ds-settings-page--claw > :nth-child(1) {
+  grid-column: 1 / -1;
+}
+
+.ds-settings-page--design > div,
+.ds-settings-page--mediaGeneration > div {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 1rem;
+}
+
+.ds-settings-page--design > div > :last-child,
+.ds-settings-page--mediaGeneration > div > :first-child {
+  grid-column: 1 / -1;
+}
+
+.ds-settings-page--general > .ds-settings-card:nth-child(2) .ds-settings-card-body,
+.ds-settings-page--write > .ds-settings-card:nth-child(1) .ds-settings-card-body,
+#agents-panel-assistant > .ds-settings-card .ds-settings-card-body,
+.ds-settings-page--speechToText > .ds-settings-card .ds-settings-card-body,
+.ds-settings-page--updates > .ds-settings-card .ds-settings-card-body,
+.ds-settings-page--terminal > .ds-settings-card .ds-settings-card-body {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.ds-settings-page--general > .ds-settings-card:nth-child(2) .ds-setting-row,
+.ds-settings-page--write > .ds-settings-card:nth-child(1) .ds-setting-row,
+#agents-panel-assistant > .ds-settings-card .ds-setting-row,
+.ds-settings-page--speechToText > .ds-settings-card .ds-setting-row,
+.ds-settings-page--updates > .ds-settings-card .ds-setting-row,
+.ds-settings-page--terminal > .ds-settings-card .ds-setting-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.72fr) minmax(0, 1.28fr);
+  align-items: start;
+  gap: 1rem;
+  border-bottom: 1px solid var(--ds-border-muted);
+}
+
+.ds-settings-page--general > .ds-settings-card:nth-child(2) .ds-setting-row--wide,
+.ds-settings-page--write > .ds-settings-card:nth-child(1) .ds-setting-row--wide,
+#agents-panel-assistant > .ds-settings-card .ds-setting-row--wide,
+.ds-settings-page--speechToText > .ds-settings-card .ds-setting-row--wide,
+.ds-settings-page--updates > .ds-settings-card .ds-setting-row--wide,
+.ds-settings-page--terminal > .ds-settings-card .ds-setting-row--wide {
+  grid-column: 1 / -1;
+  grid-template-columns: 1fr;
+}
+
+.ds-settings-page--general > .ds-settings-card:nth-child(2) .ds-setting-row > :last-child,
+.ds-settings-page--write > .ds-settings-card:nth-child(1) .ds-setting-row > :last-child,
+#agents-panel-assistant > .ds-settings-card .ds-setting-row > :last-child,
+.ds-settings-page--speechToText > .ds-settings-card .ds-setting-row > :last-child,
+.ds-settings-page--updates > .ds-settings-card .ds-setting-row > :last-child,
+.ds-settings-page--terminal > .ds-settings-card .ds-setting-row > :last-child {
+  width: 100%;
+  max-width: none;
+  justify-content: flex-start;
+}
+
+.ds-settings-page--general > .ds-settings-card:nth-child(2) .ds-setting-row > :last-child > *,
+.ds-settings-page--write > .ds-settings-card:nth-child(1) .ds-setting-row > :last-child > *,
+#agents-panel-assistant > .ds-settings-card .ds-setting-row > :last-child > *,
+.ds-settings-page--speechToText > .ds-settings-card .ds-setting-row > :last-child > *,
+.ds-settings-page--updates > .ds-settings-card .ds-setting-row > :last-child > *,
+.ds-settings-page--terminal > .ds-settings-card .ds-setting-row > :last-child > * {
+  max-width: none;
+}
+
+.ds-settings-page--shortcuts .ds-settings-card-body > div:last-child {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.ds-settings-page--shortcuts .ds-settings-card-body > div:last-child > * {
+  border-bottom: 1px solid var(--ds-border-muted);
+}
+
+.ds-settings-page--dataMigration [data-testid='data-migration-settings'] {
+  padding-bottom: 1rem;
+}
+
+.ds-settings-page--subagents [data-testid='subagent-settings-editor'] > :first-child {
+  display: none;
+}
+
+@container (max-width: 580px) {
+  .ds-setting-row:not(.ds-setting-row--wide) {
+    flex-direction: column;
+    gap: 0.65rem;
+  }
+
+  .ds-setting-row:not(.ds-setting-row--wide) > :last-child {
+    width: 100%;
+    max-width: none;
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 1050px) {
+  .ds-settings-content {
+    width: min(100%, 880px);
+  }
+
+  .ds-settings-page--general,
+  .ds-settings-page--write,
+  .ds-settings-page--claw,
+  .ds-settings-page--design > div,
+  .ds-settings-page--mediaGeneration > div {
+    grid-template-columns: 1fr;
+  }
+
+  .ds-settings-page--general > *,
+  .ds-settings-page--write > *,
+  .ds-settings-page--claw > *,
+  .ds-settings-page--design > div > *,
+  .ds-settings-page--mediaGeneration > div > * {
+    grid-column: 1;
+  }
+
+  .ds-settings-page--shortcuts .ds-settings-card-body > div:last-child {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 760px) {
+  .ds-settings-scroller {
+    padding: 1.25rem;
+  }
+
+  .ds-settings-page-header {
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .ds-settings-page--general > .ds-settings-card:nth-child(2) .ds-settings-card-body,
+  .ds-settings-page--write > .ds-settings-card:nth-child(1) .ds-settings-card-body,
+  #agents-panel-assistant > .ds-settings-card .ds-settings-card-body,
+  .ds-settings-page--speechToText > .ds-settings-card .ds-settings-card-body,
+  .ds-settings-page--updates > .ds-settings-card .ds-settings-card-body,
+  .ds-settings-page--terminal > .ds-settings-card .ds-settings-card-body {
+    grid-template-columns: 1fr;
+  }
+}

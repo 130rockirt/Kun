@@ -489,10 +489,10 @@ export function WriteSettingsSection({ ctx }: { ctx: Record<string, any> }): Rea
 
                       <div>
                         <div className="text-[13px] font-semibold text-ds-ink">
-                          {t('writeDesignDraftPromptLabel')}
+                          {tCommon('writeDesignDraftPromptLabel')}
                         </div>
                         <p className="mt-1 text-[12.5px] leading-5 text-ds-faint">
-                          {t('writeDesignDraftPromptDesc')}
+                          {tCommon('writeDesignDraftPromptDesc')}
                         </p>
                         <textarea
                           className={`${textInputClass} mt-2 min-h-[72px] resize-y leading-5`}
@@ -507,10 +507,10 @@ export function WriteSettingsSection({ ctx }: { ctx: Record<string, any> }): Rea
 
                       <div>
                         <div className="text-[13px] font-semibold text-ds-ink">
-                          {t('writePrototypePromptLabel')}
+                          {tCommon('writePrototypePromptLabel')}
                         </div>
                         <p className="mt-1 text-[12.5px] leading-5 text-ds-faint">
-                          {t('writePrototypePromptDesc')}
+                          {tCommon('writePrototypePromptDesc')}
                         </p>
                         <textarea
                           className={`${textInputClass} mt-2 min-h-[72px] resize-y leading-5`}
@@ -632,7 +632,12 @@ export function WriteSettingsSection({ ctx }: { ctx: Record<string, any> }): Rea
                 </div>
               </SettingsCard>
 
-              <SettingsCard title={t('writeAgentPresets')} className="mt-5">
+              <SettingsCard
+                title={t('writeAgentPresets')}
+                description={t('writeAgentPresetsDesc')}
+                className="mt-5"
+                collapsible
+              >
                 <div className="px-3 py-4">
                   <p className="text-[12.5px] leading-5 text-ds-faint">
                     {t('writeAgentPresetsDesc')}
