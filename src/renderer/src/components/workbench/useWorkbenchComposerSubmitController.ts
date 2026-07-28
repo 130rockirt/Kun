@@ -50,7 +50,14 @@ import {
 
 type PlanTurnOverrides = Pick<
   SendMessageOverrides,
-  'attachmentIds' | 'attachments' | 'displayText' | 'fileReferences' | 'guiPlan' | 'model' | 'reasoningEffort'
+  | 'attachmentIds'
+  | 'attachments'
+  | 'displayText'
+  | 'fileReferences'
+  | 'guiPlan'
+  | 'model'
+  | 'providerId'
+  | 'reasoningEffort'
 > & {
   workspaceRoot?: string
 }

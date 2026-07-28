@@ -46,7 +46,14 @@ type PendingSddPlanTarget = {
 
 type PlanTurnOverrides = Pick<
   SendMessageOverrides,
-  'attachmentIds' | 'attachments' | 'displayText' | 'fileReferences' | 'guiPlan' | 'model' | 'reasoningEffort'
+  | 'attachmentIds'
+  | 'attachments'
+  | 'displayText'
+  | 'fileReferences'
+  | 'guiPlan'
+  | 'model'
+  | 'providerId'
+  | 'reasoningEffort'
 > & {
   workspaceRoot?: string
 }
@@ -131,6 +138,21 @@ function sddAssistantContextFromBlocks(blocks: ChatBlock[], maxMessages = 10): s
     messages.push(`${block.kind === 'user' ? 'User' : 'Requirement AI'}:\n${text}`)
   }
   return messages.slice(-maxMessages).join('\n\n').slice(0, 12_000)
+}
+
+export function buildSddAssistantModelOverrides(input: {
+  model: string
+  providerId: string
+  reasoningEffort: ComposerReasoningEffort
+}): Pick<SendMessageOverrides, 'model' | 'providerId' | 'reasoningEffort'> {
+  const model = input.model.trim()
+  const providerId = input.providerId.trim()
+  const reasoningEffort = composerReasoningEffortRequestValue(input.reasoningEffort)
+  return {
+    ...(model ? { model } : {}),
+    ...(providerId ? { providerId } : {}),
+    ...(reasoningEffort ? { reasoningEffort } : {})
+  }
 }
 
 export function useWorkbenchSddTurnController({
@@ -272,16 +294,16 @@ export function useWorkbenchSddTurnController({
       ...(frameworkId ? { frameworkIds: [frameworkId] } : {})
     })
     setInput('')
-    const model = writeAssistantModel.trim()
-    const providerId = resolvedWriteAssistantProviderId.trim()
-    const reasoningEffort = composerReasoningEffortRequestValue(composerReasoningEffort)
+    const modelOverrides = buildSddAssistantModelOverrides({
+      model: writeAssistantModel,
+      providerId: resolvedWriteAssistantProviderId,
+      reasoningEffort: composerReasoningEffort
+    })
     const sent = await sendMessage(prompt, composerMode === 'plan' ? 'plan' : 'agent', {
       displayText: v || (documentAttachments.length > 0
         ? t('composerFileOnlyDisplay', { count: documentAttachments.length })
         : t('composerImageOnlyDisplay')),
-      ...(model ? { model } : {}),
-      ...(providerId ? { providerId } : {}),
-      ...(reasoningEffort ? { reasoningEffort } : {}),
+      ...modelOverrides,
       ...(attachmentIds.length ? { attachmentIds } : {}),
       ...(publicAttachments.length ? { attachments: publicAttachments } : {})
     })
@@ -494,9 +516,15 @@ export function useWorkbenchSddTurnController({
       workspaceRoot: draft.workspaceRoot
     }
     setComposerMode('plan')
+    const modelOverrides = buildSddAssistantModelOverrides({
+      model: writeAssistantModel,
+      providerId: resolvedWriteAssistantProviderId,
+      reasoningEffort: composerReasoningEffort
+    })
     const sent = await sendPlanTurn(prompt, {
       displayText: t('sddGeneratePlanAction'),
       workspaceRoot: draft.workspaceRoot,
+      ...modelOverrides,
       guiPlan: {
         operation: 'draft',
         workspaceRoot: draft.workspaceRoot,
@@ -528,13 +556,16 @@ export function useWorkbenchSddTurnController({
     }
   }, [
     blocks,
+    composerReasoningEffort,
     ensureSddAssistantThreadForDraft,
+    resolvedWriteAssistantProviderId,
     runtimeInfo,
     sendPlanTurn,
     setComposerMode,
     setError,
     t,
-    uploadSddImagesAsAttachments
+    uploadSddImagesAsAttachments,
+    writeAssistantModel
   ])
 
   const startNewSddAssistantConversation = useCallback((): void => {
