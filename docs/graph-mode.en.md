@@ -12,7 +12,7 @@ The detailed Chinese guide is [graph-mode.md](./graph-mode.md).
 
 Graph Mode has three separable planes:
 
-1. Execution: plans, runs, nodes, attempts, typed edges, budgets, mailbox,
+1. Execution: plans, runs, nodes, attempts, typed edges, resource accounting, mailbox,
    artifacts, reviews, scheduling, and recovery.
 2. Project capability: versioned Agent profiles, Skill and Graph Recipe
    candidates, routing, scores, and evidence.
@@ -74,7 +74,7 @@ truth. Accepted history is immutable.
 ## Validation, revisions, and loops
 
 The host validates identity, references, reachability, completion paths, edge
-kinds, assignments, scopes, reviews, risk, and every configured budget.
+kinds, assignments, scopes, reviews, risk, and every configured non-token resource limit.
 Ordinary dependencies must be acyclic. A logical cycle is valid only inside a
 strongly connected component with an explicit bounded LoopGate.
 
@@ -84,7 +84,7 @@ revalidated and committed as one revision while accepted facts remain as
 superseded history.
 
 A LoopGate declares a condition source, continuation, exit and exhaustion
-targets, maximum iterations, and optional token budget. Every continuation
+targets, and maximum iterations. Every continuation
 writes `loop_iteration_advanced`, resets only the host-computed cycle nodes,
 preserves prior attempts, creates attempts at a new iteration, and increments
 the run ledger. Exhaustion can never create another attempt. Repeated identical
@@ -99,7 +99,12 @@ priority and retry delay, and enforces:
 - global and per-run concurrent nodes;
 - attempts and capped exponential retry;
 - run and node wall time;
-- revisions, loops, tokens, messages, and artifact bytes.
+- revisions, loops, messages, and artifact bytes.
+
+Token usage is recorded for cost attribution and learning evidence only. Graph
+plans, nodes, loops, and immutable worker assignments have no token ceiling,
+and the scheduler never pauses, fails, warns, or suppresses work because of
+token count.
 
 Runs rotate fairly. Node timeout is enforced with a host AbortSignal. Cancel
 first fences the run as terminal, aborts and waits for active workers, discards
@@ -111,7 +116,7 @@ idempotent.
 
 Every attempt freezes profile/version/origin, model/provider/reasoning,
 system instructions, tools, Skills, MCP servers, approval, sandbox, workspace,
-read/write scopes, network, and time/token limits. Effective authority is the
+read/write scopes, network, and time limits. Effective authority is the
 intersection of parent, graph, profile, node, and host policy.
 
 Workers never receive delegation, Graph creation/control/patch/review, or
@@ -132,7 +137,7 @@ Review policies can require deterministic, peer, Lead, human, or combined
 approval. A peer is a different child instance. Risky writes add Lead review;
 critical risk can require a human.
 
-Supervision is event driven for submission, failure, stall, conflict, budget,
+Supervision is event driven for submission, failure, stall, conflict, resource-limit,
 help, recovery, completion, and user steering. Normal progress does not poll a
 model. Signals coalesce, and `graph_runtime` Lead turns serialize with user
 turns.
@@ -146,7 +151,7 @@ disposition. Unaccepted, conflicted, or orphaned worktrees are preserved.
 
 Completion requires accepted required/completion nodes, no active or
 review-pending nodes, all required reviews, no mailbox blocker, safe write
-integration, a closed budget ledger, durable cleanup disposition, and one
+integration, settled resource accounting, durable cleanup disposition, and one
 persisted synthesis with evidence, changed files, checks, risks, and cost.
 
 ## Project agents, scoring, and learning
@@ -243,7 +248,7 @@ flows through the existing RuntimeEventRecorder/SSE thread cursor.
 
 When enabled, the composer exposes `Direct | Graph`. The Graph workbench tab
 renders phases, typed edges, loops, revisions, minimap/navigation, state and
-budget summaries, phase collapse and an accessible list fallback. Node detail
+resource summaries, phase collapse and an accessible list fallback. Node detail
 includes the immutable assignment, permissions, tools/Skills, attempts, child
 session, bounded paged artifacts, checks, reviews, writes, worktrees, and
 errors. Run controls include rebind and versioned CAS GraphPatch operations in

@@ -42,7 +42,7 @@ export function unmountGraphWorkbenchSmokeFixture(): void {
 
 function GraphWorkbenchSmokeView(): ReactElement {
   const run = useMemo(() => smokeRun(), [])
-  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>('research')
   const [steering, setSteering] = useState('')
   const selectedNode = selectedNodeId ? run.nodes[selectedNodeId] : undefined
   const elements = graphElements(run, true, selectedNodeId)
@@ -118,7 +118,6 @@ function planNode(
         deterministicChecks: []
       }
     },
-    tokenBudget: 12_000,
     timeoutMs: 600_000,
     maxAttempts: 2,
     readScopes: ['src'],
@@ -175,7 +174,6 @@ function smokeRun(): GraphRun {
     steering: [],
     budget: {
       limits: {
-        maxTotalTokens: 80_000,
         maxWallTimeMs: 2_700_000,
         maxAttemptsPerNode: 3
       },

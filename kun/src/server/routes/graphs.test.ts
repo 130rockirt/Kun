@@ -121,6 +121,39 @@ describe('Graph HTTP routes', () => {
     expect(testRuntime.graph!.control.retryNode).not.toHaveBeenCalled()
   })
 
+  it('returns a bounded summary page instead of full GraphRun snapshots', async () => {
+    const testRuntime = runtime()
+    vi.mocked(testRuntime.graph!.control.list).mockResolvedValueOnce([{
+      id: 'run_1',
+      threadId: 'thread_1',
+      projectId: 'project_1',
+      sourceTurnId: 'turn_1',
+      status: 'running',
+      currentRevision: 2,
+      lastEventSeq: 7,
+      plans: [{ title: 'Bounded run', goal: 'Verify list projections' }],
+      nodes: { node_1: {}, node_2: {} },
+      createdAt: '2026-07-26T00:00:00.000Z',
+      updatedAt: '2026-07-26T00:01:00.000Z'
+    }] as never)
+
+    const response = await dispatch(
+      testRuntime,
+      'GET',
+      '/v1/graphs?thread_id=thread_1&limit=1',
+      undefined,
+      { authorization: 'Bearer graph-route-token' }
+    )
+    const body = JSON.parse(response.body)
+    expect(body.runs).toEqual([expect.objectContaining({
+      id: 'run_1',
+      title: 'Bounded run',
+      nodeCount: 2
+    })])
+    expect(body.runs[0]).not.toHaveProperty('plans')
+    expect(body.runs[0]).not.toHaveProperty('nodes')
+  })
+
   it('returns bounded replay events after reconciling the selected run', async () => {
     const testRuntime = runtime()
     const response = await dispatch(
@@ -133,7 +166,11 @@ describe('Graph HTTP routes', () => {
 
     expect(response.status).toBe(200)
     expect(JSON.parse(response.body)).toEqual({
-      events: [{ eventId: 'event_2', graphSeq: 2 }]
+      events: [{ eventId: 'event_2', graphSeq: 2 }],
+      replayFloorSeq: 1,
+      currentSeq: 0,
+      snapshotSeq: 0,
+      truncated: false
     })
     expect(testRuntime.graph!.control.get).toHaveBeenCalledWith('run_1')
     expect(testRuntime.graph!.store.events).toHaveBeenCalledWith('run_1', 1)

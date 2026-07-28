@@ -23,12 +23,21 @@ export type ToolProviderKind =
   | 'video'
   | 'extension'
 
+export type ToolEffects = {
+  network: boolean
+  externalWrite: boolean
+  processExecution: boolean
+  guiAutomation: boolean
+}
+
 export type ToolProviderPolicy = {
   id: string
   kind: ToolProviderKind
   enabled: boolean
   available: boolean
   reason?: string
+  /** Host-authored effects. Omission means unknown and is denied by restricted Graph workers. */
+  effects?: ToolEffects
 }
 
 /**

@@ -109,10 +109,34 @@ describe('FileGraphRunStore', () => {
       graph: { runId: 'run_1', graphSeq: 1 }
     })
     expect(published).toEqual(persisted)
+
+    const journal = (await readFile(
+      join(root, 'graphs', 'run_1', 'events.jsonl'),
+      'utf8'
+    )).trim().split('\n').map((line) => JSON.parse(line))
+    await writeFile(
+      join(root, 'graphs', 'run_1', 'runtime-outbox.json'),
+      `${JSON.stringify(journal.map((record) => record.envelope))}\n`,
+      'utf8'
+    )
+    const restartedRecorder = new RuntimeEventRecorder({
+      eventBus,
+      sessionStore: sessions,
+      allocateSeq: (threadId) => eventBus.allocateSeq(threadId),
+      nowIso: () => new Date().toISOString()
+    })
+    const restartedStore = new FileGraphRunStore({
+      rootDir: join(root, 'graphs'),
+      artifactStore: new FileArtifactStore(join(root, 'artifacts')),
+      config: () => testGraphConfig(),
+      runtimeEvents: restartedRecorder
+    })
+    expect((await createRun(restartedStore)).duplicate).toBe(true)
+    expect(await sessions.loadEventsSince('thread_1', 0)).toHaveLength(1)
   })
 
   it('uses command/idempotency records to suppress duplicate side effects', async () => {
-    const { store } = await fixture()
+    const { store, runtimeEvents } = await fixture()
     const first = await createRun(store)
     const duplicateCreate = await createRun(store)
     expect(duplicateCreate.duplicate).toBe(true)
@@ -133,6 +157,32 @@ describe('FileGraphRunStore', () => {
     expect(applied.duplicate).toBe(false)
     expect(duplicate.duplicate).toBe(true)
     expect(duplicate.state.lastEventSeq).toBe(2)
+    expect(runtimeEvents).toHaveLength(2)
+  })
+
+  it('retries an undelivered runtime outbox event without duplicating graph truth', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-graph-outbox-'))
+    roots.push(root)
+    const delivered: RuntimeEventDraft[] = []
+    let calls = 0
+    const store = new FileGraphRunStore({
+      rootDir: join(root, 'graphs'),
+      config: () => testGraphConfig(),
+      runtimeEvents: {
+        record: async (event) => {
+          calls += 1
+          if (calls === 1) throw new Error('temporary recorder failure')
+          delivered.push(event)
+          return event as never
+        }
+      }
+    })
+
+    await expect(createRun(store)).rejects.toThrow('temporary recorder failure')
+    const retried = await createRun(store)
+    expect(retried.duplicate).toBe(true)
+    expect(retried.run.lastEventSeq).toBe(1)
+    expect(delivered).toHaveLength(1)
   })
 
   it('serializes optimistic appends so only one stale writer commits', async () => {
@@ -251,5 +301,24 @@ describe('FileGraphRunStore', () => {
       lastEventSeq: 5
     })
     expect((await reloaded.events('run_1', 0)).map((event) => event.graphSeq)).toEqual([4, 5])
+    await expect(reloaded.append('run_1', {
+      expectedSeq: 1,
+      graphRevision: 1,
+      commandId: 'command_validating',
+      idempotencyKey: 'transition_validating',
+      event: {
+        type: 'run_status_changed',
+        payload: { from: 'draft', to: 'validating' }
+      }
+    })).resolves.toMatchObject({
+      duplicate: true,
+      state: { lastEventSeq: 5 }
+    })
+    expect(await reloaded.eventReplay('run_1', 0)).toMatchObject({
+      replayFloorSeq: 4,
+      currentSeq: 5,
+      snapshotSeq: 5,
+      truncated: true
+    })
   })
 })

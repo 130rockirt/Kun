@@ -90,4 +90,16 @@ describe('Kun Graph settings', () => {
 
     expect(normalized.agents.kun.graph).not.toHaveProperty('unknownPolicy')
   })
+
+  it('drops the legacy Graph token ceiling during normalization', () => {
+    const normalized = normalizeKunGraphSettings({
+      ...defaultKunGraphSettings(),
+      scheduler: {
+        ...defaultKunGraphSettings().scheduler,
+        maxTotalTokens: 1
+      }
+    } as Parameters<typeof normalizeKunGraphSettings>[0])
+
+    expect(normalized.scheduler).not.toHaveProperty('maxTotalTokens')
+  })
 })

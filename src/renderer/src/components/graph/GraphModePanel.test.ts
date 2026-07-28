@@ -66,7 +66,6 @@ function graphRun(nodes: GraphPlanNode[], edges: GraphRun['plans'][number]['edge
     steering: [],
     budget: {
       limits: {
-        maxTotalTokens: 100_000,
         maxWallTimeMs: 60_000,
         maxAttemptsPerNode: 3
       },

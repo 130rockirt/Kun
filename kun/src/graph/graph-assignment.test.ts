@@ -7,6 +7,9 @@ const parent: GraphParentAuthority = {
   workspaceRoot: '/workspace',
   model: 'parent-model',
   providerId: 'parent-provider',
+  allowedModelProviderIds: ['parent-provider'],
+  allowedModels: ['parent-model'],
+  allowedProviderIds: ['builtin'],
   reasoningEffort: 'medium',
   approvalPolicy: 'on-request',
   sandboxMode: 'workspace-write',
@@ -45,8 +48,7 @@ describe('GraphAssignmentResolver', () => {
       node,
       reference: node.assignment,
       parent,
-      maxWallTimeMs: 60_000,
-      maxTokens: 10_000
+      maxWallTimeMs: 60_000
     })
 
     expect(assignment).toMatchObject({
@@ -91,8 +93,7 @@ describe('GraphAssignmentResolver', () => {
       node,
       reference: node.assignment,
       parent,
-      maxWallTimeMs: 60_000,
-      maxTokens: 10_000
+      maxWallTimeMs: 60_000
     })
 
     expect(assignment).toMatchObject({
@@ -140,8 +141,31 @@ describe('GraphAssignmentResolver', () => {
       node,
       reference: node.assignment,
       parent,
-      maxWallTimeMs: 60_000,
-      maxTokens: 10_000
+      maxWallTimeMs: 60_000
+    })).rejects.toThrow('expands parent authority')
+  })
+
+  it('rejects model and provider overrides outside the captured parent allow-list', async () => {
+    const node = {
+      ...testGraphPlan().nodes[0]!,
+      assignment: {
+        kind: 'ephemeral' as const,
+        name: 'Routing escalation',
+        systemPrompt: 'Try another provider.',
+        model: 'unapproved-model',
+        providerId: 'unapproved-provider',
+        toolPolicy: 'readOnly' as const,
+        blockedTools: [],
+        blockedSkills: [],
+        blockedMcpServers: []
+      }
+    }
+    await expect(new GraphAssignmentResolver({ registry }).resolve({
+      projectId: 'project_1',
+      node,
+      reference: node.assignment,
+      parent,
+      maxWallTimeMs: 60_000
     })).rejects.toThrow('expands parent authority')
   })
 })

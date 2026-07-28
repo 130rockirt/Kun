@@ -121,11 +121,7 @@ export function GraphNodeInspector({
         <Metric label={t('graphPlannedAssignment')} value={plannedAssignment} />
         <Metric label={t('graphDispatchState')} value={dispatchState} />
       </div>
-      <div className="grid grid-cols-3 gap-2 text-[10px]">
-        <Metric
-          label={t('graphNodeTokenBudget')}
-          value={node.node.tokenBudget?.toLocaleString() ?? t('graphInheritedValue')}
-        />
+      <div className="grid grid-cols-2 gap-2 text-[10px]">
         <Metric
           label={t('graphNodeTimeout')}
           value={node.node.timeoutMs
@@ -213,8 +209,7 @@ export function GraphNodeInspector({
               `${t('graphNetworkLabel')}: ${attempt.assignment.networkAllowed
                 ? t('graphEnabledValue')
                 : t('graphDisabledValue')}`,
-              `${t('graphWallTimeLabel')}: ${Math.round(attempt.assignment.maxWallTimeMs / 1000)}s`,
-              `${t('graphTokenLimitLabel')}: ${attempt.assignment.maxTokens.toLocaleString()}`
+              `${t('graphWallTimeLabel')}: ${Math.round(attempt.assignment.maxWallTimeMs / 1000)}s`
             ]}
           />
           {attempt.assignment.allowedTools.length ? (
@@ -353,10 +348,23 @@ export function GraphNodeInspector({
       {attempt?.result?.changedFiles.length ? (
         <InspectorList title={t('graphChangedFiles')} values={attempt.result.changedFiles} />
       ) : null}
-      {attempt?.result?.checks.length ? (
+      {(attempt?.result?.verifiedChecks?.length ||
+        attempt?.result?.reportedChecks?.length ||
+        attempt?.result?.checks?.length) ? (
         <InspectorList
           title={t('graphChecks')}
-          values={attempt.result.checks.map((check) =>
+          values={[
+            ...(attempt.result.verifiedChecks ?? []).map((check) => ({
+              ...check,
+              name: `[verified] ${check.name}`
+            })),
+            ...(attempt.result.reportedChecks?.length
+              ? attempt.result.reportedChecks
+              : attempt.result.checks ?? []).map((check) => ({
+                ...check,
+                name: `[reported] ${check.name}`
+              }))
+          ].map((check) =>
             `${check.name}: ${check.status} — ${check.summary}`)}
         />
       ) : null}

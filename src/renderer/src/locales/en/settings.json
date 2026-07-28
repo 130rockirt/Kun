@@ -1706,8 +1706,6 @@
   "graphSettingsAttemptsDesc": "Hard retry cap including repairs and restart recovery.",
   "graphSettingsLoops": "Loop iterations",
   "graphSettingsLoopsDesc": "Global hard cap for validated loop gates; zero prohibits cycles.",
-  "graphSettingsTokenBudget": "Run token budget",
-  "graphSettingsTokenBudgetDesc": "Hard total token ceiling across Lead, workers, retries, reviewers, and synthesis.",
   "graphSettingsRunHours": "Run timeout (hours)",
   "graphSettingsRunHoursDesc": "Maximum wall-clock lifetime of one Graph run, including pauses and recovery.",
   "graphSettingsWriteIsolation": "Write isolation",

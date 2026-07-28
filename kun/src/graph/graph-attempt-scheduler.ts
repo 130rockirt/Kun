@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto'
 import {
   GRAPH_CONTRACT_VERSION,
   type GraphNodeAttemptV1,
@@ -9,7 +8,6 @@ import type { ChildRunRecord } from '../delegation/delegation-runtime.js'
 import { buildGraphWorkerContext } from './graph-worker-context.js'
 import type { GraphPathLease } from './graph-write-coordinator.js'
 import {
-  downstreamNodeIds,
   errorMessage,
   findAttempt,
   isTerminalAttemptStatus,
@@ -76,6 +74,9 @@ export abstract class GraphAttemptScheduler {
   resumeRun(runId: string): void {
     this.fencedRuns.delete(runId)
     this.cancellingRuns.delete(runId)
+    void this.tick().catch((error) => {
+      console.warn(`[kun] Graph scheduler wake failed: ${errorMessage(error)}`)
+    })
   }
 
   protected async scheduleNode(runId: string, nodeId: string): Promise<boolean> {
@@ -398,51 +399,30 @@ export abstract class GraphAttemptScheduler {
       }
       const downstreamDataEdges = run.plans.at(-1)!.edges.filter((edge) =>
         edge.kind === 'data' && edge.from === nodeId)
-      const missingArtifactNames = [...new Set(downstreamDataEdges
+      const missingRequiredArtifactNames = [...new Set(downstreamDataEdges
+        .filter((edge) => edge.kind === 'data' && edge.required)
         .flatMap((edge) => edge.kind === 'data' ? [edge.artifactName] : [])
         .filter((name) => !result.artifactRefs.some((artifact) =>
           artifact.logicalNames?.includes(name))))]
-      let generatedArtifactBytes = 0
-      if (
-        missingArtifactNames.length &&
-        this.options.artifactStore
-      ) {
-        const content = JSON.stringify(result)
-        const stored = await this.options.artifactStore.put({
-          content,
-          mimeType: 'application/json',
-          source: 'other',
-          origin: `graph-result:${attemptId}`,
-          maxInlineChars: 2_048
-        })
-        const artifact = {
-          version: GRAPH_CONTRACT_VERSION,
-          artifactId: stored.meta.id,
-          contentHash: createHash('sha256').update(content).digest('hex'),
-          mimeType: 'application/json',
-          byteLength: stored.meta.byteSize,
-          summary: result.summary,
-          logicalNames: missingArtifactNames,
-          producerNodeId: nodeId,
-          producerAttemptId: attemptId,
-          visibility: 'dependency',
-          retention: 'run',
-          createdAt: stored.meta.createdAt
-        } as const
-        run = (await this.options.store.append(run.id, {
-          expectedSeq: run.lastEventSeq,
-          graphRevision: run.currentRevision,
-          commandId: `artifact_${artifact.artifactId}_${attemptId}`,
-          idempotencyKey: `artifact:${attemptId}:${artifact.artifactId}`,
-          event: {
-            type: 'artifact_published',
-            payload: { artifact, consumerNodeIds: downstreamNodeIds(run, nodeId) }
-          }
-        })).state
-        generatedArtifactBytes = artifact.byteLength
-        result = { ...result, artifactRefs: [...result.artifactRefs, artifact] }
-      }
-      const validation = validateWorkerResult(projection, result)
+      const checkNames = projection.node.completion.review.deterministicChecks
+      const verifiedChecks = this.options.verifyChecks
+        ? await this.options.verifyChecks({ run, node: projection, attempt, checkNames })
+        : checkNames.map((name) => ({
+            name,
+            status: 'not_run' as const,
+            summary: 'No host verifier was configured.',
+            artifactRefs: [],
+            command: ['not-configured'],
+            exitCode: null,
+            workspaceRevision: 'unknown',
+            outputSummary: 'No host verifier was configured.'
+          }))
+      result = { ...result, verifiedChecks }
+      const validation = validateWorkerResult(
+        projection,
+        result,
+        missingRequiredArtifactNames
+      )
       run = (await this.options.store.append(run.id, {
         expectedSeq: run.lastEventSeq,
         graphRevision: run.currentRevision,
@@ -473,7 +453,7 @@ export abstract class GraphAttemptScheduler {
       run = await this.updateBudget(run, {
         totalTokens: run.budget.totalTokens + child.usage.totalTokens,
         elapsedMs: Math.max(run.budget.elapsedMs, Date.now() - Date.parse(run.createdAt)),
-        artifactBytes: run.budget.artifactBytes + generatedArtifactBytes
+        artifactBytes: run.budget.artifactBytes
       }, 'worker attempt completed')
       run = await this.handleAttemptSteering(run, nodeId, attemptId)
       await this.requestSupervision(run.id, 'submitted', [nodeId], result.summary)

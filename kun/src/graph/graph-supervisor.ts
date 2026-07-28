@@ -225,7 +225,8 @@ export class GraphSupervisor implements GraphSupervisionPort {
           `Objective: ${input.node.node.objective}`,
           `Acceptance criteria:\n${input.node.node.completion.acceptanceCriteria.map((item) => `- ${item}`).join('\n')}`,
           `Worker summary: ${result?.summary ?? '(missing)'}`,
-          `Checks: ${JSON.stringify(result?.checks ?? [])}`,
+          `Worker-reported checks: ${JSON.stringify(result?.reportedChecks ?? result?.checks ?? [])}`,
+          `Host-verified checks: ${JSON.stringify(result?.verifiedChecks ?? [])}`,
           `Evidence: ${JSON.stringify(result?.evidence ?? [])}`,
           'Return JSON: {"outcome":"pass|fail|revise|needs_human","summary":"...","evidence":["..."],"repairInstructions":"optional"}.'
         ].join('\n\n').slice(0, this.options.config().context.maxWorkerContextBytes),
@@ -348,7 +349,7 @@ export class GraphSupervisor implements GraphSupervisionPort {
       changedFiles: [...new Set(accepted.flatMap((attempt) =>
         attempt.result?.changedFiles ?? []))].slice(0, 10_000),
       validationResults: accepted.flatMap((attempt) =>
-        attempt.result?.checks ?? []).slice(0, 512),
+        attempt.result?.verifiedChecks ?? []).slice(0, 512),
       totalTokens: run.budget.totalTokens,
       totalElapsedMs: run.budget.elapsedMs,
       completedAt: this.nowIso()

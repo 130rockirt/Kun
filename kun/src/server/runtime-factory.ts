@@ -846,6 +846,12 @@ export async function createKunServeRuntime(
     kind: 'gui' as const,
     enabled: true,
     available: true,
+    effects: {
+      network: false,
+      externalWrite: false,
+      processExecution: false,
+      guiAutomation: true
+    },
     // Safe to include in child runs: the tool is still gated per turn by
     // `context.guiDesignCanvas`, so only design-canvas child turns see it.
     tools: [
@@ -859,6 +865,12 @@ export async function createKunServeRuntime(
     kind: 'skill' as const,
     enabled: true,
     available: true,
+    effects: {
+      network: false,
+      externalWrite: false,
+      processExecution: false,
+      guiAutomation: false
+    },
     tools: buildPptMasterLocalTools()
   }
   const officeCliProviders = buildOfficeCliToolProviders({
@@ -872,6 +884,12 @@ export async function createKunServeRuntime(
       kind: 'built-in' as const,
       enabled: true,
       available: true,
+      effects: {
+        network: false,
+        externalWrite: false,
+        processExecution: false,
+        guiAutomation: false
+      },
       tools: withBackgroundShellTools(
         buildDefaultLocalTools({}, builtinToolOptionsForOptions(activeOptions)),
         activeOptions
@@ -882,6 +900,12 @@ export async function createKunServeRuntime(
       kind: 'built-in' as const,
       enabled: true,
       available: true,
+      effects: {
+        network: false,
+        externalWrite: false,
+        processExecution: false,
+        guiAutomation: false
+      },
       tools: [createReadArtifactTool()]
     },
     graphToolsProvider,
@@ -1389,7 +1413,7 @@ export async function createKunServeRuntime(
 	        activeOptions.capabilities?.web.fetchEnabled === true ||
 	        activeOptions.capabilities?.web.searchEnabled === true
 	    }),
-	    toolNames: () => registry.listTools().map((tool) => tool.name),
+	    tools: () => registry.listTools(),
 	    skillIds: () => skillRuntime.diagnostics().skills.map((skill) => skill.id)
 	  }))
 	  const extensionProfiles = new ExtensionAgentProfileRegistry()

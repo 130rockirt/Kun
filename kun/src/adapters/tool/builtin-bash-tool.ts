@@ -931,6 +931,12 @@ export function createBashLocalTool(options: BashLocalToolOptions = {}): LocalTo
     },
     policy: 'on-request',
     toolKind: 'command_execution',
+    effects: {
+      network: true,
+      externalWrite: true,
+      processExecution: true,
+      guiAutomation: false
+    },
     execute: async (args, context, onUpdate) => withToolBoundary(async () => {
       const command = typeof args.command === 'string' ? args.command : ''
       if (!command.trim()) return { output: { error: 'command is required' }, isError: true }

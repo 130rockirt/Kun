@@ -163,7 +163,6 @@ export function testGraphPlan(patch: Partial<GraphPlanV1> = {}): GraphPlanV1 {
       maxLoopIterations: 4,
       maxWallTimeMs: 60 * 60 * 1_000,
       maxNodeWallTimeMs: 30 * 60 * 1_000,
-      maxTotalTokens: 100_000,
       maxMessages: 512,
       maxArtifactBytes: 100 * 1024 * 1024,
       warningRatio: 0.8
@@ -204,6 +203,9 @@ export function testAssignmentSnapshot(): GraphAssignmentSnapshotV1 {
     systemPrompt: 'Inspect only the assigned scope.',
     model: 'test-model',
     providerId: 'test-provider',
+    allowedModelProviderIds: ['test-provider'],
+    allowedModels: ['test-model'],
+    allowedProviderIds: ['builtin'],
     reasoningEffort: 'off',
     toolPolicy: 'readOnly',
     allowedTools: ['read', 'rg'],
@@ -219,7 +221,6 @@ export function testAssignmentSnapshot(): GraphAssignmentSnapshotV1 {
     writeScopes: [],
     networkAllowed: false,
     maxWallTimeMs: 30_000,
-    maxTokens: 10_000,
     capturedAt: TEST_GRAPH_NOW
   })
 }

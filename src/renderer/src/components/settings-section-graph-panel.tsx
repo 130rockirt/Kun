@@ -154,28 +154,6 @@ export function GraphModeSettingsPanel({
               }
             />
             <SettingRow
-              title={t('graphSettingsTokenBudget')}
-              description={t('graphSettingsTokenBudgetDesc')}
-              control={
-                <input
-                  type="number"
-                  min={1000}
-                  max={1000000000}
-                  step={1000}
-                  className={numberInputClass}
-                  value={value.scheduler.maxTotalTokens}
-                  onChange={(event) => onChange({
-                    scheduler: {
-                      maxTotalTokens: Math.max(
-                        1000,
-                        Math.min(1000000000, Number(event.target.value))
-                      )
-                    }
-                  })}
-                />
-              }
-            />
-            <SettingRow
               title={t('graphSettingsRunHours')}
               description={t('graphSettingsRunHoursDesc')}
               control={

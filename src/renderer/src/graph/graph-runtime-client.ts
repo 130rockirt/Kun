@@ -65,7 +65,8 @@ async function request<T>(
 export const graphRuntimeClient = {
   async listRuns(threadId?: string): Promise<GraphRun[]> {
     const query = threadId ? `?thread_id=${encodeURIComponent(threadId)}` : ''
-    return (await request<{ runs: GraphRun[] }>(`${KUN_GRAPHS_PATH}${query}`)).runs
+    const page = await request<{ runs: Array<{ id: string }> }>(`${KUN_GRAPHS_PATH}${query}`)
+    return Promise.all(page.runs.map((run) => graphRuntimeClient.getRun(run.id)))
   },
 
   getRun(runId: string): Promise<GraphRun> {

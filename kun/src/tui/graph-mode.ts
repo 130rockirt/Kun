@@ -108,7 +108,7 @@ export function renderTuiGraphStatus(
     `Title: ${plan.title}`,
     `Status: ${run.status} · revision ${run.currentRevision} · event ${run.lastEventSeq}`,
     `Progress: ${progress.accepted}/${progress.total} accepted · ${progress.settled}/${progress.total} settled · ${progress.active} active · ${progress.activeAgents} active agents`,
-    `Budget: ${run.budget.totalTokens.toLocaleString()} tokens · ${run.budget.elapsedMs} ms · ${run.budget.attempts} attempts`,
+    `Usage: ${run.budget.elapsedMs} ms · ${run.budget.attempts} attempts`,
     ''
   ]
 

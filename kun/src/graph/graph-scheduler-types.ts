@@ -3,7 +3,8 @@ import type {
   GraphNodeProjectionV1,
   GraphReviewResultV1,
   GraphRunSummaryV1,
-  GraphRunV1
+  GraphRunV1,
+  GraphVerifiedCheckResultV1
 } from '../contracts/graph.js'
 import type { GraphRuntimeConfig } from '../config/kun-config.js'
 import type { ArtifactStore } from '../artifacts/artifact-store.js'
@@ -43,6 +44,12 @@ export type GraphSchedulerOptions = {
   workerSessions: GraphWorkerSessionRegistry
   authorityForRun: (run: GraphRunV1) => Promise<GraphParentAuthority> | GraphParentAuthority
   artifactStore?: ArtifactStore
+  verifyChecks?: (input: {
+    run: GraphRunV1
+    node: GraphNodeProjectionV1
+    attempt: GraphNodeAttemptV1
+    checkNames: readonly string[]
+  }) => Promise<GraphVerifiedCheckResultV1[]>
   supervision?: () => GraphSupervisionPort | undefined
   nowIso?: () => string
   nextId?: (prefix: string) => string

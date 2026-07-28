@@ -108,6 +108,12 @@ export function buildWebToolProviders(
           kind: 'web',
           enabled: true,
           available: true,
+          effects: {
+            network: true,
+            externalWrite: false,
+            processExecution: false,
+            guiAutomation: false
+          },
           ...(reason ? { reason } : {}),
           tools
         }]

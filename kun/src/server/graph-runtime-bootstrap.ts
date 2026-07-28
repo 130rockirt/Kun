@@ -4,6 +4,7 @@ import type { ThreadStore } from '../ports/thread-store.js'
 import type { TurnService } from '../services/turn-service.js'
 import type { GraphRuntimeStartOptions } from './graph-runtime-factory.js'
 import { graphParentAuthorityToolNames } from '../graph/graph-tool-boundary.js'
+import type { CapabilityToolSpec } from '../adapters/tool/capability-registry.js'
 
 type GraphAuthorityDefaults = {
   model: string
@@ -25,7 +26,7 @@ export function createGraphRuntimeStartOptions(input: {
     turnId: string
   ) => Promise<'completed' | 'failed' | 'aborted'>
   defaults: () => GraphAuthorityDefaults
-  toolNames: () => string[]
+  tools: () => CapabilityToolSpec[]
   skillIds: () => string[]
 }): GraphRuntimeStartOptions {
   return {
@@ -59,14 +60,25 @@ export function createGraphRuntimeStartOptions(input: {
       const sourceTurn = thread?.turns.find((turn) => turn.id === run.sourceTurnId)
       const defaults = input.defaults()
       const sandboxMode = thread?.sandboxMode ?? defaults.sandboxMode
+      const model = sourceTurn?.model ?? thread?.model ?? defaults.model
+      const providerId = sourceTurn?.providerId ?? thread?.providerId ?? 'default'
+      const tools = input.tools()
+      const allowedProviders = [...new Set(tools
+        .filter((tool) => defaults.networkAllowed || tool.effects?.network === false)
+        .map((tool) => tool.providerId))]
       return {
         workspaceRoot: run.plans.at(-1)!.workspaceRoot,
-        model: sourceTurn?.model ?? thread?.model ?? defaults.model,
-        providerId: sourceTurn?.providerId ?? thread?.providerId ?? 'default',
+        model,
+        providerId,
+        allowedModelProviderIds: [providerId],
+        allowedModels: [model],
+        allowedProviderIds: allowedProviders,
         reasoningEffort: sourceTurn?.reasoningEffort ?? 'off',
         approvalPolicy: thread?.approvalPolicy ?? defaults.approvalPolicy,
         sandboxMode,
-        allowedTools: graphParentAuthorityToolNames(input.toolNames()),
+        allowedTools: graphParentAuthorityToolNames(tools
+          .filter((tool) => allowedProviders.includes(tool.providerId))
+          .map((tool) => tool.name)),
         blockedTools: [],
         allowedSkills: input.skillIds(),
         blockedSkills: defaults.disabledSkillIds,

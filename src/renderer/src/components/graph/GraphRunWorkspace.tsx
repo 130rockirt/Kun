@@ -79,7 +79,7 @@ export function GraphRunWorkspace({
   const workspaceRef = useRef<HTMLDivElement>(null)
   const [containerWidth, setContainerWidth] = useState(900)
   const [inspectorWidth, setInspectorWidth] = useState(DEFAULT_GRAPH_INSPECTOR_WIDTH)
-  const [inspectorOpen, setInspectorOpen] = useState(Boolean(selectedNode))
+  const [inspectorOpen, setInspectorOpen] = useState(false)
 
   useEffect(() => {
     const target = workspaceRef.current
@@ -96,10 +96,6 @@ export function GraphRunWorkspace({
     observer.observe(target)
     return () => observer.disconnect()
   }, [])
-
-  useEffect(() => {
-    if (selectedNodeId) setInspectorOpen(true)
-  }, [selectedNodeId])
 
   const resizeInspector = (requested: number): void => {
     setInspectorWidth(clampGraphInspectorWidth(requested, containerWidth))
@@ -148,7 +144,10 @@ export function GraphRunWorkspace({
   const inspectorIsOverlay = containerWidth < GRAPH_INSPECTOR_OVERLAY_BREAKPOINT
   const selectNode = (nodeId: string | null): void => {
     onSelectNode(nodeId)
-    if (nodeId) setInspectorOpen(true)
+  }
+  const inspectNode = (nodeId: string): void => {
+    onSelectNode(nodeId)
+    setInspectorOpen(true)
   }
 
   return (
@@ -168,6 +167,7 @@ export function GraphRunWorkspace({
                 role="listitem"
                 aria-current={selectedNodeId === node.id}
                 onClick={() => selectNode(node.id)}
+                onDoubleClick={() => inspectNode(node.id)}
                 className={`mb-1.5 flex w-full items-center justify-between gap-3 rounded-lg border bg-ds-card px-3 py-2 text-left ${
                   selectedNodeId === node.id
                     ? 'border-indigo-500 ring-2 ring-indigo-500/15'
@@ -194,6 +194,7 @@ export function GraphRunWorkspace({
             edges={elements.edges}
             selectedNodeId={selectedNodeId}
             onSelectNode={selectNode}
+            onInspectNode={inspectNode}
             onOpenInspector={() => setInspectorOpen(true)}
           />
         )}

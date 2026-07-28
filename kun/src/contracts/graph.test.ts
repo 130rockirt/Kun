@@ -2,7 +2,10 @@ import { describe, expect, test } from 'vitest'
 import {
   GRAPH_CONTRACT_VERSION,
   GRAPH_EVENT_VERSION,
+  GraphAssignmentSnapshotV1Schema,
+  GraphBudgetLedgerV1Schema,
   GraphEventEnvelopeV1Schema,
+  GraphLoopGateV1Schema,
   GraphPatchV1Schema,
   GraphPlanV1Schema,
   GraphWorkerResultV1Schema
@@ -49,6 +52,7 @@ function plan() {
       },
       readScopes: ['src'],
       writeScopes: [],
+      tokenBudget: 1,
       metadata: {}
     }],
     edges: [],
@@ -74,15 +78,80 @@ function plan() {
 }
 
 describe('Graph Mode contracts', () => {
-  test('parses a versioned plan and rejects unsafe paths', () => {
-    expect(GraphPlanV1Schema.parse(plan())).toMatchObject({
+  test('parses a versioned plan, drops legacy token limits, and rejects unsafe paths', () => {
+    const parsed = GraphPlanV1Schema.parse(plan())
+    expect(parsed).toMatchObject({
       revision: 1,
       nodes: [{ id: 'implement' }]
     })
+    expect(parsed.budget).not.toHaveProperty('maxTotalTokens')
+    expect(parsed.nodes[0]).not.toHaveProperty('tokenBudget')
     expect(() => GraphPlanV1Schema.parse({
       ...plan(),
       nodes: [{ ...plan().nodes[0], writeScopes: ['../outside'] }]
     })).toThrow(/repository relative/)
+  })
+
+  test('drops legacy token limits from loops, assignments, and warning ledgers', () => {
+    const gate = GraphLoopGateV1Schema.parse({
+      maxIterations: 2,
+      condition: {
+        sourceNodeId: 'implement',
+        outcomeIn: ['repair_required']
+      },
+      continueTargetNodeId: 'implement',
+      exitTargetNodeId: 'finish',
+      maxTokenBudget: 1
+    })
+    expect(gate).not.toHaveProperty('maxTokenBudget')
+
+    const assignment = GraphAssignmentSnapshotV1Schema.parse({
+      version: GRAPH_CONTRACT_VERSION,
+      profileId: 'profile_1',
+      profileVersion: 1,
+      profileOrigin: 'ephemeral',
+      name: 'Implementer',
+      systemPrompt: 'Implement only the assigned objective.',
+      model: 'test-model',
+      providerId: 'test-provider',
+      allowedModelProviderIds: ['test-provider'],
+      allowedModels: ['test-model'],
+      allowedProviderIds: ['builtin'],
+      reasoningEffort: 'off',
+      toolPolicy: 'readOnly',
+      allowedTools: ['read'],
+      blockedTools: [],
+      allowedSkills: [],
+      blockedSkills: [],
+      allowedMcpServers: [],
+      blockedMcpServers: [],
+      approvalPolicy: 'on-request',
+      sandboxMode: 'read-only',
+      workspaceRoot: '/workspace',
+      readScopes: ['src'],
+      writeScopes: [],
+      networkAllowed: false,
+      maxWallTimeMs: 30_000,
+      maxTokens: 1,
+      capturedAt: now
+    })
+    expect(assignment).not.toHaveProperty('maxTokens')
+
+    const ledger = GraphBudgetLedgerV1Schema.parse({
+      version: GRAPH_CONTRACT_VERSION,
+      limits: plan().budget,
+      attempts: 1,
+      revisions: 0,
+      loopIterations: 0,
+      elapsedMs: 1,
+      totalTokens: 1_000_000_000,
+      messages: 0,
+      artifactBytes: 0,
+      warningKinds: ['tokens', 'time'],
+      closed: false
+    })
+    expect(ledger.totalTokens).toBe(1_000_000_000)
+    expect(ledger.warningKinds).toEqual(['time'])
   })
 
   test('defaults old turn requests to direct and accepts explicit graph turns', () => {

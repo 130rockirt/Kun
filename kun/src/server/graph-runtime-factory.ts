@@ -26,6 +26,7 @@ import {
 import type { IdGenerator } from '../ports/id-generator.js'
 import type { ThreadStore } from '../ports/thread-store.js'
 import type { RuntimeEventRecorder } from '../services/runtime-event-recorder.js'
+import { createGraphCheckVerifier } from '../graph/graph-check-verifier.js'
 
 export type GraphRuntimeStartOptions = {
   delegation: () => DelegationRuntime | undefined
@@ -183,6 +184,12 @@ export class GraphRuntimeComposition {
       kind: 'built-in' as const,
       enabled: true,
       available: true,
+      effects: {
+        network: false,
+        externalWrite: false,
+        processExecution: false,
+        guiAutomation: false
+      },
       tools: buildGraphModeLocalTools({
         control: this.control,
         store: this.store,
@@ -261,6 +268,7 @@ export class GraphRuntimeComposition {
       workerSessions: this.workerSessions,
       authorityForRun: options.authorityForRun,
       artifactStore: this.options.artifactStore,
+      verifyChecks: createGraphCheckVerifier(),
       supervision: () => this.supervisor,
       nowIso: this.options.nowIso,
       nextId,

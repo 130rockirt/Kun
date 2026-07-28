@@ -39,7 +39,6 @@ function run(id: string, seq: number): GraphRun {
     steering: [],
     budget: {
       limits: {
-        maxTotalTokens: 10_000,
         maxWallTimeMs: 60_000,
         maxAttemptsPerNode: 3
       },

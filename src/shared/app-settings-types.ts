@@ -464,7 +464,6 @@ export type KunGraphSchedulerSettingsV1 = {
   maxLoopIterations: number
   maxRunWallTimeMs: number
   maxNodeWallTimeMs: number
-  maxTotalTokens: number
   maxArtifactBytes: number
   budgetWarningRatio: number
 }

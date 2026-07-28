@@ -2,6 +2,16 @@ import { z } from 'zod'
 import { ModelReasoningEffort, SubagentToolPolicy } from './capabilities.js'
 import { ApprovalPolicySchema, SandboxModeSchema } from './policy.js'
 import { GraphRelativePathSchema } from './graph-path.js'
+import {
+  GraphBudgetLedgerV1Schema,
+  GraphBudgetV1Schema
+} from './graph-budget.js'
+export {
+  GraphBudgetLedgerV1Schema,
+  GraphBudgetV1Schema,
+  type GraphBudgetLedgerV1,
+  type GraphBudgetV1
+} from './graph-budget.js'
 
 export const GRAPH_CONTRACT_VERSION = 1 as const
 export const GRAPH_EVENT_VERSION = 1 as const
@@ -128,12 +138,23 @@ export const GraphCheckResultV1Schema = z.object({
 }).strict()
 export type GraphCheckResultV1 = z.infer<typeof GraphCheckResultV1Schema>
 
+export const GraphVerifiedCheckResultV1Schema = GraphCheckResultV1Schema.extend({
+  command: z.array(z.string().min(1).max(4_096)).min(1).max(64),
+  exitCode: z.number().int().nullable(),
+  workspaceRevision: z.string().max(256),
+  outputSummary: BoundedSummary
+}).strict()
+export type GraphVerifiedCheckResultV1 = z.infer<typeof GraphVerifiedCheckResultV1Schema>
+
 export const GraphWorkerResultV1Schema = z.object({
   version: z.literal(GRAPH_CONTRACT_VERSION),
   summary: BoundedSummary,
   artifactRefs: z.array(GraphArtifactReferenceV1Schema).max(128).default([]),
   changedFiles: z.array(RelativePath).max(1_000).default([]),
-  checks: z.array(GraphCheckResultV1Schema).max(128).default([]),
+  /** Legacy persisted worker reports. New results use reportedChecks. */
+  checks: z.array(GraphCheckResultV1Schema).max(128).optional(),
+  reportedChecks: z.array(GraphCheckResultV1Schema).max(128).optional(),
+  verifiedChecks: z.array(GraphVerifiedCheckResultV1Schema).max(128).optional(),
   evidence: z.array(BoundedSummary).max(128).default([]),
   risks: z.array(BoundedSummary).max(64).default([]),
   suggestedMessages: z.array(z.object({
@@ -225,46 +246,7 @@ export const GraphProgressUpdateV1Schema = z.object({
 }).strict()
 export type GraphProgressUpdateV1 = z.infer<typeof GraphProgressUpdateV1Schema>
 
-export const GraphBudgetV1Schema = z.object({
-  maxNodes: z.number().int().positive().max(10_000),
-  maxEdges: z.number().int().positive().max(50_000),
-  maxConcurrentNodes: z.number().int().positive().max(256),
-  maxAttemptsPerNode: z.number().int().positive().max(20),
-  maxRevisions: z.number().int().positive().max(1_000),
-  maxLoopIterations: z.number().int().nonnegative().max(1_000),
-  maxWallTimeMs: z.number().int().positive().max(30 * 24 * 60 * 60 * 1_000),
-  maxNodeWallTimeMs: z.number().int().positive().max(24 * 60 * 60 * 1_000),
-  maxTotalTokens: z.number().int().positive().max(1_000_000_000),
-  maxMessages: z.number().int().nonnegative().max(1_000_000),
-  maxArtifactBytes: z.number().int().nonnegative().max(1_000_000_000_000),
-  warningRatio: z.number().positive().max(1)
-}).strict()
-export type GraphBudgetV1 = z.infer<typeof GraphBudgetV1Schema>
-
-export const GraphBudgetLedgerV1Schema = z.object({
-  version: z.literal(GRAPH_CONTRACT_VERSION),
-  limits: GraphBudgetV1Schema,
-  attempts: z.number().int().nonnegative(),
-  revisions: z.number().int().nonnegative(),
-  loopIterations: z.number().int().nonnegative(),
-  elapsedMs: z.number().int().nonnegative(),
-  totalTokens: z.number().int().nonnegative(),
-  messages: z.number().int().nonnegative(),
-  artifactBytes: z.number().int().nonnegative(),
-  warningKinds: z.array(z.enum([
-    'time',
-    'tokens',
-    'attempts',
-    'revisions',
-    'loops',
-    'messages',
-    'artifacts'
-  ])).default([]),
-  closed: z.boolean().default(false)
-}).strict()
-export type GraphBudgetLedgerV1 = z.infer<typeof GraphBudgetLedgerV1Schema>
-
-export const GraphLoopGateV1Schema = z.object({
+const GraphLoopGateV1CompatibilitySchema = z.object({
   maxIterations: z.number().int().positive().max(1_000),
   condition: z.object({
     sourceNodeId: GraphNodeIdSchema,
@@ -280,6 +262,11 @@ export const GraphLoopGateV1Schema = z.object({
   exhaustionTargetNodeId: GraphNodeIdSchema.optional(),
   maxTokenBudget: z.number().int().positive().optional()
 }).strict()
+export const GraphLoopGateV1Schema = GraphLoopGateV1CompatibilitySchema.transform((gate) => {
+  const { maxTokenBudget, ...activeGate } = gate
+  void maxTokenBudget
+  return activeGate
+})
 export type GraphLoopGateV1 = z.infer<typeof GraphLoopGateV1Schema>
 
 export const GraphAssignmentReferenceV1Schema = z.discriminatedUnion('kind', [
@@ -307,7 +294,7 @@ export const GraphAssignmentReferenceV1Schema = z.discriminatedUnion('kind', [
 ])
 export type GraphAssignmentReferenceV1 = z.infer<typeof GraphAssignmentReferenceV1Schema>
 
-export const GraphAssignmentSnapshotV1Schema = z.object({
+const GraphAssignmentSnapshotV1CompatibilitySchema = z.object({
   version: z.literal(GRAPH_CONTRACT_VERSION),
   profileId: GraphProfileIdSchema,
   profileVersion: z.number().int().positive(),
@@ -319,6 +306,9 @@ export const GraphAssignmentSnapshotV1Schema = z.object({
   systemPrompt: BoundedText,
   model: z.string().trim().min(1).max(256),
   providerId: z.string().trim().min(1).max(128),
+  allowedModelProviderIds: z.array(Identifier).min(1).max(128),
+  allowedModels: z.array(z.string().trim().min(1).max(256)).min(1).max(256),
+  allowedProviderIds: z.array(Identifier).max(128),
   reasoningEffort: ModelReasoningEffort,
   toolPolicy: SubagentToolPolicy,
   allowedTools: z.array(Identifier).max(256),
@@ -334,9 +324,15 @@ export const GraphAssignmentSnapshotV1Schema = z.object({
   writeScopes: z.array(RelativePath).max(1_000),
   networkAllowed: z.boolean(),
   maxWallTimeMs: z.number().int().positive(),
-  maxTokens: z.number().int().positive(),
+  maxTokens: z.number().int().positive().optional(),
   capturedAt: Timestamp
 }).strict()
+export const GraphAssignmentSnapshotV1Schema =
+  GraphAssignmentSnapshotV1CompatibilitySchema.transform((assignment) => {
+    const { maxTokens, ...activeAssignment } = assignment
+    void maxTokens
+    return activeAssignment
+  })
 export type GraphAssignmentSnapshotV1 = z.infer<typeof GraphAssignmentSnapshotV1Schema>
 
 export const GraphReviewPolicyV1Schema = z.object({
@@ -362,7 +358,7 @@ export const GraphCompletionContractV1Schema = z.object({
 }).strict()
 export type GraphCompletionContractV1 = z.infer<typeof GraphCompletionContractV1Schema>
 
-export const GraphNodeV1Schema = z.object({
+const GraphNodeV1CompatibilitySchema = z.object({
   id: GraphNodeIdSchema,
   phaseId: Identifier,
   kind: z.enum(['work', 'review', 'integration', 'loop_gate']),
@@ -399,6 +395,11 @@ export const GraphNodeV1Schema = z.object({
       message: 'only loop_gate nodes may declare loopGate policy'
     })
   }
+})
+export const GraphNodeV1Schema = GraphNodeV1CompatibilitySchema.transform((node) => {
+  const { tokenBudget, ...activeNode } = node
+  void tokenBudget
+  return activeNode
 })
 export type GraphNodeV1 = z.infer<typeof GraphNodeV1Schema>
 

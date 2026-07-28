@@ -565,8 +565,11 @@ export function buildGraphModeLocalTools(options: {
         try {
           const located = await authorizedWorker(options.store, stringArg(args.runId), context)
           const parsed = GraphWorkerResultV1Schema.parse(args.result)
+          const { verifiedChecks: _untrustedVerifiedChecks, ...workerReported } = parsed
           const result = {
-            ...parsed,
+            ...workerReported,
+            reportedChecks: parsed.reportedChecks ?? parsed.checks ?? [],
+            verifiedChecks: [],
             artifactRefs: canonicalWorkerArtifactRefs(
               located.run,
               located.nodeId,

@@ -677,7 +677,6 @@ function assertBudgetNotBelowUsage(
     ['maxLoopIterations', run.budget.loopIterations],
     ['maxWallTimeMs', run.budget.elapsedMs],
     ['maxNodeWallTimeMs', activeNodeWallTime],
-    ['maxTotalTokens', run.budget.totalTokens],
     ['maxMessages', run.budget.messages],
     ['maxArtifactBytes', run.budget.artifactBytes]
   ]

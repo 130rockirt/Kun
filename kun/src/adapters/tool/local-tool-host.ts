@@ -4,7 +4,8 @@ import type {
   ToolHostContext,
   ToolHostResult,
   ToolCallLike,
-  ToolExecutionUpdate
+  ToolExecutionUpdate,
+  ToolEffects
 } from '../../ports/tool-host.js'
 import type { UserInputQuestion } from '../../ports/user-input-gate.js'
 import type { ApprovalRequest } from '../../domain/approval.js'
@@ -52,6 +53,8 @@ export type LocalTool = {
   toolKind: 'tool_call' | 'command_execution' | 'file_change'
   /** Host-authored side-effect classification. Unknown is denied in Plan mode. */
   sideEffect?: ToolSideEffect
+  /** Host-authored effects. Omission is intentionally treated as unknown. */
+  effects?: ToolEffects
   /**
    * Tool policy. `auto` runs the tool without asking. `on-request` and
    * `suggest` always ask the user. `never` blocks the tool. `untrusted`

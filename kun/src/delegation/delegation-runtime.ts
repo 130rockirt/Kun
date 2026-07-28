@@ -56,6 +56,8 @@ export type ChildReturnFormat = z.infer<typeof ChildReturnFormat>
 const ChildSecuritySnapshot = z.object({
   /** Immutable parent workspace boundary; also used as the child working directory. */
   sandboxRoot: z.string().min(1),
+  allowedModelProviderIds: z.array(z.string().min(1)).optional(),
+  allowedModelIds: z.array(z.string().min(1)).optional(),
   allowedProviderIds: z.array(z.string().min(1)).optional(),
   allowedToolNames: z.array(z.string().min(1)).optional(),
   allowedSkillIds: z.array(z.string().min(1)).optional(),
@@ -480,6 +482,20 @@ export class DelegationRuntime {
     })
     const resolvedModel = selection.model
     const resolvedProviderId = selection.providerId
+    if (
+      resolvedProviderId &&
+      security?.allowedModelProviderIds &&
+      !security.allowedModelProviderIds.includes(resolvedProviderId)
+    ) {
+      throw new Error(`child model provider ${resolvedProviderId} expands parent authority`)
+    }
+    if (
+      resolvedModel &&
+      security?.allowedModelIds &&
+      !security.allowedModelIds.includes(resolvedModel)
+    ) {
+      throw new Error(`child model ${resolvedModel} expands parent authority`)
+    }
     const resolvedSystemPrompt = profile?.systemPrompt
     const resolvedOmitBasePrompt = profile?.omitBasePrompt === true
     const resolvedAllowedTools = profile?.allowedTools

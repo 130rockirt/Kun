@@ -22,10 +22,6 @@ export async function resolveGraphAttemptAssignment(
     maxWallTimeMs: Math.min(
       projection.node.timeoutMs ?? run.budget.limits.maxNodeWallTimeMs,
       options.config().scheduler.maxNodeWallTimeMs
-    ),
-    maxTokens: Math.min(
-      projection.node.tokenBudget ?? run.budget.limits.maxTotalTokens,
-      Math.max(1, run.budget.limits.maxTotalTokens - run.budget.totalTokens)
     )
   })
 }

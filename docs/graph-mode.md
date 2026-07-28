@@ -11,7 +11,7 @@ Graph Mode 是 Kun 的一种按回合选择的编排策略，不是第二套 Age
 
 Graph Mode 由三层组成：
 
-1. 执行层：GraphPlan、GraphRun、节点、attempt、边、预算、Mailbox、
+1. 执行层：GraphPlan、GraphRun、节点、attempt、边、资源记录、Mailbox、
    Artifact、review、scheduler、recovery。
 2. 项目能力层：项目级 Agent profile、Skill candidate、Graph Recipe
    candidate、路由、评分和证据。
@@ -54,10 +54,10 @@ GUI 重连时先读取 HTTP snapshot，再从已确认的 sequence 继续 SSE re
 所有 Graph 契约位于 `kun/src/contracts/graph.ts` 和
 `kun/src/contracts/graph-agents.ts`，均带显式版本。
 
-- `GraphPlanV1`：phase、逻辑 node、typed edge、预算、completion nodes、
+- `GraphPlanV1`：phase、逻辑 node、typed edge、非 Token 资源限制、completion nodes、
   revision 和创建信息。
 - `GraphRunV1`：当前 revision、run/node/attempt 投影、review、message、
-  artifact、cleanup、budget ledger 和最终 summary。
+  artifact、cleanup、资源 ledger 和最终 summary。
 - `GraphNodeAttemptV1`：不可变 assignment snapshot、attempt number、
   loop iteration、child session、result、usage 和失败分类。
 - `GraphEventEnvelopeV1`：run/thread、单调 `graphSeq`、revision、checksum
@@ -128,17 +128,17 @@ accepted attempt 永不被 revision 重写；新需求只能创建 superseding r
 - patch 后整张图重新校验，通过后一次性写入 `plan_revised`。
 
 LoopGate 必须声明 condition source、continuation target、exit target、
-exhaustion target、最大 iteration 和可选 token budget。每次继续都会：
+exhaustion target 和最大 iteration。每次继续都会：
 
 1. 写入 `loop_iteration_advanced`。
 2. 只重置宿主计算出的 cycle nodes。
 3. 保留旧 attempt history，并为新 attempt 写入新的 iteration。
 4. 增加全局 loop ledger。
 
-达到 gate、run 或 token 上限时只能走 exhaustion path，不允许再创建 attempt。
+达到 gate 或 run 的非 Token 资源上限时只能走 exhaustion path，不允许再创建 attempt。
 重复相同的 normalized failure 达到阈值时会暂停或升级，不机械耗尽循环。
 
-## 6. Scheduler 与预算
+## 6. Scheduler 与资源限制
 
 Scheduler 由宿主驱动，不依赖 Lead 逐节点调用工具。它负责：
 
@@ -147,10 +147,14 @@ Scheduler 由宿主驱动，不依赖 Lead 逐节点调用工具。它负责：
 - 全局 `maxConcurrentNodes`、单 run `maxConcurrentNodesPerRun` 和
   `maxConcurrentRuns` 准入。
 - 跨 GraphRun 轮转，避免大型图长期占用全部容量。
-- attempt、run wall time、node wall time、revision、loop、token、
-  Artifact 和 message 预算。
+- attempt、run wall time、node wall time、revision、loop、
+  Artifact 和 message 限制。
 - capped exponential retry backoff 和失败分类。
 - 不可用 DelegationRuntime 时安全暂停。
+
+Token 只记录实际用量，用于成本归因和学习证据。GraphPlan、节点、循环和冻结后的
+worker assignment 都没有 Token 上限；Scheduler 不会因 Token 数量告警、暂停、
+失败或停止派发。
 
 每个 node timeout 由宿主 `AbortController` 强制执行。用户 cancel 会先写入
 terminal fence，再中止并等待活跃 worker；迟到结果不会进入已取消 GraphRun。
@@ -163,7 +167,7 @@ terminal fence，再中止并等待活跃 worker；迟到结果不会进入已�
 - model、provider、reasoning effort。
 - allowed/blocked tools、Skills 和 MCP servers。
 - approval policy、sandbox mode、workspace root。
-- read/write scope、network、time/token limit。
+- read/write scope、network 和 time limit。
 
 有效权限始终是父 turn、Graph policy、profile、node 和宿主硬限制的交集。
 任何子层只能收窄，不能扩张。worker 还会被强制屏蔽：
@@ -209,7 +213,7 @@ human review；worker 自评不能绕过。
 
 GraphSupervisor 只响应 material signals：
 
-- submitted、failure、stall、conflict、budget、help、recovery、
+- submitted、failure、stall、conflict、resource-limit、help、recovery、
   completion、user steering。
 
 普通 progress heartbeat 只更新图，不触发模型轮询。相同信号按窗口合并；
@@ -222,7 +226,7 @@ GraphRun 只有同时满足以下条件才进入 completed：
 - 所有 required review 已通过。
 - blocking Mailbox 已解决。
 - 写入已安全集成或有明确的人类处置。
-- 预算 ledger 已关闭。
+- 资源记录已收敛。
 - final synthesis 已持久化。
 - lease/worktree/journal cleanup disposition 已持久化。
 
@@ -347,7 +351,7 @@ Journal 是带 checksum 的 append-only JSONL；sequence 单调递增。snapshot
 1. 校验 journal/snapshot，记录 corrupt/missing/invalid diagnostics。
 2. 过期 lease，标记缺失 worktree。
 3. 对 queued/running/waiting attempt 与 child session 对账。
-4. 缺失 child 变为 orphaned/interrupted，并按剩余 attempt budget 重试或升级。
+4. 缺失 child 变为 orphaned/interrupted，并按剩余 attempt 次数重试或升级。
 5. `pausing` 收敛到 paused；缺 final summary 的 `completing` 回到 supervision。
 6. 写入 cleanup 和 recovery signal，再启动 scheduler。
 
@@ -409,7 +413,7 @@ active GraphRun 的输入明确标为 steering。右侧 `Graph` tab 提供：
 
 - phase 分组、typed edges、LoopGate/revision 标记。
 - pan/zoom、minimap、progressive collapse 和大图 list fallback。
-- 状态计数、预算、critical path、attempt 和当前 Agent。
+- 状态计数、资源使用、critical path、attempt 和当前 Agent。
 - node objective、assignment version、tools/Skills、attempt history、
   child session、messages、分页 Artifact 预览、checks、review、writes、worktree 和 error。
 - steer、pause/resume、cancel、retry、review、rebind、带 CAS 的通用 GraphPatch、

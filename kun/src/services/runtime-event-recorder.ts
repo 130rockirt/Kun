@@ -46,6 +46,8 @@ export class RuntimeEventRecorder {
   private readonly options: RuntimeEventRecorderOptions
   private readonly lastIssuedSeq = new Map<string, number>()
   private readonly commitQueues = new Map<string, Promise<unknown>>()
+  private readonly graphEvents = new Map<string, Map<string, RuntimeEvent>>()
+  private readonly graphEventsLoaded = new Set<string>()
 
   constructor(options: RuntimeEventRecorderOptions) {
     this.options = options
@@ -70,12 +72,19 @@ export class RuntimeEventRecorder {
     draft: RuntimeEventDraft,
     lease?: ThreadLifecycleLease
   ): Promise<RuntimeEvent> {
+    const graphEventId = draft.kind === 'graph_event' ? draft.graph.eventId : undefined
+    if (graphEventId) await this.loadRecentGraphEvents(draft.threadId)
+    const duplicate = graphEventId
+      ? this.graphEvents.get(draft.threadId)?.get(graphEventId)
+      : undefined
+    if (duplicate) return duplicate
     const event = await this.makeEvent(draft)
     // Do not persist (or publish) a draft from an expired generation. It is
     // still returned for caller compatibility; lifecycle events are commands,
     // not a durable acknowledgement.
     if (lease && !lease.isCurrent()) return event
     await this.options.sessionStore.appendEvent(event.threadId, event)
+    if (graphEventId) this.rememberGraphEvent(event.threadId, graphEventId, event)
     // `appendEvent` can have started before a close. The deletion path drains
     // that write before unlinking files; this second check is what prevents an
     // already-committed old event from escaping through live SSE afterwards.
@@ -134,9 +143,32 @@ export class RuntimeEventRecorder {
 
   clearThread(threadId: string): void {
     this.lastIssuedSeq.delete(threadId)
+    this.graphEvents.delete(threadId)
+    this.graphEventsLoaded.delete(threadId)
     for (const observer of this.options.observers ?? []) {
       observer.clearThread?.(threadId)
     }
+  }
+
+  private rememberGraphEvent(threadId: string, eventId: string, event: RuntimeEvent): void {
+    const events = this.graphEvents.get(threadId) ?? new Map<string, RuntimeEvent>()
+    events.set(eventId, event)
+    while (events.size > 4_096) events.delete(events.keys().next().value!)
+    this.graphEvents.set(threadId, events)
+  }
+
+  private async loadRecentGraphEvents(threadId: string): Promise<void> {
+    if (this.graphEventsLoaded.has(threadId)) return
+    const highWater = await this.options.sessionStore.highestSeq(threadId).catch(() => 0)
+    const recent = await this.options.sessionStore
+      .loadEventsSince(threadId, Math.max(0, highWater - 4_096))
+      .catch(() => [])
+    for (const event of recent) {
+      if (event.kind === 'graph_event') {
+        this.rememberGraphEvent(threadId, event.graph.eventId, event)
+      }
+    }
+    this.graphEventsLoaded.add(threadId)
   }
 
   private async notifyObservers(event: RuntimeEvent, lease?: ThreadLifecycleLease): Promise<void> {

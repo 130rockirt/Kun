@@ -125,7 +125,6 @@ function graphRun(): GraphRun {
     steering: [],
     budget: {
       limits: {
-        maxTotalTokens: 20_000,
         maxWallTimeMs: 60_000,
         maxAttemptsPerNode: 3
       },
@@ -164,6 +163,9 @@ function fallbackAttempt(): GraphAttempt {
       systemPrompt: 'Inspect only the assigned node.',
       model: 'test-model',
       providerId: 'default',
+      allowedModelProviderIds: ['default'],
+      allowedModels: ['test-model'],
+      allowedProviderIds: ['builtin'],
       reasoningEffort: 'medium',
       toolPolicy: 'readOnly',
       allowedTools: ['read'],
@@ -179,7 +181,6 @@ function fallbackAttempt(): GraphAttempt {
       writeScopes: [],
       networkAllowed: false,
       maxWallTimeMs: 60_000,
-      maxTokens: 10_000,
       capturedAt: '2026-07-27T00:00:00.000Z'
     }
   }

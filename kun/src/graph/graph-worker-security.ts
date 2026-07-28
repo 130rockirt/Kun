@@ -19,6 +19,9 @@ export function graphWorkerSecuritySnapshot(
       assignment.readScopes,
       assignment.writeScopes
     ),
+    allowedModelProviderIds: assignment.allowedModelProviderIds,
+    allowedModelIds: assignment.allowedModels,
+    allowedProviderIds: assignment.allowedProviderIds,
     allowedSkillIds: assignment.allowedSkills,
     allowedReadPaths: [
       ...new Set([

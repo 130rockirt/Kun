@@ -63,7 +63,7 @@ export class GraphScheduler extends GraphAttemptScheduler {
       void this.tick().catch((error) => {
         console.warn(`[kun] Graph scheduler tick failed: ${errorMessage(error)}`)
       })
-    }, this.options.tickIntervalMs ?? 250)
+    }, this.options.tickIntervalMs ?? 5_000)
     this.timer.unref?.()
     void this.tick().catch((error) => {
       console.warn(`[kun] Graph scheduler initial tick failed: ${errorMessage(error)}`)
@@ -227,9 +227,7 @@ export class GraphScheduler extends GraphAttemptScheduler {
         gate.maxIterations,
         run.budget.limits.maxLoopIterations
       )
-      const tokenExhausted = gate.maxTokenBudget !== undefined &&
-        run.budget.totalTokens >= gate.maxTokenBudget
-      const exhausted = iterationExhausted || tokenExhausted
+      const exhausted = iterationExhausted
       if (continues && !exhausted) {
         const resetNodeIds = loopResetNodeIds(
           run.plans.at(-1)!,
@@ -266,11 +264,9 @@ export class GraphScheduler extends GraphAttemptScheduler {
       }
       if (!continues || exhausted) {
         run = await this.transitionNode(run, projection.node.id, 'skipped',
-          tokenExhausted
-            ? 'loop gate token budget exhausted'
-            : exhausted
-              ? 'loop gate iteration limit exhausted'
-              : 'loop gate evaluated')
+          exhausted
+            ? 'loop gate iteration limit exhausted'
+            : 'loop gate evaluated')
       }
     }
     return run
@@ -412,7 +408,6 @@ export class GraphScheduler extends GraphAttemptScheduler {
       run = await this.updateBudget(run, { elapsedMs }, 'scheduler wall time accounting')
     }
     const exhausted =
-      run.budget.totalTokens >= run.budget.limits.maxTotalTokens ||
       run.budget.elapsedMs >= run.budget.limits.maxWallTimeMs ||
       run.budget.attempts >= totalAttemptLimit(run) ||
       run.budget.artifactBytes >= run.budget.limits.maxArtifactBytes

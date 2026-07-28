@@ -1,5 +1,25 @@
 import { z } from 'zod'
 
+const kunGraphSchedulerPatchSchema = z.object({
+  maxNodes: z.number().int().positive().max(10_000).optional(),
+  maxEdges: z.number().int().positive().max(50_000).optional(),
+  maxConcurrentRuns: z.number().int().positive().max(256).optional(),
+  maxConcurrentNodes: z.number().int().positive().max(256).optional(),
+  maxConcurrentNodesPerRun: z.number().int().positive().max(256).optional(),
+  maxAttemptsPerNode: z.number().int().positive().max(20).optional(),
+  maxRevisions: z.number().int().positive().max(1_000).optional(),
+  maxLoopIterations: z.number().int().nonnegative().max(1_000).optional(),
+  maxRunWallTimeMs: z.number().int().positive().max(30 * 86_400_000).optional(),
+  maxNodeWallTimeMs: z.number().int().positive().max(86_400_000).optional(),
+  maxTotalTokens: z.number().int().positive().max(1_000_000_000).optional(),
+  maxArtifactBytes: z.number().int().nonnegative().max(1_000_000_000_000).optional(),
+  budgetWarningRatio: z.number().min(0).max(1).optional()
+}).strict().transform((scheduler) => {
+  const { maxTotalTokens, ...activeSettings } = scheduler
+  void maxTotalTokens
+  return activeSettings
+})
+
 export const kunGraphPatchSchema = z.object({
   enabled: z.boolean().optional(),
   defaultStrategy: z.enum(['direct', 'graph']).optional(),
@@ -10,21 +30,7 @@ export const kunGraphPatchSchema = z.object({
     'learning-preview',
     'stable'
   ]).optional(),
-  scheduler: z.object({
-    maxNodes: z.number().int().positive().max(10_000).optional(),
-    maxEdges: z.number().int().positive().max(50_000).optional(),
-    maxConcurrentRuns: z.number().int().positive().max(256).optional(),
-    maxConcurrentNodes: z.number().int().positive().max(256).optional(),
-    maxConcurrentNodesPerRun: z.number().int().positive().max(256).optional(),
-    maxAttemptsPerNode: z.number().int().positive().max(20).optional(),
-    maxRevisions: z.number().int().positive().max(1_000).optional(),
-    maxLoopIterations: z.number().int().nonnegative().max(1_000).optional(),
-    maxRunWallTimeMs: z.number().int().positive().max(30 * 86_400_000).optional(),
-    maxNodeWallTimeMs: z.number().int().positive().max(86_400_000).optional(),
-    maxTotalTokens: z.number().int().positive().max(1_000_000_000).optional(),
-    maxArtifactBytes: z.number().int().nonnegative().max(1_000_000_000_000).optional(),
-    budgetWarningRatio: z.number().min(0).max(1).optional()
-  }).strict().optional(),
+  scheduler: kunGraphSchedulerPatchSchema.optional(),
   context: z.object({
     maxWorkerContextBytes: z.number().int().positive().max(16 * 1024 * 1024).optional(),
     maxDependencySummaryBytes: z.number().int().positive().max(1024 * 1024).optional(),

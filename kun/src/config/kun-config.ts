@@ -209,6 +209,26 @@ export const RuntimeTuningConfigSchema = z
   })
   .strict()
 
+const GraphSchedulerRuntimeConfigSchema = z.object({
+  maxNodes: PositiveInt.max(10_000).default(128),
+  maxEdges: PositiveInt.max(50_000).default(512),
+  maxConcurrentRuns: PositiveInt.max(256).default(4),
+  maxConcurrentNodes: PositiveInt.max(256).default(8),
+  maxConcurrentNodesPerRun: PositiveInt.max(256).default(4),
+  maxAttemptsPerNode: PositiveInt.max(20).default(3),
+  maxRevisions: PositiveInt.max(128).default(16),
+  maxLoopIterations: z.number().int().min(0).max(128).default(5),
+  maxRunWallTimeMs: PositiveInt.max(30 * 24 * 60 * 60 * 1_000).default(6 * 60 * 60 * 1_000),
+  maxNodeWallTimeMs: PositiveInt.max(24 * 60 * 60 * 1_000).default(60 * 60 * 1_000),
+  maxTotalTokens: PositiveInt.max(1_000_000_000).optional(),
+  maxArtifactBytes: z.number().int().min(0).max(100_000_000_000).default(1024 * 1024 * 1024),
+  budgetWarningRatio: z.number().positive().max(1).default(0.8)
+}).strict().transform((scheduler) => {
+  const { maxTotalTokens, ...activeConfig } = scheduler
+  void maxTotalTokens
+  return activeConfig
+})
+
 export const GraphRuntimeConfigSchema = z
   .object({
     enabled: z.boolean().default(false),
@@ -220,21 +240,7 @@ export const GraphRuntimeConfigSchema = z
       'learning-preview',
       'stable'
     ]).default('experimental'),
-    scheduler: z.object({
-      maxNodes: PositiveInt.max(10_000).default(128),
-      maxEdges: PositiveInt.max(50_000).default(512),
-      maxConcurrentRuns: PositiveInt.max(256).default(4),
-      maxConcurrentNodes: PositiveInt.max(256).default(8),
-      maxConcurrentNodesPerRun: PositiveInt.max(256).default(4),
-      maxAttemptsPerNode: PositiveInt.max(20).default(3),
-      maxRevisions: PositiveInt.max(1_000).default(16),
-      maxLoopIterations: z.number().int().min(0).max(1_000).default(5),
-      maxRunWallTimeMs: PositiveInt.max(30 * 24 * 60 * 60 * 1_000).default(6 * 60 * 60 * 1_000),
-      maxNodeWallTimeMs: PositiveInt.max(24 * 60 * 60 * 1_000).default(60 * 60 * 1_000),
-      maxTotalTokens: PositiveInt.max(1_000_000_000).default(2_000_000),
-      maxArtifactBytes: z.number().int().min(0).max(1_000_000_000_000).default(10 * 1024 * 1024 * 1024),
-      budgetWarningRatio: z.number().positive().max(1).default(0.8)
-    }).strict(),
+    scheduler: GraphSchedulerRuntimeConfigSchema,
     context: z.object({
       maxWorkerContextBytes: PositiveInt.max(16 * 1024 * 1024).default(256 * 1024),
       maxDependencySummaryBytes: PositiveInt.max(1024 * 1024).default(32 * 1024),
@@ -243,8 +249,8 @@ export const GraphRuntimeConfigSchema = z
       maxInlineEventBytes: PositiveInt.max(1024 * 1024).default(16 * 1024)
     }).strict(),
     mailbox: z.object({
-      maxMessagesPerNode: z.number().int().min(0).max(100_000).default(128),
-      maxMessagesPerRun: z.number().int().min(0).max(1_000_000).default(2_048),
+      maxMessagesPerNode: z.number().int().min(0).max(10_000).default(128),
+      maxMessagesPerRun: z.number().int().min(0).max(100_000).default(2_048),
       maxMessageBytes: PositiveInt.max(1024 * 1024).default(16 * 1024),
       maxArtifactRefsPerMessage: z.number().int().min(0).max(1_000).default(32),
       maxMessagesPerMinute: z.number().int().min(0).max(10_000).default(60),
@@ -331,8 +337,7 @@ export const DEFAULT_GRAPH_RUNTIME_CONFIG: GraphRuntimeConfig = GraphRuntimeConf
     maxLoopIterations: 5,
     maxRunWallTimeMs: 6 * 60 * 60 * 1_000,
     maxNodeWallTimeMs: 60 * 60 * 1_000,
-    maxTotalTokens: 2_000_000,
-    maxArtifactBytes: 10 * 1024 * 1024 * 1024,
+    maxArtifactBytes: 1024 * 1024 * 1024,
     budgetWarningRatio: 0.8
   },
   context: {

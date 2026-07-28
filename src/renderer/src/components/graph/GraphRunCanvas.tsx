@@ -27,6 +27,7 @@ export function GraphRunCanvas({
   edges,
   selectedNodeId,
   onSelectNode,
+  onInspectNode,
   onOpenInspector
 }: {
   runId: string
@@ -34,6 +35,7 @@ export function GraphRunCanvas({
   edges: Edge[]
   selectedNodeId: string | null
   onSelectNode: (nodeId: string | null) => void
+  onInspectNode: (nodeId: string) => void
   onOpenInspector: () => void
 }): ReactElement {
   const { t } = useTranslation('common')
@@ -86,13 +88,14 @@ export function GraphRunCanvas({
         panOnDrag={mode === 'pan' ? [0, 1, 2] : [1, 2]}
         zoomOnScroll
         zoomOnPinch
-        zoomOnDoubleClick
+        zoomOnDoubleClick={false}
         selectionOnDrag={mode === 'select'}
         onlyRenderVisibleElements
         elementsSelectable
         onPaneClick={() => onSelectNode(null)}
         onNodeClick={(_, node) => onSelectNode(node.id)}
         onNodeDragStart={(_, node) => onSelectNode(node.id)}
+        onNodeDoubleClick={(_, node) => onInspectNode(node.id)}
         proOptions={{ hideAttribution: true }}
       >
         <Background variant={BackgroundVariant.Dots} gap={18} size={1} />

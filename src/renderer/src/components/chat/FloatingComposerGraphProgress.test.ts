@@ -93,7 +93,6 @@ function graphRun({
     steering: [],
     budget: {
       limits: {
-        maxTotalTokens: 100_000,
         maxWallTimeMs: 60_000,
         maxAttemptsPerNode: 3
       },

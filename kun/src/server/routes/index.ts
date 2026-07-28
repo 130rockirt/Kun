@@ -385,7 +385,17 @@ export function buildRouter(runtime: ServerRuntime): Router {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
     return graphRunEvents(
       runtime.graph?.control,
-      runtime.graph ? (runId, sinceSeq) => runtime.graph!.store.events(runId, sinceSeq) : undefined,
+      runtime.graph
+        ? async (runId, sinceSeq) => runtime.graph!.store.eventReplay
+          ? runtime.graph!.store.eventReplay(runId, sinceSeq)
+          : {
+              events: await runtime.graph!.store.events(runId, sinceSeq),
+              replayFloorSeq: 1,
+              currentSeq: 0,
+              snapshotSeq: 0,
+              truncated: false
+            }
+        : undefined,
       ctx.params.id,
       request
     )

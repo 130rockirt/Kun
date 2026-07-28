@@ -21,6 +21,12 @@ export function buildSkillToolProviders(
     kind: 'skill',
     enabled: true,
     available: true,
+    effects: {
+      network: false,
+      externalWrite: false,
+      processExecution: false,
+      guiAutomation: false
+    },
     tools: [
       LocalToolHost.defineTool({
         name: 'load_skill',

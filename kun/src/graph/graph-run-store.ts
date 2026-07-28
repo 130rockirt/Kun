@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdir, open, readFile, readdir, rm, stat } from 'node:fs/promises'
+import { mkdir, open, readFile, rm, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
 import type { GraphRuntimeConfig } from '../config/kun-config.js'
@@ -23,6 +23,7 @@ import { atomicWriteFile } from '../adapters/file/atomic-write.js'
 import type { RuntimeEventRecorder } from '../services/runtime-event-recorder.js'
 import { applyGraphEvent } from './graph-reducer.js'
 import { assertValidGraphPlan } from './graph-validator.js'
+import { FileGraphRunIndex } from './graph-run-index.js'
 
 const GraphJournalRecordSchema = z.object({
   checksum: z.string().regex(/^[a-f0-9]{64}$/),
@@ -32,8 +33,17 @@ type GraphJournalRecord = z.infer<typeof GraphJournalRecordSchema>
 
 const GraphSnapshotRecordSchema = z.object({
   checksum: z.string().regex(/^[a-f0-9]{64}$/),
-  state: GraphRunV1Schema
+  state: GraphRunV1Schema,
+  recentCommands: z.array(z.object({
+    commandId: z.string().optional(),
+    idempotencyKey: z.string().optional(),
+    resultDigest: z.string().regex(/^[a-f0-9]{64}$/),
+    envelope: GraphEventEnvelopeV1Schema
+  }).strict()).max(2_048).default([])
 }).strict()
+type GraphSnapshotRecord = z.infer<typeof GraphSnapshotRecordSchema>
+
+const GraphOutboxSchema = z.array(GraphEventEnvelopeV1Schema).max(10_000)
 
 export type CreateGraphRunInput = {
   runId: string
@@ -67,6 +77,14 @@ export type GraphRunListFilter = {
   statuses?: GraphRunStatus[]
 }
 
+export type GraphEventReplay = {
+  events: GraphEventEnvelopeV1[]
+  replayFloorSeq: number
+  currentSeq: number
+  snapshotSeq: number
+  truncated: boolean
+}
+
 export type GraphStoreDiagnostic = {
   runId: string
   code: 'corrupt_journal' | 'missing_artifact' | 'invalid_state'
@@ -80,6 +98,7 @@ export interface GraphRunStore {
   get(runId: string): Promise<GraphRunV1 | null>
   list(filter?: GraphRunListFilter): Promise<GraphRunV1[]>
   events(runId: string, sinceSeq?: number): Promise<GraphEventEnvelopeV1[]>
+  eventReplay?(runId: string, sinceSeq?: number): Promise<GraphEventReplay>
   snapshot(runId: string): Promise<GraphRunV1>
   remove(runId: string): Promise<void>
   diagnostics?(): Promise<GraphStoreDiagnostic[]>
@@ -118,6 +137,7 @@ export type FileGraphRunStoreOptions = {
 export class FileGraphRunStore implements GraphRunStore {
   private readonly queues = new Map<string, Promise<unknown>>()
   private ready?: Promise<void>
+  private readonly index: FileGraphRunIndex
   private readonly nowIso: () => string
   private readonly nextId: (prefix: string) => string
   private readonly issues = new Map<string, GraphStoreDiagnostic>()
@@ -125,6 +145,7 @@ export class FileGraphRunStore implements GraphRunStore {
   constructor(private readonly options: FileGraphRunStoreOptions) {
     this.nowIso = options.nowIso ?? (() => new Date().toISOString())
     this.nextId = options.nextId ?? ((prefix) => `${prefix}_${randomUUID().replaceAll('-', '')}`)
+    this.index = new FileGraphRunIndex(options.rootDir)
   }
 
   async create(input: CreateGraphRunInput): Promise<GraphCommandResultV1> {
@@ -138,7 +159,8 @@ export class FileGraphRunStore implements GraphRunStore {
       if (existing) {
         const duplicate = await this.findDuplicate(runId, input.commandId, input.idempotencyKey)
         if (!duplicate) throw new GraphRunConflictError(`GraphRun already exists: ${runId}`)
-        await this.emitRuntimeEvent(duplicate)
+        await this.index.update(existing)
+        await this.flushRuntimeEvents(runId)
         return GraphCommandResultV1Schema.parse({
           version: GRAPH_CONTRACT_VERSION,
           commandId: input.commandId,
@@ -177,9 +199,10 @@ export class FileGraphRunStore implements GraphRunStore {
         }
       })
       const state = applyGraphEvent(undefined, envelope)
-      const persisted = await this.persistEnvelope(envelope)
+      await this.persistEnvelope(envelope)
       await this.writeSnapshot(state)
-      await this.emitRuntimeEvent(persisted)
+      await this.index.update(state)
+      await this.flushRuntimeEvents(runId)
       return GraphCommandResultV1Schema.parse({
         version: GRAPH_CONTRACT_VERSION,
         commandId: input.commandId,
@@ -196,7 +219,8 @@ export class FileGraphRunStore implements GraphRunStore {
       const state = await this.loadRun(runId)
       const duplicate = await this.findDuplicate(runId, input.commandId, input.idempotencyKey)
       if (duplicate) {
-        await this.emitRuntimeEvent(duplicate)
+        await this.index.update(state)
+        await this.flushRuntimeEvents(runId)
         return { state, envelope: duplicate, duplicate: true }
       }
       if (state.lastEventSeq !== input.expectedSeq) {
@@ -230,7 +254,8 @@ export class FileGraphRunStore implements GraphRunStore {
       ) {
         await this.compactJournal(next)
       }
-      await this.emitRuntimeEvent(persisted)
+      await this.index.update(next)
+      await this.flushRuntimeEvents(runId)
       return { state: next, envelope: persisted, duplicate: false }
     })
   }
@@ -249,32 +274,44 @@ export class FileGraphRunStore implements GraphRunStore {
 
   async list(filter: GraphRunListFilter = {}): Promise<GraphRunV1[]> {
     await this.ensureRoot()
-    const entries = await readdir(this.options.rootDir, { withFileTypes: true })
     const runs: GraphRunV1[] = []
-    for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
-      if (!entry.isDirectory() || !GraphRunIdSchema.safeParse(entry.name).success) continue
-      const run = await this.get(entry.name).catch((error) => {
-        const diagnostic = diagnosticForStoreError(entry.name, error)
-        this.issues.set(entry.name, diagnostic)
+    const candidates = this.index.candidates(filter)
+    for (const entry of candidates) {
+      const run = await this.get(entry.runId).catch((error) => {
+        const diagnostic = diagnosticForStoreError(entry.runId, error)
+        this.issues.set(entry.runId, diagnostic)
         return null
       })
       if (!run) continue
-      this.issues.delete(entry.name)
-      if (filter.threadId && run.threadId !== filter.threadId) continue
-      if (filter.projectId && run.projectId !== filter.projectId) continue
-      if (filter.statuses && !filter.statuses.includes(run.status)) continue
+      this.issues.delete(entry.runId)
       runs.push(run)
     }
     return runs.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id))
   }
 
   async events(runIdInput: string, sinceSeq = 0): Promise<GraphEventEnvelopeV1[]> {
+    return (await this.eventReplay(runIdInput, sinceSeq)).events
+  }
+
+  async eventReplay(runIdInput: string, sinceSeq = 0): Promise<GraphEventReplay> {
     const runId = GraphRunIdSchema.parse(runIdInput)
     return this.enqueue(runId, async () => {
+      const state = await this.loadRun(runId)
       const records = await this.readJournal(runId)
-      return records
+      const snapshot = await this.readSnapshot(
+        runId,
+        records.at(-1)?.envelope.graphSeq ?? Number.MAX_SAFE_INTEGER
+      )
+      const replayFloorSeq = records.at(0)?.envelope.graphSeq ?? state.lastEventSeq + 1
+      return {
+        events: records
         .map((record) => record.envelope)
-        .filter((envelope) => envelope.graphSeq > sinceSeq)
+        .filter((envelope) => envelope.graphSeq > sinceSeq),
+        replayFloorSeq,
+        currentSeq: state.lastEventSeq,
+        snapshotSeq: snapshot?.state.lastEventSeq ?? 0,
+        truncated: sinceSeq + 1 < replayFloorSeq
+      }
     })
   }
 
@@ -295,6 +332,7 @@ export class FileGraphRunStore implements GraphRunStore {
         throw new GraphRunConflictError(`cannot remove nonterminal GraphRun ${runId}`)
       }
       await rm(this.runDir(runId), { recursive: true, force: true })
+      await this.index.remove(runId)
     })
   }
 
@@ -318,7 +356,7 @@ export class FileGraphRunStore implements GraphRunStore {
 
     const records = await this.readJournal(runId)
     const journalHighWater = records.at(-1)?.envelope.graphSeq ?? Number.MAX_SAFE_INTEGER
-    let state = await this.readSnapshot(runId, journalHighWater)
+    let state = (await this.readSnapshot(runId, journalHighWater))?.state
     if (!state && records.length === 0) {
       throw new GraphStoreCorruptionError(`GraphRun ${runId} has no journal events or valid snapshot`)
     }
@@ -375,14 +413,24 @@ export class FileGraphRunStore implements GraphRunStore {
     return records
   }
 
-  private async readSnapshot(runId: string, journalHighWater: number): Promise<GraphRunV1 | undefined> {
+  private async readSnapshot(
+    runId: string,
+    journalHighWater: number
+  ): Promise<GraphSnapshotRecord | undefined> {
     try {
       const raw = JSON.parse(await readFile(this.snapshotPath(runId), 'utf8')) as unknown
       const parsed = GraphSnapshotRecordSchema.safeParse(raw)
       if (!parsed.success) return undefined
-      if (checksumJson(parsed.data.state) !== parsed.data.checksum) return undefined
+      const currentChecksum = checksumJson({
+        state: parsed.data.state,
+        recentCommands: parsed.data.recentCommands
+      })
+      const legacyChecksum = checksumJson(parsed.data.state)
+      if (currentChecksum !== parsed.data.checksum && legacyChecksum !== parsed.data.checksum) {
+        return undefined
+      }
       if (parsed.data.state.lastEventSeq > journalHighWater) return undefined
-      return parsed.data.state
+      return parsed.data
     } catch {
       return undefined
     }
@@ -395,7 +443,13 @@ export class FileGraphRunStore implements GraphRunStore {
   ): Promise<GraphEventEnvelopeV1 | undefined> {
     if (!commandId && !idempotencyKey) return undefined
     const records = await this.readJournal(runId)
-    return records.find(({ envelope }) =>
+    const journalMatch = records.find(({ envelope }) =>
+      (idempotencyKey && envelope.idempotencyKey === idempotencyKey) ||
+      (commandId && envelope.commandId === commandId))?.envelope
+    if (journalMatch) return journalMatch
+    const highWater = records.at(-1)?.envelope.graphSeq ?? Number.MAX_SAFE_INTEGER
+    const snapshot = await this.readSnapshot(runId, highWater)
+    return snapshot?.recentCommands.find(({ envelope }) =>
       (idempotencyKey && envelope.idempotencyKey === idempotencyKey) ||
       (commandId && envelope.commandId === commandId))?.envelope
   }
@@ -413,6 +467,7 @@ export class FileGraphRunStore implements GraphRunStore {
     } finally {
       await handle.close()
     }
+    await this.queueRuntimeEvent(publicEnvelope)
     return publicEnvelope
   }
 
@@ -485,9 +540,25 @@ export class FileGraphRunStore implements GraphRunStore {
 
   private async writeSnapshot(state: GraphRunV1): Promise<void> {
     const parsed = GraphRunV1Schema.parse(state)
+    const records = await this.readJournal(state.id)
+    const previous = await this.readSnapshot(
+      state.id,
+      records.at(-1)?.envelope.graphSeq ?? Number.MAX_SAFE_INTEGER
+    )
+    const commands = [...(previous?.recentCommands ?? []), ...records.map(({ envelope }) => ({
+      ...(envelope.commandId ? { commandId: envelope.commandId } : {}),
+      ...(envelope.idempotencyKey ? { idempotencyKey: envelope.idempotencyKey } : {}),
+      resultDigest: checksumJson(envelope),
+      envelope
+    }))]
+    const recentCommands = [...new Map(commands.map((entry) => [
+      entry.envelope.eventId,
+      entry
+    ])).values()].slice(-2_048)
     const record = GraphSnapshotRecordSchema.parse({
-      checksum: checksumJson(parsed),
-      state: parsed
+      checksum: checksumJson({ state: parsed, recentCommands }),
+      state: parsed,
+      recentCommands
     })
     await atomicWriteFile(this.snapshotPath(state.id), `${JSON.stringify(record)}\n`)
   }
@@ -503,18 +574,50 @@ export class FileGraphRunStore implements GraphRunStore {
     )
   }
 
-  private async emitRuntimeEvent(envelope: GraphEventEnvelopeV1): Promise<void> {
+  private async queueRuntimeEvent(envelope: GraphEventEnvelopeV1): Promise<void> {
     if (!this.options.runtimeEvents) return
-    await this.options.runtimeEvents.record({
-      kind: 'graph_event',
-      threadId: envelope.threadId,
-      graph: envelope
-    })
+    const pending = await this.readOutbox(envelope.runId)
+    if (pending.some((entry) => entry.eventId === envelope.eventId)) return
+    await atomicWriteFile(
+      this.outboxPath(envelope.runId),
+      `${JSON.stringify(GraphOutboxSchema.parse([...pending, envelope]))}\n`
+    )
+  }
+
+  private async flushRuntimeEvents(runId: string): Promise<void> {
+    if (!this.options.runtimeEvents) return
+    const pending = await this.readOutbox(runId)
+    for (let index = 0; index < pending.length; index += 1) {
+      const envelope = pending[index]!
+      await this.options.runtimeEvents.record({
+        kind: 'graph_event',
+        threadId: envelope.threadId,
+        graph: envelope
+      })
+      await atomicWriteFile(
+        this.outboxPath(runId),
+        `${JSON.stringify(pending.slice(index + 1))}\n`
+      )
+    }
+  }
+
+  private async readOutbox(runId: string): Promise<GraphEventEnvelopeV1[]> {
+    try {
+      return GraphOutboxSchema.parse(
+        JSON.parse(await readFile(this.outboxPath(runId), 'utf8'))
+      )
+    } catch (error) {
+      if (String((error as { code?: unknown })?.code ?? '') === 'ENOENT') return []
+      throw error
+    }
   }
 
   private async ensureRoot(): Promise<void> {
     if (!this.ready) {
-      this.ready = mkdir(this.options.rootDir, { recursive: true, mode: 0o700 }).then(() => undefined)
+      this.ready = (async () => {
+        await mkdir(this.options.rootDir, { recursive: true, mode: 0o700 })
+        await this.index.initialize()
+      })()
     }
     return this.ready
   }
@@ -529,6 +632,10 @@ export class FileGraphRunStore implements GraphRunStore {
 
   private snapshotPath(runId: string): string {
     return join(this.runDir(runId), 'snapshot.json')
+  }
+
+  private outboxPath(runId: string): string {
+    return join(this.runDir(runId), 'runtime-outbox.json')
   }
 
   private async enqueue<T>(runId: string, operation: () => Promise<T>): Promise<T> {

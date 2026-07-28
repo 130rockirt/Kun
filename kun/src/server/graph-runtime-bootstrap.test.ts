@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import type { CapabilityToolSpec } from '../adapters/tool/capability-registry.js'
 import type { GraphRunV1 } from '../contracts/graph.js'
 import { GRAPH_WORKER_TOOL_NAMES } from '../graph/graph-tool-boundary.js'
 import { createGraphRuntimeStartOptions } from './graph-runtime-bootstrap.js'
@@ -38,13 +39,43 @@ function runtimeOptions() {
       disabledSkillIds: [],
       networkAllowed: false
     }),
-    toolNames: () => [
+    tools: (): CapabilityToolSpec[] => [...[
       'read',
       'delegate_task',
       'list_subagent_profiles',
       'task_graph',
       'design_component'
-    ],
+    ].map((name) => ({
+      name,
+      description: name,
+      inputSchema: {},
+      providerId: 'builtin',
+      providerKind: 'built-in' as const,
+      effects: {
+        network: false,
+        externalWrite: false,
+        processExecution: false,
+        guiAutomation: false
+      }
+    })), {
+      name: 'unknown_remote',
+      description: 'Unclassified remote capability',
+      inputSchema: {},
+      providerId: 'extension:unknown',
+      providerKind: 'extension' as const
+    }, {
+      name: 'web_fetch',
+      description: 'Network capability',
+      inputSchema: {},
+      providerId: 'web',
+      providerKind: 'web' as const,
+      effects: {
+        network: true,
+        externalWrite: false,
+        processExecution: false,
+        guiAutomation: false
+      }
+    }],
     skillIds: () => ['safe-skill']
   })
   return { options, startTurn, runAgentTurn }
@@ -66,6 +97,9 @@ describe('Graph runtime bootstrap capability boundary', () => {
     expect(authority).toMatchObject({
       model: 'source-model',
       providerId: 'source-provider',
+      allowedModelProviderIds: ['source-provider'],
+      allowedModels: ['source-model'],
+      allowedProviderIds: ['builtin'],
       reasoningEffort: 'high',
       allowedSkills: ['safe-skill']
     })
@@ -77,7 +111,9 @@ describe('Graph runtime bootstrap capability boundary', () => {
       'delegate_task',
       'list_subagent_profiles',
       'task_graph',
-      'design_component'
+      'design_component',
+      'unknown_remote',
+      'web_fetch'
     ]))
   })
 

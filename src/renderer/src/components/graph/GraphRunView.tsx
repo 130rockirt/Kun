@@ -4,7 +4,6 @@ import {
   CirclePause,
   CirclePlay,
   Clock3,
-  Coins,
   GitBranch,
   List,
   RefreshCw,
@@ -126,10 +125,6 @@ export function GraphRunView({
   }, {})
   const activeAgents = Object.values(run.nodes).filter((node) =>
     ['submitted', 'running', 'reviewing'].includes(node.status)).length
-  const tokenLimit = run.budget.limits.maxTotalTokens
-  const tokenPercent = tokenLimit
-    ? Math.min(100, Math.round(run.budget.totalTokens / tokenLimit * 100))
-    : 0
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="graph-run-overview shrink-0 border-b border-ds-border-muted bg-ds-sidebar px-3 pb-2.5 pt-2">
@@ -192,10 +187,9 @@ export function GraphRunView({
             icon={<Clock3 />}
           />
           <RunMetric
-            label={t('graphMetricTokenBudget')}
-            value={`${tokenPercent}%`}
-            detail={`${run.budget.totalTokens.toLocaleString()} / ${tokenLimit.toLocaleString()}`}
-            icon={<Coins />}
+            label={t('graphAttempts')}
+            value={run.budget.attempts.toLocaleString()}
+            detail={t('graphMetricTotal')}
           />
         </div>
 

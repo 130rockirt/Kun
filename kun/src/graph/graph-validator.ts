@@ -83,9 +83,9 @@ export function validateGraphPlan(
     )
   }
 
-  validateUnique(plan.phases, 'id', 'phase', issues)
-  validateUnique(plan.nodes, 'id', 'node', issues)
-  validateUnique(plan.edges, 'id', 'edge', issues)
+  validateUnique(plan.phases, 'id', 'phase', error)
+  validateUnique(plan.nodes, 'id', 'node', error)
+  validateUnique(plan.edges, 'id', 'edge', error)
 
   const phaseIds = new Set(plan.phases.map((phase) => phase.id))
   const nodes = new Map(plan.nodes.map((node) => [node.id, node]))
@@ -110,13 +110,6 @@ export function validateGraphPlan(
         'node_time_limit_exceeded',
         ['nodes', index, 'timeoutMs'],
         `node ${node.id} exceeds the host node wall-time limit`
-      )
-    }
-    if (node.tokenBudget !== undefined && node.tokenBudget > plan.budget.maxTotalTokens) {
-      error(
-        'node_token_limit_exceeded',
-        ['nodes', index, 'tokenBudget'],
-        `node ${node.id} token budget exceeds the run budget`
       )
     }
   }
@@ -169,61 +162,75 @@ export function validateGraphPlan(
     }
   }
 
-  const components = stronglyConnectedComponents(plan.nodes.map((node) => node.id), outgoing)
-  for (const component of components) {
-    const cyclic = component.length > 1 ||
-      validSchedulingEdges.some((edge) => edge.from === component[0] && edge.to === component[0])
-    if (!cyclic) continue
+  const loopContinuationEdgeIds = new Set<string>()
+  for (const [nodeIndex, node] of plan.nodes.entries()) {
+    if (node.kind !== 'loop_gate' || !node.loopGate) continue
+    const gate = node.loopGate
     if (!graphAllowsLoops(config)) {
       error(
         'rollout_loop_not_enabled',
-        ['edges'],
+        ['nodes', nodeIndex, 'loopGate'],
         `bounded loops require beta rollout or later; current stage is ${config.rolloutStage}`
       )
-      continue
     }
-    const gates = component.filter((nodeId) => nodes.get(nodeId)?.kind === 'loop_gate')
-    if (gates.length === 0) {
+    if (gate.maxIterations > plan.budget.maxLoopIterations ||
+      gate.maxIterations > config.scheduler.maxLoopIterations) {
       error(
-        'unbounded_cycle',
-        ['edges'],
-        `cycle ${component.join(' -> ')} does not contain an explicit LoopGate`
+        'loop_limit_exceeded',
+        ['nodes', nodeIndex, 'loopGate', 'maxIterations'],
+        `LoopGate ${node.id} exceeds the effective loop limit`
       )
-      continue
     }
-    for (const gateId of gates) {
-      const gate = nodes.get(gateId)?.loopGate
-      if (!gate) continue
-      if (gate.maxIterations > plan.budget.maxLoopIterations ||
-        gate.maxIterations > config.scheduler.maxLoopIterations) {
+    for (const [field, target] of [
+      ['sourceNodeId', gate.condition.sourceNodeId],
+      ['continueTargetNodeId', gate.continueTargetNodeId],
+      ['exitTargetNodeId', gate.exitTargetNodeId],
+      ['exhaustionTargetNodeId', gate.exhaustionTargetNodeId]
+    ] as const) {
+      if (target && !nodes.has(target)) {
         error(
-          'loop_limit_exceeded',
-          ['nodes', plan.nodes.findIndex((node) => node.id === gateId), 'loopGate', 'maxIterations'],
-          `LoopGate ${gateId} exceeds the effective loop limit`
-        )
-      }
-      for (const [field, target] of [
-        ['sourceNodeId', gate.condition.sourceNodeId],
-        ['continueTargetNodeId', gate.continueTargetNodeId],
-        ['exitTargetNodeId', gate.exitTargetNodeId],
-        ['exhaustionTargetNodeId', gate.exhaustionTargetNodeId]
-      ] as const) {
-        if (target && !nodes.has(target)) {
-          error(
-            'missing_loop_target',
-            ['nodes', plan.nodes.findIndex((node) => node.id === gateId), 'loopGate', field],
-            `LoopGate ${gateId} references missing node ${target}`
-          )
-        }
-      }
-      if (gate.continueTargetNodeId === gate.exitTargetNodeId) {
-        error(
-          'invalid_loop_exit',
-          ['nodes', plan.nodes.findIndex((node) => node.id === gateId), 'loopGate'],
-          `LoopGate ${gateId} must use distinct continue and exit targets`
+          'missing_loop_target',
+          ['nodes', nodeIndex, 'loopGate', field],
+          `LoopGate ${node.id} references missing node ${target}`
         )
       }
     }
+    if (gate.continueTargetNodeId === gate.exitTargetNodeId) {
+      error(
+        'invalid_loop_exit',
+        ['nodes', nodeIndex, 'loopGate'],
+        `LoopGate ${node.id} must use distinct continue and exit targets`
+      )
+    }
+    const continuations = validSchedulingEdges.filter((edge) =>
+      edge.from === node.id && edge.to === gate.continueTargetNodeId)
+    const exits = validSchedulingEdges.filter((edge) =>
+      edge.from === node.id && edge.to === gate.exitTargetNodeId)
+    if (continuations.length !== 1) {
+      error(
+        'invalid_loop_continuation_edge',
+        ['nodes', nodeIndex, 'loopGate', 'continueTargetNodeId'],
+        `LoopGate ${node.id} must have exactly one scheduling edge to ${gate.continueTargetNodeId}`
+      )
+    }
+    if (exits.length < 1) {
+      error(
+        'missing_loop_exit_edge',
+        ['nodes', nodeIndex, 'loopGate', 'exitTargetNodeId'],
+        `LoopGate ${node.id} has no scheduling edge to ${gate.exitTargetNodeId}`
+      )
+    }
+    for (const continuation of continuations) loopContinuationEdgeIds.add(continuation.id)
+  }
+
+  const residualEdges = validSchedulingEdges.filter((edge) =>
+    !loopContinuationEdgeIds.has(edge.id))
+  if (containsDirectedCycle(plan.nodes.map((node) => node.id), residualEdges)) {
+    error(
+      'unbounded_cycle',
+      ['edges'],
+      'scheduling graph remains cyclic after removing declared LoopGate continuation edges'
+    )
   }
 
   const result = GraphValidationResultV1Schema.parse({
@@ -253,18 +260,17 @@ function validateUnique<T extends Record<K, string>, K extends keyof T>(
   values: readonly T[],
   key: K,
   label: string,
-  issues: GraphValidationIssueV1[]
+  error: (code: string, path: Array<string | number>, message: string) => void
 ): void {
   const seen = new Set<string>()
   for (const [index, value] of values.entries()) {
     const id = value[key]
     if (seen.has(id)) {
-      issues.push({
-        code: `duplicate_${label}_id`,
-        path: [`${label}s`, index, String(key)],
-        message: `duplicate ${label} id ${id}`,
-        severity: 'error'
-      })
+      error(
+        `duplicate_${label}_id`,
+        [`${label}s`, index, String(key)],
+        `duplicate ${label} id ${id}`
+      )
     }
     seen.add(id)
   }
@@ -284,7 +290,6 @@ function validateBudget(
     ['maxLoopIterations', plan.budget.maxLoopIterations, config.scheduler.maxLoopIterations],
     ['maxWallTimeMs', plan.budget.maxWallTimeMs, config.scheduler.maxRunWallTimeMs],
     ['maxNodeWallTimeMs', plan.budget.maxNodeWallTimeMs, config.scheduler.maxNodeWallTimeMs],
-    ['maxTotalTokens', plan.budget.maxTotalTokens, config.scheduler.maxTotalTokens],
     ['maxMessages', plan.budget.maxMessages, config.mailbox.maxMessagesPerRun],
     ['maxArtifactBytes', plan.budget.maxArtifactBytes, config.scheduler.maxArtifactBytes]
   ]
@@ -311,44 +316,27 @@ function reachableFrom(entries: readonly string[], outgoing: ReadonlyMap<string,
   return reachable
 }
 
-function stronglyConnectedComponents(
+function containsDirectedCycle(
   nodeIds: readonly string[],
-  outgoing: ReadonlyMap<string, readonly string[]>
-): string[][] {
-  let index = 0
-  const stack: string[] = []
-  const onStack = new Set<string>()
-  const indices = new Map<string, number>()
-  const low = new Map<string, number>()
-  const components: string[][] = []
-
-  const visit = (nodeId: string): void => {
-    indices.set(nodeId, index)
-    low.set(nodeId, index)
-    index += 1
-    stack.push(nodeId)
-    onStack.add(nodeId)
-    for (const next of outgoing.get(nodeId) ?? []) {
-      if (!indices.has(next)) {
-        visit(next)
-        low.set(nodeId, Math.min(low.get(nodeId)!, low.get(next)!))
-      } else if (onStack.has(next)) {
-        low.set(nodeId, Math.min(low.get(nodeId)!, indices.get(next)!))
-      }
-    }
-    if (low.get(nodeId) !== indices.get(nodeId)) return
-    const component: string[] = []
-    while (stack.length > 0) {
-      const member = stack.pop()!
-      onStack.delete(member)
-      component.push(member)
-      if (member === nodeId) break
-    }
-    components.push(component.sort())
+  edges: readonly GraphEdgeV1[]
+): boolean {
+  const incoming = new Map(nodeIds.map((nodeId) => [nodeId, 0]))
+  const outgoing = new Map(nodeIds.map((nodeId) => [nodeId, [] as string[]]))
+  for (const edge of edges) {
+    if (!incoming.has(edge.from) || !incoming.has(edge.to)) continue
+    incoming.set(edge.to, incoming.get(edge.to)! + 1)
+    outgoing.get(edge.from)!.push(edge.to)
   }
-
-  for (const nodeId of nodeIds) {
-    if (!indices.has(nodeId)) visit(nodeId)
+  const ready = nodeIds.filter((nodeId) => incoming.get(nodeId) === 0)
+  let visited = 0
+  while (ready.length > 0) {
+    const nodeId = ready.pop()!
+    visited += 1
+    for (const target of outgoing.get(nodeId) ?? []) {
+      const next = incoming.get(target)! - 1
+      incoming.set(target, next)
+      if (next === 0) ready.push(target)
+    }
   }
-  return components
+  return visited !== nodeIds.length
 }

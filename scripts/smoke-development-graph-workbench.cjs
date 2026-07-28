@@ -157,11 +157,19 @@ async function main() {
     const canvas = page.locator('[data-graph-interaction-root]')
     await canvas.waitFor({ state: 'visible', timeout: timeoutMs })
     await page.waitForTimeout(500)
+    const visibleText = await page.locator('body').innerText()
+    if (/token (?:budget|ceiling|limit)/iu.test(visibleText)) {
+      throw new Error('Graph workbench still exposes a token budget or ceiling')
+    }
 
     const appRegion = await page.locator('.graph-run-canvas').evaluate((element) =>
       getComputedStyle(element).getPropertyValue('-webkit-app-region'))
     if (appRegion.trim() !== 'no-drag') {
       throw new Error(`Graph canvas is still inside Electron drag region: ${appRegion || 'unset'}`)
+    }
+    const inspector = page.locator('.graph-run-inspector')
+    if (await inspector.isVisible()) {
+      throw new Error('A preselected Graph node unexpectedly opened the inspector')
     }
 
     const viewport = page.locator('.graph-run-canvas .react-flow__viewport')
@@ -234,8 +242,23 @@ async function main() {
       throw new Error(`Select drag did not change the Graph node position: ${nodeAfter}`)
     }
 
-    const inspector = page.locator('.graph-run-inspector')
+    if (await inspector.isVisible()) {
+      throw new Error('Dragging a Graph node unexpectedly opened the inspector')
+    }
+    await node.click()
+    await page.waitForTimeout(120)
+    if (await inspector.isVisible()) {
+      throw new Error('Single-clicking a Graph node unexpectedly opened the inspector')
+    }
+    const viewportBeforeInspect = await viewport.getAttribute('style')
+    await node.dblclick()
     await inspector.waitFor({ state: 'visible' })
+    const viewportAfterInspect = await viewport.getAttribute('style')
+    if (viewportBeforeInspect !== viewportAfterInspect) {
+      throw new Error(
+        `Double-click inspection unexpectedly changed the Graph viewport: ${viewportBeforeInspect} -> ${viewportAfterInspect}`
+      )
+    }
     await page.getByRole('button', { name: 'Execution' }).click()
     const inspectorWidthBeforeResize = (await inspector.boundingBox())?.width
     const separator = page.getByRole('separator', { name: 'Resize Graph details' })
@@ -267,7 +290,7 @@ async function main() {
       fixture.setGraphWorkbenchSmokeWidth(680)
     })
     await page.waitForTimeout(120)
-    await node.click()
+    await node.dblclick()
     await inspector.waitFor({ state: 'visible' })
     const layout = await page.locator('.graph-run-workspace').getAttribute('data-inspector-layout')
     if (layout !== 'overlay') throw new Error(`Expected narrow overlay inspector, received ${layout}`)
@@ -289,6 +312,14 @@ async function main() {
       minimap: { before: viewportBeforeMinimap, after: viewportAfterMinimap },
       fitView: { before: viewportBeforeFit, after: viewportAfterFit },
       nodeDrag: { before: nodeBefore, after: nodeAfter },
+      inspectorGesture: {
+        preselectedOpened: false,
+        dragOpened: false,
+        singleClickOpened: false,
+        doubleClickOpened: true,
+        doubleClickZoomed: false
+      },
+      tokenCeilingVisible: false,
       inspectorResize: {
         before: inspectorWidthBeforeResize,
         after: inspectorWidthAfterResize

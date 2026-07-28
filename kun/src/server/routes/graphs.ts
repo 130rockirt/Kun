@@ -16,6 +16,7 @@ import {
   GraphRunNotFoundError,
   GraphStoreCorruptionError
 } from '../../graph/index.js'
+import type { GraphEventReplay } from '../../graph/graph-run-store.js'
 import {
   isValidArtifactId,
   readArtifactBounded,
@@ -147,16 +148,56 @@ export async function listGraphRuns(
     return ERRORS.validation('invalid Graph run status filter', parsedStatuses.error.issues)
   }
   const statuses = parsedStatuses?.data
+  const limit = Number(url.searchParams.get('limit') ?? 20)
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+    return ERRORS.validation('limit must be an integer from 1 to 100', [])
+  }
+  const cursor = decodeListCursor(url.searchParams.get('cursor'))
+  if (cursor === null) return ERRORS.validation('invalid Graph run cursor', [])
   try {
+    const runs = await graphs.list({
+      ...(url.searchParams.get('thread_id') ? { threadId: url.searchParams.get('thread_id')! } : {}),
+      ...(url.searchParams.get('project_id') ? { projectId: url.searchParams.get('project_id')! } : {}),
+      ...(statuses?.length ? { statuses } : {})
+    })
+    const page = runs.slice(cursor, cursor + limit)
     return jsonResponse({
-      runs: await graphs.list({
-        ...(url.searchParams.get('thread_id') ? { threadId: url.searchParams.get('thread_id')! } : {}),
-        ...(url.searchParams.get('project_id') ? { projectId: url.searchParams.get('project_id')! } : {}),
-        ...(statuses?.length ? { statuses } : {})
-      })
+      runs: page.map((run) => ({
+        id: run.id,
+        threadId: run.threadId,
+        projectId: run.projectId,
+        sourceTurnId: run.sourceTurnId,
+        status: run.status,
+        currentRevision: run.currentRevision,
+        lastEventSeq: run.lastEventSeq,
+        title: run.plans.at(-1)?.title ?? '',
+        goal: run.plans.at(-1)?.goal ?? '',
+        nodeCount: Object.keys(run.nodes).length,
+        createdAt: run.createdAt,
+        updatedAt: run.updatedAt
+      })),
+      ...(cursor + page.length < runs.length
+        ? { nextCursor: encodeListCursor(cursor + page.length) }
+        : {})
     })
   } catch (error) {
     return graphErrorResponse(error)
+  }
+}
+
+function encodeListCursor(offset: number): string {
+  return Buffer.from(JSON.stringify({ offset }), 'utf8').toString('base64url')
+}
+
+function decodeListCursor(value: string | null): number | null {
+  if (value === null) return 0
+  try {
+    const raw = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')) as unknown
+    if (!raw || typeof raw !== 'object') return null
+    const offset = (raw as { offset?: unknown }).offset
+    return Number.isInteger(offset) && Number(offset) >= 0 ? Number(offset) : null
+  } catch {
+    return null
   }
 }
 
@@ -174,7 +215,7 @@ export async function getGraphRun(
 
 export async function graphRunEvents(
   graphs: GraphControlService | undefined,
-  storeEvents: ((runId: string, sinceSeq?: number) => Promise<unknown[]>) | undefined,
+  storeEvents: ((runId: string, sinceSeq?: number) => Promise<GraphEventReplay>) | undefined,
   runId: string,
   request: Request
 ): Promise<JsonResponse> {
@@ -186,7 +227,7 @@ export async function graphRunEvents(
   }
   try {
     await graphs.get(runId)
-    return jsonResponse({ events: await storeEvents(runId, sinceSeq) })
+    return jsonResponse(await storeEvents(runId, sinceSeq))
   } catch (error) {
     return graphErrorResponse(error)
   }

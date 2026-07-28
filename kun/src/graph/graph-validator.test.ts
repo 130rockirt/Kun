@@ -101,12 +101,91 @@ describe('GraphPlan host validation', () => {
     }))
   })
 
+  it('rejects a bypass cycle even when the same component contains a LoopGate', () => {
+    const base = testGraphPlan()
+    const workA = { ...base.nodes[0]!, id: 'work_a' }
+    const workB = { ...base.nodes[0]!, id: 'work_b' }
+    const gate = {
+      ...base.nodes[0]!,
+      id: 'gate',
+      kind: 'loop_gate' as const,
+      loopGate: {
+        maxIterations: 2,
+        condition: { sourceNodeId: 'work_b', outcomeIn: ['repair_required'] as const },
+        continueTargetNodeId: 'work_a',
+        exitTargetNodeId: 'finish',
+        exhaustionTargetNodeId: 'finish'
+      }
+    }
+    const plan = GraphPlanV1Schema.parse({
+      ...base,
+      nodes: [{ ...base.nodes[0]!, id: 'start' }, workA, workB, gate, base.nodes[1]],
+      edges: [
+        { id: 'start_a', kind: 'control', from: 'start', to: 'work_a', requiredOutcomes: ['accepted'] },
+        { id: 'a_b', kind: 'control', from: 'work_a', to: 'work_b', requiredOutcomes: ['accepted'] },
+        { id: 'b_gate', kind: 'control', from: 'work_b', to: 'gate', requiredOutcomes: ['accepted'] },
+        { id: 'bypass', kind: 'control', from: 'work_b', to: 'work_a', requiredOutcomes: ['repair_required'] },
+        { id: 'continue', kind: 'control', from: 'gate', to: 'work_a', requiredOutcomes: ['repair_required'] },
+        { id: 'exit', kind: 'control', from: 'gate', to: 'finish', requiredOutcomes: ['accepted'] }
+      ]
+    })
+
+    expect(validateGraphPlan(plan, testGraphConfig()).result.issues)
+      .toContainEqual(expect.objectContaining({ code: 'unbounded_cycle' }))
+  })
+
+  it('bounds duplicate-id diagnostics at the contract issue limit', () => {
+    const base = testGraphPlan()
+    const duplicated = GraphPlanV1Schema.parse({
+      ...base,
+      nodes: Array.from({ length: 600 }, () => ({ ...base.nodes[0]!, id: 'duplicate' })),
+      edges: [],
+      completionNodeIds: ['duplicate'],
+      budget: { ...base.budget, maxNodes: 1_000 }
+    })
+
+    const result = validateGraphPlan(
+      duplicated,
+      testGraphConfig({ scheduler: { maxNodes: 1_000 } })
+    ).result
+    expect(result.valid).toBe(false)
+    expect(result.issues).toHaveLength(512)
+    expect(result.issues.every((issue) => issue.code === 'duplicate_node_id')).toBe(true)
+  })
+
+  it('validates a 10k-node chain without recursive traversal', () => {
+    const base = testGraphPlan()
+    const nodes = Array.from({ length: 10_000 }, (_, index) => ({
+      ...base.nodes[index === 9_999 ? 1 : 0]!,
+      id: `node_${index}`
+    }))
+    const edges = Array.from({ length: 9_999 }, (_, index) => ({
+      id: `edge_${index}`,
+      kind: 'control' as const,
+      from: `node_${index}`,
+      to: `node_${index + 1}`,
+      requiredOutcomes: ['accepted'] as const
+    }))
+    const plan = GraphPlanV1Schema.parse({
+      ...base,
+      nodes,
+      edges,
+      completionNodeIds: ['node_9999'],
+      budget: { ...base.budget, maxNodes: 10_000, maxEdges: 50_000 }
+    })
+
+    expect(validateGraphPlan(
+      plan,
+      testGraphConfig({ scheduler: { maxNodes: 10_000, maxEdges: 50_000 } })
+    ).result.valid).toBe(true)
+  })
+
   it('enforces every host budget boundary', () => {
     const plan = testGraphPlan({
       budget: {
         ...testGraphPlan().budget,
         maxConcurrentNodes: 99,
-        maxArtifactBytes: 999_999_999_999
+        maxArtifactBytes: 99_999_999_999
       }
     })
     const validation = validateGraphPlan(plan, testGraphConfig({

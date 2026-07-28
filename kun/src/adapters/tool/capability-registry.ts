@@ -1,5 +1,6 @@
 import type {
   ToolHostContext,
+  ToolEffects,
   ToolProviderKind,
   ToolProviderPolicy
 } from '../../ports/tool-host.js'
@@ -24,6 +25,7 @@ export type CapabilityToolSpec = {
   sideEffect?: 'read-only' | 'unknown'
   providerId: string
   providerKind: ToolProviderKind
+  effects?: ToolEffects
 }
 
 const PLAN_MODE_ALLOWED_TOOL_NAMES = new Set([
@@ -128,7 +130,10 @@ export class CapabilityRegistry {
         toolKind: record.tool.toolKind,
         ...(record.tool.sideEffect ? { sideEffect: record.tool.sideEffect } : {}),
         providerId: record.provider.id,
-        providerKind: record.provider.kind
+        providerKind: record.provider.kind,
+        ...(record.tool.effects || record.provider.effects
+          ? { effects: record.tool.effects ?? record.provider.effects }
+          : {})
       })
     }
     return specs
@@ -221,6 +226,7 @@ function providerPolicy(provider: ToolProviderPolicy): ToolProviderPolicy {
     kind: provider.kind,
     enabled: provider.enabled,
     available: provider.available,
-    ...(provider.reason ? { reason: provider.reason } : {})
+    ...(provider.reason ? { reason: provider.reason } : {}),
+    ...(provider.effects ? { effects: provider.effects } : {})
   }
 }

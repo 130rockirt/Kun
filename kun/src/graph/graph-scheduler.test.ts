@@ -3,8 +3,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { FileArtifactStore } from '../artifacts/artifact-store.js'
-import { GRAPH_CONTRACT_VERSION } from '../contracts/graph.js'
-import type { DelegationRuntime, ChildRunRecord } from '../delegation/delegation-runtime.js'
+import { GRAPH_CONTRACT_VERSION, GraphPlanV1Schema } from '../contracts/graph.js'
+import type {
+  ChildRunRecord,
+  ChildSecuritySnapshot,
+  DelegationRuntime
+} from '../delegation/delegation-runtime.js'
 import { GraphAssignmentResolver } from './graph-assignment.js'
 import { GraphControlService } from './graph-control-service.js'
 import { FileGraphRunStore } from './graph-run-store.js'
@@ -18,15 +22,12 @@ import {
   testGraphConfig,
   testGraphPlan
 } from './graph-test-fixtures.test-support.js'
-
 const roots: string[] = []
-
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })))
 })
-
 describe('GraphScheduler', () => {
-  it('executes dependent nodes through DelegationRuntime and completes after review', async () => {
+  it('completes regardless of a legacy Graph token ceiling', async () => {
     const root = await mkdtemp(join(tmpdir(), 'kun-graph-scheduler-'))
     roots.push(root)
     const workspace = join(root, 'workspace')
@@ -59,23 +60,15 @@ describe('GraphScheduler', () => {
       nextId
     })
     const sessions = new GraphWorkerSessionRegistry()
-    const childSecurity: Array<{
-      allowedProviderIds?: string[]
-      allowedSkillIds?: string[]
-      blockedProviderIds?: string[]
-    }> = []
+    const childSecurity: ChildSecuritySnapshot[] = []
     const fakeDelegation = {
       enabled: () => true,
       runChild: async (input: {
         onQueued?: (id: string) => Promise<void> | void
         onRunning?: (id: string) => Promise<void> | void
-        security?: {
-          allowedProviderIds?: string[]
-          allowedSkillIds?: string[]
-          blockedProviderIds?: string[]
-        }
+        security?: ChildSecuritySnapshot
       }) => {
-        childSecurity.push(input.security ?? {})
+        if (input.security) childSecurity.push(input.security)
         const childId = nextId('child')
         await input.onQueued?.(childId)
         await input.onRunning?.(childId)
@@ -101,7 +94,13 @@ describe('GraphScheduler', () => {
       threadId: 'thread_1',
       projectId: identity.projectId,
       sourceTurnId: 'turn_1',
-      plan: testGraphPlan({ workspaceRoot: workspace, autoStart: true }),
+      plan: GraphPlanV1Schema.parse({
+        ...testGraphPlan({ workspaceRoot: workspace, autoStart: true }),
+        budget: {
+          ...testGraphPlan().budget,
+          maxTotalTokens: 1
+        }
+      }),
       commandId: 'command_create',
       idempotencyKey: 'create_1',
       start: true
@@ -130,7 +129,7 @@ describe('GraphScheduler', () => {
       authorityForRun: () => ({
         workspaceRoot: workspace,
         model: 'test-model',
-        providerId: 'default',
+        providerId: 'test-provider',
         reasoningEffort: 'off',
         approvalPolicy: 'on-request',
         sandboxMode: 'workspace-write',
@@ -161,7 +160,9 @@ describe('GraphScheduler', () => {
     expect(completed.budget.totalTokens).toBe(40)
     expect(childSecurity).not.toHaveLength(0)
     expect(childSecurity.every((security) =>
-      security.allowedProviderIds === undefined &&
+      security.allowedProviderIds?.length === 0 &&
+      security.allowedModelProviderIds?.join(',') === 'test-provider' &&
+      security.allowedModelIds?.join(',') === 'test-model' &&
       security.allowedSkillIds?.join(',') === 'safe-skill' &&
       security.blockedProviderIds?.includes('imageGen') === true &&
       security.blockedProviderIds?.includes('videoGen') === true
@@ -676,7 +677,6 @@ async function waitFor<T>(
   }
   throw new Error('timed out waiting for Graph scheduler')
 }
-
 function rejectWhenAborted(
   signal: AbortSignal | undefined,
   onAbort?: () => void

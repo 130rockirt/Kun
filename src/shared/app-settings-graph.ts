@@ -16,8 +16,7 @@ export function defaultKunGraphSettings(): KunGraphSettingsV1 {
       maxLoopIterations: 5,
       maxRunWallTimeMs: 6 * 60 * 60 * 1_000,
       maxNodeWallTimeMs: 60 * 60 * 1_000,
-      maxTotalTokens: 2_000_000,
-      maxArtifactBytes: 10 * 1024 * 1024 * 1024,
+      maxArtifactBytes: 1024 * 1024 * 1024,
       budgetWarningRatio: 0.8
     },
     context: {
@@ -132,12 +131,12 @@ export function normalizeKunGraphSettings(
       maxRevisions: boundedPositiveInt(
         scheduler.maxRevisions,
         defaults.scheduler.maxRevisions,
-        1_000
+        128
       ),
       maxLoopIterations: boundedNonNegativeInt(
         scheduler.maxLoopIterations,
         defaults.scheduler.maxLoopIterations,
-        1_000
+        128
       ),
       maxRunWallTimeMs: boundedPositiveInt(
         scheduler.maxRunWallTimeMs,
@@ -149,15 +148,10 @@ export function normalizeKunGraphSettings(
         defaults.scheduler.maxNodeWallTimeMs,
         24 * 60 * 60 * 1_000
       ),
-      maxTotalTokens: boundedPositiveInt(
-        scheduler.maxTotalTokens,
-        defaults.scheduler.maxTotalTokens,
-        1_000_000_000
-      ),
       maxArtifactBytes: boundedNonNegativeInt(
         scheduler.maxArtifactBytes,
         defaults.scheduler.maxArtifactBytes,
-        1_000_000_000_000
+        100_000_000_000
       ),
       budgetWarningRatio: boundedRatio(
         scheduler.budgetWarningRatio,
@@ -195,12 +189,12 @@ export function normalizeKunGraphSettings(
       maxMessagesPerNode: boundedNonNegativeInt(
         mailbox.maxMessagesPerNode,
         defaults.mailbox.maxMessagesPerNode,
-        100_000
+        10_000
       ),
       maxMessagesPerRun: boundedNonNegativeInt(
         mailbox.maxMessagesPerRun,
         defaults.mailbox.maxMessagesPerRun,
-        1_000_000
+        100_000
       ),
       maxMessageBytes: boundedPositiveInt(
         mailbox.maxMessageBytes,

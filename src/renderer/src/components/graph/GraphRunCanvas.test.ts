@@ -55,6 +55,7 @@ describe('GraphRunCanvas', () => {
 
   it('wires click, drag, pan, zoom and keeps a dragged position across refreshes', async () => {
     const onSelectNode = vi.fn()
+    const onInspectNode = vi.fn()
     const original = [{
       id: 'audit',
       position: { x: 36, y: 40 },
@@ -68,6 +69,7 @@ describe('GraphRunCanvas', () => {
         edges: [],
         selectedNodeId: null,
         onSelectNode,
+        onInspectNode,
         onOpenInspector: vi.fn()
       }))
     })
@@ -78,6 +80,7 @@ describe('GraphRunCanvas', () => {
     expect(flow.props.nodesDraggable).toBe(false)
     expect(flow.props.panOnDrag).toEqual([0, 1, 2])
     expect(flow.props.zoomOnScroll).toBe(true)
+    expect(flow.props.zoomOnDoubleClick).toBe(false)
     expect(flow.props.fitViewOptions.minZoom).toBeGreaterThanOrEqual(0.6)
     expect(flow.props.onNodesChange).toEqual(expect.any(Function))
     const interactionRoot = renderer!.root.find((instance) =>
@@ -95,6 +98,7 @@ describe('GraphRunCanvas', () => {
     expect(flow.props.selectionOnDrag).toBe(true)
 
     act(() => {
+      flow.props.onNodeDragStart({}, { id: 'audit' })
       flow.props.onNodeClick({}, { id: 'audit' })
       flow.props.onNodesChange([{
         id: 'audit',
@@ -103,6 +107,9 @@ describe('GraphRunCanvas', () => {
       }])
     })
     expect(onSelectNode).toHaveBeenCalledWith('audit')
+    expect(onInspectNode).not.toHaveBeenCalled()
+    act(() => flow.props.onNodeDoubleClick({}, { id: 'audit' }))
+    expect(onInspectNode).toHaveBeenCalledWith('audit')
     flow = renderer!.root.find((instance) =>
       instance.props['aria-label'] === 'Directed Graph run' &&
       typeof instance.props.onNodesChange === 'function')
@@ -118,6 +125,7 @@ describe('GraphRunCanvas', () => {
         edges: [],
         selectedNodeId: 'audit',
         onSelectNode,
+        onInspectNode,
         onOpenInspector: vi.fn()
       }))
     })

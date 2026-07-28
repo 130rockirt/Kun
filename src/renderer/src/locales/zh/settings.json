@@ -1706,8 +1706,6 @@
   "graphSettingsAttemptsDesc": "包含修复和重启恢复在内的硬重试上限。",
   "graphSettingsLoops": "循环次数",
   "graphSettingsLoopsDesc": "已校验循环门的全局硬上限；设为零即禁止回环。",
-  "graphSettingsTokenBudget": "单次运行 Token 预算",
-  "graphSettingsTokenBudgetDesc": "Lead、工作代理、重试、验收和汇总共同使用的 Token 硬上限。",
   "graphSettingsRunHours": "运行超时（小时）",
   "graphSettingsRunHoursDesc": "一次 Graph 运行的最长墙钟时间，包括暂停和恢复。",
   "graphSettingsWriteIsolation": "写入隔离",

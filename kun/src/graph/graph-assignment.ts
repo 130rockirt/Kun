@@ -20,6 +20,9 @@ export type GraphParentAuthority = {
   workspaceRoot: string
   model: string
   providerId: string
+  allowedModelProviderIds?: readonly string[]
+  allowedModels?: readonly string[]
+  allowedProviderIds?: readonly string[]
   reasoningEffort: ModelReasoningEffort
   approvalPolicy: ApprovalPolicy
   sandboxMode: SandboxMode
@@ -52,7 +55,6 @@ export class GraphAssignmentResolver {
     reference: GraphAssignmentReferenceV1
     parent: GraphParentAuthority
     maxWallTimeMs: number
-    maxTokens: number
   }): Promise<GraphAssignmentSnapshotV1> {
     const capturedAt = this.nowIso()
     const requested = input.reference.kind === 'existing' ? input.reference : undefined
@@ -105,6 +107,17 @@ export class GraphAssignmentResolver {
       input.parent.allowedMcpServers.filter((serverId) => !allowedMcpServers.includes(serverId))
     )
     const approvalPolicy = narrowerApproval(input.parent.approvalPolicy, caps.approvalPolicy)
+    const model = profile.model || input.parent.model
+    const providerId = profile.providerId || input.parent.providerId
+    const allowedModelProviderIds = input.parent.allowedModelProviderIds ?? [input.parent.providerId]
+    const allowedModels = input.parent.allowedModels ?? [input.parent.model]
+    const allowedProviderIds = input.parent.allowedProviderIds ?? []
+    if (!allowedModelProviderIds.includes(providerId)) {
+      throw new Error(`profile ${profile.profileId} model provider ${providerId} expands parent authority`)
+    }
+    if (!allowedModels.includes(model)) {
+      throw new Error(`profile ${profile.profileId} model ${model} expands parent authority`)
+    }
     return GraphAssignmentSnapshotV1Schema.parse({
       version: GRAPH_CONTRACT_VERSION,
       profileId: profile.profileId,
@@ -123,8 +136,11 @@ export class GraphAssignmentResolver {
       } : {}),
       name: profile.name,
       systemPrompt: profile.systemPrompt,
-      model: profile.model || input.parent.model,
-      providerId: profile.providerId || input.parent.providerId,
+      model,
+      providerId,
+      allowedModelProviderIds,
+      allowedModels,
+      allowedProviderIds,
       reasoningEffort: profile.reasoningEffort ?? input.parent.reasoningEffort,
       toolPolicy,
       allowedTools,
@@ -140,7 +156,6 @@ export class GraphAssignmentResolver {
       writeScopes: input.node.writeScopes,
       networkAllowed: input.parent.networkAllowed && caps.networkAllowed,
       maxWallTimeMs: input.maxWallTimeMs,
-      maxTokens: input.maxTokens,
       capturedAt
     })
   }

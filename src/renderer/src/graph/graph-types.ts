@@ -89,9 +89,7 @@ export type GraphPlanNode = {
     continueTargetNodeId: string
     exitTargetNodeId: string
     exhaustionTargetNodeId?: string
-    maxTokenBudget?: number
   }
-  tokenBudget?: number
   timeoutMs?: number
   maxAttempts?: number
 }
@@ -147,6 +145,9 @@ export type GraphAttempt = {
     systemPrompt: string
     model: string
     providerId: string
+    allowedModelProviderIds: string[]
+    allowedModels: string[]
+    allowedProviderIds: string[]
     reasoningEffort: 'auto' | 'off' | 'low' | 'medium' | 'high' | 'max'
     toolPolicy: 'readOnly' | 'inherit'
     allowedTools: string[]
@@ -162,7 +163,6 @@ export type GraphAttempt = {
     writeScopes: string[]
     networkAllowed: boolean
     maxWallTimeMs: number
-    maxTokens: number
     capturedAt: string
   }
   result?: {
@@ -171,7 +171,17 @@ export type GraphAttempt = {
     changedFiles: string[]
     evidence: string[]
     risks: string[]
-    checks: Array<{ name: string; status: string; summary: string }>
+    checks?: Array<{ name: string; status: string; summary: string }>
+    reportedChecks?: Array<{ name: string; status: string; summary: string }>
+    verifiedChecks?: Array<{
+      name: string
+      status: string
+      summary: string
+      command: string[]
+      exitCode: number | null
+      workspaceRevision: string
+      outputSummary: string
+    }>
   }
 }
 
@@ -256,7 +266,6 @@ export type GraphRun = {
   }>
   budget: {
     limits: {
-      maxTotalTokens: number
       maxWallTimeMs: number
       maxAttemptsPerNode: number
     }

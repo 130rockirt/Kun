@@ -120,10 +120,10 @@ export function deterministicReview(
   createdAt: string
 ): GraphReviewResultV1 {
   const validation = attempt.validation
-  const checkFailures = attempt.result?.checks.filter((check) => check.status === 'failed') ?? []
+  const checkFailures = attempt.result?.verifiedChecks?.filter((check) => check.status !== 'passed') ?? []
   const configuredChecks = new Set(node.node.completion.review.deterministicChecks)
   const missingChecks = [...configuredChecks].filter((name) =>
-    !attempt.result?.checks.some((check) => check.name === name && check.status === 'passed'))
+    !attempt.result?.verifiedChecks?.some((check) => check.name === name && check.status === 'passed'))
   const passed = validation?.valid === true && checkFailures.length === 0 && missingChecks.length === 0
   return {
     version: GRAPH_CONTRACT_VERSION,
@@ -151,7 +151,8 @@ export function deterministicReview(
 
 export function validateWorkerResult(
   node: GraphNodeProjectionV1,
-  result: GraphWorkerResultV1
+  result: GraphWorkerResultV1,
+  missingRequiredArtifactNames: readonly string[] = []
 ) {
   const issues: Array<{
     code: string
@@ -160,7 +161,9 @@ export function validateWorkerResult(
     severity: 'error' | 'warning'
   }> = []
   for (const field of node.node.completion.requiredResultFields) {
-    const value = result[field]
+    const value = field === 'checks'
+      ? (result.reportedChecks?.length ? result.reportedChecks : result.checks)
+      : result[field]
     if (value === undefined || value === '' || (Array.isArray(value) && value.length === 0)) {
       issues.push({
         code: 'required_result_field',
@@ -169,6 +172,14 @@ export function validateWorkerResult(
         severity: 'error'
       })
     }
+  }
+  for (const artifactName of missingRequiredArtifactNames) {
+    issues.push({
+      code: 'missing_required_artifact',
+      path: ['artifactRefs'],
+      message: `required downstream artifact ${artifactName} was not published`,
+      severity: 'error'
+    })
   }
   for (const changedFile of result.changedFiles) {
     if (!node.node.writeScopes.some((scope) =>
@@ -198,7 +209,8 @@ export function parseWorkerResult(child: ChildRunRecord): GraphWorkerResultV1 {
         summary: typeof parsed.summary === 'string' ? parsed.summary : child.summary ?? '',
         artifactRefs: Array.isArray(parsed.artifactRefs) ? parsed.artifactRefs : [],
         changedFiles: stringArray(parsed.changedFiles),
-        checks: normalizeChecks(parsed.checks),
+        reportedChecks: normalizeChecks(parsed.reportedChecks ?? parsed.checks),
+        verifiedChecks: [],
         evidence: stringArray(parsed.evidence).length
           ? stringArray(parsed.evidence)
           : child.evidence ?? [],
@@ -210,7 +222,8 @@ export function parseWorkerResult(child: ChildRunRecord): GraphWorkerResultV1 {
         summary: (child.summary ?? 'Worker completed without a summary.').slice(0, 4_096),
         artifactRefs: [],
         changedFiles: [],
-        checks: [],
+        reportedChecks: [],
+        verifiedChecks: [],
         evidence: child.evidence ?? [],
         risks: [],
         suggestedMessages: []
@@ -222,7 +235,8 @@ export function parseWorkerResult(child: ChildRunRecord): GraphWorkerResultV1 {
     summary: (child.summary ?? 'Worker result failed structured parsing.').slice(0, 4_096),
     artifactRefs: [],
     changedFiles: [],
-    checks: [],
+    reportedChecks: [],
+    verifiedChecks: [],
     evidence: child.evidence ?? [],
     risks: ['Worker output did not satisfy the structured result schema.'],
     suggestedMessages: []
@@ -352,7 +366,6 @@ export function totalAttemptLimit(run: GraphRunV1): number {
 
 export function maxBudgetRatio(run: GraphRunV1): number {
   return Math.max(
-    run.budget.totalTokens / run.budget.limits.maxTotalTokens,
     run.budget.elapsedMs / run.budget.limits.maxWallTimeMs,
     run.budget.attempts / Math.max(1, totalAttemptLimit(run)),
     run.budget.artifactBytes / Math.max(1, run.budget.limits.maxArtifactBytes),
@@ -366,7 +379,6 @@ export function budgetWarningKinds(run: GraphRunV1): GraphRunV1['budget']['warni
   const threshold = run.budget.limits.warningRatio
   const entries: Array<[GraphRunV1['budget']['warningKinds'][number], number]> = [
     ['time', run.budget.elapsedMs / run.budget.limits.maxWallTimeMs],
-    ['tokens', run.budget.totalTokens / run.budget.limits.maxTotalTokens],
     ['attempts', run.budget.attempts / Math.max(1, totalAttemptLimit(run))],
     ['revisions', run.budget.revisions / run.budget.limits.maxRevisions],
     ['loops', run.budget.loopIterations / Math.max(1, run.budget.limits.maxLoopIterations)],
@@ -392,7 +404,7 @@ export function deterministicSummary(run: GraphRunV1, completedAt: string): Grap
     changedFiles: [...new Set(acceptedAttempts.flatMap((attempt) =>
       attempt.result?.changedFiles ?? []))].slice(0, 10_000),
     validationResults: acceptedAttempts.flatMap((attempt) =>
-      attempt.result?.checks ?? []).slice(0, 512),
+      attempt.result?.verifiedChecks ?? []).slice(0, 512),
     totalTokens: run.budget.totalTokens,
     totalElapsedMs: run.budget.elapsedMs,
     completedAt
