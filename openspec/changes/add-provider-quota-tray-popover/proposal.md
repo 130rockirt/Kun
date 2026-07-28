@@ -10,6 +10,7 @@ Kun's menu-bar icon currently opens a plain session/action menu, so provider all
 - Show provider status, reported balance or rate-window metrics, progress, reset time, data source, and provider dashboard action.
 - Add manual refresh plus New Chat and Open Kun actions inside the popover.
 - Hide the popover on blur or Escape, constrain it to the active display, and keep long quota content independently scrollable.
+- Adapt the shell and anchor calculation for Windows taskbars, multi-monitor work areas, high-contrast mode, and environments without compositor blur.
 - Use a dedicated renderer entry, preload bridge, and narrowly scoped IPC surface so the popover does not receive the full workbench API.
 
 ## Capabilities

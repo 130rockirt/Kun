@@ -17,9 +17,12 @@ export const TRAY_PROVIDER_QUOTA_ACTIONS = [
 
 export type TrayProviderQuotaAction = (typeof TRAY_PROVIDER_QUOTA_ACTIONS)[number]
 
+export type TrayProviderQuotaPlatform = 'darwin' | 'win32' | 'linux'
+
 export type TrayProviderQuotaContext = {
   locale: AppLocale
   colorMode: 'light' | 'dark'
+  platform: TrayProviderQuotaPlatform
 }
 
 export type KunTrayProviderQuotaApi = {

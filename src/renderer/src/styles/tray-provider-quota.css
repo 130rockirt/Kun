@@ -36,6 +36,17 @@
   --tray-danger: #f0718a;
 }
 
+:root[data-platform="win32"] {
+  --tray-bg: #f7f9fc;
+  --tray-panel: #ffffff;
+}
+
+:root[data-platform="win32"][data-theme="dark"] {
+  --tray-bg: #20232a;
+  --tray-panel: #292d36;
+  --tray-panel-strong: #2d313a;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -74,6 +85,20 @@ button {
     0 18px 48px rgba(12, 24, 44, 0.19),
     0 2px 8px rgba(12, 24, 44, 0.09);
   backdrop-filter: blur(28px) saturate(1.2);
+}
+
+:root[data-platform="win32"] .tray-quota-popover {
+  border-radius: 12px;
+  background: var(--tray-bg);
+  box-shadow:
+    0 16px 38px rgba(12, 24, 44, 0.22),
+    0 2px 8px rgba(12, 24, 44, 0.12);
+  backdrop-filter: none;
+}
+
+:root[data-platform="win32"] button:focus-visible {
+  outline: 2px solid var(--tray-accent);
+  outline-offset: -2px;
 }
 
 .tray-quota-switcher {
@@ -718,5 +743,49 @@ button {
     scroll-behavior: auto !important;
     transition-duration: 0.01ms !important;
     animation-duration: 0.01ms !important;
+  }
+}
+
+@media (forced-colors: active) {
+  :root {
+    --tray-bg: Canvas;
+    --tray-panel: Canvas;
+    --tray-panel-strong: Canvas;
+    --tray-text: CanvasText;
+    --tray-muted: CanvasText;
+    --tray-faint: GrayText;
+    --tray-border: CanvasText;
+    --tray-hover: Highlight;
+    --tray-accent: Highlight;
+    --tray-accent-soft: Canvas;
+    --tray-good: CanvasText;
+    --tray-warn: CanvasText;
+    --tray-danger: CanvasText;
+  }
+
+  .tray-quota-popover {
+    border-color: CanvasText;
+    background: Canvas;
+    box-shadow: none;
+    backdrop-filter: none;
+  }
+
+  .tray-provider-tab.is-active,
+  .tray-quota-footer button.is-primary {
+    border: 1px solid Highlight;
+    background: Highlight;
+    color: HighlightText;
+    forced-color-adjust: none;
+  }
+
+  .tray-provider-tab-track > span,
+  .tray-quota-progress span {
+    background: Highlight;
+    forced-color-adjust: none;
+  }
+
+  button:focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
   }
 }

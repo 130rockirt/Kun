@@ -32,7 +32,10 @@ import { createAppIcon, pickTrayIcon, prepareTrayIcon } from './app-icon'
 import { buildTrayMenuTemplate, parseTrayThreads, type TrayThreadSummary } from './tray-session-menu'
 import { listProviderQuotas } from './provider-quota'
 import { registerTrayQuotaIpc } from './tray-quota-ipc'
-import { resolveTrayQuotaPopoverPosition } from './tray-quota-position'
+import {
+  resolveTrayQuotaAnchorBounds,
+  resolveTrayQuotaPopoverPosition
+} from './tray-quota-position'
 import { TRAY_PROVIDER_QUOTA_CHANNELS } from '../shared/tray-provider-quota'
 import { configureLinuxWaylandImeSwitches } from './app-command-line'
 import {
@@ -668,11 +671,11 @@ const TRAY_QUOTA_WINDOW_MARGIN = 8
 
 function positionTrayQuotaWindow(window: BrowserWindow): void {
   if (!tray || tray.isDestroyed() || window.isDestroyed()) return
-  const trayBounds = tray.getBounds()
-  const display = screen.getDisplayNearestPoint({
-    x: Math.round(trayBounds.x + trayBounds.width / 2),
-    y: Math.round(trayBounds.y + trayBounds.height / 2)
-  })
+  const trayBounds = resolveTrayQuotaAnchorBounds(
+    tray.getBounds(),
+    screen.getCursorScreenPoint()
+  )
+  const display = screen.getDisplayMatching(trayBounds)
   const width = Math.max(1, Math.min(
     TRAY_QUOTA_WINDOW_WIDTH,
     display.workArea.width - TRAY_QUOTA_WINDOW_MARGIN * 2
@@ -1933,6 +1936,11 @@ app.whenReady().then(async () => {
       const settings = await store.load()
       return {
         locale: settings.locale,
+        platform: process.platform === 'darwin'
+          ? 'darwin'
+          : process.platform === 'win32'
+            ? 'win32'
+            : 'linux',
         colorMode: settings.theme === 'dark' ||
           (settings.theme === 'system' && nativeTheme.shouldUseDarkColors)
           ? 'dark'

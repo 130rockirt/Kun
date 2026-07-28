@@ -39,7 +39,11 @@ const result: ProviderQuotaListResult = {
 function createApi(overrides: Partial<KunTrayProviderQuotaApi> = {}): KunTrayProviderQuotaApi {
   return {
     list: vi.fn(async () => result),
-    context: vi.fn(async () => ({ locale: 'en' as const, colorMode: 'light' as const })),
+    context: vi.fn(async () => ({
+      locale: 'en' as const,
+      colorMode: 'light' as const,
+      platform: 'win32' as const
+    })),
     action: vi.fn(async () => undefined),
     openExternal: vi.fn(async () => undefined),
     onRefresh: vi.fn(() => () => undefined),
@@ -87,6 +91,7 @@ describe('TrayProviderQuotaPopover', () => {
     const tabs = renderer.root.findAllByProps({ role: 'tab' })
     expect(tabs).toHaveLength(3)
     expect(tabs[1].props['aria-selected']).toBe(true)
+    expect((document.documentElement.dataset as Record<string, string>).platform).toBe('win32')
     expect(JSON.stringify(renderer.toJSON())).toContain('Weekly')
     expect(JSON.stringify(renderer.toJSON())).toContain('77 requests')
 
@@ -148,5 +153,7 @@ describe('TrayProviderQuotaPopover', () => {
     expect(css).toMatch(/\.tray-quota-switcher \{[\s\S]*overflow-y: auto/)
     expect(css).toMatch(/\.tray-quota-content \{[\s\S]*min-height: 0;[\s\S]*overflow-y: auto/)
     expect(css).toMatch(/\.tray-quota-footer \{[\s\S]*flex: none/)
+    expect(css).toContain(':root[data-platform="win32"] .tray-quota-popover')
+    expect(css).toContain('@media (forced-colors: active)')
   })
 })

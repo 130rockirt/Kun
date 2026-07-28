@@ -73,9 +73,16 @@ The main process emits a refresh event after showing an already-loaded popover. 
 
 The window hides on blur, Escape, a second tray click, or when an action opens the main window. It is destroyed when the tray is disabled or the application quits. The window never appears in the taskbar or Dock window list.
 
+### Use a Windows-specific solid Fluent fallback
+
+The context bridge reports the host platform in addition to locale and color mode. On Windows, the renderer uses a tighter Fluent-style radius, a solid surface color, and a platform-specific shadow instead of depending on compositor backdrop blur. Forced-colors mode removes decorative gradients and exposes native system colors and outlines.
+
+Windows normally reports the notification-area icon at the bottom edge of a display, so the same geometry helper places the popover above it. Main resolves the display from the tray rectangle rather than only its center point, which is safer for negative-origin and mixed-DPI secondary displays. If Electron returns an empty tray rectangle, the current pointer position becomes a bounded fallback anchor. macOS keeps the translucent menu-bar presentation.
+
 ## Risks / Trade-offs
 
 - [Transparent frameless windows vary across desktop environments] → Use platform-appropriate background color, keep the layout functional without blur, and test positioning separately from visual effects.
+- [Windows can report an empty or edge-adjacent tray rectangle] → Fall back to a small pointer-centered anchor and resolve the display by rectangle before clamping to its work area.
 - [A blur event can fire while opening a provider dashboard] → Treat this as expected popover behavior and launch the dashboard through main-process IPC.
 - [Many providers can overflow the switcher] → Allow the switcher to wrap to a bounded grid and keep the detail region independently scrollable.
 - [Provider names may be long or contain unsafe text] → Truncate visual labels, preserve accessible titles, and rely on React escaping plus the normalized bounded contract.

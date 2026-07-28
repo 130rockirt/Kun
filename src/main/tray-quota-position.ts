@@ -10,6 +10,11 @@ export type TrayQuotaSize = {
   height: number
 }
 
+export type TrayQuotaPoint = {
+  x: number
+  y: number
+}
+
 export type TrayQuotaPositionInput = {
   trayBounds: TrayQuotaRectangle
   windowSize: TrayQuotaSize
@@ -40,6 +45,31 @@ export function resolveTrayQuotaPopoverPosition({
   return {
     x,
     y: clamp(Math.round(preferredY), minY, Math.max(minY, maxY))
+  }
+}
+
+export function resolveTrayQuotaAnchorBounds(
+  trayBounds: TrayQuotaRectangle,
+  pointer: TrayQuotaPoint,
+  fallbackSize = 24
+): TrayQuotaRectangle {
+  if (
+    Number.isFinite(trayBounds.x) &&
+    Number.isFinite(trayBounds.y) &&
+    Number.isFinite(trayBounds.width) &&
+    Number.isFinite(trayBounds.height) &&
+    trayBounds.width > 0 &&
+    trayBounds.height > 0
+  ) {
+    return trayBounds
+  }
+
+  const size = Math.max(1, Math.round(fallbackSize))
+  return {
+    x: Math.round(pointer.x - size / 2),
+    y: Math.round(pointer.y - size / 2),
+    width: size,
+    height: size
   }
 }
 

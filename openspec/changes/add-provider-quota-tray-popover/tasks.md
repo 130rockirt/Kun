@@ -18,3 +18,9 @@
 - [x] 3.1 Add focused positioning, preload/IPC security, provider switching, rendering, refresh, scrolling, and action tests.
 - [x] 3.2 Run focused tests, typecheck, build, lint, and `git diff --check`; separate unrelated concurrent work.
 - [x] 3.3 Commit only the tray-quota popover and OpenSpec files to local `develop`.
+
+## 4. Windows hardening
+
+- [x] 4.1 Pass platform context to the tray renderer and add a solid Fluent/forced-colors presentation for Windows.
+- [x] 4.2 Harden tray anchoring for bottom/top taskbars, secondary-display origins, and temporarily empty tray bounds.
+- [x] 4.3 Add Windows-focused geometry, renderer, typecheck, build, and 420×660 visual verification; commit only this follow-up to local `develop`.

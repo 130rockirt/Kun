@@ -62,6 +62,7 @@ export function TrayProviderQuotaPopover({
     const context = await api.context()
     document.documentElement.lang = context.locale
     document.documentElement.dataset.theme = context.colorMode
+    document.documentElement.dataset.platform = context.platform
     if (i18n.resolvedLanguage !== context.locale) {
       await i18n.changeLanguage(context.locale)
     }

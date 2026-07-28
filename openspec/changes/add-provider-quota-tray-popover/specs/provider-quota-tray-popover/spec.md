@@ -26,6 +26,14 @@ The application SHALL position the provider-quota popover inside the work area o
 - **WHEN** the tray icon does not have enough work-area space below it
 - **THEN** the popover is placed above the tray icon and clamped within the display work area
 
+#### Scenario: Windows notification area is on a secondary display
+- **WHEN** the Windows tray icon is on a display with a positive or negative desktop origin
+- **THEN** the application resolves that display from the tray rectangle and places the popover above the taskbar inside its work area
+
+#### Scenario: Tray bounds are temporarily empty
+- **WHEN** Electron reports a zero-sized tray rectangle after a tray click
+- **THEN** the application uses a small pointer-centered rectangle as the anchor and still clamps the popover to the selected display
+
 ### Requirement: Provider switcher exposes configured providers
 The popover SHALL provide an overview and a selectable item for every configured provider returned by the quota service.
 
@@ -96,3 +104,14 @@ The tray renderer SHALL receive only quota and tray-popover capabilities through
 #### Scenario: Block renderer navigation
 - **WHEN** tray content attempts to open a new window or navigate away from its bundled entry
 - **THEN** Electron denies that navigation
+
+### Requirement: Windows presentation remains usable
+The popover SHALL remain visually clear on Windows without requiring macOS-style compositor blur.
+
+#### Scenario: Standard Windows presentation
+- **WHEN** the tray renderer reports the Windows platform
+- **THEN** the shell uses a solid Fluent-style surface, Windows-appropriate radius and shadow, and the same independently scrollable content layout
+
+#### Scenario: Windows forced-colors presentation
+- **WHEN** the operating system activates forced-colors mode
+- **THEN** the popover uses system colors and visible control outlines without relying on gradients, transparency, or status color alone
