@@ -386,6 +386,7 @@ export class KunRuntimeProvider implements AgentProvider {
       }
       attachmentIds?: string[]
       workspaceCheckpointId?: string
+      workspaceCheckpointRequestId?: string
       fileReferences?: Array<{ path: string; relativePath: string; name: string; kind?: 'file' | 'directory' }>
       composerContexts?: ComposerContextAttachment[]
     }
@@ -445,6 +446,9 @@ export class KunRuntimeProvider implements AgentProvider {
     }
     if (options?.workspaceCheckpointId?.trim()) {
       body.workspaceCheckpointId = options.workspaceCheckpointId.trim()
+    }
+    if (options?.workspaceCheckpointRequestId?.trim()) {
+      body.workspaceCheckpointRequestId = options.workspaceCheckpointRequestId.trim()
     }
     if (options?.fileReferences?.length) {
       body.fileReferences = options.fileReferences

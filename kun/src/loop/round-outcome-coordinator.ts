@@ -423,6 +423,9 @@ export class RoundOutcomeCoordinator {
       threadId: input.threadId,
       turnId: input.turnId,
       workspace: prepared.workspace,
+      ...(input.turn.workspaceCheckpointRequestId
+        ? { workspaceCheckpointRequestId: input.turn.workspaceCheckpointRequestId }
+        : {}),
       orchestration: prepared.orchestration,
       messageSource: prepared.messageSource,
       additionalWorkspaces: prepared.additionalWorkspaces,

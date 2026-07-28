@@ -85,6 +85,8 @@ export type ToolHostContext = {
   threadId: string
   turnId: string
   workspace: string
+  /** Pending desktop checkpoint gate for the first workspace mutation. */
+  workspaceCheckpointRequestId?: string
   orchestration?: 'direct' | 'graph'
   messageSource?: 'background_shell' | 'background_subagent' | 'graph_runtime'
   /** Additional explicitly trusted workspace roots for this persisted thread. */

@@ -126,7 +126,7 @@ describe('runtime factory usage carryover', () => {
     })
 
     try {
-      expect(runtime.llmDebug).toBeDefined()
+      expect(runtime.llmDebug).toBeUndefined()
       expect(runtime.extensionPlatform).toBeDefined()
       expect(runtime.info().extensions).toMatchObject({
         enabled: true,
@@ -155,10 +155,11 @@ describe('runtime factory usage carryover', () => {
     }
   })
 
-  it('keeps Agent Perspective capture available when runtime llmDebug is omitted or disabled', async () => {
+  it('keeps full Agent Perspective capture off unless runtime llmDebug is enabled', async () => {
     for (const [name, runtimeOptions] of [
       ['omitted', undefined],
-      ['disabled', { llmDebug: { enabled: false } }]
+      ['disabled', { llmDebug: { enabled: false } }],
+      ['enabled', { llmDebug: { enabled: true } }]
     ] as const) {
       const dataDir = await mkdtemp(join(tmpdir(), `kun-runtime-llm-debug-${name}-`))
       tempDirs.push(dataDir)
@@ -181,8 +182,12 @@ describe('runtime factory usage carryover', () => {
 
       try {
         const recorder = runtime.llmDebug
+        if (name !== 'enabled') {
+          expect(recorder).toBeUndefined()
+          continue
+        }
         expect(recorder).toBeDefined()
-        if (!recorder) throw new Error('expected Agent Perspective recorder')
+        if (!recorder) throw new Error('expected enabled Agent Perspective recorder')
         const round = recorder.start({
           threadId: `thread-${name}`,
           turnId: 'turn-1',

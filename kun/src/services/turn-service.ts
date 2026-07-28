@@ -207,6 +207,7 @@ export class TurnService {
             disableUserInput: input.request.disableUserInput,
             imContext: input.request.imContext,
             workspaceCheckpointId: input.request.workspaceCheckpointId,
+            workspaceCheckpointRequestId: input.request.workspaceCheckpointRequestId,
             ...(options.extensionBudgetTokenBaseline !== undefined
               ? { extensionBudgetTokenBaseline: options.extensionBudgetTokenBaseline }
               : {})
@@ -865,6 +866,7 @@ export class TurnService {
       | 'toolCatalogDrift'
       | 'extensionModelRequests'
       | 'extensionToolInvocations'
+      | 'workspaceCheckpointId'
     >
   ): Promise<void> {
     await this.upsertThread(threadId, (current) => ({
@@ -893,6 +895,9 @@ export class TurnService {
                 : {}),
               ...(patch.extensionToolInvocations !== undefined
                 ? { extensionToolInvocations: patch.extensionToolInvocations }
+                : {}),
+              ...(patch.workspaceCheckpointId
+                ? { workspaceCheckpointId: patch.workspaceCheckpointId }
                 : {})
             }
           : turn

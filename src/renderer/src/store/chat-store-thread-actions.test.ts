@@ -743,6 +743,74 @@ describe('chat-store-thread-actions queued messages', () => {
     )
   })
 
+  it('starts a Git checkpoint without blocking turn admission', async () => {
+    const sendUserMessage = vi.fn(async () => ({
+      threadId: 'thr_existing',
+      turnId: 'turn_1',
+      userMessageItemId: 'user_1'
+    }))
+    registryMock.getProvider.mockReturnValue({
+      sendUserMessage,
+      subscribeThreadEvents: vi.fn(async () => undefined)
+    })
+    let finishCheckpoint!: (value: {
+      ok: true
+      checkpointId: string
+      repositoryRoot: string
+      head: string | null
+      currentBranch: string | null
+    }) => void
+    const createGitCheckpoint = vi.fn((_input: {
+      workspaceRoot: string
+      threadId: string
+      checkpointId?: string
+    }) => new Promise<{
+      ok: true
+      checkpointId: string
+      repositoryRoot: string
+      head: string | null
+      currentBranch: string | null
+    }>((resolve) => { finishCheckpoint = resolve }))
+    vi.stubGlobal('window', {
+      kunGui: {
+        getSettings: vi.fn(async () => ({
+          agents: { kun: { providerId: 'deepseek', model: 'deepseek-v4-pro' } },
+          workspaceRoot: '/workspace/deepseek-gui',
+          checkpointCleanup: { createEnabled: true, enabled: true, intervalDays: 3 },
+          codePromptPrefix: ''
+        })),
+        createGitCheckpoint,
+        logError: vi.fn(async () => undefined)
+      }
+    })
+    const { actions, state } = buildHarness()
+    state.busy = false
+    state.threads = [{ ...thread('thr_existing'), status: 'idle' }]
+
+    await expect(actions.sendMessage('optimize this', 'agent')).resolves.toBe(true)
+
+    expect(createGitCheckpoint).toHaveBeenCalledWith(expect.objectContaining({
+      workspaceRoot: '/workspace/deepseek-gui',
+      threadId: 'thr_existing',
+      checkpointId: expect.stringMatching(/^gcp_/)
+    }))
+    const checkpointId = createGitCheckpoint.mock.calls[0]![0].checkpointId!
+    expect(sendUserMessage).toHaveBeenCalledWith(
+      'thr_existing',
+      expect.any(String),
+      expect.objectContaining({ workspaceCheckpointRequestId: checkpointId })
+    )
+
+    finishCheckpoint({
+      ok: true,
+      checkpointId,
+      repositoryRoot: '/workspace/deepseek-gui',
+      head: null,
+      currentBranch: null
+    })
+    await Promise.resolve()
+  })
+
   it('sends Graph only while Graph is enabled and otherwise stays direct', async () => {
     const provider = {
       sendUserMessage: vi.fn(async () => ({

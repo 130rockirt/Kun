@@ -172,6 +172,12 @@ let drainingQueuedMessages = false
 const guidingQueuedMessageIds = new Set<string>()
 const checkpointGitAvailability = new GitCheckpointAvailabilityCache()
 
+function createWorkspaceCheckpointRequestId(): string {
+  const random = globalThis.crypto?.randomUUID?.() ??
+    `${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`
+  return `gcp_${Date.now()}_${random}`
+}
+
 function localConversationErrorBlock(error: unknown, id: string): Extract<ChatBlock, { kind: 'system' }> {
   const view = describeRuntimeError(error)
   return {
@@ -1267,7 +1273,7 @@ export function createThreadActions(
         model: composerModel
       })
       const settings = await rendererRuntimeClient.getSettings()
-      let workspaceCheckpointId: string | undefined
+      let workspaceCheckpointRequestId: string | undefined
       const checkpointThread = get().threads.find((thread) => thread.id === activeThreadId)
       const checkpointWorkspaceRoot = normalizeWorkspaceRoot(checkpointThread?.workspace) || normalizeWorkspaceRoot(settings.workspaceRoot)
       const checkpointWorkspaceKey = checkpointWorkspaceRoot.replaceAll('\\', '/').toLowerCase()
@@ -1277,36 +1283,38 @@ export function createThreadActions(
         checkpointGitAvailability.canAttempt(checkpointWorkspaceKey) &&
         typeof window.kunGui.createGitCheckpoint === 'function'
       ) {
-        const checkpoint = await window.kunGui.createGitCheckpoint({
+        workspaceCheckpointRequestId = createWorkspaceCheckpointRequestId()
+        const checkpoint = window.kunGui.createGitCheckpoint({
           workspaceRoot: checkpointWorkspaceRoot,
-          threadId: activeThreadId
+          threadId: activeThreadId,
+          checkpointId: workspaceCheckpointRequestId
         }).catch((error) => ({
           ok: false as const,
           reason: 'error' as const,
           message: error instanceof Error ? error.message : String(error)
         }))
-        if (checkpoint.ok) {
-          workspaceCheckpointId = checkpoint.checkpointId
-        } else if (
-          checkpoint.reason !== 'not_git_repo' &&
-          checkpoint.reason !== 'no_workspace' &&
-          checkpoint.reason !== 'disabled'
-        ) {
-          if (checkpoint.reason === 'git_unavailable') {
+        void checkpoint.then((result) => {
+          if (
+            result.ok ||
+            result.reason === 'not_git_repo' ||
+            result.reason === 'no_workspace' ||
+            result.reason === 'disabled'
+          ) return
+          if (result.reason === 'git_unavailable') {
             checkpointGitAvailability.markUnavailable(checkpointWorkspaceKey)
           }
           void window.kunGui.logError(
             'git-checkpoint',
-            checkpoint.reason === 'git_unavailable'
+            result.reason === 'git_unavailable'
               ? 'Git checkpoint disabled for this workspace because Git was not found'
               : 'Failed to create Git checkpoint',
             {
-              message: checkpoint.message,
-              reason: checkpoint.reason,
+              message: result.message,
+              reason: result.reason,
               workspaceRoot: checkpointWorkspaceRoot
             }
           ).catch(() => undefined)
-        }
+        })
       }
       let runtimeText: string
       if (channel) {
@@ -1332,7 +1340,7 @@ export function createThreadActions(
           ? { guiDesignArtifact: queued?.guiDesignArtifact ?? overrides?.guiDesignArtifact }
           : {}),
         ...(attachmentIds.length ? { attachmentIds } : {}),
-        ...(workspaceCheckpointId ? { workspaceCheckpointId } : {}),
+        ...(workspaceCheckpointRequestId ? { workspaceCheckpointRequestId } : {}),
         ...(fileReferences.length ? { fileReferences } : {}),
         ...(composerContexts.length ? { composerContexts } : {})
       })
@@ -1375,8 +1383,7 @@ export function createThreadActions(
                   ...block,
                   meta: {
                     ...(block.meta ?? {}),
-                    turnId,
-                    ...(workspaceCheckpointId ? { workspaceCheckpointId } : {})
+                    turnId
                   }
                 }
               : block

@@ -30,7 +30,7 @@ describe('ModelRoutingService', () => {
     const model = new RouterModel()
     const routing = new ModelRoutingService(model)
     const input = {
-      threadId: 'thread_1', turnId: 'turn_1', latestRequest: 'refactor this architecture', items: [],
+      threadId: 'thread_1', turnId: 'turn_1', latestRequest: 'Help me choose the appropriate approach', items: [],
       signal: new AbortController().signal, providerId: 'provider_1', accountId: 'account_1', candidates: ['auto']
     }
 
@@ -41,5 +41,23 @@ describe('ModelRoutingService', () => {
     routing.clear('thread_1', 'turn_1')
     await routing.resolve(input)
     expect(model.requests).toHaveLength(2)
+  })
+
+  it('uses a decisive local route without adding a classifier round trip', async () => {
+    const model = new RouterModel()
+    const routing = new ModelRoutingService(model)
+
+    await expect(routing.resolve({
+      threadId: 'thread_1',
+      turnId: 'turn_local',
+      latestRequest: '优化这个多文件 TypeScript 实现并修复测试',
+      items: [],
+      signal: new AbortController().signal,
+      candidates: ['auto']
+    })).resolves.toEqual({
+      model: 'deepseek-v4-pro',
+      reasoningEffort: 'high'
+    })
+    expect(model.requests).toEqual([])
   })
 })

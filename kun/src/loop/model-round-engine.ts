@@ -164,14 +164,25 @@ export class ModelRoundEngine {
       'pre_send',
       input.preSendDetails
     )
-    await this.deps.recordPipelineStage(
-      input.threadId,
-      input.turnId,
-      'post_send',
-      input.postSendDetails
-    )
     try {
-      for await (const chunk of this.deps.model.stream(input.request)) {
+      const streamIterator = this.deps.model.stream(input.request)[Symbol.asyncIterator]()
+      // Calling next() enters async-generator model clients and starts their
+      // fetch/SDK request. Post-send telemetry can then overlap provider TTFB
+      // instead of delaying the actual network dispatch.
+      const firstChunk = streamIterator.next()
+      void firstChunk.catch(() => undefined)
+      try {
+        await this.deps.recordPipelineStage(
+          input.threadId,
+          input.turnId,
+          'post_send',
+          input.postSendDetails
+        )
+      } catch (error) {
+        await streamIterator.return?.()
+        throw error
+      }
+      for await (const chunk of streamFromDispatchedIterator(streamIterator, firstChunk)) {
         if (input.signal.aborted) {
           await deltaEvents.flush()
           await persistAccumulatedResponse()
@@ -371,6 +382,23 @@ export class ModelRoundEngine {
       used.add(runtimeCallId)
       return runtimeCallId
     }
+  }
+}
+
+async function* streamFromDispatchedIterator<T>(
+  iterator: AsyncIterator<T>,
+  first: Promise<IteratorResult<T>>
+): AsyncGenerator<T> {
+  let completed = false
+  try {
+    let current = await first
+    while (!current.done) {
+      yield current.value
+      current = await iterator.next()
+    }
+    completed = true
+  } finally {
+    if (!completed && iterator.return) await iterator.return()
   }
 }
 

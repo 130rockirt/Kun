@@ -78,6 +78,9 @@ type GitCheckpointCleanupState = {
 const DAY_MS = 24 * 60 * 60 * 1_000
 const CHECKPOINT_CLEANUP_STATE_FILE = '.cleanup.json'
 const CHECKPOINT_REFERENCE_FILE_EXTENSIONS = new Set(['.json', '.jsonl'])
+const CHECKPOINT_GATE_DIRECTORY = 'git-checkpoint-gates'
+const DEFERRED_RETENTION_DELAY_MS = 30_000
+const deferredRetentionTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
 function checkpointFailure(error: unknown): Extract<GitCheckpointCreateResult, { ok: false }> {
   const message = error instanceof Error ? error.message : String(error)
@@ -637,6 +640,47 @@ export async function createGitCheckpoint(params: {
   workspaceRoot: string
   threadId: string
   checkpointId?: string
+  /** Return once the snapshot is safe; run history-based retention in background. */
+  deferRetention?: boolean
+  storage?: GitCheckpointStorageOptions
+}): Promise<GitCheckpointCreateResult> {
+  const requestedCheckpointId = params.checkpointId?.trim()
+  const checkpointId = requestedCheckpointId || `gcp_${Date.now()}_${randomUUID()}`
+  if (requestedCheckpointId) {
+    await writeCheckpointGateStatus(params.dataDir, {
+      version: 1,
+      checkpointId,
+      status: 'pending',
+      updatedAt: new Date().toISOString()
+    }).catch(() => undefined)
+  }
+  const result = await createGitCheckpointSnapshot({ ...params, checkpointId })
+  if (requestedCheckpointId) {
+    await writeCheckpointGateStatus(params.dataDir, result.ok
+      ? {
+          version: 1,
+          checkpointId,
+          status: 'ready',
+          updatedAt: new Date().toISOString()
+        }
+      : {
+          version: 1,
+          checkpointId,
+          status: 'failed',
+          reason: result.reason,
+          message: result.message,
+          updatedAt: new Date().toISOString()
+        }).catch(() => undefined)
+  }
+  return result
+}
+
+async function createGitCheckpointSnapshot(params: {
+  dataDir: string
+  workspaceRoot: string
+  threadId: string
+  checkpointId: string
+  deferRetention?: boolean
   storage?: GitCheckpointStorageOptions
 }): Promise<GitCheckpointCreateResult> {
   const workspaceRoot = params.workspaceRoot.trim()
@@ -654,23 +698,26 @@ export async function createGitCheckpoint(params: {
     }
     await assertNoUnmerged(repositoryRoot)
 
-    const checkpointId = params.checkpointId?.trim() || `gcp_${Date.now()}_${randomUUID()}`
+    const checkpointId = params.checkpointId
     const dir = checkpointDir(root, checkpointId)
     await rm(dir, { recursive: true, force: true })
     await mkdir(join(dir, 'untracked'), { recursive: true })
 
-    const head = await resolveHead(repositoryRoot)
-    if (head) {
-      await writeHeadBundle(repositoryRoot, checkpointHeadBundlePath(root, checkpointId))
-    }
-    const currentBranchRaw = (await runGit(repositoryRoot, ['branch', '--show-current'])).stdout.trim()
+    const [head, currentBranchResult, untrackedResult] = await Promise.all([
+      resolveHead(repositoryRoot).then(async (resolvedHead) => {
+        if (resolvedHead) {
+          await writeHeadBundle(repositoryRoot, checkpointHeadBundlePath(root, checkpointId))
+        }
+        return resolvedHead
+      }),
+      runGit(repositoryRoot, ['branch', '--show-current']),
+      runGit(repositoryRoot, ['ls-files', '--others', '--exclude-standard', '-z']),
+      writePatch(repositoryRoot, ['diff', '--binary'], join(dir, 'unstaged.patch')),
+      writePatch(repositoryRoot, ['diff', '--cached', '--binary'], join(dir, 'staged.patch'))
+    ])
+    const currentBranchRaw = currentBranchResult.stdout.trim()
     const currentBranch = currentBranchRaw || null
-    const candidateUntracked = splitNul(
-      (await runGit(repositoryRoot, ['ls-files', '--others', '--exclude-standard', '-z'])).stdout
-    )
-
-    await writePatch(repositoryRoot, ['diff', '--binary'], join(dir, 'unstaged.patch'))
-    await writePatch(repositoryRoot, ['diff', '--cached', '--binary'], join(dir, 'staged.patch'))
+    const candidateUntracked = splitNul(untrackedResult.stdout)
 
     // Bounded untracked snapshot (issue #651): copying every untracked file in
     // full each turn is what ballooned the store by GBs. Skip files over the
@@ -715,11 +762,17 @@ export async function createGitCheckpoint(params: {
     await writeFile(join(dir, 'metadata.json'), JSON.stringify(metadata, null, 2), 'utf-8')
     const manifest = await createCheckpointManifestV1({ metadata, workspaceRoot })
     await writeFile(manifestPath(root, checkpointId), JSON.stringify(manifest, null, 2), 'utf-8')
-    // Retention may only remove checkpoints that thread history no longer
-    // references. This keeps all visible rollback actions restorable.
-    const referenced = await collectReferencedCheckpointIds(params.dataDir)
-    await pruneThreadCheckpoints(root, params.threadId, maxPerThread, checkpointId, referenced)
-      .catch(() => undefined)
+    // The snapshot is already safe to use. Retention is maintenance work and
+    // must not hold the first mutating tool behind a full thread-history scan.
+    const runRetention = async (): Promise<void> => {
+      const referenced = await collectReferencedCheckpointIds(params.dataDir)
+      await pruneThreadCheckpoints(root, params.threadId, maxPerThread, checkpointId, referenced)
+    }
+    if (params.deferRetention === true) {
+      scheduleDeferredRetention(`${root}:${params.threadId}`, runRetention)
+    } else {
+      await runRetention().catch(() => undefined)
+    }
     return { ok: true, checkpointId, repositoryRoot, head, currentBranch }
   } catch (error) {
     const failure = checkpointFailure(error)
@@ -728,6 +781,53 @@ export async function createGitCheckpoint(params: {
     }
     return failure
   }
+}
+
+function scheduleDeferredRetention(key: string, task: () => Promise<void>): void {
+  const existing = deferredRetentionTimers.get(key)
+  if (existing) clearTimeout(existing)
+  const timer = setTimeout(() => {
+    deferredRetentionTimers.delete(key)
+    void task().catch(() => undefined)
+  }, DEFERRED_RETENTION_DELAY_MS)
+  timer.unref?.()
+  deferredRetentionTimers.set(key, timer)
+}
+
+async function writeCheckpointGateStatus(
+  dataDir: string,
+  status: {
+    version: 1
+    checkpointId: string
+    status: 'pending' | 'ready' | 'failed'
+    updatedAt: string
+    reason?: string
+    message?: string
+  }
+): Promise<void> {
+  const root = join(resolve(dataDir), CHECKPOINT_GATE_DIRECTORY)
+  await mkdir(root, { recursive: true, mode: 0o700 })
+  const name = Buffer.from(status.checkpointId, 'utf8').toString('base64url') || 'empty'
+  await writeFile(join(root, `${name}.json`), JSON.stringify(status), {
+    encoding: 'utf8',
+    mode: 0o600
+  })
+}
+
+export async function failGitCheckpointGate(
+  dataDir: string,
+  checkpointId: string,
+  reason: string,
+  message: string
+): Promise<void> {
+  await writeCheckpointGateStatus(dataDir, {
+    version: 1,
+    checkpointId,
+    status: 'failed',
+    reason,
+    message,
+    updatedAt: new Date().toISOString()
+  })
 }
 
 /**

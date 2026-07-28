@@ -664,6 +664,7 @@ export interface AgentProvider {
       }
       attachmentIds?: string[]
       workspaceCheckpointId?: string
+      workspaceCheckpointRequestId?: string
       fileReferences?: UserFileReference[]
       composerContexts?: ComposerContextAttachment[]
     }

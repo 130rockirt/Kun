@@ -588,6 +588,30 @@ describe('KunRuntimeProvider', () => {
     )
   })
 
+  it('posts pending checkpoint request ids without claiming rollback is ready', async () => {
+    const runtimeRequest = vi.fn(async () => ({
+      ok: true,
+      status: 202,
+      body: JSON.stringify({ threadId: 'thr_1', turnId: 'turn_abc', userMessageItemId: 'item_user_real' })
+    }))
+    installDsGui({ runtimeRequest })
+    const provider = new KunRuntimeProvider()
+    await provider.sendUserMessage('thr_1', 'hello', {
+      workspaceCheckpointRequestId: 'gcp_pending_1'
+    })
+    expect(runtimeRequest).toHaveBeenCalledWith(
+      '/v1/threads/thr_1/turns',
+      'POST',
+      JSON.stringify({
+        prompt: 'hello',
+        clientSurface: 'gui',
+        approvalPolicy: 'on-request',
+        sandboxMode: 'workspace-write',
+        workspaceCheckpointRequestId: 'gcp_pending_1'
+      })
+    )
+  })
+
   it('posts bounded extension composer context with the next Kun turn', async () => {
     const runtimeRequest = vi.fn(async () => ({
       ok: true,

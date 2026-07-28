@@ -150,6 +150,11 @@ export type AgentLoopOptions = {
   toolArgumentRepair?: {
     maxStringBytes?: number
   }
+  /** Desktop Git snapshot gate awaited only by the first mutating tool. */
+  awaitWorkspaceCheckpoint?: (
+    checkpointRequestId: string,
+    signal: AbortSignal
+  ) => Promise<string | null>
   /**
    * Tuning + test seams for goal auto-resume (KunAgent/Kun#370). Defaults
    * back off exponentially and bound consecutive no-progress retries; tests
@@ -332,6 +337,9 @@ export class AgentLoop {
       turns: opts.turns,
       events: opts.events,
       nowIso: opts.nowIso,
+      ...(opts.awaitWorkspaceCheckpoint
+        ? { awaitWorkspaceCheckpoint: opts.awaitWorkspaceCheckpoint }
+        : {}),
       ...(opts.onPlanWritten ? { onPlanWritten: opts.onPlanWritten } : {})
     })
     this.toolCallDispatcher = new ToolCallDispatcher(this.toolExecution)
@@ -388,6 +396,9 @@ export class AgentLoop {
       turnAttachments: this.turnAttachments,
       modelRoundEngine: this.modelRoundEngine,
       roundOutcome: this.roundOutcome,
+      ...(opts.awaitWorkspaceCheckpoint
+        ? { awaitWorkspaceCheckpoint: opts.awaitWorkspaceCheckpoint }
+        : {}),
       recordPipelineStage: (threadId, turnId, stage, details) =>
         this.recordPipelineStage(threadId, turnId, stage, details),
       recordToolCatalogDrift: (input) => this.recordToolCatalogDrift(input),
@@ -552,8 +563,24 @@ export class AgentLoop {
       void this.threadTitle.generateAfterTurn(threadId, turnId, signal).catch(() => {})
       if (delegatedSdkRuntime) {
         // The delegated SDK owns its model stream and cannot consume Kun's
-        // native mid-turn queue. Drain anything that arrived before startup,
-        // then seal admission so later guidance remains renderer-owned.
+        // native tool mutation gate. Preserve snapshot-before-mutation safety
+        // by resolving a pending desktop checkpoint before handing it control.
+        const checkpointRequestId = owningThread?.turns
+          .find((candidate) => candidate.id === turnId)
+          ?.workspaceCheckpointRequestId
+        if (checkpointRequestId && this.opts.awaitWorkspaceCheckpoint) {
+          const checkpointId = await this.opts.awaitWorkspaceCheckpoint(checkpointRequestId, signal)
+          if (checkpointId) {
+            await this.opts.turns.updateTurnMetadata(threadId, turnId, {
+              workspaceCheckpointId: checkpointId
+            })
+            await this.opts.turns.updateItem(threadId, `item_${turnId}_user`, {
+              workspaceCheckpointId: checkpointId
+            })
+          }
+        }
+        // Drain anything that arrived before startup, then seal admission so
+        // later guidance remains renderer-owned.
         await this.drainAndSealSteering(threadId, turnId, signal)
         const reportedStatus = await delegatedSdkRuntime.runTurn(
           threadId,

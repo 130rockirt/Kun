@@ -96,30 +96,31 @@ export class TurnContextResolver {
     const clientSurface = resolveTurnClientSurface(input.turn)
     const approvalPolicy = normalizeApprovalPolicy(input.thread.approvalPolicy)
     const sandboxMode = normalizeSandboxMode(input.thread.sandboxMode)
-    // Keep the legacy dependency/read order. Besides making failures and
-    // diagnostics deterministic, the runtimes retain per-turn diagnostic
-    // snapshots, so speculative parallel resolution would be observable.
-    const attachments = await this.deps.resolveAttachments({
-      attachmentIds: input.turn.attachmentIds ?? [],
-      threadId: input.threadId,
-      workspace,
-      modelCapabilities: input.modelCapabilities
-    })
-    const skillResolution = await this.deps.skillRuntime?.resolveTurn({
-      prompt: input.turn.prompt,
-      workspace,
-      threadId: input.threadId,
-      turnId: input.turnId,
-      ...(this.deps.allowedSkillIds ? { allowedSkillIds: this.deps.allowedSkillIds } : {}),
-      ...(this.deps.blockedSkillIds ? { blockedSkillIds: this.deps.blockedSkillIds } : {})
-    }) ?? EMPTY_SKILL_RESOLUTION
-    const instructionResolution = await this.deps.instructionRuntime?.resolveTurn({ workspace }) ??
-      EMPTY_INSTRUCTION_RESOLUTION
     const memoryStore = this.deps.getMemoryStore?.() ?? this.deps.memoryStore
-    const memories = await retrieveMemories(memoryStore, {
-      prompt: input.turn.prompt,
-      workspace
-    })
+    // These inputs are independent snapshots. Resolve their filesystem/store
+    // I/O together so model dispatch pays the slowest branch, not their sum.
+    const [attachments, skillResolution, instructionResolution, memories] = await Promise.all([
+      this.deps.resolveAttachments({
+        attachmentIds: input.turn.attachmentIds ?? [],
+        threadId: input.threadId,
+        workspace,
+        modelCapabilities: input.modelCapabilities
+      }),
+      this.deps.skillRuntime?.resolveTurn({
+        prompt: input.turn.prompt,
+        workspace,
+        threadId: input.threadId,
+        turnId: input.turnId,
+        ...(this.deps.allowedSkillIds ? { allowedSkillIds: this.deps.allowedSkillIds } : {}),
+        ...(this.deps.blockedSkillIds ? { blockedSkillIds: this.deps.blockedSkillIds } : {})
+      }) ?? Promise.resolve(EMPTY_SKILL_RESOLUTION),
+      this.deps.instructionRuntime?.resolveTurn({ workspace }) ??
+        Promise.resolve(EMPTY_INSTRUCTION_RESOLUTION),
+      retrieveMemories(memoryStore, {
+        prompt: input.turn.prompt,
+        workspace
+      })
+    ])
     const planTurnActive = !input.mode.dedicatedSvgTurn && !input.mode.planContextStale && (
       input.mode.effectiveMode === 'plan' || Boolean(input.mode.activePlanContext)
     )

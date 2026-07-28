@@ -158,6 +158,66 @@ describe('TurnContextResolver', () => {
     }))
   })
 
+  it('resolves independent attachment, skill, instruction, and memory I/O concurrently', async () => {
+    let started = 0
+    let release!: () => void
+    const barrier = new Promise<void>((resolve) => { release = resolve })
+    const joinBarrier = async <T>(value: T): Promise<T> => {
+      started += 1
+      if (started === 4) release()
+      await barrier
+      return value
+    }
+    const resolver = new TurnContextResolver({
+      toolHost: { listTools: async () => [] },
+      resolveAttachments: async () => joinBarrier({
+        imageAttachments: [],
+        textFallbacks: [],
+        documents: []
+      }),
+      skillRuntime: {
+        resolveTurn: async () => joinBarrier({
+          activeSkillIds: [],
+          activations: [],
+          instructions: [],
+          injectedBytes: 0
+        })
+      },
+      instructionRuntime: {
+        resolveTurn: async () => joinBarrier({
+          instruction: undefined,
+          sources: [],
+          injectedBytes: 0
+        })
+      },
+      memoryStore: {
+        retrieve: async () => joinBarrier([]),
+        setLastInjected: async () => undefined
+      },
+      interactiveToolBridge: { awaitUserInput: async () => ({ status: 'cancelled' }) }
+    })
+    const inputTurn = turn({ attachmentIds: [] })
+
+    await resolver.resolve({
+      threadId: 'thread_1',
+      turnId: 'turn_1',
+      thread: thread(),
+      turn: inputTurn,
+      history: [],
+      model: 'model_1',
+      modelCapabilities: capabilities(['text']),
+      signal: new AbortController().signal,
+      mode: resolveTurnModeContext({
+        turn: inputTurn,
+        workspace: '/workspace',
+        threadMode: 'agent'
+      }),
+      goalNoToolRecoverySteps: 0
+    })
+
+    expect(started).toBe(4)
+  })
+
   it('drops stale plan state and forces SVG turns to agent mode', () => {
     const stalePlan = turn({
       mode: 'plan',

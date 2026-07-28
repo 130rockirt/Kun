@@ -191,7 +191,12 @@ import {
   removeGitBranchWorktree,
   switchGitBranch
 } from '../services/git-service'
-import { createGitCheckpoint, restoreGitCheckpoint, type GitCheckpointStorageOptions } from '../services/git-checkpoint-service'
+import {
+  createGitCheckpoint,
+  failGitCheckpointGate,
+  restoreGitCheckpoint,
+  type GitCheckpointStorageOptions
+} from '../services/git-checkpoint-service'
 import {
   abortMerge,
   abortRebase,
@@ -1816,6 +1821,14 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     const request = parseIpcPayload('git:checkpoint:create', gitCheckpointCreatePayloadSchema, payload)
     const settings = await store.load()
     if (!settings.checkpointCleanup.createEnabled) {
+      if (request.checkpointId) {
+        await failGitCheckpointGate(
+          await resolveKunThreadsDataDir(),
+          request.checkpointId,
+          'disabled',
+          'Git checkpoint creation is disabled in settings.'
+        ).catch(() => undefined)
+      }
       return {
         ok: false as const,
         reason: 'disabled' as const,
@@ -1826,6 +1839,8 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       dataDir: await resolveKunThreadsDataDir(),
       workspaceRoot: request.workspaceRoot,
       threadId: request.threadId,
+      ...(request.checkpointId ? { checkpointId: request.checkpointId } : {}),
+      deferRetention: true,
       storage: resolveCheckpointStorageOptions(settings.checkpointCleanup)
     })
   })

@@ -735,6 +735,7 @@ export type KunGuiApi = ExtensionIpcApi & {
   createGitCheckpoint: (params: {
     workspaceRoot: string
     threadId: string
+    checkpointId?: string
   }) => Promise<GitCheckpointCreateResult>
   restoreGitCheckpoint: (params: {
     checkpointId: string

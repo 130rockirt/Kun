@@ -38,6 +38,8 @@ export async function resolveAutoModelRoute(input: {
 }): Promise<AutoModelRouteSelection> {
   const fallback = fallbackAutoRoute(input.latestRequest, input.selectedModelMode)
   if (input.abortSignal.aborted) return fallback
+  const local = confidentLocalAutoRoute(input.latestRequest, input.selectedModelMode)
+  if (local) return local
 
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), input.timeoutMs ?? AUTO_MODEL_ROUTER_TIMEOUT_MS)
@@ -99,7 +101,18 @@ export function autoModelHeuristic(input: string, _currentModel = ''): typeof AU
     'optimize',
     'rewrite',
     'implement',
-    'analyze'
+    'analyze',
+    '实现',
+    '重构',
+    '架构',
+    '调试',
+    '修复',
+    '安全',
+    '审查',
+    '迁移',
+    '优化',
+    '重写',
+    '分析'
   ]
   if (complexKeywords.some((keyword) => lower.includes(keyword))) {
     return AUTO_MODEL_PRO
@@ -107,6 +120,30 @@ export function autoModelHeuristic(input: string, _currentModel = ''): typeof AU
   if (len < 100) return AUTO_MODEL_FLASH
   if (len > 500) return AUTO_MODEL_PRO
   return AUTO_MODEL_FLASH
+}
+
+/**
+ * Skip the extra router request only when the local signal is decisive.
+ * Ambiguous ordinary prompts still use the Flash classifier.
+ */
+export function confidentLocalAutoRoute(
+  latestRequest: string,
+  selectedModelMode = 'auto'
+): AutoModelRouteSelection | null {
+  const trimmed = latestRequest.trim()
+  if (!trimmed) return fallbackAutoRoute(trimmed, selectedModelMode)
+  const routed = fallbackAutoRoute(trimmed, selectedModelMode)
+  const length = [...trimmed].length
+  if (routed.model === AUTO_MODEL_PRO && (
+    length > 500 ||
+    autoModelHeuristic(trimmed, selectedModelMode) === AUTO_MODEL_PRO
+  )) return routed
+
+  const normalized = trimmed.toLowerCase().replace(/[!！。.?？]+$/g, '').trim()
+  const trivial = /^(hi|hello|hey|thanks|thank you|ok|okay|你好|您好|谢谢|好的|收到|在吗)$/.test(normalized)
+  return trivial
+    ? { model: AUTO_MODEL_FLASH, reasoningEffort: 'off', source: 'heuristic' }
+    : null
 }
 
 export function parseAutoRouteRecommendation(raw: string): {

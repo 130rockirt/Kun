@@ -447,6 +447,7 @@ export type CoreTurnJson = {
   injectedInstructionSources?: Array<{ scope: 'global' | 'workspace'; path: string; bytes: number; truncated?: boolean }>
   instructionInjectionBytes?: number
   workspaceCheckpointId?: string
+  workspaceCheckpointRequestId?: string
   guiDesignCanvas?: boolean
   guiDesignMode?: boolean
   agentSurface?: 'code' | 'write' | 'design'

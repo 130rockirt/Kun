@@ -112,6 +112,8 @@ export const TurnSchema = z.object({
   injectedInstructionSources: z.array(InjectedInstructionSourceSchema).default([]),
   instructionInjectionBytes: z.number().int().nonnegative().optional(),
   workspaceCheckpointId: z.string().min(1).optional(),
+  /** Pending GUI checkpoint whose completion gates the first mutating tool. */
+  workspaceCheckpointRequestId: z.string().min(1).optional(),
   toolCatalogFingerprint: z.string().optional(),
   toolCatalogToolCount: z.number().int().nonnegative().optional(),
   toolCatalogDrift: z.boolean().optional(),
@@ -200,6 +202,7 @@ export const StartTurnRequest = z.object({
     .default([]),
   fileReferences: z.array(UserFileReferenceSchema).default([]),
   workspaceCheckpointId: z.string().min(1).optional(),
+  workspaceCheckpointRequestId: z.string().min(1).optional(),
   /**
    * Optional GUI plan context. When set, Kun advertises the
    * `create_plan` tool for the turn and writes only to the reserved

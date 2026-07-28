@@ -130,6 +130,7 @@ import {
   ThreadLifecycleFence
 } from '../services/thread-lifecycle-fence.js'
 import { LlmDebugRecorder } from '../services/llm-debug-recorder.js'
+import { waitForWorkspaceCheckpoint } from '../services/workspace-checkpoint-gate.js'
 import { ThreadService } from '../services/thread-service.js'
 import { TurnService } from '../services/turn-service.js'
 import { ReviewService } from '../services/review-service.js'
@@ -345,9 +346,11 @@ export async function createKunServeRuntime(
   const ids = new RandomIdGenerator()
   const nowIso = () => new Date().toISOString()
   const allocateSeq = (threadId: string) => eventBus.allocateSeq(threadId)
-  // Agent Perspective covers both HTTP-backed providers and delegated
-  // subscription transports. Records are private, thread-scoped JSONL.
-  const llmDebug = new LlmDebugRecorder({ dataDir: activeOptions.dataDir })
+  // Full Agent Perspective capture clones and parses model payloads. Keep it
+  // completely off the request path unless the user explicitly enables it.
+  const llmDebug = activeOptions.runtime?.llmDebug?.enabled === true
+    ? new LlmDebugRecorder({ dataDir: activeOptions.dataDir })
+    : undefined
   const agentObservability = createAgentObservabilityRecorder({
     config: activeOptions.observability,
     dataDir: activeOptions.dataDir
@@ -400,7 +403,7 @@ export async function createKunServeRuntime(
       events.clearThread(threadId)
       eventBus.clearThread(threadId)
       await Promise.all([
-        llmDebug.deleteThread(threadId),
+        ...(llmDebug ? [llmDebug.deleteThread(threadId)] : []),
         delegatedSessions.invalidate(threadId)
       ])
     },
@@ -950,7 +953,7 @@ export async function createKunServeRuntime(
           sessionStore: child.sessionStore,
           threadStore: child.threadStore,
           events: child.events,
-          debugSink: llmDebug,
+          ...(llmDebug ? { debugSink: llmDebug } : {}),
           ids: child.ids,
           prefix: child.prefix,
           providerConfigs: activeOptions.providers ?? {},
@@ -1001,7 +1004,7 @@ export async function createKunServeRuntime(
           turns: child.turns,
           events: child.events,
           ids: child.ids,
-          debugSink: llmDebug,
+          ...(llmDebug ? { debugSink: llmDebug } : {}),
           turnLimits: activeOptions.runtime?.turnLimits,
           enforceReadOnly: child.toolPolicy === 'readOnly',
           sessionCoordinator: delegatedSessions,
@@ -1025,7 +1028,7 @@ export async function createKunServeRuntime(
           turns: child.turns,
           events: child.events,
           ids: child.ids,
-          debugSink: llmDebug,
+          ...(llmDebug ? { debugSink: llmDebug } : {}),
           ...(attachmentStore ? { attachmentStore } : {}),
           turnLimits: activeOptions.runtime?.turnLimits,
           enforceReadOnly: child.toolPolicy === 'readOnly',
@@ -1266,7 +1269,7 @@ export async function createKunServeRuntime(
       turns: turnService,
       events,
       ids,
-      debugSink: llmDebug,
+      ...(llmDebug ? { debugSink: llmDebug } : {}),
       turnLimits: input.options.runtime?.turnLimits,
       sessionCoordinator: delegatedSessions,
       contextProfile: delegatedContextProfile
@@ -1287,7 +1290,7 @@ export async function createKunServeRuntime(
       turns: turnService,
       events,
       ids,
-      debugSink: llmDebug,
+      ...(llmDebug ? { debugSink: llmDebug } : {}),
       approvalGate,
       userInputGate,
       skillRuntime: input.skillRuntime,
@@ -1366,6 +1369,8 @@ export async function createKunServeRuntime(
 	    artifactStore,
 	    ...(memoryStore ? { memoryStore } : {}),
 	    runtimeDataDir: activeOptions.dataDir,
+	    awaitWorkspaceCheckpoint: (checkpointRequestId, signal) =>
+	      waitForWorkspaceCheckpoint(activeOptions.dataDir, checkpointRequestId, signal),
 	    onPlanWritten: async ({ threadId, planId, relativePath, markdown }) => {
 	      await threadService.syncTodosFromPlan(threadId, {
 	        planId,
@@ -2470,7 +2475,7 @@ export async function createKunServeRuntime(
 	        await routeHealth.flush()
       } finally {
         try {
-          await llmDebug.shutdown()
+          await llmDebug?.shutdown()
           await agentObservability?.shutdown()
         } finally {
           await stores.shutdown?.()

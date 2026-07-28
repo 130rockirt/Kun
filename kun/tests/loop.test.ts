@@ -3519,7 +3519,7 @@ describe('AgentLoop', () => {
     )
     const { turnId } = await h.turns.startTurn({
       threadId: h.threadId,
-      request: { prompt: 'hello', model: 'auto' }
+      request: { prompt: 'Help me choose the appropriate approach', model: 'auto' }
     })
 
     await h.loop.runTurn(h.threadId, turnId)
@@ -3553,7 +3553,11 @@ describe('AgentLoop', () => {
     )
     const { turnId } = await h.turns.startTurn({
       threadId: h.threadId,
-      request: { prompt: 'hello', model: 'auto', reasoningEffort: 'low' }
+      request: {
+        prompt: 'Help me choose the appropriate approach',
+        model: 'auto',
+        reasoningEffort: 'low'
+      }
     })
 
     await h.loop.runTurn(h.threadId, turnId)
@@ -3586,7 +3590,7 @@ describe('AgentLoop', () => {
     )
     const { turnId } = await h.turns.startTurn({
       threadId: h.threadId,
-      request: { prompt: 'hello' }
+      request: { prompt: 'Help me choose the appropriate approach' }
     })
 
     await h.loop.runTurn(h.threadId, turnId)

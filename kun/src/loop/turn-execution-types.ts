@@ -92,6 +92,7 @@ export type ToolTurnContextInput = {
   threadId: string
   turnId: string
   workspace: string
+  workspaceCheckpointRequestId?: string
   orchestration?: 'direct' | 'graph'
   messageSource?: 'background_shell' | 'background_subagent' | 'graph_runtime'
   additionalWorkspaces?: readonly string[]

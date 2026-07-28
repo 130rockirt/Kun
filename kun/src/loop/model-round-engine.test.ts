@@ -165,6 +165,22 @@ function harness(values: readonly ModelStreamChunk[]) {
 }
 
 describe('ModelRoundEngine', () => {
+  it('dispatches the model stream before awaiting post-send telemetry', async () => {
+    const test = harness([])
+    test.setStream(() => ({
+      async *[Symbol.asyncIterator]() {
+        test.trace.push('model:dispatched')
+        yield { kind: 'completed', stopReason: 'stop' }
+      }
+    }))
+
+    await test.run()
+
+    expect(test.trace.indexOf('model:dispatched')).toBeLessThan(
+      test.trace.indexOf('stage:post_send')
+    )
+  })
+
   it('preserves stream side-effect order through final persistence', async () => {
     const test = harness([
       { kind: 'assistant_reasoning_delta', text: 'think' },

@@ -113,7 +113,7 @@ const GRAPH_MODE_INSTRUCTION = [
 export type ModelStepServiceDeps = {
   threadStore: ThreadStore
   sessionStore: SessionStore
-  turns: Pick<TurnService, 'getTurn' | 'applyItem' | 'updateTurnMetadata'>
+  turns: Pick<TurnService, 'getTurn' | 'applyItem' | 'updateItem' | 'updateTurnMetadata'>
   events: Pick<RuntimeEventRecorder, 'record'>
   model: ModelClient
   compactor: import('./context-compactor.js').ContextCompactor
@@ -158,10 +158,15 @@ export type ModelStepServiceDeps = {
     sentInputTokens: number
   }) => Promise<void>
   rememberFailure: (turnId: string, failure: TurnExecutionFailure) => void
+  awaitWorkspaceCheckpoint?: (
+    checkpointRequestId: string,
+    signal: AbortSignal
+  ) => Promise<string | null>
 }
 
 export class ModelStepService {
   private readonly turnToolCatalogs = new TurnToolCatalogFreezer()
+  private readonly workspaceCheckpointGates = new Map<string, Promise<void>>()
 
   constructor(private readonly deps: ModelStepServiceDeps) {}
 
@@ -708,6 +713,12 @@ export class ModelStepService {
         ...clientDiagnostics
       },
       writeGeneratedImage: async ({ imageBase64 }) => {
+        await this.ensureWorkspaceCheckpoint(
+          threadId,
+          turnId,
+          turn.workspaceCheckpointRequestId,
+          signal
+        )
         const imgDir = '.deepseekgui-images'
         const stamp = new Date().toISOString().replace(/\D/g, '').slice(0, 14)
         const fileName = `img-${stamp}-${randomBytes(2).toString('hex')}.png`
@@ -737,6 +748,31 @@ export class ModelStepService {
       toolProviderKinds,
       svgCompletion
     })
+  }
+
+  private async ensureWorkspaceCheckpoint(
+    threadId: string,
+    turnId: string,
+    checkpointRequestId: string | undefined,
+    signal: AbortSignal
+  ): Promise<void> {
+    if (!checkpointRequestId || !this.deps.awaitWorkspaceCheckpoint) return
+    const key = `${turnId}:${checkpointRequestId}`
+    let gate = this.workspaceCheckpointGates.get(key)
+    if (!gate) {
+      gate = (async () => {
+        const checkpointId = await this.deps.awaitWorkspaceCheckpoint!(checkpointRequestId, signal)
+        if (!checkpointId) return
+        await this.deps.turns.updateTurnMetadata(threadId, turnId, {
+          workspaceCheckpointId: checkpointId
+        })
+        await this.deps.turns.updateItem(threadId, `item_${turnId}_user`, {
+          workspaceCheckpointId: checkpointId
+        })
+      })()
+      this.workspaceCheckpointGates.set(key, gate)
+    }
+    await gate
   }
 }
 

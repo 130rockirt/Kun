@@ -30,6 +30,9 @@ export function createToolExecutionContext(
     threadId: input.threadId,
     turnId: input.turnId,
     workspace: input.workspace,
+    ...(input.workspaceCheckpointRequestId
+      ? { workspaceCheckpointRequestId: input.workspaceCheckpointRequestId }
+      : {}),
     ...(input.orchestration ? { orchestration: input.orchestration } : {}),
     ...(input.messageSource ? { messageSource: input.messageSource } : {}),
     ...(input.additionalWorkspaces?.length ? { additionalWorkspaces: input.additionalWorkspaces } : {}),

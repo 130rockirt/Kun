@@ -107,7 +107,8 @@ export const gitBranchPayloadSchema = z
 export const gitCheckpointCreatePayloadSchema = z
   .object({
     workspaceRoot: workspaceRootSchema,
-    threadId: trimmedString(MAX_ID_LENGTH)
+    threadId: trimmedString(MAX_ID_LENGTH),
+    checkpointId: trimmedString(MAX_ID_LENGTH * 4).optional()
   })
   .strict()
 

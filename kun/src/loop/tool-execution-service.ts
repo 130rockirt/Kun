@@ -22,6 +22,10 @@ export type ToolExecutionServiceDeps = {
   events: RuntimeEventRecorder
   nowIso: () => string
   onPlanWritten?: PlanWrittenCallback
+  awaitWorkspaceCheckpoint?: (
+    checkpointRequestId: string,
+    signal: AbortSignal
+  ) => Promise<string | null>
 }
 
 export type ToolExecutionInput = {
@@ -37,6 +41,8 @@ export type ToolExecutionInput = {
  * partial updates, error normalization, and result-side plan integration.
  */
 export class ToolExecutionService {
+  private readonly checkpointGates = new Map<string, Promise<void>>()
+
   constructor(private readonly deps: ToolExecutionServiceDeps) {}
 
   async executeSafely(input: ToolExecutionInput): Promise<ToolHostResult> {
@@ -135,6 +141,7 @@ export class ToolExecutionService {
       },
       async () => {
         try {
+          await this.ensureWorkspaceCheckpoint(input)
           let acceptingUpdates = true
           let updateFailure: unknown
           let pendingUpdates = Promise.resolve()
@@ -200,6 +207,41 @@ export class ToolExecutionService {
         }
       }
     )
+  }
+
+  private async ensureWorkspaceCheckpoint(input: ToolExecutionInput): Promise<void> {
+    const requestId = input.context.workspaceCheckpointRequestId?.trim()
+    if (
+      !requestId ||
+      !this.deps.awaitWorkspaceCheckpoint ||
+      (input.call.toolKind !== 'file_change' && input.call.toolKind !== 'command_execution')
+    ) return
+
+    const key = `${input.turnId}:${requestId}`
+    let gate = this.checkpointGates.get(key)
+    if (!gate) {
+      gate = (async () => {
+        const checkpointId = await this.deps.awaitWorkspaceCheckpoint!(
+          requestId,
+          input.context.abortSignal
+        )
+        if (!checkpointId) return
+        await this.deps.turns.updateTurnMetadata(input.threadId, input.turnId, {
+          workspaceCheckpointId: checkpointId
+        })
+        await this.deps.turns.updateItem(
+          input.threadId,
+          `item_${input.turnId}_user`,
+          { workspaceCheckpointId: checkpointId }
+        )
+      })()
+      this.checkpointGates.set(key, gate)
+      if (this.checkpointGates.size > 512) {
+        const oldest = this.checkpointGates.keys().next().value
+        if (oldest !== undefined) this.checkpointGates.delete(oldest)
+      }
+    }
+    await gate
   }
 
   private async afterResultPersisted(
