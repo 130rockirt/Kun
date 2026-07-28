@@ -1,5 +1,6 @@
 export * from './bash.js'
 export * from './builtin-verify-tool.js'
+export * from './builtin-git-inspect-tool.js'
 export * from './capability-registry.js'
 export * from './create-plan-tool.js'
 export * from './delegation-tool-provider.js'

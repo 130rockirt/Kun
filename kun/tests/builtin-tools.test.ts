@@ -371,7 +371,14 @@ describe('Kun built-in tools', () => {
 
   it('exposes pi-style coding and read-only tool groups', () => {
     expect(buildCodingBuiltinLocalTools().map((tool) => tool.name)).toEqual(['read', 'bash', 'edit', 'write'])
-    expect(buildReadOnlyBuiltinLocalTools().map((tool) => tool.name)).toEqual(['read', 'grep', 'find', 'ls', 'repo_map'])
+    expect(buildReadOnlyBuiltinLocalTools().map((tool) => tool.name)).toEqual([
+      'read',
+      'grep',
+      'find',
+      'ls',
+      'repo_map',
+      'git_inspect'
+    ])
   })
 
   it('supports pi-style configurable built-in tool factory APIs', async () => {
@@ -386,6 +393,7 @@ describe('Kun built-in tools', () => {
       'bash',
       'edit',
       'find',
+      'git_inspect',
       'grep',
       'ls',
       'lsp',
@@ -411,15 +419,30 @@ describe('Kun built-in tools', () => {
     expect(defaultGrepLocalToolOperations).toEqual({})
     expect(defaultLsLocalToolOperations.readdir).toBeTypeOf('function')
     expect(createCodingTools().map((tool) => tool.name)).toEqual(['read', 'bash', 'edit', 'write'])
-    expect(createReadOnlyTools().map((tool) => tool.name)).toEqual(['read', 'grep', 'find', 'ls', 'repo_map'])
+    expect(createReadOnlyTools().map((tool) => tool.name)).toEqual([
+      'read',
+      'grep',
+      'find',
+      'ls',
+      'repo_map',
+      'git_inspect'
+    ])
     expect(createCodingToolDefinitions().map((tool) => tool.name)).toEqual(['read', 'bash', 'edit', 'write'])
-    expect(createReadOnlyToolDefinitions().map((tool) => tool.name)).toEqual(['read', 'grep', 'find', 'ls', 'repo_map'])
+    expect(createReadOnlyToolDefinitions().map((tool) => tool.name)).toEqual([
+      'read',
+      'grep',
+      'find',
+      'ls',
+      'repo_map',
+      'git_inspect'
+    ])
     const allTools = createAllTools()
     const allDefinitions = createAllToolDefinitions()
     expect(Object.keys(allTools).sort()).toEqual([
       'bash',
       'edit',
       'find',
+      'git_inspect',
       'grep',
       'ls',
       'lsp',
@@ -433,6 +456,7 @@ describe('Kun built-in tools', () => {
       'bash',
       'edit',
       'find',
+      'git_inspect',
       'grep',
       'ls',
       'lsp',

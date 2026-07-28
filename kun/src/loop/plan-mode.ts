@@ -12,8 +12,9 @@ import { VERIFY_CHANGES_TOOL_NAME } from '../adapters/tool/builtin-verify-tool.j
  */
 export const PLAN_MODE_INSTRUCTION = [
   'You are in Plan mode.',
-  'Investigate the task first using read-only tools: prefer `read`, `grep`, `find`, and `ls` to gather the facts you need.',
-  'Do NOT modify project files, apply edits, run shell commands, or run mutating commands in this mode.',
+  'Investigate the task first using the available read-only tools: prefer `repo_map`, `read`, `grep`, `find`, and `ls`, and use `git_inspect` for repository status, branches, history, revisions, diffs, and merge-base checks.',
+  'You may use `write` and `edit` only for Markdown (`.md`) working documents. The host rejects every other file mutation in this mode, including attempts through symlinks.',
+  'Do NOT run mutating shell commands or invoke tools with unknown/external side effects in this mode.',
   'If the request is ambiguous or hinges on a decision only the user can make, ask before planning: prefer the `user_input` tool to ask one concise round of clarifying questions (offer concrete options when there are any), then use the answer to write the plan in the same turn. If that tool is not available, end your turn with the question(s) in prose and wait for the answer. Either way, do NOT call `create_plan` until the ambiguity is resolved — a set of options the user still has to choose between is not a plan.',
   'When you understand the task well enough, call the `create_plan` tool to save a complete implementation plan as Markdown.',
   'For GUI-reserved plan turns, the host owns `operation`, `plan_id`, and `plan_relative_path`; provide the plan content and do not guess or invent routing metadata. For context-free Plan turns, omit `operation` to create a draft by default, or use `operation: "refine"` only when deliberately revising an explicitly targeted plan.',
@@ -23,16 +24,19 @@ export const PLAN_MODE_INSTRUCTION = [
   'After saving, give the user a short summary of the plan and what to review.'
 ].join('\n')
 
-/** Read-only tools allowed during the investigation phase of a Plan-mode
- * turn (step 0, before `create_plan` has been called). Matches the
- * PLAN_MODE_INSTRUCTION guidance. `bash` is intentionally excluded —
- * it can execute arbitrary commands and its policy is `on-request` which
- * auto-approves under `approvalPolicy: auto`. */
+/** Read-only and host-constrained tools allowed throughout a Plan-mode turn
+ * before `create_plan` has been called. `write` and `edit` are advertised
+ * here because the host independently limits them to resolved `.md` targets. */
 const PLAN_READ_ONLY_TOOL_NAMES = new Set([
   'read',
   'ls',
   'find',
   'grep',
+  'repo_map',
+  'git_inspect',
+  'lsp',
+  'write',
+  'edit',
   'web_search',
   'web_fetch'
 ])
@@ -50,8 +54,9 @@ const PLAN_INTERACTIVE_TOOL_NAMES = new Set(['user_input', 'request_user_input']
  * full agent loop.
  *
  * - Not plan-active or plan already satisfied → pass through unchanged.
- * - Step 0 (investigation): read-only + interactive (user_input) tools + create_plan.
- * - Step > 0 (must produce plan): only create_plan.
+ * - Until the plan is saved: read-only/Markdown + interactive tools +
+ *   create_plan remain available on every model step. Multi-step repository
+ *   investigation must not lose Git/read access after the first tool call.
  */
 export function resolvePlanModeToolSpecs(
   toolSpecs: ModelToolSpec[],
@@ -68,15 +73,13 @@ export function resolvePlanModeToolSpecs(
   const readOnly = options.readOnlyToolNames ?? PLAN_READ_ONLY_TOOL_NAMES
   const interactive = options.interactiveToolNames ?? PLAN_INTERACTIVE_TOOL_NAMES
   const planTool = options.planToolName ?? CREATE_PLAN_TOOL_NAME
-  return options.stepIndex === 0
-    ? toolSpecs.filter(
-        (tool) =>
-          tool.name === planTool ||
-          readOnly.has(tool.name) ||
-          interactive.has(tool.name) ||
-          tool.sideEffect === 'read-only'
-      )
-    : toolSpecs.filter((tool) => tool.name === planTool)
+  return toolSpecs.filter(
+    (tool) =>
+      tool.name === planTool ||
+      readOnly.has(tool.name) ||
+      interactive.has(tool.name) ||
+      tool.sideEffect === 'read-only'
+  )
 }
 
 // Source files a `verify_changes` run can meaningfully validate (Vitest/tsc).

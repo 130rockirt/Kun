@@ -50,7 +50,7 @@ const RUNTIME_PROVIDER_KINDS = new Set([
 ])
 const LEGACY_KUN_CORE_TOOLS = new Set([
   'read', 'bash', 'background_shell', 'edit', 'write', 'grep', 'find', 'ls', 'lsp',
-  'repo_map', 'verify_changes', 'send_im_attachment', 'echo', 'user_input',
+  'repo_map', 'git_inspect', 'verify_changes', 'send_im_attachment', 'echo', 'user_input',
   'request_user_input', 'create_plan', 'read_artifact', 'task_graph'
 ])
 const LEGACY_KUN_GUI_TOOLS = new Set([
