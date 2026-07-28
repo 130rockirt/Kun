@@ -3,7 +3,6 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { useTranslation } from 'react-i18next'
 import {
   DEFAULT_WRITE_INLINE_COMPLETION_BASE_URL,
-  activeModelProviderNeedsApiKey,
   kunSettingsPatch,
   DEFAULT_WRITE_WORKSPACE_ROOT,
   type AppSettingsPatch,
@@ -246,7 +245,6 @@ export function SettingsView(): ReactElement {
   )
   const extensionSettingsAvailable = extensionSettingsService !== null &&
     extensionSettingsContributions.length > 0
-  const initializedCategory = useRef(false)
   const saveTimer = useRef<ReturnType<typeof window.setTimeout> | null>(null)
   const statusTimer = useRef<ReturnType<typeof window.setTimeout> | null>(null)
   const draftVersion = useRef(0)
@@ -402,14 +400,6 @@ export function SettingsView(): ReactElement {
     if (category !== 'write') return
     void loadWriteDebugEntries()
   }, [category, loadWriteDebugEntries])
-
-  useEffect(() => {
-    if (!form || initializedCategory.current) return
-    initializedCategory.current = true
-    if (activeModelProviderNeedsApiKey(form)) {
-      setCategory('providers')
-    }
-  }, [form])
 
   useEffect(() => {
     if (settingsSection === 'general') {
@@ -1079,7 +1069,6 @@ export function SettingsView(): ReactElement {
 
   const kun = getKunRuntimeSettings(form)
   const provider = getModelProviderSettings(form)
-  const activeProviderNeedsApiKey = activeModelProviderNeedsApiKey(form)
 
   const update = (partial: SettingsPatch): void => {
     const next = mergeSettings(form, partial)
@@ -1392,15 +1381,6 @@ export function SettingsView(): ReactElement {
                       : t('autoApplyHint')}
             </span> : null}
           </div> : null}
-
-          {category !== 'extensions' && category !== 'dataMigration' && activeProviderNeedsApiKey ? (
-            <div className="mb-6 rounded-2xl border border-amber-300/80 bg-amber-50/95 px-5 py-4 text-amber-950 shadow-sm dark:border-amber-700/60 dark:bg-amber-950/35 dark:text-amber-100">
-              <div className="text-[15px] font-semibold">{t('apiKeyRequiredTitle')}</div>
-              <p className="mt-1 text-[13px] leading-6 text-amber-900/90 dark:text-amber-100/90">
-                {t('apiKeyRequiredBody')}
-              </p>
-            </div>
-          ) : null}
 
           {category !== 'extensions' && category !== 'dataMigration' && saveStatus === 'error' && saveError ? (
             <div

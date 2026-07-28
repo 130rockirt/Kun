@@ -529,6 +529,53 @@ describe('create_plan tool mapping', () => {
     })
   })
 
+  it('omits legacy persisted tool catalog drift items from the conversation', () => {
+    const block = chatBlockFromItem({
+      id: 'item_tool_catalog_changed',
+      turnId: 'turn_1',
+      threadId: 'thr_1',
+      role: 'system',
+      status: 'failed',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      kind: 'error',
+      message: 'Tool catalog changed for this thread',
+      code: 'tool_catalog_changed',
+      severity: 'info'
+    })
+
+    expect(block).toBeNull()
+  })
+
+  it('omits legacy live tool catalog drift items without hiding actionable errors', async () => {
+    const runtimeError = vi.fn()
+    const sink: ThreadEventSink = {
+      ...makeSink(),
+      onRuntimeError: runtimeError
+    }
+
+    await dispatchKunRuntimeEvent({
+      kind: 'item_created',
+      seq: 10,
+      timestamp: '2024-01-01T00:00:00.000Z',
+      threadId: 'thr_1',
+      turnId: 'turn_1',
+      item: {
+        id: 'item_tool_catalog_changed',
+        turnId: 'turn_1',
+        threadId: 'thr_1',
+        role: 'system',
+        status: 'failed',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        kind: 'error',
+        message: 'Tool catalog changed for this thread',
+        code: 'tool_catalog_changed',
+        severity: 'info'
+      }
+    }, sink, async () => undefined)
+
+    expect(runtimeError).not.toHaveBeenCalled()
+  })
+
   it('maps a successful create_plan result to a tool block with plan metadata', () => {
     const item: CoreTurnItemJson = {
       id: 'item_plan_1',
@@ -1422,7 +1469,7 @@ describe('streaming runtime status events', () => {
     })
   })
 
-	  it('surfaces tool catalog drift as a runtime status event', async () => {
+	  it('keeps tool catalog drift out of the conversation projection', async () => {
 	    let captured: unknown = null
     const sink: ThreadEventSink = {
       ...makeSink(),
@@ -1446,13 +1493,7 @@ describe('streaming runtime status events', () => {
       async () => undefined
     )
 
-	    expect(captured).toMatchObject({
-	      kind: 'tool_catalog_changed',
-	      itemId: 'runtime_status_tool_catalog_fp_next',
-	      turnId: 'turn_1',
-	      createdAt: '2026-06-03T10:00:01.000Z',
-	      message: 'Tool catalog changed'
-	    })
+	    expect(captured).toBeNull()
 	  })
 
 	  it('surfaces storm suppression as a runtime status event', async () => {

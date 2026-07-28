@@ -74,7 +74,9 @@ export function normalizeKunTurnItem(
     case 'review':
       return { type: 'review_updated', payload: deps.review(item) }
     case 'error':
-      return { type: 'runtime_error_received', payload: deps.itemRuntimeError(item) }
+      return item.code === 'tool_catalog_changed'
+        ? null
+        : { type: 'runtime_error_received', payload: deps.itemRuntimeError(item) }
     default:
       return null
   }
@@ -123,11 +125,12 @@ export function normalizeKunRuntimeEvent(
     }
     case 'tool_result_upload_wait':
     case 'model_request_retry':
-    case 'tool_catalog_changed':
     case 'tool_storm_suppressed': {
       const status = deps.runtimeStatus(event)
       return status ? [{ type: 'runtime_status_received', payload: status }] : []
     }
+    case 'tool_catalog_changed':
+      return []
     case 'approval_requested':
       return [deps.approvalAction(event)]
     case 'approval_resolved': {

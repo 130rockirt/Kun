@@ -1477,7 +1477,7 @@ export function chatBlockFromItem(item: CoreTurnItemJson, child?: CoreChildRunti
     case 'review':
       return reviewBlockFromItem(item)
     case 'error':
-      return systemErrorBlockFromItem(item)
+      return item.code === 'tool_catalog_changed' ? null : systemErrorBlockFromItem(item)
     default:
       return null
   }

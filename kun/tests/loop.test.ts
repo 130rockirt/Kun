@@ -880,7 +880,7 @@ describe('AgentLoop', () => {
       kind: 'tool_catalog_changed',
       changeKind: 'additive'
     })
-    expect(items.some((item) => item.kind === 'error' && item.code === 'tool_catalog_changed')).toBe(true)
+    expect(items.some((item) => item.kind === 'error' && item.code === 'tool_catalog_changed')).toBe(false)
     expect(seenInstructions[1]?.some((text) => text.includes('Tool catalog changed'))).toBe(true)
     expect(seenInstructions[1]?.some((text) => text.includes('next turn'))).toBe(true)
     expect(seenToolNames[0]).toEqual(['echo'])
@@ -944,11 +944,7 @@ describe('AgentLoop', () => {
       kind: 'tool_catalog_changed',
       changeKind: 'breaking'
     })
-    expect(items.find((item) => item.kind === 'error' && item.code === 'tool_catalog_changed'))
-      .toMatchObject({
-        kind: 'error',
-        message: expect.stringContaining('next turn')
-      })
+    expect(items.some((item) => item.kind === 'error' && item.code === 'tool_catalog_changed')).toBe(false)
   })
 
 	  it('runs consecutive built-in read-only tool calls in a deterministic parallel batch', async () => {

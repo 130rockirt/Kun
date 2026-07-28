@@ -910,14 +910,6 @@ export class AgentLoop {
     changeKind: 'additive' | 'breaking'
     message: string
   }): Promise<void> {
-    await this.opts.turns.applyItem(input.threadId, makeErrorItem({
-      id: `item_${input.turnId}_tool_catalog_changed_${input.fingerprint}`,
-      threadId: input.threadId,
-      turnId: input.turnId,
-      message: input.message,
-      code: 'tool_catalog_changed',
-      severity: 'info'
-    }))
     await this.opts.events.record({
       kind: 'tool_catalog_changed',
       threadId: input.threadId,

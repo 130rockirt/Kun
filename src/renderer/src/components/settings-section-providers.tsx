@@ -117,6 +117,20 @@ type SharedModelConnectionsSnapshot = {
   localModelGateway?: { enabled: boolean }
 }
 
+export function sharedProviderSetupNeedsApiKey(
+  providers: readonly ModelProviderProfileV1[],
+  snapshot: SharedModelConnectionsSnapshot | null
+): boolean {
+  if (!snapshot) return false
+  return !providers.some((provider) =>
+    !modelProviderRequiresApiKey(provider) ||
+    Boolean(provider.apiKey.trim()) ||
+    snapshot.providers.some((connection) =>
+      connection.id === provider.id && connection.configured
+    )
+  )
+}
+
 function validateSharedModelConnections(value: unknown): SharedModelConnectionsSnapshot {
   const snapshot = value as SharedModelConnectionsSnapshot
   if (snapshot?.schemaVersion !== 1 || !Number.isInteger(snapshot.revision) || !Array.isArray(snapshot.providers)) {
@@ -232,10 +246,11 @@ export function projectSharedModelConnections(
       }),
       id: connection.id,
       name: connection.name,
-      // Current clients resolve this provider through its protected registry
-      // binding. Keeping a cached plaintext value in renderer settings would
-      // let an unrelated save overwrite a credential changed by the TUI.
-      apiKey: '',
+      // Preserve the ephemeral compatibility value already loaded from the
+      // protected settings binding. Replacing it with an empty string makes
+      // the settings save path interpret a registry projection as an explicit
+      // disconnect and forget every legacy binding.
+      apiKey: existing?.apiKey ?? '',
       baseUrl: connection.baseUrl ?? '',
       endpointFormat: connection.endpointFormat,
       kind: connection.kind,
@@ -250,7 +265,7 @@ export function projectSharedModelConnections(
     ? existingById.get(DEFAULT_MODEL_PROVIDER_ID)
     : undefined
   const providers = compatibilityDefault
-    ? [{ ...compatibilityDefault, apiKey: '' }, ...projectedProviders]
+    ? [compatibilityDefault, ...projectedProviders]
     : projectedProviders
   return {
     provider: {
@@ -1772,6 +1787,10 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
   const activeProvider =
     displayProviders.find((item) => item.id === selectedProviderId) ??
     modelProviders[0]
+  const sharedConnectionFor = (providerId: string): SharedModelConnection | undefined =>
+    sharedConnections?.providers.find((connection) => connection.id === providerId)
+  const hasConfiguredCredential = (provider: ModelProviderProfileV1): boolean =>
+    Boolean(provider.apiKey.trim() || sharedConnectionFor(provider.id)?.configured)
   useEffect(() => {
     if (displayProviders.some((item) => item.id === selectedProviderId)) return
     setSelectedProviderId(
@@ -2850,6 +2869,47 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
       }))
       return
     }
+    const sharedConnection = sharedConnectionFor(target.id)
+    if (
+      modelProviderRequiresApiKey(target) &&
+      !target.apiKey.trim() &&
+      sharedConnection?.configured
+    ) {
+      setProbeStates((previous) => ({
+        ...previous,
+        [target.id]: { fingerprint, mode, status: 'busy' }
+      }))
+      const startedAt = performance.now()
+      try {
+        const snapshot = await requestSharedModelConnections(
+          `/v1/model-connections/${encodeURIComponent(target.id)}/probe`,
+          'POST',
+          { expectedRevision: sharedConnections?.revision ?? 0 }
+        )
+        setSharedConnections(snapshot)
+        setProbeStates((previous) => ({
+          ...previous,
+          [target.id]: {
+            fingerprint,
+            mode,
+            status: 'ok',
+            latencyMs: Math.max(0, Math.round(performance.now() - startedAt)),
+            total: sharedConnection.models.length
+          }
+        }))
+      } catch (error) {
+        setProbeStates((previous) => ({
+          ...previous,
+          [target.id]: {
+            fingerprint,
+            mode,
+            status: 'error',
+            message: error instanceof Error ? error.message : String(error)
+          }
+        }))
+      }
+      return
+    }
     if (modelProviderRequiresApiKey(target) && !target.apiKey.trim()) {
       setProbeStates((previous) => ({
         ...previous,
@@ -3069,8 +3129,9 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
   const activeMissingCredential = Boolean(
     activeProvider &&
     modelProviderRequiresApiKey(activeProvider) &&
-    !activeProvider.apiKey.trim()
+    !hasConfiguredCredential(activeProvider)
   )
+  const providerSetupNeedsApiKey = sharedProviderSetupNeedsApiKey(displayProviders, sharedConnections)
   const activeProbeBlocked = activeBaseUrlInvalid || activeMissingCredential
   const activeCursorAccount = activeProvider
     ? cursorAccounts[activeProvider.id]
@@ -3102,7 +3163,8 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
     const selected = activeProvider?.id === item.id
     const isDraft = draftProvider?.id === item.id
     const inUse = !isDraft && activeKunProviderId === item.id
-    const missingKey = modelProviderRequiresApiKey(item) && !item.apiKey.trim()
+    const configuredCredential = hasConfiguredCredential(item)
+    const missingKey = modelProviderRequiresApiKey(item) && !configuredCredential
     return (
       <button
         key={item.id}
@@ -3127,7 +3189,7 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
           <span>{t('modelProviderModelCount', { total: providerModelCount(item) })}</span>
           <span aria-hidden="true">·</span>
           <span>{providerKindLabel(item)}</span>
-          {item.apiKey.trim() ? <KeyRound className="h-3 w-3" strokeWidth={1.9} /> : null}
+          {configuredCredential ? <KeyRound className="h-3 w-3" strokeWidth={1.9} /> : null}
           {item.image ? <ImageIcon className="h-3 w-3" strokeWidth={1.9} /> : null}
           {item.models.some((model) =>
             modelSupportsImageInput(profileForModel(item, model))
@@ -3224,6 +3286,14 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
 
   return (
     <>
+      {providerSetupNeedsApiKey ? (
+        <div className="mb-6 rounded-2xl border border-amber-300/80 bg-amber-50/95 px-5 py-4 text-amber-950 shadow-sm dark:border-amber-700/60 dark:bg-amber-950/35 dark:text-amber-100">
+          <div className="text-[15px] font-semibold">{t('apiKeyRequiredTitle')}</div>
+          <p className="mt-1 text-[13px] leading-6 text-amber-900/90 dark:text-amber-100/90">
+            {t('apiKeyRequiredBody')}
+          </p>
+        </div>
+      ) : null}
       <section className="overflow-hidden rounded-2xl border border-ds-border bg-ds-card/95 shadow-sm shadow-black/5 dark:shadow-black/25">
         <header className="flex flex-wrap items-start justify-between gap-4 border-b border-ds-border-muted px-5 py-4">
           <div className="min-w-0">
@@ -3513,6 +3583,13 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                           showLabel={t('showSecret')}
                           hideLabel={t('hideSecret')}
                         />
+                        {!activeProvider.apiKey.trim() && sharedConnectionFor(activeProvider.id)?.configured ? (
+                          <span className="text-[12px] font-normal text-ds-muted">
+                            {zh
+                              ? '凭据已安全保存在共享连接中。输入新值可替换现有凭据。'
+                              : 'The credential is stored securely in the shared connection. Enter a new value to replace it.'}
+                          </span>
+                        ) : null}
                       </label>
                       {activeCursorAccountFresh && activeCursorAccount ? (
                         <p className="text-[12px] leading-5 text-ds-muted">
