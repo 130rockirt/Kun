@@ -236,6 +236,7 @@ describe('ClawSettingsSection', () => {
 
     expect(html).toContain('Telegram Bot Credentials')
     expect(html).toContain('@kun_test_bot is connected and saved locally.')
-    expect(html).not.toContain('Connect Telegram Bot')
+    expect(html).not.toContain('Connect Telegram Bot description')
+    expect(html).not.toContain('Paste the token below')
   })
 })

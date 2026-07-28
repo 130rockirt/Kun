@@ -287,6 +287,47 @@ describe('GraphControlService', () => {
     }, 'system')).rejects.toThrow(/not required/)
   })
 
+  it('rejects a pass review when host validation is invalid', async () => {
+    const { control, store } = await fixture()
+    const source = testGraphPlan().nodes[0]!
+    await control.create({
+      runId: 'run_invalid_review',
+      threadId: 'thread_1',
+      projectId: 'project_1',
+      sourceTurnId: 'turn_1',
+      plan: testGraphPlan({
+        nodes: [{
+          ...source,
+          completion: {
+            ...source.completion,
+            review: {
+              kinds: ['human'],
+              requireAll: true,
+              deterministicChecks: []
+            }
+          }
+        }],
+        edges: [],
+        completionNodeIds: [source.id]
+      }),
+      commandId: 'create_invalid_review',
+      idempotencyKey: 'create_invalid_review'
+    })
+    const submitted = await submitAttempt(
+      control,
+      store,
+      'run_invalid_review',
+      source.id,
+      false,
+      false
+    )
+    const attempt = submitted.nodes[source.id]!.attempts.at(-1)!
+    await expect(control.recordReview('run_invalid_review', reviewFor(attempt.id), {
+      commandId: 'pass_invalid_review',
+      idempotencyKey: 'pass_invalid_review'
+    })).rejects.toThrow(/cannot pass invalid attempt/)
+  })
+
   it('rejects active-node rewrites and budgets below durable usage', async () => {
     const { control, store } = await fixture()
     await control.create({
@@ -398,7 +439,8 @@ async function submitAttempt(
   store: FileGraphRunStore,
   runId: string,
   nodeId: string,
-  accept = false
+  accept = false,
+  validationValid = true
 ) {
   let run = await control.get(runId)
   if (run.nodes[nodeId]!.status === 'pending') {
@@ -456,8 +498,15 @@ async function submitAttempt(
         },
         validation: {
           version: GRAPH_CONTRACT_VERSION,
-          valid: true,
-          issues: [],
+          valid: validationValid,
+          issues: validationValid
+            ? []
+            : [{
+                code: 'missing_required_artifact',
+                path: ['artifactRefs'],
+                message: 'required artifact was not published',
+                severity: 'error' as const
+              }],
           normalizedNodeCount: 1,
           normalizedEdgeCount: 0
         },

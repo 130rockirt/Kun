@@ -21,11 +21,24 @@ import {
 } from '@shared/app-settings'
 import type { SkillRootId } from '../lib/skill-root-preference'
 import type { CliInstallAction, CliInstallStatus } from '@shared/cli-install'
-import { FolderOpen, Loader2, PencilLine, RefreshCw, Settings } from 'lucide-react'
+import {
+  FolderOpen,
+  FolderInput,
+  GitBranch,
+  Laptop,
+  Loader2,
+  MessageSquareText,
+  Monitor,
+  RefreshCw,
+  ScrollText,
+  SquareTerminal
+} from 'lucide-react'
 import {
   InlineNoticeView,
-  SectionJumpButton,
   SettingsCard,
+  SettingsSubTabs,
+  SettingsTabPanel,
+  SettingsTabs,
   SettingRow,
   Toggle
 } from './settings-controls'
@@ -33,6 +46,9 @@ import { LegacySessionImportCard } from './settings-section-general-legacy-impor
 import { terminalCommandCopy } from './terminal-command-copy'
 
 type Rgb = { r: number; g: number; b: number }
+type GeneralSettingsTab = 'appearance' | 'conversation' | 'directories' | 'desktop'
+type DirectorySettingsSubTab = 'workspace' | 'migration' | 'checkpoints'
+type DesktopSettingsSubTab = 'command' | 'behavior' | 'logs'
 
 function CliCommandSettingsCard({ locale }: { locale: string }): ReactElement {
   const zh = locale.toLowerCase().startsWith('zh')
@@ -300,6 +316,9 @@ export function GeneralSettingsSection({ ctx }: { ctx: Record<string, any> }): R
     splitSettingsList,
     listSettingsText
   } = ctx
+  const [activeTab, setActiveTab] = useState<GeneralSettingsTab>('appearance')
+  const [directorySubTab, setDirectorySubTab] = useState<DirectorySettingsSubTab>('workspace')
+  const [desktopSubTab, setDesktopSubTab] = useState<DesktopSettingsSubTab>('command')
   const platform = typeof window !== 'undefined' ? window.kunGui?.platform ?? '' : ''
   const openAtLoginSupported = platform === 'win32' || platform === 'darwin'
   const startMinimizedSupported = platform === 'win32'
@@ -314,519 +333,628 @@ export function GeneralSettingsSection({ ctx }: { ctx: Record<string, any> }): R
   const setChatContentMaxWidthPx = (value: number): void =>
     update({ chatContentMaxWidthPx: normalizeChatContentMaxWidth(value) })
   const cursorSpotlightColor = normalizeHexColor(form.cursorSpotlightColor)
+  const tabs = [
+    { id: 'appearance' as const, label: t('generalTabAppearance'), icon: Monitor },
+    { id: 'conversation' as const, label: t('generalTabConversation'), icon: MessageSquareText },
+    { id: 'directories' as const, label: t('generalTabDirectories'), icon: FolderOpen },
+    { id: 'desktop' as const, label: t('generalTabDesktop'), icon: Laptop }
+  ]
 
   return (
-            <>
-              <CliCommandSettingsCard locale={form.locale} />
-              <SettingsCard title={t('sectionGeneral')}>
-                <SettingRow
-                  title={t('language')}
-                  description={t('languageDesc')}
-                  control={
-                    <select
-                      className={selectControlClass}
-                      value={form.locale}
-                      onChange={(e) => update({ locale: e.target.value as AppSettingsV1['locale'] })}
-                    >
-                      {APP_LOCALE_OPTIONS.map((option) => (
-                        <option key={option.value} value={option.value}>{option.label}</option>
-                      ))}
-                    </select>
-                  }
-                />
-                <SettingRow
-                  title={t('theme')}
-                  description={t('themeDesc')}
-                  control={
-                    <select
-                      className={selectControlClass}
-                      value={form.theme}
-                      onChange={(e) => update({ theme: e.target.value as AppSettingsV1['theme'] })}
-                    >
-                      <option value="system">{t('themeSystem')}</option>
-                      <option value="light">{t('themeLight')}</option>
-                      <option value="dark">{t('themeDark')}</option>
-                    </select>
-                  }
-                />
-                <SettingRow
-                  title={t('fontScale')}
-                  description={t('fontScaleDesc')}
-                  control={
-                    <div className="w-full min-w-0 space-y-2.5 md:max-w-md">
-                      <div className="flex items-center gap-3">
-                        <span className="shrink-0 text-[12px] leading-none text-ds-faint" aria-hidden="true">
-                          A
-                        </span>
-                        <input
-                          type="range"
-                          min={UI_FONT_SCALE_MIN}
-                          max={UI_FONT_SCALE_MAX}
-                          step={0.01}
-                          value={fontScale}
-                          aria-label={t('fontScale')}
-                          className="w-full accent-accent"
-                          onChange={(e) => setFontScale(Number(e.target.value))}
-                        />
-                        <span className="shrink-0 text-[18px] leading-none text-ds-faint" aria-hidden="true">
-                          A
-                        </span>
-                        <div className="inline-flex shrink-0 items-center rounded-lg border border-ds-border bg-ds-card">
-                          <button
-                            type="button"
-                            aria-label={t('fontScaleSmall')}
-                            className="flex h-7 w-7 items-center justify-center rounded-l-lg text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
-                            onClick={() => setFontScale(fontScale - 0.05)}
-                          >
-                            −
-                          </button>
-                          <div className="flex h-7 w-[3.75rem] items-center justify-center border-x border-ds-border tabular-nums">
-                            <input
-                              type="number"
-                              min={Math.round(UI_FONT_SCALE_MIN * 100)}
-                              max={Math.round(UI_FONT_SCALE_MAX * 100)}
-                              step={1}
-                              value={fontScalePercent}
-                              aria-label={t('fontScale')}
-                              className="hide-number-spinner w-8 border-0 bg-transparent p-0 text-center text-[13px] font-medium text-ds-ink outline-none"
-                              onChange={(e) => setFontScale(Number(e.target.value) / 100)}
-                            />
-                            <span className="text-[11px] text-ds-faint">%</span>
-                          </div>
-                          <button
-                            type="button"
-                            aria-label={t('fontScaleLarge')}
-                            className="flex h-7 w-7 items-center justify-center rounded-r-lg text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
-                            onClick={() => setFontScale(fontScale + 0.05)}
-                          >
-                            +
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  }
-                />
-                <SettingRow
-                  title={t('chatContentMaxWidth')}
-                  description={t('chatContentMaxWidthDesc')}
-                  control={
-                    <div className="w-full min-w-0 space-y-2.5 md:max-w-md">
-                      <div className="flex items-center gap-3">
-                        <span className="shrink-0 text-[12px] leading-none text-ds-faint" aria-hidden="true">
-                          {t('chatContentMaxWidthNarrow')}
-                        </span>
-                        <input
-                          type="range"
-                          min={CHAT_CONTENT_MAX_WIDTH_MIN}
-                          max={CHAT_CONTENT_MAX_WIDTH_MAX}
-                          step={8}
-                          value={chatContentMaxWidthPx}
-                          aria-label={t('chatContentMaxWidth')}
-                          className="w-full accent-accent"
-                          onChange={(e) => setChatContentMaxWidthPx(Number(e.target.value))}
-                        />
-                        <span className="shrink-0 text-[12px] leading-none text-ds-faint" aria-hidden="true">
-                          {t('chatContentMaxWidthWide')}
-                        </span>
-                        <div className="inline-flex shrink-0 items-center rounded-lg border border-ds-border bg-ds-card">
-                          <button
-                            type="button"
-                            aria-label={t('chatContentMaxWidthDecrease')}
-                            className="flex h-7 w-7 items-center justify-center rounded-l-lg text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
-                            onClick={() => setChatContentMaxWidthPx(chatContentMaxWidthPx - 32)}
-                          >
-                            −
-                          </button>
-                          <div className="flex h-7 min-w-[4.5rem] items-center justify-center border-x border-ds-border px-2 tabular-nums">
-                            <input
-                              type="number"
-                              min={CHAT_CONTENT_MAX_WIDTH_MIN}
-                              max={CHAT_CONTENT_MAX_WIDTH_MAX}
-                              step={8}
-                              value={chatContentMaxWidthPx}
-                              aria-label={t('chatContentMaxWidth')}
-                              className="hide-number-spinner w-full border-0 bg-transparent p-0 text-center text-[13px] font-medium text-ds-ink outline-none"
-                              onChange={(e) => setChatContentMaxWidthPx(Number(e.target.value))}
-                            />
-                            <span className="text-[11px] text-ds-faint">px</span>
-                          </div>
-                          <button
-                            type="button"
-                            aria-label={t('chatContentMaxWidthIncrease')}
-                            className="flex h-7 w-7 items-center justify-center rounded-r-lg text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
-                            onClick={() => setChatContentMaxWidthPx(chatContentMaxWidthPx + 32)}
-                          >
-                            +
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  }
-                />
-                <SettingRow
-                  title={t('composerSendKey')}
-                  description={t('composerSendKeyDesc')}
-                  control={
-                    <select
-                      className={selectControlClass}
-                      value={normalizeComposerSendKey(form.composerSendKey)}
-                      onChange={(e) =>
-                        update({
-                          composerSendKey: normalizeComposerSendKey(e.target.value)
-                        })
-                      }
-                    >
-                      <option value="enter">{t('composerSendKey_enter')}</option>
-                      <option value="shiftEnter">{t('composerSendKey_shiftEnter')}</option>
-                    </select>
-                  }
-                />
-                <SettingRow
-                  title={t('workspaceRoot')}
-                  description={t('workspaceRootDesc')}
-                  control={
-                    <div className="grid w-full min-w-0 gap-2 md:max-w-xl">
-                      <div className="min-w-0">
-                        <input
-                          className="w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30"
-                          value={compactHomePath(form.workspaceRoot)}
-                          onChange={(e) => update({ workspaceRoot: expandHomePath(e.target.value) })}
-                          placeholder={t('workspaceRootPlaceholder')}
-                        />
-                      </div>
-                      <div className="flex flex-wrap justify-end gap-2">
-                        <button
-                          type="button"
-                          onClick={resetWorkspaceToDefault}
-                          className="shrink-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[13px] font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover"
-                        >
-                          {t('restoreWorkspaceDefault')}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => void pickWorkspace()}
-                          className="shrink-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[13px] font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover"
-                        >
-                          {t('browse')}
-                        </button>
-                      </div>
-                      {workspacePickerError ? (
-                        <p className="mt-2 text-[13px] leading-5 text-amber-700 dark:text-amber-300">
-                          {workspacePickerError}
-                        </p>
-                      ) : null}
-                    </div>
-                  }
-                />
-                <SettingRow
-                  title={t('conversationWorkspaceRoot')}
-                  description={t('conversationWorkspaceRootDesc')}
-                  control={
-                    <div className="grid w-full min-w-0 gap-2 md:max-w-xl">
-                      <div className="min-w-0">
-                        <input
-                          className="w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30"
-                          value={compactHomePath(form.conversationWorkspaceRoot)}
-                          onChange={(e) => update({ conversationWorkspaceRoot: expandHomePath(e.target.value) })}
-                          placeholder={t('conversationWorkspaceRootPlaceholder')}
-                        />
-                      </div>
-                      <div className="flex flex-wrap justify-end gap-2">
-                        <button
-                          type="button"
-                          onClick={resetConversationWorkspaceToDefault}
-                          className="shrink-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[13px] font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover"
-                        >
-                          {t('restoreConversationWorkspaceDefault')}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => void pickConversationWorkspace()}
-                          className="shrink-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[13px] font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover"
-                        >
-                          {t('browse')}
-                        </button>
-                      </div>
-                      {conversationWorkspacePickerError ? (
-                        <p className="mt-2 text-[13px] leading-5 text-amber-700 dark:text-amber-300">
-                          {conversationWorkspacePickerError}
-                        </p>
-                      ) : null}
-                    </div>
-                  }
-                />
-                <SettingRow
-                  title={t('cursorSpotlight')}
-                  description={t('cursorSpotlightDesc')}
-                  wideControl
-                  control={
-                    <div className="grid w-full min-w-0 gap-3 md:max-w-md">
-                      <div className="flex justify-end">
-                        <Toggle
-                          checked={form.cursorSpotlight !== false}
-                          onChange={(enabled) => update({ cursorSpotlight: enabled })}
-                        />
-                      </div>
-                      <SpotlightColorControl
-                        color={cursorSpotlightColor}
-                        disabled={form.cursorSpotlight === false}
-                        t={t}
-                        onChange={(color) => update({ cursorSpotlightColor: color })}
-                      />
-                    </div>
-                  }
-                />
-              </SettingsCard>
+    <>
+      <SettingsTabs<GeneralSettingsTab>
+        baseId="general-settings"
+        ariaLabel={t('generalTabsLabel')}
+        items={tabs}
+        value={activeTab}
+        onChange={setActiveTab}
+      />
 
-              <SettingsCard
-                title={t('desktopBehavior')}
-                description={t('desktopCloseActionDesc')}
-                className="mt-6"
-                collapsible
+      <SettingsTabPanel
+        baseId="general-settings"
+        tabId="appearance"
+        active={activeTab === 'appearance'}
+      >
+        <SettingsCard title={t('sectionGeneral')}>
+          <SettingRow
+            title={t('language')}
+            description={t('languageDesc')}
+            control={
+              <select
+                className={selectControlClass}
+                value={form.locale}
+                onChange={(e) => update({ locale: e.target.value as AppSettingsV1['locale'] })}
               >
-                <SettingRow
-                  title={t('desktopOpenAtLogin')}
-                  description={
-                    openAtLoginSupported
-                      ? t('desktopOpenAtLoginDesc')
-                      : t('desktopOpenAtLoginUnsupportedDesc')
-                  }
-                  control={
-                    <Toggle
-                      checked={desktopBehavior.openAtLogin}
-                      disabled={!openAtLoginSupported}
-                      onChange={(v) =>
-                        update({
-                          appBehavior: {
-                            openAtLogin: v,
-                            startMinimized: v ? desktopBehavior.startMinimized : false
-                          }
-                        })
-                      }
-                    />
-                  }
-                />
-                <SettingRow
-                  title={t('desktopStartMinimized')}
-                  description={
-                    desktopBehavior.openAtLogin && startMinimizedSupported
-                      ? t('desktopStartMinimizedDesc')
-                      : t('desktopStartMinimizedDisabledDesc')
-                  }
-                  control={
-                    <Toggle
-                      checked={desktopBehavior.startMinimized}
-                      disabled={!desktopBehavior.openAtLogin || !startMinimizedSupported}
-                      onChange={(v) => update({ appBehavior: { startMinimized: v } })}
-                    />
-                  }
-                />
-                <SettingRow
-                  title={t('desktopCloseAction')}
-                  description={t('desktopCloseActionDesc')}
-                  control={
-                    <select
-                      className={selectControlClass}
-                      value={closeAction}
-                      onChange={(e) => update({ appBehavior: { closeAction: e.target.value as WindowCloseAction } })}
-                    >
-                      {closeActionOptions.map((option) => (
-                        <option key={option} value={option}>
-                          {t(`desktopCloseAction_${option}`)}
-                        </option>
-                      ))}
-                    </select>
-                  }
-                />
-                <SettingRow
-                  title={t('turnCompleteNotification')}
-                  description={t('turnCompleteNotificationDesc')}
-                  control={
-                    <Toggle
-                      checked={form.notifications.turnComplete}
-                      onChange={(v) => update({ notifications: { turnComplete: v } })}
-                    />
-                  }
-                />
-              </SettingsCard>
-
-              <SettingsCard title={t('onboardingPreview')} className="mt-6">
-                <SettingRow
-                  title={t('onboardingPreview')}
-                  description={t('onboardingPreviewDesc')}
-                  control={
+                {APP_LOCALE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            }
+          />
+          <SettingRow
+            title={t('theme')}
+            description={t('themeDesc')}
+            control={
+              <select
+                className={selectControlClass}
+                value={form.theme}
+                onChange={(e) => update({ theme: e.target.value as AppSettingsV1['theme'] })}
+              >
+                <option value="system">{t('themeSystem')}</option>
+                <option value="light">{t('themeLight')}</option>
+                <option value="dark">{t('themeDark')}</option>
+              </select>
+            }
+          />
+          <SettingRow
+            title={t('fontScale')}
+            description={t('fontScaleDesc')}
+            control={
+              <div className="w-full min-w-0 space-y-2.5 md:max-w-md">
+                <div className="flex items-center gap-3">
+                  <span className="shrink-0 text-[12px] leading-none text-ds-faint" aria-hidden="true">
+                    A
+                  </span>
+                  <input
+                    type="range"
+                    min={UI_FONT_SCALE_MIN}
+                    max={UI_FONT_SCALE_MAX}
+                    step={0.01}
+                    value={fontScale}
+                    aria-label={t('fontScale')}
+                    className="w-full accent-accent"
+                    onChange={(e) => setFontScale(Number(e.target.value))}
+                  />
+                  <span className="shrink-0 text-[18px] leading-none text-ds-faint" aria-hidden="true">
+                    A
+                  </span>
+                  <div className="inline-flex shrink-0 items-center rounded-lg border border-ds-border bg-ds-card">
                     <button
                       type="button"
-                      onClick={openOnboardingPreview}
-                      className="inline-flex w-fit items-center rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover"
+                      aria-label={t('fontScaleSmall')}
+                      className="flex h-7 w-7 items-center justify-center rounded-l-lg text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+                      onClick={() => setFontScale(fontScale - 0.05)}
                     >
-                      {t('onboardingPreviewOpen')}
+                      −
                     </button>
-                  }
-                />
-              </SettingsCard>
-
-              <LegacySessionImportCard t={t} tCommon={tCommon} />
-
-              <SettingsCard
-                title={t('gitCheckpointTitle')}
-                description={t('checkpointCreateEnabledDesc')}
-                className="mt-6"
-                collapsible
-              >
-                <SettingRow
-                  title={t('checkpointCreateEnabled')}
-                  description={t('checkpointCreateEnabledDesc')}
-                  control={
-                    <Toggle
-                      checked={form.checkpointCleanup.createEnabled}
-                      onChange={(v) => update({ checkpointCleanup: { createEnabled: v } })}
-                    />
-                  }
-                />
-                <SettingRow
-                  title={t('checkpointCleanupEnabled')}
-                  description={t('checkpointCleanupEnabledDesc')}
-                  control={
-                    <Toggle
-                      checked={form.checkpointCleanup.enabled}
-                      onChange={(v) => update({ checkpointCleanup: { enabled: v } })}
-                    />
-                  }
-                />
-                <SettingRow
-                  title={t('checkpointCleanupInterval')}
-                  description={t('checkpointCleanupIntervalDesc')}
-                  control={
-                    <select
-                      className={selectControlClass}
-                      value={form.checkpointCleanup.intervalDays}
-                      disabled={!form.checkpointCleanup.enabled}
-                      onChange={(e) =>
-                        update({
-                          checkpointCleanup: {
-                            intervalDays: Number(e.target.value) as AppSettingsV1['checkpointCleanup']['intervalDays']
-                          }
-                        })
-                      }
-                    >
-                      {checkpointCleanupIntervalOptions.map((days) => (
-                        <option key={days} value={days}>
-                          {t(`checkpointCleanupInterval${days}`)}
-                        </option>
-                      ))}
-                    </select>
-                  }
-                />
-                <SettingRow
-                  title={t('checkpointDirectory')}
-                  description={t('checkpointDirectoryDesc')}
-                  control={
-                    <input
-                      type="text"
-                      className={selectControlClass}
-                      placeholder={t('checkpointDirectoryPlaceholder')}
-                      value={form.checkpointCleanup.directory ?? ''}
-                      disabled={!form.checkpointCleanup.createEnabled}
-                      onChange={(e) => update({ checkpointCleanup: { directory: e.target.value } })}
-                    />
-                  }
-                />
-                <SettingRow
-                  title={t('checkpointMaxPerThread')}
-                  description={t('checkpointMaxPerThreadDesc')}
-                  control={
-                    <input
-                      type="number"
-                      min={1}
-                      max={100}
-                      className={selectControlClass}
-                      value={form.checkpointCleanup.maxPerThread ?? 5}
-                      disabled={!form.checkpointCleanup.createEnabled}
-                      onChange={(e) => {
-                        const n = Number(e.target.value)
-                        update({ checkpointCleanup: { maxPerThread: Number.isFinite(n) ? Math.max(1, Math.min(100, Math.floor(n))) : 5 } })
-                      }}
-                    />
-                  }
-                />
-              </SettingsCard>
-
-              <SettingsCard
-                title={t('logTitle')}
-                description={t('logEnabledDesc')}
-                className="mt-6"
-                collapsible
-              >
-                <SettingRow
-                  title={t('logEnabled')}
-                  description={t('logEnabledDesc')}
-                  control={
-                    <Toggle
-                      checked={form.log.enabled}
-                      onChange={(v) => update({ log: { enabled: v } })}
-                    />
-                  }
-                />
-                <SettingRow
-                  title={t('logRetention')}
-                  description={t('logRetentionDesc')}
-                  control={
-                    <select
-                      className={selectControlClass}
-                      value={form.log.retentionDays}
-                      onChange={(e) =>
-                        update({ log: { retentionDays: Number(e.target.value) } })
-                      }
-                    >
-                      <option value={1}>{t('logRetentionOne')}</option>
-                      <option value={2}>{t('logRetentionTwo')}</option>
-                      <option value={3}>{t('logRetentionThree')}</option>
-                      <option value={5}>{t('logRetentionFive')}</option>
-                      <option value={7}>{t('logRetentionSeven')}</option>
-                    </select>
-                  }
-                />
-                <SettingRow
-                  title={t('logDir')}
-                  description={t('logDirDesc')}
-                  wideControl
-                  control={
-                    <div className="flex w-full min-w-0 flex-col items-start gap-2">
-                      {logPath ? (
-                        <code className="block w-full max-w-full break-all rounded-xl border border-ds-border-muted bg-ds-main/60 px-3 py-2 font-mono text-[12px] text-ds-ink">
-                          {compactHomePath(logPath)}
-                        </code>
-                      ) : (
-                        <span className="text-[13px] text-ds-faint">…</span>
-                      )}
-                      <button
-                        type="button"
-                        className="inline-flex items-center gap-1.5 rounded-xl border border-ds-border bg-ds-card px-3 py-1.5 text-[13px] font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover disabled:opacity-50"
-                        disabled={typeof window.kunGui?.openLogDir !== 'function'}
-                        onClick={async () => {
-                          if (typeof window.kunGui?.openLogDir !== 'function') return
-                          setLogDirOpenError(null)
-                          try {
-                            const result = await window.kunGui.openLogDir()
-                            if (!result.ok) setLogDirOpenError(result.message ?? 'Unknown error')
-                          } catch (e) {
-                            setLogDirOpenError(e instanceof Error ? e.message : String(e))
-                          }
-                        }}
-                      >
-                        <FolderOpen className="h-4 w-4" />
-                        {t('logDirOpen')}
-                      </button>
-                      {logDirOpenError ? (
-                        <p className="text-[12px] text-red-700 dark:text-red-300">
-                          {logDirOpenError}
-                        </p>
-                      ) : null}
+                    <div className="flex h-7 w-[3.75rem] items-center justify-center border-x border-ds-border tabular-nums">
+                      <input
+                        type="number"
+                        min={Math.round(UI_FONT_SCALE_MIN * 100)}
+                        max={Math.round(UI_FONT_SCALE_MAX * 100)}
+                        step={1}
+                        value={fontScalePercent}
+                        aria-label={t('fontScale')}
+                        className="hide-number-spinner w-8 border-0 bg-transparent p-0 text-center text-[13px] font-medium text-ds-ink outline-none"
+                        onChange={(e) => setFontScale(Number(e.target.value) / 100)}
+                      />
+                      <span className="text-[11px] text-ds-faint">%</span>
                     </div>
-                  }
+                    <button
+                      type="button"
+                      aria-label={t('fontScaleLarge')}
+                      className="flex h-7 w-7 items-center justify-center rounded-r-lg text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+                      onClick={() => setFontScale(fontScale + 0.05)}
+                    >
+                      +
+                    </button>
+                  </div>
+                </div>
+              </div>
+            }
+          />
+          <SettingRow
+            title={t('chatContentMaxWidth')}
+            description={t('chatContentMaxWidthDesc')}
+            control={
+              <div className="w-full min-w-0 space-y-2.5 md:max-w-md">
+                <div className="flex items-center gap-3">
+                  <span className="shrink-0 text-[12px] leading-none text-ds-faint" aria-hidden="true">
+                    {t('chatContentMaxWidthNarrow')}
+                  </span>
+                  <input
+                    type="range"
+                    min={CHAT_CONTENT_MAX_WIDTH_MIN}
+                    max={CHAT_CONTENT_MAX_WIDTH_MAX}
+                    step={8}
+                    value={chatContentMaxWidthPx}
+                    aria-label={t('chatContentMaxWidth')}
+                    className="w-full accent-accent"
+                    onChange={(e) => setChatContentMaxWidthPx(Number(e.target.value))}
+                  />
+                  <span className="shrink-0 text-[12px] leading-none text-ds-faint" aria-hidden="true">
+                    {t('chatContentMaxWidthWide')}
+                  </span>
+                  <div className="inline-flex shrink-0 items-center rounded-lg border border-ds-border bg-ds-card">
+                    <button
+                      type="button"
+                      aria-label={t('chatContentMaxWidthDecrease')}
+                      className="flex h-7 w-7 items-center justify-center rounded-l-lg text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+                      onClick={() => setChatContentMaxWidthPx(chatContentMaxWidthPx - 32)}
+                    >
+                      −
+                    </button>
+                    <div className="flex h-7 min-w-[4.5rem] items-center justify-center border-x border-ds-border px-2 tabular-nums">
+                      <input
+                        type="number"
+                        min={CHAT_CONTENT_MAX_WIDTH_MIN}
+                        max={CHAT_CONTENT_MAX_WIDTH_MAX}
+                        step={8}
+                        value={chatContentMaxWidthPx}
+                        aria-label={t('chatContentMaxWidth')}
+                        className="hide-number-spinner w-full border-0 bg-transparent p-0 text-center text-[13px] font-medium text-ds-ink outline-none"
+                        onChange={(e) => setChatContentMaxWidthPx(Number(e.target.value))}
+                      />
+                      <span className="text-[11px] text-ds-faint">px</span>
+                    </div>
+                    <button
+                      type="button"
+                      aria-label={t('chatContentMaxWidthIncrease')}
+                      className="flex h-7 w-7 items-center justify-center rounded-r-lg text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+                      onClick={() => setChatContentMaxWidthPx(chatContentMaxWidthPx + 32)}
+                    >
+                      +
+                    </button>
+                  </div>
+                </div>
+              </div>
+            }
+          />
+          <SettingRow
+            title={t('cursorSpotlight')}
+            description={t('cursorSpotlightDesc')}
+            wideControl
+            control={
+              <div className="grid w-full min-w-0 gap-3">
+                <div className="flex justify-end">
+                  <Toggle
+                    checked={form.cursorSpotlight !== false}
+                    onChange={(enabled) => update({ cursorSpotlight: enabled })}
+                  />
+                </div>
+                <SpotlightColorControl
+                  color={cursorSpotlightColor}
+                  disabled={form.cursorSpotlight === false}
+                  t={t}
+                  onChange={(color) => update({ cursorSpotlightColor: color })}
                 />
-              </SettingsCard>
-            </>
+              </div>
+            }
+          />
+        </SettingsCard>
+      </SettingsTabPanel>
+
+      <SettingsTabPanel
+        baseId="general-settings"
+        tabId="conversation"
+        active={activeTab === 'conversation'}
+      >
+        <SettingsCard title={t('generalTabConversation')}>
+          <SettingRow
+            title={t('composerSendKey')}
+            description={t('composerSendKeyDesc')}
+            control={
+              <select
+                className={selectControlClass}
+                value={normalizeComposerSendKey(form.composerSendKey)}
+                onChange={(e) =>
+                  update({
+                    composerSendKey: normalizeComposerSendKey(e.target.value)
+                  })
+                }
+              >
+                <option value="enter">{t('composerSendKey_enter')}</option>
+                <option value="shiftEnter">{t('composerSendKey_shiftEnter')}</option>
+              </select>
+            }
+          />
+          <SettingRow
+            title={t('turnCompleteNotification')}
+            description={t('turnCompleteNotificationDesc')}
+            control={
+              <Toggle
+                checked={form.notifications.turnComplete}
+                onChange={(v) => update({ notifications: { turnComplete: v } })}
+              />
+            }
+          />
+        </SettingsCard>
+        <SettingsCard title={t('onboardingPreview')}>
+          <SettingRow
+            title={t('onboardingPreview')}
+            description={t('onboardingPreviewDesc')}
+            control={
+              <button
+                type="button"
+                onClick={openOnboardingPreview}
+                className="inline-flex w-fit items-center rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover"
+              >
+                {t('onboardingPreviewOpen')}
+              </button>
+            }
+          />
+        </SettingsCard>
+      </SettingsTabPanel>
+
+      <SettingsTabPanel
+        baseId="general-settings"
+        tabId="directories"
+        active={activeTab === 'directories'}
+      >
+        <SettingsSubTabs<DirectorySettingsSubTab>
+          baseId="general-directories"
+          ariaLabel={t('generalTabDirectories')}
+          items={[
+            { id: 'workspace', label: t('workspaceRoot'), icon: FolderOpen },
+            { id: 'migration', label: t('legacyImportTitle'), icon: FolderInput },
+            { id: 'checkpoints', label: t('gitCheckpointTitle'), icon: GitBranch }
+          ]}
+          value={directorySubTab}
+          onChange={setDirectorySubTab}
+        />
+        <SettingsTabPanel
+          baseId="general-directories"
+          tabId="workspace"
+          active={directorySubTab === 'workspace'}
+          className="mt-4"
+        >
+          <SettingsCard title={t('generalTabDirectories')}>
+          <SettingRow
+            title={t('workspaceRoot')}
+            description={t('workspaceRootDesc')}
+            control={
+              <div className="grid w-full min-w-0 gap-2 md:max-w-xl">
+                <div className="min-w-0">
+                  <input
+                    className="w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30"
+                    value={compactHomePath(form.workspaceRoot)}
+                    onChange={(e) => update({ workspaceRoot: expandHomePath(e.target.value) })}
+                    placeholder={t('workspaceRootPlaceholder')}
+                  />
+                </div>
+                <div className="flex flex-wrap justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={resetWorkspaceToDefault}
+                    className="shrink-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[13px] font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover"
+                  >
+                    {t('restoreWorkspaceDefault')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void pickWorkspace()}
+                    className="shrink-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[13px] font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover"
+                  >
+                    {t('browse')}
+                  </button>
+                </div>
+                {workspacePickerError ? (
+                  <p className="mt-2 text-[13px] leading-5 text-amber-700 dark:text-amber-300">
+                    {workspacePickerError}
+                  </p>
+                ) : null}
+              </div>
+            }
+          />
+          <SettingRow
+            title={t('conversationWorkspaceRoot')}
+            description={t('conversationWorkspaceRootDesc')}
+            control={
+              <div className="grid w-full min-w-0 gap-2 md:max-w-xl">
+                <div className="min-w-0">
+                  <input
+                    className="w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30"
+                    value={compactHomePath(form.conversationWorkspaceRoot)}
+                    onChange={(e) => update({ conversationWorkspaceRoot: expandHomePath(e.target.value) })}
+                    placeholder={t('conversationWorkspaceRootPlaceholder')}
+                  />
+                </div>
+                <div className="flex flex-wrap justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={resetConversationWorkspaceToDefault}
+                    className="shrink-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[13px] font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover"
+                  >
+                    {t('restoreConversationWorkspaceDefault')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void pickConversationWorkspace()}
+                    className="shrink-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[13px] font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover"
+                  >
+                    {t('browse')}
+                  </button>
+                </div>
+                {conversationWorkspacePickerError ? (
+                  <p className="mt-2 text-[13px] leading-5 text-amber-700 dark:text-amber-300">
+                    {conversationWorkspacePickerError}
+                  </p>
+                ) : null}
+              </div>
+            }
+          />
+          </SettingsCard>
+        </SettingsTabPanel>
+        <SettingsTabPanel
+          baseId="general-directories"
+          tabId="migration"
+          active={directorySubTab === 'migration'}
+          className="mt-4"
+        >
+          <div className="[&>.ds-settings-card]:mt-0">
+            <LegacySessionImportCard t={t} tCommon={tCommon} />
+          </div>
+        </SettingsTabPanel>
+        <SettingsTabPanel
+          baseId="general-directories"
+          tabId="checkpoints"
+          active={directorySubTab === 'checkpoints'}
+          className="mt-4"
+        >
+          <SettingsCard
+            title={t('gitCheckpointTitle')}
+            description={t('checkpointCreateEnabledDesc')}
+            collapsible
+          >
+          <SettingRow
+            title={t('checkpointCreateEnabled')}
+            description={t('checkpointCreateEnabledDesc')}
+            control={
+              <Toggle
+                checked={form.checkpointCleanup.createEnabled}
+                onChange={(v) => update({ checkpointCleanup: { createEnabled: v } })}
+              />
+            }
+          />
+          <SettingRow
+            title={t('checkpointCleanupEnabled')}
+            description={t('checkpointCleanupEnabledDesc')}
+            control={
+              <Toggle
+                checked={form.checkpointCleanup.enabled}
+                onChange={(v) => update({ checkpointCleanup: { enabled: v } })}
+              />
+            }
+          />
+          <SettingRow
+            title={t('checkpointCleanupInterval')}
+            description={t('checkpointCleanupIntervalDesc')}
+            control={
+              <select
+                className={selectControlClass}
+                value={form.checkpointCleanup.intervalDays}
+                disabled={!form.checkpointCleanup.enabled}
+                onChange={(e) =>
+                  update({
+                    checkpointCleanup: {
+                      intervalDays: Number(e.target.value) as AppSettingsV1['checkpointCleanup']['intervalDays']
+                    }
+                  })
+                }
+              >
+                {checkpointCleanupIntervalOptions.map((days) => (
+                  <option key={days} value={days}>
+                    {t(`checkpointCleanupInterval${days}`)}
+                  </option>
+                ))}
+              </select>
+            }
+          />
+          <SettingRow
+            title={t('checkpointDirectory')}
+            description={t('checkpointDirectoryDesc')}
+            control={
+              <input
+                type="text"
+                className={selectControlClass}
+                placeholder={t('checkpointDirectoryPlaceholder')}
+                value={form.checkpointCleanup.directory ?? ''}
+                disabled={!form.checkpointCleanup.createEnabled}
+                onChange={(e) => update({ checkpointCleanup: { directory: e.target.value } })}
+              />
+            }
+          />
+          <SettingRow
+            title={t('checkpointMaxPerThread')}
+            description={t('checkpointMaxPerThreadDesc')}
+            control={
+              <input
+                type="number"
+                min={1}
+                max={100}
+                className={selectControlClass}
+                value={form.checkpointCleanup.maxPerThread ?? 5}
+                disabled={!form.checkpointCleanup.createEnabled}
+                onChange={(e) => {
+                  const n = Number(e.target.value)
+                  update({
+                    checkpointCleanup: {
+                      maxPerThread: Number.isFinite(n)
+                        ? Math.max(1, Math.min(100, Math.floor(n)))
+                        : 5
+                    }
+                  })
+                }}
+              />
+            }
+          />
+          </SettingsCard>
+        </SettingsTabPanel>
+      </SettingsTabPanel>
+
+      <SettingsTabPanel
+        baseId="general-settings"
+        tabId="desktop"
+        active={activeTab === 'desktop'}
+      >
+        <SettingsSubTabs<DesktopSettingsSubTab>
+          baseId="general-desktop"
+          ariaLabel={t('generalTabDesktop')}
+          items={[
+            { id: 'command', label: t('terminal'), icon: SquareTerminal },
+            { id: 'behavior', label: t('desktopBehavior'), icon: Laptop },
+            { id: 'logs', label: t('logTitle'), icon: ScrollText }
+          ]}
+          value={desktopSubTab}
+          onChange={setDesktopSubTab}
+        />
+        <SettingsTabPanel
+          baseId="general-desktop"
+          tabId="command"
+          active={desktopSubTab === 'command'}
+          className="mt-4"
+        >
+          <CliCommandSettingsCard locale={form.locale} />
+        </SettingsTabPanel>
+        <SettingsTabPanel
+          baseId="general-desktop"
+          tabId="behavior"
+          active={desktopSubTab === 'behavior'}
+          className="mt-4"
+        >
+          <SettingsCard
+            title={t('desktopBehavior')}
+            description={t('desktopCloseActionDesc')}
+            collapsible
+          >
+          <SettingRow
+            title={t('desktopOpenAtLogin')}
+            description={
+              openAtLoginSupported
+                ? t('desktopOpenAtLoginDesc')
+                : t('desktopOpenAtLoginUnsupportedDesc')
+            }
+            control={
+              <Toggle
+                checked={desktopBehavior.openAtLogin}
+                disabled={!openAtLoginSupported}
+                onChange={(v) =>
+                  update({
+                    appBehavior: {
+                      openAtLogin: v,
+                      startMinimized: v ? desktopBehavior.startMinimized : false
+                    }
+                  })
+                }
+              />
+            }
+          />
+          <SettingRow
+            title={t('desktopStartMinimized')}
+            description={
+              desktopBehavior.openAtLogin && startMinimizedSupported
+                ? t('desktopStartMinimizedDesc')
+                : t('desktopStartMinimizedDisabledDesc')
+            }
+            control={
+              <Toggle
+                checked={desktopBehavior.startMinimized}
+                disabled={!desktopBehavior.openAtLogin || !startMinimizedSupported}
+                onChange={(v) => update({ appBehavior: { startMinimized: v } })}
+              />
+            }
+          />
+          <SettingRow
+            title={t('desktopCloseAction')}
+            description={t('desktopCloseActionDesc')}
+            control={
+              <select
+                className={selectControlClass}
+                value={closeAction}
+                onChange={(e) => update({ appBehavior: { closeAction: e.target.value as WindowCloseAction } })}
+              >
+                {closeActionOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {t(`desktopCloseAction_${option}`)}
+                  </option>
+                ))}
+              </select>
+            }
+          />
+          </SettingsCard>
+        </SettingsTabPanel>
+        <SettingsTabPanel
+          baseId="general-desktop"
+          tabId="logs"
+          active={desktopSubTab === 'logs'}
+          className="mt-4"
+        >
+          <SettingsCard
+            title={t('logTitle')}
+            description={t('logEnabledDesc')}
+            collapsible
+          >
+          <SettingRow
+            title={t('logEnabled')}
+            description={t('logEnabledDesc')}
+            control={
+              <Toggle
+                checked={form.log.enabled}
+                onChange={(v) => update({ log: { enabled: v } })}
+              />
+            }
+          />
+          <SettingRow
+            title={t('logRetention')}
+            description={t('logRetentionDesc')}
+            control={
+              <select
+                className={selectControlClass}
+                value={form.log.retentionDays}
+                onChange={(e) =>
+                  update({ log: { retentionDays: Number(e.target.value) } })
+                }
+              >
+                <option value={1}>{t('logRetentionOne')}</option>
+                <option value={2}>{t('logRetentionTwo')}</option>
+                <option value={3}>{t('logRetentionThree')}</option>
+                <option value={5}>{t('logRetentionFive')}</option>
+                <option value={7}>{t('logRetentionSeven')}</option>
+              </select>
+            }
+          />
+          <SettingRow
+            title={t('logDir')}
+            description={t('logDirDesc')}
+            wideControl
+            control={
+              <div className="flex w-full min-w-0 flex-col items-start gap-2">
+                {logPath ? (
+                  <code className="block w-full max-w-full break-all rounded-xl border border-ds-border-muted bg-ds-main/60 px-3 py-2 font-mono text-[12px] text-ds-ink">
+                    {compactHomePath(logPath)}
+                  </code>
+                ) : (
+                  <span className="text-[13px] text-ds-faint">…</span>
+                )}
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-ds-border bg-ds-card px-3 py-1.5 text-[13px] font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover disabled:opacity-50"
+                  disabled={typeof window.kunGui?.openLogDir !== 'function'}
+                  onClick={async () => {
+                    if (typeof window.kunGui?.openLogDir !== 'function') return
+                    setLogDirOpenError(null)
+                    try {
+                      const result = await window.kunGui.openLogDir()
+                      if (!result.ok) setLogDirOpenError(result.message ?? 'Unknown error')
+                    } catch (e) {
+                      setLogDirOpenError(e instanceof Error ? e.message : String(e))
+                    }
+                  }}
+                >
+                  <FolderOpen className="h-4 w-4" />
+                  {t('logDirOpen')}
+                </button>
+                {logDirOpenError ? (
+                  <p className="text-[12px] text-red-700 dark:text-red-300">
+                    {logDirOpenError}
+                  </p>
+                ) : null}
+              </div>
+            }
+          />
+          </SettingsCard>
+        </SettingsTabPanel>
+      </SettingsTabPanel>
+    </>
   )
 }

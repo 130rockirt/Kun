@@ -16,7 +16,11 @@ import {
   defaultTerminalSettings,
   type AppSettingsV1
 } from '../../shared/app-settings'
-import { kunRuntimeAdapter, runtimeRequestViaHost } from './kun-adapter'
+import {
+  kunRuntimeAdapter,
+  resolveRuntimeRequestTimeoutMs,
+  runtimeRequestViaHost
+} from './kun-adapter'
 import { buildRuntimeCapabilityManifest } from '../../../kun/src/contracts/capabilities.js'
 import { modelCapabilitiesForModel } from '../../../kun/src/loop/model-context-profile.js'
 import { publishRuntimeDiscovery } from '../../../kun/src/server/runtime-discovery.js'
@@ -83,6 +87,19 @@ afterEach(async () => {
 })
 
 describe('runtimeRequestViaHost', () => {
+  it('keeps model connection long polls alive beyond their server wait window', () => {
+    expect(resolveRuntimeRequestTimeoutMs(
+      '/v1/model-connections/events?since_revision=62&wait_ms=25000',
+      'GET'
+    )).toBe(30_000)
+    expect(resolveRuntimeRequestTimeoutMs('/v1/threads', 'GET')).toBe(15_000)
+    expect(resolveRuntimeRequestTimeoutMs(
+      '/v1/model-connections/events?since_revision=62&wait_ms=25000',
+      'GET',
+      40_000
+    )).toBe(40_000)
+  })
+
   it('forwards daily usage requests to the Kun runtime with bearer auth', async () => {
     let seenUrl = ''
     let seenAuthorization = ''

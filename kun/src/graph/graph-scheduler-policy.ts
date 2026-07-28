@@ -64,6 +64,16 @@ export function terminalRequiredFailure(
   })
 }
 
+export function validationFailureSummary(attempt: GraphNodeAttemptV1): string {
+  const issues = attempt.validation?.issues
+    .filter((issue) => issue.severity === 'error')
+    .slice(0, 8)
+    .map((issue) => `${issue.code}: ${issue.message}`)
+  return issues?.length
+    ? `Host validation failed: ${issues.join('; ')}`
+    : 'Host validation failed; repair the structured result before review.'
+}
+
 export function isTerminalNodeStatus(status: GraphNodeProjectionV1['status']): boolean {
   return ['accepted', 'failed', 'cancelled', 'skipped', 'superseded'].includes(status)
 }

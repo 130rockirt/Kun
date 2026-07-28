@@ -225,6 +225,23 @@ describe('buildToolPreferenceInstruction', () => {
     expect(instruction).not.toContain('Issue multiple child calls')
   })
 
+  it('makes the original Graph Lead actively inspect, wait, and guide workers', () => {
+    const instruction = buildToolPreferenceInstruction([
+      { name: 'graph_create_run', description: 'Create a GraphRun' },
+      { name: 'graph_control_run', description: 'Inspect a GraphRun' },
+      { name: 'graph_supervise_node', description: 'Supervise a Graph worker' }
+    ])
+
+    expect(instruction).toContain(
+      'host supplies omitted defaults, including seven days per run, 24 hours per node, and the warning ratio'
+    )
+    expect(instruction).toContain('Creating or dispatching a Graph is not completion')
+    expect(instruction).toContain('inspect their bounded live sessions')
+    expect(instruction).toContain('wait and recheck')
+    expect(instruction).toContain('guide drift, missing artifacts')
+    expect(instruction).toContain('suspend only after the current supervision episode is handled')
+  })
+
   it('prefers specialized MCP source navigation with available built-in fallback', () => {
     const instruction = buildToolPreferenceInstruction([
       { name: 'grep', description: 'Search file contents' },

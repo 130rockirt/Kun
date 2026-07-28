@@ -188,7 +188,7 @@ describe('GraphScheduler', () => {
   }, 15_000)
 
   it('allows the final admitted attempt to finish at the global attempt limit', async () => {
-    const source = {
+    const source: ReturnType<typeof testGraphPlan>['nodes'][number] = {
       ...testGraphPlan().nodes[0]!,
       maxAttempts: 1
     }
@@ -235,6 +235,62 @@ describe('GraphScheduler', () => {
     expect(returnFormat).toBe('summary')
     expect(completed.nodes.research.status).toBe('accepted')
     expect(completed.nodes.research.attempts[0]?.status).toBe('accepted')
+    await harness.scheduler.stop()
+  }, 15_000)
+
+  it('holds a missing required artifact for Lead repair instead of approving and skipping', async () => {
+    const basic = testGraphPlan()
+    const source: ReturnType<typeof testGraphPlan>['nodes'][number] = {
+      ...basic.nodes[0]!,
+      maxAttempts: 1,
+      completion: {
+        ...basic.nodes[0]!.completion,
+        requiredResultFields: ['summary', 'artifactRefs']
+      }
+    }
+    const plan = testGraphPlan({
+      nodes: [source, basic.nodes[1]!],
+      edges: [{
+        id: 'footer_data',
+        kind: 'data',
+        from: source.id,
+        to: 'finish',
+        artifactName: 'footer-analysis',
+        required: true
+      }],
+      completionNodeIds: ['finish'],
+      autoStart: true
+    })
+    const delegation = {
+      enabled: () => true,
+      runChild: async (input: {
+        onQueued?: (id: string) => Promise<void> | void
+        onRunning?: (id: string) => Promise<void> | void
+      }) => {
+        await input.onQueued?.('child_missing_artifact')
+        await input.onRunning?.('child_missing_artifact')
+        return testCompletedChild(
+          'child_missing_artifact',
+          'Useful footer analysis, but no artifact was published.'
+        )
+      }
+    } as unknown as DelegationRuntime
+    const harness = await schedulerHarness(plan, () => delegation)
+    harness.scheduler.start()
+    const waiting = await waitFor(async () => {
+      const run = await harness.store.get('run_harness')
+      return run?.status === 'awaiting_supervision' ? run : null
+    })
+
+    expect(waiting.nodes.research.status).toBe('repair_required')
+    expect(waiting.nodes.research.attempts[0]?.validation).toMatchObject({
+      valid: false,
+      issues: expect.arrayContaining([
+        expect.objectContaining({ code: 'missing_required_artifact' })
+      ])
+    })
+    expect(waiting.nodes.finish.status).not.toBe('skipped')
+    expect(waiting.reviews).toHaveLength(0)
     await harness.scheduler.stop()
   }, 15_000)
 
@@ -498,8 +554,9 @@ describe('GraphScheduler', () => {
 
   it('host-aborts a worker that exceeds its node wall-time budget and retries safely', async () => {
     let calls = 0
+    const basic = testGraphPlan()
     const node = {
-      ...testGraphPlan().nodes[0]!,
+      ...basic.nodes[0]!,
       timeoutMs: 20,
       maxAttempts: 1
     }
@@ -518,36 +575,35 @@ describe('GraphScheduler', () => {
     } as unknown as DelegationRuntime
     const harness = await schedulerHarness(
       testGraphPlan({
-        nodes: [node],
-        edges: [],
-        completionNodeIds: [node.id],
+        nodes: [node, basic.nodes[1]!],
+        edges: basic.edges,
+        completionNodeIds: ['finish'],
         autoStart: true
       }),
       () => delegation
     )
     harness.scheduler.start()
-    const failed = await waitFor(async () => {
+    const waiting = await waitFor(async () => {
       await harness.scheduler.tick()
       const run = await harness.store.get('run_harness')
-      return run?.status === 'failed' ? run : null
+      return run?.status === 'awaiting_supervision' ? run : null
     })
 
     expect(calls).toBe(1)
-    expect(failed.nodes.research.attempts[0]).toEqual(expect.objectContaining({
+    expect(waiting.nodes.research.attempts[0]).toEqual(expect.objectContaining({
       status: 'failed',
       failureClass: 'retryable',
       normalizedFailure: 'Graph node wall-time budget exhausted'
     }))
-    expect(failed.cleanup).toEqual(expect.arrayContaining([
+    expect(waiting.nodes.finish.status).not.toBe('skipped')
+    expect(waiting.cleanup).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ resourceKind: 'journal', state: 'completed' })
     ]))
     const events = await harness.store.events('run_harness')
     expect(events.at(-1)?.event).toMatchObject({
       type: 'run_status_changed',
-      payload: { to: 'failed' }
+      payload: { to: 'awaiting_supervision' }
     })
-    expect(events.findIndex((event) => event.event.type === 'cleanup_updated'))
-      .toBeLessThan(events.length - 1)
     await harness.scheduler.stop()
   }, 15_000)
 

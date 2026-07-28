@@ -23,8 +23,11 @@ import type {
   DataMigrationReport,
   DataMigrationWorkspaceConflictStrategy
 } from '@shared/data-migration'
+import { SettingsSubTabs, SettingsTabPanel } from './settings-controls'
 
 type Flow = 'landing' | 'export' | 'import' | 'report'
+type DataMigrationTab = 'export' | 'import' | 'reports'
+type DataMigrationLandingMode = 'all' | DataMigrationTab
 
 const EXPORT_STEPS = ['scope', 'security', 'review', 'create'] as const
 const IMPORT_STEPS = ['select', 'inspect', 'map', 'resolve', 'review', 'import'] as const
@@ -37,6 +40,7 @@ export function DataMigrationSettingsSection(): ReactElement {
   const { t } = useTranslation('settings')
   const api = window.kunGui.dataMigration
   const [flow, setFlow] = useState<Flow>('landing')
+  const [activeTab, setActiveTab] = useState<DataMigrationTab>('export')
   const [status, setStatus] = useState<DataMigrationOperationStatus | null>(null)
   const [progress, setProgress] = useState<DataMigrationProgress | null>(null)
   const [error, setError] = useState('')
@@ -133,6 +137,7 @@ export function DataMigrationSettingsSection(): ReactElement {
       })
       clearPasswords()
       setReport(result.report)
+      setActiveTab('reports')
       setFlow('report')
       await refreshStatus()
     } catch (reason) {
@@ -211,6 +216,7 @@ export function DataMigrationSettingsSection(): ReactElement {
       })
       clearPasswords()
       setReport(result.report)
+      setActiveTab('reports')
       setFlow('report')
       await refreshStatus()
     } catch (reason) {
@@ -247,6 +253,8 @@ export function DataMigrationSettingsSection(): ReactElement {
     setExportPassphrase('')
     setExportPassphraseConfirm('')
     setImportPassphrase('')
+    setShowExportPassphrase(false)
+    setShowImportPassphrase(false)
   }
 
   const backToLanding = () => {
@@ -257,6 +265,9 @@ export function DataMigrationSettingsSection(): ReactElement {
   }
 
   const beginExport = () => {
+    if (busy || status?.activeOperationId) return
+    clearPasswords()
+    setActiveTab('export')
     automaticEstimateStarted.current = false
     setExportOperationId(operationId('export'))
     setExportStep(0)
@@ -269,6 +280,9 @@ export function DataMigrationSettingsSection(): ReactElement {
   }
 
   const beginImport = () => {
+    if (busy || status?.activeOperationId) return
+    clearPasswords()
+    setActiveTab('import')
     setImportOperationId(operationId('import'))
     setImportStep(0)
     setPackagePath('')
@@ -280,25 +294,62 @@ export function DataMigrationSettingsSection(): ReactElement {
     setFlow('import')
   }
 
+  const openReport = (value: DataMigrationReport): void => {
+    clearPasswords()
+    setReport(value)
+    setActiveTab('reports')
+    setFlow('report')
+  }
+
+  const deleteReport = async (operationIdValue: string): Promise<void> => {
+    await api.deleteReport(operationIdValue)
+    await refreshStatus()
+  }
+
+  const recoverOperation = async (
+    operationIdValue: string,
+    action: 'resume' | 'rollback'
+  ): Promise<void> => {
+    setBusy(true)
+    setError('')
+    try {
+      setStatus(await api.recover(operationIdValue, action))
+    } catch (reason) {
+      setError(errorMessage(reason))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const exportSecurityValid = exportPassphrase
     ? exportPassphrase.length >= 8 && exportPassphrase === exportPassphraseConfirm
     : unencryptedAcknowledged
   const importReady = Boolean(plan && normalizeResolvedPlan(plan).fatalIssueCount === 0 &&
     normalizeResolvedPlan(plan).mappings.every((mapping) => mapping.strategy === 'skip' || mapping.compatible))
+  const activeTabHasFlow =
+    (activeTab === 'export' && flow === 'export') ||
+    (activeTab === 'import' && flow === 'import') ||
+    (activeTab === 'reports' && flow === 'report')
+  const landingProps = {
+    status,
+    onExport: beginExport,
+    onImport: beginImport,
+    onOpenReport: openReport,
+    onDeleteReport: deleteReport,
+    onRecover: recoverOperation,
+    busy
+  }
 
   return (
     <section aria-labelledby="data-migration-title" className="space-y-6 pb-12" data-testid="data-migration-settings">
-      <header className="flex items-start justify-between gap-4">
-        <div>
-          <h2 id="data-migration-title" className="text-xl font-semibold text-ds-ink">{t('dataMigration')}</h2>
-          <p className="mt-1 text-[13px] leading-6 text-ds-muted">{t('dataMigrationSubtitle')}</p>
-        </div>
-        {flow !== 'landing' ? (
+      <h2 id="data-migration-title" className="sr-only">{t('dataMigration')}</h2>
+      {activeTabHasFlow ? (
+        <div className="flex justify-end">
           <button type="button" onClick={backToLanding} className="inline-flex items-center gap-2 rounded-xl border border-ds-border px-3 py-2 text-[13px] text-ds-muted hover:bg-ds-hover">
             <ArrowLeft className="h-4 w-4" />{t('dataMigrationBack')}
           </button>
-        ) : null}
-      </header>
+        </div>
+      ) : null}
 
       {error ? <DataMigrationActionError message={error} /> : null}
       {progress && status?.activeOperationId ? (
@@ -309,22 +360,25 @@ export function DataMigrationSettingsSection(): ReactElement {
         }} />
       ) : null}
 
-      {flow === 'landing' ? (
-        <DataMigrationLanding
-          status={status}
-          onExport={beginExport}
-          onImport={beginImport}
-          onOpenReport={(value) => { setReport(value); setFlow('report') }}
-          onDeleteReport={async (operationIdValue) => { await api.deleteReport(operationIdValue); await refreshStatus() }}
-          onRecover={async (operationIdValue, action) => {
-            setBusy(true); setError('')
-            try { setStatus(await api.recover(operationIdValue, action)) } catch (reason) { setError(errorMessage(reason)) } finally { setBusy(false) }
-          }}
-          busy={busy}
-        />
-      ) : null}
+      <DataMigrationSafetyNotice />
+      <SettingsSubTabs<DataMigrationTab>
+        baseId="data-migration"
+        ariaLabel={t('dataMigration')}
+        items={[
+          { id: 'export', label: t('dataMigrationCreateTitle'), icon: PackagePlus },
+          { id: 'import', label: t('dataMigrationImportTitle'), icon: FolderInput },
+          { id: 'reports', label: t('dataMigrationRecentReports'), icon: FileArchive }
+        ]}
+        value={activeTab}
+        onChange={setActiveTab}
+      />
 
-      {flow === 'export' ? (
+      <SettingsTabPanel
+        baseId="data-migration"
+        tabId="export"
+        active={activeTab === 'export'}
+      >
+        {flow === 'export' ? (
         <div className="space-y-5">
           <DataMigrationStepRail steps={EXPORT_STEPS.map((step) => t(`dataMigrationExportStep${capitalize(step)}`))} current={exportStep} />
           {exportStep === 0 ? (
@@ -372,9 +426,15 @@ export function DataMigrationSettingsSection(): ReactElement {
           ) : null}
           {exportStep === 3 ? <RunPanel kind="export" busy={busy} progress={progress} onStart={() => void startExport()} /> : null}
         </div>
-      ) : null}
+        ) : <DataMigrationLanding {...landingProps} mode="export" />}
+      </SettingsTabPanel>
 
-      {flow === 'import' ? (
+      <SettingsTabPanel
+        baseId="data-migration"
+        tabId="import"
+        active={activeTab === 'import'}
+      >
+        {flow === 'import' ? (
         <div className="space-y-5">
           <DataMigrationStepRail steps={IMPORT_STEPS.map((step) => t(`dataMigrationImportStep${capitalize(step)}`))} current={importStep} />
           {importStep === 0 ? <Panel title={t('dataMigrationSelectTitle')} description={t('dataMigrationSelectBody')}><div className="flex gap-2"><input readOnly className="settings-input min-w-0 flex-1" value={packagePath} /><button type="button" className="secondary-button" onClick={() => void choosePackage()}>{t('browse')}</button></div><div className="mt-3 flex gap-2"><input className="settings-input flex-1" type={showImportPassphrase ? 'text' : 'password'} value={importPassphrase} autoComplete="off" onChange={(event) => setImportPassphrase(event.target.value)} placeholder={t('dataMigrationPassphraseIfNeeded')} /><button type="button" className="secondary-button" onClick={() => setShowImportPassphrase((value) => !value)}>{showImportPassphrase ? t('hide') : t('show')}</button></div><div className="mt-4 flex justify-end"><button type="button" className="primary-button" disabled={!packagePath || busy} onClick={() => void inspectPackage()}>{t('dataMigrationInspect')}</button></div></Panel> : null}
@@ -384,9 +444,18 @@ export function DataMigrationSettingsSection(): ReactElement {
           {importStep === 4 && inspection && plan ? <Panel title={t('dataMigrationReviewTitle')} description={t('dataMigrationImportReviewBody')}><Summary rows={[[t('dataMigrationWorkspaces'), String(plan.mappings.filter((mapping) => mapping.strategy !== 'skip').length)], [t('dataMigrationConflicts'), String(plan.conflicts.length)], [t('dataMigrationRequiredSpace'), formatBytes(plan.estimatedPeakBytes)], [t('dataMigrationDisabledItems'), String(plan.disabledItems.length)]]} /><div className="mt-3 rounded-xl border border-amber-300/60 bg-amber-500/5 p-3 text-[12px] text-amber-800 dark:text-amber-200"><ShieldAlert className="mr-2 inline h-4 w-4" />{t('dataMigrationTrustResetNotice')}</div><WizardButtons back={() => setImportStep(3)} next={() => setImportStep(5)} nextDisabled={!importReady} nextLabel={t('dataMigrationImportNow')} /></Panel> : null}
           {importStep === 5 ? <RunPanel kind="import" busy={busy} progress={progress} onStart={() => void startImport()} /> : null}
         </div>
-      ) : null}
+        ) : <DataMigrationLanding {...landingProps} mode="import" />}
+      </SettingsTabPanel>
 
-      {flow === 'report' && report ? <DataMigrationReportView report={report} onDone={backToLanding} /> : null}
+      <SettingsTabPanel
+        baseId="data-migration"
+        tabId="reports"
+        active={activeTab === 'reports'}
+      >
+        {flow === 'report' && report
+          ? <DataMigrationReportView report={report} onDone={backToLanding} />
+          : <DataMigrationLanding {...landingProps} mode="reports" />}
+      </SettingsTabPanel>
       <span className="sr-only" role="status" aria-live="polite">{progress ? `${progress.phase}: ${progress.completedItems}` : ''}</span>
     </section>
   )
@@ -400,15 +469,31 @@ export function DataMigrationLanding(props: {
   onDeleteReport: (operationId: string) => Promise<void>
   onRecover: (operationId: string, action: 'resume' | 'rollback') => Promise<void>
   busy: boolean
+  mode?: DataMigrationLandingMode
 }): ReactElement {
   const { t } = useTranslation('settings')
+  const mode = props.mode ?? 'all'
+  const showExport = mode === 'all' || mode === 'export'
+  const showImport = mode === 'all' || mode === 'import'
+  const showReports = mode === 'all' || mode === 'reports'
+  const newMigrationDisabled = props.busy ||
+    Boolean(props.status?.activeOperationId) ||
+    Boolean(props.status?.recoverable.length)
   if (props.status && !props.status.featureEnabled && props.status.recoverable.length === 0) return <DataMigrationActionError message={t('dataMigrationFeatureDisabled')} />
   return <div className="space-y-5">
-    {props.status?.recoverable.map((item) => <div key={item.operationId} className="rounded-2xl border border-amber-300/70 bg-amber-500/5 p-5"><div className="flex items-center gap-2 font-semibold text-ds-ink"><AlertTriangle className="h-5 w-5 text-amber-600" />{t('dataMigrationRecoveryTitle')}</div><p className="mt-2 text-[13px] text-ds-muted">{t('dataMigrationRecoveryBody', { phase: item.phase, effect: item.destinationEffect })}</p>{item.error ? <p className="mt-2 text-[12px] text-ds-muted"><strong>{item.error.code}</strong> · {item.error.message}</p> : null}{item.manualRecoverySteps.length > 0 ? <ul className="mt-3 list-disc space-y-1 pl-5 text-[12px] text-amber-800 dark:text-amber-200">{item.manualRecoverySteps.map((step) => <li key={step}>{step}</li>)}</ul> : null}{item.reportPath ? <p className="mt-2 break-all text-[11px] text-ds-muted">{t('dataMigrationReportLocation')}: {item.reportPath}</p> : null}<div className="mt-4 flex gap-2">{item.phase !== 'inspected' ? <button type="button" className="primary-button" disabled={props.busy} onClick={() => void props.onRecover(item.operationId, 'resume')}>{t('dataMigrationResume')}</button> : null}<button type="button" className="secondary-button" disabled={props.busy} onClick={() => void props.onRecover(item.operationId, 'rollback')}>{t('dataMigrationRollback')}</button></div></div>)}
-    <div className="grid gap-4 sm:grid-cols-2"><LandingCard icon={<PackagePlus />} title={t('dataMigrationCreateTitle')} body={t('dataMigrationCreateBody')} action={t('dataMigrationCreateAction')} onClick={props.onExport} disabled={Boolean(props.status?.recoverable.length)} /><LandingCard icon={<FolderInput />} title={t('dataMigrationImportTitle')} body={t('dataMigrationImportBody')} action={t('dataMigrationImportAction')} onClick={props.onImport} disabled={Boolean(props.status?.recoverable.length)} /></div>
-    <div className="rounded-2xl border border-ds-border bg-ds-subtle/40 p-5"><div className="flex items-center gap-2 font-medium text-ds-ink"><ShieldAlert className="h-4 w-4" />{t('dataMigrationNeverTransferredTitle')}</div><p className="mt-2 text-[13px] leading-6 text-ds-muted">{t('dataMigrationNeverTransferredBody')}</p></div>
-    <div><h3 className="text-[14px] font-semibold text-ds-ink">{t('dataMigrationRecentReports')}</h3><div className="mt-2 space-y-2">{props.status?.recentReports.length ? props.status.recentReports.map((report) => <div key={report.operationId} className="flex items-center gap-3 rounded-xl border border-ds-border px-3 py-3"><StatusIcon outcome={report.outcome} /><button type="button" className="min-w-0 flex-1 text-left" onClick={() => props.onOpenReport(report)}><span className="block font-medium text-ds-ink">{t(`dataMigrationOutcome_${report.outcome}`)}</span><span className="block text-[12px] text-ds-muted">{new Date(report.finishedAt).toLocaleString()} · {report.kind}</span></button><button type="button" aria-label={t('delete')} className="rounded-lg p-2 text-ds-muted hover:bg-ds-hover" onClick={() => void props.onDeleteReport(report.operationId)}><Trash2 className="h-4 w-4" /></button></div>) : <p className="rounded-xl border border-dashed border-ds-border p-4 text-[13px] text-ds-muted">{t('dataMigrationNoReports')}</p>}</div></div>
+    {showReports ? props.status?.recoverable.map((item) => <div key={item.operationId} className="rounded-2xl border border-amber-300/70 bg-amber-500/5 p-5"><div className="flex items-center gap-2 font-semibold text-ds-ink"><AlertTriangle className="h-5 w-5 text-amber-600" />{t('dataMigrationRecoveryTitle')}</div><p className="mt-2 text-[13px] text-ds-muted">{t('dataMigrationRecoveryBody', { phase: item.phase, effect: item.destinationEffect })}</p>{item.error ? <p className="mt-2 text-[12px] text-ds-muted"><strong>{item.error.code}</strong> · {item.error.message}</p> : null}{item.manualRecoverySteps.length > 0 ? <ul className="mt-3 list-disc space-y-1 pl-5 text-[12px] text-amber-800 dark:text-amber-200">{item.manualRecoverySteps.map((step) => <li key={step}>{step}</li>)}</ul> : null}{item.reportPath ? <p className="mt-2 break-all text-[11px] text-ds-muted">{t('dataMigrationReportLocation')}: {item.reportPath}</p> : null}<div className="mt-4 flex gap-2">{item.phase !== 'inspected' ? <button type="button" className="primary-button" disabled={props.busy} onClick={() => void props.onRecover(item.operationId, 'resume')}>{t('dataMigrationResume')}</button> : null}<button type="button" className="secondary-button" disabled={props.busy} onClick={() => void props.onRecover(item.operationId, 'rollback')}>{t('dataMigrationRollback')}</button></div></div>) : null}
+    {showExport || showImport ? <div className={`grid gap-4 ${showExport && showImport ? 'sm:grid-cols-2' : ''}`}>
+      {showExport ? <LandingCard icon={<PackagePlus />} title={t('dataMigrationCreateTitle')} body={t('dataMigrationCreateBody')} action={t('dataMigrationCreateAction')} onClick={props.onExport} disabled={newMigrationDisabled} /> : null}
+      {showImport ? <LandingCard icon={<FolderInput />} title={t('dataMigrationImportTitle')} body={t('dataMigrationImportBody')} action={t('dataMigrationImportAction')} onClick={props.onImport} disabled={newMigrationDisabled} /> : null}
+    </div> : null}
+    {mode === 'all' ? <DataMigrationSafetyNotice /> : null}
+    {showReports ? <div><h3 className="text-[14px] font-semibold text-ds-ink">{t('dataMigrationRecentReports')}</h3><div className="mt-2 space-y-2">{props.status?.recentReports.length ? props.status.recentReports.map((report) => <div key={report.operationId} className="flex items-center gap-3 rounded-xl border border-ds-border px-3 py-3"><StatusIcon outcome={report.outcome} /><button type="button" className="min-w-0 flex-1 text-left" onClick={() => props.onOpenReport(report)}><span className="block font-medium text-ds-ink">{t(`dataMigrationOutcome_${report.outcome}`)}</span><span className="block text-[12px] text-ds-muted">{new Date(report.finishedAt).toLocaleString()} · {report.kind}</span></button><button type="button" aria-label={t('delete')} className="rounded-lg p-2 text-ds-muted hover:bg-ds-hover" onClick={() => void props.onDeleteReport(report.operationId)}><Trash2 className="h-4 w-4" /></button></div>) : <p className="rounded-xl border border-dashed border-ds-border p-4 text-[13px] text-ds-muted">{t('dataMigrationNoReports')}</p>}</div></div> : null}
   </div>
+}
+
+function DataMigrationSafetyNotice(): ReactElement {
+  const { t } = useTranslation('settings')
+  return <div className="rounded-2xl border border-ds-border bg-ds-subtle/40 p-5"><div className="flex items-center gap-2 font-medium text-ds-ink"><ShieldAlert className="h-4 w-4" />{t('dataMigrationNeverTransferredTitle')}</div><p className="mt-2 text-[13px] leading-6 text-ds-muted">{t('dataMigrationNeverTransferredBody')}</p></div>
 }
 
 function LandingCard({ icon, title, body, action, onClick, disabled }: { icon: ReactElement; title: string; body: string; action: string; onClick: () => void; disabled: boolean }): ReactElement {

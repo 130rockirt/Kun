@@ -410,6 +410,10 @@ export function SettingsView(): ReactElement {
       setCategory('providers')
       return
     }
+    if (settingsSection === 'extensions') {
+      setCategory('extensions')
+      return
+    }
     if (settingsSection === 'write') {
       setCategory('write')
       return
@@ -442,6 +446,14 @@ export function SettingsView(): ReactElement {
       setCategory('archives')
       return
     }
+    if (settingsSection === 'worktree') {
+      setCategory('worktree')
+      return
+    }
+    if (settingsSection === 'memory') {
+      setCategory('memory')
+      return
+    }
     if (settingsSection === 'claw') {
       setCategory('claw')
       return
@@ -462,6 +474,10 @@ export function SettingsView(): ReactElement {
       setCategory('terminal')
       return
     }
+    if (settingsSection === 'debug') {
+      setCategory('debug')
+      return
+    }
     if (settingsSection === 'dataMigration') {
       setCategory('dataMigration')
       return
@@ -474,6 +490,7 @@ export function SettingsView(): ReactElement {
     if (
       settingsSection === 'general' ||
       settingsSection === 'providers' ||
+      settingsSection === 'extensions' ||
       settingsSection === 'write' ||
       settingsSection === 'design' ||
       settingsSection === 'imageGeneration' ||
@@ -481,11 +498,14 @@ export function SettingsView(): ReactElement {
       settingsSection === 'speechToText' ||
       settingsSection === 'subagents' ||
       settingsSection === 'archives' ||
+      settingsSection === 'worktree' ||
+      settingsSection === 'memory' ||
       settingsSection === 'claw' ||
       settingsSection === 'shortcuts' ||
       settingsSection === 'easterEgg' ||
       settingsSection === 'updates' ||
       settingsSection === 'terminal' ||
+      settingsSection === 'debug' ||
       settingsSection === 'dataMigration' ||
       category !== 'agents'
     ) {
@@ -493,7 +513,7 @@ export function SettingsView(): ReactElement {
     }
     if (!agentsSectionReady) return
     const refs: Record<
-      Exclude<SettingsRouteSection, 'general' | 'providers' | 'write' | 'design' | 'imageGeneration' | 'mediaGeneration' | 'speechToText' | 'subagents' | 'archives' | 'claw' | 'shortcuts' | 'easterEgg' | 'updates' | 'terminal' | 'dataMigration'>,
+      Exclude<SettingsRouteSection, 'general' | 'providers' | 'extensions' | 'write' | 'design' | 'imageGeneration' | 'mediaGeneration' | 'speechToText' | 'subagents' | 'archives' | 'worktree' | 'memory' | 'claw' | 'shortcuts' | 'easterEgg' | 'updates' | 'terminal' | 'debug' | 'dataMigration'>,
       HTMLDivElement | null
     > = {
       agents: agentsSectionRef.current,
@@ -1224,6 +1244,7 @@ export function SettingsView(): ReactElement {
   const settingsSectionContext = {
     t,
     tCommon,
+    settingsSection,
     form,
     provider,
     kun,
@@ -1349,7 +1370,7 @@ export function SettingsView(): ReactElement {
       <div className="ds-settings-stage relative min-h-0 min-w-0 flex-1 overflow-hidden">
         <div className="ds-settings-scroller ds-no-drag h-full min-h-0 overflow-y-auto px-5 py-6 lg:px-8 lg:py-8">
           <div className="ds-settings-content mx-auto max-w-6xl">
-          {category !== 'providers' ? <div className="ds-settings-page-header mb-5 flex items-start justify-between gap-5">
+          <div className="ds-settings-page-header flex items-start justify-between gap-5">
             <div className="min-w-0">
               <h1 className="truncate text-2xl font-semibold tracking-tight text-ds-ink">
                 {categoryTitle}
@@ -1380,7 +1401,7 @@ export function SettingsView(): ReactElement {
                       ? t('applyFailed')
                       : t('autoApplyHint')}
             </span> : null}
-          </div> : null}
+          </div>
 
           {category !== 'extensions' && category !== 'dataMigration' && saveStatus === 'error' && saveError ? (
             <div

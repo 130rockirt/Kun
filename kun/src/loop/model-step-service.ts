@@ -25,6 +25,7 @@ import {
 } from '../adapters/tool/design-svg-tool.js'
 import { resolveWorkspacePath, shellRuntimeInstruction } from '../adapters/tool/builtin-tool-utils.js'
 import { VERIFY_CHANGES_TOOL_NAME } from '../adapters/tool/builtin-verify-tool.js'
+import { GRAPH_LEAD_MODE_INSTRUCTION } from '../prompt/graph-lead-mode.js'
 import { buildToolPreferenceInstruction } from '../prompt/kun-system-prompt.js'
 import {
   buildClientSurfaceInstruction,
@@ -104,17 +105,6 @@ import { buildToolCatalogFingerprint } from '../cache/tool-catalog-fingerprint.j
 import { rewriteItemHistoryWithRetry } from '../services/history-commit-coordinator.js'
 import { TurnToolCatalogFreezer } from './turn-tool-catalog.js'
 
-const GRAPH_MODE_INSTRUCTION = [
-  'Graph Mode is active for this turn.',
-  'First understand the complete user outcome and decompose it into a durable, bounded GraphPlan.',
-  'Use graph_create_run exactly once before giving a final response.',
-  'Give each node a focused objective, explicit acceptance criteria, least-privilege scopes, review policy, and a suitable existing or ephemeral project agent.',
-  'Do not use ordinary delegate_task/profile ids or the legacy task_graph: omit node.assignment for host Graph-agent routing, use an exact Graph registry id only when known, or define a graph-scoped ephemeral role.',
-  'Use typed dependencies and only bounded LoopGates; do not encode an unbounded cycle.',
-  'After creation, remain accountable for this GraphRun: the host will suspend and resume this same turn for material events until terminal delivery.',
-  'On every supervision continuation, inspect durable truth, report a concise milestone, resolve safe issues with validated Graph controls, and retry, repair, patch, or rebind eligible work when evidence requires it.'
-].join(' ')
-
 function graphCreateRunRecoveryInstruction(
   attempt: number,
   reason: GraphCreateRunRecoveryReason
@@ -122,8 +112,10 @@ function graphCreateRunRecoveryInstruction(
   const correction = reason === 'invalid'
     ? [
         `The previous \`${GRAPH_CREATE_RUN_TOOL_NAME}\` call failed validation, so no GraphRun exists.`,
-        'Use the advertised nested schema and the structured issues in the latest tool result to correct the arguments.',
-        'Do not repeat the same invalid arguments or use legacy task-graph field names.'
+        'Read every structured issue path in the latest tool result and correct that exact field in the actual next tool arguments.',
+        'All readScopes and writeScopes must be normalized repository-relative paths such as `.`, `src`, or `.graph-artifacts`, never absolute workspace paths.',
+        'Omit host-owned mechanical budget values unless a narrower limit is intentional; the host supplies omitted defaults.',
+        'Do not repeat unchanged invalid arguments, invent fields, use legacy task-graph names, or merely say in prose that a field was fixed.'
       ]
     : [
         `The previous response did not call \`${GRAPH_CREATE_RUN_TOOL_NAME}\`, so no GraphRun exists.`
@@ -131,8 +123,8 @@ function graphCreateRunRecoveryInstruction(
   return [
     `Graph creation attempt ${attempt}/${MAX_GRAPH_CREATE_RUN_ATTEMPTS}.`,
     ...correction,
-    `Call the only available tool, \`${GRAPH_CREATE_RUN_TOOL_NAME}\`, now with a complete schema-valid GraphPlan.`,
-    'Do not answer with prose and do not claim that validation ran unless the tool result says so.'
+    `Call the only available tool, \`${GRAPH_CREATE_RUN_TOOL_NAME}\`, now with a schema-valid GraphPlan whose arguments contain the correction.`,
+    'Return no prose before or instead of the tool call, and do not claim that validation ran unless the tool result says so.'
   ].join(' ')
 }
 
@@ -618,7 +610,7 @@ export class ModelStepService {
       contextInstructionCount: contextInstructions.length
     })
     const modeInstruction = [
-      ...(turn.orchestration === 'graph' ? [GRAPH_MODE_INSTRUCTION] : []),
+      ...(turn.orchestration === 'graph' ? [GRAPH_LEAD_MODE_INSTRUCTION] : []),
       ...(hardRequiredToolName === GRAPH_CREATE_RUN_TOOL_NAME && graphCreateRunAttempt > 1
         ? [graphCreateRunRecoveryInstruction(
             graphCreateRunAttempt,

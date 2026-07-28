@@ -8,6 +8,7 @@ import { GraphPlanValidationError } from '../../graph/graph-validator.js'
 import { GraphWorkerSessionRegistry } from '../../graph/graph-worker-sessions.js'
 import { replayGraphEvents } from '../../graph/graph-reducer.js'
 import {
+  testGraphConfig,
   testGraphEnvelope,
   testGraphPlan
 } from '../../graph/graph-test-fixtures.test-support.js'
@@ -46,15 +47,19 @@ describe('Graph Mode tool visibility boundaries', () => {
       'phases',
       'nodes',
       'edges',
-      'budget',
       'completionNodeIds'
     ]))
+    expect(plan.required).not.toContain('budget')
     expect(plan.properties).not.toHaveProperty('version')
     expect(plan.properties).not.toHaveProperty('revision')
     expect(plan.properties).not.toHaveProperty('workspaceRoot')
     expect(plan.properties).not.toHaveProperty('autoStart')
     expect(plan.properties).not.toHaveProperty('createdBy')
     expect(plan.properties).not.toHaveProperty('createdAt')
+    const budget = plan.properties.budget as {
+      required?: string[]
+    }
+    expect(budget.required ?? []).toEqual([])
 
     const nodes = plan.properties.nodes as {
       items: { properties: Record<string, unknown>; required: string[] }
@@ -75,11 +80,28 @@ describe('Graph Mode tool visibility boundaries', () => {
     expect(JSON.stringify(GRAPH_CREATE_RUN_INPUT_JSON_SCHEMA)).not.toContain('"$schema"')
   })
 
-  it('materializes host-owned creation fields and starts by default', async () => {
+  it('materializes every omitted host budget field and preserves explicit limits', async () => {
     const create = vi.fn(async (input: { plan: ReturnType<typeof testGraphPlan> }) => ({
       run: { id: 'graph_run_1', plan: input.plan },
       validation: { valid: true }
     }))
+    const hostConfig = testGraphConfig({
+      scheduler: {
+        maxNodes: 64,
+        maxEdges: 256,
+        maxConcurrentNodesPerRun: 3,
+        maxAttemptsPerNode: 4,
+        maxRevisions: 12,
+        maxLoopIterations: 6,
+        maxRunWallTimeMs: 7 * 24 * 60 * 60 * 1_000,
+        maxNodeWallTimeMs: 24 * 60 * 60 * 1_000,
+        maxArtifactBytes: 700_000_000,
+        budgetWarningRatio: 0.73
+      },
+      mailbox: {
+        maxMessagesPerRun: 1_337
+      }
+    })
     const tools = buildGraphModeLocalTools({
       control: {
         allocateId: () => 'graph_run_1',
@@ -96,6 +118,7 @@ describe('Graph Mode tool visibility boundaries', () => {
       artifactStore: {} as never,
       workerSessions: new GraphWorkerSessionRegistry(),
       enabled: () => true,
+      config: () => hostConfig,
       nowIso: () => '2026-07-27T00:00:00.000Z',
       nextId: () => 'graph_command_1'
     })
@@ -109,9 +132,19 @@ describe('Graph Mode tool visibility boundaries', () => {
       createdAt: _createdAt,
       ...modelPlan
     } = testGraphPlan()
+    const {
+      budget: explicitBudget,
+      ...planWithoutBudget
+    } = modelPlan
+    const {
+      maxWallTimeMs: explicitRunWallTime,
+      maxNodeWallTimeMs: explicitNodeWallTime,
+      warningRatio: _explicitWarningRatio,
+      ...partialBudgetWithoutWarningOrWallTimes
+    } = explicitBudget
 
     const result = await graphCreate.execute(
-      { plan: modelPlan },
+      { plan: planWithoutBudget },
       context('lead_thread', 'graph')
     )
 
@@ -126,7 +159,68 @@ describe('Graph Mode tool visibility boundaries', () => {
         workspaceRoot: '/canonical/workspace',
         autoStart: true,
         createdBy: 'lead',
-        createdAt: '2026-07-27T00:00:00.000Z'
+        createdAt: '2026-07-27T00:00:00.000Z',
+        budget: {
+          maxNodes: 64,
+          maxEdges: 256,
+          maxConcurrentNodes: 3,
+          maxAttemptsPerNode: 4,
+          maxRevisions: 12,
+          maxLoopIterations: 6,
+          maxWallTimeMs: 7 * 24 * 60 * 60 * 1_000,
+          maxNodeWallTimeMs: 24 * 60 * 60 * 1_000,
+          maxMessages: 1_337,
+          maxArtifactBytes: 700_000_000,
+          warningRatio: 0.73
+        }
+      })
+    }))
+    expect(result.output).toMatchObject({
+      appliedBudgetDefaultFields: expect.arrayContaining([
+        'maxNodes',
+        'maxWallTimeMs',
+        'maxNodeWallTimeMs',
+        'warningRatio'
+      ])
+    })
+
+    const partialResult = await graphCreate.execute(
+      {
+        plan: {
+          ...planWithoutBudget,
+          budget: {
+            ...partialBudgetWithoutWarningOrWallTimes,
+            maxNodes: 12,
+            maxTotalTokens: 800_000
+          }
+        }
+      },
+      context('lead_thread', 'graph')
+    )
+    expect(partialResult.isError).not.toBe(true)
+    expect(create).toHaveBeenLastCalledWith(expect.objectContaining({
+      plan: expect.objectContaining({
+        budget: expect.objectContaining({
+          maxNodes: 12,
+          maxWallTimeMs: 7 * 24 * 60 * 60 * 1_000,
+          maxNodeWallTimeMs: 24 * 60 * 60 * 1_000,
+          warningRatio: 0.73
+        })
+      })
+    }))
+    expect(create.mock.lastCall?.[0].plan.budget).not.toHaveProperty('maxTotalTokens')
+
+    await graphCreate.execute(
+      { plan: modelPlan },
+      context('lead_thread', 'graph')
+    )
+    expect(create).toHaveBeenLastCalledWith(expect.objectContaining({
+      plan: expect.objectContaining({
+        budget: expect.objectContaining({
+          maxWallTimeMs: explicitRunWallTime,
+          maxNodeWallTimeMs: explicitNodeWallTime,
+          warningRatio: explicitBudget.warningRatio
+        })
       })
     }))
   })
@@ -274,7 +368,8 @@ describe('Graph Mode tool visibility boundaries', () => {
       'graph_create_run',
       'graph_control_run',
       'graph_patch_run',
-      'graph_review_node'
+      'graph_review_node',
+      'graph_supervise_node'
     ])
     const workerNames = new Set(tools
       .map((tool) => tool.name)

@@ -208,7 +208,8 @@ export class GraphControlService {
   async steer(
     runId: string,
     steeringInput: GraphSteeringV1,
-    command: GraphCommandContext
+    command: GraphCommandContext,
+    notifySupervisor = true
   ): Promise<GraphRunV1> {
     const run = await this.get(runId)
     this.assertCommandPreconditions(run, command)
@@ -246,7 +247,7 @@ export class GraphControlService {
       idempotencyKey: command.idempotencyKey,
       event: { type: 'steering_recorded', payload: { steering } }
     })
-    await this.options.onSteering?.(appended.state, steering)
+    if (notifySupervisor) await this.options.onSteering?.(appended.state, steering)
     return appended.state
   }
 
@@ -254,7 +255,6 @@ export class GraphControlService {
     await this.options.onCancelled?.(run, reason)
     return run
   }
-
   async retryNode(
     runId: string,
     nodeId: string,
@@ -278,7 +278,6 @@ export class GraphControlService {
       }
     })).state
   }
-
   async recordReview(
     runId: string,
     reviewInput: GraphReviewResultV1,
@@ -309,6 +308,9 @@ export class GraphControlService {
       throw new GraphRunConflictError(
         `attempt ${attempt.id} is not a submitted result awaiting review`
       )
+    }
+    if (review.outcome === 'pass' && attempt.validation.valid !== true) {
+      throw new GraphRunConflictError(`cannot pass invalid attempt ${attempt.id}`)
     }
     const requiredKinds = effectiveReviewKinds(
       node,
@@ -352,7 +354,6 @@ export class GraphControlService {
       event: { type: 'review_recorded', payload: { review } }
     })).state
   }
-
   async applyPatch(
     runId: string,
     patchInput: GraphPatchV1,
@@ -386,7 +387,6 @@ export class GraphControlService {
       }
     })).state
   }
-
   async cleanup(runId: string, command: GraphCommandContext): Promise<GraphRunV1> {
     let run = await this.get(runId)
     this.assertCommandPreconditions(run, command)

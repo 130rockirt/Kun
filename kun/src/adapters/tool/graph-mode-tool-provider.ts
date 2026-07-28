@@ -26,6 +26,9 @@ import {
   GRAPH_WORKER_TOOL_NAMES
 } from '../../graph/graph-tool-boundary.js'
 import { buildGraphCreateRunTool } from './graph-create-run-tool.js'
+import { buildGraphLeadSupervisionTool } from './graph-lead-supervision-tool.js'
+import type { SessionStore } from '../../ports/session-store.js'
+import type { ThreadStore } from '../../ports/thread-store.js'
 
 export {
   GRAPH_CREATE_RUN_INPUT_JSON_SCHEMA,
@@ -40,6 +43,30 @@ export function buildGraphModeLocalTools(options: {
   registry: ProjectAgentRegistry
   artifactStore: ArtifactStore
   workerSessions: GraphWorkerSessionRegistry
+  threads?: Pick<ThreadStore, 'get'>
+  sessions?: Pick<SessionStore, 'loadItems'>
+  steerChildTurn?: () => ((input: {
+    threadId: string
+    turnId: string
+    text: string
+    displayText?: string
+    messageSource?: 'graph_runtime'
+  }) => Promise<void>) | undefined
+  childActivity?: (
+    parentThreadId: string,
+    childThreadId: string
+  ) => Promise<{
+    status: 'queued' | 'running' | 'completed' | 'failed' | 'aborted'
+    activity?: {
+      phase: 'starting' | 'thinking' | 'responding' | 'tool' | 'retrying' | 'compacting' | 'waiting'
+      label: string
+      toolName?: string
+      startedAt: string
+      updatedAt: string
+    }
+    updatedAt: string
+  } | undefined>
+  config?: () => import('../../config/kun-config.js').GraphRuntimeConfig
   enabled: () => boolean
   signalSupervision?: (input: {
     runId: string
@@ -69,6 +96,19 @@ export function buildGraphModeLocalTools(options: {
       control: options.control,
       registry: options.registry,
       shouldAdvertise: graphCreatorOnly,
+      nowIso,
+      nextId,
+      config: options.config
+    }),
+    buildGraphLeadSupervisionTool({
+      control: options.control,
+      store: options.store,
+      registry: options.registry,
+      threads: options.threads,
+      sessions: options.sessions,
+      steerChildTurn: options.steerChildTurn,
+      childActivity: options.childActivity,
+      shouldAdvertise: graphLeadOnly,
       nowIso,
       nextId
     }),
@@ -153,7 +193,9 @@ export function buildGraphModeLocalTools(options: {
       name: GRAPH_LEAD_TOOL_NAMES[2],
       description:
         'Apply a validated compare-and-swap GraphPatch. Accepted history cannot be rewritten; ' +
-        'replacement work must use a distinct superseding node.',
+        'replacement work must use a distinct superseding node. Operations are semantic: add_node, ' +
+        'replace_node, rebind_node, add_edge, remove_edge, update_budget, or update_review. ' +
+        'RFC 6902 path/value operations are invalid.',
       inputSchema: {
         type: 'object',
         properties: {

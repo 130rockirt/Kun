@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-const CompatibilitySchema = z.object({
+export const GraphBudgetV1InputSchema = z.object({
   maxNodes: z.number().int().positive().max(10_000),
   maxEdges: z.number().int().positive().max(50_000),
   maxConcurrentNodes: z.number().int().positive().max(256),
@@ -15,7 +15,7 @@ const CompatibilitySchema = z.object({
   warningRatio: z.number().positive().max(1)
 }).strict()
 
-export const GraphBudgetV1Schema = CompatibilitySchema.transform((budget) => {
+export const GraphBudgetV1Schema = GraphBudgetV1InputSchema.transform((budget) => {
   const { maxTotalTokens, ...activeLimits } = budget
   void maxTotalTokens
   return activeLimits

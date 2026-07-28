@@ -23,7 +23,8 @@ import {
   maxBudgetRatio,
   outcomeOf,
   rotate,
-  terminalRequiredFailure
+  terminalRequiredFailure,
+  validationFailureSummary
 } from './graph-scheduler-policy.js'
 import type {
   GraphSchedulerOptions,
@@ -34,7 +35,6 @@ import {
   deliverNodeSteering,
   handleNodeAttemptSteering
 } from './graph-steering-delivery.js'
-
 export type {
   GraphSchedulerOptions,
   GraphSupervisionPort
@@ -78,7 +78,6 @@ export class GraphScheduler extends GraphAttemptScheduler {
     this.stopAllLeaseHeartbeats()
     await Promise.allSettled([...this.cleanupTasks])
   }
-
   async tick(): Promise<void> {
     if (this.ticking || !this.options.config().enabled) return
     this.ticking = true
@@ -91,7 +90,6 @@ export class GraphScheduler extends GraphAttemptScheduler {
       if (this.currentTick === operation) this.currentTick = undefined
     }
   }
-
   private async tickOnce(): Promise<void> {
     this.abortOverdueAttempts()
     const runs = await this.options.store.list({
@@ -133,7 +131,6 @@ export class GraphScheduler extends GraphAttemptScheduler {
       }
     }
   }
-
   diagnostics(): {
     active: Array<{ runId: string; nodeId: string; attemptId: string }>
     fairCursor: number
@@ -147,7 +144,6 @@ export class GraphScheduler extends GraphAttemptScheduler {
       fairCursor: this.fairCursor
     }
   }
-
   private async reconcileRun(runId: string): Promise<GraphRunV1> {
     return this.withRunQueue(runId, async () => {
       let run = await this.requireRun(runId)
@@ -160,6 +156,10 @@ export class GraphScheduler extends GraphAttemptScheduler {
       if (run.status === 'completing') return this.finishCompletion(run)
       run = await this.options.mailbox.expire(run, `scheduler_${run.id}_${run.lastEventSeq}`)
       run = await this.reconcileSubmitted(run)
+      const exhaustedRequiredNode = terminalRequiredFailure(run, this.options.config())
+      if (exhaustedRequiredNode) {
+        return this.holdRequiredFailure(run, exhaustedRequiredNode)
+      }
       if (
         (run.status === 'awaiting_supervision' || run.status === 'awaiting_human') &&
         !hasPendingExternalReview(run)
@@ -170,10 +170,7 @@ export class GraphScheduler extends GraphAttemptScheduler {
       run = await this.reconcileReadiness(run)
       const failedGate = terminalRequiredFailure(run, this.options.config())
       if (failedGate) {
-        return this.failRun(
-          run,
-          `Required node ${failedGate.node.id} cannot complete: ${failedGate.status}`
-        )
+        return this.holdRequiredFailure(run, failedGate)
       }
       run = await this.evaluateLoopGates(run)
       run = await this.enforceBudgets(run)
@@ -181,7 +178,6 @@ export class GraphScheduler extends GraphAttemptScheduler {
       return run
     })
   }
-
   private async reconcileReadiness(runInput: GraphRunV1): Promise<GraphRunV1> {
     let run = runInput
     const plan = run.plans.at(-1)!
@@ -212,7 +208,6 @@ export class GraphScheduler extends GraphAttemptScheduler {
     }
     return run
   }
-
   private async evaluateLoopGates(runInput: GraphRunV1): Promise<GraphRunV1> {
     let run = runInput
     for (const projection of Object.values(run.nodes)) {
@@ -270,7 +265,6 @@ export class GraphScheduler extends GraphAttemptScheduler {
     }
     return run
   }
-
   private async reconcileSubmitted(runInput: GraphRunV1): Promise<GraphRunV1> {
     let run = runInput
     for (const projection of Object.values(run.nodes)) {
@@ -283,18 +277,29 @@ export class GraphScheduler extends GraphAttemptScheduler {
       if (attempt.status === 'submitted') {
         run = await this.transitionAttempt(run, projection.node.id, attempt.id, 'reviewing')
       }
-      run = await this.ensureReviews(run, projection.node.id, attempt.id)
       const currentNode = run.nodes[projection.node.id]
       const currentAttempt = currentNode.attempts.find((entry) => entry.id === attempt.id)!
+      if (currentAttempt.validation?.valid !== true) {
+        run = await this.requireRepair(
+          run,
+          currentNode,
+          currentAttempt,
+          validationFailureSummary(currentAttempt)
+        )
+        continue
+      }
+      run = await this.ensureReviews(run, projection.node.id, attempt.id)
+      const reviewedNode = run.nodes[projection.node.id]
+      const reviewedAttempt = reviewedNode.attempts.find((entry) => entry.id === attempt.id)!
       const requiredKinds = effectiveReviewKinds(
-        currentNode,
+        reviewedNode,
         this.options.config(),
-        run.plans.at(-1)!.completionNodeIds.includes(currentNode.node.id)
+        run.plans.at(-1)!.completionNodeIds.includes(reviewedNode.node.id)
       )
       const reviews = run.reviews.filter((review) =>
-        review.nodeId === currentNode.node.id &&
-        review.attemptId === currentAttempt.id)
-      const requireAll = currentNode.node.completion.review.requireAll
+        review.nodeId === reviewedNode.node.id &&
+        review.attemptId === reviewedAttempt.id)
+      const requireAll = reviewedNode.node.completion.review.requireAll
       const passedKinds = requiredKinds.filter((kind) =>
         reviews.some((review) => review.reviewerKind === kind && review.outcome === 'pass'))
       const hasSufficientPasses = requireAll
@@ -317,22 +322,7 @@ export class GraphScheduler extends GraphAttemptScheduler {
         review.outcome === 'fail' || review.outcome === 'revise')
         : undefined
       if (negative) {
-        run = await this.transitionAttempt(
-          run,
-          currentNode.node.id,
-          currentAttempt.id,
-          'repair_required',
-          'retryable',
-          negative.summary
-        )
-        run = await this.transitionNode(
-          run,
-          currentNode.node.id,
-          'repair_required',
-          negative.summary
-        )
-        await this.releaseWrite(currentAttempt.id, 'failed')
-        run = await this.maybeRetry(run, currentNode.node.id)
+        run = await this.requireRepair(run, reviewedNode, reviewedAttempt, negative.summary)
         continue
       }
       if (!hasSufficientPasses) {
@@ -341,7 +331,7 @@ export class GraphScheduler extends GraphAttemptScheduler {
         }
         continue
       }
-      const integration = await this.integrateWrite(currentAttempt.id)
+      const integration = await this.integrateWrite(reviewedAttempt.id)
       if (integration !== 'applied') {
         if (run.status === 'running' || run.status === 'awaiting_supervision') {
           run = await this.transitionRun(run, 'awaiting_human', 'write integration requires human resolution')
@@ -349,17 +339,46 @@ export class GraphScheduler extends GraphAttemptScheduler {
         await this.requestSupervision(
           run.id,
           'conflict',
-          [currentNode.node.id],
+          [reviewedNode.node.id],
           'Accepted worker result could not be integrated safely.'
         )
         continue
       }
-      run = await this.transitionAttempt(run, currentNode.node.id, currentAttempt.id, 'accepted')
-      run = await this.transitionNode(run, currentNode.node.id, 'accepted', 'completion contract passed')
+      run = await this.transitionAttempt(run, reviewedNode.node.id, reviewedAttempt.id, 'accepted')
+      run = await this.transitionNode(run, reviewedNode.node.id, 'accepted', 'completion contract passed')
     }
     return run
   }
-
+  private async requireRepair(
+    run: GraphRunV1,
+    node: GraphNodeProjectionV1,
+    attempt: GraphNodeAttemptV1,
+    reason: string
+  ): Promise<GraphRunV1> {
+    run = await this.transitionAttempt(
+      run,
+      node.node.id,
+      attempt.id,
+      'repair_required',
+      'retryable',
+      reason
+    )
+    run = await this.transitionNode(run, node.node.id, 'repair_required', reason)
+    await this.releaseWrite(attempt.id, 'failed')
+    return this.maybeRetry(run, node.node.id)
+  }
+  private async holdRequiredFailure(
+    run: GraphRunV1,
+    node: GraphNodeProjectionV1
+  ): Promise<GraphRunV1> {
+    if (run.status === 'running' || run.status === 'awaiting_human') {
+      const reason =
+        `Required node ${node.node.id} exhausted automatic attempts: ${node.status}`
+      run = await this.transitionRun(run, 'awaiting_supervision', reason)
+      await this.requestSupervision(run.id, 'failure', [node.node.id], reason)
+    }
+    return run
+  }
   private async ensureReviews(
     runInput: GraphRunV1,
     nodeId: string,
@@ -397,7 +416,6 @@ export class GraphScheduler extends GraphAttemptScheduler {
     }
     return run
   }
-
   private async enforceBudgets(run: GraphRunV1): Promise<GraphRunV1> {
     const elapsedMs = Math.max(run.budget.elapsedMs, Date.now() - Date.parse(run.createdAt))
     if (
@@ -437,14 +455,12 @@ export class GraphScheduler extends GraphAttemptScheduler {
     }
     return run
   }
-
   protected async failForBudget(run: GraphRunV1, reason: string): Promise<GraphRunV1> {
     const next = await this.failRun(run, reason)
     if (next === run) return run
     await this.requestSupervision(run.id, 'budget', [], reason)
     return next
   }
-
   private async failRun(run: GraphRunV1, reason: string): Promise<GraphRunV1> {
     if (run.status !== 'running') return run
     this.fencedRuns.add(run.id)
@@ -461,7 +477,6 @@ export class GraphScheduler extends GraphAttemptScheduler {
     }
     return this.finalizeFailure(run, reason)
   }
-
   private async finalizeFailure(run: GraphRunV1, reason: string): Promise<GraphRunV1> {
     if (run.status !== 'running' && run.status !== 'awaiting_supervision') return run
     run = await this.recordTerminalCleanup(run)
@@ -470,7 +485,6 @@ export class GraphScheduler extends GraphAttemptScheduler {
     await this.options.onTerminal?.(next)
     return next
   }
-
   private scheduleFailureFinalization(
     runId: string,
     reason: string,
@@ -487,7 +501,6 @@ export class GraphScheduler extends GraphAttemptScheduler {
     this.cleanupTasks.add(task)
     void task.finally(() => this.cleanupTasks.delete(task))
   }
-
   private async tryComplete(runInput: GraphRunV1): Promise<GraphRunV1> {
     let run = runInput
     const required = Object.values(run.nodes).filter((node) => node.node.required)
@@ -503,7 +516,6 @@ export class GraphScheduler extends GraphAttemptScheduler {
     run = await this.transitionRun(run, 'completing', 'all completion gates passed')
     return this.finishCompletion(run)
   }
-
   private async finishCompletion(initialRun: GraphRunV1): Promise<GraphRunV1> {
     let run = initialRun
     if (run.status !== 'completing') return run
@@ -530,7 +542,6 @@ export class GraphScheduler extends GraphAttemptScheduler {
     await this.options.onTerminal?.(run)
     return run
   }
-
   private recordTerminalCleanup(run: GraphRunV1): Promise<GraphRunV1> {
     this.stopRunLeaseHeartbeats(run.id)
     return recordGraphTerminalCleanup({

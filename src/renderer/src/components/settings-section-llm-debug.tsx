@@ -7,11 +7,19 @@ import {
   ChevronRight,
   Clipboard,
   ExternalLink,
+  History,
   RefreshCw,
+  SlidersHorizontal,
   X
 } from 'lucide-react'
 import type { KunRuntimeSettingsPatchV1, KunRuntimeSettingsV1 } from '@shared/app-settings'
-import { SettingsCard, SettingRow, Toggle } from './settings-controls'
+import {
+  SettingsCard,
+  SettingsTabPanel,
+  SettingsTabs,
+  SettingRow,
+  Toggle
+} from './settings-controls'
 
 export type LlmDebugToolCall = {
   callId: string
@@ -42,6 +50,7 @@ export type LlmDebugRound = {
 
 type Translate = (key: string, options?: Record<string, unknown>) => string
 type DetailTab = 'overview' | 'request' | 'response'
+type LlmDebugPageTab = 'capture' | 'records'
 
 const PAGE_SIZE = 5
 const detailTabs: DetailTab[] = ['overview', 'request', 'response']
@@ -548,6 +557,11 @@ export function LlmDebugSettingsSection({ ctx }: { ctx: Record<string, any> }): 
   const [rounds, setRounds] = useState<LlmDebugRound[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [activePageTab, setActivePageTab] = useState<LlmDebugPageTab>('capture')
+  const pageTabs = [
+    { id: 'capture', label: t('llmDebugCaptureSettings'), icon: SlidersHorizontal },
+    { id: 'records', label: t('llmDebugRecords'), icon: History }
+  ] as const
 
   const load = useCallback(async (): Promise<void> => {
     setLoading(true)
@@ -573,54 +587,76 @@ export function LlmDebugSettingsSection({ ctx }: { ctx: Record<string, any> }): 
 
   return (
     <div className="space-y-4">
-      <SettingsCard
-        title={t('llmDebugCaptureSettings')}
-        description={t('llmDebugCaptureSettingsDesc')}
+      <SettingsTabs
+        baseId="llm-debug-settings"
+        ariaLabel={t('sectionLlmDebug')}
+        items={pageTabs}
+        value={activePageTab}
+        onChange={setActivePageTab}
+      />
+
+      <SettingsTabPanel
+        baseId="llm-debug-settings"
+        tabId="capture"
+        active={activePageTab === 'capture'}
+        className="space-y-4"
       >
-        <SettingRow
-          title={t('llmDebugDefaultCapture')}
-          description={t('llmDebugDefaultCaptureDesc')}
-          control={
-            <Toggle
-              checked={kun.llmDebug.defaultThreadCaptureEnabled}
-              onChange={(defaultThreadCaptureEnabled) =>
-                updateKun({ llmDebug: { defaultThreadCaptureEnabled } })}
-              ariaLabel={t('llmDebugDefaultCapture')}
-            />
-          }
-        />
-      </SettingsCard>
-
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-ds-border-muted bg-ds-card/55 px-4 py-3 backdrop-blur">
-        <div className="min-w-0">
-          <h2 className="text-[14px] font-semibold text-ds-ink">{t('sectionLlmDebug')}</h2>
-          <p className="mt-0.5 text-[11.5px] leading-5 text-ds-faint">{t('llmDebugDesc')}</p>
-        </div>
-        <button
-          type="button"
-          aria-label={t('refresh')}
-          title={t('refresh')}
-          disabled={loading}
-          onClick={() => void load()}
-          className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-ds-border bg-ds-main/55 text-ds-muted transition hover:border-accent/25 hover:text-accent disabled:opacity-60"
+        <SettingsCard
+          title={t('llmDebugCaptureSettings')}
+          description={t('llmDebugCaptureSettingsDesc')}
         >
-          <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} strokeWidth={1.8} />
-        </button>
-      </div>
+          <SettingRow
+            title={t('llmDebugDefaultCapture')}
+            description={t('llmDebugDefaultCaptureDesc')}
+            control={
+              <Toggle
+                checked={kun.llmDebug.defaultThreadCaptureEnabled}
+                onChange={(defaultThreadCaptureEnabled) =>
+                  updateKun({ llmDebug: { defaultThreadCaptureEnabled } })}
+                ariaLabel={t('llmDebugDefaultCapture')}
+              />
+            }
+          />
+        </SettingsCard>
+      </SettingsTabPanel>
 
-      {error ? (
-        <p role="alert" className="rounded-2xl border border-red-500/20 bg-red-500/[0.06] px-4 py-3 text-[12px] text-ds-danger">
-          {error}
-        </p>
-      ) : null}
-
-      {rounds.length === 0 ? (
-        <div className="rounded-[20px] border border-dashed border-ds-border bg-ds-card/55 px-6 py-16 text-center">
-          <p className="text-[12.5px] text-ds-faint">{loading ? t('loading') : t('llmDebugEmpty')}</p>
+      <SettingsTabPanel
+        baseId="llm-debug-settings"
+        tabId="records"
+        active={activePageTab === 'records'}
+        className="space-y-4"
+      >
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-ds-border-muted bg-ds-card/55 px-4 py-3 backdrop-blur">
+          <div className="min-w-0">
+            <h2 className="text-[14px] font-semibold text-ds-ink">{t('sectionLlmDebug')}</h2>
+            <p className="mt-0.5 text-[11.5px] leading-5 text-ds-faint">{t('llmDebugDesc')}</p>
+          </div>
+          <button
+            type="button"
+            aria-label={t('refresh')}
+            title={t('refresh')}
+            disabled={loading}
+            onClick={() => void load()}
+            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-ds-border bg-ds-main/55 text-ds-muted transition hover:border-accent/25 hover:text-accent disabled:opacity-60"
+          >
+            <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} strokeWidth={1.8} />
+          </button>
         </div>
-      ) : (
-        <LlmDebugRequestBrowser rounds={rounds} t={t} />
-      )}
+
+        {error ? (
+          <p role="alert" className="rounded-2xl border border-red-500/20 bg-red-500/[0.06] px-4 py-3 text-[12px] text-ds-danger">
+            {error}
+          </p>
+        ) : null}
+
+        {rounds.length === 0 ? (
+          <div className="rounded-[20px] border border-dashed border-ds-border bg-ds-card/55 px-6 py-16 text-center">
+            <p className="text-[12.5px] text-ds-faint">{loading ? t('loading') : t('llmDebugEmpty')}</p>
+          </div>
+        ) : (
+          <LlmDebugRequestBrowser rounds={rounds} t={t} />
+        )}
+      </SettingsTabPanel>
     </div>
   )
 }

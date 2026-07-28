@@ -4,10 +4,12 @@ import { ApprovalPolicySchema, SandboxModeSchema } from './policy.js'
 import { GraphRelativePathSchema } from './graph-path.js'
 import {
   GraphBudgetLedgerV1Schema,
+  GraphBudgetV1InputSchema,
   GraphBudgetV1Schema
 } from './graph-budget.js'
 export {
   GraphBudgetLedgerV1Schema,
+  GraphBudgetV1InputSchema,
   GraphBudgetV1Schema,
   type GraphBudgetLedgerV1,
   type GraphBudgetV1

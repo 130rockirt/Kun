@@ -2,8 +2,13 @@ import { z } from 'zod'
 import type { ArtifactStore } from '../../artifacts/artifact-store.js'
 import {
   GRAPH_CONTRACT_VERSION,
+  GraphBudgetV1InputSchema,
   GraphPlanV1Schema
 } from '../../contracts/index.js'
+import {
+  DEFAULT_GRAPH_RUNTIME_CONFIG,
+  type GraphRuntimeConfig
+} from '../../config/kun-config.js'
 import {
   GraphPlanValidationError,
   type GraphControlService,
@@ -14,13 +19,22 @@ import { LocalToolHost, type LocalTool } from './local-tool-host.js'
 
 const MAX_GRAPH_CREATE_RUN_ISSUES = 64
 
+const GraphCreateBudgetInputSchema = GraphBudgetV1InputSchema
+  .partial()
+  .describe(
+    'Optional narrower Graph limits. Omit this object or individual fields unless the user or project intentionally requires a narrower value; the host supplies all omitted mechanical defaults.'
+  )
+
 export const GraphCreateRunPlanInputSchema = GraphPlanV1Schema.omit({
   version: true,
   revision: true,
   workspaceRoot: true,
   autoStart: true,
   createdBy: true,
-  createdAt: true
+  createdAt: true,
+  budget: true
+}).extend({
+  budget: GraphCreateBudgetInputSchema.optional()
 }).describe(
   'Model-authored Graph plan. The host supplies version, revision, workspaceRoot, autoStart, createdBy, and createdAt.'
 )
@@ -53,16 +67,19 @@ export function buildGraphCreateRunTool(options: {
   shouldAdvertise: (context: ToolHostContext) => boolean
   nowIso: () => string
   nextId: (prefix: string) => string
+  config?: () => GraphRuntimeConfig
 }): LocalTool {
   return LocalToolHost.defineTool({
     name: 'graph_create_run',
     description:
       'Create and start a durable GraphRun after thinking through the user request. ' +
       'Provide only the model-owned plan fields described by the schema; the host supplies identity, provenance, revision, and timestamps. ' +
-      'The plan must define phases, bounded nodes, typed edges, budgets, completion nodes, ' +
+      'Omit the budget or any individual budget field unless the user or project explicitly asks for a narrower limit; the host supplies all omitted defaults, including seven days per run, 24 hours per node, and the warning ratio. ' +
+      'Use normalized repository-relative read/write scopes, never absolute workspace paths. ' +
+      'The plan must define phases, bounded nodes, typed edges, completion nodes, ' +
       'acceptance criteria, review policy, explicit read/write scopes, and bounded LoopGates. ' +
       'Omit node.assignment by default for host routing; use an existing assignment only with an exact Graph registry profile id. ' +
-      'Use this exactly once for a Graph-mode user turn; the host validates all authority and graph invariants.',
+      'Create exactly one successful GraphRun for a Graph-mode user turn; retry only when a structured tool result explicitly says the failure is retryable. The host validates all authority and graph invariants.',
     inputSchema: GRAPH_CREATE_RUN_INPUT_JSON_SCHEMA,
     policy: 'auto',
     toolKind: 'tool_call',
@@ -83,8 +100,15 @@ export function buildGraphCreateRunTool(options: {
       try {
         const identity = await options.registry.identify(context.workspace)
         const { plan: modelPlan, start } = parsed.data
+        const runtimeConfig = options.config?.() ?? DEFAULT_GRAPH_RUNTIME_CONFIG
+        const modelBudget = modelPlan.budget ?? {}
+        const budgetDefaults = graphCreateBudgetDefaults(runtimeConfig)
         const plan = GraphPlanV1Schema.parse({
           ...modelPlan,
+          budget: {
+            ...budgetDefaults,
+            ...modelBudget
+          },
           version: GRAPH_CONTRACT_VERSION,
           revision: 1,
           workspaceRoot: identity.canonicalWorkspaceRoot,
@@ -103,7 +127,24 @@ export function buildGraphCreateRunTool(options: {
           idempotencyKey: `graph-create:${context.turnId}`,
           start
         })
-        return { output: { run: result.run, validation: result.validation } }
+        return {
+          output: {
+            run: result.run,
+            validation: result.validation,
+            appliedBudgetDefaultFields: Object.keys(budgetDefaults).filter((field) =>
+              modelBudget[field as keyof typeof modelBudget] === undefined),
+            appliedWallTimeDefaults: {
+              run: modelBudget.maxWallTimeMs === undefined
+                ? budgetDefaults.maxWallTimeMs
+                : null,
+              node: modelBudget.maxNodeWallTimeMs === undefined
+                ? budgetDefaults.maxNodeWallTimeMs
+                : null
+            },
+            nextAction:
+              'The Lead remains responsible after dispatch. Inspect active workers with graph_supervise_node, wait and recheck at a risk-appropriate cadence, and guide drift or missing deliverables before accepting results.'
+          }
+        }
       } catch (error) {
         if (error instanceof GraphPlanValidationError) {
           return graphCreateRunError({
@@ -125,6 +166,22 @@ export function buildGraphCreateRunTool(options: {
       }
     }
   })
+}
+
+function graphCreateBudgetDefaults(config: GraphRuntimeConfig) {
+  return {
+    maxNodes: config.scheduler.maxNodes,
+    maxEdges: config.scheduler.maxEdges,
+    maxConcurrentNodes: config.scheduler.maxConcurrentNodesPerRun,
+    maxAttemptsPerNode: config.scheduler.maxAttemptsPerNode,
+    maxRevisions: config.scheduler.maxRevisions,
+    maxLoopIterations: config.scheduler.maxLoopIterations,
+    maxWallTimeMs: config.scheduler.maxRunWallTimeMs,
+    maxNodeWallTimeMs: config.scheduler.maxNodeWallTimeMs,
+    maxMessages: config.mailbox.maxMessagesPerRun,
+    maxArtifactBytes: config.scheduler.maxArtifactBytes,
+    warningRatio: config.scheduler.budgetWarningRatio
+  }
 }
 
 type GraphCreateRunIssueLike = {

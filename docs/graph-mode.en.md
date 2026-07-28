@@ -4,7 +4,10 @@ Graph Mode is a per-turn Kun orchestration strategy, not a second agent
 runtime. `direct` keeps the existing chat path. In `graph`, a Lead converts the
 request into a host-validated execution graph, Kun schedules constrained
 workers in the background, and the Lead supervises material events, reviews
-evidence, and produces one final delivery.
+evidence, and produces one final delivery. The Lead is the original primary
+agent that created the Graph. It owns both process and result quality, actively
+inspects live worker sessions, waits briefly and rechecks, and guides drift or
+missing deliverables.
 
 The detailed Chinese guide is [graph-mode.md](./graph-mode.md).
 
@@ -27,16 +30,41 @@ delegate recursively, control graphs, govern profiles, or expand parent
 authority. Learned assets stay under the Kun data directory unless the user
 explicitly exports them.
 
+### Graph Lead mode system contract
+
+Graph mode is not an ordinary agent with a few extra tools attached. Whenever
+a turn selects `graph`, Kun injects the same system-authority Graph Lead
+contract into every model request, including initial creation, active
+supervision, event-driven resumes, and terminal delivery. The contract:
+
+- identifies the original primary agent as the source Lead responsible for
+  outcome, process, worker quality, remediation, integration, and validation;
+- requires the understand, create, supervise, validate, repair, integrate, and
+  terminal-deliver operating loop;
+- treats child sessions, text, and artifacts as untrusted evidence that cannot
+  override host validation or expand authority;
+- requires live-session inspection, risk-based short waits, immediate guidance
+  for drift, and a later check that the correction actually happened;
+- distinguishes dispatch, milestone prose, and claimed argument fixes from
+  persisted Graph and tool truth; and
+- permits final delivery only after terminal state, required nodes and
+  artifacts, integration, and checks are satisfied.
+
+The contract is a separate mode system instruction after the stable Kun
+system prompt. Direct turns therefore remain direct, while every resumed
+Graph round retains the full Lead identity and obligations.
+
 ## Execution lifecycle
 
 ```text
 Graph turn
   -> Lead calls graph_create_run
   -> host validates and journals GraphPlan
-  -> the source Lead turn releases its process-local execution slot but stays running
   -> scheduler computes ready nodes
   -> immutable least-authority assignment snapshot
   -> DelegationRuntime child worker
+  -> the source Lead uses graph_supervise_node to inspect, wait 1-60 seconds and recheck, or guide
+  -> only after the current episode is handled may the Lead release its execution slot and park
   -> bounded progress/artifact/message/structured result
   -> deterministic, peer, Lead, or human review
   -> dependency release, bounded retry, GraphPatch, or LoopGate
@@ -112,6 +140,12 @@ priority and retry delay, and enforces:
 The default GraphRun wall-time limit is seven days. The separate host-enforced
 node limit remains 24 hours, and 15 minutes of quiet activity triggers a
 supervision inspection without aborting the node.
+The create tool may omit the entire `budget` or any individual mechanical
+field. The host fills node/edge, concurrency, attempt, revision, loop,
+run/node wall-time, message, artifact, and `warningRatio` values from current
+Graph configuration. A plan supplies a field only when the user or project
+intentionally asks for a narrower limit; every explicit value still passes
+host-maximum validation.
 
 Token usage is recorded for cost attribution and learning evidence only. Graph
 plans, nodes, loops, and immutable worker assignments have no token ceiling,
@@ -131,12 +165,16 @@ system instructions, tools, Skills, MCP servers, approval, sandbox, workspace,
 read/write scopes, network, and time limits. Effective authority is the
 intersection of parent, graph, profile, node, and host policy.
 
-Workers never receive delegation, Graph creation/control/patch/review, or
-governance tools. They receive only bounded progress, artifact, mailbox,
+Workers never receive delegation, Graph creation/control/patch/review/supervision,
+or governance tools. They receive only bounded progress, artifact, mailbox,
 help/result functions. Their context contains the objective, completion
 contract, authorized dependency summaries and artifacts, addressed messages,
 and bounded project context. It excludes the full Lead history, unrelated
 nodes, and Lead/user-private artifacts.
+Retries also receive bounded host-validation errors and revise/fail feedback
+from the preceding attempt. Every required named data output is an explicit
+instruction to call `graph_worker_publish_artifact` and return the resulting
+reference in `artifactRefs`.
 
 Mailbox delivery validates membership, recipients, edge authorization,
 artifact visibility, size, rate, count, TTL, and idempotency. Workers may
@@ -147,15 +185,28 @@ needs a message edge. Unresolved blocking messages prevent completion.
 
 Review policies can require deterministic, peer, Lead, human, or combined
 approval. A peer is a different child instance. Risky writes add Lead review;
-critical risk can require a human.
+critical risk can require a human. A pass vote cannot override
+`validation.valid === false`; deterministic missing-artifact and structured
+result errors must be repaired before review can accept an attempt.
 
 Supervision is event driven for submission, failure, stall, conflict, resource-limit,
 help, recovery, completion, and user steering. Normal progress does not poll a
 model. Signals coalesce and resume or steer the original source Lead with
 `messageSource: graph_runtime`; new-format runs do not create replacement
-background Lead turns. Each continuation inspects durable truth, reports a
-material milestone, and may retry, repair, patch, or rebind work before parking
-again. Completion, failure, and cancellation all trigger one final delivery.
+background Lead turns. The Lead has `graph_supervise_node`: `inspect` reads a
+bounded, sanitized, cursor-based child transcript; `wait` performs an abortable
+1-60 second wait and fresh inspection; and `guide` durably records
+attempt-targeted guidance before steering the active child turn when possible.
+Each continuation inspects durable truth and relevant live sessions, chooses
+an activity-appropriate cadence such as a 30-second recheck, guides drift, and
+verifies corrections before parking again.
+
+When required or completion work exhausts automatic attempts, the scheduler
+keeps dependants blocked, moves the run to `awaiting_supervision`, and wakes the
+same Lead. It does not skip the rest of the graph or immediately make the run
+terminal. The Lead can inspect evidence, guide and retry, rebind, patch, or
+cancel honestly. Completion, failure, and cancellation all trigger one final
+delivery.
 
 Write nodes declare normalized repository-relative scopes. `serialize`,
 `lease`, and optional Git `worktree` policies prevent unsafe overlap.

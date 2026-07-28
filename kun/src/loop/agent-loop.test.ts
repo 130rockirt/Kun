@@ -557,13 +557,24 @@ describe('AgentLoop interruption', () => {
       shouldAdvertise: (context) => context.orchestration === 'graph',
       execute: async () => ({ output: { ok: true } })
     })
+    const graphSuperviseTool = LocalToolHost.defineTool({
+      name: 'graph_supervise_node',
+      description: 'Inspect, wait for, or guide an active Graph worker.',
+      inputSchema: { type: 'object', additionalProperties: false },
+      toolKind: 'tool_call',
+      policy: 'auto',
+      shouldAdvertise: (context) => context.orchestration === 'graph',
+      execute: async () => ({ output: { ok: true } })
+    })
     const loop = new AgentLoop({
       threadStore,
       sessionStore,
       approvalGate: new AllowApprovalGate(),
       userInputGate: new NoopUserInputGate(),
       model,
-      toolHost: new LocalToolHost({ tools: [graphTool, graphControlTool] }),
+      toolHost: new LocalToolHost({
+        tools: [graphTool, graphControlTool, graphSuperviseTool]
+      }),
       usage: new UsageService(),
       events,
       turns,
@@ -595,11 +606,29 @@ describe('AgentLoop interruption', () => {
     expect(model.requests).toHaveLength(3)
     expect(model.requests[0]?.requiredToolName).toBe('graph_create_run')
     expect(model.requests[0]?.modeInstruction).toContain('Graph Mode is active')
+    expect(model.requests[0]?.modeInstruction).toContain(
+      'You are the source Graph Lead: the original main agent'
+    )
+    expect(model.requests[0]?.modeInstruction).toContain('## Required operating loop')
     expect(model.requests[0]?.tools.map((tool) => tool.name)).toEqual(['graph_create_run'])
     expect(model.requests[1]?.requiredToolName).toBe('graph_create_run')
     expect(model.requests[1]?.tools.map((tool) => tool.name)).toEqual(['graph_create_run'])
     expect(model.requests[1]?.modeInstruction).toContain('Graph creation attempt 2/3')
     expect(model.requests[2]?.requiredToolName).toBeUndefined()
+    expect(model.requests[2]?.tools.map((tool) => tool.name)).toEqual([
+      'graph_create_run',
+      'graph_control_run',
+      'graph_supervise_node'
+    ])
+    expect(model.requests[2]?.modeInstruction).toContain(
+      'You are the source Graph Lead: the original main agent'
+    )
+    expect(model.requests[2]?.modeInstruction).toContain(
+      'Actively inspect live workers with graph_supervise_node'
+    )
+    expect(model.requests[2]?.modeInstruction).toContain(
+      'Do not treat dispatch or one milestone as completion'
+    )
     expect(model.requests[2]?.history).toEqual(expect.arrayContaining([
       expect.objectContaining({
         kind: 'tool_result',
@@ -865,7 +894,14 @@ describe('AgentLoop interruption', () => {
     expect(model.requests[1]?.requiredToolName).toBe('graph_create_run')
     expect(model.requests[1]?.tools.map((tool) => tool.name)).toEqual(['graph_create_run'])
     expect(model.requests[1]?.modeInstruction).toContain('failed validation')
-    expect(model.requests[1]?.modeInstruction).toContain('structured issues')
+    expect(model.requests[1]?.modeInstruction).toContain('structured issue path')
+    expect(model.requests[1]?.modeInstruction).toContain('repository-relative paths')
+    expect(model.requests[1]?.modeInstruction).toContain(
+      'actual next tool arguments'
+    )
+    expect(model.requests[1]?.modeInstruction).toContain(
+      'merely say in prose that a field was fixed'
+    )
     expect(model.requests[1]?.history).toEqual(expect.arrayContaining([
       expect.objectContaining({
         kind: 'tool_result',

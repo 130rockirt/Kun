@@ -127,4 +127,20 @@ describe('GeneralSettingsSection workspace layout', () => {
       expect(html).toContain(option.label)
     }
   })
+
+  it('keeps every directory and desktop subtab panel mounted', () => {
+    const html = renderToStaticMarkup(createElement(GeneralSettingsSection, { ctx: baseCtx() }))
+
+    for (const tab of ['workspace', 'migration', 'checkpoints']) {
+      expect(html).toContain(`id="general-directories-tab-${tab}"`)
+      expect(html).toContain(`id="general-directories-panel-${tab}"`)
+    }
+    for (const tab of ['command', 'behavior', 'logs']) {
+      expect(html).toContain(`id="general-desktop-tab-${tab}"`)
+      expect(html).toContain(`id="general-desktop-panel-${tab}"`)
+    }
+    expect(html).toContain('legacyImportTitle')
+    expect(html).toContain('gitCheckpointTitle')
+    expect(html).toContain('logTitle')
+  })
 })

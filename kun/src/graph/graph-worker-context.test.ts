@@ -177,8 +177,8 @@ describe('buildGraphWorkerContext', () => {
     expect(context.prompt).not.toContain('artifact_lead_only')
     expect(context.prompt).toContain('Phase guidance is visible.')
     expect(context.prompt).not.toContain('LEAD-ONLY GUIDANCE')
-    expect(context.prompt).toContain('checks ({ name, status:')
-    expect(context.prompt).toContain('Empty changedFiles and risks arrays')
+    expect(context.prompt).toContain('reportedChecks ({ name, status:')
+    expect(context.prompt).toContain('Empty arrays explicitly mean none')
   })
 
   it('keeps host boundary instructions when untrusted content is truncated', () => {
@@ -199,5 +199,71 @@ describe('buildGraphWorkerContext', () => {
     expect(context.prompt).toContain('Host-enforced boundary')
     expect(context.prompt).toContain('Do not delegate')
     expect(Buffer.byteLength(context.prompt, 'utf8')).toBeLessThanOrEqual(1_024)
+  })
+
+  it('requires named artifact publication and carries repair feedback into retries', () => {
+    const basic = testGraphPlan()
+    const plan = testGraphPlan({
+      nodes: basic.nodes,
+      edges: [{
+        id: 'footer_data',
+        kind: 'data',
+        from: 'research',
+        to: 'finish',
+        artifactName: 'footer-analysis',
+        required: true
+      }]
+    })
+    const original = applyGraphEvent(undefined, testGraphEnvelope(1, {
+      type: 'run_created',
+      payload: { plan, projectId: 'project_1', sourceTurnId: 'turn_1' }
+    }))
+    const prior: GraphNodeAttemptV1 = {
+      ...acceptedAttempt('research', 'attempt_missing_artifact', 'Analysis without artifact.'),
+      status: 'repair_required',
+      validation: {
+        version: 1,
+        valid: false,
+        issues: [{
+          code: 'missing_required_artifact',
+          path: ['artifactRefs'],
+          message: 'footer-analysis was not published',
+          severity: 'error'
+        }],
+        normalizedNodeCount: 1,
+        normalizedEdgeCount: 1
+      }
+    }
+    const run: GraphRunV1 = {
+      ...original,
+      nodes: {
+        ...original.nodes,
+        research: {
+          ...original.nodes.research,
+          status: 'repair_required',
+          attempts: [prior]
+        }
+      },
+      reviews: [{
+        version: 1,
+        reviewId: 'review_revise',
+        nodeId: 'research',
+        attemptId: prior.id,
+        reviewerKind: 'lead',
+        outcome: 'revise',
+        summary: 'Publish the named artifact before submitting.',
+        evidence: [],
+        artifactRefs: [],
+        createdAt: '2026-07-26T00:00:02.000Z'
+      }]
+    }
+
+    const context = buildGraphWorkerContext(run, 'research', testGraphConfig())
+    expect(context.prompt).toContain(
+      'MUST call graph_worker_publish_artifact for "footer-analysis"'
+    )
+    expect(context.prompt).toContain('missing_required_artifact')
+    expect(context.prompt).toContain('Publish the named artifact before submitting.')
+    expect(context.prompt).toContain('include the returned artifact reference in artifactRefs')
   })
 })

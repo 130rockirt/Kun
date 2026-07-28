@@ -36,6 +36,7 @@ export function createGraphRuntimeStartOptions(input: {
 }): GraphRuntimeStartOptions {
   return {
     delegation: input.delegation,
+    steerTurn: input.steerTurn,
     leadTurn: async ({ run, reasons, nodeIds, digest }) => {
       const thread = await input.threads.get(run.threadId)
       if (!thread) return
@@ -143,9 +144,10 @@ function graphLeadPrompt(input: {
       ? 'Present the persisted terminal outcome, synthesis, evidence, changed files, checks, costs, and unresolved risks to the user.'
       : [
           'Report a concise milestone to the user from this same Lead turn.',
-          'Supervise progress and resolve safe issues; retry, repair, patch, or rebind eligible work when evidence requires it.',
+          'Actively inspect affected and live worker sessions with graph_supervise_node; choose a bounded wait and inspect again when progress is healthy.',
+          'Guide drift or missing deliverables immediately, verify the correction, and resolve safe issues; retry, repair, patch, or rebind eligible work when evidence requires it.',
           'Request human input only for decisions that policy or risk prevents you from making.',
-          'When the run remains nonterminal after this update, stop cleanly so the host can suspend this turn until the next material event.'
+          'Do not treat dispatch or one milestone as completion. Suspend only after this supervision episode is handled and no live worker requires continued observation; the same Lead turn will resume on later durable signals.'
         ].join(' ')
   ].filter(Boolean).join('\n\n')
 }

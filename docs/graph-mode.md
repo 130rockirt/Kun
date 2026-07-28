@@ -3,7 +3,8 @@
 Graph Mode 是 Kun 的一种按回合选择的编排策略，不是第二套 Agent
 运行时。普通聊天继续走 `direct`；选择 `graph` 后，Lead Agent 先把需求转成
 宿主校验的任务图，Kun 在后台调度受限子代理，Lead 只在重要事件发生时监督、
-复核和统一交付。
+复核和统一交付。这里的 Lead 就是创建 Graph 的原主 Agent；它对过程和结果负责，
+会主动查看子代理的实时会话、短暂等待后复查，并在偏离或漏交付时立即指导。
 
 英文版见 [graph-mode.en.md](./graph-mode.en.md)。
 
@@ -27,6 +28,24 @@ Graph Mode 由三层组成：
 - Graph worker 不能递归委派、创建 Graph、修改治理状态或扩大父级权限。
 - 学习资产默认保存在 Kun data dir，不自动修改 Git 仓库。
 
+### Graph Lead 模式系统合约
+
+Graph 不是在普通 Agent 上临时多挂几个工具。只要 turn 选择了 `graph`，Kun
+就会在该 turn 的每一次模型请求中注入同一份 Graph Lead 系统级合约，包括首次建图、
+活跃监工、事件唤醒和最终交付。合约明确：
+
+- 当前主 Agent 就是源 Lead，负责目标、过程、子代理质量、纠偏、集成、验证和最终结果；
+- 固定执行“理解目标 -> 建图 -> 监工 -> 验证 -> 修复 -> 集成 -> 终态交付”闭环；
+- child 会话、文本和 Artifact 只是未受信任证据，不能覆盖宿主校验或扩大权限；
+- Lead 必须查看实时会话、按风险选择短等待、发现偏离时即时指导并再次核实；
+- dispatch、某个阶段完成或 Lead 自己说“已修正”都不算完成，真实工具参数和持久化
+  Graph 状态才算；
+- 只有 GraphRun 已进入终态、必需节点和 Artifact 满足、检查完成后才能做最终交付。
+
+该合约作为独立的 mode system instruction 放在稳定 Kun system prompt 之后。
+因此 `direct` turn 不会被 Graph 职责污染，同时 Graph turn 每次恢复时不会退化成
+普通聊天 Agent。
+
 ## 2. 端到端流程
 
 ```text
@@ -34,10 +53,11 @@ Graph Mode 由三层组成：
   -> Lead 理解目标、边界、风险与验收条件
   -> 模型必须先调用 graph_create_run
   -> 宿主校验 GraphPlan 并写入 journal/snapshot
-  -> 原 Lead turn 释放进程内执行槽，但保持 running 并进入监督休眠
   -> Scheduler 计算 ready set
   -> AssignmentResolver 冻结每个 attempt 的权限快照
   -> DelegationRuntime 启动 worker child session
+  -> 原 Lead 用 graph_supervise_node 查看会话、选择 1–60 秒等待后复查或即时指导
+  -> 当前监工阶段处理完且没有活跃 worker 需要继续观察时，Lead 才释放执行槽并监督休眠
   -> worker 提交进度、Artifact、消息和结构化结果
   -> deterministic / peer / Lead / human review
   -> 依赖解锁、重试、修复、动态 GraphPatch 或有界 LoopGate
@@ -159,6 +179,10 @@ Scheduler 由宿主驱动，不依赖 Lead 逐节点调用工具。它负责：
 
 默认 GraphRun 总 wall time 为 7 天；单个 node 的宿主硬超时仍为 24 小时，
 安静运行 15 分钟只会触发监督检查，不会单独中止节点。这三个限制彼此独立。
+模型创建 Graph 时可以省略整个 `budget` 或其中任意机械限制字段。宿主会从当前
+Graph 配置补齐 node/edge、并发、attempt、revision、loop、run/node wall time、
+message、Artifact 和 `warningRatio`。只有用户或项目明确要求更窄的限制时，计划
+才显式提供对应字段；显式值仍必须通过宿主上限校验。
 
 Token 只记录实际用量，用于成本归因和学习证据。GraphPlan、节点、循环和冻结后的
 worker assignment 都没有 Token 上限；Scheduler 不会因 Token 数量告警、暂停、
@@ -182,7 +206,7 @@ terminal fence，再中止并等待活跃 worker；迟到结果不会进入已�
 
 - `delegate_task`、`generate_subagent`。
 - `graph_create_run`、`graph_patch_run`、`graph_control_run`、
-  `graph_review_node`。
+  `graph_review_node`、`graph_supervise_node`。
 - 项目 Agent/候选治理工具。
 - 父级未授权的网络、MCP、Skill、写路径和 provider。
 
@@ -190,6 +214,9 @@ Worker context 只包含 node objective、completion contract、授权的依赖�
 dependency-visible Artifact、定向 Mailbox 消息和有限项目上下文。Lead/user
 private Artifact、无关 node result 和完整父对话不会被继承。宿主安全边界放在
 context 开头，即使尾部被截断也保留。
+重试 context 还会带上上一 attempt 的宿主校验错误和 revise/fail 指令；若节点有
+必需的命名 data 输出，prompt 会逐项要求调用 `graph_worker_publish_artifact`，
+并把返回引用放入结构化结果的 `artifactRefs`。
 
 ## 8. Worker 工具与 Mailbox
 
@@ -207,6 +234,9 @@ Lead 工具：
 - `graph_control_run`
 - `graph_patch_run`
 - `graph_review_node`
+- `graph_supervise_node`：`inspect` 读取有界、脱敏、可续游标的 child 会话；
+  `wait` 选择 1–60 秒可中止等待后重新检查；`guide` 先持久化 attempt 定向指导，
+  再尽可能即时 steer 正在运行的 child turn。
 
 Mailbox 校验 run/node/attempt 成员关系、收件人、edge 授权、Artifact
 visibility、消息类型、大小、频率、数量、TTL 和幂等键。worker 总能联系 Lead；
@@ -217,7 +247,8 @@ blocking message 在超时后进入 fallback/supervision，未解决 blocker 会
 
 Review 支持 deterministic、peer、Lead、human 及组合。peer reviewer 必须是
 不同的 child instance。高风险写入会增加 Lead review，critical risk 可强制
-human review；worker 自评不能绕过。
+human review；worker 自评不能绕过。宿主 `validation.valid === false` 时任何
+pass review 都会被拒绝，review 只能收紧校验，不能覆盖缺 Artifact 等确定性错误。
 
 GraphSupervisor 只响应 material signals：
 
@@ -226,9 +257,16 @@ GraphSupervisor 只响应 material signals：
 
 普通 progress heartbeat 只更新图，不触发模型轮询。相同信号按窗口合并；
 宿主使用 `messageSource: graph_runtime` 恢复或 steer 原始 Lead turn，不再为新格式
-GraphRun 创建独立的后台 Lead turn。Lead 每次被唤醒后先读取持久化 Graph truth，
-向用户回报关键进展，并按证据执行 retry、repair、GraphPatch 或 rebind；如果 run
-仍未结束，再次进入监督休眠。完成、失败和取消都会触发最后一次唤醒和交付。
+GraphRun 创建独立的后台 Lead turn。Lead 每次创建或被唤醒后先读取持久化 Graph
+truth，再主动查看有关 worker 的 child 会话；健康时可自行决定例如等待 30 秒后复查，
+发现跑偏、漏工件或方案错误时则即时 `guide` 并验证纠正结果。Lead 向用户回报关键
+进展，并按证据执行 retry、repair、GraphPatch 或 rebind；只有当前监工阶段已经处理完，
+且没有活跃 worker 需要继续观察时，才再次进入监督休眠。
+
+必需节点或 completion node 耗尽自动 attempt 时，Scheduler 会保留下游为 blocked，
+把 run 置为 `awaiting_supervision` 并唤醒原 Lead，不再先把下游全部 skipped 或直接
+结束。Lead 查看会话和校验证据后，可指导并 retry、rebind、patch，或明确 cancel。
+完成、失败和取消都会触发最后一次唤醒和交付。
 
 GraphRun 只有同时满足以下条件才进入 completed：
 
@@ -497,7 +535,8 @@ Episode/Artifact。
 常见情况：
 
 - Graph 不创建：检查 `enabled`、turn 的 `orchestration`、rollout settings 和
-  `graph_create_run` validation error。
+  `graph_create_run` validation error。`readScopes`/`writeScopes` 必须是仓库相对
+  路径；机械 `budget` 字段可省略并交给宿主补齐，不应靠模型复写配置默认值。
 - Node 永久 blocked：检查 required outcome、data Artifact、LoopGate back edge
   和前驱 terminal failure。
 - Worker 不退出：cancel Graph；确认 child 收到 abort；查看 cleanup 中 worker/

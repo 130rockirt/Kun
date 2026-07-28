@@ -155,9 +155,14 @@ describe('Graph runtime bootstrap capability boundary', () => {
     expect(steerTurn).toHaveBeenCalledWith({
       threadId: 'thread_1',
       turnId: 'turn_1',
-      text: expect.stringContaining('Graph Lead supervision for durable run run_1.'),
+      text: expect.stringMatching(
+        /Graph Lead supervision for durable run run_1[\s\S]*graph_supervise_node[\s\S]*Do not treat dispatch or one milestone as completion/
+      ),
       messageSource: 'graph_runtime'
     })
+    expect(JSON.stringify(steerTurn.mock.calls)).not.toContain(
+      'stop cleanly so the host can suspend'
+    )
     expect(runAgentTurn).toHaveBeenCalledWith('thread_1', 'turn_1')
   })
 

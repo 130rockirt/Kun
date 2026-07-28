@@ -254,13 +254,15 @@ describe('Graph admission remediation', () => {
         }
       }
     })
-
     await scheduler.tick()
     await scheduler.tick()
     await scheduler.stop()
     const settled = await store.get('run_admission')
 
-    expect(settled?.status).toBe('failed')
+    expect(settled?.status).toBe('awaiting_supervision')
+    const settledSeq = settled!.lastEventSeq
+    await scheduler.tick()
+    expect((await store.get('run_admission'))?.lastEventSeq).toBe(settledSeq)
     expect(resolve).toHaveBeenCalledOnce()
     expect(delegation.runChild).not.toHaveBeenCalled()
     expect(signal.mock.calls.filter(([request]) =>

@@ -1,5 +1,12 @@
-import { isValidElement, useRef, useState, type ReactElement, type ReactNode } from 'react'
-import { ChevronDown, Eye, EyeOff } from 'lucide-react'
+import {
+  isValidElement,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactElement,
+  type ReactNode
+} from 'react'
+import { ChevronDown, Eye, EyeOff, type LucideIcon } from 'lucide-react'
 
 export type InlineNotice = {
   tone: 'success' | 'error' | 'info'
@@ -87,6 +94,165 @@ export function SectionJumpButton({
   )
 }
 
+export type SettingsTabItem<T extends string> = {
+  id: T
+  label: string
+  icon?: LucideIcon
+}
+
+export type SettingsTabsProps<T extends string> = {
+  items: readonly SettingsTabItem<T>[]
+  value: T
+  onChange: (value: T) => void
+  baseId: string
+  ariaLabel: string
+}
+
+type SettingsTabVariant = 'primary' | 'secondary'
+
+function SettingsTabList<T extends string>({
+  items,
+  value,
+  onChange,
+  baseId,
+  ariaLabel,
+  variant
+}: SettingsTabsProps<T> & {
+  variant: SettingsTabVariant
+}): ReactElement {
+  const tabRefs = useRef<Array<HTMLButtonElement | null>>([])
+  const secondary = variant === 'secondary'
+
+  const handleKeyDown = (
+    event: ReactKeyboardEvent<HTMLButtonElement>,
+    currentIndex: number
+  ): void => {
+    if (items.length === 0) return
+
+    let nextIndex: number | null = null
+    if (event.key === 'ArrowRight') {
+      nextIndex = (currentIndex + 1) % items.length
+    } else if (event.key === 'ArrowLeft') {
+      nextIndex = (currentIndex - 1 + items.length) % items.length
+    } else if (event.key === 'Home') {
+      nextIndex = 0
+    } else if (event.key === 'End') {
+      nextIndex = items.length - 1
+    }
+    if (nextIndex === null) return
+
+    event.preventDefault()
+    const nextItem = items[nextIndex]
+    if (!nextItem) return
+    onChange(nextItem.id)
+    tabRefs.current[nextIndex]?.focus()
+  }
+
+  return (
+    <div
+      role="tablist"
+      aria-label={ariaLabel}
+      aria-orientation="horizontal"
+      className={
+        secondary
+          ? 'ds-settings-subtabs flex w-full min-w-0 items-center gap-1 overflow-x-auto rounded-full border border-ds-border-muted bg-ds-main/60 p-1'
+          : 'ds-settings-tabs grid w-full grid-flow-col auto-cols-[minmax(9rem,1fr)] gap-1.5 overflow-x-auto rounded-2xl border border-ds-border bg-ds-card/90 p-1.5 shadow-sm shadow-black/5 dark:shadow-black/25'
+      }
+    >
+      {items.map((item, index) => {
+        const active = item.id === value
+        const Icon = item.icon
+        return (
+          <button
+            key={item.id}
+            ref={(node) => {
+              tabRefs.current[index] = node
+            }}
+            id={`${baseId}-tab-${item.id}`}
+            type="button"
+            role="tab"
+            aria-selected={active}
+            aria-controls={`${baseId}-panel-${item.id}`}
+            tabIndex={active ? 0 : -1}
+            onClick={() => onChange(item.id)}
+            onKeyDown={(event) => handleKeyDown(event, index)}
+            className={
+              secondary
+                ? `group flex h-8 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-full border px-3 text-[12px] font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 ${
+                    active
+                      ? 'border-accent/20 bg-ds-card text-accent shadow-sm ring-1 ring-inset ring-accent/10'
+                      : 'border-transparent text-ds-muted hover:bg-ds-hover hover:text-ds-ink'
+                  }`
+                : `group flex min-h-12 min-w-0 items-center justify-center gap-2 rounded-xl border px-3 py-2.5 text-[13px] font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 ${
+                    active
+                      ? 'border-accent/25 bg-accent-soft text-accent shadow-sm ring-1 ring-inset ring-accent/15'
+                      : 'border-transparent text-ds-muted hover:bg-ds-hover hover:text-ds-ink'
+                  }`
+            }
+          >
+            {Icon ? (
+              <Icon
+                aria-hidden="true"
+                className={secondary ? 'h-3.5 w-3.5 shrink-0' : 'h-4 w-4 shrink-0'}
+                strokeWidth={1.9}
+              />
+            ) : null}
+            <span className={secondary ? '' : 'truncate'}>{item.label}</span>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+export function SettingsTabs<T extends string>(
+  props: SettingsTabsProps<T>
+): ReactElement {
+  return <SettingsTabList {...props} variant="primary" />
+}
+
+export function SettingsSubTabs<T extends string>(
+  props: SettingsTabsProps<T>
+): ReactElement {
+  return <SettingsTabList {...props} variant="secondary" />
+}
+
+type SettingsTabPanelProps<T extends string> = {
+  baseId: string
+  children: ReactNode
+  className?: string
+} & ({
+  tabId: T
+  active: boolean
+} | {
+  value: T
+  activeValue: T
+})
+
+export function SettingsTabPanel<T extends string>(
+  props: SettingsTabPanelProps<T>
+): ReactElement {
+  const {
+    baseId,
+    children,
+    className = ''
+  } = props
+  const tabId = 'tabId' in props ? props.tabId : props.value
+  const active = 'active' in props ? props.active : props.value === props.activeValue
+
+  return (
+    <div
+      id={`${baseId}-panel-${tabId}`}
+      role="tabpanel"
+      aria-labelledby={`${baseId}-tab-${tabId}`}
+      hidden={!active}
+      className={`ds-settings-tab-panel ${active ? '' : 'hidden'} ${className}`}
+    >
+      {children}
+    </div>
+  )
+}
+
 export function InlineNoticeView({
   notice
 }: {
@@ -156,6 +322,9 @@ export function SettingsCard({
     >
       <div className="ds-settings-card-header border-b border-ds-border-muted px-5 py-3">
         <h2 className="text-[16px] font-semibold text-ds-ink">{title}</h2>
+        {description ? (
+          <p className="mt-0.5 text-[12px] leading-5 text-ds-faint">{description}</p>
+        ) : null}
       </div>
       <div className="ds-settings-card-body divide-y divide-ds-border-muted px-2 py-1">{children}</div>
     </section>

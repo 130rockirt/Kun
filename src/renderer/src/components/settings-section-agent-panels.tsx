@@ -13,7 +13,7 @@ export function ComputerUseSettingsPanel({
   permissionRow: ReactNode
   onChange: (patch: Record<string, unknown>) => void
 }): ReactElement {
-  return <div className="mt-6"><SettingsCard title={t('computerUseTitle')}>
+  return <SettingsCard title={t('computerUseTitle')}>
     <div className="space-y-4 px-3 py-4">
       <InlineNoticeView notice={{ tone: 'info', message: t('computerUseHint') }} />
       <div className="rounded-lg border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-[12px] leading-5 text-amber-700 dark:text-amber-200">
@@ -32,7 +32,7 @@ export function ComputerUseSettingsPanel({
         </select>} />
       {permissionRow}
     </> : null}
-  </SettingsCard></div>
+  </SettingsCard>
 }
 
 export function BrowserUseSettingsPanel({
@@ -52,7 +52,7 @@ export function BrowserUseSettingsPanel({
       ? 'detailed'
       : 'standard'
 
-  return <div className="mt-6"><SettingsCard title={t('browserUseSettingsTitle')}>
+  return <SettingsCard title={t('browserUseSettingsTitle')}>
     <div className="space-y-3 px-3 py-4">
       <InlineNoticeView notice={{ tone: 'info', message: t('browserUseSettingsHint') }} />
       <div className="rounded-lg border border-emerald-400/30 bg-emerald-500/10 px-3 py-2 text-[12px] leading-5 text-emerald-800 dark:text-emerald-200">
@@ -184,7 +184,7 @@ export function BrowserUseSettingsPanel({
         }
       />
     </> : null}
-  </SettingsCard></div>
+  </SettingsCard>
 }
 
 export function DesignQualitySettingsPanel({
@@ -195,7 +195,7 @@ export function DesignQualitySettingsPanel({
   selectControlClass: string
   onChange: (patch: Record<string, unknown>) => void
 }): ReactElement {
-  return <div className="mt-6"><SettingsCard title={t('designQualityTitle')}>
+  return <SettingsCard title={t('designQualityTitle')}>
     <div className="px-3 py-4"><InlineNoticeView notice={{ tone: 'info', message: t('designQualityHint') }} /></div>
     <SettingRow title={t('designQualityEnable')} description={t('designQualityEnableDesc')}
       control={<Toggle checked={value.enabled} onChange={(enabled) => onChange({ enabled })} />} />
@@ -205,5 +205,5 @@ export function DesignQualitySettingsPanel({
         <option value="standard">{t('designQualityStrictnessStandard')}</option>
         <option value="strict">{t('designQualityStrictnessStrict')}</option>
       </select>} /> : null}
-  </SettingsCard></div>
+  </SettingsCard>
 }

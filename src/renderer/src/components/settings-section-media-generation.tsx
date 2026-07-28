@@ -1,4 +1,5 @@
 import { useState, type ReactElement } from 'react'
+import { AudioLines, Image as ImageIcon, Music2, Video } from 'lucide-react'
 import {
   CUSTOM_MUSIC_GENERATION_PROVIDER_ID,
   CUSTOM_TEXT_TO_SPEECH_PROVIDER_ID,
@@ -10,7 +11,15 @@ import {
   TEXT_TO_SPEECH_PROTOCOLS,
   VIDEO_GENERATION_PROTOCOLS
 } from '@shared/app-settings'
-import { ModelSelect, SecretInput, SettingsCard, SettingRow, Toggle } from './settings-controls'
+import {
+  ModelSelect,
+  SecretInput,
+  SettingsCard,
+  SettingRow,
+  SettingsTabPanel,
+  SettingsTabs,
+  Toggle
+} from './settings-controls'
 import { ImageGenerationSettingsSection } from './settings-section-image-generation'
 
 const AUDIO_FORMATS = ['mp3', 'wav', 'flac'] as const
@@ -69,6 +78,8 @@ type ProviderProfile = {
   video?: ProviderCapability
 }
 
+type MediaGenerationTab = 'image' | 'speech' | 'music' | 'video'
+
 const inputClass =
   'w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30'
 const compactInputClass =
@@ -101,6 +112,7 @@ export function MediaGenerationSettingsSection({ ctx }: { ctx: Record<string, an
   const [showTtsApiKey, setShowTtsApiKey] = useState(false)
   const [showMusicApiKey, setShowMusicApiKey] = useState(false)
   const [showVideoApiKey, setShowVideoApiKey] = useState(false)
+  const [activeTab, setActiveTab] = useState<MediaGenerationTab>('image')
 
   const updateTextToSpeech = (patch: Record<string, unknown>): void => {
     updateKun({
@@ -166,15 +178,33 @@ export function MediaGenerationSettingsSection({ ctx }: { ctx: Record<string, an
 
   return (
     <div className="grid gap-6">
-      <SettingsCard title={t('mediaGeneration')}>
-        <div className="px-5 py-4 text-[13px] leading-6 text-ds-muted">
-          {t('mediaGenerationDesc')}
-        </div>
-      </SettingsCard>
+      <SettingsTabs
+        baseId="media-generation-settings"
+        ariaLabel={t('mediaGeneration')}
+        items={[
+          { id: 'image', label: t('imageGen'), icon: ImageIcon },
+          { id: 'speech', label: t('textToSpeech'), icon: AudioLines },
+          { id: 'music', label: t('musicGeneration'), icon: Music2 },
+          { id: 'video', label: t('videoGeneration'), icon: Video }
+        ]}
+        value={activeTab}
+        onChange={setActiveTab}
+      />
 
-      <ImageGenerationSettingsSection ctx={ctx} />
+      <SettingsTabPanel
+        baseId="media-generation-settings"
+        tabId="image"
+        active={activeTab === 'image'}
+      >
+        <ImageGenerationSettingsSection ctx={ctx} />
+      </SettingsTabPanel>
 
-      <SettingsCard title={t('textToSpeech')}>
+      <SettingsTabPanel
+        baseId="media-generation-settings"
+        tabId="speech"
+        active={activeTab === 'speech'}
+      >
+        <SettingsCard title={t('textToSpeech')}>
         <SettingRow
           title={t('textToSpeechEnabled')}
           description={t('textToSpeechEnabledDesc')}
@@ -255,9 +285,15 @@ export function MediaGenerationSettingsSection({ ctx }: { ctx: Record<string, an
             {renderTimeoutRow(t, 'textToSpeechTimeout', textToSpeech.timeoutMs, 10000, 900000, updateTextToSpeech)}
           </>
         ) : null}
-      </SettingsCard>
+        </SettingsCard>
+      </SettingsTabPanel>
 
-      <SettingsCard title={t('musicGeneration')}>
+      <SettingsTabPanel
+        baseId="media-generation-settings"
+        tabId="music"
+        active={activeTab === 'music'}
+      >
+        <SettingsCard title={t('musicGeneration')}>
         <SettingRow
           title={t('musicGenerationEnabled')}
           description={t('musicGenerationEnabledDesc')}
@@ -326,9 +362,15 @@ export function MediaGenerationSettingsSection({ ctx }: { ctx: Record<string, an
             {renderTimeoutRow(t, 'musicGenerationTimeout', musicGeneration.timeoutMs, 10000, 1800000, updateMusicGeneration)}
           </>
         ) : null}
-      </SettingsCard>
+        </SettingsCard>
+      </SettingsTabPanel>
 
-      <SettingsCard title={t('videoGeneration')}>
+      <SettingsTabPanel
+        baseId="media-generation-settings"
+        tabId="video"
+        active={activeTab === 'video'}
+      >
+        <SettingsCard title={t('videoGeneration')}>
         <SettingRow
           title={t('videoGenerationEnabled')}
           description={t('videoGenerationEnabledDesc')}
@@ -453,7 +495,8 @@ export function MediaGenerationSettingsSection({ ctx }: { ctx: Record<string, an
             />
           </>
         ) : null}
-      </SettingsCard>
+        </SettingsCard>
+      </SettingsTabPanel>
     </div>
   )
 }

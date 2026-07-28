@@ -1,4 +1,4 @@
-import type { ReactElement } from 'react'
+import { useState, type ReactElement } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   DEFAULT_WRITE_INLINE_COMPLETION_MAX_TOKENS,
@@ -27,12 +27,24 @@ import {
 } from '@shared/app-settings'
 import { WRITE_DESIGN_DRAFT_DEFAULT_PROMPT, WRITE_INFOGRAPHIC_DEFAULT_PROMPT } from '@shared/write-infographic'
 import { WRITE_PROTOTYPE_DEFAULT_PROMPT } from '@shared/write-prototype'
-import { PencilLine, Plus, RotateCcw, Trash2 } from 'lucide-react'
+import {
+  Bot,
+  FolderOpen,
+  PencilLine,
+  Plus,
+  RotateCcw,
+  Sparkles,
+  TextCursorInput,
+  Trash2,
+  Type
+} from 'lucide-react'
 import { builtinWriteQuickActionDefaults } from '../write/quick-actions'
 import {
   AdvancedSettingsDisclosure,
   ModelSelect,
   SettingsCard,
+  SettingsTabPanel,
+  SettingsTabs,
   SettingRow,
   Toggle
 } from './settings-controls'
@@ -108,9 +120,26 @@ export function WriteSettingsSection({ ctx }: { ctx: Record<string, any> }): Rea
       ? writeInlineProviderModels[0]
       : undefined)
     || (kun?.model?.trim() || DEFAULT_WRITE_INLINE_COMPLETION_MODEL)
+  const [activeTab, setActiveTab] = useState<
+    'workspace' | 'typography' | 'suggestions' | 'selection' | 'agents'
+  >('workspace')
 
   return (
             <>
+              <SettingsTabs
+                baseId="write-settings"
+                ariaLabel={t('write')}
+                value={activeTab}
+                onChange={setActiveTab}
+                items={[
+                  { id: 'workspace', label: t('sectionWrite'), icon: FolderOpen },
+                  { id: 'typography', label: t('writeTypography'), icon: Type },
+                  { id: 'suggestions', label: t('writeInlineCompletion'), icon: Sparkles },
+                  { id: 'selection', label: t('writeSelectionAssistTitle'), icon: TextCursorInput },
+                  { id: 'agents', label: t('writeAgentPresets'), icon: Bot }
+                ]}
+              />
+              <SettingsTabPanel baseId="write-settings" tabId="workspace" active={activeTab === 'workspace'}>
               <SettingsCard title={t('sectionWrite')}>
                 <SettingRow
                   title={t('writeWorkspaceRoot')}
@@ -188,7 +217,9 @@ export function WriteSettingsSection({ ctx }: { ctx: Record<string, any> }): Rea
                   }
                 />
               </SettingsCard>
+              </SettingsTabPanel>
 
+              <SettingsTabPanel baseId="write-settings" tabId="typography" active={activeTab === 'typography'}>
               <SettingsCard title={t('writeTypography')} className="mt-5">
                 <SettingRow
                   title={t('writeFontPreset')}
@@ -285,7 +316,9 @@ export function WriteSettingsSection({ ctx }: { ctx: Record<string, any> }): Rea
                   }
                 />
               </SettingsCard>
+              </SettingsTabPanel>
 
+              <SettingsTabPanel baseId="write-settings" tabId="suggestions" active={activeTab === 'suggestions'}>
               <SettingsCard title={t('writeInlineCompletion')} className="mt-5">
                 <SettingRow
                   title={t('writeInlineCompletionEnabled')}
@@ -461,7 +494,9 @@ export function WriteSettingsSection({ ctx }: { ctx: Record<string, any> }): Rea
                   </AdvancedSettingsDisclosure>
                 </div>
               </SettingsCard>
+              </SettingsTabPanel>
 
+              <SettingsTabPanel baseId="write-settings" tabId="selection" active={activeTab === 'selection'}>
               <SettingsCard title={t('writeSelectionAssistTitle')} className="mt-5">
                 <div className="px-3 py-4">
                   <AdvancedSettingsDisclosure
@@ -631,7 +666,9 @@ export function WriteSettingsSection({ ctx }: { ctx: Record<string, any> }): Rea
                   </AdvancedSettingsDisclosure>
                 </div>
               </SettingsCard>
+              </SettingsTabPanel>
 
+              <SettingsTabPanel baseId="write-settings" tabId="agents" active={activeTab === 'agents'}>
               <SettingsCard
                 title={t('writeAgentPresets')}
                 description={t('writeAgentPresetsDesc')}
@@ -741,6 +778,7 @@ export function WriteSettingsSection({ ctx }: { ctx: Record<string, any> }): Rea
                   }
                 />
               </SettingsCard>
+              </SettingsTabPanel>
             </>
   )
 }

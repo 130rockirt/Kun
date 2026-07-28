@@ -429,6 +429,7 @@ export async function createKunServeRuntime(
     artifactStore,
     runtimeEvents: events,
     threadStore,
+    sessionStore,
     ids,
     nowIso
   })

@@ -142,6 +142,33 @@ export type RuntimeRequestInit = {
   timeoutMs?: number
 }
 
+const DEFAULT_RUNTIME_GET_TIMEOUT_MS = 15_000
+const DEFAULT_RUNTIME_POST_TIMEOUT_MS = 60_000
+const MODEL_CONNECTION_EVENTS_TIMEOUT_MARGIN_MS = 5_000
+const MAX_MODEL_CONNECTION_EVENTS_WAIT_MS = 120_000
+
+export function resolveRuntimeRequestTimeoutMs(
+  pathNorm: string,
+  method: string,
+  requestedTimeoutMs?: number
+): number {
+  if (requestedTimeoutMs !== undefined) return requestedTimeoutMs
+  const fallback = method === 'POST'
+    ? DEFAULT_RUNTIME_POST_TIMEOUT_MS
+    : DEFAULT_RUNTIME_GET_TIMEOUT_MS
+  if (method !== 'GET' || !pathNorm.startsWith('/v1/model-connections/events?')) {
+    return fallback
+  }
+  const query = pathNorm.slice(pathNorm.indexOf('?') + 1)
+  const waitMs = Number(new URLSearchParams(query).get('wait_ms'))
+  if (!Number.isSafeInteger(waitMs) || waitMs <= 0) return fallback
+  return Math.max(
+    fallback,
+    Math.min(waitMs, MAX_MODEL_CONNECTION_EVENTS_WAIT_MS) +
+      MODEL_CONNECTION_EVENTS_TIMEOUT_MARGIN_MS
+  )
+}
+
 export async function runtimeRequestViaHost(
   settings: AppSettingsV1,
   pathAndQuery: string,
@@ -195,7 +222,7 @@ async function fetchRuntimeRequest(
     body: init.body,
     signal: requestSignal(
       init.signal,
-      init.timeoutMs ?? (method === 'POST' ? 60_000 : 15_000)
+      resolveRuntimeRequestTimeoutMs(pathNorm, method, init.timeoutMs)
     )
   })
   const text = await res.text()

@@ -1,5 +1,6 @@
 import type { ReactElement } from 'react'
 import { useState } from 'react'
+import { Bot, MessageSquare, Settings } from 'lucide-react'
 import {
   type AppSettingsPatch,
   type AppSettingsV1,
@@ -9,8 +10,18 @@ import {
   type ClawModel
 } from '@shared/app-settings'
 import type { ClawImTelegramConnectErrorCode } from '@shared/kun-gui-api'
-import { AdvancedSettingsDisclosure, InlineNoticeView, SettingsCard, SettingRow, Toggle } from './settings-controls'
+import {
+  AdvancedSettingsDisclosure,
+  InlineNoticeView,
+  SettingsCard,
+  SettingsTabPanel,
+  SettingsTabs,
+  SettingRow,
+  Toggle
+} from './settings-controls'
 import { clawModelSelectOptions } from '../lib/claw-model-options'
+
+type ClawSettingsTab = 'runtime' | 'channels' | 'agents'
 
 type AddClawChannelFn = (
   provider: 'telegram',
@@ -197,7 +208,7 @@ function TelegramConnectCard({
   }
 
   return (
-    <SettingsCard title={t('clawTelegramConnectTitle')} className="mt-6">
+    <SettingsCard title={t('clawTelegramConnectTitle')}>
       <div className="space-y-4 px-1">
         <p className="text-[13px] leading-6 text-ds-muted">
           {t('clawTelegramConnectDesc')}
@@ -281,11 +292,36 @@ export function ClawSettingsSection({ ctx }: { ctx: ClawSettingsContext }): Reac
     clawWorkspacePickerError,
     addClawChannel
   } = ctx
-  const hasTelegramChannel = form.claw.channels.some((channel) => channel.provider === 'telegram')
+  const [activeTab, setActiveTab] = useState<ClawSettingsTab>('runtime')
+  const telegramChannel = form.claw.channels.find((channel) => channel.provider === 'telegram')
+  const hasTelegramChannel = Boolean(telegramChannel)
+  const telegramBotName =
+    telegramChannel?.platformCredential?.kind === 'telegram' &&
+    telegramChannel.platformCredential.botUsername
+      ? `@${telegramChannel.platformCredential.botUsername}`
+      : 'Telegram Bot'
+  const tabs = [
+    { id: 'runtime', label: t('clawRuntime'), icon: Settings },
+    { id: 'channels', label: t('clawTelegramConnectTitle'), icon: MessageSquare },
+    { id: 'agents', label: t('clawManageAgents'), icon: Bot }
+  ] as const
 
   return (
     <>
-      <SettingsCard title={t('clawRuntime')}>
+      <SettingsTabs
+        baseId="claw-settings"
+        ariaLabel={t('claw')}
+        items={tabs}
+        value={activeTab}
+        onChange={setActiveTab}
+      />
+
+      <SettingsTabPanel
+        baseId="claw-settings"
+        tabId="runtime"
+        active={activeTab === 'runtime'}
+      >
+        <SettingsCard title={t('clawRuntime')}>
         <SettingRow
           title={t('clawEnabled')}
           description={t('clawEnabledDesc')}
@@ -362,13 +398,36 @@ export function ClawSettingsSection({ ctx }: { ctx: ClawSettingsContext }): Reac
             />
           }
         />
-      </SettingsCard>
+        </SettingsCard>
+      </SettingsTabPanel>
 
-      {!hasTelegramChannel ? (
-        <TelegramConnectCard t={t} tCommon={tCommon} addClawChannel={addClawChannel} />
-      ) : null}
+      <SettingsTabPanel
+        baseId="claw-settings"
+        tabId="channels"
+        active={activeTab === 'channels'}
+      >
+        {!hasTelegramChannel ? (
+          <TelegramConnectCard t={t} tCommon={tCommon} addClawChannel={addClawChannel} />
+        ) : (
+          <SettingsCard title={t('clawTelegramCredentialTitle')}>
+            <div className="px-4 py-4">
+              <InlineNoticeView
+                notice={{
+                  tone: 'info',
+                  message: t('clawTelegramConnectedHint', { bot: telegramBotName })
+                }}
+              />
+            </div>
+          </SettingsCard>
+        )}
+      </SettingsTabPanel>
 
-      <SettingsCard title={t('clawManageAgents')} className="mt-6">
+      <SettingsTabPanel
+        baseId="claw-settings"
+        tabId="agents"
+        active={activeTab === 'agents'}
+      >
+        <SettingsCard title={t('clawManageAgents')}>
         {form.claw.channels.length === 0 ? (
           <div className="px-3 py-4 text-[13px] leading-6 text-ds-muted">
             {t('clawManageAgentsEmpty')}
@@ -544,7 +603,8 @@ export function ClawSettingsSection({ ctx }: { ctx: ClawSettingsContext }): Reac
             )
           })
         )}
-      </SettingsCard>
+        </SettingsCard>
+      </SettingsTabPanel>
     </>
   )
 }

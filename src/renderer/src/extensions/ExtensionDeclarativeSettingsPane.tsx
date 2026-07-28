@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import type { JsonValue } from '@kun/extension-api'
 import type { RegisteredContribution } from './contribution-registry'
+import {
+  SettingsSubTabs,
+  SettingsTabPanel,
+  type SettingsTabItem
+} from '../components/settings-controls'
 import { DeclarativeSettingsSections } from './ControlledContributionSurfaces'
 import type {
   ExtensionSettingChange,
@@ -21,6 +26,9 @@ export function ExtensionDeclarativeSettingsPane({
   const [loading, setLoading] = useState(true)
   const [updating, setUpdating] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [activeContributionId, setActiveContributionId] = useState(
+    contributions[0]?.id ?? ''
+  )
   const snapshotRef = useRef<ExtensionSettingsSnapshot | null>(null)
   const updateQueueRef = useRef(Promise.resolve())
   const loadGenerationRef = useRef(0)
@@ -28,6 +36,13 @@ export function ExtensionDeclarativeSettingsPane({
   const contributionIds = useMemo(
     () => contributionKey ? contributionKey.split('\n') : [],
     [contributionKey]
+  )
+  const contributionTabs = useMemo<SettingsTabItem<string>[]>(
+    () => contributions.map((contribution) => ({
+      id: contribution.id,
+      label: contribution.payload.title
+    })),
+    [contributions]
   )
   const scopeKey = `${workspaceRoot}\n${contributionKey}`
   const scopeKeyRef = useRef(scopeKey)
@@ -75,6 +90,12 @@ export function ExtensionDeclarativeSettingsPane({
     void load()
     return () => { loadGenerationRef.current += 1 }
   }, [load, scopeKey])
+
+  useEffect(() => {
+    setActiveContributionId((current) => (
+      contributionIds.includes(current) ? current : (contributionIds[0] ?? '')
+    ))
+  }, [contributionIds])
 
   useEffect(() => service.subscribe?.((change: ExtensionSettingChange) => {
     if (!contributionIds.includes(change.contributionId)) return
@@ -130,6 +151,11 @@ export function ExtensionDeclarativeSettingsPane({
     return <div role="status" className="text-[12px] text-ds-muted">Loading extension settings…</div>
   }
 
+  const showContributionTabs = contributions.length >= 3
+  const selectedContributionId = contributionIds.includes(activeContributionId)
+    ? activeContributionId
+    : (contributionIds[0] ?? '')
+
   return (
     <div className="space-y-4">
       {error ? (
@@ -144,12 +170,39 @@ export function ExtensionDeclarativeSettingsPane({
           </button>
         </div>
       ) : null}
-      <DeclarativeSettingsSections
-        contributions={contributions}
-        values={snapshot?.values ?? {}}
-        disabled={updating || loading}
-        onChange={update}
-      />
+      {showContributionTabs ? (
+        <div className="space-y-4">
+          <SettingsSubTabs
+            baseId="extension-settings-contributions"
+            ariaLabel="Extension setting groups"
+            items={contributionTabs}
+            value={selectedContributionId}
+            onChange={setActiveContributionId}
+          />
+          {contributions.map((contribution) => (
+            <SettingsTabPanel
+              key={contribution.id}
+              baseId="extension-settings-contributions"
+              tabId={contribution.id}
+              active={selectedContributionId === contribution.id}
+            >
+              <DeclarativeSettingsSections
+                contributions={[contribution]}
+                values={snapshot?.values ?? {}}
+                disabled={updating || loading}
+                onChange={update}
+              />
+            </SettingsTabPanel>
+          ))}
+        </div>
+      ) : (
+        <DeclarativeSettingsSections
+          contributions={contributions}
+          values={snapshot?.values ?? {}}
+          disabled={updating || loading}
+          onChange={update}
+        />
+      )}
     </div>
   )
 }

@@ -415,6 +415,10 @@ const labels: Record<string, string> = {
   permissions: 'Permissions',
   toolPermissionMode: 'Tool permission mode',
   toolPermissionModeDesc: 'Tool permission mode description',
+  computerUseTitle: 'Computer control',
+  browserUseSettingsTitle: 'Browser',
+  designQualityTitle: 'Design quality',
+  graphSettingsTitle: 'Graph mode',
   toolPermissionAlwaysAsk: 'Always ask',
   toolPermissionAlwaysAskDesc: 'Every tool call asks first',
   toolPermissionReadOnly: 'Read only',
@@ -610,7 +614,10 @@ function findButtonContaining(renderer: ReactTestRenderer, label: string): React
 }
 
 function activePanelText(renderer: ReactTestRenderer): string {
-  const panels = renderer.root.findAllByProps({ role: 'tabpanel' })
+  const panels = renderer.root
+    .findAllByProps({ role: 'tabpanel' })
+    .filter((panel) => String(panel.props.id ?? '').startsWith('provider-settings-panel-'))
+    .filter((panel) => panel.props.hidden !== true)
   expect(panels).toHaveLength(1)
   return instanceText(panels[0])
 }
@@ -1278,7 +1285,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
         apiKey: '',
         baseUrl: 'https://api.example.com/v1',
         endpointFormat: 'messages',
-        models: [],
+        models: Array.from({ length: 9 }, (_, index) => `custom-model-${index + 1}`),
         modelProfiles: {},
         image: {
           protocol: 'openai-images',
@@ -1298,7 +1305,17 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
         }
       })
 
-      const tabs = renderer.root.findAllByProps({ role: 'tab' })
+      const workspacePanels = renderer.root.findAllByProps({ role: 'tabpanel' })
+        .filter((panel) => String(panel.props.id ?? '').startsWith('provider-workspace-panel-'))
+      expect(workspacePanels.map((panel) => panel.props.id)).toEqual([
+        'provider-workspace-panel-providers',
+        'provider-workspace-panel-routes'
+      ])
+      expect(workspacePanels.map((panel) => panel.props.hidden)).toEqual([false, true])
+
+      const tabs = renderer.root
+        .findAllByProps({ role: 'tab' })
+        .filter((tab) => String(tab.props.id ?? '').startsWith('provider-settings-tab-'))
       expect(tabs.map(instanceText)).toEqual(['Connection', 'Models', 'Capabilities', 'Advanced'])
       expect(tabs.map((tab) => tab.props['aria-selected'])).toEqual([true, false, false, false])
       expect(tabs.map((tab) => tab.props.tabIndex)).toEqual([0, -1, -1, -1])
@@ -1308,9 +1325,18 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
         'provider-settings-panel-capabilities',
         'provider-settings-panel-advanced'
       ])
-      const initialPanel = renderer.root.findByProps({ role: 'tabpanel' })
+      const initialPanel = renderer.root.findByProps({ id: 'provider-settings-panel-connection' })
       expect(initialPanel.props.id).toBe('provider-settings-panel-connection')
       expect(initialPanel.props['aria-labelledby']).toBe('provider-settings-tab-connection')
+      const taskPanels = renderer.root.findAllByProps({ role: 'tabpanel' })
+        .filter((panel) => String(panel.props.id ?? '').startsWith('provider-settings-panel-'))
+      expect(taskPanels.map((panel) => panel.props.id)).toEqual([
+        'provider-settings-panel-connection',
+        'provider-settings-panel-advanced',
+        'provider-settings-panel-models',
+        'provider-settings-panel-capabilities'
+      ])
+      expect(taskPanels.map((panel) => panel.props.hidden)).toEqual([false, true, true, true])
       expect(activePanelText(renderer)).toContain('Provider connection')
       expect(activePanelText(renderer)).not.toContain('Provider models')
       expect(renderer.root.findAllByType('select').some((select) => select.props.value === 'messages')).toBe(true)
@@ -1318,21 +1344,25 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       expect(rendererText(renderer)).not.toContain('Inherit API key')
 
       const preventDefault = vi.fn()
-      const tabFocusTargets = Array.from({ length: 4 }, () => ({ focus: vi.fn() }))
       await act(async () => tabs[0].props.onKeyDown({
         key: 'ArrowRight',
-        preventDefault,
-        currentTarget: {
-          parentElement: { querySelectorAll: () => tabFocusTargets }
-        }
+        preventDefault
       }))
       expect(preventDefault).toHaveBeenCalledOnce()
-      expect(tabFocusTargets[1].focus).toHaveBeenCalledOnce()
-      expect(renderer.root.findAllByProps({ role: 'tab' }).map((tab) => tab.props.tabIndex))
+      expect(renderer.root
+        .findAllByProps({ role: 'tab' })
+        .filter((tab) => String(tab.props.id ?? '').startsWith('provider-settings-tab-'))
+        .map((tab) => tab.props.tabIndex))
         .toEqual([-1, 0, -1, -1])
       expect(activePanelText(renderer)).toContain('Provider models')
       expect(activePanelText(renderer)).toContain('Fetch models')
       expect(activePanelText(renderer)).not.toContain('Provider connection')
+      const modelSearch = renderer.root.findByProps({
+        placeholder: 'providerModelSearchPlaceholder'
+      })
+      await act(async () => {
+        modelSearch.props.onChange({ target: { value: 'custom-model-9' } })
+      })
 
       await clickProviderTab(renderer, 'Capabilities')
       expect(activePanelText(renderer)).toContain('Image capability')
@@ -1345,6 +1375,11 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
         'aria-label': 'Configure: Image capability'
       })
       expect(imageCapabilityConfigure.props['aria-controls']).toBe('provider-capability-image')
+
+      await clickProviderTab(renderer, 'Models')
+      expect(renderer.root.findByProps({
+        placeholder: 'providerModelSearchPlaceholder'
+      }).props.value).toBe('custom-model-9')
 
       await clickProviderTab(renderer, 'Advanced')
       const customIdInput = renderer.root.findAllByType('input')
@@ -1894,7 +1929,10 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
 
       expect(rendererText(renderer)).toContain('Ready')
       expect(rendererText(renderer)).toContain('Could not apply')
-      expect(renderer.root.findAllByType('span')
+      const providersPanel = renderer.root.findByProps({
+        id: 'provider-workspace-panel-providers'
+      })
+      expect(providersPanel.findAllByType('span')
         .filter((span) => span.props.title === 'Disk is read-only')).toHaveLength(1)
       expect(findButton(renderer, 'Test connection').props.disabled).toBe(false)
 
@@ -2098,6 +2136,66 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
     expect(html).toContain('lucide-lock-keyhole-open')
     expect(html).not.toContain('Approval policy')
     expect(html).not.toContain('Sandbox mode')
+  })
+
+  it('opens a permissions deep link on policy and keeps all secondary panels mounted', () => {
+    let renderer!: ReactTestRenderer
+    act(() => {
+      renderer = createRenderer(createElement(AgentsSettingsSection, {
+        ctx: {
+          ...baseCtx(),
+          settingsSection: 'permissions'
+        }
+      }))
+    })
+
+    const primaryPermissionsPanel = renderer.root.findByProps({
+      id: 'agents-settings-panel-permissions'
+    })
+    expect(renderer.root.findByProps({
+      id: 'agents-settings-tab-permissions'
+    }).props['aria-selected']).toBe(true)
+    expect(primaryPermissionsPanel.props.className).not.toContain('hidden')
+
+    const secondaryTabs = renderer.root
+      .findAllByProps({ role: 'tab' })
+      .filter((tab) => String(tab.props.id ?? '').startsWith('agents-permissions-tab-'))
+    expect(secondaryTabs.map(instanceText)).toEqual([
+      'Tool permission mode',
+      'Computer control',
+      'Browser',
+      'Design quality',
+      'Graph mode'
+    ])
+    expect(secondaryTabs.map((tab) => tab.props['aria-selected']))
+      .toEqual([true, false, false, false, false])
+    expect(secondaryTabs.map((tab) => tab.props['aria-controls'])).toEqual([
+      'agents-permissions-panel-policy',
+      'agents-permissions-panel-computer',
+      'agents-permissions-panel-browser',
+      'agents-permissions-panel-quality',
+      'agents-permissions-panel-graph'
+    ])
+
+    const secondaryPanels = renderer.root
+      .findAllByProps({ role: 'tabpanel' })
+      .filter((panel) => String(panel.props.id ?? '').startsWith('agents-permissions-panel-'))
+    expect(secondaryPanels).toHaveLength(5)
+    expect(secondaryPanels.map((panel) => panel.props.hidden))
+      .toEqual([false, true, true, true, true])
+    expect(secondaryPanels[0].findAllByProps({ role: 'radiogroup' })).toHaveLength(1)
+
+    act(() => {
+      secondaryTabs[2].props.onClick()
+    })
+
+    const switchedPanels = renderer.root
+      .findAllByProps({ role: 'tabpanel' })
+      .filter((panel) => String(panel.props.id ?? '').startsWith('agents-permissions-panel-'))
+    expect(switchedPanels).toHaveLength(5)
+    expect(switchedPanels.map((panel) => panel.props.hidden))
+      .toEqual([true, true, false, true, true])
+    expect(switchedPanels[0].findAllByProps({ role: 'radiogroup' })).toHaveLength(1)
   })
 
   it('renders pure JSONL as a selectable storage backend', () => {

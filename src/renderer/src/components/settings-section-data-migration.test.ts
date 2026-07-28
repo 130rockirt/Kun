@@ -161,6 +161,11 @@ describe('data migration settings states', () => {
     expect(html.match(/disabled=""/g)?.length).toBe(2)
   })
 
+  it('disables new routes while another migration operation is active', () => {
+    const html = landing(status({ activeOperationId: 'active_migration' }))
+    expect(html.match(/disabled=""/g)?.length).toBe(2)
+  })
+
   it('keeps recovery available even when new migrations are feature-disabled', () => {
     expect(landing(status({ featureEnabled: false }))).toContain('dataMigrationFeatureDisabled')
     expect(landing(status({
@@ -223,6 +228,154 @@ describe('data migration settings states', () => {
 })
 
 describe('data migration estimate loading', () => {
+  it('keeps export, import, and report panels mounted behind shared secondary tabs', async () => {
+    vi.stubGlobal('window', {
+      kunGui: {
+        dataMigration: {
+          getStatus: async () => status(),
+          onProgress: () => () => undefined
+        }
+      },
+      requestAnimationFrame: () => 1,
+      cancelAnimationFrame: vi.fn()
+    })
+    vi.stubGlobal('document', { querySelector: () => null })
+
+    let renderer!: ReactTestRenderer
+    await act(async () => {
+      renderer = create(createElement(DataMigrationSettingsSection))
+    })
+
+    const tabs = renderer.root.findAllByProps({ role: 'tab' })
+    expect(tabs.map((tab) => tab.props.id)).toEqual([
+      'data-migration-tab-export',
+      'data-migration-tab-import',
+      'data-migration-tab-reports'
+    ])
+    expect(renderer.root.findByProps({ id: 'data-migration-panel-export' }).props.hidden).toBe(false)
+    expect(renderer.root.findByProps({ id: 'data-migration-panel-import' }).props.hidden).toBe(true)
+    expect(renderer.root.findByProps({ id: 'data-migration-panel-reports' }).props.hidden).toBe(true)
+    expect(JSON.stringify(renderer.toJSON()).match(/dataMigrationNeverTransferredTitle/g)).toHaveLength(1)
+
+    await act(async () => {
+      renderer.root.findByProps({ id: 'data-migration-tab-import' }).props.onClick()
+    })
+    expect(renderer.root.findByProps({ id: 'data-migration-panel-export' }).props.hidden).toBe(true)
+    expect(renderer.root.findByProps({ id: 'data-migration-panel-import' }).props.hidden).toBe(false)
+    expect(renderer.root.findByProps({ id: 'data-migration-panel-reports' }).props.hidden).toBe(true)
+
+    await act(async () => renderer.unmount())
+  })
+
+  it('opens the reports tab after a successful export', async () => {
+    const exportReport = DataMigrationReportSchema.parse({
+      ...report,
+      operationId: 'export_report_ui',
+      kind: 'export'
+    })
+    const startExport = vi.fn(async () => ({
+      packagePath: '/tmp/backup.kunpack',
+      report: exportReport
+    }))
+    vi.stubGlobal('window', {
+      kunGui: {
+        dataMigration: {
+          getStatus: async () => status(),
+          onProgress: () => () => undefined,
+          estimateExport: async () => ({
+            workspaces: [{
+              workspaceId: 'workspace_ui',
+              displayName: 'Workspace',
+              sourcePathDisplay: '/workspace',
+              sourcePlatform: 'macos' as const,
+              fileCount: 1,
+              logicalBytes: 128,
+              relatedThreadIds: [],
+              capabilities: ['code' as const]
+            }],
+            threadCount: 0,
+            attachmentCount: 0,
+            artifactCount: 0,
+            memoryCount: 0,
+            logicalBytes: 128,
+            estimatedPackageBytes: 64,
+            sensitiveFindings: [],
+            exclusions: []
+          }),
+          pickExportPackage: async () => ({
+            canceled: false,
+            path: '/tmp/backup.kunpack'
+          }),
+          startExport
+        }
+      },
+      requestAnimationFrame: () => 1,
+      cancelAnimationFrame: vi.fn()
+    })
+    vi.stubGlobal('document', { querySelector: () => null })
+
+    let renderer!: ReactTestRenderer
+    await act(async () => {
+      renderer = create(createElement(DataMigrationSettingsSection))
+    })
+
+    const createButton = renderer.root.findAllByType('button').find((button) =>
+      button.props.role !== 'tab' &&
+      button.findAllByType('span').some((span) => span.children.includes('dataMigrationCreateTitle'))
+    )
+    await act(async () => {
+      createButton!.props.onClick()
+      await Promise.resolve()
+    })
+    await act(async () => { await Promise.resolve() })
+
+    const continueButton = () => renderer.root.findAllByType('button').find((button) =>
+      button.children.includes('dataMigrationContinue')
+    )
+    await act(async () => continueButton()!.props.onClick())
+
+    const passphrase = renderer.root.findByProps({
+      placeholder: 'dataMigrationPassphraseOptional'
+    })
+    await act(async () => {
+      passphrase.props.onChange({ target: { value: 'password123' } })
+    })
+    const confirmation = renderer.root.findByProps({
+      placeholder: 'dataMigrationPassphraseConfirm'
+    })
+    await act(async () => {
+      confirmation.props.onChange({ target: { value: 'password123' } })
+    })
+    await act(async () => continueButton()!.props.onClick())
+
+    const browseButton = renderer.root.findAllByType('button').find((button) =>
+      button.children.includes('browse')
+    )
+    await act(async () => {
+      browseButton!.props.onClick()
+      await Promise.resolve()
+    })
+    const reviewButton = renderer.root.findAllByType('button').find((button) =>
+      button.children.includes('dataMigrationCreatePackage')
+    )
+    await act(async () => reviewButton!.props.onClick())
+    const runButton = renderer.root.findAllByType('button').find((button) =>
+      button.children.includes('dataMigrationCreatePackage')
+    )
+    await act(async () => {
+      runButton!.props.onClick()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(startExport).toHaveBeenCalledOnce()
+    expect(renderer.root.findByProps({ id: 'data-migration-panel-export' }).props.hidden).toBe(true)
+    expect(renderer.root.findByProps({ id: 'data-migration-panel-reports' }).props.hidden).toBe(false)
+    expect(JSON.stringify(renderer.toJSON())).toContain('dataMigrationOutcome_completed-with-review')
+
+    await act(async () => renderer.unmount())
+  })
+
   it('shows a failed automatic estimate once and waits for an explicit retry', async () => {
     const estimateExport = vi.fn(async () => { throw new Error('Kun thread inventory failed (400)') })
     vi.stubGlobal('window', {
@@ -243,6 +396,7 @@ describe('data migration estimate loading', () => {
       renderer = create(createElement(DataMigrationSettingsSection))
     })
     const createButton = renderer.root.findAllByType('button').find((button) =>
+      button.props.role !== 'tab' &&
       button.findAllByType('span').some((span) => span.children.includes('dataMigrationCreateTitle'))
     )
     expect(createButton).toBeDefined()

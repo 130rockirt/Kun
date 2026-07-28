@@ -24,12 +24,20 @@ import {
   type GraphParentAuthority
 } from '../graph/index.js'
 import type { IdGenerator } from '../ports/id-generator.js'
+import type { SessionStore } from '../ports/session-store.js'
 import type { ThreadStore } from '../ports/thread-store.js'
 import type { RuntimeEventRecorder } from '../services/runtime-event-recorder.js'
 import { createGraphCheckVerifier } from '../graph/graph-check-verifier.js'
 
 export type GraphRuntimeStartOptions = {
   delegation: () => DelegationRuntime | undefined
+  steerTurn?: (input: {
+    threadId: string
+    turnId: string
+    text: string
+    displayText?: string
+    messageSource?: 'graph_runtime'
+  }) => Promise<void>
   leadTurn: (input: {
     run: GraphRunV1
     reasons: string[]
@@ -55,6 +63,8 @@ export class GraphRuntimeComposition {
   supervisor!: GraphSupervisor
   recovery!: GraphRecoveryService
   private readonly backgroundTasks = new Set<Promise<unknown>>()
+  private delegation?: GraphRuntimeStartOptions['delegation']
+  private steerChildTurn?: GraphRuntimeStartOptions['steerTurn']
   private retentionTimer?: NodeJS.Timeout
 
   constructor(private readonly options: {
@@ -63,6 +73,7 @@ export class GraphRuntimeComposition {
     artifactStore: ArtifactStore
     runtimeEvents: Pick<RuntimeEventRecorder, 'record'>
     threadStore: Pick<ThreadStore, 'get'>
+    sessionStore?: Pick<SessionStore, 'loadItems'>
     ids: IdGenerator
     nowIso: () => string
   }) {
@@ -214,6 +225,23 @@ export class GraphRuntimeComposition {
         registry: this.registry,
         artifactStore: options.artifactStore,
         workerSessions: this.workerSessions,
+        threads: options.threadStore,
+        sessions: options.sessionStore,
+        steerChildTurn: () => this.steerChildTurn,
+        childActivity: async (parentThreadId, childThreadId) => {
+          const runtime = this.delegation?.()
+          if (!runtime) return undefined
+          const record = (await runtime.diagnostics(parentThreadId)).childRuns
+            .find((child) => child.id === childThreadId)
+          return record
+            ? {
+                status: record.status,
+                ...(record.activity ? { activity: record.activity } : {}),
+                updatedAt: record.updatedAt
+              }
+            : undefined
+        },
+        config: options.config,
         enabled: () => options.config().enabled,
         signalSupervision: (input) => this.supervisor?.signal(input),
         nowIso: options.nowIso,
@@ -266,6 +294,8 @@ export class GraphRuntimeComposition {
 
   async start(options: GraphRuntimeStartOptions): Promise<void> {
     const nextId = (prefix: string): string => this.options.ids.next(prefix)
+    this.delegation = options.delegation
+    this.steerChildTurn = options.steerTurn
     this.supervisor = new GraphSupervisor({
       store: this.store,
       config: this.options.config,

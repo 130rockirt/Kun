@@ -4,7 +4,8 @@ export const GRAPH_LEAD_TOOL_NAMES = [
   'graph_create_run',
   'graph_control_run',
   'graph_patch_run',
-  'graph_review_node'
+  'graph_review_node',
+  'graph_supervise_node'
 ] as const
 
 export const GRAPH_WORKER_TOOL_NAMES = [
