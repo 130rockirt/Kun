@@ -281,15 +281,17 @@ export function WriteInlineAgent({
       onValueChange('')
       return
     }
-    if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return
+    if (
+      event.key !== 'Enter' ||
+      event.shiftKey ||
+      event.nativeEvent.isComposing ||
+      (!event.metaKey && !event.ctrlKey)
+    ) return
     event.preventDefault()
-    // Enter rewrites editable selections in place; read-only selections such
-    // as PDFs send the prompt to the sidebar assistant instead.
+    // A multiline composer must keep plain Enter available for writing.
+    // Command/Ctrl + Enter runs the primary action: rewrite editable text in
+    // place, or ask the sidebar assistant for read-only selections.
     if (askOnly) {
-      onSubmitPrompt(value)
-      return
-    }
-    if (event.metaKey || event.ctrlKey) {
       onSubmitPrompt(value)
       return
     }
@@ -536,17 +538,18 @@ export function WriteInlineAgent({
             }
           }}
         >
-          {askOnly ? (
-            <MessageSquareQuote className="h-4 w-4 shrink-0 text-accent" strokeWidth={1.9} />
-          ) : (
-            <Sparkles className="h-4 w-4 shrink-0 text-accent" strokeWidth={1.9} />
-          )}
+          <div className="write-inline-agent-edit-header">
+            <span className="write-inline-agent-edit-icon">
+              <Sparkles className="h-4 w-4" strokeWidth={1.9} />
+            </span>
+            <span className="write-inline-agent-edit-title">{t('writeInlineAgentAskAi')}</span>
+          </div>
           <textarea
             ref={textareaRef}
-            rows={1}
+            rows={4}
             value={value}
-            placeholder={t(askOnly ? 'writeInlineAgentPlaceholder' : 'writeInlineAgentEditHint')}
-            aria-label={t(askOnly ? 'writeInlineAgentPlaceholder' : 'writeInlineAgentEditHint')}
+            placeholder={t('writeInlineAgentPlaceholder')}
+            aria-label={t('writeInlineAgentPlaceholder')}
             spellCheck={false}
             className="write-inline-agent-input"
             disabled={inFlight}
@@ -555,33 +558,42 @@ export function WriteInlineAgent({
             onFocus={onTextareaFocus}
             onBlur={onTextareaBlur}
           />
-          {!askOnly ? (
-            <button
-              type="button"
-              className="write-inline-agent-secondary"
-              aria-label={t('writeInlineAgentSend')}
-              title={t('writeInlineAgentSend')}
-              disabled={!value.trim() || inFlight}
-              onClick={() => onSubmitPrompt(value)}
-            >
-              <MessageSquareQuote className="h-4 w-4" strokeWidth={1.9} />
-            </button>
-          ) : null}
-          <button
-            type="submit"
-            className="write-inline-agent-submit"
-            aria-label={inFlight ? t('writeInlineEditApplying') : t(askOnly ? 'writeInlineAgentSend' : 'writeInlineEditApply')}
-            title={inFlight ? t('writeInlineEditApplying') : t(askOnly ? 'writeInlineAgentSend' : 'writeInlineEditApply')}
-            disabled={!value.trim() || inFlight}
-          >
-            {inFlight ? (
-              <Loader2 className="h-4 w-4 animate-spin" strokeWidth={2} />
-            ) : askOnly ? (
-              <MessageSquareQuote className="h-4 w-4" strokeWidth={2} />
-            ) : (
-              <Sparkles className="h-4 w-4" strokeWidth={2} />
-            )}
-          </button>
+          <div className="write-inline-agent-edit-footer">
+            <span className="write-inline-agent-selection-chip">
+              <MessageSquareQuote className="h-3.5 w-3.5 shrink-0" strokeWidth={1.85} />
+              <span className="truncate">{t('writeSelectionNoLineInfo')}</span>
+            </span>
+            <div className="write-inline-agent-footer-actions">
+              <span className="write-inline-agent-shortcut" aria-hidden="true">⌘/Ctrl ↵</span>
+              {!askOnly ? (
+                <button
+                  type="button"
+                  className="write-inline-agent-secondary"
+                  aria-label={t('writeInlineAgentSend')}
+                  title={t('writeInlineAgentSend')}
+                  disabled={!value.trim() || inFlight}
+                  onClick={() => onSubmitPrompt(value)}
+                >
+                  <MessageSquareQuote className="h-4 w-4" strokeWidth={1.9} />
+                </button>
+              ) : null}
+              <button
+                type="submit"
+                className="write-inline-agent-submit"
+                aria-label={inFlight ? t('writeInlineEditApplying') : t(askOnly ? 'writeInlineAgentSend' : 'writeInlineEditApply')}
+                title={inFlight ? t('writeInlineEditApplying') : t(askOnly ? 'writeInlineAgentSend' : 'writeInlineEditApply')}
+                disabled={!value.trim() || inFlight}
+              >
+                {inFlight ? (
+                  <Loader2 className="h-4 w-4 animate-spin" strokeWidth={2} />
+                ) : askOnly ? (
+                  <MessageSquareQuote className="h-4 w-4" strokeWidth={2} />
+                ) : (
+                  <Sparkles className="h-4 w-4" strokeWidth={2} />
+                )}
+              </button>
+            </div>
+          </div>
         </form>
         ) : null}
       </div>
