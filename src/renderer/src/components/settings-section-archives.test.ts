@@ -19,7 +19,13 @@ function thread(overrides: Partial<NormalizedThread> & Pick<NormalizedThread, 'i
 }
 
 const labels: Record<string, string> = {
+  title: 'Settings',
   back: 'Back',
+  settingsGroupCore: 'Basics',
+  settingsGroupWorkbench: 'Workbench',
+  settingsGroupIntelligence: 'Intelligence',
+  settingsGroupData: 'Data',
+  settingsGroupSystem: 'System',
   general: 'General',
   providers: 'Providers',
   write: 'Write',
@@ -121,7 +127,7 @@ describe('ArchivedThreadsSettingsSection', () => {
     expect(html.match(/data-cursor-spotlight-target/g)?.length).toBe(19)
   })
 
-  it('keeps settings tabs scrollable without pushing the footer away', () => {
+  it('groups compact settings navigation without pushing the footer away', () => {
     const html = renderToStaticMarkup(createElement(SettingsSidebar, {
       category: 'shortcuts',
       goBack: () => undefined,
@@ -129,9 +135,15 @@ describe('ArchivedThreadsSettingsSection', () => {
       t
     }))
 
-    expect(html).toContain('flex h-full min-h-0 w-[248px]')
-    expect(html).toContain('flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto overscroll-contain')
-    expect(html).toContain('ds-no-drag shrink-0 border-t border-ds-border p-3')
+    expect(html).toContain('flex h-full min-h-0 w-[228px]')
+    expect(html).toContain('min-h-0 flex-1 overflow-y-auto overscroll-contain')
+    expect(html).toContain('ds-no-drag shrink-0 border-t border-ds-border px-3 py-2.5')
+    expect(html).toContain('group flex h-8 w-full')
+    expect(html).toContain('aria-current="page"')
+    expect(html.indexOf('Basics')).toBeLessThan(html.indexOf('Workbench'))
+    expect(html.indexOf('Workbench')).toBeLessThan(html.indexOf('Intelligence'))
+    expect(html.indexOf('Intelligence')).toBeLessThan(html.indexOf('Data'))
+    expect(html.indexOf('Data')).toBeLessThan(html.indexOf('System'))
     expect(html).toContain('Kun')
     expect(html).toContain('Settings')
   })

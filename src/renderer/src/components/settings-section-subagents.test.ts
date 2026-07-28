@@ -75,6 +75,6 @@ describe('SubagentsSettingsSection', () => {
     expect(subagentsIndex).toBeGreaterThan(agentsIndex)
     expect(archivesIndex).toBeGreaterThan(subagentsIndex)
     expect(html).toContain('lucide-users-round')
-    expect(html).toContain('bg-ds-subtle text-ds-ink')
+    expect(html).toContain('bg-accent/10 text-accent')
   })
 })
