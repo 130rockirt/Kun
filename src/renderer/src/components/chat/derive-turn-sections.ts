@@ -30,9 +30,9 @@ type ResolvedFileChangeBlock = ToolBlock & {
 type DeriveTurnSectionsInput = {
   turn: Turn
   isProcessing: boolean
-  /** Reserved for call-site clarity; live thinking is rendered at the turn bottom. */
+  /** Current reasoning stream, appended to the active chronological timeline. */
   liveProcessText: string
-  /** Reserved for call-site clarity; live assistant is rendered by MessageTimeline. */
+  /** Current assistant stream, appended to the active chronological timeline. */
   liveContent: string
   workspaceRoot: string
 }
@@ -77,11 +77,27 @@ function hasGeneratedFiles(block: ToolBlock): boolean {
 }
 
 /**
+ * Returns the last persisted assistant block with visible non-thinking text.
+ * After settlement this one block remains outside the folded process as the
+ * final answer. Every earlier assistant update stays in chronological work.
+ */
+function findLastAssistantContentIndex(blocks: ChatBlock[]): number {
+  for (let index = blocks.length - 1; index >= 0; index -= 1) {
+    const block = blocks[index]
+    if (block.kind === 'assistant' && splitThink(block.text).content.trim()) {
+      return index
+    }
+  }
+  return -1
+}
+
+/**
  * Pure derivation of a turn's three view slices:
- *  - `processBlocks`: chronological reasoning/tool/compaction/approval
- *    trace. Ordinary assistant text never moves into this collapsed region.
- *  - `assistantContentBlocks`: all assistant content for the turn, merged into
- *    one stable visible message body.
+ *  - `processBlocks`: chronological assistant/reasoning/tool/compaction/
+ *    approval trace. It contains the whole active stream while processing and
+ *    all intermediate output after the turn settles.
+ *  - `assistantContentBlocks`: the single final assistant text shown outside
+ *    the folded process after settlement.
  *  - `turnFileChanges`: successful file_change tool blocks whose detail
  *    is a unified diff, with paths normalised for display.
  *
@@ -91,15 +107,18 @@ function hasGeneratedFiles(block: ToolBlock): boolean {
 export function deriveTurnSections({
   turn,
   isProcessing,
-  liveProcessText: _liveProcessText,
-  liveContent: _liveContent,
+  liveProcessText,
+  liveContent,
   workspaceRoot
 }: DeriveTurnSectionsInput): TurnSections {
   const processBlocks: ChatBlock[] = []
   const assistantContentBlocks: TurnAssistantBlock[] = []
   const runtimeErrorBlocks: TurnRuntimeErrorBlock[] = []
+  const finalAssistantContentIndex = isProcessing
+    ? -1
+    : findLastAssistantContentIndex(turn.blocks)
 
-  for (const block of turn.blocks) {
+  for (const [index, block] of turn.blocks.entries()) {
     if (block.kind === 'system' && block.runtimeError === true) {
       runtimeErrorBlocks.push(block as TurnRuntimeErrorBlock)
       continue
@@ -116,7 +135,12 @@ export function deriveTurnSections({
         })
       }
       if (split.content.trim()) {
-        assistantContentBlocks.push({ ...block, text: split.content })
+        const contentBlock: TurnAssistantBlock = { ...block, text: split.content }
+        if (index === finalAssistantContentIndex) {
+          assistantContentBlocks.push(contentBlock)
+        } else {
+          processBlocks.push(contentBlock)
+        }
       }
       continue
     }
@@ -125,10 +149,23 @@ export function deriveTurnSections({
     }
   }
 
-  // Live thinking and streaming assistant text are rendered at the turn
-  // bottom / as a dedicated MessageBubble by MessageTimeline. Keep them out
-  // of processBlocks so loading chrome cannot interleave above later text
-  // or replace completed tool summaries.
+  // Live values represent the current tail after all persisted blocks. Keeping
+  // them in this same projection makes text, thought, and tool work read as one
+  // downward timeline instead of splitting assistant output into another lane.
+  if (isProcessing && liveProcessText.trim()) {
+    processBlocks.push({
+      kind: 'reasoning',
+      id: 'live-reasoning',
+      text: liveProcessText
+    })
+  }
+  if (isProcessing && liveContent.trim()) {
+    processBlocks.push({
+      kind: 'assistant',
+      id: 'live-assistant',
+      text: liveContent
+    })
+  }
 
   const turnFileChanges: ToolBlock[] = isProcessing
     ? []
@@ -161,17 +198,9 @@ export function deriveTurnSections({
     Boolean(block.meta.componentPrototype)
   ))
 
-  const visibleAssistantBlocks: TurnAssistantBlock[] = assistantContentBlocks.length <= 1
-    ? assistantContentBlocks
-    : [{
-        ...assistantContentBlocks[0],
-        id: turn.turnId ? `assistant-turn-${turn.turnId}` : assistantContentBlocks[0].id,
-        text: assistantContentBlocks.map((block) => block.text.trim()).filter(Boolean).join('\n\n')
-      }]
-
   return {
     processBlocks,
-    assistantContentBlocks: visibleAssistantBlocks,
+    assistantContentBlocks,
     runtimeErrorBlocks,
     componentPrototypeBlocks,
     generatedFileBlocks,

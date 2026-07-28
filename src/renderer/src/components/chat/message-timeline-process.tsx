@@ -111,28 +111,9 @@ export function groupProcessSections(blocks: ChatBlock[]): ProcessSection[] {
     const last = sections[sections.length - 1]
     const followsGeneratedMedia = last?.blocks.some(processBlockHasGeneratedMedia) === true
 
-    // Reasoning and tool calls between two visible assistant updates are one
-    // activity phase. Keeping them together prevents long-running turns from
-    // becoming an alternating "thinking / tool / thinking / tool" waterfall.
-    // Exception: live thinking after a completed tool batch must stay separate,
-    // otherwise the section title becomes "Thinking..." and eats the tool summary.
-    const liveReasoningAfterTools =
-      block.kind === 'reasoning' &&
-      block.id === 'live-reasoning' &&
-      last?.kind === 'execution' &&
-      last.blocks.some((entry) => entry.kind !== 'reasoning')
-    if (
-      last &&
-      !followsGeneratedMedia &&
-      !liveReasoningAfterTools &&
-      (last.kind === 'reasoning' || last.kind === 'execution') &&
-      (kind === 'reasoning' || kind === 'execution')
-    ) {
-      if (last.kind !== kind) last.kind = 'execution'
-      last.blocks.push(block)
-      continue
-    }
-
+    // Only adjacent entries of the same kind may coalesce. Crossing a
+    // reasoning/tool/output boundary would erase when that transition happened
+    // and turn the chronological message chain into a tools-at-the-top bucket.
     if (last && !followsGeneratedMedia && last.kind === kind) {
       last.blocks.push(block)
       continue

@@ -240,7 +240,7 @@ describe('MessageTimeline tool summaries', () => {
     ).toBe('Read background shell 2mcorxhe sleep 15 && echo "Hello from background!"')
   })
 
-  it('coalesces reasoning and tools into one activity phase until visible text appears', () => {
+  it('preserves reasoning, tool, and text boundaries in chronological order', () => {
     const sections = groupProcessSections([
       { kind: 'reasoning', id: 'reasoning_1', text: 'inspect the code' },
       toolBlock({ id: 'tool_read', summary: 'read: file', meta: { toolName: 'read' } }),
@@ -254,8 +254,16 @@ describe('MessageTimeline tool summaries', () => {
       ids: section.blocks.map((block) => block.id)
     }))).toEqual([
       {
+        kind: 'reasoning',
+        ids: ['reasoning_1']
+      },
+      {
         kind: 'execution',
-        ids: ['reasoning_1', 'tool_read', 'reasoning_2']
+        ids: ['tool_read']
+      },
+      {
+        kind: 'reasoning',
+        ids: ['reasoning_2']
       },
       {
         kind: 'output',
@@ -268,7 +276,7 @@ describe('MessageTimeline tool summaries', () => {
     ])
   })
 
-  it('keeps live reasoning out of a completed tool batch so thinking does not eat the summary', () => {
+  it('keeps live reasoning after a completed tool batch as the next timeline phase', () => {
     const sections = groupProcessSections([
       toolBlock({ id: 'tool_read', summary: 'read: file', meta: { toolName: 'read' } }),
       toolBlock({ id: 'tool_grep', summary: 'grep: search', meta: { toolName: 'grep' } }),
@@ -425,7 +433,7 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
     ])
   })
 
-  it('renders active generated work before the merged visible assistant reply without a duplicate', () => {
+  it('renders active text and generated work in chronological order without a duplicate', () => {
     const html = renderToStaticMarkup(
       createElement(ConversationTurn, {
         turn: {
@@ -459,8 +467,8 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
     expect(html).toContain(placement)
     expect(html).not.toContain('data-generated-files-placement="turn"')
     expect((html.match(/data-generated-files-placement=/g) ?? []).length).toBe(1)
-    expect(html.indexOf(placement)).toBeLessThan(html.indexOf('Preparing the image now.'))
-    expect(html.indexOf('Preparing the image now.')).toBeLessThan(html.indexOf('Checking the rendered result.'))
+    expect(html.indexOf('Preparing the image now.')).toBeLessThan(html.indexOf(placement))
+    expect(html.indexOf(placement)).toBeLessThan(html.indexOf('Checking the rendered result.'))
   })
 
   it('moves a completed generated image below the final assistant content', () => {
@@ -984,7 +992,7 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
     expect(html).not.toContain('grep detail should stay tucked away')
   })
 
-  it('keeps the completed tool summary visible while live thinking stays at the turn bottom', () => {
+  it('keeps completed tools, live thinking, and live text on one ordered timeline', () => {
     const turn = {
       user: {
         kind: 'user' as const,
@@ -1022,7 +1030,9 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
     expect(html).toContain('发现阻塞项：继续审阅。')
     expect(html).toMatch(/Thinking|思考中|thinkingNow/)
     expect(html.indexOf('Used 2 tools')).toBeLessThan(html.search(/Thinking|思考中|thinkingNow/))
-    expect(html.indexOf('发现阻塞项：继续审阅。')).toBeLessThan(html.search(/Thinking|思考中|thinkingNow/))
+    expect(html.search(/Thinking|思考中|thinkingNow/)).toBeLessThan(
+      html.indexOf('发现阻塞项：继续审阅。')
+    )
   })
 
   it('auto-expands pending request_user_input while keeping other tool details tucked away', () => {
@@ -1301,10 +1311,67 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
     )
 
     expect(html).toContain('I found the rendering path and am checking the active state.')
-    expect(html).toContain('Used 2 tools')
+    expect(html).toContain('Read')
+    expect(html).toContain('Search')
+    expect(html).not.toContain('Used 2 tools')
+    expect(html.indexOf('/tmp/project/src/flow.ts')).toBeLessThan(
+      html.indexOf('I found the rendering path and am checking the active state.')
+    )
+    expect(html.indexOf('I found the rendering path and am checking the active state.')).toBeLessThan(
+      html.indexOf('workExpanded')
+    )
     expect(html).not.toContain('internal reasoning should stay collapsed')
     expect(html).not.toContain('completed read detail should stay collapsed')
     expect(html).not.toContain('running search detail should stay collapsed')
+  })
+
+  it('auto-folds completed work and leaves only the final assistant text visible', () => {
+    const html = renderToStaticMarkup(
+      createElement(ConversationTurn, {
+        turn: {
+          user: {
+            kind: 'user',
+            id: 'user_completed_chain',
+            text: 'finish the investigation'
+          },
+          blocks: [
+            {
+              kind: 'reasoning',
+              id: 'reasoning_completed_chain',
+              text: 'intermediate reasoning'
+            },
+            {
+              kind: 'assistant',
+              id: 'assistant_progress_chain',
+              text: 'I am checking the relevant path.'
+            },
+            toolBlock({
+              id: 'tool_completed_chain',
+              summary: 'read: relevant path',
+              meta: { toolName: 'read' },
+              filePath: '/tmp/project/src/path.ts'
+            }),
+            {
+              kind: 'assistant',
+              id: 'assistant_final_chain',
+              text: 'The final answer is ready.'
+            }
+          ]
+        },
+        isProcessing: false,
+        liveReasoning: '',
+        live: '',
+        filePreviewWorkspaceRoot: '/tmp/project',
+        viewportRef: { current: null }
+      })
+    )
+
+    expect(html).toContain('The final answer is ready.')
+    expect(html).toContain('ds-chat-answer')
+    expect(html).toContain('aria-expanded="false"')
+    expect(html).not.toContain('I am checking the relevant path.')
+    expect(html).not.toContain('intermediate reasoning')
+    expect(html).not.toContain('/tmp/project/src/path.ts')
   })
 
   it('still expands live work automatically when an approval needs attention', () => {
@@ -1615,17 +1682,15 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
     expect(html).toMatch(/composerReviewChanges|Review|审查/)
   })
 
-  it('renders the live assistant bubble while busy is true (streaming period)', () => {
+  it('renders live assistant text inside the process timeline while busy', () => {
     // Streaming period: the user has just sent a turn, the agent is
     // running, and the SSE has streamed some `live` text into the chat
     // store. The chat view must surface the streamed text immediately
     // (e.g. for the Feishu bot case), not wait until turn_completed.
     //
-    // We assert against the `ds-chat-answer` class which is only emitted
-    // by the live assistant `MessageBubble`. The process-section fold
-    // in `deriveTurnSections` would render the same text via
-    // `ProcessSectionRow`, so a plain text assertion is not specific
-    // enough — we want the actual `live-assistant` bubble here.
+    // While active, streamed text belongs to the same chronological process
+    // as reasoning and tools. It becomes the outside answer bubble only after
+    // turn completion.
     const blocks: ChatBlock[] = [
       {
         kind: 'user',
@@ -1651,7 +1716,7 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
       })
     )
 
-    expect(html).toContain('ds-chat-answer')
     expect(html).toContain('hello')
+    expect(html).not.toContain('ds-chat-answer')
   })
 })

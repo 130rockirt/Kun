@@ -1053,17 +1053,6 @@ export function ConversationTurn({
     () => processSections.filter((section) => section.kind === 'reasoning').length,
     [processSections]
   )
-  // Show the live assistant bubble whenever the SSE has streamed any text
-  // into `live`. We deliberately do NOT gate on `isProcessing`: the
-  // live activity rows already cover "the agent is working", and hiding the
-  // streaming text here causes real-time updates
-  // (Feishu bot streaming) to appear only after turn_completed, which the
-  // user perceives as a long delay.
-  // Note: `live` is the generic SSE sink output across ALL channels
-  // (Kun runtime turns, claw channel replies from feishu/weixin/etc),
-  // not feishu-specific. Removing the !isProcessing gate is intentional
-  // for all streaming paths, not just feishu.
-  const showLiveAssistant = !!liveContent.trim()
   const forkTurnId =
     turn.user?.turnId?.trim() ||
     [...assistantContentBlocks].reverse().find((block) => block.turnId?.trim())?.turnId?.trim() ||
@@ -1078,19 +1067,15 @@ export function ConversationTurn({
       ? assistantContentBlocks[assistantContentBlocks.length - 1]?.id
       : undefined
 
-  // During a live turn, activity phases stay visible as one-line loading rows
-  // and intermediate assistant text remains readable between them. Completed
-  // work folds back into the turn-level summary.
+  // During a live turn, assistant text, reasoning, and tools share one ordered
+  // process timeline. Once complete, that timeline folds by default and only
+  // the final assistant text remains outside it.
 
   const hasProcess =
     workProcessBlocks.length > 0 ||
     (runtimeErrorBlocks.length > 0 && typeof durationMs === 'number')
-  // Live thinking / running chrome is independent of process sections and
-  // always renders at the turn bottom so it cannot interleave above text
-  // or replace completed tool summaries.
-  const showLiveThinking = isProcessing && !!liveProcessText.trim()
   const showLiveProgress =
-    isProcessing && !onlyCompactionProcess && !showLiveThinking
+    isProcessing && !onlyCompactionProcess && !liveProcessText.trim()
   const liveToolBlock = useMemo(
     () => [...workProcessBlocks].reverse().find(
       (block): block is Extract<ChatBlock, { kind: 'tool' }> =>
@@ -1194,13 +1179,6 @@ export function ConversationTurn({
         />
       ))}
 
-      {showLiveAssistant ? (
-        <MessageBubble
-          block={{ kind: 'assistant', id: 'live-assistant', text: liveContent }}
-          allowThreadActions={allowMainThreadActions}
-        />
-      ) : null}
-
       {!isProcessing ? (
         <GeneratedFilesPanel blocks={generatedFileBlocks} placement="turn" />
       ) : null}
@@ -1214,10 +1192,6 @@ export function ConversationTurn({
       {runtimeErrorBlocks.map((block) => (
         <TimelineRuntimeError key={block.id} block={block} />
       ))}
-
-      {showLiveThinking ? (
-        <LiveTurnThinkingRow />
-      ) : null}
 
       {showLiveProgress ? (
         <LiveTurnProgressRow tool={liveToolBlock} />
@@ -1255,11 +1229,6 @@ export function ConversationTurn({
       ))}
     </div>
   )
-}
-
-function LiveTurnThinkingRow(): ReactElement {
-  const { t } = useTranslation('common')
-  return <LiveTurnActivityRow label={t('thinkingNow')} />
 }
 
 function LiveTurnProgressRow({
