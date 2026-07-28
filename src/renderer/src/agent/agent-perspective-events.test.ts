@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { ModelRequestTraceRecord } from './model-request-traces'
 import {
+  AGENT_PERSPECTIVE_SYSTEM_ROUND_ID,
+  groupAgentPerspectiveEvents,
   isTitleGenerationRequest,
   parseSemanticRequest,
   projectAgentPerspectiveEvents
@@ -38,6 +40,31 @@ function trace(
 }
 
 describe('Agent Perspective semantic projection', () => {
+  it('groups events by turn with newest rounds and newest steps first', () => {
+    const oldest = trace('1', { model: 'test', messages: [] }, { turnId: 'turn-a' })
+    const newerSameTurn = trace('2', { model: 'test', messages: [] }, { turnId: 'turn-a' })
+    const newestTurn = trace('3', { model: 'test', messages: [] }, { turnId: 'turn-b' })
+    const title = trace('4', {
+      model: 'small-model',
+      messages: [{ role: 'system', content: 'You generate a concise title for a chat conversation.' }]
+    }, {
+      turnId: 'turn-b_title',
+      decoded: { text: 'Title', reasoning: '', toolCalls: [] }
+    })
+
+    const rounds = groupAgentPerspectiveEvents(
+      projectAgentPerspectiveEvents([newerSameTurn, title, oldest, newestTurn])
+    )
+
+    expect(rounds.map((round) => round.id)).toEqual([
+      'turn-b',
+      'turn-a',
+      AGENT_PERSPECTIVE_SYSTEM_ROUND_ID
+    ])
+    expect(rounds[1]?.events.map((event) => event.record.sequence)).toEqual([2, 1])
+    expect(rounds[2]).toMatchObject({ system: true, turnId: null })
+  })
+
   it('extracts the Chat Completions request shape used by custom endpoints too', () => {
     const parsed = parseSemanticRequest(trace('1', {
       model: 'chat-model',

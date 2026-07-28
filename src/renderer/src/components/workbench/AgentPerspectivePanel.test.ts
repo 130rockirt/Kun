@@ -120,17 +120,19 @@ describe('AgentPerspectivePanel', () => {
 
     const tabs = renderer.root.findAll((node) => node.props.role === 'tab')
     expect(tabs.map(textContent)).toEqual([
-      'Semantic request', 'Raw request', 'Response', 'Stream events', 'Timing'
+      'Summary', 'Input', 'Output', 'Technical details'
     ])
     expect(tabs[0]?.props['aria-selected']).toBe(true)
     expect(renderer.root.findByProps({ 'aria-label': 'Refresh requests' })).toBeDefined()
     expect(textContent(renderer.root)).toContain('LLM request')
+
+    act(() => tabs[1]?.props.onClick())
     expect(textContent(renderer.root)).toContain('System prompt')
     expect(textContent(renderer.root)).toContain('Tool definitions')
     expect(textContent(renderer.root)).toContain('Inspect this request')
     expect(textContent(renderer.root)).toContain('read_file')
 
-    act(() => tabs[1]?.props.onClick())
+    act(() => tabs[3]?.props.onClick())
     const requestBody = renderer.root.findByProps({ 'aria-label': 'Request body' })
     expect(requestBody.props.value).toContain('"model": "deepseek-chat"')
     const renderedText = textContent(renderer.root)
@@ -195,6 +197,8 @@ describe('AgentPerspectivePanel', () => {
       }))
     })
 
+    const tabs = renderer.root.findAll((node) => node.props.role === 'tab')
+    act(() => tabs[1]?.props.onClick())
     const rendered = textContent(renderer.root)
     expect(rendered).toContain('Kun Gemini system prompt.')
     expect(rendered).toContain('Inspect Gemini semantics')
@@ -215,6 +219,8 @@ describe('AgentPerspectivePanel', () => {
       }))
     })
 
+    const tabs = renderer.root.findAll((node) => node.props.role === 'tab')
+    act(() => tabs[1]?.props.onClick())
     const panelRoot = renderer.root.findAllByType('div').find((node) =>
       String(node.props.className).includes('bg-ds-sidebar text-ds-ink')
     )
@@ -254,6 +260,8 @@ describe('AgentPerspectivePanel', () => {
       }))
     })
 
+    const tabs = renderer.root.findAll((node) => node.props.role === 'tab')
+    act(() => tabs[1]?.props.onClick())
     const kunSummary = renderer.root.findByProps({ 'aria-label': 'Toggle Kun system tools' })
     const mcpSummary = renderer.root.findByProps({ 'aria-label': 'Toggle MCP tools' })
     const extensionSummary = renderer.root.findByProps({ 'aria-label': 'Toggle Extensions tools' })
@@ -302,11 +310,59 @@ describe('AgentPerspectivePanel', () => {
       }))
     })
 
+    const toolRow = renderer.root.findByProps({
+      'data-event-id': 'tool:trace-1:call-schedule'
+    })
+    act(() => toolRow.props.onClick())
     const rendered = textContent(renderer.root)
     expect(rendered).toContain('Tool source')
     expect(rendered).toContain('MCP · gui_schedule')
     expect(rendered).toContain('Kun managed')
     expect(rendered).toContain('call-schedule')
+  })
+
+  it('renders newest-first turn groups and an infinite-scroll loading sentinel', () => {
+    const state = useTraces()
+    const older = {
+      ...state.records[0],
+      id: 'trace-old',
+      sequence: 1,
+      turnId: 'turn-old',
+      startedAt: '2026-07-20T00:00:00.000Z'
+    }
+    const newer = {
+      ...state.records[0],
+      id: 'trace-new',
+      sequence: 2,
+      turnId: 'turn-new',
+      startedAt: '2026-07-20T00:01:00.000Z'
+    }
+    useTraces.mockReturnValue({
+      ...state,
+      records: [older, newer],
+      selectedId: 'trace-new',
+      selected: newer,
+      nextCursor: 'older-cursor',
+      loadingOlder: true
+    })
+
+    let renderer!: ReactTestRenderer
+    act(() => {
+      renderer = create(createElement(AgentPerspectivePanel, {
+        threadId: 'thread-1',
+        active: true,
+        threadRunning: false
+      }))
+    })
+
+    const groups = renderer.root.findAll((node) => Boolean(node.props['data-round-id']))
+    expect(groups.map((node) => node.props['data-round-id'])).toEqual(['turn-new', 'turn-old'])
+    expect(textContent(renderer.root)).toContain('Newest first')
+    expect(textContent(groups[0]!)).toContain('Latest round')
+    expect(textContent(renderer.root)).toContain('Loading earlier rounds…')
+    expect(renderer.root.findByProps({
+      'data-testid': 'agent-perspective-round-scroller'
+    })).toBeDefined()
   })
 
   it('shows delegated SDK continuity, context ownership, and capability limits', () => {

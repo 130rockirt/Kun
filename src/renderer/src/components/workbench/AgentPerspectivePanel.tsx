@@ -7,7 +7,6 @@ import {
   CheckCircle2,
   ChevronDown,
   Clipboard,
-  Clock3,
   FileText,
   Hammer,
   LoaderCircle,
@@ -21,6 +20,7 @@ import {
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
 import {
+  groupAgentPerspectiveEvents,
   projectAgentPerspectiveEvents,
   usageNumber,
   type AgentPerspectiveEvent,
@@ -43,25 +43,23 @@ import type {
   ModelRequestTraceHeaders,
   ModelRequestTraceRecord
 } from '../../agent/model-request-traces'
+import { AgentPerspectiveRoundList } from './AgentPerspectiveRoundList'
 import { useModelRequestTraces } from './useModelRequestTraces'
 
-type DetailSection = 'semantic' | 'raw_request' | 'response' | 'stream' | 'timing'
-type EventFilter = 'all' | AgentPerspectiveEventKind
+type DetailSection = 'summary' | 'input' | 'output' | 'technical'
+type EventFilter = 'rounds' | 'errors'
 type BodyMode = 'pretty' | 'raw'
 
 const SECTION_KEYS: ReadonlyArray<{ id: DetailSection; label: string }> = [
-  { id: 'semantic', label: 'agentPerspectiveSemanticRequest' },
-  { id: 'raw_request', label: 'agentPerspectiveRawRequest' },
-  { id: 'response', label: 'agentPerspectiveResponse' },
-  { id: 'stream', label: 'agentPerspectiveStreamEvents' },
-  { id: 'timing', label: 'agentPerspectiveTiming' }
+  { id: 'summary', label: 'agentPerspectiveSummary' },
+  { id: 'input', label: 'agentPerspectiveInput' },
+  { id: 'output', label: 'agentPerspectiveOutput' },
+  { id: 'technical', label: 'agentPerspectiveTechnicalDetails' }
 ]
 
 const FILTER_KEYS: ReadonlyArray<{ id: EventFilter; label: string }> = [
-  { id: 'all', label: 'agentPerspectiveFilterAll' },
-  { id: 'llm_request', label: 'agentPerspectiveFilterLlm' },
-  { id: 'tool_call', label: 'agentPerspectiveFilterTools' },
-  { id: 'title_generation', label: 'agentPerspectiveFilterTitles' }
+  { id: 'rounds', label: 'agentPerspectiveFilterRounds' },
+  { id: 'errors', label: 'agentPerspectiveFilterErrors' }
 ]
 
 export function AgentPerspectivePanel({
@@ -76,27 +74,32 @@ export function AgentPerspectivePanel({
   const { t } = useTranslation('common')
   const traces = useModelRequestTraces({ threadId, visible: active, threadRunning })
   const events = useMemo(() => projectAgentPerspectiveEvents(traces.records), [traces.records])
-  const [section, setSection] = useState<DetailSection>('semantic')
-  const [filter, setFilter] = useState<EventFilter>('all')
+  const rounds = useMemo(() => groupAgentPerspectiveEvents(events), [events])
+  const [section, setSection] = useState<DetailSection>('summary')
+  const [filter, setFilter] = useState<EventFilter>('rounds')
   const [query, setQuery] = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null)
 
-  const visibleEvents = useMemo(() => {
+  const visibleRounds = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase()
-    return events.filter((event) => {
-      if (filter !== 'all' && event.kind !== filter) return false
-      return !needle || eventSearchText(event).toLocaleLowerCase().includes(needle)
+    return rounds.flatMap((round) => {
+      const matchingEvents = round.events.filter((event) => {
+        if (filter === 'errors' && !requestFailed(event.record)) return false
+        return !needle || eventSearchText(event).toLocaleLowerCase().includes(needle)
+      })
+      return matchingEvents.length ? [{ ...round, events: matchingEvents }] : []
     })
-  }, [events, filter, query])
+  }, [filter, query, rounds])
 
-  const selected = visibleEvents.find((event) => event.id === selectedEventId) ?? visibleEvents.at(-1) ?? null
+  const visibleEvents = visibleRounds.flatMap((round) => round.events)
+  const selected = visibleEvents.find((event) => event.id === selectedEventId) ?? visibleEvents[0] ?? null
   const requestCount = events.filter((event) => event.kind !== 'tool_call').length
 
   useEffect(() => {
     setSelectedEventId(null)
-    setSection('semantic')
-    setFilter('all')
+    setSection('summary')
+    setFilter('rounds')
     setQuery('')
     setSearchOpen(false)
   }, [threadId])
@@ -107,7 +110,7 @@ export function AgentPerspectivePanel({
     }
   }, [events, selectedEventId])
 
-  useEffect(() => setSection('semantic'), [selected?.id])
+  useEffect(() => setSection('summary'), [selected?.id])
 
   return (
     <div className="ds-no-drag flex h-full min-h-0 flex-col bg-ds-sidebar text-ds-ink">
@@ -185,38 +188,28 @@ export function AgentPerspectivePanel({
       ) : traces.records.length === 0 ? (
         <EmptyState text={t('agentPerspectiveEmpty')} />
       ) : (
-        <div className="grid min-h-0 flex-1 grid-cols-[180px_minmax(0,1fr)]">
-          <aside className="flex min-h-0 flex-col border-r border-ds-border-muted bg-ds-surface-subtle/30">
-            <div className="min-h-0 flex-1 overflow-y-auto px-1.5 py-2">
-              {visibleEvents.length ? visibleEvents.map((event, index) => (
-                <TimelineItem
-                  key={event.id}
-                  event={event}
-                  index={index}
-                  last={index === visibleEvents.length - 1}
-                  selected={event.id === selected?.id}
-                  onSelect={() => {
-                    setSelectedEventId(event.id)
-                    traces.select(event.record.id)
-                  }}
-                />
-              )) : (
-                <p className="px-2 py-8 text-center text-[10px] leading-4 text-ds-faint">
-                  {t('agentPerspectiveNoMatchingEvents')}
-                </p>
-              )}
-            </div>
-            {traces.nextCursor ? (
-              <button
-                type="button"
-                onClick={traces.loadOlder}
-                disabled={traces.loadingOlder}
-                className="m-1.5 rounded-md border border-ds-border-muted px-2 py-1.5 text-[10px] text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:opacity-50"
-              >
-                {traces.loadingOlder ? t('agentPerspectiveLoading') : t('agentPerspectiveLoadOlder')}
-              </button>
-            ) : null}
-          </aside>
+        <div className="grid min-h-0 flex-1 grid-cols-[220px_minmax(0,1fr)]">
+          {visibleRounds.length ? (
+            <AgentPerspectiveRoundList
+              rounds={visibleRounds}
+              activityEvents={events}
+              selectedEventId={selected?.id ?? null}
+              threadId={threadId}
+              nextCursor={traces.nextCursor}
+              loadingOlder={traces.loadingOlder}
+              onLoadOlder={traces.loadOlder}
+              onSelect={(event) => {
+                setSelectedEventId(event.id)
+                traces.select(event.record.id)
+              }}
+            />
+          ) : (
+            <aside className="border-r border-ds-border-muted bg-ds-surface-subtle/25">
+              <p className="px-3 py-8 text-center text-[10px] leading-4 text-ds-faint">
+                {t('agentPerspectiveNoMatchingEvents')}
+              </p>
+            </aside>
+          )}
 
           <main className="flex min-h-0 min-w-0 flex-col bg-ds-card/35">
             {selected ? (
@@ -269,67 +262,6 @@ export function AgentPerspectivePanel({
         {t('agentPerspectivePrivacyNotice')}
       </div>
     </div>
-  )
-}
-
-function TimelineItem({
-  event,
-  index,
-  last,
-  selected,
-  onSelect
-}: {
-  event: AgentPerspectiveEvent
-  index: number
-  last: boolean
-  selected: boolean
-  onSelect: () => void
-}): ReactElement {
-  const { t } = useTranslation('common')
-  const style = eventStyle(event.kind)
-  const Icon = style.Icon
-  return (
-    <button
-      type="button"
-      onClick={onSelect}
-      className={`relative mb-0.5 flex w-full gap-2 rounded-lg px-1.5 py-2 text-left transition ${
-        selected ? 'bg-ds-card shadow-sm ring-1 ring-ds-border-muted' : 'hover:bg-ds-hover'
-      }`}
-      aria-pressed={selected}
-    >
-      <span className="relative flex w-5 shrink-0 justify-center">
-        {!last ? <span className="absolute bottom-[-12px] top-4 w-px bg-ds-border-muted" /> : null}
-        <span className={`relative z-10 flex h-5 w-5 items-center justify-center rounded-md ${style.iconClass}`}>
-          <Icon className="h-3 w-3" aria-hidden />
-        </span>
-      </span>
-      <span className="min-w-0 flex-1">
-        <span className="flex items-center gap-1">
-          <span className={`truncate text-[9px] font-semibold ${style.textClass}`}>
-            {t(style.label)}
-          </span>
-          <span className="ml-auto shrink-0 text-[8px] tabular-nums text-ds-faint">#{index + 1}</span>
-        </span>
-        <span className="mt-0.5 block truncate text-[9px] text-ds-muted" title={eventSubtitle(event)}>
-          {eventSubtitle(event)}
-        </span>
-        {event.record.delegated ? (
-          <span className="mt-1 inline-flex rounded-full border border-violet-500/20 bg-violet-500/8 px-1.5 py-0.5 text-[8px] font-medium text-violet-700 dark:text-violet-300">
-            {t(delegatedPhaseKey(event.record.delegated.phase))}
-          </span>
-        ) : null}
-        {event.kind === 'tool_call' ? (
-          <span className="mt-1 flex min-w-0 flex-wrap gap-1">
-            <ToolProvenanceBadges provenance={event.provenance} compact />
-          </span>
-        ) : null}
-        <span className="mt-1 flex items-center gap-1 text-[8px] text-ds-faint">
-          <Clock3 className="h-2.5 w-2.5" aria-hidden />
-          {formatTimestamp(event.startedAt)}
-          <StatusDot record={event.record} />
-        </span>
-      </span>
-    </button>
   )
 }
 
@@ -389,13 +321,93 @@ function EventHero({ event }: { event: AgentPerspectiveEvent }): ReactElement {
 }
 
 function EventDetail({ event, section }: { event: AgentPerspectiveEvent; section: DetailSection }): ReactElement {
-  if (section === 'raw_request') return <RawRequest record={event.record} />
-  if (section === 'response') return <ResponseDetail record={event.record} />
-  if (section === 'stream') return <StreamDetail record={event.record} />
-  if (section === 'timing') return <TimingDetail record={event.record} />
+  if (section === 'summary') return <EventSummary event={event} />
+  if (section === 'output') return <ResponseDetail record={event.record} />
+  if (section === 'technical') return <TechnicalDetail record={event.record} />
+  if (event.kind === 'tool_call') return <ToolCallDetail event={event} />
+  if (event.kind === 'title_generation') {
+    return <SemanticRequestDetail semantic={event.semantic} record={event.record} />
+  }
+  return <SemanticRequestDetail semantic={event.semantic} record={event.record} />
+}
+
+function EventSummary({ event }: { event: AgentPerspectiveEvent }): ReactElement {
+  const { t } = useTranslation('common')
   if (event.kind === 'tool_call') return <ToolCallDetail event={event} />
   if (event.kind === 'title_generation') return <TitleGenerationDetail event={event} />
-  return <SemanticRequestDetail semantic={event.semantic} record={event.record} />
+
+  const record = event.record
+  const usage = record.decoded?.usage
+  const cacheHitRate = usageNumber(usage, 'cacheHitRate')
+  const error = record.decoded?.error || record.error ||
+    (record.response && record.response.status >= 400
+      ? `HTTP ${record.response.status} ${record.response.statusText}`
+      : '')
+  const output = record.decoded?.text || record.decoded?.reasoning || ''
+  const composition = requestComposition(event.semantic, record)
+  const metrics: Array<[string, string]> = [
+    [
+      t('agentPerspectiveStatus'),
+      record.response ? `HTTP ${record.response.status}` : statusLabel(t, record)
+    ],
+    [
+      t('agentPerspectiveTimeToHeaders'),
+      record.timeToHeadersMs === undefined ? '—' : formatMilliseconds(record.timeToHeadersMs)
+    ],
+    [
+      t('agentPerspectiveDuration'),
+      record.durationMs === undefined ? '—' : formatMilliseconds(record.durationMs)
+    ],
+    [
+      t('agentPerspectiveCacheHitLabel'),
+      cacheHitRate === undefined ? '—' : `${Math.round(cacheHitRate * 100)}%`
+    ]
+  ]
+
+  return (
+    <div className="space-y-4">
+      {error ? (
+        <section className="border-l-2 border-red-500 px-3 py-1.5">
+          <h4 className="text-[11px] font-semibold text-red-600 dark:text-red-300">{error}</h4>
+          <p className="mt-1 text-[9px] text-ds-muted">
+            {record.status === 'transport_error'
+              ? t('agentPerspectiveTransportError')
+              : t('agentPerspectiveModelError')}
+          </p>
+        </section>
+      ) : null}
+      {record.delegated ? <DelegatedTraceSummary delegated={record.delegated} /> : null}
+      <dl className="grid grid-cols-2 gap-x-5 gap-y-3 border-y border-ds-border-muted py-3 sm:grid-cols-4">
+        {metrics.map(([label, value]) => (
+          <div key={label} className="min-w-0">
+            <dt className="text-[8px] text-ds-faint">{label}</dt>
+            <dd className="mt-1 truncate text-[11px] font-semibold tabular-nums">{value}</dd>
+          </div>
+        ))}
+      </dl>
+      <SummaryComposition items={composition} />
+      {output ? (
+        <section>
+          <h4 className="text-[9px] font-semibold uppercase tracking-wide text-ds-muted">
+            {t('agentPerspectiveKeyOutput')}
+          </h4>
+          <p className="mt-2 line-clamp-4 whitespace-pre-wrap break-words text-[10px] leading-5 text-ds-ink">
+            {output}
+          </p>
+        </section>
+      ) : null}
+    </div>
+  )
+}
+
+function TechnicalDetail({ record }: { record: ModelRequestTraceRecord }): ReactElement {
+  return (
+    <div className="space-y-5">
+      <TimingDetail record={record} />
+      <RawRequest record={record} />
+      <StreamDetail record={record} />
+    </div>
+  )
 }
 
 function SemanticRequestDetail({
@@ -927,6 +939,30 @@ function CompositionBar({ items }: { items: Array<{ label: string; value: number
   )
 }
 
+function SummaryComposition({ items }: { items: Array<{ label: string; value: number; color: string }> }): ReactElement {
+  const { t } = useTranslation('common')
+  const total = items.reduce((sum, item) => sum + item.value, 0)
+  return (
+    <section>
+      <h4 className="text-[9px] font-semibold uppercase tracking-wide text-ds-muted">
+        {t('agentPerspectiveRequestComposition')}
+      </h4>
+      <div className="mt-2 flex h-1.5 overflow-hidden rounded-full bg-ds-surface-subtle">
+        {items.filter((item) => item.value > 0).map((item) => (
+          <span
+            key={item.label}
+            className={item.color}
+            style={{ width: `${Math.max(2, item.value / Math.max(1, total) * 100)}%` }}
+          />
+        ))}
+      </div>
+      <p className="mt-2 truncate text-[8px] text-ds-faint">
+        {items.map((item) => `${item.label} ${Math.round(item.value / Math.max(1, total) * 100)}%`).join(' · ')}
+      </p>
+    </section>
+  )
+}
+
 function SemanticSection({
   title,
   count,
@@ -1402,6 +1438,11 @@ function formatTimestamp(value: string, full = false): string {
   return new Intl.DateTimeFormat(undefined, full
     ? { dateStyle: 'medium', timeStyle: 'medium' }
     : { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(date)
+}
+
+function formatMilliseconds(value: number): string {
+  if (value < 1_000) return `${Math.round(value)} ms`
+  return `${(value / 1_000).toFixed(value < 10_000 ? 1 : 0)} s`
 }
 
 function attemptLabel(

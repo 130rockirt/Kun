@@ -86,6 +86,17 @@ export type AgentPerspectiveEvent =
   | AgentTitleGenerationEvent
   | AgentToolCallEvent
 
+export type AgentPerspectiveRound = {
+  id: string
+  turnId: string | null
+  system: boolean
+  events: AgentPerspectiveEvent[]
+  startedAt: string
+  latestAt: string
+}
+
+export const AGENT_PERSPECTIVE_SYSTEM_ROUND_ID = '__agent_perspective_system_tasks__'
+
 const TITLE_SYSTEM_SIGNATURE = 'You generate a concise title for a chat conversation.'
 const TITLE_TURN_SUFFIX = '_title'
 const STRUCTURAL_KEYS = new Set([
@@ -141,6 +152,38 @@ export function projectAgentPerspectiveEvents(
   return events
 }
 
+export function groupAgentPerspectiveEvents(
+  events: readonly AgentPerspectiveEvent[]
+): AgentPerspectiveRound[] {
+  const grouped = new Map<string, AgentPerspectiveEvent[]>()
+  for (const event of events) {
+    const key = event.kind === 'title_generation'
+      ? AGENT_PERSPECTIVE_SYSTEM_ROUND_ID
+      : event.record.turnId
+    const roundEvents = grouped.get(key) ?? []
+    roundEvents.push(event)
+    grouped.set(key, roundEvents)
+  }
+
+  return [...grouped.entries()]
+    .map(([id, roundEvents]) => {
+      const ordered = [...roundEvents].sort(newestEventFirst)
+      const system = id === AGENT_PERSPECTIVE_SYSTEM_ROUND_ID
+      return {
+        id,
+        turnId: system ? null : id,
+        system,
+        events: ordered,
+        startedAt: oldestEventAt(ordered),
+        latestAt: ordered[0]?.startedAt ?? ''
+      }
+    })
+    .sort((left, right) => {
+      if (left.system !== right.system) return left.system ? 1 : -1
+      return compareTimestamp(right.latestAt, left.latestAt) || right.id.localeCompare(left.id)
+    })
+}
+
 export function parseSemanticRequest(record: ModelRequestTraceRecord): SemanticRequest {
   let body: Record<string, unknown>
   try {
@@ -178,6 +221,27 @@ export function parseSemanticRequest(record: ModelRequestTraceRecord): SemanticR
         .filter(([key]) => !STRUCTURAL_KEYS.has(key))
         .map(([name, value]) => ({ name, value }))
   }
+}
+
+function newestEventFirst(left: AgentPerspectiveEvent, right: AgentPerspectiveEvent): number {
+  return compareTimestamp(right.startedAt, left.startedAt) ||
+    right.record.sequence - left.record.sequence ||
+    right.id.localeCompare(left.id)
+}
+
+function oldestEventAt(events: readonly AgentPerspectiveEvent[]): string {
+  let oldest = events[0]?.startedAt ?? ''
+  for (const event of events) {
+    if (compareTimestamp(event.startedAt, oldest) < 0) oldest = event.startedAt
+  }
+  return oldest
+}
+
+function compareTimestamp(left: string, right: string): number {
+  const leftMs = Date.parse(left)
+  const rightMs = Date.parse(right)
+  if (Number.isFinite(leftMs) && Number.isFinite(rightMs)) return leftMs - rightMs
+  return left.localeCompare(right)
 }
 
 export function isTitleGenerationRequest(
