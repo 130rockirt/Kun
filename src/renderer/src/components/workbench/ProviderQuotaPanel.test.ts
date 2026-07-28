@@ -15,6 +15,7 @@ describe('ProviderQuotaPanel', () => {
   })
 
   it('loads and renders configured providers with available and unsupported states', async () => {
+    const openExternal = vi.fn()
     const listProviderQuotas = vi.fn(async () => ({
       refreshedAt: '2027-01-15T08:00:00.000Z',
       entries: [{
@@ -22,17 +23,20 @@ describe('ProviderQuotaPanel', () => {
         providerName: 'DeepSeek Work',
         status: 'available' as const,
         source: 'DeepSeek balance API',
+        dashboardUrl: 'https://platform.deepseek.com/usage',
         metrics: [{
           id: 'balance',
           label: 'Account balance',
           unit: 'CNY',
-          remaining: 12.5
+          remaining: 12.5,
+          usedPercent: 25
         }],
         updatedAt: '2027-01-15T08:00:00.000Z'
       }, {
         providerId: 'custom',
         providerName: 'Custom provider',
         status: 'unsupported' as const,
+        dashboardUrl: 'https://models.example.com/dashboard',
         metrics: [],
         message: 'This provider does not expose a supported quota API in this version.'
       }]
@@ -40,7 +44,7 @@ describe('ProviderQuotaPanel', () => {
     vi.stubGlobal('window', {
       kunGui: {
         listProviderQuotas,
-        openExternal: vi.fn()
+        openExternal
       }
     })
 
@@ -60,7 +64,50 @@ describe('ProviderQuotaPanel', () => {
     const stopPropagation = vi.fn()
     scroller.props.onWheel({ stopPropagation })
     expect(stopPropagation).toHaveBeenCalledTimes(1)
+
+    const deepSeekToggle = renderer.root.findByProps({
+      'data-provider-quota-toggle': 'deepseek-work'
+    })
+    const customToggle = renderer.root.findByProps({
+      'data-provider-quota-toggle': 'custom'
+    })
+    expect(deepSeekToggle.props['aria-expanded']).toBe(false)
+    expect(customToggle.props['aria-expanded']).toBe(false)
+    expect(renderer.root.findAllByProps({
+      'data-provider-quota-details': 'deepseek-work'
+    })).toHaveLength(0)
+    expect(renderer.root.findAllByProps({ role: 'progressbar' })).toHaveLength(0)
     expect(JSON.stringify(renderer.toJSON())).toContain('12.5 CNY')
+
+    act(() => deepSeekToggle.props.onClick())
+    expect(renderer.root.findByProps({
+      'data-provider-quota-toggle': 'deepseek-work'
+    }).props['aria-expanded']).toBe(true)
+    expect(renderer.root.findByProps({
+      'data-provider-quota-toggle': 'custom'
+    }).props['aria-expanded']).toBe(false)
+    expect(renderer.root.findAllByProps({
+      'data-provider-quota-details': 'deepseek-work'
+    })).toHaveLength(1)
+    expect(renderer.root.findAllByProps({ role: 'progressbar' })).toHaveLength(1)
+
+    act(() => renderer.root.findByProps({
+      'aria-label': 'Open Custom provider dashboard'
+    }).props.onClick())
+    expect(openExternal).toHaveBeenCalledWith('https://models.example.com/dashboard')
+    expect(renderer.root.findByProps({
+      'data-provider-quota-toggle': 'custom'
+    }).props['aria-expanded']).toBe(false)
+
+    act(() => renderer.root.findByProps({
+      'data-provider-quota-toggle': 'custom'
+    }).props.onClick())
+    expect(renderer.root.findAllByProps({
+      'data-provider-quota-details': 'deepseek-work'
+    })).toHaveLength(1)
+    expect(renderer.root.findAllByProps({
+      'data-provider-quota-details': 'custom'
+    })).toHaveLength(1)
     act(() => renderer.unmount())
   })
 

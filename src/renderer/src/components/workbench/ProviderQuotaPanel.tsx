@@ -1,5 +1,6 @@
 import {
   AlertCircle,
+  ChevronRight,
   CircleOff,
   ExternalLink,
   Gauge,
@@ -7,7 +8,8 @@ import {
   Loader2,
   RefreshCw
 } from 'lucide-react'
-import { useCallback, useEffect, useState, type ReactElement } from 'react'
+import { useCallback, useEffect, useId, useState, type ReactElement } from 'react'
+import type { TFunction } from 'i18next'
 import { useTranslation } from 'react-i18next'
 import type {
   ProviderQuotaEntry,
@@ -175,29 +177,63 @@ function ProviderQuotaCard({
   onOpenDashboard: (url: string) => void
 }): ReactElement {
   const { t } = useTranslation('common')
+  const [expanded, setExpanded] = useState(false)
+  const detailsId = useId()
   const presentation = STATUS_PRESENTATION[entry.status]
   const StatusIcon = presentation.icon
+  const compactSummary = providerQuotaCompactSummary(entry, locale, t)
   return (
     <article
       data-provider-quota-status={entry.status}
-      className="rounded-[14px] border border-ds-border-muted bg-ds-card p-3 shadow-sm"
+      className="rounded-[14px] border border-ds-border-muted bg-ds-card p-1.5 shadow-sm"
     >
-      <div className="flex items-start gap-2.5">
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-1.5">
-            <h3 className="truncate text-[13px] font-semibold text-ds-ink">{entry.providerName}</h3>
-            <span className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9.5px] font-semibold ${presentation.className}`}>
-              <StatusIcon className="h-2.5 w-2.5" strokeWidth={2} />
-              {t(presentation.labelKey)}
-            </span>
+      <div className="flex items-stretch gap-1">
+        <button
+          type="button"
+          data-provider-quota-toggle={entry.providerId}
+          aria-expanded={expanded}
+          aria-controls={detailsId}
+          aria-label={t(
+            expanded ? 'providerQuotaCollapseDetails' : 'providerQuotaExpandDetails',
+            { provider: entry.providerName }
+          )}
+          onClick={() => setExpanded((value) => !value)}
+          className="group flex min-w-0 flex-1 items-center gap-2 rounded-xl px-2 py-2.5 text-left outline-none transition hover:bg-ds-hover focus-visible:ring-2 focus-visible:ring-accent/45"
+        >
+          <ChevronRight
+            aria-hidden="true"
+            className={`h-3.5 w-3.5 shrink-0 text-ds-faint transition-transform ${
+              expanded ? 'rotate-90 text-ds-muted' : ''
+            }`}
+            strokeWidth={1.9}
+          />
+          <div className="min-w-0 flex-1">
+            <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+              <h3
+                title={entry.providerName}
+                className="max-w-full truncate text-[12.5px] font-semibold text-ds-ink"
+              >
+                {entry.providerName}
+              </h3>
+              <span className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px] font-semibold ${presentation.className}`}>
+                <StatusIcon className="h-2.5 w-2.5" strokeWidth={2} />
+                {t(presentation.labelKey)}
+              </span>
+            </div>
+            <p className="mt-0.5 truncate font-mono text-[9px] text-ds-faint">{entry.providerId}</p>
           </div>
-          <p className="mt-0.5 truncate font-mono text-[9.5px] text-ds-faint">{entry.providerId}</p>
-        </div>
+          <p
+            title={compactSummary}
+            className="ml-auto max-w-[42%] truncate text-right text-[10.5px] font-medium leading-4 text-ds-muted"
+          >
+            {compactSummary}
+          </p>
+        </button>
         {entry.dashboardUrl ? (
           <button
             type="button"
             onClick={() => onOpenDashboard(entry.dashboardUrl!)}
-            className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-ds-faint transition hover:bg-ds-hover hover:text-ds-ink"
+            className="my-1.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-ds-faint transition hover:bg-ds-hover hover:text-ds-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/45"
             aria-label={t('providerQuotaOpenDashboard', { provider: entry.providerName })}
           >
             <ExternalLink className="h-3.5 w-3.5" strokeWidth={1.8} />
@@ -205,40 +241,83 @@ function ProviderQuotaCard({
         ) : null}
       </div>
 
-      {entry.summary ? (
-        <p className="mt-2 text-[11px] font-medium text-ds-muted">{entry.summary}</p>
-      ) : null}
+      {expanded ? (
+        <div
+          id={detailsId}
+          data-provider-quota-details={entry.providerId}
+          className="mx-2 border-t border-ds-border-muted px-1 pb-2 pt-2.5"
+        >
+          {entry.summary ? (
+            <p className="text-[11px] font-medium text-ds-muted">{entry.summary}</p>
+          ) : null}
 
-      {entry.status === 'available' ? (
-        entry.metrics.length > 0 ? (
-          <div className="mt-2.5 space-y-2">
-            {entry.metrics.map((metric) => (
-              <QuotaMetric key={metric.id} metric={metric} locale={locale} />
-            ))}
+          {entry.status === 'available' ? (
+            entry.metrics.length > 0 ? (
+              <div className={`${entry.summary ? 'mt-2' : ''} space-y-2`}>
+                {entry.metrics.map((metric) => (
+                  <QuotaMetric key={metric.id} metric={metric} locale={locale} />
+                ))}
+              </div>
+            ) : (
+              <p className="text-[11px] text-ds-muted">{t('providerQuotaNoMetrics')}</p>
+            )
+          ) : (
+            <p className="text-[11px] leading-4 text-ds-muted">
+              {entry.status === 'unsupported'
+                ? t('providerQuotaUnsupportedHint')
+                : entry.status === 'missing_credentials'
+                  ? entry.message || t('providerQuotaMissingCredentialsHint')
+                  : entry.message || t(presentation.labelKey)}
+            </p>
+          )}
+
+          <div className="mt-2.5 flex flex-wrap items-center justify-between gap-1 border-t border-ds-border-muted pt-2 text-[9.5px] text-ds-faint">
+            <span>{entry.source || t('providerQuotaUnsupportedSource')}</span>
+            {entry.updatedAt ? (
+              <span>{t('providerQuotaUpdated', {
+                time: formatQuotaDate(entry.updatedAt, locale)
+              })}</span>
+            ) : null}
           </div>
-        ) : (
-          <p className="mt-2 text-[11px] text-ds-muted">{t('providerQuotaNoMetrics')}</p>
-        )
-      ) : (
-        <p className="mt-2 text-[11px] leading-4 text-ds-muted">
-          {entry.status === 'unsupported'
-            ? t('providerQuotaUnsupportedHint')
-            : entry.status === 'missing_credentials'
-              ? t('providerQuotaMissingCredentialsHint')
-              : entry.message || t(presentation.labelKey)}
-        </p>
-      )}
-
-      <div className="mt-2.5 flex flex-wrap items-center justify-between gap-1 border-t border-ds-border-muted pt-2 text-[9.5px] text-ds-faint">
-        <span>{entry.source || t('providerQuotaUnsupportedSource')}</span>
-        {entry.updatedAt ? (
-          <span>{t('providerQuotaUpdated', {
-            time: formatQuotaDate(entry.updatedAt, locale)
-          })}</span>
-        ) : null}
-      </div>
+        </div>
+      ) : null}
     </article>
   )
+}
+
+function providerQuotaCompactSummary(
+  entry: ProviderQuotaEntry,
+  locale: string | undefined,
+  t: TFunction
+): string {
+  if (entry.status !== 'available') {
+    if (entry.message) return entry.message
+    if (entry.status === 'unsupported') return t('providerQuotaUnsupportedHint')
+    if (entry.status === 'missing_credentials') return t('providerQuotaMissingCredentialsHint')
+    return t('providerQuotaError')
+  }
+
+  const metric = entry.metrics[0]
+  if (metric) {
+    if (metric.remaining !== undefined) {
+      return `${formatQuotaValue(metric.remaining, metric.unit, locale)} ${t('providerQuotaRemaining')}`
+    }
+    if (metric.usedPercent !== undefined) {
+      return `${Math.round(metric.usedPercent)}% ${t('providerQuotaUsed')}`
+    }
+    if (metric.used !== undefined && metric.limit !== undefined) {
+      return `${formatQuotaValue(metric.used, metric.unit, locale)} / ${
+        formatQuotaValue(metric.limit, metric.unit, locale)
+      }`
+    }
+    if (metric.used !== undefined) {
+      return `${formatQuotaValue(metric.used, metric.unit, locale)} ${t('providerQuotaUsed')}`
+    }
+    if (metric.limit !== undefined) {
+      return `${formatQuotaValue(metric.limit, metric.unit, locale)} ${t('providerQuotaLimit')}`
+    }
+  }
+  return entry.summary || t('providerQuotaNoMetrics')
 }
 
 function QuotaMetric({

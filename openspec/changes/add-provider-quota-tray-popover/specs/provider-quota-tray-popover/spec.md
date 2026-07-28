@@ -142,3 +142,18 @@ The quota service SHALL recognize configured ChatGPT/Codex, Kimi Code, Grok, and
 #### Scenario: OpenCode Go has no local usage history
 - **WHEN** the OpenCode database is missing or has no `opencode-go` usage rows
 - **THEN** the service reports that OpenCode Go must be used locally first instead of marking the provider unsupported
+
+### Requirement: Workbench quota providers use compact disclosure
+The workbench provider-quota sidebar SHALL keep every provider's detail region collapsed by default while retaining a useful status and quota summary.
+
+#### Scenario: Sidebar first opens
+- **WHEN** the provider-quota sidebar renders a refreshed provider list
+- **THEN** every provider row shows its identity, status, primary summary, and dashboard action without rendering its full metric details
+
+#### Scenario: Expand one provider
+- **WHEN** the user activates a provider disclosure row
+- **THEN** that provider independently reveals its complete metrics, source, update time, and actionable state
+
+#### Scenario: Open provider dashboard from a collapsed row
+- **WHEN** the user activates the dashboard action
+- **THEN** the application opens the provider dashboard without changing the row's disclosure state

@@ -11,6 +11,7 @@ Kun's menu-bar icon currently opens a plain session/action menu, so provider all
 - Add manual refresh plus New Chat and Open Kun actions inside the popover.
 - Extend the normalized quota service with CodexBar-compatible read-only probes for
   ChatGPT/Codex, Kimi Code, Grok, and OpenCode Go subscription providers already configured in Settings.
+- Present the workbench quota sidebar as a compact accordion whose provider details are collapsed by default.
 - Hide the popover on blur or Escape, constrain it to the active display, and keep long quota content independently scrollable.
 - Adapt the shell and anchor calculation for Windows taskbars, multi-monitor work areas, high-contrast mode, and environments without compositor blur.
 - Use a dedicated renderer entry, preload bridge, and narrowly scoped IPC surface so the popover does not receive the full workbench API.

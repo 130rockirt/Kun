@@ -38,3 +38,10 @@
 - [x] 6.2 Register OpenCode Go in both Electron GUI and Kun/TUI quota services with an actionable missing-history state.
 - [x] 6.3 Add focused local-reader, GUI-service, and Kun-service regression tests.
 - [x] 6.4 Run focused tests, typecheck, build, lint, and `git diff --check`; commit only the OpenCode Go follow-up to local `develop`.
+
+## 7. Compact workbench quota accordion
+
+- [x] 7.1 Redesign workbench provider cards as compact, independently expandable disclosures that default to collapsed.
+- [x] 7.2 Keep status, primary quota/error summary, dashboard action, and accessible disclosure semantics visible in collapsed rows.
+- [x] 7.3 Add focused renderer tests for default collapse, independent expansion, and dashboard action behavior.
+- [x] 7.4 Run focused tests, typecheck, build, lint, and `git diff --check`; commit only the accordion follow-up to local `develop`.

@@ -65,6 +65,20 @@ The UI includes:
 
 Overview summarizes every provider without inventing a cross-provider percentage or balance total. Cost history and projected exhaustion from the CodexBar reference are omitted because the current contract does not supply authoritative data for them.
 
+### Keep workbench provider cards collapsed by default
+
+The workbench quota sidebar uses a compact accordion list instead of rendering
+every provider's complete metric collection at once. Each row keeps the provider
+identity, status, one truthful primary quota or error summary, and dashboard
+action visible. All detail regions start collapsed and expand independently when
+their disclosure control is activated. Expanded content reuses the existing
+metric, source, and update-time presentation without changing the normalized
+quota contract.
+
+The dashboard action remains a separate button so opening it cannot accidentally
+toggle the row. Native disclosure semantics (`aria-expanded` and
+`aria-controls`) keep the interaction keyboard and screen-reader accessible.
+
 ### Match CodexBar's read-only subscription sources
 
 The quota service recognizes the actual preset profile shape, where ordinary HTTP
@@ -106,6 +120,7 @@ Windows normally reports the notification-area icon at the bottom edge of a disp
 - [Windows can report an empty or edge-adjacent tray rectangle] → Fall back to a small pointer-centered anchor and resolve the display by rectangle before clamping to its work area.
 - [A blur event can fire while opening a provider dashboard] → Treat this as expected popover behavior and launch the dashboard through main-process IPC.
 - [Many providers can overflow the switcher] → Allow the switcher to wrap to a bounded grid and keep the detail region independently scrollable.
+- [Collapsed rows can hide important failures] → Keep status and a truncated actionable error summary visible even while details are collapsed.
 - [Provider names may be long or contain unsafe text] → Truncate visual labels, preserve accessible titles, and rely on React escaping plus the normalized bounded contract.
 - [Retained windows can show stale data] → Refresh on every show and retain old data only as an explicit fallback on error.
 - [The same quota service may perform several provider requests] → Keep the existing bounded concurrency and request timeouts; do not introduce background polling.
