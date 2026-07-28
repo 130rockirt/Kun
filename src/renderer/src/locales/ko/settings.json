@@ -83,7 +83,7 @@
   "terminalColorResetDesc": "복원은 기본 설정을 따릅니다.",
   "terminalColorResetButton": "재설정",
   "sectionLlmDebug": "LLM 요청 문제 해결",
-  "llmDebugDesc": "모델(시스템 프롬프트, 메시지, 도구)로 전송된 마지막 25개의 원시 요청 본문과 해당 원시 출력을 검사합니다. 메모리에만 보관되며 다시 시작하면 지워집니다.",
+  "llmDebugDesc": "모델로 전송된 최근 25개의 원시 요청과 출력을 확인합니다. 자격 증명은 가려지며 수집된 Agent 시점 콘텐츠는 이 기기에 비공개로 저장되고 대화 삭제 시 함께 제거됩니다.",
   "llmDebugEmpty": "아직 기록이 없습니다. 메시지를 보낸 다음 새로 고침을 클릭하세요.",
   "llmDebugRequest": "요청(모델에 전송된 HTTP 본문)",
   "llmDebugOutput": "출력",

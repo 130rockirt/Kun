@@ -83,7 +83,7 @@
   "terminalColorResetDesc": "ネイティブ設定に従って復元します。",
   "terminalColorResetButton": "リセット",
   "sectionLlmDebug": "LLM リクエストのトラブルシューティング",
-  "llmDebugDesc": "モデルに送信された最後の 25 個の生のリクエスト本文 (システム プロンプト、メッセージ、ツール) とその生の出力を検査します。メモリ内にのみ保持され、再起動時にクリアされます。",
+  "llmDebugDesc": "モデルへの最新 25 件の生のリクエストと出力を確認します。認証情報は秘匿され、収集された Agent 視点の内容はこの端末に非公開で保存され、会話の削除時に消去されます。",
   "llmDebugEmpty": "まだ記録がありません。メッセージを送信し、「更新」をクリックします。",
   "llmDebugRequest": "リクエスト (モデルに送信される HTTP ボディ)",
   "llmDebugOutput": "出力",

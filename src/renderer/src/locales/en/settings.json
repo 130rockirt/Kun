@@ -83,7 +83,7 @@
   "terminalColorResetDesc": "Restore follow native settings.",
   "terminalColorResetButton": "Reset",
   "sectionLlmDebug": "LLM request troubleshooting",
-  "llmDebugDesc": "Inspect the last 25 raw request bodies sent to the model (system prompt, messages, tools) and their raw output. Kept in memory only and cleared on restart.",
+  "llmDebugDesc": "Inspect the latest 25 raw model requests and outputs. Credentials are redacted; captured Agent Perspective content is stored privately on this device and removed with its conversation.",
   "llmDebugEmpty": "No records yet. Send a message, then click Refresh.",
   "llmDebugRequest": "Request (HTTP body sent to the model)",
   "llmDebugOutput": "Output",

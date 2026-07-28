@@ -346,9 +346,10 @@ export async function createKunServeRuntime(
   const ids = new RandomIdGenerator()
   const nowIso = () => new Date().toISOString()
   const allocateSeq = (threadId: string) => eventBus.allocateSeq(threadId)
-  // Full Agent Perspective capture clones and parses model payloads. Keep it
-  // completely off the request path unless the user explicitly enables it.
-  const llmDebug = activeOptions.runtime?.llmDebug?.enabled === true
+  // Agent Perspective is a visible runtime capability, so capture is available
+  // by default. Advanced configurations can explicitly opt out when local
+  // sensitive-content retention or request-path overhead is undesirable.
+  const llmDebug = llmDebugCaptureEnabled(activeOptions)
     ? new LlmDebugRecorder({ dataDir: activeOptions.dataDir })
     : undefined
   const agentObservability = createAgentObservabilityRecorder({
@@ -1920,8 +1921,16 @@ export async function createKunServeRuntime(
 	        message: 'observability exporter changes require a runtime restart'
 	      }
 	    }
+	    const mergedOptions = mergeRuntimeConfigApplyOptions(activeOptions, request)
+	    if (llmDebugCaptureEnabled(mergedOptions) !== llmDebugCaptureEnabled(activeOptions)) {
+	      return {
+	        ok: false,
+	        code: 'restart_required',
+	        message: 'Agent Perspective capture changes require a runtime restart'
+	      }
+	    }
 	    let nextOptions = await hydrateLegacyCredentialOptions(
-	      mergeRuntimeConfigApplyOptions(activeOptions, request),
+	      mergedOptions,
 	      legacyCredentialMigration
 	    )
 	    if (nextOptions.localModelGateway?.enabled && !isLoopbackHost(nextOptions.host)) {
@@ -2801,6 +2810,12 @@ function mergeRuntimeConfigApplyOptions(
     hooks: request.hooks ?? current.hooks,
     quality: request.quality ?? current.quality
   }
+}
+
+function llmDebugCaptureEnabled(
+  options: Pick<KunServeRuntimeOptions, 'runtime'>
+): boolean {
+  return options.runtime?.llmDebug?.enabled !== false
 }
 
 async function persistRuntimeMcpConfig(

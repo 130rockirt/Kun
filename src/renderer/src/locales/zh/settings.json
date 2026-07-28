@@ -83,7 +83,7 @@
   "terminalColorResetDesc": "恢复为跟随原生设置。",
   "terminalColorResetButton": "重置",
   "sectionLlmDebug": "LLM 请求排障",
-  "llmDebugDesc": "查看最近 25 轮发往模型的原始请求体(系统提示、消息、工具)与原始输出,仅保存在内存中,重启即清空。",
+  "llmDebugDesc": "查看最近 25 轮发往模型的原始请求体与输出。凭据会脱敏；采集的 Agent 视角内容会私密保存在本机，并随对话删除。",
   "llmDebugEmpty": "暂无记录,发送一条消息后点击刷新。",
   "llmDebugRequest": "请求(发往模型的 HTTP body)",
   "llmDebugOutput": "输出",

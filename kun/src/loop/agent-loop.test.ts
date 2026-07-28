@@ -148,6 +148,14 @@ class ScriptedGraphModel implements ModelClient {
     this.requests.push(request)
     if (this.requests.length === 1) {
       yield {
+        kind: 'assistant_text_delta',
+        text: 'Graph validation failed, so the run was not started.'
+      }
+      yield { kind: 'completed', stopReason: 'stop' }
+      return
+    }
+    if (this.requests.length === 2) {
+      yield {
         kind: 'tool_call_complete',
         callId: 'graph_create_call',
         toolName: 'graph_create_run',
@@ -474,7 +482,7 @@ describe('AgentLoop interruption', () => {
     ]))
   })
 
-  it('forces one GraphRun creation before final response and leaves direct turns unchanged', async () => {
+  it('recovers an omitted GraphRun creation before final response and leaves direct turns unchanged', async () => {
     const sessionStore = new InMemorySessionStore()
     const threadStore = new InMemoryThreadStore()
     const eventBus = new InMemoryEventBus()
@@ -508,13 +516,22 @@ describe('AgentLoop interruption', () => {
       shouldAdvertise: (context) => context.orchestration === 'graph',
       execute: async () => ({ output: { run: { id: 'graph_run_1', status: 'running' } } })
     })
+    const graphControlTool = LocalToolHost.defineTool({
+      name: 'graph_control_run',
+      description: 'Control an existing GraphRun.',
+      inputSchema: { type: 'object', additionalProperties: false },
+      toolKind: 'tool_call',
+      policy: 'auto',
+      shouldAdvertise: (context) => context.orchestration === 'graph',
+      execute: async () => ({ output: { ok: true } })
+    })
     const loop = new AgentLoop({
       threadStore,
       sessionStore,
       approvalGate: new AllowApprovalGate(),
       userInputGate: new NoopUserInputGate(),
       model,
-      toolHost: new LocalToolHost({ tools: [graphTool] }),
+      toolHost: new LocalToolHost({ tools: [graphTool, graphControlTool] }),
       usage: new UsageService(),
       events,
       turns,
@@ -541,11 +558,18 @@ describe('AgentLoop interruption', () => {
     })
 
     await expect(loop.runTurn('thr_graph_mode', graphTurn.turnId)).resolves.toBe('completed')
-    expect(model.requests).toHaveLength(2)
+    expect(model.requests).toHaveLength(3)
     expect(model.requests[0]?.requiredToolName).toBe('graph_create_run')
     expect(model.requests[0]?.modeInstruction).toContain('Graph Mode is active')
-    expect(model.requests[1]?.requiredToolName).toBeUndefined()
-    expect(model.requests[1]?.history).toEqual(expect.arrayContaining([
+    expect(model.requests[0]?.tools.map((tool) => tool.name)).toEqual(expect.arrayContaining([
+      'graph_create_run',
+      'graph_control_run'
+    ]))
+    expect(model.requests[1]?.requiredToolName).toBe('graph_create_run')
+    expect(model.requests[1]?.tools.map((tool) => tool.name)).toEqual(['graph_create_run'])
+    expect(model.requests[1]?.modeInstruction).toContain('Graph creation recovery 1/2')
+    expect(model.requests[2]?.requiredToolName).toBeUndefined()
+    expect(model.requests[2]?.history).toEqual(expect.arrayContaining([
       expect.objectContaining({
         kind: 'tool_result',
         toolName: 'graph_create_run'

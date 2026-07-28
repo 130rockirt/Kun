@@ -195,9 +195,9 @@ export const RuntimeTuningConfigSchema = z
       })
       .strict()
       .optional(),
-    /** Sensitive in-memory request capture; disabled unless explicitly enabled. */
+    /** Sensitive local Agent Perspective capture; explicitly set false to disable. */
     llmDebug: z
-      .object({ enabled: z.boolean().default(false) })
+      .object({ enabled: z.boolean().default(true) })
       .strict()
       .optional(),
     toolArgumentRepair: z

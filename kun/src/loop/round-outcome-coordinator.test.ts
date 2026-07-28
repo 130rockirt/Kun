@@ -9,6 +9,8 @@ import type { TurnService } from '../services/turn-service.js'
 import { CREATE_PLAN_TOOL_NAME } from '../adapters/tool/create-plan-tool.js'
 import type { ModelRoundStreamResult } from './model-round-engine.js'
 import {
+  GRAPH_CREATE_RUN_TOOL_NAME,
+  MAX_GRAPH_CREATE_RUN_RECOVERY_STEPS,
   RoundOutcomeCoordinator,
   type RoundOutcomeInput
 } from './round-outcome-coordinator.js'
@@ -80,7 +82,7 @@ function prepared(overrides: Partial<PreparedTurnContext> = {}): PreparedTurnCon
 function harness(options: { madeProgress?: boolean; latestItems?: TurnItem[] } = {}) {
   const effects: string[] = []
   const items: TurnItem[] = []
-  const eventDrafts: Array<{ kind?: string; code?: string }> = []
+  const eventDrafts: Array<{ kind?: string; code?: string; message?: string }> = []
   const dispatches: ToolDispatchInput[] = []
   const failures: unknown[] = []
   const suppressGoalResume = vi.fn()
@@ -96,7 +98,7 @@ function harness(options: { madeProgress?: boolean; latestItems?: TurnItem[] } =
     })
   } as Pick<TurnService, 'applyItem'>
   const events = {
-    record: vi.fn(async (draft: { kind?: string; code?: string }) => {
+    record: vi.fn(async (draft: { kind?: string; code?: string; message?: string }) => {
       effects.push(`event:${draft.kind}`)
       eventDrafts.push(draft)
       return draft
@@ -214,6 +216,73 @@ describe('RoundOutcomeCoordinator', () => {
     expect(h.effects).toEqual(['event:error', 'item:error'])
     expect(h.eventDrafts[0]).toMatchObject({ code: 'required_tool_missing' })
     expect(h.items[0]).toMatchObject({ kind: 'error', code: 'required_tool_missing' })
+  })
+
+  it('recovers a missing Graph creation call and clears recovery state on progress or cleanup', async () => {
+    const h = harness()
+    const graphTurn = createTurnRecord({
+      id: turnId,
+      threadId,
+      prompt: 'run this as a graph',
+      status: 'running',
+      orchestration: 'graph'
+    })
+    const missing = input(completed({ text: 'The graph could not be started.' }), {
+      requiredToolName: GRAPH_CREATE_RUN_TOOL_NAME,
+      turn: graphTurn,
+      prepared: prepared({ orchestration: 'graph' })
+    })
+
+    await expect(h.coordinator.resolve(missing)).resolves.toBe('continue')
+    expect(h.coordinator.graphCreateRunRecoverySteps(turnId)).toBe(1)
+    expect(h.effects).toEqual([])
+
+    const graphCall = {
+      callId: 'call_graph_create',
+      toolName: GRAPH_CREATE_RUN_TOOL_NAME,
+      toolKind: 'tool_call' as const,
+      arguments: {}
+    }
+    await expect(h.coordinator.resolve(input(completed({ toolCalls: [graphCall] }), {
+      requiredToolName: GRAPH_CREATE_RUN_TOOL_NAME,
+      turn: graphTurn,
+      prepared: prepared({ orchestration: 'graph' })
+    }))).resolves.toBe('continue')
+    expect(h.coordinator.graphCreateRunRecoverySteps(turnId)).toBe(0)
+    expect(h.dispatches[0]?.calls).toEqual([graphCall])
+
+    await expect(h.coordinator.resolve(missing)).resolves.toBe('continue')
+    expect(h.coordinator.graphCreateRunRecoverySteps(turnId)).toBe(1)
+    h.coordinator.clearTurn(turnId)
+    expect(h.coordinator.graphCreateRunRecoverySteps(turnId)).toBe(0)
+  })
+
+  it('bounds Graph creation recovery and reports a Graph-specific terminal error', async () => {
+    const h = harness()
+    const round = input(completed({ text: 'Unable to start.' }), {
+      requiredToolName: GRAPH_CREATE_RUN_TOOL_NAME,
+      turn: createTurnRecord({
+        id: turnId,
+        threadId,
+        prompt: 'run this as a graph',
+        status: 'running',
+        orchestration: 'graph'
+      }),
+      prepared: prepared({ orchestration: 'graph' })
+    })
+
+    for (let step = 0; step < MAX_GRAPH_CREATE_RUN_RECOVERY_STEPS; step += 1) {
+      await expect(h.coordinator.resolve(round)).resolves.toBe('continue')
+    }
+    await expect(h.coordinator.resolve(round)).resolves.toBe('failed')
+
+    expect(h.effects).toEqual(['event:error', 'item:error'])
+    expect(h.eventDrafts[0]).toMatchObject({
+      code: 'required_tool_missing',
+      message: expect.stringContaining('Graph turn could not start')
+    })
+    expect(h.eventDrafts[0]?.message).toContain('graph_create_run')
+    expect(h.eventDrafts[0]?.message).not.toContain('Plan-mode')
   })
 
   it('allows continuation and final-answer recovery before failing in event-then-item order', async () => {

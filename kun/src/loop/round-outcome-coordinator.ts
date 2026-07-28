@@ -32,6 +32,8 @@ import type {
 } from './turn-execution-types.js'
 
 const MAX_SVG_COMPLETION_RECOVERY_STEPS = 3
+export const GRAPH_CREATE_RUN_TOOL_NAME = 'graph_create_run'
+export const MAX_GRAPH_CREATE_RUN_RECOVERY_STEPS = 2
 
 export type RoundToolProviderMetadata = Readonly<{
   providerId?: string
@@ -74,6 +76,7 @@ export class RoundOutcomeCoordinator {
   private readonly goalNoToolRecoveryStepsByTurn = new Map<string, number>()
   private readonly emptyPostToolRecoveryStepsByTurn = new Map<string, number>()
   private readonly svgCompletionRecoveryStepsByTurn = new Map<string, number>()
+  private readonly graphCreateRunRecoveryStepsByTurn = new Map<string, number>()
 
   constructor(private readonly deps: RoundOutcomeCoordinatorDeps) {}
 
@@ -89,11 +92,16 @@ export class RoundOutcomeCoordinator {
     return this.emptyPostToolRecoveryStepsByTurn.get(turnId) ?? 0
   }
 
+  graphCreateRunRecoverySteps(turnId: string): number {
+    return this.graphCreateRunRecoveryStepsByTurn.get(turnId) ?? 0
+  }
+
   clearTurn(turnId: string): void {
     this.lastNoToolTextByTurn.delete(turnId)
     this.goalNoToolRecoveryStepsByTurn.delete(turnId)
     this.emptyPostToolRecoveryStepsByTurn.delete(turnId)
     this.svgCompletionRecoveryStepsByTurn.delete(turnId)
+    this.graphCreateRunRecoveryStepsByTurn.delete(turnId)
   }
 
   async resolve(input: RoundOutcomeInput): Promise<ModelRoundOutcome> {
@@ -138,6 +146,9 @@ export class RoundOutcomeCoordinator {
     this.lastNoToolTextByTurn.delete(input.turnId)
     this.goalNoToolRecoveryStepsByTurn.delete(input.turnId)
     this.emptyPostToolRecoveryStepsByTurn.delete(input.turnId)
+    if (completedToolCalls.some((call) => call.toolName === GRAPH_CREATE_RUN_TOOL_NAME)) {
+      this.graphCreateRunRecoveryStepsByTurn.delete(input.turnId)
+    }
     const dispatched = await this.deps.dispatchToolCalls(
       this.toolDispatchInput(input, completedToolCalls, true)
     )
@@ -241,7 +252,23 @@ export class RoundOutcomeCoordinator {
       return 'continue'
     }
 
-    const message = `Model did not call the required \`${input.requiredToolName}\` tool for this Plan-mode turn.`
+    if (input.requiredToolName === GRAPH_CREATE_RUN_TOOL_NAME) {
+      const recoverySteps = this.graphCreateRunRecoverySteps(input.turnId) + 1
+      if (recoverySteps <= MAX_GRAPH_CREATE_RUN_RECOVERY_STEPS) {
+        this.graphCreateRunRecoveryStepsByTurn.set(input.turnId, recoverySteps)
+        return 'continue'
+      }
+    }
+
+    const message = input.requiredToolName === GRAPH_CREATE_RUN_TOOL_NAME
+      ? [
+          'Graph turn could not start because the model did not call the required',
+          `\`${GRAPH_CREATE_RUN_TOOL_NAME}\` tool after`,
+          `${MAX_GRAPH_CREATE_RUN_RECOVERY_STEPS} recovery attempts.`
+        ].join(' ')
+      : input.requiredToolName === CREATE_PLAN_TOOL_NAME
+        ? `Model did not call the required \`${input.requiredToolName}\` tool for this Plan-mode turn.`
+        : `Model did not call the required \`${input.requiredToolName}\` tool for this turn.`
     await this.deps.events.record({
       kind: 'error',
       threadId: input.threadId,

@@ -126,7 +126,7 @@ describe('runtime factory usage carryover', () => {
     })
 
     try {
-      expect(runtime.llmDebug).toBeUndefined()
+      expect(runtime.llmDebug).toBeDefined()
       expect(runtime.extensionPlatform).toBeDefined()
       expect(runtime.info().extensions).toMatchObject({
         enabled: true,
@@ -155,7 +155,7 @@ describe('runtime factory usage carryover', () => {
     }
   })
 
-  it('keeps full Agent Perspective capture off unless runtime llmDebug is enabled', async () => {
+  it('enables Agent Perspective capture by default while preserving explicit opt-out', async () => {
     for (const [name, runtimeOptions] of [
       ['omitted', undefined],
       ['disabled', { llmDebug: { enabled: false } }],
@@ -182,12 +182,12 @@ describe('runtime factory usage carryover', () => {
 
       try {
         const recorder = runtime.llmDebug
-        if (name !== 'enabled') {
+        if (name === 'disabled') {
           expect(recorder).toBeUndefined()
           continue
         }
         expect(recorder).toBeDefined()
-        if (!recorder) throw new Error('expected enabled Agent Perspective recorder')
+        if (!recorder) throw new Error('expected Agent Perspective recorder')
         const round = recorder.start({
           threadId: `thread-${name}`,
           turnId: 'turn-1',
@@ -211,6 +211,45 @@ describe('runtime factory usage carryover', () => {
             endpointFormat: 'chat_completions'
           })]
         })
+      } finally {
+        await runtime.shutdown?.()
+      }
+    }
+  })
+
+  it('requires restart when config apply changes Agent Perspective capture policy', async () => {
+    for (const [name, runtimeOptions, appliedRuntime] of [
+      ['disable', undefined, { llmDebug: { enabled: false } }],
+      ['enable', { llmDebug: { enabled: false } }, { llmDebug: { enabled: true } }]
+    ] as const) {
+      const dataDir = await mkdtemp(join(tmpdir(), `kun-runtime-llm-debug-apply-${name}-`))
+      tempDirs.push(dataDir)
+      const runtime = await createKunServeRuntime({
+        host: '127.0.0.1',
+        port: 0,
+        dataDir,
+        runtimeToken: 'tok',
+        apiKey: 'sk-default',
+        baseUrl: 'https://api.example.test/v1',
+        model: 'model-before',
+        approvalPolicy: 'auto',
+        sandboxMode: 'danger-full-access',
+        tokenEconomyMode: false,
+        insecure: false,
+        storage: { backend: 'file' },
+        ...(runtimeOptions ? { runtime: runtimeOptions } : {}),
+        capabilities: KunCapabilitiesConfig.parse({})
+      })
+
+      try {
+        await expect(runtime.applyConfig({
+          runtime: appliedRuntime
+        })).resolves.toEqual({
+          ok: false,
+          code: 'restart_required',
+          message: 'Agent Perspective capture changes require a runtime restart'
+        })
+        expect(Boolean(runtime.llmDebug)).toBe(name === 'disable')
       } finally {
         await runtime.shutdown?.()
       }

@@ -65,7 +65,11 @@ import {
   buildRuntimeContextInstruction,
   shouldInjectInitialRuntimeContext
 } from './runtime-context.js'
-import type { RoundOutcomeCoordinator } from './round-outcome-coordinator.js'
+import {
+  GRAPH_CREATE_RUN_TOOL_NAME,
+  MAX_GRAPH_CREATE_RUN_RECOVERY_STEPS,
+  type RoundOutcomeCoordinator
+} from './round-outcome-coordinator.js'
 import { svgArtifactCompletionState } from './svg-artifact-completion.js'
 import {
   rehydrateGeneratedImagesForForward,
@@ -99,7 +103,6 @@ import { buildToolCatalogFingerprint } from '../cache/tool-catalog-fingerprint.j
 import { rewriteItemHistoryWithRetry } from '../services/history-commit-coordinator.js'
 import { TurnToolCatalogFreezer } from './turn-tool-catalog.js'
 
-const GRAPH_CREATE_RUN_TOOL_NAME = 'graph_create_run'
 const GRAPH_MODE_INSTRUCTION = [
   'Graph Mode is active for this turn.',
   'First understand the complete user outcome and decompose it into a durable, bounded GraphPlan.',
@@ -109,6 +112,15 @@ const GRAPH_MODE_INSTRUCTION = [
   'Use typed dependencies and only bounded LoopGates; do not encode an unbounded cycle.',
   'After creation, the host scheduler and Graph workers execute the plan while the Lead supervises through validated Graph tools.'
 ].join(' ')
+
+function graphCreateRunRecoveryInstruction(step: number): string {
+  return [
+    `Graph creation recovery ${step}/${MAX_GRAPH_CREATE_RUN_RECOVERY_STEPS}.`,
+    `The previous response did not call \`${GRAPH_CREATE_RUN_TOOL_NAME}\`, so no GraphRun exists.`,
+    `Call the only available tool, \`${GRAPH_CREATE_RUN_TOOL_NAME}\`, now with a complete schema-valid GraphPlan.`,
+    'Do not answer with prose and do not claim that validation ran unless the tool result says so.'
+  ].join(' ')
+}
 
 export type ModelStepServiceDeps = {
   threadStore: ThreadStore
@@ -445,9 +457,17 @@ export class ModelStepService {
       stepIndex
     })
     const emptyPostToolRecoveryStep = this.deps.roundOutcome.emptyPostToolRecoverySteps(turnId)
+    const graphCreateRunRecoveryStep =
+      requiredToolName === GRAPH_CREATE_RUN_TOOL_NAME
+        ? this.deps.roundOutcome.graphCreateRunRecoverySteps(turnId)
+        : 0
     const forceFinalAnswerRecovery =
       emptyPostToolRecoveryStep >= EMPTY_POST_TOOL_FINAL_ANSWER_RECOVERY_STEP
-    const requestToolSpecs = forceFinalAnswerRecovery ? [] : effectiveToolSpecs
+    const requestToolSpecs = forceFinalAnswerRecovery
+      ? []
+      : graphCreateRunRecoveryStep > 0
+        ? effectiveToolSpecs.filter((tool) => tool.name === GRAPH_CREATE_RUN_TOOL_NAME)
+        : effectiveToolSpecs
     const history = await this.deps.historyCompaction.compactIfNeeded({
       items,
       model,
@@ -590,6 +610,9 @@ export class ModelStepService {
     })
     const modeInstruction = [
       ...(turn.orchestration === 'graph' ? [GRAPH_MODE_INSTRUCTION] : []),
+      ...(graphCreateRunRecoveryStep > 0
+        ? [graphCreateRunRecoveryInstruction(graphCreateRunRecoveryStep)]
+        : []),
       ...(planTurnActive ? [PLAN_MODE_INSTRUCTION] : []),
       ...(turn.guiDesignArtifact?.kind === 'svg'
         ? [SVG_ARTIFACT_MODE_INSTRUCTION]

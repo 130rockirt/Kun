@@ -39,6 +39,20 @@ Coverage is intentionally limited to HTTP-backed providers routed through `Compa
 
 The recorder never retries, rewrites, replays, or blocks a provider request because capture failed. It serializes each request body once, observes a cloned response, and isolates recorder failures from the agent-visible result.
 
+## Capture policy
+
+Agent Perspective capture is enabled by default for the shared Kun runtime so every client sees the same thread-scoped request history. Advanced installations can opt out in Kun runtime configuration:
+
+```yaml
+runtime:
+  llmDebug:
+    enabled: false
+```
+
+The recorder is composed at runtime startup and shared by native and delegated model transports. Changing the effective `runtime.llmDebug.enabled` value through runtime config apply returns `restart_required`; restart Kun to apply the new policy.
+
+Capture is not retroactive. Requests made while the recorder is disabled cannot be reconstructed, while trace files written by an earlier enabled runtime remain readable after restart.
+
 ## Security and local storage
 
 Completed exchange records are append-only JSONL files at:
@@ -87,6 +101,7 @@ Useful diagnosis patterns:
 - A retry changes the outcome: compare status, response body, timing, and attempt reason across records.
 - UI output differs from provider output: compare **Raw response** with **Decoded**.
 - Missing early data: capture begins only after the runtime containing this feature starts; requests made by older builds are not reconstructed.
+- Capture unavailable: confirm `runtime.llmDebug.enabled` is not explicitly `false`, then restart Kun after changing the setting.
 
 ## Validation targets
 
