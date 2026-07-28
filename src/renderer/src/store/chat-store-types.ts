@@ -165,6 +165,13 @@ export type SideConversation = {
   blocks: ChatBlock[]
   liveReasoning: string
   liveAssistant: string
+  /** Stable runtime identity for the current compatibility live overlays. */
+  liveReasoningItemId?: string
+  liveReasoningTurnId?: string
+  liveReasoningCreatedAt?: string
+  liveAssistantItemId?: string
+  liveAssistantTurnId?: string
+  liveAssistantCreatedAt?: string
   lastSeq: number
   input: string
   model: string
@@ -212,6 +219,13 @@ export type ChatState = {
   blocks: ChatBlock[]
   liveReasoning: string
   liveAssistant: string
+  /** Stable runtime identity for the current compatibility live overlays. */
+  liveReasoningItemId?: string
+  liveReasoningTurnId?: string
+  liveReasoningCreatedAt?: string
+  liveAssistantItemId?: string
+  liveAssistantTurnId?: string
+  liveAssistantCreatedAt?: string
   lastSeq: number
   /**
    * Highest delta `seq` (per-thread, monotonic) already folded into the live

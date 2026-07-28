@@ -84,13 +84,15 @@ describe('runtime projection action normalization', () => {
 })
 
 describe('assistant stream mapping', () => {
-  it('does not append completed assistant snapshots after streaming deltas', async () => {
+  it('keeps delta identity and emits the completed assistant snapshot as an authoritative upsert', async () => {
     const deltas: unknown[] = []
+    const assistantItems: unknown[] = []
     const sink: ThreadEventSink = {
       ...makeSink(),
       onDeltas: (events) => {
         deltas.push(...events)
-      }
+      },
+      onAssistantItem: (item) => assistantItems.push(item)
     }
 
     await dispatchKunRuntimeEvent({
@@ -137,9 +139,34 @@ describe('assistant stream mapping', () => {
     }, sink, async () => undefined)
 
     expect(deltas).toEqual([
-      { text: 'he', kind: 'agent_message', seq: 1 },
-      { text: 'llo', kind: 'agent_message', seq: 2 }
+      {
+        text: 'he',
+        kind: 'agent_message',
+        seq: 1,
+        threadId: 'thr_1',
+        turnId: 'turn_1',
+        itemId: 'item_answer',
+        createdAt: '2024-01-01T00:00:00.000Z'
+      },
+      {
+        text: 'llo',
+        kind: 'agent_message',
+        seq: 2,
+        threadId: 'thr_1',
+        turnId: 'turn_1',
+        itemId: 'item_answer',
+        createdAt: '2024-01-01T00:00:00.000Z'
+      }
     ])
+    expect(assistantItems).toEqual([{
+      itemId: 'item_answer',
+      threadId: 'thr_1',
+      turnId: 'turn_1',
+      kind: 'agent_message',
+      status: 'completed',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      text: 'hello'
+    }])
   })
 })
 

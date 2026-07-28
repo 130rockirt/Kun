@@ -35,11 +35,6 @@ export type ChatProjectionReducerContext = {
   isInterruptSettledError: (error: unknown, message: string) => boolean
   settlePendingRuntimeWork: (blocks: ChatBlock[]) => ChatBlock[]
   threadSnapshotLooksRunning: (blocks: ChatBlock[], threadStatus?: string) => boolean
-  hasAssistantTextForCompletedTurn: (
-    state: Pick<ChatState, 'blocks' | 'liveAssistant'>,
-    turnId?: string | null,
-    userBlockId?: string | null
-  ) => boolean
 }
 
 export function flushLiveProjection(
@@ -47,16 +42,47 @@ export function flushLiveProjection(
   now: number,
   base: Partial<ChatState> = {}
 ): Partial<ChatState> {
-  const nextBlocks = [...state.blocks]
+  let nextBlocks = state.blocks
   const createdAt = new Date(now).toISOString()
   if (state.liveReasoning.trim()) {
-    nextBlocks.push({ kind: 'reasoning', id: `r-${now}`, createdAt, text: state.liveReasoning })
+    nextBlocks = upsertTimelineBlock(nextBlocks, {
+      kind: 'reasoning',
+      id: state.liveReasoningItemId ?? `r-${now}`,
+      turnId: state.liveReasoningTurnId ?? state.currentTurnId ?? undefined,
+      createdAt: state.liveReasoningCreatedAt ?? createdAt,
+      text: state.liveReasoning
+    })
   }
   if (state.liveAssistant.trim()) {
-    nextBlocks.push({ kind: 'assistant', id: `a-${now}`, createdAt, text: state.liveAssistant })
+    nextBlocks = upsertTimelineBlock(nextBlocks, {
+      kind: 'assistant',
+      id: state.liveAssistantItemId ?? `a-${now}`,
+      turnId: state.liveAssistantTurnId ?? state.currentTurnId ?? undefined,
+      createdAt: state.liveAssistantCreatedAt ?? createdAt,
+      text: state.liveAssistant
+    })
   }
-  if (nextBlocks.length === state.blocks.length) return base
-  return { ...base, blocks: nextBlocks, liveReasoning: '', liveAssistant: '' }
+  if (
+    nextBlocks === state.blocks &&
+    !state.liveReasoningItemId &&
+    !state.liveReasoningTurnId &&
+    !state.liveReasoningCreatedAt &&
+    !state.liveAssistantItemId &&
+    !state.liveAssistantTurnId &&
+    !state.liveAssistantCreatedAt
+  ) return base
+  return {
+    ...base,
+    ...(nextBlocks !== state.blocks ? { blocks: nextBlocks } : {}),
+    liveReasoning: '',
+    liveAssistant: '',
+    liveReasoningItemId: undefined,
+    liveReasoningTurnId: undefined,
+    liveReasoningCreatedAt: undefined,
+    liveAssistantItemId: undefined,
+    liveAssistantTurnId: undefined,
+    liveAssistantCreatedAt: undefined
+  }
 }
 
 /** Pure state projection for normalized actions; browser work is emitted elsewhere. */
@@ -115,7 +141,9 @@ export function reduceChatProjection(
       }
     }
     case 'deltas_received': {
-      const deltas = action.deltas
+      const deltas = action.deltas.filter(
+        (delta) => !delta.threadId || !state.activeThreadId || delta.threadId === state.activeThreadId
+      )
       if (deltas.length === 0) return {}
       const seqs = deltas
         .map((delta) => delta.seq)
@@ -125,8 +153,15 @@ export function reduceChatProjection(
         ...(seqs.length > 0 ? { lastSeq: Math.max(state.lastSeq, ...seqs) } : {}),
         ...(!state.busy ? { busy: true } : {})
       }
+      let blocks = state.blocks
       let liveReasoning = state.liveReasoning
+      let liveReasoningItemId = state.liveReasoningItemId
+      let liveReasoningTurnId = state.liveReasoningTurnId
+      let liveReasoningCreatedAt = state.liveReasoningCreatedAt
       let liveAssistant = state.liveAssistant
+      let liveAssistantItemId = state.liveAssistantItemId
+      let liveAssistantTurnId = state.liveAssistantTurnId
+      let liveAssistantCreatedAt = state.liveAssistantCreatedAt
       let liveDeltaSeqFloor = state.liveDeltaSeqFloor
       let reasoningFirst = state.turnReasoningFirstAtByUserId
       let reasoningLast = state.turnReasoningLastAtByUserId
@@ -137,9 +172,39 @@ export function reduceChatProjection(
           liveDeltaSeqFloor = delta.seq
         }
         if (delta.kind === 'agent_reasoning') {
+          if (delta.itemId && liveReasoningItemId && delta.itemId !== liveReasoningItemId) {
+            if (liveReasoning.trim()) {
+              blocks = upsertTimelineBlock(blocks, {
+                kind: 'reasoning',
+                id: liveReasoningItemId,
+                turnId: liveReasoningTurnId,
+                createdAt: liveReasoningCreatedAt,
+                text: liveReasoning
+              })
+            }
+            liveReasoning = ''
+          }
+          liveReasoningItemId = delta.itemId ?? liveReasoningItemId
+          liveReasoningTurnId = delta.turnId ?? liveReasoningTurnId ?? state.currentTurnId ?? undefined
+          liveReasoningCreatedAt = delta.createdAt ?? liveReasoningCreatedAt
           liveReasoning += delta.text
           sawReasoning = true
         } else {
+          if (delta.itemId && liveAssistantItemId && delta.itemId !== liveAssistantItemId) {
+            if (liveAssistant.trim()) {
+              blocks = upsertTimelineBlock(blocks, {
+                kind: 'assistant',
+                id: liveAssistantItemId,
+                turnId: liveAssistantTurnId,
+                createdAt: liveAssistantCreatedAt,
+                text: liveAssistant
+              })
+            }
+            liveAssistant = ''
+          }
+          liveAssistantItemId = delta.itemId ?? liveAssistantItemId
+          liveAssistantTurnId = delta.turnId ?? liveAssistantTurnId ?? state.currentTurnId ?? undefined
+          liveAssistantCreatedAt = delta.createdAt ?? liveAssistantCreatedAt
           liveAssistant += delta.text
         }
       }
@@ -152,8 +217,15 @@ export function reduceChatProjection(
       }
       return {
         ...patch,
+        ...(blocks !== state.blocks ? { blocks } : {}),
         ...(liveReasoning !== state.liveReasoning ? { liveReasoning } : {}),
+        ...(liveReasoningItemId !== state.liveReasoningItemId ? { liveReasoningItemId } : {}),
+        ...(liveReasoningTurnId !== state.liveReasoningTurnId ? { liveReasoningTurnId } : {}),
+        ...(liveReasoningCreatedAt !== state.liveReasoningCreatedAt ? { liveReasoningCreatedAt } : {}),
         ...(liveAssistant !== state.liveAssistant ? { liveAssistant } : {}),
+        ...(liveAssistantItemId !== state.liveAssistantItemId ? { liveAssistantItemId } : {}),
+        ...(liveAssistantTurnId !== state.liveAssistantTurnId ? { liveAssistantTurnId } : {}),
+        ...(liveAssistantCreatedAt !== state.liveAssistantCreatedAt ? { liveAssistantCreatedAt } : {}),
         ...(liveDeltaSeqFloor !== state.liveDeltaSeqFloor ? { liveDeltaSeqFloor } : {}),
         ...(reasoningFirst !== state.turnReasoningFirstAtByUserId
           ? { turnReasoningFirstAtByUserId: reasoningFirst }
@@ -162,6 +234,54 @@ export function reduceChatProjection(
           ? { turnReasoningLastAtByUserId: reasoningLast }
           : {})
       }
+    }
+    case 'assistant_item_upserted': {
+      const item = action.payload
+      if (state.activeThreadId && item.threadId !== state.activeThreadId) return {}
+      const block: ChatBlock = item.kind === 'agent_message'
+        ? {
+            kind: 'assistant',
+            id: item.itemId,
+            turnId: item.turnId,
+            createdAt: item.createdAt,
+            text: item.text
+          }
+        : {
+            kind: 'reasoning',
+            id: item.itemId,
+            turnId: item.turnId,
+            createdAt: item.createdAt,
+            text: item.text
+          }
+      const patch: Partial<ChatState> = {
+        blocks: upsertTimelineBlock(state.blocks, block),
+        error: context.clearRecoveringError(state.error)
+      }
+      if (
+        item.kind === 'agent_message' &&
+        (
+          state.liveAssistantItemId === item.itemId ||
+          (!state.liveAssistantItemId && state.liveAssistantTurnId === item.turnId)
+        )
+      ) {
+        patch.liveAssistant = ''
+        patch.liveAssistantItemId = undefined
+        patch.liveAssistantTurnId = undefined
+        patch.liveAssistantCreatedAt = undefined
+      }
+      if (
+        item.kind === 'agent_reasoning' &&
+        (
+          state.liveReasoningItemId === item.itemId ||
+          (!state.liveReasoningItemId && state.liveReasoningTurnId === item.turnId)
+        )
+      ) {
+        patch.liveReasoning = ''
+        patch.liveReasoningItemId = undefined
+        patch.liveReasoningTurnId = undefined
+        patch.liveReasoningCreatedAt = undefined
+      }
+      return patch
     }
     case 'tool_updated': {
       const event = action.payload
@@ -181,6 +301,7 @@ export function reduceChatProjection(
         const blocks = [...state.blocks]
         blocks[index] = {
           ...current,
+          turnId: event.turnId ?? current.turnId,
           summary: event.summary || current.summary,
           status: event.status,
           toolKind: event.toolKind ?? current.toolKind,
@@ -191,11 +312,10 @@ export function reduceChatProjection(
         return { ...base, blocks, error: context.clearRecoveringError(state.error) }
       }
       if (event.updateOnly) return base
-      const flushed = flushLiveProjection(state, context.now)
-      const baseBlocks = flushed.blocks ?? state.blocks
       const block: ToolBlock = {
         kind: 'tool',
         id: event.itemId,
+        turnId: event.turnId,
         createdAt: event.createdAt ?? new Date(context.now).toISOString(),
         summary: event.summary,
         status: event.status,
@@ -206,8 +326,7 @@ export function reduceChatProjection(
       }
       return {
         ...base,
-        ...flushed,
-        blocks: [...baseBlocks, block],
+        blocks: [...state.blocks, block],
         error: context.clearRecoveringError(state.error)
       }
     }
@@ -216,14 +335,12 @@ export function reduceChatProjection(
       if (state.blocks.some(
         (block) => block.kind === 'approval' && block.approvalId === request.approvalId
       )) return {}
-      const flushed = flushLiveProjection(state, context.now)
-      const baseBlocks = flushed.blocks ?? state.blocks
       return {
-        ...flushed,
-        blocks: [...baseBlocks, {
+        blocks: [...state.blocks, {
           kind: 'approval',
           id: `approval-${request.approvalId}`,
-          createdAt: new Date(context.now).toISOString(),
+          turnId: request.turnId,
+          createdAt: request.createdAt ?? new Date(context.now).toISOString(),
           approvalId: request.approvalId,
           summary: request.summary,
           toolName: request.toolName,
@@ -263,14 +380,12 @@ export function reduceChatProjection(
           )
         }
       }
-      const flushed = flushLiveProjection(state, context.now)
-      const baseBlocks = flushed.blocks ?? state.blocks
       return {
-        ...flushed,
-        blocks: [...baseBlocks, {
+        blocks: [...state.blocks, {
           kind: 'user_input',
           id: req.itemId,
-          createdAt: new Date(context.now).toISOString(),
+          turnId: req.turnId,
+          createdAt: req.createdAt ?? new Date(context.now).toISOString(),
           requestId: req.requestId,
           questions: req.questions,
           status: 'pending',
@@ -301,31 +416,27 @@ export function reduceChatProjection(
     case 'runtime_status_received': {
       const event = action.payload
       const base: Partial<ChatState> = state.busy ? {} : { busy: true }
-      const flushed = flushLiveProjection(state, context.now)
-      const baseBlocks = flushed.blocks ?? state.blocks
       const block: ChatBlock = {
         kind: 'system',
         id: event.itemId,
+        turnId: event.turnId,
         createdAt: event.createdAt ?? new Date(context.now).toISOString(),
         text: context.runtimeStatusText(event)
       }
-      const index = baseBlocks.findIndex(
+      const index = state.blocks.findIndex(
         (candidate) => candidate.kind === 'system' && candidate.id === event.itemId
       )
-      const blocks = [...baseBlocks]
+      const blocks = [...state.blocks]
       if (index >= 0) blocks[index] = block
       else blocks.push(block)
       return {
         ...base,
-        ...flushed,
         blocks,
         error: context.clearRecoveringError(state.error)
       }
     }
     case 'runtime_error_received': {
       const event = action.payload
-      const flushed = flushLiveProjection(state, context.now)
-      const baseBlocks = flushed.blocks ?? state.blocks
       const view = context.runtimeErrorView(event)
       const block: Extract<ChatBlock, { kind: 'system' }> = {
         kind: 'system',
@@ -339,8 +450,7 @@ export function reduceChatProjection(
         runtimeError: true
       }
       return {
-        ...flushed,
-        blocks: context.upsertRuntimeError(baseBlocks, block),
+        blocks: context.upsertRuntimeError(state.blocks, block),
         error: context.clearRecoveringError(state.error)
       }
     }
@@ -369,19 +479,16 @@ export function reduceChatProjection(
         }
         return { ...base, blocks, error: context.clearRecoveringError(state.error) }
       }
-      const flushed = flushLiveProjection(state, context.now)
-      const baseBlocks = flushed.blocks ?? state.blocks
       const visibleBlocks = event.auto !== false && event.turnId
-        ? baseBlocks.filter((block) => !(
+        ? state.blocks.filter((block) => !(
             block.kind === 'compaction' &&
             block.id !== event.itemId &&
             block.auto !== false &&
             block.turnId === event.turnId
           ))
-        : baseBlocks
+        : state.blocks
       return {
         ...base,
-        ...flushed,
         blocks: [...visibleBlocks, {
           kind: 'compaction',
           id: event.itemId,
@@ -409,6 +516,7 @@ export function reduceChatProjection(
         const blocks = [...state.blocks]
         blocks[index] = {
           ...current,
+          turnId: event.turnId ?? current.turnId,
           title: event.title || current.title,
           status: event.status,
           target: event.target ?? current.target,
@@ -418,14 +526,12 @@ export function reduceChatProjection(
         }
         return { ...base, blocks, error: context.clearRecoveringError(state.error) }
       }
-      const flushed = flushLiveProjection(state, context.now)
-      const baseBlocks = flushed.blocks ?? state.blocks
       return {
         ...base,
-        ...flushed,
-        blocks: [...baseBlocks, {
+        blocks: [...state.blocks, {
           kind: 'review',
           id: event.itemId,
+          turnId: event.turnId,
           createdAt: event.createdAt ?? new Date(context.now).toISOString(),
           title: event.title,
           status: event.status,
@@ -445,8 +551,6 @@ export function reduceChatProjection(
         thread.id === event.threadId ? { ...thread, goal: event.goal, updatedAt } : thread
       )
       if (!currentThread) return { threads }
-      const flushed = flushLiveProjection(state, context.now)
-      const baseBlocks = flushed.blocks ?? state.blocks
       const block: ChatBlock = {
         kind: 'system',
         id: `goal-${event.threadId}-${updatedAt}-${event.goal?.status ?? 'cleared'}`,
@@ -454,10 +558,9 @@ export function reduceChatProjection(
         text: context.goalTimelineText(event.goal, event.cleared)
       }
       return {
-        ...flushed,
         activeThreadGoal: event.goal,
         threads,
-        blocks: [...baseBlocks, block],
+        blocks: [...state.blocks, block],
         error: context.clearRecoveringError(state.error)
       }
     }
@@ -500,17 +603,38 @@ export function reduceChatProjection(
       }
     case 'thread_snapshot_reconciled': {
       const snapshot = action.payload
-      if (state.activeThreadId !== snapshot.threadId || state.busy) return {}
-      if (state.currentTurnId && state.currentTurnId !== snapshot.turnId) return {}
-      if (context.hasAssistantTextForCompletedTurn(state, snapshot.turnId, snapshot.userBlockId)) {
-        return {}
-      }
+      if (state.activeThreadId !== snapshot.threadId) return {}
       const busy = context.threadSnapshotLooksRunning(snapshot.blocks, snapshot.threadStatus)
+      const canonicalBlocks = busy
+        ? snapshot.blocks
+        : context.settlePendingRuntimeWork(snapshot.blocks)
+      const shouldClearLive = (
+        !snapshot.turnId ||
+        !state.currentTurnId ||
+        state.currentTurnId === snapshot.turnId
+      )
       return {
-        blocks: busy ? snapshot.blocks : context.settlePendingRuntimeWork(snapshot.blocks),
+        blocks: snapshot.turnId
+          ? reconcileSnapshotTurn(
+              state.blocks,
+              canonicalBlocks,
+              snapshot.turnId,
+              snapshot.userBlockId
+            )
+          : reconcileSnapshotBlocks(state.blocks, canonicalBlocks),
         lastSeq: Math.max(state.lastSeq, snapshot.latestSeq),
-        liveReasoning: '',
-        liveAssistant: '',
+        ...(shouldClearLive
+          ? {
+              liveReasoning: '',
+              liveAssistant: '',
+              liveReasoningItemId: undefined,
+              liveReasoningTurnId: undefined,
+              liveReasoningCreatedAt: undefined,
+              liveAssistantItemId: undefined,
+              liveAssistantTurnId: undefined,
+              liveAssistantCreatedAt: undefined
+            }
+          : {}),
         activeThreadGoal: snapshot.goal ?? state.activeThreadGoal,
         activeThreadTodos: snapshot.todos ?? state.activeThreadTodos,
         error: context.clearRecoveringError(state.error)
@@ -611,6 +735,8 @@ export function mergeToolProjectionEvents(
 ): ToolEventPayload {
   return {
     ...base,
+    turnId: update.turnId ?? base.turnId,
+    createdAt: base.createdAt ?? update.createdAt,
     summary: update.summary || base.summary,
     status: update.status,
     toolKind: update.toolKind ?? base.toolKind,
@@ -666,4 +792,94 @@ function isUserInputInterruptError(message: string | undefined): boolean {
   if (!message) return false
   const normalized = message.trim().toLowerCase()
   return normalized.includes('interrupt') || normalized.includes('cancelled') || normalized.includes('canceled')
+}
+
+function upsertTimelineBlock(blocks: ChatBlock[], incoming: ChatBlock): ChatBlock[] {
+  const index = blocks.findIndex(
+    (block) => block.kind === incoming.kind && block.id === incoming.id
+  )
+  if (index < 0) return [...blocks, incoming]
+  const current = blocks[index]
+  if (sameStableTimelineBlock(current, incoming)) return blocks
+  const next = [...blocks]
+  next[index] = incoming
+  return next
+}
+
+function sameStableTimelineBlock(left: ChatBlock, right: ChatBlock): boolean {
+  if (left.kind !== right.kind || left.id !== right.id) return false
+  if (
+    (left.kind === 'assistant' && right.kind === 'assistant') ||
+    (left.kind === 'reasoning' && right.kind === 'reasoning')
+  ) {
+    return (
+      left.turnId === right.turnId &&
+      left.createdAt === right.createdAt &&
+      left.text === right.text
+    )
+  }
+  return left === right
+}
+
+function reconcileSnapshotBlocks(current: ChatBlock[], persisted: ChatBlock[]): ChatBlock[] {
+  const currentByIdentity = new Map(
+    current.map((block) => [`${block.kind}:${block.id}`, block] as const)
+  )
+  return persisted.map((block) => {
+    const existing = currentByIdentity.get(`${block.kind}:${block.id}`)
+    return existing && sameStableTimelineBlock(existing, block) ? existing : block
+  })
+}
+
+function reconcileSnapshotTurn(
+  current: ChatBlock[],
+  persisted: ChatBlock[],
+  turnId: string,
+  userBlockId?: string | null
+): ChatBlock[] {
+  const persistedTurn = persisted.filter(
+    (block) => block.turnId === turnId || Boolean(userBlockId && block.id === userBlockId)
+  )
+  if (persistedTurn.length === 0) return current
+
+  const currentByIdentity = new Map(
+    current.map((block) => [`${block.kind}:${block.id}`, block] as const)
+  )
+  const stablePersistedTurn = persistedTurn.map((block) => {
+    const existing = currentByIdentity.get(`${block.kind}:${block.id}`)
+    return existing && sameStableTimelineBlock(existing, block) ? existing : block
+  })
+  const explicitTargetIndexes = current.flatMap((block, index) =>
+    block.turnId === turnId || Boolean(userBlockId && block.id === userBlockId) ? [index] : []
+  )
+  const userIndex = userBlockId
+    ? current.findIndex((block) => block.kind === 'user' && block.id === userBlockId)
+    : -1
+  let nextUserIndex = current.length
+  if (userIndex >= 0) {
+    for (let index = userIndex + 1; index < current.length; index += 1) {
+      if (current[index]?.kind === 'user') {
+        nextUserIndex = index
+        break
+      }
+    }
+  }
+  const belongsToTarget = (block: ChatBlock, index: number): boolean => {
+    if (block.turnId === turnId || Boolean(userBlockId && block.id === userBlockId)) return true
+    return (
+      userIndex >= 0 &&
+      index > userIndex &&
+      index < nextUserIndex &&
+      !block.turnId &&
+      (block.kind === 'assistant' || block.kind === 'reasoning')
+    )
+  }
+  const insertionIndex = explicitTargetIndexes.length > 0
+    ? Math.min(...explicitTargetIndexes)
+    : current.length
+  const before = current.slice(0, insertionIndex).filter((block, index) => !belongsToTarget(block, index))
+  const after = current.slice(insertionIndex).filter(
+    (block, offset) => !belongsToTarget(block, insertionIndex + offset)
+  )
+  return [...before, ...stablePersistedTurn, ...after]
 }

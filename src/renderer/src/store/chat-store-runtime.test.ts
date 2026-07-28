@@ -332,6 +332,53 @@ describe('thread event sink binding', () => {
     })
   })
 
+  it('reconciles a completed turn even when part of the live assistant text was already visible', async () => {
+    const getThreadDetail = vi.fn(async () => ({
+      blocks: [
+        { kind: 'user' as const, id: 'user-current', turnId: 'turn-current', text: 'check the workspace' },
+        {
+          kind: 'assistant' as const,
+          id: 'assistant-current',
+          turnId: 'turn-current',
+          createdAt: '2026-07-11T00:00:00.000Z',
+          text: 'Workspace is /tmp/project and all files are healthy.'
+        }
+      ],
+      latestSeq: 42,
+      threadStatus: 'completed'
+    }))
+    const { getState, set, get } = makeSinkHarness({
+      activeThreadId: 'thread-current',
+      blocks: [{ kind: 'user', id: 'user-current', turnId: 'turn-current', text: 'check the workspace' }],
+      liveAssistant: 'Workspace is /tmp',
+      liveAssistantItemId: 'assistant-current',
+      liveAssistantTurnId: 'turn-current',
+      liveAssistantCreatedAt: '2026-07-11T00:00:00.000Z',
+      lastSeq: 10,
+      busy: true,
+      currentTurnId: 'turn-current',
+      currentTurnUserId: 'user-current'
+    })
+    const sink = buildThreadEventSink(set, get, {
+      threadId: 'thread-current',
+      getThreadDetail
+    })
+
+    sink.onTurnComplete()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(getThreadDetail).toHaveBeenCalledWith('thread-current')
+    expect(getState().blocks.filter((block) => block.kind === 'assistant')).toEqual([{
+      kind: 'assistant',
+      id: 'assistant-current',
+      turnId: 'turn-current',
+      createdAt: '2026-07-11T00:00:00.000Z',
+      text: 'Workspace is /tmp/project and all files are healthy.'
+    }])
+    expect(getState().liveAssistant).toBe('')
+  })
+
   it('projects a replayed duplicate completion once, including external effects', () => {
     const showTurnCompleteNotification = vi.fn(async () => ({ ok: true }))
     vi.stubGlobal('window', {

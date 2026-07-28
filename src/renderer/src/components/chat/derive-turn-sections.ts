@@ -77,27 +77,11 @@ function hasGeneratedFiles(block: ToolBlock): boolean {
 }
 
 /**
- * Index of the last assistant block that carries visible (non-think) content.
- * That single segment is the turn's final answer bubble; everything before it
- * — including any consecutive narration segments — belongs inside the
- * collapsed process timeline. Returns -1 when the turn has no assistant text.
- */
-function findLastAssistantContentIndex(blocks: ChatBlock[]): number {
-  for (let index = blocks.length - 1; index >= 0; index -= 1) {
-    const block = blocks[index]
-    if (block.kind === 'assistant' && splitThink(block.text).content.trim()) {
-      return index
-    }
-  }
-  return -1
-}
-
-/**
  * Pure derivation of a turn's three view slices:
  *  - `processBlocks`: chronological reasoning/tool/compaction/approval
- *    trace, including in-flight assistant output while a turn is processing.
- *  - `assistantContentBlocks`: assistant content that should render as the
- *    visible message body once it is no longer part of the active work timeline.
+ *    trace. Ordinary assistant text never moves into this collapsed region.
+ *  - `assistantContentBlocks`: all assistant content for the turn, merged into
+ *    one stable visible message body.
  *  - `turnFileChanges`: successful file_change tool blocks whose detail
  *    is a unified diff, with paths normalised for display.
  *
@@ -114,16 +98,8 @@ export function deriveTurnSections({
   const processBlocks: ChatBlock[] = []
   const assistantContentBlocks: TurnAssistantBlock[] = []
   const runtimeErrorBlocks: TurnRuntimeErrorBlock[] = []
-  // Only the SINGLE last assistant text segment is the visible answer bubble
-  // (rendered outside the collapsed timeline). Every earlier "我先看看…" preface
-  // / intermediate narration stays inside 已处理 — even consecutive trailing
-  // segments. While processing, nothing is surfaced as the final body yet;
-  // everything is part of the live trace.
-  const finalAssistantContentIndex = isProcessing
-    ? -1
-    : findLastAssistantContentIndex(turn.blocks)
 
-  for (const [index, block] of turn.blocks.entries()) {
+  for (const block of turn.blocks) {
     if (block.kind === 'system' && block.runtimeError === true) {
       runtimeErrorBlocks.push(block as TurnRuntimeErrorBlock)
       continue
@@ -131,15 +107,16 @@ export function deriveTurnSections({
     if (block.kind === 'assistant') {
       const split = splitThink(block.text)
       if (split.think) {
-        processBlocks.push({ kind: 'reasoning', id: `${block.id}-think`, text: split.think })
+        processBlocks.push({
+          kind: 'reasoning',
+          id: `${block.id}-think`,
+          turnId: block.turnId,
+          createdAt: block.createdAt,
+          text: split.think
+        })
       }
       if (split.content.trim()) {
-        const contentBlock: TurnAssistantBlock = { ...block, text: split.content }
-        if (index === finalAssistantContentIndex) {
-          assistantContentBlocks.push(contentBlock)
-        } else {
-          processBlocks.push(contentBlock)
-        }
+        assistantContentBlocks.push({ ...block, text: split.content })
       }
       continue
     }
@@ -184,9 +161,17 @@ export function deriveTurnSections({
     Boolean(block.meta.componentPrototype)
   ))
 
+  const visibleAssistantBlocks: TurnAssistantBlock[] = assistantContentBlocks.length <= 1
+    ? assistantContentBlocks
+    : [{
+        ...assistantContentBlocks[0],
+        id: turn.turnId ? `assistant-turn-${turn.turnId}` : assistantContentBlocks[0].id,
+        text: assistantContentBlocks.map((block) => block.text.trim()).filter(Boolean).join('\n\n')
+      }]
+
   return {
     processBlocks,
-    assistantContentBlocks,
+    assistantContentBlocks: visibleAssistantBlocks,
     runtimeErrorBlocks,
     componentPrototypeBlocks,
     generatedFileBlocks,

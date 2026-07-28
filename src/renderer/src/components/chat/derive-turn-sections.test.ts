@@ -58,7 +58,7 @@ describe('deriveTurnSections', () => {
     expect(result.processBlocks.map((block) => block.kind)).toEqual(['tool'])
   })
 
-  it('keeps intermediate assistant text inside the process timeline and surfaces only the final answer', () => {
+  it('keeps all assistant text visible and merges it into one stable answer', () => {
     const result = sections([
       { kind: 'assistant', id: 'intro', text: 'I found the likely cause.' },
       {
@@ -92,31 +92,14 @@ describe('deriveTurnSections', () => {
       { kind: 'assistant', id: 'next', text: 'The issue link above should still be visible.' }
     ])
 
-    // Only the trailing answer renders as the visible message body; the earlier
-    // "我先看看…"-style narration belongs inside the collapsed work timeline,
-    // not spilled out as standalone bubbles (regression from b9d4efb0a).
-    expect(result.assistantContentBlocks.map((block) => block.id)).toEqual(['next'])
-    // The intermediate segments are preserved (not dropped) — just kept in the
-    // process trace, in chronological order with the tool calls.
-    expect(result.processBlocks.map((block) => block.id)).toEqual([
-      'intro',
-      'tool_read',
-      'analysis',
-      'tool_issue'
-    ])
-    expect(
-      result.processBlocks
-        .filter((block) => block.kind === 'assistant')
-        .map((block) => block.text)
-        .join('\n\n')
-    ).toContain('command output line 2')
+    expect(result.assistantContentBlocks).toHaveLength(1)
+    expect(result.assistantContentBlocks[0]?.text).toContain('I found the likely cause.')
+    expect(result.assistantContentBlocks[0]?.text).toContain('command output line 2')
+    expect(result.assistantContentBlocks[0]?.text).toContain('The issue link above should still be visible.')
+    expect(result.processBlocks.map((block) => block.id)).toEqual(['tool_read', 'tool_issue'])
   })
 
-  it('keeps every consecutive trailing segment but the last inside the timeline', () => {
-    // Reproduces the reported case: a single command followed by several
-    // consecutive assistant segments. Only the final segment is the visible
-    // answer; the preface + intermediate analysis stay inside 已处理 even
-    // though no tool separates them.
+  it('keeps every consecutive assistant segment visible outside the process timeline', () => {
     const result = sections([
       {
         kind: 'tool',
@@ -131,8 +114,13 @@ describe('deriveTurnSections', () => {
       { kind: 'assistant', id: 'question', text: '请问你想看哪个项目？' }
     ])
 
-    expect(result.assistantContentBlocks.map((block) => block.id)).toEqual(['question'])
-    expect(result.processBlocks.map((block) => block.id)).toEqual(['tool_ls', 'preface', 'analysis'])
+    expect(result.assistantContentBlocks).toHaveLength(1)
+    expect(result.assistantContentBlocks[0]?.text).toBe([
+      '我先看看当前工作目录和项目结构。',
+      '当前工作目录是 default_workspace，没有实际项目代码。',
+      '请问你想看哪个项目？'
+    ].join('\n\n'))
+    expect(result.processBlocks.map((block) => block.id)).toEqual(['tool_ls'])
   })
 
   it('does not create assistant content from tool-only process work', () => {
@@ -360,7 +348,7 @@ describe('deriveTurnSections', () => {
     expect(result.processBlocks).toEqual([])
   })
 
-  it('keeps assistant content in chronological process order while a later tool is still running', () => {
+  it('keeps assistant content visible while a later tool is still running', () => {
     const result = processingSections({
       blocks: [
         { kind: 'assistant', id: 'answer', text: '先给你一部分结果。' },
@@ -374,20 +362,13 @@ describe('deriveTurnSections', () => {
       ]
     })
 
-    expect(result.assistantContentBlocks).toEqual([])
-    expect(result.processBlocks).toEqual([
-      { kind: 'assistant', id: 'answer', text: '先给你一部分结果。' },
-      {
-        kind: 'tool',
-        id: 'tool_1',
-        summary: 'read',
-        status: 'running',
-        toolKind: 'tool_call'
-      }
+    expect(result.assistantContentBlocks).toEqual([
+      { kind: 'assistant', id: 'answer', text: '先给你一部分结果。' }
     ])
+    expect(result.processBlocks.map((block) => block.id)).toEqual(['tool_1'])
   })
 
-  it('places assistant output between process steps while processing', () => {
+  it('does not move assistant output into process steps while processing', () => {
     const result = processingSections({
       blocks: [
         {
@@ -408,7 +389,9 @@ describe('deriveTurnSections', () => {
       ]
     })
 
-    expect(result.assistantContentBlocks).toEqual([])
-    expect(result.processBlocks.map((block) => block.id)).toEqual(['tool_1', 'answer', 'tool_2'])
+    expect(result.assistantContentBlocks).toEqual([
+      { kind: 'assistant', id: 'answer', text: '读完了，下一步继续查。' }
+    ])
+    expect(result.processBlocks.map((block) => block.id)).toEqual(['tool_1', 'tool_2'])
   })
 })

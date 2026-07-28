@@ -45,6 +45,7 @@ import { notifySddChatTranscriptMirror } from '../sdd/sdd-chat-transcript'
 import { notifyDesignChatTranscriptMirror } from '../design/design-chat-transcript'
 import { useWriteWorkspaceStore } from '../write/write-workspace-store'
 import {
+  flushLiveProjection,
   mergeToolProjectionEvents,
   reduceChatProjection,
   toolBlockChildId,
@@ -367,22 +368,7 @@ export function finalizeTurnTiming(state: ChatState): Partial<ChatState> {
 }
 
 export function flushLiveBlocks(state: ChatState, base: Partial<ChatState> = {}): Partial<ChatState> {
-  const nextBlocks = [...state.blocks]
-  const now = Date.now()
-  const createdAt = new Date(now).toISOString()
-  if (state.liveReasoning.trim()) {
-    nextBlocks.push({ kind: 'reasoning', id: `r-${now}`, createdAt, text: state.liveReasoning })
-  }
-  if (state.liveAssistant.trim()) {
-    nextBlocks.push({ kind: 'assistant', id: `a-${now}`, createdAt, text: state.liveAssistant })
-  }
-  if (nextBlocks.length === state.blocks.length) return base
-  return {
-    ...base,
-    blocks: nextBlocks,
-    liveReasoning: '',
-    liveAssistant: ''
-  }
+  return flushLiveProjection(state, Date.now(), base)
 }
 
 function goalStatusText(status: string): string {
@@ -669,34 +655,6 @@ export type ThreadEventSinkBinding = {
   getThreadDetail?: AgentProvider['getThreadDetail']
 }
 
-function assistantTextAfterUser(blocks: ChatBlock[], userBlockId: string): string {
-  const userIndex = blocks.findIndex((block) => block.kind === 'user' && block.id === userBlockId)
-  if (userIndex < 0) return ''
-  const parts: string[] = []
-  for (let index = userIndex + 1; index < blocks.length; index += 1) {
-    const block = blocks[index]
-    if (block.kind === 'user') break
-    if (block.kind === 'assistant' && block.text.trim()) parts.push(block.text.trim())
-  }
-  return parts.join('\n\n').trim()
-}
-
-function hasAssistantTextForCompletedTurn(
-  state: Pick<ChatState, 'blocks' | 'liveAssistant'>,
-  turnId: string | null | undefined,
-  userBlockId: string | null | undefined
-): boolean {
-  if (state.liveAssistant.trim()) return true
-  const normalizedTurnId = turnId?.trim()
-  if (normalizedTurnId) {
-    return state.blocks.some(
-      (block) => block.kind === 'assistant' && block.turnId === normalizedTurnId && block.text.trim()
-    )
-  }
-  const normalizedUserBlockId = userBlockId?.trim()
-  return normalizedUserBlockId ? !!assistantTextAfterUser(state.blocks, normalizedUserBlockId) : false
-}
-
 async function reconcileCompletedTurnFromThreadDetail(input: {
   threadId: string | null | undefined
   turnId: string | null | undefined
@@ -707,18 +665,10 @@ async function reconcileCompletedTurnFromThreadDetail(input: {
 }): Promise<void> {
   const threadId = input.threadId?.trim()
   if (!threadId) return
-  if (hasAssistantTextForCompletedTurn(input.get(), input.turnId, input.userBlockId)) return
 
   try {
     const detail = await input.loadThreadDetail(threadId)
     const loaded = hydrateBlockModelLabels(threadId, detail.blocks)
-    const hasPersistedCompletion =
-      hasAssistantTextForCompletedTurn(
-        { blocks: loaded, liveAssistant: '' } as Pick<ChatState, 'blocks' | 'liveAssistant'>,
-        input.turnId,
-        input.userBlockId
-      ) || detail.latestSeq > input.get().lastSeq
-    if (!hasPersistedCompletion) return
 
     input.set((state) => reduceChatProjection(state, {
       type: 'thread_snapshot_reconciled',
@@ -743,8 +693,7 @@ async function reconcileCompletedTurnFromThreadDetail(input: {
       runtimeErrorDetail,
       isInterruptSettledError,
       settlePendingRuntimeWork: settlePendingRuntimeWorkAfterInterrupt,
-      threadSnapshotLooksRunning,
-      hasAssistantTextForCompletedTurn
+      threadSnapshotLooksRunning
     }))
   } catch (error) {
     if (typeof window === 'undefined') return
@@ -783,8 +732,7 @@ export function buildThreadEventSink(
       runtimeErrorDetail,
       isInterruptSettledError,
       settlePendingRuntimeWork: settlePendingRuntimeWorkAfterInterrupt,
-      threadSnapshotLooksRunning,
-      hasAssistantTextForCompletedTurn
+      threadSnapshotLooksRunning
     })
   const runEffects = (effects: readonly ChatProjectionEffect[]): void => {
     for (const effect of effects) {
@@ -877,6 +825,11 @@ export function buildThreadEventSink(
       resetBusyRecoveryAttempts()
       if (!get().busy) armBusyWatchdog(set, get)
       set((state) => reduce(state, { type: 'deltas_received', deltas }))
+    },
+    onAssistantItem: (item) => {
+      if (!isCurrentStream()) return
+      resetBusyRecoveryAttempts()
+      set((state) => reduce(state, { type: 'assistant_item_upserted', payload: item }))
     },
     onTool: (event) => {
       if (!isCurrentStream()) return
@@ -989,11 +942,6 @@ export function buildThreadEventSink(
       const completedThreadId = completedState.activeThreadId
       const completedTurnId = completedState.currentTurnId
       const completedUserBlockId = completedState.currentTurnUserId
-      const shouldReconcileCompletion = !hasAssistantTextForCompletedTurn(
-        completedState,
-        completedTurnId,
-        completedUserBlockId
-      )
       const completedKey = completedState.currentTurnId
         ? `turn:${completedState.currentTurnId}`
         : `active:${completedThreadId ?? 'unknown'}:${completedState.lastSeq}`
@@ -1016,7 +964,7 @@ export function buildThreadEventSink(
         dedupeKey: completedKey,
         mirrorText: pendingMirror && assistantMirrorText ? assistantMirrorText : undefined,
         mirrorThreadId: pendingMirror?.threadId,
-        reconcile: shouldReconcileCompletion,
+        reconcile: true,
         releaseWorktree: !get().queuedMessages.some(isPendingQueuedMessage)
       }))
     },
@@ -1030,6 +978,14 @@ export function buildThreadEventSink(
       set((current) => reduce(current, { type: 'turn_failed', error: err, options }))
       if (terminal && state.activeThreadId) {
         clearWatchedCompletionNotification(state.activeThreadId)
+        void reconcileCompletedTurnFromThreadDetail({
+          threadId: state.activeThreadId,
+          turnId: state.currentTurnId,
+          userBlockId: state.currentTurnUserId,
+          loadThreadDetail,
+          set,
+          get
+        })
       }
       if (terminal) {
         runEffects(terminalFailureProjectionEffects(

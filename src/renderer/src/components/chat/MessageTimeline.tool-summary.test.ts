@@ -413,7 +413,7 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
     ])
   })
 
-  it('renders an active generated image at its timeline position without a bottom duplicate', () => {
+  it('renders active generated work before the merged visible assistant reply without a duplicate', () => {
     const html = renderToStaticMarkup(
       createElement(ConversationTurn, {
         turn: {
@@ -447,8 +447,8 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
     expect(html).toContain(placement)
     expect(html).not.toContain('data-generated-files-placement="turn"')
     expect((html.match(/data-generated-files-placement=/g) ?? []).length).toBe(1)
-    expect(html.indexOf('Preparing the image now.')).toBeLessThan(html.indexOf(placement))
-    expect(html.indexOf(placement)).toBeLessThan(html.indexOf('Checking the rendered result.'))
+    expect(html.indexOf(placement)).toBeLessThan(html.indexOf('Preparing the image now.'))
+    expect(html.indexOf('Preparing the image now.')).toBeLessThan(html.indexOf('Checking the rendered result.'))
   })
 
   it('moves a completed generated image below the final assistant content', () => {
@@ -1207,7 +1207,7 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
     expect(html).toContain('is-active')
   })
 
-  it('keeps intermediate text visible between compact activity phases', () => {
+  it('keeps intermediate text visible while compact activity details remain collapsed', () => {
     const blocks: ChatBlock[] = [
       {
         kind: 'user',
@@ -1259,7 +1259,7 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
     )
 
     expect(html).toContain('I found the rendering path and am checking the active state.')
-    expect(html).toContain('workExpanded')
+    expect(html).toContain('Used 2 tools')
     expect(html).not.toContain('internal reasoning should stay collapsed')
     expect(html).not.toContain('completed read detail should stay collapsed')
     expect(html).not.toContain('running search detail should stay collapsed')

@@ -260,6 +260,7 @@ export type ThreadListOptions = {
 export type ToolBlock = {
   kind: 'tool'
   id: string
+  turnId?: string
   createdAt?: string
   summary: string
   status: 'running' | 'success' | 'error'
@@ -312,6 +313,7 @@ export type ReviewOutput = {
 export type ReviewBlock = {
   kind: 'review'
   id: string
+  turnId?: string
   createdAt?: string
   title: string
   status: 'running' | 'success' | 'error'
@@ -332,7 +334,7 @@ export type ChatBlock =
       meta?: RuntimeDisclosureMetadata
     }
   | { kind: 'assistant'; id: string; turnId?: string; createdAt?: string; text: string }
-  | { kind: 'reasoning'; id: string; createdAt?: string; text: string }
+  | { kind: 'reasoning'; id: string; turnId?: string; createdAt?: string; text: string }
   | ToolBlock
   | CompactionBlock
   | ReviewBlock
@@ -351,6 +353,7 @@ export type ChatBlock =
   | {
       kind: 'approval'
       id: string
+      turnId?: string
       createdAt?: string
       approvalId: string
       summary: string
@@ -362,6 +365,7 @@ export type ChatBlock =
   | {
       kind: 'user_input'
       id: string
+      turnId?: string
       createdAt?: string
       requestId: string
       questions: UserInputQuestion[]
@@ -379,6 +383,8 @@ export type ChatBlock =
 
 export type ApprovalRequestPayload = {
   approvalId: string
+  turnId?: string
+  createdAt?: string
   summary: string
   toolName?: string
   meta?: RuntimeDisclosureMetadata
@@ -392,6 +398,7 @@ export type ApprovalStatusPayload = {
 
 export type ToolEventPayload = {
   itemId: string
+  turnId?: string
   summary: string
   status: 'running' | 'success' | 'error'
   updateOnly?: boolean
@@ -447,6 +454,7 @@ export type CompactionEventPayload = {
 
 export type ReviewEventPayload = {
   itemId: string
+  turnId?: string
   createdAt?: string
   title: string
   status: 'running' | 'success' | 'error'
@@ -457,6 +465,8 @@ export type ReviewEventPayload = {
 
 export type UserInputRequestPayload = {
   itemId: string
+  turnId?: string
+  createdAt?: string
   requestId: string
   questions: UserInputQuestion[]
 }
@@ -482,6 +492,20 @@ export type ThreadDeltaEvent = {
   text: string
   kind: 'agent_message' | 'agent_reasoning'
   seq?: number
+  threadId?: string
+  turnId?: string
+  itemId?: string
+  createdAt?: string
+}
+
+export type AssistantItemSnapshotPayload = {
+  itemId: string
+  threadId: string
+  turnId: string
+  kind: 'agent_message' | 'agent_reasoning'
+  status: string
+  createdAt: string
+  text: string
 }
 
 export type ThreadErrorOptions = {
@@ -557,6 +581,7 @@ export type DelegatedRuntimeState = {
 export type ThreadEventSink = {
   onSeq(seq: number): void
   onDeltas(deltas: ThreadDeltaEvent[]): void
+  onAssistantItem?(item: AssistantItemSnapshotPayload): void
   onUserMessage(ev: UserMessageEventPayload): void
   onTool(ev: ToolEventPayload): void
   onCompaction(ev: CompactionEventPayload): void

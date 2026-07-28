@@ -75,26 +75,63 @@ function flushSideLiveBlocks(side: SideConversation): { side: SideConversation; 
   let nextLiveReasoning = side.liveReasoning
   let nextLiveAssistant = side.liveAssistant
   if (nextLiveReasoning) {
-    const id = `live_reasoning_${side.lastSeq || Date.now()}`
-    nextBlocks = [
-      ...nextBlocks,
-      { kind: 'reasoning', id, createdAt: new Date().toISOString(), text: nextLiveReasoning }
-    ]
+    const block: ChatBlock = {
+      kind: 'reasoning',
+      id: side.liveReasoningItemId ?? `live_reasoning_${side.lastSeq || Date.now()}`,
+      turnId: side.liveReasoningTurnId ?? side.turnId ?? undefined,
+      createdAt: side.liveReasoningCreatedAt ?? new Date().toISOString(),
+      text: nextLiveReasoning
+    }
+    nextBlocks = upsertSideTimelineBlock(nextBlocks, block)
     nextLiveReasoning = ''
   }
   if (nextLiveAssistant) {
-    const id = `live_assistant_${side.lastSeq || Date.now()}`
-    nextBlocks = [
-      ...nextBlocks,
-      { kind: 'assistant', id, createdAt: new Date().toISOString(), text: nextLiveAssistant }
-    ]
+    const block: ChatBlock = {
+      kind: 'assistant',
+      id: side.liveAssistantItemId ?? `live_assistant_${side.lastSeq || Date.now()}`,
+      turnId: side.liveAssistantTurnId ?? side.turnId ?? undefined,
+      createdAt: side.liveAssistantCreatedAt ?? new Date().toISOString(),
+      text: nextLiveAssistant
+    }
+    nextBlocks = upsertSideTimelineBlock(nextBlocks, block)
     nextLiveAssistant = ''
   }
   if (nextBlocks === side.blocks) return { side, blocks: nextBlocks }
   return {
-    side: { ...side, blocks: nextBlocks, liveReasoning: nextLiveReasoning, liveAssistant: nextLiveAssistant },
+    side: {
+      ...side,
+      blocks: nextBlocks,
+      liveReasoning: nextLiveReasoning,
+      liveAssistant: nextLiveAssistant,
+      liveReasoningItemId: undefined,
+      liveReasoningTurnId: undefined,
+      liveReasoningCreatedAt: undefined,
+      liveAssistantItemId: undefined,
+      liveAssistantTurnId: undefined,
+      liveAssistantCreatedAt: undefined
+    },
     blocks: nextBlocks
   }
+}
+
+function upsertSideTimelineBlock(blocks: ChatBlock[], incoming: ChatBlock): ChatBlock[] {
+  const index = blocks.findIndex(
+    (block) => block.kind === incoming.kind && block.id === incoming.id
+  )
+  if (index < 0) return [...blocks, incoming]
+  const current = blocks[index]
+  if (
+    (
+      (current.kind === 'assistant' && incoming.kind === 'assistant') ||
+      (current.kind === 'reasoning' && incoming.kind === 'reasoning')
+    ) &&
+    current.turnId === incoming.turnId &&
+    current.createdAt === incoming.createdAt &&
+    current.text === incoming.text
+  ) return blocks
+  const next = [...blocks]
+  next[index] = incoming
+  return next
 }
 
 function buildSideSink(sideId: string, ctx: SideContext, sinceSeq = 0): ThreadEventSink {
@@ -123,6 +160,7 @@ function buildSideSink(sideId: string, ctx: SideContext, sinceSeq = 0): ThreadEv
     onDeltas: (rawDeltas) => {
       const deltas: typeof rawDeltas = []
       for (const delta of rawDeltas) {
+        if (delta.threadId && delta.threadId !== sideId) continue
         if (typeof delta.seq === 'number') {
           if (delta.seq <= appliedDeltaSeqFloor) continue
           appliedDeltaSeqFloor = delta.seq
@@ -137,32 +175,115 @@ function buildSideSink(sideId: string, ctx: SideContext, sinceSeq = 0): ThreadEv
             .filter((value): value is number => typeof value === 'number')
           const lastSeq = seqs.length > 0 ? Math.max(side.lastSeq, ...seqs) : side.lastSeq
           let liveReasoning = side.liveReasoning
+          let liveReasoningItemId = side.liveReasoningItemId
+          let liveReasoningTurnId = side.liveReasoningTurnId
+          let liveReasoningCreatedAt = side.liveReasoningCreatedAt
           let liveAssistant = side.liveAssistant
+          let liveAssistantItemId = side.liveAssistantItemId
+          let liveAssistantTurnId = side.liveAssistantTurnId
+          let liveAssistantCreatedAt = side.liveAssistantCreatedAt
+          let blocks = side.blocks
           for (const delta of deltas) {
-            if (delta.kind === 'agent_reasoning') liveReasoning += delta.text
-            else liveAssistant += delta.text
+            if (delta.kind === 'agent_reasoning') {
+              if (delta.itemId && liveReasoningItemId && delta.itemId !== liveReasoningItemId) {
+                if (liveReasoning.trim()) {
+                  blocks = upsertSideTimelineBlock(blocks, {
+                    kind: 'reasoning',
+                    id: liveReasoningItemId,
+                    turnId: liveReasoningTurnId,
+                    createdAt: liveReasoningCreatedAt,
+                    text: liveReasoning
+                  })
+                }
+                liveReasoning = ''
+              }
+              liveReasoningItemId = delta.itemId ?? liveReasoningItemId
+              liveReasoningTurnId = delta.turnId ?? liveReasoningTurnId ?? side.turnId ?? undefined
+              liveReasoningCreatedAt = delta.createdAt ?? liveReasoningCreatedAt
+              liveReasoning += delta.text
+            } else {
+              if (delta.itemId && liveAssistantItemId && delta.itemId !== liveAssistantItemId) {
+                if (liveAssistant.trim()) {
+                  blocks = upsertSideTimelineBlock(blocks, {
+                    kind: 'assistant',
+                    id: liveAssistantItemId,
+                    turnId: liveAssistantTurnId,
+                    createdAt: liveAssistantCreatedAt,
+                    text: liveAssistant
+                  })
+                }
+                liveAssistant = ''
+              }
+              liveAssistantItemId = delta.itemId ?? liveAssistantItemId
+              liveAssistantTurnId = delta.turnId ?? liveAssistantTurnId ?? side.turnId ?? undefined
+              liveAssistantCreatedAt = delta.createdAt ?? liveAssistantCreatedAt
+              liveAssistant += delta.text
+            }
           }
           return {
             ...side,
+            blocks,
             lastSeq,
             liveReasoning,
+            liveReasoningItemId,
+            liveReasoningTurnId,
+            liveReasoningCreatedAt,
             liveAssistant,
+            liveAssistantItemId,
+            liveAssistantTurnId,
+            liveAssistantCreatedAt,
             busy: true
           }
+        })
+      )
+    },
+    onAssistantItem: (item) => {
+      if (item.threadId !== sideId) return
+      ctx.set((s) =>
+        patchSide(s, sideId, (side) => {
+          const block: ChatBlock = item.kind === 'agent_message'
+            ? {
+                kind: 'assistant',
+                id: item.itemId,
+                turnId: item.turnId,
+                createdAt: item.createdAt,
+                text: item.text
+              }
+            : {
+                kind: 'reasoning',
+                id: item.itemId,
+                turnId: item.turnId,
+                createdAt: item.createdAt,
+                text: item.text
+              }
+          const next = { ...side, blocks: upsertSideTimelineBlock(side.blocks, block) }
+          if (item.kind === 'agent_message' && side.liveAssistantItemId === item.itemId) {
+            next.liveAssistant = ''
+            next.liveAssistantItemId = undefined
+            next.liveAssistantTurnId = undefined
+            next.liveAssistantCreatedAt = undefined
+          }
+          if (item.kind === 'agent_reasoning' && side.liveReasoningItemId === item.itemId) {
+            next.liveReasoning = ''
+            next.liveReasoningItemId = undefined
+            next.liveReasoningTurnId = undefined
+            next.liveReasoningCreatedAt = undefined
+          }
+          return next
         })
       )
     },
     onTool: (ev: ToolEventPayload) => {
       ctx.set((s) =>
         patchSide(s, sideId, (side) => {
-          const flushed = flushSideLiveBlocks(side)
-          const idx = flushed.blocks.findIndex((b) => b.kind === 'tool' && b.id === ev.itemId)
+          const idx = side.blocks.findIndex((b) => b.kind === 'tool' && b.id === ev.itemId)
           let blocks: ChatBlock[]
           if (idx >= 0) {
-            const cur = flushed.blocks[idx]
-            if (cur.kind !== 'tool') return flushed.side
+            const cur = side.blocks[idx]
+            if (cur.kind !== 'tool') return side
             const next: ToolBlock = {
               ...cur,
+              turnId: ev.turnId ?? cur.turnId,
               summary: ev.summary || cur.summary,
               status: ev.status,
               toolKind: ev.toolKind ?? cur.toolKind,
@@ -170,13 +291,14 @@ function buildSideSink(sideId: string, ctx: SideContext, sinceSeq = 0): ThreadEv
               filePath: ev.filePath ?? cur.filePath,
               meta: ev.meta ?? cur.meta
             }
-            blocks = [...flushed.blocks]
+            blocks = [...side.blocks]
             blocks[idx] = next
           } else {
             const block: ToolBlock = {
               kind: 'tool',
               id: ev.itemId,
-              createdAt: new Date().toISOString(),
+              turnId: ev.turnId,
+              createdAt: ev.createdAt ?? new Date().toISOString(),
               summary: ev.summary,
               status: ev.status,
               toolKind: ev.toolKind,
@@ -184,23 +306,23 @@ function buildSideSink(sideId: string, ctx: SideContext, sinceSeq = 0): ThreadEv
               filePath: ev.filePath,
               meta: ev.meta
             }
-            blocks = [...flushed.blocks, block]
+            blocks = [...side.blocks, block]
           }
-          return { ...flushed.side, blocks, busy: true }
+          return { ...side, blocks, busy: true }
         })
       )
     },
     onCompaction: (ev) => {
       ctx.set((s) =>
         patchSide(s, sideId, (side) => {
-          const flushed = flushSideLiveBlocks(side)
-          const index = flushed.blocks.findIndex(
+          const index = side.blocks.findIndex(
             (block) => block.kind === 'compaction' && block.id === ev.itemId
           )
-          const current = index >= 0 ? flushed.blocks[index] : undefined
+          const current = index >= 0 ? side.blocks[index] : undefined
           const block: CompactionBlock = {
             kind: 'compaction',
             id: ev.itemId,
+            turnId: ev.turnId,
             createdAt: current?.kind === 'compaction'
               ? current.createdAt
               : ev.createdAt ?? new Date().toISOString(),
@@ -211,10 +333,10 @@ function buildSideSink(sideId: string, ctx: SideContext, sinceSeq = 0): ThreadEv
             messagesBefore: ev.messagesBefore ?? (current?.kind === 'compaction' ? current.messagesBefore : undefined),
             messagesAfter: ev.messagesAfter ?? (current?.kind === 'compaction' ? current.messagesAfter : undefined)
           }
-          const blocks = [...flushed.blocks]
+          const blocks = [...side.blocks]
           if (index >= 0) blocks[index] = block
           else blocks.push(block)
-          return { ...flushed.side, blocks }
+          return { ...side, blocks }
         })
       )
     },
@@ -226,8 +348,9 @@ function buildSideSink(sideId: string, ctx: SideContext, sinceSeq = 0): ThreadEv
             ...side.blocks,
             {
               kind: 'approval',
-              id: `appr_${Date.now()}`,
-              createdAt: new Date().toISOString(),
+              id: `approval-${req.approvalId}`,
+              turnId: req.turnId,
+              createdAt: req.createdAt ?? new Date().toISOString(),
               approvalId: req.approvalId,
               summary: req.summary,
               toolName: req.toolName,
@@ -262,8 +385,9 @@ function buildSideSink(sideId: string, ctx: SideContext, sinceSeq = 0): ThreadEv
             ...side.blocks,
             {
               kind: 'user_input',
-              id: `ui_${Date.now()}`,
-              createdAt: new Date().toISOString(),
+              id: req.itemId,
+              turnId: req.turnId,
+              createdAt: req.createdAt ?? new Date().toISOString(),
               requestId: req.requestId,
               questions: req.questions,
               status: 'pending'
@@ -277,7 +401,7 @@ function buildSideSink(sideId: string, ctx: SideContext, sinceSeq = 0): ThreadEv
         patchSide(s, sideId, (side) => ({
           ...side,
           blocks: side.blocks.map((block) =>
-            block.kind === 'user_input' && block.requestId === ev.itemId
+            block.kind === 'user_input' && block.id === ev.itemId
               ? { ...block, status: ev.status }
               : block
           )
@@ -291,14 +415,17 @@ function buildSideSink(sideId: string, ctx: SideContext, sinceSeq = 0): ThreadEv
       // Side conversations do not render runtime todo chips yet.
     },
     onTurnComplete: () => {
+      const completedTurnId = ctx.get().sideConversations[sideId]?.turnId
       ctx.set((s) =>
         patchSide(s, sideId, (side) => {
           const flushed = flushSideLiveBlocks(side)
           return { ...flushed.side, busy: false, turnId: null }
         })
       )
+      void reconcileCompletedSideTurn(sideId, completedTurnId, ctx)
     },
-    onError: (err) => {
+    onError: (err, options) => {
+      const completedTurnId = ctx.get().sideConversations[sideId]?.turnId
       ctx.set((s) =>
         patchSide(s, sideId, (side) => ({
           ...side,
@@ -306,12 +433,48 @@ function buildSideSink(sideId: string, ctx: SideContext, sinceSeq = 0): ThreadEv
           error: ctx.formatRuntimeError(err)
         }))
       )
+      if (options?.terminal) void reconcileCompletedSideTurn(sideId, completedTurnId, ctx)
     },
     onUsage: (usage) => {
       // Side usage is reported only to keep lastSeq cursors consistent;
       // a per-thread usage counter can be wired here in the future.
       void usage
     }
+  }
+}
+
+async function reconcileCompletedSideTurn(
+  sideId: string,
+  completedTurnId: string | null | undefined,
+  ctx: SideContext
+): Promise<void> {
+  try {
+    const detail = await ctx.getProvider().getThreadDetail(sideId)
+    ctx.set((state) =>
+      patchSide(state, sideId, (side) => {
+        if (side.busy || side.turnId) return side
+        const hasCompletedTurn = !completedTurnId || detail.blocks.some(
+          (block) => block.turnId === completedTurnId
+        )
+        if (!hasCompletedTurn) return side
+        return {
+          ...side,
+          blocks: detail.blocks,
+          lastSeq: Math.max(side.lastSeq, detail.latestSeq),
+          liveReasoning: '',
+          liveAssistant: '',
+          liveReasoningItemId: undefined,
+          liveReasoningTurnId: undefined,
+          liveReasoningCreatedAt: undefined,
+          liveAssistantItemId: undefined,
+          liveAssistantTurnId: undefined,
+          liveAssistantCreatedAt: undefined
+        }
+      })
+    )
+  } catch {
+    // The live projection remains visible; the next side-thread reload retries
+    // from the persisted runtime snapshot.
   }
 }
 

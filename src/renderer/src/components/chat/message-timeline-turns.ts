@@ -4,6 +4,7 @@ import { isBackgroundSubagentNoticeUserMessage } from '@shared/background-subage
 import { hasPendingRuntimeWork } from '../../store/chat-store-runtime-helpers'
 
 export type Turn = {
+  turnId?: string
   user?: Extract<ChatBlock, { kind: 'user' }>
   blocks: ChatBlock[]
 }
@@ -22,32 +23,52 @@ export function isBackgroundNoticeBlock(block: ChatBlock): boolean {
 
 export function groupTurns(blocks: ChatBlock[]): Turn[] {
   const turns: Turn[] = []
+  const turnsById = new Map<string, Turn>()
   let current: Turn | null = null
 
   for (const block of blocks) {
+    const turnId = block.turnId?.trim()
+    if (turnId) {
+      let turn = turnsById.get(turnId)
+      if (!turn) {
+        turn = { turnId, blocks: [] }
+        turnsById.set(turnId, turn)
+        turns.push(turn)
+      }
+      if (block.kind === 'user' && !isBackgroundNoticeBlock(block) && !turn.user) {
+        turn.user = block
+      } else {
+        turn.blocks.push(block)
+      }
+      if (block.kind === 'user' && !isBackgroundNoticeBlock(block)) current = turn
+      continue
+    }
     if (block.kind === 'user') {
       if (isBackgroundNoticeBlock(block)) {
         if (!current) current = { blocks: [] }
         current.blocks.push(block)
         continue
       }
-      if (current) turns.push(current)
       current = { user: block, blocks: [] }
+      turns.push(current)
       continue
     }
-    if (!current) current = { blocks: [] }
+    if (!current) {
+      current = { blocks: [] }
+      turns.push(current)
+    }
     current.blocks.push(block)
   }
 
-  if (current) turns.push(current)
   return turns
 }
 
 export function stableTurnKey(turn: Turn, fallbackIndex: number): string {
-  return turn.user?.id ?? turn.blocks[0]?.id ?? `turn-${fallbackIndex}`
+  return turn.turnId ?? turn.user?.id ?? turn.blocks[0]?.id ?? `turn-${fallbackIndex}`
 }
 
 export function sameTurnContent(left: Turn, right: Turn): boolean {
+  if (left.turnId !== right.turnId) return false
   if (left.user !== right.user) return false
   if (left.blocks.length !== right.blocks.length) return false
   for (let index = 0; index < left.blocks.length; index += 1) {

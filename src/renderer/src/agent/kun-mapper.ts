@@ -851,6 +851,7 @@ function toolBlockFromItem(item: CoreTurnItemJson, child?: CoreChildRuntimeMetad
   return {
     kind: 'tool',
     id: toolBlockId(item),
+    turnId: item.turnId,
     createdAt: itemCreatedAt(item),
     summary,
     status: componentDesignStatusOverride(item, componentPrototype) ?? delegateTaskStatusOverride(item, payload) ?? toolStatus(item),
@@ -1198,7 +1199,13 @@ function assistantTextBlockFromItem(item: CoreTurnItemJson): ChatBlock | null {
 
 function reasoningBlockFromItem(item: CoreTurnItemJson): ChatBlock | null {
   if (!item.text?.trim()) return null
-  return { kind: 'reasoning', id: item.id, createdAt: itemCreatedAt(item), text: item.text }
+  return {
+    kind: 'reasoning',
+    id: item.id,
+    turnId: item.turnId,
+    createdAt: itemCreatedAt(item),
+    text: item.text
+  }
 }
 
 function approvalBlockFromItem(item: CoreTurnItemJson, child?: CoreChildRuntimeMetadataJson): ChatBlock {
@@ -1207,6 +1214,7 @@ function approvalBlockFromItem(item: CoreTurnItemJson, child?: CoreChildRuntimeM
   return {
     kind: 'approval',
     id: item.id,
+    turnId: item.turnId,
     createdAt: itemCreatedAt(item),
     approvalId: item.approvalId ?? item.id,
     summary: item.summary?.trim() || 'Approval required',
@@ -1243,6 +1251,7 @@ function userInputBlockFromItem(
   return {
     kind: 'user_input',
     id: item.id,
+    turnId: item.turnId,
     createdAt: itemCreatedAt(item),
     requestId: item.inputId ?? item.id,
     questions: userInputQuestionsFromItem(item),
@@ -1261,6 +1270,8 @@ function userInputBlockFromItem(
 function userInputRequestFromCore(input: {
   itemId?: string
   inputId?: string
+  turnId?: string
+  createdAt?: string
   prompt?: string
   questions?: CoreTurnItemJson['questions'] | CoreRuntimeEventJson['questions']
   seq?: number
@@ -1268,6 +1279,8 @@ function userInputRequestFromCore(input: {
   const fallbackId = input.inputId ?? input.itemId ?? `input_${input.seq ?? Date.now()}`
   return {
     itemId: input.itemId ?? fallbackId,
+    ...(input.turnId ? { turnId: input.turnId } : {}),
+    ...(input.createdAt ? { createdAt: input.createdAt } : {}),
     requestId: input.inputId ?? fallbackId,
     questions: questionsFromCore(input.questions, input.prompt, input.inputId ?? fallbackId)
   }
@@ -1348,6 +1361,7 @@ function reviewBlockFromItem(item: CoreTurnItemJson): ReviewBlock {
   return {
     kind: 'review',
     id: item.id,
+    turnId: item.turnId,
     createdAt: itemCreatedAt(item),
     title: item.title?.trim() || 'Code review',
     status: reviewStatus(item),
@@ -1473,6 +1487,8 @@ function toolEventFromItem(item: CoreTurnItemJson, child?: CoreChildRuntimeMetad
   const block = toolBlockFromItem(item, child)
   return {
     itemId: block.id,
+    turnId: item.turnId,
+    createdAt: block.createdAt,
     summary: block.summary,
     status: block.status,
     toolKind: block.toolKind,
@@ -1493,6 +1509,7 @@ function childLifecycleToolEventFromRuntimeEvent(event: CoreRuntimeEventJson): T
   if (!child) return null
   return {
     itemId: `child_lifecycle_${child.childId}`,
+    turnId: event.turnId ?? child.parentTurnId,
     summary: child.childLabel || 'delegate_task',
     status: toolStatusFromChildStatus(child.childStatus),
     updateOnly: true,
@@ -1524,6 +1541,7 @@ function reviewFromItem(item: CoreTurnItemJson): ReviewEventPayload {
   const block = reviewBlockFromItem(item)
   return {
     itemId: block.id,
+    turnId: item.turnId,
     createdAt: block.createdAt,
     title: block.title,
     status: block.status,
@@ -1562,6 +1580,8 @@ function toolReadyFromEvent(event: CoreRuntimeEventJson): ToolEventPayload | nul
   if (!callId || !toolName) return null
   return {
     itemId: `tool_${callId}`,
+    turnId: event.turnId,
+    createdAt: event.timestamp,
     summary: toolName,
     status: 'running',
     toolKind: 'tool_call',
@@ -1651,6 +1671,8 @@ const kunEventNormalizerDeps: KunEventNormalizerDeps = {
   userInputRequest: (event) => userInputRequestFromCore({
     itemId: event.itemId,
     inputId: event.inputId,
+    turnId: event.turnId,
+    createdAt: event.timestamp,
     prompt: event.prompt,
     questions: event.questions,
     seq: event.seq
@@ -1701,6 +1723,7 @@ async function applyRuntimeProjectionAction(
   switch (action.type) {
     case 'seq_observed': sink.onSeq(action.seq); return
     case 'deltas_received': sink.onDeltas(action.deltas); return
+    case 'assistant_item_upserted': sink.onAssistantItem?.(action.payload); return
     case 'user_message_received': sink.onUserMessage(action.payload); return
     case 'tool_updated': sink.onTool(action.payload); return
     case 'compaction_updated': sink.onCompaction(action.payload); return
@@ -1751,7 +1774,11 @@ export async function dispatchKunRuntimeEvents(
         pendingDeltas.push({
           text,
           kind: event.kind === 'assistant_text_delta' ? 'agent_message' : 'agent_reasoning',
-          seq: event.seq
+          seq: event.seq,
+          threadId: event.threadId ?? event.item?.threadId,
+          turnId: event.turnId ?? event.item?.turnId,
+          itemId: event.itemId ?? event.item?.id,
+          createdAt: event.timestamp ?? event.item?.createdAt
         })
       }
       continue

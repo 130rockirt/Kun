@@ -51,6 +51,18 @@ export function normalizeKunTurnItem(
       return { type: 'user_message_received', payload: deps.userMessage(item) }
     case 'assistant_text':
     case 'assistant_reasoning':
+      return {
+        type: 'assistant_item_upserted',
+        payload: {
+          itemId: item.id,
+          threadId: item.threadId,
+          turnId: item.turnId,
+          kind: item.kind === 'assistant_text' ? 'agent_message' : 'agent_reasoning',
+          status: item.status,
+          createdAt: item.createdAt,
+          text: item.text ?? ''
+        }
+      }
     case 'approval':
     case 'user_input':
       return null
@@ -83,7 +95,11 @@ export function normalizeKunRuntimeEvent(
             deltas: [{
               text,
               kind: event.kind === 'assistant_text_delta' ? 'agent_message' : 'agent_reasoning',
-              seq: event.seq
+              seq: event.seq,
+              threadId: event.threadId ?? event.item?.threadId,
+              turnId: event.turnId ?? event.item?.turnId,
+              itemId: event.itemId ?? event.item?.id,
+              createdAt: event.timestamp ?? event.item?.createdAt
             }]
           }]
         : []

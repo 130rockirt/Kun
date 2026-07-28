@@ -26,8 +26,7 @@ const context = {
   runtimeErrorDetail: () => '',
   isInterruptSettledError: () => false,
   settlePendingRuntimeWork: (blocks: ChatState['blocks']) => blocks,
-  threadSnapshotLooksRunning: () => false,
-  hasAssistantTextForCompletedTurn: () => false
+  threadSnapshotLooksRunning: () => false
 }
 
 function state(): ChatState {
@@ -387,5 +386,181 @@ describe('chat projection reducer', () => {
     expect(projected.blocks).toEqual(blocks)
     expect(projected.lastSeq).toBe(8)
     expect(projected.error).toBeNull()
+  })
+
+  it('replaces incomplete deltas with the authoritative completed item snapshot', () => {
+    const initial = {
+      ...state(),
+      busy: true,
+      currentTurnId: 'turn_1',
+      currentTurnUserId: 'user_1',
+      liveDeltaSeqFloor: 0,
+      turnReasoningFirstAtByUserId: {},
+      turnReasoningLastAtByUserId: {}
+    }
+    const projected = project(initial, [
+      {
+        type: 'deltas_received',
+        deltas: [{
+          seq: 1,
+          threadId: 'thread_1',
+          turnId: 'turn_1',
+          itemId: 'assistant_1',
+          createdAt: '2026-07-11T00:00:00.000Z',
+          kind: 'agent_message',
+          text: 'Hello '
+        }]
+      },
+      {
+        type: 'assistant_item_upserted',
+        payload: {
+          itemId: 'assistant_1',
+          threadId: 'thread_1',
+          turnId: 'turn_1',
+          kind: 'agent_message',
+          status: 'completed',
+          createdAt: '2026-07-11T00:00:00.000Z',
+          text: 'Hello missing middle world'
+        }
+      }
+    ])
+
+    expect(projected.liveAssistant).toBe('')
+    expect(projected.blocks).toContainEqual({
+      kind: 'assistant',
+      id: 'assistant_1',
+      turnId: 'turn_1',
+      createdAt: '2026-07-11T00:00:00.000Z',
+      text: 'Hello missing middle world'
+    })
+  })
+
+  it('does not flush or split live assistant text when tool and status events arrive', () => {
+    const initial = {
+      ...state(),
+      busy: true,
+      currentTurnId: 'turn_1',
+      currentTurnUserId: 'user_1',
+      liveDeltaSeqFloor: 0,
+      turnReasoningFirstAtByUserId: {},
+      turnReasoningLastAtByUserId: {}
+    }
+    const projected = project(initial, [
+      {
+        type: 'deltas_received',
+        deltas: [{
+          seq: 1,
+          turnId: 'turn_1',
+          itemId: 'assistant_1',
+          kind: 'agent_message',
+          text: 'first '
+        }]
+      },
+      {
+        type: 'tool_updated',
+        payload: {
+          itemId: 'tool_1',
+          turnId: 'turn_1',
+          summary: 'read',
+          status: 'running'
+        }
+      },
+      {
+        type: 'runtime_status_received',
+        payload: {
+          kind: 'model_request_retry',
+          itemId: 'status_1',
+          turnId: 'turn_1'
+        }
+      },
+      {
+        type: 'deltas_received',
+        deltas: [{
+          seq: 2,
+          turnId: 'turn_1',
+          itemId: 'assistant_1',
+          kind: 'agent_message',
+          text: 'second'
+        }]
+      }
+    ])
+
+    expect(projected.liveAssistant).toBe('first second')
+    expect(projected.blocks.filter((block) => block.kind === 'assistant')).toEqual([])
+    expect(projected.blocks.map((block) => block.id)).toEqual(['tool_1', 'status_1'])
+  })
+
+  it('is idempotent for repeated delta seqs and authoritative snapshots', () => {
+    const initial = {
+      ...state(),
+      busy: true,
+      currentTurnId: 'turn_1',
+      currentTurnUserId: 'user_1',
+      liveDeltaSeqFloor: 0,
+      turnReasoningFirstAtByUserId: {},
+      turnReasoningLastAtByUserId: {}
+    }
+    const delta: RuntimeProjectionAction = {
+      type: 'deltas_received',
+      deltas: [{
+        seq: 4,
+        turnId: 'turn_1',
+        itemId: 'assistant_1',
+        kind: 'agent_message',
+        text: 'hello'
+      }]
+    }
+    const snapshot: RuntimeProjectionAction = {
+      type: 'assistant_item_upserted',
+      payload: {
+        itemId: 'assistant_1',
+        threadId: 'thread_1',
+        turnId: 'turn_1',
+        kind: 'agent_message',
+        status: 'completed',
+        createdAt: '2026-07-11T00:00:00.000Z',
+        text: 'hello'
+      }
+    }
+
+    const projected = project(initial, [delta, delta, snapshot, snapshot])
+
+    expect(projected.blocks.filter((block) => block.kind === 'assistant')).toHaveLength(1)
+    expect(projected.blocks.find((block) => block.kind === 'assistant')).toMatchObject({ text: 'hello' })
+  })
+
+  it('preserves an unchanged assistant block reference during terminal snapshot reconciliation', () => {
+    const assistant = {
+      kind: 'assistant' as const,
+      id: 'assistant_1',
+      turnId: 'turn_1',
+      createdAt: '2026-07-11T00:00:00.000Z',
+      text: 'Stable markdown'
+    }
+    const initial = {
+      ...state(),
+      busy: false,
+      currentTurnId: null,
+      lastSeq: 4,
+      blocks: [
+        { kind: 'user' as const, id: 'user_1', turnId: 'turn_1', text: 'Question' },
+        assistant
+      ]
+    }
+    const projected = project(initial, [{
+      type: 'thread_snapshot_reconciled',
+      payload: {
+        threadId: 'thread_1',
+        turnId: 'turn_1',
+        userBlockId: 'user_1',
+        latestSeq: 8,
+        blocks: [
+          { kind: 'user', id: 'user_1', turnId: 'turn_1', text: 'Question' },
+          { ...assistant }
+        ]
+      }
+    }])
+
+    expect(projected.blocks.find((block) => block.id === 'assistant_1')).toBe(assistant)
   })
 })

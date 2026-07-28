@@ -401,6 +401,58 @@ describe('chat-store-side-actions', () => {
     })
   })
 
+  it('keeps side assistant text intact across tools and replaces it from the authoritative snapshot', async () => {
+    const { actions, state, provider } = buildHarness()
+    const id = (await actions.spawnSideConversation())!
+    const sink = provider.subscribeMock.mock.calls.at(-1)?.[2] as ThreadEventSink
+
+    sink.onDeltas([{
+      seq: 1,
+      threadId: id,
+      turnId: 'turn_side_1',
+      itemId: 'assistant_side_1',
+      createdAt: '2026-06-02T00:00:00.000Z',
+      kind: 'agent_message',
+      text: 'partial '
+    }])
+    sink.onTool({
+      itemId: 'tool_side_1',
+      turnId: 'turn_side_1',
+      summary: 'read',
+      status: 'running'
+    })
+    sink.onDeltas([{
+      seq: 2,
+      threadId: id,
+      turnId: 'turn_side_1',
+      itemId: 'assistant_side_1',
+      kind: 'agent_message',
+      text: 'text'
+    }])
+
+    expect(state.sideConversations[id].liveAssistant).toBe('partial text')
+    expect(state.sideConversations[id].blocks.filter((block) => block.kind === 'assistant')).toEqual([])
+
+    sink.onAssistantItem?.({
+      itemId: 'assistant_side_1',
+      threadId: id,
+      turnId: 'turn_side_1',
+      kind: 'agent_message',
+      status: 'completed',
+      createdAt: '2026-06-02T00:00:00.000Z',
+      text: 'partial missing middle text'
+    })
+
+    expect(state.sideConversations[id].liveAssistant).toBe('')
+    expect(state.sideConversations[id].blocks).toContainEqual({
+      kind: 'assistant',
+      id: 'assistant_side_1',
+      turnId: 'turn_side_1',
+      createdAt: '2026-06-02T00:00:00.000Z',
+      text: 'partial missing middle text'
+    })
+  })
+
   it('updates approval resolution inside the matching side conversation', async () => {
     const { actions, state, provider } = buildHarness()
     const id = (await actions.spawnSideConversation())!

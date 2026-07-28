@@ -1111,11 +1111,14 @@ export class KunRuntimeProvider implements AgentProvider {
             this.handleApprovalRequest(runtimeEvent, eventSink)
           )
           if (signal.aborted || settled) return
+          // Commit the renderer cursor only after the whole ordered batch has
+          // been projected. ACK is flow control for the main process and must
+          // never precede the renderer's durable in-memory projection.
+          if (maxSeq !== null) sink.onSeq(maxSeq)
+          if (signal.aborted || settled) return
           if (payload.batchId) {
             await rendererRuntimeClient.ackSse(streamId, payload.batchId)
           }
-          if (signal.aborted || settled) return
-          if (maxSeq !== null) sink.onSeq(maxSeq)
         }).catch((error) => {
           if (!settled) {
             sink.onError(error instanceof Error ? error : new Error(String(error)))
@@ -1180,6 +1183,8 @@ export class KunRuntimeProvider implements AgentProvider {
     }
     sink.onApproval({
       approvalId,
+      turnId: event.turnId,
+      createdAt: event.timestamp,
       summary: event.summary ?? 'Approval required',
       toolName: event.toolName,
       ...(event.child ? { meta: { child: event.child } } : {})

@@ -1332,10 +1332,18 @@ describe('KunRuntimeProvider', () => {
     const provider = new KunRuntimeProvider()
     await provider.subscribeThreadEvents('thr_1', 2, sink, ac.signal)
     expect(sink.onSeq).toHaveBeenCalledWith(3)
-    expect(sink.onDeltas).toHaveBeenCalledWith([{ text: 'he', kind: 'agent_message', seq: 3 }])
+    expect(sink.onDeltas).toHaveBeenCalledWith([{
+      text: 'he',
+      kind: 'agent_message',
+      seq: 3,
+      threadId: 'thr_1',
+      turnId: 'turn_1',
+      itemId: 'item_text',
+      createdAt: 't1'
+    }])
   })
 
-  it('acknowledges an SSE batch only after dispatching it and then advances the cursor', async () => {
+  it('advances the renderer cursor after dispatch and only then acknowledges the SSE batch', async () => {
     let onData: ((payload: { streamId: string; events: unknown[]; batchId?: string }) => void) | null = null
     let releaseAck: (() => void) | undefined
     const ackGate = new Promise<void>((resolve) => {
@@ -1392,10 +1400,10 @@ describe('KunRuntimeProvider', () => {
       expect.any(String),
       { acknowledgedBatches: true }
     )
-    expect(sink.onSeq).not.toHaveBeenCalled()
+    expect(sink.onSeq).toHaveBeenCalledWith(4)
 
     releaseAck?.()
-    await vi.waitFor(() => expect(sink.onSeq).toHaveBeenCalledWith(4))
+    await Promise.resolve()
     ac.abort()
     await subscription
   })
