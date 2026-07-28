@@ -16,6 +16,7 @@ import { ReviewPlanCard, ReviewSummaryCard, TurnChangeSummary, WorkMetaRow } fro
 import {
   ProcessSectionRow,
   groupProcessSections,
+  summarizeProcessWork,
   summarizeToolBlock
 } from './message-timeline-process'
 import { ComponentPrototypeCard } from './ComponentPrototypeCard'
@@ -982,6 +983,7 @@ export function ConversationTurn({
   compactCards = false,
   allowMainThreadActions = true
 }: ConversationTurnProps): ReactElement {
+  const { t } = useTranslation('common')
   const forkThreadFromTurn = useChatStore((s) => s.forkThreadFromTurn)
   const rollbackWorkspaceToCheckpoint = useChatStore((s) => s.rollbackWorkspaceToCheckpoint)
   const [forking, setForking] = useState(false)
@@ -1037,6 +1039,10 @@ export function ConversationTurn({
   const workProcessBlocks = useMemo(
     () => processBlocks.filter((block) => block.kind !== 'compaction'),
     [processBlocks]
+  )
+  const workSummary = useMemo(
+    () => summarizeProcessWork(workProcessBlocks, t),
+    [t, workProcessBlocks]
   )
   const onlyCompactionProcess = processBlocks.length > 0 && workProcessBlocks.length === 0
   const workExpanded = workExpandedOverride ?? false
@@ -1117,6 +1123,7 @@ export function ConversationTurn({
               stepCount={workProcessBlocks.length}
               durationMs={durationMs}
               reasoningDurationMs={reasoningDurationMs}
+              summary={workSummary}
               expanded={workExpanded}
               collapsible={workProcessBlocks.length > 0}
               onToggle={() => setWorkExpandedOverride((value) => !(value ?? false))}

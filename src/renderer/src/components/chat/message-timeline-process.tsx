@@ -111,9 +111,28 @@ export function groupProcessSections(blocks: ChatBlock[]): ProcessSection[] {
     const last = sections[sections.length - 1]
     const followsGeneratedMedia = last?.blocks.some(processBlockHasGeneratedMedia) === true
 
-    // Only adjacent entries of the same kind may coalesce. Crossing a
-    // reasoning/tool/output boundary would erase when that transition happened
-    // and turn the chronological message chain into a tools-at-the-top bucket.
+    // Keep a real assistant text update as a hard timeline boundary, but fold
+    // adjacent non-text work together. A long read/search/reason sequence does
+    // not need to expand into dozens of empty process rows while it runs.
+    // The expanded detail still preserves every original entry in order.
+    const silentProcessPhase = kind === 'reasoning' || kind === 'execution'
+    const previousIsSilentProcessPhase =
+      last?.kind === 'reasoning' || last?.kind === 'execution'
+    if (
+      last &&
+      !followsGeneratedMedia &&
+      silentProcessPhase &&
+      previousIsSilentProcessPhase
+    ) {
+      if (last.kind === 'reasoning' && kind === 'reasoning') {
+        last.blocks.push(block)
+        continue
+      }
+      last.kind = 'execution'
+      last.blocks.push(block)
+      continue
+    }
+
     if (last && !followsGeneratedMedia && last.kind === kind) {
       last.blocks.push(block)
       continue
@@ -728,7 +747,7 @@ function ProcessGlyph({
   return <Icon className={`${className} h-3.5 w-3.5 shrink-0 opacity-75`} strokeWidth={1.9} />
 }
 
-function describeProcessSection(
+export function describeProcessSection(
   section: ProcessSection,
   t: (key: string, opts?: Record<string, unknown>) => string,
   opts: {
@@ -757,20 +776,38 @@ function describeProcessSection(
     return t('processTextLabel')
   }
 
-  // Keep execution titles stable while the turn is live. Active thinking /
-  // running chrome is rendered at the turn bottom, not by replacing this
-  // summary with a single in-flight tool or "Thinking...".
+  if (opts.processing && processSectionHasActiveWork(section, true)) {
+    const activeBlock = [...section.blocks].reverse().find(
+      (block) =>
+        block.id === 'live-reasoning' ||
+        block.id === 'live-assistant' ||
+        blockHasPendingRuntimeWork(block)
+    )
+    const phase = activeBlock
+      ? activeBlock.kind === 'reasoning'
+        ? t('thinkingNow')
+        : activeBlock.kind === 'tool'
+          ? t('workingToolAction', { action: summarizeToolBlock(activeBlock, t) })
+          : describeProcessBlock(activeBlock, t)
+      : t('processing')
+    const workSummary = summarizeProcessWork(section.blocks, t)
+    return workSummary ? `${phase} · ${workSummary}` : phase
+  }
+
   if (section.blocks.length === 1) {
     return describeProcessBlock(section.blocks[0], t)
   }
 
-  return summarizeExecutionSection(section.blocks, t)
+  return summarizeProcessWork(section.blocks, t) || t('processSteps', { count: section.blocks.length })
 }
 
-function summarizeExecutionSection(
+/** A compact, activity-based recap for a collapsed process phase. */
+export function summarizeProcessWork(
   blocks: ChatBlock[],
   t: (key: string, opts?: Record<string, unknown>) => string
 ): string {
+  let readCount = 0
+  let searchCount = 0
   let fileCount = 0
   let commandCount = 0
   let backgroundCommandCount = 0
@@ -791,12 +828,22 @@ function summarizeExecutionSection(
       } else {
         commandCount += 1
       }
+    } else if (isReadToolBlock(block)) {
+      readCount += 1
+    } else if (isSearchToolBlock(block)) {
+      searchCount += 1
     } else {
       toolCount += 1
     }
   }
 
   const parts: string[] = []
+  if (readCount > 0) {
+    parts.push(readCount === 1 ? t('groupReadFile') : t('groupReadFiles', { count: readCount }))
+  }
+  if (searchCount > 0) {
+    parts.push(searchCount === 1 ? t('groupSearchedOnce') : t('groupSearched', { count: searchCount }))
+  }
   if (fileCount > 0) {
     parts.push(
       fileCount === 1 ? t('groupEditedFile') : t('groupEditedFiles', { count: fileCount })
@@ -825,8 +872,23 @@ function summarizeExecutionSection(
     )
   }
 
-  if (parts.length > 0) return parts.join(' · ')
-  return t('processSteps', { count: blocks.length })
+  return parts.join(' · ')
+}
+
+function isReadToolBlock(block: ToolBlock): boolean {
+  const toolName = toolNameForBlock(block)
+  return toolName === 'read' || toolName === 'read_file'
+}
+
+function isSearchToolBlock(block: ToolBlock): boolean {
+  const toolName = toolNameForBlock(block)
+  return (
+    toolName === 'grep' ||
+    toolName === 'grep_files' ||
+    toolName === 'search' ||
+    toolName === 'search_files' ||
+    toolName === 'find'
+  )
 }
 
 function processSectionIcon(section: ProcessSection): LucideIcon | null {

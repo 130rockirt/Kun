@@ -17,7 +17,12 @@ import {
   MessageBubble,
   generatedMediaScrollAvailability
 } from './message-timeline-bubbles'
-import { ProcessSectionRow, groupProcessSections } from './message-timeline-process'
+import {
+  describeProcessSection,
+  ProcessSectionRow,
+  groupProcessSections,
+  summarizeProcessWork
+} from './message-timeline-process'
 import {
   TimelineFilePreviewWorkspaceProvider,
   timelineFilePreviewWorkspaceRoot,
@@ -36,10 +41,24 @@ const labels: Record<string, string> = {
   toolBuiltinBash: 'Bash',
   toolBuiltinBackgroundShell: 'Background shell',
   toolActionBackgroundShellRead: 'Read background shell',
-  toolActionBackgroundShellList: 'List background shells'
+  toolActionBackgroundShellList: 'List background shells',
+  workingToolAction: 'Working {{action}}',
+  thinkingNow: 'Thinking…',
+  groupReadFiles: 'Read {{count}} files',
+  groupReadFile: 'Read 1 file',
+  groupSearched: 'Searched {{count}} times',
+  groupSearchedOnce: 'Searched once',
+  groupEditedFiles: 'Edited {{count}} files',
+  groupEditedFile: 'Edited 1 file',
+  groupRanCommands: 'Ran {{count}} commands',
+  groupRanCommand: 'Ran 1 command'
 }
 
-const t = (key: string) => labels[key] ?? (key === 'toolActionCommand' ? 'Ran command' : key)
+const t = (key: string, opts?: Record<string, unknown>) =>
+  (labels[key] ?? (key === 'toolActionCommand' ? 'Ran command' : key)).replace(
+    /\{\{(\w+)\}\}/g,
+    (_match, name: string) => String(opts?.[name] ?? '')
+  )
 
 const activeThread: NormalizedThread = {
   id: 'thr_1',
@@ -240,7 +259,7 @@ describe('MessageTimeline tool summaries', () => {
     ).toBe('Read background shell 2mcorxhe sleep 15 && echo "Hello from background!"')
   })
 
-  it('preserves reasoning, tool, and text boundaries in chronological order', () => {
+  it('folds adjacent non-text work while preserving assistant text boundaries', () => {
     const sections = groupProcessSections([
       { kind: 'reasoning', id: 'reasoning_1', text: 'inspect the code' },
       toolBlock({ id: 'tool_read', summary: 'read: file', meta: { toolName: 'read' } }),
@@ -254,16 +273,8 @@ describe('MessageTimeline tool summaries', () => {
       ids: section.blocks.map((block) => block.id)
     }))).toEqual([
       {
-        kind: 'reasoning',
-        ids: ['reasoning_1']
-      },
-      {
         kind: 'execution',
-        ids: ['tool_read']
-      },
-      {
-        kind: 'reasoning',
-        ids: ['reasoning_2']
+        ids: ['reasoning_1', 'tool_read', 'reasoning_2']
       },
       {
         kind: 'output',
@@ -276,7 +287,45 @@ describe('MessageTimeline tool summaries', () => {
     ])
   })
 
-  it('keeps live reasoning after a completed tool batch as the next timeline phase', () => {
+  it('summarizes a collapsed phase by its work and its active operation', () => {
+    const readBlock = toolBlock({
+      id: 'tool_read',
+      summary: 'read: app',
+      meta: { toolName: 'read' },
+      filePath: '/tmp/app.ts'
+    })
+    const searchBlock = toolBlock({
+      id: 'tool_search',
+      summary: 'grep: app',
+      status: 'running',
+      meta: { toolName: 'grep', pattern: 'phase summary' }
+    })
+    const editBlock = toolBlock({
+      id: 'tool_edit',
+      summary: 'edit: app',
+      toolKind: 'file_change',
+      meta: { toolName: 'edit' }
+    })
+    const commandBlock = toolBlock({
+      id: 'tool_command',
+      summary: 'bash: test',
+      toolKind: 'command_execution',
+      meta: { toolName: 'bash', command: 'npm test' }
+    })
+
+    expect(summarizeProcessWork([readBlock, searchBlock, editBlock, commandBlock], t)).toBe(
+      'Read 1 file · Searched once · Edited 1 file · Ran 1 command'
+    )
+    expect(
+      describeProcessSection(
+        { id: 'execution_active', kind: 'execution', blocks: [readBlock, searchBlock] },
+        t,
+        { processing: true, singleReasoningSection: false }
+      )
+    ).toBe('Working Search phase summary · Read 1 file · Searched once')
+  })
+
+  it('folds live reasoning into a preceding non-text tool batch', () => {
     const sections = groupProcessSections([
       toolBlock({ id: 'tool_read', summary: 'read: file', meta: { toolName: 'read' } }),
       toolBlock({ id: 'tool_grep', summary: 'grep: search', meta: { toolName: 'grep' } }),
@@ -289,11 +338,7 @@ describe('MessageTimeline tool summaries', () => {
     }))).toEqual([
       {
         kind: 'execution',
-        ids: ['tool_read', 'tool_grep']
-      },
-      {
-        kind: 'reasoning',
-        ids: ['live-reasoning']
+        ids: ['tool_read', 'tool_grep', 'live-reasoning']
       }
     ])
   })
@@ -882,7 +927,7 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
 
     // Tool failures must not open the batch or tint the folded header; the
     // warning-toned inner rows only appear after the user expands.
-    expect(html).toContain('Used 2 tools')
+    expect(html).toContain('Read 1 file · Searched once')
     expect(html).toContain('aria-expanded="false"')
     expect(html).not.toContain('Search needle')
     expect(html).not.toContain('text-orange-700')
@@ -890,7 +935,7 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
     expect(html).not.toContain('read detail should stay tucked away')
   })
 
-  it('keeps live thinking on the turn-bottom loading row', () => {
+  it('folds live thinking into the preceding non-text process batch', () => {
     const turn = {
       user: {
         kind: 'user' as const,
@@ -919,11 +964,9 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
       })
     )
 
-    expect(html).toContain('Read')
+    expect(html).toContain('Thinking… · Read 1 file')
     expect(html).toContain('ds-shiny-text')
-    expect(html).toContain('ds-work-logo')
-    expect(html).toContain('is-active')
-    expect(html).toMatch(/Thinking|思考中|thinkingNow/)
+    expect(html).toContain('aria-expanded="false"')
     expect(html).not.toContain('current reasoning summary')
     expect(html).not.toContain('&lt;!-- --&gt;')
   })
@@ -984,7 +1027,7 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
       })
     )
 
-    expect(html).toContain('Used 2 tools')
+    expect(html).toContain('Read 1 file · Searched once')
     expect(html).not.toContain('ds-work-stack')
     expect(html).not.toContain('/tmp/readme.md')
     expect(html).not.toContain('needle')
@@ -992,7 +1035,7 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
     expect(html).not.toContain('grep detail should stay tucked away')
   })
 
-  it('keeps completed tools, live thinking, and live text on one ordered timeline', () => {
+  it('folds non-text work before the following live assistant text', () => {
     const turn = {
       user: {
         kind: 'user' as const,
@@ -1026,11 +1069,10 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
       })
     )
 
-    expect(html).toContain('Used 2 tools')
+    expect(html).toContain('Thinking… · Read 1 file · Searched once')
     expect(html).toContain('发现阻塞项：继续审阅。')
-    expect(html).toMatch(/Thinking|思考中|thinkingNow/)
-    expect(html.indexOf('Used 2 tools')).toBeLessThan(html.search(/Thinking|思考中|thinkingNow/))
-    expect(html.search(/Thinking|思考中|thinkingNow/)).toBeLessThan(
+    expect(html).toContain('aria-expanded="false"')
+    expect(html.indexOf('Thinking… · Read 1 file · Searched once')).toBeLessThan(
       html.indexOf('发现阻塞项：继续审阅。')
     )
   })
@@ -1311,10 +1353,10 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
     )
 
     expect(html).toContain('I found the rendering path and am checking the active state.')
-    expect(html).toContain('Read')
+    expect(html).toContain('Read 1 file')
     expect(html).toContain('Search')
-    expect(html).not.toContain('Used 2 tools')
-    expect(html.indexOf('/tmp/project/src/flow.ts')).toBeLessThan(
+    expect(html).toContain('aria-expanded="false"')
+    expect(html.indexOf('Read 1 file')).toBeLessThan(
       html.indexOf('I found the rendering path and am checking the active state.')
     )
     expect(html.indexOf('I found the rendering path and am checking the active state.')).toBeLessThan(
@@ -1368,6 +1410,7 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
 
     expect(html).toContain('The final answer is ready.')
     expect(html).toContain('ds-chat-answer')
+    expect(html).toContain('Read 1 file')
     expect(html).toContain('aria-expanded="false"')
     expect(html).not.toContain('I am checking the relevant path.')
     expect(html).not.toContain('intermediate reasoning')

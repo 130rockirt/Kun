@@ -377,6 +377,7 @@ export function WorkMetaRow({
   stepCount,
   durationMs,
   reasoningDurationMs,
+  summary,
   expanded,
   onToggle,
   collapsible = true
@@ -385,6 +386,7 @@ export function WorkMetaRow({
   stepCount: number
   durationMs?: number
   reasoningDurationMs?: number
+  summary?: string
   expanded: boolean
   onToggle: () => void
   collapsible?: boolean
@@ -403,11 +405,14 @@ export function WorkMetaRow({
     !processing &&
     typeof reasoningDurationMs === 'number' &&
     reasoningDurationMs >= 1000
-  const showStepSuffix = !expanded && stepCount > 0
+  const workSummary = summary?.trim() ?? ''
+  const showSummary = !expanded && workSummary.length > 0
+  const showStepSuffix = !expanded && !showSummary && stepCount > 0
 
   const content = (
     <>
       <span className={`tabular-nums ${processing ? 'ds-shiny-text' : ''}`}>{mainLabel}</span>
+      {showSummary ? <span className="text-ds-faint">· {workSummary}</span> : null}
       {showStepSuffix ? (
         <span className="text-ds-faint">· {t('processStepCount', { count: stepCount })}</span>
       ) : null}
