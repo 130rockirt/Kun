@@ -9,7 +9,10 @@ import {
   type GraphRunV1
 } from '../contracts/graph.js'
 import type { GraphRuntimeConfig } from '../config/kun-config.js'
-import type { DelegationRuntime } from '../delegation/delegation-runtime.js'
+import type {
+  ChildRunRecord,
+  DelegationRuntime
+} from '../delegation/delegation-runtime.js'
 import type { GraphSupervisionPort } from './graph-scheduler.js'
 import type { GraphRunStore } from './graph-run-store.js'
 import { runGraphBackgroundTask } from './graph-background-task.js'
@@ -29,6 +32,7 @@ export class GraphSupervisor implements GraphSupervisionPort {
   private readonly queues = new Map<string, Promise<unknown>>()
   private readonly leadQueues = new Map<string, Promise<unknown>>()
   private readonly nowIso: () => string
+  private readonly nowMs: () => number
   private readonly nextId: (prefix: string) => string
   private stopped = false
   private sweepTimer?: NodeJS.Timeout
@@ -45,9 +49,11 @@ export class GraphSupervisor implements GraphSupervisionPort {
     }) => Promise<void>
     synthesize?: (run: GraphRunV1) => Promise<GraphRunSummaryV1>
     nowIso?: () => string
+    nowMs?: () => number
     nextId?: (prefix: string) => string
   }) {
     this.nowIso = options.nowIso ?? (() => new Date().toISOString())
+    this.nowMs = options.nowMs ?? Date.now
     let next = 0
     this.nextId = options.nextId ?? ((prefix) => `${prefix}_${Date.now()}_${++next}`)
   }
@@ -156,7 +162,7 @@ export class GraphSupervisor implements GraphSupervisionPort {
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         if (
-          /active turn|capacity/i.test(message) &&
+          /active turn|capacity|not active|no longer accepting steering|steering queue/i.test(message) &&
           !this.stopped &&
           graphAutomaticSupervisionEnabled(this.options.config())
         ) {
@@ -360,24 +366,55 @@ export class GraphSupervisor implements GraphSupervisionPort {
     if (!graphAutomaticSupervisionEnabled(this.options.config())) return 0
     const runs = await this.options.store.list({ statuses: ['running'] })
     let signaled = 0
-    const now = Date.now()
+    const now = this.nowMs()
+    const childRunsByThread = new Map<string, Map<string, ChildRunRecord>>()
     for (const run of runs) {
+      let childRunsById = childRunsByThread.get(run.threadId)
+      if (!childRunsById) {
+        childRunsById = await this.loadChildRunsById(run.threadId)
+        childRunsByThread.set(run.threadId, childRunsById)
+      }
       const stalled = Object.values(run.nodes).filter((node) => {
         const attempt = node.attempts.at(-1)
-        return node.status === 'running' &&
-          attempt?.startedAt &&
-          now - Date.parse(attempt.startedAt) >= this.options.config().supervision.stallTimeoutMs
+        if (node.status !== 'running' || !attempt?.startedAt) return false
+        const child = attempt.childThreadId
+          ? childRunsById.get(attempt.childThreadId)
+          : undefined
+        const latestActivityAt = child?.activity?.updatedAt ??
+          child?.updatedAt ??
+          attempt.startedAt
+        const latestActivityMs = Date.parse(latestActivityAt)
+        return Number.isFinite(latestActivityMs) &&
+          now - latestActivityMs >= this.options.config().supervision.stallTimeoutMs
       })
       if (!stalled.length) continue
       await this.signal({
         runId: run.id,
         reason: 'stall',
         nodeIds: stalled.map((node) => node.node.id),
-        digest: `${stalled.length} node attempt(s) exceeded the supervision stall threshold.`
+        digest:
+          `${stalled.length} running node attempt(s) had no safe child activity within the ` +
+          'supervision quiet threshold. Attempts remain running; inspect durable state before acting.'
       })
       signaled += 1
     }
     return signaled
+  }
+
+  private async loadChildRunsById(threadId: string): Promise<Map<string, ChildRunRecord>> {
+    const delegation = this.options.delegation()
+    if (!delegation) return new Map()
+    try {
+      const diagnostics = await delegation.diagnostics(threadId)
+      return new Map(diagnostics.childRuns.map((child) => [child.id, child]))
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      console.warn(
+        `[kun] Graph supervisor could not read child activity for ${threadId}: ` +
+        message.slice(0, 512)
+      )
+      return new Map()
+    }
   }
 
   async stop(): Promise<void> {

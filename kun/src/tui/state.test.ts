@@ -3,6 +3,7 @@ import { ThreadSchema } from '../contracts/threads.js'
 import type { RuntimeEvent } from '../contracts/events.js'
 import {
   applyRuntimeEvent,
+  matchingRequestContextSnapshot,
   projectThreadSnapshot,
   setProjectionRunningTurn
 } from './state.js'
@@ -111,6 +112,64 @@ describe('thread projection', () => {
       expect.objectContaining({ id: 'reasoning_1', text: 'think more' }),
       expect.objectContaining({ id: 'text_1', text: 'answer' })
     ]))
+  })
+
+  it('projects request-local context snapshots independently from cumulative usage', () => {
+    let state = projectThreadSnapshot(detail())
+    state = applyRuntimeEvent(state, event({
+      kind: 'usage',
+      seq: 1,
+      model: 'model-a',
+      usage: {
+        promptTokens: 557_000,
+        completionTokens: 1_000,
+        totalTokens: 558_000,
+        cachedTokens: 0,
+        cacheHitRate: null,
+        turns: 2
+      }
+    }))
+    state = applyRuntimeEvent(state, event({
+      kind: 'context_snapshot',
+      seq: 2,
+      turnId: 'turn_1',
+      model: 'model-a',
+      providerId: 'provider-a',
+      stepIndex: 0,
+      contextWindowTokens: 372_000,
+      softThresholdTokens: 279_000,
+      hardThresholdTokens: 316_200,
+      estimatedInputTokens: 120_000,
+      breakdown: {
+        tools: 10_000,
+        system: 20_000,
+        skills: 10_000,
+        messages: 75_000,
+        other: 5_000
+      },
+      toolCount: 5,
+      activeSkillIds: [],
+      contextManagement: 'kun-managed',
+      nativeHistory: 'none'
+    }))
+
+    expect(state.usage?.totalTokens).toBe(558_000)
+    expect(state.contextSnapshot).toMatchObject({
+      estimatedInputTokens: 120_000,
+      contextWindowTokens: 372_000
+    })
+    expect(matchingRequestContextSnapshot(state, {
+      model: 'model-a',
+      providerId: 'provider-a'
+    })).toBe(state.contextSnapshot)
+    expect(matchingRequestContextSnapshot(state, {
+      model: 'model-b',
+      providerId: 'provider-a'
+    })).toBeUndefined()
+    expect(matchingRequestContextSnapshot(state, {
+      model: 'model-a',
+      providerId: 'provider-b'
+    })).toBeUndefined()
   })
 
   it('reflects externally-started turns and cross-client gate resolution', () => {

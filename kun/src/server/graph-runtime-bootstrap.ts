@@ -21,6 +21,9 @@ export function createGraphRuntimeStartOptions(input: {
   startTurn: (
     request: Parameters<TurnService['startTurn']>[0]
   ) => ReturnType<TurnService['startTurn']>
+  steerTurn: (
+    request: Parameters<TurnService['steerTurn']>[0]
+  ) => ReturnType<TurnService['steerTurn']>
   runAgentTurn: (
     threadId: string,
     turnId: string
@@ -34,16 +37,28 @@ export function createGraphRuntimeStartOptions(input: {
     leadTurn: async ({ run, reasons, nodeIds, digest }) => {
       const thread = await input.threads.get(run.threadId)
       if (!thread) return
+      const prompt = graphLeadPrompt({
+        runId: run.id,
+        runStatus: run.status,
+        reasons,
+        nodeIds,
+        digest
+      })
+      const activeTurn = [...thread.turns].reverse()
+        .find((turn) => turn.status === 'running')
+      if (activeTurn) {
+        await input.steerTurn({
+          threadId: run.threadId,
+          turnId: activeTurn.id,
+          text: prompt,
+          messageSource: 'graph_runtime'
+        })
+        return
+      }
       const started = await input.startTurn({
         threadId: run.threadId,
         request: {
-          prompt: graphLeadPrompt({
-            runId: run.id,
-            runStatus: run.status,
-            reasons,
-            nodeIds,
-            digest
-          }),
+          prompt,
           messageSource: 'graph_runtime',
           model: thread.model,
           providerId: thread.providerId,

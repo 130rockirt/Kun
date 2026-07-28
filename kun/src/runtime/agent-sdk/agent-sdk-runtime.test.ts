@@ -227,6 +227,14 @@ describe('AgentSdkRuntime.runTurn', () => {
   })
 
   test('decideSdkBuiltinSandbox limits SDK reads to the workspace in workspace-write mode', () => {
+    expect(decideSdkBuiltinSandbox('Bash', { command: 'pwd' }, {
+      workspace: '/ws',
+      sandboxMode: 'workspace-write'
+    })).toBeNull()
+    expect(decideSdkBuiltinSandbox('Bash', { command: 'pwd' }, {
+      workspace: '/ws',
+      sandboxMode: 'read-only'
+    })).toMatchObject({ allow: false })
     expect(decideSdkBuiltinSandbox('Read', { file_path: '/tmp/outside.txt' }, {
       workspace: '/ws',
       sandboxMode: 'workspace-write'
@@ -801,7 +809,7 @@ describe('AgentSdkRuntime.runTurn', () => {
     }
   })
 
-  test('gates SDK built-ins with the workspace sandbox before approval policy', async () => {
+  test('allows approved Bash but still gates SDK file paths in workspace-write', async () => {
     let canUseTool: SdkCanUseTool | undefined
     let permissionMode: unknown
     const sdk = fakeSdk(STREAM, (opts) => {
@@ -823,9 +831,9 @@ describe('AgentSdkRuntime.runTurn', () => {
 
     expect(permissionMode).toBe('default')
     expect(canUseTool).toBeDefined()
-    await expect(canUseTool!('Bash', { command: 'pwd' })).resolves.toMatchObject({
-      behavior: 'deny',
-      message: expect.stringContaining('does not run host shell commands')
+    await expect(canUseTool!('Bash', { command: 'pwd' })).resolves.toEqual({
+      behavior: 'allow',
+      updatedInput: { command: 'pwd' }
     })
     await expect(canUseTool!('Write', { file_path: '/tmp/outside.txt', content: 'x' })).resolves.toMatchObject({
       behavior: 'deny',

@@ -72,6 +72,43 @@ describe('LocalToolHost approval policy', () => {
     expect(result.approved).toBe(false)
   })
 
+  it.each(['gui', 'tui'] as const)(
+    'uses the shared workspace-write command approval policy for %s',
+    async (clientSurface) => {
+      const execute = vi.fn(async () => ({ output: { ok: true } }))
+      const command = LocalToolHost.defineTool({
+        name: 'bash',
+        description: 'Run a test host command',
+        inputSchema: { type: 'object' },
+        policy: 'auto',
+        toolKind: 'command_execution',
+        execute
+      })
+      const host = new LocalToolHost({ tools: [command] })
+      const awaitApproval = vi.fn(async () => 'allow' as const)
+      const context = {
+        threadId: 'thread_1',
+        turnId: `turn_${clientSurface}`,
+        workspace: '/tmp/workspace',
+        approvalPolicy: 'auto',
+        sandboxMode: 'workspace-write',
+        clientSurface,
+        abortSignal: new AbortController().signal,
+        awaitApproval
+      } satisfies ToolHostContext
+
+      expect((await host.listTools(context)).map((tool) => tool.name)).toEqual(['bash'])
+      const result = await host.execute(
+        { callId: `call_${clientSurface}`, toolName: 'bash', arguments: { command: 'pwd' } },
+        context
+      )
+
+      expect(awaitApproval).toHaveBeenCalledOnce()
+      expect(execute).toHaveBeenCalledOnce()
+      expect(result.item).toMatchObject({ kind: 'tool_result', output: { ok: true } })
+    }
+  )
+
   it('does not let provider-managed approval bypass an explicit runtime approval', async () => {
     const execute = vi.fn(async () => ({ output: { ok: true } }))
     const host = new LocalToolHost({

@@ -56,6 +56,7 @@ import { createApprovalConsentToken, KUN_APPROVAL_CONSENT_HEADER } from '../serv
 import { isLoopbackHost } from '../server/loopback-host.js'
 import { readRuntimeDiscovery, type RuntimeDiscoveryRecord } from '../server/runtime-discovery.js'
 import { ensureSharedRuntime } from '../cli/shared-runtime.js'
+import { readRuntimeBuildIdForEntry } from '../server/runtime-build-identity.js'
 import type { TuiOptions } from './options.js'
 import { IncrementalSseParser, parseRuntimeEventFrame } from './sse.js'
 
@@ -378,7 +379,11 @@ export class TuiClientError extends Error {
 
 export async function resolveTuiConnection(
   options: TuiOptions,
-  fetchImpl: typeof fetch = fetch
+  fetchImpl: typeof fetch = fetch,
+  deps?: {
+    expectedBuildId?: string
+    ensureRuntime?: typeof ensureSharedRuntime
+  }
 ): Promise<TuiConnection> {
   if (options.url) {
     return validateConnection({
@@ -388,25 +393,51 @@ export async function resolveTuiConnection(
     }, fetchImpl)
   }
 
+  const expectedBuildId = deps?.expectedBuildId ??
+    await readRuntimeBuildIdForEntry(import.meta.url)
+  const ensureRuntime = deps?.ensureRuntime ?? ensureSharedRuntime
+  const startExpectedRuntime = async (): Promise<TuiConnection> => {
+    const started = await ensureRuntime({
+      dataDir: options.dataDir,
+      fetch: fetchImpl,
+      ...(expectedBuildId ? { expectedBuildId } : {})
+    })
+    return {
+      baseUrl: started.discovery.baseUrl,
+      runtimeToken: started.discovery.runtimeToken,
+      runtimeInfo: started.info,
+      discovered: true
+    }
+  }
   const discovery = await readRuntimeDiscovery(options.dataDir).catch(() => null)
   if (discovery) {
     assertSafeDiscovery(discovery)
     try {
-      return await validateConnection({
+      const connection = await validateConnection({
         baseUrl: discovery.baseUrl.replace(/\/$/, ''),
         runtimeToken: options.runtimeToken || discovery.runtimeToken,
         discovered: true,
         discovery
       }, fetchImpl)
+      const buildMatches = !expectedBuildId || (
+        discovery.buildId === expectedBuildId &&
+        connection.runtimeInfo.buildId === expectedBuildId
+      )
+      if (buildMatches) return connection
+      if (options.noStart) {
+        throw new TuiClientError(
+          'Kun runtime discovery belongs to an older application build; remove --no-start so this TUI can replace it.',
+          undefined,
+          'runtime_build_mismatch'
+        )
+      }
+      return startExpectedRuntime()
     } catch (error) {
       if (!options.noStart) {
-        const started = await ensureSharedRuntime({ dataDir: options.dataDir, fetch: fetchImpl })
-        return {
-          baseUrl: started.discovery.baseUrl,
-          runtimeToken: started.discovery.runtimeToken,
-          runtimeInfo: started.info,
-          discovered: true
-        }
+        return startExpectedRuntime()
+      }
+      if (error instanceof TuiClientError && error.code === 'runtime_build_mismatch') {
+        throw error
       }
       throw new TuiClientError(
         `Kun runtime discovery is stale or unavailable in ${options.dataDir}. Run \`kun runtime restart\`, or remove --no-start so this client can start the shared runtime.`,
@@ -422,13 +453,7 @@ export async function resolveTuiConnection(
       'runtime_unavailable'
     )
   }
-  const started = await ensureSharedRuntime({ dataDir: options.dataDir, fetch: fetchImpl })
-  return {
-    baseUrl: started.discovery.baseUrl,
-    runtimeToken: started.discovery.runtimeToken,
-    runtimeInfo: started.info,
-    discovered: true
-  }
+  return startExpectedRuntime()
 }
 
 async function validateConnection(

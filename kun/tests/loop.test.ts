@@ -192,7 +192,9 @@ describe('AgentLoop', () => {
     expect(instructions).toContain('Specialized source-code MCP tools are available')
     expect(instructions).toContain('`mcp_semantic_find_symbol`')
     expect(instructions).toContain('before broad scans')
-    expect(instructions).toContain('Use `read`, `grep`, `find`, `ls`, `repo_map` for unsupported files')
+    expect(instructions).toContain(
+      'Use `read`, `grep`, `find`, `ls`, `repo_map` for unsupported files'
+    )
   })
 
   it('records elapsed seconds for active goals after a turn finishes', async () => {
@@ -297,8 +299,8 @@ describe('AgentLoop', () => {
       'input_received',
       'input_cached',
       'input_routed',
-      'input_compressed',
       'input_remembered',
+      'input_compressed',
       'pre_send',
       'post_send',
       'response_received'
@@ -334,6 +336,110 @@ describe('AgentLoop', () => {
       softThresholdTokens: 750,
       hardThresholdTokens: 850
     })
+  })
+
+  it('compacts from complete request overhead before dispatching the rebuilt request', async () => {
+    const requests: ModelRequest[] = []
+    const h = makeHarness({
+      provider: 'preflight',
+      model: 'preflight',
+      async *stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
+        requests.push(request)
+        yield { kind: 'completed', stopReason: 'stop' }
+      }
+    }, {
+      tools: [],
+      compactor: new ContextCompactor({ softThreshold: 220, hardThreshold: 320 }),
+      instructionRuntime: {
+        resolveTurn: async () => ({
+          instruction: `Large dynamic instruction ${'z'.repeat(1_200)}`,
+          sources: [],
+          injectedBytes: 1_226
+        })
+      } as never,
+      modelCapabilities: (model) => ({
+        id: model,
+        inputModalities: ['text'],
+        outputModalities: ['text'],
+        supportsToolCalling: true,
+        contextWindowTokens: 2_000,
+        messageParts: ['text']
+      })
+    })
+    await h.threadStore.upsert(
+      createThreadRecord({ id: h.threadId, title: 'demo', workspace: '/tmp', model: 'preflight' })
+    )
+    for (let index = 0; index < 4; index += 1) {
+      await h.sessionStore.appendItem(h.threadId, makeUserItem({
+        id: `old_preflight_${index}`,
+        turnId: `old_turn_${index}`,
+        threadId: h.threadId,
+        text: `old context ${index} ${'x'.repeat(80)}`
+      }))
+    }
+    const started = await h.turns.startTurn({
+      threadId: h.threadId,
+      request: { prompt: 'keep this current request' }
+    })
+    h.turnId = started.turnId
+
+    await expect(h.loop.runTurn(h.threadId, h.turnId)).resolves.toBe('completed')
+
+    expect(requests).toHaveLength(1)
+    expect(requests[0]?.history[0]).toMatchObject({ kind: 'compaction' })
+    expect(requests[0]?.history).toContainEqual(expect.objectContaining({
+      kind: 'user_message',
+      text: 'keep this current request'
+    }))
+    const events = await h.sessionStore.loadEventsSince(h.threadId, 0)
+    expect(events).toContainEqual(expect.objectContaining({
+      kind: 'compaction_completed',
+      replacedTokens: expect.any(Number)
+    }))
+    expect(events).toContainEqual(expect.objectContaining({
+      kind: 'pipeline_stage',
+      stage: 'input_compressed',
+      details: expect.objectContaining({
+        requestOverheadTokens: expect.any(Number)
+      })
+    }))
+  })
+
+  it('blocks an uncompactable oversized request before model transport dispatch', async () => {
+    let dispatches = 0
+    const h = makeHarness({
+      provider: 'preflight-block',
+      model: 'preflight-block',
+      async *stream(): AsyncIterable<ModelStreamChunk> {
+        dispatches += 1
+        yield { kind: 'completed', stopReason: 'stop' }
+      }
+    }, {
+      tools: [],
+      compactor: new ContextCompactor({ softThreshold: 100, hardThreshold: 200 }),
+      modelCapabilities: (model) => ({
+        id: model,
+        inputModalities: ['text'],
+        outputModalities: ['text'],
+        supportsToolCalling: true,
+        contextWindowTokens: 500,
+        messageParts: ['text']
+      })
+    })
+    await bootstrapThread(h, {
+      request: { prompt: `uncompactable current input ${'x'.repeat(4_000)}` }
+    })
+
+    await expect(h.loop.runTurn(h.threadId, h.turnId)).resolves.toBe('failed')
+
+    expect(dispatches).toBe(0)
+    const events = await h.sessionStore.loadEventsSince(h.threadId, 0)
+    expect(events).toContainEqual(expect.objectContaining({
+      kind: 'error',
+      code: 'context_window_exceeded',
+      message: expect.stringContaining('request exceeds the 425-token context cap')
+    }))
+    expect(events.some((event) => event.kind === 'context_snapshot')).toBe(false)
   })
 
   it('records provider endpoint diagnostics for model send stages', async () => {

@@ -31,7 +31,9 @@ import {
   type ReadTrackerOptions
 } from './read-tracker.js'
 import {
+  effectiveSandboxMode,
   externalWriteTargetsForApproval,
+  isWorkspaceApprovalCommandTool,
   sandboxBlockForTool,
   type SandboxBlock
 } from './sandbox-policy.js'
@@ -281,9 +283,17 @@ export class LocalToolHost implements ToolHost {
       }
     }
     const externalPathApproval = externalWriteTargets.length > 0
+    const workspaceCommandApproval =
+      effectiveSandboxMode(context) === 'workspace-write' &&
+      isWorkspaceApprovalCommandTool({
+        name: activeCall.toolName,
+        toolKind: activeCall.toolKind ?? tool.toolKind
+      })
     // A configured hook may auto-approve ordinary tool calls, but it must not
-    // bypass an explicit user decision for an external side effect.
-    const needsApproval = externalPathApproval || tool.requiresExplicitApproval ||
+    // bypass an explicit user decision for an external side effect or an
+    // unrestricted host command exposed by workspace-write.
+    const needsApproval = externalPathApproval || workspaceCommandApproval ||
+      tool.requiresExplicitApproval ||
       (!preHooks.autoApproved && this.requiresApproval(tool, activeCall, context))
     if (needsApproval) {
       const approvalId = `appr_${randomUUID().replaceAll('-', '')}`

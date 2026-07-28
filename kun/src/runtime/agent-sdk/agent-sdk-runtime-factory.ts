@@ -873,7 +873,10 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
       if (approvalPolicy === 'never') {
         return { allow: false, message: 'tools are disabled for this turn (policy: never)' }
       }
-      if (approvalPolicy === 'auto') return { allow: true }
+      const sandboxMode = thread?.sandboxMode ?? deps.defaultSandboxMode ?? DEFAULT_SANDBOX_MODE
+      const workspaceCommandApproval =
+        toolName === 'Bash' && sandboxMode === 'workspace-write'
+      if (approvalPolicy === 'auto' && !workspaceCommandApproval) return { allow: true }
       const approval = createApprovalRequest({
         id: deps.ids.next('appr'),
         threadId,
@@ -883,7 +886,7 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
       })
       const decision = await makeAwaitApproval(
         approvalPolicy,
-        thread?.sandboxMode ?? deps.defaultSandboxMode,
+        sandboxMode,
         signal ?? new AbortController().signal
       )(approval)
       return decision === 'allow'

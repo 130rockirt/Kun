@@ -45,6 +45,40 @@ function failedAttempt(id: string, attemptNumber: number, failure: string): Grap
   }
 }
 
+function runningRun(startedAt: string): GraphRunV1 {
+  const original = baseRun()
+  const attempt: GraphNodeAttemptV1 = {
+    version: 1,
+    id: 'attempt_running',
+    runId: original.id,
+    nodeId: 'research',
+    revision: 1,
+    attemptNumber: 1,
+    iteration: 0,
+    commandId: 'command_running',
+    idempotencyKey: 'attempt_running',
+    status: 'running',
+    assignment: testAssignmentSnapshot(),
+    childThreadId: 'child_running',
+    queuedAt: startedAt,
+    startedAt,
+    tokenUsage: 0,
+    elapsedMs: 0
+  }
+  return {
+    ...original,
+    status: 'running',
+    nodes: {
+      ...original.nodes,
+      research: {
+        ...original.nodes.research,
+        status: 'running',
+        attempts: [attempt]
+      }
+    }
+  }
+}
+
 describe('GraphSupervisor', () => {
   it('coalesces material signals and pauses repeated non-progress failures', async () => {
     const original = baseRun()
@@ -210,6 +244,83 @@ describe('GraphSupervisor', () => {
 
     expect(idempotencyKeys).toHaveLength(1)
     expect(leadTurn).toHaveBeenCalledOnce()
+  })
+
+  it('uses latest safe child activity instead of attempt start time for quiet supervision', async () => {
+    const current = runningRun('2026-07-26T10:00:00.000Z')
+    const store = {
+      get: vi.fn(async () => current),
+      list: vi.fn(async () => [current]),
+      append: vi.fn()
+    }
+    const diagnostics = vi.fn(async () => ({
+      childRuns: [{
+        id: 'child_running',
+        status: 'running',
+        updatedAt: '2026-07-26T11:59:00.000Z',
+        activity: {
+          kind: 'tool',
+          label: 'Scanning repository',
+          updatedAt: '2026-07-26T11:59:00.000Z'
+        }
+      }]
+    }))
+    const supervisor = new GraphSupervisor({
+      store: store as never,
+      config: () => testGraphConfig({
+        supervision: { stallTimeoutMs: 15 * 60_000, coalesceWindowMs: 60_000 }
+      }),
+      delegation: () => ({ diagnostics } as never),
+      leadTurn: vi.fn(async () => undefined),
+      nowMs: () => Date.parse('2026-07-26T12:00:00.000Z')
+    })
+
+    await expect(supervisor.sweepStalls()).resolves.toBe(0)
+    await supervisor.stop()
+
+    expect(diagnostics).toHaveBeenCalledWith('thread_1')
+    expect(store.append).not.toHaveBeenCalled()
+  })
+
+  it('signals a quiet running child without aborting or changing its durable state', async () => {
+    let current = runningRun('2026-07-26T10:00:00.000Z')
+    const store = {
+      get: vi.fn(async () => current),
+      list: vi.fn(async () => [current]),
+      append: vi.fn(async () => {
+        current = { ...current, lastEventSeq: current.lastEventSeq + 1 }
+        return { state: current, envelope: {}, duplicate: false }
+      })
+    }
+    const supervisor = new GraphSupervisor({
+      store: store as never,
+      config: () => testGraphConfig({
+        supervision: { stallTimeoutMs: 15 * 60_000, coalesceWindowMs: 60_000 }
+      }),
+      delegation: () => ({
+        diagnostics: async () => ({
+          childRuns: [{
+            id: 'child_running',
+            status: 'running',
+            updatedAt: '2026-07-26T11:40:00.000Z',
+            activity: {
+              kind: 'model',
+              label: 'Waiting for model response',
+              updatedAt: '2026-07-26T11:40:00.000Z'
+            }
+          }]
+        })
+      } as never),
+      leadTurn: vi.fn(async () => undefined),
+      nowMs: () => Date.parse('2026-07-26T12:00:00.000Z')
+    })
+
+    await expect(supervisor.sweepStalls()).resolves.toBe(1)
+    await supervisor.stop()
+
+    expect(store.append).toHaveBeenCalledOnce()
+    expect(current.nodes.research.status).toBe('running')
+    expect(current.nodes.research.attempts.at(-1)?.status).toBe('running')
   })
 
   it('hot-reconfigures automatic Lead turns without dropping durable signals', async () => {

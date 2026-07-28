@@ -150,13 +150,23 @@ describe('sandbox policy', () => {
     expect(sameFilesystemPath('/repo/target\\', '/repo/target', 'linux')).toBe(false)
   })
 
-  it('keeps command execution blocked in workspace-write mode', () => {
+  it('advertises command execution in workspace-write for the explicit approval layer', () => {
     expect(sandboxBlockForTool(
       { name: 'bash', toolKind: 'command_execution' },
       { sandboxMode: 'workspace-write' }
-    )).toMatchObject({
-      code: 'sandbox_command_blocked'
-    })
+    )).toBeNull()
+    expect(sandboxBlockForTool(
+      { name: 'bash', toolKind: 'command_execution' },
+      { sandboxMode: 'read-only' }
+    )).toMatchObject({ code: 'sandbox_command_blocked' })
+    expect(sandboxBlockForTool(
+      { name: 'bash', toolKind: 'command_execution' },
+      { sandboxMode: 'external-sandbox' }
+    )).toMatchObject({ code: 'sandbox_command_blocked' })
+    expect(sandboxBlockForTool(
+      { name: 'lsp', toolKind: 'command_execution' },
+      { sandboxMode: 'workspace-write' }
+    )).toMatchObject({ code: 'sandbox_command_blocked' })
   })
 
   it('enforces delegated write scopes and blocks shell escape for narrow scopes', () => {

@@ -205,6 +205,17 @@ function mergeDiagnostics(
   return next
 }
 
+function mergeRunSnapshots(
+  current: readonly GraphRun[],
+  incoming: readonly GraphRun[]
+): GraphRun[] {
+  const currentById = new Map(current.map((run) => [run.id, run]))
+  return incoming.map((run) => {
+    const previous = currentById.get(run.id)
+    return previous && previous.lastEventSeq > run.lastEventSeq ? previous : run
+  })
+}
+
 export const useGraphStore = create<GraphViewState>((set, get) => ({
   threadId: null,
   workspace: '',
@@ -248,18 +259,20 @@ export const useGraphStore = create<GraphViewState>((set, get) => ({
         graphRuntimeClient.delegationDiagnostics(threadId).catch(() => null)
       ])
       if (get().threadId !== threadId) return
-      const previousRunId = get().selectedRunId
-      const previousNodeId = get().selectedNodeId
-      const selectedRunId = runs.some((run) => run.id === previousRunId)
+      const current = get()
+      const mergedRuns = mergeRunSnapshots(current.runs, runs)
+      const previousRunId = current.selectedRunId
+      const previousNodeId = current.selectedNodeId
+      const selectedRunId = mergedRuns.some((run) => run.id === previousRunId)
         ? previousRunId
-        : runs[0]?.id ?? null
-      const selectedRun = runs.find((run) => run.id === selectedRunId)
+        : mergedRuns[0]?.id ?? null
+      const selectedRun = mergedRuns.find((run) => run.id === selectedRunId)
       const selectedNodeId = previousNodeId && selectedRun?.nodes[previousNodeId]
         ? previousNodeId
         : null
       set({
-        runs,
-        childRuns: mergeDiagnostics(get().childRuns, diagnostics, threadId),
+        runs: mergedRuns,
+        childRuns: mergeDiagnostics(current.childRuns, diagnostics, threadId),
         selectedRunId,
         selectedNodeId,
         artifactPage: null,

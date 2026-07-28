@@ -522,52 +522,6 @@ export class ModelStepService {
           : {})
       })
     }
-    const history = await this.deps.historyCompaction.compactIfNeeded({
-      items,
-      model,
-      ...(providerId ? { providerId } : {}),
-      ...(accountId ? { accountId } : {}),
-      signal,
-      threadId,
-      turnId,
-      clientSurface: prepared.clientSurface,
-      toolSpecs: requestToolSpecs,
-      reserveModelRequest: () => this.deps.budgetGate.reserveAdditionalModelRequest(threadId, turnId)
-    })
-    if (signal.aborted) return 'aborted'
-    const postCompactionBudgetGate = await this.deps.budgetGate.recheckReservedMainModelRequest(
-      threadId,
-      turnId
-    )
-    if (postCompactionBudgetGate === 'blocked') {
-      this.deps.goalTurns.suppressResume(turnId)
-      if (dedicatedSvgTurn) {
-        const persistedCompletion = svgArtifactCompletionState(
-          await this.deps.sessionStore.loadItems(threadId),
-          turnId
-        )
-        if (persistedCompletion.validationAfterMutation) return 'stop'
-        this.deps.rememberFailure(turnId, {
-          error: 'Dedicated SVG artifact turn could not satisfy its completion gate before the budget was exhausted.',
-          code: 'svg_completion_budget_blocked',
-          severity: 'error'
-        })
-        return 'failed'
-      }
-      return 'stop'
-    }
-    await this.deps.recordPipelineStage(threadId, turnId, 'input_compressed', {
-      historyItems: history.length
-    })
-    // Forward the just-generated image(s) back to a vision-capable model so it can
-    // self-review and regenerate if the result is off. Bytes come from the
-    // already-persisted attachment/file; the persisted tool output keeps NO base64
-    // (only this transient request copy carries it).
-    const forwardHistory = await rehydrateGeneratedImagesForForward(
-      rehydrateTransientBrowserUseOutputsForForward(history),
-      (output) => this.deps.turnAttachments.resolveGeneratedImageForForward(output, threadId, thread?.workspace),
-      MAX_FORWARDED_GENERATED_IMAGES
-    )
     const runtimeContextInstruction = shouldInjectInitialRuntimeContext({
       stepIndex,
       turnId,
@@ -677,6 +631,77 @@ export class ModelStepService {
           ? [DESIGN_MODE_INSTRUCTION]
           : [])
     ].join('\n\n')
+    // Automatic compaction must see every non-history part of the request that
+    // will actually be sent. Building the same request with empty history gives
+    // us an authoritative overhead estimate for system/thread prompts, dynamic
+    // context, skills, tools, and attachments without mixing in cumulative
+    // provider usage.
+    const requestOverheadTokens = composeModelRequest({
+      threadId,
+      turnId,
+      model,
+      ...(providerId ? { providerId } : {}),
+      ...(accountId ? { accountId } : {}),
+      ...(modelRoute.reasoningEffort ? { reasoningEffort: modelRoute.reasoningEffort } : {}),
+      immutablePrefix: this.deps.prefix,
+      ...(thread.systemPrompt !== undefined ? { threadSystemPrompt: thread.systemPrompt } : {}),
+      ...(modeInstruction ? { modeInstruction } : {}),
+      contextInstructions,
+      history: [],
+      attachments,
+      tools: requestToolSpecs,
+      ...(hardRequiredToolName ? { requiredToolName: hardRequiredToolName } : {}),
+      ...(this.deps.tokenEconomy ? { tokenEconomy: this.deps.tokenEconomy } : {}),
+      signal
+    }).sentInputTokens
+    const history = await this.deps.historyCompaction.compactIfNeeded({
+      items,
+      model,
+      ...(providerId ? { providerId } : {}),
+      ...(accountId ? { accountId } : {}),
+      signal,
+      threadId,
+      turnId,
+      clientSurface: prepared.clientSurface,
+      toolSpecs: requestToolSpecs,
+      requestOverheadTokens,
+      reserveModelRequest: () => this.deps.budgetGate.reserveAdditionalModelRequest(threadId, turnId)
+    })
+    if (signal.aborted) return 'aborted'
+    const postCompactionBudgetGate = await this.deps.budgetGate.recheckReservedMainModelRequest(
+      threadId,
+      turnId
+    )
+    if (postCompactionBudgetGate === 'blocked') {
+      this.deps.goalTurns.suppressResume(turnId)
+      if (dedicatedSvgTurn) {
+        const persistedCompletion = svgArtifactCompletionState(
+          await this.deps.sessionStore.loadItems(threadId),
+          turnId
+        )
+        if (persistedCompletion.validationAfterMutation) return 'stop'
+        this.deps.rememberFailure(turnId, {
+          error: 'Dedicated SVG artifact turn could not satisfy its completion gate before the budget was exhausted.',
+          code: 'svg_completion_budget_blocked',
+          severity: 'error'
+        })
+        return 'failed'
+      }
+      return 'stop'
+    }
+    await this.deps.recordPipelineStage(threadId, turnId, 'input_compressed', {
+      historyItems: history.length,
+      requestOverheadTokens
+    })
+    // Forward the just-generated image(s) back to a vision-capable model so it can
+    // self-review and regenerate if the result is off. Bytes come from the
+    // already-persisted attachment/file; the persisted tool output keeps NO base64
+    // (only this transient request copy carries it).
+    const forwardHistory = await rehydrateGeneratedImagesForForward(
+      rehydrateTransientBrowserUseOutputsForForward(history),
+      (output) => this.deps.turnAttachments.resolveGeneratedImageForForward(output, threadId, thread?.workspace),
+      MAX_FORWARDED_GENERATED_IMAGES
+    )
     if (hardRequiredToolName === GRAPH_CREATE_RUN_TOOL_NAME) {
       await this.persistGraphCreateGate({
         threadId,
@@ -718,11 +743,19 @@ export class ModelStepService {
       ? Math.floor(modelCapabilities.contextWindowTokens * 0.85)
       : this.deps.compactor.hardCap(model, providerId)
     if (inputTokens + outputTokens > hardCap) {
+      const message =
+        `request exceeds the ${hardCap}-token context cap ` +
+        `(${inputTokens} input + ${outputTokens} output budget)`
+      this.deps.rememberFailure(turnId, {
+        error: message,
+        code: 'context_window_exceeded',
+        severity: 'warning'
+      })
       await this.deps.events.record({
         kind: 'error',
         threadId,
         turnId,
-        message: `request exceeds the ${hardCap}-token context cap (${inputTokens} input + ${outputTokens} output budget)`,
+        message,
         code: 'context_window_exceeded',
         severity: 'warning'
       })

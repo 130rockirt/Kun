@@ -6,6 +6,7 @@ import process from 'node:process'
 import * as pty from 'node-pty'
 import { afterEach, describe, expect, it } from 'vitest'
 import { resolveSharedRuntime, stopSharedRuntime } from '../cli/shared-runtime.js'
+import { readRuntimeBuildIdForEntry } from '../server/runtime-build-identity.js'
 import { startKunServe, type KunServeHandle } from '../server/runtime-factory.js'
 import { KunTuiClient } from './client.js'
 import { sanitizeTerminalText } from './layout.js'
@@ -26,6 +27,7 @@ describe.skipIf(process.platform === 'win32' || !existsSync(cliEntry))('kun tui 
     const root = await mkdtemp(join(tmpdir(), 'kun-tui-pty-'))
     roots.push(root)
     const runtimeToken = 'pty-runtime-token'
+    const buildId = await readRuntimeBuildIdForEntry(cliEntry)
     const server = await startKunServe({
       host: '127.0.0.1',
       port: 0,
@@ -44,7 +46,8 @@ describe.skipIf(process.platform === 'win32' || !existsSync(cliEntry))('kun tui 
       approvalPolicy: 'on-request',
       sandboxMode: 'workspace-write',
       tokenEconomyMode: false,
-      insecure: false
+      insecure: false,
+      ...(buildId ? { buildId } : {})
     })
     servers.push(server)
     const client = new KunTuiClient({
@@ -137,18 +140,19 @@ describe.skipIf(process.platform === 'win32' || !existsSync(cliEntry))('kun tui 
       })
       await waitFor(() => output.includes('/thinking expand'))
       expect(output).not.toContain('Inspect the active model capability.')
-      expect(output).toContain('\x1b[?1000h\x1b[?1006h')
+      expect(output).not.toContain('\x1b[?1000h\x1b[?1006h')
+      expect(sanitizeTerminalText(output)).toContain('History')
 
-      terminal.write('\x18p') // Ctrl+X P temporarily restores native selection.
-      await waitFor(() =>
-        output.includes('Text selection mode') &&
-        output.includes('\x1b[?1000l\x1b[?1006l')
-      )
-      terminal.write('\x18p') // The same binding restores direct clicks.
+      terminal.write('\x18p') // Ctrl+X P opts into direct transcript clicks.
       await waitFor(() =>
         output.includes('Mouse clicks enabled') &&
-        output.lastIndexOf('\x1b[?1000h\x1b[?1006h') >
-          output.lastIndexOf('\x1b[?1000l\x1b[?1006l')
+        output.includes('\x1b[?1000h\x1b[?1006h')
+      )
+      terminal.write('\x18p') // The same binding restores native scroll and selection.
+      await waitFor(() =>
+        output.includes('Text selection mode') &&
+        output.lastIndexOf('\x1b[?1000l\x1b[?1006l') >
+          output.lastIndexOf('\x1b[?1000h\x1b[?1006h')
       )
       expect((await client.getThread(thread.id)).turns.find((candidate) => candidate.id === turn.turnId)?.status).toBe('running')
 

@@ -127,6 +127,130 @@ describe('resolveTuiConnection', () => {
       .toBe('Bearer discovered-secret')
   })
 
+  it('reuses a discovered runtime when the bundled TUI build identity matches', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-tui-client-same-build-'))
+    roots.push(root)
+    const buildId = 'a'.repeat(64)
+    await publishRuntimeDiscovery(root, {
+      instanceId: 'same-build-runtime',
+      pid: process.pid,
+      startedAt: '2026-07-22T00:00:00.000Z',
+      host: '127.0.0.1',
+      port: 18899,
+      baseUrl: 'http://127.0.0.1:18899',
+      runtimeToken: 'same-build-secret',
+      insecure: false,
+      buildId
+    })
+    const fetchImpl = vi.fn(async () => Response.json(runtimeInfo({
+      instanceId: 'same-build-runtime',
+      buildId
+    }))) as unknown as typeof fetch
+    const ensureRuntime = vi.fn()
+
+    await expect(resolveTuiConnection(
+      options({ dataDir: root, runtimeToken: '' }),
+      fetchImpl,
+      { expectedBuildId: buildId, ensureRuntime }
+    )).resolves.toMatchObject({
+      discovered: true,
+      runtimeInfo: { buildId }
+    })
+    expect(ensureRuntime).not.toHaveBeenCalled()
+  })
+
+  it('replaces a healthy older runtime before returning the TUI connection', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-tui-client-replace-build-'))
+    roots.push(root)
+    const oldBuildId = 'a'.repeat(64)
+    const expectedBuildId = 'b'.repeat(64)
+    await publishRuntimeDiscovery(root, {
+      instanceId: 'old-build-runtime',
+      pid: process.pid,
+      startedAt: '2026-07-22T00:00:00.000Z',
+      host: '127.0.0.1',
+      port: 18899,
+      baseUrl: 'http://127.0.0.1:18899',
+      runtimeToken: 'old-build-secret',
+      insecure: false,
+      buildId: oldBuildId
+    })
+    const fetchImpl = vi.fn(async () => Response.json(runtimeInfo({
+      instanceId: 'old-build-runtime',
+      buildId: oldBuildId
+    }))) as unknown as typeof fetch
+    const replacementInfo = runtimeInfo({
+      instanceId: 'new-build-runtime',
+      buildId: expectedBuildId
+    })
+    const ensureRuntime = vi.fn(async () => ({
+      discovery: {
+        version: 2,
+        instanceId: 'new-build-runtime',
+        pid: process.pid,
+        startedAt: replacementInfo.startedAt,
+        host: '127.0.0.1',
+        port: 18900,
+        baseUrl: 'http://127.0.0.1:18900',
+        runtimeToken: 'new-build-secret',
+        insecure: false,
+        serviceVersion: '0.1.0',
+        buildId: expectedBuildId,
+        launchMode: 'shared'
+      },
+      info: replacementInfo
+    }))
+
+    await expect(resolveTuiConnection(
+      options({ dataDir: root, runtimeToken: '' }),
+      fetchImpl,
+      { expectedBuildId, ensureRuntime: ensureRuntime as never }
+    )).resolves.toMatchObject({
+      baseUrl: 'http://127.0.0.1:18900',
+      runtimeToken: 'new-build-secret',
+      runtimeInfo: { buildId: expectedBuildId }
+    })
+    expect(ensureRuntime).toHaveBeenCalledWith({
+      dataDir: root,
+      fetch: fetchImpl,
+      expectedBuildId
+    })
+  })
+
+  it('rejects a discovered build mismatch when --no-start is active', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-tui-client-no-start-build-'))
+    roots.push(root)
+    const oldBuildId = 'a'.repeat(64)
+    const expectedBuildId = 'b'.repeat(64)
+    await publishRuntimeDiscovery(root, {
+      instanceId: 'old-build-runtime',
+      pid: process.pid,
+      startedAt: '2026-07-22T00:00:00.000Z',
+      host: '127.0.0.1',
+      port: 18899,
+      baseUrl: 'http://127.0.0.1:18899',
+      runtimeToken: 'old-build-secret',
+      insecure: false,
+      buildId: oldBuildId
+    })
+    const fetchImpl = vi.fn(async () => Response.json(runtimeInfo({
+      instanceId: 'old-build-runtime',
+      buildId: oldBuildId
+    }))) as unknown as typeof fetch
+    const ensureRuntime = vi.fn()
+
+    const error = await resolveTuiConnection(
+      options({ dataDir: root, runtimeToken: '', noStart: true }),
+      fetchImpl,
+      { expectedBuildId, ensureRuntime }
+    ).catch((value) => value)
+
+    expect(error).toBeInstanceOf(TuiClientError)
+    expect(error).toMatchObject({ code: 'runtime_build_mismatch' })
+    expect(String(error)).toContain('older application build')
+    expect(ensureRuntime).not.toHaveBeenCalled()
+  })
+
   it('rejects unsafe and stale discovery without exposing its token', async () => {
     const root = await mkdtemp(join(tmpdir(), 'kun-tui-client-stale-'))
     roots.push(root)

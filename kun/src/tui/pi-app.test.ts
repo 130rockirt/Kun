@@ -133,6 +133,42 @@ function modelSnapshot(): ModelConnectionSnapshot {
   }
 }
 
+function renderAssistantMessage(text: string, width: number, running = false): string[] {
+  const current = detail()
+  const status = running ? 'running' as const : 'completed' as const
+  current.status = running ? 'running' : 'idle'
+  current.turns = [{
+    id: 'turn_markdown',
+    threadId: current.id,
+    status,
+    orchestration: 'direct',
+    prompt: 'Show code',
+    steering: [],
+    createdAt: current.createdAt,
+    startedAt: current.createdAt,
+    ...(running ? {} : { finishedAt: current.createdAt }),
+    items: [{
+      id: 'answer_markdown',
+      threadId: current.id,
+      turnId: 'turn_markdown',
+      role: 'assistant',
+      status,
+      createdAt: current.createdAt,
+      ...(running ? {} : { finishedAt: current.createdAt }),
+      kind: 'assistant_text',
+      text
+    }],
+    attachmentIds: [],
+    activeSkillIds: [],
+    injectedMemoryIds: [],
+    injectedMemorySummaries: [],
+    injectedInstructionSources: []
+  }]
+  const transcript = new TranscriptComponent()
+  transcript.update(projectThreadSnapshot(current), false, false)
+  return transcript.render(width)
+}
+
 describe('PiTuiApplication command overlays', () => {
   it('decodes complete SGR mouse reports and rejects partial or invalid coordinates', () => {
     expect(parseSgrMouseEvent('\x1b[<0;12;7M')).toEqual({
@@ -304,6 +340,50 @@ describe('PiTuiApplication command overlays', () => {
     expect(withReply.indexOf('Kun')).toBeLessThan(withReply.indexOf('Thinking'))
     expect(withReply.indexOf('Thinking')).toBeLessThan(withReply.indexOf('Hello.'))
     expect(withReply.match(/Kun/g)).toHaveLength(1)
+  })
+
+  it('renders completed fenced code as labeled terminal blocks without source delimiters', () => {
+    const rendered = renderAssistantMessage([
+      'Tagged:',
+      '```ts',
+      'const answer = "<ok>"',
+      '```',
+      '',
+      'Bare:',
+      '```',
+      '  keep indentation',
+      '```',
+      '',
+      'Fallback:',
+      '```made-up-language',
+      'alpha < beta',
+      '```'
+    ].join('\n'), 54)
+    const plain = sanitizeTerminalText(rendered.join('\n'))
+
+    expect(plain).toContain('╭─ typescript')
+    expect(plain).toContain('╭─ code')
+    expect(plain).toContain('╭─ made-up-language')
+    expect(plain).toContain('│ const answer = "<ok>"')
+    expect(plain).toContain('│   keep indentation')
+    expect(plain).toContain('│ alpha < beta')
+    expect(plain).toContain('╰─')
+    expect(plain).not.toMatch(/```|~~~/u)
+    expect(rendered.every((line) => visibleWidth(line) <= 54)).toBe(true)
+  })
+
+  it('keeps an unterminated streamed code block styled and bounded at narrow widths', () => {
+    const rendered = renderAssistantMessage([
+      '```typescript',
+      '  const message = "a deliberately long streamed code line that must wrap safely";'
+    ].join('\n'), 32, true)
+    const plain = sanitizeTerminalText(rendered.join('\n'))
+
+    expect(plain).toContain('╭─ typescript')
+    expect(plain).toContain('│   const message')
+    expect(plain).toContain('▍')
+    expect(plain).not.toContain('```')
+    expect(rendered.every((line) => visibleWidth(line) <= 32)).toBe(true)
   })
 
   it('maps only a Thinking title row and toggles that reasoning item independently', () => {
@@ -544,7 +624,7 @@ describe('PiTuiApplication command overlays', () => {
     expect(reconnecting).toContain('Reconnecting')
   })
 
-  it('uses phase motion and a bounded context gauge without persistent tips or overflow', () => {
+  it('uses phase motion and a request-local context gauge without cumulative usage overflow', () => {
     const now = new Date().toISOString()
     const contextRuntime = {
       ...runtime,
@@ -577,7 +657,31 @@ describe('PiTuiApplication command overlays', () => {
       injectedInstructionSources: []
     }]
     const projection = projectThreadSnapshot(current)
-    projection.usage = { ...emptyUsageSnapshot(), totalTokens: 7_100 }
+    projection.usage = { ...emptyUsageSnapshot(), totalTokens: 750_000 }
+    projection.contextSnapshot = {
+      kind: 'context_snapshot',
+      seq: 2,
+      timestamp: now,
+      threadId: current.id,
+      turnId: 'turn_loading',
+      model: current.model,
+      stepIndex: 0,
+      contextWindowTokens: 500_000,
+      softThresholdTokens: 375_000,
+      hardThresholdTokens: 425_000,
+      estimatedInputTokens: 7_100,
+      breakdown: {
+        tools: 1_000,
+        system: 1_000,
+        skills: 100,
+        messages: 5_000,
+        other: 0
+      },
+      toolCount: 1,
+      activeSkillIds: [],
+      contextManagement: 'kun-managed',
+      nativeHistory: 'none'
+    }
     projection.activity = {
       turnId: 'turn_loading',
       phase: 'responding',
@@ -602,6 +706,74 @@ describe('PiTuiApplication command overlays', () => {
     expect(visibleWidth(first)).toBeLessThanOrEqual(140)
     expect(visibleWidth(second)).toBeLessThanOrEqual(140)
     expect(visibleWidth(narrow)).toBeLessThanOrEqual(70)
+  })
+
+  it('omits context occupancy when no matching request snapshot exists', () => {
+    const now = new Date().toISOString()
+    const controller = new TuiController(
+      {} as KunTuiClient,
+      { ...options, continueLatest: false },
+      runtime
+    )
+    const current = detail()
+    current.status = 'running'
+    current.turns = [{
+      id: 'turn_loading',
+      threadId: current.id,
+      status: 'running',
+      orchestration: 'direct',
+      prompt: 'Stream a response',
+      steering: [],
+      createdAt: now,
+      startedAt: now,
+      items: [],
+      attachmentIds: [],
+      activeSkillIds: [],
+      injectedMemoryIds: [],
+      injectedMemorySummaries: [],
+      injectedInstructionSources: []
+    }]
+    const projection = projectThreadSnapshot(current)
+    projection.usage = { ...emptyUsageSnapshot(), totalTokens: 750_000 }
+    projection.contextSnapshot = {
+      kind: 'context_snapshot',
+      seq: 2,
+      timestamp: now,
+      threadId: current.id,
+      turnId: 'turn_loading',
+      model: 'different-model',
+      stepIndex: 0,
+      contextWindowTokens: 500_000,
+      softThresholdTokens: 375_000,
+      hardThresholdTokens: 425_000,
+      estimatedInputTokens: 400_000,
+      breakdown: {
+        tools: 0,
+        system: 0,
+        skills: 0,
+        messages: 400_000,
+        other: 0
+      },
+      toolCount: 0,
+      activeSkillIds: []
+    }
+    projection.activity = {
+      turnId: 'turn_loading',
+      phase: 'responding',
+      label: 'Responding',
+      startedAt: now,
+      turnStartedAt: now,
+      updatedAt: now
+    }
+
+    const rendered = sanitizeTerminalText(renderActivityRow({
+      ...controller.state,
+      connection: 'connected',
+      projection
+    }, controller, 140, 0))
+
+    expect(rendered).not.toContain('750k')
+    expect(rendered).not.toContain('400k / 500k')
   })
 
   it('renders tool input and output as a compact semantic tree', () => {
@@ -683,7 +855,7 @@ describe('PiTuiApplication command overlays', () => {
     expect(expanded.every((line) => visibleWidth(line) <= 80)).toBe(true)
   })
 
-  it('groups multi-round exploration across collapsed Thinking and stops at execution boundaries', () => {
+  it('merges exploration Thinking in source order and stops at execution boundaries', () => {
     const current = detail()
     const turnId = 'turn_exploration'
     const startedAt = '2026-07-22T00:00:00.000Z'
@@ -756,7 +928,7 @@ describe('PiTuiApplication command overlays', () => {
           turnId,
           role: 'assistant',
           status: 'completed',
-          createdAt: '2026-07-22T00:00:00.500Z',
+          createdAt: '2026-07-22T00:00:01.000Z',
           kind: 'assistant_reasoning',
           text: 'Find the relevant tests.'
         },
@@ -775,7 +947,7 @@ describe('PiTuiApplication command overlays', () => {
           turnId,
           role: 'assistant',
           status: 'completed',
-          createdAt: '2026-07-22T00:00:02.500Z',
+          createdAt: '2026-07-22T00:00:03.000Z',
           kind: 'assistant_reasoning',
           text: 'Read the matching test.'
         },
@@ -806,6 +978,16 @@ describe('PiTuiApplication command overlays', () => {
           createdAt: '2026-07-22T00:00:08.000Z',
           output: 'src/app.ts:1'
         }),
+        {
+          id: 'reasoning_after_execution',
+          threadId: current.id,
+          turnId,
+          role: 'assistant',
+          status: 'completed',
+          createdAt: '2026-07-22T00:00:08.500Z',
+          kind: 'assistant_reasoning',
+          text: 'Check the final README separately.'
+        },
         singleRead,
         testToolResult({
           id: singleRead.id,
@@ -840,11 +1022,26 @@ describe('PiTuiApplication command overlays', () => {
     expect(rendered).toContain('Explored · 2 actions · 3.0s')
     expect(rendered).toContain('Search modelCapabilities')
     expect(rendered).toContain('Read loop.test.ts')
-    expect(rendered).toContain('Thinking')
-    expect(rendered.indexOf('Thinking')).toBeLessThan(rendered.indexOf('Explored'))
+    expect(rendered.match(/Thinking/g)).toHaveLength(1)
     expect(rendered.indexOf('Explored')).toBeLessThan(rendered.indexOf('Edit'))
     expect(rendered).toContain('Run · rg modelCapabilities')
+    expect(rendered.indexOf('Run · rg modelCapabilities')).toBeLessThan(rendered.indexOf('Thinking'))
+    expect(rendered.indexOf('Thinking')).toBeLessThan(rendered.indexOf('Read · README.md'))
     expect(rendered).toContain('Read · README.md')
+
+    transcript.update(projectThreadSnapshot(current), true, false)
+    const expanded = sanitizeTerminalText(transcript.render(96).join('\n'))
+    expect(expanded.indexOf('Find the relevant tests.'))
+      .toBeLessThan(expanded.indexOf('Search modelCapabilities'))
+    expect(expanded.indexOf('Search modelCapabilities'))
+      .toBeLessThan(expanded.indexOf('Read the matching test.'))
+    expect(expanded.indexOf('Read the matching test.'))
+      .toBeLessThan(expanded.indexOf('Read loop.test.ts'))
+    expect(expanded.indexOf('Read loop.test.ts')).toBeLessThan(expanded.indexOf('Edit'))
+    expect(expanded.indexOf('Run · rg modelCapabilities'))
+      .toBeLessThan(expanded.indexOf('Check the final README separately.'))
+    expect(expanded.indexOf('Check the final README separately.'))
+      .toBeLessThan(expanded.indexOf('Read · README.md'))
   })
 
   it('shows live, failed, capped, expanded, and narrow exploration group states', () => {
@@ -1479,6 +1676,8 @@ describe('PiTuiApplication command overlays', () => {
       timestamp: '2026-07-22T00:00:01.000Z', threadId: current.id, turnId: 'turn_stream', itemId: 'item_stream'
     }
     try {
+      await waitFor(() => sanitizeTerminalText(outputText).includes('History'))
+      expect(outputText).not.toContain('\x1b[?1000h\x1b[?1006h')
       onEvent?.({
         ...base, kind: 'assistant_text_delta', seq: 1,
         item: {
@@ -1512,7 +1711,12 @@ describe('PiTuiApplication command overlays', () => {
       await waitFor(() => outputText.includes('Thinking'))
       await waitFor(() => outputText.includes('/thinking expand'))
       expect(outputText).not.toContain('private thought')
-      expect(outputText).toContain('\x1b[?1000h\x1b[?1006h')
+
+      const beforePointerMode = outputText.length
+      input.emit('data', '\x18')
+      input.emit('data', 'p')
+      await waitFor(() => outputText.slice(beforePointerMode).includes('Mouse clicks enabled'))
+      expect(outputText.slice(beforePointerMode)).toContain('\x1b[?1000h\x1b[?1006h')
 
       const beforeMouseExpand = outputText.length
       for (let row = 1; row <= output.rows!; row += 1) {
@@ -1854,13 +2058,18 @@ describe('PiTuiApplication command overlays', () => {
     const app = new PiTuiApplication(controller, input, output)
     const running = app.run()
     try {
+      expect(outputText).not.toContain('\x1b[?1000h\x1b[?1006h')
+      input.emit('data', '\x18')
+      input.emit('data', 'p')
+      await waitFor(() => outputText.includes('Mouse clicks enabled'))
       type(input, '/subagents')
       await waitFor(() => outputText.includes('Subagents') && outputText.includes('Inspect streaming'))
       expect(sanitizeTerminalText(outputText)).toContain('Enter open transcript')
       expect(outputText).toContain('\x1b[?1000h\x1b[?1006h')
 
+      const beforeRouteClose = outputText.length
       input.emit('data', '\x03')
-      await waitFor(() => outputText.includes('Parent investigation'))
+      await waitFor(() => outputText.slice(beforeRouteClose).includes('Parent investigation'))
       const beforeOpen = outputText.length
       for (let row = 1; row <= output.rows!; row += 1) {
         input.emit('data', `\x1b[<0;8;${row}M`)

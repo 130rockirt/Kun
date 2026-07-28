@@ -1213,6 +1213,53 @@ describe('createAgentSdkRuntime turn context', () => {
     expect(events).toContainEqual(expect.objectContaining({ kind: 'approval_requested', approvalPolicy: 'always' }))
   })
 
+  test('requires approval for SDK Bash under auto workspace-write policy', async () => {
+    const events: Array<{ kind: string; approvalPolicy?: string; sandboxMode?: string }> = []
+    const runtime = createAgentSdkRuntime({
+      registry: {} as never,
+      turns: {} as never,
+      sessionStore: {} as never,
+      threadStore: {
+        get: async () => threadWith({
+          approvalPolicy: 'auto',
+          sandboxMode: 'workspace-write'
+        })
+      } as never,
+      events: {
+        record: async (event: { kind: string; approvalPolicy?: string; sandboxMode?: string }) => {
+          events.push(event)
+        }
+      } as never,
+      ids: { next: (prefix) => `${prefix}_workspace` },
+      prefix: { systemPrompt: '' },
+      providerConfigs: {},
+      agentSdkProviderIds: new Set(),
+      defaultApprovalPolicy: 'auto',
+      approvalGate: {
+        request: async () => 'allow', decide: () => false, pending: () => [], get: () => undefined
+      } as never
+    })
+    const deps = (runtime as unknown as {
+      deps: {
+        decideToolApproval(
+          threadId: string,
+          turnId: string,
+          toolName: string,
+          input: Record<string, unknown>
+        ): Promise<{ allow: boolean }>
+      }
+    }).deps
+
+    await expect(
+      deps.decideToolApproval('th', 'tn', 'Bash', { command: 'pwd' })
+    ).resolves.toEqual({ allow: true })
+    expect(events).toContainEqual(expect.objectContaining({
+      kind: 'approval_requested',
+      approvalPolicy: 'auto',
+      sandboxMode: 'workspace-write'
+    }))
+  })
+
   test('arms SDK approvals before publishing approval_requested', async () => {
     const approvalGate = new InMemoryApprovalGate()
     let immediatelyAllowed = false

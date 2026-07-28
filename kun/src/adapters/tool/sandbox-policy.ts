@@ -25,6 +25,18 @@ export type SandboxBlock = {
   message: string
 }
 
+const WORKSPACE_APPROVAL_COMMAND_TOOLS = new Set(['bash', 'background_shell'])
+
+// Tool safety is a shared runtime contract. Client surfaces may differ in how
+// they render an approval, but GUI and TUI must never receive different
+// sandbox or approval behavior for the same tool and thread policy.
+export function isWorkspaceApprovalCommandTool(
+  tool: Pick<LocalTool, 'toolKind' | 'name'>
+): boolean {
+  return tool.toolKind === 'command_execution' &&
+    WORKSPACE_APPROVAL_COMMAND_TOOLS.has(tool.name)
+}
+
 /**
  * Resolve exact external targets that an opted-in file tool wants to mutate.
  * The physical targets captured here are compared again immediately before the
@@ -145,6 +157,11 @@ export function sandboxBlockForTool(
   }
 
   if (tool.toolKind === 'command_execution') {
+    // The host shell itself is not path-confined. Workspace-write exposes only
+    // the built-in shell tools because LocalToolHost adds an unskippable
+    // per-command approval. Other process-backed tools retain the stricter
+    // sandbox boundary.
+    if (mode === 'workspace-write' && isWorkspaceApprovalCommandTool(tool)) return null
     return {
       code: 'sandbox_command_blocked',
       message:

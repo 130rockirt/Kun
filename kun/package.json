@@ -87,6 +87,7 @@
     "better-sqlite3": "^12.10.0",
     "create-kun-extension": "file:../packages/create-kun-extension",
     "diff": "^8.0.4",
+    "highlight.js": "^11.11.1",
     "ipaddr.js": "^2.4.0",
     "jimp": "^1.6.0",
     "proxy-agent": "^8.0.2",

@@ -1205,6 +1205,7 @@ export function decideSdkBuiltinSandbox(
   if (mode === 'danger-full-access') return null
 
   if (SDK_COMMAND_TOOLS.has(toolName)) {
+    if (mode === 'workspace-write') return null
     return denySandbox(`tool ${toolName} is blocked because the "${mode}" sandbox mode does not run host shell commands`)
   }
 

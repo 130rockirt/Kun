@@ -184,6 +184,89 @@ describe('TuiController', () => {
     await controller.stop()
   })
 
+  it('leaves implicit permissions to the active shared runtime defaults', async () => {
+    const created = detail({
+      id: 'thr_inherited',
+      approvalPolicy: 'auto',
+      sandboxMode: 'danger-full-access'
+    })
+    const createThread = vi.fn(async (_request: Parameters<KunTuiClient['createThread']>[0]) => created)
+    const client = {
+      createThread,
+      listThreads: vi.fn(async () => [created]),
+      getThread: vi.fn(async () => created),
+      subscribeThreadEvents: vi.fn(async (input: { signal: AbortSignal }) => {
+        await new Promise<void>((resolve) =>
+          input.signal.addEventListener('abort', () => resolve(), { once: true }))
+      })
+    } as unknown as KunTuiClient
+    const staleRuntime = {
+      ...runtime,
+      runtimeInfo: {
+        ...runtime.runtimeInfo,
+        approvalPolicy: 'on-request',
+        sandboxMode: 'workspace-write'
+      }
+    } as TuiConnection
+    const controller = new TuiController(client, { ...options(), continueLatest: false }, staleRuntime)
+
+    await controller.createThread('Inherited permissions')
+
+    const request = createThread.mock.calls[0]![0]
+    expect(request).not.toHaveProperty('approvalPolicy')
+    expect(request).not.toHaveProperty('sandboxMode')
+    await controller.stop()
+  })
+
+  it.each([
+    {
+      name: 'approval only',
+      overrides: { approvalPolicy: 'never' as const },
+      expected: { approvalPolicy: 'never' }
+    },
+    {
+      name: 'sandbox only',
+      overrides: { sandboxMode: 'danger-full-access' as const },
+      expected: { sandboxMode: 'danger-full-access' }
+    },
+    {
+      name: 'approval and sandbox',
+      overrides: {
+        approvalPolicy: 'auto' as const,
+        sandboxMode: 'danger-full-access' as const
+      },
+      expected: {
+        approvalPolicy: 'auto',
+        sandboxMode: 'danger-full-access'
+      }
+    }
+  ])('sends explicit TUI permission overrides: $name', async ({ overrides, expected }) => {
+    const created = detail({ id: `thr_${expected.approvalPolicy ?? 'default'}_${expected.sandboxMode ?? 'default'}` })
+    const createThread = vi.fn(async (_request: Parameters<KunTuiClient['createThread']>[0]) => created)
+    const client = {
+      createThread,
+      listThreads: vi.fn(async () => [created]),
+      getThread: vi.fn(async () => created),
+      subscribeThreadEvents: vi.fn(async (input: { signal: AbortSignal }) => {
+        await new Promise<void>((resolve) =>
+          input.signal.addEventListener('abort', () => resolve(), { once: true }))
+      })
+    } as unknown as KunTuiClient
+    const controller = new TuiController(
+      client,
+      { ...options(), continueLatest: false, ...overrides },
+      runtime
+    )
+
+    await controller.createThread('Explicit permissions')
+
+    const request = createThread.mock.calls[0]![0]
+    expect(request).toMatchObject(expected)
+    if (!('approvalPolicy' in expected)) expect(request).not.toHaveProperty('approvalPolicy')
+    if (!('sandboxMode' in expected)) expect(request).not.toHaveProperty('sandboxMode')
+    await controller.stop()
+  })
+
   it('does not create a fallback session after the last shared provider is disconnected', async () => {
     const createThread = vi.fn()
     const client = {
@@ -1269,6 +1352,12 @@ describe('TuiController', () => {
     ]))
     controller.dismissInspection()
     await controller.showContext()
+    expect(controller.state.inspection?.lines).toContain(
+      'Latest request: no request-local context snapshot yet'
+    )
+    expect(controller.state.inspection?.lines).toContain(
+      'Cumulative usage (not context occupancy):'
+    )
     expect(controller.state.inspection?.lines).toContain('Total: 125 tokens')
     controller.dismissInspection()
     await controller.showQueue()

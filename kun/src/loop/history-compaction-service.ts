@@ -61,16 +61,25 @@ export class HistoryCompactionService {
     turnId: string
     clientSurface?: TurnClientSurface
     toolSpecs?: readonly ModelToolSpec[]
+    /**
+     * Complete non-history token estimate from the request that is about to be
+     * sent. When supplied this is authoritative over the legacy prefix/tool
+     * fallback so dynamic instructions, skills, and attachments participate
+     * in the compaction preflight.
+     */
+    requestOverheadTokens?: number
     reserveModelRequest?: () => Promise<{ allowed: boolean; reason?: string }>
   }): Promise<TurnItem[]> {
     await this.deps.telemetry.hydratePromptPressureIfCold(input.threadId, input.model)
     const pressure = this.deps.telemetry.consumePromptPressure(input.threadId, input.model)
     const thresholdModel = pressure?.model || input.model
-    const overheadTokens = estimateRequestOverheadTokens({
-      systemPrompt: this.deps.prefix.systemPrompt,
-      prefix: this.deps.prefix.fewShots,
-      tools: input.toolSpecs
-    })
+    const overheadTokens = input.requestOverheadTokens === undefined
+      ? estimateRequestOverheadTokens({
+          systemPrompt: this.deps.prefix.systemPrompt,
+          prefix: this.deps.prefix.fewShots,
+          tools: input.toolSpecs
+        })
+      : Math.max(0, Math.floor(input.requestOverheadTokens))
     const plan = this.deps.compactor.planCompaction(input.items, {
       model: thresholdModel,
       providerId: input.providerId,

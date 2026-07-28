@@ -22,6 +22,7 @@ const currentNodeStatuses = new Set<GraphNodeStatus>([
   ...activeNodeStatuses,
   'ready'
 ])
+const activeChildStatuses = new Set<GraphChildRuntime['status']>(['queued', 'running'])
 
 const PHASE_WIDTH = 168
 const PHASE_GAP = 24
@@ -108,8 +109,16 @@ export function getComposerGraphProgress(
   const completed = projections.filter((projection) => (
     completedNodeStatuses.has(projection.status)
   )).length
-  const active = projections.filter((projection) => activeNodeStatuses.has(projection.status))
-  const current = projections.find((projection) => currentNodeStatuses.has(projection.status))
+  const childForProjection = (projection: GraphNodeProjection): GraphChildRuntime | null => {
+    const childThreadId = projection.attempts.at(-1)?.childThreadId
+    return childThreadId ? childRuns[childThreadId] ?? null : null
+  }
+  const projectionIsActive = (projection: GraphNodeProjection): boolean =>
+    activeNodeStatuses.has(projection.status) ||
+    activeChildStatuses.has(childForProjection(projection)?.status ?? 'completed')
+  const active = projections.filter(projectionIsActive)
+  const current = projections.find(projectionIsActive) ??
+    projections.find((projection) => currentNodeStatuses.has(projection.status))
   const activeAgents = [...new Set(active.map(graphNodeAgentName))]
   const currentAttempt = current?.attempts.at(-1)
   const childThreadId = currentAttempt?.childThreadId ?? null

@@ -15,8 +15,7 @@ import {
   type MarkdownTheme,
   type OverlayHandle,
   type SelectListTheme,
-  type SlashCommand,
-  type Terminal
+  type SlashCommand
 } from '@earendil-works/pi-tui'
 import {
   providerCatalogEntries,
@@ -58,6 +57,7 @@ import { TuiClientError, type KunTuiClient, type SkillsSnapshot } from './client
 import type { TuiControllerState } from './controller.js'
 import { TuiController } from './controller.js'
 import { sanitizeTerminalText as stripTerminalControls } from './layout.js'
+import { codeFenceLanguage, highlightTerminalCode, terminalAssistantMarkdown } from './markdown-code.js'
 import {
   contextualFooter,
   pageFrame,
@@ -80,6 +80,7 @@ import {
 import {
   applyRuntimeEvent,
   hydrateProjectedChildRuns,
+  matchingRequestContextSnapshot,
   projectThreadSnapshot,
   type ProjectedChildRun,
   type ProjectedTurnActivity,
@@ -194,7 +195,14 @@ const markdownTheme: MarkdownTheme = {
   linkUrl: dim,
   code: yellow,
   codeBlock: (value) => value,
-  codeBlockBorder: dim,
+  codeBlockBorder: (value) => {
+    const language = codeFenceLanguage(value.slice(3))
+    return language
+      ? dim(`╭─ ${language === 'text' || language === 'plaintext' ? 'code' : language}`)
+      : dim('╰─')
+  },
+  codeBlockIndent: dim('│ '),
+  highlightCode: highlightTerminalCode,
   quote: dim,
   quoteBorder: magenta,
   hr: dim,
@@ -213,7 +221,7 @@ type ExclusiveRouteHandle = {
 
 /** pi-tui application shell. It deliberately uses the normal screen buffer. */
 export class PiTuiApplication {
-  private readonly terminal: Terminal
+  private readonly terminal: ScrollbackPreservingTerminal
   private readonly tui: TUI
   private readonly root: ChatRoot
   private unsubscribeController?: () => void
@@ -247,11 +255,12 @@ export class PiTuiApplication {
   private pendingExit?: { key: 'ctrl+c' | 'ctrl+d'; timer: ReturnType<typeof setTimeout> }
   private pendingUndoTimer?: ReturnType<typeof setTimeout>
   private terminalActive = false
-  // Match OpenCode's direct-manipulation model: transcript targets are
-  // clickable immediately. Users who need native drag-selection can toggle
-  // mouse handling off with Ctrl+X P or /mouse off.
-  private pointerModeEnabled = true
-  private mouseTrackingWanted = true
+  // Kun is an inline normal-screen application, so leave the mouse with the
+  // terminal by default. This preserves wheel scrollback and ordinary
+  // drag-selection/copy. Direct transcript clicks remain an explicit opt-in
+  // through Ctrl+X P or /mouse on.
+  private pointerModeEnabled = false
+  private mouseTrackingWanted = false
   private mouseTrackingEnabled = false
   private clipboardPastePending = false
   private readonly signalHandler = () => this.requestQuit()
@@ -296,7 +305,7 @@ export class PiTuiApplication {
         this.tui.requestRender(true)
       }
     })
-    this.root.setPointerMode(true)
+    this.root.setPointerMode(false)
   }
 
   run(): Promise<void> {
@@ -1331,6 +1340,7 @@ export class PiTuiApplication {
   }
 
   private writeMouseTracking(enabled: boolean): void {
+    this.terminal.setMouseTrackingAllowed(enabled)
     if (!this.terminalActive || this.mouseTrackingEnabled === enabled) return
     this.terminal.write(enabled ? ENABLE_MOUSE_TRACKING : DISABLE_MOUSE_TRACKING)
     this.mouseTrackingEnabled = enabled
@@ -1791,16 +1801,22 @@ const EXPLORE_GROUP_COMPACT_LIMIT = 12
 
 type ToolCallItem = Extract<TurnItem, { kind: 'tool_call' }>
 type ToolResultItem = Extract<TurnItem, { kind: 'tool_result' }>
+type ReasoningItem = Extract<TurnItem, { kind: 'assistant_reasoning' }>
 
 type ExplorationEntry = {
   call: ToolCallItem
   result?: ToolResultItem
 }
 
+type ExplorationTimelineEntry =
+  | { kind: 'reasoning'; item: ReasoningItem }
+  | { kind: 'action'; entry: ExplorationEntry }
+
 type ExplorationStage = {
   id: string
   turnId: string
   entries: ExplorationEntry[]
+  timeline: ExplorationTimelineEntry[]
   insertAfterItemId: string
   active: boolean
 }
@@ -1861,14 +1877,19 @@ export class TranscriptComponent implements Component {
     }
     for (const stage of explorationStages) {
       const current = this.explorationGroups.get(stage.id)
-      if (current) current.update(stage, showToolDetails)
-      else this.explorationGroups.set(stage.id, new ExplorationGroupComponent(stage, showToolDetails))
+      if (current) current.update(stage, showToolDetails, showReasoning)
+      else this.explorationGroups.set(
+        stage.id,
+        new ExplorationGroupComponent(stage, showToolDetails, showReasoning)
+      )
     }
     const explorationGroupAfterItem = new Map(
       explorationStages.map((stage) => [stage.insertAfterItemId, stage.id] as const)
     )
     const groupedExplorationItemIds = new Set(
-      explorationStages.flatMap((stage) => stage.entries.map((entry) => entry.call.id))
+      explorationStages.flatMap((stage) => stage.timeline.map((entry) =>
+        entry.kind === 'reasoning' ? entry.item.id : entry.entry.call.id
+      ))
     )
     const nextIds = new Set(visible.map((item) => item.id))
     for (const id of this.items.keys()) if (!nextIds.has(id)) this.items.delete(id)
@@ -1994,12 +2015,14 @@ export class TranscriptComponent implements Component {
         order.splice(itemIndex + 1, 0, groupId)
         continue
       }
-      const lastGroupedCall = explorationStages
+      const lastGroupedItemId = explorationStages
         .find((stage) => stage.id === groupId)
-        ?.entries.at(-1)?.call.id
-      const callIndex = lastGroupedCall ? visible.findIndex((item) => item.id === lastGroupedCall) : -1
-      if (callIndex < 0) continue
-      const nextVisibleId = visible.slice(callIndex + 1)
+        ?.insertAfterItemId
+      const groupedItemIndex = lastGroupedItemId
+        ? visible.findIndex((item) => item.id === lastGroupedItemId)
+        : -1
+      if (groupedItemIndex < 0) continue
+      const nextVisibleId = visible.slice(groupedItemIndex + 1)
         .map((item) => item.id)
         .find((id) => order.includes(id))
       const nextOrderIndex = nextVisibleId ? order.indexOf(nextVisibleId) : -1
@@ -2102,22 +2125,36 @@ export class TranscriptComponent implements Component {
 class ExplorationGroupComponent implements Component {
   constructor(
     private stage: ExplorationStage,
-    private showToolDetails: boolean
+    private showToolDetails: boolean,
+    private showReasoning: boolean
   ) {}
 
-  update(stage: ExplorationStage, showToolDetails: boolean): void {
+  update(stage: ExplorationStage, showToolDetails: boolean, showReasoning: boolean): void {
     this.stage = stage
     this.showToolDetails = showToolDetails
+    this.showReasoning = showReasoning
   }
 
   invalidate(): void {}
 
   render(width: number, animationFrame = 0): string[] {
     const contentWidth = Math.max(8, width - 2)
-    const entries = this.showToolDetails
-      ? this.stage.entries
-      : this.stage.entries.slice(0, EXPLORE_GROUP_COMPACT_LIMIT)
-    const omitted = this.stage.entries.length - entries.length
+    const visibleTimeline: ExplorationTimelineEntry[] = []
+    let visibleActions = 0
+    for (const entry of this.stage.timeline) {
+      if (entry.kind === 'reasoning') {
+        if (this.showReasoning && (this.showToolDetails || visibleActions <= EXPLORE_GROUP_COMPACT_LIMIT)) {
+          visibleTimeline.push(entry)
+        }
+        continue
+      }
+      if (this.showToolDetails || visibleActions < EXPLORE_GROUP_COMPACT_LIMIT) {
+        visibleTimeline.push(entry)
+      }
+      visibleActions += 1
+    }
+    const renderedActionCount = Math.min(visibleActions, EXPLORE_GROUP_COMPACT_LIMIT)
+    const omitted = this.showToolDetails ? 0 : this.stage.entries.length - renderedActionCount
     const failedCount = this.stage.entries.filter(explorationEntryFailed).length
     const icon = this.stage.active
       ? cyan(activityFrame('tool', animationFrame))
@@ -2135,14 +2172,58 @@ class ExplorationGroupComponent implements Component {
       truncateToWidth(` ${icon} ${bold(title)}${metadata ? ` ${dim(`· ${metadata}`)}` : ''}`, contentWidth)
     ]
 
-    entries.forEach((entry, index) => {
-      const last = index === entries.length - 1 && omitted === 0
-      lines.push(...this.renderEntry(entry, last, contentWidth, animationFrame))
+    visibleTimeline.forEach((timelineEntry, index) => {
+      const last = index === visibleTimeline.length - 1 && omitted === 0
+      if (timelineEntry.kind === 'reasoning') {
+        const sourceIndex = this.stage.timeline.indexOf(timelineEntry)
+        const nextEntry = this.stage.timeline[sourceIndex + 1]
+        const endedAt = timelineEntry.item.finishedAt ??
+          (nextEntry?.kind === 'reasoning'
+            ? nextEntry.item.createdAt
+            : nextEntry?.entry.call.createdAt)
+        lines.push(...this.renderReasoningEntry(
+          timelineEntry.item,
+          last,
+          contentWidth,
+          animationFrame,
+          endedAt
+        ))
+      } else {
+        lines.push(...this.renderEntry(timelineEntry.entry, last, contentWidth, animationFrame))
+      }
     })
     if (omitted > 0) {
       lines.push(truncateToWidth(`   └ ${dim(`… +${omitted} more`)}`, contentWidth))
     }
     return lines
+  }
+
+  private renderReasoningEntry(
+    item: ReasoningItem,
+    last: boolean,
+    width: number,
+    animationFrame: number,
+    endedAt?: string
+  ): string[] {
+    const branch = last ? '└' : '├'
+    const continuation = last ? ' ' : '│'
+    const lastTimelineEntry = this.stage.timeline.at(-1)
+    const running = this.stage.active &&
+      item.status === 'running' &&
+      lastTimelineEntry?.kind === 'reasoning' &&
+      lastTimelineEntry.item.id === item.id
+    const duration = itemDuration(item, running, endedAt)
+    const title = running
+      ? `${cyan(activityFrame('thinking', animationFrame))} ${dim(italic('Thinking…'))}`
+      : dim(italic('Thinking'))
+    return [
+      truncateToWidth(
+        `   ${branch} ${title}${duration ? ` ${dim(`· ${duration}`)}` : ''}`,
+        width
+      ),
+      ...plainLines(item.text, Math.max(8, width - 8), 0)
+        .map((line) => truncateToWidth(`   ${continuation}  ${dim(italic(line))}`, width))
+    ]
   }
 
   private renderEntry(
@@ -2238,7 +2319,10 @@ class ItemComponent implements Component {
     this.userAttachmentIds = userAttachmentIds
     if (item.kind === 'assistant_text') {
       this.markdown = new Markdown(
-        `${sanitizeTerminalText(item.text)}${turnRunning && item.status === 'running' ? ' ▍' : ''}`,
+        terminalAssistantMarkdown(
+          sanitizeTerminalText(item.text),
+          turnRunning && item.status === 'running'
+        ),
         2,
         0,
         markdownTheme
@@ -2269,7 +2353,10 @@ class ItemComponent implements Component {
     this.attachmentMetadata = attachmentMetadata
     this.userAttachmentIds = userAttachmentIds
     if (item.kind === 'assistant_text') {
-      this.markdown?.setText(`${sanitizeTerminalText(item.text)}${turnRunning && item.status === 'running' ? ' ▍' : ''}`)
+      this.markdown?.setText(terminalAssistantMarkdown(
+        sanitizeTerminalText(item.text),
+        turnRunning && item.status === 'running'
+      ))
     }
   }
 
@@ -2293,7 +2380,9 @@ class ItemComponent implements Component {
         ]
       }
       case 'assistant_text': {
-        const body = this.markdown?.render(contentWidth).map((line) => `   ${line}`) ?? []
+        const body = this.markdown
+          ?.render(Math.max(1, contentWidth - 3))
+          .map((line) => `   ${line}`) ?? []
         return body
       }
       case 'assistant_reasoning': {
@@ -3677,9 +3766,9 @@ class HelpDialog implements Component, Focusable {
         ` ${cyan(bold(this.keymap.display('agent_list')))} ${dim('Agent / Plan / Graph / Goal mode')}  ·  ${cyan(bold('/graph'))} ${dim('Graph then type requirement')}`,
         '',
         sectionLabel('Terminal', width - 2),
-        ` ${dim('Click Thinking or a Subagent directly; Esc closes the opened view.')}`,
-        ` ${cyan(bold(this.keymap.display('pointer_mode_toggle')))} ${dim('toggle native text selection; Shift+drag also works in supported terminals')}`,
-        ` ${dim('Shift+PgUp/PgDn uses native scrollback. Ctrl+C acts as back in routes.')}`
+        ` ${dim('Mouse wheel/trackpad scrolls terminal history; drag selects text to copy.')}`,
+        ` ${cyan(bold(this.keymap.display('pointer_mode_toggle')))} ${dim('enable direct Thinking/Subagent clicks; toggle again to restore native selection')}`,
+        ` ${dim('Shift+PgUp/PgDn also uses native scrollback. Ctrl+C acts as back in routes.')}`
       ],
       footer: [
         { key: this.keymap.display('command_list'), label: 'all commands' },
@@ -3803,6 +3892,15 @@ function approvalPolicyDescription(value: ApprovalPolicy): string {
   }
 }
 
+function sandboxModeDescription(value: SandboxMode): string {
+  switch (value) {
+    case 'read-only': return 'Read tools only; file changes and host commands are blocked'
+    case 'workspace-write': return 'Workspace file tools follow policy; every host command asks first'
+    case 'danger-full-access': return 'Host commands and file tools may access the full machine'
+    case 'external-sandbox': return 'External sandbox only; in-process writes and host commands are blocked'
+  }
+}
+
 class PermissionDialog implements Component, Focusable {
   private _focused = true
   private approvalIndex: number
@@ -3834,9 +3932,9 @@ class PermissionDialog implements Component, Focusable {
       ),
       '',
       sectionLabel('Sandbox mode', width - 2),
-      SANDBOX_MODES.map((value, index) =>
-        index === this.sandboxIndex ? cyan(bold(`[${value}]`)) : dim(value)
-      ).join('  '),
+      ...SANDBOX_MODES.map((value, index) =>
+        selectionRow(value, sandboxModeDescription(value), width - 2, index === this.sandboxIndex)
+      ),
       ...(this.error ? ['', red(this.error)] : [])
       ],
       footer: this.saving
@@ -5805,12 +5903,15 @@ export function renderActivityRow(
     : notice
       ? (notice.kind === 'error' ? red(` ! ${notice.message}`) : green(` ✓ ${notice.message}`))
       : `${dim(' Enter send · Ctrl+J newline')}`
-  const usage = projection?.usage
-  const contextWindow = controller.runtime.runtimeInfo.capabilities?.model?.contextWindowTokens
-  const usageText = usage
-    ? contextWindow
-      ? formatContextGauge(usage.totalTokens, contextWindow)
-      : `${formatTokenCount(usage.totalTokens)} tok`
+  const contextSnapshot = matchingRequestContextSnapshot(projection, {
+    model: controller.options.model ?? projection?.thread.model,
+    providerId: controller.options.providerId ?? projection?.thread.providerId
+  })
+  const usageText = contextSnapshot
+    ? formatContextGauge(
+        contextSnapshot.estimatedInputTokens,
+        contextSnapshot.contextWindowTokens
+      )
     : undefined
   const status = waitingForApproval
     ? yellow('Action required')
@@ -6001,7 +6102,7 @@ function renderShortcutFooter(
     return truncateToWidth(` ${actions.join(dim('  ·  '))}`, width)
   }
   return truncateToWidth(
-    ` ${cyan(bold('Text selection'))}  ${dim(`drag to copy · ${keymap.display('pointer_mode_toggle')} restore clicks`)}`,
+    ` ${cyan(bold('History'))} ${dim(`wheel · drag copy · ${keymap.display('command_list')} commands · ${keymap.display('pointer_mode_toggle')} clicks`)}`,
     width
   )
 }
@@ -6167,9 +6268,14 @@ function deriveExplorationStages(
   const stageIndexes = new Map<string, number>()
   let turnId = ''
   let entries: ExplorationEntry[] = []
-  let insertAfterItemId = ''
+  let timeline: ExplorationTimelineEntry[] = []
+  let leadingReasoning: ReasoningItem[] = []
 
   const flush = (closed: boolean): void => {
+    const lastTimelineEntry = timeline.at(-1)
+    const insertAfterItemId = lastTimelineEntry?.kind === 'reasoning'
+      ? lastTimelineEntry.item.id
+      : lastTimelineEntry?.entry.call.id
     if (entries.length >= 2 && turnId && insertAfterItemId) {
       const index = stageIndexes.get(turnId) ?? 0
       stageIndexes.set(turnId, index + 1)
@@ -6177,12 +6283,14 @@ function deriveExplorationStages(
         id: `${EXPLORE_GROUP_PREFIX}${turnId}:${index}`,
         turnId,
         entries,
+        timeline,
         insertAfterItemId,
         active: !closed && runningTurnId === turnId
       })
     }
     entries = []
-    insertAfterItemId = ''
+    timeline = []
+    leadingReasoning = []
   }
 
   for (const item of items) {
@@ -6190,12 +6298,21 @@ function deriveExplorationStages(
     turnId = item.turnId
 
     if (item.kind === 'tool_call' && explorationToolAction(item)) {
-      entries.push({ call: item, result: toolResults.get(item.callId) })
-      insertAfterItemId = item.id
+      if (entries.length === 0 && leadingReasoning.length > 0) {
+        timeline.push(...leadingReasoning.map((reasoning) => ({
+          kind: 'reasoning' as const,
+          item: reasoning
+        })))
+        leadingReasoning = []
+      }
+      const entry = { call: item, result: toolResults.get(item.callId) }
+      entries.push(entry)
+      timeline.push({ kind: 'action', entry })
       continue
     }
-    if (item.kind === 'assistant_reasoning' && entries.length > 0) {
-      insertAfterItemId = item.id
+    if (item.kind === 'assistant_reasoning') {
+      if (entries.length > 0) timeline.push({ kind: 'reasoning', item })
+      else leadingReasoning.push(item)
       continue
     }
     flush(true)
@@ -6251,18 +6368,17 @@ function explorationEntryFailed(entry: ExplorationEntry): boolean {
 }
 
 function explorationStageDuration(stage: ExplorationStage): string {
-  const start = stage.entries[0]?.call.createdAt
+  const first = stage.timeline[0]
+  const start = first?.kind === 'reasoning' ? first.item.createdAt : first?.entry.call.createdAt
+  const last = stage.timeline.at(-1)
   const end = stage.active
     ? undefined
-    : [...stage.entries]
-        .reverse()
-        .map((entry) =>
-          entry.result?.finishedAt ??
-          entry.call.finishedAt ??
-          entry.result?.createdAt ??
-          entry.call.createdAt
-        )
-        .find(Boolean)
+    : last?.kind === 'reasoning'
+      ? last.item.finishedAt ?? last.item.createdAt
+      : last?.entry.result?.finishedAt ??
+        last?.entry.call.finishedAt ??
+        last?.entry.result?.createdAt ??
+        last?.entry.call.createdAt
   return elapsedDuration(start, end, stage.active)
 }
 

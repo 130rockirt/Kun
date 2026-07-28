@@ -118,7 +118,17 @@ describe('AgentLoop transcript characterization', () => {
       execute: async (args) => ({ output: { echoed: args.text } })
     })
     const toolHost = new CapturingToolHost({ tools: [echo] })
-    const harness = makeHarness(model, { toolHost })
+    // Keep this characterization focused on request-history ordering. The
+    // harness default compaction threshold is intentionally tiny for unrelated
+    // tests and the complete-request preflight now correctly includes the tool
+    // schema in that threshold.
+    const harness = makeHarness(model, {
+      toolHost,
+      compactor: new ContextCompactor({
+        softThreshold: 100_000,
+        hardThreshold: 120_000
+      })
+    })
     await bootstrapThread(harness, {
       request: { prompt: 'Please echo ping.', model: 'transcript-model' }
     })

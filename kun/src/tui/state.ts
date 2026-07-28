@@ -1,4 +1,4 @@
-import type { RuntimeEvent } from '../contracts/events.js'
+import type { ContextSnapshotEvent, RuntimeEvent } from '../contracts/events.js'
 import type { UsageSnapshot } from '../contracts/usage.js'
 import type {
   ApprovalTurnItem,
@@ -83,6 +83,7 @@ export type ThreadProjection = {
   pendingApproval?: PendingApproval
   pendingUserInput?: PendingUserInput
   usage?: UsageSnapshot
+  contextSnapshot?: ContextSnapshotEvent
   lastError?: string
   activity?: ProjectedTurnActivity
   childRuns: ProjectedChildRun[]
@@ -393,6 +394,9 @@ export function applyRuntimeEvent(
     case 'usage':
       next = { ...next, usage: event.usage }
       break
+    case 'context_snapshot':
+      next = { ...next, contextSnapshot: event }
+      break
     case 'turn_steered':
       if (event.turnId && event.text) {
         const thread = ensureTurn(next.thread, event.turnId, 'running', event.timestamp)
@@ -510,6 +514,32 @@ export function applyRuntimeEvent(
       break
   }
   return next
+}
+
+function normalizedSelection(value: string | undefined): string {
+  return value?.trim().toLowerCase() ?? ''
+}
+
+/**
+ * Return only a request-local context snapshot that belongs to the active
+ * thread/model/provider selection. This mirrors the GUI's isolation rule and
+ * prevents a model switch from combining an old numerator with a new window.
+ */
+export function matchingRequestContextSnapshot(
+  projection: ThreadProjection | undefined,
+  selection: { model?: string; providerId?: string }
+): ContextSnapshotEvent | undefined {
+  const snapshot = projection?.contextSnapshot
+  if (!projection || !snapshot || snapshot.threadId !== projection.thread.id) return undefined
+  const selectedModel = normalizedSelection(selection.model)
+  const snapshotModel = normalizedSelection(snapshot.model)
+  if (selectedModel && selectedModel !== 'auto' && selectedModel !== snapshotModel) return undefined
+  const selectedProvider = normalizedSelection(selection.providerId)
+  const snapshotProvider = normalizedSelection(snapshot.providerId)
+  if (selectedProvider) {
+    return selectedProvider === snapshotProvider ? snapshot : undefined
+  }
+  return !snapshotProvider || snapshotProvider === 'default' ? snapshot : undefined
 }
 
 function replaceGoal(thread: ThreadDetail, goal: ThreadDetail['goal'] | undefined): ThreadDetail {

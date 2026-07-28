@@ -4,12 +4,13 @@ import type { GraphRunV1 } from '../contracts/graph.js'
 import { GRAPH_WORKER_TOOL_NAMES } from '../graph/graph-tool-boundary.js'
 import { createGraphRuntimeStartOptions } from './graph-runtime-bootstrap.js'
 
-function runtimeOptions() {
+function runtimeOptions(active = false) {
   const startTurn = vi.fn(async () => ({
     threadId: 'thread_1',
     turnId: 'runtime_turn',
     userMessageItemId: 'item_runtime_user'
   }))
+  const steerTurn = vi.fn(async () => undefined)
   const runAgentTurn = vi.fn(async () => 'completed' as const)
   const options = createGraphRuntimeStartOptions({
     delegation: () => undefined,
@@ -23,6 +24,7 @@ function runtimeOptions() {
         sandboxMode: 'workspace-write',
         turns: [{
           id: 'turn_1',
+          status: active ? 'running' : 'completed',
           model: 'source-model',
           providerId: 'source-provider',
           reasoningEffort: 'high'
@@ -30,6 +32,7 @@ function runtimeOptions() {
       } as never)
     },
     startTurn,
+    steerTurn,
     runAgentTurn,
     defaults: () => ({
       model: 'default-model',
@@ -90,7 +93,7 @@ function runtimeOptions() {
     }],
     skillIds: () => ['safe-skill']
   })
-  return { options, startTurn, runAgentTurn }
+  return { options, startTurn, steerTurn, runAgentTurn }
 }
 
 const run = {
@@ -131,7 +134,7 @@ describe('Graph runtime bootstrap capability boundary', () => {
   })
 
   it('labels automatic supervision for the isolated Graph Lead policy', async () => {
-    const { options, startTurn, runAgentTurn } = runtimeOptions()
+    const { options, startTurn, steerTurn, runAgentTurn } = runtimeOptions()
 
     await options.leadTurn({
       run,
@@ -147,6 +150,27 @@ describe('Graph runtime bootstrap capability boundary', () => {
         disableUserInput: true
       })
     }))
+    expect(steerTurn).not.toHaveBeenCalled()
     expect(runAgentTurn).toHaveBeenCalledWith('thread_1', 'runtime_turn')
+  })
+
+  it('steers supervision into the active parent turn instead of starting a conflicting turn', async () => {
+    const { options, startTurn, steerTurn, runAgentTurn } = runtimeOptions(true)
+
+    await options.leadTurn({
+      run,
+      reasons: ['stall'],
+      nodeIds: ['node_1'],
+      digest: 'No safe child activity for 15 minutes; the attempt remains running.'
+    })
+
+    expect(steerTurn).toHaveBeenCalledWith({
+      threadId: 'thread_1',
+      turnId: 'turn_1',
+      text: expect.stringContaining('Graph Lead supervision for durable run run_1.'),
+      messageSource: 'graph_runtime'
+    })
+    expect(startTurn).not.toHaveBeenCalled()
+    expect(runAgentTurn).not.toHaveBeenCalled()
   })
 })

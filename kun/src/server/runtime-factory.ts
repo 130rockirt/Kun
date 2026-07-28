@@ -1454,6 +1454,7 @@ export async function createKunServeRuntime(
 	    delegation: () => delegationRuntime,
 	    threads: threadStore,
 	    startTurn: (input) => turnService.startTurn(input),
+	    steerTurn: (input) => turnService.steerTurn(input),
 	    runAgentTurn,
 	    defaults: () => ({
 	      model: activeOptions.model,

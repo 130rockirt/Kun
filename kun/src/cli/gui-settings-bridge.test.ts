@@ -31,7 +31,9 @@ describe('GUI settings bridge', () => {
     expect(settings).toMatchObject({
       dataDir: fixture.dataDir,
       defaultProviderId: 'codex',
-      defaultModel: 'gpt-5.6-luna'
+      defaultModel: 'gpt-5.6-luna',
+      defaultApprovalPolicy: 'auto',
+      defaultSandboxMode: 'danger-full-access'
     })
     expect(settings?.providers.map((provider) => provider.id)).toEqual(['deepseek', 'codex', 'kimi-code'])
     expect(settings?.providers[1]).not.toHaveProperty('apiKey')
@@ -142,7 +144,9 @@ describe('GUI settings bridge', () => {
     expect(text).not.toContain('gui-secret')
     expect(config.serve).toMatchObject({
       credentialSourceId: 'settings:provider:codex',
-      model: 'gpt-5.6-luna'
+      model: 'gpt-5.6-luna',
+      approvalPolicy: 'auto',
+      sandboxMode: 'danger-full-access'
     })
     expect(config.serve.providers.deepseek.models).toEqual(['deepseek-v4-pro', 'deepseek-v4-flash'])
     expect(config.serve.providers.codex.models).toEqual(['gpt-5.6-luna', 'gpt-5.6-sol'])
@@ -157,6 +161,10 @@ describe('GUI settings bridge', () => {
     expect(config.capabilities.futureGuiCapability).toEqual({ enabled: true, protocol: 'future-v2' })
     expect((await stat(configPath)).mode & 0o777).toBe(0o600)
     expect(result?.applyRequest.serve?.providers?.codex?.models).toEqual(['gpt-5.6-luna', 'gpt-5.6-sol'])
+    expect(result?.applyRequest.serve).toMatchObject({
+      approvalPolicy: 'auto',
+      sandboxMode: 'danger-full-access'
+    })
     expect(result?.applyRequest.modelSelection).toEqual({
       providerId: 'codex',
       model: 'gpt-5.6-luna'
@@ -165,6 +173,38 @@ describe('GUI settings bridge', () => {
       supportedEfforts: ['low', 'high'],
       defaultEffort: 'low',
       requestProtocol: 'openai-responses'
+    })
+  })
+
+  it('preserves canonical permission defaults when legacy GUI settings omit them', async () => {
+    const fixture = await createFixture()
+    const rawSettings = JSON.parse(await readFile(fixture.settingsPath, 'utf8'))
+    delete rawSettings.agents.kun.approvalPolicy
+    delete rawSettings.agents.kun.sandboxMode
+    await writeFile(fixture.settingsPath, JSON.stringify(rawSettings), 'utf8')
+
+    const configPath = join(fixture.dataDir, 'config.json')
+    const rawConfig = JSON.parse(await readFile(configPath, 'utf8'))
+    rawConfig.serve.approvalPolicy = 'never'
+    rawConfig.serve.sandboxMode = 'read-only'
+    await writeFile(configPath, JSON.stringify(rawConfig), 'utf8')
+
+    const settings = await readGuiSharedSettings({
+      env: { KUN_GUI_SETTINGS_PATH: fixture.settingsPath },
+      platform: 'darwin',
+      homeDir: fixture.home
+    })
+    expect(settings).not.toHaveProperty('defaultApprovalPolicy')
+    expect(settings).not.toHaveProperty('defaultSandboxMode')
+
+    const result = await syncGuiProviderCatalogToConfig(fixture.dataDir, settings!)
+    expect(result?.config.serve).toMatchObject({
+      approvalPolicy: 'never',
+      sandboxMode: 'read-only'
+    })
+    expect(result?.applyRequest.serve).toMatchObject({
+      approvalPolicy: 'never',
+      sandboxMode: 'read-only'
     })
   })
 
@@ -484,7 +524,8 @@ describe('GUI settings bridge', () => {
       agents: {
         kun: {
           dataDir, providerId: 'codex', model: 'gpt-5.6-luna',
-          port: 19999, runtimeToken: 'legacy-runtime-secret'
+          port: 19999, runtimeToken: 'legacy-runtime-secret',
+          approvalPolicy: 'auto', sandboxMode: 'danger-full-access'
         }
       }
     }), 'utf8')

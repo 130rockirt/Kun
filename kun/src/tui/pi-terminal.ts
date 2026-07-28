@@ -86,6 +86,8 @@ export class InlineStreamTerminal implements Terminal {
  * destructive operation while forwarding every other terminal capability.
  */
 export class ScrollbackPreservingTerminal implements Terminal {
+  private mouseTrackingAllowed = false
+
   constructor(private readonly delegate: Terminal) {}
 
   get columns(): number { return this.delegate.columns }
@@ -95,7 +97,16 @@ export class ScrollbackPreservingTerminal implements Terminal {
   start(onInput: (data: string) => void, onResize: () => void): void { this.delegate.start(onInput, onResize) }
   stop(): void { this.delegate.stop() }
   drainInput(maxMs?: number, idleMs?: number): Promise<void> { return this.delegate.drainInput(maxMs, idleMs) }
-  write(data: string): void { this.delegate.write(stripScrollbackErase(data)) }
+  setMouseTrackingAllowed(allowed: boolean): void {
+    this.mouseTrackingAllowed = allowed
+  }
+
+  write(data: string): void {
+    const scrollbackSafe = stripScrollbackErase(data)
+    this.delegate.write(this.mouseTrackingAllowed
+      ? scrollbackSafe
+      : stripMouseTrackingEnable(scrollbackSafe))
+  }
   moveBy(lines: number): void { this.delegate.moveBy(lines) }
   hideCursor(): void { this.delegate.hideCursor() }
   showCursor(): void { this.delegate.showCursor() }
@@ -108,6 +119,10 @@ export class ScrollbackPreservingTerminal implements Terminal {
 
 export function stripScrollbackErase(data: string): string {
   return data.replaceAll('\x1b[3J', '')
+}
+
+export function stripMouseTrackingEnable(data: string): string {
+  return data.replace(/\x1b\[\?(?:1000|1002|1003|1006)h/gu, '')
 }
 
 function terminalTitle(value: string): string {

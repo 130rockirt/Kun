@@ -93,7 +93,7 @@ export const TUI_SLASH_COMMANDS: SlashCommand[] = [
   { name: 'variants', description: 'Choose the model reasoning effort' },
   { name: 'thinking', description: 'Expand or collapse accumulated reasoning text' },
   { name: 'reasoning', description: 'Compatibility alias for /thinking' },
-  { name: 'mouse', description: 'Toggle direct transcript clicks or native text selection', argumentHint: '[on|off]' },
+  { name: 'mouse', description: 'Opt into direct transcript clicks or restore native scroll and selection', argumentHint: '[on|off]' },
   { name: 'status', description: 'Show session, model, workspace, permissions, and connection' },
   { name: 'copy', description: 'Copy the last Kun response' },
   { name: 'export', description: 'Export the active session as Markdown', argumentHint: '[path]' },

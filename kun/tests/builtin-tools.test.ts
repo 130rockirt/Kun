@@ -190,12 +190,19 @@ describe('Kun built-in tools', () => {
     expect(names).not.toContain('write')
   })
 
-  it('allows file tools but hides host shell commands in workspace-write sandbox mode', async () => {
+  it('advertises approved shell tools but keeps other process tools hidden in workspace-write', async () => {
     const tools = await host.listTools(buildContext(workspace, { sandboxMode: 'workspace-write' }))
     const names = tools.map((tool) => tool.name)
 
-    expect(names).toEqual(expect.arrayContaining(['read', 'grep', 'find', 'ls', 'edit', 'write']))
-    expect(names).not.toContain('bash')
+    expect(names).toEqual(expect.arrayContaining([
+      'read',
+      'grep',
+      'find',
+      'ls',
+      'edit',
+      'write',
+      'bash'
+    ]))
     expect(names).not.toContain('lsp')
   })
 
@@ -276,23 +283,30 @@ describe('Kun built-in tools', () => {
     expect(String(output.hint)).toContain('ls, find, or grep')
   })
 
-  it('blocks host shell execution in workspace-write sandbox mode', async () => {
+  it('requires approval before host shell execution in workspace-write sandbox mode', async () => {
+    const awaitApproval = vi.fn(async () => 'allow' as const)
     const result = await host.execute(
       {
         callId: 'call_bash',
         toolName: 'bash',
         arguments: { command: 'echo hello' }
       },
-      buildContext(workspace, { sandboxMode: 'workspace-write' })
+      buildContext(workspace, {
+        approvalPolicy: 'auto',
+        sandboxMode: 'workspace-write',
+        awaitApproval
+      })
     )
 
+    expect(awaitApproval).toHaveBeenCalledOnce()
     expect(result.approved).toBe(false)
     expect(result.item).toMatchObject({
       kind: 'tool_result',
       toolName: 'bash',
-      isError: true,
+      isError: false,
       output: {
-        code: 'sandbox_command_blocked'
+        command: 'echo hello',
+        exit_code: 0
       }
     })
   })

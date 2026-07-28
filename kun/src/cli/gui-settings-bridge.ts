@@ -25,6 +25,12 @@ import {
   type ModelConnectionSnapshot
 } from '../contracts/model-connections.js'
 import {
+  ApprovalPolicySchema,
+  SandboxModeSchema,
+  type ApprovalPolicy,
+  type SandboxMode
+} from '../contracts/policy.js'
+import {
   RuntimeConfigApplyRequest,
   type RuntimeConfigApplyRequest as RuntimeConfigApplyPayload
 } from '../contracts/runtime-config.js'
@@ -74,7 +80,9 @@ const GuiSharedSettingsSchema = z.object({
       model: z.string().max(512).default(''),
       providerId: z.string().max(128).default(''),
       port: z.number().int().min(1).max(65_535).default(18899),
-      runtimeToken: z.string().max(64 * 1024).default('')
+      runtimeToken: z.string().max(64 * 1024).default(''),
+      approvalPolicy: ApprovalPolicySchema.optional(),
+      sandboxMode: SandboxModeSchema.optional()
     })
   })
 })
@@ -88,6 +96,8 @@ export type GuiSharedSettings = {
   dataDir: string
   defaultModel: string
   defaultProviderId: string
+  defaultApprovalPolicy?: ApprovalPolicy
+  defaultSandboxMode?: SandboxMode
   providers: GuiProviderCatalog[]
   /** Used only to detect an older GUI runtime that has no discovery record. */
   legacyRuntimePort: number
@@ -147,6 +157,12 @@ export async function readGuiSharedSettings(input: {
       dataDir,
       defaultModel: parsed.data.agents.kun.model.trim(),
       defaultProviderId: parsed.data.agents.kun.providerId.trim(),
+      ...(parsed.data.agents.kun.approvalPolicy
+        ? { defaultApprovalPolicy: parsed.data.agents.kun.approvalPolicy }
+        : {}),
+      ...(parsed.data.agents.kun.sandboxMode
+        ? { defaultSandboxMode: parsed.data.agents.kun.sandboxMode }
+        : {}),
       legacyRuntimePort: parsed.data.agents.kun.port,
       legacyRuntimeToken: parsed.data.agents.kun.runtimeToken,
       providers: parsed.data.provider.providers.flatMap((value) => {
@@ -600,6 +616,12 @@ export async function syncGuiProviderCatalogToConfig(
   })
   const nextServe = KunServeConfigSchema.parse({
     ...existingServe,
+    ...(settings.defaultApprovalPolicy
+      ? { approvalPolicy: settings.defaultApprovalPolicy }
+      : {}),
+    ...(settings.defaultSandboxMode
+      ? { sandboxMode: settings.defaultSandboxMode }
+      : {}),
     ...(options.authoritative ? { providers: {}, credentialSourceId: undefined } : {}),
     ...(options.stripCredentials ? { apiKey: '' } : {}),
     providers,

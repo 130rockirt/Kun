@@ -155,6 +155,28 @@ describe('Graph renderer store', () => {
     expect(client.listRuns).toHaveBeenCalledTimes(2)
   })
 
+  it('does not let an older concurrent refresh overwrite a newer Graph snapshot', async () => {
+    let resolveOlder!: (runs: GraphRun[]) => void
+    let resolveNewer!: (runs: GraphRun[]) => void
+    client.listRuns
+      .mockReturnValueOnce(new Promise<GraphRun[]>((resolve) => { resolveOlder = resolve }))
+      .mockReturnValueOnce(new Promise<GraphRun[]>((resolve) => { resolveNewer = resolve }))
+
+    const olderRefresh = useGraphStore.getState().refreshThread('thread_1')
+    const newerRefresh = useGraphStore.getState().refreshThread('thread_1')
+    resolveNewer([runWithNode('run_1', 3, 'node_1')])
+    await newerRefresh
+    expect(useGraphStore.getState().runs[0]?.lastEventSeq).toBe(3)
+
+    resolveOlder([run('run_1', 2)])
+    await olderRefresh
+
+    expect(useGraphStore.getState().runs[0]).toMatchObject({
+      lastEventSeq: 3,
+      nodes: { node_1: { status: 'running' } }
+    })
+  })
+
   it('preserves a durable node selection when the selected run refreshes', async () => {
     useGraphStore.setState({
       threadId: 'thread_1',

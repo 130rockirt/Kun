@@ -38,6 +38,7 @@ import type { TuiOptions } from './options.js'
 import {
   applyRuntimeEvent,
   hydrateProjectedChildRuns,
+  matchingRequestContextSnapshot,
   projectThreadSnapshot,
   setProjectionRunningTurn,
   type ThreadProjection
@@ -506,11 +507,11 @@ export class TuiController {
         ...(selection.providerId ? { providerId: selection.providerId } : {}),
         ...(selection.accountId ? { accountId: selection.accountId } : {}),
         mode: this.stateValue.composerMode,
-        ...(this.options.approvalPolicy ?? this.runtime.runtimeInfo.approvalPolicy
-          ? { approvalPolicy: this.options.approvalPolicy ?? this.runtime.runtimeInfo.approvalPolicy }
+        ...(this.options.approvalPolicy
+          ? { approvalPolicy: this.options.approvalPolicy }
           : {}),
-        ...(this.options.sandboxMode ?? this.runtime.runtimeInfo.sandboxMode
-          ? { sandboxMode: this.options.sandboxMode ?? this.runtime.runtimeInfo.sandboxMode }
+        ...(this.options.sandboxMode
+          ? { sandboxMode: this.options.sandboxMode }
           : {})
       })
       await this.refreshThreads('')
@@ -1995,22 +1996,37 @@ export class TuiController {
       const providerId = this.options.providerId ?? projection.thread.providerId
       const accountId = this.options.accountId ?? projection.thread.accountId
       const model = this.options.model ?? projection.thread.model
+      const contextSnapshot = matchingRequestContextSnapshot(projection, {
+        model,
+        providerId
+      })
       const configuredContextWindow = this.stateValue.modelConnections?.providers.find((provider) =>
         provider.id === providerId && provider.accountId === accountId
       )?.modelCapabilities?.[model]?.contextWindowTokens
       const contextWindow = configuredContextWindow ??
         modelCapabilitiesForProviderModel({ providerId, model }).contextWindowTokens
-      this.inspect('Context', bucket
+      const requestLines = contextSnapshot
         ? [
+            `Latest request (estimated): ${contextSnapshot.estimatedInputTokens.toLocaleString()} / ${contextSnapshot.contextWindowTokens.toLocaleString()} tokens`,
+            `Auto-compact threshold: ${contextSnapshot.softThresholdTokens.toLocaleString()} tokens`,
+            `Hard threshold: ${contextSnapshot.hardThresholdTokens.toLocaleString()} tokens`
+          ]
+        : [
+            'Latest request: no request-local context snapshot yet',
+            `Context window: ${contextWindow ? `${contextWindow.toLocaleString()} tokens` : 'unknown'}`
+          ]
+      const usageLines = bucket
+        ? [
+            'Cumulative usage (not context occupancy):',
             `Input: ${bucket.input_tokens.toLocaleString()} tokens`,
             `Output: ${bucket.output_tokens.toLocaleString()} tokens`,
             `Reasoning: ${bucket.reasoning_tokens.toLocaleString()} tokens`,
             `Cached: ${bucket.cached_tokens.toLocaleString()} tokens`,
             `Total: ${bucket.total_tokens.toLocaleString()} tokens`,
-            `Turns: ${bucket.turns}`,
-            `Context window: ${contextWindow ? `${contextWindow.toLocaleString()} tokens` : 'unknown'}`
+            `Turns: ${bucket.turns}`
           ]
-        : ['No usage has been recorded for this thread.'])
+        : ['No cumulative usage has been recorded for this thread.']
+      this.inspect('Context', [...requestLines, '', ...usageLines])
     } catch (error) {
       this.fail(error)
     }
