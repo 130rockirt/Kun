@@ -338,10 +338,18 @@ describe('AnimatedWorkLogo', () => {
     const appIcon = await readFile(new URL('../../../../asset/img/kun.png', import.meta.url))
     const macIcon = await readFile(new URL('../../../../asset/img/kun_mac.png', import.meta.url))
     const trayIcon = await readFile(new URL('../../../../asset/img/kun_tray.png', import.meta.url))
+    const macTrayIcon = await readFile(
+      new URL('../../../../asset/img/kun_tray_mac.png', import.meta.url)
+    )
+    const macRetinaTrayIcon = await readFile(
+      new URL('../../../../asset/img/kun_tray_mac@2x.png', import.meta.url)
+    )
 
     expect(pngDimensions(appIcon)).toEqual({ width: 1254, height: 1254 })
     expect(pngDimensions(macIcon)).toEqual({ width: 1024, height: 1024 })
     expect(pngDimensions(trayIcon)).toEqual({ width: 954, height: 994 })
+    expect(pngDimensions(macTrayIcon)).toEqual({ width: 22, height: 22 })
+    expect(pngDimensions(macRetinaTrayIcon)).toEqual({ width: 44, height: 44 })
   })
 
   it('ships the iKun figure asset used by ikun mode', async () => {

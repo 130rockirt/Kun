@@ -104,7 +104,7 @@ Thinking 默认折叠，工具与 Subagent 使用紧凑的状态/对象/耗时�
 整轮耗时。审批或结构化问答等待使用较慢的注意力脉冲；普通通知只占用状态行右侧，
 不会遮住正在进行的工作。
 
-这里参考 Kimi Code 的“持续可感知进度”，但不伪造百分比：不同阶段使用不同的单格
+这里采用“持续可感知进度”原则，但不伪造百分比：不同阶段使用不同的单格
 动画，Responding 使用打印头节奏，工具和 Subagent 使用各自的运动符号。活动栏仅在
 发送、等待、推理、输出、工具、子代理、重试或重连等真实阶段出现，空闲时完全隐藏，
 所以不会长期占据注意力。运行时提供上下文窗口且已有 usage 时，右侧显示
@@ -139,7 +139,7 @@ Search、Grep、Find、List、Fetch 和 Web Search 可以跨越中间折叠的 T
   粘贴完整 callback URL 或单独 authorization code 并按 Enter。该值不会显示、写入
   shell history、普通设置或日志。
 - Claude Pro/Max 使用 Agent SDK 连接类型；TUI 会检测并按需下载 Claude Code，再启动官方登录流程。
-- 同一预设可建立多个账号，ID 会稳定分配为 `kimi-code`、`kimi-code-2` 等。
+- 同一预设可建立多个账号，ID 会稳定分配为带序号的稳定账号标识。
 - 在已连接账号上按 Enter 可探测模型、重命名、遮罩替换凭据或确认断开；删除默认连接时会明确提示自动回退。
 
 凭据只写入运行时的受保护 credential store；registry 和 HTTP 响应只包含
@@ -192,7 +192,7 @@ Kun 不会附加到该旧进程，也不会在同一 data-dir 启动第二个写
 | `Ctrl+L` | 强制重绘 |
 | `Shift+PgUp/PgDn` | 使用终端原生 scrollback（应用不会截获） |
 
-默认状态与 Kimi Code 一样，不开启终端鼠标上报：直接拖动即可框选任意 transcript
+默认状态不开启终端鼠标上报：直接拖动即可框选任意 transcript
 文本，再使用终端自己的复制快捷键。Codex/VS Code 集成终端通常会在已有选区时让
 `Ctrl+C` 复制；macOS Terminal/iTerm2 通常使用 `Cmd+C`，Linux/Windows 终端通常使用
 `Ctrl+Shift+C`。没有选区时，`Ctrl+C` 仍执行 Kun 的返回、清空、中止或退出语义。

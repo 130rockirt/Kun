@@ -5,8 +5,8 @@
 <h1 align="center">Kun</h1>
 
 <p align="center">
-  <strong>An experiment in requirement-first coding for the next programming paradigm.</strong><br>
-  Use DeepSeek, Xiaomi MiMo, and MiniMax to connect requirements, Design, Code, and Write into one loop.
+  <strong>One runtime, GUI + TUI, and AI agents that work inside a real delivery loop.</strong><br>
+  Move from requirements, design, and planning to implementation and verification. Use Agent Graph for complex work while keeping execution visible, controlled, and traceable.
 </p>
 
 <p align="center">
@@ -14,30 +14,35 @@
   &nbsp;·&nbsp;
   <strong>English</strong>
   &nbsp;·&nbsp;
+  <a href="https://www.kun-agent.com/">Website</a>
+  &nbsp;·&nbsp;
+  <a href="https://www.kun-agent.com/docs">Docs</a>
+  &nbsp;·&nbsp;
   <a href="https://github.com/KunAgent/Kun/releases">Download</a>
-  &nbsp;·&nbsp;
-  <a href="#documentation-map">Docs</a>
-  &nbsp;·&nbsp;
-  <a href="#path-b-run-from-source">Run from source</a>
 </p>
 
 <p align="center">
   <a href="https://github.com/KunAgent/Kun/releases"><img src="https://img.shields.io/github/v/release/KunAgent/Kun?label=release" alt="GitHub release"></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-blue" alt="License: PolyForm Noncommercial 1.0.0"></a>
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey" alt="Platform">
-  <img src="https://img.shields.io/badge/Electron-43-47848F?logo=electron&logoColor=white" alt="Electron 43">
-  <img src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black" alt="React 19">
+  <img src="https://img.shields.io/badge/GUI%20%2B%20TUI-one%20runtime-41c8ff" alt="GUI and TUI share one runtime">
 </p>
 
-Kun is a product experiment for the future of programming: instead of starting from “ask the agent to edit code,” it starts from requirement clarification and connects requirement documents, Design drafts, interactive prototypes, implementation plans, todos, agent coding, and change review in one GUI workflow.
+## What is Kun?
 
-Kun is for users who want to put AI agents into real everyday work. It is not just a chat client, and it is not only a CLI shell for programmers: in Code mode you can hand it a local folder for code, requirements, plans, and change review; in Design mode you can generate and iterate UI drafts, interactive prototypes, and a shared design system; in Write mode you can work on long-form Markdown, editing, and document export.
+Kun is a local-first AI agent workbench with both a desktop GUI and a terminal TUI. Both clients connect to the same `kun serve` runtime and share threads, model connections, approvals, plans, subagents, usage, and background work. Use the desktop to see the whole process or stay keyboard-first in the terminal without splitting your work across two systems.
 
-This is also why Kun treats DeepSeek, Xiaomi MiMo, and MiniMax as the default first-class model stack, not just ordinary optional providers. Requirement-first coding requires more rounds of clarification, research, structuring, planning, execution, and verification. If model cost is too high, that richer workflow cannot become an everyday habit. Kun chooses three cost-efficient Chinese model providers so the full loop is affordable to run, repeat, and refine.
+Kun is not another chat box. Its job is to move real work from an initial request to a result you can verify:
 
-Kun includes the local `kun serve` runtime for the desktop app. Preferences, sessions, logs, and runtime config stay on your machine; model calls use your own provider credentials. For workflows that can read/write files or run commands, Kun gives you tool approvals, filesystem permission modes, inline diffs, and a change-review panel.
+```text
+requirements → design → plan → implementation / execution → review → verification
+```
 
----
+- **Requirement-first**: define the goal, boundaries, and acceptance criteria before execution.
+- **One runtime, two interfaces**: use the GUI and TUI at the same time without losing threads or background tasks.
+- **Agent Graph**: turn decomposable work into a dependency graph supervised by a Lead Agent.
+- **Evidence-driven delivery**: keep diffs, commands, tests, browser checks, and review findings next to the task instead of treating “the agent says it is done” as proof.
+- **Provider-flexible**: manage subscription sign-ins, Coding Plans, Token Plans, API keys, compatible endpoints, and self-hosted models in one place.
 
 <p align="center">
   <a href="src/asset/img/code.mp4">
@@ -48,121 +53,108 @@ Kun includes the local `kun serve` runtime for the desktop app. Preferences, ses
   </a>
 </p>
 
-## Requirement-First Coding
+## Start in five minutes
 
-Kun explores a next-generation programming workflow: **requirement -> design -> plan -> code -> verify**. It is not just a chat box attached to an IDE.
+### Download the desktop app
 
-That workflow is carried by three first-class modes: **Code** for real repositories and shipping changes, **Design** for UI direction, prototypes, and design systems, and **Write** for long-form documents, requirements, release notes, and essays. All three share the same Kun runtime, provider config, approvals, and thread capabilities.
-
-| Stage | Kun's approach |
-| --- | --- |
-| **Clarify** | Create requirement drafts in the GUI and ask Requirement AI to find missing questions, research options, and shape boundaries |
-| **Document** | Save drafts as `.kunsdd/draft/.../requirement.md`, with structured requirement blocks, acceptance criteria, and requirement history |
-| **Design** | Enter Design mode to generate UI drafts, infographics, interactive HTML prototypes, and a shared design system from requirement selections, so requirements become more than text |
-| **Plan** | Use `/plan` and `create_plan` to produce GUI-owned `.kunsdd/plan/...` implementation plans linked back to requirements |
-| **Code** | Move from plan into todos, file edits, command execution, and change review; when requirements change, Kun can surface affected replanning |
-| **Verify** | Bring requirement blocks, acceptance criteria, plan state, and `/review` back together to answer whether the original requirement is done |
-
-This is Kun's most important product direction: moving AI coding from instant Q&A into a requirement-driven software production workflow. Code, Design, Write, models, planning, review, and automation all serve that line.
-
-## Core Model Stack
-
-Kun optimizes for **complete capability + extreme cost efficiency**. A requirement-first workflow is longer than ordinary chat and depends on repeated model calls; first-run setup and provider settings are organized around three Chinese model providers so users can cover more agent scenarios with lower model cost.
-
-| Provider | Role in Kun |
-| --- | --- |
-| **DeepSeek** | Default text and reasoning provider with `deepseek-v4-pro` / `deepseek-v4-flash`, powering coding, planning, review, long-context sessions, and auto model routing |
-| **Xiaomi MiMo** | Cost-efficient multimodal and speech entry point, covering long-context text models, vision input, ASR transcription, TTS generation, and Token Plan |
-| **MiniMax** | Full media generation complement, covering Anthropic Messages text models, image generation, speech generation, music generation, video generation, and Token Plan |
-
-This stack lets Kun route different jobs to the right capability: fast models for lightweight clarification, stronger models for complex coding and reasoning, speech for writing and IM flows, and image/music/video generation for design and creative work. You can still add OpenAI-compatible, self-hosted, or other custom providers, but Kun's default experience is built around these three cost-efficient model services.
-
-## Why Kun
-
-| You want | Kun provides |
-| --- | --- |
-| A next-generation coding workflow | Requirement clarification, requirement documents, design drafts, implementation plans, agent coding, and verification in one line |
-| Design in the same app | Design mode generates UI drafts, interactive HTML prototypes, node-based design flows, and a shared `DESIGN_SYSTEM.md`, then hands approved work to Code |
-| Complete agent capability at extreme cost efficiency | DeepSeek, Xiaomi MiMo, and MiniMax as the core stack for text, reasoning, vision, speech, image, music, and video |
-| AI that works on real projects | Bind a local workspace, read and edit files, search code, run commands, and inspect tool calls and results |
-| Requirements that become executable plans | New requirements, `/plan`, todos, `/goal`, side conversations, thread compaction, forking, and archiving |
-| Controlled changes | Tool approvals, filesystem permission modes, inline diffs, a change-review panel, and `/review` |
-| Writing in the same app | Markdown file tree, Live / Source / Split / Preview, export formats, and selection-based inline agent actions |
-| Turn Markdown into a presentation | Launch PPT Master from Write, confirm the outline, audience, and visual direction, then generate a natively editable `.pptx` |
-| Remote or background triggers | Feishu / Lark / WeChat connection, local webhook / relay, and one-time or recurring scheduled tasks |
-| Reusable workflows for repeatable processes | Visual "Create Loop" node editor to draw, run, and reuse multi-step agent flows |
-| Extend Kun for your own workflows | Install `.kunx` extensions that add workbench UI, background services, Agents, tools, custom model Providers, and account integrations |
-| More than one model vendor | Custom Base URLs, protocols, model lists, and capability extensions beyond the three core providers |
-
-## Core Features
-
-- **Requirement-first coding**: draft requirements, clarify and structure them with AI, generate design drafts or prototypes, then move into implementation plans, todos, agent coding, and verification.
-- **Code workbench**: bind a local project folder, chat around real codebases, read and edit files, run commands, and inspect tool calls and file changes.
-- **Design mode**: generate design drafts, interactive HTML prototypes, and design flow graphs from natural language, requirement drafts, or existing UI; iterate versions, preview on canvas, export, publish a shared design system, and hand designs to Code for implementation.
-- **Planning and review**: new requirements, `/plan`, todos, `/goal`, `/review`, side conversations, thread compaction, forking, and archiving.
-- **Controlled changes**: inline diffs, a change-review panel, tool approvals, and filesystem permission modes.
-- **Write mode and PPT Master**: dedicated Markdown workspaces with a file tree, Live / Source / Split / Preview modes, completion, selection-based inline agent actions, and `HTML / PDF / DOC / DOCX` export. From the current Markdown file, PPT Master can propose an outline, slide count, audience, and visual direction for confirmation, then generate a natively editable `.pptx`.
-- **Connect phone**: Feishu / Lark / WeChat IM agents, local webhook / relay support, and one-time, daily, interval, or manual scheduled tasks.
-- **Visual workflows (Create Loop)**: an n8n / dify-style node canvas on top of scheduled tasks that turns multi-step agent flows into runnable, reusable workflows — rich triggers and nodes, typed dataflow, a local run API, exposable to Kun as a tool, and bindable to hook phases.
-- **Model-stack-first**: first-run setup, provider presets, and capability auto-wiring are designed around DeepSeek, Xiaomi MiMo, and MiniMax as a cost-efficient full agent stack.
-- **Multimodal and media capabilities**: image attachments, vision input, speech transcription, image generation, speech generation, music generation, and video generation, enabled by provider configuration.
-- **MCP and Skills**: Model Context Protocol servers and project/global Skills give Kun specialized tools and workflows for different tasks.
-- **Kun Extension platform**: install or side-load `.kunx` packages that combine workbench pages and sidebars, background Node services, Agent workflows, tools, custom model Providers, and account authentication. Public SDKs, a Manifest Schema, permission consent, an isolated Extension Host, scaffolding, and test utilities form the stable Extension API v1 surface.
-- **Local runtime**: `kun serve` provides the HTTP/SSE boundary with a cache-first agent loop, append-only event logs, usage tracking, and context compaction.
-
-## More Demos
-
-<p align="center">
-  <a href="src/asset/img/pdf-research.mp4">
-    <img src="src/asset/img/pdf-research.gif" width="680" alt="PDF research demo">
-  </a>
-</p>
-<p align="center"><em>PDF research and source organization demo</em></p>
-
-<p align="center">
-  <a href="src/asset/img/sdd.mp4">
-    <img src="src/asset/img/sdd.gif" width="680" alt="Requirement clarification, requirement documents, and planning demo">
-  </a>
-</p>
-<p align="center"><em>Requirement clarification, requirement documents, and planning demo</em></p>
-
-<p align="center">
-  <a href="src/asset/img/ikun-ui-plugin.mp4">
-    <img src="src/asset/img/ikun-ui-plugin.gif" width="680" alt="iKun UI plugin demo">
-  </a>
-</p>
-<p align="center"><em>iKun UI plugin demo</em></p>
-
-## Quick Start
-
-### Path A: Download a Release
-
-Download the latest build from [GitHub Releases](https://github.com/KunAgent/Kun/releases).
+Get the latest release from [GitHub Releases](https://github.com/KunAgent/Kun/releases):
 
 | Platform | Package | Architecture |
 | --- | --- | --- |
-| macOS | `.dmg` or `.zip` | Intel / Apple Silicon |
-| Windows | `.exe`, NSIS installer | x64 |
-| Linux | `.AppImage` | x64 |
-
-The GUI packages already contain the `kun` TUI. Headless developer machines
-can also download a self-contained standalone TUI archive for macOS arm64/x64,
-Windows x64, or Linux x64 from the same Release. The GUI and standalone TUI
-always ship together under one version; the TUI is not published through npm.
-See the [Kun TUI documentation](docs/kun-tui.en.md) for details.
+| macOS | `.dmg` / `.zip` | Apple Silicon / Intel |
+| Windows | `.exe` | x64 |
+| Linux | `.AppImage` / `.deb` | x64 |
 
 On first launch:
 
-1. Choose a UI language.
-2. Choose a model provider and enter an API key or Token Plan key.
-3. For compatible providers, edit the Base URL, protocol, and model list in Settings.
-4. Open Code to bind a local project, open Design to generate a prototype, or open Write to create a writing workspace.
+1. Choose the interface language.
+2. Sign in to a supported model subscription, or configure an API key, Token Plan, or custom provider.
+3. Open a local project in Code and send a small task with a clear goal, limited scope, and verifiable outcome.
 
-With a plain Markdown file open in Write, use the “Generate a PPT with PPT Master” toolbar action. On first use, Kun prepares a pinned PPT Master release and an isolated Python environment; Python 3.10 or later must already be installed. Kun asks you to confirm the outline and visual direction before generating the deck under the workspace's `presentations/` directory, and it does not modify the source Markdown.
+The desktop package includes the TUI. Open a new terminal in a project directory and run:
 
-To extend Kun, install a `.kunx` package from the extension management UI. Developers can run `npm create kun-extension` and follow the [five-minute extension quick start](docs/extensions/quick-start.en.md) for development, testing, packaging, and side-loading. Node and Direct DOM extensions are privileged capabilities, so install only trusted packages and review their permission prompts.
+```bash
+kun
+```
 
-### Path B: Run From Source
+The GUI and TUI automatically connect to the same local runtime. A standalone TUI archive is also available from the same Release for servers and headless environments. See the [Kun TUI documentation](docs/kun-tui.en.md).
+
+## Choose how you work
+
+| Surface | Best for | Main outputs |
+| --- | --- | --- |
+| **Code** | Understanding real repositories, editing files, running commands, managing plans, and reviewing changes | Code diffs, test results, implementation plans, review findings |
+| **Design** | Exploring visual directions from requirements or existing UI and iterating interactive prototypes | HTML prototypes, design canvases, design flows, `DESIGN_SYSTEM.md` |
+| **Write** | Drafting, editing, research, document export, and presentation generation | Markdown, HTML, PDF, DOCX, editable PPTX |
+| **TUI** | Managing sessions, models, plans, approvals, Skills, MCP, and subagents from the terminal | The same shared threads, turns, and task results as the GUI |
+| **Connect phone** | Starting or continuing work from Feishu / Lark / WeChat or a webhook | IM conversations, background tasks, notifications |
+
+Code, Design, and Write are not isolated tools. Design can hand an approved prototype to Code for implementation, Write can hold requirements and delivery documents, and all three reuse the same runtime, providers, approvals, and thread mechanics.
+
+## From requirements to verification
+
+| Stage | What Kun does |
+| --- | --- |
+| **1. Clarify** | Create a requirement draft and let Requirement AI inspect the project, find missing questions, define boundaries, and write acceptance criteria |
+| **2. Design** | Turn selected requirements into UI directions, interactive prototypes, or a shared design system |
+| **3. Plan** | Use `/plan` to split the goal into executable steps aligned with requirements and todos |
+| **4. Execute** | Let the agent search code, edit files, call tools, and run commands; long-running work can be resumed |
+| **5. Verify** | Inspect diffs, tests, and `/review` findings against the original acceptance criteria |
+
+Requirements and plans are stored in the project by default so they can be versioned, reviewed, and resumed. When a requirement changes, recheck the plan and completed steps instead of silently continuing with stale assumptions.
+
+## Agent Graph: supervised multi-agent work
+
+The experimental Graph mode is designed for complex work that spans files or phases and has explicit acceptance criteria. A Lead Agent builds a dependency graph, dispatches restricted workers as their prerequisites become ready, inspects execution, requests evidence or revision, and delivers only after the required nodes pass.
+
+Graph is not a second runtime and does not grant extra permissions:
+
+- The GUI and TUI read Graph state from the same Kun runtime.
+- Workers stay inside the parent turn's file, tool, network, Skill, and MCP boundaries.
+- A node can hand results downstream only after real validation and explicit Lead acceptance.
+- Runs can be paused, resumed, retried, revised, or stopped without relabeling recorded work as successful.
+
+Direct mode is faster for simple questions and small edits. See the [Graph Mode documentation](docs/graph-mode.en.md) for architecture, limits, and operations.
+
+## Key capabilities
+
+| Capability | What it includes |
+| --- | --- |
+| **Real-project workbench** | Local workspaces, file search and editing, Terminal, Browser, Git / Worktree, inline diffs, and a Changes panel |
+| **Long-running work** | Plans, todos, persistent goals, compaction, forks, archives, side questions, background shells, and subagents |
+| **Models and quota** | Subscription, API, and plan connections; provider, model, and reasoning selection; supported-provider quota views |
+| **Agents and knowledge** | Agent Profiles, long-term memory, project `AGENTS.md`, Skills, MCP, and Extensions |
+| **Automation** | One-time and recurring schedules, visual Loop workflows, hooks, and local run APIs |
+| **Multimodal and media** | Image and PDF input, vision, speech-to-text, and image, speech, music, and video generation |
+| **Extension platform** | Install or side-load `.kunx` packages for workbench UI, services, agents, tools, providers, and account integrations |
+| **Permissions and review** | Workspace scopes, sandbox modes, tool approvals, Computer Use permissions, sensitive-action confirmation, and `/review` |
+
+Availability depends on the Kun version, operating system, provider, model capabilities, and permissions you grant. A preset is a configuration starting point; it does not guarantee that an account has access to a model or quota.
+
+## Subscriptions, providers, and models
+
+Kun puts subscription sign-ins, plan credentials, and regular APIs in one provider entry point:
+
+| Type | Currently supported |
+| --- | --- |
+| **Account subscriptions** | ChatGPT / Codex, Claude Pro / Max, Google Antigravity, Gemini CLI, Cursor, Ollama Cloud, and Grok |
+| **Coding Plans** | Zhipu Coding Plan, Z.ai Coding Plan, Volcano Ark Agent Plan, Volcano Ark Coding Plan, and a Kimi coding subscription |
+| **Token Plans** | Xiaomi MiMo, MiniMax, Aliyun, and Tencent Cloud Token Plan entries |
+| **Compatible and self-hosted** | OpenCode Go, Vercel AI Gateway, LiteLLM, LongCat, OpenAI-compatible endpoints, and self-hosted models |
+
+Sign-in methods, available models, regions, and quota depend on the current release and provider rules. A preset is a starting point, not a guarantee that an account has access to a model.
+
+Sessions, preferences, logs, and runtime data stay on the local machine by default. Model requests use credentials that you configure. Closing the GUI does not stop work still running in the TUI or background, and closing the TUI does not shut down the desktop client. Local-first does not mean that every model runs locally: unless you connect a self-hosted model, prompts, attachments, and task context are sent to the selected provider.
+
+Kun brings several connection types into one model registry:
+
+- supported subscription sign-ins and Agent SDKs;
+- Coding Plans, Token Plans, and pay-as-you-go APIs;
+- compatible OpenAI Chat Completions, Responses, and Anthropic Messages protocols;
+- custom Base URLs, model lists, capability declarations, and self-hosted services;
+- different models for the default agent, a thread, Design, Write, schedules, or individual subagents; built-in presets also include DeepSeek, Xiaomi MiMo, MiniMax, Kimi, GLM, and Qwen.
+
+## Run from source
 
 Requirements:
 
@@ -170,7 +162,7 @@ Requirements:
 | --- | --- |
 | Node.js | 22.19+ |
 | npm | Ships with Node.js |
-| Model credentials | At least one of DeepSeek / Xiaomi MiMo / MiniMax / custom provider |
+| Model connection | At least one supported subscription, API, or custom provider |
 
 ```bash
 git clone https://github.com/KunAgent/Kun.git
@@ -179,81 +171,70 @@ npm install
 npm run dev
 ```
 
-For slower network access in mainland China, use an npm mirror:
+Start the development TUI by itself:
+
+```bash
+npm run dev:tui
+```
+
+For slower npm access in mainland China:
 
 ```bash
 npm install --registry=https://registry.npmmirror.com
 ```
 
-## Common Commands
+### Common development commands
 
 | Command | Description |
 | --- | --- |
-| `npm run dev` | Build the Kun runtime and start the Electron dev app |
-| `npm run build` | Production build |
-| `npm run typecheck` | TypeScript type checking |
-| `npm run lint` | ESLint checks |
-| `npm run test` | Vitest tests |
-| `npm run dist:mac` | Build macOS `.dmg` and `.zip` |
-| `npm run dist:win` | Build the Windows NSIS installer |
-| `npm run dist:linux` | Build the Linux AppImage |
+| `npm run dev` | Build the Kun runtime and start the Electron development app |
+| `npm run dev:tui` | Build the runtime and start the terminal TUI |
+| `npm run typecheck` | Run TypeScript checks |
+| `npm run lint` | Run ESLint |
+| `npm run test` | Run tests |
+| `npm run build` | Create a production build |
+| `npm run dist:mac` | Build macOS packages |
+| `npm run dist:win` | Build the Windows package |
+| `npm run dist:linux` | Build Linux packages |
 
-## Configuration and Data
+## Documentation
 
-- Preferences, sessions, logs, runtime config, and local runtime data stay on your machine by default.
-- Model calls use the provider credentials you configure; provider presets are editable starting points.
-- Code / Design / Write / Connect Phone share the same `kun` runtime boundary for sessions, approvals, tools, and usage tracking.
-- File writes, command execution, MCP tools, and media generation are governed by permissions and configuration.
+User documentation is available at [kun-agent.com/docs](https://www.kun-agent.com/docs). Repository documentation is aimed at developers and contributors:
 
-## Documentation Map
-
-| Doc | Contents |
+| Document | Contents |
 | --- | --- |
-| [docs/extensions/README.en.md](docs/extensions/README.en.md) | Kun Extension platform: workbench apps, Agent runs, tools, custom model providers, accounts, packaging, and compatibility |
-| [kun/README.md](kun/README.md) | Kun runtime, CLI, environment variables, HTTP API |
-| [docs/kun-tui.en.md](docs/kun-tui.en.md) | Inline pi-tui client launched with bare `kun` and designed to coexist with the GUI |
-| [docs/kun-architecture.en.md](docs/kun-architecture.en.md) | Runtime architecture and GUI integration |
-| [docs/kun-cache-optimization.en.md](docs/kun-cache-optimization.en.md) | Cache optimization and token economy |
-| [docs/DESIGN_MODE.md](docs/DESIGN_MODE.md) | Design mode, canvas, prototypes, design systems, and the Design -> Code loop |
-| [docs/model-provider-presets.md](docs/model-provider-presets.md) | Model provider presets |
-| [docs/workflow-loop.en.md](docs/workflow-loop.en.md) | The Loop node and the loop-agent idea (Create Loop workflows) |
+| [docs/kun-tui.en.md](docs/kun-tui.en.md) | TUI installation, startup, commands, keybindings, configuration, and runtime |
+| [docs/graph-mode.en.md](docs/graph-mode.en.md) | Graph architecture, scheduling, supervision, permissions, and recovery |
+| [docs/kun-architecture.en.md](docs/kun-architecture.en.md) | The shared runtime architecture for GUI and TUI |
+| [docs/DESIGN_MODE.md](docs/DESIGN_MODE.md) | Design canvas, prototypes, design systems, and Design → Code |
+| [docs/workflow-loop.en.md](docs/workflow-loop.en.md) | Visual Loop workflows |
+| [docs/project-mcp-skills.md](docs/project-mcp-skills.md) | Project configuration, MCP, and Skill discovery |
+| [docs/extensions/README.en.md](docs/extensions/README.en.md) | The Kun Extension platform |
+| [kun/README.md](kun/README.md) | Runtime, CLI, environment variables, and HTTP API |
+| [docs/DEVELOPMENT.en.md](docs/DEVELOPMENT.en.md) | Local development and release workflow |
 | [docs/CONTRIBUTING.en.md](docs/CONTRIBUTING.en.md) | Contribution guide |
-| [docs/DEVELOPMENT.en.md](docs/DEVELOPMENT.en.md) | Local development workflow |
-| [SECURITY.md](SECURITY.md) | Security disclosure policy |
+| [SECURITY.md](SECURITY.md) | Security disclosure |
 
 ## Contributing
 
-Bug fixes, UI/UX improvements, documentation, localization, build/release work, and runtime integration contributions are welcome.
+Contributions are welcome across bug fixes, UI/UX, runtime capabilities, providers, extensions, documentation, and localization. Day-to-day integration happens on `develop`, and pull requests should target `develop` by default. Read the [contribution guide](docs/CONTRIBUTING.en.md) before starting. External contributions require acceptance of the [Contributor License Agreement](./CLA.md).
 
-Project conventions:
+After **5 pull requests have been reviewed and merged normally**, you may apply to become a Kun Builder by emailing [zhongxingyuemail@gmail.com](mailto:zhongxingyuemail@gmail.com). Include your GitHub username, links to the merged pull requests, and the areas where you want to keep contributing.
 
-- Day-to-day integration happens on `develop`; stable releases land on `master`.
-- Open pull requests into `develop` by default.
-- Before opening a PR, run `npm run typecheck`, `npm run build`, and `npm run test` when possible.
-- External contributions require acceptance of the [Contributor License Agreement](./CLA.md).
+## License
 
-### Join Kun Builder
+Kun is licensed under the [PolyForm Noncommercial License 1.0.0](./LICENSE) for learning, research, and noncommercial use. Commercial use, commercial distribution, SaaS / hosted services, resale, or integration into commercial products requires separate written authorization.
 
-If you want to become a Kun Builder, start by contributing through the normal pull request flow. After you have **5 pull requests reviewed and merged normally**, you can email [zhongxingyuemail@gmail.com](mailto:zhongxingyuemail@gmail.com) to apply.
-
-Include your GitHub username, links to the 5 merged pull requests, and the areas where you want to keep contributing, such as Code, Design, Write, runtime, model providers, workflows, documentation, or localization.
+Companies using Kun solely to improve internal employee productivity may request free written internal-use authorization at [zhongxingyuemail@gmail.com](mailto:zhongxingyuemail@gmail.com). This authorization does not cover customer-facing SaaS, hosting, resale, or commercial distribution.
 
 ## Thanks
 
 Thanks to [LobsterAI](https://github.com/netease-youdao/LobsterAI), DeepSeek, Xiaomi MiMo, MiniMax, and everyone who contributes issues, ideas, code, and documentation.
 
 <a href="https://github.com/KunAgent/Kun/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=KunAgent/Kun" />
+  <img src="https://contrib.rocks/image?repo=KunAgent/Kun" alt="Kun contributors">
 </a>
 
-## License
-
-This project is provided for learning and reference only and may not be used for any commercial purpose. Commercial use, commercial distribution, SaaS/hosted services, resale, or integration into commercial products requires separate written authorization from the author.
-
-We strongly support companies that want to use Kun solely within their organization to improve employee productivity. Email [zhongxingyuemail@gmail.com](mailto:zhongxingyuemail@gmail.com) to request written authorization; no license fee will be charged. This free internal-use authorization does not cover external SaaS/hosted services, resale, commercial distribution, or integration into customer-facing commercial products.
-
-Educational institutions and public-interest educational organizations may use the project for noncommercial teaching, research, coursework, experiments, and learning/reference purposes. See [PolyForm Noncommercial License 1.0.0](./LICENSE) for the full terms.
-
-## Star History
+## Star history
 
 [![Star History Chart](https://api.star-history.com/chart?repos=KunAgent/Kun&type=date&legend=top-left)](https://www.star-history.com/?repos=KunAgent%2FKun&type=date&logscale=&legend=top-left)

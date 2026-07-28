@@ -118,8 +118,8 @@ phase and total-turn timers. Approval and structured-input waits use a calmer
 attention pulse. Ordinary notices share the right side of the row instead of
 hiding active work.
 
-This borrows Kimi Code's continuously perceptible progress without inventing
-a percentage: each authoritative phase has distinct one-cell motion,
+This uses continuously perceptible progress without inventing a percentage:
+each authoritative phase has distinct one-cell motion,
 Responding uses a print-head rhythm, and tools and Subagents have their own
 motion. The activity row appears only while sending, waiting, thinking,
 responding, running a tool or child, retrying, or reconnecting, and disappears
@@ -165,7 +165,7 @@ presentation, not execution order, event history, or exports.
   written to shell history, ordinary settings, or logs.
 - Claude Pro/Max uses the Agent SDK connection type; the TUI detects and, when
   necessary, downloads Claude Code before launching its official login flow.
-- Multiple accounts receive stable IDs such as `kimi-code` and `kimi-code-2`.
+- Multiple accounts receive stable, sequential account identifiers.
 - Press Enter on a connected account to probe models, rename it, replace a
   credential with masked input, or confirm disconnect and default fallback.
 
@@ -225,8 +225,8 @@ directory, writes only a secret-free GUI compatibility projection, and
 | `Ctrl+L` | Redraw |
 | `Shift+PgUp/PgDn` | Native terminal scrollback; not captured by Kun |
 
-Like Kimi Code, Kun leaves terminal mouse reporting disabled by default. Drag
-to select any transcript text, then use the terminal's own copy shortcut.
+Kun leaves terminal mouse reporting disabled by default. Drag to select any
+transcript text, then use the terminal's own copy shortcut.
 Codex/VS Code integrated terminals commonly let `Ctrl+C` copy an existing
 selection; macOS Terminal/iTerm2 normally use `Cmd+C`, while Linux and Windows
 terminals commonly use `Ctrl+Shift+C`. Without a selection, `Ctrl+C` keeps its

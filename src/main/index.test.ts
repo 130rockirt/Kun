@@ -132,6 +132,53 @@ describe('app icon loader', () => {
     })
   })
 
+  describe('createMultiScaleIcon', () => {
+    it('adds the 2x PNG as a Retina representation on the 1x image', () => {
+      const addRepresentation = vi.fn()
+      const retinaDataUrl = 'data:image/png;base64,retina'
+      const standard = {
+        isEmpty: () => false,
+        addRepresentation
+      } as unknown as Electron.NativeImage
+      const retina = {
+        isEmpty: () => false,
+        toDataURL: vi.fn(() => retinaDataUrl)
+      } as unknown as Electron.NativeImage
+      createFromBuffer
+        .mockReturnValueOnce(standard)
+        .mockReturnValueOnce(retina)
+      fsMock.readFileSync.mockReturnValue(PNG_MAGIC)
+
+      expect(
+        mod.createMultiScaleIcon('chunks/kun-tray.png', 'chunks/kun-tray@2x.png')
+      ).toBe(standard)
+      expect(addRepresentation).toHaveBeenCalledWith({
+        scaleFactor: 2,
+        dataURL: retinaDataUrl
+      })
+    })
+
+    it('keeps the 1x image when the Retina asset cannot be loaded', () => {
+      const addRepresentation = vi.fn()
+      const standard = {
+        isEmpty: () => false,
+        addRepresentation
+      } as unknown as Electron.NativeImage
+      const missingRetina = {
+        isEmpty: () => true
+      } as unknown as Electron.NativeImage
+      createFromBuffer
+        .mockReturnValueOnce(standard)
+        .mockReturnValueOnce(missingRetina)
+      fsMock.readFileSync.mockReturnValue(PNG_MAGIC)
+
+      expect(
+        mod.createMultiScaleIcon('chunks/kun-tray.png', 'chunks/kun-tray@2x.png')
+      ).toBe(standard)
+      expect(addRepresentation).not.toHaveBeenCalled()
+    })
+  })
+
   describe('pickTrayIcon', () => {
     function fakeImage(empty: boolean): Electron.NativeImage {
       return { isEmpty: () => empty } as unknown as Electron.NativeImage
@@ -168,15 +215,21 @@ describe('app icon loader', () => {
     function fakeResized(empty: boolean): FakeNativeImage {
       return {
         isEmpty: () => empty,
+        getSize: vi.fn(() => ({ width: 16, height: 16 })),
         resize: vi.fn(),
         setTemplateImage: vi.fn()
       } as unknown as FakeNativeImage
     }
 
-    function fakeImage(empty: boolean, resizeResult?: Electron.NativeImage): FakeNativeImage {
+    function fakeImage(
+      empty: boolean,
+      resizeResult?: Electron.NativeImage,
+      size: Electron.Size = { width: 32, height: 32 }
+    ): FakeNativeImage {
       const fallbackResizeResult = fakeResized(false)
       return {
         isEmpty: () => empty,
+        getSize: vi.fn(() => size),
         resize: vi.fn(() => resizeResult ?? fallbackResizeResult),
         setTemplateImage: vi.fn()
       } as unknown as FakeNativeImage
@@ -203,12 +256,20 @@ describe('app icon loader', () => {
       })
     })
 
-    it('keeps a macOS color tray icon out of template mode', () => {
+    it('enables native template rendering for a resized macOS tray icon', () => {
       const resized = fakeResized(false)
       const source = fakeImage(false, resized)
 
       expect(mod.prepareTrayIcon(source, 'darwin')).toBe(resized)
-      expect(resized.setTemplateImage).toHaveBeenCalledWith(false)
+      expect(resized.setTemplateImage).toHaveBeenCalledWith(true)
+    })
+
+    it('preserves an already-sized macOS image and its Retina representation', () => {
+      const source = fakeImage(false, undefined, { width: 22, height: 22 })
+
+      expect(mod.prepareTrayIcon(source, 'darwin')).toBe(source)
+      expect(source.resize).not.toHaveBeenCalled()
+      expect(source.setTemplateImage).toHaveBeenCalledWith(true)
     })
 
     it('does not resize an empty image', () => {

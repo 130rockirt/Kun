@@ -94,13 +94,12 @@ Z.ai Coding Plan:
 - role: international coding subscription provider added from Settings >
   Providers only
 
-Kimi Code:
+Kimi coding subscription:
 
-- id: `kimi-code`
 - base URL: `https://api.kimi.com/coding/v1`
 - endpoint format: OpenAI Chat Completions
 - initial model: `kimi-for-coding`
-- role: Kimi coding subscription provider added from Settings > Providers only
+- role: optional Kimi coding subscription provider added from Settings > Providers only
 
 Moonshot CN:
 
@@ -131,5 +130,6 @@ any time.
 
 First-run setup intentionally remains focused on the default stack. It only
 shows DeepSeek plus the Xiaomi and MiniMax presets; Vercel AI Gateway, LiteLLM,
-Zhipu, Z.ai, Kimi Code, and Moonshot presets are opt-in from Settings >
-Providers.
+Zhipu, Z.ai, additional coding subscriptions, and Moonshot presets are opt-in
+from Settings > Providers. These catalog entries stay out of the default
+first-run screen so setup remains focused.

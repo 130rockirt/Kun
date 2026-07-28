@@ -28,7 +28,14 @@ import {
 import kunLogoPng from '../asset/img/kun.png?url'
 import kunMacLogoPng from '../asset/img/kun_mac.png?url'
 import kunTrayPng from '../asset/img/kun_tray.png?url'
-import { createAppIcon, pickTrayIcon, prepareTrayIcon } from './app-icon'
+import kunTrayMacPng from '../asset/img/kun_tray_mac.png?url'
+import kunTrayMacRetinaPng from '../asset/img/kun_tray_mac@2x.png?url'
+import {
+  createAppIcon,
+  createMultiScaleIcon,
+  pickTrayIcon,
+  prepareTrayIcon
+} from './app-icon'
 import { buildTrayMenuTemplate, parseTrayThreads, type TrayThreadSummary } from './tray-session-menu'
 import { listProviderQuotas } from './provider-quota'
 import { registerTrayQuotaIpc } from './tray-quota-ipc'
@@ -504,7 +511,9 @@ function installDevPreviewWebviewGuards(options: {
 
 const appIconSource = process.platform === 'win32' ? kunMacLogoPng : kunLogoPng
 const appIcon = createAppIcon(appIconSource)
-const trayIcon = createAppIcon(kunTrayPng)
+const trayIcon = process.platform === 'darwin'
+  ? createMultiScaleIcon(kunTrayMacPng, kunTrayMacRetinaPng)
+  : createAppIcon(kunTrayPng)
 traceStartup('app icon loaded', { source: appIconSource.startsWith('data:') ? 'data-url' : 'path' })
 const gotSingleInstanceLock = runningClawScheduleMcpServer || app.requestSingleInstanceLock()
 traceStartup('single instance lock checked', {

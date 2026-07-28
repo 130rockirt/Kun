@@ -225,7 +225,7 @@ window:
   no_drag_class: ds-no-drag  # add to anything clickable in the title bar
   macos_top_inset_px: 42     # safe area for traffic-light controls
   app_icon: src/asset/img/kun.png
-  secondary_logos: [kun_mac.png, kun_tray.png]
+  secondary_logos: [kun_mac.png, kun_tray.png, kun_tray_mac.svg]
 
 # ---------- 9. Iconography ----------
 icons:

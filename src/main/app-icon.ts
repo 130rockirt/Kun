@@ -89,6 +89,28 @@ export function createAppIcon(source: string): Electron.NativeImage {
 }
 
 /**
+ * Combines explicit 1x and 2x PNGs into one NativeImage. Menu-bar artwork needs
+ * both representations because a 22px bitmap alone is visibly soft on Retina
+ * displays, while shrinking a large app icon loses its small-size geometry.
+ */
+export function createMultiScaleIcon(
+  standardSource: string,
+  retinaSource: string
+): Electron.NativeImage {
+  const standard = createAppIcon(standardSource)
+  if (standard.isEmpty()) return standard
+
+  const retina = createAppIcon(retinaSource)
+  if (retina.isEmpty()) return standard
+
+  standard.addRepresentation({
+    scaleFactor: 2,
+    dataURL: retina.toDataURL()
+  })
+  return standard
+}
+
+/**
  * 给 Tray 选图。优先用专为托盘优化的 primary 图(通常是更小、更简化的
  * 剪影,在 16x16 / 24x24 任务栏尺寸下也清晰);primary 加载失败时回退到
  * 主应用图标,这样即使托盘专用图丢了也不至于看到 electron 默认占位。
@@ -117,15 +139,21 @@ export function prepareTrayIcon(
   if (image.isEmpty()) return image
 
   const size = trayIconSize(platform)
-  const resized = image.resize({
-    width: size,
-    height: size,
-    quality: 'best'
-  })
+  const currentSize = image.getSize()
+  const alreadySized = currentSize.width === size && currentSize.height === size
+  const resized = alreadySized
+    ? image
+    : image.resize({
+        width: size,
+        height: size,
+        quality: 'best'
+      })
   const result = resized.isEmpty() ? image : resized
 
   if (platform === 'darwin') {
-    result.setTemplateImage(false)
+    // Template images automatically follow light/dark menu-bar appearance and
+    // invert while selected, matching native macOS status items.
+    result.setTemplateImage(true)
   }
 
   return result
