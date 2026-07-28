@@ -19,7 +19,7 @@ The popover is a trusted product surface, but it has a much smaller purpose than
 **Non-Goals:**
 
 - Reimplementing CodexBar's spend estimates, token history chart, pace projection, warning thresholds, or background polling.
-- Adding new provider probes, credentials, settings, or persisted quota snapshots.
+- Importing browser cookies, adding new credential fields, or persisting quota snapshots.
 - Replacing the existing workbench quota panel.
 - Removing the native session menu or changing its contents.
 - Supporting arbitrary navigation or third-party content inside the popover.
@@ -65,6 +65,20 @@ The UI includes:
 
 Overview summarizes every provider without inventing a cross-provider percentage or balance total. Cost history and projected exhaustion from the CodexBar reference are omitted because the current contract does not supply authoritative data for them.
 
+### Match CodexBar's read-only subscription sources
+
+The quota service recognizes the actual preset profile shape, where ordinary HTTP
+subscription presets may omit `kind`. ChatGPT/Codex reads configured OAuth state or
+the Codex CLI `auth.json` (including `CODEX_HOME`) and calls the fixed
+`/backend-api/wham/usage` endpoint. Kimi Code calls the fixed official
+`/coding/v1/usages` endpoint with the API key already stored for that provider.
+
+Grok calls the same fixed grok.com billing gRPC-web endpoint used by CodexBar with
+an existing Kun or Grok CLI OAuth bearer. Kun does not silently import browser
+cookies. If xAI rejects bearer-only billing, the provider remains recognized and
+returns an actionable request/authentication error instead of an inaccurate
+unsupported state.
+
 ### Refresh on every show while retaining stale data
 
 The main process emits a refresh event after showing an already-loaded popover. The renderer also loads on mount and supports manual refresh. A refresh failure leaves the previous result visible with an inline error. Duplicate refreshes are coalesced in the component.
@@ -88,6 +102,9 @@ Windows normally reports the notification-area icon at the bottom edge of a disp
 - [Provider names may be long or contain unsafe text] → Truncate visual labels, preserve accessible titles, and rely on React escaping plus the normalized bounded contract.
 - [Retained windows can show stale data] → Refresh on every show and retain old data only as an explicit fallback on error.
 - [The same quota service may perform several provider requests] → Keep the existing bounded concurrency and request timeouts; do not introduce background polling.
+- [Grok billing may require a grok.com browser session] → Reuse only existing OAuth
+  state in this phase and report the upstream authentication limitation explicitly;
+  do not read browser cookies without a separate opt-in design.
 
 ## Migration Plan
 

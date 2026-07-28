@@ -31,6 +31,7 @@ type ProviderQuotaProbeKind =
   | 'bigmodel'
   | 'minimax-global'
   | 'minimax-cn'
+  | 'kimi-code'
   | 'openai'
   | SubscriptionQuotaProbeKind
 
@@ -86,11 +87,18 @@ export function classifyProviderQuotaProbe(
       dashboardUrl: 'https://claude.ai/settings/usage'
     }
   }
-  if (stableId === 'codex' && provider.kind === 'http') {
+  if (stableId === 'codex' && isHttpQuotaPresetKind(provider.kind)) {
     return {
       kind: 'codex-subscription',
       source: 'ChatGPT Codex usage API',
       dashboardUrl: 'https://chatgpt.com/codex/settings/usage'
+    }
+  }
+  if (stableId === 'grok-subscription' && isHttpQuotaPresetKind(provider.kind)) {
+    return {
+      kind: 'grok-subscription',
+      source: 'Grok web billing API',
+      dashboardUrl: 'https://grok.com/?_s=usage'
     }
   }
   if (stableId === 'cursor-subscription' && provider.kind === 'cursor-sdk') {
@@ -116,6 +124,17 @@ export function classifyProviderQuotaProbe(
   }
   const hostname = exactHostname(provider.baseUrl)
 
+  if (
+    stableId === 'kimi-code' &&
+    isHttpQuotaPresetKind(provider.kind) &&
+    hostname === 'api.kimi.com'
+  ) {
+    return {
+      kind: 'kimi-code',
+      source: 'Kimi Code usage API',
+      dashboardUrl: 'https://www.kimi.com/code/console'
+    }
+  }
   if (hostname === 'api.deepseek.com') {
     return {
       kind: 'deepseek',
@@ -362,6 +381,31 @@ export function parseOpenAiQuota(payload: unknown): ProviderQuotaMetric[] {
   }]
 }
 
+export function parseKimiCodeQuota(payload: unknown): ProviderQuotaMetric[] {
+  const root = requireRecord(payload, 'Kimi Code returned an invalid usage response.')
+  const metrics: ProviderQuotaMetric[] = []
+  const weekly = kimiUsageMetric('weekly', 'Weekly request quota', root.usage)
+  if (weekly) metrics.push(weekly)
+
+  const limits = Array.isArray(root.limits) ? root.limits : []
+  for (const [index, value] of limits.entries()) {
+    const limit = optionalRecord(value)
+    const window = optionalRecord(limit?.window)
+    const duration = numberValue(window?.duration)
+    const unit = stringValue(window?.timeUnit).toLowerCase()
+    const label = duration === 300 && unit.includes('minute')
+      ? '5-hour rate limit'
+      : `Rate limit ${index + 1}`
+    const metric = kimiUsageMetric(`rate-limit-${index}`, label, limit?.detail)
+    if (metric) metrics.push(metric)
+  }
+
+  if (metrics.length === 0) {
+    throw new Error('Kimi Code did not return a recognized usage limit.')
+  }
+  return metrics
+}
+
 async function refreshProviderQuota(
   provider: ModelProviderProfileV1,
   proxyUrl: string,
@@ -488,6 +532,13 @@ async function runProbe(
       )
     }
   }
+  if (kind === 'kimi-code') {
+    return {
+      metrics: parseKimiCodeQuota(
+        await requestJson('https://api.kimi.com/coding/v1/usages', context)
+      )
+    }
+  }
   return probeMiniMax(kind, context)
 }
 
@@ -496,6 +547,7 @@ function isSubscriptionQuotaProbe(
 ): kind is SubscriptionQuotaProbeKind {
   return kind === 'claude-subscription' ||
     kind === 'codex-subscription' ||
+    kind === 'grok-subscription' ||
     kind === 'cursor-subscription' ||
     kind === 'antigravity-subscription' ||
     kind === 'gemini-cli-subscription'
@@ -707,6 +759,46 @@ function pushRemainingMetric(
   metrics.push({ id, label, unit, remaining })
 }
 
+function isHttpQuotaPresetKind(
+  kind: ModelProviderProfileV1['kind']
+): boolean {
+  return kind === undefined || kind === 'http'
+}
+
+function kimiUsageMetric(
+  id: string,
+  label: string,
+  value: unknown
+): ProviderQuotaMetric | null {
+  const detail = optionalRecord(value)
+  if (!detail) return null
+  const limit = numberValue(detail.limit)
+  const remaining = numberValue(detail.remaining)
+  const explicitUsed = numberValue(detail.used)
+  const used = explicitUsed ?? (
+    limit === undefined || remaining === undefined
+      ? undefined
+      : Math.max(0, limit - remaining)
+  )
+  if (limit === undefined && remaining === undefined && used === undefined) return null
+  const resetsAt = isoDateValue(
+    detail.resetTime ??
+    detail.resetAt ??
+    detail.reset_time ??
+    detail.reset_at
+  )
+  return {
+    id,
+    label,
+    unit: 'requests',
+    ...(used === undefined ? {} : { used }),
+    ...(limit === undefined ? {} : { limit }),
+    ...(remaining === undefined ? {} : { remaining }),
+    ...percentageFields(used, limit),
+    ...(resetsAt ? { resetsAt } : {})
+  }
+}
+
 function quotaWindowLabel(number: unknown, unit: unknown): string {
   const numeric = numberValue(number)
   const numericUnit = numberValue(unit)
@@ -730,6 +822,16 @@ function epochToIso(value: unknown): string | undefined {
   if (numeric === undefined || numeric <= 0) return undefined
   const milliseconds = numeric < 100_000_000_000 ? numeric * 1000 : numeric
   const date = new Date(milliseconds)
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString()
+}
+
+function isoDateValue(value: unknown): string | undefined {
+  if (typeof value !== 'string' || !value.trim()) return undefined
+  const normalized = value.trim().replace(
+    /(\.\d{3})\d+(Z|[+-]\d{2}:\d{2})$/,
+    '$1$2'
+  )
+  const date = new Date(normalized)
   return Number.isNaN(date.getTime()) ? undefined : date.toISOString()
 }
 

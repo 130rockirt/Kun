@@ -24,3 +24,10 @@
 - [x] 4.1 Pass platform context to the tray renderer and add a solid Fluent/forced-colors presentation for Windows.
 - [x] 4.2 Harden tray anchoring for bottom/top taskbars, secondary-display origins, and temporarily empty tray bounds.
 - [x] 4.3 Add Windows-focused geometry, renderer, typecheck, build, and 420×660 visual verification; commit only this follow-up to local `develop`.
+
+## 5. Subscription quota source compatibility
+
+- [x] 5.1 Correct ChatGPT/Codex preset recognition and honor the Codex CLI `CODEX_HOME` auth location.
+- [x] 5.2 Add and test Kimi Code weekly and five-hour quota parsing from the official usages endpoint.
+- [x] 5.3 Add and test Grok bearer-authenticated gRPC-web billing parsing with Grok CLI auth fallback and actionable upstream errors.
+- [x] 5.4 Run focused tests, typecheck, build, lint, and `git diff --check`; commit the compatibility follow-up to local `develop`.

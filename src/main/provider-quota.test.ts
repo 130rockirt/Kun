@@ -4,6 +4,7 @@ import {
   classifyProviderQuotaProbe,
   listProviderQuotas,
   parseDeepSeekQuota,
+  parseKimiCodeQuota,
   parseMiniMaxQuota,
   parseMoonshotQuota,
   parseOpenAiQuota,
@@ -15,6 +16,7 @@ import {
   parseClaudeSubscriptionQuota,
   parseCodexSubscriptionQuota,
   parseCursorSubscriptionQuota,
+  parseGrokSubscriptionQuota,
   parseGoogleCodeAssistQuota
 } from './provider-subscription-quota'
 
@@ -69,6 +71,32 @@ function subscriptionProvider(
     kind,
     endpointFormat: 'custom_endpoint'
   }
+}
+
+function grokBillingFrame(
+  usedPercent: number,
+  resetEpoch: number
+): Uint8Array<ArrayBuffer> {
+  const float = Buffer.alloc(4)
+  float.writeFloatLE(usedPercent)
+  const varint: number[] = []
+  let remaining = resetEpoch
+  do {
+    const next = remaining % 128
+    remaining = Math.floor(remaining / 128)
+    varint.push(next | (remaining > 0 ? 0x80 : 0))
+  } while (remaining > 0)
+  const payload = Buffer.concat([
+    Buffer.from([0x0d]),
+    float,
+    Buffer.from([0x10, ...varint])
+  ])
+  const frame = Buffer.alloc(5 + payload.length)
+  frame.writeUInt32BE(payload.length, 1)
+  payload.copy(frame, 5)
+  const output = new Uint8Array(frame.length)
+  output.set(frame)
+  return output
 }
 
 describe('provider quota parsers', () => {
@@ -252,6 +280,59 @@ describe('provider quota parsers', () => {
     })
   })
 
+  it('normalizes Kimi Code weekly and five-hour request quotas', () => {
+    expect(parseKimiCodeQuota({
+      usage: {
+        limit: '2048',
+        used: '375',
+        remaining: '1673',
+        resetTime: '2027-01-09T15:23:13.373329235Z'
+      },
+      limits: [{
+        window: { duration: 300, timeUnit: 'TIME_UNIT_MINUTE' },
+        detail: {
+          limit: '200',
+          remaining: '181',
+          reset_at: '2027-01-06T15:05:24.374187075Z'
+        }
+      }]
+    })).toEqual([
+      {
+        id: 'weekly',
+        label: 'Weekly request quota',
+        unit: 'requests',
+        used: 375,
+        limit: 2048,
+        remaining: 1673,
+        usedPercent: 18.310546875,
+        resetsAt: '2027-01-09T15:23:13.373Z'
+      },
+      {
+        id: 'rate-limit-0',
+        label: '5-hour rate limit',
+        unit: 'requests',
+        used: 19,
+        limit: 200,
+        remaining: 181,
+        usedPercent: 9.5,
+        resetsAt: '2027-01-06T15:05:24.374Z'
+      }
+    ])
+  })
+
+  it('normalizes Grok gRPC-web billing frames', () => {
+    expect(parseGrokSubscriptionQuota(
+      grokBillingFrame(42.5, 1_900_000_000),
+      new Date('2027-01-01T00:00:00Z')
+    )).toEqual([{
+      id: 'credits',
+      label: 'Credits usage',
+      unit: 'percent',
+      usedPercent: 42.5,
+      resetsAt: '2030-03-17T17:46:40.000Z'
+    }])
+  })
+
   it('normalizes Claude and Codex subscription usage windows', () => {
     expect(parseClaudeSubscriptionQuota({
       five_hour: { utilization: 35, resets_at: '2027-01-15T09:00:00Z' },
@@ -399,6 +480,33 @@ describe('provider quota registry and refresh', () => {
       subscriptionProvider('codex', 'http')
     )?.kind).toBe('codex-subscription')
     expect(classifyProviderQuotaProbe(
+      provider(
+        'codex',
+        'ChatGPT subscription',
+        'https://chatgpt.com/backend-api/codex/responses',
+        '',
+        'codex'
+      )
+    )?.kind).toBe('codex-subscription')
+    expect(classifyProviderQuotaProbe(
+      provider(
+        'grok-subscription',
+        'Grok subscription',
+        'https://cli-chat-proxy.grok.com/v1',
+        '',
+        'grok-subscription'
+      )
+    )?.kind).toBe('grok-subscription')
+    expect(classifyProviderQuotaProbe(
+      provider(
+        'kimi-code',
+        'Kimi Code',
+        'https://api.kimi.com/coding/v1',
+        'kimi-key',
+        'kimi-code'
+      )
+    )?.kind).toBe('kimi-code')
+    expect(classifyProviderQuotaProbe(
       subscriptionProvider('cursor-subscription', 'cursor-sdk')
     )?.kind).toBe('cursor-subscription')
     expect(classifyProviderQuotaProbe(
@@ -537,6 +645,88 @@ describe('provider quota registry and refresh', () => {
       ['gemini-subscription', 'available']
     ])
     expect(JSON.stringify(result)).not.toMatch(/claude-secret|codex-secret|session-secret|google-secret/)
+  })
+
+  it('queries ChatGPT, Kimi Code, and Grok presets that omit an explicit HTTP kind', async () => {
+    const fetcher = vi.fn(async (url: string | URL, init?: RequestInit) => {
+      const requestUrl = url.toString()
+      const headers = new Headers(init?.headers)
+      if (requestUrl.endsWith('/wham/usage')) {
+        expect(headers.get('authorization')).toBe('Bearer codex-secret')
+        return new Response(JSON.stringify({
+          plan_type: 'pro',
+          rate_limit: {
+            primary_window: {
+              used_percent: 15,
+              reset_at: 1_900_000_000,
+              limit_window_seconds: 18_000
+            }
+          }
+        }))
+      }
+      if (requestUrl.endsWith('/coding/v1/usages')) {
+        expect(headers.get('authorization')).toBe('Bearer kimi-secret')
+        return new Response(JSON.stringify({
+          usage: { limit: '1000', used: '250', remaining: '750' },
+          limits: []
+        }))
+      }
+      if (requestUrl.includes('GetGrokCreditsConfig')) {
+        expect(headers.get('authorization')).toBe('Bearer grok-secret')
+        expect(headers.get('content-type')).toBe('application/grpc-web+proto')
+        expect(Array.from(init?.body as Uint8Array)).toEqual([0, 0, 0, 0, 0])
+        return new Response(grokBillingFrame(32, 1_900_000_000), {
+          headers: { 'Content-Type': 'application/grpc-web+proto' }
+        })
+      }
+      throw new Error(`Unexpected URL: ${requestUrl}`)
+    })
+    const result = await listProviderQuotas(settings([
+      provider(
+        'codex',
+        'ChatGPT subscription',
+        'https://chatgpt.com/backend-api/codex/responses',
+        '',
+        'codex'
+      ),
+      provider(
+        'kimi-code',
+        'Kimi Code',
+        'https://api.kimi.com/coding/v1',
+        'kimi-secret',
+        'kimi-code'
+      ),
+      provider(
+        'grok-subscription',
+        'Grok subscription',
+        'https://cli-chat-proxy.grok.com/v1',
+        '',
+        'grok-subscription'
+      )
+    ]), fetcher, {
+      resolveCodexCredential: async () => ({ accessToken: 'codex-secret' }),
+      resolveGrokCredential: async () => ({
+        accessToken: 'grok-secret',
+        email: 'grok@example.test'
+      })
+    })
+
+    expect(result.entries
+      .filter((entry) => [
+        'codex',
+        'kimi-code',
+        'grok-subscription'
+      ].includes(entry.providerId))
+      .map((entry) => [
+        entry.providerId,
+        entry.status,
+        entry.metrics[0]?.usedPercent
+      ])).toEqual([
+      ['codex', 'available', 15],
+      ['kimi-code', 'available', 25],
+      ['grok-subscription', 'available', 32]
+    ])
+    expect(JSON.stringify(result)).not.toMatch(/codex-secret|kimi-secret|grok-secret/)
   })
 
   it('reports a missing subscription login without making a request', async () => {

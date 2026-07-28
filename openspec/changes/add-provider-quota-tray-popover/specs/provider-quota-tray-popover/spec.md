@@ -115,3 +115,22 @@ The popover SHALL remain visually clear on Windows without requiring macOS-style
 #### Scenario: Windows forced-colors presentation
 - **WHEN** the operating system activates forced-colors mode
 - **THEN** the popover uses system colors and visible control outlines without relying on gradients, transparency, or status color alone
+
+### Requirement: Configured subscription providers use supported read-only quota sources
+The quota service SHALL recognize configured ChatGPT/Codex, Kimi Code, and Grok subscription presets and query their fixed read-only quota endpoints with existing provider or CLI credentials.
+
+#### Scenario: ChatGPT preset omits HTTP kind
+- **WHEN** a configured ChatGPT/Codex preset has no explicit provider `kind`
+- **THEN** the service still recognizes it and requests the Codex usage endpoint
+
+#### Scenario: Kimi Code has an API key
+- **WHEN** a configured Kimi Code provider has an API key
+- **THEN** the service requests the official Kimi Code usages endpoint and returns its weekly and five-hour limits
+
+#### Scenario: Grok has existing OAuth state
+- **WHEN** a configured Grok subscription has an existing Kun or Grok CLI OAuth bearer
+- **THEN** the service requests the fixed grok.com billing gRPC-web endpoint without exposing the credential
+
+#### Scenario: Grok billing rejects bearer-only access
+- **WHEN** grok.com requires a browser session that is not available to Kun
+- **THEN** the service reports an actionable provider authentication error instead of marking Grok unsupported

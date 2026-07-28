@@ -9,6 +9,8 @@ Kun's menu-bar icon currently opens a plain session/action menu, so provider all
 - Add a provider switcher with an overview and one tab per configured provider.
 - Show provider status, reported balance or rate-window metrics, progress, reset time, data source, and provider dashboard action.
 - Add manual refresh plus New Chat and Open Kun actions inside the popover.
+- Extend the normalized quota service with CodexBar-compatible read-only probes for
+  ChatGPT/Codex, Kimi Code, and Grok subscription providers already configured in Settings.
 - Hide the popover on blur or Escape, constrain it to the active display, and keep long quota content independently scrollable.
 - Adapt the shell and anchor calculation for Windows taskbars, multi-monitor work areas, high-contrast mode, and environments without compositor blur.
 - Use a dedicated renderer entry, preload bridge, and narrowly scoped IPC surface so the popover does not receive the full workbench API.
@@ -29,4 +31,5 @@ None.
 - The preload and renderer builds gain dedicated tray-quota entry points.
 - The renderer gains a compact provider switcher and detailed quota view that reuse the existing normalized provider-quota contract.
 - The existing `provider:quota:list` workbench IPC and right-sidebar quota surface remain unchanged.
+- The existing workbench and tray quota surfaces both gain the same corrected subscription-provider coverage.
 - The existing tray session menu is retained on right click; no settings migration or new dependency is required.
