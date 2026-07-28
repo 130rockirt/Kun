@@ -40,6 +40,7 @@ export const RuntimeEventKind = z.enum([
   'model_request_retry',
   'tool_result_upload_wait',
   'tool_storm_suppressed',
+  'source_tool_page',
   'tool_catalog_changed',
   'tool_call_started',
   'tool_call_finished',
@@ -264,6 +265,16 @@ export const ToolStormSuppressedEvent = RuntimeEventBase.extend({
 })
 export type ToolStormSuppressedEvent = z.infer<typeof ToolStormSuppressedEvent>
 
+export const SourceToolPageEvent = RuntimeEventBase.extend({
+  kind: z.literal('source_tool_page'),
+  toolName: z.enum(['read', 'grep', 'glob', 'find']),
+  callId: z.string().min(1),
+  hasMore: z.boolean(),
+  continuation: z.enum(['offset', 'cursor', 'none']),
+  budgetTokens: z.number().int().nonnegative().optional()
+})
+export type SourceToolPageEvent = z.infer<typeof SourceToolPageEvent>
+
 export const ToolCatalogEvent = RuntimeEventBase.extend({
   kind: z.literal('tool_catalog_changed'),
   fingerprint: z.string().min(1),
@@ -420,6 +431,7 @@ export const RuntimeEvent = z.discriminatedUnion('kind', [
   ModelRequestRetryEvent,
   ToolUploadStatusEvent,
   ToolStormSuppressedEvent,
+  SourceToolPageEvent,
   ToolCatalogEvent,
   CompactionEvent,
   GoalEvent,

@@ -25,6 +25,7 @@ import {
 } from '../../services/llm-debug-recorder.js'
 import { makeAssistantReasoningItem, makeAssistantTextItem } from '../../domain/item.js'
 import { normalizeTurnLimits, type TurnLimitsConfig } from '../../loop/turn-limits.js'
+import type { TurnRunOutcome } from '../../loop/turn-execution-types.js'
 import { utf8PrefixWithinBytes } from '../../shared/utf8-text-blocks.js'
 import {
   SdkEventMapper,
@@ -162,7 +163,12 @@ export interface SdkRuntimeDeps {
   /** Upsert a turn item into the item store (turns.applyItem). */
   applyItem(threadId: string, item: TurnItem): Promise<void>
   /** Finish the turn lifecycle (turns.finishTurn). */
-  finishTurn(threadId: string, turnId: string, status: TurnStatus, error?: string): Promise<void>
+  finishTurn(
+    threadId: string,
+    turnId: string,
+    status: TurnStatus,
+    error?: string
+  ): Promise<TurnRunOutcome | void>
   /** Stage the SDK session id for commit after Kun finishes successfully. */
   saveSessionId(threadId: string, turnId: string, sessionId: string): Promise<void>
   /** Rotate an unusable native resume preparation before the portable retry. */
@@ -309,7 +315,7 @@ export class AgentSdkRuntime {
     threadId: string,
     turnId: string,
     signal: AbortSignal
-  ): Promise<'completed' | 'failed' | 'aborted'> {
+  ): Promise<TurnRunOutcome> {
     const execute = () => this.runTurnOwned(threadId, turnId, signal)
     return this.deps.runExclusive
       ? this.deps.runExclusive(threadId, execute)
@@ -320,7 +326,7 @@ export class AgentSdkRuntime {
     threadId: string,
     turnId: string,
     signal: AbortSignal
-  ): Promise<'completed' | 'failed' | 'aborted'> {
+  ): Promise<TurnRunOutcome> {
     const ctx = await this.deps.loadTurnContext(threadId, turnId)
     if (!ctx) {
       await this.deps.finishTurn(threadId, turnId, 'failed', 'no input for subscription turn')
@@ -733,13 +739,12 @@ export class AgentSdkRuntime {
       }
       const status: 'completed' | 'failed' | 'aborted' =
         final?.status === 'failed' ? 'failed' : 'completed'
-      await this.deps.finishTurn(
+      return (await this.deps.finishTurn(
         threadId,
         turnId,
         status,
         final?.message ? sanitizeAgentSdkError(final.message, ctx.oauthToken) : undefined
-      )
-      return status
+      )) ?? status
     } catch (err) {
       let failure = err
       try {

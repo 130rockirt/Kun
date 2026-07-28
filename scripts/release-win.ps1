@@ -191,8 +191,7 @@ Remove-Item -Force -ErrorAction SilentlyContinue `
   (Join-Path $Root 'dist\DeepSeek GUI-*'), `
   (Join-Path $Root 'dist\latest*.yml'), `
   (Join-Path $Root 'dist\*.blockmap'), `
-  (Join-Path $Root 'dist\extension-native-evidence-*.json'), `
-  (Join-Path $Root 'dist\kun-video-editor-*.kunx')
+  (Join-Path $Root 'dist\extension-native-evidence-*.json')
 
 Write-Info 'Building Windows installer...'
 & npm run dist:win
@@ -221,13 +220,6 @@ $env:KUN_RUN_MEDIA_SMOKE = '1'
 Remove-Item Env:\KUN_RUN_MEDIA_SMOKE -ErrorAction SilentlyContinue
 if ($LASTEXITCODE -ne 0) {
   Write-Err 'Windows host-native FFmpeg broker smoke failed.'
-  exit 1
-}
-
-Write-Info 'Smoking packaged Kun Video Editor native workflow...'
-& npm run smoke:packaged-video-editor-native
-if ($LASTEXITCODE -ne 0) {
-  Write-Err 'Windows packaged Kun Video Editor native workflow smoke failed.'
   exit 1
 }
 

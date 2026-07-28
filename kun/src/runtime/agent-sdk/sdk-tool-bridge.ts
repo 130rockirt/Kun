@@ -6,7 +6,7 @@
  * kun's richer subagents), etc. all keep working on a subscription turn.
  *
  * Decision (per design): tools that OVERLAP Claude Code's built-ins
- * (read/bash/edit/write/grep/find/ls) are NOT bridged — the model uses the SDK's
+ * (read/bash/edit/write/grep/glob/find/ls) are NOT bridged — the model uses the SDK's
  * native ones. We only bridge kun-EXCLUSIVE tools. `delegate_task` is bridged
  * rather than mapped to the SDK `agents` option because kun's delegation is
  * richer (async detach, live profile overlays, per-child deny-lists).
@@ -54,6 +54,7 @@ export const DEFAULT_OVERLAP_TOOL_NAMES: ReadonlySet<string> = new Set([
   'edit',
   'write',
   'grep',
+  'glob',
   'find',
   'ls'
 ])

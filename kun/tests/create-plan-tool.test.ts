@@ -94,7 +94,7 @@ describe('create_plan tool: advertisement', () => {
       'edit',
       'write',
       'grep',
-      'find',
+      'glob',
       'ls',
       'lsp',
       'repo_map',
@@ -116,7 +116,7 @@ describe('create_plan tool: advertisement', () => {
       'edit',
       'write',
       'grep',
-      'find',
+      'glob',
       'ls',
       'lsp',
       'repo_map',
@@ -132,7 +132,8 @@ describe('create_plan tool: advertisement', () => {
     const tools = await host.listTools(buildContext({ threadMode: 'agent' }))
     const names = tools.map((tool) => tool.name)
 
-    expect(names).toEqual(expect.arrayContaining(['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls', 'echo']))
+    expect(names).toEqual(expect.arrayContaining(['read', 'bash', 'edit', 'write', 'grep', 'glob', 'ls', 'echo']))
+    expect(names).not.toContain('find')
     expect(names).not.toContain(CREATE_PLAN_TOOL_NAME)
   })
 })

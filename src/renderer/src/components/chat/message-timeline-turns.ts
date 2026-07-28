@@ -17,8 +17,16 @@ export function isBackgroundSubagentNoticeBlock(block: ChatBlock): boolean {
   return block.kind === 'user' && isBackgroundSubagentNoticeUserMessage(block)
 }
 
+export function isGraphRuntimeNoticeBlock(block: ChatBlock): boolean {
+  return block.kind === 'user' && block.meta?.messageSource === 'graph_runtime'
+}
+
 export function isBackgroundNoticeBlock(block: ChatBlock): boolean {
-  return isBackgroundShellNoticeBlock(block) || isBackgroundSubagentNoticeBlock(block)
+  return (
+    isBackgroundShellNoticeBlock(block) ||
+    isBackgroundSubagentNoticeBlock(block) ||
+    isGraphRuntimeNoticeBlock(block)
+  )
 }
 
 export function groupTurns(blocks: ChatBlock[]): Turn[] {
@@ -92,7 +100,8 @@ export function blockHasPendingRuntimeWork(block: ChatBlock): boolean {
 
 export function isProcessBlock(block: ChatBlock): boolean {
   return (
-    isBackgroundNoticeBlock(block) ||
+    isBackgroundShellNoticeBlock(block) ||
+    isBackgroundSubagentNoticeBlock(block) ||
     block.kind === 'reasoning' ||
     block.kind === 'tool' ||
     block.kind === 'compaction' ||

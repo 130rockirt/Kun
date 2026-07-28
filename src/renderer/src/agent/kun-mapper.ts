@@ -438,10 +438,14 @@ function applyRuntimeDisclosureMeta(
   }
   if (item.role === 'user' && item.guiDesignCanvas === true) meta.guiDesignCanvas = true
   if (item.role === 'user' && item.guiDesignMode === true) meta.guiDesignMode = true
-  if (item.messageSource === 'background_shell' || item.messageSource === 'background_subagent') {
+  applyClientUserMessageSourceMeta(meta, item.text ?? '')
+  if (
+    item.messageSource === 'background_shell' ||
+    item.messageSource === 'background_subagent' ||
+    item.messageSource === 'graph_runtime'
+  ) {
     meta.messageSource = item.messageSource
   }
-  applyClientUserMessageSourceMeta(meta, item.text ?? '')
   if (attachmentIds) meta.attachmentIds = attachmentIds
   if (fileReferences) meta.fileReferences = fileReferences
   if (composerContexts) meta.composerContexts = composerContexts

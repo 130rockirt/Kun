@@ -20,6 +20,7 @@ import type { TuiOptions } from './options.js'
 import {
   parseSgrMouseEvent,
   imagePasteShortcutLabel,
+  PermissionDialog,
   PiTuiApplication,
   renderActivityRow,
   renderGraphProgressRow,
@@ -706,6 +707,109 @@ describe('PiTuiApplication command overlays', () => {
     expect(visibleWidth(first)).toBeLessThanOrEqual(140)
     expect(visibleWidth(second)).toBeLessThanOrEqual(140)
     expect(visibleWidth(narrow)).toBeLessThanOrEqual(70)
+  })
+
+  it('does not flash a redundant total timer when the first phase starts with the turn', () => {
+    vi.useFakeTimers()
+    try {
+      const turnStartedAt = '2026-07-22T00:00:00.000Z'
+      const phaseStartedAt = '2026-07-22T00:00:00.040Z'
+      const controller = new TuiController(
+        {} as KunTuiClient,
+        { ...options, continueLatest: false },
+        runtime
+      )
+      const current = detail()
+      current.status = 'running'
+      current.turns = [{
+        id: 'turn_pre_send',
+        threadId: current.id,
+        status: 'running',
+        orchestration: 'direct',
+        prompt: 'Start the conversation',
+        steering: [],
+        createdAt: turnStartedAt,
+        startedAt: turnStartedAt,
+        items: [],
+        attachmentIds: [],
+        activeSkillIds: [],
+        injectedMemoryIds: [],
+        injectedMemorySummaries: [],
+        injectedInstructionSources: []
+      }]
+      const projection = projectThreadSnapshot(current)
+      projection.activity = {
+        turnId: 'turn_pre_send',
+        phase: 'starting',
+        label: 'Pre-Send',
+        startedAt: phaseStartedAt,
+        turnStartedAt,
+        updatedAt: phaseStartedAt
+      }
+      const state = { ...controller.state, connection: 'connected' as const, projection }
+
+      const totalVisibility = [130, 160, 230, 260].map((elapsedMs, animationFrame) => {
+        vi.setSystemTime(Date.parse(turnStartedAt) + elapsedMs)
+        return sanitizeTerminalText(
+          renderActivityRow(state, controller, 120, animationFrame)
+        ).includes('· total ')
+      })
+
+      expect(totalVisibility).toEqual([false, false, false, false])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps total timing visible when the current phase started meaningfully later', () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime('2026-07-22T00:04:28.000Z')
+      const turnStartedAt = '2026-07-22T00:00:00.000Z'
+      const phaseStartedAt = '2026-07-22T00:04:21.300Z'
+      const controller = new TuiController(
+        {} as KunTuiClient,
+        { ...options, continueLatest: false },
+        runtime
+      )
+      const current = detail()
+      current.status = 'running'
+      current.turns = [{
+        id: 'turn_pre_send',
+        threadId: current.id,
+        status: 'running',
+        orchestration: 'direct',
+        prompt: 'Continue the conversation',
+        steering: [],
+        createdAt: turnStartedAt,
+        startedAt: turnStartedAt,
+        items: [],
+        attachmentIds: [],
+        activeSkillIds: [],
+        injectedMemoryIds: [],
+        injectedMemorySummaries: [],
+        injectedInstructionSources: []
+      }]
+      const projection = projectThreadSnapshot(current)
+      projection.activity = {
+        turnId: 'turn_pre_send',
+        phase: 'starting',
+        label: 'Pre-Send',
+        startedAt: phaseStartedAt,
+        turnStartedAt,
+        updatedAt: phaseStartedAt
+      }
+
+      const rendered = sanitizeTerminalText(renderActivityRow({
+        ...controller.state,
+        connection: 'connected',
+        projection
+      }, controller, 120, 0))
+
+      expect(rendered).toContain('· 6.7s · total 4m 28s')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('omits context occupancy when no matching request snapshot exists', () => {
@@ -2187,7 +2291,94 @@ describe('PiTuiApplication command overlays', () => {
     expect(outputText).not.toContain('\x1b[?1049l')
   })
 
-  it('renders status and permission overlays in a narrow inline terminal and restores focus', async () => {
+  it('maps GUI-aligned permission presets and preserves Advanced custom settings', async () => {
+    const presetSave = vi.fn(async () => true)
+    const closePreset = vi.fn()
+    const presetDialog = new PermissionDialog(
+      { setPermissions: presetSave } as unknown as TuiController,
+      'on-request',
+      'workspace-write',
+      closePreset
+    )
+    const presetFrame = sanitizeTerminalText(presetDialog.render(100).join('\n'))
+    for (const label of [
+      'Always ask',
+      'Read only',
+      'Sensitive operations ask',
+      'Ask for workspace writes',
+      'Trusted workspace',
+      'Full access'
+    ]) {
+      expect(presetFrame).toContain(label)
+    }
+    expect(presetFrame).not.toContain('Approval policy')
+
+    presetDialog.handleInput('\x1b[B')
+    presetDialog.handleInput('\x1b[B')
+    presetDialog.handleInput('\r')
+    await waitFor(() => presetSave.mock.calls.length === 1)
+    expect(presetSave).toHaveBeenCalledWith('auto', 'danger-full-access')
+    expect(closePreset).toHaveBeenCalledOnce()
+
+    const advancedSave = vi.fn(async () => true)
+    const closeAdvanced = vi.fn()
+    const advancedDialog = new PermissionDialog(
+      { setPermissions: advancedSave } as unknown as TuiController,
+      'on-request',
+      'workspace-write',
+      closeAdvanced
+    )
+    advancedDialog.handleInput('a')
+    const advancedFrame = sanitizeTerminalText(advancedDialog.render(100).join('\n'))
+    expect(advancedFrame).toContain('Permissions / Advanced')
+    expect(advancedFrame).toContain('Approval policy')
+    expect(advancedFrame).toContain('Sandbox mode')
+
+    advancedDialog.handleInput('\x1b[B')
+    advancedDialog.handleInput('\x1b[C')
+    advancedDialog.handleInput('\x1b')
+    expect(sanitizeTerminalText(advancedDialog.render(100).join('\n'))).toContain('Tool permission mode')
+    expect(advancedSave).not.toHaveBeenCalled()
+    expect(closeAdvanced).not.toHaveBeenCalled()
+
+    // Re-entering Advanced starts from the persisted raw pair, not the
+    // cancelled local draft.
+    advancedDialog.handleInput('a')
+    advancedDialog.handleInput('\r')
+    await waitFor(() => advancedSave.mock.calls.length === 1)
+    expect(advancedSave).toHaveBeenCalledWith('on-request', 'workspace-write')
+
+    const customSave = vi.fn(async () => true)
+    const customDialog = new PermissionDialog(
+      { setPermissions: customSave } as unknown as TuiController,
+      'never',
+      'read-only',
+      vi.fn()
+    )
+    const customReadOnlyRow = customDialog.render(100)
+      .map((line) => sanitizeTerminalText(line))
+      .find((line) => line.includes('Read only'))
+    expect(customReadOnlyRow).toContain('│ Read only')
+    expect(customSave).not.toHaveBeenCalled()
+    customDialog.handleInput('a')
+    customDialog.handleInput('\r')
+    await waitFor(() => customSave.mock.calls.length === 1)
+    expect(customSave).toHaveBeenCalledWith('never', 'read-only')
+
+    const cancelSave = vi.fn(async () => true)
+    const cancelClose = vi.fn()
+    const cancelDialog = new PermissionDialog(
+      { setPermissions: cancelSave } as unknown as TuiController,
+      'suggest',
+      'external-sandbox',
+      cancelClose
+    )
+    cancelDialog.handleInput('\x1b')
+    expect(cancelClose).toHaveBeenCalledOnce()
+    expect(cancelSave).not.toHaveBeenCalled()
+  })
+
+  it('renders GUI-aligned permission presets in a narrow inline terminal and restores focus', async () => {
     let current = detail()
     const updateThread = vi.fn(async (_id: string, patch: Partial<ThreadDetail>) => {
       current = { ...current, ...patch }
@@ -2232,8 +2423,17 @@ describe('PiTuiApplication command overlays', () => {
       input.emit('data', '\x1b[B')
       await waitFor(() => /Mode\s+agent/u.test(sanitizeTerminalText(outputText.slice(beforeStatusScroll))))
       input.emit('data', '\x1b')
+      const beforePermission = outputText.length
       type(input, '/permission')
-      await waitFor(() => outputText.includes('Permissions'))
+      await waitFor(() => outputText.slice(beforePermission).includes('Full access'))
+      const narrowPresetFrame = sanitizeTerminalText(outputText.slice(beforePermission))
+      expect(narrowPresetFrame).toContain('Tool permission mode')
+      expect(narrowPresetFrame).toContain('Always ask')
+      expect(narrowPresetFrame).toContain('Sensitive oper...')
+      expect(narrowPresetFrame).toContain('Ask for worksp...')
+      expect(narrowPresetFrame).toContain('Full access')
+      expect(narrowPresetFrame).toContain('A adva...')
+      expect(narrowPresetFrame).not.toContain('Approval policy')
       input.emit('data', '\r')
       await waitFor(() => updateThread.mock.calls.length > 0)
 

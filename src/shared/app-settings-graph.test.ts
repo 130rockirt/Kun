@@ -20,6 +20,8 @@ describe('Kun Graph settings', () => {
     expect(normalized.agents.kun.graph).toEqual(defaultKunGraphSettings())
     expect(normalized.agents.kun.graph.enabled).toBe(false)
     expect(normalized.agents.kun.graph.defaultStrategy).toBe('direct')
+    expect(normalized.agents.kun.graph.scheduler.maxRunWallTimeMs)
+      .toBe(7 * 24 * 60 * 60 * 1_000)
   })
 
   it('normalizes invalid and over-broad values to host bounds', () => {

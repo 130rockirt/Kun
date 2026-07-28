@@ -222,9 +222,6 @@ jobs:
           KUN_RUN_MEDIA_SMOKE: '1'
         run: npm run smoke:extension-native-media
 
-      - name: Smoke packaged Kun Video Editor native workflow
-        run: npm run smoke:packaged-video-editor-native
-
       - name: Smoke packaged Runtime data migration
         run: npm run smoke:packaged-runtime-migration
 
@@ -373,9 +370,6 @@ jobs:
           KUN_RUN_MEDIA_SMOKE: '1'
         run: npm run smoke:extension-native-media
 
-      - name: Smoke packaged Kun Video Editor native workflow
-        run: npm run smoke:packaged-video-editor-native
-
       - name: Smoke packaged Runtime data migration
         run: npm run smoke:packaged-runtime-migration
 
@@ -468,14 +462,6 @@ jobs:
           KUN_RUN_MEDIA_SMOKE: '1'
         run: npm run smoke:extension-native-media
 
-      - name: Build deterministic Kun Video Editor extension package
-        run: npm run pack:kun-video-editor
-
-      - name: Smoke packaged Kun Video Editor native workflow
-        run: >
-          npm run smoke:packaged-video-editor-native --
-          --archive dist/kun-video-editor-0.4.4.kunx
-
       - name: Prepare and verify Linux user namespace sandbox
         run: |
           if [[ -e /proc/sys/kernel/unprivileged_userns_clone ]]; then
@@ -513,7 +499,6 @@ jobs:
             dist/Kun-*-linux-amd64.deb
             dist/latest-linux.yml
             dist/extension-native-evidence-linux.json
-            dist/kun-video-editor-*.kunx
 
   publish:
     name: Publish GitHub Release and R2
@@ -580,7 +565,6 @@ jobs:
             "extension-native-evidence-darwin.json"
             "extension-native-evidence-win32.json"
             "extension-native-evidence-linux.json"
-            "kun-video-editor-0.4.4.kunx"
           )
 
           for pattern in "${required[@]}"; do
@@ -643,9 +627,6 @@ jobs:
           --tag "${TAG_NAME}"
           --version "${RELEASE_VERSION}"
 
-      - name: Verify downloadable Kun Video Editor extension package
-        run: npm run verify:kun-video-editor-package -- --input release-artifacts
-
       - name: Create or update draft GitHub Release
         run: |
           set -euo pipefail
@@ -666,7 +647,7 @@ jobs:
           set -euo pipefail
           mapfile -d '' assets < <(
             find release-artifacts -type f \
-              \( -name 'Kun-*' -o -name 'latest*.yml' -o -name 'extension-native-evidence-*.json' -o -name 'kun-video-editor-*.kunx' \) \
+              \( -name 'Kun-*' -o -name 'latest*.yml' -o -name 'extension-native-evidence-*.json' \) \
               -print0
           )
 

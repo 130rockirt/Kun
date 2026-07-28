@@ -2,16 +2,16 @@ import { describe, expect, it, vi } from 'vitest'
 import type { CapabilityToolSpec } from '../adapters/tool/capability-registry.js'
 import type { GraphRunV1 } from '../contracts/graph.js'
 import { GRAPH_WORKER_TOOL_NAMES } from '../graph/graph-tool-boundary.js'
+import type { TurnRunOutcome } from '../loop/turn-execution-types.js'
 import { createGraphRuntimeStartOptions } from './graph-runtime-bootstrap.js'
 
 function runtimeOptions(active = false) {
-  const startTurn = vi.fn(async () => ({
-    threadId: 'thread_1',
-    turnId: 'runtime_turn',
-    userMessageItemId: 'item_runtime_user'
-  }))
+  const resumeTurn = vi.fn(async () => 'resumed' as const)
+  const isTurnExecutionActive = vi.fn(() => active)
   const steerTurn = vi.fn(async () => undefined)
-  const runAgentTurn = vi.fn(async () => 'completed' as const)
+  const runAgentTurn = vi.fn<
+    (threadId: string, turnId: string) => Promise<TurnRunOutcome>
+  >(async () => 'suspended')
   const options = createGraphRuntimeStartOptions({
     delegation: () => undefined,
     threads: {
@@ -24,14 +24,15 @@ function runtimeOptions(active = false) {
         sandboxMode: 'workspace-write',
         turns: [{
           id: 'turn_1',
-          status: active ? 'running' : 'completed',
+          status: 'running',
           model: 'source-model',
           providerId: 'source-provider',
           reasoningEffort: 'high'
         }]
       } as never)
     },
-    startTurn,
+    resumeTurn,
+    isTurnExecutionActive,
     steerTurn,
     runAgentTurn,
     defaults: () => ({
@@ -93,7 +94,7 @@ function runtimeOptions(active = false) {
     }],
     skillIds: () => ['safe-skill']
   })
-  return { options, startTurn, steerTurn, runAgentTurn }
+  return { options, resumeTurn, isTurnExecutionActive, steerTurn, runAgentTurn }
 }
 
 const run = {
@@ -101,6 +102,7 @@ const run = {
   threadId: 'thread_1',
   sourceTurnId: 'turn_1',
   status: 'running',
+  lastEventSeq: 12,
   plans: [{ workspaceRoot: '/workspace' }]
 } as GraphRunV1
 
@@ -133,8 +135,8 @@ describe('Graph runtime bootstrap capability boundary', () => {
     ]))
   })
 
-  it('labels automatic supervision for the isolated Graph Lead policy', async () => {
-    const { options, startTurn, steerTurn, runAgentTurn } = runtimeOptions()
+  it('resumes the suspended source Lead turn instead of creating a replacement turn', async () => {
+    const { options, resumeTurn, steerTurn, runAgentTurn } = runtimeOptions()
 
     await options.leadTurn({
       run,
@@ -143,19 +145,24 @@ describe('Graph runtime bootstrap capability boundary', () => {
       digest: 'bounded failure'
     })
 
-    expect(startTurn).toHaveBeenCalledWith(expect.objectContaining({
-      request: expect.objectContaining({
-        orchestration: 'direct',
-        messageSource: 'graph_runtime',
-        disableUserInput: true
-      })
-    }))
-    expect(steerTurn).not.toHaveBeenCalled()
-    expect(runAgentTurn).toHaveBeenCalledWith('thread_1', 'runtime_turn')
+    expect(resumeTurn).toHaveBeenCalledWith({
+      threadId: 'thread_1',
+      turnId: 'turn_1',
+      runId: 'run_1',
+      lastDeliveredSeq: 12,
+      terminal: false
+    })
+    expect(steerTurn).toHaveBeenCalledWith({
+      threadId: 'thread_1',
+      turnId: 'turn_1',
+      text: expect.stringContaining('Graph Lead supervision for durable run run_1.'),
+      messageSource: 'graph_runtime'
+    })
+    expect(runAgentTurn).toHaveBeenCalledWith('thread_1', 'turn_1')
   })
 
-  it('steers supervision into the active parent turn instead of starting a conflicting turn', async () => {
-    const { options, startTurn, steerTurn, runAgentTurn } = runtimeOptions(true)
+  it('steers supervision into the executing source turn without another execution', async () => {
+    const { options, resumeTurn, steerTurn, runAgentTurn } = runtimeOptions(true)
 
     await options.leadTurn({
       run,
@@ -170,7 +177,58 @@ describe('Graph runtime bootstrap capability boundary', () => {
       text: expect.stringContaining('Graph Lead supervision for durable run run_1.'),
       messageSource: 'graph_runtime'
     })
-    expect(startTurn).not.toHaveBeenCalled()
+    expect(resumeTurn).not.toHaveBeenCalled()
     expect(runAgentTurn).not.toHaveBeenCalled()
+  })
+
+  it.each(['completed', 'failed', 'cancelled'] as const)(
+    'resumes the original source turn for %s terminal delivery',
+    async (status) => {
+      const { options, resumeTurn, steerTurn, runAgentTurn } = runtimeOptions()
+      runAgentTurn.mockResolvedValueOnce('completed')
+
+      await options.leadTurn({
+        run: { ...run, status },
+        reasons: ['completion'],
+        nodeIds: [],
+        digest: `terminal status: ${status}`
+      })
+
+      expect(resumeTurn).toHaveBeenCalledWith(expect.objectContaining({
+        threadId: 'thread_1',
+        turnId: 'turn_1',
+        runId: 'run_1',
+        terminal: true
+      }))
+      expect(steerTurn).toHaveBeenCalledWith(expect.objectContaining({
+        turnId: 'turn_1',
+        text: expect.stringContaining(
+          'Present the persisted terminal outcome'
+        )
+      }))
+      expect(runAgentTurn).toHaveBeenCalledOnce()
+    }
+  )
+
+  it('starts the continuation that reacquired a lease during a suspension race', async () => {
+    const { options, isTurnExecutionActive, runAgentTurn } = runtimeOptions()
+    isTurnExecutionActive
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(true)
+      .mockReturnValueOnce(false)
+    runAgentTurn
+      .mockResolvedValueOnce('suspended')
+      .mockResolvedValueOnce('suspended')
+
+    await options.leadTurn({
+      run,
+      reasons: ['help'],
+      nodeIds: ['node_1'],
+      digest: 'A second signal arrived while the first slice parked.'
+    })
+
+    expect(runAgentTurn).toHaveBeenCalledTimes(2)
+    expect(runAgentTurn).toHaveBeenNthCalledWith(1, 'thread_1', 'turn_1')
+    expect(runAgentTurn).toHaveBeenNthCalledWith(2, 'thread_1', 'turn_1')
   })
 })

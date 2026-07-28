@@ -25,7 +25,6 @@ test('declares every product-owned default extension', () => {
   assert.deepEqual(
     BUNDLED_EXTENSION_DEFINITIONS.map((entry) => entry.id),
     [
-      'kun-examples.kun-video-editor',
       'kun-examples.presentation-studio',
       'kun-examples.social-media-sidebar'
     ]
@@ -33,7 +32,7 @@ test('declares every product-owned default extension', () => {
 })
 
 test('derives bounded catalog entries from canonical manifests', () => {
-  const definition = BUNDLED_EXTENSION_DEFINITIONS[1]
+  const definition = BUNDLED_EXTENSION_DEFINITIONS[0]
   assert.equal(
     bundledArchiveName(manifest('presentation-studio'), definition.name),
     'presentation-studio-0.1.0.kunx'
@@ -77,7 +76,6 @@ test('sorts catalog entries and rejects duplicate extension ids', () => {
   assert.deepEqual(
     catalog.extensions.map((entry) => entry.id),
     [
-      'kun-examples.kun-video-editor',
       'kun-examples.presentation-studio',
       'kun-examples.social-media-sidebar'
     ]

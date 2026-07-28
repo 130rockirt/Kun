@@ -78,6 +78,63 @@ describe('GraphControlService', () => {
     expect(cancelled.status).toBe('cancelled')
   })
 
+  it('notifies supervision after durable user steering and cancellation', async () => {
+    const { store } = await fixture()
+    const onSteering = vi.fn(async () => undefined)
+    const onCancelled = vi.fn(async () => undefined)
+    const control = new GraphControlService({
+      store,
+      config: () => testGraphConfig(),
+      onSteering,
+      onCancelled
+    })
+    await control.create({
+      runId: 'run_notifications',
+      threadId: 'thread_1',
+      projectId: 'project_1',
+      sourceTurnId: 'turn_1',
+      plan: testGraphPlan(),
+      commandId: 'command_create_notifications',
+      idempotencyKey: 'create_notifications',
+      start: true
+    })
+    const steered = await control.steer('run_notifications', {
+      version: GRAPH_CONTRACT_VERSION,
+      steeringId: 'steering_1',
+      runId: 'run_notifications',
+      target: { kind: 'node', nodeId: 'research' },
+      text: 'Use the smaller fixture.',
+      status: 'persisted',
+      createdAt: TEST_GRAPH_NOW
+    }, {
+      commandId: 'command_steer',
+      idempotencyKey: 'steer_1'
+    })
+    expect(onSteering).toHaveBeenCalledOnce()
+    expect(onSteering).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'run_notifications',
+        lastEventSeq: steered.lastEventSeq
+      }),
+      expect.objectContaining({
+        steeringId: 'steering_1',
+        text: 'Use the smaller fixture.'
+      })
+    )
+
+    const cancelled = await control.cancel('run_notifications', {
+      commandId: 'command_cancel_notifications',
+      idempotencyKey: 'cancel_notifications',
+      reason: 'No longer needed.'
+    })
+    expect(cancelled.status).toBe('cancelled')
+    expect(onCancelled).toHaveBeenCalledOnce()
+    expect(onCancelled).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'run_notifications', status: 'cancelled' }),
+      'No longer needed.'
+    )
+  })
+
   it('rejects stale revisions and preserves accepted facts during patches', async () => {
     const { control } = await fixture()
     const created = await control.create({

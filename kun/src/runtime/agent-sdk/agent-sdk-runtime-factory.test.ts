@@ -11,6 +11,7 @@ import { CapabilityRegistry } from '../../adapters/tool/capability-registry.js'
 import { LocalToolHost } from '../../adapters/tool/local-tool-host.js'
 import { InMemoryApprovalGate } from '../../adapters/in-memory-approval-gate.js'
 import { InMemoryUserInputGate } from '../../adapters/in-memory-user-input-gate.js'
+import type { TurnRunOutcome } from '../../loop/turn-execution-types.js'
 import {
   DelegatedSessionCoordinator,
   FileDelegatedSessionBindingStore,
@@ -977,9 +978,10 @@ describe('createAgentSdkRuntime turn context', () => {
   test('clears turn-scoped skill activation when an SDK turn finishes', async () => {
     const clearTurnActivation = vi.fn()
     const finishTurn = vi.fn(async () => undefined)
+    const suspendGraphLeadTurn = vi.fn(async () => 'not_graph' as const)
     const runtime = createAgentSdkRuntime({
       registry: {} as never,
-      turns: { finishTurn } as never,
+      turns: { finishTurn, suspendGraphLeadTurn } as never,
       sessionStore: {} as never,
       threadStore: {} as never,
       events: {} as never,
@@ -1003,11 +1005,53 @@ describe('createAgentSdkRuntime turn context', () => {
 
     await deps.finishTurn('thread_1', 'turn_1', 'completed')
 
+    expect(suspendGraphLeadTurn).toHaveBeenCalledWith({
+      threadId: 'thread_1',
+      turnId: 'turn_1'
+    })
     expect(finishTurn).toHaveBeenCalledWith({
       threadId: 'thread_1',
       turnId: 'turn_1',
       status: 'completed'
     })
+    expect(clearTurnActivation).toHaveBeenCalledWith('thread_1', 'turn_1')
+  })
+
+  test('parks a completed SDK response when the same Graph Lead turn is still supervising', async () => {
+    const clearTurnActivation = vi.fn()
+    const finishTurn = vi.fn(async () => undefined)
+    const suspendGraphLeadTurn = vi.fn(async () => 'suspended' as const)
+    const runtime = createAgentSdkRuntime({
+      registry: {} as never,
+      turns: { finishTurn, suspendGraphLeadTurn } as never,
+      sessionStore: {} as never,
+      threadStore: {} as never,
+      events: {} as never,
+      ids: { next: (prefix) => prefix },
+      prefix: { systemPrompt: '' },
+      providerConfigs: {},
+      agentSdkProviderIds: new Set(),
+      defaultApprovalPolicy: 'auto',
+      skillRuntime: { clearTurnActivation } as never
+    })
+    const runtimeDeps = (runtime as unknown as {
+      deps: {
+        finishTurn(
+          threadId: string,
+          turnId: string,
+          status: 'completed' | 'failed' | 'aborted',
+          error?: string
+        ): Promise<TurnRunOutcome>
+      }
+    }).deps
+
+    await expect(runtimeDeps.finishTurn(
+      'thread_1',
+      'turn_1',
+      'completed'
+    )).resolves.toBe('suspended')
+
+    expect(finishTurn).not.toHaveBeenCalled()
     expect(clearTurnActivation).toHaveBeenCalledWith('thread_1', 'turn_1')
   })
 

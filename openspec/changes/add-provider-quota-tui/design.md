@@ -30,7 +30,7 @@ The existing `GET /v1/usage` endpoint reports accumulated thread tokens and cost
 
 This is preferred over calling Electron IPC because the TUI must work when the desktop app is closed. It is preferred over implementing probes in the TUI because credentials and raw provider responses must remain server-side.
 
-The service will initially mirror the provider families already recognized by the GUI: DeepSeek, OpenRouter, Moonshot, Z.ai/BigModel, MiniMax, exact OpenAI, Claude subscription, ChatGPT/Codex, Cursor, Antigravity, and Gemini CLI. Unrecognized connections remain visible as `unsupported`.
+The service mirrors the provider families recognized by the GUI: DeepSeek, OpenRouter, Moonshot, Z.ai/BigModel, MiniMax, Kimi Code, exact OpenAI, Claude subscription, ChatGPT/Codex, Grok, Cursor, Antigravity, Gemini CLI, and OpenCode Go. Unrecognized connections remain visible as `unsupported`.
 
 ### Resolve canonical connections and credentials at request time
 

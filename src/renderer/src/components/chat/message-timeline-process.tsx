@@ -39,7 +39,6 @@ import {
 } from './message-timeline-tools'
 import { SubagentGroup, type OpenChildThreadHandler } from './SubagentCallCard'
 import { InjectedMemoryMetaChip } from './injected-memory-meta-chip'
-import { AnimatedWorkLogo } from './AnimatedWorkLogo'
 
 export type ProcessSection = {
   id: string
@@ -281,15 +280,9 @@ export function ProcessSectionRow({
   // Tool failures stay quiet on the batch header: only runtime/system errors
   // expand the group or tint the collapsed title. Inner rows keep their own tone.
   const hasRuntimeError = errorTone === 'error'
-  // Ordinary tool execution loading chrome lives on the turn-bottom row.
-  // Keep in-section animation only for non-execution phases (e.g. live
-  // reasoning fallback); approvals / user-input expand in place without it.
-  const showActiveAnimation =
-    active &&
-    section.kind !== 'execution' &&
-    !hasRuntimeError &&
-    !sectionHasPendingApproval(section) &&
-    !sectionHasRequestUserInput(section)
+  // ConversationTurn owns the single live animation at the visual bottom.
+  // Process sections stay quiet so reasoning cannot move that indicator back
+  // into the historical timeline.
   const defaultExpanded =
     (processing && hasRuntimeError) ||
     sectionHasPendingApproval(section) ||
@@ -370,11 +363,7 @@ export function ProcessSectionRow({
               <span className={`h-2 w-2 rounded-full ${processErrorDotClass(errorTone)}`} />
             </span>
           ) : null}
-          {showActiveAnimation ? (
-            <span className="ds-work-logo-slot ds-work-logo-slot-sm mr-0.5">
-              <AnimatedWorkLogo active phase="trail" size="sm" />
-            </span>
-          ) : SectionIcon ? (
+          {SectionIcon ? (
             <ProcessGlyph Icon={SectionIcon} />
           ) : null}
           <span className={active && !hasRuntimeError ? 'ds-shiny-text' : ''}>{title}</span>
@@ -395,11 +384,7 @@ export function ProcessSectionRow({
               <span className={`h-2 w-2 rounded-full ${processErrorDotClass(errorTone)}`} />
             </span>
           ) : null}
-          {showActiveAnimation ? (
-            <span className="ds-work-logo-slot ds-work-logo-slot-sm mr-0.5">
-              <AnimatedWorkLogo active phase="trail" size="sm" />
-            </span>
-          ) : SectionIcon ? (
+          {SectionIcon ? (
             <ProcessGlyph Icon={SectionIcon} />
           ) : null}
           <span className={active && !hasRuntimeError ? 'ds-shiny-text' : ''}>{title}</span>
@@ -622,11 +607,6 @@ function ProcessEntryRow({
 
   const { verb, rest } = splitVerb(summary)
   const rowActive = isAutoOpenPending || isStreamingAssistant
-  const showActiveAnimation =
-    rowActive &&
-    !isError &&
-    !isPendingApproval(block) &&
-    !isRequestUserInputTool(block)
   const wrapSummary = (block.kind === 'system' && !canExpand) || isAssistantProcessText
   const canToggle = canExpand && !forceOpen
   const RowIcon = processBlockIcon(block)
@@ -664,11 +644,7 @@ function ProcessEntryRow({
             : 'cursor-default'
         }`}
       >
-        {showActiveAnimation ? (
-          <span className="ds-work-logo-slot ds-work-logo-slot-sm mr-0.5 mt-1">
-            <AnimatedWorkLogo active phase="trail" size="sm" />
-          </span>
-        ) : RowIcon ? (
+        {RowIcon ? (
           <ProcessGlyph Icon={RowIcon} className="mt-1" />
         ) : null}
         <span

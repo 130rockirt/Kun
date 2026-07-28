@@ -154,11 +154,6 @@ smoke_macos_extensions() {
   KUN_RUN_MEDIA_SMOKE=1 npm run smoke:extension-native-media \
     || die "macOS host-native FFmpeg broker smoke failed"
 
-  cyan "Smoking packaged Kun Video Editor native workflow (macOS ${host_arch})..."
-  npm run smoke:packaged-video-editor-native -- --resources "${host_resources}" \
-    --archive "${ROOT}/dist/kun-video-editor-0.4.4.kunx" \
-    || die "macOS packaged Kun Video Editor native workflow smoke failed"
-
   cyan "Recording commit-bound macOS native evidence..."
   npm run evidence:extension-native \
     || die "macOS native evidence generation failed"
@@ -194,10 +189,6 @@ release_clean_dist_artifacts
 
 cyan "Building macOS..."
 build_macos
-
-cyan "Building deterministic Kun Video Editor extension package..."
-rm -f "${ROOT}"/dist/kun-video-editor-*.kunx
-npm run pack:kun-video-editor || die "Kun Video Editor extension package failed"
 
 smoke_macos_extensions
 
@@ -262,7 +253,6 @@ collect "macOS x64 dmg" "dist/Kun-*-mac-x64.dmg"
 collect "macOS arm64 zip" "dist/Kun-*-mac-arm64.zip"
 collect "macOS x64 zip" "dist/Kun-*-mac-x64.zip"
 collect "macOS native evidence" "dist/extension-native-evidence-darwin.json"
-collect "Kun Video Editor extension" "dist/kun-video-editor-*.kunx"
 collect_optional "macOS blockmap" "dist/Kun-*-mac-*.zip.blockmap"
 
 upload_github_assets() {

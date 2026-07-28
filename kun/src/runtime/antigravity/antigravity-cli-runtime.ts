@@ -5,6 +5,7 @@ import { userMessageTextWithComposerContexts } from '../../domain/composer-conte
 import { makeAssistantTextItem } from '../../domain/item.js'
 import { resolveTurnClientSurface } from '../../loop/turn-context-resolver.js'
 import { normalizeTurnLimits, type TurnLimitsConfig } from '../../loop/turn-limits.js'
+import type { TurnRunOutcome } from '../../loop/turn-execution-types.js'
 import type { SessionStore } from '../../ports/session-store.js'
 import type { ThreadStore } from '../../ports/thread-store.js'
 import { buildClientSurfaceInstruction } from '../../prompt/kun-prompt-context.js'
@@ -140,7 +141,7 @@ export class AntigravityCliRuntime implements DelegatedTurnRuntime {
     turnId: string,
     signal: AbortSignal,
     providerId?: string
-  ): Promise<'completed' | 'failed' | 'aborted'> {
+  ): Promise<TurnRunOutcome> {
     const execute = () => this.runTurnOwned(threadId, turnId, signal, providerId)
     return this.deps.sessionCoordinator
       ? this.deps.sessionCoordinator.runExclusive(threadId, execute)
@@ -152,7 +153,7 @@ export class AntigravityCliRuntime implements DelegatedTurnRuntime {
     turnId: string,
     signal: AbortSignal,
     providerId?: string
-  ): Promise<'completed' | 'failed' | 'aborted'> {
+  ): Promise<TurnRunOutcome> {
     const thread = await this.deps.threadStore.get(threadId)
     const turn = thread?.turns.find((candidate) => candidate.id === turnId)
     if (!thread || !turn) {
@@ -354,7 +355,11 @@ export class AntigravityCliRuntime implements DelegatedTurnRuntime {
           status: 'completed'
         })
       )
-      await this.deps.turns.finishTurn({ threadId, turnId, status: 'completed' })
+      const suspension = await this.deps.turns.suspendGraphLeadTurn?.({ threadId, turnId })
+      const outcome: TurnRunOutcome = suspension === 'suspended' ? 'suspended' : 'completed'
+      if (outcome === 'completed') {
+        await this.deps.turns.finishTurn({ threadId, turnId, status: 'completed' })
+      }
       if (preparation && this.deps.sessionCoordinator) {
         try {
           await this.deps.sessionCoordinator.commit({
@@ -367,7 +372,7 @@ export class AntigravityCliRuntime implements DelegatedTurnRuntime {
           // cannot be recorded.
         }
       }
-      return 'completed'
+      return outcome
     } catch (error) {
       await finishAntigravityTrace(trace, { kind: 'error', error })
       trace = undefined

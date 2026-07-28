@@ -31,7 +31,7 @@
 
 PR 检查必须在三种原生 runner 上完成上述 smoke，且只验证、上传临时 artifact，不创建 Release。最后一个 smoke 成功后才可运行 `npm run evidence:extension-native`；生成的三平台 JSON 证据必须绑定完整 commit、GitHub run/attempt、规范 artifact、bytes 和 SHA-256，并随 artifact 上传。证据生成对缺失、多余、错误架构、目录和 symlink fail closed。macOS PR 使用不含发布秘密的 ad-hoc 签名；正式发布记录仍必须来自 Developer ID 签名、公证和 stapled ticket 均通过的受保护工作流。
 
-可下载的 `kun-video-editor-*.kunx` 必须先于 Linux 原生 lifecycle smoke 打包，并把这个精确的普通文件依次用于 validate、install、activation、render、uninstall，且上传前复核 SHA-256 未变化；stable 与 daily publish 下载后还会再次校验该 archive。手工发布在任何构建前要求 tracked 与 untracked 工作区均干净。Windows 发布会 fetch 远端 tag，并要求它与本地 `HEAD` 指向同一 commit；将 draft 公开或把 R2 `latest` 推广前，还会下载该 tag 的完整 Release assets，统一校验三份 evidence JSON、七个原生安装包、唯一版本/commit、每个 size/SHA-256、所需 FFmpeg 能力和唯一 `.kunx`。所有以 `Kun-` 命名的 Release asset 必须命中七个 final artifact 或同版本 canonical blockmap allowlist，其他扩展名、架构、大小写或版本全部拒绝。因此缺少 Linux evidence 时，`--publish`/`-Publish` 与 `--r2-promote`/`-PromoteR2` 都必须失败；R2 推广还显式要求 mac、win、linux 三份 manifest，不能生成缺平台的 `latest`。macOS 单平台脚本的 `--r2` 只上传 metadata，并拒绝推广；推广必须由三平台校验后的 Windows 路径执行。手工发布清理会删除旧 evidence 和 `.kunx`，因为 evidence 生成刻意使用 create-only 语义。
+视频编辑器仅保留为源码示例，不进入默认 catalog、产品包或 Release assets。手工发布在任何构建前要求 tracked 与 untracked 工作区均干净。Windows 发布会 fetch 远端 tag，并要求它与本地 `HEAD` 指向同一 commit；将 draft 公开或把 R2 `latest` 推广前，还会下载该 tag 的完整 Release assets，统一校验三份 evidence JSON、七个原生安装包、唯一版本/commit、每个 size/SHA-256 和所需 FFmpeg 能力。所有以 `Kun-` 命名的 Release asset 必须命中七个 final artifact 或同版本 canonical blockmap allowlist，其他扩展名、架构、大小写或版本全部拒绝。因此缺少 Linux evidence 时，`--publish`/`-Publish` 与 `--r2-promote`/`-PromoteR2` 都必须失败；R2 推广还显式要求 mac、win、linux 三份 manifest，不能生成缺平台的 `latest`。macOS 单平台脚本的 `--r2` 只上传 metadata，并拒绝推广；推广必须由三平台校验后的 Windows 路径执行。手工发布清理会删除旧 evidence，因为 evidence 生成刻意使用 create-only 语义。
 
 #### 发布证据记录
 

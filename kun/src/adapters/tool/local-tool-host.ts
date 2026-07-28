@@ -91,6 +91,8 @@ export type LocalTool = {
    * `create_plan`.
    */
   shouldAdvertise?: (context: ToolHostContext) => boolean
+  /** Hide a legacy compatibility tool from model schemas without blocking a persisted/direct execution. */
+  modelAdvertised?: boolean
   execute: (
     args: Record<string, unknown>,
     context: ToolHostContext,
@@ -612,6 +614,7 @@ export class LocalToolHost implements ToolHost {
       toolKind: tool.toolKind ?? 'tool_call',
       ...(tool.sideEffect ? { sideEffect: tool.sideEffect } : {}),
       execute: tool.execute,
+      ...(tool.modelAdvertised === false ? { modelAdvertised: false } : {}),
       ...(tool.shouldAdvertise ? { shouldAdvertise: tool.shouldAdvertise } : {}),
       ...(tool.requiresExplicitApproval ? { requiresExplicitApproval: true } : {}),
       ...(tool.providerManagedApproval ? { providerManagedApproval: true } : {}),

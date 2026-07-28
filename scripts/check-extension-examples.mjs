@@ -14,15 +14,20 @@ const expected = [
   'agent-assistant',
   'direct-dom',
   'hello-sidebar',
-  'kun-video-editor',
   'presentation-studio',
   'social-media-sidebar',
   'streaming-model-provider',
   'tool-provider',
   'workspace-dashboard'
 ]
-if (JSON.stringify(examples) !== JSON.stringify(expected)) {
-  throw new Error(`Extension examples changed without updating validation: ${examples.join(', ')}`)
+const sourceOnlyExamples = ['kun-video-editor']
+const excluded = new Set(sourceOnlyExamples)
+const validatedExamples = examples.filter((name) => !excluded.has(name))
+if (JSON.stringify(validatedExamples) !== JSON.stringify(expected)) {
+  throw new Error(`Extension examples changed without updating validation: ${validatedExamples.join(', ')}`)
+}
+if (JSON.stringify(examples) !== JSON.stringify([...expected, ...sourceOnlyExamples].sort())) {
+  throw new Error(`Extension example inventory changed: ${examples.join(', ')}`)
 }
 
 run('npm', ['run', 'build:extensions'])
@@ -34,9 +39,16 @@ for (const packageName of ['@kun/extension-api', '@kun/extension-react', '@kun/e
 }
 await import(pathToFileURL(join(root, 'packages', 'create-kun-extension', 'src', 'scaffold.mjs')).href)
 
+for (const name of sourceOnlyExamples) {
+  const directory = join(examplesRoot, name)
+  const packageJson = JSON.parse(await readFile(join(directory, 'package.json'), 'utf8'))
+  run('npm', ['--prefix', directory, 'run', 'typecheck'])
+  if (packageJson.scripts?.test) run('npm', ['--prefix', directory, 'run', 'test'])
+}
+
 const temporary = await mkdtemp(join(tmpdir(), 'kun-extension-examples-'))
 try {
-  for (const name of examples) {
+  for (const name of validatedExamples) {
     const directory = join(examplesRoot, name)
     const packageJson = JSON.parse(await readFile(join(directory, 'package.json'), 'utf8'))
     const manifest = JSON.parse(await readFile(join(directory, 'kun-extension.json'), 'utf8'))
@@ -57,14 +69,14 @@ try {
     ])
   }
 } finally {
-  await Promise.all(examples.map((name) =>
+  await Promise.all(validatedExamples.map((name) =>
     rm(join(examplesRoot, name, 'dist'), { recursive: true, force: true })
   ))
   await rm(temporary, { recursive: true, force: true })
 }
 
 process.stdout.write(
-  `Extension examples OK: ${examples.length} typechecked, built, browser-artifact checked, validated, packed, and smoke-tested.\n`
+  `Extension examples OK: ${validatedExamples.length} packaged examples passed their full lifecycle; ${sourceOnlyExamples.length} source-only example was typechecked and tested without build or pack. Kun Video Editor remains excluded from default build/packaging.\n`
 )
 
 async function assertBrowserBuild(directory, browserEntry) {

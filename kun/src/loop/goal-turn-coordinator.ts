@@ -10,7 +10,7 @@ import {
   DEFAULT_MAX_GOAL_RESUME_NO_PROGRESS_ATTEMPTS,
   type GoalResumeCoordinatorDeps
 } from './goal-resume-coordinator.js'
-import type { TurnExecutionStatus } from './turn-execution-types.js'
+import type { TurnExecutionStatus, TurnRunOutcome } from './turn-execution-types.js'
 import { resolveTurnClientSurface } from './turn-context-resolver.js'
 
 const GOAL_RESUME_PROMPT = [
@@ -41,7 +41,7 @@ export type GoalTurnCoordinatorDeps = {
   events: Pick<RuntimeEventRecorder, 'record'>
   nowIso: () => string
   nowMs: () => number
-  runTurn: (threadId: string, turnId: string) => Promise<TurnExecutionStatus>
+  runTurn: (threadId: string, turnId: string) => Promise<TurnRunOutcome>
   goalResume?: GoalTurnCoordinatorOptions
 }
 

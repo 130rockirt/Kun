@@ -67,11 +67,12 @@ export class ToolCallDispatcher {
         }
       })
       if (!parallelCandidates) {
+        const context = contextForSourceCalls(input.context, [call])
         const result = await this.toolExecution.executeSafely({
           threadId: dispatch.threadId,
           turnId: dispatch.turnId,
           call,
-          context: input.context
+          context
         })
         executedAny = true
         input.onToolExecuted?.(call.toolName)
@@ -99,7 +100,7 @@ export class ToolCallDispatcher {
           threadId: dispatch.threadId,
           turnId: dispatch.turnId,
           call: entry,
-          context: input.context
+          context: contextForSourceCalls(input.context, batch)
         }))
       )
       executedAny = true
@@ -123,5 +124,16 @@ export class ToolCallDispatcher {
     }
 
     return executedAny ? 'continue' : 'all_suppressed'
+  }
+}
+
+const SOURCE_TOOL_NAMES = new Set(['read', 'grep', 'glob', 'find'])
+
+function contextForSourceCalls(context: ToolHostContext, calls: readonly ToolCallLike[]): ToolHostContext {
+  const sourceCalls = calls.filter((call) => SOURCE_TOOL_NAMES.has(call.toolName))
+  if (!context.sourceResultBudgetTokens || sourceCalls.length === 0) return context
+  return {
+    ...context,
+    sourceResultBudgetTokens: Math.max(1, Math.floor(context.sourceResultBudgetTokens / sourceCalls.length))
   }
 }

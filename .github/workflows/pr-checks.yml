@@ -127,14 +127,6 @@ jobs:
           KUN_RUN_MEDIA_SMOKE: '1'
         run: npm run smoke:extension-native-media
 
-      - name: Build deterministic Kun Video Editor extension package
-        run: npm run pack:kun-video-editor
-
-      - name: Smoke packaged Kun Video Editor native workflow
-        run: >
-          npm run smoke:packaged-video-editor-native --
-          --archive dist/kun-video-editor-0.4.4.kunx
-
       - name: Prepare and verify Linux user namespace sandbox
         run: |
           if [[ -e /proc/sys/kernel/unprivileged_userns_clone ]]; then
@@ -171,7 +163,6 @@ jobs:
             dist/Kun-*-linux-x86_64.AppImage.blockmap
             dist/Kun-*-linux-amd64.deb
             dist/extension-native-evidence-linux.json
-            dist/kun-video-editor-*.kunx
 
   package-macos:
     name: Ad-hoc macOS packaged validation (PR)
@@ -252,9 +243,6 @@ jobs:
         env:
           KUN_RUN_MEDIA_SMOKE: '1'
         run: npm run smoke:extension-native-media
-
-      - name: Smoke packaged Kun Video Editor native workflow
-        run: npm run smoke:packaged-video-editor-native
 
       - name: Smoke packaged Runtime data migration
         run: npm run smoke:packaged-runtime-migration
@@ -394,9 +382,6 @@ jobs:
         env:
           KUN_RUN_MEDIA_SMOKE: '1'
         run: npm run smoke:extension-native-media
-
-      - name: Smoke packaged Kun Video Editor native workflow
-        run: npm run smoke:packaged-video-editor-native
 
       - name: Smoke packaged Runtime data migration
         run: npm run smoke:packaged-runtime-migration

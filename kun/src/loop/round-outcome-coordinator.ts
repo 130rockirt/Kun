@@ -62,6 +62,7 @@ export type RoundOutcomeInput = Readonly<{
   prepared: PreparedTurnContext
   modelProviderId?: string
   modelReasoningEffort?: string
+  sourceResultBudgetTokens?: number
   toolProviderMetadata: ReadonlyMap<string, RoundToolProviderMetadata>
   toolKinds: ReadonlyMap<string, ToolCallLike['toolKind'] | undefined>
   toolProviderKinds: ReadonlyMap<string, ToolProviderKind | undefined>
@@ -700,6 +701,9 @@ export class RoundOutcomeCoordinator {
       modelProviderId: input.modelProviderId,
       reasoningEffort: input.modelReasoningEffort,
       modelCapabilities: prepared.modelCapabilities,
+      ...(input.sourceResultBudgetTokens !== undefined
+        ? { sourceResultBudgetTokens: input.sourceResultBudgetTokens }
+        : {}),
       activeSkillIds: prepared.skillResolution.activeSkillIds,
       allowedToolNames: prepared.allowedToolNames,
       extensionToolCatalogEpoch: prepared.extensionToolCatalogEpoch,

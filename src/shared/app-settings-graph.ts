@@ -14,7 +14,7 @@ export function defaultKunGraphSettings(): KunGraphSettingsV1 {
       maxAttemptsPerNode: 3,
       maxRevisions: 16,
       maxLoopIterations: 5,
-      maxRunWallTimeMs: 6 * 60 * 60 * 1_000,
+      maxRunWallTimeMs: 7 * 24 * 60 * 60 * 1_000,
       maxNodeWallTimeMs: 24 * 60 * 60 * 1_000,
       maxArtifactBytes: 1024 * 1024 * 1024,
       budgetWarningRatio: 0.8

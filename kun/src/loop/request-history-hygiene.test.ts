@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { TurnItem } from '../contracts/items.js'
 import { applyRequestHistoryHygiene } from './request-history-hygiene.js'
 
-function toolResult(id: string, output: string, isError = false): TurnItem {
+function toolResult(id: string, output: unknown, isError = false): TurnItem {
   return {
     id: `item_${id}`,
     turnId: 'turn_1',
@@ -36,6 +36,29 @@ function toolCall(id: string, argument: string): TurnItem {
 }
 
 describe('applyRequestHistoryHygiene cumulative tool-result budget', () => {
+  it('preserves the current source page atomically', () => {
+    const source = toolResult('read', {
+      content: 'x'.repeat(10_000),
+      start_line: 1,
+      end_line: 2,
+      total_lines: 2
+    }) as Extract<TurnItem, { kind: 'tool_result' }>
+    source.toolName = 'read'
+    const out = applyRequestHistoryHygiene([source], { maxToolResultBytes: 512, maxToolResultTokens: 128 })
+    expect(out[0]).toEqual(source)
+  })
+
+  it('does not treat unstructured read output as an atomic source page', () => {
+    const source = toolResult('read', { content: '汉'.repeat(9_000) })
+    const out = applyRequestHistoryHygiene([source], {
+      maxToolResultBytes: 32 * 1024,
+      maxToolResultTokens: 4_000
+    })
+    expect(out[0]).not.toBe(source)
+    expect(out[0]?.kind === 'tool_result'
+      ? String((out[0].output as { content?: string }).content)
+      : '').toContain('cache hygiene')
+  })
   it('collapses older tool results once the cumulative budget is exhausted', () => {
     // Each result is ~250 ASCII tokens (1000 chars / 4). With a 600-token
     // budget and keepRecent=1, only the most recent couple should survive

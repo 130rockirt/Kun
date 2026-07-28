@@ -64,6 +64,15 @@ export type TurnServiceDeps = {
   migrationMaintenance?: MigrationMaintenanceLock
   /** Dispose machine-local continuation state after a successful manual compaction. */
   onCompacted?: (threadId: string) => Promise<void>
+  /** Resolve durable Graph ownership without coupling TurnService to the Graph store. */
+  resolveGraphLeadRun?: (input: {
+    threadId: string
+    turnId: string
+  }) => Promise<{
+    runId: string
+    lastEventSeq: number
+    terminal: boolean
+  } | null>
   ids: IdGenerator
   nowIso: () => string
 }
@@ -93,6 +102,14 @@ export type TurnSettlement =
   | { kind: 'applied'; status: TerminalTurnStatus; error?: string }
   | { kind: 'already_terminal'; status: TerminalTurnStatus; error?: string }
   | { kind: 'missing' }
+
+export type GraphLeadSuspensionResult =
+  | 'not_graph'
+  | 'graph_terminal'
+  | 'pending_steering'
+  | 'suspended'
+
+export type GraphLeadResumeResult = 'resumed' | 'already_running'
 
 /**
  * Keep a finite backstop for one serve process while allowing a desktop user
@@ -776,6 +793,133 @@ export class TurnService {
     return settlement
   }
 
+  /**
+   * Park a Graph source Lead between material events. The durable turn stays
+   * running, but its process-local execution lease and capacity slot are
+   * released. The per-thread mutation lock makes the empty-steering check
+   * race-safe with steerTurn.
+   */
+  async suspendGraphLeadTurn(input: {
+    threadId: string
+    turnId: string
+  }): Promise<GraphLeadSuspensionResult> {
+    const turn = await this.getTurn(input.threadId, input.turnId)
+    if (!turn || turn.status !== 'running' || turn.orchestration !== 'graph') return 'not_graph'
+    const attached = await this.deps.resolveGraphLeadRun?.(input)
+    if (!attached || attached.terminal) return 'graph_terminal'
+
+    return this.withThreadMutation(input.threadId, async () => {
+      const current = await this.deps.threadStore.get(input.threadId)
+      const latest = current?.turns.find((candidate) => candidate.id === input.turnId)
+      if (!current || !latest || latest.status !== 'running' || latest.orchestration !== 'graph') {
+        return 'not_graph'
+      }
+      if (this.deps.steering.peek(input.turnId).length > 0) return 'pending_steering'
+
+      const now = this.deps.nowIso()
+      const graphLeadLifecycle = {
+        version: 1 as const,
+        runId: attached.runId,
+        state: 'supervising' as const,
+        lastDeliveredSeq: Math.max(
+          latest.graphLeadLifecycle?.lastDeliveredSeq ?? 0,
+          attached.lastEventSeq
+        ),
+        suspendedAt: now,
+        ...(latest.graphLeadLifecycle?.resumedAt
+          ? { resumedAt: latest.graphLeadLifecycle.resumedAt }
+          : {})
+      }
+      await this.deps.threadStore.upsert({
+        ...current,
+        turns: current.turns.map((candidate) =>
+          candidate.id === input.turnId
+            ? { ...candidate, graphLeadLifecycle }
+            : candidate),
+        updatedAt: now
+      })
+      this.releaseRuntimeTurnExecution(input.threadId, input.turnId)
+      return 'suspended'
+    })
+  }
+
+  /**
+   * Reacquire a process-local execution lease for an already-running Graph
+   * source turn. Duplicate wake-ups share the active execution instead of
+   * admitting a second model loop.
+   */
+  async resumeGraphLeadTurn(input: {
+    threadId: string
+    turnId: string
+    runId: string
+    lastDeliveredSeq: number
+    terminal: boolean
+  }): Promise<GraphLeadResumeResult> {
+    return this.withThreadMutation(input.threadId, async () => {
+      const current = await this.deps.threadStore.get(input.threadId)
+      const turn = current?.turns.find((candidate) => candidate.id === input.turnId)
+      if (!current || !turn) throw new Error(`turn not found: ${input.turnId}`)
+      if (turn.status !== 'running' || turn.orchestration !== 'graph') {
+        throw new TurnConflictError(`Graph source turn is not active: ${input.turnId}`)
+      }
+      if (
+        turn.graphLeadLifecycle?.runId &&
+        turn.graphLeadLifecycle.runId !== input.runId
+      ) {
+        throw new TurnConflictError(
+          `Graph source turn ${input.turnId} already owns ${turn.graphLeadLifecycle.runId}`
+        )
+      }
+      if (this.inflightTurns.has(input.turnId)) return 'already_running'
+      if (!this.tryAdmitTurn(input.turnId, input.threadId)) {
+        throw new TurnCapacityError(this.maxConcurrentTurns)
+      }
+      try {
+        const now = this.deps.nowIso()
+        const controller = new AbortController()
+        this.inflightTurns.set(input.turnId, controller)
+        this.deps.inflight.begin({
+          id: input.turnId,
+          kind: 'model',
+          threadId: input.threadId,
+          turnId: input.turnId
+        })
+        this.deps.steering.reopen(input.turnId)
+        await this.deps.threadStore.upsert({
+          ...current,
+          turns: current.turns.map((candidate) =>
+            candidate.id === input.turnId
+              ? {
+                  ...candidate,
+                  graphLeadLifecycle: {
+                    version: 1 as const,
+                    runId: input.runId,
+                    state: input.terminal ? 'finalizing' as const : 'supervising' as const,
+                    lastDeliveredSeq: Math.max(
+                      candidate.graphLeadLifecycle?.lastDeliveredSeq ?? 0,
+                      input.lastDeliveredSeq
+                    ),
+                    resumedAt: now,
+                    ...(candidate.graphLeadLifecycle?.suspendedAt
+                      ? { suspendedAt: candidate.graphLeadLifecycle.suspendedAt }
+                      : {})
+                  }
+                }
+              : candidate),
+          updatedAt: now
+        })
+        return 'resumed'
+      } catch (error) {
+        this.releaseRuntimeTurnExecution(input.threadId, input.turnId)
+        throw error
+      }
+    })
+  }
+
+  isTurnExecutionActive(turnId: string): boolean {
+    return this.inflightTurns.has(turnId)
+  }
+
   getAbortController(turnId: string): AbortSignal | undefined {
     return this.inflightTurns.get(turnId)?.signal
   }
@@ -827,6 +971,15 @@ export class TurnService {
       for (const turn of thread.turns) {
         if (turn.status !== 'running' && turn.status !== 'queued') continue
         if (this.inflightTurns.has(turn.id)) continue
+        if (turn.status === 'running' && turn.orchestration === 'graph') {
+          const suspension = await this.suspendGraphLeadTurn({
+            threadId: thread.id,
+            turnId: turn.id
+          }).catch(() => 'not_graph' as const)
+          if (suspension === 'suspended' || suspension === 'pending_steering') {
+            continue
+          }
+        }
         try {
           await this.finishTurn({
             threadId: thread.id,
@@ -997,18 +1150,25 @@ export class TurnService {
     turnId: string,
     options: { abort?: boolean } = {}
   ): void {
+    this.releaseRuntimeTurnExecution(threadId, turnId, options)
+    this.deps.steering.clear(turnId)
+  }
+
+  private releaseRuntimeTurnExecution(
+    threadId: string,
+    turnId: string,
+    options: { abort?: boolean } = {}
+  ): void {
     const admittedThreadId = this.admittedTurnThreads.get(turnId)
     if (admittedThreadId !== threadId) {
       // An external interrupt may already have released admission before the
       // model loop observes the abort and seals its terminal boundary. The
       // loop's later idempotent finish must still clear that transient seal.
-      if (admittedThreadId === undefined) this.deps.steering.clear(turnId)
       return
     }
     if (options.abort) this.inflightTurns.get(turnId)?.abort()
     this.inflightTurns.delete(turnId)
     this.deps.inflight.end(turnId)
-    this.deps.steering.clear(turnId)
     this.admittedTurnThreads.delete(turnId)
   }
 

@@ -233,18 +233,24 @@ describe('AnimatedWorkLogo', () => {
     expect(html).toContain('ds-work-logo-phase-trail')
   })
 
-  it('keeps the processing work row as text-only status', () => {
+  it('keeps the processing work row as a static elapsed-time divider', () => {
     const html = renderToStaticMarkup(
       createElement(WorkMetaRow, {
         processing: true,
         stepCount: 3,
+        durationMs: 74_000,
         expanded: true,
+        collapsible: false,
         onToggle: () => undefined
       })
     )
 
-    expect(html).toContain('ds-shiny-text')
+    expect(html).toMatch(/Processed|已处理|processed/)
+    expect(html).toContain('1m 14s')
+    expect(html).toContain('border-b')
+    expect(html).not.toContain('ds-shiny-text')
     expect(html).not.toContain('ds-work-logo-slot')
+    expect(html).not.toContain('aria-expanded')
   })
 
   it('summarizes collapsed work with its step count', () => {

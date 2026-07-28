@@ -1,5 +1,6 @@
 import type { ThreadService } from '../../services/thread-service.js'
 import type { TurnService } from '../../services/turn-service.js'
+import type { TurnRunOutcome } from '../../loop/turn-execution-types.js'
 import type { UsageService } from '../../services/usage-service.js'
 import type { ReviewService } from '../../services/review-service.js'
 import type { EventBus } from '../../ports/event-bus.js'
@@ -226,7 +227,7 @@ export type ServerRuntime = {
    * one-shot internal routes can reuse the runtime's systemPrompt. Optional.
    */
   immutablePrefix?: ImmutablePrefix
-  runTurn(threadId: string, turnId: string): Promise<'completed' | 'failed' | 'aborted'> | void
+  runTurn(threadId: string, turnId: string): Promise<TurnRunOutcome> | void
   /**
    * Relaunch goal continuation turns for threads whose in-flight turn was
    * just reconciled to `failed` after a runtime restart. Returns the number

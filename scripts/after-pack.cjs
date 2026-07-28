@@ -71,7 +71,6 @@ const BUNDLED_EXTENSIONS_DIR = 'bundled-extensions'
 const BUNDLED_EXTENSION_CATALOG_FILE = 'catalog.json'
 const OFFICECLI_DIR = 'officecli'
 const REQUIRED_BUNDLED_EXTENSION_IDS = [
-  'kun-examples.kun-video-editor',
   'kun-examples.presentation-studio',
   'kun-examples.social-media-sidebar'
 ]
@@ -203,6 +202,7 @@ function validateBundledExtensionResources(context) {
     throw new Error('[after-pack] Invalid bundled extension catalog shape')
   }
   const ids = new Set()
+  const catalogArchives = new Set()
   for (const entry of catalog.extensions) {
     if (
       typeof entry?.id !== 'string' ||
@@ -218,6 +218,7 @@ function validateBundledExtensionResources(context) {
       throw new Error(`[after-pack] Duplicate bundled extension id: ${entry.id}`)
     }
     ids.add(entry.id)
+    catalogArchives.add(entry.archive)
     const archivePath = join(root, entry.archive)
     assertRegularNonSymlink(archivePath, `bundled extension archive ${entry.id}`)
     const digest = createHash('sha256').update(readFileSync(archivePath)).digest('hex')
@@ -227,6 +228,15 @@ function validateBundledExtensionResources(context) {
   }
   for (const id of REQUIRED_BUNDLED_EXTENSION_IDS) {
     if (!ids.has(id)) throw new Error(`[after-pack] Missing required bundled extension: ${id}`)
+  }
+  if (ids.size !== REQUIRED_BUNDLED_EXTENSION_IDS.length) {
+    const unexpected = [...ids].filter((id) => !REQUIRED_BUNDLED_EXTENSION_IDS.includes(id))
+    throw new Error(`[after-pack] Unexpected bundled extension: ${unexpected.join(', ')}`)
+  }
+  for (const archive of readdirSync(root).filter((entry) => entry.endsWith('.kunx'))) {
+    if (!catalogArchives.has(archive)) {
+      throw new Error(`[after-pack] Unexpected bundled extension archive: ${archive}`)
+    }
   }
 }
 

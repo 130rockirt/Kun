@@ -61,7 +61,7 @@ describe('component designer profile', () => {
     expect(config.profiles[COMPONENT_DESIGN_PROFILE_NAME]).toMatchObject({
       mode: 'subagent',
       toolPolicy: 'inherit',
-      allowedTools: ['read', 'grep', 'find', 'ls', 'write', 'edit']
+      allowedTools: ['read', 'grep', 'glob', 'ls', 'write', 'edit']
     })
     expect(config.profiles[COMPONENT_DESIGN_PROFILE_NAME]?.systemPrompt).toContain('data-kun-component-root')
   })

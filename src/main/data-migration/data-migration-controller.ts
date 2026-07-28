@@ -1,6 +1,6 @@
 import { createReadStream, createWriteStream } from 'node:fs'
 import { createHash, randomUUID } from 'node:crypto'
-import { rm } from 'node:fs/promises'
+import { rm, stat } from 'node:fs/promises'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { dirname, join } from 'node:path'
@@ -44,6 +44,7 @@ import {
 } from './application-state-migration'
 import { portableSettingsForMigration } from './export-inventory'
 import { reconstructStagedWorkspace } from './workspace-staging'
+import { sha256File } from './kunpack-zip'
 
 const operationIdSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/)
 const localPathSchema = z.string().min(1).max(32_767).refine((value) => !value.includes('\0'), 'path contains NUL')
@@ -533,8 +534,6 @@ function runtimeSnapshotClient(runtimeFetch: DataMigrationControllerOptions['run
       const response = await runtimeFetch(`/v1/migrations/exports/${encodeURIComponent(snapshotId)}`, { signal })
       if (!response.ok || !response.body) throw new Error(`Kun snapshot download failed (${response.status})`)
       await pipeline(Readable.fromWeb(response.body as never), createWriteStream(destinationPath, { flags: 'wx', mode: 0o600 }), ...(signal ? [{ signal }] : []))
-      const { stat } = await import('node:fs/promises')
-      const { sha256File } = await import('./kunpack-zip')
       return { byteSize: (await stat(destinationPath)).size, sha256: await sha256File(destinationPath) }
     },
     release: async (snapshotId) => {

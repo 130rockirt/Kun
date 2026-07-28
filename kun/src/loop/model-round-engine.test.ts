@@ -12,11 +12,10 @@ const usage = {
 }
 
 /**
- * Captured from the pre-extraction AgentLoop stream path. Keep this explicit
- * reference so the extracted engine is compared with observable legacy
- * behavior rather than merely testing its own implementation details.
+ * Keep the expected side-effect order explicit: assistant content that the
+ * provider emitted before a tool call must also be persisted before that tool.
  */
-const LEGACY_TOOL_ROUND_REFERENCE = {
+const TOOL_ROUND_TIMELINE_REFERENCE = {
   requests: [{
     threadId: 'thread_1',
     turnId: 'turn_1',
@@ -47,15 +46,15 @@ const LEGACY_TOOL_ROUND_REFERENCE = {
     'stage:post_send',
     'event:assistant_reasoning_delta',
     'event:assistant_text_delta',
+    'item:assistant_reasoning',
+    'item:assistant_text',
     'item:tool_call',
     'event:tool_call_ready',
     'telemetry:pressure',
     'usage:record',
     'goal:usage',
     'event:usage',
-    'stage:response_received',
-    'item:assistant_reasoning',
-    'item:assistant_text'
+    'stage:response_received'
   ]
 } as const
 
@@ -196,7 +195,23 @@ describe('ModelRoundEngine', () => {
       cacheSignatures: test.cacheSignatures,
       outcome,
       trace: test.trace
-    }).toEqual(LEGACY_TOOL_ROUND_REFERENCE)
+    }).toEqual(TOOL_ROUND_TIMELINE_REFERENCE)
+    const liveReasoning = test.recordedEvents.find(
+      (event) => event.kind === 'assistant_reasoning_delta'
+    )
+    const liveText = test.recordedEvents.find(
+      (event) => event.kind === 'assistant_text_delta'
+    )
+    expect(liveReasoning).toMatchObject({
+      item: {
+        createdAt: test.appliedItems.find((item) => item.kind === 'assistant_reasoning')?.createdAt
+      }
+    })
+    expect(liveText).toMatchObject({
+      item: {
+        createdAt: test.appliedItems.find((item) => item.kind === 'assistant_text')?.createdAt
+      }
+    })
   })
 
   it('allocates distinct runtime ids when separate model steps reuse a provider call id', async () => {

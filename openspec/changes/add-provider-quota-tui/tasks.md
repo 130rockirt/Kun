@@ -20,3 +20,8 @@
 
 - [x] 4.1 Add focused parser, security, command, client, responsive rendering, refresh, and navigation tests.
 - [x] 4.2 Run focused tests, Kun typecheck/build, repository typecheck/build, lint, and `git diff --check`; separate unrelated concurrent changes.
+
+## 5. Release review follow-up
+
+- [x] 5.1 Keep runtime/TUI quota classification aligned with the GUI for Grok and Kimi Code.
+- [x] 5.2 Add focused Grok gRPC-web and Kimi Code parser/classification coverage.

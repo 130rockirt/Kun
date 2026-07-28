@@ -103,6 +103,7 @@ export type BuiltinToolName =
   | 'edit'
   | 'write'
   | 'grep'
+  | 'glob'
   | 'find'
   | 'ls'
   | 'lsp'
@@ -116,6 +117,7 @@ export const allBuiltinToolNames: Set<BuiltinToolName> = new Set([
   'edit',
   'write',
   'grep',
+  'glob',
   'find',
   'ls',
   'lsp',
@@ -211,6 +213,7 @@ export type BuiltinLocalToolsOptions = {
   write?: WriteLocalToolOptions
   edit?: EditLocalToolOptions
   grep?: GrepLocalToolOptions
+  glob?: FindLocalToolOptions
   find?: FindLocalToolOptions
   ls?: LsLocalToolOptions
 }

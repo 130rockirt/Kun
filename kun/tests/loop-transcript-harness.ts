@@ -11,6 +11,7 @@ import type {
   ToolHostResult
 } from '../src/ports/tool-host.js'
 import type { Harness } from './loop-test-harness.js'
+import type { TurnRunOutcome } from '../src/loop/turn-execution-types.js'
 
 /**
  * JSON-safe projection used by the loop transcript tests. It intentionally
@@ -100,7 +101,7 @@ type TranscriptNormalizationState = {
 }
 
 export type LoopTranscript = {
-  status: TurnStatus
+  status: TurnRunOutcome
   modelRequests: NormalizedModelRequest[]
   events: NormalizedRuntimeEvent[]
   eventProjection: TranscriptValue
@@ -185,7 +186,7 @@ export async function runTranscript(input: {
 export async function captureTranscript(input: {
   harness: Harness
   model: ScriptedCapturingModel
-  status: TurnStatus
+  status: TurnRunOutcome
   toolHost?: CapturingToolHost
 }): Promise<LoopTranscript> {
   const [events, sessionItems, thread] = await Promise.all([

@@ -479,7 +479,7 @@ export type CoreTurnItemJson = {
   displayText?: string
   guiDesignCanvas?: boolean
   guiDesignMode?: boolean
-  messageSource?: 'background_shell' | 'background_subagent'
+  messageSource?: 'background_shell' | 'background_subagent' | 'graph_runtime'
   toolName?: string
   callId?: string
   toolKind?: 'tool_call' | 'command_execution' | 'file_change'

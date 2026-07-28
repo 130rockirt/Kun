@@ -13,6 +13,7 @@ const client = vi.hoisted(() => ({
   listCandidates: vi.fn(),
   listJobs: vi.fn(),
   patch: vi.fn(),
+  steer: vi.fn(),
   readArtifact: vi.fn()
 }))
 
@@ -443,6 +444,40 @@ describe('Graph renderer store', () => {
       expect.stringContaining('node_1')
     )
     expect(useGraphStore.getState().runs[0]).toBe(revised)
+  })
+
+  it('routes active source-turn guidance to the owning GraphRun Lead', async () => {
+    const current = run('run_1', 3)
+    const steered = {
+      ...current,
+      lastEventSeq: 4,
+      steering: [{
+        steeringId: 'steering_1',
+        target: { kind: 'lead' },
+        text: 'Inspect the failing check.',
+        status: 'persisted',
+        createdAt: '2026-07-26T00:00:01.000Z'
+      }]
+    } as GraphRun
+    useGraphStore.setState({
+      threadId: current.threadId,
+      runs: [current],
+      selectedRunId: current.id
+    })
+    client.steer.mockResolvedValue(steered)
+
+    await expect(useGraphStore.getState().steerSourceTurn(
+      current.threadId,
+      current.sourceTurnId,
+      'Inspect the failing check.'
+    )).resolves.toBe(true)
+
+    expect(client.steer).toHaveBeenCalledWith(
+      current.id,
+      'Inspect the failing check.',
+      { kind: 'lead' }
+    )
+    expect(useGraphStore.getState().runs[0]).toBe(steered)
   })
 
   it('pages artifact previews without requesting unbounded content', async () => {

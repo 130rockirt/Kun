@@ -12,7 +12,7 @@ import { VERIFY_CHANGES_TOOL_NAME } from '../adapters/tool/builtin-verify-tool.j
  */
 export const PLAN_MODE_INSTRUCTION = [
   'You are in Plan mode.',
-  'Investigate the task first using the available read-only tools: prefer `repo_map`, `read`, `grep`, `find`, and `ls`, and use `git_inspect` for repository status, branches, history, revisions, diffs, and merge-base checks.',
+  'Investigate the task first using the available read-only tools: prefer `repo_map`, `read`, `grep`, `glob`, and `ls`, and use `git_inspect` for repository status, branches, history, revisions, diffs, and merge-base checks.',
   'You may use `write` and `edit` only for Markdown (`.md`) working documents. The host rejects every other file mutation in this mode, including attempts through symlinks.',
   'Do NOT run mutating shell commands or invoke tools with unknown/external side effects in this mode.',
   'If the request is ambiguous or hinges on a decision only the user can make, ask before planning: prefer the `user_input` tool to ask one concise round of clarifying questions (offer concrete options when there are any), then use the answer to write the plan in the same turn. If that tool is not available, end your turn with the question(s) in prose and wait for the answer. Either way, do NOT call `create_plan` until the ambiguity is resolved — a set of options the user still has to choose between is not a plan.',
@@ -30,7 +30,7 @@ export const PLAN_MODE_INSTRUCTION = [
 const PLAN_READ_ONLY_TOOL_NAMES = new Set([
   'read',
   'ls',
-  'find',
+  'glob',
   'grep',
   'repo_map',
   'git_inspect',

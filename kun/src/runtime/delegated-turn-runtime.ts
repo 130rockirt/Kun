@@ -1,3 +1,5 @@
+import type { TurnRunOutcome } from '../loop/turn-execution-types.js'
+
 export type DelegatedRuntimeCapabilities = {
   nativeResume: boolean
   structuredStreaming: boolean
@@ -26,7 +28,7 @@ export interface DelegatedTurnRuntime {
     turnId: string,
     signal: AbortSignal,
     providerId?: string
-  ): Promise<'completed' | 'failed' | 'aborted'>
+  ): Promise<TurnRunOutcome>
 }
 
 export function composeDelegatedTurnRuntimes(
@@ -83,7 +85,7 @@ export class ReplaceableDelegatedTurnRuntime implements DelegatedTurnRuntime {
     turnId: string,
     signal: AbortSignal,
     providerId?: string
-  ): Promise<'completed' | 'failed' | 'aborted'> {
+  ): Promise<TurnRunOutcome> {
     const runtime = this.resolveProvider(providerId)
     if (!runtime) throw new Error('no delegated runtime owns this turn')
     return runtime.runTurn(threadId, turnId, signal, providerId)

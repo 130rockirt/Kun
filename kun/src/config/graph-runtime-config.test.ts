@@ -37,4 +37,27 @@ describe('Graph runtime token accounting', () => {
     expect(parsedDefault.scheduler.maxNodeWallTimeMs).toBe(24 * 60 * 60_000)
     expect(parsedLower.scheduler.maxNodeWallTimeMs).toBe(2 * 60 * 60_000)
   })
+
+  it('defaults total GraphRun wall time to seven days while preserving narrower limits', () => {
+    const parsedDefault = GraphRuntimeConfigSchema.parse({
+      ...DEFAULT_GRAPH_RUNTIME_CONFIG,
+      scheduler: {
+        ...DEFAULT_GRAPH_RUNTIME_CONFIG.scheduler,
+        maxRunWallTimeMs: undefined
+      }
+    })
+    const parsedLower = GraphRuntimeConfigSchema.parse({
+      ...DEFAULT_GRAPH_RUNTIME_CONFIG,
+      scheduler: {
+        ...DEFAULT_GRAPH_RUNTIME_CONFIG.scheduler,
+        maxRunWallTimeMs: 6 * 60 * 60_000
+      }
+    })
+
+    expect(DEFAULT_GRAPH_RUNTIME_CONFIG.scheduler.maxRunWallTimeMs)
+      .toBe(7 * 24 * 60 * 60_000)
+    expect(parsedDefault.scheduler.maxRunWallTimeMs)
+      .toBe(7 * 24 * 60 * 60_000)
+    expect(parsedLower.scheduler.maxRunWallTimeMs).toBe(6 * 60 * 60_000)
+  })
 })

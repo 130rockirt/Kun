@@ -2,6 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ChatBlock, NormalizedThread, ThreadEventSink } from '../agent/types'
 import type { ChatState, ChatStoreGet, ChatStoreSet, GuiPlanMessageContext } from './chat-store-types'
 import { rendererRuntimeClient } from '../agent/runtime-client'
+import { graphRuntimeClient } from '../graph/graph-runtime-client'
+import { useGraphStore } from '../graph/graph-store'
+import type { GraphRun } from '../graph/graph-types'
 import { useWriteWorkspaceStore } from '../write/write-workspace-store'
 import type { BrowserStorageLike } from '../lib/browser-storage'
 import {
@@ -103,6 +106,13 @@ describe('chat-store-thread-actions queued messages', () => {
     rendererRuntimeClient.invalidateSettings()
     registryMock.getProvider.mockReset()
     registryMock.getProvider.mockReturnValue({})
+    useGraphStore.setState({
+      threadId: null,
+      runs: [],
+      selectedRunId: null,
+      selectedNodeId: null,
+      error: null
+    })
   })
 
   afterEach(() => {
@@ -147,6 +157,45 @@ describe('chat-store-thread-actions queued messages', () => {
     state.composerOrchestration = 'direct'
     expect(state.queuedMessages[0]?.orchestration).toBe('graph')
     expect(state.currentTurnOrchestration).toBe('direct')
+  })
+
+  it('steers text into the active Graph source turn instead of admitting queued work', async () => {
+    const { actions, state } = buildHarness()
+    state.currentTurnId = 'turn_graph_lead'
+    state.currentTurnOrchestration = 'graph'
+    const activeRun = {
+      id: 'run_1',
+      threadId: 'thr_existing',
+      sourceTurnId: 'turn_graph_lead',
+      status: 'running',
+      lastEventSeq: 4
+    } as GraphRun
+    useGraphStore.setState({
+      threadId: 'thr_existing',
+      runs: [activeRun],
+      selectedRunId: activeRun.id
+    })
+    const steer = vi.spyOn(graphRuntimeClient, 'steer').mockResolvedValue({
+      ...activeRun,
+      lastEventSeq: 5
+    })
+
+    await expect(actions.sendMessage(
+      'Please reassign the blocked node.',
+      'agent'
+    )).resolves.toBe(true)
+
+    expect(steer).toHaveBeenCalledWith(
+      'run_1',
+      'Please reassign the blocked node.',
+      { kind: 'lead' }
+    )
+    expect(state.queuedMessages).toEqual([])
+    expect(state.blocks).toContainEqual(expect.objectContaining({
+      kind: 'user',
+      turnId: 'turn_graph_lead',
+      text: 'Please reassign the blocked node.'
+    }))
   })
 
   it('persists queued messages and their reordered send order for the active thread', async () => {

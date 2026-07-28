@@ -36,7 +36,6 @@ const { KUN_RUNTIME_REQUIRED_PATHS } = require('./after-pack.cjs')
 
 const EXTENSION_ID = 'kun-smoke.packaged'
 const DEFAULT_EXTENSION_IDS = [
-  'kun-examples.kun-video-editor',
   'kun-examples.presentation-studio',
   'kun-examples.social-media-sidebar'
 ]

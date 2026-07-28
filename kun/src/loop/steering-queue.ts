@@ -120,6 +120,11 @@ export class SteeringQueue {
     return this.sealedTurns.has(turnId)
   }
 
+  /** Reopen admission for a durable turn that is resuming a suspended execution slice. */
+  reopen(turnId: string): void {
+    this.sealedTurns.delete(turnId)
+  }
+
   clear(turnId: string): void {
     this.buffers.delete(turnId)
     this.sealedTurns.delete(turnId)

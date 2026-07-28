@@ -122,7 +122,7 @@ export function stripScrollbackErase(data: string): string {
 }
 
 export function stripMouseTrackingEnable(data: string): string {
-  return data.replace(/\x1b\[\?(?:1000|1002|1003|1006)h/gu, '')
+  return data.replace(new RegExp(String.raw`\u001B\[\?(?:1000|1002|1003|1006)h`, 'gu'), '')
 }
 
 function terminalTitle(value: string): string {

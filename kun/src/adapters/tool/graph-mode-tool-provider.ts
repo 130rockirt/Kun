@@ -141,12 +141,6 @@ export function buildGraphModeLocalTools(options: {
               status: 'persisted',
               createdAt: nowIso()
             }, command)
-            await options.signalSupervision?.({
-              runId,
-              reason: 'user_steering',
-              nodeIds: stringArg(args.nodeId) ? [stringArg(args.nodeId)] : [],
-              digest: text
-            })
             return { output }
           }
           throw new Error(`unsupported Graph control action: ${action}`)

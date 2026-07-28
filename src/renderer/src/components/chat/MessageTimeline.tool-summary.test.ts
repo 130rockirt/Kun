@@ -959,14 +959,23 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
         isProcessing: true,
         liveReasoning: '**current reasoning summary**\n\n<!-- -->',
         live: '',
+        durationMs: 74_000,
         filePreviewWorkspaceRoot: '/tmp/project',
         viewportRef: { current: null }
       })
     )
 
+    expect(html).toContain('1m 14s')
     expect(html).toContain('Thinking… · Read 1 file')
+    expect(html.indexOf('1m 14s')).toBeLessThan(
+      html.indexOf('Thinking… · Read 1 file')
+    )
     expect(html).toContain('ds-shiny-text')
     expect(html).toContain('aria-expanded="false"')
+    expect(html.match(/ds-work-logo-phase-trail/g) ?? []).toHaveLength(1)
+    expect(html.indexOf('ds-work-logo-phase-trail')).toBeGreaterThan(
+      html.indexOf('Thinking… · Read 1 file')
+    )
     expect(html).not.toContain('current reasoning summary')
     expect(html).not.toContain('&lt;!-- --&gt;')
   })
@@ -1073,6 +1082,10 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
     expect(html).toContain('发现阻塞项：继续审阅。')
     expect(html).toContain('aria-expanded="false"')
     expect(html.indexOf('Thinking… · Read 1 file · Searched once')).toBeLessThan(
+      html.indexOf('发现阻塞项：继续审阅。')
+    )
+    expect(html.match(/ds-work-logo-phase-trail/g) ?? []).toHaveLength(1)
+    expect(html.indexOf('ds-work-logo-phase-trail')).toBeGreaterThan(
       html.indexOf('发现阻塞项：继续审阅。')
     )
   })
@@ -1403,11 +1416,13 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
         isProcessing: false,
         liveReasoning: '',
         live: '',
+        durationMs: 87_000,
         filePreviewWorkspaceRoot: '/tmp/project',
         viewportRef: { current: null }
       })
     )
 
+    expect(html).toContain('1m 27s')
     expect(html).toContain('The final answer is ready.')
     expect(html).toContain('ds-chat-answer')
     expect(html).toContain('Read 1 file')
@@ -1485,6 +1500,10 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
 
     expect(html).toContain('role="status"')
     expect(html).toMatch(/Compacting context|compactionRunning|正在压缩上下文/)
+    expect(html).toContain('ds-work-logo-phase-trail')
+    expect(html.indexOf('ds-work-logo-phase-trail')).toBeGreaterThan(
+      html.indexOf('role="status"')
+    )
     expect(html).not.toContain('aria-expanded=')
   })
 

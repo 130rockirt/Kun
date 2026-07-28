@@ -221,7 +221,7 @@ const GraphSchedulerRuntimeConfigSchema = z.object({
   maxAttemptsPerNode: PositiveInt.max(20).default(3),
   maxRevisions: PositiveInt.max(128).default(16),
   maxLoopIterations: z.number().int().min(0).max(128).default(5),
-  maxRunWallTimeMs: PositiveInt.max(30 * 24 * 60 * 60 * 1_000).default(6 * 60 * 60 * 1_000),
+  maxRunWallTimeMs: PositiveInt.max(30 * 24 * 60 * 60 * 1_000).default(7 * 24 * 60 * 60 * 1_000),
   maxNodeWallTimeMs: PositiveInt.max(24 * 60 * 60 * 1_000).default(24 * 60 * 60 * 1_000),
   maxTotalTokens: PositiveInt.max(1_000_000_000).optional(),
   maxArtifactBytes: z.number().int().min(0).max(100_000_000_000).default(1024 * 1024 * 1024),
@@ -338,7 +338,7 @@ export const DEFAULT_GRAPH_RUNTIME_CONFIG: GraphRuntimeConfig = GraphRuntimeConf
     maxAttemptsPerNode: 3,
     maxRevisions: 16,
     maxLoopIterations: 5,
-    maxRunWallTimeMs: 6 * 60 * 60 * 1_000,
+    maxRunWallTimeMs: 7 * 24 * 60 * 60 * 1_000,
     maxNodeWallTimeMs: 24 * 60 * 60 * 1_000,
     maxArtifactBytes: 1024 * 1024 * 1024,
     budgetWarningRatio: 0.8

@@ -1044,7 +1044,6 @@ export function ConversationTurn({
     () => summarizeProcessWork(workProcessBlocks, t),
     [t, workProcessBlocks]
   )
-  const onlyCompactionProcess = processBlocks.length > 0 && workProcessBlocks.length === 0
   const workExpanded = workExpandedOverride ?? false
   const reviewBlocks = useMemo(
     () => turn.blocks.filter((block) => block.kind === 'review'),
@@ -1078,10 +1077,11 @@ export function ConversationTurn({
   // the final assistant text remains outside it.
 
   const hasProcess =
+    isProcessing ||
     workProcessBlocks.length > 0 ||
     (runtimeErrorBlocks.length > 0 && typeof durationMs === 'number')
-  const showLiveProgress =
-    isProcessing && !onlyCompactionProcess && !liveProcessText.trim()
+  const showLiveProgress = isProcessing
+  const showLiveThinking = Boolean(liveProcessText.trim())
   const liveToolBlock = useMemo(
     () => [...workProcessBlocks].reverse().find(
       (block): block is Extract<ChatBlock, { kind: 'tool' }> =>
@@ -1117,18 +1117,16 @@ export function ConversationTurn({
 
       {hasProcess ? (
         <div className="flex flex-col gap-1 pb-2">
-          {!isProcessing ? (
-            <WorkMetaRow
-              processing={false}
-              stepCount={workProcessBlocks.length}
-              durationMs={durationMs}
-              reasoningDurationMs={reasoningDurationMs}
-              summary={workSummary}
-              expanded={workExpanded}
-              collapsible={workProcessBlocks.length > 0}
-              onToggle={() => setWorkExpandedOverride((value) => !(value ?? false))}
-            />
-          ) : null}
+          <WorkMetaRow
+            processing={isProcessing}
+            stepCount={workProcessBlocks.length}
+            durationMs={durationMs}
+            reasoningDurationMs={reasoningDurationMs}
+            summary={workSummary}
+            expanded={isProcessing || workExpanded}
+            collapsible={!isProcessing && workProcessBlocks.length > 0}
+            onToggle={() => setWorkExpandedOverride((value) => !(value ?? false))}
+          />
           {processSections.length > 0 ? (
             <div className="flex flex-col gap-1">
               {processSections.map((section) => (
@@ -1200,10 +1198,6 @@ export function ConversationTurn({
         <TimelineRuntimeError key={block.id} block={block} />
       ))}
 
-      {showLiveProgress ? (
-        <LiveTurnProgressRow tool={liveToolBlock} />
-      ) : null}
-
       {!isProcessing && devPreviewCard ? devPreviewCard : null}
 
       {planResult ? (
@@ -1227,21 +1221,26 @@ export function ConversationTurn({
         />
       ) : null}
 
-      {/* The compaction marker renders LAST so "已压缩上下文" sits at the very
-          bottom of the turn it belongs to — i.e. the bottom of the latest turn
-          when the compaction just happened — rather than wedged between the
-          user's question and the assistant's answer. */}
+      {/* The compaction marker remains the final persisted entry in the turn.
+          While processing, the transient progress row renders after it so the
+          active animation always stays at the visual bottom. */}
       {compactionBlocks.map((block) => (
         <CompactionDivider key={block.id} block={block} />
       ))}
+
+      {showLiveProgress ? (
+        <LiveTurnProgressRow tool={liveToolBlock} thinking={showLiveThinking} />
+      ) : null}
     </div>
   )
 }
 
 function LiveTurnProgressRow({
-  tool
+  tool,
+  thinking
 }: {
   tool?: Extract<ChatBlock, { kind: 'tool' }>
+  thinking: boolean
 }): ReactElement {
   const { t, i18n } = useTranslation('common')
   const swimMode = useWorkLogoSwimMode(true)
@@ -1258,11 +1257,13 @@ function LiveTurnProgressRow({
     swimLabelKey as UiPluginLabelKey,
     i18n.language ?? 'zh'
   )
-  const label = tool
-    ? t('workingToolAction', { action: summarizeToolBlock(tool, t) })
-    : ikunModeOn
-      ? t(IKUN_WORK_LOGO_VARIANT_LABEL_KEYS[ikunVariant])
-      : pluginLabel ?? t(swimLabelKey)
+  const label = thinking
+    ? t('thinkingNow')
+    : tool
+      ? t('workingToolAction', { action: summarizeToolBlock(tool, t) })
+      : ikunModeOn
+        ? t(IKUN_WORK_LOGO_VARIANT_LABEL_KEYS[ikunVariant])
+        : pluginLabel ?? t(swimLabelKey)
 
   return (
     <LiveTurnActivityRow

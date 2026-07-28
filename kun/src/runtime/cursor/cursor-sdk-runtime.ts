@@ -26,6 +26,7 @@ import type { UsageSnapshot } from '../../contracts/usage.js'
 import { userMessageTextWithComposerContexts } from '../../domain/composer-context.js'
 import { resolveTurnClientSurface } from '../../loop/turn-context-resolver.js'
 import { normalizeTurnLimits, type TurnLimitsConfig } from '../../loop/turn-limits.js'
+import type { TurnRunOutcome } from '../../loop/turn-execution-types.js'
 import type { SessionStore } from '../../ports/session-store.js'
 import type { ThreadStore } from '../../ports/thread-store.js'
 import { buildClientSurfaceInstruction } from '../../prompt/kun-prompt-context.js'
@@ -278,7 +279,7 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
     turnId: string,
     signal: AbortSignal,
     providerId?: string
-  ): Promise<'completed' | 'failed' | 'aborted'> {
+  ): Promise<TurnRunOutcome> {
     const runtimeController = new AbortController()
     const abortRuntime = (): void => runtimeController.abort()
     signal.addEventListener('abort', abortRuntime, { once: true })
@@ -306,7 +307,7 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
     signal: AbortSignal,
     providerId: string | undefined,
     abortRuntime: () => void
-  ): Promise<'completed' | 'failed' | 'aborted'> {
+  ): Promise<TurnRunOutcome> {
     const thread = await this.deps.threadStore.get(threadId)
     const turn = thread?.turns.find((candidate) => candidate.id === turnId)
     if (!thread || !turn) {
@@ -746,7 +747,11 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
           }
         }
       }
-      await this.deps.turns.finishTurn({ threadId, turnId, status: 'completed' })
+      const suspension = await this.deps.turns.suspendGraphLeadTurn?.({ threadId, turnId })
+      const outcome: TurnRunOutcome = suspension === 'suspended' ? 'suspended' : 'completed'
+      if (outcome === 'completed') {
+        await this.deps.turns.finishTurn({ threadId, turnId, status: 'completed' })
+      }
       if (preparation && this.deps.sessionCoordinator) {
         try {
           await this.deps.sessionCoordinator.commit({
@@ -760,7 +765,7 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
           // failure simply forces a portable rebase on the next turn.
         }
       }
-      return 'completed'
+      return outcome
     } catch (error) {
       const abortedBeforeFailure = signal.aborted
       abortRuntime()

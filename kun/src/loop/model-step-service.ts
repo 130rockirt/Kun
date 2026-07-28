@@ -111,7 +111,8 @@ const GRAPH_MODE_INSTRUCTION = [
   'Give each node a focused objective, explicit acceptance criteria, least-privilege scopes, review policy, and a suitable existing or ephemeral project agent.',
   'Do not use ordinary delegate_task/profile ids or the legacy task_graph: omit node.assignment for host Graph-agent routing, use an exact Graph registry id only when known, or define a graph-scoped ephemeral role.',
   'Use typed dependencies and only bounded LoopGates; do not encode an unbounded cycle.',
-  'After creation, the host scheduler and Graph workers execute the plan while the Lead supervises through validated Graph tools.'
+  'After creation, remain accountable for this GraphRun: the host will suspend and resume this same turn for material events until terminal delivery.',
+  'On every supervision continuation, inspect durable truth, report a concise milestone, resolve safe issues with validated Graph controls, and retry, repair, patch, or rebind eligible work when evidence requires it.'
 ].join(' ')
 
 function graphCreateRunRecoveryInstruction(
@@ -761,6 +762,11 @@ export class ModelStepService {
       })
       return 'failed'
     }
+    // Tool results become input to the *next* request. Reserve the configured
+    // output budget now so built-in source tools can return the largest honest
+    // page that has a realistic chance of fitting instead of relying on the
+    // send-time history cleaner to silently rewrite it.
+    const sourceResultBudgetTokens = Math.max(0, hardCap - inputTokens - outputTokens)
     const contextThresholds = this.deps.compactor.thresholds(model, providerId)
     const contextWindowTokens = modelCapabilities.contextWindowTokens ??
       Math.max(contextThresholds.softThreshold, contextThresholds.hardThreshold)
@@ -866,6 +872,7 @@ export class ModelStepService {
       prepared,
       ...(providerId ? { modelProviderId: providerId } : {}),
       modelReasoningEffort: modelRoute.reasoningEffort ?? turn.reasoningEffort ?? 'auto',
+      sourceResultBudgetTokens,
       toolProviderMetadata,
       toolKinds,
       toolProviderKinds,

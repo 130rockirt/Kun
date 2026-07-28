@@ -113,6 +113,12 @@ export type ToolHostContext = {
   imContext?: boolean
   /** Active model capability metadata used by capability-aware providers. */
   model?: ModelCapabilityMetadata
+  /**
+   * Transient model-visible token allowance for source-tool results in this
+   * dispatch. It is derived immediately before execution and is never stored
+   * in the session log or exposed in a tool schema.
+   */
+  sourceResultBudgetTokens?: number
   /** Active model provider id selected for this turn. Child agents inherit this routing unless a profile overrides it. */
   modelProviderId?: string
   /** Effective reasoning strength selected for this model round. Custom child agents inherit it. */

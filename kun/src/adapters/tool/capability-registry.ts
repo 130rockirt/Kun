@@ -31,6 +31,7 @@ export type CapabilityToolSpec = {
 const PLAN_MODE_ALLOWED_TOOL_NAMES = new Set([
   'read',
   'grep',
+  'glob',
   'find',
   'ls',
   'repo_map',
@@ -123,6 +124,7 @@ export class CapabilityRegistry {
         providerKind: record.provider.kind
       }, context)) continue
       if (!this.canUseTool(record.tool, context)) continue
+      if (record.tool.modelAdvertised === false) continue
       if (!isToolAdvertisedInSandbox(record.tool, context)) continue
       if (record.tool.shouldAdvertise) {
         if (!context || !record.tool.shouldAdvertise(context)) continue

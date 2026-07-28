@@ -144,13 +144,15 @@ describe('TrayProviderQuotaPopover', () => {
     await act(async () => renderer.unmount())
   })
 
-  it('keeps provider wrapping and quota details independently scrollable', async () => {
+  it('keeps providers in one horizontal row and quota details independently scrollable', async () => {
     const nodeFs = 'node:fs/promises'
     const { readFile } = await import(/* @vite-ignore */ nodeFs)
     const css = await readFile(new URL('../../styles/tray-provider-quota.css', import.meta.url), 'utf8')
 
-    expect(css).toMatch(/\.tray-quota-tabs \{[\s\S]*grid-template-columns: repeat\(5, minmax\(0, 1fr\)\)/)
-    expect(css).toMatch(/\.tray-quota-switcher \{[\s\S]*overflow-y: auto/)
+    expect(css).toMatch(/\.tray-quota-tabs \{[\s\S]*display: flex/)
+    expect(css).toMatch(/\.tray-provider-tab \{[\s\S]*flex: 1 0 56px/)
+    expect(css).toMatch(/\.tray-quota-switcher \{[\s\S]*overflow-x: auto/)
+    expect(css).toMatch(/\.tray-quota-switcher \{[\s\S]*overflow-y: hidden/)
     expect(css).toMatch(/\.tray-quota-content \{[\s\S]*min-height: 0;[\s\S]*overflow-y: auto/)
     expect(css).toMatch(/\.tray-quota-footer \{[\s\S]*flex: none/)
     expect(css).toContain(':root[data-platform="win32"] .tray-quota-popover')

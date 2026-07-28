@@ -162,7 +162,7 @@ Kun retains at least the immediately previous selected version until explicit re
 
 ## Product-bundled default packages
 
-Kun desktop ships `kun-examples.kun-video-editor` as both a default local extension and the repository's complete Extension API v1.2 reference example. Its only source tree is `examples/extensions/kun-video-editor`; product code does not import that implementation or register its contributions privately.
+Kun desktop ships `kun-examples.presentation-studio` and `kun-examples.social-media-sidebar` by default. `kun-examples.kun-video-editor` remains a source-only Extension API v1.2 example: it is excluded from the default catalog, product builds, Release packaging, and first-launch seeding.
 
 The product build runs the normal validate/pack CLI and places the resulting deterministic `.kunx` beside `bundled-extensions/catalog.json`. The catalog pins ID, version, archive name, SHA-256, engine range, API version, and exact permissions. On a fresh profile, `kun serve` verifies that catalog and calls the same `ExtensionPackageManager.installArchive` transaction used for local side-loading. It does not copy an extracted tree into the registry or bypass compatibility, integrity, migration, permission, or activation checks.
 
@@ -175,7 +175,7 @@ Default seeding grants the product-shipped package permission snapshot and enabl
 - an automatic bundled update requires a newer SemVer, the prior seeded fingerprint, and the exact same permission set; added permissions require the ordinary user review flow;
 - identical versions with different bytes, downgrades, invalid catalogs, and hash mismatches fail closed while the last valid registry state remains usable.
 
-The downloadable release `.kunx` and the bundled default are produced by the same deterministic packer. Authors can therefore inspect, build, validate, install, modify, and repack the example using only documented surfaces; the out-of-box behavior is not a hidden extension tier.
+The product defaults are produced by the same deterministic packer. Authors can still inspect and develop the repository's source examples using documented surfaces; the out-of-box behavior is not a hidden extension tier.
 
 ## Side-load a local `.kunx`
 

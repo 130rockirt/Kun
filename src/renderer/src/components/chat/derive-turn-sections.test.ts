@@ -28,6 +28,27 @@ function processingSections(input: {
 }
 
 describe('deriveTurnSections', () => {
+  it('does not render internal Graph supervision prompts as user or process content', () => {
+    const result = sections([
+      {
+        kind: 'user',
+        id: 'graph_runtime_1',
+        text: 'Graph Lead supervision for durable run run_1.',
+        meta: { messageSource: 'graph_runtime' }
+      },
+      {
+        kind: 'assistant',
+        id: 'milestone_1',
+        text: 'The first node passed review.'
+      }
+    ])
+
+    expect(result.processBlocks).toEqual([])
+    expect(result.assistantContentBlocks.map((block) => block.id)).toEqual([
+      'milestone_1'
+    ])
+  })
+
   it('renders the final assistant answer as content even when reasoning was persisted after it', () => {
     const result = sections([
       { kind: 'assistant', id: 'answer', text: '你好！' },

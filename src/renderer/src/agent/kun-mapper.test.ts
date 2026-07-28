@@ -1774,6 +1774,25 @@ describe('Kun extension metadata mapping', () => {
       }
     })
   })
+
+  it('preserves internal Graph supervision source for timeline filtering', () => {
+    const block = chatBlockFromItem({
+      id: 'item_graph_supervision',
+      turnId: 'turn_1',
+      threadId: 'thr_1',
+      role: 'user',
+      status: 'completed',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      kind: 'user_message',
+      text: 'Graph Lead supervision for durable run run_1.',
+      messageSource: 'graph_runtime'
+    })
+
+    expect(block).toMatchObject({
+      kind: 'user',
+      meta: { messageSource: 'graph_runtime' }
+    })
+  })
 })
 
 describe('usage event mapping', () => {

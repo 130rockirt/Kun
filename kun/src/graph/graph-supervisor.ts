@@ -17,7 +17,7 @@ import type { GraphSupervisionPort } from './graph-scheduler.js'
 import type { GraphRunStore } from './graph-run-store.js'
 import { runGraphBackgroundTask } from './graph-background-task.js'
 import {
-  graphAutomaticSupervisionEnabled,
+  graphLeadLifecycleSupervisionEnabled,
   graphSupervisionEnabled
 } from './graph-rollout-policy.js'
 import { graphBlockedProviderIds } from './graph-security-policy.js'
@@ -66,7 +66,7 @@ export class GraphSupervisor implements GraphSupervisionPort {
     if (this.stopped) return
     if (this.sweepTimer) clearInterval(this.sweepTimer)
     this.sweepTimer = undefined
-    if (!graphAutomaticSupervisionEnabled(this.options.config())) {
+    if (!graphLeadLifecycleSupervisionEnabled(this.options.config())) {
       this.clearPending()
       return
     }
@@ -86,7 +86,7 @@ export class GraphSupervisor implements GraphSupervisionPort {
   async signal(
     input: Parameters<GraphSupervisionPort['signal']>[0]
   ): Promise<void> {
-    if (this.stopped || !graphSupervisionEnabled(this.options.config())) return
+    if (this.stopped || !graphLeadLifecycleSupervisionEnabled(this.options.config())) return
     const appended = await this.withRunQueue(input.runId, async () => {
       const run = await this.options.store.get(input.runId)
       if (!run) return null
@@ -108,7 +108,20 @@ export class GraphSupervisor implements GraphSupervisionPort {
       })
     })
     if (!appended || appended.duplicate) return
-    if (!graphAutomaticSupervisionEnabled(this.options.config())) return
+    if (!graphLeadLifecycleSupervisionEnabled(this.options.config())) return
+    this.queuePending(input)
+  }
+
+  redeliver(
+    input: Parameters<GraphSupervisionPort['signal']>[0]
+  ): void {
+    if (this.stopped || !graphLeadLifecycleSupervisionEnabled(this.options.config())) return
+    this.queuePending(input)
+  }
+
+  private queuePending(
+    input: Parameters<GraphSupervisionPort['signal']>[0]
+  ): void {
     const pending = this.pending.get(input.runId) ?? {
       reasons: new Set(),
       nodeIds: new Set(),
@@ -134,7 +147,7 @@ export class GraphSupervisor implements GraphSupervisionPort {
   async flush(runId: string): Promise<void> {
     const pending = this.pending.get(runId)
     if (!pending || this.stopped) return
-    if (!graphAutomaticSupervisionEnabled(this.options.config())) {
+    if (!graphLeadLifecycleSupervisionEnabled(this.options.config())) {
       if (pending.timer) clearTimeout(pending.timer)
       this.pending.delete(runId)
       return
@@ -149,7 +162,11 @@ export class GraphSupervisor implements GraphSupervisionPort {
       if (!run) return
       if (
         !this.options.leadTurn ||
-        (isTerminal(run.status) && !pending.reasons.has('completion'))
+        (
+          isTerminal(run.status) &&
+          !pending.reasons.has('completion') &&
+          !pending.reasons.has('failure')
+        )
       ) return
       try {
         await this.options.leadTurn({
@@ -164,7 +181,7 @@ export class GraphSupervisor implements GraphSupervisionPort {
         if (
           /active turn|capacity|not active|no longer accepting steering|steering queue/i.test(message) &&
           !this.stopped &&
-          graphAutomaticSupervisionEnabled(this.options.config())
+          graphLeadLifecycleSupervisionEnabled(this.options.config())
         ) {
           const retry = this.pending.get(runId) ?? {
             reasons: new Set(),
@@ -363,7 +380,7 @@ export class GraphSupervisor implements GraphSupervisionPort {
   }
 
   async sweepStalls(): Promise<number> {
-    if (!graphAutomaticSupervisionEnabled(this.options.config())) return 0
+    if (!graphLeadLifecycleSupervisionEnabled(this.options.config())) return 0
     const runs = await this.options.store.list({ statuses: ['running'] })
     let signaled = 0
     const now = this.nowMs()

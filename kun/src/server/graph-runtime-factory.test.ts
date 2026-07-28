@@ -114,4 +114,92 @@ describe('GraphRuntimeComposition creation authority', () => {
     })
     await runtime.stop()
   })
+
+  it('records legacy source-turn ambiguity without fabricating a replacement Lead', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-graph-runtime-recovery-'))
+    const workspace = join(root, 'workspace')
+    await mkdir(workspace)
+    roots.push(root)
+    let id = 0
+    const threadStore = new InMemoryThreadStore()
+    const thread = createThreadRecord({
+      id: 'thread_legacy',
+      title: 'Legacy Graph recovery',
+      workspace,
+      model: 'test-model'
+    })
+    await threadStore.upsert({
+      ...thread,
+      turns: [createTurnRecord({
+        id: 'turn_legacy',
+        threadId: thread.id,
+        prompt: 'Build a graph.',
+        orchestration: 'graph',
+        status: 'completed'
+      })]
+    })
+    const runtime = new GraphRuntimeComposition({
+      dataDir: root,
+      config: () => testGraphConfig(),
+      artifactStore: new InMemoryArtifactStore(),
+      runtimeEvents: { record: vi.fn(async (event) => event as never) },
+      threadStore,
+      ids: { next: (prefix) => `${prefix}_${++id}` },
+      nowIso: () => '2026-07-26T00:00:00.000Z'
+    })
+    const identity = await runtime.registry.identify(workspace)
+    await runtime.control.create({
+      runId: 'run_legacy',
+      threadId: thread.id,
+      projectId: identity.projectId,
+      sourceTurnId: 'turn_legacy',
+      plan: testGraphPlan({ workspaceRoot: workspace }),
+      commandId: 'command_create_legacy',
+      idempotencyKey: 'create_legacy'
+    })
+    const leadTurn = vi.fn(async () => undefined)
+
+    await runtime.start({
+      delegation: () => undefined,
+      leadTurn,
+      authorityForRun: () => ({
+        workspaceRoot: workspace,
+        model: 'test-model',
+        providerId: 'default',
+        allowedModelProviderIds: ['default'],
+        allowedModels: ['test-model'],
+        allowedProviderIds: [],
+        reasoningEffort: 'off',
+        approvalPolicy: 'never',
+        sandboxMode: 'read-only',
+        allowedTools: [],
+        blockedTools: [],
+        allowedSkills: [],
+        blockedSkills: [],
+        allowedMcpServers: [],
+        blockedMcpServers: [],
+        readScopes: ['.'],
+        writeScopes: [],
+        networkAllowed: false
+      })
+    })
+
+    const events = await runtime.store.events('run_legacy')
+    expect(events).toContainEqual(expect.objectContaining({
+      event: expect.objectContaining({
+        type: 'supervision_requested',
+        payload: expect.objectContaining({
+          reason: 'recovery',
+          digest: expect.stringContaining('already-terminal source turn')
+        })
+      })
+    }))
+    expect(await threadStore.get(thread.id)).toMatchObject({
+      turns: [expect.objectContaining({
+        id: 'turn_legacy',
+        status: 'completed'
+      })]
+    })
+    await runtime.stop()
+  })
 })

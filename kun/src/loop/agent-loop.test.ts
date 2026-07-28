@@ -521,6 +521,7 @@ describe('AgentLoop interruption', () => {
       nowIso
     })
     const model = new ScriptedGraphModel()
+    let graphTerminal = false
     const turns = new TurnService({
       threadStore,
       sessionStore,
@@ -528,6 +529,13 @@ describe('AgentLoop interruption', () => {
       inflight,
       steering,
       compactor: new ContextCompactor(),
+      resolveGraphLeadRun: async ({ threadId }) => threadId === 'thr_graph_mode'
+        ? {
+            runId: 'graph_run_1',
+            lastEventSeq: graphTerminal ? 9 : 3,
+            terminal: graphTerminal
+          }
+        : null,
       ids,
       nowIso
     })
@@ -581,7 +589,9 @@ describe('AgentLoop interruption', () => {
       }
     })
 
-    await expect(loop.runTurn('thr_graph_mode', graphTurn.turnId)).resolves.toBe('completed')
+    await expect(loop.runTurn('thr_graph_mode', graphTurn.turnId)).resolves.toBe('suspended')
+    expect((await turns.getTurn('thr_graph_mode', graphTurn.turnId))?.status).toBe('running')
+    expect(turns.isTurnExecutionActive(graphTurn.turnId)).toBe(false)
     expect(model.requests).toHaveLength(3)
     expect(model.requests[0]?.requiredToolName).toBe('graph_create_run')
     expect(model.requests[0]?.modeInstruction).toContain('Graph Mode is active')
@@ -596,6 +606,23 @@ describe('AgentLoop interruption', () => {
         toolName: 'graph_create_run'
       })
     ]))
+
+    graphTerminal = true
+    await turns.resumeGraphLeadTurn({
+      threadId: 'thr_graph_mode',
+      turnId: graphTurn.turnId,
+      runId: 'graph_run_1',
+      lastDeliveredSeq: 9,
+      terminal: true
+    })
+    await turns.steerTurn({
+      threadId: 'thr_graph_mode',
+      turnId: graphTurn.turnId,
+      text: 'Present the persisted final Graph result.',
+      messageSource: 'graph_runtime'
+    })
+    await expect(loop.runTurn('thr_graph_mode', graphTurn.turnId)).resolves.toBe('completed')
+    expect((await turns.getTurn('thr_graph_mode', graphTurn.turnId))?.status).toBe('completed')
 
     const directModel = new CapturingCompleteModel()
     const directLoop = new AgentLoop({
@@ -1219,7 +1246,7 @@ const ALL_TOOLS: ModelToolSpec[] = [
   spec('write'),
   spec('edit'),
   spec('ls'),
-  spec('find'),
+  spec('glob'),
   spec('grep'),
   spec('bash'),
   spec('web_search'),
@@ -1228,7 +1255,7 @@ const ALL_TOOLS: ModelToolSpec[] = [
 ]
 
 const READ_ONLY_TOOLS = new Set([
-  'read', 'write', 'edit', 'ls', 'find', 'grep', 'web_search', 'web_fetch'
+  'read', 'write', 'edit', 'ls', 'glob', 'grep', 'web_search', 'web_fetch'
 ])
 
 describe('isStalePlanContext', () => {
@@ -1260,7 +1287,7 @@ describe('resolvePlanModeToolSpecs', () => {
     const names = result.map((t) => t.name)
     expect(names).toContain('read')
     expect(names).toContain('ls')
-    expect(names).toContain('find')
+    expect(names).toContain('glob')
     expect(names).toContain('grep')
     expect(names).toContain('web_search')
     expect(names).toContain('web_fetch')
@@ -1298,7 +1325,7 @@ describe('resolvePlanModeToolSpecs', () => {
       'write',
       'edit',
       'ls',
-      'find',
+      'glob',
       'grep',
       'web_search',
       'web_fetch',

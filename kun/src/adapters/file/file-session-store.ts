@@ -219,21 +219,16 @@ export class FileSessionStore implements SessionStore {
     const startedAt = performance.now()
     const raw = await readJsonl<TurnItem>(this.messagesPath(threadId))
     const latestById = new Map<string, TurnItem>()
+    const firstSeenIds: string[] = []
     for (const item of raw) {
+      if (!latestById.has(item.id)) firstSeenIds.push(item.id)
       latestById.set(item.id, item)
     }
-    const seen = new Set<string>()
-    // Walk newest→oldest keeping each id's latest write, push (O(1) amortized),
-    // then reverse once. The previous unshift-per-item was O(n²) and blocked the
-    // event loop for seconds on large threads, starving /health (KunAgent/Kun#621).
-    const deduped: TurnItem[] = []
-    for (let index = raw.length - 1; index >= 0; index -= 1) {
-      const item = raw[index]!
-      if (seen.has(item.id)) continue
-      seen.add(item.id)
-      deduped.push(latestById.get(item.id)!)
-    }
-    const ordered = deduped.reverse()
+    // Updates are append-only records, but they must not move an existing
+    // message to the end of the conversation. Keep each id's first insertion
+    // slot while reading its latest value. This stays O(n), unlike the old
+    // unshift-based dedupe that blocked large-thread reloads (#621).
+    const ordered = firstSeenIds.map((id) => latestById.get(id)!)
     const elapsedMs = performance.now() - startedAt
     if (elapsedMs >= SLOW_LOAD_ITEMS_LOG_MS) {
       // A slow cold read points at an oversized thread log as the likely

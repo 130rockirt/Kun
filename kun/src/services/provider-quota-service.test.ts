@@ -3,6 +3,7 @@ import {
   ProviderQuotaService,
   classifyProviderQuotaProbe,
   parseDeepSeekQuota,
+  parseKimiCodeQuota,
   parseMiniMaxQuota,
   parseMoonshotQuota,
   parseOpenAiQuota,
@@ -44,6 +45,18 @@ describe('ProviderQuotaService', () => {
       baseUrl: 'https://opencode.ai/zen/go/v1',
       apiKey: ''
     }))?.kind).toBe('opencode-go-local')
+    expect(classifyProviderQuotaProbe(profile({
+      id: 'grok-subscription',
+      name: 'Grok',
+      presetId: 'grok-subscription',
+      baseUrl: 'https://cli-chat-proxy.grok.com/v1'
+    }))?.kind).toBe('grok-subscription')
+    expect(classifyProviderQuotaProbe(profile({
+      id: 'kimi-code',
+      name: 'Kimi Code',
+      presetId: 'kimi-code',
+      baseUrl: 'https://api.kimi.com/coding/v1'
+    }))?.kind).toBe('kimi-code')
     expect(classifyProviderQuotaProbe(profile({
       id: 'lookalike',
       presetId: undefined,
@@ -230,5 +243,16 @@ describe('provider quota response parsers', () => {
       total_used: 3,
       total_available: 15
     })[0]).toMatchObject({ id: 'credits', limit: 18, used: 3, remaining: 15 })
+
+    expect(parseKimiCodeQuota({
+      usage: { limit: 2_048, remaining: 1_673, resetTime: '2027-01-09T15:23:13.373Z' },
+      limits: [{
+        window: { duration: 300, timeUnit: 'MINUTE' },
+        detail: { limit: 200, remaining: 181 }
+      }]
+    })).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'weekly', used: 375, limit: 2_048 }),
+      expect.objectContaining({ id: 'rate-limit-0', usedPercent: 9.5 })
+    ]))
   })
 })

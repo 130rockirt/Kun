@@ -95,6 +95,7 @@ import {
   writeWorkspaceForThreadId
 } from '../write/write-thread-registry'
 import { useWriteWorkspaceStore } from '../write/write-workspace-store'
+import { useGraphStore } from '../graph/graph-store'
 import {
   clearBusyWatchdog,
   resetBusyRecoveryAttempts,
@@ -992,23 +993,78 @@ export function createThreadActions(
     }
     const hasPendingActiveTurn = threadHasPendingRuntimeWork(get().blocks)
     if (get().busy || hasPendingActiveTurn) {
+      const state = get()
+      const graphGuidanceIsTextOnly = !(
+        overrides?.attachmentIds?.length ||
+        overrides?.attachments?.length ||
+        overrides?.fileReferences?.length ||
+        overrides?.composerContexts?.length ||
+        overrides?.guiPlan ||
+        overrides?.guiDesignArtifact ||
+        overrides?.guiDesignCanvas ||
+        overrides?.guiDesignMode ||
+        writeContext
+      )
+      if (
+        state.route === 'chat' &&
+        state.currentTurnOrchestration === 'graph' &&
+        state.activeThreadId &&
+        state.currentTurnId &&
+        graphGuidanceIsTextOnly
+      ) {
+        try {
+          const steered = await useGraphStore.getState().steerSourceTurn(
+            state.activeThreadId,
+            state.currentTurnId,
+            trimmedText
+          )
+          if (steered) {
+            const createdAt = new Date().toISOString()
+            const displayText = overrides?.displayText?.trim() || trimmedText
+            set((current) => ({
+              blocks: [
+                ...current.blocks,
+                {
+                  kind: 'user' as const,
+                  id: `graph-steering-${Date.now()}`,
+                  turnId: state.currentTurnId!,
+                  createdAt,
+                  text: displayText,
+                  ...(displayText !== trimmedText
+                    ? { meta: { displayText } }
+                    : {})
+                }
+              ],
+              error: null
+            }))
+            return true
+          }
+        } catch (error) {
+          set({
+            error: i18n.t('common:guideQueuedMessageFailed', {
+              message: formatRuntimeError(error)
+            })
+          })
+          return false
+        }
+      }
       if (overrides?.guiPlan || writeContext) {
         set({ error: i18n.t('common:composerQueuePlaceholder') })
         return false
       }
       const now = Date.now()
-      const activeThreadId = get().activeThreadId
+      const activeThreadId = state.activeThreadId
       const threadSnap = activeThreadId
-        ? get().threads.find((thread) => thread.id === activeThreadId)
+        ? state.threads.find((thread) => thread.id === activeThreadId)
         : undefined
-      const clawModel = activeClawChannel(get())?.model
+      const clawModel = activeClawChannel(state)?.model
       const overrideModel = overrides?.model?.trim()
       const composerModel =
-        overrideModel ?? (get().route === 'claw' && clawModel ? clawModel : get().composerModel.trim())
+        overrideModel ?? (state.route === 'claw' && clawModel ? clawModel : state.composerModel.trim())
       const composerProviderId =
-        overrides?.providerId?.trim() || fallbackComposerProviderIdForSend(get())
+        overrides?.providerId?.trim() || fallbackComposerProviderIdForSend(state)
       const composerAccountId = overrides?.accountId?.trim() || accountIdForComposerSelection(
-        get().composerModelGroups,
+        state.composerModelGroups,
         composerProviderId,
         composerModel
       )
@@ -1023,12 +1079,12 @@ export function createThreadActions(
         reference.relativePath.trim().length > 0 &&
         reference.name.trim().length > 0
       )
-      const composerContexts = get().route === 'chat'
-        ? overrides?.composerContexts ?? pendingComposerContexts(get())
+      const composerContexts = state.route === 'chat'
+        ? overrides?.composerContexts ?? pendingComposerContexts(state)
         : []
       const orchestration = overrides?.orchestration ??
-        (mode === 'agent' && get().route === 'chat' && get().graphEnabled
-          ? get().composerOrchestration
+        (mode === 'agent' && state.route === 'chat' && state.graphEnabled
+          ? state.composerOrchestration
           : 'direct')
       set((s) => ({
         queuedMessages: [

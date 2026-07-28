@@ -57,6 +57,18 @@ function dispatchInput(calls: ToolCallLike[]): ToolDispatchInput {
 }
 
 describe('ToolCallDispatcher', () => {
+  it('shares the source result budget across a parallel source batch', async () => {
+    const observed: number[] = []
+    const dispatcher = new ToolCallDispatcher({
+      executeSafely: vi.fn(async (input: { call: ToolCallLike; context: ToolHostContext }) => {
+        observed.push(input.context.sourceResultBudgetTokens ?? 0)
+        return resultFor(input.call)
+      }),
+      persistResult: vi.fn(async () => undefined), persistSuppressed: vi.fn(async () => undefined)
+    } as never)
+    await dispatcher.dispatch({ dispatch: dispatchInput([call('read', 'a'), call('grep', 'b')]), context: { ...context, sourceResultBudgetTokens: 100 } })
+    expect(observed).toEqual([50, 50])
+  })
   it('fans out a read-only batch but persists results in model order', async () => {
     const started: string[] = []
     const persisted: string[] = []

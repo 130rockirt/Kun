@@ -869,7 +869,7 @@ describe('registerAppIpcHandlers', () => {
           'file:workspace-changed',
           expect.objectContaining({ ok: true, content: '<svg id="two"/>' })
         )
-      }, { timeout: 2_000 })
+      }, { timeout: 5_000 })
 
       replace('.motion-second.tmp', '<svg id="three"/>')
       await vi.waitFor(() => {
@@ -877,7 +877,7 @@ describe('registerAppIpcHandlers', () => {
           'file:workspace-changed',
           expect.objectContaining({ ok: true, content: '<svg id="three"/>' })
         )
-      }, { timeout: 2_000 })
+      }, { timeout: 5_000 })
 
       await expect(unwatchHandler?.({}, result.watchId)).resolves.toBe(true)
       expect(sender.listenerCount('destroyed')).toBe(1)

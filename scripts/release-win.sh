@@ -105,10 +105,6 @@ cyan "Smoking host-native FFmpeg broker..."
 KUN_RUN_MEDIA_SMOKE=1 npm run smoke:extension-native-media \
   || die "Windows host-native FFmpeg broker smoke failed"
 
-cyan "Smoking packaged Kun Video Editor native workflow..."
-npm run smoke:packaged-video-editor-native \
-  || die "Windows packaged Kun Video Editor native workflow smoke failed"
-
 cyan "Recording commit-bound Windows native evidence..."
 npm run evidence:extension-native \
   || die "Windows native evidence generation failed"

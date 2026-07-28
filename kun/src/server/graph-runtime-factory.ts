@@ -138,6 +138,23 @@ export class GraphRuntimeComposition {
       resumeActive: (run) => {
         this.scheduler?.resumeRun(run.id)
       },
+      onSteering: (run, steering) => this.supervisor?.signal({
+        runId: run.id,
+        reason: 'user_steering',
+        nodeIds:
+          steering.target.kind === 'node' || steering.target.kind === 'attempt'
+            ? [steering.target.nodeId]
+            : [],
+        digest: steering.text
+      }),
+      onCancelled: (run, reason) => this.supervisor?.signal({
+        runId: run.id,
+        reason: 'completion',
+        nodeIds: [],
+        digest: reason
+          ? `GraphRun was cancelled: ${reason}`
+          : 'GraphRun was cancelled.'
+      }),
       cleanupResources: (run) => this.writes.cleanupRun(run.id),
       nowIso: options.nowIso,
       nextId
@@ -291,6 +308,7 @@ export class GraphRuntimeComposition {
     await this.recovery.reconcile()
     this.supervisor.start()
     this.scheduler.start()
+    await this.recoverLeadOwnership()
     this.learning.start()
     this.trackBackground('Graph retention failed', this.runRetention())
     this.retentionTimer = setInterval(() => {
@@ -327,6 +345,78 @@ export class GraphRuntimeComposition {
 
   private async runRetention(): Promise<void> {
     await this.retention.run()
+  }
+
+  private async recoverLeadOwnership(): Promise<void> {
+    const runs = await this.store.list()
+    for (const run of runs) {
+      const thread = await this.options.threadStore.get(run.threadId)
+      const sourceTurn = thread?.turns.find((turn) => turn.id === run.sourceTurnId)
+      if (!sourceTurn) continue
+      const terminal =
+        run.status === 'completed' ||
+        run.status === 'failed' ||
+        run.status === 'cancelled'
+      if (sourceTurn.status !== 'running') {
+        if (
+          !terminal &&
+          (sourceTurn.status === 'completed' ||
+            sourceTurn.status === 'failed' ||
+            sourceTurn.status === 'aborted')
+        ) {
+          await this.supervisor.signal({
+            runId: run.id,
+            reason: 'recovery',
+            nodeIds: [],
+            digest: [
+              `Recovery ambiguity: nonterminal GraphRun ${run.id}`,
+              `references already-terminal source turn ${sourceTurn.id}`,
+              `with status ${sourceTurn.status}. Preserving immutable turn history.`
+            ].join(' ')
+          })
+        }
+        continue
+      }
+      const lifecycle = sourceTurn.graphLeadLifecycle
+      const lastDeliveredSeq =
+        lifecycle?.runId === run.id
+          ? lifecycle.lastDeliveredSeq
+          : 0
+      const unseenSignals = (await this.store.events(run.id, lastDeliveredSeq))
+        .flatMap((event) => event.event.type === 'supervision_requested'
+          ? [{
+              reason: event.event.payload.reason,
+              nodeIds: event.event.payload.nodeIds,
+              digest: event.event.payload.digest
+            }]
+          : [])
+      const resumedAt = lifecycle?.resumedAt ? Date.parse(lifecycle.resumedAt) : 0
+      const suspendedAt = lifecycle?.suspendedAt ? Date.parse(lifecycle.suspendedAt) : 0
+      const interruptedContinuation =
+        lifecycle?.runId === run.id &&
+        Number.isFinite(resumedAt) &&
+        resumedAt > 0 &&
+        (!Number.isFinite(suspendedAt) || resumedAt > suspendedAt)
+      if (!terminal && unseenSignals.length === 0 && !interruptedContinuation) continue
+      const latestSignals = unseenSignals.slice(-32)
+      this.supervisor.redeliver({
+        runId: run.id,
+        reason: terminal
+          ? 'completion'
+          : latestSignals.at(-1)
+            ? latestSignals.at(-1)!.reason
+            : 'recovery',
+        nodeIds: [...new Set(latestSignals.flatMap((signal) => signal.nodeIds))],
+        digest: latestSignals.length > 0
+          ? latestSignals.map((signal) => signal.digest)
+              .filter(Boolean)
+              .join('\n')
+              .slice(0, 16_384)
+          : terminal
+            ? `Recovered terminal GraphRun ${run.id} with status ${run.status}.`
+            : `Recovered interrupted Lead continuation for GraphRun ${run.id}.`
+      })
+    }
   }
 
   private trackBackground(label: string, operation: Promise<unknown>): void {

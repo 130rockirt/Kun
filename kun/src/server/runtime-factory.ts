@@ -114,6 +114,7 @@ import { buildBuiltinHooks } from '../hooks/builtins/index.js'
 import { mergeBuiltinSubagentProfiles } from '../delegation/builtin-profiles.js'
 import { InflightTracker } from '../loop/inflight-tracker.js'
 import { SteeringQueue } from '../loop/steering-queue.js'
+import type { TurnRunOutcome } from '../loop/turn-execution-types.js'
 import { RandomIdGenerator } from '../ports/id-generator.js'
 import type { ModelClient } from '../ports/model-client.js'
 import type { SessionStore } from '../ports/session-store.js'
@@ -431,6 +432,29 @@ export async function createKunServeRuntime(
     ids,
     nowIso
   })
+  const resolveGraphLeadRun = async (input: {
+    threadId: string
+    turnId: string
+  }): Promise<{
+    runId: string
+    lastEventSeq: number
+    terminal: boolean
+  } | null> => {
+    const runs = await graphRuntime.store.list({ threadId: input.threadId })
+    const run = runs
+      .filter((candidate) => candidate.sourceTurnId === input.turnId)
+      .sort((left, right) => right.lastEventSeq - left.lastEventSeq)[0]
+    return run
+      ? {
+          runId: run.id,
+          lastEventSeq: run.lastEventSeq,
+          terminal:
+            run.status === 'completed' ||
+            run.status === 'failed' ||
+            run.status === 'cancelled'
+        }
+      : null
+  }
   handleGraphThreadFork = (sourceThreadId, targetThreadId) =>
     graphRuntime.handleThreadFork(sourceThreadId, targetThreadId)
   handleGraphThreadStatus = (threadId, status) =>
@@ -760,6 +784,7 @@ export async function createKunServeRuntime(
     maxConcurrentTurns: activeOptions.runtime?.turnLimits?.maxConcurrentTurns,
     lifecycleFence,
     onCompacted: (threadId) => delegatedSessions.invalidate(threadId),
+    resolveGraphLeadRun,
     migrationMaintenance,
     ids,
     nowIso
@@ -1430,9 +1455,9 @@ export async function createKunServeRuntime(
 	    }
 	  }
 	  let loop = new AgentLoop(loopOptions)
-	  const activeRuntimeRuns = new Set<Promise<'completed' | 'failed' | 'aborted'>>()
+	  const activeRuntimeRuns = new Set<Promise<TurnRunOutcome>>()
 	  let shuttingDown = false
-	  const trackRuntimeRun = <T extends 'completed' | 'failed' | 'aborted'>(run: Promise<T>): Promise<T> => {
+	  const trackRuntimeRun = <T extends TurnRunOutcome>(run: Promise<T>): Promise<T> => {
 	    activeRuntimeRuns.add(run)
 	    void run.then(
 	      () => activeRuntimeRuns.delete(run),
@@ -1440,7 +1465,7 @@ export async function createKunServeRuntime(
 	    )
 	    return run
 	  }
-	  const runAgentTurn = (threadId: string, turnId: string): Promise<'completed' | 'failed' | 'aborted'> => {
+	  const runAgentTurn = (threadId: string, turnId: string): Promise<TurnRunOutcome> => {
 	    if (shuttingDown) {
 	      return turnService.interruptTurn({ threadId, turnId })
 	        .then(() => 'aborted' as const)
@@ -1453,7 +1478,8 @@ export async function createKunServeRuntime(
 	  await graphRuntime.start(createGraphRuntimeStartOptions({
 	    delegation: () => delegationRuntime,
 	    threads: threadStore,
-	    startTurn: (input) => turnService.startTurn(input),
+	    resumeTurn: (input) => turnService.resumeGraphLeadTurn(input),
+	    isTurnExecutionActive: (turnId) => turnService.isTurnExecutionActive(turnId),
 	    steerTurn: (input) => turnService.steerTurn(input),
 	    runAgentTurn,
 	    defaults: () => ({

@@ -50,6 +50,8 @@ export type GraphControlServiceOptions = {
   pauseActive?: (run: GraphRunV1) => Promise<void>
   cancelActive?: (run: GraphRunV1) => Promise<void>
   resumeActive?: (run: GraphRunV1) => Promise<void> | void
+  onSteering?: (run: GraphRunV1, steering: GraphSteeringV1) => Promise<void> | void
+  onCancelled?: (run: GraphRunV1, reason?: string) => Promise<void> | void
   cleanupResources?: (run: GraphRunV1) => Promise<Array<Pick<
     GraphCleanupRecordV1,
     'resourceKind' | 'resourceId' | 'attemptId' | 'state' | 'lastError'
@@ -68,9 +70,7 @@ export class GraphControlService {
     this.nextId = options.nextId ?? ((prefix) => `${prefix}_${Date.now()}_${++next}`)
   }
 
-  allocateId(prefix: string): string {
-    return this.nextId(prefix)
-  }
+  allocateId(prefix: string): string { return this.nextId(prefix) }
 
   validate(input: unknown): GraphValidationResultV1 {
     return parseAndValidateGraphPlan(input, this.options.config()).result
@@ -169,14 +169,14 @@ export class GraphControlService {
   ): Promise<GraphRunV1> {
     let run = await this.get(runId)
     this.assertCommandPreconditions(run, command)
-    if (run.status === 'cancelled') return run
+    if (run.status === 'cancelled') return this.notifyCancelled(run, command.reason)
     if (run.status === 'completed' || run.status === 'failed') {
       throw new GraphRunConflictError(`cannot cancel terminal GraphRun ${runId}`)
     }
     run = await this.fenceCancellation(run, command)
     await this.options.cancelActive?.(run)
     run = await this.get(runId)
-    if (run.status === 'cancelled') return run
+    if (run.status === 'cancelled') return this.notifyCancelled(run, command.reason)
     if (run.status === 'completed' || run.status === 'failed') {
       throw new GraphRunConflictError(`cannot cancel terminal GraphRun ${runId}`)
     }
@@ -189,17 +189,20 @@ export class GraphControlService {
       },
       true
     )
+    let cancelled: GraphRunV1
     try {
-      return await this.transitionRun(run, 'cancelled', command, command.reason)
+      cancelled = await this.transitionRun(run, 'cancelled', command, command.reason)
     } catch (error) {
       if (!(error instanceof GraphRunConflictError) || command.expectedSeq !== undefined) throw error
       run = await this.get(runId)
-      if (run.status === 'cancelled') return run
+      if (run.status === 'cancelled') return this.notifyCancelled(run, command.reason)
       if (run.status === 'completed' || run.status === 'failed') {
         throw new GraphRunConflictError(`cannot cancel terminal GraphRun ${runId}`)
       }
-      return this.transitionRun(run, 'cancelled', command, command.reason)
+      cancelled = await this.transitionRun(run, 'cancelled', command, command.reason)
     }
+    await this.options.onCancelled?.(cancelled, command.reason)
+    return cancelled
   }
 
   async steer(
@@ -236,13 +239,20 @@ export class GraphControlService {
         )
       }
     }
-    return (await this.options.store.append(run.id, {
+    const appended = await this.options.store.append(run.id, {
       expectedSeq: run.lastEventSeq,
       graphRevision: run.currentRevision,
       commandId: command.commandId,
       idempotencyKey: command.idempotencyKey,
       event: { type: 'steering_recorded', payload: { steering } }
-    })).state
+    })
+    await this.options.onSteering?.(appended.state, steering)
+    return appended.state
+  }
+
+  private async notifyCancelled(run: GraphRunV1, reason?: string): Promise<GraphRunV1> {
+    await this.options.onCancelled?.(run, reason)
+    return run
   }
 
   async retryNode(

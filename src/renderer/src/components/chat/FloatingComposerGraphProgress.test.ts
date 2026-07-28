@@ -121,19 +121,23 @@ describe('FloatingComposerGraphProgress', () => {
   })
 
   afterAll(() => {
-    useGraphStore.setState({ refreshThread: originalRefreshThread })
+    act(() => {
+      useGraphStore.setState({ refreshThread: originalRefreshThread })
+    })
     delete (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT
   })
 
   beforeEach(() => {
-    useGraphStore.setState({
-      threadId: 'thread_1',
-      runs: [graphRun()],
-      childRuns: {},
-      childReturnTarget: null,
-      selectedRunId: 'run_1',
-      selectedNodeId: null,
-      refreshThread: vi.fn().mockResolvedValue(undefined)
+    act(() => {
+      useGraphStore.setState({
+        threadId: 'thread_1',
+        runs: [graphRun()],
+        childRuns: {},
+        childReturnTarget: null,
+        selectedRunId: 'run_1',
+        selectedNodeId: null,
+        refreshThread: vi.fn().mockResolvedValue(undefined)
+      })
     })
   })
 
@@ -242,7 +246,7 @@ describe('FloatingComposerGraphProgress', () => {
     expect(html).toContain('data-graph-preview-edge="edge_audit_build"')
     expect(html).toContain('marker-end="url(#graph-composer-arrow-run_1)"')
     expect(html).toContain('Builder')
-    renderer!.unmount()
+    act(() => renderer!.unmount())
   })
 
   it('refreshes durable truth and opens the preview on hover', async () => {
@@ -261,7 +265,7 @@ describe('FloatingComposerGraphProgress', () => {
     await act(async () => trigger.props.onPointerEnter())
     expect(renderer!.root.find((instance) =>
       instance.props['aria-haspopup'] === 'dialog').props['aria-expanded']).toBe(true)
-    renderer!.unmount()
+    act(() => renderer!.unmount())
   })
 
   it('occupies no composer space when only another thread has a Graph run', async () => {
@@ -273,6 +277,6 @@ describe('FloatingComposerGraphProgress', () => {
       }))
     })
     expect(renderer!.toJSON()).toBeNull()
-    renderer!.unmount()
+    act(() => renderer!.unmount())
   })
 })

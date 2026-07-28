@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { RuntimeChildEventPayload } from '../agent/types'
 import { graphRuntimeClient } from './graph-runtime-client'
+import { steerGraphSourceTurn } from './graph-source-turn-steering'
 import type {
   GraphAgentEvidence,
   GraphAgentProfile,
@@ -61,6 +62,7 @@ type GraphViewState = {
   patch: (operations: GraphPatchOperation[], reason: string) => Promise<void>
   rebindNode: (nodeId: string, profileId: string) => Promise<void>
   steer: (text: string, nodeId?: string) => Promise<void>
+  steerSourceTurn: (threadId: string, sourceTurnId: string, text: string) => Promise<boolean>
   loadArtifact: (artifactId: string) => Promise<void>
   loadNextArtifactPage: () => Promise<void>
   clearArtifact: () => void
@@ -493,6 +495,31 @@ export const useGraphStore = create<GraphViewState>((set, get) => ({
       }))
     } catch (error) {
       set({ error: message(error) })
+    }
+  },
+
+  steerSourceTurn: async (threadId, sourceTurnId, text) => {
+    const trimmed = text.trim()
+    if (!trimmed) return false
+    try {
+      const next = await steerGraphSourceTurn({
+        threadId,
+        sourceTurnId,
+        text: trimmed,
+        knownRuns: get().runs
+      })
+      if (!next) return false
+      set((state) => ({
+        runs: state.runs.some((item) => item.id === next.id)
+          ? state.runs.map((item) => item.id === next.id ? next : item)
+          : [next, ...state.runs],
+        selectedRunId: next.id,
+        error: null
+      }))
+      return true
+    } catch (error) {
+      set({ error: message(error) })
+      throw error
     }
   },
 

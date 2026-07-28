@@ -34,8 +34,12 @@ import type { TurnItem } from '../contracts/items.js'
 import type { ModelReasoningEffort } from '../contracts/capabilities.js'
 import {
   APPROVAL_POLICIES,
+  KUN_TOOL_PERMISSION_MODES,
   SANDBOX_MODES,
+  kunToolPermissionModeFromSettings,
+  kunToolPermissionModeSettings,
   type ApprovalPolicy,
+  type KunToolPermissionMode,
   type SandboxMode
 } from '../contracts/policy.js'
 import type {
@@ -130,6 +134,7 @@ const isCancelInput = (data: string): boolean =>
 
 const EXIT_CONFIRM_WINDOW_MS = 1_500
 const UNDO_ESCAPE_WINDOW_MS = 600
+const TOTAL_ELAPSED_MIN_START_GAP_MS = 100
 const BRACKETED_PASTE_START = '\x1b[200~'
 const BRACKETED_PASTE_END = '\x1b[201~'
 
@@ -2244,7 +2249,8 @@ class ExplorationGroupComponent implements Component {
       : running
         ? `${cyan(activityFrame('tool', animationFrame))} `
         : ''
-    const action = explorationToolAction(entry.call) ?? toolAction(entry.call)
+    const baseAction = explorationToolAction(entry.call) ?? toolAction(entry.call)
+    const action = { ...baseAction, subject: `${baseAction.subject}${sourcePageSuffix(entry.result?.output)}` }
     const duration = elapsedDuration(
       entry.call.createdAt,
       entry.result?.finishedAt ?? entry.call.finishedAt,
@@ -2402,7 +2408,8 @@ class ItemComponent implements Component {
           : running
             ? cyan(activityFrame('tool', animationFrame))
             : green('●')
-        const action = toolAction(item)
+        const baseAction = toolAction(item)
+        const action = { ...baseAction, subject: `${baseAction.subject}${sourcePageSuffix(result?.output)}` }
         const duration = elapsedDuration(item.createdAt, result?.finishedAt ?? item.finishedAt, running)
         const compactResult = result ? conciseToolResultSummary(result.output) : undefined
         const details = this.showToolDetails
@@ -3901,8 +3908,42 @@ function sandboxModeDescription(value: SandboxMode): string {
   }
 }
 
-class PermissionDialog implements Component, Focusable {
+const PERMISSION_PRESET_COPY: Record<
+  KunToolPermissionMode,
+  { label: string; description: string }
+> = {
+  'always-ask': {
+    label: 'Always ask',
+    description: 'Every tool call asks first; safest, but interrupts often'
+  },
+  'read-only': {
+    label: 'Read only',
+    description: 'Read tools run automatically; writes and commands ask first, and it can only read workspace content'
+  },
+  'sensitive-ask': {
+    label: 'Sensitive operations ask',
+    description: 'Ordinary reads can run automatically; sensitive operations ask first, so review the risk'
+  },
+  'workspace-write': {
+    label: 'Ask for workspace writes',
+    description: 'Asks before workspace file changes and every host command; approved commands may affect paths outside the workspace'
+  },
+  'trusted-workspace': {
+    label: 'Trusted workspace',
+    description: 'Workspace file changes run without prompts; every host command still asks and may affect paths outside the workspace'
+  },
+  bypass: {
+    label: 'Full access',
+    description: 'Never asks and has full access; highest risk, use only for trusted tasks'
+  }
+}
+
+export class PermissionDialog implements Component, Focusable {
   private _focused = true
+  private view: 'presets' | 'advanced' = 'presets'
+  private presetIndex: number
+  private readonly initialApprovalIndex: number
+  private readonly initialSandboxIndex: number
   private approvalIndex: number
   private sandboxIndex: number
   private saving = false
@@ -3914,35 +3955,36 @@ class PermissionDialog implements Component, Focusable {
     sandboxMode: SandboxMode,
     private readonly close: () => void
   ) {
+    const mode = kunToolPermissionModeFromSettings({ approvalPolicy, sandboxMode })
+    this.presetIndex = Math.max(0, KUN_TOOL_PERMISSION_MODES.indexOf(mode))
     this.approvalIndex = Math.max(0, APPROVAL_POLICIES.indexOf(approvalPolicy))
     this.sandboxIndex = Math.max(0, SANDBOX_MODES.indexOf(sandboxMode))
+    this.initialApprovalIndex = this.approvalIndex
+    this.initialSandboxIndex = this.sandboxIndex
   }
 
   get focused(): boolean { return this._focused }
   set focused(value: boolean) { this._focused = value }
 
   render(width: number): string[] {
+    if (this.view === 'advanced') return this.renderAdvanced(width)
     return pageFrame({
       path: ['KUN', 'Permissions'],
-      description: 'Control approval prompts and workspace isolation for this session.',
+      description: 'Choose the same tool permission mode used by the Kun GUI.',
       body: [
-      sectionLabel('Approval policy', width - 2),
-      ...APPROVAL_POLICIES.map((value, index) =>
-        selectionRow(value, approvalPolicyDescription(value), width - 2, index === this.approvalIndex)
-      ),
-      '',
-      sectionLabel('Sandbox mode', width - 2),
-      ...SANDBOX_MODES.map((value, index) =>
-        selectionRow(value, sandboxModeDescription(value), width - 2, index === this.sandboxIndex)
-      ),
-      ...(this.error ? ['', red(this.error)] : [])
+        sectionLabel('Tool permission mode', width - 2),
+        ...KUN_TOOL_PERMISSION_MODES.map((mode, index) => {
+          const copy = PERMISSION_PRESET_COPY[mode]
+          return selectionRow(copy.label, copy.description, width - 2, index === this.presetIndex)
+        }),
+        ...(this.error ? ['', red(this.error)] : [])
       ],
       footer: this.saving
         ? [{ key: statusGlyph('running'), label: 'saving' }]
         : [
-            { key: '↑/↓', label: 'policy' },
-            { key: '←/→', label: 'sandbox' },
+            { key: '↑/↓', label: 'mode' },
             { key: 'Enter', label: 'save' },
+            { key: 'A', label: 'advanced' },
             { key: 'Esc', label: 'cancel' }
           ],
       width
@@ -3951,22 +3993,96 @@ class PermissionDialog implements Component, Focusable {
 
   handleInput(data: string): void {
     if (this.saving) return
+    if (this.view === 'advanced') {
+      this.handleAdvancedInput(data)
+      return
+    }
     if (isCancelInput(data)) { this.close(); return }
-    if (matchesKey(data, 'up') || matchesKey(data, 'ctrl+p')) this.approvalIndex = Math.max(0, this.approvalIndex - 1)
-    else if (matchesKey(data, 'down') || matchesKey(data, 'ctrl+n')) this.approvalIndex = Math.min(APPROVAL_POLICIES.length - 1, this.approvalIndex + 1)
-    else if (matchesKey(data, 'home') || matchesKey(data, 'pageUp')) this.approvalIndex = 0
-    else if (matchesKey(data, 'end') || matchesKey(data, 'pageDown')) this.approvalIndex = APPROVAL_POLICIES.length - 1
-    else if (matchesKey(data, 'left')) this.sandboxIndex = Math.max(0, this.sandboxIndex - 1)
-    else if (matchesKey(data, 'right')) this.sandboxIndex = Math.min(SANDBOX_MODES.length - 1, this.sandboxIndex + 1)
-    else if (matchesKey(data, 'enter')) void this.save()
+    if (matchesKey(data, 'up') || matchesKey(data, 'ctrl+p')) {
+      this.presetIndex = Math.max(0, this.presetIndex - 1)
+    } else if (matchesKey(data, 'down') || matchesKey(data, 'ctrl+n')) {
+      this.presetIndex = Math.min(KUN_TOOL_PERMISSION_MODES.length - 1, this.presetIndex + 1)
+    } else if (matchesKey(data, 'home') || matchesKey(data, 'pageUp')) {
+      this.presetIndex = 0
+    } else if (matchesKey(data, 'end') || matchesKey(data, 'pageDown')) {
+      this.presetIndex = KUN_TOOL_PERMISSION_MODES.length - 1
+    } else if (matchesKey(data, 'a')) {
+      this.resetAdvancedDraft()
+      this.view = 'advanced'
+      this.error = ''
+    } else if (matchesKey(data, 'enter')) {
+      const mode = KUN_TOOL_PERMISSION_MODES[this.presetIndex]!
+      const settings = kunToolPermissionModeSettings(mode)
+      void this.save(settings.approvalPolicy, settings.sandboxMode)
+    }
   }
 
   invalidate(): void {}
 
-  private async save(): Promise<void> {
+  private renderAdvanced(width: number): string[] {
+    return pageFrame({
+      path: ['KUN', 'Permissions', 'Advanced'],
+      description: 'Edit the raw approval policy and sandbox mode for this session.',
+      body: [
+        sectionLabel('Approval policy', width - 2),
+        ...APPROVAL_POLICIES.map((value, index) =>
+          selectionRow(value, approvalPolicyDescription(value), width - 2, index === this.approvalIndex)
+        ),
+        '',
+        sectionLabel('Sandbox mode', width - 2),
+        ...SANDBOX_MODES.map((value, index) =>
+          selectionRow(value, sandboxModeDescription(value), width - 2, index === this.sandboxIndex)
+        ),
+        ...(this.error ? ['', red(this.error)] : [])
+      ],
+      footer: this.saving
+        ? [{ key: statusGlyph('running'), label: 'saving' }]
+        : [
+            { key: '↑/↓', label: 'policy' },
+            { key: '←/→', label: 'sandbox' },
+            { key: 'Enter', label: 'save' },
+            { key: 'Esc', label: 'presets' }
+          ],
+      width
+    })
+  }
+
+  private handleAdvancedInput(data: string): void {
+    if (isCancelInput(data)) {
+      this.resetAdvancedDraft()
+      this.view = 'presets'
+      this.error = ''
+      return
+    }
+    if (matchesKey(data, 'up') || matchesKey(data, 'ctrl+p')) {
+      this.approvalIndex = Math.max(0, this.approvalIndex - 1)
+    } else if (matchesKey(data, 'down') || matchesKey(data, 'ctrl+n')) {
+      this.approvalIndex = Math.min(APPROVAL_POLICIES.length - 1, this.approvalIndex + 1)
+    } else if (matchesKey(data, 'home') || matchesKey(data, 'pageUp')) {
+      this.approvalIndex = 0
+    } else if (matchesKey(data, 'end') || matchesKey(data, 'pageDown')) {
+      this.approvalIndex = APPROVAL_POLICIES.length - 1
+    } else if (matchesKey(data, 'left')) {
+      this.sandboxIndex = Math.max(0, this.sandboxIndex - 1)
+    } else if (matchesKey(data, 'right')) {
+      this.sandboxIndex = Math.min(SANDBOX_MODES.length - 1, this.sandboxIndex + 1)
+    } else if (matchesKey(data, 'enter')) {
+      void this.save(
+        APPROVAL_POLICIES[this.approvalIndex]!,
+        SANDBOX_MODES[this.sandboxIndex]!
+      )
+    }
+  }
+
+  private resetAdvancedDraft(): void {
+    this.approvalIndex = this.initialApprovalIndex
+    this.sandboxIndex = this.initialSandboxIndex
+  }
+
+  private async save(approvalPolicy: ApprovalPolicy, sandboxMode: SandboxMode): Promise<void> {
     this.saving = true
     try {
-      const saved = await this.controller.setPermissions(APPROVAL_POLICIES[this.approvalIndex]!, SANDBOX_MODES[this.sandboxIndex]!)
+      const saved = await this.controller.setPermissions(approvalPolicy, sandboxMode)
       if (saved) this.close()
       else this.saving = false
     } catch (error) {
@@ -5870,11 +5986,19 @@ export function renderActivityRow(
     : activeChild?.startedAt ?? activity?.startedAt
   const runningTurn = projection?.thread.turns.find((turn) => turn.id === projection.runningTurnId)
   const turnSince = activity?.turnStartedAt ?? runningTurn?.startedAt ?? runningTurn?.createdAt
-  const phaseElapsed = elapsedDuration(activitySince, undefined, true)
+  const nowMs = Date.now()
+  const phaseElapsed = elapsedDuration(activitySince, undefined, true, nowMs)
   const turnElapsed = projection?.runningTurnId
-    ? elapsedDuration(turnSince, undefined, true)
+    ? elapsedDuration(turnSince, undefined, true, nowMs)
     : ''
-  const elapsedText = turnElapsed && turnElapsed !== phaseElapsed && width >= 84
+  // The first pipeline phase normally starts only a few milliseconds after
+  // the turn. Comparing rounded display strings made `total` alternate on
+  // each tenth-second boundary. Base visibility on the stable start-time gap
+  // instead, and omit a second timer when the difference is below the finest
+  // precision we display.
+  const showTotalElapsed = turnElapsed && width >= 84 &&
+    elapsedStartGapMs(turnSince, activitySince) >= TOTAL_ELAPSED_MIN_START_GAP_MS
+  const elapsedText = showTotalElapsed
     ? `· ${phaseElapsed} · total ${turnElapsed}`
     : `· ${phaseElapsed}`
   const visualKind: ActivityVisualKind = waitingForApproval || waitingForInput
@@ -6194,13 +6318,26 @@ function outputText(value: unknown): string {
   try { return sanitizeTerminalText(JSON.stringify(redactSecrets(value))) } catch { return sanitizeTerminalText(String(value)) }
 }
 
-function elapsedDuration(start: string | undefined, end: string | undefined, live: boolean): string {
+function elapsedDuration(
+  start: string | undefined,
+  end: string | undefined,
+  live: boolean,
+  nowMs = Date.now()
+): string {
   if (!start) return live ? '0.0s' : ''
   if (!end && !live) return ''
   const startMs = Date.parse(start)
-  const endMs = end ? Date.parse(end) : Date.now()
+  const endMs = end ? Date.parse(end) : nowMs
   if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return ''
   return formatDurationMs(Math.max(0, endMs - startMs))
+}
+
+function elapsedStartGapMs(earlier: string | undefined, later: string | undefined): number {
+  if (!earlier || !later) return 0
+  const earlierMs = Date.parse(earlier)
+  const laterMs = Date.parse(later)
+  if (!Number.isFinite(earlierMs) || !Number.isFinite(laterMs)) return 0
+  return Math.max(0, laterMs - earlierMs)
 }
 
 function formatDurationMs(durationMs: number): string {
@@ -6430,6 +6567,20 @@ function toolAction(item: Extract<TurnItem, { kind: 'tool_call' }>): { verb: str
     return { verb: 'Delegate', subject: value('label', 'prompt') || item.summary || '' }
   }
   return { verb: humanizeToolName(item.toolName), subject: item.summary ?? summarize(args) }
+}
+
+function sourcePageSuffix(output: unknown): string {
+  if (!output || typeof output !== 'object' || Array.isArray(output)) return ''
+  const record = output as Record<string, unknown>
+  const start = record.start_line
+  const end = record.end_line
+  const total = record.total_lines
+  if (typeof start === 'number' && typeof end === 'number' && typeof total === 'number') {
+    return ` (lines ${start}-${end}/${total}${record.has_more === true ? ', more' : ''})`
+  }
+  const matches = Array.isArray(record.matches) ? record.matches.length : undefined
+  if (matches !== undefined) return ` (${matches} result${matches === 1 ? '' : 's'}${record.has_more === true ? ', more' : ''})`
+  return ''
 }
 
 function toolResultSummary(value: unknown): string {

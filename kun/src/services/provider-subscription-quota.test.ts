@@ -3,8 +3,26 @@ import {
   parseClaudeSubscriptionQuota,
   parseCodexSubscriptionQuota,
   parseCursorSubscriptionQuota,
+  parseGrokSubscriptionQuota,
   parseGoogleCodeAssistQuota
 } from './provider-subscription-quota.js'
+
+function grokBillingFrame(usedPercent: number, resetEpoch: number): Uint8Array {
+  const float = Buffer.alloc(4)
+  float.writeFloatLE(usedPercent)
+  const varint: number[] = []
+  let remaining = resetEpoch
+  do {
+    const next = remaining % 128
+    remaining = Math.floor(remaining / 128)
+    varint.push(next | (remaining > 0 ? 0x80 : 0))
+  } while (remaining > 0)
+  const payload = Buffer.concat([Buffer.from([0x0d]), float, Buffer.from([0x10, ...varint])])
+  const frame = Buffer.alloc(5 + payload.length)
+  frame.writeUInt32BE(payload.length, 1)
+  payload.copy(frame, 5)
+  return new Uint8Array(frame)
+}
 
 describe('subscription provider quota parsers', () => {
   it('parses Claude and Codex utilization windows', () => {
@@ -67,5 +85,18 @@ describe('subscription provider quota parsers', () => {
       label: 'gemini-2.5-pro',
       usedPercent: 28
     })
+  })
+
+  it('parses Grok gRPC-web billing frames', () => {
+    expect(parseGrokSubscriptionQuota(
+      grokBillingFrame(42.5, 1_900_000_000),
+      new Date('2027-01-01T00:00:00Z')
+    )).toEqual([{
+      id: 'credits',
+      label: 'Credits usage',
+      unit: 'percent',
+      usedPercent: 42.5,
+      resetsAt: '2030-03-17T17:46:40.000Z'
+    }])
   })
 })

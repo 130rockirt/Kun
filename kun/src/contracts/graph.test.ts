@@ -11,7 +11,7 @@ import {
   GraphWorkerResultV1Schema
 } from './graph.js'
 import { RuntimeEvent } from './events.js'
-import { StartTurnRequest } from './turns.js'
+import { StartTurnRequest, TurnSchema } from './turns.js'
 
 const now = '2026-07-26T00:00:00.000Z'
 
@@ -167,6 +167,34 @@ describe('Graph Mode contracts', () => {
   test('defaults old turn requests to direct and accepts explicit graph turns', () => {
     expect(StartTurnRequest.parse({ prompt: 'hello' }).orchestration).toBe('direct')
     expect(StartTurnRequest.parse({ prompt: 'hello', orchestration: 'graph' }).orchestration).toBe('graph')
+  })
+
+  test('parses optional durable Graph Lead lifecycle metadata without breaking legacy turns', () => {
+    const base = {
+      id: 'turn_1',
+      threadId: 'thread_1',
+      status: 'running',
+      prompt: 'Build this with Graph.',
+      orchestration: 'graph',
+      createdAt: now
+    }
+    expect(TurnSchema.parse(base).graphLeadLifecycle).toBeUndefined()
+    expect(TurnSchema.parse({
+      ...base,
+      graphLeadLifecycle: {
+        version: 1,
+        runId: 'run_1',
+        state: 'supervising',
+        lastDeliveredSeq: 12,
+        suspendedAt: now
+      }
+    }).graphLeadLifecycle).toEqual({
+      version: 1,
+      runId: 'run_1',
+      state: 'supervising',
+      lastDeliveredSeq: 12,
+      suspendedAt: now
+    })
   })
 
   test('parses a strict structured worker result', () => {

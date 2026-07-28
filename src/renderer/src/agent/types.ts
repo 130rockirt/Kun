@@ -145,7 +145,7 @@ export type RuntimeDisclosureMetadata = {
   /** Persisted turn routing hint so edit/resend can rebuild live canvas context. */
   guiDesignCanvas?: boolean
   guiDesignMode?: boolean
-  messageSource?: 'background_shell' | 'background_subagent' // client-only rendering hint; never sent to the runtime
+  messageSource?: 'background_shell' | 'background_subagent' | 'graph_runtime' // client-only rendering hint; never sent to the runtime
   turnId?: string
   workspaceCheckpointId?: string
   attachmentIds?: string[]

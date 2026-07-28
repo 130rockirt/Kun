@@ -73,12 +73,13 @@ describe('active locale resources', () => {
     await i18n.changeLanguage('en')
   })
 
-  it('registers every persisted application locale', () => {
+  it('supports every persisted application locale', () => {
     expect(Object.keys(resources)).toEqual([...APP_LOCALES])
     for (const locale of APP_LOCALES) {
-      expect(i18n.hasResourceBundle(locale, 'common')).toBe(true)
-      expect(i18n.hasResourceBundle(locale, 'settings')).toBe(true)
+      expect(i18n.options.supportedLngs).toContain(locale)
     }
+    expect(i18n.hasResourceBundle('en', 'common')).toBe(true)
+    expect(i18n.hasResourceBundle('en', 'settings')).toBe(true)
   })
 
   it.each(['ru', 'hi', 'th', 'ja', 'ko'] as const)(

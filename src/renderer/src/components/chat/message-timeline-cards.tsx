@@ -393,12 +393,10 @@ export function WorkMetaRow({
 }): ReactElement {
   const { t } = useTranslation('common')
 
-  const mainLabel = processing
-    ? typeof durationMs === 'number'
-      ? `${t('processing')} ${formatDuration(durationMs)}`
-      : t('processing')
-    : typeof durationMs === 'number'
-      ? `${t('processed')} ${formatDuration(durationMs)}`
+  const mainLabel = typeof durationMs === 'number'
+    ? `${t('processed')} ${formatDuration(durationMs)}`
+    : processing
+      ? t('processing')
       : t('processSteps', { count: stepCount })
 
   const showThoughtSuffix =
@@ -411,7 +409,7 @@ export function WorkMetaRow({
 
   const content = (
     <>
-      <span className={`tabular-nums ${processing ? 'ds-shiny-text' : ''}`}>{mainLabel}</span>
+      <span className="tabular-nums">{mainLabel}</span>
       {showSummary ? <span className="text-ds-faint">· {workSummary}</span> : null}
       {showStepSuffix ? (
         <span className="text-ds-faint">· {t('processStepCount', { count: stepCount })}</span>
@@ -436,7 +434,7 @@ export function WorkMetaRow({
 
   if (!collapsible) {
     return (
-      <div className="flex w-fit max-w-full items-center gap-1.5 rounded-md py-1 text-left text-[15px] font-medium text-ds-muted">
+      <div className="flex w-full max-w-full items-center gap-1.5 border-b border-ds-border-muted/70 py-2 text-left text-[15px] font-medium text-ds-muted">
         {content}
       </div>
     )
@@ -447,7 +445,7 @@ export function WorkMetaRow({
       type="button"
       onClick={onToggle}
       aria-expanded={expanded}
-      className="group flex w-fit max-w-full items-center gap-1.5 rounded-md py-1 text-left text-[15px] font-medium text-ds-muted transition hover:opacity-85"
+      className="group flex w-full max-w-full items-center gap-1.5 border-b border-ds-border-muted/70 py-2 text-left text-[15px] font-medium text-ds-muted transition hover:opacity-85"
     >
       {content}
     </button>

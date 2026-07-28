@@ -27,7 +27,8 @@ describe('AgentLoop sandbox policy', () => {
     const request = observedRequest as ModelRequest | null
     if (!request) throw new Error('expected model request')
     const toolNames = request.tools.map((tool) => tool.name)
-    expect(toolNames).toEqual(expect.arrayContaining(['read', 'grep', 'find', 'ls']))
+    expect(toolNames).toEqual(expect.arrayContaining(['read', 'grep', 'glob', 'ls']))
+    expect(toolNames).not.toContain('find')
     expect(toolNames).not.toContain('bash')
     expect(toolNames).not.toContain('edit')
     expect(toolNames).not.toContain('write')

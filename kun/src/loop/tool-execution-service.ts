@@ -171,6 +171,7 @@ export class ToolExecutionService {
             await pendingUpdates
           }
           if (updateFailure) throw updateFailure
+          await this.recordSourceToolPage(input, result)
           return result
         } catch (error) {
           if (input.context.abortSignal.aborted || !isRecoverableToolDispatchError(error)) {
@@ -207,6 +208,30 @@ export class ToolExecutionService {
         }
       }
     )
+  }
+
+  private async recordSourceToolPage(input: ToolExecutionInput, result: ToolHostResult): Promise<void> {
+    const toolName = input.call.toolName
+    if (!['read', 'grep', 'glob', 'find'].includes(toolName)) return
+    const output = result.item.kind === 'tool_result' && result.item.output && typeof result.item.output === 'object'
+      ? result.item.output as Record<string, unknown> : undefined
+    if (!output) return
+    const hasMore = output.has_more === true
+    const continuation = typeof output.next_offset === 'number'
+      ? 'offset' as const
+      : typeof output.next_cursor === 'string' ? 'cursor' as const : 'none' as const
+    await this.deps.events.record({
+      kind: 'source_tool_page',
+      threadId: input.threadId,
+      turnId: input.turnId,
+      toolName: toolName as 'read' | 'grep' | 'glob' | 'find',
+      callId: input.call.callId,
+      hasMore,
+      continuation,
+      ...(input.context.sourceResultBudgetTokens !== undefined
+        ? { budgetTokens: input.context.sourceResultBudgetTokens }
+        : {})
+    })
   }
 
   private async ensureWorkspaceCheckpoint(input: ToolExecutionInput): Promise<void> {

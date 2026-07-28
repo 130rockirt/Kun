@@ -110,6 +110,39 @@ describe('message timeline turns', () => {
     expect(turns[1]?.user?.id).toBe('user_2')
   })
 
+  it('keeps internal Graph supervision prompts in the source turn without rendering them as work', () => {
+    const blocks: ChatBlock[] = [
+      {
+        kind: 'user',
+        id: 'user_1',
+        turnId: 'turn_1',
+        text: 'Build the feature.'
+      },
+      {
+        kind: 'user',
+        id: 'graph_runtime_1',
+        turnId: 'turn_1',
+        text: 'Graph Lead supervision for durable run run_1.',
+        meta: { messageSource: 'graph_runtime' }
+      },
+      {
+        kind: 'assistant',
+        id: 'milestone_1',
+        turnId: 'turn_1',
+        text: 'The first node passed review.'
+      }
+    ]
+
+    const turns = groupTurns(blocks)
+
+    expect(turns).toHaveLength(1)
+    expect(turns[0]?.user?.id).toBe('user_1')
+    expect(turns[0]?.blocks.map((block) => block.id)).toEqual([
+      'graph_runtime_1',
+      'milestone_1'
+    ])
+  })
+
   it('routes a delayed tool update back to its owning turn by turnId', () => {
     const blocks: ChatBlock[] = [
       { kind: 'user', id: 'user_1', turnId: 'turn_1', text: 'First' },

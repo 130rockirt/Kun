@@ -46,7 +46,7 @@ export type WorkspaceAgentProfile = {
 const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/
 const MAX_WORKSPACE_AGENT_FILES = 32
 const MAX_WORKSPACE_AGENT_FILE_BYTES = 64 * 1024
-const WORKSPACE_AGENT_LOCAL_READ_TOOLS = ['read', 'grep', 'find', 'ls', 'repo_map'] as const
+const WORKSPACE_AGENT_LOCAL_READ_TOOLS = ['read', 'grep', 'glob', 'ls', 'repo_map'] as const
 
 export async function loadWorkspaceAgentProfiles(workspace: string): Promise<WorkspaceAgentProfile[]> {
   if (!workspace) return []

@@ -125,7 +125,7 @@ describe('FileSessionStore', () => {
     await expect(oversized()).rejects.toThrow('event replay record exceeds 128 bytes')
   })
 
-  it('loadItems reads from disk and dedups by id, keeping the latest write', async () => {
+  it('loadItems reads from disk and keeps the latest value in its original timeline slot', async () => {
     const item = (id: string, text: string): TurnItem => ({
       id,
       kind: 'assistant_text',
@@ -142,12 +142,12 @@ describe('FileSessionStore', () => {
     await writer.appendItem('thr_x', item('c', 'C'))
     await writer.appendItem('thr_x', item('b', 'B-updated')) // same id, newer write
 
-    // A fresh store has a cold cache, so loadItems hits the on-disk dedup path
-    // (newest-write-wins, ordered by last occurrence) the refactor rewrote from
-    // an O(n²) unshift to push+reverse (KunAgent/Kun#621).
+    // A fresh store has a cold cache, so loadItems hits the on-disk dedup path.
+    // Rewriting an item updates its value without moving it behind later tool
+    // calls or messages in the reconstructed conversation timeline.
     const reader = new FileSessionStore({ dataDir })
     const items = await reader.loadItems('thr_x')
-    expect(items.map((entry) => entry.id)).toEqual(['a', 'c', 'b'])
+    expect(items.map((entry) => entry.id)).toEqual(['a', 'b', 'c'])
     expect(items.find((entry) => entry.id === 'b')).toMatchObject({ text: 'B-updated' })
   })
 

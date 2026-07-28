@@ -99,6 +99,21 @@ export const RequiredToolGateSchema = z.object({
 }).strict()
 export type RequiredToolGate = z.infer<typeof RequiredToolGateSchema>
 
+/**
+ * Durable ownership state for a Graph source Lead. The turn remains logically
+ * running while its process-local execution lease is suspended between
+ * material Graph events.
+ */
+export const GraphLeadLifecycleSchema = z.object({
+  version: z.literal(1),
+  runId: z.string().min(1),
+  state: z.enum(['supervising', 'awaiting_user', 'finalizing']),
+  lastDeliveredSeq: z.number().int().nonnegative().default(0),
+  suspendedAt: z.string().optional(),
+  resumedAt: z.string().optional()
+}).strict()
+export type GraphLeadLifecycle = z.infer<typeof GraphLeadLifecycleSchema>
+
 export const TurnSchema = z.object({
   id: z.string().min(1),
   threadId: z.string().min(1),
@@ -133,6 +148,8 @@ export const TurnSchema = z.object({
   toolCatalogDrift: z.boolean().optional(),
   /** Optional persisted hard-tool gate. Missing legacy values mean inactive. */
   requiredToolGate: RequiredToolGateSchema.optional(),
+  /** Optional durable ownership state for a suspended/resumable Graph Lead. */
+  graphLeadLifecycle: GraphLeadLifecycleSchema.optional(),
   /** Extension-run budget accounting persisted across runtime restarts. */
   extensionBudgetTokenBaseline: z.number().int().nonnegative().optional(),
   extensionModelRequests: z.number().int().nonnegative().optional(),

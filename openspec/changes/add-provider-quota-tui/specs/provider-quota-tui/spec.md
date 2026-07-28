@@ -19,7 +19,7 @@ The runtime SHALL classify supported quota probes using stable provider or prese
 - **THEN** the runtime calls the fixed balance or quota endpoint for that provider and normalizes the response
 
 #### Scenario: Recognized subscription provider
-- **WHEN** a configured Claude, ChatGPT/Codex, Cursor, Antigravity, or Gemini CLI subscription has usable existing login state
+- **WHEN** a configured Claude, ChatGPT/Codex, Grok, Cursor, Antigravity, or Gemini CLI subscription has usable existing login state
 - **THEN** the runtime calls the corresponding fixed subscription usage endpoint and returns normalized allowance windows
 
 #### Scenario: Custom provider hostname

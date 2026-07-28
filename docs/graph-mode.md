@@ -34,20 +34,25 @@ Graph Mode 由三层组成：
   -> Lead 理解目标、边界、风险与验收条件
   -> 模型必须先调用 graph_create_run
   -> 宿主校验 GraphPlan 并写入 journal/snapshot
+  -> 原 Lead turn 释放进程内执行槽，但保持 running 并进入监督休眠
   -> Scheduler 计算 ready set
   -> AssignmentResolver 冻结每个 attempt 的权限快照
   -> DelegationRuntime 启动 worker child session
   -> worker 提交进度、Artifact、消息和结构化结果
   -> deterministic / peer / Lead / human review
   -> 依赖解锁、重试、修复、动态 GraphPatch 或有界 LoopGate
+  -> material signal 唤醒同一个 Lead turn 检查、汇报、修复、重试、改图或换人
   -> 完成条件、阻塞消息、活跃 worker、写入集成和资源清理全部关闭
-  -> Lead 生成统一 summary
-  -> GraphRun completed，GUI 和父线程收到持久化结果
+  -> GraphRun 进入 completed / failed / cancelled
+  -> 同一个 Lead turn 最后一次醒来，生成统一交付并结束
   -> 异步生成已脱敏 Episode，按策略做项目能力沉淀
 ```
 
-GraphRun 独立于创建它的模型请求。源 turn 结束后，scheduler 仍可继续执行；
-GUI 重连时先读取 HTTP snapshot，再从已确认的 sequence 继续 SSE replay。
+GraphRun 独立于单次模型请求和网络流，但不脱离创建它的源 Lead turn。等待节点期间，
+宿主只暂停该 turn 的进程内执行并释放模型并发槽，持久化 turn 仍是 `running`；
+重要事件到来时恢复同一个 `sourceTurnId`。只有 GraphRun 已进入终态且 Lead 完成最后
+交付后，源 turn 才结束。GUI 重连时先读取 HTTP snapshot，再从已确认的 sequence
+继续 SSE replay。
 
 ## 3. 核心契约
 
@@ -152,6 +157,9 @@ Scheduler 由宿主驱动，不依赖 Lead 逐节点调用工具。它负责：
 - capped exponential retry backoff 和失败分类。
 - 不可用 DelegationRuntime 时安全暂停。
 
+默认 GraphRun 总 wall time 为 7 天；单个 node 的宿主硬超时仍为 24 小时，
+安静运行 15 分钟只会触发监督检查，不会单独中止节点。这三个限制彼此独立。
+
 Token 只记录实际用量，用于成本归因和学习证据。GraphPlan、节点、循环和冻结后的
 worker assignment 都没有 Token 上限；Scheduler 不会因 Token 数量告警、暂停、
 失败或停止派发。
@@ -217,7 +225,10 @@ GraphSupervisor 只响应 material signals：
   completion、user steering。
 
 普通 progress heartbeat 只更新图，不触发模型轮询。相同信号按窗口合并；
-自动 Lead turn 使用 `messageSource: graph_runtime`，与用户 turn 串行。
+宿主使用 `messageSource: graph_runtime` 恢复或 steer 原始 Lead turn，不再为新格式
+GraphRun 创建独立的后台 Lead turn。Lead 每次被唤醒后先读取持久化 Graph truth，
+向用户回报关键进展，并按证据执行 retry、repair、GraphPatch 或 rebind；如果 run
+仍未结束，再次进入监督休眠。完成、失败和取消都会触发最后一次唤醒和交付。
 
 GraphRun 只有同时满足以下条件才进入 completed：
 
@@ -409,7 +420,9 @@ event cursor，Graph 专用 events route 可按 `graphSeq` 补齐。
 ## 15. Workbench 与可访问性
 
 Composer 在 Graph 开启时显示 `Direct | Graph`，选择随 turn 请求发送。
-active GraphRun 的输入明确标为 steering。右侧 `Graph` tab 提供：
+源 Lead turn 在 GraphRun 非终态期间持续显示为 active。此时同一会话里提交的纯文本
+不会创建另一个 turn，而是作为该 GraphRun 的 Lead steering 持久化，并唤醒原 Lead；
+右侧 `Graph` tab 提供：
 
 - phase 分组、typed edges、LoopGate/revision 标记。
 - pan/zoom、minimap、progressive collapse 和大图 list fallback。
@@ -444,8 +457,9 @@ Graph disabled 时不能把 default strategy 设为 graph，per-run 并发不能
 
 建议发布顺序：
 
-1. `experimental`：只允许显式、已校验的 DAG；自动监督和 asset generation 关闭。
-2. `alpha`：在 `supervision.enabled && autoStart` 时启用自动 Lead 监督。
+1. `experimental`：只允许显式、已校验的 DAG；源 Lead 的必要生命周期监督始终启用，
+   可选 reviewer/增强监督和 asset generation 关闭。
+2. `alpha`：在 `supervision.enabled && autoStart` 时启用可选的自动 reviewer 和增强监督。
 3. `beta`：在 alpha 能力上开放 host-bounded LoopGate 回环。
 4. `learning-preview`：开放 `suggest`；即使配置 `auto_candidate` 也会收窄为 suggest。
 5. `stable`：允许 `auto_candidate` 自动落不可执行、可逆的 candidate profile；
@@ -494,6 +508,8 @@ Episode/Artifact。
   恢复 snapshot+journal，不截断唯一副本。
 - 重启后 attempt orphaned：RecoveryService 会写入 orphaned 和 retry/supervision；
   确认没有同一 scope 的 live lease 后再手动 retry。
+- 重启后源 Lead 仍为 running：启动恢复会读取其 lifecycle cursor，重投未交付的
+  supervision/terminal 信号，或恢复崩溃时正在执行的同一个 turn，不创建替代 Lead。
 - Learning 候选异常：reject/rollback candidate；检查 provenance Episode 和 audit；
   不要直接编辑 registry JSON。
 
@@ -515,12 +531,14 @@ npm run build
 发布前手动冒烟：
 
 1. Direct turn 不创建 GraphRun，普通 delegation 不变。
-2. Graph turn 创建 attached run，GUI 收到 snapshot 和 SSE。
+2. Graph turn 创建 attached run；源 Lead 保持 running、休眠时释放执行槽，GUI 收到
+   snapshot 和 SSE。
 3. 独立节点并行，依赖节点等待；多 run 公平并发。
 4. pause/resume/cancel/retry/steer/review/cleanup 均返回 durable truth。
 5. cancel 中止 worker，重启可恢复 orphan，重复命令不重复副作用。
 6. LoopGate 在上限退出，GraphPatch stale revision 被拒绝。
 7. lease/worktree 冲突不覆盖用户改动，未合并 worktree 被 preserved。
-8. final review、blocking message、cleanup 未关闭时不能完成。
+8. final review、blocking message、cleanup 未关闭时不能完成；completed、failed、
+   cancelled 都由原 Lead turn 做最终交付后才结束。
 9. 多会话 Episode 达阈值后生成候选，promotion 需要用户，回滚和审计可见。
 10. 关闭 Graph 后 Direct 可用，旧 Graph/Agent/Episode 仍可查看。

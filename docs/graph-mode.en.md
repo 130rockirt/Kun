@@ -33,19 +33,27 @@ explicitly exports them.
 Graph turn
   -> Lead calls graph_create_run
   -> host validates and journals GraphPlan
+  -> the source Lead turn releases its process-local execution slot but stays running
   -> scheduler computes ready nodes
   -> immutable least-authority assignment snapshot
   -> DelegationRuntime child worker
   -> bounded progress/artifact/message/structured result
   -> deterministic, peer, Lead, or human review
   -> dependency release, bounded retry, GraphPatch, or LoopGate
+  -> material signals resume the same Lead for inspection, reporting, remediation, or reassignment
   -> final gates and resource disposition
-  -> durable Lead synthesis and completed GraphRun
+  -> completed, failed, or cancelled GraphRun
+  -> the same Lead turn performs final delivery and only then terminates
   -> sanitized Episode and asynchronous learning
 ```
 
-A GraphRun outlives its source model request. On reconnect the renderer
-reconciles an HTTP snapshot, then resumes SSE after its acknowledged cursor.
+A GraphRun outlives any individual model request or network stream, but it
+remains owned by its source Lead turn. While nodes run, the host parks only the
+process-local execution and releases model concurrency; the durable turn stays
+`running`. Material events resume that exact `sourceTurnId`. The turn becomes
+terminal only after the GraphRun is terminal and the Lead has delivered the
+final outcome. On reconnect the renderer reconciles an HTTP snapshot, then
+resumes SSE after its acknowledged cursor.
 
 ## Contracts and state
 
@@ -101,6 +109,10 @@ priority and retry delay, and enforces:
 - run and node wall time;
 - revisions, loops, messages, and artifact bytes.
 
+The default GraphRun wall-time limit is seven days. The separate host-enforced
+node limit remains 24 hours, and 15 minutes of quiet activity triggers a
+supervision inspection without aborting the node.
+
 Token usage is recorded for cost attribution and learning evidence only. Graph
 plans, nodes, loops, and immutable worker assignments have no token ceiling,
 and the scheduler never pauses, fails, warns, or suppresses work because of
@@ -139,8 +151,11 @@ critical risk can require a human.
 
 Supervision is event driven for submission, failure, stall, conflict, resource-limit,
 help, recovery, completion, and user steering. Normal progress does not poll a
-model. Signals coalesce, and `graph_runtime` Lead turns serialize with user
-turns.
+model. Signals coalesce and resume or steer the original source Lead with
+`messageSource: graph_runtime`; new-format runs do not create replacement
+background Lead turns. Each continuation inspects durable truth, reports a
+material milestone, and may retry, repair, patch, or rebind work before parking
+again. Completion, failure, and cancellation all trigger one final delivery.
 
 Write nodes declare normalized repository-relative scopes. `serialize`,
 `lease`, and optional Git `worktree` policies prevent unsafe overlap.
@@ -254,6 +269,10 @@ session, bounded paged artifacts, checks, reviews, writes, worktrees, and
 errors. Run controls include rebind and versioned CAS GraphPatch operations in
 addition to the ordinary lifecycle controls.
 
+The source Lead remains visibly active while its GraphRun is nonterminal.
+Plain-text input submitted in that conversation is persisted as Lead-targeted
+Graph steering and wakes the same turn instead of admitting an unrelated turn.
+
 Artifact preview uses only the authenticated, run-scoped bounded-read route:
 the server verifies that the reference belongs to the GraphRun and the
 renderer retains only the current byte/line page. Every mutation reconciles
@@ -276,8 +295,9 @@ writeIsolation.allowWorktrees=false
 ```
 
 The host enforces the rollout stages: `experimental` permits explicit validated
-DAGs only; `alpha` enables automatic Lead supervision when both supervision
-and `autoStart` are enabled; `beta` admits host-bounded LoopGates;
+DAGs and still keeps the required source-Lead lifecycle supervision active;
+`alpha` enables optional reviewer and enhanced supervision behavior when both
+supervision and `autoStart` are enabled; `beta` admits host-bounded LoopGates;
 `learning-preview` enables suggest mode and clamps `auto_candidate` to suggest;
 and `stable` may materialize reversible, non-executable candidate profiles.
 Promotion still requires evidence and user authority.
@@ -312,6 +332,9 @@ paths, prompts, secrets, or raw patches.
   suffix; never truncate the only copy.
 - Orphan after restart: let recovery persist orphan/retry/supervision before
   manual retry.
+- Running source Lead after restart: lifecycle recovery redelivers unseen
+  supervision or terminal signals and resumes an interrupted continuation
+  using the same durable turn identity.
 - Bad learned candidate: reject or roll back and inspect provenance plus audit;
   do not edit registry JSON manually.
 

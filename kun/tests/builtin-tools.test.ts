@@ -123,7 +123,8 @@ describe('Kun built-in tools', () => {
   it('advertises the pi-style built-in tool family by default', async () => {
     const tools = await host.listTools(buildContext(workspace))
     const toolNames = new Set(tools.map((tool) => tool.name))
-    expect([...allBuiltinToolNames].every((name) => toolNames.has(name))).toBe(true)
+    expect([...allBuiltinToolNames].filter((name) => name !== 'find').every((name) => toolNames.has(name))).toBe(true)
+    expect(toolNames).not.toContain('find')
   })
 
   it('uses 500kb and 20000 lines as the default tool output caps', () => {
@@ -183,7 +184,8 @@ describe('Kun built-in tools', () => {
     const tools = await host.listTools(buildContext(workspace, { sandboxMode: 'read-only' }))
     const names = tools.map((tool) => tool.name)
 
-    expect(names).toEqual(expect.arrayContaining(['read', 'grep', 'find', 'ls']))
+    expect(names).toEqual(expect.arrayContaining(['read', 'grep', 'glob', 'ls']))
+    expect(names).not.toContain('find')
     expect(names).not.toContain('bash')
     expect(names).not.toContain('lsp')
     expect(names).not.toContain('edit')
@@ -197,7 +199,7 @@ describe('Kun built-in tools', () => {
     expect(names).toEqual(expect.arrayContaining([
       'read',
       'grep',
-      'find',
+      'glob',
       'ls',
       'edit',
       'write',
@@ -280,7 +282,7 @@ describe('Kun built-in tools', () => {
     const output = result.item.kind === 'tool_result'
       ? result.item.output as { hint?: string }
       : {}
-    expect(String(output.hint)).toContain('ls, find, or grep')
+    expect(String(output.hint)).toContain('ls, glob, or grep')
   })
 
   it('requires approval before host shell execution in workspace-write sandbox mode', async () => {
@@ -388,6 +390,7 @@ describe('Kun built-in tools', () => {
     expect(buildReadOnlyBuiltinLocalTools().map((tool) => tool.name)).toEqual([
       'read',
       'grep',
+      'glob',
       'find',
       'ls',
       'repo_map',
@@ -408,6 +411,7 @@ describe('Kun built-in tools', () => {
       'edit',
       'find',
       'git_inspect',
+      'glob',
       'grep',
       'ls',
       'lsp',
@@ -421,7 +425,12 @@ describe('Kun built-in tools', () => {
     await writeFile(join(workspace, 'limited.txt'), 'one\ntwo\nthree\n', 'utf8')
     const customHost = new LocalToolHost({ tools: [toolRecord.read, toolRecord.ls] })
     const readOutput = await executeTool(customHost, workspace, 'read', { path: 'limited.txt' })
-    expect(String(readOutput.content)).toContain('Use offset=2 to continue')
+    expect(readOutput).toMatchObject({
+      content: 'one',
+      has_more: true,
+      next_offset: 2,
+      truncation_by: 'requested_limit'
+    })
   })
 
   it('exposes pi-style alias composition helpers and tool-name set', async () => {
@@ -436,6 +445,7 @@ describe('Kun built-in tools', () => {
     expect(createReadOnlyTools().map((tool) => tool.name)).toEqual([
       'read',
       'grep',
+      'glob',
       'find',
       'ls',
       'repo_map',
@@ -445,6 +455,7 @@ describe('Kun built-in tools', () => {
     expect(createReadOnlyToolDefinitions().map((tool) => tool.name)).toEqual([
       'read',
       'grep',
+      'glob',
       'find',
       'ls',
       'repo_map',
@@ -457,6 +468,7 @@ describe('Kun built-in tools', () => {
       'edit',
       'find',
       'git_inspect',
+      'glob',
       'grep',
       'ls',
       'lsp',
@@ -471,6 +483,7 @@ describe('Kun built-in tools', () => {
       'edit',
       'find',
       'git_inspect',
+      'glob',
       'grep',
       'ls',
       'lsp',
@@ -510,7 +523,12 @@ describe('Kun built-in tools', () => {
     })
     await writeFile(join(workspace, 'alias.txt'), 'a\nb\n', 'utf8')
     const output = await executeTool(singleToolHost, workspace, 'read', { path: 'alias.txt' })
-    expect(String(output.content)).toContain('Use offset=2 to continue')
+    expect(output).toMatchObject({
+      content: 'a',
+      has_more: true,
+      next_offset: 2,
+      truncation_by: 'requested_limit'
+    })
   })
 
   it('supports injected backend operations like pi tool factories', async () => {
@@ -647,7 +665,7 @@ describe('Kun built-in tools', () => {
     expect(Array.isArray((grepOutput.matches as Array<Record<string, unknown>>)[0]?.context_before)).toBe(true)
     expect(['rg', 'scan']).toContain(String(grepOutput.backend))
 
-    const findOutput = await executeTool(host, workspace, 'find', {
+    const findOutput = await executeTool(host, workspace, 'glob', {
       pattern: '**/*.txt',
       path: '.'
     })
@@ -1341,7 +1359,12 @@ describe('Kun built-in tools', () => {
       limit: 2
     })
     expect(output.start_line).toBe(2)
-    expect(String(output.content)).toContain('Use offset=4 to continue')
+    expect(output.content).toBe('two\nthree')
+    expect(output).toMatchObject({
+      has_more: true,
+      next_offset: 4,
+      truncation_by: 'requested_limit'
+    })
   })
 
   it('allows an edit after a read window reaches EOF but omits leading lines', async () => {

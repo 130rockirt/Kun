@@ -12,7 +12,7 @@ import type { SubagentProfileConfig } from '../contracts/capabilities.js'
 const SCOPED_RESEARCH_TOOL_NAMES = [
   'read',
   'grep',
-  'find',
+  'glob',
   'ls',
   'repo_map',
   'web_fetch',

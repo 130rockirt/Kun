@@ -59,7 +59,7 @@ type ToolPreferenceSpec = {
 const SOURCE_EXPLORATION_PATTERN =
   /\b(?:code(?:base|graph)?|source|repository|repo|symbol|definition|reference|implementation|dependency|call[ -]?graph|ast)\b/i
 
-const INSPECTION_TOOL_NAMES = ['read', 'grep', 'find', 'ls', 'repo_map', 'lsp'] as const
+const INSPECTION_TOOL_NAMES = ['read', 'grep', 'glob', 'ls', 'repo_map', 'lsp'] as const
 const MUTATION_TOOL_NAMES = ['edit', 'write'] as const
 const TODO_TOOL_NAMES = ['todo_list', 'todo_write'] as const
 const GOAL_TOOL_NAMES = ['get_goal', 'create_goal', 'update_goal'] as const

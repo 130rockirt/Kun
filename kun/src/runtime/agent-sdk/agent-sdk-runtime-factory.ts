@@ -24,6 +24,7 @@ import type { SdkApi } from './sdk-protocol.js'
 import type { RuntimeEventRecorder } from '../../services/runtime-event-recorder.js'
 import type { LlmDebugSink } from '../../services/llm-debug-recorder.js'
 import type { TurnService } from '../../services/turn-service.js'
+import type { TurnRunOutcome } from '../../loop/turn-execution-types.js'
 import type { SessionStore } from '../../ports/session-store.js'
 import type { ThreadStore } from '../../ports/thread-store.js'
 import type { CapabilityRegistry } from '../../adapters/tool/capability-registry.js'
@@ -902,11 +903,21 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
       await deps.turns.applyItem(threadId, item)
     },
 
-    async finishTurn(threadId, turnId, status, error): Promise<void> {
+    async finishTurn(threadId, turnId, status, error): Promise<TurnRunOutcome> {
       const key = skillTurnKey(threadId, turnId)
       try {
-        await deps.turns.finishTurn({ threadId, turnId, status, ...(error ? { error } : {}) })
-        if (status === 'completed' && deps.sessionCoordinator) {
+        let outcome: TurnRunOutcome = status
+        if (status === 'completed') {
+          const suspension = await deps.turns.suspendGraphLeadTurn?.({ threadId, turnId })
+          if (suspension === 'suspended') {
+            outcome = 'suspended'
+          } else {
+            await deps.turns.finishTurn({ threadId, turnId, status, ...(error ? { error } : {}) })
+          }
+        } else {
+          await deps.turns.finishTurn({ threadId, turnId, status, ...(error ? { error } : {}) })
+        }
+        if ((outcome === 'completed' || outcome === 'suspended') && deps.sessionCoordinator) {
           const preparation = sessionPreparationsByTurn.get(key)
           if (preparation) {
             try {
@@ -923,6 +934,7 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
             }
           }
         }
+        return outcome
       } finally {
         activeSkillIdsByTurn.delete(key)
         skillPromptByTurn.delete(key)

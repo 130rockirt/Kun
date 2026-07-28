@@ -5,7 +5,6 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { verifyVideoEditorArchive } from './pack-kun-video-editor.mjs'
 import { verifyNativeEvidenceBundle } from './verify-extension-native-evidence.mjs'
 
 const FULL_COMMIT = /^[a-f0-9]{40}$/i
@@ -57,8 +56,7 @@ export async function verifyManualReleaseDirectory({
   tag,
   expectedVersion,
   checkedOutCommit,
-  tagCommit,
-  verifyPackage = verifyVideoEditorArchive
+  tagCommit
 }) {
   const commit = assertTagMatchesCheckout({ tag, checkedOutCommit, tagCommit })
   const native = await verifyNativeEvidenceBundle({
@@ -68,8 +66,7 @@ export async function verifyManualReleaseDirectory({
     tagCommit,
     expectedVersion
   })
-  const extension = await verifyPackage({ input: directory })
-  return { commit, version: native.version, native, extension }
+  return { commit, version: native.version, native }
 }
 
 export function fetchReleaseTag({ tag, run = runRequired } = {}) {
@@ -186,8 +183,7 @@ async function main() {
     })
     process.stdout.write(
       `Manual Extension release bundle OK: ${tag}, commit ${result.commit}, ` +
-      `${result.native.artifacts.length} native artifacts, ` +
-      `Kun Video Editor sha256 ${result.extension.sha256}\n`
+      `${result.native.artifacts.length} native artifacts\n`
     )
   } finally {
     await rm(directory, { recursive: true, force: true })

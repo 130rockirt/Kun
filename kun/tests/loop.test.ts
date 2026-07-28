@@ -193,7 +193,7 @@ describe('AgentLoop', () => {
     expect(instructions).toContain('`mcp_semantic_find_symbol`')
     expect(instructions).toContain('before broad scans')
     expect(instructions).toContain(
-      'Use `read`, `grep`, `find`, `ls`, `repo_map` for unsupported files'
+      'Use `read`, `grep`, `glob`, `ls`, `repo_map` for unsupported files'
     )
   })
 

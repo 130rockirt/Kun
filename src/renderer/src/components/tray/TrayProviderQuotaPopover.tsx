@@ -1,15 +1,16 @@
 import {
   AlertCircle,
   CircleOff,
+  Clock3,
   ExternalLink,
   Gauge,
+  Info,
   KeyRound,
   LayoutGrid,
   LoaderCircle,
   MonitorUp,
   Plus,
-  RefreshCw,
-  X
+  RefreshCw
 } from 'lucide-react'
 import {
   useCallback,
@@ -135,7 +136,6 @@ export function TrayProviderQuotaPopover({
               label={shortProviderName(entry.providerName)}
               title={entry.providerName}
               status={entry.status}
-              progress={entry.metrics.find((metric) => metric.usedPercent !== undefined)?.usedPercent}
               onClick={() => setSelection(entry.providerId)}
               icon={<span aria-hidden="true">{providerMonogram(entry.providerName)}</span>}
             />
@@ -185,14 +185,6 @@ export function TrayProviderQuotaPopover({
             onClick={() => void refresh(true)}
           >
             <RefreshCw className={loading || refreshing ? 'is-spinning' : ''} aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            className="tray-icon-button"
-            aria-label={copy.close}
-            onClick={() => void api.action('close')}
-          >
-            <X aria-hidden="true" />
           </button>
         </div>
       </header>
@@ -262,7 +254,6 @@ function ProviderTab({
   label,
   title,
   status,
-  progress,
   onClick,
   icon
 }: {
@@ -270,11 +261,9 @@ function ProviderTab({
   label: string
   title?: string
   status: ProviderQuotaStatus
-  progress?: number
   onClick: () => void
   icon: ReactElement
 }): ReactElement {
-  const availablePercent = progress === undefined ? 100 : 100 - clampPercent(progress)
   return (
     <button
       type="button"
@@ -287,9 +276,6 @@ function ProviderTab({
     >
       <span className="tray-provider-tab-icon">{icon}</span>
       <span className="tray-provider-tab-label">{label}</span>
-      <span className="tray-provider-tab-track" aria-hidden="true">
-        <span style={{ width: `${status === 'available' ? availablePercent : 100}%` }} />
-      </span>
     </button>
   )
 }
@@ -400,7 +386,10 @@ function ProviderQuotaDetails({
         </div>
       )}
       <div className="tray-quota-source">
-        <span>{entry.source || t('providerQuotaUnsupportedSource')}</span>
+        <span>
+          {entry.source || t('providerQuotaUnsupportedSource')}
+          <Info aria-hidden="true" />
+        </span>
         {entry.updatedAt ? (
           <span>
             {t('providerQuotaUpdated', { time: formatQuotaDate(entry.updatedAt, locale) })}
@@ -465,6 +454,7 @@ function QuotaMetricDetail({
       ) : null}
       {metric.resetsAt ? (
         <p className="tray-quota-reset">
+          <Clock3 aria-hidden="true" />
           {t('providerQuotaResetsAt', { time: formatQuotaDate(metric.resetsAt, locale) })}
         </p>
       ) : null}
@@ -529,7 +519,6 @@ function supplementalCopy(locale?: string): {
   overview: string
   providers: string
   openKun: string
-  close: string
   stale: string
 } {
   if (locale?.startsWith('zh')) {
@@ -537,7 +526,6 @@ function supplementalCopy(locale?: string): {
       overview: '概览',
       providers: '供应商',
       openKun: '打开 Kun',
-      close: '关闭',
       stale: '显示的是上次成功刷新的数据'
     }
   }
@@ -545,7 +533,6 @@ function supplementalCopy(locale?: string): {
     overview: 'Overview',
     providers: 'Providers',
     openKun: 'Open Kun',
-    close: 'Close',
     stale: 'Showing the last successful refresh'
   }
 }

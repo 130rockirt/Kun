@@ -94,36 +94,46 @@ export class ModelRoundEngine {
     })
     let textItemId = ''
     let reasoningItemId = ''
-    let persistedReasoning = false
-    let persistedText = false
+    let textCreatedAt = ''
+    let reasoningCreatedAt = ''
+    let persistedReasoningText = ''
+    let persistedText = ''
     const persistAccumulatedResponse = async (): Promise<void> => {
-      if (!persistedReasoning && collector.reasoning) {
-        persistedReasoning = true
+      if (collector.reasoning && collector.reasoning !== persistedReasoningText) {
+        const nextReasoning = collector.reasoning
         const itemId = reasoningItemId || this.deps.ids.next('item_reasoning')
+        reasoningItemId = itemId
+        reasoningCreatedAt ||= new Date().toISOString()
         await this.deps.turns.applyItem(
           input.threadId,
           makeAssistantReasoningItem({
             id: itemId,
             turnId: input.turnId,
             threadId: input.threadId,
-            text: collector.reasoning,
-            status: 'completed'
+            text: nextReasoning,
+            status: 'completed',
+            createdAt: reasoningCreatedAt
           })
         )
+        persistedReasoningText = nextReasoning
       }
-      if (!persistedText && collector.text) {
-        persistedText = true
+      if (collector.text && collector.text !== persistedText) {
+        const nextText = collector.text
         const itemId = textItemId || this.deps.ids.next('item_text')
+        textItemId = itemId
+        textCreatedAt ||= new Date().toISOString()
         await this.deps.turns.applyItem(
           input.threadId,
           makeAssistantTextItem({
             id: itemId,
             turnId: input.turnId,
             threadId: input.threadId,
-            text: collector.text,
-            status: 'completed'
+            text: nextText,
+            status: 'completed',
+            createdAt: textCreatedAt
           })
         )
+        persistedText = nextText
       }
     }
     const deltaEvents = new AssistantDeltaEventCoalescer(async (delta) => {
@@ -138,7 +148,8 @@ export class ModelRoundEngine {
             turnId: input.turnId,
             threadId: input.threadId,
             text: delta.text,
-            status: 'running'
+            status: 'running',
+            createdAt: textCreatedAt
           })
         })
         return
@@ -153,7 +164,8 @@ export class ModelRoundEngine {
           turnId: input.turnId,
           threadId: input.threadId,
           text: delta.text,
-          status: 'running'
+          status: 'running',
+          createdAt: reasoningCreatedAt
         })
       })
     })
@@ -210,7 +222,10 @@ export class ModelRoundEngine {
           }
           switch (intent.kind) {
             case 'assistant_text_delta':
-              textItemId ||= this.deps.ids.next('item_text')
+              if (!textItemId) {
+                textItemId = this.deps.ids.next('item_text')
+                textCreatedAt = new Date().toISOString()
+              }
               await deltaEvents.append({
                 kind: intent.kind,
                 itemId: textItemId,
@@ -218,7 +233,10 @@ export class ModelRoundEngine {
               })
               break
             case 'assistant_reasoning_delta':
-              reasoningItemId ||= this.deps.ids.next('item_reasoning')
+              if (!reasoningItemId) {
+                reasoningItemId = this.deps.ids.next('item_reasoning')
+                reasoningCreatedAt = new Date().toISOString()
+              }
               await deltaEvents.append({
                 kind: intent.kind,
                 itemId: reasoningItemId,
@@ -238,6 +256,12 @@ export class ModelRoundEngine {
               })
               break
             case 'tool_call_ready': {
+              // A model response can emit reasoning/text before its tool call.
+              // Persist those assistant items now so the canonical item stream
+              // keeps the same order as the SSE stream. Waiting until the
+              // whole response ends would append the tool first and make a
+              // reloaded conversation read backwards.
+              await persistAccumulatedResponse()
               const itemId = `item_tool_${input.turnId}_${intent.call.callId}`
               await this.deps.turns.applyItem(
                 input.threadId,
@@ -276,7 +300,10 @@ export class ModelRoundEngine {
                 mimeType: intent.mimeType
               })
               const textIntent = collector.appendAssistantText(generated.markdown)
-              textItemId ||= this.deps.ids.next('item_text')
+              if (!textItemId) {
+                textItemId = this.deps.ids.next('item_text')
+                textCreatedAt = new Date().toISOString()
+              }
               await deltaEvents.append({
                 kind: textIntent.kind,
                 itemId: textItemId,

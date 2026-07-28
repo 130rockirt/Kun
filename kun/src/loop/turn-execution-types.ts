@@ -23,6 +23,9 @@ import type { TurnClientSurface } from '../contracts/turns.js'
 /** Terminal status exposed by the public AgentLoop turn boundary. */
 export type TurnExecutionStatus = 'completed' | 'failed' | 'aborted'
 
+/** One process-local execution slice may park while its durable turn remains active. */
+export type TurnRunOutcome = TurnExecutionStatus | 'suspended'
+
 /** Failure metadata retained until the lifecycle facade finalizes a turn. */
 export type TurnExecutionFailure = {
   error: string
@@ -120,4 +123,6 @@ export type ToolTurnContextInput = {
 export type ToolDispatchInput = ToolTurnContextInput & {
   calls: ToolCallLike[]
   toolProviderKinds: ReadonlyMap<string, ToolProviderKind | undefined>
+  /** Aggregate model-visible allowance for source results in this dispatch. */
+  sourceResultBudgetTokens?: number
 }

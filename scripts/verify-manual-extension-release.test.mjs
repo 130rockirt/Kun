@@ -47,7 +47,6 @@ async function fixture(t) {
       `${JSON.stringify(evidence, null, 2)}\n`
     )
   }
-  await writeFile(join(root, 'kun-video-editor-0.1.0.kunx'), 'extension archive')
   return root
 }
 
@@ -80,23 +79,17 @@ test('rejects tracked and untracked release checkout changes before build', () =
   assert.throws(() => assertCleanReleaseCheckout('?? local-release-note.txt\n'), /checkout is dirty/)
 })
 
-test('verifies the complete three-platform bundle and exact extension package', async (t) => {
+test('verifies the complete three-platform native bundle', async (t) => {
   const directory = await fixture(t)
-  const verifiedPackages = []
   const result = await verifyManualReleaseDirectory({
     directory,
     tag: TAG,
     expectedVersion: VERSION,
     checkedOutCommit: COMMIT,
-    tagCommit: COMMIT,
-    verifyPackage: async ({ input }) => {
-      verifiedPackages.push(input)
-      return { sha256: 'a'.repeat(64) }
-    }
+    tagCommit: COMMIT
   })
   assert.equal(result.commit, COMMIT)
   assert.equal(result.native.artifacts.length, 7)
-  assert.deepEqual(verifiedPackages, [directory])
 })
 
 test('fails closed before publish when Linux evidence or artifacts are missing', async (t) => {
@@ -107,7 +100,6 @@ test('fails closed before publish when Linux evidence or artifacts are missing',
     tag: TAG,
     expectedVersion: VERSION,
     checkedOutCommit: COMMIT,
-    tagCommit: COMMIT,
-    verifyPackage: async () => ({ sha256: 'a'.repeat(64) })
+    tagCommit: COMMIT
   }), /exactly one extension-native-evidence-linux/)
 })

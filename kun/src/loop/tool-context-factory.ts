@@ -45,6 +45,9 @@ export function createToolExecutionContext(
     ...(input.guiDesignArtifact ? { guiDesignArtifact: input.guiDesignArtifact } : {}),
     ...(input.imContext ? { imContext: true } : {}),
     model: input.modelCapabilities,
+    ...(input.sourceResultBudgetTokens !== undefined
+      ? { sourceResultBudgetTokens: input.sourceResultBudgetTokens }
+      : {}),
     ...(input.modelProviderId ? { modelProviderId: input.modelProviderId } : {}),
     ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
     activeSkillIds: input.activeSkillIds,

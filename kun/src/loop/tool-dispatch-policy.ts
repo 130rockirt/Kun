@@ -1,7 +1,7 @@
 import type { ApprovalPolicy } from '../contracts/policy.js'
 import type { ToolCallLike, ToolProviderKind } from '../ports/tool-host.js'
 
-const PARALLEL_READ_ONLY_TOOL_NAMES = new Set(['read', 'grep', 'find', 'ls'])
+const PARALLEL_READ_ONLY_TOOL_NAMES = new Set(['read', 'grep', 'glob', 'find', 'ls'])
 const DELEGATE_TASK_TOOL_NAME = 'delegate_task'
 export const DEFAULT_MAX_PARALLEL_READ_ONLY_TOOL_CALLS = 3
 

@@ -5,6 +5,7 @@ import type { TurnService } from '../services/turn-service.js'
 import type { GraphRuntimeStartOptions } from './graph-runtime-factory.js'
 import { graphParentAuthorityToolNames } from '../graph/graph-tool-boundary.js'
 import type { CapabilityToolSpec } from '../adapters/tool/capability-registry.js'
+import type { TurnRunOutcome } from '../loop/turn-execution-types.js'
 
 type GraphAuthorityDefaults = {
   model: string
@@ -18,16 +19,17 @@ type GraphAuthorityDefaults = {
 export function createGraphRuntimeStartOptions(input: {
   delegation: () => DelegationRuntime | undefined
   threads: Pick<ThreadStore, 'get'>
-  startTurn: (
-    request: Parameters<TurnService['startTurn']>[0]
-  ) => ReturnType<TurnService['startTurn']>
+  resumeTurn: (
+    request: Parameters<TurnService['resumeGraphLeadTurn']>[0]
+  ) => ReturnType<TurnService['resumeGraphLeadTurn']>
+  isTurnExecutionActive: (turnId: string) => boolean
   steerTurn: (
     request: Parameters<TurnService['steerTurn']>[0]
   ) => ReturnType<TurnService['steerTurn']>
   runAgentTurn: (
     threadId: string,
     turnId: string
-  ) => Promise<'completed' | 'failed' | 'aborted'>
+  ) => Promise<TurnRunOutcome>
   defaults: () => GraphAuthorityDefaults
   tools: () => CapabilityToolSpec[]
   skillIds: () => string[]
@@ -44,31 +46,47 @@ export function createGraphRuntimeStartOptions(input: {
         nodeIds,
         digest
       })
-      const activeTurn = [...thread.turns].reverse()
-        .find((turn) => turn.status === 'running')
-      if (activeTurn) {
+      const sourceTurn = thread.turns.find((turn) => turn.id === run.sourceTurnId)
+      if (!sourceTurn) return
+      if (sourceTurn.status !== 'running') {
+        // Legacy GraphRuns may have been detached from an already-terminal
+        // source turn. Preserve immutable history instead of fabricating a
+        // replacement Lead turn.
+        return
+      }
+      if (input.isTurnExecutionActive(sourceTurn.id)) {
         await input.steerTurn({
           threadId: run.threadId,
-          turnId: activeTurn.id,
+          turnId: sourceTurn.id,
           text: prompt,
           messageSource: 'graph_runtime'
         })
         return
       }
-      const started = await input.startTurn({
+      const resumed = await input.resumeTurn({
         threadId: run.threadId,
-        request: {
-          prompt,
-          messageSource: 'graph_runtime',
-          model: thread.model,
-          providerId: thread.providerId,
-          accountId: thread.accountId,
-          mode: 'agent',
-          orchestration: 'direct',
-          disableUserInput: true
-        }
+        turnId: sourceTurn.id,
+        runId: run.id,
+        lastDeliveredSeq: run.lastEventSeq,
+        terminal:
+          run.status === 'completed' ||
+          run.status === 'failed' ||
+          run.status === 'cancelled'
       })
-      await input.runAgentTurn(run.threadId, started.turnId)
+      await input.steerTurn({
+        threadId: run.threadId,
+        turnId: sourceTurn.id,
+        text: prompt,
+        messageSource: 'graph_runtime'
+      })
+      if (resumed === 'already_running') return
+      let outcome = await input.runAgentTurn(run.threadId, sourceTurn.id)
+      // A wake-up can reacquire the execution lease during the tiny interval
+      // between a previous slice parking and its active-run promise settling.
+      // Once that promise is gone, start the continuation that owns the lease.
+      while (outcome === 'suspended' && input.isTurnExecutionActive(sourceTurn.id)) {
+        outcome = await input.runAgentTurn(run.threadId, sourceTurn.id)
+      }
     },
     authorityForRun: async (run) => {
       const thread = await input.threads.get(run.threadId)
@@ -121,8 +139,13 @@ function graphLeadPrompt(input: {
     input.digest ? `Bounded signal digest:\n${input.digest}` : '',
     'Inspect current durable truth with graph_control_run before deciding.',
     'Use only validated Graph tools for mutations. Do not edit Graph state indirectly.',
-    input.runStatus === 'completed'
-      ? 'Present the persisted final synthesis, evidence, changed files, checks, costs, and unresolved risks to the user.'
-      : 'Supervise progress, resolve safe issues, or request human input for policy/risk decisions.'
+    ['completed', 'failed', 'cancelled'].includes(input.runStatus)
+      ? 'Present the persisted terminal outcome, synthesis, evidence, changed files, checks, costs, and unresolved risks to the user.'
+      : [
+          'Report a concise milestone to the user from this same Lead turn.',
+          'Supervise progress and resolve safe issues; retry, repair, patch, or rebind eligible work when evidence requires it.',
+          'Request human input only for decisions that policy or risk prevents you from making.',
+          'When the run remains nonterminal after this update, stop cleanly so the host can suspend this turn until the next material event.'
+        ].join(' ')
   ].filter(Boolean).join('\n\n')
 }

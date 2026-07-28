@@ -267,7 +267,7 @@ export type SubagentSurface = z.infer<typeof SubagentSurface>
 export const SUBAGENT_READ_ONLY_TOOL_NAMES = [
   'read',
   'grep',
-  'find',
+  'glob',
   'ls',
   'repo_map',
   'web_fetch',

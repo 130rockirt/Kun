@@ -323,7 +323,7 @@ describe('GraphSupervisor', () => {
     expect(current.nodes.research.attempts.at(-1)?.status).toBe('running')
   })
 
-  it('hot-reconfigures automatic Lead turns without dropping durable signals', async () => {
+  it('keeps source-Lead lifecycle delivery active when optional auto-start is disabled', async () => {
     let config = testGraphConfig({
       supervision: { autoStart: false, coalesceWindowMs: 60_000 }
     })
@@ -352,7 +352,7 @@ describe('GraphSupervisor', () => {
     })
     await supervisor.flush(current.id)
     expect(store.append).toHaveBeenCalledOnce()
-    expect(leadTurn).not.toHaveBeenCalled()
+    expect(leadTurn).toHaveBeenCalledOnce()
 
     config = testGraphConfig({
       supervision: { autoStart: true, coalesceWindowMs: 60_000 }
@@ -365,7 +365,7 @@ describe('GraphSupervisor', () => {
       digest: 'Automatic supervision signal.'
     })
     await supervisor.flush(current.id)
-    expect(leadTurn).toHaveBeenCalledOnce()
+    expect(leadTurn).toHaveBeenCalledTimes(2)
 
     config = testGraphConfig({ enabled: false })
     supervisor.reconfigure()
@@ -376,6 +376,41 @@ describe('GraphSupervisor', () => {
       digest: 'Disabled signal.'
     })
     expect(store.append).toHaveBeenCalledTimes(2)
+    await supervisor.stop()
+  })
+
+  it('delivers a terminal failure signal to the source Lead', async () => {
+    let current: GraphRunV1 = { ...baseRun(), status: 'failed' }
+    const leadTurn = vi.fn(async () => undefined)
+    const store = {
+      get: vi.fn(async () => current),
+      list: vi.fn(async () => [current]),
+      append: vi.fn(async () => {
+        current = { ...current, lastEventSeq: current.lastEventSeq + 1 }
+        return { state: current, envelope: {}, duplicate: false }
+      })
+    }
+    const supervisor = new GraphSupervisor({
+      store: store as never,
+      config: () => testGraphConfig({
+        supervision: { coalesceWindowMs: 60_000 }
+      }),
+      delegation: () => undefined,
+      leadTurn
+    })
+
+    await supervisor.signal({
+      runId: current.id,
+      reason: 'failure',
+      nodeIds: [],
+      digest: 'The GraphRun exhausted its recovery path.'
+    })
+    await supervisor.flush(current.id)
+
+    expect(leadTurn).toHaveBeenCalledWith(expect.objectContaining({
+      run: expect.objectContaining({ status: 'failed' }),
+      reasons: ['failure']
+    }))
     await supervisor.stop()
   })
 
