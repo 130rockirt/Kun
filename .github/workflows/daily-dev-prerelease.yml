@@ -108,6 +108,15 @@ jobs:
       - name: Build macOS packages
         run: npm run dist:mac
 
+      - name: Smoke packaged Kun terminal command
+        run: |
+          if [[ "$(uname -m)" == "arm64" ]]; then
+            resources="dist/mac-arm64/Kun.app/Contents/Resources"
+          else
+            resources="dist/mac/Kun.app/Contents/Resources"
+          fi
+          npm run smoke:packaged-cli -- --resources "$resources"
+
       - name: Verify packaged macOS x64 native architecture
         run: npm run verify:packaged-macos-native -- --resources dist/mac/Kun.app/Contents/Resources --arch x64
 
@@ -270,6 +279,9 @@ jobs:
       - name: Build Windows installer
         run: npm run dist:win
 
+      - name: Smoke packaged Kun terminal command
+        run: npm run smoke:packaged-cli -- --resources dist/win-unpacked/resources
+
       - name: Smoke packaged Extension Node runtime
         run: npm run smoke:packaged-extensions -- --resources dist/win-unpacked/resources
 
@@ -351,6 +363,17 @@ jobs:
 
       - name: Build Linux AppImage
         run: npm run dist:linux
+
+      - name: Smoke packaged Kun terminal command (linux-unpacked and deb)
+        run: |
+          deb_packages=(dist/Kun-*-linux-amd64.deb)
+          if [[ ${#deb_packages[@]} -ne 1 || ! -f "${deb_packages[0]}" ]]; then
+            echo "::error::Expected exactly one Linux deb package"
+            exit 1
+          fi
+          npm run smoke:packaged-cli -- \
+            --resources dist/linux-unpacked/resources \
+            --deb "${deb_packages[0]}"
 
       - name: Smoke packaged Extension Node runtime
         run: npm run smoke:packaged-extensions -- --resources dist/linux-unpacked/resources

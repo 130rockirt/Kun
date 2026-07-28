@@ -196,7 +196,7 @@ The Changelog records public Extension API, not Kun internal refactors. Each ent
 The public surface snapshots below are computed from package entries, public exports, and reachable `.d.ts` declarations. Update them only after this section explains the compatibility impact; changing a hash is not itself a Changelog entry.
 
 <!-- BEGIN GENERATED SDK PUBLIC SURFACE SNAPSHOTS -->
-<!-- sdk-surface-snapshot @kun/extension-api@1.2.0 sha256:b30724f4cdc3c9c1a989794a3a120e385c394a8fc6341e27a27742dabf429fbb -->
+<!-- sdk-surface-snapshot @kun/extension-api@1.2.0 sha256:2333c41597d3c788c81c39604f99f1dca80902304018ceabed696651026e7b45 -->
 <!-- sdk-surface-snapshot @kun/extension-react@1.2.0 sha256:e2099a64dc22c05056dca0c599bafdfb22702b6d57e9b60edd2154b165323322 -->
 <!-- sdk-surface-snapshot @kun/extension-test@1.2.0 sha256:386c2beca46c240f957af2c92925c410a6d801a3bcc9f87697944d9f6d23337e -->
 <!-- END GENERATED SDK PUBLIC SURFACE SNAPSHOTS -->
@@ -221,6 +221,7 @@ Added:
 
 Changed:
 
+- `ModelProviderRequest.generation.toolChoice` now accepts `{ type: 'tool', name }` in addition to `auto` / `none` / `required`, allowing a request to force one declared named tool. The field remains optional, so existing requests need no migration.
 - `ViewContribution.showInRightRail` is an optional boolean that defaults to `true`. A right-sidebar View may set it to `false` to remain available from Extension management or commands without staying in Code's right rail; existing Manifests need no migration.
 - `MediaApi.readText()` raises public `MAX_MEDIA_TEXT_BYTES` from 512 KiB to 2 MiB while retaining strict UTF-8, a caller-tightenable `maxBytes`, opaque handles, and path-free results.
 - SRT/VTT text output remains limited to 192 KiB per item; all text output combined is limited to 2 MiB. Text-only, media, and OTIO outputs continue to stage, validate, promote, or roll back together.

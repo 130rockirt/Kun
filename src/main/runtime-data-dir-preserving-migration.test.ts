@@ -18,11 +18,21 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   markCanonicalKunRuntimeMigrationRuntimeVerified,
-  runCanonicalKunRuntimeDataMigration
+  runCanonicalKunRuntimeDataMigration as runCanonicalKunRuntimeDataMigrationImpl
 } from './runtime-data-dir-migration'
 
 const tempRoots: string[] = []
 const TEST_TIMESTAMP = '2026-07-26T00:00:00.000Z'
+const TEST_AVAILABLE_COPY_BYTES = 100 * 1024 * 1024 * 1024
+
+function runCanonicalKunRuntimeDataMigration(
+  input: Parameters<typeof runCanonicalKunRuntimeDataMigrationImpl>[0]
+): ReturnType<typeof runCanonicalKunRuntimeDataMigrationImpl> {
+  return runCanonicalKunRuntimeDataMigrationImpl({
+    availableCopyBytes: () => TEST_AVAILABLE_COPY_BYTES,
+    ...input
+  })
+}
 
 async function fixture(dataDir = '~/.deepseekgui/kun') {
   const root = await mkdtemp(join(tmpdir(), 'kun-runtime-preservation-'))

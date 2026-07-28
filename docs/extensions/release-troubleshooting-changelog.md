@@ -196,7 +196,7 @@ Changelog 记录公开 Extension API，而不是 Kun 内部重构。每项包含
 下面的 public surface 快照由文档门禁从 package 入口、公开 export 和可达 `.d.ts` 计算。只有在本节已经解释兼容性影响后才更新快照；不能把更新 hash 当成 Changelog 条目。
 
 <!-- BEGIN GENERATED SDK PUBLIC SURFACE SNAPSHOTS -->
-<!-- sdk-surface-snapshot @kun/extension-api@1.2.0 sha256:b30724f4cdc3c9c1a989794a3a120e385c394a8fc6341e27a27742dabf429fbb -->
+<!-- sdk-surface-snapshot @kun/extension-api@1.2.0 sha256:2333c41597d3c788c81c39604f99f1dca80902304018ceabed696651026e7b45 -->
 <!-- sdk-surface-snapshot @kun/extension-react@1.2.0 sha256:e2099a64dc22c05056dca0c599bafdfb22702b6d57e9b60edd2154b165323322 -->
 <!-- sdk-surface-snapshot @kun/extension-test@1.2.0 sha256:386c2beca46c240f957af2c92925c410a6d801a3bcc9f87697944d9f6d23337e -->
 <!-- END GENERATED SDK PUBLIC SURFACE SNAPSHOTS -->
@@ -220,6 +220,7 @@ Added:
 
 Changed:
 
+- `ModelProviderRequest.generation.toolChoice` 除 `auto` / `none` / `required` 外新增 `{ type: 'tool', name }`，允许请求强制选择已声明的具名工具；该字段仍为可选，既有请求无需迁移。
 - `ViewContribution.showInRightRail` 是默认 `true` 的可选布尔字段。右侧栏 View 可设为 `false`，继续由扩展管理页或命令打开，但不在 Code 右侧图标栏常驻；既有 Manifest 无需迁移。
 - `MediaApi.readText()` 的公开 `MAX_MEDIA_TEXT_BYTES` 从 512 KiB 提升到 2 MiB，并继续要求严格 UTF-8、调用者可收紧的 `maxBytes`、opaque handle 与无路径结果。
 - SRT/VTT text output 仍保持单项 192 KiB；全部 text output 总量上限为 2 MiB。纯文本、媒体与 OTIO 输出继续共同 staging、校验、提升或回滚。

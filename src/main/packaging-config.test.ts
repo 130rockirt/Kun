@@ -31,7 +31,14 @@ function preloadSourceFiles(dir = join(process.cwd(), 'src/preload')): string[] 
     const path = join(dir, entry)
     const stat = statSync(path)
     if (stat.isDirectory()) return preloadSourceFiles(path)
-    return path.endsWith('.ts') && !path.endsWith('.d.ts') ? [path] : []
+    if (
+      path.endsWith('.d.ts') ||
+      path.endsWith('.test.ts') ||
+      path.endsWith('.spec.ts')
+    ) {
+      return []
+    }
+    return path.endsWith('.ts') ? [path] : []
   })
 }
 

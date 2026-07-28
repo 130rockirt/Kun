@@ -37,6 +37,7 @@ try {
 
   const artifacts = new Map()
   for (const packagePath of [
+    'packages/provider-catalog',
     'packages/extension-api',
     'packages/extension-test',
     'packages/extension-react',
@@ -188,6 +189,9 @@ async function packPackage(packageDirectory, destination, label) {
 
 async function packPublishableKunCli(destination) {
   const sourceManifest = JSON.parse(await readFile(join(root, 'kun/package.json'), 'utf8'))
+  const providerCatalogManifest = JSON.parse(
+    await readFile(join(root, 'packages/provider-catalog/package.json'), 'utf8')
+  )
   const apiManifest = JSON.parse(await readFile(join(root, 'packages/extension-api/package.json'), 'utf8'))
   const scaffoldManifest = JSON.parse(
     await readFile(join(root, 'packages/create-kun-extension/package.json'), 'utf8')
@@ -204,6 +208,7 @@ async function packPublishableKunCli(destination) {
     files: ['dist', 'README.md'],
     dependencies: {
       ...sourceManifest.dependencies,
+      '@kun/provider-catalog': providerCatalogManifest.version,
       '@kun/extension-api': apiManifest.version,
       'create-kun-extension': scaffoldManifest.version
     }
@@ -248,6 +253,7 @@ async function assertExternalLockfile(project) {
   }
   const lock = JSON.parse(lockText)
   for (const name of [
+    '@kun/provider-catalog',
     '@kun/extension-api',
     '@kun/extension-test',
     '@kun/extension-react',

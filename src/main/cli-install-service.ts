@@ -27,6 +27,8 @@ import type {
 
 const execFileAsync = promisify(execFile)
 const LINUX_MARKER = '# Kun CLI launcher — managed by Kun'
+const LINUX_TARGET_PREFIX = '# Kun CLI target (base64url): '
+const LINUX_REAL_EXECUTABLE_SUFFIX = '.electron-bin'
 const PATH_BLOCK_START = '# >>> Kun CLI >>>'
 const PATH_BLOCK_END = '# <<< Kun CLI <<<'
 
@@ -143,8 +145,13 @@ async function privilegedMacCommand(command: string): Promise<void> {
   }
 }
 
-function linuxAppImagePath(): string {
-  return process.env.APPIMAGE?.trim() || process.execPath
+function linuxLauncherPath(): string {
+  const appImage = process.env.APPIMAGE?.trim()
+  if (appImage) return appImage
+  if (process.execPath.endsWith(LINUX_REAL_EXECUTABLE_SUFFIX)) {
+    return process.execPath.slice(0, -LINUX_REAL_EXECUTABLE_SUFFIX.length)
+  }
+  return process.execPath
 }
 
 function linuxCommandPath(): string {
@@ -153,14 +160,13 @@ function linuxCommandPath(): string {
 
 async function linuxStatus(): Promise<CliInstallStatus> {
   const commandPath = linuxCommandPath()
-  const launcherPath = linuxAppImagePath()
+  const launcherPath = linuxLauncherPath()
   try {
     const contents = await readFile(commandPath, 'utf8')
-    if (!contents.includes(LINUX_MARKER)) {
+    if (!contents.split(/\r?\n/u).includes(LINUX_MARKER)) {
       return { state: 'conflict', commandPath, launcherPath, message: 'An unmanaged command already exists.' }
     }
-    const target = /^app_image=(.+)$/mu.exec(contents)?.[1]?.trim().replace(/^'|'$/gu, '')
-    const targetPath = target || undefined
+    const targetPath = parseLinuxLauncherTarget(contents)
     const state = targetPath === launcherPath ? 'installed' : 'stale'
     return {
       state,
@@ -192,10 +198,11 @@ async function mutateLinux(action: CliInstallAction): Promise<void> {
   }
   if (status.state === 'conflict') throw new Error(`Refusing to overwrite ${commandPath}.`)
   await mkdir(dirname(commandPath), { recursive: true, mode: 0o755 })
-  const appImage = linuxAppImagePath()
+  const launcherPath = linuxLauncherPath()
   await writeFile(commandPath, `#!/bin/sh
 ${LINUX_MARKER}
-app_image=${shellQuote(appImage)}
+${LINUX_TARGET_PREFIX}${Buffer.from(launcherPath, 'utf8').toString('base64url')}
+app_image=${shellQuote(launcherPath)}
 KUN_CLI_ENTRY=1 exec "$app_image" "$@"
 `, { mode: 0o755 })
   await chmod(commandPath, 0o755)
@@ -205,10 +212,18 @@ KUN_CLI_ENTRY=1 exec "$app_image" "$@"
 async function windowsStatus(): Promise<CliInstallStatus> {
   const commandPath = join(dirname(process.execPath), 'bin', 'kun.cmd')
   try {
-    await lstat(commandPath)
+    const details = await lstat(commandPath)
+    if (!details.isFile() || details.isSymbolicLink()) {
+      return {
+        state: 'conflict',
+        commandPath,
+        launcherPath: commandPath,
+        message: 'The packaged terminal launcher is not a regular file.'
+      }
+    }
     const pathConfigured = pathContains(dirname(commandPath))
     return {
-      state: pathConfigured ? 'installed' : 'stale',
+      state: pathConfigured ? 'installed' : 'not-installed',
       commandPath,
       launcherPath: commandPath,
       pathConfigured
@@ -221,6 +236,18 @@ async function windowsStatus(): Promise<CliInstallStatus> {
 
 async function mutateWindows(action: CliInstallAction): Promise<void> {
   const binDir = join(dirname(process.execPath), 'bin')
+  if (action !== 'uninstall') {
+    const status = await windowsStatus()
+    if (status.state === 'conflict') {
+      throw new Error(status.message ?? 'The packaged terminal launcher is unavailable.')
+    }
+    try {
+      const details = await lstat(status.commandPath!)
+      if (!details.isFile() || details.isSymbolicLink()) throw new Error('not a regular file')
+    } catch (error) {
+      throw new Error(`The packaged terminal launcher is unavailable: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
   const escaped = powerShellString(binDir)
   const command = action === 'uninstall'
     ? `$p=[Environment]::GetEnvironmentVariable('Path','User');$parts=@($p -split ';' | ? {$_.Trim() -ne '' -and -not $_.TrimEnd('\\').Equals('${escaped}'.TrimEnd('\\'),'OrdinalIgnoreCase')});[Environment]::SetEnvironmentVariable('Path',($parts -join ';'),'User')`
@@ -273,6 +300,26 @@ function errorCode(error: unknown): string {
 
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'"'"'`)}'`
+}
+
+function parseLinuxLauncherTarget(contents: string): string | undefined {
+  const encoded = contents.split(/\r?\n/u)
+    .find((line) => line.startsWith(LINUX_TARGET_PREFIX))
+    ?.slice(LINUX_TARGET_PREFIX.length)
+    .trim()
+  if (encoded) {
+    try {
+      const decoded = Buffer.from(encoded, 'base64url').toString('utf8')
+      if (Buffer.from(decoded, 'utf8').toString('base64url') === encoded) return decoded
+    } catch {
+      // Fall through to the legacy shell-quoted format.
+    }
+  }
+
+  const serialized = /^app_image=(.+)$/mu.exec(contents)?.[1]?.trim()
+  if (!serialized?.startsWith("'") || !serialized.endsWith("'")) return undefined
+  const decoded = serialized.slice(1, -1).replaceAll(`'"'"'`, "'")
+  return shellQuote(decoded) === serialized ? decoded : undefined
 }
 
 function appleScriptString(value: string): string {

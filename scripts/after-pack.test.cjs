@@ -6,6 +6,7 @@ const {
   chmodSync,
   existsSync,
   mkdtempSync,
+  mkdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -222,7 +223,7 @@ test('does not alter non-Linux packages', (t) => {
   )
 })
 
-test('writes a relative macOS kun launcher inside the app before signing', {
+test('writes a relocatable macOS kun launcher that resolves its installed symlink', {
   skip: process.platform === 'win32' && 'requires POSIX executable modes'
 }, (t) => {
   const appOutDir = mkdtempSync(join(tmpdir(), 'kun-mac-cli-launcher-'))
@@ -237,11 +238,45 @@ test('writes a relative macOS kun launcher inside the app before signing', {
   }
   installCliLaunchers(context)
   const launcher = join(appOutDir, 'Kun.app', 'Contents', 'Resources', 'bin', 'kun')
+  const appExecutable = join(appOutDir, 'Kun.app', 'Contents', 'MacOS', 'Kun')
+  mkdirSync(join(appOutDir, 'Kun.app', 'Contents', 'MacOS'), { recursive: true })
+  writeFileSync(
+    appExecutable,
+    '#!/usr/bin/env node\n' +
+      'process.stdout.write(JSON.stringify({ args: process.argv.slice(2), runAsNode: process.env.ELECTRON_RUN_AS_NODE }))\n'
+  )
+  chmodSync(appExecutable, 0o755)
+  const commandDir = join(appOutDir, 'usr', 'local', 'bin')
+  mkdirSync(commandDir, { recursive: true })
+  const commandPath = join(commandDir, 'kun')
+  const intermediateLink = join(commandDir, 'kun-app-link')
+  symlinkSync(launcher, intermediateLink)
+  symlinkSync('kun-app-link', commandPath)
+
   const contents = readFileSync(launcher, 'utf8')
-  assert.match(contents, /resources_dir=.*self_dir/)
+  assert.match(contents, /while \[ -L "\$launcher_path" \]/)
   assert.match(contents, /app\.asar\.unpacked\/kun\/dist\/cli\/serve-entry\.js/)
   assert.match(contents, /ELECTRON_RUN_AS_NODE=1 exec/)
   assert.equal(statSync(launcher).mode & 0o777, 0o755)
+  const result = JSON.parse(execFileSync(commandPath, ['runtime', 'status'], {
+    encoding: 'utf8'
+  }))
+  assert.equal(result.runAsNode, '1')
+  assert.deepEqual(result.args, [
+    join(
+      realpathSync(appOutDir),
+      'Kun.app',
+      'Contents',
+      'Resources',
+      'app.asar.unpacked',
+      'kun',
+      'dist',
+      'cli',
+      'serve-entry.js'
+    ),
+    'runtime',
+    'status'
+  ])
 })
 
 test('writes a relocatable Windows kun.cmd launcher', (t) => {

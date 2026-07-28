@@ -1,9 +1,6 @@
 name: PR Checks
 
 on:
-  push:
-    branches:
-      - develop
   pull_request:
     types:
       - opened
@@ -48,6 +45,9 @@ jobs:
       - name: Typecheck root app
         run: npm run typecheck
 
+      - name: Typecheck Kun runtime
+        run: npm --prefix kun run typecheck
+
       - name: Lint
         run: npm run lint
 
@@ -60,11 +60,13 @@ jobs:
       - name: Test root app
         run: npm run test
 
+      - name: Test Kun runtime
+        run: npm --prefix kun run test
+
   package:
     name: Build Linux package
     runs-on: ubuntu-latest
     needs: test
-    if: github.event_name == 'pull_request'
     timeout-minutes: 60
     steps:
       - name: Check out repository
@@ -99,6 +101,17 @@ jobs:
 
       - name: Build Linux AppImage
         run: npm run dist:linux
+
+      - name: Smoke packaged Kun terminal command (linux-unpacked and deb)
+        run: |
+          deb_packages=(dist/Kun-*-linux-amd64.deb)
+          if [[ ${#deb_packages[@]} -ne 1 || ! -f "${deb_packages[0]}" ]]; then
+            echo "::error::Expected exactly one Linux deb package"
+            exit 1
+          fi
+          npm run smoke:packaged-cli -- \
+            --resources dist/linux-unpacked/resources \
+            --deb "${deb_packages[0]}"
 
       - name: Smoke Graph workbench pointer interactions on native Linux
         run: xvfb-run -a npm run smoke:development-graph-workbench
@@ -164,7 +177,6 @@ jobs:
     name: Ad-hoc macOS packaged validation (PR)
     runs-on: macos-latest
     needs: test
-    if: github.event_name == 'pull_request'
     timeout-minutes: 90
     env:
       # PR validation intentionally uses the afterPack ad-hoc signature only.
@@ -206,6 +218,15 @@ jobs:
 
       - name: Build ad-hoc macOS packages (x64 and arm64)
         run: npm run dist:mac
+
+      - name: Smoke packaged Kun terminal command
+        run: |
+          if [[ "$(uname -m)" == "arm64" ]]; then
+            resources="dist/mac-arm64/Kun.app/Contents/Resources"
+          else
+            resources="dist/mac/Kun.app/Contents/Resources"
+          fi
+          npm run smoke:packaged-cli -- --resources "$resources"
 
       - name: Smoke Graph workbench pointer interactions on native macOS
         run: npm run smoke:development-graph-workbench
@@ -263,7 +284,6 @@ jobs:
     name: Intel macOS packaged validation (PR)
     runs-on: macos-15-intel
     needs: package-macos
-    if: github.event_name == 'pull_request'
     timeout-minutes: 30
     steps:
       - name: Check out repository
@@ -317,7 +337,6 @@ jobs:
     name: Windows NSIS packaged validation (PR)
     runs-on: windows-latest
     needs: test
-    if: github.event_name == 'pull_request'
     timeout-minutes: 90
     env:
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
@@ -361,6 +380,9 @@ jobs:
 
       - name: Build Windows NSIS installer
         run: npm run dist:win
+
+      - name: Smoke packaged Kun terminal command (win-unpacked)
+        run: npm run smoke:packaged-cli -- --resources dist/win-unpacked/resources
 
       - name: Smoke Graph workbench pointer interactions on native Windows
         run: npm run smoke:development-graph-workbench

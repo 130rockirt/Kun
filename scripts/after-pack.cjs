@@ -416,7 +416,26 @@ function installCliLaunchers(context) {
     require('node:fs').mkdirSync(binDir, { recursive: true, mode: 0o755 })
     writeFileSync(launcher, `#!/bin/sh
 set -eu
-self_dir=$(CDPATH= cd -P "$(dirname "$0")" && pwd -P)
+case "$0" in
+  /*) launcher_path=$0 ;;
+  */*) launcher_path=$PWD/$0 ;;
+  *) launcher_path=$(command -v "$0") ;;
+esac
+link_hops=0
+while [ -L "$launcher_path" ]; do
+  link_hops=$((link_hops + 1))
+  if [ "$link_hops" -gt 40 ]; then
+    echo "kun: too many symbolic links while resolving launcher" >&2
+    exit 1
+  fi
+  launcher_dir=$(CDPATH= cd -P "$(dirname "$launcher_path")" && pwd -P)
+  link_target=$(readlink "$launcher_path")
+  case "$link_target" in
+    /*) launcher_path=$link_target ;;
+    *) launcher_path=$launcher_dir/$link_target ;;
+  esac
+done
+self_dir=$(CDPATH= cd -P "$(dirname "$launcher_path")" && pwd -P)
 resources_dir=$(CDPATH= cd -P "$self_dir/.." && pwd -P)
 app_exec="$resources_dir/../MacOS/${context.packager.appInfo.productFilename}"
 cli_entry="$resources_dir/${entryRelative}"

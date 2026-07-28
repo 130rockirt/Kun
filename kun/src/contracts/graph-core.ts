@@ -31,7 +31,9 @@ export const GraphIdempotencyKeySchema = z.string().trim().min(1).max(256).regex
  * `extension:com.example.tools`.
  */
 export const GraphToolProviderIdSchema = z.string().trim().min(1).max(256).refine(
-  (value) => !/[\u0000-\u001F\u007F]/.test(value),
+  (value) => !Array.from(value).some(
+    (character) => character.charCodeAt(0) <= 0x1f || character.charCodeAt(0) === 0x7f
+  ),
   'tool provider id contains control characters'
 )
 export const GraphTimestampSchema = z.string().datetime({ offset: true })
