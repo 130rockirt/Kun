@@ -89,6 +89,10 @@ import {
 } from '../extensions/contribution-registry'
 import { getSlashQuery } from './chat/floating-composer-commands'
 import { useGraphStore } from '../graph/graph-store'
+import { useGraphParentObserver } from '../graph/use-graph-parent-observer'
+import { graphNodeLiveness } from '../graph/graph-liveness'
+import { openGraphChildThread } from '../graph/graph-child-navigation'
+import { formatSubagentElapsed } from './subagents/SubagentLiveness'
 
 const FILE_TREE_SIDEBAR_WIDTH = 320
 const extensionSurfaceLayoutStorage = {
@@ -126,6 +130,25 @@ export function Workbench(): ReactElement {
     clearActiveThreadSelection, spawnSideConversation, openSideConversationDraft, selectSideConversation, setSidePanelOpen,
     sideConversations, sidePanel
   } = useWorkbenchChatStoreState()
+  useGraphParentObserver(activeThreadId)
+  const graphChildReturnTarget = useGraphStore((state) => state.childReturnTarget)
+  const graphRuns = useGraphStore((state) => state.runs)
+  const graphChildRuns = useGraphStore((state) => state.childRuns)
+  const [graphChildNow, setGraphChildNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!graphChildReturnTarget || activeThreadId !== graphChildReturnTarget.childThreadId) return
+    const id = globalThis.setInterval(() => setGraphChildNow(Date.now()), 1_000)
+    return () => globalThis.clearInterval(id)
+  }, [activeThreadId, graphChildReturnTarget])
+  useEffect(() => {
+    if (
+      !graphChildReturnTarget ||
+      !activeThreadId ||
+      activeThreadId === graphChildReturnTarget.parentThreadId ||
+      activeThreadId === graphChildReturnTarget.childThreadId
+    ) return
+    useGraphStore.getState().clearChildReturnTarget()
+  }, [activeThreadId, graphChildReturnTarget])
   const extensionWorkspaceRoot = useMemo(
     () => resolveActiveExtensionWorkspaceRoot(activeThreadId, threads, workspaceRoot),
     [activeThreadId, threads, workspaceRoot]
@@ -822,10 +845,90 @@ export function Workbench(): ReactElement {
     openRightPanelTab(BUILTIN_RIGHT_PANEL_IDS.graph)
   }, [openRightPanelTab])
 
+  const openComposerGraphChild = useCallback((
+    runId: string,
+    nodeId: string,
+    attemptId: string,
+    childThreadId: string
+  ): void => {
+    const graph = useGraphStore.getState()
+    const run = graph.runs.find((candidate) => candidate.id === runId)
+    if (!run) return
+    graph.setChildReturnTarget({
+      parentThreadId: run.threadId,
+      childThreadId,
+      runId,
+      nodeId,
+      attemptId,
+      parentEventSeq: useChatStore.getState().lastSeq,
+      childSessionStatus: 'creating',
+      observerStatus: 'connecting',
+      openedAt: new Date().toISOString()
+    })
+    void openGraphChildThread(childThreadId)
+  }, [])
+
+  const graphChildContext = useMemo(() => {
+    const target = graphChildReturnTarget
+    if (!target || activeThreadId !== target.childThreadId) return undefined
+    const run = graphRuns.find((candidate) => candidate.id === target.runId)
+    const node = run?.nodes[target.nodeId]
+    const attempt = node?.attempts.find((candidate) => candidate.id === target.attemptId)
+    if (!run || !node || !attempt) return undefined
+    const liveness = graphNodeLiveness(node, graphChildRuns, graphChildNow)
+    return {
+      runTitle: run.plans.at(-1)?.title ?? t('graphPanelTitle'),
+      nodeTitle: node.node.title,
+      attemptNumber: attempt.attemptNumber,
+      agentName: attempt.assignment.name,
+      statusLabel: t(`graphLiveness_${liveness.kind}`),
+      activityLabel: liveness.quiet
+        ? t('graphStillWaiting', {
+            seconds: Math.floor((liveness.lastActivityAgeMs ?? 0) / 1_000)
+          })
+        : liveness.activityLabel ??
+          (liveness.child?.status === 'queued'
+            ? t('graphCreatingChildSession')
+            : t(`graphStatus_${node.status}`, { defaultValue: node.status })),
+      elapsedLabel: liveness.elapsedMs ? formatSubagentElapsed(liveness.elapsedMs) : '',
+      observerStatus: target.observerStatus
+    }
+  }, [
+    activeThreadId,
+    graphChildNow,
+    graphChildReturnTarget,
+    graphChildRuns,
+    graphRuns,
+    t
+  ])
+
+  const returnFromSubagent = useCallback((): void => {
+    const target = useGraphStore.getState().childReturnTarget
+    if (!target || activeThreadId !== target.childThreadId) {
+      if (activeThreadParentId) void selectThread(activeThreadParentId)
+      return
+    }
+    void (async () => {
+      await selectThread(target.parentThreadId)
+      const graph = useGraphStore.getState()
+      await graph.refreshThread(target.parentThreadId)
+      graph.selectRun(target.runId)
+      graph.selectNode(target.nodeId)
+      openRightPanelTab(BUILTIN_RIGHT_PANEL_IDS.graph)
+      graph.clearChildReturnTarget()
+    })()
+  }, [
+    activeThreadId,
+    activeThreadParentId,
+    openRightPanelTab,
+    selectThread
+  ])
+
   const chatComposerProps = useWorkbenchChatComposerProps({
     input, setInput, composerMode, setComposerMode, composerOrchestration, graphEnabled,
     setComposerOrchestration,
     openGraph: openComposerGraph,
+    openGraphChild: openComposerGraphChild,
     busy, currentTurnOrchestration, route, runtimeReady: runtimeConnection === 'ready',
     activeThreadId, activeClawChannelId,
     activeClawChannelModel: activeClawChannel?.model, composerModel, composerProviderId, composerPickList,
@@ -1167,6 +1270,7 @@ export function Workbench(): ReactElement {
             devPreviewOpened: rightPanelMode === BUILTIN_RIGHT_PANEL_IDS.browser,
             returnParentTitle: threads.find((thread) => thread.id === activeThreadParentId)?.title?.trim() ?? '',
             showReturnBar: activeThreadRelation === 'side' && Boolean(activeThreadParentId),
+            graphChildContext,
             composerProps: chatComposerProps,
             conversationDropWorkspaceRoot: activeSkillWorkspace,
             terminalOpen,
@@ -1183,9 +1287,7 @@ export function Workbench(): ReactElement {
             onReviewChanges: () => void reviewActiveThread({ kind: 'uncommittedChanges' }),
             reviewChangesDisabled: busy || runtimeConnection !== 'ready',
             onOpenDevPreview: openDevPreview,
-            onBackToParent: () => {
-              if (activeThreadParentId) void selectThread(activeThreadParentId)
-            },
+            onBackToParent: returnFromSubagent,
             onBeginTerminalResize: beginTerminalResize,
             onToggleTerminal: toggleTerminal,
             onToggleRightWorkspace: toggleCodeRightWorkspace,

@@ -80,6 +80,14 @@ export type ComponentPrototypeMetadata = {
   error?: string
 }
 
+export type RuntimeChildActivity = {
+  phase: 'starting' | 'thinking' | 'responding' | 'tool' | 'retrying' | 'compacting' | 'waiting'
+  label: string
+  toolName?: string
+  startedAt: string
+  updatedAt: string
+}
+
 export type UserFileReference = {
   path: string
   relativePath: string
@@ -98,6 +106,8 @@ export type RuntimeChildMetadata = {
   childProfileName?: string
   /** Model override the child ran under, when one was resolved. */
   childModel?: string
+  /** Provider the child ran through, when one was resolved. */
+  childProviderId?: string
   /** Tool policy applied to the child run. */
   childToolPolicy?: 'readOnly' | 'inherit'
   childStatus: 'queued' | 'running' | 'completed' | 'failed' | 'aborted'
@@ -112,6 +122,15 @@ export type RuntimeChildMetadata = {
   cacheHitRate?: number | null
   costUsd?: number
   costCny?: number
+  /** Safe bounded liveness projection; never includes reasoning or tool output. */
+  activity?: RuntimeChildActivity
+}
+
+export type RuntimeChildEventPayload = {
+  child: RuntimeChildMetadata
+  /** Monotonic sequence from the parent thread event stream. */
+  seq?: number
+  timestamp?: string
 }
 
 export type WebCitationSource = {
@@ -586,6 +605,8 @@ export type DelegatedRuntimeState = {
 }
 
 export type ThreadEventSink = {
+  /** The HTTP/SSE stream is established, even when no replay or live event is pending. */
+  onConnected?(): void
   onSeq(seq: number): void
   onDeltas(deltas: ThreadDeltaEvent[]): void
   onAssistantItem?(item: AssistantItemSnapshotPayload): void
@@ -610,6 +631,8 @@ export type ThreadEventSink = {
   /** Optional: request-local context accounting for the main agent. */
   onContextSnapshot?(snapshot: RequestContextSnapshot): void
   onDelegatedRuntimeState?(state: DelegatedRuntimeState): void
+  /** Safe child lifecycle/activity projected onto the parent thread. */
+  onChildRuntimeEvent?(event: RuntimeChildEventPayload): void
   /** Raw versioned Graph envelope; the Graph projection owns validation/reconciliation. */
   onGraphEvent?(event: unknown): void
 }

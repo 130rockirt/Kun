@@ -2,6 +2,7 @@ import { rendererRuntimeClient } from '../agent/runtime-client'
 import {
   KUN_GRAPHS_PATH,
   KUN_GRAPH_PROJECT_IDENTITY_PATH,
+  kunDelegationDiagnosticsPath,
   kunGraphActionPath,
   kunGraphArtifactPath,
   kunGraphEventsPath,
@@ -18,6 +19,7 @@ import type {
   GraphAgentProfile,
   GraphAgentScore,
   GraphArtifactPage,
+  GraphDelegationDiagnostics,
   GraphEventEnvelope,
   GraphGovernanceAudit,
   GraphLearningCandidate,
@@ -63,6 +65,10 @@ async function request<T>(
 }
 
 export const graphRuntimeClient = {
+  delegationDiagnostics(parentThreadId: string): Promise<GraphDelegationDiagnostics> {
+    return request(kunDelegationDiagnosticsPath(parentThreadId))
+  },
+
   async listRuns(threadId?: string): Promise<GraphRun[]> {
     const query = threadId ? `?thread_id=${encodeURIComponent(threadId)}` : ''
     const page = await request<{ runs: Array<{ id: string }> }>(`${KUN_GRAPHS_PATH}${query}`)

@@ -1348,6 +1348,7 @@ describe('KunRuntimeProvider', () => {
     let onData: ((payload: { streamId: string; events: unknown[] }) => void) | null = null
     const ac = new AbortController()
     const sink: ThreadEventSink = {
+      onConnected: vi.fn(),
       onSeq: vi.fn(() => ac.abort()),
       onDeltas: vi.fn(),
       onUserMessage: vi.fn(),
@@ -1393,6 +1394,7 @@ describe('KunRuntimeProvider', () => {
     })
     const provider = new KunRuntimeProvider()
     await provider.subscribeThreadEvents('thr_1', 2, sink, ac.signal)
+    expect(sink.onConnected).toHaveBeenCalledTimes(1)
     expect(sink.onSeq).toHaveBeenCalledWith(3)
     expect(sink.onDeltas).toHaveBeenCalledWith([{
       text: 'he',

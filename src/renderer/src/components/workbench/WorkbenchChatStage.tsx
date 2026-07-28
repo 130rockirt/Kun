@@ -11,7 +11,11 @@ import { normalizeWorkspaceRoot } from '../../lib/workspace-path'
 import { FloatingComposer } from '../chat/FloatingComposer'
 import { ConversationFileDropZone } from '../chat/ConversationFileDropZone'
 import { LazyMessageTimeline } from '../chat/LazyMessageTimeline'
-import { SubagentReturnBar } from '../chat/message-timeline-empty'
+import {
+  GraphChildSessionBar,
+  SubagentReturnBar,
+  type GraphChildSessionContext
+} from '../chat/message-timeline-empty'
 import { WorkbenchTopActions } from '../chat/WorkbenchTopBar'
 import { IkunCameoLayer, KunCelebrationLayer } from '../chat/AnimatedWorkLogo'
 import { ActiveUiPluginStagePresentation } from '../chat/UiPluginStagePresentation'
@@ -46,6 +50,7 @@ export type WorkbenchChatStageProps = {
   devPreviewOpened: boolean
   returnParentTitle: string
   showReturnBar: boolean
+  graphChildContext?: GraphChildSessionContext
   composerProps: FloatingComposerProps
   conversationDropWorkspaceRoot: string
   terminalOpen: boolean
@@ -98,6 +103,7 @@ export function WorkbenchChatStage({
   devPreviewOpened,
   returnParentTitle,
   showReturnBar,
+  graphChildContext,
   composerProps,
   conversationDropWorkspaceRoot,
   terminalOpen,
@@ -197,6 +203,9 @@ export function WorkbenchChatStage({
             </div>
           </div>
         </header>
+        {graphChildContext ? (
+          <GraphChildSessionBar context={graphChildContext} onBack={onBackToParent} />
+        ) : null}
         <ConversationFileDropZone
           className="flex min-h-0 min-w-0 flex-1 flex-col"
           options={conversationFileDropOptions}

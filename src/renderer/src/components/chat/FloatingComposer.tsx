@@ -190,6 +190,12 @@ type Props = {
   graphEnabled?: boolean
   onOrchestrationChange?: (mode: 'direct' | 'graph') => void
   onOpenGraph?: (runId: string, nodeId?: string) => void
+  onOpenGraphChild?: (
+    runId: string,
+    nodeId: string,
+    attemptId: string,
+    childThreadId: string
+  ) => void
   busy: boolean
   currentTurnOrchestration?: 'direct' | 'graph' | null
   runtimeReady: boolean
@@ -315,6 +321,7 @@ export function FloatingComposer({
   graphEnabled = false,
   onOrchestrationChange,
   onOpenGraph,
+  onOpenGraphChild,
   busy,
   currentTurnOrchestration = null,
   runtimeReady,
@@ -1147,6 +1154,7 @@ export function FloatingComposer({
               threadId={activeThreadId}
               enabled={showGraphProgress}
               onOpenGraph={onOpenGraph}
+              onOpenChild={onOpenGraphChild}
             />
           )}
           incoming={(

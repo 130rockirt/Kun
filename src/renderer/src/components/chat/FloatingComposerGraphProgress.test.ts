@@ -129,6 +129,8 @@ describe('FloatingComposerGraphProgress', () => {
     useGraphStore.setState({
       threadId: 'thread_1',
       runs: [graphRun()],
+      childRuns: {},
+      childReturnTarget: null,
       selectedRunId: 'run_1',
       selectedNodeId: null,
       refreshThread: vi.fn().mockResolvedValue(undefined)
@@ -151,7 +153,14 @@ describe('FloatingComposerGraphProgress', () => {
       total: 3,
       fraction: 1 / 3,
       activeAgents: ['Builder'],
-      currentNodeTitle: 'Node implement'
+      activeCount: 1,
+      currentNodeTitle: 'Node implement',
+      currentNodeId: 'implement',
+      currentStatus: 'running',
+      currentAgent: 'Builder',
+      attemptNumber: null,
+      childThreadId: null,
+      childRuntime: null
     })
 
     const layout = layoutComposerGraph(run)
@@ -160,6 +169,36 @@ describe('FloatingComposerGraphProgress', () => {
     expect(layout.nodes.find((node) => node.id === 'implement')?.agentName).toBe('Builder')
     expect(layout.edges).toHaveLength(2)
     expect(layout.edges[0]?.path).toMatch(/^M .+ C .+/)
+  })
+
+  it('separates zero accepted completion from an actively running node', () => {
+    const run = graphRun()
+    run.nodes.audit!.status = 'blocked'
+    const progress = getComposerGraphProgress(run)
+
+    expect(progress).toMatchObject({
+      completed: 0,
+      total: 3,
+      fraction: 0,
+      activeCount: 1,
+      currentNodeId: 'implement',
+      currentStatus: 'running',
+      activeAgents: ['Builder']
+    })
+  })
+
+  it('does not count skipped or superseded nodes as accepted progress', () => {
+    const run = graphRun({ status: 'failed' })
+    run.nodes.audit!.status = 'accepted'
+    run.nodes.implement!.status = 'skipped'
+    run.nodes.review!.status = 'superseded'
+
+    expect(getComposerGraphProgress(run)).toMatchObject({
+      completed: 1,
+      total: 3,
+      fraction: 1 / 3,
+      activeCount: 0
+    })
   })
 
   it('places the bounded Graph preview above the composer when room is available', () => {

@@ -67,7 +67,7 @@ export function GraphRunWorkspace({
   onReview: (nodeId: string, outcome: 'pass' | 'fail') => void
   onPatch: (operations: GraphPatchOperation[], reason: string) => Promise<void>
   onRebind: (nodeId: string, profileId: string) => void
-  onOpenChild: (threadId: string) => void
+  onOpenChild: (threadId: string, nodeId: string, attemptId: string) => void
   artifactPage: GraphArtifactPage | null
   artifactContent: string
   artifactLoading: boolean

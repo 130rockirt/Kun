@@ -1,6 +1,7 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { beforeAll, describe, expect, it } from 'vitest'
+import { act, create, type ReactTestRenderer } from 'react-test-renderer'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import i18n from '../../i18n'
 import type {
   GraphAttempt,
@@ -10,7 +11,12 @@ import type {
 import { GraphNodeInspector } from './GraphNodeInspector'
 
 beforeAll(async () => {
+  ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
   await i18n.changeLanguage('en')
+})
+
+afterAll(() => {
+  delete (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT
 })
 
 describe('GraphNodeInspector', () => {
@@ -43,6 +49,37 @@ describe('GraphNodeInspector', () => {
     expect(html).toContain('requested profile was unavailable')
     expect(html).toContain('Open child session')
     expect(html).toContain('Open attempt #1 session')
+  })
+
+  it('opens the exact child attempt while preserving node identity', async () => {
+    const run = graphRun()
+    run.nodes.audit!.status = 'running'
+    run.nodes.audit!.attempts = [fallbackAttempt()]
+    const onOpenChild = vi.fn()
+    let renderer: ReactTestRenderer
+    await act(async () => {
+      renderer = create(createElement(GraphNodeInspector, {
+        run,
+        node: run.nodes.audit!,
+        onRetry: () => undefined,
+        onReview: () => undefined,
+        onRebind: () => undefined,
+        onOpenChild,
+        artifactPage: null,
+        artifactContent: '',
+        artifactLoading: false,
+        onOpenArtifact: () => undefined,
+        onNextArtifactPage: () => undefined,
+        onCloseArtifact: () => undefined
+      }))
+    })
+
+    const openButtons = renderer!.root.findAllByType('button').filter((button) =>
+      button.children.join('').includes('Open child session'))
+    act(() => openButtons[0]!.props.onClick())
+
+    expect(onOpenChild).toHaveBeenCalledWith('thread_child', 'audit', 'attempt_1')
+    await act(async () => renderer!.unmount())
   })
 })
 

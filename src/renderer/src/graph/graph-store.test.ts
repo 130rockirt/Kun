@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { GraphEventEnvelope, GraphPlanNode, GraphRun } from './graph-types'
 
 const client = vi.hoisted(() => ({
+  delegationDiagnostics: vi.fn(),
   listRuns: vi.fn(),
   getRun: vi.fn(),
   identity: vi.fn(),
@@ -19,7 +20,11 @@ vi.mock('./graph-runtime-client', () => ({
   graphRuntimeClient: client
 }))
 
-import { receiveGraphRuntimeEvent, useGraphStore } from './graph-store'
+import {
+  receiveGraphChildRuntimeEvent,
+  receiveGraphRuntimeEvent,
+  useGraphStore
+} from './graph-store'
 
 function run(id: string, seq: number): GraphRun {
   return {
@@ -103,6 +108,8 @@ describe('Graph renderer store', () => {
       threadId: null,
       workspace: '',
       runs: [],
+      childRuns: {},
+      childReturnTarget: null,
       selectedRunId: null,
       selectedNodeId: null,
       identity: null,
@@ -117,6 +124,11 @@ describe('Graph renderer store', () => {
       artifactLoading: false,
       loading: false,
       error: null
+    })
+    client.delegationDiagnostics.mockResolvedValue({
+      enabled: true,
+      active: 0,
+      childRuns: []
     })
   })
 
@@ -188,6 +200,183 @@ describe('Graph renderer store', () => {
 
     await Promise.resolve()
     expect(client.listRuns).toHaveBeenCalledTimes(1)
+  })
+
+  it('hydrates child activity from diagnostics without changing durable graph state', async () => {
+    client.listRuns.mockResolvedValueOnce([run('run_1', 1)])
+    client.delegationDiagnostics.mockResolvedValueOnce({
+      enabled: true,
+      active: 1,
+      childRuns: [{
+        id: 'child_1',
+        parentThreadId: 'thread_1',
+        parentTurnId: 'turn_1',
+        childSeq: 1,
+        label: 'Inspect Geo',
+        profile: 'explore',
+        profileSnapshot: { name: 'Explorer' },
+        status: 'running',
+        activity: {
+          phase: 'tool',
+          label: 'Scanning the repository',
+          toolName: 'repo_map',
+          startedAt: '2026-07-26T00:00:00.000Z',
+          updatedAt: '2026-07-26T00:00:10.000Z'
+        },
+        usage: { totalTokens: 42 },
+        startedAt: '2026-07-26T00:00:00.000Z',
+        updatedAt: '2026-07-26T00:00:10.000Z'
+      }]
+    })
+
+    await useGraphStore.getState().refreshThread('thread_1')
+
+    expect(useGraphStore.getState().runs[0]?.lastEventSeq).toBe(1)
+    expect(useGraphStore.getState().childRuns.child_1).toMatchObject({
+      childId: 'child_1',
+      status: 'running',
+      profileName: 'Explorer',
+      totalTokens: 42,
+      activity: {
+        phase: 'tool',
+        label: 'Scanning the repository',
+        toolName: 'repo_map'
+      }
+    })
+  })
+
+  it('deduplicates and rejects out-of-order child activity events', () => {
+    useGraphStore.setState({ threadId: 'thread_1' })
+    receiveGraphChildRuntimeEvent({
+      seq: 12,
+      timestamp: '2026-07-26T00:00:12.000Z',
+      child: {
+        parentThreadId: 'thread_1',
+        parentTurnId: 'turn_1',
+        childId: 'child_1',
+        childStatus: 'running',
+        childSeq: 1,
+        activity: {
+          phase: 'tool',
+          label: 'Reading current files',
+          toolName: 'read_file',
+          startedAt: '2026-07-26T00:00:00.000Z',
+          updatedAt: '2026-07-26T00:00:12.000Z'
+        }
+      }
+    })
+    receiveGraphChildRuntimeEvent({
+      seq: 11,
+      timestamp: '2026-07-26T00:00:11.000Z',
+      child: {
+        parentThreadId: 'thread_1',
+        parentTurnId: 'turn_1',
+        childId: 'child_1',
+        childStatus: 'running',
+        childSeq: 1,
+        activity: {
+          phase: 'thinking',
+          label: 'Older activity',
+          startedAt: '2026-07-26T00:00:00.000Z',
+          updatedAt: '2026-07-26T00:00:11.000Z'
+        }
+      }
+    })
+
+    expect(useGraphStore.getState().childRuns.child_1).toMatchObject({
+      eventSeq: 12,
+      activity: {
+        phase: 'tool',
+        label: 'Reading current files'
+      }
+    })
+  })
+
+  it('keeps Graph loading successful when optional diagnostics are unavailable', async () => {
+    client.listRuns.mockResolvedValueOnce([run('run_1', 1)])
+    client.delegationDiagnostics.mockRejectedValueOnce(new Error('diagnostics offline'))
+
+    await useGraphStore.getState().refreshThread('thread_1')
+
+    expect(useGraphStore.getState()).toMatchObject({
+      loading: false,
+      error: null,
+      runs: [{ id: 'run_1' }]
+    })
+  })
+
+  it('keeps a newer live child event when refresh diagnostics arrive out of order', async () => {
+    useGraphStore.setState({ threadId: 'thread_1' })
+    receiveGraphChildRuntimeEvent({
+      seq: 20,
+      timestamp: '2026-07-26T00:00:20.000Z',
+      child: {
+        parentThreadId: 'thread_1',
+        parentTurnId: 'turn_1',
+        childId: 'child_1',
+        childStatus: 'running',
+        childSeq: 1,
+        activity: {
+          phase: 'tool',
+          label: 'Newest live activity',
+          startedAt: '2026-07-26T00:00:00.000Z',
+          updatedAt: '2026-07-26T00:00:20.000Z'
+        }
+      }
+    })
+    client.listRuns.mockResolvedValueOnce([run('run_1', 1)])
+    client.delegationDiagnostics.mockResolvedValueOnce({
+      enabled: true,
+      active: 1,
+      childRuns: [{
+        id: 'child_1',
+        parentThreadId: 'thread_1',
+        parentTurnId: 'turn_1',
+        status: 'running',
+        activity: {
+          phase: 'thinking',
+          label: 'Older diagnostic activity',
+          startedAt: '2026-07-26T00:00:00.000Z',
+          updatedAt: '2026-07-26T00:00:10.000Z'
+        },
+        updatedAt: '2026-07-26T00:00:10.000Z'
+      }]
+    })
+
+    await useGraphStore.getState().refreshThread('thread_1')
+
+    expect(useGraphStore.getState().childRuns.child_1?.activity?.label)
+      .toBe('Newest live activity')
+  })
+
+  it('persists and clears a Graph child return target without resetting selection', () => {
+    useGraphStore.getState().setChildReturnTarget({
+      parentThreadId: 'thread_1',
+      childThreadId: 'child_1',
+      runId: 'run_1',
+      nodeId: 'node_1',
+      attemptId: 'attempt_1',
+      parentEventSeq: 10,
+      childSessionStatus: 'creating',
+      observerStatus: 'connecting',
+      openedAt: '2026-07-26T00:00:00.000Z'
+    })
+
+    expect(useGraphStore.getState()).toMatchObject({
+      selectedRunId: 'run_1',
+      selectedNodeId: 'node_1',
+      childReturnTarget: {
+        childThreadId: 'child_1',
+        childSessionStatus: 'creating'
+      }
+    })
+
+    useGraphStore.getState().clearChildReturnTarget()
+    expect(useGraphStore.getState()).toMatchObject({
+      selectedRunId: 'run_1',
+      selectedNodeId: 'node_1',
+      childReturnTarget: null
+    })
   })
 
   it('loads project agents, scores, governance and learning state together', async () => {

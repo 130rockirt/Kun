@@ -23,10 +23,16 @@ export function statusTone(status: string): string {
   if (status === 'running' || status === 'queued' || status === 'reviewing' || status === 'probation') {
     return 'border-sky-400/35 bg-sky-500/10 text-sky-700 dark:text-sky-200'
   }
-  if (status === 'failed' || status === 'cancelled' || status === 'repair_required' || status === 'rejected') {
+  if (status === 'failed' || status === 'cancelled' || status === 'rejected') {
     return 'border-red-400/35 bg-red-500/10 text-red-700 dark:text-red-200'
   }
-  if (status === 'awaiting_human' || status === 'paused' || status === 'dormant' || status === 'draft') {
+  if (
+    status === 'awaiting_human' ||
+    status === 'paused' ||
+    status === 'dormant' ||
+    status === 'draft' ||
+    status === 'repair_required'
+  ) {
     return 'border-amber-400/35 bg-amber-500/10 text-amber-700 dark:text-amber-200'
   }
   return 'border-ds-border-muted bg-ds-card text-ds-muted'

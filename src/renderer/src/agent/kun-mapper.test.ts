@@ -1701,6 +1701,57 @@ describe('Kun extension metadata mapping', () => {
     })
   })
 
+  it('forwards safe child activity to the dedicated runtime sink', async () => {
+    const childEvents: unknown[] = []
+    const sink: ThreadEventSink = {
+      ...makeSink(),
+      onChildRuntimeEvent: (event) => childEvents.push(event)
+    }
+    await dispatchKunRuntimeEvent(
+      {
+        kind: 'item_updated',
+        seq: 17,
+        timestamp: '2026-07-28T00:00:17.000Z',
+        threadId: 'thr_1',
+        turnId: 'turn_1',
+        child: {
+          parentThreadId: 'thr_1',
+          parentTurnId: 'turn_1',
+          childId: 'child_geo',
+          childLabel: 'Inspect Geo',
+          childStatus: 'running',
+          childSeq: 1,
+          childProviderId: 'deepseek',
+          activity: {
+            phase: 'tool',
+            label: 'Scanning the repository',
+            toolName: 'repo_map',
+            startedAt: '2026-07-28T00:00:00.000Z',
+            updatedAt: '2026-07-28T00:00:17.000Z'
+          }
+        }
+      },
+      sink,
+      async () => undefined
+    )
+
+    expect(childEvents).toEqual([{
+      seq: 17,
+      timestamp: '2026-07-28T00:00:17.000Z',
+      child: expect.objectContaining({
+        childId: 'child_geo',
+        childProviderId: 'deepseek',
+        activity: {
+          phase: 'tool',
+          label: 'Scanning the repository',
+          toolName: 'repo_map',
+          startedAt: '2026-07-28T00:00:00.000Z',
+          updatedAt: '2026-07-28T00:00:17.000Z'
+        }
+      })
+    }])
+  })
+
   it('preserves background subagent message source on user messages', () => {
     const block = chatBlockFromItem({
       id: 'item_subagent_notice',

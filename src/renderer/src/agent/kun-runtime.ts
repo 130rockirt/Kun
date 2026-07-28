@@ -1160,6 +1160,7 @@ export class KunRuntimeProvider implements AgentProvider {
       signal.addEventListener('abort', onAbort, { once: true })
       try {
         await rendererRuntimeClient.startSse(threadId, sinceSeq, streamId, { acknowledgedBatches: true })
+        if (!settled && !signal.aborted) sink.onConnected?.()
       } catch (error) {
         sink.onError(error instanceof Error ? error : new Error(String(error)))
         finish()

@@ -397,6 +397,14 @@ export type CoreRuntimeSkillsResponseJson = {
   validationErrors?: Array<Record<string, unknown> | string>
 }
 
+export type CoreChildRunActivityJson = {
+  phase: 'starting' | 'thinking' | 'responding' | 'tool' | 'retrying' | 'compacting' | 'waiting'
+  label: string
+  toolName?: string
+  startedAt: string
+  updatedAt: string
+}
+
 export type CoreChildRuntimeMetadataJson = {
   parentThreadId: string
   parentTurnId: string
@@ -406,6 +414,7 @@ export type CoreChildRuntimeMetadataJson = {
   childSeq: number
   detached?: boolean
   childModel?: string
+  childProviderId?: string
   childProfile?: string
   childProfileName?: string
   childToolPolicy?: 'readOnly' | 'inherit'
@@ -418,6 +427,7 @@ export type CoreChildRuntimeMetadataJson = {
   cacheHitRate?: number | null
   costUsd?: number
   costCny?: number
+  activity?: CoreChildRunActivityJson
 }
 
 export type CoreWebSourceJson = {

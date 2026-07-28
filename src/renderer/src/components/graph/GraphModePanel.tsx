@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactElement } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ReactElement } from 'react'
 import {
   BrainCircuit,
   GitBranch,
@@ -7,6 +7,7 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useChatStore } from '../../store/chat-store'
+import { openGraphChildThread } from '../../graph/graph-child-navigation'
 import { useGraphStore } from '../../graph/graph-store'
 import { GraphAgentsView } from './GraphAgentsView'
 import { GraphLearningView } from './GraphLearningView'
@@ -41,11 +42,12 @@ export function GraphModePanel({
   const reducedMotion = usePrefersReducedMotion()
   const activeThreadId = useChatStore((state) => state.activeThreadId)
   const workspaceRoot = useChatStore((state) => state.workspaceRoot)
-  const selectThread = useChatStore((state) => state.selectThread)
   const [view, setView] = useState<View>('run')
   const [steering, setSteering] = useState('')
   const {
     runs,
+    childRuns,
+    childReturnTarget,
     selectedRunId,
     selectedNodeId,
     profiles,
@@ -66,6 +68,7 @@ export function GraphModePanel({
     refreshSelectedRun,
     selectRun,
     selectNode,
+    setChildReturnTarget,
     command,
     cancel,
     retryNode,
@@ -83,10 +86,14 @@ export function GraphModePanel({
     governCandidate,
     consolidate
   } = useGraphStore()
+  const [now, setNow] = useState(() => Date.now())
+  const graphThreadId = childReturnTarget?.childThreadId === activeThreadId
+    ? childReturnTarget.parentThreadId
+    : activeThreadId
 
   useEffect(() => {
-    void refreshThread(activeThreadId)
-  }, [activeThreadId, refreshThread])
+    void refreshThread(graphThreadId)
+  }, [graphThreadId, refreshThread])
 
   useEffect(() => {
     void refreshProject(workspaceRoot)
@@ -94,11 +101,46 @@ export function GraphModePanel({
 
   const run = runs.find((item) => item.id === selectedRunId) ?? runs[0] ?? null
   const selectedNode = run && selectedNodeId ? run.nodes[selectedNodeId] : undefined
+  const hasActiveNode = Boolean(run && Object.values(run.nodes).some((node) =>
+    ['queued', 'running', 'submitted', 'reviewing', 'repair_required'].includes(node.status)))
+  useEffect(() => {
+    if (!hasActiveNode) return
+    const id = globalThis.setInterval(() => setNow(Date.now()), 1_000)
+    return () => globalThis.clearInterval(id)
+  }, [hasActiveNode])
+
+  const openChild = useCallback((
+    threadId: string,
+    nodeId: string,
+    attemptId: string
+  ): void => {
+    if (!run) return
+    setChildReturnTarget({
+      parentThreadId: run.threadId,
+      childThreadId: threadId,
+      runId: run.id,
+      nodeId,
+      attemptId,
+      parentEventSeq: useChatStore.getState().lastSeq,
+      childSessionStatus: 'creating',
+      observerStatus: 'connecting',
+      openedAt: new Date().toISOString()
+    })
+    void openGraphChildThread(threadId)
+  }, [run, setChildReturnTarget])
   const elements = useMemo(
     () => run
-      ? graphElements(run, reducedMotion, selectedNodeId)
+      ? graphElements(run, reducedMotion, selectedNodeId, {
+          childRuns,
+          now,
+          onOpenChild: (nodeId, attemptId, threadId) => {
+            openChild(threadId, nodeId, attemptId)
+          },
+          waitingUpstreamLabel: t('graphWaitingUpstream'),
+          viewLiveWorkLabel: t('graphViewLiveWork')
+        })
       : { nodes: [], edges: [] },
-    [reducedMotion, run, selectedNodeId]
+    [childRuns, now, openChild, reducedMotion, run, selectedNodeId, t]
   )
   const progress = run ? runProgress(run) : { completed: 0, total: 0 }
 
@@ -132,7 +174,7 @@ export function GraphModePanel({
           <button
             type="button"
             onClick={() => {
-              void refreshThread(activeThreadId)
+              void refreshThread(graphThreadId)
               void refreshProject(workspaceRoot)
             }}
             className="rounded-lg p-2 text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
@@ -198,7 +240,7 @@ export function GraphModePanel({
           onReview={(nodeId, outcome) => void reviewNode(nodeId, outcome)}
           onPatch={(operations, reason) => patch(operations, reason)}
           onRebind={(nodeId, profileId) => void rebindNode(nodeId, profileId)}
-          onOpenChild={(threadId) => void selectThread(threadId)}
+          onOpenChild={openChild}
           artifactPage={artifactPage}
           artifactContent={artifactContent}
           artifactLoading={artifactLoading}

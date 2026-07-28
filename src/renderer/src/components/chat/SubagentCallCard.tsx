@@ -2,10 +2,18 @@ import type { ReactElement } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
-import { Check, ChevronDown, ChevronRight, ExternalLink, Hourglass, Loader2, TriangleAlert } from 'lucide-react'
+import { Check, ChevronDown, ChevronRight, ExternalLink, Hourglass, Loader2 } from 'lucide-react'
 import type { ChatBlock, ToolBlock } from '../../agent/types'
 import { useChatStore } from '../../store/chat-store'
 import { AgentKun } from '../subagents/AgentKun'
+import {
+  isTerminalSubagentStatus,
+  SubagentLiveAvatar as AvatarDisc,
+  SubagentLivenessLane as LaneHairline,
+  type SubagentLivenessStatus,
+  useSubagentElapsed,
+  useSubagentReducedMotion
+} from '../subagents/SubagentLiveness'
 import { BUILTIN_AGENT_CATALOG_BY_ID } from '../../../../../kun/src/delegation/builtin-agent-catalog'
 
 /**
@@ -19,7 +27,7 @@ import { BUILTIN_AGENT_CATALOG_BY_ID } from '../../../../../kun/src/delegation/b
  * every read degrades gracefully so a contract change never blanks the card.
  */
 
-type CardStatus = 'queued' | 'running' | 'done' | 'failed' | 'awaiting-permission'
+type CardStatus = SubagentLivenessStatus
 export type OpenChildThreadHandler = (threadId: string) => void
 
 const KNOWN_POSE_IDS = new Set([
@@ -36,8 +44,6 @@ const KNOWN_POSE_IDS = new Set([
   'title',
   'summary'
 ])
-
-const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)'
 
 /** Parsed shape of the `delegate_task` tool `detail` JSON (all optional). */
 type DelegateDetail = {
@@ -176,7 +182,7 @@ function resolveStatus(block: ChatBlock, child: ChildMeta, detail?: DelegateDeta
 }
 
 function isTerminal(status: CardStatus): boolean {
-  return status === 'done' || status === 'failed'
+  return isTerminalSubagentStatus(status)
 }
 
 /** Deterministic hue from a string, so same-pose custom agents differ. */
@@ -186,19 +192,6 @@ function hashHue(input: string): number {
     h = (h * 31 + input.charCodeAt(i)) | 0
   }
   return Math.abs(h) % 360
-}
-
-function useReducedMotion(): boolean {
-  const [reduced, setReduced] = useState(false)
-  useEffect(() => {
-    if (typeof window === 'undefined' || !window.matchMedia) return
-    const mq = window.matchMedia(REDUCED_MOTION_QUERY)
-    setReduced(mq.matches)
-    const onChange = (e: MediaQueryListEvent): void => setReduced(e.matches)
-    mq.addEventListener?.('change', onChange)
-    return () => mq.removeEventListener?.('change', onChange)
-  }, [])
-  return reduced
 }
 
 /** Freeze animation when the card scrolls out of the viewport. */
@@ -215,80 +208,6 @@ function useOnScreen(ref: React.RefObject<Element | null>): boolean {
     return () => io.disconnect()
   }, [ref])
   return onScreen
-}
-
-function mmss(ms: number): string {
-  const total = Math.max(0, Math.floor(ms / 1000))
-  const m = Math.floor(total / 60)
-  const s = total % 60
-  return `${m}:${s.toString().padStart(2, '0')}`
-}
-
-/**
- * Live elapsed ticker. While `running`, ticks `now - createdAt` once a second;
- * on a terminal status it freezes at `durationMs` (or the last tick). Local-only.
- */
-function useElapsed(
-  status: CardStatus,
-  createdAt: string | undefined,
-  durationMs: number | undefined,
-  tickNow?: number
-): string {
-  const start = useMemo(() => {
-    const parsed = createdAt ? Date.parse(createdAt) : NaN
-    return Number.isFinite(parsed) ? parsed : Date.now()
-  }, [createdAt])
-  const [now, setNow] = useState(() => Date.now())
-  const running = status === 'running' || status === 'awaiting-permission' || status === 'queued'
-  useEffect(() => {
-    if (!running) return
-    const id = window.setInterval(() => setNow(Date.now()), 1000)
-    return () => window.clearInterval(id)
-  }, [running])
-  if (status === 'queued') return '—'
-  if (isTerminal(status) && typeof durationMs === 'number') return mmss(durationMs)
-  return mmss((tickNow ?? now) - start)
-}
-
-const DISC_BG: Record<CardStatus, string> = {
-  queued: 'radial-gradient(circle at 50% 36%,#fff 0%,#eef4fb 80%)',
-  running: 'radial-gradient(circle at 50% 36%,#fff 0%,#e3eefb 82%)',
-  done: 'radial-gradient(circle at 50% 36%,#fff 0%,#e4f5ee 82%)',
-  failed: 'radial-gradient(circle at 50% 36%,#fff 0%,#fbe6e4 82%)',
-  'awaiting-permission': 'radial-gradient(circle at 50% 36%,#fff 0%,#fbf0df 82%)'
-}
-const DISC_RING: Record<CardStatus, string> = {
-  queued: 'inset 0 0 0 1px rgba(188,214,245,0.7)',
-  running: 'inset 0 0 0 1px var(--ds-accent, #3b82d8)',
-  done: 'inset 0 0 0 1px #8fd9bf',
-  failed: 'inset 0 0 0 1px #efa8a2',
-  'awaiting-permission': 'inset 0 0 0 1px #e8c486'
-}
-
-function StatusDot({ status }: { status: CardStatus }): ReactElement {
-  const ring = 'absolute -bottom-px -right-px flex h-[13px] w-[13px] items-center justify-center rounded-full border-[2.5px] border-ds-card'
-  if (status === 'done') {
-    return (
-      <span className={`${ring} bg-emerald-500 dark:bg-emerald-400`}>
-        <Check className="h-2 w-2 text-white" strokeWidth={3.5} />
-      </span>
-    )
-  }
-  if (status === 'failed') {
-    return (
-      <span className={`${ring} bg-red-500 dark:bg-red-400`}>
-        <TriangleAlert className="h-2 w-2 text-white" strokeWidth={3} />
-      </span>
-    )
-  }
-  if (status === 'queued') {
-    return <span className={`${ring} bg-ds-faint/60`} />
-  }
-  if (status === 'awaiting-permission') {
-    return <span className={`${ring} bg-amber-500`} />
-  }
-  // running: pulsing accent dot
-  return <span className={`${ring} ds-subagent-dot-pulse bg-accent`} />
 }
 
 function StatusPill({ status, t }: { status: CardStatus; t: (k: string) => string }): ReactElement | null {
@@ -329,86 +248,6 @@ function GeneratedPill({ t }: { t: TFunction<'common'> }): ReactElement {
   return (
     <span className="whitespace-nowrap rounded-full bg-violet-500/10 px-2 py-[2px] text-[10.5px] font-semibold text-violet-600 dark:text-violet-300">
       {t('subagentGeneratedBadge', { defaultValue: 'Generated' })}
-    </span>
-  )
-}
-
-/** 2.5px liveness lane directly under the trigger row. */
-function LaneHairline({ status, animate }: { status: CardStatus; animate: boolean }): ReactElement | null {
-  if (status === 'queued') return null
-  const base = 'relative h-[2.5px] w-full overflow-hidden bg-ds-border-muted'
-  if (status === 'running') {
-    return (
-      <div className={base}>
-        {animate ? (
-          <span className="ds-subagent-lane-sweep absolute top-0 h-full w-2/5 rounded-[2px]" />
-        ) : (
-          <span className="absolute inset-y-0 left-0 w-1/3 bg-accent/60" />
-        )}
-      </div>
-    )
-  }
-  if (status === 'done') {
-    return (
-      <div className={base}>
-        <span className="absolute inset-0 bg-emerald-500" />
-      </div>
-    )
-  }
-  if (status === 'failed') {
-    return (
-      <div className={base}>
-        <span className="absolute inset-y-0 left-0 w-[62%] bg-red-500" />
-      </div>
-    )
-  }
-  // awaiting-permission: striped amber, paused
-  return (
-    <div className={base}>
-      <span
-        className="absolute inset-0 opacity-60"
-        style={{
-          backgroundImage:
-            'repeating-linear-gradient(45deg,#dd9444 0 6px,transparent 6px 12px)'
-        }}
-      />
-    </div>
-  )
-}
-
-function AvatarDisc({
-  poseId,
-  status,
-  hue,
-  compact,
-  animate
-}: {
-  poseId: string
-  status: CardStatus
-  hue: number | null
-  compact: boolean
-  animate: boolean
-}): ReactElement {
-  // Failed: keep the pose, freeze motion, tint disc red (reads "stuck", not "asleep").
-  // Queued: AgentKun's disabled (resting) path, grayscale + static.
-  const disabled = status === 'queued'
-  const frozen = !animate || status === 'failed' || isTerminal(status)
-  const size = compact ? 'h-9 w-9' : 'h-11 w-11'
-  const inner = compact ? 'h-[31px] w-[31px]' : 'h-9 w-9'
-  // Hash-tint for same-pose custom agents — applied to the wrapper gradient only.
-  const bg =
-    hue !== null && status !== 'failed' && status !== 'done'
-      ? `radial-gradient(circle at 50% 36%,#fff 0%,hsl(${hue} 60% 94%) 82%)`
-      : DISC_BG[status]
-  return (
-    <span
-      className={`relative flex ${size} shrink-0 items-center justify-center rounded-full ${
-        frozen ? 'ds-subagent-frozen' : ''
-      }`}
-      style={{ background: bg, boxShadow: DISC_RING[status] }}
-    >
-      <AgentKun id={poseId} disabled={disabled} className={inner} />
-      <StatusDot status={status} />
     </span>
   )
 }
@@ -483,7 +322,7 @@ export function SubagentCallCard({
 }): ReactElement | null {
   const { t } = useTranslation('common')
   const selectThread = useChatStore((s) => s.selectThread)
-  const reducedMotion = useReducedMotion()
+  const reducedMotion = useSubagentReducedMotion()
   const ref = useRef<HTMLElement | null>(null)
   const onScreen = useOnScreen(ref)
 
@@ -534,7 +373,12 @@ export function SubagentCallCard({
     t('subagentDefaultName')
   const taskLine = detail.summary?.trim() || (taskText?.trim() !== taskTitle ? taskText?.trim() : '')
 
-  const elapsed = useElapsed(status, block.createdAt, child.durationMs ?? detail.durationMs, tickNow)
+  const elapsed = useSubagentElapsed(
+    status,
+    block.createdAt,
+    child.durationMs ?? detail.durationMs,
+    tickNow
+  )
   const steps = child.toolInvocations ?? detail.toolInvocations
 
   // Always start collapsed — both while running and after it finishes. The card
@@ -714,7 +558,7 @@ export function SubagentGroup({
 }): ReactElement | null {
   const { t } = useTranslation('common')
   const [collapsed, setCollapsed] = useState(false)
-  const reducedMotion = useReducedMotion()
+  const reducedMotion = useSubagentReducedMotion()
   const [tickNow, setTickNow] = useState(() => Date.now())
 
   const sorted = [...blocks].sort((a, b) => {

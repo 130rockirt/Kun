@@ -14,6 +14,7 @@ type UseWorkbenchChatComposerPropsInput = {
   graphEnabled: boolean
   setComposerOrchestration: NonNullable<ComposerProps['onOrchestrationChange']>
   openGraph: NonNullable<ComposerProps['onOpenGraph']>
+  openGraphChild: NonNullable<ComposerProps['onOpenGraphChild']>
   busy: boolean
   currentTurnOrchestration: ComposerProps['currentTurnOrchestration']
   route: string
@@ -79,6 +80,7 @@ export function useWorkbenchChatComposerProps({
   graphEnabled,
   setComposerOrchestration,
   openGraph,
+  openGraphChild,
   busy,
   currentTurnOrchestration,
   route,
@@ -143,6 +145,7 @@ export function useWorkbenchChatComposerProps({
     graphEnabled,
     onOrchestrationChange: setComposerOrchestration,
     onOpenGraph: openGraph,
+    onOpenGraphChild: openGraphChild,
     busy,
     currentTurnOrchestration,
     runtimeReady,
@@ -251,6 +254,7 @@ export function useWorkbenchChatComposerProps({
     openDesignFileTreeSidePanel,
     openFileTreeSidePanel,
     openGraph,
+    openGraphChild,
     openProvidersSettings,
     openSideConversationDraft,
     pickComposerFileReferences,

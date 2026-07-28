@@ -1,3 +1,5 @@
+import { type ReactElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { GraphPlanNode, GraphRun } from '../../graph/graph-types'
 import {
@@ -99,6 +101,9 @@ describe('Graph Mode panel projection', () => {
       { id: 'e3', kind: 'message', from: 'side', to: 'finish' }
     ])
 
+    run.nodes.middle!.status = 'skipped'
+    run.nodes.side!.status = 'superseded'
+
     expect([...criticalPathNodeIds(run)]).toEqual(['finish', 'middle', 'start'])
     expect(runProgress(run)).toEqual({ completed: 1, total: 4 })
   })
@@ -138,6 +143,24 @@ describe('Graph Mode panel projection', () => {
       'start: running; Kun auto route',
       'finish: pending; Kun auto route'
     ])
+    expect(renderToStaticMarkup(animated.nodes[0]?.data.label as ReactElement))
+      .toContain('ds-subagent-lane-sweep')
+    expect(renderToStaticMarkup(reduced.nodes[0]?.data.label as ReactElement))
+      .not.toContain('ds-subagent-lane-sweep')
+  })
+
+  it('uses neutral styling for ordinary dependency waiting', () => {
+    const waiting = node('waiting', 'phase_1')
+    const run = graphRun([waiting], [])
+    run.nodes.waiting!.status = 'blocked'
+
+    const projected = graphElements(run)
+
+    expect(projected.nodes[0]?.style).toMatchObject({
+      border: '1px solid var(--ds-border-muted)'
+    })
+    expect(renderToStaticMarkup(projected.nodes[0]?.data.label as ReactElement))
+      .toContain('Waiting for upstream node')
   })
 
   it('collapses phases without leaving dangling edges and supports a bounded list fallback', () => {

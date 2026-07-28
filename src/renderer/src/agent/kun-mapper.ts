@@ -11,6 +11,7 @@ import type {
   ReviewOutput,
   ReviewTarget,
   RequestContextSnapshot,
+  RuntimeChildMetadata,
   RuntimeErrorEventPayload,
   RuntimeStatusEventPayload,
   ThreadGoal,
@@ -301,8 +302,25 @@ function readItemStructuredString(
 
 function normalizeChildMetadata(
   child: CoreChildRuntimeMetadataJson | undefined
-): CoreChildRuntimeMetadataJson | undefined {
+): RuntimeChildMetadata | undefined {
   if (!child?.childId || !child.parentThreadId || !child.parentTurnId) return undefined
+  const activity = child.activity
+  const normalizedActivity = activity &&
+    ['starting', 'thinking', 'responding', 'tool', 'retrying', 'compacting', 'waiting']
+      .includes(activity.phase) &&
+    activity.label?.trim() &&
+    activity.startedAt &&
+    activity.updatedAt
+    ? {
+        phase: activity.phase,
+        label: activity.label.trim().slice(0, 500),
+        ...(activity.toolName?.trim()
+          ? { toolName: activity.toolName.trim().slice(0, 256) }
+          : {}),
+        startedAt: activity.startedAt,
+        updatedAt: activity.updatedAt
+      }
+    : undefined
   return {
     parentThreadId: child.parentThreadId,
     parentTurnId: child.parentTurnId,
@@ -311,6 +329,7 @@ function normalizeChildMetadata(
     ...(child.childProfile ? { childProfile: child.childProfile } : {}),
     ...(child.childProfileName ? { childProfileName: child.childProfileName } : {}),
     ...(child.childModel ? { childModel: child.childModel } : {}),
+    ...(child.childProviderId ? { childProviderId: child.childProviderId } : {}),
     ...(child.childToolPolicy ? { childToolPolicy: child.childToolPolicy } : {}),
     childStatus: child.childStatus,
     childSeq: child.childSeq,
@@ -323,7 +342,8 @@ function normalizeChildMetadata(
     ...(child.totalTokens !== undefined ? { totalTokens: child.totalTokens } : {}),
     ...(child.cacheHitRate !== undefined ? { cacheHitRate: child.cacheHitRate } : {}),
     ...(child.costUsd !== undefined ? { costUsd: child.costUsd } : {}),
-    ...(child.costCny !== undefined ? { costCny: child.costCny } : {})
+    ...(child.costCny !== undefined ? { costCny: child.costCny } : {}),
+    ...(normalizedActivity ? { activity: normalizedActivity } : {})
   }
 }
 
@@ -1825,6 +1845,14 @@ export async function dispatchKunRuntimeEvent(
   sink: ThreadEventSink,
   handleApprovalRequest: (event: CoreRuntimeEventJson, sink: ThreadEventSink) => Promise<void>
 ): Promise<void> {
+  const child = normalizeChildMetadata(event.child)
+  if (child) {
+    sink.onChildRuntimeEvent?.({
+      child,
+      ...(typeof event.seq === 'number' ? { seq: event.seq } : {}),
+      ...(event.timestamp ? { timestamp: event.timestamp } : {})
+    })
+  }
   if (event.kind === 'graph_event' && event.graph !== undefined) {
     sink.onGraphEvent?.(event.graph)
   }

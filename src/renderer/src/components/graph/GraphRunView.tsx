@@ -12,12 +12,19 @@ import {
   UserRoundCheck
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { graphNodeLiveness } from '../../graph/graph-liveness'
+import { useGraphStore } from '../../graph/graph-store'
 import type {
   GraphArtifactPage,
   GraphNodeProjection,
   GraphPatchOperation,
   GraphRun
 } from '../../graph/graph-types'
+import {
+  formatSubagentElapsed,
+  SubagentLivenessLane,
+  useSubagentReducedMotion
+} from '../subagents/SubagentLiveness'
 import { filterGraphElementsByPhases } from './graph-elements'
 import { GraphRunWorkspace } from './GraphRunWorkspace'
 import {
@@ -71,7 +78,7 @@ export function GraphRunView({
   onReview: (nodeId: string, outcome: 'pass' | 'fail') => void
   onPatch: (operations: GraphPatchOperation[], reason: string) => Promise<void>
   onRebind: (nodeId: string, profileId: string) => void
-  onOpenChild: (threadId: string) => void
+  onOpenChild: (threadId: string, nodeId: string, attemptId: string) => void
   artifactPage: GraphArtifactPage | null
   artifactContent: string
   artifactLoading: boolean
@@ -80,6 +87,9 @@ export function GraphRunView({
   onCloseArtifact: () => void
 }): ReactElement {
   const { t } = useTranslation('common')
+  const childRuns = useGraphStore((state) => state.childRuns)
+  const reducedMotion = useSubagentReducedMotion()
+  const [now, setNow] = useState(() => Date.now())
   const [collapsedPhaseIds, setCollapsedPhaseIds] = useState<string[]>([])
   const [listFallback, setListFallback] = useState(false)
   const defaultCollapsedPhaseIds = run?.plans.at(-1)?.phases
@@ -100,6 +110,18 @@ export function GraphRunView({
       : { nodes: [], edges: [] },
     [collapsedPhases, elements, run]
   )
+  const activeProjection = run
+    ? Object.values(run.nodes).find((node) =>
+        ['queued', 'submitted', 'running', 'reviewing', 'repair_required'].includes(node.status))
+    : undefined
+  const activeLiveness = activeProjection
+    ? graphNodeLiveness(activeProjection, childRuns, now)
+    : null
+  useEffect(() => {
+    if (!run || !activeProjection || terminalRunStatuses.has(run.status)) return
+    const id = globalThis.setInterval(() => setNow(Date.now()), 1_000)
+    return () => globalThis.clearInterval(id)
+  }, [activeProjection, run])
   if (!run) {
     return (
       <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-8 text-center">
@@ -124,7 +146,7 @@ export function GraphRunView({
     return counts
   }, {})
   const activeAgents = Object.values(run.nodes).filter((node) =>
-    ['submitted', 'running', 'reviewing'].includes(node.status)).length
+    ['queued', 'submitted', 'running', 'reviewing', 'repair_required'].includes(node.status)).length
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="graph-run-overview shrink-0 border-b border-ds-border-muted bg-ds-sidebar px-3 pb-2.5 pt-2">
@@ -167,7 +189,7 @@ export function GraphRunView({
             label={t('graphStatus_blocked')}
             value={String(stateCounts.blocked ?? 0)}
             detail={t('graphMetricNodes')}
-            tone={(stateCounts.blocked ?? 0) > 0 ? 'amber' : 'neutral'}
+            tone="neutral"
           />
           <RunMetric
             label={t('graphStatus_ready')}
@@ -193,7 +215,37 @@ export function GraphRunView({
           />
         </div>
 
-        <div className="mt-2 h-1 overflow-hidden rounded-full bg-ds-hover">
+        {activeProjection && activeLiveness ? (
+          <div
+            role="status"
+            aria-live="polite"
+            className="mt-2 flex items-center gap-2 rounded-lg border border-indigo-400/15 bg-indigo-500/5 px-2.5 py-1.5 text-[10px]"
+          >
+            <span className="shrink-0 font-semibold text-indigo-700 dark:text-indigo-200">
+              {t(`graphLiveness_${activeLiveness.kind}`)}
+            </span>
+            <span className="min-w-0 flex-1 truncate text-ds-muted">
+              {activeProjection.node.title}
+              {' · '}
+              {activeLiveness.quiet
+                ? t('graphStillWaiting', {
+                    seconds: Math.floor((activeLiveness.lastActivityAgeMs ?? 0) / 1_000)
+                  })
+                : activeLiveness.activityLabel ?? t(`graphStatus_${activeProjection.status}`)}
+              {activeLiveness.activityToolName ? ` · ${activeLiveness.activityToolName}` : ''}
+            </span>
+            {activeLiveness.attemptNumber ? (
+              <span className="shrink-0 text-ds-faint">#{activeLiveness.attemptNumber}</span>
+            ) : null}
+            {activeLiveness.elapsedMs ? (
+              <span className="shrink-0 tabular-nums text-ds-faint">
+                {formatSubagentElapsed(activeLiveness.elapsedMs)}
+              </span>
+            ) : null}
+          </div>
+        ) : null}
+
+        <div className="relative mt-2 h-1 overflow-hidden rounded-full bg-ds-hover">
           <div
             className="h-full rounded-full bg-indigo-500 transition-[width]"
             role="progressbar"
@@ -203,6 +255,11 @@ export function GraphRunView({
             aria-valuenow={progress.completed}
             style={{ width: `${progress.total ? progress.completed / progress.total * 100 : 0}%` }}
           />
+          {activeAgents > 0 ? (
+            <span className="absolute inset-0">
+              <SubagentLivenessLane status="running" animate={!reducedMotion} />
+            </span>
+          ) : null}
         </div>
       </div>
 

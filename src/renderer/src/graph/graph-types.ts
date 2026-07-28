@@ -122,6 +122,9 @@ export type GraphAttempt = {
   attemptNumber: number
   status: string
   childThreadId?: string
+  queuedAt?: string
+  startedAt?: string
+  finishedAt?: string
   tokenUsage: number
   elapsedMs: number
   normalizedFailure?: string
@@ -304,6 +307,59 @@ export type GraphEventEnvelope = {
     type: string
     payload: Record<string, unknown>
   }
+}
+
+export type GraphChildActivity = {
+  phase: 'starting' | 'thinking' | 'responding' | 'tool' | 'retrying' | 'compacting' | 'waiting'
+  label: string
+  toolName?: string
+  startedAt: string
+  updatedAt: string
+}
+
+export type GraphChildRuntime = {
+  childId: string
+  parentThreadId: string
+  parentTurnId: string
+  childSeq?: number
+  eventSeq?: number
+  label?: string
+  profile?: string
+  profileName?: string
+  model?: string
+  providerId?: string
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'aborted'
+  activity?: GraphChildActivity
+  toolInvocations?: number
+  durationMs?: number
+  queuedMs?: number
+  totalTokens?: number
+  startedAt?: string
+  updatedAt: string
+}
+
+export type GraphDelegationDiagnostics = {
+  enabled: boolean
+  active: number
+  childRuns: Array<{
+    id: string
+    parentThreadId: string
+    parentTurnId: string
+    childSeq?: number
+    label?: string
+    profile?: string
+    profileSnapshot?: { name?: string }
+    model?: string
+    providerId?: string
+    status: GraphChildRuntime['status']
+    activity?: GraphChildActivity
+    toolInvocations?: number
+    durationMs?: number
+    queuedMs?: number
+    usage?: { totalTokens?: number }
+    startedAt?: string
+    updatedAt: string
+  }>
 }
 
 export type GraphPatchOperation =

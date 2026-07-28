@@ -9,8 +9,18 @@ import {
 import { ChevronUp, ExternalLink, GitBranch } from 'lucide-react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
+import { graphNodeLiveness } from '../../graph/graph-liveness'
 import { useGraphStore } from '../../graph/graph-store'
-import type { GraphNodeStatus, GraphRun } from '../../graph/graph-types'
+import type {
+  GraphChildRuntime,
+  GraphNodeStatus,
+  GraphRun
+} from '../../graph/graph-types'
+import {
+  formatSubagentElapsed,
+  SubagentLiveAvatar,
+  useSubagentReducedMotion
+} from '../subagents/SubagentLiveness'
 import {
   getComposerGraphProgress,
   layoutComposerGraph,
@@ -29,7 +39,7 @@ const GRAPH_POPOVER_ESTIMATED_HEIGHT = 390
 
 const nodeTone: Record<GraphNodeStatus, { fill: string; stroke: string; accent: string }> = {
   pending: { fill: 'var(--ds-surface-card)', stroke: 'var(--ds-border)', accent: '#94a3b8' },
-  blocked: { fill: 'var(--ds-surface-card)', stroke: '#f59e0b', accent: '#f59e0b' },
+  blocked: { fill: 'var(--ds-surface-card)', stroke: '#94a3b8', accent: '#94a3b8' },
   ready: { fill: 'var(--ds-surface-card)', stroke: '#60a5fa', accent: '#60a5fa' },
   queued: { fill: 'var(--ds-surface-card)', stroke: '#38bdf8', accent: '#38bdf8' },
   running: { fill: 'var(--ds-surface-card)', stroke: '#3b82f6', accent: '#3b82f6' },
@@ -117,6 +127,14 @@ function GraphPreviewNode({
         stroke={tone.stroke}
         strokeWidth={node.status === 'running' ? 2 : 1.25}
       />
+      {node.status === 'running' ? (
+        <circle
+          cx={node.x + node.width - 10}
+          cy={node.y + 11}
+          r={3}
+          className="ds-subagent-dot-pulse fill-accent"
+        />
+      ) : null}
       <rect
         x={node.x}
         y={node.y}
@@ -135,7 +153,12 @@ function GraphPreviewNode({
         {truncateLabel(node.title, 19)}
       </text>
       <text x={node.x + 13} y={node.y + 39} fill="var(--ds-text-muted)" fontSize={9}>
-        {truncateLabel(node.agentName, 13)}
+        {truncateLabel(
+          node.attemptNumber
+            ? `${node.agentName} · #${node.attemptNumber}`
+            : node.agentName,
+          17
+        )}
       </text>
       <text
         x={node.x + node.width - 8}
@@ -152,13 +175,24 @@ function GraphPreviewNode({
 
 export function FloatingComposerGraphPreview({
   run,
-  onOpenGraph
+  childRuns = {},
+  now = Date.now(),
+  onOpenGraph,
+  onOpenChild
 }: {
   run: GraphRun
+  childRuns?: Readonly<Record<string, GraphChildRuntime>>
+  now?: number
   onOpenGraph: (runId: string, nodeId?: string) => void
+  onOpenChild?: (
+    runId: string,
+    nodeId: string,
+    attemptId: string,
+    childThreadId: string
+  ) => void
 }): ReactElement {
   const { t } = useTranslation('common')
-  const layout = layoutComposerGraph(run)
+  const layout = layoutComposerGraph(run, childRuns)
   const [inspectedNodeId, setInspectedNodeId] = useState<string | null>(
     layout.nodes.find((node) => node.status === 'running')?.id ?? layout.nodes[0]?.id ?? null
   )
@@ -166,6 +200,11 @@ export function FloatingComposerGraphPreview({
     ?? layout.nodes.find((node) => node.status === 'running')
     ?? layout.nodes[0]
     ?? null
+  const inspectedProjection = inspectedNode ? run.nodes[inspectedNode.id] : undefined
+  const inspectedAttempt = inspectedProjection?.attempts.at(-1)
+  const inspectedLiveness = inspectedProjection
+    ? graphNodeLiveness(inspectedProjection, childRuns, now)
+    : null
 
   return (
     <div className="min-h-0 overflow-auto rounded-2xl border border-ds-border-muted bg-ds-subtle/55">
@@ -241,13 +280,62 @@ export function FloatingComposerGraphPreview({
           className="border-t border-ds-border-muted bg-white/70 px-3 py-2 dark:bg-ds-card/70"
           data-graph-preview-inspector
         >
-          <div className="flex items-center gap-2 text-[11px]">
-            <span className="min-w-0 truncate font-semibold text-ds-ink">
-              {inspectedNode.title}
-            </span>
-            <span className="shrink-0 text-ds-faint">
-              {t('graphComposerAssignedAgent', { agent: inspectedNode.agentName })}
-            </span>
+          <div className="flex items-center gap-2">
+            <SubagentLiveAvatar
+              poseId={inspectedLiveness?.child?.profile ?? inspectedNode.agentName}
+              status={
+                inspectedNode.status === 'failed' || inspectedNode.status === 'cancelled'
+                  ? 'failed'
+                  : inspectedNode.status === 'accepted'
+                    ? 'done'
+                    : inspectedNode.status === 'blocked'
+                      ? 'queued'
+                      : inspectedNode.status === 'reviewing' ||
+                          inspectedNode.status === 'repair_required'
+                        ? 'awaiting-permission'
+                        : 'running'
+              }
+              compact
+              animate={inspectedNode.status === 'running'}
+            />
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2 text-[11px]">
+                <span className="min-w-0 truncate font-semibold text-ds-ink">
+                  {inspectedNode.title}
+                </span>
+                <span className="shrink-0 text-ds-faint">
+                  {t('graphComposerAssignedAgent', { agent: inspectedNode.agentName })}
+                </span>
+              </div>
+              <div className="mt-0.5 truncate text-[10px] text-ds-muted">
+                {inspectedLiveness?.quiet
+                  ? t('graphStillWaiting', {
+                      seconds: Math.floor((inspectedLiveness.lastActivityAgeMs ?? 0) / 1_000)
+                    })
+                  : inspectedLiveness?.activityLabel ??
+                    t(`graphLiveness_${inspectedLiveness?.kind ?? 'idle'}`)}
+                {inspectedLiveness?.activityToolName
+                  ? ` · ${inspectedLiveness.activityToolName}`
+                  : ''}
+                {inspectedLiveness?.elapsedMs
+                  ? ` · ${formatSubagentElapsed(inspectedLiveness.elapsedMs)}`
+                  : ''}
+              </div>
+            </div>
+            {inspectedNode.childThreadId && inspectedAttempt && onOpenChild ? (
+              <button
+                type="button"
+                className="shrink-0 rounded-lg border border-accent/25 bg-accent/8 px-2 py-1 text-[10px] font-semibold text-accent hover:bg-accent/12"
+                onClick={() => onOpenChild(
+                  run.id,
+                  inspectedNode.id,
+                  inspectedAttempt.id,
+                  inspectedNode.childThreadId!
+                )}
+              >
+                {t('graphViewLiveWork')}
+              </button>
+            ) : null}
           </div>
           <p className="mt-0.5 line-clamp-2 text-[10px] leading-4 text-ds-muted">
             {inspectedNode.objective}
@@ -261,17 +349,27 @@ export function FloatingComposerGraphPreview({
 export function FloatingComposerGraphProgress({
   threadId,
   enabled,
-  onOpenGraph
+  onOpenGraph,
+  onOpenChild
 }: {
   threadId: string | null
   enabled: boolean
   onOpenGraph?: (runId: string, nodeId?: string) => void
+  onOpenChild?: (
+    runId: string,
+    nodeId: string,
+    attemptId: string,
+    childThreadId: string
+  ) => void
 }): ReactElement | null {
   const { t } = useTranslation('common')
+  const reducedMotion = useSubagentReducedMotion()
   const runs = useGraphStore((state) => state.runs)
+  const childRuns = useGraphStore((state) => state.childRuns)
   const selectedRunId = useGraphStore((state) => state.selectedRunId)
   const refreshThread = useGraphStore((state) => state.refreshThread)
   const [open, setOpen] = useState(false)
+  const [now, setNow] = useState(() => Date.now())
   const [placement, setPlacement] = useState<ComposerPopoverPlacement | null>(null)
   const rootRef = useRef<HTMLDivElement | null>(null)
   const buttonRef = useRef<HTMLButtonElement | null>(null)
@@ -289,7 +387,19 @@ export function FloatingComposerGraphProgress({
 
   const threadRuns = threadId ? runs.filter((candidate) => candidate.threadId === threadId) : []
   const run = enabled ? selectComposerGraphRun(threadRuns, selectedRunId) : null
-  const progress = run ? getComposerGraphProgress(run) : null
+  const progress = run ? getComposerGraphProgress(run, childRuns) : null
+  const currentProjection = run && progress?.currentNodeId
+    ? run.nodes[progress.currentNodeId]
+    : undefined
+  const currentLiveness = currentProjection
+    ? graphNodeLiveness(currentProjection, childRuns, now)
+    : null
+
+  useEffect(() => {
+    if (!run || !progress?.activeCount || typeof window === 'undefined') return
+    const id = window.setInterval(() => setNow(Date.now()), 1_000)
+    return () => window.clearInterval(id)
+  }, [progress?.activeCount, run])
 
   useEffect(() => {
     if (!open || !run || typeof window === 'undefined') {
@@ -428,7 +538,13 @@ export function FloatingComposerGraphProgress({
                   <ExternalLink className="h-3 w-3" />
                 </button>
               </div>
-              <FloatingComposerGraphPreview run={run} onOpenGraph={openFullGraph} />
+              <FloatingComposerGraphPreview
+                run={run}
+                childRuns={childRuns}
+                now={now}
+                onOpenGraph={openFullGraph}
+                onOpenChild={onOpenChild}
+              />
             </div>,
             document.body
           )
@@ -462,17 +578,50 @@ export function FloatingComposerGraphProgress({
             <span className="flex items-center gap-2">
               <span className="text-[12px] font-semibold text-ds-ink">Graph</span>
               <span className="truncate text-[11px] text-ds-muted">
-                {progress.currentNodeTitle ?? statusLabel}
+                {currentLiveness?.quiet
+                  ? t('graphStillWaiting', {
+                      seconds: Math.floor((currentLiveness.lastActivityAgeMs ?? 0) / 1_000)
+                    })
+                  : currentLiveness?.activityLabel ??
+                    t(`graphLiveness_${currentLiveness?.kind ?? 'idle'}`, {
+                      defaultValue: progress.currentNodeTitle ?? statusLabel
+                    })}
               </span>
               <span className="ml-auto shrink-0 text-[10px] font-semibold text-ds-faint">
-                {progress.completed}/{progress.total}
+                {t('graphCompletedAndRunning', {
+                  completed: progress.completed,
+                  total: progress.total,
+                  running: progress.activeCount
+                })}
               </span>
             </span>
-            <span className="mt-1 block h-1 overflow-hidden rounded-full bg-ds-border-muted">
+            <span className="mt-0.5 flex items-center gap-2 text-[9px] text-ds-faint">
+              <span className="truncate">
+                {progress.currentNodeTitle ?? statusLabel}
+                {progress.currentAgent ? ` · ${progress.currentAgent}` : ''}
+                {progress.attemptNumber ? ` · #${progress.attemptNumber}` : ''}
+              </span>
+              {currentLiveness?.elapsedMs ? (
+                <span className="ml-auto shrink-0 tabular-nums">
+                  {formatSubagentElapsed(currentLiveness.elapsedMs)}
+                </span>
+              ) : null}
+            </span>
+            <span className="relative mt-1 block h-1 overflow-hidden rounded-full bg-ds-border-muted">
               <span
                 className="block h-full rounded-full bg-accent transition-[width]"
                 style={{ width: `${Math.round(progress.fraction * 100)}%` }}
               />
+              {progress.activeCount > 0 ? (
+                <span
+                  className={
+                    reducedMotion
+                      ? 'absolute inset-y-0 left-0 w-1/3 bg-accent/45'
+                      : 'ds-subagent-lane-sweep absolute inset-y-0 w-2/5'
+                  }
+                  aria-hidden
+                />
+              ) : null}
             </span>
           </span>
           <AgentStack names={progress.activeAgents} />

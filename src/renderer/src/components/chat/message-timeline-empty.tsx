@@ -1,6 +1,13 @@
 import { useState, type ReactElement } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Bot, CornerUpLeft, GitFork, RefreshCw, Settings } from 'lucide-react'
+import {
+  Bot,
+  CornerUpLeft,
+  GitBranch,
+  GitFork,
+  RefreshCw,
+  Settings
+} from 'lucide-react'
 import type { ClawImChannelV1 } from '@shared/app-settings'
 import { KunStateFigure } from './AnimatedWorkLogo'
 
@@ -256,6 +263,85 @@ export function SubagentReturnBar({
         {t('subagentSessionBannerBack')}
       </span>
     </button>
+  )
+}
+
+export type GraphChildSessionContext = {
+  runTitle: string
+  nodeTitle: string
+  attemptNumber: number
+  agentName: string
+  statusLabel: string
+  activityLabel: string
+  elapsedLabel: string
+  observerStatus: 'connecting' | 'live' | 'reconnecting' | 'stopped'
+}
+
+export function GraphChildSessionBar({
+  context,
+  onBack
+}: {
+  context: GraphChildSessionContext
+  onBack: () => void
+}): ReactElement {
+  const { t } = useTranslation('common')
+  return (
+    <div
+      className="ds-no-drag flex shrink-0 items-center gap-3 border-b border-ds-border-muted bg-ds-card/92 px-4 py-2 backdrop-blur-xl"
+      role="status"
+      aria-live="polite"
+      data-graph-child-session-bar
+    >
+      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-indigo-500/10 text-indigo-600 dark:text-indigo-200">
+        <GitBranch className="h-4 w-4" />
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="flex min-w-0 items-center gap-1.5 text-[10px] text-ds-faint">
+          <span className="shrink-0">{t('graphBreadcrumbMain')}</span>
+          <span aria-hidden>›</span>
+          <span className="max-w-[180px] truncate">{context.runTitle}</span>
+          <span aria-hidden>›</span>
+          <span className="max-w-[180px] truncate font-semibold text-ds-muted">
+            {context.nodeTitle}
+          </span>
+          <span aria-hidden>›</span>
+          <span className="shrink-0">
+            {t('graphBreadcrumbAttempt', { number: context.attemptNumber })}
+          </span>
+        </div>
+        <div className="mt-0.5 flex min-w-0 items-center gap-2 text-[11px]">
+          <span className="shrink-0 font-semibold text-ds-ink">{context.statusLabel}</span>
+          <span className="min-w-0 truncate text-ds-muted">
+            {context.agentName} · {context.activityLabel}
+          </span>
+          {context.elapsedLabel ? (
+            <span className="shrink-0 tabular-nums text-ds-faint">{context.elapsedLabel}</span>
+          ) : null}
+          <span
+            className={`inline-flex shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-[9px] ${
+              context.observerStatus === 'live'
+                ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-200'
+                : 'bg-amber-500/10 text-amber-700 dark:text-amber-200'
+            }`}
+          >
+            <span className={`h-1.5 w-1.5 rounded-full ${
+              context.observerStatus === 'live'
+                ? 'ds-subagent-dot-pulse bg-emerald-500'
+                : 'bg-amber-500'
+            }`} />
+            {t(`graphObserver_${context.observerStatus}`)}
+          </span>
+        </div>
+      </div>
+      <button
+        type="button"
+        onClick={onBack}
+        className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-accent/20 bg-accent/8 px-2.5 text-[10px] font-semibold text-accent transition hover:bg-accent/12"
+      >
+        <CornerUpLeft className="h-3.5 w-3.5" />
+        {t('graphReturnToGraph')}
+      </button>
+    </div>
   )
 }
 

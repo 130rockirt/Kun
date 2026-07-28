@@ -1,4 +1,4 @@
-import { useState, type ReactElement } from 'react'
+import { useEffect, useState, type ReactElement } from 'react'
 import {
   Activity,
   FileCheck2,
@@ -8,11 +8,19 @@ import {
   RotateCcw
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { graphNodeLiveness } from '../../graph/graph-liveness'
+import { useGraphStore } from '../../graph/graph-store'
 import type {
   GraphArtifactPage,
   GraphNodeProjection,
   GraphRun
 } from '../../graph/graph-types'
+import {
+  formatSubagentElapsed,
+  SubagentLiveAvatar,
+  SubagentLivenessLane,
+  useSubagentReducedMotion
+} from '../subagents/SubagentLiveness'
 import { plannedAssignmentLabel } from './graph-elements'
 import {
   InspectorList,
@@ -40,7 +48,7 @@ export function GraphNodeInspector({
   onRetry: () => void
   onReview: (outcome: 'pass' | 'fail') => void
   onRebind: (profileId: string) => void
-  onOpenChild: (threadId: string) => void
+  onOpenChild: (threadId: string, nodeId: string, attemptId: string) => void
   artifactPage: GraphArtifactPage | null
   artifactContent: string
   artifactLoading: boolean
@@ -49,9 +57,23 @@ export function GraphNodeInspector({
   onCloseArtifact: () => void
 }): ReactElement {
   const { t } = useTranslation('common')
+  const childRuns = useGraphStore((state) => state.childRuns)
+  const childReturnTarget = useGraphStore((state) => state.childReturnTarget)
+  const reducedMotion = useSubagentReducedMotion()
+  const [now, setNow] = useState(() => Date.now())
   const [activeTab, setActiveTab] = useState<'overview' | 'execution' | 'evidence'>('overview')
   const [rebindProfileId, setRebindProfileId] = useState('')
   const attempt = node.attempts.at(-1)
+  const liveness = graphNodeLiveness(node, childRuns, now)
+  const childOpeningState = childReturnTarget?.runId === run.id &&
+    childReturnTarget.nodeId === node.node.id
+    ? childReturnTarget.childSessionStatus
+    : null
+  useEffect(() => {
+    if (!['working', 'reviewing', 'retrying', 'waiting_human'].includes(liveness.kind)) return
+    const id = globalThis.setInterval(() => setNow(Date.now()), 1_000)
+    return () => globalThis.clearInterval(id)
+  }, [liveness.kind])
   const plannedAssignment = plannedAssignmentLabel(node.node)
   const dispatchState = attempt
     ? attempt.childThreadId
@@ -92,6 +114,96 @@ export function GraphNodeInspector({
         <StatusPill status={node.status} />
       </div>
       <p className="text-[11px] leading-5 text-ds-muted">{node.node.objective}</p>
+      <div
+        role="status"
+        aria-live="polite"
+        className={`overflow-hidden rounded-xl border ${
+          liveness.kind === 'failed'
+            ? 'border-red-400/30 bg-red-500/7'
+            : liveness.kind === 'retrying' || liveness.kind === 'waiting_human'
+              ? 'border-amber-400/30 bg-amber-500/7'
+              : 'border-ds-border-muted bg-ds-card'
+        }`}
+      >
+        <div className="flex items-center gap-2.5 px-2.5 py-2">
+          <SubagentLiveAvatar
+            poseId={liveness.child?.profile ?? attempt?.assignment.profileId ?? plannedAssignment}
+            status={
+              liveness.kind === 'done'
+                ? 'done'
+                : liveness.kind === 'failed'
+                  ? 'failed'
+                  : liveness.kind === 'waiting_dependency' || liveness.kind === 'queued'
+                    ? 'queued'
+                    : liveness.kind === 'reviewing' ||
+                        liveness.kind === 'waiting_human' ||
+                        liveness.kind === 'retrying'
+                      ? 'awaiting-permission'
+                      : 'running'
+            }
+            compact
+            animate={!reducedMotion && liveness.kind === 'working'}
+          />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 text-[10px]">
+              <span className="font-semibold text-ds-ink">
+                {t(`graphLiveness_${liveness.kind}`)}
+              </span>
+              {attempt ? (
+                <span className="text-ds-faint">
+                  {attempt.assignment.name} · #{attempt.attemptNumber}
+                </span>
+              ) : null}
+              {liveness.elapsedMs > 0 ? (
+                <span className="ml-auto shrink-0 tabular-nums text-ds-faint">
+                  {formatSubagentElapsed(liveness.elapsedMs)}
+                </span>
+              ) : null}
+            </div>
+            <div className="mt-0.5 truncate text-[10px] text-ds-muted">
+              {liveness.quiet
+                ? t('graphStillWaiting', {
+                    seconds: Math.floor((liveness.lastActivityAgeMs ?? 0) / 1_000)
+                  })
+                : childOpeningState === 'creating'
+                  ? t('graphCreatingChildSession')
+                  : childOpeningState === 'failed'
+                    ? t('graphChildSessionUnavailable')
+                    : liveness.activityLabel ??
+                  (node.status === 'blocked'
+                    ? t('graphWaitingUpstream')
+                    : t(`graphStatus_${node.status}`, { defaultValue: node.status }))}
+              {liveness.activityToolName ? ` · ${liveness.activityToolName}` : ''}
+            </div>
+          </div>
+        </div>
+        <SubagentLivenessLane
+          status={
+            liveness.kind === 'done'
+              ? 'done'
+              : liveness.kind === 'failed'
+                ? 'failed'
+                : liveness.kind === 'reviewing' ||
+                    liveness.kind === 'waiting_human' ||
+                    liveness.kind === 'retrying'
+                  ? 'awaiting-permission'
+                  : liveness.kind === 'waiting_dependency' || liveness.kind === 'queued'
+                    ? 'queued'
+                    : 'running'
+          }
+          animate={!reducedMotion}
+        />
+      </div>
+      {attempt && ['submitted', 'reviewing', 'repair_required'].includes(node.status) ? (
+        <div className="rounded-lg border border-ds-border-muted bg-ds-main px-2.5 py-2 text-[10px] leading-4 text-ds-muted">
+          {node.status === 'repair_required'
+            ? t('graphTransitionRepair', {
+                attempt: attempt.attemptNumber + 1,
+                reason: node.lastTransitionReason ?? t('graphRepairReasonUnknown')
+              })
+            : t('graphTransitionReview')}
+        </div>
+      ) : null}
       <nav
         aria-label={t('graphInspectorSections')}
         className="grid grid-cols-3 rounded-xl border border-ds-border-muted bg-ds-main p-1"
@@ -155,10 +267,18 @@ export function GraphNodeInspector({
           ) : null}
           {attempt.childThreadId ? (
             <div className="flex flex-wrap gap-1.5">
-              <SmallAction onClick={() => onOpenChild(attempt.childThreadId!)}>
+              <SmallAction onClick={() => onOpenChild(
+                attempt.childThreadId!,
+                node.node.id,
+                attempt.id
+              )}>
                 {t('graphOpenChildSession')}
               </SmallAction>
-              <SmallAction onClick={() => onOpenChild(attempt.childThreadId!)}>
+              <SmallAction onClick={() => onOpenChild(
+                attempt.childThreadId!,
+                node.node.id,
+                attempt.id
+              )}>
                 {t('graphOpenAttemptSession', { number: attempt.attemptNumber })}
               </SmallAction>
             </div>
@@ -245,7 +365,11 @@ export function GraphNodeInspector({
             ]}
           />
           {attempt.childThreadId ? (
-            <SmallAction onClick={() => onOpenChild(attempt.childThreadId!)}>
+            <SmallAction onClick={() => onOpenChild(
+              attempt.childThreadId!,
+              node.node.id,
+              attempt.id
+            )}>
               {t('graphOpenChildSession')}
             </SmallAction>
           ) : null}
@@ -287,7 +411,11 @@ export function GraphNodeInspector({
                   {item.normalizedFailure ? ` · ${item.normalizedFailure}` : ''}
                 </div>
                 {item.childThreadId ? (
-                  <SmallAction onClick={() => onOpenChild(item.childThreadId!)}>
+                  <SmallAction onClick={() => onOpenChild(
+                    item.childThreadId!,
+                    node.node.id,
+                    item.id
+                  )}>
                     {t('graphOpenAttemptSession', { number: item.attemptNumber })}
                   </SmallAction>
                 ) : null}

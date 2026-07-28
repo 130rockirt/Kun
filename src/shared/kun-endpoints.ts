@@ -81,9 +81,15 @@ export function kunMemoryRecordPath(memoryId: string): string {
 
 export const KUN_DELEGATION_PROFILES_PATH = '/v1/delegation/profiles'
 export const KUN_DELEGATION_PROFILES_TEMPLATE = '/v1/delegation/profiles'
+export const KUN_DELEGATION_DIAGNOSTICS_PATH = '/v1/delegation/diagnostics'
+export const KUN_DELEGATION_DIAGNOSTICS_TEMPLATE = '/v1/delegation/diagnostics'
 export function kunDelegationProfilesPath(workspace?: string): string {
   if (!workspace?.trim()) return KUN_DELEGATION_PROFILES_PATH
   return `${KUN_DELEGATION_PROFILES_PATH}?workspace=${encodeURIComponent(workspace.trim())}`
+}
+export function kunDelegationDiagnosticsPath(parentThreadId?: string): string {
+  if (!parentThreadId?.trim()) return KUN_DELEGATION_DIAGNOSTICS_PATH
+  return `${KUN_DELEGATION_DIAGNOSTICS_PATH}?parent_thread_id=${encodeURIComponent(parentThreadId.trim())}`
 }
 
 export const KUN_GRAPHS_PATH = '/v1/graphs'

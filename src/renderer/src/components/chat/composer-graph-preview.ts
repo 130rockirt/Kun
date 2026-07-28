@@ -1,4 +1,5 @@
 import type {
+  GraphChildRuntime,
   GraphNodeProjection,
   GraphNodeStatus,
   GraphPlanEdge,
@@ -6,7 +7,10 @@ import type {
 } from '../../graph/graph-types'
 
 const terminalRunStatuses = new Set(['completed', 'failed', 'cancelled'])
-const completedNodeStatuses = new Set<GraphNodeStatus>(['accepted', 'skipped', 'superseded'])
+// Completion is deliberately stricter than terminality. A skipped,
+// superseded, failed, or cancelled node may close scheduler work, but it has
+// not passed Graph acceptance and must not advance the accepted-work bar.
+const completedNodeStatuses = new Set<GraphNodeStatus>(['accepted'])
 const activeNodeStatuses = new Set<GraphNodeStatus>([
   'queued',
   'running',
@@ -33,7 +37,14 @@ export type ComposerGraphProgress = {
   total: number
   fraction: number
   activeAgents: string[]
+  activeCount: number
   currentNodeTitle: string | null
+  currentNodeId: string | null
+  currentStatus: GraphNodeStatus | null
+  currentAgent: string | null
+  attemptNumber: number | null
+  childThreadId: string | null
+  childRuntime: GraphChildRuntime | null
 }
 
 export type ComposerGraphLayoutNode = {
@@ -43,6 +54,9 @@ export type ComposerGraphLayoutNode = {
   objective: string
   agentName: string
   status: GraphNodeStatus
+  attemptNumber?: number
+  childThreadId?: string
+  childRuntime?: GraphChildRuntime
   x: number
   y: number
   width: number
@@ -83,7 +97,10 @@ export function selectComposerGraphRun(
   return runs.find((run) => !terminalRunStatuses.has(run.status)) ?? selected ?? runs[0] ?? null
 }
 
-export function getComposerGraphProgress(run: GraphRun): ComposerGraphProgress {
+export function getComposerGraphProgress(
+  run: GraphRun,
+  childRuns: Readonly<Record<string, GraphChildRuntime>> = {}
+): ComposerGraphProgress {
   const plan = currentPlan(run)
   const projections = (plan?.nodes ?? [])
     .map((node) => run.nodes[node.id])
@@ -94,13 +111,23 @@ export function getComposerGraphProgress(run: GraphRun): ComposerGraphProgress {
   const active = projections.filter((projection) => activeNodeStatuses.has(projection.status))
   const current = projections.find((projection) => currentNodeStatuses.has(projection.status))
   const activeAgents = [...new Set(active.map(graphNodeAgentName))]
+  const currentAttempt = current?.attempts.at(-1)
+  const childThreadId = currentAttempt?.childThreadId ?? null
+  const childRuntime = childThreadId ? childRuns[childThreadId] ?? null : null
 
   return {
     completed,
     total: plan?.nodes.length ?? projections.length,
     fraction: plan?.nodes.length ? completed / plan.nodes.length : 0,
     activeAgents,
-    currentNodeTitle: current?.node.title ?? null
+    activeCount: active.length,
+    currentNodeTitle: current?.node.title ?? null,
+    currentNodeId: current?.node.id ?? null,
+    currentStatus: current?.status ?? null,
+    currentAgent: current ? graphNodeAgentName(current) : null,
+    attemptNumber: currentAttempt?.attemptNumber ?? null,
+    childThreadId,
+    childRuntime
   }
 }
 
@@ -122,7 +149,10 @@ function edgePath(
   ].join(' ')
 }
 
-export function layoutComposerGraph(run: GraphRun): ComposerGraphLayout {
+export function layoutComposerGraph(
+  run: GraphRun,
+  childRuns: Readonly<Record<string, GraphChildRuntime>> = {}
+): ComposerGraphLayout {
   const plan = currentPlan(run)
   if (!plan) return { width: 640, height: 220, phases: [], nodes: [], edges: [] }
   const phases = [...plan.phases].sort((left, right) => left.order - right.order)
@@ -133,6 +163,8 @@ export function layoutComposerGraph(run: GraphRun): ComposerGraphLayout {
     if (!projection) continue
     const phaseIndex = Math.max(0, phases.findIndex((phase) => phase.id === node.phaseId))
     const phaseNodes = nodesByPhase.get(node.phaseId) ?? []
+    const attempt = projection.attempts.at(-1)
+    const childThreadId = attempt?.childThreadId
     const layoutNode: ComposerGraphLayoutNode = {
       id: node.id,
       phaseId: node.phaseId,
@@ -140,6 +172,11 @@ export function layoutComposerGraph(run: GraphRun): ComposerGraphLayout {
       objective: node.objective,
       agentName: graphNodeAgentName(projection),
       status: projection.status,
+      ...(attempt ? { attemptNumber: attempt.attemptNumber } : {}),
+      ...(childThreadId ? { childThreadId } : {}),
+      ...(childThreadId && childRuns[childThreadId]
+        ? { childRuntime: childRuns[childThreadId] }
+        : {}),
       x: LEFT_PADDING + phaseIndex * (PHASE_WIDTH + PHASE_GAP),
       y: TOP_PADDING + phaseNodes.length * (NODE_HEIGHT + NODE_GAP),
       width: NODE_WIDTH,

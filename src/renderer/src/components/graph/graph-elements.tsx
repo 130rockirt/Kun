@@ -1,11 +1,33 @@
 import { MarkerType, type Edge, type Node } from '@xyflow/react'
-import type { GraphPlanNode, GraphRun } from '../../graph/graph-types'
+import { ExternalLink } from 'lucide-react'
+import { graphNodeLiveness } from '../../graph/graph-liveness'
+import type {
+  GraphChildRuntime,
+  GraphPlanNode,
+  GraphRun
+} from '../../graph/graph-types'
+import {
+  formatSubagentElapsed,
+  SubagentLiveAvatar,
+  SubagentLivenessLane
+} from '../subagents/SubagentLiveness'
 import { StatusPill } from './graph-panel-shared'
 
 export function graphElements(
   run: GraphRun,
   reducedMotion = false,
-  selectedNodeId: string | null = null
+  selectedNodeId: string | null = null,
+  options: {
+    childRuns?: Readonly<Record<string, GraphChildRuntime>>
+    now?: number
+    onOpenChild?: (
+      nodeId: string,
+      attemptId: string,
+      childThreadId: string
+    ) => void
+    waitingUpstreamLabel?: string
+    viewLiveWorkLabel?: string
+  } = {}
 ): { nodes: Node[]; edges: Edge[] } {
   const plan = run.plans.at(-1)
   if (!plan) return { nodes: [], edges: [] }
@@ -21,6 +43,9 @@ export function graphElements(
     const projection = run.nodes[node.id]
     const status = projection?.status ?? 'pending'
     const attempt = projection?.attempts.at(-1)
+    const liveness = projection
+      ? graphNodeLiveness(projection, options.childRuns ?? {}, options.now)
+      : null
     const selected = selectedNodeId === node.id
     const phaseTitle = plan.phases.find((item) => item.id === node.phaseId)?.title ?? node.phaseId
     const effectiveAssignment = attempt?.assignment.name ?? plannedAssignmentLabel(node)
@@ -48,14 +73,65 @@ export function graphElements(
               {node.objective}
             </div>
             <div className="mt-2 flex items-center gap-1.5 border-t border-ds-border-muted pt-2">
-              <span className="shrink-0 text-[8px] text-ds-faint">Agent</span>
-              <span
-                className="min-w-0 flex-1 truncate rounded-md bg-indigo-500/8 px-1.5 py-0.5 text-[8px] font-semibold text-indigo-700 dark:text-indigo-200"
-                title={effectiveAssignment}
-              >
-                {effectiveAssignment}
+              <SubagentLiveAvatar
+                poseId={liveness?.child?.profile ?? effectiveAssignment}
+                status={
+                  status === 'failed' || status === 'cancelled'
+                    ? 'failed'
+                    : status === 'accepted'
+                      ? 'done'
+                      : status === 'blocked' || status === 'pending' || status === 'queued'
+                        ? 'queued'
+                        : status === 'reviewing' || status === 'repair_required'
+                          ? 'awaiting-permission'
+                          : 'running'
+                }
+                compact
+                animate={!reducedMotion && status === 'running'}
+              />
+              <span className="min-w-0 flex-1">
+                <span
+                  className="block truncate text-[9px] font-semibold text-ds-ink"
+                  title={effectiveAssignment}
+                >
+                  {effectiveAssignment}
+                  {attempt ? ` · #${attempt.attemptNumber}` : ''}
+                </span>
+                <span className="mt-0.5 block truncate text-[8px] text-ds-faint">
+                  {liveness?.activityLabel ??
+                    (status === 'blocked'
+                      ? options.waitingUpstreamLabel ?? 'Waiting for upstream node'
+                      : status.replaceAll('_', ' '))}
+                  {liveness?.activityToolName ? ` · ${liveness.activityToolName}` : ''}
+                  {liveness?.elapsedMs ? ` · ${formatSubagentElapsed(liveness.elapsedMs)}` : ''}
+                </span>
               </span>
+              {attempt?.childThreadId && options.onOpenChild ? (
+                <button
+                  type="button"
+                  title={options.viewLiveWorkLabel ?? 'View live work'}
+                  aria-label={`${options.viewLiveWorkLabel ?? 'View live work'}: ${node.title}`}
+                  className="nodrag nopan flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-accent/20 text-accent transition hover:bg-accent/10"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    options.onOpenChild?.(node.id, attempt.id, attempt.childThreadId!)
+                  }}
+                >
+                  <ExternalLink className="h-3 w-3" />
+                </button>
+              ) : null}
             </div>
+            {liveness && ['working', 'reviewing', 'retrying', 'waiting_human'].includes(liveness.kind) ? (
+              <div className="mt-2 overflow-hidden rounded-full">
+                <SubagentLivenessLane
+                  status={liveness.kind === 'reviewing' || liveness.kind === 'waiting_human'
+                    || liveness.kind === 'retrying'
+                    ? 'awaiting-permission'
+                    : 'running'}
+                  animate={!reducedMotion}
+                />
+              </div>
+            ) : null}
             {projection?.lastProgress?.percent !== undefined ? (
               <div className="mt-2 h-1 overflow-hidden rounded-full bg-ds-hover">
                 <div
@@ -75,7 +151,11 @@ export function graphElements(
           ? '1.5px solid rgb(79 70 229 / 0.95)'
           : status === 'running'
           ? '1px solid rgb(99 102 241 / 0.55)'
-          : critical.has(node.id)
+          : status === 'repair_required'
+            ? '1px solid rgb(245 158 11 / 0.55)'
+            : status === 'failed'
+              ? '1px solid rgb(239 68 68 / 0.55)'
+          : critical.has(node.id) && status !== 'blocked' && status !== 'pending'
             ? '1px solid rgb(245 158 11 / 0.5)'
             : '1px solid var(--ds-border-muted)',
         background: 'color-mix(in srgb, var(--ds-card) 96%, transparent)',
@@ -83,7 +163,7 @@ export function graphElements(
           ? '0 0 0 4px rgb(79 70 229 / 0.12), 0 14px 32px rgb(15 23 42 / 0.12)'
           : status === 'running'
           ? '0 0 0 3px rgb(99 102 241 / 0.08), 0 10px 25px rgb(15 23 42 / 0.08)'
-          : critical.has(node.id)
+          : critical.has(node.id) && status !== 'blocked' && status !== 'pending'
             ? '0 0 0 2px rgb(245 158 11 / 0.06), 0 8px 22px rgb(15 23 42 / 0.06)'
             : '0 8px 22px rgb(15 23 42 / 0.055)'
       }
@@ -154,8 +234,7 @@ export function filterGraphElementsByPhases(
 export function runProgress(run: GraphRun): { completed: number; total: number } {
   const values = Object.values(run.nodes)
   return {
-    completed: values.filter((node) =>
-      ['accepted', 'skipped', 'superseded'].includes(node.status)).length,
+    completed: values.filter((node) => node.status === 'accepted').length,
     total: values.length
   }
 }
