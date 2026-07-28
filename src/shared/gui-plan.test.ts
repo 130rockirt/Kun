@@ -90,11 +90,15 @@ describe('plan feature name sanitisation', () => {
 })
 
 describe('create_plan tool input validation', () => {
-  it('flags missing markdown and operation', () => {
+  it('requires markdown while allowing operation to be omitted', () => {
     expect(validateCreatePlanToolInput({ operation: 'draft' })).toContain(
       'markdown is required and must be non-empty'
     )
-    expect(validateCreatePlanToolInput({ markdown: '# hi' })).toContain(
+    expect(validateCreatePlanToolInput({ markdown: '# hi' })).toEqual([])
+  })
+
+  it('rejects an explicitly invalid operation', () => {
+    expect(validateCreatePlanToolInput({ markdown: '# hi', operation: 'replace' as never })).toContain(
       'operation must be either "draft" or "refine"'
     )
   })

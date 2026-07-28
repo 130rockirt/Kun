@@ -57,7 +57,7 @@ export type CreatePlanToolInput = {
   markdown: string
   source_request?: string
   title?: string
-  operation: GuiPlanOperation
+  operation?: GuiPlanOperation
   plan_id?: string
   plan_relative_path?: string
 }
@@ -81,7 +81,11 @@ export function validateCreatePlanToolInput(input: Partial<CreatePlanToolInput>)
   if (typeof input.markdown !== 'string' || !input.markdown.trim()) {
     issues.push('markdown is required and must be non-empty')
   }
-  if (input.operation !== 'draft' && input.operation !== 'refine') {
+  if (
+    input.operation !== undefined &&
+    input.operation !== 'draft' &&
+    input.operation !== 'refine'
+  ) {
     issues.push('operation must be either "draft" or "refine"')
   }
   if (input.plan_relative_path != null) {

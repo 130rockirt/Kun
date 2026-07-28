@@ -1256,6 +1256,9 @@ export function summarizeToolBlock(
   if (rawSummary) {
     const compact = toolName ? rawSummary.replace(/^([a-z0-9_-]+)\s*:\s*/i, '') : rawSummary
     const summary = summarizeProcessText(compact, 72)
+    if (summary && normalizeProcessText(summary) === normalizeProcessText(label)) {
+      return label
+    }
     return summary ? `${label} ${summary}` : label
   }
   return label

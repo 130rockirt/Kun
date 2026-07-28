@@ -176,6 +176,18 @@ describe('MessageTimeline tool summaries', () => {
     expect(find).toBe('Find *.ts · /tmp/src')
   })
 
+  it('does not repeat a raw summary that matches the generated tool label', () => {
+    expect(
+      summarizeToolBlock(
+        toolBlock({
+          summary: 'Create plan',
+          meta: { toolName: 'create_plan' }
+        }),
+        t
+      )
+    ).toBe('Create plan')
+  })
+
   it('summarizes built-in ls with its path and bash with its command', () => {
     expect(
       summarizeToolBlock(

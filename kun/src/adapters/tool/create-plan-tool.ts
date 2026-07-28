@@ -54,7 +54,7 @@ export const CREATE_PLAN_INPUT_SCHEMA: Record<string, unknown> = {
     operation: {
       type: 'string',
       enum: ['draft', 'refine'],
-      description: 'Use "draft" for a new plan, "refine" when revising an existing one.'
+      description: 'Optional for context-free Plan turns: omit to draft, or use "refine" when deliberately revising a target. An active reserved GUI context overrides this value.'
     },
     plan_id: {
       type: 'string',
@@ -65,7 +65,7 @@ export const CREATE_PLAN_INPUT_SCHEMA: Record<string, unknown> = {
       description: 'Optional reserved relative path; must live directly under .kunsdd/plan.'
     }
   },
-  required: ['markdown', 'operation'],
+  required: ['markdown'],
   additionalProperties: false
 }
 
@@ -201,7 +201,8 @@ async function listExistingPlanRelativePaths(
  * 1. Advertises during any Plan-mode turn, or when an explicit GUI
  *    plan context is present.
  * 2. With a GUI plan context, writes only to the reserved path and
- *    enforces operation/workspace/id parity (refine-in-place).
+ *    uses the host-reserved operation while enforcing workspace/id
+ *    parity (refine-in-place).
  * 3. Without one (free-form plan mode), allocates a fresh
  *    `.kunsdd/plan/<feature>.md` under the active workspace.
  * 4. Writes atomically, observes the abort signal, and returns a
@@ -256,16 +257,17 @@ export async function executeCreatePlanTool(
       isError: true
     }
   }
+  const requestedOperation = pickOperation(args.operation)
+  if (args.operation !== undefined && requestedOperation === undefined) {
+    return { output: { error: 'operation must be "draft" or "refine"' }, isError: true }
+  }
   const input: Partial<CreatePlanToolInput> = {
     markdown: pickString(args.markdown),
     source_request: pickString(args.source_request),
     title: pickString(args.title),
-    operation: pickOperation(args.operation),
+    operation: context.guiPlan?.operation ?? requestedOperation ?? 'draft',
     plan_id: pickString(args.plan_id),
     plan_relative_path: pickString(args.plan_relative_path)
-  }
-  if (input.operation !== 'draft' && input.operation !== 'refine') {
-    return { output: { error: 'operation must be "draft" or "refine"' }, isError: true }
   }
   if (typeof input.markdown !== 'string' || !input.markdown.trim()) {
     return { output: { error: 'markdown is required and must be non-empty' }, isError: true }
@@ -351,8 +353,9 @@ export async function executeCreatePlanTool(
 
 /**
  * Strict resolution for turns that carry a renderer-advertised GUI plan
- * context: the tool may only write to the reserved path, with parity
- * checks on operation, workspace, id, and explicit path overrides.
+ * context: the tool may only write to the reserved path and uses the
+ * host-owned operation, with parity checks on workspace, id, and
+ * explicit path overrides.
  */
 function resolveReservedTarget(
   input: Partial<CreatePlanToolInput>,
@@ -362,9 +365,6 @@ function resolveReservedTarget(
   if (!contextPlan) {
     return { error: 'create_plan requires an active reserved plan context' }
   }
-  if (input.operation !== contextPlan.operation) {
-    return { error: 'operation does not match the active plan operation' }
-  }
   if (!guiPlanWorkspaceMatches(context.workspace, contextPlan.workspaceRoot)) {
     return { error: 'tool workspace does not match the active plan workspace' }
   }
@@ -372,7 +372,7 @@ function resolveReservedTarget(
   if (!relativePath || !isGuiPlanRelativePath(relativePath)) {
     return { error: 'plan_relative_path must be a direct Markdown file under .kunsdd/plan' }
   }
-  if (input.operation === 'draft' && !isGuiPlanCurrentRelativePath(relativePath)) {
+  if (contextPlan.operation === 'draft' && !isGuiPlanCurrentRelativePath(relativePath)) {
     return { error: 'legacy .deepseekgui/plan paths can only be refined' }
   }
   if (input.plan_relative_path && toRelativePath(input.plan_relative_path) !== contextPlan.relativePath) {
@@ -389,7 +389,7 @@ function resolveReservedTarget(
     workspaceRoot,
     relativePath,
     planId: contextPlan.planId ?? input.plan_id ?? buildGuiPlanId(workspaceRoot, relativePath),
-    operation: input.operation as GuiPlanOperation,
+    operation: contextPlan.operation,
     sourceRequest: contextPlan.sourceRequest,
     title: contextPlan.title
   }

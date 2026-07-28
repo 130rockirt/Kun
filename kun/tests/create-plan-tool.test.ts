@@ -197,7 +197,7 @@ describe('create_plan tool: path validation', () => {
     expect(JSON.stringify(result.output)).toMatch(/does not match the reserved/)
   })
 
-  it('rejects an operation that differs from the active GUI plan operation', async () => {
+  it('uses the active GUI plan operation when the caller supplies the other valid operation', async () => {
     const result = await executeCreatePlanTool(
       {
         markdown: '# mismatch',
@@ -206,17 +206,23 @@ describe('create_plan tool: path validation', () => {
       buildContext({
         threadMode: 'plan',
         guiPlan: buildGuiPlan('.kunsdd/plan/login.md', 'refine')
-      })
+      }),
+      {
+        writePlan: async (target) => ({ path: target.absolutePath, savedAt: 'now' })
+      }
     )
-    expect(result.isError).toBe(true)
-    expect(JSON.stringify(result.output)).toMatch(/operation does not match/)
+    expect(result.isError).toBeFalsy()
+    expect(result.output).toMatchObject({
+      operation: 'refine',
+      relative_path: '.kunsdd/plan/login.md'
+    })
   })
 })
 
 describe('create_plan tool: execution safety', () => {
-  it('allows a free-form plan-mode call without a GUI plan context and self-allocates a path', async () => {
+  it('defaults a context-free call without operation to draft and self-allocates a path', async () => {
     const result = await executeCreatePlanTool(
-      { markdown: '# allowed', operation: 'draft', title: 'disk cleanup' },
+      { markdown: '# allowed', title: 'disk cleanup' },
       buildContext({ threadMode: 'plan', workspace: '/tmp/ws' }),
       {
         listPlanFiles: () => [],
@@ -227,6 +233,39 @@ describe('create_plan tool: execution safety', () => {
     expect((result.output as { relative_path: string }).relative_path).toBe(
       '.kunsdd/plan/disk-cleanup.md'
     )
+    expect((result.output as { operation: string }).operation).toBe('draft')
+  })
+
+  it('uses a reserved GUI operation when the caller omits operation', async () => {
+    const result = await executeCreatePlanTool(
+      { markdown: '# refined' },
+      buildContext({
+        threadMode: 'plan',
+        guiPlan: buildGuiPlan('.kunsdd/plan/login.md', 'refine')
+      }),
+      {
+        writePlan: async (target) => ({ path: target.absolutePath, savedAt: 'now' })
+      }
+    )
+
+    expect(result.isError).toBeFalsy()
+    expect(result.output).toMatchObject({
+      operation: 'refine',
+      relative_path: '.kunsdd/plan/login.md'
+    })
+  })
+
+  it('rejects an explicitly invalid operation', async () => {
+    const result = await executeCreatePlanTool(
+      { markdown: '# invalid', operation: 'replace' },
+      buildContext({
+        threadMode: 'plan',
+        guiPlan: buildGuiPlan()
+      })
+    )
+
+    expect(result.isError).toBe(true)
+    expect(JSON.stringify(result.output)).toMatch(/operation must be/)
   })
 
   it('rejects a forged call when the active turn is not in plan mode', async () => {
@@ -486,11 +525,9 @@ describe('create_plan tool: success and atomic write', () => {
 })
 
 describe('create_plan tool: schema surface', () => {
-  it('exposes a stable JSON schema with required fields', () => {
+  it('requires markdown and keeps operation optional in the stable JSON schema', () => {
     expect(CREATE_PLAN_INPUT_SCHEMA.type).toBe('object')
-    expect((CREATE_PLAN_INPUT_SCHEMA as { required: string[] }).required).toEqual(
-      expect.arrayContaining(['markdown', 'operation'])
-    )
+    expect((CREATE_PLAN_INPUT_SCHEMA as { required: string[] }).required).toEqual(['markdown'])
     const properties = (CREATE_PLAN_INPUT_SCHEMA as { properties: Record<string, { type?: string; enum?: string[] }> }).properties
     expect(properties.operation.enum).toEqual(['draft', 'refine'])
     expect(properties.markdown.type).toBe('string')
