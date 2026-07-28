@@ -149,6 +149,35 @@ describe('resolveTuiConnection', () => {
 })
 
 describe('KunTuiClient', () => {
+  it('loads and validates the provider quota snapshot', async () => {
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      expect(new URL(String(input)).pathname).toBe('/v1/provider-quotas')
+      return Response.json({
+        entries: [{
+          providerId: 'deepseek',
+          providerName: 'DeepSeek',
+          status: 'available',
+          metrics: [{
+            id: 'balance',
+            label: 'Account balance',
+            unit: 'CNY',
+            remaining: 40.76
+          }]
+        }],
+        refreshedAt: '2026-07-28T01:31:00.000Z'
+      })
+    }) as unknown as typeof fetch
+    const client = new KunTuiClient({
+      baseUrl: 'http://127.0.0.1:18899',
+      runtimeToken: 'runtime-secret',
+      fetch: fetchImpl
+    })
+
+    await expect(client.providerQuotas()).resolves.toMatchObject({
+      entries: [{ providerId: 'deepseek', status: 'available' }]
+    })
+  })
+
   it('sends typed thread, turn, approval, and user-input requests', async () => {
     const calls: Array<{ path: string; method: string; body?: unknown; headers: Headers }> = []
     const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {

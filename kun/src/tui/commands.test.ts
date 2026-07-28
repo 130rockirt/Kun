@@ -20,6 +20,9 @@ describe('TUI slash commands', () => {
     expect(parseTuiCommand('/title release')).toEqual({ kind: 'rename', title: 'release' })
     expect(parseTuiCommand('/models')).toEqual({ kind: 'model' })
     expect(parseTuiCommand('/provider')).toEqual({ kind: 'connect' })
+    expect(parseTuiCommand('/provider usage')).toEqual({ kind: 'quota' })
+    expect(parseTuiCommand('/provider quota')).toEqual({ kind: 'quota' })
+    expect(parseTuiCommand('/quota')).toEqual({ kind: 'quota' })
     expect(parseTuiCommand('/summarize')).toEqual({ kind: 'compact' })
     expect(parseTuiCommand('/thinking')).toEqual({ kind: 'reasoning' })
     expect(parseTuiCommand('/mouse')).toEqual({ kind: 'mouse' })
@@ -50,7 +53,7 @@ describe('TUI slash commands', () => {
   it('offers canonical commands and compatibility aliases through pi-tui autocomplete', async () => {
     const names = TUI_SLASH_COMMANDS.map((command) => command.name)
     expect(names).toEqual(expect.arrayContaining([
-      'sessions', 'resume', 'continue', 'clear', 'title', 'models', 'provider', 'summarize', 'q',
+      'sessions', 'resume', 'continue', 'clear', 'title', 'models', 'provider', 'quota', 'summarize', 'q',
       'status', 'copy', 'export', 'details', 'permission', 'undo', 'init', 'mcp',
       'timeline', 'jump', 'subagents', 'tasks', 'plan', 'graph', 'agent', 'goal', 'skills', 'editor', 'add-dir',
       'btw', 'context', 'queue', 'variants', 'thinking', 'mouse', 'paste', 'redo'
@@ -96,6 +99,7 @@ describe('TUI slash commands', () => {
     expect(paletteSlashes).toEqual(new Set([
       'sessions', 'new', 'open', 'timeline', 'jump', 'rename', 'archive', 'archives', 'fork',
       'compact', 'export', 'status', 'copy', 'undo', 'redo', 'connect', 'model',
+      'quota',
       'variants', 'thinking', 'mouse', 'details', 'permission', 'plan', 'graph', 'agent', 'subagents', 'tasks', 'goal',
       'attach', 'paste', 'memory', 'shells', 'extensions', 'queue', 'skills', 'mcp', 'init', 'editor', 'add-dir', 'btw', 'context',
       'capabilities', 'theme', 'share', 'unshare', 'console', 'diff', 'terminal', 'help', 'quit'

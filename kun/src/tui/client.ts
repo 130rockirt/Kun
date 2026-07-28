@@ -42,6 +42,7 @@ import {
   ThreadSchema,
   ThreadTodosResponse,
   ThreadUsageResponseSchema,
+  ProviderQuotaListResponseSchema,
   UpdateThreadRequest,
   UserInputAnswerSchema,
   type ApprovalDecisionRequest,
@@ -1079,6 +1080,10 @@ export class KunTuiClient {
 
   usage() {
     return this.request('/v1/usage?group_by=thread', ThreadUsageResponseSchema)
+  }
+
+  providerQuotas() {
+    return this.request('/v1/provider-quotas', ProviderQuotaListResponseSchema)
   }
 
   async subscribeThreadEvents(input: {

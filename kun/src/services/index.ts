@@ -1,6 +1,7 @@
 export * from './thread-service.js'
 export * from './turn-service.js'
 export * from './usage-service.js'
+export * from './provider-quota-service.js'
 export * from './review-service.js'
 export * from './runtime-event-recorder.js'
 export * from './fault-injection-controller.js'

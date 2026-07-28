@@ -68,6 +68,7 @@ import {
   visualDensity
 } from './visual-system.js'
 import { InlineStreamTerminal, ScrollbackPreservingTerminal } from './pi-terminal.js'
+import { ProviderQuotaDialog } from './provider-quota.js'
 import {
   copyWithSystemClipboard,
   editTextInExternalEditor,
@@ -226,6 +227,7 @@ export class PiTuiApplication {
   private inputOverlay?: { id: string; component: UserInputDialog; handle: ExclusiveRouteHandle }
   private connectRoute?: ConnectDialog
   private modelRoute?: ModelDialog
+  private quotaRoute?: ProviderQuotaDialog
   private subagentRoute?: SubagentDialog
   private subagentPopup?: { component: SubagentDialog; handle: OverlayHandle }
   private commandOverlay?: { component: CommandPaletteDialog; handle: ExclusiveRouteHandle }
@@ -269,6 +271,7 @@ export class PiTuiApplication {
     this.root = new ChatRoot(this.tui, controller, this.keymap, {
       onConnect: () => { void this.showConnect() },
       onModel: () => { void this.showModels() },
+      onQuota: () => this.showQuota(),
       onVariants: () => this.showVariants(),
       onGoal: () => this.showGoal(),
       onPermission: () => this.showPermissions(),
@@ -1081,6 +1084,7 @@ export class PiTuiApplication {
 
   private async showConnect(): Promise<void> {
     this.closeModelRoute()
+    this.closeQuotaRoute()
     this.closeSubagentRoute()
     if (this.connectRoute) return
     try {
@@ -1102,6 +1106,7 @@ export class PiTuiApplication {
 
   private async showModels(): Promise<void> {
     this.closeConnectRoute()
+    this.closeQuotaRoute()
     this.closeSubagentRoute()
     if (this.modelRoute) return
     try {
@@ -1135,9 +1140,37 @@ export class PiTuiApplication {
     this.tui.requestRender()
   }
 
+  private showQuota(): void {
+    this.closeConnectRoute()
+    this.closeModelRoute()
+    this.closeSubagentRoute()
+    if (this.quotaRoute) return
+    const component = new ProviderQuotaDialog(
+      this.tui,
+      () => this.controller.client.providerQuotas(),
+      () => this.closeQuotaRoute(),
+      () => this.terminal.rows
+    )
+    this.quotaRoute = component
+    this.root.showPrimaryRoute('provider-quota', component)
+    this.tui.setFocus(component)
+    this.tui.requestRender()
+    void component.refresh()
+  }
+
+  private closeQuotaRoute(): void {
+    if (!this.quotaRoute) return
+    const route = this.quotaRoute
+    this.quotaRoute = undefined
+    this.root.hidePrimaryRoute(route)
+    this.tui.setFocus(this.root)
+    this.tui.requestRender()
+  }
+
   private showSubagents(): void {
     this.closeConnectRoute()
     this.closeModelRoute()
+    this.closeQuotaRoute()
     if (this.subagentRoute) return
     const projection = this.controller.state.projection
     if (!projection) {
@@ -1288,6 +1321,7 @@ export class PiTuiApplication {
     this.goalOverlay = undefined
     this.closeConnectRoute()
     this.closeModelRoute()
+    this.closeQuotaRoute()
     this.closeSubagentRoute()
   }
 
@@ -1331,6 +1365,7 @@ class ChatRoot implements Component, Focusable {
     private readonly actions: {
       onConnect: () => void
       onModel: () => void
+      onQuota: () => void
       onVariants: () => void
       onGoal: () => void
       onPermission: () => void
@@ -1670,6 +1705,7 @@ class ChatRoot implements Component, Focusable {
       case 'fork': await this.controller.fork(command.title); break
       case 'compact': await this.controller.compact(); break
       case 'connect': this.actions.onConnect(); break
+      case 'quota': this.actions.onQuota(); break
       case 'model': this.actions.onModel(); break
       case 'variants': this.actions.onVariants(); break
       case 'reasoning':

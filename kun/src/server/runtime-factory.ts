@@ -135,6 +135,7 @@ import { ThreadService } from '../services/thread-service.js'
 import { TurnService } from '../services/turn-service.js'
 import { ReviewService } from '../services/review-service.js'
 import { UsageService } from '../services/usage-service.js'
+import { ProviderQuotaService } from '../services/provider-quota-service.js'
 import { RoutePoolTestService } from '../services/route-pool-test-service.js'
 import type { UsageEvent } from '../contracts/events.js'
 import type {
@@ -681,6 +682,43 @@ export async function createKunServeRuntime(
     proxy: { enabled: Boolean(activeOptions.modelProxyUrl), url: activeOptions.modelProxyUrl ?? '' },
     routePools: activeOptions.routePools ?? [],
     localModelGateway: activeOptions.localModelGateway ?? { enabled: false }
+  })
+  const providerQuotaService = new ProviderQuotaService({
+    loadSource: async () => {
+      const [snapshot, materialized] = await Promise.all([
+        modelConnections.snapshot(),
+        modelConnections.materialize()
+      ])
+      const profiles = await Promise.all(snapshot.providers.map(async (profile) => {
+        const config = materialized.providers.get(profile.id)
+        let apiKey = config?.apiKey ?? ''
+        let headers = (config?.kind ?? 'http') === 'http'
+          ? config?.headers
+          : undefined
+        if (config?.credentialSourceId) {
+          try {
+            const resolved = await resolveLegacyRequestCredentials(config.credentialSourceId)
+            apiKey = resolved.apiKey
+            headers = { ...(headers ?? {}), ...(resolved.headers ?? {}) }
+          } catch {
+            // A missing protected binding becomes a per-provider missing-credential state.
+          }
+        }
+        return {
+          id: profile.id,
+          name: profile.name,
+          ...(profile.presetSource ? { presetId: profile.presetSource } : {}),
+          kind: profile.kind,
+          ...(profile.baseUrl ? { baseUrl: profile.baseUrl } : {}),
+          apiKey,
+          ...(headers ? { headers } : {})
+        }
+      }))
+      return {
+        profiles,
+        proxyUrl: snapshot.proxy.enabled ? snapshot.proxy.url : ''
+      }
+    }
   })
   const claudeConnections = new ClaudeConnectionService({ dataDir: activeOptions.dataDir })
   const modelConnectionOAuth = new ModelConnectionOAuthService({
@@ -2307,6 +2345,7 @@ export async function createKunServeRuntime(
 	    },
 	    modelConnections,
 	    modelConnectionOAuth,
+	    providerQuotaService,
 	    get defaultModel() {
 	      return activeOptions.model
 	    },

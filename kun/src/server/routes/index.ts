@@ -32,6 +32,7 @@ import { decideApproval } from './approvals.js'
 import { resolveUserInput } from './user-inputs.js'
 import { resumeSession } from './sessions.js'
 import { usageJsonResponse } from './usage.js'
+import { listProviderQuotas } from './provider-quotas.js'
 import { llmDebugRoundsResponse } from './debug-llm.js'
 import { modelRequestsResponse } from './model-requests.js'
 import { runtimeInfoJsonResponse, runtimeToolDiagnosticsJsonResponse } from './runtime-info.js'
@@ -177,6 +178,7 @@ import {
  * - `POST /v1/user-inputs/{id}` and `/v1/user-input/{id}` (auth)
  * - `POST /v1/sessions/{id}/resume-thread` (auth)
  * - `GET /v1/usage` (auth)
+ * - `GET /v1/provider-quotas` (auth)
  * - `GET /v1/debug/llm-rounds` (auth)
  * - `POST /v1/supply-chain/audit`, `/v1/supply-chain/update-check` (auth)
  */
@@ -768,6 +770,13 @@ export function buildRouter(runtime: ServerRuntime): Router {
   router.add('GET', '/v1/usage', async (request) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
     return usageJsonResponse(request, runtime)
+  })
+  router.add('GET', '/v1/provider-quotas', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    if (!runtime.providerQuotaService) {
+      return ERRORS.unavailable('provider quota service is not available')
+    }
+    return listProviderQuotas(runtime.providerQuotaService)
   })
   router.add('GET', '/v1/debug/llm-rounds', async (request) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
