@@ -39,6 +39,17 @@ test('requires the shared provider catalog in the packaged Kun runtime', () => {
   )
 })
 
+test('requires the Graph execution plane in every packaged Kun runtime', () => {
+  for (const relativePath of [
+    'kun/dist/server/graph-runtime-factory.js',
+    'kun/dist/graph/graph-scheduler.js',
+    'kun/dist/adapters/tool/graph-mode-tool-provider.js',
+    'kun/dist/tui/graph-mode.js'
+  ]) {
+    assert.equal(KUN_RUNTIME_REQUIRED_PATHS.includes(relativePath), true, relativePath)
+  }
+})
+
 function fixture(t, executableName = 'kun-gui') {
   const appOutDir = mkdtempSync(join(tmpdir(), 'kun-linux-launcher-test-'))
   t.after(() => rmSync(appOutDir, { recursive: true, force: true }))

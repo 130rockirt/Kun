@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { ModelReasoningEffort, SubagentToolPolicy } from './capabilities.js'
 import { ApprovalPolicySchema, SandboxModeSchema } from './policy.js'
+import { GraphRelativePathSchema } from './graph-path.js'
 
 export const GRAPH_CONTRACT_VERSION = 1 as const
 export const GRAPH_EVENT_VERSION = 1 as const
@@ -17,13 +18,7 @@ export const GraphTimestampSchema = z.string().datetime({ offset: true })
 const BoundedText = z.string().max(32_768)
 export const GraphBoundedSummarySchema = z.string().max(4_096)
 const Sha256 = z.string().regex(/^[a-f0-9]{64}$/)
-const RelativePath = z.string().min(1).max(4_096).refine((value) => {
-  const normalized = value.replaceAll('\\', '/')
-  return normalized === value &&
-    !normalized.startsWith('/') &&
-    !normalized.split('/').includes('..') &&
-    !/^[A-Za-z]:\//.test(normalized)
-}, { message: 'path must be normalized and repository relative' })
+const RelativePath = GraphRelativePathSchema
 
 const Identifier = GraphIdentifierSchema
 const IdempotencyKey = GraphIdempotencyKeySchema
@@ -317,6 +312,9 @@ export const GraphAssignmentSnapshotV1Schema = z.object({
   profileId: GraphProfileIdSchema,
   profileVersion: z.number().int().positive(),
   profileOrigin: z.enum(['builtin', 'user', 'ephemeral', 'learned']),
+  requestedProfileId: GraphProfileIdSchema.optional(),
+  requestedProfileVersion: z.number().int().positive().optional(),
+  routingReason: BoundedSummary.optional(),
   name: z.string().trim().min(1).max(128),
   systemPrompt: BoundedText,
   model: z.string().trim().min(1).max(256),
@@ -656,6 +654,7 @@ export const GraphNodeProjectionV1Schema = z.object({
   acceptedAttemptId: GraphAttemptIdSchema.optional(),
   supersededByNodeId: GraphNodeIdSchema.optional(),
   loopIteration: z.number().int().nonnegative().default(0),
+  lastTransitionReason: BoundedSummary.optional(),
   lastProgress: GraphProgressUpdateV1Schema.optional()
 }).strict()
 export type GraphNodeProjectionV1 = z.infer<typeof GraphNodeProjectionV1Schema>

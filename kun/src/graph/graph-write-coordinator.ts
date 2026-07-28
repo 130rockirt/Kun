@@ -1,21 +1,28 @@
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { mkdir, readFile, realpath, rm } from 'node:fs/promises'
-import { dirname, isAbsolute, join, posix, resolve, sep } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { z } from 'zod'
 import type { ArtifactStore } from '../artifacts/artifact-store.js'
 import type { GraphRuntimeConfig } from '../config/kun-config.js'
 import { atomicWriteFile } from '../adapters/file/atomic-write.js'
+import {
+  GraphRelativePathSchema,
+  graphRelativePathsOverlap,
+  normalizeGraphRelativePath
+} from '../contracts/graph-path.js'
+import {
+  graphHostRelativePathCovers,
+  graphHostRelativePathsOverlap,
+  graphPhysicalPathsEqual,
+  isGraphPhysicalPathContained
+} from './graph-platform-path.js'
 
 const execFileAsync = promisify(execFile)
 const Timestamp = z.string().datetime({ offset: true })
 const Identifier = z.string().trim().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/)
-const RelativePath = z.string().min(1).max(4_096).refine((value) =>
-  value === value.replaceAll('\\', '/') &&
-  !value.startsWith('/') &&
-  !value.split('/').includes('..') &&
-  !/^[A-Za-z]:\//.test(value))
+const RelativePath = GraphRelativePathSchema
 
 const PathLeaseSchema = z.object({
   leaseId: Identifier,
@@ -99,7 +106,7 @@ export class FileGraphWriteCoordinator {
       const isolation = this.options.config().writeIsolation
       const conflicts = state.leases.filter((lease) =>
         lease.state === 'active' &&
-        lease.workspaceRoot === workspaceRoot &&
+        graphPhysicalPathsEqual(lease.workspaceRoot, workspaceRoot) &&
         lease.attemptId !== input.attemptId &&
         writeClaimsConflict(
           isolation.mode,
@@ -507,7 +514,7 @@ export class FileGraphWriteCoordinator {
       return `write lease is ${lease.state} for attempt ${record.attemptId}`
     }
     const outside = record.changedFiles.filter((path) =>
-      !lease.scopes.some((scope) => pathCovers(scope, path)))
+      !lease.scopes.some((scope) => graphHostRelativePathCovers(scope, path)))
     return outside.length
       ? `worktree changed files outside its frozen write scope: ${outside.slice(0, 20).join(', ')}`
       : undefined
@@ -523,7 +530,7 @@ export class FileGraphWriteCoordinator {
     }
     const root = await canonicalPath(this.worktreeRoot())
     const candidate = await canonicalPath(record.path)
-    if (!isContained(root, candidate)) {
+    if (!isGraphPhysicalPathContained(root, candidate)) {
       throw new Error('refusing to clean worktree outside graph root')
     }
     await git(record.repositoryRoot, ['worktree', 'remove', '--force', candidate])
@@ -561,8 +568,14 @@ export class FileGraphWriteCoordinator {
   }
 }
 
-export function scopesOverlap(left: readonly string[], right: readonly string[]): boolean {
-  return left.some((a) => right.some((b) => pathCovers(a, b) || pathCovers(b, a)))
+export function scopesOverlap(
+  left: readonly string[],
+  right: readonly string[],
+  caseInsensitive?: boolean
+): boolean {
+  return caseInsensitive === undefined
+    ? graphHostRelativePathsOverlap(left, right)
+    : graphRelativePathsOverlap(left, right, caseInsensitive)
 }
 
 function writeClaimsConflict(
@@ -577,25 +590,13 @@ function writeClaimsConflict(
   return scopesOverlap(left, right)
 }
 
-function pathCovers(parent: string, child: string): boolean {
-  const normalizedParent = parent.replace(/\/+$/, '')
-  if (normalizedParent === '.') return true
-  return child === normalizedParent || child.startsWith(`${normalizedParent}/`)
-}
-
 function normalizeScopes(scopes: readonly string[]): string[] {
   return [...new Set(scopes.map((scope) => {
-    const normalized = posix.normalize(scope.replaceAll('\\', '/')).replace(/^\.\//, '')
-    if (
-      !normalized ||
-      isAbsolute(normalized) ||
-      normalized === '..' ||
-      normalized.startsWith('../') ||
-      /^[A-Za-z]:\//.test(normalized)
-    ) {
+    try {
+      return normalizeGraphRelativePath(scope)
+    } catch {
       throw new Error(`invalid Graph write scope: ${scope}`)
     }
-    return RelativePath.parse(normalized)
   }))].sort()
 }
 
@@ -622,11 +623,6 @@ async function workingTreeChangedFiles(repositoryRoot: string): Promise<string[]
 async function canonicalPath(input: string): Promise<string> {
   const absolute = resolve(input)
   return realpath(absolute).catch(() => absolute)
-}
-
-function isContained(parent: string, child: string): boolean {
-  const prefix = parent.endsWith(sep) ? parent : `${parent}${sep}`
-  return child.startsWith(prefix)
 }
 
 function safeId(value: string): string {

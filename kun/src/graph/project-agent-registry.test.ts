@@ -13,6 +13,24 @@ afterEach(async () => {
 })
 
 describe('FileProjectAgentRegistry', () => {
+  it.runIf(process.platform === 'win32')(
+    'uses one project identity for Windows path casing variants',
+    async () => {
+      const parent = await mkdtemp(join(tmpdir(), 'kun-graph-project-case-'))
+      const workspace = join(parent, 'GraphWorkspace')
+      const alternate = join(parent, 'graphworkspace')
+      const root = await mkdtemp(join(tmpdir(), 'kun-graph-registry-case-'))
+      await mkdir(workspace)
+      roots.push(parent, root)
+      const registry = new FileProjectAgentRegistry({
+        rootDir: root,
+        config: () => testGraphConfig()
+      })
+      expect((await registry.identify(alternate)).projectId)
+        .toBe((await registry.identify(workspace)).projectId)
+    }
+  )
+
   it('uses stable project identity, hard eligibility, and explainable evidence ranking', async () => {
     const workspace = await mkdtemp(join(tmpdir(), 'kun-graph-project-'))
     const root = await mkdtemp(join(tmpdir(), 'kun-graph-registry-'))

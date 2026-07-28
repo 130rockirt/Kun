@@ -65,6 +65,13 @@ export type LocalTool = {
    */
   requiresExplicitApproval?: boolean
   /**
+   * The trusted provider applies its own action-specific approval boundary.
+   * This skips only the generic runtime approval policy; explicit approvals,
+   * external-write approvals, hooks, advertisement, and sandbox gates remain
+   * authoritative.
+   */
+  providerManagedApproval?: boolean
+  /**
    * String argument names that are exact file mutation targets eligible for a
    * one-call external workspace grant. Tools must opt in explicitly; merely
    * being a `file_change` tool never grants inferred path arguments. Opted-in
@@ -481,6 +488,7 @@ export class LocalToolHost implements ToolHost {
     )
     if (sandboxBlock) return sandboxBlock
     if (this.isInteractiveGuiGateTool(call.toolName)) return null
+    if (tool.providerManagedApproval) return null
     if (context.approvalPolicy !== 'never') return null
     if (tool.policy === 'never') return null
     return {
@@ -491,6 +499,7 @@ export class LocalToolHost implements ToolHost {
 
   private requiresApproval(tool: LocalTool, call: ToolCallLike, context: ToolHostContext): boolean {
     if (this.isInteractiveGuiGateTool(call.toolName)) return false
+    if (tool.providerManagedApproval) return false
     if (tool.policy === 'never' || context.approvalPolicy === 'never') return false
     switch (context.approvalPolicy) {
       case 'always':
@@ -578,6 +587,7 @@ export class LocalToolHost implements ToolHost {
       execute: tool.execute,
       ...(tool.shouldAdvertise ? { shouldAdvertise: tool.shouldAdvertise } : {}),
       ...(tool.requiresExplicitApproval ? { requiresExplicitApproval: true } : {}),
+      ...(tool.providerManagedApproval ? { providerManagedApproval: true } : {}),
       ...(tool.externalWritePathArguments?.length
         ? { externalWritePathArguments: [...tool.externalWritePathArguments] }
         : {})

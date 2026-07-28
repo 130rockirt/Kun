@@ -6,6 +6,7 @@ import type {
   GraphNodeProjection,
   GraphRun
 } from '../../graph/graph-types'
+import { plannedAssignmentLabel } from './graph-elements'
 import {
   InspectorList,
   Metric,
@@ -43,6 +44,14 @@ export function GraphNodeInspector({
   const { t } = useTranslation('common')
   const [rebindProfileId, setRebindProfileId] = useState('')
   const attempt = node.attempts.at(-1)
+  const plannedAssignment = plannedAssignmentLabel(node.node)
+  const dispatchState = attempt
+    ? attempt.childThreadId
+      ? t('graphDispatchChildCreated')
+      : t('graphDispatchAdmitted')
+    : node.status === 'failed'
+      ? t('graphDispatchAdmissionFailed')
+      : t('graphDispatchNotStarted')
   const plan = run.plans.at(-1)
   const dependencies = plan?.edges
     .filter((edge) => edge.to === node.node.id)
@@ -58,6 +67,7 @@ export function GraphNodeInspector({
     (!item.attemptId || node.attempts.some((nodeAttempt) => nodeAttempt.id === item.attemptId)))
   const needsHuman = run.status === 'awaiting_human' ||
     node.node.completion?.review.kinds.includes('human')
+  const transitionIsError = ['failed', 'repair_required', 'cancelled'].includes(node.status)
   return (
     <div className="space-y-3 p-3">
       <div className="flex items-start justify-between gap-2">
@@ -74,6 +84,10 @@ export function GraphNodeInspector({
         <StatusPill status={node.status} />
       </div>
       <p className="text-[11px] leading-5 text-ds-muted">{node.node.objective}</p>
+      <div className="grid grid-cols-2 gap-2 text-[10px]">
+        <Metric label={t('graphPlannedAssignment')} value={plannedAssignment} />
+        <Metric label={t('graphDispatchState')} value={dispatchState} />
+      </div>
       <div className="grid grid-cols-3 gap-2 text-[10px]">
         <Metric
           label={t('graphNodeTokenBudget')}
@@ -98,13 +112,33 @@ export function GraphNodeInspector({
               label={t('graphMetricProfile')}
               value={`${attempt.assignment.profileId}@${attempt.assignment.profileVersion}`}
             />
+            {attempt.assignment.requestedProfileId ? (
+              <Metric
+                label={t('graphRequestedProfile')}
+                value={`${attempt.assignment.requestedProfileId}${
+                  attempt.assignment.requestedProfileVersion
+                    ? `@${attempt.assignment.requestedProfileVersion}`
+                    : ''
+                }`}
+              />
+            ) : null}
             <Metric label={t('graphMetricModel')} value={attempt.assignment.model} />
             <Metric label={t('graphMetricProvider')} value={attempt.assignment.providerId} />
             <Metric label={t('graphMetricAttempt')} value={`#${attempt.attemptNumber}`} />
             <Metric label={t('graphMetricTokens')} value={attempt.tokenUsage.toLocaleString()} />
             <Metric label={t('graphMetricElapsed')} value={`${Math.round(attempt.elapsedMs / 1000)}s`} />
             <Metric label={t('graphMetricSandbox')} value={attempt.assignment.sandboxMode} />
+            <Metric
+              label={t('graphMetricChildSession')}
+              value={attempt.childThreadId ?? t('graphChildSessionPending')}
+            />
           </div>
+          {attempt.assignment.routingReason ? (
+            <div className="rounded-lg border border-amber-400/30 bg-amber-500/8 px-2.5 py-2 text-[10px] leading-4 text-amber-800 dark:text-amber-100">
+              <div className="mb-0.5 font-semibold">{t('graphRoutingDecision')}</div>
+              {attempt.assignment.routingReason}
+            </div>
+          ) : null}
           <InspectorList
             title={t('graphAssignmentPolicy')}
             values={[
@@ -177,18 +211,25 @@ export function GraphNodeInspector({
           </SmallAction>
         </div>
       ) : null}
-      {node.attempts.length > 1 ? (
+      {node.attempts.length ? (
         <details className="text-[10px] text-ds-muted">
           <summary className="cursor-pointer font-semibold">
             {t('graphAttemptHistory', { count: node.attempts.length })}
           </summary>
           <div className="mt-1.5 space-y-1">
             {node.attempts.map((item) => (
-              <div key={item.id} className="rounded-md bg-ds-card px-2 py-1">
-                #{item.attemptNumber} · {t(`graphStatus_${item.status}`, {
-                  defaultValue: item.status
-                })} · {t('graphTokenCount', { count: item.tokenUsage })}
-                {item.normalizedFailure ? ` · ${item.normalizedFailure}` : ''}
+              <div key={item.id} className="space-y-1 rounded-md bg-ds-card px-2 py-1.5">
+                <div>
+                  #{item.attemptNumber} · {item.assignment.name} · {t(`graphStatus_${item.status}`, {
+                    defaultValue: item.status
+                  })} · {t('graphTokenCount', { count: item.tokenUsage })}
+                  {item.normalizedFailure ? ` · ${item.normalizedFailure}` : ''}
+                </div>
+                {item.childThreadId ? (
+                  <SmallAction onClick={() => onOpenChild(item.childThreadId!)}>
+                    {t('graphOpenAttemptSession', { number: item.attemptNumber })}
+                  </SmallAction>
+                ) : null}
               </div>
             ))}
           </div>
@@ -202,6 +243,19 @@ export function GraphNodeInspector({
       {attempt?.normalizedFailure ? (
         <div role="alert" className="rounded-lg border border-red-400/25 bg-red-500/7 px-2.5 py-2 text-[10px] leading-4 text-red-700 dark:text-red-200">
           {attempt.normalizedFailure}
+        </div>
+      ) : null}
+      {node.lastTransitionReason ? (
+        <div
+          role={transitionIsError ? 'alert' : 'status'}
+          className={`rounded-lg border px-2.5 py-2 text-[10px] leading-4 ${
+            transitionIsError
+              ? 'border-red-400/25 bg-red-500/7 text-red-700 dark:text-red-200'
+              : 'border-ds-border-muted bg-ds-card text-ds-muted'
+          }`}
+        >
+          <div className="mb-0.5 font-semibold">{t('graphLatestTransitionReason')}</div>
+          {node.lastTransitionReason}
         </div>
       ) : null}
       {attempt?.validation?.issues.length ? (

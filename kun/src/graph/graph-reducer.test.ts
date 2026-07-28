@@ -83,7 +83,12 @@ describe('GraphRun deterministic reducer', () => {
       testGraphEnvelope(1, created()),
       testGraphEnvelope(2, {
         type: 'node_status_changed',
-        payload: { nodeId: 'research', from: 'pending', to: 'ready' }
+        payload: {
+          nodeId: 'research',
+          from: 'pending',
+          to: 'ready',
+          reason: 'Dependencies accepted.'
+        }
       }),
       testGraphEnvelope(3, { type: 'attempt_created', payload: { attempt } }),
       testGraphEnvelope(4, {
@@ -143,6 +148,7 @@ describe('GraphRun deterministic reducer', () => {
       result: { summary: 'Found the relevant code.' }
     })
     expect(state.nodes.research.lastProgress?.percent).toBe(50)
+    expect(state.nodes.research.lastTransitionReason).toBeUndefined()
     expect(state.nodes.research.status).toBe('queued')
     expect(state.budget.attempts).toBe(1)
   })

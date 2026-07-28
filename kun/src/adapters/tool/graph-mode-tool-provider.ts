@@ -18,9 +18,14 @@ import {
   GraphMailbox,
   GraphWorkerSessionRegistry,
   canonicalWorkerArtifactRefs,
+  graphPhysicalPathsEqual,
   type GraphRunStore,
   type ProjectAgentRegistry
 } from '../../graph/index.js'
+import {
+  GRAPH_LEAD_TOOL_NAMES,
+  GRAPH_WORKER_TOOL_NAMES
+} from '../../graph/graph-tool-boundary.js'
 
 export function buildGraphModeLocalTools(options: {
   control: GraphControlService
@@ -55,7 +60,7 @@ export function buildGraphModeLocalTools(options: {
 
   return [
     LocalToolHost.defineTool({
-      name: 'graph_create_run',
+      name: GRAPH_LEAD_TOOL_NAMES[0],
       description:
         'Create and start a durable GraphRun after thinking through the user request. ' +
         'The plan must define phases, bounded nodes, typed edges, budgets, completion nodes, ' +
@@ -101,7 +106,7 @@ export function buildGraphModeLocalTools(options: {
       }
     }),
     LocalToolHost.defineTool({
-      name: 'graph_control_run',
+      name: GRAPH_LEAD_TOOL_NAMES[1],
       description:
         'Inspect or control one durable GraphRun. Actions: inspect, pause, resume, cancel, retry_node, or steer. ' +
         'Every mutation is host-validated, idempotent, and revision/sequence checked.',
@@ -184,7 +189,7 @@ export function buildGraphModeLocalTools(options: {
       }
     }),
     LocalToolHost.defineTool({
-      name: 'graph_patch_run',
+      name: GRAPH_LEAD_TOOL_NAMES[2],
       description:
         'Apply a validated compare-and-swap GraphPatch. Accepted history cannot be rewritten; ' +
         'replacement work must use a distinct superseding node.',
@@ -221,7 +226,7 @@ export function buildGraphModeLocalTools(options: {
       }
     }),
     LocalToolHost.defineTool({
-      name: 'graph_review_node',
+      name: GRAPH_LEAD_TOOL_NAMES[3],
       description:
         'Record a Lead or human review decision for a submitted Graph node. ' +
         'Use pass, fail, revise, or needs_human with bounded evidence.',
@@ -263,7 +268,7 @@ export function buildGraphModeLocalTools(options: {
       }
     }),
     LocalToolHost.defineTool({
-      name: 'graph_worker_progress',
+      name: GRAPH_WORKER_TOOL_NAMES[0],
       description:
         'Report bounded progress for the Graph worker attempt associated with this child session.',
       inputSchema: {
@@ -315,7 +320,7 @@ export function buildGraphModeLocalTools(options: {
       }
     }),
     LocalToolHost.defineTool({
-      name: 'graph_worker_message',
+      name: GRAPH_WORKER_TOOL_NAMES[1],
       description:
         'Send a typed bounded Graph mailbox message. The host verifies worker identity, graph edges, recipients, artifacts, quotas, expiry, and deduplication.',
       inputSchema: {
@@ -393,7 +398,7 @@ export function buildGraphModeLocalTools(options: {
       }
     }),
     LocalToolHost.defineTool({
-      name: 'graph_worker_receive_messages',
+      name: GRAPH_WORKER_TOOL_NAMES[2],
       description:
         'Receive Graph mailbox messages addressed to this worker and optionally acknowledge messages already handled.',
       inputSchema: {
@@ -447,7 +452,7 @@ export function buildGraphModeLocalTools(options: {
       }
     }),
     LocalToolHost.defineTool({
-      name: 'graph_worker_publish_artifact',
+      name: GRAPH_WORKER_TOOL_NAMES[3],
       description:
         'Publish bounded worker output to the content-addressed ArtifactStore and GraphRun. ' +
         'Use this for evidence or outputs too large for the structured result.',
@@ -539,7 +544,7 @@ export function buildGraphModeLocalTools(options: {
       }
     }),
     LocalToolHost.defineTool({
-      name: 'graph_worker_submit_result',
+      name: GRAPH_WORKER_TOOL_NAMES[4],
       description:
         'Submit the structured Graph worker result for the attempt associated with this child session. ' +
         'The scheduler still owns validation, review, acceptance, retry, and completion.',
@@ -623,7 +628,10 @@ async function authorizedLead(
   if (
     identity.projectId !== run.projectId ||
     identity.projectId !== planIdentity.projectId ||
-    identity.canonicalWorkspaceRoot !== planIdentity.canonicalWorkspaceRoot
+    !graphPhysicalPathsEqual(
+      identity.canonicalWorkspaceRoot,
+      planIdentity.canonicalWorkspaceRoot
+    )
   ) {
     throw new Error('current workspace does not own this GraphRun')
   }

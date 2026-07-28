@@ -1,4 +1,5 @@
 import { z, type ZodType } from 'zod'
+import { randomUUID } from 'node:crypto'
 import {
   ApprovalDecisionResponse,
   AttachmentReleaseResponse,
@@ -14,6 +15,7 @@ import {
   CreateThreadRequest,
   DeleteThreadResponse,
   ForkThreadRequest,
+  GraphRunV1Schema,
   ListThreadsResponse,
   ModelConnectionConnectRequestSchema,
   ModelConnectionCredentialRequestSchema,
@@ -304,6 +306,14 @@ const ExtensionJobCancelResponse = z.object({
   schemaVersion: z.literal(1),
   accepted: z.boolean(),
   job: ExtensionJob
+})
+
+const GraphAvailabilityResponse = z.object({
+  enabled: z.boolean()
+}).passthrough()
+
+const GraphRunsResponse = z.object({
+  runs: z.array(GraphRunV1Schema)
 })
 
 export type ThreadDetail = z.infer<typeof ThreadDetailResponse>
@@ -964,6 +974,34 @@ export class KunTuiClient {
     return this.request(`/v1/threads/${segment(threadId)}/turns`, StartTurnResponse, {
       method: 'POST',
       body: StartTurnRequest.parse(input)
+    })
+  }
+
+  graphAvailability() {
+    return this.request('/v1/graphs/diagnostics', GraphAvailabilityResponse)
+  }
+
+  async listGraphRuns(threadId: string) {
+    return (await this.request(
+      `/v1/graphs?thread_id=${encodeURIComponent(threadId)}`,
+      GraphRunsResponse
+    )).runs
+  }
+
+  getGraphRun(runId: string) {
+    return this.request(`/v1/graphs/${segment(runId)}`, GraphRunV1Schema)
+  }
+
+  steerGraphRun(runId: string, text: string) {
+    const commandId = `tui_steer_${randomUUID()}`
+    return this.request(`/v1/graphs/${segment(runId)}/steer`, GraphRunV1Schema, {
+      method: 'POST',
+      body: {
+        commandId,
+        idempotencyKey: commandId,
+        target: { kind: 'run' },
+        text
+      }
     })
   }
 

@@ -13,6 +13,7 @@ import {
 } from '../contracts/graph.js'
 import type { GraphRuntimeConfig } from '../config/kun-config.js'
 import type { ChildRunRecord } from '../delegation/delegation-runtime.js'
+import { graphHostRelativePathCovers } from './graph-platform-path.js'
 
 export function dependencyDecision(
   run: GraphRunV1,
@@ -171,9 +172,7 @@ export function validateWorkerResult(
   }
   for (const changedFile of result.changedFiles) {
     if (!node.node.writeScopes.some((scope) =>
-      scope === '.' ||
-      changedFile === scope ||
-      changedFile.startsWith(`${scope.replace(/\/+$/, '')}/`))) {
+      graphHostRelativePathCovers(scope, changedFile))) {
       issues.push({
         code: 'changed_file_outside_scope',
         path: ['changedFiles'],

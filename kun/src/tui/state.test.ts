@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { ThreadSchema } from '../contracts/threads.js'
 import type { RuntimeEvent } from '../contracts/events.js'
-import { applyRuntimeEvent, projectThreadSnapshot } from './state.js'
+import {
+  applyRuntimeEvent,
+  projectThreadSnapshot,
+  setProjectionRunningTurn
+} from './state.js'
 import { lastAssistantText, renderThreadMarkdown } from './operations.js'
 import type { ThreadDetail } from './client.js'
 
@@ -144,6 +148,26 @@ describe('thread projection', () => {
     state = applyRuntimeEvent(state, event({ kind: 'turn_completed', seq: 4, turnId: 'turn_gui', status: 'completed' }))
     expect(state.runningTurnId).toBeUndefined()
     expect(state.thread).toMatchObject({ status: 'idle', latestSeq: 4, turns: [{ id: 'turn_gui', status: 'completed' }] })
+  })
+
+  it('keeps the Graph orchestration contract on an optimistic TUI turn', () => {
+    const state = setProjectionRunningTurn(
+      projectThreadSnapshot(detail()),
+      'turn_graph',
+      'Implement with Graph.',
+      '2026-07-22T00:00:01.000Z',
+      {
+        mode: 'agent',
+        orchestration: 'graph'
+      }
+    )
+
+    expect(state.thread.turns).toContainEqual(expect.objectContaining({
+      id: 'turn_graph',
+      mode: 'agent',
+      orchestration: 'graph',
+      prompt: 'Implement with Graph.'
+    }))
   })
 
   it('keeps runtime failures visible when no assistant item was emitted', () => {

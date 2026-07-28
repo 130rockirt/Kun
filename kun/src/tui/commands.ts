@@ -53,6 +53,7 @@ export type TuiCommand =
   | { kind: 'diff' }
   | { kind: 'terminal' }
   | { kind: 'plan'; action?: string }
+  | { kind: 'graph'; action?: string }
   | { kind: 'agent' }
   | { kind: 'goal'; action?: string }
   | { kind: 'skills'; query?: string }
@@ -116,6 +117,7 @@ export const TUI_SLASH_COMMANDS: SlashCommand[] = [
   { name: 'diff', description: 'Inspect the current workspace Git diff' },
   { name: 'terminal', description: 'Open an interactive shell and return to Kun on exit' },
   { name: 'plan', description: 'Enter plan mode for the next turn', argumentHint: '[status|tasks|off]' },
+  { name: 'graph', description: 'Enter Graph mode, inspect its run, or return to Direct', argumentHint: '[status|off]' },
   { name: 'agent', description: 'Enter normal agent mode' },
   { name: 'goal', description: 'View or manage the persistent goal', argumentHint: '[objective|pause|resume|clear]' },
   { name: 'skills', description: 'Browse workspace-visible skills', argumentHint: '[search]' },
@@ -162,6 +164,7 @@ export const TUI_COMMAND_DEFINITIONS: readonly TuiCommandDefinition[] = [
   { id: 'permission', title: 'Change permissions', category: 'Session', slash: 'permission', available: true },
   { id: 'mode', title: 'Choose Agent, Plan, or Goal mode', category: 'Session', keyAction: 'agent_list', available: true },
   { id: 'plan', title: 'Enter Plan mode', category: 'Session', slash: 'plan', available: true },
+  { id: 'graph', title: 'Enter or inspect Graph mode', category: 'Session', slash: 'graph', available: true },
   { id: 'agent', title: 'Enter Agent mode', category: 'Session', slash: 'agent', available: true },
   { id: 'subagents', title: 'Manage subagent sessions', category: 'Session', slash: 'subagents', available: true },
   { id: 'tasks', title: 'Manage plan tasks', category: 'Session', slash: 'tasks', available: true },
@@ -253,6 +256,7 @@ export function parseTuiCommand(text: string): TuiCommand | null {
     case 'diff': return { kind: 'diff' }
     case 'terminal': return { kind: 'terminal' }
     case 'plan': return { kind: 'plan', ...(rest ? { action: rest } : {}) }
+    case 'graph': return { kind: 'graph', ...(rest ? { action: rest } : {}) }
     case 'agent': return { kind: 'agent' }
     case 'goal': return { kind: 'goal', ...(rest ? { action: rest } : {}) }
     case 'skills': return { kind: 'skills', ...(rest ? { query: rest } : {}) }

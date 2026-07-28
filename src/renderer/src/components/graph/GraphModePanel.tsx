@@ -15,6 +15,7 @@ import {
   criticalPathNodeIds,
   filterGraphElementsByPhases,
   graphElements,
+  plannedAssignmentLabel,
   runProgress
 } from './graph-elements'
 import { usePrefersReducedMotion } from './graph-panel-shared'
@@ -23,6 +24,7 @@ export {
   criticalPathNodeIds,
   filterGraphElementsByPhases,
   graphElements,
+  plannedAssignmentLabel,
   runProgress
 } from './graph-elements'
 
@@ -93,8 +95,10 @@ export function GraphModePanel({
   const run = runs.find((item) => item.id === selectedRunId) ?? runs[0] ?? null
   const selectedNode = run && selectedNodeId ? run.nodes[selectedNodeId] : undefined
   const elements = useMemo(
-    () => run ? graphElements(run, reducedMotion) : { nodes: [], edges: [] },
-    [reducedMotion, run]
+    () => run
+      ? graphElements(run, reducedMotion, selectedNodeId)
+      : { nodes: [], edges: [] },
+    [reducedMotion, run, selectedNodeId]
   )
   const progress = run ? runProgress(run) : { completed: 0, total: 0 }
 

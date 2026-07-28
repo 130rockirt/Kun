@@ -498,6 +498,7 @@ export function applyRuntimeEvent(
     case 'bash_session_started':
     case 'bash_session_updated':
     case 'bash_session_completed':
+    case 'graph_event':
       break
     case 'pipeline_stage':
       if (event.turnId && next.runningTurnId === event.turnId && event.stage === 'pre_send') {
@@ -526,7 +527,7 @@ export function setProjectionRunningTurn(
   turnId: string,
   prompt = '',
   timestamp = new Date().toISOString(),
-  metadata: Partial<Pick<Turn, 'model' | 'providerId' | 'accountId' | 'reasoningEffort' | 'mode' | 'attachmentIds'>> = {}
+  metadata: Partial<Pick<Turn, 'model' | 'providerId' | 'accountId' | 'reasoningEffort' | 'mode' | 'orchestration' | 'attachmentIds'>> = {}
 ): ThreadProjection {
   return {
     ...current,
@@ -722,7 +723,7 @@ function updateTurnStatus(
   threadStatus: ThreadDetail['status'],
   timestamp: string,
   prompt = '',
-  metadata: Partial<Pick<Turn, 'model' | 'providerId' | 'accountId' | 'reasoningEffort' | 'mode' | 'attachmentIds'>> = {}
+  metadata: Partial<Pick<Turn, 'model' | 'providerId' | 'accountId' | 'reasoningEffort' | 'mode' | 'orchestration' | 'attachmentIds'>> = {}
 ): ThreadDetail {
   if (!turnId) return { ...thread, status: threadStatus }
   const withTurn = ensureTurn(thread, turnId, status, timestamp, prompt, metadata)
@@ -748,7 +749,7 @@ function ensureTurn(
   status: Turn['status'],
   timestamp: string,
   prompt = '',
-  metadata: Partial<Pick<Turn, 'model' | 'providerId' | 'accountId' | 'reasoningEffort' | 'mode' | 'attachmentIds'>> = {}
+  metadata: Partial<Pick<Turn, 'model' | 'providerId' | 'accountId' | 'reasoningEffort' | 'mode' | 'orchestration' | 'attachmentIds'>> = {}
 ): ThreadDetail {
   if (thread.turns.some((turn) => turn.id === turnId)) {
     if (Object.keys(metadata).length === 0) return thread
@@ -762,7 +763,7 @@ function ensureTurn(
     threadId: thread.id,
     status,
     prompt,
-    orchestration: 'direct',
+    orchestration: metadata.orchestration ?? 'direct',
     model: thread.model,
     ...(thread.providerId ? { providerId: thread.providerId } : {}),
     ...(thread.accountId ? { accountId: thread.accountId } : {}),

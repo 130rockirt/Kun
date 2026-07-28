@@ -9,6 +9,12 @@ import { CheckCircle2, Circle } from 'lucide-react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import type { ThreadTodoItem, ThreadTodoList } from '../../agent/types'
+import {
+  calculateComposerPopoverPlacement,
+  currentComposerBodyZoom,
+  type ComposerPopoverAnchorRect,
+  type ComposerPopoverPlacement
+} from './floating-composer-popover-placement'
 
 const TODO_POPOVER_WIDTH = 640
 const TODO_POPOVER_MAX_HEIGHT = 360
@@ -17,30 +23,13 @@ const TODO_POPOVER_GAP = 8
 const TODO_ROW_ESTIMATED_HEIGHT = 56
 const TODO_POPOVER_CHROME_HEIGHT = 24
 
-type PopoverAnchorRect = Pick<DOMRect, 'bottom' | 'left' | 'right' | 'top'>
-
-export type TodoProgressPopoverPlacement = {
-  left: number
-  top: number
-  width: number
-  maxHeight: number
-}
+export type TodoProgressPopoverPlacement = ComposerPopoverPlacement
 
 export type TodoProgress = {
   completed: number
   current: number
   total: number
   allComplete: boolean
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(Math.max(value, min), max)
-}
-
-function currentBodyZoom(): number {
-  if (typeof window === 'undefined') return 1
-  const parsed = Number.parseFloat(window.getComputedStyle(document.body).zoom)
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1
 }
 
 export function getTodoProgress(items: readonly ThreadTodoItem[]): TodoProgress {
@@ -71,55 +60,23 @@ export function calculateTodoProgressPopoverPlacement({
   viewportWidth,
   coordinateScale = 1
 }: {
-  anchorRect: PopoverAnchorRect
+  anchorRect: ComposerPopoverAnchorRect
   popoverHeight: number
   viewportHeight: number
   viewportWidth: number
   coordinateScale?: number
 }): TodoProgressPopoverPlacement {
-  const scale = Number.isFinite(coordinateScale) && coordinateScale > 0 ? coordinateScale : 1
-  const normalizedAnchorRect = {
-    bottom: anchorRect.bottom / scale,
-    left: anchorRect.left / scale,
-    right: anchorRect.right / scale,
-    top: anchorRect.top / scale
-  }
-  const normalizedViewportHeight = viewportHeight / scale
-  const normalizedViewportWidth = viewportWidth / scale
-  const width = Math.min(
-    TODO_POPOVER_WIDTH,
-    Math.max(1, normalizedViewportWidth - TODO_POPOVER_MARGIN * 2)
-  )
-  const anchorCenter = (normalizedAnchorRect.left + normalizedAnchorRect.right) / 2
-  const left = clamp(
-    anchorCenter - width / 2,
-    TODO_POPOVER_MARGIN,
-    Math.max(TODO_POPOVER_MARGIN, normalizedViewportWidth - TODO_POPOVER_MARGIN - width)
-  )
-  const contentHeight = Math.max(1, popoverHeight)
-  const targetHeight = Math.min(contentHeight, TODO_POPOVER_MAX_HEIGHT)
-  const spaceAbove = Math.max(
-    1,
-    normalizedAnchorRect.top - TODO_POPOVER_MARGIN - TODO_POPOVER_GAP
-  )
-  const spaceBelow = Math.max(
-    1,
-    normalizedViewportHeight - normalizedAnchorRect.bottom - TODO_POPOVER_MARGIN - TODO_POPOVER_GAP
-  )
-  const openAbove = spaceAbove >= targetHeight || spaceAbove >= spaceBelow
-  const availableHeight = openAbove ? spaceAbove : spaceBelow
-  const maxHeight = Math.min(TODO_POPOVER_MAX_HEIGHT, availableHeight)
-  const visibleHeight = Math.min(contentHeight, maxHeight)
-  const preferredTop = openAbove
-    ? normalizedAnchorRect.top - TODO_POPOVER_GAP - visibleHeight
-    : normalizedAnchorRect.bottom + TODO_POPOVER_GAP
-  const top = clamp(
-    preferredTop,
-    TODO_POPOVER_MARGIN,
-    Math.max(TODO_POPOVER_MARGIN, normalizedViewportHeight - TODO_POPOVER_MARGIN - visibleHeight)
-  )
-
-  return { left, top, width, maxHeight }
+  return calculateComposerPopoverPlacement({
+    anchorRect,
+    popoverHeight,
+    viewportHeight,
+    viewportWidth,
+    coordinateScale,
+    preferredWidth: TODO_POPOVER_WIDTH,
+    maximumHeight: TODO_POPOVER_MAX_HEIGHT,
+    margin: TODO_POPOVER_MARGIN,
+    gap: TODO_POPOVER_GAP
+  })
 }
 
 export function FloatingComposerTodoProgress({
@@ -153,7 +110,7 @@ export function FloatingComposerTodoProgress({
         popoverHeight: popoverRef.current?.offsetHeight ?? estimatedPopoverHeight,
         viewportHeight: window.innerHeight,
         viewportWidth: window.innerWidth,
-        coordinateScale: currentBodyZoom()
+        coordinateScale: currentComposerBodyZoom()
       }))
     }
     updatePlacement()

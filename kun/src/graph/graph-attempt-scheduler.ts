@@ -224,14 +224,25 @@ export abstract class GraphAttemptScheduler {
     error: unknown
   ): Promise<void> {
     const message = `Graph node admission failed: ${errorMessage(error)}`
-    await this.withRunQueue(runId, async () => {
-      let run = await this.requireRun(runId)
-      const node = run.nodes[nodeId]
-      if (!node || node.status !== 'ready' || run.status !== 'running') return
-      run = await this.transitionNode(run, nodeId, 'failed', message)
-      await this.transitionRun(run, 'awaiting_supervision', message)
-    }).catch(() => undefined)
-    await this.requestSupervision(runId, 'failure', [nodeId], message)
+    let settled = false
+    try {
+      await this.withRunQueue(runId, async () => {
+        let run = await this.requireRun(runId)
+        const node = run.nodes[nodeId]
+        if (!node || node.status !== 'ready' || run.status !== 'running') return
+        run = await this.transitionNode(run, nodeId, 'failed', message)
+        await this.transitionRun(run, 'awaiting_supervision', message)
+        settled = true
+      })
+    } catch (stateError) {
+      this.fencedRuns.add(runId)
+      console.warn(
+        `[kun] Graph admission failure could not be persisted; fenced ${runId}/${nodeId}: ` +
+        errorMessage(stateError)
+      )
+      throw stateError
+    }
+    if (settled) await this.requestSupervision(runId, 'failure', [nodeId], message)
   }
 
   private async executeAttempt(

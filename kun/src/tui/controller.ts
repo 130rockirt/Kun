@@ -1,5 +1,7 @@
 import type {
   AttachmentMetadata,
+  GraphOrchestrationStrategy,
+  GraphRunV1,
   ThreadGoalStatus,
   ThreadSummary,
   ThreadTodoItem,
@@ -58,6 +60,12 @@ import {
 import { readRuntimeDiscovery } from '../server/runtime-discovery.js'
 import { parsePastedFilePaths } from './pasted-paths.js'
 import type { ClipboardImage } from './clipboard-image.js'
+import {
+  isTerminalGraphRun,
+  latestTuiGraphRun,
+  renderTuiGraphStatus,
+  summarizeTuiGraphRun
+} from './graph-mode.js'
 
 const execFile = promisify(execFileCallback)
 
@@ -80,6 +88,10 @@ export type TuiControllerState = {
   modelConnections?: ModelConnectionSnapshot
   reasoningEffort?: ModelReasoningEffort
   composerMode: 'agent' | 'plan'
+  composerOrchestration: GraphOrchestrationStrategy
+  graphAvailable?: boolean
+  graphUnavailableReason?: string
+  graphRuns: GraphRunV1[]
   pendingAttachments: AttachmentMetadata[]
   attachmentMetadata: Record<string, AttachmentMetadata>
   theme: TuiThemeName
@@ -99,6 +111,8 @@ export class TuiController {
     connection: 'connecting',
     busy: false,
     composerMode: 'agent',
+    composerOrchestration: 'direct',
+    graphRuns: [],
     pendingAttachments: [],
     attachmentMetadata: {},
     theme: 'kun',
@@ -115,6 +129,8 @@ export class TuiController {
   private readonly redoTargets = new Map<string, string>()
   private readonly locallyEnabledCapabilities = new Set<'attachments' | 'memory'>()
   private readonly attachmentMetadataRequests = new Set<string>()
+  private readonly graphRunRequests = new Set<string>()
+  private readonly graphRunRefreshPending = new Set<string>()
   private attachmentHydrationGeneration = 0
   private readonly attachmentLeaseId = `tui_${randomUUID()}`
   /**
@@ -228,6 +244,7 @@ export class TuiController {
 
   async start(): Promise<void> {
     await this.initializePersistence()
+    await this.refreshGraphAvailability(false)
     await this.refreshThreads()
     if (this.options.threadId) {
       await this.openThread(this.options.threadId)
@@ -316,7 +333,7 @@ export class TuiController {
       await this.client.deleteThread(selected.id)
       if (this.stateValue.projection?.thread.id === selected.id) {
         this.eventsAbort?.abort()
-        this.patch({ projection: undefined })
+        this.patch({ projection: undefined, graphRuns: [] })
       }
       await this.refreshThreads(this.stateValue.threadSearch)
       this.notify(`Deleted session ${selected.title || selected.id}.`)
@@ -346,9 +363,13 @@ export class TuiController {
       const delegationRequest = typeof this.client.delegationDiagnostics === 'function'
         ? this.client.delegationDiagnostics(threadId).catch(() => undefined)
         : Promise.resolve(undefined)
-      const [detail, delegation] = await Promise.all([
+      const graphRunsRequest = typeof this.client.listGraphRuns === 'function'
+        ? this.client.listGraphRuns(threadId).catch(() => [])
+        : Promise.resolve([])
+      const [detail, delegation, graphRuns] = await Promise.all([
         this.client.getThread(threadId),
-        delegationRequest
+        delegationRequest,
+        graphRunsRequest
       ])
       const projection = hydrateProjectedChildRuns(projectThreadSnapshot(detail), delegation)
       const latestConfiguredTurn = [...detail.turns].reverse().find((turn) =>
@@ -368,6 +389,7 @@ export class TuiController {
         projection,
         reasoningEffort,
         composerMode: detail.mode,
+        graphRuns,
         attachmentMetadata: {},
         busy: false,
         connection: 'connecting',
@@ -416,6 +438,9 @@ export class TuiController {
                 }
               : {})
           })
+          if (event.kind === 'graph_event') {
+            void this.reconcileGraphRun(event.graph.runId, threadId)
+          }
           void this.hydrateAttachmentMetadata(
             attachmentIdsFromProjection(projection),
             threadId,
@@ -432,6 +457,7 @@ export class TuiController {
             this.patch({
               view: 'chat',
               projection: undefined,
+              graphRuns: [],
               connection: 'disconnected',
               notification: { kind: 'error', message: 'This session was removed by another client. Choose or create a session.' }
             })
@@ -502,19 +528,42 @@ export class TuiController {
       if (!this.stateValue.projection) return
     }
     const { thread, runningTurnId } = this.stateValue.projection
-    if (runningTurnId && this.stateValue.pendingAttachments.length) {
-      this.notify('Attachments are kept for the next new turn; they cannot be added to queued guidance.', 'error')
+    const orchestration = (modeOverride ?? thread.mode) === 'agent'
+      ? this.stateValue.composerOrchestration
+      : 'direct'
+    const activeGraphRun = orchestration === 'graph'
+      ? latestTuiGraphRun(this.stateValue.graphRuns, thread.id)
+      : undefined
+    const steeringGraph = Boolean(
+      activeGraphRun && !isTerminalGraphRun(activeGraphRun) && !runningTurnId
+    )
+    if ((runningTurnId || steeringGraph) && this.stateValue.pendingAttachments.length) {
+      this.notify('Attachments are kept for the next new turn; they cannot be added to queued guidance or Graph steering.', 'error')
       return
     }
     this.patch({
       busy: true,
-      busyLabel: runningTurnId ? 'Queuing guidance' : 'Sending message',
+      busyLabel: runningTurnId
+        ? 'Queuing guidance'
+        : steeringGraph
+          ? 'Steering Graph'
+          : 'Sending message',
       notification: undefined
     })
     try {
       if (runningTurnId) {
         await this.client.steerTurn(thread.id, runningTurnId, prompt)
         this.patch({ busy: false, notification: { kind: 'info', message: 'Guidance queued for the running turn.' } })
+      } else if (steeringGraph && activeGraphRun) {
+        const run = await this.client.steerGraphRun(activeGraphRun.id, prompt)
+        this.patch({
+          busy: false,
+          graphRuns: replaceGraphRun(this.stateValue.graphRuns, run),
+          notification: {
+            kind: 'info',
+            message: `Guidance persisted for Graph ${activeGraphRun.id}.`
+          }
+        })
       } else {
         const pendingAttachments = this.stateValue.pendingAttachments
         const model = this.options.model ?? thread.model
@@ -529,6 +578,7 @@ export class TuiController {
           ...(accountId ? { accountId } : {}),
           ...(reasoningEffort ? { reasoningEffort } : {}),
           mode: modeOverride ?? thread.mode,
+          orchestration,
           approvalPolicy: thread.approvalPolicy,
           sandboxMode: thread.sandboxMode,
           attachmentIds: pendingAttachments.map((attachment) => attachment.id)
@@ -547,7 +597,8 @@ export class TuiController {
               ...(providerId ? { providerId } : {}),
               ...(accountId ? { accountId } : {}),
               ...(reasoningEffort ? { reasoningEffort } : {}),
-              mode: thread.mode,
+              mode: modeOverride ?? thread.mode,
+              orchestration,
               attachmentIds: pendingAttachments.map((attachment) => attachment.id)
             }
           ),
@@ -759,7 +810,7 @@ export class TuiController {
   async setPlanMode(mode: 'agent' | 'plan'): Promise<void> {
     const projection = this.stateValue.projection
     if (!projection) {
-      this.patch({ composerMode: mode })
+      this.patch({ composerMode: mode, composerOrchestration: 'direct' })
       this.notify(`New session mode: ${mode}`)
       return
     }
@@ -771,6 +822,7 @@ export class TuiController {
       this.patch({
         projection: { ...projection, thread: { ...projection.thread, ...thread } },
         composerMode: mode,
+        composerOrchestration: 'direct',
         notification: {
           kind: 'info',
           message: projection.thread.goal?.status === 'active'
@@ -781,6 +833,81 @@ export class TuiController {
     } catch (error) {
       this.fail(error)
     }
+  }
+
+  async manageGraphMode(action?: string): Promise<void> {
+    const requested = action?.trim().toLowerCase() ?? ''
+    if (requested === 'status' || requested === 'list') {
+      await this.showGraphStatus()
+      return
+    }
+    if (requested === 'off' || requested === 'direct' || requested === 'agent') {
+      this.patch({ composerOrchestration: 'direct' })
+      this.notify('Graph mode off · subsequent turns use Direct orchestration.')
+      return
+    }
+    if (requested && requested !== 'on' && requested !== 'start') {
+      this.notify('Usage: /graph [status|off]', 'error')
+      return
+    }
+    if (!await this.refreshGraphAvailability(false)) {
+      this.patch({ composerOrchestration: 'direct' })
+      this.notify(
+        this.stateValue.graphUnavailableReason ??
+          'Graph Mode is disabled in the shared Kun runtime.',
+        'error'
+      )
+      return
+    }
+    const current = this.stateValue.projection
+    if (
+      current &&
+      (current.thread.mode !== 'agent' || current.thread.goal?.status === 'active')
+    ) {
+      await this.setPlanMode('agent')
+    } else {
+      this.patch({ composerMode: 'agent', composerOrchestration: 'direct' })
+    }
+    const active = this.stateValue.projection
+    if (active && (
+      active.thread.mode !== 'agent' ||
+      active.thread.goal?.status === 'active'
+    )) return
+    this.patch({
+      composerMode: 'agent',
+      composerOrchestration: 'graph',
+      notification: {
+        kind: 'info',
+        message: 'Graph mode active · type a requirement and press Enter.'
+      }
+    })
+  }
+
+  async showGraphStatus(): Promise<void> {
+    const threadId = this.stateValue.projection?.thread.id
+    if (threadId && typeof this.client.listGraphRuns === 'function') {
+      try {
+        const graphRuns = await this.client.listGraphRuns(threadId)
+        if (this.stateValue.projection?.thread.id === threadId) {
+          this.patch({ graphRuns })
+        }
+      } catch (error) {
+        this.notify(`Could not load Graph status: ${safeMessage(error)}`, 'error')
+        return
+      }
+    }
+    const run = latestTuiGraphRun(this.stateValue.graphRuns, threadId)
+    this.inspect('Graph', [
+      `Composer: ${this.stateValue.composerOrchestration === 'graph' ? 'Graph' : 'Direct'}`,
+      `Availability: ${this.stateValue.graphAvailable === true
+        ? 'enabled'
+        : this.stateValue.graphAvailable === false
+          ? 'disabled'
+          : 'unknown'}`,
+      ...(run
+        ? ['', ...renderTuiGraphStatus(run)]
+        : ['', 'No GraphRun is attached to this session.', 'Use /graph, then type a requirement and press Enter.'])
+    ])
   }
 
   reasoningOptions(): readonly ModelReasoningEffort[] {
@@ -1300,6 +1427,7 @@ export class TuiController {
   async activateGoal(objective: string, tokenBudget?: number | null): Promise<boolean> {
     const trimmed = objective.trim()
     if (!trimmed) return false
+    this.patch({ composerMode: 'agent', composerOrchestration: 'direct' })
     if (!this.stateValue.projection) {
       await this.createThread(trimmed.slice(0, 80))
     }
@@ -1333,6 +1461,9 @@ export class TuiController {
     }
     this.patch({ busy: true, busyLabel: status === 'active' ? 'Resuming goal' : 'Updating goal' })
     try {
+      if (status === 'active') {
+        this.patch({ composerMode: 'agent', composerOrchestration: 'direct' })
+      }
       if (status === 'active' && projection.thread.mode !== 'agent') {
         await this.client.updateThread(projection.thread.id, { mode: 'agent' })
       }
@@ -1381,6 +1512,8 @@ export class TuiController {
     const projection = this.requireProjection()
     if (!projection) return
     const thread = projection.thread
+    const graph = latestTuiGraphRun(this.stateValue.graphRuns, thread.id)
+    const graphProgress = graph ? summarizeTuiGraphRun(graph) : undefined
     this.inspect('Status', [
       `Connection: ${this.stateValue.connection}`,
       `Runtime: ${this.runtime.runtimeInfo.serviceVersion ?? 'unknown'} · ${this.runtime.runtimeInfo.instanceId ?? 'unknown'} · PID ${this.runtime.runtimeInfo.pid ?? 'unknown'}`,
@@ -1391,6 +1524,10 @@ export class TuiController {
       `Reasoning: ${this.stateValue.reasoningEffort ?? 'model default'}`,
       `Workspace: ${thread.workspace}`,
       `Mode: ${thread.goal?.status === 'active' ? 'goal' : thread.mode}`,
+      `Orchestration: ${this.stateValue.composerOrchestration}`,
+      ...(graphProgress ? [
+        `Graph: ${graphProgress.status} · ${graphProgress.accepted}/${graphProgress.total} accepted · ${graphProgress.activeAgents} active agents · revision ${graphProgress.revision}`
+      ] : []),
       ...(thread.goal ? [
         `Goal: ${thread.goal.status} · ${thread.goal.objective}`,
         `Goal usage: ${thread.goal.tokensUsed.toLocaleString()} tokens · ${thread.goal.timeUsedSeconds}s`
@@ -2233,6 +2370,70 @@ export class TuiController {
     this.patch({ notification: { kind, message } })
   }
 
+  private async refreshGraphAvailability(notify: boolean): Promise<boolean> {
+    if (typeof this.client.graphAvailability !== 'function') {
+      const reason = 'The connected Kun runtime does not support TUI Graph mode.'
+      this.patch({
+        graphAvailable: false,
+        graphUnavailableReason: reason,
+        composerOrchestration: 'direct'
+      })
+      if (notify) this.notify(reason, 'error')
+      return false
+    }
+    try {
+      const availability = await this.client.graphAvailability()
+      const reason = availability.enabled
+        ? undefined
+        : 'Graph Mode is disabled in the shared Kun runtime configuration.'
+      this.patch({
+        graphAvailable: availability.enabled,
+        graphUnavailableReason: reason,
+        ...(!availability.enabled ? { composerOrchestration: 'direct' as const } : {})
+      })
+      if (notify && reason) this.notify(reason, 'error')
+      return availability.enabled
+    } catch (error) {
+      const reason = error instanceof TuiClientError && error.status === 404
+        ? 'The connected Kun runtime does not support TUI Graph mode.'
+        : `Graph Mode availability could not be verified: ${safeMessage(error)}`
+      this.patch({
+        graphAvailable: false,
+        graphUnavailableReason: reason,
+        composerOrchestration: 'direct'
+      })
+      if (notify) this.notify(reason, 'error')
+      return false
+    }
+  }
+
+  private async reconcileGraphRun(runId: string, threadId: string): Promise<void> {
+    if (typeof this.client.getGraphRun !== 'function') return
+    if (this.graphRunRequests.has(runId)) {
+      this.graphRunRefreshPending.add(runId)
+      return
+    }
+    this.graphRunRequests.add(runId)
+    try {
+      do {
+        this.graphRunRefreshPending.delete(runId)
+        const run = await this.client.getGraphRun(runId)
+        if (
+          this.stateValue.projection?.thread.id !== threadId ||
+          run.threadId !== threadId
+        ) return
+        this.patch({ graphRuns: replaceGraphRun(this.stateValue.graphRuns, run) })
+      } while (this.graphRunRefreshPending.has(runId))
+    } catch (error) {
+      if (this.stateValue.projection?.thread.id === threadId) {
+        this.notify(`Graph progress refresh failed: ${safeMessage(error)}`, 'error')
+      }
+    } finally {
+      this.graphRunRequests.delete(runId)
+      this.graphRunRefreshPending.delete(runId)
+    }
+  }
+
   private async reloadActiveThread(): Promise<void> {
     const id = this.stateValue.projection?.thread.id
     if (id) await this.openThread(id)
@@ -2513,6 +2714,14 @@ function isRefreshConflict(error: unknown): boolean {
 
 function isMissingThread(error: unknown): boolean {
   return error instanceof TuiClientError && (error.status === 404 || error.status === 410)
+}
+
+function replaceGraphRun(
+  runs: readonly GraphRunV1[],
+  run: GraphRunV1
+): GraphRunV1[] {
+  return [run, ...runs.filter((candidate) => candidate.id !== run.id)]
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
 }
 
 function splitWords(value: string): string[] {

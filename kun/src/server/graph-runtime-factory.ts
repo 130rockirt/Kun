@@ -20,6 +20,7 @@ import {
   GraphScheduler,
   GraphSupervisor,
   GraphWorkerSessionRegistry,
+  graphPhysicalPathsEqual,
   type GraphParentAuthority
 } from '../graph/index.js'
 import type { IdGenerator } from '../ports/id-generator.js'
@@ -111,7 +112,10 @@ export class GraphRuntimeComposition {
           this.registry.identify(input.plan.workspaceRoot)
         ])
         if (
-          threadIdentity.canonicalWorkspaceRoot !== planIdentity.canonicalWorkspaceRoot ||
+          !graphPhysicalPathsEqual(
+            threadIdentity.canonicalWorkspaceRoot,
+            planIdentity.canonicalWorkspaceRoot
+          ) ||
           threadIdentity.projectId !== planIdentity.projectId
         ) {
           throw new GraphRunConflictError(

@@ -88,6 +88,7 @@ import {
   type ExtensionRightRailViewEntry
 } from '../extensions/contribution-registry'
 import { getSlashQuery } from './chat/floating-composer-commands'
+import { useGraphStore } from '../graph/graph-store'
 
 const FILE_TREE_SIDEBAR_WIDTH = 320
 const extensionSurfaceLayoutStorage = {
@@ -813,12 +814,20 @@ export function Workbench(): ReactElement {
     setRightPanelMode, setRoute, setUseWorktreePool, setWriteAssistantOpen
   })
 
+  const openComposerGraph = useCallback((runId: string, nodeId?: string): void => {
+    const graph = useGraphStore.getState()
+    graph.selectRun(runId)
+    graph.selectNode(nodeId ?? null)
+    openRightPanelTab(BUILTIN_RIGHT_PANEL_IDS.graph)
+  }, [openRightPanelTab])
+
   const chatComposerProps = useWorkbenchChatComposerProps({
     input, setInput, composerMode, setComposerMode, composerOrchestration, graphEnabled,
     setComposerOrchestration: (nextMode) => {
       setComposerOrchestration(nextMode)
       if (nextMode === 'graph') openRightPanelTab(BUILTIN_RIGHT_PANEL_IDS.graph)
     },
+    openGraph: openComposerGraph,
     busy, route, runtimeReady: runtimeConnection === 'ready',
     activeThreadId, activeClawChannelId,
     activeClawChannelModel: activeClawChannel?.model, composerModel, composerProviderId, composerPickList,

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import {
   GRAPH_CONTRACT_VERSION,
   GraphReviewResultV1Schema,
@@ -80,14 +81,15 @@ export class GraphSupervisor implements GraphSupervisionPort {
     input: Parameters<GraphSupervisionPort['signal']>[0]
   ): Promise<void> {
     if (this.stopped || !graphSupervisionEnabled(this.options.config())) return
-    await this.withRunQueue(input.runId, async () => {
+    const appended = await this.withRunQueue(input.runId, async () => {
       const run = await this.options.store.get(input.runId)
-      if (!run) return
-      await this.options.store.append(run.id, {
+      if (!run) return null
+      const episodeKey = supervisionEpisodeKey(run, input)
+      return this.options.store.append(run.id, {
         expectedSeq: run.lastEventSeq,
         graphRevision: run.currentRevision,
         commandId: this.nextId('graph_supervision'),
-        idempotencyKey: `supervision:${run.id}:${input.reason}:${run.lastEventSeq + 1}`,
+        idempotencyKey: `supervision:${run.id}:${episodeKey}`,
         event: {
           type: 'supervision_requested',
           payload: {
@@ -99,6 +101,7 @@ export class GraphSupervisor implements GraphSupervisionPort {
         }
       })
     })
+    if (!appended || appended.duplicate) return
     if (!graphAutomaticSupervisionEnabled(this.options.config())) return
     const pending = this.pending.get(input.runId) ?? {
       reasons: new Set(),
@@ -496,6 +499,30 @@ function parseReview(text: string): {
 
 function normalizeFailure(value: string): string {
   return value.toLowerCase().replace(/\d+/g, '#').replace(/\s+/g, ' ').trim()
+}
+
+function supervisionEpisodeKey(
+  run: GraphRunV1,
+  input: Parameters<GraphSupervisionPort['signal']>[0]
+): string {
+  const nodes = [...new Set(input.nodeIds)].sort().map((nodeId) => {
+    const node = run.nodes[nodeId]
+    const attempt = node?.attempts.at(-1)
+    return {
+      nodeId,
+      status: node?.status,
+      attemptId: attempt?.id,
+      attemptStatus: attempt?.status,
+      failure: attempt?.normalizedFailure
+    }
+  })
+  return createHash('sha256').update(JSON.stringify({
+    revision: run.currentRevision,
+    reason: input.reason,
+    nodes,
+    digest: normalizeFailure(input.digest).slice(0, 4_096),
+    latestSteeringId: run.steering.at(-1)?.steeringId
+  })).digest('hex').slice(0, 32)
 }
 
 function isTerminal(status: GraphRunV1['status']): boolean {

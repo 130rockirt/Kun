@@ -11,6 +11,8 @@ import { TuiController } from './controller.js'
 import type { TuiOptions } from './options.js'
 import { buildRuntimeCapabilityManifest } from '../contracts/capabilities.js'
 import { modelCapabilitiesForModel } from '../loop/model-context-profile.js'
+import { testGraphEnvelope, testGraphPlan } from '../graph/graph-test-fixtures.test-support.js'
+import { testTuiGraphRun } from './graph-mode.test-support.js'
 
 function detail(overrides: Partial<ThreadDetail> = {}): ThreadDetail {
   return {
@@ -271,6 +273,198 @@ describe('TuiController', () => {
       prompt: 'slow request',
       clientSurface: 'tui'
     }))
+    await controller.stop()
+  })
+
+  it('enters Graph mode before the prompt and submits the shared orchestration contract', async () => {
+    const source = detail()
+    const startTurn = vi.fn(async () => ({ turnId: 'turn_graph' }))
+    const client = {
+      graphAvailability: vi.fn(async () => ({ enabled: true })),
+      listGraphRuns: vi.fn(async () => []),
+      listThreads: vi.fn(async () => [source]),
+      getThread: vi.fn(async () => source),
+      subscribeThreadEvents: vi.fn(async (input: { signal: AbortSignal }) => {
+        await new Promise<void>((resolve) =>
+          input.signal.addEventListener('abort', () => resolve(), { once: true }))
+      }),
+      startTurn
+    } as unknown as KunTuiClient
+    const controller = new TuiController(client, options(), runtime)
+
+    await controller.start()
+    await controller.manageGraphMode()
+    expect(controller.state.composerOrchestration).toBe('graph')
+    expect(controller.state.notification?.message).toContain('type a requirement')
+
+    await controller.submit('Implement the release workflow.')
+    expect(startTurn).toHaveBeenCalledWith(source.id, expect.objectContaining({
+      prompt: 'Implement the release workflow.',
+      clientSurface: 'tui',
+      orchestration: 'graph'
+    }))
+    expect(controller.state.projection?.thread.turns.at(-1)?.orchestration).toBe('graph')
+
+    await controller.manageGraphMode('off')
+    expect(controller.state.composerOrchestration).toBe('direct')
+    await controller.stop()
+  })
+
+  it('refuses disabled Graph entry without changing Direct mode', async () => {
+    const client = {
+      graphAvailability: vi.fn(async () => ({ enabled: false })),
+      listThreads: vi.fn(async () => [])
+    } as unknown as KunTuiClient
+    const controller = new TuiController(
+      client,
+      { ...options(), continueLatest: false },
+      runtime
+    )
+
+    await controller.start()
+    await controller.manageGraphMode()
+
+    expect(controller.state.composerOrchestration).toBe('direct')
+    expect(controller.state.graphAvailable).toBe(false)
+    expect(controller.state.notification).toMatchObject({
+      kind: 'error',
+      message: expect.stringContaining('disabled')
+    })
+    await controller.stop()
+  })
+
+  it('starts a new TUI process in Direct mode after another process selected Graph', async () => {
+    const client = {
+      graphAvailability: vi.fn(async () => ({ enabled: true })),
+      listThreads: vi.fn(async () => [])
+    } as unknown as KunTuiClient
+    const first = new TuiController(
+      client,
+      { ...options(), continueLatest: false },
+      runtime
+    )
+    await first.start()
+    await first.manageGraphMode()
+    expect(first.state.composerOrchestration).toBe('graph')
+    await first.stop()
+
+    const restarted = new TuiController(
+      client,
+      { ...options(), continueLatest: false },
+      runtime
+    )
+    expect(restarted.state.composerOrchestration).toBe('direct')
+    await restarted.start()
+    expect(restarted.state.composerOrchestration).toBe('direct')
+    await restarted.stop()
+  })
+
+  it('steers a durable active GraphRun instead of starting a second graph', async () => {
+    const source = detail()
+    const run = testTuiGraphRun()
+    const startTurn = vi.fn()
+    const steerGraphRun = vi.fn(async () => run)
+    const client = {
+      graphAvailability: vi.fn(async () => ({ enabled: true })),
+      listGraphRuns: vi.fn(async () => [run]),
+      listThreads: vi.fn(async () => [source]),
+      getThread: vi.fn(async () => source),
+      subscribeThreadEvents: vi.fn(async (input: { signal: AbortSignal }) => {
+        await new Promise<void>((resolve) =>
+          input.signal.addEventListener('abort', () => resolve(), { once: true }))
+      }),
+      startTurn,
+      steerGraphRun
+    } as unknown as KunTuiClient
+    const controller = new TuiController(client, options(), runtime)
+
+    await controller.start()
+    await controller.manageGraphMode()
+    await controller.submit('Prioritize the Windows validation node.')
+
+    expect(steerGraphRun).toHaveBeenCalledWith(
+      run.id,
+      'Prioritize the Windows validation node.'
+    )
+    expect(startTurn).not.toHaveBeenCalled()
+    expect(controller.state.notification?.message).toContain('Guidance persisted')
+
+    await controller.showGraphStatus()
+    expect(controller.state.inspection?.lines.join('\n')).toContain('child_research')
+    await controller.stop()
+  })
+
+  it('reconciles Graph events through server-confirmed run truth', async () => {
+    const source = detail()
+    const run = testTuiGraphRun()
+    const latestRun = testTuiGraphRun({
+      lastEventSeq: 5,
+      updatedAt: '2026-07-26T00:00:05.000Z'
+    })
+    let onEvent!: (event: RuntimeEvent) => void
+    let resolveFirst!: (value: typeof run) => void
+    const getGraphRun = vi.fn()
+      .mockImplementationOnce(() => new Promise<typeof run>((resolve) => {
+        resolveFirst = resolve
+      }))
+      .mockResolvedValueOnce(latestRun)
+    const client = {
+      graphAvailability: vi.fn(async () => ({ enabled: true })),
+      listGraphRuns: vi.fn(async () => []),
+      listThreads: vi.fn(async () => [source]),
+      getThread: vi.fn(async () => source),
+      getGraphRun,
+      subscribeThreadEvents: vi.fn(async (input: {
+        signal: AbortSignal
+        onEvent: (event: RuntimeEvent) => void
+      }) => {
+        onEvent = input.onEvent
+        await new Promise<void>((resolve) =>
+          input.signal.addEventListener('abort', () => resolve(), { once: true }))
+      })
+    } as unknown as KunTuiClient
+    const controller = new TuiController(client, options(), runtime)
+
+    await controller.start()
+    onEvent({
+      kind: 'graph_event',
+      threadId: source.id,
+      seq: 1,
+      timestamp: '2026-07-26T00:00:01.000Z',
+      graph: testGraphEnvelope(1, {
+        type: 'run_created',
+        payload: {
+          plan: testGraphPlan(),
+          projectId: 'project_1',
+          sourceTurnId: 'turn_source'
+        }
+      }, {
+        threadId: source.id
+      })
+    })
+    await vi.waitFor(() => expect(getGraphRun).toHaveBeenCalledTimes(1))
+    onEvent({
+      kind: 'graph_event',
+      threadId: source.id,
+      seq: 2,
+      timestamp: '2026-07-26T00:00:02.000Z',
+      graph: testGraphEnvelope(2, {
+        type: 'run_created',
+        payload: {
+          plan: testGraphPlan(),
+          projectId: 'project_1',
+          sourceTurnId: 'turn_source'
+        }
+      }, {
+        threadId: source.id
+      })
+    })
+    resolveFirst(run)
+
+    await vi.waitFor(() => expect(controller.state.graphRuns).toEqual([latestRun]))
+    expect(getGraphRun).toHaveBeenCalledTimes(2)
+    expect(getGraphRun).toHaveBeenNthCalledWith(1, run.id)
+    expect(getGraphRun).toHaveBeenNthCalledWith(2, run.id)
     await controller.stop()
   })
 

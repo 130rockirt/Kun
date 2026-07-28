@@ -47,6 +47,7 @@
     "lint": "eslint .",
     "test": "npm run test:extensions && npm run test:kun && vitest run",
     "test:kun": "npm --prefix kun test",
+    "test:graph:platform": "node ./scripts/run-graph-platform-tests.mjs",
     "test:watch": "vitest",
     "dist": "npm run build && npx --yes electron-builder@26.8.1 --config electron-builder.config.cjs --publish never",
     "dist:mac": "rm -f dist/Kun-*-mac-* dist/DeepSeek-GUI-*-mac-* dist/latest-mac.yml && npm run build && npm run dist:mac:x64:dmg && npm run dist:mac:x64:zip && npm run dist:mac:arm64:dmg && npm run dist:mac:arm64:zip && node ./scripts/generate-mac-latest.cjs dist",

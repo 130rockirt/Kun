@@ -114,6 +114,7 @@ import { FloatingComposerFileMentionMenu } from './FloatingComposerFileMentionMe
 import { useComposerSlashCommandMenu } from './use-composer-slash-command-menu'
 import { FloatingComposerSlashCommandMenu } from './FloatingComposerSlashCommandMenu'
 import { FloatingComposerTodoProgress } from './FloatingComposerTodoProgress'
+import { FloatingComposerGraphProgress } from './FloatingComposerGraphProgress'
 import { FloatingComposerAboveInputStack } from './FloatingComposerAboveInputStack'
 import {
   canAcceptComposerFileDrop,
@@ -188,6 +189,7 @@ type Props = {
   orchestration?: 'direct' | 'graph'
   graphEnabled?: boolean
   onOrchestrationChange?: (mode: 'direct' | 'graph') => void
+  onOpenGraph?: (runId: string, nodeId?: string) => void
   busy: boolean
   runtimeReady: boolean
   hasActiveThread: boolean
@@ -311,6 +313,7 @@ export function FloatingComposer({
   orchestration = 'direct',
   graphEnabled = false,
   onOrchestrationChange,
+  onOpenGraph,
   busy,
   runtimeReady,
   hasActiveThread,
@@ -583,6 +586,14 @@ export function FloatingComposer({
     && activeThreadTodos?.threadId === activeThreadId
     && activeThreadTodos.items.length > 0
     && activeThreadTodos.items.some((item) => item.status !== 'completed')
+    && slashQuery == null
+    && !composerMenuOpen
+    && !goalPanelOpen
+    && !pendingUserInputBlock
+  const showGraphProgress = !compact
+    && route === 'chat'
+    && Boolean(activeThreadId)
+    && runtimeReady
     && slashQuery == null
     && !composerMenuOpen
     && !goalPanelOpen
@@ -1128,6 +1139,13 @@ export function FloatingComposer({
           todo={showTodoProgress && activeThreadTodos ? (
             <FloatingComposerTodoProgress todos={activeThreadTodos} />
           ) : null}
+          graph={(
+            <FloatingComposerGraphProgress
+              threadId={activeThreadId}
+              enabled={showGraphProgress}
+              onOpenGraph={onOpenGraph}
+            />
+          )}
           incoming={(
             <>
               {runtimeReady ? <BackgroundShellOverlay threadId={activeThreadId} /> : null}

@@ -86,6 +86,10 @@ import {
 } from './state.js'
 import type { TerminalInput, TerminalOutput } from './pi-terminal.js'
 import {
+  latestTuiGraphRun,
+  summarizeTuiGraphRun
+} from './graph-mode.js'
+import {
   answerCurrentUserInputWithText,
   confirmCurrentUserInput,
   createUserInputSession,
@@ -1548,8 +1552,10 @@ class ChatRoot implements Component, Focusable {
       this.keymap
     )
     const activity = renderActivityRow(this.state, this.controller, safeWidth, this.animationFrame, this.transientHint)
+    const graphProgress = renderGraphProgressRow(this.state, safeWidth)
     const bottom = [
       ...(activity ? [activity] : []),
+      ...(graphProgress ? [graphProgress] : []),
       ...composerLines,
       renderShortcutFooter(this.state, this.keymap, safeWidth, this.leaderHint, this.pointerMode)
     ]
@@ -1721,6 +1727,7 @@ class ChatRoot implements Component, Focusable {
         else this.controller.notify('Usage: /plan [status|tasks|off]', 'error')
         break
       }
+      case 'graph': await this.controller.manageGraphMode(command.action); break
       case 'agent': await this.controller.setPlanMode('agent'); break
       case 'goal':
         if (command.action?.trim()) await this.controller.manageGoal(command.action)
@@ -3037,7 +3044,7 @@ class VariantDialog implements Component, Focusable {
 }
 
 class AgentModeDialog implements Component, Focusable {
-  private readonly modes = ['agent', 'plan', 'goal'] as const
+  private readonly modes = ['agent', 'plan', 'graph', 'goal'] as const
   private index: number
   private _focused = false
 
@@ -3049,6 +3056,8 @@ class AgentModeDialog implements Component, Focusable {
     const thread = controller.state.projection?.thread
     const current = thread?.goal?.status === 'active'
       ? 'goal'
+      : controller.state.composerOrchestration === 'graph'
+        ? 'graph'
       : thread?.mode ?? controller.state.composerMode
     this.index = this.modes.indexOf(current)
   }
@@ -3059,14 +3068,21 @@ class AgentModeDialog implements Component, Focusable {
   render(width: number): string[] {
     return pageFrame({
       path: ['KUN', 'Mode'],
-      description: 'Choose how Kun approaches the work. Goal mode persists across turns.',
+      description: 'Choose Direct, Plan, Graph, or a persistent Goal.',
       body: this.modes.map((mode, index) => {
         const description = mode === 'agent'
           ? 'Build and act on the next request'
           : mode === 'plan'
             ? 'Analyze and plan before making changes'
-            : 'Keep pursuing a durable objective until complete'
-        return selectionRow(mode, description, width - 2, index === this.index)
+            : mode === 'graph'
+              ? 'Plan and execute through durable Graph subagents'
+            : 'Keep pursuing Goals until complete'
+        return selectionRow(
+          mode === 'goal' ? 'Goal' : mode,
+          description,
+          width - 2,
+          index === this.index
+        )
       }),
       footer: [
         { key: '↑/↓', label: 'choose' },
@@ -3086,6 +3102,11 @@ class AgentModeDialog implements Component, Focusable {
     else if (matchesKey(data, 'enter')) {
       const mode = this.modes[this.index]!
       if (mode === 'goal') this.openGoal()
+      else if (mode === 'graph') {
+        void this.controller.manageGraphMode().then(() => {
+          this.close()
+        })
+      }
       else {
         void this.controller.setPlanMode(mode)
         this.close()
@@ -3460,7 +3481,7 @@ class HelpDialog implements Component, Focusable {
         '',
         sectionLabel('Start and switch', width - 2),
         ` ${cyan(bold('/connect'))} ${dim('providers')}  ·  ${cyan(bold('/model'))} ${dim('model')}  ·  ${cyan(bold('/sessions'))} ${dim('previous work')}`,
-        ` ${cyan(bold(this.keymap.display('agent_list')))} ${dim('Agent / Plan / Goal mode')}  ·  ${cyan(bold('/goal'))} ${dim('persistent objective')}`,
+        ` ${cyan(bold(this.keymap.display('agent_list')))} ${dim('Agent / Plan / Graph / Goal mode')}  ·  ${cyan(bold('/graph'))} ${dim('Graph then type requirement')}`,
         '',
         sectionLabel('Terminal', width - 2),
         ` ${dim('Click Thinking or a Subagent directly; Esc closes the opened view.')}`,
@@ -5508,6 +5529,7 @@ export function renderKunWelcome(
     ...metadata,
     '',
     ` ${cyan('›')} ${bold('Type a task')} ${dim('and press Enter')}`,
+    ` ${cyan('›')} ${bold('/graph')} ${dim('enter Graph mode, then type the requirement')}`,
     ` ${cyan('›')} ${bold('/connect')} ${dim('add or manage a provider')}`,
     ` ${cyan('›')} ${bold('/sessions')} ${dim(threadCount ? `resume previous work · ${threadCount} saved` : 'resume previous work')}`,
     ` ${cyan('›')} ${bold(imagePasteShortcutLabel())} ${dim('paste a screenshot · /paste also works')}`
@@ -5622,6 +5644,30 @@ export function renderActivityRow(
   return joinSides(left, ` ${status}`, width)
 }
 
+export function renderGraphProgressRow(
+  state: TuiControllerState,
+  width: number
+): string {
+  const threadId = state.projection?.thread.id
+  if (!threadId) return ''
+  const run = latestTuiGraphRun(state.graphRuns, threadId)
+  if (!run) return ''
+  const progress = summarizeTuiGraphRun(run)
+  const status = progress.status === 'completed'
+    ? green(progress.status)
+    : progress.status === 'failed' || progress.status === 'cancelled'
+      ? red(progress.status)
+      : yellow(progress.status)
+  const left = ` ${magenta(bold('GRAPH'))}  ${sanitizeTerminalText(progress.title)}`
+  const right = [
+    `${progress.accepted}/${progress.total} accepted`,
+    `${progress.activeAgents} agents`,
+    `r${progress.revision}`,
+    status
+  ].join(dim(' · '))
+  return joinSides(left, right, width)
+}
+
 function activityLabel(activity: ProjectedTurnActivity | undefined): string {
   if (!activity) return 'Kun is working'
   if (activity.label) return activity.label
@@ -5721,6 +5767,8 @@ function renderComposerMetadata(
       ? green(bold(mode))
       : mode === 'plan'
         ? yellow(bold(mode))
+        : mode === 'graph'
+          ? magenta(bold(mode))
         : dim(mode)
   ].join(' ')
   return truncateToWidth(` ${metadata}`, width)
@@ -5800,12 +5848,14 @@ function currentModel(state: TuiControllerState, controller: TuiController): str
   return sanitizeTerminalText(provider ? `${provider} / ${model}` : model)
 }
 
-function currentMode(state: TuiControllerState): 'agent' | 'plan' | 'goal' {
+function currentMode(state: TuiControllerState): 'agent' | 'plan' | 'graph' | 'goal' {
   const thread = state.projection?.thread
   if (thread?.goal?.status === 'active') return 'goal'
   // This label describes what the next submission will do. A previous turn's
   // mode is history and must not hide a mode change that has not sent yet.
-  return thread?.mode ?? state.composerMode
+  const mode = thread?.mode ?? state.composerMode
+  if (mode === 'plan') return 'plan'
+  return state.composerOrchestration === 'graph' ? 'graph' : 'agent'
 }
 
 function joinSides(left: string, right: string, width: number): string {

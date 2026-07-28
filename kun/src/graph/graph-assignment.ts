@@ -10,6 +10,11 @@ import {
 import type { ApprovalPolicy, SandboxMode } from '../contracts/policy.js'
 import type { ModelReasoningEffort } from '../contracts/capabilities.js'
 import type { ProjectAgentRegistry } from './project-agent-registry.js'
+import {
+  GRAPH_INCOMPATIBLE_TOOL_NAMES,
+  graphWorkerToolNamesWithin
+} from './graph-tool-boundary.js'
+import { graphHostRelativePathCovers } from './graph-platform-path.js'
 
 export type GraphParentAuthority = {
   workspaceRoot: string
@@ -49,9 +54,23 @@ export class GraphAssignmentResolver {
     maxWallTimeMs: number
     maxTokens: number
   }): Promise<GraphAssignmentSnapshotV1> {
-    const profile = input.reference.kind === 'existing'
-      ? await this.resolveExisting(input.projectId, input.reference.profileId, input.reference.profileVersion)
-      : ephemeralProfile(input.reference, input.parent, this.nowIso())
+    const capturedAt = this.nowIso()
+    const requested = input.reference.kind === 'existing' ? input.reference : undefined
+    const existing = requested
+      ? await this.resolveExisting(input.projectId, requested.profileId, requested.profileVersion)
+      : undefined
+    const missingRequestedProfile = requested && !existing
+    const profile = existing ?? (missingRequestedProfile
+      ? ephemeralProfile(
+          missingProfileFallback(input.node, requested),
+          input.parent,
+          capturedAt
+        )
+      : ephemeralProfile(
+          input.reference as Extract<GraphAssignmentReferenceV1, { kind: 'ephemeral' }>,
+          input.parent,
+          capturedAt
+        ))
     const caps = profile.capabilities
     if (!['probation', 'trusted'].includes(profile.lifecycle) && profile.origin !== 'ephemeral') {
       throw new Error(`profile ${profile.profileId} lifecycle ${profile.lifecycle} is not executable`)
@@ -65,12 +84,14 @@ export class GraphAssignmentResolver {
       throw new Error(`profile ${profile.profileId} cannot satisfy node write scope`)
     }
     const toolPolicy = caps.toolPolicy === 'readOnly' ? 'readOnly' : 'inherit'
-    const allowedTools = intersect(input.parent.allowedTools, caps.allowedTools)
+    const allowedTools = union(
+      intersect(input.parent.allowedTools, caps.allowedTools),
+      graphWorkerToolNamesWithin(input.parent.allowedTools)
+    )
     const allowedSkills = intersect(input.parent.allowedSkills, caps.allowedSkills)
     const allowedMcpServers = intersect(input.parent.allowedMcpServers, caps.allowedMcpServers)
     const blockedTools = union(input.parent.blockedTools, caps.blockedTools, [
-      'delegate_task',
-      'generate_subagent',
+      ...GRAPH_INCOMPATIBLE_TOOL_NAMES,
       'graph_create_run',
       'graph_patch_run',
       'graph_control_run',
@@ -89,6 +110,17 @@ export class GraphAssignmentResolver {
       profileId: profile.profileId,
       profileVersion: profile.profileVersion,
       profileOrigin: profile.origin,
+      ...(requested ? {
+        requestedProfileId: requested.profileId,
+        ...(requested.profileVersion
+          ? { requestedProfileVersion: requested.profileVersion }
+          : {})
+      } : {}),
+      ...(missingRequestedProfile ? {
+        routingReason:
+          `Requested project profile "${requested.profileId}" was unavailable; ` +
+          'Kun created a graph-scoped least-authority fallback.'
+      } : {}),
       name: profile.name,
       systemPrompt: profile.systemPrompt,
       model: profile.model || input.parent.model,
@@ -109,7 +141,7 @@ export class GraphAssignmentResolver {
       networkAllowed: input.parent.networkAllowed && caps.networkAllowed,
       maxWallTimeMs: input.maxWallTimeMs,
       maxTokens: input.maxTokens,
-      capturedAt: this.nowIso()
+      capturedAt
     })
   }
 
@@ -117,10 +149,35 @@ export class GraphAssignmentResolver {
     projectId: string,
     profileId: string,
     version?: number
-  ): Promise<GraphAgentProfileVersionV1> {
-    const profile = await this.options.registry.getProfile(projectId, profileId, version)
-    if (!profile) throw new Error(`project agent profile not found: ${profileId}`)
-    return profile
+  ): Promise<GraphAgentProfileVersionV1 | null> {
+    return this.options.registry.getProfile(projectId, profileId, version)
+  }
+}
+
+function missingProfileFallback(
+  node: GraphNodeV1,
+  requested: Extract<GraphAssignmentReferenceV1, { kind: 'existing' }>
+): Extract<GraphAssignmentReferenceV1, { kind: 'ephemeral' }> {
+  const criteria = node.completion.acceptanceCriteria
+    .map((item) => `- ${item}`)
+    .join('\n')
+  return {
+    kind: 'ephemeral',
+    name: `${node.title} fallback`.slice(0, 128),
+    description:
+      `Graph-scoped replacement for unavailable project profile ${requested.profileId}.`
+        .slice(0, 1_024),
+    systemPrompt: [
+      'You are a graph-scoped specialist created because the requested project profile is unavailable.',
+      'Do not expand the parent authority, delegate recursively, or work outside the assigned node.',
+      `Node objective:\n${node.objective}`,
+      `Acceptance criteria:\n${criteria}`,
+      'Return the required structured result with concrete evidence and explicit risks.'
+    ].join('\n\n'),
+    toolPolicy: node.writeScopes.length ? 'inherit' : 'readOnly',
+    blockedTools: [],
+    blockedSkills: [],
+    blockedMcpServers: []
   }
 }
 
@@ -174,16 +231,10 @@ function assertScopeSubset(
   label: string
 ): void {
   for (const scope of requested) {
-    if (!allowed.some((parent) => coversPath(parent, scope))) {
+    if (!allowed.some((parent) => graphHostRelativePathCovers(parent, scope))) {
       throw new Error(`${label} scope ${scope} expands parent authority`)
     }
   }
-}
-
-function coversPath(parent: string, child: string): boolean {
-  const normalizedParent = parent.replace(/\/+$/, '')
-  if (normalizedParent === '.' || normalizedParent === '') return true
-  return child === normalizedParent || child.startsWith(`${normalizedParent}/`)
 }
 
 function intersect(parent: readonly string[], requested: readonly string[]): string[] {

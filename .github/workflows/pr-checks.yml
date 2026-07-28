@@ -94,6 +94,9 @@ jobs:
       - name: Test Runtime data migration on native Linux
         run: npx vitest run src/main/kun-data-dir-paths.test.ts src/main/legacy-data-migration.test.ts src/main/runtime-data-dir-migration.test.ts src/main/runtime-data-dir-ownership.test.ts --reporter=dot
 
+      - name: Test Graph Mode on native Linux
+        run: npm run test:graph:platform
+
       - name: Build Linux AppImage
         run: npm run dist:linux
 
@@ -190,6 +193,9 @@ jobs:
 
       - name: Test Runtime data migration on native macOS
         run: npx vitest run src/main/kun-data-dir-paths.test.ts src/main/legacy-data-migration.test.ts src/main/runtime-data-dir-migration.test.ts src/main/runtime-data-dir-ownership.test.ts --reporter=dot
+
+      - name: Test Graph Mode on native macOS
+        run: npm run test:graph:platform
 
       - name: Check Extension public release gate (host-native macOS)
         run: npm run check:extension-release-gate
@@ -337,6 +343,9 @@ jobs:
 
       - name: Test Runtime data migration on native Windows
         run: npx vitest run src/main/kun-data-dir-paths.test.ts src/main/legacy-data-migration.test.ts src/main/runtime-data-dir-migration.test.ts src/main/runtime-data-dir-ownership.test.ts --reporter=dot
+
+      - name: Test Graph Mode on native Windows
+        run: npm run test:graph:platform
 
       - name: Check Extension public release gate (host-native Windows)
         run: npm run check:extension-release-gate

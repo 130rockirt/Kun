@@ -10,7 +10,12 @@ const parent: GraphParentAuthority = {
   reasoningEffort: 'medium',
   approvalPolicy: 'on-request',
   sandboxMode: 'workspace-write',
-  allowedTools: ['read', 'write'],
+  allowedTools: [
+    'read',
+    'write',
+    'graph_worker_progress',
+    'graph_worker_submit_result'
+  ],
   blockedTools: ['bash'],
   allowedSkills: ['safe-skill'],
   blockedSkills: [],
@@ -26,6 +31,43 @@ const registry = {
 } as unknown as ProjectAgentRegistry
 
 describe('GraphAssignmentResolver', () => {
+  it('uses a graph-scoped least-authority fallback when a requested profile is missing', async () => {
+    const source = testGraphPlan().nodes[0]!
+    const node = {
+      ...source,
+      assignment: {
+        kind: 'existing' as const,
+        profileId: 'explore'
+      }
+    }
+    const assignment = await new GraphAssignmentResolver({ registry }).resolve({
+      projectId: 'project_1',
+      node,
+      reference: node.assignment,
+      parent,
+      maxWallTimeMs: 60_000,
+      maxTokens: 10_000
+    })
+
+    expect(assignment).toMatchObject({
+      profileOrigin: 'ephemeral',
+      requestedProfileId: 'explore',
+      name: 'Research fallback',
+      toolPolicy: 'readOnly',
+      allowedTools: [
+        'graph_worker_progress',
+        'graph_worker_submit_result',
+        'read',
+        'write'
+      ],
+      readScopes: ['src'],
+      writeScopes: []
+    })
+    expect(assignment.profileId).toMatch(/^ephemeral_/)
+    expect(assignment.routingReason).toContain('explore')
+    expect(assignment.systemPrompt).toContain(source.objective)
+  })
+
   it('freezes a least-authority assignment and blocks worker delegation controls', async () => {
     const source = testGraphPlan().nodes[0]!
     const node = {
@@ -56,7 +98,12 @@ describe('GraphAssignmentResolver', () => {
     expect(assignment).toMatchObject({
       model: 'parent-model',
       providerId: 'parent-provider',
-      allowedTools: ['read', 'write'],
+      allowedTools: [
+        'graph_worker_progress',
+        'graph_worker_submit_result',
+        'read',
+        'write'
+      ],
       allowedSkills: ['safe-skill'],
       allowedMcpServers: ['safe-mcp'],
       blockedMcpServers: ['other-mcp'],
@@ -68,7 +115,9 @@ describe('GraphAssignmentResolver', () => {
       'bash',
       'delegate_task',
       'generate_subagent',
-      'graph_control_run'
+      'graph_control_run',
+      'list_subagent_profiles',
+      'task_graph'
     ]))
   })
 

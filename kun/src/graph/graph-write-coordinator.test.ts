@@ -53,6 +53,8 @@ describe('FileGraphWriteCoordinator', () => {
     expect(disjoint.acquired).toBe(true)
     expect(scopesOverlap(['src'], ['src/generated'])).toBe(true)
     expect(scopesOverlap(['src'], ['tests'])).toBe(false)
+    expect(scopesOverlap(['src'], ['SRC/generated'], true)).toBe(true)
+    expect(scopesOverlap(['src'], ['SRC/generated'], false)).toBe(false)
   })
 
   it('serializes every writer in serialize mode and treats dot as full workspace', async () => {

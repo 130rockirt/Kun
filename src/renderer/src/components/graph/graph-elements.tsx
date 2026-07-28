@@ -1,10 +1,11 @@
 import { MarkerType, type Edge, type Node } from '@xyflow/react'
-import type { GraphRun } from '../../graph/graph-types'
+import type { GraphPlanNode, GraphRun } from '../../graph/graph-types'
 import { StatusPill } from './graph-panel-shared'
 
 export function graphElements(
   run: GraphRun,
-  reducedMotion = false
+  reducedMotion = false,
+  selectedNodeId: string | null = null
 ): { nodes: Node[]; edges: Edge[] } {
   const plan = run.plans.at(-1)
   if (!plan) return { nodes: [], edges: [] }
@@ -20,10 +21,12 @@ export function graphElements(
     const projection = run.nodes[node.id]
     const status = projection?.status ?? 'pending'
     const attempt = projection?.attempts.at(-1)
+    const selected = selectedNodeId === node.id
     return {
       id: node.id,
-      ariaLabel: `${node.title}: ${status.replaceAll('_', ' ')}`,
+      ariaLabel: `${node.title}: ${status.replaceAll('_', ' ')}; ${plannedAssignmentLabel(node)}`,
       position: { x: phase * 300 + 36, y: row * 148 + 40 },
+      selected,
       data: {
         label: (
           <div className="w-[210px] space-y-2 p-1 text-left">
@@ -34,7 +37,9 @@ export function graphElements(
             <div className="line-clamp-2 text-[10px] leading-4 text-ds-muted">{node.objective}</div>
             <div className="flex items-center justify-between gap-2 text-[9px] text-ds-faint">
               <span>{node.kind.replaceAll('_', ' ')}</span>
-              <span className="truncate">{attempt?.assignment.name ?? 'unassigned'}</span>
+              <span className="truncate">
+                {attempt?.assignment.name ?? plannedAssignmentLabel(node)}
+              </span>
             </div>
             {projection?.lastProgress?.percent !== undefined ? (
               <div className="h-1 overflow-hidden rounded-full bg-ds-hover">
@@ -50,13 +55,17 @@ export function graphElements(
       style: {
         width: 232,
         borderRadius: 14,
-        border: status === 'running'
+        border: selected
+          ? '2px solid rgb(79 70 229 / 0.9)'
+          : status === 'running'
           ? '1px solid rgb(99 102 241 / 0.65)'
           : critical.has(node.id)
             ? '1px solid rgb(245 158 11 / 0.65)'
             : '1px solid var(--ds-border-muted)',
         background: 'var(--ds-card)',
-        boxShadow: status === 'running'
+        boxShadow: selected
+          ? '0 0 0 4px rgb(79 70 229 / 0.16), 0 12px 28px rgb(15 23 42 / 0.10)'
+          : status === 'running'
           ? '0 0 0 3px rgb(99 102 241 / 0.10)'
           : critical.has(node.id)
             ? '0 0 0 2px rgb(245 158 11 / 0.08)'
@@ -93,6 +102,17 @@ export function graphElements(
     }
   })
   return { nodes, edges }
+}
+
+export function plannedAssignmentLabel(node: GraphPlanNode): string {
+  const assignment = node.assignment
+  if (!assignment) return 'Kun auto route'
+  if (assignment.kind === 'existing') {
+    return assignment.profileVersion
+      ? `${assignment.profileId}@${assignment.profileVersion}`
+      : assignment.profileId
+  }
+  return assignment.name
 }
 
 export function filterGraphElementsByPhases(

@@ -3,6 +3,7 @@ import type { DelegationRuntime } from '../delegation/delegation-runtime.js'
 import type { ThreadStore } from '../ports/thread-store.js'
 import type { TurnService } from '../services/turn-service.js'
 import type { GraphRuntimeStartOptions } from './graph-runtime-factory.js'
+import { graphParentAuthorityToolNames } from '../graph/graph-tool-boundary.js'
 
 type GraphAuthorityDefaults = {
   model: string
@@ -65,7 +66,7 @@ export function createGraphRuntimeStartOptions(input: {
         reasoningEffort: sourceTurn?.reasoningEffort ?? 'off',
         approvalPolicy: thread?.approvalPolicy ?? defaults.approvalPolicy,
         sandboxMode,
-        allowedTools: input.toolNames(),
+        allowedTools: graphParentAuthorityToolNames(input.toolNames()),
         blockedTools: [],
         allowedSkills: input.skillIds(),
         blockedSkills: defaults.disabledSkillIds,

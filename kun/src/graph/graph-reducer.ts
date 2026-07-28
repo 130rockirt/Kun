@@ -28,7 +28,7 @@ const RUN_TRANSITIONS: Readonly<Record<GraphRunStatus, readonly GraphRunStatus[]
 const NODE_TRANSITIONS: Readonly<Record<GraphNodeStatus, readonly GraphNodeStatus[]>> = {
   pending: ['blocked', 'ready', 'cancelled', 'skipped', 'superseded'],
   blocked: ['pending', 'ready', 'cancelled', 'skipped', 'superseded'],
-  ready: ['queued', 'blocked', 'cancelled', 'skipped', 'superseded'],
+  ready: ['queued', 'blocked', 'failed', 'cancelled', 'skipped', 'superseded'],
   queued: ['running', 'ready', 'failed', 'cancelled', 'superseded'],
   running: ['submitted', 'repair_required', 'failed', 'cancelled', 'superseded'],
   submitted: ['reviewing', 'accepted', 'repair_required', 'failed', 'cancelled', 'superseded'],
@@ -125,6 +125,8 @@ export function applyGraphEvent(
         node.acceptedAttemptId = attempt.id
       }
       node.status = event.payload.to
+      if (event.payload.reason) node.lastTransitionReason = event.payload.reason
+      else delete node.lastTransitionReason
       break
     }
     case 'loop_iteration_advanced': {
@@ -147,6 +149,7 @@ export function applyGraphEvent(
         }
         node.loopIteration = event.payload.iteration
         delete node.acceptedAttemptId
+        delete node.lastTransitionReason
         node.status = nodeId === event.payload.continueTargetNodeId
           ? 'ready'
           : 'pending'
@@ -163,6 +166,7 @@ export function applyGraphEvent(
         )
       }
       addAttempt(next, event.payload.attempt)
+      delete node.lastTransitionReason
       node.status = 'queued'
       break
     }

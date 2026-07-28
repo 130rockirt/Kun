@@ -1,20 +1,11 @@
 import { useEffect, useMemo, useState, type ReactElement } from 'react'
-import {
-  Background,
-  BackgroundVariant,
-  Controls,
-  MiniMap,
-  ReactFlow,
-  type Edge,
-  type Node
-} from '@xyflow/react'
+import type { Edge, Node } from '@xyflow/react'
 import {
   CirclePause,
   CirclePlay,
   GitBranch,
   List,
   RefreshCw,
-  Send,
   Square,
   Trash2
 } from 'lucide-react'
@@ -26,8 +17,7 @@ import type {
   GraphRun
 } from '../../graph/graph-types'
 import { filterGraphElementsByPhases } from './graph-elements'
-import { GraphNodeInspector } from './GraphNodeInspector'
-import { GraphRunInspector } from './GraphRunInspector'
+import { GraphRunWorkspace } from './GraphRunWorkspace'
 import {
   statusTone,
   StatusPill,
@@ -127,7 +117,6 @@ export function GraphRunView({
   const canCleanup = terminalRunStatuses.has(run.status) &&
     !run.cleanup?.some((item) => item.resourceKind === 'journal' && item.state === 'completed')
   const plan = run.plans.at(-1)
-  const visibleNodeIds = new Set(visibleElements.nodes.map((node) => node.id))
   const stateCounts = Object.values(run.nodes).reduce<Record<string, number>>((counts, node) => {
     counts[node.status] = (counts[node.status] ?? 0) + 1
     return counts
@@ -231,89 +220,28 @@ export function GraphRunView({
           })}
       </div>
 
-      <div className="min-h-[260px] flex-1 bg-ds-main">
-        {listFallback ? (
-          <div role="list" aria-label={t('graphListFallback')} className="h-full overflow-y-auto p-3">
-            {plan?.nodes.filter((node) => visibleNodeIds.has(node.id)).map((node) => (
-              <button
-                key={node.id}
-                type="button"
-                role="listitem"
-                onClick={() => onSelectNode(node.id)}
-                className="mb-1.5 flex w-full items-center justify-between gap-3 rounded-lg border border-ds-border-muted bg-ds-card px-3 py-2 text-left"
-              >
-                <span className="min-w-0">
-                  <span className="block truncate text-[11px] font-semibold text-ds-ink">
-                    {node.title}
-                  </span>
-                  <span className="block truncate text-[9px] text-ds-faint">
-                    {plan?.phases.find((phase) => phase.id === node.phaseId)?.title} · {node.kind}
-                  </span>
-                </span>
-                <StatusPill status={run.nodes[node.id]?.status ?? 'pending'} />
-              </button>
-            ))}
-          </div>
-        ) : (
-          <ReactFlow
-            aria-label={t('graphCanvasLabel')}
-            nodes={visibleElements.nodes}
-            edges={visibleElements.edges}
-            fitView
-            minZoom={0.2}
-            maxZoom={1.8}
-            nodesDraggable
-            nodesConnectable={false}
-            onlyRenderVisibleElements
-            elementsSelectable
-            onPaneClick={() => onSelectNode(null)}
-            onNodeClick={(_, node) => onSelectNode(node.id)}
-          >
-            <Background variant={BackgroundVariant.Dots} gap={18} size={1} />
-            <MiniMap pannable zoomable nodeStrokeWidth={2} />
-            <Controls showInteractive={false} />
-          </ReactFlow>
-        )}
-      </div>
-
-      <div className="max-h-[42%] shrink-0 overflow-y-auto border-t border-ds-border-muted bg-ds-sidebar">
-        {selectedNode ? (
-          <GraphNodeInspector
-            run={run}
-            node={selectedNode}
-            onRetry={() => onRetry(selectedNode.node.id)}
-            onReview={(outcome) => onReview(selectedNode.node.id, outcome)}
-            onRebind={(profileId) => onRebind(selectedNode.node.id, profileId)}
-            onOpenChild={onOpenChild}
-            artifactPage={artifactPage}
-            artifactContent={artifactContent}
-            artifactLoading={artifactLoading}
-            onOpenArtifact={onOpenArtifact}
-            onNextArtifactPage={onNextArtifactPage}
-            onCloseArtifact={onCloseArtifact}
-          />
-        ) : (
-          <GraphRunInspector run={run} onPatch={onPatch} />
-        )}
-        <div className="flex items-end gap-2 border-t border-ds-border-muted p-3">
-          <textarea
-            value={steering}
-            onChange={(event) => onSteeringChange(event.target.value)}
-            rows={2}
-            placeholder={selectedNodeId ? t('graphSteerNodePlaceholder') : t('graphSteerRunPlaceholder')}
-            className="min-w-0 flex-1 resize-none rounded-lg border border-ds-border-muted bg-ds-card px-2.5 py-2 text-[11px] text-ds-ink outline-none focus:border-indigo-400"
-          />
-          <button
-            type="button"
-            disabled={!steering.trim()}
-            onClick={onSendSteering}
-            className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-600 text-white disabled:opacity-40"
-            aria-label={t('graphSendSteering')}
-          >
-            <Send className="h-3.5 w-3.5" />
-          </button>
-        </div>
-      </div>
+      <GraphRunWorkspace
+        run={run}
+        elements={visibleElements}
+        listFallback={listFallback}
+        selectedNode={selectedNode}
+        selectedNodeId={selectedNodeId}
+        steering={steering}
+        onSteeringChange={onSteeringChange}
+        onSendSteering={onSendSteering}
+        onSelectNode={onSelectNode}
+        onRetry={onRetry}
+        onReview={onReview}
+        onPatch={onPatch}
+        onRebind={onRebind}
+        onOpenChild={onOpenChild}
+        artifactPage={artifactPage}
+        artifactContent={artifactContent}
+        artifactLoading={artifactLoading}
+        onOpenArtifact={onOpenArtifact}
+        onNextArtifactPage={onNextArtifactPage}
+        onCloseArtifact={onCloseArtifact}
+      />
     </div>
   )
 }

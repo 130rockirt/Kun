@@ -6,6 +6,7 @@ import { buildRuntimeCapabilityManifest } from '../contracts/capabilities.js'
 import { ThreadSchema } from '../contracts/threads.js'
 import { publishRuntimeDiscovery } from '../server/runtime-discovery.js'
 import { KunTuiClient, TuiClientError, resolveTuiConnection } from './client.js'
+import { testTuiGraphRun } from './graph-mode.test-support.js'
 import type { TuiOptions } from './options.js'
 
 const roots: string[] = []
@@ -230,6 +231,51 @@ describe('KunTuiClient', () => {
       'http://127.0.0.1:18899/v1/attachments/att_current_gui',
       expect.objectContaining({ method: 'GET' })
     )
+  })
+
+  it('uses authenticated Graph availability, run, and steering routes', async () => {
+    const run = testTuiGraphRun()
+    const calls: Array<{ url: URL; method: string; body?: Record<string, unknown> }> = []
+    const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const parsed = new URL(String(url))
+      calls.push({
+        url: parsed,
+        method: init?.method ?? 'GET',
+        ...(typeof init?.body === 'string'
+          ? { body: JSON.parse(init.body) as Record<string, unknown> }
+          : {})
+      })
+      if (parsed.pathname === '/v1/graphs/diagnostics') {
+        return Response.json({ enabled: true })
+      }
+      if (parsed.pathname === '/v1/graphs') {
+        return Response.json({ runs: [run] })
+      }
+      return Response.json(run)
+    }) as unknown as typeof fetch
+    const client = new KunTuiClient({
+      baseUrl: 'http://127.0.0.1:18899',
+      runtimeToken: 'runtime-secret',
+      fetch: fetchImpl
+    })
+
+    await expect(client.graphAvailability()).resolves.toMatchObject({ enabled: true })
+    await expect(client.listGraphRuns('thr_1')).resolves.toEqual([run])
+    await expect(client.getGraphRun(run.id)).resolves.toEqual(run)
+    await expect(client.steerGraphRun(run.id, 'Focus on Windows parity.')).resolves.toEqual(run)
+
+    expect(calls.map((call) => [call.method, call.url.pathname])).toEqual([
+      ['GET', '/v1/graphs/diagnostics'],
+      ['GET', '/v1/graphs'],
+      ['GET', '/v1/graphs/run_1'],
+      ['POST', '/v1/graphs/run_1/steer']
+    ])
+    expect(calls[1]?.url.searchParams.get('thread_id')).toBe('thr_1')
+    expect(calls[3]?.body).toMatchObject({
+      target: { kind: 'run' },
+      text: 'Focus on Windows parity.'
+    })
+    expect(String(calls[3]?.body?.commandId)).toMatch(/^tui_steer_/u)
   })
 
   it('redacts the known runtime token from structured server errors', async () => {

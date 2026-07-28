@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { ModelReasoningEffort, SubagentToolPolicy } from './capabilities.js'
 import { ApprovalPolicySchema, SandboxModeSchema } from './policy.js'
+import { GraphRelativePathSchema } from './graph-path.js'
 import {
   GRAPH_CONTRACT_VERSION,
   GraphArtifactReferenceV1Schema,
@@ -16,13 +17,7 @@ const Timestamp = z.string().datetime({ offset: true })
 const BoundedText = z.string().max(32_768)
 const BoundedSummary = z.string().max(4_096)
 const Sha256 = z.string().regex(/^[a-f0-9]{64}$/)
-const RelativePath = z.string().min(1).max(4_096).refine((value) => {
-  const normalized = value.replaceAll('\\', '/')
-  return normalized === value &&
-    !normalized.startsWith('/') &&
-    !normalized.split('/').includes('..') &&
-    !/^[A-Za-z]:\//.test(normalized)
-}, { message: 'path must be normalized and repository relative' })
+const RelativePath = GraphRelativePathSchema
 
 export const ProjectIdentityV1Schema = z.object({
   version: z.literal(GRAPH_CONTRACT_VERSION),

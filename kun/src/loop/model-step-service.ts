@@ -105,6 +105,7 @@ const GRAPH_MODE_INSTRUCTION = [
   'First understand the complete user outcome and decompose it into a durable, bounded GraphPlan.',
   'Use graph_create_run exactly once before giving a final response.',
   'Give each node a focused objective, explicit acceptance criteria, least-privilege scopes, review policy, and a suitable existing or ephemeral project agent.',
+  'Do not use ordinary delegate_task/profile ids or the legacy task_graph: omit node.assignment for host Graph-agent routing, use an exact Graph registry id only when known, or define a graph-scoped ephemeral role.',
   'Use typed dependencies and only bounded LoopGates; do not encode an unbounded cycle.',
   'After creation, the host scheduler and Graph workers execute the plan while the Lead supervises through validated Graph tools.'
 ].join(' ')

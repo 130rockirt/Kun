@@ -4,8 +4,11 @@ import {
   criticalPathNodeIds,
   filterGraphElementsByPhases,
   graphElements,
+  plannedAssignmentLabel,
   runProgress
 } from './GraphModePanel'
+import { reconcileInteractiveGraphNodes } from './graph-canvas-state'
+import { clampGraphInspectorWidth } from './graph-workspace-layout'
 
 function node(id: string, phaseId: string): GraphPlanNode {
   return {
@@ -133,8 +136,8 @@ describe('Graph Mode panel projection', () => {
     expect(animated.edges[0]?.animated).toBe(true)
     expect(reduced.edges[0]?.animated).toBe(false)
     expect(reduced.nodes.map((item) => item.ariaLabel)).toEqual([
-      'start: running',
-      'finish: pending'
+      'start: running; Kun auto route',
+      'finish: pending; Kun auto route'
     ])
   })
 
@@ -157,5 +160,48 @@ describe('Graph Mode panel projection', () => {
 
     expect(filtered.nodes.map((item) => item.id)).toEqual(['start', 'finish'])
     expect(filtered.edges).toEqual([])
+  })
+
+  it('shows the planned subagent before dispatch and the selected node clearly', () => {
+    const planned = {
+      ...node('research', 'phase_1'),
+      assignment: {
+        kind: 'existing' as const,
+        profileId: 'explore',
+        profileVersion: 2
+      }
+    }
+    const projected = graphElements(graphRun([planned], []), false, 'research')
+
+    expect(plannedAssignmentLabel(planned)).toBe('explore@2')
+    expect(projected.nodes[0]).toMatchObject({
+      id: 'research',
+      selected: true,
+      ariaLabel: 'research: accepted; explore@2'
+    })
+  })
+
+  it('preserves dragged positions while refreshing status and selection data', () => {
+    const incoming = graphElements(graphRun([
+      node('start', 'phase_1'),
+      node('finish', 'phase_2')
+    ], [])).nodes
+    const current = [{
+      ...incoming[0]!,
+      position: { x: 812, y: 408 }
+    }]
+
+    const reconciled = reconcileInteractiveGraphNodes(current, incoming, 'start')
+
+    expect(reconciled[0]?.position).toEqual({ x: 812, y: 408 })
+    expect(reconciled[0]?.selected).toBe(true)
+    expect(reconciled[1]?.position).toEqual(incoming[1]?.position)
+  })
+
+  it('bounds the inspector while reserving usable canvas space', () => {
+    expect(clampGraphInspectorWidth(520, 900)).toBe(520)
+    expect(clampGraphInspectorWidth(800, 900)).toBe(522)
+    expect(clampGraphInspectorWidth(100, 900)).toBe(260)
+    expect(clampGraphInspectorWidth(360, 560)).toBe(320)
   })
 })

@@ -13,6 +13,7 @@ import { emptyUsageSnapshot } from '../contracts/usage.js'
 import { modelCapabilitiesForModel } from '../loop/model-context-profile.js'
 import { TuiClientError, type KunTuiClient, type ThreadDetail, type TuiConnection } from './client.js'
 import { TuiController } from './controller.js'
+import { testTuiGraphRun } from './graph-mode.test-support.js'
 import { parseTuiKeymapConfig } from './keymap.js'
 import { sanitizeTerminalText } from './layout.js'
 import type { TuiOptions } from './options.js'
@@ -21,6 +22,7 @@ import {
   imagePasteShortcutLabel,
   PiTuiApplication,
   renderActivityRow,
+  renderGraphProgressRow,
   renderKunComposerFrame,
   renderKunThinking,
   renderKunWelcome,
@@ -133,6 +135,30 @@ describe('PiTuiApplication command overlays', () => {
     }
     expect(renderKunWelcome(controller.state, controller, 120, 36).join('\n')).toContain('Version')
     expect(renderKunWelcome(controller.state, controller, 42, 18).join('\n')).toContain('Mode')
+  })
+
+  it('shows Graph as the next-turn mode and renders bounded durable progress above the composer', () => {
+    const controller = new TuiController({} as KunTuiClient, options, runtime)
+    const projection = projectThreadSnapshot(detail())
+    const state = {
+      ...controller.state,
+      projection,
+      composerOrchestration: 'graph' as const,
+      graphRuns: [testTuiGraphRun({ threadId: projection.thread.id })]
+    }
+
+    const composer = sanitizeTerminalText(
+      renderKunComposerFrame(['────', '', '────'], state, controller, 80).join('\n')
+    )
+    const progress = sanitizeTerminalText(renderGraphProgressRow(state, 80))
+
+    expect(composer).toContain('graph')
+    expect(progress).toContain('GRAPH')
+    expect(progress).toContain('Test graph')
+    expect(progress).toContain('agents')
+    expect(visibleWidth(progress)).toBeLessThanOrEqual(80)
+    expect(renderGraphProgressRow(state, 36)).not.toHaveLength(0)
+    expect(visibleWidth(renderGraphProgressRow(state, 36))).toBeLessThanOrEqual(36)
   })
 
   it('renders Thinking collapsed by default and expands its muted content on request', () => {

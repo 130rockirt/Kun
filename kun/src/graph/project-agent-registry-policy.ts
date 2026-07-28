@@ -16,6 +16,10 @@ import {
   type GraphAgentScoreV1,
   type GraphGovernanceAuditV1
 } from '../contracts/index.js'
+import {
+  graphHostRelativePathCovers,
+  graphPhysicalPathIdentity
+} from './graph-platform-path.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -218,9 +222,7 @@ function tokenize(value: string): Set<string> {
 
 function scopesCovered(required: readonly string[], allowed: readonly string[]): boolean {
   return required.every((scope) => allowed.some((parent) =>
-    parent === '.' ||
-    scope === parent ||
-    scope.startsWith(`${parent.replace(/\/+$/, '')}/`)))
+    graphHostRelativePathCovers(parent, scope)))
 }
 
 export function latestProfiles(
@@ -331,9 +333,7 @@ function intersectScopes(values: readonly string[][]): string[] {
   const candidates = [...new Set(values.flat())]
   return candidates.filter((candidate) =>
     values.every((scopes) => scopes.some((scope) =>
-      scope === '.' ||
-      scope === candidate ||
-      candidate.startsWith(`${scope.replace(/\/+$/, '')}/`))))
+      graphHostRelativePathCovers(scope, candidate))))
     .sort()
 }
 
@@ -361,6 +361,11 @@ export async function gitValue(cwd: string, args: string[]): Promise<string | un
 
 export function normalizeRemoteIdentity(remote: string): string {
   const trimmed = remote.trim()
+  if (/^[A-Za-z]:[\\/]/.test(trimmed)) {
+    return stripGitSuffix(
+      graphPhysicalPathIdentity(trimmed, 'win32').replaceAll('\\', '/')
+    )
+  }
   const scpLike = trimmed.match(/^(?:[^@]+@)?([^:]+):(.+)$/)
   if (scpLike && !trimmed.includes('://')) {
     return `${scpLike[1].toLowerCase()}/${stripGitSuffix(scpLike[2])}`

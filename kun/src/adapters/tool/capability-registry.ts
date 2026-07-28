@@ -5,6 +5,7 @@ import type {
 } from '../../ports/tool-host.js'
 import type { LocalTool } from './local-tool-host.js'
 import { isToolAdvertisedInSandbox } from './sandbox-policy.js'
+import { isToolAllowedInOrchestration } from '../../graph/graph-tool-boundary.js'
 
 export type CapabilityToolRecord = {
   provider: ToolProviderPolicy
@@ -110,6 +111,11 @@ export class CapabilityRegistry {
     const specs: CapabilityToolSpec[] = []
     for (const record of this.tools.values()) {
       if (!this.canUseProvider(record.provider, context)) continue
+      if (!isToolAllowedInOrchestration({
+        toolName: record.tool.name,
+        providerId: record.provider.id,
+        providerKind: record.provider.kind
+      }, context)) continue
       if (!this.canUseTool(record.tool, context)) continue
       if (!isToolAdvertisedInSandbox(record.tool, context)) continue
       if (record.tool.shouldAdvertise) {
@@ -138,6 +144,13 @@ export class CapabilityRegistry {
     }
     if (!this.canUseProvider(record.provider, context)) {
       throw new Error(`tool ${toolName} is not advertised by provider ${record.provider.id}`)
+    }
+    if (!isToolAllowedInOrchestration({
+      toolName: record.tool.name,
+      providerId: record.provider.id,
+      providerKind: record.provider.kind
+    }, context)) {
+      throw new Error(`tool ${toolName} is unavailable in the Graph capability plane`)
     }
     if (!this.canUseTool(record.tool, context)) {
       throw new Error(`tool ${toolName} is not advertised by active tool policy`)

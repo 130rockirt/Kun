@@ -2,6 +2,7 @@ import type { ReactElement, ReactNode } from 'react'
 
 type Props = {
   todo?: ReactNode
+  graph?: ReactNode
   incoming?: ReactNode
   goal?: ReactNode
 }
@@ -9,12 +10,13 @@ type Props = {
 /**
  * Owns the persistent surfaces above the composer.
  *
- * Todo progress is always the top-level summary, newly arriving surfaces grow
+ * Todo and Graph are durable progress summaries, newly arriving surfaces grow
  * through the middle, and the active goal stays anchored nearest the input.
- * Temporary menus and popovers remain outside this stack.
+ * Temporary menus and portaled previews remain outside this stack.
  */
 export function FloatingComposerAboveInputStack({
   todo,
+  graph,
   incoming,
   goal
 }: Props): ReactElement {
@@ -24,6 +26,7 @@ export function FloatingComposerAboveInputStack({
       className="mb-2 flex w-full flex-col items-center gap-2 empty:hidden"
     >
       {todo}
+      {graph}
       {incoming}
       {goal}
     </div>

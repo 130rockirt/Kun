@@ -72,6 +72,47 @@ describe('LocalToolHost approval policy', () => {
     expect(result.approved).toBe(false)
   })
 
+  it('does not let provider-managed approval bypass an explicit runtime approval', async () => {
+    const execute = vi.fn(async () => ({ output: { ok: true } }))
+    const host = new LocalToolHost({
+      tools: [LocalToolHost.defineTool({
+        name: 'provider_managed_explicit',
+        description: 'provider-managed tool with an additional explicit runtime gate',
+        inputSchema: { type: 'object' },
+        policy: 'auto',
+        providerManagedApproval: true,
+        requiresExplicitApproval: true,
+        execute
+      })]
+    })
+    const awaitApproval = vi.fn(async () => 'deny' as const)
+
+    const result = await host.execute(
+      {
+        callId: 'call_provider_managed_explicit',
+        toolName: 'provider_managed_explicit',
+        arguments: {}
+      },
+      {
+        threadId: 'thread_1',
+        turnId: 'turn_1',
+        workspace: '/tmp/workspace',
+        approvalPolicy: 'never',
+        sandboxMode: 'workspace-write',
+        abortSignal: new AbortController().signal,
+        awaitApproval
+      } satisfies ToolHostContext
+    )
+
+    expect(awaitApproval).toHaveBeenCalledOnce()
+    expect(execute).not.toHaveBeenCalled()
+    expect(result.item).toMatchObject({
+      kind: 'tool_result',
+      isError: true,
+      output: { code: 'approval_denied' }
+    })
+  })
+
   it('returns a model-visible error tool result when approval is denied', async () => {
     const host = new LocalToolHost({ tools: [echoTool] })
     const result = await host.execute(

@@ -113,6 +113,29 @@ describe('Graph Mode contracts', () => {
     })).toThrow()
   })
 
+  test('normalizes native Windows separators without accepting absolute paths', () => {
+    expect(GraphWorkerResultV1Schema.parse({
+      version: GRAPH_CONTRACT_VERSION,
+      summary: 'Windows worker output',
+      changedFiles: ['.\\src\\feature\\index.ts', 'src//feature/./test.ts']
+    }).changedFiles).toEqual([
+      'src/feature/index.ts',
+      'src/feature/test.ts'
+    ])
+    for (const unsafe of [
+      'C:\\outside\\file.ts',
+      '\\\\server\\share\\file.ts',
+      '/outside/file.ts',
+      'src\\..\\outside.ts'
+    ]) {
+      expect(() => GraphWorkerResultV1Schema.parse({
+        version: GRAPH_CONTRACT_VERSION,
+        summary: 'Unsafe worker output',
+        changedFiles: [unsafe]
+      })).toThrow(/repository relative/)
+    }
+  })
+
   test('requires compare-and-swap metadata for graph patches', () => {
     expect(GraphPatchV1Schema.parse({
       version: GRAPH_CONTRACT_VERSION,

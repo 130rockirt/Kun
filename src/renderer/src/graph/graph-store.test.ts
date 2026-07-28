@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { GraphEventEnvelope, GraphRun } from './graph-types'
+import type { GraphEventEnvelope, GraphPlanNode, GraphRun } from './graph-types'
 
 const client = vi.hoisted(() => ({
   listRuns: vi.fn(),
@@ -59,6 +59,44 @@ function run(id: string, seq: number): GraphRun {
   }
 }
 
+function runWithNode(id: string, seq: number, nodeId: string): GraphRun {
+  const node: GraphPlanNode = {
+    id: nodeId,
+    phaseId: 'phase_1',
+    kind: 'work',
+    title: 'Selected node',
+    objective: 'Keep the selected inspector visible.',
+    priority: 1,
+    required: true,
+    riskClass: 'low',
+    readScopes: [],
+    writeScopes: []
+  }
+  return {
+    ...run(id, seq),
+    plans: [{
+      version: 1,
+      revision: 1,
+      title: 'Selection test',
+      goal: 'Preserve durable selection',
+      workspaceRoot: '/repo',
+      phases: [{ id: 'phase_1', title: 'Phase', order: 1 }],
+      nodes: [node],
+      edges: [],
+      completionNodeIds: [nodeId],
+      createdAt: '2026-07-26T00:00:00.000Z'
+    }],
+    nodes: {
+      [nodeId]: {
+        node,
+        status: 'running',
+        attempts: [],
+        loopIteration: 0
+      }
+    }
+  }
+}
+
 describe('Graph renderer store', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -104,6 +142,23 @@ describe('Graph renderer store', () => {
       expect(useGraphStore.getState().runs[0]?.lastEventSeq).toBe(2)
     })
     expect(client.listRuns).toHaveBeenCalledTimes(2)
+  })
+
+  it('preserves a durable node selection when the selected run refreshes', async () => {
+    useGraphStore.setState({
+      threadId: 'thread_1',
+      runs: [runWithNode('run_1', 1, 'node_1')],
+      selectedRunId: 'run_1',
+      selectedNodeId: 'node_1'
+    })
+    client.listRuns.mockResolvedValueOnce([runWithNode('run_1', 2, 'node_1')])
+
+    await useGraphStore.getState().refreshThread('thread_1')
+
+    expect(useGraphStore.getState()).toMatchObject({
+      selectedRunId: 'run_1',
+      selectedNodeId: 'node_1'
+    })
   })
 
   it('ignores stale, malformed, and unrelated runtime events', async () => {

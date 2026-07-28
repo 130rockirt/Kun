@@ -43,6 +43,7 @@ import {
   sha256,
   upsertScore
 } from './project-agent-registry-policy.js'
+import { graphPhysicalPathIdentity } from './graph-platform-path.js'
 
 export { scoreProfile } from './project-agent-registry-policy.js'
 import type {
@@ -79,7 +80,9 @@ export class FileProjectAgentRegistry implements ProjectAgentRegistry {
     const remote = await gitValue(canonicalWorkspaceRoot, ['config', '--get', 'remote.origin.url'])
     const normalizedRemote = remote ? normalizeRemoteIdentity(remote) : undefined
     const remoteIdentityHash = normalizedRemote ? sha256(normalizedRemote) : undefined
-    const stableSource = remoteIdentityHash ?? gitCommonDir ?? canonicalWorkspaceRoot
+    const stableSource = remoteIdentityHash ?? graphPhysicalPathIdentity(
+      gitCommonDir ?? canonicalWorkspaceRoot
+    )
     return ProjectIdentityV1Schema.parse({
       version: GRAPH_CONTRACT_VERSION,
       projectId: `project_${sha256(stableSource).slice(0, 24)}`,

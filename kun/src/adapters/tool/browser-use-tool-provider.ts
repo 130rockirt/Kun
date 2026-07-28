@@ -151,11 +151,11 @@ export function buildBrowserUseToolProviders(
     name: 'browser_use',
     description: TOOL_DESCRIPTION,
     inputSchema: INPUT_SCHEMA as unknown as Record<string, unknown>,
-    toolKind: 'command_execution',
-    // General tool approval is deliberately skipped. Main owns live target
-    // validation plus the auto-safe/always-ask decision, independently of the
-    // runtime approval policy.
-    policy: 'never',
+    toolKind: 'tool_call',
+    policy: 'auto',
+    // Main owns live target validation plus the auto-safe/always-ask decision,
+    // independently of the runtime approval policy.
+    providerManagedApproval: true,
     shouldAdvertise: (context: ToolHostContext) =>
       context.agentSurface === 'code' && context.imContext !== true,
     execute: async (args, context) => {

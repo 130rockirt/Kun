@@ -162,6 +162,7 @@ function assertSupportedNodeVersion(): void {
 export * from './client.js'
 export * from './commands.js'
 export * from './controller.js'
+export * from './graph-mode.js'
 export * from './layout.js'
 export * from './keymap.js'
 export * from './options.js'

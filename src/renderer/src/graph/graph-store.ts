@@ -107,13 +107,20 @@ export const useGraphStore = create<GraphViewState>((set, get) => ({
     }
     try {
       const runs = await graphRuntimeClient.listRuns(threadId)
-      const selectedRunId = runs.some((run) => run.id === get().selectedRunId)
-        ? get().selectedRunId
+      if (get().threadId !== threadId) return
+      const previousRunId = get().selectedRunId
+      const previousNodeId = get().selectedNodeId
+      const selectedRunId = runs.some((run) => run.id === previousRunId)
+        ? previousRunId
         : runs[0]?.id ?? null
+      const selectedRun = runs.find((run) => run.id === selectedRunId)
+      const selectedNodeId = previousNodeId && selectedRun?.nodes[previousNodeId]
+        ? previousNodeId
+        : null
       set({
         runs,
         selectedRunId,
-        selectedNodeId: null,
+        selectedNodeId,
         artifactPage: null,
         artifactContent: '',
         artifactLoading: false,

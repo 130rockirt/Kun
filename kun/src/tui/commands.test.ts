@@ -36,6 +36,9 @@ describe('TUI slash commands', () => {
     expect(parseTuiCommand('/timeline failed tool')).toEqual({ kind: 'timeline', query: 'failed tool' })
     expect(parseTuiCommand('/jump 4')).toEqual({ kind: 'jump', target: '4' })
     expect(parseTuiCommand('/goal pause')).toEqual({ kind: 'goal', action: 'pause' })
+    expect(parseTuiCommand('/graph')).toEqual({ kind: 'graph' })
+    expect(parseTuiCommand('/graph status')).toEqual({ kind: 'graph', action: 'status' })
+    expect(parseTuiCommand('/graph off')).toEqual({ kind: 'graph', action: 'off' })
     expect(parseTuiCommand('/agent')).toEqual({ kind: 'agent' })
     expect(parseTuiCommand('/skill:pdf inspect this')).toEqual({ kind: 'skill', name: 'pdf', prompt: 'inspect this' })
     expect(parseTuiCommand('/editor draft prompt')).toEqual({ kind: 'editor', initial: 'draft prompt' })
@@ -49,7 +52,7 @@ describe('TUI slash commands', () => {
     expect(names).toEqual(expect.arrayContaining([
       'sessions', 'resume', 'continue', 'clear', 'title', 'models', 'provider', 'summarize', 'q',
       'status', 'copy', 'export', 'details', 'permission', 'undo', 'init', 'mcp',
-      'timeline', 'jump', 'subagents', 'tasks', 'plan', 'agent', 'goal', 'skills', 'editor', 'add-dir',
+      'timeline', 'jump', 'subagents', 'tasks', 'plan', 'graph', 'agent', 'goal', 'skills', 'editor', 'add-dir',
       'btw', 'context', 'queue', 'variants', 'thinking', 'mouse', 'paste', 'redo'
     ]))
     const provider = new CombinedAutocompleteProvider(TUI_SLASH_COMMANDS, '/tmp', null)
@@ -93,7 +96,7 @@ describe('TUI slash commands', () => {
     expect(paletteSlashes).toEqual(new Set([
       'sessions', 'new', 'open', 'timeline', 'jump', 'rename', 'archive', 'archives', 'fork',
       'compact', 'export', 'status', 'copy', 'undo', 'redo', 'connect', 'model',
-      'variants', 'thinking', 'mouse', 'details', 'permission', 'plan', 'agent', 'subagents', 'tasks', 'goal',
+      'variants', 'thinking', 'mouse', 'details', 'permission', 'plan', 'graph', 'agent', 'subagents', 'tasks', 'goal',
       'attach', 'paste', 'memory', 'shells', 'extensions', 'queue', 'skills', 'mcp', 'init', 'editor', 'add-dir', 'btw', 'context',
       'capabilities', 'theme', 'share', 'unshare', 'console', 'diff', 'terminal', 'help', 'quit'
     ]))

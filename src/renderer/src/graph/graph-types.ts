@@ -46,6 +46,28 @@ export type GraphPlanNode = {
   priority: number
   required: boolean
   riskClass: 'low' | 'medium' | 'high' | 'critical'
+  assignment?:
+    | {
+        kind: 'existing'
+        profileId: string
+        profileVersion?: number
+      }
+    | {
+        kind: 'ephemeral'
+        name: string
+        description?: string
+        systemPrompt: string
+        model?: string
+        providerId?: string
+        reasoningEffort?: 'auto' | 'off' | 'low' | 'medium' | 'high' | 'max'
+        toolPolicy?: 'readOnly' | 'inherit'
+        allowedTools?: string[]
+        blockedTools?: string[]
+        allowedSkills?: string[]
+        blockedSkills?: string[]
+        allowedMcpServers?: string[]
+        blockedMcpServers?: string[]
+      }
   readScopes: string[]
   writeScopes: string[]
   completion?: {
@@ -118,6 +140,9 @@ export type GraphAttempt = {
     profileId: string
     profileVersion: number
     profileOrigin: 'builtin' | 'user' | 'ephemeral' | 'learned'
+    requestedProfileId?: string
+    requestedProfileVersion?: number
+    routingReason?: string
     name: string
     systemPrompt: string
     model: string
@@ -168,6 +193,7 @@ export type GraphNodeProjection = {
   attempts: GraphAttempt[]
   acceptedAttemptId?: string
   loopIteration: number
+  lastTransitionReason?: string
   lastProgress?: {
     percent?: number
     summary: string

@@ -8,6 +8,7 @@ import {
   type GraphRunV1,
   type ProjectIdentityV1
 } from '../contracts/index.js'
+import { graphHostRelativePathCovers } from './graph-platform-path.js'
 
 export function successfulClusters(
   episodes: readonly GraphEpisodeV1[],
@@ -161,15 +162,9 @@ function scopeIntersection(values: readonly string[][]): string[] {
   if (!values.length) return []
   const candidates = [...new Set(values.flat())]
   return candidates.filter((candidate) =>
-    values.every((scopes) => scopes.some((scope) => scopeCovers(scope, candidate))))
+    values.every((scopes) => scopes.some((scope) =>
+      graphHostRelativePathCovers(scope, candidate))))
     .sort()
-}
-
-function scopeCovers(parent: string, child: string): boolean {
-  const normalized = parent.replace(/\/+$/, '')
-  return normalized === '.' || normalized === '' ||
-    child === normalized ||
-    child.startsWith(`${normalized}/`)
 }
 
 export function episodeNodeOutcome(

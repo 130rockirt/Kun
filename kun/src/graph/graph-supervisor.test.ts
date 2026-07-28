@@ -173,6 +173,45 @@ describe('GraphSupervisor', () => {
     expect(store.append).toHaveBeenCalledTimes(2)
   })
 
+  it('does not start another Lead turn for the same durable supervision episode', async () => {
+    let current: GraphRunV1 = { ...baseRun(), status: 'running' }
+    const idempotencyKeys = new Set<string>()
+    const leadTurn = vi.fn(async () => undefined)
+    const store = {
+      get: vi.fn(async () => current),
+      list: vi.fn(async () => [current]),
+      append: vi.fn(async (_runId: string, input: { idempotencyKey: string }) => {
+        const duplicate = idempotencyKeys.has(input.idempotencyKey)
+        if (!duplicate) {
+          idempotencyKeys.add(input.idempotencyKey)
+          current = { ...current, lastEventSeq: current.lastEventSeq + 1 }
+        }
+        return { state: current, envelope: {}, duplicate }
+      })
+    }
+    const supervisor = new GraphSupervisor({
+      store: store as never,
+      config: () => testGraphConfig({ supervision: { coalesceWindowMs: 60_000 } }),
+      delegation: () => undefined,
+      leadTurn
+    })
+    const signal = {
+      runId: current.id,
+      reason: 'failure' as const,
+      nodeIds: ['research'],
+      digest: 'Graph node admission failed: unavailable profile.'
+    }
+
+    await supervisor.signal(signal)
+    await supervisor.flush(current.id)
+    await supervisor.signal(signal)
+    await supervisor.flush(current.id)
+    await supervisor.stop()
+
+    expect(idempotencyKeys).toHaveLength(1)
+    expect(leadTurn).toHaveBeenCalledOnce()
+  })
+
   it('hot-reconfigures automatic Lead turns without dropping durable signals', async () => {
     let config = testGraphConfig({
       supervision: { autoStart: false, coalesceWindowMs: 60_000 }
