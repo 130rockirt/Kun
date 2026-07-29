@@ -5,9 +5,9 @@ import { GraphRelativePathSchema } from './graph-path.js'
 import {
   GRAPH_CONTRACT_VERSION,
   GraphArtifactReferenceV1Schema,
-  GraphRiskClassSchema,
   GraphRunIdSchema
 } from './graph-core.js'
+import { GraphRiskClassSchema } from './graph-status.js'
 
 const Identifier = z.string().trim().min(1).max(128).regex(
   /^[A-Za-z0-9][A-Za-z0-9._-]*$/,

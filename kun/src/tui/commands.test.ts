@@ -8,7 +8,7 @@ describe('TUI slash commands', () => {
     expect(parseTuiCommand('hello')).toBeNull()
     expect(parseTuiCommand('/threads provider bug')).toEqual({ kind: 'threads', search: 'provider bug' })
     expect(parseTuiCommand('/new release work')).toEqual({ kind: 'new', title: 'release work' })
-    expect(parseTuiCommand('/rename')).toEqual({ kind: 'usage', usage: '/rename <title>' })
+    expect(parseTuiCommand('/rename')).toEqual({ kind: 'command-usage', usage: '/rename <title>' })
     expect(parseTuiCommand('/quit')).toEqual({ kind: 'quit' })
   })
 
@@ -22,7 +22,7 @@ describe('TUI slash commands', () => {
     expect(parseTuiCommand('/provider')).toEqual({ kind: 'connect' })
     expect(parseTuiCommand('/provider usage')).toEqual({ kind: 'quota' })
     expect(parseTuiCommand('/provider quota')).toEqual({ kind: 'quota' })
-    expect(parseTuiCommand('/usage')).toEqual({ kind: 'quota' })
+    expect(parseTuiCommand('/usage')).toEqual({ kind: 'usage-report' })
     expect(parseTuiCommand('/quota')).toEqual({ kind: 'quota' })
     expect(parseTuiCommand('/summarize')).toEqual({ kind: 'compact' })
     expect(parseTuiCommand('/thinking')).toEqual({ kind: 'reasoning' })
@@ -53,8 +53,8 @@ describe('TUI slash commands', () => {
     expect(parseTuiCommand('/update yes')).toEqual({ kind: 'update', confirm: true })
     expect(parseTuiCommand('/skill:pdf inspect this')).toEqual({ kind: 'skill', name: 'pdf', prompt: 'inspect this' })
     expect(parseTuiCommand('/editor draft prompt')).toEqual({ kind: 'editor', initial: 'draft prompt' })
-    expect(parseTuiCommand('/add-dir')).toEqual({ kind: 'usage', usage: '/add-dir <path>' })
-    expect(parseTuiCommand('/btw')).toEqual({ kind: 'usage', usage: '/btw <question>' })
+    expect(parseTuiCommand('/add-dir')).toEqual({ kind: 'command-usage', usage: '/add-dir <path>' })
+    expect(parseTuiCommand('/btw')).toEqual({ kind: 'command-usage', usage: '/btw <question>' })
     expect(parseTuiCommand('/queue')).toEqual({ kind: 'queue' })
   })
 
@@ -98,7 +98,7 @@ describe('TUI slash commands', () => {
       const command = parseTuiCommand(`/${slash.name}${requiredArguments[slash.name] ? ` ${requiredArguments[slash.name]}` : ''}`)
       expect(command, slash.name).not.toBeNull()
       expect(command?.kind, slash.name).not.toBe('unknown')
-      expect(command?.kind, slash.name).not.toBe('usage')
+      expect(command?.kind, slash.name).not.toBe('command-usage')
     }
   })
 
@@ -107,7 +107,7 @@ describe('TUI slash commands', () => {
     expect(paletteSlashes).toEqual(new Set([
       'sessions', 'new', 'open', 'timeline', 'jump', 'rename', 'archive', 'archives', 'fork',
       'compact', 'export', 'status', 'copy', 'undo', 'redo', 'connect', 'model',
-      'usage',
+      'usage', 'quota',
       'variants', 'thinking', 'mouse', 'details', 'permission', 'plan', 'graph', 'agent', 'subagents', 'tasks', 'goal',
       'attach', 'paste', 'memory', 'shells', 'extensions', 'queue', 'skills', 'mcp', 'init', 'editor', 'add-dir', 'btw', 'context',
       'capabilities', 'theme', 'share', 'unshare', 'console', 'diff', 'terminal', 'update', 'help', 'quit'

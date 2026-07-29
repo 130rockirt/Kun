@@ -24,7 +24,7 @@ type CalendarWeek = {
   key: string
   cells: CalendarCell[]
 }
-type UsageTotalsBucket = DailyUsageBucket & { days: number; activeDays: number }
+export type UsageTotalsBucket = DailyUsageBucket & { days: number; activeDays: number }
 type UsageViewMode = 'populated' | 'loading' | 'empty' | 'error'
 type UsageRangeKey = 'all' | '90d' | '30d' | '7d'
 type UsageTabKey = 'overview' | 'models'
@@ -123,7 +123,7 @@ function usageRangeBuckets(buckets: DailyUsageBucket[], rangeKey: UsageRangeKey)
   return buckets.slice(-USAGE_RANGE_DAYS[rangeKey])
 }
 
-function usageTotalsFromBuckets(buckets: DailyUsageBucket[]): UsageTotalsBucket {
+export function usageTotalsFromBuckets(buckets: DailyUsageBucket[]): UsageTotalsBucket {
   let hasCny = false
   const totals = buckets.reduce<UsageTotalsBucket>(
     (acc, bucket) => {

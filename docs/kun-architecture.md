@@ -185,9 +185,10 @@ Renderer 只应展示 Kun。需要删除或保持删除的 UI 面包括：
 - Agent 切换器：`AgentSwitcher` 不再出现，`AGENT_CATALOG` 只有
   `kun`。
 - 顶部连接状态条和 runtime 诊断按钮：不再把运行时检测作为用户入口。
-- Runtime insights/right panel：右侧面板只保留 Changes、Preview、Plan、
-  File 等 GUI 工作区视图，不再有 runtime/usage 控制台。
-- 斜杠菜单里的 `/usage`、`/runtime`：这些命令会暗示还有可切换运行时。
+- Runtime insights/right panel：右侧面板可以展示只读 Kun 用量与 provider
+  订阅额度，但不恢复 runtime 诊断、切换或控制台。
+- GUI 斜杠菜单不恢复 runtime 控制命令。独立 TUI 的 `/usage` 只读取
+  `GET /v1/usage` 生成用量报告，不代表可切换或可控制的运行时。
 - 设置页 provider selector：Settings -> Agents 直接展示 Kun 配置，
   包含 binary path、port、autoStart、API key、base URL、runtime token、
   data dir、model、approval policy、sandbox mode、insecure。
@@ -283,8 +284,8 @@ Renderer 只应展示 Kun。需要删除或保持删除的 UI 面包括：
 - `POST /v1/approvals/{id}` 继续支持工具审批；approval 和 user-input 都是
   gate/route/service 分层，不在 renderer 内实现 agent 逻辑。
 - `GET /v1/usage?group_by=thread|day` 返回累计 token、turn、cache hit 数据。
-  Workbench 首页和 composer 底部只消费 Kun usage，不再打开 runtime
-  insights 面板。
+  Workbench 首页、composer 底部和右侧“用量与额度”面板只消费 Kun usage，
+  不提供 runtime diagnostics 或控制动作。
 
 ## 已删除/应保持删除的旧入口
 
@@ -326,6 +327,11 @@ GUI 包继续通过 `electron-builder` 内置 `kun/dist` 和平台启动器；�
 headless 压缩包，不替代 GUI 中的终端命令。两种形态必须从同一 commit 和同一份
 `kun/dist/runtime-build.json` 派生，并共享应用版本、tag、release channel 和 build ID。
 TUI 没有独立版本、独立 tag 或 npm 发布流程。
+
+独立 TUI 中 `/usage` 是只读 Kun 本地用量报告，展示当前会话、全部会话和
+Top Sessions；`/quota` 展示 provider 订阅额度，`/provider usage` 与
+`/provider quota` 保持相同的 provider 兼容语义，`/context` 继续展示当前
+请求上下文。这些命令只复用现有查询接口，不增加 runtime 诊断或控制入口。
 
 Stable 和 Daily 的发布工作流都必须生成 macOS arm64/x64、Windows x64、Linux x64
 四个独立 TUI 目标，并把 GUI/TUI 同一组资产上传到 GitHub Release 与 R2。R2 的

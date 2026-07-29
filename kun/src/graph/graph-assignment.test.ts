@@ -56,7 +56,7 @@ describe('GraphAssignmentResolver', () => {
       requestedProfileId: 'explore',
       name: 'Research fallback',
       toolPolicy: 'readOnly',
-      allowedTools: ['read', 'write'],
+      allowedTools: ['read', 'report_to_parent', 'write'],
       readScopes: ['src'],
       writeScopes: []
     })
@@ -94,7 +94,7 @@ describe('GraphAssignmentResolver', () => {
     expect(assignment).toMatchObject({
       model: 'parent-model',
       providerId: 'parent-provider',
-      allowedTools: ['read', 'write'],
+      allowedTools: ['read', 'report_to_parent', 'write'],
       allowedSkills: ['safe-skill'],
       allowedMcpServers: ['safe-mcp'],
       allowedProviderIds: ['builtin', 'mcp:facade', 'extension:com.example.tools'],
@@ -114,6 +114,7 @@ describe('GraphAssignmentResolver', () => {
       'list_subagent_profiles',
       'task_graph'
     ]))
+    expect(assignment.blockedTools).not.toContain('report_to_parent')
   })
 
   it('rejects node scopes that expand the parent authority', async () => {

@@ -184,6 +184,62 @@ describe('DataMigrationExportOrchestrator', () => {
     await expect(readFile(output)).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
+  it('never deletes a pre-existing export destination when atomic publication is refused', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-export-existing-'))
+    roots.push(root)
+    const workspace = join(root, 'workspace')
+    const output = join(root, 'existing.kunpack')
+    await mkdir(workspace, { recursive: true })
+    await writeFile(output, 'original user data')
+    const orchestrator = new DataMigrationExportOrchestrator(runtimeClient().client)
+    await expect(orchestrator.export({
+      operationId: 'export_existing', outputPath: output, settings: settings(workspace),
+      runtimeThreads: [], selectedWorkspaceIds: [], selectedThreadIds: [],
+      categories: ['portable-settings'], preset: 'complete',
+      sensitiveContentAcknowledged: false, unencryptedPackageAcknowledged: true, runningThreadPolicy: 'wait',
+      sourceInstallationId: 'installation_test', sourceAppVersion: 'test', sourceRuntimeVersion: 'test'
+    })).rejects.toThrow('destination already exists')
+    expect(await readFile(output, 'utf8')).toBe('original user data')
+  })
+
+  it('does not scan or require acknowledgement for workspace files excluded from a history-only package', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-export-history-only-'))
+    roots.push(root)
+    const workspace = join(root, 'workspace')
+    const output = join(root, 'history.kunpack')
+    await mkdir(workspace, { recursive: true })
+    await writeFile(join(workspace, '.env'), 'TOKEN=not-packaged')
+    const runtime = runtimeClient()
+    const orchestrator = new DataMigrationExportOrchestrator(runtime.client)
+    await orchestrator.export({
+      operationId: 'export_history_only', outputPath: output, settings: settings(workspace),
+      runtimeThreads: [{ id: 'thread_one', title: 'History', workspace, createdAt: 't0', updatedAt: 't1' }],
+      selectedWorkspaceIds: [], selectedThreadIds: ['thread_one'], categories: ['thread-history'], preset: 'complete',
+      sensitiveContentAcknowledged: false, unencryptedPackageAcknowledged: true, runningThreadPolicy: 'wait',
+      sourceInstallationId: 'installation_test', sourceAppVersion: 'test', sourceRuntimeVersion: 'test'
+    })
+    const verified = await verifyKunpackPackage({
+      packagePath: output,
+      materializedZipPath: join(root, 'history.zip')
+    })
+    expect(verified.entries.some((entry) => entry.kind === 'workspace-file')).toBe(false)
+  })
+
+  it('rejects runtime content categories that cannot be exported without history', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-export-category-dependency-'))
+    roots.push(root)
+    const workspace = join(root, 'workspace')
+    await mkdir(workspace, { recursive: true })
+    const orchestrator = new DataMigrationExportOrchestrator(runtimeClient().client)
+    await expect(orchestrator.export({
+      operationId: 'export_bad_categories', outputPath: join(root, 'bad.kunpack'), settings: settings(workspace),
+      runtimeThreads: [], selectedWorkspaceIds: [], selectedThreadIds: [],
+      categories: ['attachments'], preset: 'complete',
+      sensitiveContentAcknowledged: false, unencryptedPackageAcknowledged: true, runningThreadPolicy: 'wait',
+      sourceInstallationId: 'installation_test', sourceAppVersion: 'test', sourceRuntimeVersion: 'test'
+    })).rejects.toThrow('require thread history')
+  })
+
   it('treats an empty thread selection as all runtime histories when history is included', async () => {
     const root = await mkdtemp(join(tmpdir(), 'kun-export-all-threads-'))
     roots.push(root)
@@ -223,6 +279,7 @@ describe('DataMigrationExportOrchestrator', () => {
       settings: settings(firstWorkspace),
       runtimeThreads,
       selectedWorkspaceIds: [],
+      categories: ['workspace-files'],
       preset: 'complete',
       sensitiveContentAcknowledged: false
     })
@@ -241,5 +298,27 @@ describe('DataMigrationExportOrchestrator', () => {
     const verified = await verifyKunpackPackage({ packagePath: outputPath, materializedZipPath: join(root, 'related.zip') })
     expect(verified.manifest.selection.threadIds).toEqual(['thread_first'])
     expect(verified.manifest.counts.threads).toBe(1)
+  })
+
+  it('returns a workspace catalog without scanning files when workspace files are not selected for estimation', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-estimate-history-only-'))
+    roots.push(root)
+    const workspace = join(root, 'workspace')
+    await mkdir(workspace)
+    await writeFile(join(workspace, '.env'), 'TOKEN=not-selected')
+    const inventory = await new DataMigrationExportOrchestrator(runtimeClient().client).estimate({
+      operationId: 'estimate_history_only',
+      settings: settings(workspace),
+      runtimeThreads: [],
+      selectedWorkspaceIds: [],
+      categories: ['thread-history'],
+      preset: 'complete',
+      sensitiveContentAcknowledged: false
+    })
+    expect(inventory.files).toEqual([])
+    expect(inventory.estimate.workspaces).toEqual([
+      expect.objectContaining({ sourcePathDisplay: workspace, fileCount: 0, logicalBytes: 0 })
+    ])
+    expect(inventory.estimate.sensitiveFindings).toEqual([])
   })
 })

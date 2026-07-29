@@ -8,6 +8,7 @@ import type { AppSettingsV1 } from '../../shared/app-settings'
 import {
   classifyDataMigrationPath,
   parsePackageRelativePath,
+  type DataMigrationCategory,
   type DataMigrationEstimate,
   type DataMigrationPreset,
   type DataMigrationWorkspaceCatalogEntry,
@@ -254,11 +255,16 @@ export function portableSettingsForMigration(settings: AppSettingsV1): Record<st
   }
 }
 
-export function sanitizedAutomationsForMigration(settings: AppSettingsV1): Record<string, unknown> {
+export function sanitizedAutomationsForMigration(
+  settings: AppSettingsV1,
+  categories: readonly DataMigrationCategory[] = ['workflows', 'schedules']
+): Record<string, unknown> {
   return {
     schemaVersion: 1,
-    workflows: settings.workflow.workflows.map((workflow) => sanitizeAutomationValue({ ...workflow, enabled: false })),
-    schedules: settings.schedule.tasks.map((task) => ({
+    workflows: categories.includes('workflows')
+      ? settings.workflow.workflows.map((workflow) => sanitizeAutomationValue({ ...workflow, enabled: false }))
+      : [],
+    schedules: categories.includes('schedules') ? settings.schedule.tasks.map((task) => ({
       ...sanitizeRecord(sanitizeAutomationValue(task)),
       enabled: false,
       clawChannelId: '',
@@ -267,7 +273,7 @@ export function sanitizedAutomationsForMigration(settings: AppSettingsV1): Recor
       nextRunAt: '',
       lastStatus: 'idle',
       lastMessage: ''
-    }))
+    })) : []
   }
 }
 
@@ -284,7 +290,9 @@ export function assertMigrationOutputOutsideWorkspaces(outputPath: string, works
       throw new Error(`migration output cannot be placed inside a selected workspace: ${workspace.sourcePathDisplay}`)
     }
   }
-  if (output.split(sep).some((segment) => segment === '.kun-migration-staging' || segment === '.kun-migration-backup')) {
+  if (output.split(sep).some((segment) =>
+    segment.startsWith('.kun-migration-staging') || segment === '.kun-migration-backup'
+  )) {
     throw new Error('migration output cannot be placed inside a migration staging or backup directory')
   }
 }

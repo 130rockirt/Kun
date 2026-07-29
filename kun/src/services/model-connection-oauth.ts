@@ -244,7 +244,7 @@ export class ModelConnectionOAuthService {
     try {
       if (session.input.provider === 'claude') {
         const preset = requireCatalogPreset('claude-subscription')
-        session.snapshot = await this.options.registry.connect({
+        session.snapshot = await this.options.registry.connectAuthenticated({
           expectedRevision: session.input.expectedRevision,
           id: preset.id,
           name: preset.name,
@@ -256,7 +256,6 @@ export class ModelConnectionOAuthService {
           credential: session.claudeToken,
           models: [...preset.models],
           selectedModel: catalogModel(preset, session.input.model),
-          probe: false,
           select: session.input.select
         })
         this.finish(session, 'connected')
@@ -264,7 +263,7 @@ export class ModelConnectionOAuthService {
       }
       const chatGpt = session.input.provider === 'chatgpt'
       const preset = requireCatalogPreset(chatGpt ? 'codex' : 'grok-subscription')
-      session.snapshot = await this.options.registry.connect({
+      session.snapshot = await this.options.registry.connectAuthenticated({
         expectedRevision: session.input.expectedRevision,
         id: preset.id,
         name: preset.name,
@@ -276,7 +275,6 @@ export class ModelConnectionOAuthService {
         credential: JSON.stringify(session.credentials),
         models: [...preset.models],
         selectedModel: catalogModel(preset, session.input.model),
-        probe: false,
         select: session.input.select
       })
       this.finish(session, 'connected')

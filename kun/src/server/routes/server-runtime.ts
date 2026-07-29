@@ -91,6 +91,7 @@ import type { RuntimeMigrationImportService } from '../../services/runtime-migra
 import type { ArtifactStore } from '../../artifacts/artifact-store.js'
 import type { ModelConnectionRegistry } from '../../services/model-connection-registry.js'
 import type { ModelConnectionOAuthService } from '../../services/model-connection-oauth.js'
+import type { OfficialProviderAuthService } from '../../services/official-provider-cli.js'
 import type { ProviderQuotaService } from '../../services/provider-quota-service.js'
 
 export type RuntimeToolDiagnostics = {
@@ -208,6 +209,7 @@ export type ServerRuntime = {
   modelClient?: ModelClient
   modelConnections?: ModelConnectionRegistry
   modelConnectionOAuth?: ModelConnectionOAuthService
+  officialProviderAuth?: OfficialProviderAuthService
   providerQuotaService?: Pick<ProviderQuotaService, 'list'>
   modelGateway?: {
     enabled(): boolean

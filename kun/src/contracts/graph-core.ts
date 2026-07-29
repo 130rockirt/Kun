@@ -7,6 +7,14 @@ import {
   GraphBudgetV1InputSchema,
   GraphBudgetV1Schema
 } from './graph-budget.js'
+import {
+  GraphAttemptStatusSchema,
+  GraphExecutionStrategyV1Schema,
+  GraphNodeStatusSchema,
+  GraphReviewOutcomeSchema,
+  GraphRiskClassSchema,
+  GraphRunStatusSchema
+} from './graph-status.js'
 export {
   GraphBudgetLedgerV1Schema,
   GraphBudgetV1InputSchema,
@@ -65,68 +73,6 @@ export const GraphCommandIdSchema = Identifier
 export type GraphCommandId = z.infer<typeof GraphCommandIdSchema>
 export const GraphProfileIdSchema = Identifier
 export type GraphProfileId = z.infer<typeof GraphProfileIdSchema>
-
-export const GraphOrchestrationStrategySchema = z.enum(['direct', 'graph'])
-export type GraphOrchestrationStrategy = z.infer<typeof GraphOrchestrationStrategySchema>
-
-export const GraphRunStatusSchema = z.enum([
-  'draft',
-  'validating',
-  'ready',
-  'running',
-  'pausing',
-  'paused',
-  'awaiting_supervision',
-  'awaiting_human',
-  'completing',
-  'completed',
-  'failed',
-  'cancelled'
-])
-export type GraphRunStatus = z.infer<typeof GraphRunStatusSchema>
-
-export const GraphNodeStatusSchema = z.enum([
-  'pending',
-  'blocked',
-  'ready',
-  'queued',
-  'running',
-  'submitted',
-  'reviewing',
-  'accepted',
-  'repair_required',
-  'failed',
-  'cancelled',
-  'skipped',
-  'superseded'
-])
-export type GraphNodeStatus = z.infer<typeof GraphNodeStatusSchema>
-
-export const GraphAttemptStatusSchema = z.enum([
-  'queued',
-  'running',
-  'waiting',
-  'submitted',
-  'reviewing',
-  'accepted',
-  'repair_required',
-  'failed',
-  'interrupted',
-  'cancelled',
-  'orphaned'
-])
-export type GraphAttemptStatus = z.infer<typeof GraphAttemptStatusSchema>
-
-export const GraphReviewOutcomeSchema = z.enum([
-  'pass',
-  'fail',
-  'revise',
-  'needs_human'
-])
-export type GraphReviewOutcome = z.infer<typeof GraphReviewOutcomeSchema>
-
-export const GraphRiskClassSchema = z.enum(['low', 'medium', 'high', 'critical'])
-export type GraphRiskClass = z.infer<typeof GraphRiskClassSchema>
 
 export const GraphArtifactReferenceV1Schema = z.object({
   version: z.literal(GRAPH_CONTRACT_VERSION),
@@ -451,7 +397,10 @@ export const GraphEdgeV1Schema = z.discriminatedUnion('kind', [
       'finding',
       'question',
       'answer',
-      'warning'
+      'warning',
+      'progress',
+      'risk',
+      'result'
     ])).min(1),
     label: z.string().max(256).optional()
   }).strict()
@@ -479,6 +428,7 @@ export const GraphPlanV1Schema = z.object({
   budget: GraphBudgetV1Schema,
   autoStart: z.boolean().default(false),
   completionNodeIds: z.array(GraphNodeIdSchema).min(1).max(1_000),
+  strategy: GraphExecutionStrategyV1Schema.optional(),
   createdBy: z.enum(['lead', 'user', 'recipe', 'system']),
   createdAt: Timestamp
 }).strict()
@@ -539,10 +489,14 @@ export const GraphMessageV1Schema = z.object({
     'warning',
     'help',
     'steering',
-    'system'
+    'system',
+    'progress',
+    'risk',
+    'result'
   ]),
   priority: z.enum(['low', 'normal', 'high', 'blocking']),
   summary: BoundedSummary,
+  details: BoundedText.optional(),
   artifactRefs: z.array(GraphArtifactReferenceV1Schema).max(32).default([]),
   correlationId: Identifier.optional(),
   replyRequired: z.boolean().default(false),

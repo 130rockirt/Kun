@@ -37,6 +37,7 @@ describe('Graph tool boundary', () => {
   it('builds executor authority without ordinary or Graph orchestration tools', () => {
     const names = graphParentAuthorityToolNames([
       'read',
+      'report_to_parent',
       'graph_create_run',
       'graph_worker_submit_result',
       'delegate_task',
@@ -47,5 +48,7 @@ describe('Graph tool boundary', () => {
 
     expect(names).toEqual(['read'])
     expect(graphWorkerToolNamesWithin(names)).toEqual([])
+    expect(graphWorkerToolNamesWithin(['read', 'report_to_parent']))
+      .toEqual(['report_to_parent'])
   })
 })

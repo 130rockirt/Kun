@@ -24,6 +24,7 @@ export type TuiCommand =
   | { kind: 'fork'; title?: string }
   | { kind: 'compact' }
   | { kind: 'connect' }
+  | { kind: 'usage-report' }
   | { kind: 'quota' }
   | { kind: 'model' }
   | { kind: 'reasoning' }
@@ -67,7 +68,7 @@ export type TuiCommand =
   | { kind: 'queue'; action?: string }
   | { kind: 'update'; confirm: boolean }
   | { kind: 'quit' }
-  | { kind: 'usage'; usage: string }
+  | { kind: 'command-usage'; usage: string }
   | { kind: 'unknown'; name: string }
 
 export const TUI_SLASH_COMMANDS: SlashCommand[] = [
@@ -87,8 +88,8 @@ export const TUI_SLASH_COMMANDS: SlashCommand[] = [
   { name: 'summarize', description: 'Alias for /compact' },
   { name: 'connect', description: 'Configure a shared model connection' },
   { name: 'provider', description: 'Alias for /connect' },
-  { name: 'usage', description: 'Show provider account balances and rate limits' },
-  { name: 'quota', description: 'Alias for /usage' },
+  { name: 'usage', description: 'Show current and accumulated Kun model usage' },
+  { name: 'quota', description: 'Show provider account balances and rate limits' },
   { name: 'model', description: 'Select the shared provider and model' },
   { name: 'models', description: 'Alias for /model' },
   { name: 'variants', description: 'Choose the model reasoning effort' },
@@ -160,7 +161,8 @@ export const TUI_COMMAND_DEFINITIONS: readonly TuiCommandDefinition[] = [
   { id: 'undo', title: 'Undo in a safe branch', category: 'Session', slash: 'undo', keyAction: 'session_undo', available: true },
   { id: 'redo', title: 'Redo to preserved branch', category: 'Session', slash: 'redo', keyAction: 'session_redo', available: true },
   { id: 'connect', title: 'Connect model provider', category: 'Model', slash: 'connect', available: true },
-  { id: 'quota', title: 'Show provider quota', category: 'Model', slash: 'usage', available: true },
+  { id: 'usage', title: 'Show Kun usage', category: 'Session', slash: 'usage', available: true },
+  { id: 'quota', title: 'Show provider quota', category: 'Model', slash: 'quota', available: true },
   { id: 'model', title: 'Select model', category: 'Model', slash: 'model', keyAction: 'model_list', available: true },
   { id: 'variants', title: 'Select reasoning effort', category: 'Model', slash: 'variants', keyAction: 'variant_cycle', available: true },
   { id: 'thinking', title: 'Expand or collapse Thinking', category: 'Display', slash: 'thinking', keyAction: 'thinking_toggle', available: true },
@@ -216,9 +218,9 @@ export function parseTuiCommand(text: string): TuiCommand | null {
     case 'continue': return { kind: 'resume', ...(rest ? { search: rest } : {}) }
     case 'clear': return { kind: 'clear' }
     case 'new': return { kind: 'new', ...(rest ? { title: rest } : {}) }
-    case 'open': return rest ? { kind: 'open', threadId: rest } : { kind: 'usage', usage: '/open <session-id>' }
+    case 'open': return rest ? { kind: 'open', threadId: rest } : { kind: 'command-usage', usage: '/open <session-id>' }
     case 'title':
-    case 'rename': return rest ? { kind: 'rename', title: rest } : { kind: 'usage', usage: '/rename <title>' }
+    case 'rename': return rest ? { kind: 'rename', title: rest } : { kind: 'command-usage', usage: '/rename <title>' }
     case 'archive': return { kind: 'archive' }
     case 'archives': return { kind: 'archives', ...(rest ? { search: rest } : {}) }
     case 'fork': return { kind: 'fork', ...(rest ? { title: rest } : {}) }
@@ -229,7 +231,7 @@ export function parseTuiCommand(text: string): TuiCommand | null {
         ? { kind: 'quota' }
         : { kind: 'connect' }
     case 'connect': return { kind: 'connect' }
-    case 'usage':
+    case 'usage': return { kind: 'usage-report' }
     case 'quota': return { kind: 'quota' }
     case 'models':
     case 'model': return { kind: 'model' }
@@ -282,10 +284,10 @@ export function parseTuiCommand(text: string): TuiCommand | null {
     case 'editor': return { kind: 'editor', ...(rest ? { initial: rest } : {}) }
     case 'add-dir': return rest
       ? { kind: 'add-dir', path: rest }
-      : { kind: 'usage', usage: '/add-dir <path>' }
+      : { kind: 'command-usage', usage: '/add-dir <path>' }
     case 'btw': return rest
       ? { kind: 'btw', question: rest }
-      : { kind: 'usage', usage: '/btw <question>' }
+      : { kind: 'command-usage', usage: '/btw <question>' }
     case 'context': return { kind: 'context' }
     case 'capabilities': return { kind: 'capabilities' }
     case 'queue': return { kind: 'queue', ...(rest ? { action: rest } : {}) }
@@ -297,7 +299,7 @@ export function parseTuiCommand(text: string): TuiCommand | null {
         const skillName = name.slice('skill:'.length).trim()
         return skillName
           ? { kind: 'skill', name: skillName, ...(rest ? { prompt: rest } : {}) }
-          : { kind: 'usage', usage: '/skill:<name> [prompt]' }
+          : { kind: 'command-usage', usage: '/skill:<name> [prompt]' }
       }
       return { kind: 'unknown', name }
     }

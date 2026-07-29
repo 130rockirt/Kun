@@ -91,7 +91,7 @@ export class DataMigrationExportOrchestrator {
 
   async estimate(input: Pick<
     DataMigrationExportRequest,
-    'settings' | 'runtimeThreads' | 'selectedWorkspaceIds' | 'preset' | 'sensitiveContentAcknowledged' | 'signal' | 'onProgress' | 'operationId'
+    'settings' | 'runtimeThreads' | 'selectedWorkspaceIds' | 'categories' | 'preset' | 'sensitiveContentAcknowledged' | 'signal' | 'onProgress' | 'operationId'
   >) {
     const discovered = await discoverDataMigrationWorkspaces({
       settings: input.settings,
@@ -100,27 +100,30 @@ export class DataMigrationExportOrchestrator {
     const selected = input.selectedWorkspaceIds.length > 0
       ? discovered.filter((workspace) => input.selectedWorkspaceIds.includes(workspace.workspaceId))
       : discovered
-    return inventoryDataMigrationFiles({
-      workspaces: selected,
-      preset: input.preset,
-      sensitiveContentAcknowledged: input.sensitiveContentAcknowledged,
-      signal: input.signal,
-      onProgress: ({ files, bytes, path }) => input.onProgress?.({
-        operationId: input.operationId,
-        kind: 'export',
-        phase: 'scanning',
-        completedItems: files,
-        completedBytes: bytes,
-        currentPath: safeProgressPath(path),
-        cancellable: true,
-        cancellationEffect: 'cleanup',
-        updatedAt: new Date().toISOString()
-      })
-    })
+    return input.categories.includes('workspace-files')
+      ? inventoryDataMigrationFiles({
+          workspaces: selected,
+          preset: input.preset,
+          sensitiveContentAcknowledged: input.sensitiveContentAcknowledged,
+          signal: input.signal,
+          onProgress: ({ files, bytes, path }) => input.onProgress?.({
+            operationId: input.operationId,
+            kind: 'export',
+            phase: 'scanning',
+            completedItems: files,
+            completedBytes: bytes,
+            currentPath: safeProgressPath(path),
+            cancellable: true,
+            cancellationEffect: 'cleanup',
+            updatedAt: new Date().toISOString()
+          })
+        })
+      : emptyWorkspaceInventory(selected)
   }
 
   async export(input: DataMigrationExportRequest): Promise<DataMigrationExportResult> {
     input.signal?.throwIfAborted()
+    assertCoherentExportCategories(input.categories)
     if (!input.passphrase && !input.unencryptedPackageAcknowledged) {
       throw new Error('creating an unencrypted migration package requires explicit acknowledgement')
     }
@@ -160,13 +163,15 @@ export class DataMigrationExportOrchestrator {
     try {
       await mkdir(temporaryRoot, { recursive: true, mode: 0o700 })
       this.progress(input, 'snapshotting', 0, 0, true)
-      const inventory = await inventoryDataMigrationFiles({
-        workspaces: selectedWorkspaces,
-        preset: input.preset,
-        sensitiveContentAcknowledged: input.sensitiveContentAcknowledged,
-        signal: input.signal,
-        onProgress: ({ files, bytes, path }) => this.progress(input, 'scanning', files, bytes, true, path)
-      })
+      const inventory = input.categories.includes('workspace-files')
+        ? await inventoryDataMigrationFiles({
+            workspaces: selectedWorkspaces,
+            preset: input.preset,
+            sensitiveContentAcknowledged: input.sensitiveContentAcknowledged,
+            signal: input.signal,
+            onProgress: ({ files, bytes, path }) => this.progress(input, 'scanning', files, bytes, true, path)
+          })
+        : emptyWorkspaceInventory(selectedWorkspaces)
       if (inventory.estimate.sensitiveFindings.length > 0 && !input.sensitiveContentAcknowledged) {
         throw new Error('sensitive workspace files require explicit acknowledgement before export')
       }
@@ -237,7 +242,7 @@ export class DataMigrationExportOrchestrator {
       if (input.categories.includes('workflows') || input.categories.includes('schedules')) {
         catalogs.push({
           path: parsePackageRelativePath('catalog/automations.json'),
-          value: sanitizedAutomationsForMigration(input.settings)
+          value: sanitizedAutomationsForMigration(input.settings, input.categories)
         })
       }
 
@@ -283,13 +288,12 @@ export class DataMigrationExportOrchestrator {
         exclusions: Object.entries(inventory.exclusionCounts).map(([ruleId, count]) => ({ ruleId, count })),
         warnings: omittedThreadIds.map((id) => `Running thread omitted: ${id}`),
         unresolvedReferences: 0,
-        disabledItems: input.settings.workflow.workflows.length + input.settings.schedule.tasks.length
+        disabledItems:
+          (input.categories.includes('workflows') ? input.settings.workflow.workflows.length : 0) +
+          (input.categories.includes('schedules') ? input.settings.schedule.tasks.length : 0)
       }
       this.progress(input, 'completed', inventory.files.length, packageStats.size, false)
       return { packagePath: input.outputPath, packageId, report }
-    } catch (error) {
-      await rm(input.outputPath, { force: true }).catch(() => undefined)
-      throw error
     } finally {
       if (runtimeSnapshotId) await this.runtime.release(runtimeSnapshotId).catch(() => undefined)
       await rm(temporaryRoot, { recursive: true, force: true }).catch(() => undefined)
@@ -315,6 +319,39 @@ export class DataMigrationExportOrchestrator {
       ...(cancellable ? { cancellationEffect: 'cleanup' } : {}),
       updatedAt: new Date().toISOString()
     })
+  }
+}
+
+function assertCoherentExportCategories(categories: readonly DataMigrationCategory[]): void {
+  const runtimeDependent = categories.filter((category) =>
+    category === 'attachments' || category === 'artifacts' || category === 'memory'
+  )
+  if (runtimeDependent.length > 0 && !categories.includes('thread-history')) {
+    throw new Error(`${runtimeDependent.join(', ')} require thread history to be included`)
+  }
+}
+
+function emptyWorkspaceInventory(
+  workspaces: Awaited<ReturnType<typeof discoverDataMigrationWorkspaces>>
+): Awaited<ReturnType<typeof inventoryDataMigrationFiles>> {
+  return {
+    files: [],
+    exclusionCounts: {},
+    estimate: {
+      workspaces: workspaces.map(({ canonicalPath: _canonicalPath, ...workspace }) => ({
+        ...workspace,
+        fileCount: 0,
+        logicalBytes: 0
+      })),
+      threadCount: new Set(workspaces.flatMap((workspace) => workspace.relatedThreadIds)).size,
+      attachmentCount: 0,
+      artifactCount: 0,
+      memoryCount: 0,
+      logicalBytes: 0,
+      estimatedPackageBytes: 64 * 1024,
+      sensitiveFindings: [],
+      exclusions: []
+    }
   }
 }
 

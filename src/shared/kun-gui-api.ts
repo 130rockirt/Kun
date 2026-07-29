@@ -566,7 +566,7 @@ export type KunGuiApi = ExtensionIpcApi & {
     pickImportPackage: (defaultPath?: string) => Promise<DataMigrationPathPickResult>
     pickDestinationDirectory: (defaultPath?: string) => Promise<DataMigrationPathPickResult>
     estimateExport: (input: Pick<DataMigrationExportOptions,
-      'operationId' | 'selectedWorkspaceIds' | 'preset' | 'sensitiveContentAcknowledged'
+      'operationId' | 'selectedWorkspaceIds' | 'categories' | 'preset' | 'sensitiveContentAcknowledged'
     >) => Promise<DataMigrationEstimate>
     inspectPackage: (input: { packagePath: string; passphrase?: string }) => Promise<DataMigrationInspectionSummary>
     planImport: (input: {

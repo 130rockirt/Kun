@@ -222,6 +222,7 @@ export type GraphMessage = {
   type: string
   priority: string
   summary: string
+  details?: string
   status: string
   createdAt: string
 }
@@ -244,6 +245,11 @@ export type GraphRun = {
     nodes: GraphPlanNode[]
     edges: GraphPlanEdge[]
     completionNodeIds: string[]
+    strategy?: {
+      kind: 'fanout_join' | 'pipeline' | 'bounded_loop' | 'state_machine' | 'hybrid'
+      selectedBy: 'lead' | 'user' | 'host'
+      rationale?: string
+    }
     createdAt: string
   }>
   nodes: Record<string, GraphNodeProjection>

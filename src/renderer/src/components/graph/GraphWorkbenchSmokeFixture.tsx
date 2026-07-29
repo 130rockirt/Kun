@@ -64,6 +64,7 @@ function GraphWorkbenchSmokeView(): ReactElement {
         progress={runProgress(run)}
         selectedNode={selectedNode}
         selectedNodeId={selectedNodeId}
+        canvasFocusRequestKey={selectedNodeId ? `fixture:${run.id}:${selectedNodeId}` : null}
         steering={steering}
         onSteeringChange={setSteering}
         onSendSteering={() => setSteering('')}

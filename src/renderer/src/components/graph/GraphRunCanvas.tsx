@@ -26,6 +26,7 @@ export function GraphRunCanvas({
   nodes: incomingNodes,
   edges,
   selectedNodeId,
+  focusRequestKey,
   onSelectNode,
   onInspectNode,
   onOpenInspector
@@ -34,6 +35,7 @@ export function GraphRunCanvas({
   nodes: Node[]
   edges: Edge[]
   selectedNodeId: string | null
+  focusRequestKey: string | null
   onSelectNode: (nodeId: string | null) => void
   onInspectNode: (nodeId: string) => void
   onOpenInspector: () => void
@@ -46,6 +48,21 @@ export function GraphRunCanvas({
   const [nodes, setNodes, onNodesChange] = useNodesState(
     reconcileInteractiveGraphNodes([], incomingNodes, selectedNodeId)
   )
+  const selectedNodeAvailable = selectedNodeId !== null &&
+    incomingNodes.some((node) => node.id === selectedNodeId)
+
+  const focusSelectedNode = (
+    instance: ReactFlowInstance<Node, Edge> | null
+  ): void => {
+    if (!instance || !selectedNodeId || !selectedNodeAvailable) return
+    void instance.fitView({
+      nodes: [{ id: selectedNodeId }],
+      minZoom: 0.6,
+      maxZoom: 1,
+      padding: 0.45,
+      duration: 220
+    })
+  }
 
   useEffect(() => {
     for (const node of nodes) layoutNodesRef.current.set(node.id, node)
@@ -64,6 +81,11 @@ export function GraphRunCanvas({
     })
   }, [incomingNodes, runId, selectedNodeId, setNodes])
 
+  useEffect(() => {
+    if (!focusRequestKey) return
+    focusSelectedNode(flowRef.current)
+  }, [focusRequestKey, selectedNodeAvailable])
+
   return (
     <div
       className="graph-run-canvas ds-no-drag relative h-full min-h-[320px] w-full"
@@ -78,6 +100,7 @@ export function GraphRunCanvas({
         onNodesChange={onNodesChange}
         onInit={(instance) => {
           flowRef.current = instance
+          if (focusRequestKey) focusSelectedNode(instance)
         }}
         fitView
         fitViewOptions={{ minZoom: 0.6, maxZoom: 1, padding: 0.22 }}

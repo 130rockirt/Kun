@@ -226,6 +226,10 @@ import {
 } from '../services/model-connection-registry.js'
 import { ModelConnectionOAuthService } from '../services/model-connection-oauth.js'
 import { ClaudeConnectionService } from '../services/claude-connection-service.js'
+import {
+  OfficialProviderAuthService,
+  resolveAntigravityCliCommand
+} from '../services/official-provider-cli.js'
 import type { LocalModelGatewayConfig, ModelRoutePoolConfig } from '../contracts/model-route-pool.js'
 import type { GeminiCodeAssistCredential } from '../contracts/gemini-code-assist.js'
 
@@ -751,6 +755,10 @@ export async function createKunServeRuntime(
     registry: modelConnections,
     claude: claudeConnections
   })
+  const officialProviderAuth = new OfficialProviderAuthService({
+    dataDir: activeOptions.dataDir,
+    registry: modelConnections
+  })
   const stopExtensionModelListener = extensionModelProviders.onDidChange(replaceRoutedModelClients)
   const hasMcpOAuth = Object.values(activeOptions.capabilities?.mcp?.servers ?? {}).some((server) =>
     server.oauth?.enabled !== false && Boolean(server.oauth) && server.transport !== 'stdio'
@@ -1070,7 +1078,9 @@ export async function createKunServeRuntime(
           defaultIsAntigravity,
           defaultModel: activeOptions.model,
           systemPrompt: child.prefix.systemPrompt,
-          binaryPath: process.env.KUN_ANTIGRAVITY_BINARY,
+          binaryPath:
+            process.env.KUN_ANTIGRAVITY_BINARY ??
+            resolveAntigravityCliCommand(activeOptions.dataDir)?.command,
           threadStore: child.threadStore,
           sessionStore: child.sessionStore,
           turns: child.turns,
@@ -1337,7 +1347,9 @@ export async function createKunServeRuntime(
       defaultIsAntigravity,
       defaultModel: input.options.model,
       systemPrompt: prefix.systemPrompt,
-      binaryPath: process.env.KUN_ANTIGRAVITY_BINARY,
+      binaryPath:
+        process.env.KUN_ANTIGRAVITY_BINARY ??
+        resolveAntigravityCliCommand(activeOptions.dataDir)?.command,
       threadStore,
       sessionStore,
       turns: turnService,
@@ -1491,6 +1503,7 @@ export async function createKunServeRuntime(
 	    runAgentTurn,
 	    defaults: () => ({
 	      model: activeOptions.model,
+	      workerModel: graphConfig().workerModel,
 	      approvalPolicy: activeOptions.approvalPolicy,
 	      sandboxMode: activeOptions.sandboxMode,
 	      allowedMcpServers: Object.entries(activeOptions.capabilities?.mcp.servers ?? {})
@@ -2379,6 +2392,7 @@ export async function createKunServeRuntime(
 	    },
 	    modelConnections,
 	    modelConnectionOAuth,
+	    officialProviderAuth,
 	    providerQuotaService,
 	    get defaultModel() {
 	      return activeOptions.model

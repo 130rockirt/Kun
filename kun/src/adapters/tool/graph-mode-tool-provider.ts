@@ -3,7 +3,6 @@ import type { ArtifactStore } from '../../artifacts/artifact-store.js'
 import {
   GRAPH_CONTRACT_VERSION,
   GraphPatchV1Schema,
-  GraphReviewResultV1Schema,
   GraphWorkerResultV1Schema,
   type GraphArtifactReferenceV1,
   type GraphNodeAttemptV1,
@@ -27,12 +26,15 @@ import {
 } from '../../graph/graph-tool-boundary.js'
 import { buildGraphCreateRunTool } from './graph-create-run-tool.js'
 import { buildGraphLeadSupervisionTool } from './graph-lead-supervision-tool.js'
+import { buildGraphLeadReviewTool } from './graph-lead-review-tool.js'
+import { buildGraphReportToParentTool } from './graph-report-to-parent-tool.js'
 import type { SessionStore } from '../../ports/session-store.js'
 import type { ThreadStore } from '../../ports/thread-store.js'
 
 export {
   GRAPH_CREATE_RUN_INPUT_JSON_SCHEMA,
   GraphCreateRunInputSchema,
+  GraphCreateRunLegacyInputSchema,
   GraphCreateRunPlanInputSchema
 } from './graph-create-run-tool.js'
 
@@ -70,7 +72,7 @@ export function buildGraphModeLocalTools(options: {
   enabled: () => boolean
   signalSupervision?: (input: {
     runId: string
-    reason: 'help' | 'user_steering' | 'submitted'
+    reason: 'help' | 'user_steering' | 'submitted' | 'worker_report'
     nodeIds: string[]
     digest: string
   }) => Promise<void> | void
@@ -88,8 +90,10 @@ export function buildGraphModeLocalTools(options: {
     options.enabled() &&
     !options.workerSessions.has(context.threadId) &&
     context.orchestration === 'graph'
+  const reportToParentOnly = (context: ToolHostContext) =>
+    options.enabled() && options.workerSessions.has(context.threadId)
   // Legacy handlers stay readable for persisted history, but new Graph
-  // children are ordinary executors and never receive Graph protocol tools.
+  // children receive only the minimal host-owned reporting capability.
   const graphWorkerOnly = (_context: ToolHostContext) => false
 
   return [
@@ -103,6 +107,7 @@ export function buildGraphModeLocalTools(options: {
     }),
     buildGraphLeadSupervisionTool({
       control: options.control,
+      mailbox: options.mailbox,
       store: options.store,
       registry: options.registry,
       threads: options.threads,
@@ -229,47 +234,21 @@ export function buildGraphModeLocalTools(options: {
         }
       }
     }),
-    LocalToolHost.defineTool({
-      name: GRAPH_LEAD_TOOL_NAMES[3],
-      description:
-        'Record a Lead or human review decision for a submitted Graph node. ' +
-        'Use pass, fail, revise, or needs_human with bounded evidence.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          runId: { type: 'string' },
-          review: { type: 'object' },
-          expectedSeq: { type: 'number' },
-          expectedRevision: { type: 'number' }
-        },
-        required: ['runId', 'review', 'expectedSeq', 'expectedRevision'],
-        additionalProperties: false
-      },
-      policy: 'auto',
-      toolKind: 'tool_call',
-      sideEffect: 'unknown',
+    buildGraphLeadReviewTool({
+      control: options.control,
+      store: options.store,
+      registry: options.registry,
       shouldAdvertise: graphLeadOnly,
-      execute: async (args, context) => {
-        try {
-          const runId = stringArg(args.runId)
-          await authorizedLead(options.store, options.registry, runId, context)
-          const review = GraphReviewResultV1Schema.parse(args.review)
-          return {
-            output: await options.control.recordReview(runId, review, {
-              commandId: nextId('graph_command'),
-              idempotencyKey: `graph-review:${review.reviewId}`,
-              ...(numberArg(args.expectedSeq) !== undefined
-                ? { expectedSeq: numberArg(args.expectedSeq) }
-                : {}),
-              ...(numberArg(args.expectedRevision) !== undefined
-                ? { expectedRevision: numberArg(args.expectedRevision) }
-                : {})
-            }, 'lead')
-          }
-        } catch (error) {
-          return { output: { error: errorMessage(error) }, isError: true }
-        }
-      }
+      nowIso,
+      nextId
+    }),
+    buildGraphReportToParentTool({
+      store: options.store,
+      mailbox: options.mailbox,
+      workerSessions: options.workerSessions,
+      shouldAdvertise: reportToParentOnly,
+      signalSupervision: options.signalSupervision,
+      nextId
     }),
     LocalToolHost.defineTool({
       name: GRAPH_WORKER_TOOL_NAMES[0],

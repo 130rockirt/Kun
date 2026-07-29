@@ -68,6 +68,7 @@ describe('GraphRunCanvas', () => {
         nodes: original,
         edges: [],
         selectedNodeId: null,
+        focusRequestKey: null,
         onSelectNode,
         onInspectNode,
         onOpenInspector: vi.fn()
@@ -124,6 +125,7 @@ describe('GraphRunCanvas', () => {
         }],
         edges: [],
         selectedNodeId: 'audit',
+        focusRequestKey: 'thread_1:run_1:audit',
         onSelectNode,
         onInspectNode,
         onOpenInspector: vi.fn()
@@ -137,5 +139,51 @@ describe('GraphRunCanvas', () => {
       selected: true,
       data: { label: 'Audit v2' }
     })
+  })
+
+  it('centers the selected node again when returning from a child thread', async () => {
+    const fitView = vi.fn().mockResolvedValue(true)
+    const node = {
+      id: 'implementation',
+      position: { x: 640, y: 320 },
+      data: { label: 'Implementation' }
+    }
+    const props = {
+      runId: 'run_1',
+      nodes: [node],
+      edges: [],
+      selectedNodeId: 'implementation',
+      onSelectNode: vi.fn(),
+      onInspectNode: vi.fn(),
+      onOpenInspector: vi.fn()
+    }
+    let renderer: ReactTestRenderer
+    await act(async () => {
+      renderer = create(createElement(GraphRunCanvas, {
+        ...props,
+        focusRequestKey: 'child_thread:run_1:implementation'
+      }))
+    })
+    const flow = renderer!.root.find((instance) =>
+      instance.props['aria-label'] === 'Directed Graph run' &&
+      typeof instance.props.onInit === 'function')
+
+    act(() => flow.props.onInit({ fitView }))
+    expect(fitView).toHaveBeenLastCalledWith(expect.objectContaining({
+      nodes: [{ id: 'implementation' }],
+      minZoom: 0.6,
+      maxZoom: 1
+    }))
+
+    await act(async () => {
+      renderer!.update(createElement(GraphRunCanvas, {
+        ...props,
+        focusRequestKey: 'parent_thread:run_1:implementation'
+      }))
+    })
+    expect(fitView).toHaveBeenCalledTimes(2)
+    expect(fitView).toHaveBeenLastCalledWith(expect.objectContaining({
+      nodes: [{ id: 'implementation' }]
+    }))
   })
 })

@@ -130,6 +130,13 @@ export const ModelConnectionOAuthStatusSchema = z.object({
   snapshot: ModelConnectionSnapshotSchema.optional()
 }).strict()
 
+export const ModelConnectionCliAuthRequestSchema = z.object({
+  expectedRevision: z.number().int().nonnegative(),
+  provider: z.enum(['gemini-cli', 'antigravity']),
+  select: z.boolean().default(true),
+  model: z.string().min(1).max(512).optional()
+}).strict()
+
 export const ClaudeSdkInstallStatusSchema = z.object({
   installed: z.boolean(),
   path: z.string().optional(),
@@ -145,4 +152,5 @@ export type ModelConnectionConnectRequest = z.infer<typeof ModelConnectionConnec
 export type ModelConnectionSelectRequest = z.infer<typeof ModelConnectionSelectRequestSchema>
 export type ModelConnectionOAuthStartRequest = z.infer<typeof ModelConnectionOAuthStartRequestSchema>
 export type ModelConnectionOAuthStatus = z.infer<typeof ModelConnectionOAuthStatusSchema>
+export type ModelConnectionCliAuthRequest = z.infer<typeof ModelConnectionCliAuthRequestSchema>
 export type ClaudeSdkInstallStatus = z.infer<typeof ClaudeSdkInstallStatusSchema>

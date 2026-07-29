@@ -14,7 +14,10 @@ import type {
   DelegationRuntime
 } from '../delegation/delegation-runtime.js'
 import type { GraphSupervisionPort } from './graph-scheduler.js'
-import type { GraphRunStore } from './graph-run-store.js'
+import {
+  GraphRunConflictError,
+  type GraphRunStore
+} from './graph-run-store.js'
 import { runGraphBackgroundTask } from './graph-background-task.js'
 import {
   graphLeadLifecycleSupervisionEnabled,
@@ -88,24 +91,31 @@ export class GraphSupervisor implements GraphSupervisionPort {
   ): Promise<void> {
     if (this.stopped || !graphLeadLifecycleSupervisionEnabled(this.options.config())) return
     const appended = await this.withRunQueue(input.runId, async () => {
-      const run = await this.options.store.get(input.runId)
-      if (!run) return null
-      const episodeKey = supervisionEpisodeKey(run, input)
-      return this.options.store.append(run.id, {
-        expectedSeq: run.lastEventSeq,
-        graphRevision: run.currentRevision,
-        commandId: this.nextId('graph_supervision'),
-        idempotencyKey: `supervision:${run.id}:${episodeKey}`,
-        event: {
-          type: 'supervision_requested',
-          payload: {
-            signalId: this.nextId('graph_signal'),
-            reason: input.reason,
-            nodeIds: input.nodeIds,
-            digest: input.digest.slice(0, 4_096)
-          }
+      for (let retry = 0; retry < 5; retry += 1) {
+        const run = await this.options.store.get(input.runId)
+        if (!run) return null
+        const episodeKey = supervisionEpisodeKey(run, input)
+        try {
+          return await this.options.store.append(run.id, {
+            expectedSeq: run.lastEventSeq,
+            graphRevision: run.currentRevision,
+            commandId: this.nextId('graph_supervision'),
+            idempotencyKey: `supervision:${run.id}:${episodeKey}`,
+            event: {
+              type: 'supervision_requested',
+              payload: {
+                signalId: this.nextId('graph_signal'),
+                reason: input.reason,
+                nodeIds: input.nodeIds,
+                digest: input.digest.slice(0, 4_096)
+              }
+            }
+          })
+        } catch (error) {
+          if (!(error instanceof GraphRunConflictError) || retry === 4) throw error
         }
-      })
+      }
+      return null
     })
     if (!appended || appended.duplicate) return
     if (!graphLeadLifecycleSupervisionEnabled(this.options.config())) return

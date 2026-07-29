@@ -1,5 +1,4 @@
 import {
-  CombinedAutocompleteProvider,
   Editor,
   Input,
   Markdown,
@@ -77,12 +76,20 @@ import {
 } from './visual-system.js'
 import { InlineStreamTerminal, ScrollbackPreservingTerminal } from './pi-terminal.js'
 import { ProviderQuotaDialog } from './provider-quota.js'
+import { UsageDialog } from './usage-report.js'
+import {
+  installAntigravityCli,
+  resolveAntigravityCliCommand,
+  resolveGeminiCliCommand,
+  type OfficialProviderCliId
+} from '../services/official-provider-cli.js'
 import {
   copyWithSystemClipboard,
   editTextInExternalEditor,
   lastAssistantText,
   osc52ClipboardSequence,
   renderThreadMarkdown,
+  runInteractiveProviderCli,
   writeThreadExport
 } from './operations.js'
 import {
@@ -121,6 +128,7 @@ import {
   readClipboardImage,
   type ClipboardImage
 } from './clipboard-image.js'
+import { WorkspaceFileAutocompleteProvider } from './file-mentions.js'
 
 const bold = visual.strong
 const dim = visual.muted
@@ -249,6 +257,7 @@ export class PiTuiApplication {
   private connectRoute?: ConnectDialog
   private modelRoute?: ModelDialog
   private quotaRoute?: ProviderQuotaDialog
+  private usageRoute?: UsageDialog
   private subagentRoute?: SubagentDialog
   private subagentPopup?: { component: SubagentDialog; handle: OverlayHandle }
   private subagentPopupReturn?: () => void
@@ -286,7 +295,10 @@ export class PiTuiApplication {
     input: TerminalInput,
     output: TerminalOutput,
     private readonly keymap: TuiKeymap = parseTuiKeymapConfig({}).keymap,
-    private readonly clipboardImageReader: () => Promise<ClipboardImage | null> = readClipboardImage
+    private readonly clipboardImageReader: () => Promise<ClipboardImage | null> = readClipboardImage,
+    private readonly officialProviderAuthenticator?: (
+      provider: OfficialProviderCliId
+    ) => Promise<void>
   ) {
     const baseTerminal = input === processStdin && output === processStdout
       ? new ProcessTerminal()
@@ -296,6 +308,7 @@ export class PiTuiApplication {
     this.root = new ChatRoot(this.tui, controller, this.keymap, {
       onConnect: () => { void this.showConnect() },
       onModel: () => { void this.showModels() },
+      onUsage: () => this.showUsage(),
       onQuota: () => this.showQuota(),
       onVariants: () => this.showVariants(),
       onGoal: () => this.showGoal(),
@@ -1207,8 +1220,55 @@ export class PiTuiApplication {
     }
   }
 
+  private async authenticateOfficialProvider(provider: OfficialProviderCliId): Promise<void> {
+    if (this.officialProviderAuthenticator) {
+      await this.officialProviderAuthenticator(provider)
+      return
+    }
+    let command = provider === 'gemini-cli'
+      ? resolveGeminiCliCommand()
+      : resolveAntigravityCliCommand(this.controller.options.dataDir)
+    if (!command && provider === 'antigravity') {
+      this.controller.notify('Installing the official Antigravity CLI…')
+      command = await installAntigravityCli({
+        dataDir: this.controller.options.dataDir
+      })
+    }
+    if (!command) {
+      throw new Error(
+        'The official Gemini CLI is unavailable. Install @google/gemini-cli or use a current standalone Kun TUI build.'
+      )
+    }
+    this.writeMouseTracking(false)
+    this.tui.stop()
+    this.terminalActive = false
+    this.terminal.write([
+      '',
+      `Kun opened ${command.displayName} for provider-owned authentication.`,
+      provider === 'gemini-cli'
+        ? 'Use /auth to sign in again if needed, then use /quit to return to Kun.'
+        : 'Complete Google sign-in, then use /quit to return to Kun.',
+      ''
+    ].join('\r\n'))
+    try {
+      await runInteractiveProviderCli(command, {
+        cwd: this.controller.state.projection?.thread.workspace ?? this.controller.options.workspace
+      })
+    } finally {
+      if (!this.stopped) {
+        this.tui.start()
+        this.terminalActive = true
+        this.writeMouseTracking(this.mouseTrackingWanted)
+        this.terminal.setTitle('Kun')
+        this.tui.setFocus(this.connectRoute ?? this.root)
+        this.tui.requestRender(true)
+      }
+    }
+  }
+
   private async showConnect(): Promise<void> {
     this.closeModelRoute()
+    this.closeUsageRoute()
     this.closeQuotaRoute()
     this.closeSubagentRoute()
     if (this.connectRoute) return
@@ -1218,6 +1278,7 @@ export class PiTuiApplication {
         this.tui,
         this.controller,
         snapshot,
+        (provider) => this.authenticateOfficialProvider(provider),
         () => this.closeConnectRoute()
       )
       this.connectRoute = component
@@ -1231,6 +1292,7 @@ export class PiTuiApplication {
 
   private async showModels(): Promise<void> {
     this.closeConnectRoute()
+    this.closeUsageRoute()
     this.closeQuotaRoute()
     this.closeSubagentRoute()
     if (this.modelRoute) return
@@ -1268,6 +1330,7 @@ export class PiTuiApplication {
   private showQuota(): void {
     this.closeConnectRoute()
     this.closeModelRoute()
+    this.closeUsageRoute()
     this.closeSubagentRoute()
     if (this.quotaRoute) return
     const component = new ProviderQuotaDialog(
@@ -1292,9 +1355,46 @@ export class PiTuiApplication {
     this.tui.requestRender()
   }
 
+  private showUsage(): void {
+    this.closeConnectRoute()
+    this.closeModelRoute()
+    this.closeQuotaRoute()
+    this.closeSubagentRoute()
+    if (this.usageRoute) return
+    const component = new UsageDialog(
+      this.tui,
+      async () => ({
+        usage: await this.controller.client.usage(),
+        ...(this.controller.state.projection?.thread.id
+          ? { activeThreadId: this.controller.state.projection.thread.id }
+          : {}),
+        threadTitles: Object.fromEntries(
+          this.controller.state.threads.map((thread) => [thread.id, thread.title || thread.id])
+        )
+      }),
+      () => this.closeUsageRoute(),
+      () => this.terminal.rows
+    )
+    this.usageRoute = component
+    this.root.showPrimaryRoute('usage', component)
+    this.tui.setFocus(component)
+    this.tui.requestRender()
+    void component.refresh()
+  }
+
+  private closeUsageRoute(): void {
+    if (!this.usageRoute) return
+    const route = this.usageRoute
+    this.usageRoute = undefined
+    this.root.hidePrimaryRoute(route)
+    this.tui.setFocus(this.root)
+    this.tui.requestRender()
+  }
+
   private showSubagents(): void {
     this.closeConnectRoute()
     this.closeModelRoute()
+    this.closeUsageRoute()
     this.closeQuotaRoute()
     if (this.subagentRoute) return
     const projection = this.controller.state.projection
@@ -1452,6 +1552,7 @@ export class PiTuiApplication {
     this.goalOverlay = undefined
     this.closeConnectRoute()
     this.closeModelRoute()
+    this.closeUsageRoute()
     this.closeQuotaRoute()
     this.closeSubagentRoute()
   }
@@ -1498,6 +1599,7 @@ class ChatRoot implements Component, Focusable {
     private readonly actions: {
       onConnect: () => void
       onModel: () => void
+      onUsage: () => void
       onQuota: () => void
       onVariants: () => void
       onGoal: () => void
@@ -1610,6 +1712,12 @@ class ChatRoot implements Component, Focusable {
       this.controller.notify('Type guidance before pressing Ctrl+S.', 'error')
       return
     }
+    if (!await this.controller.prepareFileMentions(text)) {
+      // A running turn cannot accept attachment IDs. Keep the guidance draft
+      // intact instead of silently treating @file as ordinary text.
+      this.tui.requestRender()
+      return
+    }
     if (this.state.pendingAttachments.length) {
       this.controller.notify(
         'Attachments cannot be added to queued guidance. They remain attached for the next new turn.',
@@ -1686,8 +1794,9 @@ class ChatRoot implements Component, Focusable {
       description: skill.description || `Invoke ${skill.name}`,
       argumentHint: '[prompt]'
     }))
-    this.editor.setAutocompleteProvider(new CombinedAutocompleteProvider(
-      [...TUI_SLASH_COMMANDS, ...skillCommands], workspace, null
+    this.editor.setAutocompleteProvider(new WorkspaceFileAutocompleteProvider(
+      [...TUI_SLASH_COMMANDS, ...skillCommands],
+      workspace
     ))
   }
 
@@ -1773,6 +1882,13 @@ class ChatRoot implements Component, Focusable {
     if (!text) return
     const command = parseTuiCommand(text)
     if (!command) {
+      if (!await this.controller.prepareFileMentions(text)) {
+        // pi-tui clears before onSubmit. File mention preparation is atomic,
+        // and the exact draft is restored so the user can repair any path.
+        this.editor.setText(raw)
+        this.tui.requestRender()
+        return
+      }
       if (!this.controller.validatePendingAttachmentsForCurrentModel()) {
         // pi-tui clears the editor before invoking onSubmit. Restore the exact
         // expanded prompt so a capability rejection never discards the
@@ -1788,6 +1904,18 @@ class ChatRoot implements Component, Focusable {
       this.editor.setText('')
       this.tui.requestRender()
       await this.controller.submit(text)
+      return
+    }
+    if (
+      command.kind === 'skill' &&
+      command.prompt &&
+      (
+        !await this.controller.prepareFileMentions(command.prompt) ||
+        !this.controller.validatePendingAttachmentsForCurrentModel()
+      )
+    ) {
+      this.editor.setText(raw)
+      this.tui.requestRender()
       return
     }
     await this.execute(command)
@@ -1849,6 +1977,7 @@ class ChatRoot implements Component, Focusable {
       case 'fork': await this.controller.fork(command.title); break
       case 'compact': await this.controller.compact(); break
       case 'connect': this.actions.onConnect(); break
+      case 'usage-report': this.actions.onUsage(); break
       case 'quota': this.actions.onQuota(); break
       case 'model': this.actions.onModel(); break
       case 'variants': this.actions.onVariants(); break
@@ -1948,7 +2077,7 @@ class ChatRoot implements Component, Focusable {
       case 'capabilities': this.controller.showCapabilities(); break
       case 'queue': await this.controller.showQueue(command.action); break
       case 'quit': this.controller.requestQuit(); break
-      case 'usage': this.controller.notify(`Usage: ${command.usage}`, 'error'); break
+      case 'command-usage': this.controller.notify(`Usage: ${command.usage}`, 'error'); break
       case 'unknown': this.controller.notify(`Unknown command: /${command.name}`, 'error'); break
     }
   }
@@ -2619,7 +2748,7 @@ class ItemComponent implements Component {
           ...plainLines(friendlyRuntimeError(item.message), contentWidth, 3).slice(0, 8).map((line) => color(`   ${line}`)),
           ...(isModelConnectionError(item)
             ? [
-                cyan('   Run /connect to refresh this provider.'),
+                cyan('   Run /connect, select this provider, then choose Sign in again / reconnect.'),
                 dim(this.legacyGui
                   ? '   Kun will update the protected store and active GUI runtime.'
                   : '   Or use /model to choose another model.')
@@ -5007,14 +5136,37 @@ const CONNECT_ENDPOINT_FORMATS = ['chat_completions', 'responses', 'messages', '
 
 type ConnectField = 'id' | 'name' | 'baseUrl' | 'endpointFormat' | 'credential' | 'models'
 type ManagementAction = {
-  kind: 'rename' | 'credential' | 'probe' | 'disconnect' | 'back'
+  kind: 'rename' | 'reconnect' | 'credential' | 'probe' | 'disconnect' | 'back'
   label: string
 }
 
-function managementActions(profile: ModelConnectionProfile): ManagementAction[] {
+export function authenticationStrategy(
+  authFlow: ProviderCatalogAuthFlow
+): 'secret' | 'runtime' | 'official-cli' {
+  switch (authFlow) {
+    case 'api-key':
+    case 'cursor-api-key':
+      return 'secret'
+    case 'chatgpt-oauth':
+    case 'grok-oauth':
+    case 'claude-subscription':
+      return 'runtime'
+    case 'gemini-subscription':
+    case 'gemini-cli-subscription':
+      return 'official-cli'
+  }
+}
+
+function managementActions(
+  profile: ModelConnectionProfile,
+  preset: ConnectionPreset | undefined
+): ManagementAction[] {
+  const strategy = preset ? authenticationStrategy(preset.authFlow) : undefined
   return [
     { kind: 'rename', label: 'Rename connection' },
-    ...(profile.kind === 'http' || profile.kind === 'cursor-sdk'
+    ...(strategy === 'runtime' || strategy === 'official-cli'
+      ? [{ kind: 'reconnect', label: 'Sign in again / reconnect' }] satisfies ManagementAction[]
+      : profile.kind === 'http' || profile.kind === 'cursor-sdk'
       ? [{ kind: 'credential', label: 'Replace credential' }] satisfies ManagementAction[]
       : []),
     ...(profile.kind === 'http'
@@ -5050,12 +5202,16 @@ class ConnectDialog implements Component, Focusable {
   private oauthCode = ''
   private bracketedPaste = false
   private claudeSdk?: ClaudeSdkInstallStatus
+  private officialCli?: OfficialProviderCliId
   private closed = false
 
   constructor(
     private readonly tui: TUI,
     private readonly controller: TuiController,
     private snapshot: ModelConnectionSnapshot,
+    private readonly authenticateOfficialProvider: (
+      provider: OfficialProviderCliId
+    ) => Promise<void>,
     private readonly close: () => void
   ) {}
 
@@ -5155,6 +5311,25 @@ class ConnectDialog implements Component, Focusable {
           this.claudeSdk.message ? ` ${red(sanitizeTerminalText(this.claudeSdk.message))}` : ''
         ].filter((line): line is string => Boolean(line)),
         footer: [{ key: 'Esc', label: 'close; download continues' }],
+        width
+      })
+    }
+    if (this.officialCli) {
+      const displayName = this.officialCli === 'gemini-cli'
+        ? 'Gemini CLI'
+        : 'Antigravity CLI'
+      return pageFrame({
+        path: ['KUN', 'Connect', this.preset.name],
+        right: 'Provider login',
+        description: 'Authentication stays inside the official provider CLI; Kun verifies it after you return.',
+        body: [
+          ` ${statusGlyph('running', Math.floor(Date.now() / 200))} ${bold(`Opening ${displayName}`)}`,
+          '',
+          ` ${dim('Complete Google sign-in in the provider CLI.')}`,
+          ` ${dim('Then quit the provider CLI to return to Kun and finish verification.')}`,
+          this.error ? ` ${red(this.error)}` : ''
+        ].filter((line): line is string => Boolean(line)),
+        footer: [{ key: 'Provider CLI', label: 'finish or cancel there' }],
         width
       })
     }
@@ -5411,15 +5586,7 @@ class ConnectDialog implements Component, Focusable {
         const profile = this.snapshot.providers[this.connectionIndex - 1]
         const preset = profile ? connectionPresetForProfile(profile) : undefined
         if (profile?.configured) this.management = { profile, mode: 'menu', index: 0 }
-        else if (
-          preset &&
-          (
-            preset.authFlow === 'chatgpt-oauth' ||
-            preset.authFlow === 'grok-oauth' ||
-            preset.authFlow === 'claude-subscription' ||
-            preset.authFlow === 'gemini-subscription'
-          )
-        ) {
+        else if (preset && authenticationStrategy(preset.authFlow) !== 'secret') {
           this.choosePreset(preset)
         } else if (profile?.kind === 'http') {
           this.management = {
@@ -5505,7 +5672,7 @@ class ConnectDialog implements Component, Focusable {
     const management = this.management!
     const profile = management.profile
     if (management.mode === 'menu') {
-      const actions = managementActions(profile)
+      const actions = managementActions(profile, connectionPresetForProfile(profile))
       return pageFrame({
         path: ['KUN', 'Connect', profile.name],
         right: profile.configured ? 'Connected' : 'Needs configuration',
@@ -5595,7 +5762,10 @@ class ConnectDialog implements Component, Focusable {
       return
     }
     if (management.mode === 'menu') {
-      const actions = managementActions(management.profile)
+      const actions = managementActions(
+        management.profile,
+        connectionPresetForProfile(management.profile)
+      )
       if (matchesKey(data, 'up') || matchesKey(data, 'ctrl+p')) management.index = Math.max(0, management.index - 1)
       else if (matchesKey(data, 'down') || matchesKey(data, 'ctrl+n')) management.index = Math.min(actions.length - 1, management.index + 1)
       else if (matchesKey(data, 'home') || matchesKey(data, 'pageUp')) management.index = 0
@@ -5635,6 +5805,14 @@ class ConnectDialog implements Component, Focusable {
     } else if (action === 'credential') {
       management.mode = 'credential'
       this.value = ''
+    } else if (action === 'reconnect') {
+      const preset = connectionPresetForProfile(management.profile)
+      if (!preset) {
+        this.error = 'This connection has no current provider authentication preset.'
+      } else {
+        this.management = undefined
+        this.choosePreset(preset)
+      }
     } else if (action === 'disconnect') {
       management.mode = 'confirm-delete'
     } else {
@@ -5728,12 +5906,14 @@ class ConnectDialog implements Component, Focusable {
     this.error = ''
     this.notice = ''
     this.allowUnprobedSave = false
-    if (preset.authFlow === 'claude-subscription') {
-      void this.beginClaude(preset)
+    const strategy = authenticationStrategy(preset.authFlow)
+    if (strategy === 'runtime') {
+      if (preset.authFlow === 'claude-subscription') void this.beginClaude(preset)
+      else void this.beginOAuth(preset)
       return
     }
-    if (preset.authFlow === 'chatgpt-oauth' || preset.authFlow === 'grok-oauth') {
-      void this.beginOAuth(preset)
+    if (strategy === 'official-cli') {
+      void this.beginOfficialCli(preset)
       return
     }
     const customId = preset.id === 'custom' ? this.suggestCustomProviderId() : undefined
@@ -5755,6 +5935,40 @@ class ConnectDialog implements Component, Focusable {
     }
     this.fieldIndex = 0
     this.value = this.values[this.fields[0]!] ?? ''
+  }
+
+  private async beginOfficialCli(preset: ConnectionPreset): Promise<void> {
+    this.saving = true
+    this.error = ''
+    this.notice = preset.authFlow === 'gemini-cli-subscription'
+      ? 'Opening the official Gemini CLI for Google sign-in…'
+      : 'Opening the official Antigravity CLI for Google sign-in…'
+    this.officialCli = preset.authFlow === 'gemini-cli-subscription'
+      ? 'gemini-cli'
+      : 'antigravity'
+    this.tui.requestRender()
+    try {
+      const provider = this.officialCli
+      await this.authenticateOfficialProvider(provider)
+      const snapshot = await this.controller.client.completeModelCliAuth({
+        expectedRevision: this.snapshot.revision,
+        provider,
+        model: preset.models[0],
+        select: true
+      })
+      this.snapshot = snapshot
+      this.controller.applyModelSelection(snapshot)
+      this.clearSensitiveDraft()
+      this.closed = true
+      this.close()
+    } catch (error) {
+      this.error = await this.mutationError(error)
+      this.notice = ''
+      this.officialCli = undefined
+    } finally {
+      this.saving = false
+      this.tui.requestRender()
+    }
   }
 
   private async beginClaude(preset: ConnectionPreset): Promise<void> {
@@ -5971,6 +6185,7 @@ class ConnectDialog implements Component, Focusable {
     this.oauth = undefined
     this.oauthCode = ''
     this.claudeSdk = undefined
+    this.officialCli = undefined
     this.fields = []
     this.fieldIndex = 0
     this.error = ''
@@ -6330,14 +6545,26 @@ function isModelProbeFailure(error: unknown): boolean {
     message.includes('/models')
 }
 
-function openBrowser(url: string): void {
-  const launch = process.platform === 'darwin'
+export function openBrowser(
+  url: string,
+  spawnFn: typeof spawn = spawn,
+  platform: NodeJS.Platform = process.platform
+): void {
+  const launch = platform === 'darwin'
     ? { command: 'open', args: [url] }
-    : process.platform === 'win32'
+    : platform === 'win32'
       ? { command: 'cmd.exe', args: ['/d', '/s', '/c', 'start', '', url] }
       : { command: 'xdg-open', args: [url] }
   try {
-    const child = spawn(launch.command, launch.args, { detached: true, stdio: 'ignore', windowsHide: true })
+    const child = spawnFn(launch.command, launch.args, {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true
+    })
+    // spawn() reports a missing desktop opener asynchronously. Consume that
+    // event so headless/SSH TUI sessions keep running with the visible,
+    // copyable authorization URL as their fallback.
+    child.once('error', () => undefined)
     child.unref()
   } catch {
     // The URL remains visible and copyable when no desktop opener exists.

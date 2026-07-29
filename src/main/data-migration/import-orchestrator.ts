@@ -33,7 +33,11 @@ import {
   validateKunpackLinkMetadata
 } from './archive-security'
 import { portableSettingsForMigration } from './export-inventory'
-import { buildDataMigrationImportPlan, probeDestinationFileSystem } from './import-planner'
+import {
+  buildDataMigrationImportPlan,
+  probeDestinationFileSystem,
+  revalidateDataMigrationImportPlan
+} from './import-planner'
 import {
   DataMigrationImportTransactionCoordinator,
   type ImportApplicationMutationStep,
@@ -61,6 +65,7 @@ export type DataMigrationPackageInspection = {
   entries: DataMigrationPackageEntry[]
   catalogs: KunpackCatalogs
   encrypted: boolean
+  payloadSha256: string
   expandedBytes: number
   compressedBytes: number
   warnings: string[]
@@ -131,6 +136,7 @@ export class DataMigrationImportOrchestrator {
       validateKunpackArchiveDirectory(directory, verified.entries, DEFAULT_KUNPACK_INSPECTION_BUDGET)
       validateKunpackLinkMetadata(verified.entries)
       const catalogs = await readCatalogs(zipPath, verified.entries)
+      validateInspectionCatalogs(verified.manifest, verified.entries, catalogs)
       assertNoImportedTrustOrSecrets({
         portableSettings: catalogs.portableSettings,
         rendererState: catalogs.rendererState,
@@ -143,6 +149,7 @@ export class DataMigrationImportOrchestrator {
         entries: verified.entries,
         catalogs,
         encrypted: verified.header.encryption.mode === 'passphrase',
+        payloadSha256: verified.header.plainPayloadSha256,
         expandedBytes: verified.manifest.expandedBytes,
         compressedBytes: directory.reduce((total, entry) => total + entry.compressedBytes, 0),
         warnings: verified.header.encryption.mode === 'none'
@@ -181,10 +188,23 @@ export class DataMigrationImportOrchestrator {
     input.signal?.throwIfAborted()
     if (input.plan.operationId !== input.operationId) throw new Error('migration plan operation id mismatch')
     if (input.plan.packageId !== input.inspection.manifest.packageId) throw new Error('migration plan package id mismatch')
-    if (input.plan.fatalIssueCount > 0 || input.plan.mappings.some((mapping) => !mapping.compatible)) {
+    const plan = await revalidateDataMigrationImportPlan({
+      plan: input.plan,
+      packageId: input.inspection.manifest.packageId,
+      sourcePlatform: input.inspection.manifest.sourcePlatform,
+      encrypted: input.inspection.encrypted,
+      workspaces: input.inspection.catalogs.workspaces,
+      entries: input.inspection.entries
+    })
+    if (
+      plan.fatalIssueCount > 0 ||
+      plan.conflicts.some((conflict) => !conflict.resolution) ||
+      plan.mappings.some((mapping) => mapping.strategy !== 'skip' && !mapping.compatible)
+    ) {
       throw new Error('migration plan contains unresolved fatal or incompatible targets')
     }
-    await this.transactions.begin(input.plan)
+    const authoritativeInput: DataMigrationImportRequest = { ...input, plan }
+    await this.transactions.begin(plan)
     const operationRoot = this.journals.operationDirectory(input.operationId)
     const zipPath = join(operationRoot, 'payload.zip')
     const stagedWorkspaces: StagedWorkspaceCommit[] = []
@@ -198,9 +218,14 @@ export class DataMigrationImportOrchestrator {
         cleanupMaterialized: false,
         ...(input.passphrase ? { passphrase: input.passphrase } : {})
       })
-      if (verified.manifest.packageId !== input.plan.packageId) throw new Error('migration package changed after inspection')
+      if (
+        verified.manifest.packageId !== plan.packageId ||
+        verified.header.plainPayloadSha256 !== input.inspection.payloadSha256
+      ) {
+        throw new Error('migration package changed after inspection')
+      }
       const workspacePathMap: Record<string, string> = {}
-      for (const mapping of input.plan.mappings) {
+      for (const mapping of plan.mappings) {
         input.signal?.throwIfAborted()
         if (mapping.strategy === 'skip' || !mapping.destinationRoot) continue
         const catalog = input.inspection.catalogs.workspaces.find((workspace) => workspace.workspaceId === mapping.workspaceId)
@@ -221,8 +246,8 @@ export class DataMigrationImportOrchestrator {
           workspaceId: mapping.workspaceId,
           staged,
           strategy: mapping.strategy,
-          resolutions: conflictResolutions(input.plan, mapping.workspaceId),
-          renamedPaths: renamedConflictPaths(input.plan, mapping.workspaceId)
+          resolutions: conflictResolutions(plan, mapping.workspaceId),
+          renamedPaths: renamedConflictPaths(plan, mapping.workspaceId)
         })
         workspacePathMap[catalog.sourcePathDisplay] = mapping.destinationRoot
       }
@@ -259,7 +284,7 @@ export class DataMigrationImportOrchestrator {
       }
 
       const applicationSteps = await this.applicationSteps({
-        input,
+        input: authoritativeInput,
         settings,
         workspacePathMap,
         threadIdMap: runtimePreflight?.threadIdMap ?? {}
@@ -508,6 +533,189 @@ async function readCatalogs(zipPath: string, entries: readonly DataMigrationPack
     ...(has('catalog/renderer-state.json') ? { rendererState: await read('catalog/renderer-state.json') } : {}),
     ...(has('catalog/automations.json') ? { automations: await read('catalog/automations.json') } : {})
   }
+}
+
+export function validateInspectionCatalogs(
+  manifest: DataMigrationManifestV1,
+  entries: readonly DataMigrationPackageEntry[],
+  catalogs: KunpackCatalogs
+): void {
+  for (const [component, version] of Object.entries(manifest.componentVersions)) {
+    if (version !== 1) {
+      throw new Error(`migration component version is unsupported: ${component}@${version}`)
+    }
+  }
+  const categories = new Set(manifest.selection.categories)
+  if (
+    (categories.has('attachments') || categories.has('artifacts') || categories.has('memory')) &&
+    !categories.has('thread-history')
+  ) {
+    throw new Error('migration runtime content categories require thread history')
+  }
+  assertUnique(manifest.selection.categories, 'migration selection category')
+  assertUnique(manifest.selection.workspaceIds, 'migration selected workspace')
+  assertUnique(manifest.selection.threadIds, 'migration selected thread')
+  const workspaceIds = new Set(catalogs.workspaces.map((workspace) => workspace.workspaceId))
+  const threadIds = new Set(catalogs.threads.map((thread) => thread.exportThreadId))
+  if (workspaceIds.size !== catalogs.workspaces.length || catalogs.workspaces.length !== manifest.counts.workspaces) {
+    throw new Error('migration workspace catalog count or identity mismatch')
+  }
+  if (threadIds.size !== catalogs.threads.length || catalogs.threads.length !== manifest.counts.threads) {
+    throw new Error('migration thread catalog count or identity mismatch')
+  }
+  if (
+    workspaceIds.size !== manifest.selection.workspaceIds.length ||
+    manifest.selection.workspaceIds.some((workspaceId) => !workspaceIds.has(workspaceId))
+  ) {
+    throw new Error('migration selected workspace identities do not match the workspace catalog')
+  }
+  if (!categories.has('thread-history') && catalogs.threads.length > 0) {
+    throw new Error('migration package contains unselected thread history')
+  }
+  const selectedThreadIds = new Set(manifest.selection.threadIds)
+  for (const thread of catalogs.threads) {
+    if (!selectedThreadIds.has(thread.exportThreadId)) {
+      throw new Error(`migration thread was not selected for export: ${thread.exportThreadId}`)
+    }
+    if (thread.workspaceId && !workspaceIds.has(thread.workspaceId)) {
+      throw new Error(`migration thread references an unknown workspace: ${thread.exportThreadId}`)
+    }
+  }
+  for (const workspace of catalogs.workspaces) {
+    if (workspace.nestedUnderWorkspaceId && !workspaceIds.has(workspace.nestedUnderWorkspaceId)) {
+      throw new Error(`migration workspace references an unknown parent: ${workspace.workspaceId}`)
+    }
+  }
+  for (const workspace of catalogs.workspaces) {
+    const owned = entries.filter((entry) =>
+      entry.kind === 'workspace-file' && entry.ownerId === workspace.workspaceId
+    )
+    const logicalBytes = owned.reduce((total, entry) => total + entry.logicalBytes, 0)
+    if (owned.length !== workspace.fileCount || logicalBytes !== workspace.logicalBytes) {
+      throw new Error(`migration workspace catalog inventory mismatch: ${workspace.workspaceId}`)
+    }
+  }
+  if (entries.some((entry) => entry.kind === 'workspace-file' && !entry.ownerId)) {
+    throw new Error('migration workspace payload entry has no owner')
+  }
+  if (entries.some((entry) => entry.kind === 'workspace-file' && !workspaceIds.has(entry.ownerId!))) {
+    throw new Error('migration workspace payload references an unknown owner')
+  }
+  for (const entry of entries.filter((item) => item.kind === 'workspace-file')) {
+    const expectedPrefix = `payload/workspaces/${entry.ownerId}/files/`
+    if (!entry.path.startsWith(expectedPrefix)) {
+      throw new Error(`migration workspace payload path does not match its owner: ${entry.path}`)
+    }
+    if (entry.linkTarget) {
+      const target = entries.find((candidate) => candidate.path === entry.linkTarget)
+      if (
+        !target ||
+        target.kind !== 'workspace-file' ||
+        target.ownerId !== entry.ownerId ||
+        !target.path.startsWith(expectedPrefix)
+      ) {
+        throw new Error(`migration workspace link crosses its declared owner: ${entry.path}`)
+      }
+    }
+  }
+  if (!categories.has('workspace-files') && entries.some((entry) => entry.kind === 'workspace-file')) {
+    throw new Error('migration package contains unselected workspace files')
+  }
+  const knownCatalogPaths = new Set([
+    'catalog/workspaces.json',
+    'catalog/threads.json',
+    'catalog/portable-settings.json',
+    'catalog/renderer-state.json',
+    'catalog/automations.json'
+  ])
+  for (const entry of entries) {
+    if (entry.kind === 'catalog') {
+      if (!knownCatalogPaths.has(entry.path)) {
+        throw new Error(`migration package contains an unsupported catalog: ${entry.path}`)
+      }
+      continue
+    }
+    if (entry.kind === 'workspace-file') continue
+    if (entry.kind === 'runtime-record' && entry.path === 'payload/runtime/snapshot.jsonl' && !entry.linkTarget) continue
+    throw new Error(`migration package contains an unsupported v1 payload entry: ${entry.path}`)
+  }
+  const entryAt = (path: string) => entries.find((entry) => entry.path === path)
+  const hasCatalog = (path: string) => entryAt(path)?.kind === 'catalog'
+  if (!hasCatalog('catalog/workspaces.json') || !hasCatalog('catalog/threads.json')) {
+    throw new Error('migration package is missing its required workspace or thread catalog')
+  }
+  const runtimeEntry = entryAt('payload/runtime/snapshot.jsonl')
+  if (runtimeEntry && runtimeEntry.kind !== 'runtime-record') {
+    throw new Error('migration runtime snapshot has an invalid entry kind')
+  }
+  if (!categories.has('thread-history') && runtimeEntry) {
+    throw new Error('migration package contains an unselected runtime snapshot')
+  }
+  if (manifest.counts.threads > 0 && !runtimeEntry) {
+    throw new Error('migration package is missing selected runtime history')
+  }
+  if (manifest.counts.threads === 0 && runtimeEntry) {
+    throw new Error('migration package contains runtime history without cataloged threads')
+  }
+  for (const [category, count] of [
+    ['attachments', manifest.counts.attachments],
+    ['artifacts', manifest.counts.artifacts],
+    ['memory', manifest.counts.memories]
+  ] as const) {
+    if (!categories.has(category) && count > 0) {
+      throw new Error(`migration manifest counts unselected ${category}`)
+    }
+  }
+  const requireExactCatalog = (
+    category: 'portable-settings' | 'renderer-state',
+    path: string
+  ) => {
+    if (categories.has(category) !== hasCatalog(path)) {
+      throw new Error(categories.has(category)
+        ? `migration package is missing selected ${category} catalog`
+        : `migration package contains unselected ${category} catalog`)
+    }
+  }
+  requireExactCatalog('portable-settings', 'catalog/portable-settings.json')
+  requireExactCatalog('renderer-state', 'catalog/renderer-state.json')
+  const automationsSelected = categories.has('workflows') || categories.has('schedules')
+  if (automationsSelected !== hasCatalog('catalog/automations.json')) {
+    throw new Error(automationsSelected
+      ? 'migration package is missing selected automations catalog'
+      : 'migration package contains an unselected automations catalog')
+  }
+  if (catalogs.portableSettings !== undefined && asRecord(catalogs.portableSettings).schemaVersion !== 1) {
+    throw new Error('migration portable settings catalog version is unsupported')
+  }
+  if (catalogs.rendererState !== undefined) {
+    const rendererState = asRecord(catalogs.rendererState)
+    if (
+      rendererState.schemaVersion !== 1 ||
+      !Object.prototype.hasOwnProperty.call(rendererState, 'value')
+    ) {
+      throw new Error('migration renderer state catalog is malformed or unsupported')
+    }
+  }
+  if (catalogs.automations !== undefined) {
+    const automations = asRecord(catalogs.automations)
+    if (
+      automations.schemaVersion !== 1 ||
+      !Array.isArray(automations.workflows) ||
+      !Array.isArray(automations.schedules)
+    ) {
+      throw new Error('migration automations catalog is malformed or unsupported')
+    }
+    if (!categories.has('workflows') && automations.workflows.length > 0) {
+      throw new Error('migration automations catalog contains unselected workflows')
+    }
+    if (!categories.has('schedules') && automations.schedules.length > 0) {
+      throw new Error('migration automations catalog contains unselected schedules')
+    }
+  }
+}
+
+function assertUnique(values: readonly string[], label: string): void {
+  if (new Set(values).size !== values.length) throw new Error(`${label} is duplicated`)
 }
 
 function conflictResolutions(plan: DataMigrationImportPlan, workspaceId: string) {

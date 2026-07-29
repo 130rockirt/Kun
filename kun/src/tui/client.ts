@@ -19,6 +19,7 @@ import {
   GraphRunV1Schema,
   ListThreadsResponse,
   ModelConnectionConnectRequestSchema,
+  ModelConnectionCliAuthRequestSchema,
   ModelConnectionCredentialRequestSchema,
   ModelConnectionOAuthStartRequestSchema,
   ModelConnectionOAuthStatusSchema,
@@ -373,6 +374,7 @@ export type ModelConnectionTransport = {
   deleteModel(providerId: string, expectedRevision: number): Promise<z.infer<typeof ModelConnectionSnapshotSchema>>
   probeModel(providerId: string): Promise<{ ok: true; models: string[] }>
   selectModel(input: z.input<typeof ModelConnectionSelectRequestSchema>): Promise<z.infer<typeof ModelConnectionSnapshotSchema>>
+  completeModelCliAuth(input: z.input<typeof ModelConnectionCliAuthRequestSchema>): Promise<z.infer<typeof ModelConnectionSnapshotSchema>>
   startModelOAuth(input: z.input<typeof ModelConnectionOAuthStartRequestSchema>): Promise<z.infer<typeof ModelConnectionOAuthStatusSchema>>
   modelOAuthStatus(sessionId: string): Promise<z.infer<typeof ModelConnectionOAuthStatusSchema>>
   submitModelOAuth(sessionId: string, code: string): Promise<z.infer<typeof ModelConnectionOAuthStatusSchema>>
@@ -886,6 +888,14 @@ export class KunTuiClient {
     return this.request('/v1/model-connections/select', ModelConnectionSnapshotSchema, {
       method: 'POST',
       body: ModelConnectionSelectRequestSchema.parse(input)
+    })
+  }
+
+  completeModelCliAuth(input: z.input<typeof ModelConnectionCliAuthRequestSchema>) {
+    if (this.modelConnectionTransport) return this.modelConnectionTransport.completeModelCliAuth(input)
+    return this.request('/v1/model-connections/cli/complete', ModelConnectionSnapshotSchema, {
+      method: 'POST',
+      body: ModelConnectionCliAuthRequestSchema.parse(input)
     })
   }
 

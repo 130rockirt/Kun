@@ -44,6 +44,8 @@ internal `claw` name in code for compatibility.
   importer.
 - No legacy drawing/painting starter card outside the current Design mode.
 - No `/usage` or `/runtime` slash command that opens a runtime control panel.
+  The standalone TUI may expose `/usage` as a read-only report backed by
+  `GET /v1/usage`; it must not add runtime diagnostics or control actions.
 
 ## Legacy Data Rule
 

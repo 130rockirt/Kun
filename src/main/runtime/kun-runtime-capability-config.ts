@@ -7,6 +7,7 @@ export function graphConfigForRuntime(
 ): KunRuntimeSettingsV1['graph'] {
   return {
     ...value,
+    workerModel: { ...value.workerModel },
     scheduler: { ...value.scheduler },
     context: { ...value.context },
     mailbox: { ...value.mailbox },

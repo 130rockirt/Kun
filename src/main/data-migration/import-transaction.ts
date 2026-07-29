@@ -123,6 +123,7 @@ export class DataMigrationImportTransactionCoordinator {
           }
           await commitStagedWorkspace({
             staged: { ...workspace.staged, files: remainingFiles },
+            allFiles: workspace.staged.files,
             strategy: workspace.strategy,
             ...(workspace.resolutions ? { resolutions: workspace.resolutions } : {}),
             ...(workspace.renamedPaths ? { renamedPaths: workspace.renamedPaths } : {}),

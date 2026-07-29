@@ -15,6 +15,55 @@ afterEach(async () => {
 })
 
 describe('GraphMailbox', () => {
+  it('serializes simultaneous reports for the same run', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-graph-mailbox-'))
+    roots.push(root)
+    const config = testGraphConfig()
+    const store = new FileGraphRunStore({
+      rootDir: join(root, 'graphs'),
+      artifactStore: new FileArtifactStore(join(root, 'artifacts')),
+      config: () => config
+    })
+    const control = new GraphControlService({ store, config: () => config })
+    await control.create({
+      runId: 'run_1',
+      threadId: 'thread_1',
+      projectId: 'project_1',
+      sourceTurnId: 'turn_1',
+      plan: testGraphPlan(),
+      commandId: 'create_1',
+      idempotencyKey: 'create_1'
+    })
+    const mailbox = new GraphMailbox({ store, config: () => config })
+    const send = (id: string) => mailbox.send({
+      id,
+      runId: 'run_1',
+      sender: { kind: 'lead' },
+      recipients: [{ kind: 'worker', nodeId: 'finish' }],
+      type: 'finding',
+      priority: 'normal',
+      summary: id,
+      artifactRefs: [],
+      replyRequired: false
+    }, {
+      commandId: `send_${id}`,
+      idempotencyKey: `send:${id}`
+    })
+
+    await expect(Promise.all([
+      send('message_a'),
+      send('message_b'),
+      send('message_c')
+    ])).resolves.toHaveLength(3)
+    const run = await store.get('run_1')
+    expect(run?.messages.map((message) => message.id)).toEqual([
+      'message_a',
+      'message_b',
+      'message_c'
+    ])
+    expect(run?.budget.messages).toBe(3)
+  })
+
   it('enforces membership and quotas while keeping retries idempotent', async () => {
     const root = await mkdtemp(join(tmpdir(), 'kun-graph-mailbox-'))
     roots.push(root)

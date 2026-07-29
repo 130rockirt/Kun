@@ -101,6 +101,9 @@ export function GraphModePanel({
 
   const run = runs.find((item) => item.id === selectedRunId) ?? runs[0] ?? null
   const selectedNode = run && selectedNodeId ? run.nodes[selectedNodeId] : undefined
+  const canvasFocusRequestKey = run && selectedNodeId
+    ? `${activeThreadId ?? ''}:${run.id}:${selectedNodeId}`
+    : null
   const hasActiveNode = Boolean(run && Object.values(run.nodes).some((node) =>
     ['queued', 'running', 'submitted', 'reviewing', 'repair_required'].includes(node.status)))
   useEffect(() => {
@@ -228,6 +231,7 @@ export function GraphModePanel({
           progress={progress}
           selectedNode={selectedNode}
           selectedNodeId={selectedNodeId}
+          canvasFocusRequestKey={canvasFocusRequestKey}
           steering={steering}
           onSteeringChange={setSteering}
           onSendSteering={sendSteering}

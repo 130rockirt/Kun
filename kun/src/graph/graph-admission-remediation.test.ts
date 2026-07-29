@@ -142,7 +142,7 @@ describe('Graph admission remediation', () => {
       source: 'custom'
     })
     expect(runChild.mock.calls[0]?.[0].security).toMatchObject({
-      allowedToolNames: ['read'],
+      allowedToolNames: ['read', 'report_to_parent'],
       blockedToolNames: expect.arrayContaining([
         'delegate_task',
         'list_subagent_profiles',

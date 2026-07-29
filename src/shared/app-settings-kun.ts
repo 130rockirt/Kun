@@ -542,6 +542,10 @@ export function mergeKunRuntimeSettings(
   const nextGraph = normalizeKunGraphSettings({
     ...current.graph,
     ...(patch?.graph ?? {}),
+    workerModel: {
+      ...current.graph?.workerModel,
+      ...(patch?.graph?.workerModel ?? {})
+    },
     scheduler: {
       ...current.graph?.scheduler,
       ...(patch?.graph?.scheduler ?? {})

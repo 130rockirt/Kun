@@ -20,7 +20,7 @@ import type { GraphWorkerSessionRegistry } from './graph-worker-sessions.js'
 export type GraphSupervisionPort = {
   signal(input: {
     runId: string
-    reason: 'submitted' | 'failure' | 'stall' | 'conflict' | 'budget' | 'help' | 'recovery' | 'completion' | 'user_steering'
+    reason: 'submitted' | 'failure' | 'stall' | 'conflict' | 'budget' | 'help' | 'recovery' | 'completion' | 'user_steering' | 'worker_report'
     nodeIds: string[]
     digest: string
   }): Promise<void> | void

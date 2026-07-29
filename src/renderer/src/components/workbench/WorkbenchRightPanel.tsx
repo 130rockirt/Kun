@@ -58,8 +58,8 @@ const SideConversationPanel = lazy(() =>
 const McpSkillsPanel = lazy(() =>
   import('./McpSkillsPanel').then((module) => ({ default: module.McpSkillsPanel }))
 )
-const ProviderQuotaPanel = lazy(() =>
-  import('./ProviderQuotaPanel').then((module) => ({ default: module.ProviderQuotaPanel }))
+const UsageQuotaPanel = lazy(() =>
+  import('./UsageQuotaPanel').then((module) => ({ default: module.UsageQuotaPanel }))
 )
 const AgentPerspectivePanel = lazy(() =>
   import('./AgentPerspectivePanel').then((module) => ({ default: module.AgentPerspectivePanel }))
@@ -301,7 +301,7 @@ function CodeRightPanelWorkspace({
       return <McpSkillsPanel workspaceRoot={workspaceRoot} onOpenSettings={mcpSkills.onOpenSettings} />
     }
     if (id === BUILTIN_RIGHT_PANEL_IDS.providerQuotas) {
-      return <ProviderQuotaPanel />
+      return <UsageQuotaPanel activeThreadId={code.activeThreadId} />
     }
     if (id === BUILTIN_RIGHT_PANEL_IDS.graph) {
       return <GraphModePanel className="h-full max-h-full w-full" onCollapse={onCollapse} />

@@ -4,6 +4,7 @@ import {
   type ModelConnectionRegistry
 } from '../../services/model-connection-registry.js'
 import type { ModelConnectionOAuthService } from '../../services/model-connection-oauth.js'
+import type { OfficialProviderAuthService } from '../../services/official-provider-cli.js'
 import { ModelConnectionOAuthSubmitRequestSchema } from '../../contracts/model-connections.js'
 import { jsonResponse, type JsonResponse } from '../response.js'
 import { ERRORS } from './runtime-error.js'
@@ -209,6 +210,13 @@ export async function installClaudeSdk(
   return oauthAction(service, () => service!.installClaudeSdk(), 202)
 }
 
+export async function completeOfficialProviderAuth(
+  service: OfficialProviderAuthService | undefined,
+  request: Request
+): Promise<JsonResponse> {
+  return oauthAction(service, async () => service!.complete(await readJson(request)))
+}
+
 async function mutate(
   registry: ModelConnectionRegistry | undefined,
   action: () => Promise<unknown>,
@@ -235,7 +243,7 @@ async function mutate(
 }
 
 async function oauthAction(
-  service: ModelConnectionOAuthService | undefined,
+  service: ModelConnectionOAuthService | OfficialProviderAuthService | undefined,
   action: () => Promise<unknown> | unknown,
   status = 200
 ): Promise<JsonResponse> {

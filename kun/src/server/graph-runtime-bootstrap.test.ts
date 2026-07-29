@@ -231,4 +231,46 @@ describe('Graph runtime bootstrap capability boundary', () => {
     expect(runAgentTurn).toHaveBeenNthCalledWith(1, 'thread_1', 'turn_1')
     expect(runAgentTurn).toHaveBeenNthCalledWith(2, 'thread_1', 'turn_1')
   })
+
+  it('adds a host-configured worker model to the frozen Graph authority', async () => {
+    const { options } = runtimeOptions()
+    const originalDefaults = options.authorityForRun
+    void originalDefaults
+    const configured = createGraphRuntimeStartOptions({
+      delegation: () => undefined,
+      threads: {
+        get: async () => ({
+          id: 'thread_1',
+          workspace: '/workspace',
+          model: 'source-model',
+          providerId: 'source-provider',
+          turns: [{ id: 'turn_1', status: 'running' }]
+        } as never)
+      },
+      resumeTurn: async () => 'resumed',
+      isTurnExecutionActive: () => false,
+      steerTurn: async () => undefined,
+      runAgentTurn: async () => 'suspended',
+      defaults: () => ({
+        model: 'default-model',
+        approvalPolicy: 'never',
+        sandboxMode: 'read-only',
+        allowedMcpServers: [],
+        disabledSkillIds: [],
+        networkAllowed: false,
+        workerModel: {
+          mode: 'fixed',
+          providerId: 'worker-provider',
+          model: 'worker-model'
+        }
+      }),
+      tools: () => [],
+      skillIds: () => []
+    })
+    const authority = await configured.authorityForRun(run)
+
+    expect(authority.allowedModelProviderIds)
+      .toEqual(['source-provider', 'worker-provider'])
+    expect(authority.allowedModels).toEqual(['source-model', 'worker-model'])
+  })
 })

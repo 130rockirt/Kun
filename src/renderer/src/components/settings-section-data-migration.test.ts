@@ -24,7 +24,8 @@ import {
   formatBytes,
   normalizeResolvedPlan,
   resolveAllPlanConflicts,
-  resolvePlanConflict
+  resolvePlanConflict,
+  skippedWorkspaceIdsForStrategies
 } from './settings-section-data-migration'
 
 vi.mock('react-i18next', () => ({
@@ -48,11 +49,12 @@ function plan() {
     encrypted: true,
     mappings: [{
       workspaceId: 'ws_ui', sourcePathDisplay: 'C:\\Project', destinationRoot: '/Users/test/Project',
-      strategy: 'merge', compatible: false, requiredBytes: 10, freeBytes: 1_000, unresolvedIssueCount: 1
+      strategy: 'merge', compatible: false, preflightCompatible: true,
+      requiredBytes: 10, freeBytes: 1_000, unresolvedIssueCount: 1
     }],
     conflicts: [{
       conflictId: 'conflict_ui', workspaceId: 'ws_ui', path: parsePackageRelativePath('README.md'),
-      kind: 'different-content', fatal: true
+      kind: 'invalid-name', fatal: true, renamedPath: parsePackageRelativePath('README-imported.md')
     }],
     threadIdMap: {}, unresolvedReferences: [], disabledItems: [], estimatedPeakBytes: 20, fatalIssueCount: 1
   })
@@ -85,15 +87,54 @@ const report = DataMigrationReportSchema.parse({
 describe('data migration settings helpers', () => {
   it('keeps fatal conflicts blocking until an explicit resolution is selected', () => {
     expect(normalizeResolvedPlan(plan())).toMatchObject({ fatalIssueCount: 1 })
-    const resolved = resolvePlanConflict(plan(), 'conflict_ui', 'replace-with-backup')
+    const resolved = resolvePlanConflict(plan(), 'conflict_ui', 'rename-source')
     expect(resolved.fatalIssueCount).toBe(0)
     expect(resolved.mappings[0]).toMatchObject({ compatible: true, unresolvedIssueCount: 0 })
   })
 
   it('applies bulk conflict decisions without dropping the plan identity', () => {
-    const resolved = resolveAllPlanConflicts(plan(), 'keep-target')
+    const nonfatal = DataMigrationImportPlanSchema.parse({
+      ...plan(),
+      mappings: [{
+        ...plan().mappings[0],
+        compatible: true
+      }],
+      conflicts: [{
+        conflictId: 'conflict_ui',
+        workspaceId: 'ws_ui',
+        path: parsePackageRelativePath('README.md'),
+        kind: 'different-content',
+        fatal: false
+      }],
+      fatalIssueCount: 0
+    })
+    const resolved = resolveAllPlanConflicts(nonfatal, 'keep-target')
     expect(resolved.operationId).toBe('import_ui')
     expect(resolved.conflicts).toEqual([expect.objectContaining({ resolution: 'keep-target' })])
+  })
+
+  it('never turns a failed disk or permissions preflight into a compatible mapping by resolving conflicts', () => {
+    const blocked = DataMigrationImportPlanSchema.parse({
+      ...plan(),
+      mappings: plan().mappings.map((mapping) => ({
+        ...mapping,
+        preflightCompatible: false
+      }))
+    })
+    const resolved = resolvePlanConflict(blocked, 'conflict_ui', 'rename-source')
+    expect(resolved).toMatchObject({ fatalIssueCount: 0 })
+    expect(resolved.mappings[0]).toMatchObject({
+      compatible: false,
+      unresolvedIssueCount: 0
+    })
+  })
+
+  it('sends skipped workspace identities explicitly instead of planning their destinations and conflicts', () => {
+    expect(skippedWorkspaceIdsForStrategies({
+      ws_keep: 'keep-both',
+      ws_skip: 'skip',
+      ws_merge: 'merge'
+    })).toEqual(['ws_skip'])
   })
 
   it('formats byte counters without invalid or negative output', () => {

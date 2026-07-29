@@ -628,6 +628,12 @@ describe('KunTuiClient', () => {
       probe: true,
       select: true
     })
+    await client.completeModelCliAuth({
+      expectedRevision: 1,
+      provider: 'gemini-cli',
+      model: 'gemini-3.1-pro-preview',
+      select: true
+    })
     await client.patchModel('provider-a', { expectedRevision: 1, name: 'Renamed' })
     await client.replaceModelCredential('provider-a', { expectedRevision: 2, credential: 'secret-value' })
     await client.probeModel('provider-a')
@@ -635,6 +641,7 @@ describe('KunTuiClient', () => {
 
     expect(calls.map((call) => [call.method, call.path])).toEqual([
       ['POST', '/v1/model-connections/connect'],
+      ['POST', '/v1/model-connections/cli/complete'],
       ['PATCH', '/v1/model-connections/provider-a'],
       ['PUT', '/v1/model-connections/provider-a/credential'],
       ['POST', '/v1/model-connections/provider-a/probe'],
@@ -647,9 +654,15 @@ describe('KunTuiClient', () => {
       models: ['custom-model'],
       probe: true
     })
-    expect(calls[2].search).not.toContain('secret-value')
-    expect(calls[2].body).toMatchObject({ credential: 'secret-value' })
-    expect(calls[4].search).toBe('?expected_revision=3')
+    expect(calls[1].body).toEqual({
+      expectedRevision: 1,
+      provider: 'gemini-cli',
+      model: 'gemini-3.1-pro-preview',
+      select: true
+    })
+    expect(calls[3].search).not.toContain('secret-value')
+    expect(calls[3].body).toMatchObject({ credential: 'secret-value' })
+    expect(calls[5].search).toBe('?expected_revision=3')
   })
 
   it('submits a Grok browser result in the authenticated request body only', async () => {

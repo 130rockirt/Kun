@@ -103,7 +103,6 @@ describe('WorkbenchSideRail', () => {
       'Preview',
       'Whiteboard',
       'Subagents',
-      'Provider quota',
       'Files'
     ]) {
       expect(html).toContain(`data-tooltip="${label}"`)
@@ -113,6 +112,8 @@ describe('WorkbenchSideRail', () => {
 
     expect(html).not.toContain('data-tooltip="Todo"')
 
+    expect(html).toContain('data-tooltip="Usage &amp; quota"')
+    expect(html).toContain('aria-label="Usage &amp; quota"')
     expect(html).toContain('data-tooltip="Issues"')
     expect(html).toContain('data-tooltip="MCP &amp; Skills"')
     expect(html).toContain('aria-label="MCP &amp; Skills"')
@@ -126,9 +127,9 @@ describe('WorkbenchSideRail', () => {
       html.indexOf('data-contribution-id="extension:acme.issues/issues"')
     )
     expect(html.indexOf('data-tooltip="MCP &amp; Skills"')).toBeLessThan(
-      html.indexOf('data-tooltip="Provider quota"')
+      html.indexOf('data-tooltip="Usage &amp; quota"')
     )
-    expect(html.indexOf('data-tooltip="Provider quota"')).toBeLessThan(
+    expect(html.indexOf('data-tooltip="Usage &amp; quota"')).toBeLessThan(
       html.indexOf('data-contribution-id="extension:acme.issues/summary"')
     )
     expect(html.indexOf('data-tooltip="MCP &amp; Skills"')).toBeLessThan(

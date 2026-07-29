@@ -2,7 +2,7 @@
 
 Graph Mode is a per-turn Kun orchestration strategy, not a second agent
 runtime. `direct` keeps the existing chat path. In `graph`, a Lead converts the
-request into a host-validated execution graph, Kun schedules constrained
+request into a lightweight intent that the host compiles into a validated execution graph, Kun schedules constrained
 workers in the background, and the Lead supervises material events, reviews
 evidence, and produces one final delivery. The Lead is the original primary
 agent that created the Graph. It owns both process and result quality, actively
@@ -60,12 +60,14 @@ Graph round retains the full Lead identity and obligations.
 ```text
 Graph turn
   -> a Plan-sidebar launch embeds the complete saved Markdown in the source request
-  -> Lead calls graph_create_run
-  -> host validates and journals GraphPlan
+  -> Lead selects auto, fanout_join, pipeline, bounded_loop, state_machine, or hybrid
+  -> Lead calls graph_create_run with focused task intent
+  -> host derives durable plan mechanics, validates, and journals GraphPlan
   -> scheduler computes ready nodes
   -> immutable least-authority assignment snapshot
   -> DelegationRuntime child executor
-  -> the source Lead uses graph_supervise_node to inspect, wait 1-60 seconds and recheck, or guide
+  -> workers proactively report progress, findings, questions, risks, and early results
+  -> the source Lead uses graph_supervise_node overview, then inspects, waits, or guides as needed
   -> only after the current episode is handled may the Lead release its execution slot and park
   -> executor finishes normally; host captures its response and durable child session
   -> deterministic/peer evidence plus mandatory source Lead pass or revise
@@ -111,6 +113,15 @@ Edge kinds are:
   Lead accepts the predecessor;
 - `message`: a legacy persisted edge shape. New executors have no peer mailbox
   tools; cross-node information must use a Lead-approved data handoff.
+
+The compiled plan also records the resolved execution strategy. `fanout_join`
+leaves independent siblings ready together; `pipeline` chains real
+accepted-result dependencies; `bounded_loop` uses an explicit LoopGate;
+`state_machine` represents explicit state transitions while keeping cycles
+bounded; and `hybrid` mixes parallel and serial regions in one run. `auto`
+infers the strategy only from an already explicit task topology. All strategies
+compile to the same ready-set scheduler, so one run can fan out, join, proceed
+serially, and fan out again.
 
 Run states progress from `draft -> validating -> ready -> running`, with
 pause, supervision, and human-review branches, then
@@ -182,20 +193,30 @@ read/write scopes, network, and time limits. Effective authority is the
 intersection of parent, graph, profile, node, and host policy.
 
 Executors never receive delegation, Graph
-creation/control/patch/review/supervision, governance, or any
+creation/control/patch/review/supervision, governance, or any legacy
 `graph_worker_*` tool. They receive ordinary tools authorized by the frozen
-assignment. Their context contains the objective, acceptance criteria, scopes,
+assignment plus the single host-owned `report_to_parent` capability. Their context contains the objective, acceptance criteria, scopes,
 bounded repair feedback, prerequisite status, and only the named result
 packets that the source Lead has already approved for this node. Control edges
 convey readiness only. It excludes the full Lead history, peer mailbox
 content, unrelated node results, and Lead/user-private artifacts.
 
 An executor is not told the run, node, attempt, edge, mailbox, or artifact-store
-protocol. It simply does the task and finishes with a normal concise response
+protocol. `report_to_parent` infers those identities and the sole Lead
+recipient from the active child session. Progress is persisted without waking
+the Lead; findings, questions, risks, and early results trigger coalesced
+supervision. Reports are advisory and cannot accept work or advance the graph.
+The executor still finishes with a normal concise response
 covering result, changed files, checks, evidence, and risks. Kun automatically
 captures that response and retains the canonical child session. Retries receive
 bounded host-validation errors and Lead repair feedback, but never an
 instruction to publish or submit Graph state.
+
+Worker model policy defaults to `inherit`, freezing the source Lead provider,
+model, and reasoning effort into the attempt. Settings may select a `fixed`
+default for implicit workers. An explicit authorized node/profile assignment
+still wins, and any fixed selection outside the frozen parent model authority
+fails closed before launch. Configuration changes affect future attempts only.
 
 ## Review, writes, and completion
 
@@ -209,13 +230,16 @@ scope errors must be repaired before the Lead can accept an attempt. Absence
 of a worker Graph-tool call is not a validation error.
 
 Supervision is event driven for submission, failure, stall, conflict, resource-limit,
-help, recovery, completion, and user steering. Normal progress does not poll a
+help, recovery, completion, user steering, and material worker reports. Normal progress does not poll a
 model. Signals coalesce and resume or steer the original source Lead with
 `messageSource: graph_runtime`; new-format runs do not create replacement
-background Lead turns. The Lead has `graph_supervise_node`: `inspect` reads a
+background Lead turns. The Lead has `graph_supervise_node`: `overview` pages
+across every node with latest attempt, activity, report, and a small transcript
+tail; `inspect` reads a
 bounded, sanitized, cursor-based child transcript; `wait` performs an abortable
 1-60 second wait and fresh inspection; and `guide` durably records
-attempt-targeted guidance before steering the active child turn when possible.
+attempt-targeted guidance, acknowledges answered blocking questions, and then
+steers the active child turn when possible.
 Each continuation inspects durable truth and relevant live sessions, chooses
 an activity-appropriate cadence such as a 30-second recheck, guides drift, and
 verifies corrections before parking again. When an executor finishes, the

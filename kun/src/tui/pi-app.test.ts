@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { visibleWidth } from '@earendil-works/pi-tui'
+import { providerCatalogEntries } from '@kun/provider-catalog'
 import { ThreadSchema } from '../contracts/threads.js'
 import { buildRuntimeCapabilityManifest } from '../contracts/capabilities.js'
 import type { RuntimeEvent } from '../contracts/events.js'
@@ -21,6 +22,8 @@ import {
   parseSgrMouseEvent,
   GraphBoardDialog,
   imagePasteShortcutLabel,
+  openBrowser,
+  authenticationStrategy,
   PermissionDialog,
   PiTuiApplication,
   renderActivityRow,
@@ -172,6 +175,21 @@ function renderAssistantMessage(text: string, width: number, running = false): s
 }
 
 describe('PiTuiApplication command overlays', () => {
+  it('keeps browser authentication usable when a Linux desktop opener is unavailable', () => {
+    const child = Object.assign(new EventEmitter(), { unref: vi.fn() })
+    const spawnFn = vi.fn(() => child)
+    const url = 'https://auth.example.test/authorize?state=visible'
+
+    expect(() => openBrowser(url, spawnFn as never, 'linux')).not.toThrow()
+    expect(spawnFn).toHaveBeenCalledWith('xdg-open', [url], {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true
+    })
+    expect(child.unref).toHaveBeenCalledOnce()
+    expect(() => child.emit('error', new Error('spawn xdg-open ENOENT'))).not.toThrow()
+  })
+
   it('decodes complete SGR mouse reports and rejects partial or invalid coordinates', () => {
     expect(parseSgrMouseEvent('\x1b[<0;12;7M')).toEqual({
       button: 0, x: 12, y: 7, pressed: true
@@ -1700,6 +1718,66 @@ describe('PiTuiApplication command overlays', () => {
     }
   })
 
+  it('restores the exact composer draft when @file preparation fails', async () => {
+    const current = detail()
+    const startTurn = vi.fn(async () => ({ turnId: 'turn_file_mention' }))
+    const client = {
+      listThreads: vi.fn(async () => [current]),
+      getThread: vi.fn(async () => current),
+      subscribeThreadEvents: vi.fn(async (input: { signal: AbortSignal }) => {
+        await new Promise<void>((resolve) => input.signal.addEventListener('abort', () => resolve(), { once: true }))
+      }),
+      skills: vi.fn(async () => ({ enabled: true, roots: [], skills: [], validationErrors: [] })),
+      modelConnections: vi.fn(async () => modelSnapshot()),
+      startTurn
+    } as unknown as KunTuiClient
+    const controller = new TuiController(client, options, runtime)
+    await controller.start()
+    const prepare = vi.spyOn(controller, 'prepareFileMentions')
+      .mockImplementationOnce(async () => {
+        controller.notify('Could not attach @missing.ts: file was not found.', 'error')
+        return false
+      })
+      .mockResolvedValueOnce(true)
+    const input = Object.assign(new EventEmitter(), {
+      isRaw: false,
+      setRawMode: vi.fn(),
+      setEncoding: vi.fn(),
+      resume: vi.fn(),
+      pause: vi.fn()
+    }) as unknown as TerminalInput
+    const output = Object.assign(new EventEmitter(), {
+      columns: 92,
+      rows: 28,
+      write: vi.fn()
+    }) as unknown as TerminalOutput
+    const app = new PiTuiApplication(controller, input, output)
+    const root = (app as unknown as {
+      root: { editor: { getText: () => string } }
+    }).root
+    const running = app.run()
+    const original = 'Inspect @missing.ts'
+    try {
+      type(input as unknown as EventEmitter, original)
+      await waitFor(() => prepare.mock.calls.length === 1)
+      await waitFor(() => root.editor.getText() === original)
+      expect(startTurn).not.toHaveBeenCalled()
+
+      for (const character of ' after fixing') input.emit('data', character)
+      input.emit('data', '\r')
+      await waitFor(() => startTurn.mock.calls.length === 1)
+      expect(prepare).toHaveBeenNthCalledWith(2, `${original} after fixing`)
+      expect(startTurn).toHaveBeenCalledWith(current.id, expect.objectContaining({
+        prompt: `${original} after fixing`
+      }))
+    } finally {
+      controller.requestQuit()
+      await running
+      await app.stop()
+      await controller.stop()
+    }
+  })
+
   it('intercepts complete and split bracketed path pastes while preserving ordinary pasted text', async () => {
     const current = detail()
     const startTurn = vi.fn(async () => ({ turnId: 'turn_after_paste' }))
@@ -2937,6 +3015,178 @@ describe('PiTuiApplication command overlays', () => {
       await app.stop()
       await controller.stop()
     }
+  })
+
+  it('authenticates and selects a new Gemini CLI subscription through the official CLI handoff', async () => {
+    const current = detail()
+    const initial = modelSnapshot()
+    const geminiProfile = {
+      id: 'gemini-cli-subscription',
+      accountId: 'account:gemini-cli-subscription',
+      name: 'Gemini CLI 订阅（API）',
+      presetSource: 'gemini-cli-subscription',
+      kind: 'gemini-cli-api' as const,
+      authType: 'subscription' as const,
+      endpointFormat: 'custom_endpoint' as const,
+      configured: true,
+      models: ['gemini-3.1-pro-preview', 'gemini-3-flash-preview'],
+      selectedModel: 'gemini-3.1-pro-preview'
+    }
+    const connected: ModelConnectionSnapshot = {
+      ...initial,
+      revision: initial.revision + 1,
+      providers: [...initial.providers, geminiProfile],
+      defaultProviderId: geminiProfile.id,
+      defaultAccountId: geminiProfile.accountId,
+      defaultModel: geminiProfile.selectedModel
+    }
+    const completeModelCliAuth = vi.fn(async () => connected)
+    const authenticateOfficialProvider = vi.fn(async () => undefined)
+    const client = {
+      listThreads: vi.fn(async () => [current]),
+      getThread: vi.fn(async () => current),
+      subscribeThreadEvents: vi.fn(async (input: { signal: AbortSignal }) => {
+        await new Promise<void>((resolve) => input.signal.addEventListener('abort', () => resolve(), { once: true }))
+      }),
+      skills: vi.fn(async () => ({ enabled: true, roots: [], skills: [], validationErrors: [] })),
+      modelConnections: vi.fn(async () => initial),
+      completeModelCliAuth
+    } as unknown as KunTuiClient
+    const controller = new TuiController(client, options, runtime)
+    await controller.start()
+    controller.applyModelSelection(initial, false)
+    const input = Object.assign(new EventEmitter(), {
+      isRaw: false, setRawMode: vi.fn(), setEncoding: vi.fn(), resume: vi.fn(), pause: vi.fn()
+    }) as unknown as TerminalInput
+    let outputText = ''
+    const output = Object.assign(new EventEmitter(), {
+      columns: 92, rows: 28, write: (chunk: string) => { outputText += chunk }
+    }) as unknown as TerminalOutput
+    const app = new PiTuiApplication(
+      controller,
+      input,
+      output,
+      undefined,
+      async () => null,
+      authenticateOfficialProvider
+    )
+    const running = app.run()
+    try {
+      type(input, '/connect')
+      await waitFor(() => sanitizeTerminalText(outputText).includes('KUN / Connect'))
+      input.emit('data', '\r')
+      await waitFor(() => outputText.includes('Add provider'))
+      type(input, 'gemini-cli-subscription')
+
+      await waitFor(() => completeModelCliAuth.mock.calls.length === 1)
+      expect(authenticateOfficialProvider).toHaveBeenCalledWith('gemini-cli')
+      expect(completeModelCliAuth).toHaveBeenCalledWith({
+        expectedRevision: initial.revision,
+        provider: 'gemini-cli',
+        model: 'gemini-3.1-pro-preview',
+        select: true
+      })
+      await waitFor(() =>
+        controller.state.modelConnections?.defaultProviderId === 'gemini-cli-subscription'
+      )
+    } finally {
+      controller.requestQuit()
+      await running
+      await app.stop()
+      await controller.stop()
+    }
+  })
+
+  it('keeps the existing default when Gemini CLI reconnect is cancelled', async () => {
+    const current = detail()
+    const initialBase = modelSnapshot()
+    const initial: ModelConnectionSnapshot = {
+      ...initialBase,
+      providers: [...initialBase.providers, {
+        id: 'gemini-cli-subscription',
+        accountId: 'account:gemini-cli-subscription',
+        name: 'Gemini CLI 订阅（API）',
+        presetSource: 'gemini-cli-subscription',
+        kind: 'gemini-cli-api',
+        authType: 'subscription',
+        endpointFormat: 'custom_endpoint',
+        configured: true,
+        models: ['gemini-3.1-pro-preview'],
+        selectedModel: 'gemini-3.1-pro-preview'
+      }]
+    }
+    const completeModelCliAuth = vi.fn()
+    const authenticateOfficialProvider = vi.fn(async () => {
+      throw new Error('Google login cancelled')
+    })
+    const client = {
+      listThreads: vi.fn(async () => [current]),
+      getThread: vi.fn(async () => current),
+      subscribeThreadEvents: vi.fn(async (input: { signal: AbortSignal }) => {
+        await new Promise<void>((resolve) => input.signal.addEventListener('abort', () => resolve(), { once: true }))
+      }),
+      skills: vi.fn(async () => ({ enabled: true, roots: [], skills: [], validationErrors: [] })),
+      modelConnections: vi.fn(async () => initial),
+      completeModelCliAuth
+    } as unknown as KunTuiClient
+    const controller = new TuiController(client, options, runtime)
+    await controller.start()
+    controller.applyModelSelection(initial, false)
+    const input = Object.assign(new EventEmitter(), {
+      isRaw: false, setRawMode: vi.fn(), setEncoding: vi.fn(), resume: vi.fn(), pause: vi.fn()
+    }) as unknown as TerminalInput
+    let outputText = ''
+    const output = Object.assign(new EventEmitter(), {
+      columns: 92, rows: 28, write: (chunk: string) => { outputText += chunk }
+    }) as unknown as TerminalOutput
+    const app = new PiTuiApplication(
+      controller,
+      input,
+      output,
+      undefined,
+      async () => null,
+      authenticateOfficialProvider
+    )
+    const running = app.run()
+    try {
+      type(input, '/connect')
+      await waitFor(() => sanitizeTerminalText(outputText).includes('KUN / Connect'))
+      input.emit('data', '\x1b[F')
+      input.emit('data', '\r')
+      await waitFor(() => outputText.includes('Sign in again / reconnect'))
+      input.emit('data', '\x1b[B')
+      input.emit('data', '\r')
+
+      await waitFor(() => outputText.includes('Google login cancelled'))
+      expect(authenticateOfficialProvider).toHaveBeenCalledWith('gemini-cli')
+      expect(completeModelCliAuth).not.toHaveBeenCalled()
+      expect(controller.state.modelConnections?.defaultProviderId).toBe('deepseek')
+      expect(controller.state.modelConnections?.defaultModel).toBe('deepseek-v4-pro')
+    } finally {
+      controller.requestQuit()
+      await running
+      await app.stop()
+      await controller.stop()
+    }
+  })
+
+  it('maps every shared catalog authentication flow to an implemented TUI strategy', () => {
+    const strategies = new Map(
+      providerCatalogEntries().map((entry) => [
+        entry.authFlow,
+        authenticationStrategy(entry.authFlow)
+      ])
+    )
+
+    expect(strategies).toEqual(new Map([
+      ['api-key', 'secret'],
+      ['chatgpt-oauth', 'runtime'],
+      ['grok-oauth', 'runtime'],
+      ['claude-subscription', 'runtime'],
+      ['gemini-subscription', 'official-cli'],
+      ['gemini-cli-subscription', 'official-cli'],
+      ['cursor-api-key', 'secret']
+    ]))
   })
 
   it('creates a custom provider from the explicit /connect entry and publishes it to /model', async () => {

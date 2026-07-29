@@ -232,6 +232,18 @@ const GraphSchedulerRuntimeConfigSchema = z.object({
   return activeConfig
 })
 
+const GraphWorkerModelRuntimeConfigSchema = z.discriminatedUnion('mode', [
+  z.object({
+    mode: z.literal('inherit')
+  }).strict(),
+  z.object({
+    mode: z.literal('fixed'),
+    providerId: z.string().trim().min(1).max(128),
+    model: z.string().trim().min(1).max(256),
+    reasoningEffort: ModelReasoningEffort.optional()
+  }).strict()
+]).default({ mode: 'inherit' })
+
 export const GraphRuntimeConfigSchema = z
   .object({
     enabled: z.boolean().default(false),
@@ -243,6 +255,7 @@ export const GraphRuntimeConfigSchema = z
       'learning-preview',
       'stable'
     ]).default('experimental'),
+    workerModel: GraphWorkerModelRuntimeConfigSchema,
     scheduler: GraphSchedulerRuntimeConfigSchema,
     context: z.object({
       maxWorkerContextBytes: PositiveInt.max(16 * 1024 * 1024).default(256 * 1024),
@@ -329,6 +342,7 @@ export const DEFAULT_GRAPH_RUNTIME_CONFIG: GraphRuntimeConfig = GraphRuntimeConf
   enabled: false,
   defaultStrategy: 'direct',
   rolloutStage: 'experimental',
+  workerModel: { mode: 'inherit' },
   scheduler: {
     maxNodes: 128,
     maxEdges: 512,

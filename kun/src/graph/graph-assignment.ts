@@ -13,6 +13,7 @@ import type { ProjectAgentRegistry } from './project-agent-registry.js'
 import {
   GRAPH_LEAD_TOOL_NAMES,
   GRAPH_INCOMPATIBLE_TOOL_NAMES,
+  GRAPH_WORKER_REPORT_TOOL_NAME,
   GRAPH_WORKER_TOOL_NAMES
 } from './graph-tool-boundary.js'
 import { graphHostRelativePathCovers } from './graph-platform-path.js'
@@ -89,10 +90,14 @@ export class GraphAssignmentResolver {
     const toolPolicy = caps.toolPolicy === 'readOnly' ? 'readOnly' : 'inherit'
     const graphControlTools = new Set<string>([
       ...GRAPH_LEAD_TOOL_NAMES,
-      ...GRAPH_WORKER_TOOL_NAMES
+      ...GRAPH_WORKER_TOOL_NAMES,
+      GRAPH_WORKER_REPORT_TOOL_NAME
     ])
-    const allowedTools = intersect(input.parent.allowedTools, caps.allowedTools)
-      .filter((tool) => !graphControlTools.has(tool))
+    const allowedTools = union(
+      intersect(input.parent.allowedTools, caps.allowedTools)
+        .filter((tool) => !graphControlTools.has(tool)),
+      [GRAPH_WORKER_REPORT_TOOL_NAME]
+    )
     const allowedSkills = intersect(input.parent.allowedSkills, caps.allowedSkills)
     const allowedMcpServers = intersect(input.parent.allowedMcpServers, caps.allowedMcpServers)
     const blockedTools = union(input.parent.blockedTools, caps.blockedTools, [
@@ -100,7 +105,7 @@ export class GraphAssignmentResolver {
       ...GRAPH_LEAD_TOOL_NAMES,
       ...GRAPH_WORKER_TOOL_NAMES,
       'graph_agent_governance'
-    ])
+    ]).filter((tool) => tool !== GRAPH_WORKER_REPORT_TOOL_NAME)
     const blockedSkills = union(input.parent.blockedSkills, caps.blockedSkills)
     const blockedMcpServers = union(
       input.parent.blockedMcpServers,

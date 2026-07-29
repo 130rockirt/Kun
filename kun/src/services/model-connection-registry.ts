@@ -41,6 +41,19 @@ export type ModelConnectionSeed = ModelConnectionConnectRequest & {
   credentialSourceId?: string
 }
 
+export type AuthenticatedModelConnectionInput = Omit<
+  ModelConnectionConnectRequest,
+  'credential' | 'probe'
+> & {
+  /**
+   * Credential material produced by a runtime-owned OAuth/SDK flow. Official
+   * CLI providers omit this only after the service has verified their
+   * provider-owned login.
+   */
+  credential?: string
+  externalAuthVerified?: boolean
+}
+
 const MODEL_CONNECTION_CREDENTIAL_SOURCE_PREFIX = 'model-connection:'
 
 export function isModelConnectionCredentialSourceId(sourceId: string): boolean {
@@ -119,7 +132,8 @@ export class ModelConnectionRegistry {
           // visible to standalone TUI clients.
           await this.connectInternal(
             { ...request, select: newRegistry ? request.select : false },
-            credentialSourceId
+            credentialSourceId,
+            request.kind === 'antigravity-cli' || request.kind === 'gemini-cli-api'
           )
         } else {
           const preserveSelection = !newRegistry && current.defaultProviderId === existing.id
@@ -221,9 +235,102 @@ export class ModelConnectionRegistry {
     return this.connectInternal(raw)
   }
 
+  /**
+   * Runtime-only authenticated upsert used after OAuth, SDK, or official CLI
+   * verification. Unlike public connect(), a stable preset id is updated in
+   * place so reconnecting never allocates a duplicate `-2` profile.
+   */
+  async connectAuthenticated(
+    raw: AuthenticatedModelConnectionInput
+  ): Promise<ModelConnectionSnapshot> {
+    const {
+      externalAuthVerified = false,
+      ...connection
+    } = raw
+    const input = ModelConnectionConnectRequestSchema.parse({
+      ...connection,
+      probe: false
+    })
+    const requestedId = input.id?.trim()
+    if (!requestedId) throw new Error('authenticated model connection id is required')
+    if (input.kind === 'http' && !input.baseUrl) {
+      throw new Error('baseUrl is required for HTTP providers')
+    }
+    const credential = input.credential?.trim() ?? ''
+    if (!credential && !externalAuthVerified) {
+      throw new Error('authenticated model connection credential is required')
+    }
+    const nextRef = credential
+      ? await this.options.credentials.create({ apiKey: credential })
+      : undefined
+    let previousRef: string | undefined
+    let document: RegistryDocument
+    try {
+      document = await this.file.update(emptyDocument, (current) => {
+        assertRevision(current, input.expectedRevision, this.options.modelCapabilities)
+        const id = normalizeProviderId(requestedId)
+        const existing = current.profiles[id]
+        previousRef = nextRef ? existing?.credentialRef : undefined
+        const models = uniqueModels(input.models)
+        const selectedModel = input.selectedModel ?? models[0]
+        if (selectedModel && models.length > 0 && !models.includes(selectedModel)) {
+          throw new Error('selected model is not present in the provider model list')
+        }
+        const accountId = existing?.accountId ?? `account:${id}`
+        const credentialRef = nextRef ?? existing?.credentialRef
+        const profile = StoredProfileSchema.parse({
+          id,
+          accountId,
+          name: input.name,
+          presetSource: input.presetSource,
+          kind: input.kind,
+          authType: input.authType,
+          baseUrl: input.baseUrl,
+          endpointFormat: input.endpointFormat,
+          configured: true,
+          models,
+          ...(input.modelCapabilities
+            ? { modelCapabilities: capabilitiesForModels(input.modelCapabilities, models) }
+            : {}),
+          selectedModel,
+          credentialRef,
+          // A newly committed runtime-owned credential replaces any imported
+          // request-time source. Official CLI verification intentionally
+          // leaves an existing source untouched when no credential is copied.
+          credentialSourceId: nextRef
+            ? undefined
+            : existing?.credentialSourceId,
+          headers: existing?.headers
+        })
+        return {
+          ...current,
+          revision: current.revision + 1,
+          profiles: { ...current.profiles, [id]: profile },
+          ...(input.select && selectedModel ? {
+            defaultProviderId: id,
+            defaultAccountId: accountId,
+            defaultModel: selectedModel
+          } : {})
+        }
+      })
+    } catch (error) {
+      if (nextRef) await this.options.credentials.delete(nextRef).catch(() => undefined)
+      throw error
+    }
+    try {
+      await this.changed(document)
+    } finally {
+      if (previousRef && previousRef !== nextRef) {
+        await this.options.credentials.delete(previousRef).catch(() => undefined)
+      }
+    }
+    return this.project(document)
+  }
+
   private async connectInternal(
     raw: unknown,
-    credentialSourceId?: string
+    credentialSourceId?: string,
+    trustedExternalAuth = false
   ): Promise<ModelConnectionSnapshot> {
     const input = ModelConnectionConnectRequestSchema.parse(raw)
     if (input.kind === 'http' && !input.baseUrl) throw new Error('baseUrl is required for HTTP providers')
@@ -242,6 +349,9 @@ export class ModelConnectionRegistry {
         const id = allocateId(current, input.id ?? input.name)
         const accountId = `account:${id}`
         const selectedModel = input.selectedModel ?? models[0]
+        const configured = Boolean(credentialRef || credentialSourceId) ||
+          input.kind === 'agent-sdk' ||
+          trustedExternalAuth
         const profile = StoredProfileSchema.parse({
           id,
           accountId,
@@ -251,10 +361,7 @@ export class ModelConnectionRegistry {
           authType: input.authType,
           baseUrl: input.baseUrl,
           endpointFormat: input.endpointFormat,
-          configured: Boolean(credentialRef || credentialSourceId) ||
-            input.kind === 'agent-sdk' ||
-            input.kind === 'antigravity-cli' ||
-            input.kind === 'gemini-cli-api',
+          configured,
           models,
           ...(input.modelCapabilities
             ? { modelCapabilities: capabilitiesForModels(input.modelCapabilities, models) }
@@ -267,7 +374,7 @@ export class ModelConnectionRegistry {
           ...current,
           revision: current.revision + 1,
           profiles: { ...current.profiles, [id]: profile },
-          ...(input.select && selectedModel ? {
+          ...(input.select && configured && selectedModel ? {
             defaultProviderId: id,
             defaultAccountId: accountId,
             defaultModel: selectedModel
@@ -612,7 +719,8 @@ export class ModelConnectionRegistry {
       const config: ServeProviderConfig =
         profile.kind === 'agent-sdk' ||
         profile.kind === 'antigravity-cli' ||
-        profile.kind === 'cursor-sdk'
+        profile.kind === 'cursor-sdk' ||
+        profile.kind === 'gemini-cli-api'
         ? {
             kind: profile.kind,
             apiKey,
@@ -918,16 +1026,20 @@ function sameCapabilities(
 }
 
 function allocateId(document: RegistryDocument, requested: string): string {
-  const base = requested.trim().toLowerCase()
-    .replace(/[^a-z0-9._-]+/gu, '-')
-    .replace(/^-+|-+$/gu, '')
-    .slice(0, 100) || 'provider'
+  const base = normalizeProviderId(requested) || 'provider'
   if (!document.profiles[base]) return base
   for (let index = 2; index < 10_000; index += 1) {
     const candidate = `${base}-${index}`
     if (!document.profiles[candidate]) return candidate
   }
   throw new Error('unable to allocate provider id')
+}
+
+function normalizeProviderId(requested: string): string {
+  return requested.trim().toLowerCase()
+    .replace(/[^a-z0-9._-]+/gu, '-')
+    .replace(/^-+|-+$/gu, '')
+    .slice(0, 100)
 }
 
 function uniqueModels(models: readonly string[]): string[] {

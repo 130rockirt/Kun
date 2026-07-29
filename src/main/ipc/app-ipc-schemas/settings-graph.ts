@@ -30,6 +30,12 @@ export const kunGraphPatchSchema = z.object({
     'learning-preview',
     'stable'
   ]).optional(),
+  workerModel: z.object({
+    mode: z.enum(['inherit', 'fixed']).optional(),
+    providerId: z.string().trim().max(128).optional(),
+    model: z.string().trim().max(256).optional(),
+    reasoningEffort: z.enum(['auto', 'off', 'low', 'medium', 'high', 'max']).optional()
+  }).strict().optional(),
   scheduler: kunGraphSchedulerPatchSchema.optional(),
   context: z.object({
     maxWorkerContextBytes: z.number().int().positive().max(16 * 1024 * 1024).optional(),

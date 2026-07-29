@@ -55,7 +55,14 @@ describe('application state migration', () => {
           threadId: 'thread-old',
           description: 'Keep C:\\Users\\Alice\\Project and thread-old in prose.'
         }],
-        write: [{ workspaceRoot: 'D:\\Missing', threadId: 'not-a-declared-write-thread-field' }],
+        write: [{
+          workspaceRoot: 'D:\\Missing',
+          threadId: 'not-a-declared-write-thread-field',
+          filePaths: [
+            'C:\\Users\\Alice\\Project\\drafts\\chapter.md',
+            'D:\\Missing\\outside.md'
+          ]
+        }],
         unknownCache: { path: 'C:\\Users\\Alice\\Project' }
       },
       workspacePathMap: { 'C:\\Users\\Alice\\Project': '/Users/bob/Project' },
@@ -68,8 +75,16 @@ describe('application state migration', () => {
       threadId: 'thread-new',
       description: 'Keep C:\\Users\\Alice\\Project and thread-old in prose.'
     })
-    expect(restored.write[0]).toEqual({ workspaceRoot: 'D:\\Missing', threadId: 'not-a-declared-write-thread-field' })
+    expect(restored.write[0]).toEqual({
+      workspaceRoot: 'D:\\Missing',
+      threadId: 'not-a-declared-write-thread-field',
+      filePaths: [
+        '/Users/bob/Project/drafts/chapter.md',
+        'D:\\Missing\\outside.md'
+      ]
+    })
     expect(restored.unresolvedReferences).toEqual([
+      { pointer: '/write/0/filePaths/1', originalValue: 'D:\\Missing\\outside.md' },
       { pointer: '/write/0/workspaceRoot', originalValue: 'D:\\Missing' },
       { pointer: '/write/0/threadId', originalValue: 'not-a-declared-write-thread-field' }
     ])

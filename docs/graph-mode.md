@@ -2,7 +2,7 @@
 
 Graph Mode 是 Kun 的一种按回合选择的编排策略，不是第二套 Agent
 运行时。普通聊天继续走 `direct`；选择 `graph` 后，Lead Agent 先把需求转成
-宿主校验的任务图，Kun 在后台调度受限子代理，Lead 只在重要事件发生时监督、
+轻量任务意图，宿主把它编译成经过校验的任务图，Kun 在后台调度受限子代理，Lead 只在重要事件发生时监督、
 复核和统一交付。这里的 Lead 就是创建 Graph 的原主 Agent；它对过程和结果负责，
 会主动查看子代理的实时会话、短暂等待后复查，并在偏离或漏交付时立即指导。
 
@@ -53,13 +53,17 @@ Graph 不是在普通 Agent 上临时多挂几个工具。只要 turn 选择了 
 ```text
 用户选择 Graph 并发送请求
   -> Lead 理解目标、边界、风险与验收条件
+  -> Lead 按依赖结构选择 fanout_join / pipeline / bounded_loop / state_machine / hybrid（或 auto）
+  -> Lead 把独立 concern / subsystem / scope / validation track 拆成可单独验收的细粒度节点
+  -> 只为真实 outcome 或 accepted result 依赖连边，形成尽可能宽的安全 ready frontier
   -> 若从右侧计划面板启动，GUI 把已保存的完整 Markdown 直接嵌入本次请求
-  -> 模型必须先调用 graph_create_run
-  -> 宿主校验 GraphPlan 并写入 journal/snapshot
+  -> 模型用轻量 intent 调用 graph_create_run
+  -> 宿主补齐 phase、node、edge、review、budget、identity 和 timestamp，校验后写入 journal/snapshot
   -> Scheduler 计算 ready set
   -> AssignmentResolver 冻结每个 attempt 的权限快照
   -> DelegationRuntime 启动普通 executor child session
-  -> 原 Lead 用 graph_supervise_node 查看会话、选择 1–60 秒等待后复查或即时指导
+  -> executor 用 report_to_parent 主动上报 progress / finding / question / risk / result
+  -> 原 Lead 用 graph_supervise_node overview 观察全部会话，再按需逐个查看、等待或即时指导
   -> 当前监工阶段处理完且没有活跃 worker 需要继续观察时，Lead 才释放执行槽并监督休眠
   -> executor 正常结束，宿主自动回收最终回复和完整 child 会话
   -> deterministic / peer 证据加源 Lead 对每个节点显式 pass / revise
@@ -89,7 +93,7 @@ GUI 重连时先读取 HTTP snapshot，再从已确认的 sequence 继续 SSE re
 `kun/src/contracts/graph-agents.ts`，均带显式版本。
 
 - `GraphPlanV1`：phase、逻辑 node、typed edge、非 Token 资源限制、completion nodes、
-  revision 和创建信息。
+  revision、创建信息，以及已解析的执行策略。
 - `GraphRunV1`：当前 revision、run/node/attempt 投影、review、message、
   artifact、cleanup、资源 ledger 和最终 summary。
 - `GraphNodeAttemptV1`：不可变 assignment snapshot、attempt number、
@@ -208,6 +212,34 @@ Token 只记录实际用量，用于成本归因和学习证据。GraphPlan、�
 worker assignment 都没有 Token 上限；Scheduler 不会因 Token 数量告警、暂停、
 失败或停止派发。
 
+Graph 的并发上限只有在计划暴露多个 ready node 时才有意义。Lead 不能把整个多 concern
+需求塞进一个首节点，再用普通依赖把其余工作全部串在后面。对非平凡任务，节点应以
+“一个可独立验收的交付”为粒度，并按互不依赖的 concern、subsystem、repository scope
+或 validation track 扇出；同属一个 phase 或最后需要统一集成，不构成提前串行的理由。
+只有 successor 确实需要 predecessor outcome 时才使用 control edge，确实消费其已验收
+结果包时才使用 data edge。工作天然串行时仍保留真实依赖，不为了并发伪造独立性。
+
+`graph_create_run` 成功结果会返回 `executionShape`，包含
+已解析的 `strategy`、`initialExecutableNodeIds`、`initialExecutableNodeCount`、
+`effectivePerRunConcurrency` 和 `maximumImmediateDispatchCount`。非平凡图只有一个
+立即可派发节点时还会附带 informational diagnostic；它不否决已创建的 GraphRun，
+用于让 Lead 和排障人员直接看出当前计划没有吃满并发能力。
+
+### 执行策略
+
+Graph 不是只有一种固定拓扑。Lead 根据任务选择策略，宿主再把轻量 intent 编译成同一套
+可持久化 GraphPlan：
+
+- `fanout_join`：多个互不依赖的节点并发执行，由后续集成或 Lead 汇总。
+- `pipeline`：后一步确实消费前一步已验收结果；省略依赖时宿主按声明顺序串联。
+- `bounded_loop`：显式 LoopGate 驱动的有限修复或质量循环。
+- `state_machine`：用显式状态节点和转换依赖表达阶段切换；回环仍必须受 LoopGate 限制。
+- `hybrid`：同一张图中同时包含并发分支、串行交接和最终集成。
+- `auto`：只在 task 依赖已经足够明确时由宿主判断上述策略。
+
+Scheduler 不需要为每种策略复制一套实现；所有模式最终都落实为 ready set 和显式依赖，
+所以同一 GraphRun 可以先并发、再串行、之后重新扇出。
+
 每个 node timeout 由宿主 `AbortController` 强制执行。用户 cancel 会先写入
 terminal fence，再中止并等待活跃 worker；迟到结果不会进入已取消 GraphRun。
 
@@ -230,6 +262,12 @@ terminal fence，再中止并等待活跃 worker；迟到结果不会进入已�
 - 项目 Agent/候选治理工具。
 - 父级未授权的网络、MCP、Skill、写路径和 provider。
 
+Graph worker 模型策略默认是 `inherit`，即继承创建该 run 的源 Lead provider、model
+和 reasoning effort。设置中也可以选择 `fixed` 的默认 worker provider/model；
+该值只用于没有显式 assignment 且项目路由没有选中专用 profile 的隐式 executor。
+显式节点/profile 优先，所有固定值仍必须位于冻结的父级模型权限集合内，否则 attempt
+在启动前失败关闭。配置变化只影响后续 attempt，不改写历史 assignment snapshot。
+
 Executor context 只包含 task objective、验收条件、授权 scope、上一 attempt 的
 有限校验/修复反馈、前置状态，以及源 Lead 已明确批准给当前节点的数据结果包。
 control edge 只传 ready 状态，不附带前驱结果；Lead/user private Artifact、点对点
@@ -237,14 +275,19 @@ Mailbox、无关 node result 和完整父对话都不会继承。宿主安全边
 开头，即使尾部被截断也保留。
 
 子代理不需要理解 runId、nodeId、attemptId、edge、Mailbox 或 ArtifactStore。
-它只使用 assignment 授权的普通工具完成任务，再用正常最终回复说明结果、改动文件、
-实际检查、证据和风险。宿主自动回收回复并保留完整 child 会话给 Lead 查看。
+它只使用 assignment 授权的普通工具完成任务，并可调用 `report_to_parent` 主动上报：
+普通进度只持久化；finding、question、risk 和 result 会经过监督合并窗口唤醒 Lead。
+run、node、attempt、sender 和唯一 Lead recipient 全由宿主从 child session 推断，
+模型不能伪造这些字段。报告只是组织信号，不能验收节点、推进依赖或完成 GraphRun。
+子代理最后仍用正常回复说明结果、改动文件、实际检查、证据和风险。宿主自动回收回复
+并保留完整 child 会话给 Lead 查看。
 重试只补充有界的宿主校验错误和 Lead 修复要求，不再要求子代理调用任何
 `graph_worker_*` 工具。
 
 ## 8. Lead 工具与执行者边界
 
-新 Graph attempt 不向 executor 暴露 `graph_worker_progress`、
+新 Graph attempt 只额外暴露宿主管理的 `report_to_parent`，不暴露
+`graph_worker_progress`、
 `graph_worker_publish_artifact`、`graph_worker_message`、
 `graph_worker_receive_messages` 或 `graph_worker_submit_result`。这些旧事件仅用于
 兼容读取历史 GraphRun，不参与新流程。
@@ -254,10 +297,15 @@ Lead 工具：
 - `graph_create_run`
 - `graph_control_run`
 - `graph_patch_run`
-- `graph_review_node`
+- `graph_review_node`：模型只填写 `runId`、`nodeId`、`outcome`、`summary` 和可选
+  evidence / artifact refs / repair instructions / explicit attempt id。Kun 从持久化状态
+  解析最新 eligible attempt，并生成 review id、Lead provenance、timestamp、当前
+  revision 和 sequence；模型不再手写完整 `GraphReviewResultV1`。
 - `graph_supervise_node`：`inspect` 读取有界、脱敏、可续游标的 child 会话；
+  `overview` 按节点游标返回全 run 的状态、最新 attempt、实时 activity、最新主动报告
+  和少量会话尾部；完整内容仍通过 `inspect` 分页读取；
   `wait` 选择 1–60 秒可中止等待后重新检查；`guide` 先持久化 attempt 定向指导，
-  再尽可能即时 steer 正在运行的 child turn。
+  再尽可能即时 steer 正在运行的 child turn，并确认该 attempt 已被回复的阻塞问题。
 
 所有 Graph 流程动作都留在 Lead 和宿主：Lead 查看 executor 会话、即时指导、
 验收或要求返工；宿主记录状态、执行校验，并在 Lead 通过后把有界结果投影给计划中
@@ -275,7 +323,7 @@ Review 可以增加 deterministic、peer、human 等证据，但每个可执行�
 GraphSupervisor 只响应 material signals：
 
 - submitted、failure、stall、conflict、resource-limit、help、recovery、
-  completion、user steering。
+  completion、user steering、worker report。
 
 普通 progress heartbeat 只更新图，不触发模型轮询。相同信号按窗口合并；
 宿主使用 `messageSource: graph_runtime` 恢复或 steer 原始 Lead turn，不再为新格式

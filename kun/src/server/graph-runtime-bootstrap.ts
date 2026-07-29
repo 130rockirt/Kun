@@ -3,6 +3,7 @@ import type { DelegationRuntime } from '../delegation/delegation-runtime.js'
 import type { ThreadStore } from '../ports/thread-store.js'
 import type { TurnService } from '../services/turn-service.js'
 import type { GraphRuntimeStartOptions } from './graph-runtime-factory.js'
+import type { GraphRuntimeConfig } from '../config/kun-config.js'
 import { graphParentAuthorityToolNames } from '../graph/graph-tool-boundary.js'
 import type { CapabilityToolSpec } from '../adapters/tool/capability-registry.js'
 import type { TurnRunOutcome } from '../loop/turn-execution-types.js'
@@ -14,6 +15,7 @@ type GraphAuthorityDefaults = {
   allowedMcpServers: string[]
   disabledSkillIds: string[]
   networkAllowed: boolean
+  workerModel?: GraphRuntimeConfig['workerModel']
 }
 
 export function createGraphRuntimeStartOptions(input: {
@@ -96,6 +98,9 @@ export function createGraphRuntimeStartOptions(input: {
       const sandboxMode = thread?.sandboxMode ?? defaults.sandboxMode
       const model = sourceTurn?.model ?? thread?.model ?? defaults.model
       const providerId = sourceTurn?.providerId ?? thread?.providerId ?? 'default'
+      const configuredWorkerModel = defaults.workerModel?.mode === 'fixed'
+        ? defaults.workerModel
+        : undefined
       const tools = input.tools()
       const allowedProviders = [...new Set(tools
         .filter((tool) => defaults.networkAllowed || tool.effects?.network === false)
@@ -104,8 +109,14 @@ export function createGraphRuntimeStartOptions(input: {
         workspaceRoot: run.plans.at(-1)!.workspaceRoot,
         model,
         providerId,
-        allowedModelProviderIds: [providerId],
-        allowedModels: [model],
+        allowedModelProviderIds: [...new Set([
+          providerId,
+          ...(configuredWorkerModel ? [configuredWorkerModel.providerId] : [])
+        ])],
+        allowedModels: [...new Set([
+          model,
+          ...(configuredWorkerModel ? [configuredWorkerModel.model] : [])
+        ])],
         allowedProviderIds: allowedProviders,
         reasoningEffort: sourceTurn?.reasoningEffort ?? 'off',
         approvalPolicy: thread?.approvalPolicy ?? defaults.approvalPolicy,

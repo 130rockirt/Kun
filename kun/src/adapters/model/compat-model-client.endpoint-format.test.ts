@@ -13,6 +13,12 @@ import { createCompatRequestCodecs, normalizeToolSpecs } from './compat-request-
 
 type CapturedCall = { url: string; body: Record<string, unknown> }
 
+const DEEPSEEK_REASONING: NonNullable<ModelCapabilityMetadata['reasoning']> = {
+  supportedEfforts: ['off', 'high', 'max'],
+  defaultEffort: 'max',
+  requestProtocol: 'deepseek-chat-completions'
+}
+
 function modelCapabilities(
   overrides: Record<string, ModelEndpointFormat>
 ): (model: string) => ModelCapabilityMetadata {
@@ -111,6 +117,78 @@ describe('CompatModelClient per-model endpointFormat', () => {
 
     expect(build('https://api.deepseek.com').thinking).toEqual({ type: 'disabled' })
     expect(build('https://openrouter.ai/api/v1')).not.toHaveProperty('thinking')
+  })
+
+  it('disables DeepSeek thinking when a named tool choice is required', () => {
+    const codecs = createCompatRequestCodecs()
+    const tools = normalizeToolSpecs([{
+      name: 'graph_create_run',
+      description: 'Create a Graph run',
+      inputSchema: { type: 'object', additionalProperties: false }
+    }])
+    const build = (reasoningEffort?: string) => codecs.build({
+      request: {
+        ...request('deepseek-v4-pro'),
+        ...(reasoningEffort ? { reasoningEffort } : {}),
+        requiredToolName: 'graph_create_run'
+      },
+      model: 'deepseek-v4-pro',
+      messages: [],
+      tools,
+      stream: true,
+      endpointFormat: 'chat_completions',
+      baseUrl: 'https://api.deepseek.com',
+      reasoning: DEEPSEEK_REASONING,
+      isCodex: false,
+      isCodexLite: false,
+      codexNativeImageGeneration: false
+    })
+
+    for (const body of [build('high'), build()]) {
+      expect(body.thinking).toEqual({ type: 'disabled' })
+      expect(body).not.toHaveProperty('reasoning_effort')
+      expect(body.tool_choice).toEqual({
+        type: 'function', function: { name: 'graph_create_run' }
+      })
+    }
+  })
+
+  it('keeps required-tool thinking fallback scoped to official DeepSeek requests', () => {
+    const codecs = createCompatRequestCodecs()
+    const tools = normalizeToolSpecs([{
+      name: 'graph_create_run',
+      description: 'Create a Graph run',
+      inputSchema: { type: 'object', additionalProperties: false }
+    }])
+    const build = (baseUrl: string, requiredToolName?: string) => codecs.build({
+      request: {
+        ...request('deepseek-v4-pro'),
+        reasoningEffort: 'high',
+        ...(requiredToolName ? { requiredToolName } : {})
+      },
+      model: 'deepseek-v4-pro',
+      messages: [],
+      tools,
+      stream: true,
+      endpointFormat: 'chat_completions',
+      baseUrl,
+      reasoning: DEEPSEEK_REASONING,
+      isCodex: false,
+      isCodexLite: false,
+      codexNativeImageGeneration: false
+    })
+
+    const ordinaryDeepSeek = build('https://api.deepseek.com')
+    expect(ordinaryDeepSeek.thinking).toEqual({ type: 'enabled' })
+    expect(ordinaryDeepSeek.reasoning_effort).toBe('high')
+    expect(ordinaryDeepSeek).not.toHaveProperty('tool_choice')
+
+    const compatibleProvider = build('https://provider.example/v1', 'graph_create_run')
+    expect(compatibleProvider).not.toHaveProperty('thinking')
+    expect(compatibleProvider.reasoning_effort).toBe('high')
+    expect(compatibleProvider.tool_choice).toEqual({
+      type: 'function', function: { name: 'graph_create_run' }
+    })
   })
 
   it('excludes local tool provenance from every supported wire format', () => {

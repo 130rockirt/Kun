@@ -9,6 +9,7 @@ import { z } from 'zod'
 import type { AppSettingsV1 } from '../../shared/app-settings'
 import {
   DataMigrationImportPlanSchema,
+  DataMigrationEstimateSchema,
   DataMigrationInspectionSummarySchema,
   DataMigrationOperationStatusSchema,
   DataMigrationPackageEntrySchema,
@@ -203,16 +204,18 @@ export class DataMigrationController {
     const input = z.object({
       operationId: operationIdSchema,
       selectedWorkspaceIds: z.array(operationIdSchema),
+      categories: DataMigrationSelectionSchema.shape.categories.default(['workspace-files']),
       preset: DataMigrationSelectionSchema.shape.preset,
       sensitiveContentAcknowledged: z.boolean()
     }).strict().parse(raw)
     const [settings, runtimeThreads] = await Promise.all([this.options.store.load(), this.listRuntimeThreads()])
-    return this.exporter.estimate({
+    const inventory = await this.exporter.estimate({
       ...input,
       settings,
       runtimeThreads,
       onProgress: (progress) => this.publishProgress(progress)
     })
+    return DataMigrationEstimateSchema.parse(inventory.estimate)
   }
 
   private async inspect(raw: unknown): Promise<DataMigrationInspectionSummary> {
@@ -310,6 +313,9 @@ export class DataMigrationController {
       if (journal.phase === 'inspected') {
         throw new Error('This import stopped before staging was complete. Roll it back, then select the original package again; encrypted passphrases are never stored.')
       }
+      if (journal.phase !== 'staged' && journal.phase !== 'committing' && journal.phase !== 'verifying') {
+        throw new Error(`migration import cannot resume during ${journal.phase}; roll it back instead`)
+      }
       await this.runOperation(operationId, 'import', async () => {
         const workspaces = await this.recoverStagedWorkspaces(operationId)
         const runtimeArtifact = await this.journals.readArtifact<{
@@ -401,6 +407,7 @@ export class DataMigrationController {
     const blocking = recoverable.find((journal) => journal.operationId !== operationId)
     if (blocking) throw new Error(`migration recovery is required before starting another operation: ${blocking.operationId}`)
     const abort = new AbortController()
+    this.progress = undefined
     this.active = { operationId, kind, abort }
     try {
       return await task(abort.signal)

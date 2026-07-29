@@ -16,6 +16,8 @@ export const GRAPH_WORKER_TOOL_NAMES = [
   'graph_worker_submit_result'
 ] as const
 
+export const GRAPH_WORKER_REPORT_TOOL_NAME = 'report_to_parent' as const
+
 /**
  * Ordinary orchestration surfaces conflict with host-owned Graph scheduling.
  * Provider-kind filtering covers current and future delegation tools; exact
@@ -32,6 +34,7 @@ export const GRAPH_INCOMPATIBLE_TOOL_NAMES = [
 const INCOMPATIBLE_TOOL_NAMES = new Set<string>(GRAPH_INCOMPATIBLE_TOOL_NAMES)
 const LEAD_TOOL_NAMES = new Set<string>(GRAPH_LEAD_TOOL_NAMES)
 const WORKER_TOOL_NAMES = new Set<string>(GRAPH_WORKER_TOOL_NAMES)
+const WORKER_REPORT_TOOL_NAMES = new Set<string>([GRAPH_WORKER_REPORT_TOOL_NAME])
 
 export function isGraphLeadContext(
   context: Pick<ToolHostContext, 'orchestration' | 'messageSource'> | undefined
@@ -64,14 +67,15 @@ export function graphParentAuthorityToolNames(toolNames: readonly string[]): str
   return [...new Set(toolNames.filter((name) =>
     !INCOMPATIBLE_TOOL_NAMES.has(name) &&
     !LEAD_TOOL_NAMES.has(name) &&
-    !WORKER_TOOL_NAMES.has(name)
+    !WORKER_TOOL_NAMES.has(name) &&
+    !WORKER_REPORT_TOOL_NAMES.has(name)
   ))].sort()
 }
 
 export function graphWorkerToolNamesWithin(
-  _allowedToolNames: readonly string[]
+  allowedToolNames: readonly string[]
 ): string[] {
-  // Retained as a compatibility export for callers compiled against the old
-  // boundary. New Graph children are ordinary executors and receive none.
-  return []
+  return allowedToolNames.includes(GRAPH_WORKER_REPORT_TOOL_NAME)
+    ? [GRAPH_WORKER_REPORT_TOOL_NAME]
+    : []
 }

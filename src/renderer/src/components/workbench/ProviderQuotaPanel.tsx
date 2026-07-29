@@ -55,7 +55,22 @@ const STATUS_PRESENTATION: Record<ProviderQuotaStatus, StatusPresentation> = {
   }
 }
 
-export function ProviderQuotaPanel(): ReactElement {
+export type ProviderQuotaPanelStatus = {
+  loading: boolean
+  refreshedAt?: string
+}
+
+type ProviderQuotaPanelProps = {
+  embedded?: boolean
+  refreshKey?: unknown
+  onStatusChange?: (status: ProviderQuotaPanelStatus) => void
+}
+
+export function ProviderQuotaPanel({
+  embedded = false,
+  refreshKey,
+  onStatusChange
+}: ProviderQuotaPanelProps = {}): ReactElement {
   const { t, i18n } = useTranslation('common')
   const [result, setResult] = useState<ProviderQuotaListResult | null>(null)
   const [loading, setLoading] = useState(true)
@@ -85,7 +100,14 @@ export function ProviderQuotaPanel(): ReactElement {
 
   useEffect(() => {
     void refresh()
-  }, [refresh])
+  }, [refresh, refreshKey])
+
+  useEffect(() => {
+    onStatusChange?.({
+      loading: loading || refreshing,
+      ...(result?.refreshedAt ? { refreshedAt: result.refreshedAt } : {})
+    })
+  }, [loading, onStatusChange, refreshing, result?.refreshedAt])
 
   const openDashboard = (url: string): void => {
     if (typeof window.kunGui?.openExternal === 'function') {
@@ -98,7 +120,7 @@ export function ProviderQuotaPanel(): ReactElement {
       aria-label={t('providerQuotaTitle')}
       className="ds-no-drag flex h-full min-h-0 flex-col overflow-hidden bg-ds-sidebar"
     >
-      <header className="shrink-0 border-b border-ds-border-muted px-4 py-3.5">
+      {!embedded ? <header className="shrink-0 border-b border-ds-border-muted px-4 py-3.5">
         <div className="flex items-start gap-3">
           <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-ds-border-muted bg-ds-card text-accent shadow-sm">
             <Gauge className="h-4.5 w-4.5" strokeWidth={1.8} />
@@ -130,7 +152,7 @@ export function ProviderQuotaPanel(): ReactElement {
             })}
           </p>
         ) : null}
-      </header>
+      </header> : null}
 
       <div
         data-provider-quota-scroller

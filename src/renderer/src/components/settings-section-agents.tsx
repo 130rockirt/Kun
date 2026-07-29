@@ -933,6 +933,9 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
                     <GraphModeSettingsPanel
                       t={t}
                       value={graph}
+                      modelProviders={modelProviders}
+                      leadProviderId={activeProviderId}
+                      leadModel={kun.model}
                       selectControlClass={selectControlClass}
                       onChange={(patch) => updateKun({ graph: patch })}
                     />

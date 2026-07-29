@@ -1,10 +1,14 @@
-import type { KunGraphSettingsV1 } from './app-settings-types'
+import type {
+  KunGraphSettingsPatchV1,
+  KunGraphSettingsV1
+} from './app-settings-types'
 
 export function defaultKunGraphSettings(): KunGraphSettingsV1 {
   return {
     enabled: false,
     defaultStrategy: 'direct',
     rolloutStage: 'experimental',
+    workerModel: { mode: 'inherit' },
     scheduler: {
       maxNodes: 128,
       maxEdges: 512,
@@ -78,9 +82,10 @@ export function defaultKunGraphSettings(): KunGraphSettingsV1 {
 }
 
 export function normalizeKunGraphSettings(
-  input: Partial<KunGraphSettingsV1> | undefined
+  input: KunGraphSettingsPatchV1 | undefined
 ): KunGraphSettingsV1 {
   const defaults = defaultKunGraphSettings()
+  const workerModel = input?.workerModel ?? defaults.workerModel
   const scheduler = input?.scheduler ?? defaults.scheduler
   const context = input?.context ?? defaults.context
   const mailbox = input?.mailbox ?? defaults.mailbox
@@ -106,6 +111,21 @@ export function normalizeKunGraphSettings(
       input?.rolloutStage === 'stable'
         ? input.rolloutStage
         : 'experimental',
+    workerModel:
+      workerModel.mode === 'fixed' &&
+      typeof workerModel.providerId === 'string' &&
+      workerModel.providerId.trim() &&
+      typeof workerModel.model === 'string' &&
+      workerModel.model.trim()
+        ? {
+            mode: 'fixed',
+            providerId: workerModel.providerId.trim().slice(0, 128),
+            model: workerModel.model.trim().slice(0, 256),
+            ...(workerModel.reasoningEffort
+              ? { reasoningEffort: workerModel.reasoningEffort }
+              : {})
+          }
+        : { mode: 'inherit' },
     scheduler: {
       maxNodes: boundedPositiveInt(scheduler.maxNodes, defaults.scheduler.maxNodes, 10_000),
       maxEdges: boundedPositiveInt(scheduler.maxEdges, defaults.scheduler.maxEdges, 50_000),

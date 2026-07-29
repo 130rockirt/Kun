@@ -49,6 +49,7 @@ export function DataMigrationSettingsSection(): ReactElement {
 
   const [exportStep, setExportStep] = useState(0)
   const [estimate, setEstimate] = useState<DataMigrationEstimate | null>(null)
+  const [availableWorkspaces, setAvailableWorkspaces] = useState<DataMigrationEstimate['workspaces']>([])
   const [selectedWorkspaces, setSelectedWorkspaces] = useState<string[]>([])
   const [categories, setCategories] = useState<DataMigrationCategory[]>(DEFAULT_CATEGORIES)
   const [preset, setPreset] = useState<'complete' | 'smaller'>('complete')
@@ -93,23 +94,29 @@ export function DataMigrationSettingsSection(): ReactElement {
       const value = await api.estimateExport({
         operationId: exportOperationId,
         selectedWorkspaceIds: selectedWorkspaces,
+        categories,
         preset,
         sensitiveContentAcknowledged: sensitiveAcknowledged
       })
       setEstimate(value)
+      setAvailableWorkspaces((current) => {
+        const byId = new Map(current.map((workspace) => [workspace.workspaceId, workspace]))
+        for (const workspace of value.workspaces) byId.set(workspace.workspaceId, workspace)
+        return [...byId.values()]
+      })
       if (selectedWorkspaces.length === 0) setSelectedWorkspaces(value.workspaces.map((workspace) => workspace.workspaceId))
     } catch (reason) {
       setError(errorMessage(reason))
     } finally {
       setBusy(false)
     }
-  }, [api, exportOperationId, preset, selectedWorkspaces, sensitiveAcknowledged])
+  }, [api, categories, exportOperationId, preset, selectedWorkspaces, sensitiveAcknowledged])
 
   useEffect(() => {
-    if (flow === 'export' && exportStep === 0 && !estimate && !automaticEstimateStarted.current) {
+    if (flow === 'export' && !estimate && !automaticEstimateStarted.current) {
       void loadEstimate()
     }
-  }, [estimate, exportStep, flow, loadEstimate])
+  }, [estimate, flow, loadEstimate])
 
   useEffect(() => {
     if (flow === 'landing') return
@@ -175,7 +182,10 @@ export function DataMigrationSettingsSection(): ReactElement {
         inspectionId: inspection.inspectionId,
         destinationBaseRoot,
         ...(input?.strategies ? { strategies: input.strategies } : {}),
-        ...(input?.destinationRoots ? { destinationRoots: input.destinationRoots } : {})
+        ...(input?.destinationRoots ? { destinationRoots: input.destinationRoots } : {}),
+        ...(input?.strategies
+          ? { skippedWorkspaceIds: skippedWorkspaceIdsForStrategies(input.strategies) }
+          : {})
       })
       setPlan(value)
       setImportStep(3)
@@ -199,6 +209,22 @@ export function DataMigrationSettingsSection(): ReactElement {
 
   const resolveConflict = (conflictId: string, resolution: DataMigrationFileConflictResolution) => {
     setPlan((current) => current ? resolvePlanConflict(current, conflictId, resolution) : current)
+  }
+
+  const toggleExportCategory = (category: DataMigrationCategory) => {
+    automaticEstimateStarted.current = false
+    setEstimate(null)
+    setCategories((current) => {
+      if (category === 'thread-history' && current.includes(category)) {
+        return current.filter((item) =>
+          item !== 'thread-history' && item !== 'attachments' && item !== 'artifacts' && item !== 'memory'
+        )
+      }
+      const next = toggle(current, category)
+      return category === 'attachments' || category === 'artifacts' || category === 'memory'
+        ? [...new Set([...next, 'thread-history' as const])]
+        : next
+    })
   }
 
   const startImport = async () => {
@@ -324,8 +350,13 @@ export function DataMigrationSettingsSection(): ReactElement {
   const exportSecurityValid = exportPassphrase
     ? exportPassphrase.length >= 8 && exportPassphrase === exportPassphraseConfirm
     : unencryptedAcknowledged
-  const importReady = Boolean(plan && normalizeResolvedPlan(plan).fatalIssueCount === 0 &&
-    normalizeResolvedPlan(plan).mappings.every((mapping) => mapping.strategy === 'skip' || mapping.compatible))
+  const resolvedPlan = plan ? normalizeResolvedPlan(plan) : null
+  const importReady = Boolean(resolvedPlan &&
+    resolvedPlan.fatalIssueCount === 0 &&
+    resolvedPlan.conflicts.every((conflict) => Boolean(conflict.resolution)) &&
+    resolvedPlan.mappings.every((mapping) =>
+      mapping.strategy === 'skip' || (mapping.compatible && mapping.unresolvedIssueCount === 0)
+    ))
   const activeTabHasFlow =
     (activeTab === 'export' && flow === 'export') ||
     (activeTab === 'import' && flow === 'import') ||
@@ -384,11 +415,17 @@ export function DataMigrationSettingsSection(): ReactElement {
           {exportStep === 0 ? (
             <Panel title={t('dataMigrationScopeTitle')} description={t('dataMigrationScopeBody')}>
               {busy && !estimate ? <Loading /> : null}
-              {estimate ? (
+              {availableWorkspaces.length > 0 ? (
                 <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
-                  {estimate.workspaces.map((workspace) => (
+                  {availableWorkspaces.map((workspace) => (
                     <label key={workspace.workspaceId} className="flex items-start gap-3 rounded-xl border border-ds-border px-3 py-3">
-                      <input type="checkbox" className="mt-1" checked={selectedWorkspaces.includes(workspace.workspaceId)} onChange={() => setSelectedWorkspaces(toggle(selectedWorkspaces, workspace.workspaceId))} />
+                      <input type="checkbox" className="mt-1" checked={selectedWorkspaces.includes(workspace.workspaceId)} onChange={() => {
+                        const next = toggle(selectedWorkspaces, workspace.workspaceId)
+                        if (next.length === 0) return
+                        automaticEstimateStarted.current = false
+                        setSelectedWorkspaces(next)
+                        setEstimate(null)
+                      }} />
                       <span className="min-w-0 flex-1"><span className="block font-medium text-ds-ink">{workspace.displayName}</span><span className="block truncate text-[12px] text-ds-muted">{workspace.sourcePathDisplay}</span></span>
                       <span className="text-[12px] text-ds-muted">{formatBytes(workspace.logicalBytes)}</span>
                     </label>
@@ -401,7 +438,7 @@ export function DataMigrationSettingsSection(): ReactElement {
           {exportStep === 1 ? (
             <Panel title={t('dataMigrationSecurityTitle')} description={t('dataMigrationSecurityBody')}>
               <div className="grid gap-3 sm:grid-cols-2">
-                {DEFAULT_CATEGORIES.map((category) => <label key={category} className="flex items-center gap-2 rounded-lg border border-ds-border px-3 py-2 text-[13px]"><input type="checkbox" checked={categories.includes(category)} onChange={() => setCategories(toggle(categories, category))} />{t(`dataMigrationCategory_${category}`)}</label>)}
+                {DEFAULT_CATEGORIES.map((category) => <label key={category} className="flex items-center gap-2 rounded-lg border border-ds-border px-3 py-2 text-[13px]"><input type="checkbox" checked={categories.includes(category)} onChange={() => toggleExportCategory(category)} />{t(`dataMigrationCategory_${category}`)}</label>)}
               </div>
               <div className="mt-4 grid gap-3 sm:grid-cols-2"><Choice active={preset === 'complete'} title={t('dataMigrationPresetComplete')} body={t('dataMigrationPresetCompleteBody')} onClick={() => { automaticEstimateStarted.current = false; setPreset('complete'); setEstimate(null) }} /><Choice active={preset === 'smaller'} title={t('dataMigrationPresetSmaller')} body={t('dataMigrationPresetSmallerBody')} onClick={() => { automaticEstimateStarted.current = false; setPreset('smaller'); setEstimate(null) }} /></div>
               <div className="mt-5 rounded-xl border border-ds-border bg-ds-subtle/50 p-4">
@@ -412,9 +449,13 @@ export function DataMigrationSettingsSection(): ReactElement {
                 )}
                 <p className="mt-2 text-[12px] text-ds-muted">{t('dataMigrationNoPasswordRecovery')}</p>
               </div>
-              {estimate && estimate.sensitiveFindings.length > 0 ? <label className="mt-3 flex items-start gap-2 rounded-xl border border-amber-300/60 p-3 text-[12px]"><input type="checkbox" checked={sensitiveAcknowledged} onChange={(event) => setSensitiveAcknowledged(event.target.checked)} />{t('dataMigrationSensitiveAck', { count: estimate.sensitiveFindings.length })}</label> : null}
+              {categories.includes('workspace-files') && estimate && estimate.sensitiveFindings.length > 0 ? <label className="mt-3 flex items-start gap-2 rounded-xl border border-amber-300/60 p-3 text-[12px]"><input type="checkbox" checked={sensitiveAcknowledged} onChange={(event) => {
+                automaticEstimateStarted.current = false
+                setSensitiveAcknowledged(event.target.checked)
+                setEstimate(null)
+              }} />{t('dataMigrationSensitiveAck', { count: estimate.sensitiveFindings.length })}</label> : null}
               <label className="mt-4 block text-[13px] text-ds-muted">{t('dataMigrationRunningThreads')}<select className="settings-input mt-2 w-full" value={runningThreadPolicy} onChange={(event) => setRunningThreadPolicy(event.target.value as typeof runningThreadPolicy)}><option value="wait">{t('dataMigrationRunningWait')}</option><option value="interrupt">{t('dataMigrationRunningInterrupt')}</option><option value="omit">{t('dataMigrationRunningOmit')}</option></select></label>
-              <WizardButtons back={() => setExportStep(0)} next={() => setExportStep(2)} nextDisabled={categories.length === 0 || !exportSecurityValid || Boolean(estimate?.sensitiveFindings.length && !sensitiveAcknowledged)} />
+              <WizardButtons back={() => setExportStep(0)} next={() => setExportStep(2)} nextDisabled={categories.length === 0 || !estimate || !exportSecurityValid || Boolean(categories.includes('workspace-files') && estimate.sensitiveFindings.length && !sensitiveAcknowledged)} />
             </Panel>
           ) : null}
           {exportStep === 2 ? (
@@ -481,7 +522,7 @@ export function DataMigrationLanding(props: {
     Boolean(props.status?.recoverable.length)
   if (props.status && !props.status.featureEnabled && props.status.recoverable.length === 0) return <DataMigrationActionError message={t('dataMigrationFeatureDisabled')} />
   return <div className="space-y-5">
-    {showReports ? props.status?.recoverable.map((item) => <div key={item.operationId} className="rounded-2xl border border-amber-300/70 bg-amber-500/5 p-5"><div className="flex items-center gap-2 font-semibold text-ds-ink"><AlertTriangle className="h-5 w-5 text-amber-600" />{t('dataMigrationRecoveryTitle')}</div><p className="mt-2 text-[13px] text-ds-muted">{t('dataMigrationRecoveryBody', { phase: item.phase, effect: item.destinationEffect })}</p>{item.error ? <p className="mt-2 text-[12px] text-ds-muted"><strong>{item.error.code}</strong> · {item.error.message}</p> : null}{item.manualRecoverySteps.length > 0 ? <ul className="mt-3 list-disc space-y-1 pl-5 text-[12px] text-amber-800 dark:text-amber-200">{item.manualRecoverySteps.map((step) => <li key={step}>{step}</li>)}</ul> : null}{item.reportPath ? <p className="mt-2 break-all text-[11px] text-ds-muted">{t('dataMigrationReportLocation')}: {item.reportPath}</p> : null}<div className="mt-4 flex gap-2">{item.phase !== 'inspected' ? <button type="button" className="primary-button" disabled={props.busy} onClick={() => void props.onRecover(item.operationId, 'resume')}>{t('dataMigrationResume')}</button> : null}<button type="button" className="secondary-button" disabled={props.busy} onClick={() => void props.onRecover(item.operationId, 'rollback')}>{t('dataMigrationRollback')}</button></div></div>) : null}
+    {showReports ? props.status?.recoverable.map((item) => <div key={item.operationId} className="rounded-2xl border border-amber-300/70 bg-amber-500/5 p-5"><div className="flex items-center gap-2 font-semibold text-ds-ink"><AlertTriangle className="h-5 w-5 text-amber-600" />{t('dataMigrationRecoveryTitle')}</div><p className="mt-2 text-[13px] text-ds-muted">{t('dataMigrationRecoveryBody', { phase: item.phase, effect: item.destinationEffect })}</p>{item.error ? <p className="mt-2 text-[12px] text-ds-muted"><strong>{item.error.code}</strong> · {item.error.message}</p> : null}{item.manualRecoverySteps.length > 0 ? <ul className="mt-3 list-disc space-y-1 pl-5 text-[12px] text-amber-800 dark:text-amber-200">{item.manualRecoverySteps.map((step) => <li key={step}>{step}</li>)}</ul> : null}{item.reportPath ? <p className="mt-2 break-all text-[11px] text-ds-muted">{t('dataMigrationReportLocation')}: {item.reportPath}</p> : null}<div className="mt-4 flex gap-2">{canResumeMigrationPhase(item.phase) ? <button type="button" className="primary-button" disabled={props.busy} onClick={() => void props.onRecover(item.operationId, 'resume')}>{t('dataMigrationResume')}</button> : null}<button type="button" className="secondary-button" disabled={props.busy} onClick={() => void props.onRecover(item.operationId, 'rollback')}>{t('dataMigrationRollback')}</button></div></div>) : null}
     {showExport || showImport ? <div className={`grid gap-4 ${showExport && showImport ? 'sm:grid-cols-2' : ''}`}>
       {showExport ? <LandingCard icon={<PackagePlus />} title={t('dataMigrationCreateTitle')} body={t('dataMigrationCreateBody')} action={t('dataMigrationCreateAction')} onClick={props.onExport} disabled={newMigrationDisabled} /> : null}
       {showImport ? <LandingCard icon={<FolderInput />} title={t('dataMigrationImportTitle')} body={t('dataMigrationImportBody')} action={t('dataMigrationImportAction')} onClick={props.onImport} disabled={newMigrationDisabled} /> : null}
@@ -502,7 +543,7 @@ function LandingCard({ icon, title, body, action, onClick, disabled }: { icon: R
 
 function Panel({ title, description, children }: { title: string; description: string; children: React.ReactNode }): ReactElement { return <div data-migration-step-panel className="rounded-2xl border border-ds-border bg-ds-card p-5 shadow-sm"><h3 tabIndex={-1} className="text-[16px] font-semibold text-ds-ink focus:outline-none">{title}</h3><p className="mt-1 text-[13px] leading-6 text-ds-muted">{description}</p><div className="mt-5">{children}</div></div> }
 export function DataMigrationStepRail({ steps, current }: { steps: string[]; current: number }): ReactElement { return <ol className="flex gap-2 overflow-x-auto" aria-label="Migration steps">{steps.map((step, index) => <li key={step} aria-current={index === current ? 'step' : undefined} className={`whitespace-nowrap rounded-full px-3 py-1.5 text-[12px] font-medium ${index === current ? 'bg-blue-600 text-white' : index < current ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-200' : 'bg-ds-subtle text-ds-muted'}`}>{index + 1}. {step}</li>)}</ol> }
-export function DataMigrationVirtualConflictList({ conflicts, onResolve }: { conflicts: DataMigrationConflict[]; onResolve: (id: string, resolution: DataMigrationFileConflictResolution) => void }): ReactElement { const { t } = useTranslation('settings'); const [scrollTop, setScrollTop] = useState(0); const rowHeight = 116; const viewportHeight = 320; const start = Math.max(0, Math.floor(scrollTop / rowHeight) - 3); const end = Math.min(conflicts.length, Math.ceil((scrollTop + viewportHeight) / rowHeight) + 3); return <div className="relative overflow-y-auto rounded-xl border border-ds-border" style={{ height: viewportHeight }} onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)} role="list" aria-label={t('dataMigrationConflictList')}><div className="relative" style={{ height: conflicts.length * rowHeight }}>{conflicts.slice(start, end).map((conflict, offset) => <div key={conflict.conflictId} role="listitem" className="absolute left-0 right-0 border-b border-ds-border p-3 text-[12px]" style={{ height: rowHeight, top: (start + offset) * rowHeight }}><div className="truncate font-medium text-ds-ink" title={conflict.path}>{conflict.path}</div><div className="text-ds-muted">{conflict.kind}</div><select aria-label={`${conflict.path} resolution`} className="settings-input mt-2 w-full" value={conflict.resolution ?? ''} onChange={(event) => onResolve(conflict.conflictId, event.target.value as DataMigrationFileConflictResolution)}><option value="">{t('dataMigrationChooseResolution')}</option><option value="keep-target">{t('dataMigrationKeepTarget')}</option><option value="import-sibling">{t('dataMigrationSaveImportedCopy')}</option><option value="replace-with-backup">{t('dataMigrationReplaceBackup')}</option><option value="skip">{t('dataMigrationSkip')}</option><option value="rename-source">{t('dataMigrationRenameSource')}</option></select></div>)}</div></div> }
+export function DataMigrationVirtualConflictList({ conflicts, onResolve }: { conflicts: DataMigrationConflict[]; onResolve: (id: string, resolution: DataMigrationFileConflictResolution) => void }): ReactElement { const { t } = useTranslation('settings'); const [scrollTop, setScrollTop] = useState(0); const rowHeight = 116; const viewportHeight = 320; const start = Math.max(0, Math.floor(scrollTop / rowHeight) - 3); const end = Math.min(conflicts.length, Math.ceil((scrollTop + viewportHeight) / rowHeight) + 3); const labels: Record<DataMigrationFileConflictResolution, string> = { 'keep-target': t('dataMigrationKeepTarget'), 'import-sibling': t('dataMigrationSaveImportedCopy'), 'replace-with-backup': t('dataMigrationReplaceBackup'), skip: t('dataMigrationSkip'), 'rename-source': t('dataMigrationRenameSource') }; return <div className="relative overflow-y-auto rounded-xl border border-ds-border" style={{ height: viewportHeight }} onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)} role="list" aria-label={t('dataMigrationConflictList')}><div className="relative" style={{ height: conflicts.length * rowHeight }}>{conflicts.slice(start, end).map((conflict, offset) => <div key={conflict.conflictId} role="listitem" className="absolute left-0 right-0 border-b border-ds-border p-3 text-[12px]" style={{ height: rowHeight, top: (start + offset) * rowHeight }}><div className="truncate font-medium text-ds-ink" title={conflict.path}>{conflict.path}</div><div className="text-ds-muted">{conflict.kind}</div><select aria-label={`${conflict.path} resolution`} className="settings-input mt-2 w-full" value={conflict.resolution ?? ''} onChange={(event) => onResolve(conflict.conflictId, event.target.value as DataMigrationFileConflictResolution)}><option value="">{t('dataMigrationChooseResolution')}</option>{allowedConflictResolutions(conflict).map((resolution) => <option key={resolution} value={resolution}>{labels[resolution]}</option>)}</select></div>)}</div></div> }
 function Choice({ active, title, body, onClick }: { active: boolean; title: string; body: string; onClick: () => void }): ReactElement { return <button type="button" aria-pressed={active} onClick={onClick} className={`rounded-xl border p-3 text-left ${active ? 'border-blue-500 bg-blue-500/5' : 'border-ds-border'}`}><span className="block font-medium text-ds-ink">{title}</span><span className="mt-1 block text-[12px] text-ds-muted">{body}</span></button> }
 function WizardButtons({ back, next, nextDisabled, nextLabel }: { back: () => void; next: () => void; nextDisabled?: boolean; nextLabel?: string }): ReactElement { const { t } = useTranslation('settings'); return <div className="mt-5 flex justify-between"><button type="button" className="secondary-button" onClick={back}>{t('dataMigrationBack')}</button><button type="button" className="primary-button" disabled={nextDisabled} onClick={next}>{nextLabel ?? t('dataMigrationContinue')}</button></div> }
 function Summary({ rows }: { rows: string[][] }): ReactElement { return <dl className="divide-y divide-ds-border rounded-xl border border-ds-border">{rows.map(([label, value]) => <div key={label} className="flex justify-between gap-4 px-3 py-2.5 text-[13px]"><dt className="text-ds-muted">{label}</dt><dd className="text-right font-medium text-ds-ink">{value}</dd></div>)}</dl> }
@@ -516,9 +557,12 @@ export function DataMigrationReportView({ report, onDone }: { report: DataMigrat
 function StatusIcon({ outcome }: { outcome: DataMigrationReport['outcome'] }): ReactElement { return outcome === 'success' ? <CheckCircle2 aria-label="Success" className="h-5 w-5 text-emerald-600" /> : outcome === 'completed-with-review' ? <AlertTriangle aria-label="Review needed" className="h-5 w-5 text-amber-600" /> : <FileArchive aria-label={outcome} className="h-5 w-5 text-ds-muted" /> }
 
 export function formatBytes(value: number): string { if (!Number.isFinite(value) || value <= 0) return '0 B'; const units = ['B', 'KB', 'MB', 'GB', 'TB']; const index = Math.min(units.length - 1, Math.floor(Math.log(value) / Math.log(1024))); return `${(value / 1024 ** index).toFixed(index === 0 ? 0 : 1)} ${units[index]}` }
-export function resolvePlanConflict(plan: DataMigrationImportPlan, conflictId: string, resolution: DataMigrationFileConflictResolution): DataMigrationImportPlan { return normalizeResolvedPlan({ ...plan, conflicts: plan.conflicts.map((conflict) => conflict.conflictId === conflictId ? { ...conflict, resolution, ...(resolution === 'rename-source' ? { renamedPath: `${conflict.path}.imported` as typeof conflict.path } : {}) } : conflict) }) }
-export function resolveAllPlanConflicts(plan: DataMigrationImportPlan, resolution: DataMigrationFileConflictResolution): DataMigrationImportPlan { return normalizeResolvedPlan({ ...plan, conflicts: plan.conflicts.map((conflict) => ({ ...conflict, resolution, ...(resolution === 'rename-source' ? { renamedPath: `${conflict.path}.imported` as typeof conflict.path } : {}) })) }) }
-export function normalizeResolvedPlan(plan: DataMigrationImportPlan): DataMigrationImportPlan { const unresolvedFatalByWorkspace = new Map<string, number>(); for (const conflict of plan.conflicts) if (conflict.fatal && !conflict.resolution) unresolvedFatalByWorkspace.set(conflict.workspaceId, (unresolvedFatalByWorkspace.get(conflict.workspaceId) ?? 0) + 1); return { ...plan, mappings: plan.mappings.map((mapping) => ({ ...mapping, compatible: mapping.strategy === 'skip' || (mapping.freeBytes !== undefined && mapping.requiredBytes <= mapping.freeBytes && !unresolvedFatalByWorkspace.has(mapping.workspaceId)), unresolvedIssueCount: plan.conflicts.filter((conflict) => conflict.workspaceId === mapping.workspaceId && !conflict.resolution).length })), fatalIssueCount: [...unresolvedFatalByWorkspace.values()].reduce((sum, count) => sum + count, 0) } }
+export function resolvePlanConflict(plan: DataMigrationImportPlan, conflictId: string, resolution: DataMigrationFileConflictResolution): DataMigrationImportPlan { return normalizeResolvedPlan({ ...plan, conflicts: plan.conflicts.map((conflict) => conflict.conflictId === conflictId && allowedConflictResolutions(conflict).includes(resolution) ? { ...conflict, resolution } : conflict) }) }
+export function resolveAllPlanConflicts(plan: DataMigrationImportPlan, resolution: DataMigrationFileConflictResolution): DataMigrationImportPlan { return normalizeResolvedPlan({ ...plan, conflicts: plan.conflicts.map((conflict) => allowedConflictResolutions(conflict).includes(resolution) ? { ...conflict, resolution } : conflict) }) }
+export function normalizeResolvedPlan(plan: DataMigrationImportPlan): DataMigrationImportPlan { const unresolvedFatalByWorkspace = new Map<string, number>(); for (const conflict of plan.conflicts) if (conflict.fatal && !conflict.resolution) unresolvedFatalByWorkspace.set(conflict.workspaceId, (unresolvedFatalByWorkspace.get(conflict.workspaceId) ?? 0) + 1); return { ...plan, mappings: plan.mappings.map((mapping) => ({ ...mapping, compatible: mapping.strategy === 'skip' || ((mapping.preflightCompatible ?? mapping.compatible) && !unresolvedFatalByWorkspace.has(mapping.workspaceId)), unresolvedIssueCount: plan.conflicts.filter((conflict) => conflict.workspaceId === mapping.workspaceId && !conflict.resolution).length })), fatalIssueCount: [...unresolvedFatalByWorkspace.values()].reduce((sum, count) => sum + count, 0) } }
+function allowedConflictResolutions(conflict: DataMigrationConflict): DataMigrationFileConflictResolution[] { if (!conflict.fatal) return ['keep-target', 'import-sibling', 'replace-with-backup', 'skip']; return conflict.renamedPath ? ['skip', 'rename-source'] : ['skip'] }
+function canResumeMigrationPhase(phase: DataMigrationProgress['phase']): boolean { return phase === 'staged' || phase === 'committing' || phase === 'verifying' }
+export function skippedWorkspaceIdsForStrategies(strategies: Readonly<Record<string, DataMigrationWorkspaceConflictStrategy>>): string[] { return Object.entries(strategies).flatMap(([workspaceId, strategy]) => strategy === 'skip' ? [workspaceId] : []) }
 function toggle<T>(values: T[], value: T): T[] { return values.includes(value) ? values.filter((item) => item !== value) : [...values, value] }
 function operationId(kind: string): string { return `${kind}_${globalThis.crypto?.randomUUID?.().replaceAll('-', '') ?? `${Date.now()}_${Math.random().toString(16).slice(2)}`}` }
 function errorMessage(reason: unknown): string { return reason instanceof Error ? reason.message : String(reason) }

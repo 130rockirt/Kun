@@ -107,7 +107,14 @@ export class CompatRequestCodecs {
     const nativeDeepSeekHost = isDeepSeekHost(input.baseUrl)
     const geminiOpenAiHost = isGeminiOpenAiHost(input.baseUrl)
     const includeThinking = !isAzureOpenAiEndpoint(input.baseUrl) && !geminiOpenAiHost
-    this.deps.applyChatReasoning(body, input.request.reasoningEffort, {
+    const requiredToolChoice = namedToolChoice(input)
+    // DeepSeek V4 can call tools while thinking, but its Chat Completions API
+    // rejects any tool_choice parameter in thinking mode. Keep the hard named
+    // tool gate and disable thinking only for this constrained request.
+    const reasoningEffort = nativeDeepSeekHost && requiredToolChoice
+      ? 'off'
+      : input.request.reasoningEffort
+    this.deps.applyChatReasoning(body, reasoningEffort, {
       includeThinking,
       nativeDeepSeekHost,
       geminiOpenAiHost,
@@ -130,7 +137,6 @@ export class CompatRequestCodecs {
         }
       }))
     }
-    const requiredToolChoice = namedToolChoice(input)
     if (requiredToolChoice) body.tool_choice = {
       type: 'function',
       function: { name: requiredToolChoice }

@@ -1,22 +1,48 @@
 import type { ReactElement } from 'react'
-import type { KunGraphSettingsV1, KunGraphSettingsPatchV1 } from '@shared/app-settings'
-import { InlineNoticeView, SettingsCard, SettingRow, Toggle } from './settings-controls'
+import type {
+  KunGraphSettingsV1,
+  KunGraphSettingsPatchV1,
+  ModelProviderProfileV1
+} from '@shared/app-settings'
+import {
+  InlineNoticeView,
+  ModelSelect,
+  SettingsCard,
+  SettingRow,
+  Toggle
+} from './settings-controls'
 
 type Translate = (key: string) => string
 
 export function GraphModeSettingsPanel({
   t,
   value,
+  modelProviders,
+  leadProviderId,
+  leadModel,
   selectControlClass,
   onChange
 }: {
   t: Translate
   value: KunGraphSettingsV1
+  modelProviders: ModelProviderProfileV1[]
+  leadProviderId: string
+  leadModel: string
   selectControlClass: string
   onChange: (patch: KunGraphSettingsPatchV1) => void
 }): ReactElement {
   const numberInputClass =
     'w-28 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[13px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30'
+  const workerProviderId = value.workerModel.mode === 'fixed'
+    ? value.workerModel.providerId
+    : leadProviderId
+  const workerProvider = modelProviders.find((provider) =>
+    provider.id === workerProviderId
+  ) ?? modelProviders[0]
+  const workerModels = workerProvider?.models ?? []
+  const workerModel = value.workerModel.mode === 'fixed'
+    ? value.workerModel.model
+    : leadModel
   return (
     <div className="mt-6">
       <SettingsCard title={t('graphSettingsTitle')}>
@@ -41,6 +67,87 @@ export function GraphModeSettingsPanel({
         />
         {value.enabled ? (
           <>
+            <SettingRow
+              title={t('graphSettingsWorkerModelMode')}
+              description={t('graphSettingsWorkerModelModeDesc')}
+              control={
+                <select
+                  className={selectControlClass}
+                  value={value.workerModel.mode}
+                  onChange={(event) => {
+                    if (event.target.value === 'inherit') {
+                      onChange({ workerModel: { mode: 'inherit' } })
+                      return
+                    }
+                    const providerId = workerProvider?.id || leadProviderId
+                    const model = workerModels.includes(leadModel)
+                      ? leadModel
+                      : workerModels[0] ?? leadModel
+                    onChange({
+                      workerModel: {
+                        mode: 'fixed',
+                        providerId,
+                        model
+                      }
+                    })
+                  }}
+                >
+                  <option value="inherit">{t('graphSettingsWorkerModelInherit')}</option>
+                  <option value="fixed">{t('graphSettingsWorkerModelFixed')}</option>
+                </select>
+              }
+            />
+            {value.workerModel.mode === 'fixed' ? (
+              <SettingRow
+                title={t('graphSettingsWorkerModel')}
+                description={t('graphSettingsWorkerModelDesc')}
+                wideControl
+                control={
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <select
+                      aria-label={t('graphSettingsWorkerProvider')}
+                      className={selectControlClass}
+                      value={workerProvider?.id ?? workerProviderId}
+                      onChange={(event) => {
+                        const providerId = event.target.value
+                        const provider = modelProviders.find((item) => item.id === providerId)
+                        onChange({
+                          workerModel: {
+                            mode: 'fixed',
+                            providerId,
+                            model: provider?.models.includes(workerModel)
+                              ? workerModel
+                              : provider?.models[0] ?? workerModel
+                          }
+                        })
+                      }}
+                    >
+                      {modelProviders.map((provider) => (
+                        <option key={provider.id} value={provider.id}>{provider.name}</option>
+                      ))}
+                    </select>
+                    <ModelSelect
+                      value={workerModel}
+                      options={workerModels}
+                      allowCustom
+                      customLabel={t('modelSelectCustomOption')}
+                      customPlaceholder={t('modelSelectCustomPlaceholder')}
+                      selectClassName={selectControlClass}
+                      onChange={(model) => {
+                        const nextModel = model.trim()
+                        onChange({
+                          workerModel: {
+                            mode: 'fixed',
+                            providerId: workerProvider?.id ?? workerProviderId,
+                            model: nextModel || workerModel
+                          }
+                        })
+                      }}
+                    />
+                  </div>
+                }
+              />
+            ) : null}
             <SettingRow
               title={t('graphSettingsRollout')}
               description={t('graphSettingsRolloutDesc')}

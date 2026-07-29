@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { chmod, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { parsePackageRelativePath, type DataMigrationPackageEntry, type DataMigrationWorkspaceCatalogEntry } from '../../shared/data-migration'
 import {
@@ -10,9 +10,11 @@ import {
   probeDestinationFileSystem,
   rebindDataMigrationReferences,
   recommendCollisionFreeDestination,
+  revalidateDataMigrationImportPlan,
   stableImportedSiblingPath,
   type DestinationFileSystemProbe
 } from './import-planner'
+import { validateKunpackEntryPath } from './archive-security'
 
 const roots: string[] = []
 
@@ -108,6 +110,216 @@ describe('cross-platform migration import planning', () => {
       strategy: 'merge'
     })
     expect(conflicts.map((conflict) => conflict.kind)).toEqual(['different-content', 'case-collision'])
+    expect(conflicts[1]?.renamedPath).toBeTruthy()
+  })
+
+  it('plans deterministic compatible renames for names that are illegal on the target platform', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-import-invalid-names-'))
+    roots.push(root)
+    const probe: DestinationFileSystemProbe = {
+      root,
+      canonicalRoot: root,
+      writable: true,
+      caseSensitive: false,
+      unicodeNormalizationSensitive: false,
+      supportsSymbolicLinks: false,
+      maximumComponentBytes: 255,
+      maximumPathBytes: 32_767,
+      freeBytes: 10_000_000_000,
+      platform: 'windows'
+    }
+    const conflicts = await detectWorkspaceConflicts({
+      workspace,
+      destinationRoot: root,
+      entries: [packageEntry('CON.txt'), packageEntry('name:stream')],
+      probe,
+      strategy: 'keep-both'
+    })
+    expect(conflicts).toHaveLength(2)
+    for (const conflict of conflicts) {
+      expect(conflict).toMatchObject({ kind: 'invalid-name', fatal: true })
+      expect(() => validateKunpackEntryPath(conflict.renamedPath!)).not.toThrow()
+    }
+  })
+
+  it('rebuilds submitted plans from inspected inputs and does not trust renderer compatibility flags', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-import-revalidate-'))
+    roots.push(root)
+    const oversized = packageEntry('huge.bin')
+    oversized.logicalBytes = 1_000_000_000_000_000
+    const plan = await buildDataMigrationImportPlan({
+      operationId: 'import_revalidate', packageId: 'package_revalidate', inspectedAt: 'now',
+      sourcePlatform: 'windows', encrypted: true, workspaces: [workspace], entries: [oversized],
+      destinationBaseRoot: root
+    })
+    const submitted = {
+      ...plan,
+      mappings: plan.mappings.map((mapping) => ({
+        ...mapping,
+        compatible: true,
+        preflightCompatible: true,
+        freeBytes: Number.MAX_SAFE_INTEGER
+      }))
+    }
+    const authoritative = await revalidateDataMigrationImportPlan({
+      plan: submitted,
+      packageId: 'package_revalidate',
+      sourcePlatform: 'windows',
+      encrypted: true,
+      workspaces: [workspace],
+      entries: [oversized]
+    })
+    expect(authoritative.mappings[0]).toMatchObject({
+      compatible: false,
+      preflightCompatible: false
+    })
+    await expect(revalidateDataMigrationImportPlan({
+      plan: { ...plan, mappings: [] },
+      packageId: 'package_revalidate',
+      sourcePlatform: 'windows',
+      encrypted: true,
+      workspaces: [workspace],
+      entries: [oversized]
+    })).rejects.toThrow('mappings do not match')
+    await expect(revalidateDataMigrationImportPlan({
+      plan: { ...plan, mappings: [plan.mappings[0]!, plan.mappings[0]!] },
+      packageId: 'package_revalidate',
+      sourcePlatform: 'windows',
+      encrypted: true,
+      workspaces: [workspace],
+      entries: [oversized]
+    })).rejects.toThrow('mappings do not match')
+  })
+
+  it('keeps nonfatal merge conflicts unresolved until the user chooses a decision', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-import-unresolved-merge-'))
+    roots.push(root)
+    await writeFile(join(root, 'README.md'), 'target')
+    const source = packageEntry('README.md', 'source')
+    const plan = await buildDataMigrationImportPlan({
+      operationId: 'import_unresolved', packageId: 'package_unresolved', inspectedAt: 'now',
+      sourcePlatform: 'windows', encrypted: false, workspaces: [workspace], entries: [source],
+      destinationBaseRoot: dirname(root),
+      destinationRoots: { ws_source: root },
+      strategies: { ws_source: 'merge' }
+    })
+    const authoritative = await revalidateDataMigrationImportPlan({
+      plan,
+      packageId: 'package_unresolved',
+      sourcePlatform: 'windows',
+      encrypted: false,
+      workspaces: [workspace],
+      entries: [source]
+    })
+    expect(authoritative.conflicts).toEqual([
+      expect.objectContaining({ kind: 'different-content', fatal: false })
+    ])
+    expect(authoritative.conflicts[0]).not.toHaveProperty('resolution')
+    expect(authoritative.mappings[0]?.unresolvedIssueCount).toBe(1)
+    await expect(revalidateDataMigrationImportPlan({
+      plan: {
+        ...plan,
+        conflicts: plan.conflicts.map((conflict) => ({
+          ...conflict,
+          resolution: 'rename-source' as const
+        }))
+      },
+      packageId: 'package_unresolved',
+      sourcePlatform: 'windows',
+      encrypted: false,
+      workspaces: [workspace],
+      entries: [source]
+    })).rejects.toThrow('invalid resolution')
+  })
+
+  it('rejects missing, shared, nested, or migration-internal workspace destinations', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-import-destination-boundaries-'))
+    roots.push(root)
+    const shared = join(root, 'shared')
+    await mkdir(shared)
+    const secondWorkspace: DataMigrationWorkspaceCatalogEntry = {
+      ...workspace,
+      workspaceId: 'ws_second',
+      displayName: 'Second',
+      sourcePathDisplay: 'C:\\Users\\Alice\\Second'
+    }
+    const secondEntry: DataMigrationPackageEntry = {
+      ...packageEntry('SECOND.md'),
+      path: parsePackageRelativePath('payload/workspaces/ws_second/files/SECOND.md'),
+      ownerId: 'ws_second'
+    }
+    const common = {
+      operationId: 'import_destination_boundaries',
+      packageId: 'package_destination_boundaries',
+      inspectedAt: 'now',
+      sourcePlatform: 'windows' as const,
+      encrypted: false,
+      workspaces: [workspace, secondWorkspace],
+      entries: [packageEntry('README.md'), secondEntry],
+      destinationBaseRoot: root,
+      strategies: { ws_source: 'merge' as const, ws_second: 'merge' as const }
+    }
+    await expect(buildDataMigrationImportPlan({
+      ...common,
+      destinationRoots: { ws_source: shared, ws_second: shared }
+    })).rejects.toThrow('destinations overlap')
+    await expect(buildDataMigrationImportPlan({
+      ...common,
+      destinationRoots: { ws_source: shared, ws_second: join(shared, 'nested') }
+    })).rejects.toThrow('destinations overlap')
+    await expect(buildDataMigrationImportPlan({
+      ...common,
+      destinationRoots: {
+        ws_source: shared,
+        ws_second: join(root, '.kun-migration-staging-user-selected', 'Second')
+      }
+    })).rejects.toThrow('staging or backup')
+
+    const valid = await buildDataMigrationImportPlan({
+      operationId: 'import_missing_destination',
+      packageId: 'package_missing_destination',
+      inspectedAt: 'now',
+      sourcePlatform: 'windows',
+      encrypted: false,
+      workspaces: [workspace],
+      entries: [packageEntry('README.md')],
+      destinationBaseRoot: root
+    })
+    await expect(revalidateDataMigrationImportPlan({
+      plan: {
+        ...valid,
+        mappings: valid.mappings.map(({ destinationRoot: _destinationRoot, ...mapping }) => mapping)
+      },
+      packageId: 'package_missing_destination',
+      sourcePlatform: 'windows',
+      encrypted: false,
+      workspaces: [workspace],
+      entries: [packageEntry('README.md')]
+    })).rejects.toThrow('destination is required')
+  })
+
+  it('treats the skip strategy as a true unmapped workspace without probing or conflicts', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-import-skip-workspace-'))
+    roots.push(root)
+    const result = await buildDataMigrationImportPlan({
+      operationId: 'import_skip_workspace',
+      packageId: 'package_skip_workspace',
+      inspectedAt: 'now',
+      sourcePlatform: 'windows',
+      encrypted: false,
+      workspaces: [workspace],
+      entries: [packageEntry('CON.txt')],
+      destinationBaseRoot: root,
+      destinationRoots: { ws_source: join(root, '.kun-migration-staging-ignored') },
+      strategies: { ws_source: 'skip' }
+    })
+    expect(result.mappings[0]).toMatchObject({
+      strategy: 'skip',
+      compatible: true,
+      unresolvedIssueCount: 0
+    })
+    expect(result.mappings[0]).not.toHaveProperty('destinationRoot')
+    expect(result.conflicts).toEqual([])
   })
 
   it('rewrites only typed path and thread references while preserving prose', () => {

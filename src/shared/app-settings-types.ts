@@ -525,10 +525,22 @@ export type KunGraphRetentionSettingsV1 = {
   compactAfterEvents: number
 }
 
+export type KunGraphWorkerModelSettingsV1 =
+  | {
+      mode: 'inherit'
+    }
+  | {
+      mode: 'fixed'
+      providerId: string
+      model: string
+      reasoningEffort?: ModelReasoningEffort
+    }
+
 export type KunGraphSettingsV1 = {
   enabled: boolean
   defaultStrategy: 'direct' | 'graph'
   rolloutStage: KunGraphRolloutStage
+  workerModel: KunGraphWorkerModelSettingsV1
   scheduler: KunGraphSchedulerSettingsV1
   context: KunGraphContextSettingsV1
   mailbox: KunGraphMailboxSettingsV1
@@ -550,8 +562,15 @@ export type KunGraphSettingsPatchV1 = Partial<
     | 'routing'
     | 'learning'
     | 'retention'
+    | 'workerModel'
   >
 > & {
+  workerModel?: {
+    mode?: 'inherit' | 'fixed'
+    providerId?: string
+    model?: string
+    reasoningEffort?: ModelReasoningEffort
+  }
   scheduler?: Partial<KunGraphSchedulerSettingsV1>
   context?: Partial<KunGraphContextSettingsV1>
   mailbox?: Partial<KunGraphMailboxSettingsV1>

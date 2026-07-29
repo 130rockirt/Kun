@@ -20,6 +20,7 @@ describe('Kun Graph settings', () => {
     expect(normalized.agents.kun.graph).toEqual(defaultKunGraphSettings())
     expect(normalized.agents.kun.graph.enabled).toBe(false)
     expect(normalized.agents.kun.graph.defaultStrategy).toBe('direct')
+    expect(normalized.agents.kun.graph.workerModel).toEqual({ mode: 'inherit' })
     expect(normalized.agents.kun.graph.scheduler.maxRunWallTimeMs)
       .toBe(7 * 24 * 60 * 60 * 1_000)
   })
@@ -74,6 +75,37 @@ describe('Kun Graph settings', () => {
       },
       learning: { mode: 'suggest' }
     })
+  })
+
+  it('normalizes and deep-merges a fixed worker model policy', () => {
+    const fixed = mergeKunRuntimeSettings(defaultKunRuntimeSettings(), {
+      graph: {
+        workerModel: {
+          mode: 'fixed',
+          providerId: 'provider-b',
+          model: 'worker-model'
+        }
+      }
+    })
+    const updated = mergeKunRuntimeSettings(fixed, {
+      graph: {
+        workerModel: { model: 'worker-model-2' }
+      }
+    })
+
+    expect(updated.graph.workerModel).toEqual({
+      mode: 'fixed',
+      providerId: 'provider-b',
+      model: 'worker-model-2'
+    })
+    expect(normalizeKunGraphSettings({
+      ...defaultKunGraphSettings(),
+      workerModel: {
+        mode: 'fixed',
+        providerId: '',
+        model: ''
+      }
+    }).workerModel).toEqual({ mode: 'inherit' })
   })
 
   it('drops unknown persisted keys during normalization', () => {

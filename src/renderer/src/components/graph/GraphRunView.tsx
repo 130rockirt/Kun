@@ -40,6 +40,7 @@ export function GraphRunView({
   progress,
   selectedNode,
   selectedNodeId,
+  canvasFocusRequestKey,
   steering,
   onSteeringChange,
   onSendSteering,
@@ -66,6 +67,7 @@ export function GraphRunView({
   progress: { completed: number; total: number }
   selectedNode?: GraphNodeProjection
   selectedNodeId: string | null
+  canvasFocusRequestKey: string | null
   steering: string
   onSteeringChange: (value: string) => void
   onSendSteering: () => void
@@ -100,6 +102,15 @@ export function GraphRunView({
     setCollapsedPhaseIds(defaultCollapsedPhaseKey ? defaultCollapsedPhaseKey.split(',') : [])
     setListFallback(false)
   }, [defaultCollapsedPhaseKey, run?.id, run?.currentRevision])
+  const selectedPhaseId = run?.plans.at(-1)?.nodes
+    .find((node) => node.id === selectedNodeId)?.phaseId
+  useEffect(() => {
+    if (!selectedPhaseId) return
+    setCollapsedPhaseIds((current) =>
+      current.includes(selectedPhaseId)
+        ? current.filter((phaseId) => phaseId !== selectedPhaseId)
+        : current)
+  }, [selectedPhaseId])
   const collapsedPhases = useMemo(
     () => new Set(collapsedPhaseIds),
     [collapsedPhaseIds]
@@ -332,6 +343,7 @@ export function GraphRunView({
         listFallback={listFallback}
         selectedNode={selectedNode}
         selectedNodeId={selectedNodeId}
+        canvasFocusRequestKey={canvasFocusRequestKey}
         steering={steering}
         onSteeringChange={onSteeringChange}
         onSendSteering={onSendSteering}

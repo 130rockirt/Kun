@@ -38,6 +38,7 @@ export function GraphRunWorkspace({
   listFallback,
   selectedNode,
   selectedNodeId,
+  canvasFocusRequestKey,
   steering,
   onSteeringChange,
   onSendSteering,
@@ -59,6 +60,7 @@ export function GraphRunWorkspace({
   listFallback: boolean
   selectedNode?: GraphNodeProjection
   selectedNodeId: string | null
+  canvasFocusRequestKey: string | null
   steering: string
   onSteeringChange: (value: string) => void
   onSendSteering: () => void
@@ -193,6 +195,7 @@ export function GraphRunWorkspace({
             nodes={elements.nodes}
             edges={elements.edges}
             selectedNodeId={selectedNodeId}
+            focusRequestKey={canvasFocusRequestKey}
             onSelectNode={selectNode}
             onInspectNode={inspectNode}
             onOpenInspector={() => setInspectorOpen(true)}

@@ -7,6 +7,7 @@ import { redactSecrets, redactSecretText } from '../config/secret-redaction.js'
 import type { TurnItem } from '../contracts/items.js'
 import type { ThreadDetail } from './client.js'
 import { sanitizeTerminalText } from './layout.js'
+import type { OfficialProviderCliCommand } from '../services/official-provider-cli.js'
 
 export function lastAssistantText(thread: ThreadDetail): string | null {
   const item = [...thread.turns]
@@ -98,6 +99,38 @@ export async function editTextInExternalEditor(
   } finally {
     await rm(directory, { recursive: true, force: true })
   }
+}
+
+export async function runInteractiveProviderCli(
+  spec: OfficialProviderCliCommand,
+  options: {
+    cwd?: string
+    spawnFn?: typeof spawn
+  } = {}
+): Promise<void> {
+  await new Promise<void>((resolvePromise, reject) => {
+    const spawnFn = options.spawnFn ?? spawn
+    let child
+    try {
+      child = spawnFn(spec.command, spec.args, {
+        ...(options.cwd ? { cwd: options.cwd } : {}),
+        stdio: 'inherit',
+        windowsHide: false,
+        env: process.env,
+        shell: process.platform === 'win32' && /\.(?:cmd|bat)$/iu.test(spec.command)
+      })
+    } catch (error) {
+      reject(error)
+      return
+    }
+    child.once('error', reject)
+    child.once('close', (code, signal) => {
+      if (code === 0) resolvePromise()
+      else reject(new Error(
+        `${spec.displayName} exited with ${signal ? `signal ${signal}` : `code ${code ?? 'unknown'}`}`
+      ))
+    })
+  })
 }
 
 function appendItem(lines: string[], item: TurnItem): void {

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ThreadSchema } from '../contracts/threads.js'
@@ -1554,6 +1554,186 @@ describe('TuiController', () => {
     } finally {
       await controller.stop()
       await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('binds distinct @file mentions to attachment IDs without rewriting the prompt', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-tui-file-mention-'))
+    const notes = join(root, 'notes.txt')
+    const design = join(root, 'design notes.md')
+    await writeFile(notes, 'notes')
+    await writeFile(design, '# design')
+    const source = detail({ workspace: root })
+    const uploadAttachment = vi.fn(async (input: {
+      name: string
+      mimeType: string
+      localFilePath?: string
+      dataBase64: string
+    }) => ({
+      attachment: {
+        id: `attachment_${input.name}`,
+        name: input.name,
+        kind: 'document' as const,
+        mimeType: input.mimeType,
+        byteSize: Buffer.from(input.dataBase64, 'base64').length,
+        hash: `hash_${input.name}`,
+        localFilePath: input.localFilePath,
+        threadIds: [source.id],
+        workspaces: [root],
+        createdAt: source.createdAt,
+        updatedAt: source.updatedAt
+      }
+    }))
+    const startTurn = vi.fn(async () => ({ turnId: 'turn_mentions' }))
+    const client = {
+      listThreads: vi.fn(async () => [source]),
+      getThread: vi.fn(async () => source),
+      subscribeThreadEvents: vi.fn(async (input: { signal: AbortSignal }) => {
+        await new Promise<void>((resolve) => input.signal.addEventListener('abort', () => resolve(), { once: true }))
+      }),
+      setLocalCapabilityEnabled: vi.fn(async () => ({ id: 'attachments' as const, enabled: true })),
+      uploadAttachment,
+      startTurn
+    } as unknown as KunTuiClient
+    const attachmentRuntime = {
+      ...runtime,
+      runtimeInfo: {
+        ...runtime.runtimeInfo,
+        capabilities: buildRuntimeCapabilityManifest({
+          model: modelCapabilitiesForModel('model-a')
+        })
+      }
+    } as TuiConnection
+    const controller = new TuiController(client, {
+      ...options(),
+      dataDir: join(root, 'data'),
+      workspace: root
+    }, attachmentRuntime)
+    const prompt = 'Compare @notes.txt with @"design notes.md", then re-check @notes.txt'
+    try {
+      await controller.start()
+      await expect(controller.prepareFileMentions(prompt)).resolves.toBe(true)
+      expect(uploadAttachment).toHaveBeenCalledTimes(2)
+      expect(controller.state.pendingAttachments.map((attachment) => attachment.name)).toEqual([
+        'notes.txt',
+        'design notes.md'
+      ])
+
+      await controller.submit(prompt)
+      expect(startTurn).toHaveBeenCalledWith(source.id, expect.objectContaining({
+        prompt,
+        attachmentIds: ['attachment_notes.txt', 'attachment_design notes.md']
+      }))
+    } finally {
+      await controller.stop()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('rolls back staged mention leases and preserves existing pending attachments on failure', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-tui-file-mention-rollback-'))
+    const existing = join(root, 'existing.txt')
+    const staged = join(root, 'staged.txt')
+    const unsupported = join(root, 'unsupported.bin')
+    await writeFile(existing, 'existing')
+    await writeFile(staged, 'staged')
+    await writeFile(unsupported, Buffer.from([0, 1, 2, 3]))
+    const source = detail({ workspace: root })
+    const uploadAttachment = vi.fn(async (input: {
+      name: string
+      mimeType: string
+      localFilePath?: string
+      dataBase64: string
+    }) => ({
+      attachment: {
+        id: `attachment_${input.name}`,
+        name: input.name,
+        kind: 'document' as const,
+        mimeType: input.mimeType,
+        byteSize: Buffer.from(input.dataBase64, 'base64').length,
+        hash: `hash_${input.name}`,
+        localFilePath: input.localFilePath,
+        threadIds: [source.id],
+        workspaces: [root],
+        createdAt: source.createdAt,
+        updatedAt: source.updatedAt
+      }
+    }))
+    const releaseAttachment = vi.fn(async () => ({ released: true }))
+    const client = {
+      listThreads: vi.fn(async () => [source]),
+      getThread: vi.fn(async () => source),
+      subscribeThreadEvents: vi.fn(async (input: { signal: AbortSignal }) => {
+        await new Promise<void>((resolve) => input.signal.addEventListener('abort', () => resolve(), { once: true }))
+      }),
+      setLocalCapabilityEnabled: vi.fn(async () => ({ id: 'attachments' as const, enabled: true })),
+      uploadAttachment,
+      releaseAttachment
+    } as unknown as KunTuiClient
+    const attachmentRuntime = {
+      ...runtime,
+      runtimeInfo: {
+        ...runtime.runtimeInfo,
+        capabilities: buildRuntimeCapabilityManifest({
+          model: modelCapabilitiesForModel('model-a')
+        })
+      }
+    } as TuiConnection
+    const controller = new TuiController(client, {
+      ...options(),
+      dataDir: join(root, 'data'),
+      workspace: root
+    }, attachmentRuntime)
+    try {
+      await controller.start()
+      await controller.manageAttachments(existing)
+      expect(controller.state.pendingAttachments.map((attachment) => attachment.name)).toEqual(['existing.txt'])
+
+      await expect(controller.prepareFileMentions(
+        'Use @staged.txt and @unsupported.bin'
+      )).resolves.toBe(false)
+      expect(controller.state.pendingAttachments.map((attachment) => attachment.name)).toEqual(['existing.txt'])
+      expect(releaseAttachment).toHaveBeenCalledWith(
+        'attachment_staged.txt',
+        expect.stringMatching(/^tui_/u)
+      )
+      expect(controller.state.notification?.message).toContain('unsupported attachment type')
+    } finally {
+      await controller.stop()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects an @file symlink whose canonical target is outside the workspace', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-tui-file-mention-workspace-'))
+    const outside = await mkdtemp(join(tmpdir(), 'kun-tui-file-mention-outside-'))
+    const target = join(outside, 'secret.txt')
+    await writeFile(target, 'secret')
+    await symlink(target, join(root, 'escape.txt'))
+    const source = detail({ workspace: root })
+    const uploadAttachment = vi.fn()
+    const client = {
+      listThreads: vi.fn(async () => [source]),
+      getThread: vi.fn(async () => source),
+      subscribeThreadEvents: vi.fn(async (input: { signal: AbortSignal }) => {
+        await new Promise<void>((resolve) => input.signal.addEventListener('abort', () => resolve(), { once: true }))
+      }),
+      uploadAttachment
+    } as unknown as KunTuiClient
+    const controller = new TuiController(client, {
+      ...options(),
+      dataDir: join(root, 'data'),
+      workspace: root
+    }, runtime)
+    try {
+      await controller.start()
+      await expect(controller.prepareFileMentions('Read @escape.txt')).resolves.toBe(false)
+      expect(uploadAttachment).not.toHaveBeenCalled()
+      expect(controller.state.notification?.message).toContain('outside the active workspace')
+    } finally {
+      await controller.stop()
+      await rm(root, { recursive: true, force: true })
+      await rm(outside, { recursive: true, force: true })
     }
   })
 

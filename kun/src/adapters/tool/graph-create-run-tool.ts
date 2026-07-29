@@ -3,13 +3,16 @@ import type { ArtifactStore } from '../../artifacts/artifact-store.js'
 import {
   GRAPH_CONTRACT_VERSION,
   GraphBudgetV1InputSchema,
-  GraphPlanV1Schema
+  GraphPlanV1Schema,
+  type GraphPlanV1
 } from '../../contracts/index.js'
 import {
   DEFAULT_GRAPH_RUNTIME_CONFIG,
   type GraphRuntimeConfig
 } from '../../config/kun-config.js'
 import {
+  compileGraphIntent,
+  GraphIntentSchema,
   GraphPlanValidationError,
   type GraphControlService,
   type ProjectAgentRegistry
@@ -40,6 +43,15 @@ export const GraphCreateRunPlanInputSchema = GraphPlanV1Schema.omit({
 )
 
 export const GraphCreateRunInputSchema = z.object({
+  intent: GraphIntentSchema.describe(
+    'Focused task intent. Declare meaningful tasks and only real dependencies; the host compiles durable Graph fields.'
+  ),
+  start: z.boolean().default(true).describe(
+    'Start the GraphRun immediately after validation. Defaults to true.'
+  )
+}).strict()
+
+export const GraphCreateRunLegacyInputSchema = z.object({
   plan: GraphCreateRunPlanInputSchema,
   start: z.boolean().default(true).describe(
     'Start the GraphRun immediately after validation. Defaults to true.'
@@ -72,14 +84,12 @@ export function buildGraphCreateRunTool(options: {
   return LocalToolHost.defineTool({
     name: 'graph_create_run',
     description:
-      'Create and start a durable GraphRun after thinking through the user request. ' +
-      'Provide only the model-owned plan fields described by the schema; the host supplies identity, provenance, revision, and timestamps. ' +
+      'Create and start a durable GraphRun from a lightweight task intent. Choose auto, fanout_join, pipeline, bounded_loop, state_machine, or hybrid from the real dependency structure. ' +
+      'Provide focused tasks, explicit dependencies only when a successor consumes a predecessor outcome, acceptance criteria, and repository-relative scopes; the host compiles phases, nodes, edges, completion/review defaults, identity, provenance, revision, timestamps, and budgets. ' +
       'Omit the budget or any individual budget field unless the user or project explicitly asks for a narrower limit; the host supplies all omitted defaults, including seven days per run, 24 hours per node, and the warning ratio. ' +
       'Use normalized repository-relative read/write scopes, never absolute workspace paths. ' +
-      'The plan must define phases, bounded nodes, control edges or named data-result handoffs, completion nodes, ' +
-      'acceptance criteria, review policy, explicit read/write scopes, and bounded LoopGates. ' +
-      'Executors finish normally; they never publish Graph artifacts or submit Graph state. Every node waits for an explicit source Lead review before its result can reach successors. ' +
-      'Omit node.assignment by default for host routing; use an existing assignment only with an exact Graph registry profile id. ' +
+      'For non-trivial work, create focused independently verifiable nodes and expose a broad safe ready frontier: split independent concerns, subsystems, scopes, and validation tracks into siblings, and add an edge only when its successor truly requires that accepted outcome or result packet. Do not put a whole multi-concern feature into one executor. ' +
+      'Independent tasks run concurrently; dependsOn and dataFrom create serial handoffs. Executors may proactively report progress, findings, questions, risks, and early results, but every node still waits for explicit source Lead review before its accepted result reaches successors. ' +
       'Create exactly one successful GraphRun for a Graph-mode user turn; retry only when a structured tool result explicitly says the failure is retryable. The host validates all authority and graph invariants.',
     inputSchema: GRAPH_CREATE_RUN_INPUT_JSON_SCHEMA,
     policy: 'auto',
@@ -87,36 +97,50 @@ export function buildGraphCreateRunTool(options: {
     sideEffect: 'unknown',
     shouldAdvertise: options.shouldAdvertise,
     execute: async (args, context) => {
-      const parsed = GraphCreateRunInputSchema.safeParse(args)
-      if (!parsed.success) {
+      const parsedIntent = GraphCreateRunInputSchema.safeParse(args)
+      const parsedLegacy = GraphCreateRunLegacyInputSchema.safeParse(args)
+      if (!parsedIntent.success && !parsedLegacy.success) {
+        const legacyShape = typeof args === 'object' && args !== null && 'plan' in args
         return graphCreateRunError({
           code: 'graph_create_run_schema_invalid',
           error: 'Graph creation arguments do not match the advertised schema.',
-          issues: parsed.error.issues,
+          issues: legacyShape ? parsedLegacy.error.issues : parsedIntent.error.issues,
           guidance:
-            'Correct the listed fields against the graph_create_run schema and retry without legacy or invented fields.',
+            'Correct the listed fields against the graph_create_run schema (lightweight intent) and retry without invented host fields.',
           retryable: true
         })
       }
       try {
         const identity = await options.registry.identify(context.workspace)
-        const { plan: modelPlan, start } = parsed.data
         const runtimeConfig = options.config?.() ?? DEFAULT_GRAPH_RUNTIME_CONFIG
-        const modelBudget = modelPlan.budget ?? {}
         const budgetDefaults = graphCreateBudgetDefaults(runtimeConfig)
-        const plan = GraphPlanV1Schema.parse({
-          ...modelPlan,
-          budget: {
-            ...budgetDefaults,
-            ...modelBudget
-          },
-          version: GRAPH_CONTRACT_VERSION,
-          revision: 1,
-          workspaceRoot: identity.canonicalWorkspaceRoot,
-          autoStart: start,
-          createdBy: 'lead',
-          createdAt: options.nowIso()
-        })
+        const legacy = parsedLegacy.success ? parsedLegacy.data : undefined
+        const start = parsedIntent.success ? parsedIntent.data.start : legacy!.start
+        const modelBudget = parsedIntent.success
+          ? parsedIntent.data.intent.budget ?? {}
+          : legacy!.plan.budget ?? {}
+        const plan = parsedIntent.success
+          ? compileGraphIntent({
+              intent: parsedIntent.data.intent,
+              workspaceRoot: identity.canonicalWorkspaceRoot,
+              start,
+              nowIso: options.nowIso(),
+              budgetDefaults,
+              config: runtimeConfig
+            })
+          : GraphPlanV1Schema.parse({
+              ...legacy!.plan,
+              budget: {
+                ...budgetDefaults,
+                ...modelBudget
+              },
+              version: GRAPH_CONTRACT_VERSION,
+              revision: 1,
+              workspaceRoot: identity.canonicalWorkspaceRoot,
+              autoStart: start,
+              createdBy: 'lead',
+              createdAt: options.nowIso()
+            })
         const runId = options.control.allocateId('graph_run')
         const result = await options.control.create({
           runId,
@@ -128,10 +152,12 @@ export function buildGraphCreateRunTool(options: {
           idempotencyKey: `graph-create:${context.turnId}`,
           start
         })
+        const executionShape = initialExecutionShape(plan, runtimeConfig)
         return {
           output: {
             run: result.run,
             validation: result.validation,
+            executionShape,
             appliedBudgetDefaultFields: Object.keys(budgetDefaults).filter((field) =>
               modelBudget[field as keyof typeof modelBudget] === undefined),
             appliedWallTimeDefaults: {
@@ -143,7 +169,7 @@ export function buildGraphCreateRunTool(options: {
                 : null
             },
             nextAction:
-              'The Lead remains responsible after dispatch. Inspect active executors with graph_supervise_node, wait and recheck at a risk-appropriate cadence, guide drift, and explicitly pass or revise every completed node with graph_review_node before any successor receives its result.'
+              'The Lead remains responsible after dispatch. Use executionShape to confirm the graph exposes the intended safe concurrency, inspect active executors with graph_supervise_node, wait and recheck at a risk-appropriate cadence, guide drift, and explicitly pass or revise every completed node with graph_review_node before any successor receives its result.'
           }
         }
       } catch (error) {
@@ -167,6 +193,56 @@ export function buildGraphCreateRunTool(options: {
       }
     }
   })
+}
+
+function initialExecutionShape(plan: GraphPlanV1, config: GraphRuntimeConfig) {
+  const dependencyTargets = new Set(plan.edges
+    .filter((edge) => edge.kind !== 'message')
+    .map((edge) => edge.to))
+  const initialExecutableNodeIds = plan.nodes
+    .filter((node) => node.kind !== 'loop_gate' && !dependencyTargets.has(node.id))
+    .sort((left, right) =>
+      right.priority - left.priority || left.id.localeCompare(right.id))
+    .map((node) => node.id)
+  const effectivePerRunConcurrency = Math.min(
+    plan.budget.maxConcurrentNodes,
+    config.scheduler.maxConcurrentNodesPerRun,
+    config.scheduler.maxConcurrentNodes
+  )
+  const maximumImmediateDispatchCount = Math.min(
+    initialExecutableNodeIds.length,
+    effectivePerRunConcurrency
+  )
+  const executableNodeCount = plan.nodes.filter((node) => node.kind !== 'loop_gate').length
+  return {
+    strategy: plan.strategy?.kind ?? inferLegacyStrategy(plan),
+    initialExecutableNodeIds,
+    initialExecutableNodeCount: initialExecutableNodeIds.length,
+    effectivePerRunConcurrency,
+    maximumImmediateDispatchCount,
+    ...(executableNodeCount >= 3 && maximumImmediateDispatchCount <= 1
+      ? {
+          diagnostic:
+            'This non-trivial graph currently exposes only one immediate worker. Preserve real dependencies, but split independent concerns into sibling ready nodes in future Graph plans so configured concurrency can be used.'
+        }
+      : {})
+  }
+}
+
+function inferLegacyStrategy(plan: GraphPlanV1) {
+  if (plan.nodes.some((node) => node.kind === 'loop_gate')) return 'bounded_loop'
+  const schedulingEdges = plan.edges.filter((edge) => edge.kind !== 'message')
+  if (plan.nodes.length <= 1) return 'pipeline'
+  if (!schedulingEdges.length) return 'fanout_join'
+  const incoming = new Map(plan.nodes.map((node) => [node.id, [] as string[]]))
+  for (const edge of schedulingEdges) incoming.get(edge.to)?.push(edge.from)
+  const linear = plan.nodes.every((node, index) => {
+    const sources = incoming.get(node.id) ?? []
+    return index === 0
+      ? sources.length === 0
+      : sources.length === 1 && sources[0] === plan.nodes[index - 1]!.id
+  })
+  return linear ? 'pipeline' : 'hybrid'
 }
 
 function graphCreateBudgetDefaults(config: GraphRuntimeConfig) {

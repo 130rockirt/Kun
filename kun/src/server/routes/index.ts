@@ -41,6 +41,7 @@ import {
   cancelModelConnectionOAuth,
   clearModelCredential,
   claudeSdkStatus,
+  completeOfficialProviderAuth,
   connectModelConnection,
   deleteModelConnection,
   listModelConnections,
@@ -274,6 +275,10 @@ export function buildRouter(runtime: ServerRuntime): Router {
   router.add('POST', '/v1/model-connections/oauth/start', async (request) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
     return startModelConnectionOAuth(runtime.modelConnectionOAuth, request)
+  })
+  router.add('POST', '/v1/model-connections/cli/complete', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return completeOfficialProviderAuth(runtime.officialProviderAuth, request)
   })
   router.add('GET', '/v1/model-connections/oauth/:sessionId', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()

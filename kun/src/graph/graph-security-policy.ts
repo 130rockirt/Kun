@@ -42,13 +42,20 @@ export function graphPathScopedToolNames(
     ...GRAPH_LEAD_TOOL_NAMES,
     ...GRAPH_WORKER_TOOL_NAMES
   ])
+  const collaborationTools = tools.filter((tool) =>
+    tool === GRAPH_WORKER_REPORT_TOOL_NAME
+  )
   const executorTools = tools.filter((tool) => !graphTools.has(tool))
   if (readScopes.includes('.') && (writeScopes.length === 0 || writeScopes.includes('.'))) {
     return executorTools
   }
-  return executorTools.filter((tool) => SCOPED_WORKSPACE_TOOL_NAMES.has(tool))
+  return [
+    ...executorTools.filter((tool) => SCOPED_WORKSPACE_TOOL_NAMES.has(tool)),
+    ...collaborationTools
+  ].filter((tool, index, all) => all.indexOf(tool) === index)
 }
 import {
   GRAPH_LEAD_TOOL_NAMES,
+  GRAPH_WORKER_REPORT_TOOL_NAME,
   GRAPH_WORKER_TOOL_NAMES
 } from './graph-tool-boundary.js'

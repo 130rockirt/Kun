@@ -45,6 +45,59 @@ describe('ModelConnectionOAuthService', () => {
     service.close()
   })
 
+  it('reconnects an existing ChatGPT profile without allocating a duplicate provider', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'kun-oauth-reconnect-'))
+    roots.push(dataDir)
+    const registry = new ModelConnectionRegistry({
+      dataDir,
+      credentials: new ExtensionCredentialStore({ dataDir, profileId: 'oauth-test' })
+    })
+    const existing = await registry.connectAuthenticated({
+      expectedRevision: 0,
+      id: 'codex',
+      name: 'ChatGPT subscription',
+      presetSource: 'codex',
+      kind: 'http',
+      authType: 'oauth',
+      baseUrl: 'https://chatgpt.com/backend-api/codex/responses',
+      endpointFormat: 'custom_endpoint',
+      credential: JSON.stringify({
+        kind: 'codex-oauth',
+        accessToken: 'expired-access',
+        refreshToken: 'expired-refresh',
+        expiresAt: 1,
+        accountId: 'account-1'
+      }),
+      models: ['gpt-5.6-sol'],
+      selectedModel: 'gpt-5.6-sol',
+      select: true
+    })
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json({ device_auth_id: 'device-2', user_code: 'EFGH', interval: 1 }))
+      .mockResolvedValueOnce(Response.json({ authorization_code: 'auth-2', code_verifier: 'verifier-2' }))
+      .mockResolvedValueOnce(Response.json({
+        access_token: jwt({ chatgpt_account_id: 'account-1', email: 'test@example.com' }),
+        refresh_token: 'rotated-refresh-secret',
+        expires_in: 3600
+      }))
+    const service = new ModelConnectionOAuthService({ registry, fetch: fetchMock })
+
+    const started = await service.start({
+      expectedRevision: existing.revision,
+      provider: 'chatgpt'
+    })
+    const completed = await service.status(started.sessionId)
+
+    expect(completed.status).toBe('connected')
+    expect(completed.snapshot?.providers).toHaveLength(1)
+    expect(completed.snapshot?.providers[0]).toMatchObject({
+      id: 'codex',
+      accountId: 'account:codex'
+    })
+    expect(JSON.stringify(completed)).not.toContain('rotated-refresh-secret')
+    service.close()
+  })
+
   it('rejects an OAuth start against a stale registry revision', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'kun-oauth-conflict-'))
     roots.push(dataDir)

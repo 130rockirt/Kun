@@ -5,6 +5,32 @@ import {
 } from './kun-config.js'
 
 describe('Graph runtime token accounting', () => {
+  it('inherits the Lead model by default and validates fixed worker defaults', () => {
+    expect(DEFAULT_GRAPH_RUNTIME_CONFIG.workerModel).toEqual({ mode: 'inherit' })
+    expect(GraphRuntimeConfigSchema.parse({
+      ...DEFAULT_GRAPH_RUNTIME_CONFIG,
+      workerModel: {
+        mode: 'fixed',
+        providerId: 'provider-b',
+        model: 'worker-model',
+        reasoningEffort: 'high'
+      }
+    }).workerModel).toEqual({
+      mode: 'fixed',
+      providerId: 'provider-b',
+      model: 'worker-model',
+      reasoningEffort: 'high'
+    })
+    expect(() => GraphRuntimeConfigSchema.parse({
+      ...DEFAULT_GRAPH_RUNTIME_CONFIG,
+      workerModel: {
+        mode: 'fixed',
+        providerId: '',
+        model: ''
+      }
+    })).toThrow()
+  })
+
   it('accepts and drops a legacy scheduler token ceiling', () => {
     const parsed = GraphRuntimeConfigSchema.parse({
       ...DEFAULT_GRAPH_RUNTIME_CONFIG,

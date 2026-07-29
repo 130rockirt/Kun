@@ -35,48 +35,46 @@ function context(
 }
 
 describe('Graph Mode tool visibility boundaries', () => {
-  it('advertises the complete model-owned Graph creation schema without host fields', () => {
+  it('advertises the lightweight Graph intent schema without durable host fields', () => {
     const properties = GRAPH_CREATE_RUN_INPUT_JSON_SCHEMA.properties as Record<string, unknown>
-    const plan = properties.plan as {
+    const intent = properties.intent as {
       properties: Record<string, unknown>
       required: string[]
     }
-    expect(plan.required).toEqual(expect.arrayContaining([
+    expect(intent.required).toEqual(expect.arrayContaining([
       'title',
       'goal',
-      'phases',
-      'nodes',
-      'edges',
-      'completionNodeIds'
+      'tasks'
     ]))
-    expect(plan.required).not.toContain('budget')
-    expect(plan.properties).not.toHaveProperty('version')
-    expect(plan.properties).not.toHaveProperty('revision')
-    expect(plan.properties).not.toHaveProperty('workspaceRoot')
-    expect(plan.properties).not.toHaveProperty('autoStart')
-    expect(plan.properties).not.toHaveProperty('createdBy')
-    expect(plan.properties).not.toHaveProperty('createdAt')
-    const budget = plan.properties.budget as {
+    expect(intent.required).not.toContain('budget')
+    expect(intent.properties).not.toHaveProperty('version')
+    expect(intent.properties).not.toHaveProperty('revision')
+    expect(intent.properties).not.toHaveProperty('workspaceRoot')
+    expect(intent.properties).not.toHaveProperty('autoStart')
+    expect(intent.properties).not.toHaveProperty('createdBy')
+    expect(intent.properties).not.toHaveProperty('createdAt')
+    const budget = intent.properties.budget as {
       required?: string[]
     }
     expect(budget.required ?? []).toEqual([])
 
-    const nodes = plan.properties.nodes as {
+    const tasks = intent.properties.tasks as {
       items: { properties: Record<string, unknown>; required: string[] }
     }
-    expect(nodes.items.required).toEqual(expect.arrayContaining([
+    expect(tasks.items.required).toEqual(expect.arrayContaining([
       'id',
-      'phaseId',
-      'kind',
       'title',
-      'objective',
-      'completion'
+      'objective'
     ]))
-    expect(nodes.items.properties).toHaveProperty('readScopes')
-    expect(nodes.items.properties).toHaveProperty('writeScopes')
-    expect(nodes.items.properties.kind).toMatchObject({
+    expect(tasks.items.properties).toHaveProperty('dependsOn')
+    expect(tasks.items.properties).toHaveProperty('dataFrom')
+    expect(tasks.items.properties).toHaveProperty('readScopes')
+    expect(tasks.items.properties).toHaveProperty('writeScopes')
+    expect(tasks.items.properties.kind).toMatchObject({
       enum: ['work', 'review', 'integration', 'loop_gate']
     })
+    expect(JSON.stringify(intent.properties.strategy)).toContain('fanout_join')
+    expect(JSON.stringify(intent.properties.strategy)).toContain('hybrid')
     expect(JSON.stringify(GRAPH_CREATE_RUN_INPUT_JSON_SCHEMA)).not.toContain('"$schema"')
   })
 
@@ -176,6 +174,12 @@ describe('Graph Mode tool visibility boundaries', () => {
       })
     }))
     expect(result.output).toMatchObject({
+      executionShape: {
+        initialExecutableNodeIds: ['research'],
+        initialExecutableNodeCount: 1,
+        effectivePerRunConcurrency: 3,
+        maximumImmediateDispatchCount: 1
+      },
       appliedBudgetDefaultFields: expect.arrayContaining([
         'maxNodes',
         'maxWallTimeMs',
@@ -223,6 +227,202 @@ describe('Graph Mode tool visibility boundaries', () => {
         })
       })
     }))
+  })
+
+  it('compiles the advertised lightweight intent before durable creation', async () => {
+    const create = vi.fn(async (input: { plan: ReturnType<typeof testGraphPlan> }) => ({
+      run: { id: 'graph_run_intent', plan: input.plan },
+      validation: { valid: true }
+    }))
+    const tools = buildGraphModeLocalTools({
+      control: {
+        allocateId: () => 'graph_run_intent',
+        create
+      } as never,
+      store: {} as never,
+      mailbox: {} as never,
+      registry: {
+        identify: async () => ({
+          projectId: 'project_1',
+          canonicalWorkspaceRoot: '/workspace'
+        })
+      } as never,
+      artifactStore: {} as never,
+      workerSessions: new GraphWorkerSessionRegistry(),
+      enabled: () => true,
+      config: () => testGraphConfig(),
+      nowIso: () => '2026-07-29T00:00:00.000Z',
+      nextId: () => 'graph_command_intent'
+    })
+    const result = await tools.find((tool) => tool.name === 'graph_create_run')!.execute({
+      intent: {
+        title: 'Hybrid implementation',
+        goal: 'Implement independent runtime and UI work, then integrate.',
+        strategy: 'hybrid',
+        tasks: [
+          {
+            id: 'runtime',
+            title: 'Runtime',
+            objective: 'Implement the runtime contract.',
+            readScopes: ['kun/src'],
+            writeScopes: ['kun/src']
+          },
+          {
+            id: 'ui',
+            title: 'UI',
+            objective: 'Implement the UI contract.',
+            readScopes: ['src/renderer'],
+            writeScopes: ['src/renderer']
+          },
+          {
+            id: 'integrate',
+            title: 'Integrate',
+            objective: 'Verify the combined result.',
+            dependsOn: ['runtime', 'ui'],
+            readScopes: ['.']
+          }
+        ],
+        completionTaskIds: ['integrate']
+      }
+    }, context('lead_thread', 'graph'))
+
+    expect(result.isError).not.toBe(true)
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      plan: expect.objectContaining({
+        strategy: {
+          kind: 'hybrid',
+          selectedBy: 'lead'
+        },
+        nodes: expect.arrayContaining([
+          expect.objectContaining({ id: 'runtime' }),
+          expect.objectContaining({ id: 'ui' }),
+          expect.objectContaining({ id: 'integrate' })
+        ]),
+        edges: [
+          expect.objectContaining({ from: 'runtime', to: 'integrate' }),
+          expect.objectContaining({ from: 'ui', to: 'integrate' })
+        ],
+        completionNodeIds: ['integrate']
+      })
+    }))
+    expect(result.output).toMatchObject({
+      executionShape: {
+        strategy: 'hybrid',
+        initialExecutableNodeIds: ['runtime', 'ui'],
+        maximumImmediateDispatchCount: 2
+      }
+    })
+  })
+
+  it('reports the realized parallel frontier and diagnoses a non-trivial serial graph', async () => {
+    const create = vi.fn(async (input: { plan: ReturnType<typeof testGraphPlan> }) => ({
+      run: { id: 'graph_run_shape', plan: input.plan },
+      validation: { valid: true }
+    }))
+    const tools = buildGraphModeLocalTools({
+      control: {
+        allocateId: () => 'graph_run_shape',
+        create
+      } as never,
+      store: {} as never,
+      mailbox: {} as never,
+      registry: {
+        identify: async () => ({
+          projectId: 'project_1',
+          canonicalWorkspaceRoot: '/workspace'
+        })
+      } as never,
+      artifactStore: {} as never,
+      workerSessions: new GraphWorkerSessionRegistry(),
+      enabled: () => true,
+      config: () => testGraphConfig({
+        scheduler: {
+          maxConcurrentNodes: 8,
+          maxConcurrentNodesPerRun: 4
+        }
+      })
+    })
+    const graphCreate = tools.find((tool) => tool.name === 'graph_create_run')!
+    const base = testGraphPlan()
+    const stripHostFields = (plan: ReturnType<typeof testGraphPlan>) => {
+      const {
+        version: _version,
+        revision: _revision,
+        workspaceRoot: _workspaceRoot,
+        autoStart: _autoStart,
+        createdBy: _createdBy,
+        createdAt: _createdAt,
+        ...modelPlan
+      } = plan
+      return modelPlan
+    }
+    const auditA = { ...base.nodes[0]!, id: 'audit-a', title: 'Audit A' }
+    const auditB = { ...base.nodes[0]!, id: 'audit-b', title: 'Audit B' }
+    const integrate = { ...base.nodes[1]!, id: 'integrate', title: 'Integrate' }
+    const parallelResult = await graphCreate.execute({
+      plan: stripHostFields(testGraphPlan({
+        nodes: [auditA, auditB, integrate],
+        edges: [
+          {
+            id: 'audit-a-integrate',
+            kind: 'control',
+            from: 'audit-a',
+            to: 'integrate',
+            requiredOutcomes: ['accepted']
+          },
+          {
+            id: 'audit-b-integrate',
+            kind: 'control',
+            from: 'audit-b',
+            to: 'integrate',
+            requiredOutcomes: ['accepted']
+          }
+        ],
+        completionNodeIds: ['integrate']
+      }))
+    }, context('lead_thread', 'graph'))
+    expect(parallelResult.output).toMatchObject({
+      executionShape: {
+        initialExecutableNodeIds: ['audit-a', 'audit-b'],
+        initialExecutableNodeCount: 2,
+        effectivePerRunConcurrency: 4,
+        maximumImmediateDispatchCount: 2
+      }
+    })
+    expect((parallelResult.output as {
+      executionShape: { diagnostic?: string }
+    }).executionShape.diagnostic).toBeUndefined()
+
+    const serialResult = await graphCreate.execute({
+      plan: stripHostFields(testGraphPlan({
+        nodes: [auditA, auditB, integrate],
+        edges: [
+          {
+            id: 'audit-a-audit-b',
+            kind: 'control',
+            from: 'audit-a',
+            to: 'audit-b',
+            requiredOutcomes: ['accepted']
+          },
+          {
+            id: 'audit-b-integrate',
+            kind: 'control',
+            from: 'audit-b',
+            to: 'integrate',
+            requiredOutcomes: ['accepted']
+          }
+        ],
+        completionNodeIds: ['integrate']
+      }))
+    }, context('lead_thread', 'graph'))
+    expect(serialResult.output).toMatchObject({
+      executionShape: {
+        initialExecutableNodeIds: ['audit-a'],
+        initialExecutableNodeCount: 1,
+        maximumImmediateDispatchCount: 1,
+        diagnostic: expect.stringContaining('only one immediate worker')
+      }
+    })
   })
 
   it('returns structured retryable issues for guessed or host-owned fields', async () => {
@@ -379,7 +579,9 @@ describe('Graph Mode tool visibility boundaries', () => {
       expect(tool.shouldAdvertise?.(context('runtime_thread', 'direct', 'graph_runtime'))).toBe(
         leadNames.has(tool.name) && tool.name !== 'graph_create_run'
       )
-      expect(tool.shouldAdvertise?.(context('worker_thread', 'graph'))).toBe(false)
+      expect(tool.shouldAdvertise?.(context('worker_thread', 'graph'))).toBe(
+        tool.name === 'report_to_parent'
+      )
     }
   })
 

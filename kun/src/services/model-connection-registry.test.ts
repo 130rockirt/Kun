@@ -163,6 +163,81 @@ describe('ModelConnectionRegistry', () => {
     expect(fetchImpl).not.toHaveBeenCalled()
   })
 
+  it('reconnects an authenticated preset in place and rotates its protected credential', async () => {
+    const { dataDir, value } = await registry()
+    const first = await value.connectAuthenticated({
+      expectedRevision: 0,
+      id: 'codex',
+      name: 'ChatGPT subscription',
+      presetSource: 'codex',
+      kind: 'http',
+      authType: 'oauth',
+      baseUrl: 'https://chatgpt.com/backend-api/codex/responses',
+      endpointFormat: 'custom_endpoint',
+      credential: 'first-oauth-secret',
+      models: ['gpt-5.6-sol'],
+      selectedModel: 'gpt-5.6-sol',
+      select: true
+    })
+    const originalAccountId = first.providers[0]!.accountId
+    const sourceId = (await value.materialize()).providers.get('codex')!.credentialSourceId!
+
+    const second = await value.connectAuthenticated({
+      expectedRevision: first.revision,
+      id: 'codex',
+      name: 'ChatGPT subscription',
+      presetSource: 'codex',
+      kind: 'http',
+      authType: 'oauth',
+      baseUrl: 'https://chatgpt.com/backend-api/codex/responses',
+      endpointFormat: 'custom_endpoint',
+      credential: 'rotated-oauth-secret',
+      models: ['gpt-5.6-sol', 'gpt-5.4'],
+      selectedModel: 'gpt-5.6-sol',
+      select: true
+    })
+
+    expect(second.providers).toHaveLength(1)
+    expect(second.providers[0]).toMatchObject({
+      id: 'codex',
+      accountId: originalAccountId,
+      configured: true,
+      models: ['gpt-5.6-sol', 'gpt-5.4']
+    })
+    expect(JSON.stringify(second)).not.toContain('rotated-oauth-secret')
+    expect((await value.resolveApiKey(sourceId))?.apiKey).toBe('rotated-oauth-secret')
+    const registryDocument = await readFile(join(dataDir, 'model-connections.v1.json'), 'utf8')
+    expect(registryDocument).not.toContain('first-oauth-secret')
+    expect(registryDocument).not.toContain('rotated-oauth-secret')
+  })
+
+  it('materializes a verified Gemini CLI subscription with its native route kind', async () => {
+    const { value } = await registry()
+    const snapshot = await value.connectAuthenticated({
+      expectedRevision: 0,
+      id: 'gemini-cli-subscription',
+      name: 'Gemini CLI subscription',
+      presetSource: 'gemini-cli-subscription',
+      kind: 'gemini-cli-api',
+      authType: 'subscription',
+      endpointFormat: 'custom_endpoint',
+      models: ['gemini-3.1-pro-preview'],
+      selectedModel: 'gemini-3.1-pro-preview',
+      select: true,
+      externalAuthVerified: true
+    })
+
+    expect(snapshot.providers[0]).toMatchObject({
+      id: 'gemini-cli-subscription',
+      kind: 'gemini-cli-api',
+      configured: true
+    })
+    expect((await value.materialize()).providers.get('gemini-cli-subscription')).toMatchObject({
+      kind: 'gemini-cli-api',
+      models: ['gemini-3.1-pro-preview']
+    })
+  })
+
   it('keeps managed non-HTTP subscription material available to its delegated runtime', async () => {
     const { value } = await registry()
     await value.initialize([{
@@ -646,6 +721,31 @@ describe('ModelConnectionRegistry', () => {
         projectId: 'project-1'
       }
     })
+  })
+
+  it('does not select CLI-backed providers before external authentication is verified', async () => {
+    const { value } = await registry()
+    const snapshot = await value.connect({
+      expectedRevision: 0,
+      id: 'gemini-cli-subscription',
+      name: 'Gemini CLI subscription',
+      presetSource: 'gemini-cli-subscription',
+      kind: 'gemini-cli-api',
+      authType: 'subscription',
+      endpointFormat: 'custom_endpoint',
+      models: ['gemini-3.1-pro-preview'],
+      selectedModel: 'gemini-3.1-pro-preview',
+      probe: false,
+      select: true
+    })
+
+    expect(snapshot.providers[0]).toMatchObject({
+      id: 'gemini-cli-subscription',
+      kind: 'gemini-cli-api',
+      configured: false
+    })
+    expect(snapshot.defaultProviderId).toBeUndefined()
+    expect((await value.materialize()).selected).toBeUndefined()
   })
 
   it('atomically migrates the legacy Gemini subscription transport without changing identity or default', async () => {

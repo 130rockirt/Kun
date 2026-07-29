@@ -64,6 +64,7 @@ async function routeOrCreateEphemeral(
   } catch {
     // A routing miss is expected to fall back to a frozen ephemeral profile.
   }
+  const workerModel = implicitWorkerModel(options.config(), parent)
   return {
     kind: 'ephemeral' as const,
     name: `${projection.node.kind}-${projection.node.id}`,
@@ -74,9 +75,9 @@ async function routeOrCreateEphemeral(
       'Complete only this assignment. Do not manage the workflow or other agents.',
       'Finish with a concise normal response containing result, changed files, checks, evidence, and risks.'
     ].join('\n\n'),
-    model: parent.model,
-    providerId: parent.providerId,
-    reasoningEffort: parent.reasoningEffort,
+    model: workerModel.model,
+    providerId: workerModel.providerId,
+    reasoningEffort: workerModel.reasoningEffort,
     toolPolicy: projection.node.writeScopes.length ? 'inherit' as const : 'readOnly' as const,
     allowedTools: [...parent.allowedTools],
     blockedTools: [...parent.blockedTools],
@@ -84,5 +85,27 @@ async function routeOrCreateEphemeral(
     blockedSkills: [...parent.blockedSkills],
     allowedMcpServers: [...parent.allowedMcpServers],
     blockedMcpServers: [...parent.blockedMcpServers]
+  }
+}
+
+function implicitWorkerModel(
+  config: ReturnType<GraphSchedulerOptions['config']>,
+  parent: GraphParentAuthority
+): {
+  model: string
+  providerId: string
+  reasoningEffort: GraphParentAuthority['reasoningEffort']
+} {
+  if (config.workerModel.mode === 'fixed') {
+    return {
+      model: config.workerModel.model,
+      providerId: config.workerModel.providerId,
+      reasoningEffort: config.workerModel.reasoningEffort ?? parent.reasoningEffort
+    }
+  }
+  return {
+    model: parent.model,
+    providerId: parent.providerId,
+    reasoningEffort: parent.reasoningEffort
   }
 }

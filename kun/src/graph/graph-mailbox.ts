@@ -26,12 +26,20 @@ export type GraphMailboxOptions = {
 
 export class GraphMailbox {
   private readonly nowIso: () => string
+  private readonly sendQueues = new Map<string, Promise<void>>()
 
   constructor(private readonly options: GraphMailboxOptions) {
     this.nowIso = options.nowIso ?? (() => new Date().toISOString())
   }
 
   async send(
+    input: GraphMailboxSendInput,
+    command: { commandId: string; idempotencyKey: string }
+  ): Promise<{ run: GraphRunV1; message: GraphMessageV1; duplicate: boolean }> {
+    return this.withSendQueue(input.runId, () => this.sendLocked(input, command))
+  }
+
+  private async sendLocked(
     input: GraphMailboxSendInput,
     command: { commandId: string; idempotencyKey: string }
   ): Promise<{ run: GraphRunV1; message: GraphMessageV1; duplicate: boolean }> {
@@ -101,6 +109,25 @@ export class GraphMailbox {
       event: { type: 'budget_updated', payload: { ledger, reason: 'mailbox message accepted' } }
     })
     return { run: budgeted.state, message, duplicate: false }
+  }
+
+  private async withSendQueue<T>(
+    runId: string,
+    operation: () => Promise<T>
+  ): Promise<T> {
+    const prior = this.sendQueues.get(runId) ?? Promise.resolve()
+    const current = prior
+      .catch(() => undefined)
+      .then(operation)
+    const settled = current.then(
+      () => undefined,
+      () => undefined
+    )
+    this.sendQueues.set(runId, settled)
+    void settled.finally(() => {
+      if (this.sendQueues.get(runId) === settled) this.sendQueues.delete(runId)
+    })
+    return current
   }
 
   async receive(
@@ -271,6 +298,7 @@ function sameMessageInput(
     existing.type === input.type &&
     existing.priority === input.priority &&
     existing.summary === input.summary &&
+    existing.details === input.details &&
     existing.correlationId === input.correlationId &&
     existing.replyRequired === input.replyRequired &&
     JSON.stringify(existing.artifactRefs) === JSON.stringify(input.artifactRefs)

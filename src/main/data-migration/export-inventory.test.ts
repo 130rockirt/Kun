@@ -138,6 +138,16 @@ describe('data migration export inventory', () => {
     const automations = sanitizedAutomationsForMigration(value) as { schedules: Array<Record<string, unknown>> }
     expect(automations.schedules[0]).toMatchObject({ enabled: false, clawChannelId: '', lastThreadId: '' })
     expect(automations.schedules[0]).not.toHaveProperty('providerId')
+    const workflowsOnly = sanitizedAutomationsForMigration(value, ['workflows']) as {
+      workflows: unknown[]
+      schedules: unknown[]
+    }
+    expect(workflowsOnly.schedules).toEqual([])
+    const schedulesOnly = sanitizedAutomationsForMigration(value, ['schedules']) as {
+      workflows: unknown[]
+      schedules: unknown[]
+    }
+    expect(schedulesOnly.workflows).toEqual([])
   })
 
   it('rejects export destinations inside selected workspaces or migration internals', async () => {
@@ -146,5 +156,6 @@ describe('data migration export inventory', () => {
     const [workspace] = await discoverDataMigrationWorkspaces({ settings: settings(root) })
     expect(() => assertMigrationOutputOutsideWorkspaces(join(root, 'backup.kunpack'), [workspace!])).toThrow('inside a selected workspace')
     expect(() => assertMigrationOutputOutsideWorkspaces(join(root, '..', '.kun-migration-backup', 'backup.kunpack'), [])).toThrow('staging or backup')
+    expect(() => assertMigrationOutputOutsideWorkspaces(join(root, '..', '.kun-migration-staging-op', 'backup.kunpack'), [])).toThrow('staging or backup')
   })
 })

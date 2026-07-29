@@ -66,6 +66,7 @@ import {
   latestTuiGraphRun,
   summarizeTuiGraphRun
 } from './graph-mode.js'
+import { parseTuiFileMentions } from './file-mentions.js'
 
 const execFile = promisify(execFileCallback)
 
@@ -1116,6 +1117,93 @@ export class TuiController {
       this.notify(`Attached ${attachment.name} to the next message.`)
     } catch (error) {
       this.fail(error)
+    }
+  }
+
+  /**
+   * Resolve @file tokens into the existing attachment transport before the
+   * composer submits. State is committed only after every distinct file has
+   * uploaded successfully so a partial failure cannot alter the queued turn.
+   */
+  async prepareFileMentions(text: string): Promise<boolean> {
+    const parsed = parseTuiFileMentions(text)
+    if (parsed.invalid.length > 0) {
+      const issue = parsed.invalid[0]!
+      this.notify(`Could not attach ${issue.raw}: ${issue.reason}.`, 'error')
+      return false
+    }
+    if (parsed.mentions.length === 0) return true
+
+    const projection = this.stateValue.projection
+    const graphRun = projection && projection.thread.mode === 'agent' &&
+      this.stateValue.composerOrchestration === 'graph'
+      ? latestTuiGraphRun(this.stateValue.graphRuns, projection.thread.id)
+      : undefined
+    if (projection?.runningTurnId || (graphRun && !isTerminalGraphRun(graphRun))) {
+      this.notify(
+        '@file references require a new turn; stop the running turn or Graph run before sending this message.',
+        'error'
+      )
+      return false
+    }
+
+    const workspace = projection?.thread.workspace ?? this.options.workspace
+    const staged: AttachmentMetadata[] = []
+    const originalIds = new Set(this.stateValue.pendingAttachments.map((attachment) => attachment.id))
+    try {
+      const canonicalWorkspace = await realpath(workspace)
+      const canonicalMentions = new Map<string, { raw: string; path: string }>()
+      for (const mention of parsed.mentions) {
+        let canonical: string
+        try {
+          canonical = await realpath(resolve(canonicalWorkspace, mention.relativePath))
+        } catch {
+          throw new Error(`${mention.raw} does not name a readable workspace file`)
+        }
+        if (!isPathInside(canonicalWorkspace, canonical)) {
+          throw new Error(`${mention.raw} resolves outside the active workspace`)
+        }
+        const metadata = await stat(canonical)
+        if (!metadata.isFile()) throw new Error(`${mention.raw} must name a regular file, not a directory`)
+        canonicalMentions.set(canonical, { raw: mention.raw, path: canonical })
+      }
+
+      const pendingPaths = new Set(
+        this.stateValue.pendingAttachments.flatMap((attachment) =>
+          attachment.localFilePath ? [resolve(attachment.localFilePath)] : []
+        )
+      )
+      const newFiles = [...canonicalMentions.values()].filter((mention) =>
+        !pendingPaths.has(resolve(mention.path))
+      )
+      if (this.stateValue.pendingAttachments.length + newFiles.length > 8) {
+        throw new Error('file mentions would exceed the 8-attachment limit')
+      }
+      if (newFiles.length === 0) return true
+
+      this.patch({
+        busy: true,
+        busyLabel: newFiles.length === 1 ? 'Attaching mentioned file' : 'Attaching mentioned files',
+        notification: undefined
+      })
+      for (const file of newFiles) {
+        staged.push(await this.uploadLocalAttachment(file.path, canonicalWorkspace))
+      }
+      const pending = [...this.stateValue.pendingAttachments, ...staged]
+        .filter((attachment, index, all) =>
+          all.findIndex((candidate) => candidate.id === attachment.id) === index
+        )
+      if (pending.length > 8) throw new Error('file mentions would exceed the 8-attachment limit')
+      this.patch({ busy: false, pendingAttachments: pending })
+      return true
+    } catch (error) {
+      const releasable = staged.filter((attachment, index, all) =>
+        !originalIds.has(attachment.id) &&
+        all.findIndex((candidate) => candidate.id === attachment.id) === index
+      )
+      await Promise.all(releasable.map((attachment) => this.releasePendingAttachment(attachment)))
+      this.fail(new Error(`Could not attach file mention: ${safeMessage(error)}`))
+      return false
     }
   }
 

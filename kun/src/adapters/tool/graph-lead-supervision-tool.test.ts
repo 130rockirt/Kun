@@ -4,6 +4,7 @@ import type {
   GraphRunV1,
   TurnItem
 } from '../../contracts/index.js'
+import { GraphMessageV1Schema } from '../../contracts/index.js'
 import type { ToolHostContext } from '../../ports/tool-host.js'
 import { applyGraphEvent } from '../../graph/graph-reducer.js'
 import {
@@ -32,7 +33,7 @@ const attempt: GraphNodeAttemptV1 = {
   elapsedMs: 1_000
 }
 
-function graphRun(): GraphRunV1 {
+function graphRun(patch: Partial<GraphRunV1> = {}): GraphRunV1 {
   const base = applyGraphEvent(undefined, testGraphEnvelope(1, {
     type: 'run_created',
     payload: {
@@ -51,7 +52,8 @@ function graphRun(): GraphRunV1 {
         status: 'running',
         attempts: [attempt]
       }
-    }
+    },
+    ...patch
   }
 }
 
@@ -78,13 +80,14 @@ function context(abortSignal = new AbortController().signal): ToolHostContext {
   }
 }
 
-function harness(items: TurnItem[]) {
-  const run = graphRun()
+function harness(items: TurnItem[], run = graphRun()) {
   const steer = vi.fn(async () => run)
   const steerChildTurn = vi.fn(async () => undefined)
   const loadItems = vi.fn(async () => items)
+  const acknowledge = vi.fn(async () => run)
   const tool = buildGraphLeadSupervisionTool({
     control: { steer } as never,
+    mailbox: { acknowledge } as never,
     store: { get: async () => run } as never,
     registry: {
       identify: async () => ({
@@ -116,10 +119,97 @@ function harness(items: TurnItem[]) {
     nowIso: () => '2026-07-28T00:00:03.000Z',
     nextId: (prefix) => `${prefix}_1`
   })
-  return { tool, steer, steerChildTurn, loadItems }
+  return { tool, steer, steerChildTurn, loadItems, acknowledge }
 }
 
 describe('graph_supervise_node', () => {
+  it('returns a bounded run-wide overview with reports, activity, and node paging', async () => {
+    const report = GraphMessageV1Schema.parse({
+      version: 1,
+      id: 'report_1',
+      runId: 'run_1',
+      sender: {
+        kind: 'worker',
+        nodeId: 'research',
+        attemptId: 'attempt_research_1'
+      },
+      recipients: [{ kind: 'lead' }],
+      type: 'risk',
+      priority: 'high',
+      summary: 'Shared contract mismatch.',
+      details: 'The renderer expects a different field.',
+      artifactRefs: [],
+      replyRequired: false,
+      status: 'queued',
+      createdAt: '2026-07-28T00:00:02.000Z'
+    })
+    const run = graphRun({ messages: [report] })
+    const tail = item({
+      id: 'overview_tail',
+      kind: 'assistant_text',
+      text: 'Checking the shared contract.'
+    })
+    const { tool, loadItems } = harness([tail], run)
+    const first = await tool.execute({
+      action: 'overview',
+      runId: 'run_1',
+      nodeLimit: 1,
+      perWorkerLimit: 1
+    }, context())
+
+    expect(first.isError).not.toBe(true)
+    expect(first.output).toMatchObject({
+      runId: 'run_1',
+      totals: {
+        nodes: 2,
+        active: 1,
+        unresolvedBlockingReports: 0
+      },
+      nodes: [{
+        nodeId: 'research',
+        latestReport: {
+          id: 'report_1',
+          type: 'risk',
+          summary: 'Shared contract mismatch.'
+        },
+        child: {
+          threadId: 'child_thread_1',
+          runtimeActivity: {
+            activity: { label: 'Reading src/docs.css' }
+          }
+        },
+        transcriptTail: [{
+          id: 'overview_tail',
+          text: 'Checking the shared contract.'
+        }]
+      }],
+      page: {
+        nextCursor: 'research',
+        hasMore: true
+      }
+    })
+    expect(loadItems).toHaveBeenCalledOnce()
+
+    const second = await tool.execute({
+      action: 'overview',
+      runId: 'run_1',
+      afterNodeId: 'research',
+      nodeLimit: 1
+    }, context())
+    expect(second.output).toMatchObject({
+      nodes: [{
+        nodeId: 'finish',
+        child: null,
+        transcriptTail: []
+      }],
+      page: {
+        cursorFound: true,
+        nextCursor: 'finish',
+        hasMore: false
+      }
+    })
+  })
+
   it('returns a bounded cursor page without provider continuation metadata', async () => {
     const items = [
       item({ id: 'item_1', kind: 'assistant_reasoning', text: 'Inspecting the footer.' }),
@@ -209,6 +299,47 @@ describe('graph_supervise_node', () => {
         detail: expect.stringContaining('turn is no longer active')
       }
     })
+  })
+
+  it('acknowledges an attempt question after durable Lead guidance', async () => {
+    const question = GraphMessageV1Schema.parse({
+      version: 1,
+      id: 'question_1',
+      runId: 'run_1',
+      sender: {
+        kind: 'worker',
+        nodeId: 'research',
+        attemptId: 'attempt_research_1'
+      },
+      recipients: [{ kind: 'lead' }],
+      type: 'question',
+      priority: 'blocking',
+      summary: 'Which compatibility path should remain?',
+      artifactRefs: [],
+      replyRequired: true,
+      status: 'queued',
+      createdAt: '2026-07-28T00:00:02.000Z'
+    })
+    const { tool, acknowledge } = harness([], graphRun({ messages: [question] }))
+    const result = await tool.execute({
+      action: 'guide',
+      runId: 'run_1',
+      nodeId: 'research',
+      text: 'Keep the public compatibility path and update its adapter.'
+    }, context())
+
+    expect(result.output).toMatchObject({
+      persisted: true,
+      acknowledgedQuestionIds: ['question_1']
+    })
+    expect(acknowledge).toHaveBeenCalledWith(
+      'run_1',
+      'question_1',
+      { kind: 'lead' },
+      expect.objectContaining({
+        idempotencyKey: 'graph-question-ack:run_1:question_1'
+      })
+    )
   })
 
   it('waits for the Lead-selected interval and then performs a fresh inspection', async () => {

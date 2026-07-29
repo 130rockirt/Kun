@@ -4,7 +4,6 @@ import {
   GRAPH_EVENT_VERSION,
   GraphArtifactReferenceV1Schema,
   GraphAttemptIdSchema,
-  GraphAttemptStatusSchema,
   GraphBoundedSummarySchema,
   GraphBudgetLedgerV1Schema,
   GraphCleanupRecordV1Schema,
@@ -15,13 +14,11 @@ import {
   GraphMessageV1Schema,
   GraphNodeAttemptV1Schema,
   GraphNodeIdSchema,
-  GraphNodeStatusSchema,
   GraphPatchV1Schema,
   GraphPlanV1Schema,
   GraphProgressUpdateV1Schema,
   GraphReviewResultV1Schema,
   GraphRunIdSchema,
-  GraphRunStatusSchema,
   GraphRunSummaryV1Schema,
   GraphRunV1Schema,
   GraphSteeringV1Schema,
@@ -29,6 +26,11 @@ import {
   GraphValidationResultV1Schema,
   GraphWorkerResultV1Schema
 } from './graph-core.js'
+import {
+  GraphAttemptStatusSchema,
+  GraphNodeStatusSchema,
+  GraphRunStatusSchema
+} from './graph-status.js'
 
 const GraphRunCreatedEventPayload = z.object({
   plan: GraphPlanV1Schema,
@@ -126,7 +128,8 @@ const GraphSupervisionEventPayload = z.object({
     'help',
     'recovery',
     'completion',
-    'user_steering'
+    'user_steering',
+    'worker_report'
   ]),
   nodeIds: z.array(GraphNodeIdSchema).max(1_000).default([]),
   digest: GraphBoundedSummarySchema

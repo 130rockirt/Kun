@@ -2,6 +2,7 @@ import { join } from 'node:path'
 import type { z } from 'zod'
 import {
   ClaudeSdkInstallStatusSchema,
+  ModelConnectionCliAuthRequestSchema,
   ModelConnectionConnectRequestSchema,
   ModelConnectionCredentialRequestSchema,
   ModelConnectionOAuthStartRequestSchema,
@@ -32,6 +33,7 @@ import {
   type MaterializedModelConnections
 } from '../services/model-connection-registry.js'
 import { ModelConnectionOAuthService } from '../services/model-connection-oauth.js'
+import { OfficialProviderAuthService } from '../services/official-provider-cli.js'
 import { TuiClientError, type ModelConnectionTransport } from './client.js'
 import { modelCapabilitiesForProviderModel } from '../loop/model-context-profile.js'
 
@@ -63,6 +65,7 @@ export class LegacyModelConnectionTransport implements ModelConnectionTransport 
     private readonly registry: ModelConnectionRegistry,
     private readonly migration: LegacyProviderCredentialMigrationService,
     private readonly oauth: ModelConnectionOAuthService,
+    private readonly officialProviderAuth: OfficialProviderAuthService,
     private readonly claude: ClaudeConnectionService
   ) {
     this.settings = options.guiSettings
@@ -132,7 +135,18 @@ export class LegacyModelConnectionTransport implements ModelConnectionTransport 
       claude,
       ...(options.fetch ? { fetch: options.fetch } : {})
     })
-    transport = new LegacyModelConnectionTransport(options, registry, migration, oauth, claude)
+    const officialProviderAuth = new OfficialProviderAuthService({
+      dataDir: options.dataDir,
+      registry
+    })
+    transport = new LegacyModelConnectionTransport(
+      options,
+      registry,
+      migration,
+      oauth,
+      officialProviderAuth,
+      claude
+    )
     initializing = false
     return transport
   }
@@ -180,6 +194,12 @@ export class LegacyModelConnectionTransport implements ModelConnectionTransport 
 
   selectModel(input: z.input<typeof ModelConnectionSelectRequestSchema>): Promise<ModelConnectionSnapshot> {
     return this.mutation(() => this.registry.select(input))
+  }
+
+  completeModelCliAuth(
+    input: z.input<typeof ModelConnectionCliAuthRequestSchema>
+  ): Promise<ModelConnectionSnapshot> {
+    return this.mutation(() => this.officialProviderAuth.complete(input))
   }
 
   startModelOAuth(input: z.input<typeof ModelConnectionOAuthStartRequestSchema>) {

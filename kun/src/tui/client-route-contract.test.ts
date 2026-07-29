@@ -31,6 +31,7 @@ const TUI_RUNTIME_ROUTES = [
   ['GET', '/v1/model-connections'],
   ['GET', '/v1/model-connections/events?since_revision=1'],
   ['POST', '/v1/model-connections/connect'],
+  ['POST', '/v1/model-connections/cli/complete'],
   ['PATCH', '/v1/model-connections/provider-a'],
   ['PUT', '/v1/model-connections/provider-a/credential'],
   ['DELETE', '/v1/model-connections/provider-a?expected_revision=1'],
