@@ -137,6 +137,7 @@ const labels: Record<string, string> = {
   modelProviderEndpointFormat: 'Endpoint format',
   modelProviderRetrySection: 'Failure retry',
   modelProviderRetryMaxAttempts: 'Retry attempts',
+  modelProviderRetryMaxAttemptsHint: 'Excludes the initial request. Default 5, maximum 10.',
   modelProviderRetryInitialDelayMs: 'Initial retry delay (ms)',
   modelProviderRetryStatusCodes: 'Retry HTTP status codes',
   modelProviderRetryStatusCodesHint: 'Separate multiple status codes with commas, for example 429,503.',
@@ -1397,8 +1398,9 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       expect(rendererText(renderer)).not.toContain('Danger zone')
     })
 
-    it('renders retry status codes in the Advanced task without spaces', async () => {
+    it('renders and persists provider retry controls in the Advanced tab', async () => {
       const provider = defaultModelProviderSettings()
+      const update = vi.fn()
       const customProvider = {
         id: 'retry-provider',
         name: 'Retry Provider',
@@ -1415,6 +1417,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       } satisfies ModelProviderProfileV1
       const renderer = await mountProviders({
         ...baseCtx(),
+        update,
         provider: {
           ...provider,
           providers: [...provider.providers, customProvider]
@@ -1432,8 +1435,61 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       expect(renderer.root.findAllByType('input').some((input) => input.props.value === '429,503')).toBe(true)
       expect(renderer.root.findAllByType('input').some((input) => input.props.value === '429, 503')).toBe(false)
       expect(panelText).toContain('Separate multiple status codes with commas, for example 429,503.')
+      expect(panelText).toContain('Excludes the initial request. Default 5, maximum 10.')
       expect(panelText.indexOf('Separate multiple status codes with commas, for example 429,503.'))
         .toBeLessThan(panelText.indexOf('Retry attempts'))
+
+      const retryCountInput = renderer.root.findAllByType('input')
+        .find((input) => input.props.type === 'number' && input.props.value === 3)
+      expect(retryCountInput).toBeDefined()
+      await act(async () => retryCountInput!.props.onChange({ target: { value: '7' } }))
+
+      const updatedProviders = update.mock.calls.at(-1)?.[0]?.provider?.providers as
+        | ModelProviderProfileV1[]
+        | undefined
+      expect(updatedProviders?.find((item) => item.id === customProvider.id)?.retry?.maxAttempts)
+        .toBe(7)
+    })
+
+    it('restores the five-retry default when provider retries are re-enabled', async () => {
+      const provider = defaultModelProviderSettings()
+      const update = vi.fn()
+      const disabledProvider = {
+        ...provider.providers[0]!,
+        id: 'retry-disabled',
+        name: 'Retry Disabled',
+        retry: {
+          maxAttempts: 0,
+          initialDelayMs: 3000,
+          httpStatusCodes: [429, 503]
+        }
+      } satisfies ModelProviderProfileV1
+      const renderer = await mountProviders({
+        ...baseCtx(),
+        update,
+        provider: {
+          ...provider,
+          providers: [...provider.providers, disabledProvider]
+        },
+        kun: {
+          ...defaultKunRuntimeSettings(),
+          providerId: disabledProvider.id
+        }
+      })
+
+      await clickProviderTab(renderer, 'Advanced')
+      const retryToggle = renderer.root.findByProps({
+        role: 'switch',
+        'aria-label': 'Failure retry'
+      })
+      expect(retryToggle.props['aria-checked']).toBe(false)
+      await act(async () => retryToggle.props.onClick())
+
+      const updatedProviders = update.mock.calls.at(-1)?.[0]?.provider?.providers as
+        | ModelProviderProfileV1[]
+        | undefined
+      expect(updatedProviders?.find((item) => item.id === disabledProvider.id)?.retry?.maxAttempts)
+        .toBe(5)
     })
 
     it('locks preset IDs, blocks probes without required credentials, and limits the danger zone', async () => {

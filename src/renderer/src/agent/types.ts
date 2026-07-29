@@ -491,7 +491,7 @@ export type RuntimeStatusEventPayload = {
   attempt?: number
   maxAttempts?: number
   delayMs?: number
-  retryReason?: 'stream_transport'
+  retryReason?: 'network' | 'stream_transport'
   changeKind?: 'additive' | 'breaking'
   toolName?: string
   callId?: string

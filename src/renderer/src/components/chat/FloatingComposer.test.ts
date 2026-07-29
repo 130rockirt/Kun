@@ -2311,8 +2311,137 @@ describe('FloatingComposer capability controls', () => {
         webAccessAvailable: false
       })
     )
-    expect(html).toContain('title="Plan"')
+    expect(html).toContain('data-composer-plan-mode-badge')
+    expect(html).toContain('title="Cancel Plan"')
     expect(html).toContain('>Plan</span>')
+  })
+
+  it('uses goal mode input as the objective and lets both intent badges cancel', async () => {
+    const previousLanguage = i18n.language
+    const originalGoalSetter = useChatStore.getState().setActiveThreadGoal
+    const setActiveThreadGoal = vi.fn(async () => true)
+    const setInput = vi.fn()
+    const setMode = vi.fn()
+    const onSend = vi.fn()
+    let goalRenderer: ReturnType<typeof createRenderer> | undefined
+    let planRenderer: ReturnType<typeof createRenderer> | undefined
+
+    await i18n.changeLanguage('en')
+    useChatStore.setState({
+      activeThreadId: null,
+      activeThreadGoal: null,
+      activeThreadTodos: null,
+      blocks: [],
+      route: 'chat',
+      workspaceRoot: '/workspace/deepseek-gui',
+      threads: [],
+      setActiveThreadGoal
+    })
+    ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+    vi.stubGlobal('document', { activeElement: null })
+    vi.stubGlobal('HTMLElement', class {})
+    vi.stubGlobal('window', {
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      requestAnimationFrame: vi.fn(() => 1),
+      cancelAnimationFrame: vi.fn(),
+      kunGui: {
+        getSettings: vi.fn(async () => ({ composerSendKey: 'enter' }))
+      }
+    })
+
+    const props = {
+      input: 'ship the goal UX',
+      setInput,
+      mode: 'agent' as const,
+      setMode,
+      busy: false,
+      runtimeReady: true,
+      hasActiveThread: false,
+      workspaceRootOverride: '/workspace/deepseek-gui',
+      composerModel: 'test-model',
+      composerPickList: ['test-model'],
+      onComposerModelChange: () => undefined,
+      queuedMessages: [] as [],
+      onRemoveQueuedMessage: () => undefined,
+      onSend,
+      onInterrupt: () => undefined,
+      onPlanCommand: () => undefined,
+      attachmentUploadEnabled: false,
+      webAccessAvailable: false
+    }
+
+    try {
+      await act(async () => {
+        goalRenderer = createRenderer(createElement(FloatingComposer, props))
+      })
+      const renderedGoal = goalRenderer!
+      const plusButton = renderedGoal.root.findAllByType('button').find(
+        (button) => String(button.props.className).includes('ds-composer-menu-button')
+      )
+      expect(plusButton).toBeDefined()
+
+      await act(async () => {
+        plusButton!.props.onClick()
+      })
+      await act(async () => {
+        goalRenderer!.root.findByProps({ 'data-composer-goal-menu-item': true }).props.onClick()
+      })
+
+      expect(setMode).toHaveBeenCalledWith('agent')
+      expect(renderedGoal.root.findByType('textarea').props.placeholder).toBe('Type a goal for this thread')
+      const goalBadge = renderedGoal.root.findByProps({ 'data-composer-goal-mode-badge': true })
+      expect(goalBadge.props['aria-label']).toBe('Cancel Goal')
+
+      await act(async () => {
+        goalBadge.props.onClick()
+      })
+      expect(renderedGoal.root.findAllByProps({ 'data-composer-goal-mode-badge': true })).toHaveLength(0)
+
+      await act(async () => {
+        plusButton!.props.onClick()
+      })
+      await act(async () => {
+        goalRenderer!.root.findByProps({ 'data-composer-goal-menu-item': true }).props.onClick()
+      })
+      await act(async () => {
+        goalRenderer!.root.findByProps({ 'aria-label': 'Send' }).props.onClick()
+      })
+
+      expect(setActiveThreadGoal).toHaveBeenCalledWith('ship the goal UX')
+      expect(setInput).toHaveBeenCalledWith('')
+      expect(onSend).not.toHaveBeenCalled()
+      expect(renderedGoal.root.findAllByProps({ 'data-composer-goal-mode-badge': true })).toHaveLength(0)
+
+      await act(async () => {
+        planRenderer = createRenderer(createElement(FloatingComposer, {
+          ...props,
+          mode: 'plan'
+        }))
+      })
+      const renderedPlan = planRenderer!
+      const planBadge = renderedPlan.root.findByProps({ 'data-composer-plan-mode-badge': true })
+      expect(planBadge.props['aria-label']).toBe('Cancel Plan')
+      await act(async () => {
+        planBadge.props.onClick()
+      })
+      expect(setMode).toHaveBeenLastCalledWith('agent')
+    } finally {
+      if (goalRenderer) {
+        await act(async () => {
+          goalRenderer!.unmount()
+        })
+      }
+      if (planRenderer) {
+        await act(async () => {
+          planRenderer!.unmount()
+        })
+      }
+      useChatStore.setState({ setActiveThreadGoal: originalGoalSetter })
+      await i18n.changeLanguage(previousLanguage)
+      vi.unstubAllGlobals()
+      Reflect.deleteProperty(globalThis, 'IS_REACT_ACT_ENVIRONMENT')
+    }
   })
 
   it('renders image attachment thumbnails when a local preview is available', () => {

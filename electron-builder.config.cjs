@@ -105,6 +105,9 @@ module.exports = {
   //  - macOS TCC 权限、通知授权也都挂在这个 id 上。
   appId: 'com.xingyuzhong.deepseekgui',
   productName: 'Kun',
+  // Chromium locale packs are independent from the renderer's JSON translations.
+  // Ship only the locales exposed by APP_LOCALES (Chinese needs both script variants).
+  electronLanguages: ['en', 'zh_CN', 'zh_TW', 'ru', 'hi', 'th', 'ja', 'ko'],
   asar: true,
   asarUnpack: [
     '**/kun/dist/**/*',

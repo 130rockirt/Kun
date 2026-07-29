@@ -29,11 +29,12 @@ import { useWorkbenchDesignAgentRuntime } from './workbench/useWorkbenchDesignAg
 import { WorkbenchImageAnnotationHost } from './workbench/WorkbenchImageAnnotationHost'
 import { AgentBrowserFloatingPreview } from './AgentBrowserFloatingPreview'
 import { isWriteThreadId } from '../write/write-thread-registry'
-import { buildSddDraftId, useSddDraftStore, type SddDraft } from '../sdd/sdd-draft-store'
+import { useSddDraftStore } from '../sdd/sdd-draft-store'
+import { sddDraftRefForThreadId } from '../sdd/sdd-chat-transcript'
+import { resolveLinkedSddDraft } from '../sdd/sdd-linked-draft'
 import {
   releaseSddAssistantThread,
 } from '../sdd/sdd-thread-registry'
-import { sddDraftRelativePathForPlanPath } from '@shared/sdd'
 import { useWorkbenchLayout } from './workbench-layout'
 import { useWorkbenchPlanController } from './workbench-plan-controller'
 import { useGuiPlanStore } from '../plan/plan-store'
@@ -545,13 +546,13 @@ export function Workbench(): ReactElement {
     ) selectExtensionSurface(null)
   }, [activeExtensionSurface, activeExtensionSurfaceId, extensionContributionSnapshotReady, selectExtensionSurface])
   const {
-    composerFileReferences, fileTreeSidePanelView, openFilePreviewTargets,
+    composerFileReferences, fileTreeSidePanelOpen, fileTreeSidePanelView, openFilePreviewTargets,
     pinnedFilePreviewTargetKeys, preserveFilePreviewTargets, fileTreeWorkspaceRoot,
     clearComposerFileReferences, addComposerFileReference, pickComposerFileReferences,
     removeComposerFileReference, openWorkspaceFilePreviewTarget, previewWorkspaceFileFromSidebar,
     closeWorkspaceFilePreviewTarget, togglePinnedFilePreviewTarget, closeOtherFilePreviewTargets,
     togglePreserveFilePreviewTargets, addWorkspaceReferenceFromSidebar,
-    openFileTreeSidePanel, openDesignFileTreeSidePanel, setFileTreeSidePanelView,
+    toggleFileTreeSidePanel, openFileTreeSidePanel, openDesignFileTreeSidePanel, setFileTreeSidePanelView,
     clearFilePreviewTargets
   } = useWorkbenchFileTreeController({
     route,
@@ -612,18 +613,10 @@ export function Workbench(): ReactElement {
       await useChatStore.getState().refreshThreads()
     }
   })
-  const linkedSddDraft = useMemo<SddDraft | null>(() => {
-    if (!activeGuiPlan) return null
-    const relativePath = sddDraftRelativePathForPlanPath(activeGuiPlan.relativePath)
-    if (!relativePath) return null
-    return {
-      id: buildSddDraftId(activeGuiPlan.workspaceRoot, relativePath),
-      workspaceRoot: activeGuiPlan.workspaceRoot,
-      relativePath,
-      createdAt: activeGuiPlan.createdAt,
-      updatedAt: activeGuiPlan.updatedAt
-    }
-  }, [activeGuiPlan])
+  const linkedSddDraft = useMemo(() => resolveLinkedSddDraft({
+    plan: activeGuiPlan,
+    threadDraftRef: activeThreadId ? sddDraftRefForThreadId(activeThreadId) : null
+  }), [activeGuiPlan, activeThreadId])
   const openLinkedSddDraft = useCallback((): void => {
     if (!linkedSddDraft) return
     void openSddRequirementDraftFromHistory(linkedSddDraft)
@@ -678,9 +671,9 @@ export function Workbench(): ReactElement {
       return
     }
     if (id === BUILTIN_RIGHT_PANEL_IDS.sideConversations) openSideChat()
-    if (id === BUILTIN_RIGHT_PANEL_IDS.files) setFileTreeSidePanelView('workspace')
+    if (id === BUILTIN_RIGHT_PANEL_IDS.files) openFileTreeSidePanel()
     openRightPanelTab(id)
-  }, [openRightPanelTab, openSideChat, setFileTreeSidePanelView, toggleTerminal])
+  }, [openFileTreeSidePanel, openRightPanelTab, openSideChat, toggleTerminal])
 
   const closeCodeRightTool = useCallback((id: RightPanelContributionId): void => {
     if (id === BUILTIN_RIGHT_PANEL_IDS.sideConversations) setSidePanelOpen(false)
@@ -1120,7 +1113,7 @@ export function Workbench(): ReactElement {
       sideConversationCount: currentSideConversations.length,
       sideConversationRunningCount: currentSideRunningCount,
       files: {
-        open: true,
+        open: fileTreeSidePanelOpen,
         view: fileTreeSidePanelView,
         width: FILE_TREE_SIDEBAR_WIDTH,
         workspaceRoot: fileTreeWorkspaceRoot,
@@ -1137,6 +1130,7 @@ export function Workbench(): ReactElement {
       onOpen: openRightPanelTab,
       onActivate: activateRightPanelTab,
       onClose: closeCodeRightTool,
+      onToggleFiles: toggleFileTreeSidePanel,
       onNewSideConversation: openSideConversationDraft
     },
     workspaceRoot: extensionWorkspaceRoot

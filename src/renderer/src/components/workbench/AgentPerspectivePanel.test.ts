@@ -162,6 +162,12 @@ describe('AgentPerspectivePanel', () => {
       role: 'switch',
       'aria-label': 'Capture model requests for this conversation'
     }).props['aria-checked']).toBe(true)
+    const thumb = renderer.root.find((node) =>
+      typeof node.props.className === 'string' &&
+      node.props.className.includes('rounded-full bg-white')
+    )
+    expect(thumb.props.className).toContain('left-0')
+    expect(thumb.props.className).toContain('translate-x-3.5')
   })
 
   it('renders the semantic inspector and preserves access to already-redacted raw data', () => {

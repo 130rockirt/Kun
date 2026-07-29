@@ -30,11 +30,11 @@ export type ModelStreamChunk = (
     }
   | {
       kind: 'retrying'
-      status: number
+      status?: number
       attempt: number
       maxAttempts: number
       delayMs: number
-      reason?: 'stream_transport'
+      reason?: 'network' | 'stream_transport'
     }
   | { kind: 'image_generation_complete'; imageBase64: string; mimeType: string }
   | { kind: 'usage'; usage: UsageSnapshot }

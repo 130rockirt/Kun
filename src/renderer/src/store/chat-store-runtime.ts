@@ -534,9 +534,11 @@ export function runtimeStatusText(event: RuntimeStatusEventPayload): string {
     return i18n.t('common:toolUploadWaitStatus', { count: event.toolResultCount ?? 0 })
   }
   if (event.kind === 'model_request_retry') {
-    const key = event.retryReason === 'stream_transport'
-      ? 'common:modelStreamRetryStatus'
-      : 'common:modelRequestRetryStatus'
+    const key = event.retryReason === 'network'
+      ? 'common:modelNetworkRetryStatus'
+      : event.retryReason === 'stream_transport'
+        ? 'common:modelStreamRetryStatus'
+        : 'common:modelRequestRetryStatus'
     return i18n.t(key, {
       status: event.status ?? '',
       attempt: event.attempt ?? 0,

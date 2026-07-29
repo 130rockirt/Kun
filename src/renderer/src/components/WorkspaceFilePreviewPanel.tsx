@@ -77,6 +77,8 @@ type Props = {
   openTargets?: WorkspaceFileTarget[]
   workspaceRoot: string
   className?: string
+  fileTreeOpen?: boolean
+  onToggleFileTree?: () => void
   onSelectTarget?: (target: WorkspaceFileTarget) => void
   onCloseTarget?: (target: WorkspaceFileTarget) => void
   pinnedTargetKeys?: string[]
@@ -315,6 +317,8 @@ export function WorkspaceFilePreviewPanel({
   openTargets = target ? [target] : [],
   workspaceRoot,
   className,
+  fileTreeOpen = false,
+  onToggleFileTree,
   onSelectTarget,
   onCloseTarget,
   pinnedTargetKeys = [],
@@ -1164,16 +1168,32 @@ export function WorkspaceFilePreviewPanel({
           >
             <ExternalLink className="h-4 w-4" strokeWidth={1.75} />
           </button>
-          <button
-            type="button"
-            onClick={openInSystem}
-            disabled={!target}
-            className="ds-code-sidebar-icon-button"
-            title={t('filePreviewOpenSystem', { defaultValue: 'Open with system app' })}
-            aria-label={t('filePreviewOpenSystem', { defaultValue: 'Open with system app' })}
-          >
-            <FolderOpen className="h-4 w-4" strokeWidth={1.75} />
-          </button>
+          {onToggleFileTree ? (
+            <button
+              type="button"
+              onClick={() => {
+                if (readingMode) setReadingMode(false)
+                onToggleFileTree()
+              }}
+              className={`ds-code-sidebar-icon-button ${fileTreeOpen ? 'is-active' : ''}`}
+              title={fileTreeOpen ? t('fileTreeClose') : t('fileTreeOpen')}
+              aria-label={fileTreeOpen ? t('fileTreeClose') : t('fileTreeOpen')}
+              aria-pressed={fileTreeOpen}
+            >
+              <FolderOpen className="h-4 w-4" strokeWidth={1.75} />
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={openInSystem}
+              disabled={!target}
+              className="ds-code-sidebar-icon-button"
+              title={t('filePreviewOpenSystem', { defaultValue: 'Open with system app' })}
+              aria-label={t('filePreviewOpenSystem', { defaultValue: 'Open with system app' })}
+            >
+              <FolderOpen className="h-4 w-4" strokeWidth={1.75} />
+            </button>
+          )}
           <button
             type="button"
             onClick={() => void copyContent()}

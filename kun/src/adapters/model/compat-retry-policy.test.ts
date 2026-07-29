@@ -6,6 +6,14 @@ import {
 } from './compat-retry-policy.js'
 
 describe('compat retry policy', () => {
+  it('defaults to five retries after the initial request', () => {
+    expect(normalizeModelRequestRetryConfig(undefined)).toEqual({
+      maxAttempts: 5,
+      initialDelayMs: 3_000,
+      httpStatusCodes: [429, 503]
+    })
+  })
+
   it('normalizes limits and retryable statuses', () => {
     expect(normalizeModelRequestRetryConfig({
       maxAttempts: 99,

@@ -1726,6 +1726,32 @@ describe('streaming runtime status events', () => {
       maxAttempts: 3,
       delayMs: 3000
     })
+
+    captured = null
+    await dispatchKunRuntimeEvent(
+      {
+        kind: 'model_request_retry',
+        seq: 25,
+        timestamp: '2026-06-03T10:00:04.000Z',
+        threadId: 'thr_1',
+        turnId: 'turn_1',
+        attempt: 2,
+        maxAttempts: 5,
+        delayMs: 6000,
+        reason: 'network'
+      },
+      sink,
+      async () => undefined
+    )
+
+    expect(captured).toMatchObject({
+      kind: 'model_request_retry',
+      attempt: 2,
+      maxAttempts: 5,
+      delayMs: 6000,
+      retryReason: 'network'
+    })
+    expect(captured).not.toHaveProperty('status')
     expect(runtimeError).not.toHaveBeenCalled()
   })
 	})

@@ -1064,15 +1064,9 @@ export function modelProviderPresetProfile(
     apiKey: apiKey.trim(),
     baseUrl: preset.baseUrl,
     endpointFormat: preset.endpointFormat,
-    retry: preset.kind === 'gemini-cli-api' || preset.id === CHATGPT_SUBSCRIPTION_PROVIDER_ID
-      ? {
-          ...defaultPresetRetrySettings(),
-          // Subscription transports are long-lived and routinely cross
-          // gateways. Keep their transient retries bounded for multi-step
-          // tool turns and interrupted response streams.
-          maxAttempts: 3
-        }
-      : defaultPresetRetrySettings(),
+    // Subscription and API transports share the same bounded default. An
+    // explicit provider setting can still reduce or disable retries.
+    retry: defaultPresetRetrySettings(),
     ...(preset.kind ? { kind: preset.kind } : {}),
     models: [...preset.models],
     modelProfiles: copyModelProfiles(preset.modelProfiles),

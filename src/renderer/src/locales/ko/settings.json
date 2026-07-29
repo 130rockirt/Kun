@@ -422,6 +422,7 @@
   "modelProviderEndpointFormat": "끝점 형식",
   "modelProviderRetrySection": "실패 재시도",
   "modelProviderRetryMaxAttempts": "재시도 시도",
+  "modelProviderRetryMaxAttemptsHint": "최초 요청은 포함하지 않습니다. 기본 5회, 최대 10회입니다.",
   "modelProviderRetryInitialDelayMs": "초기 재시도 지연(ms)",
   "modelProviderRetryStatusCodes": "HTTP 상태 코드 재시도",
   "modelProviderRetryStatusCodesHint": "여러 상태 코드는 쉼표로 구분하세요(예: 429,503).",

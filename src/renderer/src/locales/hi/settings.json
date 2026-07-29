@@ -422,6 +422,7 @@
   "modelProviderEndpointFormat": "समापन बिंदु प्रारूप",
   "modelProviderRetrySection": "पुनः प्रयास विफल",
   "modelProviderRetryMaxAttempts": "पुनः प्रयास करें",
+  "modelProviderRetryMaxAttemptsHint": "Excludes the initial request. Default 5, maximum 10.",
   "modelProviderRetryInitialDelayMs": "प्रारंभिक पुनः प्रयास विलंब (एमएस)",
   "modelProviderRetryStatusCodes": "HTTP स्थिति कोड पुनः प्रयास करें",
   "modelProviderRetryStatusCodesHint": "एकाधिक स्थिति कोड को अल्पविराम से अलग करें, उदाहरण के लिए 429,503।",

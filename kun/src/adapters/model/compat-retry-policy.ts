@@ -28,6 +28,14 @@ export function retryDelayMs(
 ): number {
   const retryAfterMs = parseRetryAfterMs(response.headers.get('retry-after'), options.now?.() ?? Date.now())
   if (retryAfterMs !== undefined) return retryAfterMs
+  return exponentialRetryDelayMs(initialDelayMs, attempt, options)
+}
+
+export function exponentialRetryDelayMs(
+  initialDelayMs: number,
+  attempt: number,
+  options: { random?: () => number } = {}
+): number {
   const exponential = Math.min(600_000, initialDelayMs * 2 ** attempt)
   if (exponential <= 0) return 0
   return Math.round(exponential * (0.8 + (options.random?.() ?? Math.random()) * 0.4))

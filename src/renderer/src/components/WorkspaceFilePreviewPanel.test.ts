@@ -30,7 +30,10 @@ vi.mock('react-i18next', () => {
     filePreviewEmpty: 'No file selected',
     filePreviewTitle: 'File preview',
     filePreviewOpenEditor: 'Open in editor',
+    filePreviewOpenSystem: 'Open with system app',
     filePreviewCopyContent: 'Copy file',
+    fileTreeOpen: 'Show file tree',
+    fileTreeClose: 'Hide file tree',
     rightPanelCollapse: 'Collapse'
   }
   const t = (key: string) => labels[key] ?? key
@@ -103,6 +106,28 @@ describe('WorkspaceFilePreviewPanel toolbar', () => {
     expect(html).toContain('aria-pressed="true"')
     expect(html).toContain('lucide-pin')
     expect(html).not.toMatch(/role="tab"[^>]*>[^<]*<button/)
+  })
+
+  it('turns the folder action into an accessible file-tree toggle when provided', async () => {
+    const onToggleFileTree = vi.fn()
+    let renderer!: ReactTestRenderer
+    await act(async () => {
+      renderer = create(createElement(WorkspaceFilePreviewPanel, {
+        target: null,
+        workspaceRoot: '/repo',
+        fileTreeOpen: false,
+        onToggleFileTree,
+        onClose: () => undefined
+      }))
+    })
+
+    const toggle = renderer.root.findByProps({ 'aria-label': 'Show file tree' })
+    expect(toggle.props['aria-pressed']).toBe(false)
+    expect(renderer.root.findAllByProps({ 'aria-label': 'Open with system app' })).toHaveLength(0)
+
+    await act(async () => toggle.props.onClick())
+    expect(onToggleFileTree).toHaveBeenCalledTimes(1)
+    await act(async () => renderer.unmount())
   })
 })
 

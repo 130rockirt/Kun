@@ -32,6 +32,7 @@ import {
   DEFAULT_IMAGE_GENERATION_PROTOCOL,
   DEFAULT_MUSIC_GENERATION_PROTOCOL,
   DEFAULT_MODEL_PROVIDER_ID,
+  DEFAULT_MODEL_REQUEST_RETRY_MAX_ATTEMPTS,
   DEFAULT_SPEECH_TO_TEXT_PROTOCOL,
   DEFAULT_TEXT_TO_SPEECH_PROTOCOL,
   DEFAULT_VIDEO_GENERATION_PROTOCOL,
@@ -1655,8 +1656,6 @@ function GeminiCliApiSubscriptionSection({
 const fieldLabelClass = 'grid gap-1.5 text-[12px] font-semibold text-ds-muted'
 const textInputClass =
   'w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] font-normal text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30'
-const ENABLED_MODEL_REQUEST_RETRY_ATTEMPTS = 3
-
 function retryStatusCodesText(codes: readonly number[] | undefined): string {
   return (codes?.length ? codes : defaultModelRequestRetrySettings().httpStatusCodes).join(',')
 }
@@ -3930,7 +3929,7 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                       onChange={(enabled) => updateModelProvider(activeProvider.id, {
                         retry: {
                           ...activeRetry,
-                          maxAttempts: enabled ? ENABLED_MODEL_REQUEST_RETRY_ATTEMPTS : 0
+                          maxAttempts: enabled ? DEFAULT_MODEL_REQUEST_RETRY_MAX_ATTEMPTS : 0
                         }
                       })}
                     />
@@ -3958,6 +3957,9 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                               }
                             })}
                           />
+                          <span className="text-[11px] font-normal leading-4 text-ds-faint">
+                            {t('modelProviderRetryMaxAttemptsHint')}
+                          </span>
                         </label>
                         <label className={fieldLabelClass}>
                           {t('modelProviderRetryInitialDelayMs')}

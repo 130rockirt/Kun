@@ -820,6 +820,25 @@ describe('thread event sink runtime errors', () => {
     expect(systemBlocks[0].text).toContain('1')
     expect(systemBlocks[0].text).toContain('3')
     expect(getState().error).toBeNull()
+
+    sink.onRuntimeStatus?.({
+      kind: 'model_request_retry',
+      itemId: 'runtime_status_turn-current_model_retry',
+      turnId: 'turn-current',
+      createdAt: '2026-06-08T00:00:01.000Z',
+      attempt: 2,
+      maxAttempts: 5,
+      delayMs: 6000,
+      retryReason: 'network'
+    })
+
+    const networkRetry = getState().blocks.find(
+      (block) => block.id === 'runtime_status_turn-current_model_retry'
+    )
+    const networkRetryText = networkRetry?.kind === 'system' ? networkRetry.text : ''
+    expect(networkRetryText).toContain('Model provider connection failed')
+    expect(networkRetryText).toContain('2')
+    expect(networkRetryText).toContain('5')
   })
 
   it('adds runtime error events to the timeline with details', () => {

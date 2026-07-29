@@ -3,8 +3,8 @@ import { CompatModelClient } from './compat-model-client.js'
 import type { ModelRequestRetryConfig } from '../../config/kun-config.js'
 import type { ModelRequest, ModelStreamChunk } from '../../ports/model-client.js'
 
-// Retry behavior is opt-in and provider-configurable. Keep the status list and
-// delays explicit so these tests match the runtime contract.
+// Retry behavior is enabled by default and provider-configurable. Keep custom
+// status lists and zero delays explicit where tests need deterministic timing.
 
 function request(signal?: AbortSignal): ModelRequest {
   return {
@@ -89,14 +89,17 @@ describe('CompatModelClient transient gateway retry', () => {
     expect(chunks.some((c) => c.kind === 'error')).toBe(false)
   })
 
-  it('does not retry by default', async () => {
+  it('does not retry when the provider explicitly disables retries', async () => {
     let calls = 0
     const fetchImpl = (async () => {
       calls += 1
       return gatewayError(502)
     }) as unknown as typeof fetch
 
-    const chunks = await drain(client(fetchImpl).stream(request()))
+    const chunks = await drain(
+      client(fetchImpl, { maxAttempts: 0, initialDelayMs: 0, httpStatusCodes: [502] })
+        .stream(request())
+    )
 
     expect(calls).toBe(1)
     expect(chunks.some((c) => c.kind === 'error')).toBe(true)
@@ -146,6 +149,89 @@ describe('CompatModelClient transient gateway retry', () => {
 
     expect(calls).toBe(1)
     expect(chunks.some((c) => c.kind === 'error')).toBe(true)
+  })
+})
+
+describe('CompatModelClient network retry', () => {
+  it('uses the default five-retry budget and recovers from fetch failures', async () => {
+    let calls = 0
+    const fetchImpl = (async () => {
+      calls += 1
+      if (calls <= 5) throw new TypeError('fetch failed')
+      return okJson()
+    }) as unknown as typeof fetch
+
+    const chunks = await drain(
+      client(fetchImpl, { initialDelayMs: 0 }).stream(request())
+    )
+    const retries = chunks.filter((chunk) => chunk.kind === 'retrying')
+
+    expect(calls).toBe(6)
+    expect(retries).toHaveLength(5)
+    expect(retries[0]).toEqual({
+      kind: 'retrying',
+      attempt: 1,
+      maxAttempts: 5,
+      delayMs: 0,
+      reason: 'network'
+    })
+    expect(retries.at(-1)).toEqual({
+      kind: 'retrying',
+      attempt: 5,
+      maxAttempts: 5,
+      delayMs: 0,
+      reason: 'network'
+    })
+    expect(chunks.at(-1)).toEqual({ kind: 'completed', stopReason: 'stop' })
+    expect(chunks.some((chunk) => chunk.kind === 'error')).toBe(false)
+  })
+
+  it('surfaces the fetch failure after the default five retries are exhausted', async () => {
+    let calls = 0
+    const fetchImpl = (async () => {
+      calls += 1
+      throw new TypeError('fetch failed')
+    }) as unknown as typeof fetch
+
+    const chunks = await drain(
+      client(fetchImpl, { initialDelayMs: 0 }).stream(request())
+    )
+
+    expect(calls).toBe(6)
+    expect(chunks.filter((chunk) => chunk.kind === 'retrying')).toHaveLength(5)
+    expect(chunks.at(-1)).toMatchObject({
+      kind: 'error',
+      message: 'model request failed: fetch failed',
+      failure: { category: 'network', failoverAllowed: true }
+    })
+  })
+
+  it('stops a network retry while waiting in backoff when the request is cancelled', async () => {
+    const controller = new AbortController()
+    let calls = 0
+    const fetchImpl = (async () => {
+      calls += 1
+      setTimeout(() => controller.abort(), 0)
+      throw new TypeError('fetch failed')
+    }) as unknown as typeof fetch
+
+    const chunks = await drain(
+      client(fetchImpl, { maxAttempts: 5, initialDelayMs: 10_000 })
+        .stream(request(controller.signal))
+    )
+
+    expect(calls).toBe(1)
+    expect(chunks).toContainEqual({
+      kind: 'retrying',
+      attempt: 1,
+      maxAttempts: 5,
+      delayMs: expect.any(Number),
+      reason: 'network'
+    })
+    expect(chunks.at(-1)).toMatchObject({
+      kind: 'error',
+      message: 'request was aborted during retry backoff'
+    })
   })
 })
 

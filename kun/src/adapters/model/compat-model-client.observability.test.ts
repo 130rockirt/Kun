@@ -212,6 +212,7 @@ describe('CompatModelClient request observability', () => {
       apiKey: 'sk-test',
       model: 'test-model',
       endpointFormat: 'chat_completions',
+      retry: { maxAttempts: 0 },
       debugSink: recorder,
       fetchImpl: (async () => { throw new Error('socket unavailable') }) as unknown as typeof fetch
     })

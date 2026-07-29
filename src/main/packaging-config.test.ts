@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 const require = createRequire(import.meta.url)
 const builderConfig = require('../../electron-builder.config.cjs')
+const rootPackage = require('../../package.json')
 const afterPack = require('../../scripts/after-pack.cjs')
 const nativeBuildEnv = require('../../scripts/electron-native-build-env.cjs')
 const macNotarize = require('../../scripts/mac-notarize.cjs')
@@ -162,6 +163,44 @@ afterEach(() => {
 })
 
 describe('electron-builder Kun packaging', () => {
+  it('ships only Chromium locales exposed by the application locale picker', () => {
+    expect(builderConfig.electronLanguages).toEqual([
+      'en',
+      'zh_CN',
+      'zh_TW',
+      'ru',
+      'hi',
+      'th',
+      'ja',
+      'ko'
+    ])
+  })
+
+  it('keeps renderer and release-only packages out of the production dependency graph', () => {
+    const developmentOnly = [
+      '@aws-sdk/client-s3',
+      '@codemirror/view',
+      '@streamdown/math',
+      '@tiptap/core',
+      '@xterm/xterm',
+      '@xyflow/react',
+      'i18next',
+      'jimp',
+      'lucide-react',
+      'qrcode.react',
+      'react-i18next',
+      'rehype-harden',
+      'rehype-raw',
+      'shiki',
+      'streamdown',
+      'zustand'
+    ]
+    for (const packageName of developmentOnly) {
+      expect(rootPackage.dependencies?.[packageName]).toBeUndefined()
+      expect(rootPackage.devDependencies?.[packageName]).toEqual(expect.any(String))
+    }
+  })
+
   it('keeps Linux Electron native-addon rebuilds on the external V8 header path', () => {
     const linuxEnv: Record<string, string> = { CXXFLAGS: '-O2' }
 

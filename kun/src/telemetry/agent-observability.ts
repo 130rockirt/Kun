@@ -93,7 +93,9 @@ export class AgentObservabilityRecorder implements RuntimeEventObserver {
         return
       case 'model_request_retry':
         this.addTurnEvent(event.threadId, event.turnId, 'gen_ai.model.retry', {
-          'http.response.status_code': event.status,
+          ...(event.status !== undefined
+            ? { 'http.response.status_code': event.status }
+            : {}),
           'kun.retry.attempt': event.attempt,
           'kun.retry.max_attempts': event.maxAttempts,
           'kun.retry.delay_ms': event.delayMs

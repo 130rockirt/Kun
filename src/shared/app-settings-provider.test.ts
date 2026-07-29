@@ -56,14 +56,15 @@ describe('model provider retry settings', () => {
     const settings = defaultModelProviderSettings()
 
     expect(settings.providers[0].retry).toEqual(defaultModelRequestRetrySettings())
+    expect(settings.providers[0]?.retry?.maxAttempts).toBe(5)
   })
 
-  it('enables bounded retries for new ChatGPT subscription profiles', () => {
+  it('uses the common five-retry default for new ChatGPT subscription profiles', () => {
     const preset = getModelProviderPreset('codex')
     expect(preset).not.toBeNull()
 
     expect(modelProviderPresetProfile(preset!, '').retry).toMatchObject({
-      maxAttempts: 3,
+      maxAttempts: 5,
       httpStatusCodes: expect.arrayContaining([429, 503])
     })
   })
@@ -125,7 +126,7 @@ describe('Gemini subscription provider preset', () => {
       baseUrl: '',
       endpointFormat: 'custom_endpoint',
       retry: expect.objectContaining({
-        maxAttempts: 3,
+        maxAttempts: 5,
         httpStatusCodes: expect.arrayContaining([429, 503])
       }),
       speech: {

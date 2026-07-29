@@ -29,6 +29,7 @@ import {
 } from './model-stream-resource-budget.js'
 import { normalizeCompatUsage } from './compat-usage-normalizer.js'
 import {
+  exponentialRetryDelayMs,
   normalizeModelRequestRetryConfig,
   retryDelayMs,
   sleepWithAbort
@@ -296,7 +297,32 @@ export class CompatModelClient implements ModelClient {
     let result = await post(body, 'initial')
     let transportRetryAttempt = 0
     let credentialRefreshAttempted = false
-    while (result.kind === 'response' && !result.response.ok) {
+    while (true) {
+      if (result.kind === 'error') {
+        if (
+          request.abortSignal.aborted ||
+          result.failure.failoverAllowed === false ||
+          transportRetryAttempt >= retry.maxAttempts
+        ) break
+        const nextAttempt = transportRetryAttempt + 1
+        const delayMs = exponentialRetryDelayMs(retry.initialDelayMs, transportRetryAttempt)
+        yield {
+          kind: 'retrying',
+          attempt: nextAttempt,
+          maxAttempts: retry.maxAttempts,
+          delayMs,
+          reason: 'network'
+        }
+        const aborted = await sleepWithAbort(delayMs, request.abortSignal)
+        if (aborted || request.abortSignal.aborted) {
+          yield { kind: 'error', message: 'request was aborted during retry backoff' }
+          return
+        }
+        transportRetryAttempt = nextAttempt
+        result = await post(body, 'transport_retry')
+        continue
+      }
+      if (result.response.ok) break
       if (
         result.response.status === 401 &&
         credentials.refreshable &&
@@ -801,8 +827,36 @@ export class CompatModelClient implements ModelClient {
       while (true) {
         const retried = await input.post()
         if (retried.kind === 'error') {
-          yield { kind: 'error', message: retried.message, failure: retried.failure }
-          return
+          if (
+            input.request.abortSignal.aborted ||
+            retried.failure.failoverAllowed === false ||
+            usedRetryAttempts >= maxRetryAttempts
+          ) {
+            yield { kind: 'error', message: retried.message, failure: retried.failure }
+            return
+          }
+          const networkRetryAttempt = usedRetryAttempts + 1
+          const networkDelayMs = exponentialRetryDelayMs(
+            input.retry.initialDelayMs,
+            usedRetryAttempts
+          )
+          yield {
+            kind: 'retrying',
+            attempt: networkRetryAttempt,
+            maxAttempts: maxRetryAttempts,
+            delayMs: networkDelayMs,
+            reason: 'network'
+          }
+          const networkRetryAborted = await sleepWithAbort(
+            networkDelayMs,
+            input.request.abortSignal
+          )
+          if (networkRetryAborted || input.request.abortSignal.aborted) {
+            yield { kind: 'error', message: 'request was aborted during stream retry backoff' }
+            return
+          }
+          usedRetryAttempts = networkRetryAttempt
+          continue
         }
         response = retried.response
         if (response.ok) break

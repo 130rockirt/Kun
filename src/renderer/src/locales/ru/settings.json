@@ -422,6 +422,7 @@
   "modelProviderEndpointFormat": "Формат endpoint",
   "modelProviderRetrySection": "Повтор при ошибке",
   "modelProviderRetryMaxAttempts": "Попыток повтора",
+  "modelProviderRetryMaxAttemptsHint": "Excludes the initial request. Default 5, maximum 10.",
   "modelProviderRetryInitialDelayMs": "Начальная задержка повтора (мс)",
   "modelProviderRetryStatusCodes": "HTTP-статусы для повтора",
   "modelProviderRetryStatusCodesHint": "Укажите коды через запятую, например 429,503.",

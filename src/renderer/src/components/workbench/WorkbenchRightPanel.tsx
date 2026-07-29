@@ -9,6 +9,7 @@ import {
   type PointerEventHandler,
   type ReactElement
 } from 'react'
+import { useTranslation } from 'react-i18next'
 import {
   DesignRightPanelContent,
   type DesignRightPanelContentProps
@@ -88,6 +89,7 @@ export type WorkbenchCodeRightWorkspaceProps = {
   onOpen: (id: RightPanelContributionId) => void
   onActivate: (id: RightPanelContributionId) => void
   onClose: (id: RightPanelContributionId) => void
+  onToggleFiles: () => void
   onNewSideConversation: () => void
 }
 
@@ -237,6 +239,7 @@ function CodeRightPanelWorkspace({
   | 'workspaceRoot'
   | 'onCollapse'
 > & { code: WorkbenchCodeRightWorkspaceProps }): ReactElement {
+  const { t } = useTranslation('common')
   const reactId = useId()
   const domIdPrefix = `code-right-${reactId}`
   const [visited, setVisited] = useState<Set<RightPanelContributionId>>(() =>
@@ -294,7 +297,29 @@ function CodeRightPanelWorkspace({
       return <WorkbenchFileTreeSidePanel {...code.files} open embedded />
     }
     if (id === BUILTIN_RIGHT_PANEL_IDS.file) {
-      return <WorkspaceFilePreviewPanel {...file} className="h-full max-h-full w-full" />
+      return (
+        <div className="ds-file-preview-workspace h-full min-h-0 min-w-0">
+          {code.files.open ? (
+            <>
+              <button
+                type="button"
+                className="ds-file-preview-explorer-backdrop"
+                onClick={code.onToggleFiles}
+                aria-label={t('fileTreeClose')}
+              />
+              <div className="ds-file-preview-explorer">
+                <WorkbenchFileTreeSidePanel {...code.files} open embedded />
+              </div>
+            </>
+          ) : null}
+          <WorkspaceFilePreviewPanel
+            {...file}
+            fileTreeOpen={code.files.open}
+            onToggleFileTree={code.onToggleFiles}
+            className="h-full max-h-full min-w-0 flex-1 border-l-0"
+          />
+        </div>
+      )
     }
     if (id === BUILTIN_RIGHT_PANEL_IDS.sideConversations) {
       return (

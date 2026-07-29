@@ -212,7 +212,7 @@ export function AgentPerspectivePanel({
               aria-hidden
             >
               <span
-                className={`absolute top-0.5 h-3 w-3 rounded-full bg-white shadow-sm transition-transform ${
+                className={`absolute left-0 top-0.5 h-3 w-3 rounded-full bg-white shadow-sm transition-transform ${
                   captureEnabled ? 'translate-x-3.5' : 'translate-x-0.5'
                 }`}
               />

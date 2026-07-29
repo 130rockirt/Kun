@@ -59,7 +59,8 @@ const HttpUrl = z.string().url().refine((value) => {
 }, { message: 'URL must use http or https' })
 
 export const DEFAULT_MODEL_REQUEST_RETRY_CONFIG = {
-  maxAttempts: 0,
+  // Retries are counted after the initial provider request.
+  maxAttempts: 5,
   initialDelayMs: 3_000,
   httpStatusCodes: [429, 503]
 } as const

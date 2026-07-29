@@ -204,7 +204,8 @@ export type NetworkProxySettingsV1 = {
   url: string
 }
 export type { ModelEndpointFormat }
-export const DEFAULT_MODEL_REQUEST_RETRY_MAX_ATTEMPTS = 0
+/** Number of retries after the initial model-provider request. */
+export const DEFAULT_MODEL_REQUEST_RETRY_MAX_ATTEMPTS = 5
 export const DEFAULT_MODEL_REQUEST_RETRY_INITIAL_DELAY_MS = 3_000
 export const DEFAULT_MODEL_REQUEST_RETRY_HTTP_STATUS_CODES = [429, 503] as const
 export type ModelRequestRetrySettingsV1 = {

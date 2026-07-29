@@ -8,6 +8,7 @@ const {
   mkdtempSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   rmSync,
   statSync,
@@ -15,7 +16,7 @@ const {
   writeFileSync
 } = require('node:fs')
 const { tmpdir } = require('node:os')
-const { join } = require('node:path')
+const { dirname, join } = require('node:path')
 const test = require('node:test')
 const {
   KUN_RUNTIME_REQUIRED_PATHS,
@@ -25,7 +26,13 @@ const {
     installCliLaunchers,
     linuxElectronLauncherContent,
     linuxRealExecutableName,
-    packedKunPruneArgs
+    packedKunPruneArgs,
+    claudeAgentSdkPlatformPackage,
+    prunePackedApplicationPayload,
+    validatePackedApplicationPayload,
+    TESSERACT_NODE_LSTM_ALIASES,
+    TESSERACT_LSTM_CORE_FILES,
+    BETTER_SQLITE_BUILD_PATHS
   }
 } = require('./after-pack.cjs')
 
@@ -101,6 +108,88 @@ test('prunes packaged Kun dependencies for the package target architecture', () 
     '--os=darwin',
     '--cpu=x64'
   ])
+})
+
+function payloadFixture(t) {
+  const appOutDir = mkdtempSync(join(tmpdir(), 'kun-packed-payload-test-'))
+  t.after(() => rmSync(appOutDir, { recursive: true, force: true }))
+  const context = {
+    appOutDir,
+    electronPlatformName: 'darwin',
+    arch: 'arm64',
+    packager: {
+      appInfo: { productFilename: 'Kun' }
+    }
+  }
+  const root = join(
+    appOutDir,
+    'Kun.app',
+    'Contents',
+    'Resources',
+    'app.asar.unpacked'
+  )
+  return { context, root }
+}
+
+function writeFixture(path, contents = 'fixture') {
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, contents)
+}
+
+test('removes only regenerable or on-demand payload from packaged applications', (t) => {
+  const { context, root } = payloadFixture(t)
+  const modules = join(root, 'node_modules')
+  const kunModules = join(root, 'kun', 'node_modules')
+  const claudePlatformPackage = claudeAgentSdkPlatformPackage(context)
+  const claudePlatformRoot = join(kunModules, ...claudePlatformPackage.split('/'))
+  writeFixture(join(kunModules, '@anthropic-ai', 'claude-agent-sdk', 'sdk.mjs'))
+  writeFixture(join(claudePlatformRoot, 'claude'), 'large on-demand binary')
+
+  const sqliteRoot = join(modules, 'better-sqlite3')
+  writeFixture(join(sqliteRoot, 'build', 'Release', 'better_sqlite3.node'))
+  writeFixture(join(sqliteRoot, 'lib', 'index.js'))
+  for (const relativePath of BETTER_SQLITE_BUILD_PATHS) {
+    writeFixture(join(sqliteRoot, relativePath))
+  }
+
+  const coreRoot = join(modules, 'tesseract.js-core')
+  for (const entry of TESSERACT_LSTM_CORE_FILES) {
+    writeFixture(join(coreRoot, entry))
+  }
+  for (const entry of [
+    'index.js',
+    'tesseract-core.js',
+    'tesseract-core.wasm',
+    'tesseract-core-lstm.wasm.js',
+    'tesseract-core-simd.wasm.js'
+  ]) {
+    writeFixture(join(coreRoot, entry))
+  }
+  writeFixture(
+    join(modules, '@tesseract.js-data', 'eng', '4.0.0', 'eng.traineddata.gz')
+  )
+  writeFixture(
+    join(modules, '@tesseract.js-data', 'eng', '4.0.0_best_int', 'eng.traineddata.gz')
+  )
+
+  prunePackedApplicationPayload(context)
+  assert.doesNotThrow(() => validatePackedApplicationPayload(context))
+  assert.equal(existsSync(claudePlatformRoot), false)
+  assert.equal(
+    existsSync(join(kunModules, '@anthropic-ai', 'claude-agent-sdk', 'sdk.mjs')),
+    true
+  )
+  assert.deepEqual(readdirSync(coreRoot).sort(), [...TESSERACT_LSTM_CORE_FILES].sort())
+  for (const [entry, target] of TESSERACT_NODE_LSTM_ALIASES) {
+    assert.match(readFileSync(join(coreRoot, entry), 'utf8'), new RegExp(`require\\('${target}'\\)`))
+  }
+  assert.equal(existsSync(join(sqliteRoot, 'build', 'Release', 'better_sqlite3.node')), true)
+
+  writeFixture(join(claudePlatformRoot, 'claude'))
+  assert.throws(
+    () => validatePackedApplicationPayload(context),
+    /on-demand Claude Code binary package/
+  )
 })
 
 test('installs an executable Linux product launcher over a preserved ELF payload', {

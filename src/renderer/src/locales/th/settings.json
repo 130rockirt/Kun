@@ -422,6 +422,7 @@
   "modelProviderEndpointFormat": "รูปแบบจุดสิ้นสุด",
   "modelProviderRetrySection": "ล้มเหลวลองอีกครั้ง",
   "modelProviderRetryMaxAttempts": "ลองอีกครั้ง",
+  "modelProviderRetryMaxAttemptsHint": "ไม่รวมคำขอครั้งแรก ค่าเริ่มต้น 5 ครั้ง สูงสุด 10 ครั้ง",
   "modelProviderRetryInitialDelayMs": "ความล่าช้าในการลองใหม่ครั้งแรก (มิลลิวินาที)",
   "modelProviderRetryStatusCodes": "ลองรหัสสถานะ HTTP อีกครั้ง",
   "modelProviderRetryStatusCodesHint": "แยกรหัสสถานะหลายรหัสด้วยเครื่องหมายจุลภาค เช่น 429,503",

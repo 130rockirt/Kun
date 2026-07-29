@@ -2232,6 +2232,7 @@ describe('CompatModelClient', () => {
       apiKey: 'k',
       model: 'deepseek-v4-pro',
       modelProxyUrl: 'http://127.0.0.1:7890',
+      retry: { maxAttempts: 0 },
       fetchImpl
     })
     const chunks: ModelStreamChunk[] = []

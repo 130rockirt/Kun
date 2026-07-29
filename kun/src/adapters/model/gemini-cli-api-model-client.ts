@@ -16,6 +16,7 @@ import { createProxyFetch } from './proxy-fetch.js'
 import { IncrementalSseFrameBuffer } from './incremental-sse-frame-buffer.js'
 import { GeminiCliOAuthSource } from './gemini-cli-oauth.js'
 import {
+  exponentialRetryDelayMs,
   normalizeModelRequestRetryConfig,
   parseRetryAfterMs,
   retryDelayMs,
@@ -217,7 +218,38 @@ export class GeminiCliApiModelClient implements ModelClient {
     let credentialRefreshAttempted = false
     let transportRetryAttempt = 0
     const retryStatuses = new Set(this.retry.httpStatusCodes)
-    while (result.response && !result.response.ok) {
+    while (true) {
+      if (result.error) {
+        if (
+          request.abortSignal.aborted ||
+          transportRetryAttempt >= this.retry.maxAttempts
+        ) break
+        const nextAttempt = transportRetryAttempt + 1
+        const delayMs = exponentialRetryDelayMs(
+          this.retry.initialDelayMs,
+          transportRetryAttempt
+        )
+        yield {
+          kind: 'retrying',
+          attempt: nextAttempt,
+          maxAttempts: this.retry.maxAttempts,
+          delayMs,
+          reason: 'network'
+        }
+        const aborted = await sleepWithAbort(delayMs, request.abortSignal)
+        if (aborted || request.abortSignal.aborted) {
+          yield {
+            kind: 'error',
+            code: 'request_aborted',
+            message: 'Gemini CLI API request was aborted during retry backoff.'
+          }
+          return
+        }
+        transportRetryAttempt = nextAttempt
+        result = await post('transport_retry')
+        continue
+      }
+      if (!result.response || result.response.ok) break
       if (result.response.status === 401 && !credentialRefreshAttempted) {
         credentialRefreshAttempted = true
         await result.response.body?.cancel().catch(() => {})

@@ -1,6 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import { createPortal } from 'react-dom'
-import { AlertCircle, Check, ChevronDown, GitBranch, GitFork, Loader2, Plus, Search } from 'lucide-react'
+import {
+  AlertCircle,
+  Check,
+  ChevronDown,
+  GitBranch,
+  GitFork,
+  Info,
+  Loader2,
+  Plus,
+  Search,
+  X
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import {
   applyGitBranchPrefix,
@@ -29,6 +40,10 @@ const BRANCH_FOOTER_LABEL_MAX_LENGTH = 34
 
 type Props = {
   workspaceRoot: string
+  useWorktreePool?: boolean
+  worktreeBranch?: string
+  onWorktreeBranchChange?: (branch: string) => void
+  onToggleWorktreeMode?: () => void
 }
 
 type BranchTooltip = {
@@ -44,7 +59,13 @@ function branchTooltipPosition(clientX: number, clientY: number): { x: number; y
   return { x, y }
 }
 
-export function GitBranchPicker({ workspaceRoot }: Props): ReactElement | null {
+export function GitBranchPicker({
+  workspaceRoot,
+  useWorktreePool = false,
+  worktreeBranch = '',
+  onWorktreeBranchChange,
+  onToggleWorktreeMode
+}: Props): ReactElement | null {
   const { t } = useTranslation('common')
   const root = workspaceRoot.trim()
   const [open, setOpen] = useState(false)
@@ -139,7 +160,16 @@ export function GitBranchPicker({ workspaceRoot }: Props): ReactElement | null {
   const canCreate = createBranchName.length > 0 && !switchTargetRow
   const canCreateWorktree = trimmedQuery.length > 0 && (canCreate || Boolean(switchTargetRow))
   const currentBranch = result?.ok ? result.currentBranch : null
-  const label = currentBranch || (result?.ok ? t('gitDetached') : t('gitBranchUnavailable'))
+  const selectedWorktreeBranch = worktreeBranch.trim() || currentBranch || ''
+  const selectedBranch = useWorktreePool ? selectedWorktreeBranch : currentBranch || ''
+  const label = selectedBranch || (result?.ok ? t('gitDetached') : t('gitBranchUnavailable'))
+  const launchModeLabel = useWorktreePool
+    ? t('composerLaunchIsolatedWorktreeShort')
+    : t('composerLaunchCurrentDirectoryShort')
+  const triggerLabel = `${middleEllipsize(label, BRANCH_TRIGGER_LABEL_MAX_LENGTH)} · ${launchModeLabel}`
+  const launchSummary = useWorktreePool
+    ? t('composerLaunchSummaryWorktree', { branch: label })
+    : t('composerLaunchSummaryCurrentDirectory', { branch: label })
   const footerBranchLabel = middleEllipsize(createBranchName, BRANCH_FOOTER_LABEL_MAX_LENGTH)
   const footerCreateLabel = t('gitCreateNamedBranch', { branch: footerBranchLabel })
   const footerCreateTitle = t('gitCreateNamedBranch', { branch: createBranchName })
@@ -155,6 +185,11 @@ export function GitBranchPicker({ workspaceRoot }: Props): ReactElement | null {
   const hideTooltip = useCallback((): void => {
     setTooltip(null)
   }, [])
+
+  useEffect(() => {
+    if (!useWorktreePool || worktreeBranch.trim() || !currentBranch) return
+    onWorktreeBranchChange?.(currentBranch)
+  }, [currentBranch, onWorktreeBranchChange, useWorktreePool, worktreeBranch])
 
   const moveActiveThreadToWorktree = async (record: {
     projectPath: string
@@ -250,11 +285,24 @@ export function GitBranchPicker({ workspaceRoot }: Props): ReactElement | null {
   }
 
   const selectBranch = (branch: GitBranchRow): void => {
+    if (useWorktreePool) {
+      onWorktreeBranchChange?.(branch.name)
+      setQuery('')
+      return
+    }
     if (branch.worktreePath) {
       void navigateToWorktree(branch)
     } else {
       void switchBranch(branch.name)
     }
+  }
+
+  const toggleWorktreeMode = (): void => {
+    if (!onToggleWorktreeMode) return
+    if (!useWorktreePool && !worktreeBranch.trim() && currentBranch) {
+      onWorktreeBranchChange?.(currentBranch)
+    }
+    onToggleWorktreeMode()
   }
 
   const createAndSwitchBranch = async (): Promise<void> => {
@@ -344,12 +392,14 @@ export function GitBranchPicker({ workspaceRoot }: Props): ReactElement | null {
     <div ref={wrapRef} className="ds-git-branch-picker ds-no-drag relative min-w-0">
       <button
         type="button"
-        className="flex h-8 max-w-[320px] min-w-0 items-center gap-2 rounded-lg px-2 text-[14px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+        data-composer-launch-settings-trigger
+        data-composer-launch-mode={useWorktreePool ? 'worktree' : 'current-directory'}
+        className="flex h-8 max-w-[360px] min-w-0 items-center gap-2 rounded-lg px-2 text-[14px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
         onClick={() => setOpen((v) => !v)}
-        aria-label={label}
+        aria-label={t('composerLaunchTriggerLabel', { branch: label, mode: launchModeLabel })}
       >
         <GitBranch className="h-4 w-4 shrink-0" strokeWidth={1.8} />
-        <span className="min-w-0 truncate">{middleEllipsize(label, BRANCH_TRIGGER_LABEL_MAX_LENGTH)}</span>
+        <span className="min-w-0 truncate">{triggerLabel}</span>
         {loading ? (
           <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-ds-faint" strokeWidth={2} />
         ) : (
@@ -358,38 +408,65 @@ export function GitBranchPicker({ workspaceRoot }: Props): ReactElement | null {
       </button>
 
       {open ? (
-        <div className="absolute bottom-[calc(100%+8px)] left-0 z-50 w-[min(420px,calc(100vw-48px))] overflow-hidden rounded-xl border border-ds-border bg-ds-elevated shadow-[0_24px_70px_rgba(44,55,78,0.18)] backdrop-blur-xl dark:shadow-[0_30px_80px_rgba(0,0,0,0.42)]">
-          <div className="flex items-center gap-2 border-b border-ds-border-muted px-4 py-3">
-            <Search className="h-4 w-4 shrink-0 text-ds-faint" strokeWidth={1.8} />
-            <input
-              ref={inputRef}
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Escape') {
-                  e.preventDefault()
-                  setOpen(false)
-                }
-                if (e.key === 'Enter') {
-                  if (canCreate) {
-                    e.preventDefault()
-                    void createAndSwitchBranch()
-                  } else if (switchTargetRow) {
-                    e.preventDefault()
-                    selectBranch(switchTargetRow)
-                  }
-                }
-              }}
-              placeholder={t('gitSearchBranches')}
-              className="min-w-0 flex-1 bg-transparent text-[15px] text-ds-ink outline-none placeholder:text-ds-faint"
-            />
+        <div
+          data-composer-launch-settings-panel
+          className="absolute bottom-[calc(100%+8px)] left-0 z-50 w-[min(560px,calc(100vw-48px))] overflow-hidden rounded-2xl border border-ds-border bg-ds-elevated shadow-[0_24px_70px_rgba(44,55,78,0.18)] backdrop-blur-xl dark:shadow-[0_30px_80px_rgba(0,0,0,0.42)]"
+        >
+          <div className="flex items-center justify-between gap-4 border-b border-ds-border-muted px-4 py-3.5">
+            <div className="min-w-0">
+              <div className="text-[15px] font-semibold text-ds-ink">
+                {t('composerLaunchSettingsTitle')}
+              </div>
+              <div className="mt-0.5 text-[12px] leading-5 text-ds-faint">
+                {t('composerLaunchSettingsDescription')}
+              </div>
+            </div>
+            <button
+              type="button"
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-ds-faint transition hover:bg-ds-hover hover:text-ds-ink"
+              onClick={() => setOpen(false)}
+              aria-label={t('close')}
+              title={t('close')}
+            >
+              <X className="h-4 w-4" strokeWidth={2} />
+            </button>
           </div>
 
-          <div className="max-h-[320px] overflow-y-auto px-3 py-3">
-            <div className="mb-2 px-1 text-[13px] font-medium text-ds-faint">
-              {t('gitBranches')}
+          <div className="px-4 pb-2 pt-3">
+            <div className="mb-2 text-[13px] font-semibold text-ds-ink">
+              {t('composerLaunchStartingBranch')}
             </div>
+            <div className="flex items-center gap-2 rounded-xl border border-ds-border bg-ds-card px-3 py-2.5 focus-within:border-accent/45 focus-within:ring-2 focus-within:ring-accent/10">
+              <Search className="h-4 w-4 shrink-0 text-ds-faint" strokeWidth={1.8} />
+              <input
+                ref={inputRef}
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') {
+                    e.preventDefault()
+                    setOpen(false)
+                  }
+                  if (e.key === 'Enter') {
+                    if (useWorktreePool && switchTargetRow) {
+                      e.preventDefault()
+                      selectBranch(switchTargetRow)
+                    } else if (!useWorktreePool && canCreate) {
+                      e.preventDefault()
+                      void createAndSwitchBranch()
+                    } else if (switchTargetRow) {
+                      e.preventDefault()
+                      selectBranch(switchTargetRow)
+                    }
+                  }
+                }}
+                placeholder={t('gitSearchBranches')}
+                className="min-w-0 flex-1 bg-transparent text-[14px] text-ds-ink outline-none placeholder:text-ds-faint"
+              />
+            </div>
+          </div>
 
+          <div className="max-h-[220px] overflow-y-auto px-3 pb-3">
             {loading && !result ? (
               <div className="flex items-center gap-2 px-1 py-3 text-[13px] text-ds-muted">
                 <Loader2 className="h-4 w-4 animate-spin" strokeWidth={2} />
@@ -406,6 +483,14 @@ export function GitBranchPicker({ workspaceRoot }: Props): ReactElement | null {
 
             {filteredBranches.map((branch) => {
               const isActing = actingBranch === branch.name
+              const selected = useWorktreePool
+                ? branch.name === selectedWorktreeBranch
+                : branch.current
+              const branchActionLabel = useWorktreePool
+                ? t('composerLaunchSelectWorktreeBranch', { branch: branch.name })
+                : branch.worktreePath
+                  ? t('gitOpenExistingWorktree', { branch: branch.name })
+                  : t('gitSwitchToNamedBranch', { branch: branch.name })
               return (
                 <div
                   key={branch.name}
@@ -413,22 +498,13 @@ export function GitBranchPicker({ workspaceRoot }: Props): ReactElement | null {
                 >
                   <button
                     type="button"
+                    data-composer-launch-branch={branch.name}
                     className="flex min-w-0 flex-1 items-start gap-3 rounded-lg px-1 py-2.5 text-left text-ds-ink"
                     onClick={() => selectBranch(branch)}
-                    disabled={actingBranch != null || branch.current}
-                    aria-label={
-                      branch.worktreePath
-                        ? t('gitOpenExistingWorktree', { branch: branch.name })
-                        : t('gitSwitchToNamedBranch', { branch: branch.name })
-                    }
+                    disabled={actingBranch != null || selected}
+                    aria-label={branchActionLabel}
                     onPointerEnter={(event) =>
-                      showTooltip(
-                        branch.worktreePath
-                          ? t('gitOpenExistingWorktree', { branch: branch.name })
-                          : branch.name,
-                        event.clientX,
-                        event.clientY
-                      )
+                      showTooltip(branchActionLabel, event.clientX, event.clientY)
                     }
                     onPointerMove={(event) => moveTooltip(event.clientX, event.clientY)}
                     onPointerLeave={hideTooltip}
@@ -451,29 +527,31 @@ export function GitBranchPicker({ workspaceRoot }: Props): ReactElement | null {
                     </span>
                     {isActing && actingKind === 'switch' ? (
                       <Loader2 className="mt-1 h-4 w-4 shrink-0 animate-spin text-ds-muted" strokeWidth={2} />
-                    ) : branch.current ? (
-                      <Check className="mt-0.5 h-5 w-5 shrink-0 text-ds-muted" strokeWidth={2} />
+                    ) : selected ? (
+                      <Check className="mt-0.5 h-5 w-5 shrink-0 text-accent" strokeWidth={2} />
                     ) : null}
                   </button>
-                  <button
-                    type="button"
-                    className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-ds-faint opacity-0 transition hover:bg-ds-active hover:text-ds-ink focus-visible:opacity-100 group-hover/branch:opacity-100 disabled:cursor-not-allowed disabled:opacity-45"
-                    onClick={() => void checkoutBranchWorktree(branch.name)}
-                    disabled={actingBranch != null}
-                    aria-label={t('gitOpenBranchWorktree', { branch: branch.name })}
-                    onPointerEnter={(event) =>
-                      showTooltip(t('gitOpenBranchWorktree', { branch: branch.name }), event.clientX, event.clientY)
-                    }
-                    onPointerMove={(event) => moveTooltip(event.clientX, event.clientY)}
-                    onPointerLeave={hideTooltip}
-                    onPointerCancel={hideTooltip}
-                  >
-                    {isActing && actingKind === 'worktree' ? (
-                      <Loader2 className="h-4 w-4 animate-spin" strokeWidth={2} />
-                    ) : (
-                      <GitFork className="h-4 w-4" strokeWidth={1.8} />
-                    )}
-                  </button>
+                  {!useWorktreePool ? (
+                    <button
+                      type="button"
+                      className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-ds-faint opacity-0 transition hover:bg-ds-active hover:text-ds-ink focus-visible:opacity-100 group-hover/branch:opacity-100 disabled:cursor-not-allowed disabled:opacity-45"
+                      onClick={() => void checkoutBranchWorktree(branch.name)}
+                      disabled={actingBranch != null}
+                      aria-label={t('gitOpenBranchWorktree', { branch: branch.name })}
+                      onPointerEnter={(event) =>
+                        showTooltip(t('gitOpenBranchWorktree', { branch: branch.name }), event.clientX, event.clientY)
+                      }
+                      onPointerMove={(event) => moveTooltip(event.clientX, event.clientY)}
+                      onPointerLeave={hideTooltip}
+                      onPointerCancel={hideTooltip}
+                    >
+                      {isActing && actingKind === 'worktree' ? (
+                        <Loader2 className="h-4 w-4 animate-spin" strokeWidth={2} />
+                      ) : (
+                        <GitFork className="h-4 w-4" strokeWidth={1.8} />
+                      )}
+                    </button>
+                  ) : null}
                 </div>
               )
             })}
@@ -483,7 +561,7 @@ export function GitBranchPicker({ workspaceRoot }: Props): ReactElement | null {
             ) : null}
           </div>
 
-          {canCreateWorktree ? (
+          {!useWorktreePool && canCreateWorktree ? (
             <div className="flex items-center gap-1 border-t border-ds-border-muted px-3 py-3">
               {canCreate ? (
                 <button
@@ -538,6 +616,61 @@ export function GitBranchPicker({ workspaceRoot }: Props): ReactElement | null {
               </button>
             </div>
           ) : null}
+
+          <div className="border-t border-ds-border-muted px-4 py-3">
+            <div className="mb-2 text-[13px] font-semibold text-ds-ink">
+              {t('composerLaunchWorkspaceMode')}
+            </div>
+            <button
+              type="button"
+              data-composer-worktree-mode-toggle
+              disabled={!onToggleWorktreeMode}
+              onClick={toggleWorktreeMode}
+              className="flex w-full items-center gap-3 rounded-xl border border-ds-border bg-ds-card px-3 py-3 text-left transition hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-ds-card"
+            >
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-ds-hover text-ds-muted">
+                <GitFork className="h-4.5 w-4.5" strokeWidth={1.8} />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-[14px] font-semibold text-ds-ink">
+                  {t('composerLaunchUseIsolatedWorktree')}
+                </span>
+                <span className="mt-0.5 block text-[12px] leading-5 text-ds-faint">
+                  {t('composerLaunchUseIsolatedWorktreeDescription')}
+                </span>
+              </span>
+              <span
+                role="switch"
+                aria-checked={useWorktreePool}
+                aria-label={t('composerLaunchUseIsolatedWorktree')}
+                className={`relative h-5 w-9 shrink-0 rounded-full ring-1 transition ${
+                  useWorktreePool
+                    ? 'bg-accent ring-accent/35 shadow-[inset_0_1px_0_rgba(255,255,255,0.24)]'
+                    : 'bg-ds-border-muted ring-ds-border-muted'
+                }`}
+              >
+                <span
+                  className={`absolute top-0.5 h-4 w-4 rounded-full bg-white ring-1 ring-black/5 transition ${
+                    useWorktreePool ? 'translate-x-[17px]' : 'translate-x-0.5'
+                  } shadow-[0_1px_4px_rgba(20,47,95,0.28)]`}
+                />
+              </span>
+            </button>
+          </div>
+
+          <div className="flex items-center gap-3 border-t border-ds-border-muted bg-ds-card/50 px-4 py-3">
+            <div className="flex min-w-0 flex-1 items-start gap-2 rounded-xl border border-accent/20 bg-accent/5 px-3 py-2 text-[12px] leading-5 text-ds-muted">
+              <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent" strokeWidth={2} />
+              <span className="min-w-0">{launchSummary}</span>
+            </div>
+            <button
+              type="button"
+              className="h-9 shrink-0 rounded-lg bg-accent px-4 text-[13px] font-semibold text-white shadow-sm transition hover:brightness-105"
+              onClick={() => setOpen(false)}
+            >
+              {t('composerLaunchDone')}
+            </button>
+          </div>
         </div>
       ) : null}
       {tooltip ? createPortal(

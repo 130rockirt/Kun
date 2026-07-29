@@ -291,11 +291,11 @@ export type RequiredToolGateEvent = z.infer<typeof RequiredToolGateEvent>
 
 export const ModelRequestRetryEvent = RuntimeEventBase.extend({
   kind: z.literal('model_request_retry'),
-  status: z.number().int().min(100).max(599),
+  status: z.number().int().min(100).max(599).optional(),
   attempt: z.number().int().positive(),
   maxAttempts: z.number().int().positive(),
   delayMs: z.number().int().nonnegative(),
-  reason: z.literal('stream_transport').optional()
+  reason: z.enum(['network', 'stream_transport']).optional()
 })
 export type ModelRequestRetryEvent = z.infer<typeof ModelRequestRetryEvent>
 

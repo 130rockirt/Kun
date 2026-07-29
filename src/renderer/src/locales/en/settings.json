@@ -422,6 +422,7 @@
   "modelProviderEndpointFormat": "Endpoint format",
   "modelProviderRetrySection": "Failure retry",
   "modelProviderRetryMaxAttempts": "Retry attempts",
+  "modelProviderRetryMaxAttemptsHint": "Excludes the initial request. Default 5, maximum 10.",
   "modelProviderRetryInitialDelayMs": "Initial retry delay (ms)",
   "modelProviderRetryStatusCodes": "Retry HTTP status codes",
   "modelProviderRetryStatusCodesHint": "Separate multiple status codes with commas, for example 429,503.",

@@ -28,11 +28,11 @@ export type ModelStreamIntent =
   | { kind: 'assistant_reasoning_delta'; text: string }
   | {
       kind: 'retrying'
-      status: number
+      status?: number
       attempt: number
       maxAttempts: number
       delayMs: number
-      reason?: 'stream_transport'
+      reason?: 'network' | 'stream_transport'
     }
   | {
       kind: 'tool_call_ready'
@@ -85,7 +85,7 @@ export class ModelStreamCollector {
         return {
           intents: [{
             kind: 'retrying',
-            status: chunk.status,
+            ...(chunk.status !== undefined ? { status: chunk.status } : {}),
             attempt: chunk.attempt,
             maxAttempts: chunk.maxAttempts,
             delayMs: chunk.delayMs,

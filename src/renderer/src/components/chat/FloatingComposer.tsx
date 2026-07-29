@@ -14,7 +14,6 @@ import {
   BarChart3,
   FileText,
   Folder,
-  GitBranch,
   ImagePlus,
   ListTodo,
   Loader2,
@@ -523,7 +522,7 @@ export function FloatingComposer({
   const canRunReview = canCompose && route !== 'claw' && Boolean(onReviewCommand)
   const canToggleWorktreeMode = canCompose && route !== 'claw' && Boolean(onToggleWorktreeMode)
   const canOpenComposerMenu = showComposerMenuButton
-    && (canPickFileReference || canPickDesignReference || canPickLocalFileReference || canTogglePlanMode || showGraphMenuOption || canCreateNewThread || canOpenGoalPanel || canRunReview || canToggleWorktreeMode)
+    && (canPickFileReference || canPickDesignReference || canPickLocalFileReference || canTogglePlanMode || showGraphMenuOption || canCreateNewThread || canOpenGoalPanel || canRunReview)
   const showToolbarStartControls = showComposerMenuButton
   const showExecutionSettingsPicker = showIntentToolbar
     && Boolean(executionSettings)
@@ -534,11 +533,18 @@ export function FloatingComposer({
   const inputHistory = useComposerInputHistory()
   const slashQuery = getSlashQuery(input)
   const [composerMenuOpen, setComposerMenuOpen] = useState(false)
-  const [worktreeBranches, setWorktreeBranches] = useState<string[]>([])
   const [goalPanelOpen, setGoalPanelOpen] = useState(false)
+  const [goalInputMode, setGoalInputMode] = useState(false)
   const [goalRuntimeNowMs, setGoalRuntimeNowMs] = useState(() => Date.now())
   const [promptOptimizationBusy, setPromptOptimizationBusy] = useState(false)
   const [promptOptimizationError, setPromptOptimizationError] = useState<string | null>(null)
+  useEffect(() => {
+    setGoalInputMode(false)
+    setGoalPanelOpen(false)
+  }, [activeThreadId, route])
+  useEffect(() => {
+    if (mode === 'plan') setGoalInputMode(false)
+  }, [mode])
   const fileMentions = useComposerFileMentions({
     enabled: fileReferenceEnabled,
     canCompose,
@@ -586,7 +592,7 @@ export function FloatingComposer({
       ? t('userInputComposerPlaceholder')
     : !hasActiveThread && !effectiveWorkspaceRoot
       ? t('workspaceRequiredToCreateThread')
-      : goalPanelOpen && route !== 'claw'
+      : (goalInputMode || goalPanelOpen) && route !== 'claw'
         ? t('goalComposerPlaceholder')
       : busy
         ? t('composerQueuePlaceholder')
@@ -632,24 +638,6 @@ export function FloatingComposer({
     && !goalPanelOpen
     && !pendingUserInputBlock
 
-  useEffect(() => {
-    if (!useWorktreePool || !effectiveWorkspaceRoot || typeof window.kunGui?.getGitBranches !== 'function') {
-      setWorktreeBranches([])
-      return
-    }
-    let cancelled = false
-    void window.kunGui.getGitBranches(effectiveWorkspaceRoot).then((result) => {
-      if (cancelled || !result.ok) return
-      const names = result.branches.map((branch) => branch.name)
-      setWorktreeBranches(names)
-      if (!worktreeBranch.trim() && result.currentBranch) {
-        onWorktreeBranchChange?.(result.currentBranch)
-      }
-    }).catch(() => undefined)
-    return () => {
-      cancelled = true
-    }
-  }, [effectiveWorkspaceRoot, onWorktreeBranchChange, useWorktreePool, worktreeBranch])
   const parsedGoalCommand = parseGoalCommand(input)
   const goalPanelDraftObjective = getGoalPanelDraftObjective(input, goalPanelOpen)
   const canSetGoalPanelDraft =
@@ -694,7 +682,7 @@ export function FloatingComposer({
       ? t('goalActiveHeading')
       : t(`goalStatusShort.${activeThreadGoal.status}`)
     : ''
-  const goalMenuChecked = activeThreadGoal?.status === 'active'
+  const goalMenuChecked = goalInputMode
   const showGoalFloater = shouldShowGoalFloater({
     compact,
     hasActiveGoal: Boolean(activeThreadGoal),
@@ -765,6 +753,7 @@ export function FloatingComposer({
     }
     if (commandId === 'plan') {
       setInput('')
+      setGoalInputMode(false)
       setMode('plan')
       onPlanCommand?.()
       draft.focusComposer()
@@ -784,11 +773,14 @@ export function FloatingComposer({
     }
     if (commandId === 'goal') {
       setInput('')
-      setGoalPanelOpen(true)
+      onOrchestrationChange?.('direct')
+      setMode('agent')
+      setGoalInputMode(true)
       draft.focusComposer()
       return
     }
     if (commandId === 'research') {
+      setGoalInputMode(false)
       setMode('agent')
       setInput(buildResearchPrompt(t('slashCommandResearchPrompt'), null))
       draft.focusComposer()
@@ -832,7 +824,9 @@ export function FloatingComposer({
     setInput('')
     setGoalPanelOpen(false)
     if (command.action === 'menu') {
-      setGoalPanelOpen(true)
+      onOrchestrationChange?.('direct')
+      setMode('agent')
+      setGoalInputMode(true)
       draft.focusComposer()
       return true
     }
@@ -860,6 +854,17 @@ export function FloatingComposer({
     setInput('')
     setGoalPanelOpen(false)
     void setActiveThreadGoal(goalPanelDraftObjective)
+    draft.focusComposer()
+    return true
+  }
+
+  const setGoalFromGoalInputMode = (): boolean => {
+    const objective = input.trim()
+    if (!goalInputMode || objective.length === 0 || objective.startsWith('/')) return false
+    inputHistory.push(input)
+    setInput('')
+    setGoalInputMode(false)
+    void setActiveThreadGoal(objective)
     draft.focusComposer()
     return true
   }
@@ -905,6 +910,7 @@ export function FloatingComposer({
     if (mode === 'plan') {
       setMode('agent')
     } else {
+      setGoalInputMode(false)
       onOrchestrationChange?.('direct')
       setMode('plan')
       onPlanCommand?.()
@@ -918,6 +924,7 @@ export function FloatingComposer({
     if (mode === 'agent' && orchestration === 'graph') {
       onOrchestrationChange('direct')
     } else {
+      setGoalInputMode(false)
       setMode('agent')
       onOrchestrationChange('graph')
     }
@@ -927,20 +934,13 @@ export function FloatingComposer({
   const handleGoalMenuClick = (): void => {
     if (!canOpenGoalPanel) return
     setComposerMenuOpen(false)
-    if (activeThreadGoal?.status === 'active') {
-      void setActiveThreadGoalStatus('paused')
-    } else if (activeThreadGoal) {
-      void setActiveThreadGoalStatus('active')
+    if (goalInputMode) {
+      setGoalInputMode(false)
     } else {
-      setGoalPanelOpen(true)
+      onOrchestrationChange?.('direct')
+      setMode('agent')
+      setGoalInputMode(true)
     }
-    draft.focusComposer()
-  }
-
-  const handleWorktreeToolbarClick = (): void => {
-    if (!onToggleWorktreeMode) return
-    setComposerMenuOpen(false)
-    onToggleWorktreeMode()
     draft.focusComposer()
   }
 
@@ -991,6 +991,9 @@ export function FloatingComposer({
     if (highlightedSlashCommand) {
       if (highlightedSlashCommand.disabled) return
       applySlashCommand(highlightedSlashCommand.id)
+      return
+    }
+    if (setGoalFromGoalInputMode()) {
       return
     }
     if (setGoalFromComposerInput()) {
@@ -1396,6 +1399,7 @@ export function FloatingComposer({
             ) : null}
             <button
               type="button"
+              data-composer-goal-menu-item
               disabled={!canOpenGoalPanel}
               onClick={handleGoalMenuClick}
               className="ds-no-drag flex h-8 w-full items-center gap-2 px-3 text-left transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent disabled:hover:text-ds-muted"
@@ -1418,34 +1422,6 @@ export function FloatingComposer({
                 />
               </span>
             </button>
-            {canToggleWorktreeMode ? (
-              <button
-                type="button"
-                disabled={!canToggleWorktreeMode}
-                onClick={handleWorktreeToolbarClick}
-                className="ds-no-drag flex h-8 w-full items-center gap-2 px-3 text-left transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent disabled:hover:text-ds-muted"
-              >
-                <GitBranch className="h-3.5 w-3.5 shrink-0" strokeWidth={1.9} />
-                <span className="min-w-0 flex-1 truncate">
-                  {useWorktreePool ? t('composerEnvironmentWorktree') : t('composerEnvironmentLocal')}
-                </span>
-                <span
-                  role="switch"
-                  aria-checked={useWorktreePool}
-                  className={`relative h-5 w-9 shrink-0 rounded-full ring-1 transition ${
-                    useWorktreePool
-                      ? 'bg-accent ring-accent/35 shadow-[inset_0_1px_0_rgba(255,255,255,0.24)]'
-                      : 'bg-ds-border-muted ring-ds-border-muted'
-                  }`}
-                >
-                  <span
-                    className={`absolute top-0.5 h-4 w-4 rounded-full bg-white ring-1 ring-black/5 transition ${
-                      useWorktreePool ? 'translate-x-[17px]' : 'translate-x-0.5'
-                    } shadow-[0_1px_4px_rgba(20,47,95,0.28)]`}
-                  />
-                </span>
-              </button>
-            ) : null}
           </div>
         ) : null}
 
@@ -1560,24 +1536,13 @@ export function FloatingComposer({
             data-composer-workspace-controls
           >
             <WorkspaceProjectPicker currentWorkspaceRoot={effectiveWorkspaceRoot} />
-            <GitBranchPicker workspaceRoot={effectiveWorkspaceRoot} />
-            {useWorktreePool && worktreeBranches.length > 0 ? (
-              <label className="ds-no-drag inline-flex min-h-7 max-w-[220px] items-center gap-1.5 rounded-full border border-ds-border-muted bg-ds-card px-2.5 py-0.5 text-[12px] font-medium text-ds-muted">
-                <GitBranch className="h-3.5 w-3.5 shrink-0" strokeWidth={1.8} />
-                <select
-                  value={worktreeBranch || worktreeBranches[0]}
-                  onChange={(event) => onWorktreeBranchChange?.(event.target.value)}
-                  className="min-w-0 bg-transparent text-ds-muted outline-none"
-                  title={t('composerWorktreeBranch')}
-                >
-                  {worktreeBranches.map((branch) => (
-                    <option key={branch} value={branch}>
-                      {branch}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            ) : null}
+            <GitBranchPicker
+              workspaceRoot={effectiveWorkspaceRoot}
+              useWorktreePool={useWorktreePool}
+              worktreeBranch={worktreeBranch}
+              onWorktreeBranchChange={onWorktreeBranchChange}
+              onToggleWorktreeMode={canToggleWorktreeMode ? onToggleWorktreeMode : undefined}
+            />
           </div>
         ) : null}
 
@@ -1739,14 +1704,18 @@ export function FloatingComposer({
                       <Plus className="h-5 w-5" strokeWidth={1.8} />
                     </button>
                     {mode === 'plan' ? (
-                      <span
-                        className="ds-composer-mode-badge inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-full bg-ds-hover px-2.5 text-[13px] font-medium text-ds-muted"
-                        title={t('slashCommandPlanTitle')}
-                        aria-label={t('slashCommandPlanTitle')}
+                      <button
+                        type="button"
+                        data-composer-plan-mode-badge
+                        onClick={handlePlanToolbarClick}
+                        className="ds-composer-mode-badge ds-no-drag inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-full bg-ds-hover px-2.5 text-[13px] font-medium text-ds-muted transition hover:text-ds-ink"
+                        title={`${t('cancel')} ${t('slashCommandPlanTitle')}`}
+                        aria-label={`${t('cancel')} ${t('slashCommandPlanTitle')}`}
                       >
                         <ListTodo className="h-3.5 w-3.5" strokeWidth={1.9} />
                         <span className="ds-composer-mode-label">{t('slashCommandPlanTitle')}</span>
-                      </span>
+                        <X className="h-3 w-3" strokeWidth={2} />
+                      </button>
                     ) : null}
                     {runningGraphTurn ? (
                       <span
@@ -1775,7 +1744,23 @@ export function FloatingComposer({
                         </span>
                       </span>
                     ) : null}
-                    {activeThreadGoal?.status === 'active' ? (
+                    {goalInputMode ? (
+                      <button
+                        type="button"
+                        data-composer-goal-mode-badge
+                        onClick={() => {
+                          setGoalInputMode(false)
+                          draft.focusComposer()
+                        }}
+                        className="ds-composer-mode-badge ds-no-drag inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-full bg-ds-hover px-2.5 text-[13px] font-medium text-ds-muted transition hover:text-ds-ink"
+                        title={`${t('cancel')} ${t('slashCommandGoalTitle')}`}
+                        aria-label={`${t('cancel')} ${t('slashCommandGoalTitle')}`}
+                      >
+                        <Target className="h-3.5 w-3.5" strokeWidth={1.9} />
+                        <span className="ds-composer-mode-label">{t('slashCommandGoalTitle')}</span>
+                        <X className="h-3 w-3" strokeWidth={2} />
+                      </button>
+                    ) : activeThreadGoal?.status === 'active' ? (
                       <span
                         className="ds-composer-mode-badge inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-full bg-ds-hover px-2.5 text-[13px] font-medium text-ds-muted"
                         title={t('slashCommandGoalTitle')}

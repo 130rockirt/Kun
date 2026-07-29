@@ -271,7 +271,7 @@ export class ModelRoundEngine {
                 kind: 'model_request_retry',
                 threadId: input.threadId,
                 turnId: input.turnId,
-                status: intent.status,
+                ...(intent.status !== undefined ? { status: intent.status } : {}),
                 attempt: intent.attempt,
                 maxAttempts: intent.maxAttempts,
                 delayMs: intent.delayMs,

@@ -388,6 +388,47 @@ describe('GeminiCliApiModelClient', () => {
     expect(streamAttempts).toBe(2)
   })
 
+  it('retries a Code Assist fetch failure before surfacing a network error', async () => {
+    let streamAttempts = 0
+    const fetchImpl = vi.fn(async (url: string | URL | Request) => {
+      if (String(url).endsWith(':loadCodeAssist')) {
+        return new Response(JSON.stringify({
+          currentTier: { id: 'standard-tier' },
+          cloudaicompanionProject: 'project'
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      streamAttempts += 1
+      if (streamAttempts === 1) throw new TypeError('fetch failed')
+      return new Response(
+        'data: {"response":{"candidates":[{"content":{"role":"model","parts":[{"text":"recovered"}]},"finishReason":"STOP"}]}}\n\n',
+        { status: 200, headers: { 'content-type': 'text/event-stream' } }
+      )
+    }) as unknown as typeof fetch
+    const client = new GeminiCliApiModelClient({
+      model: 'gemini-2.5-flash',
+      fetchImpl,
+      oauthSource: oauth(fetchImpl),
+      retry: {
+        maxAttempts: 1,
+        initialDelayMs: 0,
+        httpStatusCodes: [429, 503]
+      }
+    })
+
+    expect(await drain(client.stream(request()))).toEqual([
+      {
+        kind: 'retrying',
+        attempt: 1,
+        maxAttempts: 1,
+        delayMs: 0,
+        reason: 'network'
+      },
+      { kind: 'assistant_text_delta', text: 'recovered' },
+      { kind: 'completed', stopReason: 'stop' }
+    ])
+    expect(streamAttempts).toBe(2)
+  })
+
   it('parses Google quota reset durations into failure metadata', async () => {
     const fetchImpl = vi.fn(async (url: string | URL | Request) => {
       if (String(url).endsWith(':loadCodeAssist')) {
@@ -407,7 +448,8 @@ describe('GeminiCliApiModelClient', () => {
     const client = new GeminiCliApiModelClient({
       model: 'gemini-2.5-flash',
       fetchImpl,
-      oauthSource: oauth(fetchImpl)
+      oauthSource: oauth(fetchImpl),
+      retry: { maxAttempts: 0 }
     })
 
     expect(await drain(client.stream(request()))).toEqual([expect.objectContaining({

@@ -1,11 +1,22 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   clearHighlightCodeCache,
+  extensionForLanguage,
   hasCachedHighlightCode,
   highlightCodeCacheSize,
   highlightCodeHtml,
+  languageFromFilePath,
   MAX_HIGHLIGHT_CACHE_ENTRIES
 } from './code-highlighting'
+
+describe('code highlighting languages', () => {
+  it('maps PowerShell workspace files to the bundled grammar', () => {
+    expect(languageFromFilePath('/repo/install.ps1')).toBe('powershell')
+    expect(languageFromFilePath('Profile.PSM1')).toBe('powershell')
+    expect(languageFromFilePath('Module.psd1')).toBe('powershell')
+    expect(extensionForLanguage('powershell')).toBe('ps1')
+  })
+})
 
 describe('code highlighting cache', () => {
   afterEach(() => {
