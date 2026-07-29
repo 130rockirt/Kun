@@ -165,7 +165,7 @@ export function SessionExportMenu({
           setOpen((value) => !value)
           setError('')
         }}
-        className="ds-topbar-action-button inline-flex h-8 w-8 items-center justify-center rounded-[0.9rem] border border-transparent bg-white/38 text-ds-faint opacity-90 shadow-[inset_0_1px_0_rgba(255,255,255,0.45)] transition hover:border-ds-border-muted hover:bg-white/55 hover:text-ds-ink hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-40 dark:bg-white/4 dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] dark:hover:bg-white/8"
+        className="ds-topbar-action-button inline-flex h-8 w-8 items-center justify-center rounded-[var(--ds-radius-control)] border border-transparent bg-transparent text-ds-faint opacity-90 transition hover:border-ds-border-muted hover:bg-ds-hover hover:text-ds-ink hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 disabled:cursor-not-allowed disabled:opacity-40"
         data-tooltip={tooltip}
         aria-label={tooltip}
         aria-haspopup="menu"

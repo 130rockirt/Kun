@@ -133,6 +133,8 @@
   "agentsQuickSkill": "기술",
   "agentsQuickMcp": "외부 도구",
   "agentsQuickPermissions": "액세스",
+  "agentsQuickLaboratory": "실험실",
+  "laboratorySettingsDesc": "실험적인 에이전트 기능을 설정합니다. 기능은 발전 과정에서 변경될 수 있습니다.",
   "archivesTitle": "보관된 채팅",
   "archivesOverview": "보관된 채팅 기록",
   "archivesOverviewDesc": "활성 사이드바에서 제거된 채팅을 검토하세요. 여기에서 해당 항목을 열거나 복원하거나 영구적으로 삭제할 수 있습니다.",

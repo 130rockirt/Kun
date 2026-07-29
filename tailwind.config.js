@@ -11,8 +11,12 @@ export default {
       colors: {
         accent: {
           DEFAULT: 'var(--ds-accent)',
-          foreground: '#ffffff',
+          foreground: 'var(--ds-control-foreground)',
           soft: 'var(--ds-accent-soft)'
+        },
+        control: {
+          DEFAULT: 'var(--ds-control)',
+          foreground: 'var(--ds-control-foreground)'
         },
         background: 'var(--ds-bg-canvas)',
         foreground: 'var(--ds-text)',
@@ -23,8 +27,8 @@ export default {
         },
         sidebar: 'var(--ds-surface-subtle)',
         primary: {
-          DEFAULT: 'var(--ds-accent)',
-          foreground: '#ffffff'
+          DEFAULT: 'var(--ds-control)',
+          foreground: 'var(--ds-control-foreground)'
         },
         ds: {
           main: 'var(--ds-bg-main)',
@@ -59,6 +63,9 @@ export default {
         panel: 'var(--ds-shadow-panel)'
       },
       borderRadius: {
+        control: 'var(--ds-radius-control)',
+        card: 'var(--ds-radius-card)',
+        pill: 'var(--ds-radius-pill)',
         xl: '14px',
         '2xl': '18px',
         '3xl': '22px'

@@ -12,14 +12,15 @@
 .ds-user-message-bubble {
   max-width: min(72%, 640px);
   min-width: 0;
-  border-radius: 20px;
+  border: 1px solid var(--ds-border);
+  border-radius: var(--ds-radius-card);
   background: var(--ds-bubble-user);
   padding: 0.72rem 1.05rem;
   color: var(--ds-bubble-user-fg);
   font-size: 15px;
-  font-weight: 500;
+  font-weight: 400;
   line-height: 1.58;
-  box-shadow: 0 8px 22px rgba(20, 47, 95, 0.06);
+  box-shadow: none;
 }
 
 @media (max-width: 640px) {

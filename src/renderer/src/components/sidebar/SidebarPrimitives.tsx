@@ -123,22 +123,22 @@ export function SidebarCommandRow({
       title={disabled ? disabledHint : undefined}
       onClick={onClick}
       className={cx(
-        'ds-sidebar-command-row flex min-h-[34px] w-full items-center gap-2.5 rounded-[8px] px-3 py-1.5 text-[13px] font-normal transition',
+        'ds-sidebar-command-row flex min-h-9 w-full items-center gap-2.5 rounded-full border px-3 py-1.5 text-[13px] font-normal transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30',
         disabled
-          ? 'cursor-not-allowed text-[#a8a8a8] opacity-55'
+          ? 'cursor-not-allowed border-transparent text-ds-faint opacity-55'
           : active
-            ? 'bg-[var(--ds-sidebar-row-active)] text-[#1f1f1f] shadow-[inset_0_0_0_1px_var(--ds-sidebar-row-ring)] dark:text-white'
+            ? 'border-[var(--ds-sidebar-row-ring)] bg-[var(--ds-sidebar-row-active)] font-medium text-ds-ink'
             : footer
-              ? 'text-[#4f4f4f] hover:bg-[var(--ds-sidebar-row-hover)] hover:text-[#1f1f1f] dark:text-white/70 dark:hover:text-white'
+              ? 'border-transparent text-ds-muted hover:bg-[var(--ds-sidebar-row-hover)] hover:text-ds-ink'
               : accent
-                ? 'text-[#1f1f1f] hover:bg-[var(--ds-sidebar-row-hover)] dark:text-white'
-                : 'text-[#343434] hover:bg-[var(--ds-sidebar-row-hover)] hover:text-[#1f1f1f] dark:text-white/75 dark:hover:text-white'
+                ? 'border-transparent text-ds-ink hover:bg-[var(--ds-sidebar-row-hover)]'
+                : 'border-transparent text-ds-muted hover:bg-[var(--ds-sidebar-row-hover)] hover:text-ds-ink'
       )}
     >
       <span
         className={cx(
           'flex h-5 w-5 shrink-0 items-center justify-center',
-          accent ? 'text-[#1f1f1f] dark:text-white' : footer ? 'text-[#888888]' : 'text-[#343434] dark:text-white/75'
+          accent ? 'text-ds-ink' : footer ? 'text-ds-faint' : 'text-ds-muted'
         )}
       >
         {icon}
@@ -168,9 +168,9 @@ export function SidebarSectionHeader({
   actions
 }: SidebarSectionHeaderProps): ReactElement {
   return (
-    <div className="ds-sidebar-section-header flex items-center justify-between px-2.5 pb-2 pt-5">
+    <div className="ds-sidebar-section-header flex items-center justify-between px-3 pb-2 pt-5">
       <span
-        className="min-w-0 truncate text-[12px] font-normal text-[#9aa5b5] dark:text-white/35"
+        className="min-w-0 truncate text-[11px] font-medium tracking-[0.02em] text-ds-faint"
         title={title}
       >
         {label}
@@ -207,8 +207,8 @@ export function SidebarIconButton({
     tone === 'danger'
       ? 'hover:bg-red-500/10 hover:text-red-600 dark:hover:text-red-300'
       : tone === 'accent'
-        ? 'hover:bg-[var(--ds-sidebar-row-hover)] hover:text-[#1f1f1f] dark:hover:text-white'
-        : 'hover:bg-[var(--ds-sidebar-row-hover)] hover:text-[#1f1f1f] dark:hover:text-white'
+        ? 'hover:bg-[var(--ds-sidebar-row-hover)] hover:text-ds-ink'
+        : 'hover:bg-[var(--ds-sidebar-row-hover)] hover:text-ds-ink'
 
   return (
     <button
@@ -223,8 +223,8 @@ export function SidebarIconButton({
         onClick?.()
       }}
       className={cx(
-        'ds-sidebar-icon-button ds-no-drag inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-transparent text-[#9a9a9a] transition disabled:cursor-not-allowed disabled:opacity-40 dark:text-white/45',
-        active ? 'bg-[color-mix(in_srgb,var(--ds-sidebar-row-active)_72%,var(--ds-accent)_28%)] text-[#1f1f1f] shadow-[inset_0_0_0_1px_var(--ds-sidebar-row-ring)] dark:text-white' : toneClass,
+        'ds-sidebar-icon-button ds-no-drag inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-[var(--ds-radius-control)] border border-transparent text-ds-faint transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 disabled:cursor-not-allowed disabled:opacity-40',
+        active ? 'border-[var(--ds-sidebar-row-ring)] bg-[var(--ds-sidebar-row-active)] text-ds-ink' : toneClass,
         className
       )}
       title={title}
@@ -252,7 +252,7 @@ export function SidebarSearchField({
   return (
     <label
       data-cursor-spotlight-target
-      className="ds-sidebar-search-field relative min-w-0 flex-1 rounded-[8px]"
+      className="ds-sidebar-search-field relative min-w-0 flex-1 rounded-full"
     >
       <Search
         className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ds-faint"
@@ -262,14 +262,14 @@ export function SidebarSearchField({
         value={value}
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}
-        className="h-8 w-full rounded-[8px] border border-transparent bg-[var(--ds-sidebar-field-bg)] pl-7 pr-7 text-[13px] text-[#1f1f1f] outline-none transition placeholder:text-[#9aa5b5] focus:bg-[var(--ds-sidebar-field-focus)] dark:text-white"
+        className="h-9 w-full rounded-full border border-[var(--ds-sidebar-row-ring)] bg-[var(--ds-sidebar-field-bg)] pl-8 pr-8 text-[13px] text-ds-ink outline-none transition placeholder:text-ds-faint focus:border-accent/55 focus:bg-[var(--ds-sidebar-field-focus)] focus:ring-2 focus:ring-accent/15"
       />
       {value.trim() ? (
         <button
           type="button"
           data-cursor-spotlight-target
           onClick={() => onChange('')}
-          className="absolute right-1 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-[#9a9a9a] transition hover:bg-[var(--ds-sidebar-row-hover)] hover:text-[#1f1f1f] dark:hover:text-white"
+          className="absolute right-1.5 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full text-ds-faint transition hover:bg-[var(--ds-sidebar-row-hover)] hover:text-ds-ink"
           title={clearLabel}
           aria-label={clearLabel}
         >
@@ -358,12 +358,12 @@ export function SidebarTreeRow({
       data-active={active ? 'true' : 'false'}
       data-active-variant={activeVariant}
       className={cx(
-        'ds-sidebar-tree-row group relative flex w-full items-center overflow-hidden rounded-[8px] text-[13px] font-normal transition',
+        'ds-sidebar-tree-row group relative flex w-full items-center overflow-hidden rounded-[var(--ds-radius-control)] border text-[13px] font-normal transition',
         outlined
-          ? 'bg-[var(--ds-sidebar-row-active)] text-[#1f1f1f] shadow-[inset_0_0_0_1px_var(--ds-sidebar-row-ring)] dark:text-white'
+          ? 'border-[var(--ds-sidebar-row-ring)] bg-[var(--ds-sidebar-row-active)] text-ds-ink'
           : active
-            ? 'bg-[var(--ds-sidebar-row-active)] text-[#1f1f1f] shadow-[inset_0_0_0_1px_var(--ds-sidebar-row-ring)] dark:text-white'
-            : 'text-[#343434] hover:bg-[var(--ds-sidebar-row-hover)] dark:text-white/75',
+            ? 'border-[var(--ds-sidebar-row-ring)] bg-[var(--ds-sidebar-row-active)] text-ds-ink'
+            : 'border-transparent text-ds-muted hover:bg-[var(--ds-sidebar-row-hover)] hover:text-ds-ink',
         className
       )}
       title={title}

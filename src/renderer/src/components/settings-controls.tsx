@@ -38,17 +38,17 @@ export function SecretInput({
 }): ReactElement {
   return (
     <div
-      className={`flex w-full min-w-0 items-stretch overflow-hidden rounded-xl bg-ds-card shadow-sm ${className} ${
+      className={`flex min-h-9 w-full min-w-0 items-stretch overflow-hidden rounded-full bg-ds-card ${className} ${
         invalid
           ? 'border border-amber-300 focus-within:border-amber-400 focus-within:ring-1 focus-within:ring-amber-200'
-          : 'border border-ds-border focus-within:border-accent/40 focus-within:ring-1 focus-within:ring-accent/30'
+          : 'border border-ds-border focus-within:border-accent/60 focus-within:ring-2 focus-within:ring-accent/15'
       }`}
     >
       <input
         type={visible ? 'text' : 'password'}
         autoComplete={autoComplete}
         placeholder={placeholder}
-        className="min-w-0 flex-1 bg-transparent px-3 py-2 text-[14px] text-ds-ink focus:outline-none"
+        className="min-w-0 flex-1 bg-transparent px-3 py-2 text-[13px] text-ds-ink focus:outline-none"
         value={value}
         onChange={(e) => onChange(e.target.value)}
       />
@@ -83,9 +83,9 @@ export function SectionJumpButton({
       aria-selected={active}
       aria-controls={controls}
       onClick={onClick}
-      className={`rounded-xl border px-3 py-1.5 text-[12px] font-medium shadow-sm transition ${
+      className={`rounded-full border px-3 py-1.5 text-[12px] font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 ${
         active
-          ? 'border-accent/35 bg-accent/12 text-accent'
+          ? 'border-transparent bg-[var(--ds-control)] text-[var(--ds-control-foreground)]'
           : 'border-ds-border bg-ds-card text-ds-muted hover:bg-ds-hover hover:text-ds-ink'
       }`}
     >
@@ -156,7 +156,7 @@ function SettingsTabList<T extends string>({
       className={
         secondary
           ? 'ds-settings-subtabs flex w-full min-w-0 items-center gap-1 overflow-x-auto rounded-full border border-ds-border-muted bg-ds-main/60 p-1'
-          : 'ds-settings-tabs grid w-full grid-flow-col auto-cols-[minmax(9rem,1fr)] gap-1.5 overflow-x-auto rounded-2xl border border-ds-border bg-ds-card/90 p-1.5 shadow-sm shadow-black/5 dark:shadow-black/25'
+          : 'ds-settings-tabs grid w-full grid-flow-col auto-cols-[minmax(8rem,1fr)] gap-1 overflow-x-auto rounded-full border border-ds-border bg-ds-main p-1'
       }
     >
       {items.map((item, index) => {
@@ -180,12 +180,12 @@ function SettingsTabList<T extends string>({
               secondary
                 ? `group flex h-8 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-full border px-3 text-[12px] font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 ${
                     active
-                      ? 'border-accent/20 bg-ds-card text-accent shadow-sm ring-1 ring-inset ring-accent/10'
+                      ? 'border-ds-border bg-ds-card text-ds-ink'
                       : 'border-transparent text-ds-muted hover:bg-ds-hover hover:text-ds-ink'
                   }`
-                : `group flex min-h-12 min-w-0 items-center justify-center gap-2 rounded-xl border px-3 py-2.5 text-[13px] font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 ${
+                : `group flex h-9 min-w-0 items-center justify-center gap-2 rounded-full border px-3 text-[13px] font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 ${
                     active
-                      ? 'border-accent/25 bg-accent-soft text-accent shadow-sm ring-1 ring-inset ring-accent/15'
+                      ? 'border-ds-border bg-ds-card text-ds-ink'
                       : 'border-transparent text-ds-muted hover:bg-ds-hover hover:text-ds-ink'
                   }`
             }
@@ -271,7 +271,7 @@ export function InlineNoticeView({
     // instead of forcing horizontal overflow that stretches the settings panel
     // — the success notice is short so the bug only ever showed on failure (#617).
     <div
-      className={`min-w-0 break-words rounded-xl border px-3 py-2 text-[12.5px] leading-5 ${className}`}
+      className={`min-w-0 break-words rounded-[var(--ds-radius-card)] border px-3 py-2 text-[12px] leading-5 ${className}`}
     >
       {notice.message}
     </div>
@@ -296,14 +296,14 @@ export function SettingsCard({
   if (collapsible) {
     return (
       <details
-        className={`ds-settings-card ds-settings-card--collapsible group overflow-hidden rounded-2xl border border-ds-border bg-ds-card/95 shadow-sm shadow-black/5 dark:shadow-black/25 ${className}`}
+        className={`ds-settings-card ds-settings-card--collapsible group overflow-hidden rounded-[var(--ds-radius-card)] border border-ds-border bg-ds-card ${className}`}
         open={defaultOpen || undefined}
       >
-        <summary className="ds-settings-card-header flex cursor-pointer list-none items-center justify-between gap-4 border-b border-transparent px-5 py-3 transition hover:bg-ds-hover/55 group-open:border-ds-border-muted [&::-webkit-details-marker]:hidden">
+        <summary className="ds-settings-card-header flex cursor-pointer list-none items-center justify-between gap-4 px-5 transition hover:bg-ds-hover/55 [&::-webkit-details-marker]:hidden">
           <span className="min-w-0">
-            <h2 className="text-[16px] font-semibold text-ds-ink">{title}</h2>
+            <h2 className="text-[16px] font-medium leading-tight text-ds-ink">{title}</h2>
             {description ? (
-              <span className="mt-0.5 block text-[12px] leading-5 text-ds-faint">{description}</span>
+              <span className="mt-1 block text-[12px] leading-[1.4] text-ds-muted">{description}</span>
             ) : null}
           </span>
           <ChevronDown
@@ -311,22 +311,22 @@ export function SettingsCard({
             strokeWidth={1.9}
           />
         </summary>
-        <div className="ds-settings-card-body divide-y divide-ds-border-muted px-2 py-1">{children}</div>
+        <div className="ds-settings-card-body divide-y divide-ds-border-muted px-2">{children}</div>
       </details>
     )
   }
 
   return (
     <section
-      className={`ds-settings-card rounded-2xl border border-ds-border bg-ds-card/95 shadow-sm shadow-black/5 dark:shadow-black/25 ${className}`}
+      className={`ds-settings-card rounded-[var(--ds-radius-card)] border border-ds-border bg-ds-card ${className}`}
     >
-      <div className="ds-settings-card-header border-b border-ds-border-muted px-5 py-3">
-        <h2 className="text-[16px] font-semibold text-ds-ink">{title}</h2>
+      <div className="ds-settings-card-header px-5">
+        <h2 className="text-[16px] font-medium leading-tight text-ds-ink">{title}</h2>
         {description ? (
-          <p className="mt-0.5 text-[12px] leading-5 text-ds-faint">{description}</p>
+          <p className="mt-1 text-[12px] leading-[1.4] text-ds-muted">{description}</p>
         ) : null}
       </div>
-      <div className="ds-settings-card-body divide-y divide-ds-border-muted px-2 py-1">{children}</div>
+      <div className="ds-settings-card-body divide-y divide-ds-border-muted px-2">{children}</div>
     </section>
   )
 }
@@ -349,16 +349,16 @@ export function SettingRow({
 
   return (
     <div
-      className={`ds-setting-row flex gap-3 px-3 py-4 ${
+      className={`ds-setting-row flex gap-3 px-3 py-3.5 ${
         wideControl
           ? 'ds-setting-row--wide flex-col sm:gap-3.5'
           : 'flex-col sm:flex-row sm:items-start sm:justify-between sm:gap-8'
       }`}
     >
       <div className={`min-w-0 ${wideControl ? 'w-full max-w-none shrink-0' : 'flex-1'}`}>
-        <div className="text-[14px] font-semibold text-ds-ink">{title}</div>
+        <div className="text-[13px] font-medium text-ds-ink">{title}</div>
         {description ? (
-          <p className="mt-0.5 text-[13px] leading-relaxed text-ds-muted">{description}</p>
+          <p className="mt-1 text-[12px] leading-[1.4] text-ds-muted">{description}</p>
         ) : null}
       </div>
       <div
@@ -454,7 +454,7 @@ export function ModelSelect({
       </select>
       {customActive ? (
         <input
-          className="w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 font-mono text-[13px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30"
+          className="w-full min-w-0 rounded-full border border-ds-border bg-ds-card px-3 py-2 font-mono text-[13px] text-ds-ink focus:border-accent/60 focus:outline-none focus:ring-2 focus:ring-accent/15"
           value={customDraft}
           placeholder={customPlaceholder}
           spellCheck={false}
@@ -493,12 +493,12 @@ export function AdvancedSettingsDisclosure({
   children: ReactNode
 }): ReactElement {
   return (
-    <details className="ds-settings-disclosure group overflow-hidden rounded-xl border border-ds-border-muted bg-ds-main/35">
+    <details className="ds-settings-disclosure group overflow-hidden rounded-[var(--ds-radius-card)] border border-ds-border-muted bg-ds-main/35">
       <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-left transition hover:bg-ds-hover/70 [&::-webkit-details-marker]:hidden">
         <span className="min-w-0">
-          <span className="block text-[13px] font-semibold text-ds-ink">{title}</span>
+          <span className="block text-[13px] font-medium text-ds-ink">{title}</span>
           {description ? (
-            <span className="mt-1 block text-[12.5px] leading-5 text-ds-faint">{description}</span>
+            <span className="mt-1 block text-[12px] leading-[1.4] text-ds-muted">{description}</span>
           ) : null}
         </span>
         <ChevronDown className="h-4 w-4 shrink-0 text-ds-faint transition group-open:rotate-180" strokeWidth={1.9} />
@@ -530,13 +530,13 @@ export function Toggle({
       onClick={() => {
         if (!disabled) onChange(!checked)
       }}
-      className={`relative h-7 w-12 shrink-0 rounded-full transition-colors duration-200 ease-out ${
-        checked ? 'bg-emerald-500' : 'bg-ds-faint'
+      className={`relative h-5 w-9 shrink-0 rounded-full transition-colors duration-150 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 ${
+        checked ? 'bg-[var(--ds-control)]' : 'bg-ds-faint'
       } ${disabled ? 'cursor-not-allowed opacity-60' : 'active:scale-[0.98]'}`}
     >
       <span
-        className={`absolute left-0.5 top-0.5 h-6 w-6 rounded-full bg-white shadow transition-transform duration-200 ease-out ${
-          checked ? 'translate-x-5' : 'translate-x-0'
+        className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform duration-150 ease-out ${
+          checked ? 'translate-x-4' : 'translate-x-0'
         }`}
       />
     </button>

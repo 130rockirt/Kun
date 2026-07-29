@@ -27,6 +27,7 @@ const labels: Record<string, string> = {
   mediaGeneration: 'Media generation',
   speechToText: 'Speech to text',
   agents: 'AI assistant',
+  agentsQuickLaboratory: 'Laboratory',
   subagents: 'Subagents',
   archives: 'Archived chats',
   worktree: 'Worktrees',
@@ -59,7 +60,7 @@ describe('SubagentsSettingsSection', () => {
     expect(html).toContain('data-variant="settings"')
   })
 
-  it('places the Subagents navigation item immediately after AI assistant', () => {
+  it('places Laboratory beside AI assistant before Subagents', () => {
     const html = renderToStaticMarkup(createElement(SettingsSidebar, {
       category: 'subagents',
       goBack: () => undefined,
@@ -68,13 +69,15 @@ describe('SubagentsSettingsSection', () => {
     }))
 
     const agentsIndex = html.indexOf('AI assistant')
+    const laboratoryIndex = html.indexOf('Laboratory')
     const subagentsIndex = html.indexOf('Subagents')
     const archivesIndex = html.indexOf('Archived chats')
 
     expect(agentsIndex).toBeGreaterThanOrEqual(0)
-    expect(subagentsIndex).toBeGreaterThan(agentsIndex)
+    expect(laboratoryIndex).toBeGreaterThan(agentsIndex)
+    expect(subagentsIndex).toBeGreaterThan(laboratoryIndex)
     expect(archivesIndex).toBeGreaterThan(subagentsIndex)
     expect(html).toContain('lucide-users-round')
-    expect(html).toContain('bg-accent/10 text-accent')
+    expect(html).toContain('bg-[var(--ds-control)]')
   })
 })

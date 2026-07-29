@@ -1554,7 +1554,7 @@ export function FloatingComposer({
             <WorkspaceProjectPicker currentWorkspaceRoot={effectiveWorkspaceRoot} />
             <GitBranchPicker workspaceRoot={effectiveWorkspaceRoot} />
             {useWorktreePool && worktreeBranches.length > 0 ? (
-              <label className="ds-no-drag inline-flex min-h-7 max-w-[220px] items-center gap-1.5 rounded-lg border border-ds-border-muted bg-ds-card px-2 py-0.5 text-[12.5px] font-medium text-ds-muted shadow-sm">
+              <label className="ds-no-drag inline-flex min-h-7 max-w-[220px] items-center gap-1.5 rounded-full border border-ds-border-muted bg-ds-card px-2.5 py-0.5 text-[12px] font-medium text-ds-muted">
                 <GitBranch className="h-3.5 w-3.5 shrink-0" strokeWidth={1.8} />
                 <select
                   value={worktreeBranch || worktreeBranches[0]}
@@ -1576,7 +1576,7 @@ export function FloatingComposer({
         <div
           className={`ds-composer-shell ds-chat-composer ds-frosted ds-no-drag flex flex-col gap-1 px-3 pb-2 pt-2 transition ${
             draft.focused ? 'ds-chat-composer-focus' : ''
-          } ${compact ? `rounded-[24px] px-3 py-2 ${side ? 'shadow-[0_14px_38px_rgba(20,47,95,0.10)]' : 'shadow-none'}` : ''}`}
+          } ${compact ? 'rounded-[var(--ds-radius-card)] px-3 py-2 shadow-none' : ''}`}
           onMouseDown={handleComposerShellMouseDown}
           onPaste={handleComposerPaste}
           onDragOver={handleComposerDragOver}
@@ -1598,7 +1598,7 @@ export function FloatingComposer({
                 return (
                   <span
                     key={chip.id}
-                    className="ds-no-drag inline-flex h-7 max-w-full items-center gap-1.5 rounded-lg border border-accent/25 bg-accent/10 px-2 text-[12px] font-medium text-ds-muted"
+                    className="ds-no-drag inline-flex h-7 max-w-full items-center gap-1.5 rounded-full border border-ds-border bg-ds-subtle px-2.5 text-[12px] font-medium text-ds-muted"
                     title={title}
                   >
                     <Icon className="h-3.5 w-3.5 shrink-0 text-accent" strokeWidth={1.8} />
@@ -1612,7 +1612,7 @@ export function FloatingComposer({
                       <button
                         type="button"
                         onClick={() => onRemoveContextChip?.(chip.id)}
-                        className="rounded-full p-0.5 text-ds-faint transition hover:bg-ds-hover hover:text-ds-ink"
+                        className="rounded-full p-0.5 text-ds-faint transition hover:bg-ds-hover hover:text-ds-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
                         aria-label={t('composerRemoveContext', 'Remove context')}
                         title={t('composerRemoveContext', 'Remove context')}
                       >
@@ -1805,7 +1805,7 @@ export function FloatingComposer({
                   <button
                     type="button"
                     onClick={() => dictation.stop('insert')}
-                    className="ds-no-drag flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-ds-border bg-ds-card text-ds-ink shadow-sm transition hover:bg-ds-hover"
+                    className="ds-no-drag flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-ds-border bg-ds-card text-ds-ink transition hover:bg-ds-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
                     aria-label={t('composerVoiceStop')}
                     title={t('composerVoiceStop')}
                   >
@@ -1814,7 +1814,7 @@ export function FloatingComposer({
                   <button
                     type="button"
                     onClick={() => dictation.stop('send')}
-                    className="ds-no-drag flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-zinc-950 text-white shadow-[0_10px_22px_rgba(20,47,95,0.22)] transition hover:bg-zinc-800 dark:bg-white dark:text-zinc-950 dark:hover:bg-zinc-200"
+                    className="ds-no-drag flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-control text-control-foreground transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
                     aria-label={t('composerVoiceSend')}
                     title={t('composerVoiceSend')}
                   >
@@ -1896,7 +1896,7 @@ export function FloatingComposer({
                     <button
                       type="button"
                       onClick={() => onInterrupt()}
-                      className="ds-no-drag flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-zinc-950 text-white shadow-[0_10px_22px_rgba(20,47,95,0.22)] transition hover:bg-zinc-800 dark:bg-white dark:text-zinc-950 dark:hover:bg-zinc-200"
+                      className="ds-no-drag flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-control text-control-foreground transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
                       aria-label={t('interrupt')}
                       title={t('interrupt')}
                     >
@@ -1907,7 +1907,7 @@ export function FloatingComposer({
                     type="button"
                     disabled={primaryActionDisabled}
                     onClick={handlePrimaryAction}
-                    className="ds-composer-primary-action ds-no-drag flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-zinc-950 text-white shadow-[0_10px_22px_rgba(20,47,95,0.22)] transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:bg-ds-card disabled:text-ds-faint disabled:shadow-none dark:bg-white dark:text-zinc-950 dark:hover:bg-zinc-200 dark:disabled:bg-ds-card dark:disabled:text-ds-faint"
+                    className="ds-composer-primary-action ds-no-drag flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-control text-control-foreground transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 disabled:cursor-not-allowed disabled:bg-ds-card disabled:text-ds-faint"
                     aria-label={primaryActionLabel}
                     title={primaryActionLabel}
                   >

@@ -6,6 +6,7 @@ import {
 
 describe('Graph runtime token accounting', () => {
   it('inherits the Lead model by default and validates fixed worker defaults', () => {
+    expect(DEFAULT_GRAPH_RUNTIME_CONFIG.rolloutStage).toBe('stable')
     expect(DEFAULT_GRAPH_RUNTIME_CONFIG.workerModel).toEqual({ mode: 'inherit' })
     expect(GraphRuntimeConfigSchema.parse({
       ...DEFAULT_GRAPH_RUNTIME_CONFIG,

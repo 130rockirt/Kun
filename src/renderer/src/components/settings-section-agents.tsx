@@ -37,6 +37,7 @@ import {
   Bot,
   Check,
   Eye,
+  FlaskConical,
   FolderOpen,
   FolderPen,
   Globe2,
@@ -90,8 +91,15 @@ import { GraphModeSettingsPanel } from './settings-section-graph-panel'
 
 export { modelProvidersSettingsPatch } from './settings-section-providers'
 
-type AgentsSettingsPanel = 'assistant' | 'permissions' | 'skills' | 'tools' | 'project' | 'runtime'
-type PermissionsSettingsPanel = 'policy' | 'computer' | 'browser' | 'quality' | 'graph'
+type AgentsSettingsPanel =
+  | 'assistant'
+  | 'permissions'
+  | 'skills'
+  | 'tools'
+  | 'project'
+  | 'runtime'
+type PermissionsSettingsPanel = 'policy' | 'quality'
+type LaboratorySettingsPanel = 'computer' | 'browser' | 'graph'
 
 function panelForSettingsSection(section: unknown): AgentsSettingsPanel {
   if (section === 'permissions') return 'permissions'
@@ -812,10 +820,7 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
                     ariaLabel={t('permissions')}
                     items={[
                       { id: 'policy', label: t('toolPermissionMode'), icon: ShieldCheck },
-                      { id: 'computer', label: t('computerUseTitle'), icon: Monitor },
-                      { id: 'browser', label: t('browserUseSettingsTitle'), icon: Globe2 },
-                      { id: 'quality', label: t('designQualityTitle'), icon: Palette },
-                      { id: 'graph', label: t('graphSettingsTitle'), icon: Workflow }
+                      { id: 'quality', label: t('designQualityTitle'), icon: Palette }
                     ]}
                     value={activePermissionsPanel}
                     onChange={setActivePermissionsPanel}
@@ -883,35 +888,6 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
 
                   <SettingsTabPanel<PermissionsSettingsPanel>
                     baseId="agents-permissions"
-                    tabId="computer"
-                    active={activePermissionsPanel === 'computer'}
-                    className="[&>div]:mt-0"
-                  >
-                    <ComputerUseSettingsPanel
-                      t={t}
-                      value={computerUse}
-                      selectControlClass={selectControlClass}
-                      permissionRow={<ComputerUsePermissionRow t={t} />}
-                      onChange={updateComputerUse}
-                    />
-                  </SettingsTabPanel>
-
-                  <SettingsTabPanel<PermissionsSettingsPanel>
-                    baseId="agents-permissions"
-                    tabId="browser"
-                    active={activePermissionsPanel === 'browser'}
-                    className="[&>div]:mt-0"
-                  >
-                    <BrowserUseSettingsPanel
-                      t={t}
-                      value={browserUse}
-                      selectControlClass={selectControlClass}
-                      onChange={updateBrowserUse}
-                    />
-                  </SettingsTabPanel>
-
-                  <SettingsTabPanel<PermissionsSettingsPanel>
-                    baseId="agents-permissions"
                     tabId="quality"
                     active={activePermissionsPanel === 'quality'}
                     className="[&>div]:mt-0"
@@ -921,23 +897,6 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
                       value={quality}
                       selectControlClass={selectControlClass}
                       onChange={updateQuality}
-                    />
-                  </SettingsTabPanel>
-
-                  <SettingsTabPanel<PermissionsSettingsPanel>
-                    baseId="agents-permissions"
-                    tabId="graph"
-                    active={activePermissionsPanel === 'graph'}
-                    className="[&>div]:mt-0"
-                  >
-                    <GraphModeSettingsPanel
-                      t={t}
-                      value={graph}
-                      modelProviders={modelProviders}
-                      leadProviderId={activeProviderId}
-                      leadModel={kun.model}
-                      selectControlClass={selectControlClass}
-                      onChange={(patch) => updateKun({ graph: patch })}
                     />
                   </SettingsTabPanel>
                 </div>
@@ -2090,6 +2049,101 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
               </div>
               </div>
             </>
+  )
+}
+
+export function LaboratorySettingsSection({ ctx }: { ctx: Record<string, any> }): ReactElement {
+  const { t, form, kun, updateKun, selectControlClass } = ctx
+  const [activePanel, setActivePanel] = useState<LaboratorySettingsPanel>('computer')
+  const provider = form.provider ?? defaultModelProviderSettings()
+  const modelProviders = provider.providers as ModelProviderProfileV1[]
+  const activeProviderId = kun.providerId?.trim() || DEFAULT_MODEL_PROVIDER_ID
+  const computerUse = kun.computerUse ?? {
+    enabled: false,
+    mode: 'auto' as const,
+    maxImageDimension: 1280,
+    maxActionsPerTurn: 40
+  }
+  const browserUse = kun.browserUse ?? defaultKunBrowserUseSettings()
+  const graph = kun.graph ?? defaultKunGraphSettings()
+
+  const updateComputerUse = (patch: Record<string, unknown>): void => {
+    updateKun({
+      computerUse: {
+        ...computerUse,
+        ...patch
+      }
+    })
+  }
+  const updateBrowserUse = (patch: Partial<KunBrowserUseSettingsV1>): void => {
+    updateKun({
+      browserUse: {
+        ...browserUse,
+        ...patch
+      }
+    })
+  }
+
+  return (
+    <>
+      <SettingsTabs<LaboratorySettingsPanel>
+        baseId="laboratory-settings"
+        ariaLabel={t('agentsQuickLaboratory')}
+        items={[
+          { id: 'computer', label: t('computerUseTitle'), icon: Monitor },
+          { id: 'browser', label: t('browserUseSettingsTitle'), icon: Globe2 },
+          { id: 'graph', label: t('graphSettingsTitle'), icon: Workflow }
+        ]}
+        value={activePanel}
+        onChange={setActivePanel}
+      />
+
+      <SettingsTabPanel<LaboratorySettingsPanel>
+        baseId="laboratory-settings"
+        tabId="computer"
+        active={activePanel === 'computer'}
+        className="[&>div]:mt-0"
+      >
+        <ComputerUseSettingsPanel
+          t={t}
+          value={computerUse}
+          selectControlClass={selectControlClass}
+          permissionRow={<ComputerUsePermissionRow t={t} />}
+          onChange={updateComputerUse}
+        />
+      </SettingsTabPanel>
+
+      <SettingsTabPanel<LaboratorySettingsPanel>
+        baseId="laboratory-settings"
+        tabId="browser"
+        active={activePanel === 'browser'}
+        className="[&>div]:mt-0"
+      >
+        <BrowserUseSettingsPanel
+          t={t}
+          value={browserUse}
+          selectControlClass={selectControlClass}
+          onChange={updateBrowserUse}
+        />
+      </SettingsTabPanel>
+
+      <SettingsTabPanel<LaboratorySettingsPanel>
+        baseId="laboratory-settings"
+        tabId="graph"
+        active={activePanel === 'graph'}
+        className="[&>div]:mt-0"
+      >
+        <GraphModeSettingsPanel
+          t={t}
+          value={graph}
+          modelProviders={modelProviders}
+          leadProviderId={activeProviderId}
+          leadModel={kun.model}
+          selectControlClass={selectControlClass}
+          onChange={(patch) => updateKun({ graph: patch })}
+        />
+      </SettingsTabPanel>
+    </>
   )
 }
 

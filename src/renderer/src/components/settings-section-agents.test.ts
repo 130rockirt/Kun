@@ -24,7 +24,11 @@ import type {
   ModelsDevCatalogResult,
   ModelProviderProbeResult
 } from '@shared/kun-gui-api'
-import { AgentsSettingsSection, modelProvidersSettingsPatch } from './settings-section-agents'
+import {
+  AgentsSettingsSection,
+  LaboratorySettingsSection,
+  modelProvidersSettingsPatch
+} from './settings-section-agents'
 import {
   ProvidersSettingsSection,
   antigravityProviderCatalogPatch
@@ -35,6 +39,7 @@ const labels: Record<string, string> = {
   agentsQuickSkill: 'Skills',
   agentsQuickMcp: 'MCP',
   agentsQuickPermissions: 'Permissions',
+  agentsQuickLaboratory: 'Laboratory',
   agents: 'Agents',
   providers: 'Providers',
   providersDesc: 'Providers description',
@@ -2138,7 +2143,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
     expect(html).not.toContain('Sandbox mode')
   })
 
-  it('opens a permissions deep link on policy and keeps all secondary panels mounted', () => {
+  it('keeps permissions in the assistant and experimental features in a standalone laboratory', () => {
     let renderer!: ReactTestRenderer
     act(() => {
       renderer = createRenderer(createElement(AgentsSettingsSection, {
@@ -2162,40 +2167,52 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       .filter((tab) => String(tab.props.id ?? '').startsWith('agents-permissions-tab-'))
     expect(secondaryTabs.map(instanceText)).toEqual([
       'Tool permission mode',
-      'Computer control',
-      'Browser',
-      'Design quality',
-      'Graph mode'
+      'Design quality'
     ])
     expect(secondaryTabs.map((tab) => tab.props['aria-selected']))
-      .toEqual([true, false, false, false, false])
+      .toEqual([true, false])
     expect(secondaryTabs.map((tab) => tab.props['aria-controls'])).toEqual([
       'agents-permissions-panel-policy',
-      'agents-permissions-panel-computer',
-      'agents-permissions-panel-browser',
-      'agents-permissions-panel-quality',
-      'agents-permissions-panel-graph'
+      'agents-permissions-panel-quality'
     ])
 
     const secondaryPanels = renderer.root
       .findAllByProps({ role: 'tabpanel' })
       .filter((panel) => String(panel.props.id ?? '').startsWith('agents-permissions-panel-'))
-    expect(secondaryPanels).toHaveLength(5)
+    expect(secondaryPanels).toHaveLength(2)
     expect(secondaryPanels.map((panel) => panel.props.hidden))
-      .toEqual([false, true, true, true, true])
+      .toEqual([false, true])
     expect(secondaryPanels[0].findAllByProps({ role: 'radiogroup' })).toHaveLength(1)
+    expect(renderer.root.findAllByProps({ id: 'agents-settings-tab-laboratory' })).toHaveLength(0)
 
     act(() => {
-      secondaryTabs[2].props.onClick()
+      renderer = createRenderer(createElement(LaboratorySettingsSection, {
+        ctx: baseCtx()
+      }))
     })
 
-    const switchedPanels = renderer.root
+    const laboratoryTabs = renderer.root
+      .findAllByProps({ role: 'tab' })
+      .filter((tab) => String(tab.props.id ?? '').startsWith('laboratory-settings-tab-'))
+    expect(laboratoryTabs.map(instanceText)).toEqual([
+      'Computer control',
+      'Browser',
+      'Graph mode'
+    ])
+    expect(laboratoryTabs.map((tab) => tab.props['aria-selected']))
+      .toEqual([true, false, false])
+    expect(laboratoryTabs.map((tab) => tab.props['aria-controls'])).toEqual([
+      'laboratory-settings-panel-computer',
+      'laboratory-settings-panel-browser',
+      'laboratory-settings-panel-graph'
+    ])
+
+    const laboratoryPanels = renderer.root
       .findAllByProps({ role: 'tabpanel' })
-      .filter((panel) => String(panel.props.id ?? '').startsWith('agents-permissions-panel-'))
-    expect(switchedPanels).toHaveLength(5)
-    expect(switchedPanels.map((panel) => panel.props.hidden))
-      .toEqual([true, true, false, true, true])
-    expect(switchedPanels[0].findAllByProps({ role: 'radiogroup' })).toHaveLength(1)
+      .filter((panel) => String(panel.props.id ?? '').startsWith('laboratory-settings-panel-'))
+    expect(laboratoryPanels).toHaveLength(3)
+    expect(laboratoryPanels.map((panel) => panel.props.hidden))
+      .toEqual([false, true, true])
   })
 
   it('renders pure JSONL as a selectable storage backend', () => {

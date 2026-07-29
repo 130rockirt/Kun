@@ -1,9 +1,11 @@
 import type { ReactElement } from 'react'
-import { useEffect, useState } from 'react'
-import { ChevronRight, Folder, GitFork } from 'lucide-react'
+import { useCallback, useEffect, useState } from 'react'
+import { ChevronRight, Folder, GitBranch, GitFork } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useChatStore } from '../store/chat-store'
 import { formatRelativeTime } from '../lib/format-relative-time'
+import { GIT_BRANCH_STATUS_CHANGED_EVENT } from '../lib/git-branch-status-event'
+import { middleEllipsize } from '../lib/middle-ellipsize'
 import { workspaceLabelFromPath } from '../lib/workspace-label'
 import { SessionExportMenu } from './SessionExportMenu'
 import {
@@ -20,6 +22,79 @@ type Props = {
   className?: string
 }
 
+const COMPACT_BRANCH_LABEL_MAX_LENGTH = 30
+
+function CompactGitBranch({ workspaceRoot }: { workspaceRoot: string }): ReactElement | null {
+  const { t } = useTranslation('common')
+  const root = workspaceRoot.trim()
+  const [branch, setBranch] = useState<string | null>(null)
+  const [isRepository, setIsRepository] = useState(false)
+
+  const load = useCallback(async (): Promise<void> => {
+    if (
+      !root ||
+      typeof window === 'undefined' ||
+      typeof window.kunGui?.getGitBranches !== 'function'
+    ) {
+      setBranch(null)
+      setIsRepository(false)
+      return
+    }
+    try {
+      const result = await window.kunGui.getGitBranches(root)
+      if (!result.ok) {
+        setBranch(null)
+        setIsRepository(false)
+        return
+      }
+      setBranch(result.currentBranch)
+      setIsRepository(true)
+    } catch {
+      setBranch(null)
+      setIsRepository(false)
+    }
+  }, [root])
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const refreshForWorkspace = (event: Event): void => {
+      const changedRoot = (event as CustomEvent<string>).detail?.trim()
+      if (!changedRoot || changedRoot === root) void load()
+    }
+    const refreshOnFocus = (): void => {
+      void load()
+    }
+    window.addEventListener(GIT_BRANCH_STATUS_CHANGED_EVENT, refreshForWorkspace)
+    window.addEventListener('focus', refreshOnFocus)
+    return () => {
+      window.removeEventListener(GIT_BRANCH_STATUS_CHANGED_EVENT, refreshForWorkspace)
+      window.removeEventListener('focus', refreshOnFocus)
+    }
+  }, [load, root])
+
+  if (!isRepository) return null
+
+  const label = branch || t('gitDetached')
+  const accessibleLabel = `${t('gitBranch')}: ${label}`
+
+  return (
+    <span
+      className="session-header-compact-branch inline-flex min-w-0 max-w-[180px] shrink items-center gap-1 rounded-[var(--ds-radius-pill)] border border-ds-border-muted bg-ds-subtle px-2 py-0.5 text-[11px] font-medium leading-4 text-ds-muted"
+      title={accessibleLabel}
+      aria-label={accessibleLabel}
+    >
+      <GitBranch className="h-3 w-3 shrink-0 text-ds-faint" strokeWidth={1.8} aria-hidden="true" />
+      <span className="min-w-0 truncate">
+        {middleEllipsize(label, COMPACT_BRANCH_LABEL_MAX_LENGTH)}
+      </span>
+    </span>
+  )
+}
+
 export function SessionHeader({ compact = false, className = '' }: Props): ReactElement {
   const { t, i18n } = useTranslation('common')
   const threads = useChatStore((s) => s.threads)
@@ -30,9 +105,11 @@ export function SessionHeader({ compact = false, className = '' }: Props): React
   const currentTurnUserId = useChatStore((s) => s.currentTurnUserId)
   const runtimeConnection = useChatStore((s) => s.runtimeConnection)
   const workspaceLabel = useChatStore((s) => s.workspaceLabel)
+  const workspaceRoot = useChatStore((s) => s.workspaceRoot)
   const renameActiveThread = useChatStore((s) => s.renameActiveThread)
 
   const active = threads.find((th) => th.id === activeThreadId)
+  const activeWorkspaceRoot = active?.workspace?.trim() || workspaceRoot.trim()
   const activeWorkspaceLabel = active?.workspace
     ? workspaceLabelFromPath(active.workspace)
     : workspaceLabel
@@ -91,6 +168,7 @@ export function SessionHeader({ compact = false, className = '' }: Props): React
                 <Folder className="h-4 w-4 shrink-0" strokeWidth={1.75} aria-hidden="true" />
                 <span className="truncate">{activeWorkspaceLabel}</span>
               </span>
+              <CompactGitBranch key={activeWorkspaceRoot} workspaceRoot={activeWorkspaceRoot} />
               <ChevronRight
                 className="session-header-compact-chevron h-3.5 w-3.5 shrink-0 text-ds-faint/70"
                 strokeWidth={1.75}
@@ -122,6 +200,7 @@ export function SessionHeader({ compact = false, className = '' }: Props): React
           <div className="session-header-compact-empty flex min-w-0 items-center gap-1.5 text-[12.5px] font-medium text-ds-faint">
             <Folder className="h-4 w-4 shrink-0" strokeWidth={1.75} aria-hidden="true" />
             <span className="truncate">{workspaceLabel}</span>
+            <CompactGitBranch key={workspaceRoot} workspaceRoot={workspaceRoot} />
           </div>
         )}
       </div>

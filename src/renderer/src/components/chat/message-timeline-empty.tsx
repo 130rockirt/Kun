@@ -90,13 +90,13 @@ function RuntimeWakeHero({
 
   return (
     <div className="ds-runtime-wake-hero ds-no-drag mx-auto flex min-h-[min(620px,calc(100dvh-220px))] w-full flex-col items-center justify-center px-6 py-10 text-center">
-      <p className="text-[12px] font-semibold uppercase tracking-[0] text-accent">
+      <p className="text-[12px] font-medium tracking-[0.02em] text-ds-faint">
         {t('runtimeOfflineHeroKicker')}
       </p>
-      <h1 className="mt-2 max-w-[620px] text-[26px] font-semibold leading-tight tracking-[0] text-ds-ink md:text-[32px]">
+      <h1 className="mt-2 max-w-[620px] text-[24px] font-medium leading-tight tracking-[-0.02em] text-ds-ink md:text-[28px]">
         {title}
       </h1>
-      <p className="mt-3 max-w-[620px] text-[15px] leading-7 text-ds-muted">
+      <p className="mt-3 max-w-[620px] text-[13px] leading-6 text-ds-muted">
         {detail}
       </p>
       <div className="mt-6 flex flex-wrap items-center justify-center gap-2">
@@ -129,11 +129,11 @@ function ChatEmptyHero(): ReactElement {
       <div className="flex max-w-[720px] -translate-y-6 flex-col items-center sm:-translate-y-8">
         <h1
           id="chat-empty-hero-title"
-          className="max-w-[620px] text-[28px] font-semibold leading-tight tracking-[-0.025em] text-ds-ink sm:text-[32px]"
+          className="max-w-[620px] text-[24px] font-medium leading-tight tracking-[-0.025em] text-ds-ink sm:text-[28px]"
         >
           {t('emptyHeroTitle')}
         </h1>
-        <p className="mt-3 max-w-[680px] text-[14.5px] leading-7 text-ds-muted">
+        <p className="mt-3 max-w-[680px] text-[13px] leading-6 text-ds-muted">
           {t('emptyHeroSub')}
         </p>
       </div>

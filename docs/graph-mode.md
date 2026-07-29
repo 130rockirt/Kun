@@ -559,7 +559,7 @@ summary；系统启用 reduced motion 时关闭动态边。英文和中文 label
 
 - `enabled: false`
 - `defaultStrategy: direct`
-- `rolloutStage: experimental`
+- `rolloutStage: stable`
 - `learning.mode: off`
 - `writeIsolation.mode: serialize`
 - `allowWorktrees: false`
@@ -569,15 +569,9 @@ summary；系统启用 reduced motion 时关闭动态边。英文和中文 label
 Graph disabled 时不能把 default strategy 设为 graph，per-run 并发不能高于
 全局并发，learning off 时不能启用自动探索。
 
-建议发布顺序：
-
-1. `experimental`：只允许显式、已校验的 DAG；源 Lead 的必要生命周期监督始终启用，
-   可选 reviewer/增强监督和 asset generation 关闭。
-2. `alpha`：在 `supervision.enabled && autoStart` 时启用可选的自动 reviewer 和增强监督。
-3. `beta`：在 alpha 能力上开放 host-bounded LoopGate 回环。
-4. `learning-preview`：开放 `suggest`；即使配置 `auto_candidate` 也会收窄为 suggest。
-5. `stable`：允许 `auto_candidate` 自动落不可执行、可逆的 candidate profile；
-   direct 始终可用，promotion 仍需要证据和用户授权。
+产品始终按完整的稳定版 Graph 能力运行。旧的 `rolloutStage` 字段仅为降级兼容保留，
+不再限制 LoopGate、自动监督或学习；这些能力只由各自的显式设置控制。候选 Agent 的
+promotion 仍需要证据和用户授权。
 
 紧急关闭只需设置 `enabled: false` 和 `defaultStrategy: direct`。这会停止新 Graph
 创建、自动监督和自动学习，fence 并暂停非终态 run、等待 active worker 收敛；

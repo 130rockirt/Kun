@@ -69,7 +69,7 @@ export function SidebarConversationsSection({
   const watchTurnCompletion = useChatStore((s) => s.watchTurnCompletion)
   const unreadThreadIds = useChatStore((s) => s.unreadThreadIds)
 
-  const [collapsed, setCollapsed] = useState(false)
+  const [collapsed, setCollapsed] = useState(true)
   const [searchOpen, setSearchOpen] = useState(false)
   const [search, setSearch] = useState('')
   const [deletingThreadIds, setDeletingThreadIds] = useState<Record<string, boolean>>({})

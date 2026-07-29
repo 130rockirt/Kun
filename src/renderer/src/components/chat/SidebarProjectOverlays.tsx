@@ -1,4 +1,5 @@
 import { useEffect, type FormEvent, type ReactElement } from 'react'
+import { createPortal } from 'react-dom'
 import {
   Archive,
   ExternalLink,
@@ -74,6 +75,17 @@ export type SidebarFolderDialogState = {
   error?: string
 }
 
+export function sidebarOverlayPortalHost(
+  currentDocument: Document | undefined = typeof document === 'undefined' ? undefined : document
+): HTMLElement | null {
+  return currentDocument?.body ?? null
+}
+
+function SidebarOverlayPortal({ children }: { children: ReactElement }): ReactElement {
+  const host = sidebarOverlayPortalHost()
+  return host ? createPortal(children, host) : children
+}
+
 export function ThreadRenameDialog({
   state,
   onClose,
@@ -91,40 +103,42 @@ export function ThreadRenameDialog({
   const canSubmit = Boolean(nextTitle) && nextTitle !== state.thread.title && !state.submitting
   useEscapeToClose(onClose, state.submitting)
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="thread-rename-dialog-title"
-      className="ds-no-drag fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/18 px-4 backdrop-blur-[2px] dark:bg-black/35"
-      onMouseDown={onClose}
-    >
-      <form
-        onSubmit={onSubmit}
-        onMouseDown={(event) => event.stopPropagation()}
-        className="w-full max-w-sm rounded-[24px] border border-ds-border bg-ds-card p-5 shadow-[0_24px_72px_rgba(20,47,95,0.22)]"
+    <SidebarOverlayPortal>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="thread-rename-dialog-title"
+        className="ds-no-drag fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/18 px-4 backdrop-blur-[2px] dark:bg-black/35"
+        onMouseDown={onClose}
       >
-        <h2 id="thread-rename-dialog-title" className="text-[18px] font-semibold tracking-[-0.035em] text-ds-ink">
-          {t('sidebarThreadRename')}
-        </h2>
-        <p className="mt-2 text-[13px] leading-6 text-ds-muted">{t('sidebarThreadRenamePrompt')}</p>
-        <input
-          autoFocus
-          aria-label={t('sidebarThreadRenamePrompt')}
-          disabled={state.submitting}
-          value={state.value}
-          onChange={(event) => onValueChange(event.target.value)}
-          onFocus={(event) => event.currentTarget.select()}
-          className="mt-4 w-full rounded-xl border border-ds-border bg-ds-main/65 px-3 py-2 text-[14px] text-ds-ink outline-none transition focus:border-accent/40 focus:ring-1 focus:ring-accent/25 disabled:cursor-wait disabled:opacity-70"
-        />
-        <DialogActions
-          submitting={state.submitting}
-          confirmDisabled={!canSubmit}
-          confirmLabel={t('confirm')}
-          onClose={onClose}
-          t={t}
-        />
-      </form>
-    </div>
+        <form
+          onSubmit={onSubmit}
+          onMouseDown={(event) => event.stopPropagation()}
+          className="w-full max-w-sm rounded-[24px] border border-ds-border bg-ds-card p-5 shadow-[0_24px_72px_rgba(20,47,95,0.22)]"
+        >
+          <h2 id="thread-rename-dialog-title" className="text-[18px] font-semibold tracking-[-0.035em] text-ds-ink">
+            {t('sidebarThreadRename')}
+          </h2>
+          <p className="mt-2 text-[13px] leading-6 text-ds-muted">{t('sidebarThreadRenamePrompt')}</p>
+          <input
+            autoFocus
+            aria-label={t('sidebarThreadRenamePrompt')}
+            disabled={state.submitting}
+            value={state.value}
+            onChange={(event) => onValueChange(event.target.value)}
+            onFocus={(event) => event.currentTarget.select()}
+            className="mt-4 w-full rounded-xl border border-ds-border bg-ds-main/65 px-3 py-2 text-[14px] text-ds-ink outline-none transition focus:border-accent/40 focus:ring-1 focus:ring-accent/25 disabled:cursor-wait disabled:opacity-70"
+          />
+          <DialogActions
+            submitting={state.submitting}
+            confirmDisabled={!canSubmit}
+            confirmLabel={t('confirm')}
+            onClose={onClose}
+            t={t}
+          />
+        </form>
+      </div>
+    </SidebarOverlayPortal>
   )
 }
 
@@ -153,43 +167,45 @@ export function SidebarFolderDialog({
     ? t('sidebarFolderCreatePrompt')
     : t('sidebarFolderRenamePrompt')
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="sidebar-folder-dialog-title"
-      className="ds-no-drag fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/18 px-4 backdrop-blur-[2px] dark:bg-black/35"
-      onMouseDown={onClose}
-    >
-      <form
-        onSubmit={onSubmit}
-        onMouseDown={(event) => event.stopPropagation()}
-        className="w-full max-w-sm rounded-[24px] border border-ds-border bg-ds-card p-5 shadow-[0_24px_72px_rgba(20,47,95,0.22)]"
+    <SidebarOverlayPortal>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="sidebar-folder-dialog-title"
+        className="ds-no-drag fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/18 px-4 backdrop-blur-[2px] dark:bg-black/35"
+        onMouseDown={onClose}
       >
-        <h2 id="sidebar-folder-dialog-title" className="text-[18px] font-semibold tracking-[-0.035em] text-ds-ink">
-          {title}
-        </h2>
-        <p className="mt-2 text-[13px] leading-6 text-ds-muted">{prompt}</p>
-        <input
-          autoFocus
-          aria-label={prompt}
-          value={state.value}
-          maxLength={80}
-          onChange={(event) => onValueChange(event.target.value)}
-          onFocus={(event) => event.currentTarget.select()}
-          className="mt-4 w-full rounded-xl border border-ds-border bg-ds-main/65 px-3 py-2 text-[14px] text-ds-ink outline-none transition focus:border-accent/40 focus:ring-1 focus:ring-accent/25"
-        />
-        {state.error ? (
-          <p className="mt-2 text-[12.5px] leading-5 text-red-600 dark:text-red-300">{state.error}</p>
-        ) : null}
-        <DialogActions
-          submitting={false}
-          confirmDisabled={!canSubmit}
-          confirmLabel={t('confirm')}
-          onClose={onClose}
-          t={t}
-        />
-      </form>
-    </div>
+        <form
+          onSubmit={onSubmit}
+          onMouseDown={(event) => event.stopPropagation()}
+          className="w-full max-w-sm rounded-[24px] border border-ds-border bg-ds-card p-5 shadow-[0_24px_72px_rgba(20,47,95,0.22)]"
+        >
+          <h2 id="sidebar-folder-dialog-title" className="text-[18px] font-semibold tracking-[-0.035em] text-ds-ink">
+            {title}
+          </h2>
+          <p className="mt-2 text-[13px] leading-6 text-ds-muted">{prompt}</p>
+          <input
+            autoFocus
+            aria-label={prompt}
+            value={state.value}
+            maxLength={80}
+            onChange={(event) => onValueChange(event.target.value)}
+            onFocus={(event) => event.currentTarget.select()}
+            className="mt-4 w-full rounded-xl border border-ds-border bg-ds-main/65 px-3 py-2 text-[14px] text-ds-ink outline-none transition focus:border-accent/40 focus:ring-1 focus:ring-accent/25"
+          />
+          {state.error ? (
+            <p className="mt-2 text-[12.5px] leading-5 text-red-600 dark:text-red-300">{state.error}</p>
+          ) : null}
+          <DialogActions
+            submitting={false}
+            confirmDisabled={!canSubmit}
+            confirmLabel={t('confirm')}
+            onClose={onClose}
+            t={t}
+          />
+        </form>
+      </div>
+    </SidebarOverlayPortal>
   )
 }
 
@@ -211,86 +227,88 @@ export function MoveThreadDialog({
   const selectedTarget = state.targetWorkspace ? normalizeWorkspaceRoot(state.targetWorkspace) : ''
   useEscapeToClose(onClose, state.submitting)
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="move-thread-dialog-title"
-      className="ds-no-drag fixed inset-0 z-[85] flex items-center justify-center bg-slate-950/18 px-4 backdrop-blur-[2px] dark:bg-black/35"
-      onMouseDown={onClose}
-    >
+    <SidebarOverlayPortal>
       <div
-        onMouseDown={(event) => event.stopPropagation()}
-        className="w-full max-w-lg rounded-[24px] border border-ds-border bg-ds-card p-5 shadow-[0_24px_72px_rgba(20,47,95,0.22)]"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="move-thread-dialog-title"
+        className="ds-no-drag fixed inset-0 z-[85] flex items-center justify-center bg-slate-950/18 px-4 backdrop-blur-[2px] dark:bg-black/35"
+        onMouseDown={onClose}
       >
-        <h2 id="move-thread-dialog-title" className="text-[18px] font-semibold tracking-[-0.035em] text-ds-ink">
-          {state.targetWorkspace
-            ? t('sidebarThreadMoveDialogTitle', { title: threadTitle })
-            : t('sidebarThreadMovePickerTitle')}
-        </h2>
-        <p className="mt-2 text-[13px] leading-6 text-ds-muted">
-          {state.targetWorkspace
-            ? t('sidebarThreadMoveDialogDescription', {
-                from: workspaceLabelFromPath(fromWorkspace),
-                to: workspaceLabelFromPath(selectedTarget)
-              })
-            : t('sidebarThreadMovePickerDescription')}
-        </p>
-        {state.targetWorkspace ? (
-          <div className="mt-4 space-y-2">
-            <p className="rounded-2xl border border-ds-border-muted bg-ds-main px-3.5 py-3 text-[13px] leading-6 text-ds-muted">
-              {t('sidebarThreadMoveDialogDetail')}
-            </p>
-            <p className="rounded-2xl border border-amber-300/45 bg-amber-50/75 px-3.5 py-3 text-[12.5px] leading-5 text-amber-900 dark:border-amber-400/30 dark:bg-amber-400/10 dark:text-amber-100">
-              {t('sidebarThreadMoveMetadataOnlyDetail')}
-            </p>
-          </div>
-        ) : (
-          <div className="mt-4 space-y-2">
-            {state.targets.length === 0 ? (
-              <div className="rounded-2xl border border-ds-border-muted bg-ds-main px-3.5 py-3 text-[13px] leading-6 text-ds-muted">
-                {t('sidebarThreadMoveNoTargets')}
-              </div>
-            ) : state.targets.map((workspacePath) => (
-              <button
-                key={workspacePath}
-                type="button"
-                onClick={() => onPickTarget(workspacePath)}
-                className="flex w-full items-center justify-between gap-3 rounded-2xl border border-ds-border bg-ds-main/55 px-3.5 py-3 text-left transition hover:border-accent/35 hover:bg-accent/6"
-              >
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[13.5px] font-medium text-ds-ink">
-                    {workspaceLabelFromPath(workspacePath)}
-                  </span>
-                  <span className="mt-1 block truncate text-[12px] text-ds-faint">{workspacePath}</span>
-                </span>
-                <MoveRight className="h-4 w-4 shrink-0 text-ds-faint" strokeWidth={1.9} />
-              </button>
-            ))}
-          </div>
-        )}
-        {state.error ? <p className="mt-4 text-[12.5px] leading-5 text-red-600 dark:text-red-300">{state.error}</p> : null}
-        <div className="mt-5 flex justify-end gap-2">
-          <button
-            type="button"
-            disabled={state.submitting}
-            onClick={onClose}
-            className="rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[13px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-wait disabled:opacity-60"
-          >
-            {t('cancel')}
-          </button>
+        <div
+          onMouseDown={(event) => event.stopPropagation()}
+          className="w-full max-w-lg rounded-[24px] border border-ds-border bg-ds-card p-5 shadow-[0_24px_72px_rgba(20,47,95,0.22)]"
+        >
+          <h2 id="move-thread-dialog-title" className="text-[18px] font-semibold tracking-[-0.035em] text-ds-ink">
+            {state.targetWorkspace
+              ? t('sidebarThreadMoveDialogTitle', { title: threadTitle })
+              : t('sidebarThreadMovePickerTitle')}
+          </h2>
+          <p className="mt-2 text-[13px] leading-6 text-ds-muted">
+            {state.targetWorkspace
+              ? t('sidebarThreadMoveDialogDescription', {
+                  from: workspaceLabelFromPath(fromWorkspace),
+                  to: workspaceLabelFromPath(selectedTarget)
+                })
+              : t('sidebarThreadMovePickerDescription')}
+          </p>
           {state.targetWorkspace ? (
+            <div className="mt-4 space-y-2">
+              <p className="rounded-2xl border border-ds-border-muted bg-ds-main px-3.5 py-3 text-[13px] leading-6 text-ds-muted">
+                {t('sidebarThreadMoveDialogDetail')}
+              </p>
+              <p className="rounded-2xl border border-amber-300/45 bg-amber-50/75 px-3.5 py-3 text-[12.5px] leading-5 text-amber-900 dark:border-amber-400/30 dark:bg-amber-400/10 dark:text-amber-100">
+                {t('sidebarThreadMoveMetadataOnlyDetail')}
+              </p>
+            </div>
+          ) : (
+            <div className="mt-4 space-y-2">
+              {state.targets.length === 0 ? (
+                <div className="rounded-2xl border border-ds-border-muted bg-ds-main px-3.5 py-3 text-[13px] leading-6 text-ds-muted">
+                  {t('sidebarThreadMoveNoTargets')}
+                </div>
+              ) : state.targets.map((workspacePath) => (
+                <button
+                  key={workspacePath}
+                  type="button"
+                  onClick={() => onPickTarget(workspacePath)}
+                  className="flex w-full items-center justify-between gap-3 rounded-2xl border border-ds-border bg-ds-main/55 px-3.5 py-3 text-left transition hover:border-accent/35 hover:bg-accent/6"
+                >
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[13.5px] font-medium text-ds-ink">
+                      {workspaceLabelFromPath(workspacePath)}
+                    </span>
+                    <span className="mt-1 block truncate text-[12px] text-ds-faint">{workspacePath}</span>
+                  </span>
+                  <MoveRight className="h-4 w-4 shrink-0 text-ds-faint" strokeWidth={1.9} />
+                </button>
+              ))}
+            </div>
+          )}
+          {state.error ? <p className="mt-4 text-[12.5px] leading-5 text-red-600 dark:text-red-300">{state.error}</p> : null}
+          <div className="mt-5 flex justify-end gap-2">
             <button
               type="button"
-              disabled={!selectedTarget || state.submitting}
-              onClick={() => void onConfirm()}
-              className="rounded-xl bg-accent px-3 py-2 text-[13px] font-semibold text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-55"
+              disabled={state.submitting}
+              onClick={onClose}
+              className="rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[13px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-wait disabled:opacity-60"
             >
-              {state.submitting ? t('loading') : t('sidebarThreadMoveConfirmButton')}
+              {t('cancel')}
             </button>
-          ) : null}
+            {state.targetWorkspace ? (
+              <button
+                type="button"
+                disabled={!selectedTarget || state.submitting}
+                onClick={() => void onConfirm()}
+                className="rounded-xl bg-accent px-3 py-2 text-[13px] font-semibold text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-55"
+              >
+                {state.submitting ? t('loading') : t('sidebarThreadMoveConfirmButton')}
+              </button>
+            ) : null}
+          </div>
         </div>
       </div>
-    </div>
+    </SidebarOverlayPortal>
   )
 }
 
@@ -475,50 +493,52 @@ export function SidebarActionDialog({
 }): ReactElement {
   useEscapeToClose(onClose, state.submitting)
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="sidebar-action-dialog-title"
-      className="ds-no-drag fixed inset-0 z-[1000] flex items-end justify-center bg-slate-950/28 px-4 pb-10 backdrop-blur-[2px] dark:bg-black/45 sm:items-center sm:pb-0"
-      onMouseDown={onClose}
-    >
+    <SidebarOverlayPortal>
       <div
-        onMouseDown={(event) => event.stopPropagation()}
-        className="w-full max-w-[520px] rounded-[26px] border border-ds-border bg-[var(--surface-3)] p-6 shadow-[0_26px_82px_rgba(20,47,95,0.24)]"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="sidebar-action-dialog-title"
+        className="ds-no-drag fixed inset-0 z-[1000] flex items-end justify-center bg-slate-950/28 px-4 pb-10 backdrop-blur-[2px] dark:bg-black/45 sm:items-center sm:pb-0"
+        onMouseDown={onClose}
       >
-        <div className="flex items-start justify-between gap-4">
-          <div className="min-w-0">
-            <h2 id="sidebar-action-dialog-title" className="text-[22px] font-semibold tracking-[-0.04em] text-ds-ink">{state.title}</h2>
-            <p className="mt-2 text-[14px] leading-6 text-ds-muted">{state.description}</p>
+        <div
+          onMouseDown={(event) => event.stopPropagation()}
+          className="w-full max-w-[520px] rounded-[26px] border border-ds-border bg-[var(--surface-3)] p-6 shadow-[0_26px_82px_rgba(20,47,95,0.24)]"
+        >
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <h2 id="sidebar-action-dialog-title" className="text-[22px] font-semibold tracking-[-0.04em] text-ds-ink">{state.title}</h2>
+              <p className="mt-2 text-[14px] leading-6 text-ds-muted">{state.description}</p>
+            </div>
+            <button
+              type="button"
+              disabled={state.submitting}
+              onClick={onClose}
+              className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-ds-faint transition hover:bg-[var(--ds-sidebar-row-hover)] hover:text-ds-ink disabled:cursor-wait disabled:opacity-50"
+              aria-label={t('cancel')}
+            >
+              <X className="h-4 w-4" strokeWidth={1.9} />
+            </button>
           </div>
-          <button
-            type="button"
-            disabled={state.submitting}
-            onClick={onClose}
-            className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-ds-faint transition hover:bg-[var(--ds-sidebar-row-hover)] hover:text-ds-ink disabled:cursor-wait disabled:opacity-50"
-            aria-label={t('cancel')}
-          >
-            <X className="h-4 w-4" strokeWidth={1.9} />
-          </button>
-        </div>
-        <p className="mt-4 rounded-2xl border border-ds-border-muted bg-ds-main px-3.5 py-3 text-[13px] leading-6 text-ds-muted">{state.detail}</p>
-        <div className="mt-5 flex justify-end gap-2">
-          <button type="button" disabled={state.submitting} onClick={onClose} className="rounded-2xl px-4 py-2 text-[14px] font-medium text-ds-muted transition hover:bg-[var(--ds-sidebar-row-hover)] hover:text-ds-ink disabled:cursor-wait disabled:opacity-60">{t('cancel')}</button>
-          <button
-            type="button"
-            disabled={state.submitting}
-            onClick={onConfirm}
-            className={`rounded-2xl px-5 py-2 text-[14px] font-semibold transition disabled:cursor-wait disabled:opacity-60 ${
-              state.danger
-                ? 'bg-red-500/12 text-red-600 hover:bg-red-500/18 dark:text-red-300'
-                : 'bg-accent text-white hover:brightness-110'
-            }`}
-          >
-            {state.submitting ? t('loading') : state.confirmLabel}
-          </button>
+          <p className="mt-4 rounded-2xl border border-ds-border-muted bg-ds-main px-3.5 py-3 text-[13px] leading-6 text-ds-muted">{state.detail}</p>
+          <div className="mt-5 flex justify-end gap-2">
+            <button type="button" disabled={state.submitting} onClick={onClose} className="rounded-2xl px-4 py-2 text-[14px] font-medium text-ds-muted transition hover:bg-[var(--ds-sidebar-row-hover)] hover:text-ds-ink disabled:cursor-wait disabled:opacity-60">{t('cancel')}</button>
+            <button
+              type="button"
+              disabled={state.submitting}
+              onClick={onConfirm}
+              className={`rounded-2xl px-5 py-2 text-[14px] font-semibold transition disabled:cursor-wait disabled:opacity-60 ${
+                state.danger
+                  ? 'bg-red-500/12 text-red-600 hover:bg-red-500/18 dark:text-red-300'
+                  : 'bg-accent text-white hover:brightness-110'
+              }`}
+            >
+              {state.submitting ? t('loading') : state.confirmLabel}
+            </button>
+          </div>
         </div>
       </div>
-    </div>
+    </SidebarOverlayPortal>
   )
 }
 

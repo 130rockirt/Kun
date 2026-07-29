@@ -133,6 +133,8 @@
   "agentsQuickSkill": "ทักษะ",
   "agentsQuickMcp": "เครื่องมือภายนอก",
   "agentsQuickPermissions": "การเข้าถึง",
+  "agentsQuickLaboratory": "ห้องทดลอง",
+  "laboratorySettingsDesc": "กำหนดค่าความสามารถเอเจนต์รุ่นทดลอง ฟีเจอร์เหล่านี้อาจเปลี่ยนแปลงระหว่างการพัฒนา",
   "archivesTitle": "แชทที่เก็บถาวร",
   "archivesOverview": "ประวัติการแชทที่เก็บไว้",
   "archivesOverviewDesc": "ตรวจสอบแชทที่ถูกลบออกจากแถบด้านข้างที่ใช้งานอยู่ คุณสามารถเปิด กู้คืน หรือลบอย่างถาวรได้ที่นี่",

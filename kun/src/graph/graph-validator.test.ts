@@ -111,9 +111,7 @@ describe('GraphPlan host validation', () => {
     expect(validateGraphPlan(
       bounded,
       testGraphConfig({ rolloutStage: 'alpha' })
-    ).result.issues).toContainEqual(expect.objectContaining({
-      code: 'rollout_loop_not_enabled'
-    }))
+    ).result.valid).toBe(true)
   })
 
   it('rejects a bypass cycle even when the same component contains a LoopGate', () => {

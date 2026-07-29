@@ -118,8 +118,8 @@ describe('SettingsTabs', () => {
     const tablist = renderer.root.findByProps({ role: 'tablist' })
     expect(tablist.props['aria-label']).toBe('General settings sections')
     expect(tablist.props['aria-orientation']).toBe('horizontal')
-    expect(tablist.props.className).toContain('rounded-2xl')
-    expect(tablist.props.className).toContain('auto-cols-[minmax(9rem,1fr)]')
+    expect(tablist.props.className).toContain('rounded-full')
+    expect(tablist.props.className).toContain('auto-cols-[minmax(8rem,1fr)]')
 
     const renderedTabs = tabs(renderer)
     expect(renderedTabs.map(textContent)).toEqual([
@@ -139,7 +139,7 @@ describe('SettingsTabs', () => {
       'general-settings-panel-input',
       'general-settings-panel-files'
     ])
-    expect(renderedTabs[0]?.props.className).toContain('bg-accent-soft')
+    expect(renderedTabs[0]?.props.className).toContain('bg-ds-card')
     expect(renderedTabs[1]?.props.className).toContain('hover:bg-ds-hover')
     expect(renderedTabs.every((tab) => tab.findAllByType('svg').length === 1)).toBe(true)
 

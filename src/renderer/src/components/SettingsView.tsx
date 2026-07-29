@@ -91,6 +91,9 @@ const SpeechToTextSettingsSection = lazy(() =>
 const AgentsSettingsSection = lazy(() =>
   import('./settings-section-agents').then((module) => ({ default: module.AgentsSettingsSection }))
 )
+const LaboratorySettingsSection = lazy(() =>
+  import('./settings-section-agents').then((module) => ({ default: module.LaboratorySettingsSection }))
+)
 const SubagentsSettingsSection = lazy(() =>
   import('./settings-section-subagents').then((module) => ({ default: module.SubagentsSettingsSection }))
 )
@@ -248,6 +251,7 @@ export function SettingsView(): ReactElement {
   const saveTimer = useRef<ReturnType<typeof window.setTimeout> | null>(null)
   const statusTimer = useRef<ReturnType<typeof window.setTimeout> | null>(null)
   const draftVersion = useRef(0)
+  const settingsScrollerRef = useRef<HTMLDivElement | null>(null)
   // Snapshot of a debounced-but-not-yet-persisted edit, flushed on unmount so
   // exits that bypass goBack() (Esc, route changes, closing settings) don't
   // drop the last edit made within the 450ms debounce window (issue #602).
@@ -402,6 +406,10 @@ export function SettingsView(): ReactElement {
   }, [category, loadWriteDebugEntries])
 
   useEffect(() => {
+    settingsScrollerRef.current?.scrollTo({ top: 0, behavior: 'auto' })
+  }, [category])
+
+  useEffect(() => {
     if (settingsSection === 'general') {
       setCategory('general')
       return
@@ -436,6 +444,10 @@ export function SettingsView(): ReactElement {
     }
     if (settingsSection === 'permissions') {
       setCategory('agents')
+      return
+    }
+    if (settingsSection === 'laboratory') {
+      setCategory('laboratory')
       return
     }
     if (settingsSection === 'subagents') {
@@ -496,6 +508,7 @@ export function SettingsView(): ReactElement {
       settingsSection === 'imageGeneration' ||
       settingsSection === 'mediaGeneration' ||
       settingsSection === 'speechToText' ||
+      settingsSection === 'laboratory' ||
       settingsSection === 'subagents' ||
       settingsSection === 'archives' ||
       settingsSection === 'worktree' ||
@@ -513,7 +526,7 @@ export function SettingsView(): ReactElement {
     }
     if (!agentsSectionReady) return
     const refs: Record<
-      Exclude<SettingsRouteSection, 'general' | 'providers' | 'extensions' | 'write' | 'design' | 'imageGeneration' | 'mediaGeneration' | 'speechToText' | 'subagents' | 'archives' | 'worktree' | 'memory' | 'claw' | 'shortcuts' | 'easterEgg' | 'updates' | 'terminal' | 'debug' | 'dataMigration'>,
+      Exclude<SettingsRouteSection, 'general' | 'providers' | 'extensions' | 'write' | 'design' | 'imageGeneration' | 'mediaGeneration' | 'speechToText' | 'laboratory' | 'subagents' | 'archives' | 'worktree' | 'memory' | 'claw' | 'shortcuts' | 'easterEgg' | 'updates' | 'terminal' | 'debug' | 'dataMigration'>,
       HTMLDivElement | null
     > = {
       agents: agentsSectionRef.current,
@@ -1239,7 +1252,7 @@ export function SettingsView(): ReactElement {
   }
 
   const selectControlClass =
-    'w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30'
+    'w-full min-w-0 rounded-full border border-ds-border bg-ds-card px-3 py-2 text-[13px] text-ds-ink focus:border-accent/60 focus:outline-none focus:ring-2 focus:ring-accent/15'
 
   const settingsSectionContext = {
     t,
@@ -1368,14 +1381,17 @@ export function SettingsView(): ReactElement {
       />
 
       <div className="ds-settings-stage relative min-h-0 min-w-0 flex-1 overflow-hidden">
-        <div className="ds-settings-scroller ds-no-drag h-full min-h-0 overflow-y-auto px-5 py-6 lg:px-8 lg:py-8">
-          <div className="ds-settings-content mx-auto max-w-6xl">
+        <div
+          ref={settingsScrollerRef}
+          className="ds-settings-scroller ds-no-drag h-full min-h-0 overflow-y-auto"
+        >
+          <div className="ds-settings-content mx-auto">
           <div className="ds-settings-page-header flex items-start justify-between gap-5">
             <div className="min-w-0">
-              <h1 className="truncate text-2xl font-semibold tracking-tight text-ds-ink">
+              <h1 className="truncate text-[24px] font-medium leading-tight tracking-[-0.02em] text-ds-ink">
                 {categoryTitle}
               </h1>
-              <p className="mt-1 max-w-2xl text-[13px] leading-5 text-ds-muted">
+              <p className="mt-1.5 max-w-2xl text-[12px] leading-[1.4] text-ds-muted">
                 {categoryDescription}
               </p>
             </div>
@@ -1406,7 +1422,7 @@ export function SettingsView(): ReactElement {
           {category !== 'extensions' && category !== 'dataMigration' && saveStatus === 'error' && saveError ? (
             <div
               role="alert"
-              className="mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-[13px] leading-5 text-red-800 shadow-sm dark:border-red-500/25 dark:bg-red-500/10 dark:text-red-200"
+              className="mb-5 rounded-[var(--ds-radius-card)] border border-red-200 bg-red-50 px-4 py-3 text-[13px] leading-5 text-red-800 dark:border-red-500/25 dark:bg-red-500/10 dark:text-red-200"
             >
               {saveError}
             </div>
@@ -1415,6 +1431,7 @@ export function SettingsView(): ReactElement {
           <div
             className={`ds-settings-page ds-settings-page--${category}`}
             data-settings-category-view={category}
+            key={category}
           >
             {category === 'general' ? <GeneralSettingsSection ctx={settingsSectionContext} /> : null}
             {category === 'extensions' && extensionSettingsService ? (
@@ -1433,6 +1450,7 @@ export function SettingsView(): ReactElement {
               {category === 'agents' ? (
                 <LoadedAgentsSettingsSection ctx={settingsSectionContext} onReady={markAgentsSectionReady} />
               ) : null}
+              {category === 'laboratory' ? <LaboratorySettingsSection ctx={settingsSectionContext} /> : null}
               {category === 'subagents' ? <SubagentsSettingsSection ctx={settingsSectionContext} /> : null}
               {category === 'archives' ? <ArchivedThreadsSettingsSection ctx={settingsSectionContext} /> : null}
               {category === 'worktree' ? <WorktreeSettingsSection ctx={settingsSectionContext} /> : null}

@@ -133,6 +133,8 @@
   "agentsQuickSkill": "कौशल",
   "agentsQuickMcp": "बाहरी उपकरण",
   "agentsQuickPermissions": "पहुंच",
+  "agentsQuickLaboratory": "प्रयोगशाला",
+  "laboratorySettingsDesc": "प्रयोगात्मक एजेंट क्षमताओं को कॉन्फ़िगर करें। विकसित होने के साथ ये सुविधाएँ बदल सकती हैं।",
   "archivesTitle": "संग्रहीत चैट",
   "archivesOverview": "संग्रहीत चैट इतिहास",
   "archivesOverviewDesc": "उन चैट की समीक्षा करें जिन्हें सक्रिय साइडबार से हटा दिया गया था। आप यहां उन्हें खोल सकते हैं, पुनर्स्थापित कर सकते हैं या स्थायी रूप से हटा सकते हैं।",

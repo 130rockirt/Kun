@@ -12,6 +12,7 @@ import type { GitBranchesResult, GitBranchRow } from '@shared/git-branches'
 import { getProvider } from '../../agent/registry'
 import { rendererRuntimeClient } from '../../agent/runtime-client'
 import { SETTINGS_CHANGED_EVENT } from '../../lib/keyboard-shortcut-settings'
+import { notifyGitBranchStatusChanged } from '../../lib/git-branch-status-event'
 import { middleEllipsize } from '../../lib/middle-ellipsize'
 import {
   forgetThreadWorktree,
@@ -194,6 +195,7 @@ export function GitBranchPicker({ workspaceRoot }: Props): ReactElement | null {
         setError(next.message)
         return
       }
+      notifyGitBranchStatusChanged(root)
       setOpen(false)
       setQuery('')
     } catch (e) {
@@ -268,6 +270,7 @@ export function GitBranchPicker({ workspaceRoot }: Props): ReactElement | null {
         setError(next.message)
         return
       }
+      notifyGitBranchStatusChanged(root)
       setOpen(false)
       setQuery('')
     } catch (e) {
@@ -295,6 +298,7 @@ export function GitBranchPicker({ workspaceRoot }: Props): ReactElement | null {
         worktreePath: next.worktreePath,
         branch: next.currentBranch ?? branch
       })
+      notifyGitBranchStatusChanged(next.worktreePath)
       setOpen(false)
       setQuery('')
     } catch (e) {
@@ -323,6 +327,7 @@ export function GitBranchPicker({ workspaceRoot }: Props): ReactElement | null {
         worktreePath: next.worktreePath,
         branch: next.currentBranch ?? branch
       })
+      notifyGitBranchStatusChanged(next.worktreePath)
       setOpen(false)
       setQuery('')
     } catch (e) {

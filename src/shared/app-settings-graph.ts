@@ -1,13 +1,20 @@
 import type {
   KunGraphSettingsPatchV1,
-  KunGraphSettingsV1
+  KunGraphSettingsV1,
+  ModelReasoningEffort
 } from './app-settings-types'
+import { MODEL_REASONING_EFFORTS } from './app-settings-types'
+
+function isModelReasoningEffort(value: unknown): value is ModelReasoningEffort {
+  return typeof value === 'string' &&
+    MODEL_REASONING_EFFORTS.includes(value as ModelReasoningEffort)
+}
 
 export function defaultKunGraphSettings(): KunGraphSettingsV1 {
   return {
     enabled: false,
     defaultStrategy: 'direct',
-    rolloutStage: 'experimental',
+    rolloutStage: 'stable',
     workerModel: { mode: 'inherit' },
     scheduler: {
       maxNodes: 128,
@@ -104,13 +111,10 @@ export function normalizeKunGraphSettings(
     defaultStrategy: input?.defaultStrategy === 'graph' && input?.enabled === true
       ? 'graph'
       : 'direct',
-    rolloutStage:
-      input?.rolloutStage === 'alpha' ||
-      input?.rolloutStage === 'beta' ||
-      input?.rolloutStage === 'learning-preview' ||
-      input?.rolloutStage === 'stable'
-        ? input.rolloutStage
-        : 'experimental',
+    // Rollout cohorts are retained in the persisted schema for downgrade
+    // compatibility, but the product always exposes the complete stable
+    // capability set.
+    rolloutStage: 'stable',
     workerModel:
       workerModel.mode === 'fixed' &&
       typeof workerModel.providerId === 'string' &&
@@ -121,7 +125,7 @@ export function normalizeKunGraphSettings(
             mode: 'fixed',
             providerId: workerModel.providerId.trim().slice(0, 128),
             model: workerModel.model.trim().slice(0, 256),
-            ...(workerModel.reasoningEffort
+            ...(isModelReasoningEffort(workerModel.reasoningEffort)
               ? { reasoningEffort: workerModel.reasoningEffort }
               : {})
           }

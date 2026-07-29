@@ -133,6 +133,7 @@ export type SettingsRouteSection =
   | 'mediaGeneration'
   | 'speechToText'
   | 'agents'
+  | 'laboratory'
   | 'subagents'
   | 'archives'
   | 'worktree'

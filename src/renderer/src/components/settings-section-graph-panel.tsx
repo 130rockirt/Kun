@@ -2,7 +2,12 @@ import type { ReactElement } from 'react'
 import type {
   KunGraphSettingsV1,
   KunGraphSettingsPatchV1,
+  ModelReasoningEffort,
   ModelProviderProfileV1
+} from '@shared/app-settings'
+import {
+  MODEL_REASONING_EFFORTS,
+  modelProviderModelProfile
 } from '@shared/app-settings'
 import {
   InlineNoticeView,
@@ -13,6 +18,37 @@ import {
 } from './settings-controls'
 
 type Translate = (key: string) => string
+
+const REASONING_EFFORT_LABEL_KEYS: Record<ModelReasoningEffort, string> = {
+  auto: 'graphSettingsReasoningAuto',
+  off: 'graphSettingsReasoningOff',
+  low: 'graphSettingsReasoningLow',
+  medium: 'graphSettingsReasoningMedium',
+  high: 'graphSettingsReasoningHigh',
+  max: 'graphSettingsReasoningMax'
+}
+
+function reasoningEffortsForWorkerModel(
+  provider: ModelProviderProfileV1 | undefined,
+  model: string
+): ModelReasoningEffort[] {
+  if (!provider) return [...MODEL_REASONING_EFFORTS]
+  const supported = modelProviderModelProfile(provider, model)?.reasoning?.supportedEfforts
+  return supported && supported.length > 0
+    ? supported
+    : [...MODEL_REASONING_EFFORTS]
+}
+
+function compatibleReasoningEffort(
+  provider: ModelProviderProfileV1 | undefined,
+  model: string,
+  current: ModelReasoningEffort | undefined
+): ModelReasoningEffort | undefined {
+  if (!current || !provider) return current
+  const reasoning = modelProviderModelProfile(provider, model)?.reasoning
+  if (!reasoning || reasoning.supportedEfforts.includes(current)) return current
+  return reasoning.defaultEffort
+}
 
 export function GraphModeSettingsPanel({
   t,
@@ -43,6 +79,10 @@ export function GraphModeSettingsPanel({
   const workerModel = value.workerModel.mode === 'fixed'
     ? value.workerModel.model
     : leadModel
+  const workerReasoningEfforts = reasoningEffortsForWorkerModel(workerProvider, workerModel)
+  const workerReasoningEffort = value.workerModel.mode === 'fixed'
+    ? value.workerModel.reasoningEffort
+    : undefined
   return (
     <div className="mt-6">
       <SettingsCard title={t('graphSettingsTitle')}>
@@ -117,7 +157,14 @@ export function GraphModeSettingsPanel({
                             providerId,
                             model: provider?.models.includes(workerModel)
                               ? workerModel
-                              : provider?.models[0] ?? workerModel
+                              : provider?.models[0] ?? workerModel,
+                            reasoningEffort: compatibleReasoningEffort(
+                              provider,
+                              provider?.models.includes(workerModel)
+                                ? workerModel
+                                : provider?.models[0] ?? workerModel,
+                              workerReasoningEffort
+                            )
                           }
                         })
                       }}
@@ -139,7 +186,12 @@ export function GraphModeSettingsPanel({
                           workerModel: {
                             mode: 'fixed',
                             providerId: workerProvider?.id ?? workerProviderId,
-                            model: nextModel || workerModel
+                            model: nextModel || workerModel,
+                            reasoningEffort: compatibleReasoningEffort(
+                              workerProvider,
+                              nextModel || workerModel,
+                              workerReasoningEffort
+                            )
                           }
                         })
                       }}
@@ -148,25 +200,36 @@ export function GraphModeSettingsPanel({
                 }
               />
             ) : null}
-            <SettingRow
-              title={t('graphSettingsRollout')}
-              description={t('graphSettingsRolloutDesc')}
-              control={
-                <select
-                  className={selectControlClass}
-                  value={value.rolloutStage}
-                  onChange={(event) => onChange({
-                    rolloutStage: event.target.value as KunGraphSettingsV1['rolloutStage']
-                  })}
-                >
-                  <option value="experimental">{t('graphSettingsRolloutExperimental')}</option>
-                  <option value="alpha">{t('graphSettingsRolloutAlpha')}</option>
-                  <option value="beta">{t('graphSettingsRolloutBeta')}</option>
-                  <option value="learning-preview">{t('graphSettingsRolloutLearning')}</option>
-                  <option value="stable">{t('graphSettingsRolloutStable')}</option>
-                </select>
-              }
-            />
+            {value.workerModel.mode === 'fixed' ? (
+              <SettingRow
+                title={t('graphSettingsWorkerReasoning')}
+                description={t('graphSettingsWorkerReasoningDesc')}
+                control={
+                  <select
+                    aria-label={t('graphSettingsWorkerReasoning')}
+                    className={selectControlClass}
+                    value={workerReasoningEffort ?? ''}
+                    onChange={(event) => onChange({
+                      workerModel: {
+                        mode: 'fixed',
+                        providerId: workerProvider?.id ?? workerProviderId,
+                        model: workerModel,
+                        reasoningEffort: event.target.value
+                          ? event.target.value as ModelReasoningEffort
+                          : undefined
+                      }
+                    })}
+                  >
+                    <option value="">{t('graphSettingsReasoningInherit')}</option>
+                    {workerReasoningEfforts.map((effort) => (
+                      <option key={effort} value={effort}>
+                        {t(REASONING_EFFORT_LABEL_KEYS[effort])}
+                      </option>
+                    ))}
+                  </select>
+                }
+              />
+            ) : null}
             <SettingRow
               title={t('graphSettingsGlobalConcurrency')}
               description={t('graphSettingsGlobalConcurrencyDesc')}

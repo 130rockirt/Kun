@@ -133,6 +133,8 @@
   "agentsQuickSkill": "スキル",
   "agentsQuickMcp": "外部ツール",
   "agentsQuickPermissions": "アクセス",
+  "agentsQuickLaboratory": "ラボ",
+  "laboratorySettingsDesc": "実験的なエージェント機能を設定します。これらの機能は今後変更される可能性があります。",
   "archivesTitle": "アーカイブされたチャット",
   "archivesOverview": "アーカイブされたチャット履歴",
   "archivesOverviewDesc": "アクティブなサイドバーから削除されたチャットを確認します。ここで、ファイルを開いたり、復元したり、完全に削除したりできます。",

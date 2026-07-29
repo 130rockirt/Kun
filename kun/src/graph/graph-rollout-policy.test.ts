@@ -7,10 +7,10 @@ import {
 } from './graph-rollout-policy.js'
 
 describe('Graph rollout policy', () => {
-  it('enables automatic capabilities only at their readiness gates', () => {
+  it('does not restrict enabled capabilities by legacy rollout cohorts', () => {
     expect(graphAutomaticSupervisionEnabled(testGraphConfig({
       rolloutStage: 'experimental'
-    }))).toBe(false)
+    }))).toBe(true)
     expect(graphAutomaticSupervisionEnabled(testGraphConfig({
       rolloutStage: 'alpha'
     }))).toBe(true)
@@ -29,11 +29,11 @@ describe('Graph rollout policy', () => {
     expect(effectiveGraphLearningMode(testGraphConfig({
       rolloutStage: 'beta',
       learning: { mode: 'suggest' }
-    }))).toBe('off')
+    }))).toBe('suggest')
     expect(effectiveGraphLearningMode(testGraphConfig({
       rolloutStage: 'learning-preview',
       learning: { mode: 'auto_candidate' }
-    }))).toBe('suggest')
+    }))).toBe('auto_candidate')
     expect(effectiveGraphLearningMode(testGraphConfig({
       rolloutStage: 'stable',
       learning: { mode: 'auto_candidate' }

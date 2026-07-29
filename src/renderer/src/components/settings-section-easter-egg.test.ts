@@ -109,7 +109,7 @@ describe('EasterEggSettingsSection (mode workshop)', () => {
     }))
 
     expect(html).toContain('Mode workshop')
-    expect(html).toContain('bg-accent/10 text-accent')
+    expect(html).toContain('bg-[var(--ds-control)]')
   })
 
   it('disables plugin removal while another workshop operation is busy', async () => {

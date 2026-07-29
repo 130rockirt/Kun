@@ -391,19 +391,17 @@ Configuration is under `agents.kun.graph`, grouped into `scheduler`, `context`,
 ```text
 enabled=false
 defaultStrategy=direct
-rolloutStage=experimental
+rolloutStage=stable
 learning.mode=off
 writeIsolation.mode=serialize
 writeIsolation.allowWorktrees=false
 ```
 
-The host enforces the rollout stages: `experimental` permits explicit validated
-DAGs and still keeps the required source-Lead lifecycle supervision active;
-`alpha` enables optional reviewer and enhanced supervision behavior when both
-supervision and `autoStart` are enabled; `beta` admits host-bounded LoopGates;
-`learning-preview` enables suggest mode and clamps `auto_candidate` to suggest;
-and `stable` may materialize reversible, non-executable candidate profiles.
-Promotion still requires evidence and user authority.
+The product always runs the complete stable Graph capability set. The legacy
+`rolloutStage` field remains readable for downgrade compatibility, but it no
+longer gates loops, supervision, or learning. Those capabilities are controlled
+only by their explicit settings; promotion still requires evidence and user
+authority.
 
 Safe disable sets `enabled=false` and `defaultStrategy=direct`. It stops new
 creation, automatic supervision, and automatic learning, fences and pauses

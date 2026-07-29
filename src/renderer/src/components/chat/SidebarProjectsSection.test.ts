@@ -15,6 +15,7 @@ import {
   mergeSidebarWorkspaceGroupsWithDraftHistory,
   MoveThreadDialog,
   resolveThreadPreviewPosition,
+  sidebarOverlayPortalHost,
   SidebarProjectsSection,
   sortSidebarThreads,
   SddDraftHistoryRows,
@@ -622,6 +623,14 @@ describe('ThreadRenameDialog', () => {
 })
 
 describe('SidebarActionDialog', () => {
+  it('mounts sidebar overlays on the document body so the sidebar cannot clip them', () => {
+    const body = {} as HTMLElement
+    const currentDocument = { body } as Document
+
+    expect(sidebarOverlayPortalHost(currentDocument)).toBe(body)
+    expect(sidebarOverlayPortalHost(undefined)).toBeNull()
+  })
+
   it('uses an opaque card and stronger backdrop so sidebar controls cannot bleed through', () => {
     const html = renderToStaticMarkup(
       createElement(SidebarActionDialog, {
@@ -1088,7 +1097,7 @@ describe('SidebarProjectsSection drag ordering', () => {
 })
 
 describe('SidebarConversationsSection drag ordering', () => {
-  it('restores saved conversation order and renders conversations as draggable', () => {
+  it('starts collapsed, then restores saved conversation order and renders conversations as draggable', async () => {
     const storageValue = JSON.stringify({
       version: 1,
       workspacePaths: [],
@@ -1100,9 +1109,11 @@ describe('SidebarConversationsSection drag ordering', () => {
       getItem: (key: string) => key === SIDEBAR_ORDER_STORAGE_KEY ? storageValue : null,
       setItem: vi.fn()
     })
+    let renderer: ReactTestRenderer | null = null
     try {
-      const html = renderToStaticMarkup(
-        createElement(SidebarConversationsSection, {
+      await act(async () => {
+        renderer = createRenderer(
+          createElement(SidebarConversationsSection, {
           threads: [
             thread({
               id: 'conversation-a',
@@ -1126,14 +1137,29 @@ describe('SidebarConversationsSection drag ordering', () => {
           onDeleteThread: vi.fn(async () => undefined),
           onRestoreThread: vi.fn(async () => undefined),
           t: (key: string) => key
-        })
-      )
+          })
+        )
+      })
 
-      expect(html.indexOf('title="Conversation B"')).toBeLessThan(
-        html.indexOf('title="Conversation A"')
+      expect(renderer!.root.findAll((node) => node.props.title === 'Conversation A')).toHaveLength(0)
+      expect(renderer!.root.findAll((node) => node.props.title === 'Conversation B')).toHaveLength(0)
+
+      const sectionToggle = renderer!.root.find((node) =>
+        node.type === 'button' && node.props.title === 'sidebarConversations'
       )
-      expect(html.match(/draggable="true"/g)).toHaveLength(2)
+      await act(async () => {
+        sectionToggle.props.onClick()
+      })
+
+      const conversationRows = renderer!.root.findAll((node) =>
+        node.type === 'div' && node.props.draggable === true
+      )
+      expect(conversationRows.map((node) => node.props.title)).toEqual([
+        'Conversation B',
+        'Conversation A'
+      ])
     } finally {
+      ;(renderer as ReactTestRenderer | null)?.unmount()
       vi.unstubAllGlobals()
     }
   })

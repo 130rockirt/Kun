@@ -1,11 +1,18 @@
 .ds-settings-content {
-  width: min(100%, 1120px);
+  width: 100%;
+  max-width: 920px;
+}
+
+.ds-settings-scroller {
+  padding: 56px 24px 128px 16px;
+  scrollbar-gutter: stable;
 }
 
 .ds-settings-page {
   display: grid;
   min-width: 0;
-  gap: 1rem;
+  gap: 14px;
+  animation: ds-settings-page-enter 150ms ease-out;
 }
 
 .ds-settings-page > *,
@@ -13,8 +20,24 @@
   min-width: 0;
 }
 
+.ds-settings-surface .font-semibold {
+  font-weight: 500;
+}
+
+.ds-settings-surface .shadow-sm {
+  box-shadow: none;
+}
+
+.ds-settings-surface :is(button, input, select).rounded-xl {
+  border-radius: var(--ds-radius-pill);
+}
+
+.ds-settings-surface :is(.rounded-2xl, .rounded-3xl) {
+  border-radius: var(--ds-radius-card);
+}
+
 .ds-settings-page-header {
-  margin-bottom: 1.25rem;
+  margin-bottom: 18px;
 }
 
 .ds-settings-tabs,
@@ -39,33 +62,45 @@
 
 .ds-settings-tab-panel:not([hidden]) {
   display: grid;
-  gap: 1rem;
+  gap: 14px;
 }
 
 .ds-settings-panel-stack {
   display: grid;
   min-width: 0;
-  gap: 1rem;
+  gap: 14px;
 }
 
 .ds-settings-card {
   container-type: inline-size;
+  border-radius: var(--ds-radius-card);
+  box-shadow: none;
 }
 
 .ds-settings-card-header {
-  padding-block: 1rem;
+  padding-block: 20px 14px;
 }
 
 .ds-settings-card-body {
-  padding-block: 0.2rem;
+  padding-block: 0 6px;
 }
 
 .ds-setting-row {
-  padding-block: 1rem;
+  padding-block: 14px;
 }
 
 .ds-setting-row p {
-  line-height: 1.5;
+  line-height: 1.4;
+}
+
+@keyframes ds-settings-page-enter {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
 }
 
 .ds-settings-page :is(.mt-5, .mt-6):has(> .ds-settings-card),
@@ -108,7 +143,7 @@
 
 @media (max-width: 1050px) {
   .ds-settings-content {
-    width: min(100%, 880px);
+    width: 100%;
   }
 
   .ds-settings-page--shortcuts .ds-settings-card-body > div:last-child {
@@ -118,11 +153,17 @@
 
 @media (max-width: 760px) {
   .ds-settings-scroller {
-    padding: 1.25rem;
+    padding: 32px 20px 80px;
   }
 
   .ds-settings-page-header {
     flex-direction: column;
     gap: 0.75rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ds-settings-page {
+    animation: none;
   }
 }

@@ -20,9 +20,17 @@ describe('Kun Graph settings', () => {
     expect(normalized.agents.kun.graph).toEqual(defaultKunGraphSettings())
     expect(normalized.agents.kun.graph.enabled).toBe(false)
     expect(normalized.agents.kun.graph.defaultStrategy).toBe('direct')
+    expect(normalized.agents.kun.graph.rolloutStage).toBe('stable')
     expect(normalized.agents.kun.graph.workerModel).toEqual({ mode: 'inherit' })
     expect(normalized.agents.kun.graph.scheduler.maxRunWallTimeMs)
       .toBe(7 * 24 * 60 * 60 * 1_000)
+  })
+
+  it('migrates legacy rollout cohorts to the complete stable capability set', () => {
+    expect(normalizeKunGraphSettings({
+      ...defaultKunGraphSettings(),
+      rolloutStage: 'experimental'
+    }).rolloutStage).toBe('stable')
   })
 
   it('normalizes invalid and over-broad values to host bounds', () => {
@@ -83,7 +91,8 @@ describe('Kun Graph settings', () => {
         workerModel: {
           mode: 'fixed',
           providerId: 'provider-b',
-          model: 'worker-model'
+          model: 'worker-model',
+          reasoningEffort: 'high'
         }
       }
     })
@@ -96,7 +105,8 @@ describe('Kun Graph settings', () => {
     expect(updated.graph.workerModel).toEqual({
       mode: 'fixed',
       providerId: 'provider-b',
-      model: 'worker-model-2'
+      model: 'worker-model-2',
+      reasoningEffort: 'high'
     })
     expect(normalizeKunGraphSettings({
       ...defaultKunGraphSettings(),
@@ -106,6 +116,20 @@ describe('Kun Graph settings', () => {
         model: ''
       }
     }).workerModel).toEqual({ mode: 'inherit' })
+
+    expect(normalizeKunGraphSettings({
+      ...defaultKunGraphSettings(),
+      workerModel: {
+        mode: 'fixed',
+        providerId: 'provider-b',
+        model: 'worker-model',
+        reasoningEffort: 'invalid'
+      }
+    } as unknown as Parameters<typeof normalizeKunGraphSettings>[0]).workerModel).toEqual({
+      mode: 'fixed',
+      providerId: 'provider-b',
+      model: 'worker-model'
+    })
   })
 
   it('drops unknown persisted keys during normalization', () => {

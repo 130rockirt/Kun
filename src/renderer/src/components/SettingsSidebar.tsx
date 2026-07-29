@@ -6,6 +6,7 @@ import {
   BrainCircuit,
   Bug,
   ChevronLeft,
+  FlaskConical,
   GitBranch,
   Globe,
   Keyboard,
@@ -33,6 +34,7 @@ export type SettingsCategory =
   | 'mediaGeneration'
   | 'speechToText'
   | 'agents'
+  | 'laboratory'
   | 'subagents'
   | 'archives'
   | 'worktree'
@@ -95,6 +97,7 @@ const SETTINGS_NAVIGATION_GROUPS: SettingsNavigationGroup[] = [
     labelKey: 'settingsGroupIntelligence',
     items: [
       { category: 'agents', labelKey: 'agents', navigationLabelKey: 'settingsNavAssistant', icon: Bot },
+      { category: 'laboratory', labelKey: 'agentsQuickLaboratory', icon: FlaskConical },
       { category: 'subagents', labelKey: 'subagents', icon: UsersRound },
       { category: 'memory', labelKey: 'memory', icon: BrainCircuit }
     ]
@@ -146,6 +149,7 @@ const SETTINGS_CATEGORY_DESCRIPTION_KEYS: Record<SettingsCategory, string> = {
   mediaGeneration: 'mediaGenerationDesc',
   speechToText: 'speechToTextEnabledDesc',
   agents: 'kunProviderDesc',
+  laboratory: 'laboratorySettingsDesc',
   subagents: 'subagentsSettingsIntro',
   archives: 'archivesOverviewDesc',
   worktree: 'worktreeOverviewDesc',
@@ -185,21 +189,21 @@ export function SettingsSidebar({
   t: (key: string) => string
 }): ReactElement {
   return (
-    <aside className="ds-settings-sidebar ds-drag flex h-full min-h-0 w-[228px] shrink-0 flex-col border-r border-ds-border bg-ds-sidebar backdrop-blur-md">
-      <div className="shrink-0 px-3 pb-2 pt-3">
+    <aside className="ds-settings-sidebar ds-drag flex h-full min-h-0 w-[260px] shrink-0 flex-col bg-ds-sidebar">
+      <div className="shrink-0 px-5 pb-4 pt-5">
         <div aria-hidden className="ds-titlebar-safe-block" />
-        <div className="flex items-center gap-2 px-1">
+        <div className="flex items-center gap-2">
           <button
             type="button"
             aria-label={t('back')}
             title={t('back')}
             data-cursor-spotlight-target
             onClick={goBack}
-            className="ds-no-drag flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+            className="ds-no-drag flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/35"
           >
-            <ChevronLeft className="h-4 w-4" strokeWidth={1.9} />
+            <ChevronLeft className="h-5 w-5" strokeWidth={1.8} />
           </button>
-          <h1 className="truncate text-[16px] font-semibold tracking-tight text-ds-ink">
+          <h1 className="truncate text-[24px] font-medium leading-tight tracking-[-0.02em] text-ds-ink">
             {t('title')}
           </h1>
         </div>
@@ -207,7 +211,7 @@ export function SettingsSidebar({
 
       <nav
         aria-label={t('title')}
-        className="ds-no-drag min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-3"
+        className="ds-no-drag min-h-0 flex-1 overflow-y-auto overscroll-contain px-3.5 pb-5"
       >
         {SETTINGS_NAVIGATION_GROUPS.map((group, groupIndex) => {
           const items = group.items.filter((item) => !item.extensionOnly || extensionSettingsAvailable)
@@ -217,15 +221,15 @@ export function SettingsSidebar({
             <section
               key={group.id}
               aria-labelledby={headingId}
-              className={groupIndex === 0 ? '' : 'mt-3'}
+              className={groupIndex === 0 ? '' : 'mt-3.5'}
             >
               <h2
                 id={headingId}
-                className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-ds-faint"
+                className="px-3 pb-1.5 text-[11px] font-medium tracking-[0.02em] text-ds-faint"
               >
                 {t(group.labelKey)}
               </h2>
-              <div className="space-y-0.5">
+              <div className="space-y-1">
                 {items.map((item) => {
                   const Icon = item.icon
                   const selected = category === item.category
@@ -244,24 +248,21 @@ export function SettingsSidebar({
                       title={fullLabel}
                       data-settings-category={item.category}
                       data-cursor-spotlight-target
-                      className={`group flex h-8 w-full min-w-0 items-center gap-2 rounded-lg px-1.5 text-left text-[13px] font-medium transition ${
+                      className={`group flex h-9 w-full min-w-0 items-center gap-2.5 rounded-full border px-3 text-left text-[13px] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/35 ${
                         selected
-                          ? 'bg-accent/10 text-accent ring-1 ring-inset ring-accent/20'
-                          : 'text-ds-muted hover:bg-ds-hover hover:text-ds-ink'
+                          ? 'border-transparent bg-[var(--ds-control)] font-medium text-[var(--ds-control-foreground)]'
+                          : 'border-transparent font-normal text-ds-muted hover:bg-ds-hover hover:text-ds-ink'
                       }`}
                       onClick={() => setCategory(item.category)}
                     >
                       <span
-                        className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border transition ${
-                          selected
-                            ? 'border-accent/20 bg-accent text-white shadow-sm'
-                            : 'border-ds-border-muted bg-ds-card/70 text-ds-muted group-hover:border-ds-border group-hover:text-ds-ink'
+                        className={`flex h-5 w-5 shrink-0 items-center justify-center transition ${
+                          selected ? 'text-[var(--ds-control-foreground)]' : 'text-ds-faint group-hover:text-ds-ink'
                         }`}
                       >
-                        <Icon className="h-3.5 w-3.5" strokeWidth={1.8} />
+                        <Icon className="h-4 w-4" strokeWidth={1.75} />
                       </span>
                       <span className="min-w-0 flex-1 truncate">{label}</span>
-                      {selected ? <span aria-hidden className="mr-1 h-1.5 w-1.5 shrink-0 rounded-full bg-accent" /> : null}
                     </button>
                   )
                 })}
@@ -271,9 +272,9 @@ export function SettingsSidebar({
         })}
       </nav>
 
-      <div className="ds-no-drag shrink-0 border-t border-ds-border px-3 py-2.5">
-        <div className="flex items-center gap-2 rounded-xl px-1">
-          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-ds-subtle text-ds-muted">
+      <div className="ds-no-drag shrink-0 border-t border-ds-border px-5 py-3.5">
+        <div className="flex items-center gap-2">
+          <div className="flex h-6 w-6 shrink-0 items-center justify-center text-ds-faint">
             <ShieldCheck className="h-3.5 w-3.5" strokeWidth={1.8} />
           </div>
           <div className="min-w-0 text-[11px] leading-4 text-ds-faint">

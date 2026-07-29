@@ -341,7 +341,7 @@ export type GraphRuntimeConfig = z.infer<typeof GraphRuntimeConfigSchema>
 export const DEFAULT_GRAPH_RUNTIME_CONFIG: GraphRuntimeConfig = GraphRuntimeConfigSchema.parse({
   enabled: false,
   defaultStrategy: 'direct',
-  rolloutStage: 'experimental',
+  rolloutStage: 'stable',
   workerModel: { mode: 'inherit' },
   scheduler: {
     maxNodes: 128,

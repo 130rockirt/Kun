@@ -124,7 +124,7 @@ describe('ArchivedThreadsSettingsSection', () => {
     expect(permissionsIndex).toBe(-1)
     expect(archivesIndex).toBeGreaterThan(subagentsIndex)
     expect(migrationIndex).toBeGreaterThan(archivesIndex)
-    expect(html.match(/data-cursor-spotlight-target/g)?.length).toBe(19)
+    expect(html.match(/data-cursor-spotlight-target/g)?.length).toBe(20)
   })
 
   it('groups compact settings navigation without pushing the footer away', () => {
@@ -135,10 +135,10 @@ describe('ArchivedThreadsSettingsSection', () => {
       t
     }))
 
-    expect(html).toContain('flex h-full min-h-0 w-[228px]')
+    expect(html).toContain('flex h-full min-h-0 w-[260px]')
     expect(html).toContain('min-h-0 flex-1 overflow-y-auto overscroll-contain')
-    expect(html).toContain('ds-no-drag shrink-0 border-t border-ds-border px-3 py-2.5')
-    expect(html).toContain('group flex h-8 w-full')
+    expect(html).toContain('ds-no-drag shrink-0 border-t border-ds-border px-5 py-3.5')
+    expect(html).toContain('group flex h-9 w-full')
     expect(html).toContain('aria-current="page"')
     expect(html.indexOf('Basics')).toBeLessThan(html.indexOf('Workbench'))
     expect(html.indexOf('Workbench')).toBeLessThan(html.indexOf('Intelligence'))

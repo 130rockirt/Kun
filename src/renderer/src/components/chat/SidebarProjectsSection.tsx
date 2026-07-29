@@ -57,6 +57,7 @@ import {
 } from './SidebarProjectOverlays'
 export {
   MoveThreadDialog,
+  sidebarOverlayPortalHost,
   SidebarActionDialog,
   ThreadRenameDialog
 } from './SidebarProjectOverlays'

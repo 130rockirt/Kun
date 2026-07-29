@@ -133,6 +133,8 @@
   "agentsQuickSkill": "Навыки",
   "agentsQuickMcp": "Внешние инструменты",
   "agentsQuickPermissions": "Доступ",
+  "agentsQuickLaboratory": "Лаборатория",
+  "laboratorySettingsDesc": "Настройка экспериментальных возможностей агента. Эти функции могут меняться по мере развития.",
   "archivesTitle": "Архив чатов",
   "archivesOverview": "Архив переписок",
   "archivesOverviewDesc": "Просмотр чатов, удалённых из активной боковой панели. Вы можете открыть, восстановить или навсегда удалить их отсюда.",
