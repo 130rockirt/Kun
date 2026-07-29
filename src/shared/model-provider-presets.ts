@@ -974,11 +974,15 @@ export const MODEL_PROVIDER_PRESETS: ModelProviderPreset[] = [
     endpointFormat: 'custom_endpoint',
     models: [...CHATGPT_SUBSCRIPTION_MODEL_IDS],
     modelProfiles: {
-      'gpt-5.5': visionChatProfile(1_000_000, CODEX_RESPONSES_REASONING),
-      'gpt-5.6-sol': codexLiteVisionChatProfile(372_000),
-      'gpt-5.6-terra': codexLiteVisionChatProfile(372_000),
-      'gpt-5.6-luna': codexLiteVisionChatProfile(372_000),
-      'gpt-5.4': visionChatProfile(1_000_000, CODEX_RESPONSES_REASONING),
+      'gpt-5.5': withPriorityServiceTier(
+        visionChatProfile(1_000_000, CODEX_RESPONSES_REASONING)
+      ),
+      'gpt-5.6-sol': withPriorityServiceTier(codexLiteVisionChatProfile(372_000)),
+      'gpt-5.6-terra': withPriorityServiceTier(codexLiteVisionChatProfile(372_000)),
+      'gpt-5.6-luna': withPriorityServiceTier(codexLiteVisionChatProfile(372_000)),
+      'gpt-5.4': withPriorityServiceTier(
+        visionChatProfile(1_000_000, CODEX_RESPONSES_REASONING)
+      ),
       'gpt-5.4-mini': visionChatProfile(1_000_000, CODEX_RESPONSES_REASONING),
       'gpt-5.3-codex-spark': textChatProfile(128_000, CODEX_RESPONSES_REASONING)
     },
@@ -1328,6 +1332,15 @@ function codexLiteVisionChatProfile(contextWindowTokens: number): ModelProviderM
   }
 }
 
+function withPriorityServiceTier(
+  profile: ModelProviderModelProfileV1
+): ModelProviderModelProfileV1 {
+  return {
+    ...profile,
+    serviceTiers: ['priority']
+  }
+}
+
 function copyModelProfiles(
   profiles: Record<string, ModelProviderModelProfileV1> | undefined
 ): Record<string, ModelProviderModelProfileV1> {
@@ -1341,6 +1354,7 @@ function copyModelProfiles(
         inputModalities: [...profile.inputModalities],
         outputModalities: [...profile.outputModalities],
         messageParts: [...profile.messageParts],
+        ...(profile.serviceTiers ? { serviceTiers: [...profile.serviceTiers] } : {}),
         ...(profile.reasoning
           ? {
               reasoning: {

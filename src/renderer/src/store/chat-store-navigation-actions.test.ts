@@ -45,8 +45,7 @@ const applyThemeLibMock = vi.hoisted(() => ({
 vi.mock('../lib/apply-theme', () => applyThemeLibMock)
 
 import {
-  createNavigationActions,
-  shouldIncludeThreadInSidebarInventory
+  createNavigationActions
 } from './chat-store-navigation-actions'
 
 function thread(overrides: Partial<NormalizedThread> & Pick<NormalizedThread, 'id' | 'workspace'>): NormalizedThread {
@@ -74,7 +73,7 @@ class MemoryStorage implements BrowserStorageLike {
   }
 }
 
-describe('requirement thread sidebar inventory', () => {
+describe('requirement session lifecycle', () => {
   const draft: SddDraft = {
     id: 'draft-1',
     workspaceRoot: '/tmp/app',
@@ -88,21 +87,19 @@ describe('requirement thread sidebar inventory', () => {
     workspace: '/tmp/app'
   })
 
-  it('becomes visible after the first accepted turn without switching to Code routing', () => {
+  it('stays bound to its draft until released into Code', () => {
     const storage = new MemoryStorage()
     markSddAssistantThread(draft, requirementThread.id, storage)
 
     let registry = readSddThreadRegistry(storage)
-    expect(shouldIncludeThreadInSidebarInventory(requirementThread, registry)).toBe(false)
+    expect(isSddAssistantThread(requirementThread, registry)).toBe(true)
 
     showSddAssistantThreadInSidebar(requirementThread.id, storage)
     registry = readSddThreadRegistry(storage)
-    expect(shouldIncludeThreadInSidebarInventory(requirementThread, registry)).toBe(true)
     expect(isSddAssistantThread(requirementThread, registry)).toBe(true)
 
     releaseSddAssistantThread(requirementThread.id, storage)
     registry = readSddThreadRegistry(storage)
-    expect(shouldIncludeThreadInSidebarInventory(requirementThread, registry)).toBe(true)
     expect(isSddAssistantThread(requirementThread, registry)).toBe(false)
   })
 })

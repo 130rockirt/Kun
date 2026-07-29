@@ -73,6 +73,7 @@ export type TurnServiceDeps = {
     runId: string
     lastEventSeq: number
     terminal: boolean
+    supervisionPending?: boolean
   } | null>
   createGraphPlanningDraft?: (input: {
     threadId: string
@@ -80,11 +81,26 @@ export type TurnServiceDeps = {
     goal: string
     workspace?: string
   }) => Promise<GraphPlanningLifecycle>
+  /** Resolve the latest durable draft so stale turn metadata can self-heal after restart. */
+  resolveGraphPlanningDraft?: (input: {
+    threadId: string
+    sourceTurnId: string
+  }) => Promise<GraphPlanningLifecycle | null>
   transitionGraphPlanningDraft?: (input: {
     threadId: string
     sourceTurnId: string
     action: 'suspend' | 'resume' | 'cancel'
   }) => Promise<GraphPlanningLifecycle | null>
+  /**
+   * Durably cancel any GraphRun owned by this source turn before the source
+   * turn itself is persisted as aborted. This ordering is the explicit Stop
+   * fence: a process exit between the two writes can never leave an aborted
+   * source turn attached to a still-completing run.
+   */
+  cancelGraphSourceRuns?: (input: {
+    threadId: string
+    sourceTurnId: string
+  }) => Promise<void>
   ids: IdGenerator
   nowIso: () => string
 }
@@ -119,9 +135,27 @@ export type GraphLeadSuspensionResult =
   | 'not_graph'
   | 'graph_terminal'
   | 'pending_steering'
+  | 'supervision_pending'
   | 'suspended'
 
 export type GraphLeadResumeResult = 'resumed' | 'already_running'
+
+const HOST_SHUTDOWN_TURN_SUSPENSION_CODE = 'host_shutdown_turn_suspension'
+
+function hostShutdownTurnSuspensionReason(): { code: string } {
+  return { code: HOST_SHUTDOWN_TURN_SUSPENSION_CODE }
+}
+
+/** True only for the process-local abort used to park work during host shutdown. */
+export function isHostShutdownTurnSuspension(signal: AbortSignal): boolean {
+  const reason = signal.reason
+  return Boolean(
+    reason &&
+    typeof reason === 'object' &&
+    'code' in reason &&
+    reason.code === HOST_SHUTDOWN_TURN_SUSPENSION_CODE
+  )
+}
 
 /**
  * Keep a finite backstop for one serve process while allowing a desktop user
@@ -141,6 +175,8 @@ export class TurnService {
   private readonly inflightTurns = new Map<string, AbortController>()
   /** Turn ids that own one global admission slot. */
   private readonly admittedTurnThreads = new Map<string, string>()
+  /** Steering requests that are restoring a parked Graph lease before enqueueing. */
+  private readonly graphSteeringResumeFences = new Map<string, number>()
   private maxConcurrentTurns: number
 
   constructor(deps: TurnServiceDeps) {
@@ -235,6 +271,7 @@ export class TurnService {
             providerId: input.request.providerId,
             accountId: input.request.accountId,
             reasoningEffort: input.request.reasoningEffort,
+            serviceTier: input.request.serviceTier,
             clientSurface: input.request.clientSurface,
             approvalPolicy,
             sandboxMode,
@@ -306,6 +343,7 @@ export class TurnService {
         ...(started.turn.providerId ? { providerId: started.turn.providerId } : {}),
         ...(started.turn.accountId ? { accountId: started.turn.accountId } : {}),
         ...(input.request.reasoningEffort ? { reasoningEffort: input.request.reasoningEffort } : {}),
+        ...(input.request.serviceTier ? { serviceTier: input.request.serviceTier } : {}),
         ...(started.turn.clientSurface ? { clientSurface: started.turn.clientSurface } : {}),
         ...(started.turn.approvalPolicy ? { approvalPolicy: started.turn.approvalPolicy } : {}),
         ...(started.turn.sandboxMode ? { sandboxMode: started.turn.sandboxMode } : {}),
@@ -391,39 +429,52 @@ export class TurnService {
     displayText?: string
     messageSource?: UserMessageSource
   }): Promise<void> {
-    if (!this.inflightTurns.has(input.turnId)) {
-      const current = await this.deps.threadStore.get(input.threadId)
-      const turn = current?.turns.find((candidate) => candidate.id === input.turnId)
-      if (
-        turn?.status === 'running' &&
-        turn.orchestration === 'graph' &&
-        turn.graphPlanningLifecycle
-      ) {
-        await this.resumeGraphPlanningTurn({
+    let holdsGraphResumeFence = false
+    try {
+      for (;;) {
+        const action = await this.withThreadMutation(input.threadId, async () => {
+          const current = await this.deps.threadStore.get(input.threadId)
+          const turn = current?.turns.find((candidate) => candidate.id === input.turnId)
+          if (!turn) throw new Error(`turn not found: ${input.turnId}`)
+          if (turn.status !== 'running') {
+            throw new TurnConflictError(`turn is not active: ${input.turnId}`)
+          }
+          if (!this.inflightTurns.has(input.turnId)) {
+            if (turn.orchestration !== 'graph') {
+              throw new TurnConflictError(`turn is not active: ${input.turnId}`)
+            }
+            if (!holdsGraphResumeFence) {
+              this.beginGraphSteeringResume(input.turnId)
+              holdsGraphResumeFence = true
+            }
+            return 'resume_graph' as const
+          }
+          const accepted = this.deps.steering.enqueue(input.turnId, {
+            text: input.text,
+            ...(input.displayText ? { displayText: input.displayText } : {}),
+            ...(input.messageSource ? { messageSource: input.messageSource } : {})
+          })
+          if (!accepted) {
+            if (this.deps.steering.isSealed(input.turnId)) {
+              throw new TurnConflictError(`turn is no longer accepting steering: ${input.turnId}`)
+            }
+            throw new TurnConflictError(
+              `steering queue capacity reached for active turn: ${input.turnId}`
+            )
+          }
+          return 'accepted' as const
+        })
+        if (action === 'accepted') break
+        await this.resumeGraphTurnForSteering({
           threadId: input.threadId,
           turnId: input.turnId
         })
       }
+    } finally {
+      if (holdsGraphResumeFence) {
+        this.endGraphSteeringResume(input.turnId)
+      }
     }
-    await this.withThreadMutation(input.threadId, async () => {
-      const current = await this.deps.threadStore.get(input.threadId)
-      const turn = current?.turns.find((candidate) => candidate.id === input.turnId)
-      if (!turn) throw new Error(`turn not found: ${input.turnId}`)
-      if (turn.status !== 'running' || !this.inflightTurns.has(input.turnId)) {
-        throw new TurnConflictError(`turn is not active: ${input.turnId}`)
-      }
-      const accepted = this.deps.steering.enqueue(input.turnId, {
-        text: input.text,
-        ...(input.displayText ? { displayText: input.displayText } : {}),
-        ...(input.messageSource ? { messageSource: input.messageSource } : {})
-      })
-      if (!accepted) {
-        if (this.deps.steering.isSealed(input.turnId)) {
-          throw new TurnConflictError(`turn is no longer accepting steering: ${input.turnId}`)
-        }
-        throw new TurnConflictError(`steering queue capacity reached for active turn: ${input.turnId}`)
-      }
-    })
     await this.deps.events.record({
       kind: 'turn_steered',
       threadId: input.threadId,
@@ -432,6 +483,54 @@ export class TurnService {
       ...(input.displayText ? { displayText: input.displayText } : {}),
       ...(input.messageSource ? { messageSource: input.messageSource } : {})
     })
+  }
+
+  private async resumeGraphTurnForSteering(input: {
+    threadId: string
+    turnId: string
+  }): Promise<void> {
+    const attached = await this.deps.resolveGraphLeadRun?.(input)
+    if (attached) {
+      await this.resumeGraphLeadTurn({
+        ...input,
+        runId: attached.runId,
+        lastDeliveredSeq: attached.lastEventSeq,
+        terminal: attached.terminal
+      })
+      return
+    }
+    const durablePlanning = await this.deps.resolveGraphPlanningDraft?.({
+      threadId: input.threadId,
+      sourceTurnId: input.turnId
+    })
+    const lifecycle = durablePlanning ??
+      (await this.getTurn(input.threadId, input.turnId))?.graphPlanningLifecycle
+    if (
+      lifecycle?.state === 'planning' ||
+      lifecycle?.state === 'repairing' ||
+      lifecycle?.state === 'needs_correction'
+    ) {
+      await this.resumeGraphPlanningTurn(input)
+      return
+    }
+    throw new TurnConflictError(`Graph source turn is not resumable: ${input.turnId}`)
+  }
+
+  private beginGraphSteeringResume(turnId: string): void {
+    this.graphSteeringResumeFences.set(
+      turnId,
+      (this.graphSteeringResumeFences.get(turnId) ?? 0) + 1
+    )
+  }
+
+  private endGraphSteeringResume(turnId: string): void {
+    const remaining = (this.graphSteeringResumeFences.get(turnId) ?? 0) - 1
+    if (remaining > 0) this.graphSteeringResumeFences.set(turnId, remaining)
+    else this.graphSteeringResumeFences.delete(turnId)
+  }
+
+  private hasGraphSteeringResume(turnId: string): boolean {
+    return (this.graphSteeringResumeFences.get(turnId) ?? 0) > 0
   }
 
   async steeringQueue(input: { threadId: string; turnId: string }): Promise<SteeringEntry[]> {
@@ -478,6 +577,24 @@ export class TurnService {
         if (!turn) throw new Error(`turn not found: ${input.turnId}`)
         if (!isActiveTurn(turn)) {
           throw new TurnConflictError(`turn is not active: ${input.turnId}`)
+        }
+        if (turn.orchestration === 'graph') {
+          // Keep this inside the thread mutation fence. A racing AgentLoop
+          // settlement cannot overtake explicit Stop while Graph cancellation
+          // is being made durable.
+          // Cancel the pre-run draft first. If graph_define_plan is between
+          // creating its paused run and committing the draft, its CAS will then
+          // lose and clean up that run. Listing/cancelling runs second closes the
+          // opposite ordering where commit won first.
+          await this.deps.transitionGraphPlanningDraft?.({
+            threadId: input.threadId,
+            sourceTurnId: input.turnId,
+            action: 'cancel'
+          })
+          await this.deps.cancelGraphSourceRuns?.({
+            threadId: input.threadId,
+            sourceTurnId: input.turnId
+          })
         }
         const turns = current.turns.map((candidate) =>
           candidate.id === input.turnId
@@ -527,6 +644,72 @@ export class TurnService {
       active.map(({ threadId, turnId }) => this.interruptTurn({ threadId, turnId }))
     )
     return settled.filter((result) => result.status === 'fulfilled').length
+  }
+
+  /**
+   * Stop process-local work for shutdown without turning a durable Graph Lead
+   * into a user cancellation. Direct turns keep their existing abort behavior;
+   * Graph turns remain running and are resumed from durable state on restart.
+   */
+  async suspendActiveTurnsForShutdown(): Promise<number> {
+    const active = this.deps.inflight.list()
+      .filter((record) => record.kind === 'model' && Boolean(record.turnId))
+      .map((record) => ({ threadId: record.threadId, turnId: record.turnId! }))
+    const settled = await Promise.allSettled(
+      active.map((input) => this.suspendTurnForHostShutdown(input))
+    )
+    return settled.filter((result) => result.status === 'fulfilled').length
+  }
+
+  async suspendTurnForHostShutdown(input: {
+    threadId: string
+    turnId: string
+  }): Promise<void> {
+    const turn = await this.getTurn(input.threadId, input.turnId)
+    if (
+      turn?.status !== 'running' ||
+      turn.orchestration !== 'graph'
+    ) {
+      if (turn?.status === 'running' || turn?.status === 'queued') {
+        await this.interruptTurn(input)
+      }
+      return
+    }
+    const controller = this.inflightTurns.get(input.turnId)
+    controller?.abort(hostShutdownTurnSuspensionReason())
+    try {
+      const attached = await this.deps.resolveGraphLeadRun?.(input)
+      if (attached) {
+        await this.suspendGraphLeadTurn({
+          ...input,
+          force: true,
+          preserveDeliveryCursor: true,
+          allowPendingSupervision: true
+        })
+      } else {
+        // A planning draft is not invalid merely because its host exits.
+        // Preserve the exact draft state and only record that execution
+        // was parked; user-driven suspension may still request correction.
+        const lifecycle =
+          await this.deps.resolveGraphPlanningDraft?.({
+            threadId: input.threadId,
+            sourceTurnId: input.turnId
+          }) ??
+          turn.graphPlanningLifecycle
+        if (lifecycle) {
+          await this.updateTurnMetadata(input.threadId, input.turnId, {
+            graphPlanningLifecycle: {
+              ...lifecycle,
+              suspendedAt: this.deps.nowIso()
+            }
+          })
+        }
+      }
+    } finally {
+      // suspendGraphLeadTurn normally releases this lease. Keep this
+      // idempotent fallback for terminal/recovery races and store errors.
+      this.releaseRuntimeTurnExecution(input.threadId, input.turnId)
+    }
   }
 
   async compact(input: {
@@ -850,12 +1033,22 @@ export class TurnService {
   async suspendGraphLeadTurn(input: {
     threadId: string
     turnId: string
+    /** Host shutdown must park even when in-memory steering is pending. */
+    force?: boolean
+    /** Host shutdown must not acknowledge Graph events the Lead has not handled. */
+    preserveDeliveryCursor?: boolean
+    /** Permit parking while durable Graph review/supervision work remains pending. */
+    allowPendingSupervision?: boolean
   }): Promise<GraphLeadSuspensionResult> {
     const turn = await this.getTurn(input.threadId, input.turnId)
     if (!turn || turn.status !== 'running' || turn.orchestration !== 'graph') return 'not_graph'
     const attached = await this.deps.resolveGraphLeadRun?.(input)
     if (!attached) return this.suspendGraphPlanningTurn(input)
     if (attached.terminal) return 'graph_terminal'
+    const planningLifecycle = await this.deps.resolveGraphPlanningDraft?.({
+      threadId: input.threadId,
+      sourceTurnId: input.turnId
+    })
 
     return this.withThreadMutation(input.threadId, async () => {
       const current = await this.deps.threadStore.get(input.threadId)
@@ -863,17 +1056,26 @@ export class TurnService {
       if (!current || !latest || latest.status !== 'running' || latest.orchestration !== 'graph') {
         return 'not_graph'
       }
-      if (this.deps.steering.peek(input.turnId).length > 0) return 'pending_steering'
+      if (
+        input.force !== true &&
+        (
+          this.hasGraphSteeringResume(input.turnId) ||
+          this.deps.steering.peek(input.turnId).length > 0
+        )
+      ) return 'pending_steering'
+      if (attached.supervisionPending && input.allowPendingSupervision !== true) {
+        return 'supervision_pending'
+      }
 
       const now = this.deps.nowIso()
       const graphLeadLifecycle = {
         version: 1 as const,
         runId: attached.runId,
         state: 'supervising' as const,
-        lastDeliveredSeq: Math.max(
-          latest.graphLeadLifecycle?.lastDeliveredSeq ?? 0,
-          attached.lastEventSeq
-        ),
+        // Delivery is acknowledged when a bounded Lead episode starts from a
+        // specific GraphRun snapshot. Never jump to the latest sequence while
+        // parking: events written during the episode must remain redeliverable.
+        lastDeliveredSeq: latest.graphLeadLifecycle?.lastDeliveredSeq ?? 0,
         suspendedAt: now,
         ...(latest.graphLeadLifecycle?.resumedAt
           ? { resumedAt: latest.graphLeadLifecycle.resumedAt }
@@ -883,7 +1085,13 @@ export class TurnService {
         ...current,
         turns: current.turns.map((candidate) =>
           candidate.id === input.turnId
-            ? { ...candidate, graphLeadLifecycle }
+            ? {
+                ...candidate,
+                graphLeadLifecycle,
+                ...(planningLifecycle
+                  ? { graphPlanningLifecycle: planningLifecycle }
+                  : {})
+              }
             : candidate),
         updatedAt: now
       })
@@ -895,6 +1103,8 @@ export class TurnService {
   async suspendGraphPlanningTurn(input: {
     threadId: string
     turnId: string
+    /** Host shutdown must park even when in-memory steering is pending. */
+    force?: boolean
   }): Promise<GraphLeadSuspensionResult> {
     let lifecycle = await this.deps.transitionGraphPlanningDraft?.({
       threadId: input.threadId,
@@ -928,7 +1138,13 @@ export class TurnService {
       const current = await this.deps.threadStore.get(input.threadId)
       const turn = current?.turns.find((candidate) => candidate.id === input.turnId)
       if (!current || !turn || turn.status !== 'running') return 'not_graph'
-      if (this.deps.steering.peek(input.turnId).length > 0) return 'pending_steering'
+      if (
+        input.force !== true &&
+        (
+          this.hasGraphSteeringResume(input.turnId) ||
+          this.deps.steering.peek(input.turnId).length > 0
+        )
+      ) return 'pending_steering'
       await this.deps.threadStore.upsert({
         ...current,
         turns: current.turns.map((candidate) =>
@@ -950,26 +1166,61 @@ export class TurnService {
     threadId: string
     turnId: string
   }): Promise<GraphLeadResumeResult> {
-    const lifecycle = await this.deps.transitionGraphPlanningDraft?.({
-      threadId: input.threadId,
-      sourceTurnId: input.turnId,
-      action: 'resume'
-    })
-    if (!lifecycle || lifecycle.state !== 'planning') {
-      throw new TurnConflictError(`Graph planning draft is not resumable: ${input.turnId}`)
-    }
     return this.withThreadMutation(input.threadId, async () => {
       const current = await this.deps.threadStore.get(input.threadId)
       const turn = current?.turns.find((candidate) => candidate.id === input.turnId)
-      if (!current || !turn) throw new Error(`turn not found: ${input.turnId}`)
-      if (turn.status !== 'running' || turn.orchestration !== 'graph') {
-        throw new TurnConflictError(`Graph source turn is not active: ${input.turnId}`)
+      let correctionRestored = false
+      const restoreCorrection = async (): Promise<void> => {
+        if (correctionRestored) return
+        correctionRestored = true
+        let lifecycle: GraphPlanningLifecycle | null | undefined
+        try {
+          lifecycle = await this.deps.transitionGraphPlanningDraft?.({
+            threadId: input.threadId,
+            sourceTurnId: input.turnId,
+            action: 'suspend'
+          })
+        } finally {
+          this.releaseRuntimeTurnExecution(input.threadId, input.turnId)
+        }
+        if (
+          current &&
+          turn?.status === 'running' &&
+          turn.orchestration === 'graph' &&
+          lifecycle?.state === 'needs_correction'
+        ) {
+          await this.deps.threadStore.upsert({
+            ...current,
+            turns: current.turns.map((candidate) =>
+              candidate.id === input.turnId
+                ? {
+                    ...candidate,
+                    graphPlanningLifecycle: lifecycle,
+                    requiredToolGate: undefined
+                  }
+                : candidate),
+            updatedAt: this.deps.nowIso()
+          })
+        }
       }
-      if (this.inflightTurns.has(input.turnId)) return 'already_running'
-      if (!this.tryAdmitTurn(input.turnId, input.threadId)) {
-        throw new TurnCapacityError(this.maxConcurrentTurns)
-      }
+
       try {
+        if (!current || !turn) throw new Error(`turn not found: ${input.turnId}`)
+        if (turn.status !== 'running' || turn.orchestration !== 'graph') {
+          throw new TurnConflictError(`Graph source turn is not active: ${input.turnId}`)
+        }
+        if (this.inflightTurns.has(input.turnId)) return 'already_running'
+        if (!this.tryAdmitTurn(input.turnId, input.threadId)) {
+          throw new TurnCapacityError(this.maxConcurrentTurns)
+        }
+        const lifecycle = await this.deps.transitionGraphPlanningDraft?.({
+          threadId: input.threadId,
+          sourceTurnId: input.turnId,
+          action: 'resume'
+        })
+        if (!lifecycle || lifecycle.state !== 'planning') {
+          throw new TurnConflictError(`Graph planning draft is not resumable: ${input.turnId}`)
+        }
         const controller = new AbortController()
         this.inflightTurns.set(input.turnId, controller)
         this.deps.inflight.begin({
@@ -989,7 +1240,10 @@ export class TurnService {
         })
         return 'resumed'
       } catch (error) {
-        this.releaseRuntimeTurnExecution(input.threadId, input.turnId)
+        // Keep the compensating transition inside the same thread mutation
+        // fence. A concurrent steering retry cannot acquire a fresh lease and
+        // then be suspended by this older failed resume.
+        await restoreCorrection()
         throw error
       }
     })
@@ -1023,6 +1277,10 @@ export class TurnService {
     lastDeliveredSeq: number
     terminal: boolean
   }): Promise<GraphLeadResumeResult> {
+    const planningLifecycle = await this.deps.resolveGraphPlanningDraft?.({
+      threadId: input.threadId,
+      sourceTurnId: input.turnId
+    })
     return this.withThreadMutation(input.threadId, async () => {
       const current = await this.deps.threadStore.get(input.threadId)
       const turn = current?.turns.find((candidate) => candidate.id === input.turnId)
@@ -1038,7 +1296,36 @@ export class TurnService {
           `Graph source turn ${input.turnId} already owns ${turn.graphLeadLifecycle.runId}`
         )
       }
-      if (this.inflightTurns.has(input.turnId)) return 'already_running'
+      if (this.inflightTurns.has(input.turnId)) {
+        const now = this.deps.nowIso()
+        await this.deps.threadStore.upsert({
+          ...current,
+          turns: current.turns.map((candidate) =>
+            candidate.id === input.turnId
+              ? {
+                  ...candidate,
+                  graphLeadLifecycle: {
+                    version: 1 as const,
+                    runId: input.runId,
+                    state: input.terminal ? 'finalizing' as const : 'supervising' as const,
+                    lastDeliveredSeq: Math.max(
+                      candidate.graphLeadLifecycle?.lastDeliveredSeq ?? 0,
+                      input.lastDeliveredSeq
+                    ),
+                    resumedAt: now,
+                    ...(candidate.graphLeadLifecycle?.suspendedAt
+                      ? { suspendedAt: candidate.graphLeadLifecycle.suspendedAt }
+                      : {})
+                  },
+                  ...(planningLifecycle
+                    ? { graphPlanningLifecycle: planningLifecycle }
+                    : {})
+                }
+              : candidate),
+          updatedAt: now
+        })
+        return 'already_running'
+      }
       if (!this.tryAdmitTurn(input.turnId, input.threadId)) {
         throw new TurnCapacityError(this.maxConcurrentTurns)
       }
@@ -1071,7 +1358,10 @@ export class TurnService {
                     ...(candidate.graphLeadLifecycle?.suspendedAt
                       ? { suspendedAt: candidate.graphLeadLifecycle.suspendedAt }
                       : {})
-                  }
+                  },
+                  ...(planningLifecycle
+                    ? { graphPlanningLifecycle: planningLifecycle }
+                    : {})
                 }
               : candidate),
           updatedAt: now
@@ -1140,11 +1430,46 @@ export class TurnService {
         if (turn.status !== 'running' && turn.status !== 'queued') continue
         if (this.inflightTurns.has(turn.id)) continue
         if (turn.status === 'running' && turn.orchestration === 'graph') {
-          const suspension = await this.suspendGraphLeadTurn({
+          const durablePlanning = await this.deps.resolveGraphPlanningDraft?.({
+            threadId: thread.id,
+            sourceTurnId: turn.id
+          }).catch(() => null)
+          if (durablePlanning?.state === 'cancelled') {
+            // A cancel endpoint may have durably fenced the draft immediately
+            // before the process exited. Complete the idempotent source/run
+            // cancellation instead of leaving a spinner with no resume action.
+            await this.interruptTurn({
+              threadId: thread.id,
+              turnId: turn.id
+            }).catch(() => undefined)
+            continue
+          }
+          if (turn.graphPlanningLifecycle?.suspendedAt) {
+            // A clean host shutdown already parked this planning turn without
+            // declaring the draft invalid. Keep it resumable in the same state.
+            continue
+          }
+          let suspension = await this.suspendGraphLeadTurn({
             threadId: thread.id,
             turnId: turn.id
           }).catch(() => 'not_graph' as const)
-          if (suspension === 'suspended' || suspension === 'pending_steering') {
+          if (suspension === 'supervision_pending') {
+            // Submitted/reviewing nodes are durable recovery work, not an
+            // orphan failure. Park without acknowledging their event cursor;
+            // GraphRuntime recovery will redeliver supervision to the Lead.
+            suspension = await this.suspendGraphLeadTurn({
+              threadId: thread.id,
+              turnId: turn.id,
+              force: true,
+              preserveDeliveryCursor: true,
+              allowPendingSupervision: true
+            }).catch(() => 'not_graph' as const)
+          }
+          if (
+            suspension === 'suspended' ||
+            suspension === 'pending_steering' ||
+            suspension === 'graph_terminal'
+          ) {
             continue
           }
         }

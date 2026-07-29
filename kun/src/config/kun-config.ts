@@ -109,6 +109,7 @@ export const ModelContextProfileConfigSchema = z
     supportsToolCalling: z.boolean().optional(),
     messageParts: z.array(ModelMessagePartSupport).optional(),
     reasoning: ModelReasoningCapabilityMetadata.optional(),
+    serviceTiers: z.array(z.enum(['priority', 'flex'])).min(1).optional(),
     // Per-model wire-format override. Omitted means "inherit the
     // provider/runtime endpointFormat"; no default coercion here, otherwise
     // every model would be pinned to chat_completions.
@@ -527,6 +528,10 @@ export const ServeProviderConfigSchema = z
     apiKey: z.string().default(''),
     /** Opaque binding key resolved through the protected account store. */
     credentialSourceId: z.string().min(1).max(256).optional(),
+    /** Stable built-in preset identity; independent from a multi-account id. */
+    presetSource: z.string().min(1).max(128).optional(),
+    /** Secret-free authentication family used for capability gating. */
+    authType: z.enum(['api-key', 'oauth', 'subscription']).optional(),
     baseUrl: z.string().min(1).optional(),
     endpointFormat: z
       .preprocess(normalizeModelEndpointFormat, z.enum(MODEL_ENDPOINT_FORMATS))

@@ -48,6 +48,8 @@ function normalizeQueuedMessage(value: unknown): QueuedUserMessage | null {
   } else {
     delete normalized.deliveryUserMessageItemId
   }
+  if (source.serviceTier === 'priority') normalized.serviceTier = 'priority'
+  else delete normalized.serviceTier
   return normalized
 }
 

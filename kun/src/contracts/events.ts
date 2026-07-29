@@ -25,7 +25,8 @@ import {
 import {
   SteeringEntrySchema,
   TurnClientSurfaceSchema,
-  TurnReasoningEffortSchema
+  TurnReasoningEffortSchema,
+  TurnServiceTierSchema
 } from './turns.js'
 
 /**
@@ -203,6 +204,7 @@ export const TurnLifecycleEvent = RuntimeEventBase.extend({
   providerId: z.string().min(1).optional(),
   accountId: z.string().min(1).optional(),
   reasoningEffort: TurnReasoningEffortSchema.optional(),
+  serviceTier: TurnServiceTierSchema.optional(),
   clientSurface: TurnClientSurfaceSchema.optional(),
   approvalPolicy: ApprovalPolicySchema.optional(),
   sandboxMode: SandboxModeSchema.optional(),

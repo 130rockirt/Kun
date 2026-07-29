@@ -16,6 +16,7 @@ import {
   GraphControlService,
   GraphLearningService,
   GraphMailbox,
+  GraphPlanningDraftConflictError,
   GraphRecoveryService,
   GraphRetentionService,
   GraphRunConflictError,
@@ -30,6 +31,10 @@ import type { SessionStore } from '../ports/session-store.js'
 import type { ThreadStore } from '../ports/thread-store.js'
 import type { RuntimeEventRecorder } from '../services/runtime-event-recorder.js'
 import { createGraphCheckVerifier } from '../graph/graph-check-verifier.js'
+import {
+  recoverGraphLeadOwnership,
+  recoverGraphPlanningCommits
+} from './graph-runtime-recovery.js'
 
 export type GraphRuntimeStartOptions = {
   delegation: () => DelegationRuntime | undefined
@@ -126,6 +131,11 @@ export class GraphRuntimeComposition {
             `GraphRun source turn is not authorized for Graph orchestration`
           )
         }
+        if (sourceTurn.status !== 'running') {
+          throw new GraphRunConflictError(
+            `GraphRun source turn is not active: ${input.sourceTurnId}`
+          )
+        }
         const [threadIdentity, planIdentity] = await Promise.all([
           this.registry.identify(thread.workspace),
           this.registry.identify(input.plan.workspaceRoot)
@@ -153,9 +163,7 @@ export class GraphRuntimeComposition {
       cancelActive: async (run) => {
         await this.scheduler?.cancelRun(run.id, 'cancel')
       },
-      resumeActive: (run) => {
-        this.scheduler?.resumeRun(run.id)
-      },
+      resumeActive: (run) => this.scheduler?.resumeRun(run.id),
       onSteering: (run, steering) => this.supervisor?.signal({
         runId: run.id,
         reason: 'user_steering',
@@ -280,11 +288,23 @@ export class GraphRuntimeComposition {
     await emitPlanningEvent({
       drafts: this.drafts,
       events: this.options.runtimeEvents
-    }, draft, 'draft_created')
+    }, draft, 'draft_created').catch((error) => {
+      console.warn(
+        `[kun] Graph draft_created projection failed for ${draft.id}: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      )
+    })
     await emitPlanningEvent({
       drafts: this.drafts,
       events: this.options.runtimeEvents
-    }, draft, 'inspection_started')
+    }, draft, 'inspection_started').catch((error) => {
+      console.warn(
+        `[kun] Graph inspection_started projection failed for ${draft.id}: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      )
+    })
     return planningLifecycle(draft)
   }
 
@@ -302,32 +322,50 @@ export class GraphRuntimeComposition {
     sourceTurnId: string
     action: 'suspend' | 'resume' | 'cancel'
   }) {
-    const current = await this.drafts.findBySourceTurn(input.sourceTurnId)
-    if (!current || current.threadId !== input.threadId) return null
     const target =
       input.action === 'cancel'
         ? 'cancelled'
         : input.action === 'resume'
           ? 'planning'
           : 'needs_correction'
-    if (
-      current.status === 'committed' ||
-      current.status === 'cancelled' ||
-      current.status === 'host_error'
-    ) {
-      return planningLifecycle(current)
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const current = await this.drafts.findBySourceTurn(input.sourceTurnId)
+      if (!current || current.threadId !== input.threadId) return null
+      if (
+        current.status === 'committed' ||
+        current.status === 'cancelled' ||
+        current.status === 'host_error'
+      ) {
+        return planningLifecycle(current)
+      }
+      if (current.status === target) return planningLifecycle(current)
+      try {
+        const next = await this.drafts.update(current.id, {
+          expectedRevision: current.revision,
+          status: target,
+          issues: current.issues
+        })
+        await emitPlanningEvent({
+          drafts: this.drafts,
+          events: this.options.runtimeEvents
+        }, next).catch((error) => {
+          console.warn(
+            `[kun] Graph planning event delivery failed after durable revision ` +
+            `${next.id}@${next.revision}: ${
+              error instanceof Error ? error.message : String(error)
+            }`
+          )
+        })
+        return planningLifecycle(next)
+      } catch (error) {
+        if (
+          input.action !== 'cancel' ||
+          !(error instanceof GraphPlanningDraftConflictError) ||
+          attempt === 7
+        ) throw error
+      }
     }
-    if (current.status === target) return planningLifecycle(current)
-    const next = await this.drafts.update(current.id, {
-      expectedRevision: current.revision,
-      status: target,
-      issues: current.issues
-    })
-    await emitPlanningEvent({
-      drafts: this.drafts,
-      events: this.options.runtimeEvents
-    }, next)
-    return planningLifecycle(next)
+    return null
   }
 
   async handleThreadFork(sourceThreadId: string, targetThreadId: string): Promise<void> {
@@ -387,11 +425,23 @@ export class GraphRuntimeComposition {
       ) {
         continue
       }
-      await this.control.cancel(run.id, {
-        commandId: this.options.ids.next('graph_source_turn_terminal'),
-        idempotencyKey: `source-turn-terminal:${threadId}:${sourceTurnId}:${run.id}:${status}`,
-        reason: `owning source turn ended with status ${status}`
-      })
+      try {
+        await this.control.cancel(run.id, {
+          commandId: this.options.ids.next('graph_source_turn_terminal'),
+          idempotencyKey: `source-turn-terminal:${threadId}:${sourceTurnId}:${run.id}:${status}`,
+          reason: `owning source turn ended with status ${status}`
+        })
+      } catch (error) {
+        // Completion may win after list() but before cancel(). That is already
+        // a valid terminal fence for Stop; only a still-live run is an error.
+        const latest = await this.store.get(run.id)
+        if (
+          latest?.status === 'completed' ||
+          latest?.status === 'failed' ||
+          latest?.status === 'cancelled'
+        ) continue
+        throw error
+      }
     }
   }
 
@@ -439,10 +489,32 @@ export class GraphRuntimeComposition {
       nextId
     })
     await this.recovery.reconcile()
-    await this.recoverPlanningCommits()
+    const recoveredReadyRunIds = await recoverGraphPlanningCommits({
+      store: this.store,
+      drafts: this.drafts,
+      control: this.control,
+      runtimeEvents: this.options.runtimeEvents,
+      ids: this.options.ids
+    })
     this.supervisor.start()
+    await recoverGraphLeadOwnership({
+      store: this.store,
+      drafts: this.drafts,
+      supervisor: this.supervisor,
+      config: this.options.config,
+      threadStore: this.options.threadStore,
+      handleSourceTurnTerminal: (threadId, sourceTurnId, status) =>
+        this.handleSourceTurnTerminal(threadId, sourceTurnId, status)
+    })
     this.scheduler.start()
-    await this.recoverLeadOwnership()
+    for (const runId of recoveredReadyRunIds) {
+      const run = await this.store.get(runId)
+      if (run?.status !== 'ready') continue
+      await this.control.start(run.id, {
+        commandId: this.options.ids.next('graph_plan_recovery_start'),
+        idempotencyKey: `graph-plan-recovery-start:${run.id}`
+      })
+    }
     this.learning.start()
     this.trackBackground('Graph retention failed', this.runRetention())
     this.retentionTimer = setInterval(() => {
@@ -471,128 +543,24 @@ export class GraphRuntimeComposition {
   async stop(): Promise<void> {
     if (this.retentionTimer) clearInterval(this.retentionTimer)
     this.retentionTimer = undefined
-    await this.scheduler?.stop()
     await this.supervisor?.stop()
+    await this.quiesceExecution()
     await this.learning.stop()
     await Promise.allSettled([...this.backgroundTasks])
   }
 
+  /**
+   * Stop Graph worker admission and durably classify active attempts before
+   * source Lead turns are parked. Unlike stop(), this never waits for a Lead
+   * queue, so host shutdown cannot deadlock behind an active Lead.
+   */
+  async quiesceExecution(): Promise<void> {
+    this.supervisor?.quiesceReviews()
+    await this.scheduler?.stop()
+  }
+
   private async runRetention(): Promise<void> {
     await this.retention.run()
-  }
-
-  private async recoverPlanningCommits(): Promise<void> {
-    const drafts = await this.drafts.list({ statuses: ['committing'] })
-    for (const draft of drafts) {
-      let run = await this.store.get(draft.reservedRunId)
-      if (!run) {
-        const plan = await this.drafts.readCommitPlan(draft.id)
-        if (!plan) {
-          const failed = await this.drafts.update(draft.id, {
-            expectedRevision: draft.revision,
-            status: 'host_error',
-            issues: [{
-              code: 'graph_commit_plan_missing',
-              path: [],
-              message: 'The persisted commit plan is missing.',
-              repairHint: 'Cancel this draft and start a new Graph turn.'
-            }]
-          })
-          await emitPlanningEvent({
-            drafts: this.drafts,
-            events: this.options.runtimeEvents
-          }, failed)
-          continue
-        }
-        run = (await this.control.create({
-          runId: draft.reservedRunId,
-          threadId: draft.threadId,
-          projectId: draft.projectId,
-          sourceTurnId: draft.sourceTurnId,
-          plan,
-          commandId: this.options.ids.next('graph_plan_recovery'),
-          idempotencyKey: `graph-plan-commit:${draft.sourceTurnId}`,
-          start: true
-        })).run
-      }
-      const committed = await this.drafts.update(draft.id, {
-        expectedRevision: draft.revision,
-        status: 'committed',
-        issues: [],
-        committedRunId: run.id
-      })
-      await emitPlanningEvent({
-        drafts: this.drafts,
-        events: this.options.runtimeEvents
-      }, committed)
-    }
-  }
-
-  private async recoverLeadOwnership(): Promise<void> {
-    const runs = await this.store.list()
-    for (const run of runs) {
-      const thread = await this.options.threadStore.get(run.threadId)
-      const sourceTurn = thread?.turns.find((turn) => turn.id === run.sourceTurnId)
-      if (!sourceTurn) continue
-      const terminal =
-        run.status === 'completed' ||
-        run.status === 'failed' ||
-        run.status === 'cancelled'
-      if (sourceTurn.status !== 'running') {
-        if (
-          !terminal &&
-          (sourceTurn.status === 'completed' ||
-            sourceTurn.status === 'failed' ||
-            sourceTurn.status === 'aborted')
-        ) {
-          await this.handleSourceTurnTerminal(
-            run.threadId,
-            run.sourceTurnId,
-            sourceTurn.status
-          )
-        }
-        continue
-      }
-      const lifecycle = sourceTurn.graphLeadLifecycle
-      const lastDeliveredSeq =
-        lifecycle?.runId === run.id
-          ? lifecycle.lastDeliveredSeq
-          : 0
-      const unseenSignals = (await this.store.events(run.id, lastDeliveredSeq))
-        .flatMap((event) => event.event.type === 'supervision_requested'
-          ? [{
-              reason: event.event.payload.reason,
-              nodeIds: event.event.payload.nodeIds,
-              digest: event.event.payload.digest
-            }]
-          : [])
-      const resumedAt = lifecycle?.resumedAt ? Date.parse(lifecycle.resumedAt) : 0
-      const suspendedAt = lifecycle?.suspendedAt ? Date.parse(lifecycle.suspendedAt) : 0
-      const interruptedContinuation =
-        lifecycle?.runId === run.id &&
-        Number.isFinite(resumedAt) &&
-        resumedAt > 0 &&
-        (!Number.isFinite(suspendedAt) || resumedAt > suspendedAt)
-      if (!terminal && unseenSignals.length === 0 && !interruptedContinuation) continue
-      const latestSignals = unseenSignals.slice(-32)
-      this.supervisor.redeliver({
-        runId: run.id,
-        reason: terminal
-          ? 'completion'
-          : latestSignals.at(-1)
-            ? latestSignals.at(-1)!.reason
-            : 'recovery',
-        nodeIds: [...new Set(latestSignals.flatMap((signal) => signal.nodeIds))],
-        digest: latestSignals.length > 0
-          ? latestSignals.map((signal) => signal.digest)
-              .filter(Boolean)
-              .join('\n')
-              .slice(0, 16_384)
-          : terminal
-            ? `Recovered terminal GraphRun ${run.id} with status ${run.status}.`
-            : `Recovered interrupted Lead continuation for GraphRun ${run.id}.`
-      })
-    }
   }
 
   private trackBackground(label: string, operation: Promise<unknown>): void {

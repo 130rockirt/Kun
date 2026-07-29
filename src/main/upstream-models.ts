@@ -10,6 +10,7 @@ import {
   listNonTextModelIds,
   modelProviderModelProfile,
   projectExecutableModelRoutePools,
+  resolveModelProviderPresetSource,
   resolveKunRuntimeSettings,
   type AppSettingsV1,
   type ModelProviderModelProfileV1
@@ -113,6 +114,9 @@ export function modelListFromSharedConnections(value: unknown): FetchUpstreamMod
           ? { maxOutputTokens: positiveInteger(capability.maxOutputTokens) }
           : {}),
         ...(reasoning ? { reasoning } : {}),
+        ...(sharedServiceTiers(capability.serviceTiers).length
+          ? { serviceTiers: sharedServiceTiers(capability.serviceTiers) }
+          : {}),
         ...(isModelEndpointFormat(capability.endpointFormat)
           ? { endpointFormat: capability.endpointFormat }
           : {}),
@@ -121,6 +125,9 @@ export function modelListFromSharedConnections(value: unknown): FetchUpstreamMod
     }))
     return [{
       providerId: profile.id,
+      ...(typeof profile.presetSource === 'string' && profile.presetSource.trim()
+        ? { presetSource: profile.presetSource.trim() }
+        : {}),
       label: typeof profile.name === 'string' && profile.name.trim() ? profile.name.trim() : profile.id,
       modelIds,
       modelProfiles,
@@ -194,8 +201,10 @@ async function readConfiguredModelGroups(settings: AppSettingsV1): Promise<Model
   for (const provider of getModelProviderSettings(settings).providers) {
     const modelIds = provider.models.filter((id) => isProviderComposerChatModelId(provider, id))
     if (modelIds.length === 0) continue
+    const presetSource = resolveModelProviderPresetSource(provider)?.preset.id
     groups.push({
       providerId: provider.id,
+      ...(presetSource ? { presetSource } : {}),
       label: provider.name,
       modelIds,
       modelProfiles: provider.modelProfiles
@@ -252,6 +261,9 @@ function mergeModelGroups(groups: readonly ModelProviderModelGroup[]): ModelProv
     ])
     byProvider.set(providerId, {
       providerId,
+      ...(group.presetSource ?? existing?.presetSource
+        ? { presetSource: group.presetSource ?? existing?.presetSource }
+        : {}),
       label: group.label.trim() || providerId,
       modelIds,
       modelProfiles: {
@@ -322,6 +334,15 @@ function stringValues(value: unknown): string[] {
   return Array.isArray(value)
     ? value.flatMap((item) => typeof item === 'string' ? [item] : [])
     : []
+}
+
+function sharedServiceTiers(
+  value: unknown
+): NonNullable<ModelProviderModelProfileV1['serviceTiers']> {
+  return [...new Set(stringValues(value).filter(
+    (tier): tier is NonNullable<ModelProviderModelProfileV1['serviceTiers']>[number] =>
+      tier === 'priority' || tier === 'flex'
+  ))]
 }
 
 function positiveInteger(value: unknown): number | undefined {

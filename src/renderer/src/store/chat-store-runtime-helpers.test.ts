@@ -17,6 +17,7 @@ describe('chat store runtime helpers', () => {
   it('detects optimistic user block ids', () => {
     expect(isOptimisticUserBlockId('u-123')).toBe(true)
     expect(isOptimisticUserBlockId('q-123-0')).toBe(true)
+    expect(isOptimisticUserBlockId('graph-steering-123')).toBe(true)
     expect(isOptimisticUserBlockId('item_turn_abc_user')).toBe(false)
   })
 

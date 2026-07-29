@@ -335,7 +335,10 @@ export function compileGraphIntent(input: {
     title: task.title,
     objective: task.objective,
     priority: task.priority,
-    required: task.required,
+    // Loop gates are scheduler-owned control nodes. They never produce an
+    // accepted worker result, so treating one as required would make its
+    // normal terminal `skipped` state prevent GraphRun completion.
+    required: task.kind === 'loop_gate' ? false : task.required,
     riskClass: task.riskClass,
     ...(task.model || task.providerId || task.reasoningEffort
       ? {
@@ -453,16 +456,38 @@ function compileIntentEdges(
   strategy: GraphExecutionStrategyKind
 ): GraphPlanV1['edges'] {
   const edges: GraphPlanV1['edges'] = []
-  const addControl = (from: string, to: string, label?: string) => {
-    if (edges.some((edge) => edge.kind !== 'message' && edge.from === from && edge.to === to)) {
+  type ControlOutcome = Extract<
+    GraphPlanV1['edges'][number],
+    { kind: 'control' }
+  >['requiredOutcomes'][number]
+  const addControl = (
+    from: string,
+    to: string,
+    label?: string,
+    requiredOutcomes: ControlOutcome[] = ['accepted']
+  ) => {
+    const existing = edges.find((edge) =>
+      edge.kind === 'control' && edge.from === from && edge.to === to)
+    if (existing?.kind === 'control') {
+      existing.requiredOutcomes = [
+        ...new Set([...existing.requiredOutcomes, ...requiredOutcomes])
+      ]
       return
     }
+    // Preserve the legacy de-duplication for ordinary accepted dependencies,
+    // while still allowing a LoopGate condition edge beside a data edge so it
+    // can observe repair/failed control outcomes.
+    if (
+      requiredOutcomes.length === 1 &&
+      requiredOutcomes[0] === 'accepted' &&
+      edges.some((edge) => edge.kind !== 'message' && edge.from === from && edge.to === to)
+    ) return
     edges.push({
       id: `edge_${edges.length + 1}`,
       kind: 'control',
       from,
       to,
-      requiredOutcomes: ['accepted'],
+      requiredOutcomes,
       ...(label ? { label } : {})
     })
   }
@@ -495,6 +520,15 @@ function compileIntentEdges(
       addControl(intent.tasks[index - 1]!.id, task.id, 'pipeline')
     }
     if (task.loop) {
+      // `continueOn` chooses the branch; it must not decide whether the gate
+      // itself is reachable. Admit every non-cancellation terminal outcome so
+      // the gate can choose either continuation or exit.
+      addControl(
+        task.loop.conditionTaskId,
+        task.id,
+        'bounded loop condition',
+        ['accepted', 'repair_required', 'failed', 'skipped']
+      )
       addControl(task.id, task.loop.continueTaskId, 'bounded loop continuation')
       addControl(task.id, task.loop.exitTaskId, 'bounded loop exit')
       if (task.loop.exhaustionTaskId) {

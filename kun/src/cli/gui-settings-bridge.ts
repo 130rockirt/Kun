@@ -62,6 +62,10 @@ const GuiModelProfileSchema = ModelCapabilityMetadata.omit({ id: true }).extend(
 const GuiProviderSchema = z.object({
   id: z.string().min(1).max(128),
   name: z.string().min(1).max(120).optional(),
+  presetSource: z.object({
+    presetId: z.string().min(1).max(128),
+    mode: z.enum(['api', 'token-plan'])
+  }).optional(),
   baseUrl: z.string().max(2_048).default(''),
   endpointFormat: z.enum(MODEL_ENDPOINT_FORMATS).default(DEFAULT_MODEL_ENDPOINT_FORMAT),
   kind: z.enum(GUI_PROVIDER_KINDS).default('http'),
@@ -270,7 +274,7 @@ export function modelConnectionSnapshotFromGuiSettings(
       id: provider.id,
       accountId: `account:${provider.id}`,
       name: provider.name ?? provider.id,
-      presetSource: provider.id,
+      presetSource: guiProviderPresetId(provider),
       kind: provider.kind,
       authType: legacyAuthType(provider),
       ...(httpUrl(provider.baseUrl) ? { baseUrl: provider.baseUrl } : {}),
@@ -308,7 +312,7 @@ function guiModelCapability(
     : {}
   const builtIn = modelCapabilitiesForProviderModel({
     providerId: provider.id,
-    presetSource: provider.id,
+    presetSource: guiProviderPresetId(provider),
     baseUrl: provider.baseUrl,
     kind: provider.kind,
     model
@@ -602,6 +606,8 @@ export async function syncGuiProviderCatalogToConfig(
       kind,
       apiKey: options.stripCredentials ? '' : current?.apiKey ?? '',
       credentialSourceId: current?.credentialSourceId ?? credentialSourceId(provider.id),
+      presetSource: guiProviderPresetId(provider),
+      authType: legacyAuthType(provider),
       ...(baseUrl ? { baseUrl } : {}),
       endpointFormat: provider.endpointFormat ?? current?.endpointFormat ?? DEFAULT_MODEL_ENDPOINT_FORMAT,
       models: provider.models,
@@ -771,16 +777,21 @@ function uniqueModels(models: readonly string[]): string[] {
 }
 
 function legacyAuthType(provider: GuiProviderCatalog): 'api-key' | 'subscription' {
-  const id = provider.id.toLowerCase()
+  const id = guiProviderPresetId(provider).toLowerCase()
   return provider.kind === 'agent-sdk' ||
     provider.kind === 'antigravity-cli' ||
     provider.kind === 'cursor-sdk' ||
     id.includes('subscription') ||
     id.includes('token-plan') ||
+    id === 'codex' ||
     id === 'kimi-code' ||
     id === 'opencode-go'
     ? 'subscription'
     : 'api-key'
+}
+
+function guiProviderPresetId(provider: GuiProviderCatalog): string {
+  return provider.presetSource?.presetId.trim() || provider.id
 }
 
 function httpUrl(value: string): boolean {

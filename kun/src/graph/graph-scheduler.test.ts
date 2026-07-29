@@ -301,6 +301,9 @@ describe('GraphScheduler', () => {
       expectedSeq: waiting.lastEventSeq,
       expectedRevision: waiting.currentRevision
     })
+    const immediatelyAdvanced = await harness.store.get('run_harness')
+    expect(immediatelyAdvanced?.status).not.toBe('awaiting_human')
+    expect(immediatelyAdvanced?.nodes.research.status).toBe('accepted')
     const completed = await waitFor(async () => {
       const run = await harness.store.get('run_harness')
       return run?.status === 'completed' ? run : null

@@ -229,20 +229,22 @@ describe('buildToolPreferenceInstruction', () => {
 
   it('makes the original Graph Lead actively inspect, wait, and guide workers', () => {
     const instruction = buildToolPreferenceInstruction([
-      { name: 'graph_create_run', description: 'Create a GraphRun' },
+      { name: 'graph_define_plan', description: 'Define and commit the planning draft' },
       { name: 'graph_control_run', description: 'Inspect a GraphRun' },
-      { name: 'graph_supervise_node', description: 'Supervise a Graph worker' }
+      { name: 'graph_supervise_node', description: 'Supervise a Graph worker' },
+      { name: 'graph_review_node', description: 'Review a submitted Graph result' }
     ])
 
-    expect(instruction).toContain(
-      'host supplies omitted defaults, including seven days per run, 24 hours per node, and the warning ratio'
-    )
-    expect(instruction).toContain('Creating or dispatching a Graph is not completion')
+    expect(instruction).toContain('A durable Graph planning draft already exists')
+    expect(instruction).toContain('The host supplies every execution mechanic')
+    expect(instruction).toContain('one changed correction')
+    expect(instruction).toContain('before `graph_define_plan` returns committed')
     expect(instruction).toContain('inspect their bounded live sessions')
     expect(instruction).toContain('wait and recheck')
     expect(instruction).toContain('guide drift, missing evidence')
     expect(instruction).toContain('Executors do not manage Graph flow')
     expect(instruction).toContain('explicitly pass or revise every node')
+    expect(instruction).not.toContain('graph_create_run')
   })
 
   it('prefers specialized MCP source navigation with available built-in fallback', () => {

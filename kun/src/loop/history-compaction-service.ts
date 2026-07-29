@@ -56,6 +56,7 @@ export class HistoryCompactionService {
     model: string
     providerId?: string
     accountId?: string
+    serviceTier?: 'priority'
     signal: AbortSignal
     threadId: string
     turnId: string
@@ -207,6 +208,7 @@ export class HistoryCompactionService {
                   model: compactionModel.model,
                   ...(compactionModel.providerId ? { providerId: compactionModel.providerId } : {}),
                   ...(compactionModel.accountId ? { accountId: compactionModel.accountId } : {}),
+                  ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
                   modelClient: this.deps.model,
                   prefix: this.deps.prefix,
                   contextCompaction,

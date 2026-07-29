@@ -9,6 +9,7 @@ import { useTranslation } from 'react-i18next'
 import { useChatStore } from '../../store/chat-store'
 import { openGraphChildThread } from '../../graph/graph-child-navigation'
 import { useGraphStore } from '../../graph/graph-store'
+import type { GraphPlanningDraftView } from '../../graph/graph-types'
 import { GraphAgentsView } from './GraphAgentsView'
 import { GraphLearningView } from './GraphLearningView'
 import { GraphPlanningCard } from './GraphPlanningCard'
@@ -31,6 +32,19 @@ export {
 } from './graph-elements'
 
 type View = 'run' | 'agents' | 'learning'
+
+export function selectGraphPlanningDraft(
+  drafts: readonly GraphPlanningDraftView[],
+  hasRun: boolean
+): GraphPlanningDraftView | null {
+  const active = drafts.find((item) =>
+    !['committed', 'cancelled', 'host_error'].includes(item.draft.status))
+  if (active) return active
+  if (hasRun) return null
+  // A host failure is rendered once by TurnService in the chat timeline.
+  // Keep the durable draft queryable by id without creating a second error surface here.
+  return drafts.find((item) => item.draft.status !== 'host_error') ?? null
+}
 
 export function GraphModePanel({
   className = '',
@@ -104,9 +118,7 @@ export function GraphModePanel({
   }, [refreshProject, workspaceRoot])
 
   const run = runs.find((item) => item.id === selectedRunId) ?? runs[0] ?? null
-  const planningDraft = drafts.find((item) =>
-    !['committed', 'cancelled'].includes(item.draft.status)) ??
-    (!run ? drafts[0] ?? null : null)
+  const planningDraft = selectGraphPlanningDraft(drafts, Boolean(run))
   const selectedNode = run && selectedNodeId ? run.nodes[selectedNodeId] : undefined
   const canvasFocusRequestKey = run && selectedNodeId
     ? `${activeThreadId ?? ''}:${run.id}:${selectedNodeId}`

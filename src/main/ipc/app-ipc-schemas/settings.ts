@@ -486,7 +486,9 @@ const checkpointCleanupPatchSchema = z.object({
 }).strict()
 
 const notificationsPatchSchema = z.object({
-  turnComplete: z.boolean().optional()
+  turnComplete: z.boolean().optional(),
+  mainAgentTurnComplete: z.boolean().optional(),
+  subagentTurnComplete: z.boolean().optional()
 }).strict()
 
 const appBehaviorPatchSchema = z.object({

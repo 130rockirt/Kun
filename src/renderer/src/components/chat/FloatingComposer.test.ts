@@ -71,11 +71,34 @@ import {
   type ComposerFileReference
 } from '../../lib/composer-file-references'
 import { filesUnderDirectory } from '../../lib/workspace-file-index'
+import type { ModelProviderModelGroup } from '@shared/kun-gui-api'
 
 const DEEPSEEK_PROVIDER_GROUP = {
   providerId: 'deepseek',
   label: 'DeepSeek',
   modelIds: ['deepseek-v4-pro', 'deepseek-v4-flash']
+}
+
+const CODEX_PROVIDER_GROUP: ModelProviderModelGroup = {
+  providerId: 'codex-2',
+  presetSource: 'codex',
+  label: 'ChatGPT subscription 2',
+  modelIds: ['gpt-5.4', 'gpt-5.4-mini'],
+  modelProfiles: {
+    'gpt-5.4': {
+      inputModalities: ['text', 'image'],
+      outputModalities: ['text'],
+      supportsToolCalling: true,
+      messageParts: ['text', 'image_url'],
+      serviceTiers: ['priority']
+    },
+    'gpt-5.4-mini': {
+      inputModalities: ['text', 'image'],
+      outputModalities: ['text'],
+      supportsToolCalling: true,
+      messageParts: ['text', 'image_url']
+    }
+  }
 }
 
 describe('FloatingComposer usage history visibility', () => {
@@ -183,6 +206,45 @@ describe('FloatingComposer workspace controls visibility', () => {
 })
 
 describe('FloatingComposer Graph entry', () => {
+  it('hides Graph controls and status while Graph is disabled', () => {
+    useChatStore.setState({
+      activeThreadId: null,
+      activeThreadGoal: null,
+      activeThreadTodos: null,
+      blocks: [],
+      route: 'chat',
+      workspaceRoot: '/Users/test/code/acme-project',
+      threads: []
+    })
+
+    const html = renderToStaticMarkup(createElement(FloatingComposer, {
+      input: '',
+      setInput: () => undefined,
+      mode: 'agent',
+      setMode: () => undefined,
+      orchestration: 'graph',
+      graphEnabled: false,
+      onOrchestrationChange: () => undefined,
+      busy: true,
+      currentTurnOrchestration: 'graph',
+      runtimeReady: true,
+      hasActiveThread: true,
+      composerModel: 'test-model',
+      composerPickList: ['test-model'],
+      onComposerModelChange: () => undefined,
+      queuedMessages: [],
+      onRemoveQueuedMessage: () => undefined,
+      onSend: () => undefined,
+      onInterrupt: () => undefined,
+      onPlanCommand: () => undefined
+    }))
+
+    expect(html).not.toContain('data-composer-graph-menu-item')
+    expect(html).not.toContain('data-composer-graph-running')
+    expect(html).not.toContain('data-composer-graph-active')
+    expect(html).not.toContain('data-composer-stack-item="graph"')
+  })
+
   it('keeps Graph inside the plus menu and selects it explicitly', async () => {
     useChatStore.setState({
       activeThreadId: null,
@@ -580,6 +642,28 @@ describe('FloatingComposer queued guidance', () => {
       text: 'build the plan',
       mode: 'plan'
     })).toBe(false)
+  })
+
+  it('disables guidance when a compact sidebar row carries structured context', async () => {
+    const previousLanguage = i18n.language
+    await i18n.changeLanguage('en')
+    try {
+      const html = renderToStaticMarkup(createElement(FloatingComposerQueuedMessages, {
+        messages: [{
+          id: 'q-design',
+          text: 'make the card smaller',
+          guiDesignMode: true
+        }],
+        onGuide: () => undefined,
+        onRemove: () => undefined
+      }))
+
+      expect(html).toContain('aria-label="Guide"')
+      expect(html).toContain('disabled=""')
+      expect(html).toContain('Only plain-text follow-ups can guide')
+    } finally {
+      await i18n.changeLanguage(previousLanguage)
+    }
   })
 
   it('hides a durable in-flight item while keeping later pending items visible', () => {
@@ -1319,6 +1403,51 @@ describe('FloatingComposer model controls', () => {
     expect(html).toContain('aria-label="Model"')
     expect(html).toContain('aria-label="Reasoning: Ultra"')
     expect(html).not.toContain('Model and reasoning settings')
+  })
+
+  it('shows an active Fast toggle for an eligible multi-account Codex subscription', () => {
+    const html = renderToStaticMarkup(
+      createElement(FloatingComposerModelPicker, {
+        compact: false,
+        mode: 'select',
+        controlVariant: 'split',
+        composerModel: 'gpt-5.4',
+        composerProviderId: 'codex-2',
+        composerPickList: ['gpt-5.4'],
+        composerModelGroups: [CODEX_PROVIDER_GROUP],
+        composerReasoningEffort: 'high',
+        composerFastMode: true,
+        canChangeModel: true,
+        onComposerModelChange: () => undefined,
+        onComposerReasoningEffortChange: () => undefined,
+        onComposerFastModeChange: () => undefined
+      })
+    )
+
+    expect(html).toContain('aria-label="Fast mode on"')
+    expect(html).toContain('aria-pressed="true"')
+    expect(html).toContain('lucide-zap')
+  })
+
+  it('hides Fast for Codex subscription models that do not advertise priority', () => {
+    const html = renderToStaticMarkup(
+      createElement(FloatingComposerModelPicker, {
+        compact: false,
+        mode: 'select',
+        controlVariant: 'split',
+        composerModel: 'gpt-5.4-mini',
+        composerProviderId: 'codex-2',
+        composerPickList: ['gpt-5.4-mini'],
+        composerModelGroups: [CODEX_PROVIDER_GROUP],
+        composerFastMode: true,
+        canChangeModel: true,
+        onComposerModelChange: () => undefined,
+        onComposerFastModeChange: () => undefined
+      })
+    )
+
+    expect(html).not.toContain('Fast mode on')
+    expect(html).not.toContain('lucide-zap')
   })
 
   it('keeps provider setup reachable when no chat providers are available', () => {

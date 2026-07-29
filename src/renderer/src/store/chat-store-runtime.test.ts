@@ -13,6 +13,7 @@ import {
   MAX_WATCHED_COMPLETION_NOTIFICATIONS,
   rememberPendingClawFeishuMirror,
   takePendingClawFeishuMirror,
+  turnCompleteNotificationSource,
   watchTurnCompletionNotification
 } from './chat-store-runtime'
 import { clearBusyWatchdog, resetBusyRecoveryAttempts } from './chat-store-schedulers'
@@ -78,9 +79,50 @@ function makeThread(overrides: Partial<NormalizedThread> & Pick<NormalizedThread
     mode: overrides.mode ?? 'agent',
     workspace: overrides.workspace ?? '/workspace/deepseek-gui',
     ...(overrides.archived !== undefined ? { archived: overrides.archived } : {}),
-    ...(overrides.status ? { status: overrides.status } : {})
+    ...(overrides.status ? { status: overrides.status } : {}),
+    ...(overrides.relation ? { relation: overrides.relation } : {}),
+    ...(overrides.parentThreadId ? { parentThreadId: overrides.parentThreadId } : {})
   }
 }
+
+describe('completion notification classification', () => {
+  it.each([
+    ['primary', 'main-agent'],
+    ['fork', 'main-agent'],
+    ['side', 'subagent'],
+    [undefined, 'main-agent']
+  ] as const)('classifies %s threads as %s', (relation, expected) => {
+    const thread = makeThread({
+      id: 'thread-classified',
+      ...(relation ? { relation } : {})
+    })
+
+    expect(turnCompleteNotificationSource('thread-classified', { threads: [thread] }))
+      .toBe(expected)
+  })
+
+  it('falls back to main-agent when the thread is not in the local list', () => {
+    expect(turnCompleteNotificationSource('thread-missing', { threads: [] }))
+      .toBe('main-agent')
+  })
+
+  it('recognizes an active side session even when sidebar filtering removed it', () => {
+    expect(turnCompleteNotificationSource('thread-side', {
+      threads: [],
+      activeThreadId: 'thread-side',
+      activeThreadRelation: 'side'
+    })).toBe('subagent')
+  })
+
+  it('recognizes a tracked side conversation after navigation', () => {
+    expect(turnCompleteNotificationSource('thread-side', {
+      threads: [],
+      sideConversations: {
+        'thread-side': { threadId: 'thread-side' }
+      } as unknown as ChatState['sideConversations']
+    })).toBe('subagent')
+  })
+})
 
 describe('code thread classification', () => {
   it('keeps archived Code threads visible for the sidebar archive view', () => {
@@ -139,7 +181,7 @@ describe('code thread classification', () => {
     expect(isCodeThread(designWorkspaceThread)).toBe(false)
   })
 
-  it('shows a visible requirement thread in the project sidebar without classifying it as Code', () => {
+  it('shows a requirement thread in the project sidebar immediately without classifying it as Code', () => {
     const requirement = makeThread({
       id: 'thr_requirement',
       title: 'Requirement draft'
@@ -165,7 +207,7 @@ describe('code thread classification', () => {
       undefined,
       undefined,
       hiddenRegistry
-    )).toBe(false)
+    )).toBe(true)
     expect(isCodeSidebarThread(
       requirement,
       [],
@@ -453,6 +495,9 @@ describe('thread event sink binding', () => {
 
     expect(getState()).toEqual(projectedOnce)
     expect(showTurnCompleteNotification).toHaveBeenCalledTimes(1)
+    expect(showTurnCompleteNotification).toHaveBeenCalledWith(
+      expect.objectContaining({ source: 'main-agent' })
+    )
     expect(refreshThreads).toHaveBeenCalledTimes(1)
     expect(drainQueuedMessages).toHaveBeenCalledTimes(1)
     vi.unstubAllGlobals()

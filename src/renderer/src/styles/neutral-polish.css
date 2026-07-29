@@ -148,7 +148,7 @@ html:not([data-ikun-mode='on']):not([data-retroma-mode='on']):not(
     [data-ui-plugin-presentation='on']
   )
   .ds-workbench-side-rail {
-  background: var(--ds-bg-canvas);
+  background: var(--ds-sidebar-surface-bg);
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
 }

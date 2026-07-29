@@ -123,7 +123,7 @@ describe('plan build actions', () => {
     act(() => renderer!.unmount())
   })
 
-  it('keeps Graph discoverable but disabled when Graph Mode is unavailable', async () => {
+  it('hides Graph when Graph Mode is unavailable', async () => {
     let renderer: ReactTestRenderer
 
     await act(async () => {
@@ -137,12 +137,10 @@ describe('plan build actions', () => {
 
     const actions = renderer!.root.findByProps({ 'data-plan-build-actions-variant': 'panel' })
     const direct = renderer!.root.findByProps({ 'data-plan-build-orchestration': 'direct' })
-    const graph = renderer!.root.findByProps({ 'data-plan-build-orchestration': 'graph' })
-    expect(actions.props.className).toContain('grid-cols-2')
+    const graph = renderer!.root.findAllByProps({ 'data-plan-build-orchestration': 'graph' })
+    expect(actions.props.className).toContain('grid-cols-1')
     expect(direct.props.disabled).toBe(false)
-    expect(graph.props.disabled).toBe(true)
-    expect(graph.props.title).toBe('Enable experimental Graph Mode in Settings → AI assistant')
-    expect(graph.props['aria-label']).toContain('Enable experimental Graph Mode')
+    expect(graph).toHaveLength(0)
 
     act(() => renderer!.unmount())
   })

@@ -727,6 +727,7 @@ export type CoreRuntimeEventJson = {
   /** turn_started: the effective routing and reasoning configuration. */
   accountId?: string
   reasoningEffort?: 'auto' | 'off' | 'low' | 'medium' | 'high' | 'max'
+  serviceTier?: 'priority'
   mode?: 'agent' | 'plan'
   /** thread_created / thread_updated: the thread's (possibly upgraded) title. */
   title?: string

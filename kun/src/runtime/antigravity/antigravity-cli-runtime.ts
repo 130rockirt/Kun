@@ -39,6 +39,7 @@ import {
   type DelegatedSessionCoordinator
 } from '../delegated-session-binding.js'
 import { shellSpawnEnv } from '../../adapters/tool/builtin-tool-utils.js'
+import { parkDelegatedGraphTurnAfterRecovery } from '../delegated-graph-turn-policy.js'
 
 const MAX_STDOUT_BYTES = 8 * 1024 * 1024
 const MAX_STDERR_BYTES = 256 * 1024
@@ -179,6 +180,48 @@ export class AntigravityCliRuntime implements DelegatedTurnRuntime {
         turnId,
         status: 'failed',
         error: 'no input for Antigravity subscription turn'
+      })
+      return 'failed'
+    }
+    if (turn.orchestration === 'graph') {
+      const message =
+        'Graph mode is unavailable for the Antigravity CLI provider because it cannot execute Kun structured Graph tools. Choose a tool-capable provider and continue the same planning draft.'
+      const itemId = this.deps.ids.next('item_assistant')
+      await this.deps.events.record({
+        kind: 'assistant_text_delta',
+        threadId,
+        turnId,
+        itemId,
+        item: makeAssistantTextItem({
+          id: itemId,
+          threadId,
+          turnId,
+          text: message,
+          status: 'running'
+        })
+      })
+      await this.deps.turns.applyItem(
+        threadId,
+        makeAssistantTextItem({
+          id: itemId,
+          threadId,
+          turnId,
+          text: message,
+          status: 'completed'
+        })
+      )
+      const graphCompletion = await parkDelegatedGraphTurnAfterRecovery(
+        this.deps.turns,
+        { threadId, turnId }
+      )
+      if (graphCompletion === 'suspended') return 'suspended'
+      await this.deps.turns.finishTurn({
+        threadId,
+        turnId,
+        status: 'failed',
+        error: message,
+        code: 'antigravity_graph_tools_unsupported',
+        severity: 'error'
       })
       return 'failed'
     }

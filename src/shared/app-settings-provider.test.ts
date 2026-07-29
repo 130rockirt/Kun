@@ -338,9 +338,39 @@ describe('ChatGPT subscription migration', () => {
           supportedEfforts: ['low', 'medium', 'high', 'max'],
           defaultEffort: 'high',
           requestProtocol: 'openai-responses'
-        }
+        },
+        serviceTiers: ['priority']
       })
     }
+    expect(provider.modelProfiles['gpt-5.4-mini'].serviceTiers).toBeUndefined()
+    expect(provider.modelProfiles['gpt-5.3-codex-spark'].serviceTiers).toBeUndefined()
+  })
+
+  it('removes stale priority metadata from unsupported Codex models', () => {
+    const normalized = normalizeModelProviderSettings({
+      providers: [{
+        id: 'codex',
+        name: 'ChatGPT 订阅',
+        apiKey: 'oauth-json',
+        baseUrl: 'https://chatgpt.com/backend-api/codex',
+        endpointFormat: 'custom_endpoint',
+        models: ['gpt-5.4-mini'],
+        modelProfiles: {
+          'gpt-5.4-mini': {
+            inputModalities: ['text', 'image'],
+            outputModalities: ['text'],
+            supportsToolCalling: true,
+            messageParts: ['text', 'image_url'],
+            serviceTiers: ['priority']
+          }
+        }
+      }]
+    })
+
+    expect(
+      normalized.providers.find((item) => item.id === 'codex')
+        ?.modelProfiles['gpt-5.4-mini'].serviceTiers
+    ).toBeUndefined()
   })
 
   it('keeps custom names and custom model collections unchanged', () => {

@@ -127,7 +127,8 @@ describe('chat-store-thread-actions queued messages', () => {
     state.composerProviderId = 'deepseek'
 
     await expect(actions.sendMessage('use these next-turn settings', 'agent', {
-      reasoningEffort: 'high'
+      reasoningEffort: 'high',
+      serviceTier: 'priority'
     })).resolves.toBe(true)
 
     expect(state.queuedMessages).toHaveLength(1)
@@ -135,7 +136,8 @@ describe('chat-store-thread-actions queued messages', () => {
       text: 'use these next-turn settings',
       model: 'deepseek-v4-flash',
       providerId: 'deepseek',
-      reasoningEffort: 'high'
+      reasoningEffort: 'high',
+      serviceTier: 'priority'
     })
 
     state.composerModel = 'deepseek-v4-pro'
@@ -196,6 +198,99 @@ describe('chat-store-thread-actions queued messages', () => {
       turnId: 'turn_graph_lead',
       text: 'Please reassign the blocked node.'
     }))
+  })
+
+  it('resumes a suspended Graph planning turn before a GraphRun exists', async () => {
+    const steerUserMessage = vi.fn(async () => undefined)
+    registryMock.getProvider.mockReturnValue({ steerUserMessage })
+    const listRuns = vi.spyOn(graphRuntimeClient, 'listRuns').mockResolvedValue([])
+    const { actions, state } = buildHarness()
+    state.currentTurnId = 'turn_graph_planning'
+    state.currentTurnOrchestration = 'graph'
+
+    await expect(actions.sendMessage(
+      'Continue building the Graph.',
+      'agent'
+    )).resolves.toBe(true)
+
+    expect(listRuns).toHaveBeenCalledWith('thr_existing')
+    expect(steerUserMessage).toHaveBeenCalledWith(
+      'thr_existing',
+      'turn_graph_planning',
+      'Continue building the Graph.',
+      undefined
+    )
+    expect(state.queuedMessages).toEqual([])
+    expect(state.blocks).toContainEqual(expect.objectContaining({
+      kind: 'user',
+      turnId: 'turn_graph_planning',
+      text: 'Continue building the Graph.'
+    }))
+  })
+
+  it('does not duplicate resumed Graph guidance when its runtime user item wins the race', async () => {
+    const { actions, state } = buildHarness()
+    state.currentTurnId = 'turn_graph_planning'
+    state.currentTurnOrchestration = 'graph'
+    const steerUserMessage = vi.fn(async () => {
+      state.blocks = [
+        ...state.blocks,
+        {
+          kind: 'user',
+          id: 'item_graph_guidance',
+          turnId: 'turn_graph_planning',
+          createdAt: new Date().toISOString(),
+          text: 'Continue building the Graph.'
+        }
+      ]
+    })
+    registryMock.getProvider.mockReturnValue({ steerUserMessage })
+    vi.spyOn(graphRuntimeClient, 'listRuns').mockResolvedValue([])
+
+    await expect(actions.sendMessage(
+      'Continue building the Graph.',
+      'agent'
+    )).resolves.toBe(true)
+
+    expect(state.blocks.filter((block) => block.kind === 'user')).toEqual([
+      expect.objectContaining({ id: 'item_graph_guidance' })
+    ])
+  })
+
+  it('does not append Graph guidance into a conversation selected during steering', async () => {
+    const { actions, state } = buildHarness()
+    state.currentTurnId = 'turn_graph_lead'
+    state.currentTurnOrchestration = 'graph'
+    const activeRun = {
+      id: 'run_1',
+      threadId: 'thr_existing',
+      sourceTurnId: 'turn_graph_lead',
+      status: 'running',
+      lastEventSeq: 4
+    } as GraphRun
+    useGraphStore.setState({
+      threadId: 'thr_existing',
+      runs: [activeRun],
+      selectedRunId: activeRun.id
+    })
+    let resolveSteer!: (run: GraphRun) => void
+    const steer = vi.spyOn(graphRuntimeClient, 'steer').mockImplementation(
+      () => new Promise((resolve) => {
+        resolveSteer = resolve
+      })
+    )
+
+    const pendingSend = actions.sendMessage('Continue the Graph.', 'agent')
+    await vi.waitFor(() => expect(resolveSteer).toBeTypeOf('function'))
+    expect(steer).toHaveBeenCalled()
+    state.activeThreadId = 'thr_other'
+    state.currentTurnId = 'turn_other'
+    state.currentTurnOrchestration = 'direct'
+    state.blocks = []
+    resolveSteer({ ...activeRun, lastEventSeq: 5 })
+
+    await expect(pendingSend).resolves.toBe(true)
+    expect(state.blocks).toEqual([])
   })
 
   it('persists queued messages and their reordered send order for the active thread', async () => {
@@ -788,7 +883,9 @@ describe('chat-store-thread-actions queued messages', () => {
     state.composerModel = 'mimo-v2.5'
     state.composerProviderId = 'xiaomi-token-plan'
 
-    await expect(actions.sendMessage('hello', 'agent')).resolves.toBe(true)
+    await expect(actions.sendMessage('hello', 'agent', {
+      serviceTier: 'priority'
+    })).resolves.toBe(true)
 
     expect(setSettings).not.toHaveBeenCalled()
     expect(restartRuntime).not.toHaveBeenCalled()
@@ -796,7 +893,11 @@ describe('chat-store-thread-actions queued messages', () => {
     expect(provider.sendUserMessage).toHaveBeenCalledWith(
       'thr_existing',
       'hello',
-      expect.objectContaining({ model: 'mimo-v2.5', providerId: 'xiaomi-token-plan' })
+      expect.objectContaining({
+        model: 'mimo-v2.5',
+        providerId: 'xiaomi-token-plan',
+        serviceTier: 'priority'
+      })
     )
   })
 

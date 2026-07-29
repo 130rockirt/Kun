@@ -861,6 +861,219 @@ describe('AgentSdkRuntime.runTurn', () => {
     })
   })
 
+  test('bridges Kun read tools when Graph disables all overlapping SDK built-ins', async () => {
+    let options: {
+      tools?: unknown[]
+      allowedTools?: string[]
+      mcpServers?: Record<string, unknown>
+    } = {}
+    const sdk = fakeSdk(svgSdkTextAttempt('planning paused'), (value) => {
+      options = value as typeof options
+    })
+    const { deps } = makeDeps({
+      loadSdk: async () => sdk,
+      loadTurnContext: async () => ({
+        workspace: '/ws',
+        userText: 'inspect and define the Graph',
+        approvalPolicy: 'auto',
+        sandboxMode: 'workspace-write',
+        allowSdkBuiltins: false,
+        bridgeKunBuiltinOverlaps: true,
+        bridgeableTools: [{
+          name: 'read',
+          description: 'Read a file',
+          inputSchema: { type: 'object' }
+        }]
+      })
+    })
+
+    await expect(
+      new AgentSdkRuntime(deps).runTurn('th', 'tn', new AbortController().signal)
+    ).resolves.toBe('completed')
+
+    expect(options.tools).toEqual([])
+    expect(options.allowedTools).toContain('mcp__kun__read')
+    expect(options.mcpServers).toHaveProperty('kun')
+  })
+
+  test('gives Graph planning one real SDK recovery exchange before parking prose-only output', async () => {
+    const prompts: string[] = []
+    const checkGraphCompletion = vi.fn(async () => 'complete' as const)
+    const finishTurn = vi.fn(async () => 'suspended' as const)
+    const sdk = fakeSdkAttempts([
+      svgSdkTextAttempt('I have a plan.'),
+      svgSdkTextAttempt('I still will not call the tool.')
+    ], (input) => {
+      if (typeof input.prompt === 'string') prompts.push(input.prompt)
+    })
+    const { deps } = makeDeps({
+      loadSdk: async () => sdk,
+      checkGraphCompletion,
+      finishTurn,
+      loadTurnContext: async () => ({
+        workspace: '/ws',
+        userText: 'build this with Graph',
+        approvalPolicy: 'auto',
+        sandboxMode: 'read-only',
+        allowSdkBuiltins: false,
+        bridgeKunBuiltinOverlaps: true,
+        graphPhase: 'planning',
+        bridgeableTools: [{
+          name: 'graph_define_plan',
+          description: 'Define the Graph plan',
+          inputSchema: { type: 'object' }
+        }]
+      })
+    })
+
+    await expect(new AgentSdkRuntime(deps).runTurn(
+      'th',
+      'tn',
+      new AbortController().signal
+    )).resolves.toBe('suspended')
+
+    expect(prompts).toHaveLength(2)
+    expect(prompts[1]).toContain('Host planning gate')
+    expect(prompts[1]).toContain('call `graph_define_plan` now')
+    expect(checkGraphCompletion).not.toHaveBeenCalled()
+    expect(finishTurn).toHaveBeenCalledTimes(1)
+  })
+
+  test('resumes the first Graph SDK session and carries exact plan issue paths into recovery', async () => {
+    const queries: Array<{
+      prompt: unknown
+      options?: { resume?: string }
+    }> = []
+    let graphDefinePlanHandler:
+      | ((args: Record<string, unknown>, extra: unknown) => Promise<unknown>)
+      | undefined
+    let queryIndex = 0
+    const sdk: SdkApi = {
+      tool: (name, _description, _schema, handler) => {
+        if (name === 'graph_define_plan') graphDefinePlanHandler = handler
+        return { name }
+      },
+      createSdkMcpServer: (config) => ({
+        type: 'sdk',
+        name: config.name,
+        instance: {}
+      }),
+      query: (input): SdkQueryResult => {
+        const current = queryIndex
+        queryIndex += 1
+        queries.push(input as typeof queries[number])
+        async function* gen(): AsyncGenerator<SdkMessage> {
+          if (current === 0) {
+            await graphDefinePlanHandler?.({}, {})
+            yield {
+              type: 'system',
+              subtype: 'init',
+              session_id: 'graph_session_after_invalid_plan'
+            } as SdkMessage
+          }
+          yield* svgSdkTextAttempt(
+            current === 0 ? 'The plan is ready.' : 'Still prose only.'
+          )
+        }
+        const stream = gen() as SdkQueryResult
+        stream.interrupt = async () => {}
+        return stream
+      }
+    }
+    const executeKunTool = vi.fn(async () => ({
+      output: {
+        code: 'graph_plan_invalid',
+        issues: [{
+          path: ['tasks', 0, 'loop'],
+          message: 'Ordinary work tasks cannot contain loop.',
+          repairHint: 'Remove loop or change kind to loop_gate.'
+        }]
+      },
+      isError: true
+    }))
+    const finishTurn = vi.fn(async () => 'suspended' as const)
+    const { deps } = makeDeps({
+      loadSdk: async () => sdk,
+      executeKunTool,
+      finishTurn,
+      loadTurnContext: async () => ({
+        workspace: '/ws',
+        userText: 'build this with Graph',
+        approvalPolicy: 'auto',
+        sandboxMode: 'read-only',
+        allowSdkBuiltins: false,
+        bridgeKunBuiltinOverlaps: true,
+        graphPhase: 'planning',
+        bridgeableTools: [{
+          name: 'graph_define_plan',
+          description: 'Define the Graph plan',
+          inputSchema: { type: 'object' }
+        }]
+      })
+    })
+
+    await expect(new AgentSdkRuntime(deps).runTurn(
+      'th',
+      'tn',
+      new AbortController().signal
+    )).resolves.toBe('suspended')
+
+    expect(queries).toHaveLength(2)
+    expect(queries[1]?.options?.resume).toBe(
+      'graph_session_after_invalid_plan'
+    )
+    expect(queries[1]?.prompt).toEqual(expect.stringContaining(
+      '"path":["tasks",0,"loop"]'
+    ))
+    expect(queries[1]?.prompt).toEqual(expect.stringContaining(
+      'Remove loop or change kind to loop_gate.'
+    ))
+    expect(executeKunTool).toHaveBeenCalledTimes(1)
+  })
+
+  test('gives pending Graph supervision one real SDK recovery exchange before parking', async () => {
+    const prompts: string[] = []
+    const checkGraphCompletion = vi.fn(async () => 'retry_required' as const)
+    const finishTurn = vi.fn(async () => 'suspended' as const)
+    const sdk = fakeSdkAttempts([
+      svgSdkTextAttempt('Everything looks complete.'),
+      svgSdkTextAttempt('Still prose only.')
+    ], (input) => {
+      if (typeof input.prompt === 'string') prompts.push(input.prompt)
+    })
+    const { deps } = makeDeps({
+      loadSdk: async () => sdk,
+      checkGraphCompletion,
+      finishTurn,
+      loadTurnContext: async () => ({
+        workspace: '/ws',
+        userText: 'continue Graph supervision',
+        approvalPolicy: 'auto',
+        sandboxMode: 'read-only',
+        allowSdkBuiltins: false,
+        bridgeKunBuiltinOverlaps: true,
+        graphPhase: 'supervising',
+        bridgeableTools: [{
+          name: 'graph_review_node',
+          description: 'Review a pending Graph node',
+          inputSchema: { type: 'object' }
+        }]
+      })
+    })
+
+    await expect(new AgentSdkRuntime(deps).runTurn(
+      'th',
+      'tn',
+      new AbortController().signal
+    )).resolves.toBe('suspended')
+
+    expect(checkGraphCompletion).toHaveBeenCalledTimes(1)
+    expect(prompts).toHaveLength(2)
+    expect(prompts[1]).toContain('Host supervision gate')
+    expect(prompts[1]).toContain('call `graph_review_node`')
+    expect(finishTurn).toHaveBeenCalledTimes(1)
+  })
+
   test('disables SDK built-ins and completes after mutation plus matching validation', async () => {
     const seenOptions: Array<{ tools?: unknown; strictMcpConfig?: boolean; allowedTools?: string[] }> = []
     const sdk = fakeSdkAttempts([

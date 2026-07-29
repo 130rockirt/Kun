@@ -17,7 +17,8 @@ import {
   Gauge,
   Image as ImageIcon,
   Search,
-  Type as TypeIcon
+  Type as TypeIcon,
+  Zap
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import {
@@ -30,6 +31,7 @@ import {
 } from '@shared/app-settings'
 import { DEFAULT_COMPOSER_MODEL_IDS } from '@shared/default-composer-models'
 import type { ModelProviderModelGroup } from '@shared/kun-gui-api'
+import { composerSupportsCodexFastMode } from './composer-fast-mode'
 
 export type ComposerReasoningEffort = ModelReasoningEffort
 
@@ -44,8 +46,10 @@ type Props = {
   controlVariant?: 'combined' | 'split'
   stretch?: boolean
   composerReasoningEffort?: string
+  composerFastMode?: boolean
   onComposerModelChange: (modelId: string, providerId?: string) => void
   onComposerReasoningEffortChange?: (effort: ComposerReasoningEffort) => void
+  onComposerFastModeChange?: (enabled: boolean) => void
   onConfigureProviders?: () => void
 }
 
@@ -85,6 +89,7 @@ type FloatingReasoningPopoverAnchorRect = Pick<DOMRect, 'bottom' | 'left' | 'rig
 
 type ComposerModelMenuGroup = {
   providerId: string
+  presetSource?: string
   label: string
   modelIds: string[]
   modelProfiles?: Record<string, ModelProviderModelProfileV1>
@@ -121,8 +126,10 @@ export function FloatingComposerModelPicker({
   controlVariant = 'combined',
   stretch = false,
   composerReasoningEffort = 'max',
+  composerFastMode = false,
   onComposerModelChange,
   onComposerReasoningEffortChange,
+  onComposerFastModeChange,
   onConfigureProviders
 }: Props): ReactElement {
   const { t } = useTranslation('common')
@@ -164,6 +171,13 @@ export function FloatingComposerModelPicker({
   const reasoningOptions = reasoningOptionsForModel(currentModelProfile)
   const reasoningEnabled =
     !needsProviderSetup && Boolean(onComposerReasoningEffortChange) && reasoningOptions.length > 0
+  const fastModeAvailable =
+    Boolean(onComposerFastModeChange) &&
+    composerSupportsCodexFastMode(
+      composerModelGroups,
+      currentModel,
+      composerProviderId
+    )
   const currentReasoning = normalizeComposerReasoningEffort(
     composerReasoningEffort,
     currentModelProfile
@@ -196,10 +210,12 @@ export function FloatingComposerModelPicker({
       ? 'w-[184px] max-w-[184px] shrink-0 overflow-hidden'
       : 'w-[248px] max-w-[min(260px,42vw)] shrink-0 overflow-hidden'
   const splitModelWidthClass = stretch
-    ? 'max-w-[min(284px,45vw)]'
+    ? fastModeAvailable
+      ? 'max-w-[min(328px,52vw)]'
+      : 'max-w-[min(284px,45vw)]'
     : compact
-      ? 'max-w-[184px]'
-      : 'max-w-[min(260px,42vw)]'
+      ? fastModeAvailable ? 'max-w-[224px]' : 'max-w-[184px]'
+      : fastModeAvailable ? 'max-w-[min(304px,50vw)]' : 'max-w-[min(260px,42vw)]'
 
   useEffect(() => {
     if (!reasoningEnabled) return
@@ -771,6 +787,29 @@ export function FloatingComposerModelPicker({
             <span>{t('composerReasoning')} · </span>
             <span className="text-accent">{currentReasoningLabel}</span>
             <ChevronDown className="h-3.5 w-3.5 shrink-0 text-ds-faint" strokeWidth={1.8} />
+          </button>
+        ) : null}
+
+        {fastModeAvailable ? (
+          <button
+            type="button"
+            disabled={!canChangeModel}
+            onClick={() => onComposerFastModeChange?.(!composerFastMode)}
+            className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg outline-none transition focus-visible:ring-2 focus-visible:ring-accent/25 disabled:cursor-not-allowed ${
+              composerFastMode
+                ? 'bg-amber-400/15 text-amber-600 hover:bg-amber-400/25 dark:text-amber-300'
+                : canChangeModel
+                  ? 'text-ds-faint hover:bg-ds-hover hover:text-ds-ink'
+                  : 'text-ds-faint'
+            }`}
+            aria-pressed={composerFastMode}
+            aria-label={composerFastMode ? t('composerFastModeOn') : t('composerFastModeOff')}
+            title={`${composerFastMode ? t('composerFastModeOn') : t('composerFastModeOff')} — ${t('composerFastModeHint')}`}
+          >
+            <Zap
+              className={`h-4 w-4 ${composerFastMode ? 'fill-current' : ''}`}
+              strokeWidth={2}
+            />
           </button>
         ) : null}
 

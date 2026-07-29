@@ -21,6 +21,7 @@ import {
   isEmptySddAssistantThreadCandidate,
   markSddAssistantThread,
   sddAssistantThreadIdForDraft,
+  showSddAssistantThreadInSidebar,
   type SddThreadRegistry
 } from '../../sdd/sdd-thread-registry'
 import {
@@ -48,6 +49,16 @@ function sddDraftFromRegisteredThread(threadId: string): SddDraft | null {
     createdAt: timestamp,
     updatedAt: timestamp
   }
+}
+
+function sddThreadOwnsDraft(threadId: string, draft: SddDraft): boolean {
+  const ref = sddDraftRefForThreadId(threadId)
+  return Boolean(
+    ref &&
+    normalizeWorkspaceRoot(ref.workspaceRoot) === normalizeWorkspaceRoot(draft.workspaceRoot) &&
+    ref.draftRelativePath.trim().replaceAll('\\', '/') ===
+      draft.relativePath.trim().replaceAll('\\', '/')
+  )
 }
 
 export function shouldRestoreRequirementDraftForSidebarThread(
@@ -175,6 +186,7 @@ export function useWorkbenchSddThreadController({
         workspace: normalizeWorkspaceRoot(thread.workspace) || normalizedWorkspace
       }
       markSddAssistantThread(draft, normalizedThread.id)
+      showSddAssistantThreadInSidebar(normalizedThread.id)
       void writeSddChatTranscriptForThread({
         workspaceRoot: draft.workspaceRoot,
         draftRelativePath: draft.relativePath,
@@ -205,6 +217,7 @@ export function useWorkbenchSddThreadController({
       ? ''
       : sddAssistantThreadIdForDraft(draft)
     if (registeredThreadId) {
+      showSddAssistantThreadInSidebar(registeredThreadId)
       setRoute('chat')
       if (useChatStore.getState().activeThreadId !== registeredThreadId) {
         await selectThread(registeredThreadId)
@@ -268,9 +281,16 @@ export function useWorkbenchSddThreadController({
     setRoute('chat')
     if (options.openAssistant ?? runtimeConnection === 'ready') {
       setRightSidebarWidth((width) => Math.max(width, 420))
-      const sddThreadId = sddAssistantThreadIdForDraft(draft)
+      const currentThreadId = useChatStore.getState().activeThreadId?.trim() ?? ''
+      let sddThreadId = sddThreadOwnsDraft(currentThreadId, draft)
+        ? currentThreadId
+        : sddAssistantThreadIdForDraft(draft)
       if (sddThreadId && useChatStore.getState().activeThreadId !== sddThreadId) {
+        showSddAssistantThreadInSidebar(sddThreadId)
         await selectThread(sddThreadId)
+      }
+      if (!sddThreadId && runtimeConnection === 'ready') {
+        sddThreadId = await createSddAssistantThreadForDraft(draft) ?? ''
       }
       if (!sddThreadId) useChatStore.getState().clearActiveThreadSelection()
       setRightPanelMode(BUILTIN_RIGHT_PANEL_IDS.sddAi)
@@ -279,6 +299,7 @@ export function useWorkbenchSddThreadController({
     }
     return true
   }, [
+    createSddAssistantThreadForDraft,
     runtimeConnection,
     selectThread,
     setComposerMode,

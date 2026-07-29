@@ -23,6 +23,9 @@ import { GraphPlanningDraftStatusSchema } from './graph-planning.js'
 const TurnModeSchema = z.enum(['agent', 'plan'])
 export const TurnReasoningEffortSchema = z.enum(['auto', 'off', 'low', 'medium', 'high', 'max'])
 export type TurnReasoningEffort = z.infer<typeof TurnReasoningEffortSchema>
+/** Canonical Codex/API request value. The legacy UI label is "fast". */
+export const TurnServiceTierSchema = z.literal('priority')
+export type TurnServiceTier = z.infer<typeof TurnServiceTierSchema>
 export const TurnClientSurfaceSchema = z.enum(['gui', 'tui', 'cli', 'api', 'im', 'extension'])
 export type TurnClientSurface = z.infer<typeof TurnClientSurfaceSchema>
 
@@ -135,7 +138,9 @@ export const GraphPlanningLifecycleSchema = z.object({
   draftId: z.string().min(1),
   reservedRunId: z.string().min(1),
   state: GraphPlanningDraftStatusSchema,
-  draftRevision: z.number().int().positive()
+  draftRevision: z.number().int().positive(),
+  /** Process shutdown parked execution without changing the durable draft state. */
+  suspendedAt: z.string().optional()
 }).strict()
 export type GraphPlanningLifecycle = z.infer<typeof GraphPlanningLifecycleSchema>
 
@@ -151,6 +156,7 @@ export const TurnSchema = z.object({
   /** First successfully resolved route; immutable for the remainder of this turn. */
   actingModelRoute: ActingTurnModelRouteSchema.optional(),
   reasoningEffort: TurnReasoningEffortSchema.optional(),
+  serviceTier: TurnServiceTierSchema.optional(),
   /** Client that initiated this turn. Used only for per-turn capability and prompt scoping. */
   clientSurface: TurnClientSurfaceSchema.optional(),
   /** Immutable execution-authority snapshot captured when this turn starts. */
@@ -232,6 +238,7 @@ export const StartTurnRequest = z.object({
   providerId: z.string().optional(),
   accountId: z.string().min(1).optional(),
   reasoningEffort: TurnReasoningEffortSchema.optional(),
+  serviceTier: TurnServiceTierSchema.optional(),
   /** Initiating client surface. It does not grant authority beyond the advertised tool policy. */
   clientSurface: TurnClientSurfaceSchema.optional(),
   approvalPolicy: ApprovalPolicySchema.optional(),

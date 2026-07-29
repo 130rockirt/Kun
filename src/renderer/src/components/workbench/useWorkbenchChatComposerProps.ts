@@ -27,7 +27,9 @@ type UseWorkbenchChatComposerPropsInput = {
   composerPickList: ComposerProps['composerPickList']
   composerModelGroups: ComposerProps['composerModelGroups']
   composerReasoningEffort: ComposerProps['composerReasoningEffort']
+  composerFastMode: NonNullable<ComposerProps['composerFastMode']>
   setComposerReasoningEffort: ComposerProps['onComposerReasoningEffortChange']
+  setComposerFastMode: NonNullable<ComposerProps['onComposerFastModeChange']>
   setClawChannelModel: (channelId: string, modelId: string, providerId?: string) => void | Promise<unknown>
   setComposerModel: (modelId: string, providerId?: string) => void
   openProvidersSettings: () => void
@@ -93,7 +95,9 @@ export function useWorkbenchChatComposerProps({
   composerPickList,
   composerModelGroups,
   composerReasoningEffort,
+  composerFastMode,
   setComposerReasoningEffort,
+  setComposerFastMode,
   setClawChannelModel,
   setComposerModel,
   openProvidersSettings,
@@ -155,6 +159,7 @@ export function useWorkbenchChatComposerProps({
     composerPickList,
     composerModelGroups,
     composerReasoningEffort: route === 'chat' || route === 'claw' ? composerReasoningEffort : undefined,
+    composerFastMode: route === 'chat' && !activeSddDraft ? composerFastMode : undefined,
     modelControlVariant: route === 'chat' && !activeSddDraft ? 'split' : 'combined',
     onComposerModelChange: (modelId, providerId) => {
       if (route === 'claw' && activeClawChannelId) {
@@ -165,6 +170,9 @@ export function useWorkbenchChatComposerProps({
     },
     onComposerReasoningEffortChange: route === 'chat' || route === 'claw'
       ? setComposerReasoningEffort
+      : undefined,
+    onComposerFastModeChange: route === 'chat' && !activeSddDraft
+      ? setComposerFastMode
       : undefined,
     onConfigureProviders: openProvidersSettings,
     onSend: handleSend,
@@ -240,6 +248,7 @@ export function useWorkbenchChatComposerProps({
     composerPickList,
     composerProviderId,
     composerReasoningEffort,
+    composerFastMode,
     createThread,
     currentTurnOrchestration,
     disabledSkillIds,
@@ -272,6 +281,7 @@ export function useWorkbenchChatComposerProps({
     setComposerOrchestration,
     setComposerModel,
     setComposerReasoningEffort,
+    setComposerFastMode,
     setInput,
     setUseWorktreePool,
     setWorktreeBranch,

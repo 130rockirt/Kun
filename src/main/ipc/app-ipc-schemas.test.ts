@@ -7,6 +7,7 @@ import {
   cursorSubscriptionDiscoveryPayloadSchema,
   isSafeOpenExternalUrl,
   modelsDevCatalogPayloadSchema,
+  notificationPayloadSchema,
   runtimeRequestPayloadSchema,
   scheduleTaskFromTextPayloadSchema,
   settingsPatchSchema,
@@ -27,6 +28,27 @@ import {
 } from './app-ipc-schemas'
 
 describe('app-ipc-schemas', () => {
+  it('accepts only modeled completion notification sources', () => {
+    expect(notificationPayloadSchema.parse({
+      threadId: 'thread-main',
+      source: 'main-agent',
+      title: 'Kun',
+      body: 'Done'
+    }).source).toBe('main-agent')
+    expect(notificationPayloadSchema.parse({
+      threadId: 'thread-child',
+      source: 'subagent',
+      title: 'Kun',
+      body: 'Done'
+    }).source).toBe('subagent')
+    expect(() => notificationPayloadSchema.parse({
+      threadId: 'thread-other',
+      source: 'extension',
+      title: 'Kun',
+      body: 'Done'
+    })).toThrow()
+  })
+
   it('accepts only a bounded Cursor API key for subscription discovery', () => {
     expect(cursorSubscriptionDiscoveryPayloadSchema.parse({
       apiKey: ' cursor-key '
@@ -275,6 +297,18 @@ describe('app-ipc-schemas', () => {
   it('accepts only the modeled Kun Graph workbench endpoints', () => {
     for (const payload of [
       { path: '/v1/graphs?thread_id=thread_1', method: 'GET' },
+      { path: '/v1/graph-drafts?thread_id=thread_1', method: 'GET' },
+      { path: '/v1/graph-drafts/draft%201', method: 'GET' },
+      {
+        path: '/v1/graph-drafts/draft_1/resume',
+        method: 'POST',
+        body: '{"expectedRevision":2}'
+      },
+      {
+        path: '/v1/graph-drafts/draft_1/cancel',
+        method: 'POST',
+        body: '{"expectedRevision":2}'
+      },
       { path: '/v1/graphs/run%201', method: 'GET' },
       { path: '/v1/graphs/run_1/events?since_seq=3', method: 'GET' },
       { path: '/v1/graphs/run_1/artifacts/artifact%201?offset=0', method: 'GET' },
@@ -335,6 +369,10 @@ describe('app-ipc-schemas', () => {
 
     for (const payload of [
       { path: '/v1/graphs', method: 'POST' },
+      { path: '/v1/graph-drafts', method: 'POST' },
+      { path: '/v1/graph-drafts/draft_1', method: 'DELETE' },
+      { path: '/v1/graph-drafts/draft_1/resume', method: 'GET' },
+      { path: '/v1/graph-drafts/draft_1/cancel', method: 'DELETE' },
       { path: '/v1/graphs/run_1/start', method: 'DELETE' },
       { path: '/v1/graph-projects/identity', method: 'POST' },
       {
@@ -480,6 +518,10 @@ describe('app-ipc-schemas', () => {
         tone: ['专业', '科技感'],
         designSystemPreset: 'shadcn'
       },
+      notifications: {
+        mainAgentTurnComplete: false,
+        subagentTurnComplete: true
+      },
       disabledSkillIds: ['test-skill-08']
     })
 
@@ -502,6 +544,10 @@ describe('app-ipc-schemas', () => {
     expect(payload.write?.selectionAssist?.quickActions).toHaveLength(2)
     expect(payload.design?.brandColor).toBe('#3b82d8')
     expect(payload.design?.designSystemPreset).toBe('shadcn')
+    expect(payload.notifications).toEqual({
+      mainAgentTurnComplete: false,
+      subagentTurnComplete: true
+    })
     expect(payload.disabledSkillIds).toEqual(['test-skill-08'])
   })
 

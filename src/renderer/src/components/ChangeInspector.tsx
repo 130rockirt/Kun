@@ -63,7 +63,7 @@ export function ChangeInspector({
 
   return (
     <aside
-      className={`ds-no-drag ds-panel-ghost flex flex-col border-l border-ds-border-muted backdrop-blur-xl ${className ?? ''}`}
+      className={`ds-sidebar-surface ds-no-drag flex flex-col border-l border-ds-border-muted backdrop-blur-xl ${className ?? ''}`}
     >
       <div className="flex min-h-[58px] shrink-0 items-center gap-3 border-b border-ds-border-muted px-3 py-3">
         <button

@@ -268,7 +268,9 @@ const defaultSettings = (): AppSettingsV1 => ({
   },
   gitBranchPrefix: DEFAULT_GIT_BRANCH_PREFIX,
   notifications: {
-    turnComplete: true
+    turnComplete: true,
+    mainAgentTurnComplete: true,
+    subagentTurnComplete: false
   },
   appBehavior: normalizeAppBehaviorSettings(),
   keyboardShortcuts: normalizeKeyboardShortcuts(),

@@ -861,6 +861,34 @@ describe('KunRuntimeProvider', () => {
     )
   })
 
+  it('posts the canonical priority service tier for Fast turns', async () => {
+    const runtimeRequest = vi.fn(async () => ({
+      ok: true,
+      status: 202,
+      body: JSON.stringify({ threadId: 'thr_1', turnId: 'turn_fast', userMessageItemId: 'item_user_fast' })
+    }))
+    installDsGui({ runtimeRequest })
+
+    await new KunRuntimeProvider().sendUserMessage('thr_1', 'move faster', {
+      model: 'gpt-5.4',
+      providerId: 'codex-2',
+      serviceTier: 'priority'
+    })
+
+    expect(runtimeRequest).toHaveBeenCalledWith(
+      '/v1/threads/thr_1/turns',
+      'POST',
+      JSON.stringify({
+        prompt: 'move faster',
+        clientSurface: 'gui',
+        model: 'gpt-5.4',
+        providerId: 'codex-2',
+        ...DEFAULT_EXECUTION_SETTINGS,
+        serviceTier: 'priority'
+      })
+    )
+  })
+
   it('posts GUI plan context with Kun plan turn requests', async () => {
     const runtimeRequest = vi.fn(async () => ({
       ok: true,

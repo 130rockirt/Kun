@@ -12,6 +12,7 @@ const client = vi.hoisted(() => ({
   listDrafts: vi.fn(),
   resumeDraft: vi.fn(),
   cancelDraft: vi.fn(),
+  getDraft: vi.fn(),
   getRun: vi.fn(),
   identity: vi.fn(),
   listProfiles: vi.fn(),
@@ -230,6 +231,35 @@ describe('Graph renderer store', () => {
       revision: 3,
       status: 'planning'
     })
+  })
+
+  it('reloads the compensated revision after resume fails so Continue can retry', async () => {
+    useGraphStore.setState({
+      threadId: 'thread_1',
+      drafts: [planningDraft('needs_correction', 2)]
+    })
+    client.resumeDraft.mockRejectedValueOnce(
+      new Error('runtime turn capacity reached; retry after a turn finishes')
+    )
+    client.getDraft.mockResolvedValueOnce(planningDraft('needs_correction', 4))
+
+    await useGraphStore.getState().resumeDraft('draft_1')
+
+    expect(client.resumeDraft).toHaveBeenCalledWith('draft_1', 2)
+    expect(client.getDraft).toHaveBeenCalledWith('draft_1')
+    expect(useGraphStore.getState()).toMatchObject({
+      drafts: [{
+        draft: {
+          revision: 4,
+          status: 'needs_correction'
+        }
+      }],
+      error: expect.stringContaining('capacity reached')
+    })
+
+    client.resumeDraft.mockResolvedValueOnce(planningDraft('planning', 5))
+    await useGraphStore.getState().resumeDraft('draft_1')
+    expect(client.resumeDraft).toHaveBeenLastCalledWith('draft_1', 4)
   })
 
   it('does not let an older concurrent refresh overwrite a newer Graph snapshot', async () => {

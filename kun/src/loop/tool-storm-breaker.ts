@@ -16,6 +16,10 @@ const DEFAULT_WINDOW_SIZE = 8
 const DEFAULT_THRESHOLD = 3
 const DEFAULT_INTERACTIVE_THRESHOLD = 3
 const MUTATING_TOOL_NAMES = new Set(['write', 'edit', 'edit_diff', 'apply_patch', 'delete', 'move'])
+const GRAPH_MUTATING_TOOL_NAMES = new Set([
+  'graph_patch_run',
+  'graph_review_node'
+])
 const INTERACTIVE_TOOL_NAMES = new Set(['request_user_input', 'user_input'])
 
 /**
@@ -58,11 +62,6 @@ export class ToolStormBreaker {
       }
       return { suppress: false }
     }
-    if (isGraphRunInspection(call)) {
-      // Graph state is durable and may advance between identical reads. The
-      // Lead must be able to inspect again while supervising an active run.
-      return { suppress: false }
-    }
     const name = call.toolName
     const args = stableStringify(call.arguments)
     const readOnly = !isMutatingToolCall(call)
@@ -103,15 +102,27 @@ export class ToolStormBreaker {
 
 function isMutatingToolCall(call: ToolCallLike): boolean {
   if (call.toolKind === 'file_change') return true
+  if (call.toolName === 'graph_control_run') {
+    return graphControlAction(call) !== 'inspect'
+  }
+  if (call.toolName === 'graph_supervise_node') {
+    return graphAction(call) === 'guide'
+  }
+  if (GRAPH_MUTATING_TOOL_NAMES.has(call.toolName)) return true
   return MUTATING_TOOL_NAMES.has(call.toolName)
 }
 
-function isGraphRunInspection(call: ToolCallLike): boolean {
-  if (call.toolName !== 'graph_control_run') return false
+function graphControlAction(call: ToolCallLike): string {
+  if (call.toolName !== 'graph_control_run') return ''
+  return graphAction(call)
+}
+
+function graphAction(call: ToolCallLike): string {
   if (!call.arguments || typeof call.arguments !== 'object' || Array.isArray(call.arguments)) {
-    return false
+    return ''
   }
-  return (call.arguments as Record<string, unknown>).action === 'inspect'
+  const action = (call.arguments as Record<string, unknown>).action
+  return typeof action === 'string' ? action : ''
 }
 
 function stableStringify(value: unknown): string {

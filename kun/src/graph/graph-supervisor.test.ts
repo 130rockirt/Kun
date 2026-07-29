@@ -1,12 +1,14 @@
 import { describe, expect, it, vi } from 'vitest'
-import type {
-  GraphNodeAttemptV1,
-  GraphRunV1
+import {
+  GraphReviewResultV1Schema,
+  type GraphNodeAttemptV1,
+  type GraphRunV1
 } from '../contracts/graph.js'
 import { applyGraphEvent } from './graph-reducer.js'
 import { GraphSupervisor } from './graph-supervisor.js'
 import {
   testAssignmentSnapshot,
+  testCompletedChild,
   testGraphConfig,
   testGraphEnvelope,
   testGraphPlan
@@ -174,6 +176,162 @@ describe('GraphSupervisor', () => {
       outcome: 'needs_human',
       summary: 'Independent reviewer runtime is unavailable.'
     })
+  })
+
+  it('aborts a deferred peer reviewer when Graph execution is quiesced', async () => {
+    const run = baseRun()
+    const attempt: GraphNodeAttemptV1 = {
+      ...failedAttempt('attempt_deferred_review', 1, 'not relevant'),
+      status: 'submitted',
+      result: {
+        version: 1,
+        summary: 'Review this result.',
+        changedFiles: [],
+        checks: [],
+        evidence: [],
+        artifactRefs: [],
+        risks: [],
+        suggestedMessages: []
+      }
+    }
+    let reviewStarted!: () => void
+    const started = new Promise<void>((resolve) => {
+      reviewStarted = resolve
+    })
+    const runChild = vi.fn(async (input: { signal: AbortSignal }) => {
+      reviewStarted()
+      if (!input.signal.aborted) {
+        await new Promise<void>((resolve) => {
+          input.signal.addEventListener('abort', () => resolve(), { once: true })
+        })
+      }
+      return {
+        ...testCompletedChild('peer_review_shutdown', 'interrupted'),
+        status: 'aborted' as const,
+        error: 'Graph runtime is shutting down'
+      }
+    })
+    const supervisor = new GraphSupervisor({
+      store: {} as never,
+      config: () => testGraphConfig(),
+      delegation: () => ({
+        enabled: () => true,
+        runChild
+      } as never)
+    })
+
+    const review = supervisor.review({
+      run,
+      node: run.nodes.research,
+      attempt,
+      kind: 'peer'
+    })
+    await started
+    supervisor.quiesceReviews()
+
+    await expect(Promise.race([
+      review,
+      new Promise<'timed_out'>((resolve) =>
+        setTimeout(() => resolve('timed_out'), 500))
+    ])).resolves.toMatchObject({
+      reviewerKind: 'peer',
+      outcome: 'needs_human'
+    })
+    await supervisor.stop()
+  })
+
+  it('normalizes oversized peer review prose and artifacts without rerunning the reviewer', async () => {
+    const run = baseRun()
+    const canonicalArtifact = {
+      version: 1 as const,
+      artifactId: 'host_artifact',
+      contentHash: 'a'.repeat(64),
+      mimeType: 'text/plain',
+      byteLength: 1,
+      summary: 'Host-captured artifact.',
+      visibility: 'lead' as const,
+      retention: 'run' as const,
+      createdAt: '2026-07-26T00:00:00.000Z'
+    }
+    const attempt: GraphNodeAttemptV1 = {
+      ...failedAttempt('attempt_peer_review', 1, 'not relevant'),
+      result: {
+        version: 1,
+        summary: 'Worker result.',
+        artifactRefs: [canonicalArtifact],
+        changedFiles: [],
+        reportedChecks: [],
+        verifiedChecks: [],
+        evidence: [],
+        risks: [],
+        suggestedMessages: []
+      }
+    }
+    const artifactRefs = [
+      {
+        ...canonicalArtifact,
+        summary: 'Peer-authored metadata must not replace canonical metadata.'
+      },
+      ...Array.from({ length: 70 }, (_, index) => ({
+        ...canonicalArtifact,
+        artifactId: `fabricated_peer_artifact_${index}`,
+        contentHash: index.toString(16).padStart(64, '0'),
+        summary: '物'.repeat(4_311)
+      }))
+    ]
+    const runChild = vi.fn(async () => ({
+      ...testCompletedChild('peer_reviewer_1', 'unused'),
+      id: 'peer_reviewer_1',
+      summary: JSON.stringify({
+        outcome: 'revise',
+        summary: '审'.repeat(4_311),
+        evidence: [
+          '证'.repeat(4_311),
+          null,
+          ...Array.from({ length: 140 }, (_, index) => `evidence-${index}`)
+        ],
+        artifactRefs: [
+          null,
+          { artifactId: 'host_artifact', contentHash: 'not-a-hash' },
+          ...artifactRefs
+        ],
+        repairInstructions: '修'.repeat(33_000)
+      })
+    }))
+    const supervisor = new GraphSupervisor({
+      store: {} as never,
+      config: () => testGraphConfig(),
+      delegation: () => ({
+        enabled: () => true,
+        runChild
+      } as never),
+      nowIso: () => '2026-07-26T12:00:00.000Z',
+      nextId: (prefix) => `${prefix}_peer`
+    })
+
+    const review = await supervisor.review({
+      run,
+      node: run.nodes.research,
+      attempt,
+      kind: 'peer'
+    })
+
+    expect(runChild).toHaveBeenCalledOnce()
+    expect(GraphReviewResultV1Schema.safeParse(review).success).toBe(true)
+    expect(review.summary).toHaveLength(4_096)
+    expect(review.evidence.length).toBeLessThanOrEqual(128)
+    expect(review.evidence.length).toBeGreaterThan(1)
+    expect(review.evidence[0]).toHaveLength(4_096)
+    expect(review.repairInstructions).toHaveLength(32_768)
+    expect(review.artifactRefs).toHaveLength(1)
+    expect(review.artifactRefs[0]).toMatchObject({
+      artifactId: 'host_artifact',
+      summary: 'Host-captured artifact.'
+    })
+    expect(review.artifactRefs.some((artifact) =>
+      artifact.artifactId.startsWith('fabricated_peer_artifact_')
+    )).toBe(false)
+    await supervisor.stop()
   })
 
   it('allows a Lead turn to emit a new supervision signal without deadlocking', async () => {

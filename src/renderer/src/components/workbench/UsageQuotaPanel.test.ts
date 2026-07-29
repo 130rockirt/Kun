@@ -110,6 +110,8 @@ describe('UsageQuotaPanel', () => {
 
     expect(renderer.root.findByProps({ 'data-usage-quota-panel': true })).toBeTruthy()
     expect(renderer.root.findByProps({ id: 'usage-quota-tab-usage' }).props['aria-selected']).toBe(true)
+    expect(renderer.root.findByProps({ id: 'usage-quota-tab-usage' }).props['data-active']).toBe('true')
+    expect(renderer.root.findByProps({ id: 'usage-quota-tab-quota' }).props['data-active']).toBe('false')
     expect(renderer.root.findByProps({ 'data-sidebar-usage-panel': true })).toBeTruthy()
     expect(listProviderQuotas).not.toHaveBeenCalled()
     expect(JSON.stringify(renderer.toJSON())).toContain('1.0k')
@@ -120,6 +122,10 @@ describe('UsageQuotaPanel', () => {
     })
 
     expect(renderer.root.findByProps({ id: 'usage-quota-tab-quota' }).props['aria-selected']).toBe(true)
+    expect(renderer.root.findByProps({ id: 'usage-quota-tab-quota' }).props['data-active']).toBe('true')
+    expect(renderer.root.findByProps({ 'data-provider-quota-panel': true }).props['data-embedded'])
+      .toBe('true')
+    expect(renderer.root.findAllByProps({ className: 'provider-quota-header' })).toHaveLength(0)
     expect(renderer.root.findByProps({ 'data-provider-quota-scroller': true })).toBeTruthy()
     expect(listProviderQuotas).toHaveBeenCalledTimes(1)
 

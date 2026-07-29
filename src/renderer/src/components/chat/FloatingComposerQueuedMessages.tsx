@@ -88,12 +88,10 @@ export type QueuedComposerMessage = {
   writeContext?: unknown
 }
 
-/** Editing dequeues the item, so only payloads that can be fully restored as text are eligible. */
-export function canEditQueuedComposerMessage(message: QueuedComposerMessage): boolean {
+/** True when the text-only steer contract can preserve the whole queued payload. */
+export function canGuideQueuedComposerMessage(message: QueuedComposerMessage): boolean {
   return Boolean(
     message.text.trim() &&
-    message.guidanceEligible !== false &&
-    message.mode !== 'plan' &&
     !message.attachmentIds?.length &&
     !message.attachments?.length &&
     !message.fileReferences?.length &&
@@ -103,6 +101,15 @@ export function canEditQueuedComposerMessage(message: QueuedComposerMessage): bo
     message.guiDesignMode !== true &&
     !message.guiDesignArtifact &&
     !message.writeContext
+  )
+}
+
+/** Editing dequeues the item, so only payloads that can be fully restored as text are eligible. */
+export function canEditQueuedComposerMessage(message: QueuedComposerMessage): boolean {
+  return Boolean(
+    message.guidanceEligible !== false &&
+    message.mode !== 'plan' &&
+    canGuideQueuedComposerMessage(message)
   )
 }
 
@@ -294,7 +301,8 @@ export function FloatingComposerQueuedMessages({
       >
         {visibleMessages.map((message, messageIndex) => {
           const guiding = guidingIds.has(message.id)
-          const guidanceEligible = message.guidanceEligible !== false
+          const guidanceEligible =
+            message.guidanceEligible !== false && canGuideQueuedComposerMessage(message)
           const guideTitle = guidanceEligible
             ? t('guideQueuedMessageHint')
             : t('guideQueuedMessageTextOnly')

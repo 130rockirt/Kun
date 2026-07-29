@@ -1,6 +1,6 @@
 import type { ReactElement } from 'react'
 import { useCallback, useEffect, useState } from 'react'
-import { ChevronRight, Folder, GitBranch, GitFork } from 'lucide-react'
+import { ChevronRight, FileText, Folder, GitBranch, GitFork } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useChatStore } from '../store/chat-store'
 import { formatRelativeTime } from '../lib/format-relative-time'
@@ -20,6 +20,7 @@ import {
 type Props = {
   compact?: boolean
   className?: string
+  onOpenRequirementDraft?: () => void
 }
 
 const COMPACT_BRANCH_LABEL_MAX_LENGTH = 30
@@ -95,7 +96,11 @@ function CompactGitBranch({ workspaceRoot }: { workspaceRoot: string }): ReactEl
   )
 }
 
-export function SessionHeader({ compact = false, className = '' }: Props): ReactElement {
+export function SessionHeader({
+  compact = false,
+  className = '',
+  onOpenRequirementDraft
+}: Props): ReactElement {
   const { t, i18n } = useTranslation('common')
   const threads = useChatStore((s) => s.threads)
   const activeThreadId = useChatStore((s) => s.activeThreadId)
@@ -180,6 +185,18 @@ export function SessionHeader({ compact = false, className = '' }: Props): React
               >
                 {active.title}
               </div>
+              {onOpenRequirementDraft ? (
+                <button
+                  type="button"
+                  className="session-header-compact-requirement ds-no-drag inline-flex h-7 shrink-0 items-center gap-1.5 rounded-[var(--ds-radius-control)] border border-ds-border-muted bg-ds-card px-2 text-[11.5px] font-medium text-ds-muted transition hover:border-ds-border-strong hover:bg-ds-hover hover:text-ds-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
+                  onClick={onOpenRequirementDraft}
+                  title={t('sddDraftTitle')}
+                  aria-label={t('sddDraftTitle')}
+                >
+                  <FileText className="h-3.5 w-3.5 shrink-0 text-accent" strokeWidth={1.85} />
+                  <span className="max-w-24 truncate">{t('sddDraftTitle')}</span>
+                </button>
+              ) : null}
               {active.forkedFromThreadId ? (
                 <GitFork
                   className="session-header-compact-fork h-3.5 w-3.5 shrink-0 text-ds-faint"

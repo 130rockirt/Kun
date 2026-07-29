@@ -100,7 +100,7 @@ function SideConversationTimeline({
       <InjectedMemoryLookupProvider workspaceRoot={workspaceRoot}>
         <div
           ref={viewportRef}
-          className="ds-no-drag min-h-0 flex-1 overflow-y-auto overflow-x-hidden bg-ds-main"
+          className="ds-sidebar-surface-body ds-no-drag min-h-0 flex-1 overflow-y-auto overflow-x-hidden"
           data-testid="side-conversation-timeline"
         >
           <div className="mx-auto flex w-full min-w-0 flex-col gap-8 px-5 pb-10 pt-6 sm:px-6">
@@ -375,7 +375,7 @@ export function SideConversationPanel({
 
   return (
     <aside
-      className={`ds-side-chat ds-no-drag flex flex-col overflow-hidden bg-ds-main text-ds-ink ${
+      className={`ds-side-chat ds-sidebar-surface ds-no-drag flex flex-col overflow-hidden text-ds-ink ${
         docked
           ? 'h-full min-h-0 w-full'
           : 'fixed bottom-[112px] z-40 max-h-[min(680px,calc(100vh-156px))] w-[min(520px,calc(100vw-24px))] rounded-[16px] border border-ds-border shadow-[0_22px_64px_rgba(20,47,95,0.2)] dark:shadow-[0_24px_72px_rgba(0,0,0,0.46)]'
@@ -383,7 +383,7 @@ export function SideConversationPanel({
       style={docked ? undefined : rightStyle}
       aria-label={t('sidePanelTitle')}
     >
-      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-ds-border-muted bg-ds-surface-subtle/55 px-3">
+      <div className="ds-sidebar-surface-chrome flex h-10 shrink-0 items-center gap-2 border-b border-ds-border-muted px-3">
         <div ref={switchMenuRef} className="relative min-w-0 flex-1">
           <button
             type="button"
@@ -513,13 +513,13 @@ export function SideConversationPanel({
       {activeSide ? (
         <SideConversationTimeline side={activeSide} workspaceRoot={sideData.workspaceRoot} />
       ) : (
-        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 bg-ds-main px-8 text-center text-[12.5px] leading-5 text-ds-faint">
+        <div className="ds-sidebar-surface-body flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-8 text-center text-[12.5px] leading-5 text-ds-faint">
           <MessageCircleMore className="h-5 w-5 opacity-65" strokeWidth={1.7} />
           <p>{t('sidePanelDraftEmpty')}</p>
         </div>
       )}
 
-      <footer className="shrink-0 bg-gradient-to-t from-ds-main via-ds-main to-transparent px-3 pb-3 pt-2">
+      <footer className="ds-sidebar-surface-chrome shrink-0 px-3 pb-3 pt-2">
         <FloatingComposer
           variant="side"
           workspaceRootOverride={sideData.workspaceRoot}

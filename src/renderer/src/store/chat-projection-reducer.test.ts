@@ -423,6 +423,52 @@ describe('chat projection reducer', () => {
     expect(projected.currentTurnUserId).toBe('item_original_user')
   })
 
+  it('reconciles Graph guidance when the stable user event arrives after the HTTP response', () => {
+    const createdAt = '2026-07-11T00:00:00.000Z'
+    const initial = {
+      ...state(),
+      busy: true,
+      currentTurnId: 'turn_graph',
+      currentTurnUserId: 'item_original_user',
+      turnStartedAtByUserId: { item_original_user: NOW - 1_000 },
+      blocks: [
+        {
+          kind: 'user' as const,
+          id: 'item_original_user',
+          turnId: 'turn_graph',
+          createdAt: '2026-07-10T23:59:00.000Z',
+          text: 'Build this as a Graph'
+        },
+        {
+          kind: 'user' as const,
+          id: 'graph-steering-1783728000000',
+          turnId: 'turn_graph',
+          createdAt,
+          text: 'Continue building the Graph.'
+        }
+      ]
+    }
+
+    const projected = project(initial, [{
+      type: 'user_message_received',
+      payload: {
+        itemId: 'item_steered',
+        turnId: 'turn_graph',
+        createdAt,
+        text: 'Continue building the Graph.'
+      }
+    }])
+
+    expect(projected.blocks).toHaveLength(2)
+    expect(projected.blocks[1]).toMatchObject({
+      kind: 'user',
+      id: 'item_steered',
+      turnId: 'turn_graph',
+      text: 'Continue building the Graph.'
+    })
+    expect(projected.currentTurnUserId).toBe('item_original_user')
+  })
+
   it('keeps only the latest automatic compaction marker for a turn', () => {
     const projected = project(state(), [
       {

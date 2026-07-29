@@ -10,6 +10,7 @@ export type WorkbenchRightPanelHostProps = Pick<
   | 'width'
   | 'route'
   | 'rightPanelMode'
+  | 'graphEnabled'
   | 'writeAssistantOpen'
   | 'changes'
   | 'browser'
@@ -38,6 +39,7 @@ export function WorkbenchRightPanelHost({
   width,
   route,
   rightPanelMode,
+  graphEnabled,
   onBeginResize,
   design,
   writeAssistantOpen,
@@ -60,6 +62,7 @@ export function WorkbenchRightPanelHost({
       width={width}
       route={route}
       rightPanelMode={rightPanelMode}
+      graphEnabled={graphEnabled}
       onBeginResize={onBeginResize}
       design={design}
       writeAssistantOpen={writeAssistantOpen}

@@ -1,5 +1,5 @@
 import { resolve } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { InMemoryEventBus } from '../adapters/in-memory-event-bus.js'
 import { InMemorySessionStore } from '../adapters/in-memory-session-store.js'
 import { InMemoryThreadStore } from '../adapters/in-memory-thread-store.js'
@@ -127,6 +127,53 @@ class RepeatingToolModel implements ModelClient {
   }
 }
 
+class AlternatingGraphLeadToolModel implements ModelClient {
+  readonly provider = 'test'
+  readonly model = 'alternating-graph-lead-tool-model'
+  readonly requests: ModelRequest[] = []
+
+  async *stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
+    this.requests.push(request)
+    const sequence = this.requests.length
+    const controlStep = sequence % 2 === 1
+    yield {
+      kind: 'tool_call_complete',
+      callId: `graph_lead_call_${sequence}`,
+      toolName: controlStep ? 'graph_control_run' : 'graph_supervise_node',
+      arguments: {
+        action: controlStep ? 'inspect' : 'overview',
+        sequence
+      }
+    }
+    yield { kind: 'completed', stopReason: 'tool_calls' }
+  }
+}
+
+class HangingGraphLeadModel implements ModelClient {
+  readonly provider = 'test'
+  readonly model = 'hanging-graph-lead-model'
+  readonly requests: ModelRequest[] = []
+  private markStarted: (() => void) | undefined
+  private readonly started = new Promise<void>((resolve) => {
+    this.markStarted = resolve
+  })
+
+  async *stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
+    this.requests.push(request)
+    this.markStarted?.()
+    if (!request.abortSignal.aborted) {
+      await new Promise<void>((resolve) => {
+        request.abortSignal.addEventListener('abort', () => resolve(), { once: true })
+      })
+    }
+    for (const chunk of [] as ModelStreamChunk[]) yield chunk
+  }
+
+  waitForStart(): Promise<void> {
+    return this.started
+  }
+}
+
 class CapturingCompleteModel implements ModelClient {
   readonly provider = 'test'
   readonly model = 'capturing-complete-model'
@@ -135,6 +182,28 @@ class CapturingCompleteModel implements ModelClient {
   async *stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
     this.requests.push(request)
     yield { kind: 'assistant_text_delta', text: 'Done.' }
+    yield { kind: 'completed', stopReason: 'stop' }
+  }
+}
+
+class RecoverableGraphStreamModel implements ModelClient {
+  readonly provider = 'test'
+  readonly model = 'recoverable-graph-stream-model'
+  readonly requests: ModelRequest[] = []
+
+  async *stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
+    this.requests.push(request)
+    if (this.requests.length === 1) {
+      yield { kind: 'assistant_text_delta', text: 'Partial Graph supervision update.' }
+      yield {
+        kind: 'error',
+        message: 'model stream read failed: terminated',
+        code: 'stream_read_error',
+        failure: { category: 'network', failoverAllowed: true }
+      }
+      return
+    }
+    yield { kind: 'assistant_text_delta', text: 'Recovered Graph final response.' }
     yield { kind: 'completed', stopReason: 'stop' }
   }
 }
@@ -701,6 +770,379 @@ describe('AgentLoop interruption', () => {
       .not.toContain('graph_create_run')
   })
 
+  it('parks a nonterminal Graph Lead episode after eight alternating tool steps', async () => {
+    const sessionStore = new InMemorySessionStore()
+    const threadStore = new InMemoryThreadStore()
+    const eventBus = new InMemoryEventBus()
+    const inflight = new InflightTracker()
+    const steering = new SteeringQueue()
+    const ids = new SequentialIdGenerator()
+    const nowIso = () => '2026-07-30T00:00:00.000Z'
+    const events = new RuntimeEventRecorder({
+      eventBus,
+      sessionStore,
+      allocateSeq: (threadId) => eventBus.allocateSeq(threadId),
+      nowIso
+    })
+    const model = new AlternatingGraphLeadToolModel()
+    const turns = new TurnService({
+      threadStore,
+      sessionStore,
+      events,
+      inflight,
+      steering,
+      compactor: new ContextCompactor(),
+      resolveGraphLeadRun: async () => ({
+        runId: 'graph_run_bounded_episode',
+        lastEventSeq: 12,
+        terminal: false,
+        supervisionPending: true
+      }),
+      ids,
+      nowIso
+    })
+    const graphToolSchema = {
+      type: 'object',
+      properties: {
+        action: { type: 'string' },
+        sequence: { type: 'number' }
+      },
+      required: ['action', 'sequence'],
+      additionalProperties: false
+    } as const
+    const graphControlTool = LocalToolHost.defineTool({
+      name: 'graph_control_run',
+      description: 'Inspect a GraphRun.',
+      inputSchema: graphToolSchema,
+      toolKind: 'tool_call',
+      policy: 'auto',
+      shouldAdvertise: (context) => context.orchestration === 'graph',
+      execute: async () => ({ output: { ok: true } })
+    })
+    const graphSuperviseTool = LocalToolHost.defineTool({
+      name: 'graph_supervise_node',
+      description: 'Inspect a Graph worker.',
+      inputSchema: graphToolSchema,
+      toolKind: 'tool_call',
+      policy: 'auto',
+      shouldAdvertise: (context) => context.orchestration === 'graph',
+      execute: async () => ({ output: { ok: true } })
+    })
+    const loop = new AgentLoop({
+      threadStore,
+      sessionStore,
+      approvalGate: new AllowApprovalGate(),
+      userInputGate: new NoopUserInputGate(),
+      model,
+      toolHost: new LocalToolHost({ tools: [graphControlTool, graphSuperviseTool] }),
+      usage: new UsageService(),
+      events,
+      turns,
+      inflight,
+      steering,
+      compactor: new ContextCompactor(),
+      prefix: createImmutablePrefix({ systemPrompt: 'test system prompt' }),
+      turnLimits: { maxSteps: 1, maxWallTimeMs: 60_000 },
+      ids,
+      nowIso
+    })
+    const threadId = 'thr_graph_bounded_lead_episode'
+    await threadStore.upsert(createThreadRecord({
+      id: threadId,
+      title: 'Bounded Graph Lead episode',
+      workspace: '/tmp/workspace',
+      model: model.model
+    }))
+    const started = await turns.startTurn({
+      threadId,
+      request: {
+        prompt: 'Supervise the durable GraphRun.',
+        model: model.model,
+        orchestration: 'graph'
+      }
+    })
+    await turns.resumeGraphLeadTurn({
+      threadId,
+      turnId: started.turnId,
+      runId: 'graph_run_bounded_episode',
+      lastDeliveredSeq: 12,
+      terminal: false
+    })
+
+    const suspendGraphLeadTurn = turns.suspendGraphLeadTurn.bind(turns)
+    const suspensionInputs: Parameters<TurnService['suspendGraphLeadTurn']>[0][] = []
+    turns.suspendGraphLeadTurn = async (input) => {
+      suspensionInputs.push(input)
+      return suspendGraphLeadTurn(input)
+    }
+    const finishTurn = turns.finishTurn.bind(turns)
+    let finishTurnCalls = 0
+    turns.finishTurn = async (input) => {
+      finishTurnCalls += 1
+      return finishTurn(input)
+    }
+
+    await expect(loop.runTurn(threadId, started.turnId)).resolves.toBe('suspended')
+
+    expect(model.requests).toHaveLength(8)
+    expect(suspensionInputs).toEqual([
+      {
+        threadId,
+        turnId: started.turnId,
+        force: true,
+        preserveDeliveryCursor: true,
+        allowPendingSupervision: true
+      }
+    ])
+    expect(finishTurnCalls).toBe(0)
+    expect((await turns.getTurn(threadId, started.turnId))?.status).toBe('running')
+    expect(turns.isTurnExecutionActive(started.turnId)).toBe(false)
+    expect(eventBus.snapshotSince(threadId, 0).some((event) =>
+      event.kind === 'turn_completed' ||
+      event.kind === 'turn_failed' ||
+      (event.kind === 'error' && event.code === 'turn_step_limit')
+    )).toBe(false)
+  })
+
+  it('aborts and parks a Graph Lead model step at the episode elapsed-time limit', async () => {
+    vi.useFakeTimers()
+    try {
+      const sessionStore = new InMemorySessionStore()
+      const threadStore = new InMemoryThreadStore()
+      const eventBus = new InMemoryEventBus()
+      const inflight = new InflightTracker()
+      const steering = new SteeringQueue()
+      const ids = new SequentialIdGenerator()
+      const nowIso = () => '2026-07-30T00:00:00.000Z'
+      const events = new RuntimeEventRecorder({
+        eventBus,
+        sessionStore,
+        allocateSeq: (threadId) => eventBus.allocateSeq(threadId),
+        nowIso
+      })
+      const model = new HangingGraphLeadModel()
+      const turns = new TurnService({
+        threadStore,
+        sessionStore,
+        events,
+        inflight,
+        steering,
+        compactor: new ContextCompactor(),
+        resolveGraphLeadRun: async () => ({
+          runId: 'graph_run_elapsed_episode',
+          lastEventSeq: 4,
+          terminal: false,
+          supervisionPending: true
+        }),
+        ids,
+        nowIso
+      })
+      const loop = new AgentLoop({
+        threadStore,
+        sessionStore,
+        approvalGate: new AllowApprovalGate(),
+        userInputGate: new NoopUserInputGate(),
+        model,
+        toolHost: new LocalToolHost({ tools: [] }),
+        usage: new UsageService(),
+        events,
+        turns,
+        inflight,
+        steering,
+        compactor: new ContextCompactor(),
+        prefix: createImmutablePrefix({ systemPrompt: 'test system prompt' }),
+        ids,
+        nowIso
+      })
+      const threadId = 'thr_graph_elapsed_lead_episode'
+      await threadStore.upsert(createThreadRecord({
+        id: threadId,
+        title: 'Elapsed Graph Lead episode',
+        workspace: '/tmp/workspace',
+        model: model.model
+      }))
+      const started = await turns.startTurn({
+        threadId,
+        request: {
+          prompt: 'Supervise without hanging forever.',
+          model: model.model,
+          orchestration: 'graph'
+        }
+      })
+      await turns.resumeGraphLeadTurn({
+        threadId,
+        turnId: started.turnId,
+        runId: 'graph_run_elapsed_episode',
+        lastDeliveredSeq: 4,
+        terminal: false
+      })
+
+      const finishTurn = turns.finishTurn.bind(turns)
+      let finishTurnCalls = 0
+      turns.finishTurn = async (input) => {
+        finishTurnCalls += 1
+        return finishTurn(input)
+      }
+
+      const run = loop.runTurn(threadId, started.turnId)
+      await model.waitForStart()
+      await vi.advanceTimersByTimeAsync(10 * 60_000)
+
+      await expect(run).resolves.toBe('suspended')
+      expect(model.requests).toHaveLength(1)
+      expect(model.requests[0]?.abortSignal.aborted).toBe(true)
+      expect(finishTurnCalls).toBe(0)
+      expect((await turns.getTurn(threadId, started.turnId))?.status).toBe('running')
+      expect(turns.isTurnExecutionActive(started.turnId)).toBe(false)
+      expect(eventBus.snapshotSince(threadId, 0).some((event) =>
+        event.kind === 'turn_completed' ||
+        event.kind === 'turn_failed' ||
+        event.kind === 'error'
+      )).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('parks and resumes the same Graph source turn after a committed stream read failure', async () => {
+    const sessionStore = new InMemorySessionStore()
+    const threadStore = new InMemoryThreadStore()
+    const eventBus = new InMemoryEventBus()
+    const inflight = new InflightTracker()
+    const steering = new SteeringQueue()
+    const ids = new SequentialIdGenerator()
+    const nowIso = () => '2026-07-30T00:00:00.000Z'
+    const events = new RuntimeEventRecorder({
+      eventBus,
+      sessionStore,
+      allocateSeq: (threadId) => eventBus.allocateSeq(threadId),
+      nowIso
+    })
+    const model = new RecoverableGraphStreamModel()
+    let graphTerminal = false
+    const turns = new TurnService({
+      threadStore,
+      sessionStore,
+      events,
+      inflight,
+      steering,
+      compactor: new ContextCompactor(),
+      resolveGraphLeadRun: async () => ({
+        runId: 'graph_run_stream_recovery',
+        lastEventSeq: graphTerminal ? 8 : 4,
+        terminal: graphTerminal
+      }),
+      ids,
+      nowIso
+    })
+    const loop = new AgentLoop({
+      threadStore,
+      sessionStore,
+      approvalGate: new AllowApprovalGate(),
+      userInputGate: new NoopUserInputGate(),
+      model,
+      toolHost: new LocalToolHost({ tools: [] }),
+      usage: new UsageService(),
+      events,
+      turns,
+      inflight,
+      steering,
+      compactor: new ContextCompactor(),
+      prefix: createImmutablePrefix({ systemPrompt: 'test system prompt' }),
+      ids,
+      nowIso
+    })
+    const threadId = 'thr_graph_stream_recovery'
+    await threadStore.upsert(createThreadRecord({
+      id: threadId,
+      title: 'Graph stream recovery',
+      workspace: '/tmp/workspace',
+      model: model.model
+    }))
+    const started = await turns.startTurn({
+      threadId,
+      request: {
+        prompt: 'Keep supervising this Graph until it is complete.',
+        model: model.model,
+        orchestration: 'graph'
+      }
+    })
+
+    const suspendGraphLeadTurn = turns.suspendGraphLeadTurn.bind(turns)
+    let parkedTurn: Awaited<ReturnType<TurnService['getTurn']>> | undefined
+    let parkedItems: Awaited<ReturnType<InMemorySessionStore['loadItems']>> = []
+    let executionReleasedBeforeWake = false
+    let turnFailedBeforeWake = false
+    let racedContinuation: ReturnType<AgentLoop['runTurn']> | undefined
+    turns.suspendGraphLeadTurn = async (input) => {
+      const outcome = await suspendGraphLeadTurn(input)
+      if (outcome !== 'suspended' || racedContinuation) return outcome
+      parkedTurn = await turns.getTurn(threadId, started.turnId)
+      parkedItems = await sessionStore.loadItems(threadId)
+      executionReleasedBeforeWake = !turns.isTurnExecutionActive(started.turnId)
+      turnFailedBeforeWake = eventBus.snapshotSince(threadId, 0)
+        .some((event) => event.kind === 'turn_failed')
+
+      // Reacquire the lease and invoke runTurn before the old suspended
+      // promise has left AgentLoop.activeTurnRuns. The wake-up must chain a
+      // fresh runner after that promise settles instead of losing the lease.
+      graphTerminal = true
+      await turns.resumeGraphLeadTurn({
+        threadId,
+        turnId: started.turnId,
+        runId: 'graph_run_stream_recovery',
+        lastDeliveredSeq: 8,
+        terminal: true
+      })
+      await turns.steerTurn({
+        threadId,
+        turnId: started.turnId,
+        text: 'Continue in Graph mode and deliver the final result.'
+      })
+      racedContinuation = loop.runTurn(threadId, started.turnId)
+      return outcome
+    }
+
+    await expect(loop.runTurn(threadId, started.turnId)).resolves.toBe('suspended')
+    expect(parkedTurn).toMatchObject({
+      id: started.turnId,
+      status: 'running',
+      orchestration: 'graph',
+      graphLeadLifecycle: {
+        runId: 'graph_run_stream_recovery',
+        state: 'supervising',
+        // Parking a failed episode must not acknowledge events that were not
+        // delivered through an explicit Graph Lead resume snapshot.
+        lastDeliveredSeq: 0
+      }
+    })
+    expect(executionReleasedBeforeWake).toBe(true)
+    expect(parkedItems).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'error',
+        code: 'stream_read_error',
+        message: 'model stream read failed: terminated'
+      })
+    ]))
+    expect(parkedItems.filter((item) =>
+      item.kind === 'assistant_text' &&
+      item.text === 'Partial Graph supervision update.'
+    )).toHaveLength(1)
+    expect(turnFailedBeforeWake).toBe(false)
+
+    expect(racedContinuation).toBeDefined()
+    await expect(racedContinuation!).resolves.toBe('completed')
+    expect((await turns.getTurn(threadId, started.turnId))?.status).toBe('completed')
+    expect(model.requests).toHaveLength(2)
+    expect(model.requests[1]?.modeInstruction).toContain('Graph Mode is active')
+    expect(model.requests[1]?.history).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'user_message',
+        text: 'Continue in Graph mode and deliver the final result.'
+      })
+    ]))
+  })
+
   it('parks the planning draft without a terminal error when the model cannot call tools', async () => {
     const sessionStore = new InMemorySessionStore()
     const threadStore = new InMemoryThreadStore()
@@ -803,6 +1245,17 @@ describe('AgentLoop interruption', () => {
     })
     const recorded = await sessionStore.loadEventsSince(threadId, 0)
     expect(recorded.some((event) => event.kind === 'error')).toBe(false)
+
+    await turns.steerTurn({
+      threadId,
+      turnId: started.turnId,
+      text: 'Continue the suspended Graph planning turn.'
+    })
+    expect(turns.isTurnExecutionActive(started.turnId)).toBe(true)
+    expect(steering.peek(started.turnId)).toEqual([
+      { text: 'Continue the suspended Graph planning turn.' }
+    ])
+    await turns.interruptTurn({ threadId, turnId: started.turnId })
   })
 
   it('recovers retryable invalid Graph creation through a single-tool correction round', async () => {

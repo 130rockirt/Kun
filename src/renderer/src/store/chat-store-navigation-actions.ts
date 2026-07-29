@@ -90,9 +90,7 @@ import {
 import { persistDesignChatMetaForDoc } from '../design/design-chat-transcript'
 import {
   isSddAssistantThread,
-  isSddThreadVisibleInSidebar,
-  readSddThreadRegistry,
-  type SddThreadRegistry
+  readSddThreadRegistry
 } from '../sdd/sdd-thread-registry'
 import {
   clearBusyWatchdog,
@@ -119,18 +117,11 @@ import {
   runtimeStreamRecoveringMessage,
   shouldOpenSettingsForError,
   syncTurnCompletionPoll,
+  turnCompleteNotificationSource,
   watchTurnCompletionNotification
 } from './chat-store-runtime'
 
 type SseAbortRef = { current: AbortController | null }
-
-export function shouldIncludeThreadInSidebarInventory(
-  thread: NormalizedThread,
-  registry: SddThreadRegistry
-): boolean {
-  return !isSddAssistantThread(thread, registry) ||
-    isSddThreadVisibleInSidebar(thread.id, registry)
-}
 
 type StoreActionContext = {
   set: ChatStoreSet
@@ -178,7 +169,11 @@ export function createNavigationActions(
     const nextWatch = { ...state.watchTurnCompletion }
     if (state.activeThreadId && state.busy) {
       nextWatch[state.activeThreadId] = true
-      watchTurnCompletionNotification(state.activeThreadId)
+      watchTurnCompletionNotification(
+        state.activeThreadId,
+        Date.now(),
+        turnCompleteNotificationSource(state.activeThreadId, state)
+      )
     }
     set({
       ...clearedThreadSelection(),
@@ -198,7 +193,11 @@ export function createNavigationActions(
     const nextWatch = { ...state.watchTurnCompletion }
     if (state.activeThreadId && state.busy) {
       nextWatch[state.activeThreadId] = true
-      watchTurnCompletionNotification(state.activeThreadId)
+      watchTurnCompletionNotification(
+        state.activeThreadId,
+        Date.now(),
+        turnCompleteNotificationSource(state.activeThreadId, state)
+      )
     }
     sseAbortRef.current?.abort()
     sseAbortRef.current = null
@@ -217,7 +216,11 @@ export function createNavigationActions(
     const nextWatch = { ...state.watchTurnCompletion }
     if (state.activeThreadId && state.busy) {
       nextWatch[state.activeThreadId] = true
-      watchTurnCompletionNotification(state.activeThreadId)
+      watchTurnCompletionNotification(
+        state.activeThreadId,
+        Date.now(),
+        turnCompleteNotificationSource(state.activeThreadId, state)
+      )
     }
     sseAbortRef.current?.abort()
     sseAbortRef.current = null
@@ -270,7 +273,11 @@ export function createNavigationActions(
     const nextWatch = { ...state.watchTurnCompletion }
     if (state.activeThreadId && state.busy) {
       nextWatch[state.activeThreadId] = true
-      watchTurnCompletionNotification(state.activeThreadId)
+      watchTurnCompletionNotification(
+        state.activeThreadId,
+        Date.now(),
+        turnCompleteNotificationSource(state.activeThreadId, state)
+      )
     }
     set({
       ...clearedThreadSelection(),
@@ -878,8 +885,7 @@ export function createNavigationActions(
       }))
       const sddThreadRegistry = readSddThreadRegistry()
       const designRegistry = readDesignThreadRegistry()
-      const sidebarThreads = (await filterThreadsForSidebar(threads, p))
-        .filter((thread) => shouldIncludeThreadInSidebarInventory(thread, sddThreadRegistry))
+      const sidebarThreads = await filterThreadsForSidebar(threads, p)
       const forkRegistry = hydrateThreadForkRegistry(sidebarThreads, readThreadForkRegistry())
       saveThreadForkRegistry(forkRegistry)
       const enrichedThreads = enrichThreadsWithForkInfo(sidebarThreads, forkRegistry)

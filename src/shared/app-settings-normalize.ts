@@ -133,7 +133,9 @@ export function normalizeAppSettings(settings: AppSettingsV1): AppSettingsV1 {
     checkpointCleanup: normalizeCheckpointCleanupSettings(maybeSettings.checkpointCleanup),
     gitBranchPrefix: normalizeGitBranchPrefix(maybeSettings.gitBranchPrefix),
     notifications: {
-      turnComplete: maybeSettings.notifications?.turnComplete !== false
+      turnComplete: maybeSettings.notifications?.turnComplete !== false,
+      mainAgentTurnComplete: maybeSettings.notifications?.mainAgentTurnComplete !== false,
+      subagentTurnComplete: maybeSettings.notifications?.subagentTurnComplete === true
     },
     appBehavior: normalizeAppBehaviorSettings(maybeSettings.appBehavior),
     keyboardShortcuts: normalizeKeyboardShortcuts(maybeSettings.keyboardShortcuts),

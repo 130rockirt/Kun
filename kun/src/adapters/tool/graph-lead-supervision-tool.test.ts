@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type {
   GraphNodeAttemptV1,
   GraphRunV1,
+  GraphSteeringV1,
   TurnItem
 } from '../../contracts/index.js'
 import { GraphMessageV1Schema } from '../../contracts/index.js'
@@ -81,14 +82,43 @@ function context(abortSignal = new AbortController().signal): ToolHostContext {
 }
 
 function harness(items: TurnItem[], run = graphRun()) {
-  const steer = vi.fn(async () => run)
+  let currentRun = run
+  const idCounts = new Map<string, number>()
+  const steer = vi.fn(async (_runId: string, steering: GraphSteeringV1) => {
+    currentRun = {
+      ...currentRun,
+      steering: [...currentRun.steering, steering],
+      lastEventSeq: currentRun.lastEventSeq + 1
+    }
+    return currentRun
+  })
+  const append = vi.fn(async (
+    _runId: string,
+    input: {
+      event: {
+        type: string
+        payload: { steeringId: string; to: GraphSteeringV1['status'] }
+      }
+    }
+  ) => {
+    currentRun = {
+      ...currentRun,
+      steering: currentRun.steering.map((entry) =>
+        entry.steeringId === input.event.payload.steeringId
+          ? { ...entry, status: input.event.payload.to }
+          : entry
+      ),
+      lastEventSeq: currentRun.lastEventSeq + 1
+    }
+    return { state: currentRun }
+  })
   const steerChildTurn = vi.fn(async () => undefined)
   const loadItems = vi.fn(async () => items)
   const acknowledge = vi.fn(async () => run)
   const tool = buildGraphLeadSupervisionTool({
     control: { steer } as never,
     mailbox: { acknowledge } as never,
-    store: { get: async () => run } as never,
+    store: { get: async () => currentRun, append } as never,
     registry: {
       identify: async () => ({
         projectId: 'project_1',
@@ -117,9 +147,13 @@ function harness(items: TurnItem[], run = graphRun()) {
     }),
     shouldAdvertise: () => true,
     nowIso: () => '2026-07-28T00:00:03.000Z',
-    nextId: (prefix) => `${prefix}_1`
+    nextId: (prefix) => {
+      const count = (idCounts.get(prefix) ?? 0) + 1
+      idCounts.set(prefix, count)
+      return `${prefix}_${count}`
+    }
   })
-  return { tool, steer, steerChildTurn, loadItems, acknowledge }
+  return { tool, steer, append, steerChildTurn, loadItems, acknowledge }
 }
 
 describe('graph_supervise_node', () => {
@@ -255,7 +289,7 @@ describe('graph_supervise_node', () => {
   })
 
   it('persists attempt guidance before steering the active child turn', async () => {
-    const { tool, steer, steerChildTurn } = harness([])
+    const { tool, steer, append, steerChildTurn } = harness([])
     const result = await tool.execute({
       action: 'guide',
       runId: 'run_1',
@@ -265,8 +299,22 @@ describe('graph_supervise_node', () => {
 
     expect(result.output).toMatchObject({
       persisted: true,
+      durableStatus: 'delivered',
       immediateDelivery: { status: 'delivered' }
     })
+    expect(append).toHaveBeenCalledWith(
+      'run_1',
+      expect.objectContaining({
+        event: {
+          type: 'steering_status_changed',
+          payload: {
+            steeringId: 'graph_steering_1',
+            from: 'persisted',
+            to: 'delivered'
+          }
+        }
+      })
+    )
     expect(steer).toHaveBeenCalledWith(
       'run_1',
       expect.objectContaining({
@@ -294,6 +342,7 @@ describe('graph_supervise_node', () => {
     }, context())
     expect(raced.output).toMatchObject({
       persisted: true,
+      durableStatus: 'persisted',
       immediateDelivery: {
         status: 'queued',
         detail: expect.stringContaining('turn is no longer active')

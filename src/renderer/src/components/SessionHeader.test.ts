@@ -89,6 +89,24 @@ describe('SessionHeader', () => {
     act(() => renderer!.unmount())
   })
 
+  it('shows a requirement draft button next to the compact conversation title', async () => {
+    const onOpenRequirementDraft = vi.fn()
+    let renderer: ReactTestRenderer
+    await act(async () => {
+      renderer = createRenderer(createElement(SessionHeader, {
+        compact: true,
+        onOpenRequirementDraft
+      }))
+    })
+
+    const button = renderer!.root.findByProps({ 'aria-label': 'Requirement draft' })
+    expect(button.props.className).toContain('session-header-compact-requirement')
+
+    act(() => button.props.onClick())
+    expect(onOpenRequirementDraft).toHaveBeenCalledTimes(1)
+    act(() => renderer!.unmount())
+  })
+
   it('hides the branch badge when the workspace is not a Git repository', async () => {
     vi.mocked(window.kunGui.getGitBranches).mockResolvedValue({
       ok: false,

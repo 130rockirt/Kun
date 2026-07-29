@@ -134,6 +134,17 @@ describe('contracts', () => {
     expect(parsed.reasoningEffort).toBe('max')
   })
 
+  it('accepts only the canonical priority service tier on start turns', () => {
+    expect(StartTurnRequest.parse({
+      prompt: 'Move faster',
+      serviceTier: 'priority'
+    }).serviceTier).toBe('priority')
+    expect(StartTurnRequest.safeParse({
+      prompt: 'Do not use the legacy label on the wire',
+      serviceTier: 'fast'
+    }).success).toBe(false)
+  })
+
   it('accepts per-turn execution policy on start turn payloads', () => {
     const parsed = StartTurnRequest.parse({
       prompt: 'Inspect without changing files',

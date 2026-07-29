@@ -55,7 +55,8 @@ export async function steerTurn(
   turns: TurnService,
   threadId: string,
   turnId: string,
-  request: Request
+  request: Request,
+  onSteered?: (response: { threadId: string; turnId: string }) => void
 ): Promise<JsonResponse | Response> {
   const body = await readJsonBody(request)
   if (!body.ok) return body.response
@@ -71,6 +72,7 @@ export async function steerTurn(
       ...(parsed.data.displayText ? { displayText: parsed.data.displayText } : {}),
       ...(parsed.data.messageSource ? { messageSource: parsed.data.messageSource } : {})
     })
+    onSteered?.({ threadId, turnId })
   } catch (error) {
     if (error instanceof TurnConflictError) return ERRORS.conflict(error.message)
     if (error instanceof Error && /not found/i.test(error.message)) return ERRORS.notFound(error.message)

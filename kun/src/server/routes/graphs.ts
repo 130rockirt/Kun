@@ -20,7 +20,11 @@ import {
   GraphRunNotFoundError,
   GraphStoreCorruptionError
 } from '../../graph/index.js'
-import type { TurnService } from '../../services/turn-service.js'
+import {
+  TurnCapacityError,
+  TurnConflictError,
+  type TurnService
+} from '../../services/turn-service.js'
 import type { RuntimeEventRecorder } from '../../services/runtime-event-recorder.js'
 import { emitPlanningEvent } from '../../adapters/tool/graph-define-plan-tool.js'
 import type { GraphEventReplay } from '../../graph/graph-run-store.js'
@@ -261,6 +265,7 @@ export async function resumeGraphPlanningDraft(
   if (!drafts) return ERRORS.unavailable('Graph Mode runtime is unavailable')
   const parsed = await parseBody(request, GraphDraftCommandSchema)
   if (!parsed.ok) return parsed.response
+  let resumeTarget: { threadId: string; turnId: string } | null = null
   try {
     const current = await drafts.require(draftId)
     if (current.revision !== parsed.data.expectedRevision) {
@@ -278,14 +283,42 @@ export async function resumeGraphPlanningDraft(
       status: 'planning',
       issues: current.issues
     })
-    await emitPlanningEvent({ drafts, events }, draft)
-    await turns.resumeGraphPlanningTurn({
+    resumeTarget = {
       threadId: draft.threadId,
       turnId: draft.sourceTurnId
-    })
-    void runTurn(draft.threadId, draft.sourceTurnId)
+    }
+    await emitPlanningEvent({ drafts, events }, draft)
+    try {
+      const result = await turns.resumeGraphPlanningTurn(resumeTarget)
+      if (result === 'resumed') {
+        void runTurn(draft.threadId, draft.sourceTurnId)
+      }
+    } catch (error) {
+      // TurnService compensates its own failed lease acquisition. Do not issue
+      // a second suspend here: another concurrent retry may already own the
+      // newly restored correction revision.
+      resumeTarget = null
+      throw error
+    }
+    // The execution owner is now responsible for the planning lifecycle.
+    resumeTarget = null
     return jsonResponse(await graphDraftView(drafts, draft.id), 202)
   } catch (error) {
+    if (resumeTarget) {
+      try {
+        await turns.suspendGraphPlanningTurn({
+          ...resumeTarget,
+          force: true
+        })
+      } catch (recoveryError) {
+        const message = recoveryError instanceof Error
+          ? recoveryError.message
+          : String(recoveryError)
+        return ERRORS.internal(
+          `Graph planning resume failed and correction recovery also failed: ${message}`
+        )
+      }
+    }
     return graphErrorResponse(error)
   }
 }
@@ -301,27 +334,41 @@ export async function cancelGraphPlanningDraft(
   const parsed = await parseBody(request, GraphDraftCommandSchema)
   if (!parsed.ok) return parsed.response
   try {
-    const current = await drafts.require(draftId)
-    if (current.revision !== parsed.data.expectedRevision) {
+    let draft = await drafts.require(draftId)
+    if (
+      draft.status !== 'cancelled' &&
+      draft.revision !== parsed.data.expectedRevision
+    ) {
       throw new GraphPlanningDraftConflictError(
-        `draft ${draftId} expected revision ${parsed.data.expectedRevision}; current is ${current.revision}`
+        `draft ${draftId} expected revision ${parsed.data.expectedRevision}; current is ${draft.revision}`
       )
     }
-    if (current.status === 'committed' || current.status === 'cancelled') {
-      throw new GraphPlanningDraftConflictError(
-        `draft ${draftId} cannot cancel from ${current.status}`
-      )
+    for (let attempt = 0; draft.status !== 'cancelled' && attempt < 8; attempt += 1) {
+      if (draft.status === 'committed') {
+        throw new GraphPlanningDraftConflictError(
+          `draft ${draftId} cannot cancel from ${draft.status}`
+        )
+      }
+      try {
+        draft = await drafts.update(draftId, {
+          expectedRevision: draft.revision,
+          status: 'cancelled',
+          issues: draft.issues
+        })
+      } catch (error) {
+        if (!(error instanceof GraphPlanningDraftConflictError) || attempt === 7) throw error
+        draft = await drafts.require(draftId)
+      }
     }
-    const draft = await drafts.update(draftId, {
-      expectedRevision: current.revision,
-      status: 'cancelled',
-      issues: current.issues
-    })
-    await emitPlanningEvent({ drafts, events }, draft)
-    await turns.interruptTurn({
-      threadId: draft.threadId,
-      turnId: draft.sourceTurnId
-    })
+    await emitPlanningEvent({ drafts, events }, draft).catch(() => undefined)
+    try {
+      await turns.interruptTurn({
+        threadId: draft.threadId,
+        turnId: draft.sourceTurnId
+      })
+    } catch (error) {
+      if (!(error instanceof TurnConflictError)) throw error
+    }
     return jsonResponse(await graphDraftView(drafts, draft.id))
   } catch (error) {
     return graphErrorResponse(error)
@@ -537,6 +584,15 @@ async function parseBody<T extends z.ZodType>(
 function graphErrorResponse(error: unknown): JsonResponse {
   if (error instanceof GraphPlanningDraftNotFoundError) return ERRORS.notFound(error.message)
   if (error instanceof GraphPlanningDraftConflictError) return ERRORS.conflict(error.message)
+  if (error instanceof TurnCapacityError) {
+    return ERRORS.rateLimited(error.message, {
+      maxConcurrentTurns: error.maxConcurrentTurns
+    })
+  }
+  if (error instanceof TurnConflictError) return ERRORS.conflict(error.message)
+  if (error instanceof Error && /turn not found/i.test(error.message)) {
+    return ERRORS.notFound(error.message)
+  }
   if (error instanceof GraphRunNotFoundError) return ERRORS.notFound(error.message)
   if (error instanceof GraphRunConflictError) return ERRORS.conflict(error.message)
   if (error instanceof GraphPlanValidationError) {

@@ -121,6 +121,7 @@ import {
   runtimeStreamRecoveringMessage,
   shouldOpenSettingsForError,
   syncTurnCompletionPoll,
+  turnCompleteNotificationSource,
   watchTurnCompletionNotification
 } from './chat-store-runtime'
 import {
@@ -147,7 +148,11 @@ function hasRuntimeUserBlockForGuidance(
       .filter((text): text is string => Boolean(text))
   )
   return blocks.some((block) => {
-    if (block.kind !== 'user' || block.id.startsWith('q-')) return false
+    if (
+      block.kind !== 'user' ||
+      block.id.startsWith('q-') ||
+      block.id.startsWith('graph-steering-')
+    ) return false
     const blockTurnId = block.turnId?.trim() || block.meta?.turnId?.trim()
     if (blockTurnId !== turnId) return false
     const blockTexts = [block.text, block.meta?.displayText]
@@ -551,14 +556,19 @@ export function createThreadActions(
       set({ error: i18n.t('common:runtimeActionNeedsConnection') })
       return
     }
-    const prevId = get().activeThreadId
-    const prevBusy = get().busy
+    const previousState = get()
+    const prevId = previousState.activeThreadId
+    const prevBusy = previousState.busy
     let nextWatch = { ...get().watchTurnCompletion }
     delete nextWatch[id]
     clearWatchedCompletionNotification(id)
     if (prevId && prevId !== id && prevBusy) {
       nextWatch[prevId] = true
-      watchTurnCompletionNotification(prevId)
+      watchTurnCompletionNotification(
+        prevId,
+        Date.now(),
+        turnCompleteNotificationSource(prevId, previousState)
+      )
     }
     const nextUnread = { ...get().unreadThreadIds }
     delete nextUnread[id]
@@ -1012,40 +1022,99 @@ export function createThreadActions(
         state.currentTurnId &&
         graphGuidanceIsTextOnly
       ) {
-        try {
-          const steered = await useGraphStore.getState().steerSourceTurn(
-            state.activeThreadId,
-            state.currentTurnId,
-            trimmedText
-          )
-          if (steered) {
-            const createdAt = new Date().toISOString()
-            const displayText = overrides?.displayText?.trim() || trimmedText
-            set((current) => ({
+        const graphThreadId = state.activeThreadId
+        const graphTurnId = state.currentTurnId
+        const guidanceDisplayText = overrides?.displayText?.trim() || trimmedText
+        const guidanceMessage = {
+          text: trimmedText,
+          ...(guidanceDisplayText !== trimmedText
+            ? { displayText: guidanceDisplayText }
+            : {})
+        }
+        const graphTurnIsStillActive = (current: ChatState): boolean =>
+          current.activeThreadId === graphThreadId &&
+          current.currentTurnId === graphTurnId &&
+          current.currentTurnOrchestration === 'graph'
+        const setGraphGuidanceError = (error: unknown): void => {
+          set((current) => graphTurnIsStillActive(current)
+            ? {
+                error: i18n.t('common:guideQueuedMessageFailed', {
+                  message: formatRuntimeError(error)
+                })
+              }
+            : {})
+        }
+        const appendGraphGuidance = (
+          requestStartedAt: number,
+          requestCompletedAt: number
+        ): void => {
+          set((current) => {
+            if (!graphTurnIsStillActive(current)) return {}
+            if (hasRuntimeUserBlockForGuidance(
+              current.blocks,
+              guidanceMessage,
+              graphTurnId,
+              requestStartedAt,
+              requestCompletedAt
+            )) {
+              return { error: null }
+            }
+            return {
               blocks: [
                 ...current.blocks,
                 {
                   kind: 'user' as const,
-                  id: `graph-steering-${Date.now()}`,
-                  turnId: state.currentTurnId!,
-                  createdAt,
-                  text: displayText,
-                  ...(displayText !== trimmedText
-                    ? { meta: { displayText } }
+                  id: `graph-steering-${requestCompletedAt}`,
+                  turnId: graphTurnId,
+                  createdAt: new Date(requestCompletedAt).toISOString(),
+                  text: guidanceDisplayText,
+                  ...(guidanceDisplayText !== trimmedText
+                    ? { meta: { displayText: guidanceDisplayText } }
                     : {})
                 }
               ],
               error: null
-            }))
+            }
+          })
+        }
+        const graphSteerStartedAt = Date.now()
+        try {
+          const steered = await useGraphStore.getState().steerSourceTurn(
+            graphThreadId,
+            graphTurnId,
+            trimmedText
+          )
+          if (steered) {
+            appendGraphGuidance(graphSteerStartedAt, Date.now())
             return true
           }
         } catch (error) {
-          set({
-            error: i18n.t('common:guideQueuedMessageFailed', {
-              message: formatRuntimeError(error)
-            })
-          })
+          setGraphGuidanceError(error)
           return false
+        }
+        if (!graphTurnIsStillActive(get())) return false
+        // Before graph_create_run commits there is no GraphRun endpoint to
+        // steer. A recoverably suspended planning slice is still the same
+        // running Graph source turn, so wake it through the generic turn
+        // steering route instead of snapshotting "continue" as a new Direct
+        // turn that can never regain the draft's Graph ownership.
+        if (typeof p.steerUserMessage === 'function') {
+          const turnSteerStartedAt = Date.now()
+          try {
+            await p.steerUserMessage(
+              graphThreadId,
+              graphTurnId,
+              trimmedText,
+              guidanceMessage.displayText
+                ? { displayText: guidanceMessage.displayText }
+                : undefined
+            )
+            appendGraphGuidance(turnSteerStartedAt, Date.now())
+            return true
+          } catch (error) {
+            setGraphGuidanceError(error)
+            return false
+          }
         }
       }
       if (overrides?.guiPlan || writeContext) {
@@ -1072,6 +1141,7 @@ export function createThreadActions(
         overrides?.modelLabel ?? optimisticUserModelLabel(composerModel, threadSnap?.model)
       const displayText = overrides?.displayText?.trim()
       const reasoningEffort = overrides?.reasoningEffort?.trim()
+      const serviceTier = overrides?.serviceTier === 'priority' ? 'priority' as const : undefined
       const attachmentIds = overrides?.attachmentIds?.filter((id) => id.trim().length > 0)
       const attachments = overrides?.attachments?.filter((attachment) => attachment.id.trim().length > 0)
       const fileReferences = overrides?.fileReferences?.filter((reference) =>
@@ -1101,6 +1171,7 @@ export function createThreadActions(
             ...(composerAccountId ? { accountId: composerAccountId } : {}),
             ...(userModelChip ? { modelLabel: userModelChip } : {}),
             ...(reasoningEffort ? { reasoningEffort } : {}),
+            ...(serviceTier ? { serviceTier } : {}),
             ...(overrides?.guiPlan ? { guiPlan: overrides.guiPlan } : {}),
             ...(overrides?.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
             ...(overrides?.guiDesignMode ? { guiDesignMode: true } : {}),
@@ -1170,6 +1241,10 @@ export function createThreadActions(
       overrides?.accountId?.trim() ??
       accountIdForComposerSelection(get().composerModelGroups, composerProviderId, composerModel)
     const reasoningEffort = queued?.reasoningEffort ?? overrides?.reasoningEffort?.trim()
+    const serviceTier =
+      (queued?.serviceTier ?? overrides?.serviceTier) === 'priority'
+        ? 'priority' as const
+        : undefined
     const guiDesignCanvas = (queued?.guiDesignCanvas ?? overrides?.guiDesignCanvas) === true
     const guiDesignMode = (queued?.guiDesignMode ?? overrides?.guiDesignMode) === true
     const orchestration = queued?.orchestration ??
@@ -1400,6 +1475,7 @@ export function createThreadActions(
         ...(!channel && composerProviderId ? { providerId: composerProviderId } : {}),
         ...(!channel && composerAccountId ? { accountId: composerAccountId } : {}),
         ...(reasoningEffort ? { reasoningEffort } : {}),
+        ...(!channel && serviceTier ? { serviceTier } : {}),
         ...(runtimeDisplayText ? { displayText: runtimeDisplayText } : {}),
         ...((queued?.guiPlan ?? overrides?.guiPlan) ? { guiPlan: queued?.guiPlan ?? overrides?.guiPlan } : {}),
         ...(guiDesignCanvas ? { guiDesignCanvas: true } : {}),

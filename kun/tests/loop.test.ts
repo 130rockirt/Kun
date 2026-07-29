@@ -1328,7 +1328,7 @@ describe('AgentLoop', () => {
 	    })
 	  })
 
-  it('does not suppress repeated Graph run inspections within a turn', async () => {
+  it('suppresses the third identical Graph run inspection within a turn', async () => {
     let executions = 0
     const inspectTool = LocalToolHost.defineTool({
       name: 'graph_control_run',
@@ -1354,7 +1354,7 @@ describe('AgentLoop', () => {
         model: 'graph-inspect-model',
         async *stream(): AsyncIterable<ModelStreamChunk> {
           calls += 1
-          if (calls <= 4) {
+          if (calls <= 3) {
             yield {
               kind: 'tool_call_complete',
               callId: `call_graph_inspect_${calls}`,
@@ -1372,11 +1372,26 @@ describe('AgentLoop', () => {
     await bootstrapThread(h)
 
     const status = await h.loop.runTurn(h.threadId, h.turnId)
+    const items = await h.sessionStore.loadItems(h.threadId)
     const events = await h.sessionStore.loadEventsSince(h.threadId, 0)
+    const stormResult = items.find(
+      (item) => item.kind === 'tool_result' && item.callId === 'call_graph_inspect_3'
+    )
+    const thirdCall = items.find(
+      (item) => item.kind === 'tool_call' && item.callId === 'call_graph_inspect_3'
+    )
 
     expect(status).toBe('completed')
-    expect(executions).toBe(4)
-    expect(events.some((event) => event.kind === 'tool_storm_suppressed')).toBe(false)
+    expect(executions).toBe(2)
+    expect(thirdCall).toMatchObject({ kind: 'tool_call', status: 'failed' })
+    expect(stormResult?.kind === 'tool_result' ? stormResult.isError : false).toBe(true)
+    expect(stormResult?.kind === 'tool_result' ? JSON.stringify(stormResult.output) : '')
+      .toContain('repeat-loop guard suppressed')
+    expect(events.find((event) => event.kind === 'tool_storm_suppressed')).toMatchObject({
+      kind: 'tool_storm_suppressed',
+      callId: 'call_graph_inspect_3',
+      toolName: 'graph_control_run'
+    })
   })
 
 	  it('can disable the storm breaker through loop config', async () => {

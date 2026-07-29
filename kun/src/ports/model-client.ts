@@ -2,6 +2,7 @@ import type { ToolCallProviderMetadata, TurnItem } from '../contracts/items.js'
 import type { UsageSnapshot } from '../contracts/usage.js'
 import type { ToolProviderKind } from './tool-host.js'
 import type { ModelFailureMetadata } from '../contracts/model-route-pool.js'
+import type { TurnServiceTier } from '../contracts/turns.js'
 
 /**
  * One streaming chunk from a model response. The loop consumes these
@@ -111,6 +112,8 @@ export type ModelRequest = {
    * `high` and `max` enable it with a concrete reasoning effort.
    */
   reasoningEffort?: string
+  /** Optional provider request class, captured from the initiating turn. */
+  serviceTier?: TurnServiceTier
   abortSignal: AbortSignal
 }
 

@@ -84,6 +84,7 @@ describe('WorkbenchSideRail', () => {
         onToggleRightPanelMode: vi.fn(),
         planPanelEnabled: true,
         canvasEnabled: true,
+        graphEnabled: false,
         sideChatRunningCount: 0,
         sideChatOpen: false,
         sideChatEnabled: true,
@@ -111,6 +112,7 @@ describe('WorkbenchSideRail', () => {
     }
 
     expect(html).not.toContain('data-tooltip="Todo"')
+    expect(html).not.toContain('data-tooltip="Graph"')
 
     expect(html).toContain('data-tooltip="Usage &amp; quota"')
     expect(html).toContain('aria-label="Usage &amp; quota"')
@@ -147,6 +149,22 @@ describe('WorkbenchSideRail', () => {
     expect(html).not.toContain(`data-tooltip="Terminal"`)
 
     expect(html.match(/ds-side-rail-button/g)?.length).toBeGreaterThanOrEqual(8)
+  })
+
+  it('shows the Graph launcher only after Graph is enabled', () => {
+    const disabledHtml = renderToStaticMarkup(createElement(WorkbenchSideRail, {
+      rightPanelMode: null,
+      onToggleRightPanelMode: vi.fn(),
+      graphEnabled: false
+    }))
+    const enabledHtml = renderToStaticMarkup(createElement(WorkbenchSideRail, {
+      rightPanelMode: null,
+      onToggleRightPanelMode: vi.fn(),
+      graphEnabled: true
+    }))
+
+    expect(disabledHtml).not.toContain('data-tooltip="Graph"')
+    expect(enabledHtml).toContain('data-tooltip="Graph"')
   })
 
   it('disables Agent Perspective until a Code conversation is selected', () => {

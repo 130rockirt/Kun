@@ -218,6 +218,8 @@ export const MODEL_PROVIDER_MESSAGE_PARTS = ['text', 'image_url', 'input_image']
 export type ModelProviderMessagePartSupport = (typeof MODEL_PROVIDER_MESSAGE_PARTS)[number]
 export const MODEL_REASONING_EFFORTS = ['auto', 'off', 'low', 'medium', 'high', 'max'] as const
 export type ModelReasoningEffort = (typeof MODEL_REASONING_EFFORTS)[number]
+export const MODEL_SERVICE_TIERS = ['priority', 'flex'] as const
+export type ModelServiceTier = (typeof MODEL_SERVICE_TIERS)[number]
 export const MODEL_REASONING_REQUEST_PROTOCOLS = [
   'none',
   'deepseek-chat-completions',
@@ -244,6 +246,8 @@ export type ModelProviderModelProfileV1 = {
   supportsToolCalling: boolean
   messageParts: ModelProviderMessagePartSupport[]
   reasoning?: ModelProviderReasoningCapabilityV1
+  /** Provider-advertised request service tiers supported by this model. */
+  serviceTiers?: ModelServiceTier[]
   /** Per-model wire-format override. Omitted means "inherit the provider's endpointFormat". */
   endpointFormat?: ModelEndpointFormat
   /**
@@ -1037,7 +1041,12 @@ export type CheckpointCleanupConfigV1 = {
 }
 
 export type NotificationConfigV1 = {
+  /** Master switch for native reply-completion notifications. */
   turnComplete: boolean
+  /** Main-agent completion notifications. Missing legacy values normalize to enabled. */
+  mainAgentTurnComplete?: boolean
+  /** Subagent side-session completion notifications. Missing legacy values normalize to disabled. */
+  subagentTurnComplete?: boolean
 }
 
 export const WINDOW_CLOSE_ACTIONS = ['ask', 'tray', 'quit'] as const

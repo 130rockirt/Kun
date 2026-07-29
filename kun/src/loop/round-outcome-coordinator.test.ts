@@ -7,6 +7,7 @@ import type { ToolHostContext } from '../ports/tool-host.js'
 import type { RuntimeEventRecorder } from '../services/runtime-event-recorder.js'
 import type { TurnService } from '../services/turn-service.js'
 import { CREATE_PLAN_TOOL_NAME } from '../adapters/tool/create-plan-tool.js'
+import { GRAPH_DEFINE_PLAN_TOOL_NAME } from '../adapters/tool/graph-define-plan-tool.js'
 import type { ModelRoundStreamResult } from './model-round-engine.js'
 import {
   GRAPH_CREATE_RUN_TOOL_NAME,
@@ -99,12 +100,16 @@ function harness(options: {
   const dispatches: ToolDispatchInput[] = []
   const updatedItemPatches: Array<{ itemId: string; patch: unknown }> = []
   const failures: unknown[] = []
+  const metadataPatches: unknown[] = []
   const suppressGoalResume = vi.fn()
   const dispatchToolCalls = vi.fn(async (input: ToolDispatchInput) => {
     effects.push('dispatch')
     dispatches.push(input)
     for (const call of input.calls) {
-      if (call.toolName !== GRAPH_CREATE_RUN_TOOL_NAME) continue
+      if (
+        call.toolName !== GRAPH_CREATE_RUN_TOOL_NAME &&
+        call.toolName !== GRAPH_DEFINE_PLAN_TOOL_NAME
+      ) continue
       const result = graphResults.shift()
       if (!result) continue
       sessionItems.push(makeToolResultItem({
@@ -132,8 +137,12 @@ function harness(options: {
     updateTurnMetadata: vi.fn(async (
       _threadId: string,
       _turnId: string,
-      patch: { requiredToolGate?: typeof requiredToolGate | null }
+      patch: {
+        requiredToolGate?: typeof requiredToolGate | null
+        graphPlanningLifecycle?: unknown
+      }
     ) => {
+      metadataPatches.push(patch)
       requiredToolGate = patch.requiredToolGate === null
         ? undefined
         : patch.requiredToolGate ?? requiredToolGate
@@ -163,6 +172,7 @@ function harness(options: {
     eventDrafts,
     dispatches,
     failures,
+    metadataPatches,
     updatedItemPatches,
     sessionItems,
     suppressGoalResume,
@@ -304,6 +314,95 @@ describe('RoundOutcomeCoordinator', () => {
     expect(h.coordinator.graphCreateRunRecoverySteps(turnId)).toBe(1)
     h.coordinator.clearTurn(turnId)
     expect(h.coordinator.graphCreateRunRecoverySteps(turnId)).toBe(0)
+  })
+
+  it('synchronizes every graph_define_plan draft state onto the source turn', async () => {
+    const cases = [
+      {
+        status: 'committed' as const,
+        revision: 4,
+        isError: false,
+        outcome: 'continue',
+        output: (draft: Record<string, unknown>) => ({ status: 'committed', draft })
+      },
+      {
+        status: 'needs_correction' as const,
+        revision: 3,
+        isError: true,
+        outcome: 'stop',
+        output: (draft: Record<string, unknown>) => ({
+          code: 'graph_plan_needs_correction',
+          retryable: false,
+          draft
+        })
+      },
+      {
+        status: 'host_error' as const,
+        revision: 2,
+        isError: true,
+        outcome: 'failed',
+        output: (draft: Record<string, unknown>) => ({
+          code: 'graph_planning_host_error',
+          retryable: false,
+          error: 'storage failed',
+          draft
+        })
+      }
+    ]
+
+    for (const testCase of cases) {
+      const draft = {
+        version: 1,
+        id: `draft_${testCase.status}`,
+        reservedRunId: `run_${testCase.status}`,
+        threadId,
+        sourceTurnId: turnId,
+        projectId: 'project_1',
+        goal: 'Run the work as a Graph.',
+        revision: testCase.revision,
+        status: testCase.status,
+        issues: [],
+        repairCount: testCase.status === 'needs_correction' ? 1 : 0,
+        createdAt: '2026-07-30T00:00:00.000Z',
+        updatedAt: '2026-07-30T00:00:01.000Z',
+        ...(testCase.status === 'committed'
+          ? { committedRunId: `run_${testCase.status}` }
+          : {})
+      }
+      const h = harness({
+        graphResults: [{
+          output: testCase.output(draft),
+          isError: testCase.isError
+        }]
+      })
+      const graphCall = {
+        callId: `call_${testCase.status}`,
+        toolName: GRAPH_DEFINE_PLAN_TOOL_NAME,
+        toolKind: 'tool_call' as const,
+        arguments: { plan: { title: 'Test', tasks: [] } }
+      }
+
+      await expect(h.coordinator.resolve(input(completed({ toolCalls: [graphCall] }), {
+        softRequiredToolName: GRAPH_DEFINE_PLAN_TOOL_NAME,
+        turn: createTurnRecord({
+          id: turnId,
+          threadId,
+          prompt: 'run graph',
+          status: 'running',
+          orchestration: 'graph'
+        }),
+        prepared: prepared({ orchestration: 'graph' })
+      }))).resolves.toBe(testCase.outcome)
+      expect(h.metadataPatches).toContainEqual({
+        graphPlanningLifecycle: {
+          version: 1,
+          draftId: draft.id,
+          reservedRunId: draft.reservedRunId,
+          state: testCase.status,
+          draftRevision: testCase.revision
+        }
+      })
+    }
   })
 
   it('suppresses extra tools when a hard Graph tool call is present', async () => {

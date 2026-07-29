@@ -192,6 +192,12 @@ export function initialCodeRightTabsForLaunch(
   return collapseCodeRightTabs(migrated)
 }
 
+export function transientRightPanelModeForWorkspaceChange(
+  mode: RightPanelMode
+): RightPanelMode {
+  return mode === BUILTIN_RIGHT_PANEL_IDS.sddAi ? mode : null
+}
+
 export function workbenchWidthConstraintsForRightPanel(
   route: AppRoute,
   _rightPanelMode: RightPanelMode
@@ -397,7 +403,7 @@ export function useWorkbenchLayout({
       }
     }
     initialScopeRef.current = nextScope
-    setTransientRightPanelMode(null)
+    setTransientRightPanelMode(transientRightPanelModeForWorkspaceChange)
     const nextTabs = tabsRegistryRef.current.workspaces[nextScope] ?? emptyCodeRightTabsState()
     setCodeRightTabs(nextTabs)
     const nextWidth = widthsRegistryRef.current.workspaces[nextScope]

@@ -47,41 +47,39 @@ export function UsageQuotaPanel({ activeThreadId }: Props): ReactElement {
   return (
     <section
       aria-label={t('usageQuotaTitle')}
-      className="ds-no-drag flex h-full min-h-0 flex-col overflow-hidden bg-ds-sidebar"
+      className="usage-quota-panel ds-no-drag"
       data-usage-quota-panel
     >
-      <header className="shrink-0 border-b border-ds-border-muted px-4 py-3.5">
-        <div className="flex items-start gap-3">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-ds-border-muted bg-ds-card text-accent shadow-sm">
-            <Gauge className="h-4.5 w-4.5" strokeWidth={1.8} />
+      <header className="usage-quota-header">
+        <div className="usage-quota-heading">
+          <div className="usage-quota-heading-icon">
+            <Gauge aria-hidden="true" strokeWidth={1.8} />
           </div>
-          <div className="min-w-0 flex-1">
-            <h2 className="text-[14px] font-semibold text-ds-ink">
-              {t('usageQuotaTitle')}
-            </h2>
-            <p className="mt-0.5 text-[11px] leading-4 text-ds-muted">
-              {t('usageQuotaDescription')}
-            </p>
+          <div className="usage-quota-heading-copy">
+            <h2>{t('usageQuotaTitle')}</h2>
+            <p>{t('usageQuotaDescription')}</p>
           </div>
           <button
             type="button"
             onClick={refresh}
             disabled={activeStatus.loading}
-            className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-ds-border-muted bg-ds-card px-2.5 text-[11px] font-semibold text-ds-muted transition hover:border-ds-border-strong hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-55"
+            className="usage-quota-refresh"
+            data-loading={activeStatus.loading ? 'true' : 'false'}
             aria-label={t(activeStatus.loading ? 'usageQuotaRefreshing' : 'usageQuotaRefresh')}
+            title={t(activeStatus.loading ? 'usageQuotaRefreshing' : 'usageQuotaRefresh')}
           >
             {activeStatus.loading ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.9} />
+              <Loader2 className="animate-spin" aria-hidden="true" strokeWidth={1.9} />
             ) : (
-              <RefreshCw className="h-3.5 w-3.5" strokeWidth={1.9} />
+              <RefreshCw aria-hidden="true" strokeWidth={1.9} />
             )}
-            <span>
+            <span className="usage-quota-refresh-label">
               {t(activeStatus.loading ? 'usageQuotaRefreshing' : 'usageQuotaRefresh')}
             </span>
           </button>
         </div>
         {activeStatus.refreshedAt ? (
-          <p className="mt-2 text-[10.5px] text-ds-faint">
+          <p className="usage-quota-refreshed-at">
             {t('usageQuotaLastRefreshed', {
               time: formatRefreshTime(activeStatus.refreshedAt, i18n.resolvedLanguage)
             })}
@@ -90,7 +88,7 @@ export function UsageQuotaPanel({ activeThreadId }: Props): ReactElement {
         <div
           role="tablist"
           aria-label={t('usageQuotaTitle')}
-          className="mt-3 grid grid-cols-2 rounded-xl border border-ds-border-muted bg-ds-surface-subtle p-1 text-[11.5px] font-semibold text-ds-muted"
+          className="usage-quota-tabs"
         >
           <TabButton
             active={activeTab === 'usage'}
@@ -111,7 +109,7 @@ export function UsageQuotaPanel({ activeThreadId }: Props): ReactElement {
         id={`usage-quota-panel-${activeTab}`}
         role="tabpanel"
         aria-labelledby={`usage-quota-tab-${activeTab}`}
-        className="flex min-h-0 flex-1 flex-col"
+        className="usage-quota-body"
       >
         {activeTab === 'usage' ? (
           <SidebarUsagePanel
@@ -151,11 +149,8 @@ function TabButton({
       aria-controls={`usage-quota-panel-${id}`}
       tabIndex={active ? 0 : -1}
       onClick={onClick}
-      className={`min-h-7 rounded-lg px-2 transition ${
-        active
-          ? 'bg-ds-card text-accent shadow-sm dark:bg-white/10'
-          : 'hover:bg-ds-hover hover:text-ds-ink'
-      }`}
+      className="usage-quota-tab"
+      data-active={active ? 'true' : 'false'}
     >
       {label}
     </button>

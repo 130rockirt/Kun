@@ -184,9 +184,9 @@ export type { DesignComposerContext } from '../../design/design-composer-context
 type Props = {
   variant?: 'default' | 'compact' | 'side'
   workspaceRootOverride?: string
-  /** Use a non-active thread for compact side-conversation usage. */
+  /** Bind compact or side composers to the thread they render. */
   activeThreadIdOverride?: string | null
-  /** Blocks owned by a non-active thread, such as a side conversation. */
+  /** Blocks owned by the thread rendered by this composer. */
   userInputBlocksOverride?: ChatBlock[]
   /** Resolver paired with userInputBlocksOverride. */
   onResolveUserInput?: ResolveUserInput
@@ -213,8 +213,10 @@ type Props = {
   composerPickList: string[]
   composerModelGroups?: ModelProviderModelGroup[]
   composerReasoningEffort?: string
+  composerFastMode?: boolean
   onComposerModelChange: (modelId: string, providerId?: string) => void
   onComposerReasoningEffortChange?: (effort: ComposerReasoningEffort) => void
+  onComposerFastModeChange?: (enabled: boolean) => void
   onConfigureProviders?: () => void
   hideModelPicker?: boolean
   modelPickerMode?: 'select' | 'combobox'
@@ -341,8 +343,10 @@ export function FloatingComposer({
   composerPickList,
   composerModelGroups = EMPTY_MODEL_GROUPS,
   composerReasoningEffort,
+  composerFastMode,
   onComposerModelChange,
   onComposerReasoningEffortChange,
+  onComposerFastModeChange,
   onConfigureProviders,
   hideModelPicker = false,
   modelPickerMode = 'select',
@@ -411,12 +415,14 @@ export function FloatingComposer({
   const compact = variant !== 'default'
   const side = variant === 'side'
   // The pending ask-user request for this composer's thread, surfaced as a
-  // panel docked above the input. Side conversations provide their own blocks
-  // and resolver so they never mirror or mutate the active main thread.
+  // panel docked above the input. Thread-scoped rails (for example SDD and
+  // side conversations) provide their own blocks + resolver because their
+  // compact route would otherwise be mistaken for a duplicate main composer.
   const userInputBlocks = userInputBlocksOverride ?? blocks
-  const canSurfaceUserInput = side
-    ? userInputBlocksOverride !== undefined && onResolveUserInput !== undefined
-    : shouldSurfaceComposerUserInput(route, compact)
+  const hasThreadScopedUserInput =
+    userInputBlocksOverride !== undefined && onResolveUserInput !== undefined
+  const canSurfaceUserInput =
+    hasThreadScopedUserInput || (!side && shouldSurfaceComposerUserInput(route, compact))
   const pendingUserInputBlock = useMemo<PendingUserInputBlock | null>(() => {
     if (!canSurfaceUserInput) return null
     // Only surface a request the live runtime is actively awaiting. A stale
@@ -509,9 +515,9 @@ export function FloatingComposer({
   const showIntentToolbar = !compact && route === 'chat'
   const showComposerMenuButton = showIntentToolbar
   const canTogglePlanMode = canCompose && Boolean(onPlanCommand)
-  const showGraphMenuOption = Boolean(onOrchestrationChange)
-  const canToggleGraphMode = canCompose && graphEnabled && !busy && showGraphMenuOption
-  const runningGraphTurn = busy && currentTurnOrchestration === 'graph'
+  const showGraphMenuOption = graphEnabled && Boolean(onOrchestrationChange)
+  const canToggleGraphMode = canCompose && !busy && showGraphMenuOption
+  const runningGraphTurn = graphEnabled && busy && currentTurnOrchestration === 'graph'
   const canCreateNewThread = runtimeReady && route !== 'claw' && Boolean(effectiveWorkspaceRoot) && Boolean(onNewCommand)
   const canOpenGoalPanel = canCompose && route !== 'claw'
   const canRunReview = canCompose && route !== 'claw' && Boolean(onReviewCommand)
@@ -616,7 +622,8 @@ export function FloatingComposer({
     && !composerMenuOpen
     && !goalPanelOpen
     && !pendingUserInputBlock
-  const showGraphProgress = !compact
+  const showGraphProgress = graphEnabled
+    && !compact
     && route === 'chat'
     && Boolean(activeThreadId)
     && runtimeReady
@@ -1753,7 +1760,7 @@ export function FloatingComposer({
                           {t('graphModeRunning', { defaultValue: 'Running: Graph' })}
                         </span>
                       </span>
-                    ) : !busy && mode === 'agent' && orchestration === 'graph' ? (
+                    ) : graphEnabled && !busy && mode === 'agent' && orchestration === 'graph' ? (
                       <span
                         data-composer-graph-active
                         className="ds-composer-mode-badge inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-full bg-indigo-500/10 px-2.5 text-[13px] font-medium text-indigo-700 dark:text-indigo-200"
@@ -1843,11 +1850,13 @@ export function FloatingComposer({
                       composerPickList={composerPickList}
                       composerModelGroups={composerModelGroups}
                       composerReasoningEffort={composerReasoningEffort}
+                      composerFastMode={composerFastMode}
                       canChangeModel={canChangeModel}
                       controlVariant={modelControlVariant}
                       stretch={stretchModelPicker || showToolbarStartControls}
                       onComposerModelChange={onComposerModelChange}
                       onComposerReasoningEffortChange={onComposerReasoningEffortChange}
+                      onComposerFastModeChange={onComposerFastModeChange}
                       onConfigureProviders={onConfigureProviders}
                     />
                   )}

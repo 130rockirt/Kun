@@ -243,9 +243,9 @@ export function PlanPanel({
 
   return (
     <aside
-      className={`ds-no-drag flex min-h-0 flex-col border-l border-ds-border-muted bg-white dark:bg-ds-canvas ${className}`}
+      className={`ds-sidebar-surface ds-no-drag flex min-h-0 flex-col border-l border-ds-border-muted ${className}`}
     >
-      <div className="shrink-0 border-b border-ds-border-muted bg-white/92 dark:bg-ds-card">
+      <div className="ds-sidebar-surface-chrome shrink-0 border-b border-ds-border-muted">
         <div className="flex h-12 min-w-0 items-center gap-2 px-4">
           <button
             type="button"
@@ -333,7 +333,7 @@ export function PlanPanel({
         ) : null}
       </div>
 
-      <div className="min-h-0 flex-1 overflow-hidden bg-ds-main/45 dark:bg-transparent">
+      <div className="ds-sidebar-surface-body min-h-0 flex-1 overflow-hidden">
         {!normalizeWorkspaceRoot(workspaceRoot) ? (
           <div className="flex h-full items-center justify-center px-5 text-center text-[13.5px] leading-6 text-ds-muted">
             {t('planNoWorkspace')}
@@ -350,7 +350,7 @@ export function PlanPanel({
           </div>
         ) : (
           <div className="flex h-full min-h-0 min-w-0">
-            <div className="min-h-0 min-w-0 flex-1 bg-white dark:bg-ds-canvas">
+            <div className="ds-sidebar-surface-body min-h-0 min-w-0 flex-1">
               <WriteRichEditor
                 value={content}
                 workspaceRoot={activePlan!.workspaceRoot}
@@ -415,7 +415,7 @@ export function PlanPanel({
       </div>
 
       {hasPlan ? (
-        <div className="shrink-0 border-t border-ds-border-muted bg-white/94 p-3 dark:bg-ds-card">
+        <div className="ds-sidebar-surface-chrome shrink-0 border-t border-ds-border-muted p-3">
           {error ? (
             <div className="mb-2 rounded-lg border border-red-300/70 bg-red-500/10 px-3 py-2 text-[12px] leading-5 text-red-700 dark:border-red-800/60 dark:text-red-300">
               {error}

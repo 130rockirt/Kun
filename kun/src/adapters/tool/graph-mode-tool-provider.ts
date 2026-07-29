@@ -2,7 +2,6 @@ import { createHash } from 'node:crypto'
 import type { ArtifactStore } from '../../artifacts/artifact-store.js'
 import {
   GRAPH_CONTRACT_VERSION,
-  GraphPatchV1Schema,
   GraphWorkerResultV1Schema,
   type GraphArtifactReferenceV1,
   type GraphNodeAttemptV1,
@@ -33,7 +32,13 @@ import {
 } from './graph-define-plan-tool.js'
 import { buildGraphLeadSupervisionTool } from './graph-lead-supervision-tool.js'
 import { buildGraphLeadReviewTool } from './graph-lead-review-tool.js'
+import {
+  buildGraphLeadPatchTool,
+  GRAPH_LEAD_PATCH_INPUT_JSON_SCHEMA,
+  GraphLeadPatchInputSchema
+} from './graph-lead-patch-tool.js'
 import { buildGraphReportToParentTool } from './graph-report-to-parent-tool.js'
+import { graphControlSnapshot } from './graph-control-snapshot.js'
 import type { SessionStore } from '../../ports/session-store.js'
 import type { ThreadStore } from '../../ports/thread-store.js'
 
@@ -90,6 +95,8 @@ export function buildGraphModeLocalTools(options: {
   const nowIso = options.nowIso ?? (() => new Date().toISOString())
   let next = 0
   const nextId = options.nextId ?? ((prefix: string) => `${prefix}_${Date.now()}_${++next}`)
+  const controlSnapshot = (run: GraphRunV1) =>
+    graphControlSnapshot(run, options.config?.())
   const graphLeadOnly = (context: ToolHostContext) =>
     options.enabled() &&
     !options.workerSessions.has(context.threadId) &&
@@ -140,20 +147,20 @@ export function buildGraphModeLocalTools(options: {
     LocalToolHost.defineTool({
       name: GRAPH_LEAD_TOOL_NAMES[2],
       description:
-        'Inspect or control one durable GraphRun. Actions: inspect, pause, resume, cancel, retry_node, or steer. ' +
-        'Every mutation is host-validated, idempotent, and revision/sequence checked.',
+        'Inspect or control one durable GraphRun. Actions: inspect, pause, resume, cancel, or retry_node. ' +
+        'Inspect returns a bounded decision snapshot, not the full journal. Use graph_supervise_node guide ' +
+        'for attempt-specific guidance. Every mutation is host-validated and idempotent; sequence and revision ' +
+        'preconditions are owned by the host.',
       inputSchema: {
         type: 'object',
         properties: {
           action: {
             type: 'string',
-            enum: ['inspect', 'pause', 'resume', 'cancel', 'retry_node', 'steer']
+            enum: ['inspect', 'pause', 'resume', 'cancel', 'retry_node']
           },
           runId: { type: 'string' },
           nodeId: { type: 'string' },
-          text: { type: 'string' },
-          expectedSeq: { type: 'number' },
-          expectedRevision: { type: 'number' }
+          text: { type: 'string' }
         },
         required: ['action', 'runId'],
         additionalProperties: false
@@ -166,47 +173,36 @@ export function buildGraphModeLocalTools(options: {
         try {
           const action = stringArg(args.action)
           const runId = stringArg(args.runId)
-          await authorizedLead(options.store, options.registry, runId, context)
-          if (action === 'inspect') return { output: await options.control.get(runId) }
+          const authorized = await authorizedLead(options.store, options.registry, runId, context)
+          if (action === 'inspect') return { output: controlSnapshot(authorized) }
+          const commandId = nextId('graph_command')
           const command = {
-            commandId: nextId('graph_command'),
-            idempotencyKey: `graph-control:${runId}:${action}:${stringArg(args.nodeId) || 'run'}:${Number(args.expectedSeq ?? -1)}`,
-            ...(numberArg(args.expectedSeq) !== undefined
-              ? { expectedSeq: numberArg(args.expectedSeq) }
-              : {}),
-            ...(numberArg(args.expectedRevision) !== undefined
-              ? { expectedRevision: numberArg(args.expectedRevision) }
-              : {})
+            commandId,
+            idempotencyKey:
+              `graph-control:${runId}:${action}:${stringArg(args.nodeId) || 'run'}:${commandId}`
           }
-          if (action === 'pause') return { output: await options.control.pause(runId, command) }
-          if (action === 'resume') return { output: await options.control.resume(runId, command) }
+          if (action === 'pause') {
+            return { output: controlSnapshot(await options.control.pause(runId, command)) }
+          }
+          if (action === 'resume') {
+            return { output: controlSnapshot(await options.control.resume(runId, command)) }
+          }
           if (action === 'cancel') return {
-            output: await options.control.cancel(runId, {
-              ...command,
-              ...(stringArg(args.text) ? { reason: stringArg(args.text) } : {})
-            })
+            output: controlSnapshot(
+              await options.control.cancel(runId, {
+                ...command,
+                ...(stringArg(args.text) ? { reason: stringArg(args.text) } : {})
+              })
+            )
           }
           if (action === 'retry_node') {
             const nodeId = stringArg(args.nodeId)
             if (!nodeId) throw new Error('nodeId is required for retry_node')
-            return { output: await options.control.retryNode(runId, nodeId, command) }
-          }
-          if (action === 'steer') {
-            const text = stringArg(args.text)
-            if (!text) throw new Error('text is required for steer')
-            const steeringId = nextId('graph_steering')
-            const output = await options.control.steer(runId, {
-              version: GRAPH_CONTRACT_VERSION,
-              steeringId,
-              runId,
-              target: stringArg(args.nodeId)
-                ? { kind: 'node', nodeId: stringArg(args.nodeId) }
-                : { kind: 'run' },
-              text,
-              status: 'persisted',
-              createdAt: nowIso()
-            }, command)
-            return { output }
+            return {
+              output: controlSnapshot(
+                await options.control.retryNode(runId, nodeId, command)
+              )
+            }
           }
           throw new Error(`unsupported Graph control action: ${action}`)
         } catch (error) {
@@ -214,44 +210,14 @@ export function buildGraphModeLocalTools(options: {
         }
       }
     }),
-    LocalToolHost.defineTool({
-      name: GRAPH_LEAD_TOOL_NAMES[3],
-      description:
-        'Apply a validated compare-and-swap GraphPatch. Accepted history cannot be rewritten; ' +
-        'replacement work must use a distinct superseding node. Operations are semantic: add_node, ' +
-        'replace_node, rebind_node, add_edge, remove_edge, update_budget, or update_review. ' +
-        'RFC 6902 path/value operations are invalid.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          patch: { type: 'object' },
-          expectedSeq: { type: 'number' }
-        },
-        required: ['patch', 'expectedSeq'],
-        additionalProperties: false
-      },
-      policy: 'auto',
-      toolKind: 'tool_call',
-      sideEffect: 'unknown',
+    buildGraphLeadPatchTool({
+      control: options.control,
+      store: options.store,
+      registry: options.registry,
       shouldAdvertise: graphLeadOnly,
-      execute: async (args, context) => {
-        try {
-          const patch = GraphPatchV1Schema.parse(args.patch)
-          await authorizedLead(options.store, options.registry, patch.runId, context)
-          return {
-            output: await options.control.applyPatch(patch.runId, patch, {
-              commandId: patch.commandId,
-              idempotencyKey: `graph-patch:${patch.patchId}`,
-              ...(numberArg(args.expectedSeq) !== undefined
-                ? { expectedSeq: numberArg(args.expectedSeq) }
-                : {}),
-              expectedRevision: patch.baseRevision
-            })
-          }
-        } catch (error) {
-          return { output: { error: errorMessage(error) }, isError: true }
-        }
-      }
+      nowIso,
+      nextId,
+      config: options.config
     }),
     buildGraphLeadReviewTool({
       control: options.control,
@@ -619,7 +585,9 @@ export function buildGraphModeLocalTools(options: {
 
 export {
   GRAPH_DEFINE_PLAN_INPUT_JSON_SCHEMA,
-  GraphDefinePlanInputSchema
+  GraphDefinePlanInputSchema,
+  GRAPH_LEAD_PATCH_INPUT_JSON_SCHEMA,
+  GraphLeadPatchInputSchema
 }
 
 async function authorizedLead(
@@ -630,8 +598,8 @@ async function authorizedLead(
 ): Promise<GraphRunV1> {
   const run = await store.get(runId)
   if (!run) throw new Error(`GraphRun not found: ${runId}`)
-  if (run.threadId !== context.threadId) {
-    throw new Error('current thread does not own this GraphRun')
+  if (run.threadId !== context.threadId || run.sourceTurnId !== context.turnId) {
+    throw new Error('current Lead turn does not own this GraphRun')
   }
   const identity = await registry.identify(context.workspace)
   const planIdentity = await registry.identify(run.plans.at(-1)!.workspaceRoot)

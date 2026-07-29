@@ -35,7 +35,6 @@ export type WorkbenchLeftSidebarProps = {
   onNewChat: CodeSidebarProps['onNewChat']
   onNewChatInWorkspace: CodeSidebarProps['onNewChatInWorkspace']
   onNewRequirement: CodeSidebarProps['onNewRequirement']
-  onOpenRequirementDraft: CodeSidebarProps['onOpenRequirementDraft']
   onOpenSettings: (section?: SettingsRouteSection) => void
   onOpenPlugins: CodeSidebarProps['onOpenPlugins']
   onOpenExtensions: CodeSidebarProps['onOpenExtensions']
@@ -81,7 +80,6 @@ export function WorkbenchLeftSidebar({
   onNewChat,
   onNewChatInWorkspace,
   onNewRequirement,
-  onOpenRequirementDraft,
   onOpenSettings,
   onOpenPlugins,
   onOpenExtensions,
@@ -146,7 +144,6 @@ export function WorkbenchLeftSidebar({
             onNewChat={onNewChat}
             onNewChatInWorkspace={onNewChatInWorkspace}
             onNewRequirement={onNewRequirement}
-            onOpenRequirementDraft={onOpenRequirementDraft}
             onOpenSettings={onOpenSettings}
             onOpenPlugins={onOpenPlugins}
             onOpenExtensions={onOpenExtensions}

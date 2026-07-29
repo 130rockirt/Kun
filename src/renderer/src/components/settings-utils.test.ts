@@ -16,6 +16,16 @@ describe('coerceRendererSettings', () => {
       initialSetupCompleted: true
     } as AppSettingsV1).initialSetupCompleted).toBe(true)
   })
+
+  it('normalizes legacy notification sources for the settings form', () => {
+    expect(coerceRendererSettings({
+      notifications: { turnComplete: true }
+    } as AppSettingsV1).notifications).toEqual({
+      turnComplete: true,
+      mainAgentTurnComplete: true,
+      subagentTurnComplete: false
+    })
+  })
 })
 
 describe('diffSettingsPatch', () => {
@@ -104,6 +114,23 @@ describe('diffSettingsPatch', () => {
     expect(mergeSettings(base, patch).provider.proxy).toEqual({
       enabled: true,
       url: 'http://127.0.0.1:9999'
+    })
+  })
+
+  it('patches one notification source without changing the master or sibling source', () => {
+    const base = settings()
+    const next = mergeSettings(base, {
+      notifications: { subagentTurnComplete: true }
+    })
+    const patch = diffSettingsPatch(base, next)
+
+    expect(next.notifications).toEqual({
+      turnComplete: true,
+      mainAgentTurnComplete: true,
+      subagentTurnComplete: true
+    })
+    expect(patch.notifications).toEqual({
+      subagentTurnComplete: true
     })
   })
 

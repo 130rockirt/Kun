@@ -44,6 +44,7 @@ export type QueuedUserMessage = {
   accountId?: string
   modelLabel?: string
   reasoningEffort?: string
+  serviceTier?: 'priority'
   attachmentIds?: string[]
   attachments?: AttachmentReference[]
   fileReferences?: UserFileReference[]
@@ -108,6 +109,7 @@ export type SendMessageOverrides = {
   accountId?: string
   modelLabel?: string
   reasoningEffort?: string
+  serviceTier?: 'priority'
   displayText?: string
   orchestration?: 'direct' | 'graph'
   guiPlan?: GuiPlanMessageContext
@@ -277,6 +279,8 @@ export type ChatState = {
   composerModel: string
   composerProviderId: string
   composerReasoningEffort: ModelReasoningEffort
+  /** User preference; effective only for eligible ChatGPT subscription models. */
+  composerFastMode: boolean
   composerPickList: string[]
   composerModelGroups: ModelProviderModelGroup[]
   /**
@@ -304,6 +308,7 @@ export type ChatState = {
   setComposerOrchestration: (mode: 'direct' | 'graph') => void
   setComposerModel: (modelId: string, providerId?: string) => void
   setComposerReasoningEffort: (effort: ModelReasoningEffort) => void
+  setComposerFastMode: (enabled: boolean) => void
   setComposerAgentId: (agentId: string) => void
   loadComposerModels: () => Promise<void>
   setRoute: (r: AppRoute) => void

@@ -87,6 +87,9 @@ function harness(input: {
   contextProfile?: CursorSdkRuntimeDeps['contextProfile']
   streamLimits?: CursorSdkRuntimeDeps['streamLimits']
   todoSyncError?: Error
+  suspendGraphLeadTurn?: (
+    input: Record<string, unknown>
+  ) => Promise<'not_graph' | 'suspended' | 'supervision_pending'>
 }) {
   const applied: unknown[] = []
   const updated: unknown[] = []
@@ -194,6 +197,9 @@ function harness(input: {
         const turn = thread.turns.find((candidate) => candidate.id === turnId)
         if (turn) Object.assign(turn, patch)
       },
+      ...(input.suspendGraphLeadTurn
+        ? { suspendGraphLeadTurn: input.suspendGraphLeadTurn }
+        : {}),
       finishTurn: async (value: unknown) => { finished.push(value) }
     },
     events: { record: async (value: unknown) => { recorded.push(value) } },
@@ -322,6 +328,102 @@ describe('CursorSdkRuntime', () => {
       }
     })
     expect(JSON.stringify(trace)).not.toContain('cursor-secret')
+  })
+
+  test('keeps Graph in plan mode and gives pending review a real second Cursor exchange', async () => {
+    const suspendGraphLeadTurn = vi.fn()
+      .mockResolvedValueOnce('supervision_pending')
+      .mockResolvedValueOnce('supervision_pending')
+      .mockResolvedValueOnce('suspended')
+    const h = harness({
+      thread: {
+        turns: [{
+          id: 'turn_1',
+          model: 'auto',
+          mode: 'agent',
+          orchestration: 'graph'
+        }]
+      },
+      kunContext: {
+        instructionBlocks: [],
+        activeSkillIds: [],
+        tools: [],
+        customTools: {},
+        graphPhase: 'supervising'
+      },
+      sendResults: [fakeRun(), fakeRun()],
+      suspendGraphLeadTurn
+    })
+
+    await expect(h.runtime.runTurn(
+      'thread_1',
+      'turn_1',
+      new AbortController().signal,
+      'cursor-subscription'
+    )).resolves.toBe('suspended')
+
+    expect(h.createOptions[0]).toMatchObject({
+      mode: 'plan',
+      local: { sandboxOptions: { enabled: true } }
+    })
+    expect(h.sentMessages).toHaveLength(2)
+    expect(h.sentMessages[1]).toContain('Host supervision gate')
+    expect(h.sentMessages[1]).toContain('call `graph_review_node`')
+    expect(suspendGraphLeadTurn).toHaveBeenNthCalledWith(1, {
+      threadId: 'thread_1',
+      turnId: 'turn_1'
+    })
+    expect(suspendGraphLeadTurn).toHaveBeenNthCalledWith(2, {
+      threadId: 'thread_1',
+      turnId: 'turn_1'
+    })
+    expect(suspendGraphLeadTurn).toHaveBeenNthCalledWith(3, {
+      threadId: 'thread_1',
+      turnId: 'turn_1',
+      force: true,
+      preserveDeliveryCursor: true,
+      allowPendingSupervision: true
+    })
+    expect(h.finished).toEqual([])
+  })
+
+  test('reminds Graph planning once before a second prose response becomes needs-correction', async () => {
+    const suspendGraphLeadTurn = vi.fn(async () => 'suspended' as const)
+    const h = harness({
+      thread: {
+        turns: [{
+          id: 'turn_1',
+          model: 'auto',
+          mode: 'agent',
+          orchestration: 'graph'
+        }]
+      },
+      kunContext: {
+        instructionBlocks: [],
+        activeSkillIds: [],
+        tools: [],
+        customTools: {},
+        graphPhase: 'planning',
+        graphPlanWasCommitted: () => false
+      },
+      sendResults: [fakeRun(), fakeRun()],
+      suspendGraphLeadTurn
+    })
+
+    await expect(h.runtime.runTurn(
+      'thread_1',
+      'turn_1',
+      new AbortController().signal,
+      'cursor-subscription'
+    )).resolves.toBe('suspended')
+
+    expect(h.sentMessages).toHaveLength(2)
+    expect(h.sentMessages[1]).toContain('Host planning gate')
+    expect(h.sentMessages[1]).toContain('call `graph_define_plan` now')
+    // Planning is not suspended on the first prose response. The only
+    // suspension happens after the bounded second exchange is exhausted.
+    expect(suspendGraphLeadTurn).toHaveBeenCalledTimes(1)
+    expect(h.finished).toEqual([])
   })
 
   test('syncs successful Cursor updateTodos results without redispatching the tool', async () => {

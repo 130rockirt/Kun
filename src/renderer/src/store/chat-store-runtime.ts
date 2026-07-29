@@ -22,6 +22,7 @@ import {
   normalizeWorkspaceRoot
 } from '../lib/workspace-path'
 import type { ClawImChannelV1 } from '@shared/app-settings'
+import type { TurnCompleteNotificationSource } from '@shared/kun-gui-api'
 import { isBackgroundShellNoticeUserMessage } from '@shared/background-shell-notice'
 import type { ChatState } from './chat-store-types'
 import { isPendingQueuedMessage } from './queued-message-persistence'
@@ -40,7 +41,6 @@ import {
 } from '../write/write-thread-registry'
 import {
   isSddAssistantThread,
-  isSddThreadVisibleInSidebar,
   type SddThreadRegistry
 } from '../sdd/sdd-thread-registry'
 import { isDesignThreadId, type DesignThreadRegistry } from '../design/design-thread-registry'
@@ -85,6 +85,7 @@ export const MAX_PENDING_CHILD_TOOL_UPDATES = 200
 const completionNotificationKeys: string[] = []
 const completionNotificationKeySet = new Set<string>()
 const watchCompletionNotificationKeys = new Map<string, string>()
+const watchCompletionNotificationSources = new Map<string, TurnCompleteNotificationSource>()
 
 export type PendingClawFeishuMirror = {
   threadId: string
@@ -94,15 +95,22 @@ export type PendingClawFeishuMirror = {
 
 const pendingClawFeishuMirrors = new Map<string, PendingClawFeishuMirror>()
 
-export function watchTurnCompletionNotification(threadId: string, now = Date.now()): void {
+export function watchTurnCompletionNotification(
+  threadId: string,
+  now = Date.now(),
+  source: TurnCompleteNotificationSource = 'main-agent'
+): void {
   const normalizedThreadId = threadId.trim()
   if (!normalizedThreadId) return
   watchCompletionNotificationKeys.delete(normalizedThreadId)
+  watchCompletionNotificationSources.delete(normalizedThreadId)
   watchCompletionNotificationKeys.set(normalizedThreadId, `watch:${normalizedThreadId}:${now}`)
+  watchCompletionNotificationSources.set(normalizedThreadId, source)
   while (watchCompletionNotificationKeys.size > MAX_WATCHED_COMPLETION_NOTIFICATIONS) {
     const oldestThreadId = watchCompletionNotificationKeys.keys().next().value
     if (!oldestThreadId) break
     watchCompletionNotificationKeys.delete(oldestThreadId)
+    watchCompletionNotificationSources.delete(oldestThreadId)
   }
 }
 
@@ -117,6 +125,7 @@ export function completionNotificationDedupeKeyForWatchedThread(
 
 export function clearWatchedCompletionNotifications(): void {
   watchCompletionNotificationKeys.clear()
+  watchCompletionNotificationSources.clear()
 }
 
 export function rememberPendingClawFeishuMirror(
@@ -293,9 +302,29 @@ export function clearWatchedCompletionNotification(threadId: string): void {
   const normalizedThreadId = threadId.trim()
   if (!normalizedThreadId) return
   watchCompletionNotificationKeys.delete(normalizedThreadId)
+  watchCompletionNotificationSources.delete(normalizedThreadId)
 }
 
-function notifyTurnComplete(threadId: string | null, state: ChatState, dedupeKey: string): void {
+export function turnCompleteNotificationSource(
+  threadId: string,
+  state: Pick<ChatState, 'threads'> &
+    Partial<Pick<ChatState, 'activeThreadId' | 'activeThreadRelation' | 'sideConversations'>>
+): TurnCompleteNotificationSource {
+  return (
+    state.threads.find((thread) => thread.id === threadId)?.relation === 'side' ||
+    (state.activeThreadId === threadId && state.activeThreadRelation === 'side') ||
+    Boolean(state.sideConversations?.[threadId])
+  )
+    ? 'subagent'
+    : 'main-agent'
+}
+
+function notifyTurnComplete(
+  threadId: string | null,
+  state: ChatState,
+  dedupeKey: string,
+  source?: TurnCompleteNotificationSource
+): void {
   if (
     !threadId ||
     typeof window === 'undefined' ||
@@ -312,6 +341,7 @@ function notifyTurnComplete(threadId: string | null, state: ChatState, dedupeKey
   void window.kunGui
     .showTurnCompleteNotification({
       threadId,
+      source: source ?? turnCompleteNotificationSource(threadId, state),
       title: i18n.t('common:turnCompleteNotificationTitle'),
       body: i18n.t('common:turnCompleteNotificationBody', { title: threadTitle })
     })
@@ -435,14 +465,12 @@ export function isCodeSidebarThread(
   sddRegistry?: SddThreadRegistry
 ): boolean {
   const workspace = normalizeWorkspaceRoot(thread.workspace)
-  const isRequirementThread = isSddAssistantThread(thread, sddRegistry)
   return Boolean(workspace) &&
     !isInternalTemporaryWorkspace(thread.workspace) &&
     !isInternalDeepSeekGuiWorkspace(thread.workspace) &&
     !isClawWorkspacePath(thread.workspace) &&
     !isClawThread(thread, clawChannels) &&
     !isWriteAssistantThread(thread, writeRegistry) &&
-    (!isRequirementThread || isSddThreadVisibleInSidebar(thread.id, sddRegistry)) &&
     !isDesignThreadId(thread.id, designRegistry)
 }
 
@@ -665,7 +693,8 @@ export function syncTurnCompletionPoll(
         notifyTurnComplete(
           id,
           state,
-          completionNotificationDedupeKeyForWatchedThread(id)
+          completionNotificationDedupeKeyForWatchedThread(id),
+          watchCompletionNotificationSources.get(id)
         )
         clearWatchedCompletionNotification(id)
       }

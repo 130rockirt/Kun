@@ -373,6 +373,7 @@ export class KunRuntimeProvider implements AgentProvider {
       providerId?: string
       accountId?: string
       reasoningEffort?: string
+      serviceTier?: 'priority'
       displayText?: string
       guiPlan?: {
         operation: 'draft' | 'refine'
@@ -419,6 +420,9 @@ export class KunRuntimeProvider implements AgentProvider {
     }
     if (options?.reasoningEffort?.trim()) {
       body.reasoningEffort = options.reasoningEffort.trim()
+    }
+    if (options?.serviceTier === 'priority') {
+      body.serviceTier = 'priority'
     }
     if (options?.displayText?.trim() && options.displayText.trim() !== text.trim()) {
       body.displayText = options.displayText.trim()

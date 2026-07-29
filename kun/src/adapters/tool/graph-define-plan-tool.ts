@@ -20,6 +20,7 @@ import {
 } from '../../graph/index.js'
 import type { ToolHostContext } from '../../ports/tool-host.js'
 import type { RuntimeEventRecorder } from '../../services/runtime-event-recorder.js'
+import { isHostShutdownTurnSuspension } from '../../services/turn-service.js'
 import { graphCreateBudgetDefaults } from './graph-create-run-tool.js'
 import { LocalToolHost, type LocalTool } from './local-tool-host.js'
 
@@ -88,7 +89,9 @@ export function buildGraphDefinePlanTool(options: {
     shouldAdvertise: options.shouldAdvertise,
     execute: async (args, context) => {
       let draft: GraphPlanningDraftV1 | null = null
+      let createdRunId: string | undefined
       try {
+        assertPlanningExecutionActive(context)
         draft = await options.drafts.findBySourceTurn(context.turnId)
         if (!draft || draft.threadId !== context.threadId) {
           return planningError(
@@ -99,11 +102,18 @@ export function buildGraphDefinePlanTool(options: {
           )
         }
         if (draft.status === 'committed' && draft.committedRunId) {
+          let run = await options.control.get(draft.committedRunId)
+          if (run.status === 'ready') {
+            run = await options.control.start(run.id, {
+              commandId: options.nextId('graph_plan_start'),
+              idempotencyKey: `graph-plan-start:${draft.sourceTurnId}`
+            })
+          }
           return {
             output: {
               status: 'committed',
               draft,
-              run: await options.control.get(draft.committedRunId)
+              run: planningRunSummary(run)
             }
           }
         }
@@ -137,6 +147,7 @@ export function buildGraphDefinePlanTool(options: {
         }
 
         await options.drafts.writeCandidate(draft.id, candidate)
+        assertPlanningExecutionActive(context)
         draft = await transitionDraft(options, draft, {
           status: 'validating',
           candidateHash,
@@ -167,12 +178,14 @@ export function buildGraphDefinePlanTool(options: {
         }
 
         await options.drafts.writeCommitPlan(draft.id, plan)
+        assertPlanningExecutionActive(context)
         draft = await transitionDraft(options, draft, {
           status: 'committing',
           candidateHash,
           issues: []
         })
-        const result = await options.control.create({
+        assertPlanningExecutionActive(context)
+        const created = await options.control.create({
           runId: draft.reservedRunId,
           threadId: draft.threadId,
           projectId: draft.projectId,
@@ -180,25 +193,212 @@ export function buildGraphDefinePlanTool(options: {
           plan,
           commandId: options.nextId('graph_plan_commit'),
           idempotencyKey: `graph-plan-commit:${draft.sourceTurnId}`,
-          start: true
+          // The draft commit is the linearization point. Keep the run paused
+          // until that CAS wins so Stop can never miss a newly active run.
+          start: false
         })
+        createdRunId = created.run.id
+        const latestBeforeCommit = await options.drafts.require(draft.id)
+        if (
+          latestBeforeCommit.status === 'cancelled' ||
+          latestBeforeCommit.status === 'host_error'
+        ) {
+          await cancelCreatedRun(options, createdRunId, draft.sourceTurnId)
+          return planningError(
+            'graph_planning_aborted',
+            'Graph planning was cancelled before the run could be committed.',
+            latestBeforeCommit.issues,
+            false,
+            latestBeforeCommit
+          )
+        }
+        if (context.abortSignal.aborted) {
+          return planningError(
+            'graph_planning_interrupted',
+            'Graph planning was interrupted while its recoverable commit was being prepared.',
+            latestBeforeCommit.issues,
+            false,
+            latestBeforeCommit
+          )
+        }
+        if (
+          latestBeforeCommit.status === 'committed' &&
+          latestBeforeCommit.committedRunId === createdRunId
+        ) {
+          const run = await options.control.get(createdRunId)
+          return {
+            output: {
+              status: 'committed',
+              draft: latestBeforeCommit,
+              run: planningRunSummary(run)
+            }
+          }
+        }
+        if (
+          latestBeforeCommit.status !== 'committing' ||
+          latestBeforeCommit.revision !== draft.revision
+        ) {
+          throw new GraphPlanningDraftConflictError(
+            `draft ${draft.id} changed while GraphRun ${createdRunId} was being prepared`
+          )
+        }
         draft = await transitionDraft(options, draft, {
           status: 'committed',
           candidateHash,
           issues: [],
-          committedRunId: result.run.id
+          committedRunId: createdRunId
         })
+        if (
+          context.abortSignal.aborted &&
+          !isHostShutdownTurnSuspension(context.abortSignal)
+        ) {
+          return planningError(
+            'graph_planning_aborted',
+            'Graph planning was cancelled before the committed run could start.',
+            draft.issues,
+            false,
+            draft
+          )
+        }
+        const run = await options.control.start(createdRunId, {
+          commandId: options.nextId('graph_plan_start'),
+          idempotencyKey: `graph-plan-start:${draft.sourceTurnId}`
+        })
+        if (context.abortSignal.aborted) {
+          return planningError(
+            'graph_planning_aborted',
+            'Graph planning was cancelled while the committed run was starting.',
+            draft.issues,
+            false,
+            draft
+          )
+        }
         return {
           output: {
-            status: 'committed',
-            draft,
-            run: result.run,
-            validation: result.validation,
+              status: 'committed',
+              draft,
+              run: planningRunSummary(run),
+              validation: created.validation,
             nextAction:
               'Inspect the running Graph, supervise submitted worker results, and explicitly accept or request repair before delivering the final answer.'
           }
         }
       } catch (error) {
+        let failure = error
+        let latestDraft = draft
+          ? await options.drafts.get(draft.id).catch(() => null)
+          : await options.drafts.findBySourceTurn(context.turnId).catch(() => null)
+        const durableRunId =
+          latestDraft?.committedRunId ??
+          latestDraft?.reservedRunId ??
+          createdRunId
+        let durableRun = durableRunId
+          ? await options.control.get(durableRunId).catch(() => null)
+          : null
+        if (
+          durableRun &&
+          (
+            latestDraft?.status === 'cancelled' ||
+            latestDraft?.status === 'host_error' ||
+            error instanceof PlanningExecutionAbortedError
+          )
+        ) {
+          await cancelCreatedRun(
+            options,
+            durableRun.id,
+            latestDraft?.sourceTurnId ?? context.turnId
+          ).catch(() => undefined)
+          durableRun = await options.control.get(durableRun.id).catch(() => durableRun)
+        }
+        if (durableRun?.status === 'cancelled') {
+          return planningError(
+            'graph_planning_aborted',
+            'Graph planning was cancelled before the run could start.',
+            latestDraft?.issues ?? [],
+            false,
+            latestDraft ?? draft ?? undefined
+          )
+        }
+        if (
+          latestDraft?.status === 'committing' &&
+          durableRun &&
+          !context.abortSignal.aborted
+        ) {
+          try {
+            latestDraft = await transitionDraft(options, latestDraft, {
+              status: 'committed',
+              ...(latestDraft.candidateHash
+                ? { candidateHash: latestDraft.candidateHash }
+                : {}),
+              issues: [],
+              committedRunId: durableRun.id
+            })
+          } catch (commitError) {
+            failure = commitError
+            latestDraft = await options.drafts.get(latestDraft.id).catch(() => latestDraft)
+          }
+        }
+        if (
+          latestDraft?.status === 'committed' &&
+          durableRun &&
+          !context.abortSignal.aborted
+        ) {
+          if (durableRun.status === 'ready') {
+            const runBeforeStart = durableRun
+            try {
+              durableRun = await options.control.start(durableRun.id, {
+                commandId: options.nextId('graph_plan_start'),
+                idempotencyKey: `graph-plan-start:${latestDraft.sourceTurnId}`
+              })
+            } catch (startError) {
+              failure = startError
+              durableRun =
+                await options.control.get(runBeforeStart.id).catch(() => null) ??
+                runBeforeStart
+            }
+          }
+          if (durableRun.status === 'cancelled') {
+            return planningError(
+              'graph_planning_aborted',
+              'Graph planning was cancelled while the committed run was starting.',
+              latestDraft.issues,
+              false,
+              latestDraft
+            )
+          }
+          if (durableRun.status !== 'ready') {
+            return {
+              output: {
+                status: 'committed',
+                draft: latestDraft,
+                run: planningRunSummary(durableRun)
+              }
+            }
+          }
+        }
+        if (context.abortSignal.aborted) {
+          return planningError(
+            isHostShutdownTurnSuspension(context.abortSignal)
+              ? 'graph_planning_interrupted'
+              : 'graph_planning_aborted',
+            'Graph planning execution stopped before this tool call could finish.',
+            latestDraft?.issues ?? [],
+            false,
+            latestDraft ?? draft ?? undefined
+          )
+        }
+        if (
+          error instanceof PlanningExecutionAbortedError ||
+          latestDraft?.status === 'cancelled'
+        ) {
+          return planningError(
+            'graph_planning_aborted',
+            'Graph planning was cancelled before the run could start.',
+            latestDraft?.issues ?? [],
+            false,
+            latestDraft ?? draft ?? undefined
+          )
+        }
         if (error instanceof GraphPlanValidationError && draft) {
           return recordInvalidCandidate(
             options,
@@ -215,19 +415,23 @@ export function buildGraphDefinePlanTool(options: {
             true
           )
         }
-        if (draft) {
-          const issue = toPlanningIssue(error, [])
-          await transitionDraft(options, draft, {
+        if (
+          latestDraft &&
+          latestDraft.status !== 'committed' &&
+          latestDraft.status !== 'host_error'
+        ) {
+          const issue = toPlanningIssue(failure, [])
+          draft = await transitionDraft(options, latestDraft, {
             status: 'host_error',
             issues: [issue]
-          }).catch(() => undefined)
+          }).catch(() => latestDraft)
         }
         return planningError(
           'graph_planning_host_error',
-          errorMessage(error),
+          errorMessage(failure),
           [],
           false,
-          draft ?? undefined
+          draft ?? latestDraft ?? undefined
         )
       }
     }
@@ -279,7 +483,12 @@ async function transitionDraft(
     ...patch,
     expectedRevision: draft.revision
   })
-  await emitPlanningEvent(options, next)
+  await emitPlanningEvent(options, next).catch((error) => {
+    console.warn(
+      `[kun] Graph planning event delivery failed after durable revision ` +
+      `${next.id}@${next.revision}: ${errorMessage(error)}`
+    )
+  })
   return next
 }
 
@@ -406,6 +615,35 @@ function planningError(
   }
 }
 
+class PlanningExecutionAbortedError extends Error {
+  constructor() {
+    super('Graph planning execution was aborted')
+    this.name = 'PlanningExecutionAbortedError'
+  }
+}
+
+function assertPlanningExecutionActive(context: ToolHostContext): void {
+  if (context.abortSignal.aborted) throw new PlanningExecutionAbortedError()
+}
+
+async function cancelCreatedRun(
+  options: Pick<Parameters<typeof buildGraphDefinePlanTool>[0], 'control' | 'nextId'>,
+  runId: string,
+  sourceTurnId: string
+): Promise<void> {
+  const run = await options.control.get(runId)
+  if (
+    run.status === 'completed' ||
+    run.status === 'failed' ||
+    run.status === 'cancelled'
+  ) return
+  await options.control.cancel(runId, {
+    commandId: options.nextId('graph_plan_abort'),
+    idempotencyKey: `graph-plan-abort:${sourceTurnId}:${runId}`,
+    reason: 'Graph planning source turn was interrupted before commit'
+  })
+}
+
 function hashCandidate(candidate: unknown): string {
   return createHash('sha256').update(stableJson(candidate)).digest('hex')
 }
@@ -419,6 +657,22 @@ function stableJson(value: unknown): string {
       .join(',')}}`
   }
   return JSON.stringify(value) ?? 'null'
+}
+
+function planningRunSummary(run: {
+  id: string
+  status: unknown
+  currentRevision?: number
+  lastEventSeq?: number
+}): Record<string, unknown> {
+  return {
+    id: run.id,
+    status: run.status,
+    ...(run.currentRevision !== undefined
+      ? { currentRevision: run.currentRevision }
+      : {}),
+    ...(run.lastEventSeq !== undefined ? { lastEventSeq: run.lastEventSeq } : {})
+  }
 }
 
 function errorMessage(error: unknown): string {

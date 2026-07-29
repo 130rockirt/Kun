@@ -684,6 +684,7 @@ export class CompatModelClient implements ModelClient {
       maxTokens: this.resolveMaxTokens(request, model),
       isCodex,
       isCodexLite,
+      serviceTiers: this.capabilitiesForModel(model).serviceTiers,
       codexNativeImageGeneration: codexModelSupportsNativeImageGeneration(model)
     })
   }

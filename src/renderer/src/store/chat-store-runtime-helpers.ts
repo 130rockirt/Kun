@@ -171,7 +171,9 @@ function mergeRuntimeDisclosureMeta(
 }
 
 export function isOptimisticUserBlockId(id: string): boolean {
-  return id.startsWith('u-') || id.startsWith('q-')
+  return id.startsWith('u-') ||
+    id.startsWith('q-') ||
+    id.startsWith('graph-steering-')
 }
 
 /**

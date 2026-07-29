@@ -6,17 +6,20 @@ import {
 } from '../contracts/graph.js'
 import type { GraphRuntimeConfig } from '../config/kun-config.js'
 import type { DelegationRuntime } from '../delegation/delegation-runtime.js'
-import {
-  parseWorkerResult,
-  validateWorkerResult,
-  type GraphSupervisionPort
-} from './graph-scheduler.js'
+import type { GraphSupervisionPort } from './graph-scheduler.js'
 import type {
   GraphRunStore,
   GraphStoreDiagnostic
 } from './graph-run-store.js'
 import type { FileGraphWriteCoordinator } from './graph-write-coordinator.js'
-import { canonicalWorkerArtifactRefs } from './graph-artifact-policy.js'
+import { createGraphCheckVerifier } from './graph-check-verifier.js'
+import { finalizeGraphWorkerResult } from './graph-worker-result-finalizer.js'
+import {
+  currentIterationAttemptCount,
+  effectiveNodeMaxAttempts,
+  GRAPH_RUNTIME_RESTART_ATTEMPT_FAILURE
+} from './graph-scheduler-policy.js'
+import type { GraphSchedulerOptions } from './graph-scheduler-types.js'
 
 export type GraphRecoveryReport = {
   runsInspected: number
@@ -33,17 +36,20 @@ export type GraphRecoveryReport = {
 export class GraphRecoveryService {
   private readonly nowIso: () => string
   private readonly nextId: (prefix: string) => string
+  private readonly verifyChecks: NonNullable<GraphSchedulerOptions['verifyChecks']>
 
   constructor(private readonly options: {
     store: GraphRunStore
     config: () => GraphRuntimeConfig
     writes: FileGraphWriteCoordinator
     delegation: () => DelegationRuntime | undefined
+    verifyChecks?: GraphSchedulerOptions['verifyChecks']
     supervision?: () => GraphSupervisionPort | undefined
     nowIso?: () => string
     nextId?: (prefix: string) => string
   }) {
     this.nowIso = options.nowIso ?? (() => new Date().toISOString())
+    this.verifyChecks = options.verifyChecks ?? createGraphCheckVerifier()
     let next = 0
     this.nextId = options.nextId ?? ((prefix) => `${prefix}_${Date.now()}_${++next}`)
   }
@@ -98,11 +104,16 @@ export class GraphRecoveryService {
         if (node.status === 'queued' || node.status === 'running') {
           run = await this.transitionNode(run, node.node.id, 'failed', 'orphaned after runtime restart')
         }
-        const maxAttempts = Math.min(
-          node.node.maxAttempts ?? run.budget.limits.maxAttemptsPerNode,
-          this.options.config().scheduler.maxAttemptsPerNode
+        const recoveredNode = run.nodes[node.node.id]
+        const maxAttempts = effectiveNodeMaxAttempts(
+          run,
+          recoveredNode,
+          this.options.config()
         )
-        if (node.attempts.length < maxAttempts && run.status !== 'paused') {
+        if (
+          currentIterationAttemptCount(recoveredNode) < maxAttempts &&
+          run.status !== 'paused'
+        ) {
           run = await this.transitionNode(run, node.node.id, 'ready', 'recovered for idempotent retry')
           retriedNodes += 1
         }
@@ -180,17 +191,15 @@ export class GraphRecoveryService {
       entry.id === initialAttempt.id)!
     let recoveredResult = false
     if (!attempt.result) {
-      const parsedResult = parseWorkerResult(child)
-      const result = {
-        ...parsedResult,
-        artifactRefs: canonicalWorkerArtifactRefs(
-          run,
-          attempt.nodeId,
-          attempt.id,
-          parsedResult.artifactRefs
-        )
-      }
-      const validation = validateWorkerResult(run.nodes[attempt.nodeId]!, result)
+      const finalized = await finalizeGraphWorkerResult({
+        run,
+        node: run.nodes[attempt.nodeId]!,
+        attempt,
+        child,
+        writes: this.options.writes,
+        verifyChecks: this.verifyChecks
+      })
+      const { result, validation } = finalized
       run = (await this.options.store.append(run.id, {
         expectedSeq: run.lastEventSeq,
         graphRevision: run.currentRevision,
@@ -276,7 +285,7 @@ export class GraphRecoveryService {
           from: attempt.status,
           to: 'orphaned',
           failureClass: 'interrupted',
-          normalizedFailure: 'runtime restart interrupted child execution'
+          normalizedFailure: GRAPH_RUNTIME_RESTART_ATTEMPT_FAILURE
         }
       }
     })).state

@@ -10,7 +10,10 @@ const labels: Record<string, string> = {
   workspaceRootDesc: 'Default workspace description',
   workspaceRootPlaceholder: '~/.kun/default_workspace',
   restoreWorkspaceDefault: 'Restore default',
-  browse: 'Browse'
+  browse: 'Browse',
+  turnCompleteNotification: 'Reply completion notifications',
+  mainAgentTurnCompleteNotification: 'Main agent completions',
+  subagentTurnCompleteNotification: 'Subagent completions'
 }
 
 function t(key: string, values?: Record<string, unknown>): string {
@@ -39,7 +42,9 @@ function baseCtx(): Record<string, unknown> {
         closeAction: 'ask'
       },
       notifications: {
-        turnComplete: false
+        turnComplete: false,
+        mainAgentTurnComplete: true,
+        subagentTurnComplete: false
       },
       checkpointCleanup: { createEnabled: false, enabled: false, intervalDays: 3 },
       log: {
@@ -142,5 +147,21 @@ describe('GeneralSettingsSection workspace layout', () => {
     expect(html).toContain('legacyImportTitle')
     expect(html).toContain('gitCheckpointTitle')
     expect(html).toContain('logTitle')
+  })
+
+  it('shows disabled source controls beneath the disabled master notification switch', () => {
+    const html = renderToStaticMarkup(createElement(GeneralSettingsSection, { ctx: baseCtx() }))
+    const mainToggleIndex = html.indexOf('aria-label="Main agent completions"')
+    const subagentToggleIndex = html.indexOf('aria-label="Subagent completions"')
+    const mainToggle = html.slice(mainToggleIndex, mainToggleIndex + 500)
+    const subagentToggle = html.slice(subagentToggleIndex, subagentToggleIndex + 500)
+
+    expect(html).toContain('ml-3 divide-y divide-ds-border-muted border-l')
+    expect(mainToggleIndex).toBeGreaterThan(-1)
+    expect(subagentToggleIndex).toBeGreaterThan(-1)
+    expect(mainToggle).toContain('aria-checked="true"')
+    expect(mainToggle).toContain('aria-disabled="true"')
+    expect(subagentToggle).toContain('aria-checked="false"')
+    expect(subagentToggle).toContain('aria-disabled="true"')
   })
 })

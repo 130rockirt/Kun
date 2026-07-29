@@ -722,6 +722,7 @@ export interface AgentProvider {
       providerId?: string
       accountId?: string
       reasoningEffort?: string
+      serviceTier?: 'priority'
       displayText?: string
       guiPlan?: {
         operation: 'draft' | 'refine'

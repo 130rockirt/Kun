@@ -295,8 +295,11 @@ export type KunProjectConfigFileResult = {
   skillRootCount: number
   disabledSkillCount: number
 }
+export type TurnCompleteNotificationSource = 'main-agent' | 'subagent'
+
 export type TurnCompleteNotificationPayload = {
   threadId?: string
+  source: TurnCompleteNotificationSource
   title: string
   body: string
 }
@@ -326,6 +329,8 @@ export type ModelProviderModelSelection = {
 }
 export type ModelProviderModelGroup = {
   providerId: string
+  /** Stable built-in preset identity; survives multi-account ids such as codex-2. */
+  presetSource?: string
   label: string
   modelIds: string[]
   modelProfiles?: Record<string, ModelProviderModelProfileV1>

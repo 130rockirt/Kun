@@ -22,7 +22,7 @@ import type { SessionStore } from '../../ports/session-store.js'
 import type { UserInputGate } from '../../ports/user-input-gate.js'
 import type { Turn } from '../../contracts/turns.js'
 import type { TurnItem } from '../../contracts/items.js'
-import { placeCompactionsAtTurnEnd } from '../../loop/compaction-history.js'
+import { placeCompactionsChronologically } from '../../loop/compaction-history.js'
 
 /**
  * Handlers for the thread CRUD endpoints. The handlers accept a
@@ -182,7 +182,7 @@ function hydrateThreadItemsFromSession(thread: ThreadRecord, items: TurnItem[]):
     const sessionTurnItems = itemsByTurn.get(turn.id)
     if (!sessionTurnItems) return turn
     changed = true
-    return { ...turn, items: placeCompactionsAtTurnEnd(sessionTurnItems) }
+    return { ...turn, items: placeCompactionsChronologically(sessionTurnItems) }
   })
   return changed ? { ...thread, turns } : thread
 }

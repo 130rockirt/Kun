@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { GraphPlanningDraftV1 } from '../../contracts/graph.js'
+import { TurnCapacityError } from '../../services/turn-service.js'
 import type { ServerRuntime } from './server-runtime.js'
 import { buildRouter } from './index.js'
 
@@ -38,7 +39,16 @@ function runtime(): ServerRuntime {
       record: vi.fn(async () => undefined)
     },
     turnService: {
-      resumeGraphPlanningTurn: vi.fn(async () => undefined),
+      resumeGraphPlanningTurn: vi.fn(async () => 'resumed'),
+      suspendGraphPlanningTurn: vi.fn(async () => {
+        draft = {
+          ...draft,
+          revision: draft.revision + 1,
+          status: 'needs_correction',
+          updatedAt: '2026-07-26T00:03:00.000Z'
+        }
+        return 'suspended'
+      }),
       interruptTurn: vi.fn(async () => undefined)
     },
     runTurn: vi.fn(),
@@ -251,6 +261,90 @@ describe('Graph HTTP routes', () => {
     expect(testRuntime.events.record).toHaveBeenCalledTimes(1)
   })
 
+  it('does not launch a duplicate loop when a concurrent resume already owns execution', async () => {
+    const testRuntime = runtime()
+    vi.mocked(testRuntime.turnService.resumeGraphPlanningTurn)
+      .mockResolvedValueOnce('already_running')
+
+    const response = await dispatch(
+      testRuntime,
+      'POST',
+      '/v1/graph-drafts/draft_1/resume',
+      { expectedRevision: 2 },
+      { authorization: 'Bearer graph-route-token' }
+    )
+
+    expect(response.status).toBe(202)
+    expect(JSON.parse(response.body)).toMatchObject({
+      draft: {
+        revision: 3,
+        status: 'planning'
+      }
+    })
+    expect(testRuntime.runTurn).not.toHaveBeenCalled()
+  })
+
+  it('restores a retryable correction revision when execution capacity rejects resume', async () => {
+    const testRuntime = runtime()
+    const headers = { authorization: 'Bearer graph-route-token' }
+    vi.mocked(testRuntime.turnService.resumeGraphPlanningTurn)
+      .mockImplementationOnce(async (input) => {
+        await testRuntime.turnService.suspendGraphPlanningTurn({
+          ...input,
+          force: true
+        })
+        throw new TurnCapacityError(1)
+      })
+
+    const rejected = await dispatch(
+      testRuntime,
+      'POST',
+      '/v1/graph-drafts/draft_1/resume',
+      { expectedRevision: 2 },
+      headers
+    )
+    expect(rejected.status).toBe(429)
+    expect(JSON.parse(rejected.body)).toMatchObject({
+      code: 'rate_limited',
+      details: { maxConcurrentTurns: 1 }
+    })
+    expect(testRuntime.turnService.suspendGraphPlanningTurn).toHaveBeenCalledWith({
+      threadId: 'thread_1',
+      turnId: 'turn_1',
+      force: true
+    })
+    expect(testRuntime.runTurn).not.toHaveBeenCalled()
+
+    const restored = await dispatch(
+      testRuntime,
+      'GET',
+      '/v1/graph-drafts/draft_1',
+      undefined,
+      headers
+    )
+    expect(JSON.parse(restored.body)).toMatchObject({
+      draft: {
+        revision: 4,
+        status: 'needs_correction'
+      }
+    })
+
+    const retried = await dispatch(
+      testRuntime,
+      'POST',
+      '/v1/graph-drafts/draft_1/resume',
+      { expectedRevision: 4 },
+      headers
+    )
+    expect(retried.status).toBe(202)
+    expect(JSON.parse(retried.body)).toMatchObject({
+      draft: {
+        revision: 5,
+        status: 'planning'
+      }
+    })
+  })
+
   it('cancels a planning draft once and rejects a stale revision', async () => {
     const testRuntime = runtime()
     const headers = { authorization: 'Bearer graph-route-token' }
@@ -279,6 +373,18 @@ describe('Graph HTTP routes', () => {
       threadId: 'thread_1',
       turnId: 'turn_1'
     })
+    const retried = await dispatch(
+      testRuntime,
+      'POST',
+      '/v1/graph-drafts/draft_1/cancel',
+      { expectedRevision: 2 },
+      headers
+    )
+    expect(retried.status).toBe(200)
+    expect(JSON.parse(retried.body)).toMatchObject({
+      draft: { status: 'cancelled', revision: 3 }
+    })
+    expect(testRuntime.turnService.interruptTurn).toHaveBeenCalledTimes(2)
   })
 
   it('returns bounded replay events after reconciling the selected run', async () => {

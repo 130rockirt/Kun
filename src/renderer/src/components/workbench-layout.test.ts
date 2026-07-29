@@ -8,6 +8,7 @@ import {
   normalizeStoredCodeRightWidthsRegistry,
   PANEL_RESIZE_HANDLE_WIDTH,
   RAIL_WIDTH,
+  transientRightPanelModeForWorkspaceChange,
   WORKBENCH_RESIZE_CLASS,
   workbenchWidthConstraintsForRightPanel
 } from './workbench-layout'
@@ -102,6 +103,21 @@ describe('code right workspace startup', () => {
       activeId: BUILTIN_RIGHT_PANEL_IDS.files,
       expanded: false
     })
+  })
+})
+
+describe('transient right panel workspace changes', () => {
+  it('keeps Requirement AI open while its first thread changes the workspace scope', () => {
+    expect(
+      transientRightPanelModeForWorkspaceChange(BUILTIN_RIGHT_PANEL_IDS.sddAi)
+    ).toBe(BUILTIN_RIGHT_PANEL_IDS.sddAi)
+  })
+
+  it('clears other transient panel modes on a workspace scope change', () => {
+    expect(
+      transientRightPanelModeForWorkspaceChange(BUILTIN_RIGHT_PANEL_IDS.browser)
+    ).toBeNull()
+    expect(transientRightPanelModeForWorkspaceChange(null)).toBeNull()
   })
 })
 

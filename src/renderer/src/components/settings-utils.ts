@@ -160,7 +160,9 @@ export function coerceRendererSettings(settings: AppSettingsV1): AppSettingsV1 {
     ),
     gitBranchPrefix: normalizeGitBranchPrefix(raw.gitBranchPrefix ?? DEFAULT_GIT_BRANCH_PREFIX),
     notifications: {
-      turnComplete: raw.notifications?.turnComplete !== false
+      turnComplete: raw.notifications?.turnComplete !== false,
+      mainAgentTurnComplete: raw.notifications?.mainAgentTurnComplete !== false,
+      subagentTurnComplete: raw.notifications?.subagentTurnComplete === true
     },
     appBehavior: normalizeAppBehaviorSettings(raw.appBehavior),
     keyboardShortcuts: normalizeKeyboardShortcuts(raw.keyboardShortcuts),

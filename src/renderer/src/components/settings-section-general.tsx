@@ -558,6 +558,36 @@ export function GeneralSettingsSection({ ctx }: { ctx: Record<string, any> }): R
               />
             }
           />
+          <div className="ml-3 divide-y divide-ds-border-muted border-l border-ds-border-muted pl-2">
+            <SettingRow
+              title={t('mainAgentTurnCompleteNotification')}
+              description={t('mainAgentTurnCompleteNotificationDesc')}
+              control={
+                <Toggle
+                  checked={form.notifications.mainAgentTurnComplete !== false}
+                  disabled={!form.notifications.turnComplete}
+                  ariaLabel={t('mainAgentTurnCompleteNotification')}
+                  onChange={(v) =>
+                    update({ notifications: { mainAgentTurnComplete: v } })
+                  }
+                />
+              }
+            />
+            <SettingRow
+              title={t('subagentTurnCompleteNotification')}
+              description={t('subagentTurnCompleteNotificationDesc')}
+              control={
+                <Toggle
+                  checked={form.notifications.subagentTurnComplete === true}
+                  disabled={!form.notifications.turnComplete}
+                  ariaLabel={t('subagentTurnCompleteNotification')}
+                  onChange={(v) =>
+                    update({ notifications: { subagentTurnComplete: v } })
+                  }
+                />
+              }
+            />
+          </div>
         </SettingsCard>
         <SettingsCard title={t('onboardingPreview')}>
           <SettingRow

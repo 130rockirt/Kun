@@ -30,6 +30,7 @@ type CreateAppActionsOptions = {
     providerId: string,
     effort: ModelReasoningEffort
   ) => void
+  persistComposerFastMode: (enabled: boolean) => void
   rememberThreadComposerMode: (threadId: string, mode: ComposerPlanMode) => void
   readStoredComposerModel: (allowedIds: readonly string[]) => string
   mergeComposerPickList: (upstreamOk: boolean, upstreamIds: string[]) => string[]
@@ -58,6 +59,7 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
   | 'setComposerOrchestration'
   | 'setComposerModel'
   | 'setComposerReasoningEffort'
+  | 'setComposerFastMode'
   | 'setComposerAgentId'
   | 'loadComposerModels'
   | 'setRoute'
@@ -81,6 +83,7 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
     persistComposerModel,
     persistComposerMode,
     persistComposerReasoningEffort,
+    persistComposerFastMode,
     rememberThreadComposerMode,
     readStoredComposerModel,
     mergeComposerPickList,
@@ -163,6 +166,11 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
         effort
       )
       set({ composerReasoningEffort: effort })
+    },
+
+    setComposerFastMode: (enabled) => {
+      persistComposerFastMode(enabled)
+      set({ composerFastMode: enabled })
     },
 
     setComposerAgentId: (agentId) => {

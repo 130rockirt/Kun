@@ -34,13 +34,15 @@ async function fixture() {
     nextId: (prefix) => `${prefix}_${++id}`
   })
   const pauseActive = vi.fn(async () => undefined)
+  const resumeActive = vi.fn(async () => undefined)
   const control = new GraphControlService({
     store,
     config: () => config,
     pauseActive,
+    resumeActive,
     nextId: (prefix) => `${prefix}_${++id}`
   })
-  return { control, store, pauseActive }
+  return { control, store, pauseActive, resumeActive }
 }
 
 describe('GraphControlService', () => {
@@ -166,6 +168,53 @@ describe('GraphControlService', () => {
     })).rejects.toBeInstanceOf(GraphRunConflictError)
   })
 
+  it('enforces the durable Graph revision budget before applying another patch', async () => {
+    const { control } = await fixture()
+    const base = testGraphPlan()
+    const plan = testGraphPlan({
+      budget: { ...base.budget, maxRevisions: 1 }
+    })
+    const created = await control.create({
+      runId: 'run_revision_budget',
+      threadId: 'thread_1',
+      projectId: 'project_1',
+      sourceTurnId: 'turn_1',
+      plan,
+      commandId: 'create_revision_budget',
+      idempotencyKey: 'create_revision_budget'
+    })
+    const first = await control.applyPatch(created.run.id, {
+      version: 1,
+      patchId: 'patch_revision_budget_1',
+      commandId: 'patch_revision_budget_1',
+      runId: created.run.id,
+      baseRevision: 1,
+      requester: { kind: 'lead', id: 'turn_1' },
+      reason: 'Consume the only allowed revision.',
+      operations: [{ op: 'update_budget', budget: plan.budget }],
+      createdAt: TEST_GRAPH_NOW
+    }, {
+      commandId: 'patch_revision_budget_1',
+      idempotencyKey: 'patch_revision_budget_1'
+    })
+    expect(first.budget.revisions).toBe(1)
+
+    await expect(control.applyPatch(first.id, {
+      version: 1,
+      patchId: 'patch_revision_budget_2',
+      commandId: 'patch_revision_budget_2',
+      runId: first.id,
+      baseRevision: 2,
+      requester: { kind: 'lead', id: 'turn_1' },
+      reason: 'Exceed the allowed revisions.',
+      operations: [{ op: 'update_budget', budget: plan.budget }],
+      createdAt: TEST_GRAPH_NOW
+    }, {
+      commandId: 'patch_revision_budget_2',
+      idempotencyKey: 'patch_revision_budget_2'
+    })).rejects.toThrow(/revision budget exhausted/)
+  })
+
   it('supersedes accepted work with a distinct node while retaining accepted history', async () => {
     const { control, store } = await fixture()
     await control.create({
@@ -228,10 +277,14 @@ describe('GraphControlService', () => {
     expect(revised.nodes.finish_v2.status).toBe('pending')
     expect(revised.nodes.finish.node.title).toBe('Finish')
     expect(revised.nodes.finish_v2.node.title).toBe('Revised finish')
+    expect(revised.plans.at(-1)!.completionNodeIds).toEqual(['finish_v2'])
+    expect(revised.plans.at(-1)!.edges).toEqual([
+      expect.objectContaining({ from: 'research', to: 'finish_v2' })
+    ])
   })
 
   it('rejects stale, duplicate, unrequired, and premature external reviews', async () => {
-    const { control, store } = await fixture()
+    const { control, store, resumeActive } = await fixture()
     const source = testGraphPlan().nodes[0]!
     await control.create({
       runId: 'run_review',
@@ -264,12 +317,23 @@ describe('GraphControlService', () => {
     const submitted = await submitAttempt(control, store, 'run_review', source.id)
     const attempt = submitted.nodes[source.id]!.attempts.at(-1)!
     const review = reviewFor(attempt.id)
+    resumeActive.mockClear()
     const reviewed = await control.recordReview('run_review', review, {
       commandId: 'human_review',
       idempotencyKey: 'human_review',
       expectedSeq: submitted.lastEventSeq
     })
     expect(reviewed.reviews).toHaveLength(1)
+    expect(resumeActive).toHaveBeenCalledOnce()
+    expect(resumeActive).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'run_review', lastEventSeq: reviewed.lastEventSeq })
+    )
+    resumeActive.mockClear()
+    await expect(control.recordReview('run_review', review, {
+      commandId: 'human_review_replay',
+      idempotencyKey: 'human_review_replay'
+    })).resolves.toMatchObject({ id: 'run_review' })
+    expect(resumeActive).toHaveBeenCalledOnce()
     await expect(control.recordReview('run_review', {
       ...review,
       reviewId: 'human_review_duplicate'

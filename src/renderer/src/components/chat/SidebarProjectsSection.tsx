@@ -20,9 +20,6 @@ import { rendererRuntimeClient } from '../../agent/runtime-client'
 import { useChatStore } from '../../store/chat-store'
 import { rememberCodeWorkspaceRoots } from '../../store/chat-store-helpers'
 import { workspaceLabelFromPath } from '../../lib/workspace-label'
-import { deleteSddDraft } from '../../sdd/sdd-draft-actions'
-import { listSddDraftHistory, type SddDraftHistoryItem } from '../../sdd/sdd-draft-history'
-import { useSddDraftStore, type SddDraft } from '../../sdd/sdd-draft-store'
 import {
   normalizeWorkspaceRoot,
   workspaceRootIdentityKey
@@ -34,7 +31,6 @@ import {
 } from '../sidebar/SidebarPrimitives'
 import { readThreadWorktreeRegistry } from '../../lib/thread-worktree-registry'
 import {
-  SddDraftHistoryRows,
   SidebarEmpty,
   ThreadRow
 } from './SidebarProjectRows'
@@ -72,7 +68,6 @@ import {
   mergeSidebarWorkspaceGroupsWithDraftHistory,
   sidebarWorkspacePathForThread,
   sidebarWorkspaceResolutionCandidates,
-  sddDraftHistoryForWorkspace,
   sortSidebarThreads,
   worktreeRecordForSidebarThread,
   type SidebarThreadWorktreeRecord,
@@ -155,7 +150,6 @@ type SidebarProjectsSectionProps = {
     workspacePath: string,
     options?: { forceNew?: boolean }
   ) => Promise<string | null>
-  onOpenRequirementDraft: (draft: SddDraft) => void
   onSelectThread: (threadId: string) => void
   onRenameThread: (threadId: string, title: string) => Promise<void>
   onPinThread: (threadId: string, pinned: boolean) => Promise<void>
@@ -166,7 +160,11 @@ type SidebarProjectsSectionProps = {
   t: (k: string, opts?: Record<string, unknown>) => string
 }
 
-const SDD_DRAFT_HISTORY_LOAD_LIMIT = 40
+export function sddDraftHistorySavedRevision(
+  draft: { id: string; updatedAt: string } | null | undefined
+): string {
+  return draft ? `${draft.id}\n${draft.updatedAt}` : ''
+}
 
 type WorkspaceOrderDropTarget = {
   workspacePath: string
@@ -200,7 +198,6 @@ export function SidebarProjectsSection({
   onPickWorkspace,
   onRemoveWorkspace,
   onCreateThreadInWorkspace,
-  onOpenRequirementDraft,
   onSelectThread,
   onRenameThread,
   onPinThread,
@@ -215,9 +212,6 @@ export function SidebarProjectsSection({
   )
   const [expandedWorkspaces, setExpandedWorkspaces] = useState<Record<string, boolean>>({})
   const [deletingThreadIds, setDeletingThreadIds] = useState<Record<string, boolean>>({})
-  const [deletingDraftIds, setDeletingDraftIds] = useState<Record<string, boolean>>({})
-  const [draftHistoryErrors, setDraftHistoryErrors] = useState<Record<string, string>>({})
-  const [draftHistoryRefreshVersion, setDraftHistoryRefreshVersion] = useState(0)
   const [searchOpen, setSearchOpen] = useState(false)
   const [threadContextMenu, setThreadContextMenu] = useState<ThreadContextMenuState | null>(null)
   const [workspaceContextMenu, setWorkspaceContextMenu] = useState<WorkspaceContextMenuState | null>(null)
@@ -234,9 +228,7 @@ export function SidebarProjectsSection({
   const [threadOrderDropTarget, setThreadOrderDropTarget] = useState<ThreadOrderDropTarget | null>(null)
   const [dragOverWorkspace, setDragOverWorkspace] = useState<string | null>(null)
   const [folderDropTarget, setFolderDropTarget] = useState<FolderDropTarget | null>(null)
-  const [draftHistoryByWorkspace, setDraftHistoryByWorkspace] = useState<Record<string, SddDraftHistoryItem[]>>({})
   const [threadWorktrees, setThreadWorktrees] = useState<SidebarThreadWorktrees>(() => readThreadWorktreeRegistry().worktrees)
-  const activeSddDraftId = useSddDraftStore((s) => s.activeDraft?.id ?? '')
 
   useEffect(() => {
     setThreadWorktrees(readThreadWorktreeRegistry().worktrees)
@@ -253,15 +245,6 @@ export function SidebarProjectsSection({
       threadWorktrees
     })
   }, [searchQuery, showArchived, threadWorktrees, threads, workspaceRoot, workspaceRoots, conversationRoot])
-
-  const draftHistoryWorkspacePaths = useMemo(() => {
-    return buildSidebarDraftWorkspacePaths({
-      threads,
-      workspaceRoot,
-      workspaceRoots,
-      threadWorktrees
-    })
-  }, [threadWorktrees, threads, workspaceRoot, workspaceRoots])
 
   const allProjectGroups = useMemo(() => {
     const byWorkspace = new Map<string, [string, NormalizedThread[]]>()
@@ -292,24 +275,7 @@ export function SidebarProjectsSection({
     ]))
   }, [allProjectGroups])
 
-  const filteredDraftHistoryByWorkspace = useMemo(() => {
-    return Object.fromEntries(
-      Object.entries(draftHistoryByWorkspace)
-        .map(([path, history]) => [
-          path,
-          filterSddDraftHistoryItems(history, searchQuery, path)
-        ] as const)
-        .filter(([, history]) => history.length > 0)
-    )
-  }, [draftHistoryByWorkspace, searchQuery])
-
-  const unorderedDisplayGroups = useMemo(() => {
-    return mergeSidebarWorkspaceGroupsWithDraftHistory({
-      groups,
-      draftHistoryByWorkspace: filteredDraftHistoryByWorkspace,
-      workspaceRoot
-    })
-  }, [filteredDraftHistoryByWorkspace, groups, workspaceRoot])
+  const unorderedDisplayGroups = groups
 
   const displayGroups = useMemo(() => {
     const byWorkspace = new Map(
@@ -336,42 +302,7 @@ export function SidebarProjectsSection({
   const allGroupsCollapsed = displayGroups.length > 0 && displayGroups.every(([workspacePath]) =>
     isSidebarWorkspaceCollapsed(sidebarCollapse, workspacePath)
   )
-  const workspaceHistoryKey = draftHistoryWorkspacePaths.join('\n')
   const projectWorkspaceGroups = displayGroups.filter(([workspacePath]) => isSidebarProjectWorkspacePath(workspacePath))
-
-  useEffect(() => {
-    if (
-      typeof window === 'undefined' ||
-      typeof window.kunGui?.listWorkspaceDirectory !== 'function' ||
-      typeof window.kunGui?.readWorkspaceFile !== 'function'
-    ) {
-      setDraftHistoryByWorkspace({})
-      return
-    }
-    const workspacePaths = workspaceHistoryKey.split('\n').filter(Boolean)
-    if (workspacePaths.length === 0) {
-      setDraftHistoryByWorkspace({})
-      return
-    }
-    let cancelled = false
-    void Promise.all(
-      workspacePaths.map(async (path) => {
-        const history = await listSddDraftHistory({
-          workspaceRoot: path,
-          listWorkspaceDirectory: window.kunGui.listWorkspaceDirectory,
-          readWorkspaceFile: window.kunGui.readWorkspaceFile,
-          limit: SDD_DRAFT_HISTORY_LOAD_LIMIT
-        }).catch(() => [])
-        return [path, history] as const
-      })
-    ).then((entries) => {
-      if (cancelled) return
-      setDraftHistoryByWorkspace(Object.fromEntries(entries.filter(([, history]) => history.length > 0)))
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [draftHistoryRefreshVersion, workspaceHistoryKey])
 
   useEffect(() => {
     if (!threadContextMenu && !workspaceContextMenu && !folderContextMenu) return
@@ -1259,55 +1190,6 @@ export function SidebarProjectsSection({
     })
   }
 
-  const handleDeleteRequirementDraft = async (draft: SddDraftHistoryItem): Promise<void> => {
-    const draftId = draft.id.trim()
-    if (!draftId || deletingDraftIds[draftId]) return
-    const workspaceKey = draft.workspaceRoot
-    openActionDialog({
-      title: t('sddDraftHistoryDeleteDialogTitle', { title: draft.title }),
-      description: t('sddDraftHistoryDeleteDialogDescription'),
-      detail: t('sddDraftHistoryDeleteDialogDetail'),
-      confirmLabel: t('sddDraftHistoryDelete'),
-      danger: true,
-      onConfirm: async () => {
-        setDeletingDraftIds((prev) => ({ ...prev, [draftId]: true }))
-        setDraftHistoryErrors((prev) => {
-          const next = { ...prev }
-          delete next[workspaceKey]
-          return next
-        })
-        try {
-          const result = await deleteSddDraft(draft)
-          if (!result.ok) {
-            setDraftHistoryErrors((prev) => ({
-              ...prev,
-              [workspaceKey]: t('sddDraftHistoryDeleteFailed', { message: result.message })
-            }))
-            return
-          }
-          setDraftHistoryByWorkspace((current) => {
-            const next = Object.fromEntries(
-              Object.entries(current)
-                .map(([workspacePath, items]) => [
-                  workspacePath,
-                  items.filter((item) => item.id !== draftId)
-                ] as const)
-                .filter(([, items]) => items.length > 0)
-            )
-            return next
-          })
-          setDraftHistoryRefreshVersion((version) => version + 1)
-        } finally {
-          setDeletingDraftIds((prev) => {
-            const next = { ...prev }
-            delete next[draftId]
-            return next
-          })
-        }
-      }
-    })
-  }
-
   const renderThreadRow = (
     thread: NormalizedThread,
     workspacePath: string,
@@ -1425,10 +1307,9 @@ export function SidebarProjectsSection({
             && workspaceRootIdentityKey(workspaceOrderDropTarget.workspacePath) === workspaceRootIdentityKey(workspacePath)
               ? workspaceOrderDropTarget.position
               : null
-          const draftHistory = sddDraftHistoryForWorkspace(filteredDraftHistoryByWorkspace, workspacePath)
           const threadOrderScope = sidebarThreadOrderScope(workspacePath)
           const sortedThreads = reconcileSidebarThreadOrder(
-            sortSidebarThreads(filterEmptySddAssistantThreadsFromSidebar(list, draftHistory)),
+            sortSidebarThreads(list),
             sidebarOrder.threadIdsByScope[threadOrderScope] ?? []
           )
           const workspaceFolders = sidebarFoldersForWorkspace(sidebarFolders, workspacePath)
@@ -1524,15 +1405,6 @@ export function SidebarProjectsSection({
 
               {!isCollapsed ? (
                 <div className="mt-1 space-y-[3px] pl-4">
-                  <SddDraftHistoryRows
-                    items={draftHistory}
-                    activeDraftId={activeSddDraftId}
-                    deletingDraftIds={deletingDraftIds}
-                    error={draftHistoryErrors[workspacePath] ?? ''}
-                    onOpen={onOpenRequirementDraft}
-                    onDelete={(draft) => void handleDeleteRequirementDraft(draft)}
-                    t={t}
-                  />
                   {rootFolders.map((folder) => {
                     const renderFolder = (item: SidebarVirtualFolder): ReactElement => {
                       const folderCollapsed = isSidebarFolderCollapsed(
@@ -1630,7 +1502,7 @@ export function SidebarProjectsSection({
                     }
                     return renderFolder(folder)
                   })}
-                  {rootThreads.length === 0 && rootFolders.length === 0 && draftHistory.length === 0 ? (
+                  {rootThreads.length === 0 && rootFolders.length === 0 ? (
                     <div className="flex items-center justify-between gap-2 px-2.5 py-1.5">
                       <div className="text-[12.5px] leading-5 text-ds-faint">
                         {searchQuery.trim()

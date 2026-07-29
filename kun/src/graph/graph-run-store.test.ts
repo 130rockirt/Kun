@@ -1,7 +1,7 @@
 import { appendFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { FileArtifactStore } from '../artifacts/artifact-store.js'
 import { InMemoryEventBus } from '../adapters/in-memory-event-bus.js'
 import { InMemorySessionStore } from '../adapters/in-memory-session-store.js'
@@ -17,6 +17,7 @@ import { testGraphConfig, testGraphPlan } from './graph-test-fixtures.test-suppo
 const roots: string[] = []
 
 afterEach(async () => {
+  vi.restoreAllMocks()
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })))
 })
 
@@ -160,29 +161,147 @@ describe('FileGraphRunStore', () => {
     expect(runtimeEvents).toHaveLength(2)
   })
 
-  it('retries an undelivered runtime outbox event without duplicating graph truth', async () => {
+  it('keeps durable create and append commands successful while replaying a failed outbox once', async () => {
     const root = await mkdtemp(join(tmpdir(), 'kun-graph-outbox-'))
     roots.push(root)
     const delivered: RuntimeEventDraft[] = []
-    let calls = 0
+    let failNext = true
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
     const store = new FileGraphRunStore({
       rootDir: join(root, 'graphs'),
       config: () => testGraphConfig(),
       runtimeEvents: {
         record: async (event) => {
-          calls += 1
-          if (calls === 1) throw new Error('temporary recorder failure')
+          if (failNext) {
+            failNext = false
+            throw new Error(`temporary recorder failure ${'x'.repeat(2_048)}`)
+          }
           delivered.push(event)
           return event as never
         }
       }
     })
 
-    await expect(createRun(store)).rejects.toThrow('temporary recorder failure')
-    const retried = await createRun(store)
-    expect(retried.duplicate).toBe(true)
-    expect(retried.run.lastEventSeq).toBe(1)
+    const created = await createRun(store)
+    expect(created).toMatchObject({
+      duplicate: false,
+      run: { id: 'run_1', lastEventSeq: 1 }
+    })
+    expect((await store.get('run_1'))?.lastEventSeq).toBe(1)
+    expect(await store.list({ threadId: 'thread_1' })).toEqual([
+      expect.objectContaining({ id: 'run_1', lastEventSeq: 1 })
+    ])
+    expect((await readFile(
+      join(root, 'graphs', 'run_1', 'events.jsonl'),
+      'utf8'
+    )).trim().split('\n')).toHaveLength(1)
+    const pendingCreate = JSON.parse(await readFile(
+      join(root, 'graphs', 'run_1', 'runtime-outbox.json'),
+      'utf8'
+    )) as Array<{ eventId: string }>
+    expect(pendingCreate).toHaveLength(1)
+    expect(warning).toHaveBeenCalledOnce()
+    expect(String(warning.mock.calls[0]?.[0])).toMatch(
+      /^\[kun] Graph runtime event outbox flush deferred for run_1: temporary recorder failure /
+    )
+    expect(String(warning.mock.calls[0]?.[0]).length).toBeLessThan(600)
+
+    failNext = true
+    const duplicateCreateWhileRecorderIsDown = await createRun(store)
+    expect(duplicateCreateWhileRecorderIsDown.duplicate).toBe(true)
+    expect(delivered).toHaveLength(0)
+    expect(JSON.parse(await readFile(
+      join(root, 'graphs', 'run_1', 'runtime-outbox.json'),
+      'utf8'
+    ))).toHaveLength(1)
+
+    const duplicateCreate = await createRun(store)
+    expect(duplicateCreate.duplicate).toBe(true)
     expect(delivered).toHaveLength(1)
+    expect(JSON.parse(await readFile(
+      join(root, 'graphs', 'run_1', 'runtime-outbox.json'),
+      'utf8'
+    ))).toEqual([])
+
+    failNext = true
+    const appended = await store.append('run_1', {
+      expectedSeq: 1,
+      graphRevision: 1,
+      commandId: 'command_validate',
+      idempotencyKey: 'validate_1',
+      event: {
+        type: 'run_status_changed',
+        payload: { from: 'draft', to: 'validating' }
+      }
+    })
+    expect(appended).toMatchObject({
+      duplicate: false,
+      state: { status: 'validating', lastEventSeq: 2 },
+      envelope: { graphSeq: 2 }
+    })
+    expect((await store.get('run_1'))?.lastEventSeq).toBe(2)
+    expect(await store.list({ threadId: 'thread_1' })).toEqual([
+      expect.objectContaining({ id: 'run_1', status: 'validating', lastEventSeq: 2 })
+    ])
+    expect((await readFile(
+      join(root, 'graphs', 'run_1', 'events.jsonl'),
+      'utf8'
+    )).trim().split('\n')).toHaveLength(2)
+    expect(JSON.parse(await readFile(
+      join(root, 'graphs', 'run_1', 'runtime-outbox.json'),
+      'utf8'
+    ))).toHaveLength(1)
+
+    failNext = true
+    const duplicateAppendWhileRecorderIsDown = await store.append('run_1', {
+      expectedSeq: 1,
+      graphRevision: 1,
+      commandId: 'command_validate',
+      idempotencyKey: 'validate_1',
+      event: {
+        type: 'run_status_changed',
+        payload: { from: 'draft', to: 'validating' }
+      }
+    })
+    expect(duplicateAppendWhileRecorderIsDown).toMatchObject({
+      duplicate: true,
+      state: { status: 'validating', lastEventSeq: 2 }
+    })
+    expect(delivered).toHaveLength(1)
+    expect(JSON.parse(await readFile(
+      join(root, 'graphs', 'run_1', 'runtime-outbox.json'),
+      'utf8'
+    ))).toHaveLength(1)
+
+    const duplicateAppend = await store.append('run_1', {
+      expectedSeq: 1,
+      graphRevision: 1,
+      commandId: 'command_validate',
+      idempotencyKey: 'validate_1',
+      event: {
+        type: 'run_status_changed',
+        payload: { from: 'draft', to: 'validating' }
+      }
+    })
+    expect(duplicateAppend).toMatchObject({
+      duplicate: true,
+      state: { status: 'validating', lastEventSeq: 2 }
+    })
+    expect(delivered.map((event) => (
+      event.kind === 'graph_event' ? event.graph.eventId : undefined
+    ))).toEqual([
+      pendingCreate[0]!.eventId,
+      appended.envelope.eventId
+    ])
+    expect(new Set(delivered.map((event) => (
+      event.kind === 'graph_event' ? event.graph.eventId : undefined
+    ))).size).toBe(2)
+    expect(JSON.parse(await readFile(
+      join(root, 'graphs', 'run_1', 'runtime-outbox.json'),
+      'utf8'
+    ))).toEqual([])
+    expect(warning).toHaveBeenCalledTimes(4)
+    expect(warning.mock.calls.every(([message]) => String(message).length < 600)).toBe(true)
   })
 
   it('serializes optimistic appends so only one stale writer commits', async () => {

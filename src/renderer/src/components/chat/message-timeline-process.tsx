@@ -15,10 +15,12 @@ import {
   PencilLine,
   BellRing,
   Search,
+  Sparkles,
   Terminal,
   Wrench
 } from 'lucide-react'
 import type { ChatBlock, ToolBlock } from '../../agent/types'
+import { parseBackgroundSubagentCompletionNotice } from '@shared/background-subagent-notice'
 import { extractUnifiedDiffText } from '../../lib/diff-stats'
 import { useDeferredRender } from '../../hooks/use-deferred-render'
 import { openWorkspacePathInEditor } from '../../lib/open-workspace-path'
@@ -102,6 +104,10 @@ export function groupProcessSections(blocks: ChatBlock[]): ProcessSection[] {
       sections.push({ id: `execution-${block.id}`, kind: 'execution', blocks: [block] })
       continue
     }
+    if (block.kind === 'compaction') {
+      sections.push({ id: `compaction-${block.id}`, kind: 'execution', blocks: [block] })
+      continue
+    }
     const kind =
       block.kind === 'reasoning'
         ? 'reasoning'
@@ -110,6 +116,9 @@ export function groupProcessSections(blocks: ChatBlock[]): ProcessSection[] {
           : 'execution'
     const last = sections[sections.length - 1]
     const followsGeneratedMedia = last?.blocks.some(processBlockHasGeneratedMedia) === true
+    const followsCompaction = last?.blocks.some(
+      (candidate) => candidate.kind === 'compaction'
+    ) === true
 
     // Keep a real assistant text update as a hard timeline boundary, but fold
     // adjacent non-text work together. A long read/search/reason sequence does
@@ -121,6 +130,7 @@ export function groupProcessSections(blocks: ChatBlock[]): ProcessSection[] {
     if (
       last &&
       !followsGeneratedMedia &&
+      !followsCompaction &&
       silentProcessPhase &&
       previousIsSilentProcessPhase
     ) {
@@ -133,7 +143,7 @@ export function groupProcessSections(blocks: ChatBlock[]): ProcessSection[] {
       continue
     }
 
-    if (last && !followsGeneratedMedia && last.kind === kind) {
+    if (last && !followsGeneratedMedia && !followsCompaction && last.kind === kind) {
       last.blocks.push(block)
       continue
     }
@@ -449,6 +459,46 @@ function processBlockHasError(block: ChatBlock): boolean {
   return processBlockErrorTone(block) !== null
 }
 
+function BackgroundSubagentRowSummary({
+  block
+}: {
+  block: Extract<ChatBlock, { kind: 'user' }>
+}): ReactElement {
+  const { t } = useTranslation('common')
+  const parsed = parseBackgroundSubagentCompletionNotice(block.text)
+  const failed = parsed?.status === 'failed'
+  const label =
+    parsed?.label ||
+    block.meta?.displayText?.trim() ||
+    t('backgroundSubagentNotice.title', { defaultValue: 'Background subagent completed' })
+
+  return (
+    <span
+      data-background-subagent-row="true"
+      className="flex min-w-0 flex-1 items-center gap-2.5"
+    >
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-[13.5px] font-semibold text-ds-ink">{label}</span>
+        <span className="block truncate text-[11.5px] text-ds-faint">
+          {t('backgroundSubagentNotice.taskKind', { defaultValue: 'Background task' })}
+        </span>
+      </span>
+      <span
+        className={`inline-flex shrink-0 items-center gap-1.5 text-[11.5px] font-medium ${
+          failed
+            ? 'text-orange-700 dark:text-orange-300'
+            : 'text-emerald-700 dark:text-emerald-300'
+        }`}
+      >
+        <span className={`h-1.5 w-1.5 rounded-full ${failed ? 'bg-orange-500' : 'bg-emerald-500'}`} />
+        {failed
+          ? t('backgroundSubagentNotice.failed', { defaultValue: 'Failed' })
+          : t('backgroundSubagentNotice.completed', { defaultValue: 'Completed' })}
+      </span>
+    </span>
+  )
+}
+
 function ProcessStackRows({
   blocks,
   processing,
@@ -484,6 +534,7 @@ function ProcessStackRows({
         const rowActive = processBlockIsActive(block, processing)
         const canToggle = canExpand && !forceOpen
         const RowIcon = processBlockIcon(block)
+        const isBackgroundSubagent = isBackgroundSubagentNoticeBlock(block)
         const handleToggle = (): void => {
           if (!canToggle) return
           if (open) {
@@ -524,16 +575,24 @@ function ProcessStackRows({
               aria-expanded={canToggle ? open : undefined}
               onClick={handleToggle}
               onKeyDown={handleKeyDown}
-              className={`group flex w-full min-w-0 items-center gap-1.5 rounded-md px-1 py-0.5 text-left text-[13.5px] leading-6 transition ${
+              className={`group flex w-full min-w-0 items-center text-left text-[13.5px] leading-6 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/25 ${
+                isBackgroundSubagent
+                  ? 'gap-2.5 rounded-[12px] border border-ds-border bg-ds-card/55 px-3 py-2.5 shadow-[0_2px_10px_rgba(42,52,72,0.035)]'
+                  : 'gap-1.5 rounded-md px-1 py-0.5'
+              } ${
                 isError
                   ? processErrorTextClass(errorTone)
                   : 'text-ds-faint hover:text-ds-muted'
-              } ${canToggle ? 'cursor-pointer hover:bg-ds-hover/45' : 'cursor-default'}`}
+              } ${canToggle ? `cursor-pointer ${isBackgroundSubagent ? 'hover:border-ds-border-strong hover:bg-ds-card' : 'hover:bg-ds-hover/45'}` : 'cursor-default'}`}
             >
               {RowIcon ? <ProcessGlyph Icon={RowIcon} /> : null}
-              <span className={`min-w-0 flex-1 truncate ${rowActive && !isError ? 'ds-shiny-text' : ''}`}>
-                <ProcessSummaryText block={block} summary={summary} workspaceRoot={workspaceRoot} />
-              </span>
+              {isBackgroundSubagent && block.kind === 'user' ? (
+                <BackgroundSubagentRowSummary block={block} />
+              ) : (
+                <span className={`min-w-0 flex-1 truncate ${rowActive && !isError ? 'ds-shiny-text' : ''}`}>
+                  <ProcessSummaryText block={block} summary={summary} workspaceRoot={workspaceRoot} />
+                </span>
+              )}
               {canExpand ? (
                 <button
                   type="button"
@@ -616,6 +675,7 @@ function ProcessEntryRow({
   const wrapSummary = (block.kind === 'system' && !canExpand) || isAssistantProcessText
   const canToggle = canExpand && !forceOpen
   const RowIcon = processBlockIcon(block)
+  const isBackgroundSubagent = isBackgroundSubagentNoticeBlock(block)
   const showInlineGeneratedMedia = processing && processBlockHasGeneratedMedia(block)
   const handleToggle = (): void => {
     if (!canToggle) return
@@ -640,35 +700,46 @@ function ProcessEntryRow({
         aria-expanded={canToggle ? open : undefined}
         onClick={handleToggle}
         onKeyDown={handleKeyDown}
-        className={`group flex w-full items-start gap-2 rounded-md px-2 py-1 text-left text-[13.5px] leading-[1.55] transition ${
+        className={`group flex w-full text-left text-[13.5px] leading-[1.55] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/25 ${
+          isBackgroundSubagent
+            ? 'items-center gap-2.5 rounded-[12px] border border-ds-border bg-ds-card/55 px-3 py-2.5 shadow-[0_2px_10px_rgba(42,52,72,0.035)]'
+            : 'items-start gap-2 rounded-md px-2 py-1'
+        } ${
           isError
             ? processErrorTextClass(errorTone)
             : 'text-ds-faint hover:text-ds-ink'
         } ${
           canToggle
-            ? 'cursor-pointer hover:bg-ds-hover/70'
+            ? `cursor-pointer ${isBackgroundSubagent ? 'hover:border-ds-border-strong hover:bg-ds-card' : 'hover:bg-ds-hover/70'}`
             : 'cursor-default'
         }`}
       >
         {RowIcon ? (
           <ProcessGlyph Icon={RowIcon} className="mt-1" />
         ) : null}
-        <span
-          className={`min-w-0 flex-1 ${wrapSummary ? 'whitespace-pre-wrap break-words' : 'truncate'} ${
-            rowActive && !isError ? 'ds-shiny-text' : ''
-          }`}
-        >
+        {isBackgroundSubagent && block.kind === 'user' ? (
+          <BackgroundSubagentRowSummary block={block} />
+        ) : (
           <span
-            className={`font-medium ${isError ? '' : rowActive ? '' : 'text-ds-muted'}`}
+            role={block.kind === 'compaction' && block.status === 'running' ? 'status' : undefined}
+            aria-live={block.kind === 'compaction' && block.status === 'running' ? 'polite' : undefined}
+            data-compaction-timeline-entry={block.kind === 'compaction' ? 'true' : undefined}
+            className={`min-w-0 flex-1 ${wrapSummary ? 'whitespace-pre-wrap break-words' : 'truncate'} ${
+              rowActive && !isError ? 'ds-shiny-text' : ''
+            }`}
           >
-            {verb}
-          </span>
-          {rest ? (
-            <span className="ml-1.5 font-mono text-[13px]">
-              <ProcessSummaryText block={block} summary={rest} workspaceRoot={workspaceRoot} />
+            <span
+              className={`font-medium ${isError ? '' : rowActive ? '' : 'text-ds-muted'}`}
+            >
+              {verb}
             </span>
-          ) : null}
-        </span>
+            {rest ? (
+              <span className="ml-1.5 font-mono text-[13px]">
+                <ProcessSummaryText block={block} summary={rest} workspaceRoot={workspaceRoot} />
+              </span>
+            ) : null}
+          </span>
+        )}
         {canExpand ? (
           <button
             type="button"
@@ -893,7 +964,7 @@ function processBlockIcon(block: ChatBlock): LucideIcon | null {
   if (block.kind === 'approval_review') return Bot
   if (block.kind === 'user_input') return MessageSquareQuote
   if (isBackgroundShellNoticeBlock(block)) return BellRing
-  if (isBackgroundSubagentNoticeBlock(block)) return BellRing
+  if (isBackgroundSubagentNoticeBlock(block)) return Sparkles
   if (block.kind !== 'tool') return null
   return toolBlockIcon(block)
 }

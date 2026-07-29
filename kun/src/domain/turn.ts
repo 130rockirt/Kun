@@ -5,6 +5,7 @@ import type {
   Turn,
   TurnClientSurface,
   TurnReasoningEffort,
+  TurnServiceTier,
   TurnStatus
 } from '../contracts/turns.js'
 import type {
@@ -29,6 +30,7 @@ export function createTurnRecord(input: {
   accountId?: string
   actingModelRoute?: ActingTurnModelRoute
   reasoningEffort?: TurnReasoningEffort
+  serviceTier?: TurnServiceTier
   clientSurface?: TurnClientSurface
   approvalPolicy?: ApprovalPolicy
   sandboxMode?: SandboxMode
@@ -75,6 +77,7 @@ export function createTurnRecord(input: {
     ...(accountId ? { accountId } : {}),
     ...(input.actingModelRoute ? { actingModelRoute: { ...input.actingModelRoute } } : {}),
     ...(reasoningEffort ? { reasoningEffort } : {}),
+    ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
     ...(input.clientSurface ? { clientSurface: input.clientSurface } : {}),
     ...(input.approvalPolicy ? { approvalPolicy: input.approvalPolicy } : {}),
     ...(input.sandboxMode ? { sandboxMode: input.sandboxMode } : {}),

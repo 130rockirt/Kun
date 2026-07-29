@@ -405,6 +405,15 @@
   z-index: 1;
 }
 
+.ds-sidebar-surface,
+.ds-sidebar-surface-body {
+  background: var(--ds-sidebar-surface-bg);
+}
+
+.ds-sidebar-surface-chrome {
+  background: var(--ds-sidebar-surface-chrome-bg);
+}
+
 :root:not([data-platform='darwin']) .ds-sidebar-titlebar-spacer {
   padding-top: 4px;
   padding-bottom: 6px;

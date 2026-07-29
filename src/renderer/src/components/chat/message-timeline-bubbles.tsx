@@ -1,7 +1,7 @@
 import type { ReactElement } from 'react'
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Check, ChevronDown, ChevronLeft, ChevronRight, Copy, Download, File, FileEdit, GitFork, ImageIcon, Loader2, MessageSquareQuote, PencilLine, RotateCcw, Terminal, Video, Wrench } from 'lucide-react'
+import { Check, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, CircleAlert, Copy, Download, File, FileEdit, GitFork, ImageIcon, Layers3, Loader2, MessageSquareQuote, PencilLine, RotateCcw, Sparkles, Terminal, Video, Wrench } from 'lucide-react'
 import type { AttachmentReference, ChatBlock, GeneratedFileReference, RuntimeDisclosureMetadata, ToolBlock, UserFileReference, UserInputAnswer } from '../../agent/types'
 import { extractUnifiedDiffText } from '../../lib/diff-stats'
 import { useChatStore } from '../../store/chat-store'
@@ -148,70 +148,108 @@ function BackgroundSubagentNoticeBubble({
   nested?: boolean
 }): ReactElement {
   const { t } = useTranslation('common')
+  const [summaryExpanded, setSummaryExpanded] = useState(false)
   const parsed = useMemo(() => parseBackgroundSubagentCompletionNotice(block.text), [block.text])
+  const isFailed = parsed?.status === 'failed'
   const title =
+    parsed?.label ||
     block.meta?.displayText?.trim() ||
     t('backgroundSubagentNotice.title', { defaultValue: 'Background subagent completed' })
-  const isFailed = parsed?.status === 'failed'
+  const statusLabel = isFailed
+    ? t('backgroundSubagentNotice.failed', { defaultValue: 'Failed' })
+    : t('backgroundSubagentNotice.completed', { defaultValue: 'Completed' })
+  const summary = parsed?.summary ?? ''
+  const canExpandSummary = summary.length > 900 || summary.split('\n').length > 14
   const statusTone = isFailed
-    ? 'border-orange-400/30 bg-orange-500/10 text-orange-800 dark:text-orange-200'
-    : 'border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+    ? 'border-orange-400/35 bg-orange-500/8 text-orange-800 dark:text-orange-200'
+    : 'border-emerald-500/25 bg-emerald-500/8 text-emerald-700 dark:text-emerald-300'
+  const StatusIcon = isFailed ? CircleAlert : CheckCircle2
 
   return (
     <div className={nested ? 'min-w-0' : 'flex w-full justify-start'}>
-      <div className="w-full max-w-[min(640px,calc(100vw-3rem))] rounded-[18px] border border-accent/25 bg-[linear-gradient(180deg,rgba(79,124,255,0.06),rgba(79,124,255,0.1))] px-3.5 py-3 text-ds-muted shadow-sm">
-        <div className="mb-2 flex flex-wrap items-center gap-2">
-          <span className="rounded-full border border-accent/25 bg-accent/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-accent">
-            {t('backgroundSubagentNotice.kindLabel', { defaultValue: 'Background callback' })}
+      <div
+        data-background-subagent-card="true"
+        className="relative w-full max-w-[min(760px,calc(100vw-3rem))] overflow-hidden rounded-[16px] border border-ds-border bg-ds-card text-ds-muted shadow-[0_8px_24px_rgba(42,52,72,0.06)]"
+      >
+        <div
+          aria-hidden="true"
+          className={`absolute inset-y-0 left-0 w-[3px] ${isFailed ? 'bg-orange-500/80' : 'bg-accent/90'}`}
+        />
+        <div className="flex min-w-0 items-center gap-3 px-4 py-3.5 pl-[18px]">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] border border-accent/15 bg-accent/[0.07] text-accent">
+            <Sparkles className="h-[17px] w-[17px]" strokeWidth={1.9} />
           </span>
-          {parsed ? (
-            <>
-              <span
-                className="inline-flex items-center gap-1 rounded-full border border-ds-border/80 bg-ds-card/70 px-2 py-0.5 font-mono text-[11px] text-ds-ink"
-                title={parsed.childId}
-              >
-                <span className="font-sans font-medium text-ds-muted">
-                  {t('backgroundSubagentNotice.childId', { defaultValue: 'Child' })}
-                </span>
-                <span>{parsed.childId}</span>
+          <div className="min-w-0 flex-1">
+            <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+              <h3 className="truncate text-[14px] font-semibold leading-5 text-ds-ink">{title}</h3>
+              <span className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium ${statusTone}`}>
+                <StatusIcon className="h-3 w-3" strokeWidth={2} />
+                {statusLabel}
               </span>
-              <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] ${statusTone}`}>
-                <span className="font-medium opacity-80">
-                  {t('backgroundSubagentNotice.status', { defaultValue: 'Status' })}
-                </span>
-                <span>{parsed.status}</span>
-              </span>
-            </>
-          ) : null}
-        </div>
-        <div className="min-w-0">
-          <p className="text-[13px] font-medium text-ds-ink">{title}</p>
-          {parsed?.label ? (
-            <dl className="mt-2 space-y-1.5 text-[12.5px] leading-5">
-              <div className="flex flex-wrap gap-x-2">
-                <dt className="font-medium text-ds-muted">
-                  {t('backgroundSubagentNotice.agent', { defaultValue: 'Agent' })}
-                </dt>
-                <dd className="min-w-0 break-words text-ds-ink">{parsed.label}</dd>
-              </div>
-            </dl>
-          ) : null}
-          {parsed?.summary ? (
-            <div className="mt-2.5">
-              <p className="text-[12px] font-medium text-ds-muted">
-                {t('backgroundSubagentNotice.summary', { defaultValue: 'Summary' })}
-              </p>
-              <div className="ds-markdown mt-1 rounded-[10px] border border-ds-border/70 bg-ds-card/70 px-2.5 py-2 text-[12.5px] leading-5 text-ds-ink">
-                <AssistantMarkdown text={parsed.summary} streaming={false} />
-              </div>
             </div>
-          ) : null}
-          {parsed?.error ? (
-            <pre className="mt-2.5 overflow-auto whitespace-pre-wrap break-words rounded-[10px] border border-orange-400/30 bg-orange-500/10 px-2.5 py-2 font-mono text-[11.5px] leading-5 text-orange-900 dark:text-orange-100">
-              {parsed.error}
-            </pre>
-          ) : null}
+            {parsed?.childId ? (
+              <p className="mt-0.5 truncate font-mono text-[11.5px] leading-4 text-ds-faint" title={parsed.childId}>
+                {parsed.childId}
+              </p>
+            ) : null}
+          </div>
+          <span className="hidden shrink-0 items-center gap-1.5 text-[11.5px] text-ds-faint sm:inline-flex">
+            <Layers3 className="h-3.5 w-3.5" strokeWidth={1.8} />
+            {t('backgroundSubagentNotice.taskKind', { defaultValue: 'Background task' })}
+          </span>
         </div>
+        {summary || parsed?.error ? (
+          <div className="border-t border-ds-border/80 px-4 pb-3.5 pl-[18px] pt-3">
+            {summary ? (
+              <div data-background-subagent-result="true">
+                <p className="mb-2 text-[12px] font-semibold tracking-[0.01em] text-ds-muted">
+                  {t('backgroundSubagentNotice.resultTitle', { defaultValue: 'Execution result' })}
+                </p>
+                <div className="relative">
+                  <div
+                    className={`ds-markdown text-[13.5px] leading-[1.68] text-ds-ink ${
+                      canExpandSummary && !summaryExpanded ? 'max-h-[360px] overflow-hidden' : ''
+                    }`}
+                  >
+                    <AssistantMarkdown text={summary} streaming={false} />
+                  </div>
+                  {canExpandSummary && !summaryExpanded ? (
+                    <div
+                      aria-hidden="true"
+                      className="pointer-events-none absolute inset-x-0 bottom-0 h-20 bg-gradient-to-b from-transparent to-ds-card"
+                    />
+                  ) : null}
+                </div>
+                {canExpandSummary ? (
+                  <button
+                    type="button"
+                    onClick={() => setSummaryExpanded((value) => !value)}
+                    aria-expanded={summaryExpanded}
+                    className="mt-2.5 flex w-full items-center justify-between gap-3 border-t border-ds-border/70 pt-2.5 text-left text-[12px] font-medium text-ds-muted transition hover:text-ds-ink"
+                  >
+                    <span>
+                      {summaryExpanded
+                        ? t('backgroundSubagentNotice.collapseOutput', { defaultValue: 'Collapse output' })
+                        : t('backgroundSubagentNotice.showFullOutput', { defaultValue: 'View full output' })}
+                    </span>
+                    {summaryExpanded ? (
+                      <ChevronDown className="h-3.5 w-3.5" strokeWidth={1.9} />
+                    ) : (
+                      <ChevronRight className="h-3.5 w-3.5" strokeWidth={1.9} />
+                    )}
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+            {parsed?.error ? (
+              <div
+                className={`${summary ? 'mt-3' : ''} overflow-auto whitespace-pre-wrap break-words rounded-[10px] border border-orange-400/30 bg-orange-500/[0.07] px-3 py-2.5 font-mono text-[11.5px] leading-5 text-orange-900 dark:text-orange-100`}
+              >
+                {parsed.error}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
       </div>
     </div>
   )

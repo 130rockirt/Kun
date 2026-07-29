@@ -4,7 +4,10 @@ import {
   testGraphEnvelope,
   testGraphPlan
 } from './graph-test-fixtures.test-support.js'
-import { canonicalWorkerArtifactRefs } from './graph-artifact-policy.js'
+import {
+  canonicalWorkerArtifactRefs,
+  resolveCanonicalWorkerArtifactRefs
+} from './graph-artifact-policy.js'
 import type { GraphArtifactReferenceV1 } from '../contracts/graph.js'
 
 describe('Graph worker artifact policy', () => {
@@ -39,17 +42,35 @@ describe('Graph worker artifact policy', () => {
       'attempt_1',
       [artifact]
     )).toEqual([artifact])
-    expect(() => canonicalWorkerArtifactRefs(
+    expect(canonicalWorkerArtifactRefs(
       run,
       'research',
       'attempt_other',
       [artifact]
-    )).toThrow(/was not published/)
-    expect(() => canonicalWorkerArtifactRefs(
+    )).toEqual([])
+    expect(canonicalWorkerArtifactRefs(
       run,
       'research',
       'attempt_1',
       [{ ...artifact, contentHash: 'b'.repeat(64) }]
-    )).toThrow(/metadata does not match/)
+    )).toEqual([])
+    expect(resolveCanonicalWorkerArtifactRefs(
+      run,
+      'research',
+      'attempt_1',
+      [
+        artifact,
+        artifact,
+        { ...artifact, artifactId: 'fabricated_artifact' },
+        { ...artifact, contentHash: 'b'.repeat(64) }
+      ]
+    )).toEqual({
+      artifactRefs: [artifact],
+      rejected: [
+        { artifactId: 'artifact_1', reason: 'duplicate' },
+        { artifactId: 'fabricated_artifact', reason: 'not_published_by_attempt' },
+        { artifactId: 'artifact_1', reason: 'metadata_mismatch' }
+      ]
+    })
   })
 })

@@ -25,6 +25,9 @@ export type ModelMessagePartSupport = z.infer<typeof ModelMessagePartSupport>
 export const ModelReasoningEffort = z.enum(['auto', 'off', 'low', 'medium', 'high', 'max'])
 export type ModelReasoningEffort = z.infer<typeof ModelReasoningEffort>
 
+export const ModelServiceTier = z.enum(['priority', 'flex'])
+export type ModelServiceTier = z.infer<typeof ModelServiceTier>
+
 export const ModelReasoningRequestProtocol = z.enum([
   'none',
   'deepseek-chat-completions',
@@ -61,6 +64,8 @@ export const ModelCapabilityMetadata = z
     maxOutputTokens: z.number().int().positive().optional(),
     messageParts: z.array(ModelMessagePartSupport).min(1),
     reasoning: ModelReasoningCapabilityMetadata.optional(),
+    /** Provider-advertised request service tiers supported by this model. */
+    serviceTiers: z.array(ModelServiceTier).min(1).optional(),
     // Per-model wire-format override. Lets one provider route some models to
     // chat completions and others to Anthropic Messages / OpenAI Responses
     // (e.g. OpenCode Go). Absent means "inherit the provider/runtime format".

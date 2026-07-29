@@ -5,6 +5,7 @@ import type {
   GraphAttempt,
   GraphChildRuntime,
   GraphPlanNode,
+  GraphPlanningDraftView,
   GraphRun
 } from '../../graph/graph-types'
 import {
@@ -12,7 +13,8 @@ import {
   filterGraphElementsByPhases,
   graphElements,
   plannedAssignmentLabel,
-  runProgress
+  runProgress,
+  selectGraphPlanningDraft
 } from './GraphModePanel'
 import { reconcileInteractiveGraphNodes } from './graph-canvas-state'
 import { clampGraphInspectorWidth } from './graph-workspace-layout'
@@ -92,7 +94,40 @@ function graphRun(nodes: GraphPlanNode[], edges: GraphRun['plans'][number]['edge
   }
 }
 
+function planningDraft(
+  id: string,
+  status: GraphPlanningDraftView['draft']['status']
+): GraphPlanningDraftView {
+  return {
+    draft: {
+      version: 1,
+      id,
+      reservedRunId: `run_${id}`,
+      threadId: 'thread_1',
+      sourceTurnId: `turn_${id}`,
+      projectId: 'project_1',
+      goal: 'Test planning projection.',
+      revision: 1,
+      status,
+      issues: [],
+      repairCount: 0,
+      createdAt: '2026-07-30T00:00:00.000Z',
+      updatedAt: '2026-07-30T00:00:00.000Z'
+    },
+    tasks: []
+  }
+}
+
 describe('Graph Mode panel projection', () => {
+  it('never lets a terminal host error hide the current run or create a second error surface', () => {
+    const hostError = planningDraft('draft_failed', 'host_error')
+    const correction = planningDraft('draft_active', 'needs_correction')
+
+    expect(selectGraphPlanningDraft([hostError], true)).toBeNull()
+    expect(selectGraphPlanningDraft([hostError], false)).toBeNull()
+    expect(selectGraphPlanningDraft([hostError, correction], true)).toBe(correction)
+  })
+
   it('marks the longest forward dependency path as critical and ignores message edges', () => {
     const nodes = [
       node('start', 'phase_1'),

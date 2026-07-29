@@ -15,6 +15,7 @@ import {
   mergeSidebarWorkspaceGroupsWithDraftHistory,
   MoveThreadDialog,
   resolveThreadPreviewPosition,
+  sddDraftHistorySavedRevision,
   sidebarOverlayPortalHost,
   SidebarProjectsSection,
   sortSidebarThreads,
@@ -99,7 +100,6 @@ function sidebarProjectProps(overrides: Record<string, unknown> = {}) {
     onPickWorkspace: vi.fn(),
     onRemoveWorkspace: vi.fn(async () => undefined),
     onCreateThreadInWorkspace: vi.fn(),
-    onOpenRequirementDraft: vi.fn(),
     onSelectThread: vi.fn(),
     onRenameThread: vi.fn(async () => undefined),
     onPinThread: vi.fn(async () => undefined),
@@ -514,6 +514,36 @@ describe('SidebarProjectsSection groups', () => {
   })
 })
 
+describe('requirement history saved revision', () => {
+  it('changes when a requirement is created or successfully saved', () => {
+    const created = {
+      id: 'draft-a',
+      updatedAt: '2026-07-30T01:00:00.000Z'
+    }
+    const saved = {
+      ...created,
+      updatedAt: '2026-07-30T01:01:00.000Z'
+    }
+
+    expect(sddDraftHistorySavedRevision(null)).toBe('')
+    expect(sddDraftHistorySavedRevision(created)).not.toBe('')
+    expect(sddDraftHistorySavedRevision(saved)).not.toBe(
+      sddDraftHistorySavedRevision(created)
+    )
+  })
+
+  it('does not depend on unsaved requirement content', () => {
+    const draftRevision = {
+      id: 'draft-a',
+      updatedAt: '2026-07-30T01:00:00.000Z'
+    }
+
+    expect(sddDraftHistorySavedRevision(draftRevision)).toBe(
+      sddDraftHistorySavedRevision({ ...draftRevision })
+    )
+  })
+})
+
 describe('sidebar thread move helpers', () => {
   it('excludes the current workspace from move targets', () => {
     const groups = buildSidebarWorkspaceGroups({
@@ -890,6 +920,24 @@ describe('ThreadRow', () => {
 })
 
 describe('SidebarProjectsSection drag ordering', () => {
+  it('renders requirement drafts as ordinary sessions without a draft folder', () => {
+    const html = renderToStaticMarkup(
+      createElement(SidebarProjectsSection, sidebarProjectProps({
+        threads: [
+          thread({
+            id: 'thread-requirement',
+            title: 'Checkout requirement',
+            workspace: '/Users/zxy/project-a'
+          })
+        ]
+      }))
+    )
+
+    expect(html).toContain('Checkout requirement')
+    expect(html).not.toContain('sddDraftHistoryTitle')
+    expect(html).not.toContain('sddDraftHistoryExpand')
+  })
+
   it('restores saved workspace order and renders workspace headers as draggable', () => {
     const storageValue = JSON.stringify({
       version: 1,
@@ -919,7 +967,6 @@ describe('SidebarProjectsSection drag ordering', () => {
           onPickWorkspace: vi.fn(),
           onRemoveWorkspace: vi.fn(async () => undefined),
           onCreateThreadInWorkspace: vi.fn(),
-          onOpenRequirementDraft: vi.fn(),
           onSelectThread: vi.fn(),
           onRenameThread: vi.fn(async () => undefined),
           onPinThread: vi.fn(async () => undefined),
@@ -998,7 +1045,6 @@ describe('SidebarProjectsSection drag ordering', () => {
           onPickWorkspace: vi.fn(),
           onRemoveWorkspace: vi.fn(async () => undefined),
           onCreateThreadInWorkspace: vi.fn(),
-          onOpenRequirementDraft: vi.fn(),
           onSelectThread: vi.fn(),
           onRenameThread: vi.fn(async () => undefined),
           onPinThread: vi.fn(async () => undefined),
@@ -1059,7 +1105,6 @@ describe('SidebarProjectsSection drag ordering', () => {
           onPickWorkspace: vi.fn(),
           onRemoveWorkspace: vi.fn(async () => undefined),
           onCreateThreadInWorkspace,
-          onOpenRequirementDraft: vi.fn(),
           onSelectThread: vi.fn(),
           onRenameThread: vi.fn(async () => undefined),
           onPinThread: vi.fn(async () => undefined),

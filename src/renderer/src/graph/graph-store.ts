@@ -366,7 +366,19 @@ export const useGraphStore = create<GraphViewState>((set, get) => ({
         error: null
       }))
     } catch (error) {
-      set({ error: message(error) })
+      const actionError = message(error)
+      try {
+        const latest = await graphRuntimeClient.getDraft(draftId)
+        set((state) => ({
+          drafts: state.drafts.map((item) =>
+            item.draft.id === draftId && latest.draft.revision >= item.draft.revision
+              ? latest
+              : item),
+          error: actionError
+        }))
+      } catch {
+        set({ error: actionError })
+      }
     }
   },
 

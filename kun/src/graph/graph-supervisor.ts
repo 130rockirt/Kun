@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto'
 import {
   GRAPH_CONTRACT_VERSION,
-  GraphReviewResultV1Schema,
   type GraphNodeAttemptV1,
   type GraphNodeProjectionV1,
+  type GraphArtifactReferenceV1,
   type GraphReviewResultV1,
   type GraphRunSummaryV1,
   type GraphRunV1
@@ -24,6 +24,7 @@ import {
   graphSupervisionEnabled
 } from './graph-rollout-policy.js'
 import { graphBlockedProviderIds } from './graph-security-policy.js'
+import { normalizeGraphReviewResult } from './graph-review-normalizer.js'
 
 export class GraphSupervisor implements GraphSupervisionPort {
   private readonly pending = new Map<string, {
@@ -34,6 +35,7 @@ export class GraphSupervisor implements GraphSupervisionPort {
   }>()
   private readonly queues = new Map<string, Promise<unknown>>()
   private readonly leadQueues = new Map<string, Promise<unknown>>()
+  private readonly activeReviewControllers = new Set<AbortController>()
   private readonly nowIso: () => string
   private readonly nowMs: () => number
   private readonly nextId: (prefix: string) => string
@@ -175,6 +177,11 @@ export class GraphSupervisor implements GraphSupervisionPort {
           !pending.reasons.has('failure')
         )
       ) return
+      const deliveredSteeringIds = run.steering
+        .filter((entry) =>
+          (entry.target.kind === 'lead' || entry.target.kind === 'run') &&
+          (entry.status === 'persisted' || entry.status === 'delivered'))
+        .map((entry) => entry.steeringId)
       try {
         await this.options.leadTurn({
           run,
@@ -182,7 +189,7 @@ export class GraphSupervisor implements GraphSupervisionPort {
           nodeIds: [...pending.nodeIds],
           digest: pending.digests.join('\n').slice(0, 16_384)
         })
-        await this.acknowledgeLeadSteering(runId)
+        await this.acknowledgeLeadSteering(runId, deliveredSteeringIds)
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         if (
@@ -222,8 +229,7 @@ export class GraphSupervisor implements GraphSupervisionPort {
   }): Promise<GraphReviewResultV1> {
     const delegation = this.options.delegation()
     if (!graphSupervisionEnabled(this.options.config()) || !delegation?.enabled()) {
-      return GraphReviewResultV1Schema.parse({
-        version: GRAPH_CONTRACT_VERSION,
+      return normalizeGraphReviewResult({
         reviewId: this.nextId('graph_review'),
         nodeId: input.node.node.id,
         attemptId: input.attempt.id,
@@ -237,6 +243,7 @@ export class GraphSupervisor implements GraphSupervisionPort {
     }
     const result = input.attempt.result
     const controller = new AbortController()
+    this.activeReviewControllers.add(controller)
     const timeout = setTimeout(
       () => controller.abort(),
       Math.min(
@@ -311,8 +318,7 @@ export class GraphSupervisor implements GraphSupervisionPort {
         signal: controller.signal
       })
       const parsed = parseReview(record.summary ?? '')
-      return GraphReviewResultV1Schema.parse({
-        version: GRAPH_CONTRACT_VERSION,
+      return normalizeGraphReviewResult({
         reviewId: this.nextId('graph_review'),
         nodeId: input.node.node.id,
         attemptId: input.attempt.id,
@@ -323,25 +329,39 @@ export class GraphSupervisor implements GraphSupervisionPort {
           ? parsed.summary
           : record.error ?? `reviewer ended with ${record.status}`,
         evidence: parsed.evidence.length ? parsed.evidence : record.evidence ?? [],
-        artifactRefs: [],
-        ...(parsed.repairInstructions ? { repairInstructions: parsed.repairInstructions } : {}),
+        artifactRefs: canonicalPeerReviewArtifactRefs(
+          parsed.artifactRefs,
+          [
+            ...(result?.artifactRefs ?? []),
+            ...input.run.artifacts
+          ]
+        ),
+        repairInstructions: parsed.repairInstructions,
         createdAt: this.nowIso()
       })
     } finally {
       clearTimeout(timeout)
+      this.activeReviewControllers.delete(controller)
     }
   }
 
-  private async acknowledgeLeadSteering(runId: string): Promise<void> {
+  /** Abort reviewer children without waiting for source-Lead queues. */
+  quiesceReviews(): void {
+    for (const controller of this.activeReviewControllers) {
+      controller.abort(new Error('Graph runtime is shutting down'))
+    }
+  }
+
+  private async acknowledgeLeadSteering(
+    runId: string,
+    deliveredSteeringIds: readonly string[]
+  ): Promise<void> {
     let run = await this.options.store.get(runId)
     if (!run) return
-    for (const initial of run.steering.filter((entry) =>
-      (entry.target.kind === 'lead' || entry.target.kind === 'run') &&
-      (entry.status === 'persisted' || entry.status === 'delivered')
-    )) {
+    for (const steeringId of deliveredSteeringIds) {
       run = await this.options.store.get(runId)
       if (!run) return
-      const steering = run.steering.find((entry) => entry.steeringId === initial.steeringId)
+      const steering = run.steering.find((entry) => entry.steeringId === steeringId)
       if (!steering || steering.status === 'handled' || steering.status === 'superseded') continue
       run = (await this.options.store.append(run.id, {
         expectedSeq: run.lastEventSeq,
@@ -443,6 +463,7 @@ export class GraphSupervisor implements GraphSupervisionPort {
 
   async stop(): Promise<void> {
     this.stopped = true
+    this.quiesceReviews()
     if (this.sweepTimer) clearInterval(this.sweepTimer)
     this.sweepTimer = undefined
     this.clearPending()
@@ -486,6 +507,7 @@ function parseReview(text: string): {
   outcome: GraphReviewResultV1['outcome']
   summary: string
   evidence: string[]
+  artifactRefs: unknown[]
   repairInstructions?: string
 } {
   const json = text.match(/\{[\s\S]*\}/)?.[0]
@@ -501,7 +523,12 @@ function parseReview(text: string): {
           ? value.summary.slice(0, 4_096)
           : 'Reviewer returned no summary.',
         evidence: Array.isArray(value.evidence)
-          ? value.evidence.filter((item): item is string => typeof item === 'string').slice(0, 128)
+          ? value.evidence
+            .slice(0, 128)
+            .flatMap((item) => typeof item === 'string' ? [item.slice(0, 4_096)] : [])
+          : [],
+        artifactRefs: Array.isArray(value.artifactRefs)
+          ? value.artifactRefs.slice(0, 128)
           : [],
         ...(typeof value.repairInstructions === 'string'
           ? { repairInstructions: value.repairInstructions.slice(0, 32_768) }
@@ -514,8 +541,37 @@ function parseReview(text: string): {
   return {
     outcome: 'needs_human',
     summary: (text || 'Reviewer output was not structured.').slice(0, 4_096),
-    evidence: []
+    evidence: [],
+    artifactRefs: []
   }
+}
+
+function canonicalPeerReviewArtifactRefs(
+  candidates: readonly unknown[],
+  available: readonly GraphArtifactReferenceV1[]
+): GraphArtifactReferenceV1[] {
+  const canonical = new Map<string, GraphArtifactReferenceV1>()
+  for (const artifact of available) {
+    const key = `${artifact.artifactId}:${artifact.contentHash}`
+    if (!canonical.has(key)) canonical.set(key, artifact)
+  }
+  const matched: GraphArtifactReferenceV1[] = []
+  const seen = new Set<string>()
+  for (const candidate of candidates.slice(0, 128)) {
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) continue
+    const value = candidate as Record<string, unknown>
+    if (typeof value.artifactId !== 'string' || typeof value.contentHash !== 'string') continue
+    if (
+      value.artifactId.length > 128 ||
+      !/^[a-f0-9]{64}$/.test(value.contentHash)
+    ) continue
+    const key = `${value.artifactId}:${value.contentHash}`
+    const artifact = canonical.get(key)
+    if (!artifact || seen.has(key)) continue
+    seen.add(key)
+    matched.push(artifact)
+  }
+  return matched
 }
 
 function normalizeFailure(value: string): string {

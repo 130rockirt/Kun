@@ -49,6 +49,7 @@ type Props = {
   onToggleRightPanelMode: (mode: Exclude<RightPanelMode, null>) => void
   planPanelEnabled?: boolean
   canvasEnabled?: boolean
+  graphEnabled?: boolean
   sideChatRunningCount?: number
   sideChatOpen?: boolean
   sideChatEnabled?: boolean
@@ -387,6 +388,7 @@ export function WorkbenchSideRail({
   onToggleRightPanelMode,
   planPanelEnabled = false,
   canvasEnabled = false,
+  graphEnabled = false,
   sideChatRunningCount = 0,
   sideChatOpen = false,
   sideChatEnabled = true,
@@ -411,11 +413,11 @@ export function WorkbenchSideRail({
     { mode: BUILTIN_RIGHT_PANEL_IDS.changes, label: t('rightPanelChanges'), icon: FileEdit },
     { mode: BUILTIN_RIGHT_PANEL_IDS.browser, label: t('rightPanelBrowser'), icon: Globe2 },
     ...(canvasEnabled ? [{ mode: BUILTIN_RIGHT_PANEL_IDS.canvas, label: t('rightPanelWhiteboard'), icon: Shapes }] : []),
-    {
+    ...(graphEnabled ? [{
       mode: BUILTIN_RIGHT_PANEL_IDS.graph,
       label: t('rightPanelGraph', { defaultValue: 'Graph' }),
       icon: GitBranch
-    },
+    }] : []),
     { mode: BUILTIN_RIGHT_PANEL_IDS.subagents, label: t('rightPanelSubagents'), icon: Bot },
     { mode: BUILTIN_RIGHT_PANEL_IDS.mcpSkills, label: t('rightPanelMcpSkills'), icon: Blocks },
     {
@@ -426,7 +428,7 @@ export function WorkbenchSideRail({
   ]
 
   return (
-    <div className="ds-workbench-side-rail ds-no-drag flex h-full w-12 shrink-0 flex-col items-center gap-1.5 border-l border-ds-border-muted bg-ds-canvas py-3">
+    <div className="ds-workbench-side-rail ds-sidebar-surface ds-no-drag flex h-full w-12 shrink-0 flex-col items-center gap-1.5 border-l border-ds-border-muted py-3">
       {onOpenSideChat ? (
         <button
           type="button"

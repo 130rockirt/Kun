@@ -1385,11 +1385,16 @@ function withPresetModelProfiles(
       storedProfile?.reasoning,
       presetProfile.reasoning
     )
-    profiles[modelId] = {
+    const profile: ModelProviderModelProfileV1 = {
       ...presetProfile,
       ...(storedProfile ?? {}),
       ...(usePresetReasoning && presetProfile.reasoning
         ? { reasoning: presetProfile.reasoning }
+        : {}),
+      // Service-tier availability is upstream model metadata. Older stored
+      // profiles must inherit additions and removals from the preset catalog.
+      ...(presetProfile.serviceTiers?.length
+        ? { serviceTiers: [...presetProfile.serviceTiers] }
         : {}),
       // Responses Lite is a required transport contract for its matching
       // Codex models, not a user-editable profile choice. Older manually
@@ -1398,6 +1403,8 @@ function withPresetModelProfiles(
         ? { responsesMode: presetProfile.responsesMode }
         : {})
     }
+    if (!presetProfile.serviceTiers?.length) delete profile.serviceTiers
+    profiles[modelId] = profile
   }
   return profiles
 }
@@ -1475,6 +1482,7 @@ function normalizeModelProviderModelProfile(
   const contextWindowTokens = boundedPositiveInteger(input?.contextWindowTokens)
   const maxOutputTokens = boundedPositiveInteger(input?.maxOutputTokens)
   const reasoning = normalizeModelReasoningCapability(input?.reasoning)
+  const serviceTiers = normalizeModelServiceTiers(input?.serviceTiers)
   const endpointFormat = normalizeOptionalModelEndpointFormat(input?.endpointFormat)
   const responsesMode = input?.responsesMode === 'lite' ? 'lite' : undefined
   return {
@@ -1488,9 +1496,20 @@ function normalizeModelProviderModelProfile(
     supportsToolCalling: input?.supportsToolCalling !== false,
     messageParts: normalizeModelMessageParts(input?.messageParts, defaultMessageParts),
     ...(reasoning ? { reasoning } : {}),
+    ...(serviceTiers.length ? { serviceTiers } : {}),
     ...(endpointFormat ? { endpointFormat } : {}),
     ...(responsesMode ? { responsesMode } : {})
   }
+}
+
+function normalizeModelServiceTiers(
+  value: unknown
+): NonNullable<ModelProviderModelProfileV1['serviceTiers']> {
+  if (!Array.isArray(value)) return []
+  return [...new Set(value.filter(
+    (tier): tier is NonNullable<ModelProviderModelProfileV1['serviceTiers']>[number] =>
+      tier === 'priority' || tier === 'flex'
+  ))]
 }
 
 /**

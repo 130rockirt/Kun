@@ -228,7 +228,7 @@ describe('compileGraphPlanIntentV2', () => {
 
     const plan = compileV2({
       tasks: [
-        planTask('work'),
+        planTask('work', { writeScopes: ['src'] }),
         planTask('review', { kind: 'review', dependsOn: ['work'] }),
         planTask('finish', { dependsOn: ['review'] }),
         planTask('gate', {
@@ -251,5 +251,14 @@ describe('compileGraphPlanIntentV2', () => {
       continueTargetNodeId: 'work',
       exitTargetNodeId: 'finish'
     })
+    expect(plan.nodes.find((node) => node.id === 'gate')?.required).toBe(false)
+    expect(plan.nodes.find((node) => node.id === 'review')?.writeScopes).toEqual([])
+    expect(plan.nodes.find((node) => node.id === 'work')?.writeScopes).toEqual(['src'])
+    expect(plan.edges).toContainEqual(expect.objectContaining({
+      kind: 'control',
+      from: 'review',
+      to: 'gate',
+      requiredOutcomes: ['accepted', 'repair_required', 'failed', 'skipped']
+    }))
   })
 })

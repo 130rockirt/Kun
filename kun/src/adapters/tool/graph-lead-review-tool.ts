@@ -64,7 +64,9 @@ export function buildGraphLeadReviewTool(options: {
     shouldAdvertise: options.shouldAdvertise,
     execute: async (args, context) => {
       try {
-        const input = GraphLeadReviewInputSchema.parse(args)
+        const input = GraphLeadReviewInputSchema.parse(
+          normalizeGraphLeadReviewInput(args)
+        )
         const run = await authorizedLead(
           options.store,
           options.registry,
@@ -98,7 +100,10 @@ export function buildGraphLeadReviewTool(options: {
           outcome: input.outcome,
           summary: input.summary,
           evidence: input.evidence,
-          artifactRefs: input.artifactRefs,
+          artifactRefs: canonicalLeadReviewArtifactRefs(
+            input.artifactRefs,
+            attempt.result?.artifactRefs ?? []
+          ),
           ...(input.repairInstructions
             ? { repairInstructions: input.repairInstructions }
             : {}),
@@ -108,7 +113,6 @@ export function buildGraphLeadReviewTool(options: {
           output: await options.control.recordReview(input.runId, review, {
             commandId: options.nextId('graph_command'),
             idempotencyKey: `graph-review:${review.reviewId}`,
-            expectedSeq: run.lastEventSeq,
             expectedRevision: run.currentRevision
           }, 'lead')
         }
@@ -122,6 +126,53 @@ export function buildGraphLeadReviewTool(options: {
   })
 }
 
+/**
+ * Keep model-authored prose inside the durable review contract without
+ * turning an otherwise valid Lead decision into a failed tool call. The tool
+ * schema still advertises the exact limits; this is the host-side safety net
+ * for providers that emit an oversized argument anyway.
+ */
+function normalizeGraphLeadReviewInput(value: unknown): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value
+  const input = value as Record<string, unknown>
+  return {
+    ...input,
+    ...(typeof input.summary === 'string'
+      ? { summary: input.summary.slice(0, 4_096) }
+      : {}),
+    ...(Array.isArray(input.evidence)
+      ? {
+          evidence: input.evidence
+            .slice(0, 128)
+            .map((entry) => typeof entry === 'string' ? entry.slice(0, 4_096) : entry)
+        }
+      : {}),
+    ...(Array.isArray(input.artifactRefs)
+      ? { artifactRefs: input.artifactRefs.slice(0, 64) }
+      : {}),
+    ...(typeof input.repairInstructions === 'string'
+      ? { repairInstructions: input.repairInstructions.slice(0, 32_768) }
+      : {})
+  }
+}
+
+function canonicalLeadReviewArtifactRefs(
+  requested: readonly z.infer<typeof GraphArtifactReferenceV1Schema>[],
+  published: readonly z.infer<typeof GraphArtifactReferenceV1Schema>[]
+): Array<z.infer<typeof GraphArtifactReferenceV1Schema>> {
+  const publishedById = new Map(published.map((artifact) => [
+    artifact.artifactId,
+    artifact
+  ]))
+  const accepted = new Map<string, z.infer<typeof GraphArtifactReferenceV1Schema>>()
+  for (const candidate of requested) {
+    const artifact = publishedById.get(candidate.artifactId)
+    if (!artifact || artifact.contentHash !== candidate.contentHash) continue
+    accepted.set(artifact.artifactId, artifact)
+  }
+  return [...accepted.values()]
+}
+
 async function authorizedLead(
   store: GraphRunStore,
   registry: ProjectAgentRegistry,
@@ -130,8 +181,8 @@ async function authorizedLead(
 ): Promise<GraphRunV1> {
   const run = await store.get(runId)
   if (!run) throw new Error(`GraphRun not found: ${runId}`)
-  if (run.threadId !== context.threadId) {
-    throw new Error('current thread does not own this GraphRun')
+  if (run.threadId !== context.threadId || run.sourceTurnId !== context.turnId) {
+    throw new Error('current Lead turn does not own this GraphRun')
   }
   const identity = await registry.identify(context.workspace)
   const planIdentity = await registry.identify(run.plans.at(-1)!.workspaceRoot)

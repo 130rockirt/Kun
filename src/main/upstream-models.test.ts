@@ -17,7 +17,11 @@ import {
   modelProviderPresetAccountProfile,
   type AppSettingsV1
 } from '../shared/app-settings'
-import { fetchUpstreamModelIds, readConfiguredKunModelIds } from './upstream-models'
+import {
+  fetchUpstreamModelIds,
+  modelListFromSharedConnections,
+  readConfiguredKunModelIds
+} from './upstream-models'
 
 function settings(dataDir: string, model = 'settings-model'): AppSettingsV1 {
   const provider = defaultModelProviderSettings()
@@ -71,6 +75,39 @@ function settings(dataDir: string, model = 'settings-model'): AppSettingsV1 {
 }
 
 describe('upstream model picker list', () => {
+  it('preserves Codex preset identity and Fast service-tier capability from the live registry', () => {
+    const result = modelListFromSharedConnections({
+      schemaVersion: 1,
+      providers: [{
+        id: 'codex-2',
+        name: 'ChatGPT subscription 2',
+        presetSource: 'codex',
+        configured: true,
+        models: ['gpt-5.4'],
+        modelCapabilities: {
+          'gpt-5.4': {
+            inputModalities: ['text', 'image'],
+            outputModalities: ['text'],
+            supportsToolCalling: true,
+            messageParts: ['text', 'image_url'],
+            serviceTiers: ['priority']
+          }
+        }
+      }]
+    })
+
+    expect(result).toMatchObject({
+      ok: true,
+      modelGroups: [{
+        providerId: 'codex-2',
+        presetSource: 'codex',
+        modelProfiles: {
+          'gpt-5.4': { serviceTiers: ['priority'] }
+        }
+      }]
+    })
+  })
+
   it('never reads the canonical legacy config as a model source', async () => {
     await expect(readConfiguredKunModelIds(
       settings(join(homedir(), '.deepseekgui', 'kun'))
@@ -266,6 +303,32 @@ describe('upstream model picker list', () => {
           modelIds: expect.arrayContaining(['kimi-for-coding'])
         })
       ]))
+    }
+  })
+
+  it('projects Fast capability for a second ChatGPT subscription account', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'deepseek-gui-models-'))
+    await mkdir(dataDir, { recursive: true })
+    const configured = settings(dataDir)
+    const codex = getModelProviderPreset('codex')!
+    const first = modelProviderPresetAccountProfile(codex, 'api', [])!
+    const second = modelProviderPresetAccountProfile(codex, 'api', [first])!
+    configured.provider.providers.push(first, second)
+
+    const result = await fetchUpstreamModelIds(configured, '')
+
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      const group = result.modelGroups?.find((candidate) => candidate.providerId === 'codex-2')
+      expect(group).toMatchObject({
+        presetSource: 'codex',
+        modelProfiles: {
+          'gpt-5.4': {
+            serviceTiers: ['priority']
+          }
+        }
+      })
+      expect(group?.modelProfiles?.['gpt-5.4-mini']?.serviceTiers).toBeUndefined()
     }
   })
 

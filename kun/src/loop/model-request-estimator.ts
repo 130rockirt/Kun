@@ -52,7 +52,8 @@ export function estimateModelRequestInputTokenBreakdown(
     estimateDocuments(request.attachmentDocuments) +
     estimateImageAttachments(request.attachments) +
     estimateText(request.requiredToolName) +
-    estimateText(request.reasoningEffort)
+    estimateText(request.reasoningEffort) +
+    estimateText(request.serviceTier)
   return {
     tools,
     system,

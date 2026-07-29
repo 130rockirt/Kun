@@ -160,7 +160,7 @@ export class FileGraphRunStore implements GraphRunStore {
         const duplicate = await this.findDuplicate(runId, input.commandId, input.idempotencyKey)
         if (!duplicate) throw new GraphRunConflictError(`GraphRun already exists: ${runId}`)
         await this.index.update(existing)
-        await this.flushRuntimeEvents(runId)
+        await this.flushRuntimeEventsBestEffort(runId)
         return GraphCommandResultV1Schema.parse({
           version: GRAPH_CONTRACT_VERSION,
           commandId: input.commandId,
@@ -202,7 +202,7 @@ export class FileGraphRunStore implements GraphRunStore {
       await this.persistEnvelope(envelope)
       await this.writeSnapshot(state)
       await this.index.update(state)
-      await this.flushRuntimeEvents(runId)
+      await this.flushRuntimeEventsBestEffort(runId)
       return GraphCommandResultV1Schema.parse({
         version: GRAPH_CONTRACT_VERSION,
         commandId: input.commandId,
@@ -220,7 +220,7 @@ export class FileGraphRunStore implements GraphRunStore {
       const duplicate = await this.findDuplicate(runId, input.commandId, input.idempotencyKey)
       if (duplicate) {
         await this.index.update(state)
-        await this.flushRuntimeEvents(runId)
+        await this.flushRuntimeEventsBestEffort(runId)
         return { state, envelope: duplicate, duplicate: true }
       }
       if (state.lastEventSeq !== input.expectedSeq) {
@@ -255,7 +255,7 @@ export class FileGraphRunStore implements GraphRunStore {
         await this.compactJournal(next)
       }
       await this.index.update(next)
-      await this.flushRuntimeEvents(runId)
+      await this.flushRuntimeEventsBestEffort(runId)
       return { state: next, envelope: persisted, duplicate: false }
     })
   }
@@ -597,6 +597,17 @@ export class FileGraphRunStore implements GraphRunStore {
       await atomicWriteFile(
         this.outboxPath(runId),
         `${JSON.stringify(pending.slice(index + 1))}\n`
+      )
+    }
+  }
+
+  private async flushRuntimeEventsBestEffort(runId: string): Promise<void> {
+    try {
+      await this.flushRuntimeEvents(runId)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      console.warn(
+        `[kun] Graph runtime event outbox flush deferred for ${runId}: ${message.slice(0, 512)}`
       )
     }
   }

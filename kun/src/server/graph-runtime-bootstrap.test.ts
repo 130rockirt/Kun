@@ -4,7 +4,7 @@ import type { GraphRunV1 } from '../contracts/graph.js'
 import type { TurnRunOutcome } from '../loop/turn-execution-types.js'
 import { createGraphRuntimeStartOptions } from './graph-runtime-bootstrap.js'
 
-function runtimeOptions(active = false) {
+function runtimeOptions(active = false, isShuttingDown: () => boolean = () => false) {
   const resumeTurn = vi.fn(async () => 'resumed' as const)
   const isTurnExecutionActive = vi.fn(() => active)
   const steerTurn = vi.fn(async () => undefined)
@@ -42,6 +42,7 @@ function runtimeOptions(active = false) {
     },
     resumeTurn,
     isTurnExecutionActive,
+    isShuttingDown,
     steerTurn,
     runAgentTurn,
     defaults: () => ({
@@ -204,7 +205,36 @@ describe('Graph runtime bootstrap capability boundary', () => {
       text: expect.stringContaining('Graph Lead supervision for durable run run_1.'),
       messageSource: 'graph_runtime'
     })
-    expect(resumeTurn).not.toHaveBeenCalled()
+    expect(resumeTurn).toHaveBeenCalledOnce()
+    expect(resumeTurn).toHaveBeenCalledWith({
+      threadId: 'thread_1',
+      turnId: 'turn_1',
+      runId: 'run_1',
+      lastDeliveredSeq: 12,
+      terminal: false
+    })
+    expect(runAgentTurn).not.toHaveBeenCalled()
+  })
+
+  it('does not acknowledge a supervision snapshot when steering delivery fails', async () => {
+    const { options, resumeTurn, steerTurn, runAgentTurn } = runtimeOptions()
+    steerTurn.mockRejectedValueOnce(new Error('steering queue unavailable'))
+
+    await expect(options.leadTurn({
+      run,
+      reasons: ['submitted'],
+      nodeIds: ['node_1'],
+      digest: 'Review is pending.'
+    })).rejects.toThrow('steering queue unavailable')
+
+    expect(resumeTurn).toHaveBeenCalledOnce()
+    expect(resumeTurn).toHaveBeenCalledWith({
+      threadId: 'thread_1',
+      turnId: 'turn_1',
+      runId: 'run_1',
+      lastDeliveredSeq: 0,
+      terminal: false
+    })
     expect(runAgentTurn).not.toHaveBeenCalled()
   })
 
@@ -257,6 +287,29 @@ describe('Graph runtime bootstrap capability boundary', () => {
     expect(runAgentTurn).toHaveBeenCalledTimes(2)
     expect(runAgentTurn).toHaveBeenNthCalledWith(1, 'thread_1', 'turn_1')
     expect(runAgentTurn).toHaveBeenNthCalledWith(2, 'thread_1', 'turn_1')
+  })
+
+  it('does not spin a reacquired Lead lease after shutdown begins', async () => {
+    let shuttingDown = false
+    const {
+      options,
+      isTurnExecutionActive,
+      runAgentTurn
+    } = runtimeOptions(false, () => shuttingDown)
+    isTurnExecutionActive.mockReturnValueOnce(false).mockReturnValue(true)
+    runAgentTurn.mockImplementationOnce(async () => {
+      shuttingDown = true
+      return 'suspended'
+    })
+
+    await options.leadTurn({
+      run,
+      reasons: ['completion'],
+      nodeIds: [],
+      digest: 'Shutdown raced with final Lead delivery.'
+    })
+
+    expect(runAgentTurn).toHaveBeenCalledOnce()
   })
 
   it('adds a host-configured worker model to the frozen Graph authority', async () => {

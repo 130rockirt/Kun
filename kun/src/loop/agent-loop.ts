@@ -13,7 +13,11 @@ import type { ApprovalGate } from '../ports/approval-gate.js'
 import type { ApprovalReviewPort } from '../ports/approval-review.js'
 import type { UserInputGate } from '../ports/user-input-gate.js'
 import type { UsageService } from '../services/usage-service.js'
-import type { TurnService, TurnSettlement } from '../services/turn-service.js'
+import {
+  isHostShutdownTurnSuspension,
+  type TurnService,
+  type TurnSettlement
+} from '../services/turn-service.js'
 import type { RuntimeEventRecorder } from '../services/runtime-event-recorder.js'
 import { ThreadItemProjectionService } from '../services/thread-item-projection.js'
 import type { PipelineStage } from '../contracts/events.js'
@@ -111,6 +115,19 @@ const PIPELINE_STAGE_LABELS: Record<PipelineStage, string> = {
   post_send: 'Post-Send',
   response_received: 'Response Received'
 }
+
+const RECOVERABLE_GRAPH_LEAD_MODEL_FAILURE_CODES = new Set([
+  'stream_idle_timeout',
+  'stream_read_error',
+  'stream_truncated'
+])
+
+// A GraphRun may live for hours, but one process-local Lead wake-up must not.
+// Durable Graph events can start a fresh episode after this one releases its
+// lease. This cap is intentionally independent of ToolStormBreaker because a
+// confused Lead can alternate valid, non-identical tools forever.
+const GRAPH_LEAD_EPISODE_MAX_MODEL_STEPS = 8
+const GRAPH_LEAD_EPISODE_MAX_ELAPSED_MS = 10 * 60_000
 
 export type AgentLoopOptions = {
   threadStore: ThreadStore
@@ -259,8 +276,15 @@ export class AgentLoop {
   private readonly toolExecution: ToolExecutionService
   private readonly toolCallDispatcher: ToolCallDispatcher
   private readonly turnFailures = new Map<string, TurnExecutionFailure>()
-  /** One owned runner per turn; duplicate callers share its execution-slice result. */
-  private readonly activeTurnRuns = new Map<string, Promise<TurnRunOutcome>>()
+  /**
+   * One owned runner per turn. Calls made under the same execution lease share
+   * the exact promise; a Graph wake-up that has already acquired a new lease
+   * may chain its continuation behind the runner that is still parking.
+   */
+  private readonly activeTurnRuns = new Map<string, {
+    promise: Promise<TurnRunOutcome>
+    signal: AbortSignal | undefined
+  }>()
   private readonly goalTurns: GoalTurnCoordinator
 
   constructor(opts: AgentLoopOptions) {
@@ -435,12 +459,32 @@ export class AgentLoop {
   runTurn(threadId: string, turnId: string): Promise<TurnRunOutcome> {
     const key = activeTurnRunKey(threadId, turnId)
     const existing = this.activeTurnRuns.get(key)
-    if (existing) return existing
+    if (existing) {
+      const signal = this.opts.turns.getAbortController(turnId)
+      if (existing.signal === signal) return existing.promise
+      return existing.promise.then((outcome) => {
+        // A suspended Graph slice releases its execution lease before this
+        // promise leaves activeTurnRuns. Steering can reacquire the lease in
+        // that narrow interval, so the caller that delivered the wake-up must
+        // start the continuation after the parked runner fully settles.
+        if (
+          outcome === 'suspended' &&
+          this.opts.turns.isTurnExecutionActive(turnId)
+        ) {
+          return this.runTurn(threadId, turnId)
+        }
+        return outcome
+      })
+    }
     const run = this.runTurnOwned(threadId, turnId)
-    this.activeTurnRuns.set(key, run)
+    const active = {
+      promise: run,
+      signal: this.opts.turns.getAbortController(turnId)
+    }
+    this.activeTurnRuns.set(key, active)
     void run.then(
-      () => { if (this.activeTurnRuns.get(key) === run) this.activeTurnRuns.delete(key) },
-      () => { if (this.activeTurnRuns.get(key) === run) this.activeTurnRuns.delete(key) }
+      () => { if (this.activeTurnRuns.get(key) === active) this.activeTurnRuns.delete(key) },
+      () => { if (this.activeTurnRuns.get(key) === active) this.activeTurnRuns.delete(key) }
     )
     return run
   }
@@ -461,6 +505,7 @@ export class AgentLoop {
       return statusFromSettlement(settlement, 'failed')
     }
     if (signal.aborted) {
+      if (isHostShutdownTurnSuspension(signal)) return 'suspended'
       const settlement = await settle({ status: 'aborted' })
       return statusFromSettlement(settlement, 'aborted')
     }
@@ -609,9 +654,12 @@ export class AgentLoop {
           signal,
           delegatedProviderId
         )
-        if (reportedStatus === 'suspended') {
+        if (
+          reportedStatus === 'suspended' ||
+          isHostShutdownTurnSuspension(signal)
+        ) {
           suspended = true
-          return reportedStatus
+          return 'suspended'
         }
         const settlement = await finalizer.observeExternal({ threadId, turnId })
         finalStatus = statusFromSettlement(settlement, reportedStatus)
@@ -619,9 +667,12 @@ export class AgentLoop {
         return finalStatus
       }
       const status = await this.loop(threadId, turnId, signal)
-      if (status === 'suspended') {
+      if (
+        status === 'suspended' ||
+        isHostShutdownTurnSuspension(signal)
+      ) {
         suspended = true
-        return status
+        return 'suspended'
       }
       if (wallTimeExceeded) return failWallTimeLimit()
       const failure = status === 'failed' ? this.turnFailures.get(turnId) : undefined
@@ -635,6 +686,10 @@ export class AgentLoop {
     } catch (error) {
       if (wallTimeExceeded) return failWallTimeLimit()
       if (signal.aborted) {
+        if (isHostShutdownTurnSuspension(signal)) {
+          suspended = true
+          return 'suspended'
+        }
         const settlement = await settle({ status: 'aborted' })
         finalStatus = statusFromSettlement(settlement, 'aborted')
         finalError = errorFromSettlement(settlement)
@@ -777,15 +832,44 @@ export class AgentLoop {
       thread?.extensionBudget === undefined &&
       await this.opts.turns.graphRunOwnsLeadLimits({ threadId, turnId })
     const startedAt = this.opts.nowMs?.() ?? Date.now()
+    let graphSupervisionReminderUsed = false
+    let graphLeadEpisodeStartedAt: number | undefined
+    let graphLeadEpisodeModelSteps = 0
     for (let step = 0; ; step += 1) {
       if (signal.aborted) {
         await this.drainAndSealSteering(threadId, turnId, signal)
         return 'aborted'
       }
+      const now = this.opts.nowMs?.() ?? Date.now()
+      const graphLeadEpisodeActive = await graphRunOwnsLimits()
+      if (graphLeadEpisodeActive && graphLeadEpisodeStartedAt === undefined) {
+        graphLeadEpisodeStartedAt = now
+      }
+      if (
+        graphLeadEpisodeActive &&
+        (
+          graphLeadEpisodeModelSteps >= GRAPH_LEAD_EPISODE_MAX_MODEL_STEPS ||
+          now - (graphLeadEpisodeStartedAt ?? now) >= GRAPH_LEAD_EPISODE_MAX_ELAPSED_MS
+        )
+      ) {
+        const parked = await this.opts.turns.suspendGraphLeadTurn({
+          threadId,
+          turnId,
+          force: true,
+          preserveDeliveryCursor: true,
+          allowPendingSupervision: true
+        })
+        if (parked === 'suspended') return 'suspended'
+        // The run can become terminal between the ownership check and the
+        // suspension fence. Give that terminal state its normal finalization
+        // path instead of spinning forever on an already-consumed episode.
+        graphLeadEpisodeStartedAt = undefined
+        graphLeadEpisodeModelSteps = 0
+      }
       if (
         limits.maxSteps !== undefined &&
         step >= limits.maxSteps &&
-        !await graphRunOwnsLimits()
+        !graphLeadEpisodeActive
       ) {
         await this.drainAndSealSteering(threadId, turnId, signal)
         const extensionLimited = Boolean(
@@ -806,8 +890,8 @@ export class AgentLoop {
       }
       if (
         this.opts.disableWallTimeLimit !== true &&
-        (this.opts.nowMs?.() ?? Date.now()) - startedAt >= limits.maxWallTimeMs &&
-        !await graphRunOwnsLimits()
+        now - startedAt >= limits.maxWallTimeMs &&
+        !graphLeadEpisodeActive
       ) {
         await this.drainAndSealSteering(threadId, turnId, signal)
         const extensionLimited = Boolean(
@@ -824,7 +908,59 @@ export class AgentLoop {
         return 'failed'
       }
       await this.drainSteering(threadId, turnId, signal)
-      const stepResult = await this.modelStep(threadId, turnId, signal, step, limits.maxToolCallsPerStep)
+      let stepResult: ModelRoundOutcome
+      if (graphLeadEpisodeActive && graphLeadEpisodeStartedAt !== undefined) {
+        const deadlineAt = graphLeadEpisodeStartedAt + GRAPH_LEAD_EPISODE_MAX_ELAPSED_MS
+        const scopedController = new AbortController()
+        const abortScopedStep = () => scopedController.abort(signal.reason)
+        if (signal.aborted) abortScopedStep()
+        else signal.addEventListener('abort', abortScopedStep, { once: true })
+        let episodeDeadlineExceeded = false
+        const deadline = setTimeout(() => {
+          episodeDeadlineExceeded = true
+          scopedController.abort()
+        }, Math.max(1, deadlineAt - (this.opts.nowMs?.() ?? Date.now())))
+        if (typeof (deadline as { unref?: () => void }).unref === 'function') {
+          ;(deadline as { unref: () => void }).unref()
+        }
+        try {
+          stepResult = await this.modelStep(
+            threadId,
+            turnId,
+            scopedController.signal,
+            step,
+            limits.maxToolCallsPerStep
+          )
+        } finally {
+          clearTimeout(deadline)
+          signal.removeEventListener('abort', abortScopedStep)
+        }
+        graphLeadEpisodeModelSteps += 1
+        if (
+          !signal.aborted &&
+          (
+            episodeDeadlineExceeded ||
+            (this.opts.nowMs?.() ?? Date.now()) >= deadlineAt
+          )
+        ) {
+          const parked = await this.opts.turns.suspendGraphLeadTurn({
+            threadId,
+            turnId,
+            force: true,
+            preserveDeliveryCursor: true,
+            allowPendingSupervision: true
+          })
+          if (parked === 'suspended') return 'suspended'
+        }
+      } else {
+        stepResult = await this.modelStep(
+          threadId,
+          turnId,
+          signal,
+          step,
+          limits.maxToolCallsPerStep
+        )
+      }
       if (stepResult === 'stop') {
         const graphSuspension = await this.opts.turns.suspendGraphLeadTurn({
           threadId,
@@ -832,12 +968,96 @@ export class AgentLoop {
         })
         if (graphSuspension === 'suspended') return 'suspended'
         if (graphSuspension === 'pending_steering') continue
+        if (graphSuspension === 'supervision_pending') {
+          if (!graphSupervisionReminderUsed) {
+            graphSupervisionReminderUsed = true
+            try {
+              await this.opts.turns.steerTurn({
+                threadId,
+                turnId,
+                messageSource: 'graph_runtime',
+                text: [
+                  'Host supervision gate: this Graph still has unresolved durable work.',
+                  'Inspect its current node and attempt status before ending this Lead slice.',
+                  'Use `graph_review_node` only for submitted/reviewing attempts.',
+                  'For an exhausted failed or repair-required node, use `graph_patch_run` to create a semantic replacement instead of reviewing it again.'
+                ].join(' ')
+              })
+              continue
+            } catch {
+              // A concurrent shutdown or user steering may close admission.
+              // Fall through to a cursor-preserving suspension.
+            }
+          }
+          const parked = await this.opts.turns.suspendGraphLeadTurn({
+            threadId,
+            turnId,
+            allowPendingSupervision: true,
+            preserveDeliveryCursor: true
+          })
+          if (parked === 'suspended') return 'suspended'
+          if (parked === 'pending_steering') continue
+        }
         // Either accepted guidance wins and forces another model interaction,
         // or the synchronous seal wins and late steer requests are rejected.
         if (this.opts.steering.sealIfEmpty(turnId)) return 'completed'
         continue
       }
-      if (stepResult === 'failed' || stepResult === 'aborted') {
+      if (stepResult === 'failed') {
+        const failure = this.turnFailures.get(turnId)
+        if (
+          failure?.code &&
+          RECOVERABLE_GRAPH_LEAD_MODEL_FAILURE_CODES.has(failure.code)
+        ) {
+          const activeTurn = await this.opts.turns.getTurn(threadId, turnId)
+          if (activeTurn?.status === 'running' && activeTurn.orchestration === 'graph') {
+            // The stream error event is durable, but thread rehydration is
+            // item-based. Persist before releasing the execution lease so a
+            // concurrent Graph wake-up cannot reuse this runner while it is
+            // still appending the diagnostic.
+            await this.opts.turns.applyItem(
+              threadId,
+              makeErrorItem({
+                id: `item_${turnId}_error`,
+                turnId,
+                threadId,
+                message: failure.error,
+                code: failure.code,
+                ...(failure.details !== undefined ? { details: failure.details } : {}),
+                severity: failure.severity ?? 'error'
+              })
+            ).catch(() => undefined)
+          }
+          const graphSuspension = await this.opts.turns.suspendGraphLeadTurn({
+            threadId,
+            turnId
+          })
+          if (graphSuspension !== 'not_graph') {
+            if (graphSuspension === 'suspended') return 'suspended'
+            if (graphSuspension === 'supervision_pending') {
+              const parked = await this.opts.turns.suspendGraphLeadTurn({
+                threadId,
+                turnId,
+                allowPendingSupervision: true,
+                preserveDeliveryCursor: true
+              })
+              if (parked === 'suspended') return 'suspended'
+            }
+            // Accepted guidance wins the suspension race, and a terminal Graph
+            // still needs its source Lead to synthesize the final response.
+            if (
+              graphSuspension === 'pending_steering' ||
+              graphSuspension === 'graph_terminal'
+            ) {
+              this.turnFailures.delete(turnId)
+              continue
+            }
+          }
+        }
+        await this.drainAndSealSteering(threadId, turnId, signal)
+        return stepResult
+      }
+      if (stepResult === 'aborted') {
         await this.drainAndSealSteering(threadId, turnId, signal)
         return stepResult
       }

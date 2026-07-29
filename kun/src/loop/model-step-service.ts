@@ -309,6 +309,11 @@ export class ModelStepService {
     const model = modelRoute.model
     const modelCapabilities =
       this.deps.modelCapabilities?.(model, providerId) ?? modelCapabilitiesForModel(model)
+    const serviceTier =
+      turn?.serviceTier === 'priority' &&
+      modelCapabilities.serviceTiers?.includes('priority')
+        ? 'priority' as const
+        : undefined
     const prepared = await this.deps.turnContextResolver.resolve({
       threadId,
       turnId,
@@ -625,6 +630,7 @@ export class ModelStepService {
       ...(providerId ? { providerId } : {}),
       ...(accountId ? { accountId } : {}),
       ...(modelRoute.reasoningEffort ? { reasoningEffort: modelRoute.reasoningEffort } : {}),
+      ...(serviceTier ? { serviceTier } : {}),
       immutablePrefix: this.deps.prefix,
       ...(thread.systemPrompt !== undefined ? { threadSystemPrompt: thread.systemPrompt } : {}),
       ...(modeInstruction ? { modeInstruction } : {}),
@@ -641,6 +647,7 @@ export class ModelStepService {
       model,
       ...(providerId ? { providerId } : {}),
       ...(accountId ? { accountId } : {}),
+      ...(serviceTier ? { serviceTier } : {}),
       signal,
       threadId,
       turnId,
@@ -691,6 +698,7 @@ export class ModelStepService {
       ...(providerId ? { providerId } : {}),
       ...(accountId ? { accountId } : {}),
       ...(modelRoute.reasoningEffort ? { reasoningEffort: modelRoute.reasoningEffort } : {}),
+      ...(serviceTier ? { serviceTier } : {}),
       immutablePrefix: this.deps.prefix,
       ...(thread.systemPrompt !== undefined ? { threadSystemPrompt: thread.systemPrompt } : {}),
       ...(modeInstruction ? { modeInstruction } : {}),

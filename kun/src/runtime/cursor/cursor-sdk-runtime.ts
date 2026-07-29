@@ -55,6 +55,12 @@ import {
   type DelegatedSessionPreparation
 } from '../delegated-session-binding.js'
 import {
+  delegatedGraphCompletionCheck,
+  delegatedGraphRecoveryInstruction,
+  parkDelegatedGraphTurnAfterRecovery,
+  type DelegatedGraphPhase
+} from '../delegated-graph-turn-policy.js'
+import {
   CursorSdkEventMapper,
   CursorSdkResourceLimitError,
   cursorTodosRequestFromMessage,
@@ -120,6 +126,9 @@ export type CursorKunTurnContext = {
   activeSkillIds: string[]
   tools: CursorBridgeTool[]
   customTools: Record<string, SDKCustomTool>
+  graphPhase?: DelegatedGraphPhase
+  graphPlanWasCommitted?: () => boolean
+  graphPlanCanRetry?: () => boolean
 }
 
 class CursorTurnInterruptedError extends Error {
@@ -165,7 +174,10 @@ export function cursorAgentExecutionOptions(input: {
       // a future SDK release changes the headless default.
       enableAgentRetries: true,
       sandboxOptions: {
-        enabled: input.enforceReadOnly === true || input.sandboxMode !== 'danger-full-access'
+        enabled:
+          input.planMode === true ||
+          input.enforceReadOnly === true ||
+          input.sandboxMode !== 'danger-full-access'
       }
     }
   }
@@ -441,7 +453,10 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
       threadId,
       workspace: thread.workspace
     })
-    const planMode = this.deps.enforceReadOnly === true || (turn.mode ?? thread.mode) === 'plan'
+    const planMode =
+      turn.orchestration === 'graph' ||
+      this.deps.enforceReadOnly === true ||
+      (turn.mode ?? thread.mode) === 'plan'
     const approvalPolicy = turn.approvalPolicy ?? thread.approvalPolicy
     const sandboxMode = turn.sandboxMode ?? thread.sandboxMode
     let capabilities = cursorSdkCapabilities(Boolean(this.deps.loadKunTurnContext))
@@ -666,6 +681,8 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
       let attemptMessage = sdkMessage
       let forceRecoveryRun = false
       let recoveryContinuesAcceptedRun = false
+      let graphRecoveryAttempted = false
+      let graphRecoveryPhase = kunContext.graphPhase
       for (;;) {
         trace = await startCursorTrace(this.deps.debugSink, {
           threadId,
@@ -734,6 +751,47 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
           finishCursorTraceChunks(trace, mapper.text, result.usage, resolvedProviderId, model)
           await finishCursorTrace(trace, { kind: 'completed' })
           trace = undefined
+          if (graphRecoveryPhase && !graphRecoveryAttempted) {
+            const graphPlanCommitted = kunContext.graphPlanWasCommitted?.() === true
+            if (
+              graphRecoveryPhase === 'planning' &&
+              !graphPlanCommitted &&
+              kunContext.graphPlanCanRetry?.() === false
+            ) {
+              break
+            }
+            const shouldCheckDurableGraph =
+              graphRecoveryPhase === 'supervising' || graphPlanCommitted
+            if (graphPlanCommitted) graphRecoveryPhase = 'supervising'
+            const graphCompletion = shouldCheckDurableGraph
+              ? delegatedGraphCompletionCheck(
+                  await this.deps.turns.suspendGraphLeadTurn({
+                    threadId,
+                    turnId
+                  })
+                )
+              : 'retry_required'
+            if (graphCompletion === 'retry_required') {
+              graphRecoveryAttempted = true
+              const recoveryInstruction =
+                delegatedGraphRecoveryInstruction(graphRecoveryPhase)
+              await this.deps.events.record({
+                kind: 'error',
+                threadId,
+                turnId,
+                message: recoveryInstruction,
+                code: graphRecoveryPhase === 'planning'
+                  ? 'graph_plan_submission_required'
+                  : 'graph_supervision_required',
+                severity: 'warning'
+              })
+              attemptPrompt = recoveryInstruction
+              attemptMessage = recoveryInstruction
+              forceRecoveryRun = false
+              recoveryContinuesAcceptedRun = true
+              continue
+            }
+          }
           break
         } catch (error) {
           if (
@@ -778,8 +836,12 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
           }
         }
       }
-      const suspension = await this.deps.turns.suspendGraphLeadTurn?.({ threadId, turnId })
-      const outcome: TurnRunOutcome = suspension === 'suspended' ? 'suspended' : 'completed'
+      const graphCompletion = await parkDelegatedGraphTurnAfterRecovery(
+        this.deps.turns,
+        { threadId, turnId }
+      )
+      const outcome: TurnRunOutcome =
+        graphCompletion === 'suspended' ? 'suspended' : 'completed'
       if (outcome === 'completed') {
         await this.deps.turns.finishTurn({ threadId, turnId, status: 'completed' })
       }

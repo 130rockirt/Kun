@@ -55,6 +55,14 @@ import { composeSdkPromptText } from './sdk-context-assembler.js'
 import type { SdkApi, SdkMessage, SdkQueryResult } from './sdk-protocol.js'
 import type { DelegatedSessionPreparation } from '../delegated-session-binding.js'
 import type { DelegatedRuntimeCapabilities } from '../delegated-turn-runtime.js'
+import {
+  delegatedGraphPlanCanRetry,
+  delegatedGraphPlanRepairFeedback,
+  delegatedGraphPlanWasCommitted,
+  delegatedGraphRecoveryInstruction,
+  type DelegatedGraphCompletionCheck,
+  type DelegatedGraphPhase
+} from '../delegated-graph-turn-policy.js'
 
 export type TurnStatus = 'completed' | 'failed' | 'aborted'
 
@@ -82,6 +90,10 @@ export interface SdkTurnContext {
   planMode?: boolean
   /** Dedicated artifact turns disable Claude Code's raw filesystem/shell tools. */
   allowSdkBuiltins?: boolean
+  /** Preserve Kun read/grep/etc tools when Graph disables the overlapping SDK built-ins. */
+  bridgeKunBuiltinOverlaps?: boolean
+  /** Durable Graph phase for the bounded host-gated completion exchange. */
+  graphPhase?: DelegatedGraphPhase
   /** Enforce structured SVG mutation followed by a later successful validation. */
   requireSvgCompletion?: boolean
   model?: string
@@ -176,6 +188,14 @@ export interface SdkRuntimeDeps {
     status: TurnStatus,
     error?: string
   ): Promise<TurnRunOutcome | void>
+  /**
+   * Check durable Graph state after the first model response. This may park an
+   * idle Graph slice, but it must not force-park pending supervision.
+   */
+  checkGraphCompletion?(
+    threadId: string,
+    turnId: string
+  ): Promise<DelegatedGraphCompletionCheck>
   /** Stage the SDK session id for commit after Kun finishes successfully. */
   saveSessionId(threadId: string, turnId: string, sessionId: string): Promise<void>
   /** Rotate an unusable native resume preparation before the portable retry. */
@@ -435,10 +455,34 @@ export class AgentSdkRuntime {
       const sdk = await awaitAbortable(() => this.deps.loadSdk(), abort.signal)
 
       // Bridge kun-exclusive tools into an in-process MCP server.
-      const selectedKunTools = selectBridgeableTools(ctx.bridgeableTools)
-      const bridged = buildBridgedToolSpecs(selectedKunTools, (name, args) =>
-        this.deps.executeKunTool(threadId, turnId, name, args, abort.signal)
+      const selectedKunTools = selectBridgeableTools(
+        ctx.bridgeableTools,
+        ctx.bridgeKunBuiltinOverlaps ? { overlap: new Set() } : undefined
       )
+      let graphPlanCommitted = false
+      let graphPlanRetryAllowed = true
+      let graphPlanRepairFeedback: string | undefined
+      const bridged = buildBridgedToolSpecs(selectedKunTools, async (name, args) => {
+        const result = await this.deps.executeKunTool(
+          threadId,
+          turnId,
+          name,
+          args,
+          abort.signal
+        )
+        if (name === 'graph_define_plan') {
+          if (delegatedGraphPlanWasCommitted(result)) {
+            graphPlanCommitted = true
+            graphPlanRetryAllowed = false
+            graphPlanRepairFeedback = undefined
+          } else {
+            graphPlanRetryAllowed = delegatedGraphPlanCanRetry(result)
+            graphPlanRepairFeedback =
+              delegatedGraphPlanRepairFeedback(result)
+          }
+        }
+        return result
+      })
       let resumeSessionId = ctx.resumeSessionId
       let activeRebaseReason = ctx.sessionPreparation?.rebaseReason
       const buildOptions = (maxTurns?: number) => assembleSdkOptions({
@@ -537,7 +581,12 @@ export class AgentSdkRuntime {
         lastMutation: -1,
         lastValidation: -1
       }
-      const maxAttempts = ctx.requireSvgCompletion ? MAX_SVG_COMPLETION_ATTEMPTS : 1
+      const maxAttempts = ctx.graphPhase
+        ? 2
+        : ctx.requireSvgCompletion
+          ? MAX_SVG_COMPLETION_ATTEMPTS
+          : 1
+      let graphRecoveryPhase = ctx.graphPhase
       let completionGateFailed = false
       let stepLimitFailed = false
       let sdkTurnsUsed = 0
@@ -552,8 +601,17 @@ export class AgentSdkRuntime {
         const composedText = composeTurnText()
         const attemptText = attempt === 0
           ? composedText
-          : `${composedText}\n\n${svgCompletionRecoveryInstruction(svgCompletion)}`
-        const prompt = ctx.images && ctx.images.length > 0
+          : graphRecoveryPhase
+            ? delegatedGraphRecoveryInstruction(
+                graphRecoveryPhase,
+                graphPlanRepairFeedback
+              )
+            : `${composedText}\n\n${svgCompletionRecoveryInstruction(svgCompletion)}`
+        const prompt = (
+          ctx.images &&
+          ctx.images.length > 0 &&
+          !(ctx.graphPhase && attempt > 0)
+        )
           ? userMessageStream(attemptText, ctx.images)
           : attemptText
         const options = buildOptions(remainingTurns)
@@ -628,7 +686,7 @@ export class AgentSdkRuntime {
               }
             }
             // `result` is terminal and already carries usage/final status. Give
-            // the Query a bounded chance to clean up before an SVG retry starts.
+            // the Query a bounded chance to clean up before a recovery query starts.
             if (attemptFinalSeen) {
               const closed = await closeIterator(iterator, abort.signal)
               if (!closed) interruptActiveStream()
@@ -690,12 +748,57 @@ export class AgentSdkRuntime {
         }
         if (timedOut) interruptActiveStream()
         activeStream = undefined
+        // Every recovery query must resume the session created by the
+        // immediately preceding query. Otherwise the model loses structured
+        // MCP tool results (notably graph_define_plan issue paths).
+        resumeSessionId = mapper.getSessionId() ?? resumeSessionId
         // Starting a query consumes at least one native model step even if a
         // malformed/aborted SDK stream omits its terminal result message.
         sdkTurnsUsed += attemptFinalSeen ? Math.max(1, attemptTurns) : 1
         if (limits.maxSteps !== undefined && sdkTurnsUsed > limits.maxSteps) stepLimitFailed = true
         if (attemptFinalSeen && mapper.getFinal()?.status === 'failed') break
-        if (signal.aborted || abort.signal.aborted || !ctx.requireSvgCompletion || svgCompletionSatisfied(svgCompletion)) {
+        if (signal.aborted || abort.signal.aborted) {
+          break
+        }
+        if (ctx.graphPhase) {
+          if (attempt > 0) break
+          if (
+            ctx.graphPhase === 'planning' &&
+            !graphPlanCommitted &&
+            !graphPlanRetryAllowed
+          ) {
+            break
+          }
+          const shouldCheckDurableGraph =
+            ctx.graphPhase === 'supervising' || graphPlanCommitted
+          const recoveryPhase = graphPlanCommitted
+            ? 'supervising'
+            : ctx.graphPhase
+          graphRecoveryPhase = recoveryPhase
+          const graphCompletion = shouldCheckDurableGraph
+            ? await this.deps.checkGraphCompletion?.(threadId, turnId) ?? 'retry_required'
+            : 'retry_required'
+          if (graphCompletion !== 'retry_required') break
+          if (limits.maxSteps !== undefined && sdkTurnsUsed >= limits.maxSteps) {
+            stepLimitFailed = true
+            break
+          }
+          await this.deps.recordEvent({
+            kind: 'error',
+            threadId,
+            turnId,
+            message: delegatedGraphRecoveryInstruction(
+              recoveryPhase,
+              graphPlanRepairFeedback
+            ),
+            code: recoveryPhase === 'planning'
+              ? 'graph_plan_submission_required'
+              : 'graph_supervision_required',
+            severity: 'warning'
+          })
+          continue
+        }
+        if (!ctx.requireSvgCompletion || svgCompletionSatisfied(svgCompletion)) {
           break
         }
         if (limits.maxSteps !== undefined && sdkTurnsUsed >= limits.maxSteps) {

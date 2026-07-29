@@ -38,6 +38,7 @@ export type CompatRequestCodecInput = {
   maxTokens?: number
   isCodex: boolean
   isCodexLite: boolean
+  serviceTiers?: readonly ('priority' | 'flex')[]
   codexNativeImageGeneration: boolean
 }
 
@@ -196,6 +197,13 @@ export class CompatRequestCodecs {
       ...(input.isCodex ? { prompt_cache_key: input.request.threadId } : {})
     }
     if (input.maxTokens !== undefined && !input.isCodex) body.max_output_tokens = input.maxTokens
+    if (
+      input.isCodex &&
+      input.request.serviceTier === 'priority' &&
+      input.serviceTiers?.includes('priority')
+    ) {
+      body.service_tier = 'priority'
+    }
     if (input.request.temperature !== undefined) body.temperature = input.request.temperature
     if (input.request.topP !== undefined) body.top_p = input.request.topP
     if (input.request.responseFormat === 'json_object') body.text = { format: { type: 'json_object' } }

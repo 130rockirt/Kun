@@ -287,6 +287,29 @@ describe('MessageTimeline tool summaries', () => {
     ])
   })
 
+  it('keeps compaction as a hard boundary between execution phases', () => {
+    const sections = groupProcessSections([
+      toolBlock({ id: 'tool_before', summary: 'read: before', meta: { toolName: 'read' } }),
+      {
+        kind: 'compaction',
+        id: 'compaction_1',
+        summary: 'Context compacted',
+        status: 'success',
+        auto: true
+      },
+      toolBlock({ id: 'tool_after', summary: 'read: after', meta: { toolName: 'read' } })
+    ])
+
+    expect(sections.map((section) => ({
+      id: section.id,
+      ids: section.blocks.map((block) => block.id)
+    }))).toEqual([
+      { id: 'execution-tool_before', ids: ['tool_before'] },
+      { id: 'compaction-compaction_1', ids: ['compaction_1'] },
+      { id: 'execution-tool_after', ids: ['tool_after'] }
+    ])
+  })
+
   it('summarizes a collapsed phase by its work and its active operation', () => {
     const readBlock = toolBlock({
       id: 'tool_read',
@@ -416,6 +439,93 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
     expect(html).toContain('Referenced files 2')
     expect(html).toContain('src/App.tsx')
     expect(html).toContain('src/')
+  })
+
+  it('renders background subagent completion as a compact result card', () => {
+    const block: ChatBlock = {
+      kind: 'user',
+      id: 'background_subagent_1',
+      text: [
+        '<background_subagent_completed>',
+        '<child_id>child_ms6z14fk_erng9y</child_id>',
+        '<label>Client API</label>',
+        '<status>completed</status>',
+        '<summary>Checked the shared schema and request payload.</summary>',
+        '</background_subagent_completed>'
+      ].join('\n'),
+      meta: {
+        displayText: 'Background subagent Client API completed',
+        messageSource: 'background_subagent'
+      }
+    }
+
+    const html = renderToStaticMarkup(createElement(MessageBubble, { block }))
+
+    expect(html).toContain('data-background-subagent-card="true"')
+    expect(html).toContain('data-background-subagent-result="true"')
+    expect(html).toContain('Client API')
+    expect(html).toContain('child_ms6z14fk_erng9y')
+    expect(html).toContain('Checked the shared schema and request payload.')
+    expect(html).not.toContain('rgba(79,124,255')
+  })
+
+  it('clips verbose background subagent output behind an explicit disclosure', () => {
+    const longSummary = Array.from(
+      { length: 30 },
+      (_, index) => `- Result ${index + 1}: verified contract behavior.`
+    ).join('\n')
+    const block: ChatBlock = {
+      kind: 'user',
+      id: 'background_subagent_long',
+      text: [
+        '<background_subagent_completed>',
+        '<child_id>child_long</child_id>',
+        '<label>Contract review</label>',
+        '<status>completed</status>',
+        `<summary>${longSummary}</summary>`,
+        '</background_subagent_completed>'
+      ].join('\n'),
+      meta: { messageSource: 'background_subagent' }
+    }
+
+    const html = renderToStaticMarkup(createElement(MessageBubble, { block }))
+
+    expect(html).toContain('max-h-[360px]')
+    expect(html).toContain('aria-expanded="false"')
+    expect(html).toMatch(/View full output|查看完整输出/)
+  })
+
+  it('uses the subagent label and status in the process row instead of runtime prose', () => {
+    const block: ChatBlock = {
+      kind: 'user',
+      id: 'background_subagent_process',
+      text: [
+        '<background_subagent_completed>',
+        '<child_id>child_process</child_id>',
+        '<label>Client API</label>',
+        '<status>completed</status>',
+        '<summary>Done.</summary>',
+        '</background_subagent_completed>'
+      ].join('\n'),
+      meta: {
+        displayText: 'Background subagent Client API completed',
+        messageSource: 'background_subagent'
+      }
+    }
+
+    const html = renderToStaticMarkup(
+      createElement(ProcessSectionRow, {
+        section: { id: 'execution-background_subagent', kind: 'execution', blocks: [block] },
+        processing: false,
+        singleReasoningSection: false,
+        workspaceRoot: '/tmp/project',
+        viewportRef: { current: null }
+      })
+    )
+
+    expect(html).toContain('data-background-subagent-row="true"')
+    expect(html).toContain('Client API')
+    expect(html).not.toContain('Background subagent Client API completed')
   })
 
   it('renders generated image previews with the printer reveal effect', () => {
@@ -1498,7 +1608,7 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
     expect(html).toMatch(/Approval required|需要审批|approvalTitle/)
   })
 
-  it('renders running compaction as a lightweight status divider', () => {
+  it('renders running compaction as a lightweight process status entry', () => {
     const blocks: ChatBlock[] = [
       {
         kind: 'compaction',
@@ -1527,12 +1637,76 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
     )
 
     expect(html).toContain('role="status"')
-    expect(html).toMatch(/Compacting context|compactionRunning|正在压缩上下文/)
+    expect(html).toMatch(/Compacting|compactionRunning|正在压缩上下文/)
+    expect(html).toMatch(/context|上下文/)
     expect(html).toContain('ds-work-logo-phase-trail')
     expect(html.indexOf('ds-work-logo-phase-trail')).toBeGreaterThan(
       html.indexOf('role="status"')
     )
     expect(html).not.toContain('aria-expanded=')
+  })
+
+  it('renders later live work below the compaction marker', () => {
+    const blocks: ChatBlock[] = [
+      {
+        kind: 'user',
+        id: 'user_1',
+        turnId: 'turn_1',
+        text: 'continue the task'
+      },
+      {
+        kind: 'tool',
+        id: 'before_compaction',
+        turnId: 'turn_1',
+        summary: 'read: before compaction',
+        status: 'success',
+        toolKind: 'tool_call',
+        filePath: '/tmp/TIMELINE_BEFORE_COMPACTION.ts',
+        meta: { toolName: 'read' }
+      },
+      {
+        kind: 'compaction',
+        id: 'compact_1',
+        turnId: 'turn_1',
+        summary: 'Context compacted',
+        status: 'success',
+        auto: true
+      },
+      {
+        kind: 'tool',
+        id: 'after_compaction',
+        turnId: 'turn_1',
+        summary: 'read: after compaction',
+        status: 'running',
+        toolKind: 'tool_call',
+        filePath: '/tmp/TIMELINE_AFTER_COMPACTION.ts',
+        meta: { toolName: 'read' }
+      }
+    ]
+    useChatStore.setState({
+      busy: true,
+      currentTurnUserId: 'user_1',
+      turnStartedAtByUserId: { user_1: Date.now() }
+    })
+
+    const html = renderToStaticMarkup(
+      createElement(MessageTimeline, {
+        blocks,
+        liveReasoning: '',
+        live: '',
+        activeThreadId: 'thr_1',
+        runtimeConnection: 'ready',
+        onRetryConnection: () => undefined,
+        onOpenSettings: () => undefined
+      })
+    )
+
+    const beforeIndex = html.indexOf('TIMELINE_BEFORE_COMPACTION.ts')
+    const compactionIndex = html.indexOf('data-compaction-timeline-entry="true"')
+    const afterIndex = html.indexOf('TIMELINE_AFTER_COMPACTION.ts')
+    expect(beforeIndex).toBeGreaterThanOrEqual(0)
+    expect(compactionIndex).toBeGreaterThan(beforeIndex)
+    expect(afterIndex).toBeGreaterThan(compactionIndex)
   })
 
   it('folds a completed runtime error into the collapsed work summary', () => {

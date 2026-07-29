@@ -28,6 +28,7 @@ export type ModelContextProfile = ModelContextThresholds & {
   supportsToolCalling: boolean
   messageParts: readonly ModelMessagePartSupport[]
   reasoning?: ModelReasoningCapabilityMetadata
+  serviceTiers?: readonly ('priority' | 'flex')[]
   endpointFormat?: ModelEndpointFormat
   responsesMode?: 'lite'
 }
@@ -50,6 +51,7 @@ export type ModelContextProfileConfig = {
   supportsToolCalling?: boolean
   messageParts?: readonly ModelMessagePartSupport[]
   reasoning?: ModelReasoningCapabilityMetadata
+  serviceTiers?: readonly ('priority' | 'flex')[]
   endpointFormat?: ModelEndpointFormat
   responsesMode?: 'lite'
 }
@@ -125,6 +127,13 @@ const CODEX_RESPONSES_REASONING: ModelReasoningCapabilityMetadata = {
   defaultEffort: 'high',
   requestProtocol: 'openai-responses'
 }
+const CODEX_PRIORITY_SERVICE_TIER_MODELS = new Set([
+  'gpt-5.6-sol',
+  'gpt-5.6-terra',
+  'gpt-5.6-luna',
+  'gpt-5.5',
+  'gpt-5.4'
+])
 const DEFAULT_MODEL_INPUT_MODALITIES: readonly ModelInputModality[] = ['text']
 const DEFAULT_MODEL_OUTPUT_MODALITIES: readonly ModelInputModality[] = ['text']
 const DEFAULT_MODEL_MESSAGE_PARTS: readonly ModelMessagePartSupport[] = ['text']
@@ -200,6 +209,7 @@ export function modelCapabilitiesForModel(
     ...(profile?.maxOutputTokens ? { maxOutputTokens: profile.maxOutputTokens } : {}),
     messageParts: [...(profile?.messageParts ?? DEFAULT_MODEL_MESSAGE_PARTS)],
     ...(profile?.reasoning ? { reasoning: copyReasoningCapability(profile.reasoning) } : {}),
+    ...(profile?.serviceTiers ? { serviceTiers: [...profile.serviceTiers] } : {}),
     ...(profile?.endpointFormat ? { endpointFormat: profile.endpointFormat } : {}),
     ...(profile?.responsesMode ? { responsesMode: profile.responsesMode } : {})
   }
@@ -220,9 +230,25 @@ export function modelCapabilitiesForProviderModel(
   const model = input.model?.trim()
   const builtIn = modelCapabilitiesForModel(model, profiles)
   const reasoning = providerReasoningCapability(input)
-  return reasoning
-    ? { ...builtIn, reasoning: copyReasoningCapability(reasoning) }
-    : builtIn
+  const serviceTiers = providerServiceTiers(input)
+  return {
+    ...builtIn,
+    ...(reasoning ? { reasoning: copyReasoningCapability(reasoning) } : {}),
+    ...(serviceTiers ? { serviceTiers } : {})
+  }
+}
+
+function providerServiceTiers(
+  input: ProviderModelCapabilityInput
+): ('priority' | 'flex')[] | undefined {
+  const presetSource = input.presetSource?.trim().toLowerCase() ?? ''
+  const providerId = input.providerId?.trim().toLowerCase() ?? ''
+  const codexSubscription =
+    presetSource === 'codex' ||
+    (!presetSource && /^codex(?:-\d+)?$/.test(providerId))
+  if (!codexSubscription) return undefined
+  const model = normalizeModelId(input.model).split('/').at(-1) ?? ''
+  return CODEX_PRIORITY_SERVICE_TIER_MODELS.has(model) ? ['priority'] : undefined
 }
 
 function providerReasoningCapability(
@@ -445,6 +471,7 @@ function mergeModelContextProfile(
     ...(input.aliases ?? [])
   ])
   const reasoning = input.reasoning ?? current?.reasoning
+  const serviceTiers = input.serviceTiers ?? current?.serviceTiers
   const endpointFormat = input.endpointFormat ?? current?.endpointFormat
   const responsesMode = input.responsesMode ?? current?.responsesMode
   const maxOutputTokens = input.maxOutputTokens ?? current?.maxOutputTokens
@@ -462,6 +489,7 @@ function mergeModelContextProfile(
     ...(reasoning
       ? { reasoning: copyReasoningCapability(reasoning) }
       : {}),
+    ...(serviceTiers ? { serviceTiers: [...serviceTiers] } : {}),
     ...(endpointFormat ? { endpointFormat } : {}),
     ...(responsesMode ? { responsesMode } : {})
   }

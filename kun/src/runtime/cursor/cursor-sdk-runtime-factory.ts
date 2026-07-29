@@ -50,6 +50,13 @@ import {
   buildCursorCustomTools,
   selectCursorBridgeTools
 } from './cursor-sdk-tool-bridge.js'
+import {
+  delegatedGraphAllowedToolNames,
+  delegatedGraphPlanCanRetry,
+  delegatedGraphPlanWasCommitted,
+  delegatedGraphTurnPolicy,
+  intersectDelegatedToolNames
+} from '../delegated-graph-turn-policy.js'
 
 const CURSOR_KUN_TOOL_INSTRUCTION = [
   'Kun-managed tools are available through Cursor custom tools.',
@@ -273,12 +280,18 @@ export function createCursorSdkRuntime(
     approvalPolicy: ApprovalPolicy
     sandboxMode: SandboxMode
     listing?: boolean
+    allowedToolNames?: readonly string[]
   }): ToolHostContext => {
     const plan = resolveCursorPlanContext(input.thread, input.turn.id)
-    const dedicatedSvgTurn = input.turn.guiDesignArtifact?.kind === 'svg'
-    const allowedToolNames = intersectAllowedToolNames(
+    const dedicatedSvgTurn =
+      input.turn.orchestration !== 'graph' &&
+      input.turn.guiDesignArtifact?.kind === 'svg'
+    const allowedToolNames = intersectDelegatedToolNames(
       toolContextBoundary?.allowedToolNames,
-      dedicatedSvgTurn ? SVG_ARTIFACT_ALLOWED_TOOL_NAMES : undefined
+      intersectDelegatedToolNames(
+        dedicatedSvgTurn ? SVG_ARTIFACT_ALLOWED_TOOL_NAMES : undefined,
+        input.allowedToolNames
+      )
     )
     const awaitUserInput = makeAwaitUserInput(
       input.thread.id,
@@ -296,6 +309,7 @@ export function createCursorSdkRuntime(
       approvalIntent: input.turn.prompt,
       abortSignal: input.signal,
       ...toolContextBoundary,
+      ...(input.turn.orchestration ? { orchestration: input.turn.orchestration } : {}),
       ...(plan.planMode ? { threadMode: 'plan' as const } : {}),
       ...(plan.guiPlan ? { guiPlan: plan.guiPlan } : {}),
       ...(input.turn.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
@@ -367,7 +381,8 @@ export function createCursorSdkRuntime(
           )
         : activeSkillIds
       const listingSkillIds = [...new Set([...activeSkillIds, ...availableSkillIds])]
-      const listingContext = toolContext({
+      const graphPolicy = delegatedGraphTurnPolicy(turn)
+      const discoveryContext = toolContext({
         thread,
         turn,
         signal,
@@ -381,8 +396,26 @@ export function createCursorSdkRuntime(
       if (toolHost) {
         // Run the host preparation hook first so turn-scoped extension
         // contributions are registered before the canonical catalog snapshot.
-        await toolHost.listTools(listingContext)
+        await toolHost.listTools(discoveryContext)
       }
+      const graphAllowedToolNames = graphPolicy
+        ? delegatedGraphAllowedToolNames(
+            registry.listTools(discoveryContext),
+            graphPolicy.phase
+          )
+        : undefined
+      const listingContext = toolContext({
+        thread,
+        turn,
+        signal,
+        activeSkillIds: listingSkillIds,
+        actingModelRoute,
+        approvalReviewer,
+        approvalPolicy,
+        sandboxMode,
+        listing: true,
+        ...(graphAllowedToolNames ? { allowedToolNames: graphAllowedToolNames } : {})
+      })
       const tools = toolHost
         ? selectCursorBridgeTools(registry.listTools(listingContext))
         : []
@@ -410,6 +443,7 @@ export function createCursorSdkRuntime(
       const goalInstruction = plan.planMode ? null : goalContinuationInstruction(thread.goal)
       const todoInstruction = plan.planMode ? null : todoContinuationInstruction(thread.todos)
       const instructionBlocks = [
+        ...(graphPolicy ? [graphPolicy.instruction] : []),
         ...(plan.planMode ? [PLAN_MODE_INSTRUCTION] : []),
         ...(turn.guiDesignArtifact?.kind === 'svg'
           ? [SVG_ARTIFACT_MODE_INSTRUCTION]
@@ -424,6 +458,8 @@ export function createCursorSdkRuntime(
         ...(skillResolution?.instructions ?? []),
         ...(tools.length ? [CURSOR_KUN_TOOL_INSTRUCTION] : [])
       ]
+      let graphPlanCommitted = false
+      let graphPlanRetryAllowed = true
       const customTools = toolHost
         ? buildCursorCustomTools(tools, async (toolName, args, toolCallId) => {
             const latestThread = await deps.threadStore.get(threadId)
@@ -436,7 +472,8 @@ export function createCursorSdkRuntime(
               latestTurn,
               userText
             )
-            const context = toolContext({
+            const latestGraphPolicy = delegatedGraphTurnPolicy(latestTurn)
+            const discoveryExecutionContext = toolContext({
               thread: latestThread,
               turn: latestTurn,
               signal,
@@ -445,6 +482,25 @@ export function createCursorSdkRuntime(
               approvalReviewer,
               approvalPolicy,
               sandboxMode
+            })
+            const latestGraphAllowedToolNames = latestGraphPolicy
+              ? delegatedGraphAllowedToolNames(
+                  registry.listTools(discoveryExecutionContext),
+                  latestGraphPolicy.phase
+                )
+              : undefined
+            const context = toolContext({
+              thread: latestThread,
+              turn: latestTurn,
+              signal,
+              activeSkillIds: latestActiveSkillIds,
+              actingModelRoute,
+              approvalReviewer,
+              approvalPolicy,
+              sandboxMode,
+              ...(latestGraphAllowedToolNames
+                ? { allowedToolNames: latestGraphAllowedToolNames }
+                : {})
             })
             try {
               const result = await toolHost.execute({
@@ -458,7 +514,21 @@ export function createCursorSdkRuntime(
                   isError: true
                 }
               }
-              return { output: result.item.output, isError: result.item.isError }
+              const toolResult = {
+                output: result.item.output,
+                isError: result.item.isError
+              }
+              if (
+                toolName === 'graph_define_plan' &&
+                delegatedGraphPlanWasCommitted(toolResult)
+              ) {
+                graphPlanCommitted = true
+                graphPlanRetryAllowed = false
+              } else if (toolName === 'graph_define_plan') {
+                graphPlanRetryAllowed =
+                  delegatedGraphPlanCanRetry(toolResult)
+              }
+              return toolResult
             } catch (error) {
               return {
                 output: error instanceof Error ? error.message : String(error),
@@ -472,7 +542,14 @@ export function createCursorSdkRuntime(
         instructionBlocks,
         activeSkillIds: [...(skillResolution?.activeSkillIds ?? activeSkillIds)],
         tools,
-        customTools
+        customTools,
+        ...(graphPolicy
+          ? {
+              graphPhase: graphPolicy.phase,
+              graphPlanWasCommitted: () => graphPlanCommitted,
+              graphPlanCanRetry: () => graphPlanRetryAllowed
+            }
+          : {})
       }
   }
 
@@ -493,14 +570,4 @@ function resolveCursorPlanContext(
     : undefined
   const planMode = (turn?.mode ?? thread.mode) === 'plan' || Boolean(guiPlan)
   return { planMode, ...(guiPlan ? { guiPlan } : {}) }
-}
-
-function intersectAllowedToolNames(
-  first: readonly string[] | undefined,
-  second: readonly string[] | undefined
-): readonly string[] | undefined {
-  if (!first) return second
-  if (!second) return first
-  const secondSet = new Set(second)
-  return first.filter((name) => secondSet.has(name))
 }

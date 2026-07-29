@@ -70,6 +70,12 @@
   --ds-sidebar-field-bg: #f1f1f1;
   --ds-sidebar-field-focus: #f8f8f8;
   --ds-sidebar-divider: #dcdfe3;
+  --ds-sidebar-surface-bg: var(--ds-bg-sidebar);
+  --ds-sidebar-surface-chrome-bg: color-mix(
+    in srgb,
+    var(--ds-bg-sidebar) 94%,
+    var(--ds-surface-card) 6%
+  );
   --ds-card-soft: #f8f8f8;
   --ds-card-strong: #f8f8f8;
   --ds-card-muted: #f1f1f1;
@@ -192,6 +198,12 @@
   --ds-sidebar-field-bg: #353333;
   --ds-sidebar-field-focus: #312f2f;
   --ds-sidebar-divider: #434343;
+  --ds-sidebar-surface-bg: var(--ds-bg-sidebar);
+  --ds-sidebar-surface-chrome-bg: color-mix(
+    in srgb,
+    var(--ds-bg-sidebar) 94%,
+    var(--ds-surface-card) 6%
+  );
   --ds-card-soft: #312f2f;
   --ds-card-strong: #312f2f;
   --ds-card-muted: #353333;
@@ -1090,7 +1102,7 @@ pre {
 
 .sdd-assistant-panel {
   animation: sdd-panel-enter 220ms cubic-bezier(0.22, 1, 0.36, 1);
-  box-shadow: -16px 0 38px rgba(20, 47, 95, 0.035);
+  box-shadow: var(--ds-shadow-panel);
 }
 
 .sdd-assistant-header,
@@ -1132,6 +1144,12 @@ pre {
 
 .sdd-assistant-panel .ds-user-message-bubble {
   max-width: min(88%, 520px);
+}
+
+.sdd-assistant-panel .ds-chat-composer {
+  border-color: var(--ds-border);
+  background: var(--ds-surface-card);
+  box-shadow: var(--ds-shadow-composer);
 }
 
 .sdd-assistant-empty-card,

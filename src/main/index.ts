@@ -100,7 +100,8 @@ import { parseRuntimeErrorBody, runtimeErrorToError, type RuntimeErrorCode } fro
 import type { GuiUpdateState } from '../shared/gui-update'
 import type {
   KunRuntimeSettingsSyncStatusPayload,
-  TrayActionPayload
+  TrayActionPayload,
+  TurnCompleteNotificationPayload
 } from '../shared/kun-gui-api'
 import { isAllowedDevPreviewUrl } from '../shared/dev-preview-url'
 import { isAuthorizedPrototypeFileUrl } from './services/prototype-embed-registry'
@@ -126,6 +127,7 @@ import { managedKunHostCanAutoStart } from './managed-runtime-startup-policy'
 import { configureLogger, logError, logInfo, logWarn, pruneOnStartup } from './logger'
 import { cleanupUnusedGitCheckpointsIfDue } from './services/git-checkpoint-service'
 import { resolveMainWindowCloseDecision } from './window-close-behavior'
+import { turnCompleteNotificationDisabledReason } from './notification-preferences'
 import {
   MAIN_WINDOW_RENDERER_RECOVERY_DELAY_MS,
   MAIN_WINDOW_RENDERER_RECOVERY_MAX_ATTEMPTS,
@@ -945,18 +947,16 @@ function normalizeNotificationText(raw: string | undefined, fallback: string, ma
   return value.length > maxLength ? `${value.slice(0, maxLength - 1)}…` : value
 }
 
-type TurnCompleteNotificationPayload = {
-  threadId?: string
-  title?: string
-  body?: string
-}
-
 async function showTurnCompleteNotification(
   payload: TurnCompleteNotificationPayload
 ): Promise<{ ok: true; shown: boolean; reason?: string } | { ok: false; message: string }> {
   const settings = await store.load()
-  if (!settings.notifications.turnComplete) {
-    return { ok: true, shown: false, reason: 'disabled' }
+  const disabledReason = turnCompleteNotificationDisabledReason(
+    settings.notifications,
+    payload.source
+  )
+  if (disabledReason) {
+    return { ok: true, shown: false, reason: disabledReason }
   }
   if (!Notification.isSupported()) {
     return { ok: true, shown: false, reason: 'unsupported' }

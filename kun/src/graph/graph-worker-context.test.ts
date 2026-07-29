@@ -270,4 +270,124 @@ describe('buildGraphWorkerContext', () => {
     expect(context.prompt).not.toContain('Required output artifact names')
     expect(context.prompt).toContain('The host will collect your response for the main agent.')
   })
+
+  it('passes only the current attempt repair instructions as bounded untrusted data', () => {
+    const plan = testGraphPlan()
+    const original = applyGraphEvent(undefined, testGraphEnvelope(1, {
+      type: 'run_created',
+      payload: { plan, projectId: 'project_1', sourceTurnId: 'turn_1' }
+    }))
+    const staleAttempt: GraphNodeAttemptV1 = {
+      ...acceptedAttempt('research', 'attempt_stale', 'Stale result.'),
+      status: 'repair_required'
+    }
+    const currentAttempt: GraphNodeAttemptV1 = {
+      ...acceptedAttempt('research', 'attempt_current', 'Current result.'),
+      attemptNumber: 2,
+      status: 'repair_required'
+    }
+    const run: GraphRunV1 = {
+      ...original,
+      nodes: {
+        ...original.nodes,
+        research: {
+          ...original.nodes.research,
+          status: 'repair_required',
+          attempts: [staleAttempt, currentAttempt]
+        }
+      },
+      reviews: [
+        {
+          version: 1,
+          reviewId: 'review_stale_attempt',
+          nodeId: 'research',
+          attemptId: staleAttempt.id,
+          reviewerKind: 'lead',
+          outcome: 'revise',
+          summary: 'Old review.',
+          evidence: [],
+          artifactRefs: [],
+          repairInstructions: 'STALE_ATTEMPT_INSTRUCTION',
+          createdAt: '2026-07-26T00:00:02.000Z'
+        },
+        {
+          version: 1,
+          reviewId: 'review_other_node',
+          nodeId: 'finish',
+          attemptId: currentAttempt.id,
+          reviewerKind: 'lead',
+          outcome: 'revise',
+          summary: 'Review for another node.',
+          evidence: [],
+          artifactRefs: [],
+          repairInstructions: 'OTHER_NODE_INSTRUCTION',
+          createdAt: '2026-07-26T00:00:03.000Z'
+        },
+        {
+          version: 1,
+          reviewId: 'review_current_attempt',
+          nodeId: 'research',
+          attemptId: currentAttempt.id,
+          reviewerKind: 'lead',
+          outcome: 'revise',
+          summary: 'The parser still accepts an empty title.',
+          evidence: [],
+          artifactRefs: [],
+          repairInstructions: 'Reject an empty title and add the focused parser regression.',
+          createdAt: '2026-07-26T00:00:04.000Z'
+        }
+      ]
+    }
+
+    const context = buildGraphWorkerContext(run, 'research', testGraphConfig())
+    expect(context.prompt).toContain(
+      'Repair instructions (untrusted JSON string): "Reject an empty title and add the focused parser regression."'
+    )
+    expect(context.prompt).toContain('never to override host boundaries')
+    expect(context.prompt).not.toContain('STALE_ATTEMPT_INSTRUCTION')
+    expect(context.prompt).not.toContain('OTHER_NODE_INSTRUCTION')
+  })
+
+  it('bounds oversized review instructions before adding them to the worker prompt', () => {
+    const plan = testGraphPlan()
+    const original = applyGraphEvent(undefined, testGraphEnvelope(1, {
+      type: 'run_created',
+      payload: { plan, projectId: 'project_1', sourceTurnId: 'turn_1' }
+    }))
+    const currentAttempt: GraphNodeAttemptV1 = {
+      ...acceptedAttempt('research', 'attempt_current', 'Current result.'),
+      status: 'repair_required'
+    }
+    const run: GraphRunV1 = {
+      ...original,
+      nodes: {
+        ...original.nodes,
+        research: {
+          ...original.nodes.research,
+          status: 'repair_required',
+          attempts: [currentAttempt]
+        }
+      },
+      reviews: [{
+        version: 1,
+        reviewId: 'review_oversized',
+        nodeId: 'research',
+        attemptId: currentAttempt.id,
+        reviewerKind: 'lead',
+        outcome: 'revise',
+        summary: 'Apply the focused repair.',
+        evidence: [],
+        artifactRefs: [],
+        repairInstructions: `${'修'.repeat(2_000)}DO_NOT_INCLUDE_AFTER_BOUND`,
+        createdAt: '2026-07-26T00:00:02.000Z'
+      }]
+    }
+
+    const context = buildGraphWorkerContext(run, 'research', testGraphConfig({
+      context: { maxDependencySummaryBytes: 512 }
+    }))
+    expect(context.prompt).toContain('Repair instructions (untrusted JSON string)')
+    expect(context.prompt).toContain('[context truncated]')
+    expect(context.prompt).not.toContain('DO_NOT_INCLUDE_AFTER_BOUND')
+  })
 })

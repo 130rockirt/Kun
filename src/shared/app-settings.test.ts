@@ -100,6 +100,38 @@ describe('application locale settings', () => {
   })
 })
 
+describe('notification settings', () => {
+  it('migrates legacy completion settings to main-agent on and subagent off', () => {
+    const normalized = normalizeAppSettings({
+      ...settings(),
+      notifications: { turnComplete: false }
+    })
+
+    expect(normalized.notifications).toEqual({
+      turnComplete: false,
+      mainAgentTurnComplete: true,
+      subagentTurnComplete: false
+    })
+  })
+
+  it('preserves explicit source-specific completion preferences', () => {
+    const normalized = normalizeAppSettings({
+      ...settings(),
+      notifications: {
+        turnComplete: true,
+        mainAgentTurnComplete: false,
+        subagentTurnComplete: true
+      }
+    })
+
+    expect(normalized.notifications).toEqual({
+      turnComplete: true,
+      mainAgentTurnComplete: false,
+      subagentTurnComplete: true
+    })
+  })
+})
+
 describe('initial setup completion', () => {
   it('defaults a new keyless configuration to incomplete', () => {
     expect(normalizeAppSettings(settings()).initialSetupCompleted).toBe(false)

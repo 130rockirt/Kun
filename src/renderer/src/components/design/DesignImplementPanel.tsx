@@ -31,6 +31,7 @@ type Props = {
   setComposerReasoningEffort: (effort: ComposerReasoningEffort) => void
   queuedMessages: QueuedUserMessage[]
   removeQueuedMessage: (id: string) => void
+  guideQueuedMessage: (id: string) => void | Promise<unknown>
   attachments?: AttachmentReference[]
   attachmentUploadEnabled?: boolean
   attachmentUploadBusy?: boolean
@@ -76,6 +77,7 @@ export function DesignImplementPanel({
   setComposerReasoningEffort,
   queuedMessages,
   removeQueuedMessage,
+  guideQueuedMessage,
   attachments = [],
   attachmentUploadEnabled = false,
   attachmentUploadBusy = false,
@@ -97,9 +99,9 @@ export function DesignImplementPanel({
 
   return (
     <aside
-      className={`ds-no-drag flex min-h-0 flex-col border-l border-ds-border-muted bg-white dark:bg-ds-canvas ${className}`}
+      className={`ds-sidebar-surface ds-no-drag flex min-h-0 flex-col border-l border-ds-border-muted ${className}`}
     >
-      <div className="shrink-0 border-b border-ds-border-muted bg-white/92 dark:bg-ds-card">
+      <div className="ds-sidebar-surface-chrome shrink-0 border-b border-ds-border-muted">
         <div className="flex h-12 min-w-0 items-center gap-2 px-4">
           <button
             type="button"
@@ -126,7 +128,7 @@ export function DesignImplementPanel({
         ) : null}
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden bg-ds-main/45 dark:bg-transparent">
+      <div className="ds-sidebar-surface-body min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
         {hasTimeline ? (
           <LazyMessageTimeline
             blocks={blocks}
@@ -149,7 +151,7 @@ export function DesignImplementPanel({
         )}
       </div>
 
-      <div className="shrink-0 border-t border-ds-border-muted bg-white/92 px-4 pb-4 pt-3 dark:bg-ds-card">
+      <div className="ds-sidebar-surface-chrome shrink-0 border-t border-ds-border-muted px-4 pb-4 pt-3">
         <FloatingComposer
           variant="compact"
           workspaceRootOverride={workspaceRoot}
@@ -170,6 +172,7 @@ export function DesignImplementPanel({
           modelPickerMode="combobox"
           queuedMessages={queuedMessages}
           onRemoveQueuedMessage={removeQueuedMessage}
+          onGuideQueuedMessage={guideQueuedMessage}
           attachments={attachments}
           attachmentUploadEnabled={attachmentUploadEnabled}
           attachmentUploadBusy={attachmentUploadBusy}

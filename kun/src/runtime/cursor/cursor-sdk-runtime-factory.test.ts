@@ -55,6 +55,150 @@ function completedRun(): Run {
 }
 
 describe('Cursor SDK runtime factory', () => {
+  test('uses the bounded Graph tool catalog and Graph Lead instruction by durable phase', async () => {
+    const graphOnly = (context: { orchestration?: string }) =>
+      context.orchestration === 'graph'
+    const registry = CapabilityRegistry.fromLocalTools([
+      LocalToolHost.defineTool({
+        name: 'read',
+        description: 'Read safely',
+        inputSchema: { type: 'object' },
+        sideEffect: 'read-only',
+        execute: async () => ({ output: 'read' })
+      }),
+      LocalToolHost.defineTool({
+        name: 'write',
+        description: 'Write',
+        inputSchema: { type: 'object' },
+        sideEffect: 'unknown',
+        execute: async () => ({ output: 'write' })
+      }),
+      LocalToolHost.defineTool({
+        name: 'graph_define_plan',
+        description: 'Define Graph plan',
+        inputSchema: { type: 'object' },
+        shouldAdvertise: graphOnly,
+        execute: async () => ({ output: { status: 'committed' } })
+      }),
+      LocalToolHost.defineTool({
+        name: 'graph_review_node',
+        description: 'Review Graph node',
+        inputSchema: { type: 'object' },
+        shouldAdvertise: graphOnly,
+        execute: async () => ({ output: { status: 'accepted' } })
+      })
+    ])
+    const graphTurn = {
+      id: 'turn_graph',
+      prompt: 'plan with Graph',
+      orchestration: 'graph',
+      actingModelRoute: {
+        model: 'cursor-model',
+        providerId: 'cursor-provider'
+      },
+      graphPlanningLifecycle: {
+        version: 1,
+        draftId: 'draft_1',
+        reservedRunId: 'run_1',
+        state: 'planning',
+        draftRevision: 1
+      }
+    }
+    const thread = {
+      id: 'thread_graph',
+      title: 'Cursor Graph',
+      workspace: '/tmp/cursor-graph',
+      model: 'cursor-model',
+      mode: 'agent',
+      approvalPolicy: 'auto',
+      approvalReviewer: 'user',
+      sandboxMode: 'danger-full-access',
+      turns: [graphTurn]
+    }
+    const runtime = createCursorSdkRuntime({
+      registry,
+      toolHost: new LocalToolHost({ registry }),
+      providerConfigs: {},
+      providerIds: new Set(['cursor-provider']),
+      defaultIsCursor: false,
+      defaultModel: 'cursor-model',
+      defaultApprovalPolicy: 'auto',
+      defaultSandboxMode: 'danger-full-access',
+      threadStore: { get: async () => thread } as never,
+      sessionStore: {} as never,
+      turns: { updateTurnMetadata: async () => undefined } as never,
+      events: { record: async () => undefined } as never,
+      ids: { next: (prefix) => `${prefix}_1` }
+    })
+    const loadKunTurnContext = (runtime as unknown as {
+      deps: {
+        loadKunTurnContext(input: {
+          threadId: string
+          turnId: string
+          userText: string
+          actingModelRoute: {
+            model: string
+            providerId?: string
+          }
+          signal: AbortSignal
+        }): Promise<{
+          tools: Array<{ name: string }>
+          instructionBlocks: string[]
+          customTools: Record<string, {
+            execute(
+              args: Record<string, unknown>,
+              context: { toolCallId: string }
+            ): Promise<unknown>
+          }>
+          graphPhase?: 'planning' | 'supervising'
+          graphPlanWasCommitted?: () => boolean
+          graphPlanCanRetry?: () => boolean
+        }>
+      }
+    }).deps.loadKunTurnContext
+    const input = {
+      threadId: 'thread_graph',
+      turnId: 'turn_graph',
+      userText: 'plan with Graph',
+      actingModelRoute: graphTurn.actingModelRoute,
+      signal: new AbortController().signal
+    }
+
+    const planning = await loadKunTurnContext(input)
+    expect(planning.graphPhase).toBe('planning')
+    expect(planning.tools.map((tool) => tool.name).sort()).toEqual([
+      'graph_define_plan',
+      'read'
+    ])
+    expect(planning.instructionBlocks.join('\n')).toContain(
+      'Graph Mode: source Lead operating contract'
+    )
+    expect(Object.keys(planning.customTools).sort()).toEqual([
+      'graph_define_plan',
+      'read'
+    ])
+    expect(planning.graphPlanWasCommitted?.()).toBe(false)
+    expect(planning.graphPlanCanRetry?.()).toBe(true)
+    await planning.customTools.graph_define_plan!.execute(
+      {},
+      { toolCallId: 'call_define_plan' }
+    )
+    expect(planning.graphPlanWasCommitted?.()).toBe(true)
+    expect(planning.graphPlanCanRetry?.()).toBe(false)
+
+    graphTurn.graphPlanningLifecycle = {
+      ...graphTurn.graphPlanningLifecycle,
+      state: 'committed',
+      draftRevision: 2
+    }
+    const supervising = await loadKunTurnContext(input)
+    expect(supervising.graphPhase).toBe('supervising')
+    expect(supervising.tools.map((tool) => tool.name).sort()).toEqual([
+      'graph_review_node',
+      'read'
+    ])
+  })
+
   test('bridges policy-filtered MCP and extension tools through Kun ToolHost', async () => {
     const mcpExecute = vi.fn(async (args: Record<string, unknown>) => ({
       output: { server: args.serverId, ok: true }

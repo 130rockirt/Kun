@@ -739,7 +739,15 @@ export function buildRouter(runtime: ServerRuntime): Router {
   })
   router.add('POST', '/v1/threads/:id/turns/:turnId/steer', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
-    return steerTurn(runtime.turnService, ctx.params.id, ctx.params.turnId, request)
+    return steerTurn(
+      runtime.turnService,
+      ctx.params.id,
+      ctx.params.turnId,
+      request,
+      ({ threadId, turnId }) => {
+        runtime.runTurn(threadId, turnId)
+      }
+    )
   })
   router.add('GET', '/v1/threads/:id/turns/:turnId/steering', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()

@@ -20,6 +20,7 @@ import { useChatStore } from '../../store/chat-store'
 import { clearWriteWorkspaceSaveQueueForTests } from '../../write/write-save-coordinator'
 import { useWriteWorkspaceStore } from '../../write/write-workspace-store'
 import { useWorkbenchComposerSubmitController } from './useWorkbenchComposerSubmitController'
+import type { ModelProviderModelGroup } from '@shared/kun-gui-api'
 
 type ControllerParams = Parameters<typeof useWorkbenchComposerSubmitController>[0]
 
@@ -55,8 +56,11 @@ function controllerParams(overrides: Partial<ControllerParams> = {}): Controller
     composerAttachments: [],
     composerFileReferences: [],
     composerMode: 'agent',
+    composerModel: '',
+    composerProviderId: '',
     composerModelGroups: [],
     composerReasoningEffort: 'auto',
+    composerFastMode: false,
     getAttachmentScope: () => 'write',
     handleGuiPlanCommand: vi.fn(),
     input: 'keep this prompt',
@@ -380,5 +384,42 @@ describe('useWorkbenchComposerSubmitController', () => {
       'write'
     ))
     expect(useWriteWorkspaceStore.getState().quotedSelections).toEqual([newQuote])
+  })
+
+  it('snapshots the priority service tier for an eligible Codex chat send', async () => {
+    const sendMessage = vi.fn(async () => true)
+    const modelGroup: ModelProviderModelGroup = {
+      providerId: 'codex-2',
+      presetSource: 'codex',
+      label: 'ChatGPT subscription 2',
+      modelIds: ['gpt-5.4'],
+      modelProfiles: {
+        'gpt-5.4': {
+          inputModalities: ['text', 'image'],
+          outputModalities: ['text'],
+          supportsToolCalling: true,
+          messageParts: ['text', 'image_url'],
+          serviceTiers: ['priority']
+        }
+      }
+    }
+    const controller = useWorkbenchComposerSubmitController(controllerParams({
+      route: 'chat',
+      input: 'ship it',
+      composerModel: 'gpt-5.4',
+      composerProviderId: 'codex-2',
+      composerModelGroups: [modelGroup],
+      composerFastMode: true,
+      getAttachmentScope: () => 'chat',
+      sendMessage
+    }))
+
+    controller.handleSend()
+
+    await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledWith(
+      'ship it',
+      'agent',
+      expect.objectContaining({ serviceTier: 'priority' })
+    ))
   })
 })

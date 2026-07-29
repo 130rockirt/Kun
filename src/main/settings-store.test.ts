@@ -70,6 +70,29 @@ describe('JsonSettingsStore', () => {
     expect(clamped.checkpointCleanup.intervalDays).toBe(10)
   })
 
+  it('patches one notification source without resetting sibling preferences', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'ds-gui-settings-'))
+    const store = new JsonSettingsStore(userDataDir)
+
+    const mainDisabled = await store.patch({
+      notifications: { mainAgentTurnComplete: false }
+    })
+    expect(mainDisabled.notifications).toEqual({
+      turnComplete: true,
+      mainAgentTurnComplete: false,
+      subagentTurnComplete: false
+    })
+
+    const subagentEnabled = await store.patch({
+      notifications: { subagentTurnComplete: true }
+    })
+    expect(subagentEnabled.notifications).toEqual({
+      turnComplete: true,
+      mainAgentTurnComplete: false,
+      subagentTurnComplete: true
+    })
+  })
+
   it('creates the app-managed default workspaces and welcome file', async () => {
     const userDataDir = await mkdtemp(join(tmpdir(), 'ds-gui-settings-'))
     const homeDir = await mkdtemp(join(tmpdir(), 'ds-gui-home-'))

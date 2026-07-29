@@ -547,6 +547,7 @@ describe('CompatModelClient per-model endpointFormat', () => {
         outputModalities: ['text'],
         supportsToolCalling: true,
         messageParts: ['text', 'image_url'],
+        serviceTiers: model === 'gpt-5.6-sol' ? ['priority'] : undefined,
         responsesMode: model === 'gpt-5.6-sol' ? 'lite' : undefined
       })
     })
@@ -554,6 +555,7 @@ describe('CompatModelClient per-model endpointFormat', () => {
     await drain(client.stream({
       ...request('gpt-5.6-sol'),
       reasoningEffort: 'max',
+      serviceTier: 'priority',
       tools: [{
         name: 'read_file',
         description: 'Read a file',
@@ -567,6 +569,7 @@ describe('CompatModelClient per-model endpointFormat', () => {
       store: false,
       parallel_tool_calls: false,
       prompt_cache_key: 't1',
+      service_tier: 'priority',
       reasoning: { effort: 'xhigh', context: 'all_turns' }
     })
     expect(calls[0].body).not.toHaveProperty('instructions')
@@ -581,5 +584,43 @@ describe('CompatModelClient per-model endpointFormat', () => {
       expect.objectContaining({ type: 'image_generation' })
     ]))
     expect(input[1]).toMatchObject({ type: 'message', role: 'developer' })
+  })
+
+  it('omits the priority service tier for unsupported Codex models', async () => {
+    const calls: CapturedCall[] = []
+    const client = new CompatModelClient({
+      baseUrl: 'https://chatgpt.com/backend-api/codex/responses',
+      apiKey: 'oauth-access-token',
+      model: 'gpt-5.4-mini',
+      endpointFormat: 'responses',
+      nonStreaming: true,
+      fetchImpl: fakeFetch(calls),
+      modelCapabilities: modelCapabilities({})
+    })
+
+    await drain(client.stream({
+      ...request('gpt-5.4-mini'),
+      serviceTier: 'priority'
+    }))
+
+    expect(calls[0].body).not.toHaveProperty('service_tier')
+  })
+
+  it('never forwards the priority service tier to non-Codex Responses endpoints', () => {
+    const body = createCompatRequestCodecs().build({
+      request: { ...request('gpt-5.4'), serviceTier: 'priority' },
+      model: 'gpt-5.4',
+      messages: [],
+      tools: [],
+      stream: true,
+      endpointFormat: 'responses',
+      baseUrl: 'https://api.openai.com/v1',
+      isCodex: false,
+      isCodexLite: false,
+      serviceTiers: ['priority'],
+      codexNativeImageGeneration: false
+    })
+
+    expect(body).not.toHaveProperty('service_tier')
   })
 })

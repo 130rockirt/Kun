@@ -469,6 +469,7 @@ describe('HistoryCompactionService', () => {
       model: 'main-extension-model',
       providerId: 'ext-private',
       accountId: 'account-private',
+      serviceTier: 'priority',
       signal: new AbortController().signal,
       threadId,
       turnId
@@ -479,7 +480,8 @@ describe('HistoryCompactionService', () => {
     expect(extensionRequests[0]).toMatchObject({
       model: 'extension-summary-model',
       providerId: 'ext-private',
-      accountId: 'account-private'
+      accountId: 'account-private',
+      serviceTier: 'priority'
     })
     expect(history[0]).toMatchObject({
       kind: 'compaction',

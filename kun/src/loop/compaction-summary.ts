@@ -176,6 +176,7 @@ export async function summarizeCompactionWithModel(input: {
   providerId?: string
   /** Opaque account id paired with `providerId`; never credential material. */
   accountId?: string
+  serviceTier?: 'priority'
   modelClient: ModelClient
   prefix: ImmutablePrefix
   contextCompaction?: ContextCompactionConfig
@@ -228,6 +229,7 @@ export async function summarizeCompactionWithModel(input: {
       model: input.model,
       ...(input.providerId ? { providerId: input.providerId } : {}),
       ...(input.accountId ? { accountId: input.accountId } : {}),
+      ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
       // Dedicated compaction-mode system prompt; the main agent prefix and
       // few-shots are intentionally dropped so this is a clean summarizer turn.
       systemPrompt: COMPACTION_SYSTEM_PROMPT,

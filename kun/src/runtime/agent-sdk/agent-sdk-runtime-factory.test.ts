@@ -613,6 +613,131 @@ describe('createAgentSdkRuntime turn context', () => {
     expect(extensionExecute).toHaveBeenCalledOnce()
   })
 
+  test('uses the bounded Graph catalog and disables SDK built-ins across planning and supervision', async () => {
+    const graphOnly = (context: { orchestration?: string }) =>
+      context.orchestration === 'graph'
+    const registry = CapabilityRegistry.fromLocalTools([
+      LocalToolHost.defineTool({
+        name: 'read',
+        description: 'Read safely',
+        inputSchema: { type: 'object' },
+        sideEffect: 'read-only',
+        execute: async () => ({ output: 'read' })
+      }),
+      LocalToolHost.defineTool({
+        name: 'write',
+        description: 'Write',
+        inputSchema: { type: 'object' },
+        sideEffect: 'unknown',
+        execute: async () => ({ output: 'write' })
+      }),
+      LocalToolHost.defineTool({
+        name: 'graph_define_plan',
+        description: 'Define Graph plan',
+        inputSchema: { type: 'object' },
+        shouldAdvertise: graphOnly,
+        execute: async () => ({ output: { status: 'committed' } })
+      }),
+      LocalToolHost.defineTool({
+        name: 'graph_review_node',
+        description: 'Review Graph node',
+        inputSchema: { type: 'object' },
+        shouldAdvertise: graphOnly,
+        execute: async () => ({ output: { status: 'accepted' } })
+      })
+    ])
+    const host = new LocalToolHost({ registry })
+    const graphTurn = {
+      id: 'tn',
+      prompt: 'plan with Graph',
+      orchestration: 'graph',
+      graphPlanningLifecycle: {
+        version: 1,
+        draftId: 'draft_1',
+        reservedRunId: 'run_1',
+        state: 'planning',
+        draftRevision: 1
+      }
+    } as ThreadRecord['turns'][number]
+    const thread = threadWith({
+      providerId: 'claude-subscription',
+      turns: [graphTurn]
+    })
+    const runtime = createAgentSdkRuntime({
+      registry,
+      toolHost: host,
+      turns: { updateTurnMetadata: async () => undefined } as never,
+      sessionStore: {
+        loadItems: async () => [{
+          id: 'item_user',
+          turnId: 'tn',
+          threadId: 'th',
+          kind: 'user_message',
+          role: 'user',
+          status: 'completed',
+          text: 'plan with Graph',
+          createdAt: '2026-07-30T00:00:00.000Z'
+        }]
+      } as never,
+      threadStore: { get: async () => thread } as never,
+      events: {} as never,
+      ids: { next: (prefix) => prefix },
+      prefix: { systemPrompt: 'Kun system prompt' },
+      providerConfigs: {
+        'claude-subscription': { kind: 'agent-sdk', apiKey: 'sk-ant-oat01-token' }
+      } as never,
+      agentSdkProviderIds: new Set(['claude-subscription']),
+      defaultApprovalPolicy: 'auto'
+    })
+    const deps = (runtime as unknown as {
+      deps: {
+        loadTurnContext(threadId: string, turnId: string): Promise<{
+          bridgeableTools: Array<{ name: string }>
+          allowSdkBuiltins?: boolean
+          bridgeKunBuiltinOverlaps?: boolean
+          graphPhase?: 'planning' | 'supervising'
+          contextInstructions?: string[]
+        } | null>
+        executeKunTool(
+          threadId: string,
+          turnId: string,
+          toolName: string,
+          args: Record<string, unknown>
+        ): Promise<{ output: unknown; isError?: boolean }>
+      }
+    }).deps
+
+    const planning = await deps.loadTurnContext('th', 'tn')
+    expect(planning).toMatchObject({
+      allowSdkBuiltins: false,
+      bridgeKunBuiltinOverlaps: true,
+      graphPhase: 'planning'
+    })
+    expect(planning?.bridgeableTools.map((tool) => tool.name).sort()).toEqual([
+      'graph_define_plan',
+      'read'
+    ])
+    expect(planning?.contextInstructions?.join('\n')).toContain(
+      'Graph Mode: source Lead operating contract'
+    )
+    await expect(deps.executeKunTool('th', 'tn', 'write', {})).resolves.toMatchObject({
+      isError: true,
+      output: expect.stringContaining('active tool policy')
+    })
+
+    thread.turns[0]!.graphPlanningLifecycle = {
+      ...thread.turns[0]!.graphPlanningLifecycle!,
+      state: 'committed',
+      draftRevision: 2
+    }
+    const supervising = await deps.loadTurnContext('th', 'tn')
+    expect(supervising?.graphPhase).toBe('supervising')
+    expect(supervising?.bridgeableTools.map((tool) => tool.name).sort()).toEqual([
+      'graph_review_node',
+      'read'
+    ])
+  })
+
   test('applies a child capability boundary to SDK discovery and execution', async () => {
     const executionContexts: Array<{
       allowedToolNames?: readonly string[]
@@ -1093,6 +1218,54 @@ describe('createAgentSdkRuntime turn context', () => {
 
     expect(finishTurn).not.toHaveBeenCalled()
     expect(clearTurnActivation).toHaveBeenCalledWith('thread_1', 'turn_1')
+  })
+
+  test('parks prose-only SDK completion while a Graph node still awaits Lead review', async () => {
+    const finishTurn = vi.fn(async () => undefined)
+    const suspendGraphLeadTurn = vi.fn()
+      .mockResolvedValueOnce('supervision_pending')
+      .mockResolvedValueOnce('suspended')
+    const runtime = createAgentSdkRuntime({
+      registry: {} as never,
+      turns: { finishTurn, suspendGraphLeadTurn } as never,
+      sessionStore: {} as never,
+      threadStore: {} as never,
+      events: {} as never,
+      ids: { next: (prefix) => prefix },
+      prefix: { systemPrompt: '' },
+      providerConfigs: {},
+      agentSdkProviderIds: new Set(),
+      defaultApprovalPolicy: 'auto'
+    })
+    const runtimeDeps = (runtime as unknown as {
+      deps: {
+        finishTurn(
+          threadId: string,
+          turnId: string,
+          status: 'completed' | 'failed' | 'aborted',
+          error?: string
+        ): Promise<TurnRunOutcome>
+      }
+    }).deps
+
+    await expect(runtimeDeps.finishTurn(
+      'thread_1',
+      'turn_1',
+      'completed'
+    )).resolves.toBe('suspended')
+
+    expect(suspendGraphLeadTurn).toHaveBeenNthCalledWith(1, {
+      threadId: 'thread_1',
+      turnId: 'turn_1'
+    })
+    expect(suspendGraphLeadTurn).toHaveBeenNthCalledWith(2, {
+      threadId: 'thread_1',
+      turnId: 'turn_1',
+      force: true,
+      preserveDeliveryCursor: true,
+      allowPendingSupervision: true
+    })
+    expect(finishTurn).not.toHaveBeenCalled()
   })
 
   test('does not fall back to the process workspace when a thread or turn has disappeared', async () => {

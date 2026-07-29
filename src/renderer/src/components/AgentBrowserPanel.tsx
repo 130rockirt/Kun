@@ -183,11 +183,11 @@ export function AgentBrowserPanel({
   return (
     <aside
       data-browser-use-variant={variant}
-      className="flex h-full min-h-0 flex-col bg-ds-canvas"
+      className="ds-sidebar-surface flex h-full min-h-0 flex-col"
     >
       {!compact ? (
         <>
-          <div className="flex min-h-12 shrink-0 items-center gap-2 border-b border-ds-border-muted bg-ds-card px-3">
+          <div className="ds-sidebar-surface-chrome flex min-h-12 shrink-0 items-center gap-2 border-b border-ds-border-muted px-3">
             <div className="flex shrink-0 items-center gap-1 rounded-full bg-ds-surface-subtle p-0.5 dark:bg-white/[0.08]">
               <button
                 type="button"
@@ -239,7 +239,7 @@ export function AgentBrowserPanel({
             </div>
           </div>
 
-          <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-ds-border-muted bg-ds-surface-subtle/70 px-3 py-2">
+          <div className="ds-sidebar-surface-chrome flex shrink-0 flex-wrap items-center gap-1.5 border-b border-ds-border-muted px-3 py-2">
             <span className="rounded-full border border-ds-border-muted bg-ds-card px-2 py-1 text-[10px] font-semibold text-ds-muted">
               {state.mode === 'public' ? t('browserUsePublicMode') : t('browserUseLocalMode')}
             </span>
@@ -297,7 +297,7 @@ export function AgentBrowserPanel({
         </div>
       ) : null}
 
-      <div ref={hostRef} className="relative min-h-0 flex-1 overflow-hidden bg-white dark:bg-ds-canvas">
+      <div ref={hostRef} className="ds-sidebar-surface-body relative min-h-0 flex-1 overflow-hidden">
         {!state.sessionId ? (
           <div className="absolute inset-0 flex flex-col items-center justify-center px-8 text-center">
             {state.capabilityStatus === 'disabled'
@@ -317,7 +317,7 @@ export function AgentBrowserPanel({
         ) : null}
 
         {state.pendingOriginConsent ? (
-          <div className="absolute inset-0 z-10 flex items-center justify-center overflow-auto bg-ds-canvas p-5">
+          <div className="ds-sidebar-surface-body absolute inset-0 z-10 flex items-center justify-center overflow-auto p-5">
             <div className="w-full max-w-md rounded-2xl border border-ds-border-strong bg-ds-card p-4 shadow-xl">
               <div className="flex items-center gap-2 text-[13px] font-semibold text-ds-ink">
                 <ShieldAlert className="h-4 w-4 text-amber-500" />
@@ -342,7 +342,7 @@ export function AgentBrowserPanel({
         ) : null}
 
         {state.pendingActionConsent ? (
-          <div className="absolute inset-0 z-10 flex items-center justify-center overflow-auto bg-ds-canvas p-5">
+          <div className="ds-sidebar-surface-body absolute inset-0 z-10 flex items-center justify-center overflow-auto p-5">
             <div className="w-full max-w-lg rounded-2xl border border-ds-border-strong bg-ds-card p-4 shadow-xl">
               <div className="flex items-center gap-2 text-[13px] font-semibold text-ds-ink">
                 <ShieldAlert className="h-4 w-4 text-amber-500" />

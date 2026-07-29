@@ -103,8 +103,6 @@ type Props = {
   onExtensionCommand?: (commandId: string, context: JsonValue) => void | Promise<unknown>
 }
 
-type CompactionTimelineBlock = Extract<ChatBlock, { kind: 'compaction' }>
-
 const TURN_PAGE_SIZE = 18
 const TIMELINE_JUMP_RAIL_FALLBACK_LEFT_PX = 16
 const TIMELINE_JUMP_RAIL_STAGE_INSET_PX = 16
@@ -329,37 +327,6 @@ export function resultPreviewSourcesForTurn(turn: Turn): ExtensionResultPreviewS
     })
   }
   return sources
-}
-
-function compactionDividerLabel(
-  block: CompactionTimelineBlock,
-  t: (key: string, opts?: Record<string, unknown>) => string
-): string {
-  if (block.status === 'running') return t('compactionRunning')
-  if (block.status === 'error') return block.summary || t('compactionFailed')
-  return block.auto === true ? t('compactionAutoCompleted') : t('compactionManualCompleted')
-}
-
-function CompactionDivider({ block }: { block: CompactionTimelineBlock }): ReactElement {
-  const { t } = useTranslation('common')
-  const error = block.status === 'error'
-  return (
-    <div
-      role={block.status === 'running' ? 'status' : undefined}
-      aria-live={block.status === 'running' ? 'polite' : undefined}
-      className="flex w-full items-center gap-4 py-2"
-    >
-      <span className={`h-px min-w-8 flex-1 ${error ? 'bg-red-200/80 dark:bg-red-900/50' : 'bg-ds-border-muted/80'}`} />
-      <span
-        className={`shrink-0 text-[15px] font-semibold leading-6 ${
-          error ? 'text-red-600 dark:text-red-300' : 'text-ds-faint'
-        }`}
-      >
-        {compactionDividerLabel(block, t)}
-      </span>
-      <span className={`h-px min-w-8 flex-1 ${error ? 'bg-red-200/80 dark:bg-red-900/50' : 'bg-ds-border-muted/80'}`} />
-    </div>
-  )
 }
 
 /** Non-interactive runtime error rendered directly in the conversation flow. */
@@ -1040,14 +1007,7 @@ export function ConversationTurn({
     ),
     [turn.blocks, filePreviewWorkspaceRoot, isProcessing]
   )
-  const compactionBlocks = useMemo(
-    () => processBlocks.filter((block): block is CompactionTimelineBlock => block.kind === 'compaction'),
-    [processBlocks]
-  )
-  const workProcessBlocks = useMemo(
-    () => processBlocks.filter((block) => block.kind !== 'compaction'),
-    [processBlocks]
-  )
+  const workProcessBlocks = processBlocks
   const workSummary = useMemo(
     () => summarizeProcessWork(workProcessBlocks, t),
     [t, workProcessBlocks]
@@ -1229,13 +1189,6 @@ export function ConversationTurn({
           reviewChangesDisabled={reviewChangesDisabled}
         />
       ) : null}
-
-      {/* The compaction marker remains the final persisted entry in the turn.
-          While processing, the transient progress row renders after it so the
-          active animation always stays at the visual bottom. */}
-      {compactionBlocks.map((block) => (
-        <CompactionDivider key={block.id} block={block} />
-      ))}
 
       {showLiveProgress ? (
         <LiveTurnProgressRow tool={liveToolBlock} thinking={showLiveThinking} />

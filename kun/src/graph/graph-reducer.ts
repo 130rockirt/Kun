@@ -6,6 +6,7 @@ import {
   type GraphEventEnvelopeV1,
   type GraphNodeAttemptV1,
   type GraphNodeStatus,
+  type GraphPatchV1,
   type GraphRunStatus,
   type GraphRunV1
 } from '../contracts/graph.js'
@@ -110,7 +111,12 @@ export function applyGraphEvent(
       if (isTerminalRunStatus(event.payload.to)) next.finishedAt = envelope.timestamp
       break
     case 'plan_revised':
-      applyPlanRevision(next, event.payload.plan, event.payload.patch.baseRevision, event.payload.supersededNodeIds)
+      applyPlanRevision(
+        next,
+        event.payload.plan,
+        event.payload.patch,
+        event.payload.supersededNodeIds
+      )
       break
     case 'node_status_changed': {
       const node = requireNode(next, event.payload.nodeId)
@@ -321,9 +327,10 @@ function createRun(envelope: GraphEventEnvelopeV1): GraphRunV1 {
 function applyPlanRevision(
   run: GraphRunV1,
   plan: GraphRunV1['plans'][number],
-  baseRevision: number,
+  patch: GraphPatchV1,
   supersededNodeIds: readonly string[]
 ): void {
+  const baseRevision = patch.baseRevision
   if (baseRevision !== run.currentRevision) {
     throw new GraphReducerError(`stale graph revision ${baseRevision}; current is ${run.currentRevision}`)
   }
@@ -343,6 +350,13 @@ function applyPlanRevision(
   }
   for (const nodeId of supersededNodeIds) {
     const node = requireNode(run, nodeId)
+    const replacement = patch.operations.find((operation) =>
+      operation.op === 'replace_node' &&
+      operation.nodeId === nodeId &&
+      operation.replacement.id !== nodeId)
+    if (replacement?.op === 'replace_node') {
+      node.supersededByNodeId = replacement.replacement.id
+    }
     if (node.status !== 'superseded') {
       if (!NODE_TRANSITIONS[node.status].includes('superseded')) {
         throw new GraphReducerError(`node ${nodeId} cannot be superseded from ${node.status}`)

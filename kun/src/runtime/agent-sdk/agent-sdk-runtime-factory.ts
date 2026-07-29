@@ -90,6 +90,13 @@ import {
   type DelegatedSessionCoordinator,
   type DelegatedSessionPreparation
 } from '../delegated-session-binding.js'
+import {
+  delegatedGraphCompletionCheck,
+  delegatedGraphAllowedToolNames,
+  delegatedGraphTurnPolicy,
+  intersectDelegatedToolNames,
+  parkDelegatedGraphTurnAfterRecovery
+} from '../delegated-graph-turn-policy.js'
 
 const CLAUDE_KUN_TOOL_INSTRUCTION = [
   'Kun-managed capabilities are available through the mcp__kun__ tools.',
@@ -521,6 +528,7 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
       awaitUserInput?: ToolHostContext['awaitUserInput']
       awaitApproval?: ToolHostContext['awaitApproval']
       clientSurface?: ToolHostContext['clientSurface']
+      orchestration?: ToolHostContext['orchestration']
     }
   ): ToolHostContext => {
     const allowedToolNames = intersectAllowedToolNames(
@@ -548,6 +556,7 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
       ...(opts?.guiDesignArtifact ? { guiDesignArtifact: opts.guiDesignArtifact } : {}),
       ...(opts?.activeSkillIds ? { activeSkillIds: opts.activeSkillIds } : {}),
       ...(opts?.clientSurface ? { clientSurface: opts.clientSurface } : {}),
+      ...(opts?.orchestration ? { orchestration: opts.orchestration } : {}),
       ...(allowedToolNames ? { allowedToolNames } : {}),
       // Presence advertises `user_input`; the active client renders the gate.
       ...(opts?.awaitUserInput ? { awaitUserInput: opts.awaitUserInput } : {}),
@@ -681,23 +690,7 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
       const plan = dedicatedSvgTurn
         ? { planMode: false as const }
         : resolveTurnPlanContext(thread, turnId)
-      const ctx = toolContext(threadId, turnId, thread.workspace, {
-        additionalWorkspaces: thread.additionalWorkspaces,
-        ...plan,
-        ...(turn?.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
-        ...(turn?.guiDesignMode ? { guiDesignMode: true } : {}),
-        ...(turn?.guiDesignArtifact ? { guiDesignArtifact: turn.guiDesignArtifact } : {}),
-        ...(turn?.guiDesignArtifact?.kind === 'svg'
-          ? { allowedToolNames: SVG_ARTIFACT_ALLOWED_TOOL_NAMES }
-          : {}),
-        activeSkillIds,
-        clientSurface,
-        sandboxMode,
-        approvalPolicy,
-        approvalReviewer,
-        actingModelRoute,
-        ...(awaitUserInput ? { awaitUserInput } : {})
-      })
+      const graphPolicy = delegatedGraphTurnPolicy(turn)
       // An Agent SDK query pins its in-process MCP schemas at startup and
       // cannot add tools after `load_skill` returns. Pre-bridge schemas gated
       // by skills visible in this workspace; executeKunTool still re-resolves
@@ -710,28 +703,56 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
             deps.toolContextBoundary?.allowedSkillIds
           )
         : activeSkillIds
-      const bridgeListingContext = toolContext(threadId, turnId, thread.workspace, {
+      const listingOptions = {
         additionalWorkspaces: thread.additionalWorkspaces,
         ...plan,
         ...(turn?.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
         ...(turn?.guiDesignMode ? { guiDesignMode: true } : {}),
         ...(turn?.guiDesignArtifact ? { guiDesignArtifact: turn.guiDesignArtifact } : {}),
-        ...(turn?.guiDesignArtifact?.kind === 'svg'
-          ? { allowedToolNames: SVG_ARTIFACT_ALLOWED_TOOL_NAMES }
-          : {}),
         activeSkillIds: [...new Set([...activeSkillIds, ...availableSkillIds])],
         clientSurface,
         sandboxMode,
         approvalPolicy,
         approvalReviewer,
         actingModelRoute,
+        ...(turn.orchestration ? { orchestration: turn.orchestration } : {}),
         ...(awaitUserInput ? { awaitUserInput } : {})
+      }
+      const discoveryContext = toolContext(threadId, turnId, thread.workspace, {
+        ...listingOptions,
+        ...(!graphPolicy && turn.guiDesignArtifact?.kind === 'svg'
+          ? { allowedToolNames: SVG_ARTIFACT_ALLOWED_TOOL_NAMES }
+          : {})
       })
       if (deps.toolHost) {
         // Activate turn-scoped extension contributions before taking the
         // canonical registry snapshot used by the SDK MCP bridge.
-        await deps.toolHost.listTools(bridgeListingContext)
+        await deps.toolHost.listTools(discoveryContext)
       }
+      const graphAllowedToolNames = graphPolicy
+        ? delegatedGraphAllowedToolNames(
+            deps.registry.listTools(discoveryContext),
+            graphPolicy.phase
+          )
+        : undefined
+      const bridgeListingContext = toolContext(threadId, turnId, thread.workspace, {
+        ...listingOptions,
+        ...(intersectDelegatedToolNames(
+          !graphPolicy && turn.guiDesignArtifact?.kind === 'svg'
+            ? SVG_ARTIFACT_ALLOWED_TOOL_NAMES
+            : undefined,
+          graphAllowedToolNames
+        )
+          ? {
+              allowedToolNames: intersectDelegatedToolNames(
+                !graphPolicy && turn.guiDesignArtifact?.kind === 'svg'
+                  ? SVG_ARTIFACT_ALLOWED_TOOL_NAMES
+                  : undefined,
+                graphAllowedToolNames
+              )
+            }
+          : {})
+      })
       const bridgeableTools: BridgeableTool[] = deps.registry.listTools(bridgeListingContext).map((spec) => ({
         name: spec.name,
         description: spec.description,
@@ -739,7 +760,10 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
         providerId: spec.providerId,
         providerKind: spec.providerKind
       }))
-      const bridgedTools = selectBridgeableTools(bridgeableTools)
+      const bridgedTools = selectBridgeableTools(
+        bridgeableTools,
+        graphPolicy ? { overlap: new Set() } : undefined
+      )
 
       // This is the portable rebase handoff. Compatible consecutive turns use
       // the official SDK resume id and do not send this transcript again.
@@ -782,6 +806,7 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
         ...(thread.additionalWorkspaces?.length
           ? [`Additional workspace roots explicitly added by the user:\n${thread.additionalWorkspaces.map((path) => `- ${JSON.stringify(path)}`).join('\n')}`]
           : []),
+        ...(graphPolicy ? [graphPolicy.instruction] : []),
         ...(planMode ? [PLAN_MODE_INSTRUCTION] : []),
         ...(turn?.guiDesignArtifact?.kind === 'svg'
           ? [SVG_ARTIFACT_MODE_INSTRUCTION]
@@ -821,7 +846,7 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
               approvalReviewer,
               planMode,
               allowSdkBuiltins:
-                turn?.guiDesignArtifact?.kind === 'svg'
+                graphPolicy || turn?.guiDesignArtifact?.kind === 'svg'
                   ? false
                   : deps.allowSdkBuiltins ?? true,
               capabilities: agentSdkCapabilities(),
@@ -855,9 +880,15 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
         actingModelRoute,
         planMode,
         allowSdkBuiltins:
-          turn?.guiDesignArtifact?.kind === 'svg'
+          graphPolicy || turn?.guiDesignArtifact?.kind === 'svg'
             ? false
             : deps.allowSdkBuiltins ?? true,
+        ...(graphPolicy
+          ? {
+              bridgeKunBuiltinOverlaps: true,
+              graphPhase: graphPolicy.phase
+            }
+          : {}),
         ...(turn?.guiDesignArtifact?.kind === 'svg' ? { requireSvgCompletion: true } : {}),
         // Claude Code only accepts Anthropic models; coerce a thread's non-Claude
         // model (e.g. an old deepseek thread now routed to the subscription) to
@@ -910,22 +941,20 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
       const toolSignal = signal ?? new AbortController().signal
       const activeSkillIds = await resolveActiveSkillIds(thread, turn)
       const clientSurface = resolveTurnClientSurface(turn)
-      // Real per-call signal so an interactive user_input cancels on turn abort.
-      const ctx = toolContext(threadId, turnId, thread.workspace, {
+      const graphPolicy = delegatedGraphTurnPolicy(turn)
+      const executionOptions = {
         additionalWorkspaces: thread.additionalWorkspaces,
         ...(plan ?? {}),
         ...(turn?.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
         ...(turn?.guiDesignMode ? { guiDesignMode: true } : {}),
         ...(turn?.guiDesignArtifact ? { guiDesignArtifact: turn.guiDesignArtifact } : {}),
-        ...(turn?.guiDesignArtifact?.kind === 'svg'
-          ? { allowedToolNames: SVG_ARTIFACT_ALLOWED_TOOL_NAMES }
-          : {}),
         ...(activeSkillIds ? { activeSkillIds } : {}),
         clientSurface,
         ...(sandboxMode ? { sandboxMode } : {}),
         approvalPolicy,
         approvalReviewer,
         actingModelRoute,
+        ...(turn.orchestration ? { orchestration: turn.orchestration } : {}),
         signal: toolSignal,
         awaitApproval: makeAwaitApproval(
           approvalPolicy,
@@ -938,6 +967,37 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
         ...(turn.disableUserInput === true
           ? {}
           : { awaitUserInput: makeAwaitUserInput(threadId, turnId, toolSignal) })
+      }
+      const discoveryContext = toolContext(threadId, turnId, thread.workspace, {
+        ...executionOptions,
+        ...(!graphPolicy && turn.guiDesignArtifact?.kind === 'svg'
+          ? { allowedToolNames: SVG_ARTIFACT_ALLOWED_TOOL_NAMES }
+          : {})
+      })
+      const graphAllowedToolNames = graphPolicy
+        ? delegatedGraphAllowedToolNames(
+            deps.registry.listTools(discoveryContext),
+            graphPolicy.phase
+          )
+        : undefined
+      // Real per-call signal so an interactive user_input cancels on turn abort.
+      const ctx = toolContext(threadId, turnId, thread.workspace, {
+        ...executionOptions,
+        ...(intersectDelegatedToolNames(
+          !graphPolicy && turn.guiDesignArtifact?.kind === 'svg'
+            ? SVG_ARTIFACT_ALLOWED_TOOL_NAMES
+            : undefined,
+          graphAllowedToolNames
+        )
+          ? {
+              allowedToolNames: intersectDelegatedToolNames(
+                !graphPolicy && turn.guiDesignArtifact?.kind === 'svg'
+                  ? SVG_ARTIFACT_ALLOWED_TOOL_NAMES
+                  : undefined,
+                graphAllowedToolNames
+              )
+            }
+          : {})
       })
       try {
         // The SDK's MCP handler must cross the same LocalToolHost boundary as
@@ -1071,8 +1131,11 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
       try {
         let outcome: TurnRunOutcome = status
         if (status === 'completed') {
-          const suspension = await deps.turns.suspendGraphLeadTurn?.({ threadId, turnId })
-          if (suspension === 'suspended') {
+          const graphCompletion = await parkDelegatedGraphTurnAfterRecovery(
+            deps.turns,
+            { threadId, turnId }
+          )
+          if (graphCompletion === 'suspended') {
             outcome = 'suspended'
           } else {
             await deps.turns.finishTurn({ threadId, turnId, status, ...(error ? { error } : {}) })
@@ -1107,6 +1170,12 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
           deps.skillRuntime.clearTurnActivation(threadId, turnId)
         }
       }
+    },
+
+    async checkGraphCompletion(threadId, turnId) {
+      return delegatedGraphCompletionCheck(
+        await deps.turns.suspendGraphLeadTurn({ threadId, turnId })
+      )
     },
 
     async saveSessionId(threadId, turnId, sessionId): Promise<void> {

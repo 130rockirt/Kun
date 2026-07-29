@@ -35,22 +35,22 @@ const UNAVAILABLE_STATUS_ORDER: UnavailableProviderQuotaStatus[] = [
 const STATUS_PRESENTATION: Record<ProviderQuotaStatus, StatusPresentation> = {
   available: {
     labelKey: 'providerQuotaAvailable',
-    className: 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800/70 dark:bg-emerald-950/35 dark:text-emerald-300',
+    className: 'is-success',
     icon: Gauge
   },
   unsupported: {
     labelKey: 'providerQuotaUnsupported',
-    className: 'border-ds-border-muted bg-ds-surface-subtle text-ds-muted',
+    className: 'is-neutral',
     icon: CircleOff
   },
   missing_credentials: {
     labelKey: 'providerQuotaMissingCredentials',
-    className: 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-800/70 dark:bg-amber-950/35 dark:text-amber-300',
+    className: 'is-warning',
     icon: KeyRound
   },
   error: {
     labelKey: 'providerQuotaError',
-    className: 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-800/70 dark:bg-rose-950/35 dark:text-rose-300',
+    className: 'is-danger',
     icon: AlertCircle
   }
 }
@@ -60,7 +60,7 @@ export type ProviderQuotaPanelStatus = {
   refreshedAt?: string
 }
 
-type ProviderQuotaPanelProps = {
+export type ProviderQuotaPanelProps = {
   embedded?: boolean
   refreshKey?: unknown
   onStatusChange?: (status: ProviderQuotaPanelStatus) => void
@@ -118,35 +118,40 @@ export function ProviderQuotaPanel({
   return (
     <section
       aria-label={t('providerQuotaTitle')}
-      className="ds-no-drag flex h-full min-h-0 flex-col overflow-hidden bg-ds-sidebar"
+      className={`provider-quota-panel ds-no-drag ${embedded ? 'is-embedded' : ''}`}
+      data-provider-quota-panel
+      data-embedded={embedded ? 'true' : 'false'}
     >
-      {!embedded ? <header className="shrink-0 border-b border-ds-border-muted px-4 py-3.5">
-        <div className="flex items-start gap-3">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-ds-border-muted bg-ds-card text-accent shadow-sm">
-            <Gauge className="h-4.5 w-4.5" strokeWidth={1.8} />
+      {!embedded ? <header className="provider-quota-header">
+        <div className="provider-quota-heading">
+          <div className="provider-quota-heading-icon">
+            <Gauge aria-hidden="true" strokeWidth={1.8} />
           </div>
-          <div className="min-w-0 flex-1">
-            <h2 className="text-[14px] font-semibold text-ds-ink">{t('providerQuotaTitle')}</h2>
-            <p className="mt-0.5 text-[11px] leading-4 text-ds-muted">
-              {t('providerQuotaDescription')}
-            </p>
+          <div className="provider-quota-heading-copy">
+            <h2>{t('providerQuotaTitle')}</h2>
+            <p>{t('providerQuotaDescription')}</p>
           </div>
           <button
             type="button"
             onClick={() => void refresh(true)}
             disabled={loading || refreshing}
-            className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-ds-border-muted bg-ds-card px-2.5 text-[11px] font-semibold text-ds-muted transition hover:border-ds-border-strong hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-55"
+            className="provider-quota-refresh"
+            data-loading={loading || refreshing ? 'true' : 'false'}
             aria-label={refreshing ? t('providerQuotaRefreshing') : t('providerQuotaRefresh')}
+            title={refreshing ? t('providerQuotaRefreshing') : t('providerQuotaRefresh')}
           >
             <RefreshCw
-              className={`h-3.5 w-3.5 ${loading || refreshing ? 'animate-spin' : ''}`}
+              className={loading || refreshing ? 'animate-spin' : ''}
+              aria-hidden="true"
               strokeWidth={1.9}
             />
-            {t(refreshing ? 'providerQuotaRefreshing' : 'providerQuotaRefresh')}
+            <span className="provider-quota-refresh-label">
+              {t(refreshing ? 'providerQuotaRefreshing' : 'providerQuotaRefresh')}
+            </span>
           </button>
         </div>
         {result?.refreshedAt ? (
-          <p className="mt-2 text-[10.5px] text-ds-faint">
+          <p className="provider-quota-refreshed-at">
             {t('providerQuotaLastRefreshed', {
               time: formatQuotaDate(result.refreshedAt, i18n.resolvedLanguage)
             })}
@@ -156,31 +161,31 @@ export function ProviderQuotaPanel({
 
       <div
         data-provider-quota-scroller
-        className="h-0 min-h-0 flex-1 touch-pan-y overscroll-contain overflow-y-auto overflow-x-hidden px-3 py-3 [scrollbar-gutter:stable]"
+        className="provider-quota-scroller h-0 min-h-0 flex-1 touch-pan-y overscroll-contain overflow-y-auto overflow-x-hidden"
         onWheel={(event) => event.stopPropagation()}
       >
         {loading && !result ? (
-          <div role="status" className="flex h-full min-h-48 flex-col items-center justify-center gap-3 text-ds-muted">
-            <Loader2 className="h-5 w-5 animate-spin" strokeWidth={1.8} />
-            <p className="text-[12px]">{t('providerQuotaLoading')}</p>
+          <div role="status" className="provider-quota-state">
+            <Loader2 className="animate-spin" aria-hidden="true" strokeWidth={1.8} />
+            <p>{t('providerQuotaLoading')}</p>
           </div>
         ) : error && !result ? (
-          <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-[12px] leading-5 text-rose-700 dark:border-rose-800/70 dark:bg-rose-950/35 dark:text-rose-300">
-            <div className="flex items-start gap-2">
-              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" strokeWidth={1.8} />
+          <div role="alert" className="provider-quota-error">
+            <div>
+              <AlertCircle aria-hidden="true" strokeWidth={1.8} />
               <span>{error}</span>
             </div>
           </div>
         ) : result && result.entries.length === 0 ? (
-          <div className="flex h-full min-h-48 flex-col items-center justify-center gap-2 px-6 text-center">
-            <CircleOff className="h-6 w-6 text-ds-faint" strokeWidth={1.6} />
-            <p className="text-[13px] font-semibold text-ds-ink">{t('providerQuotaEmpty')}</p>
-            <p className="text-[11px] leading-4 text-ds-muted">{t('providerQuotaEmptyHint')}</p>
+          <div className="provider-quota-state provider-quota-empty">
+            <CircleOff aria-hidden="true" strokeWidth={1.6} />
+            <strong>{t('providerQuotaEmpty')}</strong>
+            <p>{t('providerQuotaEmptyHint')}</p>
           </div>
         ) : (
-          <div className="space-y-2.5">
+          <div className="provider-quota-list">
             {error ? (
-              <div role="alert" className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[11px] text-rose-700 dark:border-rose-800/70 dark:bg-rose-950/35 dark:text-rose-300">
+              <div role="alert" className="provider-quota-inline-error">
                 {error}
               </div>
             ) : null}
@@ -232,7 +237,7 @@ function UnavailableProviderGroup({
   return (
     <section
       data-provider-quota-status-group={status}
-      className="rounded-[14px] border border-ds-border-muted bg-ds-surface-subtle/45 p-1.5"
+      className="provider-quota-status-group"
     >
       <button
         type="button"
@@ -244,22 +249,21 @@ function UnavailableProviderGroup({
           { status: statusLabel, count: entries.length }
         )}
         onClick={() => setExpanded((value) => !value)}
-        className="group flex w-full items-center gap-2 rounded-xl px-2 py-2 text-left outline-none transition hover:bg-ds-hover focus-visible:ring-2 focus-visible:ring-accent/45"
+        className="provider-quota-status-group-toggle"
       >
         <ChevronRight
           aria-hidden="true"
-          className={`h-3.5 w-3.5 shrink-0 text-ds-faint transition-transform ${
-            expanded ? 'rotate-90 text-ds-muted' : ''
-          }`}
+          className="provider-quota-chevron"
+          data-expanded={expanded ? 'true' : 'false'}
           strokeWidth={1.9}
         />
-        <span className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg border ${presentation.className}`}>
-          <StatusIcon className="h-3 w-3" strokeWidth={2} />
+        <span className={`provider-quota-status-icon ${presentation.className}`}>
+          <StatusIcon aria-hidden="true" strokeWidth={2} />
         </span>
-        <span className="min-w-0 flex-1 truncate text-[11.5px] font-semibold text-ds-ink">
+        <span className="provider-quota-status-group-label">
           {statusLabel}
         </span>
-        <span className="inline-flex min-w-6 shrink-0 items-center justify-center rounded-full border border-ds-border-muted bg-ds-card px-1.5 py-0.5 text-[9.5px] font-semibold tabular-nums text-ds-muted">
+        <span className="provider-quota-status-count">
           {entries.length}
         </span>
       </button>
@@ -268,7 +272,7 @@ function UnavailableProviderGroup({
         <div
           id={detailsId}
           data-provider-quota-status-group-details={status}
-          className="space-y-2 px-0.5 pb-0.5 pt-1.5"
+          className="provider-quota-status-group-details"
         >
           {entries.map((entry) => (
             <ProviderQuotaCard
@@ -302,9 +306,9 @@ function ProviderQuotaCard({
   return (
     <article
       data-provider-quota-status={entry.status}
-      className="rounded-[14px] border border-ds-border-muted bg-ds-card p-1.5 shadow-sm"
+      className="provider-quota-card"
     >
-      <div className="flex items-stretch gap-1">
+      <div className="provider-quota-card-row">
         <button
           type="button"
           data-provider-quota-toggle={entry.providerId}
@@ -315,45 +319,49 @@ function ProviderQuotaCard({
             { provider: entry.providerName }
           )}
           onClick={() => setExpanded((value) => !value)}
-          className="group flex min-w-0 flex-1 items-center gap-2 rounded-xl px-2 py-2.5 text-left outline-none transition hover:bg-ds-hover focus-visible:ring-2 focus-visible:ring-accent/45"
+          className="provider-quota-card-toggle"
         >
           <ChevronRight
             aria-hidden="true"
-            className={`h-3.5 w-3.5 shrink-0 text-ds-faint transition-transform ${
-              expanded ? 'rotate-90 text-ds-muted' : ''
-            }`}
+            className="provider-quota-chevron"
+            data-expanded={expanded ? 'true' : 'false'}
             strokeWidth={1.9}
           />
-          <div className="min-w-0 flex-1">
-            <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+          <span className="provider-quota-monogram" aria-hidden="true">
+            {providerMonogram(entry.providerName)}
+          </span>
+          <div className="provider-quota-card-copy">
+            <div className="provider-quota-card-title">
               <h3
                 title={entry.providerName}
-                className="max-w-full truncate text-[12.5px] font-semibold text-ds-ink"
               >
                 {entry.providerName}
               </h3>
-              <span className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px] font-semibold ${presentation.className}`}>
-                <StatusIcon className="h-2.5 w-2.5" strokeWidth={2} />
-                {t(presentation.labelKey)}
+              <span
+                className={`provider-quota-status-pill ${presentation.className}`}
+                title={t(presentation.labelKey)}
+              >
+                <StatusIcon aria-hidden="true" strokeWidth={2} />
+                <span>{t(presentation.labelKey)}</span>
               </span>
             </div>
-            <p className="mt-0.5 truncate font-mono text-[9px] text-ds-faint">{entry.providerId}</p>
+            <div className="provider-quota-card-meta">
+              <p className="provider-quota-provider-id">{entry.providerId}</p>
+              <span aria-hidden="true">·</span>
+              <p title={compactSummary} className="provider-quota-compact-summary">
+                {compactSummary}
+              </p>
+            </div>
           </div>
-          <p
-            title={compactSummary}
-            className="ml-auto max-w-[42%] truncate text-right text-[10.5px] font-medium leading-4 text-ds-muted"
-          >
-            {compactSummary}
-          </p>
         </button>
         {entry.dashboardUrl ? (
           <button
             type="button"
             onClick={() => onOpenDashboard(entry.dashboardUrl!)}
-            className="my-1.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-ds-faint transition hover:bg-ds-hover hover:text-ds-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/45"
+            className="provider-quota-dashboard"
             aria-label={t('providerQuotaOpenDashboard', { provider: entry.providerName })}
           >
-            <ExternalLink className="h-3.5 w-3.5" strokeWidth={1.8} />
+            <ExternalLink aria-hidden="true" strokeWidth={1.8} />
           </button>
         ) : null}
       </div>
@@ -362,33 +370,33 @@ function ProviderQuotaCard({
         <div
           id={detailsId}
           data-provider-quota-details={entry.providerId}
-          className="mx-2 border-t border-ds-border-muted px-1 pb-2 pt-2.5"
+          className="provider-quota-details"
         >
           {entry.summary ? (
-            <p className="text-[11px] font-medium text-ds-muted">{entry.summary}</p>
+            <p className="provider-quota-summary">{entry.summary}</p>
           ) : null}
 
           {entry.status === 'available' ? (
             entry.metrics.length > 0 ? (
-              <div className={`${entry.summary ? 'mt-2' : ''} space-y-2`}>
+              <div className={`provider-quota-metrics ${entry.summary ? 'has-summary' : ''}`}>
                 {entry.metrics.map((metric) => (
                   <QuotaMetric key={metric.id} metric={metric} locale={locale} />
                 ))}
               </div>
             ) : (
-              <p className="text-[11px] text-ds-muted">{t('providerQuotaNoMetrics')}</p>
+              <p className="provider-quota-detail-message">{t('providerQuotaNoMetrics')}</p>
             )
           ) : (
-            <p className="text-[11px] leading-4 text-ds-muted">
+            <p className="provider-quota-detail-message">
               {entry.status === 'unsupported'
                 ? t('providerQuotaUnsupportedHint')
                 : entry.status === 'missing_credentials'
                   ? entry.message || t('providerQuotaMissingCredentialsHint')
                   : entry.message || t(presentation.labelKey)}
-            </p>
+              </p>
           )}
 
-          <div className="mt-2.5 flex flex-wrap items-center justify-between gap-1 border-t border-ds-border-muted pt-2 text-[9.5px] text-ds-faint">
+          <div className="provider-quota-source">
             <span>{entry.source || t('providerQuotaUnsupportedSource')}</span>
             {entry.updatedAt ? (
               <span>{t('providerQuotaUpdated', {
@@ -420,7 +428,7 @@ function providerQuotaCompactSummary(
       return `${formatQuotaValue(metric.remaining, metric.unit, locale)} ${t('providerQuotaRemaining')}`
     }
     if (metric.usedPercent !== undefined) {
-      return `${Math.round(metric.usedPercent)}% ${t('providerQuotaUsed')}`
+      return `${Math.round(clampPercent(metric.usedPercent))}% ${t('providerQuotaUsed')}`
     }
     if (metric.used !== undefined && metric.limit !== undefined) {
       return `${formatQuotaValue(metric.used, metric.unit, locale)} / ${
@@ -445,6 +453,16 @@ function QuotaMetric({
   locale?: string
 }): ReactElement {
   const { t } = useTranslation('common')
+  const usedPercent = metric.usedPercent === undefined
+    ? undefined
+    : clampPercent(metric.usedPercent)
+  const usageLevel = usedPercent === undefined
+    ? undefined
+    : usedPercent >= 90
+      ? 'danger'
+      : usedPercent >= 75
+        ? 'warning'
+        : 'neutral'
   const values = [
     metric.remaining === undefined
       ? null
@@ -458,36 +476,40 @@ function QuotaMetric({
   ].filter((item): item is { label: string; value: number } => item !== null)
 
   return (
-    <div className="rounded-xl border border-ds-border-muted bg-ds-surface-subtle/65 px-2.5 py-2">
-      <div className="flex items-start justify-between gap-2">
-        <p className="min-w-0 text-[10.5px] font-semibold leading-4 text-ds-ink">{metric.label}</p>
-        {metric.usedPercent !== undefined ? (
-          <span className="shrink-0 text-[10px] font-semibold tabular-nums text-ds-muted">
-            {Math.round(metric.usedPercent)}%
+    <div
+      className="provider-quota-metric"
+      data-provider-quota-metric={metric.id}
+    >
+      <div className="provider-quota-metric-heading">
+        <h4>{metric.label}</h4>
+        {usedPercent !== undefined ? (
+          <span>
+            {Math.round(usedPercent)}%
           </span>
         ) : null}
       </div>
-      {metric.usedPercent !== undefined ? (
+      {usedPercent !== undefined ? (
         <div
           role="progressbar"
           aria-label={metric.label}
           aria-valuemin={0}
           aria-valuemax={100}
-          aria-valuenow={Math.round(metric.usedPercent)}
-          className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-ds-border-muted"
+          aria-valuenow={Math.round(usedPercent)}
+          className="provider-quota-progress"
         >
-          <div
-            className="h-full rounded-full bg-accent transition-[width]"
-            style={{ width: `${Math.min(100, Math.max(0, metric.usedPercent))}%` }}
+          <span
+            className="provider-quota-progress-fill"
+            data-level={usageLevel}
+            style={{ width: `${usedPercent}%` }}
           />
         </div>
       ) : null}
       {values.length > 0 ? (
-        <dl className="mt-2 grid grid-cols-3 gap-2">
+        <dl className="provider-quota-values" data-count={values.length}>
           {values.map((item) => (
-            <div key={item.label} className="min-w-0">
-              <dt className="text-[9px] text-ds-faint">{item.label}</dt>
-              <dd className="mt-0.5 truncate text-[10.5px] font-semibold tabular-nums text-ds-ink">
+            <div key={item.label}>
+              <dt>{item.label}</dt>
+              <dd>
                 {formatQuotaValue(item.value, metric.unit, locale)}
               </dd>
             </div>
@@ -495,12 +517,32 @@ function QuotaMetric({
         </dl>
       ) : null}
       {metric.resetsAt ? (
-        <p className="mt-1.5 text-[9.5px] text-ds-faint">
+        <p className="provider-quota-reset">
           {t('providerQuotaResetsAt', { time: formatQuotaDate(metric.resetsAt, locale) })}
         </p>
       ) : null}
     </div>
   )
+}
+
+function providerMonogram(providerName: string): string {
+  const words = providerName.trim().split(/\s+/).filter(Boolean)
+  if (words.length === 0) return '?'
+  const firstWord = Array.from(words[0])
+  const secondWord = words[1] ? Array.from(words[1]) : []
+  const startsWithLatin = (characters: string[]): boolean => (
+    characters.length > 0 && /^[A-Za-z0-9]$/.test(characters[0])
+  )
+
+  if (startsWithLatin(firstWord) && startsWithLatin(secondWord)) {
+    return `${firstWord[0]}${secondWord[0]}`.toLocaleUpperCase()
+  }
+  return firstWord.slice(0, 2).join('').toLocaleUpperCase()
+}
+
+function clampPercent(value: number): number {
+  if (!Number.isFinite(value)) return 0
+  return Math.min(100, Math.max(0, value))
 }
 
 export function formatQuotaValue(value: number, unit: string, locale?: string): string {

@@ -42,9 +42,10 @@ describe('GraphRuntimeComposition creation authority', () => {
       turns: [
         createTurnRecord({
           id: 'turn_1',
-          threadId: thread.id,
-          prompt: 'Build a graph.',
-          orchestration: 'graph'
+	          threadId: thread.id,
+	          prompt: 'Build a graph.',
+	          orchestration: 'graph',
+	          status: 'running'
         }),
         createTurnRecord({
           id: 'turn_direct',
@@ -98,6 +99,27 @@ describe('GraphRuntimeComposition creation authority', () => {
       runId: 'run_valid'
     })).resolves.toMatchObject({ run: { status: 'ready' } })
 
+    let completing = await runtime.control.get('run_valid')
+    completing = (await runtime.store.append(completing.id, {
+      expectedSeq: completing.lastEventSeq,
+      graphRevision: completing.currentRevision,
+      commandId: 'start_run_valid',
+      idempotencyKey: 'start_run_valid',
+      event: {
+        type: 'run_status_changed',
+        payload: { from: 'ready', to: 'running' }
+      }
+    })).state
+    await runtime.store.append(completing.id, {
+      expectedSeq: completing.lastEventSeq,
+      graphRevision: completing.currentRevision,
+      commandId: 'complete_run_valid',
+      idempotencyKey: 'complete_run_valid',
+      event: {
+        type: 'run_status_changed',
+        payload: { from: 'running', to: 'completing' }
+      }
+    })
     await runtime.handleSourceTurnTerminal(thread.id, 'turn_1', 'aborted')
     await expect(runtime.control.get('run_valid')).resolves.toMatchObject({
       status: 'cancelled'
@@ -144,9 +166,9 @@ describe('GraphRuntimeComposition creation authority', () => {
       turns: [createTurnRecord({
         id: 'turn_legacy',
         threadId: thread.id,
-        prompt: 'Build a graph.',
-        orchestration: 'graph',
-        status: 'completed'
+	        prompt: 'Build a graph.',
+	        orchestration: 'graph',
+	        status: 'running'
       })]
     })
     const runtime = new GraphRuntimeComposition({
@@ -159,16 +181,24 @@ describe('GraphRuntimeComposition creation authority', () => {
       nowIso: () => '2026-07-26T00:00:00.000Z'
     })
     const identity = await runtime.registry.identify(workspace)
-    await runtime.control.create({
+	    await runtime.control.create({
       runId: 'run_legacy',
       threadId: thread.id,
       projectId: identity.projectId,
       sourceTurnId: 'turn_legacy',
       plan: testGraphPlan({ workspaceRoot: workspace }),
       commandId: 'command_create_legacy',
-      idempotencyKey: 'create_legacy'
-    })
-    const leadTurn = vi.fn(async () => undefined)
+	      idempotencyKey: 'create_legacy'
+	    })
+	    const createdThread = (await threadStore.get(thread.id))!
+	    await threadStore.upsert({
+	      ...createdThread,
+	      turns: createdThread.turns.map((turn) =>
+	        turn.id === 'turn_legacy'
+	          ? { ...turn, status: 'completed' as const }
+	          : turn)
+	    })
+	    const leadTurn = vi.fn(async () => undefined)
 
     await runtime.start({
       delegation: () => undefined,
@@ -292,6 +322,327 @@ describe('GraphRuntimeComposition creation authority', () => {
     })
     expect((await runtime.control.list({ threadId: thread.id }))
       .filter((run) => run.sourceTurnId === 'turn_planning')).toHaveLength(1)
+    await runtime.stop()
+  })
+
+  it('retries a Stop cancellation when planning advances the draft revision concurrently', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-graph-draft-cancel-cas-'))
+    const workspace = join(root, 'workspace')
+    await mkdir(workspace)
+    roots.push(root)
+    let id = 0
+    const threadStore = new InMemoryThreadStore()
+    const thread = createThreadRecord({
+      id: 'thread_draft_cancel_cas',
+      title: 'Draft cancel CAS',
+      workspace,
+      model: 'test-model'
+    })
+    await threadStore.upsert({
+      ...thread,
+      turns: [createTurnRecord({
+        id: 'turn_draft_cancel_cas',
+        threadId: thread.id,
+        prompt: 'Build a graph.',
+        orchestration: 'graph',
+        status: 'running'
+      })]
+    })
+    const runtime = new GraphRuntimeComposition({
+      dataDir: root,
+      config: () => testGraphConfig(),
+      artifactStore: new InMemoryArtifactStore(),
+      runtimeEvents: {
+        record: vi.fn(async () => {
+          throw new Error('planning projection unavailable')
+        })
+      },
+      threadStore,
+      ids: { next: (prefix) => `${prefix}_${++id}` },
+      nowIso: () => '2026-07-30T16:00:00.000Z'
+    })
+    const draft = await runtime.createPlanningDraft({
+      threadId: thread.id,
+      sourceTurnId: 'turn_draft_cancel_cas',
+      goal: 'Build a graph.',
+      workspace
+    })
+    expect(await runtime.drafts.list({ threadId: thread.id })).toHaveLength(1)
+    const update = runtime.drafts.update.bind(runtime.drafts)
+    let collided = false
+    vi.spyOn(runtime.drafts, 'update').mockImplementation(async (draftId, input) => {
+      if (!collided && input.status === 'cancelled') {
+        collided = true
+        const current = await runtime.drafts.require(draftId)
+        await update(draftId, {
+          expectedRevision: current.revision,
+          status: 'validating',
+          issues: []
+        })
+      }
+      return update(draftId, input)
+    })
+
+    await expect(runtime.transitionPlanningDraft({
+      threadId: thread.id,
+      sourceTurnId: 'turn_draft_cancel_cas',
+      action: 'cancel'
+    })).resolves.toMatchObject({
+      draftId: draft.draftId,
+      state: 'cancelled',
+      draftRevision: 3
+    })
+    expect(collided).toBe(true)
+    expect(await runtime.control.list({ threadId: thread.id })).toEqual([])
+  })
+
+  it('starts a committed ready run left by a crash between draft commit and start', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-graph-ready-recovery-'))
+    const workspace = join(root, 'workspace')
+    await mkdir(workspace)
+    roots.push(root)
+    let id = 0
+    const threadStore = new InMemoryThreadStore()
+    const thread = createThreadRecord({
+      id: 'thread_ready_recovery',
+      title: 'Ready Graph recovery',
+      workspace,
+      model: 'test-model'
+    })
+    await threadStore.upsert({
+      ...thread,
+      turns: [
+        createTurnRecord({
+          id: 'turn_ready_recovery',
+          threadId: thread.id,
+          prompt: 'Build a graph.',
+          orchestration: 'graph',
+          status: 'running'
+        }),
+        createTurnRecord({
+          id: 'turn_cancelled_recovery',
+          threadId: thread.id,
+          prompt: 'Cancel this graph.',
+          orchestration: 'graph',
+          status: 'running'
+        }),
+        createTurnRecord({
+          id: 'turn_missing_recovery',
+          threadId: thread.id,
+          prompt: 'Recover a missing graph.',
+          orchestration: 'graph',
+          status: 'running'
+        })
+      ]
+    })
+    const runtime = new GraphRuntimeComposition({
+      dataDir: root,
+      config: () => testGraphConfig(),
+      artifactStore: new InMemoryArtifactStore(),
+      runtimeEvents: { record: vi.fn(async (event) => event as never) },
+      threadStore,
+      ids: { next: (prefix) => `${prefix}_${++id}` },
+      nowIso: () => '2026-07-29T00:10:00.000Z'
+    })
+    const identity = await runtime.registry.identify(workspace)
+    const draft = await runtime.drafts.create({
+      id: 'draft_ready_recovery',
+      reservedRunId: 'run_ready_recovery',
+      threadId: thread.id,
+      sourceTurnId: 'turn_ready_recovery',
+      projectId: identity.projectId,
+      goal: 'Build a graph.'
+    })
+    const plan = testGraphPlan({ workspaceRoot: workspace, autoStart: true })
+    const ready = (await runtime.control.create({
+      runId: draft.reservedRunId,
+      threadId: thread.id,
+      projectId: identity.projectId,
+      sourceTurnId: 'turn_ready_recovery',
+      plan,
+      commandId: 'create_ready_recovery',
+      idempotencyKey: 'create_ready_recovery',
+      start: false
+    })).run
+    expect(ready.status).toBe('ready')
+    await runtime.drafts.update(draft.id, {
+      expectedRevision: draft.revision,
+      status: 'committed',
+      committedRunId: ready.id
+    })
+    const cancelledDraft = await runtime.drafts.create({
+      id: 'draft_cancelled_recovery',
+      reservedRunId: 'run_cancelled_recovery',
+      threadId: thread.id,
+      sourceTurnId: 'turn_cancelled_recovery',
+      projectId: identity.projectId,
+      goal: 'Cancel this graph.'
+    })
+    const cancelledReady = (await runtime.control.create({
+      runId: cancelledDraft.reservedRunId,
+      threadId: thread.id,
+      projectId: identity.projectId,
+      sourceTurnId: 'turn_cancelled_recovery',
+      plan,
+      commandId: 'create_cancelled_recovery',
+      idempotencyKey: 'create_cancelled_recovery',
+      start: false
+    })).run
+    await runtime.drafts.update(cancelledDraft.id, {
+      expectedRevision: cancelledDraft.revision,
+      status: 'cancelled'
+    })
+    const missingDraft = await runtime.drafts.create({
+      id: 'draft_missing_recovery',
+      reservedRunId: 'run_missing_recovery',
+      threadId: thread.id,
+      sourceTurnId: 'turn_missing_recovery',
+      projectId: identity.projectId,
+      goal: 'Recover a missing graph.'
+    })
+    await runtime.drafts.update(missingDraft.id, {
+      expectedRevision: missingDraft.revision,
+      status: 'committed',
+      committedRunId: missingDraft.reservedRunId
+    })
+
+    await runtime.start({
+      delegation: () => undefined,
+      leadTurn: async () => undefined,
+      authorityForRun: () => ({
+        workspaceRoot: workspace,
+        model: 'test-model',
+        providerId: 'default',
+        allowedModelProviderIds: ['default'],
+        allowedModels: ['test-model'],
+        allowedProviderIds: [],
+        reasoningEffort: 'off',
+        approvalPolicy: 'never',
+        sandboxMode: 'read-only',
+        allowedTools: [],
+        blockedTools: [],
+        allowedSkills: [],
+        blockedSkills: [],
+        allowedMcpServers: [],
+        blockedMcpServers: [],
+        readScopes: ['.'],
+        writeScopes: [],
+        networkAllowed: false
+      })
+    })
+
+    await expect(runtime.control.get(ready.id)).resolves.not.toMatchObject({
+      status: 'ready'
+    })
+    await expect(runtime.control.get(cancelledReady.id)).resolves.toMatchObject({
+      status: 'cancelled'
+    })
+    await expect(runtime.drafts.require(missingDraft.id)).resolves.toMatchObject({
+      status: 'host_error',
+      issues: [expect.objectContaining({ code: 'graph_committed_run_missing' })]
+    })
+    await runtime.stop()
+  })
+
+  it('wakes a parked Lead once when durable planning is committed but turn metadata is stale', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-graph-planning-lifecycle-recovery-'))
+    const workspace = join(root, 'workspace')
+    await mkdir(workspace)
+    roots.push(root)
+    let id = 0
+    const threadStore = new InMemoryThreadStore()
+    const thread = createThreadRecord({
+      id: 'thread_stale_planning',
+      title: 'Stale planning lifecycle recovery',
+      workspace,
+      model: 'test-model'
+    })
+    const sourceTurn = {
+      ...createTurnRecord({
+        id: 'turn_stale_planning',
+        threadId: thread.id,
+        prompt: 'Build a graph.',
+        orchestration: 'graph',
+        status: 'running'
+      }),
+      graphPlanningLifecycle: {
+        version: 1 as const,
+        draftId: 'draft_stale_planning',
+        reservedRunId: 'run_stale_planning',
+        state: 'planning' as const,
+        draftRevision: 1
+      }
+    }
+    await threadStore.upsert({ ...thread, turns: [sourceTurn] })
+    const config = testGraphConfig({
+      supervision: { coalesceWindowMs: 0 }
+    })
+    const runtime = new GraphRuntimeComposition({
+      dataDir: root,
+      config: () => config,
+      artifactStore: new InMemoryArtifactStore(),
+      runtimeEvents: { record: vi.fn(async (event) => event as never) },
+      threadStore,
+      ids: { next: (prefix) => `${prefix}_${++id}` },
+      nowIso: () => '2026-07-30T00:00:00.000Z'
+    })
+    const identity = await runtime.registry.identify(workspace)
+    const draft = await runtime.drafts.create({
+      id: 'draft_stale_planning',
+      reservedRunId: 'run_stale_planning',
+      threadId: thread.id,
+      sourceTurnId: sourceTurn.id,
+      projectId: identity.projectId,
+      goal: 'Build a graph.'
+    })
+    await runtime.control.create({
+      runId: draft.reservedRunId,
+      threadId: thread.id,
+      projectId: identity.projectId,
+      sourceTurnId: sourceTurn.id,
+      plan: testGraphPlan({ workspaceRoot: workspace }),
+      commandId: 'command_create_stale_planning',
+      idempotencyKey: 'create_stale_planning'
+    })
+    await runtime.drafts.update(draft.id, {
+      expectedRevision: draft.revision,
+      status: 'committed',
+      committedRunId: draft.reservedRunId
+    })
+    const leadTurn = vi.fn(async () => undefined)
+
+    await runtime.start({
+      delegation: () => undefined,
+      leadTurn,
+      authorityForRun: () => ({
+        workspaceRoot: workspace,
+        model: 'test-model',
+        providerId: 'default',
+        allowedModelProviderIds: ['default'],
+        allowedModels: ['test-model'],
+        allowedProviderIds: [],
+        reasoningEffort: 'off',
+        approvalPolicy: 'never',
+        sandboxMode: 'read-only',
+        allowedTools: [],
+        blockedTools: [],
+        allowedSkills: [],
+        blockedSkills: [],
+        allowedMcpServers: [],
+        blockedMcpServers: [],
+        readScopes: ['.'],
+        writeScopes: [],
+        networkAllowed: false
+      })
+    })
+
+    await vi.waitFor(() => {
+      expect(leadTurn).toHaveBeenCalledWith(expect.objectContaining({
+        run: expect.objectContaining({ id: 'run_stale_planning' }),
+        reasons: ['recovery'],
+        digest: expect.stringContaining('Recovered stale Graph planning lifecycle')
+      }))
+    })
     await runtime.stop()
   })
 })

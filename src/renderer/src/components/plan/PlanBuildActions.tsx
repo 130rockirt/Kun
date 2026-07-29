@@ -17,9 +17,8 @@ export function PlanBuildActions({
   onBuild
 }: Props): ReactElement {
   const { t } = useTranslation('common')
-  const graphDisabled = disabled || !graphEnabled
   const containerClass = variant === 'panel'
-    ? 'grid w-full grid-cols-2 gap-2'
+    ? `grid w-full ${graphEnabled ? 'grid-cols-2' : 'grid-cols-1'} gap-2`
     : 'ml-auto flex max-w-full flex-wrap items-center justify-end gap-2'
   const directClass = variant === 'panel'
     ? 'inline-flex h-9 w-full min-w-0 items-center justify-center gap-2 rounded-lg bg-accent px-3 text-[13px] font-semibold text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50'
@@ -27,7 +26,6 @@ export function PlanBuildActions({
   const graphClass = variant === 'panel'
     ? 'inline-flex h-9 w-full min-w-0 items-center justify-center gap-2 rounded-lg bg-indigo-600 px-3 text-[13px] font-semibold text-white transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-indigo-500 dark:hover:bg-indigo-400'
     : 'inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full bg-indigo-600 px-3 text-[13px] font-semibold text-white shadow-[0_10px_24px_rgba(79,70,229,0.2)] transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-indigo-500 dark:hover:bg-indigo-400'
-  const graphTitle = graphEnabled ? t('planBuildGraphHint') : t('graphModeDisabledHint')
 
   return (
     <div
@@ -47,20 +45,20 @@ export function PlanBuildActions({
         <Hammer className="h-3.5 w-3.5 shrink-0" strokeWidth={1.9} />
         <span className="truncate">{t('planBuildDirect')}</span>
       </button>
-      <button
-        type="button"
-        data-plan-build-orchestration="graph"
-        disabled={graphDisabled}
-        onClick={() => onBuild('graph')}
-        className={graphClass}
-        aria-label={graphEnabled
-          ? t('planBuildGraph')
-          : `${t('planBuildGraph')}. ${t('graphModeDisabledHint')}`}
-        title={graphTitle}
-      >
-        <Share2 className="h-3.5 w-3.5 shrink-0" strokeWidth={1.9} />
-        <span className="truncate">{t('planBuildGraph')}</span>
-      </button>
+      {graphEnabled ? (
+        <button
+          type="button"
+          data-plan-build-orchestration="graph"
+          disabled={disabled}
+          onClick={() => onBuild('graph')}
+          className={graphClass}
+          aria-label={t('planBuildGraph')}
+          title={t('planBuildGraphHint')}
+        >
+          <Share2 className="h-3.5 w-3.5 shrink-0" strokeWidth={1.9} />
+          <span className="truncate">{t('planBuildGraph')}</span>
+        </button>
+      ) : null}
     </div>
   )
 }

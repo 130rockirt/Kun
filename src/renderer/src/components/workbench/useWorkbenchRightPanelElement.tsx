@@ -22,7 +22,13 @@ type ComposerModelProps<T extends {
 
 type WorkbenchRightPanelElementOptions = Pick<
   RightPanelHostProps,
-  'visible' | 'width' | 'route' | 'rightPanelMode' | 'onBeginResize' | 'writeAssistantOpen'
+  | 'visible'
+  | 'width'
+  | 'route'
+  | 'rightPanelMode'
+  | 'graphEnabled'
+  | 'onBeginResize'
+  | 'writeAssistantOpen'
 > & {
   shared: RightPanelHostProps['design']['shared']
   planPanelProps: WorkbenchPlanPanelProps
@@ -109,6 +115,7 @@ export function useWorkbenchRightPanelElement({
   width,
   route,
   rightPanelMode,
+  graphEnabled,
   onBeginResize,
   writeAssistantOpen,
   shared,
@@ -139,6 +146,7 @@ export function useWorkbenchRightPanelElement({
       width={width}
       route={route}
       rightPanelMode={rightPanelMode}
+      graphEnabled={graphEnabled}
       onBeginResize={onBeginResize}
       design={{
         panelMode: designPanelMode,

@@ -1,5 +1,6 @@
 import type { Turn } from '../contracts/turns.js'
 import type { ToolResultTurnItem } from '../contracts/items.js'
+import { GraphPlanningDraftV1Schema } from '../contracts/graph-planning.js'
 import { makeErrorItem, makeToolCallItem } from '../domain/item.js'
 import type { IdGenerator } from '../ports/id-generator.js'
 import type { SessionStore } from '../ports/session-store.js'
@@ -209,6 +210,26 @@ export class RoundOutcomeCoordinator {
         item.kind === 'tool_result' &&
         item.toolName === GRAPH_DEFINE_PLAN_TOOL_NAME &&
         callIds.has(item.callId))
+      const latestDraft = results
+        .flatMap((result) => {
+          if (!result.output || typeof result.output !== 'object') return []
+          const parsed = GraphPlanningDraftV1Schema.safeParse(
+            (result.output as Record<string, unknown>).draft
+          )
+          return parsed.success ? [parsed.data] : []
+        })
+        .sort((left, right) => right.revision - left.revision)[0]
+      if (latestDraft) {
+        await this.deps.turns.updateTurnMetadata(input.threadId, input.turnId, {
+          graphPlanningLifecycle: {
+            version: 1,
+            draftId: latestDraft.id,
+            reservedRunId: latestDraft.reservedRunId,
+            state: latestDraft.status,
+            draftRevision: latestDraft.revision
+          }
+        })
+      }
       const paused = results.some((result) => {
         const output = result.output
         if (!output || typeof output !== 'object') return false

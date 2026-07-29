@@ -454,6 +454,7 @@ export async function createKunServeRuntime(
     runId: string
     lastEventSeq: number
     terminal: boolean
+    supervisionPending: boolean
   } | null> => {
     const runs = await graphRuntime.store.list({ threadId: input.threadId })
     const run = runs
@@ -463,12 +464,16 @@ export async function createKunServeRuntime(
       ? {
           runId: run.id,
           lastEventSeq: run.lastEventSeq,
-          terminal:
-            run.status === 'completed' ||
-            run.status === 'failed' ||
-            run.status === 'cancelled'
-        }
-      : null
+	          terminal:
+	            run.status === 'completed' ||
+	            run.status === 'failed' ||
+	            run.status === 'cancelled',
+	          supervisionPending:
+	            run.status === 'awaiting_supervision' ||
+	            Object.values(run.nodes).some((node) =>
+	              node.status === 'submitted' || node.status === 'reviewing')
+	        }
+	      : null
   }
   handleGraphThreadFork = (sourceThreadId, targetThreadId) =>
     graphRuntime.handleThreadFork(sourceThreadId, targetThreadId)
@@ -837,11 +842,14 @@ export async function createKunServeRuntime(
     onCompacted: (threadId) => delegatedSessions.invalidate(threadId),
     resolveGraphLeadRun,
     createGraphPlanningDraft: (input) => graphRuntime.createPlanningDraft(input),
-    transitionGraphPlanningDraft: (input) =>
-      graphRuntime.transitionPlanningDraft(input),
-    migrationMaintenance,
-    ids,
-    nowIso
+	    resolveGraphPlanningDraft: (input) => graphRuntime.resolvePlanningDraft(input),
+	    transitionGraphPlanningDraft: (input) =>
+	      graphRuntime.transitionPlanningDraft(input),
+	    cancelGraphSourceRuns: ({ threadId, sourceTurnId }) =>
+	      graphRuntime.handleSourceTurnTerminal(threadId, sourceTurnId, 'aborted'),
+	    migrationMaintenance,
+	    ids,
+	    nowIso
   })
   abortThreadExecution = (threadId) => turnService.abortThreadExecution(threadId)
   const backgroundShellRuntime = new BackgroundShellRuntime({
@@ -1537,12 +1545,11 @@ export async function createKunServeRuntime(
 	  }
 	  const runAgentTurn = (threadId: string, turnId: string): Promise<TurnRunOutcome> => {
 	    if (shuttingDown) {
-	      return turnService.interruptTurn({ threadId, turnId })
-	        .then(() => 'aborted' as const)
-	        .catch(() => 'aborted' as const)
+	      return turnService.suspendTurnForHostShutdown({ threadId, turnId })
+	        .then(() => 'suspended' as const)
 	    }
 	    return trackRuntimeRun(loop.runTurn(threadId, turnId).then(async (outcome) => {
-	      if (outcome !== 'suspended') {
+	      if (outcome !== 'suspended' && !shuttingDown) {
 	        await graphRuntime.handleSourceTurnTerminal(threadId, turnId, outcome)
 	      }
 	      return outcome
@@ -1555,6 +1562,7 @@ export async function createKunServeRuntime(
 	    threads: threadStore,
 	    resumeTurn: (input) => turnService.resumeGraphLeadTurn(input),
 	    isTurnExecutionActive: (turnId) => turnService.isTurnExecutionActive(turnId),
+	    isShuttingDown: () => shuttingDown,
 	    steerTurn: (input) => turnService.steerTurn(input),
 	    runAgentTurn,
 	    defaults: () => ({
@@ -1575,6 +1583,11 @@ export async function createKunServeRuntime(
 	    tools: () => registry.listTools(),
 	    skillIds: () => skillRuntime.diagnostics().skills.map((skill) => skill.id)
 	  }))
+	  await resumeInterruptedGraphPlanning({
+	    graphRuntime,
+	    turnService,
+	    runTurn: runAgentTurn
+	  })
 	  const extensionProfiles = new ExtensionAgentProfileRegistry()
 	  const extensionAgent = new ExtensionAgentService({
 	    threads: threadService,
@@ -2622,7 +2635,10 @@ export async function createKunServeRuntime(
       try {
         shuttingDown = true
         clearInterval(attachmentPruneTimer)
-        await graphRuntime.stop()
+	        await shutdownGraphExecutionForHost({
+	          graphRuntime,
+	          turnService
+	        })
         modelConnectionOAuth.close()
         eventStreamRegistry.closeAll()
         loop.shutdownGoalResume()
@@ -2631,7 +2647,6 @@ export async function createKunServeRuntime(
 	        extensionMediaJobs.dispose()
 	        extensionAudioAnalysisJobs.dispose()
 	        extensionMediaArchiveJobs.dispose()
-        await turnService.interruptActiveTurns()
         await waitForActiveRuns(activeRuntimeRuns)
 	        stopExtensionModelListener()
 	        extensionViewSessions.disposeAll()
@@ -2656,6 +2671,61 @@ export async function createKunServeRuntime(
       }
     }
   }
+}
+
+export async function shutdownGraphExecutionForHost(input: {
+  graphRuntime: Pick<GraphRuntimeComposition, 'quiesceExecution' | 'stop'>
+  turnService: Pick<TurnService, 'suspendActiveTurnsForShutdown'>
+}): Promise<void> {
+  // Scheduler shutdown owns the special non-consuming worker interruption
+  // marker. Park source turns only after every active attempt has recorded it.
+  await input.graphRuntime.quiesceExecution()
+  await input.turnService.suspendActiveTurnsForShutdown()
+  await input.graphRuntime.stop()
+}
+
+export async function resumeInterruptedGraphPlanning(input: {
+  graphRuntime: Pick<GraphRuntimeComposition, 'drafts'>
+  turnService: Pick<
+    TurnService,
+    'getTurn' | 'resumeGraphPlanningTurn'
+  >
+  runTurn: (threadId: string, turnId: string) => Promise<unknown> | void
+}): Promise<number> {
+  const drafts = await input.graphRuntime.drafts.list({
+    statuses: ['planning', 'validating', 'repairing']
+  })
+  let resumed = 0
+  for (const draft of drafts) {
+    const source = await input.turnService.getTurn(draft.threadId, draft.sourceTurnId)
+    if (
+      source?.status !== 'running' ||
+      source.orchestration !== 'graph'
+    ) continue
+    try {
+      const outcome = await input.turnService.resumeGraphPlanningTurn({
+        threadId: draft.threadId,
+        turnId: draft.sourceTurnId
+      })
+      if (outcome !== 'resumed') continue
+      resumed += 1
+      void Promise.resolve(input.runTurn(draft.threadId, draft.sourceTurnId))
+        .catch((error) => {
+          console.warn(
+            `[kun] restarted Graph planning turn ${draft.sourceTurnId} failed: ${
+              error instanceof Error ? error.message : String(error)
+            }`
+          )
+        })
+    } catch (error) {
+      console.warn(
+        `[kun] could not resume Graph planning draft ${draft.id}: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      )
+    }
+  }
+  return resumed
 }
 
 async function waitForActiveRuns(
@@ -2859,7 +2929,7 @@ function providerScopedModelCapabilities(
       provider?.modelCapabilities?.[model.trim().toLowerCase()]
     const providerFallback = modelCapabilitiesForProviderModel({
       providerId,
-      presetSource: providerId,
+      presetSource: provider?.presetSource ?? providerId,
       baseUrl: provider?.baseUrl,
       kind: provider?.kind,
       model
@@ -2877,13 +2947,20 @@ function providerScopedModelCapabilities(
       return {
         ...explicit,
         id: model,
-        ...(reasoning ? { reasoning } : {})
+        ...(reasoning ? { reasoning } : {}),
+        ...(explicit.serviceTiers ?? providerFallback.serviceTiers
+          ? { serviceTiers: [...(explicit.serviceTiers ?? providerFallback.serviceTiers ?? [])] }
+          : {})
       }
     }
     const base = fallback(model, providerId)
-    return providerFallback.reasoning
-      ? { ...base, reasoning: providerFallback.reasoning }
-      : base
+    return {
+      ...base,
+      ...(providerFallback.reasoning ? { reasoning: providerFallback.reasoning } : {}),
+      ...(providerFallback.serviceTiers
+        ? { serviceTiers: [...providerFallback.serviceTiers] }
+        : {})
+    }
   }
 }
 
@@ -3328,9 +3405,11 @@ function modelConnectionSeedsForOptions(
       expectedRevision: 0,
       id: activeConnectionId,
       name: activeConnectionId === 'default' ? 'Default provider' : activeConnectionId,
-      ...(activeConnectionId === 'default' ? {} : { presetSource: activeConnectionId }),
+      ...(activeProvider?.presetSource
+        ? { presetSource: activeProvider.presetSource }
+        : activeConnectionId === 'default' ? {} : { presetSource: activeConnectionId }),
       kind: activeKind,
-      authType: modelConnectionAuthType(activeKind, options.apiKey),
+      authType: activeProvider?.authType ?? modelConnectionAuthType(activeKind, options.apiKey),
       ...(activeKind === 'http'
         ? { baseUrl: options.baseUrl || 'https://api.deepseek.com' }
         : activeKind === 'gemini-code-assist' && options.baseUrl
@@ -3359,8 +3438,9 @@ function modelConnectionSeedsForOptions(
         expectedRevision: 0,
         id: providerId,
         name: providerId,
+        ...(provider.presetSource ? { presetSource: provider.presetSource } : {}),
         kind: provider.kind ?? 'http',
-        authType: modelConnectionAuthType(provider.kind ?? 'http', provider.apiKey),
+        authType: provider.authType ?? modelConnectionAuthType(provider.kind ?? 'http', provider.apiKey),
         ...((provider.kind ?? 'http') === 'http'
           ? { baseUrl: provider.baseUrl || options.baseUrl || 'https://api.deepseek.com' }
           : (provider.kind ?? 'http') === 'gemini-code-assist' && provider.baseUrl

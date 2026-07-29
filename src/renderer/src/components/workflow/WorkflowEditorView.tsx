@@ -87,7 +87,7 @@ export const WORKFLOW_EDITOR_HEADER_CLASS =
 export const WORKFLOW_EDITOR_HEADER_SIDEBAR_COLLAPSED_CLASS =
   'workflow-editor-header-sidebar-collapsed'
 export const WORKFLOW_EDITOR_SIDEBAR_CLASS =
-  'workflow-editor-sidebar ds-drag flex w-[184px] shrink-0 flex-col border-r border-ds-border bg-ds-card'
+  'workflow-editor-sidebar ds-sidebar-surface ds-drag flex w-[184px] shrink-0 flex-col border-r border-ds-border'
 export const WORKFLOW_EDITOR_BACK_BUTTON_CLASS =
   'workflow-editor-back-button ds-no-drag flex h-9 items-center gap-2 rounded-xl px-2 text-[13px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink'
 
@@ -769,7 +769,7 @@ function WorkflowEditorInner({
           </div>
 
           {!rightPanelCollapsed ? (
-            <aside className="workflow-editor-inspector flex w-[320px] shrink-0 flex-col overflow-hidden border-l border-ds-border bg-ds-card">
+            <aside className="workflow-editor-inspector ds-sidebar-surface flex w-[320px] shrink-0 flex-col overflow-hidden border-l border-ds-border">
               <div className="workflow-editor-inspector-tabs flex shrink-0 items-center gap-1 border-b border-ds-border px-2 pt-2">
                 {(['config', 'log'] as const).map((tab) => (
                   <button

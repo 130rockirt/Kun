@@ -362,7 +362,7 @@ html[data-theme='dark'] .ds-markdown .ds-code-block-html > pre span {
   --ds-code-sidebar-gutter-bg: #f3f6fb;
   --ds-code-sidebar-active-line-bg: rgba(59, 130, 216, 0.13);
   container-type: inline-size;
-  background: var(--ds-bg-canvas);
+  background: var(--ds-sidebar-surface-bg);
 }
 
 .ds-file-preview-reading-backdrop {
@@ -417,7 +417,7 @@ html[data-theme='dark'] .ds-code-sidebar {
   justify-content: space-between;
   gap: 0.75rem;
   border-bottom: 1px solid var(--ds-border-muted);
-  background: color-mix(in srgb, var(--ds-bg-canvas) 92%, var(--ds-surface-subtle));
+  background: var(--ds-sidebar-surface-chrome-bg);
   padding: 0 0.75rem;
 }
 
@@ -594,7 +594,7 @@ html[data-theme='dark'] .ds-code-sidebar {
   align-items: center;
   gap: 0.85rem;
   border-bottom: 1px solid var(--ds-border-muted);
-  background: var(--ds-bg-canvas);
+  background: var(--ds-sidebar-surface-bg);
   padding: 0 0.75rem;
   font-size: 12px;
 }
@@ -605,7 +605,7 @@ html[data-theme='dark'] .ds-code-sidebar {
 }
 
 .ds-file-preview-markdown {
-  background: var(--ds-bg-canvas);
+  background: var(--ds-sidebar-surface-bg);
 }
 
 .ds-file-preview-svg,

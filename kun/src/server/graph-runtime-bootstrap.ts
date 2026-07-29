@@ -31,6 +31,7 @@ export function createGraphRuntimeStartOptions(input: {
     request: Parameters<TurnService['resumeGraphLeadTurn']>[0]
   ) => ReturnType<TurnService['resumeGraphLeadTurn']>
   isTurnExecutionActive: (turnId: string) => boolean
+  isShuttingDown?: () => boolean
   steerTurn: (
     request: Parameters<TurnService['steerTurn']>[0]
   ) => ReturnType<TurnService['steerTurn']>
@@ -46,6 +47,7 @@ export function createGraphRuntimeStartOptions(input: {
     delegation: input.delegation,
     steerTurn: input.steerTurn,
     leadTurn: async ({ run, reasons, nodeIds, digest }) => {
+      if (input.isShuttingDown?.()) return
       const thread = await input.threads.get(run.threadId)
       if (!thread) return
       const prompt = graphLeadPrompt({
@@ -64,15 +66,53 @@ export function createGraphRuntimeStartOptions(input: {
         return
       }
       if (input.isTurnExecutionActive(sourceTurn.id)) {
+        if (input.isShuttingDown?.()) return
         await input.steerTurn({
           threadId: run.threadId,
           turnId: sourceTurn.id,
           text: prompt,
           messageSource: 'graph_runtime'
         })
+        // Acknowledge only after the episode prompt is durably accepted. If
+        // steering fails or the host exits first, restart redelivers it.
+        await input.resumeTurn({
+          threadId: run.threadId,
+          turnId: sourceTurn.id,
+          runId: run.id,
+          lastDeliveredSeq: run.lastEventSeq,
+          terminal:
+            run.status === 'completed' ||
+            run.status === 'failed' ||
+            run.status === 'cancelled'
+        })
         return
       }
+      if (input.isShuttingDown?.()) return
+      const previousDeliveredSeq =
+        sourceTurn.graphLeadLifecycle?.runId === run.id
+          ? sourceTurn.graphLeadLifecycle.lastDeliveredSeq
+          : 0
       const resumed = await input.resumeTurn({
+        threadId: run.threadId,
+        turnId: sourceTurn.id,
+        runId: run.id,
+        lastDeliveredSeq: previousDeliveredSeq,
+        terminal:
+          run.status === 'completed' ||
+          run.status === 'failed' ||
+          run.status === 'cancelled'
+      })
+      if (input.isShuttingDown?.()) {
+        await input.runAgentTurn(run.threadId, sourceTurn.id)
+        return
+      }
+      await input.steerTurn({
+        threadId: run.threadId,
+        turnId: sourceTurn.id,
+        text: prompt,
+        messageSource: 'graph_runtime'
+      })
+      await input.resumeTurn({
         threadId: run.threadId,
         turnId: sourceTurn.id,
         runId: run.id,
@@ -82,18 +122,16 @@ export function createGraphRuntimeStartOptions(input: {
           run.status === 'failed' ||
           run.status === 'cancelled'
       })
-      await input.steerTurn({
-        threadId: run.threadId,
-        turnId: sourceTurn.id,
-        text: prompt,
-        messageSource: 'graph_runtime'
-      })
       if (resumed === 'already_running') return
       let outcome = await input.runAgentTurn(run.threadId, sourceTurn.id)
       // A wake-up can reacquire the execution lease during the tiny interval
       // between a previous slice parking and its active-run promise settling.
       // Once that promise is gone, start the continuation that owns the lease.
-      while (outcome === 'suspended' && input.isTurnExecutionActive(sourceTurn.id)) {
+      while (
+        outcome === 'suspended' &&
+        !input.isShuttingDown?.() &&
+        input.isTurnExecutionActive(sourceTurn.id)
+      ) {
         outcome = await input.runAgentTurn(run.threadId, sourceTurn.id)
       }
     },

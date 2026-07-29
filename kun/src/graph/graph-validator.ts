@@ -152,22 +152,6 @@ export function validateGraphPlan(
 
   const validSchedulingEdges = schedulingEdges.filter((edge) =>
     nodes.has(edge.from) && nodes.has(edge.to))
-  const incoming = new Map(plan.nodes.map((node) => [node.id, 0]))
-  const outgoing = new Map(plan.nodes.map((node) => [node.id, [] as string[]]))
-  for (const edge of validSchedulingEdges) {
-    incoming.set(edge.to, (incoming.get(edge.to) ?? 0) + 1)
-    outgoing.get(edge.from)?.push(edge.to)
-  }
-  const entries = plan.nodes.filter((node) => (incoming.get(node.id) ?? 0) === 0).map((node) => node.id)
-  if (entries.length === 0) {
-    error('missing_entry_node', ['nodes'], 'graph must have at least one scheduling entry node')
-  }
-  const reachable = reachableFrom(entries, outgoing)
-  for (const [index, node] of plan.nodes.entries()) {
-    if (node.required && !reachable.has(node.id)) {
-      error('unreachable_required_node', ['nodes', index], `required node ${node.id} is unreachable`)
-    }
-  }
 
   const loopContinuationEdgeIds = new Set<string>()
   for (const [nodeIndex, node] of plan.nodes.entries()) {
@@ -232,6 +216,27 @@ export function validateGraphPlan(
 
   const residualEdges = validSchedulingEdges.filter((edge) =>
     !loopContinuationEdgeIds.has(edge.id))
+  // A declared continuation edge closes the bounded cycle, but it is not an
+  // initial admission dependency. Entry/reachability must use the same
+  // residual scheduling graph as cycle validation or a loop beginning at its
+  // continuation target can never have an entry node.
+  const incoming = new Map(plan.nodes.map((node) => [node.id, 0]))
+  const outgoing = new Map(plan.nodes.map((node) => [node.id, [] as string[]]))
+  for (const edge of residualEdges) {
+    incoming.set(edge.to, (incoming.get(edge.to) ?? 0) + 1)
+    outgoing.get(edge.from)?.push(edge.to)
+  }
+  const entries = plan.nodes.filter((node) =>
+    (incoming.get(node.id) ?? 0) === 0).map((node) => node.id)
+  if (entries.length === 0) {
+    error('missing_entry_node', ['nodes'], 'graph must have at least one scheduling entry node')
+  }
+  const reachable = reachableFrom(entries, outgoing)
+  for (const [index, node] of plan.nodes.entries()) {
+    if (node.required && !reachable.has(node.id)) {
+      error('unreachable_required_node', ['nodes', index], `required node ${node.id} is unreachable`)
+    }
+  }
   if (containsDirectedCycle(plan.nodes.map((node) => node.id), residualEdges)) {
     error(
       'unbounded_cycle',

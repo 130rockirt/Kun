@@ -151,7 +151,6 @@ describe('Graph Lead review tool', () => {
       expect.objectContaining({
         commandId: 'graph_command_2',
         idempotencyKey: 'graph-review:graph_review_1',
-        expectedSeq: 17,
         expectedRevision: 1
       }),
       'lead'
@@ -211,5 +210,71 @@ describe('Graph Lead review tool', () => {
       isError: true,
       output: { error: 'cannot pass invalid attempt attempt_latest' }
     })
+  })
+
+  it('bounds oversized Lead prose instead of rejecting and retrying the review', async () => {
+    const run = reviewableRun()
+    const recordReview = vi.fn(async (..._args: unknown[]) => run)
+    const reviewTool = reviewTools(run, recordReview)
+      .find((tool) => tool.name === 'graph_review_node')!
+    const result = await reviewTool.execute({
+      runId: run.id,
+      nodeId: 'research',
+      outcome: 'revise',
+      summary: '审'.repeat(4_311),
+      evidence: [
+        '证'.repeat(4_311),
+        ...Array.from({ length: 140 }, (_, index) => `evidence-${index}`)
+      ],
+      artifactRefs: [{
+        version: 1,
+        artifactId: 'fabricated_review_artifact',
+        contentHash: 'a'.repeat(64),
+        mimeType: 'text/plain',
+        byteLength: 1,
+        summary: 'Not published by the reviewed attempt.',
+        visibility: 'lead',
+        retention: 'run',
+        createdAt: '2026-07-29T01:00:00.000Z'
+      }],
+      repairInstructions: '修'.repeat(33_000)
+    }, context())
+
+    expect(result.isError).not.toBe(true)
+    expect(recordReview).toHaveBeenCalledOnce()
+    const review = recordReview.mock.calls[0]?.[1] as {
+      summary: string
+      evidence: string[]
+      artifactRefs: unknown[]
+      repairInstructions: string
+    }
+    expect(review.summary).toHaveLength(4_096)
+    expect(review.evidence).toHaveLength(128)
+    expect(review.evidence[0]).toHaveLength(4_096)
+    expect(review.artifactRefs).toEqual([])
+    expect(review.repairInstructions).toHaveLength(32_768)
+  })
+
+  it('rejects a later Graph turn in the same thread reviewing an older run', async () => {
+    const run = reviewableRun()
+    const recordReview = vi.fn(async () => run)
+    const reviewTool = reviewTools(run, recordReview)
+      .find((tool) => tool.name === 'graph_review_node')!
+
+    const result = await reviewTool.execute({
+      runId: run.id,
+      nodeId: 'research',
+      outcome: 'pass',
+      summary: 'A later turn must not inherit Lead authority.'
+    }, {
+      ...context(),
+      turnId: 'turn_2'
+    })
+
+    expect(result).toMatchObject({
+      isError: true,
+      output: { error: 'current Lead turn does not own this GraphRun' }
+    })
+    expect(recordReview).not.toHaveBeenCalled()
   })
 })

@@ -23,7 +23,11 @@ describe('application state migration', () => {
       locale: 'zh',
       theme: 'dark',
       gitBranchPrefix: 'migrated/',
-      notifications: { turnComplete: false },
+      notifications: {
+        turnComplete: false,
+        mainAgentTurnComplete: false,
+        subagentTurnComplete: true
+      },
       workspaceRoot: 'C:\\Users\\Alice\\Project',
       conversationWorkspaceRoot: 'C:\\Users\\Alice\\Chats',
       provider: { providers: [] },
@@ -33,7 +37,11 @@ describe('application state migration', () => {
     })
 
     expect(migrated).toMatchObject({ locale: 'zh', theme: 'dark', gitBranchPrefix: 'migrated/' })
-    expect(migrated.notifications.turnComplete).toBe(false)
+    expect(migrated.notifications).toEqual({
+      turnComplete: false,
+      mainAgentTurnComplete: false,
+      subagentTurnComplete: true
+    })
     expect(migrated.workspaceRoot).toBe(current.workspaceRoot)
     expect(migrated.conversationWorkspaceRoot).toBe(current.conversationWorkspaceRoot)
     expect(migrated.provider).toEqual(current.provider)

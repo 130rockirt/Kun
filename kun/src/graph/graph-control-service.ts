@@ -7,7 +7,6 @@ import {
   type GraphCleanupRecordV1,
   type GraphCommandResultV1,
   type GraphPatchV1,
-  type GraphPlanV1,
   type GraphReviewResultV1,
   type GraphRunStatus,
   type GraphRunV1,
@@ -28,9 +27,15 @@ import {
   validateGraphPlan
 } from './graph-validator.js'
 import {
+  currentIterationAttemptCount,
+  dependencyDecision,
+  effectiveNodeMaxAttempts,
   effectiveReviewKinds,
   isTerminalRunStatus
 } from './graph-scheduler-policy.js'
+import { applyPatchToPlan } from './graph-patch-service.js'
+
+export { applyPatchToPlan } from './graph-patch-service.js'
 
 export type GraphCommandContext = {
   commandId: string
@@ -84,7 +89,7 @@ export class GraphControlService {
       commandId: input.commandId,
       idempotencyKey: input.idempotencyKey
     })
-    if (input.start || input.plan.autoStart) {
+    if (input.start ?? input.plan.autoStart) {
       run = await this.start(run.id, {
         commandId: `${input.commandId}_start`,
         idempotencyKey: `${input.idempotencyKey}:start`,
@@ -262,10 +267,33 @@ export class GraphControlService {
   ): Promise<GraphRunV1> {
     const run = await this.get(runId)
     this.assertCommandPreconditions(run, command)
+    if (
+      isTerminalRunStatus(run.status) ||
+      run.status === 'completing' ||
+      run.status === 'pausing'
+    ) {
+      throw new GraphRunConflictError(`cannot retry GraphRun ${runId} from ${run.status}`)
+    }
     const node = run.nodes[nodeId]
     if (!node) throw new GraphRunNotFoundError(`${runId}/${nodeId}`)
-    if (!['failed', 'repair_required', 'cancelled', 'skipped', 'blocked'].includes(node.status)) {
+    if (!['failed', 'repair_required', 'cancelled', 'skipped'].includes(node.status)) {
       throw new GraphRunConflictError(`cannot retry node ${nodeId} from ${node.status}`)
+    }
+    const maximumAttempts = effectiveNodeMaxAttempts(run, node, this.options.config())
+    const attemptsUsed = currentIterationAttemptCount(node)
+    if (attemptsUsed >= maximumAttempts) {
+      throw new GraphRunConflictError(
+        `cannot retry exhausted node ${nodeId}; used ${attemptsUsed} of ` +
+        `${maximumAttempts} attempts, use semantic supersession instead`
+      )
+    }
+    const incoming = run.plans.at(-1)!.edges.filter((edge) =>
+      edge.to === nodeId && edge.kind !== 'message')
+    const dependencyState = dependencyDecision(run, incoming)
+    if (dependencyState !== 'ready') {
+      throw new GraphRunConflictError(
+        `cannot retry node ${nodeId} while dependencies are ${dependencyState}`
+      )
     }
     return (await this.options.store.append(run.id, {
       expectedSeq: run.lastEventSeq,
@@ -282,7 +310,8 @@ export class GraphControlService {
     runId: string,
     reviewInput: GraphReviewResultV1,
     command: GraphCommandContext,
-    reviewerAuthority: 'human' | 'lead' | 'system' = 'human'
+    reviewerAuthority: 'human' | 'lead' | 'system' = 'human',
+    conflictRetries = 0
   ): Promise<GraphRunV1> {
     const run = await this.get(runId)
     this.assertCommandPreconditions(run, command)
@@ -341,18 +370,44 @@ export class GraphControlService {
       entry.attemptId === review.attemptId &&
       entry.reviewerKind === review.reviewerKind)
     if (existing) {
-      if (existing.reviewId === review.reviewId && isDeepStrictEqual(existing, review)) return run
+      if (existing.reviewId === review.reviewId && isDeepStrictEqual(existing, review)) {
+        await this.options.resumeActive?.(run)
+        return this.get(runId)
+      }
       throw new GraphRunConflictError(
         `${review.reviewerKind} review already exists for attempt ${attempt.id}`
       )
     }
-    return (await this.options.store.append(run.id, {
-      expectedSeq: run.lastEventSeq,
-      graphRevision: run.currentRevision,
-      commandId: command.commandId,
-      idempotencyKey: command.idempotencyKey,
-      event: { type: 'review_recorded', payload: { review } }
-    })).state
+    let reviewed: GraphRunV1
+    try {
+      reviewed = (await this.options.store.append(run.id, {
+        expectedSeq: run.lastEventSeq,
+        graphRevision: run.currentRevision,
+        commandId: command.commandId,
+        idempotencyKey: command.idempotencyKey,
+        event: { type: 'review_recorded', payload: { review } }
+      })).state
+    } catch (error) {
+      if (
+        error instanceof GraphRunConflictError &&
+        command.expectedSeq === undefined &&
+        conflictRetries < 4
+      ) {
+        return this.recordReview(
+          runId,
+          review,
+          command,
+          reviewerAuthority,
+          conflictRetries + 1
+        )
+      }
+      throw error
+    }
+    // A Lead review is a scheduler input, not merely an audit record. Wake and
+    // await reconciliation so the same model round observes the reviewed
+    // projection instead of incorrectly parking for still-pending supervision.
+    await this.options.resumeActive?.(reviewed)
+    return this.get(runId)
   }
   async applyPatch(
     runId: string,
@@ -373,10 +428,15 @@ export class GraphControlService {
         `stale GraphPatch revision ${patch.baseRevision}; current is ${run.currentRevision}`
       )
     }
+    if (run.budget.revisions >= run.budget.limits.maxRevisions) {
+      throw new GraphRunConflictError(
+        `Graph revision budget exhausted at ${run.budget.revisions}`
+      )
+    }
     const { plan, supersededNodeIds } = applyPatchToPlan(run, patch, this.nowIso())
     const validation = validateGraphPlan(plan, this.options.config())
     if (!validation.plan) throw new GraphPlanValidationError(validation.result)
-    return (await this.options.store.append(run.id, {
+    const revised = (await this.options.store.append(run.id, {
       expectedSeq: run.lastEventSeq,
       graphRevision: plan.revision,
       commandId: command.commandId,
@@ -386,6 +446,8 @@ export class GraphControlService {
         payload: { patch, plan: validation.plan, supersededNodeIds }
       }
     })).state
+    await this.options.resumeActive?.(revised)
+    return this.get(runId)
   }
   async cleanup(runId: string, command: GraphCommandContext): Promise<GraphRunV1> {
     let run = await this.get(runId)
@@ -546,154 +608,6 @@ export class GraphControlService {
     if (!this.options.config().enabled) {
       throw new GraphRunConflictError(
         'Graph Mode is disabled; existing durable runs remain inspectable and cancellable'
-      )
-    }
-  }
-}
-
-export function applyPatchToPlan(
-  run: GraphRunV1,
-  patch: GraphPatchV1,
-  createdAt: string
-): { plan: GraphPlanV1; supersededNodeIds: string[] } {
-  const current = run.plans.at(-1)
-  if (!current) throw new GraphRunConflictError('GraphRun has no current plan')
-  const next = structuredClone(current)
-  const supersededNodeIds: string[] = []
-  for (const operation of patch.operations) {
-    switch (operation.op) {
-      case 'add_node':
-        if (next.nodes.some((node) => node.id === operation.node.id)) {
-          throw new GraphRunConflictError(`duplicate patched node ${operation.node.id}`)
-        }
-        next.nodes.push(operation.node)
-        break
-      case 'replace_node': {
-        const index = next.nodes.findIndex((node) => node.id === operation.nodeId)
-        if (index < 0) throw new GraphRunNotFoundError(`${run.id}/${operation.nodeId}`)
-        const projection = run.nodes[operation.nodeId]
-        if (projection?.status === 'accepted') {
-          if (!operation.supersedesAcceptedWork || operation.replacement.id === operation.nodeId) {
-            throw new GraphRunConflictError(
-              `accepted node ${operation.nodeId} requires a distinct superseding node`
-            )
-          }
-          if (next.nodes.some((node) => node.id === operation.replacement.id)) {
-            throw new GraphRunConflictError(`duplicate superseding node ${operation.replacement.id}`)
-          }
-          next.nodes.push(operation.replacement)
-          supersededNodeIds.push(operation.nodeId)
-        } else {
-          assertNodeNotActive(projection, 'replace')
-          if (operation.replacement.id !== operation.nodeId) {
-            throw new GraphRunConflictError(
-              `in-place replacement for ${operation.nodeId} must preserve its node id`
-            )
-          }
-          next.nodes[index] = operation.replacement
-        }
-        break
-      }
-      case 'rebind_node': {
-        const node = next.nodes.find((entry) => entry.id === operation.nodeId)
-        if (!node) throw new GraphRunNotFoundError(`${run.id}/${operation.nodeId}`)
-        const projection = run.nodes[operation.nodeId]
-        if (projection && !['pending', 'blocked', 'ready', 'failed', 'repair_required'].includes(projection.status)) {
-          throw new GraphRunConflictError(`cannot rebind node ${operation.nodeId} from ${projection.status}`)
-        }
-        node.assignment = operation.assignment
-        break
-      }
-      case 'add_edge':
-        if (next.edges.some((edge) => edge.id === operation.edge.id)) {
-          throw new GraphRunConflictError(`duplicate patched edge ${operation.edge.id}`)
-        }
-        assertNodeNotActive(run.nodes[operation.edge.from], 'add an edge from')
-        assertNodeNotActive(run.nodes[operation.edge.to], 'add an edge to')
-        next.edges.push(operation.edge)
-        break
-      case 'remove_edge': {
-        const edge = next.edges.find((entry) => entry.id === operation.edgeId)
-        if (!edge) {
-          throw new GraphRunNotFoundError(`${run.id}/${operation.edgeId}`)
-        }
-        assertNodeNotActive(run.nodes[edge.from], 'remove an edge from')
-        assertNodeNotActive(run.nodes[edge.to], 'remove an edge to')
-        next.edges = next.edges.filter((edge) => edge.id !== operation.edgeId)
-        break
-      }
-      case 'update_budget':
-        assertBudgetNotBelowUsage(run, operation.budget)
-        next.budget = operation.budget
-        break
-      case 'update_review': {
-        const node = next.nodes.find((entry) => entry.id === operation.nodeId)
-        if (!node) throw new GraphRunNotFoundError(`${run.id}/${operation.nodeId}`)
-        const projection = run.nodes[operation.nodeId]
-        assertNodeNotActive(projection, 'change review policy for')
-        if (projection?.status === 'accepted' || projection?.status === 'superseded') {
-          throw new GraphRunConflictError(
-            `cannot change review policy for ${projection.status} node ${operation.nodeId}`
-          )
-        }
-        node.completion.review = operation.review
-        break
-      }
-    }
-  }
-  next.revision = current.revision + 1
-  next.createdAt = createdAt
-  return { plan: next, supersededNodeIds }
-}
-
-const ACTIVE_PATCH_NODE_STATUSES = new Set([
-  'queued',
-  'running',
-  'submitted',
-  'reviewing'
-])
-
-function assertNodeNotActive(
-  projection: GraphRunV1['nodes'][string] | undefined,
-  action: string
-): void {
-  if (projection && ACTIVE_PATCH_NODE_STATUSES.has(projection.status)) {
-    throw new GraphRunConflictError(
-      `cannot ${action} active node ${projection.node.id} from ${projection.status}`
-    )
-  }
-}
-
-function assertBudgetNotBelowUsage(
-  run: GraphRunV1,
-  budget: GraphPlanV1['budget']
-): void {
-  const activeNodes = Object.values(run.nodes).filter((node) =>
-    node.status === 'queued' || node.status === 'running').length
-  const maximumAttempts = Math.max(
-    0,
-    ...Object.values(run.nodes).map((node) => node.attempts.length)
-  )
-  const activeNodeWallTime = Math.max(0, ...Object.values(run.nodes)
-    .flatMap((node) => node.attempts)
-    .filter((attempt) => ['queued', 'running', 'waiting'].includes(attempt.status))
-    .map((attempt) => attempt.assignment.maxWallTimeMs))
-  const minimums: Array<[keyof GraphPlanV1['budget'], number]> = [
-    ['maxNodes', run.plans.at(-1)!.nodes.length],
-    ['maxEdges', run.plans.at(-1)!.edges.length],
-    ['maxConcurrentNodes', activeNodes],
-    ['maxAttemptsPerNode', maximumAttempts],
-    ['maxRevisions', run.budget.revisions + 1],
-    ['maxLoopIterations', run.budget.loopIterations],
-    ['maxWallTimeMs', run.budget.elapsedMs],
-    ['maxNodeWallTimeMs', activeNodeWallTime],
-    ['maxMessages', run.budget.messages],
-    ['maxArtifactBytes', run.budget.artifactBytes]
-  ]
-  for (const [field, minimum] of minimums) {
-    if (budget[field] < minimum) {
-      throw new GraphRunConflictError(
-        `cannot reduce ${field} below already consumed value ${minimum}`
       )
     }
   }

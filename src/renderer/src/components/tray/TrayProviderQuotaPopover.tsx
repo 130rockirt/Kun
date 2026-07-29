@@ -17,7 +17,8 @@ import {
   useEffect,
   useMemo,
   useState,
-  type ReactElement
+  type ReactElement,
+  type WheelEvent
 } from 'react'
 import { useTranslation } from 'react-i18next'
 import type {
@@ -48,6 +49,23 @@ type TrayProviderQuotaPopoverProps = {
   api?: KunTrayProviderQuotaApi
 }
 
+function handleProviderSwitcherWheel(event: WheelEvent<HTMLElement>): void {
+  const switcher = event.currentTarget
+  if (switcher.scrollWidth <= switcher.clientWidth) return
+
+  // Horizontal trackpad gestures already scroll this native overflow area.
+  // Map only a conventional vertical mouse wheel so React's passive wheel
+  // listener never needs preventDefault().
+  if (Math.abs(event.deltaX) > Math.abs(event.deltaY) || event.deltaY === 0) return
+
+  const deltaScale = event.deltaMode === 1
+    ? 24
+    : event.deltaMode === 2
+      ? switcher.clientWidth
+      : 1
+  switcher.scrollLeft += event.deltaY * deltaScale
+}
+
 export function TrayProviderQuotaPopover({
   api = window.kunTrayQuota
 }: TrayProviderQuotaPopoverProps): ReactElement {
@@ -57,6 +75,7 @@ export function TrayProviderQuotaPopover({
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState('')
+  const [contextReady, setContextReady] = useState(false)
   const copy = supplementalCopy(i18n.resolvedLanguage)
 
   const syncContext = useCallback(async (): Promise<void> => {
@@ -93,7 +112,11 @@ export function TrayProviderQuotaPopover({
 
   useEffect(() => {
     let active = true
-    void syncContext().catch(() => undefined)
+    void syncContext()
+      .catch(() => undefined)
+      .finally(() => {
+        if (active) setContextReady(true)
+      })
     void refresh()
     const unsubscribe = api.onRefresh(() => {
       if (!active) return
@@ -119,8 +142,15 @@ export function TrayProviderQuotaPopover({
   )
 
   return (
-    <main className="tray-quota-popover">
-      <section className="tray-quota-switcher" aria-label={copy.providers}>
+    <main
+      className="tray-quota-popover"
+      data-context-ready={contextReady ? 'true' : 'false'}
+    >
+      <section
+        className="tray-quota-switcher"
+        aria-label={copy.providers}
+        onWheel={handleProviderSwitcherWheel}
+      >
         <div className="tray-quota-tabs" role="tablist">
           <ProviderTab
             active={selection === 'overview'}

@@ -354,4 +354,18 @@ describe('FloatingComposerGraphProgress', () => {
     expect(renderer!.toJSON()).toBeNull()
     act(() => renderer!.unmount())
   })
+
+  it('occupies no composer space and does not refresh while Graph is disabled', async () => {
+    let renderer: ReactTestRenderer
+    await act(async () => {
+      renderer = create(createElement(FloatingComposerGraphProgress, {
+        threadId: 'thread_1',
+        enabled: false
+      }))
+    })
+
+    expect(renderer!.toJSON()).toBeNull()
+    expect(useGraphStore.getState().refreshThread).not.toHaveBeenCalled()
+    act(() => renderer!.unmount())
+  })
 })

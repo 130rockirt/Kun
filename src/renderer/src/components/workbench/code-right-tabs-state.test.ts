@@ -3,6 +3,7 @@ import { BUILTIN_RIGHT_PANEL_IDS } from '../../extensions/contribution-ids'
 import {
   activateCodeRightTab,
   closeCodeRightTab,
+  codeRightTabsForGraphVisibility,
   collapseCodeRightTabs,
   emptyCodeRightTabsState,
   expandCodeRightTabs,
@@ -122,5 +123,16 @@ describe('code right tab state', () => {
       BUILTIN_RIGHT_PANEL_IDS.subagents
     ])
     expect(retained.activeId).toBe(BUILTIN_RIGHT_PANEL_IDS.subagents)
+  })
+
+  it('hides a saved Graph tab while Graph is disabled', () => {
+    let state = openCodeRightTab(emptyCodeRightTabsState(), BUILTIN_RIGHT_PANEL_IDS.files)
+    state = openCodeRightTab(state, BUILTIN_RIGHT_PANEL_IDS.graph)
+
+    expect(codeRightTabsForGraphVisibility(state, false)).toMatchObject({
+      tabs: [BUILTIN_RIGHT_PANEL_IDS.files],
+      activeId: BUILTIN_RIGHT_PANEL_IDS.files
+    })
+    expect(codeRightTabsForGraphVisibility(state, true)).toBe(state)
   })
 })

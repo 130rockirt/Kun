@@ -8,21 +8,23 @@ import type { ChildRunRecord } from '../delegation/delegation-runtime.js'
 import { buildGraphWorkerContext } from './graph-worker-context.js'
 import type { GraphPathLease } from './graph-write-coordinator.js'
 import {
+  currentIterationAttemptCount,
+  effectiveRunAttemptCount,
+  effectiveNodeMaxAttempts,
   errorMessage,
   findAttempt,
+  GRAPH_HOST_SHUTDOWN_ATTEMPT_FAILURE,
   isTerminalAttemptStatus,
   isTerminalRunStatus,
-  parseWorkerResult,
-  totalAttemptLimit,
-  validateWorkerResult
+  totalAttemptLimit
 } from './graph-scheduler-policy.js'
 import type {
   GraphSchedulerOptions,
   GraphSupervisionPort
 } from './graph-scheduler-types.js'
-import { canonicalWorkerArtifactRefs } from './graph-artifact-policy.js'
 import { graphWorkerSecuritySnapshot } from './graph-worker-security.js'
 import { resolveGraphAttemptAssignment } from './graph-attempt-routing.js'
+import { finalizeGraphWorkerResult } from './graph-worker-result-finalizer.js'
 
 type ActiveAttempt = {
   runId: string
@@ -71,10 +73,14 @@ export abstract class GraphAttemptScheduler {
     return attempts.length
   }
 
-  resumeRun(runId: string): void {
+  protected activateRun(runId: string): void {
     this.fencedRuns.delete(runId)
     this.cancellingRuns.delete(runId)
-    void this.tick().catch((error) => {
+  }
+
+  async resumeRun(runId: string): Promise<void> {
+    this.activateRun(runId)
+    await this.tick().catch((error) => {
       console.warn(`[kun] Graph scheduler wake failed: ${errorMessage(error)}`)
     })
   }
@@ -116,7 +122,18 @@ export abstract class GraphAttemptScheduler {
       const node = run.nodes[nodeId]
       if (!node || node.status !== 'ready') return null
       run = await this.deliverSteering(run, nodeId)
-      if (run.budget.attempts >= totalAttemptLimit(run)) {
+      const currentNode = run.nodes[nodeId]
+      const maxAttempts = effectiveNodeMaxAttempts(run, currentNode, this.options.config())
+      if (currentIterationAttemptCount(currentNode) >= maxAttempts) {
+        await this.transitionNode(
+          run,
+          nodeId,
+          'failed',
+          `node attempt limit exhausted before admission (${maxAttempts})`
+        )
+        return null
+      }
+      if (effectiveRunAttemptCount(run) >= totalAttemptLimit(run)) {
         run = await this.failForBudget(run, 'attempt budget exhausted')
         return null
       }
@@ -334,16 +351,27 @@ export abstract class GraphAttemptScheduler {
         },
         signal
       })
+      if (
+        signal.aborted &&
+        signal.reason instanceof Error &&
+        signal.reason.message === GRAPH_HOST_SHUTDOWN_ATTEMPT_FAILURE
+      ) {
+        throw signal.reason
+      }
       await this.finishChild(initialRun.id, nodeId, attempt.id, child, lease)
     } catch (error) {
       const timedOut = signal.aborted && signal.reason instanceof Error &&
         signal.reason.message === 'Graph node wall-time budget exhausted'
+      const interruptedFailure =
+        signal.aborted && !timedOut && signal.reason instanceof Error
+          ? signal.reason
+          : error
       await this.failAttempt(
         initialRun.id,
         nodeId,
         attempt.id,
         lease,
-        timedOut ? signal.reason : error,
+        timedOut ? signal.reason : interruptedFailure,
         signal.aborted && !timedOut
       )
     } finally {
@@ -369,6 +397,7 @@ export abstract class GraphAttemptScheduler {
       )
       return
     }
+    let submittedSummary: string | undefined
     await this.withRunQueue(runId, async () => {
       let run = await this.requireRun(runId)
       const projection = run.nodes[nodeId]
@@ -397,38 +426,16 @@ export abstract class GraphAttemptScheduler {
       if (run.nodes[nodeId].status === 'queued') {
         run = await this.transitionNode(run, nodeId, 'running', 'child completed before running callback')
       }
-      let result = attempt.result ?? parseWorkerResult(child)
-      result = {
-        ...result,
-        artifactRefs: canonicalWorkerArtifactRefs(
-          run,
-          nodeId,
-          attemptId,
-          result.artifactRefs
-        )
-      }
-      const observedChangedFiles = await this.options.writes.captureChangedFiles(attemptId)
-      if (observedChangedFiles) {
-        result = {
-          ...result,
-          changedFiles: observedChangedFiles
-        }
-      }
-      const checkNames = projection.node.completion.review.deterministicChecks
-      const verifiedChecks = this.options.verifyChecks
-        ? await this.options.verifyChecks({ run, node: projection, attempt, checkNames })
-        : checkNames.map((name) => ({
-            name,
-            status: 'not_run' as const,
-            summary: 'No host verifier was configured.',
-            artifactRefs: [],
-            command: ['not-configured'],
-            exitCode: null,
-            workspaceRevision: 'unknown',
-            outputSummary: 'No host verifier was configured.'
-          }))
-      result = { ...result, verifiedChecks }
-      const validation = validateWorkerResult(projection, result)
+      const finalized = await finalizeGraphWorkerResult({
+        run,
+        node: projection,
+        attempt,
+        child,
+        writes: this.options.writes,
+        verifyChecks: this.options.verifyChecks,
+        existingResult: attempt.result
+      })
+      const { result, validation } = finalized
       run = (await this.options.store.append(run.id, {
         expectedSeq: run.lastEventSeq,
         graphRevision: run.currentRevision,
@@ -467,9 +474,15 @@ export abstract class GraphAttemptScheduler {
         artifactBytes: run.budget.artifactBytes
       }, 'worker attempt completed')
       run = await this.handleAttemptSteering(run, nodeId, attemptId)
-      await this.requestSupervision(run.id, 'submitted', [nodeId], result.summary)
+      submittedSummary = result.summary
       return run
     })
+    // Do not invoke supervision while holding the scheduler's run queue.
+    // Test/embedded supervisors may synchronously record a Lead review and
+    // wake reconciliation; keeping the queue here would deadlock that wake.
+    if (submittedSummary !== undefined) {
+      await this.requestSupervision(runId, 'submitted', [nodeId], submittedSummary)
+    }
     const latest = await this.requireRun(runId)
     if (isTerminalRunStatus(latest.status)) {
       await this.releaseWrite(attemptId, 'cancelled')
@@ -539,9 +552,15 @@ export abstract class GraphAttemptScheduler {
   }
 
   protected async integrateWrite(attemptId: string): Promise<'applied' | 'conflict'> {
-    const lease = this.leases.get(attemptId)
+    const lease = this.leases.get(attemptId) ??
+      (await this.options.writes.list()).leases.find((entry) => entry.attemptId === attemptId)
     if (lease && !await this.options.writes.isActive(lease.leaseId)) return 'conflict'
-    const worktree = await this.options.writes.captureWorktree(attemptId).catch(() => null)
+    let worktree
+    try {
+      worktree = await this.options.writes.captureWorktree(attemptId)
+    } catch {
+      return 'conflict'
+    }
     if (worktree) {
       const integrated = await this.options.writes.integrate(attemptId)
       if (integrated.outcome !== 'applied') return 'conflict'
@@ -615,12 +634,10 @@ export abstract class GraphAttemptScheduler {
   protected async maybeRetry(runInput: GraphRunV1, nodeId: string): Promise<GraphRunV1> {
     let run = runInput
     const node = run.nodes[nodeId]
-    const maxAttempts = Math.min(
-      node.node.maxAttempts ?? run.budget.limits.maxAttemptsPerNode,
-      this.options.config().scheduler.maxAttemptsPerNode
-    )
-    if (node.attempts.length >= maxAttempts) return run
-    const delay = Math.min(30_000, 500 * 2 ** Math.max(0, node.attempts.length - 1))
+    const maxAttempts = effectiveNodeMaxAttempts(run, node, this.options.config())
+    const iterationAttempts = currentIterationAttemptCount(node)
+    if (iterationAttempts >= maxAttempts) return run
+    const delay = Math.min(30_000, 500 * 2 ** Math.max(0, iterationAttempts - 1))
     this.retryNotBefore.set(`${run.id}:${nodeId}`, Date.now() + delay)
     if (node.status === 'failed' || node.status === 'repair_required') {
       run = await this.transitionNode(

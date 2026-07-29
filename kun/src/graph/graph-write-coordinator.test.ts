@@ -222,6 +222,14 @@ describe('FileGraphWriteCoordinator', () => {
     if (!claim.acquired) throw new Error('expected worktree claim')
     await mkdir(join(claim.workspaceRoot, 'other'), { recursive: true })
     await writeFile(join(claim.workspaceRoot, 'other', 'escape.txt'), 'blocked\n')
+    await expect(coordinator.captureChangedFiles('attempt_scoped')).resolves.toEqual({
+      status: 'observed',
+      changedFiles: ['other/escape.txt']
+    })
+    expect((await coordinator.list()).worktrees[0]).toMatchObject({
+      state: 'conflict',
+      lastError: expect.stringContaining('outside its frozen write scope')
+    })
     await expect(coordinator.integrate('attempt_scoped')).resolves.toMatchObject({
       outcome: 'needs_human',
       reason: expect.stringContaining('outside its frozen write scope')
@@ -276,10 +284,38 @@ describe('FileGraphWriteCoordinator', () => {
     await writeFile(join(repository, 'src', 'a.txt'), 'worker change\n')
     await writeFile(join(repository, 'src', 'new.txt'), 'worker new file\n')
 
-    await expect(coordinator.captureChangedFiles('attempt_direct')).resolves.toEqual([
-      'src/a.txt',
-      'src/new.txt'
-    ])
+    await expect(coordinator.captureChangedFiles('attempt_direct')).resolves.toEqual({
+      status: 'observed',
+      changedFiles: ['src/a.txt', 'src/new.txt']
+    })
+  })
+
+  it('persists an unavailable direct-workspace baseline instead of trusting worker claims', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-graph-writes-baseline-'))
+    roots.push(root)
+    const workspace = join(root, 'not-a-repository')
+    await mkdir(workspace)
+    const config = testGraphConfig({
+      writeIsolation: { mode: 'serialize', allowWorktrees: false }
+    })
+    const coordinator = new FileGraphWriteCoordinator({
+      rootDir: join(root, 'state'),
+      config: () => config
+    })
+    const claim = await coordinator.acquire({
+      runId: 'run_baseline',
+      nodeId: 'node_baseline',
+      attemptId: 'attempt_baseline',
+      workspaceRoot: workspace,
+      scopes: ['src']
+    })
+    if (!claim.acquired) throw new Error('expected direct workspace claim')
+
+    expect(claim.lease.baselineError).toBeTruthy()
+    await expect(coordinator.captureChangedFiles('attempt_baseline')).resolves.toMatchObject({
+      status: 'unavailable',
+      error: expect.stringContaining('not a git repository')
+    })
   })
 })
 

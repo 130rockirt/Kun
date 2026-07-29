@@ -73,6 +73,7 @@ export type WorkbenchChatStageProps = {
   onBeginTerminalResize: PointerEventHandler<HTMLDivElement>
   onToggleTerminal: () => void
   onToggleRightWorkspace: () => void
+  onOpenRequirementDraft?: () => void
   extensionTopBarActions?: readonly RegisteredContribution<'actions.topBar'>[]
   extensionComposerActions?: readonly RegisteredContribution<'actions.composer'>[]
   extensionMessageActions?: readonly RegisteredContribution<'actions.message'>[]
@@ -127,6 +128,7 @@ export function WorkbenchChatStage({
   onBeginTerminalResize,
   onToggleTerminal,
   onToggleRightWorkspace,
+  onOpenRequirementDraft,
   extensionTopBarActions = [],
   extensionComposerActions = [],
   extensionMessageActions = [],
@@ -181,7 +183,11 @@ export function WorkbenchChatStage({
                 title={leftSidebarCollapsed ? t('sidebarExpand') : t('sidebarCollapse')}
                 ariaLabel={leftSidebarCollapsed ? t('sidebarExpand') : t('sidebarCollapse')}
               />
-              <SessionHeader compact className="min-w-0 flex-1" />
+              <SessionHeader
+                compact
+                className="min-w-0 flex-1"
+                onOpenRequirementDraft={onOpenRequirementDraft}
+              />
             </div>
             <div className="chat-topbar-actions flex min-w-0 flex-wrap items-center justify-end gap-2 self-center">
               {extensionTopBarActions.length && onExtensionCommand ? (

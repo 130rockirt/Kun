@@ -114,6 +114,89 @@ describe('AntigravityCliRuntime', () => {
     }))
   })
 
+  it('refuses Graph mode explicitly without launching the unsupported CLI', async () => {
+    const threadStore = new InMemoryThreadStore()
+    const sessionStore = new InMemorySessionStore()
+    const turn = TurnSchema.parse({
+      id: 'turn-graph',
+      threadId: 'thread-graph',
+      status: 'running',
+      prompt: 'build a Graph plan',
+      model: 'gemini-3.6-flash',
+      orchestration: 'graph',
+      graphPlanningLifecycle: {
+        version: 1,
+        draftId: 'draft-graph',
+        reservedRunId: 'run-graph',
+        state: 'planning',
+        draftRevision: 1
+      },
+      createdAt: '2026-07-30T00:00:00.000Z'
+    })
+    await threadStore.upsert({
+      ...createThreadRecord({
+        id: turn.threadId,
+        title: 'Unsupported Graph provider',
+        workspace: '/tmp',
+        model: 'gemini-3.6-flash',
+        providerId: 'gemini-subscription',
+        status: 'running'
+      }),
+      turns: [turn]
+    })
+    await sessionStore.appendItem(
+      turn.threadId,
+      makeUserItem({
+        id: 'item-user-graph',
+        threadId: turn.threadId,
+        turnId: turn.id,
+        text: turn.prompt
+      })
+    )
+    const applyItem = vi.fn(async () => undefined)
+    const suspendGraphLeadTurn = vi.fn(async () => 'suspended' as const)
+    const finishTurn = vi.fn(async () => undefined)
+    const spawnFn = vi.fn()
+    const runtime = new AntigravityCliRuntime({
+      providerConfigs: {},
+      providerIds: new Set(['gemini-subscription']),
+      defaultIsAntigravity: false,
+      threadStore,
+      sessionStore,
+      turns: {
+        applyItem,
+        updateTurnMetadata: vi.fn(async () => undefined),
+        suspendGraphLeadTurn,
+        finishTurn
+      } as unknown as TurnService,
+      events: { record: vi.fn(async () => undefined) } as unknown as RuntimeEventRecorder,
+      ids: { next: () => 'item-assistant-graph' },
+      spawnFn: spawnFn as unknown as typeof spawn
+    })
+
+    await expect(runtime.runTurn(
+      turn.threadId,
+      turn.id,
+      new AbortController().signal,
+      'gemini-subscription'
+    )).resolves.toBe('suspended')
+
+    expect(spawnFn).not.toHaveBeenCalled()
+    expect(finishTurn).not.toHaveBeenCalled()
+    expect(suspendGraphLeadTurn).toHaveBeenCalledWith({
+      threadId: turn.threadId,
+      turnId: turn.id
+    })
+    expect(applyItem).toHaveBeenCalledWith(
+      turn.threadId,
+      expect.objectContaining({
+        kind: 'assistant_text',
+        status: 'completed',
+        text: expect.stringContaining('Graph mode is unavailable')
+      })
+    )
+  })
+
   it('keeps read-only turns in plan+sandbox mode', () => {
     const args = buildAntigravityArgs({
       prompt: 'inspect only',

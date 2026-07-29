@@ -63,6 +63,7 @@ export const shellOpenExternalUrlSchema = trimmedString(MAX_URL_LENGTH).refine(
 export const notificationPayloadSchema = z
   .object({
     threadId: optionalTrimmedString(MAX_ID_LENGTH),
+    source: z.enum(['main-agent', 'subagent']),
     title: trimmedString(MAX_NOTIFICATION_TITLE_LENGTH),
     body: trimmedString(MAX_NOTIFICATION_BODY_LENGTH)
   })

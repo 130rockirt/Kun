@@ -6,8 +6,10 @@ import {
   mergeComposerPickList,
   persistComposerMode,
   persistComposerModel,
+  persistComposerFastMode,
   persistComposerReasoningEffort,
   rememberThreadComposerMode,
+  readStoredComposerFastMode,
   readStoredComposerModel,
   readStoredComposerReasoningEffort
 } from './chat-store-helpers'
@@ -85,6 +87,7 @@ function buildHarness(fetchModelsResult: FetchModelsResult): {
     i18n: { t: (key: string) => key, changeLanguage: vi.fn(async () => undefined) } as unknown as typeof i18next,
     persistComposerModel,
     persistComposerMode,
+    persistComposerFastMode,
     persistComposerReasoningEffort,
     rememberThreadComposerMode,
     readStoredComposerModel,
@@ -282,6 +285,22 @@ describe('chat-store app actions composer model loading', () => {
 
     actions.setComposerModel('model-a', 'provider-a')
     expect(state.composerReasoningEffort).toBe('off')
+  })
+
+  it('persists the Fast-mode composer preference', () => {
+    const { actions, state } = buildHarness({
+      ok: true,
+      modelIds: [],
+      modelGroups: []
+    })
+
+    actions.setComposerFastMode(true)
+    expect(state.composerFastMode).toBe(true)
+    expect(readStoredComposerFastMode()).toBe(true)
+
+    actions.setComposerFastMode(false)
+    expect(state.composerFastMode).toBe(false)
+    expect(readStoredComposerFastMode()).toBe(false)
   })
 
   it('keeps active-thread plan mode changes out of the global composer default', () => {

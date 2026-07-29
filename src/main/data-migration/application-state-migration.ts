@@ -24,6 +24,7 @@ export function applyPortableSettingsMigration(
   const value = asRecord(portable)
   const write = asRecord(value.write)
   const design = asRecord(value.design)
+  const notifications = asRecord(value.notifications)
   return normalizeAppSettings({
     ...current,
     ...(isLocale(value.locale) ? { locale: value.locale } : {}),
@@ -39,8 +40,14 @@ export function applyPortableSettingsMigration(
     ...(typeof value.cursorSpotlightColor === 'string' ? { cursorSpotlightColor: value.cursorSpotlightColor } : {}),
     notifications: {
       ...current.notifications,
-      ...(typeof asRecord(value.notifications).turnComplete === 'boolean'
-        ? { turnComplete: asRecord(value.notifications).turnComplete as boolean }
+      ...(typeof notifications.turnComplete === 'boolean'
+        ? { turnComplete: notifications.turnComplete as boolean }
+        : {}),
+      ...(typeof notifications.mainAgentTurnComplete === 'boolean'
+        ? { mainAgentTurnComplete: notifications.mainAgentTurnComplete as boolean }
+        : {}),
+      ...(typeof notifications.subagentTurnComplete === 'boolean'
+        ? { subagentTurnComplete: notifications.subagentTurnComplete as boolean }
         : {})
     },
     appBehavior: {

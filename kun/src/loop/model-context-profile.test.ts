@@ -201,6 +201,23 @@ describe('built-in reasoning compatibility profiles', () => {
     }).reasoning).toBeUndefined()
   })
 
+  it('advertises priority only for eligible Codex subscription models', () => {
+    expect(modelCapabilitiesForProviderModel({
+      providerId: 'codex-2',
+      presetSource: 'codex',
+      model: 'gpt-5.4'
+    }).serviceTiers).toEqual(['priority'])
+    expect(modelCapabilitiesForProviderModel({
+      providerId: 'codex-2',
+      presetSource: 'codex',
+      model: 'gpt-5.4-mini'
+    }).serviceTiers).toBeUndefined()
+    expect(modelCapabilitiesForProviderModel({
+      providerId: 'private-openai',
+      model: 'gpt-5.4'
+    }).serviceTiers).toBeUndefined()
+  })
+
   it('uses ZenMux chat reasoning for routed DeepSeek models and excludes non-reasoning ids', () => {
     expect(modelCapabilitiesForProviderModel({
       providerId: 'zenmux',

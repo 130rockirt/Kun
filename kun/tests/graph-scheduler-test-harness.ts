@@ -8,7 +8,10 @@ import { GraphControlService } from '../src/graph/graph-control-service.js'
 import { GraphMailbox } from '../src/graph/graph-mailbox.js'
 import { FileGraphRunStore } from '../src/graph/graph-run-store.js'
 import { GraphScheduler } from '../src/graph/graph-scheduler.js'
-import type { GraphSupervisionPort } from '../src/graph/graph-scheduler-types.js'
+import type {
+  GraphSchedulerOptions,
+  GraphSupervisionPort
+} from '../src/graph/graph-scheduler-types.js'
 import { GraphWorkerSessionRegistry } from '../src/graph/graph-worker-sessions.js'
 import { FileGraphWriteCoordinator } from '../src/graph/graph-write-coordinator.js'
 import { FileProjectAgentRegistry } from '../src/graph/project-agent-registry.js'
@@ -23,7 +26,10 @@ export async function schedulerHarness(
   plan: ReturnType<typeof testGraphPlan>,
   delegation: () => DelegationRuntime | undefined,
   configPatch: Parameters<typeof testGraphConfig>[0] = {},
-  options: { autoLeadReview?: boolean } = {}
+  options: {
+    autoLeadReview?: boolean
+    verifyChecks?: GraphSchedulerOptions['verifyChecks']
+  } = {}
 ) {
   const root = await mkdtemp(join(tmpdir(), 'kun-graph-scheduler-harness-'))
   schedulerTestRoots.push(root)
@@ -70,6 +76,9 @@ export async function schedulerHarness(
     cancelActive: async (run) => {
       await scheduler?.cancelRun(run.id, 'cancel')
     },
+    resumeActive: async (run) => {
+      await scheduler?.resumeRun(run.id)
+    },
     cleanupResources: (run) => writes.cleanupRun(run.id),
     nextId
   })
@@ -110,6 +119,7 @@ export async function schedulerHarness(
       networkAllowed: false
     }),
     artifactStore: artifacts,
+    ...(options.verifyChecks ? { verifyChecks: options.verifyChecks } : {}),
     ...(options.autoLeadReview === false
       ? {}
       : { supervision: () => autoLeadSupervision(store, control, nextId) }),

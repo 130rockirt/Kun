@@ -2,7 +2,11 @@ import { createElement } from 'react'
 import { act, create as createRenderer } from 'react-test-renderer'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import i18n from '../../i18n'
-import { formatQuotaValue, ProviderQuotaPanel } from './ProviderQuotaPanel'
+import {
+  formatQuotaValue,
+  ProviderQuotaPanel,
+  type ProviderQuotaPanelProps
+} from './ProviderQuotaPanel'
 
 describe('ProviderQuotaPanel', () => {
   beforeEach(async () => {
@@ -66,6 +70,8 @@ describe('ProviderQuotaPanel', () => {
     })
 
     expect(listProviderQuotas).toHaveBeenCalledTimes(1)
+    expect(renderer.root.findByProps({ 'data-provider-quota-panel': true }).props['data-embedded'])
+      .toBe('false')
     expect(renderer.root.findAllByProps({ 'data-provider-quota-status': 'available' })).toHaveLength(1)
     expect(renderer.root.findAllByProps({ 'data-provider-quota-status': 'unsupported' })).toHaveLength(0)
     expect(renderer.root.findAllByProps({ 'data-provider-quota-status': 'missing_credentials' })).toHaveLength(0)
@@ -121,6 +127,9 @@ describe('ProviderQuotaPanel', () => {
       'data-provider-quota-details': 'deepseek-work'
     })).toHaveLength(1)
     expect(renderer.root.findAllByProps({ role: 'progressbar' })).toHaveLength(1)
+    expect(renderer.root.findByProps({ role: 'progressbar' }).props['aria-valuenow']).toBe(25)
+    expect(renderer.root.findByProps({ 'data-provider-quota-metric': 'balance' })).toBeTruthy()
+    expect(renderer.root.findByProps({ 'data-level': 'neutral' }).props.style.width).toBe('25%')
 
     act(() => renderer.root.findByProps({
       'data-provider-quota-status-group-toggle': 'unsupported'
@@ -168,6 +177,46 @@ describe('ProviderQuotaPanel', () => {
     expect(renderer.root.findByProps({
       'data-provider-quota-toggle': 'request-failed'
     }).props['aria-expanded']).toBe(false)
+    act(() => renderer.unmount())
+  })
+
+  it('clamps invalid provider percentages before rendering progress semantics', async () => {
+    vi.stubGlobal('window', {
+      kunGui: {
+        listProviderQuotas: vi.fn(async () => ({
+          refreshedAt: '2027-01-15T08:00:00.000Z',
+          entries: [{
+            providerId: 'over-limit',
+            providerName: 'Over Limit',
+            status: 'available' as const,
+            metrics: [{
+              id: 'requests',
+              label: 'Requests',
+              unit: 'requests',
+              usedPercent: 125
+            }]
+          }]
+        }))
+      }
+    })
+
+    let renderer!: ReturnType<typeof createRenderer>
+    await act(async () => {
+      renderer = createRenderer(createElement<ProviderQuotaPanelProps>(
+        ProviderQuotaPanel,
+        { embedded: true }
+      ))
+    })
+
+    expect(renderer.root.findByProps({ 'data-provider-quota-panel': true }).props['data-embedded'])
+      .toBe('true')
+    expect(renderer.root.findAllByProps({ className: 'provider-quota-header' })).toHaveLength(0)
+    act(() => renderer.root.findByProps({
+      'data-provider-quota-toggle': 'over-limit'
+    }).props.onClick())
+
+    expect(renderer.root.findByProps({ role: 'progressbar' }).props['aria-valuenow']).toBe(100)
+    expect(renderer.root.findByProps({ 'data-level': 'danger' }).props.style.width).toBe('100%')
     act(() => renderer.unmount())
   })
 

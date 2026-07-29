@@ -29,10 +29,11 @@ import { useWorkbenchDesignAgentRuntime } from './workbench/useWorkbenchDesignAg
 import { WorkbenchImageAnnotationHost } from './workbench/WorkbenchImageAnnotationHost'
 import { AgentBrowserFloatingPreview } from './AgentBrowserFloatingPreview'
 import { isWriteThreadId } from '../write/write-thread-registry'
-import { useSddDraftStore } from '../sdd/sdd-draft-store'
+import { buildSddDraftId, useSddDraftStore, type SddDraft } from '../sdd/sdd-draft-store'
 import {
   releaseSddAssistantThread,
 } from '../sdd/sdd-thread-registry'
+import { sddDraftRelativePathForPlanPath } from '@shared/sdd'
 import { useWorkbenchLayout } from './workbench-layout'
 import { useWorkbenchPlanController } from './workbench-plan-controller'
 import { useGuiPlanStore } from '../plan/plan-store'
@@ -124,9 +125,9 @@ export function Workbench(): ReactElement {
     appendLocalClawTurn, setError, sendMessage, reviewActiveThread, queuedMessages,
     extensionComposerContexts, attachExtensionComposerContext, removeExtensionComposerContext,
     removeQueuedMessage, guideQueuedMessage, interrupt, probeRuntime, composerModel, composerProviderId,
-    composerPickList, composerModelGroups, composerReasoningEffort, disabledSkillIds,
+    composerPickList, composerModelGroups, composerReasoningEffort, composerFastMode, disabledSkillIds,
     composerMode, composerOrchestration, graphEnabled, setComposerMode,
-    setComposerOrchestration, setComposerModel, setComposerReasoningEffort,
+    setComposerOrchestration, setComposerModel, setComposerReasoningEffort, setComposerFastMode,
     setThreadSearch, renameThread, pinThread, archiveThread, deleteThread,
     clearActiveThreadSelection, spawnSideConversation, openSideConversationDraft, selectSideConversation, setSidePanelOpen,
     sideConversations, sidePanel
@@ -604,12 +605,29 @@ export function Workbench(): ReactElement {
     onPlanBuildStarted: async (plan) => {
       const threadId = plan.threadId?.trim() || useChatStore.getState().activeThreadId
       const draft = useSddDraftStore.getState().activeDraft
+      dismissActiveSddDraft({ closeAssistant: true })
       if (!threadId) return
       if (draft) await renameSddAssistantThreadToDraft(threadId, draft)
       if (!releaseSddAssistantThread(threadId)) return
       await useChatStore.getState().refreshThreads()
     }
   })
+  const linkedSddDraft = useMemo<SddDraft | null>(() => {
+    if (!activeGuiPlan) return null
+    const relativePath = sddDraftRelativePathForPlanPath(activeGuiPlan.relativePath)
+    if (!relativePath) return null
+    return {
+      id: buildSddDraftId(activeGuiPlan.workspaceRoot, relativePath),
+      workspaceRoot: activeGuiPlan.workspaceRoot,
+      relativePath,
+      createdAt: activeGuiPlan.createdAt,
+      updatedAt: activeGuiPlan.updatedAt
+    }
+  }, [activeGuiPlan])
+  const openLinkedSddDraft = useCallback((): void => {
+    if (!linkedSddDraft) return
+    void openSddRequirementDraftFromHistory(linkedSddDraft)
+  }, [linkedSddDraft, openSddRequirementDraftFromHistory])
   useWorkbenchKeyboardShortcuts({
     composerMode,
     setComposerMode,
@@ -817,8 +835,8 @@ export function Workbench(): ReactElement {
     activeClawChannelProviderId: activeClawChannel?.providerId,
     activeSddDraft: Boolean(activeSddDraft), activeThreadId, attachmentUploadEnabled,
     buildCodeCanvasOutboundPrompt, clearComposerAttachments, removeComposerAttachments, clearComposerFileReferences,
-    composerAttachments, composerFileReferences, composerMode, composerModelGroups,
-    composerReasoningEffort, getAttachmentScope,
+    composerAttachments, composerFileReferences, composerMode, composerModel, composerProviderId,
+    composerModelGroups, composerReasoningEffort, composerFastMode, getAttachmentScope,
     handleGuiPlanCommand, input, resetClawChannelSession, rightPanelMode, route,
     selectClawChannel, sendMessage, sendPlanTurn, sendSddAssistantPrompt,
     setAttachmentUploadError, setClawChannelModel, setError, setInput, threads, workspaceRoot,
@@ -841,11 +859,12 @@ export function Workbench(): ReactElement {
   })
 
   const openComposerGraph = useCallback((runId: string, nodeId?: string): void => {
+    if (!graphEnabled) return
     const graph = useGraphStore.getState()
     graph.selectRun(runId)
     graph.selectNode(nodeId ?? null)
     openRightPanelTab(BUILTIN_RIGHT_PANEL_IDS.graph)
-  }, [openRightPanelTab])
+  }, [graphEnabled, openRightPanelTab])
 
   const openComposerGraphChild = useCallback((
     runId: string,
@@ -871,6 +890,7 @@ export function Workbench(): ReactElement {
   }, [])
 
   const graphChildContext = useMemo(() => {
+    if (!graphEnabled) return undefined
     const target = graphChildReturnTarget
     if (!target || activeThreadId !== target.childThreadId) return undefined
     const run = graphRuns.find((candidate) => candidate.id === target.runId)
@@ -897,6 +917,7 @@ export function Workbench(): ReactElement {
     }
   }, [
     activeThreadId,
+    graphEnabled,
     graphChildNow,
     graphChildReturnTarget,
     graphChildRuns,
@@ -934,7 +955,8 @@ export function Workbench(): ReactElement {
     busy, currentTurnOrchestration, route, runtimeReady: runtimeConnection === 'ready',
     activeThreadId, activeClawChannelId,
     activeClawChannelModel: activeClawChannel?.model, composerModel, composerProviderId, composerPickList,
-    composerModelGroups, composerReasoningEffort, setComposerReasoningEffort,
+    composerModelGroups, composerReasoningEffort, composerFastMode,
+    setComposerReasoningEffort, setComposerFastMode,
     setClawChannelModel, setComposerModel, openProvidersSettings: () => openSettings('providers'), handleSend,
     composerAttachments,
     contextChips: extensionComposerContextChips,
@@ -954,7 +976,8 @@ export function Workbench(): ReactElement {
   const rightPanelSharedProps = buildWorkbenchRightPanelSharedProps({
     input, setInput, mode: composerMode, setMode: setComposerMode, busy, runtimeConnection,
     activeThreadId, blocks, liveReasoning, liveAssistant, composerModelGroups, composerReasoningEffort,
-    setComposerReasoningEffort, queuedMessages, removeQueuedMessage, attachments: composerAttachments,
+    setComposerReasoningEffort, queuedMessages, removeQueuedMessage, guideQueuedMessage,
+    attachments: composerAttachments,
     attachmentUploadEnabled, attachmentUploadBusy, attachmentUploadError,
     onPickAttachments: (files) => void handlePickAttachments(files),
     onPasteClipboardImage: (options) => void handlePasteClipboardImage(options),
@@ -1018,6 +1041,7 @@ export function Workbench(): ReactElement {
     width: rightSidebarWidth,
     route,
     rightPanelMode,
+    graphEnabled,
     onBeginResize: beginRightResize,
     writeAssistantOpen,
     shared: rightPanelSharedProps,
@@ -1174,7 +1198,6 @@ export function Workbench(): ReactElement {
         onNewChat={startNewChat}
         onNewChatInWorkspace={startNewChatInWorkspace}
         onNewRequirement={() => void startNewSddRequirement()}
-        onOpenRequirementDraft={(draft) => void openSddRequirementDraftFromHistory(draft)}
         onOpenSettings={(section) => openSettings(section)}
         onOpenPlugins={openPluginsView}
         onOpenExtensions={openExtensionsView}
@@ -1298,6 +1321,7 @@ export function Workbench(): ReactElement {
             onBeginTerminalResize: beginTerminalResize,
             onToggleTerminal: toggleTerminal,
             onToggleRightWorkspace: toggleCodeRightWorkspace,
+            onOpenRequirementDraft: linkedSddDraft ? openLinkedSddDraft : undefined,
             extensionTopBarActions,
             extensionComposerActions,
             extensionMessageActions,
@@ -1327,6 +1351,7 @@ export function Workbench(): ReactElement {
             onToggleRightPanelMode: openCodeRightTool,
             planPanelEnabled: Boolean(activeGuiPlan),
             canvasEnabled: true,
+            graphEnabled,
             sideChatRunningCount: currentSideRunningCount,
             sideChatOpen: rightPanelMode === BUILTIN_RIGHT_PANEL_IDS.sideConversations,
             sideChatEnabled: runtimeConnection === 'ready' && Boolean(activeThreadId),

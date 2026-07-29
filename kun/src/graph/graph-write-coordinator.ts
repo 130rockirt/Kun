@@ -32,6 +32,7 @@ const PathLeaseSchema = z.object({
   workspaceRoot: z.string().min(1).max(4_096),
   scopes: z.array(RelativePath).max(1_000),
   baselineChanges: z.record(z.string(), z.string()).optional(),
+  baselineError: z.string().max(2_048).optional(),
   state: z.enum(['active', 'released', 'expired', 'orphaned']),
   acquiredAt: Timestamp,
   expiresAt: Timestamp,
@@ -67,6 +68,9 @@ export type GraphWriteClaimResult =
   | { acquired: true; lease: GraphPathLease; workspaceRoot: string; worktree?: GraphWorktreeRecord }
   | { acquired: false; conflicts: GraphPathLease[] }
 
+export type GraphChangedFilesObservation =
+  | { status: 'observed'; changedFiles: string[] }
+  | { status: 'unavailable'; error: string }
 export type GraphResourceCleanupResult = {
   resourceKind: 'lease' | 'worktree'
   resourceId: string
@@ -124,9 +128,15 @@ export class FileGraphWriteCoordinator {
         scopes.length > 0 &&
         isolation.mode === 'worktree' &&
         isolation.allowWorktrees
-      const baselineChanges = scopes.length > 0 && !useWorktree
-        ? await workspaceChangeSnapshot(workspaceRoot).catch(() => undefined)
-        : undefined
+      let baselineChanges: Record<string, string> | undefined
+      let baselineError: string | undefined
+      if (scopes.length > 0 && !useWorktree) {
+        try {
+          baselineChanges = await workspaceChangeSnapshot(workspaceRoot)
+        } catch (error) {
+          baselineError = boundedError(error)
+        }
+      }
       const lease = PathLeaseSchema.parse({
         leaseId: this.nextId('graph_lease'),
         runId: input.runId,
@@ -135,6 +145,7 @@ export class FileGraphWriteCoordinator {
         workspaceRoot,
         scopes,
         ...(baselineChanges ? { baselineChanges } : {}),
+        ...(baselineError ? { baselineError } : {}),
         state: 'active',
         acquiredAt: now,
         expiresAt: new Date(
@@ -220,11 +231,6 @@ export class FileGraphWriteCoordinator {
     })
   }
 
-  /**
-   * Roll back a claim that never crossed the durable attempt-admission event.
-   * No worker has received this workspace, so a pristine worktree is safe to
-   * remove rather than preserve as user work.
-   */
   rollback(leaseId: string): Promise<void> {
     return this.enqueue(async () => {
       const state = await this.load()
@@ -267,7 +273,7 @@ export class FileGraphWriteCoordinator {
         record.lastError = scopeError
         record.updatedAt = this.nowIso()
         await this.persist(state)
-        throw new Error(scopeError)
+        return WorktreeRecordSchema.parse(record)
       }
       if (patch && this.options.artifactStore) {
         const stored = await this.options.artifactStore.put({
@@ -285,20 +291,31 @@ export class FileGraphWriteCoordinator {
     })
   }
 
-  async captureChangedFiles(attemptId: string): Promise<string[] | null> {
+  async captureChangedFiles(attemptId: string): Promise<GraphChangedFilesObservation> {
     const state = await this.load()
     if (state.worktrees.some((entry) => entry.attemptId === attemptId)) {
-      return (await this.captureWorktree(attemptId))?.changedFiles ?? null
+      const record = await this.captureWorktree(attemptId)
+      return record
+        ? { status: 'observed', changedFiles: record.changedFiles }
+        : { status: 'unavailable', error: 'Graph worktree disappeared during result capture.' }
     }
     const lease = state.leases.find((entry) => entry.attemptId === attemptId)
-    if (!lease?.baselineChanges) return null
+    if (!lease) return { status: 'unavailable', error: 'Graph write lease is missing.' }
+    if (!lease.scopes.length) return { status: 'observed', changedFiles: [] }
+    if (lease.baselineError) return { status: 'unavailable', error: lease.baselineError }
+    if (!lease.baselineChanges) return {
+      status: 'unavailable', error: 'Graph write baseline snapshot is missing.'
+    }
     const current = await workspaceChangeSnapshot(lease.workspaceRoot)
     const paths = new Set([
       ...Object.keys(lease.baselineChanges),
       ...Object.keys(current)
     ])
-    return normalizeScopes([...paths].filter((path) =>
-      lease.baselineChanges?.[path] !== current[path]))
+    return {
+      status: 'observed',
+      changedFiles: normalizeScopes([...paths].filter((path) =>
+        lease.baselineChanges?.[path] !== current[path]))
+    }
   }
 
   async integrate(attemptId: string): Promise<{

@@ -142,6 +142,14 @@ export function buildGraphLeadSupervisionTool(options: {
             nodeId,
             text
           )
+          if (delivery.status === 'delivered') {
+            run = await markImmediateGuidanceDelivered(
+              options.store,
+              run,
+              steeringId,
+              options.nextId
+            )
+          }
           const acknowledgedQuestionIds = await acknowledgeLeadQuestions(
             options.mailbox,
             run,
@@ -156,6 +164,8 @@ export function buildGraphLeadSupervisionTool(options: {
               attemptId: attempt.id,
               steeringId,
               persisted: true,
+              durableStatus: run.steering.find((entry) =>
+                entry.steeringId === steeringId)?.status ?? 'persisted',
               acknowledgedQuestionIds,
               immediateDelivery: delivery
             }
@@ -464,6 +474,42 @@ async function deliverGuidance(
       detail: `Guidance remains durable; immediate delivery was unavailable: ${errorMessage(error)}`
     }
   }
+}
+
+async function markImmediateGuidanceDelivered(
+  store: GraphRunStore,
+  initialRun: GraphRunV1,
+  steeringId: string,
+  nextId: (prefix: string) => string
+): Promise<GraphRunV1> {
+  let run = initialRun
+  for (let retry = 0; retry < 3; retry += 1) {
+    const steering = run.steering.find((entry) => entry.steeringId === steeringId)
+    if (!steering) throw new Error(`Graph steering not found after persistence: ${steeringId}`)
+    if (steering.status !== 'persisted') return run
+    try {
+      return (await store.append(run.id, {
+        expectedSeq: run.lastEventSeq,
+        graphRevision: run.currentRevision,
+        commandId: nextId('graph_steering_delivery'),
+        idempotencyKey: `graph-supervise-delivered:${run.id}:${steeringId}`,
+        event: {
+          type: 'steering_status_changed',
+          payload: {
+            steeringId,
+            from: 'persisted',
+            to: 'delivered'
+          }
+        }
+      })).state
+    } catch (error) {
+      if (retry === 2) throw error
+      const refreshed = await store.get(run.id)
+      if (!refreshed) throw new Error(`GraphRun not found: ${run.id}`)
+      run = refreshed
+    }
+  }
+  return run
 }
 
 function resolveAttempt(

@@ -25,6 +25,7 @@ export type ModelRequestComposerInput = Readonly<{
   providerId?: string
   accountId?: string
   reasoningEffort?: string
+  serviceTier?: 'priority'
   immutablePrefix: ImmutablePrefix
   threadSystemPrompt?: string
   modeInstruction?: string
@@ -78,6 +79,7 @@ export function composeModelRequest(input: ModelRequestComposerInput): ComposedM
     tools: [...input.tools],
     ...(input.requiredToolName ? { requiredToolName: input.requiredToolName } : {}),
     ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
+    ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
     abortSignal: input.signal
   }
   const rawInputTokens = tokenEconomy.enabled

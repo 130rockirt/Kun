@@ -54,13 +54,15 @@ describe('ToolStormBreaker', () => {
     expect(breaker.inspect(call({ path: 'src/a.ts' })).suppress).toBe(false)
   })
 
-  it('allows repeated Graph inspections because durable state may advance', () => {
+  it('suppresses the third identical Graph inspection', () => {
     const breaker = new ToolStormBreaker()
 
     expect(breaker.inspect(graphControlCall('inspect')).suppress).toBe(false)
     expect(breaker.inspect(graphControlCall('inspect')).suppress).toBe(false)
-    expect(breaker.inspect(graphControlCall('inspect')).suppress).toBe(false)
-    expect(breaker.inspect(graphControlCall('inspect')).suppress).toBe(false)
+    const third = breaker.inspect(graphControlCall('inspect'))
+
+    expect(third.suppress).toBe(true)
+    expect(third.reason).toContain('identical arguments 3 times')
   })
 
   it('still suppresses repeated mutating Graph control calls', () => {

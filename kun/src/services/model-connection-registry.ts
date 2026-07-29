@@ -969,7 +969,10 @@ function mergeProjectedCapability(
   model: string
 ): ModelCapabilityMetadata | undefined {
   if (!stored) return derived
-  if (!derived?.reasoning || stored.reasoning === derived.reasoning) return stored
+  const serviceTiers = stored.serviceTiers ?? derived?.serviceTiers
+  if (!derived?.reasoning || stored.reasoning === derived.reasoning) {
+    return serviceTiers ? { ...stored, serviceTiers: [...serviceTiers] } : stored
+  }
   const placeholder = stored.reasoning?.requestProtocol === 'none' &&
     derived.reasoning.requestProtocol !== 'none' &&
     stored.reasoning.defaultEffort === 'auto' &&
@@ -984,9 +987,13 @@ function mergeProjectedCapability(
         model.trim().toLowerCase().endsWith('grok-4.5'))
     )
   if (!stored.reasoning || placeholder || chatResponsesMismatch) {
-    return { ...stored, reasoning: derived.reasoning }
+    return {
+      ...stored,
+      reasoning: derived.reasoning,
+      ...(serviceTiers ? { serviceTiers: [...serviceTiers] } : {})
+    }
   }
-  return stored
+  return serviceTiers ? { ...stored, serviceTiers: [...serviceTiers] } : stored
 }
 
 function assertRevision(

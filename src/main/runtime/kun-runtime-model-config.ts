@@ -3,6 +3,7 @@ import {
   getModelProviderSettings,
   projectExecutableModelRoutePools,
   resolveKunRuntimeSettings,
+  resolveModelProviderPresetSource,
   resolveModelProviderProxyUrl,
   type AppSettingsV1,
   type KunRuntimeSettingsV1,
@@ -72,6 +73,7 @@ export function providersConfigForRuntime(
     const selectedModel = id === runtime.providerId && provider.models.includes(runtime.model)
       ? runtime.model
       : provider.models[0]
+    const presetSource = resolveModelProviderPresetSource(provider)
     out[id] = {
       // Provider secrets live in the protected account store. The runtime
       // resolves this opaque source binding after reading config.json.
@@ -79,6 +81,10 @@ export function providersConfigForRuntime(
       credentialSourceId: legacyProviderCredentialSourceId(id),
       ...(baseUrl ? { baseUrl } : {}),
       ...(provider.kind ? { kind: provider.kind } : {}),
+      ...(presetSource ? { presetSource: presetSource.preset.id } : {}),
+      ...(presetSource?.mode === 'token-plan' || presetSource?.preset.category === 'subscription'
+        ? { authType: 'subscription' }
+        : {}),
       ...(provider.endpointFormat ? { endpointFormat: provider.endpointFormat } : {}),
       models: [...provider.models],
       modelCapabilities: modelCapabilitiesForProviderConfig(provider),
@@ -117,6 +123,7 @@ function modelCapabilitiesForProviderConfig(
             }
           }
         : {}),
+      ...(profile.serviceTiers ? { serviceTiers: [...profile.serviceTiers] } : {}),
       ...(profile.endpointFormat ? { endpointFormat: profile.endpointFormat } : {}),
       ...(profile.responsesMode ? { responsesMode: profile.responsesMode } : {})
     }]]
@@ -238,6 +245,7 @@ function modelConfigProfilesFromProviderProfiles(
       supportsToolCalling: profile.supportsToolCalling,
       messageParts: profile.messageParts,
       ...(profile.reasoning ? { reasoning: profile.reasoning } : {}),
+      ...(profile.serviceTiers ? { serviceTiers: profile.serviceTiers } : {}),
       ...(profile.endpointFormat ? { endpointFormat: profile.endpointFormat } : {}),
       ...(profile.responsesMode ? { responsesMode: profile.responsesMode } : {})
     }
