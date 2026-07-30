@@ -184,8 +184,10 @@ describe('FileGraphWriteCoordinator', () => {
       expect.objectContaining({ resourceKind: 'worktree', state: 'completed' })
     ]))
 
-    expect(await readFile(join(repository, 'src', 'new.txt'), 'utf8')).toBe('new src file\n')
-    expect(await readFile(join(repository, 'tests', 'new.txt'), 'utf8')).toBe('new test file\n')
+    expect(normalizeLineEndings(await readFile(join(repository, 'src', 'new.txt'), 'utf8')))
+      .toBe('new src file\n')
+    expect(normalizeLineEndings(await readFile(join(repository, 'tests', 'new.txt'), 'utf8')))
+      .toBe('new test file\n')
     await expect(stat(first.workspaceRoot)).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
@@ -318,6 +320,10 @@ describe('FileGraphWriteCoordinator', () => {
     })
   })
 })
+
+function normalizeLineEndings(value: string): string {
+  return value.replaceAll('\r\n', '\n')
+}
 
 async function worktreeHarness() {
   const root = await mkdtemp(join(tmpdir(), 'kun-graph-worktree-'))

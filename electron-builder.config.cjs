@@ -273,6 +273,7 @@ module.exports = {
   linux: {
     category: 'Development',
     icon: './src/asset/img/kun.png',
+    maintainer: 'Kun Contributors <1736101137@qq.com>',
     // AppImage covers generic Linux; deb covers Debian-family installers such as
     // openKylin / Ubuntu that expect apt/software-store packages.
     target: [

@@ -87,7 +87,7 @@ export async function editTextInExternalEditor(
   initial: string,
   editorSpec = process.env.VISUAL?.trim() || process.env.EDITOR?.trim() || defaultEditor()
 ): Promise<string> {
-  const words = splitCommandLine(editorSpec)
+  const words = splitEditorCommandLine(editorSpec)
   if (words.length === 0) throw new Error('VISUAL or EDITOR does not contain a command')
   const directory = await mkdtemp(resolve(tmpdir(), 'kun-editor-'))
   const path = resolve(directory, 'prompt.md')
@@ -244,14 +244,20 @@ function spawnEditor(command: string, args: string[]): Promise<number> {
   })
 }
 
-function splitCommandLine(value: string): string[] {
+export function splitEditorCommandLine(
+  value: string,
+  platform: NodeJS.Platform = process.platform
+): string[] {
   const words: string[] = []
   let current = ''
   let quote: '"' | "'" | null = null
   let escaped = false
   for (const char of value.trim()) {
     if (escaped) { current += char; escaped = false; continue }
-    if (char === '\\' && quote !== "'") { escaped = true; continue }
+    if (char === '\\' && quote !== "'" && platform !== 'win32') {
+      escaped = true
+      continue
+    }
     if (quote) {
       if (char === quote) quote = null
       else current += char

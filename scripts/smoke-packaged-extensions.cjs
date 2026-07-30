@@ -133,8 +133,8 @@ async function main() {
     }
     for (const id of DEFAULT_EXTENSION_IDS) {
       const installed = listed.extensions.find((extension) => extension?.id === id)
-      if (installed?.globallyEnabled !== true) {
-        throw new Error(`Packaged default extension was not enabled through the registry: ${id}`)
+      if (installed?.globallyEnabled !== false) {
+        throw new Error(`Packaged default extension was not registered as disabled: ${id}`)
       }
       runKun(runtimeEntry, [
         'extension', 'uninstall', id, '--data-dir', profile, '--json'

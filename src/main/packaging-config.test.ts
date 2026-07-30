@@ -176,6 +176,11 @@ describe('electron-builder Kun packaging', () => {
     ])
   })
 
+  it('provides the maintainer identity required by Debian packages', () => {
+    expect(builderConfig.linux.maintainer)
+      .toMatch(/^Kun Contributors <[^<>@\s]+@[^<>@\s]+>$/)
+  })
+
   it('keeps renderer and release-only packages out of the production dependency graph', () => {
     const developmentOnly = [
       '@aws-sdk/client-s3',

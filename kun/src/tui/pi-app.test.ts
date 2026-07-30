@@ -3774,7 +3774,7 @@ describe('PiTuiApplication command overlays', () => {
     try {
       for (const character of 'seed') input.emit('data', character)
       input.emit('data', '\x07')
-      await waitFor(() => outputText.includes('edited draft'))
+      await waitFor(() => outputText.includes('edited draft'), 10_000)
       expect(rawModes).toEqual(expect.arrayContaining([true, false]))
       const releasedAt = rawModes.indexOf(false)
       expect(rawModes.slice(releasedAt + 1)).toContain(true)

@@ -10,6 +10,7 @@ import {
   osc52ClipboardSequence,
   resolveThreadExportPath,
   renderThreadMarkdown,
+  splitEditorCommandLine,
   writeThreadExport
 } from './operations.js'
 
@@ -93,6 +94,16 @@ describe('TUI local operations', () => {
     } finally {
       await rm(directory, { recursive: true, force: true })
     }
+  })
+
+  it('preserves Windows path separators in quoted editor commands', () => {
+    expect(splitEditorCommandLine(
+      '"C:\\Program Files\\nodejs\\node.exe" "D:\\work tree\\editor.mjs"',
+      'win32'
+    )).toEqual([
+      'C:\\Program Files\\nodejs\\node.exe',
+      'D:\\work tree\\editor.mjs'
+    ])
   })
 
   it('creates a bounded OSC52 clipboard fallback', () => {
