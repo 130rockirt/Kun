@@ -1,9 +1,9 @@
 import { spawnSync } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { npmInvocation } from './lib/extension-release-execution.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
-const npmExecutable = process.platform === 'win32' ? 'npm.cmd' : 'npm'
 
 const kunTests = [
   'src/contracts/graph.test.ts',
@@ -42,14 +42,17 @@ const rendererTests = [
   'src/renderer/src/graph/graph-store.test.ts'
 ]
 
-run(npmExecutable, [
-  '--prefix',
-  'kun',
-  'test',
-  '--',
-  ...kunTests,
-  '--reporter=dot'
-])
+const kunNpm = npmInvocation({
+  args: [
+    '--prefix',
+    'kun',
+    'test',
+    '--',
+    ...kunTests,
+    '--reporter=dot'
+  ]
+})
+run(kunNpm.command, kunNpm.args)
 
 run(process.execPath, [
   join(root, 'node_modules', 'vitest', 'vitest.mjs'),
