@@ -2948,8 +2948,13 @@ function formatBytes(bytes: number): string {
 }
 
 function normalizeSkillId(value: string): string {
-  const normalized = value.trim().toLowerCase().replace(/[^a-z0-9-]+/gu, '-').replace(/^-+|-+$/gu, '')
-  return /^[a-z0-9][a-z0-9-]{0,63}$/u.test(normalized) ? normalized : ''
+  const replaced = value.trim().toLowerCase().replace(/[^a-z0-9-]+/gu, '-')
+  let start = 0
+  let end = replaced.length
+  while (start < end && replaced.charCodeAt(start) === 45) start += 1
+  while (end > start && replaced.charCodeAt(end - 1) === 45) end -= 1
+  const normalized = replaced.slice(start, end)
+  return normalized.length > 0 && normalized.length <= 64 ? normalized : ''
 }
 
 function skillTemplate(id: string, description: string): string {

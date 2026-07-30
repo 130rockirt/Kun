@@ -272,6 +272,7 @@ describe('DelegatedSessionCoordinator', () => {
     })
     expect(first).not.toBe(second)
     expect(first).not.toContain('cursor-secret-one')
+    expect(first).toMatch(/^scrypt-v1:[a-f0-9]{64}$/u)
   })
 
   test('keeps an aligned portable generation without claiming native resume failed', async () => {

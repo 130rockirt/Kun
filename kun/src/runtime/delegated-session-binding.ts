@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto'
+import { createHash, randomUUID, scryptSync } from 'node:crypto'
 import { mkdir, readFile, rename, rm, unlink, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import type { TurnItem } from '../contracts/items.js'
@@ -302,7 +302,7 @@ export function delegatedCredentialIdentity(input: {
   if (parts.length === 0) {
     parts.push(`provider-config:${input.providerId.trim() || 'default'}`)
   }
-  return `sha256:${sha256(parts.join('\n'))}`
+  return `scrypt-v1:${credentialIdentityDigest(parts.join('\n'))}`
 }
 
 export function priorItemsForDelegatedTurn(
@@ -366,6 +366,10 @@ function stableStringify(value: unknown): string {
 
 function sha256(value: string): string {
   return createHash('sha256').update(value).digest('hex')
+}
+
+function credentialIdentityDigest(value: string): string {
+  return scryptSync(value, 'kun-delegated-session-credential-identity-v1', 32).toString('hex')
 }
 
 function threadKey(threadId: string): string {

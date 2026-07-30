@@ -201,6 +201,28 @@ describe('built-in reasoning compatibility profiles', () => {
     }).reasoning).toBeUndefined()
   })
 
+  it.each([
+    ['grok-4.5', 'https://cli-chat-proxy.grok.com.attacker.test', 'openai-responses'],
+    ['mimo-private', 'https://xiaomimimo.com.attacker.test', 'mimo-chat-completions'],
+    ['minimax-m3-private', 'https://minimaxi.com.attacker.test', 'anthropic-thinking'],
+    ['minimax-m3-private', 'https://minimax.io.attacker.test', 'anthropic-thinking'],
+    ['qwq-private', 'https://dashscope.aliyuncs.com.attacker.test', 'qwen-chat-completions'],
+    ['qwq-private', 'https://region.maas.aliyuncs.com.attacker.test', 'qwen-chat-completions'],
+    ['hunyuan-t1-private', 'https://hunyuan.cloud.tencent.com.attacker.test', 'thinking-toggle-chat-completions'],
+    ['hunyuan-t1-private', 'https://lkeap.cloud.tencent.com.attacker.test', 'thinking-toggle-chat-completions'],
+    ['doubao-private', 'https://volces.com.attacker.test', 'thinking-toggle-chat-completions']
+  ])('does not trust a provider domain embedded in an attacker hostname for %s', (
+    model,
+    baseUrl,
+    requestProtocol
+  ) => {
+    expect(modelCapabilitiesForProviderModel({
+      providerId: 'private',
+      baseUrl,
+      model
+    }).reasoning?.requestProtocol).not.toBe(requestProtocol)
+  })
+
   it('advertises priority only for eligible Codex subscription models', () => {
     expect(modelCapabilitiesForProviderModel({
       providerId: 'codex-2',

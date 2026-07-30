@@ -73,6 +73,12 @@ export type GeminiCodeAssistModelClientConfig = {
   modelCapabilities?: (model: string) => ModelCapabilityMetadata
 }
 
+function stripTrailingSlashes(value: string): string {
+  let end = value.length
+  while (end > 0 && value.charCodeAt(end - 1) === 47) end -= 1
+  return value.slice(0, end)
+}
+
 export class GeminiCodeAssistModelClient implements ModelClient {
   readonly provider = 'gemini-code-assist'
   readonly model: string
@@ -90,7 +96,7 @@ export class GeminiCodeAssistModelClient implements ModelClient {
   constructor(input: GeminiCodeAssistModelClientConfig) {
     this.model = input.model
     this.config = {
-      baseUrl: (input.baseUrl?.trim() || DEFAULT_CODE_ASSIST_BASE_URL).replace(/\/+$/, ''),
+      baseUrl: stripTrailingSlashes(input.baseUrl?.trim() || DEFAULT_CODE_ASSIST_BASE_URL),
       endpointFormat: 'custom_endpoint',
       model: input.model
     }

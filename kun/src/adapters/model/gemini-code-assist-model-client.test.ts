@@ -50,6 +50,14 @@ async function drain(iterable: AsyncIterable<ModelStreamChunk>): Promise<ModelSt
 }
 
 describe('GeminiCodeAssistModelClient', () => {
+  it('removes arbitrarily many trailing base URL slashes without a backtracking regexp', () => {
+    const client = new GeminiCodeAssistModelClient({
+      model: 'gemini-3.1-pro-preview',
+      baseUrl: `https://cloudcode-pa.googleapis.com${'/'.repeat(4_096)}`
+    })
+    expect(client.config.baseUrl).toBe('https://cloudcode-pa.googleapis.com')
+  })
+
   it('projects the Code Assist request envelope and model aliases', () => {
     expect(mapGeminiCodeAssistModel('gemini-3.5-flash')).toBe('gemini-3-flash')
     const body = buildGeminiCodeAssistRequest({

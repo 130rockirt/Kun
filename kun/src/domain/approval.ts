@@ -432,22 +432,18 @@ function normalizeApprovalValue(
 }
 
 export function redactApprovalSensitiveText(value: string): string {
-  let output = value
-    .replace(
-      /-----BEGIN ([A-Z0-9 ]*PRIVATE KEY)-----[\s\S]*?-----END \1-----/gi,
-      '[redacted private key]'
-    )
+  let output = redactPemPrivateKeys(value)
     .replace(
       /\b(gh[pousr]_[A-Za-z0-9]{12,}|github_pat_[A-Za-z0-9_]{12,})\b/gi,
       '[redacted]'
     )
     .replace(/\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g, REDACTED)
     .replace(
-      /\b((?:aws_)?(?:access_key_id|secret_access_key|session_token)\s*(?:=|:|\s)\s*)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s,;]+)/gi,
+      /\b((?:aws_)?(?:access_key_id|secret_access_key|session_token)\s*(?:=|:|\s)\s*)(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s,;]+)/gi,
       '$1[redacted]'
     )
     .replace(
-      /\b([A-Z][A-Z0-9_]*(?:_TOKEN|_SECRET|_KEY|_PASSWORD)\s*=\s*)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s,;]+)/gi,
+      /\b([A-Z][A-Z0-9_]*(?:_TOKEN|_SECRET|_KEY|_PASSWORD)\s*=\s*)(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s,;]+)/gi,
       '$1[redacted]'
     )
     .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/gi, 'Bearer [redacted]')
@@ -461,6 +457,70 @@ export function redactApprovalSensitiveText(value: string): string {
     '$1[redacted]@'
   )
   return output
+}
+
+type PemBoundary = {
+  end: number
+  label: string
+}
+
+function pemBoundaryAt(
+  value: string,
+  index: number,
+  kind: 'BEGIN' | 'END'
+): PemBoundary | undefined {
+  const prefix = `-----${kind} `
+  if (value.slice(index, index + prefix.length).toUpperCase() !== prefix) return undefined
+  let cursor = index + prefix.length
+  const labelStart = cursor
+  while (cursor < value.length) {
+    const code = value.charCodeAt(cursor)
+    const isDigit = code >= 48 && code <= 57
+    const isUpper = code >= 65 && code <= 90
+    const isLower = code >= 97 && code <= 122
+    if (!isDigit && !isUpper && !isLower && code !== 32) break
+    cursor += 1
+  }
+  if (
+    cursor === labelStart ||
+    value.slice(cursor, cursor + 5) !== '-----'
+  ) return undefined
+  const label = value.slice(labelStart, cursor).toUpperCase()
+  if (!label.endsWith('PRIVATE KEY')) return undefined
+  return { end: cursor + 5, label }
+}
+
+function redactPemPrivateKeys(value: string): string {
+  let active: { start: number; label: string } | undefined
+  let segmentStart = 0
+  let output = ''
+  let index = 0
+  while (index < value.length) {
+    if (value.charCodeAt(index) !== 45) {
+      index += 1
+      continue
+    }
+    if (!active) {
+      const begin = pemBoundaryAt(value, index, 'BEGIN')
+      if (!begin) {
+        index += 1
+        continue
+      }
+      active = { start: index, label: begin.label }
+      index = begin.end
+      continue
+    }
+    const end = pemBoundaryAt(value, index, 'END')
+    if (!end || end.label !== active.label) {
+      index += 1
+      continue
+    }
+    output += `${value.slice(segmentStart, active.start)}[redacted private key]`
+    segmentStart = end.end
+    active = undefined
+    index = end.end
+  }
+  return output + value.slice(segmentStart)
 }
 
 function sanitizeUrl(value: string): string {

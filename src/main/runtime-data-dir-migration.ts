@@ -831,7 +831,7 @@ function updateJournal(
 }
 
 function uniqueSiblingBackup(path: string, label: string, now: () => Date): string {
-  const stamp = now().toISOString().replace(/[-:.]/g, '').replace('Z', 'Z')
+  const stamp = now().toISOString().replace(/[-:.]/g, '')
   const parent = dirname(path)
   const name = basename(path)
   for (let ordinal = 0; ordinal < 10_000; ordinal += 1) {

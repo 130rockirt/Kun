@@ -256,7 +256,7 @@ function providerReasoningCapability(
 ): ModelReasoningCapabilityMetadata | undefined {
   const provider = `${input.providerId ?? ''} ${input.presetSource ?? ''}`.trim().toLowerCase()
   const model = normalizeModelId(input.model)
-  const baseUrl = input.baseUrl?.trim().toLowerCase() ?? ''
+  const endpoint = parseProviderEndpoint(input.baseUrl)
 
   if (
     (input.kind === 'agent-sdk' || provider.includes('claude-subscription')) &&
@@ -268,56 +268,80 @@ function providerReasoningCapability(
     return reasoning(['low', 'high', 'max'], 'high', 'openai-chat-completions')
   }
   if (
-    (provider.includes('grok-subscription') || baseUrl.includes('cli-chat-proxy.grok.com')) &&
+    (provider.includes('grok-subscription') || providerHostMatches(endpoint, 'cli-chat-proxy.grok.com')) &&
     (model === 'grok-4.5' || model.endsWith('/grok-4.5'))
   ) {
     return reasoning(['low', 'medium', 'high'], 'high', 'openai-responses')
   }
   if (
-    (provider.includes('opencode-go') || baseUrl.includes('opencode.ai/zen/go/')) &&
+    (provider.includes('opencode-go') ||
+      (providerHostMatches(endpoint, 'opencode.ai') && endpointPathStartsWith(endpoint, '/zen/go/'))) &&
     (model === 'grok-4.5' || model.endsWith('/grok-4.5'))
   ) {
     return reasoning(['low', 'medium', 'high'], 'medium', 'openai-chat-completions')
   }
   if (
-    (provider.includes('xiaomi') || baseUrl.includes('xiaomimimo.com')) &&
+    (provider.includes('xiaomi') || providerHostMatches(endpoint, 'xiaomimimo.com')) &&
     model.includes('mimo-')
   ) {
     return reasoning(['off', 'low', 'medium', 'high'], 'high', 'mimo-chat-completions')
   }
   if (
-    (provider.includes('minimax') || baseUrl.includes('minimaxi.com') || baseUrl.includes('minimax.io')) &&
+    (provider.includes('minimax') || providerHostMatches(endpoint, 'minimaxi.com') ||
+      providerHostMatches(endpoint, 'minimax.io')) &&
     model.includes('minimax-m3')
   ) {
     return reasoning(['auto', 'off'], 'auto', 'anthropic-thinking')
   }
   if (
-    (provider.includes('aliyun') || baseUrl.includes('dashscope.aliyuncs.com') ||
-      baseUrl.includes('.maas.aliyuncs.com')) &&
+    (provider.includes('aliyun') || providerHostMatches(endpoint, 'dashscope.aliyuncs.com') ||
+      providerHostMatches(endpoint, 'maas.aliyuncs.com')) &&
     (model.includes('qwq') || model.includes('qwen3-vl'))
   ) {
     return reasoning(['auto', 'off'], 'auto', 'qwen-chat-completions')
   }
   if (
-    (provider.includes('tencentcloud') || baseUrl.includes('hunyuan.cloud.tencent.com') ||
-      baseUrl.includes('lkeap.cloud.tencent.com')) &&
+    (provider.includes('tencentcloud') || providerHostMatches(endpoint, 'hunyuan.cloud.tencent.com') ||
+      providerHostMatches(endpoint, 'lkeap.cloud.tencent.com')) &&
     model.includes('hunyuan-t1')
   ) {
     return reasoning(['auto', 'off'], 'auto', 'thinking-toggle-chat-completions')
   }
   if (
-    (provider.includes('volcengine') || baseUrl.includes('volces.com')) &&
+    (provider.includes('volcengine') || providerHostMatches(endpoint, 'volces.com')) &&
     model.includes('doubao-')
   ) {
     return reasoning(['auto', 'off'], 'auto', 'thinking-toggle-chat-completions')
   }
   if (
-    (provider === 'zenmux' || provider.includes('zenmux') || baseUrl.includes('zenmux.ai')) &&
+    (provider === 'zenmux' || provider.includes('zenmux') || providerHostMatches(endpoint, 'zenmux.ai')) &&
     isKnownZenMuxReasoningModel(model)
   ) {
     return reasoning(['low', 'medium', 'high'], 'medium', 'openai-chat-completions')
   }
   return undefined
+}
+
+function parseProviderEndpoint(value: string | undefined): URL | undefined {
+  const normalized = value?.trim()
+  if (!normalized) return undefined
+  try {
+    const endpoint = new URL(normalized)
+    return endpoint.protocol === 'https:' || endpoint.protocol === 'http:'
+      ? endpoint
+      : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function providerHostMatches(endpoint: URL | undefined, expected: string): boolean {
+  const hostname = endpoint?.hostname.toLowerCase().replace(/\.$/u, '')
+  return hostname === expected || hostname?.endsWith(`.${expected}`) === true
+}
+
+function endpointPathStartsWith(endpoint: URL | undefined, prefix: string): boolean {
+  return endpoint?.pathname.toLowerCase().startsWith(prefix) === true
 }
 
 function reasoning(

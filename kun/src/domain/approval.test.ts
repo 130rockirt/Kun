@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { ApprovalActionEnvelopeSchema } from '../contracts/approvals.js'
 import {
   createApprovalActionEnvelope,
+  redactApprovalSensitiveText,
   safeApprovalActionSummary
 } from './approval.js'
 
@@ -346,5 +347,32 @@ describe('approval action envelopes', () => {
         value: expect.stringContaining('PRIVATE_KEY=[redacted]')
       })
     ])
+  })
+
+  it('redacts multiple PEM blocks and escaped quoted secrets without regexp backtracking', () => {
+    const rsa = [
+      '-----BEGIN RSA PRIVATE KEY-----',
+      'rsa-material',
+      '-----END RSA PRIVATE KEY-----'
+    ].join('\n')
+    const ec = [
+      '-----begin ec private key-----',
+      'ec-material',
+      '-----end ec private key-----'
+    ].join('\n')
+    const redacted = redactApprovalSensitiveText([
+      rsa,
+      'AWS_SECRET_ACCESS_KEY="escaped\\\\\\"secret"',
+      'SERVICE_TOKEN=\'escaped\\\\\\\'secret\'',
+      ec,
+      '-----BEGIN PRIVATE KEY----- unmatched'
+    ].join('\n'))
+
+    expect(redacted).not.toContain('rsa-material')
+    expect(redacted).not.toContain('ec-material')
+    expect(redacted).toContain('[redacted private key]')
+    expect(redacted).toContain('AWS_SECRET_ACCESS_KEY=[redacted]')
+    expect(redacted).toContain('SERVICE_TOKEN=[redacted]')
+    expect(redacted).toContain('-----BEGIN PRIVATE KEY----- unmatched')
   })
 })
