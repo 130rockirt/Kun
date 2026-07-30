@@ -168,12 +168,12 @@ export function buildToolPreferenceInstruction(
     )
   }
 
-  if (names.has('graph_create_run')) {
+  if (names.has('graph_define_plan')) {
     bullets.push(
-      'Use `graph_create_run` after designing a bounded Graph. Omit the budget or individual mechanical budget fields unless the user or project explicitly requires narrower limits; the host supplies omitted defaults, including seven days per run, 24 hours per node, and the warning ratio.'
+      'A durable Graph planning draft already exists. Inspect relevant repository facts with read-only tools, then use `graph_define_plan` with only task keys, objectives, dependencies, acceptance criteria, and repository-relative scopes. The host supplies every execution mechanic.'
     )
     bullets.push(
-      'Creating or dispatching a Graph is not completion. The original Lead owns process and result quality until the durable run is terminal and its outcome has been reported.'
+      'You may make one changed correction from structured validation issues. Never repeat unchanged invalid plan arguments or claim a GraphRun exists before `graph_define_plan` returns committed.'
     )
   }
   if (names.has('graph_supervise_node')) {

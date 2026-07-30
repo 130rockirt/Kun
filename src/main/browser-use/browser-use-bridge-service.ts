@@ -8,17 +8,21 @@ import {
 import {
   BROWSER_USE_BRIDGE_CONTRACT_VERSION,
   BrowserUseBridgeRequest,
-  BrowserUseBridgeResponse
+  BrowserUseBridgeResponse,
+  verifyBrowserUseKunApprovalGrant
 } from '../../../kun/src/contracts/browser-use.js'
+import { ToolOperationJournal } from '../../../kun/src/reliability/operation-journal.js'
 import type { BrowserUseManager } from './browser-use-manager'
 
 const MAX_REQUEST_BYTES = 64 * 1024
 const DEFAULT_MAX_CONCURRENCY = 8
 const REQUEST_TIMEOUT_MS = 120_000
+const MAX_CONSUMED_APPROVAL_GRANTS = 4_096
 
 export type BrowserUseBridgeLaunch = {
   url: string
   token: string
+  approvalSigningKey: string
 }
 
 export class BrowserUseBridgeService {
@@ -26,6 +30,7 @@ export class BrowserUseBridgeService {
   private launch?: BrowserUseBridgeLaunch
   private activeRequests = 0
   private readonly abortControllers = new Set<AbortController>()
+  private readonly consumedApprovalGrants = new Map<string, number>()
 
   constructor(
     private readonly manager: BrowserUseManager,
@@ -60,7 +65,8 @@ export class BrowserUseBridgeService {
     this.server = server
     this.launch = {
       url: `http://127.0.0.1:${address.port}`,
-      token
+      token,
+      approvalSigningKey: randomBytes(32).toString('base64url')
     }
     return this.launch
   }
@@ -71,6 +77,7 @@ export class BrowserUseBridgeService {
     this.launch = undefined
     for (const controller of this.abortControllers) controller.abort()
     this.abortControllers.clear()
+    this.consumedApprovalGrants.clear()
     await this.manager.disposeAll('bridge-stopped')
     if (!server) return
     await new Promise<void>((resolve) => server.close(() => resolve()))
@@ -116,12 +123,41 @@ export class BrowserUseBridgeService {
         this.json(response, 400, { error: 'invalid_request' })
         return
       }
-      const result = await this.manager.execute(
-        parsed.data.threadId,
-        parsed.data.turnId,
-        parsed.data.action,
-        controller.signal
-      )
+      const grant = parsed.data.kunApprovalGrant
+      if (
+        grant &&
+        (
+          !verifyBrowserUseKunApprovalGrant(
+            grant,
+            launch.approvalSigningKey
+          ) ||
+          grant.threadId !== parsed.data.threadId ||
+          grant.turnId !== parsed.data.turnId ||
+          grant.argumentsHash !== ToolOperationJournal.argsHash(parsed.data.action)
+        )
+      ) {
+        this.json(response, 400, { error: 'approval_grant_invalid' })
+        return
+      }
+      if (grant && !this.consumeApprovalGrant(grant.id, grant.issuedAt, grant.expiresAt)) {
+        this.json(response, 409, { error: 'approval_grant_replayed' })
+        return
+      }
+      const result = grant
+        ? await this.manager.execute(
+            parsed.data.threadId,
+            parsed.data.turnId,
+            parsed.data.action,
+            controller.signal,
+            grant,
+            parsed.data.kunApprovalMode
+          )
+        : await this.manager.execute(
+            parsed.data.threadId,
+            parsed.data.turnId,
+            parsed.data.action,
+            controller.signal
+          )
       this.json(response, 200, BrowserUseBridgeResponse.parse({
         contractVersion: BROWSER_USE_BRIDGE_CONTRACT_VERSION,
         requestId: parsed.data.requestId,
@@ -151,6 +187,29 @@ export class BrowserUseBridgeService {
     const supplied = Buffer.from(header.slice('Bearer '.length), 'utf8')
     const expected = Buffer.from(token, 'utf8')
     return supplied.length === expected.length && timingSafeEqual(supplied, expected)
+  }
+
+  private consumeApprovalGrant(
+    id: string,
+    issuedAtIso: string,
+    expiresAtIso: string
+  ): boolean {
+    const now = Date.now()
+    for (const [candidateId, candidateExpiry] of this.consumedApprovalGrants) {
+      if (candidateExpiry <= now) this.consumedApprovalGrants.delete(candidateId)
+    }
+    if (this.consumedApprovalGrants.has(id)) return false
+    const issuedAt = Date.parse(issuedAtIso)
+    const expiresAt = Date.parse(expiresAtIso)
+    if (
+      !Number.isFinite(issuedAt) ||
+      !Number.isFinite(expiresAt) ||
+      issuedAt > now + 5_000 ||
+      expiresAt <= now
+    ) return false
+    if (this.consumedApprovalGrants.size >= MAX_CONSUMED_APPROVAL_GRANTS) return false
+    this.consumedApprovalGrants.set(id, expiresAt)
+    return true
   }
 
   private json(response: ServerResponse, status: number, body: unknown): void {

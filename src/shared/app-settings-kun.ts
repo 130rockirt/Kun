@@ -1,4 +1,5 @@
 import {
+  DEFAULT_APPROVAL_REVIEWER,
   DEFAULT_APPROVAL_POLICY,
   DEFAULT_DEEPSEEK_BASE_URL,
   DEFAULT_IMAGE_GENERATION_PROTOCOL,
@@ -23,6 +24,7 @@ import {
   DEFAULT_VIDEO_GENERATION_PROTOCOL,
   MODEL_REASONING_EFFORTS,
   MODEL_REASONING_REQUEST_PROTOCOLS,
+  kunToolPermissionModeSettings,
   normalizeModelEndpointFormat,
   type AppSettingsV1,
   type KunComputerUseSettingsV1,
@@ -64,6 +66,7 @@ import {
   type TextToSpeechProtocol,
   type VideoGenerationProtocol,
   type ApprovalPolicy,
+  type ApprovalReviewer,
   type SandboxMode
 } from './app-settings-types'
 import {
@@ -100,6 +103,7 @@ type LegacyLocalHttpRuntimeSettingsV1 = {
   extraCorsOrigins: string[]
   approvalPolicy: ApprovalPolicy
   sandboxMode: SandboxMode
+  approvalReviewer: ApprovalReviewer
 }
 
 type LegacyReasoningEffort = 'low' | 'medium' | 'high' | 'max'
@@ -130,7 +134,8 @@ function legacyLocalHttpRuntimeDefaults(port = LEGACY_LOCAL_HTTP_DEFAULT_PORT): 
     runtimeToken: '',
     extraCorsOrigins: ['http://localhost:5173', 'http://127.0.0.1:5173'],
     approvalPolicy: DEFAULT_APPROVAL_POLICY,
-    sandboxMode: DEFAULT_SANDBOX_MODE
+    sandboxMode: DEFAULT_SANDBOX_MODE,
+    approvalReviewer: DEFAULT_APPROVAL_REVIEWER
   }
 }
 
@@ -165,8 +170,7 @@ export function defaultKunRuntimeSettings(
     runtimeToken: '',
     dataDir: DEFAULT_KUN_DATA_DIR,
     model: DEFAULT_KUN_MODEL,
-    approvalPolicy: DEFAULT_APPROVAL_POLICY,
-    sandboxMode: DEFAULT_SANDBOX_MODE,
+    ...kunToolPermissionModeSettings('full-access'),
     tokenEconomyMode: false,
     tokenEconomy: defaultKunTokenEconomySettings(),
     toolOutputLimits: defaultKunToolOutputLimitsSettings(),
@@ -191,6 +195,26 @@ export function defaultKunRuntimeSettings(
     quality: defaultKunQualitySettings(),
     graph: defaultKunGraphSettings()
   }
+}
+
+/**
+ * Compatibility-only base for normalizing already persisted settings. Keep
+ * this separate from the fresh-profile default so an older partial record can
+ * never acquire Full access merely because a new field was absent.
+ */
+function legacyKunRuntimeSettingsDefaults(
+  port = DEFAULT_KUN_PORT
+): KunRuntimeSettingsV1 {
+  return {
+    ...defaultKunRuntimeSettings(port),
+    approvalPolicy: DEFAULT_APPROVAL_POLICY,
+    sandboxMode: DEFAULT_SANDBOX_MODE,
+    approvalReviewer: DEFAULT_APPROVAL_REVIEWER
+  }
+}
+
+function normalizeApprovalReviewer(value: unknown): ApprovalReviewer {
+  return value === 'agent' ? 'agent' : DEFAULT_APPROVAL_REVIEWER
 }
 
 export function defaultKunInstructionSettings(): KunInstructionSettingsV1 {
@@ -416,7 +440,7 @@ export function getKunRuntimeSettings(
 ): KunRuntimeSettingsV1 {
   const raw = (settings as { agents?: { kun?: Partial<KunRuntimeSettingsV1> } }).agents?.kun
   return mergeKunRuntimeSettings(
-    defaultKunRuntimeSettings(),
+    raw ? legacyKunRuntimeSettingsDefaults() : defaultKunRuntimeSettings(),
     raw
       ? {
           ...raw,
@@ -632,17 +656,17 @@ export function mergeKunRuntimeSettings(
   void _projectConfigPatch
   void _graphPatch
   void _llmDebugPatch
-  // NOTE: approvalPolicy/sandboxMode are merged through verbatim from the patch.
-  // The unified 6-mode UI selector already resolves a mode to its concrete
-  // {approvalPolicy, sandboxMode} pair via kunToolPermissionModeSettings before
-  // dispatching the patch. We must NOT re-canonicalize here: the mode->settings
-  // mapping is lossy (only 6 of the 6x4 policy/sandbox combos are representable),
-  // so round-tripping would silently rewrite valid non-UI values — e.g. demote
-  // approvalPolicy 'never'/'suggest' to 'on-request', or escalate a 'read-only'/
-  // 'external-sandbox' sandbox to 'danger-full-access' — on every settings merge.
+  // NOTE: approvalPolicy/sandboxMode/reviewer are merged through verbatim from
+  // the patch. The three-mode UI selector resolves a deliberate selection to
+  // its complete authority snapshot before dispatching the patch. We must NOT
+  // re-canonicalize here: the projection is lossy for legacy raw combinations,
+  // so round-tripping it would silently broaden or otherwise rewrite them.
   const merged: KunRuntimeSettingsV1 = {
     ...current,
     ...flatPatch,
+    approvalReviewer: normalizeApprovalReviewer(
+      patch?.approvalReviewer ?? current.approvalReviewer
+    ),
     port: nextPort,
     tokenEconomyMode: nextTokenEconomy.enabled,
     tokenEconomy: nextTokenEconomy,
@@ -1488,7 +1512,7 @@ export function migrateLegacyAppSettings(parsed: LegacyAppSettingsShape): Partia
   const isReasoningLegacy = rawAgentProvider === 'reasonix'
   const hasProviderSettings = typeof parsed.provider === 'object' && parsed.provider !== null
   const defaults = legacyLocalHttpRuntimeDefaults()
-  const kunDefaults = defaultKunRuntimeSettings()
+  const kunDefaults = legacyKunRuntimeSettingsDefaults()
   const legacyDeepseek = parsed.deepseek ?? {}
   const legacyLocalHttp = {
     ...defaults,
@@ -1515,7 +1539,8 @@ export function migrateLegacyAppSettings(parsed: LegacyAppSettingsShape): Partia
     runtimeToken: isReasoningLegacy ? kunDefaults.runtimeToken : legacyLocalHttp.runtimeToken,
     model: isReasoningLegacy ? legacyReasoning.model : kunDefaults.model,
     approvalPolicy: isReasoningLegacy ? kunDefaults.approvalPolicy : legacyLocalHttp.approvalPolicy,
-    sandboxMode: isReasoningLegacy ? kunDefaults.sandboxMode : legacyLocalHttp.sandboxMode
+    sandboxMode: isReasoningLegacy ? kunDefaults.sandboxMode : legacyLocalHttp.sandboxMode,
+    approvalReviewer: DEFAULT_APPROVAL_REVIEWER
   }
   const provider = normalizeModelProviderSettings({
     ...parsed.provider,
@@ -1530,7 +1555,7 @@ export function migrateLegacyAppSettings(parsed: LegacyAppSettingsShape): Partia
     routePools: parsed.provider?.routePools,
     localGateway: parsed.provider?.localGateway
   })
-  const kun = {
+  const kun: KunRuntimeSettingsV1 = {
     ...kunDefaults,
     ...legacySeed,
     ...explicitKun,
@@ -1540,6 +1565,9 @@ export function migrateLegacyAppSettings(parsed: LegacyAppSettingsShape): Partia
     runtimeToken: nonEmptyStringOrFallback(explicitKun.runtimeToken, legacySeed.runtimeToken),
     dataDir: upgradeLegacyKunDefaultDataDir(explicitKun.dataDir),
     model: upgradeLegacyKunDefaultModel(explicitKun.model, legacySeed.model),
+    approvalReviewer: normalizeApprovalReviewer(
+      explicitKun.approvalReviewer ?? legacySeed.approvalReviewer
+    ),
     tokenEconomyMode: typeof explicitKun.tokenEconomy?.enabled === 'boolean'
       ? explicitKun.tokenEconomy.enabled
       : explicitKun.tokenEconomyMode ?? kunDefaults.tokenEconomyMode,

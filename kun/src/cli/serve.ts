@@ -1,10 +1,16 @@
 import { z } from 'zod'
 import {
+  DEFAULT_FRESH_SERVE_PERMISSIONS,
   DEFAULT_SERVE_PORT,
   DEFAULT_SERVE_OPTIONS,
   ServeOptionsSchema,
   type ServeOptions
 } from './cli-options.js'
+import {
+  DEFAULT_APPROVAL_POLICY,
+  DEFAULT_APPROVAL_REVIEWER,
+  DEFAULT_SANDBOX_MODE
+} from '../contracts/policy.js'
 import {
   kunConfigPathForDataDir,
   readKunConfigFile,
@@ -41,6 +47,16 @@ export function parseServeOptions(
   }
   const loadedConfig = loadServeConfig(raw, env)
   const configServe = loadedConfig?.config.serve ?? {}
+  const permissionDefaults: Pick<
+    ServeOptions,
+    'approvalPolicy' | 'sandboxMode' | 'approvalReviewer'
+  > = loadedConfig
+    ? {
+        approvalPolicy: DEFAULT_APPROVAL_POLICY,
+        sandboxMode: DEFAULT_SANDBOX_MODE,
+        approvalReviewer: DEFAULT_APPROVAL_REVIEWER
+      }
+    : DEFAULT_FRESH_SERVE_PERMISSIONS
   const portEnv = env.KUN_PORT
   const tokenEconomyMode =
     booleanFlag(raw, 'token-economy') ??
@@ -165,11 +181,17 @@ export function parseServeOptions(
     approvalPolicy:
       typeof raw['approval-policy'] === 'string'
         ? (raw['approval-policy'] as ServeOptions['approvalPolicy'])
-        : configServe.approvalPolicy ?? DEFAULT_SERVE_OPTIONS.approvalPolicy,
+        : configServe.approvalPolicy ?? permissionDefaults.approvalPolicy,
     sandboxMode:
       typeof raw['sandbox-mode'] === 'string'
         ? (raw['sandbox-mode'] as ServeOptions['sandboxMode'])
-        : configServe.sandboxMode ?? DEFAULT_SERVE_OPTIONS.sandboxMode,
+        : configServe.sandboxMode ?? permissionDefaults.sandboxMode,
+    approvalReviewer:
+      typeof raw['approval-reviewer'] === 'string'
+        ? (raw['approval-reviewer'] as ServeOptions['approvalReviewer'])
+        : env.KUN_APPROVAL_REVIEWER as ServeOptions['approvalReviewer'] | undefined ??
+          configServe.approvalReviewer ??
+          permissionDefaults.approvalReviewer,
     tokenEconomyMode,
     tokenEconomy: {
       ...(configServe.tokenEconomy ?? {}),
@@ -255,6 +277,7 @@ Options:
   --model <model>          Default model id
   --approval-policy <p>    on-request | untrusted | never | auto | suggest
   --sandbox-mode <mode>    read-only | workspace-write | danger-full-access | external-sandbox
+  --approval-reviewer <r>  user | agent
   --token-economy          Compress safe tool context before model calls
   --insecure               Disable bearer token check (local dev only)
   --storage-backend <b>    hybrid | file (default hybrid)

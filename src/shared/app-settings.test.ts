@@ -219,14 +219,17 @@ describe('kun defaults', () => {
     expect(defaultKunRuntimeSettings().model).toBe(DEFAULT_KUN_MODEL)
   })
 
-  it('defaults approval policy to request confirmation for non-read tools', () => {
-    expect(defaultKunRuntimeSettings().approvalPolicy).toBe(DEFAULT_APPROVAL_POLICY)
-    expect(defaultKunRuntimeSettings().approvalPolicy).toBe('on-request')
+  it('defaults a fresh profile to full access with user review metadata', () => {
+    expect(defaultKunRuntimeSettings()).toEqual(expect.objectContaining({
+      approvalPolicy: 'auto',
+      sandboxMode: 'danger-full-access',
+      approvalReviewer: 'user'
+    }))
   })
 
-  it('defaults sandbox mode to workspace write access', () => {
-    expect(defaultKunRuntimeSettings().sandboxMode).toBe(DEFAULT_SANDBOX_MODE)
-    expect(defaultKunRuntimeSettings().sandboxMode).toBe('workspace-write')
+  it('keeps compatibility defaults narrower than the fresh profile default', () => {
+    expect(DEFAULT_APPROVAL_POLICY).toBe('on-request')
+    expect(DEFAULT_SANDBOX_MODE).toBe('workspace-write')
   })
 
   it('defaults Agent Perspective capture off for newly created conversations', () => {
@@ -235,48 +238,82 @@ describe('kun defaults', () => {
     })
   })
 
-  it('maps unified tool permission modes to approval and sandbox settings', () => {
-    expect(kunToolPermissionModeSettings('always-ask')).toEqual({
-      approvalPolicy: 'always',
-      sandboxMode: 'danger-full-access'
-    })
-    expect(kunToolPermissionModeSettings('read-only')).toEqual({
+  it('maps unified tool permission modes to complete authority settings', () => {
+    expect(kunToolPermissionModeSettings('ask-for-approval')).toEqual({
       approvalPolicy: 'on-request',
-      sandboxMode: 'danger-full-access'
+      sandboxMode: 'workspace-write',
+      approvalReviewer: 'user'
     })
-    expect(kunToolPermissionModeSettings('sensitive-ask')).toEqual({
-      approvalPolicy: 'untrusted',
-      sandboxMode: 'danger-full-access'
-    })
-    expect(kunToolPermissionModeSettings('workspace-write')).toEqual({
+    expect(kunToolPermissionModeSettings('approve-for-me')).toEqual({
       approvalPolicy: 'on-request',
-      sandboxMode: 'workspace-write'
+      sandboxMode: 'workspace-write',
+      approvalReviewer: 'agent'
     })
-    expect(kunToolPermissionModeSettings('trusted-workspace')).toEqual({
+    expect(kunToolPermissionModeSettings('full-access')).toEqual({
       approvalPolicy: 'auto',
-      sandboxMode: 'workspace-write'
+      sandboxMode: 'danger-full-access',
+      approvalReviewer: 'user'
     })
-    expect(kunToolPermissionModeSettings('bypass')).toEqual({
-      approvalPolicy: 'auto',
-      sandboxMode: 'danger-full-access'
-    })
-    expect(kunToolPermissionModeFromSettings(defaultKunRuntimeSettings())).toBe('workspace-write')
-    expect(kunToolPermissionModeFromSettings({
-      approvalPolicy: 'always',
-      sandboxMode: 'danger-full-access'
-    })).toBe('always-ask')
-    expect(kunToolPermissionModeFromSettings({
-      approvalPolicy: 'untrusted',
-      sandboxMode: 'danger-full-access'
-    })).toBe('sensitive-ask')
+    expect(kunToolPermissionModeFromSettings(defaultKunRuntimeSettings())).toBe('full-access')
     expect(kunToolPermissionModeFromSettings({
       approvalPolicy: 'on-request',
-      sandboxMode: 'workspace-write'
-    })).toBe('workspace-write')
+      sandboxMode: 'workspace-write',
+      approvalReviewer: 'user'
+    })).toBe('ask-for-approval')
     expect(kunToolPermissionModeFromSettings({
-      approvalPolicy: 'auto',
-      sandboxMode: 'workspace-write'
-    })).toBe('trusted-workspace')
+      approvalPolicy: 'on-request',
+      sandboxMode: 'workspace-write',
+      approvalReviewer: 'agent'
+    })).toBe('approve-for-me')
+  })
+
+  it('preserves legacy approval and sandbox axes while defaulting a missing reviewer to user', () => {
+    const { approvalReviewer: _approvalReviewer, ...legacyKun } = defaultKunRuntimeSettings()
+    void _approvalReviewer
+    const normalized = normalizeAppSettings({
+      ...settings(),
+      agents: {
+        kun: {
+          ...legacyKun,
+          approvalPolicy: 'never',
+          sandboxMode: 'read-only'
+        }
+      }
+    } as unknown as AppSettingsV1)
+
+    expect(normalized.agents.kun).toEqual(expect.objectContaining({
+      approvalPolicy: 'never',
+      sandboxMode: 'read-only',
+      approvalReviewer: 'user'
+    }))
+    expect(kunToolPermissionModeFromSettings(normalized.agents.kun)).toBe('ask-for-approval')
+  })
+
+  it('normalizes unknown persisted reviewers to user and preserves agent reviewers', () => {
+    const invalid = normalizeAppSettings({
+      ...settings(),
+      agents: {
+        kun: {
+          ...defaultKunRuntimeSettings(),
+          approvalReviewer: 'operator'
+        }
+      }
+    } as unknown as AppSettingsV1)
+    const delegated = normalizeAppSettings({
+      ...settings(),
+      agents: {
+        kun: {
+          ...defaultKunRuntimeSettings(),
+          approvalPolicy: 'on-request',
+          sandboxMode: 'workspace-write',
+          approvalReviewer: 'agent'
+        }
+      }
+    })
+
+    expect(invalid.agents.kun.approvalReviewer).toBe('user')
+    expect(delegated.agents.kun.approvalReviewer).toBe('agent')
+    expect(kunToolPermissionModeFromSettings(delegated.agents.kun)).toBe('approve-for-me')
   })
 
   it('defaults token economy mode to off', () => {
@@ -939,33 +976,37 @@ describe('mergeKunRuntimeSettings', () => {
     expect(next.mcpSearch.topKMax).toBe(current.mcpSearch.topKMax)
   })
 
-  it('preserves workspace-write when normalizing unified tool permission settings', () => {
+  it('preserves ask-for-approval when normalizing unified tool permission settings', () => {
     const current = defaultKunRuntimeSettings()
     const next = mergeKunRuntimeSettings(current, {
       approvalPolicy: 'on-request',
-      sandboxMode: 'workspace-write'
+      sandboxMode: 'workspace-write',
+      approvalReviewer: 'user'
     })
 
     expect(next.approvalPolicy).toBe('on-request')
     expect(next.sandboxMode).toBe('workspace-write')
-    expect(kunToolPermissionModeFromSettings(next)).toBe('workspace-write')
+    expect(next.approvalReviewer).toBe('user')
+    expect(kunToolPermissionModeFromSettings(next)).toBe('ask-for-approval')
   })
 
-  it('preserves trusted workspace when normalizing unified tool permission settings', () => {
+  it('preserves approve-for-me when normalizing unified tool permission settings', () => {
     const current = defaultKunRuntimeSettings()
     const next = mergeKunRuntimeSettings(current, {
-      approvalPolicy: 'auto',
-      sandboxMode: 'workspace-write'
+      approvalPolicy: 'on-request',
+      sandboxMode: 'workspace-write',
+      approvalReviewer: 'agent'
     })
 
-    expect(next.approvalPolicy).toBe('auto')
+    expect(next.approvalPolicy).toBe('on-request')
     expect(next.sandboxMode).toBe('workspace-write')
-    expect(kunToolPermissionModeFromSettings(next)).toBe('trusted-workspace')
+    expect(next.approvalReviewer).toBe('agent')
+    expect(kunToolPermissionModeFromSettings(next)).toBe('approve-for-me')
   })
 
   it('preserves non-UI approval/sandbox combinations instead of canonicalizing them', () => {
-    // The unified 6-mode selector cannot represent every approvalPolicy/sandboxMode
-    // combination. mergeKunRuntimeSettings must NOT snap these to a canonical mode,
+    // The unified 3-mode selector cannot represent every raw authority snapshot.
+    // mergeKunRuntimeSettings must NOT snap these to a canonical mode,
     // otherwise it would silently weaken a user's saved security posture.
     const current = defaultKunRuntimeSettings()
 
@@ -1360,7 +1401,8 @@ describe('legacy Kun defaults migration', () => {
       autoStart: false,
       runtimeToken: 'old-token',
       approvalPolicy: 'on-request',
-      sandboxMode: 'read-only'
+      sandboxMode: 'read-only',
+      approvalReviewer: 'user'
     }))
     expect(normalized.provider).toEqual(expect.objectContaining({
       apiKey: 'sk-old',
@@ -1397,7 +1439,8 @@ describe('legacy Kun defaults migration', () => {
 
     expect(normalized.agents.kun).toEqual(expect.objectContaining({
       approvalPolicy: 'on-request',
-      sandboxMode: 'workspace-write'
+      sandboxMode: 'workspace-write',
+      approvalReviewer: 'user'
     }))
   })
 

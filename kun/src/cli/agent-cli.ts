@@ -51,6 +51,7 @@ Common options:
   --provider-id <id>         Route through a configured or extension model provider
   --account-id <id>          Bind an opaque core-managed provider account
   --approval-policy <p>      on-request | untrusted | never | auto | suggest
+  --approval-reviewer <r>    user | agent
   --json                     Emit machine-readable JSON where supported
   --jsonl                    Stream one machine-readable event per line for kun run
 
@@ -77,6 +78,7 @@ const VALUE_FLAGS = new Set([
   'account-id',
   'approval-policy',
   'sandbox-mode',
+  'approval-reviewer',
   'workspace',
   'prompt',
   'p',
@@ -157,7 +159,8 @@ async function runOneShot(argv: readonly string[], io: CliIo): Promise<number> {
       ...(parsed.accountId ? { accountId: parsed.accountId } : {}),
       mode: 'agent',
       approvalPolicy: parsed.options.approvalPolicy,
-      sandboxMode: parsed.options.sandboxMode
+      sandboxMode: parsed.options.sandboxMode,
+      approvalReviewer: parsed.options.approvalReviewer
     })
     if (jsonl) writeJsonLine(io.stdout, { type: 'run_started', threadId: thread.id })
     const turn = await runtime.turnService.startTurn({
@@ -220,7 +223,8 @@ async function runChat(argv: readonly string[], io: CliIo): Promise<number> {
       ...(parsed.accountId ? { accountId: parsed.accountId } : {}),
       mode: 'agent',
       approvalPolicy: parsed.options.approvalPolicy,
-      sandboxMode: parsed.options.sandboxMode
+      sandboxMode: parsed.options.sandboxMode,
+      approvalReviewer: parsed.options.approvalReviewer
     })
     const input = io.stdin ?? processStdin
     const terminal = isTtyInput(input)
@@ -410,6 +414,7 @@ function buildExecContext(options: ServeOptions, workspace: string): ToolHostCon
     delegationPolicy: { enabled: false },
     approvalPolicy: options.approvalPolicy,
     sandboxMode: options.sandboxMode,
+    approvalReviewer: options.approvalReviewer,
     abortSignal: new AbortController().signal,
     awaitApproval: async () => (options.approvalPolicy === 'auto' ? 'allow' : 'deny')
   }

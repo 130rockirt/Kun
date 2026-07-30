@@ -1,6 +1,10 @@
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
-import type { ApprovalPolicy, SandboxMode } from '../contracts/policy.js'
+import type {
+  ApprovalPolicy,
+  ApprovalReviewer,
+  SandboxMode
+} from '../contracts/policy.js'
 
 export const DEFAULT_TUI_DATA_DIR = join(homedir(), '.kun', 'data')
 
@@ -25,6 +29,7 @@ Options:
   --account-id <id>         Provider account for newly created threads
   --approval-policy <p>     on-request | untrusted | never | auto | suggest
   --sandbox-mode <mode>     read-only | workspace-write | danger-full-access | external-sandbox
+  --approval-reviewer <r>   user | agent
   --help, -h                Show this help
 
 Keys:
@@ -49,6 +54,7 @@ export type TuiOptions = {
   accountId?: string
   approvalPolicy?: ApprovalPolicy
   sandboxMode?: SandboxMode
+  approvalReviewer?: ApprovalReviewer
   help: boolean
 }
 
@@ -67,7 +73,8 @@ const VALUE_OPTIONS = new Set([
   'provider-id',
   'account-id',
   'approval-policy',
-  'sandbox-mode'
+  'sandbox-mode',
+  'approval-reviewer'
 ])
 
 const APPROVAL_POLICIES = new Set<ApprovalPolicy>([
@@ -84,6 +91,7 @@ const SANDBOX_MODES = new Set<SandboxMode>([
   'danger-full-access',
   'external-sandbox'
 ])
+const APPROVAL_REVIEWERS = new Set<ApprovalReviewer>(['user', 'agent'])
 
 export function parseTuiOptions(
   argv: readonly string[],
@@ -148,6 +156,11 @@ export function parseTuiOptions(
   if (sandboxMode && !SANDBOX_MODES.has(sandboxMode)) {
     return { ok: false, message: `invalid sandbox mode: ${sandboxMode}` }
   }
+  const approvalReviewer =
+    nonEmpty(values.get('approval-reviewer')) as ApprovalReviewer | undefined
+  if (approvalReviewer && !APPROVAL_REVIEWERS.has(approvalReviewer)) {
+    return { ok: false, message: `invalid approval reviewer: ${approvalReviewer}` }
+  }
 
   const argumentDataDir = nonEmpty(values.get('data-dir'))
   const environmentDataDir = nonEmpty(env.KUN_DATA_DIR)
@@ -175,6 +188,7 @@ export function parseTuiOptions(
       ...(nonEmpty(values.get('account-id')) ? { accountId: nonEmpty(values.get('account-id')) } : {}),
       ...(approvalPolicy ? { approvalPolicy } : {}),
       ...(sandboxMode ? { sandboxMode } : {}),
+      ...(approvalReviewer ? { approvalReviewer } : {}),
       help
     }
   }

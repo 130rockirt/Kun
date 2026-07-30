@@ -11,8 +11,11 @@ import {
 } from '../contracts/capabilities.js'
 import {
   ApprovalPolicySchema,
+  ApprovalReviewerSchema,
+  DEFAULT_APPROVAL_REVIEWER,
   SandboxModeSchema,
   type ApprovalPolicy,
+  type ApprovalReviewer,
   type SandboxMode
 } from '../contracts/policy.js'
 import type { RuntimeEventRecorder } from '../services/runtime-event-recorder.js'
@@ -129,6 +132,8 @@ export const ChildRunRecord = z.object({
   model: z.string().optional(),
   /** Resolved provider id the child routed through, when one was selected. */
   providerId: z.string().optional(),
+  /** Opaque account id inherited only with the same selected provider route. */
+  accountId: z.string().optional(),
   /** Effective reasoning strength used by the child model request. */
   reasoningEffort: ModelReasoningEffort.optional(),
   /** Resolved subagent profile name, when one was selected. */
@@ -148,6 +153,7 @@ export const ChildRunRecord = z.object({
   /** Parent policy captured when the child was created. */
   approvalPolicy: ApprovalPolicySchema.optional(),
   sandboxMode: SandboxModeSchema.optional(),
+  approvalReviewer: ApprovalReviewerSchema.default(DEFAULT_APPROVAL_REVIEWER),
   /** True when this child is detached from the parent turn lifecycle. */
   detached: z.boolean().optional(),
   status: z.enum(['queued', 'running', 'completed', 'failed', 'aborted']),
@@ -184,6 +190,7 @@ export type ChildRunRecord = z.infer<typeof ChildRunRecord>
 export type ChildRunLifecycleMetadata = {
   model?: string
   providerId?: string
+  accountId?: string
   reasoningEffort?: string
   profile?: string
   profileName?: string
@@ -200,6 +207,7 @@ export type ChildRunExecutor = (input: {
   workspace?: string
   model?: string
   providerId?: string
+  accountId?: string
   clientSurface?: TurnClientSurface
   systemPrompt?: string
   /** When true with a non-empty systemPrompt, skip prepending the Kun base prefix. */
@@ -219,6 +227,7 @@ export type ChildRunExecutor = (input: {
   /** Parent security snapshot; it takes precedence over executor defaults. */
   approvalPolicy?: ApprovalPolicy
   sandboxMode?: SandboxMode
+  approvalReviewer?: ApprovalReviewer
   promptPreamble?: string
   /** True when the parent turn is a GUI design-canvas turn. */
   guiDesignCanvas?: boolean
@@ -366,16 +375,20 @@ export class DelegationRuntime {
     workspace?: string
     model?: string
     providerId?: string
+    accountId?: string
     clientSurface?: TurnClientSurface
     /** Effective parent turn/thread model inherited together with inheritedProviderId. */
     inheritedModel?: string
     /** Parent turn/thread provider id inherited by delegate_task when no profile overrides it. */
     inheritedProviderId?: string
+    /** Parent account id paired with inheritedProviderId; never credential material. */
+    inheritedAccountId?: string
     /** Effective parent-turn reasoning strength inherited by custom one-run agents. */
     inheritedReasoningEffort?: string
     /** Effective parent policy captured by the delegating tool call. */
     approvalPolicy?: ApprovalPolicy
     sandboxMode?: SandboxMode
+    approvalReviewer?: ApprovalReviewer
     profile?: string
     /** Trusted, one-run-only profile designed by the parent/router; never persisted as config. */
     inlineProfile?: {
@@ -482,6 +495,14 @@ export class DelegationRuntime {
     })
     const resolvedModel = selection.model
     const resolvedProviderId = selection.providerId
+    const resolvedAccountId = sameModelRoute(
+      selection,
+      input.inheritedModel,
+      input.inheritedProviderId
+    )
+      ? input.inheritedAccountId?.trim()
+      : undefined
+    const approvalReviewer = input.approvalReviewer ?? DEFAULT_APPROVAL_REVIEWER
     if (
       resolvedProviderId &&
       security?.allowedModelProviderIds &&
@@ -533,6 +554,7 @@ export class DelegationRuntime {
       workspace,
       model: resolvedModel,
       providerId: resolvedProviderId,
+      accountId: resolvedAccountId,
       reasoningEffort: resolvedReasoningEffort,
       profile: profileName,
       ...(input.routing ? { routing: ChildRoutingMetadata.parse(input.routing) } : {}),
@@ -543,6 +565,7 @@ export class DelegationRuntime {
       toolPolicy,
       ...(input.approvalPolicy ? { approvalPolicy: input.approvalPolicy } : {}),
       ...(input.sandboxMode ? { sandboxMode: input.sandboxMode } : {}),
+      approvalReviewer,
       returnFormat,
       ...(input.detach ? { detached: true } : {}),
       status: 'queued',
@@ -595,6 +618,7 @@ export class DelegationRuntime {
         toolPolicy,
         resolvedModel,
         resolvedProviderId,
+        resolvedAccountId,
         resolvedSystemPrompt,
         resolvedOmitBasePrompt,
         resolvedAllowedTools,
@@ -605,6 +629,7 @@ export class DelegationRuntime {
         promptPreamble,
         approvalPolicy: input.approvalPolicy,
         sandboxMode: input.sandboxMode,
+        approvalReviewer,
         clientSurface: input.clientSurface,
         guiDesignCanvas: input.guiDesignCanvas === true,
         resolvedReasoningEffort,
@@ -651,6 +676,7 @@ export class DelegationRuntime {
       toolPolicy,
       resolvedModel,
       resolvedProviderId,
+      resolvedAccountId,
       resolvedSystemPrompt,
       resolvedOmitBasePrompt,
       resolvedAllowedTools,
@@ -661,6 +687,7 @@ export class DelegationRuntime {
       promptPreamble,
       approvalPolicy: input.approvalPolicy,
       sandboxMode: input.sandboxMode,
+      approvalReviewer,
       clientSurface: input.clientSurface,
       guiDesignCanvas: input.guiDesignCanvas === true,
       resolvedReasoningEffort,
@@ -712,6 +739,7 @@ export class DelegationRuntime {
     toolPolicy: SubagentToolPolicy
     resolvedModel: string | undefined
     resolvedProviderId: string | undefined
+    resolvedAccountId: string | undefined
     resolvedSystemPrompt: string | undefined
     resolvedOmitBasePrompt: boolean
     resolvedAllowedTools: string[] | undefined
@@ -722,6 +750,7 @@ export class DelegationRuntime {
     promptPreamble: string | undefined
     approvalPolicy: ApprovalPolicy | undefined
     sandboxMode: SandboxMode | undefined
+    approvalReviewer: ApprovalReviewer
     clientSurface: TurnClientSurface | undefined
     guiDesignCanvas: boolean
     resolvedReasoningEffort: string | undefined
@@ -773,6 +802,7 @@ export class DelegationRuntime {
         workspace: args.workspace,
         model: args.resolvedModel,
         ...(args.resolvedProviderId ? { providerId: args.resolvedProviderId } : {}),
+        ...(args.resolvedAccountId ? { accountId: args.resolvedAccountId } : {}),
         ...(args.resolvedSystemPrompt ? { systemPrompt: args.resolvedSystemPrompt } : {}),
         ...(args.resolvedOmitBasePrompt ? { omitBasePrompt: true } : {}),
         ...(args.resolvedAllowedTools ? { allowedTools: args.resolvedAllowedTools } : {}),
@@ -784,6 +814,7 @@ export class DelegationRuntime {
         toolPolicy: args.toolPolicy,
         ...(args.approvalPolicy ? { approvalPolicy: args.approvalPolicy } : {}),
         ...(args.sandboxMode ? { sandboxMode: args.sandboxMode } : {}),
+        approvalReviewer: args.approvalReviewer,
         ...(args.clientSurface ? { clientSurface: args.clientSurface } : {}),
         ...(args.promptPreamble ? { promptPreamble: args.promptPreamble } : {}),
         ...(args.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
@@ -1272,6 +1303,17 @@ function resolveChildModelSelection(input: {
   )
 }
 
+function sameModelRoute(
+  selected: { model?: string; providerId?: string },
+  inheritedModel: string | undefined,
+  inheritedProviderId: string | undefined
+): boolean {
+  return (
+    selected.model === inheritedModel?.trim() &&
+    (selected.providerId ?? '') === (inheritedProviderId?.trim() ?? '')
+  )
+}
+
 function completeModelProviderPair(
   source: string,
   rawModel: string | undefined,
@@ -1394,6 +1436,7 @@ function childLifecycleMetadata(record: ChildRunRecord): ChildRunLifecycleMetada
   return {
     ...(record.model ? { model: record.model } : {}),
     ...(record.providerId ? { providerId: record.providerId } : {}),
+    ...(record.accountId ? { accountId: record.accountId } : {}),
     ...(record.reasoningEffort ? { reasoningEffort: record.reasoningEffort } : {}),
     ...(record.profile ? { profile: record.profile } : {}),
     ...(record.profileSnapshot?.name ? { profileName: record.profileSnapshot.name } : {})

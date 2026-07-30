@@ -112,14 +112,18 @@ import {
 } from './openai-model-gateway.js'
 import {
   cancelGraphRun,
+  cancelGraphPlanningDraft,
   createGraphRun,
   getGraphRun,
+  getGraphPlanningDraft,
   graphRunCommand,
   graphRunEvents,
   listGraphRuns,
+  listGraphPlanningDrafts,
   patchGraphRun,
   readGraphArtifact,
   retryGraphNode,
+  resumeGraphPlanningDraft,
   reviewGraphNode,
   steerGraphRun,
   validateGraphPlan
@@ -371,6 +375,35 @@ export function buildRouter(runtime: ServerRuntime): Router {
   router.add('POST', '/v1/graphs/validate', async (request) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
     return validateGraphPlan(runtime.graph?.control, request)
+  })
+  router.add('GET', '/v1/graph-drafts', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return listGraphPlanningDrafts(runtime.graph?.drafts, request)
+  })
+  router.add('GET', '/v1/graph-drafts/:id', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return getGraphPlanningDraft(runtime.graph?.drafts, ctx.params.id)
+  })
+  router.add('POST', '/v1/graph-drafts/:id/resume', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return resumeGraphPlanningDraft(
+      runtime.graph?.drafts,
+      runtime.turnService,
+      runtime.events,
+      runtime.runTurn,
+      ctx.params.id,
+      request
+    )
+  })
+  router.add('POST', '/v1/graph-drafts/:id/cancel', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return cancelGraphPlanningDraft(
+      runtime.graph?.drafts,
+      runtime.turnService,
+      runtime.events,
+      ctx.params.id,
+      request
+    )
   })
   router.add('GET', '/v1/graphs/diagnostics', async (request) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()

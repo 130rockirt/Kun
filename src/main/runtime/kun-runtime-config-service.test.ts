@@ -31,6 +31,7 @@ describe('Kun runtime config service', () => {
       model: 'model-next',
       approvalPolicy: 'never' as const,
       sandboxMode: 'read-only' as const,
+      approvalReviewer: 'agent' as const,
       runtimeTuning: {
         ...defaultKunRuntimeSettings().runtimeTuning,
         maxConcurrentTurns: 32
@@ -70,6 +71,7 @@ describe('Kun runtime config service', () => {
       model: resolveKunRuntimeSettings(settings).model,
       approvalPolicy: 'never',
       sandboxMode: 'read-only',
+      approvalReviewer: 'agent',
       providers: {}
     })
     expect(body.modelSelection).toBeUndefined()
@@ -154,6 +156,9 @@ describe('Kun runtime config service', () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'kun-runtime-config-llm-debug-'))
     const runtime = {
       ...defaultKunRuntimeSettings(),
+      approvalPolicy: 'on-request' as const,
+      sandboxMode: 'workspace-write' as const,
+      approvalReviewer: 'agent' as const,
       llmDebug: { defaultThreadCaptureEnabled: true }
     }
     try {
@@ -162,6 +167,11 @@ describe('Kun runtime config service', () => {
       expect(config.runtime.llmDebug).toEqual({
         enabled: true,
         defaultThreadCaptureEnabled: true
+      })
+      expect(config.serve).toMatchObject({
+        approvalPolicy: 'on-request',
+        sandboxMode: 'workspace-write',
+        approvalReviewer: 'agent'
       })
     } finally {
       await rm(dataDir, { recursive: true, force: true })

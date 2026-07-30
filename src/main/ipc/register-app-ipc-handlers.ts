@@ -645,8 +645,18 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       detail: [
         `Current approval policy: ${change.current.approvalPolicy}`,
         `Current sandbox: ${change.current.sandboxMode}`,
+        `Current approval reviewer: ${change.current.approvalReviewer}`,
         `New approval policy: ${change.next.approvalPolicy}`,
         `New sandbox: ${change.next.sandboxMode}`,
+        `New approval reviewer: ${change.next.approvalReviewer}`,
+        ...(change.next.approvalPolicy === 'auto' &&
+          change.next.sandboxMode === 'danger-full-access' &&
+          change.next.approvalReviewer === 'user'
+          ? [
+              '',
+              'Full access lets Kun access any local file, execute host commands, and use network-capable tools without Kun approval.'
+            ]
+          : []),
         '',
         'This protected native prompt cannot be confirmed by extension Webviews or Direct DOM content scripts.'
       ].join('\n'),
@@ -664,7 +674,8 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     const latest = await store.load()
     const latestExecution = {
       approvalPolicy: latest.agents.kun.approvalPolicy,
-      sandboxMode: latest.agents.kun.sandboxMode
+      sandboxMode: latest.agents.kun.sandboxMode,
+      approvalReviewer: latest.agents.kun.approvalReviewer
     }
     if (!executionSettingsEqual(latestExecution, change.current)) {
       throw new Error('Kun execution settings changed while confirmation was open; retry the change.')

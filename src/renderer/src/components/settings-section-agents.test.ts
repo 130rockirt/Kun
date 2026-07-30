@@ -424,19 +424,13 @@ const labels: Record<string, string> = {
   browserUseSettingsTitle: 'Browser',
   designQualityTitle: 'Design quality',
   graphSettingsTitle: 'Graph mode',
-  toolPermissionAlwaysAsk: 'Always ask',
-  toolPermissionAlwaysAskDesc: 'Every tool call asks first',
-  toolPermissionReadOnly: 'Read only',
-  toolPermissionReadOnlyDesc: 'Read tools run automatically',
-  toolPermissionSensitiveAsk: 'Sensitive operations ask',
-  toolPermissionSensitiveAskDesc: 'Sensitive operations ask first',
-  toolPermissionWorkspaceWrite: 'Ask for workspace writes',
-  toolPermissionWorkspaceWriteDesc: 'Asks before workspace file changes',
-  toolPermissionTrustedWorkspace: 'Trusted workspace',
-  toolPermissionTrustedWorkspaceDesc: 'Workspace file changes run without prompts',
-  toolPermissionBypass: 'Bypass mode',
-  toolPermissionBypassDesc: 'Never asks and has full access',
-  permissionsBehaviorHint: 'Tool confirmation and local permissions are unified',
+  toolPermissionAskForApproval: 'Ask for approval',
+  toolPermissionAskForApprovalDesc: 'Approval-worthy actions ask you first',
+  toolPermissionApproveForMe: 'Approve for me',
+  toolPermissionApproveForMeDesc: 'Your selected model reviews approval-worthy actions',
+  toolPermissionFullAccess: 'Full access',
+  toolPermissionFullAccessDesc: 'Unrestricted files, host commands, and network-capable tools',
+  permissionsBehaviorHint: 'Choose who reviews approval-worthy actions or grant full access',
   projectConfigTitle: 'Project MCP & Skills',
   projectConfigDescription: 'Portable project configuration',
   projectConfigSecurityHint: 'Project MCP requires digest approval',
@@ -2120,27 +2114,62 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
     expect(html).not.toContain('imageGen')
   })
 
-  it('renders unified permission controls with bypass as the default mode', () => {
+  it('renders exactly three unified permission controls with full access as the default', () => {
     const html = renderToStaticMarkup(createElement(AgentsSettingsSection, { ctx: baseCtx() }))
 
     expect(html).toContain('Permissions')
-    expect(html).toContain('Tool confirmation and local permissions are unified')
+    expect(html).toContain('Choose who reviews approval-worthy actions or grant full access')
     expect(html).toContain('Tool permission mode')
     expect(html).toContain('role="radiogroup"')
-    expect(html).toContain('Every tool call asks first')
-    expect(html).toContain('Read tools run automatically')
-    expect(html).toContain('Sensitive operations ask first')
-    expect(html).toContain('Asks before workspace file changes')
-    expect(html).toContain('Workspace file changes run without prompts')
-    expect(html).toContain('Never asks and has full access')
+    expect(html.match(/role="radio"/g)).toHaveLength(3)
+    expect(html).toContain('Ask for approval')
+    expect(html).toContain('Approval-worthy actions ask you first')
+    expect(html).toContain('Approve for me')
+    expect(html).toContain('Your selected model reviews approval-worthy actions')
+    expect(html).toContain('Full access')
+    expect(html).toContain('Unrestricted files, host commands, and network-capable tools')
     expect(html).toContain('lucide-hand')
-    expect(html).toContain('lucide-eye')
-    expect(html).toContain('lucide-shield-question')
-    expect(html).toContain('lucide-folder-pen')
-    expect(html).toContain('lucide-shield-check')
+    expect(html).toContain('lucide-bot')
     expect(html).toContain('lucide-lock-keyhole-open')
     expect(html).not.toContain('Approval policy')
     expect(html).not.toContain('Sandbox mode')
+  })
+
+  it('applies the complete full-access mapping only from trusted activation', () => {
+    const updateKun = vi.fn()
+    let renderer!: ReactTestRenderer
+    act(() => {
+      renderer = createRenderer(createElement(AgentsSettingsSection, {
+        ctx: {
+          ...baseCtx(),
+          kun: {
+            ...defaultKunRuntimeSettings(),
+            approvalPolicy: 'on-request',
+            sandboxMode: 'workspace-write',
+            approvalReviewer: 'user'
+          },
+          updateKun
+        }
+      }))
+    })
+    const fullAccess = renderer.root
+      .findAllByProps({ role: 'radio' })
+      .find((button) => instanceText(button).includes('Full access'))
+    expect(fullAccess).toBeDefined()
+
+    act(() => {
+      fullAccess?.props.onClick({ isTrusted: false })
+    })
+    expect(updateKun).not.toHaveBeenCalled()
+
+    act(() => {
+      fullAccess?.props.onClick({ isTrusted: true })
+    })
+    expect(updateKun).toHaveBeenCalledWith({
+      approvalPolicy: 'auto',
+      sandboxMode: 'danger-full-access',
+      approvalReviewer: 'user'
+    })
   })
 
   it('keeps permissions in the assistant and experimental features in a standalone laboratory', () => {

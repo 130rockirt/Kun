@@ -10,6 +10,7 @@ import type { ModelCapabilityMetadata } from '../contracts/capabilities.js'
 import type { ThreadStore } from '../ports/thread-store.js'
 import type { SessionStore } from '../ports/session-store.js'
 import type { ApprovalGate } from '../ports/approval-gate.js'
+import type { ApprovalReviewPort } from '../ports/approval-review.js'
 import type { UserInputGate } from '../ports/user-input-gate.js'
 import type { UsageService } from '../services/usage-service.js'
 import type { TurnService, TurnSettlement } from '../services/turn-service.js'
@@ -115,6 +116,7 @@ export type AgentLoopOptions = {
   threadStore: ThreadStore
   sessionStore: SessionStore
   approvalGate: ApprovalGate
+  approvalReview?: ApprovalReviewPort
   userInputGate: UserInputGate
   model: ModelClient
   toolHost: ToolHost
@@ -330,7 +332,8 @@ export class AgentLoop {
       events: opts.events,
       turns: opts.turns,
       sessionStore: opts.sessionStore,
-      nowIso: opts.nowIso
+      nowIso: opts.nowIso,
+      ...(opts.approvalReview ? { approvalReview: opts.approvalReview } : {})
     })
     this.toolExecution = new ToolExecutionService({
       toolHost: opts.toolHost,

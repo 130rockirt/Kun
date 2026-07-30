@@ -6,7 +6,12 @@ import { InMemoryUserInputGate } from '../adapters/in-memory-user-input-gate.js'
 import { setSystemPrompt, type ImmutablePrefix } from '../cache/immutable-prefix.js'
 import { SUBAGENT_READ_ONLY_TOOL_NAMES, type ModelCapabilityMetadata } from '../contracts/capabilities.js'
 import type { TurnItem } from '../contracts/items.js'
-import type { ApprovalPolicy, SandboxMode } from '../contracts/policy.js'
+import {
+  DEFAULT_APPROVAL_REVIEWER,
+  type ApprovalPolicy,
+  type ApprovalReviewer,
+  type SandboxMode
+} from '../contracts/policy.js'
 import type { RuntimeTuningConfig } from '../config/kun-config.js'
 import { AgentLoop } from '../loop/agent-loop.js'
 import { normalizeRoleReasoningEffort } from '../loop/reasoning-effort.js'
@@ -24,6 +29,7 @@ import type { ArtifactStore } from '../artifacts/artifact-store.js'
 import type { ModelClient } from '../ports/model-client.js'
 import { RandomIdGenerator } from '../ports/id-generator.js'
 import type { ApprovalGate } from '../ports/approval-gate.js'
+import type { ApprovalReviewPort } from '../ports/approval-review.js'
 import type { SessionStore } from '../ports/session-store.js'
 import type { ThreadStore } from '../ports/thread-store.js'
 import type { ToolHost } from '../ports/tool-host.js'
@@ -67,6 +73,7 @@ export type ChildAgentExecutorOptions = {
   contextCompaction?: ContextCompactionConfig
   approvalPolicy?: ApprovalPolicy
   sandboxMode?: SandboxMode
+  approvalReviewer?: ApprovalReviewer
   tokenEconomy?: TokenEconomyConfig
   runtime?: RuntimeTuningConfig
   nowIso?: () => string
@@ -80,6 +87,8 @@ export type ChildAgentExecutorOptions = {
   artifactStore?: ArtifactStore
   /** Runtime-owned approval channel shared with the HTTP decision endpoint. */
   approvalGate?: ApprovalGate
+  /** Isolated automatic reviewer used when the inherited reviewer is `agent`. */
+  approvalReview?: ApprovalReviewPort
   /**
    * Host-owned provider-native runtime composition. The callback receives the
    * already narrowed child capability envelope and child turn services.
@@ -183,6 +192,8 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
     const model = input.model?.trim() || options.defaultModel
     const approvalPolicy = input.approvalPolicy ?? options.approvalPolicy ?? 'auto'
     const sandboxMode = input.sandboxMode ?? options.sandboxMode
+    const approvalReviewer =
+      input.approvalReviewer ?? options.approvalReviewer ?? DEFAULT_APPROVAL_REVIEWER
     const delegatedRuntime = options.createDelegatedRuntime?.({
       threads,
       turns,
@@ -218,6 +229,7 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
       threadStore,
       sessionStore,
       approvalGate: options.approvalGate ?? new InMemoryApprovalGate(),
+      ...(options.approvalReview ? { approvalReview: options.approvalReview } : {}),
       userInputGate: new InMemoryUserInputGate(),
       model: options.model,
       toolHost: options.toolHost,
@@ -269,10 +281,12 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
       mode: 'agent',
       approvalPolicy,
       ...(sandboxMode ? { sandboxMode } : {}),
+      approvalReviewer,
       // Route the child to the profile's provider. ThreadService threads
       // providerId into every ModelRequest, and the executor's model is the
       // MultiProviderModelClient, so this single field is all routing needs.
-      ...(input.providerId ? { providerId: input.providerId } : {})
+      ...(input.providerId ? { providerId: input.providerId } : {}),
+      ...(input.accountId ? { accountId: input.accountId } : {})
     }, {
       id: input.childId,
       title,
@@ -297,6 +311,10 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
         model,
         clientSurface: input.guiDesignCanvas ? 'gui' : input.clientSurface ?? 'api',
         ...(input.providerId ? { providerId: input.providerId } : {}),
+        ...(input.accountId ? { accountId: input.accountId } : {}),
+        approvalPolicy,
+        ...(sandboxMode ? { sandboxMode } : {}),
+        approvalReviewer,
         mode: 'agent',
         reasoningEffort: normalizeRoleReasoningEffort(input.reasoningEffort),
         ...(input.guiDesignCanvas ? { guiDesignCanvas: true } : {}),

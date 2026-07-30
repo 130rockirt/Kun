@@ -1,9 +1,12 @@
 import { rendererRuntimeClient } from '../agent/runtime-client'
 import {
   KUN_GRAPHS_PATH,
+  KUN_GRAPH_DRAFTS_PATH,
   KUN_GRAPH_PROJECT_IDENTITY_PATH,
   kunDelegationDiagnosticsPath,
   kunGraphActionPath,
+  kunGraphDraftActionPath,
+  kunGraphDraftPath,
   kunGraphArtifactPath,
   kunGraphEventsPath,
   kunGraphPath,
@@ -25,6 +28,7 @@ import type {
   GraphLearningCandidate,
   GraphLearningJob,
   GraphPatchOperation,
+  GraphPlanningDraftView,
   GraphRun,
   ProjectIdentity
 } from './graph-types'
@@ -77,6 +81,29 @@ export const graphRuntimeClient = {
 
   getRun(runId: string): Promise<GraphRun> {
     return request(kunGraphPath(runId))
+  },
+
+  async listDrafts(threadId?: string): Promise<GraphPlanningDraftView[]> {
+    const query = threadId ? `?thread_id=${encodeURIComponent(threadId)}` : ''
+    return (await request<{ drafts: GraphPlanningDraftView[] }>(
+      `${KUN_GRAPH_DRAFTS_PATH}${query}`
+    )).drafts
+  },
+
+  getDraft(draftId: string): Promise<GraphPlanningDraftView> {
+    return request(kunGraphDraftPath(draftId))
+  },
+
+  resumeDraft(draftId: string, expectedRevision: number): Promise<GraphPlanningDraftView> {
+    return request(kunGraphDraftActionPath(draftId, 'resume'), 'POST', {
+      expectedRevision
+    })
+  },
+
+  cancelDraft(draftId: string, expectedRevision: number): Promise<GraphPlanningDraftView> {
+    return request(kunGraphDraftActionPath(draftId, 'cancel'), 'POST', {
+      expectedRevision
+    })
   },
 
   async listEvents(runId: string, sinceSeq = 0): Promise<GraphEventEnvelope[]> {

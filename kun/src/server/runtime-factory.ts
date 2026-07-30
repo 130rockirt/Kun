@@ -81,7 +81,12 @@ import {
   DEFAULT_KUN_CAPABILITIES_CONFIG,
   type KunCapabilitiesConfig
 } from '../contracts/capabilities.js'
-import type { ApprovalPolicy, SandboxMode } from '../contracts/policy.js'
+import {
+  DEFAULT_APPROVAL_REVIEWER,
+  type ApprovalPolicy,
+  type ApprovalReviewer,
+  type SandboxMode
+} from '../contracts/policy.js'
 import { AgentLoop, type AgentLoopOptions } from '../loop/agent-loop.js'
 import { ContextCompactor } from '../loop/context-compactor.js'
 import type { TokenEconomyConfig } from '../loop/token-economy.js'
@@ -111,6 +116,8 @@ import {
   type ToolOutputLimitsConfig
 } from '../config/kun-config.js'
 import { createAgentObservabilityRecorder } from '../telemetry/agent-observability.js'
+import { ApprovalReviewService } from '../services/approval-review-service.js'
+import { buildApprovalReviewModelRouterInput } from '../services/approval-review-model-router.js'
 import { buildBuiltinHooks } from '../hooks/builtins/index.js'
 import { mergeBuiltinSubagentProfiles } from '../delegation/builtin-profiles.js'
 import { InflightTracker } from '../loop/inflight-tracker.js'
@@ -272,6 +279,7 @@ export type KunServeRuntimeOptions = {
   model: string
   approvalPolicy: ApprovalPolicy
   sandboxMode: SandboxMode
+  approvalReviewer?: ApprovalReviewer
   tokenEconomyMode: boolean
   tokenEconomy?: TokenEconomyConfig
   toolOutputLimits?: ToolOutputLimitsConfig
@@ -405,6 +413,7 @@ export async function createKunServeRuntime(
     nowIso,
     defaultApprovalPolicy: activeOptions.approvalPolicy,
     defaultSandboxMode: activeOptions.sandboxMode,
+    defaultApprovalReviewer: activeOptions.approvalReviewer ?? DEFAULT_APPROVAL_REVIEWER,
     defaultModelRequestCaptureEnabled: modelRequestCaptureDefaultEnabled(activeOptions),
     lifecycleFence,
     onDeleting: async (threadId) => {
@@ -611,14 +620,44 @@ export async function createKunServeRuntime(
   }
   await migrateLegacyProviderCredentials()
   activeOptions = await hydrateLegacyCredentialOptions(activeOptions, legacyCredentialMigration)
-  const directModelClient = new MultiProviderModelClient(
-    buildModelClientRouterInput(
-      activeOptions,
-      modelCapabilities,
-      llmDebug,
-      resolveLegacyRequestCredentials
-    )
+  await mkdir(join(activeOptions.dataDir, 'approval-review'), {
+    recursive: true,
+    mode: 0o700
+  })
+  const buildApprovalReviewClients = (
+    options: KunServeRuntimeOptions,
+    direct: ReturnType<typeof buildModelClientRouterInput>
+  ) => buildApprovalReviewModelRouterInput({
+    direct,
+    providers: options.providers,
+    defaultProviderKind: approvalReviewNativeProviderKind(
+      process.env.KUN_RUNTIME_PROVIDER_KIND
+    ),
+    defaultApiKey: options.apiKey,
+    defaultModel: options.model,
+    reviewCwd: join(options.dataDir, 'approval-review'),
+    ...(process.env.KUN_CLAUDE_BINARY
+      ? { pathToClaudeCodeExecutable: process.env.KUN_CLAUDE_BINARY }
+      : {})
+  })
+  const initialModelClients = buildModelClientRouterInput(
+    activeOptions,
+    modelCapabilities,
+    llmDebug,
+    resolveLegacyRequestCredentials
   )
+  const directModelClient = new MultiProviderModelClient(initialModelClients)
+  const approvalReviewModelClient = new MultiProviderModelClient(
+    buildApprovalReviewClients(activeOptions, initialModelClients)
+  )
+  const approvalReviewService = new ApprovalReviewService({
+    // Automatic review must not route through a model pool because pool
+    // failover would silently substitute the acting turn's selected route.
+    model: approvalReviewModelClient,
+    events,
+    usage: usageService,
+    nowIso
+  })
   const routeHealth = new RoutePoolHealthStore(join(activeOptions.dataDir, 'model-routing', 'health.json'))
   await routeHealth.load()
   const modelClient = new RoutePoolModelClient(
@@ -658,6 +697,7 @@ export async function createKunServeRuntime(
       next.providers.set(providerId, client)
     }
     directModelClient.replace(next)
+    approvalReviewModelClient.replace(buildApprovalReviewClients(activeOptions, next))
     modelClient.replacePools(activeOptions.routePools ?? [])
   }
   modelConnections = new ModelConnectionRegistry({
@@ -704,6 +744,7 @@ export async function createKunServeRuntime(
       activeOptions = nextOptions
       refreshDelegatedProviderIds()
       directModelClient.replace(nextClients)
+      approvalReviewModelClient.replace(buildApprovalReviewClients(activeOptions, nextClients))
       modelClient.replacePools(activeOptions.routePools ?? [])
       refreshModelConnectionDelegatedDeps()
     }
@@ -795,6 +836,9 @@ export async function createKunServeRuntime(
     lifecycleFence,
     onCompacted: (threadId) => delegatedSessions.invalidate(threadId),
     resolveGraphLeadRun,
+    createGraphPlanningDraft: (input) => graphRuntime.createPlanningDraft(input),
+    transitionGraphPlanningDraft: (input) =>
+      graphRuntime.transitionPlanningDraft(input),
     migrationMaintenance,
     ids,
     nowIso
@@ -1040,11 +1084,13 @@ export async function createKunServeRuntime(
           agentSdkProviderIds,
           defaultApprovalPolicy: activeOptions.approvalPolicy,
           defaultSandboxMode: activeOptions.sandboxMode,
+          defaultApprovalReviewer: activeOptions.approvalReviewer ?? DEFAULT_APPROVAL_REVIEWER,
           defaultModel: activeOptions.model,
           defaultIsAgentSdk,
           defaultToken: activeOptions.apiKey,
           turnLimits: activeOptions.runtime?.turnLimits,
           approvalGate,
+          approvalReview: approvalReviewService,
           instructionRuntime,
           allowSdkBuiltins: false,
           toolContextBoundary: {
@@ -1104,6 +1150,7 @@ export async function createKunServeRuntime(
           defaultModel: activeOptions.model,
           defaultApprovalPolicy: activeOptions.approvalPolicy,
           defaultSandboxMode: activeOptions.sandboxMode,
+          defaultApprovalReviewer: activeOptions.approvalReviewer ?? DEFAULT_APPROVAL_REVIEWER,
           systemPrompt: child.prefix.systemPrompt,
           threadStore: child.threadStore,
           sessionStore: child.sessionStore,
@@ -1117,6 +1164,7 @@ export async function createKunServeRuntime(
           turnLimits: activeOptions.runtime?.turnLimits,
           enforceReadOnly: child.toolPolicy === 'readOnly',
           approvalGate,
+          approvalReview: approvalReviewService,
           instructionRuntime,
           toolContextBoundary: {
             ...(child.allowedProviderIds ? { allowedProviderIds: child.allowedProviderIds } : {}),
@@ -1152,15 +1200,18 @@ export async function createKunServeRuntime(
 	          prefix,
 	          defaultModel: activeOptions.model,
 	          models: activeOptions.models,
-	          contextCompaction: activeOptions.contextCompaction,
-	          approvalPolicy: activeOptions.approvalPolicy,
-	          sandboxMode: activeOptions.sandboxMode,
-	          modelCapabilities,
+		          contextCompaction: activeOptions.contextCompaction,
+		          approvalPolicy: activeOptions.approvalPolicy,
+		          sandboxMode: activeOptions.sandboxMode,
+		          approvalReviewer:
+		            activeOptions.approvalReviewer ?? DEFAULT_APPROVAL_REVIEWER,
+		          modelCapabilities,
 	          profilesForProvider,
 	          skillRuntime,
 	          instructionRuntime,
 	          tokenEconomy,
-          approvalGate,
+	          approvalGate,
+	          approvalReview: approvalReviewService,
           createDelegatedRuntime: createChildDelegatedRuntime,
           // Persist the child as a hidden `side` thread on the shared stores +
           // event bus so its session is loadable and streams live in the GUI.
@@ -1324,11 +1375,13 @@ export async function createKunServeRuntime(
       agentSdkProviderIds: new Set(agentSdkProviderIdsForOptions(input.options)),
       defaultApprovalPolicy: input.options.approvalPolicy,
       defaultSandboxMode: input.options.sandboxMode,
+      defaultApprovalReviewer: input.options.approvalReviewer ?? DEFAULT_APPROVAL_REVIEWER,
       defaultModel: input.options.model,
       defaultIsAgentSdk,
       defaultToken: input.options.apiKey,
       turnLimits: input.options.runtime?.turnLimits,
       approvalGate,
+      approvalReview: approvalReviewService,
       skillRuntime: input.skillRuntime,
       instructionRuntime: input.instructionRuntime,
       userInputGate,
@@ -1370,6 +1423,7 @@ export async function createKunServeRuntime(
       defaultModel: input.options.model,
       defaultApprovalPolicy: input.options.approvalPolicy,
       defaultSandboxMode: input.options.sandboxMode,
+      defaultApprovalReviewer: input.options.approvalReviewer ?? DEFAULT_APPROVAL_REVIEWER,
       systemPrompt: prefix.systemPrompt,
       threadStore,
       sessionStore,
@@ -1380,6 +1434,7 @@ export async function createKunServeRuntime(
         threadService.setTodosFromTool(threadId, request),
       ...(llmDebug ? { debugSink: llmDebug } : {}),
       approvalGate,
+      approvalReview: approvalReviewService,
       userInputGate,
       skillRuntime: input.skillRuntime,
       instructionRuntime: input.instructionRuntime,
@@ -1430,6 +1485,7 @@ export async function createKunServeRuntime(
 	    threadStore,
 	    sessionStore,
 	    approvalGate,
+      approvalReview: approvalReviewService,
     userInputGate,
     model: modelClient,
     toolHost,
@@ -1506,6 +1562,8 @@ export async function createKunServeRuntime(
 	      workerModel: graphConfig().workerModel,
 	      approvalPolicy: activeOptions.approvalPolicy,
 	      sandboxMode: activeOptions.sandboxMode,
+	      approvalReviewer:
+	        activeOptions.approvalReviewer ?? DEFAULT_APPROVAL_REVIEWER,
 	      allowedMcpServers: Object.entries(activeOptions.capabilities?.mcp.servers ?? {})
 	        .filter(([, server]) => server.enabled !== false)
 	        .map(([serverId]) => serverId),
@@ -2239,6 +2297,9 @@ export async function createKunServeRuntime(
 	    tokenEconomy = nextTokenEconomy
 	    refreshDelegatedProviderIds()
 	    directModelClient.replace(nextModelClients)
+	    approvalReviewModelClient.replace(
+	      buildApprovalReviewClients(activeOptions, nextModelClients)
+	    )
 	    modelClient.replacePools(activeOptions.routePools ?? [])
 	    if (delegationRuntime && activeOptions.capabilities?.subagents) {
 	      delegationRuntime.replaceConfig(mergeBuiltinSubagentProfiles(activeOptions.capabilities.subagents))
@@ -2276,6 +2337,7 @@ export async function createKunServeRuntime(
 	    threadService.updateRuntimeDefaults({
 	      approvalPolicy: activeOptions.approvalPolicy,
 	      sandboxMode: activeOptions.sandboxMode,
+	      approvalReviewer: activeOptions.approvalReviewer ?? DEFAULT_APPROVAL_REVIEWER,
 	      modelRequestCaptureEnabled: modelRequestCaptureDefaultEnabled(activeOptions)
 	    })
 	    reviewService.updateRuntimeConfig({
@@ -2347,6 +2409,7 @@ export async function createKunServeRuntime(
 	    graph: {
 	      control: graphRuntime.control,
 	      store: graphRuntime.store,
+	      drafts: graphRuntime.drafts,
 	      config: graphConfig,
 	      scheduler: graphRuntime.scheduler,
 	      supervisor: graphRuntime.supervisor,
@@ -2431,6 +2494,8 @@ export async function createKunServeRuntime(
 	        endpointFormat: activeOptions.endpointFormat ?? DEFAULT_MODEL_ENDPOINT_FORMAT,
 	        approvalPolicy: activeOptions.approvalPolicy,
 	        sandboxMode: activeOptions.sandboxMode,
+	        approvalReviewer:
+	          activeOptions.approvalReviewer ?? DEFAULT_APPROVAL_REVIEWER,
 	        tokenEconomyMode: activeOptions.tokenEconomyMode,
 	        insecure: activeOptions.insecure,
         startedAt,
@@ -2873,6 +2938,14 @@ function cursorSdkProviderIdsForOptions(options: KunServeRuntimeOptions): Set<st
   return out
 }
 
+function approvalReviewNativeProviderKind(
+  value: string | undefined
+): 'agent-sdk' | 'cursor-sdk' | 'antigravity-cli' | undefined {
+  return value === 'agent-sdk' || value === 'cursor-sdk' || value === 'antigravity-cli'
+    ? value
+    : undefined
+}
+
 function mergeRuntimeConfigApplyOptions(
   current: KunServeRuntimeOptions,
   request: RuntimeConfigApplyRequest
@@ -2893,6 +2966,7 @@ function mergeRuntimeConfigApplyOptions(
     model: serve.model ?? current.model,
     approvalPolicy: serve.approvalPolicy ?? current.approvalPolicy,
     sandboxMode: serve.sandboxMode ?? current.sandboxMode,
+    approvalReviewer: serve.approvalReviewer ?? current.approvalReviewer,
     tokenEconomyMode: serve.tokenEconomyMode ?? current.tokenEconomyMode,
     tokenEconomy: serve.tokenEconomy ?? current.tokenEconomy,
     toolOutputLimits: serve.toolOutputLimits ?? current.toolOutputLimits,

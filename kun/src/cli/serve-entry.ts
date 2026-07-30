@@ -94,6 +94,7 @@ async function serveMain(argv: readonly string[]): Promise<number> {
     model: info.model,
     approvalPolicy: info.approvalPolicy,
     sandboxMode: info.sandboxMode,
+    approvalReviewer: info.approvalReviewer,
     insecure: info.insecure,
     startedAt: info.startedAt,
     pid: info.pid,

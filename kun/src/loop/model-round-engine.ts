@@ -1,7 +1,11 @@
 import type { CacheRequestSignature } from '../cache/cache-diagnostics.js'
 import { utf8PrefixWithinBytes } from '../shared/utf8-text-blocks.js'
 import type { PipelineStage } from '../contracts/events.js'
-import type { ModelClient, ModelRequest } from '../ports/model-client.js'
+import type {
+  ModelClient,
+  ModelRequest,
+  ModelRouteTargetMetadata
+} from '../ports/model-client.js'
 import type { IdGenerator } from '../ports/id-generator.js'
 import type { RuntimeEventRecorder } from '../services/runtime-event-recorder.js'
 import type { TurnService } from '../services/turn-service.js'
@@ -37,6 +41,12 @@ export type ModelRoundEngineInput = {
   cacheSignature: CacheRequestSignature
   preSendDetails: Record<string, unknown>
   postSendDetails: Record<string, unknown>
+  /**
+   * Runs before the first committed route chunk is reduced or persisted.
+   * Route pools suppress rejected pre-content targets, so this route owns any
+   * tool calls that follow.
+   */
+  onRouteSelected?: (route: ModelRouteTargetMetadata) => Promise<void>
   writeGeneratedImage: (input: {
     imageBase64: string
     mimeType: string
@@ -98,6 +108,7 @@ export class ModelRoundEngine {
     let reasoningCreatedAt = ''
     let persistedReasoningText = ''
     let persistedText = ''
+    let selectedRoute: ModelRouteTargetMetadata | undefined
     const persistAccumulatedResponse = async (): Promise<void> => {
       if (collector.reasoning && collector.reasoning !== persistedReasoningText) {
         const nextReasoning = collector.reasoning
@@ -199,6 +210,18 @@ export class ModelRoundEngine {
           await deltaEvents.flush()
           await persistAccumulatedResponse()
           return { kind: 'aborted' }
+        }
+        if (chunk.route) {
+          if (!selectedRoute) {
+            selectedRoute = { ...chunk.route }
+            await input.onRouteSelected?.(selectedRoute)
+          } else if (!sameModelRouteTarget(selectedRoute, chunk.route)) {
+            throw new Error(
+              'model route changed after stream commit: ' +
+              `${selectedRoute.providerId}/${selectedRoute.modelId} -> ` +
+              `${chunk.route.providerId}/${chunk.route.modelId}`
+            )
+          }
         }
         const reduction = collector.reduce(chunk)
         if (reduction.terminal) {
@@ -412,6 +435,17 @@ export class ModelRoundEngine {
       return runtimeCallId
     }
   }
+}
+
+function sameModelRouteTarget(
+  a: ModelRouteTargetMetadata,
+  b: ModelRouteTargetMetadata
+): boolean {
+  return a.routePoolId === b.routePoolId &&
+    a.targetId === b.targetId &&
+    a.providerId === b.providerId &&
+    a.modelId === b.modelId &&
+    a.requestedModelId === b.requestedModelId
 }
 
 async function* streamFromDispatchedIterator<T>(

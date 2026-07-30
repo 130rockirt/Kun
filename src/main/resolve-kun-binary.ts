@@ -124,6 +124,7 @@ export function buildKunServeArgs(input: {
   dataDir: string
   approvalPolicy: string
   sandboxMode: string
+  approvalReviewer: string
   tokenEconomyMode: boolean
   insecure: boolean
 }): string[] {
@@ -140,6 +141,8 @@ export function buildKunServeArgs(input: {
     input.approvalPolicy,
     '--sandbox-mode',
     input.sandboxMode,
+    '--approval-reviewer',
+    input.approvalReviewer,
     '--token-economy-mode',
     input.tokenEconomyMode ? 'true' : 'false',
     ...(input.insecure ? ['--insecure'] : [])

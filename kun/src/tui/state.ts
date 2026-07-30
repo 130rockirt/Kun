@@ -26,6 +26,20 @@ export type PendingUserInput = {
   itemId?: string
 }
 
+export type ProjectedApprovalReview = {
+  reviewId: string
+  approvalId: string
+  toolName: string
+  summary: string
+  turnId?: string
+  status: 'in-progress' | 'approved' | 'denied' | 'timed-out' | 'failed-closed' | 'aborted'
+  decision?: 'allow' | 'deny'
+  riskLevel?: 'low' | 'medium' | 'high' | 'critical'
+  rationale?: string
+  startedAt: string
+  completedAt?: string
+}
+
 export type ProjectedTurnActivity = {
   turnId: string
   phase: 'starting' | 'thinking' | 'responding' | 'tool' | 'retrying' | 'compacting' | 'waiting'
@@ -87,6 +101,7 @@ export type ThreadProjection = {
   lastError?: string
   activity?: ProjectedTurnActivity
   childRuns: ProjectedChildRun[]
+  approvalReviews: ProjectedApprovalReview[]
 }
 
 export function projectThreadSnapshot(thread: ThreadDetail): ThreadProjection {
@@ -104,6 +119,7 @@ export function projectThreadSnapshot(thread: ThreadDetail): ThreadProjection {
     items,
     lastSeq: thread.latestSeq,
     childRuns: [],
+    approvalReviews: [],
     ...(running ? { runningTurnId: running.id } : {}),
     ...(running ? { activity: activityFromTurn(running) } : {}),
     ...(pendingApprovalItem ? {
@@ -269,6 +285,9 @@ export function applyRuntimeEvent(
           ...(event.providerId ? { providerId: event.providerId } : {}),
           ...(event.accountId ? { accountId: event.accountId } : {}),
           ...(event.reasoningEffort ? { reasoningEffort: event.reasoningEffort } : {}),
+          ...(event.approvalPolicy ? { approvalPolicy: event.approvalPolicy } : {}),
+          ...(event.sandboxMode ? { sandboxMode: event.sandboxMode } : {}),
+          ...(event.approvalReviewer ? { approvalReviewer: event.approvalReviewer } : {}),
           ...(event.mode ? { mode: event.mode } : {})
         })
       }
@@ -333,7 +352,8 @@ export function applyRuntimeEvent(
           ...(event.workspace ? { workspace: event.workspace } : {}),
           ...(event.additionalWorkspaces ? { additionalWorkspaces: event.additionalWorkspaces } : {}),
           ...(event.approvalPolicy ? { approvalPolicy: event.approvalPolicy } : {}),
-          ...(event.sandboxMode ? { sandboxMode: event.sandboxMode } : {})
+          ...(event.sandboxMode ? { sandboxMode: event.sandboxMode } : {}),
+          ...(event.approvalReviewer ? { approvalReviewer: event.approvalReviewer } : {})
         }
       }
       break
@@ -364,6 +384,68 @@ export function applyRuntimeEvent(
           : item)
       }
       break
+    case 'approval_review_started': {
+      const review: ProjectedApprovalReview = {
+        reviewId: event.reviewId,
+        approvalId: event.approvalId,
+        toolName: event.toolName,
+        summary: event.summary,
+        status: event.status,
+        startedAt: event.timestamp,
+        ...(event.turnId ? { turnId: event.turnId } : {})
+      }
+      next = {
+        ...next,
+        approvalReviews: upsertApprovalReview(next.approvalReviews, review),
+        ...(event.turnId
+          ? {
+              activity: activityFor(
+                event.turnId,
+                'waiting',
+                `Agent reviewing ${event.toolName}`,
+                event.timestamp,
+                current.activity
+              )
+            }
+          : {})
+      }
+      break
+    }
+    case 'approval_review_completed': {
+      const existing = next.approvalReviews.find((review) => review.reviewId === event.reviewId)
+      const turnId = event.turnId ?? existing?.turnId
+      const review: ProjectedApprovalReview = {
+        reviewId: event.reviewId,
+        approvalId: event.approvalId,
+        toolName: event.toolName,
+        summary: event.summary,
+        status: event.status,
+        startedAt: existing?.startedAt ?? event.timestamp,
+        completedAt: event.timestamp,
+        ...(turnId ? { turnId } : {}),
+        ...(event.decision ? { decision: event.decision } : {}),
+        ...(event.riskLevel ? { riskLevel: event.riskLevel } : {}),
+        ...(event.rationale ? { rationale: event.rationale } : {})
+      }
+      next = {
+        ...next,
+        approvalReviews: upsertApprovalReview(next.approvalReviews, review),
+        ...(event.turnId && next.runningTurnId === event.turnId
+          ? {
+              activity: activityFor(
+                event.turnId,
+                'starting',
+                event.status === 'approved'
+                  ? `Continuing after agent review`
+                  : `Agent review ${event.status}`,
+                event.timestamp,
+                current.activity
+              )
+            }
+          : {})
+      }
+      break
+    }
     case 'user_input_requested':
       next = {
         ...next,
@@ -753,7 +835,7 @@ function updateTurnStatus(
   threadStatus: ThreadDetail['status'],
   timestamp: string,
   prompt = '',
-  metadata: Partial<Pick<Turn, 'model' | 'providerId' | 'accountId' | 'reasoningEffort' | 'mode' | 'orchestration' | 'attachmentIds'>> = {}
+  metadata: Partial<Pick<Turn, 'model' | 'providerId' | 'accountId' | 'reasoningEffort' | 'approvalPolicy' | 'sandboxMode' | 'approvalReviewer' | 'mode' | 'orchestration' | 'attachmentIds'>> = {}
 ): ThreadDetail {
   if (!turnId) return { ...thread, status: threadStatus }
   const withTurn = ensureTurn(thread, turnId, status, timestamp, prompt, metadata)
@@ -779,7 +861,7 @@ function ensureTurn(
   status: Turn['status'],
   timestamp: string,
   prompt = '',
-  metadata: Partial<Pick<Turn, 'model' | 'providerId' | 'accountId' | 'reasoningEffort' | 'mode' | 'orchestration' | 'attachmentIds'>> = {}
+  metadata: Partial<Pick<Turn, 'model' | 'providerId' | 'accountId' | 'reasoningEffort' | 'approvalPolicy' | 'sandboxMode' | 'approvalReviewer' | 'mode' | 'orchestration' | 'attachmentIds'>> = {}
 ): ThreadDetail {
   if (thread.turns.some((turn) => turn.id === turnId)) {
     if (Object.keys(metadata).length === 0) return thread
@@ -841,6 +923,17 @@ function omitPendingApproval(state: ThreadProjection, approvalId: string): Threa
   if (state.pendingApproval?.approvalId !== approvalId) return state
   const { pendingApproval: _pending, ...rest } = state
   return rest
+}
+
+function upsertApprovalReview(
+  reviews: readonly ProjectedApprovalReview[],
+  review: ProjectedApprovalReview
+): ProjectedApprovalReview[] {
+  const index = reviews.findIndex((candidate) => candidate.reviewId === review.reviewId)
+  if (index < 0) return [...reviews, review]
+  return reviews.map((candidate, candidateIndex) =>
+    candidateIndex === index ? review : candidate
+  )
 }
 
 function omitPendingUserInput(state: ThreadProjection, inputId: string): ThreadProjection {

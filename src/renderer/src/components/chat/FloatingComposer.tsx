@@ -407,6 +407,7 @@ export function FloatingComposer({
   const blocks = useChatStore((s) => s.blocks)
   const resolveUserInput = useChatStore((s) => s.resolveUserInput)
   const reorderQueuedMessage = useChatStore((s) => s.reorderQueuedMessage)
+  const openSettings = useChatStore((s) => s.openSettings)
   const compact = variant !== 'default'
   const side = variant === 'side'
   // The pending ask-user request for this composer's thread, surfaced as a
@@ -1785,6 +1786,7 @@ export function FloatingComposer({
                     applying={executionSettingsApplying}
                     disabled={!canCompose || busy}
                     onChange={onExecutionSettingsChange}
+                    onOpenPermissionSettings={() => openSettings('agents')}
                   />
                 ) : null}
               </div>

@@ -6,6 +6,7 @@ import type { ImmutablePrefix } from '../cache/immutable-prefix.js'
 import type { PipelineStage } from '../contracts/events.js'
 import type { ModelCapabilityMetadata } from '../contracts/capabilities.js'
 import type { TurnItem } from '../contracts/items.js'
+import type { ActingTurnModelRoute } from '../contracts/turns.js'
 import { makeErrorItem } from '../domain/item.js'
 import { repairModelHistoryItems } from '../domain/model-history-repair.js'
 import { memoryPreview } from '../shared/memory-preview.js'
@@ -25,6 +26,7 @@ import {
 } from '../adapters/tool/design-svg-tool.js'
 import { resolveWorkspacePath, shellRuntimeInstruction } from '../adapters/tool/builtin-tool-utils.js'
 import { VERIFY_CHANGES_TOOL_NAME } from '../adapters/tool/builtin-verify-tool.js'
+import { GRAPH_DEFINE_PLAN_TOOL_NAME } from '../adapters/tool/graph-define-plan-tool.js'
 import { GRAPH_LEAD_MODE_INSTRUCTION } from '../prompt/graph-lead-mode.js'
 import { buildToolPreferenceInstruction } from '../prompt/kun-system-prompt.js'
 import {
@@ -68,8 +70,6 @@ import {
 } from './runtime-context.js'
 import {
   GRAPH_CREATE_RUN_TOOL_NAME,
-  MAX_GRAPH_CREATE_RUN_ATTEMPTS,
-  type GraphCreateRunRecoveryReason,
   type RoundOutcomeCoordinator
 } from './round-outcome-coordinator.js'
 import { svgArtifactCompletionState } from './svg-artifact-completion.js'
@@ -104,29 +104,6 @@ import {
 import { buildToolCatalogFingerprint } from '../cache/tool-catalog-fingerprint.js'
 import { rewriteItemHistoryWithRetry } from '../services/history-commit-coordinator.js'
 import { TurnToolCatalogFreezer } from './turn-tool-catalog.js'
-
-function graphCreateRunRecoveryInstruction(
-  attempt: number,
-  reason: GraphCreateRunRecoveryReason
-): string {
-  const correction = reason === 'invalid'
-    ? [
-        `The previous \`${GRAPH_CREATE_RUN_TOOL_NAME}\` call failed validation, so no GraphRun exists.`,
-        'Read every structured issue path in the latest tool result and correct that exact field in the actual next tool arguments.',
-        'All readScopes and writeScopes must be normalized repository-relative paths such as `.`, `src`, or `.graph-artifacts`, never absolute workspace paths.',
-        'Omit host-owned mechanical budget values unless a narrower limit is intentional; the host supplies omitted defaults.',
-        'Do not repeat unchanged invalid arguments, invent fields, use legacy task-graph names, or merely say in prose that a field was fixed.'
-      ]
-    : [
-        `The previous response did not call \`${GRAPH_CREATE_RUN_TOOL_NAME}\`, so no GraphRun exists.`
-      ]
-  return [
-    `Graph creation attempt ${attempt}/${MAX_GRAPH_CREATE_RUN_ATTEMPTS}.`,
-    ...correction,
-    `Call the only available tool, \`${GRAPH_CREATE_RUN_TOOL_NAME}\`, now with a schema-valid GraphPlan whose arguments contain the correction.`,
-    'Return no prose before or instead of the tool call, and do not claim that validation ran unless the tool result says so.'
-  ].join(' ')
-}
 
 export type ModelStepServiceDeps = {
   threadStore: ThreadStore
@@ -285,23 +262,46 @@ export class ModelStepService {
     const items = repairModelHistoryItems(
       effectiveHistoryAfterLatestCompaction(historyItems)
     )
-    const { providerId, accountId } = resolveCoherentProviderAccount({
+    const inheritedProviderAccount = resolveCoherentProviderAccount({
       turnProviderId: turn.providerId,
       turnAccountId: turn.accountId,
       threadProviderId: thread.providerId,
       threadAccountId: thread.accountId
     })
-    const modelRoute = await this.deps.modelRouting.resolve({
-      threadId,
-      turnId,
-      latestRequest: turn?.prompt ?? '',
-      items,
-      signal,
-      ...(providerId ? { providerId } : {}),
-      ...(accountId ? { accountId } : {}),
-      reasoningEffort: turn?.reasoningEffort,
-      candidates: [turn?.model, thread?.model, this.deps.model.model]
-    })
+    const routeProviderId = turn.actingModelRoute?.providerId ?? inheritedProviderAccount.providerId
+    const routeAccountId = turn.actingModelRoute?.accountId ?? inheritedProviderAccount.accountId
+    const modelRoute = turn.actingModelRoute
+      ? {
+          model: turn.actingModelRoute.model,
+          ...(turn.reasoningEffort ? { reasoningEffort: turn.reasoningEffort } : {})
+        }
+      : await this.deps.modelRouting.resolve({
+          threadId,
+          turnId,
+          latestRequest: turn?.prompt ?? '',
+          items,
+          signal,
+          ...(routeProviderId ? { providerId: routeProviderId } : {}),
+          ...(routeAccountId ? { accountId: routeAccountId } : {}),
+          reasoningEffort: turn?.reasoningEffort,
+          candidates: [turn?.model, thread?.model, this.deps.model.model]
+        })
+    const actingModelRoute = turn.actingModelRoute ?? {
+      model: modelRoute.model,
+      ...(routeProviderId ? { providerId: routeProviderId } : {}),
+      ...(routeAccountId ? { accountId: routeAccountId } : {})
+    }
+    const routeSelectionDeferred =
+      !turn.actingModelRoute &&
+      this.deps.model.selectsRouteTargetDuringStream?.({
+        model: modelRoute.model,
+        ...(routeProviderId ? { providerId: routeProviderId } : {})
+      }) === true
+    if (!turn.actingModelRoute && !routeSelectionDeferred) {
+      await this.deps.turns.updateTurnMetadata(threadId, turnId, { actingModelRoute })
+    }
+    const providerId = actingModelRoute.providerId
+    const accountId = actingModelRoute.accountId
     await this.deps.recordPipelineStage(threadId, turnId, 'input_routed', {
       model: modelRoute.model,
       ...(modelRoute.reasoningEffort ? { reasoningEffort: modelRoute.reasoningEffort } : {})
@@ -316,6 +316,7 @@ export class ModelStepService {
       turn,
       history: historyItems,
       model,
+      actingModelRoute,
       modelCapabilities,
       signal,
       mode: modeContext,
@@ -434,23 +435,27 @@ export class ModelStepService {
       ? hasSuccessfulCreatePlanResult(historyItems, turnId)
       : false
     const graphCreateSatisfied = turn.orchestration === 'graph'
-      ? hasSuccessfulToolResult(historyItems, turnId, GRAPH_CREATE_RUN_TOOL_NAME)
+      ? turn.graphPlanningLifecycle?.state === 'committed' ||
+        hasSuccessfulToolResult(historyItems, turnId, GRAPH_DEFINE_PLAN_TOOL_NAME) ||
+        hasSuccessfulToolResult(historyItems, turnId, GRAPH_CREATE_RUN_TOOL_NAME)
       : false
     const svgCompletion = turn?.guiDesignArtifact?.kind === 'svg'
       ? svgArtifactCompletionState(historyItems, turnId)
       : null
     const hardRequiredToolName =
-      turn.orchestration === 'graph' && !graphCreateSatisfied
-        ? GRAPH_CREATE_RUN_TOOL_NAME
-        : svgCompletion?.mutationSucceeded &&
+      svgCompletion?.mutationSucceeded &&
             !svgCompletion.validationAfterMutation
-          ? DESIGN_SVG_VALIDATE_TOOL_NAME
-          : undefined
+        ? DESIGN_SVG_VALIDATE_TOOL_NAME
+        : undefined
     // Plan creation is deliberately a soft completion condition. A Plan turn
     // may investigate, ask for user input, or stop on a genuine clarification
     // before its prose is materialized through create_plan.
     const softRequiredToolName =
-      planTurnActive &&
+      turn.orchestration === 'graph' &&
+      !graphCreateSatisfied &&
+      toolSpecs.some((tool) => tool.name === GRAPH_DEFINE_PLAN_TOOL_NAME)
+        ? GRAPH_DEFINE_PLAN_TOOL_NAME
+        : planTurnActive &&
       !createPlanSatisfied &&
       toolSpecs.some((tool) => tool.name === CREATE_PLAN_TOOL_NAME)
         ? CREATE_PLAN_TOOL_NAME
@@ -465,23 +470,20 @@ export class ModelStepService {
       stepIndex
     })
     const emptyPostToolRecoveryStep = this.deps.roundOutcome.emptyPostToolRecoverySteps(turnId)
-    const graphCreateRunGate = hardRequiredToolName === GRAPH_CREATE_RUN_TOOL_NAME
-      ? turn.requiredToolGate
-      : undefined
-    const graphCreateRunRecoveryReason =
-      (graphCreateRunGate?.lastError ? 'invalid' : undefined) ??
-      this.deps.roundOutcome.graphCreateRunRecoveryReason(turnId) ??
-      'missing'
-    const graphCreateRunAttempt = hardRequiredToolName === GRAPH_CREATE_RUN_TOOL_NAME
-      ? graphCreateRunGate?.attempt ?? 1
-      : 0
     const forceFinalAnswerRecovery =
       emptyPostToolRecoveryStep >= EMPTY_POST_TOOL_FINAL_ANSWER_RECOVERY_STEP
+    const planningToolSpecs = turn.orchestration === 'graph' && !graphCreateSatisfied
+      ? effectiveToolSpecs.filter((tool) =>
+          tool.name === GRAPH_DEFINE_PLAN_TOOL_NAME ||
+          tool.name === 'request_user_input' ||
+          tool.name === 'user_input' ||
+          tool.sideEffect === 'read-only')
+      : effectiveToolSpecs
     const requestToolSpecs = hardRequiredToolName
-      ? effectiveToolSpecs.filter((tool) => tool.name === hardRequiredToolName)
+      ? planningToolSpecs.filter((tool) => tool.name === hardRequiredToolName)
       : forceFinalAnswerRecovery
         ? []
-        : effectiveToolSpecs
+        : planningToolSpecs
     if (hardRequiredToolName && (
       requestToolSpecs.length !== 1 ||
       requestToolSpecs[0]?.name !== hardRequiredToolName ||
@@ -495,24 +497,7 @@ export class ModelStepService {
           : 'required_tool_unsupported',
         message: modelCapabilities.supportsToolCalling
           ? `The required tool \`${hardRequiredToolName}\` is unavailable for this turn.`
-          : `The selected model does not support the required tool \`${hardRequiredToolName}\`.`,
-        ...(hardRequiredToolName === GRAPH_CREATE_RUN_TOOL_NAME
-          ? { graphGateFailureAttempt: graphCreateRunAttempt }
-          : {})
-      })
-    }
-    if (
-      hardRequiredToolName === GRAPH_CREATE_RUN_TOOL_NAME &&
-      (graphCreateRunGate?.phase === 'failed' || graphCreateRunAttempt > MAX_GRAPH_CREATE_RUN_ATTEMPTS)
-    ) {
-      return this.failRequiredToolConstraint({
-        threadId,
-        turnId,
-        code: 'graph_create_run_failed',
-        message: `Graph creation exhausted its ${MAX_GRAPH_CREATE_RUN_ATTEMPTS} allowed attempts.`,
-        ...(graphCreateRunGate?.phase !== 'failed'
-          ? { graphGateFailureAttempt: graphCreateRunAttempt }
-          : {})
+          : `The selected model does not support the required tool \`${hardRequiredToolName}\`.`
       })
     }
     const runtimeContextInstruction = shouldInjectInitialRuntimeContext({
@@ -591,6 +576,16 @@ export class ModelStepService {
       ...(toolPreferenceInstruction
         ? [kunContextBlock('tool-guidance', 'runtime', toolPreferenceInstruction)]
         : []),
+      ...(this.deps.roundOutcome.graphPlanNoToolRecoverySteps(turnId) > 0 &&
+          !graphCreateSatisfied
+        ? [kunContextBlock(
+            'graph-plan-finalization',
+            'runtime',
+            `You inspected or described the plan but did not call \`${GRAPH_DEFINE_PLAN_TOOL_NAME}\`. ` +
+              'If no genuine user clarification is required, call it now using the advertised schema. ' +
+              'Do not replace the tool call with prose.'
+          )]
+        : []),
       ...(requestToolSpecs.some((tool) => tool.name === 'bash')
         ? [kunContextBlock('shell-runtime', 'runtime', shellRuntimeInstruction())]
         : []),
@@ -611,12 +606,6 @@ export class ModelStepService {
     })
     const modeInstruction = [
       ...(turn.orchestration === 'graph' ? [GRAPH_LEAD_MODE_INSTRUCTION] : []),
-      ...(hardRequiredToolName === GRAPH_CREATE_RUN_TOOL_NAME && graphCreateRunAttempt > 1
-        ? [graphCreateRunRecoveryInstruction(
-            graphCreateRunAttempt,
-            graphCreateRunRecoveryReason
-          )]
-        : []),
       ...(planTurnActive ? [PLAN_MODE_INSTRUCTION] : []),
       ...(turn.guiDesignArtifact?.kind === 'svg'
         ? [SVG_ARTIFACT_MODE_INSTRUCTION]
@@ -695,15 +684,6 @@ export class ModelStepService {
       (output) => this.deps.turnAttachments.resolveGeneratedImageForForward(output, threadId, thread?.workspace),
       MAX_FORWARDED_GENERATED_IMAGES
     )
-    if (hardRequiredToolName === GRAPH_CREATE_RUN_TOOL_NAME) {
-      await this.persistGraphCreateGate({
-        threadId,
-        turnId,
-        attempt: graphCreateRunAttempt,
-        phase: 'preparing',
-        ...(graphCreateRunGate?.lastError ? { failureSummary: graphCreateRunGate.lastError } : {})
-      })
-    }
     const composedRequest = composeModelRequest({
       threadId,
       turnId,
@@ -803,6 +783,8 @@ export class ModelStepService {
       toolCatalogFingerprint: toolCatalog.fingerprint,
       activeSkillIds: skillResolution.activeSkillIds
     }
+    let effectiveActingModelRoute: ActingTurnModelRoute = actingModelRoute
+    let streamRouteResolved = false
     const streamed = await this.deps.modelRoundEngine.run({
       threadId,
       turnId,
@@ -832,6 +814,28 @@ export class ModelStepService {
         model: request.model,
         ...clientDiagnostics
       },
+      onRouteSelected: async (route) => {
+        const resolved: ActingTurnModelRoute = {
+          model: route.modelId,
+          providerId: route.providerId,
+          ...(routeAccountId ? { accountId: routeAccountId } : {})
+        }
+        if (!routeSelectionDeferred) {
+          if (!sameActingModelRoute(actingModelRoute, resolved)) {
+            throw new Error(
+              'model route changed after the acting route was frozen: ' +
+              `${actingModelRoute.providerId ?? 'default'}/${actingModelRoute.model} -> ` +
+              `${resolved.providerId ?? 'default'}/${resolved.model}`
+            )
+          }
+          return
+        }
+        effectiveActingModelRoute = resolved
+        streamRouteResolved = true
+        await this.deps.turns.updateTurnMetadata(threadId, turnId, {
+          actingModelRoute: resolved
+        })
+      },
       writeGeneratedImage: async ({ imageBase64 }) => {
         await this.ensureWorkspaceCheckpoint(
           threadId,
@@ -854,6 +858,27 @@ export class ModelStepService {
         return { markdown: `\n![generated image](${relativePath})\n` }
       }
     })
+    if (routeSelectionDeferred && streamed.kind === 'tool_calls' && !streamRouteResolved) {
+      const message = 'route pool emitted tool calls without resolving a concrete model target'
+      this.deps.rememberFailure(turnId, {
+        error: message,
+        code: 'model_route_unresolved',
+        severity: 'error'
+      })
+      await this.deps.events.record({
+        kind: 'error',
+        threadId,
+        turnId,
+        message,
+        code: 'model_route_unresolved',
+        severity: 'error'
+      })
+      return 'failed'
+    }
+    const effectivePrepared: PreparedTurnContext =
+      effectiveActingModelRoute === actingModelRoute
+        ? prepared
+        : { ...prepared, actingModelRoute: effectiveActingModelRoute }
     return this.deps.roundOutcome.resolve({
       threadId,
       turnId,
@@ -861,8 +886,10 @@ export class ModelStepService {
       ...(request.requiredToolName ? { requiredToolName: request.requiredToolName } : {}),
       ...(softRequiredToolName ? { softRequiredToolName } : {}),
       turn,
-      prepared,
-      ...(providerId ? { modelProviderId: providerId } : {}),
+      prepared: effectivePrepared,
+      ...(effectiveActingModelRoute.providerId
+        ? { modelProviderId: effectiveActingModelRoute.providerId }
+        : {}),
       modelReasoningEffort: modelRoute.reasoningEffort ?? turn.reasoningEffort ?? 'auto',
       sourceResultBudgetTokens,
       toolProviderMetadata,
@@ -872,51 +899,12 @@ export class ModelStepService {
     })
   }
 
-  private async persistGraphCreateGate(input: {
-    threadId: string
-    turnId: string
-    attempt: number
-    phase: 'preparing' | 'retrying' | 'succeeded' | 'failed'
-    failureSummary?: string
-  }): Promise<void> {
-    const failureSummary = input.failureSummary?.trim().slice(0, 2_048)
-    await this.deps.turns.updateTurnMetadata(input.threadId, input.turnId, {
-      requiredToolGate: {
-        toolName: GRAPH_CREATE_RUN_TOOL_NAME,
-        attempt: input.attempt,
-        maxAttempts: MAX_GRAPH_CREATE_RUN_ATTEMPTS,
-        phase: input.phase,
-        ...(failureSummary ? { lastError: failureSummary } : {})
-      }
-    })
-    await this.deps.events.record({
-      kind: 'required_tool_gate',
-      threadId: input.threadId,
-      turnId: input.turnId,
-      toolName: GRAPH_CREATE_RUN_TOOL_NAME,
-      phase: input.phase,
-      attempt: input.attempt,
-      maxAttempts: MAX_GRAPH_CREATE_RUN_ATTEMPTS,
-      ...(failureSummary ? { failureSummary } : {})
-    })
-  }
-
   private async failRequiredToolConstraint(input: {
     threadId: string
     turnId: string
-    code: 'required_tool_unavailable' | 'required_tool_unsupported' | 'graph_create_run_failed'
+    code: 'required_tool_unavailable' | 'required_tool_unsupported'
     message: string
-    graphGateFailureAttempt?: number
   }): Promise<'failed'> {
-    if (input.graphGateFailureAttempt !== undefined) {
-      await this.persistGraphCreateGate({
-        threadId: input.threadId,
-        turnId: input.turnId,
-        attempt: Math.max(1, Math.min(input.graphGateFailureAttempt, MAX_GRAPH_CREATE_RUN_ATTEMPTS)),
-        phase: 'failed',
-        failureSummary: input.message
-      })
-    }
     this.deps.rememberFailure(input.turnId, { error: input.message, code: input.code, severity: 'error' })
     await this.deps.events.record({
       kind: 'error',
@@ -974,6 +962,15 @@ function hasSuccessfulToolResult(
     item.toolName === toolName &&
     item.status === 'completed' &&
     item.isError !== true)
+}
+
+function sameActingModelRoute(
+  a: ActingTurnModelRoute,
+  b: ActingTurnModelRoute
+): boolean {
+  return a.model === b.model &&
+    a.providerId === b.providerId &&
+    a.accountId === b.accountId
 }
 
 export function buildExtensionProfileInstruction(extensionId: string, profileId: string, overlay: string): string {

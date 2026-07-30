@@ -211,8 +211,13 @@ describe('ExtensionToolRegistry', () => {
     const call = {
       callId: 'call_external', toolName: registration.modelAlias, arguments: { text: 'hello' }
     }
-    const first = await host.execute(call, context({ awaitApproval }))
-    const second = await host.execute(call, context({ awaitApproval }))
+    const restricted = {
+      approvalPolicy: 'on-request' as const,
+      sandboxMode: 'workspace-write' as const,
+      awaitApproval
+    }
+    const first = await host.execute(call, context(restricted))
+    const second = await host.execute(call, context(restricted))
 
     expect(awaitApproval).toHaveBeenCalledTimes(2)
     expect(calls).toBe(1)

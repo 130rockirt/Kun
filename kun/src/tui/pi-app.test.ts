@@ -271,6 +271,41 @@ describe('PiTuiApplication command overlays', () => {
     expect(visibleWidth(renderGraphProgressRow(state, 36))).toBeLessThanOrEqual(36)
   })
 
+  it('renders automatic review progress and terminal rationale without approval controls', () => {
+    const projection = projectThreadSnapshot(detail())
+    projection.approvalReviews = [{
+      reviewId: 'review_1',
+      approvalId: 'approval_1',
+      turnId: 'turn_1',
+      toolName: 'bash',
+      summary: 'Run the test command',
+      status: 'in-progress',
+      startedAt: '2026-07-22T00:00:01.000Z'
+    }]
+    const transcript = new TranscriptComponent()
+    transcript.update(projection, false, false)
+
+    const progress = sanitizeTerminalText(transcript.render(80).join('\n'))
+    expect(progress).toContain('Reviewing bash')
+    expect(progress).toContain('Run the test command')
+    expect(progress).not.toMatch(/\bAllow\b|\bDeny\b/u)
+
+    projection.approvalReviews = [{
+      ...projection.approvalReviews[0]!,
+      status: 'denied',
+      decision: 'deny',
+      riskLevel: 'high',
+      rationale: 'The command exceeds the requested workspace scope.',
+      completedAt: '2026-07-22T00:00:02.000Z'
+    }]
+    transcript.update(projection, false, false)
+    const terminal = sanitizeTerminalText(transcript.render(80).join('\n'))
+    expect(terminal).toContain('Agent review denied')
+    expect(terminal).toContain('risk high')
+    expect(terminal).toContain('The command exceeds the requested workspace scope.')
+    expect(terminal).not.toMatch(/\bAllow\b/u)
+  })
+
   it('renders a responsive Graph board and drills into the selected worker', () => {
     const controller = new TuiController({} as KunTuiClient, options, runtime)
     const projection = projectThreadSnapshot(detail())
@@ -873,7 +908,8 @@ describe('PiTuiApplication command overlays', () => {
           turnStartedAt: current.turns[0]!.startedAt!,
           updatedAt: current.turns[0]!.startedAt!
         },
-        childRuns: []
+        childRuns: [],
+        approvalReviews: []
       }
     }, controller, 100, 3)
     expect(reconnecting).toContain('Reconnecting to live stream')
@@ -2606,79 +2642,53 @@ describe('PiTuiApplication command overlays', () => {
     expect(outputText).not.toContain('\x1b[?1049l')
   })
 
-  it('maps GUI-aligned permission presets and preserves Advanced custom settings', async () => {
+  it('maps the three GUI-aligned permission modes and removes raw Advanced editing', async () => {
     const presetSave = vi.fn(async () => true)
     const closePreset = vi.fn()
     const presetDialog = new PermissionDialog(
       { setPermissions: presetSave } as unknown as TuiController,
       'on-request',
       'workspace-write',
+      'user',
       closePreset
     )
     const presetFrame = sanitizeTerminalText(presetDialog.render(100).join('\n'))
     for (const label of [
-      'Always ask',
-      'Read only',
-      'Sensitive operations ask',
-      'Ask for workspace writes',
-      'Trusted workspace',
+      'Ask for approval',
+      'Approve for me',
       'Full access'
     ]) {
       expect(presetFrame).toContain(label)
     }
     expect(presetFrame).not.toContain('Approval policy')
+    expect(presetFrame).not.toContain('Advanced')
 
-    presetDialog.handleInput('\x1b[B')
     presetDialog.handleInput('\x1b[B')
     presetDialog.handleInput('\r')
     await waitFor(() => presetSave.mock.calls.length === 1)
-    expect(presetSave).toHaveBeenCalledWith('auto', 'danger-full-access')
+    expect(presetSave).toHaveBeenCalledWith('on-request', 'workspace-write', 'agent')
     expect(closePreset).toHaveBeenCalledOnce()
 
-    const advancedSave = vi.fn(async () => true)
-    const closeAdvanced = vi.fn()
-    const advancedDialog = new PermissionDialog(
-      { setPermissions: advancedSave } as unknown as TuiController,
-      'on-request',
-      'workspace-write',
-      closeAdvanced
-    )
-    advancedDialog.handleInput('a')
-    const advancedFrame = sanitizeTerminalText(advancedDialog.render(100).join('\n'))
-    expect(advancedFrame).toContain('Permissions / Advanced')
-    expect(advancedFrame).toContain('Approval policy')
-    expect(advancedFrame).toContain('Sandbox mode')
-
-    advancedDialog.handleInput('\x1b[B')
-    advancedDialog.handleInput('\x1b[C')
-    advancedDialog.handleInput('\x1b')
-    expect(sanitizeTerminalText(advancedDialog.render(100).join('\n'))).toContain('Tool permission mode')
-    expect(advancedSave).not.toHaveBeenCalled()
-    expect(closeAdvanced).not.toHaveBeenCalled()
-
-    // Re-entering Advanced starts from the persisted raw pair, not the
-    // cancelled local draft.
-    advancedDialog.handleInput('a')
-    advancedDialog.handleInput('\r')
-    await waitFor(() => advancedSave.mock.calls.length === 1)
-    expect(advancedSave).toHaveBeenCalledWith('on-request', 'workspace-write')
-
+    // Rendering a custom legacy pair projects it conservatively without
+    // writing. An explicit save canonicalizes all three authority fields.
     const customSave = vi.fn(async () => true)
     const customDialog = new PermissionDialog(
       { setPermissions: customSave } as unknown as TuiController,
       'never',
       'read-only',
+      'user',
       vi.fn()
     )
-    const customReadOnlyRow = customDialog.render(100)
+    const projectedAskRow = customDialog.render(100)
       .map((line) => sanitizeTerminalText(line))
-      .find((line) => line.includes('Read only'))
-    expect(customReadOnlyRow).toContain('│ Read only')
+      .find((line) => line.includes('Ask for approval'))
+    expect(projectedAskRow).toContain('│ Ask for approval')
     expect(customSave).not.toHaveBeenCalled()
     customDialog.handleInput('a')
+    expect(sanitizeTerminalText(customDialog.render(100).join('\n'))).not.toContain('Advanced')
     customDialog.handleInput('\r')
     await waitFor(() => customSave.mock.calls.length === 1)
-    expect(customSave).toHaveBeenCalledWith('never', 'read-only')
+    expect(customSave).toHaveBeenCalledWith('on-request', 'workspace-write', 'user')
 
     const cancelSave = vi.fn(async () => true)
     const cancelClose = vi.fn()
@@ -2686,11 +2696,76 @@ describe('PiTuiApplication command overlays', () => {
       { setPermissions: cancelSave } as unknown as TuiController,
       'suggest',
       'external-sandbox',
+      'user',
       cancelClose
     )
     cancelDialog.handleInput('\x1b')
     expect(cancelClose).toHaveBeenCalledOnce()
     expect(cancelSave).not.toHaveBeenCalled()
+  })
+
+  it('requires a second explicit confirmation only when elevating to Full access', async () => {
+    const restrictedSave = vi.fn(async () => true)
+    const restrictedClose = vi.fn()
+    const restrictedDialog = new PermissionDialog(
+      { setPermissions: restrictedSave } as unknown as TuiController,
+      'on-request',
+      'workspace-write',
+      'user',
+      restrictedClose
+    )
+    restrictedDialog.handleInput('\x1b[B')
+    restrictedDialog.handleInput('\x1b[B')
+    restrictedDialog.handleInput('\r')
+
+    expect(restrictedSave).not.toHaveBeenCalled()
+    const confirmation = sanitizeTerminalText(restrictedDialog.render(100).join('\n'))
+    expect(confirmation).toContain('Enable Full access?')
+    expect(confirmation).toContain('access any file on this computer')
+    expect(confirmation).toContain('execute host commands')
+    expect(confirmation).toContain('network-capable tools')
+
+    restrictedDialog.handleInput('\x1b')
+    expect(restrictedSave).not.toHaveBeenCalled()
+    expect(restrictedClose).not.toHaveBeenCalled()
+    expect(sanitizeTerminalText(restrictedDialog.render(100).join('\n')))
+      .toContain('Tool permission mode')
+
+    restrictedDialog.handleInput('\r')
+    expect(restrictedSave).not.toHaveBeenCalled()
+    restrictedDialog.handleInput('\r')
+    await waitFor(() => restrictedSave.mock.calls.length === 1)
+    expect(restrictedSave).toHaveBeenCalledWith('auto', 'danger-full-access', 'user')
+    expect(restrictedClose).toHaveBeenCalledOnce()
+
+    const alreadyFullSave = vi.fn(async () => true)
+    const alreadyFullDialog = new PermissionDialog(
+      { setPermissions: alreadyFullSave } as unknown as TuiController,
+      'auto',
+      'danger-full-access',
+      'user',
+      vi.fn()
+    )
+    alreadyFullDialog.handleInput('\r')
+    await waitFor(() => alreadyFullSave.mock.calls.length === 1)
+    expect(alreadyFullSave).toHaveBeenCalledWith('auto', 'danger-full-access', 'user')
+
+    const lowerAuthoritySave = vi.fn(async () => true)
+    const lowerAuthorityDialog = new PermissionDialog(
+      { setPermissions: lowerAuthoritySave } as unknown as TuiController,
+      'auto',
+      'danger-full-access',
+      'user',
+      vi.fn()
+    )
+    lowerAuthorityDialog.handleInput('\x1b[A')
+    lowerAuthorityDialog.handleInput('\r')
+    await waitFor(() => lowerAuthoritySave.mock.calls.length === 1)
+    expect(lowerAuthoritySave).toHaveBeenCalledWith(
+      'on-request',
+      'workspace-write',
+      'agent'
+    )
   })
 
   it('renders GUI-aligned permission presets in a narrow inline terminal and restores focus', async () => {
@@ -2743,18 +2818,19 @@ describe('PiTuiApplication command overlays', () => {
       await waitFor(() => outputText.slice(beforePermission).includes('Full access'))
       const narrowPresetFrame = sanitizeTerminalText(outputText.slice(beforePermission))
       expect(narrowPresetFrame).toContain('Tool permission mode')
-      expect(narrowPresetFrame).toContain('Always ask')
-      expect(narrowPresetFrame).toContain('Sensitive oper...')
-      expect(narrowPresetFrame).toContain('Ask for worksp...')
+      expect(narrowPresetFrame).toContain('Ask for approval')
+      expect(narrowPresetFrame).toContain('Approve for me')
       expect(narrowPresetFrame).toContain('Full access')
-      expect(narrowPresetFrame).toContain('A adva...')
+      expect(narrowPresetFrame).not.toContain('adva')
       expect(narrowPresetFrame).not.toContain('Approval policy')
       input.emit('data', '\r')
       await waitFor(() => updateThread.mock.calls.length > 0)
 
       expect(outputText).not.toContain('\x1b[?1049h')
       expect(updateThread).toHaveBeenCalledWith('thr_pi', {
-        approvalPolicy: 'on-request', sandboxMode: 'workspace-write'
+        approvalPolicy: 'on-request',
+        sandboxMode: 'workspace-write',
+        approvalReviewer: 'user'
       })
     } finally {
       controller.requestQuit()

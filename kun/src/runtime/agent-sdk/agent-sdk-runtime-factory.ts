@@ -30,8 +30,10 @@ import type { ThreadStore } from '../../ports/thread-store.js'
 import type { CapabilityRegistry } from '../../adapters/tool/capability-registry.js'
 import type { ToolHost, ToolHostContext } from '../../ports/tool-host.js'
 import {
+  DEFAULT_APPROVAL_REVIEWER,
   DEFAULT_SANDBOX_MODE,
   type ApprovalPolicy,
+  type ApprovalReviewer,
   type SandboxMode
 } from '../../contracts/policy.js'
 import type { ServeProviderConfig } from '../../config/kun-config.js'
@@ -60,7 +62,15 @@ import type {
 } from '../../ports/user-input-gate.js'
 import type { TurnItem } from '../../contracts/items.js'
 import type { ApprovalGate } from '../../ports/approval-gate.js'
-import { createApprovalRequest, type ApprovalRequest } from '../../domain/approval.js'
+import {
+  createApprovalActionEnvelope,
+  createApprovalRequest,
+  safeApprovalActionSummary,
+  type ApprovalRequest,
+  type ApprovalResolution
+} from '../../domain/approval.js'
+import type { ApprovalReviewPort } from '../../ports/approval-review.js'
+import type { ActingTurnModelRoute } from '../../contracts/turns.js'
 import { makeUserInputItem } from '../../domain/item.js'
 import { awaitAbortableGate } from '../../services/interactive-gate.js'
 import {
@@ -87,6 +97,13 @@ const CLAUDE_KUN_TOOL_INSTRUCTION = [
   'Their execution remains governed by Kun ToolHost approval and sandbox policy.'
 ].join(' ')
 
+const SDK_ON_REQUEST_AUTO_ALLOWED_TOOLS = new Set([
+  'Read',
+  'Glob',
+  'Grep',
+  'TodoWrite'
+])
+
 export interface AgentSdkRuntimeFactoryDeps {
   registry: CapabilityRegistry
   /**
@@ -109,6 +126,9 @@ export interface AgentSdkRuntimeFactoryDeps {
   agentSdkProviderIds: ReadonlySet<string>
   defaultApprovalPolicy: ApprovalPolicy
   defaultSandboxMode?: SandboxMode
+  defaultApprovalReviewer?: ApprovalReviewer
+  /** Isolated, no-tools automatic reviewer shared with native Kun turns. */
+  approvalReview?: ApprovalReviewPort
   /** Runtime default model — used as the Claude model when a thread carries a non-Anthropic id. */
   defaultModel?: string
   /** True when the runtime's own default provider is agent-sdk (Claude sub as main model). */
@@ -344,8 +364,28 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
   const makeAwaitApproval = (
     approvalPolicy: ApprovalPolicy,
     sandboxMode: SandboxMode | undefined,
+    approvalReviewer: ApprovalReviewer,
+    actingModelRoute: ActingTurnModelRoute,
+    intent: string,
     signal: AbortSignal
-  ): ((approval: ApprovalRequest) => Promise<'allow' | 'deny'>) => async (approval) => {
+  ): ((approval: ApprovalRequest) => Promise<'allow' | 'deny' | ApprovalResolution>) => async (approval) => {
+    if (approvalPolicy === 'auto' && sandboxMode === 'danger-full-access') return 'allow'
+    if (approvalReviewer === 'agent') {
+      if (!deps.approvalReview) {
+        return {
+          decision: 'deny',
+          reviewer: 'agent',
+          reason: 'Automatic approval review is unavailable.',
+          reviewStatus: 'failed-closed'
+        }
+      }
+      return deps.approvalReview.review({
+        approval,
+        route: actingModelRoute,
+        intent,
+        signal
+      })
+    }
     const gate = deps.approvalGate
     if (approvalPolicy === 'never' || !gate) return 'deny'
     const pending = gate.request(approval)
@@ -380,7 +420,9 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
             approvalId: approval.id,
             toolName: approval.toolName,
             status: 'expired',
+            approvalReviewer: 'user',
             summary: approval.summary,
+            ...(approval.action ? { action: approval.action } : {}),
             ...(current.reason ? { reason: current.reason } : {})
           })
         }).catch(() => undefined)
@@ -411,8 +453,10 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
           toolName: approval.toolName,
           status: 'pending',
           approvalPolicy,
+          approvalReviewer: 'user',
           sandboxMode: sandboxMode ?? DEFAULT_SANDBOX_MODE,
-          summary: approval.summary
+          summary: approval.summary,
+          ...(approval.action ? { action: approval.action } : {})
         })
         // Attach both handlers immediately so a recorder rejection cannot
         // surface as unhandled while abort is winning the race.
@@ -471,6 +515,8 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
       allowedToolNames?: readonly string[]
       sandboxMode?: SandboxMode
       approvalPolicy?: ApprovalPolicy
+      approvalReviewer?: ApprovalReviewer
+      actingModelRoute?: ActingTurnModelRoute
       signal?: AbortSignal
       awaitUserInput?: ToolHostContext['awaitUserInput']
       awaitApproval?: ToolHostContext['awaitApproval']
@@ -487,7 +533,10 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
       workspace,
       ...(opts?.additionalWorkspaces?.length ? { additionalWorkspaces: opts.additionalWorkspaces } : {}),
       approvalPolicy: opts?.approvalPolicy ?? deps.defaultApprovalPolicy,
+      approvalReviewer:
+        opts?.approvalReviewer ?? deps.defaultApprovalReviewer ?? DEFAULT_APPROVAL_REVIEWER,
       sandboxMode: opts?.sandboxMode ?? deps.defaultSandboxMode ?? DEFAULT_SANDBOX_MODE,
+      ...(opts?.actingModelRoute ? { actingModelRoute: opts.actingModelRoute } : {}),
       abortSignal: opts?.signal ?? new AbortController().signal,
       ...deps.toolContextBoundary,
       // Expose plan state so `create_plan` is advertised (listTools) and executable
@@ -556,12 +605,47 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
       const images = await resolveImages(threadId, thread.workspace, attachmentIds)
       if (!userText.trim() && images.length === 0) return null
 
-      const providerId = turn?.providerId?.trim() || thread.providerId?.trim()
-      const providerCfg = providerId ? deps.providerConfigs[providerId] : undefined
+      const requestedProviderId = turn?.providerId?.trim()
+      const requestedRouteProviderId = requestedProviderId || thread.providerId?.trim()
+      const explicitRouteProviderId =
+        requestedRouteProviderId && requestedRouteProviderId !== 'default'
+          ? requestedRouteProviderId
+          : undefined
+      const actingProviderId =
+        explicitRouteProviderId || (deps.defaultIsAgentSdk ? 'default' : undefined)
+      const requestedAccountId = turn.accountId?.trim() || (
+        !requestedProviderId || requestedProviderId === thread.providerId?.trim()
+          ? thread.accountId?.trim()
+          : undefined
+      )
+      const selectedModel = resolveSdkModel(turn?.model || thread.model, deps.defaultModel)
+      const actingModelRoute: ActingTurnModelRoute = turn.actingModelRoute ?? {
+        model: selectedModel ?? 'claude-default',
+        ...(actingProviderId ? { providerId: actingProviderId } : {}),
+        ...(requestedAccountId ? { accountId: requestedAccountId } : {})
+      }
+      if (!turn.actingModelRoute) {
+        await deps.turns.updateTurnMetadata(threadId, turnId, { actingModelRoute })
+      }
+      const providerId = actingModelRoute.providerId
+      const accountId = actingModelRoute.accountId
+      const providerCfg = explicitRouteProviderId
+        ? deps.providerConfigs[explicitRouteProviderId]
+        : undefined
+      const model = actingModelRoute.model
+      const approvalPolicy =
+        turn.approvalPolicy ?? thread.approvalPolicy ?? deps.defaultApprovalPolicy
+      const sandboxMode =
+        turn.sandboxMode ?? thread.sandboxMode ?? deps.defaultSandboxMode
+      const approvalReviewer =
+        turn.approvalReviewer ??
+        thread.approvalReviewer ??
+        deps.defaultApprovalReviewer ??
+        DEFAULT_APPROVAL_REVIEWER
       // An explicit Claude provider owns its credential boundary. Empty means
       // ambient Claude Code login; it must never inherit another provider's key.
       const token = normalizeClaudeOAuthToken(
-        providerId ? providerCfg?.apiKey : deps.defaultToken
+        explicitRouteProviderId ? providerCfg?.apiKey : deps.defaultToken
       )
       // Resolve skills before listing bridgeable tools. Some managed tools
       // (notably PPT Master) are deliberately advertised only for an active
@@ -608,7 +692,10 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
           : {}),
         activeSkillIds,
         clientSurface,
-        sandboxMode: thread.sandboxMode ?? deps.defaultSandboxMode,
+        sandboxMode,
+        approvalPolicy,
+        approvalReviewer,
+        actingModelRoute,
         ...(awaitUserInput ? { awaitUserInput } : {})
       })
       // An Agent SDK query pins its in-process MCP schemas at startup and
@@ -634,7 +721,10 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
           : {}),
         activeSkillIds: [...new Set([...activeSkillIds, ...availableSkillIds])],
         clientSurface,
-        sandboxMode: thread.sandboxMode ?? deps.defaultSandboxMode,
+        sandboxMode,
+        approvalPolicy,
+        approvalReviewer,
+        actingModelRoute,
         ...(awaitUserInput ? { awaitUserInput } : {})
       })
       if (deps.toolHost) {
@@ -707,9 +797,6 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
         ...(bridgedTools.length ? [CLAUDE_KUN_TOOL_INSTRUCTION] : [])
       ]
 
-      const model = resolveSdkModel(turn?.model || thread.model, deps.defaultModel)
-      const approvalPolicy = thread.approvalPolicy ?? deps.defaultApprovalPolicy
-      const sandboxMode = thread.sandboxMode ?? deps.defaultSandboxMode
       let preparation: DelegatedSessionPreparation | undefined
       let claudeConfigDir: string | undefined
       if (deps.sessionCoordinator) {
@@ -720,7 +807,7 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
             providerId: providerId || 'default',
             credentialIdentity: delegatedCredentialIdentity({
               providerId: providerId || 'default',
-              accountId: turn.accountId || thread.accountId,
+              accountId,
               credentialSourceId: providerCfg?.credentialSourceId,
               credentialSecret: token
             }),
@@ -731,6 +818,7 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
               threadPersona: thread.systemPrompt?.trim() || '',
               approvalPolicy,
               sandboxMode,
+              approvalReviewer,
               planMode,
               allowSdkBuiltins:
                 turn?.guiDesignArtifact?.kind === 'svg'
@@ -763,6 +851,8 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
         threadPersona: thread.systemPrompt?.trim() || undefined,
         approvalPolicy,
         sandboxMode,
+        approvalReviewer,
+        actingModelRoute,
         planMode,
         allowSdkBuiltins:
           turn?.guiDesignArtifact?.kind === 'svg'
@@ -804,8 +894,19 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
       const plan = turn.guiDesignArtifact?.kind === 'svg'
         ? { planMode: false as const }
         : resolveTurnPlanContext(thread, turnId)
-      const approvalPolicy = thread.approvalPolicy ?? deps.defaultApprovalPolicy
-      const sandboxMode = thread.sandboxMode ?? deps.defaultSandboxMode
+      const approvalPolicy =
+        turn.approvalPolicy ?? thread.approvalPolicy ?? deps.defaultApprovalPolicy
+      const sandboxMode =
+        turn.sandboxMode ?? thread.sandboxMode ?? deps.defaultSandboxMode
+      const approvalReviewer =
+        turn.approvalReviewer ??
+        thread.approvalReviewer ??
+        deps.defaultApprovalReviewer ??
+        DEFAULT_APPROVAL_REVIEWER
+      const actingModelRoute = turn.actingModelRoute
+      if (!actingModelRoute) {
+        return { output: 'Acting model route is unavailable; tool execution was denied', isError: true }
+      }
       const toolSignal = signal ?? new AbortController().signal
       const activeSkillIds = await resolveActiveSkillIds(thread, turn)
       const clientSurface = resolveTurnClientSurface(turn)
@@ -823,8 +924,17 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
         clientSurface,
         ...(sandboxMode ? { sandboxMode } : {}),
         approvalPolicy,
+        approvalReviewer,
+        actingModelRoute,
         signal: toolSignal,
-        awaitApproval: makeAwaitApproval(approvalPolicy, sandboxMode, toolSignal),
+        awaitApproval: makeAwaitApproval(
+          approvalPolicy,
+          sandboxMode,
+          approvalReviewer,
+          actingModelRoute,
+          turn.prompt,
+          toolSignal
+        ),
         ...(turn.disableUserInput === true
           ? {}
           : { awaitUserInput: makeAwaitUserInput(threadId, turnId, toolSignal) })
@@ -870,29 +980,82 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
           }
         }
       }
-      const approvalPolicy = thread?.approvalPolicy ?? deps.defaultApprovalPolicy
+      const approvalPolicy =
+        turn?.approvalPolicy ?? thread?.approvalPolicy ?? deps.defaultApprovalPolicy
       if (approvalPolicy === 'never') {
         return { allow: false, message: 'tools are disabled for this turn (policy: never)' }
       }
-      const sandboxMode = thread?.sandboxMode ?? deps.defaultSandboxMode ?? DEFAULT_SANDBOX_MODE
+      // `canUseTool` runs for every SDK-native tool. Preserve the same Kun
+      // boundary as LocalToolHost: bounded reads and internal todo state are
+      // auto-allowed under on-request/suggest after decideSdkBuiltinSandbox has
+      // validated their paths; writes, commands, and network calls still review.
+      if (
+        (approvalPolicy === 'on-request' || approvalPolicy === 'suggest') &&
+        SDK_ON_REQUEST_AUTO_ALLOWED_TOOLS.has(toolName)
+      ) {
+        return { allow: true }
+      }
+      const sandboxMode =
+        turn?.sandboxMode ?? thread?.sandboxMode ?? deps.defaultSandboxMode ?? DEFAULT_SANDBOX_MODE
+      const approvalReviewer =
+        turn?.approvalReviewer ??
+        thread?.approvalReviewer ??
+        deps.defaultApprovalReviewer ??
+        DEFAULT_APPROVAL_REVIEWER
       const workspaceCommandApproval =
         toolName === 'Bash' && sandboxMode === 'workspace-write'
       if (approvalPolicy === 'auto' && !workspaceCommandApproval) return { allow: true }
+      if (!thread || !turn) {
+        return { allow: false, message: 'Acting turn is unavailable; approval failed closed.' }
+      }
+      const action = createApprovalActionEnvelope({
+          toolName,
+          providerId: turn.providerId ?? thread.providerId,
+          toolKind: toolName === 'Bash'
+            ? 'command_execution'
+            : ['Write', 'Edit', 'MultiEdit'].includes(toolName)
+              ? 'file_change'
+              : 'tool_call',
+          effects: {
+            network: toolName === 'WebSearch' || toolName === 'WebFetch',
+            externalWrite: ['Write', 'Edit', 'MultiEdit'].includes(toolName),
+            processExecution: toolName === 'Bash',
+            guiAutomation: false
+          },
+          arguments: input,
+          workspace: thread.workspace,
+          cwd: typeof input.cwd === 'string' ? input.cwd : thread.workspace,
+          reason: 'Agent SDK native tool crossed the Kun approval boundary.'
+      })
       const approval = createApprovalRequest({
         id: deps.ids.next('appr'),
         threadId,
         turnId,
         toolName,
-        summary: `Run ${toolName}(${JSON.stringify(input).slice(0, 4_000)})`
+        summary: safeApprovalActionSummary(action),
+        action
       })
+      const actingModelRoute = turn.actingModelRoute
+      if (!actingModelRoute) {
+        return { allow: false, message: 'Acting model route is unavailable; approval failed closed.' }
+      }
       const decision = await makeAwaitApproval(
         approvalPolicy,
         sandboxMode,
+        approvalReviewer,
+        actingModelRoute,
+        turn.prompt,
         signal ?? new AbortController().signal
       )(approval)
-      return decision === 'allow'
+      const resolvedDecision = typeof decision === 'string' ? decision : decision.decision
+      return resolvedDecision === 'allow'
         ? { allow: true }
-        : { allow: false, message: 'Tool call was denied by the approval policy or user.' }
+        : {
+            allow: false,
+            message: typeof decision === 'string'
+              ? 'Tool call was denied by the approval policy or user.'
+              : decision.reason ?? 'Tool call was denied by the approval reviewer.'
+          }
     },
 
     async recordEvent(draft): Promise<void> {

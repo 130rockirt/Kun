@@ -363,7 +363,10 @@ describe('TurnService startTurn', () => {
       id: threadId,
       title: 'Single active turn',
       workspace: '/tmp/workspace',
-      model: 'deepseek-v4-pro'
+      model: 'deepseek-v4-pro',
+      approvalPolicy: 'on-request',
+      sandboxMode: 'workspace-write',
+      approvalReviewer: 'agent'
     }))
 
     const [first, second] = await Promise.allSettled([
@@ -382,11 +385,46 @@ describe('TurnService startTurn', () => {
     const thread = await threadStore.get(threadId)
     expect(thread?.turns).toHaveLength(1)
     expect(thread?.turns[0]?.status).toBe('running')
-    expect(eventBus.snapshotSince(threadId, 0).find((event) => event.kind === 'turn_started')).toMatchObject({
+    expect(thread?.turns[0]).toMatchObject({
+      approvalPolicy: 'on-request',
+      sandboxMode: 'workspace-write',
+      approvalReviewer: 'agent'
+    })
+    const liveTurnStarted = eventBus.snapshotSince(threadId, 0)
+      .find((event) => event.kind === 'turn_started')
+    expect(liveTurnStarted).toMatchObject({
       kind: 'turn_started', model: 'm', providerId: 'provider-a', accountId: 'account-a',
-      reasoningEffort: 'high', mode: 'plan', clientSurface: 'tui'
+      reasoningEffort: 'high', mode: 'plan', clientSurface: 'tui',
+      approvalPolicy: 'on-request', sandboxMode: 'workspace-write', approvalReviewer: 'agent'
+    })
+    const replayedTurnStarted = (await sessionStore.loadEventsSince(threadId, 0))
+      .find((event) => event.kind === 'turn_started')
+    expect(replayedTurnStarted).toMatchObject({
+      kind: 'turn_started',
+      approvalPolicy: 'on-request',
+      sandboxMode: 'workspace-write',
+      approvalReviewer: 'agent'
     })
     expect(thread?.turns[0]?.clientSurface).toBe('tui')
+    await service.updateTurnMetadata(threadId, thread!.turns[0]!.id, {
+      actingModelRoute: {
+        model: 'input-model',
+        providerId: 'provider-a',
+        accountId: 'account-a'
+      }
+    })
+    await service.updateTurnMetadata(threadId, thread!.turns[0]!.id, {
+      actingModelRoute: {
+        model: 'changed-later',
+        providerId: 'provider-b',
+        accountId: 'account-b'
+      }
+    })
+    expect((await threadStore.get(threadId))?.turns[0]?.actingModelRoute).toEqual({
+      model: 'input-model',
+      providerId: 'provider-a',
+      accountId: 'account-a'
+    })
     expect(await service.interruptActiveTurns()).toBe(1)
     expect((await threadStore.get(threadId))?.turns[0]?.status).toBe('aborted')
   })
@@ -736,6 +774,96 @@ describe('TurnService startTurn', () => {
       threadId: 'thr_graph_restart',
       turnId: started.turnId
     })
+  })
+
+  it('migrates an active legacy Graph creation gate into a recoverable planning draft', async () => {
+    const sessionStore = new InMemorySessionStore()
+    const threadStore = new InMemoryThreadStore()
+    const eventBus = new InMemoryEventBus()
+    const inflight = new InflightTracker()
+    const steering = new SteeringQueue()
+    const nowIso = () => '2026-07-29T00:00:00.000Z'
+    const events = new RuntimeEventRecorder({
+      eventBus,
+      sessionStore,
+      allocateSeq: (threadId) => eventBus.allocateSeq(threadId),
+      nowIso
+    })
+    const original = new TurnService({
+      threadStore,
+      sessionStore,
+      events,
+      inflight,
+      steering,
+      compactor: new ContextCompactor(),
+      ids: new SequentialIdGenerator(),
+      nowIso
+    })
+    await threadStore.upsert(createThreadRecord({
+      id: 'thr_graph_legacy_gate',
+      title: 'Legacy gate',
+      workspace: '/tmp/workspace',
+      model: 'deepseek-v4-pro'
+    }))
+    const started = await original.startTurn({
+      threadId: 'thr_graph_legacy_gate',
+      request: { prompt: 'run graph', orchestration: 'graph' }
+    })
+    await original.updateTurnMetadata('thr_graph_legacy_gate', started.turnId, {
+      requiredToolGate: {
+        toolName: 'graph_create_run',
+        attempt: 2,
+        maxAttempts: 3,
+        phase: 'retrying',
+        lastError: 'legacy invalid plan'
+      }
+    })
+
+    let created = false
+    const recovered = new TurnService({
+      threadStore,
+      sessionStore,
+      events,
+      inflight,
+      steering,
+      compactor: new ContextCompactor(),
+      createGraphPlanningDraft: async () => {
+        created = true
+        return {
+          version: 1,
+          draftId: 'draft_migrated',
+          reservedRunId: 'run_migrated',
+          state: 'planning',
+          draftRevision: 1
+        }
+      },
+      transitionGraphPlanningDraft: async ({ action }) => created
+        ? {
+            version: 1,
+            draftId: 'draft_migrated',
+            reservedRunId: 'run_migrated',
+            state: action === 'suspend' ? 'needs_correction' : 'planning',
+            draftRevision: 2
+          }
+        : null,
+      ids: new SequentialIdGenerator(),
+      nowIso
+    })
+
+    await expect(recovered.suspendGraphPlanningTurn({
+      threadId: 'thr_graph_legacy_gate',
+      turnId: started.turnId
+    })).resolves.toBe('suspended')
+    expect(created).toBe(true)
+    expect(await recovered.getTurn('thr_graph_legacy_gate', started.turnId)).toMatchObject({
+      status: 'running',
+      graphPlanningLifecycle: {
+        draftId: 'draft_migrated',
+        state: 'needs_correction'
+      }
+    })
+    expect((await recovered.getTurn('thr_graph_legacy_gate', started.turnId))
+      ?.requiredToolGate).toBeUndefined()
   })
 
   it('releases an admission and aborts an already-persisted turn when startup fails', async () => {

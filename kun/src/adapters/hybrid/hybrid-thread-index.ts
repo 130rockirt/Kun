@@ -52,7 +52,7 @@ export class HybridThreadIndexRepository {
       const row = rowFromIndexRecord(record, this.paths(record.thread.id))
       this.db.prepare(`
         INSERT INTO threads (
-          id, title, workspace, model, mode, status, approval_policy, sandbox_mode,
+          id, title, workspace, model, mode, status, approval_policy, sandbox_mode, approval_reviewer,
           model_request_capture_enabled,
           cost_budget_usd, cost_budget_warning_sent, relation, parent_thread_id,
           forked_from_thread_id, forked_from_title, forked_at, forked_from_message_count,
@@ -60,7 +60,7 @@ export class HybridThreadIndexRepository {
           updated_at_ms, preview, message_count, event_seq_high_water, metadata_path,
           messages_path, events_path, search_text
         ) VALUES (
-          @id, @title, @workspace, @model, @mode, @status, @approval_policy, @sandbox_mode,
+          @id, @title, @workspace, @model, @mode, @status, @approval_policy, @sandbox_mode, @approval_reviewer,
           @model_request_capture_enabled,
           @cost_budget_usd, @cost_budget_warning_sent, @relation, @parent_thread_id,
           @forked_from_thread_id, @forked_from_title, @forked_at, @forked_from_message_count,
@@ -70,6 +70,7 @@ export class HybridThreadIndexRepository {
         ) ON CONFLICT(id) DO UPDATE SET
           title=excluded.title, workspace=excluded.workspace, model=excluded.model, mode=excluded.mode,
           status=excluded.status, approval_policy=excluded.approval_policy, sandbox_mode=excluded.sandbox_mode,
+          approval_reviewer=excluded.approval_reviewer,
           model_request_capture_enabled=excluded.model_request_capture_enabled,
           cost_budget_usd=excluded.cost_budget_usd, cost_budget_warning_sent=excluded.cost_budget_warning_sent,
           relation=excluded.relation, parent_thread_id=excluded.parent_thread_id,

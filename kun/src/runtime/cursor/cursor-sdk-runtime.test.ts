@@ -190,6 +190,10 @@ function harness(input: {
         materialized.set(itemId, item)
         return item
       },
+      updateTurnMetadata: async (_threadId: string, turnId: string, patch: Record<string, unknown>) => {
+        const turn = thread.turns.find((candidate) => candidate.id === turnId)
+        if (turn) Object.assign(turn, patch)
+      },
       finishTurn: async (value: unknown) => { finished.push(value) }
     },
     events: { record: async (value: unknown) => { recorded.push(value) } },
@@ -716,6 +720,8 @@ describe('CursorSdkRuntime', () => {
         threadPersona: '',
         mode: 'agent',
         sandbox: false,
+        approvalPolicy: 'auto',
+        sandboxMode: 'danger-full-access',
         settingSources: [],
         capabilities: cursorSdkCapabilities()
       }),
@@ -891,19 +897,25 @@ describe('CursorSdkRuntime', () => {
     }))
   })
 
-  test('uses plan mode and sandbox when Kun cannot auto-approve mutation', () => {
-    expect(cursorAgentExecutionOptions({
+  test('uses plan+sandbox with Cursor classifier disabled when Kun owns review', () => {
+    const approveForMe = cursorAgentExecutionOptions({
       workspace: '/tmp/work',
       apiKey: 'key',
       model: 'auto',
       name: 'test',
       planMode: false,
-      approvalPolicy: 'always',
+      approvalPolicy: 'on-request',
       sandboxMode: 'workspace-write'
-    })).toMatchObject({
-      mode: 'plan',
-      local: { settingSources: [], sandboxOptions: { enabled: true } }
     })
+    expect(approveForMe).toMatchObject({
+      mode: 'plan',
+      local: {
+        autoReview: false,
+        settingSources: [],
+        sandboxOptions: { enabled: true }
+      }
+    })
+    expect(approveForMe.local?.autoReview).toBe(false)
     expect(cursorAgentExecutionOptions({
       workspace: '/tmp/work',
       apiKey: 'key',
@@ -913,6 +925,93 @@ describe('CursorSdkRuntime', () => {
       approvalPolicy: 'auto',
       sandboxMode: 'read-only'
     }).mode).toBe('plan')
+  })
+
+  test('uses the restricted turn snapshot after the thread is patched to full access', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-cursor-authority-snapshot-'))
+    const coordinator = new DelegatedSessionCoordinator(
+      new FileDelegatedSessionBindingStore(root)
+    )
+    const h = harness({
+      sessionCoordinator: coordinator,
+      thread: {
+        model: 'thread-full-model',
+        approvalPolicy: 'auto',
+        sandboxMode: 'danger-full-access',
+        turns: [{
+          id: 'turn_1',
+          model: 'turn-restricted-model',
+          mode: 'agent',
+          approvalPolicy: 'on-request',
+          sandboxMode: 'workspace-write',
+          actingModelRoute: {
+            model: 'turn-restricted-model',
+            providerId: 'cursor-subscription',
+            accountId: 'turn-account'
+          }
+        }]
+      }
+    })
+
+    await expect(h.runtime.runTurn(
+      'thread_1',
+      'turn_1',
+      new AbortController().signal,
+      'cursor-subscription'
+    )).resolves.toBe('completed')
+
+    expect(h.createOptions[0]).toMatchObject({
+      model: { id: 'turn-restricted-model' },
+      mode: 'plan',
+      local: { sandboxOptions: { enabled: true } }
+    })
+    expect((await coordinator.store.load('thread_1'))?.capabilityFingerprint).toBe(
+      delegatedCapabilityFingerprint({
+        systemPrompt: 'Kun system prompt',
+        threadPersona: '',
+        mode: 'plan',
+        sandbox: true,
+        approvalPolicy: 'on-request',
+        sandboxMode: 'workspace-write',
+        settingSources: [],
+        capabilities: cursorSdkCapabilities()
+      })
+    )
+  })
+
+  test('keeps a full-access turn full after the thread is patched to restricted', async () => {
+    const h = harness({
+      thread: {
+        model: 'thread-restricted-model',
+        approvalPolicy: 'on-request',
+        sandboxMode: 'workspace-write',
+        turns: [{
+          id: 'turn_1',
+          model: 'turn-full-model',
+          mode: 'agent',
+          approvalPolicy: 'auto',
+          sandboxMode: 'danger-full-access',
+          actingModelRoute: {
+            model: 'turn-full-model',
+            providerId: 'cursor-subscription',
+            accountId: 'turn-account'
+          }
+        }]
+      }
+    })
+
+    await expect(h.runtime.runTurn(
+      'thread_1',
+      'turn_1',
+      new AbortController().signal,
+      'cursor-subscription'
+    )).resolves.toBe('completed')
+
+    expect(h.createOptions[0]).toMatchObject({
+      model: { id: 'turn-full-model' },
+      mode: 'agent',
+      local: { sandboxOptions: { enabled: false } }
+    })
   })
 
   test('forwards authorized image attachments as a structured SDK message without tracing bytes', async () => {

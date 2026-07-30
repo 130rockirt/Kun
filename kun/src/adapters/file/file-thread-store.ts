@@ -1,7 +1,11 @@
 import { mkdir, readFile, readdir, rm, stat } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import type { ThreadStore, ThreadStoreListOptions } from '../../ports/thread-store.js'
-import type { ThreadRecord, ThreadSummary } from '../../contracts/threads.js'
+import {
+  ThreadSchema,
+  type ThreadRecord,
+  type ThreadSummary
+} from '../../contracts/threads.js'
 import { assertSafeThreadId, isSafeThreadId } from '../../contracts/thread-id.js'
 import { toThreadSummary } from '../../domain/thread.js'
 import { atomicWriteFile } from './atomic-write.js'
@@ -36,8 +40,8 @@ export class FileThreadStore implements ThreadStore {
       try {
         const path = this.threadFilePath(threadId)
         const raw = await readFile(path, 'utf-8')
-        const thread = JSON.parse(raw) as ThreadRecord
-        summaries.push(toThreadSummary(thread))
+        const thread = ThreadSchema.safeParse(JSON.parse(raw))
+        if (thread.success) summaries.push(toThreadSummary(thread.data))
       } catch {
         // Skip broken entries rather than failing the whole list.
       }
@@ -49,23 +53,25 @@ export class FileThreadStore implements ThreadStore {
     if (!isSafeThreadId(threadId)) return null
     try {
       const raw = await readFile(this.threadFilePath(threadId), 'utf-8')
-      return JSON.parse(raw) as ThreadRecord
+      const parsed = ThreadSchema.safeParse(JSON.parse(raw))
+      return parsed.success ? parsed.data : null
     } catch {
       return null
     }
   }
 
   async upsert(thread: ThreadRecord): Promise<ThreadRecord> {
-    assertSafeThreadId(thread.id)
-    await this.ensureDir(this.threadDir(thread.id))
-    const path = this.threadFilePath(thread.id)
-    await this.atomicWrite(path, JSON.stringify(thread))
+    const normalized = ThreadSchema.parse(thread)
+    assertSafeThreadId(normalized.id)
+    await this.ensureDir(this.threadDir(normalized.id))
+    const path = this.threadFilePath(normalized.id)
+    await this.atomicWrite(path, JSON.stringify(normalized))
     await this.updateIndex((current) => {
       const next = new Set(current.order)
-      next.add(thread.id)
+      next.add(normalized.id)
       return { order: [...next], updatedAt: this.now().toISOString() }
     })
-    return thread
+    return normalized
   }
 
   async delete(threadId: string): Promise<boolean> {

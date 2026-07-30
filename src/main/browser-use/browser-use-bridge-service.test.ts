@@ -1,7 +1,19 @@
 import { randomUUID } from 'node:crypto'
 import { request as httpRequest } from 'node:http'
 import { describe, expect, it, vi } from 'vitest'
+import { signBrowserUseKunApprovalGrant } from '../../../kun/src/contracts/browser-use'
+import { ToolOperationJournal } from '../../../kun/src/reliability/operation-journal'
 import { BrowserUseBridgeService } from './browser-use-bridge-service'
+
+const expectedTarget = {
+  sessionId: 'session-1234567890',
+  tabId: 'tab-1',
+  documentGeneration: 3,
+  origin: 'https://example.test',
+  sanitizedUrl: 'https://example.test/settings/security',
+  role: 'button',
+  name: 'Delete account'
+}
 
 function fakeManager() {
   return {
@@ -12,6 +24,25 @@ function fakeManager() {
     })),
     disposeAll: vi.fn(async () => undefined)
   }
+}
+
+function approvalGrant(
+  action: Record<string, unknown>,
+  signingKey: string,
+  id = `appr_${'a'.repeat(32)}`
+) {
+  const issuedAt = new Date()
+  return signBrowserUseKunApprovalGrant({
+    id,
+    source: 'agent' as const,
+    toolName: 'browser_use' as const,
+    threadId: 'thread-1',
+    turnId: 'turn-1',
+    callId: 'call-browser-use',
+    argumentsHash: ToolOperationJournal.argsHash(action),
+    issuedAt: issuedAt.toISOString(),
+    expiresAt: new Date(issuedAt.getTime() + 2 * 60 * 1_000).toISOString()
+  }, signingKey)
 }
 
 async function rawRequest(
@@ -102,21 +133,44 @@ describe('BrowserUseBridgeService', () => {
         token: launch.token,
         contentType: 'application/json',
         body: JSON.stringify({
-          contractVersion: 1,
+          contractVersion: 2,
           requestId: randomUUID(),
           threadId: 'thread-1',
           turnId: 'turn-1',
-          action: { action: 'click', ref: 'opaque-reference-1234', selector: '#buy' }
+          action: {
+            action: 'click',
+            ref: 'opaque-reference-1234',
+            expectedTarget,
+            selector: '#buy'
+          }
         })
       })
       expect(invalid).toMatchObject({ status: 400, body: { error: 'invalid_request' } })
+
+      const modeInjection = await rawRequest(`${launch.url}/v1/actions`, {
+        token: launch.token,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          contractVersion: 2,
+          requestId: randomUUID(),
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+          action: { action: 'snapshot' },
+          kunApprovalMode: 'full-access'
+        })
+      })
+      expect(modeInjection).toMatchObject({
+        status: 400,
+        body: { error: 'invalid_request' }
+      })
+      expect(manager.execute).not.toHaveBeenCalled()
 
       const requestId = randomUUID()
       const valid = await rawRequest(`${launch.url}/v1/actions`, {
         token: launch.token,
         contentType: 'application/json',
         body: JSON.stringify({
-          contractVersion: 1,
+          contractVersion: 2,
           requestId,
           threadId: 'thread-1',
           turnId: 'turn-1',
@@ -126,7 +180,7 @@ describe('BrowserUseBridgeService', () => {
       expect(valid).toMatchObject({
         status: 200,
         body: {
-          contractVersion: 1,
+          contractVersion: 2,
           requestId,
           result: { ok: true, code: 'snapshot' }
         }
@@ -138,6 +192,167 @@ describe('BrowserUseBridgeService', () => {
         { action: 'snapshot' },
         expect.any(AbortSignal)
       )
+    } finally {
+      await service.stop()
+    }
+  })
+
+  it('requires, binds, and consumes one Kun approval grant per boundary action', async () => {
+    const manager = fakeManager()
+    const service = new BrowserUseBridgeService(manager as never)
+    const launch = await service.start()
+    const action = { action: 'open', url: 'https://example.test/path' }
+    const grant = approvalGrant(action, launch.approvalSigningKey)
+    const requestBody = (
+      requestId: string,
+      value = grant,
+      overrides: Partial<{
+        threadId: string
+        turnId: string
+        action: Record<string, unknown>
+      }> = {}
+    ) => JSON.stringify({
+      contractVersion: 2,
+      requestId,
+      threadId: overrides.threadId ?? 'thread-1',
+      turnId: overrides.turnId ?? 'turn-1',
+      action: overrides.action ?? action,
+      kunApprovalMode: 'agent',
+      kunApprovalGrant: value
+    })
+    try {
+      await expect(rawRequest(`${launch.url}/v1/actions`, {
+        token: launch.token,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          contractVersion: 2,
+          requestId: randomUUID(),
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+          action
+        })
+      })).resolves.toMatchObject({ status: 400, body: { error: 'invalid_request' } })
+
+      await expect(rawRequest(`${launch.url}/v1/actions`, {
+        token: launch.token,
+        contentType: 'application/json',
+        body: requestBody(randomUUID(), {
+          ...grant,
+          argumentsHash: 'f'.repeat(64)
+        })
+      })).resolves.toMatchObject({
+        status: 400,
+        body: { error: 'approval_grant_invalid' }
+      })
+      expect(manager.execute).not.toHaveBeenCalled()
+
+      await expect(rawRequest(`${launch.url}/v1/actions`, {
+        token: launch.token,
+        contentType: 'application/json',
+        body: requestBody(randomUUID(), {
+          ...grant,
+          id: `appr_${'f'.repeat(32)}`,
+          signature: 'f'.repeat(64)
+        })
+      })).resolves.toMatchObject({
+        status: 400,
+        body: { error: 'approval_grant_invalid' }
+      })
+
+      await expect(rawRequest(`${launch.url}/v1/actions`, {
+        token: launch.token,
+        contentType: 'application/json',
+        body: requestBody(randomUUID(), grant, { threadId: 'thread-substituted' })
+      })).resolves.toMatchObject({
+        status: 400,
+        body: { error: 'approval_grant_invalid' }
+      })
+
+      await expect(rawRequest(`${launch.url}/v1/actions`, {
+        token: launch.token,
+        contentType: 'application/json',
+        body: requestBody(randomUUID(), grant, { turnId: 'turn-substituted' })
+      })).resolves.toMatchObject({
+        status: 400,
+        body: { error: 'approval_grant_invalid' }
+      })
+
+      await expect(rawRequest(`${launch.url}/v1/actions`, {
+        token: launch.token,
+        contentType: 'application/json',
+        body: requestBody(randomUUID(), grant, {
+          action: { action: 'open', url: 'https://substituted.example/path' }
+        })
+      })).resolves.toMatchObject({
+        status: 400,
+        body: { error: 'approval_grant_invalid' }
+      })
+      expect(manager.execute).not.toHaveBeenCalled()
+
+      await expect(rawRequest(`${launch.url}/v1/actions`, {
+        token: launch.token,
+        contentType: 'application/json',
+        body: requestBody(randomUUID())
+      })).resolves.toMatchObject({ status: 200 })
+      expect(manager.execute).toHaveBeenCalledWith(
+        'thread-1',
+        'turn-1',
+        action,
+        expect.any(AbortSignal),
+        grant,
+        'agent'
+      )
+
+      await expect(rawRequest(`${launch.url}/v1/actions`, {
+        token: launch.token,
+        contentType: 'application/json',
+        body: requestBody(randomUUID())
+      })).resolves.toMatchObject({
+        status: 409,
+        body: { error: 'approval_grant_replayed' }
+      })
+      expect(manager.execute).toHaveBeenCalledOnce()
+    } finally {
+      await service.stop()
+    }
+  })
+
+  it('rejects an interaction when its reviewer-visible expected target is substituted', async () => {
+    const manager = fakeManager()
+    const service = new BrowserUseBridgeService(manager as never)
+    const launch = await service.start()
+    const action = {
+      action: 'click',
+      ref: 'opaque-reference-1234',
+      expectedTarget
+    }
+    const grant = approvalGrant(action, launch.approvalSigningKey)
+    try {
+      const result = await rawRequest(`${launch.url}/v1/actions`, {
+        token: launch.token,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          contractVersion: 2,
+          requestId: randomUUID(),
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+          action: {
+            ...action,
+            expectedTarget: {
+              ...expectedTarget,
+              name: 'Approve transfer'
+            }
+          },
+          kunApprovalMode: 'agent',
+          kunApprovalGrant: grant
+        })
+      })
+
+      expect(result).toMatchObject({
+        status: 400,
+        body: { error: 'approval_grant_invalid' }
+      })
+      expect(manager.execute).not.toHaveBeenCalled()
     } finally {
       await service.stop()
     }
@@ -157,6 +372,7 @@ describe('BrowserUseBridgeService', () => {
     const second = await service.start()
     try {
       expect(second.token).not.toBe(first.token)
+      expect(second.approvalSigningKey).not.toBe(first.approvalSigningKey)
       expect(second.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/)
     } finally {
       await service.stop()

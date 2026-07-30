@@ -1,7 +1,11 @@
 import { mkdir, open, readdir, rename, rm, stat } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import type { Database as BetterSqliteDatabase, Statement } from 'better-sqlite3'
-import type { ThreadRecord, ThreadSummary } from '../../contracts/threads.js'
+import {
+  ThreadSchema,
+  type ThreadRecord,
+  type ThreadSummary
+} from '../../contracts/threads.js'
 import type { RuntimeEvent } from '../../contracts/events.js'
 import type { TurnItem } from '../../contracts/items.js'
 import type { ThreadStore, ThreadStoreListOptions } from '../../ports/thread-store.js'
@@ -136,13 +140,14 @@ export class HybridThreadStore implements ThreadStore {
   }
 
   async upsert(thread: ThreadRecord): Promise<ThreadRecord> {
-    assertSafeThreadId(thread.id)
+    const normalized = ThreadSchema.parse(thread)
+    assertSafeThreadId(normalized.id)
     await this.ready()
-    await this.appendMetadata(thread)
+    await this.appendMetadata(normalized)
     if (this.db) {
-      this.upsertIndexBestEffort(this.indexRecordForThread(thread))
+      this.upsertIndexBestEffort(this.indexRecordForThread(normalized))
     }
-    return thread
+    return normalized
   }
 
   async delete(threadId: string): Promise<boolean> {
@@ -328,6 +333,7 @@ export class HybridThreadStore implements ThreadStore {
         status TEXT NOT NULL,
         approval_policy TEXT NOT NULL,
         sandbox_mode TEXT NOT NULL,
+        approval_reviewer TEXT NOT NULL DEFAULT 'user',
         model_request_capture_enabled INTEGER NOT NULL DEFAULT 0,
         cost_budget_usd REAL,
         cost_budget_warning_sent INTEGER,
@@ -378,6 +384,7 @@ export class HybridThreadStore implements ThreadStore {
     addColumnIfMissing(this.db, 'threads', 'todos_json TEXT')
     addColumnIfMissing(this.db, 'threads', 'extension_metadata_json TEXT')
     addColumnIfMissing(this.db, 'threads', 'model_request_capture_enabled INTEGER NOT NULL DEFAULT 0')
+    addColumnIfMissing(this.db, 'threads', "approval_reviewer TEXT NOT NULL DEFAULT 'user'")
     addColumnIfMissing(this.db, 'threads', 'usage_backfilled INTEGER NOT NULL DEFAULT 0')
   }
 

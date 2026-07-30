@@ -2330,7 +2330,7 @@ html[data-ui-plugin-scene-chrome-composer='nautical']
 }
 
 html[data-ui-plugin-scene-chrome-composer='nautical']
-  .ds-composer-permission-button[data-permission-mode='bypass'] {
+  .ds-composer-permission-button[data-permission-mode='full-access'] {
   border-color: #7e211d;
   background:
     radial-gradient(circle at 20% 30%, rgba(255, 225, 190, 0.24), transparent 28%),
@@ -3768,38 +3768,14 @@ html[data-ui-plugin-scene-chrome-composer='grand-line']
 }
 
 html[data-ui-plugin-scene-chrome-composer='grand-line']
-  .ds-composer-permission-button[data-permission-mode='always-ask'] {
+  .ds-composer-permission-button[data-permission-mode='ask-for-approval'] {
   --ds-permission-border: #5eb4d7;
   --ds-permission-bg: linear-gradient(160deg, #176b91, #093b5c);
   --ds-permission-ink: #effaff;
 }
 
 html[data-ui-plugin-scene-chrome-composer='grand-line']
-  .ds-composer-permission-button[data-permission-mode='read-only'] {
-  --ds-permission-border: #63c8af;
-  --ds-permission-bg: linear-gradient(160deg, #176d62, #083f43);
-  --ds-permission-ink: #e9fff8;
-  border-radius: 1.35rem;
-}
-
-html[data-ui-plugin-scene-chrome-composer='grand-line']
-  .ds-composer-permission-button[data-permission-mode='sensitive-ask'] {
-  --ds-permission-border: #efc35f;
-  --ds-permission-bg: linear-gradient(160deg, #a8741d, #69440c);
-  --ds-permission-ink: #fff4c9;
-  border-radius: 0.42rem;
-}
-
-html[data-ui-plugin-scene-chrome-composer='grand-line']
-  .ds-composer-permission-button[data-permission-mode='workspace-write'] {
-  --ds-permission-border: #9aacef;
-  --ds-permission-bg: linear-gradient(160deg, #495d92, #27345f);
-  --ds-permission-ink: #f0f2ff;
-  border-radius: 0.48rem 0.92rem 0.48rem 0.92rem;
-}
-
-html[data-ui-plugin-scene-chrome-composer='grand-line']
-  .ds-composer-permission-button[data-permission-mode='trusted-workspace'] {
+  .ds-composer-permission-button[data-permission-mode='approve-for-me'] {
   --ds-permission-border: #61d3c1;
   --ds-permission-bg: linear-gradient(160deg, #17766e, #084740);
   --ds-permission-ink: #e8fff9;
@@ -3807,7 +3783,7 @@ html[data-ui-plugin-scene-chrome-composer='grand-line']
 }
 
 html[data-ui-plugin-scene-chrome-composer='grand-line']
-  .ds-composer-permission-button[data-permission-mode='bypass'] {
+  .ds-composer-permission-button[data-permission-mode='full-access'] {
   --ds-permission-border: #7e211d;
   --ds-permission-bg:
     radial-gradient(circle at 18% 25%, rgba(255, 218, 173, 0.24), transparent 30%),
@@ -3894,42 +3870,21 @@ html[data-ui-plugin='grand-line-logbook']
 }
 
 html[data-ui-plugin='grand-line-logbook']
-  .ds-composer-permission-option[data-permission-mode='always-ask'] {
+  .ds-composer-permission-option[data-permission-mode='ask-for-approval'] {
   --ds-permission-accent: #247da5;
   --ds-permission-soft: rgba(36, 125, 165, 0.11);
   --ds-permission-selected: rgba(36, 125, 165, 0.22);
 }
 
 html[data-ui-plugin='grand-line-logbook']
-  .ds-composer-permission-option[data-permission-mode='read-only'] {
-  --ds-permission-accent: #287f69;
-  --ds-permission-soft: rgba(40, 127, 105, 0.11);
-  --ds-permission-selected: rgba(40, 127, 105, 0.22);
-}
-
-html[data-ui-plugin='grand-line-logbook']
-  .ds-composer-permission-option[data-permission-mode='sensitive-ask'] {
-  --ds-permission-accent: #9a6a12;
-  --ds-permission-soft: rgba(154, 106, 18, 0.12);
-  --ds-permission-selected: rgba(154, 106, 18, 0.24);
-}
-
-html[data-ui-plugin='grand-line-logbook']
-  .ds-composer-permission-option[data-permission-mode='workspace-write'] {
-  --ds-permission-accent: #5368a5;
-  --ds-permission-soft: rgba(83, 104, 165, 0.11);
-  --ds-permission-selected: rgba(83, 104, 165, 0.22);
-}
-
-html[data-ui-plugin='grand-line-logbook']
-  .ds-composer-permission-option[data-permission-mode='trusted-workspace'] {
+  .ds-composer-permission-option[data-permission-mode='approve-for-me'] {
   --ds-permission-accent: #167c73;
   --ds-permission-soft: rgba(22, 124, 115, 0.11);
   --ds-permission-selected: rgba(22, 124, 115, 0.22);
 }
 
 html[data-ui-plugin='grand-line-logbook']
-  .ds-composer-permission-option[data-permission-mode='bypass'] {
+  .ds-composer-permission-option[data-permission-mode='full-access'] {
   --ds-permission-accent: #a43d31;
   --ds-permission-soft: rgba(164, 61, 49, 0.11);
   --ds-permission-selected: rgba(164, 61, 49, 0.23);
@@ -3959,32 +3914,17 @@ html[data-theme='dark'][data-ui-plugin='grand-line-logbook']
 }
 
 html[data-theme='dark'][data-ui-plugin='grand-line-logbook']
-  .ds-composer-permission-option[data-permission-mode='always-ask'] {
+  .ds-composer-permission-option[data-permission-mode='ask-for-approval'] {
   --ds-permission-accent: #67c4eb;
 }
 
 html[data-theme='dark'][data-ui-plugin='grand-line-logbook']
-  .ds-composer-permission-option[data-permission-mode='read-only'] {
-  --ds-permission-accent: #62d1b5;
-}
-
-html[data-theme='dark'][data-ui-plugin='grand-line-logbook']
-  .ds-composer-permission-option[data-permission-mode='sensitive-ask'] {
-  --ds-permission-accent: #f2c45c;
-}
-
-html[data-theme='dark'][data-ui-plugin='grand-line-logbook']
-  .ds-composer-permission-option[data-permission-mode='workspace-write'] {
-  --ds-permission-accent: #aebcff;
-}
-
-html[data-theme='dark'][data-ui-plugin='grand-line-logbook']
-  .ds-composer-permission-option[data-permission-mode='trusted-workspace'] {
+  .ds-composer-permission-option[data-permission-mode='approve-for-me'] {
   --ds-permission-accent: #65dfce;
 }
 
 html[data-theme='dark'][data-ui-plugin='grand-line-logbook']
-  .ds-composer-permission-option[data-permission-mode='bypass'] {
+  .ds-composer-permission-option[data-permission-mode='full-access'] {
   --ds-permission-accent: #ff9480;
 }
 
@@ -4779,27 +4719,15 @@ html[data-ui-plugin='iron-man-arc-reactor']
 }
 
 html[data-ui-plugin='iron-man-arc-reactor']
-  .ds-composer-permission-option[data-permission-mode='always-ask'] {
+  .ds-composer-permission-option[data-permission-mode='ask-for-approval'] {
   --ds-permission-accent: #237c94;
 }
 html[data-ui-plugin='iron-man-arc-reactor']
-  .ds-composer-permission-option[data-permission-mode='read-only'] {
-  --ds-permission-accent: #287c65;
-}
-html[data-ui-plugin='iron-man-arc-reactor']
-  .ds-composer-permission-option[data-permission-mode='sensitive-ask'] {
-  --ds-permission-accent: #a16c18;
-}
-html[data-ui-plugin='iron-man-arc-reactor']
-  .ds-composer-permission-option[data-permission-mode='workspace-write'] {
-  --ds-permission-accent: #586ca8;
-}
-html[data-ui-plugin='iron-man-arc-reactor']
-  .ds-composer-permission-option[data-permission-mode='trusted-workspace'] {
+  .ds-composer-permission-option[data-permission-mode='approve-for-me'] {
   --ds-permission-accent: #197c76;
 }
 html[data-ui-plugin='iron-man-arc-reactor']
-  .ds-composer-permission-option[data-permission-mode='bypass'] {
+  .ds-composer-permission-option[data-permission-mode='full-access'] {
   --ds-permission-accent: #b1242e;
 }
 

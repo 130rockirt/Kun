@@ -52,14 +52,47 @@ describe('protected Kun execution settings consent', () => {
     expect(kunExecutionSettingsChange(current, {
       agents: { kun: {
         approvalPolicy: current.agents.kun.approvalPolicy,
-        sandboxMode: current.agents.kun.sandboxMode
+        sandboxMode: current.agents.kun.sandboxMode,
+        approvalReviewer: current.agents.kun.approvalReviewer
       } }
     })).toBeUndefined()
     expect(kunExecutionSettingsChange(current, {
-      agents: { kun: { approvalPolicy: 'auto', sandboxMode: 'danger-full-access' } }
+      agents: {
+        kun: {
+          approvalPolicy: 'on-request',
+          sandboxMode: 'workspace-write',
+          approvalReviewer: 'user'
+        }
+      }
     })).toEqual({
-      current: { approvalPolicy: 'on-request', sandboxMode: 'workspace-write' },
-      next: { approvalPolicy: 'auto', sandboxMode: 'danger-full-access' }
+      current: {
+        approvalPolicy: 'auto',
+        sandboxMode: 'danger-full-access',
+        approvalReviewer: 'user'
+      },
+      next: {
+        approvalPolicy: 'on-request',
+        sandboxMode: 'workspace-write',
+        approvalReviewer: 'user'
+      }
+    })
+  })
+
+  it('protects a reviewer-only transition', () => {
+    const current = settings()
+    expect(kunExecutionSettingsChange(current, {
+      agents: { kun: { approvalReviewer: 'agent' } }
+    })).toEqual({
+      current: {
+        approvalPolicy: 'auto',
+        sandboxMode: 'danger-full-access',
+        approvalReviewer: 'user'
+      },
+      next: {
+        approvalPolicy: 'auto',
+        sandboxMode: 'danger-full-access',
+        approvalReviewer: 'agent'
+      }
     })
   })
 
@@ -71,8 +104,16 @@ describe('protected Kun execution settings consent', () => {
       () => `token-${++tokenNumber}`
     )
     const action: KunExecutionSettingsConsentAction = {
-      current: { approvalPolicy: 'on-request', sandboxMode: 'workspace-write' },
-      next: { approvalPolicy: 'auto', sandboxMode: 'danger-full-access' },
+      current: {
+        approvalPolicy: 'on-request',
+        sandboxMode: 'workspace-write',
+        approvalReviewer: 'user'
+      },
+      next: {
+        approvalPolicy: 'on-request',
+        sandboxMode: 'workspace-write',
+        approvalReviewer: 'agent'
+      },
       senderId: 7,
       senderProcessId: 10,
       senderRoutingId: 20
@@ -80,7 +121,7 @@ describe('protected Kun execution settings consent', () => {
     const wrongToken = service.issue(action)
     expect(service.consume(wrongToken, {
       ...action,
-      next: { ...action.next, approvalPolicy: 'always' }
+      next: { ...action.next, approvalReviewer: 'user' }
     })).toBe(false)
     expect(service.consume(wrongToken, action)).toBe(false)
 

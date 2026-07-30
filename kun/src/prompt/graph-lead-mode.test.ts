@@ -9,7 +9,7 @@ describe('Graph Lead mode system contract', () => {
     expect(GRAPH_LEAD_MODE_INSTRUCTION).toContain("You own the user's requested outcome")
     expect(GRAPH_LEAD_MODE_INSTRUCTION).toContain('## Required operating loop')
     expect(GRAPH_LEAD_MODE_INSTRUCTION).toContain(
-      'Choose a task-appropriate execution strategy and create a bounded Graph intent'
+      'Inspect relevant repository truth with read-only tools and define a bounded Graph plan'
     )
     expect(GRAPH_LEAD_MODE_INSTRUCTION).toContain(
       'Deliver the result only after the GraphRun is terminal'
@@ -48,21 +48,21 @@ describe('Graph Lead mode system contract', () => {
     expect(GRAPH_LEAD_MODE_INSTRUCTION).toContain('pending condition source')
   })
 
-  it('delegates mechanical budgets to host defaults', () => {
+  it('delegates mechanical fields to the host', () => {
     expect(GRAPH_LEAD_MODE_INSTRUCTION).toContain(
-      'Mechanical budget values belong to the host'
+      'Never submit budget, model, provider'
     )
     expect(GRAPH_LEAD_MODE_INSTRUCTION).toContain(
-      'Omit the budget or individual budget fields'
+      'They belong to the host and are intentionally absent from `graph_define_plan`'
     )
   })
 
   it('requires focused decomposition and evidence-driven safe fan-out', () => {
     expect(GRAPH_LEAD_MODE_INSTRUCTION).toContain(
-      '`fanout_join` for independent siblings'
+      'host derives execution strategy'
     )
     expect(GRAPH_LEAD_MODE_INSTRUCTION).toContain(
-      '`hybrid` for mixed parallel and serial regions'
+      'real dependency topology'
     )
     expect(GRAPH_LEAD_MODE_INSTRUCTION).toContain(
       'Give every executable node one focused, independently verifiable deliverable'

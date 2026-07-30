@@ -16,6 +16,12 @@ import { getProvider, resetProviderCacheForTests } from './registry'
 import { rendererRuntimeClient } from './runtime-client'
 import type { ThreadEventSink } from './types'
 
+const DEFAULT_EXECUTION_SETTINGS = {
+  approvalPolicy: 'auto',
+  sandboxMode: 'danger-full-access',
+  approvalReviewer: 'user'
+} as const
+
 function settings(): AppSettingsV1 {
   return {
     version: 1,
@@ -535,8 +541,7 @@ describe('KunRuntimeProvider', () => {
       JSON.stringify({
         prompt: 'hello',
         clientSurface: 'gui',
-        approvalPolicy: 'on-request',
-        sandboxMode: 'workspace-write'
+        ...DEFAULT_EXECUTION_SETTINGS
       })
     )
     expect(result.userMessageItemId).toBe('item_user_real')
@@ -562,8 +567,7 @@ describe('KunRuntimeProvider', () => {
         clientSurface: 'gui',
         model: 'mimo-v2.5',
         providerId: 'xiaomi-token-plan',
-        approvalPolicy: 'on-request',
-        sandboxMode: 'workspace-write'
+        ...DEFAULT_EXECUTION_SETTINGS
       })
     )
   })
@@ -597,8 +601,7 @@ describe('KunRuntimeProvider', () => {
         clientSurface: 'gui',
         model: 'reasoning-pro',
         providerId: 'provider-pro',
-        approvalPolicy: 'on-request',
-        sandboxMode: 'workspace-write',
+        ...DEFAULT_EXECUTION_SETTINGS,
         mode: 'plan'
       })
     )
@@ -619,8 +622,7 @@ describe('KunRuntimeProvider', () => {
       JSON.stringify({
         prompt: 'hello',
         clientSurface: 'gui',
-        approvalPolicy: 'on-request',
-        sandboxMode: 'workspace-write',
+        ...DEFAULT_EXECUTION_SETTINGS,
         workspaceCheckpointId: 'gcp_1'
       })
     )
@@ -643,8 +645,7 @@ describe('KunRuntimeProvider', () => {
       JSON.stringify({
         prompt: 'hello',
         clientSurface: 'gui',
-        approvalPolicy: 'on-request',
-        sandboxMode: 'workspace-write',
+        ...DEFAULT_EXECUTION_SETTINGS,
         workspaceCheckpointRequestId: 'gcp_pending_1'
       })
     )
@@ -683,8 +684,7 @@ describe('KunRuntimeProvider', () => {
       JSON.stringify({
         prompt: 'Use the selection',
         clientSurface: 'gui',
-        approvalPolicy: 'on-request',
-        sandboxMode: 'workspace-write',
+        ...DEFAULT_EXECUTION_SETTINGS,
         composerContexts: [composerContext]
       })
     )
@@ -708,8 +708,7 @@ describe('KunRuntimeProvider', () => {
       JSON.stringify({
         prompt: 'design a screen',
         clientSurface: 'gui',
-        approvalPolicy: 'on-request',
-        sandboxMode: 'workspace-write',
+        ...DEFAULT_EXECUTION_SETTINGS,
         guiDesignCanvas: true,
         guiDesignMode: true
       })
@@ -738,8 +737,7 @@ describe('KunRuntimeProvider', () => {
       JSON.stringify({
         prompt: 'animate the mark',
         clientSurface: 'gui',
-        approvalPolicy: 'on-request',
-        sandboxMode: 'workspace-write',
+        ...DEFAULT_EXECUTION_SETTINGS,
         guiDesignMode: true,
         guiDesignArtifact: {
           kind: 'svg',
@@ -779,8 +777,7 @@ describe('KunRuntimeProvider', () => {
       JSON.stringify({
         prompt: 'describe this',
         clientSurface: 'gui',
-        approvalPolicy: 'on-request',
-        sandboxMode: 'workspace-write',
+        ...DEFAULT_EXECUTION_SETTINGS,
         attachmentIds: ['att_1']
       })
     )
@@ -818,8 +815,7 @@ describe('KunRuntimeProvider', () => {
       JSON.stringify({
         prompt: 'explain these files',
         clientSurface: 'gui',
-        approvalPolicy: 'on-request',
-        sandboxMode: 'workspace-write',
+        ...DEFAULT_EXECUTION_SETTINGS,
         fileReferences: [
           {
             path: '/workspace/deepseek-gui/src/App.tsx',
@@ -859,8 +855,7 @@ describe('KunRuntimeProvider', () => {
         prompt: 'think harder',
         clientSurface: 'gui',
         model: 'auto',
-        approvalPolicy: 'on-request',
-        sandboxMode: 'workspace-write',
+        ...DEFAULT_EXECUTION_SETTINGS,
         reasoningEffort: 'max'
       })
     )
@@ -894,8 +889,7 @@ describe('KunRuntimeProvider', () => {
       JSON.stringify({
         prompt: 'refine the plan',
         clientSurface: 'gui',
-        approvalPolicy: 'on-request',
-        sandboxMode: 'workspace-write',
+        ...DEFAULT_EXECUTION_SETTINGS,
         displayText: 'Generate implementation plan',
         mode: 'plan',
         guiPlan: {
@@ -1521,7 +1515,7 @@ describe('KunRuntimeProvider', () => {
     expect(stopSse).toHaveBeenCalled()
   })
 
-  it('auto-approves approval requests when policy is auto', async () => {
+  it('treats legacy approval requests without a reviewer as manual even when current settings are full access', async () => {
     let onData: ((payload: { streamId: string; events: unknown[] }) => void) | null = null
     const runtimeRequest = vi.fn(async () => ({ ok: true, status: 200, body: '{}' }))
     const resolveKunApproval = vi.fn(async () => ({
@@ -1543,12 +1537,7 @@ describe('KunRuntimeProvider', () => {
       onTurnComplete: vi.fn(() => ac.abort()),
       onError: vi.fn()
     }
-    const autoSettings: AppSettingsV1 = {
-      ...settings(),
-      agents: { kun: { ...defaultKunRuntimeSettings(), approvalPolicy: 'auto' } }
-    }
     installDsGui({
-      getSettings: vi.fn(async () => autoSettings),
       runtimeRequest,
       resolveKunApproval,
       onSseEvent: vi.fn((handler) => {
@@ -1570,15 +1559,17 @@ describe('KunRuntimeProvider', () => {
     })
     const provider = new KunRuntimeProvider()
     await provider.subscribeThreadEvents('thr_1', 0, sink, ac.signal)
-    expect(resolveKunApproval).toHaveBeenCalledWith({
+    expect(resolveKunApproval).not.toHaveBeenCalled()
+    expect(sink.onApproval).toHaveBeenCalledWith({
       approvalId: 'appr_auto',
-      decision: 'allow',
-      source: 'policy'
+      summary: 'Need approval',
+      turnId: undefined,
+      createdAt: undefined,
+      toolName: undefined
     })
-    expect(sink.onApproval).not.toHaveBeenCalled()
   })
 
-  it('uses the approval policy from runtime events before falling back to settings', async () => {
+  it('keeps explicit agent-reviewed requests out of the manual approval surface', async () => {
     let onData: ((payload: { streamId: string; events: unknown[] }) => void) | null = null
     const runtimeRequest = vi.fn(async () => ({ ok: true, status: 200, body: '{}' }))
     const resolveKunApproval = vi.fn(async () => ({
@@ -1622,6 +1613,7 @@ describe('KunRuntimeProvider', () => {
                 seq: 4,
                 approvalId: 'appr_event_auto',
                 approvalPolicy: 'auto',
+                approvalReviewer: 'agent',
                 summary: 'Need approval'
               },
               { kind: 'turn_completed', seq: 5 }
@@ -1633,11 +1625,7 @@ describe('KunRuntimeProvider', () => {
     })
     const provider = new KunRuntimeProvider()
     await provider.subscribeThreadEvents('thr_1', 0, sink, ac.signal)
-    expect(resolveKunApproval).toHaveBeenCalledWith({
-      approvalId: 'appr_event_auto',
-      decision: 'allow',
-      source: 'policy'
-    })
+    expect(resolveKunApproval).not.toHaveBeenCalled()
     expect(getSettings).not.toHaveBeenCalled()
     expect(sink.onApproval).not.toHaveBeenCalled()
   })

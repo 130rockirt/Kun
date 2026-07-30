@@ -7,6 +7,7 @@ import type {
   StartTurnResponse,
   SteeringEntry,
   Turn,
+  GraphPlanningLifecycle,
   TurnStatus
 } from '../contracts/turns.js'
 import type { TurnItem, UserMessageSource } from '../contracts/items.js'
@@ -73,6 +74,17 @@ export type TurnServiceDeps = {
     lastEventSeq: number
     terminal: boolean
   } | null>
+  createGraphPlanningDraft?: (input: {
+    threadId: string
+    sourceTurnId: string
+    goal: string
+    workspace?: string
+  }) => Promise<GraphPlanningLifecycle>
+  transitionGraphPlanningDraft?: (input: {
+    threadId: string
+    sourceTurnId: string
+    action: 'suspend' | 'resume' | 'cancel'
+  }) => Promise<GraphPlanningLifecycle | null>
   ids: IdGenerator
   nowIso: () => string
 }
@@ -202,6 +214,18 @@ export class TurnService {
               ...(thread.workspace ? { workspace: thread.workspace } : {})
             })
           }
+          const approvalPolicy = input.request.approvalPolicy ?? thread.approvalPolicy
+          const sandboxMode = input.request.sandboxMode ?? thread.sandboxMode
+          const approvalReviewer = input.request.approvalReviewer ?? thread.approvalReviewer
+          const graphPlanningLifecycle =
+            input.request.orchestration === 'graph' && this.deps.createGraphPlanningDraft
+              ? await this.deps.createGraphPlanningDraft({
+                  threadId: input.threadId,
+                  sourceTurnId: turnId,
+                  goal: input.request.prompt,
+                  workspace: thread.workspace
+                })
+              : undefined
           const turn = createTurnRecord({
             id: turnId,
             threadId: input.threadId,
@@ -212,6 +236,9 @@ export class TurnService {
             accountId: input.request.accountId,
             reasoningEffort: input.request.reasoningEffort,
             clientSurface: input.request.clientSurface,
+            approvalPolicy,
+            sandboxMode,
+            approvalReviewer,
             attachmentIds,
             composerContexts,
             guiPlan: input.request.guiPlan,
@@ -221,6 +248,7 @@ export class TurnService {
             guiDesignArtifact: input.request.guiDesignArtifact,
             mode: input.request.mode,
             orchestration: input.request.orchestration,
+            graphPlanningLifecycle,
             disableUserInput: input.request.disableUserInput,
             imContext: input.request.imContext,
             workspaceCheckpointId: input.request.workspaceCheckpointId,
@@ -252,6 +280,9 @@ export class TurnService {
             ...(input.request.sandboxMode !== undefined
               ? { sandboxMode: input.request.sandboxMode }
               : {}),
+            ...(input.request.approvalReviewer !== undefined
+              ? { approvalReviewer: input.request.approvalReviewer }
+              : {}),
             turns: [...thread.turns, startedTurn]
           }
           await this.deps.threadStore.upsert({ ...next, updatedAt: this.deps.nowIso() })
@@ -276,6 +307,9 @@ export class TurnService {
         ...(started.turn.accountId ? { accountId: started.turn.accountId } : {}),
         ...(input.request.reasoningEffort ? { reasoningEffort: input.request.reasoningEffort } : {}),
         ...(started.turn.clientSurface ? { clientSurface: started.turn.clientSurface } : {}),
+        ...(started.turn.approvalPolicy ? { approvalPolicy: started.turn.approvalPolicy } : {}),
+        ...(started.turn.sandboxMode ? { sandboxMode: started.turn.sandboxMode } : {}),
+        ...(started.turn.approvalReviewer ? { approvalReviewer: started.turn.approvalReviewer } : {}),
         ...(started.turn.mode ? { mode: started.turn.mode } : {})
       })
       await this.deps.events.record({
@@ -357,6 +391,20 @@ export class TurnService {
     displayText?: string
     messageSource?: UserMessageSource
   }): Promise<void> {
+    if (!this.inflightTurns.has(input.turnId)) {
+      const current = await this.deps.threadStore.get(input.threadId)
+      const turn = current?.turns.find((candidate) => candidate.id === input.turnId)
+      if (
+        turn?.status === 'running' &&
+        turn.orchestration === 'graph' &&
+        turn.graphPlanningLifecycle
+      ) {
+        await this.resumeGraphPlanningTurn({
+          threadId: input.threadId,
+          turnId: input.turnId
+        })
+      }
+    }
     await this.withThreadMutation(input.threadId, async () => {
       const current = await this.deps.threadStore.get(input.threadId)
       const turn = current?.turns.find((candidate) => candidate.id === input.turnId)
@@ -806,7 +854,8 @@ export class TurnService {
     const turn = await this.getTurn(input.threadId, input.turnId)
     if (!turn || turn.status !== 'running' || turn.orchestration !== 'graph') return 'not_graph'
     const attached = await this.deps.resolveGraphLeadRun?.(input)
-    if (!attached || attached.terminal) return 'graph_terminal'
+    if (!attached) return this.suspendGraphPlanningTurn(input)
+    if (attached.terminal) return 'graph_terminal'
 
     return this.withThreadMutation(input.threadId, async () => {
       const current = await this.deps.threadStore.get(input.threadId)
@@ -840,6 +889,109 @@ export class TurnService {
       })
       this.releaseRuntimeTurnExecution(input.threadId, input.turnId)
       return 'suspended'
+    })
+  }
+
+  async suspendGraphPlanningTurn(input: {
+    threadId: string
+    turnId: string
+  }): Promise<GraphLeadSuspensionResult> {
+    let lifecycle = await this.deps.transitionGraphPlanningDraft?.({
+      threadId: input.threadId,
+      sourceTurnId: input.turnId,
+      action: 'suspend'
+    })
+    if (!lifecycle && this.deps.createGraphPlanningDraft) {
+      const thread = await this.deps.threadStore.get(input.threadId)
+      const turn = thread?.turns.find((candidate) => candidate.id === input.turnId)
+      if (thread && turn?.orchestration === 'graph') {
+        await this.deps.createGraphPlanningDraft({
+          threadId: input.threadId,
+          sourceTurnId: input.turnId,
+          goal: turn.prompt,
+          workspace: thread.workspace
+        })
+        lifecycle = await this.deps.transitionGraphPlanningDraft?.({
+          threadId: input.threadId,
+          sourceTurnId: input.turnId,
+          action: 'suspend'
+        })
+      }
+    }
+    if (!lifecycle) return 'not_graph'
+    if (
+      lifecycle.state === 'committed' ||
+      lifecycle.state === 'cancelled' ||
+      lifecycle.state === 'host_error'
+    ) return 'graph_terminal'
+    return this.withThreadMutation(input.threadId, async () => {
+      const current = await this.deps.threadStore.get(input.threadId)
+      const turn = current?.turns.find((candidate) => candidate.id === input.turnId)
+      if (!current || !turn || turn.status !== 'running') return 'not_graph'
+      if (this.deps.steering.peek(input.turnId).length > 0) return 'pending_steering'
+      await this.deps.threadStore.upsert({
+        ...current,
+        turns: current.turns.map((candidate) =>
+          candidate.id === input.turnId
+            ? {
+                ...candidate,
+                graphPlanningLifecycle: lifecycle,
+                requiredToolGate: undefined
+              }
+            : candidate),
+        updatedAt: this.deps.nowIso()
+      })
+      this.releaseRuntimeTurnExecution(input.threadId, input.turnId)
+      return 'suspended'
+    })
+  }
+
+  async resumeGraphPlanningTurn(input: {
+    threadId: string
+    turnId: string
+  }): Promise<GraphLeadResumeResult> {
+    const lifecycle = await this.deps.transitionGraphPlanningDraft?.({
+      threadId: input.threadId,
+      sourceTurnId: input.turnId,
+      action: 'resume'
+    })
+    if (!lifecycle || lifecycle.state !== 'planning') {
+      throw new TurnConflictError(`Graph planning draft is not resumable: ${input.turnId}`)
+    }
+    return this.withThreadMutation(input.threadId, async () => {
+      const current = await this.deps.threadStore.get(input.threadId)
+      const turn = current?.turns.find((candidate) => candidate.id === input.turnId)
+      if (!current || !turn) throw new Error(`turn not found: ${input.turnId}`)
+      if (turn.status !== 'running' || turn.orchestration !== 'graph') {
+        throw new TurnConflictError(`Graph source turn is not active: ${input.turnId}`)
+      }
+      if (this.inflightTurns.has(input.turnId)) return 'already_running'
+      if (!this.tryAdmitTurn(input.turnId, input.threadId)) {
+        throw new TurnCapacityError(this.maxConcurrentTurns)
+      }
+      try {
+        const controller = new AbortController()
+        this.inflightTurns.set(input.turnId, controller)
+        this.deps.inflight.begin({
+          id: input.turnId,
+          kind: 'model',
+          threadId: input.threadId,
+          turnId: input.turnId
+        })
+        this.deps.steering.reopen(input.turnId)
+        await this.deps.threadStore.upsert({
+          ...current,
+          turns: current.turns.map((candidate) =>
+            candidate.id === input.turnId
+              ? { ...candidate, graphPlanningLifecycle: lifecycle }
+              : candidate),
+          updatedAt: this.deps.nowIso()
+        })
+        return 'resumed'
+      } catch (error) {
+        this.releaseRuntimeTurnExecution(input.threadId, input.turnId)
+        throw error
+      }
     })
   }
 
@@ -1037,6 +1189,8 @@ export class TurnService {
       | 'extensionModelRequests'
       | 'extensionToolInvocations'
       | 'workspaceCheckpointId'
+      | 'actingModelRoute'
+      | 'graphPlanningLifecycle'
     >, 'requiredToolGate'>
       & { requiredToolGate?: Turn['requiredToolGate'] | null }
   ): Promise<void> {
@@ -1074,6 +1228,14 @@ export class TurnService {
                 : {}),
               ...(patch.workspaceCheckpointId
                 ? { workspaceCheckpointId: patch.workspaceCheckpointId }
+                : {}),
+              // The first resolved model/provider/account tuple owns the turn.
+              // Later steps and settings changes cannot replace it.
+              ...(!turn.actingModelRoute && patch.actingModelRoute
+                ? { actingModelRoute: { ...patch.actingModelRoute } }
+                : {}),
+              ...(patch.graphPlanningLifecycle
+                ? { graphPlanningLifecycle: { ...patch.graphPlanningLifecycle } }
                 : {})
             }
           : turn

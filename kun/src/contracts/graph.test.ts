@@ -136,6 +136,7 @@ describe('Graph Mode contracts', () => {
       capturedAt: now
     })
     expect(assignment).not.toHaveProperty('maxTokens')
+    expect(assignment.approvalReviewer).toBe('user')
     expect(assignment.allowedProviderIds).toEqual([
       'builtin',
       'mcp:facade',

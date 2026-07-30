@@ -1,5 +1,7 @@
 import type {
   BrowserUseActionInput,
+  BrowserUseKunApprovalGrantDraft,
+  BrowserUseKunApprovalMode,
   BrowserUseToolResult
 } from '../contracts/browser-use.js'
 
@@ -15,6 +17,8 @@ export interface BrowserController {
     threadId: string
     turnId: string
     action: BrowserUseActionInput
+    kunApprovalMode?: BrowserUseKunApprovalMode
+    kunApprovalGrant?: BrowserUseKunApprovalGrantDraft
     signal: AbortSignal
   }): Promise<BrowserUseToolResult>
 }

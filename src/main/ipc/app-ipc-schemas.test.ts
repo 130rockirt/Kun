@@ -431,6 +431,7 @@ describe('app-ipc-schemas', () => {
         kun: {
           port: 19000,
           model: 'deepseek-chat',
+          approvalReviewer: 'agent',
           modelProfiles: {
             'custom-vision-model': {
               aliases: ['custom-vision'],
@@ -483,6 +484,7 @@ describe('app-ipc-schemas', () => {
     })
 
     expect(payload.agents?.kun?.port).toBe(19000)
+    expect(payload.agents?.kun?.approvalReviewer).toBe('agent')
     expect(payload.agents?.kun?.modelProfiles?.['custom-vision-model']?.inputModalities).toEqual(['text', 'image'])
     expect(payload.agents?.kun?.modelProfiles?.['custom-vision-model']?.maxOutputTokens).toBe(32000)
     expect(payload.agents?.kun?.tokenEconomy?.enabled).toBe(true)
@@ -515,6 +517,12 @@ describe('app-ipc-schemas', () => {
     })).toThrow()
     expect(() => settingsPatchSchema.parse({
       workflow: { webhookPort: 9999 }
+    })).toThrow()
+  })
+
+  it('rejects unknown approval reviewers', () => {
+    expect(() => settingsPatchSchema.parse({
+      agents: { kun: { approvalReviewer: 'operator' } }
     })).toThrow()
   })
 

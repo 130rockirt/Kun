@@ -19,6 +19,7 @@ import {
   syncGuiProviderCatalogToConfig
 } from './gui-settings-bridge.js'
 import { readRuntimeBuildIdForEntry } from '../server/runtime-build-identity.js'
+import { DEFAULT_FRESH_SERVE_PERMISSIONS } from './cli-options.js'
 
 const START_TIMEOUT_MS = 30_000
 const STOP_TIMEOUT_MS = 15_000
@@ -235,6 +236,7 @@ export function runtimeMatchesExpectedBuild(
 async function prepareFreshSharedRuntimeCapabilities(dataDir: string): Promise<void> {
   const target = join(dataDir, 'config.json')
   let current: Record<string, unknown> = {}
+  let newProfile = false
   try {
     const parsed = JSON.parse(await readFile(target, 'utf8')) as unknown
     if (!isRecord(parsed)) return
@@ -242,6 +244,7 @@ async function prepareFreshSharedRuntimeCapabilities(dataDir: string): Promise<v
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
       current = {}
+      newProfile = true
     } else {
       // Let the normal config loader report malformed or unreadable files.
       return
@@ -263,7 +266,19 @@ async function prepareFreshSharedRuntimeCapabilities(dataDir: string): Promise<v
     changed = true
   }
   if (!changed) return
-  const next = { ...current, capabilities: nextCapabilities }
+  const next = {
+    ...current,
+    ...(newProfile
+      ? {
+          serve: {
+            approvalPolicy: DEFAULT_FRESH_SERVE_PERMISSIONS.approvalPolicy,
+            sandboxMode: DEFAULT_FRESH_SERVE_PERMISSIONS.sandboxMode,
+            approvalReviewer: DEFAULT_FRESH_SERVE_PERMISSIONS.approvalReviewer
+          }
+        }
+      : {}),
+    capabilities: nextCapabilities
+  }
   await mkdir(dataDir, { recursive: true, mode: 0o700 })
   const temporary = `${target}.${process.pid}.shared.tmp`
   await writeFile(temporary, `${JSON.stringify(next, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })

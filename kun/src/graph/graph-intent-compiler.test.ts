@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { GraphIntentSchema, compileGraphIntent } from './graph-intent-compiler.js'
+import {
+  GraphIntentSchema,
+  GraphPlanIntentV2Schema,
+  compileGraphIntent,
+  compileGraphPlanIntentV2
+} from './graph-intent-compiler.js'
 import { testGraphConfig } from './graph-test-fixtures.test-support.js'
 
 const nowIso = '2026-07-29T00:00:00.000Z'
@@ -35,6 +40,45 @@ function task(id: string, patch: Record<string, unknown> = {}) {
     objective: `Complete ${id}.`,
     ...patch
   }
+}
+
+function planTask(key: string, patch: Record<string, unknown> = {}) {
+  return {
+    key,
+    kind: 'work',
+    title: key,
+    objective: `Complete ${key}.`,
+    dependsOn: [],
+    dataFrom: [],
+    acceptanceCriteria: [`${key} is complete.`],
+    readScopes: ['.'],
+    writeScopes: [],
+    ...patch
+  }
+}
+
+function compileV2(input: unknown) {
+  const config = testGraphConfig()
+  return compileGraphPlanIntentV2({
+    intent: GraphPlanIntentV2Schema.parse(input),
+    goal: 'Implement and verify the requested change.',
+    workspaceRoot: '/workspace',
+    nowIso,
+    config,
+    budgetDefaults: {
+      maxNodes: config.scheduler.maxNodes,
+      maxEdges: config.scheduler.maxEdges,
+      maxConcurrentNodes: config.scheduler.maxConcurrentNodesPerRun,
+      maxAttemptsPerNode: config.scheduler.maxAttemptsPerNode,
+      maxRevisions: config.scheduler.maxRevisions,
+      maxLoopIterations: config.scheduler.maxLoopIterations,
+      maxWallTimeMs: config.scheduler.maxRunWallTimeMs,
+      maxNodeWallTimeMs: config.scheduler.maxNodeWallTimeMs,
+      maxMessages: config.mailbox.maxMessagesPerRun,
+      maxArtifactBytes: config.scheduler.maxArtifactBytes,
+      warningRatio: config.scheduler.budgetWarningRatio
+    }
+  })
 }
 
 describe('compileGraphIntent', () => {
@@ -115,5 +159,97 @@ describe('compileGraphIntent', () => {
       strategy: 'bounded_loop',
       tasks: [task('work')]
     })).toThrow(/requires at least one loop_gate task/)
+  })
+})
+
+describe('compileGraphPlanIntentV2', () => {
+  it('derives parallel, pipeline, and named data dependencies from task relationships', () => {
+    const parallel = compileV2({
+      tasks: [planTask('api'), planTask('ui')]
+    })
+    expect(parallel.strategy?.kind).toBe('fanout_join')
+    expect(parallel.edges).toEqual([])
+
+    const pipeline = compileV2({
+      tasks: [
+        planTask('inspect'),
+        planTask('implement', { dependsOn: ['inspect'] }),
+        planTask('verify', { dependsOn: ['implement'] })
+      ]
+    })
+    expect(pipeline.strategy?.kind).toBe('pipeline')
+    expect(pipeline.edges).toEqual(expect.arrayContaining([
+      expect.objectContaining({ from: 'inspect', to: 'implement', kind: 'control' }),
+      expect.objectContaining({ from: 'implement', to: 'verify', kind: 'control' })
+    ]))
+
+    const withData = compileV2({
+      tasks: [
+        planTask('implement'),
+        planTask('verify', {
+          dataFrom: [{ taskKey: 'implement', name: 'implementation' }]
+        })
+      ]
+    })
+    expect(withData.strategy?.kind).toBe('pipeline')
+    expect(withData.edges).toContainEqual(
+      expect.objectContaining({ from: 'implement', to: 'verify', kind: 'data' })
+    )
+  })
+
+  it('adds only the safe write check and requires only a worker summary', () => {
+    const plan = compileV2({
+      tasks: [planTask('implement', {
+        writeScopes: ['src']
+      })]
+    })
+
+    expect(plan.nodes[0]?.completion).toMatchObject({
+      requiredResultFields: ['summary'],
+      review: {
+        kinds: ['lead'],
+        deterministicChecks: ['git diff --check']
+      }
+    })
+  })
+
+  it('rejects loop on ordinary tasks and compiles an explicit bounded loop gate', () => {
+    expect(() => GraphPlanIntentV2Schema.parse({
+      tasks: [planTask('work', {
+        loop: {
+          conditionTaskKey: 'work',
+          continueTaskKey: 'work',
+          exitTaskKey: 'work',
+          continueOn: ['repair_required'],
+          maxIterations: 2
+        }
+      })]
+    })).toThrow()
+
+    const plan = compileV2({
+      tasks: [
+        planTask('work'),
+        planTask('review', { kind: 'review', dependsOn: ['work'] }),
+        planTask('finish', { dependsOn: ['review'] }),
+        planTask('gate', {
+          kind: 'loop_gate',
+          dependsOn: ['review'],
+          loop: {
+            conditionTaskKey: 'review',
+            continueTaskKey: 'work',
+            exitTaskKey: 'finish',
+            continueOn: ['repair_required', 'failed'],
+            maxIterations: 2
+          }
+        })
+      ],
+      completionTaskKeys: ['finish']
+    })
+    expect(plan.strategy?.kind).toBe('bounded_loop')
+    expect(plan.nodes.find((node) => node.id === 'gate')?.loopGate).toMatchObject({
+      maxIterations: 2,
+      continueTargetNodeId: 'work',
+      exitTargetNodeId: 'finish'
+    })
   })
 })

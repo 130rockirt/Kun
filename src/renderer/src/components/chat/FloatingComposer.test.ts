@@ -46,6 +46,7 @@ import {
 } from './FloatingComposerModelPicker'
 import {
   FloatingComposerExecutionPicker,
+  FloatingComposerPermissionMenuContent,
   calculateExecutionMenuPlacement
 } from './FloatingComposerExecutionPicker'
 import {
@@ -1500,6 +1501,63 @@ describe('FloatingComposer image transfer helpers', () => {
 })
 
 describe('FloatingComposer capability controls', () => {
+  it('renders the permission menu as a compact borderless list', async () => {
+    const previousLanguage = i18n.language
+    await i18n.changeLanguage('zh')
+
+    try {
+      const html = renderToStaticMarkup(
+        createElement(FloatingComposerPermissionMenuContent, {
+          permissionMode: 'full-access',
+          onSelect: () => undefined,
+          onOpenPermissionSettings: () => undefined
+        })
+      )
+      const optionClasses = Array.from(
+        html.matchAll(/class="([^"]*ds-composer-permission-option [^"]*)"/g),
+        (match) => match[1]
+      )
+
+      expect(html).toContain('Kun 如何执行操作？')
+      expect(html).toContain('了解权限')
+      expect(html.match(/role="menuitemradio"/g)).toHaveLength(3)
+      expect(html).toContain('data-permission-mode="full-access" aria-checked="true"')
+      expect(html).toContain('lucide-check')
+      expect(optionClasses).toHaveLength(3)
+      expect(optionClasses.every((className) => !className.split(/\s+/).includes('border'))).toBe(true)
+      expect(
+        optionClasses.every(
+          (className) => !className.split(/\s+/).some((name) => name.startsWith('bg-'))
+        )
+      ).toBe(true)
+    } finally {
+      await i18n.changeLanguage(previousLanguage)
+    }
+  })
+
+  it('opens permission settings from the menu header action', async () => {
+    const onOpenPermissionSettings = vi.fn()
+    let renderer!: ReturnType<typeof createRenderer>
+
+    await act(async () => {
+      renderer = createRenderer(
+        createElement(FloatingComposerPermissionMenuContent, {
+          permissionMode: 'ask-for-approval',
+          onSelect: () => undefined,
+          onOpenPermissionSettings
+        })
+      )
+    })
+    await act(async () => {
+      renderer.root.findByProps({ role: 'menuitem' }).props.onClick()
+    })
+
+    expect(onOpenPermissionSettings).toHaveBeenCalledOnce()
+    await act(async () => {
+      renderer.unmount()
+    })
+  })
+
   it('declares progressive container-width fallbacks for secondary toolbar controls', async () => {
     const nodeFs = 'node:fs/promises'
     const { readFile } = await import(/* @vite-ignore */ nodeFs)
@@ -1615,7 +1673,8 @@ describe('FloatingComposer capability controls', () => {
         createElement(FloatingComposerExecutionPicker, {
           value: {
             approvalPolicy: 'auto',
-            sandboxMode: 'danger-full-access'
+            sandboxMode: 'danger-full-access',
+            approvalReviewer: 'user'
           },
           onChange: () => undefined
         })
@@ -1625,7 +1684,7 @@ describe('FloatingComposer capability controls', () => {
       expect(html).not.toContain('>审批<')
       expect(html).not.toContain('>权限<')
       expect(html).toContain('aria-label="工具权限"')
-      expect(html).toContain('data-permission-mode="bypass"')
+      expect(html).toContain('data-permission-mode="full-access"')
       expect(html).toContain('lucide-lock-keyhole-open')
       expect(html).toContain('ds-composer-permission-label')
       expect(html).toContain('ds-composer-permission-chevron')
@@ -1637,76 +1696,45 @@ describe('FloatingComposer capability controls', () => {
     }
   })
 
-  it('renders the workspace-write permission mode in the execution picker', () => {
+  it('renders the ask-for-approval permission mode in the execution picker', () => {
     const html = renderToStaticMarkup(
       createElement(FloatingComposerExecutionPicker, {
         value: {
           approvalPolicy: 'on-request',
-          sandboxMode: 'workspace-write'
+          sandboxMode: 'workspace-write',
+          approvalReviewer: 'user'
         },
         onChange: () => undefined
       })
     )
 
-    expect(html).toContain('Ask in workspace')
-    expect(html).toContain('Asks before workspace file changes')
+    expect(html).toContain('Ask for approval')
+    expect(html).toContain('approval-worthy writes, commands, network, and external effects ask you first')
     expect(html).toContain('aria-label="Tool permission"')
-    expect(html).toContain('data-permission-mode="workspace-write"')
-    expect(html).toContain('lucide-folder-pen')
+    expect(html).toContain('data-permission-mode="ask-for-approval"')
+    expect(html).toContain('lucide-hand')
   })
 
-  it('renders the trusted workspace permission mode in the execution picker', () => {
-    const html = renderToStaticMarkup(
-      createElement(FloatingComposerExecutionPicker, {
-        value: {
-          approvalPolicy: 'auto',
-          sandboxMode: 'workspace-write'
-        },
-        onChange: () => undefined
-      })
-    )
-
-    expect(html).toContain('Trusted workspace')
-    expect(html).toContain('Workspace file changes run without prompts')
-    expect(html).toContain('aria-label="Tool permission"')
-    expect(html).toContain('data-permission-mode="trusted-workspace"')
-    expect(html).toContain('lucide-shield-check')
-  })
-
-  it('renders the sensitive-ask permission mode in the execution picker', () => {
-    const html = renderToStaticMarkup(
-      createElement(FloatingComposerExecutionPicker, {
-        value: {
-          approvalPolicy: 'untrusted',
-          sandboxMode: 'danger-full-access'
-        },
-        onChange: () => undefined
-      })
-    )
-
-    expect(html).toContain('Sensitive ask')
-    expect(html).toContain('Ordinary reads can run automatically')
-    expect(html).toContain('aria-label="Tool permission"')
-    expect(html).toContain('data-permission-mode="sensitive-ask"')
-    expect(html).toContain('lucide-shield-question')
-  })
-
-  it('marks the read-only permission mode for theme-specific presentation', () => {
+  it('renders the approve-for-me permission mode in the execution picker', () => {
     const html = renderToStaticMarkup(
       createElement(FloatingComposerExecutionPicker, {
         value: {
           approvalPolicy: 'on-request',
-          sandboxMode: 'danger-full-access'
+          sandboxMode: 'workspace-write',
+          approvalReviewer: 'agent'
         },
         onChange: () => undefined
       })
     )
 
-    expect(html).toContain('data-permission-mode="read-only"')
-    expect(html).toContain('lucide-eye')
+    expect(html).toContain('Approve for me')
+    expect(html).toContain('selected model reviews approval-worthy actions')
+    expect(html).toContain('aria-label="Tool permission"')
+    expect(html).toContain('data-permission-mode="approve-for-me"')
+    expect(html).toContain('lucide-bot')
   })
 
-  it('renders the always-ask permission label in Chinese as 永远询问', async () => {
+  it('renders approve-for-me in Chinese', async () => {
     const previousLanguage = i18n.language
     await i18n.changeLanguage('zh')
 
@@ -1714,18 +1742,18 @@ describe('FloatingComposer capability controls', () => {
       const html = renderToStaticMarkup(
         createElement(FloatingComposerExecutionPicker, {
           value: {
-            approvalPolicy: 'always',
-            sandboxMode: 'danger-full-access'
+            approvalPolicy: 'on-request',
+            sandboxMode: 'workspace-write',
+            approvalReviewer: 'agent'
           },
           onChange: () => undefined
         })
       )
 
-      expect(html).toContain('永远询问')
-      expect(html).toContain('每次工具调用都要你确认')
-      expect(html).toContain('data-permission-mode="always-ask"')
-      expect(html).toContain('lucide-hand')
-      expect(html).not.toContain('永远咨询')
+      expect(html).toContain('替我审批')
+      expect(html).toContain('由输入框所选模型审查需审批操作')
+      expect(html).toContain('data-permission-mode="approve-for-me"')
+      expect(html).toContain('lucide-bot')
     } finally {
       await i18n.changeLanguage(previousLanguage)
     }
@@ -2291,7 +2319,8 @@ describe('FloatingComposer capability controls', () => {
         webAccessAvailable: false,
         executionSettings: {
           approvalPolicy: 'auto',
-          sandboxMode: 'danger-full-access'
+          sandboxMode: 'danger-full-access',
+          approvalReviewer: 'user'
         },
         onExecutionSettingsChange: () => undefined
       })

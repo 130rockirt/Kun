@@ -51,7 +51,7 @@ export function buildGraphLeadReviewTool(options: {
   nextId: (prefix: string) => string
 }): LocalTool {
   return LocalToolHost.defineTool({
-    name: GRAPH_LEAD_TOOL_NAMES[3],
+    name: GRAPH_LEAD_TOOL_NAMES[4],
     description:
       'Record the source Lead decision for a submitted Graph node. Provide only the node, ' +
       'outcome (pass, fail, revise, or needs_human), summary, and optional evidence, artifact ' +

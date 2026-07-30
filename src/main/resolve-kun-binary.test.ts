@@ -134,6 +134,7 @@ describe('buildKunServeArgs', () => {
       dataDir: '/tmp/kun',
       approvalPolicy: 'on-request',
       sandboxMode: 'workspace-write',
+      approvalReviewer: 'user',
       tokenEconomyMode: false,
       insecure: false
     })
@@ -147,6 +148,8 @@ describe('buildKunServeArgs', () => {
     expect(args).toContain('serve')
     expect(args).toContain('--token-economy-mode')
     expect(args).toContain('false')
+    expect(args).toContain('--approval-reviewer')
+    expect(args).toContain('user')
   })
 })
 

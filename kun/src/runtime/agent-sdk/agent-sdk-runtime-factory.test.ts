@@ -63,7 +63,7 @@ describe('waitForGate', () => {
 })
 
 function threadWith(partial: Partial<ThreadRecord>): ThreadRecord {
-  return {
+  const thread = {
     id: 'th',
     title: 't',
     workspace: '/ws',
@@ -72,11 +72,28 @@ function threadWith(partial: Partial<ThreadRecord>): ThreadRecord {
     status: 'idle',
     approvalPolicy: 'auto',
     sandboxMode: 'danger-full-access',
+    approvalReviewer: 'user',
     relation: 'primary',
     createdAt: '2026-06-27T00:00:00Z',
     updatedAt: '2026-06-27T00:00:00Z',
-    turns: [],
+    turns: [{ id: 'tn', prompt: 'test turn' } as ThreadRecord['turns'][number]],
     ...partial
+  } as ThreadRecord
+  return {
+    ...thread,
+    turns: thread.turns.map((turn) => ({
+      actingModelRoute: {
+        model: turn.model?.trim() || thread.model,
+        ...(turn.providerId?.trim() || thread.providerId?.trim()
+          ? { providerId: turn.providerId?.trim() || thread.providerId?.trim() }
+          : {}),
+        ...(turn.accountId?.trim() || thread.accountId?.trim()
+          ? { accountId: turn.accountId?.trim() || thread.accountId?.trim() }
+          : {})
+      },
+      approvalReviewer: turn.approvalReviewer ?? thread.approvalReviewer ?? 'user',
+      ...turn
+    }))
   } as ThreadRecord
 }
 
@@ -387,7 +404,14 @@ describe('createAgentSdkRuntime turn context', () => {
     providerId?: string
     providerToken?: string
     defaultToken?: string
-  }): Promise<{ oauthToken?: string } | null> => {
+  }): Promise<{
+    oauthToken?: string
+    actingModelRoute?: {
+      model: string
+      providerId?: string
+      accountId?: string
+    }
+  } | null> => {
     const runtime = createAgentSdkRuntime({
       registry: CapabilityRegistry.fromLocalTools([]),
       turns: { updateTurnMetadata: async () => undefined } as never,
@@ -406,7 +430,13 @@ describe('createAgentSdkRuntime turn context', () => {
       threadStore: {
         get: async () => threadWith({
           ...(options.providerId ? { providerId: options.providerId } : {}),
-          turns: [{ id: 'tn', prompt: 'check credentials' } as ThreadRecord['turns'][number]]
+          turns: [{
+            id: 'tn',
+            prompt: 'check credentials',
+            // Exercise first-resolution behavior rather than the test helper's
+            // synthesized legacy route snapshot.
+            actingModelRoute: undefined
+          } as ThreadRecord['turns'][number]]
         })
       } as never,
       events: {} as never,
@@ -430,7 +460,14 @@ describe('createAgentSdkRuntime turn context', () => {
         loadTurnContext(
           threadId: string,
           turnId: string
-        ): Promise<{ oauthToken?: string } | null>
+        ): Promise<{
+          oauthToken?: string
+          actingModelRoute?: {
+            model: string
+            providerId?: string
+            accountId?: string
+          }
+        } | null>
       }
     }).deps
     return deps.loadTurnContext('th', 'tn')
@@ -450,6 +487,9 @@ describe('createAgentSdkRuntime turn context', () => {
       defaultToken: 'sk-ant-oat01-default-agent-sdk'
     })
     expect(context?.oauthToken).toBe('sk-ant-oat01-default-agent-sdk')
+    expect(context?.actingModelRoute).toMatchObject({
+      providerId: 'default'
+    })
   })
 
   test('rejects an invalid explicit token without disclosing it', async () => {
@@ -1257,6 +1297,226 @@ describe('createAgentSdkRuntime turn context', () => {
     expect(events).toContainEqual(expect.objectContaining({ kind: 'approval_requested', approvalPolicy: 'always' }))
   })
 
+  test.each([
+    { decision: 'allow' as const, reviewStatus: 'approved' as const, allow: true },
+    { decision: 'deny' as const, reviewStatus: 'denied' as const, allow: false }
+  ])('routes native SDK commands through agent review ($decision)', async ({
+    decision,
+    reviewStatus,
+    allow
+  }) => {
+    const approvalGate = new InMemoryApprovalGate()
+    const gateRequest = vi.spyOn(approvalGate, 'request')
+    const review = vi.fn(async () => ({
+      decision,
+      reviewer: 'agent' as const,
+      reviewId: 'review_sdk',
+      reviewStatus,
+      riskLevel: decision === 'allow' ? 'low' as const : 'high' as const,
+      reason: decision === 'allow'
+        ? 'Command matches the initiating intent.'
+        : 'Command is broader than the initiating intent.'
+    }))
+    const record = vi.fn(async () => undefined)
+    const runtime = createAgentSdkRuntime({
+      registry: {} as never,
+      turns: {} as never,
+      sessionStore: {} as never,
+      threadStore: {
+        get: async () => threadWith({
+          approvalPolicy: 'on-request',
+          sandboxMode: 'workspace-write',
+          approvalReviewer: 'agent',
+          providerId: 'selected-provider',
+          accountId: 'selected-account',
+          turns: [{
+            id: 'tn',
+            prompt: 'Run the tests',
+            model: 'selected-model',
+            providerId: 'selected-provider',
+            accountId: 'selected-account',
+            approvalReviewer: 'agent',
+            actingModelRoute: {
+              model: 'selected-model',
+              providerId: 'selected-provider',
+              accountId: 'selected-account'
+            }
+          } as ThreadRecord['turns'][number]]
+        })
+      } as never,
+      events: { record } as never,
+      ids: { next: (prefix) => `${prefix}_sdk` },
+      prefix: { systemPrompt: '' },
+      providerConfigs: {},
+      agentSdkProviderIds: new Set(),
+      defaultApprovalPolicy: 'on-request',
+      defaultSandboxMode: 'workspace-write',
+      defaultApprovalReviewer: 'agent',
+      approvalGate,
+      approvalReview: { review }
+    })
+    const deps = (runtime as unknown as {
+      deps: {
+        decideToolApproval(
+          threadId: string,
+          turnId: string,
+          toolName: string,
+          input: Record<string, unknown>
+        ): Promise<{ allow: boolean; message?: string }>
+      }
+    }).deps
+
+    await expect(deps.decideToolApproval(
+      'th',
+      'tn',
+      'Bash',
+      { command: 'npm test', apiKey: 'sk-sdk-secret-abcdefghijklmnop' }
+    )).resolves.toMatchObject({
+      allow,
+      ...(allow
+        ? {}
+        : { message: 'Command is broader than the initiating intent.' })
+    })
+    expect(review).toHaveBeenCalledWith(expect.objectContaining({
+      route: {
+        model: 'selected-model',
+        providerId: 'selected-provider',
+        accountId: 'selected-account'
+      },
+      intent: 'Run the tests',
+      approval: expect.objectContaining({
+        toolName: 'Bash',
+        action: expect.objectContaining({
+          kind: 'command',
+          arguments: expect.objectContaining({
+            command: 'npm test',
+            apiKey: '[redacted]'
+          })
+        })
+      })
+    }))
+    expect(JSON.stringify(review.mock.calls)).not.toContain('sk-sdk-secret')
+    expect(gateRequest).not.toHaveBeenCalled()
+    expect(approvalGate.pending()).toEqual([])
+    expect(record).not.toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'approval_requested'
+    }))
+  })
+
+  test.each(['Read', 'Glob', 'Grep', 'TodoWrite'])(
+    'does not review SDK-native safe tool %s under on-request policy',
+    async (toolName) => {
+      const approvalGate = new InMemoryApprovalGate()
+      const gateRequest = vi.spyOn(approvalGate, 'request')
+      const review = vi.fn()
+      const record = vi.fn()
+      const runtime = createAgentSdkRuntime({
+        registry: {} as never,
+        turns: {} as never,
+        sessionStore: {} as never,
+        threadStore: {
+          get: async () => threadWith({
+            approvalPolicy: 'on-request',
+            sandboxMode: 'workspace-write',
+            approvalReviewer: 'agent',
+            turns: [{
+              id: 'tn',
+              prompt: 'Inspect the workspace',
+              model: 'selected-model',
+              approvalPolicy: 'on-request',
+              sandboxMode: 'workspace-write',
+              approvalReviewer: 'agent',
+              actingModelRoute: {
+                model: 'selected-model',
+                providerId: 'selected-provider',
+                accountId: 'selected-account'
+              }
+            } as ThreadRecord['turns'][number]]
+          })
+        } as never,
+        events: { record } as never,
+        ids: { next: (prefix) => `${prefix}_safe` },
+        prefix: { systemPrompt: '' },
+        providerConfigs: {},
+        agentSdkProviderIds: new Set(),
+        defaultApprovalPolicy: 'on-request',
+        defaultSandboxMode: 'workspace-write',
+        defaultApprovalReviewer: 'agent',
+        approvalGate,
+        approvalReview: { review } as never
+      })
+      const deps = (runtime as unknown as {
+        deps: {
+          decideToolApproval(
+            threadId: string,
+            turnId: string,
+            toolName: string,
+            input: Record<string, unknown>
+          ): Promise<{ allow: boolean; message?: string }>
+        }
+      }).deps
+
+      await expect(deps.decideToolApproval(
+        'th',
+        'tn',
+        toolName,
+        toolName === 'Glob' ? { pattern: '**/*.ts' } : { file_path: '/tmp/file.ts' }
+      )).resolves.toEqual({ allow: true })
+      expect(review).not.toHaveBeenCalled()
+      expect(gateRequest).not.toHaveBeenCalled()
+      expect(record).not.toHaveBeenCalled()
+    }
+  )
+
+  test('lets native SDK tools run in Full access without any Kun approval lifecycle', async () => {
+    const approvalGate = new InMemoryApprovalGate()
+    const gateRequest = vi.spyOn(approvalGate, 'request')
+    const review = vi.fn()
+    const record = vi.fn()
+    const runtime = createAgentSdkRuntime({
+      registry: {} as never,
+      turns: {} as never,
+      sessionStore: {} as never,
+      threadStore: {
+        get: async () => threadWith({
+          approvalPolicy: 'auto',
+          sandboxMode: 'danger-full-access',
+          approvalReviewer: 'agent'
+        })
+      } as never,
+      events: { record } as never,
+      ids: { next: (prefix) => `${prefix}_full` },
+      prefix: { systemPrompt: '' },
+      providerConfigs: {},
+      agentSdkProviderIds: new Set(),
+      defaultApprovalPolicy: 'auto',
+      defaultSandboxMode: 'danger-full-access',
+      defaultApprovalReviewer: 'agent',
+      approvalGate,
+      approvalReview: { review } as never
+    })
+    const deps = (runtime as unknown as {
+      deps: {
+        decideToolApproval(
+          threadId: string,
+          turnId: string,
+          toolName: string,
+          input: Record<string, unknown>
+        ): Promise<{ allow: boolean }>
+      }
+    }).deps
+
+    await expect(deps.decideToolApproval(
+      'th',
+      'tn',
+      'Bash',
+      { command: 'pwd' }
+    )).resolves.toEqual({ allow: true })
+    expect(review).not.toHaveBeenCalled()
+    expect(gateRequest).not.toHaveBeenCalled()
+    expect(record).not.toHaveBeenCalled()
+  })
+
   test('requires approval for SDK Bash under auto workspace-write policy', async () => {
     const events: Array<{ kind: string; approvalPolicy?: string; sandboxMode?: string }> = []
     const runtime = createAgentSdkRuntime({
@@ -1636,7 +1896,11 @@ describe('createAgentSdkRuntime turn context', () => {
             id: 'th',
             workspace,
             providerId: 'claude-subscription',
-            turns: [{ id: 'tn', prompt: 'hello' } as ThreadRecord['turns'][number]]
+            turns: [{
+              id: 'tn',
+              prompt: 'hello',
+              actingModelRoute: undefined
+            } as ThreadRecord['turns'][number]]
           })
         } as never,
         events: {} as never,
@@ -1653,16 +1917,42 @@ describe('createAgentSdkRuntime turn context', () => {
         )
       })
       const deps = (runtime as unknown as {
-        deps: { loadTurnContext(threadId: string, turnId: string): Promise<{ contextInstructions?: string[] } | null> }
+        deps: {
+          loadTurnContext(threadId: string, turnId: string): Promise<{
+            contextInstructions?: string[]
+            actingModelRoute?: {
+              model: string
+              providerId?: string
+              accountId?: string
+            }
+          } | null>
+        }
       }).deps
 
       const ctx = await deps.loadTurnContext('th', 'tn')
 
       expect(ctx?.contextInstructions?.join('\n')).toContain('SDK workspace rule.')
-      expect(updatedMetadata[0]).toMatchObject({
-        injectedInstructionSources: [expect.objectContaining({ scope: 'workspace', path: join(workspace, 'AGENTS.md') })],
-        instructionInjectionBytes: expect.any(Number)
+      expect(ctx?.actingModelRoute).toEqual({
+        model: 'claude-haiku-4-5',
+        providerId: 'claude-subscription'
       })
+      expect(updatedMetadata).toEqual(expect.arrayContaining([
+        {
+          actingModelRoute: {
+            model: 'claude-haiku-4-5',
+            providerId: 'claude-subscription'
+          }
+        },
+        expect.objectContaining({
+          injectedInstructionSources: [
+            expect.objectContaining({
+              scope: 'workspace',
+              path: join(workspace, 'AGENTS.md')
+            })
+          ],
+          instructionInjectionBytes: expect.any(Number)
+        })
+      ]))
     } finally {
       await rm(root, { recursive: true, force: true })
     }

@@ -207,4 +207,91 @@ describe('GraphRuntimeComposition creation authority', () => {
     })
     await runtime.stop()
   })
+
+  it('finishes an interrupted committing draft once with its reserved run id', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-graph-planning-recovery-'))
+    const workspace = join(root, 'workspace')
+    await mkdir(workspace)
+    roots.push(root)
+    let id = 0
+    const threadStore = new InMemoryThreadStore()
+    const thread = createThreadRecord({
+      id: 'thread_planning',
+      title: 'Planning recovery',
+      workspace,
+      model: 'test-model'
+    })
+    await threadStore.upsert({
+      ...thread,
+      turns: [createTurnRecord({
+        id: 'turn_planning',
+        threadId: thread.id,
+        prompt: 'Build a graph.',
+        orchestration: 'graph',
+        status: 'running'
+      })]
+    })
+    const runtime = new GraphRuntimeComposition({
+      dataDir: root,
+      config: () => testGraphConfig(),
+      artifactStore: new InMemoryArtifactStore(),
+      runtimeEvents: { record: vi.fn(async (event) => event as never) },
+      threadStore,
+      ids: { next: (prefix) => `${prefix}_${++id}` },
+      nowIso: () => '2026-07-29T00:00:00.000Z'
+    })
+    const identity = await runtime.registry.identify(workspace)
+    const draft = await runtime.drafts.create({
+      id: 'draft_recovery',
+      reservedRunId: 'run_reserved',
+      threadId: thread.id,
+      sourceTurnId: 'turn_planning',
+      projectId: identity.projectId,
+      goal: 'Build a graph.'
+    })
+    await runtime.drafts.writeCommitPlan(
+      draft.id,
+      testGraphPlan({ workspaceRoot: workspace, autoStart: true })
+    )
+    await runtime.drafts.update(draft.id, {
+      expectedRevision: draft.revision,
+      status: 'committing'
+    })
+
+    await runtime.start({
+      delegation: () => undefined,
+      leadTurn: async () => undefined,
+      authorityForRun: () => ({
+        workspaceRoot: workspace,
+        model: 'test-model',
+        providerId: 'default',
+        allowedModelProviderIds: ['default'],
+        allowedModels: ['test-model'],
+        allowedProviderIds: [],
+        reasoningEffort: 'off',
+        approvalPolicy: 'never',
+        sandboxMode: 'read-only',
+        allowedTools: [],
+        blockedTools: [],
+        allowedSkills: [],
+        blockedSkills: [],
+        allowedMcpServers: [],
+        blockedMcpServers: [],
+        readScopes: ['.'],
+        writeScopes: [],
+        networkAllowed: false
+      })
+    })
+
+    await expect(runtime.control.get('run_reserved')).resolves.toMatchObject({
+      id: 'run_reserved'
+    })
+    await expect(runtime.drafts.require('draft_recovery')).resolves.toMatchObject({
+      status: 'committed',
+      committedRunId: 'run_reserved'
+    })
+    expect((await runtime.control.list({ threadId: thread.id }))
+      .filter((run) => run.sourceTurnId === 'turn_planning')).toHaveLength(1)
+    await runtime.stop()
+  })
 })

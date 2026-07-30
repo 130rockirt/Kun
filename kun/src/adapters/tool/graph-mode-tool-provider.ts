@@ -13,6 +13,7 @@ import type { LocalTool } from './local-tool-host.js'
 import { LocalToolHost } from './local-tool-host.js'
 import {
   GraphControlService,
+  type FileGraphPlanningDraftStore,
   GraphMailbox,
   GraphWorkerSessionRegistry,
   canonicalWorkerArtifactRefs,
@@ -25,6 +26,11 @@ import {
   GRAPH_WORKER_TOOL_NAMES
 } from '../../graph/graph-tool-boundary.js'
 import { buildGraphCreateRunTool } from './graph-create-run-tool.js'
+import {
+  buildGraphDefinePlanTool,
+  GRAPH_DEFINE_PLAN_INPUT_JSON_SCHEMA,
+  GraphDefinePlanInputSchema
+} from './graph-define-plan-tool.js'
 import { buildGraphLeadSupervisionTool } from './graph-lead-supervision-tool.js'
 import { buildGraphLeadReviewTool } from './graph-lead-review-tool.js'
 import { buildGraphReportToParentTool } from './graph-report-to-parent-tool.js'
@@ -45,6 +51,8 @@ export function buildGraphModeLocalTools(options: {
   registry: ProjectAgentRegistry
   artifactStore: ArtifactStore
   workerSessions: GraphWorkerSessionRegistry
+  drafts: FileGraphPlanningDraftStore
+  events: Pick<import('../../services/runtime-event-recorder.js').RuntimeEventRecorder, 'record'>
   threads?: Pick<ThreadStore, 'get'>
   sessions?: Pick<SessionStore, 'loadItems'>
   steerChildTurn?: () => ((input: {
@@ -86,7 +94,8 @@ export function buildGraphModeLocalTools(options: {
     options.enabled() &&
     !options.workerSessions.has(context.threadId) &&
     (context.orchestration === 'graph' || context.messageSource === 'graph_runtime')
-  const graphCreatorOnly = (context: ToolHostContext) =>
+  const graphCreatorOnly = (_context: ToolHostContext) => false
+  const graphPlannerOnly = (context: ToolHostContext) =>
     options.enabled() &&
     !options.workerSessions.has(context.threadId) &&
     context.orchestration === 'graph'
@@ -97,6 +106,16 @@ export function buildGraphModeLocalTools(options: {
   const graphWorkerOnly = (_context: ToolHostContext) => false
 
   return [
+    buildGraphDefinePlanTool({
+      control: options.control,
+      drafts: options.drafts,
+      registry: options.registry,
+      events: options.events,
+      shouldAdvertise: graphPlannerOnly,
+      nowIso,
+      nextId,
+      config: options.config
+    }),
     buildGraphCreateRunTool({
       control: options.control,
       registry: options.registry,
@@ -119,7 +138,7 @@ export function buildGraphModeLocalTools(options: {
       nextId
     }),
     LocalToolHost.defineTool({
-      name: GRAPH_LEAD_TOOL_NAMES[1],
+      name: GRAPH_LEAD_TOOL_NAMES[2],
       description:
         'Inspect or control one durable GraphRun. Actions: inspect, pause, resume, cancel, retry_node, or steer. ' +
         'Every mutation is host-validated, idempotent, and revision/sequence checked.',
@@ -196,7 +215,7 @@ export function buildGraphModeLocalTools(options: {
       }
     }),
     LocalToolHost.defineTool({
-      name: GRAPH_LEAD_TOOL_NAMES[2],
+      name: GRAPH_LEAD_TOOL_NAMES[3],
       description:
         'Apply a validated compare-and-swap GraphPatch. Accepted history cannot be rewritten; ' +
         'replacement work must use a distinct superseding node. Operations are semantic: add_node, ' +
@@ -596,6 +615,11 @@ export function buildGraphModeLocalTools(options: {
       }
     })
   ]
+}
+
+export {
+  GRAPH_DEFINE_PLAN_INPUT_JSON_SCHEMA,
+  GraphDefinePlanInputSchema
 }
 
 async function authorizedLead(

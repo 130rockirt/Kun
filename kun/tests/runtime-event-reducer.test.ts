@@ -26,7 +26,10 @@ describe('runtime event reducer', () => {
       baseEvent({
         kind: 'turn_started',
         seq: 2,
-        turnId: 'turn-1'
+        turnId: 'turn-1',
+        approvalPolicy: 'on-request',
+        sandboxMode: 'workspace-write',
+        approvalReviewer: 'agent'
       }),
       baseEvent({
         kind: 'assistant_text_delta',
@@ -76,6 +79,9 @@ describe('runtime event reducer', () => {
       expect.objectContaining({
         id: 'turn-1',
         status: 'completed',
+        approvalPolicy: 'on-request',
+        sandboxMode: 'workspace-write',
+        approvalReviewer: 'agent',
         itemIds: ['item-1']
       })
     ])
@@ -239,6 +245,96 @@ describe('runtime event reducer', () => {
         code: 'budget_limited',
         details: { spent: 2, budget: 1 },
         severity: 'error'
+      })
+    ])
+  })
+
+  it('replays automatic review lifecycle as non-actionable audit state', () => {
+    const action = {
+      version: 1 as const,
+      kind: 'command' as const,
+      toolName: 'bash',
+      providerKind: 'built-in' as const,
+      toolKind: 'command_execution' as const,
+      effects: {
+        network: false,
+        externalWrite: false,
+        processExecution: true,
+        guiAutomation: false
+      },
+      arguments: { command: 'npm test' },
+      workspace: '/workspace',
+      cwd: '/workspace',
+      targets: [{ kind: 'command' as const, value: 'npm test' }],
+      reason: 'workspace command requires approval'
+    }
+    const projection = replayRuntimeEvents([
+      baseEvent({
+        kind: 'approval_review_started',
+        seq: 1,
+        turnId: 'turn-1',
+        reviewId: 'review-1',
+        approvalId: 'approval-1',
+        toolName: 'bash',
+        reviewer: 'agent',
+        status: 'in-progress',
+        summary: 'Review command action bash',
+        action
+      }),
+      baseEvent({
+        kind: 'approval_review_completed',
+        seq: 2,
+        timestamp: '2026-06-03T10:00:01.000Z',
+        turnId: 'turn-1',
+        reviewId: 'review-1',
+        approvalId: 'approval-1',
+        toolName: 'bash',
+        reviewer: 'agent',
+        status: 'denied',
+        summary: 'Review command action bash',
+        decision: 'deny',
+        riskLevel: 'high',
+        rationale: 'The command is broader than the request.'
+      }),
+      baseEvent({
+        kind: 'approval_resolved',
+        seq: 3,
+        timestamp: '2026-06-03T10:00:01.001Z',
+        turnId: 'turn-1',
+        approvalId: 'approval-1',
+        toolName: 'bash',
+        status: 'denied',
+        approvalReviewer: 'agent',
+        decisionSource: 'agent',
+        summary: 'Review command action bash',
+        reason: 'The command is broader than the request.',
+        action
+      })
+    ])
+
+    expect(projection.approvalReviews).toEqual([{
+      reviewId: 'review-1',
+      approvalId: 'approval-1',
+      turnId: 'turn-1',
+      toolName: 'bash',
+      reviewer: 'agent',
+      status: 'denied',
+      summary: 'Review command action bash',
+      action,
+      decision: 'deny',
+      riskLevel: 'high',
+      rationale: 'The command is broader than the request.',
+      startedAt: timestamp,
+      finishedAt: '2026-06-03T10:00:01.000Z'
+    }])
+    expect(projection.items).toEqual([
+      expect.objectContaining({
+        kind: 'approval',
+        approvalId: 'approval-1',
+        status: 'denied',
+        approvalReviewer: 'agent',
+        decisionSource: 'agent',
+        reason: 'The command is broader than the request.'
       })
     ])
   })

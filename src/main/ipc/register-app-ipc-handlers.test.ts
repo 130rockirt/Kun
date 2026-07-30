@@ -393,8 +393,13 @@ describe('registerAppIpcHandlers', () => {
     })
   })
 
-  it('does not persist a renderer-requested bypass mode without protected native consent', async () => {
+  it('does not persist renderer-requested full access without protected native consent', async () => {
     const current = settings()
+    current.agents.kun = mergeKunRuntimeSettings(current.agents.kun, {
+      approvalPolicy: 'on-request',
+      sandboxMode: 'workspace-write',
+      approvalReviewer: 'user'
+    })
     const mainFrame = { processId: 10, routingId: 20 }
     const contents = { id: 7, mainFrame }
     const mainWindow = { isDestroyed: () => false, webContents: contents }
@@ -407,7 +412,13 @@ describe('registerAppIpcHandlers', () => {
       saveSettingsPatch
     }))
     const payload = {
-      agents: { kun: { approvalPolicy: 'auto' as const, sandboxMode: 'danger-full-access' as const } }
+      agents: {
+        kun: {
+          approvalPolicy: 'auto' as const,
+          sandboxMode: 'danger-full-access' as const,
+          approvalReviewer: 'user' as const
+        }
+      }
     }
     const trustedEvent = { sender: contents, senderFrame: mainFrame }
 
@@ -422,6 +433,14 @@ describe('registerAppIpcHandlers', () => {
     electronMock.showMessageBox.mockResolvedValueOnce({ response: 1 })
     await expect(handlers.get('settings:set')?.(trustedEvent, payload)).resolves.toBe(current)
     expect(applySettingsPatch).not.toHaveBeenCalled()
+    expect(electronMock.showMessageBox).toHaveBeenLastCalledWith(
+      mainWindow,
+      expect.objectContaining({
+        detail: expect.stringContaining(
+          'Full access lets Kun access any local file, execute host commands, and use network-capable tools'
+        )
+      })
+    )
 
     electronMock.showMessageBox.mockResolvedValueOnce({ response: 0 })
     await handlers.get('settings:set')?.(trustedEvent, payload)

@@ -2,7 +2,9 @@ import { z } from 'zod'
 import { TurnSchema } from './turns.js'
 import {
   ApprovalPolicySchema,
+  ApprovalReviewerSchema,
   DEFAULT_APPROVAL_POLICY,
+  DEFAULT_APPROVAL_REVIEWER,
   DEFAULT_SANDBOX_MODE,
   SandboxModeSchema
 } from './policy.js'
@@ -218,6 +220,7 @@ export const ThreadSchema = z.object({
   status: ThreadStatus,
   approvalPolicy: ApprovalPolicySchema.default(DEFAULT_APPROVAL_POLICY),
   sandboxMode: SandboxModeSchema.default(DEFAULT_SANDBOX_MODE),
+  approvalReviewer: ApprovalReviewerSchema.default(DEFAULT_APPROVAL_REVIEWER),
   /** Whether future model requests for this thread are retained for Agent Perspective. */
   modelRequestCaptureEnabled: z.boolean().optional(),
   pinned: z.boolean().optional(),
@@ -260,6 +263,7 @@ export const ThreadSummarySchema = ThreadSchema.pick({
   status: true,
   approvalPolicy: true,
   sandboxMode: true,
+  approvalReviewer: true,
   modelRequestCaptureEnabled: true,
   pinned: true,
   costBudgetUsd: true,
@@ -301,6 +305,7 @@ export const CreateThreadRequest = z.object({
   mode: ThreadMode.default('agent'),
   approvalPolicy: ApprovalPolicySchema.optional(),
   sandboxMode: SandboxModeSchema.optional(),
+  approvalReviewer: ApprovalReviewerSchema.optional(),
   modelRequestCaptureEnabled: z.boolean().optional(),
   costBudgetUsd: z.number().positive().optional()
 })
@@ -319,7 +324,12 @@ export const ForkThreadRequest = z
     title: z.string().optional(),
     turnId: z.string().trim().min(1).optional(),
     /** Exclude turnId itself, allowing a faithful undo branch before turn one. */
-    beforeTurn: z.boolean().optional()
+    beforeTurn: z.boolean().optional(),
+    /**
+     * Compatibility echo only. A fork cannot replace the source reviewer;
+     * ThreadService rejects any value that differs from the captured source.
+     */
+    approvalReviewer: ApprovalReviewerSchema.optional()
   })
   .refine((value) => !value.beforeTurn || value.turnId !== undefined, {
     message: 'beforeTurn requires turnId'
@@ -394,6 +404,7 @@ export const UpdateThreadRequest = z
     status: ThreadUpdateStatus.optional(),
     approvalPolicy: ApprovalPolicySchema.optional(),
     sandboxMode: SandboxModeSchema.optional(),
+    approvalReviewer: ApprovalReviewerSchema.optional(),
     modelRequestCaptureEnabled: z.boolean().optional(),
     pinned: z.boolean().optional(),
     costBudgetUsd: z.number().positive().nullable().optional(),
@@ -410,6 +421,7 @@ export const UpdateThreadRequest = z
       value.status !== undefined ||
       value.approvalPolicy !== undefined ||
       value.sandboxMode !== undefined ||
+      value.approvalReviewer !== undefined ||
       value.modelRequestCaptureEnabled !== undefined ||
       value.pinned !== undefined ||
       value.costBudgetUsd !== undefined ||

@@ -3,8 +3,8 @@ import { execFile } from 'node:child_process'
 import type { GraphVerifiedCheckResultV1 } from '../contracts/graph.js'
 
 const CHECK_COMMANDS: Readonly<Record<string, readonly [string, ...string[]]>> = {
-  verification: ['git', 'diff', '--check'],
-  'git diff --check': ['git', 'diff', '--check']
+  verification: ['git', 'diff', '--check', 'HEAD'],
+  'git diff --check': ['git', 'diff', '--check', 'HEAD']
 }
 
 export function createGraphCheckVerifier(): (

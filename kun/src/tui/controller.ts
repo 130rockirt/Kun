@@ -7,7 +7,12 @@ import type {
   ThreadTodoItem,
   ThreadTodoStatus
 } from '../contracts/index.js'
-import type { ApprovalPolicy, SandboxMode } from '../contracts/policy.js'
+import {
+  kunToolPermissionModeFromSettings,
+  type ApprovalPolicy,
+  type ApprovalReviewer,
+  type SandboxMode
+} from '../contracts/policy.js'
 import type { ModelConnectionSnapshot } from '../contracts/model-connections.js'
 import type { ModelReasoningEffort, ModelReasoningCapabilityMetadata } from '../contracts/capabilities.js'
 import { redactSecretText } from '../config/secret-redaction.js'
@@ -514,6 +519,9 @@ export class TuiController {
           : {}),
         ...(this.options.sandboxMode
           ? { sandboxMode: this.options.sandboxMode }
+          : {}),
+        ...(this.options.approvalReviewer
+          ? { approvalReviewer: this.options.approvalReviewer }
           : {})
       })
       await this.refreshThreads('')
@@ -794,14 +802,27 @@ export class TuiController {
     await this.openThread(target.id)
   }
 
-  async setPermissions(approvalPolicy: ApprovalPolicy, sandboxMode: SandboxMode): Promise<boolean> {
+  async setPermissions(
+    approvalPolicy: ApprovalPolicy,
+    sandboxMode: SandboxMode,
+    approvalReviewer: ApprovalReviewer
+  ): Promise<boolean> {
     const projection = this.requireProjection()
     if (!projection) return false
     try {
-      const thread = await this.client.updateThread(projection.thread.id, { approvalPolicy, sandboxMode })
+      const thread = await this.client.updateThread(projection.thread.id, {
+        approvalPolicy,
+        sandboxMode,
+        approvalReviewer
+      })
+      const mode = kunToolPermissionModeFromSettings({
+        approvalPolicy,
+        sandboxMode,
+        approvalReviewer
+      })
       this.patch({
         projection: { ...projection, thread: { ...projection.thread, ...thread } },
-        notification: { kind: 'info', message: `Permissions: ${approvalPolicy} · ${sandboxMode}` }
+        notification: { kind: 'info', message: `Permissions: ${mode}` }
       })
       return true
     } catch (error) {

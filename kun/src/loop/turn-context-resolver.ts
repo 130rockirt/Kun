@@ -2,8 +2,14 @@ import type { ModelCapabilityMetadata } from '../contracts/capabilities.js'
 import type { MemoryRecord } from '../contracts/memory.js'
 import type { ThreadRecord } from '../contracts/threads.js'
 import type { Turn } from '../contracts/turns.js'
+import type { ActingTurnModelRoute } from '../contracts/turns.js'
 import type { TurnClientSurface } from '../contracts/turns.js'
-import { DEFAULT_APPROVAL_POLICY, DEFAULT_SANDBOX_MODE } from '../contracts/policy.js'
+import {
+  ApprovalReviewerSchema,
+  DEFAULT_APPROVAL_POLICY,
+  DEFAULT_APPROVAL_REVIEWER,
+  DEFAULT_SANDBOX_MODE
+} from '../contracts/policy.js'
 import type { InstructionRuntime, InstructionTurnResolution } from '../instructions/instruction-runtime.js'
 import type { MemoryStore } from '../memory/memory-store.js'
 import type { GuiPlanContext, ToolHost, ToolHostContext } from '../ports/tool-host.js'
@@ -52,6 +58,7 @@ export type TurnContextResolverInput = {
   turn: Turn
   history: readonly import('../contracts/items.js').TurnItem[]
   model: string
+  actingModelRoute?: ActingTurnModelRoute
   modelCapabilities: ModelCapabilityMetadata
   signal: AbortSignal
   mode: TurnModeContext
@@ -94,8 +101,15 @@ export class TurnContextResolver {
   async resolve(input: TurnContextResolverInput): Promise<PreparedTurnContext> {
     const workspace = input.thread.workspace
     const clientSurface = resolveTurnClientSurface(input.turn)
-    const approvalPolicy = normalizeApprovalPolicy(input.thread.approvalPolicy)
-    const sandboxMode = normalizeSandboxMode(input.thread.sandboxMode)
+    const approvalPolicy = normalizeApprovalPolicy(
+      input.turn.approvalPolicy ?? input.thread.approvalPolicy
+    )
+    const sandboxMode = normalizeSandboxMode(
+      input.turn.sandboxMode ?? input.thread.sandboxMode
+    )
+    const approvalReviewer = normalizeApprovalReviewer(
+      input.turn.approvalReviewer ?? input.thread.approvalReviewer
+    )
     const memoryStore = this.deps.getMemoryStore?.() ?? this.deps.memoryStore
     // These inputs are independent snapshots. Resolve their filesystem/store
     // I/O together so model dispatch pays the slowest branch, not their sum.
@@ -170,6 +184,8 @@ export class TurnContextResolver {
         : {}),
       approvalPolicy,
       sandboxMode,
+      approvalReviewer,
+      actingModelRoute: input.actingModelRoute,
       ...(userInputDisabled ? { userInputDisabled: true } : {}),
       signal: input.signal
     }, {
@@ -194,6 +210,7 @@ export class TurnContextResolver {
       ...(input.turn.messageSource ? { messageSource: input.turn.messageSource } : {}),
       additionalWorkspaces: input.thread.additionalWorkspaces,
       model: input.model,
+      actingModelRoute: input.actingModelRoute,
       mode: input.mode.effectiveMode,
       clientSurface,
       dedicatedSvgTurn: input.mode.dedicatedSvgTurn,
@@ -201,6 +218,7 @@ export class TurnContextResolver {
       ...(input.mode.activePlanContext ? { activePlanContext: input.mode.activePlanContext } : {}),
       approvalPolicy,
       sandboxMode,
+      approvalReviewer,
       signal: input.signal,
       history: input.history,
       modelCapabilities: input.modelCapabilities,
@@ -295,6 +313,13 @@ function normalizeApprovalPolicy(value: string | undefined): ToolHostContext['ap
     default:
       return DEFAULT_APPROVAL_POLICY
   }
+}
+
+function normalizeApprovalReviewer(
+  value: string | undefined
+): NonNullable<ToolHostContext['approvalReviewer']> {
+  const parsed = ApprovalReviewerSchema.safeParse(value)
+  return parsed.success ? parsed.data : DEFAULT_APPROVAL_REVIEWER
 }
 
 function normalizeSandboxMode(

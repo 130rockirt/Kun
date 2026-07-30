@@ -267,6 +267,7 @@ export class KunRuntimeProvider implements AgentProvider {
         mode: normalizeThreadMode(input.mode),
         approvalPolicy: runtime.approvalPolicy,
         sandboxMode: runtime.sandboxMode,
+        approvalReviewer: runtime.approvalReviewer,
         modelRequestCaptureEnabled: runtime.llmDebug.defaultThreadCaptureEnabled,
         ...(requestedProviderId
           ? { providerId: requestedProviderId }
@@ -413,7 +414,8 @@ export class KunRuntimeProvider implements AgentProvider {
       ...(selectedProviderId ? { providerId: selectedProviderId } : {}),
       ...(selectedAccountId ? { accountId: selectedAccountId } : {}),
       approvalPolicy: runtime.approvalPolicy,
-      sandboxMode: runtime.sandboxMode
+      sandboxMode: runtime.sandboxMode,
+      approvalReviewer: runtime.approvalReviewer
     }
     if (options?.reasoningEffort?.trim()) {
       body.reasoningEffort = options.reasoningEffort.trim()
@@ -1172,25 +1174,11 @@ export class KunRuntimeProvider implements AgentProvider {
   private async handleApprovalRequest(event: CoreRuntimeEventJson, sink: ThreadEventSink): Promise<void> {
     const approvalId = event.approvalId ?? event.itemId ?? ''
     if (!approvalId) return
-    try {
-      const eventPolicy = normalizeApprovalPolicy(event.approvalPolicy)
-      const policy = eventPolicy ?? getKunRuntimeSettings(await rendererRuntimeClient.getSettings()).approvalPolicy
-      switch (policy) {
-        case 'auto':
-          await this.submitApprovalDecision(approvalId, 'allow')
-          return
-        case 'never':
-          await this.submitApprovalDecision(approvalId, 'deny')
-          return
-        case 'on-request':
-        case 'suggest':
-        case 'untrusted':
-        case 'always':
-          break
-      }
-    } catch {
-      /* Fall through and render the approval card. */
-    }
+    // Automatic review is owned by Kun and is deliberately not resolvable
+    // through the user approval surface. Missing reviewer identity is legacy
+    // manual review; never infer it from mutable global settings because the
+    // emitting thread owns an immutable authority snapshot.
+    if (event.approvalReviewer === 'agent') return
     sink.onApproval({
       approvalId,
       turnId: event.turnId,

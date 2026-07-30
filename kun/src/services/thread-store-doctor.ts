@@ -929,6 +929,7 @@ const REQUIRED_SQLITE_COLUMNS: Readonly<Record<string, readonly SqliteColumnExpe
     sqliteColumn('status', 'TEXT', true),
     sqliteColumn('approval_policy', 'TEXT', true),
     sqliteColumn('sandbox_mode', 'TEXT', true),
+    sqliteColumn('approval_reviewer', 'TEXT', true, 0, "'user'"),
     sqliteColumn('model_request_capture_enabled', 'INTEGER', true, 0, '0'),
     sqliteColumn('cost_budget_usd', 'REAL', false),
     sqliteColumn('cost_budget_warning_sent', 'INTEGER', false),
@@ -1256,7 +1257,7 @@ function probeHybridThreadStoreWrites(db: BetterSqliteDatabase): boolean {
     const [firstId, secondId] = findWriteProbeThreadIds(db)
     const threadUpsert = db.prepare(`
       INSERT INTO threads (
-        id, title, workspace, model, mode, status, approval_policy, sandbox_mode,
+        id, title, workspace, model, mode, status, approval_policy, sandbox_mode, approval_reviewer,
         model_request_capture_enabled,
         cost_budget_usd, cost_budget_warning_sent, relation, parent_thread_id,
         forked_from_thread_id, forked_from_title, forked_at, forked_from_message_count,
@@ -1264,7 +1265,7 @@ function probeHybridThreadStoreWrites(db: BetterSqliteDatabase): boolean {
         created_at, updated_at, created_at_ms, updated_at_ms, preview, message_count,
         event_seq_high_water, metadata_path, messages_path, events_path, search_text
       ) VALUES (
-        @id, @title, @workspace, @model, @mode, @status, @approval_policy, @sandbox_mode,
+        @id, @title, @workspace, @model, @mode, @status, @approval_policy, @sandbox_mode, @approval_reviewer,
         @model_request_capture_enabled,
         @cost_budget_usd, @cost_budget_warning_sent, @relation, @parent_thread_id,
         @forked_from_thread_id, @forked_from_title, @forked_at, @forked_from_message_count,
@@ -1275,6 +1276,7 @@ function probeHybridThreadStoreWrites(db: BetterSqliteDatabase): boolean {
         title=excluded.title, workspace=excluded.workspace, model=excluded.model,
         mode=excluded.mode, status=excluded.status,
         approval_policy=excluded.approval_policy, sandbox_mode=excluded.sandbox_mode,
+        approval_reviewer=excluded.approval_reviewer,
         model_request_capture_enabled=excluded.model_request_capture_enabled,
         cost_budget_usd=excluded.cost_budget_usd,
         cost_budget_warning_sent=excluded.cost_budget_warning_sent,
@@ -1390,6 +1392,7 @@ function threadWriteProbeRow(id: string, title: string): Record<string, string |
     status: 'idle',
     approval_policy: 'on-request',
     sandbox_mode: 'workspace-write',
+    approval_reviewer: 'user',
     model_request_capture_enabled: 0,
     cost_budget_usd: null,
     cost_budget_warning_sent: null,

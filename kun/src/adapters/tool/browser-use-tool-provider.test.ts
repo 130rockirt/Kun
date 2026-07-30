@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { KunCapabilitiesConfig } from '../../contracts/capabilities.js'
+import type { ApprovalRequest } from '../../domain/approval.js'
 import type { BrowserController } from '../../ports/browser-controller.js'
 import type { ToolHostContext } from '../../ports/tool-host.js'
+import { ToolOperationJournal } from '../../reliability/operation-journal.js'
 import { buildBrowserUseToolProviders } from './browser-use-tool-provider.js'
 import { CapabilityRegistry } from './capability-registry.js'
 import { LocalToolHost } from './local-tool-host.js'
@@ -17,6 +19,16 @@ const config: KunCapabilitiesConfig['browserUse'] = {
   maxSnapshotTextChars: 20_000,
   maxImageDimension: 1280,
   idleTimeoutMs: 300_000
+}
+
+const expectedTarget = {
+  sessionId: 'session-1234567890',
+  tabId: 'tab-1',
+  documentGeneration: 3,
+  origin: 'https://example.test',
+  sanitizedUrl: 'https://example.test/settings/security',
+  role: 'button',
+  name: 'Delete account'
 }
 
 function context(overrides: Partial<ToolHostContext> = {}): ToolHostContext {
@@ -82,8 +94,12 @@ describe('buildBrowserUseToolProviders', () => {
     expect(tool).toMatchObject({
       policy: 'auto',
       toolKind: 'tool_call',
-      providerManagedApproval: true
+      effects: {
+        network: true,
+        guiAutomation: true
+      }
     })
+    expect(tool.requiresExplicitApproval).toEqual(expect.any(Function))
 
     const host = localToolHost(controller())
     expect((await host.listTools(context())).map((entry) => entry.name)).toEqual(['browser_use'])
@@ -129,6 +145,7 @@ describe('buildBrowserUseToolProviders', () => {
       arguments: {
         action: 'click',
         ref: 'opaque-reference-1234',
+        expectedTarget,
         selector: '#buy'
       }
     }, context())
@@ -140,22 +157,27 @@ describe('buildBrowserUseToolProviders', () => {
     expect(browserController.execute).not.toHaveBeenCalled()
   })
 
-  it.each(['auto', 'always', 'never'] as const)(
-    'executes through LocalToolHost under general %s approval without a duplicate prompt',
-    async (approvalPolicy) => {
+  it.each([
+    ['Ask for approval', 'user'],
+    ['Approve for me', 'agent']
+  ] as const)(
+    'does not review bounded observations in %s',
+    async (_mode, approvalReviewer) => {
       const browserController = controller()
       const awaitApproval = vi.fn(async () => 'deny' as const)
       const host = localToolHost(browserController)
       const activeContext = context({
-        turnId: `turn-${approvalPolicy}`,
-        approvalPolicy,
+        turnId: `turn-${approvalReviewer}`,
+        approvalPolicy: 'on-request',
+        approvalReviewer,
+        sandboxMode: 'workspace-write',
         awaitApproval
       })
 
       expect((await host.listTools(activeContext)).map((entry) => entry.name))
         .toEqual(['browser_use'])
       const result = await host.execute({
-        callId: `call-${approvalPolicy}`,
+        callId: `call-${approvalReviewer}`,
         toolName: 'browser_use',
         arguments: { action: 'snapshot' }
       }, activeContext)
@@ -170,11 +192,197 @@ describe('buildBrowserUseToolProviders', () => {
         }
       })
       expect(browserController.execute).toHaveBeenCalledOnce()
+      expect(browserController.execute).toHaveBeenCalledWith(
+        expect.not.objectContaining({
+          kunApprovalMode: expect.anything()
+        })
+      )
+      expect(browserController.execute).toHaveBeenCalledWith(
+        expect.not.objectContaining({
+          kunApprovalGrant: expect.anything()
+        })
+      )
       expect(awaitApproval).not.toHaveBeenCalled()
     }
   )
 
-  it('keeps Browser Host approval authoritative and enforces budgets', async () => {
+  it('redacts Browser URL credentials from reviewer data while binding the raw action grant', async () => {
+    const browserController = controller({
+      ok: true,
+      code: 'opened',
+      message: 'opened'
+    })
+    const awaitApproval = vi.fn(async (_approval: ApprovalRequest) => ({
+      decision: 'allow' as const,
+      reviewer: 'agent' as const
+    }))
+    const host = localToolHost(browserController)
+    const action = {
+      action: 'open' as const,
+      url: 'https://example.test/callback?code=oauth-secret&signature=signed-secret#fragment'
+    }
+
+    await host.execute({
+      callId: 'call-open-redacted',
+      toolName: 'browser_use',
+      arguments: action
+    }, context({
+      approvalPolicy: 'on-request',
+      approvalReviewer: 'agent',
+      sandboxMode: 'workspace-write',
+      awaitApproval
+    }))
+
+    const approval = awaitApproval.mock.calls[0]?.[0]
+    expect(approval?.action?.arguments).toEqual({
+      action: 'open',
+      url: 'https://example.test/callback'
+    })
+    expect(approval?.action?.targets).toContainEqual({
+      kind: 'url',
+      value: 'https://example.test/callback'
+    })
+    expect(JSON.stringify(approval)).not.toContain('oauth-secret')
+    expect(JSON.stringify(approval)).not.toContain('signed-secret')
+    expect(browserController.execute).toHaveBeenCalledWith(expect.objectContaining({
+      action,
+      kunApprovalGrant: expect.objectContaining({
+        argumentsHash: ToolOperationJournal.argsHash(action)
+      })
+    }))
+  })
+
+  it.each([
+    ['Ask for approval', 'user'],
+    ['Approve for me', 'agent']
+  ] as const)(
+    'routes approval-worthy actions through the shared %s reviewer boundary',
+    async (_mode, approvalReviewer) => {
+      const browserController = controller({
+        ok: true,
+        code: 'opened',
+        message: 'opened'
+      })
+      const awaitApproval = vi.fn(async () => ({
+        decision: 'allow' as const,
+        reviewer: approvalReviewer
+      }))
+      const host = localToolHost(browserController)
+      const activeContext = context({
+        approvalPolicy: 'on-request',
+        approvalReviewer,
+        sandboxMode: 'workspace-write',
+        awaitApproval
+      })
+      const action = {
+        action: 'open' as const,
+        url: 'https://example.test/path'
+      }
+
+      const result = await host.execute({
+        callId: `call-open-${approvalReviewer}`,
+        toolName: 'browser_use',
+        arguments: action
+      }, activeContext)
+
+      expect(result.item).toMatchObject({
+        kind: 'tool_result',
+        isError: false
+      })
+      expect(awaitApproval).toHaveBeenCalledWith(expect.objectContaining({
+        toolName: 'browser_use',
+        action: expect.objectContaining({
+          arguments: action,
+          effects: expect.objectContaining({
+            network: true,
+            guiAutomation: true
+          })
+        })
+      }))
+      expect(browserController.execute).toHaveBeenCalledWith(expect.objectContaining({
+        action,
+        kunApprovalMode: approvalReviewer,
+        kunApprovalGrant: expect.objectContaining({
+          id: expect.stringMatching(/^appr_[a-f0-9]{32}$/),
+          source: approvalReviewer,
+          toolName: 'browser_use',
+          callId: `call-open-${approvalReviewer}`,
+          argumentsHash: expect.stringMatching(/^[a-f0-9]{64}$/)
+        })
+      }))
+    }
+  )
+
+  it('bypasses review only in canonical Full access and sends a scoped host grant', async () => {
+    const browserController = controller({
+      ok: true,
+      code: 'opened',
+      message: 'opened'
+    })
+    const awaitApproval = vi.fn(async () => 'deny' as const)
+    const host = localToolHost(browserController)
+    const action = {
+      action: 'open' as const,
+      url: 'https://example.test/path'
+    }
+
+    await host.execute({
+      callId: 'call-open-full-access',
+      toolName: 'browser_use',
+      arguments: action
+    }, context({
+      approvalPolicy: 'auto',
+      approvalReviewer: 'user',
+      sandboxMode: 'danger-full-access',
+      awaitApproval
+    }))
+
+    expect(awaitApproval).not.toHaveBeenCalled()
+    expect(browserController.execute).toHaveBeenCalledWith(expect.objectContaining({
+      action,
+      kunApprovalMode: 'full-access',
+      kunApprovalGrant: expect.objectContaining({
+        id: expect.stringMatching(/^grant_[a-f0-9]{32}$/),
+        source: 'full-access'
+      })
+    }))
+  })
+
+  it('denies a boundary action before Main when the configured reviewer denies it', async () => {
+    const browserController = controller()
+    const awaitApproval = vi.fn(async () => ({
+      decision: 'deny' as const,
+      reviewer: 'agent' as const,
+      reason: 'The navigation is unrelated.'
+    }))
+    const host = localToolHost(browserController)
+    const result = await host.execute({
+      callId: 'call-denied-open',
+      toolName: 'browser_use',
+      arguments: {
+        action: 'open',
+        url: 'https://example.test/path'
+      }
+    }, context({
+      approvalPolicy: 'on-request',
+      approvalReviewer: 'agent',
+      sandboxMode: 'workspace-write',
+      awaitApproval
+    }))
+
+    expect(result.item).toMatchObject({
+      kind: 'tool_result',
+      isError: true,
+      output: {
+        code: 'approval_denied',
+        reviewer: 'agent',
+        reason: 'The navigation is unrelated.'
+      }
+    })
+    expect(browserController.execute).not.toHaveBeenCalled()
+  })
+
+  it('keeps Browser Host validation authoritative after Kun approval and enforces budgets', async () => {
     const browserController = controller({
       ok: false,
       code: 'consent_denied',
@@ -183,7 +391,9 @@ describe('buildBrowserUseToolProviders', () => {
     const awaitApproval = vi.fn(async () => 'allow' as const)
     const host = localToolHost(browserController)
     const activeContext = context({
-      approvalPolicy: 'always',
+      approvalPolicy: 'on-request',
+      approvalReviewer: 'user',
+      sandboxMode: 'workspace-write',
       awaitApproval
     })
     const first = await host.execute({
@@ -191,7 +401,8 @@ describe('buildBrowserUseToolProviders', () => {
       toolName: 'browser_use',
       arguments: {
         action: 'click',
-        ref: 'opaque-reference-1234'
+        ref: 'opaque-reference-1234',
+        expectedTarget
       }
     }, activeContext)
     expect(first.item).toMatchObject({
@@ -199,7 +410,21 @@ describe('buildBrowserUseToolProviders', () => {
       isError: true,
       output: { code: 'consent_denied' }
     })
-    expect(awaitApproval).not.toHaveBeenCalled()
+    expect(awaitApproval).toHaveBeenCalledOnce()
+    expect(awaitApproval).toHaveBeenCalledWith(expect.objectContaining({
+      action: expect.objectContaining({
+        targets: expect.arrayContaining([
+          {
+            kind: 'url',
+            value: 'https://example.test/settings/security'
+          },
+          {
+            kind: 'resource',
+            value: expect.stringContaining('"name":"Delete account"')
+          }
+        ])
+      })
+    }))
     expect(browserController.execute).toHaveBeenCalledOnce()
 
     const second = await host.execute({
@@ -207,7 +432,8 @@ describe('buildBrowserUseToolProviders', () => {
       toolName: 'browser_use',
       arguments: {
         action: 'click',
-        ref: 'another-reference-1234'
+        ref: 'another-reference-1234',
+        expectedTarget
       }
     }, activeContext)
     expect(second.item).toMatchObject({

@@ -1,9 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { GraphEventEnvelope, GraphPlanNode, GraphRun } from './graph-types'
+import type {
+  GraphEventEnvelope,
+  GraphPlanNode,
+  GraphPlanningDraftView,
+  GraphRun
+} from './graph-types'
 
 const client = vi.hoisted(() => ({
   delegationDiagnostics: vi.fn(),
   listRuns: vi.fn(),
+  listDrafts: vi.fn(),
+  resumeDraft: vi.fn(),
+  cancelDraft: vi.fn(),
   getRun: vi.fn(),
   identity: vi.fn(),
   listProfiles: vi.fn(),
@@ -23,6 +31,7 @@ vi.mock('./graph-runtime-client', () => ({
 
 import {
   receiveGraphChildRuntimeEvent,
+  receiveGraphPlanningRuntimeEvent,
   receiveGraphRuntimeEvent,
   useGraphStore
 } from './graph-store'
@@ -102,6 +111,30 @@ function runWithNode(id: string, seq: number, nodeId: string): GraphRun {
   }
 }
 
+function planningDraft(
+  status: GraphPlanningDraftView['draft']['status'] = 'needs_correction',
+  revision = 1
+): GraphPlanningDraftView {
+  return {
+    draft: {
+      version: 1,
+      id: 'draft_1',
+      reservedRunId: 'run_reserved_1',
+      threadId: 'thread_1',
+      sourceTurnId: 'turn_1',
+      projectId: 'project_1',
+      goal: 'Implement the requested change.',
+      revision,
+      status,
+      issues: [],
+      repairCount: status === 'planning' ? 0 : 1,
+      createdAt: '2026-07-29T00:00:00.000Z',
+      updatedAt: '2026-07-29T00:00:01.000Z'
+    },
+    tasks: []
+  }
+}
+
 describe('Graph renderer store', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -109,6 +142,7 @@ describe('Graph renderer store', () => {
       threadId: null,
       workspace: '',
       runs: [],
+      drafts: [],
       childRuns: {},
       childReturnTarget: null,
       selectedRunId: null,
@@ -131,6 +165,7 @@ describe('Graph renderer store', () => {
       active: 0,
       childRuns: []
     })
+    client.listDrafts.mockResolvedValue([])
   })
 
   it('reconciles an SSE hint against durable HTTP truth without optimistic mutation', async () => {
@@ -154,6 +189,47 @@ describe('Graph renderer store', () => {
       expect(useGraphStore.getState().runs[0]?.lastEventSeq).toBe(2)
     })
     expect(client.listRuns).toHaveBeenCalledTimes(2)
+  })
+
+  it('reconciles planning events and resumes with the current draft revision', async () => {
+    useGraphStore.setState({
+      threadId: 'thread_1',
+      drafts: [planningDraft('repairing', 1)]
+    })
+    receiveGraphPlanningRuntimeEvent({
+      version: 1,
+      event: 'needs_correction',
+      draftId: 'draft_1',
+      reservedRunId: 'run_reserved_1',
+      sourceTurnId: 'turn_1',
+      revision: 2,
+      state: 'needs_correction',
+      issues: [{
+        code: 'invalid_plan',
+        path: ['tasks', 0, 'loop'],
+        message: 'ordinary tasks cannot contain loop',
+        repairHint: 'Remove loop from this task.'
+      }],
+      tasks: [{ key: 'work', kind: 'work', title: 'Implement' }]
+    })
+    expect(useGraphStore.getState().drafts[0]).toMatchObject({
+      draft: {
+        revision: 2,
+        status: 'needs_correction',
+        issues: [expect.objectContaining({ code: 'invalid_plan' })]
+      },
+      tasks: [{ key: 'work' }]
+    })
+
+    const resumed = planningDraft('planning', 3)
+    client.resumeDraft.mockResolvedValueOnce(resumed)
+    await useGraphStore.getState().resumeDraft('draft_1')
+
+    expect(client.resumeDraft).toHaveBeenCalledWith('draft_1', 2)
+    expect(useGraphStore.getState().drafts[0]?.draft).toMatchObject({
+      revision: 3,
+      status: 'planning'
+    })
   })
 
   it('does not let an older concurrent refresh overwrite a newer Graph snapshot', async () => {

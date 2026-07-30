@@ -30,6 +30,7 @@ function thread(overrides: Partial<ThreadRecord> = {}): ThreadRecord {
     status: 'running',
     approvalPolicy: 'always',
     sandboxMode: 'workspace-write',
+    approvalReviewer: 'user',
     relation: 'primary',
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',

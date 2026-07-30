@@ -133,8 +133,18 @@ server.listen(0, '127.0.0.1', () => {
       expect(concurrentClient.discovery.pid).toBe(connection.discovery.pid)
       expect(connection.discovery.logPath).toContain('runtime.log')
       const config = JSON.parse(await readFile(join(dataDir, 'config.json'), 'utf8')) as {
+        serve: {
+          approvalPolicy: string
+          sandboxMode: string
+          approvalReviewer: string
+        }
         capabilities: Record<string, { enabled: boolean }>
       }
+      expect(config.serve).toEqual({
+        approvalPolicy: 'auto',
+        sandboxMode: 'danger-full-access',
+        approvalReviewer: 'user'
+      })
       expect(config.capabilities).toMatchObject({
         skills: { enabled: true },
         attachments: { enabled: true },

@@ -26,6 +26,7 @@ import type { ToolStormBreakerOptions } from '../src/loop/tool-storm-breaker.js'
 import type { ContextCompactionConfig } from '../src/loop/model-context-profile.js'
 import type { ResolvedHook } from '../src/hooks/hook-engine.js'
 import type { AgentSdkRuntime } from '../src/runtime/agent-sdk/agent-sdk-runtime.js'
+import type { ApprovalReviewPort } from '../src/ports/approval-review.js'
 
 export type Harness = {
   threadId: string
@@ -92,6 +93,7 @@ export function makeHarness(
     }
     hooks?: readonly ResolvedHook[]
     sdkRuntime?: AgentSdkRuntime
+    approvalReview?: ApprovalReviewPort
     goalResume?: NonNullable<ConstructorParameters<typeof AgentLoop>[0]['goalResume']>
   } = {}
 ): Harness {
@@ -156,6 +158,7 @@ export function makeHarness(
     ...(options.toolArgumentRepair ? { toolArgumentRepair: options.toolArgumentRepair } : {}),
     ...(options.hooks ? { hooks: options.hooks } : {}),
     ...(options.sdkRuntime ? { sdkRuntime: options.sdkRuntime } : {}),
+    ...(options.approvalReview ? { approvalReview: options.approvalReview } : {}),
     ...(options.goalResume ? { goalResume: options.goalResume } : {})
   })
 

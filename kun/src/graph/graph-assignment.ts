@@ -7,7 +7,12 @@ import {
   type GraphAssignmentSnapshotV1,
   type GraphNodeV1
 } from '../contracts/index.js'
-import type { ApprovalPolicy, SandboxMode } from '../contracts/policy.js'
+import {
+  DEFAULT_APPROVAL_REVIEWER,
+  type ApprovalPolicy,
+  type ApprovalReviewer,
+  type SandboxMode
+} from '../contracts/policy.js'
 import type { ModelReasoningEffort } from '../contracts/capabilities.js'
 import type { ProjectAgentRegistry } from './project-agent-registry.js'
 import {
@@ -22,12 +27,14 @@ export type GraphParentAuthority = {
   workspaceRoot: string
   model: string
   providerId: string
+  accountId?: string
   allowedModelProviderIds?: readonly string[]
   allowedModels?: readonly string[]
   allowedProviderIds?: readonly string[]
   reasoningEffort: ModelReasoningEffort
   approvalPolicy: ApprovalPolicy
   sandboxMode: SandboxMode
+  approvalReviewer?: ApprovalReviewer
   allowedTools: readonly string[]
   blockedTools: readonly string[]
   allowedSkills: readonly string[]
@@ -115,6 +122,10 @@ export class GraphAssignmentResolver {
     const approvalPolicy = narrowerApproval(input.parent.approvalPolicy, caps.approvalPolicy)
     const model = profile.model || input.parent.model
     const providerId = profile.providerId || input.parent.providerId
+    const accountId =
+      model === input.parent.model && providerId === input.parent.providerId
+        ? input.parent.accountId
+        : undefined
     const allowedModelProviderIds = input.parent.allowedModelProviderIds ?? [input.parent.providerId]
     const allowedModels = input.parent.allowedModels ?? [input.parent.model]
     const allowedProviderIds = input.parent.allowedProviderIds ?? []
@@ -144,6 +155,7 @@ export class GraphAssignmentResolver {
       systemPrompt: profile.systemPrompt,
       model,
       providerId,
+      ...(accountId ? { accountId } : {}),
       allowedModelProviderIds,
       allowedModels,
       allowedProviderIds,
@@ -157,6 +169,9 @@ export class GraphAssignmentResolver {
       blockedMcpServers,
       approvalPolicy,
       sandboxMode,
+      // Profiles may narrow tool/sandbox policy, but reviewer routing is an
+      // immutable parent boundary and is never profile-controlled.
+      approvalReviewer: input.parent.approvalReviewer ?? DEFAULT_APPROVAL_REVIEWER,
       workspaceRoot: input.parent.workspaceRoot,
       readScopes: input.node.readScopes,
       writeScopes: input.node.writeScopes,

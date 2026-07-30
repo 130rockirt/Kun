@@ -85,6 +85,7 @@ import {
   videoGenConfigForRuntime
 } from './runtime/kun-runtime-capability-config'
 import {
+  KUN_BROWSER_USE_APPROVAL_SIGNING_KEY_ENV,
   KUN_BROWSER_USE_BRIDGE_TOKEN_ENV,
   KUN_BROWSER_USE_BRIDGE_URL_ENV
 } from '../../kun/src/contracts/browser-use.js'
@@ -393,6 +394,7 @@ async function prepareKunLaunch(
     dataDir,
     approvalPolicy: runtime.approvalPolicy,
     sandboxMode: runtime.sandboxMode,
+    approvalReviewer: runtime.approvalReviewer,
     tokenEconomyMode: runtime.tokenEconomyMode,
     insecure: isKunRuntimeInsecure(runtime)
   })
@@ -428,13 +430,16 @@ async function prepareKunLaunch(
     ...(browserUseBridge
       ? {
           [KUN_BROWSER_USE_BRIDGE_URL_ENV]: browserUseBridge.url,
-          [KUN_BROWSER_USE_BRIDGE_TOKEN_ENV]: browserUseBridge.token
+          [KUN_BROWSER_USE_BRIDGE_TOKEN_ENV]: browserUseBridge.token,
+          [KUN_BROWSER_USE_APPROVAL_SIGNING_KEY_ENV]:
+            browserUseBridge.approvalSigningKey
         }
       : {})
   }
   if (!browserUseBridge) {
     delete env[KUN_BROWSER_USE_BRIDGE_URL_ENV]
     delete env[KUN_BROWSER_USE_BRIDGE_TOKEN_ENV]
+    delete env[KUN_BROWSER_USE_APPROVAL_SIGNING_KEY_ENV]
   }
   const bundledExtensionsDirectory = availableBundledExtensionsDirectory({
     isPackaged: app.isPackaged,

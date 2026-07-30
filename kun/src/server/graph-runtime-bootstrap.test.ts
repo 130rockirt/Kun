@@ -19,13 +19,23 @@ function runtimeOptions(active = false) {
         workspace: '/workspace',
         model: 'thread-model',
         providerId: 'thread-provider',
-        approvalPolicy: 'on-request',
-        sandboxMode: 'workspace-write',
+        accountId: 'thread-account',
+        approvalPolicy: 'auto',
+        sandboxMode: 'danger-full-access',
+        approvalReviewer: 'agent',
         turns: [{
           id: 'turn_1',
           status: 'running',
-          model: 'source-model',
-          providerId: 'source-provider',
+          model: 'auto',
+          providerId: 'stale-source-provider',
+          approvalPolicy: 'always',
+          sandboxMode: 'read-only',
+          approvalReviewer: 'user',
+          actingModelRoute: {
+            model: 'source-model',
+            providerId: 'source-provider',
+            accountId: 'source-account'
+          },
           reasoningEffort: 'high'
         }]
       } as never)
@@ -113,10 +123,14 @@ describe('Graph runtime bootstrap capability boundary', () => {
     expect(authority).toMatchObject({
       model: 'source-model',
       providerId: 'source-provider',
+      accountId: 'source-account',
       allowedModelProviderIds: ['source-provider'],
       allowedModels: ['source-model'],
       allowedProviderIds: ['builtin', 'mcp:facade'],
       reasoningEffort: 'high',
+      approvalPolicy: 'always',
+      sandboxMode: 'read-only',
+      approvalReviewer: 'user',
       allowedSkills: ['safe-skill']
     })
     expect(authority.allowedTools).toEqual(['mcp_read', 'read'])
@@ -128,6 +142,19 @@ describe('Graph runtime bootstrap capability boundary', () => {
       'unknown_remote',
       'web_fetch'
     ]))
+    expect(authority.writeScopes).toEqual([])
+  })
+
+  it('does not widen a source turn after the thread is elevated to Full access', async () => {
+    const { options } = runtimeOptions()
+    const authority = await options.authorityForRun(run)
+
+    expect(authority).toMatchObject({
+      approvalPolicy: 'always',
+      sandboxMode: 'read-only',
+      approvalReviewer: 'user'
+    })
+    expect(authority.writeScopes).toEqual([])
   })
 
   it('resumes the suspended source Lead turn instead of creating a replacement turn', async () => {

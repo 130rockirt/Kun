@@ -74,6 +74,9 @@ const REQUIRED_BUNDLED_EXTENSION_IDS = [
   'kun-examples.presentation-studio',
   'kun-examples.social-media-sidebar'
 ]
+const REQUIRED_RETIRED_BUNDLED_EXTENSION_IDS = [
+  'kun-examples.kun-video-editor'
+]
 
 function normalizePlatform(platform) {
   return platform === 'win' ? 'win32' : platform
@@ -198,7 +201,11 @@ function validateBundledExtensionResources(context) {
   } catch (error) {
     throw new Error(`[after-pack] Invalid bundled extension catalog: ${error.message}`)
   }
-  if (catalog?.schemaVersion !== 1 || !Array.isArray(catalog.extensions)) {
+  if (
+    catalog?.schemaVersion !== 1 ||
+    !Array.isArray(catalog.extensions) ||
+    !Array.isArray(catalog.retiredExtensions)
+  ) {
     throw new Error('[after-pack] Invalid bundled extension catalog shape')
   }
   const ids = new Set()
@@ -232,6 +239,24 @@ function validateBundledExtensionResources(context) {
   if (ids.size !== REQUIRED_BUNDLED_EXTENSION_IDS.length) {
     const unexpected = [...ids].filter((id) => !REQUIRED_BUNDLED_EXTENSION_IDS.includes(id))
     throw new Error(`[after-pack] Unexpected bundled extension: ${unexpected.join(', ')}`)
+  }
+  const retiredIds = new Set(catalog.retiredExtensions)
+  if (
+    retiredIds.size !== catalog.retiredExtensions.length ||
+    catalog.retiredExtensions.some((id) => typeof id !== 'string' || ids.has(id))
+  ) {
+    throw new Error('[after-pack] Invalid retired bundled extension ids')
+  }
+  for (const id of REQUIRED_RETIRED_BUNDLED_EXTENSION_IDS) {
+    if (!retiredIds.has(id)) {
+      throw new Error(`[after-pack] Missing retired bundled extension marker: ${id}`)
+    }
+  }
+  if (retiredIds.size !== REQUIRED_RETIRED_BUNDLED_EXTENSION_IDS.length) {
+    const unexpected = [...retiredIds].filter(
+      (id) => !REQUIRED_RETIRED_BUNDLED_EXTENSION_IDS.includes(id)
+    )
+    throw new Error(`[after-pack] Unexpected retired bundled extension: ${unexpected.join(', ')}`)
   }
   for (const archive of readdirSync(root).filter((entry) => entry.endsWith('.kunx'))) {
     if (!catalogArchives.has(archive)) {
@@ -543,6 +568,7 @@ async function afterPack(context) {
 
 exports.KUN_RUNTIME_REQUIRED_PATHS = KUN_RUNTIME_REQUIRED_PATHS
 exports.REQUIRED_BUNDLED_EXTENSION_IDS = REQUIRED_BUNDLED_EXTENSION_IDS
+exports.REQUIRED_RETIRED_BUNDLED_EXTENSION_IDS = REQUIRED_RETIRED_BUNDLED_EXTENSION_IDS
 exports.LINUX_SANDBOX_LAUNCHER_FLAG = LINUX_SANDBOX_LAUNCHER_FLAG
 exports._internals = {
   appBundlePath,

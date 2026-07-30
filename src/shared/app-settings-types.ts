@@ -2,7 +2,11 @@ import type { AppLocale } from './app-locales'
 import type { GuiUpdateChannel } from './gui-update'
 import type { KeyboardShortcutsConfigV1 } from './keyboard-shortcuts'
 import type { LocalWhisperDownloadSourceId } from './local-whisper'
-import type { ApprovalPolicy, SandboxMode } from '../../kun/src/contracts/policy.js'
+import type {
+  ApprovalPolicy,
+  ApprovalReviewer,
+  SandboxMode
+} from '../../kun/src/contracts/policy.js'
 import type { ComputerUseMode } from '../../kun/src/contracts/capabilities.js'
 import type { BrowserUseMode } from './browser-use'
 import type { ModelEndpointFormat } from '../../kun/src/contracts/model-endpoint-format.js'
@@ -19,13 +23,21 @@ export {
 } from '../../kun/src/contracts/model-endpoint-format.js'
 export { DEFAULT_GUI_UPDATE_CHANNEL, normalizeGuiUpdateChannel, type GuiUpdateChannel } from './gui-update'
 export {
+  APPROVAL_REVIEWERS,
+  DEFAULT_APPROVAL_REVIEWER,
   DEFAULT_APPROVAL_POLICY,
   DEFAULT_SANDBOX_MODE,
   KUN_TOOL_PERMISSION_MODES,
+  ApprovalReviewerSchema,
+  isKunFullAccessSettings,
   kunToolPermissionModeFromSettings,
   kunToolPermissionModeSettings,
+  kunToolPermissionSettingsEqual,
   type ApprovalPolicy,
+  type ApprovalReviewer,
   type KunToolPermissionMode,
+  type KunToolPermissionSettings,
+  type KunToolPermissionSettingsInput,
   type SandboxMode
 } from '../../kun/src/contracts/policy.js'
 export {
@@ -600,6 +612,7 @@ export type KunRuntimeSettingsV1 = {
   model: string
   approvalPolicy: ApprovalPolicy
   sandboxMode: SandboxMode
+  approvalReviewer: ApprovalReviewer
   /** Compress safe tool context before each model call. */
   tokenEconomyMode: boolean
   /** Detailed token-saving behavior used when building Kun model requests. */

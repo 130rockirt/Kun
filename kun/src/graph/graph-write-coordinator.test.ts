@@ -253,6 +253,34 @@ describe('FileGraphWriteCoordinator', () => {
       worktree.worktreeId === claim.worktree!.worktreeId)?.state).toBe('cleaned')
     await expect(stat(claim.workspaceRoot)).rejects.toMatchObject({ code: 'ENOENT' })
   })
+
+  it('observes direct-workspace changes without blaming untouched pre-existing dirt', async () => {
+    const { root, repository } = await worktreeHarness()
+    await writeFile(join(repository, 'tests', 'b.txt'), 'user change before worker\n')
+    const config = testGraphConfig({
+      writeIsolation: { mode: 'serialize', allowWorktrees: false }
+    })
+    const coordinator = new FileGraphWriteCoordinator({
+      rootDir: join(root, 'direct-state'),
+      config: () => config
+    })
+    const claim = await coordinator.acquire({
+      runId: 'run_direct',
+      nodeId: 'node_direct',
+      attemptId: 'attempt_direct',
+      workspaceRoot: repository,
+      scopes: ['src']
+    })
+    if (!claim.acquired) throw new Error('expected direct workspace claim')
+
+    await writeFile(join(repository, 'src', 'a.txt'), 'worker change\n')
+    await writeFile(join(repository, 'src', 'new.txt'), 'worker new file\n')
+
+    await expect(coordinator.captureChangedFiles('attempt_direct')).resolves.toEqual([
+      'src/a.txt',
+      'src/new.txt'
+    ])
+  })
 })
 
 async function worktreeHarness() {

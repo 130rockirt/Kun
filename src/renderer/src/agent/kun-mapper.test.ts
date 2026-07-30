@@ -3,7 +3,8 @@ import {
   chatBlockFromItem,
   dispatchKunRuntimeEvent,
   mergeChatBlocks,
-  runtimeProjectionActionsFromEvent
+  runtimeProjectionActionsFromEvent,
+  threadFromCore
 } from './kun-mapper'
 import type { CoreRuntimeEventJson, CoreTurnItemJson } from './kun-contract'
 import type { ThreadErrorOptions, ThreadEventSink } from './types'
@@ -31,6 +32,132 @@ function makeSink(): ThreadEventSink {
 }
 
 describe('runtime projection action normalization', () => {
+  it('defaults a legacy thread without reviewer metadata to manual user review', () => {
+    const thread = threadFromCore({
+      id: 'thread_1',
+      title: 'Legacy thread',
+      model: 'model_1',
+      mode: 'agent',
+      status: 'idle',
+      approvalPolicy: 'on-request',
+      sandboxMode: 'workspace-write',
+      createdAt: '2026-07-29T00:00:00.000Z',
+      updatedAt: '2026-07-29T00:00:00.000Z'
+    })
+
+    expect(thread.approvalReviewer).toBe('user')
+  })
+
+  it('normalizes automatic approval review lifecycle events into visible transcript updates', () => {
+    const started = runtimeProjectionActionsFromEvent({
+      kind: 'approval_review_started',
+      seq: 12,
+      timestamp: '2026-07-29T00:00:00.000Z',
+      threadId: 'thread_1',
+      turnId: 'turn_1',
+      reviewId: 'review_1',
+      approvalId: 'approval_1',
+      reviewer: 'agent',
+      status: 'in-progress',
+      toolName: 'exec_command',
+      summary: 'Run the project tests'
+    })
+    const completed = runtimeProjectionActionsFromEvent({
+      kind: 'approval_review_completed',
+      seq: 13,
+      timestamp: '2026-07-29T00:00:01.000Z',
+      threadId: 'thread_1',
+      turnId: 'turn_1',
+      reviewId: 'review_1',
+      approvalId: 'approval_1',
+      reviewer: 'agent',
+      status: 'denied',
+      decision: 'deny',
+      riskLevel: 'high',
+      toolName: 'exec_command',
+      summary: 'Run the project tests',
+      rationale: 'The command writes outside the workspace.'
+    })
+
+    expect(started).toEqual([{
+      type: 'approval_review_updated',
+      payload: {
+        reviewId: 'review_1',
+        approvalId: 'approval_1',
+        turnId: 'turn_1',
+        createdAt: '2026-07-29T00:00:00.000Z',
+        summary: 'Run the project tests',
+        toolName: 'exec_command',
+        status: 'in-progress'
+      }
+    }])
+    expect(completed).toEqual([{
+      type: 'approval_review_updated',
+      payload: {
+        reviewId: 'review_1',
+        approvalId: 'approval_1',
+        turnId: 'turn_1',
+        createdAt: '2026-07-29T00:00:01.000Z',
+        summary: 'Run the project tests',
+        toolName: 'exec_command',
+        status: 'denied',
+        decision: 'deny',
+        riskLevel: 'high',
+        rationale: 'The command writes outside the workspace.'
+      }
+    }])
+  })
+
+  it('does not project malformed or non-agent review events', () => {
+    expect(runtimeProjectionActionsFromEvent({
+      kind: 'approval_review_started',
+      reviewId: 'review_1',
+      approvalId: 'approval_1',
+      reviewer: 'user',
+      status: 'in-progress'
+    })).toEqual([])
+  })
+
+  it('keeps agent approval resolutions out of the manual approval projection', async () => {
+    const event: CoreRuntimeEventJson = {
+      kind: 'approval_resolved',
+      seq: 14,
+      timestamp: '2026-07-29T00:00:02.000Z',
+      threadId: 'thread_1',
+      turnId: 'turn_1',
+      approvalId: 'approval_1',
+      toolName: 'exec_command',
+      status: 'denied',
+      approvalReviewer: 'agent',
+      decisionSource: 'agent',
+      summary: 'Run the project tests',
+      reason: 'The automatic reviewer denied the action.'
+    }
+    expect(runtimeProjectionActionsFromEvent(event)).toEqual([])
+
+    const onApprovalStatus = vi.fn()
+    await dispatchKunRuntimeEvent(
+      event,
+      { ...makeSink(), onApprovalStatus },
+      async () => undefined
+    )
+    expect(onApprovalStatus).not.toHaveBeenCalled()
+    expect(chatBlockFromItem({
+      id: 'item_agent_resolution',
+      turnId: 'turn_1',
+      threadId: 'thread_1',
+      role: 'tool',
+      status: 'denied',
+      createdAt: '2026-07-29T00:00:02.000Z',
+      kind: 'approval',
+      approvalId: 'approval_1',
+      toolName: 'exec_command',
+      summary: 'Run the project tests',
+      approvalReviewer: 'agent',
+      decisionSource: 'agent'
+    })).toBeNull()
+  })
+
   it('normalizes a required-tool gate as a stable runtime status, not assistant text', () => {
     const actions = runtimeProjectionActionsFromEvent({
       kind: 'required_tool_gate',

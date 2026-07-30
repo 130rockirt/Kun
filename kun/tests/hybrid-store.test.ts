@@ -156,15 +156,18 @@ describe('HybridThreadStore', () => {
       createdAt: '2025-01-01T00:00:00.000Z'
     })
     const archived = { ...legacy, status: 'archived' as const, updatedAt: '2025-01-02T00:00:00.000Z' }
+    const { approvalReviewer: _legacyReviewer, ...legacyWithoutReviewer } = archived
     const threadDir = join(dataDir, 'threads', legacy.id)
     await mkdir(threadDir, { recursive: true })
-    await writeFile(join(threadDir, 'thread.json'), JSON.stringify(archived), 'utf8')
+    await writeFile(join(threadDir, 'thread.json'), JSON.stringify(legacyWithoutReviewer), 'utf8')
 
     const { threadStore } = await createHybridStores()
     await threadStore.waitForBackfill()
     expect((await threadStore.list({ search: 'Legacy archive', includeArchived: true })).map((item) => item.id))
       .toEqual([legacy.id])
     expect((await threadStore.list({ archivedOnly: true })).map((item) => item.id)).toEqual([legacy.id])
+    expect((await threadStore.get(legacy.id))?.approvalReviewer).toBe('user')
+    expect((await threadStore.list({ archivedOnly: true }))[0]?.approvalReviewer).toBe('user')
 
     await threadStore.upsert({ ...archived, title: 'Legacy archive updated', updatedAt: '2025-01-03T00:00:00.000Z' })
     const metadata = await readFile(join(threadDir, 'metadata.jsonl'), 'utf8')

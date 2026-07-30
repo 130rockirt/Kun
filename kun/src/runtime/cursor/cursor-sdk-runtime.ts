@@ -21,6 +21,7 @@ import type {
   ModelRequestTraceRecord
 } from '../../contracts/model-request-trace.js'
 import type { TurnItem } from '../../contracts/items.js'
+import type { ActingTurnModelRoute } from '../../contracts/turns.js'
 import type { SetThreadTodosRequest } from '../../contracts/threads.js'
 import type { UsageSnapshot } from '../../contracts/usage.js'
 import { userMessageTextWithComposerContexts } from '../../domain/composer-context.js'
@@ -109,6 +110,7 @@ export interface CursorSdkRuntimeDeps {
     threadId: string
     turnId: string
     userText: string
+    actingModelRoute: ActingTurnModelRoute
     signal: AbortSignal
   }) => Promise<CursorKunTurnContext>
 }
@@ -335,11 +337,32 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
       return 'failed'
     }
 
-    const resolvedProviderId = providerId?.trim() || 'cursor-subscription'
-    const provider = providerId ? this.deps.providerConfigs[providerId] : undefined
-    const apiKey = providerId
-      ? provider?.apiKey?.trim() || ''
-      : this.deps.defaultApiKey?.trim() || ''
+    const requestedProviderId = turn.providerId?.trim()
+    const fallbackProviderId =
+      requestedProviderId ||
+      providerId?.trim() ||
+      thread.providerId?.trim() ||
+      'cursor-subscription'
+    const requestedAccountId = turn.accountId?.trim() || (
+      !requestedProviderId || requestedProviderId === thread.providerId?.trim()
+        ? thread.accountId?.trim()
+        : undefined
+    )
+    const actingModelRoute: ActingTurnModelRoute = turn.actingModelRoute ?? {
+      model: normalizeCursorModel(turn.model || thread.model || this.deps.defaultModel),
+      providerId: fallbackProviderId,
+      ...(requestedAccountId ? { accountId: requestedAccountId } : {})
+    }
+    const resolvedProviderId = actingModelRoute.providerId ?? fallbackProviderId
+    const resolvedAccountId =
+      actingModelRoute.accountId ??
+      requestedAccountId
+    const provider = this.deps.providerConfigs[resolvedProviderId]
+    const apiKey =
+      provider?.apiKey?.trim() ||
+      (resolvedProviderId === 'cursor-subscription'
+        ? this.deps.defaultApiKey?.trim() || ''
+        : '')
     if (!apiKey) {
       await this.deps.turns.finishTurn({
         threadId,
@@ -354,6 +377,9 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
     if (signal.aborted) {
       await this.deps.turns.finishTurn({ threadId, turnId, status: 'aborted' })
       return 'aborted'
+    }
+    if (!turn.actingModelRoute) {
+      await this.deps.turns.updateTurnMetadata(threadId, turnId, { actingModelRoute })
     }
 
     const historyTranscript = buildHistoryTranscript(
@@ -374,6 +400,7 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
           threadId,
           turnId,
           userText,
+          actingModelRoute,
           signal
         })
       } catch (error) {
@@ -406,7 +433,7 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
     ].filter((value, index, all): value is string =>
       Boolean(value) && all.indexOf(value) === index
     )
-    const model = normalizeCursorModel(turn.model || thread.model || this.deps.defaultModel)
+    const model = actingModelRoute.model
     const attachmentIds = userItem.attachmentIds ?? []
     const resolvedImages = await resolveCursorSdkImages({
       attachmentStore: this.deps.attachmentStore,
@@ -415,6 +442,8 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
       workspace: thread.workspace
     })
     const planMode = this.deps.enforceReadOnly === true || (turn.mode ?? thread.mode) === 'plan'
+    const approvalPolicy = turn.approvalPolicy ?? thread.approvalPolicy
+    const sandboxMode = turn.sandboxMode ?? thread.sandboxMode
     let capabilities = cursorSdkCapabilities(Boolean(this.deps.loadKunTurnContext))
     let options = cursorAgentExecutionOptions({
       workspace: thread.workspace,
@@ -422,8 +451,8 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
       model,
       name: `Kun · ${thread.title || thread.id}`.slice(0, 120),
       planMode,
-      approvalPolicy: thread.approvalPolicy,
-      sandboxMode: thread.sandboxMode,
+      approvalPolicy,
+      sandboxMode,
       enforceReadOnly: this.deps.enforceReadOnly
     })
     if (Object.keys(kunContext.customTools).length > 0) {
@@ -444,7 +473,7 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
           providerId: resolvedProviderId,
           credentialIdentity: delegatedCredentialIdentity({
             providerId: resolvedProviderId,
-            accountId: turn.accountId || thread.accountId,
+            accountId: resolvedAccountId,
             credentialSourceId: provider?.credentialSourceId,
             credentialSecret: apiKey
           }),
@@ -455,6 +484,8 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
             threadPersona: thread.systemPrompt?.trim() || '',
             mode: options.mode,
             sandbox: options.local?.sandboxOptions?.enabled !== false,
+            approvalPolicy,
+            sandboxMode,
             settingSources: options.local?.settingSources ?? [],
             capabilities,
             ...(this.deps.loadKunTurnContext

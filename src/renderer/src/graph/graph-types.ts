@@ -14,6 +14,72 @@ export type GraphRunStatus =
   | 'failed'
   | 'cancelled'
 
+export type GraphPlanningDraftStatus =
+  | 'planning'
+  | 'validating'
+  | 'repairing'
+  | 'needs_correction'
+  | 'committing'
+  | 'committed'
+  | 'cancelled'
+  | 'host_error'
+
+export type GraphPlanningIssue = {
+  code: string
+  path: Array<string | number>
+  message: string
+  repairHint: string
+  validExample?: unknown
+}
+
+export type GraphPlanningDraft = {
+  version: 1
+  id: string
+  reservedRunId: string
+  threadId: string
+  sourceTurnId: string
+  projectId: string
+  goal: string
+  revision: number
+  status: GraphPlanningDraftStatus
+  candidateHash?: string
+  issues: GraphPlanningIssue[]
+  repairCount: number
+  createdAt: string
+  updatedAt: string
+  committedRunId?: string
+}
+
+export type GraphPlanningDraftView = {
+  draft: GraphPlanningDraft
+  tasks: Array<{
+    key: string
+    kind: 'work' | 'review' | 'integration' | 'loop_gate'
+    title: string
+  }>
+}
+
+export type GraphPlanningLifecycleEvent = {
+  version: 1
+  event:
+    | 'draft_created'
+    | 'inspection_started'
+    | 'validation_started'
+    | 'repair_requested'
+    | 'needs_correction'
+    | 'run_committed'
+    | 'draft_cancelled'
+    | 'host_error'
+  draftId: string
+  reservedRunId: string
+  sourceTurnId: string
+  revision: number
+  state: GraphPlanningDraftStatus
+  issues: GraphPlanningIssue[]
+  tasks: GraphPlanningDraftView['tasks']
+  committedRunId?: string
+}
+
 export type GraphNodeStatus =
   | 'pending'
   | 'blocked'

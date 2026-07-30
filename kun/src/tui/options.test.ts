@@ -13,7 +13,8 @@ describe('parseTuiOptions', () => {
       '--graph', '实现 TUI Graph 看板',
       '--model', 'model-a',
       '--approval-policy', 'on-request',
-      '--sandbox-mode', 'workspace-write'
+      '--sandbox-mode', 'workspace-write',
+      '--approval-reviewer', 'agent'
     ], {
       KUN_TUI_URL: 'http://127.0.0.1:18899',
       KUN_RUNTIME_TOKEN: 'env-token'
@@ -32,7 +33,8 @@ describe('parseTuiOptions', () => {
         graphPrompt: '实现 TUI Graph 看板',
         model: 'model-a',
         approvalPolicy: 'on-request',
-        sandboxMode: 'workspace-write'
+        sandboxMode: 'workspace-write',
+        approvalReviewer: 'agent'
       }
     })
   })
@@ -56,6 +58,10 @@ describe('parseTuiOptions', () => {
     expect(parseTuiOptions(['--approval-policy', 'unsafe'], {}, () => '/tmp')).toEqual({
       ok: false,
       message: 'invalid approval policy: unsafe'
+    })
+    expect(parseTuiOptions(['--approval-reviewer', 'robot'], {}, () => '/tmp')).toEqual({
+      ok: false,
+      message: 'invalid approval reviewer: robot'
     })
     expect(parseTuiOptions(['--graph'], {}, () => '/tmp')).toEqual({
       ok: false,

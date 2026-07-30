@@ -24,6 +24,9 @@ const defaultOutput = join(root, 'resources', 'bundled-extensions')
 
 export const BUNDLED_EXTENSION_CATALOG_FILE = 'catalog.json'
 const RETIRED_BUNDLED_EXTENSION_NAMES = Object.freeze(['kun-video-editor'])
+export const RETIRED_BUNDLED_EXTENSION_IDS = Object.freeze([
+  'kun-examples.kun-video-editor'
+])
 export const BUNDLED_EXTENSION_DEFINITIONS = Object.freeze([
   Object.freeze({
     id: 'kun-examples.presentation-studio',
@@ -84,12 +87,19 @@ export function bundledCatalogEntry(definition, manifest, archive, sha256) {
   }
 }
 
-export function bundledExtensionCatalog(entries) {
+export function bundledExtensionCatalog(
+  entries,
+  retiredExtensions = RETIRED_BUNDLED_EXTENSION_IDS
+) {
   const sorted = [...entries].sort((left, right) => left.id.localeCompare(right.id))
   if (new Set(sorted.map((entry) => entry.id)).size !== sorted.length) {
     throw new Error('Bundled extension catalog contains duplicate extension ids')
   }
-  return { schemaVersion: 1, extensions: sorted }
+  const retired = [...new Set(retiredExtensions)].sort()
+  if (retired.some((id) => sorted.some((entry) => entry.id === id))) {
+    throw new Error('Bundled extension catalog cannot retire an active extension id')
+  }
+  return { schemaVersion: 1, extensions: sorted, retiredExtensions: retired }
 }
 
 export async function packBundledExtensions({ output = defaultOutput } = {}) {

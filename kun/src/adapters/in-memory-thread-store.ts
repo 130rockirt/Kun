@@ -1,5 +1,9 @@
 import type { ThreadStore, ThreadStoreListOptions } from '../ports/thread-store.js'
-import type { ThreadRecord, ThreadSummary } from '../contracts/threads.js'
+import {
+  ThreadSchema,
+  type ThreadRecord,
+  type ThreadSummary
+} from '../contracts/threads.js'
 import { toThreadSummary } from '../domain/thread.js'
 
 /**
@@ -20,8 +24,9 @@ export class InMemoryThreadStore implements ThreadStore {
   }
 
   async upsert(thread: ThreadRecord): Promise<ThreadRecord> {
-    this.threads.set(thread.id, thread)
-    return thread
+    const normalized = ThreadSchema.parse(thread)
+    this.threads.set(normalized.id, normalized)
+    return normalized
   }
 
   async delete(threadId: string): Promise<boolean> {

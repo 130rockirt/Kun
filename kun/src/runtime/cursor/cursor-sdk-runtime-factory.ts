@@ -2,8 +2,10 @@ import type { CapabilityRegistry } from '../../adapters/tool/capability-registry
 import type { AttachmentStore } from '../../attachments/attachment-store.js'
 import type {
   ApprovalPolicy,
+  ApprovalReviewer,
   SandboxMode
 } from '../../contracts/policy.js'
+import type { ActingTurnModelRoute } from '../../contracts/turns.js'
 import type { ThreadRecord } from '../../contracts/threads.js'
 import type { TurnItem } from '../../contracts/items.js'
 import { makeUserInputItem } from '../../domain/item.js'
@@ -23,6 +25,7 @@ import {
 } from '../../loop/agent-loop.js'
 import type { MemoryStore } from '../../memory/memory-store.js'
 import type { ApprovalGate } from '../../ports/approval-gate.js'
+import type { ApprovalReviewPort } from '../../ports/approval-review.js'
 import type {
   GuiPlanContext,
   ToolHost,
@@ -36,6 +39,7 @@ import type {
 import { awaitAbortableGate } from '../../services/interactive-gate.js'
 import type { SkillRuntime } from '../../skills/skill-runtime.js'
 import {
+  DEFAULT_APPROVAL_REVIEWER,
   DEFAULT_SANDBOX_MODE
 } from '../../contracts/policy.js'
 import {
@@ -61,11 +65,13 @@ export interface CursorSdkRuntimeFactoryDeps extends Omit<
   toolHost?: ToolHost
   defaultApprovalPolicy: ApprovalPolicy
   defaultSandboxMode?: SandboxMode
+  defaultApprovalReviewer?: ApprovalReviewer
   skillRuntime?: SkillRuntime
   instructionRuntime?: InstructionRuntime
   memoryStore?: MemoryStore
   userInputGate?: UserInputGate
   approvalGate?: ApprovalGate
+  approvalReview?: ApprovalReviewPort
   nowIso?: () => string
   toolContextBoundary?: Pick<
     ToolHostContext,
@@ -89,11 +95,13 @@ export function createCursorSdkRuntime(
     toolHost,
     defaultApprovalPolicy,
     defaultSandboxMode,
+    defaultApprovalReviewer,
     skillRuntime,
     instructionRuntime,
     memoryStore,
     userInputGate,
     approvalGate,
+    approvalReview,
     nowIso: configuredNowIso,
     toolContextBoundary,
     ...runtimeDeps
@@ -204,8 +212,28 @@ export function createCursorSdkRuntime(
   const makeAwaitApproval = (
     approvalPolicy: ApprovalPolicy,
     sandboxMode: SandboxMode | undefined,
+    approvalReviewer: ApprovalReviewer,
+    actingModelRoute: ActingTurnModelRoute,
+    intent: string,
     signal: AbortSignal
   ): ToolHostContext['awaitApproval'] => async (approval: ApprovalRequest) => {
+    if (approvalPolicy === 'auto' && sandboxMode === 'danger-full-access') return 'allow'
+    if (approvalReviewer === 'agent') {
+      if (!approvalReview) {
+        return {
+          decision: 'deny',
+          reviewer: 'agent',
+          reason: 'Automatic approval review is unavailable.',
+          reviewStatus: 'failed-closed'
+        }
+      }
+      return approvalReview.review({
+        approval,
+        route: actingModelRoute,
+        intent,
+        signal
+      })
+    }
     if (approvalPolicy === 'never' || !approvalGate) return 'deny'
     const pending = approvalGate.request(approval)
     try {
@@ -217,8 +245,10 @@ export function createCursorSdkRuntime(
         toolName: approval.toolName,
         status: 'pending',
         approvalPolicy,
+        approvalReviewer: 'user',
         sandboxMode: sandboxMode ?? DEFAULT_SANDBOX_MODE,
-        summary: approval.summary
+        summary: approval.summary,
+        ...(approval.action ? { action: approval.action } : {})
       })
       return await awaitAbortableGate(
         pending,
@@ -238,6 +268,10 @@ export function createCursorSdkRuntime(
     turn: ThreadRecord['turns'][number]
     signal: AbortSignal
     activeSkillIds: readonly string[]
+    actingModelRoute: ActingTurnModelRoute
+    approvalReviewer: ApprovalReviewer
+    approvalPolicy: ApprovalPolicy
+    sandboxMode: SandboxMode
     listing?: boolean
   }): ToolHostContext => {
     const plan = resolveCursorPlanContext(input.thread, input.turn.id)
@@ -246,12 +280,6 @@ export function createCursorSdkRuntime(
       toolContextBoundary?.allowedToolNames,
       dedicatedSvgTurn ? SVG_ARTIFACT_ALLOWED_TOOL_NAMES : undefined
     )
-    const approvalPolicy = runtimeDeps.enforceReadOnly === true
-      ? 'never'
-      : input.thread.approvalPolicy ?? defaultApprovalPolicy
-    const sandboxMode = runtimeDeps.enforceReadOnly === true
-      ? 'read-only'
-      : input.thread.sandboxMode ?? defaultSandboxMode ?? DEFAULT_SANDBOX_MODE
     const awaitUserInput = makeAwaitUserInput(
       input.thread.id,
       input.turn.id,
@@ -261,8 +289,11 @@ export function createCursorSdkRuntime(
       threadId: input.thread.id,
       turnId: input.turn.id,
       workspace: input.thread.workspace,
-      approvalPolicy,
-      sandboxMode,
+      approvalPolicy: input.approvalPolicy,
+      approvalReviewer: input.approvalReviewer,
+      sandboxMode: input.sandboxMode,
+      actingModelRoute: input.actingModelRoute,
+      approvalIntent: input.turn.prompt,
       abortSignal: input.signal,
       ...toolContextBoundary,
       ...(plan.planMode ? { threadMode: 'plan' as const } : {}),
@@ -280,16 +311,37 @@ export function createCursorSdkRuntime(
       ...(awaitUserInput ? { awaitUserInput } : {}),
       awaitApproval: input.listing
         ? async () => 'deny'
-        : makeAwaitApproval(approvalPolicy, sandboxMode, input.signal)
+        : makeAwaitApproval(
+            input.approvalPolicy,
+            input.sandboxMode,
+            input.approvalReviewer,
+            input.actingModelRoute,
+            input.turn.prompt,
+            input.signal
+          )
     }
   }
 
   const loadKunTurnContext: NonNullable<
     CursorSdkRuntimeDeps['loadKunTurnContext']
-  > = async ({ threadId, turnId, userText, signal }) => {
+  > = async ({ threadId, turnId, userText, actingModelRoute, signal }) => {
       const thread = await deps.threadStore.get(threadId)
       const turn = thread?.turns.find((candidate) => candidate.id === turnId)
       if (!thread || !turn) throw new Error('Cursor SDK Kun tool context is unavailable')
+      const approvalReviewer =
+        turn.approvalReviewer ??
+        thread.approvalReviewer ??
+        defaultApprovalReviewer ??
+        DEFAULT_APPROVAL_REVIEWER
+      const approvalPolicy = runtimeDeps.enforceReadOnly === true
+        ? 'never'
+        : turn.approvalPolicy ?? thread.approvalPolicy ?? defaultApprovalPolicy
+      const sandboxMode = runtimeDeps.enforceReadOnly === true
+        ? 'read-only'
+        : turn.sandboxMode ??
+          thread.sandboxMode ??
+          defaultSandboxMode ??
+          DEFAULT_SANDBOX_MODE
 
       const skillResolution = skillRuntime
         ? await skillRuntime.resolveTurn({
@@ -320,6 +372,10 @@ export function createCursorSdkRuntime(
         turn,
         signal,
         activeSkillIds: listingSkillIds,
+        actingModelRoute,
+        approvalReviewer,
+        approvalPolicy,
+        sandboxMode,
         listing: true
       })
       if (toolHost) {
@@ -384,7 +440,11 @@ export function createCursorSdkRuntime(
               thread: latestThread,
               turn: latestTurn,
               signal,
-              activeSkillIds: latestActiveSkillIds
+              activeSkillIds: latestActiveSkillIds,
+              actingModelRoute,
+              approvalReviewer,
+              approvalPolicy,
+              sandboxMode
             })
             try {
               const result = await toolHost.execute({

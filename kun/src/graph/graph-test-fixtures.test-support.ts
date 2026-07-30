@@ -25,6 +25,7 @@ export function testCompletedChild(id: string, summary: string): ChildRunRecord 
     parentThreadId: 'thread_harness',
     parentTurnId: 'turn_harness',
     prompt: 'test prompt',
+    approvalReviewer: 'user',
     status: 'completed',
     returnFormat: 'evidence',
     summary: JSON.stringify({

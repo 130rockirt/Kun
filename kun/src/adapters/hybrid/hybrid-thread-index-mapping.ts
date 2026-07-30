@@ -1,12 +1,19 @@
 import type {
   ThreadGoal, ThreadMode, ThreadRecord, ThreadRelation, ThreadStatus, ThreadSummary, ThreadTodoList
 } from '../../contracts/threads.js'
-import type { ApprovalPolicy, SandboxMode } from '../../contracts/policy.js'
+import {
+  DEFAULT_APPROVAL_REVIEWER,
+  type ApprovalPolicy,
+  type ApprovalReviewer,
+  type SandboxMode
+} from '../../contracts/policy.js'
 import type { ThreadStoreListOptions } from '../../ports/thread-store.js'
 
 export type ThreadRow = {
   id: string; title: string; workspace: string; model: string; mode: ThreadMode; status: ThreadStatus
-  approval_policy: ApprovalPolicy; sandbox_mode: SandboxMode; cost_budget_usd: number | null
+  approval_policy: ApprovalPolicy; sandbox_mode: SandboxMode
+  approval_reviewer: ApprovalReviewer | null
+  cost_budget_usd: number | null
   model_request_capture_enabled: number
   cost_budget_warning_sent: number | null; relation: ThreadRelation; parent_thread_id: string | null
   forked_from_thread_id: string | null; forked_from_title: string | null; forked_at: string | null
@@ -28,6 +35,7 @@ export function rowFromIndexRecord(record: ThreadIndexRecord, paths: {
     id: thread.id, title: thread.title, workspace: thread.workspace, model: thread.model,
     mode: thread.mode, status: thread.status, approval_policy: thread.approvalPolicy,
     sandbox_mode: thread.sandboxMode,
+    approval_reviewer: thread.approvalReviewer ?? DEFAULT_APPROVAL_REVIEWER,
     model_request_capture_enabled: thread.modelRequestCaptureEnabled === true ? 1 : 0,
     cost_budget_usd: thread.costBudgetUsd ?? null,
     cost_budget_warning_sent: thread.costBudgetWarningSent === undefined ? null : thread.costBudgetWarningSent ? 1 : 0,
@@ -62,6 +70,7 @@ export function summaryFromRow(row: ThreadRow): ThreadSummary {
   return {
     id: row.id, title: row.title, workspace: row.workspace, model: row.model, mode: row.mode,
     status: row.status, approvalPolicy: row.approval_policy, sandboxMode: row.sandbox_mode,
+    approvalReviewer: row.approval_reviewer ?? DEFAULT_APPROVAL_REVIEWER,
     modelRequestCaptureEnabled: Boolean(row.model_request_capture_enabled),
     ...(row.cost_budget_usd !== null ? { costBudgetUsd: row.cost_budget_usd } : {}),
     ...(row.cost_budget_warning_sent !== null ? { costBudgetWarningSent: Boolean(row.cost_budget_warning_sent) } : {}),

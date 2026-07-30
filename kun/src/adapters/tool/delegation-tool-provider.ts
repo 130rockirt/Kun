@@ -273,6 +273,7 @@ function parseCommonArgs(args: Record<string, unknown>, context: ToolHostContext
   workspace: string
   inheritedModel?: string
   inheritedProviderId?: string
+  inheritedAccountId?: string
   inheritedReasoningEffort?: string
   label?: string
   detach: boolean
@@ -283,8 +284,19 @@ function parseCommonArgs(args: Record<string, unknown>, context: ToolHostContext
   return {
     prompt,
     workspace: context.workspace,
-    ...(context.model?.id?.trim() ? { inheritedModel: context.model.id.trim() } : {}),
-    ...(context.modelProviderId?.trim() ? { inheritedProviderId: context.modelProviderId.trim() } : {}),
+    ...(context.actingModelRoute?.model
+      ? { inheritedModel: context.actingModelRoute.model }
+      : context.model?.id?.trim()
+        ? { inheritedModel: context.model.id.trim() }
+        : {}),
+    ...(context.actingModelRoute?.providerId
+      ? { inheritedProviderId: context.actingModelRoute.providerId }
+      : context.modelProviderId?.trim()
+        ? { inheritedProviderId: context.modelProviderId.trim() }
+        : {}),
+    ...(context.actingModelRoute?.accountId
+      ? { inheritedAccountId: context.actingModelRoute.accountId }
+      : {}),
     ...(context.reasoningEffort?.trim() ? { inheritedReasoningEffort: context.reasoningEffort.trim() } : {}),
     ...(stringValue(args.label) ? { label: stringValue(args.label) } : {}),
     detach: args.detach === true,
@@ -325,9 +337,11 @@ async function runChild(
     },
     ...(common.inheritedModel ? { inheritedModel: common.inheritedModel } : {}),
     ...(common.inheritedProviderId ? { inheritedProviderId: common.inheritedProviderId } : {}),
+    ...(common.inheritedAccountId ? { inheritedAccountId: common.inheritedAccountId } : {}),
     ...(common.inheritedReasoningEffort ? { inheritedReasoningEffort: common.inheritedReasoningEffort } : {}),
     approvalPolicy: context.approvalPolicy,
     ...(context.sandboxMode ? { sandboxMode: context.sandboxMode } : {}),
+    approvalReviewer: context.approvalReviewer ?? 'user',
     ...(context.clientSurface ? { clientSurface: context.clientSurface } : {}),
     ...(context.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
     ...(common.detach ? { detach: true } : {}),

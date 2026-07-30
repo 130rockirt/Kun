@@ -32,12 +32,11 @@ import type { AttachmentMetadata } from '../contracts/attachments.js'
 import type { TurnItem } from '../contracts/items.js'
 import type { ModelReasoningEffort } from '../contracts/capabilities.js'
 import {
-  APPROVAL_POLICIES,
   KUN_TOOL_PERMISSION_MODES,
-  SANDBOX_MODES,
   kunToolPermissionModeFromSettings,
   kunToolPermissionModeSettings,
   type ApprovalPolicy,
+  type ApprovalReviewer,
   type KunToolPermissionMode,
   type SandboxMode
 } from '../contracts/policy.js'
@@ -97,6 +96,7 @@ import {
   hydrateProjectedChildRuns,
   matchingRequestContextSnapshot,
   projectThreadSnapshot,
+  type ProjectedApprovalReview,
   type ProjectedChildRun,
   type ProjectedTurnActivity,
   type ThreadProjection
@@ -1025,11 +1025,17 @@ export class PiTuiApplication {
     if (this.permissionOverlay) return
     const thread = this.controller.state.projection?.thread
     if (!thread) { this.controller.notify('Open or create a thread first.', 'error'); return }
-    const component = new PermissionDialog(this.controller, thread.approvalPolicy, thread.sandboxMode, () => {
+    const component = new PermissionDialog(
+      this.controller,
+      thread.approvalPolicy,
+      thread.sandboxMode,
+      thread.approvalReviewer,
+      () => {
       this.permissionOverlay?.handle.hide()
       this.permissionOverlay = undefined
       this.tui.setFocus(this.root)
-    })
+      }
+    )
     this.permissionOverlay = {
       component,
       handle: this.showExclusiveRoute('permissions', component)
@@ -2123,6 +2129,7 @@ function isKunReplyItem(item: TurnItem): boolean {
 export class TranscriptComponent implements Component {
   private order: string[] = []
   private readonly items = new Map<string, ItemComponent>()
+  private readonly approvalReviews = new Map<string, ApprovalReviewComponent>()
   private readonly children = new Map<string, ChildRunComponent>()
   private readonly childGroups = new Map<string, ChildRunGroupComponent>()
   private readonly explorationGroups = new Map<string, ExplorationGroupComponent>()
@@ -2231,6 +2238,19 @@ export class TranscriptComponent implements Component {
       }
     }
 
+    const reviewIds = new Set(
+      (projection?.approvalReviews ?? []).map((review) => `approval-review:${review.reviewId}`)
+    )
+    for (const id of this.approvalReviews.keys()) {
+      if (!reviewIds.has(id)) this.approvalReviews.delete(id)
+    }
+    for (const review of projection?.approvalReviews ?? []) {
+      const id = `approval-review:${review.reviewId}`
+      const current = this.approvalReviews.get(id)
+      if (current) current.update(review)
+      else this.approvalReviews.set(id, new ApprovalReviewComponent(review))
+    }
+
     const childRunsByTurn = new Map<string, ProjectedChildRun[]>()
     for (const child of projection?.childRuns ?? []) {
       const current = childRunsByTurn.get(child.parentTurnId) ?? []
@@ -2330,6 +2350,39 @@ export class TranscriptComponent implements Component {
         order.push(id)
       }
     }
+    const reviews = [...(projection?.approvalReviews ?? [])]
+      .sort((left, right) => left.startedAt.localeCompare(right.startedAt))
+    const placedReviewIdsByTurn = new Map<string, string[]>()
+    for (const review of reviews) {
+      const id = `approval-review:${review.reviewId}`
+      if (!review.turnId) {
+        order.push(id)
+        continue
+      }
+      addKunReplyLabel(review.turnId)
+      const nextItem = visible.find((item) =>
+        item.turnId === review.turnId &&
+        item.createdAt > review.startedAt &&
+        order.includes(item.id)
+      )
+      if (nextItem) {
+        order.splice(order.indexOf(nextItem.id), 0, id)
+      } else {
+        const turnOrderIds = [
+          ...visible.filter((item) => item.turnId === review.turnId).map((item) => item.id),
+          ...(placedReviewIdsByTurn.get(review.turnId) ?? [])
+        ]
+        const lastTurnIndex = turnOrderIds.reduce(
+          (latest, candidate) => Math.max(latest, order.lastIndexOf(candidate)),
+          -1
+        )
+        if (lastTurnIndex >= 0) order.splice(lastTurnIndex + 1, 0, id)
+        else order.push(id)
+      }
+      const placed = placedReviewIdsByTurn.get(review.turnId) ?? []
+      placed.push(id)
+      placedReviewIdsByTurn.set(review.turnId, placed)
+    }
     this.order = order
   }
 
@@ -2347,6 +2400,8 @@ export class TranscriptComponent implements Component {
           ? this.childGroups.get(id)?.render(width, animationFrame) ?? []
         : id.startsWith('child:')
           ? this.children.get(id)?.render(width, animationFrame) ?? []
+          : id.startsWith('approval-review:')
+            ? this.approvalReviews.get(id)?.render(width, animationFrame) ?? []
           : this.items.get(id)?.render(width, animationFrame) ?? []
       const kind = replyGroup
         ? 'kun_reply'
@@ -2356,12 +2411,14 @@ export class TranscriptComponent implements Component {
           ? 'child_group'
         : id.startsWith('child:')
           ? 'child'
+          : id.startsWith('approval-review:')
+            ? 'approval_review'
           : this.items.get(id)?.kind
       const compact = kind === 'child' || kind === 'child_group' || kind === 'assistant_text' ||
         kind === 'assistant_reasoning' || kind === 'tool_call' ||
         kind === 'tool_result' || kind === 'approval' ||
         kind === 'user_input' || kind === 'review' || kind === 'error' ||
-        kind === 'compaction' || kind === 'exploration_group'
+        kind === 'approval_review' || kind === 'compaction' || kind === 'exploration_group'
       if (index !== 0 && !compact) lines.push('')
       const start = lines.length
       lines.push(...rendered)
@@ -2407,6 +2464,48 @@ export class TranscriptComponent implements Component {
 
   invalidate(): void {
     for (const item of this.items.values()) item.invalidate()
+    for (const review of this.approvalReviews.values()) review.invalidate()
+  }
+}
+
+class ApprovalReviewComponent implements Component {
+  constructor(private review: ProjectedApprovalReview) {}
+
+  update(review: ProjectedApprovalReview): void {
+    this.review = review
+  }
+
+  invalidate(): void {}
+
+  render(width: number, animationFrame = 0): string[] {
+    const contentWidth = Math.max(8, width - 2)
+    const inProgress = this.review.status === 'in-progress'
+    const icon = inProgress
+      ? cyan(activityFrame('waiting', animationFrame))
+      : this.review.status === 'approved'
+        ? green('✓')
+        : this.review.status === 'aborted'
+          ? yellow('■')
+          : red('✗')
+    const title = inProgress
+      ? `Reviewing ${this.review.toolName}`
+      : `Agent review ${this.review.status}`
+    const metadata = [
+      ...(this.review.riskLevel ? [`risk ${this.review.riskLevel}`] : []),
+      ...(this.review.decision ? [this.review.decision] : [])
+    ].join(' · ')
+    const lines = [
+      truncateToWidth(
+        ` ${icon} ${bold(sanitizeTerminalText(title))}${metadata ? ` ${dim(`· ${metadata}`)}` : ''}`,
+        contentWidth
+      )
+    ]
+    const detail = this.review.rationale || (inProgress ? this.review.summary : '')
+    if (detail) {
+      lines.push(...plainLines(detail, Math.max(8, contentWidth - 4), 0)
+        .map((line) => truncateToWidth(`   ${dim(line)}`, contentWidth)))
+    }
+    return lines
   }
 }
 
@@ -4523,64 +4622,29 @@ function renderInspectionLine(title: string, value: string, width: number): stri
   return plainLines(safe, width, 1)
 }
 
-function approvalPolicyDescription(value: ApprovalPolicy): string {
-  switch (value) {
-    case 'never': return 'Run supported actions without asking'
-    case 'on-request': return 'Ask when the runtime marks an action sensitive'
-    case 'untrusted': return 'Ask outside trusted actions'
-    case 'always': return 'Ask before every tool action'
-    case 'auto': return 'Let Kun choose from the active safety context'
-    case 'suggest': return 'Ask when a tool suggests confirmation'
-  }
-}
-
-function sandboxModeDescription(value: SandboxMode): string {
-  switch (value) {
-    case 'read-only': return 'Read tools only; file changes and host commands are blocked'
-    case 'workspace-write': return 'Workspace file tools follow policy; every host command asks first'
-    case 'danger-full-access': return 'Host commands and file tools may access the full machine'
-    case 'external-sandbox': return 'External sandbox only; in-process writes and host commands are blocked'
-  }
-}
-
 const PERMISSION_PRESET_COPY: Record<
   KunToolPermissionMode,
   { label: string; description: string }
 > = {
-  'always-ask': {
-    label: 'Always ask',
-    description: 'Every tool call asks first; safest, but interrupts often'
+  'ask-for-approval': {
+    label: 'Ask for approval',
+    description: 'Workspace-safe actions run automatically; approval-worthy actions ask you first'
   },
-  'read-only': {
-    label: 'Read only',
-    description: 'Read tools run automatically; writes and commands ask first, and it can only read workspace content'
+  'approve-for-me': {
+    label: 'Approve for me',
+    description: 'The selected model reviews approval-worthy actions and denies them if review fails'
   },
-  'sensitive-ask': {
-    label: 'Sensitive operations ask',
-    description: 'Ordinary reads can run automatically; sensitive operations ask first, so review the risk'
-  },
-  'workspace-write': {
-    label: 'Ask for workspace writes',
-    description: 'Asks before workspace file changes and every host command; approved commands may affect paths outside the workspace'
-  },
-  'trusted-workspace': {
-    label: 'Trusted workspace',
-    description: 'Workspace file changes run without prompts; every host command still asks and may affect paths outside the workspace'
-  },
-  bypass: {
+  'full-access': {
     label: 'Full access',
-    description: 'Never asks and has full access; highest risk, use only for trusted tasks'
+    description: 'No Kun approval; tools may access any file, run commands, and use the network'
   }
 }
 
 export class PermissionDialog implements Component, Focusable {
   private _focused = true
-  private view: 'presets' | 'advanced' = 'presets'
   private presetIndex: number
-  private readonly initialApprovalIndex: number
-  private readonly initialSandboxIndex: number
-  private approvalIndex: number
-  private sandboxIndex: number
+  private readonly startsInFullAccess: boolean
+  private confirmingFullAccess = false
   private saving = false
   private error = ''
 
@@ -4588,24 +4652,26 @@ export class PermissionDialog implements Component, Focusable {
     private readonly controller: TuiController,
     approvalPolicy: ApprovalPolicy,
     sandboxMode: SandboxMode,
+    approvalReviewer: ApprovalReviewer,
     private readonly close: () => void
   ) {
-    const mode = kunToolPermissionModeFromSettings({ approvalPolicy, sandboxMode })
+    const mode = kunToolPermissionModeFromSettings({
+      approvalPolicy,
+      sandboxMode,
+      approvalReviewer
+    })
     this.presetIndex = Math.max(0, KUN_TOOL_PERMISSION_MODES.indexOf(mode))
-    this.approvalIndex = Math.max(0, APPROVAL_POLICIES.indexOf(approvalPolicy))
-    this.sandboxIndex = Math.max(0, SANDBOX_MODES.indexOf(sandboxMode))
-    this.initialApprovalIndex = this.approvalIndex
-    this.initialSandboxIndex = this.sandboxIndex
+    this.startsInFullAccess = mode === 'full-access'
   }
 
   get focused(): boolean { return this._focused }
   set focused(value: boolean) { this._focused = value }
 
   render(width: number): string[] {
-    if (this.view === 'advanced') return this.renderAdvanced(width)
+    if (this.confirmingFullAccess) return this.renderFullAccessConfirmation(width)
     return pageFrame({
       path: ['KUN', 'Permissions'],
-      description: 'Choose the same tool permission mode used by the Kun GUI.',
+      description: 'Choose who reviews actions that cross the workspace boundary.',
       body: [
         sectionLabel('Tool permission mode', width - 2),
         ...KUN_TOOL_PERMISSION_MODES.map((mode, index) => {
@@ -4619,7 +4685,6 @@ export class PermissionDialog implements Component, Focusable {
         : [
             { key: '↑/↓', label: 'mode' },
             { key: 'Enter', label: 'save' },
-            { key: 'A', label: 'advanced' },
             { key: 'Esc', label: 'cancel' }
           ],
       width
@@ -4628,8 +4693,19 @@ export class PermissionDialog implements Component, Focusable {
 
   handleInput(data: string): void {
     if (this.saving) return
-    if (this.view === 'advanced') {
-      this.handleAdvancedInput(data)
+    if (this.confirmingFullAccess) {
+      if (isCancelInput(data)) {
+        this.confirmingFullAccess = false
+        return
+      }
+      if (matchesKey(data, 'enter') || data.toLowerCase() === 'y') {
+        const settings = kunToolPermissionModeSettings('full-access')
+        void this.save(
+          settings.approvalPolicy,
+          settings.sandboxMode,
+          settings.approvalReviewer
+        )
+      }
       return
     }
     if (isCancelInput(data)) { this.close(); return }
@@ -4641,83 +4717,62 @@ export class PermissionDialog implements Component, Focusable {
       this.presetIndex = 0
     } else if (matchesKey(data, 'end') || matchesKey(data, 'pageDown')) {
       this.presetIndex = KUN_TOOL_PERMISSION_MODES.length - 1
-    } else if (matchesKey(data, 'a')) {
-      this.resetAdvancedDraft()
-      this.view = 'advanced'
-      this.error = ''
     } else if (matchesKey(data, 'enter')) {
       const mode = KUN_TOOL_PERMISSION_MODES[this.presetIndex]!
+      if (mode === 'full-access' && !this.startsInFullAccess) {
+        this.confirmingFullAccess = true
+        this.error = ''
+        return
+      }
       const settings = kunToolPermissionModeSettings(mode)
-      void this.save(settings.approvalPolicy, settings.sandboxMode)
+      void this.save(
+        settings.approvalPolicy,
+        settings.sandboxMode,
+        settings.approvalReviewer
+      )
     }
   }
 
   invalidate(): void {}
 
-  private renderAdvanced(width: number): string[] {
+  private renderFullAccessConfirmation(width: number): string[] {
     return pageFrame({
-      path: ['KUN', 'Permissions', 'Advanced'],
-      description: 'Edit the raw approval policy and sandbox mode for this session.',
+      path: ['KUN', 'Permissions', 'Confirm Full access'],
+      description: 'Full access removes Kun-level approval and workspace restrictions.',
       body: [
-        sectionLabel('Approval policy', width - 2),
-        ...APPROVAL_POLICIES.map((value, index) =>
-          selectionRow(value, approvalPolicyDescription(value), width - 2, index === this.approvalIndex)
+        red(bold('Enable Full access?')),
+        '',
+        ...plainLines(
+          'Kun may access any file on this computer, execute host commands, and use network-capable tools without Kun approval.',
+          width - 2,
+          0
         ),
         '',
-        sectionLabel('Sandbox mode', width - 2),
-        ...SANDBOX_MODES.map((value, index) =>
-          selectionRow(value, sandboxModeDescription(value), width - 2, index === this.sandboxIndex)
-        ),
+        yellow('Only enable Full access for a task and workspace you trust.'),
         ...(this.error ? ['', red(this.error)] : [])
       ],
       footer: this.saving
         ? [{ key: statusGlyph('running'), label: 'saving' }]
         : [
-            { key: '↑/↓', label: 'policy' },
-            { key: '←/→', label: 'sandbox' },
-            { key: 'Enter', label: 'save' },
-            { key: 'Esc', label: 'presets' }
+            { key: 'Enter', label: 'enable Full access', tone: 'danger' },
+            { key: 'Esc', label: 'cancel' }
           ],
       width
     })
   }
 
-  private handleAdvancedInput(data: string): void {
-    if (isCancelInput(data)) {
-      this.resetAdvancedDraft()
-      this.view = 'presets'
-      this.error = ''
-      return
-    }
-    if (matchesKey(data, 'up') || matchesKey(data, 'ctrl+p')) {
-      this.approvalIndex = Math.max(0, this.approvalIndex - 1)
-    } else if (matchesKey(data, 'down') || matchesKey(data, 'ctrl+n')) {
-      this.approvalIndex = Math.min(APPROVAL_POLICIES.length - 1, this.approvalIndex + 1)
-    } else if (matchesKey(data, 'home') || matchesKey(data, 'pageUp')) {
-      this.approvalIndex = 0
-    } else if (matchesKey(data, 'end') || matchesKey(data, 'pageDown')) {
-      this.approvalIndex = APPROVAL_POLICIES.length - 1
-    } else if (matchesKey(data, 'left')) {
-      this.sandboxIndex = Math.max(0, this.sandboxIndex - 1)
-    } else if (matchesKey(data, 'right')) {
-      this.sandboxIndex = Math.min(SANDBOX_MODES.length - 1, this.sandboxIndex + 1)
-    } else if (matchesKey(data, 'enter')) {
-      void this.save(
-        APPROVAL_POLICIES[this.approvalIndex]!,
-        SANDBOX_MODES[this.sandboxIndex]!
-      )
-    }
-  }
-
-  private resetAdvancedDraft(): void {
-    this.approvalIndex = this.initialApprovalIndex
-    this.sandboxIndex = this.initialSandboxIndex
-  }
-
-  private async save(approvalPolicy: ApprovalPolicy, sandboxMode: SandboxMode): Promise<void> {
+  private async save(
+    approvalPolicy: ApprovalPolicy,
+    sandboxMode: SandboxMode,
+    approvalReviewer: ApprovalReviewer
+  ): Promise<void> {
     this.saving = true
     try {
-      const saved = await this.controller.setPermissions(approvalPolicy, sandboxMode)
+      const saved = await this.controller.setPermissions(
+        approvalPolicy,
+        sandboxMode,
+        approvalReviewer
+      )
       if (saved) this.close()
       else this.saving = false
     } catch (error) {

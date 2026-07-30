@@ -1,8 +1,15 @@
-import type { ApprovalPolicy, SandboxMode } from '../contracts/policy.js'
+import type {
+  ApprovalPolicy,
+  ApprovalReviewer,
+  SandboxMode
+} from '../contracts/policy.js'
 import type { ApprovalRequest, ApprovalResolution } from '../domain/approval.js'
 import type { TurnItem } from '../contracts/items.js'
 import type { ModelCapabilityMetadata } from '../contracts/capabilities.js'
-import type { TurnClientSurface } from '../contracts/turns.js'
+import type {
+  ActingTurnModelRoute,
+  TurnClientSurface
+} from '../contracts/turns.js'
 import type { ArtifactStore } from '../artifacts/artifact-store.js'
 import type { ExtensionToolCatalogEpoch } from '../contracts/threads.js'
 import type {
@@ -81,6 +88,22 @@ export type ApprovedExternalWriteTarget = {
   parentInode: bigint
 }
 
+/**
+ * Ephemeral proof minted by LocalToolHost after the active call crossed and
+ * passed a Kun approval boundary. Callers cannot supply or reuse this proof:
+ * the host strips incoming values and binds the replacement to the resolved
+ * call name, id, and normalized argument hash.
+ */
+export type KunActionApprovalGrant = {
+  id: string
+  source: ApprovalReviewer | 'full-access'
+  toolName: string
+  callId: string
+  argumentsHash: string
+  issuedAt: string
+  expiresAt: string
+}
+
 export type ToolHostContext = {
   threadId: string
   turnId: string
@@ -121,6 +144,10 @@ export type ToolHostContext = {
   sourceResultBudgetTokens?: number
   /** Active model provider id selected for this turn. Child agents inherit this routing unless a profile overrides it. */
   modelProviderId?: string
+  /** Frozen model/provider/account route used by automatic approval review. */
+  actingModelRoute?: ActingTurnModelRoute
+  /** Bounded initiating intent supplied only to the isolated approval reviewer. */
+  approvalIntent?: string
   /** Effective reasoning strength selected for this model round. Custom child agents inherit it. */
   reasoningEffort?: string
   /** Skill ids activated for this turn, if the Skill runtime is enabled. */
@@ -157,10 +184,14 @@ export type ToolHostContext = {
   /** Optional skill-id deny-list for this turn: hides skills from the catalog + auto-activation and rejects `load_skill`. */
   blockedSkillIds?: readonly string[]
   approvalPolicy: ApprovalPolicy
+  /** Missing only for legacy/custom callers; runtime contexts always supply `user | agent`. */
+  approvalReviewer?: ApprovalReviewer
   /** Filesystem/command sandbox selected for this turn. Defaults at execution time for old callers. */
   sandboxMode?: SandboxMode
   /** Existing physical files approved only for the active tool invocation. */
   approvedExternalWriteTargets?: readonly ApprovedExternalWriteTarget[]
+  /** Internal one-call Kun approval proof, visible only while executing the approved tool. */
+  kunActionApprovalGrant?: Readonly<KunActionApprovalGrant>
   /** Kun runtime data root; used to allow sandbox-safe reads of background shell output files. */
   runtimeDataDir?: string
   /** Store used to offload oversized tool results from model context. */

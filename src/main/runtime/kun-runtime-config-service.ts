@@ -149,6 +149,9 @@ export async function syncGuiManagedKunConfig(
       baseUrl: runtime.baseUrl.trim() || undefined,
       endpointFormat: runtime.endpointFormat,
       model: runtime.model.trim() || undefined,
+      approvalPolicy: runtime.approvalPolicy,
+      sandboxMode: runtime.sandboxMode,
+      approvalReviewer: runtime.approvalReviewer,
       modelProxyUrl: defaultModelProxyUrl || undefined,
       retry: runtime.retry,
       tokenEconomy: tokenEconomyConfigForRuntime(runtime.tokenEconomy, objectValue(serve.tokenEconomy)),
@@ -233,7 +236,9 @@ function defaultCredentialSourceId(settings: AppSettingsV1): string {
 }
 
 type KunRuntimeConfigSettings = Pick<KunRuntimeSettingsV1,
-  'apiKey' | 'baseUrl' | 'endpointFormat' | 'model' | 'mcpSearch' | 'retry' |
+  'apiKey' | 'baseUrl' | 'endpointFormat' | 'model' |
+  'approvalPolicy' | 'sandboxMode' | 'approvalReviewer' |
+  'mcpSearch' | 'retry' |
   'tokenEconomy' | 'toolOutputLimits' | 'storage' | 'contextCompaction' |
   'runtimeTuning' | 'llmDebug' | 'imageGeneration' | 'textToSpeech' | 'musicGeneration' |
   'videoGeneration' | 'computerUse' | 'browserUse' | 'modelProfiles' | 'memoryEnabled' |
@@ -272,6 +277,7 @@ export function buildManagedRuntimeHotApplyBody(
       model: runtime.model,
       approvalPolicy: runtime.approvalPolicy,
       sandboxMode: runtime.sandboxMode,
+      approvalReviewer: runtime.approvalReviewer,
       tokenEconomyMode: runtime.tokenEconomyMode,
       tokenEconomy: runtime.tokenEconomy,
       toolOutputLimits: runtime.toolOutputLimits,

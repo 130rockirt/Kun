@@ -270,9 +270,11 @@ export abstract class GraphAttemptScheduler {
         workspace: attempt.assignment.workspaceRoot,
         inheritedModel: attempt.assignment.model,
         inheritedProviderId: attempt.assignment.providerId,
+        inheritedAccountId: attempt.assignment.accountId,
         inheritedReasoningEffort: attempt.assignment.reasoningEffort,
         approvalPolicy: attempt.assignment.approvalPolicy,
         sandboxMode: attempt.assignment.sandboxMode,
+        approvalReviewer: attempt.assignment.approvalReviewer,
         inlineProfile: {
           id: attempt.assignment.profileId,
           source: attempt.assignment.profileOrigin === 'ephemeral' ? 'custom' : 'configured',
@@ -405,6 +407,13 @@ export abstract class GraphAttemptScheduler {
           result.artifactRefs
         )
       }
+      const observedChangedFiles = await this.options.writes.captureChangedFiles(attemptId)
+      if (observedChangedFiles) {
+        result = {
+          ...result,
+          changedFiles: observedChangedFiles
+        }
+      }
       const checkNames = projection.node.completion.review.deterministicChecks
       const verifiedChecks = this.options.verifyChecks
         ? await this.options.verifyChecks({ run, node: projection, attempt, checkNames })
@@ -466,7 +475,6 @@ export abstract class GraphAttemptScheduler {
       await this.releaseWrite(attemptId, 'cancelled')
       return
     }
-    await this.options.writes.captureWorktree(attemptId).catch(() => null)
   }
 
   private async failAttempt(

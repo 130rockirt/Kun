@@ -1,5 +1,6 @@
 import { join } from 'node:path'
 import { buildGraphModeLocalTools } from '../adapters/tool/graph-mode-tool-provider.js'
+import { emitPlanningEvent } from '../adapters/tool/graph-define-plan-tool.js'
 import type { ArtifactStore } from '../artifacts/artifact-store.js'
 import type { GraphRuntimeConfig } from '../config/kun-config.js'
 import type { GraphRunV1 } from '../contracts/graph.js'
@@ -7,6 +8,7 @@ import type { ThreadStatus } from '../contracts/threads.js'
 import type { DelegationRuntime } from '../delegation/delegation-runtime.js'
 import {
   FileGraphRunStore,
+  FileGraphPlanningDraftStore,
   FileGraphThreadReferenceStore,
   FileGraphWriteCoordinator,
   FileProjectAgentRegistry,
@@ -49,6 +51,7 @@ export type GraphRuntimeStartOptions = {
 
 export class GraphRuntimeComposition {
   readonly store: FileGraphRunStore
+  readonly drafts: FileGraphPlanningDraftStore
   readonly writes: FileGraphWriteCoordinator
   readonly control: GraphControlService
   readonly references: FileGraphThreadReferenceStore
@@ -85,6 +88,10 @@ export class GraphRuntimeComposition {
       runtimeEvents: options.runtimeEvents,
       nowIso: options.nowIso,
       nextId
+    })
+    this.drafts = new FileGraphPlanningDraftStore({
+      rootDir: join(options.dataDir, 'graph-planning'),
+      nowIso: options.nowIso
     })
     this.writes = new FileGraphWriteCoordinator({
       rootDir: join(options.dataDir, 'graph-resources'),
@@ -225,6 +232,8 @@ export class GraphRuntimeComposition {
         registry: this.registry,
         artifactStore: options.artifactStore,
         workerSessions: this.workerSessions,
+        drafts: this.drafts,
+        events: options.runtimeEvents,
         threads: options.threadStore,
         sessions: options.sessionStore,
         steerChildTurn: () => this.steerChildTurn,
@@ -248,6 +257,77 @@ export class GraphRuntimeComposition {
         nextId
       })
     }
+  }
+
+  async createPlanningDraft(input: {
+    threadId: string
+    sourceTurnId: string
+    goal: string
+    workspace?: string
+  }) {
+    if (!input.workspace?.trim()) {
+      throw new GraphRunConflictError('Graph planning requires a workspace')
+    }
+    const identity = await this.registry.identify(input.workspace)
+    const draft = await this.drafts.create({
+      id: this.options.ids.next('graph_draft'),
+      reservedRunId: this.control.allocateId('graph_run'),
+      threadId: input.threadId,
+      sourceTurnId: input.sourceTurnId,
+      projectId: identity.projectId,
+      goal: input.goal
+    })
+    await emitPlanningEvent({
+      drafts: this.drafts,
+      events: this.options.runtimeEvents
+    }, draft, 'draft_created')
+    await emitPlanningEvent({
+      drafts: this.drafts,
+      events: this.options.runtimeEvents
+    }, draft, 'inspection_started')
+    return planningLifecycle(draft)
+  }
+
+  async resolvePlanningDraft(input: {
+    threadId: string
+    sourceTurnId: string
+  }) {
+    const draft = await this.drafts.findBySourceTurn(input.sourceTurnId)
+    if (!draft || draft.threadId !== input.threadId) return null
+    return planningLifecycle(draft)
+  }
+
+  async transitionPlanningDraft(input: {
+    threadId: string
+    sourceTurnId: string
+    action: 'suspend' | 'resume' | 'cancel'
+  }) {
+    const current = await this.drafts.findBySourceTurn(input.sourceTurnId)
+    if (!current || current.threadId !== input.threadId) return null
+    const target =
+      input.action === 'cancel'
+        ? 'cancelled'
+        : input.action === 'resume'
+          ? 'planning'
+          : 'needs_correction'
+    if (
+      current.status === 'committed' ||
+      current.status === 'cancelled' ||
+      current.status === 'host_error'
+    ) {
+      return planningLifecycle(current)
+    }
+    if (current.status === target) return planningLifecycle(current)
+    const next = await this.drafts.update(current.id, {
+      expectedRevision: current.revision,
+      status: target,
+      issues: current.issues
+    })
+    await emitPlanningEvent({
+      drafts: this.drafts,
+      events: this.options.runtimeEvents
+    }, next)
+    return planningLifecycle(next)
   }
 
   async handleThreadFork(sourceThreadId: string, targetThreadId: string): Promise<void> {
@@ -359,6 +439,7 @@ export class GraphRuntimeComposition {
       nextId
     })
     await this.recovery.reconcile()
+    await this.recoverPlanningCommits()
     this.supervisor.start()
     this.scheduler.start()
     await this.recoverLeadOwnership()
@@ -398,6 +479,53 @@ export class GraphRuntimeComposition {
 
   private async runRetention(): Promise<void> {
     await this.retention.run()
+  }
+
+  private async recoverPlanningCommits(): Promise<void> {
+    const drafts = await this.drafts.list({ statuses: ['committing'] })
+    for (const draft of drafts) {
+      let run = await this.store.get(draft.reservedRunId)
+      if (!run) {
+        const plan = await this.drafts.readCommitPlan(draft.id)
+        if (!plan) {
+          const failed = await this.drafts.update(draft.id, {
+            expectedRevision: draft.revision,
+            status: 'host_error',
+            issues: [{
+              code: 'graph_commit_plan_missing',
+              path: [],
+              message: 'The persisted commit plan is missing.',
+              repairHint: 'Cancel this draft and start a new Graph turn.'
+            }]
+          })
+          await emitPlanningEvent({
+            drafts: this.drafts,
+            events: this.options.runtimeEvents
+          }, failed)
+          continue
+        }
+        run = (await this.control.create({
+          runId: draft.reservedRunId,
+          threadId: draft.threadId,
+          projectId: draft.projectId,
+          sourceTurnId: draft.sourceTurnId,
+          plan,
+          commandId: this.options.ids.next('graph_plan_recovery'),
+          idempotencyKey: `graph-plan-commit:${draft.sourceTurnId}`,
+          start: true
+        })).run
+      }
+      const committed = await this.drafts.update(draft.id, {
+        expectedRevision: draft.revision,
+        status: 'committed',
+        issues: [],
+        committedRunId: run.id
+      })
+      await emitPlanningEvent({
+        drafts: this.drafts,
+        events: this.options.runtimeEvents
+      }, committed)
+    }
   }
 
   private async recoverLeadOwnership(): Promise<void> {
@@ -476,5 +604,15 @@ export class GraphRuntimeComposition {
       this.backgroundTasks.delete(tracked)
     })
     this.backgroundTasks.add(tracked)
+  }
+}
+
+function planningLifecycle(draft: import('../contracts/graph.js').GraphPlanningDraftV1) {
+  return {
+    version: 1 as const,
+    draftId: draft.id,
+    reservedRunId: draft.reservedRunId,
+    state: draft.status,
+    draftRevision: draft.revision
   }
 }

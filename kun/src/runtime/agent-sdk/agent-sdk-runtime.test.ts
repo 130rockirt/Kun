@@ -726,13 +726,20 @@ describe('AgentSdkRuntime.runTurn', () => {
     }))
   })
 
-  test('scopes the env: strips ANTHROPIC_API_KEY and injects the token', async () => {
+  test('scopes the env: strips runtime secrets and injects only the selected token', async () => {
     let seenOptions: { env?: Record<string, string | undefined> } = {}
     const sdk = fakeSdk(STREAM, (opts) => {
       seenOptions = opts as typeof seenOptions
     })
     const { deps } = makeDeps({
       loadSdk: async () => sdk,
+      baseEnv: () => ({
+        PATH: '/bin',
+        ANTHROPIC_API_KEY: 'leak',
+        KUN_BROWSER_USE_BRIDGE_URL: 'http://127.0.0.1:12345',
+        KUN_BROWSER_USE_BRIDGE_TOKEN: 'bridge-token',
+        KUN_BROWSER_USE_APPROVAL_SIGNING_KEY: 'signing-key'
+      }),
       loadTurnContext: async () => ({
         workspace: '/ws',
         userText: 'hi',
@@ -743,6 +750,9 @@ describe('AgentSdkRuntime.runTurn', () => {
     })
     await new AgentSdkRuntime(deps).runTurn('th', 'tn', new AbortController().signal)
     expect(seenOptions.env?.ANTHROPIC_API_KEY).toBeUndefined()
+    expect(seenOptions.env?.KUN_BROWSER_USE_BRIDGE_URL).toBeUndefined()
+    expect(seenOptions.env?.KUN_BROWSER_USE_BRIDGE_TOKEN).toBeUndefined()
+    expect(seenOptions.env?.KUN_BROWSER_USE_APPROVAL_SIGNING_KEY).toBeUndefined()
     expect(seenOptions.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe('sk-ant-oat01-tok')
   })
 
@@ -812,9 +822,13 @@ describe('AgentSdkRuntime.runTurn', () => {
   test('allows approved Bash but still gates SDK file paths in workspace-write', async () => {
     let canUseTool: SdkCanUseTool | undefined
     let permissionMode: unknown
+    let tools: unknown
+    let allowedTools: string[] | undefined
     const sdk = fakeSdk(STREAM, (opts) => {
       canUseTool = (opts as { canUseTool?: SdkCanUseTool }).canUseTool
       permissionMode = (opts as { permissionMode?: unknown }).permissionMode
+      tools = (opts as { tools?: unknown }).tools
+      allowedTools = (opts as { allowedTools?: string[] }).allowedTools
     })
     const { deps } = makeDeps({
       loadSdk: async () => sdk,
@@ -830,6 +844,8 @@ describe('AgentSdkRuntime.runTurn', () => {
     await new AgentSdkRuntime(deps).runTurn('th', 'tn', new AbortController().signal)
 
     expect(permissionMode).toBe('default')
+    expect(tools).toEqual(expect.arrayContaining(['Read', 'Write', 'Edit', 'Bash']))
+    expect(allowedTools).not.toEqual(expect.arrayContaining(['Read', 'Write', 'Edit', 'Bash']))
     expect(canUseTool).toBeDefined()
     await expect(canUseTool!('Bash', { command: 'pwd' })).resolves.toEqual({
       behavior: 'allow',

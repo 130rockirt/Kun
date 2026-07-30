@@ -157,9 +157,9 @@ class ScriptedGraphModel implements ModelClient {
     if (this.requests.length === 2) {
       yield {
         kind: 'tool_call_complete',
-        callId: 'graph_create_call',
-        toolName: 'graph_create_run',
-        arguments: {}
+        callId: 'graph_define_call',
+        toolName: 'graph_define_plan',
+        arguments: { plan: { tasks: [] } }
       }
       yield { kind: 'completed', stopReason: 'tool_calls' }
       return
@@ -179,8 +179,8 @@ class ScriptedInvalidGraphModel implements ModelClient {
     if (this.requests.length <= 2) {
       yield {
         kind: 'tool_call_complete',
-        callId: `graph_create_call_${this.requests.length}`,
-        toolName: 'graph_create_run',
+        callId: `graph_define_call_${this.requests.length}`,
+        toolName: 'graph_define_plan',
         arguments: this.requests.length === 1
           ? { plan: {} }
           : { plan: { valid: true } }
@@ -540,8 +540,8 @@ describe('AgentLoop interruption', () => {
       nowIso
     })
     const graphTool = LocalToolHost.defineTool({
-      name: 'graph_create_run',
-      description: 'Create a validated GraphRun.',
+      name: 'graph_define_plan',
+      description: 'Define and commit a validated Graph plan.',
       inputSchema: { type: 'object', additionalProperties: false },
       toolKind: 'tool_call',
       policy: 'auto',
@@ -609,19 +609,21 @@ describe('AgentLoop interruption', () => {
     expect(eventBus.snapshotSince('thr_graph_mode', 0)
       .some((event) => event.kind === 'error' && event.code === 'turn_step_limit')).toBe(false)
     expect(model.requests).toHaveLength(3)
-    expect(model.requests[0]?.requiredToolName).toBe('graph_create_run')
+    expect(model.requests[0]?.requiredToolName).toBeUndefined()
     expect(model.requests[0]?.modeInstruction).toContain('Graph Mode is active')
     expect(model.requests[0]?.modeInstruction).toContain(
       'You are the source Graph Lead: the original main agent'
     )
     expect(model.requests[0]?.modeInstruction).toContain('## Required operating loop')
-    expect(model.requests[0]?.tools.map((tool) => tool.name)).toEqual(['graph_create_run'])
-    expect(model.requests[1]?.requiredToolName).toBe('graph_create_run')
-    expect(model.requests[1]?.tools.map((tool) => tool.name)).toEqual(['graph_create_run'])
-    expect(model.requests[1]?.modeInstruction).toContain('Graph creation attempt 2/3')
+    expect(model.requests[0]?.tools.map((tool) => tool.name)).toEqual(['graph_define_plan'])
+    expect(model.requests[1]?.requiredToolName).toBeUndefined()
+    expect(model.requests[1]?.tools.map((tool) => tool.name)).toEqual(['graph_define_plan'])
+    expect(model.requests[1]?.contextInstructions).toEqual(expect.arrayContaining([
+      expect.stringContaining('did not call `graph_define_plan`')
+    ]))
     expect(model.requests[2]?.requiredToolName).toBeUndefined()
     expect(model.requests[2]?.tools.map((tool) => tool.name)).toEqual([
-      'graph_create_run',
+      'graph_define_plan',
       'graph_control_run',
       'graph_supervise_node'
     ])
@@ -629,7 +631,7 @@ describe('AgentLoop interruption', () => {
       'You are the source Graph Lead: the original main agent'
     )
     expect(model.requests[2]?.modeInstruction).toContain(
-      'Actively inspect live workers with graph_supervise_node'
+      'Use `graph_supervise_node overview`'
     )
     expect(model.requests[2]?.modeInstruction).toContain(
       'Do not treat dispatch or one milestone as completion'
@@ -637,7 +639,7 @@ describe('AgentLoop interruption', () => {
     expect(model.requests[2]?.history).toEqual(expect.arrayContaining([
       expect.objectContaining({
         kind: 'tool_result',
-        toolName: 'graph_create_run'
+        toolName: 'graph_define_plan'
       })
     ]))
 
@@ -699,7 +701,7 @@ describe('AgentLoop interruption', () => {
       .not.toContain('graph_create_run')
   })
 
-  it('persists failed Graph gate progress when the model cannot call tools', async () => {
+  it('parks the planning draft without a terminal error when the model cannot call tools', async () => {
     const sessionStore = new InMemorySessionStore()
     const threadStore = new InMemoryThreadStore()
     const eventBus = new InMemoryEventBus()
@@ -721,12 +723,26 @@ describe('AgentLoop interruption', () => {
       inflight,
       steering,
       compactor: new ContextCompactor(),
+      createGraphPlanningDraft: async () => ({
+        version: 1,
+        draftId: 'draft_unsupported',
+        reservedRunId: 'run_unsupported',
+        state: 'planning',
+        draftRevision: 1
+      }),
+      transitionGraphPlanningDraft: async ({ action }) => ({
+        version: 1,
+        draftId: 'draft_unsupported',
+        reservedRunId: 'run_unsupported',
+        state: action === 'suspend' ? 'needs_correction' : 'planning',
+        draftRevision: 2
+      }),
       ids,
       nowIso
     })
     const graphTool = LocalToolHost.defineTool({
-      name: 'graph_create_run',
-      description: 'Create a validated GraphRun.',
+      name: 'graph_define_plan',
+      description: 'Define and commit a validated Graph plan.',
       inputSchema: { type: 'object', additionalProperties: false },
       toolKind: 'tool_call',
       policy: 'auto',
@@ -773,25 +789,20 @@ describe('AgentLoop interruption', () => {
       }
     })
 
-    await expect(loop.runTurn(threadId, started.turnId)).resolves.toBe('failed')
-    expect(model.requests).toHaveLength(0)
+    await expect(loop.runTurn(threadId, started.turnId)).resolves.toBe('suspended')
+    expect(model.requests).toHaveLength(2)
+    expect(model.requests.every((request) => request.requiredToolName === undefined)).toBe(true)
+    expect(model.requests[1]?.contextInstructions).toEqual(expect.arrayContaining([
+      expect.stringContaining('did not call `graph_define_plan`')
+    ]))
     const turn = await turns.getTurn(threadId, started.turnId)
-    expect(turn?.requiredToolGate).toMatchObject({
-      toolName: 'graph_create_run',
-      attempt: 1,
-      maxAttempts: 3,
-      phase: 'failed'
+    expect(turn?.status).toBe('running')
+    expect(turn?.graphPlanningLifecycle).toMatchObject({
+      draftId: 'draft_unsupported',
+      state: 'needs_correction'
     })
     const recorded = await sessionStore.loadEventsSince(threadId, 0)
-    expect(recorded).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        kind: 'required_tool_gate',
-        toolName: 'graph_create_run',
-        phase: 'failed',
-        attempt: 1,
-        maxAttempts: 3
-      })
-    ]))
+    expect(recorded.some((event) => event.kind === 'error')).toBe(false)
   })
 
   it('recovers retryable invalid Graph creation through a single-tool correction round', async () => {
@@ -820,8 +831,8 @@ describe('AgentLoop interruption', () => {
       nowIso
     })
     const graphTool = LocalToolHost.defineTool({
-      name: 'graph_create_run',
-      description: 'Create a validated GraphRun.',
+      name: 'graph_define_plan',
+      description: 'Define and commit a validated Graph plan.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -844,11 +855,11 @@ describe('AgentLoop interruption', () => {
           ? { output: { run: { id: 'graph_run_1', status: 'running' } } }
           : {
               output: {
-                code: 'graph_create_run_schema_invalid',
+                code: 'graph_plan_invalid',
                 error: 'plan.valid is required',
                 issues: [{ path: ['plan', 'valid'], code: 'invalid_type', message: 'Required' }],
-                guidance: 'Correct the advertised schema.',
-                retryable: true
+                retryable: true,
+                draft: { status: 'repairing' }
               },
               isError: true
             }
@@ -898,21 +909,16 @@ describe('AgentLoop interruption', () => {
     await expect(loop.runTurn('thr_invalid_graph_mode', graphTurn.turnId))
       .resolves.toBe('completed')
     expect(model.requests).toHaveLength(3)
-    expect(model.requests[1]?.requiredToolName).toBe('graph_create_run')
-    expect(model.requests[1]?.tools.map((tool) => tool.name)).toEqual(['graph_create_run'])
-    expect(model.requests[1]?.modeInstruction).toContain('failed validation')
-    expect(model.requests[1]?.modeInstruction).toContain('structured issue path')
+    expect(model.requests[1]?.requiredToolName).toBeUndefined()
+    expect(model.requests[1]?.tools.map((tool) => tool.name)).toEqual(['graph_define_plan'])
+    expect(model.requests[1]?.modeInstruction).toContain('structured issues')
     expect(model.requests[1]?.modeInstruction).toContain('repository-relative paths')
-    expect(model.requests[1]?.modeInstruction).toContain(
-      'actual next tool arguments'
-    )
-    expect(model.requests[1]?.modeInstruction).toContain(
-      'merely say in prose that a field was fixed'
-    )
+    expect(model.requests[1]?.modeInstruction).toContain('actual next tool arguments')
+    expect(model.requests[1]?.modeInstruction).toContain('Explanatory prose')
     expect(model.requests[1]?.history).toEqual(expect.arrayContaining([
       expect.objectContaining({
         kind: 'tool_result',
-        toolName: 'graph_create_run',
+        toolName: 'graph_define_plan',
         isError: true,
         output: expect.objectContaining({ retryable: true })
       })

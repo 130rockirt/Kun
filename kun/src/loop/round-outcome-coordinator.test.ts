@@ -384,7 +384,7 @@ describe('RoundOutcomeCoordinator', () => {
 
     await expect(h.coordinator.resolve(input(completed({ text: 'Still no call.' }), base)))
       .resolves.toBe('failed')
-    expect(h.eventDrafts.at(-1)).toMatchObject({ code: 'graph_create_run_failed' })
+    expect(h.failures.at(-1)).toMatchObject({ code: 'graph_create_run_failed' })
   })
 
   it('bounds retryable invalid Graph creation and fails non-retryable errors immediately', async () => {
@@ -423,9 +423,9 @@ describe('RoundOutcomeCoordinator', () => {
     await expect(h.coordinator.resolve(invalidRound('call_invalid_1'))).resolves.toBe('continue')
     await expect(h.coordinator.resolve(invalidRound('call_invalid_2'))).resolves.toBe('continue')
     await expect(h.coordinator.resolve(invalidRound('call_invalid_3'))).resolves.toBe('failed')
-    expect(h.eventDrafts.at(-1)).toMatchObject({
+    expect(h.failures.at(-1)).toMatchObject({
       code: 'graph_create_run_failed',
-      message: expect.stringContaining('Graph turn could not start')
+      error: expect.stringContaining('Graph turn could not start')
     })
 
     const nonRetryable = harness({
@@ -440,14 +440,14 @@ describe('RoundOutcomeCoordinator', () => {
     })
     await expect(nonRetryable.coordinator.resolve(invalidRound('call_host_failure')))
       .resolves.toBe('failed')
-    expect(nonRetryable.eventDrafts.at(-1)).toMatchObject({
+    expect(nonRetryable.failures.at(-1)).toMatchObject({
       code: 'graph_create_run_failed',
-      message: expect.stringContaining('workspace identity unavailable')
+      error: expect.stringContaining('workspace identity unavailable')
     })
     expect(nonRetryable.coordinator.graphCreateRunRecoverySteps(turnId)).toBe(0)
   })
 
-  it('bounds Graph creation recovery and reports a Graph-specific terminal error', async () => {
+  it('bounds legacy Graph creation recovery and leaves terminal error ownership to TurnService', async () => {
     const h = harness()
     const round = input(completed({ text: 'Unable to start.' }), {
       requiredToolName: GRAPH_CREATE_RUN_TOOL_NAME,
@@ -466,13 +466,16 @@ describe('RoundOutcomeCoordinator', () => {
     }
     await expect(h.coordinator.resolve(round)).resolves.toBe('failed')
 
-    expect(h.effects.slice(-2)).toEqual(['event:error', 'item:error'])
-    expect(h.eventDrafts.at(-1)).toMatchObject({
+    expect(h.effects.at(-1)).toBe('event:required_tool_gate')
+    expect(h.effects).not.toContain('event:error')
+    expect(h.effects).not.toContain('item:error')
+    expect(h.failures.at(-1)).toMatchObject({
       code: 'graph_create_run_failed',
-      message: expect.stringContaining('Graph turn could not start')
+      error: expect.stringMatching(/Graph turn could not start.*graph_create_run/)
     })
-    expect(h.eventDrafts.at(-1)?.message).toContain('graph_create_run')
-    expect(h.eventDrafts.at(-1)?.message).not.toContain('Plan-mode')
+    expect(h.failures.at(-1)).not.toMatchObject({
+      error: expect.stringContaining('Plan-mode')
+    })
   })
 
   it('allows continuation and final-answer recovery before failing in event-then-item order', async () => {

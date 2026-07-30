@@ -470,6 +470,7 @@ function normalizeHistoricalEvent(event: RuntimeEvent): unknown {
       ...sanitized,
       kind: 'approval_resolved',
       status: 'expired',
+      approvalReviewer: event.approvalReviewer ?? 'user',
       reason: 'Approval expired during migration export.'
     }
   }

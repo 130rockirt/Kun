@@ -29,6 +29,7 @@ export type CoreThreadSummaryJson = {
   status: CoreThreadStatus
   approvalPolicy?: string
   sandboxMode?: string
+  approvalReviewer?: string
   modelRequestCaptureEnabled?: boolean
   pinned?: boolean
   providerId?: string
@@ -280,6 +281,7 @@ export type CoreRuntimeInfoJson = {
   model?: string
   approvalPolicy?: string
   sandboxMode?: string
+  approvalReviewer?: string
   tokenEconomyMode?: boolean
   insecure?: boolean
   startedAt: string
@@ -487,6 +489,8 @@ export type CoreTurnItemJson = {
   output?: unknown
   isError?: boolean
   approvalId?: string
+  approvalReviewer?: 'user' | 'agent'
+  decisionSource?: 'user' | 'agent'
   inputId?: string
   prompt?: string
   questions?: Array<{
@@ -669,14 +673,20 @@ export type CoreRuntimeEventJson = {
   itemId?: string
   item?: CoreTurnItemJson
   approvalId?: string
+  reviewId?: string
   approvalPolicy?: string
   sandboxMode?: string
+  approvalReviewer?: string
+  decisionSource?: 'user' | 'agent'
+  reviewer?: 'agent' | 'user'
   toolName?: string
   callId?: string
   readyCount?: number
   toolResultCount?: number
   /** Durable Graph domain event projected through the existing thread SSE. */
   graph?: unknown
+  /** Durable pre-run Graph planning lifecycle projected through thread SSE. */
+  planning?: unknown
   attempt?: number
   maxAttempts?: number
   delayMs?: number
@@ -739,6 +749,9 @@ export type CoreRuntimeEventJson = {
   details?: unknown
   summary?: string
   reason?: string
+  decision?: 'allow' | 'deny'
+  riskLevel?: 'low' | 'medium' | 'high' | 'critical'
+  rationale?: string
   prompt?: string
   inputId?: string
   questions?: Array<{

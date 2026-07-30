@@ -1871,6 +1871,63 @@ function MessageBubbleImpl({
       />
     )
   }
+  if (block.kind === 'approval_review') {
+    const statusLabel =
+      block.status === 'approved'
+        ? t('approvalReviewApproved')
+        : block.status === 'denied'
+          ? t('approvalReviewDenied')
+          : block.status === 'timed-out'
+            ? t('approvalReviewTimedOut')
+            : block.status === 'failed-closed'
+              ? t('approvalReviewFailedClosed')
+              : block.status === 'aborted'
+                ? t('approvalReviewAborted')
+                : t('approvalReviewInProgress')
+    const errorTone =
+      block.status === 'denied' ||
+      block.status === 'timed-out' ||
+      block.status === 'failed-closed' ||
+      block.status === 'aborted'
+    return (
+      <div
+        className={`rounded-[20px] border px-4 py-3 text-[13px] leading-6 shadow-[0_12px_30px_rgba(86,103,136,0.04)] ${
+          errorTone
+            ? 'border-amber-300/80 bg-amber-500/10 dark:border-amber-800/60 dark:bg-amber-950/30'
+            : block.status === 'approved'
+              ? 'border-emerald-300/70 bg-emerald-500/10 dark:border-emerald-800/60 dark:bg-emerald-950/25'
+              : 'border-accent/35 bg-[linear-gradient(180deg,rgba(79,124,255,0.07),rgba(79,124,255,0.11))] text-ds-ink'
+        }`}
+        aria-live="polite"
+      >
+        <div className="flex items-center gap-2 font-semibold text-ds-ink">
+          {block.status === 'in-progress' ? (
+            <Loader2 className="h-4 w-4 animate-spin text-accent" aria-hidden="true" />
+          ) : (
+            <Check className="h-4 w-4 text-accent" aria-hidden="true" />
+          )}
+          <span>{t('approvalReviewTitle')}</span>
+        </div>
+        {block.toolName ? (
+          <div className="mt-1 text-[12px] text-ds-muted">
+            {t('approvalTool', { name: block.toolName })}
+          </div>
+        ) : null}
+        <p className="mt-1 whitespace-pre-wrap text-[13.5px] text-ds-ink">{block.summary}</p>
+        <p className="mt-2 text-[12px] font-medium text-ds-muted">{statusLabel}</p>
+        {block.riskLevel ? (
+          <p className="mt-1 text-[12px] text-ds-muted">
+            {t('approvalReviewRisk', { risk: block.riskLevel })}
+          </p>
+        ) : null}
+        {block.rationale ? (
+          <p className="mt-1 whitespace-pre-wrap text-[12.5px] text-ds-muted">
+            {t('approvalReviewRationale', { rationale: block.rationale })}
+          </p>
+        ) : null}
+      </div>
+    )
+  }
   if (block.kind === 'approval') {
     const submitting = block.status === 'submitting'
     const done = !allowThreadActions || (block.status !== 'pending' && !submitting)

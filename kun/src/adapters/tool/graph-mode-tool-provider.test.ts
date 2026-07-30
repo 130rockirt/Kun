@@ -34,6 +34,13 @@ function context(
   }
 }
 
+function planningDeps() {
+  return {
+    drafts: {} as never,
+    events: { record: vi.fn() } as never
+  }
+}
+
 describe('Graph Mode tool visibility boundaries', () => {
   it('advertises the lightweight Graph intent schema without durable host fields', () => {
     const properties = GRAPH_CREATE_RUN_INPUT_JSON_SCHEMA.properties as Record<string, unknown>
@@ -101,6 +108,7 @@ describe('Graph Mode tool visibility boundaries', () => {
       }
     })
     const tools = buildGraphModeLocalTools({
+      ...planningDeps(),
       control: {
         allocateId: () => 'graph_run_1',
         create
@@ -235,6 +243,7 @@ describe('Graph Mode tool visibility boundaries', () => {
       validation: { valid: true }
     }))
     const tools = buildGraphModeLocalTools({
+      ...planningDeps(),
       control: {
         allocateId: () => 'graph_run_intent',
         create
@@ -320,6 +329,7 @@ describe('Graph Mode tool visibility boundaries', () => {
       validation: { valid: true }
     }))
     const tools = buildGraphModeLocalTools({
+      ...planningDeps(),
       control: {
         allocateId: () => 'graph_run_shape',
         create
@@ -427,6 +437,7 @@ describe('Graph Mode tool visibility boundaries', () => {
 
   it('returns structured retryable issues for guessed or host-owned fields', async () => {
     const tools = buildGraphModeLocalTools({
+      ...planningDeps(),
       control: {} as never,
       store: {} as never,
       mailbox: {} as never,
@@ -492,6 +503,7 @@ describe('Graph Mode tool visibility boundaries', () => {
       normalizedEdgeCount: 2
     })
     const validationTools = buildGraphModeLocalTools({
+      ...planningDeps(),
       control: {
         allocateId: () => 'graph_run_1',
         create: async () => {
@@ -523,6 +535,7 @@ describe('Graph Mode tool visibility boundaries', () => {
     })
 
     const hostFailureTools = buildGraphModeLocalTools({
+      ...planningDeps(),
       control: {} as never,
       store: {} as never,
       mailbox: {} as never,
@@ -556,6 +569,7 @@ describe('Graph Mode tool visibility boundaries', () => {
       attemptId: 'attempt_1'
     })
     const tools = buildGraphModeLocalTools({
+      ...planningDeps(),
       control: {} as never,
       store: {} as never,
       mailbox: {} as never,
@@ -565,7 +579,7 @@ describe('Graph Mode tool visibility boundaries', () => {
       enabled: () => true
     })
     const leadNames = new Set([
-      'graph_create_run',
+      'graph_define_plan',
       'graph_control_run',
       'graph_patch_run',
       'graph_review_node',
@@ -577,7 +591,7 @@ describe('Graph Mode tool visibility boundaries', () => {
         leadNames.has(tool.name)
       )
       expect(tool.shouldAdvertise?.(context('runtime_thread', 'direct', 'graph_runtime'))).toBe(
-        leadNames.has(tool.name) && tool.name !== 'graph_create_run'
+        leadNames.has(tool.name) && tool.name !== 'graph_define_plan'
       )
       expect(tool.shouldAdvertise?.(context('worker_thread', 'graph'))).toBe(
         tool.name === 'report_to_parent'
@@ -587,6 +601,7 @@ describe('Graph Mode tool visibility boundaries', () => {
 
   it('safe-disable hides every Graph tool without losing durable state', () => {
     const tools = buildGraphModeLocalTools({
+      ...planningDeps(),
       control: {} as never,
       store: {} as never,
       mailbox: {} as never,
@@ -611,6 +626,7 @@ describe('Graph Mode tool visibility boundaries', () => {
       })
     ])
     const tools = buildGraphModeLocalTools({
+      ...planningDeps(),
       control: {
         get: async () => run
       } as never,

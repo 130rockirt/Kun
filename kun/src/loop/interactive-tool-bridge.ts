@@ -2,6 +2,7 @@ import type { TurnItem } from '../contracts/items.js'
 import { makeUserInputItem } from '../domain/item.js'
 import type { ApprovalRequest, ApprovalResolution } from '../domain/approval.js'
 import type { ApprovalGate } from '../ports/approval-gate.js'
+import type { ApprovalReviewPort } from '../ports/approval-review.js'
 import type { SessionStore } from '../ports/session-store.js'
 import type { ToolHostContext } from '../ports/tool-host.js'
 import type {
@@ -20,11 +21,15 @@ export type InteractiveToolBridgeDeps = {
   turns: TurnService
   sessionStore: SessionStore
   nowIso: () => string
+  approvalReview?: ApprovalReviewPort
 }
 
 export type AwaitToolApprovalInput = {
   approval: ApprovalRequest
   approvalPolicy: ToolHostContext['approvalPolicy']
+  approvalReviewer?: NonNullable<ToolHostContext['approvalReviewer']>
+  actingModelRoute?: ToolHostContext['actingModelRoute']
+  intent?: string
   sandboxMode: NonNullable<ToolHostContext['sandboxMode']>
   signal: AbortSignal
 }
@@ -47,6 +52,28 @@ export class InteractiveToolBridge {
   async awaitApproval(
     input: AwaitToolApprovalInput
   ): Promise<'allow' | 'deny' | ApprovalResolution> {
+    if (
+      input.approvalPolicy === 'auto' &&
+      input.sandboxMode === 'danger-full-access'
+    ) {
+      return { decision: 'allow', reviewer: 'user' }
+    }
+    if (input.approvalReviewer === 'agent') {
+      if (!this.deps.approvalReview) {
+        return {
+          decision: 'deny',
+          reviewer: 'agent',
+          reason: 'Automatic review is unavailable; the action was denied fail closed.',
+          reviewStatus: 'failed-closed'
+        }
+      }
+      return this.deps.approvalReview.review({
+        approval: input.approval,
+        route: input.actingModelRoute,
+        intent: input.intent,
+        signal: input.signal
+      })
+    }
     const pending = this.deps.approvalGate.request(input.approval)
     return new Promise<ApprovalResolution>((resolve, reject) => {
       let settled = false
@@ -64,7 +91,9 @@ export class InteractiveToolBridge {
             approvalId: input.approval.id,
             toolName: input.approval.toolName,
             status: 'expired',
+            approvalReviewer: 'user',
             summary: input.approval.summary,
+            ...(input.approval.action ? { action: input.approval.action } : {}),
             ...(current.reason ? { reason: current.reason } : {})
           })
         }).catch(() => undefined)
@@ -92,8 +121,10 @@ export class InteractiveToolBridge {
         toolName: input.approval.toolName,
         status: 'pending',
         approvalPolicy: input.approvalPolicy,
+        approvalReviewer: 'user',
         sandboxMode: input.sandboxMode,
-        summary: input.approval.summary
+        summary: input.approval.summary,
+        ...(input.approval.action ? { action: input.approval.action } : {})
       })
 
       if (input.signal.aborted) {
@@ -111,6 +142,7 @@ export class InteractiveToolBridge {
               const resolved = this.deps.approvalGate.get(input.approval.id)
               resolve({
                 decision,
+                reviewer: 'user',
                 ...(resolved?.reason ? { reason: resolved.reason } : {})
               })
             },

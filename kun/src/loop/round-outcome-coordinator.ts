@@ -7,6 +7,7 @@ import type { ToolCallLike, ToolProviderKind } from '../ports/tool-host.js'
 import type { RuntimeEventRecorder } from '../services/runtime-event-recorder.js'
 import type { TurnService } from '../services/turn-service.js'
 import { CREATE_PLAN_TOOL_NAME } from '../adapters/tool/create-plan-tool.js'
+import { GRAPH_DEFINE_PLAN_TOOL_NAME } from '../adapters/tool/graph-define-plan-tool.js'
 import {
   DESIGN_SVG_ANIMATE_TOOL_NAME,
   DESIGN_SVG_EDIT_TOOL_NAME,
@@ -91,6 +92,7 @@ export class RoundOutcomeCoordinator {
   private readonly emptyPostToolRecoveryStepsByTurn = new Map<string, number>()
   private readonly svgCompletionRecoveryStepsByTurn = new Map<string, number>()
   private readonly graphCreateRunRecoveryByTurn = new Map<string, GraphCreateRunRecoveryState>()
+  private readonly graphPlanNoToolRecoveryByTurn = new Map<string, number>()
 
   constructor(private readonly deps: RoundOutcomeCoordinatorDeps) {}
 
@@ -114,12 +116,17 @@ export class RoundOutcomeCoordinator {
     return this.graphCreateRunRecoveryByTurn.get(turnId)?.reason
   }
 
+  graphPlanNoToolRecoverySteps(turnId: string): number {
+    return this.graphPlanNoToolRecoveryByTurn.get(turnId) ?? 0
+  }
+
   clearTurn(turnId: string): void {
     this.lastNoToolTextByTurn.delete(turnId)
     this.goalNoToolRecoveryStepsByTurn.delete(turnId)
     this.emptyPostToolRecoveryStepsByTurn.delete(turnId)
     this.svgCompletionRecoveryStepsByTurn.delete(turnId)
     this.graphCreateRunRecoveryByTurn.delete(turnId)
+    this.graphPlanNoToolRecoveryByTurn.delete(turnId)
   }
 
   async resolve(input: RoundOutcomeInput): Promise<ModelRoundOutcome> {
@@ -191,6 +198,54 @@ export class RoundOutcomeCoordinator {
     if (input.requiredToolName === GRAPH_CREATE_RUN_TOOL_NAME && graphCreateCalls.length > 0) {
       return this.resolveDispatchedGraphCreate(input, graphCreateCalls)
     }
+    const graphDefineCalls = dispatchableToolCalls.filter(
+      (call) => call.toolName === GRAPH_DEFINE_PLAN_TOOL_NAME
+    )
+    if (graphDefineCalls.length > 0) {
+      const callIds = new Set(graphDefineCalls.map((call) => call.callId))
+      const latestItems = await this.deps.sessionStore.loadItems(input.threadId)
+      const results = latestItems.filter((item): item is ToolResultTurnItem =>
+        item.turnId === input.turnId &&
+        item.kind === 'tool_result' &&
+        item.toolName === GRAPH_DEFINE_PLAN_TOOL_NAME &&
+        callIds.has(item.callId))
+      const paused = results.some((result) => {
+        const output = result.output
+        if (!output || typeof output !== 'object') return false
+        const record = output as Record<string, unknown>
+        const draft = record.draft
+        const state = draft && typeof draft === 'object'
+          ? (draft as Record<string, unknown>).status
+          : undefined
+        return record.retryable === false && state === 'needs_correction'
+      })
+      if (paused) return 'stop'
+      const hostError = results.find((result) => {
+        if (!result.output || typeof result.output !== 'object') return false
+        const output = result.output as Record<string, unknown>
+        const draft = output.draft
+        const state = draft && typeof draft === 'object'
+          ? (draft as Record<string, unknown>).status
+          : undefined
+        return output.code === 'graph_planning_host_error' || state === 'host_error'
+      })
+      if (hostError) {
+        const output = hostError.output as Record<string, unknown>
+        const message = typeof output.error === 'string'
+          ? output.error
+          : 'Graph planning stopped because the host could not persist or commit the draft.'
+        this.deps.rememberFailure(input.turnId, {
+          error: message,
+          code: 'graph_planning_host_error',
+          details: output,
+          severity: 'error'
+        })
+        return 'failed'
+      }
+      if (results.some((result) => result.isError !== true)) {
+        this.graphPlanNoToolRecoveryByTurn.delete(input.turnId)
+      }
+    }
     if (dispatched === 'all_suppressed') {
       if (input.prepared.dedicatedSvgTurn) {
         const latestItems = await this.deps.sessionStore.loadItems(input.threadId)
@@ -223,6 +278,15 @@ export class RoundOutcomeCoordinator {
     input: RoundOutcomeInput,
     assistantText: string
   ): Promise<ModelRoundOutcome> {
+    if (input.softRequiredToolName === GRAPH_DEFINE_PLAN_TOOL_NAME) {
+      if (assistantText.trim() && isPlanClarifyingQuestion(assistantText)) return 'stop'
+      const attempts = this.graphPlanNoToolRecoveryByTurn.get(input.turnId) ?? 0
+      if (attempts === 0) {
+        this.graphPlanNoToolRecoveryByTurn.set(input.turnId, 1)
+        return 'continue'
+      }
+      return 'stop'
+    }
     if (input.softRequiredToolName === CREATE_PLAN_TOOL_NAME && assistantText.trim()) {
       // Ambiguous plan requests may legitimately require a user clarification;
       // do not turn that question into a bogus plan artifact.
@@ -411,27 +475,6 @@ export class RoundOutcomeCoordinator {
       ...(details === undefined ? {} : { details }),
       severity: 'error'
     })
-    await this.deps.events.record({
-      kind: 'error',
-      threadId: input.threadId,
-      turnId: input.turnId,
-      message,
-      code,
-      ...(details === undefined ? {} : { details }),
-      severity: 'error'
-    })
-    await this.deps.turns.applyItem(
-      input.threadId,
-      makeErrorItem({
-        id: this.deps.ids.next('item_error'),
-        turnId: input.turnId,
-        threadId: input.threadId,
-        message,
-        code,
-        ...(details === undefined ? {} : { details }),
-        severity: 'error'
-      })
-    )
     return 'failed'
   }
 
@@ -699,6 +742,8 @@ export class RoundOutcomeCoordinator {
       agentSurface: input.turn.agentSurface ?? 'code',
       guiDesignArtifact: input.turn.guiDesignArtifact,
       modelProviderId: input.modelProviderId,
+      actingModelRoute: prepared.actingModelRoute,
+      approvalIntent: input.turn.prompt,
       reasoningEffort: input.modelReasoningEffort,
       modelCapabilities: prepared.modelCapabilities,
       ...(input.sourceResultBudgetTokens !== undefined
@@ -709,6 +754,7 @@ export class RoundOutcomeCoordinator {
       extensionToolCatalogEpoch: prepared.extensionToolCatalogEpoch,
       toolProviderKinds: input.toolProviderKinds,
       approvalPolicy: prepared.approvalPolicy,
+      approvalReviewer: prepared.approvalReviewer,
       sandboxMode: prepared.sandboxMode,
       signal: prepared.signal
     }

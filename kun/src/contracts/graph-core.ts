@@ -1,6 +1,11 @@
 import { z } from 'zod'
 import { ModelReasoningEffort, SubagentToolPolicy } from './capabilities.js'
-import { ApprovalPolicySchema, SandboxModeSchema } from './policy.js'
+import {
+  ApprovalPolicySchema,
+  ApprovalReviewerSchema,
+  DEFAULT_APPROVAL_REVIEWER,
+  SandboxModeSchema
+} from './policy.js'
 import { GraphRelativePathSchema } from './graph-path.js'
 import {
   GraphBudgetLedgerV1Schema,
@@ -266,6 +271,7 @@ const GraphAssignmentSnapshotV1CompatibilitySchema = z.object({
   systemPrompt: BoundedText,
   model: z.string().trim().min(1).max(256),
   providerId: z.string().trim().min(1).max(128),
+  accountId: z.string().trim().min(1).max(256).optional(),
   allowedModelProviderIds: z.array(Identifier).min(1).max(128),
   allowedModels: z.array(z.string().trim().min(1).max(256)).min(1).max(256),
   allowedProviderIds: z.array(GraphToolProviderIdSchema).max(128),
@@ -279,6 +285,7 @@ const GraphAssignmentSnapshotV1CompatibilitySchema = z.object({
   blockedMcpServers: z.array(Identifier).max(128),
   approvalPolicy: ApprovalPolicySchema,
   sandboxMode: SandboxModeSchema,
+  approvalReviewer: ApprovalReviewerSchema.default(DEFAULT_APPROVAL_REVIEWER),
   workspaceRoot: z.string().min(1).max(4_096),
   readScopes: z.array(RelativePath).max(1_000),
   writeScopes: z.array(RelativePath).max(1_000),

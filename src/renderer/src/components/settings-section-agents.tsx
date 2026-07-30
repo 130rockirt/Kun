@@ -36,10 +36,8 @@ import {
   Ban,
   Bot,
   Check,
-  Eye,
   FlaskConical,
   FolderOpen,
-  FolderPen,
   Globe2,
   Hand,
   Loader2,
@@ -50,7 +48,6 @@ import {
   RotateCcw,
   Settings,
   ShieldCheck,
-  ShieldQuestion,
   Sparkles,
   Trash2,
   Workflow,
@@ -88,6 +85,7 @@ import {
   DesignQualitySettingsPanel
 } from './settings-section-agent-panels'
 import { GraphModeSettingsPanel } from './settings-section-graph-panel'
+import { runTrustedUserActivation } from '../extensions/protected-user-activation'
 
 export { modelProvidersSettingsPatch } from './settings-section-providers'
 
@@ -116,44 +114,23 @@ const TOOL_PERMISSION_OPTIONS: Array<{
   iconClass: string
 }> = [
   {
-    value: 'always-ask',
-    labelKey: 'toolPermissionAlwaysAsk',
-    descriptionKey: 'toolPermissionAlwaysAskDesc',
+    value: 'ask-for-approval',
+    labelKey: 'toolPermissionAskForApproval',
+    descriptionKey: 'toolPermissionAskForApprovalDesc',
     Icon: Hand,
     iconClass: 'border-sky-400/30 bg-sky-500/10 text-sky-700 dark:text-sky-200'
   },
   {
-    value: 'read-only',
-    labelKey: 'toolPermissionReadOnly',
-    descriptionKey: 'toolPermissionReadOnlyDesc',
-    Icon: Eye,
-    iconClass: 'border-emerald-400/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-200'
-  },
-  {
-    value: 'sensitive-ask',
-    labelKey: 'toolPermissionSensitiveAsk',
-    descriptionKey: 'toolPermissionSensitiveAskDesc',
-    Icon: ShieldQuestion,
-    iconClass: 'border-amber-400/35 bg-amber-500/10 text-amber-700 dark:text-amber-200'
-  },
-  {
-    value: 'workspace-write',
-    labelKey: 'toolPermissionWorkspaceWrite',
-    descriptionKey: 'toolPermissionWorkspaceWriteDesc',
-    Icon: FolderPen,
-    iconClass: 'border-indigo-400/30 bg-indigo-500/10 text-indigo-700 dark:text-indigo-200'
-  },
-  {
-    value: 'trusted-workspace',
-    labelKey: 'toolPermissionTrustedWorkspace',
-    descriptionKey: 'toolPermissionTrustedWorkspaceDesc',
-    Icon: ShieldCheck,
+    value: 'approve-for-me',
+    labelKey: 'toolPermissionApproveForMe',
+    descriptionKey: 'toolPermissionApproveForMeDesc',
+    Icon: Bot,
     iconClass: 'border-teal-400/30 bg-teal-500/10 text-teal-700 dark:text-teal-200'
   },
   {
-    value: 'bypass',
-    labelKey: 'toolPermissionBypass',
-    descriptionKey: 'toolPermissionBypassDesc',
+    value: 'full-access',
+    labelKey: 'toolPermissionFullAccess',
+    descriptionKey: 'toolPermissionFullAccessDesc',
     Icon: LockKeyholeOpen,
     iconClass: 'border-orange-400/35 bg-orange-500/10 text-orange-700 dark:text-orange-200'
   }
@@ -843,7 +820,7 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
                           <div
                             role="radiogroup"
                             aria-label={t('toolPermissionMode')}
-                            className="grid gap-2 sm:grid-cols-2"
+                            className="grid gap-2 lg:grid-cols-3"
                           >
                             {TOOL_PERMISSION_OPTIONS.map((option) => {
                               const selected = toolPermissionMode === option.value
@@ -854,7 +831,10 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
                                   type="button"
                                   role="radio"
                                   aria-checked={selected}
-                                  onClick={() => updateKun(kunToolPermissionModeSettings(option.value))}
+                                  onClick={(event) => runTrustedUserActivation(
+                                    event,
+                                    () => updateKun(kunToolPermissionModeSettings(option.value))
+                                  )}
                                   className={`min-h-[72px] rounded-lg border px-3 py-2.5 text-left transition ${
                                     selected
                                       ? 'border-accent/55 bg-accent/10 text-ds-ink'

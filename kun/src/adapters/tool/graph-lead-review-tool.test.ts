@@ -87,6 +87,8 @@ function reviewTools(
   nextId: (prefix: string) => string = (prefix) => `${prefix}_1`
 ) {
   return buildGraphModeLocalTools({
+    drafts: {} as never,
+    events: { record: vi.fn() } as never,
     control: { recordReview } as never,
     store: { get: async () => run } as never,
     mailbox: {} as never,

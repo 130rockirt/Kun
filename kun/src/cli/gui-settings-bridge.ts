@@ -25,8 +25,10 @@ import {
   type ModelConnectionSnapshot
 } from '../contracts/model-connections.js'
 import {
+  ApprovalReviewerSchema,
   ApprovalPolicySchema,
   SandboxModeSchema,
+  type ApprovalReviewer,
   type ApprovalPolicy,
   type SandboxMode
 } from '../contracts/policy.js'
@@ -82,7 +84,8 @@ const GuiSharedSettingsSchema = z.object({
       port: z.number().int().min(1).max(65_535).default(18899),
       runtimeToken: z.string().max(64 * 1024).default(''),
       approvalPolicy: ApprovalPolicySchema.optional(),
-      sandboxMode: SandboxModeSchema.optional()
+      sandboxMode: SandboxModeSchema.optional(),
+      approvalReviewer: ApprovalReviewerSchema.optional()
     })
   })
 })
@@ -98,6 +101,7 @@ export type GuiSharedSettings = {
   defaultProviderId: string
   defaultApprovalPolicy?: ApprovalPolicy
   defaultSandboxMode?: SandboxMode
+  defaultApprovalReviewer?: ApprovalReviewer
   providers: GuiProviderCatalog[]
   /** Used only to detect an older GUI runtime that has no discovery record. */
   legacyRuntimePort: number
@@ -162,6 +166,9 @@ export async function readGuiSharedSettings(input: {
         : {}),
       ...(parsed.data.agents.kun.sandboxMode
         ? { defaultSandboxMode: parsed.data.agents.kun.sandboxMode }
+        : {}),
+      ...(parsed.data.agents.kun.approvalReviewer
+        ? { defaultApprovalReviewer: parsed.data.agents.kun.approvalReviewer }
         : {}),
       legacyRuntimePort: parsed.data.agents.kun.port,
       legacyRuntimeToken: parsed.data.agents.kun.runtimeToken,
@@ -621,6 +628,9 @@ export async function syncGuiProviderCatalogToConfig(
       : {}),
     ...(settings.defaultSandboxMode
       ? { sandboxMode: settings.defaultSandboxMode }
+      : {}),
+    ...(settings.defaultApprovalReviewer
+      ? { approvalReviewer: settings.defaultApprovalReviewer }
       : {}),
     ...(options.authoritative ? { providers: {}, credentialSourceId: undefined } : {}),
     ...(options.stripCredentials ? { apiKey: '' } : {}),

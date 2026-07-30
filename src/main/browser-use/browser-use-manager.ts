@@ -19,6 +19,8 @@ import {
   BrowserUseActionInput,
   BrowserUseToolResult,
   type BrowserUseActionInput as BrowserUseAction,
+  type BrowserUseKunApprovalGrant,
+  type BrowserUseKunApprovalMode,
   type BrowserUseSnapshot,
   type BrowserUseSnapshotNode,
   type BrowserUseToolResult as BrowserUseResult
@@ -174,6 +176,10 @@ type BrowserSessionEntry = {
   idleTimer?: ReturnType<typeof setTimeout>
   stopping: boolean
   agentInputDispatchActive: boolean
+  kunApprovalMode?: {
+    mode: BrowserUseKunApprovalMode
+    turnId: string
+  }
 }
 
 type AxValue = {
@@ -229,7 +235,9 @@ export class BrowserUseManager {
     threadId: string,
     turnId: string,
     input: unknown,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    kunApprovalGrant?: BrowserUseKunApprovalGrant,
+    kunApprovalMode?: BrowserUseKunApprovalMode
   ): Promise<BrowserUseResult> {
     const parsed = BrowserUseActionInput.safeParse(input)
     if (!parsed.success) {
@@ -241,8 +249,15 @@ export class BrowserUseManager {
     }
 
     const action = parsed.data
+    // Full access bypasses only Kun's reviewer. It is deliberately not a
+    // substitute for Browser Main's origin/action consent policy.
+    const kunHostApprovalSource = kunApprovalGrant?.source === 'full-access'
+      ? undefined
+      : kunApprovalGrant?.source
     if (action.action === 'open') {
       const entry = this.sessions.get(threadId) ?? this.createSession(threadId, settings)
+      entry.activeTurnId = turnId
+      this.rememberKunApprovalMode(entry, turnId, kunApprovalMode, kunApprovalGrant)
       if (entry.stopping) {
         return resultError(
           'session_stopped',
@@ -252,7 +267,11 @@ export class BrowserUseManager {
       }
       const budgetError = this.consumeBudget(entry, turnId, 'observation', settings)
       if (budgetError) return budgetError
-      return this.withAbort(entry, signal, () => this.open(entry, action.url))
+      return this.withAbort(
+        entry,
+        signal,
+        () => this.open(entry, action.url, kunHostApprovalSource)
+      )
     }
 
     const entry = this.sessions.get(threadId)
@@ -273,6 +292,9 @@ export class BrowserUseManager {
     }
 
     const interaction = isInteractionAction(action)
+    if (interaction) {
+      this.rememberKunApprovalMode(entry, turnId, kunApprovalMode, kunApprovalGrant)
+    }
     const budgetError = this.consumeBudget(
       entry,
       turnId,
@@ -298,7 +320,7 @@ export class BrowserUseManager {
         case 'type':
         case 'select':
         case 'press':
-          return this.interact(entry, action)
+          return this.interact(entry, action, kunHostApprovalSource)
         case 'scroll':
           return this.scroll(entry, action.direction, action.amount)
         case 'wait':
@@ -543,7 +565,11 @@ export class BrowserUseManager {
     return entry
   }
 
-  private async open(entry: BrowserSessionEntry, rawUrl: string): Promise<BrowserUseResult> {
+  private async open(
+    entry: BrowserSessionEntry,
+    rawUrl: string,
+    kunApprovalSource?: Exclude<BrowserUseKunApprovalMode, 'full-access'>
+  ): Promise<BrowserUseResult> {
     let origin: string
     try {
       origin = normalizeBrowserUseOrigin(rawUrl, entry.mode)
@@ -552,7 +578,7 @@ export class BrowserUseManager {
       return resultError(code, errorMessage(error), entry)
     }
 
-    if (!(await this.ensureOriginGrant(entry, origin, rawUrl))) {
+    if (!(await this.ensureOriginGrant(entry, origin, rawUrl, kunApprovalSource))) {
       return resultError('origin_denied', 'The exact origin was not granted for this session.', entry)
     }
     try {
@@ -888,7 +914,8 @@ export class BrowserUseManager {
 
   private async interact(
     entry: BrowserSessionEntry,
-    action: Extract<BrowserUseAction, { action: 'click' | 'type' | 'select' | 'press' }>
+    action: Extract<BrowserUseAction, { action: 'click' | 'type' | 'select' | 'press' }>,
+    kunApprovalSource?: Exclude<BrowserUseKunApprovalMode, 'full-access'>
   ): Promise<BrowserUseResult> {
     const tab = this.requireActiveTab(entry)
     const target = entry.refs.get(action.ref)
@@ -900,12 +927,49 @@ export class BrowserUseManager {
         tab.id
       )
     }
+    const snapshotUrl = tab.view.webContents.getURL()
+    const liveOrigin = safeOrigin(snapshotUrl) ?? ''
+    const liveSanitizedUrl = sanitizeBrowserUseUrl(snapshotUrl)
+    if (
+      action.expectedTarget.sessionId !== entry.id ||
+      action.expectedTarget.tabId !== tab.id ||
+      action.expectedTarget.documentGeneration !== entry.documentGeneration ||
+      action.expectedTarget.origin !== liveOrigin ||
+      action.expectedTarget.sanitizedUrl !== liveSanitizedUrl ||
+      action.expectedTarget.role !== target.role ||
+      action.expectedTarget.name !== target.name
+    ) {
+      return resultError(
+        'target_binding_mismatch',
+        'The expected Browser Use target does not match the referenced snapshot target.',
+        entry,
+        tab.id
+      )
+    }
     const current = await this.liveTarget(entry, tab, target)
     if (!current || current.fingerprint !== target.fingerprint) {
       this.invalidateDocument(entry, 'target-changed')
       return resultError(
         'stale_reference',
         'The live target changed. Take a new snapshot before trying again.',
+        entry,
+        tab.id
+      )
+    }
+    const currentUrl = tab.view.webContents.getURL()
+    if (
+      action.expectedTarget.sessionId !== entry.id ||
+      action.expectedTarget.tabId !== tab.id ||
+      action.expectedTarget.documentGeneration !== entry.documentGeneration ||
+      action.expectedTarget.origin !== (safeOrigin(currentUrl) ?? '') ||
+      action.expectedTarget.sanitizedUrl !== sanitizeBrowserUseUrl(currentUrl) ||
+      action.expectedTarget.role !== current.role ||
+      action.expectedTarget.name !== current.name
+    ) {
+      this.invalidateDocument(entry, 'target-binding-changed')
+      return resultError(
+        'target_binding_mismatch',
+        'The live Browser Use target changed from the reviewer-visible binding.',
         entry,
         tab.id
       )
@@ -930,8 +994,10 @@ export class BrowserUseManager {
     entry.prepared.set(prepared.id, prepared)
     const risk = action.action === 'type' ? 'text-entry' : 'interaction'
     const settings = this.options.settings()
-    const requiresConsent = settings.approvalMode === 'always-ask' ||
+    const requiresConsent = !kunApprovalSource && (
+      settings.approvalMode === 'always-ask' ||
       entry.mode === 'local-development'
+    )
     if (requiresConsent) {
       if (!(await this.ensureSupervised(entry))) {
         entry.prepared.delete(prepared.id)
@@ -992,7 +1058,9 @@ export class BrowserUseManager {
     } else {
       this.audit(entry, {
         category: 'action-consent',
-        action: `auto-${action.action}`,
+        action: kunApprovalSource
+          ? `kun-${kunApprovalSource}-${action.action}`
+          : `auto-${action.action}`,
         origin: prepared.origin,
         risk,
         decision: 'allowed',
@@ -1038,15 +1106,47 @@ export class BrowserUseManager {
     if (prepared.used || now > prepared.expiresAt || entry.prepared.get(prepared.id) !== prepared) {
       return { ok: false, code: 'prepared_action_expired', message: 'Prepared action expired or was already used.' }
     }
+    const expectedTarget = prepared.action.expectedTarget
+    const currentUrl = tab.view.webContents.getURL()
     if (
+      expectedTarget.sessionId !== entry.id ||
+      expectedTarget.tabId !== tab.id ||
+      expectedTarget.documentGeneration !== entry.documentGeneration ||
+      expectedTarget.origin !== (safeOrigin(currentUrl) ?? '') ||
+      expectedTarget.sanitizedUrl !== sanitizeBrowserUseUrl(currentUrl) ||
+      expectedTarget.role !== prepared.target.role ||
+      expectedTarget.name !== prepared.target.name ||
       prepared.target.tabId !== tab.id ||
       prepared.target.documentGeneration !== entry.documentGeneration ||
-      prepared.origin !== (safeOrigin(tab.view.webContents.getURL()) ?? '')
+      prepared.origin !== (safeOrigin(currentUrl) ?? '')
     ) {
-      return { ok: false, code: 'target_changed', message: 'The page changed while consent was pending.' }
+      return {
+        ok: false,
+        code: 'target_binding_mismatch',
+        message: 'The reviewer-visible Browser Use target changed while consent was pending.'
+      }
     }
     const current = await this.liveTarget(entry, tab, prepared.target)
-    if (!current || current.fingerprint !== prepared.target.fingerprint) {
+    if (!current) {
+      return { ok: false, code: 'target_changed', message: 'The target changed while consent was pending.' }
+    }
+    const verifiedUrl = tab.view.webContents.getURL()
+    if (
+      expectedTarget.sessionId !== entry.id ||
+      expectedTarget.tabId !== tab.id ||
+      expectedTarget.documentGeneration !== entry.documentGeneration ||
+      expectedTarget.origin !== (safeOrigin(verifiedUrl) ?? '') ||
+      expectedTarget.sanitizedUrl !== sanitizeBrowserUseUrl(verifiedUrl) ||
+      expectedTarget.role !== current.role ||
+      expectedTarget.name !== current.name
+    ) {
+      return {
+        ok: false,
+        code: 'target_binding_mismatch',
+        message: 'The live Browser Use target no longer matches the reviewer-visible binding.'
+      }
+    }
+    if (current.fingerprint !== prepared.target.fingerprint) {
       return { ok: false, code: 'target_changed', message: 'The target changed while consent was pending.' }
     }
     const centerX = Math.round(current.rect.x + current.rect.width / 2)
@@ -1171,10 +1271,32 @@ export class BrowserUseManager {
   private async ensureOriginGrant(
     entry: BrowserSessionEntry,
     origin: string,
-    rawUrl: string
+    rawUrl: string,
+    kunApprovalSource?: Exclude<BrowserUseKunApprovalMode, 'full-access'>
   ): Promise<boolean> {
     if (entry.grants.has(origin)) return true
     const settings = this.options.settings()
+    if (kunApprovalSource) {
+      if (
+        entry.mode === 'local-development' &&
+        entry.exactLocalOrigin &&
+        entry.exactLocalOrigin !== origin
+      ) {
+        return false
+      }
+      if (entry.mode === 'local-development') entry.exactLocalOrigin = origin
+      entry.grants.add(origin)
+      this.audit(entry, {
+        category: 'origin-consent',
+        action: `kun-${kunApprovalSource}-grant-origin`,
+        origin,
+        sanitizedPath: pathOnly(rawUrl),
+        decision: 'allowed',
+        outcome: 'success'
+      })
+      this.publish(entry)
+      return true
+    }
     if (settings.approvalMode === 'auto-safe' && entry.mode === 'public') {
       entry.grants.add(origin)
       this.audit(entry, {
@@ -1227,7 +1349,10 @@ export class BrowserUseManager {
     return decision === 'allow-once'
   }
 
-  private async queueOriginNavigation(entry: BrowserSessionEntry, rawUrl: string): Promise<void> {
+  private async queueOriginNavigation(
+    entry: BrowserSessionEntry,
+    rawUrl: string
+  ): Promise<void> {
     if (entry.stopping || entry.pendingOriginDecision) return
     let origin: string
     try {
@@ -1242,6 +1367,30 @@ export class BrowserUseManager {
       })
       return
     }
+    const route = entry.kunApprovalMode
+    const mode = route && route.turnId === entry.activeTurnId
+      ? route.mode
+      : undefined
+    // A grant authorizes exactly the explicit browser_use call whose arguments
+    // it signed. A later page-driven redirect, popup, or scripted navigation is
+    // a new action and must never reuse that capability. Agent-reviewed turns
+    // cannot open a user prompt behind the reviewer's back, so they fail closed.
+    if (mode !== 'user' && mode !== 'full-access') {
+      this.audit(entry, {
+        category: 'origin-consent',
+        action: route?.mode === 'agent'
+          ? 'agent-review-required'
+          : 'approval-route-required',
+        origin,
+        sanitizedPath: pathOnly(rawUrl),
+        decision: 'denied',
+        outcome: 'blocked',
+        errorCode: 'approval_required'
+      })
+      return
+    }
+    // Only a current-turn signed user/full route may enter Browser Main's own
+    // origin policy. Agent or unknown/stale routes fail closed.
     if (await this.ensureOriginGrant(entry, origin, rawUrl)) {
       const tab = this.activeTab(entry)
       if (tab && !entry.stopping) {
@@ -1527,6 +1676,16 @@ export class BrowserUseManager {
     entry.idleTimer = setTimeout(() => {
       void this.clear(entry.threadId, 'idle-expired')
     }, settings.idleTimeoutMs)
+  }
+
+  private rememberKunApprovalMode(
+    entry: BrowserSessionEntry,
+    turnId: string,
+    mode: BrowserUseKunApprovalMode | undefined,
+    grant: BrowserUseKunApprovalGrant | undefined
+  ): void {
+    if (!mode || !grant || grant.source !== mode) return
+    entry.kunApprovalMode = { mode, turnId }
   }
 
   private async withAbort(

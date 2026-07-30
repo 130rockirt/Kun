@@ -1,4 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
+import {
+  signBrowserUseKunApprovalGrant,
+  type BrowserUseToolResult,
+  BrowserUseActionInput,
+  type BrowserUseKunApprovalGrant
+} from '../../../kun/src/contracts/browser-use'
+import { ToolOperationJournal } from '../../../kun/src/reliability/operation-journal'
 import type { KunBrowserUseSettingsV1 } from '../../shared/app-settings'
 import type { BrowserUseViewState } from '../../shared/browser-use'
 import { BrowserUseManager } from './browser-use-manager'
@@ -19,6 +26,56 @@ const settings: KunBrowserUseSettingsV1 = {
   maxSnapshotTextChars: 20_000,
   maxImageDimension: 1280,
   idleTimeoutMs: 300_000
+}
+
+let nextGrantId = 0
+const APPROVAL_SIGNING_KEY = 's'.repeat(43)
+function kunApprovalGrant(
+  action: BrowserUseActionInput,
+  source: BrowserUseKunApprovalGrant['source'] = 'agent',
+  threadId = 'thread-1',
+  turnId = 'turn-1'
+): BrowserUseKunApprovalGrant {
+  nextGrantId += 1
+  const issuedAt = new Date()
+  return signBrowserUseKunApprovalGrant({
+    id: `${source === 'full-access' ? 'grant' : 'appr'}_${nextGrantId.toString(16).padStart(32, '0')}`,
+    source,
+    toolName: 'browser_use',
+    threadId,
+    turnId,
+    callId: `call-browser-${nextGrantId}`,
+    argumentsHash: ToolOperationJournal.argsHash(action),
+    issuedAt: issuedAt.toISOString(),
+    expiresAt: new Date(issuedAt.getTime() + 2 * 60 * 1_000).toISOString()
+  }, APPROVAL_SIGNING_KEY)
+}
+
+function expectedTarget(result: BrowserUseToolResult) {
+  const snapshot = result.snapshot
+  const node = snapshot?.nodes.find((candidate) => candidate.ref)
+  if (!snapshot || !node?.ref) {
+    throw new Error('test snapshot did not contain an actionable Browser Use target')
+  }
+  return {
+    sessionId: snapshot.sessionId,
+    tabId: snapshot.tabId,
+    documentGeneration: snapshot.documentGeneration,
+    origin: snapshot.origin,
+    sanitizedUrl: snapshot.sanitizedUrl,
+    role: node.role,
+    name: node.name
+  }
+}
+
+function clickAction(result: BrowserUseToolResult) {
+  const target = expectedTarget(result)
+  const node = result.snapshot!.nodes.find((candidate) => candidate.ref)!
+  return {
+    action: 'click' as const,
+    ref: node.ref!,
+    expectedTarget: target
+  }
 }
 
 function fakeHarness(settingsPatch: Partial<KunBrowserUseSettingsV1> = {}) {
@@ -249,7 +306,24 @@ describe('BrowserUseManager', () => {
 
   it('stops a cross-origin redirect and asks for a new exact-origin decision', async () => {
     const harness = fakeHarness({ approvalMode: 'always-ask' })
-    await openAuthorized(harness)
+    const open = {
+      action: 'open' as const,
+      url: 'https://example.com/start?secret=redacted'
+    }
+    await expect(harness.manager.execute(
+      'thread-1',
+      'turn-1',
+      open,
+      undefined,
+      kunApprovalGrant(open, 'user'),
+      'user'
+    )).resolves.toMatchObject({ ok: true, code: 'opened' })
+    harness.manager.mount(
+      'thread-1',
+      harness.window as never,
+      { x: 10, y: 10, width: 800, height: 600 },
+      true
+    )
     const redirectEvent = { preventDefault: vi.fn() }
     harness.emitWebContents(
       'will-redirect',
@@ -301,6 +375,342 @@ describe('BrowserUseManager', () => {
     await expect(pending).resolves.toMatchObject({ ok: true, code: 'opened' })
   })
 
+  it('uses an agent Kun grant without exposing ordinary origin/action consent controls', async () => {
+    const harness = fakeHarness({
+      mode: 'local-development',
+      approvalMode: 'always-ask'
+    })
+    const open = {
+      action: 'open' as const,
+      url: 'http://127.0.0.1:4173/app'
+    }
+    await expect(harness.manager.execute(
+      'thread-1',
+      'turn-1',
+      open,
+      undefined,
+      kunApprovalGrant(open),
+      'agent'
+    )).resolves.toMatchObject({ ok: true, code: 'opened' })
+    expect(harness.manager.stateForThread('thread-1').pendingOriginConsent).toBeUndefined()
+
+    const snapshot = await harness.manager.execute(
+      'thread-1',
+      'turn-1',
+      { action: 'snapshot' }
+    )
+    const click = clickAction(snapshot)
+    await expect(harness.manager.execute(
+      'thread-1',
+      'turn-1',
+      click,
+      undefined,
+      kunApprovalGrant(click),
+      'agent'
+    )).resolves.toMatchObject({ ok: true, code: 'action_executed' })
+
+    const state = harness.manager.stateForThread('thread-1')
+    expect(state.pendingOriginConsent).toBeUndefined()
+    expect(state.pendingActionConsent).toBeUndefined()
+    expect(harness.sendCommand).toHaveBeenCalledWith(
+      'Input.dispatchMouseEvent',
+      expect.objectContaining({ type: 'mousePressed' })
+    )
+  })
+
+  it('retains Main origin and action consent in Full access', async () => {
+    const harness = fakeHarness({
+      mode: 'local-development',
+      approvalMode: 'always-ask'
+    })
+    const open = {
+      action: 'open' as const,
+      url: 'http://127.0.0.1:4173/app'
+    }
+    const pendingOpen = harness.manager.execute(
+      'thread-1',
+      'turn-1',
+      open,
+      undefined,
+      kunApprovalGrant(open, 'full-access'),
+      'full-access'
+    )
+    await vi.waitFor(() => {
+      expect(harness.states.at(-1)?.sessionId).toBeTruthy()
+    })
+    harness.manager.mount(
+      'thread-1',
+      harness.window as never,
+      { x: 10, y: 10, width: 800, height: 600 },
+      true
+    )
+    await vi.waitFor(() => {
+      expect(harness.manager.stateForThread('thread-1').pendingOriginConsent).toBeTruthy()
+    })
+    const originRequest = harness.manager.stateForThread('thread-1').pendingOriginConsent!
+    harness.manager.decideOrigin({
+      threadId: 'thread-1',
+      requestId: originRequest.id,
+      decision: 'allow-once'
+    })
+    await expect(pendingOpen).resolves.toMatchObject({ ok: true, code: 'opened' })
+
+    const snapshot = await harness.manager.execute(
+      'thread-1',
+      'turn-1',
+      { action: 'snapshot' },
+      undefined,
+      undefined,
+      'full-access'
+    )
+    const click = clickAction(snapshot)
+    const pendingClick = harness.manager.execute(
+      'thread-1',
+      'turn-1',
+      click,
+      undefined,
+      kunApprovalGrant(click, 'full-access'),
+      'full-access'
+    )
+    await vi.waitFor(() => {
+      expect(harness.manager.stateForThread('thread-1').pendingActionConsent).toBeTruthy()
+    })
+    const actionRequest = harness.manager.stateForThread('thread-1').pendingActionConsent!
+    harness.manager.decideAction({
+      threadId: 'thread-1',
+      requestId: actionRequest.id,
+      decision: 'allow-once'
+    })
+    await expect(pendingClick).resolves.toMatchObject({ ok: true, code: 'action_executed' })
+  })
+
+  it('does not reuse a Kun-approved call for page-driven re-origin navigation', async () => {
+    const harness = fakeHarness({ approvalMode: 'always-ask' })
+    const open = {
+      action: 'open' as const,
+      url: 'https://example.com/start'
+    }
+    await harness.manager.execute(
+      'thread-1',
+      'turn-1',
+      open,
+      undefined,
+      kunApprovalGrant(open),
+      'agent'
+    )
+
+    const redirectEvent = { preventDefault: vi.fn() }
+    harness.emitWebContents(
+      'will-redirect',
+      redirectEvent,
+      'https://other.example/landing?token=secret'
+    )
+
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(redirectEvent.preventDefault).toHaveBeenCalledOnce()
+    expect(harness.webContents.loadURL).not.toHaveBeenCalledWith(
+      'https://other.example/landing?token=secret'
+    )
+    expect(harness.manager.stateForThread('thread-1').pendingOriginConsent).toBeUndefined()
+    expect(harness.manager.auditSnapshot()).toContainEqual(expect.objectContaining({
+      category: 'origin-consent',
+      action: 'agent-review-required',
+      origin: 'https://other.example',
+      decision: 'denied',
+      outcome: 'blocked'
+    }))
+  })
+
+  it('does not let an unsigned observation replace a signed agent route', async () => {
+    const harness = fakeHarness({ approvalMode: 'always-ask' })
+    const open = {
+      action: 'open' as const,
+      url: 'https://example.com/start'
+    }
+    await harness.manager.execute(
+      'thread-1',
+      'turn-1',
+      open,
+      undefined,
+      kunApprovalGrant(open),
+      'agent'
+    )
+    await harness.manager.execute(
+      'thread-1',
+      'turn-1',
+      { action: 'snapshot' },
+      undefined,
+      undefined,
+      'full-access'
+    )
+
+    const redirectEvent = { preventDefault: vi.fn() }
+    harness.emitWebContents(
+      'will-redirect',
+      redirectEvent,
+      'https://mode-injection.example/landing'
+    )
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(redirectEvent.preventDefault).toHaveBeenCalledOnce()
+    expect(harness.webContents.loadURL).not.toHaveBeenCalledWith(
+      'https://mode-injection.example/landing'
+    )
+    expect(harness.manager.stateForThread('thread-1').pendingOriginConsent).toBeUndefined()
+    expect(harness.manager.auditSnapshot()).toContainEqual(expect.objectContaining({
+      category: 'origin-consent',
+      action: 'agent-review-required',
+      origin: 'https://mode-injection.example',
+      outcome: 'blocked'
+    }))
+  })
+
+  it('keeps exact local re-origin validation after a Kun grant', async () => {
+    const harness = fakeHarness({
+      mode: 'local-development',
+      approvalMode: 'always-ask'
+    })
+    const open = {
+      action: 'open' as const,
+      url: 'http://127.0.0.1:4173/app'
+    }
+    await harness.manager.execute(
+      'thread-1',
+      'turn-1',
+      open,
+      undefined,
+      kunApprovalGrant(open),
+      'agent'
+    )
+
+    const redirectEvent = { preventDefault: vi.fn() }
+    harness.emitWebContents(
+      'will-redirect',
+      redirectEvent,
+      'http://127.0.0.1:4174/other'
+    )
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(redirectEvent.preventDefault).toHaveBeenCalledOnce()
+    expect(harness.webContents.loadURL).not.toHaveBeenCalledWith(
+      'http://127.0.0.1:4174/other'
+    )
+    expect(harness.manager.stateForThread('thread-1').pendingOriginConsent).toBeUndefined()
+  })
+
+  it('fails closed instead of surfacing manual origin controls for agent-reviewed turns', async () => {
+    const harness = fakeHarness({ approvalMode: 'always-ask' })
+    const open = {
+      action: 'open' as const,
+      url: 'https://example.com/start'
+    }
+    await harness.manager.execute(
+      'thread-1',
+      'turn-1',
+      open,
+      undefined,
+      kunApprovalGrant(open),
+      'agent'
+    )
+    await harness.manager.execute(
+      'thread-1',
+      'turn-2',
+      { action: 'snapshot' },
+      undefined,
+      undefined,
+      'agent'
+    )
+
+    const redirectEvent = { preventDefault: vi.fn() }
+    harness.emitWebContents(
+      'will-redirect',
+      redirectEvent,
+      'https://unreviewed.example/landing'
+    )
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(redirectEvent.preventDefault).toHaveBeenCalledOnce()
+    expect(harness.webContents.loadURL).not.toHaveBeenCalledWith(
+      'https://unreviewed.example/landing'
+    )
+    expect(harness.manager.stateForThread('thread-1').pendingOriginConsent).toBeUndefined()
+    expect(harness.manager.auditSnapshot()).toContainEqual(expect.objectContaining({
+      category: 'origin-consent',
+      action: 'agent-review-required',
+      origin: 'https://unreviewed.example',
+      outcome: 'blocked'
+    }))
+  })
+
+  it('retains Main re-origin consent in Full access', async () => {
+    const harness = fakeHarness({ approvalMode: 'always-ask' })
+    const open = {
+      action: 'open' as const,
+      url: 'https://example.com/start'
+    }
+    const pendingOpen = harness.manager.execute(
+      'thread-1',
+      'turn-1',
+      open,
+      undefined,
+      kunApprovalGrant(open, 'full-access'),
+      'full-access'
+    )
+    await vi.waitFor(() => {
+      expect(harness.states.at(-1)?.sessionId).toBeTruthy()
+    })
+    harness.manager.mount(
+      'thread-1',
+      harness.window as never,
+      { x: 10, y: 10, width: 800, height: 600 },
+      true
+    )
+    await vi.waitFor(() => {
+      expect(harness.manager.stateForThread('thread-1').pendingOriginConsent).toBeTruthy()
+    })
+    const initialRequest = harness.manager.stateForThread('thread-1').pendingOriginConsent!
+    harness.manager.decideOrigin({
+      threadId: 'thread-1',
+      requestId: initialRequest.id,
+      decision: 'allow-once'
+    })
+    await expect(pendingOpen).resolves.toMatchObject({ ok: true, code: 'opened' })
+    await harness.manager.execute(
+      'thread-1',
+      'turn-1',
+      { action: 'snapshot' },
+      undefined
+    )
+
+    const redirectEvent = { preventDefault: vi.fn() }
+    harness.emitWebContents(
+      'will-redirect',
+      redirectEvent,
+      'https://full-access.example/landing'
+    )
+    await vi.waitFor(() => {
+      expect(harness.manager.stateForThread('thread-1').pendingOriginConsent?.origin)
+        .toBe('https://full-access.example')
+    })
+    expect(harness.webContents.loadURL).not.toHaveBeenCalledWith(
+      'https://full-access.example/landing'
+    )
+    const redirectRequest = harness.manager.stateForThread('thread-1').pendingOriginConsent!
+    harness.manager.decideOrigin({
+      threadId: 'thread-1',
+      requestId: redirectRequest.id,
+      decision: 'allow-once'
+    })
+    await vi.waitFor(() => {
+      expect(harness.webContents.loadURL).toHaveBeenCalledWith(
+        'https://full-access.example/landing'
+      )
+    })
+
+    expect(redirectEvent.preventDefault).toHaveBeenCalledOnce()
+    expect(harness.manager.stateForThread('thread-1').pendingOriginConsent).toBeUndefined()
+  })
+
   it('redacts secret-like values from page titles before publishing state', async () => {
     const harness = fakeHarness()
     harness.setTitle('Dashboard token=top-secret api_live_1234567890')
@@ -320,10 +730,11 @@ describe('BrowserUseManager', () => {
     expect(ref).toBeTruthy()
     expect(ref).not.toContain('button')
 
-    const pending = harness.manager.execute('thread-1', 'turn-1', {
-      action: 'click',
-      ref
-    })
+    const pending = harness.manager.execute(
+      'thread-1',
+      'turn-1',
+      clickAction(snapshot)
+    )
     await vi.waitFor(() => {
       expect(harness.manager.stateForThread('thread-1').pendingActionConsent).toBeTruthy()
     })
@@ -355,12 +766,12 @@ describe('BrowserUseManager', () => {
       { action: 'open', url: 'https://example.com/start' }
     )).resolves.toMatchObject({ ok: true, code: 'opened' })
     const snapshot = await harness.manager.execute('thread-1', 'turn-1', { action: 'snapshot' })
-    const ref = snapshot.snapshot?.nodes[0]?.ref
 
-    await expect(harness.manager.execute('thread-1', 'turn-1', {
-      action: 'click',
-      ref
-    })).resolves.toMatchObject({ ok: true, code: 'action_executed' })
+    await expect(harness.manager.execute(
+      'thread-1',
+      'turn-1',
+      clickAction(snapshot)
+    )).resolves.toMatchObject({ ok: true, code: 'action_executed' })
 
     expect(harness.manager.stateForThread('thread-1').pendingActionConsent).toBeUndefined()
     expect(harness.sendCommand).toHaveBeenCalledWith(
@@ -379,7 +790,6 @@ describe('BrowserUseManager', () => {
     const harness = fakeHarness()
     await openAuthorized(harness)
     const snapshot = await harness.manager.execute('thread-1', 'turn-1', { action: 'snapshot' })
-    const ref = snapshot.snapshot?.nodes[0]?.ref
 
     harness.manager.mount(
       'thread-1',
@@ -394,10 +804,11 @@ describe('BrowserUseManager', () => {
       mounted: true,
       controlOwner: 'agent'
     })
-    await expect(harness.manager.execute('thread-1', 'turn-1', {
-      action: 'click',
-      ref
-    })).resolves.toMatchObject({ ok: true, code: 'action_executed' })
+    await expect(harness.manager.execute(
+      'thread-1',
+      'turn-1',
+      clickAction(snapshot)
+    )).resolves.toMatchObject({ ok: true, code: 'action_executed' })
   })
 
   it('never auto-executes a transaction commit target', async () => {
@@ -411,16 +822,106 @@ describe('BrowserUseManager', () => {
     })
     await openAuthorized(harness)
     const snapshot = await harness.manager.execute('thread-1', 'turn-1', { action: 'snapshot' })
-    const ref = snapshot.snapshot?.nodes[0]?.ref
 
-    await expect(harness.manager.execute('thread-1', 'turn-1', {
-      action: 'click',
-      ref
-    })).resolves.toMatchObject({
+    await expect(harness.manager.execute(
+      'thread-1',
+      'turn-1',
+      clickAction(snapshot)
+    )).resolves.toMatchObject({
       ok: false,
       code: 'manual_interaction_required'
     })
     expect(harness.manager.stateForThread('thread-1').pendingActionConsent).toBeUndefined()
+    expect(harness.sendCommand).not.toHaveBeenCalledWith(
+      'Input.dispatchMouseEvent',
+      expect.anything()
+    )
+  })
+
+  it('does not let a Kun grant bypass live target fingerprint validation', async () => {
+    const harness = fakeHarness({ approvalMode: 'always-ask' })
+    const open = {
+      action: 'open' as const,
+      url: 'https://example.com/start'
+    }
+    await harness.manager.execute(
+      'thread-1',
+      'turn-1',
+      open,
+      undefined,
+      kunApprovalGrant(open),
+      'agent'
+    )
+    const snapshot = await harness.manager.execute(
+      'thread-1',
+      'turn-1',
+      { action: 'snapshot' }
+    )
+    const click = clickAction(snapshot)
+    harness.setBox([20, 20, 120, 20, 120, 60, 20, 60])
+
+    await expect(harness.manager.execute(
+      'thread-1',
+      'turn-1',
+      click,
+      undefined,
+      kunApprovalGrant(click),
+      'agent'
+    )).resolves.toMatchObject({ ok: false, code: 'stale_reference' })
+    expect(harness.manager.stateForThread('thread-1').pendingActionConsent).toBeUndefined()
+    expect(harness.sendCommand).not.toHaveBeenCalledWith(
+      'Input.dispatchMouseEvent',
+      expect.anything()
+    )
+  })
+
+  it.each([
+    ['sessionId', 'different-session-1234567890'],
+    ['tabId', 'different-tab'],
+    ['documentGeneration', 99],
+    ['origin', 'https://other.example'],
+    ['sanitizedUrl', 'https://example.com/other-path'],
+    ['role', 'link'],
+    ['name', 'Different target']
+  ] as const)('rejects a reviewer-visible expectedTarget %s substitution', async (field, value) => {
+    const harness = fakeHarness({ approvalMode: 'always-ask' })
+    const open = {
+      action: 'open' as const,
+      url: 'https://example.com/start'
+    }
+    await harness.manager.execute(
+      'thread-1',
+      'turn-1',
+      open,
+      undefined,
+      kunApprovalGrant(open),
+      'agent'
+    )
+    const snapshot = await harness.manager.execute(
+      'thread-1',
+      'turn-1',
+      { action: 'snapshot' }
+    )
+    const click = clickAction(snapshot)
+    const substituted = {
+      ...click,
+      expectedTarget: {
+        ...click.expectedTarget,
+        [field]: value
+      }
+    }
+
+    await expect(harness.manager.execute(
+      'thread-1',
+      'turn-1',
+      substituted,
+      undefined,
+      kunApprovalGrant(substituted),
+      'agent'
+    )).resolves.toMatchObject({
+      ok: false,
+      code: 'target_binding_mismatch'
+    })
     expect(harness.sendCommand).not.toHaveBeenCalledWith(
       'Input.dispatchMouseEvent',
       expect.anything()
@@ -463,8 +964,11 @@ describe('BrowserUseManager', () => {
     const harness = fakeHarness({ approvalMode: 'always-ask' })
     await openAuthorized(harness)
     const snapshot = await harness.manager.execute('thread-1', 'turn-1', { action: 'snapshot' })
-    const ref = snapshot.snapshot?.nodes[0]?.ref
-    const pending = harness.manager.execute('thread-1', 'turn-1', { action: 'click', ref })
+    const pending = harness.manager.execute(
+      'thread-1',
+      'turn-1',
+      clickAction(snapshot)
+    )
     await vi.waitFor(() => {
       expect(harness.manager.stateForThread('thread-1').pendingActionConsent).toBeTruthy()
     })
@@ -483,12 +987,69 @@ describe('BrowserUseManager', () => {
     )
   })
 
+  it.each([
+    ['same-origin path', async (harness: ReturnType<typeof fakeHarness>) => {
+      await harness.webContents.loadURL('https://example.com/changed-after-consent')
+    }],
+    ['target name', async (harness: ReturnType<typeof fakeHarness>) => {
+      harness.setTarget({
+        role: 'button',
+        name: 'Delete account',
+        localName: 'button',
+        nodeName: 'BUTTON',
+        attributes: ['type', 'button']
+      })
+    }]
+  ] as const)(
+    'rechecks the reviewer-visible %s after Main consent before sending input',
+    async (_case, mutate) => {
+      const harness = fakeHarness({ approvalMode: 'always-ask' })
+      await openAuthorized(harness)
+      const snapshot = await harness.manager.execute(
+        'thread-1',
+        'turn-1',
+        { action: 'snapshot' }
+      )
+      const pending = harness.manager.execute(
+        'thread-1',
+        'turn-1',
+        clickAction(snapshot)
+      )
+      await vi.waitFor(() => {
+        expect(harness.manager.stateForThread('thread-1').pendingActionConsent).toBeTruthy()
+      })
+      await mutate(harness)
+      const request = harness.manager.stateForThread('thread-1').pendingActionConsent!
+      harness.manager.decideAction({
+        threadId: 'thread-1',
+        requestId: request.id,
+        decision: 'allow-once'
+      })
+
+      await expect(pending).resolves.toMatchObject({
+        ok: false,
+        code: 'target_binding_mismatch'
+      })
+      expect(harness.sendCommand).not.toHaveBeenCalledWith(
+        'Input.dispatchMouseEvent',
+        expect.anything()
+      )
+      expect(harness.sendCommand).not.toHaveBeenCalledWith(
+        'Input.insertText',
+        expect.anything()
+      )
+    }
+  )
+
   it('cancels a pending decision when the owning supervision surface is hidden', async () => {
     const harness = fakeHarness({ approvalMode: 'always-ask' })
     await openAuthorized(harness)
     const snapshot = await harness.manager.execute('thread-1', 'turn-1', { action: 'snapshot' })
-    const ref = snapshot.snapshot?.nodes[0]?.ref
-    const pending = harness.manager.execute('thread-1', 'turn-1', { action: 'click', ref })
+    const pending = harness.manager.execute(
+      'thread-1',
+      'turn-1',
+      clickAction(snapshot)
+    )
     await vi.waitFor(() => {
       expect(harness.manager.stateForThread('thread-1').pendingActionConsent).toBeTruthy()
     })
@@ -516,21 +1077,23 @@ describe('BrowserUseManager', () => {
     expect(blockedMouse.preventDefault).toHaveBeenCalledOnce()
 
     const snapshot = await harness.manager.execute('thread-1', 'turn-1', { action: 'snapshot' })
-    const ref = snapshot.snapshot?.nodes[0]?.ref
+    const click = clickAction(snapshot)
     harness.manager.setControlOwner('thread-1', 'manual')
     const manualMouse = { preventDefault: vi.fn() }
     harness.emitWebContents('before-mouse-event', manualMouse)
     expect(manualMouse.preventDefault).not.toHaveBeenCalled()
-    await expect(harness.manager.execute('thread-1', 'turn-1', {
-      action: 'click',
-      ref
-    })).resolves.toMatchObject({ ok: false, code: 'manual_control_active' })
+    await expect(harness.manager.execute(
+      'thread-1',
+      'turn-1',
+      click
+    )).resolves.toMatchObject({ ok: false, code: 'manual_control_active' })
 
     harness.manager.setControlOwner('thread-1', 'agent')
-    await expect(harness.manager.execute('thread-1', 'turn-1', {
-      action: 'click',
-      ref
-    })).resolves.toMatchObject({ ok: false, code: 'stale_reference' })
+    await expect(harness.manager.execute(
+      'thread-1',
+      'turn-1',
+      click
+    )).resolves.toMatchObject({ ok: false, code: 'stale_reference' })
 
     await expect(harness.manager.clear('thread-1')).resolves.toBe(true)
     expect(harness.webContents.close).toHaveBeenCalledOnce()

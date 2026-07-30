@@ -4,6 +4,7 @@ import {
   GraphCommandIdSchema,
   GraphPatchV1Schema,
   GraphPlanV1Schema,
+  GraphPlanningDraftViewV1Schema,
   GraphReviewResultV1Schema,
   GraphRunIdSchema,
   GraphRunStatusSchema,
@@ -12,10 +13,16 @@ import {
 import {
   GraphControlService,
   GraphPlanValidationError,
+  GraphPlanningDraftConflictError,
+  GraphPlanningDraftNotFoundError,
+  type FileGraphPlanningDraftStore,
   GraphRunConflictError,
   GraphRunNotFoundError,
   GraphStoreCorruptionError
 } from '../../graph/index.js'
+import type { TurnService } from '../../services/turn-service.js'
+import type { RuntimeEventRecorder } from '../../services/runtime-event-recorder.js'
+import { emitPlanningEvent } from '../../adapters/tool/graph-define-plan-tool.js'
 import type { GraphEventReplay } from '../../graph/graph-run-store.js'
 import {
   isValidArtifactId,
@@ -75,6 +82,10 @@ const RecordGraphReviewRequestSchema = GraphCommandContextSchema.extend({
   expectedSeq: z.number().int().nonnegative(),
   expectedRevision: z.number().int().positive(),
   review: GraphReviewResultV1Schema
+}).strict()
+
+const GraphDraftCommandSchema = z.object({
+  expectedRevision: z.number().int().positive()
 }).strict()
 
 const GraphArtifactQuerySchema = z.object({
@@ -208,6 +219,110 @@ export async function getGraphRun(
   if (!graphs) return ERRORS.unavailable('Graph Mode runtime is unavailable')
   try {
     return jsonResponse(await graphs.get(runId))
+  } catch (error) {
+    return graphErrorResponse(error)
+  }
+}
+
+export async function listGraphPlanningDrafts(
+  drafts: FileGraphPlanningDraftStore | undefined,
+  request: Request
+): Promise<JsonResponse> {
+  if (!drafts) return ERRORS.unavailable('Graph Mode runtime is unavailable')
+  const threadId = new URL(request.url).searchParams.get('thread_id')?.trim()
+  const records = await drafts.list({
+    ...(threadId ? { threadId } : {})
+  })
+  return jsonResponse({
+    drafts: await Promise.all(records.map((draft) => graphDraftView(drafts, draft.id)))
+  })
+}
+
+export async function getGraphPlanningDraft(
+  drafts: FileGraphPlanningDraftStore | undefined,
+  draftId: string
+): Promise<JsonResponse> {
+  if (!drafts) return ERRORS.unavailable('Graph Mode runtime is unavailable')
+  try {
+    return jsonResponse(await graphDraftView(drafts, draftId))
+  } catch (error) {
+    return graphErrorResponse(error)
+  }
+}
+
+export async function resumeGraphPlanningDraft(
+  drafts: FileGraphPlanningDraftStore | undefined,
+  turns: TurnService,
+  events: Pick<RuntimeEventRecorder, 'record'>,
+  runTurn: (threadId: string, turnId: string) => Promise<unknown> | void,
+  draftId: string,
+  request: Request
+): Promise<JsonResponse | Response> {
+  if (!drafts) return ERRORS.unavailable('Graph Mode runtime is unavailable')
+  const parsed = await parseBody(request, GraphDraftCommandSchema)
+  if (!parsed.ok) return parsed.response
+  try {
+    const current = await drafts.require(draftId)
+    if (current.revision !== parsed.data.expectedRevision) {
+      throw new GraphPlanningDraftConflictError(
+        `draft ${draftId} expected revision ${parsed.data.expectedRevision}; current is ${current.revision}`
+      )
+    }
+    if (current.status !== 'needs_correction' && current.status !== 'repairing') {
+      throw new GraphPlanningDraftConflictError(
+        `draft ${draftId} cannot resume from ${current.status}`
+      )
+    }
+    const draft = await drafts.update(draftId, {
+      expectedRevision: current.revision,
+      status: 'planning',
+      issues: current.issues
+    })
+    await emitPlanningEvent({ drafts, events }, draft)
+    await turns.resumeGraphPlanningTurn({
+      threadId: draft.threadId,
+      turnId: draft.sourceTurnId
+    })
+    void runTurn(draft.threadId, draft.sourceTurnId)
+    return jsonResponse(await graphDraftView(drafts, draft.id), 202)
+  } catch (error) {
+    return graphErrorResponse(error)
+  }
+}
+
+export async function cancelGraphPlanningDraft(
+  drafts: FileGraphPlanningDraftStore | undefined,
+  turns: TurnService,
+  events: Pick<RuntimeEventRecorder, 'record'>,
+  draftId: string,
+  request: Request
+): Promise<JsonResponse | Response> {
+  if (!drafts) return ERRORS.unavailable('Graph Mode runtime is unavailable')
+  const parsed = await parseBody(request, GraphDraftCommandSchema)
+  if (!parsed.ok) return parsed.response
+  try {
+    const current = await drafts.require(draftId)
+    if (current.revision !== parsed.data.expectedRevision) {
+      throw new GraphPlanningDraftConflictError(
+        `draft ${draftId} expected revision ${parsed.data.expectedRevision}; current is ${current.revision}`
+      )
+    }
+    if (current.status === 'committed' || current.status === 'cancelled') {
+      throw new GraphPlanningDraftConflictError(
+        `draft ${draftId} cannot cancel from ${current.status}`
+      )
+    }
+    const draft = await drafts.update(draftId, {
+      expectedRevision: current.revision,
+      status: 'cancelled',
+      issues: current.issues
+    })
+    await emitPlanningEvent({ drafts, events }, draft)
+    await turns.interruptTurn({
+      threadId: draft.threadId,
+      turnId: draft.sourceTurnId
+    })
+    return jsonResponse(await graphDraftView(drafts, draft.id))
   } catch (error) {
     return graphErrorResponse(error)
   }
@@ -420,6 +535,8 @@ async function parseBody<T extends z.ZodType>(
 }
 
 function graphErrorResponse(error: unknown): JsonResponse {
+  if (error instanceof GraphPlanningDraftNotFoundError) return ERRORS.notFound(error.message)
+  if (error instanceof GraphPlanningDraftConflictError) return ERRORS.conflict(error.message)
   if (error instanceof GraphRunNotFoundError) return ERRORS.notFound(error.message)
   if (error instanceof GraphRunConflictError) return ERRORS.conflict(error.message)
   if (error instanceof GraphPlanValidationError) {
@@ -435,4 +552,25 @@ function graphErrorResponse(error: unknown): JsonResponse {
     return ERRORS.validation('invalid Graph request', error.issues)
   }
   throw error
+}
+
+async function graphDraftView(
+  drafts: FileGraphPlanningDraftStore,
+  draftId: string
+) {
+  const draft = await drafts.require(draftId)
+  const candidate = await drafts.readCandidate(draftId)
+  const tasks = candidate && typeof candidate === 'object' &&
+      Array.isArray((candidate as { tasks?: unknown }).tasks)
+    ? (candidate as { tasks: unknown[] }).tasks.flatMap((task) => {
+        if (!task || typeof task !== 'object') return []
+        const record = task as Record<string, unknown>
+        return typeof record.key === 'string' &&
+          typeof record.kind === 'string' &&
+          typeof record.title === 'string'
+          ? [{ key: record.key, kind: record.kind, title: record.title }]
+          : []
+      })
+    : []
+  return GraphPlanningDraftViewV1Schema.parse({ draft, tasks })
 }

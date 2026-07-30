@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   BUNDLED_EXTENSION_DEFINITIONS,
+  RETIRED_BUNDLED_EXTENSION_IDS,
   bundledArchiveName,
   bundledCatalogEntry,
   bundledExtensionCatalog
@@ -28,6 +29,10 @@ test('declares every product-owned default extension', () => {
       'kun-examples.presentation-studio',
       'kun-examples.social-media-sidebar'
     ]
+  )
+  assert.deepEqual(
+    RETIRED_BUNDLED_EXTENSION_IDS,
+    ['kun-examples.kun-video-editor']
   )
 })
 
@@ -80,8 +85,13 @@ test('sorts catalog entries and rejects duplicate extension ids', () => {
       'kun-examples.social-media-sidebar'
     ]
   )
+  assert.deepEqual(catalog.retiredExtensions, ['kun-examples.kun-video-editor'])
   assert.throws(
     () => bundledExtensionCatalog([entries[0], entries[0]]),
     /duplicate/
+  )
+  assert.throws(
+    () => bundledExtensionCatalog(entries, [entries[0].id]),
+    /cannot retire/
   )
 })

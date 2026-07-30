@@ -62,6 +62,7 @@ import {
 } from './chat-projection-effects'
 import {
   receiveGraphChildRuntimeEvent,
+  receiveGraphPlanningRuntimeEvent,
   receiveGraphRuntimeEvent
 } from '../graph/graph-store'
 import {
@@ -933,6 +934,12 @@ export function buildThreadEventSink(
       resetBusyRecoveryAttempts()
       set((state) => reduce(state, { type: 'approval_status_changed', payload: event }))
     },
+    onApprovalReview: (event) => {
+      if (!isCurrentStream()) return
+      resetBusyRecoveryAttempts()
+      if (!get().busy && event.status === 'in-progress') armBusyWatchdog(set, get)
+      set((state) => reduce(state, { type: 'approval_review_updated', payload: event }))
+    },
     onUserInput: (request) => {
       if (!isCurrentStream()) return
       resetBusyRecoveryAttempts()
@@ -1061,6 +1068,10 @@ export function buildThreadEventSink(
     onGraphEvent: (event) => {
       if (!isCurrentStream()) return
       receiveGraphRuntimeEvent(event)
+    },
+    onGraphPlanningEvent: (event) => {
+      if (!isCurrentStream()) return
+      receiveGraphPlanningRuntimeEvent(event)
     }
   }
 }

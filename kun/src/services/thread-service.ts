@@ -20,7 +20,11 @@ import type {
   ThreadSummary
 } from '../contracts/threads.js'
 import type { ExtensionThreadMetadata } from '../contracts/threads.js'
-import type { ApprovalPolicy, SandboxMode } from '../contracts/policy.js'
+import type {
+  ApprovalPolicy,
+  ApprovalReviewer,
+  SandboxMode
+} from '../contracts/policy.js'
 import type { Turn } from '../contracts/turns.js'
 import type { TurnItem } from '../contracts/items.js'
 import { createThreadRecord, toThreadSummary, touchThread } from '../domain/thread.js'
@@ -51,6 +55,7 @@ export type ThreadServiceOptions = {
   nowIso: () => string
   defaultApprovalPolicy?: ApprovalPolicy
   defaultSandboxMode?: SandboxMode
+  defaultApprovalReviewer?: ApprovalReviewer
   defaultModelRequestCaptureEnabled?: boolean
   lifecycleFence?: ThreadLifecycleFence
   /** Abort in-process work after the fence starts rejecting new writes. */
@@ -73,12 +78,14 @@ export type ForkThreadOptions = {
   title?: string
   turnId?: string
   beforeTurn?: boolean
+  approvalReviewer?: ApprovalReviewer
 }
 
 export type ResumeSessionOptions = {
   workspace?: string
   model?: string
   mode?: ThreadMode
+  approvalReviewer?: ApprovalReviewer
 }
 
 export type ResumeSessionResult = {
@@ -103,6 +110,7 @@ export class ThreadService {
   private readonly nowIso: () => string
   private defaultApprovalPolicy: ApprovalPolicy | undefined
   private defaultSandboxMode: SandboxMode | undefined
+  private defaultApprovalReviewer: ApprovalReviewer | undefined
   private defaultModelRequestCaptureEnabled: boolean
   private readonly lifecycleFence?: ThreadLifecycleFence
   private readonly onDeleting?: (threadId: string) => Promise<void> | void
@@ -119,6 +127,7 @@ export class ThreadService {
     this.nowIso = options.nowIso
     this.defaultApprovalPolicy = options.defaultApprovalPolicy
     this.defaultSandboxMode = options.defaultSandboxMode
+    this.defaultApprovalReviewer = options.defaultApprovalReviewer
     this.defaultModelRequestCaptureEnabled = options.defaultModelRequestCaptureEnabled ?? false
     this.lifecycleFence = options.lifecycleFence
     this.onDeleting = options.onDeleting
@@ -130,10 +139,12 @@ export class ThreadService {
   updateRuntimeDefaults(input: {
     approvalPolicy: ApprovalPolicy
     sandboxMode: SandboxMode
+    approvalReviewer: ApprovalReviewer
     modelRequestCaptureEnabled: boolean
   }): void {
     this.defaultApprovalPolicy = input.approvalPolicy
     this.defaultSandboxMode = input.sandboxMode
+    this.defaultApprovalReviewer = input.approvalReviewer
     this.defaultModelRequestCaptureEnabled = input.modelRequestCaptureEnabled
   }
 
@@ -191,6 +202,7 @@ export class ThreadService {
       mode: request.mode,
       approvalPolicy: request.approvalPolicy ?? this.defaultApprovalPolicy,
       sandboxMode: request.sandboxMode ?? this.defaultSandboxMode,
+      approvalReviewer: request.approvalReviewer ?? this.defaultApprovalReviewer,
       modelRequestCaptureEnabled:
         request.modelRequestCaptureEnabled ?? this.defaultModelRequestCaptureEnabled,
       ...(request.costBudgetUsd !== undefined ? { costBudgetUsd: request.costBudgetUsd } : {}),
@@ -211,7 +223,10 @@ export class ThreadService {
     await this.events.record({
       kind: 'thread_created',
       threadId: thread.id,
-      title: thread.title
+      title: thread.title,
+      approvalPolicy: thread.approvalPolicy,
+      sandboxMode: thread.sandboxMode,
+      approvalReviewer: thread.approvalReviewer
     })
     return thread
   }
@@ -227,6 +242,7 @@ export class ThreadService {
     status?: ThreadUpdateStatus
     approvalPolicy?: ApprovalPolicy
     sandboxMode?: SandboxMode
+    approvalReviewer?: ApprovalReviewer
     modelRequestCaptureEnabled?: boolean
     pinned?: boolean
     costBudgetUsd?: number | null
@@ -289,6 +305,7 @@ export class ThreadService {
       additionalWorkspaces: updated.additionalWorkspaces,
       approvalPolicy: updated.approvalPolicy,
       sandboxMode: updated.sandboxMode,
+      approvalReviewer: updated.approvalReviewer,
       modelRequestCaptureEnabled: updated.modelRequestCaptureEnabled
     })
     await this.onStatusChanged?.(threadId, updated.status)
@@ -573,6 +590,12 @@ export class ThreadService {
   async fork(threadId: string, options: ForkThreadOptions = {}): Promise<ThreadRecord> {
     const current = await this.threadStore.get(threadId)
     if (!current) throw new Error(`thread not found: ${threadId}`)
+    if (
+      options.approvalReviewer !== undefined &&
+      options.approvalReviewer !== current.approvalReviewer
+    ) {
+      throw new Error('fork approval reviewer must inherit the source thread')
+    }
     const now = this.nowIso()
     const forkId = this.ids.next('thr')
     const relation: ThreadRelation = options.relation ?? 'fork'
@@ -615,6 +638,7 @@ export class ThreadService {
       status: 'idle',
       approvalPolicy: current.approvalPolicy,
       sandboxMode: current.sandboxMode,
+      approvalReviewer: current.approvalReviewer,
       modelRequestCaptureEnabled: this.defaultModelRequestCaptureEnabled,
       relation,
       parentThreadId: current.id,
@@ -638,7 +662,10 @@ export class ThreadService {
     await this.events.record({
       kind: 'thread_created',
       threadId: record.id,
-      title: record.title
+      title: record.title,
+      approvalPolicy: record.approvalPolicy,
+      sandboxMode: record.sandboxMode,
+      approvalReviewer: record.approvalReviewer
     })
     await this.onForked?.(threadId, record.id)
     return record
@@ -657,6 +684,13 @@ export class ThreadService {
         : await this.sessionStore.loadItems(sessionId)
     if (!sourceThread && !sourceSession && sourceItems.length === 0) {
       throw new Error(`session not found: ${sessionId}`)
+    }
+    if (
+      sourceThread &&
+      options.approvalReviewer !== undefined &&
+      options.approvalReviewer !== sourceThread.approvalReviewer
+    ) {
+      throw new Error('resumed approval reviewer must inherit the source thread')
     }
 
     const now = this.nowIso()
@@ -682,6 +716,7 @@ export class ThreadService {
       status: 'idle',
       approvalPolicy: sourceThread?.approvalPolicy,
       sandboxMode: sourceThread?.sandboxMode,
+      approvalReviewer: sourceThread?.approvalReviewer ?? options.approvalReviewer,
       modelRequestCaptureEnabled: this.defaultModelRequestCaptureEnabled,
       forkedFromThreadId: sourceThread?.id,
       forkedFromTitle: sourceThread?.title,
@@ -704,7 +739,10 @@ export class ThreadService {
     await this.events.record({
       kind: 'thread_created',
       threadId: resumed.id,
-      title: resumed.title
+      title: resumed.title,
+      approvalPolicy: resumed.approvalPolicy,
+      sandboxMode: resumed.sandboxMode,
+      approvalReviewer: resumed.approvalReviewer
     })
     return { thread: resumed, sessionId, messageCount: clonedItems.length }
   }

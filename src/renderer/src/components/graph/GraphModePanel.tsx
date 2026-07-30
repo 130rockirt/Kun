@@ -11,6 +11,7 @@ import { openGraphChildThread } from '../../graph/graph-child-navigation'
 import { useGraphStore } from '../../graph/graph-store'
 import { GraphAgentsView } from './GraphAgentsView'
 import { GraphLearningView } from './GraphLearningView'
+import { GraphPlanningCard } from './GraphPlanningCard'
 import { GraphRunView } from './GraphRunView'
 import {
   criticalPathNodeIds,
@@ -46,6 +47,7 @@ export function GraphModePanel({
   const [steering, setSteering] = useState('')
   const {
     runs,
+    drafts,
     childRuns,
     childReturnTarget,
     selectedRunId,
@@ -71,6 +73,8 @@ export function GraphModePanel({
     setChildReturnTarget,
     command,
     cancel,
+    resumeDraft,
+    cancelDraft,
     retryNode,
     reviewNode,
     patch,
@@ -100,6 +104,9 @@ export function GraphModePanel({
   }, [refreshProject, workspaceRoot])
 
   const run = runs.find((item) => item.id === selectedRunId) ?? runs[0] ?? null
+  const planningDraft = drafts.find((item) =>
+    !['committed', 'cancelled'].includes(item.draft.status)) ??
+    (!run ? drafts[0] ?? null : null)
   const selectedNode = run && selectedNodeId ? run.nodes[selectedNodeId] : undefined
   const canvasFocusRequestKey = run && selectedNodeId
     ? `${activeThreadId ?? ''}:${run.id}:${selectedNodeId}`
@@ -224,7 +231,13 @@ export function GraphModePanel({
       ) : null}
 
       {view === 'run' ? (
-        <GraphRunView
+        planningDraft ? (
+          <GraphPlanningCard
+            view={planningDraft}
+            onResume={() => void resumeDraft(planningDraft.draft.id)}
+            onCancel={() => void cancelDraft(planningDraft.draft.id)}
+          />
+        ) : <GraphRunView
           run={run}
           runs={runs}
           elements={elements}

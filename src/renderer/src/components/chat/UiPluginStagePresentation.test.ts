@@ -281,12 +281,9 @@ describe('UiPluginStagePresentation', () => {
     expect(css).toContain('.ds-composer-model-picker .text-accent')
     expect(css).toContain('.ds-composer-permission-menu')
     for (const permissionMode of [
-      'always-ask',
-      'read-only',
-      'sensitive-ask',
-      'workspace-write',
-      'trusted-workspace',
-      'bypass'
+      'ask-for-approval',
+      'approve-for-me',
+      'full-access'
     ]) {
       expect(css).toContain(`[data-permission-mode='${permissionMode}']`)
     }

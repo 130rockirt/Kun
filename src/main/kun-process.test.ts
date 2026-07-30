@@ -168,8 +168,10 @@ describe('startKunChild', () => {
   it('removes inherited Browser Use bridge authority when the feature is disabled', async () => {
     const previousUrl = process.env.KUN_BROWSER_USE_BRIDGE_URL
     const previousToken = process.env.KUN_BROWSER_USE_BRIDGE_TOKEN
+    const previousSigningKey = process.env.KUN_BROWSER_USE_APPROVAL_SIGNING_KEY
     process.env.KUN_BROWSER_USE_BRIDGE_URL = 'http://127.0.0.1:65535'
     process.env.KUN_BROWSER_USE_BRIDGE_TOKEN = 'inherited-secret-token'
+    process.env.KUN_BROWSER_USE_APPROVAL_SIGNING_KEY = 'inherited-signing-secret'
     const script = writeScript(
       'disabled-browser-use-env-child.js',
       [
@@ -177,6 +179,7 @@ describe('startKunChild', () => {
         `const port = ${testKunPort}`,
         "process.stdout.write('BRIDGE_URL=' + String(process.env.KUN_BROWSER_USE_BRIDGE_URL) + '\\n')",
         "process.stdout.write('BRIDGE_TOKEN=' + String(process.env.KUN_BROWSER_USE_BRIDGE_TOKEN) + '\\n')",
+        "process.stdout.write('BRIDGE_SIGNING_KEY=' + String(process.env.KUN_BROWSER_USE_APPROVAL_SIGNING_KEY) + '\\n')",
         "const server = http.createServer((_req, res) => {",
         "  res.setHeader('content-type', 'application/json')",
         "  res.end(JSON.stringify({ service: 'kun', mode: 'serve', status: 'ok' }))",
@@ -194,12 +197,19 @@ describe('startKunChild', () => {
       const logText = await readKunLog()
       expect(logText).toContain('BRIDGE_URL=undefined')
       expect(logText).toContain('BRIDGE_TOKEN=undefined')
+      expect(logText).toContain('BRIDGE_SIGNING_KEY=undefined')
       expect(logText).not.toContain('inherited-secret-token')
+      expect(logText).not.toContain('inherited-signing-secret')
     } finally {
       if (previousUrl === undefined) delete process.env.KUN_BROWSER_USE_BRIDGE_URL
       else process.env.KUN_BROWSER_USE_BRIDGE_URL = previousUrl
       if (previousToken === undefined) delete process.env.KUN_BROWSER_USE_BRIDGE_TOKEN
       else process.env.KUN_BROWSER_USE_BRIDGE_TOKEN = previousToken
+      if (previousSigningKey === undefined) {
+        delete process.env.KUN_BROWSER_USE_APPROVAL_SIGNING_KEY
+      } else {
+        process.env.KUN_BROWSER_USE_APPROVAL_SIGNING_KEY = previousSigningKey
+      }
     }
   })
 

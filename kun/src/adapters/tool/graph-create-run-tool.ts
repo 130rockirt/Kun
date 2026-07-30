@@ -245,7 +245,7 @@ function inferLegacyStrategy(plan: GraphPlanV1) {
   return linear ? 'pipeline' : 'hybrid'
 }
 
-function graphCreateBudgetDefaults(config: GraphRuntimeConfig) {
+export function graphCreateBudgetDefaults(config: GraphRuntimeConfig) {
   return {
     maxNodes: config.scheduler.maxNodes,
     maxEdges: config.scheduler.maxEdges,

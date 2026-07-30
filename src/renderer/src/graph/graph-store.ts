@@ -2,18 +2,25 @@ import { create } from 'zustand'
 import type { RuntimeChildEventPayload } from '../agent/types'
 import { graphRuntimeClient } from './graph-runtime-client'
 import { steerGraphSourceTurn } from './graph-source-turn-steering'
+import {
+  graphChildRuntimeFromEvent,
+  mergeGraphChildDiagnostics,
+  mergeGraphChildRuntime,
+  type GraphChildReturnTarget
+} from './graph-child-runtime'
 import type {
   GraphAgentEvidence,
   GraphAgentProfile,
   GraphAgentScore,
   GraphArtifactPage,
   GraphChildRuntime,
-  GraphDelegationDiagnostics,
   GraphEventEnvelope,
   GraphGovernanceAudit,
   GraphLearningCandidate,
   GraphLearningJob,
   GraphPatchOperation,
+  GraphPlanningDraftView,
+  GraphPlanningLifecycleEvent,
   GraphRun,
   ProjectIdentity
 } from './graph-types'
@@ -22,6 +29,7 @@ type GraphViewState = {
   threadId: string | null
   workspace: string
   runs: GraphRun[]
+  drafts: GraphPlanningDraftView[]
   childRuns: Record<string, GraphChildRuntime>
   childReturnTarget: GraphChildReturnTarget | null
   selectedRunId: string | null
@@ -55,8 +63,11 @@ type GraphViewState = {
   clearChildReturnTarget: () => void
   receiveChildRuntimeEvent: (event: RuntimeChildEventPayload) => void
   receiveEvent: (event: GraphEventEnvelope) => void
+  receivePlanningEvent: (event: GraphPlanningLifecycleEvent) => void
   command: (action: 'start' | 'pause' | 'resume' | 'cleanup') => Promise<void>
   cancel: () => Promise<void>
+  resumeDraft: (draftId: string) => Promise<void>
+  cancelDraft: (draftId: string) => Promise<void>
   retryNode: (nodeId: string) => Promise<void>
   reviewNode: (nodeId: string, outcome: 'pass' | 'fail') => Promise<void>
   patch: (operations: GraphPatchOperation[], reason: string) => Promise<void>
@@ -84,127 +95,8 @@ type GraphViewState = {
   consolidate: () => Promise<void>
 }
 
-export type GraphChildReturnTarget = {
-  parentThreadId: string
-  childThreadId: string
-  runId: string
-  nodeId: string
-  attemptId: string
-  parentEventSeq: number
-  childSessionStatus: 'creating' | 'open' | 'failed'
-  observerStatus: 'connecting' | 'live' | 'reconnecting' | 'stopped'
-  openedAt: string
-}
-
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
-}
-
-function timestampMs(value: string | undefined): number {
-  if (!value) return 0
-  const parsed = Date.parse(value)
-  return Number.isFinite(parsed) ? parsed : 0
-}
-
-export function graphChildRuntimeFromDiagnostics(
-  record: GraphDelegationDiagnostics['childRuns'][number]
-): GraphChildRuntime {
-  return {
-    childId: record.id,
-    parentThreadId: record.parentThreadId,
-    parentTurnId: record.parentTurnId,
-    ...(record.childSeq !== undefined ? { childSeq: record.childSeq } : {}),
-    ...(record.label ? { label: record.label } : {}),
-    ...(record.profile ? { profile: record.profile } : {}),
-    ...(record.profileSnapshot?.name ? { profileName: record.profileSnapshot.name } : {}),
-    ...(record.model ? { model: record.model } : {}),
-    ...(record.providerId ? { providerId: record.providerId } : {}),
-    status: record.status,
-    ...(record.activity ? { activity: record.activity } : {}),
-    ...(record.toolInvocations !== undefined
-      ? { toolInvocations: record.toolInvocations }
-      : {}),
-    ...(record.durationMs !== undefined ? { durationMs: record.durationMs } : {}),
-    ...(record.queuedMs !== undefined ? { queuedMs: record.queuedMs } : {}),
-    ...(record.usage?.totalTokens !== undefined
-      ? { totalTokens: record.usage.totalTokens }
-      : {}),
-    ...(record.startedAt ? { startedAt: record.startedAt } : {}),
-    updatedAt: record.updatedAt
-  }
-}
-
-export function graphChildRuntimeFromEvent(
-  event: RuntimeChildEventPayload
-): GraphChildRuntime {
-  const child = event.child
-  const updatedAt = child.activity?.updatedAt ?? event.timestamp ?? new Date().toISOString()
-  return {
-    childId: child.childId,
-    parentThreadId: child.parentThreadId,
-    parentTurnId: child.parentTurnId,
-    childSeq: child.childSeq,
-    ...(event.seq !== undefined ? { eventSeq: event.seq } : {}),
-    ...(child.childLabel ? { label: child.childLabel } : {}),
-    ...(child.childProfile ? { profile: child.childProfile } : {}),
-    ...(child.childProfileName ? { profileName: child.childProfileName } : {}),
-    ...(child.childModel ? { model: child.childModel } : {}),
-    ...(child.childProviderId ? { providerId: child.childProviderId } : {}),
-    status: child.childStatus,
-    ...(child.activity ? { activity: child.activity } : {}),
-    ...(child.toolInvocations !== undefined
-      ? { toolInvocations: child.toolInvocations }
-      : {}),
-    ...(child.durationMs !== undefined ? { durationMs: child.durationMs } : {}),
-    ...(child.queuedMs !== undefined ? { queuedMs: child.queuedMs } : {}),
-    ...(child.totalTokens !== undefined ? { totalTokens: child.totalTokens } : {}),
-    ...(child.activity?.startedAt ? { startedAt: child.activity.startedAt } : {}),
-    updatedAt
-  }
-}
-
-export function mergeGraphChildRuntime(
-  current: GraphChildRuntime | undefined,
-  incoming: GraphChildRuntime
-): GraphChildRuntime {
-  if (!current) return incoming
-  if (
-    incoming.eventSeq !== undefined &&
-    current.eventSeq !== undefined &&
-    incoming.eventSeq <= current.eventSeq
-  ) {
-    return current
-  }
-  if (
-    incoming.eventSeq === undefined &&
-    timestampMs(incoming.updatedAt) < timestampMs(current.updatedAt)
-  ) {
-    return current
-  }
-  return {
-    ...current,
-    ...incoming,
-    activity: incoming.activity ?? current.activity,
-    startedAt: incoming.startedAt ?? current.startedAt,
-    eventSeq: incoming.eventSeq ?? current.eventSeq
-  }
-}
-
-function mergeDiagnostics(
-  current: Record<string, GraphChildRuntime>,
-  diagnostics: GraphDelegationDiagnostics | null,
-  parentThreadId: string
-): Record<string, GraphChildRuntime> {
-  const next: Record<string, GraphChildRuntime> = {}
-  for (const record of Object.values(current)) {
-    if (record.parentThreadId === parentThreadId) next[record.childId] = record
-  }
-  for (const record of diagnostics?.childRuns ?? []) {
-    if (record.parentThreadId !== parentThreadId) continue
-    const incoming = graphChildRuntimeFromDiagnostics(record)
-    next[incoming.childId] = mergeGraphChildRuntime(next[incoming.childId], incoming)
-  }
-  return next
 }
 
 function mergeRunSnapshots(
@@ -222,6 +114,7 @@ export const useGraphStore = create<GraphViewState>((set, get) => ({
   threadId: null,
   workspace: '',
   runs: [],
+  drafts: [],
   childRuns: {},
   childReturnTarget: null,
   selectedRunId: null,
@@ -245,6 +138,7 @@ export const useGraphStore = create<GraphViewState>((set, get) => ({
     if (!threadId) {
       set({
         runs: [],
+        drafts: [],
         childRuns: {},
         selectedRunId: null,
         selectedNodeId: null,
@@ -256,8 +150,9 @@ export const useGraphStore = create<GraphViewState>((set, get) => ({
       return
     }
     try {
-      const [runs, diagnostics] = await Promise.all([
+      const [runs, drafts, diagnostics] = await Promise.all([
         graphRuntimeClient.listRuns(threadId),
+        graphRuntimeClient.listDrafts(threadId),
         graphRuntimeClient.delegationDiagnostics(threadId).catch(() => null)
       ])
       if (get().threadId !== threadId) return
@@ -274,7 +169,8 @@ export const useGraphStore = create<GraphViewState>((set, get) => ({
         : null
       set({
         runs: mergedRuns,
-        childRuns: mergeDiagnostics(current.childRuns, diagnostics, threadId),
+        drafts,
+        childRuns: mergeGraphChildDiagnostics(current.childRuns, diagnostics, threadId),
         selectedRunId,
         selectedNodeId,
         artifactPage: null,
@@ -399,6 +295,35 @@ export const useGraphStore = create<GraphViewState>((set, get) => ({
     }
   },
 
+  receivePlanningEvent: (event) => {
+    const current = get()
+    const index = current.drafts.findIndex((view) => view.draft.id === event.draftId)
+    if (index < 0) {
+      if (current.threadId) void current.refreshThread(current.threadId)
+      return
+    }
+    set((state) => ({
+      drafts: state.drafts.map((view) =>
+        view.draft.id === event.draftId && event.revision >= view.draft.revision
+          ? {
+              draft: {
+                ...view.draft,
+                revision: event.revision,
+                status: event.state,
+                issues: event.issues,
+                ...(event.committedRunId
+                  ? { committedRunId: event.committedRunId }
+                  : {})
+              },
+              tasks: event.tasks
+            }
+          : view)
+    }))
+    if (event.state === 'committed' && current.threadId) {
+      void get().refreshThread(current.threadId)
+    }
+  },
+
   command: async (action) => {
     const runId = get().selectedRunId
     if (!runId) return
@@ -420,6 +345,42 @@ export const useGraphStore = create<GraphViewState>((set, get) => ({
       const run = await graphRuntimeClient.cancel(runId, 'Cancelled by user from Graph panel.')
       set((state) => ({
         runs: state.runs.map((item) => item.id === run.id ? run : item),
+        error: null
+      }))
+    } catch (error) {
+      set({ error: message(error) })
+    }
+  },
+
+  resumeDraft: async (draftId) => {
+    const view = get().drafts.find((item) => item.draft.id === draftId)
+    if (!view) return
+    try {
+      const next = await graphRuntimeClient.resumeDraft(
+        draftId,
+        view.draft.revision
+      )
+      set((state) => ({
+        drafts: state.drafts.map((item) =>
+          item.draft.id === draftId ? next : item),
+        error: null
+      }))
+    } catch (error) {
+      set({ error: message(error) })
+    }
+  },
+
+  cancelDraft: async (draftId) => {
+    const view = get().drafts.find((item) => item.draft.id === draftId)
+    if (!view) return
+    try {
+      const next = await graphRuntimeClient.cancelDraft(
+        draftId,
+        view.draft.revision
+      )
+      set((state) => ({
+        drafts: state.drafts.map((item) =>
+          item.draft.id === draftId ? next : item),
         error: null
       }))
     } catch (error) {
@@ -692,6 +653,31 @@ export function receiveGraphRuntimeEvent(value: unknown): void {
   useGraphStore.getState().receiveEvent(event as GraphEventEnvelope)
 }
 
+export function receiveGraphPlanningRuntimeEvent(value: unknown): void {
+  if (!value || typeof value !== 'object') return
+  const event = value as Partial<GraphPlanningLifecycleEvent>
+  if (
+    event.version !== 1 ||
+    typeof event.event !== 'string' ||
+    typeof event.draftId !== 'string' ||
+    typeof event.sourceTurnId !== 'string' ||
+    typeof event.revision !== 'number' ||
+    typeof event.state !== 'string' ||
+    !Array.isArray(event.issues) ||
+    !Array.isArray(event.tasks)
+  ) return
+  useGraphStore.getState().receivePlanningEvent(
+    event as GraphPlanningLifecycleEvent
+  )
+}
+
 export function receiveGraphChildRuntimeEvent(event: RuntimeChildEventPayload): void {
   useGraphStore.getState().receiveChildRuntimeEvent(event)
 }
+
+export type { GraphChildReturnTarget } from './graph-child-runtime'
+export {
+  graphChildRuntimeFromDiagnostics,
+  graphChildRuntimeFromEvent,
+  mergeGraphChildRuntime
+} from './graph-child-runtime'

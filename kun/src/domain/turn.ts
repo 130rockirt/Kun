@@ -1,4 +1,5 @@
 import type {
+  ActingTurnModelRoute,
   GuiDesignArtifactContextJson,
   GuiPlanContextJson,
   Turn,
@@ -6,6 +7,11 @@ import type {
   TurnReasoningEffort,
   TurnStatus
 } from '../contracts/turns.js'
+import type {
+  ApprovalPolicy,
+  ApprovalReviewer,
+  SandboxMode
+} from '../contracts/policy.js'
 import type { GraphOrchestrationStrategy } from '../contracts/graph.js'
 import type { ThreadMode } from '../contracts/threads.js'
 import type { TurnItem, UserMessageSource } from '../contracts/items.js'
@@ -21,8 +27,12 @@ export function createTurnRecord(input: {
   model?: string
   providerId?: string
   accountId?: string
+  actingModelRoute?: ActingTurnModelRoute
   reasoningEffort?: TurnReasoningEffort
   clientSurface?: TurnClientSurface
+  approvalPolicy?: ApprovalPolicy
+  sandboxMode?: SandboxMode
+  approvalReviewer?: ApprovalReviewer
   attachmentIds?: string[]
   composerContexts?: ComposerContextAttachmentJson[]
   guiPlan?: GuiPlanContextJson
@@ -37,6 +47,7 @@ export function createTurnRecord(input: {
   workspaceCheckpointId?: string
   workspaceCheckpointRequestId?: string
   extensionBudgetTokenBaseline?: number
+  graphPlanningLifecycle?: import('../contracts/turns.js').GraphPlanningLifecycle
   createdAt?: string
   status?: TurnStatus
 }): TurnEntity {
@@ -62,8 +73,12 @@ export function createTurnRecord(input: {
     ...(model ? { model } : {}),
     ...(providerId ? { providerId } : {}),
     ...(accountId ? { accountId } : {}),
+    ...(input.actingModelRoute ? { actingModelRoute: { ...input.actingModelRoute } } : {}),
     ...(reasoningEffort ? { reasoningEffort } : {}),
     ...(input.clientSurface ? { clientSurface: input.clientSurface } : {}),
+    ...(input.approvalPolicy ? { approvalPolicy: input.approvalPolicy } : {}),
+    ...(input.sandboxMode ? { sandboxMode: input.sandboxMode } : {}),
+    ...(input.approvalReviewer ? { approvalReviewer: input.approvalReviewer } : {}),
     ...(input.guiPlan ? { guiPlan: input.guiPlan } : {}),
     ...(input.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
     ...(input.guiDesignMode ? { guiDesignMode: true } : {}),
@@ -82,6 +97,9 @@ export function createTurnRecord(input: {
           extensionModelRequests: 0,
           extensionToolInvocations: 0
         }
+      : {}),
+    ...(input.graphPlanningLifecycle
+      ? { graphPlanningLifecycle: { ...input.graphPlanningLifecycle } }
       : {}),
     createdAt: input.createdAt ?? new Date().toISOString()
   }

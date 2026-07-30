@@ -8,9 +8,20 @@ import {
 import { ThreadGoalSchema, ThreadTodoListSchema } from './threads.js'
 import { UsageSnapshotSchema } from './usage.js'
 import { RuntimeErrorSeverity } from './errors.js'
-import { ApprovalPolicySchema, SandboxModeSchema } from './policy.js'
+import {
+  ApprovalPolicySchema,
+  ApprovalReviewerSchema,
+  SandboxModeSchema
+} from './policy.js'
+import {
+  ApprovalActionEnvelopeSchema,
+  ApprovalReviewTerminalStatusSchema
+} from './approvals.js'
 import { SubagentToolPolicy } from './capabilities.js'
-import { GraphEventEnvelopeV1Schema } from './graph.js'
+import {
+  GraphEventEnvelopeV1Schema,
+  GraphPlanningLifecycleEventV1Schema
+} from './graph.js'
 import {
   SteeringEntrySchema,
   TurnClientSurfaceSchema,
@@ -46,6 +57,8 @@ export const RuntimeEventKind = z.enum([
   'tool_call_finished',
   'approval_requested',
   'approval_resolved',
+  'approval_review_started',
+  'approval_review_completed',
   'user_input_requested',
   'user_input_resolved',
   'compaction_started',
@@ -59,6 +72,7 @@ export const RuntimeEventKind = z.enum([
   'bash_session_completed',
   'pipeline_stage',
   'delegated_runtime',
+  'graph_planning',
   'graph_event',
   'context_snapshot',
   'usage',
@@ -163,6 +177,7 @@ export const ThreadLifecycleEvent = RuntimeEventBase.extend({
   workspace: z.string().optional(),
   additionalWorkspaces: z.array(z.string()).optional(),
   approvalPolicy: ApprovalPolicySchema.optional(),
+  approvalReviewer: ApprovalReviewerSchema.optional(),
   sandboxMode: SandboxModeSchema.optional(),
   modelRequestCaptureEnabled: z.boolean().optional()
 })
@@ -189,6 +204,9 @@ export const TurnLifecycleEvent = RuntimeEventBase.extend({
   accountId: z.string().min(1).optional(),
   reasoningEffort: TurnReasoningEffortSchema.optional(),
   clientSurface: TurnClientSurfaceSchema.optional(),
+  approvalPolicy: ApprovalPolicySchema.optional(),
+  sandboxMode: SandboxModeSchema.optional(),
+  approvalReviewer: ApprovalReviewerSchema.optional(),
   mode: z.enum(['agent', 'plan']).optional()
 })
 export type TurnLifecycleEvent = z.infer<typeof TurnLifecycleEvent>
@@ -205,11 +223,40 @@ export const ApprovalEvent = RuntimeEventBase.extend({
   toolName: z.string().min(1),
   status: z.enum(['pending', 'allowed', 'denied', 'expired']),
   approvalPolicy: ApprovalPolicySchema.optional(),
+  approvalReviewer: ApprovalReviewerSchema.optional(),
+  decisionSource: ApprovalReviewerSchema.optional(),
   sandboxMode: SandboxModeSchema.optional(),
   summary: z.string().optional(),
-  reason: z.string().optional()
+  reason: z.string().optional(),
+  action: ApprovalActionEnvelopeSchema.optional()
 })
 export type ApprovalEvent = z.infer<typeof ApprovalEvent>
+
+export const ApprovalReviewStartedEvent = RuntimeEventBase.extend({
+  kind: z.literal('approval_review_started'),
+  reviewId: z.string().min(1),
+  approvalId: z.string().min(1),
+  toolName: z.string().min(1),
+  reviewer: z.literal('agent'),
+  status: z.literal('in-progress'),
+  summary: z.string().min(1).max(2_048),
+  action: ApprovalActionEnvelopeSchema.optional()
+}).strict()
+export type ApprovalReviewStartedEvent = z.infer<typeof ApprovalReviewStartedEvent>
+
+export const ApprovalReviewCompletedEvent = RuntimeEventBase.extend({
+  kind: z.literal('approval_review_completed'),
+  reviewId: z.string().min(1),
+  approvalId: z.string().min(1),
+  toolName: z.string().min(1),
+  reviewer: z.literal('agent'),
+  status: ApprovalReviewTerminalStatusSchema,
+  summary: z.string().min(1).max(2_048),
+  decision: z.enum(['allow', 'deny']).optional(),
+  riskLevel: z.enum(['low', 'medium', 'high', 'critical']).optional(),
+  rationale: z.string().min(1).max(2_048)
+}).strict()
+export type ApprovalReviewCompletedEvent = z.infer<typeof ApprovalReviewCompletedEvent>
 
 export const UserInputEvent = RuntimeEventBase.extend({
   kind: z.enum(['user_input_requested', 'user_input_resolved']),
@@ -390,9 +437,18 @@ export const GraphRuntimeEvent = RuntimeEventBase.extend({
 })
 export type GraphRuntimeEvent = z.infer<typeof GraphRuntimeEvent>
 
+export const GraphPlanningRuntimeEvent = RuntimeEventBase.extend({
+  kind: z.literal('graph_planning'),
+  planning: GraphPlanningLifecycleEventV1Schema
+}).strict()
+export type GraphPlanningRuntimeEvent = z.infer<typeof GraphPlanningRuntimeEvent>
+
 export const UsageEvent = RuntimeEventBase.extend({
   kind: z.literal('usage'),
   model: z.string().optional(),
+  providerId: z.string().min(1).optional(),
+  accountId: z.string().min(1).optional(),
+  attribution: z.enum(['agent-turn', 'approval-review']).optional(),
   usage: UsageSnapshotSchema
 })
 export type UsageEvent = z.infer<typeof UsageEvent>
@@ -425,6 +481,8 @@ export const RuntimeEvent = z.discriminatedUnion('kind', [
   TurnLifecycleEvent,
   SteeringEvent,
   ApprovalEvent,
+  ApprovalReviewStartedEvent,
+  ApprovalReviewCompletedEvent,
   UserInputEvent,
   ToolCallReadyEvent,
   RequiredToolGateEvent,
@@ -439,6 +497,7 @@ export const RuntimeEvent = z.discriminatedUnion('kind', [
   BashSessionEvent,
   PipelineStageEvent,
   DelegatedRuntimeEvent,
+  GraphPlanningRuntimeEvent,
   GraphRuntimeEvent,
   ContextSnapshotEvent,
   UsageEvent,

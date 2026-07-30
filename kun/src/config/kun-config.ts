@@ -4,7 +4,9 @@ import { join } from 'node:path'
 import { z } from 'zod'
 import type { GeminiCodeAssistCredential } from '../contracts/gemini-code-assist.js'
 import {
+  ApprovalReviewerSchema,
   ApprovalPolicySchema,
+  DEFAULT_APPROVAL_REVIEWER,
   DEFAULT_APPROVAL_POLICY,
   DEFAULT_SANDBOX_MODE,
   SandboxModeSchema
@@ -574,6 +576,7 @@ export const KunServeConfigSchema = z
     model: z.string().min(1).optional(),
     approvalPolicy: ApprovalPolicySchema.default(DEFAULT_APPROVAL_POLICY).optional(),
     sandboxMode: SandboxModeSchema.default(DEFAULT_SANDBOX_MODE).optional(),
+    approvalReviewer: ApprovalReviewerSchema.default(DEFAULT_APPROVAL_REVIEWER).optional(),
     tokenEconomyMode: z.boolean().optional(),
     tokenEconomy: TokenEconomyConfigSchema.optional(),
     toolOutputLimits: ToolOutputLimitsConfigSchema.optional(),

@@ -1,6 +1,7 @@
 import type { ToolHostContext, ToolProviderKind } from '../ports/tool-host.js'
 
 export const GRAPH_LEAD_TOOL_NAMES = [
+  'graph_define_plan',
   'graph_create_run',
   'graph_control_run',
   'graph_patch_run',

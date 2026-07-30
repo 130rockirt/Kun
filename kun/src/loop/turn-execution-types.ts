@@ -18,7 +18,10 @@ import type {
   ToolHostContext,
   ToolProviderKind
 } from '../ports/tool-host.js'
-import type { TurnClientSurface } from '../contracts/turns.js'
+import type {
+  ActingTurnModelRoute,
+  TurnClientSurface
+} from '../contracts/turns.js'
 
 /** Terminal status exposed by the public AgentLoop turn boundary. */
 export type TurnExecutionStatus = 'completed' | 'failed' | 'aborted'
@@ -62,11 +65,13 @@ export type PreparedTurnContext = Readonly<{
   additionalWorkspaces?: readonly string[]
   clientSurface: TurnClientSurface
   model: string
+  actingModelRoute?: ActingTurnModelRoute
   mode: 'agent' | 'plan'
   dedicatedSvgTurn: boolean
   planContextStale: boolean
   activePlanContext?: GuiPlanContext
   approvalPolicy: ToolHostContext['approvalPolicy']
+  approvalReviewer?: NonNullable<ToolHostContext['approvalReviewer']>
   sandboxMode: NonNullable<ToolHostContext['sandboxMode']>
   signal: AbortSignal
   history: readonly TurnItem[]
@@ -107,6 +112,8 @@ export type ToolTurnContextInput = {
   agentSurface?: 'code' | 'write' | 'design'
   guiDesignArtifact?: GuiDesignArtifactContext
   modelProviderId?: string
+  actingModelRoute?: ActingTurnModelRoute
+  approvalIntent?: string
   reasoningEffort?: string
   modelCapabilities: ModelCapabilityMetadata
   activeSkillIds: readonly string[]
@@ -115,6 +122,7 @@ export type ToolTurnContextInput = {
   userInputDisabled?: boolean
   imContext?: boolean
   approvalPolicy: ToolHostContext['approvalPolicy']
+  approvalReviewer?: NonNullable<ToolHostContext['approvalReviewer']>
   sandboxMode: NonNullable<ToolHostContext['sandboxMode']>
   signal: AbortSignal
 }

@@ -1,4 +1,9 @@
-import type { ApprovalPolicy, SandboxMode } from '../contracts/policy.js'
+import {
+  DEFAULT_APPROVAL_REVIEWER,
+  type ApprovalPolicy,
+  type ApprovalReviewer,
+  type SandboxMode
+} from '../contracts/policy.js'
 import type { DelegationRuntime } from '../delegation/delegation-runtime.js'
 import type { ThreadStore } from '../ports/thread-store.js'
 import type { TurnService } from '../services/turn-service.js'
@@ -12,6 +17,7 @@ type GraphAuthorityDefaults = {
   model: string
   approvalPolicy: ApprovalPolicy
   sandboxMode: SandboxMode
+  approvalReviewer?: ApprovalReviewer
   allowedMcpServers: string[]
   disabledSkillIds: string[]
   networkAllowed: boolean
@@ -95,9 +101,24 @@ export function createGraphRuntimeStartOptions(input: {
       const thread = await input.threads.get(run.threadId)
       const sourceTurn = thread?.turns.find((turn) => turn.id === run.sourceTurnId)
       const defaults = input.defaults()
-      const sandboxMode = thread?.sandboxMode ?? defaults.sandboxMode
-      const model = sourceTurn?.model ?? thread?.model ?? defaults.model
-      const providerId = sourceTurn?.providerId ?? thread?.providerId ?? 'default'
+      const sandboxMode =
+        sourceTurn?.sandboxMode ??
+        thread?.sandboxMode ??
+        defaults.sandboxMode
+      const model =
+        sourceTurn?.actingModelRoute?.model ??
+        sourceTurn?.model ??
+        thread?.model ??
+        defaults.model
+      const providerId =
+        sourceTurn?.actingModelRoute?.providerId ??
+        sourceTurn?.providerId ??
+        thread?.providerId ??
+        'default'
+      const accountId =
+        sourceTurn?.actingModelRoute?.accountId ??
+        sourceTurn?.accountId ??
+        (providerId === thread?.providerId ? thread?.accountId : undefined)
       const configuredWorkerModel = defaults.workerModel?.mode === 'fixed'
         ? defaults.workerModel
         : undefined
@@ -109,6 +130,7 @@ export function createGraphRuntimeStartOptions(input: {
         workspaceRoot: run.plans.at(-1)!.workspaceRoot,
         model,
         providerId,
+        ...(accountId ? { accountId } : {}),
         allowedModelProviderIds: [...new Set([
           providerId,
           ...(configuredWorkerModel ? [configuredWorkerModel.providerId] : [])
@@ -119,8 +141,16 @@ export function createGraphRuntimeStartOptions(input: {
         ])],
         allowedProviderIds: allowedProviders,
         reasoningEffort: sourceTurn?.reasoningEffort ?? 'off',
-        approvalPolicy: thread?.approvalPolicy ?? defaults.approvalPolicy,
+        approvalPolicy:
+          sourceTurn?.approvalPolicy ??
+          thread?.approvalPolicy ??
+          defaults.approvalPolicy,
         sandboxMode,
+        approvalReviewer:
+          sourceTurn?.approvalReviewer ??
+          thread?.approvalReviewer ??
+          defaults.approvalReviewer ??
+          DEFAULT_APPROVAL_REVIEWER,
         allowedTools: graphParentAuthorityToolNames(tools
           .filter((tool) => allowedProviders.includes(tool.providerId))
           .map((tool) => tool.name)),

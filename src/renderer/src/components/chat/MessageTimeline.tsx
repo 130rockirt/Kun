@@ -169,6 +169,7 @@ function blockScrollStamp(block: ChatBlock | undefined): string {
     case 'review':
       return `${block.id}:${block.kind}:${block.status}:${block.reviewText?.length ?? 0}`
     case 'approval':
+    case 'approval_review':
     case 'user_input':
     case 'compaction':
       return `${block.id}:${block.kind}:${block.status}`

@@ -41,6 +41,8 @@ export function createReadLocalTool(options: ReadLocalToolOptions = {}): LocalTo
       additionalProperties: false
     },
     policy: 'auto',
+    toolKind: 'tool_call',
+    sideEffect: 'read-only',
     execute: async (args, context) => withToolBoundary(async () => {
       const rawPath = typeof args.path === 'string' ? args.path : ''
       if (!rawPath.trim()) {

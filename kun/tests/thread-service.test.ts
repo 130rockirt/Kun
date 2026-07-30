@@ -69,6 +69,7 @@ describe('ThreadService runtime defaults', () => {
     expect(thread).toMatchObject({
       approvalPolicy: 'never',
       sandboxMode: 'read-only',
+      approvalReviewer: 'user',
       modelRequestCaptureEnabled: true
     })
 
@@ -83,10 +84,12 @@ describe('ThreadService runtime defaults', () => {
     service.updateRuntimeDefaults({
       approvalPolicy: 'never',
       sandboxMode: 'read-only',
+      approvalReviewer: 'agent',
       modelRequestCaptureEnabled: false
     })
     const later = await service.create({ workspace: '/tmp', model: 'm', mode: 'agent' })
     expect(later.modelRequestCaptureEnabled).toBe(false)
+    expect(later.approvalReviewer).toBe('agent')
     expect((await service.get(thread.id))?.modelRequestCaptureEnabled).toBe(true)
 
     const toggled = await service.update(thread.id, { modelRequestCaptureEnabled: false })
@@ -212,7 +215,14 @@ describe('ThreadService.fork with side relation', () => {
   it('sets parentThreadId and side relation on the new thread', async () => {
     const { service, threadStore } = buildService()
     await service.create(
-      { workspace: '/tmp/p', model: 'deepseek-chat', mode: 'agent' },
+      {
+        workspace: '/tmp/p',
+        model: 'deepseek-chat',
+        mode: 'agent',
+        approvalPolicy: 'on-request',
+        sandboxMode: 'workspace-write',
+        approvalReviewer: 'agent'
+      },
       { id: 'thr_1', title: 'Parent' }
     )
     const side = await service.fork('thr_1', { relation: 'side' })
@@ -220,6 +230,15 @@ describe('ThreadService.fork with side relation', () => {
     expect(side.parentThreadId).toBe('thr_1')
     expect(side.forkedFromThreadId).toBe('thr_1')
     expect(side.title).toBe('Parent · side')
+    expect(side).toMatchObject({
+      approvalPolicy: 'on-request',
+      sandboxMode: 'workspace-write',
+      approvalReviewer: 'agent'
+    })
+    await expect(service.fork('thr_1', {
+      relation: 'side',
+      approvalReviewer: 'user'
+    })).rejects.toThrow(/reviewer/i)
     // The parent record must not be mutated by the spawn.
     const parent = await threadStore.get('thr_1')
     expect(parent?.relation ?? 'primary').toBe('primary')

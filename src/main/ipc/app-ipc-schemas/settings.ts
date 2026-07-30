@@ -53,6 +53,7 @@ const chatContentMaxWidthSchema = z.number().min(CHAT_CONTENT_MAX_WIDTH_MIN).max
 const hexColorSchema = z.string().trim().regex(/^#[0-9a-fA-F]{6}$/)
 const approvalPolicySchema = z.enum(['always', 'on-request', 'untrusted', 'never', 'auto', 'suggest'])
 const sandboxModeSchema = z.enum(['read-only', 'workspace-write', 'danger-full-access', 'external-sandbox'])
+const approvalReviewerSchema = z.enum(['user', 'agent'])
 const mcpSearchModeSchema = z.enum(['direct', 'search', 'auto'])
 const kunStorageBackendSchema = z.enum(['hybrid', 'file'])
 const kunCompactionSummaryModeSchema = z.enum(['heuristic', 'model'])
@@ -273,6 +274,7 @@ const kunRuntimePatchSchema = z.object({
   model: modelIdSchema.optional(),
   approvalPolicy: approvalPolicySchema.optional(),
   sandboxMode: sandboxModeSchema.optional(),
+  approvalReviewer: approvalReviewerSchema.optional(),
   tokenEconomyMode: z.boolean().optional(),
   tokenEconomy: z.object({
     enabled: z.boolean().optional(),

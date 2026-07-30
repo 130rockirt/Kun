@@ -58,7 +58,9 @@ async function recordApprovalResolution(input: {
         approvalId: input.approvalId,
         toolName: approval.toolName,
         status,
+        approvalReviewer: 'user',
         summary: approval.summary,
+        ...(approval.action ? { action: approval.action } : {}),
         ...(input.reason ? { reason: input.reason } : {})
       })
     } catch (error) {

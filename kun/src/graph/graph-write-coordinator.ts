@@ -31,6 +31,7 @@ const PathLeaseSchema = z.object({
   attemptId: Identifier,
   workspaceRoot: z.string().min(1).max(4_096),
   scopes: z.array(RelativePath).max(1_000),
+  baselineChanges: z.record(z.string(), z.string()).optional(),
   state: z.enum(['active', 'released', 'expired', 'orphaned']),
   acquiredAt: Timestamp,
   expiresAt: Timestamp,
@@ -119,6 +120,13 @@ export class FileGraphWriteCoordinator {
         return { acquired: false, conflicts }
       }
       const now = this.nowIso()
+      const useWorktree =
+        scopes.length > 0 &&
+        isolation.mode === 'worktree' &&
+        isolation.allowWorktrees
+      const baselineChanges = scopes.length > 0 && !useWorktree
+        ? await workspaceChangeSnapshot(workspaceRoot).catch(() => undefined)
+        : undefined
       const lease = PathLeaseSchema.parse({
         leaseId: this.nextId('graph_lease'),
         runId: input.runId,
@@ -126,6 +134,7 @@ export class FileGraphWriteCoordinator {
         attemptId: input.attemptId,
         workspaceRoot,
         scopes,
+        ...(baselineChanges ? { baselineChanges } : {}),
         state: 'active',
         acquiredAt: now,
         expiresAt: new Date(
@@ -135,11 +144,7 @@ export class FileGraphWriteCoordinator {
       state.leases.push(lease)
       let worktree: GraphWorktreeRecord | undefined
       let effectiveWorkspace = workspaceRoot
-      if (
-        scopes.length &&
-        this.options.config().writeIsolation.mode === 'worktree' &&
-        this.options.config().writeIsolation.allowWorktrees
-      ) {
+      if (useWorktree) {
         worktree = await this.createWorktree(input, workspaceRoot)
         state.worktrees.push(worktree)
         effectiveWorkspace = worktree.path
@@ -278,6 +283,22 @@ export class FileGraphWriteCoordinator {
       await this.persist(state)
       return WorktreeRecordSchema.parse(record)
     })
+  }
+
+  async captureChangedFiles(attemptId: string): Promise<string[] | null> {
+    const state = await this.load()
+    if (state.worktrees.some((entry) => entry.attemptId === attemptId)) {
+      return (await this.captureWorktree(attemptId))?.changedFiles ?? null
+    }
+    const lease = state.leases.find((entry) => entry.attemptId === attemptId)
+    if (!lease?.baselineChanges) return null
+    const current = await workspaceChangeSnapshot(lease.workspaceRoot)
+    const paths = new Set([
+      ...Object.keys(lease.baselineChanges),
+      ...Object.keys(current)
+    ])
+    return normalizeScopes([...paths].filter((path) =>
+      lease.baselineChanges?.[path] !== current[path]))
   }
 
   async integrate(attemptId: string): Promise<{
@@ -607,6 +628,32 @@ async function git(cwd: string, args: string[]): Promise<string> {
     maxBuffer: 64 * 1024 * 1024
   })
   return result.stdout
+}
+
+async function workspaceChangeSnapshot(
+  workspaceRoot: string
+): Promise<Record<string, string>> {
+  const output = await git(workspaceRoot, [
+    'status',
+    '--porcelain=v1',
+    '-z',
+    '--untracked-files=all',
+    '--no-renames'
+  ])
+  const snapshot: Record<string, string> = {}
+  for (const entry of output.split('\0').filter(Boolean)) {
+    if (entry.length < 4) continue
+    const status = entry.slice(0, 2)
+    const path = normalizeGraphRelativePath(entry.slice(3))
+    const signature = await readFile(resolve(workspaceRoot, path))
+      .then((content) => createHash('sha256').update(content).digest('hex'))
+      .catch((error) =>
+        String((error as { code?: unknown })?.code ?? '') === 'ENOENT'
+          ? 'missing'
+          : Promise.reject(error))
+    snapshot[path] = `${status}:${signature}`
+  }
+  return snapshot
 }
 
 async function workingTreeChangedFiles(repositoryRoot: string): Promise<string[]> {

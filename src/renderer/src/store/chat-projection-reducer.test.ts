@@ -51,6 +51,53 @@ function project(initial: ChatState, actions: RuntimeProjectionAction[]): ChatSt
 }
 
 describe('chat projection reducer', () => {
+  it('updates one stable non-actionable block across an automatic review lifecycle', () => {
+    const projected = project(state(), [
+      {
+        type: 'approval_review_updated',
+        payload: {
+          reviewId: 'review_1',
+          approvalId: 'approval_1',
+          turnId: 'turn_1',
+          createdAt: '2026-07-29T00:00:00.000Z',
+          summary: 'Run tests',
+          toolName: 'exec_command',
+          status: 'in-progress'
+        }
+      },
+      {
+        type: 'approval_review_updated',
+        payload: {
+          reviewId: 'review_1',
+          approvalId: 'approval_1',
+          turnId: 'turn_1',
+          createdAt: '2026-07-29T00:00:01.000Z',
+          summary: 'Run tests',
+          toolName: 'exec_command',
+          status: 'approved',
+          decision: 'allow',
+          riskLevel: 'low',
+          rationale: 'The command only runs workspace tests.'
+        }
+      }
+    ])
+
+    expect(projected.blocks).toEqual([{
+      kind: 'approval_review',
+      id: 'approval-review-review_1',
+      reviewId: 'review_1',
+      approvalId: 'approval_1',
+      turnId: 'turn_1',
+      createdAt: '2026-07-29T00:00:00.000Z',
+      summary: 'Run tests',
+      toolName: 'exec_command',
+      status: 'approved',
+      decision: 'allow',
+      riskLevel: 'low',
+      rationale: 'The command only runs workspace tests.'
+    }])
+  })
+
   it('renders a failed required-tool gate as an expandable runtime status, not an assistant block', () => {
     const projected = project(state(), [{
       type: 'runtime_status_received',

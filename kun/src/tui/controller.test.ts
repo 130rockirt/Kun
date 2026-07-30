@@ -215,6 +215,7 @@ describe('TuiController', () => {
     const request = createThread.mock.calls[0]![0]
     expect(request).not.toHaveProperty('approvalPolicy')
     expect(request).not.toHaveProperty('sandboxMode')
+    expect(request).not.toHaveProperty('approvalReviewer')
     await controller.stop()
   })
 
@@ -228,6 +229,11 @@ describe('TuiController', () => {
       name: 'sandbox only',
       overrides: { sandboxMode: 'danger-full-access' as const },
       expected: { sandboxMode: 'danger-full-access' }
+    },
+    {
+      name: 'reviewer only',
+      overrides: { approvalReviewer: 'agent' as const },
+      expected: { approvalReviewer: 'agent' }
     },
     {
       name: 'approval and sandbox',
@@ -264,6 +270,7 @@ describe('TuiController', () => {
     expect(request).toMatchObject(expected)
     if (!('approvalPolicy' in expected)) expect(request).not.toHaveProperty('approvalPolicy')
     if (!('sandboxMode' in expected)) expect(request).not.toHaveProperty('sandboxMode')
+    if (!('approvalReviewer' in expected)) expect(request).not.toHaveProperty('approvalReviewer')
     await controller.stop()
   })
 
@@ -1203,12 +1210,16 @@ describe('TuiController', () => {
     const controller = new TuiController(client, { ...options(), workspace: root }, runtime)
     try {
       await controller.start()
-      await expect(controller.setPermissions('never', 'read-only')).resolves.toBe(true)
+      await expect(controller.setPermissions('never', 'read-only', 'user')).resolves.toBe(true)
       await controller.setPlanMode('plan')
       await controller.addDirectory(extra)
       const canonicalExtra = await realpath(extra)
       expect(controller.state.projection?.thread).toMatchObject({
-        approvalPolicy: 'never', sandboxMode: 'read-only', mode: 'plan', additionalWorkspaces: [canonicalExtra]
+        approvalPolicy: 'never',
+        sandboxMode: 'read-only',
+        approvalReviewer: 'user',
+        mode: 'plan',
+        additionalWorkspaces: [canonicalExtra]
       })
       expect(updateThread).toHaveBeenCalledWith('thr_1', { additionalWorkspaces: [canonicalExtra] })
     } finally {

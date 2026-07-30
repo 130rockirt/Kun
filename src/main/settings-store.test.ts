@@ -3,7 +3,6 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  DEFAULT_APPROVAL_POLICY,
   DEFAULT_CHECKPOINT_CLEANUP_ENABLED,
   DEFAULT_CHECKPOINT_CLEANUP_INTERVAL_DAYS,
   DEFAULT_GIT_CHECKPOINT_CREATE_ENABLED,
@@ -41,7 +40,11 @@ describe('JsonSettingsStore', () => {
     const loaded = await store.load()
 
     expect(loaded.guiUpdate.channel).toBe(DEFAULT_GUI_UPDATE_CHANNEL)
-    expect(loaded.agents.kun.approvalPolicy).toBe(DEFAULT_APPROVAL_POLICY)
+    expect(loaded.agents.kun).toEqual(expect.objectContaining({
+      approvalPolicy: 'auto',
+      sandboxMode: 'danger-full-access',
+      approvalReviewer: 'user'
+    }))
     expect(loaded.checkpointCleanup.intervalDays).toBe(DEFAULT_CHECKPOINT_CLEANUP_INTERVAL_DAYS)
     // Checkpoint cleanup is enabled by default to keep stale checkpoints from accumulating.
     expect(loaded.checkpointCleanup.enabled).toBe(DEFAULT_CHECKPOINT_CLEANUP_ENABLED)

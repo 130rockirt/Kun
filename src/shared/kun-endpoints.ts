@@ -98,6 +98,20 @@ export const KUN_GRAPH_TEMPLATE = '/v1/graphs/{id}'
 export function kunGraphPath(runId: string): string {
   return `${KUN_GRAPHS_PATH}/${encodeURIComponent(runId)}`
 }
+export const KUN_GRAPH_DRAFTS_PATH = '/v1/graph-drafts'
+export const KUN_GRAPH_DRAFTS_TEMPLATE = '/v1/graph-drafts'
+export const KUN_GRAPH_DRAFT_TEMPLATE = '/v1/graph-drafts/{id}'
+export function kunGraphDraftPath(draftId: string): string {
+  return `${KUN_GRAPH_DRAFTS_PATH}/${encodeURIComponent(draftId)}`
+}
+export const KUN_GRAPH_DRAFT_RESUME_TEMPLATE = '/v1/graph-drafts/{id}/resume'
+export const KUN_GRAPH_DRAFT_CANCEL_TEMPLATE = '/v1/graph-drafts/{id}/cancel'
+export function kunGraphDraftActionPath(
+  draftId: string,
+  action: 'resume' | 'cancel'
+): string {
+  return `${kunGraphDraftPath(draftId)}/${action}`
+}
 export const KUN_GRAPH_EVENTS_TEMPLATE = '/v1/graphs/{id}/events'
 export function kunGraphEventsPath(runId: string): string {
   return `${kunGraphPath(runId)}/events`

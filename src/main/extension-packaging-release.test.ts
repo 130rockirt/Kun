@@ -55,6 +55,7 @@ function writeBundledExtensionResources(context: ReturnType<typeof packContext>)
   }
   writeFileSync(join(root, 'catalog.json'), `${JSON.stringify({
     schemaVersion: 1,
+    retiredExtensions: ['kun-examples.kun-video-editor'],
     extensions: extensions.map((extension) => ({
       id: extension.id,
       version: '0.1.0',
@@ -101,6 +102,9 @@ describe('Extension Platform packaged release resources', () => {
     expect(afterPack.REQUIRED_BUNDLED_EXTENSION_IDS).not.toContain(
       'kun-examples.kun-video-editor'
     )
+    expect(afterPack.REQUIRED_RETIRED_BUNDLED_EXTENSION_IDS).toEqual([
+      'kun-examples.kun-video-editor'
+    ])
     expect(afterPack.REQUIRED_BUNDLED_EXTENSION_IDS).toContain(
       'kun-examples.presentation-studio'
     )

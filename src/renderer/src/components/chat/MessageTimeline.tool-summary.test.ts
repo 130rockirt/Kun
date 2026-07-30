@@ -1170,6 +1170,33 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
     expect(html).not.toContain('read detail should stay tucked away')
   })
 
+  it('renders automatic review rationale without manual Allow or Deny controls', () => {
+    const reviewBlock: ChatBlock = {
+      kind: 'approval_review',
+      id: 'approval-review-review_1',
+      reviewId: 'review_1',
+      approvalId: 'approval_1',
+      status: 'denied',
+      toolName: 'exec_command',
+      summary: 'Run a host command',
+      riskLevel: 'high',
+      rationale: 'The command targets a path outside the workspace.'
+    }
+
+    const html = renderToStaticMarkup(
+      createElement(MessageBubble, { block: reviewBlock })
+    )
+
+    expect(html).toContain('Kun approval review')
+    expect(html).toContain('Denied by Kun')
+    expect(html).toContain('Risk: high')
+    expect(html).toContain('The command targets a path outside the workspace.')
+    expect(html).not.toContain('>Allow<')
+    expect(html).not.toContain('>Deny<')
+    expect(html).not.toContain('approvalAllow')
+    expect(html).not.toContain('approvalDeny')
+  })
+
   it('renders a pending request_user_input as a read-only record pointing to the composer', () => {
     const inputBlock: ChatBlock = {
       kind: 'user_input',

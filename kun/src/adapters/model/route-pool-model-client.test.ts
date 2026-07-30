@@ -54,12 +54,39 @@ class FakeDirect implements ModelClient {
 describe('RoutePoolModelClient', () => {
   it('fails over before content and attributes the selected target', async () => {
     const direct = new FakeDirect((input) => input.providerId === 'provider-a'
-      ? [{ kind: 'error', message: 'limited', code: 'rate_limited', failure: { category: 'rate_limit', httpStatus: 429, failoverAllowed: true } }]
+      ? [
+          { kind: 'retrying', status: 429, attempt: 1, maxAttempts: 2, delayMs: 1 },
+          { kind: 'error', message: 'limited', code: 'rate_limited', failure: { category: 'rate_limit', httpStatus: 429, failoverAllowed: true } }
+        ]
       : [{ kind: 'assistant_text_delta', text: 'ok' }, { kind: 'completed', stopReason: 'stop' }])
     const client = new RoutePoolModelClient(direct, [pool()], capability)
     const chunks = await drain(client.stream(request()))
     expect(direct.seen).toEqual(['provider-a/kimi', 'provider-b/kimi-vision'])
     expect(chunks.find((chunk) => chunk.kind === 'assistant_text_delta')?.route).toMatchObject({ targetId: 'b', requestedModelId: 'kimi-auto' })
+    expect(chunks.some((chunk) => chunk.kind === 'retrying')).toBe(false)
+    expect(chunks.every((chunk) => !chunk.route || chunk.route.targetId === 'b')).toBe(true)
+  })
+
+  it('advertises only requests whose concrete target is selected during streaming', () => {
+    const client = new RoutePoolModelClient(
+      new FakeDirect(() => []),
+      [pool()],
+      capability
+    )
+    expect(client.selectsRouteTargetDuringStream({
+      model: 'kimi-auto'
+    })).toBe(true)
+    expect(client.selectsRouteTargetDuringStream({
+      model: 'kimi-auto',
+      providerId: LOCAL_MODEL_GATEWAY_PROVIDER_ID
+    })).toBe(true)
+    expect(client.selectsRouteTargetDuringStream({
+      model: 'kimi-auto',
+      providerId: 'provider-a'
+    })).toBe(false)
+    expect(client.selectsRouteTargetDuringStream({
+      model: 'kimi'
+    })).toBe(false)
   })
 
   it('uses provider identity to disambiguate a routed alias from a concrete model', async () => {

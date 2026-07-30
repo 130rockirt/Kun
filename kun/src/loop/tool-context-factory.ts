@@ -49,6 +49,8 @@ export function createToolExecutionContext(
       ? { sourceResultBudgetTokens: input.sourceResultBudgetTokens }
       : {}),
     ...(input.modelProviderId ? { modelProviderId: input.modelProviderId } : {}),
+    actingModelRoute: input.actingModelRoute,
+    ...(input.approvalIntent ? { approvalIntent: input.approvalIntent } : {}),
     ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
     activeSkillIds: input.activeSkillIds,
     memoryPolicy: { enabled: deps.memoryEnabled },
@@ -66,6 +68,7 @@ export function createToolExecutionContext(
     ...(deps.blockedToolNames ? { blockedToolNames: deps.blockedToolNames } : {}),
     ...(deps.blockedSkillIds ? { blockedSkillIds: deps.blockedSkillIds } : {}),
     approvalPolicy: input.approvalPolicy,
+    approvalReviewer: input.approvalReviewer,
     sandboxMode: input.sandboxMode,
     ...(deps.runtimeDataDir ? { runtimeDataDir: deps.runtimeDataDir } : {}),
     ...(deps.artifactStore ? { artifactStore: deps.artifactStore } : {}),
@@ -73,6 +76,9 @@ export function createToolExecutionContext(
     awaitApproval: (approval) => deps.interactiveToolBridge.awaitApproval({
       approval,
       approvalPolicy: input.approvalPolicy,
+      approvalReviewer: input.approvalReviewer,
+      actingModelRoute: input.actingModelRoute,
+      intent: input.approvalIntent,
       sandboxMode: input.sandboxMode,
       signal: input.signal
     }),

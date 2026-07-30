@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { ModelRequest, ModelStreamChunk } from '../../ports/model-client.js'
 import { makeToolCallItem, makeToolResultItem } from '../../domain/item.js'
 import { LlmDebugRecorder } from '../../services/llm-debug-recorder.js'
-import { GRAPH_CREATE_RUN_INPUT_JSON_SCHEMA } from '../tool/graph-mode-tool-provider.js'
+import { GRAPH_DEFINE_PLAN_INPUT_JSON_SCHEMA } from '../tool/graph-mode-tool-provider.js'
 import { GeminiCliOAuthSource } from './gemini-cli-oauth.js'
 import {
   buildGeminiCliCodeAssistRequest,
@@ -52,12 +52,12 @@ function oauth(fetchImpl: typeof fetch): GeminiCliOAuthSource {
 }
 
 describe('GeminiCliApiModelClient', () => {
-  it('preserves the complete graph_create_run schema in Gemini function declarations', () => {
+  it('preserves the minimal graph_define_plan schema in Gemini function declarations', () => {
     const input = request({
       tools: [{
-        name: 'graph_create_run',
-        description: 'Create a Graph run',
-        inputSchema: GRAPH_CREATE_RUN_INPUT_JSON_SCHEMA
+        name: 'graph_define_plan',
+        description: 'Define a Graph plan',
+        inputSchema: GRAPH_DEFINE_PLAN_INPUT_JSON_SCHEMA
       }]
     })
     const built = buildGeminiCliCodeAssistRequest(input, input.model, 'project')
@@ -77,13 +77,13 @@ describe('GeminiCliApiModelClient', () => {
       }
     }
 
-    expect(schema.properties.plan.properties).toHaveProperty('phases')
-    expect(schema.properties.plan.properties).toHaveProperty('nodes')
-    expect(schema.properties.plan.properties).toHaveProperty('edges')
-    expect(schema.properties.plan.properties).toHaveProperty('budget')
-    expect(schema.properties.plan.properties).toHaveProperty('completionNodeIds')
+    expect(schema.properties.plan.properties).toHaveProperty('tasks')
+    expect(schema.properties.plan.properties).toHaveProperty('completionTaskKeys')
+    expect(JSON.stringify(schema)).not.toContain('"budget"')
+    expect(JSON.stringify(schema)).not.toContain('"model"')
+    expect(JSON.stringify(schema)).not.toContain('"providerId"')
     expect(schema.properties.plan.properties).not.toHaveProperty('revision')
-    expect(schema.properties.plan.properties).not.toHaveProperty('createdBy')
+    expect(schema.properties.plan.properties).not.toHaveProperty('workspaceRoot')
   })
 
   it('streams direct Code Assist text, reasoning, tools, usage, and provider metadata', async () => {

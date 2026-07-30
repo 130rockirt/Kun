@@ -7,12 +7,14 @@ const parent: GraphParentAuthority = {
   workspaceRoot: '/workspace',
   model: 'parent-model',
   providerId: 'parent-provider',
+  accountId: 'account-input-model',
   allowedModelProviderIds: ['parent-provider'],
   allowedModels: ['parent-model'],
   allowedProviderIds: ['builtin', 'mcp:facade', 'extension:com.example.tools'],
   reasoningEffort: 'medium',
   approvalPolicy: 'on-request',
   sandboxMode: 'workspace-write',
+  approvalReviewer: 'agent',
   allowedTools: [
     'read',
     'write',
@@ -94,6 +96,8 @@ describe('GraphAssignmentResolver', () => {
     expect(assignment).toMatchObject({
       model: 'parent-model',
       providerId: 'parent-provider',
+      accountId: 'account-input-model',
+      approvalReviewer: 'agent',
       allowedTools: ['read', 'report_to_parent', 'write'],
       allowedSkills: ['safe-skill'],
       allowedMcpServers: ['safe-mcp'],

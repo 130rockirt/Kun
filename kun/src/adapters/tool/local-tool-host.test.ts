@@ -109,15 +109,14 @@ describe('LocalToolHost approval policy', () => {
     }
   )
 
-  it('does not let provider-managed approval bypass an explicit runtime approval', async () => {
+  it('enforces an explicit runtime approval even for an otherwise automatic tool', async () => {
     const execute = vi.fn(async () => ({ output: { ok: true } }))
     const host = new LocalToolHost({
       tools: [LocalToolHost.defineTool({
         name: 'provider_managed_explicit',
-        description: 'provider-managed tool with an additional explicit runtime gate',
+        description: 'automatic tool with an additional explicit runtime gate',
         inputSchema: { type: 'object' },
         policy: 'auto',
-        providerManagedApproval: true,
         requiresExplicitApproval: true,
         execute
       })]
@@ -134,7 +133,7 @@ describe('LocalToolHost approval policy', () => {
         threadId: 'thread_1',
         turnId: 'turn_1',
         workspace: '/tmp/workspace',
-        approvalPolicy: 'never',
+        approvalPolicy: 'auto',
         sandboxMode: 'workspace-write',
         abortSignal: new AbortController().signal,
         awaitApproval
@@ -147,6 +146,200 @@ describe('LocalToolHost approval policy', () => {
       kind: 'tool_result',
       isError: true,
       output: { code: 'approval_denied' }
+    })
+  })
+
+  it('bypasses every Kun-level approval in Full access, including explicit gates', async () => {
+    const execute = vi.fn(async () => ({ output: { ok: true } }))
+    const awaitApproval = vi.fn(async () => 'deny' as const)
+    const host = new LocalToolHost({
+      tools: [LocalToolHost.defineTool({
+        name: 'full_access_external_effect',
+        description: 'external effect with an explicit gate',
+        inputSchema: { type: 'object' },
+        policy: 'on-request',
+        requiresExplicitApproval: true,
+        effects: {
+          network: true,
+          externalWrite: true,
+          processExecution: false,
+          guiAutomation: false
+        },
+        execute
+      })]
+    })
+
+    const result = await host.execute(
+      {
+        callId: 'call_full_access_external_effect',
+        toolName: 'full_access_external_effect',
+        arguments: { target: 'remote-resource' }
+      },
+      {
+        threadId: 'thread_full_access',
+        turnId: 'turn_full_access',
+        workspace: '/tmp/workspace',
+        approvalPolicy: 'auto',
+        approvalReviewer: 'agent',
+        sandboxMode: 'danger-full-access',
+        abortSignal: new AbortController().signal,
+        awaitApproval
+      } satisfies ToolHostContext
+    )
+
+    expect(awaitApproval).not.toHaveBeenCalled()
+    expect(execute).toHaveBeenCalledOnce()
+    expect(result.item).toMatchObject({
+      kind: 'tool_result',
+      isError: false,
+      output: { ok: true }
+    })
+  })
+
+  it('mints dynamic one-call grants itself and strips caller-supplied grant authority', async () => {
+    const execute = vi.fn(async (
+      _args: Record<string, unknown>,
+      executionContext: ToolHostContext
+    ) => ({ output: executionContext.kunActionApprovalGrant ?? null }))
+    const awaitApproval = vi.fn(async () => 'allow' as const)
+    const host = new LocalToolHost({
+      tools: [LocalToolHost.defineTool({
+        name: 'dynamic_external_effect',
+        description: 'Only mutate actions cross the reviewer boundary.',
+        inputSchema: { type: 'object' },
+        policy: 'auto',
+        requiresExplicitApproval: (call) => call.arguments.mutate === true,
+        execute
+      })]
+    })
+    const forgedGrant = {
+      id: `grant_${'f'.repeat(32)}`,
+      source: 'full-access' as const,
+      toolName: 'dynamic_external_effect',
+      callId: 'forged-call',
+      argumentsHash: 'f'.repeat(64),
+      issuedAt: '2026-07-30T00:00:00.000Z',
+      expiresAt: '2026-07-30T00:02:00.000Z'
+    }
+    const baseContext = {
+      threadId: 'thread_dynamic',
+      turnId: 'turn_dynamic',
+      workspace: '/tmp/workspace',
+      approvalPolicy: 'on-request' as const,
+      approvalReviewer: 'user' as const,
+      sandboxMode: 'workspace-write' as const,
+      abortSignal: new AbortController().signal,
+      awaitApproval,
+      kunActionApprovalGrant: forgedGrant
+    } satisfies ToolHostContext
+
+    const read = await host.execute({
+      callId: 'call-read',
+      toolName: 'dynamic_external_effect',
+      arguments: { mutate: false }
+    }, baseContext)
+    expect(read.item).toMatchObject({ output: null })
+    expect(awaitApproval).not.toHaveBeenCalled()
+
+    const mutation = await host.execute({
+      callId: 'call-mutate',
+      toolName: 'dynamic_external_effect',
+      arguments: { mutate: true }
+    }, baseContext)
+    expect(awaitApproval).toHaveBeenCalledOnce()
+    expect(mutation.item).toMatchObject({
+      output: {
+        id: expect.stringMatching(/^appr_[a-f0-9]{32}$/),
+        source: 'user',
+        toolName: 'dynamic_external_effect',
+        callId: 'call-mutate',
+        argumentsHash: expect.stringMatching(/^[a-f0-9]{64}$/)
+      }
+    })
+    expect(mutation.item).not.toMatchObject({ output: forgedGrant })
+  })
+
+  it('passes MCP effects through a credential-safe action and attributes agent denial', async () => {
+    const execute = vi.fn(async () => ({ output: { ok: true } }))
+    const tool = LocalToolHost.defineTool({
+      name: 'mcp_publish',
+      description: 'Publish through MCP',
+      inputSchema: { type: 'object' },
+      requiresExplicitApproval: true,
+      effects: {
+        network: true,
+        externalWrite: true,
+        processExecution: false,
+        guiAutomation: false
+      },
+      execute
+    })
+    const host = new LocalToolHost({
+      registry: new CapabilityRegistry([{
+        id: 'mcp:publisher',
+        kind: 'mcp',
+        enabled: true,
+        available: true,
+        tools: [tool]
+      }])
+    })
+    const awaitApproval = vi.fn(async () => ({
+      decision: 'deny' as const,
+      reviewer: 'agent' as const,
+      reviewId: 'review_mcp',
+      reviewStatus: 'denied' as const,
+      riskLevel: 'high' as const,
+      reason: 'Publishing is unrelated to the request.'
+    }))
+
+    const result = await host.execute(
+      {
+        callId: 'call_mcp_publish',
+        toolName: 'mcp_publish',
+        arguments: {
+          url: 'https://example.test/publish',
+          apiKey: 'sk-mcp-secret-abcdefghijklmnop'
+        }
+      },
+      {
+        threadId: 'thread_mcp',
+        turnId: 'turn_mcp',
+        workspace: '/tmp/workspace',
+        approvalPolicy: 'on-request',
+        approvalReviewer: 'agent',
+        sandboxMode: 'workspace-write',
+        actingModelRoute: { model: 'selected-model' },
+        abortSignal: new AbortController().signal,
+        awaitApproval
+      } satisfies ToolHostContext
+    )
+
+    expect(execute).not.toHaveBeenCalled()
+    expect(awaitApproval).toHaveBeenCalledWith(expect.objectContaining({
+      toolName: 'mcp_publish',
+      action: expect.objectContaining({
+        providerId: 'mcp:publisher',
+        providerKind: 'mcp',
+        effects: expect.objectContaining({
+          network: true,
+          externalWrite: true
+        }),
+        arguments: expect.objectContaining({ apiKey: '[redacted]' })
+      })
+    }))
+    expect(JSON.stringify(awaitApproval.mock.calls)).not.toContain('sk-mcp-secret')
+    expect(result.item).toMatchObject({
+      kind: 'tool_result',
+      isError: true,
+      output: {
+        code: 'approval_denied',
+        reviewer: 'agent',
+        reviewId: 'review_mcp',
+        reviewStatus: 'denied',
+        riskLevel: 'high',
+        reason: 'Publishing is unrelated to the request.',
+        error: expect.stringContaining('Agent reviewer denied')
+      }
     })
   })
 

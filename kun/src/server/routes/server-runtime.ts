@@ -51,6 +51,7 @@ import type { GraphRuntimeConfig, RolesConfig } from '../../config/kun-config.js
 import type {
   FileGraphWriteCoordinator,
   FileGraphThreadReferenceStore,
+  FileGraphPlanningDraftStore,
   GraphControlService,
   GraphLearningService,
   GraphMailbox,
@@ -186,6 +187,7 @@ export type ServerRuntime = {
   graph?: {
     control: GraphControlService
     store: GraphRunStore
+    drafts: FileGraphPlanningDraftStore
     config(): GraphRuntimeConfig
     scheduler: GraphScheduler
     supervisor: GraphSupervisor

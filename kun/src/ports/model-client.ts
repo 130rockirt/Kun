@@ -170,5 +170,13 @@ export type ModelToolSpec = {
 export interface ModelClient {
   readonly provider: string
   readonly model: string
+  /**
+   * True when the concrete provider/model target is selected only after the
+   * stream starts (for example a failover route pool). Callers must not freeze
+   * the public alias as the acting route before a route-bearing chunk arrives.
+   */
+  selectsRouteTargetDuringStream?(
+    request: Pick<ModelRequest, 'model' | 'providerId'>
+  ): boolean
   stream(request: ModelRequest): AsyncIterable<ModelStreamChunk>
 }

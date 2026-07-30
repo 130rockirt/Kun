@@ -9,7 +9,11 @@ import type {
   CoreRuntimeSkillJson,
   CoreRuntimeToolDiagnosticsJson
 } from './kun-contract'
-import type { ApprovalPolicy, SandboxMode } from '@shared/app-settings'
+import type {
+  ApprovalPolicy,
+  ApprovalReviewer,
+  SandboxMode
+} from '@shared/app-settings'
 import type { ComposerContextAttachment } from '@kun/extension-api'
 
 export type ToolItemKind = 'tool_call' | 'command_execution' | 'file_change'
@@ -198,6 +202,7 @@ export type NormalizedThread = {
   status?: string
   approvalPolicy?: ApprovalPolicy
   sandboxMode?: SandboxMode
+  approvalReviewer?: ApprovalReviewer
   /** Whether future model requests are retained for Agent Perspective. */
   modelRequestCaptureEnabled?: boolean
   /** Optional provider id when this thread is pinned to a non-default provider. */
@@ -384,6 +389,26 @@ export type ChatBlock =
       meta?: RuntimeDisclosureMetadata
     }
   | {
+      kind: 'approval_review'
+      id: string
+      turnId?: string
+      createdAt?: string
+      reviewId: string
+      approvalId: string
+      summary: string
+      toolName?: string
+      status:
+        | 'in-progress'
+        | 'approved'
+        | 'denied'
+        | 'timed-out'
+        | 'failed-closed'
+        | 'aborted'
+      decision?: 'allow' | 'deny'
+      riskLevel?: 'low' | 'medium' | 'high' | 'critical'
+      rationale?: string
+    }
+  | {
       kind: 'user_input'
       id: string
       turnId?: string
@@ -415,6 +440,25 @@ export type ApprovalStatusPayload = {
   approvalId: string
   status: 'allowed' | 'denied' | 'expired' | 'error'
   errorMessage?: string
+}
+
+export type ApprovalReviewEventPayload = {
+  reviewId: string
+  approvalId: string
+  turnId?: string
+  createdAt?: string
+  summary: string
+  toolName?: string
+  status:
+    | 'in-progress'
+    | 'approved'
+    | 'denied'
+    | 'timed-out'
+    | 'failed-closed'
+    | 'aborted'
+  decision?: 'allow' | 'deny'
+  riskLevel?: 'low' | 'medium' | 'high' | 'critical'
+  rationale?: string
 }
 
 export type ToolEventPayload = {
@@ -616,6 +660,7 @@ export type ThreadEventSink = {
   onReview?(ev: ReviewEventPayload): void
   onApproval(req: ApprovalRequestPayload): void
   onApprovalStatus?(ev: ApprovalStatusPayload): void
+  onApprovalReview?(ev: ApprovalReviewEventPayload): void
   onUserInput(req: UserInputRequestPayload): void
   onUserInputStatus(ev: UserInputStatusPayload): void
   onRuntimeStatus?(ev: RuntimeStatusEventPayload): void
@@ -635,6 +680,8 @@ export type ThreadEventSink = {
   onChildRuntimeEvent?(event: RuntimeChildEventPayload): void
   /** Raw versioned Graph envelope; the Graph projection owns validation/reconciliation. */
   onGraphEvent?(event: unknown): void
+  /** Raw versioned Graph planning lifecycle; the Graph projection owns reconciliation. */
+  onGraphPlanningEvent?(event: unknown): void
 }
 
 export interface AgentProvider {

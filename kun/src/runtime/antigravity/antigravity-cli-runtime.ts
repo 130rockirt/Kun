@@ -1,6 +1,9 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import type { ServeProviderConfig } from '../../config/kun-config.js'
-import type { TurnReasoningEffort } from '../../contracts/turns.js'
+import type {
+  ActingTurnModelRoute,
+  TurnReasoningEffort
+} from '../../contracts/turns.js'
 import { userMessageTextWithComposerContexts } from '../../domain/composer-context.js'
 import { makeAssistantTextItem } from '../../domain/item.js'
 import { resolveTurnClientSurface } from '../../loop/turn-context-resolver.js'
@@ -35,6 +38,7 @@ import {
   priorItemsForDelegatedTurn,
   type DelegatedSessionCoordinator
 } from '../delegated-session-binding.js'
+import { shellSpawnEnv } from '../../adapters/tool/builtin-tool-utils.js'
 
 const MAX_STDOUT_BYTES = 8 * 1024 * 1024
 const MAX_STDERR_BYTES = 256 * 1024
@@ -197,9 +201,25 @@ export class AntigravityCliRuntime implements DelegatedTurnRuntime {
     })
     const limits = normalizeTurnLimits(this.deps.turnLimits)
     const binaryPath = this.deps.binaryPath?.trim() || process.env.KUN_ANTIGRAVITY_BINARY?.trim() || 'agy'
+    const requestedProviderId = turn.providerId?.trim()
+    const fallbackProviderId =
+      requestedProviderId ||
+      providerId?.trim() ||
+      thread.providerId?.trim() ||
+      'antigravity-cli'
+    const requestedAccountId = turn.accountId?.trim() || (
+      !requestedProviderId || requestedProviderId === thread.providerId?.trim()
+        ? thread.accountId?.trim()
+        : undefined
+    )
     let model: string
     try {
-      model = normalizeAntigravityModel(turn.model || thread.model || this.deps.defaultModel)
+      model = normalizeAntigravityModel(
+        turn.actingModelRoute?.model ||
+        turn.model ||
+        thread.model ||
+        this.deps.defaultModel
+      )
     } catch (error) {
       await this.deps.turns.finishTurn({
         threadId,
@@ -209,20 +229,34 @@ export class AntigravityCliRuntime implements DelegatedTurnRuntime {
       })
       return 'failed'
     }
+    const actingModelRoute: ActingTurnModelRoute = turn.actingModelRoute ?? {
+      model,
+      providerId: fallbackProviderId,
+      ...(requestedAccountId ? { accountId: requestedAccountId } : {})
+    }
+    const resolvedProviderId = actingModelRoute.providerId ?? fallbackProviderId
+    const resolvedAccountId = actingModelRoute.accountId ?? requestedAccountId
+    if (!turn.actingModelRoute) {
+      await this.deps.turns.updateTurnMetadata(threadId, turnId, { actingModelRoute })
+    }
     const effort = normalizeAntigravityEffort(turn.reasoningEffort)
     const planMode = this.deps.enforceReadOnly === true || (turn.mode ?? thread.mode) === 'plan'
-    const sandboxMode = this.deps.enforceReadOnly === true ? 'read-only' : thread.sandboxMode
+    const approvalPolicy = this.deps.enforceReadOnly === true
+      ? 'never'
+      : turn.approvalPolicy ?? thread.approvalPolicy
+    const sandboxMode = this.deps.enforceReadOnly === true
+      ? 'read-only'
+      : turn.sandboxMode ?? thread.sandboxMode
     const args = buildAntigravityArgs({
       prompt,
       model,
       effort,
       timeoutMs: limits.maxWallTimeMs,
       planMode,
-      approvalPolicy: thread.approvalPolicy,
+      approvalPolicy,
       sandboxMode
     })
-    const resolvedProviderId = providerId?.trim() || 'antigravity-cli'
-    const provider = providerId ? this.deps.providerConfigs[providerId] : undefined
+    const provider = this.deps.providerConfigs[resolvedProviderId]
     const capabilities = antigravityCapabilities()
     const preparation = this.deps.sessionCoordinator
       ? await this.deps.sessionCoordinator.prepare({
@@ -232,7 +266,7 @@ export class AntigravityCliRuntime implements DelegatedTurnRuntime {
             providerId: resolvedProviderId,
             credentialIdentity: delegatedCredentialIdentity({
               providerId: resolvedProviderId,
-              accountId: turn.accountId || thread.accountId,
+              accountId: resolvedAccountId,
               credentialSourceId: provider?.credentialSourceId
             }),
             workspace: thread.workspace,
@@ -242,7 +276,7 @@ export class AntigravityCliRuntime implements DelegatedTurnRuntime {
               threadPersona: thread.systemPrompt?.trim() || '',
               effort,
               planMode,
-              approvalPolicy: thread.approvalPolicy,
+              approvalPolicy,
               sandboxMode,
               capabilities
             }),
@@ -292,12 +326,12 @@ export class AntigravityCliRuntime implements DelegatedTurnRuntime {
     let trace = await startAntigravityTrace(this.deps.debugSink, {
       threadId,
       turnId,
-      provider: providerId?.trim() || 'antigravity-cli',
+      provider: resolvedProviderId,
       model,
       prompt,
       effort,
       planMode,
-      approvalPolicy: thread.approvalPolicy,
+      approvalPolicy,
       sandboxMode,
       delegated: {
         providerKind: 'antigravity-cli',
@@ -424,7 +458,10 @@ function runAntigravityProcess(input: {
     try {
       child = spawnFn(input.binaryPath, input.args, {
         cwd: input.cwd,
-        env: process.env,
+        // The Antigravity CLI is model-controlled. Never inherit Kun/Main
+        // credentials (including the browser-use bridge bearer and signing
+        // key); pass only the same small execution allow-list as shell tools.
+        env: shellSpawnEnv(),
         stdio: ['ignore', 'pipe', 'pipe'],
         shell: false
       })

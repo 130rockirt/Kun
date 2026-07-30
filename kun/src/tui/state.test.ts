@@ -177,7 +177,9 @@ describe('thread projection', () => {
     state = applyRuntimeEvent(state, event({
       kind: 'turn_started', seq: 1, turnId: 'turn_gui', status: 'running',
       model: 'model-b', providerId: 'provider-b', accountId: 'account-b',
-      reasoningEffort: 'high', mode: 'plan'
+      reasoningEffort: 'high', mode: 'plan',
+      approvalPolicy: 'on-request', sandboxMode: 'workspace-write',
+      approvalReviewer: 'agent'
     }))
     state = applyRuntimeEvent(state, event({
       kind: 'approval_requested',
@@ -191,7 +193,9 @@ describe('thread projection', () => {
     expect(state).toMatchObject({ runningTurnId: 'turn_gui', pendingApproval: { approvalId: 'appr_1' } })
     expect(state.thread.turns[0]).toMatchObject({
       id: 'turn_gui', status: 'running', model: 'model-b', providerId: 'provider-b',
-      accountId: 'account-b', reasoningEffort: 'high', mode: 'plan'
+      accountId: 'account-b', reasoningEffort: 'high', mode: 'plan',
+      approvalPolicy: 'on-request', sandboxMode: 'workspace-write',
+      approvalReviewer: 'agent'
     })
 
     state = applyRuntimeEvent(state, event({
@@ -207,6 +211,96 @@ describe('thread projection', () => {
     state = applyRuntimeEvent(state, event({ kind: 'turn_completed', seq: 4, turnId: 'turn_gui', status: 'completed' }))
     expect(state.runningTurnId).toBeUndefined()
     expect(state.thread).toMatchObject({ status: 'idle', latestSeq: 4, turns: [{ id: 'turn_gui', status: 'completed' }] })
+  })
+
+  it('projects automatic review as non-actionable progress and durable terminal audit state', () => {
+    let state = projectThreadSnapshot(detail())
+    state = applyRuntimeEvent(state, event({
+      kind: 'turn_started',
+      seq: 1,
+      turnId: 'turn_agent_review',
+      status: 'running'
+    }))
+    state = applyRuntimeEvent(state, event({
+      kind: 'approval_review_started',
+      seq: 2,
+      turnId: 'turn_agent_review',
+      reviewId: 'review_1',
+      approvalId: 'approval_1',
+      toolName: 'bash',
+      reviewer: 'agent',
+      status: 'in-progress',
+      summary: 'Run tests',
+      action: {
+        version: 1,
+        kind: 'command',
+        toolName: 'bash',
+        toolKind: 'command_execution',
+        effects: {
+          network: false,
+          externalWrite: false,
+          processExecution: true,
+          guiAutomation: false
+        },
+        arguments: { command: 'npm test' },
+        workspace: '/tmp/project',
+        targets: [{ kind: 'command', value: 'npm test' }],
+        reason: 'Host command requires review'
+      }
+    }))
+
+    expect(state.pendingApproval).toBeUndefined()
+    expect(state.activity?.label).toBe('Agent reviewing bash')
+    expect(state.approvalReviews).toEqual([
+      expect.objectContaining({
+        reviewId: 'review_1',
+        status: 'in-progress',
+        summary: 'Run tests'
+      })
+    ])
+
+    state = applyRuntimeEvent(state, event({
+      kind: 'approval_review_completed',
+      seq: 3,
+      turnId: 'turn_agent_review',
+      reviewId: 'review_1',
+      approvalId: 'approval_1',
+      toolName: 'bash',
+      reviewer: 'agent',
+      status: 'denied',
+      summary: 'Run tests',
+      decision: 'deny',
+      riskLevel: 'high',
+      rationale: 'The command is outside the requested scope.'
+    }))
+
+    expect(state.pendingApproval).toBeUndefined()
+    expect(state.approvalReviews).toEqual([
+      expect.objectContaining({
+        reviewId: 'review_1',
+        status: 'denied',
+        decision: 'deny',
+        riskLevel: 'high',
+        rationale: 'The command is outside the requested scope.',
+        completedAt: '2026-07-22T00:00:00.000Z'
+      })
+    ])
+
+    state = applyRuntimeEvent(state, event({
+      kind: 'approval_resolved',
+      seq: 4,
+      turnId: 'turn_agent_review',
+      approvalId: 'approval_1',
+      toolName: 'bash',
+      status: 'denied',
+      approvalReviewer: 'agent',
+      decisionSource: 'agent',
+      summary: 'Run tests',
+      reason: 'The command is outside the requested scope.'
+    }))
+
+    expect(state.pendingApproval).toBeUndefined()
+    expect(state.approvalReviews).toHaveLength(1)
   })
 
   it('keeps the Graph orchestration contract on an optimistic TUI turn', () => {
@@ -417,10 +511,14 @@ describe('thread projection', () => {
     expect(state.thread.todos?.items[0]?.content).toBe('test')
     state = applyRuntimeEvent(state, event({
       kind: 'thread_updated', seq: 6, mode: 'plan', additionalWorkspaces: ['/tmp/extra'],
-      approvalPolicy: 'never', sandboxMode: 'read-only'
+      approvalPolicy: 'never', sandboxMode: 'read-only', approvalReviewer: 'agent'
     }))
     expect(state.thread).toMatchObject({
-      mode: 'plan', additionalWorkspaces: ['/tmp/extra'], approvalPolicy: 'never', sandboxMode: 'read-only'
+      mode: 'plan',
+      additionalWorkspaces: ['/tmp/extra'],
+      approvalPolicy: 'never',
+      sandboxMode: 'read-only',
+      approvalReviewer: 'agent'
     })
   })
 })

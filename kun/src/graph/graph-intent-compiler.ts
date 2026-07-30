@@ -18,6 +18,108 @@ export const GraphIntentStrategySchema = z.union([
 ])
 export type GraphIntentStrategy = z.infer<typeof GraphIntentStrategySchema>
 
+const GraphPlanIntentV2DataInputSchema = z.object({
+  taskKey: GraphIdentifierSchema,
+  name: z.string().trim().min(1).max(256)
+}).strict()
+
+const GraphPlanIntentV2TaskBaseShape = {
+  key: GraphIdentifierSchema,
+  title: z.string().trim().min(1).max(256),
+  objective: z.string().trim().min(1).max(32_768),
+  dependsOn: z.array(GraphIdentifierSchema).max(1_000),
+  dataFrom: z.array(GraphPlanIntentV2DataInputSchema).max(1_000),
+  acceptanceCriteria: z.array(
+    z.string().trim().min(1).max(2_048)
+  ).min(1).max(128),
+  readScopes: z.array(GraphRelativePathSchema).max(1_000),
+  writeScopes: z.array(GraphRelativePathSchema).max(1_000)
+} as const
+
+export const GraphPlanIntentV2OrdinaryTaskSchema = z.object({
+  ...GraphPlanIntentV2TaskBaseShape,
+  kind: z.enum(['work', 'review', 'integration'])
+}).strict()
+
+export const GraphPlanIntentV2LoopTaskSchema = z.object({
+  ...GraphPlanIntentV2TaskBaseShape,
+  kind: z.literal('loop_gate'),
+  loop: z.object({
+    conditionTaskKey: GraphIdentifierSchema,
+    continueTaskKey: GraphIdentifierSchema,
+    exitTaskKey: GraphIdentifierSchema,
+    exhaustionTaskKey: GraphIdentifierSchema.optional(),
+    continueOn: z.array(z.enum([
+      'accepted',
+      'repair_required',
+      'failed',
+      'skipped'
+    ])).min(1).max(4),
+    maxIterations: z.number().int().positive().max(128)
+  }).strict()
+}).strict()
+
+export const GraphPlanIntentV2TaskSchema = z.discriminatedUnion('kind', [
+  GraphPlanIntentV2OrdinaryTaskSchema,
+  GraphPlanIntentV2LoopTaskSchema
+])
+
+export const GraphPlanIntentV2Schema = z.object({
+  title: z.string().trim().min(1).max(256).optional(),
+  tasks: z.array(GraphPlanIntentV2TaskSchema).min(1).max(10_000),
+  completionTaskKeys: z.array(GraphIdentifierSchema).min(1).max(1_000).optional()
+}).strict().superRefine((intent, ctx) => {
+  const keys = new Set<string>()
+  for (const [index, task] of intent.tasks.entries()) {
+    if (keys.has(task.key)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['tasks', index, 'key'],
+        message: `duplicate task key ${task.key}`
+      })
+    }
+    keys.add(task.key)
+  }
+  for (const [index, task] of intent.tasks.entries()) {
+    for (const [dependencyIndex, dependencyKey] of task.dependsOn.entries()) {
+      validateReference(ctx, keys, task.key, dependencyKey, [
+        'tasks', index, 'dependsOn', dependencyIndex
+      ])
+    }
+    for (const [dataIndex, data] of task.dataFrom.entries()) {
+      validateReference(ctx, keys, task.key, data.taskKey, [
+        'tasks', index, 'dataFrom', dataIndex, 'taskKey'
+      ])
+    }
+    if (task.kind === 'loop_gate') {
+      for (const [field, target] of [
+        ['conditionTaskKey', task.loop.conditionTaskKey],
+        ['continueTaskKey', task.loop.continueTaskKey],
+        ['exitTaskKey', task.loop.exitTaskKey],
+        ['exhaustionTaskKey', task.loop.exhaustionTaskKey]
+      ] as const) {
+        if (target && !keys.has(target)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['tasks', index, 'loop', field],
+            message: `loop target ${target} does not exist`
+          })
+        }
+      }
+    }
+  }
+  for (const [index, key] of (intent.completionTaskKeys ?? []).entries()) {
+    if (!keys.has(key)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['completionTaskKeys', index],
+        message: `completion task ${key} does not exist`
+      })
+    }
+  }
+})
+export type GraphPlanIntentV2 = z.infer<typeof GraphPlanIntentV2Schema>
+
 const GraphIntentDataInputSchema = z.object({
   taskId: GraphIdentifierSchema,
   name: z.string().trim().min(1).max(256)
@@ -148,6 +250,61 @@ export const GraphIntentSchema = z.object({
 })
 export type GraphIntent = z.infer<typeof GraphIntentSchema>
 
+export function compileGraphPlanIntentV2(input: {
+  intent: GraphPlanIntentV2
+  goal: string
+  workspaceRoot: string
+  nowIso: string
+  budgetDefaults: GraphPlanV1['budget']
+  config: GraphRuntimeConfig
+}): GraphPlanV1 {
+  const intent = GraphIntentSchema.parse({
+    title: input.intent.title ?? input.goal.slice(0, 256),
+    goal: input.goal,
+    strategy: 'auto',
+    tasks: input.intent.tasks.map((task) => ({
+      id: task.key,
+      title: task.title,
+      objective: task.objective,
+      kind: task.kind,
+      dependsOn: task.dependsOn,
+      dataFrom: task.dataFrom.map((data) => ({
+        taskId: data.taskKey,
+        name: data.name
+      })),
+      acceptanceCriteria: task.acceptanceCriteria,
+      checks: task.writeScopes.length ? ['git diff --check'] : [],
+      readScopes: task.readScopes,
+      writeScopes: task.writeScopes,
+      ...(task.kind === 'loop_gate'
+        ? {
+            loop: {
+              conditionTaskId: task.loop.conditionTaskKey,
+              continueTaskId: task.loop.continueTaskKey,
+              exitTaskId: task.loop.exitTaskKey,
+              ...(task.loop.exhaustionTaskKey
+                ? { exhaustionTaskId: task.loop.exhaustionTaskKey }
+                : {}),
+              continueOn: task.loop.continueOn,
+              maxIterations: task.loop.maxIterations
+            }
+          }
+        : {})
+    })),
+    ...(input.intent.completionTaskKeys
+      ? { completionTaskIds: input.intent.completionTaskKeys }
+      : {})
+  })
+  return compileGraphIntent({
+    intent,
+    workspaceRoot: input.workspaceRoot,
+    start: true,
+    nowIso: input.nowIso,
+    budgetDefaults: input.budgetDefaults,
+    config: input.config
+  })
+}
+
 export function compileGraphIntent(input: {
   intent: GraphIntent
   workspaceRoot: string
@@ -202,13 +359,7 @@ export function compileGraphIntent(input: {
         }
       : {}),
     completion: {
-      requiredResultFields: [
-        'summary' as const,
-        'changedFiles' as const,
-        'checks' as const,
-        'evidence' as const,
-        'risks' as const
-      ],
+      requiredResultFields: ['summary' as const],
       acceptanceCriteria: task.acceptanceCriteria ?? [
         `${task.title} satisfies its stated objective with concrete evidence`
       ],

@@ -1,8 +1,29 @@
 import { describe, expect, it, vi } from 'vitest'
+import type { GraphPlanningDraftV1 } from '../../contracts/graph.js'
 import type { ServerRuntime } from './server-runtime.js'
 import { buildRouter } from './index.js'
 
 function runtime(): ServerRuntime {
+  let draft: GraphPlanningDraftV1 = {
+    version: 1,
+    id: 'draft_1',
+    reservedRunId: 'run_reserved_1',
+    threadId: 'thread_1',
+    sourceTurnId: 'turn_1',
+    projectId: 'project_1',
+    goal: 'Implement the requested change.',
+    revision: 2,
+    status: 'needs_correction',
+    issues: [{
+      code: 'invalid_plan',
+      path: ['tasks', 0, 'loop'],
+      message: 'ordinary tasks cannot contain loop',
+      repairHint: 'Remove loop from the ordinary task.'
+    }],
+    repairCount: 1,
+    createdAt: '2026-07-26T00:00:00.000Z',
+    updatedAt: '2026-07-26T00:01:00.000Z'
+  }
   const identity = {
     version: 1,
     projectId: 'project_1',
@@ -13,7 +34,42 @@ function runtime(): ServerRuntime {
   return {
     runtimeToken: 'graph-route-token',
     insecure: false,
+    events: {
+      record: vi.fn(async () => undefined)
+    },
+    turnService: {
+      resumeGraphPlanningTurn: vi.fn(async () => undefined),
+      interruptTurn: vi.fn(async () => undefined)
+    },
+    runTurn: vi.fn(),
     graph: {
+      drafts: {
+        list: vi.fn(async ({ threadId }: { threadId?: string } = {}) =>
+          !threadId || threadId === draft.threadId ? [draft] : []),
+        require: vi.fn(async (id: string) => {
+          if (id !== draft.id) throw new Error(`missing ${id}`)
+          return draft
+        }),
+        update: vi.fn(async (_id: string, input: {
+          expectedRevision: number
+          status: GraphPlanningDraftV1['status']
+        }) => {
+          draft = {
+            ...draft,
+            revision: draft.revision + 1,
+            status: input.status,
+            updatedAt: '2026-07-26T00:02:00.000Z'
+          }
+          return draft
+        }),
+        readCandidate: vi.fn(async () => ({
+          tasks: [{
+            key: 'work',
+            kind: 'work',
+            title: 'Implement'
+          }]
+        }))
+      },
       control: {
         get: vi.fn(async (id: string) => ({
           id,
@@ -152,6 +208,77 @@ describe('Graph HTTP routes', () => {
     })])
     expect(body.runs[0]).not.toHaveProperty('plans')
     expect(body.runs[0]).not.toHaveProperty('nodes')
+  })
+
+  it('lists correction drafts and resumes the same source turn with revision safety', async () => {
+    const testRuntime = runtime()
+    const headers = { authorization: 'Bearer graph-route-token' }
+    const listed = await dispatch(
+      testRuntime,
+      'GET',
+      '/v1/graph-drafts?thread_id=thread_1',
+      undefined,
+      headers
+    )
+    expect(listed.status).toBe(200)
+    expect(JSON.parse(listed.body)).toMatchObject({
+      drafts: [{
+        draft: {
+          id: 'draft_1',
+          revision: 2,
+          status: 'needs_correction'
+        },
+        tasks: [{ key: 'work', kind: 'work', title: 'Implement' }]
+      }]
+    })
+
+    const resumed = await dispatch(
+      testRuntime,
+      'POST',
+      '/v1/graph-drafts/draft_1/resume',
+      { expectedRevision: 2 },
+      headers
+    )
+    expect(resumed.status).toBe(202)
+    expect(JSON.parse(resumed.body)).toMatchObject({
+      draft: { id: 'draft_1', revision: 3, status: 'planning' }
+    })
+    expect(testRuntime.turnService.resumeGraphPlanningTurn).toHaveBeenCalledWith({
+      threadId: 'thread_1',
+      turnId: 'turn_1'
+    })
+    expect(testRuntime.runTurn).toHaveBeenCalledWith('thread_1', 'turn_1')
+    expect(testRuntime.events.record).toHaveBeenCalledTimes(1)
+  })
+
+  it('cancels a planning draft once and rejects a stale revision', async () => {
+    const testRuntime = runtime()
+    const headers = { authorization: 'Bearer graph-route-token' }
+    const stale = await dispatch(
+      testRuntime,
+      'POST',
+      '/v1/graph-drafts/draft_1/cancel',
+      { expectedRevision: 1 },
+      headers
+    )
+    expect(stale.status).toBe(409)
+    expect(testRuntime.turnService.interruptTurn).not.toHaveBeenCalled()
+
+    const cancelled = await dispatch(
+      testRuntime,
+      'POST',
+      '/v1/graph-drafts/draft_1/cancel',
+      { expectedRevision: 2 },
+      headers
+    )
+    expect(cancelled.status).toBe(200)
+    expect(JSON.parse(cancelled.body)).toMatchObject({
+      draft: { status: 'cancelled', revision: 3 }
+    })
+    expect(testRuntime.turnService.interruptTurn).toHaveBeenCalledWith({
+      threadId: 'thread_1',
+      turnId: 'turn_1'
+    })
   })
 
   it('returns bounded replay events after reconciling the selected run', async () => {

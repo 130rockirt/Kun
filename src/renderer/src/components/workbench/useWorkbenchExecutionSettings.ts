@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { ApprovalPolicy, SandboxMode } from '@shared/app-settings'
+import type {
+  ApprovalPolicy,
+  ApprovalReviewer,
+  SandboxMode
+} from '@shared/app-settings'
 import { rendererRuntimeClient } from '../../agent/runtime-client'
 import type { ComposerExecutionSettings } from '../chat/FloatingComposer'
 
@@ -23,7 +27,8 @@ export function useWorkbenchExecutionSettings({
         if (cancelled) return
         setComposerExecutionSettings({
           approvalPolicy: settings.agents.kun.approvalPolicy,
-          sandboxMode: settings.agents.kun.sandboxMode
+          sandboxMode: settings.agents.kun.sandboxMode,
+          approvalReviewer: settings.agents.kun.approvalReviewer
         })
       })
       .catch(() => undefined)
@@ -42,13 +47,17 @@ export function useWorkbenchExecutionSettings({
       agents: {
         kun: {
           ...(patch.approvalPolicy ? { approvalPolicy: patch.approvalPolicy as ApprovalPolicy } : {}),
-          ...(patch.sandboxMode ? { sandboxMode: patch.sandboxMode as SandboxMode } : {})
+          ...(patch.sandboxMode ? { sandboxMode: patch.sandboxMode as SandboxMode } : {}),
+          ...(patch.approvalReviewer
+            ? { approvalReviewer: patch.approvalReviewer as ApprovalReviewer }
+            : {})
         }
       }
     }).then((settings) => {
       setComposerExecutionSettings({
         approvalPolicy: settings.agents.kun.approvalPolicy,
-        sandboxMode: settings.agents.kun.sandboxMode
+        sandboxMode: settings.agents.kun.sandboxMode,
+        approvalReviewer: settings.agents.kun.approvalReviewer
       })
       onSettingsUpdated()
     }).catch((error: unknown) => {

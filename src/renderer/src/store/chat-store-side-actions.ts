@@ -403,6 +403,34 @@ function buildSideSink(sideId: string, ctx: SideContext, sinceSeq = 0): ThreadEv
         }))
       )
     },
+    onApprovalReview: (ev) => {
+      ctx.set((s) =>
+        patchSide(s, sideId, (side) => {
+          const id = `approval-review-${ev.reviewId}`
+          const current = side.blocks.find(
+            (block): block is Extract<ChatBlock, { kind: 'approval_review' }> =>
+              block.kind === 'approval_review' && block.reviewId === ev.reviewId
+          )
+          return {
+            ...side,
+            blocks: upsertSideTimelineBlock(side.blocks, {
+              kind: 'approval_review',
+              id,
+              reviewId: ev.reviewId,
+              approvalId: ev.approvalId,
+              turnId: ev.turnId ?? current?.turnId,
+              createdAt: current?.createdAt ?? ev.createdAt ?? new Date().toISOString(),
+              summary: ev.summary || current?.summary || 'Tool action',
+              toolName: ev.toolName ?? current?.toolName,
+              status: ev.status,
+              decision: ev.decision ?? current?.decision,
+              riskLevel: ev.riskLevel ?? current?.riskLevel,
+              rationale: ev.rationale ?? current?.rationale
+            })
+          }
+        })
+      )
+    },
     onUserInput: (req) => {
       ctx.set((s) =>
         patchSide(s, sideId, (side) => ({

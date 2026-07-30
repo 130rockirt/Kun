@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { createReadStream } from 'node:fs'
 import { lstat, readFile, realpath } from 'node:fs/promises'
-import { basename, extname, join, resolve } from 'node:path'
+import { basename, dirname, extname, join, resolve } from 'node:path'
 import semver from 'semver'
 import { AtomicJsonFile } from './atomic-json.js'
 import { asExtensionError, extensionError } from './errors.js'
@@ -30,6 +30,7 @@ export type BundledExtensionCatalogEntry = {
 export type BundledExtensionCatalog = {
   schemaVersion: 1
   extensions: BundledExtensionCatalogEntry[]
+  retiredExtensions: string[]
 }
 
 export type BundledExtensionSeedStatus = 'seeded' | 'user-managed' | 'removed'
@@ -58,6 +59,8 @@ export type BundledExtensionSeedOutcome =
   | 'unchanged'
   | 'user-managed'
   | 'removed'
+  | 'retired-removed'
+  | 'retired-user-managed'
   | 'skipped-downgrade'
   | 'skipped-permission-change'
   | 'skipped-version-conflict'
@@ -82,6 +85,11 @@ type LoadedBundle = {
   archivePath: string
 }
 
+type LoadedBundledExtensionCatalog = {
+  bundles: LoadedBundle[]
+  retiredExtensionIds: string[]
+}
+
 type ReconcileResult = {
   state?: BundledExtensionSeedEntry
   result: BundledExtensionSeedResult
@@ -96,7 +104,7 @@ export async function seedBundledExtensions(
   options: SeedBundledExtensionsOptions
 ): Promise<BundledExtensionSeedResult[]> {
   const now = options.now ?? (() => new Date())
-  const bundles = await loadBundledExtensionCatalog(options.directory)
+  const catalog = await loadBundledExtensionCatalog(options.directory)
   const stateFile = new AtomicJsonFile(
     join(options.packageManager.paths.packageRoot, BUNDLED_EXTENSION_SEED_STATE_FILE),
     validateSeedDocument
@@ -104,7 +112,45 @@ export async function seedBundledExtensions(
   let state = await stateFile.read(() => emptySeedDocument(now()))
   const results: BundledExtensionSeedResult[] = []
 
-  for (const bundle of bundles) {
+  for (const extensionId of catalog.retiredExtensionIds) {
+    const prior = state.extensions[extensionId]
+    if (prior === undefined || prior.status === 'removed') continue
+    const timestamp = now().toISOString()
+    const current = await options.packageManager.registry.get(extensionId)
+    const exclusivelyManaged = current !== undefined &&
+      !current.useDevelopment &&
+      current.development === undefined &&
+      areRetiredVersionsBundled(extensionId, Object.values(current.versions))
+    if (exclusivelyManaged) {
+      await options.packageManager.uninstall(extensionId)
+    }
+    const nextEntry: BundledExtensionSeedEntry = {
+      ...prior,
+      status: exclusivelyManaged || current === undefined ? 'removed' : 'user-managed',
+      updatedAt: timestamp
+    }
+    state = await stateFile.update(
+      () => state,
+      (currentState) => ({
+        ...currentState,
+        revision: currentState.revision + 1,
+        updatedAt: timestamp,
+        extensions: {
+          ...currentState.extensions,
+          [extensionId]: nextEntry
+        }
+      })
+    )
+    results.push({
+      extensionId,
+      version: prior.lastSeenVersion,
+      outcome: exclusivelyManaged || current === undefined
+        ? 'retired-removed'
+        : 'retired-user-managed'
+    })
+  }
+
+  for (const bundle of catalog.bundles) {
     const prior = state.extensions[bundle.descriptor.id]
     let reconciled: ReconcileResult
     try {
@@ -143,7 +189,23 @@ export async function seedBundledExtensions(
   return results
 }
 
-export async function loadBundledExtensionCatalog(directory: string): Promise<LoadedBundle[]> {
+function areRetiredVersionsBundled(
+  extensionId: string,
+  versions: Array<{ source: { type: string; locator: string } }>
+): boolean {
+  const extensionName = extensionId.slice(extensionId.indexOf('.') + 1)
+  return versions.length > 0 && versions.every((version) => {
+    if (version.source.type !== 'local') return false
+    const archive = basename(version.source.locator)
+    return basename(dirname(version.source.locator)) === 'bundled-extensions' &&
+      archive.startsWith(`${extensionName}-`) &&
+      archive.endsWith('.kunx')
+  })
+}
+
+export async function loadBundledExtensionCatalog(
+  directory: string
+): Promise<LoadedBundledExtensionCatalog> {
   const requestedRoot = resolve(directory)
   const rootDetails = await lstat(requestedRoot).catch((error: unknown) => {
     throw extensionError(
@@ -221,7 +283,10 @@ export async function loadBundledExtensionCatalog(directory: string): Promise<Lo
     }
     bundles.push({ descriptor, archivePath })
   }
-  return bundles
+  return {
+    bundles,
+    retiredExtensionIds: catalog.retiredExtensions
+  }
 }
 
 async function reconcileBundle(
@@ -253,7 +318,9 @@ async function reconcileBundle(
       source: { type: 'local', locator: archivePath },
       grantedPermissions: descriptor.permissions,
       select: true,
-      enable: true,
+      // Shipping an extension makes it available in the management center,
+      // but only an explicit user action may expose its workbench surfaces.
+      enable: false,
       expected: expectedPackage(descriptor)
     })
     return seededResult(descriptor, timestamp, 'installed')
@@ -419,7 +486,7 @@ function validateCatalog(value: unknown): BundledExtensionCatalog {
       'Bundled extension catalog shape is invalid'
     )
   }
-  if (value.extensions.length < 1 || value.extensions.length > MAX_BUNDLED_EXTENSIONS) {
+  if (value.extensions.length > MAX_BUNDLED_EXTENSIONS) {
     throw extensionError(
       'EXTENSION_BUNDLED_CATALOG_INVALID',
       'Bundled extension catalog entry count is invalid'
@@ -428,7 +495,24 @@ function validateCatalog(value: unknown): BundledExtensionCatalog {
   const ids = new Set<string>()
   const archives = new Set<string>()
   const extensions = value.extensions.map((entry) => validateCatalogEntry(entry, ids, archives))
-  return { schemaVersion: 1, extensions }
+  const retiredExtensions = value.retiredExtensions === undefined
+    ? []
+    : validateRetiredExtensions(value.retiredExtensions, ids)
+  return { schemaVersion: 1, extensions, retiredExtensions }
+}
+
+function validateRetiredExtensions(value: unknown, activeIds: Set<string>): string[] {
+  if (!Array.isArray(value) || value.length > MAX_BUNDLED_EXTENSIONS) {
+    invalidCatalogEntry()
+  }
+  const retired = new Set<string>()
+  for (const extensionId of value) {
+    if (typeof extensionId !== 'string') invalidCatalogEntry()
+    assertExtensionId(extensionId)
+    if (activeIds.has(extensionId) || retired.has(extensionId)) invalidCatalogEntry()
+    retired.add(extensionId)
+  }
+  return [...retired].sort()
 }
 
 function validateCatalogEntry(

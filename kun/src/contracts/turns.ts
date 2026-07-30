@@ -1,13 +1,18 @@
 import { z } from 'zod'
 import { TurnItem, UserFileReferenceSchema, UserMessageSource } from './items.js'
 import { isGuiPlanRelativePath } from '../shared/gui-plan.js'
-import { ApprovalPolicySchema, SandboxModeSchema } from './policy.js'
+import {
+  ApprovalPolicySchema,
+  ApprovalReviewerSchema,
+  SandboxModeSchema
+} from './policy.js'
 import { MAX_TURN_ATTACHMENT_IDS } from './attachments.js'
 import {
   ComposerContextAttachmentSchema,
   MAX_COMPOSER_CONTEXT_ATTACHMENTS
 } from './composer-context.js'
 import { GraphOrchestrationStrategySchema } from './graph.js'
+import { GraphPlanningDraftStatusSchema } from './graph-planning.js'
 
 /**
  * Mode enum, inlined here (instead of importing `ThreadMode` from
@@ -20,6 +25,17 @@ export const TurnReasoningEffortSchema = z.enum(['auto', 'off', 'low', 'medium',
 export type TurnReasoningEffort = z.infer<typeof TurnReasoningEffortSchema>
 export const TurnClientSurfaceSchema = z.enum(['gui', 'tui', 'cli', 'api', 'im', 'extension'])
 export type TurnClientSurface = z.infer<typeof TurnClientSurfaceSchema>
+
+/**
+ * Immutable transport route used by model-controlled approval review for one
+ * acting turn. It contains identifiers only; credentials remain host-owned.
+ */
+export const ActingTurnModelRouteSchema = z.object({
+  model: z.string().trim().min(1),
+  providerId: z.string().trim().min(1).optional(),
+  accountId: z.string().trim().min(1).optional()
+}).strict()
+export type ActingTurnModelRoute = Readonly<z.infer<typeof ActingTurnModelRouteSchema>>
 
 /**
  * Plan operation kinds the renderer can advertise on a plan turn.
@@ -114,6 +130,15 @@ export const GraphLeadLifecycleSchema = z.object({
 }).strict()
 export type GraphLeadLifecycle = z.infer<typeof GraphLeadLifecycleSchema>
 
+export const GraphPlanningLifecycleSchema = z.object({
+  version: z.literal(1),
+  draftId: z.string().min(1),
+  reservedRunId: z.string().min(1),
+  state: GraphPlanningDraftStatusSchema,
+  draftRevision: z.number().int().positive()
+}).strict()
+export type GraphPlanningLifecycle = z.infer<typeof GraphPlanningLifecycleSchema>
+
 export const TurnSchema = z.object({
   id: z.string().min(1),
   threadId: z.string().min(1),
@@ -123,9 +148,15 @@ export const TurnSchema = z.object({
   model: z.string().optional(),
   providerId: z.string().optional(),
   accountId: z.string().min(1).optional(),
+  /** First successfully resolved route; immutable for the remainder of this turn. */
+  actingModelRoute: ActingTurnModelRouteSchema.optional(),
   reasoningEffort: TurnReasoningEffortSchema.optional(),
   /** Client that initiated this turn. Used only for per-turn capability and prompt scoping. */
   clientSurface: TurnClientSurfaceSchema.optional(),
+  /** Immutable execution-authority snapshot captured when this turn starts. */
+  approvalPolicy: ApprovalPolicySchema.optional(),
+  sandboxMode: SandboxModeSchema.optional(),
+  approvalReviewer: ApprovalReviewerSchema.optional(),
   /** Steered text queued by the user mid-turn. Cleared on completion. */
   steering: z.array(z.string()).default([]),
   createdAt: z.string(),
@@ -150,6 +181,8 @@ export const TurnSchema = z.object({
   requiredToolGate: RequiredToolGateSchema.optional(),
   /** Optional durable ownership state for a suspended/resumable Graph Lead. */
   graphLeadLifecycle: GraphLeadLifecycleSchema.optional(),
+  /** Durable pre-GraphRun planning ownership for Graph turns. */
+  graphPlanningLifecycle: GraphPlanningLifecycleSchema.optional(),
   /** Extension-run budget accounting persisted across runtime restarts. */
   extensionBudgetTokenBaseline: z.number().int().nonnegative().optional(),
   extensionModelRequests: z.number().int().nonnegative().optional(),
@@ -203,6 +236,7 @@ export const StartTurnRequest = z.object({
   clientSurface: TurnClientSurfaceSchema.optional(),
   approvalPolicy: ApprovalPolicySchema.optional(),
   sandboxMode: SandboxModeSchema.optional(),
+  approvalReviewer: ApprovalReviewerSchema.optional(),
   /**
    * Optional per-turn mode. Overrides the thread mode for this turn so
    * the GUI can toggle Plan/agent without recreating the thread. In Plan

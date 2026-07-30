@@ -364,6 +364,35 @@ export function reduceChatProjection(
         })
       }
     }
+    case 'approval_review_updated': {
+      const event = action.payload
+      const id = `approval-review-${event.reviewId}`
+      const current = state.blocks.find(
+        (block): block is Extract<ChatBlock, { kind: 'approval_review' }> =>
+          block.kind === 'approval_review' && block.reviewId === event.reviewId
+      )
+      const block: Extract<ChatBlock, { kind: 'approval_review' }> = {
+        kind: 'approval_review',
+        id,
+        reviewId: event.reviewId,
+        approvalId: event.approvalId,
+        turnId: event.turnId ?? current?.turnId,
+        createdAt:
+          current?.createdAt ??
+          event.createdAt ??
+          new Date(context.now).toISOString(),
+        summary: event.summary || current?.summary || 'Tool action',
+        toolName: event.toolName ?? current?.toolName,
+        status: event.status,
+        decision: event.decision ?? current?.decision,
+        riskLevel: event.riskLevel ?? current?.riskLevel,
+        rationale: event.rationale ?? current?.rationale
+      }
+      return {
+        blocks: upsertTimelineBlock(state.blocks, block),
+        error: context.clearRecoveringError(state.error)
+      }
+    }
     case 'user_input_requested': {
       const req = action.payload
       if (req.questions.length === 0) return {}

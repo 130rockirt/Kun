@@ -65,7 +65,7 @@ export function buildGraphLeadSupervisionTool(options: {
   nextId: (prefix: string) => string
 }): LocalTool {
   return LocalToolHost.defineTool({
-    name: GRAPH_LEAD_TOOL_NAMES[4],
+    name: GRAPH_LEAD_TOOL_NAMES[5],
     description:
       'Actively supervise workers owned by this GraphRun. overview returns a bounded run-wide snapshot of node status, reports, activity, and child-session tails; inspect returns one bounded live child-session page; ' +
       'wait pauses abortably for 1-60 seconds and then inspects again; guide durably records attempt-specific ' +

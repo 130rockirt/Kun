@@ -17,7 +17,12 @@ import type {
   ModelRequestTraceDelegated,
   ModelRequestTraceRecord
 } from '../../contracts/model-request-trace.js'
-import type { ApprovalPolicy, SandboxMode } from '../../contracts/policy.js'
+import type {
+  ApprovalPolicy,
+  ApprovalReviewer,
+  SandboxMode
+} from '../../contracts/policy.js'
+import type { ActingTurnModelRoute } from '../../contracts/turns.js'
 import {
   startLlmDebugRoundIfEnabled,
   type LlmDebugRound,
@@ -72,6 +77,8 @@ export interface SdkTurnContext {
   threadPersona?: string
   approvalPolicy: ApprovalPolicy
   sandboxMode?: SandboxMode
+  approvalReviewer?: ApprovalReviewer
+  actingModelRoute?: ActingTurnModelRoute
   planMode?: boolean
   /** Dedicated artifact turns disable Claude Code's raw filesystem/shell tools. */
   allowSdkBuiltins?: boolean

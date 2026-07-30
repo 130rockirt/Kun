@@ -9,7 +9,11 @@ import type {
 } from '../../ports/tool-host.js'
 import type { UserInputQuestion } from '../../ports/user-input-gate.js'
 import type { ApprovalRequest } from '../../domain/approval.js'
-import { createApprovalRequest } from '../../domain/approval.js'
+import {
+  createApprovalActionEnvelope,
+  createApprovalRequest,
+  safeApprovalActionSummary
+} from '../../domain/approval.js'
 import type { TurnItem } from '../../contracts/items.js'
 import { makeToolResultItem } from '../../domain/item.js'
 import { buildBuiltinLocalTools } from './builtin-tools.js'
@@ -43,6 +47,8 @@ import {
 } from '../../reliability/operation-journal.js'
 import { planModeToolBlock } from './plan-mode-tool-policy.js'
 
+const KUN_ACTION_APPROVAL_GRANT_TTL_MS = 2 * 60 * 1_000
+
 /**
  * A single registered tool. Tools are pure functions that observe the
  * abort signal and may be guarded by an approval policy.
@@ -65,18 +71,13 @@ export type LocalTool = {
    */
   policy: 'auto' | 'on-request' | 'suggest' | 'never' | 'untrusted'
   /**
-   * Require an interactive user decision even when the thread otherwise uses
-   * `approvalPolicy: 'auto'`. Reserve this for irreversible external effects
-   * such as sending workspace data to a third-party chat channel.
+   * Require the configured Kun reviewer even when the low-level policy would
+   * otherwise allow the call. The canonical Full access pair bypasses this
+   * Kun-level gate; protected host/OS/OAuth consent remains independent.
    */
-  requiresExplicitApproval?: boolean
-  /**
-   * The trusted provider applies its own action-specific approval boundary.
-   * This skips only the generic runtime approval policy; explicit approvals,
-   * external-write approvals, hooks, advertisement, and sandbox gates remain
-   * authoritative.
-   */
-  providerManagedApproval?: boolean
+  requiresExplicitApproval?:
+    | boolean
+    | ((call: ToolCallLike, context: ToolHostContext) => boolean)
   /**
    * String argument names that are exact file mutation targets eligible for a
    * one-call external workspace grant. Tools must opt in explicitly; merely
@@ -195,7 +196,11 @@ export class LocalToolHost implements ToolHost {
     if (context.abortSignal.aborted) {
       throw new Error('tool call aborted before start')
     }
-    const { tool } = components.registry.resolveTool(call.toolName, context, call.providerId)
+    const { tool, provider } = components.registry.resolveTool(
+      call.toolName,
+      context,
+      call.providerId
+    )
     if (tool.policy === 'never') {
       throw new Error(`tool ${call.toolName} is disabled by policy`)
     }
@@ -291,30 +296,82 @@ export class LocalToolHost implements ToolHost {
         name: activeCall.toolName,
         toolKind: activeCall.toolKind ?? tool.toolKind
       })
+    let explicitApprovalRequired: boolean
+    try {
+      explicitApprovalRequired = typeof tool.requiresExplicitApproval === 'function'
+        ? tool.requiresExplicitApproval(activeCall, context)
+        : tool.requiresExplicitApproval === true
+    } catch (error) {
+      return {
+        item: this.errorToolResult(
+          context,
+          activeCall,
+          tool,
+          error instanceof Error ? error.message : String(error),
+          'approval_classification_failed'
+        ),
+        approved: false
+      }
+    }
     // A configured hook may auto-approve ordinary tool calls, but it must not
     // bypass an explicit user decision for an external side effect or an
     // unrestricted host command exposed by workspace-write.
-    const needsApproval = externalPathApproval || workspaceCommandApproval ||
-      tool.requiresExplicitApproval ||
+    const fullAccess =
+      context.approvalPolicy === 'auto' &&
+      effectiveSandboxMode(context) === 'danger-full-access'
+    const needsApproval = !fullAccess && (
+      externalPathApproval ||
+      workspaceCommandApproval ||
+      explicitApprovalRequired ||
       (!preHooks.autoApproved && this.requiresApproval(tool, activeCall, context))
+    )
+    let kunActionApprovalGrant: ToolHostContext['kunActionApprovalGrant']
     if (needsApproval) {
       const approvalId = `appr_${randomUUID().replaceAll('-', '')}`
+      const approvalReason = externalPathApproval
+        ? 'exact external workspace file write requires approval'
+        : workspaceCommandApproval
+          ? 'host command execution from the workspace sandbox requires approval'
+          : explicitApprovalRequired
+            ? 'external side effect requires explicit approval'
+            : 'runtime tool policy requires approval'
+      const action = createApprovalActionEnvelope({
+        toolName: activeCall.toolName,
+        providerId: provider.id,
+        providerKind: provider.kind,
+        toolKind: activeCall.toolKind ?? tool.toolKind,
+        effects: tool.effects ?? provider.effects,
+        arguments: activeCall.arguments,
+        workspace: context.workspace,
+        cwd: typeof activeCall.arguments.cwd === 'string'
+          ? activeCall.arguments.cwd
+          : context.workspace,
+        exactFileTargets: externalWriteTargets.map((target) => target.path),
+        reason: approvalReason
+      })
       const approval: ApprovalRequest = createApprovalRequest({
         id: approvalId,
         threadId: context.threadId,
         turnId: context.turnId,
         toolName: activeCall.toolName,
-        summary: externalPathApproval
-          ? this.buildExternalPathApprovalSummary(
-              activeCall,
-              externalWriteTargets.map((target) => target.path)
-            )
-          : this.buildApprovalSummary(activeCall)
+        summary: safeApprovalActionSummary(action),
+        action
       })
       const resolution = await context.awaitApproval(approval)
       const decision = typeof resolution === 'string' ? resolution : resolution.decision
       if (decision !== 'allow') {
         const reason = typeof resolution === 'string' ? undefined : resolution.reason
+        const reviewer = typeof resolution === 'string'
+          ? context.approvalReviewer ?? 'user'
+          : resolution.reviewer ?? context.approvalReviewer ?? 'user'
+        const reviewDetails = typeof resolution === 'string'
+          ? {}
+          : {
+              ...(resolution.reviewId ? { reviewId: resolution.reviewId } : {}),
+              ...(resolution.riskLevel ? { riskLevel: resolution.riskLevel } : {}),
+              ...(resolution.reviewStatus ? { reviewStatus: resolution.reviewStatus } : {})
+            }
+        const actor = reviewer === 'agent' ? 'Agent reviewer' : 'User'
         return {
           item: makeToolResultItem({
             id: `item_${activeCall.callId}`,
@@ -326,16 +383,46 @@ export class LocalToolHost implements ToolHost {
             output: {
               code: 'approval_denied',
               error: reason
-                ? `User denied approval for ${activeCall.toolName}: ${reason}`
-                : `User denied approval for ${activeCall.toolName}`,
+                ? `${actor} denied approval for ${activeCall.toolName}: ${reason}`
+                : `${actor} denied approval for ${activeCall.toolName}`,
               approvalId,
-              ...(reason ? { reason } : {})
+              reviewer,
+              ...(reason ? { reason } : {}),
+              ...reviewDetails
             },
             isError: true
           }),
           approved: false
         }
       }
+      const reviewer = typeof resolution === 'string'
+        ? context.approvalReviewer ?? 'user'
+        : resolution.reviewer ?? context.approvalReviewer ?? 'user'
+      const issuedAt = new Date()
+      kunActionApprovalGrant = Object.freeze({
+        id: approvalId,
+        source: reviewer,
+        toolName: activeCall.toolName,
+        callId: activeCall.callId,
+        argumentsHash: ToolOperationJournal.argsHash(activeCall.arguments),
+        issuedAt: issuedAt.toISOString(),
+        expiresAt: new Date(
+          issuedAt.getTime() + KUN_ACTION_APPROVAL_GRANT_TTL_MS
+        ).toISOString()
+      })
+    } else if (fullAccess && explicitApprovalRequired) {
+      const issuedAt = new Date()
+      kunActionApprovalGrant = Object.freeze({
+        id: `grant_${randomUUID().replaceAll('-', '')}`,
+        source: 'full-access',
+        toolName: activeCall.toolName,
+        callId: activeCall.callId,
+        argumentsHash: ToolOperationJournal.argsHash(activeCall.arguments),
+        issuedAt: issuedAt.toISOString(),
+        expiresAt: new Date(
+          issuedAt.getTime() + KUN_ACTION_APPROVAL_GRANT_TTL_MS
+        ).toISOString()
+      })
     }
     if (context.abortSignal.aborted) {
       throw new Error('tool call aborted while waiting for approval')
@@ -384,12 +471,15 @@ export class LocalToolHost implements ToolHost {
     // accepted from a reused/caller-supplied context.
     const ungrantedContext = { ...context }
     delete ungrantedContext.approvedExternalWriteTargets
+    delete ungrantedContext.kunActionApprovalGrant
     const approvedExternalWriteTargets = Object.freeze(
       externalWriteTargets.map((target) => Object.freeze({ ...target }))
     )
-    const executionContext = externalPathApproval
-      ? { ...ungrantedContext, approvedExternalWriteTargets }
-      : ungrantedContext
+    const executionContext = {
+      ...ungrantedContext,
+      ...(externalPathApproval ? { approvedExternalWriteTargets } : {}),
+      ...(kunActionApprovalGrant ? { kunActionApprovalGrant } : {})
+    }
     let result: Awaited<ReturnType<LocalTool['execute']>>
     try {
       result = await tool.execute(activeCall.arguments, executionContext, async (update) => {
@@ -517,7 +607,6 @@ export class LocalToolHost implements ToolHost {
     )
     if (sandboxBlock) return sandboxBlock
     if (this.isInteractiveGuiGateTool(call.toolName)) return null
-    if (tool.providerManagedApproval) return null
     if (context.approvalPolicy !== 'never') return null
     if (tool.policy === 'never') return null
     return {
@@ -528,7 +617,6 @@ export class LocalToolHost implements ToolHost {
 
   private requiresApproval(tool: LocalTool, call: ToolCallLike, context: ToolHostContext): boolean {
     if (this.isInteractiveGuiGateTool(call.toolName)) return false
-    if (tool.providerManagedApproval) return false
     if (tool.policy === 'never' || context.approvalPolicy === 'never') return false
     switch (context.approvalPolicy) {
       case 'always':
@@ -546,18 +634,6 @@ export class LocalToolHost implements ToolHost {
 
   private isInteractiveGuiGateTool(toolName: string): boolean {
     return toolName === 'user_input' || toolName === 'request_user_input'
-  }
-
-  private buildApprovalSummary(call: ToolCallLike): string {
-    const args = Object.entries(call.arguments)
-      .map(([key, value]) => `${key}=${JSON.stringify(value)}`)
-      .join(', ')
-    return `Run ${call.toolName}(${args})`
-  }
-
-  private buildExternalPathApprovalSummary(call: ToolCallLike, paths: readonly string[]): string {
-    const targets = paths.map((path) => JSON.stringify(path)).join(', ')
-    return `Allow ${call.toolName} to modify these exact paths outside the workspace for this call only: ${targets}`
   }
 
   private completedToolResult(
@@ -613,11 +689,13 @@ export class LocalToolHost implements ToolHost {
       inputSchema: tool.inputSchema,
       toolKind: tool.toolKind ?? 'tool_call',
       ...(tool.sideEffect ? { sideEffect: tool.sideEffect } : {}),
+      ...(tool.effects ? { effects: { ...tool.effects } } : {}),
       execute: tool.execute,
       ...(tool.modelAdvertised === false ? { modelAdvertised: false } : {}),
       ...(tool.shouldAdvertise ? { shouldAdvertise: tool.shouldAdvertise } : {}),
-      ...(tool.requiresExplicitApproval ? { requiresExplicitApproval: true } : {}),
-      ...(tool.providerManagedApproval ? { providerManagedApproval: true } : {}),
+      ...(tool.requiresExplicitApproval
+        ? { requiresExplicitApproval: tool.requiresExplicitApproval }
+        : {}),
       ...(tool.externalWritePathArguments?.length
         ? { externalWritePathArguments: [...tool.externalWritePathArguments] }
         : {})

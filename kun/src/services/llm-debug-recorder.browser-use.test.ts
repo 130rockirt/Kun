@@ -59,6 +59,15 @@ describe('Browser Use model trace redaction', () => {
       arguments: {
         action: 'type',
         ref: 'opaque-reference-1234',
+        expectedTarget: {
+          sessionId: 'session-1234567890',
+          tabId: 'tab-1',
+          documentGeneration: 1,
+          origin: 'https://example.com',
+          sanitizedUrl: 'https://example.com/form',
+          role: 'textbox',
+          name: 'Public note'
+        },
         text: 'private input'
       }
     })

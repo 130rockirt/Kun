@@ -1,5 +1,6 @@
 import type {
   ApprovalStatusPayload,
+  ApprovalReviewEventPayload,
   ChatBlock,
   CompactionEventPayload,
   ComponentPrototypeMetadata,
@@ -77,6 +78,7 @@ export function threadFromCore(thread: CoreThreadSummaryJson): NormalizedThread 
     status: thread.status,
     approvalPolicy: normalizeApprovalPolicy(thread.approvalPolicy),
     sandboxMode: normalizeSandboxMode(thread.sandboxMode),
+    approvalReviewer: normalizeApprovalReviewer(thread.approvalReviewer),
     modelRequestCaptureEnabled: thread.modelRequestCaptureEnabled === true,
     archived: thread.status === 'archived',
     pinned: thread.pinned === true,
@@ -119,6 +121,12 @@ function normalizeSandboxMode(value: string | undefined): NormalizedThread['sand
     default:
       return undefined
   }
+}
+
+function normalizeApprovalReviewer(
+  value: string | undefined
+): NormalizedThread['approvalReviewer'] {
+  return value === 'agent' ? 'agent' : 'user'
 }
 
 export function goalFromCore(goal: CoreThreadGoalJson): ThreadGoal {
@@ -1269,6 +1277,48 @@ function approvalStatusFromEvent(event: CoreRuntimeEventJson): ApprovalStatusPay
   }
 }
 
+function approvalReviewFromEvent(
+  event: CoreRuntimeEventJson
+): ApprovalReviewEventPayload | null {
+  const reviewId = event.reviewId?.trim() ?? ''
+  const approvalId = event.approvalId?.trim() ?? ''
+  if (!reviewId || !approvalId || event.reviewer !== 'agent') return null
+  const status = event.status
+  if (
+    status !== 'in-progress' &&
+    status !== 'approved' &&
+    status !== 'denied' &&
+    status !== 'timed-out' &&
+    status !== 'failed-closed' &&
+    status !== 'aborted'
+  ) return null
+  const decision =
+    event.decision === 'allow' || event.decision === 'deny'
+      ? event.decision
+      : undefined
+  const riskLevel =
+    event.riskLevel === 'low' ||
+    event.riskLevel === 'medium' ||
+    event.riskLevel === 'high' ||
+    event.riskLevel === 'critical'
+      ? event.riskLevel
+      : undefined
+  return {
+    reviewId,
+    approvalId,
+    turnId: event.turnId,
+    createdAt: event.timestamp,
+    summary: redactSecretText(event.summary?.trim() || event.toolName?.trim() || 'Tool action'),
+    ...(event.toolName?.trim() ? { toolName: event.toolName.trim() } : {}),
+    status,
+    ...(decision ? { decision } : {}),
+    ...(riskLevel ? { riskLevel } : {}),
+    ...(event.rationale?.trim()
+      ? { rationale: redactSecretText(event.rationale.trim()) }
+      : {})
+  }
+}
+
 function userInputBlockFromItem(
   item: CoreTurnItemJson
 ): Extract<ChatBlock, { kind: 'user_input' }> {
@@ -1492,7 +1542,9 @@ export function chatBlockFromItem(item: CoreTurnItemJson, child?: CoreChildRunti
     case 'tool_result':
       return toolBlockFromItem(item, child)
     case 'approval':
-      return approvalBlockFromItem(item, child)
+      return item.decisionSource === 'agent' || item.approvalReviewer === 'agent'
+        ? null
+        : approvalBlockFromItem(item, child)
     case 'user_input': {
       const block = userInputBlockFromItem(item)
       return block.questions.length > 0 ? block : null
@@ -1723,6 +1775,7 @@ const kunEventNormalizerDeps: KunEventNormalizerDeps = {
   runtimeStatus: runtimeStatusFromEvent,
   approvalAction: (event) => ({ type: 'approval_requested', event }),
   approvalStatus: approvalStatusFromEvent,
+  approvalReview: approvalReviewFromEvent,
   userInputRequest: (event) => userInputRequestFromCore({
     itemId: event.itemId,
     inputId: event.inputId,
@@ -1786,6 +1839,7 @@ async function applyRuntimeProjectionAction(
     case 'approval_requested': await handleApprovalRequest(action.event, sink); return
     case 'approval_received': sink.onApproval(action.payload); return
     case 'approval_status_changed': sink.onApprovalStatus?.(action.payload); return
+    case 'approval_review_updated': sink.onApprovalReview?.(action.payload); return
     case 'user_input_requested': sink.onUserInput(action.payload); return
     case 'user_input_status_changed': sink.onUserInputStatus(action.payload); return
     case 'runtime_status_received': sink.onRuntimeStatus?.(action.payload); return
@@ -1859,6 +1913,9 @@ export async function dispatchKunRuntimeEvent(
   }
   if (event.kind === 'graph_event' && event.graph !== undefined) {
     sink.onGraphEvent?.(event.graph)
+  }
+  if (event.kind === 'graph_planning' && event.planning !== undefined) {
+    sink.onGraphPlanningEvent?.(event.planning)
   }
   const actions = runtimeProjectionActionsFromEvent(event)
   for (const action of actions) {

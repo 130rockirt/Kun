@@ -12,8 +12,10 @@ import type {
 } from '../contracts/threads.js'
 import {
   DEFAULT_APPROVAL_POLICY,
+  DEFAULT_APPROVAL_REVIEWER,
   DEFAULT_SANDBOX_MODE,
   type ApprovalPolicy,
+  type ApprovalReviewer,
   type SandboxMode
 } from '../contracts/policy.js'
 
@@ -45,6 +47,7 @@ export function createThreadRecord(input: {
   status?: ThreadStatus
   approvalPolicy?: ApprovalPolicy
   sandboxMode?: SandboxMode
+  approvalReviewer?: ApprovalReviewer
   modelRequestCaptureEnabled?: boolean
   pinned?: boolean
   costBudgetUsd?: number
@@ -84,6 +87,7 @@ export function createThreadRecord(input: {
     status: input.status ?? 'idle',
     approvalPolicy: input.approvalPolicy ?? DEFAULT_APPROVAL_POLICY,
     sandboxMode: input.sandboxMode ?? DEFAULT_SANDBOX_MODE,
+    approvalReviewer: input.approvalReviewer ?? DEFAULT_APPROVAL_REVIEWER,
     modelRequestCaptureEnabled: input.modelRequestCaptureEnabled ?? false,
     ...(input.pinned !== undefined ? { pinned: input.pinned } : {}),
     ...(input.costBudgetUsd !== undefined ? { costBudgetUsd: input.costBudgetUsd } : {}),
@@ -111,7 +115,7 @@ export function toThreadSummary(
   thread: ThreadEntity
 ): Pick<
   ThreadEntity,
-  'id' | 'title' | 'titleAuto' | 'summary' | 'workspace' | 'additionalWorkspaces' | 'model' | 'providerId' | 'agentId' | 'systemPrompt' | 'mode' | 'status' | 'approvalPolicy' | 'sandboxMode' | 'modelRequestCaptureEnabled' | 'pinned' | 'createdAt' | 'updatedAt'
+  'id' | 'title' | 'titleAuto' | 'summary' | 'workspace' | 'additionalWorkspaces' | 'model' | 'providerId' | 'agentId' | 'systemPrompt' | 'mode' | 'status' | 'approvalPolicy' | 'sandboxMode' | 'approvalReviewer' | 'modelRequestCaptureEnabled' | 'pinned' | 'createdAt' | 'updatedAt'
   | 'ownerExtensionId' | 'ownerExtensionVersion' | 'accountId' | 'extensionVisibility'
   | 'extensionProfile' | 'extensionBudget' | 'toolCatalogEpoch'
   | 'costBudgetUsd' | 'costBudgetWarningSent'
@@ -141,6 +145,7 @@ export function toThreadSummary(
     status: thread.status,
     approvalPolicy: thread.approvalPolicy,
     sandboxMode: thread.sandboxMode,
+    approvalReviewer: thread.approvalReviewer,
     modelRequestCaptureEnabled: thread.modelRequestCaptureEnabled,
     ...(thread.pinned !== undefined ? { pinned: thread.pinned } : {}),
     ...(thread.costBudgetUsd !== undefined ? { costBudgetUsd: thread.costBudgetUsd } : {}),

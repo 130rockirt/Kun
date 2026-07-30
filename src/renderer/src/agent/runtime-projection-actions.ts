@@ -1,6 +1,7 @@
 import type { CoreRuntimeEventJson } from './kun-contract'
 import type {
   ApprovalStatusPayload,
+  ApprovalReviewEventPayload,
   AssistantItemSnapshotPayload,
   CompactionEventPayload,
   ReviewEventPayload,
@@ -41,6 +42,7 @@ export type RuntimeProjectionAction =
   | { type: 'approval_requested'; event: CoreRuntimeEventJson }
   | { type: 'approval_received'; payload: Parameters<ThreadEventSink['onApproval']>[0] }
   | { type: 'approval_status_changed'; payload: ApprovalStatusPayload }
+  | { type: 'approval_review_updated'; payload: ApprovalReviewEventPayload }
   | { type: 'user_input_requested'; payload: UserInputRequestPayload }
   | { type: 'user_input_status_changed'; payload: UserInputStatusPayload }
   | { type: 'runtime_status_received'; payload: RuntimeStatusEventPayload }

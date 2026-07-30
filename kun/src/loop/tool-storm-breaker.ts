@@ -40,6 +40,12 @@ export class ToolStormBreaker {
   }
 
   inspect(call: ToolCallLike): { suppress: boolean; reason?: string } {
+    if (call.toolName === 'graph_define_plan') {
+      // The planning draft owns candidate hashing and the single-repair
+      // policy. Let it return unchanged_invalid_plan on the second identical
+      // submission instead of converting it into a generic third-call storm.
+      return { suppress: false }
+    }
     if (INTERACTIVE_TOOL_NAMES.has(call.toolName)) {
       this.interactiveCount += 1
       if (this.interactiveCount > this.interactiveThreshold) {

@@ -1,5 +1,9 @@
 import { z } from 'zod'
-import { ApprovalPolicySchema, SandboxModeSchema } from './policy.js'
+import {
+  ApprovalPolicySchema,
+  ApprovalReviewerSchema,
+  SandboxModeSchema
+} from './policy.js'
 import { RuntimeCapabilityManifest } from './capabilities.js'
 import { MODEL_ENDPOINT_FORMATS } from './model-endpoint-format.js'
 
@@ -15,6 +19,7 @@ export const RuntimeInfoResponse = z
     endpointFormat: z.enum(MODEL_ENDPOINT_FORMATS).optional(),
     approvalPolicy: ApprovalPolicySchema.optional(),
     sandboxMode: SandboxModeSchema.optional(),
+    approvalReviewer: ApprovalReviewerSchema.optional(),
     tokenEconomyMode: z.boolean().optional(),
     insecure: z.boolean().optional(),
     instanceId: z.string().min(1),

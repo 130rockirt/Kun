@@ -4,7 +4,7 @@ import type { ModelCapabilityMetadata } from '../../contracts/capabilities.js'
 import type { ModelEndpointFormat } from '../../contracts/model-endpoint-format.js'
 import type { ModelRequest, ModelStreamChunk } from '../../ports/model-client.js'
 import { makeCompactionItem } from '../../domain/item.js'
-import { GRAPH_CREATE_RUN_INPUT_JSON_SCHEMA } from '../tool/graph-mode-tool-provider.js'
+import { GRAPH_DEFINE_PLAN_INPUT_JSON_SCHEMA } from '../tool/graph-mode-tool-provider.js'
 import { createCompatRequestCodecs, normalizeToolSpecs } from './compat-request-builder.js'
 
 // A single provider (OpenCode Go) routes some models over chat completions
@@ -268,12 +268,12 @@ describe('CompatModelClient per-model endpointFormat', () => {
     })).toThrow(/required_tool_unsupported/)
   })
 
-  it('preserves the complete graph_create_run schema in OpenAI and Anthropic wire formats', () => {
+  it('preserves the minimal graph_define_plan schema in OpenAI and Anthropic wire formats', () => {
     const codecs = createCompatRequestCodecs()
     const tools = normalizeToolSpecs([{
-      name: 'graph_create_run',
-      description: 'Create a Graph run',
-      inputSchema: GRAPH_CREATE_RUN_INPUT_JSON_SCHEMA
+      name: 'graph_define_plan',
+      description: 'Define a Graph plan',
+      inputSchema: GRAPH_DEFINE_PLAN_INPUT_JSON_SCHEMA
     }])
 
     for (const endpointFormat of ['chat_completions', 'responses', 'messages'] as const) {
@@ -299,11 +299,12 @@ describe('CompatModelClient per-model endpointFormat', () => {
         properties: {
           plan: {
             properties: Record<string, unknown> & {
-              budget?: {
-                properties?: {
-                  maxNodes?: {
-                    exclusiveMinimum?: unknown
-                  }
+              tasks: {
+                items: {
+                  oneOf: Array<{
+                    properties: Record<string, unknown>
+                    required: string[]
+                  }>
                 }
               }
             }
@@ -311,17 +312,28 @@ describe('CompatModelClient per-model endpointFormat', () => {
         }
       }
 
-      expect(schema.properties.plan.properties).toHaveProperty('phases')
-      expect(schema.properties.plan.properties).toHaveProperty('nodes')
-      expect(schema.properties.plan.properties).toHaveProperty('edges')
-      expect(schema.properties.plan.properties).toHaveProperty('budget')
-      expect(schema.properties.plan.properties).toHaveProperty('completionNodeIds')
-      expect(schema.properties.plan.properties).not.toHaveProperty('version')
-      expect(schema.properties.plan.properties).not.toHaveProperty('workspaceRoot')
-      expect(
-        schema.properties.plan.properties.budget?.properties?.maxNodes?.exclusiveMinimum
-      ).toBe(0)
-      expect(JSON.stringify(wireSchema)).not.toContain('"exclusiveMinimum":true')
+      expect(schema.properties.plan.properties).toHaveProperty('tasks')
+      expect(schema.properties.plan.properties).toHaveProperty('completionTaskKeys')
+      const branches = schema.properties.plan.properties.tasks.items.oneOf
+      const ordinary = branches.find((branch) => !branch.required.includes('loop'))
+      expect(ordinary?.properties).not.toHaveProperty('loop')
+      const encoded = JSON.stringify(wireSchema)
+      for (const forbidden of [
+        'budget',
+        'model',
+        'providerId',
+        'reasoningEffort',
+        'timeout',
+        'maxAttempts',
+        'priority',
+        'phase',
+        'revision',
+        'workspaceRoot',
+        'runId',
+        'timestamp'
+      ]) {
+        expect(encoded).not.toContain(`"${forbidden}"`)
+      }
     }
   })
 

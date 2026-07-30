@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next'
 import type { LucideIcon } from 'lucide-react'
 import {
   Brain,
+  Bot,
   BookOpen,
   ChevronDown,
   ChevronRight,
@@ -207,6 +208,10 @@ function processBlockErrorTone(block: ChatBlock): ProcessErrorTone {
   if (block.kind === 'tool' && block.status === 'error') return 'tool'
   if (block.kind === 'compaction' && block.status === 'error') return 'error'
   if (block.kind === 'approval' && block.status === 'error') return 'error'
+  if (
+    block.kind === 'approval_review' &&
+    (block.status === 'timed-out' || block.status === 'failed-closed')
+  ) return 'error'
   if (block.kind === 'user_input' && block.status === 'error') return 'error'
   if (block.kind === 'system' && block.severity === 'error') return 'error'
   return null
@@ -426,6 +431,7 @@ function processBlockIsAutoOpenPending(block: ChatBlock, processing: boolean): b
     processing &&
     ((block.kind === 'compaction' && block.status === 'running') ||
       (block.kind === 'approval' && block.status === 'pending') ||
+      (block.kind === 'approval_review' && block.status === 'in-progress') ||
       (block.kind === 'user_input' && block.status === 'pending'))
   )
 }
@@ -791,7 +797,7 @@ export function summarizeProcessWork(
   let approvalCount = 0
 
   for (const block of blocks) {
-    if (block.kind === 'approval') {
+    if (block.kind === 'approval' || block.kind === 'approval_review') {
       approvalCount += 1
       continue
     }
@@ -884,6 +890,7 @@ function processBlockIcon(block: ChatBlock): LucideIcon | null {
   if (block.kind === 'assistant') return MessageSquareQuote
   if (block.kind === 'compaction') return Minimize2
   if (block.kind === 'approval') return Wrench
+  if (block.kind === 'approval_review') return Bot
   if (block.kind === 'user_input') return MessageSquareQuote
   if (isBackgroundShellNoticeBlock(block)) return BellRing
   if (isBackgroundSubagentNoticeBlock(block)) return BellRing
@@ -1034,6 +1041,7 @@ type ProcessDetail =
   | { kind: 'assistant'; text: string }
   | { kind: 'tool'; text: string; isPatch: boolean; isError: boolean; filePath?: string }
   | { kind: 'approval' }
+  | { kind: 'approval_review' }
   | { kind: 'user_input' }
   | { kind: 'background_shell' }
   | { kind: 'background_subagent' }
@@ -1324,6 +1332,7 @@ function getProcessDetail(block: ChatBlock, summaryText?: string): ProcessDetail
     return { kind: 'text', text: detailText }
   }
   if (block.kind === 'approval') return { kind: 'approval' }
+  if (block.kind === 'approval_review') return { kind: 'approval_review' }
   if (block.kind === 'user_input') return { kind: 'user_input' }
   if (isBackgroundShellNoticeBlock(block)) return { kind: 'background_shell' }
   if (isBackgroundSubagentNoticeBlock(block)) return { kind: 'background_subagent' }
@@ -1396,6 +1405,9 @@ function ProcessEntryDetail({
   if (detail.kind === 'approval' && block.kind === 'approval') {
     return <MessageBubble block={block} nested allowThreadActions={allowThreadActions} />
   }
+  if (detail.kind === 'approval_review' && block.kind === 'approval_review') {
+    return <MessageBubble block={block} nested allowThreadActions={false} />
+  }
   if (detail.kind === 'user_input' && block.kind === 'user_input') {
     return <MessageBubble block={block} nested allowThreadActions={allowThreadActions} />
   }
@@ -1446,6 +1458,10 @@ function describeProcessBlock(
   }
   if (block.kind === 'approval') {
     return block.summary || t('approvalTitle')
+  }
+  if (block.kind === 'approval_review') {
+    if (block.status === 'in-progress') return t('approvalReviewInProgress')
+    return block.summary || t('approvalReviewTitle')
   }
   if (block.kind === 'user_input') {
     return t('userInputTitle')

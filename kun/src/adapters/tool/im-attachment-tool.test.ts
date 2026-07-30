@@ -12,8 +12,8 @@ function baseContext(workspace: string, imContext: boolean): ToolHostContext {
     turnId: 'turn_1',
     workspace,
     imContext,
-    approvalPolicy: 'auto',
-    sandboxMode: 'danger-full-access',
+    approvalPolicy: 'on-request',
+    sandboxMode: 'workspace-write',
     abortSignal: new AbortController().signal,
     awaitApproval: vi.fn(async () => 'allow' as const)
   }
@@ -30,7 +30,7 @@ describe('send_im_attachment tool', () => {
       const host = new LocalToolHost({ tools: [createSendImAttachmentLocalTool()] })
       expect(createSendImAttachmentLocalTool()).toMatchObject({
         policy: 'on-request',
-        toolKind: 'command_execution',
+        toolKind: 'tool_call',
         requiresExplicitApproval: true
       })
 
@@ -125,7 +125,7 @@ describe('send_im_attachment tool', () => {
     }
   })
 
-  it('requires an explicit approval even under the auto policy', async () => {
+  it('requires an explicit approval in a restricted permission mode', async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), 'kun-im-attachment-tool-'))
     await writeFile(join(workspaceRoot, 'report.txt'), 'sensitive report')
     try {
