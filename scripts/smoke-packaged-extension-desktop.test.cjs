@@ -88,6 +88,20 @@ test('bounds Graph workbench browser operations', async () => {
   )
 })
 
+test('stops the isolated Graph runtime before reporting smoke success', () => {
+  const source = readFileSync(
+    join(root, 'scripts', 'smoke-development-graph-workbench.cjs'),
+    'utf8'
+  )
+  const stopCall = source.indexOf('stopIsolatedSharedRuntime(repositoryRoot, profile)')
+  const removeCall = source.indexOf('rm(temporaryRoot')
+  const successWrite = source.indexOf('process.stdout.write(`${JSON.stringify(result')
+  assert.ok(stopCall > 0, 'Graph smoke must stop its data-dir scoped shared Runtime')
+  assert.ok(removeCall > stopCall, 'Graph smoke must stop its shared Runtime before removing its profile')
+  assert.ok(successWrite > removeCall, 'Graph smoke must report success only after cleanup completes')
+  assert.match(source, /await stopSharedRuntime\(profile\)/u)
+})
+
 test('selects host-native packaged resources and never launches desktop Electron as Node', () => {
   assert.deepEqual(platformDesktopArguments('linux'), [
     '--disable-gpu',

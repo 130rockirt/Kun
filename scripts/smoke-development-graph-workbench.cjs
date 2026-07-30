@@ -8,6 +8,7 @@ const { mkdir, mkdtemp, rm, writeFile } = require('node:fs/promises')
 const { createConnection, createServer } = require('node:net')
 const { tmpdir } = require('node:os')
 const { dirname, extname, join, resolve } = require('node:path')
+const { pathToFileURL } = require('node:url')
 const { _electron } = require('playwright-core')
 const { makeTreeWritable } = require('./smoke-packaged-extensions.cjs')
 const {
@@ -24,6 +25,7 @@ const { findWorkbenchWindow } = require('./smoke-packaged-video-editor-desktop.c
 const DEFAULT_TIMEOUT_MS = 120_000
 const MAX_OPERATION_TIMEOUT_MS = 30_000
 const MAX_CLEANUP_TIMEOUT_MS = 15_000
+const GRACEFUL_CLOSE_TIMEOUT_MS = 3_000
 
 async function main() {
   const repositoryRoot = resolve(join(__dirname, '..'))
@@ -59,6 +61,8 @@ async function main() {
   let rendererProcess
   let electronApplication
   let electronProcess
+  let result
+  let primaryError
   let rendererOutput = ''
   let electronOutput = ''
   try {
@@ -323,7 +327,7 @@ async function main() {
         : `${absoluteEvidencePath}-narrow.png`
       await page.screenshot({ path: narrowPath })
     }
-    process.stdout.write(JSON.stringify({
+    result = {
       ok: true,
       platform: process.platform,
       appRegion: appRegion.trim(),
@@ -345,20 +349,23 @@ async function main() {
         after: inspectorWidthAfterResize
       },
       narrowInspector: layout
-    }, null, 2) + '\n')
+    }
   } catch (error) {
     const diagnostics = [
       rendererOutput.trim() ? `Renderer output:\n${rendererOutput.trim()}` : '',
       electronOutput.trim() ? `Electron output:\n${electronOutput.trim()}` : ''
     ].filter(Boolean).join('\n\n')
-    throw new Error(`${error instanceof Error ? error.stack ?? error.message : String(error)}${
+    primaryError = new Error(`${error instanceof Error ? error.stack ?? error.message : String(error)}${
       diagnostics ? `\n\n${diagnostics}` : ''
     }`)
   } finally {
+    const cleanupErrors = []
+    let electronClosePromise
     if (electronApplication) {
+      electronClosePromise = electronApplication.close()
       await withTimeout(
-        electronApplication.close(),
-        MAX_CLEANUP_TIMEOUT_MS,
+        electronClosePromise,
+        GRACEFUL_CLOSE_TIMEOUT_MS,
         'closing the Graph workbench Electron application'
       ).catch(() => undefined)
     }
@@ -366,18 +373,36 @@ async function main() {
       await terminateProcessTree(electronProcess, process.platform, {
         timeoutMs: MAX_CLEANUP_TIMEOUT_MS,
         detached: process.platform !== 'win32'
-      }).catch(() => undefined)
+      }).catch((error) => cleanupErrors.push(error))
     }
+    await withTimeout(
+      stopIsolatedSharedRuntime(repositoryRoot, profile),
+      MAX_CLEANUP_TIMEOUT_MS + 5_000,
+      'stopping the isolated Graph workbench Kun runtime'
+    ).catch((error) => cleanupErrors.push(error))
+    if (electronClosePromise) {
+      await withTimeout(
+        electronClosePromise,
+        1_000,
+        'settling the Graph workbench Electron connection'
+      ).catch(() => undefined)
+    }
+    releaseChildProcessHandles(electronProcess)
     if (rendererProcess) {
       await terminateProcessTree(rendererProcess, process.platform, {
         timeoutMs: MAX_CLEANUP_TIMEOUT_MS,
         detached: process.platform !== 'win32'
-      }).catch(() => undefined)
+      }).catch((error) => cleanupErrors.push(error))
     }
-    await Promise.all([
-      makeTreeWritable(temporaryRoot),
-      makeTreeWritable(workspaceRoot)
-    ]).catch(() => undefined)
+    releaseChildProcessHandles(rendererProcess)
+    await withTimeout(
+      Promise.all([
+        makeTreeWritable(temporaryRoot),
+        makeTreeWritable(workspaceRoot)
+      ]),
+      MAX_CLEANUP_TIMEOUT_MS,
+      'making Graph workbench smoke directories writable'
+    ).catch((error) => cleanupErrors.push(error))
     await withTimeout(
       Promise.all([
         rm(temporaryRoot, {
@@ -395,8 +420,32 @@ async function main() {
       ]),
       MAX_CLEANUP_TIMEOUT_MS,
       'removing Graph workbench smoke directories'
-    )
+    ).catch((error) => cleanupErrors.push(error))
+    if (cleanupErrors.length > 0) {
+      const cleanupDiagnostics = cleanupErrors
+        .map((error) => `- ${error instanceof Error ? error.message : String(error)}`)
+        .join('\n')
+      if (primaryError) {
+        primaryError = new Error(`${primaryError.stack ?? primaryError.message}\n\nCleanup failures:\n${cleanupDiagnostics}`)
+      } else {
+        primaryError = new Error(`Graph workbench smoke cleanup failed:\n${cleanupDiagnostics}`)
+      }
+    }
   }
+  if (primaryError) throw primaryError
+  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`)
+}
+
+async function stopIsolatedSharedRuntime(repositoryRoot, profile) {
+  const modulePath = join(repositoryRoot, 'kun', 'dist', 'cli', 'shared-runtime.js')
+  const { stopSharedRuntime } = await import(pathToFileURL(modulePath).href)
+  await stopSharedRuntime(profile)
+}
+
+function releaseChildProcessHandles(child) {
+  child?.stdout?.destroy()
+  child?.stderr?.destroy()
+  child?.unref?.()
 }
 
 async function withTimeout(operation, timeoutMs, description) {
