@@ -195,11 +195,17 @@ export class SkillRuntime {
     filePaths?: readonly string[]
     threadId?: string
     turnId?: string
+    /** Per-call skill-id allow-list captured at a delegated execution boundary. */
+    allowedSkillIds?: readonly string[]
     /** Per-call skill-id deny-list (e.g. a subagent profile's blockedSkills). Hidden from catalog + auto-activation. */
     blockedSkillIds?: readonly string[]
   }): Promise<SkillTurnResolution> {
     if (!skillsRuntimeEnabled(this.config)) return emptyResolution()
-    const skills = filterBlockedSkills(await this.skillsForWorkspace(input.workspace), input.blockedSkillIds)
+    const skills = filterSkills(
+      await this.skillsForWorkspace(input.workspace),
+      input.allowedSkillIds,
+      input.blockedSkillIds
+    )
     const catalogInstruction = renderCatalogInstruction(skills, this.options.catalogBudgetBytes)
     const matches = this.matchSkills(input, skills)
     const matchedIds = new Set(matches.map((match) => match.skill.id))
@@ -261,7 +267,8 @@ export class SkillRuntime {
     skillId: string,
     workspace = '',
     blockedIds?: readonly string[],
-    turn?: { threadId: string; turnId: string }
+    turn?: { threadId: string; turnId: string },
+    allowedIds?: readonly string[]
   ): Promise<{
     skillId: string
     name: string
@@ -270,7 +277,7 @@ export class SkillRuntime {
     truncated: boolean
   } | { error: string }> {
     if (!skillsRuntimeEnabled(this.config)) return { error: 'skills are disabled' }
-    const skills = filterBlockedSkills(await this.skillsForWorkspace(workspace), blockedIds)
+    const skills = filterSkills(await this.skillsForWorkspace(workspace), allowedIds, blockedIds)
     const normalized = slug(skillId.trim().replace(/^[$@]/, '').replace(/^skill:/i, ''))
     const skill = skills.find((candidate) => candidate.id === normalized) ??
       skills.find((candidate) => slug(candidate.name) === normalized)
@@ -332,6 +339,30 @@ export class SkillRuntime {
     }
   }
 
+  /** Return the catalog visible to one workspace, including conventional project roots. */
+  async diagnosticsForWorkspace(workspace: string): Promise<SkillRuntimeDiagnostics> {
+    const skills = skillsRuntimeEnabled(this.config)
+      ? await this.skillsForWorkspace(workspace)
+      : []
+    const base = this.diagnostics()
+    return {
+      ...base,
+      roots: uniqueRoots(skills.filter((skill) => skill.source === 'project').map((skill) => skill.root)),
+      globalRoots: uniqueRoots(skills.filter((skill) => skill.source === 'global').map((skill) => skill.root)),
+      skills: skills.map((skill) => ({
+        id: skill.id,
+        name: skill.name,
+        ...(skill.description ? { description: skill.description } : {}),
+        version: skill.version,
+        root: skill.root,
+        source: skill.source,
+        legacy: skill.legacy,
+        triggers: skill.triggers,
+        allowedTools: skill.allowedTools
+      }))
+    }
+  }
+
   count(): number {
     return this.skills.length
   }
@@ -343,11 +374,13 @@ export class SkillRuntime {
 
   async availableSkillIdsForWorkspace(
     workspace: string,
-    blockedSkillIds?: readonly string[]
+    blockedSkillIds?: readonly string[],
+    allowedSkillIds?: readonly string[]
   ): Promise<string[]> {
     if (!skillsRuntimeEnabled(this.config)) return []
-    return filterBlockedSkills(
+    return filterSkills(
       await this.skillsForWorkspace(workspace),
+      allowedSkillIds,
       blockedSkillIds
     ).map((skill) => skill.id)
   }
@@ -616,13 +649,31 @@ async function existingWorkspaceSkillRoots(workspaceRoot: string): Promise<strin
  * subagent profile that blocks specific skills — without mutating the shared
  * runtime instance, so sibling children are unaffected.
  */
-function filterBlockedSkills(skills: LoadedSkill[], blockedIds: readonly string[] | undefined): LoadedSkill[] {
-  if (!blockedIds || blockedIds.length === 0) return skills
+function filterSkills(
+  skills: LoadedSkill[],
+  allowedIds: readonly string[] | undefined,
+  blockedIds: readonly string[] | undefined
+): LoadedSkill[] {
+  const allowed = allowedIds
+    ? new Set(allowedIds.map(normalizeSkillId))
+    : undefined
+  if (!allowed && (!blockedIds || blockedIds.length === 0)) return skills
   // Normalize like loadSkillById's lookup (strip leading $/@ and a `skill:`
   // prefix before slugging) so a `skill:gmail` / `$gmail` deny entry matches
   // the discovered, slugged id.
-  const blocked = new Set(blockedIds.map((id) => slug(id.trim().replace(/^[$@]/, '').replace(/^skill:/i, ''))))
-  return skills.filter((skill) => !blocked.has(skill.id))
+  const blocked = new Set((blockedIds ?? []).map(normalizeSkillId))
+  return skills.filter((skill) => (!allowed || allowed.has(skill.id)) && !blocked.has(skill.id))
+}
+
+function filterBlockedSkills(
+  skills: LoadedSkill[],
+  blockedIds: readonly string[] | undefined
+): LoadedSkill[] {
+  return filterSkills(skills, undefined, blockedIds)
+}
+
+function normalizeSkillId(id: string): string {
+  return slug(id.trim().replace(/^[$@]/, '').replace(/^skill:/i, ''))
 }
 
 async function discoverSkills(

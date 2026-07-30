@@ -10,7 +10,6 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write
 
 concurrency:
   group: pr-checks-${{ github.event.pull_request.number || github.ref }}
@@ -49,6 +48,9 @@ jobs:
       - name: Typecheck Kun runtime
         run: npm --prefix kun run typecheck
 
+      - name: Lint
+        run: npm run lint
+
       - name: Validate Extension schema, docs, packages, and examples
         run: npm run check:extensions
 
@@ -82,7 +84,7 @@ jobs:
       - name: Install Linux packaging dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libarchive-tools rpm build-essential python3 xvfb xauth util-linux ffmpeg
+          sudo apt-get install -y --no-install-recommends libarchive-tools rpm fakeroot dpkg build-essential python3 xvfb xauth util-linux ffmpeg
           ffmpeg -hide_banner -filters 2>&1 | grep -Eq '[[:space:]]drawtext[[:space:]]'
 
       - name: Install root dependencies
@@ -91,8 +93,39 @@ jobs:
       - name: Install Kun runtime dependencies
         run: npm --prefix kun ci
 
+      - name: Test Runtime data migration on native Linux
+        run: npx vitest run src/main/kun-data-dir-paths.test.ts src/main/legacy-data-migration.test.ts src/main/runtime-data-dir-migration.test.ts src/main/runtime-data-dir-ownership.test.ts --reporter=dot
+
+      - name: Test Graph Mode on native Linux
+        run: npm run test:graph:platform
+
       - name: Build Linux AppImage
         run: npm run dist:linux
+
+      - name: Smoke packaged Kun terminal command (linux-unpacked and deb)
+        run: |
+          deb_packages=(dist/Kun-*-linux-amd64.deb)
+          if [[ ${#deb_packages[@]} -ne 1 || ! -f "${deb_packages[0]}" ]]; then
+            echo "::error::Expected exactly one Linux deb package"
+            exit 1
+          fi
+          npm run smoke:packaged-cli -- \
+            --resources dist/linux-unpacked/resources \
+            --deb "${deb_packages[0]}"
+
+      - name: Prepare and verify Linux user namespace sandbox
+        run: |
+          if [[ -e /proc/sys/kernel/unprivileged_userns_clone ]]; then
+            sudo sysctl -w kernel.unprivileged_userns_clone=1
+          fi
+          if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          unshare --user --map-root-user /bin/true
+
+      - name: Smoke Graph workbench pointer interactions on native Linux
+        timeout-minutes: 10
+        run: xvfb-run -a npm run smoke:development-graph-workbench
 
       - name: Smoke packaged OCR dependencies
         run: node scripts/smoke-packaged-ocr.cjs
@@ -105,25 +138,11 @@ jobs:
           KUN_RUN_MEDIA_SMOKE: '1'
         run: npm run smoke:extension-native-media
 
-      - name: Build deterministic Kun Video Editor extension package
-        run: npm run pack:kun-video-editor
-
-      - name: Smoke packaged Kun Video Editor native workflow
-        run: >
-          npm run smoke:packaged-video-editor-native --
-          --archive dist/kun-video-editor-0.4.4.kunx
-
-      - name: Prepare and verify Linux user namespace sandbox
-        run: |
-          if [[ -e /proc/sys/kernel/unprivileged_userns_clone ]]; then
-            sudo sysctl -w kernel.unprivileged_userns_clone=1
-          fi
-          if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
-            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          fi
-          unshare --user --map-root-user /bin/true
+      - name: Smoke packaged Runtime data migration
+        run: npm run smoke:packaged-runtime-migration
 
       - name: Smoke packaged Extension desktop Chromium
+        timeout-minutes: 10
         run: npm run smoke:packaged-extension-desktop
 
       - name: Smoke final Linux AppImage desktop Chromium
@@ -144,8 +163,8 @@ jobs:
           path: |
             dist/Kun-*-linux-x86_64.AppImage
             dist/Kun-*-linux-x86_64.AppImage.blockmap
+            dist/Kun-*-linux-amd64.deb
             dist/extension-native-evidence-linux.json
-            dist/kun-video-editor-*.kunx
 
   package-macos:
     name: Ad-hoc macOS packaged validation (PR)
@@ -181,11 +200,30 @@ jobs:
       - name: Install root dependencies
         run: npm ci
 
+      - name: Test Runtime data migration on native macOS
+        run: npx vitest run src/main/kun-data-dir-paths.test.ts src/main/legacy-data-migration.test.ts src/main/runtime-data-dir-migration.test.ts src/main/runtime-data-dir-ownership.test.ts --reporter=dot
+
+      - name: Test Graph Mode on native macOS
+        run: npm run test:graph:platform
+
       - name: Check Extension public release gate (host-native macOS)
         run: npm run check:extension-release-gate
 
       - name: Build ad-hoc macOS packages (x64 and arm64)
         run: npm run dist:mac
+
+      - name: Smoke packaged Kun terminal command
+        run: |
+          if [[ "$(uname -m)" == "arm64" ]]; then
+            resources="dist/mac-arm64/Kun.app/Contents/Resources"
+          else
+            resources="dist/mac/Kun.app/Contents/Resources"
+          fi
+          npm run smoke:packaged-cli -- --resources "$resources"
+
+      - name: Smoke Graph workbench pointer interactions on native macOS
+        timeout-minutes: 10
+        run: npm run smoke:development-graph-workbench
 
       - name: Verify packaged macOS x64 native architecture
         run: npm run verify:packaged-macos-native -- --resources dist/mac/Kun.app/Contents/Resources --arch x64
@@ -209,10 +247,11 @@ jobs:
           KUN_RUN_MEDIA_SMOKE: '1'
         run: npm run smoke:extension-native-media
 
-      - name: Smoke packaged Kun Video Editor native workflow
-        run: npm run smoke:packaged-video-editor-native
+      - name: Smoke packaged Runtime data migration
+        run: npm run smoke:packaged-runtime-migration
 
       - name: Smoke packaged Extension desktop Chromium (host-native macOS)
+        timeout-minutes: 10
         run: npm run smoke:packaged-extension-desktop
 
       - name: Record macOS native validation evidence
@@ -282,6 +321,7 @@ jobs:
           --resources dist/mac-x64-verified/Kun.app/Contents/Resources
 
       - name: Smoke final macOS x64 desktop Chromium
+        timeout-minutes: 10
         run: >-
           npm run smoke:packaged-extension-desktop --
           --resources dist/mac-x64-verified/Kun.app/Contents/Resources
@@ -322,11 +362,24 @@ jobs:
       - name: Install root dependencies
         run: npm ci
 
+      - name: Test Runtime data migration on native Windows
+        run: npx vitest run src/main/kun-data-dir-paths.test.ts src/main/legacy-data-migration.test.ts src/main/runtime-data-dir-migration.test.ts src/main/runtime-data-dir-ownership.test.ts --reporter=dot
+
+      - name: Test Graph Mode on native Windows
+        run: npm run test:graph:platform
+
       - name: Check Extension public release gate (host-native Windows)
         run: npm run check:extension-release-gate
 
       - name: Build Windows NSIS installer
         run: npm run dist:win
+
+      - name: Smoke packaged Kun terminal command (win-unpacked)
+        run: npm run smoke:packaged-cli -- --resources dist/win-unpacked/resources
+
+      - name: Smoke Graph workbench pointer interactions on native Windows
+        timeout-minutes: 10
+        run: npm run smoke:development-graph-workbench
 
       - name: Smoke packaged Extension Node runtime (win-unpacked)
         run: npm run smoke:packaged-extensions -- --resources dist/win-unpacked/resources
@@ -336,10 +389,11 @@ jobs:
           KUN_RUN_MEDIA_SMOKE: '1'
         run: npm run smoke:extension-native-media
 
-      - name: Smoke packaged Kun Video Editor native workflow
-        run: npm run smoke:packaged-video-editor-native
+      - name: Smoke packaged Runtime data migration
+        run: npm run smoke:packaged-runtime-migration
 
       - name: Smoke packaged Extension desktop Chromium (host-native Windows)
+        timeout-minutes: 10
         run: npm run smoke:packaged-extension-desktop
 
       - name: Record Windows native validation evidence
@@ -371,6 +425,7 @@ jobs:
     if: >-
       ${{
         always() &&
+        github.event_name == 'pull_request' &&
         github.event.pull_request.head.repo.full_name == github.repository &&
         (
           needs.test.result == 'failure' ||
@@ -380,6 +435,9 @@ jobs:
           needs['package-windows'].result == 'failure'
         )
       }}
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
       - name: Request changes
         uses: actions/github-script@v7

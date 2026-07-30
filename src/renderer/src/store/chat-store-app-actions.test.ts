@@ -6,8 +6,10 @@ import {
   mergeComposerPickList,
   persistComposerMode,
   persistComposerModel,
+  persistComposerFastMode,
   persistComposerReasoningEffort,
   rememberThreadComposerMode,
+  readStoredComposerFastMode,
   readStoredComposerModel,
   readStoredComposerReasoningEffort
 } from './chat-store-helpers'
@@ -18,6 +20,7 @@ const COMPOSER_PROVIDER_STORAGE_KEY = 'kun.composerProviderId'
 const THREAD_COMPOSER_SELECTION_STORAGE_KEY = 'kun.threadComposerSelection.v1'
 const THREAD_COMPOSER_MODE_STORAGE_KEY = 'kun.threadComposerMode.v1'
 const COMPOSER_MODE_STORAGE_KEY = 'kun.composerMode'
+const LEGACY_GRAPH_ORCHESTRATION_STORAGE_KEY = 'kun.graphOrchestration.v1'
 
 function createMemoryStorage(): Storage {
   const items = new Map<string, string>()
@@ -84,6 +87,7 @@ function buildHarness(fetchModelsResult: FetchModelsResult): {
     i18n: { t: (key: string) => key, changeLanguage: vi.fn(async () => undefined) } as unknown as typeof i18next,
     persistComposerModel,
     persistComposerMode,
+    persistComposerFastMode,
     persistComposerReasoningEffort,
     rememberThreadComposerMode,
     readStoredComposerModel,
@@ -283,6 +287,22 @@ describe('chat-store app actions composer model loading', () => {
     expect(state.composerReasoningEffort).toBe('off')
   })
 
+  it('persists the Fast-mode composer preference', () => {
+    const { actions, state } = buildHarness({
+      ok: true,
+      modelIds: [],
+      modelGroups: []
+    })
+
+    actions.setComposerFastMode(true)
+    expect(state.composerFastMode).toBe(true)
+    expect(readStoredComposerFastMode()).toBe(true)
+
+    actions.setComposerFastMode(false)
+    expect(state.composerFastMode).toBe(false)
+    expect(readStoredComposerFastMode()).toBe(false)
+  })
+
   it('keeps active-thread plan mode changes out of the global composer default', () => {
     const { actions, state } = buildHarness({
       ok: true,
@@ -299,6 +319,20 @@ describe('chat-store app actions composer model loading', () => {
     expect(JSON.parse(localStorage.getItem(THREAD_COMPOSER_MODE_STORAGE_KEY) ?? '{}')).toEqual({
       'thread-a': 'plan'
     })
+  })
+
+  it('keeps Graph selection session-local instead of restoring it as a default', () => {
+    const { actions, state } = buildHarness({
+      ok: true,
+      modelIds: ['deepseek-v4-pro'],
+      defaultModelId: 'deepseek-v4-pro',
+      modelGroups: []
+    })
+
+    actions.setComposerOrchestration('graph')
+
+    expect(state.composerOrchestration).toBe('graph')
+    expect(localStorage.getItem(LEGACY_GRAPH_ORCHESTRATION_STORAGE_KEY)).toBeNull()
   })
 
   it('keeps active-thread model changes out of the global Kun default', () => {

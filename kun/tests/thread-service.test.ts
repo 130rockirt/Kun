@@ -45,7 +45,7 @@ function withId(item: TurnItem, id: string): TurnItem {
 }
 
 describe('ThreadService runtime defaults', () => {
-  it('uses the runtime approval and sandbox defaults when an HTTP create request omits them', async () => {
+  it('uses runtime defaults for policy and Agent Perspective capture on new threads only', async () => {
     const bus = new InMemoryEventBus()
     const threadStore = new InMemoryThreadStore()
     const sessionStore = new InMemorySessionStore()
@@ -61,11 +61,39 @@ describe('ThreadService runtime defaults', () => {
       ids: new SequentialIdGenerator(),
       nowIso: () => '2026-07-10T00:00:00.000Z',
       defaultApprovalPolicy: 'never',
-      defaultSandboxMode: 'read-only'
+      defaultSandboxMode: 'read-only',
+      defaultModelRequestCaptureEnabled: true
     })
 
     const thread = await service.create({ workspace: '/tmp', model: 'm', mode: 'agent' })
-    expect(thread).toMatchObject({ approvalPolicy: 'never', sandboxMode: 'read-only' })
+    expect(thread).toMatchObject({
+      approvalPolicy: 'never',
+      sandboxMode: 'read-only',
+      approvalReviewer: 'user',
+      modelRequestCaptureEnabled: true
+    })
+
+    const explicitlyDisabled = await service.create({
+      workspace: '/tmp',
+      model: 'm',
+      mode: 'agent',
+      modelRequestCaptureEnabled: false
+    })
+    expect(explicitlyDisabled.modelRequestCaptureEnabled).toBe(false)
+
+    service.updateRuntimeDefaults({
+      approvalPolicy: 'never',
+      sandboxMode: 'read-only',
+      approvalReviewer: 'agent',
+      modelRequestCaptureEnabled: false
+    })
+    const later = await service.create({ workspace: '/tmp', model: 'm', mode: 'agent' })
+    expect(later.modelRequestCaptureEnabled).toBe(false)
+    expect(later.approvalReviewer).toBe('agent')
+    expect((await service.get(thread.id))?.modelRequestCaptureEnabled).toBe(true)
+
+    const toggled = await service.update(thread.id, { modelRequestCaptureEnabled: false })
+    expect(toggled.modelRequestCaptureEnabled).toBe(false)
   })
 })
 
@@ -187,7 +215,14 @@ describe('ThreadService.fork with side relation', () => {
   it('sets parentThreadId and side relation on the new thread', async () => {
     const { service, threadStore } = buildService()
     await service.create(
-      { workspace: '/tmp/p', model: 'deepseek-chat', mode: 'agent' },
+      {
+        workspace: '/tmp/p',
+        model: 'deepseek-chat',
+        mode: 'agent',
+        approvalPolicy: 'on-request',
+        sandboxMode: 'workspace-write',
+        approvalReviewer: 'agent'
+      },
       { id: 'thr_1', title: 'Parent' }
     )
     const side = await service.fork('thr_1', { relation: 'side' })
@@ -195,6 +230,15 @@ describe('ThreadService.fork with side relation', () => {
     expect(side.parentThreadId).toBe('thr_1')
     expect(side.forkedFromThreadId).toBe('thr_1')
     expect(side.title).toBe('Parent · side')
+    expect(side).toMatchObject({
+      approvalPolicy: 'on-request',
+      sandboxMode: 'workspace-write',
+      approvalReviewer: 'agent'
+    })
+    await expect(service.fork('thr_1', {
+      relation: 'side',
+      approvalReviewer: 'user'
+    })).rejects.toThrow(/reviewer/i)
     // The parent record must not be mutated by the spawn.
     const parent = await threadStore.get('thr_1')
     expect(parent?.relation ?? 'primary').toBe('primary')
@@ -273,6 +317,23 @@ describe('ThreadService.fork with side relation', () => {
     expect(fork.title).toBe('Forker fork')
   })
 
+  it('preserves pinned model routing, persona, and additional roots on forks', async () => {
+    const { service } = buildService()
+    await service.create(
+      {
+        workspace: '/tmp/p', additionalWorkspaces: ['/tmp/shared'], model: 'pinned-model',
+        providerId: 'provider-a', accountId: 'account-a', agentId: 'reviewer',
+        systemPrompt: 'Review carefully', mode: 'agent'
+      },
+      { id: 'thr_pinned', title: 'Pinned' }
+    )
+    const fork = await service.fork('thr_pinned')
+    expect(fork).toMatchObject({
+      model: 'pinned-model', providerId: 'provider-a', accountId: 'account-a',
+      agentId: 'reviewer', systemPrompt: 'Review carefully', additionalWorkspaces: ['/tmp/shared']
+    })
+  })
+
   it('forks a plan-mode thread as a fresh agent conversation', async () => {
     const { service } = buildService()
     await service.create(
@@ -303,6 +364,23 @@ describe('ThreadService.fork with side relation', () => {
     expect(fork.forkedFromThreadId).toBe('thr_branch')
     expect(fork.forkedFromTurnCount).toBe(1)
     expect(fork.forkedFromMessageCount).toBe(1)
+  })
+
+  it('forks immediately before a requested turn for non-destructive undo', async () => {
+    const { service, sessionStore, threadStore, nowIso } = buildService()
+    await seedParentWithTurns(service, threadStore, sessionStore, nowIso, {
+      parentId: 'thr_undo',
+      inflight: true
+    })
+
+    const beforeFirst = await service.fork('thr_undo', { turnId: 'turn_completed', beforeTurn: true })
+    expect(beforeFirst.turns).toEqual([])
+    expect(beforeFirst.forkedFromThreadId).toBe('thr_undo')
+    expect(beforeFirst.forkedFromTurnCount).toBe(0)
+
+    const beforeSecond = await service.fork('thr_undo', { turnId: 'turn_inflight', beforeTurn: true })
+    expect(beforeSecond.turns.map((turn) => turn.id)).toEqual(['turn_completed'])
+    expect((await threadStore.get('thr_undo'))?.turns).toHaveLength(2)
   })
 
   it('repairs malformed tool-call history when cloning a fork', async () => {

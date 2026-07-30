@@ -3,11 +3,14 @@ import type { BrowserStorageLike } from '../lib/browser-storage'
 import {
   isEmptySddAssistantThreadCandidate,
   isSddAssistantThread,
+  isSddThreadVisibleInSidebar,
   markSddAssistantThread,
   normalizeSddThreadRegistry,
   releaseSddAssistantThread,
+  releaseSddAssistantThreadsForDraft,
   readSddThreadRegistry,
-  sddAssistantThreadIdForDraft
+  sddAssistantThreadIdForDraft,
+  showSddAssistantThreadInSidebar
 } from './sdd-thread-registry'
 import type { SddDraft } from './sdd-draft-store'
 
@@ -44,10 +47,11 @@ describe('sdd-thread-registry', () => {
 
     expect(sddAssistantThreadIdForDraft(activeDraft, registry)).toBe('thread-sdd-1')
     expect(isSddAssistantThread({ id: 'thread-sdd-1' }, registry)).toBe(true)
+    expect(isSddThreadVisibleInSidebar('thread-sdd-1', registry)).toBe(false)
     expect(isSddAssistantThread({ id: 'thread-code-1' }, registry)).toBe(false)
   })
 
-  it('keeps previous Requirement AI conversations hidden after creating a new one', () => {
+  it('keeps previous Requirement AI conversations bound after creating a new one', () => {
     const storage = createMemoryStorage()
     const activeDraft = draft()
 
@@ -60,7 +64,21 @@ describe('sdd-thread-registry', () => {
     expect(isSddAssistantThread({ id: 'thread-sdd-2' }, registry)).toBe(true)
   })
 
-  it('releases the Requirement AI conversation into the Code sidebar after build starts', () => {
+  it('shows a started Requirement AI conversation without releasing it to Code', () => {
+    const storage = createMemoryStorage()
+    const activeDraft = draft()
+
+    markSddAssistantThread(activeDraft, 'thread-sdd-1', storage)
+    expect(showSddAssistantThreadInSidebar('thread-sdd-1', storage)).toBe(true)
+    expect(showSddAssistantThreadInSidebar('thread-sdd-1', storage)).toBe(false)
+    const registry = readSddThreadRegistry(storage)
+
+    expect(isSddThreadVisibleInSidebar('thread-sdd-1', registry)).toBe(true)
+    expect(sddAssistantThreadIdForDraft(activeDraft, registry)).toBe('thread-sdd-1')
+    expect(isSddAssistantThread({ id: 'thread-sdd-1' }, registry)).toBe(true)
+  })
+
+  it('releases the Requirement AI conversation into the Code sidebar after Plan creation', () => {
     const storage = createMemoryStorage()
     const activeDraft = draft()
 
@@ -69,6 +87,7 @@ describe('sdd-thread-registry', () => {
     const registry = readSddThreadRegistry(storage)
 
     expect(sddAssistantThreadIdForDraft(activeDraft, registry)).toBe('')
+    expect(isSddThreadVisibleInSidebar('thread-sdd-1', registry)).toBe(true)
     expect(isSddAssistantThread({ id: 'thread-sdd-1' }, registry)).toBe(false)
     expect(isSddAssistantThread({
       id: 'thread-sdd-1',
@@ -87,6 +106,29 @@ describe('sdd-thread-registry', () => {
 
     expect(isSddAssistantThread({ id: 'thread-sdd-1' }, registry)).toBe(true)
     expect(isSddAssistantThread({ id: 'thread-sdd-2' }, registry)).toBe(false)
+  })
+
+  it('releases every Requirement AI conversation when the requirement is completed', () => {
+    const storage = createMemoryStorage()
+    const activeDraft = draft()
+
+    markSddAssistantThread(activeDraft, 'thread-sdd-1', storage)
+    markSddAssistantThread(activeDraft, 'thread-sdd-2', storage)
+    expect(releaseSddAssistantThreadsForDraft(activeDraft, storage)).toBe(true)
+    const registry = readSddThreadRegistry(storage)
+
+    expect(registry.drafts[activeDraft.id]?.publicThreadIds).toEqual([
+      'thread-sdd-2',
+      'thread-sdd-1'
+    ])
+    expect(registry.drafts[activeDraft.id]?.visibleThreadIds).toEqual([
+      'thread-sdd-2',
+      'thread-sdd-1'
+    ])
+    expect(sddAssistantThreadIdForDraft(activeDraft, registry)).toBe('')
+    expect(isSddAssistantThread({ id: 'thread-sdd-1' }, registry)).toBe(false)
+    expect(isSddAssistantThread({ id: 'thread-sdd-2' }, registry)).toBe(false)
+    expect(releaseSddAssistantThreadsForDraft(activeDraft, storage)).toBe(false)
   })
 
   it('recognizes legacy SDD threads by draft paths even without registry data', () => {
@@ -153,6 +195,7 @@ describe('sdd-thread-registry', () => {
         draftId: 'valid',
         threadId: 'thread-sdd-1',
         threadIds: ['thread-sdd-1'],
+        visibleThreadIds: ['thread-sdd-1'],
         publicThreadIds: ['thread-sdd-1'],
         workspaceRoot: '/tmp/app',
         updatedAt: '2026-01-01T00:00:00.000Z'

@@ -77,6 +77,8 @@ const releaseArtifactVersion = (
 const artifactVersion = releaseArtifactVersion || releaseAppVersion || '${version}'
 const semverVersionPattern = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/
 const artifactVersionPattern = /^[0-9A-Za-z][0-9A-Za-z._-]*$/
+const chromiumPakLanguages = ['en-US', 'en-GB', 'zh-CN', 'zh-TW', 'ru', 'hi', 'th', 'ja', 'ko']
+const chromiumMacLanguages = ['en', 'en_GB', 'zh_CN', 'zh_TW', 'ru', 'hi', 'th', 'ja', 'ko']
 
 function normalizeUpdateChannel(raw) {
   const value = String(raw || '').trim()
@@ -111,6 +113,7 @@ module.exports = {
     '**/kun/package*.json',
     '**/kun/node_modules/**/*',
     '**/packages/extension-api/**/*',
+    '**/packages/provider-catalog/**/*',
     '**/packages/create-kun-extension/**/*',
     '**/node_modules/better-sqlite3/**/*',
     '**/node_modules/node-pty/**/*',
@@ -156,6 +159,8 @@ module.exports = {
     'packages/extension-api/dist/**/*',
     'packages/extension-api/schema/**/*',
     'packages/extension-api/fixtures/**/*',
+    'packages/provider-catalog/package.json',
+    'packages/provider-catalog/dist/**/*',
     'packages/create-kun-extension/package.json',
     'packages/create-kun-extension/src/**/*',
     // The Agent SDK ships a ~222MB per-platform Claude Code binary as an optional
@@ -216,6 +221,8 @@ module.exports = {
   afterPack: './scripts/after-pack.cjs',
   afterSign: './scripts/mac-notarize.cjs',
   mac: {
+    // macOS stores Chromium locales in language-named .lproj directories.
+    electronLanguages: chromiumMacLanguages,
     category: 'public.app-category.developer-tools',
     identity: hasExplicitMacSigningIdentity ? undefined : null,
     // We notarize in scripts/mac-notarize.cjs so APPLE_API_KEY_BASE64 can be supported.
@@ -242,6 +249,8 @@ module.exports = {
     sign: hasExplicitMacSigningIdentity
   },
   win: {
+    // Windows and Linux use BCP 47 locale names for Chromium .pak files.
+    electronLanguages: chromiumPakLanguages,
     // Windows does not mask app icons for us; use the rounded asset so
     // desktop/start-menu/taskbar shortcuts do not show a hard square edge.
     // Ship a multi-size .ico (16/24/32/48/64/72/96/128/256) so Explorer and
@@ -265,12 +274,21 @@ module.exports = {
     deleteAppDataOnUninstall: false
   },
   linux: {
+    electronLanguages: chromiumPakLanguages,
     category: 'Development',
     icon: './src/asset/img/kun.png',
-    target: [{ target: 'AppImage', arch: ['x64'] }]
+    maintainer: 'Kun Contributors <1736101137@qq.com>',
+    // AppImage covers generic Linux; deb covers Debian-family installers such as
+    // openKylin / Ubuntu that expect apt/software-store packages.
+    target: [
+      { target: 'AppImage', arch: ['x64'] },
+      { target: 'deb', arch: ['x64'] }
+    ]
   },
   // Override electron-builder's sandbox-disabling default desktop argument.
   // Linux uses user namespaces and seccomp; only the legacy SUID helper is disabled.
+  // afterPack also installs a product launcher that prepends the same flag for
+  // both AppImage and deb entrypoints (deb .desktop Exec hits that launcher).
   appImage: {
     executableArgs: ['--disable-setuid-sandbox', '--no-first-run']
   },

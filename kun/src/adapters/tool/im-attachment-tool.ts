@@ -97,7 +97,16 @@ export function createSendImAttachmentLocalTool(): LocalTool {
     // an external chat. It must never be silently allowed by a thread's
     // general auto policy.
     policy: 'on-request',
-    toolKind: 'command_execution',
+    // The tool reads an already-authorized workspace file and returns a
+    // delivery descriptor to the IM bridge; it does not spawn a host process.
+    // Its external effect is governed by requiresExplicitApproval.
+    toolKind: 'tool_call',
+    effects: {
+      network: true,
+      externalWrite: false,
+      processExecution: false,
+      guiAutomation: false
+    },
     requiresExplicitApproval: true,
     execute: async (args, context) => withToolBoundary(async () => {
       if (context.imContext !== true) {

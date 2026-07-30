@@ -1,0 +1,169 @@
+.ds-settings-content {
+  width: 100%;
+  max-width: 920px;
+}
+
+.ds-settings-scroller {
+  padding: 56px 24px 128px 16px;
+  scrollbar-gutter: stable;
+}
+
+.ds-settings-page {
+  display: grid;
+  min-width: 0;
+  gap: 14px;
+  animation: ds-settings-page-enter 150ms ease-out;
+}
+
+.ds-settings-page > *,
+.ds-settings-page :is(.ds-settings-card, .ds-settings-disclosure, .ds-settings-tab-panel) {
+  min-width: 0;
+}
+
+.ds-settings-surface .font-semibold {
+  font-weight: 500;
+}
+
+.ds-settings-surface .shadow-sm {
+  box-shadow: none;
+}
+
+.ds-settings-surface :is(button, input, select).rounded-xl {
+  border-radius: var(--ds-radius-pill);
+}
+
+.ds-settings-surface :is(.rounded-2xl, .rounded-3xl) {
+  border-radius: var(--ds-radius-card);
+}
+
+.ds-settings-page-header {
+  margin-bottom: 18px;
+}
+
+.ds-settings-tabs,
+.ds-settings-subtabs {
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.ds-settings-tabs::-webkit-scrollbar,
+.ds-settings-subtabs::-webkit-scrollbar {
+  display: none;
+}
+
+.ds-settings-subtabs {
+  overscroll-behavior-inline: contain;
+  scroll-padding-inline: 0.25rem;
+}
+
+.ds-settings-tab-panel[hidden] {
+  display: none;
+}
+
+.ds-settings-tab-panel:not([hidden]) {
+  display: grid;
+  gap: 14px;
+}
+
+.ds-settings-panel-stack {
+  display: grid;
+  min-width: 0;
+  gap: 14px;
+}
+
+.ds-settings-card {
+  container-type: inline-size;
+  border-radius: var(--ds-radius-card);
+  box-shadow: none;
+}
+
+.ds-settings-card-header {
+  padding-block: 20px 14px;
+}
+
+.ds-settings-card-body {
+  padding-block: 0 6px;
+}
+
+.ds-setting-row {
+  padding-block: 14px;
+}
+
+.ds-setting-row p {
+  line-height: 1.4;
+}
+
+@keyframes ds-settings-page-enter {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+.ds-settings-page :is(.mt-5, .mt-6):has(> .ds-settings-card),
+.ds-settings-page > :is(.mt-5, .mt-6).ds-settings-card,
+.ds-settings-page > .ds-settings-card:is(.mt-5, .mt-6),
+.ds-settings-tab-panel > :is(.mt-5, .mt-6).ds-settings-card,
+.ds-settings-tab-panel > .ds-settings-card:is(.mt-5, .mt-6) {
+  margin-top: 0;
+}
+
+.ds-settings-page--shortcuts .ds-settings-card-body > div:last-child {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.ds-settings-page--shortcuts .ds-settings-card-body > div:last-child > * {
+  border-bottom: 1px solid var(--ds-border-muted);
+}
+
+.ds-settings-page--dataMigration [data-testid='data-migration-settings'] {
+  padding-bottom: 1rem;
+}
+
+.ds-settings-page--subagents [data-testid='subagent-settings-editor'] > :first-child {
+  display: none;
+}
+
+@container (max-width: 580px) {
+  .ds-setting-row:not(.ds-setting-row--wide) {
+    flex-direction: column;
+    gap: 0.65rem;
+  }
+
+  .ds-setting-row:not(.ds-setting-row--wide) > :last-child {
+    width: 100%;
+    max-width: none;
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 1050px) {
+  .ds-settings-content {
+    width: 100%;
+  }
+
+  .ds-settings-page--shortcuts .ds-settings-card-body > div:last-child {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 760px) {
+  .ds-settings-scroller {
+    padding: 32px 20px 80px;
+  }
+
+  .ds-settings-page-header {
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ds-settings-page {
+    animation: none;
+  }
+}

@@ -93,6 +93,7 @@ function buildSettings(): AppSettingsV1 {
     theme: 'system',
     uiFontScale: 0.88,
     chatContentMaxWidthPx: 896,
+    composerSendKey: 'enter',
     provider: defaultModelProviderSettings(),
     agents: { kun: defaultKunRuntimeSettings() },
     workspaceRoot: '/tmp/workspace',
@@ -235,6 +236,7 @@ describe('ClawSettingsSection', () => {
 
     expect(html).toContain('Telegram Bot Credentials')
     expect(html).toContain('@kun_test_bot is connected and saved locally.')
-    expect(html).not.toContain('Connect Telegram Bot')
+    expect(html).not.toContain('Connect Telegram Bot description')
+    expect(html).not.toContain('Paste the token below')
   })
 })

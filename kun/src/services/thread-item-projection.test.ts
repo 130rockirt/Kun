@@ -71,26 +71,36 @@ describe('thread item projection', () => {
       }),
       turns: [firstTurn, secondTurn, untouchedTurn]
     }
-    const firstHead = makeUserItem({ id: 'first_head', threadId, turnId: firstTurn.id, text: 'head' })
-    const firstSummary = makeCompactionItem({
-      id: 'first_summary',
-      threadId,
-      turnId: firstTurn.id,
-      summary: 'summary',
-      replacedTokens: 10,
-      pinnedConstraints: []
-    })
-    const firstTail = makeUserItem({ id: 'first_tail', threadId, turnId: firstTurn.id, text: 'tail' })
+    const firstHead = {
+      ...makeUserItem({ id: 'first_head', threadId, turnId: firstTurn.id, text: 'head' }),
+      createdAt: '2026-07-11T00:00:00.000Z'
+    }
+    const firstSummary = {
+      ...makeCompactionItem({
+        id: 'first_summary',
+        threadId,
+        turnId: firstTurn.id,
+        summary: 'summary',
+        replacedTokens: 10,
+        pinnedConstraints: []
+      }),
+      createdAt: '2026-07-11T00:00:02.000Z'
+    }
+    const firstTail = {
+      ...makeUserItem({ id: 'first_tail', threadId, turnId: firstTurn.id, text: 'tail' }),
+      createdAt: '2026-07-11T00:00:03.000Z'
+    }
     const secondItem = makeUserItem({ id: 'second_item', threadId, turnId: secondTurn.id, text: 'second' })
     const unknownItem = makeUserItem({ id: 'unknown_item', threadId, turnId: 'turn_unknown', text: 'unknown' })
 
-    const projected = projectSessionItemsOntoExistingTurns(thread, [
+    const sessionItems = [
       firstHead,
       firstSummary,
       firstTail,
       unknownItem,
       secondItem
-    ])
+    ]
+    const projected = projectSessionItemsOntoExistingTurns(thread, sessionItems)
 
     expect(projected).not.toBeNull()
     expect(projected).toMatchObject({
@@ -110,8 +120,15 @@ describe('thread item projection', () => {
     })
     expect(projected?.turns[0]?.items.map((item) => item.id)).toEqual([
       'first_head',
+      'first_summary',
+      'first_tail'
+    ])
+    expect(sessionItems.map((item) => item.id)).toEqual([
+      'first_head',
+      'first_summary',
       'first_tail',
-      'first_summary'
+      'unknown_item',
+      'second_item'
     ])
     expect(projected?.turns[1]?.items.map((item) => item.id)).toEqual(['second_item'])
     expect(projected?.turns[2]).toBe(untouchedTurn)

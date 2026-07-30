@@ -29,6 +29,8 @@ export type CoreThreadSummaryJson = {
   status: CoreThreadStatus
   approvalPolicy?: string
   sandboxMode?: string
+  approvalReviewer?: string
+  modelRequestCaptureEnabled?: boolean
   pinned?: boolean
   providerId?: string
   agentId?: string
@@ -184,7 +186,7 @@ export type CoreMemoryDiagnosticsJson = {
 }
 
 export type CoreRuntimeCapabilityStateJson = {
-  status: 'available' | 'disabled' | 'unavailable'
+  status: 'available' | 'disabled' | 'unavailable' | 'interaction-required'
   enabled: boolean
   available: boolean
   reason?: string
@@ -266,6 +268,9 @@ export type CoreRuntimeCapabilityManifestJson = {
   computerUse?: CoreRuntimeCapabilityStateJson & {
     mode?: 'auto' | 'always' | 'off'
   }
+  browserUse?: CoreRuntimeCapabilityStateJson & {
+    mode?: 'public' | 'local-development'
+  }
 }
 
 export type CoreRuntimeInfoJson = {
@@ -276,6 +281,7 @@ export type CoreRuntimeInfoJson = {
   model?: string
   approvalPolicy?: string
   sandboxMode?: string
+  approvalReviewer?: string
   tokenEconomyMode?: boolean
   insecure?: boolean
   startedAt: string
@@ -393,6 +399,14 @@ export type CoreRuntimeSkillsResponseJson = {
   validationErrors?: Array<Record<string, unknown> | string>
 }
 
+export type CoreChildRunActivityJson = {
+  phase: 'starting' | 'thinking' | 'responding' | 'tool' | 'retrying' | 'compacting' | 'waiting'
+  label: string
+  toolName?: string
+  startedAt: string
+  updatedAt: string
+}
+
 export type CoreChildRuntimeMetadataJson = {
   parentThreadId: string
   parentTurnId: string
@@ -402,6 +416,7 @@ export type CoreChildRuntimeMetadataJson = {
   childSeq: number
   detached?: boolean
   childModel?: string
+  childProviderId?: string
   childProfile?: string
   childProfileName?: string
   childToolPolicy?: 'readOnly' | 'inherit'
@@ -414,6 +429,7 @@ export type CoreChildRuntimeMetadataJson = {
   cacheHitRate?: number | null
   costUsd?: number
   costCny?: number
+  activity?: CoreChildRunActivityJson
 }
 
 export type CoreWebSourceJson = {
@@ -430,6 +446,8 @@ export type CoreTurnJson = {
   prompt: string
   model?: string
   providerId?: string
+  clientSurface?: 'gui' | 'tui' | 'cli' | 'api' | 'im' | 'extension'
+  orchestration?: 'direct' | 'graph'
   createdAt: string
   startedAt?: string
   finishedAt?: string
@@ -443,6 +461,7 @@ export type CoreTurnJson = {
   injectedInstructionSources?: Array<{ scope: 'global' | 'workspace'; path: string; bytes: number; truncated?: boolean }>
   instructionInjectionBytes?: number
   workspaceCheckpointId?: string
+  workspaceCheckpointRequestId?: string
   guiDesignCanvas?: boolean
   guiDesignMode?: boolean
   agentSurface?: 'code' | 'write' | 'design'
@@ -462,7 +481,7 @@ export type CoreTurnItemJson = {
   displayText?: string
   guiDesignCanvas?: boolean
   guiDesignMode?: boolean
-  messageSource?: 'background_shell' | 'background_subagent'
+  messageSource?: 'background_shell' | 'background_subagent' | 'graph_runtime'
   toolName?: string
   callId?: string
   toolKind?: 'tool_call' | 'command_execution' | 'file_change'
@@ -470,6 +489,8 @@ export type CoreTurnItemJson = {
   output?: unknown
   isError?: boolean
   approvalId?: string
+  approvalReviewer?: 'user' | 'agent'
+  decisionSource?: 'user' | 'agent'
   inputId?: string
   prompt?: string
   questions?: Array<{
@@ -652,12 +673,20 @@ export type CoreRuntimeEventJson = {
   itemId?: string
   item?: CoreTurnItemJson
   approvalId?: string
+  reviewId?: string
   approvalPolicy?: string
   sandboxMode?: string
+  approvalReviewer?: string
+  decisionSource?: 'user' | 'agent'
+  reviewer?: 'agent' | 'user'
   toolName?: string
   callId?: string
   readyCount?: number
   toolResultCount?: number
+  /** Durable Graph domain event projected through the existing thread SSE. */
+  graph?: unknown
+  /** Durable pre-run Graph planning lifecycle projected through thread SSE. */
+  planning?: unknown
   attempt?: number
   maxAttempts?: number
   delayMs?: number
@@ -683,7 +712,8 @@ export type CoreRuntimeEventJson = {
   contextManagement?: 'kun-managed' | 'sdk-managed'
   nativeHistory?: 'known' | 'unknown' | 'none'
   providerKind?: 'agent-sdk' | 'cursor-sdk' | 'antigravity-cli'
-  phase?: 'portable' | 'resumed' | 'rebased'
+  phase?: 'portable' | 'resumed' | 'rebased' | 'preparing' | 'retrying' | 'succeeded' | 'failed'
+  failureSummary?: string
   capabilities?: {
     nativeResume?: boolean
     structuredStreaming?: boolean
@@ -694,6 +724,11 @@ export type CoreRuntimeEventJson = {
     fork?: boolean
   }
   status?: string | number
+  /** turn_started: the effective routing and reasoning configuration. */
+  accountId?: string
+  reasoningEffort?: 'auto' | 'off' | 'low' | 'medium' | 'high' | 'max'
+  serviceTier?: 'priority'
+  mode?: 'agent' | 'plan'
   /** thread_created / thread_updated: the thread's (possibly upgraded) title. */
   title?: string
   /** thread_created / thread_updated: whether that title is auto/provisional. */
@@ -711,9 +746,13 @@ export type CoreRuntimeEventJson = {
     | 'post_send'
     | 'response_received'
   label?: string
+  code?: string
   details?: unknown
   summary?: string
   reason?: string
+  decision?: 'allow' | 'deny'
+  riskLevel?: 'low' | 'medium' | 'high' | 'critical'
+  rationale?: string
   prompt?: string
   inputId?: string
   questions?: Array<{
@@ -745,7 +784,6 @@ export type CoreRuntimeEventJson = {
   todos?: CoreThreadTodoListJson | null
   cleared?: boolean
   message?: string
-  code?: string
   severity?: 'info' | 'warning' | 'error'
   child?: CoreChildRuntimeMetadataJson
 }

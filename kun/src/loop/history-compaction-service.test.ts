@@ -228,6 +228,45 @@ describe('HistoryCompactionService', () => {
     await expect(sessionStore.loadItems(threadId)).resolves.toEqual([])
   })
 
+  it('uses complete request overhead to trigger compaction when stored history alone is below threshold', async () => {
+    const sessionStore = new InMemorySessionStore()
+    for (let index = 0; index < 5; index += 1) {
+      await sessionStore.appendItem(threadId, makeUserItem({
+        id: `overhead_item_${index}`,
+        threadId,
+        turnId,
+        text: `short ${index}`
+      }))
+    }
+    const service = new HistoryCompactionService({
+      sessionStore,
+      compactor: new ContextCompactor({ softThreshold: 100, hardThreshold: 200 }),
+      prefix: createImmutablePrefix({ systemPrompt: 'stable prefix' }),
+      model: silentModel(),
+      usage: new UsageService(),
+      events: createEvents(sessionStore),
+      ids: new SequentialIdGenerator(),
+      telemetry: {
+        hydratePromptPressureIfCold: async () => undefined,
+        consumePromptPressure: () => undefined
+      },
+      recordGoalUsage: async () => undefined,
+      rewriteThreadItemsFromSession: async () => undefined
+    })
+
+    const history = await service.compactIfNeeded({
+      items: await sessionStore.loadItems(threadId),
+      model: 'test-model',
+      signal: new AbortController().signal,
+      threadId,
+      turnId,
+      requestOverheadTokens: 120
+    })
+
+    expect(history[0]).toMatchObject({ kind: 'compaction' })
+    expect(history.at(-1)).toMatchObject({ id: 'overhead_item_4' })
+  })
+
   it('reads hooks and model-summary settings lazily after construction', async () => {
     const sessionStore = new InMemorySessionStore()
     for (let index = 0; index < 5; index += 1) {
@@ -430,6 +469,7 @@ describe('HistoryCompactionService', () => {
       model: 'main-extension-model',
       providerId: 'ext-private',
       accountId: 'account-private',
+      serviceTier: 'priority',
       signal: new AbortController().signal,
       threadId,
       turnId
@@ -440,7 +480,8 @@ describe('HistoryCompactionService', () => {
     expect(extensionRequests[0]).toMatchObject({
       model: 'extension-summary-model',
       providerId: 'ext-private',
-      accountId: 'account-private'
+      accountId: 'account-private',
+      serviceTier: 'priority'
     })
     expect(history[0]).toMatchObject({
       kind: 'compaction',

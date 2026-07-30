@@ -6,7 +6,7 @@
  * kun's richer subagents), etc. all keep working on a subscription turn.
  *
  * Decision (per design): tools that OVERLAP Claude Code's built-ins
- * (read/bash/edit/write/grep/find/ls) are NOT bridged — the model uses the SDK's
+ * (read/bash/edit/write/grep/glob/find/ls) are NOT bridged — the model uses the SDK's
  * native ones. We only bridge kun-EXCLUSIVE tools. `delegate_task` is bridged
  * rather than mapped to the SDK `agents` option because kun's delegation is
  * richer (async detach, live profile overlays, per-child deny-lists).
@@ -54,6 +54,7 @@ export const DEFAULT_OVERLAP_TOOL_NAMES: ReadonlySet<string> = new Set([
   'edit',
   'write',
   'grep',
+  'glob',
   'find',
   'ls'
 ])
@@ -61,7 +62,7 @@ export const DEFAULT_OVERLAP_TOOL_NAMES: ReadonlySet<string> = new Set([
 /**
  * kun tools better handled by the SDK's own surfaces or meaningless here.
  * NOTE: user_input/request_user_input are intentionally NOT excluded — they are
- * bridged so the model uses kun's own GUI input panel (wired via the tool
+ * bridged so the model uses kun's own client-neutral input gate (wired via the tool
  * context's awaitUserInput). The SDK's native AskUserQuestion is suppressed
  * (disallowedTools) because it has no UI in this embedding.
  */

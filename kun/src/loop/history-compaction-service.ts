@@ -1,5 +1,6 @@
 import type { ImmutablePrefix } from '../cache/immutable-prefix.js'
 import type { TurnItem } from '../contracts/items.js'
+import type { TurnClientSurface } from '../contracts/turns.js'
 import type { IdGenerator } from '../ports/id-generator.js'
 import type { ModelClient, ModelToolSpec } from '../ports/model-client.js'
 import type { SessionStore } from '../ports/session-store.js'
@@ -55,20 +56,31 @@ export class HistoryCompactionService {
     model: string
     providerId?: string
     accountId?: string
+    serviceTier?: 'priority'
     signal: AbortSignal
     threadId: string
     turnId: string
+    clientSurface?: TurnClientSurface
     toolSpecs?: readonly ModelToolSpec[]
+    /**
+     * Complete non-history token estimate from the request that is about to be
+     * sent. When supplied this is authoritative over the legacy prefix/tool
+     * fallback so dynamic instructions, skills, and attachments participate
+     * in the compaction preflight.
+     */
+    requestOverheadTokens?: number
     reserveModelRequest?: () => Promise<{ allowed: boolean; reason?: string }>
   }): Promise<TurnItem[]> {
     await this.deps.telemetry.hydratePromptPressureIfCold(input.threadId, input.model)
     const pressure = this.deps.telemetry.consumePromptPressure(input.threadId, input.model)
     const thresholdModel = pressure?.model || input.model
-    const overheadTokens = estimateRequestOverheadTokens({
-      systemPrompt: this.deps.prefix.systemPrompt,
-      prefix: this.deps.prefix.fewShots,
-      tools: input.toolSpecs
-    })
+    const overheadTokens = input.requestOverheadTokens === undefined
+      ? estimateRequestOverheadTokens({
+          systemPrompt: this.deps.prefix.systemPrompt,
+          prefix: this.deps.prefix.fewShots,
+          tools: input.toolSpecs
+        })
+      : Math.max(0, Math.floor(input.requestOverheadTokens))
     const plan = this.deps.compactor.planCompaction(input.items, {
       model: thresholdModel,
       providerId: input.providerId,
@@ -83,7 +95,8 @@ export class HistoryCompactionService {
         threadId: input.threadId,
         turnId: input.turnId,
         reason: String(plan.reason),
-        mode: String(plan.mode)
+        mode: String(plan.mode),
+        ...(input.clientSurface ? { clientSurface: input.clientSurface } : {})
       })
       await recordLifecycleHookWarnings(
         this.deps.events,
@@ -195,6 +208,7 @@ export class HistoryCompactionService {
                   model: compactionModel.model,
                   ...(compactionModel.providerId ? { providerId: compactionModel.providerId } : {}),
                   ...(compactionModel.accountId ? { accountId: compactionModel.accountId } : {}),
+                  ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
                   modelClient: this.deps.model,
                   prefix: this.deps.prefix,
                   contextCompaction,

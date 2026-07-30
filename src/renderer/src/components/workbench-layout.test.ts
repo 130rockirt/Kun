@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import {
+  CODE_PANEL_PREFERRED,
   captureResizePointer,
   fitWorkbenchWidths,
+  GRAPH_PANEL_PREFERRED,
   initialCodeRightTabsForLaunch,
   normalizeStoredCodeRightWidthsRegistry,
+  PANEL_RESIZE_HANDLE_WIDTH,
   RAIL_WIDTH,
+  transientRightPanelModeForWorkspaceChange,
   WORKBENCH_RESIZE_CLASS,
   workbenchWidthConstraintsForRightPanel
 } from './workbench-layout'
@@ -21,7 +25,7 @@ describe('fitWorkbenchWidths', () => {
     )
 
     expect(next.left).toBe(304)
-    expect(next.right).toBe(878)
+    expect(next.right).toBe(870)
   })
 
   it('uses the same wide workspace constraints for the code canvas', () => {
@@ -35,7 +39,7 @@ describe('fitWorkbenchWidths', () => {
 
     expect(next.left).toBe(304)
     expect(next.right).toBeGreaterThan(760)
-    expect(next.right).toBe(878)
+    expect(next.right).toBe(870)
   })
 
   it.each([1280, 1440, 2048])(
@@ -48,7 +52,7 @@ describe('fitWorkbenchWidths', () => {
         { leftPanelVisible: true, rightPanelVisible: true },
         workbenchWidthConstraintsForRightPanel('chat', BUILTIN_RIGHT_PANEL_IDS.files)
       )
-      const handleWidth = 10
+      const handleWidth = PANEL_RESIZE_HANDLE_WIDTH * 2
       expect(containerWidth - handleWidth - RAIL_WIDTH - next.left - next.right).toBeGreaterThanOrEqual(560)
       expect(next.right).toBeGreaterThanOrEqual(280)
     }
@@ -56,6 +60,10 @@ describe('fitWorkbenchWidths', () => {
 })
 
 describe('code right workspace widths', () => {
+  it('opens Graph with a wider preferred workspace than ordinary code tabs', () => {
+    expect(GRAPH_PANEL_PREFERRED).toBeGreaterThan(CODE_PANEL_PREFERRED)
+  })
+
   it('normalizes isolated workspace widths and ignores invalid entries', () => {
     expect(normalizeStoredCodeRightWidthsRegistry({
       version: 1,
@@ -95,6 +103,21 @@ describe('code right workspace startup', () => {
       activeId: BUILTIN_RIGHT_PANEL_IDS.files,
       expanded: false
     })
+  })
+})
+
+describe('transient right panel workspace changes', () => {
+  it('keeps Requirement AI open while its first thread changes the workspace scope', () => {
+    expect(
+      transientRightPanelModeForWorkspaceChange(BUILTIN_RIGHT_PANEL_IDS.sddAi)
+    ).toBe(BUILTIN_RIGHT_PANEL_IDS.sddAi)
+  })
+
+  it('clears other transient panel modes on a workspace scope change', () => {
+    expect(
+      transientRightPanelModeForWorkspaceChange(BUILTIN_RIGHT_PANEL_IDS.browser)
+    ).toBeNull()
+    expect(transientRightPanelModeForWorkspaceChange(null)).toBeNull()
   })
 })
 

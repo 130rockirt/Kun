@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { lstat, mkdir, readdir, readlink, realpath, rm, statfs, symlink, writeFile } from 'node:fs/promises'
-import { basename, dirname, join, relative, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import {
   DATA_MIGRATION_MINIMUM_FREE_SPACE_RATIO,
   DATA_MIGRATION_REFERENCE_DESCRIPTORS_V1,
@@ -10,6 +10,7 @@ import {
   parsePackageRelativePath,
   type DataMigrationComponentName,
   type DataMigrationConflict,
+  type DataMigrationFileConflictResolution,
   type DataMigrationImportPlan,
   type DataMigrationPackageEntry,
   type DataMigrationSourcePlatform,
@@ -18,7 +19,10 @@ import {
   type DataMigrationWorkspaceMapping,
   type PackageRelativePath
 } from '../../shared/data-migration'
-import { validateKunpackEntryPath } from './archive-security'
+import {
+  validateKunpackArchiveEntryPath,
+  validateKunpackEntryPath
+} from './archive-security'
 
 export type DestinationFileSystemProbe = {
   root: string
@@ -30,6 +34,7 @@ export type DestinationFileSystemProbe = {
   maximumComponentBytes: number
   maximumPathBytes: number
   freeBytes: number
+  deviceId?: string
   platform: DataMigrationSourcePlatform
 }
 
@@ -66,6 +71,7 @@ export async function probeDestinationFileSystem(
     await rm(probe, { recursive: true, force: true }).catch(() => undefined)
   }
   const filesystem = await statfs(canonicalRoot)
+  const rootDetails = await lstat(canonicalRoot)
   return {
     root,
     canonicalRoot,
@@ -76,6 +82,7 @@ export async function probeDestinationFileSystem(
     maximumComponentBytes: platform === 'windows' ? 255 : 255,
     maximumPathBytes: platform === 'windows' ? 32_767 : 4_096,
     freeBytes: Number(filesystem.bavail) * Number(filesystem.bsize),
+    deviceId: String(rootDetails.dev),
     platform
   }
 }
@@ -98,13 +105,18 @@ export async function buildDataMigrationImportPlan(input: {
   const mappings: DataMigrationWorkspaceMapping[] = []
   const conflicts: DataMigrationConflict[] = []
   const reservedDestinations = new Set<string>()
+  const plannedDestinations: string[] = []
+  const mappingVolumeKeys: Array<string | undefined> = []
+  const peakBytesByVolume = new Map<string, number>()
+  const freeBytesByVolume = new Map<string, number>()
   let estimatedPeakBytes = 0
 
   for (const workspace of input.workspaces) {
+    const strategy = input.strategies?.[workspace.workspaceId] ?? 'keep-both'
     const requiredBytes = input.entries
       .filter((entry) => workspaceEntryRelativePath(entry.path, workspace.workspaceId) !== null)
       .reduce((total, entry) => total + entry.logicalBytes, 0)
-    if (input.skippedWorkspaceIds?.has(workspace.workspaceId)) {
+    if (strategy === 'skip' || input.skippedWorkspaceIds?.has(workspace.workspaceId)) {
       mappings.push({
         workspaceId: workspace.workspaceId,
         sourcePathDisplay: workspace.sourcePathDisplay,
@@ -113,14 +125,23 @@ export async function buildDataMigrationImportPlan(input: {
         requiredBytes,
         unresolvedIssueCount: 0
       })
+      mappingVolumeKeys.push(undefined)
       continue
     }
     const requested = input.destinationRoots?.[workspace.workspaceId]
     const destinationRoot = requested
       ? resolve(requested)
       : await recommendCollisionFreeDestination(input.destinationBaseRoot, workspace.displayName, reservedDestinations)
+    assertSafeIndependentDestination(destinationRoot, plannedDestinations)
     reservedDestinations.add(destinationIdentity(destinationRoot))
-    const strategy = input.strategies?.[workspace.workspaceId] ?? 'keep-both'
+    plannedDestinations.push(destinationRoot)
+    const destinationDetails = await lstat(destinationRoot).catch(() => null)
+    if (strategy === 'keep-both' && destinationDetails) {
+      throw new Error(`Keep both destination already exists: ${destinationRoot}`)
+    }
+    if ((strategy === 'merge' || strategy === 'replace') && destinationDetails && !destinationDetails.isDirectory()) {
+      throw new Error(`migration merge or replace destination is not a directory: ${destinationRoot}`)
+    }
     const probeRoot = await nearestExistingDirectory(destinationRoot)
     const probe = await probeDestinationFileSystem(probeRoot, destinationPlatform)
     const workspaceConflicts = await detectWorkspaceConflicts({
@@ -135,17 +156,36 @@ export async function buildDataMigrationImportPlan(input: {
     const backupBytes = workspaceConflicts.reduce((total, conflict) => total + (conflict.targetBytes ?? 0), 0)
     const peakBytes = requiredBytes + safetyMargin + backupBytes
     estimatedPeakBytes += peakBytes
-    const compatible = probe.writable && peakBytes <= probe.freeBytes && !workspaceConflicts.some((conflict) => conflict.fatal)
+    const preflightCompatible = probe.writable && peakBytes <= probe.freeBytes
+    const compatible = preflightCompatible && !workspaceConflicts.some((conflict) => conflict.fatal)
     mappings.push({
       workspaceId: workspace.workspaceId,
       sourcePathDisplay: workspace.sourcePathDisplay,
       destinationRoot,
       strategy,
       compatible,
+      preflightCompatible,
+      estimatedPeakBytes: peakBytes,
       freeBytes: probe.freeBytes,
       requiredBytes,
       unresolvedIssueCount: workspaceConflicts.filter((conflict) => !conflict.resolution).length
     })
+    const volumeKey = probe.deviceId ?? probe.canonicalRoot
+    mappingVolumeKeys.push(volumeKey)
+    peakBytesByVolume.set(volumeKey, (peakBytesByVolume.get(volumeKey) ?? 0) + peakBytes)
+    freeBytesByVolume.set(volumeKey, Math.min(freeBytesByVolume.get(volumeKey) ?? probe.freeBytes, probe.freeBytes))
+  }
+
+  for (const [volumeKey, peakBytes] of peakBytesByVolume) {
+    if (peakBytes <= (freeBytesByVolume.get(volumeKey) ?? 0)) continue
+    for (let index = 0; index < mappings.length; index += 1) {
+      if (mappingVolumeKeys[index] !== volumeKey) continue
+      mappings[index] = {
+        ...mappings[index]!,
+        compatible: false,
+        preflightCompatible: false
+      }
+    }
   }
 
   return DataMigrationImportPlanSchema.parse({
@@ -187,12 +227,21 @@ export async function detectWorkspaceConflicts(input: {
 }): Promise<DataMigrationConflict[]> {
   const conflicts: DataMigrationConflict[] = []
   const identities = new Map<string, PackageRelativePath>()
+  const reservedRenameIdentities = new Set<string>()
   for (const entry of input.entries) {
     const relativePath = workspaceEntryRelativePath(entry.path, input.workspace.workspaceId)
     if (!relativePath) continue
     const pathIssue = destinationPathIssue(relativePath, input.destinationRoot, input.probe)
     if (pathIssue) {
-      conflicts.push(conflict(input.workspace.workspaceId, relativePath, pathIssue.kind, true, entry.sha256, entry.logicalBytes))
+      conflicts.push(conflict(
+        input.workspace.workspaceId,
+        relativePath,
+        pathIssue.kind,
+        true,
+        entry.sha256,
+        entry.logicalBytes,
+        stableCompatibleRenamedPath(relativePath, entry.sha256, input.destinationRoot, input.probe, reservedRenameIdentities)
+      ))
       continue
     }
     const identity = fileSystemIdentity(relativePath, input.probe)
@@ -204,11 +253,13 @@ export async function detectWorkspaceConflicts(input: {
         input.probe.caseSensitive ? 'unicode-collision' : 'case-collision',
         true,
         entry.sha256,
-        entry.logicalBytes
+        entry.logicalBytes,
+        stableCompatibleRenamedPath(relativePath, entry.sha256, input.destinationRoot, input.probe, reservedRenameIdentities)
       ))
       continue
     }
     identities.set(identity, relativePath)
+    reservedRenameIdentities.add(identity)
     if (input.strategy !== 'merge' && input.strategy !== 'replace') continue
     const targetPath = buildMigrationDestinationPath({
       destinationRoot: input.destinationRoot,
@@ -235,6 +286,100 @@ export async function detectWorkspaceConflicts(input: {
   return conflicts
 }
 
+export async function revalidateDataMigrationImportPlan(input: {
+  plan: DataMigrationImportPlan
+  packageId: string
+  sourcePlatform: DataMigrationSourcePlatform
+  encrypted: boolean
+  workspaces: readonly DataMigrationWorkspaceCatalogEntry[]
+  entries: readonly DataMigrationPackageEntry[]
+}): Promise<DataMigrationImportPlan> {
+  if (
+    input.plan.packageId !== input.packageId ||
+    input.plan.sourcePlatform !== input.sourcePlatform ||
+    input.plan.encrypted !== input.encrypted
+  ) {
+    throw new Error('migration plan package identity changed after inspection')
+  }
+  const submittedById = new Map(input.plan.mappings.map((mapping) => [mapping.workspaceId, mapping]))
+  if (
+    submittedById.size !== input.plan.mappings.length ||
+    submittedById.size !== input.workspaces.length ||
+    input.workspaces.some((workspace) => !submittedById.has(workspace.workspaceId))
+  ) {
+    throw new Error('migration plan workspace mappings do not match the inspected package')
+  }
+  for (const mapping of input.plan.mappings) {
+    if (mapping.strategy !== 'skip' && !mapping.destinationRoot) {
+      throw new Error(`migration destination is required: ${mapping.workspaceId}`)
+    }
+    if (mapping.destinationRoot && !isAbsolute(mapping.destinationRoot)) {
+      throw new Error(`migration destination must be absolute: ${mapping.workspaceId}`)
+    }
+  }
+  const destinationRoots = Object.fromEntries(input.plan.mappings.flatMap((mapping) =>
+    mapping.destinationRoot ? [[mapping.workspaceId, mapping.destinationRoot]] : []
+  ))
+  const strategies = Object.fromEntries(input.plan.mappings.map((mapping) => [
+    mapping.workspaceId,
+    mapping.strategy
+  ]))
+  const skippedWorkspaceIds = new Set(input.plan.mappings.flatMap((mapping) =>
+    mapping.strategy === 'skip' ? [mapping.workspaceId] : []
+  ))
+  const firstDestination = input.plan.mappings.find((mapping) => mapping.destinationRoot)?.destinationRoot
+  const fresh = await buildDataMigrationImportPlan({
+    operationId: input.plan.operationId,
+    packageId: input.packageId,
+    inspectedAt: input.plan.inspectedAt,
+    sourcePlatform: input.sourcePlatform,
+    encrypted: input.encrypted,
+    workspaces: input.workspaces,
+    entries: input.entries,
+    destinationBaseRoot: firstDestination ? dirname(firstDestination) : process.cwd(),
+    destinationRoots,
+    strategies,
+    skippedWorkspaceIds
+  })
+  const submittedConflicts = new Map(input.plan.conflicts.map((item) => [item.conflictId, item]))
+  const conflicts = fresh.conflicts.map((item) => {
+    const submitted = submittedConflicts.get(item.conflictId)
+    if (
+      !submitted ||
+      submitted.workspaceId !== item.workspaceId ||
+      submitted.path !== item.path ||
+      submitted.kind !== item.kind ||
+      !submitted.resolution
+    ) {
+      return item
+    }
+    assertConflictResolutionAllowed(item, submitted.resolution)
+    return {
+      ...item,
+      resolution: submitted.resolution,
+      ...(submitted.resolution === 'rename-source' && item.renamedPath
+        ? { renamedPath: item.renamedPath }
+        : {})
+    }
+  })
+  const unresolvedFatalByWorkspace = new Set(
+    conflicts.filter((item) => item.fatal && !item.resolution).map((item) => item.workspaceId)
+  )
+  return DataMigrationImportPlanSchema.parse({
+    ...fresh,
+    conflicts,
+    mappings: fresh.mappings.map((mapping) => ({
+      ...mapping,
+      compatible: mapping.strategy === 'skip' ||
+        (mapping.preflightCompatible === true && !unresolvedFatalByWorkspace.has(mapping.workspaceId)),
+      unresolvedIssueCount: conflicts.filter((item) =>
+        item.workspaceId === mapping.workspaceId && !item.resolution
+      ).length
+    })),
+    fatalIssueCount: conflicts.filter((item) => item.fatal && !item.resolution).length
+  })
+}
+
 export function stableImportedSiblingPath(path: PackageRelativePath, sha256: string): PackageRelativePath {
   const slash = path.lastIndexOf('/')
   const directory = slash >= 0 ? path.slice(0, slash + 1) : ''
@@ -243,6 +388,32 @@ export function stableImportedSiblingPath(path: PackageRelativePath, sha256: str
   const stem = dot > 0 ? name.slice(0, dot) : name
   const extension = dot > 0 ? name.slice(dot) : ''
   return parsePackageRelativePath(`${directory}${stem}.imported-${sha256.slice(0, 8)}${extension}`)
+}
+
+export function stableCompatibleRenamedPath(
+  path: PackageRelativePath,
+  sha256: string,
+  destinationRoot: string,
+  probe: DestinationFileSystemProbe,
+  reservedIdentities: Set<string> = new Set()
+): PackageRelativePath | undefined {
+  const segments = path.split('/').map((segment) => sanitizeDestinationSegment(segment, probe.platform))
+  const originalName = segments.pop() || 'imported'
+  const dot = originalName.lastIndexOf('.')
+  const stem = dot > 0 ? originalName.slice(0, dot) : originalName
+  const extension = dot > 0 ? originalName.slice(dot) : ''
+  const suffix = `-imported-${sha256.slice(0, 8)}`
+  segments.push(`${truncateUtf8(stem || 'file', Math.max(1, probe.maximumComponentBytes - Buffer.byteLength(suffix + extension)))}${suffix}${truncateUtf8(extension, 32)}`)
+  let candidate = parsePackageRelativePath(segments.join('/'))
+  if (destinationPathIssue(candidate, destinationRoot, probe)) {
+    const compactName = `${sha256.slice(0, 16)}${truncateUtf8(extension, 16)}`
+    candidate = parsePackageRelativePath(`Imported/${compactName}`)
+  }
+  if (destinationPathIssue(candidate, destinationRoot, probe)) return undefined
+  const identity = fileSystemIdentity(candidate, probe)
+  if (reservedIdentities.has(identity)) return undefined
+  reservedIdentities.add(identity)
+  return candidate
 }
 
 export function rebindDataMigrationReferences(input: {
@@ -337,7 +508,8 @@ function destinationPathIssue(
   probe: DestinationFileSystemProbe
 ): { kind: 'invalid-name' | 'path-too-long' } | null {
   try {
-    validateKunpackEntryPath(path)
+    if (probe.platform === 'windows') validateKunpackEntryPath(path)
+    else validateKunpackArchiveEntryPath(path)
   } catch {
     return { kind: 'invalid-name' }
   }
@@ -359,7 +531,8 @@ function conflict(
   kind: DataMigrationConflict['kind'],
   fatal: boolean,
   sourceSha256?: string,
-  sourceBytes?: number
+  sourceBytes?: number,
+  renamedPath?: PackageRelativePath
 ): DataMigrationConflict {
   return {
     conflictId: `conflict_${createHash('sha256').update(`${workspaceId}\0${path}\0${kind}`).digest('hex').slice(0, 24)}`,
@@ -368,8 +541,52 @@ function conflict(
     kind,
     fatal,
     ...(sourceSha256 ? { sourceSha256 } : {}),
-    ...(sourceBytes !== undefined ? { sourceBytes } : {})
+    ...(sourceBytes !== undefined ? { sourceBytes } : {}),
+    ...(renamedPath ? { renamedPath } : {})
   }
+}
+
+function assertConflictResolutionAllowed(
+  conflict: DataMigrationConflict,
+  resolution: DataMigrationFileConflictResolution
+): void {
+  if (!conflict.fatal) {
+    if (!['keep-target', 'import-sibling', 'replace-with-backup', 'skip'].includes(resolution)) {
+      throw new Error(`invalid resolution for ${conflict.kind}: ${resolution}`)
+    }
+    return
+  }
+  if (conflict.fatal) {
+    if (resolution !== 'skip' && resolution !== 'rename-source') {
+      throw new Error(`invalid resolution for ${conflict.kind}: ${resolution}`)
+    }
+    if (resolution === 'rename-source' && !conflict.renamedPath) {
+      throw new Error(`no compatible rename is available for ${conflict.path}`)
+    }
+  }
+}
+
+function sanitizeDestinationSegment(value: string, platform: DataMigrationSourcePlatform): string {
+  let output = [...value].map((character) => {
+    if (character.charCodeAt(0) <= 0x1f) return '-'
+    if (platform === 'windows' && /[<>:"/\\|?*]/.test(character)) return '-'
+    return character
+  }).join('')
+  if (platform === 'windows') {
+    output = output.replace(/[. ]+$/g, '')
+    const stem = output.split('.')[0]!.toLocaleLowerCase('en-US')
+    if (/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$/.test(stem)) output = `${output}-file`
+  }
+  return truncateUtf8(output || 'file', 180)
+}
+
+function truncateUtf8(value: string, maximumBytes: number): string {
+  let output = ''
+  for (const character of value) {
+    if (Buffer.byteLength(output + character, 'utf8') > maximumBytes) break
+    output += character
+  }
+  return output
 }
 
 async function pathLogicalBytes(path: string): Promise<number> {
@@ -418,6 +635,34 @@ function sanitizeDestinationName(value: string): string {
 
 function destinationIdentity(value: string): string {
   return resolve(value).normalize('NFC').toLocaleLowerCase('en-US')
+}
+
+function assertSafeIndependentDestination(
+  value: string,
+  plannedDestinations: readonly string[]
+): void {
+  const destination = resolve(value)
+  const segments = destination.split(/[\\/]/).map((segment) => segment.toLocaleLowerCase('en-US'))
+  if (segments.some((segment) =>
+    segment.startsWith('.kun-migration-staging') || segment === '.kun-migration-backup'
+  )) {
+    throw new Error(`migration destination cannot use a staging or backup directory: ${value}`)
+  }
+  for (const planned of plannedDestinations) {
+    const existing = resolve(planned)
+    if (
+      destinationIdentity(destination) === destinationIdentity(existing) ||
+      pathIsBelow(existing, destination) ||
+      pathIsBelow(destination, existing)
+    ) {
+      throw new Error(`migration workspace destinations overlap: ${existing} / ${destination}`)
+    }
+  }
+}
+
+function pathIsBelow(parent: string, candidate: string): boolean {
+  const path = relative(destinationIdentity(parent), destinationIdentity(candidate))
+  return Boolean(path) && !path.startsWith('..') && !isAbsolute(path)
 }
 
 function currentPlatform(): DataMigrationSourcePlatform {

@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { ApprovalReviewerSchema } from '../../contracts/policy.js'
 import type { ThreadService } from '../../services/thread-service.js'
 import { jsonResponse, type JsonResponse } from '../response.js'
 import { readJsonBody } from '../read-json-body.js'
@@ -7,7 +8,9 @@ import type { RuntimeError } from './runtime-error.js'
 const ResumeSessionRequest = z.object({
   workspace: z.string().min(1).optional(),
   model: z.string().min(1).optional(),
-  mode: z.enum(['agent', 'plan']).optional()
+  mode: z.enum(['agent', 'plan']).optional(),
+  /** Compatibility echo; an existing source thread remains authoritative. */
+  approvalReviewer: ApprovalReviewerSchema.optional()
 })
 
 export async function resumeSession(

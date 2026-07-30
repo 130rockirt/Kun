@@ -16,6 +16,12 @@ import { getProvider, resetProviderCacheForTests } from './registry'
 import { rendererRuntimeClient } from './runtime-client'
 import type { ThreadEventSink } from './types'
 
+const DEFAULT_EXECUTION_SETTINGS = {
+  approvalPolicy: 'auto',
+  sandboxMode: 'danger-full-access',
+  approvalReviewer: 'user'
+} as const
+
 function settings(): AppSettingsV1 {
   return {
     version: 1,
@@ -23,6 +29,7 @@ function settings(): AppSettingsV1 {
     theme: 'system',
     uiFontScale: 0.82,
     chatContentMaxWidthPx: 896,
+    composerSendKey: 'enter',
     provider: defaultModelProviderSettings(),
     agents: {
       kun: defaultKunRuntimeSettings()
@@ -103,6 +110,37 @@ describe('KunRuntimeProvider', () => {
     )
   })
 
+  it('does not impose a hidden limit when listing the full thread inventory', async () => {
+    const runtimeRequest = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      body: JSON.stringify({ threads: [] })
+    }))
+    installDsGui({ runtimeRequest })
+    const provider = new KunRuntimeProvider()
+
+    await provider.listThreads({ includeArchived: true })
+
+    expect(runtimeRequest).toHaveBeenCalledWith(
+      '/v1/threads?include_archived=true',
+      'GET'
+    )
+  })
+
+  it('preserves an explicit thread list limit for bounded callers', async () => {
+    const runtimeRequest = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      body: JSON.stringify({ threads: [] })
+    }))
+    installDsGui({ runtimeRequest })
+    const provider = new KunRuntimeProvider()
+
+    await provider.listThreads({ limit: 25 })
+
+    expect(runtimeRequest).toHaveBeenCalledWith('/v1/threads?limit=25', 'GET')
+  })
+
   it('rejects thread creation before the runtime request when the workspace is missing', async () => {
     const runtimeRequest = vi.fn(async () => ({ ok: true, status: 200, body: '{}' }))
     const alertDialog = vi.fn(async () => undefined)
@@ -118,6 +156,88 @@ describe('KunRuntimeProvider', () => {
 
     expect(runtimeRequest).not.toHaveBeenCalled()
     expect(alertDialog).not.toHaveBeenCalled()
+  })
+
+  it('does not fall back to stale GUI settings when the shared registry has no connected default', async () => {
+    const runtimeRequest = vi.fn(async (path: string) => {
+      expect(path).toBe('/v1/model-connections')
+      return {
+        ok: true,
+        status: 200,
+        body: JSON.stringify({
+          schemaVersion: 1,
+          revision: 3,
+          providers: [],
+          proxy: { enabled: false, url: '' },
+          routePools: [],
+          localModelGateway: { enabled: false }
+        })
+      }
+    })
+    installDsGui({
+      runtimeRequest,
+      workspaceDirectoryExists: vi.fn(async () => true)
+    })
+
+    await expect(new KunRuntimeProvider().createThread({ workspace: '/tmp/workspace' }))
+      .rejects.toThrow(/connected model/i)
+    expect(runtimeRequest).toHaveBeenCalledTimes(1)
+  })
+
+  it('creates a new GUI session from the live shared default rather than stale local settings', async () => {
+    const runtimeRequest = vi.fn(async (path: string, method?: string, body?: string) => {
+      if (path === '/v1/model-connections') {
+        return {
+          ok: true,
+          status: 200,
+          body: JSON.stringify({
+            schemaVersion: 1,
+            revision: 4,
+            providers: [{
+              id: 'codex',
+              accountId: 'account:codex',
+              configured: true,
+              models: ['gpt-live']
+            }],
+            defaultProviderId: 'codex',
+            defaultAccountId: 'account:codex',
+            defaultModel: 'gpt-live'
+          })
+        }
+      }
+      expect(path).toBe('/v1/threads')
+      expect(method).toBe('POST')
+      expect(JSON.parse(body ?? '{}')).toMatchObject({
+        providerId: 'codex',
+        accountId: 'account:codex',
+        model: 'gpt-live',
+        modelRequestCaptureEnabled: false
+      })
+      return {
+        ok: true,
+        status: 201,
+        body: JSON.stringify({
+          id: 'thr_live',
+          title: 'Live',
+          workspace: '/tmp/workspace',
+          model: 'gpt-live',
+          providerId: 'codex',
+          accountId: 'account:codex',
+          mode: 'agent',
+          status: 'idle',
+          createdAt: 't0',
+          updatedAt: 't0',
+          turns: []
+        })
+      }
+    })
+    installDsGui({
+      runtimeRequest,
+      workspaceDirectoryExists: vi.fn(async () => true)
+    })
+
+    await expect(new KunRuntimeProvider().createThread({ workspace: '/tmp/workspace' }))
+      .resolves.toMatchObject({ id: 'thr_live', model: 'gpt-live' })
   })
 
   it('starts MCP OAuth authorization through the authenticated runtime bridge', async () => {
@@ -194,6 +314,43 @@ describe('KunRuntimeProvider', () => {
     expect(detail.latestSeq).toBe(9)
     expect(detail.latestTurnId).toBe('turn_1')
     expect(detail.latestUserMessageId).toBe('item_user')
+  })
+
+  it.each([
+    ['graph', 'graph', 'graph'],
+    ['direct', 'direct', 'direct'],
+    ['legacy missing', undefined, 'direct']
+  ] as const)('normalizes %s latest-turn orchestration', async (_label, orchestration, expected) => {
+    installDsGui({
+      runtimeRequest: vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        body: JSON.stringify({
+          id: 'thr_orchestration',
+          title: 'Orchestration',
+          workspace: '/tmp',
+          model: 'deepseek-chat',
+          mode: 'agent',
+          status: 'running',
+          createdAt: 't0',
+          updatedAt: 't1',
+          latestSeq: 1,
+          turns: [{
+            id: 'turn_orchestration',
+            threadId: 'thr_orchestration',
+            status: 'running',
+            prompt: 'continue',
+            createdAt: 't0',
+            ...(orchestration ? { orchestration } : {}),
+            items: []
+          }]
+        })
+      }))
+    })
+
+    const detail = await new KunRuntimeProvider().getThreadDetail('thr_orchestration')
+
+    expect(detail.latestTurnOrchestration).toBe(expected)
   })
 
   it('rehydrates persisted partial assistant output for a running turn', async () => {
@@ -383,8 +540,8 @@ describe('KunRuntimeProvider', () => {
       'POST',
       JSON.stringify({
         prompt: 'hello',
-        approvalPolicy: 'on-request',
-        sandboxMode: 'workspace-write'
+        clientSurface: 'gui',
+        ...DEFAULT_EXECUTION_SETTINGS
       })
     )
     expect(result.userMessageItemId).toBe('item_user_real')
@@ -407,10 +564,10 @@ describe('KunRuntimeProvider', () => {
       'POST',
       JSON.stringify({
         prompt: 'hello',
+        clientSurface: 'gui',
         model: 'mimo-v2.5',
         providerId: 'xiaomi-token-plan',
-        approvalPolicy: 'on-request',
-        sandboxMode: 'workspace-write'
+        ...DEFAULT_EXECUTION_SETTINGS
       })
     )
   })
@@ -441,10 +598,10 @@ describe('KunRuntimeProvider', () => {
       'POST',
       JSON.stringify({
         prompt: 'draft a plan',
+        clientSurface: 'gui',
         model: 'reasoning-pro',
         providerId: 'provider-pro',
-        approvalPolicy: 'on-request',
-        sandboxMode: 'workspace-write',
+        ...DEFAULT_EXECUTION_SETTINGS,
         mode: 'plan'
       })
     )
@@ -464,9 +621,32 @@ describe('KunRuntimeProvider', () => {
       'POST',
       JSON.stringify({
         prompt: 'hello',
-        approvalPolicy: 'on-request',
-        sandboxMode: 'workspace-write',
+        clientSurface: 'gui',
+        ...DEFAULT_EXECUTION_SETTINGS,
         workspaceCheckpointId: 'gcp_1'
+      })
+    )
+  })
+
+  it('posts pending checkpoint request ids without claiming rollback is ready', async () => {
+    const runtimeRequest = vi.fn(async () => ({
+      ok: true,
+      status: 202,
+      body: JSON.stringify({ threadId: 'thr_1', turnId: 'turn_abc', userMessageItemId: 'item_user_real' })
+    }))
+    installDsGui({ runtimeRequest })
+    const provider = new KunRuntimeProvider()
+    await provider.sendUserMessage('thr_1', 'hello', {
+      workspaceCheckpointRequestId: 'gcp_pending_1'
+    })
+    expect(runtimeRequest).toHaveBeenCalledWith(
+      '/v1/threads/thr_1/turns',
+      'POST',
+      JSON.stringify({
+        prompt: 'hello',
+        clientSurface: 'gui',
+        ...DEFAULT_EXECUTION_SETTINGS,
+        workspaceCheckpointRequestId: 'gcp_pending_1'
       })
     )
   })
@@ -503,8 +683,8 @@ describe('KunRuntimeProvider', () => {
       'POST',
       JSON.stringify({
         prompt: 'Use the selection',
-        approvalPolicy: 'on-request',
-        sandboxMode: 'workspace-write',
+        clientSurface: 'gui',
+        ...DEFAULT_EXECUTION_SETTINGS,
         composerContexts: [composerContext]
       })
     )
@@ -527,8 +707,8 @@ describe('KunRuntimeProvider', () => {
       'POST',
       JSON.stringify({
         prompt: 'design a screen',
-        approvalPolicy: 'on-request',
-        sandboxMode: 'workspace-write',
+        clientSurface: 'gui',
+        ...DEFAULT_EXECUTION_SETTINGS,
         guiDesignCanvas: true,
         guiDesignMode: true
       })
@@ -556,8 +736,8 @@ describe('KunRuntimeProvider', () => {
       'POST',
       JSON.stringify({
         prompt: 'animate the mark',
-        approvalPolicy: 'on-request',
-        sandboxMode: 'workspace-write',
+        clientSurface: 'gui',
+        ...DEFAULT_EXECUTION_SETTINGS,
         guiDesignMode: true,
         guiDesignArtifact: {
           kind: 'svg',
@@ -596,8 +776,8 @@ describe('KunRuntimeProvider', () => {
       'POST',
       JSON.stringify({
         prompt: 'describe this',
-        approvalPolicy: 'on-request',
-        sandboxMode: 'workspace-write',
+        clientSurface: 'gui',
+        ...DEFAULT_EXECUTION_SETTINGS,
         attachmentIds: ['att_1']
       })
     )
@@ -634,8 +814,8 @@ describe('KunRuntimeProvider', () => {
       'POST',
       JSON.stringify({
         prompt: 'explain these files',
-        approvalPolicy: 'on-request',
-        sandboxMode: 'workspace-write',
+        clientSurface: 'gui',
+        ...DEFAULT_EXECUTION_SETTINGS,
         fileReferences: [
           {
             path: '/workspace/deepseek-gui/src/App.tsx',
@@ -673,10 +853,38 @@ describe('KunRuntimeProvider', () => {
       'POST',
       JSON.stringify({
         prompt: 'think harder',
+        clientSurface: 'gui',
         model: 'auto',
-        approvalPolicy: 'on-request',
-        sandboxMode: 'workspace-write',
+        ...DEFAULT_EXECUTION_SETTINGS,
         reasoningEffort: 'max'
+      })
+    )
+  })
+
+  it('posts the canonical priority service tier for Fast turns', async () => {
+    const runtimeRequest = vi.fn(async () => ({
+      ok: true,
+      status: 202,
+      body: JSON.stringify({ threadId: 'thr_1', turnId: 'turn_fast', userMessageItemId: 'item_user_fast' })
+    }))
+    installDsGui({ runtimeRequest })
+
+    await new KunRuntimeProvider().sendUserMessage('thr_1', 'move faster', {
+      model: 'gpt-5.4',
+      providerId: 'codex-2',
+      serviceTier: 'priority'
+    })
+
+    expect(runtimeRequest).toHaveBeenCalledWith(
+      '/v1/threads/thr_1/turns',
+      'POST',
+      JSON.stringify({
+        prompt: 'move faster',
+        clientSurface: 'gui',
+        model: 'gpt-5.4',
+        providerId: 'codex-2',
+        ...DEFAULT_EXECUTION_SETTINGS,
+        serviceTier: 'priority'
       })
     )
   })
@@ -708,8 +916,8 @@ describe('KunRuntimeProvider', () => {
       'POST',
       JSON.stringify({
         prompt: 'refine the plan',
-        approvalPolicy: 'on-request',
-        sandboxMode: 'workspace-write',
+        clientSurface: 'gui',
+        ...DEFAULT_EXECUTION_SETTINGS,
         displayText: 'Generate implementation plan',
         mode: 'plan',
         guiPlan: {
@@ -1162,6 +1370,7 @@ describe('KunRuntimeProvider', () => {
     let onData: ((payload: { streamId: string; events: unknown[] }) => void) | null = null
     const ac = new AbortController()
     const sink: ThreadEventSink = {
+      onConnected: vi.fn(),
       onSeq: vi.fn(() => ac.abort()),
       onDeltas: vi.fn(),
       onUserMessage: vi.fn(),
@@ -1207,11 +1416,20 @@ describe('KunRuntimeProvider', () => {
     })
     const provider = new KunRuntimeProvider()
     await provider.subscribeThreadEvents('thr_1', 2, sink, ac.signal)
+    expect(sink.onConnected).toHaveBeenCalledTimes(1)
     expect(sink.onSeq).toHaveBeenCalledWith(3)
-    expect(sink.onDeltas).toHaveBeenCalledWith([{ text: 'he', kind: 'agent_message', seq: 3 }])
+    expect(sink.onDeltas).toHaveBeenCalledWith([{
+      text: 'he',
+      kind: 'agent_message',
+      seq: 3,
+      threadId: 'thr_1',
+      turnId: 'turn_1',
+      itemId: 'item_text',
+      createdAt: 't1'
+    }])
   })
 
-  it('acknowledges an SSE batch only after dispatching it and then advances the cursor', async () => {
+  it('advances the renderer cursor after dispatch and only then acknowledges the SSE batch', async () => {
     let onData: ((payload: { streamId: string; events: unknown[]; batchId?: string }) => void) | null = null
     let releaseAck: (() => void) | undefined
     const ackGate = new Promise<void>((resolve) => {
@@ -1268,10 +1486,10 @@ describe('KunRuntimeProvider', () => {
       expect.any(String),
       { acknowledgedBatches: true }
     )
-    expect(sink.onSeq).not.toHaveBeenCalled()
+    expect(sink.onSeq).toHaveBeenCalledWith(4)
 
     releaseAck?.()
-    await vi.waitFor(() => expect(sink.onSeq).toHaveBeenCalledWith(4))
+    await Promise.resolve()
     ac.abort()
     await subscription
   })
@@ -1325,7 +1543,7 @@ describe('KunRuntimeProvider', () => {
     expect(stopSse).toHaveBeenCalled()
   })
 
-  it('auto-approves approval requests when policy is auto', async () => {
+  it('treats legacy approval requests without a reviewer as manual even when current settings are full access', async () => {
     let onData: ((payload: { streamId: string; events: unknown[] }) => void) | null = null
     const runtimeRequest = vi.fn(async () => ({ ok: true, status: 200, body: '{}' }))
     const resolveKunApproval = vi.fn(async () => ({
@@ -1347,12 +1565,7 @@ describe('KunRuntimeProvider', () => {
       onTurnComplete: vi.fn(() => ac.abort()),
       onError: vi.fn()
     }
-    const autoSettings: AppSettingsV1 = {
-      ...settings(),
-      agents: { kun: { ...defaultKunRuntimeSettings(), approvalPolicy: 'auto' } }
-    }
     installDsGui({
-      getSettings: vi.fn(async () => autoSettings),
       runtimeRequest,
       resolveKunApproval,
       onSseEvent: vi.fn((handler) => {
@@ -1374,15 +1587,17 @@ describe('KunRuntimeProvider', () => {
     })
     const provider = new KunRuntimeProvider()
     await provider.subscribeThreadEvents('thr_1', 0, sink, ac.signal)
-    expect(resolveKunApproval).toHaveBeenCalledWith({
+    expect(resolveKunApproval).not.toHaveBeenCalled()
+    expect(sink.onApproval).toHaveBeenCalledWith({
       approvalId: 'appr_auto',
-      decision: 'allow',
-      source: 'policy'
+      summary: 'Need approval',
+      turnId: undefined,
+      createdAt: undefined,
+      toolName: undefined
     })
-    expect(sink.onApproval).not.toHaveBeenCalled()
   })
 
-  it('uses the approval policy from runtime events before falling back to settings', async () => {
+  it('keeps explicit agent-reviewed requests out of the manual approval surface', async () => {
     let onData: ((payload: { streamId: string; events: unknown[] }) => void) | null = null
     const runtimeRequest = vi.fn(async () => ({ ok: true, status: 200, body: '{}' }))
     const resolveKunApproval = vi.fn(async () => ({
@@ -1426,6 +1641,7 @@ describe('KunRuntimeProvider', () => {
                 seq: 4,
                 approvalId: 'appr_event_auto',
                 approvalPolicy: 'auto',
+                approvalReviewer: 'agent',
                 summary: 'Need approval'
               },
               { kind: 'turn_completed', seq: 5 }
@@ -1437,11 +1653,7 @@ describe('KunRuntimeProvider', () => {
     })
     const provider = new KunRuntimeProvider()
     await provider.subscribeThreadEvents('thr_1', 0, sink, ac.signal)
-    expect(resolveKunApproval).toHaveBeenCalledWith({
-      approvalId: 'appr_event_auto',
-      decision: 'allow',
-      source: 'policy'
-    })
+    expect(resolveKunApproval).not.toHaveBeenCalled()
     expect(getSettings).not.toHaveBeenCalled()
     expect(sink.onApproval).not.toHaveBeenCalled()
   })

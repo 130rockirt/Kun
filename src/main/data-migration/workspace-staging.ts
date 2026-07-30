@@ -64,11 +64,7 @@ export async function stageWorkspaceImport(input: {
   for (const entry of input.entries) {
     const relativePath = workspaceEntryRelativePath(entry.path, input.workspaceId)
     if (!relativePath) continue
-    const stagedPath = buildMigrationDestinationPath({
-      destinationRoot: stagingRoot,
-      relativePath,
-      destinationPlatform: input.destinationPlatform
-    })
+    const stagedPath = stagedEntryPath(stagingRoot, files.length, entry)
     assertBelow(stagingRoot, stagedPath)
     files.push({ entry, relativePath, stagedPath, ordinal: files.length * 2 })
   }
@@ -86,11 +82,8 @@ export async function stageWorkspaceImport(input: {
       if (!file.entry.linkTarget) continue
       const targetRelativePath = workspaceEntryRelativePath(file.entry.linkTarget, input.workspaceId)
       if (!targetRelativePath) throw new Error(`link target leaves workspace payload: ${file.entry.path}`)
-      const targetPath = buildMigrationDestinationPath({
-        destinationRoot: stagingRoot,
-        relativePath: targetRelativePath,
-        destinationPlatform: input.destinationPlatform
-      })
+      const targetPath = files.find((candidate) => candidate.entry.path === file.entry.linkTarget)?.stagedPath
+      if (!targetPath) throw new Error(`link target is not staged: ${file.entry.path}`)
       assertBelow(stagingRoot, targetPath)
       await mkdir(dirname(file.stagedPath), { recursive: true, mode: 0o700 })
       await symlink(relative(dirname(file.stagedPath), targetPath), file.stagedPath)
@@ -115,11 +108,7 @@ export function reconstructStagedWorkspace(input: {
   for (const entry of input.entries) {
     const relativePath = workspaceEntryRelativePath(entry.path, input.workspaceId)
     if (!relativePath) throw new Error(`recovery entry does not belong to workspace ${input.workspaceId}: ${entry.path}`)
-    const stagedPath = buildMigrationDestinationPath({
-      destinationRoot: stagingRoot,
-      relativePath,
-      destinationPlatform: currentPlatform()
-    })
+    const stagedPath = stagedEntryPath(stagingRoot, files.length, entry)
     assertBelow(stagingRoot, stagedPath)
     files.push({ entry, relativePath, stagedPath, ordinal: files.length * 2 })
   }
@@ -128,6 +117,7 @@ export function reconstructStagedWorkspace(input: {
 
 export async function commitStagedWorkspace(input: {
   staged: StagedWorkspace
+  allFiles?: readonly StagedWorkspaceFile[]
   strategy: DataMigrationWorkspaceConflictStrategy
   resolutions?: Readonly<Record<string, DataMigrationFileConflictResolution | undefined>>
   renamedPaths?: Readonly<Record<string, PackageRelativePath | undefined>>
@@ -142,15 +132,42 @@ export async function commitStagedWorkspace(input: {
   }
   if (input.strategy === 'keep-both') {
     if (await exists(staged.destinationRoot)) throw new Error('Keep both destination became occupied before commit')
+    const readyRoot = join(staged.stagingRoot, '.tree')
+    await mkdir(readyRoot, { recursive: true, mode: 0o700 })
+    for (const file of staged.files.sort((left, right) => left.relativePath.localeCompare(right.relativePath))) {
+      const relativePath = selectedDestinationRelativePath(file, input)
+      if (!relativePath) {
+        await rm(file.stagedPath, { recursive: true, force: true })
+        continue
+      }
+      const readyPath = buildMigrationDestinationPath({
+        destinationRoot: readyRoot,
+        relativePath,
+        destinationPlatform: currentPlatform()
+      })
+      assertBelow(readyRoot, readyPath)
+      if (await exists(readyPath)) {
+        if (
+          !await exists(file.stagedPath) &&
+          await pathIdentity(readyPath) === await plannedFileIdentity(file, readyPath, input, readyRoot)
+        ) {
+          continue
+        }
+        throw new Error(`migration destination collision while assembling workspace: ${relativePath}`)
+      }
+      await mkdir(dirname(readyPath), { recursive: true, mode: 0o700 })
+      await transferStagedFile(file, readyPath, input, readyRoot)
+    }
+    await hardenTreePermissions(readyRoot)
     const mutation: WorkspaceCommitMutation = {
       kind: 'create',
       destinationPath: staged.destinationRoot,
-      sourcePath: staged.stagingRoot,
-      expectedSha256: `tree:${await treeIdentity(staged.stagingRoot)}`
+      sourcePath: readyRoot,
+      expectedSha256: `tree:${await treeIdentity(readyRoot)}`
     }
     await input.lifecycle?.before(mutation, 0)
-    await rename(staged.stagingRoot, staged.destinationRoot)
-    await hardenTreePermissions(staged.destinationRoot)
+    await rename(readyRoot, staged.destinationRoot)
+    await rm(staged.stagingRoot, { recursive: true, force: true })
     await input.lifecycle?.after(mutation, 0)
     return {
       mutations: [mutation]
@@ -162,6 +179,49 @@ export async function commitStagedWorkspace(input: {
   let usedBackup = false
   for (const file of staged.files.sort((left, right) => left.relativePath.localeCompare(right.relativePath))) {
     input.signal?.throwIfAborted()
+    const explicitDecision = input.resolutions?.[file.relativePath]
+    if (explicitDecision === 'skip' || explicitDecision === 'keep-target') {
+      const skippedPath = buildMigrationDestinationPath({
+        destinationRoot: staged.destinationRoot,
+        relativePath: file.relativePath,
+        destinationPlatform: currentPlatform()
+      })
+      const mutation: WorkspaceCommitMutation = {
+        kind: 'skip',
+        destinationPath: skippedPath,
+        sourcePath: file.stagedPath
+      }
+      await input.lifecycle?.before(mutation, file.ordinal)
+      await rm(file.stagedPath, { recursive: true, force: true })
+      mutations.push(mutation)
+      await input.lifecycle?.after(mutation, file.ordinal)
+      continue
+    }
+    if (explicitDecision === 'rename-source') {
+      const renamed = input.renamedPaths?.[file.relativePath]
+      if (!renamed) throw new Error(`migration rename target is missing: ${file.relativePath}`)
+      const renamedDestination = buildMigrationDestinationPath({
+        destinationRoot: staged.destinationRoot,
+        relativePath: renamed,
+        destinationPlatform: currentPlatform()
+      })
+      assertBelow(staged.destinationRoot, renamedDestination)
+      if (await exists(renamedDestination)) {
+        throw new Error(`migration renamed destination already exists: ${renamed}`)
+      }
+      const mutation: WorkspaceCommitMutation = {
+        kind: 'sibling',
+        destinationPath: renamedDestination,
+        sourcePath: file.stagedPath,
+        expectedSha256: await plannedFileIdentity(file, renamedDestination, input)
+      }
+      await input.lifecycle?.before(mutation, file.ordinal)
+      await mkdir(dirname(renamedDestination), { recursive: true, mode: 0o700 })
+      await transferStagedFile(file, renamedDestination, input)
+      mutations.push(mutation)
+      await input.lifecycle?.after(mutation, file.ordinal)
+      continue
+    }
     const destinationPath = buildMigrationDestinationPath({
       destinationRoot: staged.destinationRoot,
       relativePath: file.relativePath,
@@ -171,7 +231,7 @@ export async function commitStagedWorkspace(input: {
     const target = await lstat(destinationPath).catch(() => null)
     const existingBackupPath = join(staged.backupRoot, ...file.relativePath.split('/'))
     if (!target && await exists(existingBackupPath)) {
-      const expectedIdentity = await stagedFileIdentity(file)
+      const expectedIdentity = await plannedFileIdentity(file, destinationPath, input)
       const mutation: WorkspaceCommitMutation = {
         kind: 'replace',
         destinationPath,
@@ -182,20 +242,20 @@ export async function commitStagedWorkspace(input: {
       }
       await input.lifecycle?.before(mutation, file.ordinal + 1)
       await mkdir(dirname(destinationPath), { recursive: true, mode: 0o700 })
-      await rename(file.stagedPath, destinationPath)
+      await transferStagedFile(file, destinationPath, input)
       mutations.push(mutation)
       usedBackup = true
       await input.lifecycle?.after(mutation, file.ordinal + 1)
       continue
     }
     if (!target) {
-      const expectedIdentity = await stagedFileIdentity(file)
+      const expectedIdentity = await plannedFileIdentity(file, destinationPath, input)
       const mutation: WorkspaceCommitMutation = {
         kind: 'create', destinationPath, sourcePath: file.stagedPath, expectedSha256: expectedIdentity
       }
       await input.lifecycle?.before(mutation, file.ordinal)
       await mkdir(dirname(destinationPath), { recursive: true, mode: 0o700 })
-      await rename(file.stagedPath, destinationPath)
+      await transferStagedFile(file, destinationPath, input)
       mutations.push(mutation)
       await input.lifecycle?.after(mutation, file.ordinal)
       continue
@@ -214,15 +274,7 @@ export async function commitStagedWorkspace(input: {
       ? 'replace-with-backup'
       : input.resolutions?.[file.relativePath]
     if (!decision) throw new Error(`unresolved migration conflict: ${file.relativePath}`)
-    if (decision === 'keep-target' || decision === 'skip') {
-      const mutation: WorkspaceCommitMutation = { kind: 'skip', destinationPath, sourcePath: file.stagedPath }
-      await input.lifecycle?.before(mutation, file.ordinal)
-      await rm(file.stagedPath, { recursive: true, force: true })
-      mutations.push(mutation)
-      await input.lifecycle?.after(mutation, file.ordinal)
-      continue
-    }
-    if (decision === 'import-sibling' || decision === 'rename-source') {
+    if (decision === 'import-sibling') {
       const renamed = input.renamedPaths?.[file.relativePath] ?? stableImportedSiblingPath(file.relativePath, file.entry.sha256)
       const siblingPath = buildMigrationDestinationPath({
         destinationRoot: staged.destinationRoot,
@@ -231,13 +283,13 @@ export async function commitStagedWorkspace(input: {
       })
       assertBelow(staged.destinationRoot, siblingPath)
       if (await exists(siblingPath)) throw new Error(`migration sibling destination already exists: ${renamed}`)
-      const expectedIdentity = await stagedFileIdentity(file)
+      const expectedIdentity = await plannedFileIdentity(file, siblingPath, input)
       const mutation: WorkspaceCommitMutation = {
         kind: 'sibling', destinationPath: siblingPath, sourcePath: file.stagedPath, expectedSha256: expectedIdentity
       }
       await input.lifecycle?.before(mutation, file.ordinal)
       await mkdir(dirname(siblingPath), { recursive: true, mode: 0o700 })
-      await rename(file.stagedPath, siblingPath)
+      await transferStagedFile(file, siblingPath, input)
       mutations.push(mutation)
       await input.lifecycle?.after(mutation, file.ordinal)
       continue
@@ -258,7 +310,7 @@ export async function commitStagedWorkspace(input: {
     mutations.push(backupMutation)
     await input.lifecycle?.after(backupMutation, file.ordinal)
     try {
-      const expectedIdentity = await stagedFileIdentity(file)
+      const expectedIdentity = await plannedFileIdentity(file, destinationPath, input)
       const replaceMutation: WorkspaceCommitMutation = {
         kind: 'replace',
         destinationPath,
@@ -269,7 +321,7 @@ export async function commitStagedWorkspace(input: {
       }
       await input.lifecycle?.before(replaceMutation, file.ordinal + 1)
       await mkdir(dirname(destinationPath), { recursive: true, mode: 0o700 })
-      await rename(file.stagedPath, destinationPath)
+      await transferStagedFile(file, destinationPath, input)
       mutations.push(replaceMutation)
       await input.lifecycle?.after(replaceMutation, file.ordinal + 1)
     } catch (error) {
@@ -280,6 +332,16 @@ export async function commitStagedWorkspace(input: {
   await rm(staged.stagingRoot, { recursive: true, force: true })
   await hardenTreePermissions(staged.destinationRoot)
   return { mutations, ...(usedBackup ? { backupRoot: staged.backupRoot } : {}) }
+}
+
+function stagedEntryPath(
+  stagingRoot: string,
+  index: number,
+  entry: DataMigrationPackageEntry
+): string {
+  // Staging names must be representable even when the source name is the
+  // conflict being resolved (reserved name, case fold, Unicode, or length).
+  return join(stagingRoot, '.entries', `${String(index).padStart(8, '0')}-${entry.sha256.slice(0, 16)}`)
 }
 
 export async function restoreWorkspaceCommit(mutations: readonly WorkspaceCommitMutation[]): Promise<string[]> {
@@ -377,8 +439,94 @@ async function sha256File(path: string): Promise<string> {
   return hash.digest('hex')
 }
 
-async function stagedFileIdentity(file: StagedWorkspaceFile): Promise<string> {
-  return file.entry.linkTarget ? `link:${await readlink(file.stagedPath)}` : file.entry.sha256
+function selectedDestinationRelativePath(
+  file: StagedWorkspaceFile,
+  input: {
+    resolutions?: Readonly<Record<string, DataMigrationFileConflictResolution | undefined>>
+    renamedPaths?: Readonly<Record<string, PackageRelativePath | undefined>>
+  }
+): PackageRelativePath | null {
+  const decision = input.resolutions?.[file.relativePath]
+  if (decision === 'skip' || decision === 'keep-target') return null
+  if (decision === 'rename-source') {
+    const renamed = input.renamedPaths?.[file.relativePath]
+    if (!renamed) throw new Error(`migration rename target is missing: ${file.relativePath}`)
+    return renamed
+  }
+  if (decision === 'import-sibling') {
+    return input.renamedPaths?.[file.relativePath] ??
+      stableImportedSiblingPath(file.relativePath, file.entry.sha256)
+  }
+  return file.relativePath
+}
+
+function plannedLinkTarget(
+  file: StagedWorkspaceFile,
+  destinationPath: string,
+  input: {
+    staged: StagedWorkspace
+    allFiles?: readonly StagedWorkspaceFile[]
+    resolutions?: Readonly<Record<string, DataMigrationFileConflictResolution | undefined>>
+    renamedPaths?: Readonly<Record<string, PackageRelativePath | undefined>>
+  },
+  targetRoot = input.staged.destinationRoot
+): { targetPath: string; linkText: string; omitted: boolean } {
+  if (!file.entry.linkTarget) throw new Error(`migration entry is not a link: ${file.relativePath}`)
+  const targetRelativePath = workspaceEntryRelativePath(file.entry.linkTarget, input.staged.workspaceId)
+  if (!targetRelativePath) throw new Error(`link target leaves workspace payload: ${file.entry.path}`)
+  const targetFile = (input.allFiles ?? input.staged.files).find(
+    (candidate) => candidate.relativePath === targetRelativePath
+  )
+  if (!targetFile) throw new Error(`link target is not part of the staged workspace: ${file.entry.linkTarget}`)
+  const selectedTarget = selectedDestinationRelativePath(targetFile, input)
+  const targetPath = buildMigrationDestinationPath({
+    destinationRoot: targetRoot,
+    relativePath: selectedTarget ?? targetRelativePath,
+    destinationPlatform: currentPlatform()
+  })
+  return {
+    targetPath,
+    linkText: relative(dirname(destinationPath), targetPath),
+    omitted: selectedTarget === null
+  }
+}
+
+async function plannedFileIdentity(
+  file: StagedWorkspaceFile,
+  destinationPath: string,
+  input: {
+    staged: StagedWorkspace
+    allFiles?: readonly StagedWorkspaceFile[]
+    resolutions?: Readonly<Record<string, DataMigrationFileConflictResolution | undefined>>
+    renamedPaths?: Readonly<Record<string, PackageRelativePath | undefined>>
+  },
+  targetRoot = input.staged.destinationRoot
+): Promise<string> {
+  if (!file.entry.linkTarget) return file.entry.sha256
+  return `link:${plannedLinkTarget(file, destinationPath, input, targetRoot).linkText}`
+}
+
+async function transferStagedFile(
+  file: StagedWorkspaceFile,
+  destinationPath: string,
+  input: {
+    staged: StagedWorkspace
+    allFiles?: readonly StagedWorkspaceFile[]
+    resolutions?: Readonly<Record<string, DataMigrationFileConflictResolution | undefined>>
+    renamedPaths?: Readonly<Record<string, PackageRelativePath | undefined>>
+  },
+  targetRoot = input.staged.destinationRoot
+): Promise<void> {
+  if (!file.entry.linkTarget) {
+    await rename(file.stagedPath, destinationPath)
+    return
+  }
+  const target = plannedLinkTarget(file, destinationPath, input, targetRoot)
+  if (target.omitted && !await exists(target.targetPath)) {
+    throw new Error(`migration link target was skipped and does not exist: ${file.entry.linkTarget}`)
+  }
+  await rm(file.stagedPath, { force: true })
+  await symlink(target.linkText, destinationPath)
 }
 
 async function pathIdentity(path: string): Promise<string> {

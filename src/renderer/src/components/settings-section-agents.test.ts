@@ -18,19 +18,28 @@ import {
   type ModelProviderProfileV1
 } from '@shared/app-settings'
 import type {
+  AntigravitySubscriptionModelCatalog,
   ClaudeSubscriptionProbeResult,
   CursorSubscriptionModel,
   ModelsDevCatalogResult,
   ModelProviderProbeResult
 } from '@shared/kun-gui-api'
-import { AgentsSettingsSection, modelProvidersSettingsPatch } from './settings-section-agents'
-import { ProvidersSettingsSection } from './settings-section-providers'
+import {
+  AgentsSettingsSection,
+  LaboratorySettingsSection,
+  modelProvidersSettingsPatch
+} from './settings-section-agents'
+import {
+  ProvidersSettingsSection,
+  antigravityProviderCatalogPatch
+} from './settings-section-providers'
 
 const labels: Record<string, string> = {
   agentsQuickBase: 'Base',
   agentsQuickSkill: 'Skills',
   agentsQuickMcp: 'MCP',
   agentsQuickPermissions: 'Permissions',
+  agentsQuickLaboratory: 'Laboratory',
   agents: 'Agents',
   providers: 'Providers',
   providersDesc: 'Providers description',
@@ -77,6 +86,9 @@ const labels: Record<string, string> = {
   modelProviderIdentityHint: 'Manage the provider ID under Advanced.',
   modelProviderSectionBasics: 'Provider basics',
   modelProviderSectionConnection: 'Provider connection',
+  geminiCliReady: 'Antigravity CLI is ready',
+  geminiSyncModels: 'Sync Antigravity models',
+  geminiModelsSynced: 'Synced {{count}} Antigravity models.',
   modelProviderSectionDanger: 'Danger zone',
   modelProviderTestConnection: 'Test connection',
   modelProviderTesting: 'Testing connection…',
@@ -125,6 +137,7 @@ const labels: Record<string, string> = {
   modelProviderEndpointFormat: 'Endpoint format',
   modelProviderRetrySection: 'Failure retry',
   modelProviderRetryMaxAttempts: 'Retry attempts',
+  modelProviderRetryMaxAttemptsHint: 'Excludes the initial request. Default 5, maximum 10.',
   modelProviderRetryInitialDelayMs: 'Initial retry delay (ms)',
   modelProviderRetryStatusCodes: 'Retry HTTP status codes',
   modelProviderRetryStatusCodesHint: 'Separate multiple status codes with commas, for example 429,503.',
@@ -408,19 +421,17 @@ const labels: Record<string, string> = {
   permissions: 'Permissions',
   toolPermissionMode: 'Tool permission mode',
   toolPermissionModeDesc: 'Tool permission mode description',
-  toolPermissionAlwaysAsk: 'Always ask',
-  toolPermissionAlwaysAskDesc: 'Every tool call asks first',
-  toolPermissionReadOnly: 'Read only',
-  toolPermissionReadOnlyDesc: 'Read tools run automatically',
-  toolPermissionSensitiveAsk: 'Sensitive operations ask',
-  toolPermissionSensitiveAskDesc: 'Sensitive operations ask first',
-  toolPermissionWorkspaceWrite: 'Ask for workspace writes',
-  toolPermissionWorkspaceWriteDesc: 'Asks before workspace file changes',
-  toolPermissionTrustedWorkspace: 'Trusted workspace',
-  toolPermissionTrustedWorkspaceDesc: 'Workspace file changes run without prompts',
-  toolPermissionBypass: 'Bypass mode',
-  toolPermissionBypassDesc: 'Never asks and has full access',
-  permissionsBehaviorHint: 'Tool confirmation and local permissions are unified',
+  computerUseTitle: 'Computer control',
+  browserUseSettingsTitle: 'Browser',
+  designQualityTitle: 'Design quality',
+  graphSettingsTitle: 'Graph mode',
+  toolPermissionAskForApproval: 'Ask for approval',
+  toolPermissionAskForApprovalDesc: 'Approval-worthy actions ask you first',
+  toolPermissionApproveForMe: 'Approve for me',
+  toolPermissionApproveForMeDesc: 'Your selected model reviews approval-worthy actions',
+  toolPermissionFullAccess: 'Full access',
+  toolPermissionFullAccessDesc: 'Unrestricted files, host commands, and network-capable tools',
+  permissionsBehaviorHint: 'Choose who reviews approval-worthy actions or grant full access',
   projectConfigTitle: 'Project MCP & Skills',
   projectConfigDescription: 'Portable project configuration',
   projectConfigSecurityHint: 'Project MCP requires digest approval',
@@ -603,7 +614,10 @@ function findButtonContaining(renderer: ReactTestRenderer, label: string): React
 }
 
 function activePanelText(renderer: ReactTestRenderer): string {
-  const panels = renderer.root.findAllByProps({ role: 'tabpanel' })
+  const panels = renderer.root
+    .findAllByProps({ role: 'tabpanel' })
+    .filter((panel) => String(panel.props.id ?? '').startsWith('provider-settings-panel-'))
+    .filter((panel) => panel.props.hidden !== true)
   expect(panels).toHaveLength(1)
   return instanceText(panels[0])
 }
@@ -744,6 +758,25 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
   })
 
   describe('provider settings workspace', () => {
+    const antigravityCatalog: AntigravitySubscriptionModelCatalog = {
+      models: [
+        {
+          id: 'gemini-3.6-flash',
+          supportedEfforts: ['low', 'medium', 'high'],
+          defaultEffort: 'medium'
+        },
+        {
+          id: 'claude-sonnet-4-6',
+          supportedEfforts: ['medium'],
+          defaultEffort: 'medium'
+        },
+        {
+          id: 'gpt-oss-120b',
+          supportedEfforts: ['medium'],
+          defaultEffort: 'medium'
+        }
+      ]
+    }
     const probeModelProvider = vi.fn(async (): Promise<ModelProviderProbeResult> => ({
       ok: true as const,
       latencyMs: 18,
@@ -795,6 +828,11 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       'gemini-2.5-pro',
       'gemini-2.5-flash'
     ])
+    const geminiSubscriptionCliStatus = vi.fn(async () => ({
+      installed: true,
+      path: '/Applications/Kun.app/Contents/Resources/agy'
+    }))
+    const geminiSubscriptionModels = vi.fn(async () => antigravityCatalog)
     const cursorSubscriptionDiscover = vi.fn(async (): Promise<{
       account: {
         apiKeyName: string
@@ -819,6 +857,8 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       claudeSubscriptionProbe.mockResolvedValue({ ok: true, latencyMs: 23 })
       geminiCliSubscriptionStatus.mockClear()
       geminiCliSubscriptionModels.mockClear()
+      geminiSubscriptionCliStatus.mockClear()
+      geminiSubscriptionModels.mockClear()
       cursorSubscriptionDiscover.mockReset()
       cursorSubscriptionDiscover.mockResolvedValue({
         account: { apiKeyName: 'test-key', userEmail: 'cursor@example.com' },
@@ -833,6 +873,9 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
           cursorSubscriptionDiscover,
           geminiCliSubscriptionStatus,
           geminiCliSubscriptionModels,
+          geminiSubscriptionCliStatus,
+          geminiSubscriptionModels,
+          onGeminiSubscriptionCliProgress: vi.fn(() => () => undefined),
           openExternal,
           claudeSubscriptionStatus,
           claudeSubscriptionProbe,
@@ -919,6 +962,142 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       await act(async () => findButton(renderer, 'Models').props.onClick())
       expect(rendererText(renderer)).toContain('gemini-3-flash-preview')
       expect(rendererText(renderer)).not.toContain('gemini-3.6-flash')
+    })
+
+    it('maps the authoritative Antigravity catalog to model-specific reasoning profiles', () => {
+      const patch = antigravityProviderCatalogPatch(antigravityCatalog)
+
+      expect(patch.models).toEqual([
+        'gemini-3.6-flash',
+        'claude-sonnet-4-6',
+        'gpt-oss-120b'
+      ])
+      expect(patch.modelProfiles['gemini-3.6-flash']).toMatchObject({
+        inputModalities: ['text', 'image'],
+        reasoning: {
+          supportedEfforts: ['low', 'medium', 'high'],
+          defaultEffort: 'medium',
+          requestProtocol: 'none'
+        }
+      })
+      expect(patch.modelProfiles['claude-sonnet-4-6'].inputModalities).toEqual(['text', 'image'])
+      expect(patch.modelProfiles['gpt-oss-120b']).toMatchObject({
+        inputModalities: ['text'],
+        reasoning: {
+          supportedEfforts: ['medium'],
+          defaultEffort: 'medium'
+        }
+      })
+    })
+
+    it('synchronizes all Antigravity model families and profiles into provider settings', async () => {
+      const settings = defaultModelProviderSettings()
+      const antigravity = modelProviderPresetProfile(
+        getModelProviderPreset('gemini-subscription')!,
+        ''
+      )
+      const update = vi.fn()
+      const renderer = await mountProviders({
+        ...baseCtx(),
+        update,
+        provider: { ...settings, providers: [...settings.providers, antigravity] },
+        kun: {
+          ...defaultKunRuntimeSettings(),
+          providerId: antigravity.id,
+          model: 'gemini-3.6-flash'
+        }
+      })
+      await act(async () => {
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+
+      await act(async () => findButton(renderer, 'Sync Antigravity models').props.onClick())
+
+      expect(geminiSubscriptionModels).toHaveBeenCalledOnce()
+      const lastPatch = update.mock.calls.at(-1)?.[0] as {
+        provider?: { providers?: ModelProviderProfileV1[] }
+      }
+      const saved = lastPatch.provider?.providers?.find((provider) => provider.id === antigravity.id)
+      expect(saved?.models).toEqual([
+        'gemini-3.6-flash',
+        'claude-sonnet-4-6',
+        'gpt-oss-120b'
+      ])
+      expect(saved?.modelProfiles['claude-sonnet-4-6']?.reasoning?.supportedEfforts)
+        .toEqual(['medium'])
+      expect(saved?.modelProfiles['gpt-oss-120b']?.reasoning?.supportedEfforts)
+        .toEqual(['medium'])
+    })
+
+    it('preserves Antigravity discovery profiles through the model import flow', async () => {
+      fetchModelsDevCatalog.mockResolvedValueOnce({
+        status: 'ok',
+        providerKey: 'google',
+        providerName: 'Google',
+        matchMode: 'enrichment-only',
+        stale: false,
+        models: [
+          {
+            id: 'gemini-3.6-flash',
+            inputModalities: ['text', 'image'],
+            outputModalities: ['text'],
+            contextWindowTokens: 1_048_576,
+            toolCalling: true
+          },
+          {
+            id: 'claude-sonnet-4-6',
+            inputModalities: ['text', 'image'],
+            outputModalities: ['text'],
+            contextWindowTokens: 200_000,
+            toolCalling: true
+          }
+        ]
+      })
+      const settings = defaultModelProviderSettings()
+      const antigravity = modelProviderPresetProfile(
+        getModelProviderPreset('gemini-subscription')!,
+        ''
+      )
+      const update = vi.fn()
+      const renderer = await mountProviders({
+        ...baseCtx(),
+        update,
+        provider: { ...settings, providers: [...settings.providers, antigravity] },
+        kun: {
+          ...defaultKunRuntimeSettings(),
+          providerId: antigravity.id,
+          model: 'gemini-3.6-flash'
+        }
+      })
+
+      await clickProviderTab(renderer, 'Models')
+      await act(async () => {
+        findButton(renderer, 'Fetch models').props.onClick()
+        await Promise.resolve()
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+      expect(findButton(renderer, 'Import 3').props.disabled).toBe(false)
+      await act(async () => findButton(renderer, 'Import 3').props.onClick())
+
+      const updatedProviders = update.mock.calls[0]?.[0]?.provider?.providers as ModelProviderProfileV1[]
+      const saved = updatedProviders.find((provider) => provider.id === antigravity.id)
+      expect(saved?.models).toEqual([
+        'gemini-3.6-flash',
+        'claude-sonnet-4-6',
+        'gpt-oss-120b'
+      ])
+      expect(saved?.modelProfiles['gemini-3.6-flash']).toMatchObject({
+        contextWindowTokens: 1_048_576,
+        reasoning: {
+          supportedEfforts: ['low', 'medium', 'high'],
+          defaultEffort: 'medium'
+        }
+      })
+      expect(saved?.modelProfiles['claude-sonnet-4-6']?.reasoning?.supportedEfforts)
+        .toEqual(['medium'])
+      expect(saved?.modelProfiles['claude-sonnet-4-6']?.contextWindowTokens).toBe(200_000)
     })
 
     it('turns a stale Cursor discovery handler error into restart guidance', async () => {
@@ -1106,7 +1285,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
         apiKey: '',
         baseUrl: 'https://api.example.com/v1',
         endpointFormat: 'messages',
-        models: [],
+        models: Array.from({ length: 9 }, (_, index) => `custom-model-${index + 1}`),
         modelProfiles: {},
         image: {
           protocol: 'openai-images',
@@ -1126,7 +1305,17 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
         }
       })
 
-      const tabs = renderer.root.findAllByProps({ role: 'tab' })
+      const workspacePanels = renderer.root.findAllByProps({ role: 'tabpanel' })
+        .filter((panel) => String(panel.props.id ?? '').startsWith('provider-workspace-panel-'))
+      expect(workspacePanels.map((panel) => panel.props.id)).toEqual([
+        'provider-workspace-panel-providers',
+        'provider-workspace-panel-routes'
+      ])
+      expect(workspacePanels.map((panel) => panel.props.hidden)).toEqual([false, true])
+
+      const tabs = renderer.root
+        .findAllByProps({ role: 'tab' })
+        .filter((tab) => String(tab.props.id ?? '').startsWith('provider-settings-tab-'))
       expect(tabs.map(instanceText)).toEqual(['Connection', 'Models', 'Capabilities', 'Advanced'])
       expect(tabs.map((tab) => tab.props['aria-selected'])).toEqual([true, false, false, false])
       expect(tabs.map((tab) => tab.props.tabIndex)).toEqual([0, -1, -1, -1])
@@ -1136,9 +1325,18 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
         'provider-settings-panel-capabilities',
         'provider-settings-panel-advanced'
       ])
-      const initialPanel = renderer.root.findByProps({ role: 'tabpanel' })
+      const initialPanel = renderer.root.findByProps({ id: 'provider-settings-panel-connection' })
       expect(initialPanel.props.id).toBe('provider-settings-panel-connection')
       expect(initialPanel.props['aria-labelledby']).toBe('provider-settings-tab-connection')
+      const taskPanels = renderer.root.findAllByProps({ role: 'tabpanel' })
+        .filter((panel) => String(panel.props.id ?? '').startsWith('provider-settings-panel-'))
+      expect(taskPanels.map((panel) => panel.props.id)).toEqual([
+        'provider-settings-panel-connection',
+        'provider-settings-panel-advanced',
+        'provider-settings-panel-models',
+        'provider-settings-panel-capabilities'
+      ])
+      expect(taskPanels.map((panel) => panel.props.hidden)).toEqual([false, true, true, true])
       expect(activePanelText(renderer)).toContain('Provider connection')
       expect(activePanelText(renderer)).not.toContain('Provider models')
       expect(renderer.root.findAllByType('select').some((select) => select.props.value === 'messages')).toBe(true)
@@ -1146,21 +1344,25 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       expect(rendererText(renderer)).not.toContain('Inherit API key')
 
       const preventDefault = vi.fn()
-      const tabFocusTargets = Array.from({ length: 4 }, () => ({ focus: vi.fn() }))
       await act(async () => tabs[0].props.onKeyDown({
         key: 'ArrowRight',
-        preventDefault,
-        currentTarget: {
-          parentElement: { querySelectorAll: () => tabFocusTargets }
-        }
+        preventDefault
       }))
       expect(preventDefault).toHaveBeenCalledOnce()
-      expect(tabFocusTargets[1].focus).toHaveBeenCalledOnce()
-      expect(renderer.root.findAllByProps({ role: 'tab' }).map((tab) => tab.props.tabIndex))
+      expect(renderer.root
+        .findAllByProps({ role: 'tab' })
+        .filter((tab) => String(tab.props.id ?? '').startsWith('provider-settings-tab-'))
+        .map((tab) => tab.props.tabIndex))
         .toEqual([-1, 0, -1, -1])
       expect(activePanelText(renderer)).toContain('Provider models')
       expect(activePanelText(renderer)).toContain('Fetch models')
       expect(activePanelText(renderer)).not.toContain('Provider connection')
+      const modelSearch = renderer.root.findByProps({
+        placeholder: 'providerModelSearchPlaceholder'
+      })
+      await act(async () => {
+        modelSearch.props.onChange({ target: { value: 'custom-model-9' } })
+      })
 
       await clickProviderTab(renderer, 'Capabilities')
       expect(activePanelText(renderer)).toContain('Image capability')
@@ -1173,6 +1375,11 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
         'aria-label': 'Configure: Image capability'
       })
       expect(imageCapabilityConfigure.props['aria-controls']).toBe('provider-capability-image')
+
+      await clickProviderTab(renderer, 'Models')
+      expect(renderer.root.findByProps({
+        placeholder: 'providerModelSearchPlaceholder'
+      }).props.value).toBe('custom-model-9')
 
       await clickProviderTab(renderer, 'Advanced')
       const customIdInput = renderer.root.findAllByType('input')
@@ -1191,8 +1398,9 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       expect(rendererText(renderer)).not.toContain('Danger zone')
     })
 
-    it('renders retry status codes in the Advanced task without spaces', async () => {
+    it('renders and persists provider retry controls in the Advanced tab', async () => {
       const provider = defaultModelProviderSettings()
+      const update = vi.fn()
       const customProvider = {
         id: 'retry-provider',
         name: 'Retry Provider',
@@ -1209,6 +1417,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       } satisfies ModelProviderProfileV1
       const renderer = await mountProviders({
         ...baseCtx(),
+        update,
         provider: {
           ...provider,
           providers: [...provider.providers, customProvider]
@@ -1226,8 +1435,61 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       expect(renderer.root.findAllByType('input').some((input) => input.props.value === '429,503')).toBe(true)
       expect(renderer.root.findAllByType('input').some((input) => input.props.value === '429, 503')).toBe(false)
       expect(panelText).toContain('Separate multiple status codes with commas, for example 429,503.')
+      expect(panelText).toContain('Excludes the initial request. Default 5, maximum 10.')
       expect(panelText.indexOf('Separate multiple status codes with commas, for example 429,503.'))
         .toBeLessThan(panelText.indexOf('Retry attempts'))
+
+      const retryCountInput = renderer.root.findAllByType('input')
+        .find((input) => input.props.type === 'number' && input.props.value === 3)
+      expect(retryCountInput).toBeDefined()
+      await act(async () => retryCountInput!.props.onChange({ target: { value: '7' } }))
+
+      const updatedProviders = update.mock.calls.at(-1)?.[0]?.provider?.providers as
+        | ModelProviderProfileV1[]
+        | undefined
+      expect(updatedProviders?.find((item) => item.id === customProvider.id)?.retry?.maxAttempts)
+        .toBe(7)
+    })
+
+    it('restores the five-retry default when provider retries are re-enabled', async () => {
+      const provider = defaultModelProviderSettings()
+      const update = vi.fn()
+      const disabledProvider = {
+        ...provider.providers[0]!,
+        id: 'retry-disabled',
+        name: 'Retry Disabled',
+        retry: {
+          maxAttempts: 0,
+          initialDelayMs: 3000,
+          httpStatusCodes: [429, 503]
+        }
+      } satisfies ModelProviderProfileV1
+      const renderer = await mountProviders({
+        ...baseCtx(),
+        update,
+        provider: {
+          ...provider,
+          providers: [...provider.providers, disabledProvider]
+        },
+        kun: {
+          ...defaultKunRuntimeSettings(),
+          providerId: disabledProvider.id
+        }
+      })
+
+      await clickProviderTab(renderer, 'Advanced')
+      const retryToggle = renderer.root.findByProps({
+        role: 'switch',
+        'aria-label': 'Failure retry'
+      })
+      expect(retryToggle.props['aria-checked']).toBe(false)
+      await act(async () => retryToggle.props.onClick())
+
+      const updatedProviders = update.mock.calls.at(-1)?.[0]?.provider?.providers as
+        | ModelProviderProfileV1[]
+        | undefined
+      expect(updatedProviders?.find((item) => item.id === disabledProvider.id)?.retry?.maxAttempts)
+        .toBe(5)
     })
 
     it('locks preset IDs, blocks probes without required credentials, and limits the danger zone', async () => {
@@ -1416,6 +1678,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       expect(regionTab('United States').props['aria-selected']).toBe(true)
       expect(instanceText(renderer.root.findByProps({ role: 'dialog' }))).toContain('Claude (Pro/Max 订阅)')
       expect(instanceText(renderer.root.findByProps({ role: 'dialog' }))).toContain('ChatGPT 订阅')
+      expect(instanceText(renderer.root.findByProps({ role: 'dialog' }))).toContain('Ollama Cloud')
       expect(instanceText(renderer.root.findByProps({ role: 'dialog' }))).not.toContain('Kimi Code')
 
       await act(async () => regionTab('All').props.onClick())
@@ -1464,6 +1727,102 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
         }
       })
       expect(rendererText(renderer)).not.toContain('Unsaved')
+    })
+
+    it('configures Ollama Cloud and imports only provider-confirmed models with catalog metadata', async () => {
+      const settings = defaultModelProviderSettings()
+      const preset = getModelProviderPreset('ollama')
+      expect(preset).not.toBeNull()
+      const target = {
+        ...modelProviderPresetProfile(preset!, 'ollama-secret'),
+        models: [],
+        modelProfiles: {}
+      }
+      const update = vi.fn()
+      probeModelProvider.mockResolvedValueOnce({
+        ok: true,
+        latencyMs: 12,
+        modelIds: ['gpt-oss:120b', 'ollama-new:model']
+      })
+      fetchModelsDevCatalog.mockResolvedValueOnce({
+        status: 'ok',
+        providerKey: 'ollama-cloud',
+        providerName: 'Ollama Cloud',
+        matchMode: 'enrichment-only',
+        stale: false,
+        models: [
+          {
+            id: 'gpt-oss:120b',
+            reasoning: true,
+            toolCalling: true,
+            inputModalities: ['text'],
+            outputModalities: ['text'],
+            contextWindowTokens: 131_072,
+            maxOutputTokens: 32_768
+          },
+          {
+            id: 'catalog-only',
+            inputModalities: ['text'],
+            outputModalities: ['text']
+          }
+        ]
+      })
+      const renderer = await mountProviders({
+        ...baseCtx(),
+        provider: { ...settings, providers: [...settings.providers, target] },
+        kun: {
+          ...defaultKunRuntimeSettings(),
+          providerId: target.id
+        },
+        update
+      })
+
+      expect(rendererText(renderer)).toContain('Ollama Cloud')
+      expect(renderer.root.findAllByType('input')
+        .some((input) => input.props.value === 'Ollama Cloud')).toBe(true)
+      expect(renderer.root.findAllByType('input')
+        .some((input) => input.props.value === 'https://ollama.com/v1')).toBe(true)
+      expect(renderer.root.findAllByType('input')
+        .some((input) => input.props.value === 'ollama-secret')).toBe(true)
+
+      await clickProviderTab(renderer, 'Models')
+      await act(async () => {
+        findButton(renderer, 'Fetch models').props.onClick()
+        await Promise.resolve()
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+
+      expect(probeModelProvider).toHaveBeenCalledWith({
+        baseUrl: 'https://ollama.com/v1',
+        apiKey: 'ollama-secret',
+        endpointFormat: 'chat_completions'
+      })
+      expect(fetchModelsDevCatalog).toHaveBeenCalledWith({
+        providerId: 'ollama',
+        baseUrl: 'https://ollama.com/v1',
+        forceRefresh: true
+      })
+      const importDialog = renderer.root.findByProps({ role: 'dialog' })
+      expect(instanceText(importDialog)).toContain('gpt-oss:120b')
+      expect(instanceText(importDialog)).toContain('ollama-new:model')
+      expect(instanceText(importDialog)).not.toContain('catalog-only')
+
+      await act(async () => findButton(renderer, 'Import 2').props.onClick())
+      const updatedProviders = update.mock.calls[0]?.[0]?.provider?.providers as ModelProviderProfileV1[]
+      const updatedOllama = updatedProviders.find((provider) => provider.id === 'ollama')
+      expect(updatedOllama?.models).toEqual(['gpt-oss:120b', 'ollama-new:model'])
+      expect(updatedOllama?.modelProfiles['gpt-oss:120b']).toMatchObject({
+        contextWindowTokens: 131_072,
+        maxOutputTokens: 32_768,
+        supportsToolCalling: true,
+        reasoning: {
+          supportedEfforts: ['auto'],
+          defaultEffort: 'auto',
+          requestProtocol: 'none'
+        }
+      })
+      expect(updatedOllama?.modelProfiles['ollama-new:model']).toBeUndefined()
     })
 
     it('adds repeated Token Plan accounts with independent numbered identities', async () => {
@@ -1625,7 +1984,10 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
 
       expect(rendererText(renderer)).toContain('Ready')
       expect(rendererText(renderer)).toContain('Could not apply')
-      expect(renderer.root.findAllByType('span')
+      const providersPanel = renderer.root.findByProps({
+        id: 'provider-workspace-panel-providers'
+      })
+      expect(providersPanel.findAllByType('span')
         .filter((span) => span.props.title === 'Disk is read-only')).toHaveLength(1)
       expect(findButton(renderer, 'Test connection').props.disabled).toBe(false)
 
@@ -1808,27 +2170,134 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
     expect(html).not.toContain('imageGen')
   })
 
-  it('renders unified permission controls with bypass as the default mode', () => {
+  it('renders exactly three unified permission controls with full access as the default', () => {
     const html = renderToStaticMarkup(createElement(AgentsSettingsSection, { ctx: baseCtx() }))
 
     expect(html).toContain('Permissions')
-    expect(html).toContain('Tool confirmation and local permissions are unified')
+    expect(html).toContain('Choose who reviews approval-worthy actions or grant full access')
     expect(html).toContain('Tool permission mode')
     expect(html).toContain('role="radiogroup"')
-    expect(html).toContain('Every tool call asks first')
-    expect(html).toContain('Read tools run automatically')
-    expect(html).toContain('Sensitive operations ask first')
-    expect(html).toContain('Asks before workspace file changes')
-    expect(html).toContain('Workspace file changes run without prompts')
-    expect(html).toContain('Never asks and has full access')
+    expect(html.match(/role="radio"/g)).toHaveLength(3)
+    expect(html).toContain('Ask for approval')
+    expect(html).toContain('Approval-worthy actions ask you first')
+    expect(html).toContain('Approve for me')
+    expect(html).toContain('Your selected model reviews approval-worthy actions')
+    expect(html).toContain('Full access')
+    expect(html).toContain('Unrestricted files, host commands, and network-capable tools')
     expect(html).toContain('lucide-hand')
-    expect(html).toContain('lucide-eye')
-    expect(html).toContain('lucide-shield-question')
-    expect(html).toContain('lucide-folder-pen')
-    expect(html).toContain('lucide-shield-check')
+    expect(html).toContain('lucide-bot')
     expect(html).toContain('lucide-lock-keyhole-open')
     expect(html).not.toContain('Approval policy')
     expect(html).not.toContain('Sandbox mode')
+  })
+
+  it('applies the complete full-access mapping only from trusted activation', () => {
+    const updateKun = vi.fn()
+    let renderer!: ReactTestRenderer
+    act(() => {
+      renderer = createRenderer(createElement(AgentsSettingsSection, {
+        ctx: {
+          ...baseCtx(),
+          kun: {
+            ...defaultKunRuntimeSettings(),
+            approvalPolicy: 'on-request',
+            sandboxMode: 'workspace-write',
+            approvalReviewer: 'user'
+          },
+          updateKun
+        }
+      }))
+    })
+    const fullAccess = renderer.root
+      .findAllByProps({ role: 'radio' })
+      .find((button) => instanceText(button).includes('Full access'))
+    expect(fullAccess).toBeDefined()
+
+    act(() => {
+      fullAccess?.props.onClick({ isTrusted: false })
+    })
+    expect(updateKun).not.toHaveBeenCalled()
+
+    act(() => {
+      fullAccess?.props.onClick({ isTrusted: true })
+    })
+    expect(updateKun).toHaveBeenCalledWith({
+      approvalPolicy: 'auto',
+      sandboxMode: 'danger-full-access',
+      approvalReviewer: 'user'
+    })
+  })
+
+  it('keeps permissions in the assistant and experimental features in a standalone laboratory', () => {
+    let renderer!: ReactTestRenderer
+    act(() => {
+      renderer = createRenderer(createElement(AgentsSettingsSection, {
+        ctx: {
+          ...baseCtx(),
+          settingsSection: 'permissions'
+        }
+      }))
+    })
+
+    const primaryPermissionsPanel = renderer.root.findByProps({
+      id: 'agents-settings-panel-permissions'
+    })
+    expect(renderer.root.findByProps({
+      id: 'agents-settings-tab-permissions'
+    }).props['aria-selected']).toBe(true)
+    expect(primaryPermissionsPanel.props.className).not.toContain('hidden')
+
+    const secondaryTabs = renderer.root
+      .findAllByProps({ role: 'tab' })
+      .filter((tab) => String(tab.props.id ?? '').startsWith('agents-permissions-tab-'))
+    expect(secondaryTabs.map(instanceText)).toEqual([
+      'Tool permission mode',
+      'Design quality'
+    ])
+    expect(secondaryTabs.map((tab) => tab.props['aria-selected']))
+      .toEqual([true, false])
+    expect(secondaryTabs.map((tab) => tab.props['aria-controls'])).toEqual([
+      'agents-permissions-panel-policy',
+      'agents-permissions-panel-quality'
+    ])
+
+    const secondaryPanels = renderer.root
+      .findAllByProps({ role: 'tabpanel' })
+      .filter((panel) => String(panel.props.id ?? '').startsWith('agents-permissions-panel-'))
+    expect(secondaryPanels).toHaveLength(2)
+    expect(secondaryPanels.map((panel) => panel.props.hidden))
+      .toEqual([false, true])
+    expect(secondaryPanels[0].findAllByProps({ role: 'radiogroup' })).toHaveLength(1)
+    expect(renderer.root.findAllByProps({ id: 'agents-settings-tab-laboratory' })).toHaveLength(0)
+
+    act(() => {
+      renderer = createRenderer(createElement(LaboratorySettingsSection, {
+        ctx: baseCtx()
+      }))
+    })
+
+    const laboratoryTabs = renderer.root
+      .findAllByProps({ role: 'tab' })
+      .filter((tab) => String(tab.props.id ?? '').startsWith('laboratory-settings-tab-'))
+    expect(laboratoryTabs.map(instanceText)).toEqual([
+      'Computer control',
+      'Browser',
+      'Graph mode'
+    ])
+    expect(laboratoryTabs.map((tab) => tab.props['aria-selected']))
+      .toEqual([true, false, false])
+    expect(laboratoryTabs.map((tab) => tab.props['aria-controls'])).toEqual([
+      'laboratory-settings-panel-computer',
+      'laboratory-settings-panel-browser',
+      'laboratory-settings-panel-graph'
+    ])
+
+    const laboratoryPanels = renderer.root
+      .findAllByProps({ role: 'tabpanel' })
+      .filter((panel) => String(panel.props.id ?? '').startsWith('laboratory-settings-panel-'))
+    expect(laboratoryPanels).toHaveLength(3)
+    expect(laboratoryPanels.map((panel) => panel.props.hidden))
+      .toEqual([false, true, true])
   })
 
   it('renders pure JSONL as a selectable storage backend', () => {
@@ -2091,6 +2560,9 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       ['zhipu-coding-plan', 'Zhipu Coding Plan', 'https://open.bigmodel.cn/api/coding/paas/v4/chat/completions', 'custom_endpoint'],
       ['zai-coding-plan', 'Z.ai Coding Plan', 'https://api.z.ai/api/coding/paas/v4/chat/completions', 'custom_endpoint'],
       ['kimi-code', 'Kimi Code', 'https://api.kimi.com/coding/v1'],
+      ['volcengine', 'Volcano Ark API', 'https://ark.cn-beijing.volces.com/api/v3'],
+      ['volcengine-agent-plan', 'Volcano Ark Agent Plan', 'https://ark.cn-beijing.volces.com/api/plan/v3'],
+      ['volcengine-coding-plan', 'Volcano Ark Coding Plan', 'https://ark.cn-beijing.volces.com/api/coding/v3'],
       ['moonshot-cn', 'Moonshot CN', 'https://api.moonshot.cn/v1'],
       ['moonshot-global', 'Moonshot Global', 'https://api.moonshot.ai/v1']
     ] as const

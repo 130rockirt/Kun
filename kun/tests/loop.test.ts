@@ -192,7 +192,9 @@ describe('AgentLoop', () => {
     expect(instructions).toContain('Specialized source-code MCP tools are available')
     expect(instructions).toContain('`mcp_semantic_find_symbol`')
     expect(instructions).toContain('before broad scans')
-    expect(instructions).toContain('Use `read`, `grep`, `find`, `ls`, `repo_map` for unsupported files')
+    expect(instructions).toContain(
+      'Use `read`, `grep`, `glob`, `ls`, `repo_map` for unsupported files'
+    )
   })
 
   it('records elapsed seconds for active goals after a turn finishes', async () => {
@@ -297,8 +299,8 @@ describe('AgentLoop', () => {
       'input_received',
       'input_cached',
       'input_routed',
-      'input_compressed',
       'input_remembered',
+      'input_compressed',
       'pre_send',
       'post_send',
       'response_received'
@@ -334,6 +336,110 @@ describe('AgentLoop', () => {
       softThresholdTokens: 750,
       hardThresholdTokens: 850
     })
+  })
+
+  it('compacts from complete request overhead before dispatching the rebuilt request', async () => {
+    const requests: ModelRequest[] = []
+    const h = makeHarness({
+      provider: 'preflight',
+      model: 'preflight',
+      async *stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
+        requests.push(request)
+        yield { kind: 'completed', stopReason: 'stop' }
+      }
+    }, {
+      tools: [],
+      compactor: new ContextCompactor({ softThreshold: 220, hardThreshold: 320 }),
+      instructionRuntime: {
+        resolveTurn: async () => ({
+          instruction: `Large dynamic instruction ${'z'.repeat(1_200)}`,
+          sources: [],
+          injectedBytes: 1_226
+        })
+      } as never,
+      modelCapabilities: (model) => ({
+        id: model,
+        inputModalities: ['text'],
+        outputModalities: ['text'],
+        supportsToolCalling: true,
+        contextWindowTokens: 2_000,
+        messageParts: ['text']
+      })
+    })
+    await h.threadStore.upsert(
+      createThreadRecord({ id: h.threadId, title: 'demo', workspace: '/tmp', model: 'preflight' })
+    )
+    for (let index = 0; index < 4; index += 1) {
+      await h.sessionStore.appendItem(h.threadId, makeUserItem({
+        id: `old_preflight_${index}`,
+        turnId: `old_turn_${index}`,
+        threadId: h.threadId,
+        text: `old context ${index} ${'x'.repeat(80)}`
+      }))
+    }
+    const started = await h.turns.startTurn({
+      threadId: h.threadId,
+      request: { prompt: 'keep this current request' }
+    })
+    h.turnId = started.turnId
+
+    await expect(h.loop.runTurn(h.threadId, h.turnId)).resolves.toBe('completed')
+
+    expect(requests).toHaveLength(1)
+    expect(requests[0]?.history[0]).toMatchObject({ kind: 'compaction' })
+    expect(requests[0]?.history).toContainEqual(expect.objectContaining({
+      kind: 'user_message',
+      text: 'keep this current request'
+    }))
+    const events = await h.sessionStore.loadEventsSince(h.threadId, 0)
+    expect(events).toContainEqual(expect.objectContaining({
+      kind: 'compaction_completed',
+      replacedTokens: expect.any(Number)
+    }))
+    expect(events).toContainEqual(expect.objectContaining({
+      kind: 'pipeline_stage',
+      stage: 'input_compressed',
+      details: expect.objectContaining({
+        requestOverheadTokens: expect.any(Number)
+      })
+    }))
+  })
+
+  it('blocks an uncompactable oversized request before model transport dispatch', async () => {
+    let dispatches = 0
+    const h = makeHarness({
+      provider: 'preflight-block',
+      model: 'preflight-block',
+      async *stream(): AsyncIterable<ModelStreamChunk> {
+        dispatches += 1
+        yield { kind: 'completed', stopReason: 'stop' }
+      }
+    }, {
+      tools: [],
+      compactor: new ContextCompactor({ softThreshold: 100, hardThreshold: 200 }),
+      modelCapabilities: (model) => ({
+        id: model,
+        inputModalities: ['text'],
+        outputModalities: ['text'],
+        supportsToolCalling: true,
+        contextWindowTokens: 500,
+        messageParts: ['text']
+      })
+    })
+    await bootstrapThread(h, {
+      request: { prompt: `uncompactable current input ${'x'.repeat(4_000)}` }
+    })
+
+    await expect(h.loop.runTurn(h.threadId, h.turnId)).resolves.toBe('failed')
+
+    expect(dispatches).toBe(0)
+    const events = await h.sessionStore.loadEventsSince(h.threadId, 0)
+    expect(events).toContainEqual(expect.objectContaining({
+      kind: 'error',
+      code: 'context_window_exceeded',
+      message: expect.stringContaining('request exceeds the 425-token context cap')
+    }))
+    expect(events.some((event) => event.kind === 'context_snapshot')).toBe(false)
   })
 
   it('records provider endpoint diagnostics for model send stages', async () => {
@@ -880,7 +986,7 @@ describe('AgentLoop', () => {
       kind: 'tool_catalog_changed',
       changeKind: 'additive'
     })
-    expect(items.some((item) => item.kind === 'error' && item.code === 'tool_catalog_changed')).toBe(true)
+    expect(items.some((item) => item.kind === 'error' && item.code === 'tool_catalog_changed')).toBe(false)
     expect(seenInstructions[1]?.some((text) => text.includes('Tool catalog changed'))).toBe(true)
     expect(seenInstructions[1]?.some((text) => text.includes('next turn'))).toBe(true)
     expect(seenToolNames[0]).toEqual(['echo'])
@@ -944,11 +1050,7 @@ describe('AgentLoop', () => {
       kind: 'tool_catalog_changed',
       changeKind: 'breaking'
     })
-    expect(items.find((item) => item.kind === 'error' && item.code === 'tool_catalog_changed'))
-      .toMatchObject({
-        kind: 'error',
-        message: expect.stringContaining('next turn')
-      })
+    expect(items.some((item) => item.kind === 'error' && item.code === 'tool_catalog_changed')).toBe(false)
   })
 
 	  it('runs consecutive built-in read-only tool calls in a deterministic parallel batch', async () => {
@@ -1225,6 +1327,72 @@ describe('AgentLoop', () => {
 	      toolName: 'echo'
 	    })
 	  })
+
+  it('suppresses the third identical Graph run inspection within a turn', async () => {
+    let executions = 0
+    const inspectTool = LocalToolHost.defineTool({
+      name: 'graph_control_run',
+      description: 'Inspect a durable Graph run.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          action: { type: 'string' },
+          runId: { type: 'string' }
+        },
+        required: ['action', 'runId']
+      },
+      policy: 'auto',
+      execute: async () => {
+        executions += 1
+        return { output: { seq: executions } }
+      }
+    })
+    let calls = 0
+    const h = makeHarness(
+      {
+        provider: 'graph-inspect-model',
+        model: 'graph-inspect-model',
+        async *stream(): AsyncIterable<ModelStreamChunk> {
+          calls += 1
+          if (calls <= 3) {
+            yield {
+              kind: 'tool_call_complete',
+              callId: `call_graph_inspect_${calls}`,
+              toolName: 'graph_control_run',
+              arguments: { action: 'inspect', runId: 'run_1' }
+            }
+            yield { kind: 'completed', stopReason: 'tool_calls' }
+            return
+          }
+          yield { kind: 'completed', stopReason: 'stop' }
+        }
+      },
+      { tools: [inspectTool] }
+    )
+    await bootstrapThread(h)
+
+    const status = await h.loop.runTurn(h.threadId, h.turnId)
+    const items = await h.sessionStore.loadItems(h.threadId)
+    const events = await h.sessionStore.loadEventsSince(h.threadId, 0)
+    const stormResult = items.find(
+      (item) => item.kind === 'tool_result' && item.callId === 'call_graph_inspect_3'
+    )
+    const thirdCall = items.find(
+      (item) => item.kind === 'tool_call' && item.callId === 'call_graph_inspect_3'
+    )
+
+    expect(status).toBe('completed')
+    expect(executions).toBe(2)
+    expect(thirdCall).toMatchObject({ kind: 'tool_call', status: 'failed' })
+    expect(stormResult?.kind === 'tool_result' ? stormResult.isError : false).toBe(true)
+    expect(stormResult?.kind === 'tool_result' ? JSON.stringify(stormResult.output) : '')
+      .toContain('repeat-loop guard suppressed')
+    expect(events.find((event) => event.kind === 'tool_storm_suppressed')).toMatchObject({
+      kind: 'tool_storm_suppressed',
+      callId: 'call_graph_inspect_3',
+      toolName: 'graph_control_run'
+    })
+  })
 
 	  it('can disable the storm breaker through loop config', async () => {
 	    let executions = 0
@@ -2230,7 +2398,7 @@ describe('AgentLoop', () => {
       const status = await h.loop.runTurn(h.threadId, h.turnId)
       expect(status).toBe('completed')
       expect(observedToolLists[0]).toContain(CREATE_PLAN_TOOL_NAME)
-      expect(observedRequiredToolNames).toEqual([CREATE_PLAN_TOOL_NAME, undefined])
+      expect(observedRequiredToolNames).toEqual([undefined, undefined])
       await expect(readFile(join(workspace, '.kunsdd/plan/auth.md'), 'utf8')).resolves.toBe('# Generated plan')
       const turn = await h.turns.getTurn(h.threadId, h.turnId)
       expect(turn?.guiPlan?.relativePath).toBe('.kunsdd/plan/auth.md')
@@ -2433,15 +2601,12 @@ describe('AgentLoop', () => {
       const writeResult = items.find((item) => item.kind === 'tool_result' && item.toolName === 'write')
 
       expect(status).toBe('completed')
-      expect(observedToolLists[0]).not.toEqual(expect.arrayContaining(['write', 'edit', 'bash']))
+      expect(observedToolLists[0]).toEqual(expect.arrayContaining(['write', 'edit', 'git_inspect']))
+      expect(observedToolLists[0]).not.toContain('bash')
       expect(writeCall).toMatchObject({ kind: 'tool_call', status: 'failed' })
       expect(writeResult).toMatchObject({ kind: 'tool_result', isError: true })
       expect(writeResult?.kind === 'tool_result' ? JSON.stringify(writeResult.output) : '')
-        .toContain('not advertised by active tool policy')
-      // Plan-mode rejection steers the model to create_plan rather than the
-      // generic "use advertised tools" note.
-      expect(writeResult?.kind === 'tool_result' ? JSON.stringify(writeResult.output) : '')
-        .toContain('create_plan')
+        .toContain('plan_mode_write_blocked')
       await expect(readFile(join(workspace, 'forbidden.txt'), 'utf8')).rejects.toThrow()
       await expect(readFile(join(workspace, '.kunsdd/plan/plan-a-safe-change.md'), 'utf8')).resolves.toBe(
         '## Plan\nStay read-only until build mode.'
@@ -2549,7 +2714,7 @@ describe('AgentLoop', () => {
     }
   })
 
-  it('keeps requiring create_plan after unrelated tool calls in a GUI plan turn', async () => {
+  it('keeps create_plan as a soft completion condition after unrelated tool calls', async () => {
     const workspace = await mkdtemp(join(tmpdir(), 'kun-loop-plan-other-tool-'))
     const observedRequiredToolNames: Array<string | undefined> = []
     let calls = 0
@@ -2594,7 +2759,7 @@ describe('AgentLoop', () => {
       const status = await h.loop.runTurn(h.threadId, h.turnId)
 
       expect(status).toBe('completed')
-      expect(observedRequiredToolNames).toEqual([CREATE_PLAN_TOOL_NAME, CREATE_PLAN_TOOL_NAME, undefined])
+      expect(observedRequiredToolNames).toEqual([undefined, undefined, undefined])
       await expect(readFile(join(workspace, '.kunsdd/plan/auth.md'), 'utf8')).resolves.toBe(
         '## Plan\nImplement auth after checking context.'
       )
@@ -2682,9 +2847,9 @@ describe('AgentLoop', () => {
       await expect(run).resolves.toBe('completed')
       expect(requests).toHaveLength(4)
       expect(requests[2]).toMatchObject({
-        model: model.model,
-        requiredToolName: CREATE_PLAN_TOOL_NAME
+        model: model.model
       })
+      expect(requests[2]?.requiredToolName).toBeUndefined()
       expect(requests[2]?.modeInstruction).toContain('You are in Plan mode.')
       expect(requests[2]?.history).toEqual(expect.arrayContaining([
         expect.objectContaining({
@@ -3522,7 +3687,7 @@ describe('AgentLoop', () => {
     )
     const { turnId } = await h.turns.startTurn({
       threadId: h.threadId,
-      request: { prompt: 'hello', model: 'auto' }
+      request: { prompt: 'Help me choose the appropriate approach', model: 'auto' }
     })
 
     await h.loop.runTurn(h.threadId, turnId)
@@ -3556,7 +3721,11 @@ describe('AgentLoop', () => {
     )
     const { turnId } = await h.turns.startTurn({
       threadId: h.threadId,
-      request: { prompt: 'hello', model: 'auto', reasoningEffort: 'low' }
+      request: {
+        prompt: 'Help me choose the appropriate approach',
+        model: 'auto',
+        reasoningEffort: 'low'
+      }
     })
 
     await h.loop.runTurn(h.threadId, turnId)
@@ -3589,7 +3758,7 @@ describe('AgentLoop', () => {
     )
     const { turnId } = await h.turns.startTurn({
       threadId: h.threadId,
-      request: { prompt: 'hello' }
+      request: { prompt: 'Help me choose the appropriate approach' }
     })
 
     await h.loop.runTurn(h.threadId, turnId)

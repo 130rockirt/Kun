@@ -127,10 +127,10 @@ Example:
 
 ```bash
 kun serve \
-  --config ~/.deepseekgui/kun/config.json \
+  --config ~/.kun/data/config.json \
   --host 127.0.0.1 \
   --port 18899 \
-  --data-dir ~/.deepseekgui/kun \
+  --data-dir ~/.kun/data \
   --runtime-token dev-token \
   --api-key "$DEEPSEEK_API_KEY" \
   --model deepseek-v4-pro
@@ -139,14 +139,16 @@ kun serve \
 Kun can also run as a standalone agent without the GUI:
 
 ```bash
-kun run --data-dir ~/.deepseekgui/kun --workspace "$PWD" "summarize this repo"
-kun chat --data-dir ~/.deepseekgui/kun --workspace "$PWD"
-kun exec --data-dir ~/.deepseekgui/kun --workspace "$PWD" --list-tools
-kun exec --data-dir ~/.deepseekgui/kun --workspace "$PWD" read --args '{"path":"README.md"}'
+kun run --data-dir ~/.kun/data --workspace "$PWD" "summarize this repo"
+kun chat --data-dir ~/.kun/data --workspace "$PWD"
+kun --data-dir ~/.kun/data --workspace "$PWD"
+kun exec --data-dir ~/.kun/data --workspace "$PWD" --list-tools
+kun exec --data-dir ~/.kun/data --workspace "$PWD" read --args '{"path":"README.md"}'
 ```
 
 - `kun run` creates a thread, runs one turn, streams assistant text, and exits.
 - `kun chat` starts a line-oriented REPL. Use `/exit`, `/quit`, or an empty line to stop.
+- Bare `kun` (or its `kun tui` alias) attaches to or starts the shared background runtime. Its inline pi-tui interface preserves terminal scrollback and shares live HTTP/SSE state with the GUI. See [the TUI guide](../docs/kun-tui.en.md).
 - `kun exec --list-tools` prints the effective dynamic tool registry for the chosen config/workspace.
 - `kun exec <tool> --args <json>` invokes one tool directly. Use `--json` on `run` or `exec` for machine-readable output.
 
@@ -184,7 +186,7 @@ Kun also reads `{data-dir}/config.json` when it exists. In the GUI's
 default setup this is:
 
 ```text
-~/.deepseekgui/kun/config.json
+~/.kun/data/config.json
 ```
 
 Shape:
@@ -194,7 +196,7 @@ Shape:
   "serve": {
     "host": "127.0.0.1",
     "port": 18899,
-    "dataDir": "~/.deepseekgui/kun",
+    "dataDir": "~/.kun/data",
     "runtimeToken": "",
     "apiKey": "",
     "baseUrl": "https://api.deepseek.com/beta",
@@ -324,7 +326,7 @@ Feature flags are intentionally explicit:
 - `serve.tokenEconomy` / `tokenEconomyMode` compresses tool descriptions, tool results, and history context while preserving code, paths, commands, URLs, errors, and other high-value signals.
 - `contextCompaction` controls fallback long-thread compaction thresholds and summary behavior. Per-model thresholds live in `models.profiles`. Compaction preserves goals, constraints, decisions, touched files, tool outcomes, and unresolved next steps.
 - `serve.runtimeTuning.toolStorm` suppresses repeated identical tool calls within a turn so useless tool loops do not keep spending tokens.
-- `runtime.streamIdleTimeoutMs` (top-level in `config.json`) caps the idle gap between streaming chunks before a turn fails with `stream_idle_timeout` (default `45000`). Raise it for local model servers that stay silent while prefilling a very large prompt; set `0` to disable the guard.
+- `runtime.streamIdleTimeoutMs` (top-level in `config.json`) caps the idle gap between streaming chunks before a turn fails with `stream_idle_timeout` (default `450000`, or 7.5 minutes). Raise it for local model servers that stay silent while prefilling a very large prompt; set `0` to disable the guard.
 - `capabilities.web` exposes `web_fetch` and/or `web_search`. The built-in provider can fetch HTTP(S) pages; search requires a provider implementation and may report unavailable.
 - `capabilities.skills` scans configured roots for `skill.json` manifests and, when `legacySkillMd` is true, older `SKILL.md` directories.
 - `capabilities.attachments` stores image bytes outside thread logs and allows turns to reference `attachmentIds`. Vision-capable models receive image parts; text-only models receive a bounded compressed base64 text fallback.
@@ -363,7 +365,7 @@ Settings page reads both routes.
 Hooks let external commands observe and intervene in the agent
 lifecycle without rebuilding Kun. They are configured under the
 top-level `hooks` key in `config.json` (so the GUI's
-`~/.deepseekgui/kun/config.json` works out of the box) and run inside
+`~/.kun/data/config.json` works out of the box) and run inside
 the serve runtime — main loop, subagents, and CLI alike.
 
 ```json
@@ -459,9 +461,9 @@ The HTTP server exposes the following routes under `/v1/*`:
 | GET | `/v1/threads?include=side` | list threads (most recently updated first); side threads are hidden unless `include=side` is passed |
 | POST | `/v1/threads` | create a thread |
 | GET | `/v1/threads/{id}` | read a thread with its turns |
-| PATCH | `/v1/threads/{id}` | update title/status/approval/sandbox/relation (promote a side thread by setting `relation: "primary"`) |
+| PATCH | `/v1/threads/{id}` | update title/status/mode/approval/sandbox/relation and `additionalWorkspaces` (promote a side thread by setting `relation: "primary"`) |
 | DELETE | `/v1/threads/{id}` | delete a thread |
-| POST | `/v1/threads/{id}/fork` | fork the thread. Optional JSON body: `{ "relation": "fork" \| "side", "title"?: string }` (defaults to `fork` when omitted). `relation: "side"` marks the result as a side conversation and tags `parentThreadId`. |
+| POST | `/v1/threads/{id}/fork` | fork the thread. Optional JSON body: `{ "relation": "fork" \| "side", "title"?: string, "turnId"?: string, "beforeTurn"?: boolean }` (defaults to `fork` when omitted). `turnId` limits the snapshot to one turn and `beforeTurn` excludes that turn for non-destructive undo. `relation: "side"` marks the result as a side conversation and tags `parentThreadId`. |
 | POST | `/v1/threads/{id}/turns` | start a turn |
 | GET | `/v1/threads/{id}/turns/{turnId}` | read a single turn |
 | POST | `/v1/threads/{id}/turns/{turnId}/steer` | queue steering text |

@@ -9,7 +9,11 @@ import type {
   CoreRuntimeSkillJson,
   CoreRuntimeToolDiagnosticsJson
 } from './kun-contract'
-import type { ApprovalPolicy, SandboxMode } from '@shared/app-settings'
+import type {
+  ApprovalPolicy,
+  ApprovalReviewer,
+  SandboxMode
+} from '@shared/app-settings'
 import type { ComposerContextAttachment } from '@kun/extension-api'
 
 export type ToolItemKind = 'tool_call' | 'command_execution' | 'file_change'
@@ -80,6 +84,14 @@ export type ComponentPrototypeMetadata = {
   error?: string
 }
 
+export type RuntimeChildActivity = {
+  phase: 'starting' | 'thinking' | 'responding' | 'tool' | 'retrying' | 'compacting' | 'waiting'
+  label: string
+  toolName?: string
+  startedAt: string
+  updatedAt: string
+}
+
 export type UserFileReference = {
   path: string
   relativePath: string
@@ -98,6 +110,8 @@ export type RuntimeChildMetadata = {
   childProfileName?: string
   /** Model override the child ran under, when one was resolved. */
   childModel?: string
+  /** Provider the child ran through, when one was resolved. */
+  childProviderId?: string
   /** Tool policy applied to the child run. */
   childToolPolicy?: 'readOnly' | 'inherit'
   childStatus: 'queued' | 'running' | 'completed' | 'failed' | 'aborted'
@@ -112,6 +126,15 @@ export type RuntimeChildMetadata = {
   cacheHitRate?: number | null
   costUsd?: number
   costCny?: number
+  /** Safe bounded liveness projection; never includes reasoning or tool output. */
+  activity?: RuntimeChildActivity
+}
+
+export type RuntimeChildEventPayload = {
+  child: RuntimeChildMetadata
+  /** Monotonic sequence from the parent thread event stream. */
+  seq?: number
+  timestamp?: string
 }
 
 export type WebCitationSource = {
@@ -126,7 +149,7 @@ export type RuntimeDisclosureMetadata = {
   /** Persisted turn routing hint so edit/resend can rebuild live canvas context. */
   guiDesignCanvas?: boolean
   guiDesignMode?: boolean
-  messageSource?: 'background_shell' | 'background_subagent' // client-only rendering hint; never sent to the runtime
+  messageSource?: 'background_shell' | 'background_subagent' | 'graph_runtime' // client-only rendering hint; never sent to the runtime
   turnId?: string
   workspaceCheckpointId?: string
   attachmentIds?: string[]
@@ -179,6 +202,9 @@ export type NormalizedThread = {
   status?: string
   approvalPolicy?: ApprovalPolicy
   sandboxMode?: SandboxMode
+  approvalReviewer?: ApprovalReviewer
+  /** Whether future model requests are retained for Agent Perspective. */
+  modelRequestCaptureEnabled?: boolean
   /** Optional provider id when this thread is pinned to a non-default provider. */
   providerId?: string
   /** Optional subagent profile id this thread is bound to (primary-agent persona). */
@@ -260,6 +286,7 @@ export type ThreadListOptions = {
 export type ToolBlock = {
   kind: 'tool'
   id: string
+  turnId?: string
   createdAt?: string
   summary: string
   status: 'running' | 'success' | 'error'
@@ -312,6 +339,7 @@ export type ReviewOutput = {
 export type ReviewBlock = {
   kind: 'review'
   id: string
+  turnId?: string
   createdAt?: string
   title: string
   status: 'running' | 'success' | 'error'
@@ -332,7 +360,7 @@ export type ChatBlock =
       meta?: RuntimeDisclosureMetadata
     }
   | { kind: 'assistant'; id: string; turnId?: string; createdAt?: string; text: string }
-  | { kind: 'reasoning'; id: string; createdAt?: string; text: string }
+  | { kind: 'reasoning'; id: string; turnId?: string; createdAt?: string; text: string }
   | ToolBlock
   | CompactionBlock
   | ReviewBlock
@@ -351,6 +379,7 @@ export type ChatBlock =
   | {
       kind: 'approval'
       id: string
+      turnId?: string
       createdAt?: string
       approvalId: string
       summary: string
@@ -360,8 +389,29 @@ export type ChatBlock =
       meta?: RuntimeDisclosureMetadata
     }
   | {
+      kind: 'approval_review'
+      id: string
+      turnId?: string
+      createdAt?: string
+      reviewId: string
+      approvalId: string
+      summary: string
+      toolName?: string
+      status:
+        | 'in-progress'
+        | 'approved'
+        | 'denied'
+        | 'timed-out'
+        | 'failed-closed'
+        | 'aborted'
+      decision?: 'allow' | 'deny'
+      riskLevel?: 'low' | 'medium' | 'high' | 'critical'
+      rationale?: string
+    }
+  | {
       kind: 'user_input'
       id: string
+      turnId?: string
       createdAt?: string
       requestId: string
       questions: UserInputQuestion[]
@@ -379,6 +429,8 @@ export type ChatBlock =
 
 export type ApprovalRequestPayload = {
   approvalId: string
+  turnId?: string
+  createdAt?: string
   summary: string
   toolName?: string
   meta?: RuntimeDisclosureMetadata
@@ -390,8 +442,28 @@ export type ApprovalStatusPayload = {
   errorMessage?: string
 }
 
+export type ApprovalReviewEventPayload = {
+  reviewId: string
+  approvalId: string
+  turnId?: string
+  createdAt?: string
+  summary: string
+  toolName?: string
+  status:
+    | 'in-progress'
+    | 'approved'
+    | 'denied'
+    | 'timed-out'
+    | 'failed-closed'
+    | 'aborted'
+  decision?: 'allow' | 'deny'
+  riskLevel?: 'low' | 'medium' | 'high' | 'critical'
+  rationale?: string
+}
+
 export type ToolEventPayload = {
   itemId: string
+  turnId?: string
   summary: string
   status: 'running' | 'success' | 'error'
   updateOnly?: boolean
@@ -409,6 +481,7 @@ export type RuntimeStatusEventPayload = {
     | 'tool_catalog_changed'
     | 'tool_storm_suppressed'
     | 'compaction_summary_fallback'
+    | 'required_tool_gate'
   itemId: string
   turnId?: string
   createdAt?: string
@@ -418,9 +491,13 @@ export type RuntimeStatusEventPayload = {
   attempt?: number
   maxAttempts?: number
   delayMs?: number
+  retryReason?: 'network' | 'stream_transport'
   changeKind?: 'additive' | 'breaking'
   toolName?: string
   callId?: string
+  phase?: 'preparing' | 'retrying' | 'succeeded' | 'failed'
+  failureSummary?: string
+  code?: string
 }
 
 export type RuntimeErrorEventPayload = {
@@ -447,6 +524,7 @@ export type CompactionEventPayload = {
 
 export type ReviewEventPayload = {
   itemId: string
+  turnId?: string
   createdAt?: string
   title: string
   status: 'running' | 'success' | 'error'
@@ -457,6 +535,8 @@ export type ReviewEventPayload = {
 
 export type UserInputRequestPayload = {
   itemId: string
+  turnId?: string
+  createdAt?: string
   requestId: string
   questions: UserInputQuestion[]
 }
@@ -482,6 +562,20 @@ export type ThreadDeltaEvent = {
   text: string
   kind: 'agent_message' | 'agent_reasoning'
   seq?: number
+  threadId?: string
+  turnId?: string
+  itemId?: string
+  createdAt?: string
+}
+
+export type AssistantItemSnapshotPayload = {
+  itemId: string
+  threadId: string
+  turnId: string
+  kind: 'agent_message' | 'agent_reasoning'
+  status: string
+  createdAt: string
+  text: string
 }
 
 export type ThreadErrorOptions = {
@@ -555,14 +649,18 @@ export type DelegatedRuntimeState = {
 }
 
 export type ThreadEventSink = {
+  /** The HTTP/SSE stream is established, even when no replay or live event is pending. */
+  onConnected?(): void
   onSeq(seq: number): void
   onDeltas(deltas: ThreadDeltaEvent[]): void
+  onAssistantItem?(item: AssistantItemSnapshotPayload): void
   onUserMessage(ev: UserMessageEventPayload): void
   onTool(ev: ToolEventPayload): void
   onCompaction(ev: CompactionEventPayload): void
   onReview?(ev: ReviewEventPayload): void
   onApproval(req: ApprovalRequestPayload): void
   onApprovalStatus?(ev: ApprovalStatusPayload): void
+  onApprovalReview?(ev: ApprovalReviewEventPayload): void
   onUserInput(req: UserInputRequestPayload): void
   onUserInputStatus(ev: UserInputStatusPayload): void
   onRuntimeStatus?(ev: RuntimeStatusEventPayload): void
@@ -578,6 +676,12 @@ export type ThreadEventSink = {
   /** Optional: request-local context accounting for the main agent. */
   onContextSnapshot?(snapshot: RequestContextSnapshot): void
   onDelegatedRuntimeState?(state: DelegatedRuntimeState): void
+  /** Safe child lifecycle/activity projected onto the parent thread. */
+  onChildRuntimeEvent?(event: RuntimeChildEventPayload): void
+  /** Raw versioned Graph envelope; the Graph projection owns validation/reconciliation. */
+  onGraphEvent?(event: unknown): void
+  /** Raw versioned Graph planning lifecycle; the Graph projection owns reconciliation. */
+  onGraphPlanningEvent?(event: unknown): void
 }
 
 export interface AgentProvider {
@@ -598,6 +702,7 @@ export interface AgentProvider {
     latestSeq: number
     threadStatus?: string
     latestTurnId?: string
+    latestTurnOrchestration?: 'direct' | 'graph'
     latestUserMessageId?: string
     turnDurationByUserId?: Record<string, number>
     usage?: ThreadUsageSnapshot
@@ -612,10 +717,12 @@ export interface AgentProvider {
     text: string,
     options?: {
       mode?: string
+      orchestration?: 'direct' | 'graph'
       model?: string
       providerId?: string
       accountId?: string
       reasoningEffort?: string
+      serviceTier?: 'priority'
       displayText?: string
       guiPlan?: {
         operation: 'draft' | 'refine'
@@ -635,6 +742,7 @@ export interface AgentProvider {
       }
       attachmentIds?: string[]
       workspaceCheckpointId?: string
+      workspaceCheckpointRequestId?: string
       fileReferences?: UserFileReference[]
       composerContexts?: ComposerContextAttachment[]
     }

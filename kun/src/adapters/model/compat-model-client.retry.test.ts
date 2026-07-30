@@ -3,8 +3,8 @@ import { CompatModelClient } from './compat-model-client.js'
 import type { ModelRequestRetryConfig } from '../../config/kun-config.js'
 import type { ModelRequest, ModelStreamChunk } from '../../ports/model-client.js'
 
-// Retry behavior is opt-in and provider-configurable. Keep the status list and
-// delays explicit so these tests match the runtime contract.
+// Retry behavior is enabled by default and provider-configurable. Keep custom
+// status lists and zero delays explicit where tests need deterministic timing.
 
 function request(signal?: AbortSignal): ModelRequest {
   return {
@@ -40,6 +40,24 @@ function gatewayError(status: number): Response {
   )
 }
 
+function interruptedSse(frame: string): Response {
+  const encoder = new TextEncoder()
+  let read = false
+  return new Response(new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (!read) {
+        read = true
+        controller.enqueue(encoder.encode(frame))
+        return
+      }
+      controller.error(new Error('terminated'))
+    }
+  }), {
+    status: 200,
+    headers: { 'content-type': 'text/event-stream' }
+  })
+}
+
 function client(fetchImpl: typeof fetch, retry?: ModelRequestRetryConfig): CompatModelClient {
   return new CompatModelClient({
     baseUrl: 'https://provider.example/v1',
@@ -71,14 +89,17 @@ describe('CompatModelClient transient gateway retry', () => {
     expect(chunks.some((c) => c.kind === 'error')).toBe(false)
   })
 
-  it('does not retry by default', async () => {
+  it('does not retry when the provider explicitly disables retries', async () => {
     let calls = 0
     const fetchImpl = (async () => {
       calls += 1
       return gatewayError(502)
     }) as unknown as typeof fetch
 
-    const chunks = await drain(client(fetchImpl).stream(request()))
+    const chunks = await drain(
+      client(fetchImpl, { maxAttempts: 0, initialDelayMs: 0, httpStatusCodes: [502] })
+        .stream(request())
+    )
 
     expect(calls).toBe(1)
     expect(chunks.some((c) => c.kind === 'error')).toBe(true)
@@ -128,6 +149,165 @@ describe('CompatModelClient transient gateway retry', () => {
 
     expect(calls).toBe(1)
     expect(chunks.some((c) => c.kind === 'error')).toBe(true)
+  })
+})
+
+describe('CompatModelClient network retry', () => {
+  it('uses the default five-retry budget and recovers from fetch failures', async () => {
+    let calls = 0
+    const fetchImpl = (async () => {
+      calls += 1
+      if (calls <= 5) throw new TypeError('fetch failed')
+      return okJson()
+    }) as unknown as typeof fetch
+
+    const chunks = await drain(
+      client(fetchImpl, { initialDelayMs: 0 }).stream(request())
+    )
+    const retries = chunks.filter((chunk) => chunk.kind === 'retrying')
+
+    expect(calls).toBe(6)
+    expect(retries).toHaveLength(5)
+    expect(retries[0]).toEqual({
+      kind: 'retrying',
+      attempt: 1,
+      maxAttempts: 5,
+      delayMs: 0,
+      reason: 'network'
+    })
+    expect(retries.at(-1)).toEqual({
+      kind: 'retrying',
+      attempt: 5,
+      maxAttempts: 5,
+      delayMs: 0,
+      reason: 'network'
+    })
+    expect(chunks.at(-1)).toEqual({ kind: 'completed', stopReason: 'stop' })
+    expect(chunks.some((chunk) => chunk.kind === 'error')).toBe(false)
+  })
+
+  it('surfaces the fetch failure after the default five retries are exhausted', async () => {
+    let calls = 0
+    const fetchImpl = (async () => {
+      calls += 1
+      throw new TypeError('fetch failed')
+    }) as unknown as typeof fetch
+
+    const chunks = await drain(
+      client(fetchImpl, { initialDelayMs: 0 }).stream(request())
+    )
+
+    expect(calls).toBe(6)
+    expect(chunks.filter((chunk) => chunk.kind === 'retrying')).toHaveLength(5)
+    expect(chunks.at(-1)).toMatchObject({
+      kind: 'error',
+      message: 'model request failed: fetch failed',
+      failure: { category: 'network', failoverAllowed: true }
+    })
+  })
+
+  it('stops a network retry while waiting in backoff when the request is cancelled', async () => {
+    const controller = new AbortController()
+    let calls = 0
+    const fetchImpl = (async () => {
+      calls += 1
+      setTimeout(() => controller.abort(), 0)
+      throw new TypeError('fetch failed')
+    }) as unknown as typeof fetch
+
+    const chunks = await drain(
+      client(fetchImpl, { maxAttempts: 5, initialDelayMs: 10_000 })
+        .stream(request(controller.signal))
+    )
+
+    expect(calls).toBe(1)
+    expect(chunks).toContainEqual({
+      kind: 'retrying',
+      attempt: 1,
+      maxAttempts: 5,
+      delayMs: expect.any(Number),
+      reason: 'network'
+    })
+    expect(chunks.at(-1)).toMatchObject({
+      kind: 'error',
+      message: 'request was aborted during retry backoff'
+    })
+  })
+})
+
+describe('CompatModelClient interrupted stream retry', () => {
+  it('retries an HTTP 200 stream terminated after reasoning without duplicating reasoning', async () => {
+    let calls = 0
+    const fetchImpl = (async () => {
+      calls += 1
+      if (calls === 1) {
+        return interruptedSse(
+          'data: {"type":"response.reasoning_summary_text.delta","delta":"plan"}\n\n'
+        )
+      }
+      return new Response(
+        [
+          'data: {"type":"response.reasoning_summary_text.delta","delta":"plan"}\n\n',
+          'data: {"type":"response.output_text.delta","delta":"done"}\n\n',
+          'data: {"type":"response.completed","response":{"status":"completed","output":[]}}\n\n'
+        ].join(''),
+        { status: 200, headers: { 'content-type': 'text/event-stream' } }
+      )
+    }) as unknown as typeof fetch
+    const streamClient = new CompatModelClient({
+      baseUrl: 'https://provider.example/v1/responses',
+      apiKey: 'sk-test',
+      model: 'gpt-5.6-sol',
+      endpointFormat: 'responses',
+      retry: { maxAttempts: 0, initialDelayMs: 0, httpStatusCodes: [429, 503] },
+      fetchImpl
+    })
+
+    const chunks = await drain(streamClient.stream({ ...request(), model: 'gpt-5.6-sol' }))
+
+    expect(calls).toBe(2)
+    expect(chunks.filter((chunk) => chunk.kind === 'assistant_reasoning_delta')).toEqual([
+      { kind: 'assistant_reasoning_delta', text: 'plan' }
+    ])
+    expect(chunks).toContainEqual({
+      kind: 'retrying',
+      status: 200,
+      attempt: 1,
+      maxAttempts: 1,
+      delayMs: 0,
+      reason: 'stream_transport'
+    })
+    expect(chunks).toContainEqual({ kind: 'assistant_text_delta', text: 'done' })
+    expect(chunks.at(-1)).toEqual({ kind: 'completed', stopReason: 'stop' })
+    expect(chunks.some((chunk) => chunk.kind === 'error')).toBe(false)
+  })
+
+  it('does not replay a terminated stream after final assistant text has started', async () => {
+    let calls = 0
+    const fetchImpl = (async () => {
+      calls += 1
+      return interruptedSse(
+        'data: {"type":"response.output_text.delta","delta":"partial"}\n\n'
+      )
+    }) as unknown as typeof fetch
+    const streamClient = new CompatModelClient({
+      baseUrl: 'https://provider.example/v1/responses',
+      apiKey: 'sk-test',
+      model: 'gpt-5.6-sol',
+      endpointFormat: 'responses',
+      retry: { maxAttempts: 3, initialDelayMs: 0, httpStatusCodes: [429, 503] },
+      fetchImpl
+    })
+
+    const chunks = await drain(streamClient.stream({ ...request(), model: 'gpt-5.6-sol' }))
+
+    expect(calls).toBe(1)
+    expect(chunks).toContainEqual({ kind: 'assistant_text_delta', text: 'partial' })
+    expect(chunks.at(-1)).toMatchObject({
+      kind: 'error',
+      code: 'stream_read_error',
+      failure: { category: 'network', failoverAllowed: true }
+    })
   })
 })
 

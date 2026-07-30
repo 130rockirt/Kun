@@ -2,6 +2,23 @@ import type { KunRuntimeSettingsV1 } from '../../shared/app-settings'
 import { resolveCodexOAuthApiKey } from '../codex-auth'
 import { resolveGrokMediaOAuthApiKey } from '../grok-auth'
 
+export function graphConfigForRuntime(
+  value: Pick<KunRuntimeSettingsV1, 'graph'>['graph']
+): KunRuntimeSettingsV1['graph'] {
+  return {
+    ...value,
+    workerModel: { ...value.workerModel },
+    scheduler: { ...value.scheduler },
+    context: { ...value.context },
+    mailbox: { ...value.mailbox },
+    supervision: { ...value.supervision },
+    writeIsolation: { ...value.writeIsolation },
+    routing: { ...value.routing },
+    learning: { ...value.learning },
+    retention: { ...value.retention }
+  }
+}
+
 export function computerUseConfigForRuntime(
   value: Pick<KunRuntimeSettingsV1, 'computerUse'>['computerUse'],
   existing: Record<string, unknown>
@@ -12,6 +29,25 @@ export function computerUseConfigForRuntime(
     mode: value.mode,
     maxImageDimension: value.maxImageDimension,
     maxActionsPerTurn: value.maxActionsPerTurn
+  }
+}
+
+export function browserUseConfigForRuntime(
+  value: Pick<KunRuntimeSettingsV1, 'browserUse'>['browserUse'],
+  existing: Record<string, unknown>
+): Record<string, unknown> {
+  return {
+    ...existing,
+    enabled: value.enabled,
+    mode: value.mode,
+    approvalMode: value.approvalMode,
+    maxTabs: value.maxTabs,
+    maxObservationActionsPerTurn: value.maxObservationActionsPerTurn,
+    maxInteractionActionsPerTurn: value.maxInteractionActionsPerTurn,
+    maxSnapshotNodes: value.maxSnapshotNodes,
+    maxSnapshotTextChars: value.maxSnapshotTextChars,
+    maxImageDimension: value.maxImageDimension,
+    idleTimeoutMs: value.idleTimeoutMs
   }
 }
 
@@ -108,7 +144,8 @@ export function videoGenConfigForRuntime(
 
 export function runtimeTuningConfigForRuntime(
   value: Pick<KunRuntimeSettingsV1, 'runtimeTuning'>['runtimeTuning'],
-  existing: Record<string, unknown>
+  existing: Record<string, unknown>,
+  llmDebug: Pick<KunRuntimeSettingsV1, 'llmDebug'>['llmDebug']
 ): Record<string, unknown> {
   return {
     ...existing,
@@ -118,6 +155,11 @@ export function runtimeTuningConfigForRuntime(
       maxWallTimeMs: value.maxWallTimeMs
     },
     streamIdleTimeoutMs: value.streamIdleTimeoutMs,
+    llmDebug: {
+      ...objectValue(existing.llmDebug),
+      enabled: objectValue(existing.llmDebug).enabled !== false,
+      defaultThreadCaptureEnabled: llmDebug.defaultThreadCaptureEnabled
+    },
     toolStorm: {
       ...objectValue(existing.toolStorm),
       enabled: value.toolStorm.enabled,

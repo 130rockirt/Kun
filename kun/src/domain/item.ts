@@ -56,6 +56,7 @@ export function makeAssistantTextItem(input: {
   threadId: string
   text: string
   status?: 'running' | 'completed' | 'failed'
+  createdAt?: string
 }): TurnItem {
   return {
     id: input.id,
@@ -63,7 +64,7 @@ export function makeAssistantTextItem(input: {
     threadId: input.threadId,
     role: 'assistant',
     status: input.status ?? 'running',
-    createdAt: new Date().toISOString(),
+    createdAt: input.createdAt ?? new Date().toISOString(),
     kind: 'assistant_text',
     text: input.text
   }
@@ -75,6 +76,7 @@ export function makeAssistantReasoningItem(input: {
   threadId: string
   text: string
   status?: 'running' | 'completed' | 'failed'
+  createdAt?: string
 }): TurnItem {
   return {
     id: input.id,
@@ -82,7 +84,7 @@ export function makeAssistantReasoningItem(input: {
     threadId: input.threadId,
     role: 'assistant',
     status: input.status ?? 'running',
-    createdAt: new Date().toISOString(),
+    createdAt: input.createdAt ?? new Date().toISOString(),
     kind: 'assistant_reasoning',
     text: input.text
   }

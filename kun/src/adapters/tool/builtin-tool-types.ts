@@ -103,10 +103,12 @@ export type BuiltinToolName =
   | 'edit'
   | 'write'
   | 'grep'
+  | 'glob'
   | 'find'
   | 'ls'
   | 'lsp'
   | 'repo_map'
+  | 'git_inspect'
   | 'verify_changes'
   | 'send_im_attachment'
 export const allBuiltinToolNames: Set<BuiltinToolName> = new Set([
@@ -115,10 +117,12 @@ export const allBuiltinToolNames: Set<BuiltinToolName> = new Set([
   'edit',
   'write',
   'grep',
+  'glob',
   'find',
   'ls',
   'lsp',
   'repo_map',
+  'git_inspect',
   'verify_changes',
   'send_im_attachment'
 ])
@@ -209,6 +213,7 @@ export type BuiltinLocalToolsOptions = {
   write?: WriteLocalToolOptions
   edit?: EditLocalToolOptions
   grep?: GrepLocalToolOptions
+  glob?: FindLocalToolOptions
   find?: FindLocalToolOptions
   ls?: LsLocalToolOptions
 }

@@ -33,12 +33,17 @@ import {
 } from '../../sdd/sdd-draft-images'
 import { forgetRememberedSddDraft, useSddDraftStore, type SddDraft } from '../../sdd/sdd-draft-store'
 import { saveActiveSddDraftToDisk } from '../../sdd/sdd-draft-actions'
+import {
+  releaseSddAssistantThreadsForDraft,
+  showSddAssistantThreadInSidebar
+} from '../../sdd/sdd-thread-registry'
 import { composeSddAssistantPrompt } from '../../sdd/sdd-assistant-prompt'
 import { frameworkById } from '../../sdd/pm-skill-frameworks'
 import { buildSddDraftToPlanPrompt } from '../../sdd/sdd-plan-prompt'
 import type { GuiPlanArtifact } from '../../plan/plan-store'
 
 type PendingSddPlanTarget = {
+  draft: SddDraft
   planId: string
   relativePath: string
   workspaceRoot: string
@@ -46,7 +51,14 @@ type PendingSddPlanTarget = {
 
 type PlanTurnOverrides = Pick<
   SendMessageOverrides,
-  'attachmentIds' | 'attachments' | 'displayText' | 'fileReferences' | 'guiPlan' | 'model' | 'reasoningEffort'
+  | 'attachmentIds'
+  | 'attachments'
+  | 'displayText'
+  | 'fileReferences'
+  | 'guiPlan'
+  | 'model'
+  | 'providerId'
+  | 'reasoningEffort'
 > & {
   workspaceRoot?: string
 }
@@ -133,6 +145,21 @@ function sddAssistantContextFromBlocks(blocks: ChatBlock[], maxMessages = 10): s
   return messages.slice(-maxMessages).join('\n\n').slice(0, 12_000)
 }
 
+export function buildSddAssistantModelOverrides(input: {
+  model: string
+  providerId: string
+  reasoningEffort: ComposerReasoningEffort
+}): Pick<SendMessageOverrides, 'model' | 'providerId' | 'reasoningEffort'> {
+  const model = input.model.trim()
+  const providerId = input.providerId.trim()
+  const reasoningEffort = composerReasoningEffortRequestValue(input.reasoningEffort)
+  return {
+    ...(model ? { model } : {}),
+    ...(providerId ? { providerId } : {}),
+    ...(reasoningEffort ? { reasoningEffort } : {})
+  }
+}
+
 export function useWorkbenchSddTurnController({
   activeGuiPlan,
   attachmentUploadEnabled,
@@ -176,12 +203,19 @@ export function useWorkbenchSddTurnController({
     ) {
       return
     }
+    const completedTarget = sddUpgradeTargetRef.current
     sddUpgradeInFlightRef.current = false
     sddUpgradeTargetRef.current = null
     useSddDraftStore.getState().setOperationStatus('idle')
-    const completedDraft = useSddDraftStore.getState().activeDraft
+    const completedDraft = completedTarget?.draft ?? null
+    const releasedCompletedThreads = completedDraft
+      ? releaseSddAssistantThreadsForDraft(completedDraft)
+      : false
     if (completedDraft) forgetRememberedSddDraft(completedDraft)
-    useSddDraftStore.getState().clearActiveDraft()
+    if (completedDraft && useSddDraftStore.getState().activeDraft?.id === completedDraft.id) {
+      useSddDraftStore.getState().clearActiveDraft()
+    }
+    if (releasedCompletedThreads) void useChatStore.getState().refreshThreads()
   }, [activeGuiPlan])
 
   useEffect(() => {
@@ -272,20 +306,23 @@ export function useWorkbenchSddTurnController({
       ...(frameworkId ? { frameworkIds: [frameworkId] } : {})
     })
     setInput('')
-    const model = writeAssistantModel.trim()
-    const providerId = resolvedWriteAssistantProviderId.trim()
-    const reasoningEffort = composerReasoningEffortRequestValue(composerReasoningEffort)
+    const modelOverrides = buildSddAssistantModelOverrides({
+      model: writeAssistantModel,
+      providerId: resolvedWriteAssistantProviderId,
+      reasoningEffort: composerReasoningEffort
+    })
     const sent = await sendMessage(prompt, composerMode === 'plan' ? 'plan' : 'agent', {
       displayText: v || (documentAttachments.length > 0
         ? t('composerFileOnlyDisplay', { count: documentAttachments.length })
         : t('composerImageOnlyDisplay')),
-      ...(model ? { model } : {}),
-      ...(providerId ? { providerId } : {}),
-      ...(reasoningEffort ? { reasoningEffort } : {}),
+      ...modelOverrides,
       ...(attachmentIds.length ? { attachmentIds } : {}),
       ...(publicAttachments.length ? { attachments: publicAttachments } : {})
     })
     if (sent) {
+      if (showSddAssistantThreadInSidebar(threadId)) {
+        void useChatStore.getState().refreshThreads()
+      }
       pendingSddFrameworkRef.current = null
       pendingSddFrameworkPromptRef.current = null
       if (attachments.length > 0) clearComposerAttachments(attachmentScope)
@@ -378,12 +415,16 @@ export function useWorkbenchSddTurnController({
     const model = assistantSelection.assistantModel.trim()
     const providerId =
       assistantSelection.assistantProviderId.trim() || providerIdForComposerModel(composerModelGroups, model)
-    return sendMessage(payload.prompt, 'agent', {
+    const sent = await sendMessage(payload.prompt, 'agent', {
       displayText: payload.displayText,
       ...(model ? { model } : {}),
       ...(providerId ? { providerId } : {}),
       ...(attachmentIds.length ? { attachmentIds } : {})
     })
+    if (sent && showSddAssistantThreadInSidebar(threadId)) {
+      void useChatStore.getState().refreshThreads()
+    }
+    return sent
   }, [
     composerModelGroups,
     ensureSddAssistantThreadForDraft,
@@ -489,14 +530,21 @@ export function useWorkbenchSddTurnController({
       ...(draft.designContext ? { designContext: draft.designContext } : {})
     })
     sddUpgradeTargetRef.current = {
+      draft,
       planId,
       relativePath: planRelativePath,
       workspaceRoot: draft.workspaceRoot
     }
     setComposerMode('plan')
+    const modelOverrides = buildSddAssistantModelOverrides({
+      model: writeAssistantModel,
+      providerId: resolvedWriteAssistantProviderId,
+      reasoningEffort: composerReasoningEffort
+    })
     const sent = await sendPlanTurn(prompt, {
       displayText: t('sddGeneratePlanAction'),
       workspaceRoot: draft.workspaceRoot,
+      ...modelOverrides,
       guiPlan: {
         operation: 'draft',
         workspaceRoot: draft.workspaceRoot,
@@ -511,6 +559,9 @@ export function useWorkbenchSddTurnController({
       sddUpgradeTargetRef.current = null
       useSddDraftStore.getState().setOperationStatus('idle')
       return
+    }
+    if (showSddAssistantThreadInSidebar(threadId)) {
+      void useChatStore.getState().refreshThreads()
     }
     const tracePath = sddDraftTraceRelativePath(draft.relativePath)
     if (tracePath) {
@@ -528,13 +579,16 @@ export function useWorkbenchSddTurnController({
     }
   }, [
     blocks,
+    composerReasoningEffort,
     ensureSddAssistantThreadForDraft,
+    resolvedWriteAssistantProviderId,
     runtimeInfo,
     sendPlanTurn,
     setComposerMode,
     setError,
     t,
-    uploadSddImagesAsAttachments
+    uploadSddImagesAsAttachments,
+    writeAssistantModel
   ])
 
   const startNewSddAssistantConversation = useCallback((): void => {

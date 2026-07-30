@@ -1,18 +1,25 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import type { ServeProviderConfig } from '../../config/kun-config.js'
-import type { TurnReasoningEffort } from '../../contracts/turns.js'
+import type {
+  ActingTurnModelRoute,
+  TurnReasoningEffort
+} from '../../contracts/turns.js'
 import { userMessageTextWithComposerContexts } from '../../domain/composer-context.js'
 import { makeAssistantTextItem } from '../../domain/item.js'
+import { resolveTurnClientSurface } from '../../loop/turn-context-resolver.js'
 import { normalizeTurnLimits, type TurnLimitsConfig } from '../../loop/turn-limits.js'
+import type { TurnRunOutcome } from '../../loop/turn-execution-types.js'
 import type { SessionStore } from '../../ports/session-store.js'
 import type { ThreadStore } from '../../ports/thread-store.js'
+import { buildClientSurfaceInstruction } from '../../prompt/kun-prompt-context.js'
 import type {
   ModelRequestTraceDelegated,
   ModelRequestTraceRecord
 } from '../../contracts/model-request-trace.js'
-import type {
-  LlmDebugRound,
-  LlmDebugSink
+import {
+  startLlmDebugRoundIfEnabled,
+  type LlmDebugRound,
+  type LlmDebugSink
 } from '../../services/llm-debug-recorder.js'
 import type { RuntimeEventRecorder } from '../../services/runtime-event-recorder.js'
 import type { TurnService } from '../../services/turn-service.js'
@@ -31,10 +38,13 @@ import {
   priorItemsForDelegatedTurn,
   type DelegatedSessionCoordinator
 } from '../delegated-session-binding.js'
+import { shellSpawnEnv } from '../../adapters/tool/builtin-tool-utils.js'
+import { parkDelegatedGraphTurnAfterRecovery } from '../delegated-graph-turn-policy.js'
 
-const DEFAULT_MODEL = 'gemini-3.6-flash'
 const MAX_STDOUT_BYTES = 8 * 1024 * 1024
 const MAX_STDERR_BYTES = 256 * 1024
+const ANTIGRAVITY_MODEL_ID_PATTERN = /^[a-z0-9]+(?:[.-][a-z0-9]+)+$/i
+const ANTIGRAVITY_MODEL_ID_MAX_LENGTH = 128
 
 export interface AntigravityCliRuntimeDeps {
   providerConfigs: Record<string, ServeProviderConfig>
@@ -64,9 +74,14 @@ export interface AntigravityCliRuntimeDeps {
 
 export function normalizeAntigravityModel(model: string | undefined): string {
   const normalized = model?.trim().replace(/^models\//, '').replace(/-(?:low|medium|high)$/i, '')
-  return normalized && /^gemini-[a-z0-9][a-z0-9.-]*$/i.test(normalized)
-    ? normalized
-    : DEFAULT_MODEL
+  if (
+    !normalized
+    || normalized.length > ANTIGRAVITY_MODEL_ID_MAX_LENGTH
+    || !ANTIGRAVITY_MODEL_ID_PATTERN.test(normalized)
+  ) {
+    throw new Error(`Invalid Antigravity model id: ${model?.trim() || '(empty)'}`)
+  }
+  return normalized
 }
 
 export function normalizeAntigravityEffort(
@@ -104,6 +119,10 @@ export function buildAntigravityArgs(input: {
   } else if (input.approvalPolicy === 'auto') {
     args.push('--dangerously-skip-permissions')
     if (input.sandboxMode !== 'danger-full-access') args.push('--sandbox')
+  } else if (input.sandboxMode !== 'danger-full-access') {
+    // Headless Antigravity cannot surface Kun's interactive approval gate. Preserve the
+    // requested sandbox and let the official CLI soft-deny interactive actions.
+    args.push('--sandbox')
   }
   return args
 }
@@ -127,7 +146,7 @@ export class AntigravityCliRuntime implements DelegatedTurnRuntime {
     turnId: string,
     signal: AbortSignal,
     providerId?: string
-  ): Promise<'completed' | 'failed' | 'aborted'> {
+  ): Promise<TurnRunOutcome> {
     const execute = () => this.runTurnOwned(threadId, turnId, signal, providerId)
     return this.deps.sessionCoordinator
       ? this.deps.sessionCoordinator.runExclusive(threadId, execute)
@@ -139,7 +158,7 @@ export class AntigravityCliRuntime implements DelegatedTurnRuntime {
     turnId: string,
     signal: AbortSignal,
     providerId?: string
-  ): Promise<'completed' | 'failed' | 'aborted'> {
+  ): Promise<TurnRunOutcome> {
     const thread = await this.deps.threadStore.get(threadId)
     const turn = thread?.turns.find((candidate) => candidate.id === turnId)
     if (!thread || !turn) {
@@ -164,9 +183,52 @@ export class AntigravityCliRuntime implements DelegatedTurnRuntime {
       })
       return 'failed'
     }
+    if (turn.orchestration === 'graph') {
+      const message =
+        'Graph mode is unavailable for the Antigravity CLI provider because it cannot execute Kun structured Graph tools. Choose a tool-capable provider and continue the same planning draft.'
+      const itemId = this.deps.ids.next('item_assistant')
+      await this.deps.events.record({
+        kind: 'assistant_text_delta',
+        threadId,
+        turnId,
+        itemId,
+        item: makeAssistantTextItem({
+          id: itemId,
+          threadId,
+          turnId,
+          text: message,
+          status: 'running'
+        })
+      })
+      await this.deps.turns.applyItem(
+        threadId,
+        makeAssistantTextItem({
+          id: itemId,
+          threadId,
+          turnId,
+          text: message,
+          status: 'completed'
+        })
+      )
+      const graphCompletion = await parkDelegatedGraphTurnAfterRecovery(
+        this.deps.turns,
+        { threadId, turnId }
+      )
+      if (graphCompletion === 'suspended') return 'suspended'
+      await this.deps.turns.finishTurn({
+        threadId,
+        turnId,
+        status: 'failed',
+        error: message,
+        code: 'antigravity_graph_tools_unsupported',
+        severity: 'error'
+      })
+      return 'failed'
+    }
 
     const instructionBlocks = [
       this.deps.systemPrompt?.trim(),
+      buildClientSurfaceInstruction(resolveTurnClientSurface(turn)),
       thread.systemPrompt?.trim()
     ].filter((value, index, all): value is string =>
       Boolean(value) && all.indexOf(value) === index
@@ -182,21 +244,62 @@ export class AntigravityCliRuntime implements DelegatedTurnRuntime {
     })
     const limits = normalizeTurnLimits(this.deps.turnLimits)
     const binaryPath = this.deps.binaryPath?.trim() || process.env.KUN_ANTIGRAVITY_BINARY?.trim() || 'agy'
-    const model = normalizeAntigravityModel(turn.model || thread.model || this.deps.defaultModel)
+    const requestedProviderId = turn.providerId?.trim()
+    const fallbackProviderId =
+      requestedProviderId ||
+      providerId?.trim() ||
+      thread.providerId?.trim() ||
+      'antigravity-cli'
+    const requestedAccountId = turn.accountId?.trim() || (
+      !requestedProviderId || requestedProviderId === thread.providerId?.trim()
+        ? thread.accountId?.trim()
+        : undefined
+    )
+    let model: string
+    try {
+      model = normalizeAntigravityModel(
+        turn.actingModelRoute?.model ||
+        turn.model ||
+        thread.model ||
+        this.deps.defaultModel
+      )
+    } catch (error) {
+      await this.deps.turns.finishTurn({
+        threadId,
+        turnId,
+        status: 'failed',
+        error: error instanceof Error ? error.message : String(error)
+      })
+      return 'failed'
+    }
+    const actingModelRoute: ActingTurnModelRoute = turn.actingModelRoute ?? {
+      model,
+      providerId: fallbackProviderId,
+      ...(requestedAccountId ? { accountId: requestedAccountId } : {})
+    }
+    const resolvedProviderId = actingModelRoute.providerId ?? fallbackProviderId
+    const resolvedAccountId = actingModelRoute.accountId ?? requestedAccountId
+    if (!turn.actingModelRoute) {
+      await this.deps.turns.updateTurnMetadata(threadId, turnId, { actingModelRoute })
+    }
     const effort = normalizeAntigravityEffort(turn.reasoningEffort)
     const planMode = this.deps.enforceReadOnly === true || (turn.mode ?? thread.mode) === 'plan'
-    const sandboxMode = this.deps.enforceReadOnly === true ? 'read-only' : thread.sandboxMode
+    const approvalPolicy = this.deps.enforceReadOnly === true
+      ? 'never'
+      : turn.approvalPolicy ?? thread.approvalPolicy
+    const sandboxMode = this.deps.enforceReadOnly === true
+      ? 'read-only'
+      : turn.sandboxMode ?? thread.sandboxMode
     const args = buildAntigravityArgs({
       prompt,
       model,
       effort,
       timeoutMs: limits.maxWallTimeMs,
       planMode,
-      approvalPolicy: thread.approvalPolicy,
+      approvalPolicy,
       sandboxMode
     })
-    const resolvedProviderId = providerId?.trim() || 'antigravity-cli'
-    const provider = providerId ? this.deps.providerConfigs[providerId] : undefined
+    const provider = this.deps.providerConfigs[resolvedProviderId]
     const capabilities = antigravityCapabilities()
     const preparation = this.deps.sessionCoordinator
       ? await this.deps.sessionCoordinator.prepare({
@@ -206,7 +309,7 @@ export class AntigravityCliRuntime implements DelegatedTurnRuntime {
             providerId: resolvedProviderId,
             credentialIdentity: delegatedCredentialIdentity({
               providerId: resolvedProviderId,
-              accountId: turn.accountId || thread.accountId,
+              accountId: resolvedAccountId,
               credentialSourceId: provider?.credentialSourceId
             }),
             workspace: thread.workspace,
@@ -216,7 +319,7 @@ export class AntigravityCliRuntime implements DelegatedTurnRuntime {
               threadPersona: thread.systemPrompt?.trim() || '',
               effort,
               planMode,
-              approvalPolicy: thread.approvalPolicy,
+              approvalPolicy,
               sandboxMode,
               capabilities
             }),
@@ -263,15 +366,15 @@ export class AntigravityCliRuntime implements DelegatedTurnRuntime {
         nativeHistory: 'none'
       })
     }
-    let trace = startAntigravityTrace(this.deps.debugSink, {
+    let trace = await startAntigravityTrace(this.deps.debugSink, {
       threadId,
       turnId,
-      provider: providerId?.trim() || 'antigravity-cli',
+      provider: resolvedProviderId,
       model,
       prompt,
       effort,
       planMode,
-      approvalPolicy: thread.approvalPolicy,
+      approvalPolicy,
       sandboxMode,
       delegated: {
         providerKind: 'antigravity-cli',
@@ -329,7 +432,11 @@ export class AntigravityCliRuntime implements DelegatedTurnRuntime {
           status: 'completed'
         })
       )
-      await this.deps.turns.finishTurn({ threadId, turnId, status: 'completed' })
+      const suspension = await this.deps.turns.suspendGraphLeadTurn?.({ threadId, turnId })
+      const outcome: TurnRunOutcome = suspension === 'suspended' ? 'suspended' : 'completed'
+      if (outcome === 'completed') {
+        await this.deps.turns.finishTurn({ threadId, turnId, status: 'completed' })
+      }
       if (preparation && this.deps.sessionCoordinator) {
         try {
           await this.deps.sessionCoordinator.commit({
@@ -342,7 +449,7 @@ export class AntigravityCliRuntime implements DelegatedTurnRuntime {
           // cannot be recorded.
         }
       }
-      return 'completed'
+      return outcome
     } catch (error) {
       await finishAntigravityTrace(trace, { kind: 'error', error })
       trace = undefined
@@ -394,7 +501,10 @@ function runAntigravityProcess(input: {
     try {
       child = spawnFn(input.binaryPath, input.args, {
         cwd: input.cwd,
-        env: process.env,
+        // The Antigravity CLI is model-controlled. Never inherit Kun/Main
+        // credentials (including the browser-use bridge bearer and signing
+        // key); pass only the same small execution allow-list as shell tools.
+        env: shellSpawnEnv(),
         stdio: ['ignore', 'pipe', 'pipe'],
         shell: false
       })
@@ -459,7 +569,7 @@ type AntigravityTrace = {
   record: ModelRequestTraceRecord
 }
 
-function startAntigravityTrace(
+async function startAntigravityTrace(
   sink: LlmDebugSink | undefined,
   input: {
     threadId: string
@@ -473,16 +583,17 @@ function startAntigravityTrace(
     sandboxMode: string
     delegated: ModelRequestTraceDelegated
   }
-): AntigravityTrace | undefined {
+): Promise<AntigravityTrace | undefined> {
   if (!sink) return undefined
   let round: LlmDebugRound | undefined
   try {
-    round = sink.start({
+    round = await startLlmDebugRoundIfEnabled(sink, {
       threadId: input.threadId,
       turnId: input.turnId,
       provider: input.provider,
       model: input.model
     })
+    if (!round) return undefined
     const record = sink.beginCliInvocation(round, {
       endpointFormat: 'antigravity-cli',
       target: 'antigravity-cli://local/print',

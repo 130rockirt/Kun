@@ -1,7 +1,7 @@
 import type { TurnItem } from '../contracts/items.js'
 import type { ThreadRecord } from '../contracts/threads.js'
 import { touchThread } from '../domain/thread.js'
-import { placeCompactionsAtTurnEnd } from '../loop/compaction-history.js'
+import { placeCompactionsChronologically } from '../loop/compaction-history.js'
 import type { SessionStore } from '../ports/session-store.js'
 import type { ThreadStore } from '../ports/thread-store.js'
 import { withThreadStoreMutation } from './thread-mutation-coordinator.js'
@@ -28,7 +28,7 @@ export function projectSessionItemsOntoExistingTurns(
     const sessionItems = itemsByTurn.get(turn.id)
     if (!sessionItems) return turn
     changed = true
-    return { ...turn, items: placeCompactionsAtTurnEnd(sessionItems) }
+    return { ...turn, items: placeCompactionsChronologically(sessionItems) }
   })
   return changed ? { ...thread, turns } : null
 }

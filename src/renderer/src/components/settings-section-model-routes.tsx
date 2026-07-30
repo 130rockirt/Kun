@@ -9,7 +9,7 @@ import {
 } from '@shared/app-settings'
 import { KUN_MODEL_ROUTES_PATH, kunModelRouteTestPath } from '@shared/kun-endpoints'
 import { Activity, AlertTriangle, Boxes, Check, ChevronDown, Clipboard, Code2, GripVertical, Loader2, Plus, Play, Route, Server, Trash2, X } from 'lucide-react'
-import { Toggle } from './settings-controls'
+import { SettingsSubTabs, SettingsTabPanel, Toggle } from './settings-controls'
 
 type RouteStatus = {
   localGateway?: { enabled: boolean }
@@ -50,6 +50,7 @@ type RoutePoolTestRecord = {
 }
 
 type RouteTestTarget = { targetId: string; providerId: string; modelId: string }
+type ModelRouteSettingsTab = 'gateway' | 'models' | 'resilience' | 'monitoring'
 
 const strategies: Array<{ id: ModelRouteStrategy; label: string }> = [
   { id: 'priority', label: '优先级故障转移' },
@@ -59,12 +60,33 @@ const strategies: Array<{ id: ModelRouteStrategy; label: string }> = [
   { id: 'adaptive', label: '稳定性优先自适应' }
 ]
 
+function EmptyRoutePoolState({ onAdd }: { onAdd: () => void }): ReactElement {
+  return (
+    <div className="grid min-h-[360px] place-items-center text-center">
+      <div>
+        <Route className="mx-auto h-10 w-10 text-ds-faint" />
+        <h3 className="mt-3 text-[14px] font-semibold text-ds-ink">添加第一个路由模型</h3>
+        <p className="mt-1 text-[12px] text-ds-faint">一个本地中转供应商可以包含多个公开模型。</p>
+        <button
+          type="button"
+          onClick={onAdd}
+          className="mt-4 inline-flex h-9 items-center gap-2 rounded-full bg-accent px-4 text-[12px] font-semibold text-white"
+        >
+          <Plus className="h-3.5 w-3.5" />
+          添加模型
+        </button>
+      </div>
+    </div>
+  )
+}
+
 export function ModelRoutesSettings({
   settings,
   onChange,
   saveStatus = 'idle',
   saveError,
   onRetrySave,
+  active = true,
   publicBaseUrl = 'http://127.0.0.1:18899'
 }: {
   settings: ModelProviderSettingsV1
@@ -72,6 +94,7 @@ export function ModelRoutesSettings({
   saveStatus?: 'idle' | 'saving' | 'saved' | 'error'
   saveError?: string | null
   onRetrySave?: () => void
+  active?: boolean
   /** The configured local Kun endpoint; this is also the public gateway origin. */
   publicBaseUrl?: string
 }): ReactElement {
@@ -83,6 +106,7 @@ export function ModelRoutesSettings({
   const [startError, setStartError] = useState('')
   const [apiDocsOpen, setApiDocsOpen] = useState(false)
   const [copiedValue, setCopiedValue] = useState<'base-url' | 'curl' | 'api-example' | null>(null)
+  const [activeSettingsTab, setActiveSettingsTab] = useState<ModelRouteSettingsTab>('gateway')
   const selected = settings.routePools.find((pool) => pool.id === selectedId) ?? settings.routePools[0]
   const executablePools = useMemo(() => projectExecutableModelRoutePools(settings), [settings])
   const executableSelected = executablePools.find((pool) => pool.id === selected?.id)
@@ -107,16 +131,18 @@ export function ModelRoutesSettings({
     }
   }, [])
   useEffect(() => {
+    if (!active) return
     void refreshStatus()
     const interval = globalThis.setInterval(() => { void refreshStatus() }, 1_000)
     return () => globalThis.clearInterval(interval)
-  }, [refreshStatus])
+  }, [active, refreshStatus])
   useEffect(() => {
-    let active = true
+    if (!active) return
+    let mounted = true
     if (typeof window.kunGui.getRuntimeSettingsSyncStatus === 'function') {
       void window.kunGui.getRuntimeSettingsSyncStatus()
         .then((next) => {
-          if (active) {
+          if (mounted) {
             setRuntimeSyncStatus((current) =>
               current && current.generation > next.generation ? current : next
             )
@@ -126,7 +152,7 @@ export function ModelRoutesSettings({
     }
     const unsubscribe = typeof window.kunGui.onRuntimeSettingsSyncStatus === 'function'
       ? window.kunGui.onRuntimeSettingsSyncStatus((next) => {
-          if (active) {
+          if (mounted) {
             setRuntimeSyncStatus((current) =>
               current && current.generation > next.generation ? current : next
             )
@@ -134,10 +160,10 @@ export function ModelRoutesSettings({
         })
       : undefined
     return () => {
-      active = false
+      mounted = false
       unsubscribe?.()
     }
-  }, [])
+  }, [active])
   useEffect(() => { setStartError('') }, [selected?.id])
 
   const updatePool = (patch: Partial<ModelRoutePoolV1>): void => {
@@ -261,7 +287,28 @@ export function ModelRoutesSettings({
 
   return (
     <div className="grid min-h-[620px] gap-4 p-4 lg:grid-cols-[280px_minmax(0,1fr)]">
-      <section className="flex flex-wrap items-center gap-4 rounded-2xl border border-ds-border bg-ds-main/35 p-4 lg:col-span-2">
+      <div className="lg:col-span-2">
+        <SettingsSubTabs<ModelRouteSettingsTab>
+          baseId="model-routes-settings"
+          ariaLabel="模型路由设置"
+          items={[
+            { id: 'gateway', label: '网关与 API', icon: Server },
+            { id: 'models', label: '模型与目标', icon: Boxes },
+            { id: 'resilience', label: '容错策略', icon: AlertTriangle },
+            { id: 'monitoring', label: '验证与监控', icon: Activity }
+          ]}
+          value={activeSettingsTab}
+          onChange={setActiveSettingsTab}
+        />
+      </div>
+
+      <SettingsTabPanel
+        baseId="model-routes-settings"
+        tabId="gateway"
+        active={activeSettingsTab === 'gateway'}
+        className="lg:col-span-2"
+      >
+        <section className="flex flex-wrap items-center gap-4 rounded-2xl border border-ds-border bg-ds-main/35 p-4">
         <span className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-accent/10 text-accent">
           <Server className="h-5 w-5" />
         </span>
@@ -365,8 +412,9 @@ export function ModelRoutesSettings({
           onClose={() => setApiDocsOpen(false)}
           onCopy={(value) => void copyGatewayText(value, 'api-example')}
         /> : null}
-      </section>
-      <aside className="grid min-w-0 content-start gap-3 border-b border-ds-border-muted pb-4 lg:border-b-0 lg:border-r lg:pb-0 lg:pr-4">
+        </section>
+      </SettingsTabPanel>
+      <aside className={`${activeSettingsTab === 'gateway' ? 'hidden' : 'grid'} min-w-0 content-start gap-3 border-b border-ds-border-muted pb-4 lg:border-b-0 lg:border-r lg:pb-0 lg:pr-4`}>
         <div className="flex items-start justify-between gap-2">
           <div>
             <h3 className="flex items-center gap-2 text-[14px] font-semibold text-ds-ink"><Boxes className="h-4 w-4 text-accent" />路由模型</h3>
@@ -396,8 +444,15 @@ export function ModelRoutesSettings({
         </div>
       </aside>
 
-      {selected ? (
-        <main className="grid min-w-0 content-start gap-5">
+      <main className={activeSettingsTab === 'gateway' ? 'hidden' : 'min-w-0'}>
+        <SettingsTabPanel
+          baseId="model-routes-settings"
+          tabId="models"
+          active={activeSettingsTab === 'models'}
+          className="grid content-start gap-5"
+        >
+          {selected ? (
+            <>
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0 flex-1">
               <p className="mb-1 text-[11px] font-medium text-accent">{settings.localGateway.name} / 路由模型</p>
@@ -455,12 +510,42 @@ export function ModelRoutesSettings({
             </div>
           </section>
 
-          <div className="grid gap-3 xl:grid-cols-2">
+              <div className="flex justify-end">
+                <button type="button" onClick={removePool} className="inline-flex items-center gap-2 rounded-full border border-red-200 px-3 py-2 text-[12px] text-red-600">
+                  <Trash2 className="h-3.5 w-3.5" />
+                  删除模型
+                </button>
+              </div>
+            </>
+          ) : (
+            <EmptyRoutePoolState onAdd={addPool} />
+          )}
+        </SettingsTabPanel>
+
+        <SettingsTabPanel
+          baseId="model-routes-settings"
+          tabId="resilience"
+          active={activeSettingsTab === 'resilience'}
+          className="grid content-start gap-5"
+        >
+          {selected ? (
+            <div className="grid gap-3 xl:grid-cols-2">
             <section className="rounded-xl border border-ds-border p-4"><h3 className="flex items-center gap-2 text-[13px] font-semibold text-ds-ink"><AlertTriangle className="h-4 w-4 text-amber-500" />故障转移规则</h3><div className="mt-3 grid gap-3 text-[12px] text-ds-muted"><ToggleRow label="网络错误" checked={selected.failurePolicy.failoverOnNetworkError} onChange={(value) => updatePool({ failurePolicy: { ...selected.failurePolicy, failoverOnNetworkError: value } })} /><ToggleRow label="请求超时" checked={selected.failurePolicy.failoverOnTimeout} onChange={(value) => updatePool({ failurePolicy: { ...selected.failurePolicy, failoverOnTimeout: value } })} /><ToggleRow label="401 / 403 凭据错误" checked={selected.failurePolicy.failoverOnAuthError} onChange={(value) => updatePool({ failurePolicy: { ...selected.failurePolicy, failoverOnAuthError: value } })} /><Field label="切换 HTTP 状态码"><input value={selected.failurePolicy.failoverHttpStatusCodes.join(', ')} onChange={(event) => updatePool({ failurePolicy: { ...selected.failurePolicy, failoverHttpStatusCodes: parseCodes(event.target.value) } })} className={compactInputClass} /></Field><p className="text-[11px] text-ds-faint">流式输出开始后固定停止，不会重复请求或执行工具。</p></div></section>
             <section className="rounded-xl border border-ds-border p-4"><h3 className="flex items-center gap-2 text-[13px] font-semibold text-ds-ink"><Activity className="h-4 w-4 text-emerald-500" />健康与熔断</h3><div className="mt-3 grid grid-cols-3 gap-3"><Field label="连续失败"><input type="number" min={1} max={20} value={selected.healthPolicy.failureThreshold} onChange={(event) => updatePool({ healthPolicy: { ...selected.healthPolicy, failureThreshold: Number(event.target.value) } })} className={compactInputClass} /></Field><Field label="冷却秒数"><input type="number" min={1} value={Math.round(selected.healthPolicy.cooldownMs / 1000)} onChange={(event) => updatePool({ healthPolicy: { ...selected.healthPolicy, cooldownMs: Number(event.target.value) * 1000 } })} className={compactInputClass} /></Field><Field label="半开探测"><input type="number" min={1} max={10} value={selected.healthPolicy.halfOpenMaxAttempts} onChange={(event) => updatePool({ healthPolicy: { ...selected.healthPolicy, halfOpenMaxAttempts: Number(event.target.value) } })} className={compactInputClass} /></Field></div></section>
-          </div>
+            </div>
+          ) : (
+            <EmptyRoutePoolState onAdd={addPool} />
+          )}
+        </SettingsTabPanel>
 
-          <section className="grid gap-3 border-t border-ds-border-muted pt-4">
+        <SettingsTabPanel
+          baseId="model-routes-settings"
+          tabId="monitoring"
+          active={activeSettingsTab === 'monitoring'}
+          className="grid content-start gap-5"
+        >
+          {selected ? (
+            <section className="grid gap-3">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h3 className="text-[13px] font-semibold text-ds-ink">路由验证</h3>
@@ -546,11 +631,12 @@ export function ModelRoutesSettings({
               </table>
               {events.length === 0 ? <div className="px-3 py-6 text-center text-[11px] text-ds-faint">暂无路由事件</div> : null}
             </div>
-          </section>
-
-          <div className="flex justify-end"><button type="button" onClick={removePool} className="inline-flex items-center gap-2 rounded-full border border-red-200 px-3 py-2 text-[12px] text-red-600"><Trash2 className="h-3.5 w-3.5" /> 删除模型</button></div>
-        </main>
-      ) : <main className="grid place-items-center text-center"><div><Route className="mx-auto h-10 w-10 text-ds-faint" /><h3 className="mt-3 text-[14px] font-semibold text-ds-ink">添加第一个路由模型</h3><p className="mt-1 text-[12px] text-ds-faint">一个本地中转供应商可以包含多个公开模型。</p><button type="button" onClick={addPool} className="mt-4 inline-flex h-9 items-center gap-2 rounded-full bg-accent px-4 text-[12px] font-semibold text-white"><Plus className="h-3.5 w-3.5" />添加模型</button></div></main>}
+            </section>
+          ) : (
+            <EmptyRoutePoolState onAdd={addPool} />
+          )}
+        </SettingsTabPanel>
+      </main>
     </div>
   )
 }

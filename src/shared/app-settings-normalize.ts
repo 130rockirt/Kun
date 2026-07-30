@@ -9,6 +9,7 @@ import {
   DEFAULT_LOG_RETENTION_DAYS,
   normalizeGuiUpdateChannel,
   normalizeChatContentMaxWidth,
+  normalizeComposerSendKey,
   normalizeUiFontScale,
   type AppBehaviorConfigV1,
   type AppSettingsV1,
@@ -108,6 +109,7 @@ export function normalizeAppSettings(settings: AppSettingsV1): AppSettingsV1 {
         : 'system',
     uiFontScale: normalizeUiFontScale(maybeSettings.uiFontScale),
     chatContentMaxWidthPx: normalizeChatContentMaxWidth(maybeSettings.chatContentMaxWidthPx),
+    composerSendKey: normalizeComposerSendKey(maybeSettings.composerSendKey),
     cursorSpotlight: maybeSettings.cursorSpotlight !== false,
     cursorSpotlightColor: normalizeCursorSpotlightColor(maybeSettings.cursorSpotlightColor),
     provider: providerSettings,
@@ -131,7 +133,9 @@ export function normalizeAppSettings(settings: AppSettingsV1): AppSettingsV1 {
     checkpointCleanup: normalizeCheckpointCleanupSettings(maybeSettings.checkpointCleanup),
     gitBranchPrefix: normalizeGitBranchPrefix(maybeSettings.gitBranchPrefix),
     notifications: {
-      turnComplete: maybeSettings.notifications?.turnComplete !== false
+      turnComplete: maybeSettings.notifications?.turnComplete !== false,
+      mainAgentTurnComplete: maybeSettings.notifications?.mainAgentTurnComplete !== false,
+      subagentTurnComplete: maybeSettings.notifications?.subagentTurnComplete === true
     },
     appBehavior: normalizeAppBehaviorSettings(maybeSettings.appBehavior),
     keyboardShortcuts: normalizeKeyboardShortcuts(maybeSettings.keyboardShortcuts),

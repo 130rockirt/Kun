@@ -9,8 +9,9 @@ import { createBashLocalTool } from './builtin-bash-tool.js'
 import { createEditLocalTool, createWriteLocalTool } from './builtin-file-tools.js'
 import { createLspLocalTool } from './builtin-lsp-tool.js'
 import { createReadLocalTool } from './builtin-read-tool.js'
-import { createFindLocalTool, createGrepLocalTool, createLsLocalTool } from './builtin-search-tools.js'
+import { createFindLocalTool, createGlobLocalTool, createGrepLocalTool, createLsLocalTool } from './builtin-search-tools.js'
 import { createRepoMapLocalTool } from './builtin-repo-map-tool.js'
+import { createGitInspectLocalTool } from './builtin-git-inspect-tool.js'
 import { createVerifyChangesLocalTool } from './builtin-verify-tool.js'
 import { createSendImAttachmentLocalTool } from './im-attachment-tool.js'
 
@@ -20,6 +21,7 @@ export * from './builtin-read-tool.js'
 export * from './builtin-file-tools.js'
 export * from './builtin-search-tools.js'
 export * from './builtin-repo-map-tool.js'
+export * from './builtin-git-inspect-tool.js'
 export * from './builtin-bash-tool.js'
 export * from './builtin-verify-tool.js'
 export * from './im-attachment-tool.js'
@@ -39,6 +41,8 @@ export function createBuiltinLocalTool(
       return createWriteLocalTool(options.write)
     case 'grep':
       return createGrepLocalTool(options.grep)
+    case 'glob':
+      return createGlobLocalTool(options.glob ?? options.find)
     case 'find':
       return createFindLocalTool(options.find)
     case 'ls':
@@ -47,6 +51,8 @@ export function createBuiltinLocalTool(
       return createLspLocalTool()
     case 'repo_map':
       return createRepoMapLocalTool()
+    case 'git_inspect':
+      return createGitInspectLocalTool()
     case 'verify_changes':
       return createVerifyChangesLocalTool()
     case 'send_im_attachment':
@@ -69,10 +75,12 @@ export function buildBuiltinLocalTools(options: BuiltinLocalToolsOptions = {}): 
     createEditLocalTool(options.edit),
     createWriteLocalTool(options.write),
     createGrepLocalTool(options.grep),
+    createGlobLocalTool(options.glob ?? options.find),
     createFindLocalTool(options.find),
     createLsLocalTool(options.ls),
     createLspLocalTool(),
     createRepoMapLocalTool(),
+    createGitInspectLocalTool(),
     createVerifyChangesLocalTool(),
     createSendImAttachmentLocalTool()
   ]
@@ -99,9 +107,11 @@ export function buildReadOnlyBuiltinLocalTools(options: BuiltinLocalToolsOptions
   return [
     createReadLocalTool(options.read),
     createGrepLocalTool(options.grep),
+    createGlobLocalTool(options.glob ?? options.find),
     createFindLocalTool(options.find),
     createLsLocalTool(options.ls),
-    createRepoMapLocalTool()
+    createRepoMapLocalTool(),
+    createGitInspectLocalTool()
   ]
 }
 
@@ -118,10 +128,12 @@ export function buildBuiltinLocalToolRecord(
     edit: createEditLocalTool(options.edit),
     write: createWriteLocalTool(options.write),
     grep: createGrepLocalTool(options.grep),
+    glob: createGlobLocalTool(options.glob ?? options.find),
     find: createFindLocalTool(options.find),
     ls: createLsLocalTool(options.ls),
     lsp: createLspLocalTool(),
     repo_map: createRepoMapLocalTool(),
+    git_inspect: createGitInspectLocalTool(),
     verify_changes: createVerifyChangesLocalTool(),
     send_im_attachment: createSendImAttachmentLocalTool()
   }

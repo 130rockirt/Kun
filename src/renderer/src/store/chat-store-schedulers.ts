@@ -68,6 +68,7 @@ export function armBusyWatchdog(
         ...options.finalizeBusyState(snapshot),
         busy: false,
         currentTurnId: null,
+        currentTurnOrchestration: null,
         error: options.busyTimeoutMessage()
       }
       return options.flushLiveBlocks(snapshot, base)

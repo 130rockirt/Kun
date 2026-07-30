@@ -18,11 +18,13 @@ import {
 import { summarizeThread } from './threads-summarize.js'
 import {
   compactTurn,
+  getSteeringQueue,
   getTurn,
   interruptTurn,
   rewindThread,
   startTurn,
-  steerTurn
+  steerTurn,
+  replaceSteeringQueue
 } from './turns.js'
 import { startReview } from './review.js'
 import { buildEventStreamResponse, parseEventCursor } from './events.js'
@@ -30,15 +32,38 @@ import { decideApproval } from './approvals.js'
 import { resolveUserInput } from './user-inputs.js'
 import { resumeSession } from './sessions.js'
 import { usageJsonResponse } from './usage.js'
+import { listProviderQuotas } from './provider-quotas.js'
 import { llmDebugRoundsResponse } from './debug-llm.js'
 import { modelRequestsResponse } from './model-requests.js'
 import { runtimeInfoJsonResponse, runtimeToolDiagnosticsJsonResponse } from './runtime-info.js'
+import { shutdownRuntime } from './runtime-shutdown.js'
+import {
+  cancelModelConnectionOAuth,
+  clearModelCredential,
+  claudeSdkStatus,
+  completeOfficialProviderAuth,
+  connectModelConnection,
+  deleteModelConnection,
+  listModelConnections,
+  modelConnectionEvents,
+  patchModelConnection,
+  probeModelConnection,
+  replaceModelCredential,
+  selectModelConnection,
+  startModelConnectionOAuth,
+  modelConnectionOAuthStatus,
+  submitModelConnectionOAuth,
+  installClaudeSdk,
+  updateModelConnectionGlobals
+} from './model-connections.js'
 import { applyRuntimeConfig } from './runtime-config.js'
-import { listSkills } from './skills.js'
+import { listSkills, refreshSkills, setSkillsEnabled } from './skills.js'
+import { setLocalRuntimeCapability } from './runtime-capabilities.js'
 import {
   attachmentDiagnostics,
   getAttachmentContent,
   getAttachmentMetadata,
+  releaseAttachment,
   uploadAttachment
 } from './attachments.js'
 import {
@@ -50,6 +75,7 @@ import {
 } from './memory.js'
 import {
   delegationAbort,
+  delegationDetach,
   delegationDiagnostics,
   delegationProfiles
 } from './delegation.js'
@@ -59,6 +85,7 @@ import {
   backgroundShellStop
 } from './background-shells.js'
 import { authorizeMcpOAuth, clearMcpOAuth, mcpOAuthDiagnostics } from './mcp-oauth.js'
+import { deleteMcpConfig, listMcpConfig, patchMcpConfig, putMcpConfig } from './mcp-config.js'
 import { auditSupplyChainPackage, checkSupplyChainUpdate } from './supply-chain.js'
 import { isAuthorized, bearerToken } from '../auth.js'
 import { ApprovalConsentVerifier } from '../approval-consent.js'
@@ -83,6 +110,45 @@ import {
   routePoolStatus,
   testRoutePool
 } from './openai-model-gateway.js'
+import {
+  cancelGraphRun,
+  cancelGraphPlanningDraft,
+  createGraphRun,
+  getGraphRun,
+  getGraphPlanningDraft,
+  graphRunCommand,
+  graphRunEvents,
+  listGraphRuns,
+  listGraphPlanningDrafts,
+  patchGraphRun,
+  readGraphArtifact,
+  retryGraphNode,
+  resumeGraphPlanningDraft,
+  reviewGraphNode,
+  steerGraphRun,
+  validateGraphPlan
+} from './graphs.js'
+import {
+  consolidateLearning,
+  exportProjectAgent,
+  exploreGraphCapability,
+  governLearningCandidate,
+  graphDiagnostics,
+  graphProjectIdentity,
+  listGraphGovernanceAudit,
+  listLearningCandidates,
+  listLearningEpisodes,
+  listLearningJobs,
+  listProjectAgentEvidence,
+  listProjectAgentScores,
+  listProjectAgents,
+  listProjectRoutingExplanations,
+  listThreadGraphReferences,
+  importProjectAgent,
+  mergeProjectAgents,
+  routeProjectAgent,
+  transitionProjectAgent
+} from './graph-agents.js'
 
 /**
  * Build the full router used by the HTTP server. The router exposes:
@@ -117,6 +183,7 @@ import {
  * - `POST /v1/user-inputs/{id}` and `/v1/user-input/{id}` (auth)
  * - `POST /v1/sessions/{id}/resume-thread` (auth)
  * - `GET /v1/usage` (auth)
+ * - `GET /v1/provider-quotas` (auth)
  * - `GET /v1/debug/llm-rounds` (auth)
  * - `POST /v1/supply-chain/audit`, `/v1/supply-chain/update-check` (auth)
  */
@@ -147,6 +214,7 @@ export function buildRouter(runtime: ServerRuntime): Router {
       validation: runtime.extensionPlatform.validation,
       runtimeToken: runtime.runtimeToken,
       insecure: runtime.insecure,
+      ...(runtime.extensionPlatform.jobs ? { jobs: runtime.extensionPlatform.jobs } : {}),
       ...(runtime.extensionPlatform.bundledSeedResults
         ? { bundledSeedResults: runtime.extensionPlatform.bundledSeedResults }
         : {})
@@ -192,6 +260,78 @@ export function buildRouter(runtime: ServerRuntime): Router {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
     return runtimeToolDiagnosticsJsonResponse(runtime)
   })
+  router.add('POST', '/v1/runtime/shutdown', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return shutdownRuntime(runtime, request)
+  })
+  router.add('GET', '/v1/model-connections', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return listModelConnections(runtime.modelConnections)
+  })
+  router.add('PATCH', '/v1/model-connections', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return updateModelConnectionGlobals(runtime.modelConnections, request)
+  })
+  router.add('POST', '/v1/model-connections/connect', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return connectModelConnection(runtime.modelConnections, request)
+  })
+  router.add('POST', '/v1/model-connections/oauth/start', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return startModelConnectionOAuth(runtime.modelConnectionOAuth, request)
+  })
+  router.add('POST', '/v1/model-connections/cli/complete', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return completeOfficialProviderAuth(runtime.officialProviderAuth, request)
+  })
+  router.add('GET', '/v1/model-connections/oauth/:sessionId', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return modelConnectionOAuthStatus(runtime.modelConnectionOAuth, ctx.params.sessionId)
+  })
+  router.add('POST', '/v1/model-connections/oauth/:sessionId/submit', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return submitModelConnectionOAuth(runtime.modelConnectionOAuth, ctx.params.sessionId, request)
+  })
+  router.add('DELETE', '/v1/model-connections/oauth/:sessionId', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return cancelModelConnectionOAuth(runtime.modelConnectionOAuth, ctx.params.sessionId)
+  })
+  router.add('GET', '/v1/model-connections/claude/sdk', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return claudeSdkStatus(runtime.modelConnectionOAuth)
+  })
+  router.add('POST', '/v1/model-connections/claude/sdk/install', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return installClaudeSdk(runtime.modelConnectionOAuth)
+  })
+  router.add('POST', '/v1/model-connections/select', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return selectModelConnection(runtime.modelConnections, request)
+  })
+  router.add('GET', '/v1/model-connections/events', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return modelConnectionEvents(runtime.modelConnections, request)
+  })
+  router.add('PATCH', '/v1/model-connections/:providerId', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return patchModelConnection(runtime.modelConnections, ctx.params.providerId, request)
+  })
+  router.add('PUT', '/v1/model-connections/:providerId/credential', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return replaceModelCredential(runtime.modelConnections, ctx.params.providerId, request)
+  })
+  router.add('DELETE', '/v1/model-connections/:providerId/credential', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return clearModelCredential(runtime.modelConnections, ctx.params.providerId, request)
+  })
+  router.add('DELETE', '/v1/model-connections/:providerId', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return deleteModelConnection(runtime.modelConnections, ctx.params.providerId, request)
+  })
+  router.add('POST', '/v1/model-connections/:providerId/probe', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return probeModelConnection(runtime.modelConnections, ctx.params.providerId)
+  })
   router.add('POST', '/v1/runtime/config/apply', async (request) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
     return applyRuntimeConfig(runtime, request)
@@ -199,6 +339,22 @@ export function buildRouter(runtime: ServerRuntime): Router {
   router.add('GET', '/v1/mcp/oauth', async (request) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
     return mcpOAuthDiagnostics(runtime)
+  })
+  router.add('GET', '/v1/mcp/config', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return listMcpConfig(runtime)
+  })
+  router.add('PUT', '/v1/mcp/config/:id', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return putMcpConfig(runtime, ctx.params.id, request)
+  })
+  router.add('PATCH', '/v1/mcp/config/:id', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return patchMcpConfig(runtime, ctx.params.id, request)
+  })
+  router.add('DELETE', '/v1/mcp/config/:id', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return deleteMcpConfig(runtime, ctx.params.id)
   })
   router.add('DELETE', '/v1/mcp/oauth', async (request) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
@@ -214,7 +370,200 @@ export function buildRouter(runtime: ServerRuntime): Router {
   })
   router.add('GET', '/v1/skills', async (request) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
-    return listSkills(runtime)
+    return listSkills(runtime, request)
+  })
+  router.add('POST', '/v1/graphs/validate', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return validateGraphPlan(runtime.graph?.control, request)
+  })
+  router.add('GET', '/v1/graph-drafts', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return listGraphPlanningDrafts(runtime.graph?.drafts, request)
+  })
+  router.add('GET', '/v1/graph-drafts/:id', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return getGraphPlanningDraft(runtime.graph?.drafts, ctx.params.id)
+  })
+  router.add('POST', '/v1/graph-drafts/:id/resume', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return resumeGraphPlanningDraft(
+      runtime.graph?.drafts,
+      runtime.turnService,
+      runtime.events,
+      runtime.runTurn,
+      ctx.params.id,
+      request
+    )
+  })
+  router.add('POST', '/v1/graph-drafts/:id/cancel', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return cancelGraphPlanningDraft(
+      runtime.graph?.drafts,
+      runtime.turnService,
+      runtime.events,
+      ctx.params.id,
+      request
+    )
+  })
+  router.add('GET', '/v1/graphs/diagnostics', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return graphDiagnostics(runtime)
+  })
+  router.add('GET', '/v1/graphs', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return listGraphRuns(runtime.graph?.control, request)
+  })
+  router.add('POST', '/v1/graphs', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return createGraphRun(runtime.graph?.control, request)
+  })
+  router.add('GET', '/v1/graphs/:id', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return getGraphRun(runtime.graph?.control, ctx.params.id)
+  })
+  router.add('GET', '/v1/graphs/:id/events', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return graphRunEvents(
+      runtime.graph?.control,
+      runtime.graph
+        ? async (runId, sinceSeq) => runtime.graph!.store.eventReplay
+          ? runtime.graph!.store.eventReplay(runId, sinceSeq)
+          : {
+              events: await runtime.graph!.store.events(runId, sinceSeq),
+              replayFloorSeq: 1,
+              currentSeq: 0,
+              snapshotSeq: 0,
+              truncated: false
+            }
+        : undefined,
+      ctx.params.id,
+      request
+    )
+  })
+  router.add('GET', '/v1/graphs/:id/artifacts/:artifactId', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return readGraphArtifact(
+      runtime.graph?.control,
+      runtime.graph?.artifacts,
+      ctx.params.id,
+      ctx.params.artifactId,
+      request
+    )
+  })
+  for (const action of ['start', 'pause', 'resume', 'cleanup'] as const) {
+    router.add('POST', `/v1/graphs/:id/${action}`, async (request, ctx) => {
+      if (!authorize(request, runtime)) return ERRORS.unauthorized()
+      return graphRunCommand(runtime.graph?.control, ctx.params.id, action, request)
+    })
+  }
+  router.add('POST', '/v1/graphs/:id/cancel', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return cancelGraphRun(runtime.graph?.control, ctx.params.id, request)
+  })
+  router.add('POST', '/v1/graphs/:id/retry', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return retryGraphNode(runtime.graph?.control, ctx.params.id, request)
+  })
+  router.add('POST', '/v1/graphs/:id/steer', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return steerGraphRun(runtime.graph?.control, ctx.params.id, request)
+  })
+  router.add('POST', '/v1/graphs/:id/patch', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return patchGraphRun(runtime.graph?.control, ctx.params.id, request)
+  })
+  router.add('POST', '/v1/graphs/:id/reviews', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return reviewGraphNode(runtime.graph?.control, ctx.params.id, request)
+  })
+  router.add('GET', '/v1/graph-projects/identity', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return graphProjectIdentity(runtime, request)
+  })
+  router.add('GET', '/v1/graph-projects/:projectId/agents', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return listProjectAgents(runtime, ctx.params.projectId, request)
+  })
+  router.add('POST', '/v1/graph-projects/:projectId/agents/route', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return routeProjectAgent(runtime, ctx.params.projectId, request)
+  })
+  router.add('POST', '/v1/graph-projects/:projectId/agents/import', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return importProjectAgent(runtime, ctx.params.projectId, request)
+  })
+  router.add('POST', '/v1/graph-projects/:projectId/agents/merge', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return mergeProjectAgents(runtime, ctx.params.projectId, request)
+  })
+  router.add('GET', '/v1/graph-projects/:projectId/agents/:profileId/export', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return exportProjectAgent(runtime, ctx.params.projectId, ctx.params.profileId, request)
+  })
+  router.add('POST', '/v1/graph-projects/:projectId/agents/:profileId/lifecycle', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return transitionProjectAgent(runtime, ctx.params.projectId, ctx.params.profileId, request)
+  })
+  router.add('GET', '/v1/graph-projects/:projectId/evidence', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return listProjectAgentEvidence(runtime, ctx.params.projectId, request)
+  })
+  router.add('GET', '/v1/graph-projects/:projectId/scores', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return listProjectAgentScores(runtime, ctx.params.projectId)
+  })
+  router.add('GET', '/v1/graph-projects/:projectId/routing', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return listProjectRoutingExplanations(runtime, ctx.params.projectId)
+  })
+  router.add('GET', '/v1/graph-projects/:projectId/candidates', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return listLearningCandidates(runtime, ctx.params.projectId)
+  })
+  router.add('POST', '/v1/graph-projects/:projectId/candidates/:candidateId/action', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return governLearningCandidate(
+      runtime,
+      ctx.params.projectId,
+      ctx.params.candidateId,
+      request
+    )
+  })
+  router.add('POST', '/v1/graph-projects/:projectId/consolidate', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return consolidateLearning(runtime, ctx.params.projectId, request)
+  })
+  router.add('POST', '/v1/graph-projects/:projectId/explore', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return exploreGraphCapability(runtime, ctx.params.projectId, request)
+  })
+  router.add('GET', '/v1/graph-projects/:projectId/episodes', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return listLearningEpisodes(runtime, ctx.params.projectId)
+  })
+  router.add('GET', '/v1/graph-projects/:projectId/jobs', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return listLearningJobs(runtime, ctx.params.projectId)
+  })
+  router.add('GET', '/v1/graph-projects/:projectId/audit', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return listGraphGovernanceAudit(runtime, ctx.params.projectId)
+  })
+  router.add('GET', '/v1/threads/:id/graph-references', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return listThreadGraphReferences(runtime, ctx.params.id)
+  })
+  router.add('POST', '/v1/skills/refresh', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return refreshSkills(runtime)
+  })
+  router.add('PATCH', '/v1/skills/config', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return setSkillsEnabled(runtime, request)
+  })
+  router.add('PATCH', '/v1/runtime/capabilities/:id', async (request, context) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return setLocalRuntimeCapability(runtime, context.params.id, request)
   })
   router.add('POST', '/v1/supply-chain/audit', async (request) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
@@ -227,6 +576,10 @@ export function buildRouter(runtime: ServerRuntime): Router {
   router.add('POST', '/v1/attachments', async (request) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
     return uploadAttachment(runtime.attachmentStore, request)
+  })
+  router.add('DELETE', '/v1/attachments/:id', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return releaseAttachment(runtime, ctx.params.id, request)
   })
   router.add('GET', '/v1/attachments/diagnostics', async (request) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
@@ -271,6 +624,10 @@ export function buildRouter(runtime: ServerRuntime): Router {
   router.add('POST', '/v1/delegation/abort/:childId', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
     return delegationAbort(runtime.delegationRuntime, ctx.params.childId)
+  })
+  router.add('POST', '/v1/delegation/detach/:childId', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return delegationDetach(runtime.delegationRuntime, ctx.params.childId)
   })
   router.add('GET', '/v1/background-shells', async (request) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
@@ -348,9 +705,15 @@ export function buildRouter(runtime: ServerRuntime): Router {
   })
   router.add('POST', '/v1/threads/:id/turns', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
-    return startTurn(runtime.turnService, ctx.params.id, request, ({ threadId, turnId }) => {
-      runtime.runTurn(threadId, turnId)
-    })
+    return startTurn(
+      runtime.turnService,
+      ctx.params.id,
+      request,
+      ({ threadId, turnId }) => {
+        runtime.runTurn(threadId, turnId)
+      },
+      () => runtime.graph?.config().enabled === true
+    )
   })
   router.add('POST', '/v1/threads/:id/rewind', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
@@ -376,7 +739,23 @@ export function buildRouter(runtime: ServerRuntime): Router {
   })
   router.add('POST', '/v1/threads/:id/turns/:turnId/steer', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
-    return steerTurn(runtime.turnService, ctx.params.id, ctx.params.turnId, request)
+    return steerTurn(
+      runtime.turnService,
+      ctx.params.id,
+      ctx.params.turnId,
+      request,
+      ({ threadId, turnId }) => {
+        runtime.runTurn(threadId, turnId)
+      }
+    )
+  })
+  router.add('GET', '/v1/threads/:id/turns/:turnId/steering', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return getSteeringQueue(runtime.turnService, ctx.params.id, ctx.params.turnId)
+  })
+  router.add('PATCH', '/v1/threads/:id/turns/:turnId/steering', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return replaceSteeringQueue(runtime.turnService, ctx.params.id, ctx.params.turnId, request)
   })
   router.add('POST', '/v1/threads/:id/turns/:turnId/interrupt', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
@@ -437,6 +816,13 @@ export function buildRouter(runtime: ServerRuntime): Router {
   router.add('GET', '/v1/usage', async (request) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
     return usageJsonResponse(request, runtime)
+  })
+  router.add('GET', '/v1/provider-quotas', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    if (!runtime.providerQuotaService) {
+      return ERRORS.unavailable('provider quota service is not available')
+    }
+    return listProviderQuotas(runtime.providerQuotaService)
   })
   router.add('GET', '/v1/debug/llm-rounds', async (request) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()

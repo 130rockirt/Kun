@@ -3,7 +3,7 @@ import type { TurnItem } from '../contracts/items.js'
 /**
  * Repairs persisted turn items into a model-sendable history shape.
  *
- * Kun stores GUI-only items such as approvals, user input prompts, and
+ * Kun stores runtime-only items such as approvals, user input prompts, and
  * reasoning blocks beside model-bound tool calls. Provider APIs are stricter:
  * every assistant tool-call block must be followed by exactly one matching
  * result per call, with only model-ignored bridge items in between.

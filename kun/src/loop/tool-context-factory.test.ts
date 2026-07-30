@@ -9,6 +9,7 @@ function dispatchInput(signal: AbortSignal): ToolDispatchInput {
     threadId: 'thread_1',
     turnId: 'turn_1',
     workspace: '/workspace',
+    clientSurface: 'gui',
     threadMode: 'agent',
     modelProviderId: 'provider_1',
     reasoningEffort: 'high',

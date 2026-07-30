@@ -30,11 +30,74 @@ vi.mock('react-i18next', () => {
     filePreviewEmpty: 'No file selected',
     filePreviewTitle: 'File preview',
     filePreviewOpenEditor: 'Open in editor',
+    filePreviewOpenSystem: 'Open with system app',
     filePreviewCopyContent: 'Copy file',
+    filePreviewRenderHtml: 'Render HTML',
+    filePreviewShowSource: 'Show source',
+    fileTreeOpen: 'Show file tree',
+    fileTreeClose: 'Hide file tree',
     rightPanelCollapse: 'Collapse'
   }
   const t = (key: string) => labels[key] ?? key
   return { useTranslation: () => ({ t }) }
+})
+
+describe('HTML workspace preview', () => {
+  it('opens HTML files in source view before rendering the sandboxed preview', async () => {
+    vi.stubGlobal('window', {
+      kunGui: {
+        platform: 'linux',
+        readWorkspaceFile: vi.fn(async () => ({
+          ok: true as const,
+          path: '/repo/index.html',
+          content: '<!doctype html><html><body><h1>Preview</h1><script>document.body.innerHTML = ""</script></body></html>',
+          size: 103,
+          mtimeMs: 100,
+          truncated: false
+        })),
+        openWorkspacePreviewResource: vi.fn(async () => ({
+          ok: true as const,
+          leaseId: 'lease_1',
+          url: 'kun-workspace-preview://lease/lease_1/index.html',
+          mimeType: 'text/html; charset=utf-8',
+          size: 103,
+          mtimeMs: 100,
+          expiresAt: '2026-07-30T00:00:00.000Z'
+        })),
+        releaseWorkspacePreviewResource: vi.fn(async () => ({ ok: true as const }))
+      },
+      innerWidth: 1200,
+      innerHeight: 800,
+      requestAnimationFrame: (callback: FrameRequestCallback) => {
+        callback(0)
+        return 1
+      },
+      cancelAnimationFrame: vi.fn(),
+      clearTimeout,
+      setTimeout
+    })
+
+    let renderer!: ReactTestRenderer
+    await act(async () => {
+      renderer = create(createElement(WorkspaceFilePreviewPanel, {
+        target: { path: '/repo/index.html', workspaceRoot: '/repo' },
+        workspaceRoot: '/repo',
+        onClose: () => undefined
+      }))
+    })
+
+    expect(renderer.root.findAllByType('iframe')).toHaveLength(0)
+    expect(renderer.root.findAllByProps({ className: 'ds-file-preview-code-html' })).toHaveLength(1)
+
+    const renderButton = renderer.root.findByProps({ 'aria-label': 'Render HTML' })
+    expect(renderButton.props['aria-pressed']).toBe(false)
+
+    await act(async () => renderButton.props.onClick())
+
+    expect(renderer.root.findAllByType('iframe')).toHaveLength(1)
+    expect(renderer.root.findByProps({ 'aria-label': 'Show source' }).props['aria-pressed']).toBe(true)
+    await act(async () => renderer.unmount())
+  })
 })
 
 const openTargets = [
@@ -104,6 +167,28 @@ describe('WorkspaceFilePreviewPanel toolbar', () => {
     expect(html).toContain('lucide-pin')
     expect(html).not.toMatch(/role="tab"[^>]*>[^<]*<button/)
   })
+
+  it('turns the folder action into an accessible file-tree toggle when provided', async () => {
+    const onToggleFileTree = vi.fn()
+    let renderer!: ReactTestRenderer
+    await act(async () => {
+      renderer = create(createElement(WorkspaceFilePreviewPanel, {
+        target: null,
+        workspaceRoot: '/repo',
+        fileTreeOpen: false,
+        onToggleFileTree,
+        onClose: () => undefined
+      }))
+    })
+
+    const toggle = renderer.root.findByProps({ 'aria-label': 'Show file tree' })
+    expect(toggle.props['aria-pressed']).toBe(false)
+    expect(renderer.root.findAllByProps({ 'aria-label': 'Open with system app' })).toHaveLength(0)
+
+    await act(async () => toggle.props.onClick())
+    expect(onToggleFileTree).toHaveBeenCalledTimes(1)
+    await act(async () => renderer.unmount())
+  })
 })
 
 describe('WorkspaceFilePreviewPanel interactions', () => {
@@ -146,6 +231,11 @@ describe('WorkspaceFilePreviewPanel interactions', () => {
       renderer.root.findByProps({ role: 'tablist' }).props.onWheel({
         deltaY: 1,
         deltaX: 0,
+        currentTarget: {
+          scrollWidth: 300,
+          clientWidth: 300,
+          scrollLeft: 0
+        },
         preventDefault
       })
     })
@@ -168,6 +258,41 @@ describe('WorkspaceFilePreviewPanel interactions', () => {
       }))
     })
     expect(renderer.root.findByType('aside').props['data-reading-mode']).toBe('true')
+    await act(async () => renderer.unmount())
+  })
+
+  it('scrolls overflowing tabs with the wheel instead of changing the active file', async () => {
+    const onSelectTarget = vi.fn()
+    let renderer!: ReactTestRenderer
+    await act(async () => {
+      renderer = create(createElement(WorkspaceFilePreviewPanel, {
+        target: openTargets[0],
+        openTargets,
+        workspaceRoot: '/repo',
+        onSelectTarget,
+        onClose: () => undefined
+      }))
+    })
+
+    const preventDefault = vi.fn()
+    const tablist = renderer.root.findByProps({ role: 'tablist' })
+    const currentTarget = {
+      scrollWidth: 900,
+      clientWidth: 300,
+      scrollLeft: 10
+    }
+    await act(async () => {
+      tablist.props.onWheel({
+        deltaY: 40,
+        deltaX: 0,
+        currentTarget,
+        preventDefault
+      })
+    })
+
+    expect(preventDefault).toHaveBeenCalled()
+    expect(currentTarget.scrollLeft).toBe(50)
+    expect(onSelectTarget).not.toHaveBeenCalled()
     await act(async () => renderer.unmount())
   })
 })

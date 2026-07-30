@@ -2,6 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ChatBlock, NormalizedThread, ThreadEventSink } from '../agent/types'
 import type { ChatState, ChatStoreGet, ChatStoreSet, GuiPlanMessageContext } from './chat-store-types'
 import { rendererRuntimeClient } from '../agent/runtime-client'
+import { graphRuntimeClient } from '../graph/graph-runtime-client'
+import { useGraphStore } from '../graph/graph-store'
+import type { GraphRun } from '../graph/graph-types'
 import { useWriteWorkspaceStore } from '../write/write-workspace-store'
 import type { BrowserStorageLike } from '../lib/browser-storage'
 import {
@@ -57,8 +60,11 @@ function buildHarness(): {
     clawChannels: [],
     codeWorkspaceRoots: [],
     composerModel: '',
+    composerMode: 'agent',
+    composerOrchestration: 'direct',
     composerProviderId: '',
     currentTurnId: null,
+    currentTurnOrchestration: null,
     currentTurnUserId: null,
     error: 'previous error',
     extensionComposerContexts: [],
@@ -100,6 +106,13 @@ describe('chat-store-thread-actions queued messages', () => {
     rendererRuntimeClient.invalidateSettings()
     registryMock.getProvider.mockReset()
     registryMock.getProvider.mockReturnValue({})
+    useGraphStore.setState({
+      threadId: null,
+      runs: [],
+      selectedRunId: null,
+      selectedNodeId: null,
+      error: null
+    })
   })
 
   afterEach(() => {
@@ -114,7 +127,8 @@ describe('chat-store-thread-actions queued messages', () => {
     state.composerProviderId = 'deepseek'
 
     await expect(actions.sendMessage('use these next-turn settings', 'agent', {
-      reasoningEffort: 'high'
+      reasoningEffort: 'high',
+      serviceTier: 'priority'
     })).resolves.toBe(true)
 
     expect(state.queuedMessages).toHaveLength(1)
@@ -122,11 +136,161 @@ describe('chat-store-thread-actions queued messages', () => {
       text: 'use these next-turn settings',
       model: 'deepseek-v4-flash',
       providerId: 'deepseek',
-      reasoningEffort: 'high'
+      reasoningEffort: 'high',
+      serviceTier: 'priority'
     })
 
     state.composerModel = 'deepseek-v4-pro'
     expect(state.queuedMessages[0]?.model).toBe('deepseek-v4-flash')
+  })
+
+  it('snapshots Graph orchestration into queued work and preserves it when the preference changes', async () => {
+    const { actions, state } = buildHarness()
+    state.graphEnabled = true
+    state.composerOrchestration = 'graph'
+    state.currentTurnOrchestration = 'direct'
+
+    await expect(actions.sendMessage('run this as a graph', 'agent')).resolves.toBe(true)
+
+    expect(state.queuedMessages[0]).toMatchObject({
+      text: 'run this as a graph',
+      orchestration: 'graph'
+    })
+    state.composerOrchestration = 'direct'
+    expect(state.queuedMessages[0]?.orchestration).toBe('graph')
+    expect(state.currentTurnOrchestration).toBe('direct')
+  })
+
+  it('steers text into the active Graph source turn instead of admitting queued work', async () => {
+    const { actions, state } = buildHarness()
+    state.currentTurnId = 'turn_graph_lead'
+    state.currentTurnOrchestration = 'graph'
+    const activeRun = {
+      id: 'run_1',
+      threadId: 'thr_existing',
+      sourceTurnId: 'turn_graph_lead',
+      status: 'running',
+      lastEventSeq: 4
+    } as GraphRun
+    useGraphStore.setState({
+      threadId: 'thr_existing',
+      runs: [activeRun],
+      selectedRunId: activeRun.id
+    })
+    const steer = vi.spyOn(graphRuntimeClient, 'steer').mockResolvedValue({
+      ...activeRun,
+      lastEventSeq: 5
+    })
+
+    await expect(actions.sendMessage(
+      'Please reassign the blocked node.',
+      'agent'
+    )).resolves.toBe(true)
+
+    expect(steer).toHaveBeenCalledWith(
+      'run_1',
+      'Please reassign the blocked node.',
+      { kind: 'lead' }
+    )
+    expect(state.queuedMessages).toEqual([])
+    expect(state.blocks).toContainEqual(expect.objectContaining({
+      kind: 'user',
+      turnId: 'turn_graph_lead',
+      text: 'Please reassign the blocked node.'
+    }))
+  })
+
+  it('resumes a suspended Graph planning turn before a GraphRun exists', async () => {
+    const steerUserMessage = vi.fn(async () => undefined)
+    registryMock.getProvider.mockReturnValue({ steerUserMessage })
+    const listRuns = vi.spyOn(graphRuntimeClient, 'listRuns').mockResolvedValue([])
+    const { actions, state } = buildHarness()
+    state.currentTurnId = 'turn_graph_planning'
+    state.currentTurnOrchestration = 'graph'
+
+    await expect(actions.sendMessage(
+      'Continue building the Graph.',
+      'agent'
+    )).resolves.toBe(true)
+
+    expect(listRuns).toHaveBeenCalledWith('thr_existing')
+    expect(steerUserMessage).toHaveBeenCalledWith(
+      'thr_existing',
+      'turn_graph_planning',
+      'Continue building the Graph.',
+      undefined
+    )
+    expect(state.queuedMessages).toEqual([])
+    expect(state.blocks).toContainEqual(expect.objectContaining({
+      kind: 'user',
+      turnId: 'turn_graph_planning',
+      text: 'Continue building the Graph.'
+    }))
+  })
+
+  it('does not duplicate resumed Graph guidance when its runtime user item wins the race', async () => {
+    const { actions, state } = buildHarness()
+    state.currentTurnId = 'turn_graph_planning'
+    state.currentTurnOrchestration = 'graph'
+    const steerUserMessage = vi.fn(async () => {
+      state.blocks = [
+        ...state.blocks,
+        {
+          kind: 'user',
+          id: 'item_graph_guidance',
+          turnId: 'turn_graph_planning',
+          createdAt: new Date().toISOString(),
+          text: 'Continue building the Graph.'
+        }
+      ]
+    })
+    registryMock.getProvider.mockReturnValue({ steerUserMessage })
+    vi.spyOn(graphRuntimeClient, 'listRuns').mockResolvedValue([])
+
+    await expect(actions.sendMessage(
+      'Continue building the Graph.',
+      'agent'
+    )).resolves.toBe(true)
+
+    expect(state.blocks.filter((block) => block.kind === 'user')).toEqual([
+      expect.objectContaining({ id: 'item_graph_guidance' })
+    ])
+  })
+
+  it('does not append Graph guidance into a conversation selected during steering', async () => {
+    const { actions, state } = buildHarness()
+    state.currentTurnId = 'turn_graph_lead'
+    state.currentTurnOrchestration = 'graph'
+    const activeRun = {
+      id: 'run_1',
+      threadId: 'thr_existing',
+      sourceTurnId: 'turn_graph_lead',
+      status: 'running',
+      lastEventSeq: 4
+    } as GraphRun
+    useGraphStore.setState({
+      threadId: 'thr_existing',
+      runs: [activeRun],
+      selectedRunId: activeRun.id
+    })
+    let resolveSteer!: (run: GraphRun) => void
+    const steer = vi.spyOn(graphRuntimeClient, 'steer').mockImplementation(
+      () => new Promise((resolve) => {
+        resolveSteer = resolve
+      })
+    )
+
+    const pendingSend = actions.sendMessage('Continue the Graph.', 'agent')
+    await vi.waitFor(() => expect(resolveSteer).toBeTypeOf('function'))
+    expect(steer).toHaveBeenCalled()
+    state.activeThreadId = 'thr_other'
+    state.currentTurnId = 'turn_other'
+    state.currentTurnOrchestration = 'direct'
+    state.blocks = []
+    resolveSteer({ ...activeRun, lastEventSeq: 5 })
+
+    await expect(pendingSend).resolves.toBe(true)
+    expect(state.blocks).toEqual([])
   })
 
   it('persists queued messages and their reordered send order for the active thread', async () => {
@@ -158,6 +322,7 @@ describe('chat-store-thread-actions queued messages', () => {
         latestSeq: 2,
         threadStatus: 'running',
         latestTurnId: 'turn-running',
+        latestTurnOrchestration: 'graph',
         latestUserMessageId: 'u-running'
       })),
       subscribeThreadEvents: vi.fn(async () => ({ streamId: 'stream-restored' }))
@@ -176,6 +341,8 @@ describe('chat-store-thread-actions queued messages', () => {
         deliveryState: 'pending'
       })
     ])
+    expect(state.currentTurnOrchestration).toBe('graph')
+    expect(state.composerOrchestration).not.toBe('graph')
   })
 
   it('uses the runtime model for an empty thread instead of a legacy cached selection', async () => {
@@ -716,7 +883,9 @@ describe('chat-store-thread-actions queued messages', () => {
     state.composerModel = 'mimo-v2.5'
     state.composerProviderId = 'xiaomi-token-plan'
 
-    await expect(actions.sendMessage('hello', 'agent')).resolves.toBe(true)
+    await expect(actions.sendMessage('hello', 'agent', {
+      serviceTier: 'priority'
+    })).resolves.toBe(true)
 
     expect(setSettings).not.toHaveBeenCalled()
     expect(restartRuntime).not.toHaveBeenCalled()
@@ -724,8 +893,125 @@ describe('chat-store-thread-actions queued messages', () => {
     expect(provider.sendUserMessage).toHaveBeenCalledWith(
       'thr_existing',
       'hello',
-      expect.objectContaining({ model: 'mimo-v2.5', providerId: 'xiaomi-token-plan' })
+      expect.objectContaining({
+        model: 'mimo-v2.5',
+        providerId: 'xiaomi-token-plan',
+        serviceTier: 'priority'
+      })
     )
+  })
+
+  it('starts a Git checkpoint without blocking turn admission', async () => {
+    const sendUserMessage = vi.fn(async () => ({
+      threadId: 'thr_existing',
+      turnId: 'turn_1',
+      userMessageItemId: 'user_1'
+    }))
+    registryMock.getProvider.mockReturnValue({
+      sendUserMessage,
+      subscribeThreadEvents: vi.fn(async () => undefined)
+    })
+    let finishCheckpoint!: (value: {
+      ok: true
+      checkpointId: string
+      repositoryRoot: string
+      head: string | null
+      currentBranch: string | null
+    }) => void
+    const createGitCheckpoint = vi.fn((_input: {
+      workspaceRoot: string
+      threadId: string
+      checkpointId?: string
+    }) => new Promise<{
+      ok: true
+      checkpointId: string
+      repositoryRoot: string
+      head: string | null
+      currentBranch: string | null
+    }>((resolve) => { finishCheckpoint = resolve }))
+    vi.stubGlobal('window', {
+      kunGui: {
+        getSettings: vi.fn(async () => ({
+          agents: { kun: { providerId: 'deepseek', model: 'deepseek-v4-pro' } },
+          workspaceRoot: '/workspace/deepseek-gui',
+          checkpointCleanup: { createEnabled: true, enabled: true, intervalDays: 3 },
+          codePromptPrefix: ''
+        })),
+        createGitCheckpoint,
+        logError: vi.fn(async () => undefined)
+      }
+    })
+    const { actions, state } = buildHarness()
+    state.busy = false
+    state.threads = [{ ...thread('thr_existing'), status: 'idle' }]
+
+    await expect(actions.sendMessage('optimize this', 'agent')).resolves.toBe(true)
+
+    expect(createGitCheckpoint).toHaveBeenCalledWith(expect.objectContaining({
+      workspaceRoot: '/workspace/deepseek-gui',
+      threadId: 'thr_existing',
+      checkpointId: expect.stringMatching(/^gcp_/)
+    }))
+    const checkpointId = createGitCheckpoint.mock.calls[0]![0].checkpointId!
+    expect(sendUserMessage).toHaveBeenCalledWith(
+      'thr_existing',
+      expect.any(String),
+      expect.objectContaining({ workspaceCheckpointRequestId: checkpointId })
+    )
+
+    finishCheckpoint({
+      ok: true,
+      checkpointId,
+      repositoryRoot: '/workspace/deepseek-gui',
+      head: null,
+      currentBranch: null
+    })
+    await Promise.resolve()
+  })
+
+  it('sends Graph only while Graph is enabled and otherwise stays direct', async () => {
+    const provider = {
+      sendUserMessage: vi.fn(async () => ({
+        threadId: 'thr_existing',
+        turnId: 'turn_1',
+        userMessageItemId: 'user_1'
+      })),
+      subscribeThreadEvents: vi.fn(async () => undefined)
+    }
+    registryMock.getProvider.mockReturnValue(provider)
+    vi.stubGlobal('window', {
+      kunGui: {
+        getSettings: vi.fn(async () => ({
+          agents: { kun: { providerId: 'deepseek', model: 'deepseek-v4-pro' } },
+          codePromptPrefix: ''
+        })),
+        logError: vi.fn(async () => undefined)
+      }
+    })
+    const { actions, state } = buildHarness()
+    state.busy = false
+    state.graphEnabled = true
+    state.composerOrchestration = 'graph'
+
+    await expect(actions.sendMessage('orchestrate this', 'agent')).resolves.toBe(true)
+    expect(provider.sendUserMessage).toHaveBeenLastCalledWith(
+      'thr_existing',
+      'orchestrate this',
+      expect.objectContaining({ orchestration: 'graph' })
+    )
+    expect(state.currentTurnOrchestration).toBe('graph')
+
+    const { actions: directActions, state: directState } = buildHarness()
+    directState.busy = false
+    directState.graphEnabled = false
+    directState.composerOrchestration = 'graph'
+    await expect(directActions.sendMessage('run directly', 'agent')).resolves.toBe(true)
+    expect(provider.sendUserMessage).toHaveBeenLastCalledWith(
+      'thr_existing',
+      'run directly',
+      expect.objectContaining({ orchestration: 'direct' })
+    )
+    expect(directState.currentTurnOrchestration).toBe('direct')
   })
 
   it('keeps a rejected send visible as a non-interactive conversation error', async () => {
@@ -749,6 +1035,7 @@ describe('chat-store-thread-actions queued messages', () => {
 
     await expect(actions.sendMessage('hello', 'agent')).resolves.toBe(false)
 
+    expect(state.currentTurnOrchestration).toBeNull()
     expect(state.blocks).toContainEqual(expect.objectContaining({
       kind: 'user',
       text: 'hello'
@@ -1217,7 +1504,10 @@ describe('chat-store-thread-actions recoverActiveTurn settles interrupted work',
     vi.unstubAllGlobals()
   })
 
-  function providerWith(threadStatus: string) {
+  function providerWith(
+    threadStatus: string,
+    latestTurnOrchestration: 'direct' | 'graph' = 'direct'
+  ) {
     return {
       getThreadDetail: vi.fn(async () => ({
         blocks: [
@@ -1227,6 +1517,7 @@ describe('chat-store-thread-actions recoverActiveTurn settles interrupted work',
         latestSeq: 3,
         threadStatus,
         latestTurnId: 'turn_1',
+        latestTurnOrchestration,
         latestUserMessageId: 'u1'
       })),
       subscribeThreadEvents: vi.fn(async () => ({ streamId: 'stream_recover' }))
@@ -1245,6 +1536,7 @@ describe('chat-store-thread-actions recoverActiveTurn settles interrupted work',
 
     expect(busy).toBe(false)
     expect(state.busy).toBe(false)
+    expect(state.currentTurnOrchestration).toBeNull()
     // The interrupted delegate_task block is settled, so hasPendingRuntimeWork
     // is no longer true and queued/new messages can actually send.
     const tool = state.blocks.find((block) => block.kind === 'tool')
@@ -1265,6 +1557,23 @@ describe('chat-store-thread-actions recoverActiveTurn settles interrupted work',
     // A genuinely live turn must keep its running block so the GUI reconnects.
     const tool = state.blocks.find((block) => block.kind === 'tool')
     expect(tool?.status).toBe('running')
+  })
+
+  it('restores a running Graph turn without changing the next-turn Direct selection', async () => {
+    const provider = providerWith('running', 'graph')
+    registryMock.getProvider.mockReturnValue(provider)
+
+    const { actions, state } = buildHarness()
+    state.activeThreadId = 'thr_existing'
+    state.busy = true
+    state.composerOrchestration = 'direct'
+    state.currentTurnOrchestration = null
+
+    const busy = await actions.recoverActiveTurn()
+
+    expect(busy).toBe(true)
+    expect(state.currentTurnOrchestration).toBe('graph')
+    expect(state.composerOrchestration).toBe('direct')
   })
 })
 
@@ -1404,7 +1713,8 @@ describe('chat-store-thread-actions createThread conversation mode', () => {
           locale: 'en',
           theme: 'system',
           uiFontScale: 0.82,
-    chatContentMaxWidthPx: 896,
+          chatContentMaxWidthPx: 896,
+          composerSendKey: 'enter',
           provider: { providers: [], apiKey: '', baseUrl: '', proxy: { enabled: false } },
           agents: { kun: { model: 'deepseek-v4-pro', apiKey: 'k', baseUrl: '' } },
           workspaceRoot: '/tmp/workspace',

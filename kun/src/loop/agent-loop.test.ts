@@ -1,5 +1,5 @@
 import { resolve } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { InMemoryEventBus } from '../adapters/in-memory-event-bus.js'
 import { InMemorySessionStore } from '../adapters/in-memory-session-store.js'
 import { InMemoryThreadStore } from '../adapters/in-memory-thread-store.js'
@@ -127,6 +127,53 @@ class RepeatingToolModel implements ModelClient {
   }
 }
 
+class AlternatingGraphLeadToolModel implements ModelClient {
+  readonly provider = 'test'
+  readonly model = 'alternating-graph-lead-tool-model'
+  readonly requests: ModelRequest[] = []
+
+  async *stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
+    this.requests.push(request)
+    const sequence = this.requests.length
+    const controlStep = sequence % 2 === 1
+    yield {
+      kind: 'tool_call_complete',
+      callId: `graph_lead_call_${sequence}`,
+      toolName: controlStep ? 'graph_control_run' : 'graph_supervise_node',
+      arguments: {
+        action: controlStep ? 'inspect' : 'overview',
+        sequence
+      }
+    }
+    yield { kind: 'completed', stopReason: 'tool_calls' }
+  }
+}
+
+class HangingGraphLeadModel implements ModelClient {
+  readonly provider = 'test'
+  readonly model = 'hanging-graph-lead-model'
+  readonly requests: ModelRequest[] = []
+  private markStarted: (() => void) | undefined
+  private readonly started = new Promise<void>((resolve) => {
+    this.markStarted = resolve
+  })
+
+  async *stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
+    this.requests.push(request)
+    this.markStarted?.()
+    if (!request.abortSignal.aborted) {
+      await new Promise<void>((resolve) => {
+        request.abortSignal.addEventListener('abort', () => resolve(), { once: true })
+      })
+    }
+    for (const chunk of [] as ModelStreamChunk[]) yield chunk
+  }
+
+  waitForStart(): Promise<void> {
+    return this.started
+  }
+}
+
 class CapturingCompleteModel implements ModelClient {
   readonly provider = 'test'
   readonly model = 'capturing-complete-model'
@@ -135,6 +182,82 @@ class CapturingCompleteModel implements ModelClient {
   async *stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
     this.requests.push(request)
     yield { kind: 'assistant_text_delta', text: 'Done.' }
+    yield { kind: 'completed', stopReason: 'stop' }
+  }
+}
+
+class RecoverableGraphStreamModel implements ModelClient {
+  readonly provider = 'test'
+  readonly model = 'recoverable-graph-stream-model'
+  readonly requests: ModelRequest[] = []
+
+  async *stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
+    this.requests.push(request)
+    if (this.requests.length === 1) {
+      yield { kind: 'assistant_text_delta', text: 'Partial Graph supervision update.' }
+      yield {
+        kind: 'error',
+        message: 'model stream read failed: terminated',
+        code: 'stream_read_error',
+        failure: { category: 'network', failoverAllowed: true }
+      }
+      return
+    }
+    yield { kind: 'assistant_text_delta', text: 'Recovered Graph final response.' }
+    yield { kind: 'completed', stopReason: 'stop' }
+  }
+}
+
+class ScriptedGraphModel implements ModelClient {
+  readonly provider = 'test'
+  readonly model = 'scripted-graph-model'
+  readonly requests: ModelRequest[] = []
+
+  async *stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
+    this.requests.push(request)
+    if (this.requests.length === 1) {
+      yield {
+        kind: 'assistant_text_delta',
+        text: 'Graph validation failed, so the run was not started.'
+      }
+      yield { kind: 'completed', stopReason: 'stop' }
+      return
+    }
+    if (this.requests.length === 2) {
+      yield {
+        kind: 'tool_call_complete',
+        callId: 'graph_define_call',
+        toolName: 'graph_define_plan',
+        arguments: { plan: { tasks: [] } }
+      }
+      yield { kind: 'completed', stopReason: 'tool_calls' }
+      return
+    }
+    yield { kind: 'assistant_text_delta', text: 'GraphRun started.' }
+    yield { kind: 'completed', stopReason: 'stop' }
+  }
+}
+
+class ScriptedInvalidGraphModel implements ModelClient {
+  readonly provider = 'test'
+  readonly model = 'scripted-invalid-graph-model'
+  readonly requests: ModelRequest[] = []
+
+  async *stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
+    this.requests.push(request)
+    if (this.requests.length <= 2) {
+      yield {
+        kind: 'tool_call_complete',
+        callId: `graph_define_call_${this.requests.length}`,
+        toolName: 'graph_define_plan',
+        arguments: this.requests.length === 1
+          ? { plan: {} }
+          : { plan: { valid: true } }
+      }
+      yield { kind: 'completed', stopReason: 'tool_calls' }
+      return
+    }
+    yield { kind: 'assistant_text_delta', text: 'GraphRun started after correction.' }
     yield { kind: 'completed', stopReason: 'stop' }
   }
 }
@@ -446,16 +569,818 @@ describe('AgentLoop interruption', () => {
     expect(model.requests[0]?.contextInstructions?.[0]).toContain(
       'Kun assembled the following dynamic context'
     )
-    expect(model.requests[0]?.contextInstructions?.[1]).toContain(
-      '<kun_context_block kind="runtime-context" authority="runtime">'
+    expect(model.requests[0]?.contextInstructions).toEqual(expect.arrayContaining([
+      expect.stringContaining('<kun_context_block kind="runtime-context" authority="runtime">'),
+      expect.stringContaining('Current opened project absolute path: `/tmp/workspace`')
+    ]))
+  })
+
+  it('keeps the source turn active until its GraphRun is terminal (#1031)', async () => {
+    const sessionStore = new InMemorySessionStore()
+    const threadStore = new InMemoryThreadStore()
+    const eventBus = new InMemoryEventBus()
+    const inflight = new InflightTracker()
+    const steering = new SteeringQueue()
+    const ids = new SequentialIdGenerator()
+    const nowIso = () => '2026-07-26T00:00:00.000Z'
+    const events = new RuntimeEventRecorder({
+      eventBus,
+      sessionStore,
+      allocateSeq: (threadId) => eventBus.allocateSeq(threadId),
+      nowIso
+    })
+    const model = new ScriptedGraphModel()
+    let graphTerminal = false
+    const turns = new TurnService({
+      threadStore,
+      sessionStore,
+      events,
+      inflight,
+      steering,
+      compactor: new ContextCompactor(),
+      resolveGraphLeadRun: async ({ threadId }) => threadId === 'thr_graph_mode'
+        ? {
+            runId: 'graph_run_1',
+            lastEventSeq: graphTerminal ? 9 : 3,
+            terminal: graphTerminal
+          }
+        : null,
+      ids,
+      nowIso
+    })
+    const graphTool = LocalToolHost.defineTool({
+      name: 'graph_define_plan',
+      description: 'Define and commit a validated Graph plan.',
+      inputSchema: { type: 'object', additionalProperties: false },
+      toolKind: 'tool_call',
+      policy: 'auto',
+      shouldAdvertise: (context) => context.orchestration === 'graph',
+      execute: async () => ({ output: { run: { id: 'graph_run_1', status: 'running' } } })
+    })
+    const graphControlTool = LocalToolHost.defineTool({
+      name: 'graph_control_run',
+      description: 'Control an existing GraphRun.',
+      inputSchema: { type: 'object', additionalProperties: false },
+      toolKind: 'tool_call',
+      policy: 'auto',
+      shouldAdvertise: (context) => context.orchestration === 'graph',
+      execute: async () => ({ output: { ok: true } })
+    })
+    const graphSuperviseTool = LocalToolHost.defineTool({
+      name: 'graph_supervise_node',
+      description: 'Inspect, wait for, or guide an active Graph worker.',
+      inputSchema: { type: 'object', additionalProperties: false },
+      toolKind: 'tool_call',
+      policy: 'auto',
+      shouldAdvertise: (context) => context.orchestration === 'graph',
+      execute: async () => ({ output: { ok: true } })
+    })
+    const loop = new AgentLoop({
+      threadStore,
+      sessionStore,
+      approvalGate: new AllowApprovalGate(),
+      userInputGate: new NoopUserInputGate(),
+      model,
+      toolHost: new LocalToolHost({
+        tools: [graphTool, graphControlTool, graphSuperviseTool]
+      }),
+      usage: new UsageService(),
+      events,
+      turns,
+      inflight,
+      steering,
+      compactor: new ContextCompactor(),
+      prefix: createImmutablePrefix({ systemPrompt: 'test system prompt' }),
+      turnLimits: { maxSteps: 2, maxWallTimeMs: 60_000 },
+      ids,
+      nowIso
+    })
+    await threadStore.upsert(createThreadRecord({
+      id: 'thr_graph_mode',
+      title: 'Graph mode',
+      workspace: '/tmp/workspace',
+      model: model.model
+    }))
+    const graphTurn = await turns.startTurn({
+      threadId: 'thr_graph_mode',
+      request: {
+        prompt: 'Implement and verify the feature.',
+        model: model.model,
+        orchestration: 'graph'
+      }
+    })
+
+    await expect(loop.runTurn('thr_graph_mode', graphTurn.turnId)).resolves.toBe('suspended')
+    expect((await turns.getTurn('thr_graph_mode', graphTurn.turnId))?.status).toBe('running')
+    expect(turns.isTurnExecutionActive(graphTurn.turnId)).toBe(false)
+    expect(eventBus.snapshotSince('thr_graph_mode', 0)
+      .some((event) => event.kind === 'turn_completed')).toBe(false)
+    expect(eventBus.snapshotSince('thr_graph_mode', 0)
+      .some((event) => event.kind === 'error' && event.code === 'turn_step_limit')).toBe(false)
+    expect(model.requests).toHaveLength(3)
+    expect(model.requests[0]?.requiredToolName).toBeUndefined()
+    expect(model.requests[0]?.modeInstruction).toContain('Graph Mode is active')
+    expect(model.requests[0]?.modeInstruction).toContain(
+      'You are the source Graph Lead: the original main agent'
     )
-    expect(model.requests[0]?.contextInstructions?.[1]).toContain(
-      'Current opened project absolute path: `/tmp/workspace`'
+    expect(model.requests[0]?.modeInstruction).toContain('## Required operating loop')
+    expect(model.requests[0]?.tools.map((tool) => tool.name)).toEqual(['graph_define_plan'])
+    expect(model.requests[1]?.requiredToolName).toBeUndefined()
+    expect(model.requests[1]?.tools.map((tool) => tool.name)).toEqual(['graph_define_plan'])
+    expect(model.requests[1]?.contextInstructions).toEqual(expect.arrayContaining([
+      expect.stringContaining('did not call `graph_define_plan`')
+    ]))
+    expect(model.requests[2]?.requiredToolName).toBeUndefined()
+    expect(model.requests[2]?.tools.map((tool) => tool.name)).toEqual([
+      'graph_define_plan',
+      'graph_control_run',
+      'graph_supervise_node'
+    ])
+    expect(model.requests[2]?.modeInstruction).toContain(
+      'You are the source Graph Lead: the original main agent'
     )
+    expect(model.requests[2]?.modeInstruction).toContain(
+      'Use `graph_supervise_node overview`'
+    )
+    expect(model.requests[2]?.modeInstruction).toContain(
+      'Do not treat dispatch or one milestone as completion'
+    )
+    expect(model.requests[2]?.history).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'tool_result',
+        toolName: 'graph_define_plan'
+      })
+    ]))
+
+    graphTerminal = true
+    await turns.resumeGraphLeadTurn({
+      threadId: 'thr_graph_mode',
+      turnId: graphTurn.turnId,
+      runId: 'graph_run_1',
+      lastDeliveredSeq: 9,
+      terminal: true
+    })
+    await turns.steerTurn({
+      threadId: 'thr_graph_mode',
+      turnId: graphTurn.turnId,
+      text: 'Present the persisted final Graph result.',
+      messageSource: 'graph_runtime'
+    })
+    await expect(loop.runTurn('thr_graph_mode', graphTurn.turnId)).resolves.toBe('completed')
+    expect((await turns.getTurn('thr_graph_mode', graphTurn.turnId))?.status).toBe('completed')
+    expect(eventBus.snapshotSince('thr_graph_mode', 0)
+      .some((event) => event.kind === 'turn_completed')).toBe(true)
+
+    const directModel = new CapturingCompleteModel()
+    const directLoop = new AgentLoop({
+      threadStore,
+      sessionStore,
+      approvalGate: new AllowApprovalGate(),
+      userInputGate: new NoopUserInputGate(),
+      model: directModel,
+      toolHost: new LocalToolHost({ tools: [graphTool] }),
+      usage: new UsageService(),
+      events,
+      turns,
+      inflight,
+      steering,
+      compactor: new ContextCompactor(),
+      prefix: createImmutablePrefix({ systemPrompt: 'test system prompt' }),
+      ids,
+      nowIso
+    })
+    await threadStore.upsert(createThreadRecord({
+      id: 'thr_direct_mode',
+      title: 'Direct mode',
+      workspace: '/tmp/workspace',
+      model: directModel.model
+    }))
+    const directTurn = await turns.startTurn({
+      threadId: 'thr_direct_mode',
+      request: {
+        prompt: 'Answer directly.',
+        model: directModel.model,
+        orchestration: 'direct'
+      }
+    })
+    await expect(directLoop.runTurn('thr_direct_mode', directTurn.turnId))
+      .resolves.toBe('completed')
+    expect(directModel.requests[0]?.requiredToolName).toBeUndefined()
+    expect(directModel.requests[0]?.tools.map((tool) => tool.name))
+      .not.toContain('graph_create_run')
+  })
+
+  it('parks a nonterminal Graph Lead episode after eight alternating tool steps', async () => {
+    const sessionStore = new InMemorySessionStore()
+    const threadStore = new InMemoryThreadStore()
+    const eventBus = new InMemoryEventBus()
+    const inflight = new InflightTracker()
+    const steering = new SteeringQueue()
+    const ids = new SequentialIdGenerator()
+    const nowIso = () => '2026-07-30T00:00:00.000Z'
+    const events = new RuntimeEventRecorder({
+      eventBus,
+      sessionStore,
+      allocateSeq: (threadId) => eventBus.allocateSeq(threadId),
+      nowIso
+    })
+    const model = new AlternatingGraphLeadToolModel()
+    const turns = new TurnService({
+      threadStore,
+      sessionStore,
+      events,
+      inflight,
+      steering,
+      compactor: new ContextCompactor(),
+      resolveGraphLeadRun: async () => ({
+        runId: 'graph_run_bounded_episode',
+        lastEventSeq: 12,
+        terminal: false,
+        supervisionPending: true
+      }),
+      ids,
+      nowIso
+    })
+    const graphToolSchema = {
+      type: 'object',
+      properties: {
+        action: { type: 'string' },
+        sequence: { type: 'number' }
+      },
+      required: ['action', 'sequence'],
+      additionalProperties: false
+    } as const
+    const graphControlTool = LocalToolHost.defineTool({
+      name: 'graph_control_run',
+      description: 'Inspect a GraphRun.',
+      inputSchema: graphToolSchema,
+      toolKind: 'tool_call',
+      policy: 'auto',
+      shouldAdvertise: (context) => context.orchestration === 'graph',
+      execute: async () => ({ output: { ok: true } })
+    })
+    const graphSuperviseTool = LocalToolHost.defineTool({
+      name: 'graph_supervise_node',
+      description: 'Inspect a Graph worker.',
+      inputSchema: graphToolSchema,
+      toolKind: 'tool_call',
+      policy: 'auto',
+      shouldAdvertise: (context) => context.orchestration === 'graph',
+      execute: async () => ({ output: { ok: true } })
+    })
+    const loop = new AgentLoop({
+      threadStore,
+      sessionStore,
+      approvalGate: new AllowApprovalGate(),
+      userInputGate: new NoopUserInputGate(),
+      model,
+      toolHost: new LocalToolHost({ tools: [graphControlTool, graphSuperviseTool] }),
+      usage: new UsageService(),
+      events,
+      turns,
+      inflight,
+      steering,
+      compactor: new ContextCompactor(),
+      prefix: createImmutablePrefix({ systemPrompt: 'test system prompt' }),
+      turnLimits: { maxSteps: 1, maxWallTimeMs: 60_000 },
+      ids,
+      nowIso
+    })
+    const threadId = 'thr_graph_bounded_lead_episode'
+    await threadStore.upsert(createThreadRecord({
+      id: threadId,
+      title: 'Bounded Graph Lead episode',
+      workspace: '/tmp/workspace',
+      model: model.model
+    }))
+    const started = await turns.startTurn({
+      threadId,
+      request: {
+        prompt: 'Supervise the durable GraphRun.',
+        model: model.model,
+        orchestration: 'graph'
+      }
+    })
+    await turns.resumeGraphLeadTurn({
+      threadId,
+      turnId: started.turnId,
+      runId: 'graph_run_bounded_episode',
+      lastDeliveredSeq: 12,
+      terminal: false
+    })
+
+    const suspendGraphLeadTurn = turns.suspendGraphLeadTurn.bind(turns)
+    const suspensionInputs: Parameters<TurnService['suspendGraphLeadTurn']>[0][] = []
+    turns.suspendGraphLeadTurn = async (input) => {
+      suspensionInputs.push(input)
+      return suspendGraphLeadTurn(input)
+    }
+    const finishTurn = turns.finishTurn.bind(turns)
+    let finishTurnCalls = 0
+    turns.finishTurn = async (input) => {
+      finishTurnCalls += 1
+      return finishTurn(input)
+    }
+
+    await expect(loop.runTurn(threadId, started.turnId)).resolves.toBe('suspended')
+
+    expect(model.requests).toHaveLength(8)
+    expect(suspensionInputs).toEqual([
+      {
+        threadId,
+        turnId: started.turnId,
+        force: true,
+        preserveDeliveryCursor: true,
+        allowPendingSupervision: true
+      }
+    ])
+    expect(finishTurnCalls).toBe(0)
+    expect((await turns.getTurn(threadId, started.turnId))?.status).toBe('running')
+    expect(turns.isTurnExecutionActive(started.turnId)).toBe(false)
+    expect(eventBus.snapshotSince(threadId, 0).some((event) =>
+      event.kind === 'turn_completed' ||
+      event.kind === 'turn_failed' ||
+      (event.kind === 'error' && event.code === 'turn_step_limit')
+    )).toBe(false)
+  })
+
+  it('aborts and parks a Graph Lead model step at the episode elapsed-time limit', async () => {
+    vi.useFakeTimers()
+    try {
+      const sessionStore = new InMemorySessionStore()
+      const threadStore = new InMemoryThreadStore()
+      const eventBus = new InMemoryEventBus()
+      const inflight = new InflightTracker()
+      const steering = new SteeringQueue()
+      const ids = new SequentialIdGenerator()
+      const nowIso = () => '2026-07-30T00:00:00.000Z'
+      const events = new RuntimeEventRecorder({
+        eventBus,
+        sessionStore,
+        allocateSeq: (threadId) => eventBus.allocateSeq(threadId),
+        nowIso
+      })
+      const model = new HangingGraphLeadModel()
+      const turns = new TurnService({
+        threadStore,
+        sessionStore,
+        events,
+        inflight,
+        steering,
+        compactor: new ContextCompactor(),
+        resolveGraphLeadRun: async () => ({
+          runId: 'graph_run_elapsed_episode',
+          lastEventSeq: 4,
+          terminal: false,
+          supervisionPending: true
+        }),
+        ids,
+        nowIso
+      })
+      const loop = new AgentLoop({
+        threadStore,
+        sessionStore,
+        approvalGate: new AllowApprovalGate(),
+        userInputGate: new NoopUserInputGate(),
+        model,
+        toolHost: new LocalToolHost({ tools: [] }),
+        usage: new UsageService(),
+        events,
+        turns,
+        inflight,
+        steering,
+        compactor: new ContextCompactor(),
+        prefix: createImmutablePrefix({ systemPrompt: 'test system prompt' }),
+        ids,
+        nowIso
+      })
+      const threadId = 'thr_graph_elapsed_lead_episode'
+      await threadStore.upsert(createThreadRecord({
+        id: threadId,
+        title: 'Elapsed Graph Lead episode',
+        workspace: '/tmp/workspace',
+        model: model.model
+      }))
+      const started = await turns.startTurn({
+        threadId,
+        request: {
+          prompt: 'Supervise without hanging forever.',
+          model: model.model,
+          orchestration: 'graph'
+        }
+      })
+      await turns.resumeGraphLeadTurn({
+        threadId,
+        turnId: started.turnId,
+        runId: 'graph_run_elapsed_episode',
+        lastDeliveredSeq: 4,
+        terminal: false
+      })
+
+      const finishTurn = turns.finishTurn.bind(turns)
+      let finishTurnCalls = 0
+      turns.finishTurn = async (input) => {
+        finishTurnCalls += 1
+        return finishTurn(input)
+      }
+
+      const run = loop.runTurn(threadId, started.turnId)
+      await model.waitForStart()
+      await vi.advanceTimersByTimeAsync(10 * 60_000)
+
+      await expect(run).resolves.toBe('suspended')
+      expect(model.requests).toHaveLength(1)
+      expect(model.requests[0]?.abortSignal.aborted).toBe(true)
+      expect(finishTurnCalls).toBe(0)
+      expect((await turns.getTurn(threadId, started.turnId))?.status).toBe('running')
+      expect(turns.isTurnExecutionActive(started.turnId)).toBe(false)
+      expect(eventBus.snapshotSince(threadId, 0).some((event) =>
+        event.kind === 'turn_completed' ||
+        event.kind === 'turn_failed' ||
+        event.kind === 'error'
+      )).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('parks and resumes the same Graph source turn after a committed stream read failure', async () => {
+    const sessionStore = new InMemorySessionStore()
+    const threadStore = new InMemoryThreadStore()
+    const eventBus = new InMemoryEventBus()
+    const inflight = new InflightTracker()
+    const steering = new SteeringQueue()
+    const ids = new SequentialIdGenerator()
+    const nowIso = () => '2026-07-30T00:00:00.000Z'
+    const events = new RuntimeEventRecorder({
+      eventBus,
+      sessionStore,
+      allocateSeq: (threadId) => eventBus.allocateSeq(threadId),
+      nowIso
+    })
+    const model = new RecoverableGraphStreamModel()
+    let graphTerminal = false
+    const turns = new TurnService({
+      threadStore,
+      sessionStore,
+      events,
+      inflight,
+      steering,
+      compactor: new ContextCompactor(),
+      resolveGraphLeadRun: async () => ({
+        runId: 'graph_run_stream_recovery',
+        lastEventSeq: graphTerminal ? 8 : 4,
+        terminal: graphTerminal
+      }),
+      ids,
+      nowIso
+    })
+    const loop = new AgentLoop({
+      threadStore,
+      sessionStore,
+      approvalGate: new AllowApprovalGate(),
+      userInputGate: new NoopUserInputGate(),
+      model,
+      toolHost: new LocalToolHost({ tools: [] }),
+      usage: new UsageService(),
+      events,
+      turns,
+      inflight,
+      steering,
+      compactor: new ContextCompactor(),
+      prefix: createImmutablePrefix({ systemPrompt: 'test system prompt' }),
+      ids,
+      nowIso
+    })
+    const threadId = 'thr_graph_stream_recovery'
+    await threadStore.upsert(createThreadRecord({
+      id: threadId,
+      title: 'Graph stream recovery',
+      workspace: '/tmp/workspace',
+      model: model.model
+    }))
+    const started = await turns.startTurn({
+      threadId,
+      request: {
+        prompt: 'Keep supervising this Graph until it is complete.',
+        model: model.model,
+        orchestration: 'graph'
+      }
+    })
+
+    const suspendGraphLeadTurn = turns.suspendGraphLeadTurn.bind(turns)
+    let parkedTurn: Awaited<ReturnType<TurnService['getTurn']>> | undefined
+    let parkedItems: Awaited<ReturnType<InMemorySessionStore['loadItems']>> = []
+    let executionReleasedBeforeWake = false
+    let turnFailedBeforeWake = false
+    let racedContinuation: ReturnType<AgentLoop['runTurn']> | undefined
+    turns.suspendGraphLeadTurn = async (input) => {
+      const outcome = await suspendGraphLeadTurn(input)
+      if (outcome !== 'suspended' || racedContinuation) return outcome
+      parkedTurn = await turns.getTurn(threadId, started.turnId)
+      parkedItems = await sessionStore.loadItems(threadId)
+      executionReleasedBeforeWake = !turns.isTurnExecutionActive(started.turnId)
+      turnFailedBeforeWake = eventBus.snapshotSince(threadId, 0)
+        .some((event) => event.kind === 'turn_failed')
+
+      // Reacquire the lease and invoke runTurn before the old suspended
+      // promise has left AgentLoop.activeTurnRuns. The wake-up must chain a
+      // fresh runner after that promise settles instead of losing the lease.
+      graphTerminal = true
+      await turns.resumeGraphLeadTurn({
+        threadId,
+        turnId: started.turnId,
+        runId: 'graph_run_stream_recovery',
+        lastDeliveredSeq: 8,
+        terminal: true
+      })
+      await turns.steerTurn({
+        threadId,
+        turnId: started.turnId,
+        text: 'Continue in Graph mode and deliver the final result.'
+      })
+      racedContinuation = loop.runTurn(threadId, started.turnId)
+      return outcome
+    }
+
+    await expect(loop.runTurn(threadId, started.turnId)).resolves.toBe('suspended')
+    expect(parkedTurn).toMatchObject({
+      id: started.turnId,
+      status: 'running',
+      orchestration: 'graph',
+      graphLeadLifecycle: {
+        runId: 'graph_run_stream_recovery',
+        state: 'supervising',
+        // Parking a failed episode must not acknowledge events that were not
+        // delivered through an explicit Graph Lead resume snapshot.
+        lastDeliveredSeq: 0
+      }
+    })
+    expect(executionReleasedBeforeWake).toBe(true)
+    expect(parkedItems).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'error',
+        code: 'stream_read_error',
+        message: 'model stream read failed: terminated'
+      })
+    ]))
+    expect(parkedItems.filter((item) =>
+      item.kind === 'assistant_text' &&
+      item.text === 'Partial Graph supervision update.'
+    )).toHaveLength(1)
+    expect(turnFailedBeforeWake).toBe(false)
+
+    expect(racedContinuation).toBeDefined()
+    await expect(racedContinuation!).resolves.toBe('completed')
+    expect((await turns.getTurn(threadId, started.turnId))?.status).toBe('completed')
+    expect(model.requests).toHaveLength(2)
+    expect(model.requests[1]?.modeInstruction).toContain('Graph Mode is active')
+    expect(model.requests[1]?.history).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'user_message',
+        text: 'Continue in Graph mode and deliver the final result.'
+      })
+    ]))
+  })
+
+  it('parks the planning draft without a terminal error when the model cannot call tools', async () => {
+    const sessionStore = new InMemorySessionStore()
+    const threadStore = new InMemoryThreadStore()
+    const eventBus = new InMemoryEventBus()
+    const inflight = new InflightTracker()
+    const steering = new SteeringQueue()
+    const ids = new SequentialIdGenerator()
+    const nowIso = () => '2026-07-28T00:00:00.000Z'
+    const events = new RuntimeEventRecorder({
+      eventBus,
+      sessionStore,
+      allocateSeq: (threadId) => eventBus.allocateSeq(threadId),
+      nowIso
+    })
+    const model = new CapturingCompleteModel()
+    const turns = new TurnService({
+      threadStore,
+      sessionStore,
+      events,
+      inflight,
+      steering,
+      compactor: new ContextCompactor(),
+      createGraphPlanningDraft: async () => ({
+        version: 1,
+        draftId: 'draft_unsupported',
+        reservedRunId: 'run_unsupported',
+        state: 'planning',
+        draftRevision: 1
+      }),
+      transitionGraphPlanningDraft: async ({ action }) => ({
+        version: 1,
+        draftId: 'draft_unsupported',
+        reservedRunId: 'run_unsupported',
+        state: action === 'suspend' ? 'needs_correction' : 'planning',
+        draftRevision: 2
+      }),
+      ids,
+      nowIso
+    })
+    const graphTool = LocalToolHost.defineTool({
+      name: 'graph_define_plan',
+      description: 'Define and commit a validated Graph plan.',
+      inputSchema: { type: 'object', additionalProperties: false },
+      toolKind: 'tool_call',
+      policy: 'auto',
+      shouldAdvertise: (context) => context.orchestration === 'graph',
+      execute: async () => ({ output: { run: { id: 'graph_run_unsupported' } } })
+    })
+    const loop = new AgentLoop({
+      threadStore,
+      sessionStore,
+      approvalGate: new AllowApprovalGate(),
+      userInputGate: new NoopUserInputGate(),
+      model,
+      toolHost: new LocalToolHost({ tools: [graphTool] }),
+      usage: new UsageService(),
+      events,
+      turns,
+      inflight,
+      steering,
+      compactor: new ContextCompactor(),
+      prefix: createImmutablePrefix({ systemPrompt: 'test system prompt' }),
+      ids,
+      nowIso,
+      modelCapabilities: (modelId) => ({
+        id: modelId,
+        inputModalities: ['text'],
+        outputModalities: ['text'],
+        supportsToolCalling: false,
+        messageParts: ['text']
+      })
+    })
+    const threadId = 'thr_graph_unsupported'
+    await threadStore.upsert(createThreadRecord({
+      id: threadId,
+      title: 'Unsupported Graph mode',
+      workspace: '/tmp/workspace',
+      model: model.model
+    }))
+    const started = await turns.startTurn({
+      threadId,
+      request: {
+        prompt: 'Create a graph.',
+        model: model.model,
+        orchestration: 'graph'
+      }
+    })
+
+    await expect(loop.runTurn(threadId, started.turnId)).resolves.toBe('suspended')
+    expect(model.requests).toHaveLength(2)
+    expect(model.requests.every((request) => request.requiredToolName === undefined)).toBe(true)
+    expect(model.requests[1]?.contextInstructions).toEqual(expect.arrayContaining([
+      expect.stringContaining('did not call `graph_define_plan`')
+    ]))
+    const turn = await turns.getTurn(threadId, started.turnId)
+    expect(turn?.status).toBe('running')
+    expect(turn?.graphPlanningLifecycle).toMatchObject({
+      draftId: 'draft_unsupported',
+      state: 'needs_correction'
+    })
+    const recorded = await sessionStore.loadEventsSince(threadId, 0)
+    expect(recorded.some((event) => event.kind === 'error')).toBe(false)
+
+    await turns.steerTurn({
+      threadId,
+      turnId: started.turnId,
+      text: 'Continue the suspended Graph planning turn.'
+    })
+    expect(turns.isTurnExecutionActive(started.turnId)).toBe(true)
+    expect(steering.peek(started.turnId)).toEqual([
+      { text: 'Continue the suspended Graph planning turn.' }
+    ])
+    await turns.interruptTurn({ threadId, turnId: started.turnId })
+  })
+
+  it('recovers retryable invalid Graph creation through a single-tool correction round', async () => {
+    const sessionStore = new InMemorySessionStore()
+    const threadStore = new InMemoryThreadStore()
+    const eventBus = new InMemoryEventBus()
+    const inflight = new InflightTracker()
+    const steering = new SteeringQueue()
+    const ids = new SequentialIdGenerator()
+    const nowIso = () => '2026-07-27T00:00:00.000Z'
+    const events = new RuntimeEventRecorder({
+      eventBus,
+      sessionStore,
+      allocateSeq: (threadId) => eventBus.allocateSeq(threadId),
+      nowIso
+    })
+    const model = new ScriptedInvalidGraphModel()
+    const turns = new TurnService({
+      threadStore,
+      sessionStore,
+      events,
+      inflight,
+      steering,
+      compactor: new ContextCompactor(),
+      ids,
+      nowIso
+    })
+    const graphTool = LocalToolHost.defineTool({
+      name: 'graph_define_plan',
+      description: 'Define and commit a validated Graph plan.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          plan: {
+            type: 'object',
+            properties: { valid: { type: 'boolean' } },
+            required: ['valid'],
+            additionalProperties: false
+          }
+        },
+        required: ['plan'],
+        additionalProperties: false
+      },
+      toolKind: 'tool_call',
+      policy: 'auto',
+      shouldAdvertise: (context) => context.orchestration === 'graph',
+      execute: async (args) => {
+        const plan = args.plan as { valid?: unknown } | undefined
+        return plan?.valid === true
+          ? { output: { run: { id: 'graph_run_1', status: 'running' } } }
+          : {
+              output: {
+                code: 'graph_plan_invalid',
+                error: 'plan.valid is required',
+                issues: [{ path: ['plan', 'valid'], code: 'invalid_type', message: 'Required' }],
+                retryable: true,
+                draft: { status: 'repairing' }
+              },
+              isError: true
+            }
+      }
+    })
+    const graphControlTool = LocalToolHost.defineTool({
+      name: 'graph_control_run',
+      description: 'Control an existing GraphRun.',
+      inputSchema: { type: 'object', additionalProperties: false },
+      toolKind: 'tool_call',
+      policy: 'auto',
+      shouldAdvertise: (context) => context.orchestration === 'graph',
+      execute: async () => ({ output: { ok: true } })
+    })
+    const loop = new AgentLoop({
+      threadStore,
+      sessionStore,
+      approvalGate: new AllowApprovalGate(),
+      userInputGate: new NoopUserInputGate(),
+      model,
+      toolHost: new LocalToolHost({ tools: [graphTool, graphControlTool] }),
+      usage: new UsageService(),
+      events,
+      turns,
+      inflight,
+      steering,
+      compactor: new ContextCompactor(),
+      prefix: createImmutablePrefix({ systemPrompt: 'test system prompt' }),
+      ids,
+      nowIso
+    })
+    await threadStore.upsert(createThreadRecord({
+      id: 'thr_invalid_graph_mode',
+      title: 'Invalid Graph mode',
+      workspace: '/tmp/workspace',
+      model: model.model
+    }))
+    const graphTurn = await turns.startTurn({
+      threadId: 'thr_invalid_graph_mode',
+      request: {
+        prompt: 'Implement and verify the feature.',
+        model: model.model,
+        orchestration: 'graph'
+      }
+    })
+
+    await expect(loop.runTurn('thr_invalid_graph_mode', graphTurn.turnId))
+      .resolves.toBe('completed')
+    expect(model.requests).toHaveLength(3)
+    expect(model.requests[1]?.requiredToolName).toBeUndefined()
+    expect(model.requests[1]?.tools.map((tool) => tool.name)).toEqual(['graph_define_plan'])
+    expect(model.requests[1]?.modeInstruction).toContain('structured issues')
+    expect(model.requests[1]?.modeInstruction).toContain('repository-relative paths')
+    expect(model.requests[1]?.modeInstruction).toContain('actual next tool arguments')
+    expect(model.requests[1]?.modeInstruction).toContain('Explanatory prose')
+    expect(model.requests[1]?.history).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'tool_result',
+        toolName: 'graph_define_plan',
+        isError: true,
+        output: expect.objectContaining({ retryable: true })
+      })
+    ]))
+    expect(model.requests[2]?.requiredToolName).toBeUndefined()
   })
 
   it('recovers a dedicated SVG turn until mutation and matching validation succeed', async () => {
-    const model = new ScriptedSvgModel(['stop', 'edit', 'stop', 'validate', 'stop'])
+    const model = new ScriptedSvgModel(['stop', 'edit', 'validate', 'stop'])
     const harness = await svgLoopHarness({
       model,
       tools: [
@@ -475,7 +1400,7 @@ describe('AgentLoop interruption', () => {
     })
 
     await expect(harness.loop.runTurn(harness.threadId, harness.turnId)).resolves.toBe('completed')
-    expect(model.requests).toHaveLength(5)
+    expect(model.requests).toHaveLength(4)
     expect(model.requests[0].modeInstruction).toContain('dedicated Kun SVG artifact turn')
     expect(model.requests[0].modeInstruction).not.toContain('PLAN MODE')
     expect(model.requests[0].tools.map((tool) => tool.name)).toEqual([
@@ -484,8 +1409,7 @@ describe('AgentLoop interruption', () => {
     expect(model.requests[2].requiredToolName).toBe('design_svg_validate')
     const items = await harness.sessionStore.loadItems(harness.threadId)
     expect(items).toEqual(expect.arrayContaining([
-      expect.objectContaining({ kind: 'error', code: 'required_svg_mutation_missing' }),
-      expect.objectContaining({ kind: 'error', code: 'required_svg_validation_missing' })
+      expect.objectContaining({ kind: 'error', code: 'required_svg_mutation_missing' })
     ]))
   })
 
@@ -824,7 +1748,7 @@ const ALL_TOOLS: ModelToolSpec[] = [
   spec('write'),
   spec('edit'),
   spec('ls'),
-  spec('find'),
+  spec('glob'),
   spec('grep'),
   spec('bash'),
   spec('web_search'),
@@ -833,7 +1757,7 @@ const ALL_TOOLS: ModelToolSpec[] = [
 ]
 
 const READ_ONLY_TOOLS = new Set([
-  'read', 'ls', 'find', 'grep', 'web_search', 'web_fetch'
+  'read', 'write', 'edit', 'ls', 'glob', 'grep', 'web_search', 'web_fetch'
 ])
 
 describe('isStalePlanContext', () => {
@@ -855,7 +1779,7 @@ describe('isStalePlanContext', () => {
 })
 
 describe('resolvePlanModeToolSpecs', () => {
-  it('step 0: read-only tools + create_plan only', () => {
+  it('keeps read-only and Markdown tools available while the plan is unsaved', () => {
     const result = resolvePlanModeToolSpecs(ALL_TOOLS, {
       planTurnActive: true,
       createPlanSatisfied: false,
@@ -865,13 +1789,13 @@ describe('resolvePlanModeToolSpecs', () => {
     const names = result.map((t) => t.name)
     expect(names).toContain('read')
     expect(names).toContain('ls')
-    expect(names).toContain('find')
+    expect(names).toContain('glob')
     expect(names).toContain('grep')
     expect(names).toContain('web_search')
     expect(names).toContain('web_fetch')
     expect(names).toContain('create_plan')
-    expect(names).not.toContain('write')
-    expect(names).not.toContain('edit')
+    expect(names).toContain('write')
+    expect(names).toContain('edit')
     expect(names).not.toContain('bash')
   })
 
@@ -891,15 +1815,24 @@ describe('resolvePlanModeToolSpecs', () => {
     expect(result.map((tool) => tool.name)).toEqual(['mcp_read_resource', 'create_plan'])
   })
 
-  it('step > 0: only create_plan', () => {
+  it('step > 0: preserves investigation tools instead of forcing create_plan immediately', () => {
     const result = resolvePlanModeToolSpecs(ALL_TOOLS, {
       planTurnActive: true,
       createPlanSatisfied: false,
       stepIndex: 1,
       readOnlyToolNames: READ_ONLY_TOOLS
     })
-    expect(result).toHaveLength(1)
-    expect(result[0].name).toBe('create_plan')
+    expect(result.map((tool) => tool.name)).toEqual([
+      'read',
+      'write',
+      'edit',
+      'ls',
+      'glob',
+      'grep',
+      'web_search',
+      'web_fetch',
+      'create_plan'
+    ])
   })
 
   it('plan satisfied: returns all tools unchanged (pass-through)', () => {
@@ -941,8 +1874,7 @@ describe('resolvePlanModeToolSpecs', () => {
       createPlanSatisfied: false,
       stepIndex: 1
     })
-    expect(result).toHaveLength(1)
-    expect(result[0].name).toBe('create_plan')
+    expect(result.map((tool) => tool.name)).toContain('create_plan')
   })
 
   it('custom readOnlyToolNames and planToolName', () => {
@@ -985,17 +1917,23 @@ describe('resolvePlanModeToolSpecs', () => {
     expect(names).toContain('user_input')
     expect(names).toContain('request_user_input')
     expect(names).toContain('create_plan')
-    expect(names).not.toContain('write')
+    expect(names).toContain('write')
   })
 
-  it('step > 0: drops the user-input tools, leaving only create_plan', () => {
+  it('step > 0: keeps investigation and user-input tools available', () => {
     const result = resolvePlanModeToolSpecs(WITH_INPUT_TOOLS, {
       planTurnActive: true,
       createPlanSatisfied: false,
       stepIndex: 1,
       readOnlyToolNames: READ_ONLY_TOOLS
     })
-    expect(result.map((t) => t.name)).toEqual(['create_plan'])
+    expect(result.map((t) => t.name)).toEqual([
+      'read',
+      'write',
+      'create_plan',
+      'user_input',
+      'request_user_input'
+    ])
   })
 
   it('custom interactiveToolNames overrides the default user-input set', () => {

@@ -9,6 +9,12 @@ export function buildMemoryToolProviders(store: MemoryStore | undefined): Capabi
     kind: 'memory',
     enabled: true,
     available: true,
+    effects: {
+      network: false,
+      externalWrite: false,
+      processExecution: false,
+      guiAutomation: false
+    },
     tools: [
       LocalToolHost.defineTool({
         name: 'memory_create',

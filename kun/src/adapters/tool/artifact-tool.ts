@@ -36,6 +36,15 @@ export function createReadArtifactTool(): LocalTool {
       }
       const artifactId = typeof args.artifactId === 'string' ? args.artifactId.trim() : ''
       if (!artifactId) return { output: { error: 'artifactId is required' }, isError: true }
+      if (
+        context.allowedArtifactIds &&
+        !context.allowedArtifactIds.includes(artifactId)
+      ) {
+        return {
+          output: { error: `artifact is outside the delegated child capability set: ${artifactId}` },
+          isError: true
+        }
+      }
       const meta = await context.artifactStore.stat(artifactId)
       if (!meta) return { output: { error: `artifact not found: ${artifactId}` }, isError: true }
       const range = {

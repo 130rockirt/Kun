@@ -17,7 +17,8 @@ import {
   Gauge,
   Image as ImageIcon,
   Search,
-  Type as TypeIcon
+  Type as TypeIcon,
+  Zap
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import {
@@ -30,6 +31,7 @@ import {
 } from '@shared/app-settings'
 import { DEFAULT_COMPOSER_MODEL_IDS } from '@shared/default-composer-models'
 import type { ModelProviderModelGroup } from '@shared/kun-gui-api'
+import { composerSupportsCodexFastMode } from './composer-fast-mode'
 
 export type ComposerReasoningEffort = ModelReasoningEffort
 
@@ -44,8 +46,10 @@ type Props = {
   controlVariant?: 'combined' | 'split'
   stretch?: boolean
   composerReasoningEffort?: string
+  composerFastMode?: boolean
   onComposerModelChange: (modelId: string, providerId?: string) => void
   onComposerReasoningEffortChange?: (effort: ComposerReasoningEffort) => void
+  onComposerFastModeChange?: (enabled: boolean) => void
   onConfigureProviders?: () => void
 }
 
@@ -85,6 +89,7 @@ type FloatingReasoningPopoverAnchorRect = Pick<DOMRect, 'bottom' | 'left' | 'rig
 
 type ComposerModelMenuGroup = {
   providerId: string
+  presetSource?: string
   label: string
   modelIds: string[]
   modelProfiles?: Record<string, ModelProviderModelProfileV1>
@@ -106,24 +111,6 @@ const FLOATING_REASONING_POPOVER_GAP = 12
 const REASONING_RAIL_THUMB_RADIUS = 18
 const UNGROUPED_MODEL_PROVIDER_ID = '__composer_models__'
 const REASONING_RAIL_ORDER: ComposerReasoningEffort[] = ['off', 'low', 'medium', 'high', 'max', 'auto']
-const REASONING_PARTICLES = [
-  { x: '6%', y: '61%', size: '5px', delay: '-2.1s', duration: '3.7s', driftX: '7px', driftY: '-7px' },
-  { x: '11%', y: '29%', size: '3px', delay: '-0.4s', duration: '2.9s', driftX: '-5px', driftY: '6px' },
-  { x: '17%', y: '67%', size: '2px', delay: '-1.6s', duration: '4.4s', driftX: '6px', driftY: '-5px' },
-  { x: '23%', y: '37%', size: '4px', delay: '-3.1s', duration: '3.2s', driftX: '-7px', driftY: '-4px' },
-  { x: '29%', y: '72%', size: '3px', delay: '-0.9s', duration: '4.1s', driftX: '5px', driftY: '-8px' },
-  { x: '35%', y: '24%', size: '6px', delay: '-2.8s', duration: '3.8s', driftX: '-4px', driftY: '7px' },
-  { x: '41%', y: '55%', size: '2px', delay: '-1.2s', duration: '2.7s', driftX: '8px', driftY: '-4px' },
-  { x: '47%', y: '31%', size: '4px', delay: '-3.7s', duration: '4.6s', driftX: '-6px', driftY: '5px' },
-  { x: '53%', y: '69%', size: '3px', delay: '-0.2s', duration: '3.4s', driftX: '5px', driftY: '-7px' },
-  { x: '59%', y: '43%', size: '5px', delay: '-2.4s', duration: '4.2s', driftX: '-8px', driftY: '-5px' },
-  { x: '65%', y: '24%', size: '2px', delay: '-1.4s', duration: '3.1s', driftX: '6px', driftY: '8px' },
-  { x: '71%', y: '66%', size: '4px', delay: '-3.4s', duration: '3.9s', driftX: '-5px', driftY: '-7px' },
-  { x: '77%', y: '36%', size: '3px', delay: '-0.7s', duration: '2.8s', driftX: '7px', driftY: '5px' },
-  { x: '83%', y: '71%', size: '5px', delay: '-2.6s', duration: '4.5s', driftX: '-6px', driftY: '-8px' },
-  { x: '89%', y: '27%', size: '3px', delay: '-1.8s', duration: '3.5s', driftX: '5px', driftY: '7px' },
-  { x: '95%', y: '56%', size: '4px', delay: '-3.9s', duration: '4s', driftX: '-7px', driftY: '-5px' }
-] as const
 const DEFAULT_COMPOSER_MODEL_KEYS = new Set(
   DEFAULT_COMPOSER_MODEL_IDS.map((id) => normalizeModelCapabilityKey(id))
 )
@@ -139,8 +126,10 @@ export function FloatingComposerModelPicker({
   controlVariant = 'combined',
   stretch = false,
   composerReasoningEffort = 'max',
+  composerFastMode = false,
   onComposerModelChange,
   onComposerReasoningEffortChange,
+  onComposerFastModeChange,
   onConfigureProviders
 }: Props): ReactElement {
   const { t } = useTranslation('common')
@@ -182,6 +171,13 @@ export function FloatingComposerModelPicker({
   const reasoningOptions = reasoningOptionsForModel(currentModelProfile)
   const reasoningEnabled =
     !needsProviderSetup && Boolean(onComposerReasoningEffortChange) && reasoningOptions.length > 0
+  const fastModeAvailable =
+    Boolean(onComposerFastModeChange) &&
+    composerSupportsCodexFastMode(
+      composerModelGroups,
+      currentModel,
+      composerProviderId
+    )
   const currentReasoning = normalizeComposerReasoningEffort(
     composerReasoningEffort,
     currentModelProfile
@@ -194,9 +190,7 @@ export function FloatingComposerModelPicker({
   const reasoningRailPosition = composerReasoningRailPosition(reasoningRailEfforts, currentReasoning)
   const reasoningRailIndex = Math.max(0, reasoningRailEfforts.indexOf(currentReasoning))
   const reasoningHasEnergyMotion = composerReasoningEffortHasEnergyMotion(currentReasoning)
-  const reasoningParticleCount = reasoningHasEnergyMotion
-    ? Math.round(REASONING_PARTICLES.length * reasoningRailPosition)
-    : 0
+  const reasoningAtMaximum = reasoningRailPosition >= 1
   const reasoningThumbCenter = composerReasoningRailThumbCenter(reasoningRailPosition)
   const canOpenModelControls = canChangeModel || (needsProviderSetup && Boolean(onConfigureProviders))
   const modelLabel = needsProviderSetup
@@ -216,10 +210,12 @@ export function FloatingComposerModelPicker({
       ? 'w-[184px] max-w-[184px] shrink-0 overflow-hidden'
       : 'w-[248px] max-w-[min(260px,42vw)] shrink-0 overflow-hidden'
   const splitModelWidthClass = stretch
-    ? 'max-w-[min(284px,45vw)]'
+    ? fastModeAvailable
+      ? 'max-w-[min(328px,52vw)]'
+      : 'max-w-[min(284px,45vw)]'
     : compact
-      ? 'max-w-[184px]'
-      : 'max-w-[min(260px,42vw)]'
+      ? fastModeAvailable ? 'max-w-[224px]' : 'max-w-[184px]'
+      : fastModeAvailable ? 'max-w-[min(304px,50vw)]' : 'max-w-[min(260px,42vw)]'
 
   useEffect(() => {
     if (!reasoningEnabled) return
@@ -487,7 +483,6 @@ export function FloatingComposerModelPicker({
 
   const renderSplitReasoningPopover = (): ReactElement | null => {
     if (!reasoningPopoverOpen || controlVariant !== 'split' || !reasoningEnabled) return null
-    const particleCount = Math.max(0, Math.min(REASONING_PARTICLES.length, reasoningParticleCount))
     const popover = (
       <div
         ref={reasoningPopoverRef}
@@ -498,10 +493,15 @@ export function FloatingComposerModelPicker({
       >
         <div className="ds-composer-reasoning-scale" aria-hidden="true">
           <span>{t('composerReasoningFaster')}</span>
-          <span>{t('composerReasoningSmarter')}</span>
+          <span className={reasoningAtMaximum ? 'is-selected' : undefined}>
+            {t('composerReasoningSmarter')}
+          </span>
         </div>
         <div
-          className={`ds-composer-reasoning-rail${canChangeModel ? '' : ' is-disabled'}`}
+          className={
+            `ds-composer-reasoning-rail${canChangeModel ? '' : ' is-disabled'}` +
+            `${reasoningAtMaximum ? ' is-maximum' : ''}`
+          }
           role="slider"
           tabIndex={canChangeModel ? 0 : -1}
           aria-label={t('composerReasoning')}
@@ -523,22 +523,9 @@ export function FloatingComposerModelPicker({
                 className={`ds-composer-reasoning-rail-fill${reasoningHasEnergyMotion ? ' is-energized' : ''}`}
                 style={{ width: reasoningThumbCenter }}
               >
-                {REASONING_PARTICLES.slice(0, particleCount).map((particle, index) => (
-                  <i
-                    key={index}
-                    className="ds-composer-reasoning-particle"
-                    style={{
-                      left: particle.x,
-                      top: particle.y,
-                      width: particle.size,
-                      height: particle.size,
-                      animationDelay: particle.delay,
-                      animationDuration: particle.duration,
-                      '--ds-reasoning-particle-x': particle.driftX,
-                      '--ds-reasoning-particle-y': particle.driftY
-                    } as CSSProperties}
-                  />
-                ))}
+                <i className="ds-composer-reasoning-streak is-upper" />
+                <i className="ds-composer-reasoning-streak is-center" />
+                <i className="ds-composer-reasoning-streak is-lower" />
               </span>
               <span className="ds-composer-reasoning-stops">
                 {reasoningRailEfforts.map((effort, index) => (
@@ -553,7 +540,7 @@ export function FloatingComposerModelPicker({
               </span>
             </div>
             <span
-              className="ds-composer-reasoning-thumb"
+              className={`ds-composer-reasoning-thumb${reasoningAtMaximum ? ' is-maximum' : ''}`}
               style={{ left: reasoningThumbCenter }}
               aria-hidden="true"
             >
@@ -800,6 +787,29 @@ export function FloatingComposerModelPicker({
             <span>{t('composerReasoning')} · </span>
             <span className="text-accent">{currentReasoningLabel}</span>
             <ChevronDown className="h-3.5 w-3.5 shrink-0 text-ds-faint" strokeWidth={1.8} />
+          </button>
+        ) : null}
+
+        {fastModeAvailable ? (
+          <button
+            type="button"
+            disabled={!canChangeModel}
+            onClick={() => onComposerFastModeChange?.(!composerFastMode)}
+            className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg outline-none transition focus-visible:ring-2 focus-visible:ring-accent/25 disabled:cursor-not-allowed ${
+              composerFastMode
+                ? 'bg-amber-400/15 text-amber-600 hover:bg-amber-400/25 dark:text-amber-300'
+                : canChangeModel
+                  ? 'text-ds-faint hover:bg-ds-hover hover:text-ds-ink'
+                  : 'text-ds-faint'
+            }`}
+            aria-pressed={composerFastMode}
+            aria-label={composerFastMode ? t('composerFastModeOn') : t('composerFastModeOff')}
+            title={`${composerFastMode ? t('composerFastModeOn') : t('composerFastModeOff')} — ${t('composerFastModeHint')}`}
+          >
+            <Zap
+              className={`h-4 w-4 ${composerFastMode ? 'fill-current' : ''}`}
+              strokeWidth={2}
+            />
           </button>
         ) : null}
 

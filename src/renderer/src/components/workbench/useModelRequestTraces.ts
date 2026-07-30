@@ -147,6 +147,12 @@ export function useModelRequestTraces({
   const selected = selectedId
     ? records.find((record) => record.id === selectedId) ?? null
     : null
+  const refresh = useCallback((): void => {
+    void fetchLatest(true)
+  }, [fetchLatest])
+  const requestOlder = useCallback((): void => {
+    void loadOlder()
+  }, [loadOlder])
 
   return {
     records,
@@ -159,7 +165,7 @@ export function useModelRequestTraces({
     loadingOlder,
     error,
     select: setSelectedId,
-    refresh: () => void fetchLatest(true),
-    loadOlder: () => void loadOlder()
+    refresh,
+    loadOlder: requestOlder
   }
 }

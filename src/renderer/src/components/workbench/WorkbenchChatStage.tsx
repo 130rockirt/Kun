@@ -11,7 +11,11 @@ import { normalizeWorkspaceRoot } from '../../lib/workspace-path'
 import { FloatingComposer } from '../chat/FloatingComposer'
 import { ConversationFileDropZone } from '../chat/ConversationFileDropZone'
 import { LazyMessageTimeline } from '../chat/LazyMessageTimeline'
-import { SubagentReturnBar } from '../chat/message-timeline-empty'
+import {
+  GraphChildSessionBar,
+  SubagentReturnBar,
+  type GraphChildSessionContext
+} from '../chat/message-timeline-empty'
 import { WorkbenchTopActions } from '../chat/WorkbenchTopBar'
 import { IkunCameoLayer, KunCelebrationLayer } from '../chat/AnimatedWorkLogo'
 import { ActiveUiPluginStagePresentation } from '../chat/UiPluginStagePresentation'
@@ -21,6 +25,7 @@ import { SidebarTitlebarToggleButton } from '../sidebar/SidebarPrimitives'
 import type { JsonValue } from '@kun/extension-api'
 import type { RegisteredContribution } from '../../extensions/contribution-registry'
 import { DeclarativeActionBar } from '../../extensions/ControlledContributionSurfaces'
+import type { PlanBuildOrchestration } from '../../plan/plan-build'
 
 const TerminalPanel = lazy(() =>
   import('../terminal/TerminalPanel').then((module) => ({ default: module.TerminalPanel }))
@@ -41,11 +46,13 @@ export type WorkbenchChatStageProps = {
   runtimeConnection: RuntimeConnectionStatus
   runtimeError?: string | null
   planActionsBusy: boolean
+  graphEnabled: boolean
   devPreviewVisible: boolean
   devPreviewUrl: string | null
   devPreviewOpened: boolean
   returnParentTitle: string
   showReturnBar: boolean
+  graphChildContext?: GraphChildSessionContext
   composerProps: FloatingComposerProps
   conversationDropWorkspaceRoot: string
   terminalOpen: boolean
@@ -56,7 +63,7 @@ export type WorkbenchChatStageProps = {
   onRetryConnection: () => void
   onOpenSettings: () => void
   onSelectSuggestion: (text: string) => void
-  onBuildPlan: () => void
+  onBuildPlan: (orchestration: PlanBuildOrchestration) => void
   onOpenPlan: () => void
   onOpenChanges: () => void
   onReviewChanges: () => void
@@ -66,6 +73,7 @@ export type WorkbenchChatStageProps = {
   onBeginTerminalResize: PointerEventHandler<HTMLDivElement>
   onToggleTerminal: () => void
   onToggleRightWorkspace: () => void
+  onOpenRequirementDraft?: () => void
   extensionTopBarActions?: readonly RegisteredContribution<'actions.topBar'>[]
   extensionComposerActions?: readonly RegisteredContribution<'actions.composer'>[]
   extensionMessageActions?: readonly RegisteredContribution<'actions.message'>[]
@@ -93,11 +101,13 @@ export function WorkbenchChatStage({
   runtimeConnection,
   runtimeError,
   planActionsBusy,
+  graphEnabled,
   devPreviewVisible,
   devPreviewUrl,
   devPreviewOpened,
   returnParentTitle,
   showReturnBar,
+  graphChildContext,
   composerProps,
   conversationDropWorkspaceRoot,
   terminalOpen,
@@ -118,6 +128,7 @@ export function WorkbenchChatStage({
   onBeginTerminalResize,
   onToggleTerminal,
   onToggleRightWorkspace,
+  onOpenRequirementDraft,
   extensionTopBarActions = [],
   extensionComposerActions = [],
   extensionMessageActions = [],
@@ -172,7 +183,11 @@ export function WorkbenchChatStage({
                 title={leftSidebarCollapsed ? t('sidebarExpand') : t('sidebarCollapse')}
                 ariaLabel={leftSidebarCollapsed ? t('sidebarExpand') : t('sidebarCollapse')}
               />
-              <SessionHeader compact className="min-w-0 flex-1" />
+              <SessionHeader
+                compact
+                className="min-w-0 flex-1"
+                onOpenRequirementDraft={onOpenRequirementDraft}
+              />
             </div>
             <div className="chat-topbar-actions flex min-w-0 flex-wrap items-center justify-end gap-2 self-center">
               {extensionTopBarActions.length && onExtensionCommand ? (
@@ -197,6 +212,9 @@ export function WorkbenchChatStage({
             </div>
           </div>
         </header>
+        {graphChildContext ? (
+          <GraphChildSessionBar context={graphChildContext} onBack={onBackToParent} />
+        ) : null}
         <ConversationFileDropZone
           className="flex min-h-0 min-w-0 flex-1 flex-col"
           options={conversationFileDropOptions}
@@ -214,6 +232,7 @@ export function WorkbenchChatStage({
             onSelectSuggestion={onSelectSuggestion}
             focusModeEnabled={focusModeEnabled}
             planActionsBusy={planActionsBusy}
+            graphEnabled={graphEnabled}
             onBuildPlan={onBuildPlan}
             onOpenPlan={onOpenPlan}
             onOpenChanges={onOpenChanges}

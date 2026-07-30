@@ -13,6 +13,7 @@ import {
   MAX_WATCHED_COMPLETION_NOTIFICATIONS,
   rememberPendingClawFeishuMirror,
   takePendingClawFeishuMirror,
+  turnCompleteNotificationSource,
   watchTurnCompletionNotification
 } from './chat-store-runtime'
 import { clearBusyWatchdog, resetBusyRecoveryAttempts } from './chat-store-schedulers'
@@ -24,6 +25,10 @@ import {
   markWriteThread
 } from '../write/write-thread-registry'
 import { useWriteWorkspaceStore } from '../write/write-workspace-store'
+import {
+  markSddAssistantThread,
+  normalizeSddThreadRegistry
+} from '../sdd/sdd-thread-registry'
 
 function makeSinkHarness(overrides: Partial<ChatState> = {}): {
   getState: () => ChatState
@@ -74,9 +79,50 @@ function makeThread(overrides: Partial<NormalizedThread> & Pick<NormalizedThread
     mode: overrides.mode ?? 'agent',
     workspace: overrides.workspace ?? '/workspace/deepseek-gui',
     ...(overrides.archived !== undefined ? { archived: overrides.archived } : {}),
-    ...(overrides.status ? { status: overrides.status } : {})
+    ...(overrides.status ? { status: overrides.status } : {}),
+    ...(overrides.relation ? { relation: overrides.relation } : {}),
+    ...(overrides.parentThreadId ? { parentThreadId: overrides.parentThreadId } : {})
   }
 }
+
+describe('completion notification classification', () => {
+  it.each([
+    ['primary', 'main-agent'],
+    ['fork', 'main-agent'],
+    ['side', 'subagent'],
+    [undefined, 'main-agent']
+  ] as const)('classifies %s threads as %s', (relation, expected) => {
+    const thread = makeThread({
+      id: 'thread-classified',
+      ...(relation ? { relation } : {})
+    })
+
+    expect(turnCompleteNotificationSource('thread-classified', { threads: [thread] }))
+      .toBe(expected)
+  })
+
+  it('falls back to main-agent when the thread is not in the local list', () => {
+    expect(turnCompleteNotificationSource('thread-missing', { threads: [] }))
+      .toBe('main-agent')
+  })
+
+  it('recognizes an active side session even when sidebar filtering removed it', () => {
+    expect(turnCompleteNotificationSource('thread-side', {
+      threads: [],
+      activeThreadId: 'thread-side',
+      activeThreadRelation: 'side'
+    })).toBe('subagent')
+  })
+
+  it('recognizes a tracked side conversation after navigation', () => {
+    expect(turnCompleteNotificationSource('thread-side', {
+      threads: [],
+      sideConversations: {
+        'thread-side': { threadId: 'thread-side' }
+      } as unknown as ChatState['sideConversations']
+    })).toBe('subagent')
+  })
+})
 
 describe('code thread classification', () => {
   it('keeps archived Code threads visible for the sidebar archive view', () => {
@@ -133,6 +179,49 @@ describe('code thread classification', () => {
 
     expect(isCodeSidebarThread(designWorkspaceThread)).toBe(false)
     expect(isCodeThread(designWorkspaceThread)).toBe(false)
+  })
+
+  it('shows a requirement thread in the project sidebar immediately without classifying it as Code', () => {
+    const requirement = makeThread({
+      id: 'thr_requirement',
+      title: 'Requirement draft'
+    })
+    const hiddenRegistry = markSddAssistantThread({
+      id: 'draft-1',
+      workspaceRoot: '/workspace/deepseek-gui',
+      relativePath: '.kunsdd/requirements/draft-1/requirement.md'
+    }, requirement.id, null)
+    const visibleRegistry = normalizeSddThreadRegistry({
+      ...hiddenRegistry,
+      drafts: Object.fromEntries(
+        Object.entries(hiddenRegistry.drafts).map(([draftId, record]) => [
+          draftId,
+          { ...record, visibleThreadIds: [requirement.id] }
+        ])
+      )
+    })
+
+    expect(isCodeSidebarThread(
+      requirement,
+      [],
+      undefined,
+      undefined,
+      hiddenRegistry
+    )).toBe(true)
+    expect(isCodeSidebarThread(
+      requirement,
+      [],
+      undefined,
+      undefined,
+      visibleRegistry
+    )).toBe(true)
+    expect(isCodeThread(
+      requirement,
+      [],
+      undefined,
+      undefined,
+      visibleRegistry
+    )).toBe(false)
   })
 })
 
@@ -332,6 +421,53 @@ describe('thread event sink binding', () => {
     })
   })
 
+  it('reconciles a completed turn even when part of the live assistant text was already visible', async () => {
+    const getThreadDetail = vi.fn(async () => ({
+      blocks: [
+        { kind: 'user' as const, id: 'user-current', turnId: 'turn-current', text: 'check the workspace' },
+        {
+          kind: 'assistant' as const,
+          id: 'assistant-current',
+          turnId: 'turn-current',
+          createdAt: '2026-07-11T00:00:00.000Z',
+          text: 'Workspace is /tmp/project and all files are healthy.'
+        }
+      ],
+      latestSeq: 42,
+      threadStatus: 'completed'
+    }))
+    const { getState, set, get } = makeSinkHarness({
+      activeThreadId: 'thread-current',
+      blocks: [{ kind: 'user', id: 'user-current', turnId: 'turn-current', text: 'check the workspace' }],
+      liveAssistant: 'Workspace is /tmp',
+      liveAssistantItemId: 'assistant-current',
+      liveAssistantTurnId: 'turn-current',
+      liveAssistantCreatedAt: '2026-07-11T00:00:00.000Z',
+      lastSeq: 10,
+      busy: true,
+      currentTurnId: 'turn-current',
+      currentTurnUserId: 'user-current'
+    })
+    const sink = buildThreadEventSink(set, get, {
+      threadId: 'thread-current',
+      getThreadDetail
+    })
+
+    sink.onTurnComplete()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(getThreadDetail).toHaveBeenCalledWith('thread-current')
+    expect(getState().blocks.filter((block) => block.kind === 'assistant')).toEqual([{
+      kind: 'assistant',
+      id: 'assistant-current',
+      turnId: 'turn-current',
+      createdAt: '2026-07-11T00:00:00.000Z',
+      text: 'Workspace is /tmp/project and all files are healthy.'
+    }])
+    expect(getState().liveAssistant).toBe('')
+  })
+
   it('projects a replayed duplicate completion once, including external effects', () => {
     const showTurnCompleteNotification = vi.fn(async () => ({ ok: true }))
     vi.stubGlobal('window', {
@@ -359,6 +495,9 @@ describe('thread event sink binding', () => {
 
     expect(getState()).toEqual(projectedOnce)
     expect(showTurnCompleteNotification).toHaveBeenCalledTimes(1)
+    expect(showTurnCompleteNotification).toHaveBeenCalledWith(
+      expect.objectContaining({ source: 'main-agent' })
+    )
     expect(refreshThreads).toHaveBeenCalledTimes(1)
     expect(drainQueuedMessages).toHaveBeenCalledTimes(1)
     vi.unstubAllGlobals()
@@ -681,6 +820,25 @@ describe('thread event sink runtime errors', () => {
     expect(systemBlocks[0].text).toContain('1')
     expect(systemBlocks[0].text).toContain('3')
     expect(getState().error).toBeNull()
+
+    sink.onRuntimeStatus?.({
+      kind: 'model_request_retry',
+      itemId: 'runtime_status_turn-current_model_retry',
+      turnId: 'turn-current',
+      createdAt: '2026-06-08T00:00:01.000Z',
+      attempt: 2,
+      maxAttempts: 5,
+      delayMs: 6000,
+      retryReason: 'network'
+    })
+
+    const networkRetry = getState().blocks.find(
+      (block) => block.id === 'runtime_status_turn-current_model_retry'
+    )
+    const networkRetryText = networkRetry?.kind === 'system' ? networkRetry.text : ''
+    expect(networkRetryText).toContain('Model provider connection failed')
+    expect(networkRetryText).toContain('2')
+    expect(networkRetryText).toContain('5')
   })
 
   it('adds runtime error events to the timeline with details', () => {
@@ -781,7 +939,8 @@ describe('thread event sink runtime errors', () => {
       turnStartedAtByUserId: { 'user-1': Date.now() - 1000 },
       turnDurationByUserId: {},
       turnReasoningFirstAtByUserId: {},
-      turnReasoningLastAtByUserId: {}
+      turnReasoningLastAtByUserId: {},
+      threads: []
     } as unknown as ChatState
     const set = (partial: Partial<ChatState> | ((value: ChatState) => Partial<ChatState>)): void => {
       Object.assign(state, typeof partial === 'function' ? partial(state) : partial)
@@ -826,7 +985,8 @@ describe('thread event sink runtime errors', () => {
       turnReasoningLastAtByUserId: {},
       watchTurnCompletion: { 'thr-1': true },
       unreadThreadIds: { 'thr-1': true },
-      queuedMessages: []
+      queuedMessages: [],
+      threads: []
     } as unknown as ChatState
     const set = (partial: Partial<ChatState> | ((value: ChatState) => Partial<ChatState>)): void => {
       Object.assign(state, typeof partial === 'function' ? partial(state) : partial)

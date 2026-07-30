@@ -70,7 +70,7 @@ extension:acme.issues/backlog
 
 仅渲染 title/icon 不激活扩展。打开 View 后，宿主检查兼容、enablement、workspace trust 和权限，再触发 `onView:<id>`。
 
-右侧 View 与主 Agent 协作时，应把能力注册为扩展工具，并把“当前项目”等有界指针放在 `storage.workspace`。主 Agent 通过工具读取和修改权威状态，View 通过宿主消息刷新；两者不能共享 React state、DOM、runtime token 或私有 Electron IPC。默认随 Kun 安装的 [`kun-video-editor`](../../examples/extensions/kun-video-editor/) 展示了这一模式。
+右侧 View 与主 Agent 协作时，应把能力注册为扩展工具，并把“当前项目”等有界指针放在 `storage.workspace`。主 Agent 通过工具读取和修改权威状态，View 通过宿主消息刷新；两者不能共享 React state、DOM、runtime token 或私有 Electron IPC。仓库内仅保留源码的 [`kun-video-editor`](../../examples/extensions/kun-video-editor/) 示例展示了这一模式；它不会随 Kun 打包。
 
 ## 命令
 

@@ -77,6 +77,8 @@ type Props = {
   openTargets?: WorkspaceFileTarget[]
   workspaceRoot: string
   className?: string
+  fileTreeOpen?: boolean
+  onToggleFileTree?: () => void
   onSelectTarget?: (target: WorkspaceFileTarget) => void
   onCloseTarget?: (target: WorkspaceFileTarget) => void
   pinnedTargetKeys?: string[]
@@ -315,6 +317,8 @@ export function WorkspaceFilePreviewPanel({
   openTargets = target ? [target] : [],
   workspaceRoot,
   className,
+  fileTreeOpen = false,
+  onToggleFileTree,
   onSelectTarget,
   onCloseTarget,
   pinnedTargetKeys = [],
@@ -334,7 +338,7 @@ export function WorkspaceFilePreviewPanel({
   const [copied, setCopied] = useState(false)
   const [markdownRendered, setMarkdownRendered] = useState(true)
   const [svgRendered, setSvgRendered] = useState(true)
-  const [htmlRendered, setHtmlRendered] = useState(true)
+  const [htmlRendered, setHtmlRendered] = useState(false)
   const [textDraft, setTextDraft] = useState('')
   const [textSaveError, setTextSaveError] = useState<string | null>(null)
   const [savingText, setSavingText] = useState(false)
@@ -349,6 +353,7 @@ export function WorkspaceFilePreviewPanel({
   const [pendingCloseTarget, setPendingCloseTarget] = useState<WorkspaceFileTarget | null>(null)
   const [highlightHtml, setHighlightHtml] = useState(() => renderFallbackCodeHtml(''))
   const scrollRef = useRef<HTMLDivElement>(null)
+  const tabsScrollRef = useRef<HTMLDivElement>(null)
   const scrollPositionsRef = useRef(readPreviewScrollPositions())
   const tabMenuRef = useRef<HTMLDivElement>(null)
   const tabMenuTriggerRef = useRef<HTMLElement | null>(null)
@@ -376,7 +381,7 @@ export function WorkspaceFilePreviewPanel({
 
     let cancelled = false
     setSvgRendered(true)
-    setHtmlRendered(true)
+    setHtmlRendered(false)
     setTextDraft('')
     setTextSaveError(null)
     setSavingText(false)
@@ -588,6 +593,17 @@ export function WorkspaceFilePreviewPanel({
   }, [tabMenu, visibleTargetKeySignature])
 
   useEffect(() => {
+    if (!activeTargetKey) return
+    const id = window.requestAnimationFrame(() => {
+      tabButtonRefs.current.get(activeTargetKey)?.scrollIntoView({
+        block: 'nearest',
+        inline: 'nearest'
+      })
+    })
+    return () => window.cancelAnimationFrame(id)
+  }, [activeTargetKey])
+
+  useEffect(() => {
     const visibleKeys = new Set(visibleTargetKeySignature.split('\0').filter(Boolean))
     let changed = false
     for (const key of textDraftsRef.current.keys()) {
@@ -638,6 +654,14 @@ export function WorkspaceFilePreviewPanel({
 
   const handleTabWheel = (event: ReactWheelEvent<HTMLDivElement>): void => {
     const delta = event.deltaY || event.deltaX
+    if (
+      delta !== 0 &&
+      event.currentTarget.scrollWidth > event.currentTarget.clientWidth
+    ) {
+      event.preventDefault()
+      event.currentTarget.scrollLeft += delta
+      return
+    }
     const nextTarget = nextFilePreviewTargetForWheel(visibleTargets, target, delta)
     if (!nextTarget || !onSelectTarget) return
     event.preventDefault()
@@ -913,6 +937,7 @@ export function WorkspaceFilePreviewPanel({
       >
       <div className="ds-code-sidebar-topbar">
         <div
+          ref={tabsScrollRef}
           className="ds-code-sidebar-tabs"
           role="tablist"
           aria-label={t('filePreviewOpenFiles')}
@@ -1164,16 +1189,32 @@ export function WorkspaceFilePreviewPanel({
           >
             <ExternalLink className="h-4 w-4" strokeWidth={1.75} />
           </button>
-          <button
-            type="button"
-            onClick={openInSystem}
-            disabled={!target}
-            className="ds-code-sidebar-icon-button"
-            title={t('filePreviewOpenSystem', { defaultValue: 'Open with system app' })}
-            aria-label={t('filePreviewOpenSystem', { defaultValue: 'Open with system app' })}
-          >
-            <FolderOpen className="h-4 w-4" strokeWidth={1.75} />
-          </button>
+          {onToggleFileTree ? (
+            <button
+              type="button"
+              onClick={() => {
+                if (readingMode) setReadingMode(false)
+                onToggleFileTree()
+              }}
+              className={`ds-code-sidebar-icon-button ${fileTreeOpen ? 'is-active' : ''}`}
+              title={fileTreeOpen ? t('fileTreeClose') : t('fileTreeOpen')}
+              aria-label={fileTreeOpen ? t('fileTreeClose') : t('fileTreeOpen')}
+              aria-pressed={fileTreeOpen}
+            >
+              <FolderOpen className="h-4 w-4" strokeWidth={1.75} />
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={openInSystem}
+              disabled={!target}
+              className="ds-code-sidebar-icon-button"
+              title={t('filePreviewOpenSystem', { defaultValue: 'Open with system app' })}
+              aria-label={t('filePreviewOpenSystem', { defaultValue: 'Open with system app' })}
+            >
+              <FolderOpen className="h-4 w-4" strokeWidth={1.75} />
+            </button>
+          )}
           <button
             type="button"
             onClick={() => void copyContent()}

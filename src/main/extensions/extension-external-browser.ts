@@ -17,6 +17,10 @@ import {
   type ExtensionViewSessionRecord
 } from './extension-view-sessions'
 import { isAllowedExternalWebviewSubresource } from './extension-webview-security'
+import {
+  hardenRemoteSession,
+  hardenedRemoteWebPreferences
+} from '../browser-security/web-contents-hardening'
 
 const PAUSE_MEDIA_SCRIPT = `(() => {
   for (const media of document.querySelectorAll('video, audio')) {
@@ -305,10 +309,7 @@ export class ExtensionExternalBrowserManager {
   private hardenSession(target: Session): void {
     if (this.hardenedSessions.has(target)) return
     this.hardenedSessions.add(target)
-    target.setPermissionRequestHandler((_contents, _permission, callback) => callback(false))
-    target.setPermissionCheckHandler(() => false)
-    target.setDevicePermissionHandler(() => false)
-    target.on('will-download', (event) => event.preventDefault())
+    hardenRemoteSession(target)
     target.webRequest.onBeforeRequest({ urls: ['<all_urls>'] }, (details, callback) => {
       if (details.resourceType !== 'mainFrame') {
         callback({ cancel: !isAllowedExternalWebviewSubresource(details.url) })
@@ -534,23 +535,7 @@ export class ExtensionExternalBrowserManager {
 
 function createExternalBrowserView(partition: string): WebContentsView {
   const view = new WebContentsView({
-    webPreferences: {
-      partition,
-      nodeIntegration: false,
-      nodeIntegrationInWorker: false,
-      nodeIntegrationInSubFrames: false,
-      contextIsolation: true,
-      sandbox: true,
-      webSecurity: true,
-      allowRunningInsecureContent: false,
-      webviewTag: false,
-      navigateOnDragDrop: false,
-      safeDialogs: true,
-      disableDialogs: true,
-      autoplayPolicy: 'document-user-activation-required',
-      spellcheck: false,
-      backgroundThrottling: true
-    }
+    webPreferences: hardenedRemoteWebPreferences(partition)
   })
   view.setBackgroundColor('#ffffff')
   return view

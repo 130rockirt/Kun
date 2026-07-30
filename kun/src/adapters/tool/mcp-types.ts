@@ -102,6 +102,7 @@ export type McpServerDiagnostic = {
   available: boolean
   status: 'disabled' | 'connected' | 'reconnecting' | 'error' | 'authorization_required'
   toolCount: number
+  toolNames?: string[]
   catalogFingerprint?: string
   catalogDrift?: boolean
   lastConnectedAt?: string

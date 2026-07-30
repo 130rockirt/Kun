@@ -3,7 +3,6 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { useTranslation } from 'react-i18next'
 import {
   DEFAULT_WRITE_INLINE_COMPLETION_BASE_URL,
-  activeModelProviderNeedsApiKey,
   kunSettingsPatch,
   DEFAULT_WRITE_WORKSPACE_ROOT,
   type AppSettingsPatch,
@@ -44,7 +43,12 @@ import {
   expandSettingsHomePathsForUse
 } from '../lib/settings-home-paths'
 import { useChatStore, type SettingsRouteSection } from '../store/chat-store'
-import { SettingsSidebar } from './SettingsSidebar'
+import {
+  SettingsSidebar,
+  settingsCategoryDescriptionKey,
+  settingsCategoryLabelKey,
+  type SettingsCategory
+} from './SettingsSidebar'
 import { useSettingsGuiUpdate } from './use-settings-gui-update'
 import {
   DEFAULT_WORKSPACE_ROOT,
@@ -86,6 +90,9 @@ const SpeechToTextSettingsSection = lazy(() =>
 )
 const AgentsSettingsSection = lazy(() =>
   import('./settings-section-agents').then((module) => ({ default: module.AgentsSettingsSection }))
+)
+const LaboratorySettingsSection = lazy(() =>
+  import('./settings-section-agents').then((module) => ({ default: module.LaboratorySettingsSection }))
 )
 const SubagentsSettingsSection = lazy(() =>
   import('./settings-section-subagents').then((module) => ({ default: module.SubagentsSettingsSection }))
@@ -144,7 +151,6 @@ function SettingsSectionFallback(): ReactElement {
 }
 
 type SaveStatus = 'idle' | 'saving' | 'saved' | 'error'
-type SettingsCategory = 'general' | 'providers' | 'write' | 'design' | 'mediaGeneration' | 'speechToText' | 'agents' | 'subagents' | 'archives' | 'permissions' | 'worktree' | 'memory' | 'shortcuts' | 'easterEgg' | 'claw' | 'updates' | 'debug' | 'terminal' | 'extensions' | 'dataMigration'
 type SettingsPatch = AppSettingsPatch
 type InlineNotice = {
   tone: 'success' | 'error' | 'info'
@@ -242,10 +248,10 @@ export function SettingsView(): ReactElement {
   )
   const extensionSettingsAvailable = extensionSettingsService !== null &&
     extensionSettingsContributions.length > 0
-  const initializedCategory = useRef(false)
   const saveTimer = useRef<ReturnType<typeof window.setTimeout> | null>(null)
   const statusTimer = useRef<ReturnType<typeof window.setTimeout> | null>(null)
   const draftVersion = useRef(0)
+  const settingsScrollerRef = useRef<HTMLDivElement | null>(null)
   // Snapshot of a debounced-but-not-yet-persisted edit, flushed on unmount so
   // exits that bypass goBack() (Esc, route changes, closing settings) don't
   // drop the last edit made within the 450ms debounce window (issue #602).
@@ -268,6 +274,8 @@ export function SettingsView(): ReactElement {
   const markAgentsSectionReady = useCallback(() => setAgentsSectionReady(true), [])
   const settingsPlatform = typeof window !== 'undefined' ? window.kunGui?.platform ?? '' : ''
   const settingsHomeDir = typeof window !== 'undefined' ? window.kunGui?.homeDir ?? '' : ''
+  const categoryTitle = t(settingsCategoryLabelKey(category))
+  const categoryDescription = t(settingsCategoryDescriptionKey(category))
   const compactHomePath = useCallback((value: string): string =>
     compactHomePathForSettingsDisplay(value, settingsHomeDir, settingsPlatform), [settingsHomeDir, settingsPlatform])
   const expandHomePath = useCallback((value: string): string =>
@@ -398,12 +406,8 @@ export function SettingsView(): ReactElement {
   }, [category, loadWriteDebugEntries])
 
   useEffect(() => {
-    if (!form || initializedCategory.current) return
-    initializedCategory.current = true
-    if (activeModelProviderNeedsApiKey(form)) {
-      setCategory('providers')
-    }
-  }, [form])
+    settingsScrollerRef.current?.scrollTo({ top: 0, behavior: 'auto' })
+  }, [category])
 
   useEffect(() => {
     if (settingsSection === 'general') {
@@ -412,6 +416,10 @@ export function SettingsView(): ReactElement {
     }
     if (settingsSection === 'providers') {
       setCategory('providers')
+      return
+    }
+    if (settingsSection === 'extensions') {
+      setCategory('extensions')
       return
     }
     if (settingsSection === 'write') {
@@ -438,12 +446,24 @@ export function SettingsView(): ReactElement {
       setCategory('agents')
       return
     }
+    if (settingsSection === 'laboratory') {
+      setCategory('laboratory')
+      return
+    }
     if (settingsSection === 'subagents') {
       setCategory('subagents')
       return
     }
     if (settingsSection === 'archives') {
       setCategory('archives')
+      return
+    }
+    if (settingsSection === 'worktree') {
+      setCategory('worktree')
+      return
+    }
+    if (settingsSection === 'memory') {
+      setCategory('memory')
       return
     }
     if (settingsSection === 'claw') {
@@ -466,6 +486,10 @@ export function SettingsView(): ReactElement {
       setCategory('terminal')
       return
     }
+    if (settingsSection === 'debug') {
+      setCategory('debug')
+      return
+    }
     if (settingsSection === 'dataMigration') {
       setCategory('dataMigration')
       return
@@ -478,18 +502,23 @@ export function SettingsView(): ReactElement {
     if (
       settingsSection === 'general' ||
       settingsSection === 'providers' ||
+      settingsSection === 'extensions' ||
       settingsSection === 'write' ||
       settingsSection === 'design' ||
       settingsSection === 'imageGeneration' ||
       settingsSection === 'mediaGeneration' ||
       settingsSection === 'speechToText' ||
+      settingsSection === 'laboratory' ||
       settingsSection === 'subagents' ||
       settingsSection === 'archives' ||
+      settingsSection === 'worktree' ||
+      settingsSection === 'memory' ||
       settingsSection === 'claw' ||
       settingsSection === 'shortcuts' ||
       settingsSection === 'easterEgg' ||
       settingsSection === 'updates' ||
       settingsSection === 'terminal' ||
+      settingsSection === 'debug' ||
       settingsSection === 'dataMigration' ||
       category !== 'agents'
     ) {
@@ -497,7 +526,7 @@ export function SettingsView(): ReactElement {
     }
     if (!agentsSectionReady) return
     const refs: Record<
-      Exclude<SettingsRouteSection, 'general' | 'providers' | 'write' | 'design' | 'imageGeneration' | 'mediaGeneration' | 'speechToText' | 'subagents' | 'archives' | 'claw' | 'shortcuts' | 'easterEgg' | 'updates' | 'terminal' | 'dataMigration'>,
+      Exclude<SettingsRouteSection, 'general' | 'providers' | 'extensions' | 'write' | 'design' | 'imageGeneration' | 'mediaGeneration' | 'speechToText' | 'laboratory' | 'subagents' | 'archives' | 'worktree' | 'memory' | 'claw' | 'shortcuts' | 'easterEgg' | 'updates' | 'terminal' | 'debug' | 'dataMigration'>,
       HTMLDivElement | null
     > = {
       agents: agentsSectionRef.current,
@@ -1073,7 +1102,6 @@ export function SettingsView(): ReactElement {
 
   const kun = getKunRuntimeSettings(form)
   const provider = getModelProviderSettings(form)
-  const activeProviderNeedsApiKey = activeModelProviderNeedsApiKey(form)
 
   const update = (partial: SettingsPatch): void => {
     const next = mergeSettings(form, partial)
@@ -1224,11 +1252,12 @@ export function SettingsView(): ReactElement {
   }
 
   const selectControlClass =
-    'w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30'
+    'w-full min-w-0 rounded-full border border-ds-border bg-ds-card px-3 py-2 text-[13px] text-ds-ink focus:border-accent/60 focus:outline-none focus:ring-2 focus:ring-accent/15'
 
   const settingsSectionContext = {
     t,
     tCommon,
+    settingsSection,
     form,
     provider,
     kun,
@@ -1352,21 +1381,19 @@ export function SettingsView(): ReactElement {
       />
 
       <div className="ds-settings-stage relative min-h-0 min-w-0 flex-1 overflow-hidden">
-        <div className="ds-no-drag h-full min-h-0 overflow-y-auto px-10 py-10">
-          <div className={`mx-auto ${category === 'providers' ? 'max-w-6xl' : 'max-w-3xl'}`}>
-          {category !== 'extensions' && category !== 'dataMigration' && activeProviderNeedsApiKey ? (
-            <div className="mb-6 rounded-2xl border border-amber-300/80 bg-amber-50/95 px-5 py-4 text-amber-950 shadow-sm dark:border-amber-700/60 dark:bg-amber-950/35 dark:text-amber-100">
-              <div className="text-[15px] font-semibold">{t('apiKeyRequiredTitle')}</div>
-              <p className="mt-1 text-[13px] leading-6 text-amber-900/90 dark:text-amber-100/90">
-                {t('apiKeyRequiredBody')}
+        <div
+          ref={settingsScrollerRef}
+          className="ds-settings-scroller ds-no-drag h-full min-h-0 overflow-y-auto"
+        >
+          <div className="ds-settings-content mx-auto">
+          <div className="ds-settings-page-header flex items-start justify-between gap-5">
+            <div className="min-w-0">
+              <h1 className="truncate text-[24px] font-medium leading-tight tracking-[-0.02em] text-ds-ink">
+                {categoryTitle}
+              </h1>
+              <p className="mt-1.5 max-w-2xl text-[12px] leading-[1.4] text-ds-muted">
+                {categoryDescription}
               </p>
-            </div>
-          ) : null}
-
-          <div className="mb-8 flex items-start justify-between gap-4">
-            <div>
-              <h1 className="text-2xl font-semibold tracking-tight text-ds-ink">{t('title')}</h1>
-              <p className="mt-1 text-[14px] text-ds-muted">{t('subtitle')}</p>
             </div>
             {category !== 'extensions' && category !== 'dataMigration' ? <span
               title={saveStatus === 'error' && saveError ? saveError : undefined}
@@ -1395,41 +1422,48 @@ export function SettingsView(): ReactElement {
           {category !== 'extensions' && category !== 'dataMigration' && saveStatus === 'error' && saveError ? (
             <div
               role="alert"
-              className="mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-[13px] leading-5 text-red-800 shadow-sm dark:border-red-500/25 dark:bg-red-500/10 dark:text-red-200"
+              className="mb-5 rounded-[var(--ds-radius-card)] border border-red-200 bg-red-50 px-4 py-3 text-[13px] leading-5 text-red-800 dark:border-red-500/25 dark:bg-red-500/10 dark:text-red-200"
             >
               {saveError}
             </div>
           ) : null}
 
-          {category === 'general' ? <GeneralSettingsSection ctx={settingsSectionContext} /> : null}
-          {category === 'extensions' && extensionSettingsService ? (
-            <ExtensionDeclarativeSettingsPane
-              contributions={extensionSettingsContributions}
-              workspaceRoot={extensionWorkspaceRoot}
-              service={extensionSettingsService}
-            />
-          ) : null}
-          <Suspense fallback={<SettingsSectionFallback />}>
-            {category === 'providers' ? <ProvidersSettingsSection ctx={settingsSectionContext} /> : null}
-            {category === 'write' ? <WriteSettingsSection ctx={settingsSectionContext} /> : null}
-            {category === 'design' ? <DesignSettingsSection ctx={settingsSectionContext} /> : null}
-            {category === 'mediaGeneration' ? <MediaGenerationSettingsSection ctx={settingsSectionContext} /> : null}
-            {category === 'speechToText' ? <SpeechToTextSettingsSection ctx={settingsSectionContext} /> : null}
-            {category === 'agents' ? (
-              <LoadedAgentsSettingsSection ctx={settingsSectionContext} onReady={markAgentsSectionReady} />
+          <div
+            className={`ds-settings-page ds-settings-page--${category}`}
+            data-settings-category-view={category}
+            key={category}
+          >
+            {category === 'general' ? <GeneralSettingsSection ctx={settingsSectionContext} /> : null}
+            {category === 'extensions' && extensionSettingsService ? (
+              <ExtensionDeclarativeSettingsPane
+                contributions={extensionSettingsContributions}
+                workspaceRoot={extensionWorkspaceRoot}
+                service={extensionSettingsService}
+              />
             ) : null}
-            {category === 'subagents' ? <SubagentsSettingsSection ctx={settingsSectionContext} /> : null}
-            {category === 'archives' ? <ArchivedThreadsSettingsSection ctx={settingsSectionContext} /> : null}
-            {category === 'worktree' ? <WorktreeSettingsSection ctx={settingsSectionContext} /> : null}
-            {category === 'memory' ? <MemorySettingsSection ctx={settingsSectionContext} /> : null}
-            {category === 'shortcuts' ? <KeyboardShortcutsSettingsSection ctx={settingsSectionContext} /> : null}
-            {category === 'easterEgg' ? <EasterEggSettingsSection ctx={settingsSectionContext} /> : null}
-            {category === 'claw' ? <ClawSettingsSection ctx={settingsSectionContext} /> : null}
-            {category === 'updates' ? <UpdatesSettingsSection ctx={settingsSectionContext} /> : null}
-            {category === 'terminal' ? <TerminalSettingsSection ctx={settingsSectionContext} /> : null}
-            {category === 'debug' ? <LlmDebugSettingsSection ctx={settingsSectionContext} /> : null}
-            {category === 'dataMigration' ? <DataMigrationSettingsSection /> : null}
-          </Suspense>
+            <Suspense fallback={<SettingsSectionFallback />}>
+              {category === 'providers' ? <ProvidersSettingsSection ctx={settingsSectionContext} /> : null}
+              {category === 'write' ? <WriteSettingsSection ctx={settingsSectionContext} /> : null}
+              {category === 'design' ? <DesignSettingsSection ctx={settingsSectionContext} /> : null}
+              {category === 'mediaGeneration' ? <MediaGenerationSettingsSection ctx={settingsSectionContext} /> : null}
+              {category === 'speechToText' ? <SpeechToTextSettingsSection ctx={settingsSectionContext} /> : null}
+              {category === 'agents' ? (
+                <LoadedAgentsSettingsSection ctx={settingsSectionContext} onReady={markAgentsSectionReady} />
+              ) : null}
+              {category === 'laboratory' ? <LaboratorySettingsSection ctx={settingsSectionContext} /> : null}
+              {category === 'subagents' ? <SubagentsSettingsSection ctx={settingsSectionContext} /> : null}
+              {category === 'archives' ? <ArchivedThreadsSettingsSection ctx={settingsSectionContext} /> : null}
+              {category === 'worktree' ? <WorktreeSettingsSection ctx={settingsSectionContext} /> : null}
+              {category === 'memory' ? <MemorySettingsSection ctx={settingsSectionContext} /> : null}
+              {category === 'shortcuts' ? <KeyboardShortcutsSettingsSection ctx={settingsSectionContext} /> : null}
+              {category === 'easterEgg' ? <EasterEggSettingsSection ctx={settingsSectionContext} /> : null}
+              {category === 'claw' ? <ClawSettingsSection ctx={settingsSectionContext} /> : null}
+              {category === 'updates' ? <UpdatesSettingsSection ctx={settingsSectionContext} /> : null}
+              {category === 'terminal' ? <TerminalSettingsSection ctx={settingsSectionContext} /> : null}
+              {category === 'debug' ? <LlmDebugSettingsSection ctx={settingsSectionContext} /> : null}
+              {category === 'dataMigration' ? <DataMigrationSettingsSection /> : null}
+            </Suspense>
+          </div>
           </div>
         </div>
       </div>

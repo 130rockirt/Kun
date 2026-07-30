@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -31,6 +32,7 @@ import {
   DEFAULT_IMAGE_GENERATION_PROTOCOL,
   DEFAULT_MUSIC_GENERATION_PROTOCOL,
   DEFAULT_MODEL_PROVIDER_ID,
+  DEFAULT_MODEL_REQUEST_RETRY_MAX_ATTEMPTS,
   DEFAULT_SPEECH_TO_TEXT_PROTOCOL,
   DEFAULT_TEXT_TO_SPEECH_PROTOCOL,
   DEFAULT_VIDEO_GENERATION_PROTOCOL,
@@ -55,6 +57,7 @@ import type {
   ModelProviderSubscriptionRegion
 } from '@shared/model-provider-presets'
 import type {
+  AntigravitySubscriptionModelCatalog,
   CursorSubscriptionModel,
   ModelsDevCatalogResult,
   ModelProviderProbeResult
@@ -62,8 +65,10 @@ import type {
 import {
   AlertCircle,
   AudioLines,
+  Check,
   CheckCircle2,
   ChevronDown,
+  ChevronRight,
   Clapperboard,
   Download,
   ExternalLink,
@@ -76,7 +81,9 @@ import {
   Music2,
   PlugZap,
   Plus,
+  Route,
   Search,
+  ServerCog,
   SlidersHorizontal,
   Trash2,
   X
@@ -84,9 +91,470 @@ import {
 import {
   InlineNoticeView,
   SecretInput,
+  SettingsSubTabs,
+  SettingsTabPanel,
+  SettingsTabs,
   Toggle,
   type InlineNotice
 } from './settings-controls'
+
+type SharedModelConnection = {
+  id: string
+  accountId: string
+  name: string
+  presetSource?: string
+  kind: 'http' | 'agent-sdk' | 'antigravity-cli' | 'cursor-sdk' | 'gemini-code-assist'
+  authType: 'api-key' | 'oauth' | 'subscription'
+  baseUrl?: string
+  endpointFormat: ModelEndpointFormat
+  configured: boolean
+  models: string[]
+  modelCapabilities?: Record<string, Omit<ModelProviderModelProfileV1, 'aliases'> & { id: string }>
+  selectedModel?: string
+}
+
+type SharedModelConnectionsSnapshot = {
+  schemaVersion: 1
+  revision: number
+  providers: SharedModelConnection[]
+  defaultProviderId?: string
+  defaultAccountId?: string
+  defaultModel?: string
+  proxy?: { enabled: boolean; url: string }
+  routePools?: ModelProviderSettingsV1['routePools']
+  localModelGateway?: { enabled: boolean }
+}
+
+export function sharedProviderSetupNeedsApiKey(
+  providers: readonly ModelProviderProfileV1[],
+  snapshot: SharedModelConnectionsSnapshot | null
+): boolean {
+  if (!snapshot) return false
+  return !providers.some((provider) =>
+    !modelProviderRequiresApiKey(provider) ||
+    Boolean(provider.apiKey.trim()) ||
+    snapshot.providers.some((connection) =>
+      connection.id === provider.id && connection.configured
+    )
+  )
+}
+
+function validateSharedModelConnections(value: unknown): SharedModelConnectionsSnapshot {
+  const snapshot = value as SharedModelConnectionsSnapshot
+  if (snapshot?.schemaVersion !== 1 || !Number.isInteger(snapshot.revision) || !Array.isArray(snapshot.providers)) {
+    throw new Error('Invalid shared model connection response')
+  }
+  return snapshot
+}
+
+function parseSharedModelConnections(body: string): SharedModelConnectionsSnapshot {
+  const value = JSON.parse(body) as unknown
+  return validateSharedModelConnections(value)
+}
+
+function parseSharedModelConnectionEvent(body: string): SharedModelConnectionsSnapshot {
+  const value = JSON.parse(body) as { snapshot?: unknown }
+  return validateSharedModelConnections(value?.snapshot)
+}
+
+function SharedDefaultModelPicker({
+  snapshot,
+  error,
+  zh,
+  onSelect
+}: {
+  snapshot: SharedModelConnectionsSnapshot | null
+  error: string
+  zh: boolean
+  onSelect: (connection: SharedModelConnection, model: string) => void
+}): ReactElement {
+  const rootRef = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const searchRef = useRef<HTMLInputElement>(null)
+  const [open, setOpen] = useState(false)
+  const [activeProviderId, setActiveProviderId] = useState('')
+  const [query, setQuery] = useState('')
+  const providers = useMemo(() => snapshot?.providers ?? [], [snapshot?.providers])
+  const defaultProvider = providers.find((connection) =>
+    connection.id === snapshot?.defaultProviderId
+  )
+  const activeProvider = providers.find((connection) => connection.id === activeProviderId) ??
+    defaultProvider ??
+    providers.find((connection) => connection.configured && connection.models.length > 0) ??
+    providers[0]
+  const normalizedQuery = query.trim().toLowerCase()
+  const visibleModels = (activeProvider?.models ?? []).filter((model) =>
+    !normalizedQuery || model.toLowerCase().includes(normalizedQuery)
+  )
+  const selectedLabel = defaultProvider && snapshot?.defaultModel
+    ? `${defaultProvider.name} · ${snapshot.defaultModel}`
+    : zh
+      ? '请选择默认模型'
+      : 'Choose a default model'
+
+  useEffect(() => {
+    if (!open) return
+    setActiveProviderId((current) =>
+      providers.some((connection) => connection.id === current)
+        ? current
+        : defaultProvider?.id ??
+          providers.find((connection) => connection.configured && connection.models.length > 0)?.id ??
+          providers[0]?.id ??
+          ''
+    )
+    const focusTimer = window.setTimeout(() => searchRef.current?.focus(), 0)
+    const onPointerDown = (event: PointerEvent): void => {
+      if (!(event.target instanceof Node) || rootRef.current?.contains(event.target)) return
+      setOpen(false)
+    }
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape') return
+      setOpen(false)
+      triggerRef.current?.focus()
+    }
+    window.addEventListener('pointerdown', onPointerDown)
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      window.clearTimeout(focusTimer)
+      window.removeEventListener('pointerdown', onPointerDown)
+      window.removeEventListener('keydown', onKeyDown)
+    }
+  }, [defaultProvider?.id, open, providers])
+
+  return (
+    <div className="border-b border-ds-border-muted bg-ds-main/20 px-5 py-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="text-[13px] font-semibold text-ds-ink">
+            {zh ? 'GUI / TUI 默认模型' : 'Default model for GUI / TUI'}
+          </div>
+          <p className="mt-1 text-[11.5px] leading-5 text-ds-faint">
+            {zh
+              ? '选择共享的供应商与模型，新建 GUI 和 TUI 会话都会自动使用它。'
+              : 'Choose the shared provider and model used automatically by new GUI and TUI sessions.'}
+          </p>
+        </div>
+        <StatusPill tone={error ? 'warning' : snapshot ? 'success' : 'muted'}>
+          {error
+            ? (zh ? '等待运行时' : 'Waiting for runtime')
+            : snapshot
+              ? (zh ? '修改会自动生效' : 'Changes apply automatically')
+              : (zh ? '正在连接' : 'Connecting')}
+        </StatusPill>
+      </div>
+
+      <div ref={rootRef} className="relative mt-3 max-w-[760px]">
+        <label className="mb-1.5 block text-[11.5px] font-semibold text-ds-muted">
+          {zh ? '默认模型' : 'Default model'}
+        </label>
+        <button
+          ref={triggerRef}
+          type="button"
+          aria-haspopup="dialog"
+          aria-expanded={open}
+          disabled={!snapshot || providers.length === 0}
+          onClick={() => {
+            setQuery('')
+            setOpen((current) => !current)
+          }}
+          className={`flex h-11 w-full items-center justify-between gap-3 rounded-xl border bg-ds-card px-3.5 text-left text-[13px] shadow-sm transition disabled:cursor-not-allowed disabled:opacity-55 ${
+            open
+              ? 'border-accent/65 ring-2 ring-accent/15'
+              : 'border-ds-border hover:border-accent/40 hover:bg-ds-hover'
+          }`}
+        >
+          <span className={`min-w-0 truncate font-medium ${
+            defaultProvider && snapshot?.defaultModel ? 'text-ds-ink' : 'text-ds-faint'
+          }`}>
+            {selectedLabel}
+          </span>
+          <ChevronDown
+            className={`h-4 w-4 shrink-0 text-ds-faint transition-transform ${open ? 'rotate-180' : ''}`}
+            strokeWidth={1.9}
+          />
+        </button>
+
+        {open ? (
+          <div
+            role="dialog"
+            aria-label={zh ? '选择默认模型' : 'Choose default model'}
+            className="absolute left-0 top-full z-40 mt-2 grid w-full min-w-0 grid-cols-1 overflow-hidden rounded-2xl border border-ds-border bg-ds-card shadow-xl shadow-black/10 sm:grid-cols-[minmax(190px,0.8fr)_minmax(260px,1.2fr)] dark:shadow-black/35"
+          >
+            <div className="min-w-0 border-b border-ds-border-muted p-2 sm:border-b-0 sm:border-r">
+              <div className="px-2 pb-1.5 pt-1 text-[11px] font-semibold text-ds-faint">
+                {zh ? '供应商' : 'Provider'}
+              </div>
+              <div className="max-h-72 overflow-y-auto">
+                {providers.map((connection) => {
+                  const active = connection.id === activeProvider?.id
+                  const available = connection.configured && connection.models.length > 0
+                  return (
+                    <button
+                      key={connection.id}
+                      type="button"
+                      aria-current={active ? 'true' : undefined}
+                      onClick={() => {
+                        setActiveProviderId(connection.id)
+                        setQuery('')
+                        window.setTimeout(() => searchRef.current?.focus(), 0)
+                      }}
+                      className={`flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left text-[12.5px] transition ${
+                        active
+                          ? 'bg-accent/10 font-semibold text-accent'
+                          : 'text-ds-muted hover:bg-ds-hover hover:text-ds-ink'
+                      }`}
+                    >
+                      <span className={`min-w-0 truncate ${available ? '' : 'opacity-55'}`}>
+                        {connection.name}
+                      </span>
+                      <ChevronRight className="h-3.5 w-3.5 shrink-0 opacity-65" strokeWidth={1.9} />
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+
+            <div className="min-w-0 p-2">
+              <div className="px-2 pb-1.5 pt-1 text-[11px] font-semibold text-ds-faint">
+                {zh ? '模型' : 'Model'}
+              </div>
+              <label className="relative mb-1.5 block">
+                <Search
+                  className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ds-faint"
+                  strokeWidth={1.9}
+                />
+                <input
+                  ref={searchRef}
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder={zh ? '筛选模型' : 'Filter models'}
+                  aria-label={zh ? '筛选模型' : 'Filter models'}
+                  className="h-9 w-full rounded-lg border border-ds-border bg-ds-main/25 pl-9 pr-3 text-[12px] text-ds-ink outline-none transition placeholder:text-ds-faint focus:border-accent/50 focus:ring-2 focus:ring-accent/10"
+                />
+              </label>
+              <div className="max-h-64 overflow-y-auto">
+                {!activeProvider?.configured ? (
+                  <p className="px-2.5 py-6 text-center text-[12px] text-ds-faint">
+                    {zh ? '此供应商尚未连接' : 'This provider is not connected'}
+                  </p>
+                ) : visibleModels.length === 0 ? (
+                  <p className="px-2.5 py-6 text-center text-[12px] text-ds-faint">
+                    {zh ? '没有匹配的模型' : 'No matching models'}
+                  </p>
+                ) : visibleModels.map((model) => {
+                  const selected = activeProvider.id === snapshot?.defaultProviderId &&
+                    model === snapshot.defaultModel
+                  const vision = modelSupportsImageInput(activeProvider.modelCapabilities?.[model])
+                  return (
+                    <button
+                      key={model}
+                      type="button"
+                      onClick={() => {
+                        onSelect(activeProvider, model)
+                        setOpen(false)
+                        triggerRef.current?.focus()
+                      }}
+                      className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12.5px] transition ${
+                        selected
+                          ? 'bg-accent/10 font-semibold text-accent'
+                          : 'text-ds-muted hover:bg-ds-hover hover:text-ds-ink'
+                      }`}
+                    >
+                      <span className="min-w-0 flex-1 truncate">{model}</span>
+                      <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10.5px] font-medium ${
+                        vision
+                          ? 'border-emerald-300/80 bg-emerald-50 text-emerald-700 dark:border-emerald-700/60 dark:bg-emerald-950/35 dark:text-emerald-300'
+                          : 'border-ds-border bg-ds-main/35 text-ds-faint'
+                      }`}>
+                        {vision ? (zh ? '识图' : 'Vision') : (zh ? '文本' : 'Text')}
+                      </span>
+                      {selected ? <Check className="h-4 w-4 shrink-0 text-accent" strokeWidth={2.2} /> : null}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          </div>
+        ) : null}
+      </div>
+      {error ? (
+        <p className="mt-2 text-[11.5px] text-amber-600 dark:text-amber-400">{error}</p>
+      ) : null}
+    </div>
+  )
+}
+
+class SharedModelConnectionConflictError extends Error {
+  constructor(readonly snapshot: SharedModelConnectionsSnapshot) {
+    super('The shared model configuration changed in another client.')
+    this.name = 'SharedModelConnectionConflictError'
+  }
+}
+
+async function requestSharedModelConnections(
+  path: string,
+  method = 'GET',
+  body?: unknown
+): Promise<SharedModelConnectionsSnapshot> {
+  const result = await window.kunGui.runtimeRequest(
+    path,
+    method,
+    body === undefined ? undefined : JSON.stringify(body)
+  )
+  if (!result.ok) {
+    if (result.status === 409) {
+      try {
+        const conflict = JSON.parse(result.body) as { snapshot?: unknown }
+        throw new SharedModelConnectionConflictError(
+          validateSharedModelConnections(conflict.snapshot)
+        )
+      } catch (error) {
+        if (error instanceof SharedModelConnectionConflictError) throw error
+      }
+    }
+    let message = ''
+    try {
+      const value = JSON.parse(result.body) as { message?: unknown }
+      if (typeof value.message === 'string') message = value.message.trim()
+    } catch {
+      // Keep the HTTP fallback below.
+    }
+    throw new Error(message || `Shared model connection request failed (HTTP ${result.status})`)
+  }
+  return parseSharedModelConnections(result.body)
+}
+
+function sharedModelProfiles(
+  connection: SharedModelConnection,
+  existing: ModelProviderProfileV1 | undefined
+): Record<string, ModelProviderModelProfileV1> {
+  return Object.fromEntries(connection.models.map((model) => {
+    const previous = existing?.modelProfiles[model] ??
+      existing?.modelProfiles[model.trim().toLowerCase()]
+    const capability = connection.modelCapabilities?.[model] ??
+      connection.modelCapabilities?.[model.trim().toLowerCase()]
+    return [model, {
+      ...(previous?.aliases ? { aliases: [...previous.aliases] } : {}),
+      inputModalities: capability?.inputModalities ?? previous?.inputModalities ?? ['text'],
+      outputModalities: capability?.outputModalities ?? previous?.outputModalities ?? ['text'],
+      supportsToolCalling: capability?.supportsToolCalling ?? previous?.supportsToolCalling ?? true,
+      messageParts: capability?.messageParts ?? previous?.messageParts ?? ['text'],
+      ...(capability?.contextWindowTokens ?? previous?.contextWindowTokens
+        ? { contextWindowTokens: capability?.contextWindowTokens ?? previous?.contextWindowTokens }
+        : {}),
+      ...(capability?.maxOutputTokens ?? previous?.maxOutputTokens
+        ? { maxOutputTokens: capability?.maxOutputTokens ?? previous?.maxOutputTokens }
+        : {}),
+      ...(capability?.reasoning ?? previous?.reasoning
+        ? { reasoning: capability?.reasoning ?? previous?.reasoning }
+        : {}),
+      ...(capability?.endpointFormat ?? previous?.endpointFormat
+        ? { endpointFormat: capability?.endpointFormat ?? previous?.endpointFormat }
+        : {}),
+      ...(capability?.responsesMode ?? previous?.responsesMode
+        ? { responsesMode: capability?.responsesMode ?? previous?.responsesMode }
+        : {})
+    }]
+  }))
+}
+
+export function projectSharedModelConnections(
+  current: ModelProviderSettingsV1,
+  snapshot: SharedModelConnectionsSnapshot
+): {
+  provider: Pick<ModelProviderSettingsV1, 'providers' | 'proxy' | 'routePools' | 'localGateway'>
+  kun: Pick<KunRuntimeSettingsV1, 'providerId' | 'model'>
+} {
+  const existingById = new Map(current.providers.map((item) => [item.id, item]))
+  const projectedProviders = snapshot.providers.map((connection): ModelProviderProfileV1 => {
+    const existing = existingById.get(connection.id)
+    return {
+      ...(existing ?? {
+        id: connection.id,
+        name: connection.name,
+        apiKey: '',
+        baseUrl: connection.baseUrl ?? '',
+        endpointFormat: connection.endpointFormat,
+        retry: defaultModelRequestRetrySettings(),
+        models: [],
+        modelProfiles: {}
+      }),
+      id: connection.id,
+      name: connection.name,
+      // Preserve the ephemeral compatibility value already loaded from the
+      // protected settings binding. Replacing it with an empty string makes
+      // the settings save path interpret a registry projection as an explicit
+      // disconnect and forget every legacy binding.
+      apiKey: existing?.apiKey ?? '',
+      baseUrl: connection.baseUrl ?? '',
+      endpointFormat: connection.endpointFormat,
+      kind: connection.kind,
+      models: [...connection.models],
+      modelProfiles: sharedModelProfiles(connection, existing)
+    }
+  })
+  // AppSettings keeps a normalized DeepSeek editor as its legacy fallback.
+  // When the canonical registry intentionally has no DeepSeek profile, retain
+  // that local placeholder without treating it as a connected profile.
+  const compatibilityDefault = !snapshot.providers.some((entry) => entry.id === DEFAULT_MODEL_PROVIDER_ID)
+    ? existingById.get(DEFAULT_MODEL_PROVIDER_ID)
+    : undefined
+  const providers = compatibilityDefault
+    ? [compatibilityDefault, ...projectedProviders]
+    : projectedProviders
+  return {
+    provider: {
+      providers,
+      proxy: snapshot.proxy ?? current.proxy,
+      routePools: snapshot.routePools ?? current.routePools,
+      localGateway: {
+        ...current.localGateway,
+        enabled: snapshot.localModelGateway?.enabled ?? current.localGateway.enabled
+      }
+    },
+    kun: {
+      providerId: snapshot.defaultProviderId ?? '',
+      model: snapshot.defaultModel ?? ''
+    }
+  }
+}
+
+function sharedSettingsFingerprint(input: {
+  providers: readonly ModelProviderProfileV1[]
+  providerId: string
+  model: string
+  proxy: ModelProviderSettingsV1['proxy']
+  routePools: ModelProviderSettingsV1['routePools']
+  localGateway: ModelProviderSettingsV1['localGateway']
+}): string {
+  return JSON.stringify({
+    providers: input.providers.map((item) => ({
+      id: item.id,
+      name: item.name,
+      apiKey: item.apiKey,
+      baseUrl: item.baseUrl,
+      endpointFormat: item.endpointFormat,
+      kind: item.kind,
+      models: item.models,
+      modelProfiles: item.modelProfiles
+    })),
+    providerId: input.providerId,
+    model: input.model,
+    proxy: input.proxy,
+    routePools: input.routePools,
+    localGateway: input.localGateway
+  })
+}
+
+function sharedCapabilitiesFromProvider(
+  provider: ModelProviderProfileV1
+): SharedModelConnection['modelCapabilities'] {
+  return Object.fromEntries(provider.models.flatMap((model) => {
+    const profile = provider.modelProfiles[model] ??
+      provider.modelProfiles[model.trim().toLowerCase()]
+    return profile ? [[model, { id: model, ...profile }]] : []
+  }))
+}
 import { classifyProviderModelIds, providerModelListEntries } from './provider-model-editor'
 import { ProviderModelsManager } from './settings-section-provider-models'
 import { ModelRoutesSettings } from './settings-section-model-routes'
@@ -112,7 +580,8 @@ const IMAGE_GENERATION_PROTOCOL_LABEL_KEYS: Record<ImageGenerationProtocol, stri
   'openai-images': 'imageGenProtocolOpenAi',
   'minimax-image': 'imageGenProtocolMiniMax',
   'codex-responses-image': 'imageGenProtocolCodex',
-  'grok-imagine-image': 'imageGenProtocolGrok'
+  'grok-imagine-image': 'imageGenProtocolGrok',
+  'volcengine-ark-image': 'imageGenProtocolVolcengineArk'
 }
 
 const SPEECH_TO_TEXT_PROTOCOL_LABEL_KEYS: Partial<Record<SpeechToTextProtocol, string>> = {
@@ -135,12 +604,45 @@ const MUSIC_GENERATION_PROTOCOL_LABEL_KEYS: Record<MusicGenerationProtocol, stri
 
 const VIDEO_GENERATION_PROTOCOL_LABEL_KEYS: Record<VideoGenerationProtocol, string> = {
   'minimax-video': 'videoGenerationProtocolMiniMax',
-  'grok-imagine-video': 'videoGenerationProtocolGrok'
+  'grok-imagine-video': 'videoGenerationProtocolGrok',
+  'volcengine-ark-video': 'videoGenerationProtocolVolcengineArk'
 }
 
 type ProviderTaskTab = 'connection' | 'models' | 'capabilities' | 'advanced'
+type ProviderWorkspaceMode = 'providers' | 'routes'
 type ProviderCapability = 'image' | 'speech' | 'tts' | 'music' | 'video'
 type SubscriptionRegionFilter = 'all' | ModelProviderSubscriptionRegion
+
+export function antigravityProviderCatalogPatch(
+  catalog: AntigravitySubscriptionModelCatalog,
+  existingProfiles: Readonly<Record<string, ModelProviderModelProfileV1>> = {}
+): Pick<ModelProviderProfileV1, 'models' | 'modelProfiles'> {
+  const models = catalog.models.map((model) => model.id)
+  const modelProfiles = Object.fromEntries(catalog.models.map((model) => {
+    const existing = existingProfiles[model.id]
+    const supportsImageInput = /^(?:gemini|claude)-/i.test(model.id)
+    return [
+      model.id,
+      {
+        ...existing,
+        inputModalities: existing?.inputModalities ?? (
+          supportsImageInput ? ['text', 'image'] : ['text']
+        ),
+        outputModalities: existing?.outputModalities ?? ['text'],
+        supportsToolCalling: existing?.supportsToolCalling ?? true,
+        messageParts: existing?.messageParts ?? (
+          supportsImageInput ? ['text', 'image_url'] : ['text']
+        ),
+        reasoning: {
+          supportedEfforts: [...model.supportedEfforts],
+          defaultEffort: model.defaultEffort,
+          requestProtocol: 'none'
+        }
+      } satisfies ModelProviderModelProfileV1
+    ]
+  }))
+  return { models, modelProfiles }
+}
 
 const PROVIDER_TASK_TABS: Array<{ id: ProviderTaskTab; labelKey: string }> = [
   { id: 'connection', labelKey: 'modelProviderTabConnection' },
@@ -887,7 +1389,7 @@ function GeminiSubscriptionSection({
   onModelsChange,
   t
 }: {
-  onModelsChange: (models: string[]) => void
+  onModelsChange: (catalog: AntigravitySubscriptionModelCatalog) => void
   t: (key: string, params?: Record<string, unknown>) => string
 }): ReactElement {
   const [state, setState] = useState<GeminiCliState>('checking')
@@ -962,11 +1464,11 @@ function GeminiSubscriptionSection({
     setState('syncing')
     setNotice(null)
     try {
-      const models = await window.kunGui.geminiSubscriptionModels()
-      onModelsChange(models)
+      const catalog = await window.kunGui.geminiSubscriptionModels()
+      onModelsChange(catalog)
       setNotice({
         tone: 'success',
-        message: t('geminiModelsSynced', { count: models.length })
+        message: t('geminiModelsSynced', { count: catalog.models.length })
       })
     } catch (error) {
       setNotice({
@@ -1154,8 +1656,6 @@ function GeminiCliApiSubscriptionSection({
 const fieldLabelClass = 'grid gap-1.5 text-[12px] font-semibold text-ds-muted'
 const textInputClass =
   'w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] font-normal text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30'
-const ENABLED_MODEL_REQUEST_RETRY_ATTEMPTS = 3
-
 function retryStatusCodesText(codes: readonly number[] | undefined): string {
   return (codes?.length ? codes : defaultModelRequestRetrySettings().httpStatusCodes).join(',')
 }
@@ -1351,7 +1851,9 @@ function ProviderListGroup({
           {count}
         </span>
       </div>
-      {children}
+      <div className="grid max-h-[332px] gap-2 overflow-y-auto overscroll-contain pr-1 [scrollbar-gutter:stable]">
+        {children}
+      </div>
     </div>
   )
 }
@@ -1450,8 +1952,17 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
     saveError,
     retrySave
   } = ctx
+  const zh = form.locale === 'zh'
   const provider = providerFromContext ?? defaultModelProviderSettings()
   const modelProviders = provider.providers as ModelProviderProfileV1[]
+  const [sharedConnections, setSharedConnections] = useState<SharedModelConnectionsSnapshot | null>(null)
+  const [sharedConnectionsError, setSharedConnectionsError] = useState('')
+  const sharedSyncFingerprint = useRef('')
+  const sharedProjectionPending = useRef(false)
+  const dirtyCredentialProviderIds = useRef(new Set<string>())
+  const deletedSharedProviderIds = useRef(new Set<string>())
+  const sharedProjectionInput = useRef({ provider, kun, update })
+  sharedProjectionInput.current = { provider, kun, update }
   const [selectedProviderId, setSelectedProviderId] = useState<string>(
     kun.providerId?.trim() || modelProviders[0]?.id || DEFAULT_MODEL_PROVIDER_ID
   )
@@ -1460,7 +1971,7 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
   const [subscriptionRegion, setSubscriptionRegion] = useState<SubscriptionRegionFilter>('all')
   const [providerListQuery, setProviderListQuery] = useState('')
   const [activeTab, setActiveTab] = useState<ProviderTaskTab>('connection')
-  const [workspaceMode, setWorkspaceMode] = useState<'providers' | 'routes'>('providers')
+  const [workspaceMode, setWorkspaceMode] = useState<ProviderWorkspaceMode>('providers')
   const [expandedCapabilities, setExpandedCapabilities] = useState<Set<ProviderCapability>>(new Set())
   const addProviderButtonRef = useRef<HTMLButtonElement>(null)
   const addProviderDialogRef = useRef<HTMLElement>(null)
@@ -1495,6 +2006,7 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
         providerId: string
         providerModelIds: string[]
         modelAliases?: Record<string, string[]>
+        discoveredModelProfiles?: Record<string, ModelProviderModelProfileV1>
         catalogResult: ModelsDevCatalogResult
         providerError?: string
         authoritative?: boolean
@@ -1504,19 +2016,286 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
   const cursorMetadataRepairAttempts = useRef(new Set<string>())
   // 新增供应商先停留在本地草稿,点「添加」才写入设置,避免半配置状态被持久化。
   const [draftProvider, setDraftProvider] = useState<ModelProviderProfileV1 | null>(null)
-  const displayProviders = draftProvider ? [...modelProviders, draftProvider] : modelProviders
+  const displayProviders = useMemo(
+    () => draftProvider ? [...modelProviders, draftProvider] : modelProviders,
+    [draftProvider, modelProviders]
+  )
   const activeProvider =
     displayProviders.find((item) => item.id === selectedProviderId) ??
     modelProviders[0]
+  const sharedConnectionFor = (providerId: string): SharedModelConnection | undefined =>
+    sharedConnections?.providers.find((connection) => connection.id === providerId)
+  const hasConfiguredCredential = (provider: ModelProviderProfileV1): boolean =>
+    Boolean(provider.apiKey.trim() || sharedConnectionFor(provider.id)?.configured)
+  useEffect(() => {
+    if (displayProviders.some((item) => item.id === selectedProviderId)) return
+    setSelectedProviderId(
+      sharedConnections?.defaultProviderId &&
+      displayProviders.some((item) => item.id === sharedConnections.defaultProviderId)
+        ? sharedConnections.defaultProviderId
+        : displayProviders[0]?.id ?? DEFAULT_MODEL_PROVIDER_ID
+    )
+  }, [displayProviders, selectedProviderId, sharedConnections?.defaultProviderId])
   const activeRetry = activeProvider ? providerRetrySettings(activeProvider) : defaultModelRequestRetrySettings()
   const isDraftActive = Boolean(draftProvider && activeProvider?.id === draftProvider.id)
   const canEditActiveProviderId = Boolean(
     activeProvider &&
     activeProvider.id !== DEFAULT_MODEL_PROVIDER_ID &&
+    !sharedConnections?.providers.some((connection) => connection.id === activeProvider.id) &&
     !resolveModelProviderPresetSource(activeProvider)
   )
   const activeKunProviderId: string = kun.providerId?.trim() || DEFAULT_MODEL_PROVIDER_ID
   const providerProxy = provider.proxy ?? { enabled: false, url: '' }
+
+  useEffect(() => {
+    let disposed = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let revision = 0
+    const refresh = async (): Promise<void> => {
+      try {
+        const snapshot = revision === 0
+          ? await requestSharedModelConnections('/v1/model-connections')
+          : await window.kunGui.runtimeRequest(
+              `/v1/model-connections/events?since_revision=${revision}&wait_ms=25000`,
+              'GET'
+            ).then((result) => {
+              if (!result.ok) throw new Error(`Shared model connection event failed (HTTP ${result.status})`)
+              return parseSharedModelConnectionEvent(result.body)
+            })
+        if (!disposed) {
+          revision = snapshot.revision
+          setSharedConnections(snapshot)
+          setSharedConnectionsError('')
+          const current = sharedProjectionInput.current
+          const projected = projectSharedModelConnections(current.provider, snapshot)
+          const fingerprint = sharedSettingsFingerprint({
+            providers: projected.provider.providers,
+            providerId: projected.kun.providerId,
+            model: projected.kun.model,
+            proxy: projected.provider.proxy,
+            routePools: projected.provider.routePools,
+            localGateway: projected.provider.localGateway
+          })
+          sharedSyncFingerprint.current = fingerprint
+          const currentFingerprint = sharedSettingsFingerprint({
+            providers: current.provider.providers,
+            providerId: current.kun.providerId,
+            model: current.kun.model,
+            proxy: current.provider.proxy,
+            routePools: current.provider.routePools,
+            localGateway: current.provider.localGateway
+          })
+          if (fingerprint !== currentFingerprint) {
+            sharedProjectionPending.current = true
+            current.update({
+              provider: projected.provider,
+              agents: { kun: projected.kun }
+            })
+          }
+        }
+      } catch (error) {
+        if (!disposed) setSharedConnectionsError(error instanceof Error ? error.message : String(error))
+      } finally {
+        if (!disposed) timer = setTimeout(refresh, revision === 0 ? 2_000 : 0)
+      }
+    }
+    void refresh()
+    return () => {
+      disposed = true
+      if (timer !== undefined) clearTimeout(timer)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (saveStatus !== 'saved' || !sharedConnections) return
+    const fingerprint = sharedSettingsFingerprint({
+      providers: modelProviders,
+      providerId: kun.providerId,
+      model: kun.model,
+      proxy: provider.proxy,
+      routePools: provider.routePools,
+      localGateway: provider.localGateway
+    })
+    if (sharedProjectionPending.current) {
+      if (fingerprint === sharedSyncFingerprint.current) {
+        sharedProjectionPending.current = false
+      }
+      return
+    }
+    if (fingerprint === sharedSyncFingerprint.current) return
+    let disposed = false
+    const syncOnce = async (): Promise<void> => {
+      let snapshot = await requestSharedModelConnections('/v1/model-connections')
+      const desiredProviders = modelProviders.filter((item) =>
+        item.id !== DEFAULT_MODEL_PROVIDER_ID ||
+        snapshot.providers.some((entry) => entry.id === item.id) ||
+        dirtyCredentialProviderIds.current.has(item.id) ||
+        kun.providerId === item.id
+      )
+      const desiredProviderIds = new Set(desiredProviders.map((item) => item.id))
+      for (const item of desiredProviders) {
+        const baseUrlOptional =
+          item.kind === 'agent-sdk' ||
+          item.kind === 'antigravity-cli' ||
+          item.kind === 'cursor-sdk'
+        if (!baseUrlOptional && !item.baseUrl.trim()) continue
+        const existing = snapshot.providers.find((entry) => entry.id === item.id)
+        const selectedModel = item.models.includes(kun.model) ? kun.model : item.models[0]
+        if (!existing) {
+          snapshot = await requestSharedModelConnections('/v1/model-connections/connect', 'POST', {
+            expectedRevision: snapshot.revision,
+            id: item.id,
+            name: item.name.trim() || item.id,
+            kind: item.kind ?? 'http',
+            authType: isSubscriptionProvider(item) ? 'subscription' : 'api-key',
+            ...(baseUrlOptional ? {} : { baseUrl: item.baseUrl }),
+            endpointFormat: item.endpointFormat,
+            ...(item.apiKey.trim() ? { credential: item.apiKey } : {}),
+            models: item.models,
+            modelCapabilities: sharedCapabilitiesFromProvider(item),
+            ...(selectedModel ? { selectedModel } : {}),
+            probe: false,
+            select: false
+          })
+        } else {
+          const modelCapabilities = sharedCapabilitiesFromProvider(item)
+          const needsPatch =
+            existing.name !== (item.name.trim() || item.id) ||
+            (existing.baseUrl ?? '') !== item.baseUrl ||
+            existing.endpointFormat !== item.endpointFormat ||
+            existing.kind !== (item.kind ?? 'http') ||
+            JSON.stringify(existing.models) !== JSON.stringify(item.models) ||
+            JSON.stringify(existing.modelCapabilities ?? {}) !== JSON.stringify(modelCapabilities ?? {}) ||
+            existing.selectedModel !== selectedModel
+          if (needsPatch) {
+            snapshot = await requestSharedModelConnections(
+              `/v1/model-connections/${encodeURIComponent(item.id)}`,
+              'PATCH',
+              {
+                expectedRevision: snapshot.revision,
+                name: item.name.trim() || item.id,
+                kind: item.kind ?? 'http',
+                authType: isSubscriptionProvider(item) ? 'subscription' : 'api-key',
+                ...(baseUrlOptional ? {} : { baseUrl: item.baseUrl }),
+                endpointFormat: item.endpointFormat,
+                models: item.models,
+                modelCapabilities,
+                ...(selectedModel ? { selectedModel } : {})
+              }
+            )
+          }
+          if (dirtyCredentialProviderIds.current.has(item.id)) {
+            snapshot = item.apiKey.trim()
+              ? await requestSharedModelConnections(
+                  `/v1/model-connections/${encodeURIComponent(item.id)}/credential`,
+                  'PUT',
+                  { expectedRevision: snapshot.revision, credential: item.apiKey }
+                )
+              : await requestSharedModelConnections(
+                  `/v1/model-connections/${encodeURIComponent(item.id)}/credential?expected_revision=${snapshot.revision}`,
+                  'DELETE'
+                )
+            dirtyCredentialProviderIds.current.delete(item.id)
+          }
+        }
+      }
+      for (const existing of [...snapshot.providers]) {
+        if (
+          desiredProviderIds.has(existing.id) ||
+          !deletedSharedProviderIds.current.has(existing.id)
+        ) continue
+        snapshot = await requestSharedModelConnections(
+          `/v1/model-connections/${encodeURIComponent(existing.id)}?expected_revision=${snapshot.revision}`,
+          'DELETE'
+        )
+        deletedSharedProviderIds.current.delete(existing.id)
+      }
+      const globalsChanged =
+        JSON.stringify(snapshot.proxy) !== JSON.stringify(provider.proxy ?? { enabled: false, url: '' }) ||
+        JSON.stringify(snapshot.routePools) !== JSON.stringify(provider.routePools ?? []) ||
+        snapshot.localModelGateway?.enabled !== (provider.localGateway?.enabled === true)
+      if (globalsChanged) {
+        snapshot = await requestSharedModelConnections('/v1/model-connections', 'PATCH', {
+          expectedRevision: snapshot.revision,
+          proxy: provider.proxy ?? { enabled: false, url: '' },
+          routePools: provider.routePools ?? [],
+          localModelGateway: { enabled: provider.localGateway?.enabled === true }
+        })
+      }
+      const active = snapshot.providers.find((entry) => entry.id === kun.providerId)
+      const model = active && (active.models.includes(kun.model) ? kun.model : active.models[0])
+      if (active?.configured && model && (
+        snapshot.defaultProviderId !== active.id || snapshot.defaultModel !== model
+      )) {
+        snapshot = await requestSharedModelConnections('/v1/model-connections/select', 'POST', {
+          expectedRevision: snapshot.revision,
+          providerId: active.id,
+          accountId: active.accountId,
+          model
+        })
+      }
+      if (!disposed) {
+        sharedSyncFingerprint.current = fingerprint
+        setSharedConnections(snapshot)
+        setSharedConnectionsError('')
+      }
+    }
+    const sync = async (): Promise<void> => {
+      try {
+        await syncOnce()
+      } catch (error) {
+        if (error instanceof SharedModelConnectionConflictError && !disposed) {
+          setSharedConnections(error.snapshot)
+          throw new Error('Model settings changed in another client. The latest revision was loaded; review and save again.')
+        }
+        throw error
+      }
+    }
+    void sync().catch((error) => {
+      if (!disposed) setSharedConnectionsError(error instanceof Error ? error.message : String(error))
+    })
+    return () => { disposed = true }
+  }, [
+    kun.model,
+    kun.providerId,
+    modelProviders,
+    provider.localGateway,
+    provider.proxy,
+    provider.routePools,
+    saveStatus,
+    sharedConnections
+  ])
+
+  const selectSharedModel = async (connection: SharedModelConnection, model: string): Promise<void> => {
+    if (!sharedConnections) return
+    try {
+      let expectedRevision = sharedConnections.revision
+      let snapshot: SharedModelConnectionsSnapshot | undefined
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          snapshot = await requestSharedModelConnections('/v1/model-connections/select', 'POST', {
+            expectedRevision,
+            providerId: connection.id,
+            accountId: connection.accountId,
+            model
+          })
+          break
+        } catch (error) {
+          if (!(error instanceof SharedModelConnectionConflictError) || attempt === 1) throw error
+          const latest = error.snapshot.providers.find((entry) => entry.id === connection.id)
+          if (!latest?.models.includes(model)) throw error
+          expectedRevision = error.snapshot.revision
+          setSharedConnections(error.snapshot)
+        }
+      }
+      if (!snapshot) return
+      setSharedConnections(snapshot)
+      setSharedConnectionsError('')
+      update({ agents: { kun: { providerId: connection.id, model } } })
+    } catch (error) {
+      setSharedConnectionsError(error instanceof Error ? error.message : String(error))
+    }
+  }
 
   const updateProviderProxy = (patch: Partial<typeof providerProxy>): void => {
     update({
@@ -1588,24 +2367,6 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
     tabs?.[nextIndex]?.focus()
   }
 
-  const handleProviderTabKeyDown = (
-    event: ReactKeyboardEvent<HTMLButtonElement>,
-    currentTab: ProviderTaskTab
-  ): void => {
-    const currentIndex = PROVIDER_TASK_TABS.findIndex((tab) => tab.id === currentTab)
-    let nextIndex = currentIndex
-    if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % PROVIDER_TASK_TABS.length
-    else if (event.key === 'ArrowLeft') nextIndex = (currentIndex - 1 + PROVIDER_TASK_TABS.length) % PROVIDER_TASK_TABS.length
-    else if (event.key === 'Home') nextIndex = 0
-    else if (event.key === 'End') nextIndex = PROVIDER_TASK_TABS.length - 1
-    else return
-
-    event.preventDefault()
-    setActiveTab(PROVIDER_TASK_TABS[nextIndex].id)
-    const tabs = event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]')
-    tabs?.[nextIndex]?.focus()
-  }
-
   const confirmAction = async (options: {
     message: string
     detail?: string
@@ -1644,6 +2405,13 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
   const updateModelProvider = (id: string, patch: Partial<ModelProviderProfileV1>): void => {
     const target = displayProviders.find((item) => item.id === id)
     if (!target) return
+    if (
+      !draftProvider &&
+      Object.prototype.hasOwnProperty.call(patch, 'apiKey') &&
+      patch.apiKey !== target.apiKey
+    ) {
+      dirtyCredentialProviderIds.current.add(id)
+    }
     patchProviderProfile(target, (item) => ({ ...item, ...patch }))
   }
 
@@ -1916,6 +2684,9 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
       cancelLabel: t('modelProviderCancel')
     })
     if (!confirmed) return
+    if (sharedConnections?.providers.some((connection) => connection.id === id)) {
+      deletedSharedProviderIds.current.add(id)
+    }
     const nextProviders = modelProviders.filter((item) => item.id !== id)
     const kunPatch: KunRuntimeSettingsPatchV1 | undefined =
       usedByChat || usedByImage || usedBySpeech || usedByTextToSpeech || usedByMusic || usedByVideo
@@ -2025,6 +2796,7 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
     fingerprint: string
     providerModelIds: string[]
     modelAliases?: Record<string, string[]>
+    discoveredModelProfiles?: Record<string, ModelProviderModelProfileV1>
     catalogResult: ModelsDevCatalogResult
     providerError?: string
     latencyMs?: number
@@ -2068,6 +2840,9 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
       providerId: input.target.id,
       providerModelIds: input.providerModelIds,
       ...(input.modelAliases ? { modelAliases: input.modelAliases } : {}),
+      ...(input.discoveredModelProfiles
+        ? { discoveredModelProfiles: input.discoveredModelProfiles }
+        : {}),
       catalogResult: input.catalogResult,
       ...(input.providerError ? { providerError: input.providerError } : {}),
       ...(input.authoritative ? { authoritative: true } : {})
@@ -2166,18 +2941,26 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
       }))
       const [providerResult, catalogResult] = await Promise.all([
         window.kunGui.geminiSubscriptionModels()
-          .then((modelIds) => ({ modelIds, error: undefined as string | undefined }))
+          .then((catalog) => ({
+            catalog,
+            error: undefined as string | undefined
+          }))
           .catch((error: unknown) => ({
-            modelIds: [] as string[],
+            catalog: { models: [] } satisfies AntigravitySubscriptionModelCatalog,
             error: error instanceof Error ? error.message : String(error)
           })),
         fetchModelsDevCatalogFor(target)
       ])
+      const providerPatch = antigravityProviderCatalogPatch(
+        providerResult.catalog,
+        target.modelProfiles
+      )
       if (mode === 'fetch') {
         openModelImport({
           target,
           fingerprint,
-          providerModelIds: providerResult.modelIds,
+          providerModelIds: providerPatch.models,
+          discoveredModelProfiles: providerPatch.modelProfiles,
           catalogResult,
           providerError: providerResult.error,
           latencyMs: 0,
@@ -2189,7 +2972,7 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
         ...previous,
         [target.id]: providerResult.error
           ? { fingerprint, mode, status: 'error', message: providerResult.error }
-          : { fingerprint, mode, status: 'ok', latencyMs: 0, total: providerResult.modelIds.length }
+          : { fingerprint, mode, status: 'ok', latencyMs: 0, total: providerPatch.models.length }
       }))
       return
     }
@@ -2304,6 +3087,47 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
       }))
       return
     }
+    const sharedConnection = sharedConnectionFor(target.id)
+    if (
+      modelProviderRequiresApiKey(target) &&
+      !target.apiKey.trim() &&
+      sharedConnection?.configured
+    ) {
+      setProbeStates((previous) => ({
+        ...previous,
+        [target.id]: { fingerprint, mode, status: 'busy' }
+      }))
+      const startedAt = performance.now()
+      try {
+        const snapshot = await requestSharedModelConnections(
+          `/v1/model-connections/${encodeURIComponent(target.id)}/probe`,
+          'POST',
+          { expectedRevision: sharedConnections?.revision ?? 0 }
+        )
+        setSharedConnections(snapshot)
+        setProbeStates((previous) => ({
+          ...previous,
+          [target.id]: {
+            fingerprint,
+            mode,
+            status: 'ok',
+            latencyMs: Math.max(0, Math.round(performance.now() - startedAt)),
+            total: sharedConnection.models.length
+          }
+        }))
+      } catch (error) {
+        setProbeStates((previous) => ({
+          ...previous,
+          [target.id]: {
+            fingerprint,
+            mode,
+            status: 'error',
+            message: error instanceof Error ? error.message : String(error)
+          }
+        }))
+      }
+      return
+    }
     if (modelProviderRequiresApiKey(target) && !target.apiKey.trim()) {
       setProbeStates((previous) => ({
         ...previous,
@@ -2376,7 +3200,8 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
     target: ModelProviderProfileV1,
     picked: ProviderModelImportResult,
     authoritative = false,
-    modelAliases: Readonly<Record<string, readonly string[]>> = {}
+    modelAliases: Readonly<Record<string, readonly string[]>> = {},
+    discoveredModelProfiles: Readonly<Record<string, ModelProviderModelProfileV1>> = {}
   ): void => {
     const nextChatModels = authoritative
       ? [...picked.chat]
@@ -2396,7 +3221,7 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
     const nextVideoModels = target.video
       ? mergeProviderModelIds(target.video.models, picked.video)
       : picked.video
-    const nextModelProfiles = isCursorSubscriptionProvider(target)
+    const enrichedModelProfiles = isCursorSubscriptionProvider(target)
       ? enrichCursorProviderModelProfiles(
           target,
           nextChatModels,
@@ -2409,6 +3234,16 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
           picked.catalogModels,
           modelAliases
         )
+    const nextModelProfiles = Object.keys(discoveredModelProfiles).length > 0
+      ? Object.fromEntries(nextChatModels.flatMap((modelId) => {
+          const discoveredProfile = discoveredModelProfiles[modelId]
+          const enrichedProfile = enrichedModelProfiles[modelId]
+          const profile = discoveredProfile
+            ? { ...enrichedProfile, ...discoveredProfile }
+            : enrichedProfile
+          return profile ? [[modelId, profile]] : []
+        }))
+      : enrichedModelProfiles
     const added =
       addedModelCount(target.models, nextChatModels)
       + addedModelCount(target.image?.models ?? [], nextImageModels)
@@ -2512,8 +3347,9 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
   const activeMissingCredential = Boolean(
     activeProvider &&
     modelProviderRequiresApiKey(activeProvider) &&
-    !activeProvider.apiKey.trim()
+    !hasConfiguredCredential(activeProvider)
   )
+  const providerSetupNeedsApiKey = sharedProviderSetupNeedsApiKey(displayProviders, sharedConnections)
   const activeProbeBlocked = activeBaseUrlInvalid || activeMissingCredential
   const activeCursorAccount = activeProvider
     ? cursorAccounts[activeProvider.id]
@@ -2545,14 +3381,15 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
     const selected = activeProvider?.id === item.id
     const isDraft = draftProvider?.id === item.id
     const inUse = !isDraft && activeKunProviderId === item.id
-    const missingKey = modelProviderRequiresApiKey(item) && !item.apiKey.trim()
+    const configuredCredential = hasConfiguredCredential(item)
+    const missingKey = modelProviderRequiresApiKey(item) && !configuredCredential
     return (
       <button
         key={item.id}
         type="button"
         aria-pressed={selected}
         onClick={() => setSelectedProviderId(item.id)}
-        className={`w-full min-w-0 overflow-hidden rounded-xl border px-3 py-2.5 text-left transition ${
+        className={`h-[60px] w-full min-w-0 overflow-hidden rounded-xl border px-3 py-2.5 text-left transition ${
           selected
             ? 'border-accent/60 bg-ds-main/45 ring-1 ring-accent/30'
             : 'border-ds-border bg-ds-card hover:bg-ds-hover'
@@ -2570,7 +3407,7 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
           <span>{t('modelProviderModelCount', { total: providerModelCount(item) })}</span>
           <span aria-hidden="true">·</span>
           <span>{providerKindLabel(item)}</span>
-          {item.apiKey.trim() ? <KeyRound className="h-3 w-3" strokeWidth={1.9} /> : null}
+          {configuredCredential ? <KeyRound className="h-3 w-3" strokeWidth={1.9} /> : null}
           {item.image ? <ImageIcon className="h-3 w-3" strokeWidth={1.9} /> : null}
           {item.models.some((model) =>
             modelSupportsImageInput(profileForModel(item, model))
@@ -2667,17 +3504,28 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
 
   return (
     <>
-      <section className="overflow-hidden rounded-2xl border border-ds-border bg-ds-card/95 shadow-sm shadow-black/5 dark:shadow-black/25">
-        <header className="flex flex-wrap items-start justify-between gap-4 border-b border-ds-border-muted px-5 py-4">
-          <div className="min-w-0">
-            <h2 className="text-[16px] font-semibold text-ds-ink">{t('providers')}</h2>
-            <p className="mt-1 max-w-3xl text-[13px] leading-5 text-ds-muted">{t('providersDesc')}</p>
+      {providerSetupNeedsApiKey ? (
+        <div className="mb-6 rounded-2xl border border-amber-300/80 bg-amber-50/95 px-5 py-4 text-amber-950 shadow-sm dark:border-amber-700/60 dark:bg-amber-950/35 dark:text-amber-100">
+          <div className="text-[15px] font-semibold">{t('apiKeyRequiredTitle')}</div>
+          <p className="mt-1 text-[13px] leading-6 text-amber-900/90 dark:text-amber-100/90">
+            {t('apiKeyRequiredBody')}
+          </p>
+        </div>
+      ) : null}
+      <section className="ds-settings-card rounded-2xl border border-ds-border bg-ds-card/95 shadow-sm shadow-black/5 dark:shadow-black/25">
+        <header className="flex flex-wrap items-center gap-4 border-b border-ds-border-muted px-5 py-3">
+          <div className="min-w-0 flex-1 basis-80">
+            <SettingsTabs<ProviderWorkspaceMode>
+              baseId="provider-workspace"
+              ariaLabel={t('providers')}
+              items={[
+                { id: 'providers', label: t('modelProviderModeProviders'), icon: ServerCog },
+                { id: 'routes', label: t('modelProviderModeRoutes'), icon: Route }
+              ]}
+              value={workspaceMode}
+              onChange={setWorkspaceMode}
+            />
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="inline-flex rounded-xl border border-ds-border bg-ds-main p-1 text-[12px]">
-              <button type="button" onClick={() => setWorkspaceMode('providers')} className={`rounded-lg px-3 py-1.5 ${workspaceMode === 'providers' ? 'bg-ds-card font-semibold text-ds-ink shadow-sm' : 'text-ds-muted'}`}>模型供应商</button>
-              <button type="button" onClick={() => setWorkspaceMode('routes')} className={`rounded-lg px-3 py-1.5 ${workspaceMode === 'routes' ? 'bg-ds-card font-semibold text-accent shadow-sm' : 'text-ds-muted'}`}>高级本地中转站</button>
-            </div>
           {workspaceMode === 'providers' ? <button
             ref={addProviderButtonRef}
             type="button"
@@ -2689,18 +3537,19 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
             <Plus className="h-3.5 w-3.5" strokeWidth={2} />
             {t('modelProviderAdd')}
           </button> : null}
-          </div>
         </header>
-        {workspaceMode === 'routes' ? (
-          <ModelRoutesSettings
-            settings={provider}
-            onChange={(next) => update({ provider: { routePools: next.routePools, localGateway: next.localGateway } })}
-            saveStatus={saveStatus}
-            saveError={saveError}
-            onRetrySave={retrySave}
-            publicBaseUrl={`http://127.0.0.1:${kun.port}`}
-          />
-        ) : <div className="grid gap-4 p-4">
+        <SharedDefaultModelPicker
+          snapshot={sharedConnections}
+          error={sharedConnectionsError}
+          zh={zh}
+          onSelect={(connection, model) => void selectSharedModel(connection, model)}
+        />
+        <SettingsTabPanel<ProviderWorkspaceMode>
+          baseId="provider-workspace"
+          tabId="providers"
+          active={workspaceMode === 'providers'}
+        >
+          <div className="grid gap-4 p-4">
           <label className="grid gap-1.5 lg:hidden">
             <span className="text-[12px] font-semibold text-ds-muted">{t('modelProviderCompactSelect')}</span>
             <select
@@ -2809,43 +3658,23 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                     {t('modelProviderTestConnection')}
                   </button>
                 </div>
-                <div
-                  role="tablist"
-                  aria-label={t('modelProviderWorkspaceTabs')}
-                  className="flex min-w-0 gap-1 overflow-x-auto rounded-xl border border-ds-border-muted bg-ds-card/70 p-1"
-                >
-                  {PROVIDER_TASK_TABS.map((tab) => {
-                    const selected = activeTab === tab.id
-                    return (
-                      <button
-                        key={tab.id}
-                        id={`provider-settings-tab-${tab.id}`}
-                        type="button"
-                        role="tab"
-                        aria-selected={selected}
-                        aria-controls={`provider-settings-panel-${tab.id}`}
-                        tabIndex={selected ? 0 : -1}
-                        onClick={() => setActiveTab(tab.id)}
-                        onKeyDown={(event) => handleProviderTabKeyDown(event, tab.id)}
-                        className={`h-8 min-w-fit flex-1 rounded-lg px-3 text-[12.5px] font-medium transition ${
-                          selected
-                            ? 'bg-ds-card text-ds-ink shadow-sm ring-1 ring-ds-border-muted'
-                            : 'text-ds-muted hover:bg-ds-hover hover:text-ds-ink'
-                        }`}
-                      >
-                        {t(tab.labelKey)}
-                      </button>
-                    )
-                  })}
-                </div>
+                <SettingsSubTabs<ProviderTaskTab>
+                  baseId="provider-settings"
+                  ariaLabel={t('modelProviderWorkspaceTabs')}
+                  items={PROVIDER_TASK_TABS.map((tab) => ({
+                    id: tab.id,
+                    label: t(tab.labelKey)
+                  }))}
+                  value={activeTab}
+                  onChange={setActiveTab}
+                />
                 {probeNotice ? <InlineNoticeView notice={probeNotice} /> : null}
-                {activeTab === 'connection' ? (
-                  <div
-                    id="provider-settings-panel-connection"
-                    role="tabpanel"
-                    aria-labelledby="provider-settings-tab-connection"
-                    className="grid gap-4"
-                  >
+                <SettingsTabPanel<ProviderTaskTab>
+                  baseId="provider-settings"
+                  tabId="connection"
+                  active={activeTab === 'connection'}
+                  className="grid gap-4"
+                >
                 <DetailSection title={t('modelProviderSectionBasics')}>
                   <div className="grid gap-3">
                     <label className={fieldLabelClass}>
@@ -2867,7 +3696,10 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                     />
                   ) : isGeminiSubscriptionProvider(activeProvider) ? (
                     <GeminiSubscriptionSection
-                      onModelsChange={(models) => updateModelProvider(activeProvider.id, { models })}
+                      onModelsChange={(catalog) => updateModelProvider(
+                        activeProvider.id,
+                        antigravityProviderCatalogPatch(catalog, activeProvider.modelProfiles)
+                      )}
                       t={t}
                     />
                   ) : isGeminiCliApiSubscriptionProvider(activeProvider) ? (
@@ -2905,6 +3737,13 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                           showLabel={t('showSecret')}
                           hideLabel={t('hideSecret')}
                         />
+                        {!activeProvider.apiKey.trim() && sharedConnectionFor(activeProvider.id)?.configured ? (
+                          <span className="text-[12px] font-normal text-ds-muted">
+                            {zh
+                              ? '凭据已安全保存在共享连接中。输入新值可替换现有凭据。'
+                              : 'The credential is stored securely in the shared connection. Enter a new value to replace it.'}
+                          </span>
+                        ) : null}
                       </label>
                       {activeCursorAccountFresh && activeCursorAccount ? (
                         <p className="text-[12px] leading-5 text-ds-muted">
@@ -3045,15 +3884,13 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                     </p>
                   ) : null}
                 </DetailSection>
-                  </div>
-                ) : null}
-                {activeTab === 'advanced' ? (
-                  <div
-                    id="provider-settings-panel-advanced"
-                    role="tabpanel"
-                    aria-labelledby="provider-settings-tab-advanced"
-                    className="grid gap-4"
-                  >
+                </SettingsTabPanel>
+                <SettingsTabPanel<ProviderTaskTab>
+                  baseId="provider-settings"
+                  tabId="advanced"
+                  active={activeTab === 'advanced'}
+                  className="grid gap-4"
+                >
                     <DetailSection title={t('modelProviderIdentitySection')}>
                       <label className={fieldLabelClass}>
                         {t('modelProviderId')}
@@ -3092,7 +3929,7 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                       onChange={(enabled) => updateModelProvider(activeProvider.id, {
                         retry: {
                           ...activeRetry,
-                          maxAttempts: enabled ? ENABLED_MODEL_REQUEST_RETRY_ATTEMPTS : 0
+                          maxAttempts: enabled ? DEFAULT_MODEL_REQUEST_RETRY_MAX_ATTEMPTS : 0
                         }
                       })}
                     />
@@ -3120,6 +3957,9 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                               }
                             })}
                           />
+                          <span className="text-[11px] font-normal leading-4 text-ds-faint">
+                            {t('modelProviderRetryMaxAttemptsHint')}
+                          </span>
                         </label>
                         <label className={fieldLabelClass}>
                           {t('modelProviderRetryInitialDelayMs')}
@@ -3155,15 +3995,13 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                     </div>
                   ) : null}
                 </DetailSection>
-                  </div>
-                ) : null}
-                {activeTab === 'models' ? (
-                  <div
-                    id="provider-settings-panel-models"
-                    role="tabpanel"
-                    aria-labelledby="provider-settings-tab-models"
-                    className="grid gap-4"
-                  >
+                </SettingsTabPanel>
+                <SettingsTabPanel<ProviderTaskTab>
+                  baseId="provider-settings"
+                  tabId="models"
+                  active={activeTab === 'models'}
+                  className="grid gap-4"
+                >
                 <DetailSection
                   title={`${t('modelProviderModels')} · ${providerModelCount(activeProvider)}`}
                   action={
@@ -3188,15 +4026,13 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                     onChange={(next) => patchProviderProfile(activeProvider, () => next)}
                   />
                 </DetailSection>
-                  </div>
-                ) : null}
-                {activeTab === 'capabilities' ? (
-                  <div
-                    id="provider-settings-panel-capabilities"
-                    role="tabpanel"
-                    aria-labelledby="provider-settings-tab-capabilities"
-                    className="grid gap-3"
-                  >
+                </SettingsTabPanel>
+                <SettingsTabPanel<ProviderTaskTab>
+                  baseId="provider-settings"
+                  tabId="capabilities"
+                  active={activeTab === 'capabilities'}
+                  className="grid gap-3"
+                >
                 <CapabilitySection
                   capabilityId="image"
                   icon={<ImageIcon className="h-4 w-4" strokeWidth={1.9} />}
@@ -3569,8 +4405,7 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                     </div>
                   ) : null}
                 </CapabilitySection>
-                  </div>
-                ) : null}
+                </SettingsTabPanel>
                 {!isDraftActive && activeTab === 'advanced' && activeProvider.id !== DEFAULT_MODEL_PROVIDER_ID ? (
                   <DetailSection title={t('modelProviderSectionDanger')}>
                     <div className="flex flex-wrap items-center gap-3">
@@ -3618,7 +4453,23 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
               </div>
             ) : null}
           </div>
-        </div>}
+          </div>
+        </SettingsTabPanel>
+        <SettingsTabPanel<ProviderWorkspaceMode>
+          baseId="provider-workspace"
+          tabId="routes"
+          active={workspaceMode === 'routes'}
+        >
+          <ModelRoutesSettings
+            settings={provider}
+            onChange={(next) => update({ provider: { routePools: next.routePools, localGateway: next.localGateway } })}
+            saveStatus={saveStatus}
+            saveError={saveError}
+            onRetrySave={retrySave}
+            active={workspaceMode === 'routes'}
+            publicBaseUrl={`http://127.0.0.1:${kun.port}`}
+          />
+        </SettingsTabPanel>
       </section>
       <details className="group rounded-2xl border border-ds-border bg-ds-card/95 shadow-sm">
         <summary className="flex cursor-pointer list-none items-center justify-between gap-4 px-5 py-4 [&::-webkit-details-marker]:hidden">
@@ -3785,7 +4636,8 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
             pendingImportProvider,
             picked,
             pendingImport.authoritative,
-            pendingImport.modelAliases
+            pendingImport.modelAliases,
+            pendingImport.discoveredModelProfiles
           )
           setPendingImport(null)
         }}

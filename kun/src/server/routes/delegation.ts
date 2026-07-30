@@ -73,4 +73,20 @@ export async function delegationAbort(
   return jsonResponse({ childId, aborted })
 }
 
+/**
+ * POST /v1/delegation/detach/:childId
+ *
+ * Release a queued/running foreground child from the parent turn while
+ * preserving the same child thread and execution.
+ */
+export async function delegationDetach(
+  runtime: DelegationRuntime | undefined,
+  childId: string
+): Promise<JsonResponse> {
+  if (!runtime) return ERRORS.unavailable('delegation runtime is unavailable')
+  if (!childId.trim()) return ERRORS.validation('childId is required', [])
+  const detached = await runtime.detachChild(childId)
+  return jsonResponse({ childId, detached })
+}
+
 export { ERRORS as DelegationErrors }

@@ -11,7 +11,9 @@ import {
   ClipboardList,
   FileEdit,
   Files,
+  Gauge,
   Globe2,
+  GitBranch,
   MessageCircleMore,
   PanelRightClose,
   Plus,
@@ -84,8 +86,18 @@ export function CodeRightPanelTabs({
     { id: BUILTIN_RIGHT_PANEL_IDS.plan, label: t('rightPanelPlan'), icon: ClipboardList },
     { id: BUILTIN_RIGHT_PANEL_IDS.changes, label: t('rightPanelChangesReview'), icon: FileEdit },
     { id: BUILTIN_RIGHT_PANEL_IDS.canvas, label: t('rightPanelWhiteboard'), icon: Shapes },
+    {
+      id: BUILTIN_RIGHT_PANEL_IDS.graph,
+      label: t('rightPanelGraph', { defaultValue: 'Graph' }),
+      icon: GitBranch
+    },
     { id: BUILTIN_RIGHT_PANEL_IDS.subagents, label: t('rightPanelSubagents'), icon: Bot },
     { id: BUILTIN_RIGHT_PANEL_IDS.mcpSkills, label: t('rightPanelMcpSkills'), icon: Blocks },
+    {
+      id: BUILTIN_RIGHT_PANEL_IDS.providerQuotas,
+      label: t('rightPanelProviderQuotas'),
+      icon: Gauge
+    },
     {
       id: BUILTIN_RIGHT_PANEL_IDS.agentPerspective,
       label: t('rightPanelAgentPerspective'),
@@ -153,7 +165,7 @@ export function CodeRightPanelTabs({
   }
 
   return (
-    <div className="ds-code-right-tabs ds-no-drag relative flex h-11 shrink-0 items-center gap-1 border-b border-ds-border-muted bg-ds-surface-subtle/90 px-2 backdrop-blur-xl dark:bg-ds-card/90">
+    <div className="ds-code-right-tabs ds-sidebar-surface-chrome ds-no-drag relative flex h-11 shrink-0 items-center gap-1 border-b border-ds-border-muted px-2 backdrop-blur-xl">
       <div
         role="tablist"
         aria-label={t('rightPanelTabs')}

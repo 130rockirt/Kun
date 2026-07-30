@@ -153,6 +153,7 @@ type McpConnectionState = {
   nowIso: () => string
   catalogFingerprint?: string
   catalogDrift?: boolean
+  toolNames: string[]
   lastConnectedAt?: string
   lastError?: string
   // Reconnect state machine (#642/#639), ported from upstream so a dropped
@@ -246,6 +247,7 @@ export async function buildMcpToolProviders(
           status: 'connected',
           reconnectAttempts: 0,
           reconnectBackoffMs: DEFAULT_MCP_RECONNECT_BASE_DELAY_MS,
+          toolNames: [],
           lastConnectedAt: nowIso()
         }
         attachMcpClientLifecycle(state)
@@ -374,6 +376,7 @@ export async function buildMcpToolProviders(
       status: 'connected',
       reconnectAttempts: 0,
       reconnectBackoffMs: DEFAULT_MCP_RECONNECT_BASE_DELAY_MS,
+      toolNames: [],
       lastConnectedAt: nowIso()
     }
     attachMcpClientLifecycle(state)
@@ -556,6 +559,7 @@ async function reconnectFailedMcpServer(
         status: 'connected',
         reconnectAttempts: 0,
         reconnectBackoffMs: DEFAULT_MCP_RECONNECT_BASE_DELAY_MS,
+        toolNames: [],
         lastConnectedAt: params.nowIso()
       }
       attachMcpClientLifecycle(state)
@@ -689,6 +693,7 @@ function createMcpSearchCatalogRecord(
 
 async function refreshMcpConnectionCatalog(state: McpConnectionState): Promise<McpToolDescriptor[]> {
   const listed = await listAllMcpTools(state.client, state.server.timeoutMs)
+  state.toolNames = listed.map((tool) => tool.name).sort((a, b) => a.localeCompare(b))
   const nextFingerprint = catalogFingerprint(listed.map((tool) => tool.name))
   state.catalogDrift = Boolean(state.catalogFingerprint && state.catalogFingerprint !== nextFingerprint)
   state.catalogFingerprint = nextFingerprint
@@ -946,6 +951,7 @@ function serverDiagnostic(
     available: status === 'connected',
     status,
     toolCount,
+    toolNames: [],
     ...(state.catalogFingerprint ? { catalogFingerprint: state.catalogFingerprint } : {}),
     ...(state.catalogDrift !== undefined ? { catalogDrift: state.catalogDrift } : {}),
     ...(state.lastConnectedAt ? { lastConnectedAt: state.lastConnectedAt } : {}),
@@ -966,6 +972,7 @@ function syncMcpDiagnostic(
     available: status === 'connected',
     status,
     toolCount,
+    toolNames: [...state.toolNames],
     ...(state.catalogFingerprint ? { catalogFingerprint: state.catalogFingerprint } : {}),
     ...(state.catalogDrift !== undefined ? { catalogDrift: state.catalogDrift } : {}),
     ...(state.lastConnectedAt ? { lastConnectedAt: state.lastConnectedAt } : {}),

@@ -27,6 +27,8 @@ export type ModelProviderPresetId =
   | 'zhipu-coding-plan'
   | 'zai-coding-plan'
   | 'kimi-code'
+  | 'volcengine'
+  | 'volcengine-agent-plan'
   | 'volcengine-coding-plan'
   | 'opencode-go'
   | 'codex'
@@ -34,6 +36,7 @@ export type ModelProviderPresetId =
   | 'gemini-subscription'
   | 'gemini-cli-subscription'
   | 'cursor-subscription'
+  | 'ollama'
   | 'grok-subscription'
   | 'moonshot-cn'
   | 'moonshot-global'
@@ -57,6 +60,30 @@ export const GEMINI_CLI_SUBSCRIPTION_NAME = 'Gemini CLI 订阅（API）'
 export const CURSOR_SUBSCRIPTION_PROVIDER_ID = 'cursor-subscription'
 export const CURSOR_SUBSCRIPTION_NAME = 'Cursor 订阅'
 export const CURSOR_SUBSCRIPTION_MODEL_IDS = ['auto'] as const
+export const OLLAMA_CLOUD_PROVIDER_ID = 'ollama'
+export const OLLAMA_CLOUD_PROVIDER_NAME = 'Ollama Cloud'
+// Bootstrap snapshot from Ollama Cloud's official GET /v1/models response.
+// The live endpoint remains authoritative and Settings can import additions.
+export const OLLAMA_CLOUD_MODEL_IDS = [
+  'deepseek-v4-flash',
+  'deepseek-v4-pro',
+  'gemma4:31b',
+  'glm-5.1',
+  'glm-5.2',
+  'gpt-oss:120b',
+  'gpt-oss:20b',
+  'kimi-k2.5',
+  'kimi-k2.6',
+  'kimi-k2.7-code',
+  'minimax-m2.5',
+  'minimax-m2.7',
+  'minimax-m3',
+  'mistral-large-3:675b',
+  'nemotron-3-nano:30b',
+  'nemotron-3-super',
+  'nemotron-3-ultra',
+  'qwen3.5:397b'
+] as const
 export const GEMINI_SUBSCRIPTION_MODEL_IDS = [
   'gemini-3.6-flash',
   'gemini-3.5-flash',
@@ -227,6 +254,30 @@ const GLM_REASONING: ModelProviderReasoningCapabilityV1 = {
   requestProtocol: 'glm-chat-completions'
 }
 
+const CODEX_RESPONSES_REASONING: ModelProviderReasoningCapabilityV1 = {
+  supportedEfforts: ['low', 'medium', 'high', 'max'],
+  defaultEffort: 'high',
+  requestProtocol: 'openai-responses'
+}
+
+const GROK_RESPONSES_REASONING: ModelProviderReasoningCapabilityV1 = {
+  supportedEfforts: ['low', 'medium', 'high'],
+  defaultEffort: 'high',
+  requestProtocol: 'openai-responses'
+}
+
+const KIMI_K3_REASONING: ModelProviderReasoningCapabilityV1 = {
+  supportedEfforts: ['low', 'high', 'max'],
+  defaultEffort: 'high',
+  requestProtocol: 'openai-chat-completions'
+}
+
+const CLAUDE_ADAPTIVE_REASONING: ModelProviderReasoningCapabilityV1 = {
+  supportedEfforts: ['low', 'medium', 'high', 'max'],
+  defaultEffort: 'high',
+  requestProtocol: 'anthropic-thinking'
+}
+
 const DEEPSEEK_REASONING: ModelProviderReasoningCapabilityV1 = {
   supportedEfforts: ['off', 'high', 'max'],
   defaultEffort: 'max',
@@ -256,24 +307,24 @@ export const CURSOR_SDK_ADAPTIVE_REASONING: ModelProviderReasoningCapabilityV1 =
   requestProtocol: 'none'
 }
 
-// 通义千问 / 混元 / 豆包的「思考」开关各家用私有 body 字段,无法用现有 requestProtocol 精确映射,
-// 这里统一按「内置推理」建模(requestProtocol: 'none'):只展示 effort 开关、不向上游发送特定协议字段,避免请求被拒。
+// Mixed-thinking Qwen models use the DashScope-compatible enable_thinking flag.
 const QWEN_REASONING: ModelProviderReasoningCapabilityV1 = {
   supportedEfforts: ['auto', 'off'],
   defaultEffort: 'auto',
-  requestProtocol: 'none'
+  requestProtocol: 'qwen-chat-completions'
 }
 
+// Tencent and Volcano OpenAI-compatible endpoints expose the thinking object.
 const HUNYUAN_REASONING: ModelProviderReasoningCapabilityV1 = {
   supportedEfforts: ['auto', 'off'],
   defaultEffort: 'auto',
-  requestProtocol: 'none'
+  requestProtocol: 'thinking-toggle-chat-completions'
 }
 
 const DOUBAO_REASONING: ModelProviderReasoningCapabilityV1 = {
   supportedEfforts: ['auto', 'off'],
   defaultEffort: 'auto',
-  requestProtocol: 'none'
+  requestProtocol: 'thinking-toggle-chat-completions'
 }
 
 const ZHIPU_CODING_PLAN_MODELS = [
@@ -300,6 +351,33 @@ const MOONSHOT_CHAT_MODELS = [
   'moonshot-v1-128k',
   'moonshot-v1-32k',
   'moonshot-v1-8k'
+]
+
+const VOLCENGINE_CHAT_MODELS = [
+  'doubao-seed-2-1-pro-260628',
+  'doubao-seed-2-1-turbo-260628',
+  'doubao-seed-evolving',
+  'doubao-seed-2-0-lite-260428',
+  'doubao-seed-2-0-mini-260428'
+]
+
+const VOLCENGINE_AGENT_PLAN_CHAT_MODELS = [
+  'doubao-seed-2.1-turbo',
+  'doubao-seed-evolving',
+  'doubao-seed-2.0-lite',
+  'doubao-seed-2.0-mini'
+]
+
+const VOLCENGINE_IMAGE_MODELS = [
+  'doubao-seedream-5-0-pro-260628',
+  'doubao-seedream-5-0-260128',
+  'doubao-seedream-5-0-lite-260128'
+]
+
+const VOLCENGINE_VIDEO_MODELS = [
+  'doubao-seedance-2-0-260128',
+  'doubao-seedance-2-0-fast-260128',
+  'doubao-seedance-2-0-mini-260615'
 ]
 
 export const MODEL_PROVIDER_PRESETS: ModelProviderPreset[] = [
@@ -344,8 +422,8 @@ export const MODEL_PROVIDER_PRESETS: ModelProviderPreset[] = [
     // the agent-sdk path (the SDK enforces the real limit); preset profiles are
     // authoritative, so edit them here.
     modelProfiles: {
-      'claude-opus-4-8': visionChatProfile(1_000_000),
-      'claude-sonnet-4-6': visionChatProfile(1_000_000),
+      'claude-opus-4-8': visionChatProfile(1_000_000, CLAUDE_ADAPTIVE_REASONING),
+      'claude-sonnet-4-6': visionChatProfile(1_000_000, CLAUDE_ADAPTIVE_REASONING),
       'claude-haiku-4-5': visionChatProfile(200_000)
     },
     docsUrl: 'https://code.claude.com/docs/en/authentication',
@@ -417,6 +495,20 @@ export const MODEL_PROVIDER_PRESETS: ModelProviderPreset[] = [
     apiKeyUrl: 'https://cursor.com/dashboard/api?section=user-keys#user-api-keys'
   },
   {
+    id: OLLAMA_CLOUD_PROVIDER_ID,
+    name: OLLAMA_CLOUD_PROVIDER_NAME,
+    category: 'subscription',
+    subscriptionRegion: 'united-states',
+    // Ollama Cloud documents an OpenAI-compatible surface, so Kun can retain
+    // its single HTTP model loop (streaming, tools, images, and usage) instead
+    // of adding a parallel native /api/chat transport.
+    baseUrl: 'https://ollama.com/v1',
+    endpointFormat: 'chat_completions',
+    models: [...OLLAMA_CLOUD_MODEL_IDS],
+    docsUrl: 'https://docs.ollama.com/cloud',
+    apiKeyUrl: 'https://ollama.com/settings/keys'
+  },
+  {
     id: 'zhipu-coding-plan',
     name: 'Zhipu Coding Plan',
     category: 'subscription',
@@ -460,12 +552,69 @@ export const MODEL_PROVIDER_PRESETS: ModelProviderPreset[] = [
     subscriptionRegion: 'china',
     baseUrl: 'https://api.kimi.com/coding/v1',
     endpointFormat: 'chat_completions',
-    models: ['kimi-for-coding'],
+    models: ['k3', 'kimi-for-coding', 'kimi-for-coding-highspeed'],
     modelProfiles: {
-      'kimi-for-coding': textChatProfile()
+      k3: visionChatProfile(1_000_000, KIMI_K3_REASONING),
+      'kimi-for-coding': textChatProfile(262_144),
+      'kimi-for-coding-highspeed': textChatProfile(262_144)
     },
     docsUrl: 'https://www.kimi.com/code/docs/en/',
     apiKeyUrl: 'https://www.kimi.com/code'
+  },
+  {
+    id: 'volcengine',
+    name: 'Volcano Ark API',
+    subscriptionRegion: 'china',
+    baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+    endpointFormat: 'chat_completions',
+    models: [...VOLCENGINE_CHAT_MODELS],
+    modelProfiles: {
+      'doubao-seed-2-1-pro-260628': visionChatProfile(256_000, DOUBAO_REASONING),
+      'doubao-seed-2-1-turbo-260628': visionChatProfile(256_000, DOUBAO_REASONING),
+      'doubao-seed-evolving': visionChatProfile(1_024_000, DOUBAO_REASONING),
+      'doubao-seed-2-0-lite-260428': visionChatProfile(256_000, DOUBAO_REASONING),
+      'doubao-seed-2-0-mini-260428': visionChatProfile(256_000, DOUBAO_REASONING)
+    },
+    image: {
+      protocol: 'volcengine-ark-image',
+      baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+      models: [...VOLCENGINE_IMAGE_MODELS]
+    },
+    video: {
+      protocol: 'volcengine-ark-video',
+      baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+      models: [...VOLCENGINE_VIDEO_MODELS]
+    },
+    docsUrl: 'https://www.volcengine.com/docs/82379/1330310',
+    apiKeyUrl: 'https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey'
+  },
+  {
+    id: 'volcengine-agent-plan',
+    name: 'Volcano Ark Agent Plan',
+    category: 'subscription',
+    subscriptionRegion: 'china',
+    baseUrl: 'https://ark.cn-beijing.volces.com/api/plan/v3',
+    endpointFormat: 'chat_completions',
+    models: [...VOLCENGINE_AGENT_PLAN_CHAT_MODELS],
+    modelProfiles: {
+      'doubao-seed-2.1-turbo': visionChatProfile(256_000, DOUBAO_REASONING),
+      'doubao-seed-evolving': visionChatProfile(1_024_000, DOUBAO_REASONING),
+      'doubao-seed-2.0-lite': visionChatProfile(256_000, DOUBAO_REASONING),
+      'doubao-seed-2.0-mini': visionChatProfile(256_000, DOUBAO_REASONING)
+    },
+    image: {
+      protocol: 'volcengine-ark-image',
+      baseUrl: 'https://ark.cn-beijing.volces.com/api/plan/v3',
+      models: ['doubao-seedream-5.0-lite']
+    },
+    video: {
+      protocol: 'volcengine-ark-video',
+      baseUrl: 'https://ark.cn-beijing.volces.com/api/plan/v3',
+      models: ['doubao-seedance-2.0', 'doubao-seedance-2.0-fast', 'doubao-seedance-2.0-mini']
+    },
+    docsUrl: 'https://www.volcengine.com/docs/82379/2366394',
+    apiKeyUrl:
+      'https://console.volcengine.com/ark/region:ark+cn-beijing/openManagement?LLM=%7B%7D&OpenModelVisible=false&advancedActiveKey=agentPlan'
   },
   {
     id: 'volcengine-coding-plan',
@@ -495,6 +644,7 @@ export const MODEL_PROVIDER_PRESETS: ModelProviderPreset[] = [
     baseUrl: 'https://opencode.ai/zen/go/v1',
     endpointFormat: 'chat_completions',
     models: [
+      'glm-5.2',
       'glm-5.1',
       'glm-5',
       'kimi-k2.7',
@@ -515,8 +665,9 @@ export const MODEL_PROVIDER_PRESETS: ModelProviderPreset[] = [
       'qwen3.5-plus'
     ],
     modelProfiles: {
-      'glm-5.1': visionChatProfile(131_072),
-      'glm-5': visionChatProfile(131_072),
+      'glm-5.2': visionChatProfile(1_000_000, GLM_REASONING),
+      'glm-5.1': visionChatProfile(131_072, GLM_REASONING),
+      'glm-5': visionChatProfile(131_072, GLM_REASONING),
       'kimi-k2.7': textChatProfile(131_072),
       'kimi-k2.7-code': textChatProfile(131_072),
       'kimi-k2.6': textChatProfile(131_072),
@@ -823,13 +974,17 @@ export const MODEL_PROVIDER_PRESETS: ModelProviderPreset[] = [
     endpointFormat: 'custom_endpoint',
     models: [...CHATGPT_SUBSCRIPTION_MODEL_IDS],
     modelProfiles: {
-      'gpt-5.5': visionChatProfile(1_000_000),
-      'gpt-5.6-sol': codexLiteVisionChatProfile(372_000),
-      'gpt-5.6-terra': codexLiteVisionChatProfile(372_000),
-      'gpt-5.6-luna': codexLiteVisionChatProfile(372_000),
-      'gpt-5.4': visionChatProfile(1_000_000),
-      'gpt-5.4-mini': visionChatProfile(1_000_000),
-      'gpt-5.3-codex-spark': textChatProfile(128_000)
+      'gpt-5.5': withPriorityServiceTier(
+        visionChatProfile(1_000_000, CODEX_RESPONSES_REASONING)
+      ),
+      'gpt-5.6-sol': withPriorityServiceTier(codexLiteVisionChatProfile(372_000)),
+      'gpt-5.6-terra': withPriorityServiceTier(codexLiteVisionChatProfile(372_000)),
+      'gpt-5.6-luna': withPriorityServiceTier(codexLiteVisionChatProfile(372_000)),
+      'gpt-5.4': withPriorityServiceTier(
+        visionChatProfile(1_000_000, CODEX_RESPONSES_REASONING)
+      ),
+      'gpt-5.4-mini': visionChatProfile(1_000_000, CODEX_RESPONSES_REASONING),
+      'gpt-5.3-codex-spark': textChatProfile(128_000, CODEX_RESPONSES_REASONING)
     },
     image: {
       protocol: 'codex-responses-image',
@@ -850,7 +1005,7 @@ export const MODEL_PROVIDER_PRESETS: ModelProviderPreset[] = [
     endpointFormat: 'responses',
     models: [...GROK_SUBSCRIPTION_MODEL_IDS],
     modelProfiles: {
-      'grok-4.5': visionChatProfile(500_000),
+      'grok-4.5': visionChatProfile(500_000, GROK_RESPONSES_REASONING),
       'grok-4-1-fast-reasoning': visionChatProfile(2_000_000),
       'grok-4-1-fast-non-reasoning': visionChatProfile(2_000_000),
       'grok-code-fast-1': textChatProfile(256_000)
@@ -909,14 +1064,9 @@ export function modelProviderPresetProfile(
     apiKey: apiKey.trim(),
     baseUrl: preset.baseUrl,
     endpointFormat: preset.endpointFormat,
-    retry: preset.kind === 'gemini-cli-api'
-      ? {
-          ...defaultPresetRetrySettings(),
-          // The official Gemini CLI retries transient Code Assist capacity and
-          // server failures. Preserve that behavior for multi-step tool turns.
-          maxAttempts: 3
-        }
-      : defaultPresetRetrySettings(),
+    // Subscription and API transports share the same bounded default. An
+    // explicit provider setting can still reduce or disable retries.
+    retry: defaultPresetRetrySettings(),
     ...(preset.kind ? { kind: preset.kind } : {}),
     models: [...preset.models],
     modelProfiles: copyModelProfiles(preset.modelProfiles),
@@ -1171,8 +1321,17 @@ function visionChatProfile(
 
 function codexLiteVisionChatProfile(contextWindowTokens: number): ModelProviderModelProfileV1 {
   return {
-    ...visionChatProfile(contextWindowTokens),
+    ...visionChatProfile(contextWindowTokens, CODEX_RESPONSES_REASONING),
     responsesMode: 'lite'
+  }
+}
+
+function withPriorityServiceTier(
+  profile: ModelProviderModelProfileV1
+): ModelProviderModelProfileV1 {
+  return {
+    ...profile,
+    serviceTiers: ['priority']
   }
 }
 
@@ -1189,6 +1348,7 @@ function copyModelProfiles(
         inputModalities: [...profile.inputModalities],
         outputModalities: [...profile.outputModalities],
         messageParts: [...profile.messageParts],
+        ...(profile.serviceTiers ? { serviceTiers: [...profile.serviceTiers] } : {}),
         ...(profile.reasoning
           ? {
               reasoning: {

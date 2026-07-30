@@ -15,6 +15,8 @@ const REQUIRED_PATHS = [
   'kun/node_modules/@cursor/sdk/package.json',
   'kun/node_modules/@modelcontextprotocol/sdk/package.json',
   'kun/node_modules/@kun/extension-api/package.json',
+  'kun/node_modules/@kun/provider-catalog/package.json',
+  'kun/node_modules/@kun/provider-catalog/dist/index.js',
   'kun/node_modules/create-kun-extension/package.json'
 ]
 const KUN_SQLITE_MODULE_PATH = 'kun/node_modules/better-sqlite3'

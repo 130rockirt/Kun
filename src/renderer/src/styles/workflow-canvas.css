@@ -10,10 +10,13 @@
   background-color: var(--ds-bg-main);
 }
 
-.workflow-editor-sidebar,
-.workflow-editor-header,
-.workflow-editor-inspector {
+.workflow-editor-header {
   background-color: var(--ds-surface-card);
+}
+
+.workflow-editor-sidebar,
+.workflow-editor-inspector {
+  background-color: var(--ds-sidebar-surface-bg);
 }
 
 :root[data-platform='darwin'] .workflow-editor-header {

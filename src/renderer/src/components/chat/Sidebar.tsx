@@ -16,7 +16,7 @@ import {
 } from 'lucide-react'
 import type { NormalizedThread } from '../../agent/types'
 import { useChatStore, type SettingsRouteSection } from '../../store/chat-store'
-import { resolveSddRequirementWorkspace, type SddDraft } from '../../sdd/sdd-draft-store'
+import { resolveSddRequirementWorkspace } from '../../sdd/sdd-draft-store'
 import type {
   ClawImChannelV1,
 } from '@shared/app-settings'
@@ -55,9 +55,11 @@ type Props = {
   onDeleteThread: (id: string) => Promise<void>
   onRestoreThread: (id: string) => Promise<void>
   onNewChat: () => void
-  onNewChatInWorkspace: (workspaceRoot: string) => void
+  onNewChatInWorkspace: (
+    workspaceRoot: string,
+    options?: { forceNew?: boolean }
+  ) => Promise<string | null>
   onNewRequirement: () => void
-  onOpenRequirementDraft: (draft: SddDraft) => void
   onOpenSettings: (section?: SettingsRouteSection) => void
   onOpenPlugins: () => void
   onOpenExtensions: () => void
@@ -93,7 +95,6 @@ export function Sidebar({
   onNewChat,
   onNewChatInWorkspace,
   onNewRequirement,
-  onOpenRequirementDraft,
   onOpenSettings,
   onOpenPlugins,
   onOpenExtensions,
@@ -305,7 +306,6 @@ export function Sidebar({
           onPickWorkspace={() => void chooseWorkspace()}
           onRemoveWorkspace={deleteWorkspace}
           onCreateThreadInWorkspace={onNewChatInWorkspace}
-          onOpenRequirementDraft={onOpenRequirementDraft}
           onSelectThread={onSelectThread}
           onRenameThread={onRenameThread}
           onPinThread={onPinThread}
@@ -334,7 +334,6 @@ export function Sidebar({
         onPickWorkspace={() => void chooseWorkspace()}
         onRemoveWorkspace={deleteWorkspace}
         onCreateThreadInWorkspace={onNewChatInWorkspace}
-        onOpenRequirementDraft={onOpenRequirementDraft}
         onSelectThread={onSelectThread}
         onRenameThread={onRenameThread}
         onPinThread={onPinThread}

@@ -303,7 +303,7 @@ describe('LocalToolHost', () => {
       kind: 'tool_result',
       toolName: 'user_input',
       isError: true,
-      output: { error: 'GUI user input is not available in this runtime context' }
+      output: { error: 'structured user input is not available in this client context' }
     })
   })
 

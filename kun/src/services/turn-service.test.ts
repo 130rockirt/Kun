@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -18,6 +18,7 @@ import { SequentialIdGenerator } from '../ports/id-generator.js'
 import type { ModelClient, ModelRequest, ModelStreamChunk } from '../ports/model-client.js'
 import { emptyUsageSnapshot } from '../contracts/usage.js'
 import type { TurnItem } from '../contracts/items.js'
+import type { GraphPlanningLifecycle } from '../contracts/turns.js'
 import { RuntimeEventRecorder } from './runtime-event-recorder.js'
 import {
   DEFAULT_MAX_CONCURRENT_TURNS,
@@ -363,11 +364,20 @@ describe('TurnService startTurn', () => {
       id: threadId,
       title: 'Single active turn',
       workspace: '/tmp/workspace',
-      model: 'deepseek-v4-pro'
+      model: 'deepseek-v4-pro',
+      approvalPolicy: 'on-request',
+      sandboxMode: 'workspace-write',
+      approvalReviewer: 'agent'
     }))
 
     const [first, second] = await Promise.allSettled([
-      service.startTurn({ threadId, request: { prompt: 'first', model: 'm' } }),
+      service.startTurn({
+        threadId,
+        request: {
+          prompt: 'first', model: 'm', providerId: 'provider-a', accountId: 'account-a',
+          reasoningEffort: 'high', serviceTier: 'priority', mode: 'plan', clientSurface: 'tui'
+        }
+      }),
       service.startTurn({ threadId, request: { prompt: 'second', model: 'm' } })
     ])
 
@@ -376,6 +386,47 @@ describe('TurnService startTurn', () => {
     const thread = await threadStore.get(threadId)
     expect(thread?.turns).toHaveLength(1)
     expect(thread?.turns[0]?.status).toBe('running')
+    expect(thread?.turns[0]).toMatchObject({
+      serviceTier: 'priority',
+      approvalPolicy: 'on-request',
+      sandboxMode: 'workspace-write',
+      approvalReviewer: 'agent'
+    })
+    const liveTurnStarted = eventBus.snapshotSince(threadId, 0)
+      .find((event) => event.kind === 'turn_started')
+    expect(liveTurnStarted).toMatchObject({
+      kind: 'turn_started', model: 'm', providerId: 'provider-a', accountId: 'account-a',
+      reasoningEffort: 'high', serviceTier: 'priority', mode: 'plan', clientSurface: 'tui',
+      approvalPolicy: 'on-request', sandboxMode: 'workspace-write', approvalReviewer: 'agent'
+    })
+    const replayedTurnStarted = (await sessionStore.loadEventsSince(threadId, 0))
+      .find((event) => event.kind === 'turn_started')
+    expect(replayedTurnStarted).toMatchObject({
+      kind: 'turn_started',
+      approvalPolicy: 'on-request',
+      sandboxMode: 'workspace-write',
+      approvalReviewer: 'agent'
+    })
+    expect(thread?.turns[0]?.clientSurface).toBe('tui')
+    await service.updateTurnMetadata(threadId, thread!.turns[0]!.id, {
+      actingModelRoute: {
+        model: 'input-model',
+        providerId: 'provider-a',
+        accountId: 'account-a'
+      }
+    })
+    await service.updateTurnMetadata(threadId, thread!.turns[0]!.id, {
+      actingModelRoute: {
+        model: 'changed-later',
+        providerId: 'provider-b',
+        accountId: 'account-b'
+      }
+    })
+    expect((await threadStore.get(threadId))?.turns[0]?.actingModelRoute).toEqual({
+      model: 'input-model',
+      providerId: 'provider-a',
+      accountId: 'account-a'
+    })
     expect(await service.interruptActiveTurns()).toBe(1)
     expect((await threadStore.get(threadId))?.turns[0]?.status).toBe('aborted')
   })
@@ -560,6 +611,728 @@ describe('TurnService startTurn', () => {
 
     expect(third.threadId).toBe('thr_capacity_c')
     await service.interruptTurn({ threadId: 'thr_capacity_c', turnId: third.turnId })
+  })
+
+  it('suspends and resumes one durable Graph Lead turn without holding runtime capacity', async () => {
+    const sessionStore = new InMemorySessionStore()
+    const threadStore = new InMemoryThreadStore()
+    const eventBus = new InMemoryEventBus()
+    const inflight = new InflightTracker()
+    const steering = new SteeringQueue()
+    const nowIso = () => '2026-07-28T12:00:00.000Z'
+    let graphLastEventSeq = 7
+    const service = new TurnService({
+      threadStore,
+      sessionStore,
+      events: new RuntimeEventRecorder({
+        eventBus,
+        sessionStore,
+        allocateSeq: (threadId) => eventBus.allocateSeq(threadId),
+        nowIso
+      }),
+      inflight,
+      steering,
+      compactor: new ContextCompactor(),
+      maxConcurrentTurns: 1,
+      resolveGraphLeadRun: async ({ turnId }) => turnId === 'turn_1'
+        ? { runId: 'run_1', lastEventSeq: graphLastEventSeq, terminal: false }
+        : null,
+      ids: new SequentialIdGenerator(),
+      nowIso
+    })
+    for (const id of ['thr_graph_lead', 'thr_other']) {
+      await threadStore.upsert(createThreadRecord({
+        id,
+        title: id,
+        workspace: '/tmp/workspace',
+        model: 'deepseek-v4-pro'
+      }))
+    }
+
+    const source = await service.startTurn({
+      threadId: 'thr_graph_lead',
+      request: { prompt: 'run graph', orchestration: 'graph' }
+    })
+    expect(source.turnId).toBe('turn_1')
+    expect(await service.graphRunOwnsLeadLimits({
+      threadId: 'thr_graph_lead',
+      turnId: source.turnId
+    })).toBe(true)
+    expect(await service.suspendGraphLeadTurn({
+      threadId: 'thr_graph_lead',
+      turnId: source.turnId
+    })).toBe('suspended')
+    expect(service.isTurnExecutionActive(source.turnId)).toBe(false)
+    expect(inflight.has(source.turnId)).toBe(false)
+    expect(await service.getTurn('thr_graph_lead', source.turnId)).toMatchObject({
+      status: 'running',
+      graphLeadLifecycle: {
+        runId: 'run_1',
+        state: 'supervising',
+        lastDeliveredSeq: 0
+      }
+    })
+
+    const other = await service.startTurn({
+      threadId: 'thr_other',
+      request: { prompt: 'uses released capacity' }
+    })
+    await expect(service.resumeGraphLeadTurn({
+      threadId: 'thr_graph_lead',
+      turnId: source.turnId,
+      runId: 'run_1',
+      lastDeliveredSeq: 8,
+      terminal: false
+    })).rejects.toBeInstanceOf(TurnCapacityError)
+    await service.interruptTurn({ threadId: 'thr_other', turnId: other.turnId })
+
+    await expect(service.resumeGraphLeadTurn({
+      threadId: 'thr_graph_lead',
+      turnId: source.turnId,
+      runId: 'run_1',
+      lastDeliveredSeq: 8,
+      terminal: false
+    })).resolves.toBe('resumed')
+    expect(service.isTurnExecutionActive(source.turnId)).toBe(true)
+    graphLastEventSeq = 9
+    await expect(service.suspendGraphLeadTurn({
+      threadId: 'thr_graph_lead',
+      turnId: source.turnId
+    })).resolves.toBe('suspended')
+    expect(await service.getTurn('thr_graph_lead', source.turnId)).toMatchObject({
+      status: 'running',
+      graphLeadLifecycle: {
+        runId: 'run_1',
+        lastDeliveredSeq: 8
+      }
+    })
+    await expect(service.resumeGraphLeadTurn({
+      threadId: 'thr_graph_lead',
+      turnId: source.turnId,
+      runId: 'run_1',
+      lastDeliveredSeq: 9,
+      terminal: false
+    })).resolves.toBe('resumed')
+    await service.steerTurn({
+      threadId: 'thr_graph_lead',
+      turnId: source.turnId,
+      text: 'inspect the submitted node',
+      messageSource: 'graph_runtime'
+    })
+    expect(await service.suspendGraphLeadTurn({
+      threadId: 'thr_graph_lead',
+      turnId: source.turnId
+    })).toBe('pending_steering')
+    expect(steering.drain(source.turnId)).toHaveLength(1)
+    await service.interruptTurn({ threadId: 'thr_graph_lead', turnId: source.turnId })
+    expect(await service.graphRunOwnsLeadLimits({
+      threadId: 'thr_graph_lead',
+      turnId: source.turnId
+    })).toBe(false)
+  })
+
+  it('restores a planning draft to correction when resume cannot reacquire capacity', async () => {
+    const sessionStore = new InMemorySessionStore()
+    const threadStore = new InMemoryThreadStore()
+    const eventBus = new InMemoryEventBus()
+    const inflight = new InflightTracker()
+    const steering = new SteeringQueue()
+    const nowIso = () => '2026-07-30T14:00:00.000Z'
+    let lifecycle: GraphPlanningLifecycle = {
+      version: 1,
+      draftId: 'draft_capacity',
+      reservedRunId: 'run_capacity',
+      state: 'planning',
+      draftRevision: 1
+    }
+    const transitionGraphPlanningDraft = vi.fn(async ({
+      action
+    }: {
+      action: 'suspend' | 'resume' | 'cancel'
+    }): Promise<GraphPlanningLifecycle> => {
+      const state = action === 'resume'
+        ? 'planning'
+        : action === 'suspend'
+          ? 'needs_correction'
+          : 'cancelled'
+      if (lifecycle.state !== state) {
+        lifecycle = {
+          ...lifecycle,
+          state,
+          draftRevision: lifecycle.draftRevision + 1
+        }
+      }
+      return lifecycle
+    })
+    const service = new TurnService({
+      threadStore,
+      sessionStore,
+      events: new RuntimeEventRecorder({
+        eventBus,
+        sessionStore,
+        allocateSeq: (threadId) => eventBus.allocateSeq(threadId),
+        nowIso
+      }),
+      inflight,
+      steering,
+      compactor: new ContextCompactor(),
+      maxConcurrentTurns: 1,
+      createGraphPlanningDraft: async () => lifecycle,
+      transitionGraphPlanningDraft,
+      ids: new SequentialIdGenerator(),
+      nowIso
+    })
+    for (const id of ['thr_graph_planning_capacity', 'thr_capacity_owner']) {
+      await threadStore.upsert(createThreadRecord({
+        id,
+        title: id,
+        workspace: '/tmp/workspace',
+        model: 'deepseek-v4-pro'
+      }))
+    }
+
+    const source = await service.startTurn({
+      threadId: 'thr_graph_planning_capacity',
+      request: { prompt: 'plan graph', orchestration: 'graph' }
+    })
+    await expect(service.suspendGraphPlanningTurn({
+      threadId: source.threadId,
+      turnId: source.turnId
+    })).resolves.toBe('suspended')
+    expect(lifecycle).toMatchObject({
+      state: 'needs_correction',
+      draftRevision: 2
+    })
+
+    const capacityOwner = await service.startTurn({
+      threadId: 'thr_capacity_owner',
+      request: { prompt: 'occupy the only execution slot' }
+    })
+    await expect(service.resumeGraphPlanningTurn({
+      threadId: source.threadId,
+      turnId: source.turnId
+    })).rejects.toBeInstanceOf(TurnCapacityError)
+    expect(lifecycle).toMatchObject({
+      state: 'needs_correction',
+      draftRevision: 2
+    })
+    expect(await service.getTurn(source.threadId, source.turnId)).toMatchObject({
+      graphPlanningLifecycle: {
+        state: 'needs_correction',
+        draftRevision: 2
+      }
+    })
+    expect(service.isTurnExecutionActive(source.turnId)).toBe(false)
+
+    await service.interruptTurn({
+      threadId: capacityOwner.threadId,
+      turnId: capacityOwner.turnId
+    })
+    await expect(service.resumeGraphPlanningTurn({
+      threadId: source.threadId,
+      turnId: source.turnId
+    })).resolves.toBe('resumed')
+    expect(lifecycle).toMatchObject({
+      state: 'planning',
+      draftRevision: 3
+    })
+    expect(service.isTurnExecutionActive(source.turnId)).toBe(true)
+    await service.interruptTurn({
+      threadId: source.threadId,
+      turnId: source.turnId
+    })
+  })
+
+  it('steers a suspended committed GraphRun through Lead resume, not planning resume', async () => {
+    const sessionStore = new InMemorySessionStore()
+    const threadStore = new InMemoryThreadStore()
+    const eventBus = new InMemoryEventBus()
+    const inflight = new InflightTracker()
+    const steering = new SteeringQueue()
+    const nowIso = () => '2026-07-30T12:00:00.000Z'
+    const transitionGraphPlanningDraft = vi.fn(async (input: {
+      action: 'suspend' | 'resume' | 'cancel'
+    }) => {
+      if (input.action === 'resume') {
+        throw new Error('committed planning must not be resumed')
+      }
+      return {
+        version: 1 as const,
+        draftId: 'draft_committed',
+        reservedRunId: 'run_committed',
+        state: 'committed' as const,
+        draftRevision: 4
+      }
+    })
+    const service = new TurnService({
+      threadStore,
+      sessionStore,
+      events: new RuntimeEventRecorder({
+        eventBus,
+        sessionStore,
+        allocateSeq: (threadId) => eventBus.allocateSeq(threadId),
+        nowIso
+      }),
+      inflight,
+      steering,
+      compactor: new ContextCompactor(),
+      resolveGraphLeadRun: async () => ({
+        runId: 'run_committed',
+        lastEventSeq: 9,
+        terminal: false
+      }),
+      createGraphPlanningDraft: async () => ({
+        version: 1,
+        draftId: 'draft_committed',
+        reservedRunId: 'run_committed',
+        state: 'planning',
+        draftRevision: 1
+      }),
+      resolveGraphPlanningDraft: async () => ({
+        version: 1,
+        draftId: 'draft_committed',
+        reservedRunId: 'run_committed',
+        state: 'committed',
+        draftRevision: 4
+      }),
+      transitionGraphPlanningDraft,
+      ids: new SequentialIdGenerator(),
+      nowIso
+    })
+    await threadStore.upsert(createThreadRecord({
+      id: 'thr_graph_committed_steer',
+      title: 'Committed graph steering',
+      workspace: '/tmp/workspace',
+      model: 'deepseek-v4-pro'
+    }))
+    const source = await service.startTurn({
+      threadId: 'thr_graph_committed_steer',
+      request: { prompt: 'run graph', orchestration: 'graph' }
+    })
+    await expect(service.suspendGraphLeadTurn({
+      threadId: source.threadId,
+      turnId: source.turnId
+    })).resolves.toBe('suspended')
+    expect(await service.getTurn(source.threadId, source.turnId)).toMatchObject({
+      graphPlanningLifecycle: {
+        state: 'committed',
+        draftRevision: 4
+      }
+    })
+
+    await expect(service.steerTurn({
+      threadId: source.threadId,
+      turnId: source.turnId,
+      text: 'continue supervision',
+      messageSource: 'graph_runtime'
+    })).resolves.toBeUndefined()
+
+    expect(service.isTurnExecutionActive(source.turnId)).toBe(true)
+    expect(transitionGraphPlanningDraft).not.toHaveBeenCalled()
+    expect(steering.peek(source.turnId)).toHaveLength(1)
+    await service.interruptTurn({
+      threadId: source.threadId,
+      turnId: source.turnId
+    })
+  })
+
+  it('resumes and enqueues steering when Graph suspension releases the lease under the thread lock', async () => {
+    const sessionStore = new InMemorySessionStore()
+    const threadStore = new InMemoryThreadStore()
+    const eventBus = new InMemoryEventBus()
+    const inflight = new InflightTracker()
+    const steering = new SteeringQueue()
+    const nowIso = () => '2026-07-30T12:00:00.000Z'
+    const events = new RuntimeEventRecorder({
+      eventBus,
+      sessionStore,
+      allocateSeq: (threadId) => eventBus.allocateSeq(threadId),
+      nowIso
+    })
+    const service = new TurnService({
+      threadStore,
+      sessionStore,
+      events,
+      inflight,
+      steering,
+      compactor: new ContextCompactor(),
+      resolveGraphLeadRun: async () => ({
+        runId: 'run_suspend_steer_race',
+        lastEventSeq: 11,
+        terminal: false
+      }),
+      ids: new SequentialIdGenerator(),
+      nowIso
+    })
+    await threadStore.upsert(createThreadRecord({
+      id: 'thr_suspend_steer_race',
+      title: 'Suspend steering race',
+      workspace: '/tmp/workspace',
+      model: 'deepseek-v4-pro'
+    }))
+    const source = await service.startTurn({
+      threadId: 'thr_suspend_steer_race',
+      request: { prompt: 'run graph', orchestration: 'graph' }
+    })
+
+    const originalUpsert = threadStore.upsert.bind(threadStore)
+    let markSuspendWriteStarted!: () => void
+    let releaseSuspendWrite!: () => void
+    const suspendWriteStarted = new Promise<void>((resolve) => {
+      markSuspendWriteStarted = resolve
+    })
+    const suspendWriteRelease = new Promise<void>((resolve) => {
+      releaseSuspendWrite = resolve
+    })
+    let blockSuspendWrite = true
+    threadStore.upsert = vi.fn(async (
+      thread: Parameters<InMemoryThreadStore['upsert']>[0]
+    ) => {
+      const sourceTurn = thread.turns.find((turn) => turn.id === source.turnId)
+      if (blockSuspendWrite && sourceTurn?.graphLeadLifecycle?.suspendedAt) {
+        blockSuspendWrite = false
+        markSuspendWriteStarted()
+        await suspendWriteRelease
+      }
+      return originalUpsert(thread)
+    })
+
+    const suspension = service.suspendGraphLeadTurn({
+      threadId: source.threadId,
+      turnId: source.turnId
+    })
+    await suspendWriteStarted
+    const steeringRequest = service.steerTurn({
+      threadId: source.threadId,
+      turnId: source.turnId,
+      text: 'continue while suspension is committing',
+      messageSource: 'graph_runtime'
+    })
+    releaseSuspendWrite()
+
+    await expect(suspension).resolves.toBe('suspended')
+    await expect(steeringRequest).resolves.toBeUndefined()
+    expect(service.isTurnExecutionActive(source.turnId)).toBe(true)
+    expect(steering.peek(source.turnId)).toEqual([{
+      text: 'continue while suspension is committing',
+      messageSource: 'graph_runtime'
+    }])
+    expect((await sessionStore.loadEventsSince(source.threadId, 0))
+      .filter((event) => event.kind === 'turn_steered')).toHaveLength(1)
+    await service.interruptTurn({
+      threadId: source.threadId,
+      turnId: source.turnId
+    })
+  })
+
+  it('preserves an orphaned running Graph source turn when its run is nonterminal', async () => {
+    const sessionStore = new InMemorySessionStore()
+    const threadStore = new InMemoryThreadStore()
+    const eventBus = new InMemoryEventBus()
+    const nowIso = () => '2026-07-28T12:00:00.000Z'
+    const events = new RuntimeEventRecorder({
+      eventBus,
+      sessionStore,
+      allocateSeq: (threadId) => eventBus.allocateSeq(threadId),
+      nowIso
+    })
+    const original = new TurnService({
+      threadStore,
+      sessionStore,
+      events,
+      inflight: new InflightTracker(),
+      steering: new SteeringQueue(),
+      compactor: new ContextCompactor(),
+      ids: new SequentialIdGenerator(),
+      nowIso
+    })
+    await threadStore.upsert(createThreadRecord({
+      id: 'thr_graph_restart',
+      title: 'Graph restart',
+      workspace: '/tmp/workspace',
+      model: 'deepseek-v4-pro'
+    }))
+    const started = await original.startTurn({
+      threadId: 'thr_graph_restart',
+      request: { prompt: 'run graph', orchestration: 'graph' }
+    })
+
+    const recovered = new TurnService({
+      threadStore,
+      sessionStore,
+      events,
+      inflight: new InflightTracker(),
+      steering: new SteeringQueue(),
+      compactor: new ContextCompactor(),
+      resolveGraphLeadRun: async ({ turnId }) => turnId === started.turnId
+        ? { runId: 'run_restart', lastEventSeq: 3, terminal: false }
+        : null,
+      ids: new SequentialIdGenerator(),
+      nowIso
+    })
+    await expect(recovered.reconcileOrphanedTurns()).resolves.toEqual([])
+    expect(await recovered.getTurn('thr_graph_restart', started.turnId)).toMatchObject({
+      status: 'running',
+      graphLeadLifecycle: {
+        runId: 'run_restart',
+        state: 'supervising',
+        lastDeliveredSeq: 0
+      }
+    })
+    await recovered.resumeGraphLeadTurn({
+      threadId: 'thr_graph_restart',
+      turnId: started.turnId,
+      runId: 'run_restart',
+      lastDeliveredSeq: 3,
+      terminal: false
+    })
+    await recovered.interruptTurn({
+      threadId: 'thr_graph_restart',
+      turnId: started.turnId
+    })
+  })
+
+  it('parks an orphaned Graph Lead with pending supervision without consuming its cursor', async () => {
+    const sessionStore = new InMemorySessionStore()
+    const threadStore = new InMemoryThreadStore()
+    const eventBus = new InMemoryEventBus()
+    const nowIso = () => '2026-07-30T12:30:00.000Z'
+    const events = new RuntimeEventRecorder({
+      eventBus,
+      sessionStore,
+      allocateSeq: (threadId) => eventBus.allocateSeq(threadId),
+      nowIso
+    })
+    const original = new TurnService({
+      threadStore,
+      sessionStore,
+      events,
+      inflight: new InflightTracker(),
+      steering: new SteeringQueue(),
+      compactor: new ContextCompactor(),
+      ids: new SequentialIdGenerator(),
+      nowIso
+    })
+    await threadStore.upsert(createThreadRecord({
+      id: 'thr_graph_pending_restart',
+      title: 'Graph supervision restart',
+      workspace: '/tmp/workspace',
+      model: 'deepseek-v4-pro'
+    }))
+    const started = await original.startTurn({
+      threadId: 'thr_graph_pending_restart',
+      request: { prompt: 'run graph', orchestration: 'graph' }
+    })
+
+    const recovered = new TurnService({
+      threadStore,
+      sessionStore,
+      events,
+      inflight: new InflightTracker(),
+      steering: new SteeringQueue(),
+      compactor: new ContextCompactor(),
+      resolveGraphLeadRun: async ({ turnId }) => turnId === started.turnId
+        ? {
+            runId: 'run_pending_restart',
+            lastEventSeq: 17,
+            terminal: false,
+            supervisionPending: true
+          }
+        : null,
+      ids: new SequentialIdGenerator(),
+      nowIso
+    })
+
+    await expect(recovered.reconcileOrphanedTurns()).resolves.toEqual([])
+    expect(await recovered.getTurn(started.threadId, started.turnId)).toMatchObject({
+      status: 'running',
+      graphLeadLifecycle: {
+        runId: 'run_pending_restart',
+        state: 'supervising',
+        lastDeliveredSeq: 0,
+        suspendedAt: nowIso()
+      }
+    })
+    expect((await sessionStore.loadEventsSince(started.threadId, 0))
+      .filter((event) => event.kind === 'turn_failed')).toEqual([])
+
+    await expect(recovered.resumeGraphLeadTurn({
+      threadId: started.threadId,
+      turnId: started.turnId,
+      runId: 'run_pending_restart',
+      lastDeliveredSeq: 0,
+      terminal: false
+    })).resolves.toBe('resumed')
+    await recovered.interruptTurn({
+      threadId: started.threadId,
+      turnId: started.turnId
+    })
+  })
+
+  it('preserves a terminal Graph source turn until delayed Lead recovery finalizes it', async () => {
+    const sessionStore = new InMemorySessionStore()
+    const threadStore = new InMemoryThreadStore()
+    const eventBus = new InMemoryEventBus()
+    const nowIso = () => '2026-07-30T12:00:00.000Z'
+    const events = new RuntimeEventRecorder({
+      eventBus,
+      sessionStore,
+      allocateSeq: (threadId) => eventBus.allocateSeq(threadId),
+      nowIso
+    })
+    const original = new TurnService({
+      threadStore,
+      sessionStore,
+      events,
+      inflight: new InflightTracker(),
+      steering: new SteeringQueue(),
+      compactor: new ContextCompactor(),
+      ids: new SequentialIdGenerator(),
+      nowIso
+    })
+    await threadStore.upsert(createThreadRecord({
+      id: 'thr_graph_terminal_restart',
+      title: 'Terminal Graph restart',
+      workspace: '/tmp/workspace',
+      model: 'deepseek-v4-pro'
+    }))
+    const started = await original.startTurn({
+      threadId: 'thr_graph_terminal_restart',
+      request: { prompt: 'run graph', orchestration: 'graph' }
+    })
+
+    const recovered = new TurnService({
+      threadStore,
+      sessionStore,
+      events,
+      inflight: new InflightTracker(),
+      steering: new SteeringQueue(),
+      compactor: new ContextCompactor(),
+      resolveGraphLeadRun: async ({ turnId }) => turnId === started.turnId
+        ? { runId: 'run_terminal_restart', lastEventSeq: 9, terminal: true }
+        : null,
+      ids: new SequentialIdGenerator(),
+      nowIso
+    })
+
+    // Runtime startup performs this orphan sweep before the Graph supervisor's
+    // delayed terminal wake-up. The GraphRun still owns finalization.
+    await expect(recovered.reconcileOrphanedTurns()).resolves.toEqual([])
+    expect(await recovered.getTurn(started.threadId, started.turnId)).toMatchObject({
+      status: 'running'
+    })
+    expect((await sessionStore.loadEventsSince(started.threadId, 0))
+      .filter((event) => event.kind === 'turn_failed')).toEqual([])
+
+    await expect(recovered.resumeGraphLeadTurn({
+      threadId: started.threadId,
+      turnId: started.turnId,
+      runId: 'run_terminal_restart',
+      lastDeliveredSeq: 9,
+      terminal: true
+    })).resolves.toBe('resumed')
+    expect(await recovered.getTurn(started.threadId, started.turnId)).toMatchObject({
+      status: 'running',
+      graphLeadLifecycle: {
+        runId: 'run_terminal_restart',
+        state: 'finalizing',
+        lastDeliveredSeq: 9
+      }
+    })
+    await recovered.interruptTurn({
+      threadId: started.threadId,
+      turnId: started.turnId
+    })
+  })
+
+  it('migrates an active legacy Graph creation gate into a recoverable planning draft', async () => {
+    const sessionStore = new InMemorySessionStore()
+    const threadStore = new InMemoryThreadStore()
+    const eventBus = new InMemoryEventBus()
+    const inflight = new InflightTracker()
+    const steering = new SteeringQueue()
+    const nowIso = () => '2026-07-29T00:00:00.000Z'
+    const events = new RuntimeEventRecorder({
+      eventBus,
+      sessionStore,
+      allocateSeq: (threadId) => eventBus.allocateSeq(threadId),
+      nowIso
+    })
+    const original = new TurnService({
+      threadStore,
+      sessionStore,
+      events,
+      inflight,
+      steering,
+      compactor: new ContextCompactor(),
+      ids: new SequentialIdGenerator(),
+      nowIso
+    })
+    await threadStore.upsert(createThreadRecord({
+      id: 'thr_graph_legacy_gate',
+      title: 'Legacy gate',
+      workspace: '/tmp/workspace',
+      model: 'deepseek-v4-pro'
+    }))
+    const started = await original.startTurn({
+      threadId: 'thr_graph_legacy_gate',
+      request: { prompt: 'run graph', orchestration: 'graph' }
+    })
+    await original.updateTurnMetadata('thr_graph_legacy_gate', started.turnId, {
+      requiredToolGate: {
+        toolName: 'graph_create_run',
+        attempt: 2,
+        maxAttempts: 3,
+        phase: 'retrying',
+        lastError: 'legacy invalid plan'
+      }
+    })
+
+    let created = false
+    const recovered = new TurnService({
+      threadStore,
+      sessionStore,
+      events,
+      inflight,
+      steering,
+      compactor: new ContextCompactor(),
+      createGraphPlanningDraft: async () => {
+        created = true
+        return {
+          version: 1,
+          draftId: 'draft_migrated',
+          reservedRunId: 'run_migrated',
+          state: 'planning',
+          draftRevision: 1
+        }
+      },
+      transitionGraphPlanningDraft: async ({ action }) => created
+        ? {
+            version: 1,
+            draftId: 'draft_migrated',
+            reservedRunId: 'run_migrated',
+            state: action === 'suspend' ? 'needs_correction' : 'planning',
+            draftRevision: 2
+          }
+        : null,
+      ids: new SequentialIdGenerator(),
+      nowIso
+    })
+
+    await expect(recovered.suspendGraphPlanningTurn({
+      threadId: 'thr_graph_legacy_gate',
+      turnId: started.turnId
+    })).resolves.toBe('suspended')
+    expect(created).toBe(true)
+    expect(await recovered.getTurn('thr_graph_legacy_gate', started.turnId)).toMatchObject({
+      status: 'running',
+      graphPlanningLifecycle: {
+        draftId: 'draft_migrated',
+        state: 'needs_correction'
+      }
+    })
+    expect((await recovered.getTurn('thr_graph_legacy_gate', started.turnId))
+      ?.requiredToolGate).toBeUndefined()
   })
 
   it('releases an admission and aborts an already-persisted turn when startup fails', async () => {

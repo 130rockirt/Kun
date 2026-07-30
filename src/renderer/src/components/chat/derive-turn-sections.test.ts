@@ -28,6 +28,27 @@ function processingSections(input: {
 }
 
 describe('deriveTurnSections', () => {
+  it('does not render internal Graph supervision prompts as user or process content', () => {
+    const result = sections([
+      {
+        kind: 'user',
+        id: 'graph_runtime_1',
+        text: 'Graph Lead supervision for durable run run_1.',
+        meta: { messageSource: 'graph_runtime' }
+      },
+      {
+        kind: 'assistant',
+        id: 'milestone_1',
+        text: 'The first node passed review.'
+      }
+    ])
+
+    expect(result.processBlocks).toEqual([])
+    expect(result.assistantContentBlocks.map((block) => block.id)).toEqual([
+      'milestone_1'
+    ])
+  })
+
   it('renders the final assistant answer as content even when reasoning was persisted after it', () => {
     const result = sections([
       { kind: 'assistant', id: 'answer', text: '你好！' },
@@ -58,7 +79,7 @@ describe('deriveTurnSections', () => {
     expect(result.processBlocks.map((block) => block.kind)).toEqual(['tool'])
   })
 
-  it('keeps intermediate assistant text inside the process timeline and surfaces only the final answer', () => {
+  it('keeps intermediate assistant text in chronological work and surfaces only the final answer', () => {
     const result = sections([
       { kind: 'assistant', id: 'intro', text: 'I found the likely cause.' },
       {
@@ -92,12 +113,7 @@ describe('deriveTurnSections', () => {
       { kind: 'assistant', id: 'next', text: 'The issue link above should still be visible.' }
     ])
 
-    // Only the trailing answer renders as the visible message body; the earlier
-    // "我先看看…"-style narration belongs inside the collapsed work timeline,
-    // not spilled out as standalone bubbles (regression from b9d4efb0a).
     expect(result.assistantContentBlocks.map((block) => block.id)).toEqual(['next'])
-    // The intermediate segments are preserved (not dropped) — just kept in the
-    // process trace, in chronological order with the tool calls.
     expect(result.processBlocks.map((block) => block.id)).toEqual([
       'intro',
       'tool_read',
@@ -112,11 +128,7 @@ describe('deriveTurnSections', () => {
     ).toContain('command output line 2')
   })
 
-  it('keeps every consecutive trailing segment but the last inside the timeline', () => {
-    // Reproduces the reported case: a single command followed by several
-    // consecutive assistant segments. Only the final segment is the visible
-    // answer; the preface + intermediate analysis stay inside 已处理 even
-    // though no tool separates them.
+  it('keeps every consecutive trailing segment except the final one inside work', () => {
     const result = sections([
       {
         kind: 'tool',
@@ -346,21 +358,28 @@ describe('deriveTurnSections', () => {
     expect(result.turnFileChanges[0]?.detail).toContain('+new detail')
   })
 
-  it('keeps live reasoning and live assistant out of processBlocks for bottom-of-turn rendering', () => {
-    // Live thinking and streaming assistant text are owned by ConversationTurn
-    // (bottom loading row + MessageBubble). They must NOT appear in
-    // processBlocks, otherwise loading chrome interleaves above later text
-    // and can replace completed tool summaries.
+  it('appends live reasoning and assistant output to the active process timeline', () => {
     const result = processingSections({
       liveProcessText: 'private reasoning',
       liveContent: '这里是正在生成的回答。'
     })
 
     expect(result.assistantContentBlocks).toEqual([])
-    expect(result.processBlocks).toEqual([])
+    expect(result.processBlocks).toEqual([
+      {
+        kind: 'reasoning',
+        id: 'live-reasoning',
+        text: 'private reasoning'
+      },
+      {
+        kind: 'assistant',
+        id: 'live-assistant',
+        text: '这里是正在生成的回答。'
+      }
+    ])
   })
 
-  it('keeps assistant content in chronological process order while a later tool is still running', () => {
+  it('keeps assistant content in chronological work while a later tool is still running', () => {
     const result = processingSections({
       blocks: [
         { kind: 'assistant', id: 'answer', text: '先给你一部分结果。' },

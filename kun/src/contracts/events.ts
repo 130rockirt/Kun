@@ -8,8 +8,26 @@ import {
 import { ThreadGoalSchema, ThreadTodoListSchema } from './threads.js'
 import { UsageSnapshotSchema } from './usage.js'
 import { RuntimeErrorSeverity } from './errors.js'
-import { ApprovalPolicySchema, SandboxModeSchema } from './policy.js'
+import {
+  ApprovalPolicySchema,
+  ApprovalReviewerSchema,
+  SandboxModeSchema
+} from './policy.js'
+import {
+  ApprovalActionEnvelopeSchema,
+  ApprovalReviewTerminalStatusSchema
+} from './approvals.js'
 import { SubagentToolPolicy } from './capabilities.js'
+import {
+  GraphEventEnvelopeV1Schema,
+  GraphPlanningLifecycleEventV1Schema
+} from './graph.js'
+import {
+  SteeringEntrySchema,
+  TurnClientSurfaceSchema,
+  TurnReasoningEffortSchema,
+  TurnServiceTierSchema
+} from './turns.js'
 
 /**
  * Persisted runtime events. Every event has a per-thread `seq` so the
@@ -23,20 +41,25 @@ export const RuntimeEventKind = z.enum([
   'turn_failed',
   'turn_aborted',
   'turn_steered',
+  'turn_steering_updated',
   'item_created',
   'item_updated',
   'item_completed',
   'assistant_text_delta',
   'assistant_reasoning_delta',
   'tool_call_ready',
+  'required_tool_gate',
   'model_request_retry',
   'tool_result_upload_wait',
   'tool_storm_suppressed',
+  'source_tool_page',
   'tool_catalog_changed',
   'tool_call_started',
   'tool_call_finished',
   'approval_requested',
   'approval_resolved',
+  'approval_review_started',
+  'approval_review_completed',
   'user_input_requested',
   'user_input_resolved',
   'compaction_started',
@@ -50,6 +73,8 @@ export const RuntimeEventKind = z.enum([
   'bash_session_completed',
   'pipeline_stage',
   'delegated_runtime',
+  'graph_planning',
+  'graph_event',
   'context_snapshot',
   'usage',
   'error',
@@ -71,6 +96,23 @@ export const PipelineStage = z.enum([
   'response_received'
 ])
 export type PipelineStage = z.infer<typeof PipelineStage>
+
+/**
+ * Safe, compact progress projected from a child thread onto its parent.
+ *
+ * This intentionally carries only a phase label, never reasoning text or
+ * tool output. A parent client can therefore show Kimi-style live activity
+ * without subscribing to every child transcript or duplicating private
+ * child-session content in the parent event log.
+ */
+export const ChildRunActivity = z.object({
+  phase: z.enum(['starting', 'thinking', 'responding', 'tool', 'retrying', 'compacting', 'waiting']),
+  label: z.string().min(1).max(500),
+  toolName: z.string().min(1).max(256).optional(),
+  startedAt: z.string(),
+  updatedAt: z.string()
+}).strict()
+export type ChildRunActivity = z.infer<typeof ChildRunActivity>
 
 const RuntimeEventBase = z.object({
   seq: z.number().int().nonnegative(),
@@ -102,10 +144,17 @@ const RuntimeEventBase = z.object({
     totalTokens: z.number().int().nonnegative().optional(),
     cacheHitRate: z.number().min(0).max(1).nullable().optional(),
     costUsd: z.number().nonnegative().optional(),
-    costCny: z.number().nonnegative().optional()
+    costCny: z.number().nonnegative().optional(),
+    activity: ChildRunActivity.optional()
   }).optional()
 })
 
+/**
+ * For assistant_*_delta events, item.text is the newly emitted fragment and
+ * consumers MUST append it once by stable item id after applying the seq
+ * idempotency gate. item_created/item_updated/item_completed and tool item
+ * events carry authoritative snapshots and replace the projected item.
+ */
 export const ItemEvent = RuntimeEventBase.extend({
   kind: z.enum([
     'item_created',
@@ -124,7 +173,14 @@ export const ThreadLifecycleEvent = RuntimeEventBase.extend({
   kind: z.enum(['thread_created', 'thread_updated']),
   title: z.string().optional(),
   titleAuto: z.boolean().optional(),
-  status: z.string().optional()
+  status: z.string().optional(),
+  mode: z.enum(['agent', 'plan']).optional(),
+  workspace: z.string().optional(),
+  additionalWorkspaces: z.array(z.string()).optional(),
+  approvalPolicy: ApprovalPolicySchema.optional(),
+  approvalReviewer: ApprovalReviewerSchema.optional(),
+  sandboxMode: SandboxModeSchema.optional(),
+  modelRequestCaptureEnabled: z.boolean().optional()
 })
 export type ThreadLifecycleEvent = z.infer<typeof ThreadLifecycleEvent>
 
@@ -143,9 +199,25 @@ export const TurnLifecycleEvent = RuntimeEventBase.extend({
   message: z.string().optional(),
   code: z.string().optional(),
   details: z.unknown().optional(),
-  severity: RuntimeErrorSeverity.optional()
+  severity: RuntimeErrorSeverity.optional(),
+  model: z.string().min(1).optional(),
+  providerId: z.string().min(1).optional(),
+  accountId: z.string().min(1).optional(),
+  reasoningEffort: TurnReasoningEffortSchema.optional(),
+  serviceTier: TurnServiceTierSchema.optional(),
+  clientSurface: TurnClientSurfaceSchema.optional(),
+  approvalPolicy: ApprovalPolicySchema.optional(),
+  sandboxMode: SandboxModeSchema.optional(),
+  approvalReviewer: ApprovalReviewerSchema.optional(),
+  mode: z.enum(['agent', 'plan']).optional()
 })
 export type TurnLifecycleEvent = z.infer<typeof TurnLifecycleEvent>
+
+export const SteeringEvent = RuntimeEventBase.extend({
+  kind: z.literal('turn_steering_updated'),
+  entries: z.array(SteeringEntrySchema)
+})
+export type SteeringEvent = z.infer<typeof SteeringEvent>
 
 export const ApprovalEvent = RuntimeEventBase.extend({
   kind: z.enum(['approval_requested', 'approval_resolved']),
@@ -153,11 +225,40 @@ export const ApprovalEvent = RuntimeEventBase.extend({
   toolName: z.string().min(1),
   status: z.enum(['pending', 'allowed', 'denied', 'expired']),
   approvalPolicy: ApprovalPolicySchema.optional(),
+  approvalReviewer: ApprovalReviewerSchema.optional(),
+  decisionSource: ApprovalReviewerSchema.optional(),
   sandboxMode: SandboxModeSchema.optional(),
   summary: z.string().optional(),
-  reason: z.string().optional()
+  reason: z.string().optional(),
+  action: ApprovalActionEnvelopeSchema.optional()
 })
 export type ApprovalEvent = z.infer<typeof ApprovalEvent>
+
+export const ApprovalReviewStartedEvent = RuntimeEventBase.extend({
+  kind: z.literal('approval_review_started'),
+  reviewId: z.string().min(1),
+  approvalId: z.string().min(1),
+  toolName: z.string().min(1),
+  reviewer: z.literal('agent'),
+  status: z.literal('in-progress'),
+  summary: z.string().min(1).max(2_048),
+  action: ApprovalActionEnvelopeSchema.optional()
+}).strict()
+export type ApprovalReviewStartedEvent = z.infer<typeof ApprovalReviewStartedEvent>
+
+export const ApprovalReviewCompletedEvent = RuntimeEventBase.extend({
+  kind: z.literal('approval_review_completed'),
+  reviewId: z.string().min(1),
+  approvalId: z.string().min(1),
+  toolName: z.string().min(1),
+  reviewer: z.literal('agent'),
+  status: ApprovalReviewTerminalStatusSchema,
+  summary: z.string().min(1).max(2_048),
+  decision: z.enum(['allow', 'deny']).optional(),
+  riskLevel: z.enum(['low', 'medium', 'high', 'critical']).optional(),
+  rationale: z.string().min(1).max(2_048)
+}).strict()
+export type ApprovalReviewCompletedEvent = z.infer<typeof ApprovalReviewCompletedEvent>
 
 export const UserInputEvent = RuntimeEventBase.extend({
   kind: z.enum(['user_input_requested', 'user_input_resolved']),
@@ -177,12 +278,24 @@ export const ToolCallReadyEvent = RuntimeEventBase.extend({
 })
 export type ToolCallReadyEvent = z.infer<typeof ToolCallReadyEvent>
 
-export const ModelRequestRetryEvent = RuntimeEventBase.extend({
-  kind: z.literal('model_request_retry'),
-  status: z.number().int().min(100).max(599),
+/** Structured progress for a hard named-tool gate; never assistant text. */
+export const RequiredToolGateEvent = RuntimeEventBase.extend({
+  kind: z.literal('required_tool_gate'),
+  toolName: z.string().min(1).max(256),
+  phase: z.enum(['preparing', 'retrying', 'succeeded', 'failed']),
   attempt: z.number().int().positive(),
   maxAttempts: z.number().int().positive(),
-  delayMs: z.number().int().nonnegative()
+  failureSummary: z.string().min(1).max(2_048).optional()
+})
+export type RequiredToolGateEvent = z.infer<typeof RequiredToolGateEvent>
+
+export const ModelRequestRetryEvent = RuntimeEventBase.extend({
+  kind: z.literal('model_request_retry'),
+  status: z.number().int().min(100).max(599).optional(),
+  attempt: z.number().int().positive(),
+  maxAttempts: z.number().int().positive(),
+  delayMs: z.number().int().nonnegative(),
+  reason: z.enum(['network', 'stream_transport']).optional()
 })
 export type ModelRequestRetryEvent = z.infer<typeof ModelRequestRetryEvent>
 
@@ -200,6 +313,16 @@ export const ToolStormSuppressedEvent = RuntimeEventBase.extend({
   message: z.string()
 })
 export type ToolStormSuppressedEvent = z.infer<typeof ToolStormSuppressedEvent>
+
+export const SourceToolPageEvent = RuntimeEventBase.extend({
+  kind: z.literal('source_tool_page'),
+  toolName: z.enum(['read', 'grep', 'glob', 'find']),
+  callId: z.string().min(1),
+  hasMore: z.boolean(),
+  continuation: z.enum(['offset', 'cursor', 'none']),
+  budgetTokens: z.number().int().nonnegative().optional()
+})
+export type SourceToolPageEvent = z.infer<typeof SourceToolPageEvent>
 
 export const ToolCatalogEvent = RuntimeEventBase.extend({
   kind: z.literal('tool_catalog_changed'),
@@ -310,9 +433,24 @@ export const DelegatedRuntimeEvent = RuntimeEventBase.extend({
 })
 export type DelegatedRuntimeEvent = z.infer<typeof DelegatedRuntimeEvent>
 
+export const GraphRuntimeEvent = RuntimeEventBase.extend({
+  kind: z.literal('graph_event'),
+  graph: GraphEventEnvelopeV1Schema
+})
+export type GraphRuntimeEvent = z.infer<typeof GraphRuntimeEvent>
+
+export const GraphPlanningRuntimeEvent = RuntimeEventBase.extend({
+  kind: z.literal('graph_planning'),
+  planning: GraphPlanningLifecycleEventV1Schema
+}).strict()
+export type GraphPlanningRuntimeEvent = z.infer<typeof GraphPlanningRuntimeEvent>
+
 export const UsageEvent = RuntimeEventBase.extend({
   kind: z.literal('usage'),
   model: z.string().optional(),
+  providerId: z.string().min(1).optional(),
+  accountId: z.string().min(1).optional(),
+  attribution: z.enum(['agent-turn', 'approval-review']).optional(),
   usage: UsageSnapshotSchema
 })
 export type UsageEvent = z.infer<typeof UsageEvent>
@@ -343,12 +481,17 @@ export const RuntimeEvent = z.discriminatedUnion('kind', [
   ItemEvent,
   ThreadLifecycleEvent,
   TurnLifecycleEvent,
+  SteeringEvent,
   ApprovalEvent,
+  ApprovalReviewStartedEvent,
+  ApprovalReviewCompletedEvent,
   UserInputEvent,
   ToolCallReadyEvent,
+  RequiredToolGateEvent,
   ModelRequestRetryEvent,
   ToolUploadStatusEvent,
   ToolStormSuppressedEvent,
+  SourceToolPageEvent,
   ToolCatalogEvent,
   CompactionEvent,
   GoalEvent,
@@ -356,6 +499,8 @@ export const RuntimeEvent = z.discriminatedUnion('kind', [
   BashSessionEvent,
   PipelineStageEvent,
   DelegatedRuntimeEvent,
+  GraphPlanningRuntimeEvent,
+  GraphRuntimeEvent,
   ContextSnapshotEvent,
   UsageEvent,
   ErrorEvent,

@@ -92,14 +92,50 @@ describe('inlineAgentPosition', () => {
     })
 
     expect(position).toMatchObject({
-      left: 380,
-      width: 240,
+      left: 300,
+      width: 400,
       coordinateScale
     })
     expect(position?.anchorLeft).toBeCloseTo(400)
     expect(position?.anchorRight).toBeCloseTo(600)
     expect(position?.anchorTop).toBeCloseTo(300)
     expect(position?.anchorBottom).toBeCloseTo(340)
+  })
+
+  it('gives the selection composer enough width for multiline instructions', () => {
+    expect(inlineAgentPosition({
+      anchorRect: {
+        left: 400,
+        right: 600,
+        top: 300,
+        bottom: 340,
+        width: 200
+      }
+    }, {
+      coordinateScale: 1,
+      viewportWidth: 1000
+    })).toMatchObject({
+      left: 270,
+      width: 460
+    })
+  })
+
+  it('still fits inside a narrow viewport', () => {
+    expect(inlineAgentPosition({
+      anchorRect: {
+        left: 120,
+        right: 200,
+        top: 200,
+        bottom: 240,
+        width: 80
+      }
+    }, {
+      coordinateScale: 1,
+      viewportWidth: 360
+    })).toMatchObject({
+      left: 16,
+      width: 328
+    })
   })
 })
 

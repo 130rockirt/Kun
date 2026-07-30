@@ -650,6 +650,9 @@ function testRuntimeInfo() {
     port: 18899,
     dataDir: '/tmp/kun-replay',
     model: 'deepseek-chat',
+    instanceId: 'replay-test-runtime',
+    serviceVersion: 'test',
+    launchMode: 'foreground' as const,
     startedAt: '2026-06-29T00:00:00.000Z',
     capabilities: buildRuntimeCapabilityManifest({
       model: {

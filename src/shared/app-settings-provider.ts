@@ -73,6 +73,7 @@ import {
   CHATGPT_SUBSCRIPTION_PROVIDER_ID,
   GEMINI_SUBSCRIPTION_MODEL_IDS,
   TOKEN_PLAN_PROVIDER_ID_SUFFIX,
+  getModelProviderPreset,
   modelProviderPresetProfile,
   modelProviderTokenPlanProfile,
   resolveModelProviderPresetSource,
@@ -697,23 +698,35 @@ function providerWithPresetCapabilities(provider: ModelProviderProfileV1): Model
   // preset transport during normalization so blank-base-URL subscriptions are
   // retained in serve.providers and reach DelegatedTurnRuntime.
   const kind = provider.kind ?? presetProfile.kind
-  const image = mergePresetCapability(provider.image, presetProfile.image)
   const presetSource = resolveModelProviderPresetSource(provider)
   const hasFixedSubscriptionCapabilities =
     presetSource?.mode === 'api' && presetSource.preset.category === 'subscription'
-  // Subscription/SDK credentials are tied to documented transports. Do not
-  // let a stale hand-authored speech block turn Cursor, Codex, Claude, or
-  // Antigravity into an OpenAI transcription endpoint.
+  // Subscription/SDK credentials are tied to documented transports. Do not let
+  // stale hand-authored media blocks route those credentials through a generic
+  // or unrelated protocol. This also upgrades profiles saved before a dedicated
+  // subscription image/video transport was introduced.
+  const image = hasFixedSubscriptionCapabilities
+    ? presetProfile.image
+    : mergePresetCapability(provider.image, presetProfile.image)
   const speech = hasFixedSubscriptionCapabilities
     ? presetProfile.speech
     : mergePresetCapability(provider.speech, presetProfile.speech)
   const textToSpeech = mergePresetCapability(provider.textToSpeech, presetProfile.textToSpeech)
   const music = mergePresetCapability(provider.music, presetProfile.music)
-  const video = mergePresetCapability(provider.video, presetProfile.video)
-  const { speech: _storedSpeech, ...providerWithoutSpeech } = provider
+  const video = hasFixedSubscriptionCapabilities
+    ? presetProfile.video
+    : mergePresetCapability(provider.video, presetProfile.video)
+  const {
+    image: _storedImage,
+    speech: _storedSpeech,
+    video: _storedVideo,
+    ...providerWithoutFixedMedia
+  } = provider
+  void _storedImage
   void _storedSpeech
+  void _storedVideo
   return {
-    ...(hasFixedSubscriptionCapabilities ? providerWithoutSpeech : provider),
+    ...(hasFixedSubscriptionCapabilities ? providerWithoutFixedMedia : provider),
     ...(kind ? { kind } : {}),
     ...(image ? { image } : {}),
     ...(speech ? { speech } : {}),
@@ -978,7 +991,7 @@ export function resolveKunVideoGenerationSettings(settings: AppSettingsV1): KunV
   const videoGeneration = runtime.videoGeneration
   const providerId = normalizeModelProviderId(videoGeneration.providerId)
   if (!providerId || providerId === CUSTOM_VIDEO_GENERATION_PROVIDER_ID) {
-    return normalizeResolvedGrokVideoDefaults({
+    return normalizeResolvedVideoDefaults({
       ...videoGeneration,
       providerId,
       protocol: normalizeVideoGenerationProtocol(videoGeneration.protocol)
@@ -993,7 +1006,7 @@ export function resolveKunVideoGenerationSettings(settings: AppSettingsV1): KunV
       protocol: normalizeVideoGenerationProtocol(videoGeneration.protocol)
     }
   }
-  return normalizeResolvedGrokVideoDefaults({
+  return normalizeResolvedVideoDefaults({
     ...videoGeneration,
     providerId: provider.id,
     protocol: capability.protocol,
@@ -1019,11 +1032,19 @@ function resolveVideoProviderCapabilityModel(
     : fallback || model
 }
 
-function normalizeResolvedGrokVideoDefaults(
+function normalizeResolvedVideoDefaults(
   value: KunVideoGenerationSettingsV1
 ): KunVideoGenerationSettingsV1 {
-  if (value.protocol !== 'grok-imagine-video') return value
   const resolution = value.defaultResolution.trim().toUpperCase()
+  if (value.protocol === 'volcengine-ark-video') {
+    const allowedResolutions = new Set(['480P', '720P', '1080P', '4K'])
+    return {
+      ...value,
+      defaultDuration: Math.min(15, Math.max(4, value.defaultDuration)),
+      defaultResolution: allowedResolutions.has(resolution) ? resolution : '720P'
+    }
+  }
+  if (value.protocol !== 'grok-imagine-video') return value
   return {
     ...value,
     defaultDuration: value.defaultDuration === 10 ? 10 : 6,
@@ -1083,11 +1104,11 @@ export function resolveKunImageGenerationSettings(settings: AppSettingsV1): KunI
   const imageGeneration = runtime.imageGeneration
   const providerId = normalizeModelProviderId(imageGeneration.providerId)
   if (!providerId || providerId === CUSTOM_IMAGE_GENERATION_PROVIDER_ID) {
-    return {
+    return normalizeResolvedImageDefaults({
       ...imageGeneration,
       providerId,
       protocol: normalizeImageGenerationProtocol(imageGeneration.protocol)
-    }
+    })
   }
   const provider = getModelProviderProfile(settings, providerId)
   const image = provider.image
@@ -1098,14 +1119,30 @@ export function resolveKunImageGenerationSettings(settings: AppSettingsV1): KunI
       protocol: normalizeImageGenerationProtocol(imageGeneration.protocol)
     }
   }
-  return {
+  return normalizeResolvedImageDefaults({
     ...imageGeneration,
     providerId: provider.id,
     protocol: image.protocol,
     baseUrl: resolveProviderCapabilityBaseUrl(provider, image, 'image'),
     apiKey: provider.apiKey.trim(),
     model: resolveImageProviderCapabilityModel(imageGeneration.model, image)
+  })
+}
+
+function normalizeResolvedImageDefaults(
+  value: KunImageGenerationSettingsV1
+): KunImageGenerationSettingsV1 {
+  if (value.protocol === 'volcengine-ark-image') {
+    return {
+      ...value,
+      defaultResolution: value.defaultResolution === '3K' || value.defaultResolution === '4K'
+        ? value.defaultResolution
+        : '2K'
+    }
   }
+  return value.defaultResolution === '3K' || value.defaultResolution === '4K'
+    ? { ...value, defaultResolution: '1K' }
+    : value
 }
 
 export function resolveKunRuntimeSettings(settings: AppSettingsV1): KunRuntimeSettingsV1 {
@@ -1189,7 +1226,9 @@ function normalizeModelProviderProfile(
     presetSource?.presetId === 'gemini-subscription' && input?.kind === 'gemini-code-assist'
       ? [...GEMINI_SUBSCRIPTION_MODEL_IDS]
       : savedModels
-  const { name, models } = migrateChatGptSubscriptionProfile(id, rawName, rawModels)
+  const migrated = migrateChatGptSubscriptionProfile(id, rawName, rawModels)
+  const name = migrated.name
+  const models = migrateProviderPresetModelCatalog(id, migrated.models)
   const modelProfiles = withPresetModelProfiles(
     { id, presetSource },
     models,
@@ -1255,6 +1294,14 @@ function migrateChatGptSubscriptionProfile(
       ? [...CHATGPT_SUBSCRIPTION_MODEL_IDS]
       : models
   }
+}
+
+function migrateProviderPresetModelCatalog(id: string, models: string[]): string[] {
+  if (id !== 'kimi-code') return models
+  const legacyModels = new Set(['kimi-for-coding', 'kimi-for-coding-highspeed'])
+  if (models.length === 0 || models.some((model) => !legacyModels.has(model))) return models
+  const preset = getModelProviderPreset('kimi-code')
+  return preset ? [...preset.models] : models
 }
 
 export function defaultModelRequestRetrySettings(): ModelRequestRetrySettingsV1 {
@@ -1332,9 +1379,23 @@ function withPresetModelProfiles(
   const profiles = { ...stored }
   for (const [modelId, presetProfile] of Object.entries(merged)) {
     const storedProfile = stored[modelId]
-    profiles[modelId] = {
+    const usePresetReasoning = shouldUpgradeGeneratedPresetReasoning(
+      provider.id,
+      modelId,
+      storedProfile?.reasoning,
+      presetProfile.reasoning
+    )
+    const profile: ModelProviderModelProfileV1 = {
       ...presetProfile,
       ...(storedProfile ?? {}),
+      ...(usePresetReasoning && presetProfile.reasoning
+        ? { reasoning: presetProfile.reasoning }
+        : {}),
+      // Service-tier availability is upstream model metadata. Older stored
+      // profiles must inherit additions and removals from the preset catalog.
+      ...(presetProfile.serviceTiers?.length
+        ? { serviceTiers: [...presetProfile.serviceTiers] }
+        : {}),
       // Responses Lite is a required transport contract for its matching
       // Codex models, not a user-editable profile choice. Older manually
       // added profiles should inherit it from the preset.
@@ -1342,8 +1403,43 @@ function withPresetModelProfiles(
         ? { responsesMode: presetProfile.responsesMode }
         : {})
     }
+    if (!presetProfile.serviceTiers?.length) delete profile.serviceTiers
+    profiles[modelId] = profile
   }
   return profiles
+}
+
+function shouldUpgradeGeneratedPresetReasoning(
+  providerId: string,
+  modelId: string,
+  stored: ModelProviderReasoningCapabilityV1 | undefined,
+  preset: ModelProviderReasoningCapabilityV1 | undefined
+): boolean {
+  if (!stored || !preset) return false
+  const presetId = providerId.endsWith(TOKEN_PLAN_PROVIDER_ID_SUFFIX)
+    ? providerId.slice(0, -TOKEN_PLAN_PROVIDER_ID_SUFFIX.length)
+    : providerId
+  if (
+    presetId === 'kimi-code' &&
+    modelId === 'k3' &&
+    stored.requestProtocol === 'openai-responses' &&
+    preset.requestProtocol === 'openai-chat-completions'
+  ) {
+    return true
+  }
+  const generatedPlaceholderProviders = new Set([
+    'opencode-go',
+    'zhipu-coding-plan',
+    'zai-coding-plan',
+    'aliyun',
+    'tencentcloud',
+    'volcengine-coding-plan'
+  ])
+  if (!generatedPlaceholderProviders.has(presetId)) return false
+  return stored.requestProtocol === 'none' &&
+    preset.requestProtocol !== 'none' &&
+    stored.defaultEffort === 'auto' &&
+    stored.supportedEfforts.every((effort) => effort === 'auto' || effort === 'off')
 }
 
 function presetModelProfilesForProvider(
@@ -1386,6 +1482,7 @@ function normalizeModelProviderModelProfile(
   const contextWindowTokens = boundedPositiveInteger(input?.contextWindowTokens)
   const maxOutputTokens = boundedPositiveInteger(input?.maxOutputTokens)
   const reasoning = normalizeModelReasoningCapability(input?.reasoning)
+  const serviceTiers = normalizeModelServiceTiers(input?.serviceTiers)
   const endpointFormat = normalizeOptionalModelEndpointFormat(input?.endpointFormat)
   const responsesMode = input?.responsesMode === 'lite' ? 'lite' : undefined
   return {
@@ -1399,9 +1496,20 @@ function normalizeModelProviderModelProfile(
     supportsToolCalling: input?.supportsToolCalling !== false,
     messageParts: normalizeModelMessageParts(input?.messageParts, defaultMessageParts),
     ...(reasoning ? { reasoning } : {}),
+    ...(serviceTiers.length ? { serviceTiers } : {}),
     ...(endpointFormat ? { endpointFormat } : {}),
     ...(responsesMode ? { responsesMode } : {})
   }
+}
+
+function normalizeModelServiceTiers(
+  value: unknown
+): NonNullable<ModelProviderModelProfileV1['serviceTiers']> {
+  if (!Array.isArray(value)) return []
+  return [...new Set(value.filter(
+    (tier): tier is NonNullable<ModelProviderModelProfileV1['serviceTiers']>[number] =>
+      tier === 'priority' || tier === 'flex'
+  ))]
 }
 
 /**
@@ -1515,6 +1623,7 @@ export function normalizeImageGenerationProtocol(value: unknown): ImageGeneratio
   if (value === 'minimax-image') return 'minimax-image'
   if (value === 'codex-responses-image') return 'codex-responses-image'
   if (value === 'grok-imagine-image') return 'grok-imagine-image'
+  if (value === 'volcengine-ark-image') return 'volcengine-ark-image'
   return DEFAULT_IMAGE_GENERATION_PROTOCOL
 }
 
@@ -1603,6 +1712,7 @@ function normalizeModelProviderVideoCapability(
 
 export function normalizeVideoGenerationProtocol(value: unknown): VideoGenerationProtocol {
   if (value === 'grok-imagine-video') return 'grok-imagine-video'
+  if (value === 'volcengine-ark-video') return 'volcengine-ark-video'
   return value === 'minimax-video' ? 'minimax-video' : DEFAULT_VIDEO_GENERATION_PROTOCOL
 }
 

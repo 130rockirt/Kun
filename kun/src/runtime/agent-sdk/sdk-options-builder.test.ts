@@ -36,7 +36,10 @@ describe('buildScopedEnv', () => {
         ANTHROPIC_API_KEY: 'sk-ant-xxx',
         ANTHROPIC_AUTH_TOKEN: 'tok',
         ANTHROPIC_BASE_URL: 'https://proxy',
-        CLAUDE_CODE_USE_BEDROCK: '1'
+        CLAUDE_CODE_USE_BEDROCK: '1',
+        KUN_BROWSER_USE_BRIDGE_URL: 'http://127.0.0.1:12345',
+        KUN_BROWSER_USE_BRIDGE_TOKEN: 'bridge-token',
+        kun_browser_use_approval_signing_key: 'signing-key'
       },
       'sk-ant-oat01-yyy'
     )
@@ -44,6 +47,9 @@ describe('buildScopedEnv', () => {
     expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined()
     expect(env.ANTHROPIC_BASE_URL).toBeUndefined()
     expect(env.CLAUDE_CODE_USE_BEDROCK).toBeUndefined()
+    expect(env.KUN_BROWSER_USE_BRIDGE_URL).toBeUndefined()
+    expect(env.KUN_BROWSER_USE_BRIDGE_TOKEN).toBeUndefined()
+    expect(env.kun_browser_use_approval_signing_key).toBeUndefined()
     expect(env.PATH).toBe('/usr/bin')
     expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe('sk-ant-oat01-yyy')
   })
@@ -78,7 +84,7 @@ describe('mapApprovalPolicyToPermissionMode', () => {
     expect(mapApprovalPolicyToPermissionMode('auto', true)).toBe('plan')
   })
   test('auto -> bypassPermissions', () => {
-    expect(mapApprovalPolicyToPermissionMode('auto')).toBe('bypassPermissions')
+    expect(mapApprovalPolicyToPermissionMode('auto')).toBe('default')
     expect(mapApprovalPolicyToPermissionMode('auto', false, 'danger-full-access')).toBe('bypassPermissions')
   })
   test('auto with a sandboxed filesystem still uses per-tool gating', () => {
@@ -149,9 +155,10 @@ describe('assembleSdkOptions', () => {
     oauthToken: 'sk-ant-oat01-z'
   }
 
-  test('unions SDK built-ins with bridged kun tools and turns on partial streaming', () => {
+  test('advertises SDK built-ins without auto-allowing them in restricted modes', () => {
     const opts = assembleSdkOptions(base)
-    expect(opts.allowedTools).toEqual([...DEFAULT_SDK_BUILTIN_TOOLS, ...base.bridgedToolModelNames])
+    expect(opts.tools).toEqual(DEFAULT_SDK_BUILTIN_TOOLS)
+    expect(opts.allowedTools).toEqual(base.bridgedToolModelNames)
     expect(opts.includePartialMessages).toBe(true)
     expect(opts.permissionMode).toBe('default')
     expect((opts.systemPrompt as { append: string }).append).toBe('You are kun.')
@@ -167,6 +174,28 @@ describe('assembleSdkOptions', () => {
     expect(opts.allowedTools).toEqual(base.bridgedToolModelNames)
   })
 
+  test('auto-allows native built-ins only for the complete Full access mapping', () => {
+    const full = assembleSdkOptions({
+      ...base,
+      approvalPolicy: 'auto',
+      sandboxMode: 'danger-full-access'
+    })
+    expect(full.permissionMode).toBe('bypassPermissions')
+    expect(full.tools).toEqual(DEFAULT_SDK_BUILTIN_TOOLS)
+    expect(full.allowedTools).toEqual([
+      ...DEFAULT_SDK_BUILTIN_TOOLS,
+      ...base.bridgedToolModelNames
+    ])
+
+    const incomplete = assembleSdkOptions({
+      ...base,
+      approvalPolicy: 'auto',
+      sandboxMode: undefined
+    })
+    expect(incomplete.permissionMode).toBe('default')
+    expect(incomplete.allowedTools).toEqual(base.bridgedToolModelNames)
+  })
+
   test('optional fields only present when provided', () => {
     const opts = assembleSdkOptions(base)
     expect('model' in opts).toBe(false)
@@ -180,5 +209,17 @@ describe('assembleSdkOptions', () => {
     expect(assembleSdkOptions({ ...base, maxTurns: 7 }).maxTurns).toBe(7)
     expect(assembleSdkOptions({ ...base, maxTurns: 2.9 }).maxTurns).toBe(2)
     expect(assembleSdkOptions(base).maxTurns).toBeUndefined()
+  })
+
+  test('maps Claude subscription effort to adaptive-thinking SDK options', () => {
+    expect(assembleSdkOptions({ ...base, reasoningEffort: 'low' })).toMatchObject({
+      effort: 'low',
+      thinking: { type: 'adaptive' }
+    })
+    expect(assembleSdkOptions({ ...base, reasoningEffort: 'max' })).toMatchObject({
+      effort: 'max',
+      thinking: { type: 'adaptive' }
+    })
+    expect(assembleSdkOptions({ ...base, reasoningEffort: 'off' })).not.toHaveProperty('effort')
   })
 })

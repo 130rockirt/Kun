@@ -39,13 +39,14 @@ const TERMINAL_HEIGHT_KEY = 'kun.layout.terminalHeight'
 const LEFT_PANEL_DEFAULT = 304
 const RIGHT_PANEL_DEFAULT = 360
 export const CODE_PANEL_PREFERRED = 560
+export const GRAPH_PANEL_PREFERRED = 720
 const LEFT_PANEL_MIN = 280
 const LEFT_PANEL_MAX = 480
 const RIGHT_PANEL_MIN = 280
 const RIGHT_PANEL_MAX = 760
 const SIDEBAR_HARD_MIN = 180
 const MAIN_MIN_WIDTH = 560
-const PANEL_RESIZE_HANDLE_WIDTH = 5
+export const PANEL_RESIZE_HANDLE_WIDTH = 9
 export const RAIL_WIDTH = 48
 export const WORKBENCH_RESIZE_CLASS = 'ds-workbench-resizing'
 const TERMINAL_HEIGHT_DEFAULT = 360
@@ -189,6 +190,12 @@ export function initialCodeRightTabsForLaunch(
     ? openCodeRightTab(emptyCodeRightTabsState(), legacy)
     : emptyCodeRightTabsState()
   return collapseCodeRightTabs(migrated)
+}
+
+export function transientRightPanelModeForWorkspaceChange(
+  mode: RightPanelMode
+): RightPanelMode {
+  return mode === BUILTIN_RIGHT_PANEL_IDS.sddAi ? mode : null
 }
 
 export function workbenchWidthConstraintsForRightPanel(
@@ -340,6 +347,10 @@ export function useWorkbenchLayout({
       ? designAssistantOpen || designImplementOpen
       : codeRightTabs.expanded || rightPanelMode !== null
   const widthConstraints = workbenchWidthConstraintsForRightPanel(route, rightPanelMode)
+  useEffect(() => {
+    if (rightPanelMode !== BUILTIN_RIGHT_PANEL_IDS.graph) return
+    setRightSidebarWidth((width) => Math.max(width, GRAPH_PANEL_PREFERRED))
+  }, [rightPanelMode])
   const ensureInitialCodePanelWidth = useCallback((): void => {
     if (codeRightTabsRef.current.tabs.length === 0) {
       setRightSidebarWidth((width) => Math.max(width, CODE_PANEL_PREFERRED))
@@ -392,7 +403,7 @@ export function useWorkbenchLayout({
       }
     }
     initialScopeRef.current = nextScope
-    setTransientRightPanelMode(null)
+    setTransientRightPanelMode(transientRightPanelModeForWorkspaceChange)
     const nextTabs = tabsRegistryRef.current.workspaces[nextScope] ?? emptyCodeRightTabsState()
     setCodeRightTabs(nextTabs)
     const nextWidth = widthsRegistryRef.current.workspaces[nextScope]

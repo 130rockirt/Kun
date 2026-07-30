@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -61,7 +61,7 @@ describe('component designer profile', () => {
     expect(config.profiles[COMPONENT_DESIGN_PROFILE_NAME]).toMatchObject({
       mode: 'subagent',
       toolPolicy: 'inherit',
-      allowedTools: ['read', 'grep', 'find', 'ls', 'write', 'edit']
+      allowedTools: ['read', 'grep', 'glob', 'ls', 'write', 'edit']
     })
     expect(config.profiles[COMPONENT_DESIGN_PROFILE_NAME]?.systemPrompt).toContain('data-kun-component-root')
   })
@@ -165,13 +165,13 @@ describe('design_component tool', () => {
     const result = await tool.execute({ request: 'Improve the button.' }, context(workspace))
     expect(result.isError).toBe(true)
     expect(result.output).toMatchObject({
-      error: expect.stringContaining('remote resources'),
+      error: expect.stringContaining('undeclared remote origin'),
       componentPrototype: {
         status: 'failed',
         producer: 'component-designer',
         childId: 'child_invalid',
         relativePath: expect.stringMatching(/^\.kun-design\/component-prototypes\//),
-        error: expect.stringContaining('remote resources')
+        error: expect.stringContaining('undeclared remote origin')
       }
     })
   })
@@ -326,8 +326,54 @@ describe('design_component tool', () => {
       componentPrototype: {
         status: 'failed',
         producer: 'main-agent',
-        error: expect.stringContaining('remote resources')
+        error: expect.stringContaining('undeclared remote origin')
       }
+    })
+  })
+
+  it('publishes a large existing artifact by path without a component-specific size rejection', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'kun-component-design-path-'))
+    workspaces.push(workspace)
+    const relativePath = '.kun-design/component-prototypes/large-table/prototype.html'
+    await mkdir(join(workspace, '.kun-design/component-prototypes/large-table'), { recursive: true })
+    const largeHtml = validHtml('Large table').replace(
+      '</style>',
+      `/* ${'x'.repeat(900 * 1024)} */</style>`
+    )
+    await writeFile(join(workspace, relativePath), largeHtml)
+    const tool = buildComponentDesignToolProviders(undefined)[0]!.tools[0]!
+
+    const result = await tool.execute({
+      title: 'Large table',
+      artifactPath: relativePath
+    }, context(workspace))
+
+    expect(result.isError).not.toBe(true)
+    expect(result.output).toMatchObject({
+      componentPrototype: {
+        status: 'completed',
+        producer: 'main-agent',
+        relativePath,
+        byteSize: expect.any(Number)
+      }
+    })
+    expect(((result.output as Record<string, unknown>).componentPrototype as Record<string, unknown>).byteSize)
+      .toBeGreaterThan(768 * 1024)
+  })
+
+  it('rejects local and private origins in a remote resource policy', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'kun-component-design-policy-'))
+    workspaces.push(workspace)
+    const tool = buildComponentDesignToolProviders(undefined)[0]!.tools[0]!
+
+    await expect(tool.execute({
+      html: validHtml(),
+      resourcePolicy: { connectOrigins: ['https://127.0.0.1'] }
+    }, context(workspace))).resolves.toMatchObject({
+      isError: true,
+      output: expect.objectContaining({
+        error: expect.stringContaining('public exact HTTPS origin')
+      })
     })
   })
 })
@@ -348,14 +394,46 @@ describe('component prototype hardening', () => {
     expect(hardened.match(/Content-Security-Policy/g)).toHaveLength(1)
     expect(() => hardenComponentPrototypeHtml(
       validHtml().replace('</head>', '<script src=https://cdn.example.test/ui.js></script></head>')
-    )).toThrow(/remote resources/)
+    )).toThrow(/undeclared remote origin/)
   })
 
-  it('requires one component marker root and rejects embedded documents', () => {
-    expect(() => hardenComponentPrototypeHtml(validHtml().replace(' data-kun-component-root', '')))
-      .toThrow(/exactly one/)
+  it('canonicalizes missing platform markers and rejects conflicting roots or embedded documents', () => {
+    const canonical = hardenComponentPrototypeHtml(
+      validHtml()
+        .replace('<meta name="kun-component-prototype" content="1">', '')
+        .replace(' data-kun-component-root', '')
+    )
+    expect(canonical).toContain('<meta name="kun-component-prototype" content="1">')
+    expect(canonical).toMatch(/<body\b[^>]*data-kun-component-root/)
+    expect(() => hardenComponentPrototypeHtml(
+      validHtml().replace('</main>', '<aside data-kun-component-root></aside></main>')
+    )).toThrow(/no more than one/)
     expect(() => hardenComponentPrototypeHtml(validHtml().replace('</main>', '<iframe src="about:blank"></iframe></main>')))
       .toThrow(/forbidden embedded/)
+  })
+
+  it('allows local bundles and exact declared remote origins', () => {
+    const local = hardenComponentPrototypeHtml(
+      validHtml().replace('</head>', '<link rel="stylesheet" href="./assets/app.css"><script src="./assets/app.js"></script></head>')
+    )
+    expect(local).toContain("script-src 'unsafe-inline' 'self'")
+    expect(local).toContain("style-src 'unsafe-inline' 'self'")
+
+    const remote = hardenComponentPrototypeHtml(
+      validHtml().replace(
+        '</head>',
+        '<link rel="stylesheet" href="https://cdn.example.test/app.css"><script src="https://scripts.example.test/app.js"></script></head>'
+      ),
+      {
+        assetOrigins: ['https://cdn.example.test'],
+        scriptOrigins: ['https://scripts.example.test'],
+        connectOrigins: ['https://api.example.test']
+      }
+    )
+    expect(remote).toContain('style-src')
+    expect(remote).toContain('https://cdn.example.test')
+    expect(remote).toContain('https://scripts.example.test')
+    expect(remote).toContain('connect-src https://api.example.test')
   })
 
   it('rejects browser storage in otherwise standalone prototypes', () => {

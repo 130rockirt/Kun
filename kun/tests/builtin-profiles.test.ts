@@ -111,7 +111,7 @@ describe('mergeBuiltinSubagentProfiles', () => {
     for (const id of ['browser-testing-with-devtools', 'source-driven-development']) {
       expect(BUILTIN_SUBAGENT_PROFILES[id]).toMatchObject({
         toolPolicy: 'readOnly',
-        allowedTools: ['read', 'grep', 'find', 'ls', 'repo_map', 'web_fetch', 'web_search']
+        allowedTools: ['read', 'grep', 'glob', 'ls', 'repo_map', 'web_fetch', 'web_search']
       })
       expect(BUILTIN_SUBAGENT_PROFILES[id]?.allowedTools).not.toEqual(
         expect.arrayContaining(['write', 'edit', 'bash', 'background_shell', 'mcp_call'])

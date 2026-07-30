@@ -38,6 +38,7 @@ describe('WriteAssistantPanel', () => {
       setComposerReasoningEffort: () => undefined,
       queuedMessages: [],
       removeQueuedMessage: () => undefined,
+      guideQueuedMessage: () => undefined,
       skillCommands: [
         {
           id: 'style-guide',
@@ -74,5 +75,49 @@ describe('WriteAssistantPanel', () => {
     expect(html).toContain('Style Guide')
     expect(html).toContain('/skill:style-guide')
     expect(html).not.toContain('Disabled Skill')
+  })
+
+  it('offers guidance for queued plain-text messages', () => {
+    useChatStore.setState({
+      activeThreadId: 'thr_write',
+      activeThreadGoal: null,
+      route: 'write',
+      workspaceRoot: '/workspace',
+      threads: []
+    })
+    useWriteWorkspaceStore.setState({
+      workspaceRoot: '/workspace',
+      activeFilePath: '/workspace/draft.md'
+    })
+
+    const html = renderToStaticMarkup(createElement(WriteAssistantPanel, {
+      input: '',
+      setInput: () => undefined,
+      mode: 'agent',
+      setMode: () => undefined,
+      busy: true,
+      runtimeConnection: 'ready',
+      activeThreadId: 'thr_write',
+      blocks: [],
+      liveReasoning: '',
+      liveAssistant: '',
+      composerModel: '',
+      composerPickList: [],
+      composerReasoningEffort: 'max',
+      setComposerModel: () => undefined,
+      setComposerReasoningEffort: () => undefined,
+      queuedMessages: [{ id: 'q-guide', text: 'keep the opening shorter' }],
+      removeQueuedMessage: () => undefined,
+      guideQueuedMessage: () => undefined,
+      onSend: () => undefined,
+      onInterrupt: () => undefined,
+      onRetryConnection: () => undefined,
+      onOpenSettings: () => undefined,
+      onNewConversation: () => undefined,
+      onPickWorkspace: () => undefined,
+      onCollapse: () => undefined
+    }))
+
+    expect(html).toContain('aria-label="Guide"')
   })
 })

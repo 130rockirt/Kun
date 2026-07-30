@@ -4,7 +4,7 @@ import { normalizeTurnLimits } from './turn-limits.js'
 describe('normalizeTurnLimits', () => {
   it('leaves model steps unlimited by default', () => {
     expect(normalizeTurnLimits(undefined)).toEqual({
-      maxWallTimeMs: 15 * 60_000,
+      maxWallTimeMs: 24 * 60 * 60_000,
       maxToolCallsPerStep: 10_000
     })
   })

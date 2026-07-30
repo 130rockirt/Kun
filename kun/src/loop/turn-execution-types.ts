@@ -18,9 +18,16 @@ import type {
   ToolHostContext,
   ToolProviderKind
 } from '../ports/tool-host.js'
+import type {
+  ActingTurnModelRoute,
+  TurnClientSurface
+} from '../contracts/turns.js'
 
 /** Terminal status exposed by the public AgentLoop turn boundary. */
 export type TurnExecutionStatus = 'completed' | 'failed' | 'aborted'
+
+/** One process-local execution slice may park while its durable turn remains active. */
+export type TurnRunOutcome = TurnExecutionStatus | 'suspended'
 
 /** Failure metadata retained until the lifecycle facade finalizes a turn. */
 export type TurnExecutionFailure = {
@@ -53,12 +60,18 @@ export type PreparedTurnContext = Readonly<{
   threadId: string
   turnId: string
   workspace: string
+  orchestration: 'direct' | 'graph'
+  messageSource?: 'background_shell' | 'background_subagent' | 'graph_runtime'
+  additionalWorkspaces?: readonly string[]
+  clientSurface: TurnClientSurface
   model: string
+  actingModelRoute?: ActingTurnModelRoute
   mode: 'agent' | 'plan'
   dedicatedSvgTurn: boolean
   planContextStale: boolean
   activePlanContext?: GuiPlanContext
   approvalPolicy: ToolHostContext['approvalPolicy']
+  approvalReviewer?: NonNullable<ToolHostContext['approvalReviewer']>
   sandboxMode: NonNullable<ToolHostContext['sandboxMode']>
   signal: AbortSignal
   history: readonly TurnItem[]
@@ -87,6 +100,11 @@ export type ToolTurnContextInput = {
   threadId: string
   turnId: string
   workspace: string
+  workspaceCheckpointRequestId?: string
+  orchestration?: 'direct' | 'graph'
+  messageSource?: 'background_shell' | 'background_subagent' | 'graph_runtime'
+  additionalWorkspaces?: readonly string[]
+  clientSurface: TurnClientSurface
   threadMode?: 'agent' | 'plan'
   activePlanContext?: GuiPlanContext
   guiDesignCanvas?: boolean
@@ -94,6 +112,8 @@ export type ToolTurnContextInput = {
   agentSurface?: 'code' | 'write' | 'design'
   guiDesignArtifact?: GuiDesignArtifactContext
   modelProviderId?: string
+  actingModelRoute?: ActingTurnModelRoute
+  approvalIntent?: string
   reasoningEffort?: string
   modelCapabilities: ModelCapabilityMetadata
   activeSkillIds: readonly string[]
@@ -102,6 +122,7 @@ export type ToolTurnContextInput = {
   userInputDisabled?: boolean
   imContext?: boolean
   approvalPolicy: ToolHostContext['approvalPolicy']
+  approvalReviewer?: NonNullable<ToolHostContext['approvalReviewer']>
   sandboxMode: NonNullable<ToolHostContext['sandboxMode']>
   signal: AbortSignal
 }
@@ -110,4 +131,6 @@ export type ToolTurnContextInput = {
 export type ToolDispatchInput = ToolTurnContextInput & {
   calls: ToolCallLike[]
   toolProviderKinds: ReadonlyMap<string, ToolProviderKind | undefined>
+  /** Aggregate model-visible allowance for source results in this dispatch. */
+  sourceResultBudgetTokens?: number
 }

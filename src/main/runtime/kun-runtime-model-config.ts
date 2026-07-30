@@ -2,6 +2,8 @@ import {
   defaultKunTokenEconomySettings,
   getModelProviderSettings,
   projectExecutableModelRoutePools,
+  resolveKunRuntimeSettings,
+  resolveModelProviderPresetSource,
   resolveModelProviderProxyUrl,
   type AppSettingsV1,
   type KunRuntimeSettingsV1,
@@ -58,6 +60,7 @@ export function providersConfigForRuntime(
 ): Record<string, Record<string, unknown>> {
   const out: Record<string, Record<string, unknown>> = {}
   const proxyUrl = resolveModelProviderProxyUrl(settings)
+  const runtime = resolveKunRuntimeSettings(settings)
   for (const provider of getModelProviderSettings(settings).providers as ModelProviderProfileV1[]) {
     const id = provider.id?.trim()
     const baseUrl = provider.baseUrl?.trim()
@@ -67,6 +70,10 @@ export function providersConfigForRuntime(
       provider.kind === 'gemini-cli-api' ||
       provider.kind === 'cursor-sdk'
     if (!id || (!baseUrl && !isKeylessTransport)) continue
+    const selectedModel = id === runtime.providerId && provider.models.includes(runtime.model)
+      ? runtime.model
+      : provider.models[0]
+    const presetSource = resolveModelProviderPresetSource(provider)
     out[id] = {
       // Provider secrets live in the protected account store. The runtime
       // resolves this opaque source binding after reading config.json.
@@ -74,7 +81,14 @@ export function providersConfigForRuntime(
       credentialSourceId: legacyProviderCredentialSourceId(id),
       ...(baseUrl ? { baseUrl } : {}),
       ...(provider.kind ? { kind: provider.kind } : {}),
+      ...(presetSource ? { presetSource: presetSource.preset.id } : {}),
+      ...(presetSource?.mode === 'token-plan' || presetSource?.preset.category === 'subscription'
+        ? { authType: 'subscription' }
+        : {}),
       ...(provider.endpointFormat ? { endpointFormat: provider.endpointFormat } : {}),
+      models: [...provider.models],
+      modelCapabilities: modelCapabilitiesForProviderConfig(provider),
+      ...(selectedModel ? { selectedModel } : {}),
       retry: provider.retry,
       modelProfiles: modelConfigProfilesFromProviderProfiles(provider.modelProfiles),
       ...(proxyUrl ? { modelProxyUrl: proxyUrl } : {}),
@@ -83,6 +97,37 @@ export function providersConfigForRuntime(
     }
   }
   return out
+}
+
+function modelCapabilitiesForProviderConfig(
+  provider: Pick<ModelProviderProfileV1, 'models' | 'modelProfiles'>
+): Record<string, unknown> {
+  return Object.fromEntries(provider.models.flatMap((model) => {
+    const profile = provider.modelProfiles[model] ??
+      provider.modelProfiles[model.trim().toLowerCase()]
+    if (!profile) return []
+    return [[model, {
+      id: model,
+      ...(profile.contextWindowTokens ? { contextWindowTokens: profile.contextWindowTokens } : {}),
+      ...(profile.maxOutputTokens ? { maxOutputTokens: profile.maxOutputTokens } : {}),
+      inputModalities: [...profile.inputModalities],
+      outputModalities: [...profile.outputModalities],
+      supportsToolCalling: profile.supportsToolCalling,
+      messageParts: [...profile.messageParts],
+      ...(profile.reasoning
+        ? {
+            reasoning: {
+              supportedEfforts: [...profile.reasoning.supportedEfforts],
+              defaultEffort: profile.reasoning.defaultEffort,
+              requestProtocol: profile.reasoning.requestProtocol
+            }
+          }
+        : {}),
+      ...(profile.serviceTiers ? { serviceTiers: [...profile.serviceTiers] } : {}),
+      ...(profile.endpointFormat ? { endpointFormat: profile.endpointFormat } : {}),
+      ...(profile.responsesMode ? { responsesMode: profile.responsesMode } : {})
+    }]]
+  }))
 }
 
 export function routePoolsConfigForRuntime(settings: AppSettingsV1) {
@@ -200,6 +245,7 @@ function modelConfigProfilesFromProviderProfiles(
       supportsToolCalling: profile.supportsToolCalling,
       messageParts: profile.messageParts,
       ...(profile.reasoning ? { reasoning: profile.reasoning } : {}),
+      ...(profile.serviceTiers ? { serviceTiers: profile.serviceTiers } : {}),
       ...(profile.endpointFormat ? { endpointFormat: profile.endpointFormat } : {}),
       ...(profile.responsesMode ? { responsesMode: profile.responsesMode } : {})
     }

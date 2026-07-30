@@ -8,18 +8,26 @@ import {
 } from '../../shared/app-settings'
 import {
   buildKunServeArgs,
-  resolveKunExecutable
+  resolveKunExecutable,
+  resolveKunRuntimeBuildId
 } from '../resolve-kun-binary'
 import {
   isKunChildRunning,
   reclaimKunPort,
   resolveAvailableKunPort,
-  startKunChild,
+  startKunSharedRuntime,
   stopKunChildAndWait
 } from '../kun-process'
 import { getKunBaseUrl } from '../kun-base-url'
+import type { RuntimeDiscoveryRecord } from '../../../kun/src/server/runtime-discovery.js'
+import {
+  resolveSharedRuntime,
+  runtimeMatchesExpectedBuild,
+  stopSharedRuntime
+} from '../../../kun/src/cli/shared-runtime.js'
 
 const KUN_RUNTIME_ID = 'kun' as const
+let resolvedConnection: RuntimeDiscoveryRecord | null = null
 
 function appRoot(): string {
   return app.isPackaged
@@ -43,20 +51,38 @@ export const kunRuntimeAdapter = {
   },
 
   ensureRunning(settings: AppSettingsV1): Promise<void> {
-    return startKunChild(settings)
+    return ensureResolvedKunRuntime(settings)
   },
 
-  stopAndWait(): Promise<void> {
-    return stopKunChildAndWait()
+  /**
+   * Release GUI-local runtime state only. The detached shared daemon belongs
+   * to the data directory, not to this Electron process, so ordinary client
+   * shutdown must never stop it.
+   */
+  async stopAndWait(): Promise<void> {
+    resolvedConnection = null
+    await stopKunChildAndWait()
   },
 
   isChildRunning(): boolean {
-    return isKunChildRunning()
+    return Boolean(resolvedConnection) || isKunChildRunning()
   },
 
   getBaseUrl(settings: AppSettingsV1): string {
+    if (resolvedConnection) return resolvedConnection.baseUrl
     const runtime = getKunRuntimeSettings(settings)
     return getKunBaseUrl(runtime.port)
+  },
+
+  resolveConnection(settings: AppSettingsV1): Promise<boolean> {
+    return refreshResolvedKunRuntime(settings)
+  },
+
+  async stopSharedAndWait(settings: AppSettingsV1): Promise<void> {
+    const dataDir = expandDataDir(getKunRuntimeSettings(settings).dataDir)
+    await stopSharedRuntime(dataDir)
+    resolvedConnection = null
+    await stopKunChildAndWait()
   },
 
   reclaimPort(port: number): Promise<{ ok: true } | { ok: false; message: string }> {
@@ -76,10 +102,36 @@ export function getRuntimeBaseUrlForSettings(settings: AppSettingsV1): string {
 export function runtimeAuthHeaders(settings: AppSettingsV1): Headers {
   const runtime = getKunRuntimeSettings(settings)
   const headers = new Headers()
-  if (runtime.runtimeToken.trim()) {
-    headers.set('Authorization', `Bearer ${runtime.runtimeToken.trim()}`)
+  const token = resolvedConnection?.runtimeToken ?? runtime.runtimeToken.trim()
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`)
   }
   return headers
+}
+
+async function ensureResolvedKunRuntime(settings: AppSettingsV1): Promise<void> {
+  if (await refreshResolvedKunRuntime(settings)) return
+  const connection = await startKunSharedRuntime(settings)
+  resolvedConnection = connection?.discovery ?? null
+}
+
+async function refreshResolvedKunRuntime(settings: AppSettingsV1): Promise<boolean> {
+  const runtime = getKunRuntimeSettings(settings)
+  const dataDir = expandDataDir(runtime.dataDir)
+  const expectedBuildId = await resolveKunRuntimeBuildId(
+    resolveKunExecutable(runtime.binaryPath.trim() ? '' : appRoot(), runtime.binaryPath)
+  )
+  const connection = await resolveSharedRuntime(dataDir).catch(() => null)
+  if (!connection || !runtimeMatchesExpectedBuild(connection, expectedBuildId)) {
+    resolvedConnection = null
+    return false
+  }
+  resolvedConnection = connection.discovery
+  return true
+}
+
+function expandDataDir(value: string): string {
+  return value.replace(/^~(?=$|[\\/])/, homedir())
 }
 
 export type RuntimeRequestInit = {
@@ -88,6 +140,33 @@ export type RuntimeRequestInit = {
   headers?: Record<string, string>
   signal?: AbortSignal
   timeoutMs?: number
+}
+
+const DEFAULT_RUNTIME_GET_TIMEOUT_MS = 15_000
+const DEFAULT_RUNTIME_POST_TIMEOUT_MS = 60_000
+const MODEL_CONNECTION_EVENTS_TIMEOUT_MARGIN_MS = 5_000
+const MAX_MODEL_CONNECTION_EVENTS_WAIT_MS = 120_000
+
+export function resolveRuntimeRequestTimeoutMs(
+  pathNorm: string,
+  method: string,
+  requestedTimeoutMs?: number
+): number {
+  if (requestedTimeoutMs !== undefined) return requestedTimeoutMs
+  const fallback = method === 'POST'
+    ? DEFAULT_RUNTIME_POST_TIMEOUT_MS
+    : DEFAULT_RUNTIME_GET_TIMEOUT_MS
+  if (method !== 'GET' || !pathNorm.startsWith('/v1/model-connections/events?')) {
+    return fallback
+  }
+  const query = pathNorm.slice(pathNorm.indexOf('?') + 1)
+  const waitMs = Number(new URLSearchParams(query).get('wait_ms'))
+  if (!Number.isSafeInteger(waitMs) || waitMs <= 0) return fallback
+  return Math.max(
+    fallback,
+    Math.min(waitMs, MAX_MODEL_CONNECTION_EVENTS_WAIT_MS) +
+      MODEL_CONNECTION_EVENTS_TIMEOUT_MARGIN_MS
+  )
 }
 
 export async function runtimeRequestViaHost(
@@ -143,7 +222,7 @@ async function fetchRuntimeRequest(
     body: init.body,
     signal: requestSignal(
       init.signal,
-      init.timeoutMs ?? (method === 'POST' ? 60_000 : 15_000)
+      resolveRuntimeRequestTimeoutMs(pathNorm, method, init.timeoutMs)
     )
   })
   const text = await res.text()

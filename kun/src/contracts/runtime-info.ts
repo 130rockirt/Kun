@@ -1,7 +1,13 @@
 import { z } from 'zod'
-import { ApprovalPolicySchema, SandboxModeSchema } from './policy.js'
+import {
+  ApprovalPolicySchema,
+  ApprovalReviewerSchema,
+  SandboxModeSchema
+} from './policy.js'
 import { RuntimeCapabilityManifest } from './capabilities.js'
 import { MODEL_ENDPOINT_FORMATS } from './model-endpoint-format.js'
+
+export const RuntimeBuildIdSchema = z.string().regex(/^[a-f0-9]{64}$/)
 
 export const RuntimeInfoResponse = z
   .object({
@@ -13,8 +19,13 @@ export const RuntimeInfoResponse = z
     endpointFormat: z.enum(MODEL_ENDPOINT_FORMATS).optional(),
     approvalPolicy: ApprovalPolicySchema.optional(),
     sandboxMode: SandboxModeSchema.optional(),
+    approvalReviewer: ApprovalReviewerSchema.optional(),
     tokenEconomyMode: z.boolean().optional(),
     insecure: z.boolean().optional(),
+    instanceId: z.string().min(1),
+    serviceVersion: z.string().min(1),
+    buildId: RuntimeBuildIdSchema.optional(),
+    launchMode: z.enum(['foreground', 'shared', 'gui']),
     startedAt: z.string(),
     pid: z.number().int().positive().optional(),
     memoryUsage: z.object({

@@ -17,6 +17,7 @@ export type CompatModelCapabilities = {
   supportsToolCalling: boolean
   maxOutputTokens?: number
   reasoning?: ModelCapabilityMetadata['reasoning']
+  serviceTiers?: ModelCapabilityMetadata['serviceTiers']
   responsesMode?: ModelCapabilityMetadata['responsesMode']
 }
 
@@ -43,6 +44,7 @@ export function resolveCompatModelCapabilities(input: {
     supportsToolCalling: metadata?.supportsToolCalling ?? true,
     ...(metadata?.maxOutputTokens ? { maxOutputTokens: metadata.maxOutputTokens } : {}),
     ...(metadata?.reasoning ? { reasoning: metadata.reasoning } : {}),
+    ...(metadata?.serviceTiers ? { serviceTiers: metadata.serviceTiers } : {}),
     ...(metadata?.responsesMode ? { responsesMode: metadata.responsesMode } : {})
   }
 }

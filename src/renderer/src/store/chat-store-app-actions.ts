@@ -19,7 +19,6 @@ import {
   rememberThreadComposerSelection,
   readStoredComposerProviderId
 } from './chat-store-helpers'
-
 type CreateAppActionsOptions = {
   set: ChatStoreSet
   get: ChatStoreGet
@@ -31,6 +30,7 @@ type CreateAppActionsOptions = {
     providerId: string,
     effort: ModelReasoningEffort
   ) => void
+  persistComposerFastMode: (enabled: boolean) => void
   rememberThreadComposerMode: (threadId: string, mode: ComposerPlanMode) => void
   readStoredComposerModel: (allowedIds: readonly string[]) => string
   mergeComposerPickList: (upstreamOk: boolean, upstreamIds: string[]) => string[]
@@ -56,8 +56,10 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
   ChatState,
   | 'setError'
   | 'setComposerMode'
+  | 'setComposerOrchestration'
   | 'setComposerModel'
   | 'setComposerReasoningEffort'
+  | 'setComposerFastMode'
   | 'setComposerAgentId'
   | 'loadComposerModels'
   | 'setRoute'
@@ -81,6 +83,7 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
     persistComposerModel,
     persistComposerMode,
     persistComposerReasoningEffort,
+    persistComposerFastMode,
     rememberThreadComposerMode,
     readStoredComposerModel,
     mergeComposerPickList,
@@ -113,6 +116,10 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
         persistComposerMode(mode)
       }
       set({ composerMode: mode })
+    },
+
+    setComposerOrchestration: (mode) => {
+      set({ composerOrchestration: mode })
     },
 
     setComposerModel: (modelId, providerId) => {
@@ -159,6 +166,11 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
         effort
       )
       set({ composerReasoningEffort: effort })
+    },
+
+    setComposerFastMode: (enabled) => {
+      persistComposerFastMode(enabled)
+      set({ composerFastMode: enabled })
     },
 
     setComposerAgentId: (agentId) => {
@@ -378,6 +390,11 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
         workspaceLabel: workspaceLabelFromPath(workspaceRoot),
         conversationWorkspaceRoot: settings.conversationWorkspaceRoot || '',
         disabledSkillIds: settings.disabledSkillIds,
+        graphEnabled: settings.agents.kun.graph?.enabled === true,
+        composerOrchestration:
+          settings.agents.kun.graph?.enabled === true && get().composerOrchestration === 'graph'
+            ? 'graph'
+            : 'direct',
         clawChannels: settings.claw.channels,
         activeClawChannelId: settings.claw.channels.some(
           (channel) => channel.id === get().activeClawChannelId && channel.enabled

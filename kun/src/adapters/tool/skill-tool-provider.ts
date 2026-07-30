@@ -21,6 +21,12 @@ export function buildSkillToolProviders(
     kind: 'skill',
     enabled: true,
     available: true,
+    effects: {
+      network: false,
+      externalWrite: false,
+      processExecution: false,
+      guiAutomation: false
+    },
     tools: [
       LocalToolHost.defineTool({
         name: 'load_skill',
@@ -54,7 +60,8 @@ export function buildSkillToolProviders(
             skillId,
             context.workspace,
             context.blockedSkillIds,
-            turn
+            turn,
+            context.allowedSkillIds
           )
           if ('error' in result) return { output: result, isError: true }
           return { output: result }

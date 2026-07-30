@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import {
   defaultKunRuntimeSettings,
   defaultModelProviderSettings,
@@ -15,7 +18,8 @@ import type { ServerRuntime } from '../../../kun/src/server/routes/server-runtim
 import type { AppSettingsV1 } from '../../shared/app-settings'
 import {
   buildManagedRuntimeHotApplyBody,
-  classifyManagedRuntimeHotApplyResponse
+  classifyManagedRuntimeHotApplyResponse,
+  syncGuiManagedKunConfig
 } from './kun-runtime-config-service'
 
 describe('Kun runtime config service', () => {
@@ -27,10 +31,12 @@ describe('Kun runtime config service', () => {
       model: 'model-next',
       approvalPolicy: 'never' as const,
       sandboxMode: 'read-only' as const,
+      approvalReviewer: 'agent' as const,
       runtimeTuning: {
         ...defaultKunRuntimeSettings().runtimeTuning,
         maxConcurrentTurns: 32
-      }
+      },
+      llmDebug: { defaultThreadCaptureEnabled: true }
     }
     const base = normalizeAppSettings({} as AppSettingsV1)
     const settings = normalizeAppSettings({
@@ -51,6 +57,10 @@ describe('Kun runtime config service', () => {
       runtime: {
         turnLimits: {
           maxConcurrentTurns: runtime.runtimeTuning.maxConcurrentTurns
+        },
+        llmDebug: {
+          enabled: false,
+          defaultThreadCaptureEnabled: true
         }
       }
     }))
@@ -61,8 +71,10 @@ describe('Kun runtime config service', () => {
       model: resolveKunRuntimeSettings(settings).model,
       approvalPolicy: 'never',
       sandboxMode: 'read-only',
+      approvalReviewer: 'agent',
       providers: {}
     })
+    expect(body.modelSelection).toBeUndefined()
     expect(body.serve).not.toHaveProperty('host')
     expect(body.serve).not.toHaveProperty('port')
     expect(body.serve).not.toHaveProperty('dataDir')
@@ -72,6 +84,10 @@ describe('Kun runtime config service', () => {
     expect(body.serve?.localModelGateway).toEqual({ enabled: false })
     expect(body.serve?.localModelGateway).not.toHaveProperty('name')
     expect(body.runtime?.turnLimits?.maxConcurrentTurns).toBe(32)
+    expect(body.runtime?.llmDebug).toEqual({
+      enabled: false,
+      defaultThreadCaptureEnabled: true
+    })
     expect(RuntimeConfigApplyRequest.safeParse(body).success).toBe(true)
 
     const received: RuntimeConfigApplyPayload[] = []
@@ -105,6 +121,63 @@ describe('Kun runtime config service', () => {
     expect(applied.serve).not.toHaveProperty('storage')
   })
 
+  it('does not let ordinary GUI hot apply overwrite the registry-owned shared default', () => {
+    const provider = defaultModelProviderSettings()
+    const deepseek = provider.providers.find((candidate) => candidate.id === 'deepseek')!
+    const model = deepseek.models[1]!
+    const base = normalizeAppSettings({} as AppSettingsV1)
+    const settings = normalizeAppSettings({
+      ...base,
+      provider,
+      agents: {
+        kun: {
+          ...defaultKunRuntimeSettings(),
+          providerId: deepseek.id,
+          model
+        }
+      }
+    })
+    const body = buildManagedRuntimeHotApplyBody(settings, KunConfigSchema.parse({
+      serve: {
+        host: '127.0.0.1',
+        port: 18899,
+        dataDir: '/tmp/kun-data',
+        runtimeToken: 'runtime-token',
+        insecure: false,
+        storage: { backend: 'hybrid' },
+        providers: {}
+      }
+    }))
+
+    expect(body.modelSelection).toBeUndefined()
+  })
+
+  it('persists the GUI new-thread capture default while keeping the facility available', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'kun-runtime-config-llm-debug-'))
+    const runtime = {
+      ...defaultKunRuntimeSettings(),
+      approvalPolicy: 'on-request' as const,
+      sandboxMode: 'workspace-write' as const,
+      approvalReviewer: 'agent' as const,
+      llmDebug: { defaultThreadCaptureEnabled: true }
+    }
+    try {
+      await syncGuiManagedKunConfig(dataDir, runtime)
+      const config = JSON.parse(await readFile(join(dataDir, 'config.json'), 'utf8'))
+      expect(config.runtime.llmDebug).toEqual({
+        enabled: true,
+        defaultThreadCaptureEnabled: true
+      })
+      expect(config.serve).toMatchObject({
+        approvalPolicy: 'on-request',
+        sandboxMode: 'workspace-write',
+        approvalReviewer: 'agent'
+      })
+    } finally {
+      await rm(dataDir, { recursive: true, force: true })
+    }
+  })
+
   it('classifies compatibility fallback, success, restart, and failure responses', () => {
     expect(classifyManagedRuntimeHotApplyResponse(404, false, '')).toMatchObject({
       result: 'restart_required'
@@ -118,5 +191,52 @@ describe('Kun runtime config service', () => {
     expect(classifyManagedRuntimeHotApplyResponse(500, false, 'broken')).toEqual({
       result: 'failed', message: 'broken'
     })
+  })
+
+  it('projects provider catalogs when callers pass appSettings without schedule MCP', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'kun-runtime-config-providers-'))
+    const base = normalizeAppSettings({} as AppSettingsV1)
+    const defaultProvider = defaultModelProviderSettings().providers[0]!
+    const settings = normalizeAppSettings({
+      ...base,
+      provider: {
+        ...defaultModelProviderSettings(),
+        providers: [
+          { ...defaultProvider, models: ['deepseek-v4-pro', 'deepseek-v4-flash'] },
+          {
+            ...defaultProvider,
+            id: 'kimi-code',
+            name: 'Kimi Code',
+            baseUrl: 'https://api.kimi.com/coding/v1',
+            models: ['kimi-for-coding', 'kimi-for-coding-highspeed']
+          }
+        ]
+      },
+      agents: {
+        kun: {
+          ...defaultKunRuntimeSettings(),
+          providerId: 'kimi-code',
+          model: 'kimi-for-coding'
+        }
+      }
+    })
+    try {
+      await syncGuiManagedKunConfig(dataDir, resolveKunRuntimeSettings(settings), { appSettings: settings })
+      const config = JSON.parse(await readFile(join(dataDir, 'config.json'), 'utf8'))
+      expect(config.serve.providers.deepseek.models).toEqual(['deepseek-v4-flash', 'deepseek-v4-pro'])
+      expect(config.serve.providers['kimi-code'].models).toEqual([
+        'k3',
+        'kimi-for-coding',
+        'kimi-for-coding-highspeed'
+      ])
+      expect(config.serve.providers['kimi-code'].modelCapabilities.k3.reasoning).toEqual({
+        supportedEfforts: ['low', 'high', 'max'],
+        defaultEffort: 'high',
+        requestProtocol: 'openai-chat-completions'
+      })
+      expect(config.serve.credentialSourceId).toBe('settings:provider:kimi-code')
+    } finally {
+      await rm(dataDir, { recursive: true, force: true })
+    }
   })
 })

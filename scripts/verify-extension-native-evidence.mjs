@@ -11,6 +11,14 @@ const FULL_COMMIT = /^[a-f0-9]{40}$/i
 const FULL_SHA256 = /^[a-f0-9]{64}$/
 const VERSION_PART = '[0-9A-Za-z][0-9A-Za-z._-]*'
 const KUN_NAMED_RELEASE_ASSET = /^Kun-/
+const TUI_NAMED_RELEASE_ASSET = /^Kun-TUI-/
+const TUI_RELEASE_ASSET = new RegExp(
+  `^Kun-TUI-(${VERSION_PART})-(?:` +
+  'mac-(?:arm64|x64)\\.tar\\.gz|' +
+  'win-x64\\.zip|' +
+  'linux-x64\\.tar\\.gz' +
+  ')(?:\\.sha256|\\.json)?$'
+)
 
 const FINAL_ARTIFACTS = [
   {
@@ -48,6 +56,13 @@ const FINAL_ARTIFACTS = [
     role: 'linux-x64-appimage',
     pattern: new RegExp(`^Kun-(${VERSION_PART})-linux-x86_64\\.AppImage$`),
     ancillaryPattern: new RegExp(`^Kun-(${VERSION_PART})-linux-x86_64\\.AppImage\\.blockmap$`)
+  },
+  {
+    platform: 'linux',
+    role: 'linux-x64-deb',
+    pattern: new RegExp(`^Kun-(${VERSION_PART})-linux-amd64\\.deb$`),
+    // electron-builder does not emit blockmaps for deb installers.
+    ancillaryPattern: new RegExp(`^Kun-(${VERSION_PART})-linux-amd64\\.deb\\.blockmap$`)
   }
 ]
 
@@ -103,8 +118,15 @@ export async function verifyNativeEvidenceBundle({
 
   const finalFiles = new Map()
   const ancillaryFiles = []
+  const tuiFiles = []
   for (const file of files) {
     const name = basename(file)
+    if (TUI_NAMED_RELEASE_ASSET.test(name)) {
+      const match = name.match(TUI_RELEASE_ASSET)
+      if (!match) throw new Error(`Downloaded release contains unexpected Kun-named asset: ${name}`)
+      tuiFiles.push({ name, version: match[1] })
+      continue
+    }
     if (!KUN_NAMED_RELEASE_ASSET.test(name)) continue
     const matches = FINAL_ARTIFACTS.filter((rule) => rule.pattern.test(name))
     if (matches.length > 1) throw new Error(`Ambiguous final native artifact name: ${name}`)
@@ -178,6 +200,11 @@ export async function verifyNativeEvidenceBundle({
   const [version] = versions
   if (expectedVersion !== undefined && version !== expectedVersion) {
     throw new Error(`Native artifact version ${version} does not match expected ${expectedVersion}`)
+  }
+  for (const tui of tuiFiles) {
+    if (tui.version !== version) {
+      throw new Error(`Standalone TUI asset version does not match GUI artifacts: ${tui.name}`)
+    }
   }
   for (const ancillary of ancillaryFiles) {
     const ancillaryVersion = ancillary.name.match(ancillary.rule.ancillaryPattern)?.[1]

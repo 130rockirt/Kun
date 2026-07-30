@@ -2,6 +2,7 @@ import type { ToolCallProviderMetadata, TurnItem } from '../contracts/items.js'
 import type { UsageSnapshot } from '../contracts/usage.js'
 import type { ToolProviderKind } from './tool-host.js'
 import type { ModelFailureMetadata } from '../contracts/model-route-pool.js'
+import type { TurnServiceTier } from '../contracts/turns.js'
 
 /**
  * One streaming chunk from a model response. The loop consumes these
@@ -27,7 +28,14 @@ export type ModelStreamChunk = (
       arguments: Record<string, unknown>
       providerMetadata?: ToolCallProviderMetadata
     }
-  | { kind: 'retrying'; status: number; attempt: number; maxAttempts: number; delayMs: number }
+  | {
+      kind: 'retrying'
+      status?: number
+      attempt: number
+      maxAttempts: number
+      delayMs: number
+      reason?: 'network' | 'stream_transport'
+    }
   | { kind: 'image_generation_complete'; imageBase64: string; mimeType: string }
   | { kind: 'usage'; usage: UsageSnapshot }
   | { kind: 'completed'; stopReason: 'stop' | 'tool_calls' | 'length' | 'error' }
@@ -81,9 +89,13 @@ export type ModelRequest = {
   attachmentDocuments?: ModelDocumentAttachment[]
   tools: ModelToolSpec[]
   /**
-   * Optional loop-level requirement. The agent loop uses this to keep
-   * GUI-owned workflows, such as plan creation, tied to a concrete tool
-   * result even when a provider ignores tool-use instructions.
+   * Hard named-tool constraint. The caller MUST expose this tool alone and
+   * the adapter MUST serialize the protocol's named tool-choice form. A
+   * provider that cannot enforce the exact name must fail closed rather than
+   * falling back to generic/automatic tool selection.
+   *
+   * This is intentionally not a soft post-condition for workflows that can
+   * legitimately ask questions or answer in prose (for example Plan mode).
    */
   requiredToolName?: string
   /** Optional per-request streaming override. Defaults to adapter configuration. */
@@ -100,6 +112,8 @@ export type ModelRequest = {
    * `high` and `max` enable it with a concrete reasoning effort.
    */
   reasoningEffort?: string
+  /** Optional provider request class, captured from the initiating turn. */
+  serviceTier?: TurnServiceTier
   abortSignal: AbortSignal
 }
 
@@ -159,5 +173,13 @@ export type ModelToolSpec = {
 export interface ModelClient {
   readonly provider: string
   readonly model: string
+  /**
+   * True when the concrete provider/model target is selected only after the
+   * stream starts (for example a failover route pool). Callers must not freeze
+   * the public alias as the acting route before a route-bearing chunk arrives.
+   */
+  selectsRouteTargetDuringStream?(
+    request: Pick<ModelRequest, 'model' | 'providerId'>
+  ): boolean
   stream(request: ModelRequest): AsyncIterable<ModelStreamChunk>
 }

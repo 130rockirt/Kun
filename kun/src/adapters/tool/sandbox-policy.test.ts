@@ -25,6 +25,17 @@ describe('sandbox policy', () => {
     })
   })
 
+  it('treats explicitly added workspace roots as workspace-write boundaries', () => {
+    const context = {
+      workspace: '/repo/workspace',
+      additionalWorkspaces: ['/repo/shared'],
+      sandboxMode: 'workspace-write' as const
+    }
+
+    expect(canWritePath('/repo/shared/src/app.ts', context)).toEqual({ ok: true })
+    expect(canWritePath('/repo/other/app.ts', context)).toMatchObject({ ok: false })
+  })
+
   it('resolves only explicitly declared external write targets for approval', async () => {
     const parent = await mkdtemp(join(tmpdir(), 'kun-sandbox-policy-'))
     const workspace = join(parent, 'workspace')
@@ -139,10 +150,40 @@ describe('sandbox policy', () => {
     expect(sameFilesystemPath('/repo/target\\', '/repo/target', 'linux')).toBe(false)
   })
 
-  it('keeps command execution blocked in workspace-write mode', () => {
+  it('advertises command execution in workspace-write for the explicit approval layer', () => {
     expect(sandboxBlockForTool(
       { name: 'bash', toolKind: 'command_execution' },
       { sandboxMode: 'workspace-write' }
+    )).toBeNull()
+    expect(sandboxBlockForTool(
+      { name: 'bash', toolKind: 'command_execution' },
+      { sandboxMode: 'read-only' }
+    )).toMatchObject({ code: 'sandbox_command_blocked' })
+    expect(sandboxBlockForTool(
+      { name: 'bash', toolKind: 'command_execution' },
+      { sandboxMode: 'external-sandbox' }
+    )).toMatchObject({ code: 'sandbox_command_blocked' })
+    expect(sandboxBlockForTool(
+      { name: 'lsp', toolKind: 'command_execution' },
+      { sandboxMode: 'workspace-write' }
+    )).toMatchObject({ code: 'sandbox_command_blocked' })
+  })
+
+  it('enforces delegated write scopes and blocks shell escape for narrow scopes', () => {
+    const context = {
+      workspace: '/repo/workspace',
+      sandboxMode: 'danger-full-access' as const,
+      allowedReadPaths: ['src'],
+      allowedWritePaths: ['src/generated']
+    }
+    expect(canWritePath('/repo/workspace/src/generated/app.ts', context)).toEqual({ ok: true })
+    expect(canWritePath('/repo/workspace/src/other.ts', context)).toMatchObject({
+      ok: false,
+      block: { code: 'sandbox_write_blocked' }
+    })
+    expect(sandboxBlockForTool(
+      { name: 'bash', toolKind: 'command_execution' },
+      context
     )).toMatchObject({
       code: 'sandbox_command_blocked'
     })

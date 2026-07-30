@@ -97,9 +97,8 @@ export const GUI_PLAN_OPEN_TAG = '<gui_plan>'
 export const GUI_PLAN_CLOSE_TAG = '</gui_plan>'
 
 /**
- * Plan tool operation kinds. The renderer passes one of these on every
- * plan/refine turn so Kun can scope tool availability to the
- * active plan context.
+ * Plan tool operation kinds. A reserved GUI plan context carries the
+ * host-authoritative operation; context-free callers may provide one.
  */
 export type GuiPlanOperation = 'draft' | 'refine'
 
@@ -115,8 +114,8 @@ export type CreatePlanToolInput = {
   source_request?: string
   /** Short display title for the plan, e.g. "OAuth login flow". */
   title?: string
-  /** Operation that triggered the tool call. */
-  operation: GuiPlanOperation
+  /** Optional context-free operation. Omitted calls default to a draft. */
+  operation?: GuiPlanOperation
   /**
    * Optional reserved plan id or relative path supplied by the GUI on
    * the surrounding turn. When present, the tool MUST write to that
@@ -163,7 +162,11 @@ export function validateCreatePlanToolInput(input: Partial<CreatePlanToolInput>)
   if (typeof input.markdown !== 'string' || !input.markdown.trim()) {
     issues.push('markdown is required and must be non-empty')
   }
-  if (input.operation !== 'draft' && input.operation !== 'refine') {
+  if (
+    input.operation !== undefined &&
+    input.operation !== 'draft' &&
+    input.operation !== 'refine'
+  ) {
     issues.push('operation must be either "draft" or "refine"')
   }
   if (input.plan_relative_path != null) {

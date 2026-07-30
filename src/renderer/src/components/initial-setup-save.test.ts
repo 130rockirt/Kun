@@ -3,6 +3,7 @@ import {
   getActiveAgentApiKey,
   getKunRuntimeSettings,
   getModelProviderSettings,
+  defaultKunRuntimeSettings,
   normalizeAppSettings,
   type AppSettingsV1
 } from '@shared/app-settings'
@@ -37,7 +38,12 @@ function settingsWithActiveXiaomiWithoutKey(): AppSettingsV1 {
 describe('initialSetupSelection', () => {
   it('preselects the active provider card when it is a known preset', () => {
     const selection = initialSetupSelection(settingsWithActiveXiaomiWithoutKey())
-    expect(selection).toEqual({ presetId: 'xiaomi', mode: 'api', permissionMode: 'workspace-write' })
+    expect(selection).toEqual({
+      presetId: 'xiaomi',
+      mode: 'api',
+      permissionMode: 'ask-for-approval',
+      permissionTouched: false
+    })
   })
 
   it('preselects the token plan mode for token plan profiles', () => {
@@ -45,28 +51,68 @@ describe('initialSetupSelection', () => {
     expect(initialSetupSelection(current)).toEqual({
       presetId: 'minimax',
       mode: 'token-plan',
-      permissionMode: 'workspace-write'
+      permissionMode: 'ask-for-approval',
+      permissionTouched: false
     })
   })
 
   it('falls back to deepseek for unknown or empty active providers', () => {
-    expect(initialSetupSelection(settings())).toEqual({ presetId: 'deepseek', mode: 'api', permissionMode: 'workspace-write' })
+    const fresh = settings({ agents: { kun: defaultKunRuntimeSettings() } })
+    expect(initialSetupSelection(fresh)).toEqual({
+      presetId: 'deepseek',
+      mode: 'api',
+      permissionMode: 'full-access',
+      permissionTouched: false
+    })
+    expect(initialSetupSelection(settings())).toEqual({
+      presetId: 'deepseek',
+      mode: 'api',
+      permissionMode: 'ask-for-approval',
+      permissionTouched: false
+    })
     expect(initialSetupSelection(settings({ agents: { kun: { providerId: 'custom-provider-2' } } })))
-      .toEqual({ presetId: 'deepseek', mode: 'api', permissionMode: 'workspace-write' })
+      .toEqual({
+        presetId: 'deepseek',
+        mode: 'api',
+        permissionMode: 'ask-for-approval',
+        permissionTouched: false
+      })
     expect(initialSetupSelection(settings({ agents: { kun: { providerId: 'litellm' } } })))
-      .toEqual({ presetId: 'deepseek', mode: 'api', permissionMode: 'workspace-write' })
+      .toEqual({
+        presetId: 'deepseek',
+        mode: 'api',
+        permissionMode: 'ask-for-approval',
+        permissionTouched: false
+      })
   })
 
   it('preselects the saved permission mode', () => {
     const current = settings({
-      agents: { kun: { approvalPolicy: 'on-request', sandboxMode: 'workspace-write' } }
+      agents: {
+        kun: {
+          approvalPolicy: 'on-request',
+          sandboxMode: 'workspace-write',
+          approvalReviewer: 'user'
+        }
+      }
     })
-    expect(initialSetupSelection(current).permissionMode).toBe('workspace-write')
+    expect(initialSetupSelection(current).permissionMode).toBe('ask-for-approval')
 
-    const trusted = settings({
+    const delegated = settings({
+      agents: {
+        kun: {
+          approvalPolicy: 'on-request',
+          sandboxMode: 'workspace-write',
+          approvalReviewer: 'agent'
+        }
+      }
+    })
+    expect(initialSetupSelection(delegated).permissionMode).toBe('approve-for-me')
+
+    const nonCanonical = settings({
       agents: { kun: { approvalPolicy: 'auto', sandboxMode: 'workspace-write' } }
     })
-    expect(initialSetupSelection(trusted).permissionMode).toBe('trusted-workspace')
+    expect(initialSetupSelection(nonCanonical).permissionMode).toBe('ask-for-approval')
   })
 })
 
@@ -101,7 +147,12 @@ describe('initialSetupDrafts', () => {
     for (const id of excludedIds) {
       expect(drafts[id]).toBeUndefined()
       expect(initialSetupSelection(settings({ agents: { kun: { providerId: id } } })))
-        .toEqual({ presetId: 'deepseek', mode: 'api', permissionMode: 'workspace-write' })
+        .toEqual({
+          presetId: 'deepseek',
+          mode: 'api',
+          permissionMode: 'ask-for-approval',
+          permissionTouched: false
+        })
     }
   })
 })
@@ -123,20 +174,21 @@ describe('buildInitialSetupSettings', () => {
     const next = buildInitialSetupSettings(current, drafts, {
       presetId: 'deepseek',
       mode: 'api',
-      permissionMode: 'trusted-workspace'
+      permissionMode: 'approve-for-me',
+      permissionTouched: true
     })
 
     const runtime = getKunRuntimeSettings(next)
-    expect(runtime.approvalPolicy).toBe('auto')
+    expect(runtime.approvalPolicy).toBe('on-request')
     expect(runtime.sandboxMode).toBe('workspace-write')
+    expect(runtime.approvalReviewer).toBe('agent')
   })
 
   it('preserves a non-UI permission policy when the selector is untouched', () => {
-    // A persisted policy the 6-mode UI cannot represent: stricter approval gate
+    // A persisted policy the 3-mode UI cannot represent: stricter approval gate
     // plus a sandboxed filesystem. Reopening onboarding seeds the selector from
-    // the lossy fromSettings mapping (-> 'read-only'); when the user does not
-    // move it, the save must leave the strict pair intact rather than rewrite it
-    // to 'on-request'/'danger-full-access'.
+    // the lossy projection (-> Ask for approval); when the user does not move
+    // it, the save must leave the strict snapshot intact.
     const current = settings({
       provider: { apiKey: 'sk-deepseek-key' },
       agents: {
@@ -144,12 +196,13 @@ describe('buildInitialSetupSettings', () => {
       }
     })
     const seededMode = initialSetupSelection(current).permissionMode
-    expect(seededMode).toBe('read-only')
+    expect(seededMode).toBe('ask-for-approval')
 
     const next = buildInitialSetupSettings(current, initialSetupDrafts(current), {
       presetId: 'deepseek',
       mode: 'api',
-      permissionMode: seededMode
+      permissionMode: seededMode,
+      permissionTouched: false
     })
 
     const runtime = getKunRuntimeSettings(next)
@@ -159,9 +212,9 @@ describe('buildInitialSetupSettings', () => {
     expect(runtime.sandboxMode).not.toBe('danger-full-access')
   })
 
-  it('writes the permission pair only when the user picks a different mode', () => {
-    // Same strict starting policy, but this time the user explicitly chooses a
-    // representable mode, so the concrete pair for that mode must be written.
+  it('canonicalizes a projected legacy mode only after the user selects it', () => {
+    // The visible Ask card is already selected by projection. The explicit
+    // touched flag distinguishes a real click from an untouched lossy view.
     const current = settings({
       provider: { apiKey: 'sk-deepseek-key' },
       agents: {
@@ -171,12 +224,14 @@ describe('buildInitialSetupSettings', () => {
     const next = buildInitialSetupSettings(current, initialSetupDrafts(current), {
       presetId: 'deepseek',
       mode: 'api',
-      permissionMode: 'trusted-workspace'
+      permissionMode: 'ask-for-approval',
+      permissionTouched: true
     })
 
     const runtime = getKunRuntimeSettings(next)
-    expect(runtime.approvalPolicy).toBe('auto')
+    expect(runtime.approvalPolicy).toBe('on-request')
     expect(runtime.sandboxMode).toBe('workspace-write')
+    expect(runtime.approvalReviewer).toBe('user')
   })
 
   it('syncs the deepseek draft into the provider profile used by settings', () => {

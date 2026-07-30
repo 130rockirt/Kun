@@ -5,39 +5,44 @@
 <h1 align="center">Kun</h1>
 
 <p align="center">
-  <strong>探索需求先行的下一代 coding 范式。</strong><br>
-  用 DeepSeek、Xiaomi MiMo、MiniMax 的高性价比组合，把需求澄清、Design 设计、Code 编码和 Write 写作串成完整闭环。
+  <strong>一个运行时，GUI + TUI，把 AI Agent 真正放进工作流。</strong><br>
+  从需求澄清、设计、计划、编码到验收；复杂任务交给 Agent Graph 分工执行，过程可见、可控、可回溯。
 </p>
 
 <p align="center">
-  <a href="./README.en.md">English</a>
-  &nbsp;·&nbsp;
   <strong>简体中文</strong>
   &nbsp;·&nbsp;
+  <a href="./README.en.md">English</a>
+  &nbsp;·&nbsp;
+  <a href="https://www.kun-agent.com/">官网</a>
+  &nbsp;·&nbsp;
+  <a href="https://www.kun-agent.com/docs">文档</a>
+  &nbsp;·&nbsp;
   <a href="https://github.com/KunAgent/Kun/releases">下载</a>
-  &nbsp;·&nbsp;
-  <a href="#文档地图">文档</a>
-  &nbsp;·&nbsp;
-  <a href="#从源码运行">源码运行</a>
 </p>
 
 <p align="center">
   <a href="https://github.com/KunAgent/Kun/releases"><img src="https://img.shields.io/github/v/release/KunAgent/Kun?label=release" alt="GitHub release"></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-blue" alt="License: PolyForm Noncommercial 1.0.0"></a>
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey" alt="Platform">
-  <img src="https://img.shields.io/badge/Electron-43-47848F?logo=electron&logoColor=white" alt="Electron 43">
-  <img src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black" alt="React 19">
+  <img src="https://img.shields.io/badge/GUI%20%2B%20TUI-one%20runtime-41c8ff" alt="GUI and TUI share one runtime">
 </p>
 
-Kun 是一次面向未来编程方式的产品实验：不再从“给 Agent 一句话，让它直接改代码”开始，而是从需求澄清开始，把需求文档、Design 设计稿、交互原型、实施计划、Todo、Agent 编码和变更审查放到一条连续的 GUI 工作流里。
+## Kun 是什么
 
-Kun 面向希望把 AI Agent 真正放进日常工作的用户。它不是只聊天的客户端，也不是只给程序员的 CLI 外壳：你可以在 Code 模式把本地目录交给它处理代码、需求、计划和变更审查，在 Design 模式生成和迭代 UI 设计稿、交互原型与共享设计系统，也可以在独立的 Write 工作区里写作、润色和导出文档。
+Kun 是一个本地优先的 AI Agent 工作台，同时提供桌面 GUI 和终端 TUI。两种界面连接同一个 `kun serve` 运行时，共享线程、模型连接、审批、计划、子代理、用量和后台任务；你可以在桌面里看清完整过程，也可以在终端里保持手不离键盘。
 
-这也是 Kun 为什么把 DeepSeek、Xiaomi MiMo、MiniMax 作为默认的一线模型组合，而不是把它们当成普通的“可选 Provider”。需求先行的 coding 范式会带来更多轮澄清、调研、结构化、规划、执行和验证，如果模型成本太高，这条流程很难成为日常工作方式。Kun 选择三家来自中国的高性价比模型供应商，正是为了让完整流程跑得起、用得久、试得多。
+Kun 的重点不是再做一个聊天框，而是把一次真实工作从输入推进到可以验收的结果：
 
-Kun 内置同名本地运行时，通过 `kun serve` 连接桌面端。会话、日志、偏好设置和运行时配置默认保存在本机；模型请求使用你自己的模型服务凭据。对会读写文件和执行命令的流程，Kun 提供工具审批、权限模式、内联 diff 和变更审查面板。
+```text
+需求澄清 → 设计 → 计划 → 编码 / 执行 → 审查 → 验收
+```
 
----
+- **需求先行**：先明确目标、边界和验收标准，再让 Agent 执行。
+- **一个运行时，两种界面**：GUI 与 TUI 可以同时使用，切换界面不丢线程和后台任务。
+- **Agent Graph**：把可拆分的复杂任务组织成依赖图，由 Lead Agent 派发、监督、返工和汇总。
+- **证据化交付**：文件 Diff、命令结果、测试、浏览器和审查结果都留在任务旁边，不把“Agent 说完成了”当作完成。
+- **不绑定单一模型**：统一管理订阅登录、Coding Plan、Token Plan、API Key、兼容服务和自托管模型。
 
 <p align="center">
   <a href="src/asset/img/code.mp4">
@@ -48,122 +53,116 @@ Kun 内置同名本地运行时，通过 `kun serve` 连接桌面端。会话、
   </a>
 </p>
 
-## 需求先行的 coding 范式
+## 5 分钟开始
 
-Kun 想探索的是“需求 -> 设计 -> 计划 -> 编码 -> 验证”的下一代编程工作流，而不是把一个聊天框简单贴到 IDE 上。
+### 下载桌面版
 
-这条工作流由三个并列的核心模式承载：**Code** 面向真实代码库与交付，**Design** 面向 UI 方案、原型和设计系统，**Write** 面向长文档、需求、说明和发布内容。三者共用同一个 Kun 运行时、Provider 配置、审批机制和会话能力。
-
-| 阶段 | Kun 的尝试 |
-| --- | --- |
-| **澄清需求** | 在 GUI 中新建需求草稿，让需求 AI 帮你补问题、做实现前调研、整理边界 |
-| **沉淀文档** | 把草稿保存为 `.kunsdd/draft/.../requirement.md`，支持结构化需求块、验收标准和需求历史 |
-| **生成设计** | 进入 Design 模式，从需求片段生成 UI 设计稿、信息图、交互式 HTML 原型和共享设计系统，让需求不只停留在文字里 |
-| **形成计划** | 通过 `/plan` 和 `create_plan` 生成 GUI 管理的 `.kunsdd/plan/...` 实施计划，并把计划步骤和需求关联 |
-| **Agent 编码** | 计划进入 Todo、文件编辑、命令执行和变更审查；需求变更后可以提示重规划，避免计划和需求脱节 |
-| **回到验收** | 结合需求块、验收标准、计划状态和 `/review`，把“做完了吗”落回最初的需求 |
-
-这条线是 Kun 最重要的产品方向：让 AI coding 从“即时问答”走向“需求驱动的软件生产流程”。Code、Design、Write、模型、计划、审查和自动化都围绕这条线服务。
-
-## 核心模型组合
-
-Kun 追求的是“完整能力 + 极致性价比”。需求先行的流程比普通聊天更长，也更依赖反复调用模型；首启和设置页围绕三家中国模型供应商组织，让用户可以用更低的模型成本覆盖更多 Agent 场景。
-
-| 供应商 | 在 Kun 中的角色 |
-| --- | --- |
-| **DeepSeek** | 默认文本与推理主模型，提供 `deepseek-v4-pro` / `deepseek-v4-flash`，支撑代码、计划、审查、长上下文会话和自动模型路由 |
-| **Xiaomi MiMo** | 高性价比多模态与语音入口，覆盖长上下文文本模型、视觉输入、ASR 语音转写、TTS 语音生成和 Token Plan |
-| **MiniMax** | 补齐完整媒体生成能力，覆盖 Anthropic Messages 文本模型、图片生成、语音生成、音乐生成、视频生成和 Token Plan |
-
-这套组合让 Kun 可以把不同任务分配给更合适的能力：轻量澄清走高速模型，复杂代码和推理走更强模型，需求文档和 IM 场景接入语音，设计与创作场景接入图片、音乐和视频。你仍然可以添加 OpenAI 兼容、自托管或其他自定义 Provider，但 Kun 的默认体验会优先围绕这三家高性价比模型服务展开。
-
-## 为什么选择 Kun
-
-| 你想要 | Kun 提供 |
-| --- | --- |
-| 探索下一代 coding 范式 | 从需求澄清、需求文档、设计稿、实施计划一路走到 Agent 编码和验收 |
-| 在同一个应用里完成设计 | Design 模式生成 UI 草图、交互式 HTML 原型、节点式设计流程和共享 `DESIGN_SYSTEM.md`，并一键交给 Code 实现 |
-| 极致性价比的完整 Agent 能力 | 以 DeepSeek、Xiaomi MiMo、MiniMax 为核心组合，覆盖文本、推理、视觉、语音、图片、音乐和视频 |
-| 让 AI 面向真实项目工作 | 绑定本地工作区，读写文件、搜索代码、执行命令、查看工具调用和结果 |
-| 把需求推进到可执行计划 | 支持新建需求、`/plan`、Todo、`/goal`、旁支对话、会话压缩、分叉和归档 |
-| 让改动保持可控 | 工具审批、文件系统权限模式、内联 diff、变更审查面板和 `/review` |
-| 在同一个应用里写作 | Markdown 文件树、Live / Source / Split / Preview、多种导出格式、选区 inline agent |
-| 把 Markdown 直接做成演示文稿 | Write 中一键调用 PPT Master，先确认大纲、受众与视觉方向，再生成原生可编辑的 `.pptx` |
-| 离开电脑也能触发任务 | 飞书 / Lark / 微信连接、本地 webhook / relay、一次性或周期性定时任务 |
-| 把重复流程沉淀成可复用工作流 | 可视化「创建 Loop」节点编排，多步 Agent 流程可画、可跑、可复用 |
-| 按自己的场景扩展 Kun | 安装 `.kunx` 扩展，为工作台加入 UI、后台服务、Agent、工具、自定义模型 Provider 与账号接入 |
-| 不被单一模型绑定 | 三家核心供应商之外，也支持自定义 Base URL、协议、模型列表和扩展能力 |
-
-## 核心能力
-
-- **需求先行 coding**：新建需求草稿，AI 澄清和结构化需求，生成设计稿或交互原型，再进入实施计划、Todo、Agent 编码和验收。
-- **Code 工作台**：围绕真实代码库对话，读取项目上下文，执行 shell 命令，修改文件，并在提交前审查每一次变更。
-- **Design 设计模式**：从自然语言、需求草稿或现有界面生成设计稿、交互式 HTML 原型和设计流程图；支持版本迭代、画布预览、导出、共享设计系统，以及 Design -> Code 的实现交接。
-- **需求、计划与审查**：从需求草稿进入计划，再到 Todo、执行、复盘和代码审查；长会话可以压缩、恢复、分叉或归档。
-- **Write 写作模式与 PPT Master**：独立 Markdown 工作区，支持文件树、预览模式切换、补全、选区改写、图片附件，以及 `HTML / PDF / DOC / DOCX` 导出；还可从当前 Markdown 发起 PPT Master 流程，在确认幻灯片大纲、页数、受众和视觉方向后生成原生可编辑的 `.pptx`。
-- **自动化与远程入口**：把桌面会话接到飞书 / Lark / 微信等 IM，支持本地 webhook、relay 和定时任务，让后台任务也能回到同一套 Agent loop。
-- **可视化工作流「创建 Loop」**：在定时任务之上提供 n8n / dify 风格的节点式编排画布，把多步 Agent 流程画成可运行、可复用的工作流——丰富的触发器与节点、类型化数据流、本地运行 API，可作为工具暴露给 Kun，也能绑定到 hook 阶段。
-- **模型组合优先**：围绕 DeepSeek、Xiaomi MiMo、MiniMax 设计首启、Provider 预设和能力自动接线，用高性价比模型组合承担完整桌面 Agent 工作流。
-- **多模态与媒体能力**：支持图片附件、视觉输入、语音转写、图片生成、语音生成、音乐生成和视频生成；相关能力随 Provider 配置启用。
-- **MCP 与 Skills**：接入 Model Context Protocol 服务器，加载项目或全局 Skills，让 Kun 按任务获得更专门的工具和工作方式。
-- **Kun Extension 开放平台**：安装或侧载 `.kunx` 扩展，把工作台页面与侧栏、后台 Node 服务、Agent 工作流、工具、自定义模型 Provider 和账号认证组合进 Kun；公开 SDK、Manifest Schema、权限确认、独立 Extension Host、脚手架和测试工具共同构成稳定的 Extension API v1。
-- **本地运行时**：`kun serve` 提供 HTTP/SSE 边界，采用 cache-first agent loop、追加式事件日志、用量统计和上下文压缩策略。
-
-## 更多演示
-
-<p align="center">
-  <a href="src/asset/img/pdf-research.mp4">
-    <img src="src/asset/img/pdf-research.gif" width="680" alt="PDF 研究演示">
-  </a>
-</p>
-<p align="center"><em>PDF 研究与资料整理演示</em></p>
-
-<p align="center">
-  <a href="src/asset/img/sdd.mp4">
-    <img src="src/asset/img/sdd.gif" width="680" alt="需求澄清、需求文档与计划演示">
-  </a>
-</p>
-<p align="center"><em>需求澄清、需求文档与计划演示</em></p>
-
-<p align="center">
-  <a href="src/asset/img/ikun-ui-plugin.mp4">
-    <img src="src/asset/img/ikun-ui-plugin.gif" width="680" alt="iKun UI 插件演示">
-  </a>
-</p>
-<p align="center"><em>iKun UI 插件演示</em></p>
-
-## 快速开始
-
-### 路径 A：下载发布版
-
-前往 [GitHub Releases](https://github.com/KunAgent/Kun/releases) 下载最新版本。
+从 [GitHub Releases](https://github.com/KunAgent/Kun/releases) 下载最新版：
 
 | 平台 | 安装包 | 架构 |
 | --- | --- | --- |
-| macOS | `.dmg` 或 `.zip` | Intel / Apple Silicon |
-| Windows | `.exe`，NSIS 安装器 | x64 |
-| Linux | `.AppImage` | x64 |
+| macOS | `.dmg` / `.zip` | Apple Silicon / Intel |
+| Windows | `.exe` | x64 |
+| Linux | `.AppImage` / `.deb` | x64 |
 
-首次启动时：
+首次启动只需：
 
 1. 选择界面语言。
-2. 选择模型服务并填写 API Key 或 Token Plan Key。
-3. 如需兼容服务，在设置里编辑 Base URL、协议和模型列表。
-4. 进入 Code 绑定本地项目，进入 Design 生成设计原型，或进入 Write 创建写作工作区。
+2. 登录模型订阅，或配置一个 API Key / Token Plan / 自定义 Provider。
+3. 在 Code 中打开本地项目，然后发送一个目标清楚、范围有限、可以验证的任务。
 
-在 Write 中打开普通 Markdown 文件后，可使用工具栏里的“使用 PPT Master 生成 PPT”。首次使用会按需准备固定版本的 PPT Master 及其隔离 Python 环境，需要本机已安装 Python 3.10 或更高版本。Kun 会先让你确认大纲和视觉方案，确认后才生成到工作区的 `presentations/` 目录；来源 Markdown 不会被修改。
+桌面安装包已内置 TUI。打开新终端，在项目目录运行：
 
-如需扩展 Kun，可从设置中的扩展管理入口安装 `.kunx` 包。开发者可以运行 `npm create kun-extension` 创建项目，并从[扩展五分钟快速开始](docs/extensions/quick-start.md)了解开发、测试、打包和侧载流程。扩展中的 Node 或 Direct DOM 能力权限较高，请只安装可信来源的包并仔细检查权限提示。
+```bash
+kun
+```
 
-### 路径 B：从源码运行
+GUI 和 TUI 会自动连接同一个本地运行时。服务器或无桌面环境也可以从同一 Release 下载独立 TUI 压缩包。完整说明见 [Kun TUI 文档](docs/kun-tui.md)。
+
+## 选择你的工作方式
+
+| 入口 | 适合做什么 | 主要产物 |
+| --- | --- | --- |
+| **Code** | 理解真实代码库、编辑文件、执行命令、管理计划和审查改动 | 代码 Diff、测试结果、实施计划、Review findings |
+| **Design** | 从需求或现有界面探索视觉方向，生成并迭代交互原型 | HTML 原型、设计画布、设计流程、`DESIGN_SYSTEM.md` |
+| **Write** | 写作、润色、研究资料、导出文档或生成演示文稿 | Markdown、HTML、PDF、DOCX、可编辑 PPTX |
+| **TUI** | 在终端里管理会话、模型、计划、审批、Skills、MCP 和子代理 | 与 GUI 共享的线程、回合和任务结果 |
+| **连接手机** | 从飞书 / Lark / 微信或 webhook 触发和继续任务 | IM 会话、后台任务、通知 |
+
+Code、Design 和 Write 不是三套孤立工具。Design 可以把确认后的设计交给 Code 实现，Write 可以沉淀需求和交付文档，它们都复用相同的运行时、Provider、审批和会话能力。
+
+## 从需求到验收
+
+| 阶段 | Kun 如何参与 |
+| --- | --- |
+| **1. 澄清需求** | 新建需求草稿，让需求 AI 结合项目内容补问题、整理边界和验收标准 |
+| **2. 探索设计** | 在 Design 中把需求变成 UI 方向、交互原型或共享设计系统 |
+| **3. 形成计划** | 使用 `/plan` 把目标拆成可执行步骤，并与需求和 Todo 对齐 |
+| **4. 执行任务** | Agent 搜索代码、修改文件、调用工具、运行命令；长任务可持续恢复 |
+| **5. 回到验收** | 检查 Diff、测试和 `/review` findings，对照原始验收标准确认结果 |
+
+需求文档和计划默认保存在项目内，便于版本化、复盘和继续工作。需求变化时，应重新检查计划和已经完成的步骤，而不是让旧计划继续静默执行。
+
+## Agent Graph：让复杂任务真正分工
+
+实验性的 Graph 模式适合跨文件、跨阶段、可以明确验收的复杂任务。Lead Agent 会先建立任务依赖图，再按依赖派发受限子代理，持续查看执行过程、要求补充证据、触发返工，并在所有必要节点通过后统一交付。
+
+Graph 不是第二套运行时，也不会扩大权限：
+
+- GUI 和 TUI 都通过同一个 Kun 运行时读取 Graph 状态。
+- 子代理只能使用父任务授权范围内的文件、工具、网络、Skills 和 MCP。
+- 节点只有经过真实校验和 Lead 明确验收后，才能向下游交接结果。
+- 可暂停、恢复、重试、修改任务图或停止；已发生的执行记录不会被伪装成成功。
+
+简单问答和单点修改使用 Direct 模式更快。Graph 的使用和限制见 [Graph Mode 文档](docs/graph-mode.md)。
+
+## 关键能力
+
+| 能力 | 说明 |
+| --- | --- |
+| **真实项目工作台** | 本地工作区、文件搜索与编辑、Terminal、Browser、Git / Worktree、内联 Diff 和 Changes 面板 |
+| **长任务与上下文** | Plan、Todo、持久目标、会话压缩、分叉、归档、旁支问题、后台 Shell 和子代理 |
+| **模型与额度** | 统一管理订阅、API 和套餐连接；切换 Provider / 模型 / 推理强度，并查看支持供应商的额度信息 |
+| **Agent 与知识** | Agent Profile、长期记忆、项目级 `AGENTS.md`、Skills、MCP 和 Extensions |
+| **自动化** | 一次性或周期性 Schedule、可视化 Loop 工作流、Hook 和本地运行 API |
+| **多模态与媒体** | 图片和 PDF 输入、视觉理解、语音转写、图片、语音、音乐和视频生成 |
+| **开放扩展平台** | 安装或侧载 `.kunx`，扩展工作台 UI、后台服务、Agent、工具、Provider 和账号接入 |
+| **权限与审查** | 工作区范围、Sandbox、工具审批、Computer Use 权限、敏感操作确认和 `/review` |
+
+模型、媒体和高权限能力是否可用，取决于当前版本、操作系统、Provider、模型能力和你的授权。预设是配置起点，不代表账号天然拥有对应模型或额度。
+
+## 订阅、Provider 与模型
+
+Kun 把订阅登录、套餐 Key 和普通 API 放进同一个 Provider 入口：
+
+| 类型 | 当前支持 |
+| --- | --- |
+| **账号订阅** | ChatGPT / Codex、Claude Pro / Max、Google Antigravity、Gemini CLI、Cursor、Ollama Cloud、Grok |
+| **Coding Plan** | 智谱 Coding Plan、Z.ai Coding Plan、火山方舟 Agent Plan、火山方舟 Coding Plan、Kimi coding subscription |
+| **Token Plan** | Xiaomi MiMo、MiniMax、阿里云、腾讯云的 Token Plan 入口 |
+| **兼容与自托管** | OpenCode Go、Vercel AI Gateway、LiteLLM、LongCat、OpenAI-compatible 和自托管模型 |
+
+具体登录方式、可用模型、地区和额度以当前版本及服务商规则为准；预设是配置起点，不保证账号已经开通对应权限。
+
+会话、偏好、日志和运行时数据默认保存在本机；模型请求使用你配置的服务凭据。退出 GUI 不会终止仍在 TUI 或后台执行的任务，退出 TUI 也不会关闭桌面端。本地优先不等于模型一定在本机推理：除非连接自托管模型，否则提示、附件和任务上下文会发送给所选 Provider。
+
+Kun 把不同接入方式放进同一个模型入口：
+
+- 支持的订阅登录和 Agent SDK；
+- Coding Plan、Token Plan 与按量 API；
+- OpenAI Chat Completions、Responses、Anthropic Messages 等兼容协议；
+- 自定义 Base URL、模型列表、能力声明和自托管服务；
+- 为默认 Agent、特定线程、Design、Write、Schedule 或子代理选择不同模型；内置预设还包括 DeepSeek、Xiaomi MiMo、MiniMax、Kimi、GLM、Qwen 等服务。
+
+## 从源码运行
 
 环境要求：
 
 | 依赖 | 版本 |
 | --- | --- |
-| Node.js | 20+ |
+| Node.js | 22.19+ |
 | npm | 随 Node.js 安装 |
-| 模型服务凭据 | DeepSeek / Xiaomi MiMo / MiniMax / 自定义 Provider 至少一个 |
+| 模型连接 | 至少配置一个受支持的订阅、API 或自定义 Provider |
 
 ```bash
 git clone https://github.com/KunAgent/Kun.git
@@ -172,80 +171,69 @@ npm install
 npm run dev
 ```
 
-中国大陆访问较慢时，可以使用 npm 镜像：
+单独启动开发版 TUI：
+
+```bash
+npm run dev:tui
+```
+
+中国大陆网络访问较慢时，可以使用 npm 镜像：
 
 ```bash
 npm install --registry=https://registry.npmmirror.com
 ```
 
-## 常用命令
+### 常用开发命令
 
 | 命令 | 说明 |
 | --- | --- |
 | `npm run dev` | 构建 Kun 运行时并启动 Electron 开发环境 |
-| `npm run build` | 生产构建 |
+| `npm run dev:tui` | 构建运行时并启动终端 TUI |
 | `npm run typecheck` | TypeScript 类型检查 |
 | `npm run lint` | ESLint 检查 |
-| `npm run test` | 运行 Vitest 测试 |
-| `npm run dist:mac` | 构建 macOS `.dmg` 和 `.zip` |
-| `npm run dist:win` | 构建 Windows NSIS 安装器 |
-| `npm run dist:linux` | 构建 Linux AppImage |
+| `npm run test` | 运行测试 |
+| `npm run build` | 生产构建 |
+| `npm run dist:mac` | 构建 macOS 安装包 |
+| `npm run dist:win` | 构建 Windows 安装包 |
+| `npm run dist:linux` | 构建 Linux 安装包 |
 
-## 配置与数据
+## 文档
 
-- 偏好设置、会话、日志、运行时配置和本地运行时数据默认保存在本机。
-- 模型调用通过你配置的 Provider 凭据发起；Provider 预设可以作为起点，字段仍可编辑。
-- Code / Design / Write / 连接手机共用同一个 `kun` 运行时边界，便于复用会话、审批、工具和用量统计。
-- 文件读写、命令执行、MCP 工具、媒体生成等高权限能力会经过权限与配置控制。
-
-## 文档地图
+面向用户的完整文档位于 [kun-agent.com/docs](https://www.kun-agent.com/docs)。仓库中的技术文档适合开发者和贡献者：
 
 | 文档 | 内容 |
 | --- | --- |
-| [docs/extensions/README.md](docs/extensions/README.md) | Kun Extension 开放平台：工作台应用、Agent、工具、自定义模型 Provider、账号、打包与版本兼容 |
-| [kun/README.zh-CN.md](kun/README.zh-CN.md) | Kun 运行时、CLI、环境变量、HTTP API |
-| [docs/kun-architecture.md](docs/kun-architecture.md) | 单运行时架构与 GUI 集成 |
-| [docs/project-mcp-skills.md](docs/project-mcp-skills.md) | 项目级 `.kun/project.json`、MCP 摘要授权与 Skill 发现规则 |
-| [docs/kun-cache-optimization.md](docs/kun-cache-optimization.md) | 缓存优化、token economy 与可观测性 |
-| [docs/DESIGN_MODE.md](docs/DESIGN_MODE.md) | Design 设计模式、画布、原型、设计系统与 Design -> Code 闭环 |
-| [docs/model-provider-presets.md](docs/model-provider-presets.md) | 模型 Provider 预设与扩展能力 |
-| [docs/workflow-loop.md](docs/workflow-loop.md) | Loop 循环节点与 loop-agent 思想（创建loop / 工作流） |
-| [docs/DEVELOPMENT.zh-CN.md](docs/DEVELOPMENT.zh-CN.md) | 本地开发流程、分支策略和发布说明 |
-| [docs/CONTRIBUTING.zh-CN.md](docs/CONTRIBUTING.zh-CN.md) | 贡献说明 |
-| [SECURITY.zh-CN.md](SECURITY.zh-CN.md) | 安全漏洞披露方式 |
+| [docs/kun-tui.md](docs/kun-tui.md) | TUI 安装、启动、命令、快捷键、配置和运行时 |
+| [docs/graph-mode.md](docs/graph-mode.md) | Graph 架构、调度、监督、权限和恢复 |
+| [docs/kun-architecture.md](docs/kun-architecture.md) | GUI、TUI 与单运行时架构 |
+| [docs/DESIGN_MODE.md](docs/DESIGN_MODE.md) | Design 画布、原型、设计系统与 Design → Code |
+| [docs/workflow-loop.md](docs/workflow-loop.md) | 可视化 Loop 工作流 |
+| [docs/project-mcp-skills.md](docs/project-mcp-skills.md) | 项目级配置、MCP 与 Skill 发现 |
+| [docs/extensions/README.md](docs/extensions/README.md) | Kun Extension 开放平台 |
+| [kun/README.zh-CN.md](kun/README.zh-CN.md) | Kun 运行时、CLI、环境变量和 HTTP API |
+| [docs/DEVELOPMENT.zh-CN.md](docs/DEVELOPMENT.zh-CN.md) | 本地开发和发布流程 |
+| [docs/CONTRIBUTING.zh-CN.md](docs/CONTRIBUTING.zh-CN.md) | 贡献指南 |
+| [SECURITY.zh-CN.md](SECURITY.zh-CN.md) | 安全漏洞披露 |
 
 ## 贡献
 
-欢迎提交 bug 修复、UI/UX 优化、文档改进、本地化内容、构建发布流程和运行时集成相关改动。
+欢迎提交 bug 修复、UI/UX、运行时、Provider、扩展和文档改进。日常集成分支为 `develop`，PR 默认提交到 `develop`；开始前请阅读[贡献指南](docs/CONTRIBUTING.zh-CN.md)，外部贡献需要接受 [Contributor License Agreement](./CLA.md)。
 
-协作约定：
+累计有 **5 个 PR 被正常 review 并合入** 后，可以发送邮件到 [zhongxingyuemail@gmail.com](mailto:zhongxingyuemail@gmail.com) 申请成为 Kun Builder，并附上 GitHub 用户名和 PR 链接。
 
-- 日常协作与集成分支为 `develop`，稳定发布分支为 `master`。
-- PR 默认提交到 `develop`。
-- 发起 PR 前建议运行 `npm run typecheck`、`npm run build` 和 `npm run test`。
-- 外部贡献需接受 [Contributor License Agreement](./CLA.md)。
+## 许可证
 
-### 加入 Kun Builder
+Kun 使用 [PolyForm Noncommercial License 1.0.0](./LICENSE)，仅供学习、研究和非商业用途。商业使用、商业分发、SaaS / 托管服务、转售或集成到商业产品中，需要获得作者的单独书面授权。
 
-如果你希望成为 Kun Builder，请先通过常规贡献流程提交 PR。当你累计有 **5 个 PR 被正常 review 并合入** 后，可以发送邮件到 [zhongxingyuemail@gmail.com](mailto:zhongxingyuemail@gmail.com) 提出申请。
-
-申请邮件请附上你的 GitHub 用户名、5 个已合入 PR 的链接，以及你希望继续参与的方向，例如 Code、Design、Write、运行时、模型 Provider、工作流、文档或本地化。
+企业仅用于内部员工提效时，可发送邮件到 [zhongxingyuemail@gmail.com](mailto:zhongxingyuemail@gmail.com) 免费申请书面内部使用授权。该授权不包含面向外部客户的 SaaS、托管、转售或商业分发。
 
 ## 致谢
 
 感谢 [LobsterAI](https://github.com/netease-youdao/LobsterAI)、DeepSeek、Xiaomi MiMo、MiniMax，以及所有提交 issue、建议、代码和文档的贡献者。
 
 <a href="https://github.com/KunAgent/Kun/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=KunAgent/Kun" alt="Kun contributors" />
+  <img src="https://contrib.rocks/image?repo=KunAgent/Kun" alt="Kun contributors">
 </a>
-
-## 许可证
-
-本项目仅供学习和参考，不可用于任何商业用途。商业使用、商业分发、SaaS/托管服务、二次销售或集成到商业产品中，均需要获得作者的单独书面授权。
-
-我们非常支持企业将 Kun 仅用于内部员工提效。此类使用只需发送邮件至 [zhongxingyuemail@gmail.com](mailto:zhongxingyuemail@gmail.com) 申请书面授权，授权不会收取任何费用。该免费内部授权不包括对外提供 SaaS/托管服务、转售、商业分发，或集成到面向客户的商业产品中。
-
-教育机构与公益教育机构可用于非商业教学、研究、课程实验和学习参考。完整条款见 [PolyForm Noncommercial License 1.0.0](./LICENSE)。
 
 ## Star 历史
 

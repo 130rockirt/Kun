@@ -14,6 +14,7 @@ import {
   MIN_WRITE_AUTOSAVE_DELAY_MS,
   MIN_KUN_LOCAL_PORT,
   KUN_CONTEXT_COMPACTION_DEFAULTS_VERSION,
+  KUN_RUNTIME_TUNING_DEFAULTS_VERSION,
   SCHEDULE_MODEL_IDS,
   SCHEDULE_REASONING_EFFORT_IDS,
   SPEECH_TO_TEXT_PROTOCOLS,
@@ -30,6 +31,7 @@ import { GUI_UPDATE_CHANNELS } from '../../../shared/gui-update'
 import { KEYBOARD_SHORTCUT_COMMANDS } from '../../../shared/keyboard-shortcuts'
 import { LOCAL_WHISPER_DOWNLOAD_SOURCES, LOCAL_WHISPER_MODELS } from '../../../shared/local-whisper'
 import type { LocalWhisperDownloadSourceId } from '../../../shared/local-whisper'
+import { kunGraphPatchSchema } from './settings-graph'
 import {
   MAX_BODY_BYTES,
   MAX_CHANNEL_TEXT_LENGTH,
@@ -51,6 +53,7 @@ const chatContentMaxWidthSchema = z.number().min(CHAT_CONTENT_MAX_WIDTH_MIN).max
 const hexColorSchema = z.string().trim().regex(/^#[0-9a-fA-F]{6}$/)
 const approvalPolicySchema = z.enum(['always', 'on-request', 'untrusted', 'never', 'auto', 'suggest'])
 const sandboxModeSchema = z.enum(['read-only', 'workspace-write', 'danger-full-access', 'external-sandbox'])
+const approvalReviewerSchema = z.enum(['user', 'agent'])
 const mcpSearchModeSchema = z.enum(['direct', 'search', 'auto'])
 const kunStorageBackendSchema = z.enum(['hybrid', 'file'])
 const kunCompactionSummaryModeSchema = z.enum(['heuristic', 'model'])
@@ -271,6 +274,7 @@ const kunRuntimePatchSchema = z.object({
   model: modelIdSchema.optional(),
   approvalPolicy: approvalPolicySchema.optional(),
   sandboxMode: sandboxModeSchema.optional(),
+  approvalReviewer: approvalReviewerSchema.optional(),
   tokenEconomyMode: z.boolean().optional(),
   tokenEconomy: z.object({
     enabled: z.boolean().optional(),
@@ -321,6 +325,7 @@ const kunRuntimePatchSchema = z.object({
     summaryProviderId: z.string().trim().max(64).optional()
   }).strict().optional(),
   runtimeTuning: z.object({
+    defaultsVersion: z.number().int().positive().max(KUN_RUNTIME_TUNING_DEFAULTS_VERSION).optional(),
     maxConcurrentTurns: z.number().int().positive().max(256).optional(),
     maxWallTimeMs: z.number().int().positive().max(86_400_000).optional(),
     streamIdleTimeoutMs: z.number().int().min(0).max(3_600_000).optional(),
@@ -332,6 +337,9 @@ const kunRuntimePatchSchema = z.object({
     toolArgumentRepair: z.object({
       maxStringBytes: z.number().int().positive().max(16 * 1024 * 1024).optional()
     }).strict().optional()
+  }).strict().optional(),
+  llmDebug: z.object({
+    defaultThreadCaptureEnabled: z.boolean().optional()
   }).strict().optional(),
   quality: z.object({
     enabled: z.boolean().optional(),
@@ -409,6 +417,18 @@ const kunRuntimePatchSchema = z.object({
     maxImageDimension: z.number().int().positive().max(4096).optional(),
     maxActionsPerTurn: z.number().int().positive().max(1000).optional()
   }).strict().optional(),
+  browserUse: z.object({
+    enabled: z.boolean().optional(),
+    mode: z.enum(['public', 'local-development']).optional(),
+    approvalMode: z.enum(['auto-safe', 'always-ask']).optional(),
+    maxTabs: z.number().int().min(1).max(3).optional(),
+    maxObservationActionsPerTurn: z.number().int().min(1).max(100).optional(),
+    maxInteractionActionsPerTurn: z.number().int().min(1).max(50).optional(),
+    maxSnapshotNodes: z.number().int().min(10).max(500).optional(),
+    maxSnapshotTextChars: z.number().int().min(1000).max(50_000).optional(),
+    maxImageDimension: z.number().int().min(320).max(2048).optional(),
+    idleTimeoutMs: z.number().int().min(30_000).max(1_800_000).optional()
+  }).strict().optional(),
   // 兼容旧版保存的独立视觉识别设置。当前能力已经迁移到 provider modelProfiles。
   imageRecognition: z.unknown().optional(),
   modelProfiles: z.record(
@@ -440,6 +460,7 @@ const kunRuntimePatchSchema = z.object({
   titleReasoningEffort: modelReasoningEffortSchema.optional(),
   summaryReasoningEffort: modelReasoningEffortSchema.optional(),
   codeReviewReasoningEffort: modelReasoningEffortSchema.optional(),
+  graph: kunGraphPatchSchema.optional(),
   subagents: subagentsPatchSchema.optional()
 }).strict()
 
@@ -465,7 +486,9 @@ const checkpointCleanupPatchSchema = z.object({
 }).strict()
 
 const notificationsPatchSchema = z.object({
-  turnComplete: z.boolean().optional()
+  turnComplete: z.boolean().optional(),
+  mainAgentTurnComplete: z.boolean().optional(),
+  subagentTurnComplete: z.boolean().optional()
 }).strict()
 
 const appBehaviorPatchSchema = z.object({
@@ -1315,6 +1338,7 @@ const settingsPatchObjectSchema = z.object({
   theme: themeSchema.optional(),
   uiFontScale: uiFontScaleSchema.optional(),
   chatContentMaxWidthPx: chatContentMaxWidthSchema.optional(),
+  composerSendKey: z.enum(['enter', 'shiftEnter']).optional(),
   cursorSpotlight: z.boolean().optional(),
   cursorSpotlightColor: hexColorSchema.optional(),
   provider: modelProviderPatchSchema.optional(),

@@ -7,6 +7,7 @@ import {
   backgroundShellNoticeDisplayText,
   formatBackgroundShellCompletionNotice
 } from './background-shell-notice.js'
+import { resolveTurnClientSurface } from '../loop/turn-context-resolver.js'
 
 export type BackgroundShellRuntimeDeps = {
   events: RuntimeEventRecorder
@@ -168,7 +169,11 @@ export class BackgroundShellRuntime {
       ...this.sessionEventOutput(record),
       ...(record.error ? { error: record.error } : {})
     })
-    if (!this.shuttingDown && record.detached && record.status === 'completed' && record.exitCode === 0) {
+    // A detached shell owns unfinished work even when it exits unsuccessfully
+    // or is stopped. Always wake the agent for a terminal result so it can
+    // inspect the output and report the real outcome without asking the user
+    // to send a manual "continue" message (KunAgent/Kun#1031).
+    if (!this.shuttingDown && record.detached && record.status !== 'running') {
       await this.notifyAgent(record)
     }
     if (record.status !== 'running') {
@@ -199,10 +204,13 @@ export class BackgroundShellRuntime {
       }
     }
     if (!this.runTurn) return
+    const sourceTurn = thread.turns.find((turn) => turn.id === record.turnId) ?? thread.turns.at(-1)
     const started = await this.deps.turns.startTurn({
       threadId: record.threadId,
       request: {
         prompt: notice,
+        ...(sourceTurn ? { clientSurface: resolveTurnClientSurface(sourceTurn) } : {}),
+        ...(sourceTurn?.disableUserInput ? { disableUserInput: true } : {}),
         ...noticeMeta
       }
     })

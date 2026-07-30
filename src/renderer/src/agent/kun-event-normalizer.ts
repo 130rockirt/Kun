@@ -1,6 +1,7 @@
 import type { CoreChildRuntimeMetadataJson, CoreRuntimeEventJson, CoreTurnItemJson } from './kun-contract'
 import type {
   ApprovalStatusPayload,
+  ApprovalReviewEventPayload,
   CompactionEventPayload,
   DelegatedRuntimeState,
   ReviewEventPayload,
@@ -26,6 +27,7 @@ export type KunEventNormalizerDeps = {
   runtimeStatus: (event: CoreRuntimeEventJson) => RuntimeStatusEventPayload | null
   approvalAction: (event: CoreRuntimeEventJson) => RuntimeProjectionAction
   approvalStatus: (event: CoreRuntimeEventJson) => ApprovalStatusPayload | null
+  approvalReview: (event: CoreRuntimeEventJson) => ApprovalReviewEventPayload | null
   userInputRequest: (event: CoreRuntimeEventJson) => UserInputRequestPayload
   userInputAnswers: (answers: unknown) => UserInputAnswer[] | undefined
   compactionAction: (
@@ -51,6 +53,18 @@ export function normalizeKunTurnItem(
       return { type: 'user_message_received', payload: deps.userMessage(item) }
     case 'assistant_text':
     case 'assistant_reasoning':
+      return {
+        type: 'assistant_item_upserted',
+        payload: {
+          itemId: item.id,
+          threadId: item.threadId,
+          turnId: item.turnId,
+          kind: item.kind === 'assistant_text' ? 'agent_message' : 'agent_reasoning',
+          status: item.status,
+          createdAt: item.createdAt,
+          text: item.text ?? ''
+        }
+      }
     case 'approval':
     case 'user_input':
       return null
@@ -62,7 +76,9 @@ export function normalizeKunTurnItem(
     case 'review':
       return { type: 'review_updated', payload: deps.review(item) }
     case 'error':
-      return { type: 'runtime_error_received', payload: deps.itemRuntimeError(item) }
+      return item.code === 'tool_catalog_changed'
+        ? null
+        : { type: 'runtime_error_received', payload: deps.itemRuntimeError(item) }
     default:
       return null
   }
@@ -83,7 +99,11 @@ export function normalizeKunRuntimeEvent(
             deltas: [{
               text,
               kind: event.kind === 'assistant_text_delta' ? 'agent_message' : 'agent_reasoning',
-              seq: event.seq
+              seq: event.seq,
+              threadId: event.threadId ?? event.item?.threadId,
+              turnId: event.turnId ?? event.item?.turnId,
+              itemId: event.itemId ?? event.item?.id,
+              createdAt: event.timestamp ?? event.item?.createdAt
             }]
           }]
         : []
@@ -107,16 +127,27 @@ export function normalizeKunRuntimeEvent(
     }
     case 'tool_result_upload_wait':
     case 'model_request_retry':
-    case 'tool_catalog_changed':
-    case 'tool_storm_suppressed': {
+    case 'tool_storm_suppressed':
+    case 'required_tool_gate': {
       const status = deps.runtimeStatus(event)
       return status ? [{ type: 'runtime_status_received', payload: status }] : []
     }
+    case 'tool_catalog_changed':
+      return []
     case 'approval_requested':
       return [deps.approvalAction(event)]
     case 'approval_resolved': {
+      if (
+        event.decisionSource === 'agent' ||
+        event.approvalReviewer === 'agent'
+      ) return []
       const status = deps.approvalStatus(event)
       return status ? [{ type: 'approval_status_changed', payload: status }] : []
+    }
+    case 'approval_review_started':
+    case 'approval_review_completed': {
+      const review = deps.approvalReview(event)
+      return review ? [{ type: 'approval_review_updated', payload: review }] : []
     }
     case 'user_input_requested': {
       const payload = deps.userInputRequest(event)

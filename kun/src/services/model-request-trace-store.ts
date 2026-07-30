@@ -21,6 +21,9 @@ export type ModelRequestTraceStorePage = {
 export class ModelRequestTraceStore {
   private readonly root: string
   private readonly writes = new Map<string, Promise<void>>()
+  private readonly recent = new Map<string, { records: ModelRequestTraceRecord[]; hasMore: boolean }>()
+  private readonly recentLoads = new Map<string, Promise<void>>()
+  private readonly pendingRecent = new Map<string, ModelRequestTraceRecord[]>()
   private readonly warningSet = new Set<string>()
   private ready: Promise<void> | undefined
 
@@ -39,6 +42,7 @@ export class ModelRequestTraceStore {
           const path = this.pathForThread(threadId)
           await appendFile(path, `${JSON.stringify(record)}\n`, { encoding: 'utf8', mode: 0o600 })
           await chmod(path, 0o600)
+          this.rememberRecent(threadId, record)
         } catch (error) {
           this.rememberWarning(`trace persistence failed: ${safeError(error)}`)
         }
@@ -56,6 +60,26 @@ export class ModelRequestTraceStore {
   ): Promise<ModelRequestTraceStorePage> {
     await this.flushThread(threadId)
     const limit = normalizePageSize(options.limit)
+    if (!options.cursor) {
+      await this.ensureRecent(threadId)
+      const recent = this.recent.get(threadId) ?? { records: [], hasMore: false }
+      const records = recent.records.slice(0, limit)
+      const hasMore = recent.hasMore || recent.records.length > limit
+      return {
+        records,
+        ...(hasMore && records.length
+          ? { nextCursor: encodeCursor(traceKey(records.at(-1)!)) }
+          : {}),
+        warnings: this.warnings()
+      }
+    }
+    return this.scan(threadId, { limit, cursor: options.cursor })
+  }
+
+  private async scan(
+    threadId: string,
+    options: { limit: number; cursor?: string }
+  ): Promise<ModelRequestTraceStorePage> {
     const before = decodeCursor(options.cursor)
     const retained: ModelRequestTraceRecord[] = []
     const path = this.pathForThread(threadId)
@@ -78,14 +102,14 @@ export class ModelRequestTraceStore {
         }
         if (before && compareTraceKey(traceKey(parsed.data), before) >= 0) continue
         retained.push(parsed.data)
-        if (retained.length > limit + 1) retained.shift()
+        if (retained.length > options.limit + 1) retained.shift()
       }
     } catch (error) {
       if (!isMissingFileError(error)) this.rememberWarning(`trace read failed: ${safeError(error)}`)
     }
     retained.sort((left, right) => compareTraceKey(traceKey(right), traceKey(left)))
-    const hasMore = retained.length > limit
-    const records = retained.slice(0, limit)
+    const hasMore = retained.length > options.limit
+    const records = retained.slice(0, options.limit)
     return {
       records,
       ...(hasMore && records.length ? { nextCursor: encodeCursor(traceKey(records.at(-1)!)) } : {}),
@@ -95,6 +119,9 @@ export class ModelRequestTraceStore {
 
   async deleteThread(threadId: string): Promise<void> {
     await this.flushThread(threadId)
+    this.recent.delete(threadId)
+    this.recentLoads.delete(threadId)
+    this.pendingRecent.delete(threadId)
     try {
       await rm(this.pathForThread(threadId), { force: true })
     } catch (error) {
@@ -118,6 +145,51 @@ export class ModelRequestTraceStore {
 
   private async flushThread(threadId: string): Promise<void> {
     await this.writes.get(threadId)?.catch(() => undefined)
+  }
+
+  private async ensureRecent(threadId: string): Promise<void> {
+    if (this.recent.has(threadId)) return
+    let load = this.recentLoads.get(threadId)
+    if (!load) {
+      load = this.scan(threadId, { limit: MAX_MODEL_REQUEST_TRACE_PAGE_SIZE })
+        .then((page) => {
+          const pending = this.pendingRecent.get(threadId) ?? []
+          const byId = new Map(page.records.map((record) => [record.id, record]))
+          for (const record of pending) byId.set(record.id, record)
+          const records = [...byId.values()]
+            .sort((left, right) => compareTraceKey(traceKey(right), traceKey(left)))
+            .slice(0, MAX_MODEL_REQUEST_TRACE_PAGE_SIZE)
+          this.recent.set(threadId, {
+            records,
+            hasMore: Boolean(page.nextCursor) ||
+              byId.size > MAX_MODEL_REQUEST_TRACE_PAGE_SIZE
+          })
+          this.pendingRecent.delete(threadId)
+        })
+        .finally(() => {
+          if (this.recentLoads.get(threadId) === load) this.recentLoads.delete(threadId)
+        })
+      this.recentLoads.set(threadId, load)
+    }
+    await load
+  }
+
+  private rememberRecent(threadId: string, record: ModelRequestTraceRecord): void {
+    const recent = this.recent.get(threadId)
+    if (!recent) {
+      const pending = this.pendingRecent.get(threadId) ?? []
+      pending.push(record)
+      if (pending.length > MAX_MODEL_REQUEST_TRACE_PAGE_SIZE + 1) pending.shift()
+      this.pendingRecent.set(threadId, pending)
+      return
+    }
+    const records = [record, ...recent.records.filter((candidate) => candidate.id !== record.id)]
+      .sort((left, right) => compareTraceKey(traceKey(right), traceKey(left)))
+    const overflow = records.length > MAX_MODEL_REQUEST_TRACE_PAGE_SIZE
+    this.recent.set(threadId, {
+      records: records.slice(0, MAX_MODEL_REQUEST_TRACE_PAGE_SIZE),
+      hasMore: recent.hasMore || overflow
+    })
   }
 
   private pathForThread(threadId: string): string {

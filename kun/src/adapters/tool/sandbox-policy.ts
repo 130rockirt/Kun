@@ -25,6 +25,18 @@ export type SandboxBlock = {
   message: string
 }
 
+const WORKSPACE_APPROVAL_COMMAND_TOOLS = new Set(['bash', 'background_shell'])
+
+// Tool safety is a shared runtime contract. Client surfaces may differ in how
+// they render an approval, but GUI and TUI must never receive different
+// sandbox or approval behavior for the same tool and thread policy.
+export function isWorkspaceApprovalCommandTool(
+  tool: Pick<LocalTool, 'toolKind' | 'name'>
+): boolean {
+  return tool.toolKind === 'command_execution' &&
+    WORKSPACE_APPROVAL_COMMAND_TOOLS.has(tool.name)
+}
+
 /**
  * Resolve exact external targets that an opted-in file tool wants to mutate.
  * The physical targets captured here are compared again immediately before the
@@ -33,7 +45,7 @@ export type SandboxBlock = {
 export async function externalWriteTargetsForApproval(
   tool: Pick<LocalTool, 'toolKind' | 'externalWritePathArguments'>,
   call: Pick<ToolCallLike, 'arguments'>,
-  context: Pick<ToolHostContext, 'workspace' | 'sandboxMode'>
+  context: Pick<ToolHostContext, 'workspace' | 'additionalWorkspaces' | 'sandboxMode'>
 ): Promise<ApprovedExternalWriteTarget[]> {
   if (
     tool.toolKind !== 'file_change' ||
@@ -43,7 +55,8 @@ export async function externalWriteTargetsForApproval(
     return []
   }
 
-  const { lexicalRoot, physicalRoot } = await resolveExistingWorkspaceRoot(context.workspace)
+  const roots = await resolvedWorkspaceRoots(context)
+  const lexicalRoot = roots[0]!.lexicalRoot
   const externalTargets: ApprovedExternalWriteTarget[] = []
   for (const argumentName of tool.externalWritePathArguments) {
     const value = call.arguments[argumentName]
@@ -51,7 +64,7 @@ export async function externalWriteTargetsForApproval(
     const lexicalTarget = isAbsolute(value) ? resolve(value) : resolve(lexicalRoot, value)
     const physicalTarget = await resolvePathThroughSymlinks(lexicalTarget)
     if (
-      !isPathInsideOrEqual(physicalRoot, physicalTarget) &&
+      !roots.some((root) => isPathInsideOrEqual(root.physicalRoot, physicalTarget)) &&
       !externalTargets.some((target) => sameFilesystemPath(target.path, physicalTarget))
     ) {
       let targetStats: BigIntStats
@@ -106,7 +119,7 @@ export function effectiveSandboxMode(
 
 export function isToolAdvertisedInSandbox(
   tool: Pick<LocalTool, 'toolKind' | 'name'>,
-  context?: Pick<ToolHostContext, 'sandboxMode'>
+  context?: Pick<ToolHostContext, 'sandboxMode' | 'allowedReadPaths' | 'allowedWritePaths'>
 ): boolean {
   if (!context) return true
   return sandboxBlockForTool(tool, context) === null
@@ -114,11 +127,23 @@ export function isToolAdvertisedInSandbox(
 
 export function sandboxBlockForTool(
   tool: Pick<LocalTool, 'toolKind' | 'name'>,
-  context: Pick<ToolHostContext, 'sandboxMode'>
+  context: Pick<ToolHostContext, 'sandboxMode' | 'allowedReadPaths' | 'allowedWritePaths'>
 ): SandboxBlock | null {
   const mode = effectiveSandboxMode(context)
-  if (mode === 'danger-full-access') return null
   if (isInteractiveGuiGateTool(tool.name)) return null
+
+  if (
+    tool.toolKind === 'command_execution' &&
+    hasNarrowPathBoundary(context)
+  ) {
+    return {
+      code: 'sandbox_command_blocked',
+      message:
+        `tool ${tool.name} is blocked because shell commands cannot be safely confined ` +
+        'to the delegated child path scopes'
+    }
+  }
+  if (mode === 'danger-full-access') return null
 
   if (tool.toolKind === 'file_change') {
     if (mode === 'workspace-write') return null
@@ -132,6 +157,11 @@ export function sandboxBlockForTool(
   }
 
   if (tool.toolKind === 'command_execution') {
+    // The host shell itself is not path-confined. Workspace-write exposes only
+    // the built-in shell tools because LocalToolHost adds an unskippable
+    // per-command approval. Other process-backed tools retain the stricter
+    // sandbox boundary.
+    if (mode === 'workspace-write' && isWorkspaceApprovalCommandTool(tool)) return null
     return {
       code: 'sandbox_command_blocked',
       message:
@@ -146,8 +176,27 @@ export function sandboxBlockForTool(
 
 export function canWritePath(
   absolutePath: string,
-  context: Pick<ToolHostContext, 'workspace' | 'sandboxMode' | 'approvedExternalWriteTargets'>
+  context: Pick<
+    ToolHostContext,
+    | 'workspace'
+    | 'additionalWorkspaces'
+    | 'sandboxMode'
+    | 'approvedExternalWriteTargets'
+    | 'allowedWritePaths'
+  >
 ): { ok: true } | { ok: false; block: SandboxBlock } {
+  if (
+    context.allowedWritePaths &&
+    !pathAllowedByScopes(absolutePath, context.workspace, context.allowedWritePaths)
+  ) {
+    return {
+      ok: false,
+      block: {
+        code: 'sandbox_write_blocked',
+        message: `writing is outside the delegated child write scopes: ${absolutePath}`
+      }
+    }
+  }
   const mode = effectiveSandboxMode(context)
   if (mode === 'danger-full-access') return { ok: true }
   if (mode === 'read-only') {
@@ -169,9 +218,9 @@ export function canWritePath(
     }
   }
 
-  const root = workspaceRoot(context.workspace)
-  const resolvedPath = isAbsolute(absolutePath) ? resolve(absolutePath) : resolve(root, absolutePath)
-  if (isPathInsideOrEqual(root, resolvedPath)) return { ok: true }
+  const roots = lexicalWorkspaceRoots(context)
+  const resolvedPath = isAbsolute(absolutePath) ? resolve(absolutePath) : resolve(roots[0]!, absolutePath)
+  if (roots.some((root) => isPathInsideOrEqual(root, resolvedPath))) return { ok: true }
   if (context.approvedExternalWriteTargets?.some((target) =>
     sameFilesystemPath(target.path, resolvedPath)
   )) {
@@ -188,10 +237,62 @@ export function canWritePath(
 
 export function assertCanWritePath(
   absolutePath: string,
-  context: Pick<ToolHostContext, 'workspace' | 'sandboxMode' | 'approvedExternalWriteTargets'>
+  context: Pick<
+    ToolHostContext,
+    | 'workspace'
+    | 'additionalWorkspaces'
+    | 'sandboxMode'
+    | 'approvedExternalWriteTargets'
+    | 'allowedWritePaths'
+  >
 ): void {
   const decision = canWritePath(absolutePath, context)
   if (!decision.ok) throw new Error(decision.block.message)
+}
+
+export function pathAllowedByScopes(
+  absolutePath: string,
+  workspace: string,
+  scopes: readonly string[]
+): boolean {
+  const root = workspaceRoot(workspace)
+  const target = isAbsolute(absolutePath) ? resolve(absolutePath) : resolve(root, absolutePath)
+  if (!isPathInsideOrEqual(root, target)) return false
+  const relativePath = target === root
+    ? '.'
+    : target.slice(root.length + 1).replaceAll('\\', '/')
+  return scopes.some((scope) => {
+    const normalized = scope.trim().replaceAll('\\', '/').replace(/^\.\/+/, '').replace(/\/+$/, '') || '.'
+    return normalized === '.' ||
+      relativePath === normalized ||
+      relativePath.startsWith(`${normalized}/`)
+  })
+}
+
+function hasNarrowPathBoundary(
+  context: Pick<ToolHostContext, 'allowedReadPaths' | 'allowedWritePaths'>
+): boolean {
+  const read = context.allowedReadPaths
+  const write = context.allowedWritePaths
+  if (!read && !write) return false
+  return !read?.includes('.') || !write?.includes('.')
+}
+
+function lexicalWorkspaceRoots(
+  context: Pick<ToolHostContext, 'workspace' | 'additionalWorkspaces'>
+): string[] {
+  return [...new Set([context.workspace, ...(context.additionalWorkspaces ?? [])].map(workspaceRoot))]
+}
+
+async function resolvedWorkspaceRoots(
+  context: Pick<ToolHostContext, 'workspace' | 'additionalWorkspaces'>
+): Promise<Array<{ lexicalRoot: string; physicalRoot: string }>> {
+  const roots = lexicalWorkspaceRoots(context)
+  const primary = await resolveExistingWorkspaceRoot(roots[0]!)
+  const additional = await Promise.all(roots.slice(1).map((root) =>
+    resolveExistingWorkspaceRoot(root).catch(() => null)
+  ))
+  return [primary, ...additional.filter((entry) => entry !== null)]
 }
 
 function isInteractiveGuiGateTool(toolName: string): boolean {

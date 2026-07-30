@@ -26,11 +26,13 @@ const context = {
 function makeService(input: {
   execute?: ToolHost['execute']
   onPlanWritten?: () => Promise<void>
+  awaitWorkspaceCheckpoint?: (requestId: string, signal: AbortSignal) => Promise<string | null>
 } = {}) {
   const lifecycle: string[] = []
   const events: Array<Record<string, unknown>> = []
   const turns = {
     updateItem: vi.fn(async () => { lifecycle.push('update'); return null }),
+    updateTurnMetadata: vi.fn(async () => { lifecycle.push('turn-metadata') }),
     applyItem: vi.fn(async () => { lifecycle.push('apply') })
   } as unknown as TurnService
   const service = new ToolExecutionService({
@@ -50,6 +52,9 @@ function makeService(input: {
       record: async (event: Record<string, unknown>) => { events.push(event) }
     } as unknown as RuntimeEventRecorder,
     nowIso: () => '2026-07-10T00:00:00.000Z',
+    ...(input.awaitWorkspaceCheckpoint
+      ? { awaitWorkspaceCheckpoint: input.awaitWorkspaceCheckpoint }
+      : {}),
     ...(input.onPlanWritten ? { onPlanWritten: input.onPlanWritten } : {})
   })
   return { service, lifecycle, events, turns }
@@ -73,6 +78,49 @@ describe('ToolExecutionService', () => {
     expect(events).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: 'error', code: 'tool_dispatch_rejected' })
     ]))
+  })
+
+  it('waits for a pending checkpoint before the first workspace mutation', async () => {
+    const order: string[] = []
+    const setup = makeService({
+      awaitWorkspaceCheckpoint: async (requestId) => {
+        order.push(`checkpoint:${requestId}`)
+        return 'gcp_ready'
+      },
+      execute: async () => {
+        order.push('execute')
+        return {
+          item: makeToolResultItem({
+            id: 'item_call_1',
+            threadId: 'thread_1',
+            turnId: 'turn_1',
+            callId: 'call_1',
+            toolName: 'write',
+            output: {}
+          }),
+          approved: true
+        }
+      }
+    })
+
+    await setup.service.executeSafely({
+      threadId: 'thread_1',
+      turnId: 'turn_1',
+      call: { ...call, toolName: 'write', toolKind: 'file_change' },
+      context: { ...context, workspaceCheckpointRequestId: 'gcp_pending' }
+    })
+
+    expect(order).toEqual(['checkpoint:gcp_pending', 'execute'])
+    expect(setup.turns.updateTurnMetadata).toHaveBeenCalledWith(
+      'thread_1',
+      'turn_1',
+      { workspaceCheckpointId: 'gcp_ready' }
+    )
+    expect(setup.turns.updateItem).toHaveBeenCalledWith(
+      'thread_1',
+      'item_turn_1_user',
+      { workspaceCheckpointId: 'gcp_ready' }
+    )
   })
 
   it('directs rejected PPT tools through managed skill recovery without shell fallback', async () => {

@@ -67,6 +67,9 @@ const REASONING_PROTOCOL_LABEL_KEYS: Record<ModelReasoningRequestProtocol, strin
   'deepseek-chat-completions': 'providerModelReasoningProtocolDeepseek',
   'glm-chat-completions': 'providerModelReasoningProtocolGlm',
   'mimo-chat-completions': 'providerModelReasoningProtocolMimo',
+  'openai-chat-completions': 'providerModelReasoningProtocolOpenAiChat',
+  'qwen-chat-completions': 'providerModelReasoningProtocolQwen',
+  'thinking-toggle-chat-completions': 'providerModelReasoningProtocolThinkingToggle',
   'openai-responses': 'providerModelReasoningProtocolResponses',
   'anthropic-thinking': 'providerModelReasoningProtocolAnthropic',
   none: 'providerModelReasoningProtocolNone'

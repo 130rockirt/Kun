@@ -5,6 +5,7 @@ import type { ToolCallLike, ToolHost, ToolHostContext, ToolHostResult } from '..
 import type { RuntimeEventRecorder } from '../services/runtime-event-recorder.js'
 import type { TurnService } from '../services/turn-service.js'
 import { InflightTracker } from './inflight-tracker.js'
+import { prepareBrowserUseToolResultForPersistence } from './tool-result-image.js'
 
 export type PlanWrittenCallback = (input: {
   threadId: string
@@ -21,6 +22,10 @@ export type ToolExecutionServiceDeps = {
   events: RuntimeEventRecorder
   nowIso: () => string
   onPlanWritten?: PlanWrittenCallback
+  awaitWorkspaceCheckpoint?: (
+    checkpointRequestId: string,
+    signal: AbortSignal
+  ) => Promise<string | null>
 }
 
 export type ToolExecutionInput = {
@@ -36,6 +41,8 @@ export type ToolExecutionInput = {
  * partial updates, error normalization, and result-side plan integration.
  */
 export class ToolExecutionService {
+  private readonly checkpointGates = new Map<string, Promise<void>>()
+
   constructor(private readonly deps: ToolExecutionServiceDeps) {}
 
   async executeSafely(input: ToolExecutionInput): Promise<ToolHostResult> {
@@ -83,7 +90,10 @@ export class ToolExecutionService {
       status: result.item.kind === 'tool_result' && result.item.isError ? 'failed' : 'completed',
       finishedAt: this.deps.nowIso()
     } as Partial<TurnItem>)
-    await this.deps.turns.applyItem(threadId, result.item)
+    await this.deps.turns.applyItem(
+      threadId,
+      prepareBrowserUseToolResultForPersistence(result.item)
+    )
     await this.afterResultPersisted(threadId, turnId, call, result)
   }
 
@@ -131,6 +141,7 @@ export class ToolExecutionService {
       },
       async () => {
         try {
+          await this.ensureWorkspaceCheckpoint(input)
           let acceptingUpdates = true
           let updateFailure: unknown
           let pendingUpdates = Promise.resolve()
@@ -160,6 +171,7 @@ export class ToolExecutionService {
             await pendingUpdates
           }
           if (updateFailure) throw updateFailure
+          await this.recordSourceToolPage(input, result)
           return result
         } catch (error) {
           if (input.context.abortSignal.aborted || !isRecoverableToolDispatchError(error)) {
@@ -170,7 +182,7 @@ export class ToolExecutionService {
           const guidance = input.call.toolName.startsWith('ppt_master_')
             ? 'PPT Master is not active in this turn. Call `load_skill` once with `skill_id: "ppt-master"`, then retry the managed PPT tool on the next model step after the tool catalog refreshes. If it remains unavailable, stop and report the problem. Never run PPT Master scripts through `bash`, `background_shell`, or direct Python.'
             : planActive
-            ? `\`${input.call.toolName}\` is not available in Plan mode. Do NOT try to write deliverable files now. Call \`create_plan\` and put a COMPLETE implementation plan in its \`markdown\` argument — concrete steps, the files to create with their intended contents, and how to verify. Do NOT copy this message into the plan; write the actual plan. If the request is still ambiguous, ask the user a clarifying question and wait instead.`
+            ? `\`${input.call.toolName}\` is not available in Plan mode. Continue with advertised read-only tools, \`git_inspect\`, or \`write\`/\`edit\` for Markdown only. Call \`create_plan\` and put a COMPLETE implementation plan in its \`markdown\` argument — concrete steps, the files to create with their intended contents, and how to verify. Do NOT copy this message into the plan; write the actual plan. If the request is still ambiguous, ask the user a clarifying question and wait instead.`
             : 'Use only tools advertised in the current turn context.'
           await this.deps.events.record({
             kind: 'error',
@@ -196,6 +208,65 @@ export class ToolExecutionService {
         }
       }
     )
+  }
+
+  private async recordSourceToolPage(input: ToolExecutionInput, result: ToolHostResult): Promise<void> {
+    const toolName = input.call.toolName
+    if (!['read', 'grep', 'glob', 'find'].includes(toolName)) return
+    const output = result.item.kind === 'tool_result' && result.item.output && typeof result.item.output === 'object'
+      ? result.item.output as Record<string, unknown> : undefined
+    if (!output) return
+    const hasMore = output.has_more === true
+    const continuation = typeof output.next_offset === 'number'
+      ? 'offset' as const
+      : typeof output.next_cursor === 'string' ? 'cursor' as const : 'none' as const
+    await this.deps.events.record({
+      kind: 'source_tool_page',
+      threadId: input.threadId,
+      turnId: input.turnId,
+      toolName: toolName as 'read' | 'grep' | 'glob' | 'find',
+      callId: input.call.callId,
+      hasMore,
+      continuation,
+      ...(input.context.sourceResultBudgetTokens !== undefined
+        ? { budgetTokens: input.context.sourceResultBudgetTokens }
+        : {})
+    })
+  }
+
+  private async ensureWorkspaceCheckpoint(input: ToolExecutionInput): Promise<void> {
+    const requestId = input.context.workspaceCheckpointRequestId?.trim()
+    if (
+      !requestId ||
+      !this.deps.awaitWorkspaceCheckpoint ||
+      (input.call.toolKind !== 'file_change' && input.call.toolKind !== 'command_execution')
+    ) return
+
+    const key = `${input.turnId}:${requestId}`
+    let gate = this.checkpointGates.get(key)
+    if (!gate) {
+      gate = (async () => {
+        const checkpointId = await this.deps.awaitWorkspaceCheckpoint!(
+          requestId,
+          input.context.abortSignal
+        )
+        if (!checkpointId) return
+        await this.deps.turns.updateTurnMetadata(input.threadId, input.turnId, {
+          workspaceCheckpointId: checkpointId
+        })
+        await this.deps.turns.updateItem(
+          input.threadId,
+          `item_${input.turnId}_user`,
+          { workspaceCheckpointId: checkpointId }
+        )
+      })()
+      this.checkpointGates.set(key, gate)
+      if (this.checkpointGates.size > 512) {
+        const oldest = this.checkpointGates.keys().next().value
+        if (oldest !== undefined) this.checkpointGates.delete(oldest)
+      }
+    }
+    await gate
   }
 
   private async afterResultPersisted(

@@ -3,12 +3,14 @@ import type {
   AppSettingsPatch,
   AppSettingsV1,
   ApprovalPolicy,
+  ApprovalReviewer,
   SandboxMode
 } from '../shared/app-settings'
 
 export type KunExecutionSecuritySettings = {
   approvalPolicy: ApprovalPolicy
   sandboxMode: SandboxMode
+  approvalReviewer: ApprovalReviewer
 }
 
 export type KunExecutionSettingsChange = {
@@ -41,16 +43,19 @@ export function kunExecutionSettingsChange(
   const kunPatch = patch.agents?.kun
   if (!kunPatch || (
     !Object.prototype.hasOwnProperty.call(kunPatch, 'approvalPolicy') &&
-    !Object.prototype.hasOwnProperty.call(kunPatch, 'sandboxMode')
+    !Object.prototype.hasOwnProperty.call(kunPatch, 'sandboxMode') &&
+    !Object.prototype.hasOwnProperty.call(kunPatch, 'approvalReviewer')
   )) return undefined
 
   const currentSettings: KunExecutionSecuritySettings = {
     approvalPolicy: current.agents.kun.approvalPolicy,
-    sandboxMode: current.agents.kun.sandboxMode
+    sandboxMode: current.agents.kun.sandboxMode,
+    approvalReviewer: current.agents.kun.approvalReviewer
   }
   const next: KunExecutionSecuritySettings = {
     approvalPolicy: kunPatch.approvalPolicy ?? currentSettings.approvalPolicy,
-    sandboxMode: kunPatch.sandboxMode ?? currentSettings.sandboxMode
+    sandboxMode: kunPatch.sandboxMode ?? currentSettings.sandboxMode,
+    approvalReviewer: kunPatch.approvalReviewer ?? currentSettings.approvalReviewer
   }
   return executionSettingsEqual(currentSettings, next)
     ? undefined
@@ -61,7 +66,11 @@ export function executionSettingsEqual(
   left: KunExecutionSecuritySettings,
   right: KunExecutionSecuritySettings
 ): boolean {
-  return left.approvalPolicy === right.approvalPolicy && left.sandboxMode === right.sandboxMode
+  return (
+    left.approvalPolicy === right.approvalPolicy &&
+    left.sandboxMode === right.sandboxMode &&
+    left.approvalReviewer === right.approvalReviewer
+  )
 }
 
 /**
@@ -110,8 +119,10 @@ function actionKey(action: KunExecutionSettingsConsentAction): string {
   return JSON.stringify([
     action.current.approvalPolicy,
     action.current.sandboxMode,
+    action.current.approvalReviewer,
     action.next.approvalPolicy,
     action.next.sandboxMode,
+    action.next.approvalReviewer,
     action.senderId,
     action.senderProcessId,
     action.senderRoutingId

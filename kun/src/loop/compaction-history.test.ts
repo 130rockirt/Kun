@@ -3,7 +3,7 @@ import { makeAssistantTextItem, makeCompactionItem, makeUserItem } from '../doma
 import {
   effectiveHistoryAfterLatestCompaction,
   insertCompactionIntoVisibleHistory,
-  placeCompactionsAtTurnEnd
+  placeCompactionsChronologically
 } from './compaction-history.js'
 
 describe('compaction history projection', () => {
@@ -99,27 +99,148 @@ describe('compaction history projection', () => {
     ])
   })
 
-  it('moves a turn-bucket compaction summary to the end so the UI renders it inside the latest turn', () => {
+  it('places a turn-bucket compaction summary between work that happened before and after it', () => {
     const threadId = 'thread_1'
     const turnId = 'turn_3'
-    const userMessage = makeUserItem({ id: 'item_user_3', threadId, turnId, text: 'next request' })
-    const summary = makeCompactionItem({
-      id: 'compaction_for_turn_3',
+    const userMessage = {
+      ...makeUserItem({ id: 'item_user_3', threadId, turnId, text: 'next request' }),
+      createdAt: '2026-07-30T01:00:00.000Z'
+    }
+    const before = makeAssistantTextItem({
+      id: 'item_before_compaction',
       threadId,
       turnId,
-      summary: 'fresh summary',
-      replacedTokens: 200,
-      pinnedConstraints: []
+      text: 'work before compaction',
+      status: 'completed',
+      createdAt: '2026-07-30T01:00:01.000Z'
+    })
+    const summary = {
+      ...makeCompactionItem({
+        id: 'compaction_for_turn_3',
+        threadId,
+        turnId,
+        summary: 'fresh summary',
+        replacedTokens: 200,
+        pinnedConstraints: []
+      }),
+      createdAt: '2026-07-30T01:00:02.000Z'
+    }
+    const after = makeAssistantTextItem({
+      id: 'item_after_compaction',
+      threadId,
+      turnId,
+      text: 'work after compaction',
+      status: 'completed',
+      createdAt: '2026-07-30T01:00:03.000Z'
     })
 
-    // Session-store insertion places the summary BEFORE the kept-verbatim tail
-    // (`item_user_3` in this case) so the runtime's
-    // `effectiveHistoryAfterLatestCompaction` returns `[summary, tail]`. When
-    // that bucket is handed to the renderer, the summary must sit at the end —
-    // otherwise `groupTurns` shoves it into the previous turn's process row.
+    // Session-store insertion places the summary before the retained model
+    // tail. The renderer-facing bucket restores the marker to event time.
     expect(
-      placeCompactionsAtTurnEnd([summary, userMessage]).map((item) => item.id)
-    ).toEqual(['item_user_3', 'compaction_for_turn_3'])
+      placeCompactionsChronologically([summary, userMessage, before, after])
+        .map((item) => item.id)
+    ).toEqual([
+      'item_user_3',
+      'item_before_compaction',
+      'compaction_for_turn_3',
+      'item_after_compaction'
+    ])
+  })
+
+  it('uses stable source order for invalid timestamps while keeping the turn owner first', () => {
+    const threadId = 'thread_1'
+    const turnId = 'turn_invalid_time'
+    const summary = {
+      ...makeCompactionItem({
+        id: 'compaction_invalid_time',
+        threadId,
+        turnId,
+        summary: 'summary',
+        replacedTokens: 200,
+        pinnedConstraints: []
+      }),
+      createdAt: 'invalid'
+    }
+    const userMessage = {
+      ...makeUserItem({ id: 'item_user_invalid_time', threadId, turnId, text: 'request' }),
+      createdAt: 'invalid'
+    }
+    const after = {
+      ...makeAssistantTextItem({
+        id: 'item_after_invalid_time',
+        threadId,
+        turnId,
+        text: 'later work',
+        status: 'completed'
+      }),
+      createdAt: 'invalid'
+    }
+
+    expect(
+      placeCompactionsChronologically([summary, userMessage, after]).map((item) => item.id)
+    ).toEqual([
+      'item_user_invalid_time',
+      'compaction_invalid_time',
+      'item_after_invalid_time'
+    ])
+  })
+
+  it('coalesces old automatic markers while preserving manual compactions', () => {
+    const threadId = 'thread_1'
+    const turnId = 'turn_coalesce'
+    const userMessage = {
+      ...makeUserItem({ id: 'item_user_coalesce', threadId, turnId, text: 'request' }),
+      createdAt: '2026-07-30T01:00:00.000Z'
+    }
+    const oldAutomatic = {
+      ...makeCompactionItem({
+        id: 'compaction_old_auto',
+        threadId,
+        turnId,
+        summary: 'old automatic',
+        replacedTokens: 100,
+        pinnedConstraints: [],
+        auto: true
+      }),
+      createdAt: '2026-07-30T01:00:01.000Z'
+    }
+    const manual = {
+      ...makeCompactionItem({
+        id: 'compaction_manual',
+        threadId,
+        turnId,
+        summary: 'manual',
+        replacedTokens: 150,
+        pinnedConstraints: [],
+        auto: false
+      }),
+      createdAt: '2026-07-30T01:00:02.000Z'
+    }
+    const latestAutomatic = {
+      ...makeCompactionItem({
+        id: 'compaction_latest_auto',
+        threadId,
+        turnId,
+        summary: 'latest automatic',
+        replacedTokens: 200,
+        pinnedConstraints: [],
+        auto: true
+      }),
+      createdAt: '2026-07-30T01:00:03.000Z'
+    }
+
+    expect(
+      placeCompactionsChronologically([
+        oldAutomatic,
+        userMessage,
+        manual,
+        latestAutomatic
+      ]).map((item) => item.id)
+    ).toEqual([
+      'item_user_coalesce',
+      'compaction_manual',
+      'compaction_latest_auto'
+    ])
   })
 
   it('leaves buckets without a compaction summary untouched', () => {
@@ -135,7 +256,7 @@ describe('compaction history projection', () => {
         status: 'completed'
       })
     ]
-    expect(placeCompactionsAtTurnEnd(items).map((item) => item.id)).toEqual([
+    expect(placeCompactionsChronologically(items).map((item) => item.id)).toEqual([
       'item_user_1',
       'item_assistant_1'
     ])

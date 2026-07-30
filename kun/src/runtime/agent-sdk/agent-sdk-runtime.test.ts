@@ -1,4 +1,5 @@
 import { mkdtemp, mkdir, rm, symlink } from 'node:fs/promises'
+import { realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, test, vi } from 'vitest'
@@ -226,6 +227,14 @@ describe('AgentSdkRuntime.runTurn', () => {
   })
 
   test('decideSdkBuiltinSandbox limits SDK reads to the workspace in workspace-write mode', () => {
+    expect(decideSdkBuiltinSandbox('Bash', { command: 'pwd' }, {
+      workspace: '/ws',
+      sandboxMode: 'workspace-write'
+    })).toBeNull()
+    expect(decideSdkBuiltinSandbox('Bash', { command: 'pwd' }, {
+      workspace: '/ws',
+      sandboxMode: 'read-only'
+    })).toMatchObject({ allow: false })
     expect(decideSdkBuiltinSandbox('Read', { file_path: '/tmp/outside.txt' }, {
       workspace: '/ws',
       sandboxMode: 'workspace-write'
@@ -237,6 +246,18 @@ describe('AgentSdkRuntime.runTurn', () => {
       workspace: '/ws',
       sandboxMode: 'workspace-write'
     })).toBeNull()
+    const existingExtra = realpathSync(tmpdir())
+    expect(decideSdkBuiltinSandbox('Write', { file_path: join(existingExtra, 'kun-shared-inside.txt') }, {
+      workspace: '/ws',
+      additionalWorkspaces: [existingExtra],
+      sandboxMode: 'workspace-write'
+    })).toBeNull()
+    const missingExtra = `/kun-missing-extra-${process.pid}`
+    expect(decideSdkBuiltinSandbox('Write', { file_path: `${missingExtra}/inside.txt` }, {
+      workspace: '/ws',
+      additionalWorkspaces: [missingExtra],
+      sandboxMode: 'workspace-write'
+    })).toMatchObject({ allow: false })
   })
 
   test('rejects SDK Glob patterns that select paths outside the workspace', () => {
@@ -705,13 +726,20 @@ describe('AgentSdkRuntime.runTurn', () => {
     }))
   })
 
-  test('scopes the env: strips ANTHROPIC_API_KEY and injects the token', async () => {
+  test('scopes the env: strips runtime secrets and injects only the selected token', async () => {
     let seenOptions: { env?: Record<string, string | undefined> } = {}
     const sdk = fakeSdk(STREAM, (opts) => {
       seenOptions = opts as typeof seenOptions
     })
     const { deps } = makeDeps({
       loadSdk: async () => sdk,
+      baseEnv: () => ({
+        PATH: '/bin',
+        ANTHROPIC_API_KEY: 'leak',
+        KUN_BROWSER_USE_BRIDGE_URL: 'http://127.0.0.1:12345',
+        KUN_BROWSER_USE_BRIDGE_TOKEN: 'bridge-token',
+        KUN_BROWSER_USE_APPROVAL_SIGNING_KEY: 'signing-key'
+      }),
       loadTurnContext: async () => ({
         workspace: '/ws',
         userText: 'hi',
@@ -722,6 +750,9 @@ describe('AgentSdkRuntime.runTurn', () => {
     })
     await new AgentSdkRuntime(deps).runTurn('th', 'tn', new AbortController().signal)
     expect(seenOptions.env?.ANTHROPIC_API_KEY).toBeUndefined()
+    expect(seenOptions.env?.KUN_BROWSER_USE_BRIDGE_URL).toBeUndefined()
+    expect(seenOptions.env?.KUN_BROWSER_USE_BRIDGE_TOKEN).toBeUndefined()
+    expect(seenOptions.env?.KUN_BROWSER_USE_APPROVAL_SIGNING_KEY).toBeUndefined()
     expect(seenOptions.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe('sk-ant-oat01-tok')
   })
 
@@ -788,12 +819,16 @@ describe('AgentSdkRuntime.runTurn', () => {
     }
   })
 
-  test('gates SDK built-ins with the workspace sandbox before approval policy', async () => {
+  test('allows approved Bash but still gates SDK file paths in workspace-write', async () => {
     let canUseTool: SdkCanUseTool | undefined
     let permissionMode: unknown
+    let tools: unknown
+    let allowedTools: string[] | undefined
     const sdk = fakeSdk(STREAM, (opts) => {
       canUseTool = (opts as { canUseTool?: SdkCanUseTool }).canUseTool
       permissionMode = (opts as { permissionMode?: unknown }).permissionMode
+      tools = (opts as { tools?: unknown }).tools
+      allowedTools = (opts as { allowedTools?: string[] }).allowedTools
     })
     const { deps } = makeDeps({
       loadSdk: async () => sdk,
@@ -809,10 +844,12 @@ describe('AgentSdkRuntime.runTurn', () => {
     await new AgentSdkRuntime(deps).runTurn('th', 'tn', new AbortController().signal)
 
     expect(permissionMode).toBe('default')
+    expect(tools).toEqual(expect.arrayContaining(['Read', 'Write', 'Edit', 'Bash']))
+    expect(allowedTools).not.toEqual(expect.arrayContaining(['Read', 'Write', 'Edit', 'Bash']))
     expect(canUseTool).toBeDefined()
-    await expect(canUseTool!('Bash', { command: 'pwd' })).resolves.toMatchObject({
-      behavior: 'deny',
-      message: expect.stringContaining('does not run host shell commands')
+    await expect(canUseTool!('Bash', { command: 'pwd' })).resolves.toEqual({
+      behavior: 'allow',
+      updatedInput: { command: 'pwd' }
     })
     await expect(canUseTool!('Write', { file_path: '/tmp/outside.txt', content: 'x' })).resolves.toMatchObject({
       behavior: 'deny',
@@ -822,6 +859,219 @@ describe('AgentSdkRuntime.runTurn', () => {
       behavior: 'allow',
       updatedInput: { file_path: '/ws/inside.txt', content: 'x' }
     })
+  })
+
+  test('bridges Kun read tools when Graph disables all overlapping SDK built-ins', async () => {
+    let options: {
+      tools?: unknown[]
+      allowedTools?: string[]
+      mcpServers?: Record<string, unknown>
+    } = {}
+    const sdk = fakeSdk(svgSdkTextAttempt('planning paused'), (value) => {
+      options = value as typeof options
+    })
+    const { deps } = makeDeps({
+      loadSdk: async () => sdk,
+      loadTurnContext: async () => ({
+        workspace: '/ws',
+        userText: 'inspect and define the Graph',
+        approvalPolicy: 'auto',
+        sandboxMode: 'workspace-write',
+        allowSdkBuiltins: false,
+        bridgeKunBuiltinOverlaps: true,
+        bridgeableTools: [{
+          name: 'read',
+          description: 'Read a file',
+          inputSchema: { type: 'object' }
+        }]
+      })
+    })
+
+    await expect(
+      new AgentSdkRuntime(deps).runTurn('th', 'tn', new AbortController().signal)
+    ).resolves.toBe('completed')
+
+    expect(options.tools).toEqual([])
+    expect(options.allowedTools).toContain('mcp__kun__read')
+    expect(options.mcpServers).toHaveProperty('kun')
+  })
+
+  test('gives Graph planning one real SDK recovery exchange before parking prose-only output', async () => {
+    const prompts: string[] = []
+    const checkGraphCompletion = vi.fn(async () => 'complete' as const)
+    const finishTurn = vi.fn(async () => 'suspended' as const)
+    const sdk = fakeSdkAttempts([
+      svgSdkTextAttempt('I have a plan.'),
+      svgSdkTextAttempt('I still will not call the tool.')
+    ], (input) => {
+      if (typeof input.prompt === 'string') prompts.push(input.prompt)
+    })
+    const { deps } = makeDeps({
+      loadSdk: async () => sdk,
+      checkGraphCompletion,
+      finishTurn,
+      loadTurnContext: async () => ({
+        workspace: '/ws',
+        userText: 'build this with Graph',
+        approvalPolicy: 'auto',
+        sandboxMode: 'read-only',
+        allowSdkBuiltins: false,
+        bridgeKunBuiltinOverlaps: true,
+        graphPhase: 'planning',
+        bridgeableTools: [{
+          name: 'graph_define_plan',
+          description: 'Define the Graph plan',
+          inputSchema: { type: 'object' }
+        }]
+      })
+    })
+
+    await expect(new AgentSdkRuntime(deps).runTurn(
+      'th',
+      'tn',
+      new AbortController().signal
+    )).resolves.toBe('suspended')
+
+    expect(prompts).toHaveLength(2)
+    expect(prompts[1]).toContain('Host planning gate')
+    expect(prompts[1]).toContain('call `graph_define_plan` now')
+    expect(checkGraphCompletion).not.toHaveBeenCalled()
+    expect(finishTurn).toHaveBeenCalledTimes(1)
+  })
+
+  test('resumes the first Graph SDK session and carries exact plan issue paths into recovery', async () => {
+    const queries: Array<{
+      prompt: unknown
+      options?: { resume?: string }
+    }> = []
+    let graphDefinePlanHandler:
+      | ((args: Record<string, unknown>, extra: unknown) => Promise<unknown>)
+      | undefined
+    let queryIndex = 0
+    const sdk: SdkApi = {
+      tool: (name, _description, _schema, handler) => {
+        if (name === 'graph_define_plan') graphDefinePlanHandler = handler
+        return { name }
+      },
+      createSdkMcpServer: (config) => ({
+        type: 'sdk',
+        name: config.name,
+        instance: {}
+      }),
+      query: (input): SdkQueryResult => {
+        const current = queryIndex
+        queryIndex += 1
+        queries.push(input as typeof queries[number])
+        async function* gen(): AsyncGenerator<SdkMessage> {
+          if (current === 0) {
+            await graphDefinePlanHandler?.({}, {})
+            yield {
+              type: 'system',
+              subtype: 'init',
+              session_id: 'graph_session_after_invalid_plan'
+            } as SdkMessage
+          }
+          yield* svgSdkTextAttempt(
+            current === 0 ? 'The plan is ready.' : 'Still prose only.'
+          )
+        }
+        const stream = gen() as SdkQueryResult
+        stream.interrupt = async () => {}
+        return stream
+      }
+    }
+    const executeKunTool = vi.fn(async () => ({
+      output: {
+        code: 'graph_plan_invalid',
+        issues: [{
+          path: ['tasks', 0, 'loop'],
+          message: 'Ordinary work tasks cannot contain loop.',
+          repairHint: 'Remove loop or change kind to loop_gate.'
+        }]
+      },
+      isError: true
+    }))
+    const finishTurn = vi.fn(async () => 'suspended' as const)
+    const { deps } = makeDeps({
+      loadSdk: async () => sdk,
+      executeKunTool,
+      finishTurn,
+      loadTurnContext: async () => ({
+        workspace: '/ws',
+        userText: 'build this with Graph',
+        approvalPolicy: 'auto',
+        sandboxMode: 'read-only',
+        allowSdkBuiltins: false,
+        bridgeKunBuiltinOverlaps: true,
+        graphPhase: 'planning',
+        bridgeableTools: [{
+          name: 'graph_define_plan',
+          description: 'Define the Graph plan',
+          inputSchema: { type: 'object' }
+        }]
+      })
+    })
+
+    await expect(new AgentSdkRuntime(deps).runTurn(
+      'th',
+      'tn',
+      new AbortController().signal
+    )).resolves.toBe('suspended')
+
+    expect(queries).toHaveLength(2)
+    expect(queries[1]?.options?.resume).toBe(
+      'graph_session_after_invalid_plan'
+    )
+    expect(queries[1]?.prompt).toEqual(expect.stringContaining(
+      '"path":["tasks",0,"loop"]'
+    ))
+    expect(queries[1]?.prompt).toEqual(expect.stringContaining(
+      'Remove loop or change kind to loop_gate.'
+    ))
+    expect(executeKunTool).toHaveBeenCalledTimes(1)
+  })
+
+  test('gives pending Graph supervision one real SDK recovery exchange before parking', async () => {
+    const prompts: string[] = []
+    const checkGraphCompletion = vi.fn(async () => 'retry_required' as const)
+    const finishTurn = vi.fn(async () => 'suspended' as const)
+    const sdk = fakeSdkAttempts([
+      svgSdkTextAttempt('Everything looks complete.'),
+      svgSdkTextAttempt('Still prose only.')
+    ], (input) => {
+      if (typeof input.prompt === 'string') prompts.push(input.prompt)
+    })
+    const { deps } = makeDeps({
+      loadSdk: async () => sdk,
+      checkGraphCompletion,
+      finishTurn,
+      loadTurnContext: async () => ({
+        workspace: '/ws',
+        userText: 'continue Graph supervision',
+        approvalPolicy: 'auto',
+        sandboxMode: 'read-only',
+        allowSdkBuiltins: false,
+        bridgeKunBuiltinOverlaps: true,
+        graphPhase: 'supervising',
+        bridgeableTools: [{
+          name: 'graph_review_node',
+          description: 'Review a pending Graph node',
+          inputSchema: { type: 'object' }
+        }]
+      })
+    })
+
+    await expect(new AgentSdkRuntime(deps).runTurn(
+      'th',
+      'tn',
+      new AbortController().signal
+    )).resolves.toBe('suspended')
+
+    expect(checkGraphCompletion).toHaveBeenCalledTimes(1)
+    expect(prompts).toHaveLength(2)
+    expect(prompts[1]).toContain('Host supervision gate')
+    expect(prompts[1]).toContain('call `graph_review_node`')
+    expect(finishTurn).toHaveBeenCalledTimes(1)
   })
 
   test('disables SDK built-ins and completes after mutation plus matching validation', async () => {

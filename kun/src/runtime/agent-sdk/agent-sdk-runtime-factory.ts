@@ -24,13 +24,16 @@ import type { SdkApi } from './sdk-protocol.js'
 import type { RuntimeEventRecorder } from '../../services/runtime-event-recorder.js'
 import type { LlmDebugSink } from '../../services/llm-debug-recorder.js'
 import type { TurnService } from '../../services/turn-service.js'
+import type { TurnRunOutcome } from '../../loop/turn-execution-types.js'
 import type { SessionStore } from '../../ports/session-store.js'
 import type { ThreadStore } from '../../ports/thread-store.js'
 import type { CapabilityRegistry } from '../../adapters/tool/capability-registry.js'
 import type { ToolHost, ToolHostContext } from '../../ports/tool-host.js'
 import {
+  DEFAULT_APPROVAL_REVIEWER,
   DEFAULT_SANDBOX_MODE,
   type ApprovalPolicy,
+  type ApprovalReviewer,
   type SandboxMode
 } from '../../contracts/policy.js'
 import type { ServeProviderConfig } from '../../config/kun-config.js'
@@ -59,7 +62,15 @@ import type {
 } from '../../ports/user-input-gate.js'
 import type { TurnItem } from '../../contracts/items.js'
 import type { ApprovalGate } from '../../ports/approval-gate.js'
-import { createApprovalRequest, type ApprovalRequest } from '../../domain/approval.js'
+import {
+  createApprovalActionEnvelope,
+  createApprovalRequest,
+  safeApprovalActionSummary,
+  type ApprovalRequest,
+  type ApprovalResolution
+} from '../../domain/approval.js'
+import type { ApprovalReviewPort } from '../../ports/approval-review.js'
+import type { ActingTurnModelRoute } from '../../contracts/turns.js'
 import { makeUserInputItem } from '../../domain/item.js'
 import { awaitAbortableGate } from '../../services/interactive-gate.js'
 import {
@@ -70,6 +81,8 @@ import { shellSpawnEnv } from '../../adapters/tool/builtin-tool-utils.js'
 import type { TurnLimitsConfig } from '../../loop/turn-limits.js'
 import { userMessageTextWithComposerContexts } from '../../domain/composer-context.js'
 import { mkdir } from 'node:fs/promises'
+import { resolveTurnClientSurface } from '../../loop/turn-context-resolver.js'
+import { buildClientSurfaceInstruction } from '../../prompt/kun-prompt-context.js'
 import {
   delegatedCapabilityFingerprint,
   delegatedCredentialIdentity,
@@ -77,12 +90,26 @@ import {
   type DelegatedSessionCoordinator,
   type DelegatedSessionPreparation
 } from '../delegated-session-binding.js'
+import {
+  delegatedGraphCompletionCheck,
+  delegatedGraphAllowedToolNames,
+  delegatedGraphTurnPolicy,
+  intersectDelegatedToolNames,
+  parkDelegatedGraphTurnAfterRecovery
+} from '../delegated-graph-turn-policy.js'
 
 const CLAUDE_KUN_TOOL_INSTRUCTION = [
   'Kun-managed capabilities are available through the mcp__kun__ tools.',
   'Use these tools for Kun capabilities such as MCP, extensions, skills, memory, media, GUI input, and delegation.',
   'Their execution remains governed by Kun ToolHost approval and sandbox policy.'
 ].join(' ')
+
+const SDK_ON_REQUEST_AUTO_ALLOWED_TOOLS = new Set([
+  'Read',
+  'Glob',
+  'Grep',
+  'TodoWrite'
+])
 
 export interface AgentSdkRuntimeFactoryDeps {
   registry: CapabilityRegistry
@@ -106,6 +133,9 @@ export interface AgentSdkRuntimeFactoryDeps {
   agentSdkProviderIds: ReadonlySet<string>
   defaultApprovalPolicy: ApprovalPolicy
   defaultSandboxMode?: SandboxMode
+  defaultApprovalReviewer?: ApprovalReviewer
+  /** Isolated, no-tools automatic reviewer shared with native Kun turns. */
+  approvalReview?: ApprovalReviewPort
   /** Runtime default model — used as the Claude model when a thread carries a non-Anthropic id. */
   defaultModel?: string
   /** True when the runtime's own default provider is agent-sdk (Claude sub as main model). */
@@ -120,9 +150,9 @@ export interface AgentSdkRuntimeFactoryDeps {
   instructionRuntime?: InstructionRuntime
   /** Long-term memory store — injects relevant memories per turn. */
   memoryStore?: MemoryStore
-  /** Interactive-input gate — lets the bridged `user_input` tool surface kun's GUI panel. */
+  /** Interactive-input gate rendered by whichever supported client initiated the turn. */
   userInputGate?: UserInputGate
-  /** GUI approval gate shared with native tool execution. Missing means deny closed. */
+  /** Approval gate shared with native tool execution. Missing means deny closed. */
   approvalGate?: ApprovalGate
   /** Clock for stamping item timestamps (falls back to Date when absent). */
   nowIso?: () => string
@@ -138,6 +168,10 @@ export interface AgentSdkRuntimeFactoryDeps {
     ToolHostContext,
     | 'allowedProviderIds'
     | 'allowedToolNames'
+    | 'allowedSkillIds'
+    | 'allowedReadPaths'
+    | 'allowedWritePaths'
+    | 'allowedArtifactIds'
     | 'blockedProviderIds'
     | 'blockedToolNames'
     | 'blockedSkillIds'
@@ -225,7 +259,7 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
   const sessionPreparationsByTurn = new Map<string, DelegatedSessionPreparation>()
   // Skill activation is turn-scoped. Keep the exact result used for the SDK
   // tool catalog so bridged execution sees the same skill-gated tools after a
-  // GUI input pause/resume.
+  // Client-neutral structured input pause/resume.
   const activeSkillIdsByTurn = new Map<string, readonly string[]>()
   const skillPromptByTurn = new Map<string, string>()
   const skillTurnKey = (threadId: string, turnId: string): string => `${threadId}\u0000${turnId}`
@@ -241,6 +275,9 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
       workspace: thread.workspace,
       threadId: thread.id,
       turnId: turn.id,
+      ...(deps.toolContextBoundary?.allowedSkillIds
+        ? { allowedSkillIds: deps.toolContextBoundary.allowedSkillIds }
+        : {}),
       ...(deps.toolContextBoundary?.blockedSkillIds
         ? { blockedSkillIds: deps.toolContextBoundary.blockedSkillIds }
         : {})
@@ -252,8 +289,8 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
   const nowIso = (): string => (deps.nowIso ? deps.nowIso() : new Date().toISOString())
 
   /**
-   * Bridge kun's `user_input` tool to its GUI panel: persist the request item +
-   * publish the events the renderer renders the panel from, wait on the gate,
+   * Bridge kun's `user_input` tool to the active client: persist the request item,
+   * publish the events clients render, wait on the gate,
    * then mark it resolved. Returns undefined when no gate is wired (the tool then
    * stays unadvertised — its shouldAdvertise checks for awaitUserInput).
    */
@@ -334,8 +371,28 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
   const makeAwaitApproval = (
     approvalPolicy: ApprovalPolicy,
     sandboxMode: SandboxMode | undefined,
+    approvalReviewer: ApprovalReviewer,
+    actingModelRoute: ActingTurnModelRoute,
+    intent: string,
     signal: AbortSignal
-  ): ((approval: ApprovalRequest) => Promise<'allow' | 'deny'>) => async (approval) => {
+  ): ((approval: ApprovalRequest) => Promise<'allow' | 'deny' | ApprovalResolution>) => async (approval) => {
+    if (approvalPolicy === 'auto' && sandboxMode === 'danger-full-access') return 'allow'
+    if (approvalReviewer === 'agent') {
+      if (!deps.approvalReview) {
+        return {
+          decision: 'deny',
+          reviewer: 'agent',
+          reason: 'Automatic approval review is unavailable.',
+          reviewStatus: 'failed-closed'
+        }
+      }
+      return deps.approvalReview.review({
+        approval,
+        route: actingModelRoute,
+        intent,
+        signal
+      })
+    }
     const gate = deps.approvalGate
     if (approvalPolicy === 'never' || !gate) return 'deny'
     const pending = gate.request(approval)
@@ -370,7 +427,9 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
             approvalId: approval.id,
             toolName: approval.toolName,
             status: 'expired',
+            approvalReviewer: 'user',
             summary: approval.summary,
+            ...(approval.action ? { action: approval.action } : {}),
             ...(current.reason ? { reason: current.reason } : {})
           })
         }).catch(() => undefined)
@@ -401,8 +460,10 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
           toolName: approval.toolName,
           status: 'pending',
           approvalPolicy,
+          approvalReviewer: 'user',
           sandboxMode: sandboxMode ?? DEFAULT_SANDBOX_MODE,
-          summary: approval.summary
+          summary: approval.summary,
+          ...(approval.action ? { action: approval.action } : {})
         })
         // Attach both handlers immediately so a recorder rejection cannot
         // surface as unhandled while abort is winning the race.
@@ -457,12 +518,17 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
       guiDesignMode?: boolean
       guiDesignArtifact?: GuiDesignArtifactContext
       activeSkillIds?: readonly string[]
+      additionalWorkspaces?: readonly string[]
       allowedToolNames?: readonly string[]
       sandboxMode?: SandboxMode
       approvalPolicy?: ApprovalPolicy
+      approvalReviewer?: ApprovalReviewer
+      actingModelRoute?: ActingTurnModelRoute
       signal?: AbortSignal
       awaitUserInput?: ToolHostContext['awaitUserInput']
       awaitApproval?: ToolHostContext['awaitApproval']
+      clientSurface?: ToolHostContext['clientSurface']
+      orchestration?: ToolHostContext['orchestration']
     }
   ): ToolHostContext => {
     const allowedToolNames = intersectAllowedToolNames(
@@ -473,8 +539,12 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
       threadId,
       turnId,
       workspace,
+      ...(opts?.additionalWorkspaces?.length ? { additionalWorkspaces: opts.additionalWorkspaces } : {}),
       approvalPolicy: opts?.approvalPolicy ?? deps.defaultApprovalPolicy,
+      approvalReviewer:
+        opts?.approvalReviewer ?? deps.defaultApprovalReviewer ?? DEFAULT_APPROVAL_REVIEWER,
       sandboxMode: opts?.sandboxMode ?? deps.defaultSandboxMode ?? DEFAULT_SANDBOX_MODE,
+      ...(opts?.actingModelRoute ? { actingModelRoute: opts.actingModelRoute } : {}),
       abortSignal: opts?.signal ?? new AbortController().signal,
       ...deps.toolContextBoundary,
       // Expose plan state so `create_plan` is advertised (listTools) and executable
@@ -485,10 +555,12 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
       ...(opts?.guiDesignMode ? { guiDesignMode: true } : {}),
       ...(opts?.guiDesignArtifact ? { guiDesignArtifact: opts.guiDesignArtifact } : {}),
       ...(opts?.activeSkillIds ? { activeSkillIds: opts.activeSkillIds } : {}),
+      ...(opts?.clientSurface ? { clientSurface: opts.clientSurface } : {}),
+      ...(opts?.orchestration ? { orchestration: opts.orchestration } : {}),
       ...(allowedToolNames ? { allowedToolNames } : {}),
-      // Wire interactive input to kun's GUI panel (advertises `user_input`).
+      // Presence advertises `user_input`; the active client renders the gate.
       ...(opts?.awaitUserInput ? { awaitUserInput: opts.awaitUserInput } : {}),
-      // Execution supplies the real GUI approval callback; listing contexts stay
+      // Execution supplies the real client approval callback; listing contexts stay
       // deny-closed because no tool may execute through them.
       awaitApproval: opts?.awaitApproval ?? (async () => 'deny')
     }
@@ -542,12 +614,47 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
       const images = await resolveImages(threadId, thread.workspace, attachmentIds)
       if (!userText.trim() && images.length === 0) return null
 
-      const providerId = turn?.providerId?.trim() || thread.providerId?.trim()
-      const providerCfg = providerId ? deps.providerConfigs[providerId] : undefined
+      const requestedProviderId = turn?.providerId?.trim()
+      const requestedRouteProviderId = requestedProviderId || thread.providerId?.trim()
+      const explicitRouteProviderId =
+        requestedRouteProviderId && requestedRouteProviderId !== 'default'
+          ? requestedRouteProviderId
+          : undefined
+      const actingProviderId =
+        explicitRouteProviderId || (deps.defaultIsAgentSdk ? 'default' : undefined)
+      const requestedAccountId = turn.accountId?.trim() || (
+        !requestedProviderId || requestedProviderId === thread.providerId?.trim()
+          ? thread.accountId?.trim()
+          : undefined
+      )
+      const selectedModel = resolveSdkModel(turn?.model || thread.model, deps.defaultModel)
+      const actingModelRoute: ActingTurnModelRoute = turn.actingModelRoute ?? {
+        model: selectedModel ?? 'claude-default',
+        ...(actingProviderId ? { providerId: actingProviderId } : {}),
+        ...(requestedAccountId ? { accountId: requestedAccountId } : {})
+      }
+      if (!turn.actingModelRoute) {
+        await deps.turns.updateTurnMetadata(threadId, turnId, { actingModelRoute })
+      }
+      const providerId = actingModelRoute.providerId
+      const accountId = actingModelRoute.accountId
+      const providerCfg = explicitRouteProviderId
+        ? deps.providerConfigs[explicitRouteProviderId]
+        : undefined
+      const model = actingModelRoute.model
+      const approvalPolicy =
+        turn.approvalPolicy ?? thread.approvalPolicy ?? deps.defaultApprovalPolicy
+      const sandboxMode =
+        turn.sandboxMode ?? thread.sandboxMode ?? deps.defaultSandboxMode
+      const approvalReviewer =
+        turn.approvalReviewer ??
+        thread.approvalReviewer ??
+        deps.defaultApprovalReviewer ??
+        DEFAULT_APPROVAL_REVIEWER
       // An explicit Claude provider owns its credential boundary. Empty means
       // ambient Claude Code login; it must never inherit another provider's key.
       const token = normalizeClaudeOAuthToken(
-        providerId ? providerCfg?.apiKey : deps.defaultToken
+        explicitRouteProviderId ? providerCfg?.apiKey : deps.defaultToken
       )
       // Resolve skills before listing bridgeable tools. Some managed tools
       // (notably PPT Master) are deliberately advertised only for an active
@@ -559,6 +666,9 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
             workspace: thread.workspace,
             threadId,
             turnId,
+            ...(deps.toolContextBoundary?.allowedSkillIds
+              ? { allowedSkillIds: deps.toolContextBoundary.allowedSkillIds }
+              : {}),
             ...(deps.toolContextBoundary?.blockedSkillIds
               ? { blockedSkillIds: deps.toolContextBoundary.blockedSkillIds }
               : {})
@@ -573,47 +683,76 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
       // awaitUserInput presence is what advertises `user_input` (the signal here
       // is only for advertisement; the real per-call signal is set on execution).
       const dedicatedSvgTurn = turn.guiDesignArtifact?.kind === 'svg'
+      const clientSurface = resolveTurnClientSurface(turn)
+      const awaitUserInput = turn.disableUserInput === true
+        ? undefined
+        : makeAwaitUserInput(threadId, turnId, new AbortController().signal)
       const plan = dedicatedSvgTurn
         ? { planMode: false as const }
         : resolveTurnPlanContext(thread, turnId)
-      const ctx = toolContext(threadId, turnId, thread.workspace, {
-        ...plan,
-        ...(turn?.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
-        ...(turn?.guiDesignMode ? { guiDesignMode: true } : {}),
-        ...(turn?.guiDesignArtifact ? { guiDesignArtifact: turn.guiDesignArtifact } : {}),
-        ...(turn?.guiDesignArtifact?.kind === 'svg'
-          ? { allowedToolNames: SVG_ARTIFACT_ALLOWED_TOOL_NAMES }
-          : {}),
-        activeSkillIds,
-        sandboxMode: thread.sandboxMode ?? deps.defaultSandboxMode,
-        awaitUserInput: makeAwaitUserInput(threadId, turnId, new AbortController().signal)
-      })
+      const graphPolicy = delegatedGraphTurnPolicy(turn)
       // An Agent SDK query pins its in-process MCP schemas at startup and
       // cannot add tools after `load_skill` returns. Pre-bridge schemas gated
       // by skills visible in this workspace; executeKunTool still re-resolves
       // the real active ids for every call, so schema visibility is not
       // execution authority.
       const availableSkillIds = typeof deps.skillRuntime?.availableSkillIdsForWorkspace === 'function'
-        ? (await deps.skillRuntime.availableSkillIdsForWorkspace(thread.workspace))
-            .filter((id) => !deps.toolContextBoundary?.blockedSkillIds?.includes(id))
+        ? await deps.skillRuntime.availableSkillIdsForWorkspace(
+            thread.workspace,
+            deps.toolContextBoundary?.blockedSkillIds,
+            deps.toolContextBoundary?.allowedSkillIds
+          )
         : activeSkillIds
-      const bridgeListingContext = toolContext(threadId, turnId, thread.workspace, {
+      const listingOptions = {
+        additionalWorkspaces: thread.additionalWorkspaces,
         ...plan,
         ...(turn?.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
         ...(turn?.guiDesignMode ? { guiDesignMode: true } : {}),
         ...(turn?.guiDesignArtifact ? { guiDesignArtifact: turn.guiDesignArtifact } : {}),
-        ...(turn?.guiDesignArtifact?.kind === 'svg'
-          ? { allowedToolNames: SVG_ARTIFACT_ALLOWED_TOOL_NAMES }
-          : {}),
         activeSkillIds: [...new Set([...activeSkillIds, ...availableSkillIds])],
-        sandboxMode: thread.sandboxMode ?? deps.defaultSandboxMode,
-        awaitUserInput: makeAwaitUserInput(threadId, turnId, new AbortController().signal)
+        clientSurface,
+        sandboxMode,
+        approvalPolicy,
+        approvalReviewer,
+        actingModelRoute,
+        ...(turn.orchestration ? { orchestration: turn.orchestration } : {}),
+        ...(awaitUserInput ? { awaitUserInput } : {})
+      }
+      const discoveryContext = toolContext(threadId, turnId, thread.workspace, {
+        ...listingOptions,
+        ...(!graphPolicy && turn.guiDesignArtifact?.kind === 'svg'
+          ? { allowedToolNames: SVG_ARTIFACT_ALLOWED_TOOL_NAMES }
+          : {})
       })
       if (deps.toolHost) {
         // Activate turn-scoped extension contributions before taking the
         // canonical registry snapshot used by the SDK MCP bridge.
-        await deps.toolHost.listTools(bridgeListingContext)
+        await deps.toolHost.listTools(discoveryContext)
       }
+      const graphAllowedToolNames = graphPolicy
+        ? delegatedGraphAllowedToolNames(
+            deps.registry.listTools(discoveryContext),
+            graphPolicy.phase
+          )
+        : undefined
+      const bridgeListingContext = toolContext(threadId, turnId, thread.workspace, {
+        ...listingOptions,
+        ...(intersectDelegatedToolNames(
+          !graphPolicy && turn.guiDesignArtifact?.kind === 'svg'
+            ? SVG_ARTIFACT_ALLOWED_TOOL_NAMES
+            : undefined,
+          graphAllowedToolNames
+        )
+          ? {
+              allowedToolNames: intersectDelegatedToolNames(
+                !graphPolicy && turn.guiDesignArtifact?.kind === 'svg'
+                  ? SVG_ARTIFACT_ALLOWED_TOOL_NAMES
+                  : undefined,
+                graphAllowedToolNames
+              )
+            }
+          : {})
+      })
       const bridgeableTools: BridgeableTool[] = deps.registry.listTools(bridgeListingContext).map((spec) => ({
         name: spec.name,
         description: spec.description,
@@ -621,7 +760,10 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
         providerId: spec.providerId,
         providerKind: spec.providerKind
       }))
-      const bridgedTools = selectBridgeableTools(bridgeableTools)
+      const bridgedTools = selectBridgeableTools(
+        bridgeableTools,
+        graphPolicy ? { overlap: new Set() } : undefined
+      )
 
       // This is the portable rebase handoff. Compatible consecutive turns use
       // the official SDK resume id and do not send this transcript again.
@@ -660,6 +802,11 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
       }
 
       const contextInstructions = [
+        buildClientSurfaceInstruction(clientSurface),
+        ...(thread.additionalWorkspaces?.length
+          ? [`Additional workspace roots explicitly added by the user:\n${thread.additionalWorkspaces.map((path) => `- ${JSON.stringify(path)}`).join('\n')}`]
+          : []),
+        ...(graphPolicy ? [graphPolicy.instruction] : []),
         ...(planMode ? [PLAN_MODE_INSTRUCTION] : []),
         ...(turn?.guiDesignArtifact?.kind === 'svg'
           ? [SVG_ARTIFACT_MODE_INSTRUCTION]
@@ -675,9 +822,6 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
         ...(bridgedTools.length ? [CLAUDE_KUN_TOOL_INSTRUCTION] : [])
       ]
 
-      const model = resolveSdkModel(turn?.model || thread.model, deps.defaultModel)
-      const approvalPolicy = thread.approvalPolicy ?? deps.defaultApprovalPolicy
-      const sandboxMode = thread.sandboxMode ?? deps.defaultSandboxMode
       let preparation: DelegatedSessionPreparation | undefined
       let claudeConfigDir: string | undefined
       if (deps.sessionCoordinator) {
@@ -688,7 +832,7 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
             providerId: providerId || 'default',
             credentialIdentity: delegatedCredentialIdentity({
               providerId: providerId || 'default',
-              accountId: turn.accountId || thread.accountId,
+              accountId,
               credentialSourceId: providerCfg?.credentialSourceId,
               credentialSecret: token
             }),
@@ -699,9 +843,10 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
               threadPersona: thread.systemPrompt?.trim() || '',
               approvalPolicy,
               sandboxMode,
+              approvalReviewer,
               planMode,
               allowSdkBuiltins:
-                turn?.guiDesignArtifact?.kind === 'svg'
+                graphPolicy || turn?.guiDesignArtifact?.kind === 'svg'
                   ? false
                   : deps.allowSdkBuiltins ?? true,
               capabilities: agentSdkCapabilities(),
@@ -726,20 +871,30 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
 
       return {
         workspace: thread.workspace,
+        additionalWorkspaces: thread.additionalWorkspaces,
         userText: modelUserText,
         threadPersona: thread.systemPrompt?.trim() || undefined,
         approvalPolicy,
         sandboxMode,
+        approvalReviewer,
+        actingModelRoute,
         planMode,
         allowSdkBuiltins:
-          turn?.guiDesignArtifact?.kind === 'svg'
+          graphPolicy || turn?.guiDesignArtifact?.kind === 'svg'
             ? false
             : deps.allowSdkBuiltins ?? true,
+        ...(graphPolicy
+          ? {
+              bridgeKunBuiltinOverlaps: true,
+              graphPhase: graphPolicy.phase
+            }
+          : {}),
         ...(turn?.guiDesignArtifact?.kind === 'svg' ? { requireSvgCompletion: true } : {}),
         // Claude Code only accepts Anthropic models; coerce a thread's non-Claude
         // model (e.g. an old deepseek thread now routed to the subscription) to
         // the runtime default so the turn doesn't fail "model may not exist".
         model,
+        ...(turn?.reasoningEffort ? { reasoningEffort: turn.reasoningEffort } : {}),
         ...(preparation?.nativeSessionId
           ? { resumeSessionId: preparation.nativeSessionId }
           : {}),
@@ -770,25 +925,79 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
       const plan = turn.guiDesignArtifact?.kind === 'svg'
         ? { planMode: false as const }
         : resolveTurnPlanContext(thread, turnId)
-      const approvalPolicy = thread.approvalPolicy ?? deps.defaultApprovalPolicy
-      const sandboxMode = thread.sandboxMode ?? deps.defaultSandboxMode
+      const approvalPolicy =
+        turn.approvalPolicy ?? thread.approvalPolicy ?? deps.defaultApprovalPolicy
+      const sandboxMode =
+        turn.sandboxMode ?? thread.sandboxMode ?? deps.defaultSandboxMode
+      const approvalReviewer =
+        turn.approvalReviewer ??
+        thread.approvalReviewer ??
+        deps.defaultApprovalReviewer ??
+        DEFAULT_APPROVAL_REVIEWER
+      const actingModelRoute = turn.actingModelRoute
+      if (!actingModelRoute) {
+        return { output: 'Acting model route is unavailable; tool execution was denied', isError: true }
+      }
       const toolSignal = signal ?? new AbortController().signal
       const activeSkillIds = await resolveActiveSkillIds(thread, turn)
-      // Real per-call signal so an interactive user_input cancels on turn abort.
-      const ctx = toolContext(threadId, turnId, thread.workspace, {
+      const clientSurface = resolveTurnClientSurface(turn)
+      const graphPolicy = delegatedGraphTurnPolicy(turn)
+      const executionOptions = {
+        additionalWorkspaces: thread.additionalWorkspaces,
         ...(plan ?? {}),
         ...(turn?.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
         ...(turn?.guiDesignMode ? { guiDesignMode: true } : {}),
         ...(turn?.guiDesignArtifact ? { guiDesignArtifact: turn.guiDesignArtifact } : {}),
-        ...(turn?.guiDesignArtifact?.kind === 'svg'
-          ? { allowedToolNames: SVG_ARTIFACT_ALLOWED_TOOL_NAMES }
-          : {}),
         ...(activeSkillIds ? { activeSkillIds } : {}),
+        clientSurface,
         ...(sandboxMode ? { sandboxMode } : {}),
         approvalPolicy,
+        approvalReviewer,
+        actingModelRoute,
+        ...(turn.orchestration ? { orchestration: turn.orchestration } : {}),
         signal: toolSignal,
-        awaitApproval: makeAwaitApproval(approvalPolicy, sandboxMode, toolSignal),
-        awaitUserInput: makeAwaitUserInput(threadId, turnId, toolSignal)
+        awaitApproval: makeAwaitApproval(
+          approvalPolicy,
+          sandboxMode,
+          approvalReviewer,
+          actingModelRoute,
+          turn.prompt,
+          toolSignal
+        ),
+        ...(turn.disableUserInput === true
+          ? {}
+          : { awaitUserInput: makeAwaitUserInput(threadId, turnId, toolSignal) })
+      }
+      const discoveryContext = toolContext(threadId, turnId, thread.workspace, {
+        ...executionOptions,
+        ...(!graphPolicy && turn.guiDesignArtifact?.kind === 'svg'
+          ? { allowedToolNames: SVG_ARTIFACT_ALLOWED_TOOL_NAMES }
+          : {})
+      })
+      const graphAllowedToolNames = graphPolicy
+        ? delegatedGraphAllowedToolNames(
+            deps.registry.listTools(discoveryContext),
+            graphPolicy.phase
+          )
+        : undefined
+      // Real per-call signal so an interactive user_input cancels on turn abort.
+      const ctx = toolContext(threadId, turnId, thread.workspace, {
+        ...executionOptions,
+        ...(intersectDelegatedToolNames(
+          !graphPolicy && turn.guiDesignArtifact?.kind === 'svg'
+            ? SVG_ARTIFACT_ALLOWED_TOOL_NAMES
+            : undefined,
+          graphAllowedToolNames
+        )
+          ? {
+              allowedToolNames: intersectDelegatedToolNames(
+                !graphPolicy && turn.guiDesignArtifact?.kind === 'svg'
+                  ? SVG_ARTIFACT_ALLOWED_TOOL_NAMES
+                  : undefined,
+                graphAllowedToolNames
+              )
+            }
+          : {})
       })
       try {
         // The SDK's MCP handler must cross the same LocalToolHost boundary as
@@ -831,26 +1040,82 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
           }
         }
       }
-      const approvalPolicy = thread?.approvalPolicy ?? deps.defaultApprovalPolicy
+      const approvalPolicy =
+        turn?.approvalPolicy ?? thread?.approvalPolicy ?? deps.defaultApprovalPolicy
       if (approvalPolicy === 'never') {
         return { allow: false, message: 'tools are disabled for this turn (policy: never)' }
       }
-      if (approvalPolicy === 'auto') return { allow: true }
+      // `canUseTool` runs for every SDK-native tool. Preserve the same Kun
+      // boundary as LocalToolHost: bounded reads and internal todo state are
+      // auto-allowed under on-request/suggest after decideSdkBuiltinSandbox has
+      // validated their paths; writes, commands, and network calls still review.
+      if (
+        (approvalPolicy === 'on-request' || approvalPolicy === 'suggest') &&
+        SDK_ON_REQUEST_AUTO_ALLOWED_TOOLS.has(toolName)
+      ) {
+        return { allow: true }
+      }
+      const sandboxMode =
+        turn?.sandboxMode ?? thread?.sandboxMode ?? deps.defaultSandboxMode ?? DEFAULT_SANDBOX_MODE
+      const approvalReviewer =
+        turn?.approvalReviewer ??
+        thread?.approvalReviewer ??
+        deps.defaultApprovalReviewer ??
+        DEFAULT_APPROVAL_REVIEWER
+      const workspaceCommandApproval =
+        toolName === 'Bash' && sandboxMode === 'workspace-write'
+      if (approvalPolicy === 'auto' && !workspaceCommandApproval) return { allow: true }
+      if (!thread || !turn) {
+        return { allow: false, message: 'Acting turn is unavailable; approval failed closed.' }
+      }
+      const action = createApprovalActionEnvelope({
+          toolName,
+          providerId: turn.providerId ?? thread.providerId,
+          toolKind: toolName === 'Bash'
+            ? 'command_execution'
+            : ['Write', 'Edit', 'MultiEdit'].includes(toolName)
+              ? 'file_change'
+              : 'tool_call',
+          effects: {
+            network: toolName === 'WebSearch' || toolName === 'WebFetch',
+            externalWrite: ['Write', 'Edit', 'MultiEdit'].includes(toolName),
+            processExecution: toolName === 'Bash',
+            guiAutomation: false
+          },
+          arguments: input,
+          workspace: thread.workspace,
+          cwd: typeof input.cwd === 'string' ? input.cwd : thread.workspace,
+          reason: 'Agent SDK native tool crossed the Kun approval boundary.'
+      })
       const approval = createApprovalRequest({
         id: deps.ids.next('appr'),
         threadId,
         turnId,
         toolName,
-        summary: `Run ${toolName}(${JSON.stringify(input).slice(0, 4_000)})`
+        summary: safeApprovalActionSummary(action),
+        action
       })
+      const actingModelRoute = turn.actingModelRoute
+      if (!actingModelRoute) {
+        return { allow: false, message: 'Acting model route is unavailable; approval failed closed.' }
+      }
       const decision = await makeAwaitApproval(
         approvalPolicy,
-        thread?.sandboxMode ?? deps.defaultSandboxMode,
+        sandboxMode,
+        approvalReviewer,
+        actingModelRoute,
+        turn.prompt,
         signal ?? new AbortController().signal
       )(approval)
-      return decision === 'allow'
+      const resolvedDecision = typeof decision === 'string' ? decision : decision.decision
+      return resolvedDecision === 'allow'
         ? { allow: true }
-        : { allow: false, message: 'Tool call was denied by the approval policy or user.' }
+        : {
+            allow: false,
+            message: typeof decision === 'string'
+              ? 'Tool call was denied by the approval policy or user.'
+              : decision.reason ?? 'Tool call was denied by the approval reviewer.'
+          }
     },
 
     async recordEvent(draft): Promise<void> {
@@ -861,11 +1126,24 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
       await deps.turns.applyItem(threadId, item)
     },
 
-    async finishTurn(threadId, turnId, status, error): Promise<void> {
+    async finishTurn(threadId, turnId, status, error): Promise<TurnRunOutcome> {
       const key = skillTurnKey(threadId, turnId)
       try {
-        await deps.turns.finishTurn({ threadId, turnId, status, ...(error ? { error } : {}) })
-        if (status === 'completed' && deps.sessionCoordinator) {
+        let outcome: TurnRunOutcome = status
+        if (status === 'completed') {
+          const graphCompletion = await parkDelegatedGraphTurnAfterRecovery(
+            deps.turns,
+            { threadId, turnId }
+          )
+          if (graphCompletion === 'suspended') {
+            outcome = 'suspended'
+          } else {
+            await deps.turns.finishTurn({ threadId, turnId, status, ...(error ? { error } : {}) })
+          }
+        } else {
+          await deps.turns.finishTurn({ threadId, turnId, status, ...(error ? { error } : {}) })
+        }
+        if ((outcome === 'completed' || outcome === 'suspended') && deps.sessionCoordinator) {
           const preparation = sessionPreparationsByTurn.get(key)
           if (preparation) {
             try {
@@ -882,6 +1160,7 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
             }
           }
         }
+        return outcome
       } finally {
         activeSkillIdsByTurn.delete(key)
         skillPromptByTurn.delete(key)
@@ -891,6 +1170,12 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
           deps.skillRuntime.clearTurnActivation(threadId, turnId)
         }
       }
+    },
+
+    async checkGraphCompletion(threadId, turnId) {
+      return delegatedGraphCompletionCheck(
+        await deps.turns.suspendGraphLeadTurn({ threadId, turnId })
+      )
     },
 
     async saveSessionId(threadId, turnId, sessionId): Promise<void> {

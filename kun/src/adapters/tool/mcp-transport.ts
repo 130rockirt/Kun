@@ -5,6 +5,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import type { McpServerConfig } from '../../contracts/capabilities.js'
+import { KUN_VERSION } from '../../version.js'
 import { resolveMcpServerCwd } from './mcp-naming.js'
 import {
   FileMcpOAuthProvider,
@@ -23,6 +24,8 @@ import {
 type OAuthTransport = Transport & {
   finishAuth?: (authorizationCode: string) => Promise<void>
 }
+
+const MCP_HEADER_ENV_REFERENCE = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g
 
 type SdkClientFacade = Client & {
   listResources?: (params?: { cursor?: string }, options?: { signal?: AbortSignal; timeout?: number }) => Promise<unknown>
@@ -55,7 +58,7 @@ export async function createSdkMcpClient(
   server: McpServerConfig,
   options: SdkMcpClientOptions = {}
 ): Promise<McpClientLike> {
-  const client = new Client({ name: `kun-${serverId}`, version: '0.1.0' })
+  const client = new Client({ name: `kun-${serverId}`, version: KUN_VERSION })
   const sdk = client as SdkClientFacade
   // Observe transport-level failures explicitly (#639). The SDK routes a
   // dropped SSE stream / exhausted reconnect to `onerror`; with no handler it
@@ -210,18 +213,46 @@ export function createTransport(server: McpServerConfig, authProvider?: OAuthCli
         stderr: 'pipe'
       })
     }
-    case 'streamable-http':
+    case 'streamable-http': {
+      const headers = resolveMcpHeaders(server.headers)
       return new StreamableHTTPClientTransport(new URL(server.url ?? ''), {
         ...(authProvider ? { authProvider } : {}),
-        requestInit: { headers: server.headers }
+        requestInit: { headers }
       })
-    case 'sse':
+    }
+    case 'sse': {
+      const headers = resolveMcpHeaders(server.headers)
       return new SSEClientTransport(new URL(server.url ?? ''), {
         ...(authProvider ? { authProvider } : {}),
-        requestInit: { headers: server.headers },
-        eventSourceInit: { fetch: fetchWithHeaders(server.headers) }
+        requestInit: { headers },
+        eventSourceInit: { fetch: fetchWithHeaders(headers) }
       })
+    }
   }
+}
+
+/**
+ * Resolve ${ENV_VAR} references in remote MCP header values without mutating
+ * the persisted server configuration. Errors name only the header and missing
+ * variable so a partially resolved secret can never reach logs or diagnostics.
+ */
+export function resolveMcpHeaders(
+  headers: Readonly<Record<string, string>>,
+  env: NodeJS.ProcessEnv = process.env
+): Record<string, string> {
+  const resolved: Record<string, string> = {}
+  for (const [headerName, headerValue] of Object.entries(headers)) {
+    resolved[headerName] = headerValue.replace(MCP_HEADER_ENV_REFERENCE, (_reference, variableName: string) => {
+      const value = env[variableName]
+      if (value === undefined) {
+        throw new Error(
+          `MCP header "${headerName}" references missing environment variable "${variableName}"`
+        )
+      }
+      return value
+    })
+  }
+  return resolved
 }
 
 export function fetchWithHeaders(headers: Record<string, string>): typeof fetch {

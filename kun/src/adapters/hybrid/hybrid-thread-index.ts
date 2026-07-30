@@ -32,19 +32,36 @@ export class HybridThreadIndexRepository {
     catch (error) { this.warn('find row', error); return null }
   }
 
+  repairPaths(threadId: string): void {
+    try {
+      const paths = this.paths(threadId)
+      this.db.prepare(`
+        UPDATE threads
+        SET metadata_path = @metadataPath,
+            messages_path = @messagesPath,
+            events_path = @eventsPath
+        WHERE id = @id
+      `).run({ id: threadId, ...paths })
+    } catch (error) {
+      this.warn('repair row paths', error)
+    }
+  }
+
   upsert(record: ThreadIndexRecord): void {
     try {
       const row = rowFromIndexRecord(record, this.paths(record.thread.id))
       this.db.prepare(`
         INSERT INTO threads (
-          id, title, workspace, model, mode, status, approval_policy, sandbox_mode,
+          id, title, workspace, model, mode, status, approval_policy, sandbox_mode, approval_reviewer,
+          model_request_capture_enabled,
           cost_budget_usd, cost_budget_warning_sent, relation, parent_thread_id,
           forked_from_thread_id, forked_from_title, forked_at, forked_from_message_count,
           forked_from_turn_count, goal_json, todos_json, extension_metadata_json, created_at, updated_at, created_at_ms,
           updated_at_ms, preview, message_count, event_seq_high_water, metadata_path,
           messages_path, events_path, search_text
         ) VALUES (
-          @id, @title, @workspace, @model, @mode, @status, @approval_policy, @sandbox_mode,
+          @id, @title, @workspace, @model, @mode, @status, @approval_policy, @sandbox_mode, @approval_reviewer,
+          @model_request_capture_enabled,
           @cost_budget_usd, @cost_budget_warning_sent, @relation, @parent_thread_id,
           @forked_from_thread_id, @forked_from_title, @forked_at, @forked_from_message_count,
           @forked_from_turn_count, @goal_json, @todos_json, @extension_metadata_json, @created_at, @updated_at, @created_at_ms,
@@ -53,6 +70,8 @@ export class HybridThreadIndexRepository {
         ) ON CONFLICT(id) DO UPDATE SET
           title=excluded.title, workspace=excluded.workspace, model=excluded.model, mode=excluded.mode,
           status=excluded.status, approval_policy=excluded.approval_policy, sandbox_mode=excluded.sandbox_mode,
+          approval_reviewer=excluded.approval_reviewer,
+          model_request_capture_enabled=excluded.model_request_capture_enabled,
           cost_budget_usd=excluded.cost_budget_usd, cost_budget_warning_sent=excluded.cost_budget_warning_sent,
           relation=excluded.relation, parent_thread_id=excluded.parent_thread_id,
           forked_from_thread_id=excluded.forked_from_thread_id, forked_from_title=excluded.forked_from_title,

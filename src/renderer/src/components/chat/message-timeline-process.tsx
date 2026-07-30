@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next'
 import type { LucideIcon } from 'lucide-react'
 import {
   Brain,
+  Bot,
   BookOpen,
   ChevronDown,
   ChevronRight,
@@ -14,17 +15,19 @@ import {
   PencilLine,
   BellRing,
   Search,
+  Sparkles,
   Terminal,
   Wrench
 } from 'lucide-react'
 import type { ChatBlock, ToolBlock } from '../../agent/types'
+import { parseBackgroundSubagentCompletionNotice } from '@shared/background-subagent-notice'
 import { extractUnifiedDiffText } from '../../lib/diff-stats'
 import { useDeferredRender } from '../../hooks/use-deferred-render'
 import { openWorkspacePathInEditor } from '../../lib/open-workspace-path'
 import { previewWorkspaceFile } from '../../lib/workspace-file-preview'
 import { DiffView } from '../DiffView'
 import { AssistantMarkdown } from './AssistantMarkdown'
-import { MessageBubble } from './message-timeline-bubbles'
+import { GeneratedFilesPanel, MessageBubble } from './message-timeline-bubbles'
 import {
   blockHasPendingRuntimeWork,
   isBackgroundShellNoticeBlock,
@@ -39,7 +42,6 @@ import {
 } from './message-timeline-tools'
 import { SubagentGroup, type OpenChildThreadHandler } from './SubagentCallCard'
 import { InjectedMemoryMetaChip } from './injected-memory-meta-chip'
-import { AnimatedWorkLogo } from './AnimatedWorkLogo'
 
 export type ProcessSection = {
   id: string
@@ -57,6 +59,15 @@ export function isSubagentBlock(block: ChatBlock): boolean {
   if (meta?.child && typeof meta.child === 'object') return true
   const toolName = typeof meta?.toolName === 'string' ? meta.toolName.trim() : ''
   return toolName === 'delegate_task' || toolName === 'generate_subagent'
+}
+
+function processBlockHasGeneratedMedia(block: ChatBlock): block is ToolBlock {
+  if (block.kind !== 'tool' || block.status !== 'success') return false
+  return (
+    Array.isArray(block.meta?.attachments) && block.meta.attachments.length > 0
+  ) || (
+    Array.isArray(block.meta?.generatedFiles) && block.meta.generatedFiles.length > 0
+  )
 }
 
 function subagentParentTurnId(block: ChatBlock): string {
@@ -89,6 +100,14 @@ export function groupProcessSections(blocks: ChatBlock[]): ProcessSection[] {
       sections.push({ id: `subagent-${block.id}`, kind: 'subagent', blocks: [block] })
       continue
     }
+    if (processBlockHasGeneratedMedia(block)) {
+      sections.push({ id: `execution-${block.id}`, kind: 'execution', blocks: [block] })
+      continue
+    }
+    if (block.kind === 'compaction') {
+      sections.push({ id: `compaction-${block.id}`, kind: 'execution', blocks: [block] })
+      continue
+    }
     const kind =
       block.kind === 'reasoning'
         ? 'reasoning'
@@ -96,29 +115,35 @@ export function groupProcessSections(blocks: ChatBlock[]): ProcessSection[] {
           ? 'output'
           : 'execution'
     const last = sections[sections.length - 1]
+    const followsGeneratedMedia = last?.blocks.some(processBlockHasGeneratedMedia) === true
+    const followsCompaction = last?.blocks.some(
+      (candidate) => candidate.kind === 'compaction'
+    ) === true
 
-    // Reasoning and tool calls between two visible assistant updates are one
-    // activity phase. Keeping them together prevents long-running turns from
-    // becoming an alternating "thinking / tool / thinking / tool" waterfall.
-    // Exception: live thinking after a completed tool batch must stay separate,
-    // otherwise the section title becomes "Thinking..." and eats the tool summary.
-    const liveReasoningAfterTools =
-      block.kind === 'reasoning' &&
-      block.id === 'live-reasoning' &&
-      last?.kind === 'execution' &&
-      last.blocks.some((entry) => entry.kind !== 'reasoning')
+    // Keep a real assistant text update as a hard timeline boundary, but fold
+    // adjacent non-text work together. A long read/search/reason sequence does
+    // not need to expand into dozens of empty process rows while it runs.
+    // The expanded detail still preserves every original entry in order.
+    const silentProcessPhase = kind === 'reasoning' || kind === 'execution'
+    const previousIsSilentProcessPhase =
+      last?.kind === 'reasoning' || last?.kind === 'execution'
     if (
       last &&
-      !liveReasoningAfterTools &&
-      (last.kind === 'reasoning' || last.kind === 'execution') &&
-      (kind === 'reasoning' || kind === 'execution')
+      !followsGeneratedMedia &&
+      !followsCompaction &&
+      silentProcessPhase &&
+      previousIsSilentProcessPhase
     ) {
-      if (last.kind !== kind) last.kind = 'execution'
+      if (last.kind === 'reasoning' && kind === 'reasoning') {
+        last.blocks.push(block)
+        continue
+      }
+      last.kind = 'execution'
       last.blocks.push(block)
       continue
     }
 
-    if (last && last.kind === kind) {
+    if (last && !followsGeneratedMedia && !followsCompaction && last.kind === kind) {
       last.blocks.push(block)
       continue
     }
@@ -193,6 +218,10 @@ function processBlockErrorTone(block: ChatBlock): ProcessErrorTone {
   if (block.kind === 'tool' && block.status === 'error') return 'tool'
   if (block.kind === 'compaction' && block.status === 'error') return 'error'
   if (block.kind === 'approval' && block.status === 'error') return 'error'
+  if (
+    block.kind === 'approval_review' &&
+    (block.status === 'timed-out' || block.status === 'failed-closed')
+  ) return 'error'
   if (block.kind === 'user_input' && block.status === 'error') return 'error'
   if (block.kind === 'system' && block.severity === 'error') return 'error'
   return null
@@ -263,18 +292,14 @@ export function ProcessSectionRow({
   const hasDetails = sectionHasDetails(section, t)
   const active = processSectionHasActiveWork(section, processing)
   const errorTone = processSectionErrorTone(section.blocks)
-  const hasError = errorTone !== null
-  // Ordinary tool execution loading chrome lives on the turn-bottom row.
-  // Keep in-section animation only for non-execution phases (e.g. live
-  // reasoning fallback); approvals / user-input expand in place without it.
-  const showActiveAnimation =
-    active &&
-    section.kind !== 'execution' &&
-    !hasError &&
-    !sectionHasPendingApproval(section) &&
-    !sectionHasRequestUserInput(section)
+  // Tool failures stay quiet on the batch header: only runtime/system errors
+  // expand the group or tint the collapsed title. Inner rows keep their own tone.
+  const hasRuntimeError = errorTone === 'error'
+  // ConversationTurn owns the single live animation at the visual bottom.
+  // Process sections stay quiet so reasoning cannot move that indicator back
+  // into the historical timeline.
   const defaultExpanded =
-    (processing && hasError) ||
+    (processing && hasRuntimeError) ||
     sectionHasPendingApproval(section) ||
     (processing && section.kind === 'execution' && sectionHasRequestUserInput(section))
   const forceExpanded = sectionHasPendingApproval(section)
@@ -287,7 +312,7 @@ export function ProcessSectionRow({
   const SectionIcon = processSectionIcon(section)
   const reasoningText = section.kind === 'reasoning' ? getReasoningSectionText(section) : ''
   const canToggleSection = hasDetails && !forceExpanded
-  const showActiveError = active && hasError
+  const showActiveError = active && hasRuntimeError
   const shouldDeferDetails = section.kind !== 'subagent'
   const { ref: deferredDetailRef, shouldRender: shouldRenderDetail } = useDeferredRender<HTMLDivElement>({
     enabled: shouldDeferDetails && expanded,
@@ -345,7 +370,7 @@ export function ProcessSectionRow({
           onClick={() => setUserExpanded(!(userExpanded ?? defaultExpanded))}
           aria-expanded={expanded}
           className={`group flex w-fit max-w-full items-center gap-1.5 rounded-md py-0.5 text-left text-[14px] font-medium transition hover:opacity-85 ${
-            hasError ? processErrorTextClass(errorTone) : 'text-ds-muted'
+            hasRuntimeError ? processErrorTextClass(errorTone) : 'text-ds-muted'
           }`}
         >
           {showActiveError ? (
@@ -353,14 +378,10 @@ export function ProcessSectionRow({
               <span className={`h-2 w-2 rounded-full ${processErrorDotClass(errorTone)}`} />
             </span>
           ) : null}
-          {showActiveAnimation ? (
-            <span className="ds-work-logo-slot ds-work-logo-slot-sm mr-0.5">
-              <AnimatedWorkLogo active phase="trail" size="sm" />
-            </span>
-          ) : SectionIcon ? (
+          {SectionIcon ? (
             <ProcessGlyph Icon={SectionIcon} />
           ) : null}
-          <span className={active && !hasError ? 'ds-shiny-text' : ''}>{title}</span>
+          <span className={active && !hasRuntimeError ? 'ds-shiny-text' : ''}>{title}</span>
           {expanded ? (
             <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-45" strokeWidth={1.8} />
           ) : (
@@ -370,7 +391,7 @@ export function ProcessSectionRow({
       ) : (
         <div
           className={`flex w-fit max-w-full items-center gap-1.5 py-0.5 text-[14px] font-medium ${
-            hasError ? processErrorTextClass(errorTone) : 'text-ds-muted'
+            hasRuntimeError ? processErrorTextClass(errorTone) : 'text-ds-muted'
           }`}
         >
           {showActiveError ? (
@@ -378,14 +399,10 @@ export function ProcessSectionRow({
               <span className={`h-2 w-2 rounded-full ${processErrorDotClass(errorTone)}`} />
             </span>
           ) : null}
-          {showActiveAnimation ? (
-            <span className="ds-work-logo-slot ds-work-logo-slot-sm mr-0.5">
-              <AnimatedWorkLogo active phase="trail" size="sm" />
-            </span>
-          ) : SectionIcon ? (
+          {SectionIcon ? (
             <ProcessGlyph Icon={SectionIcon} />
           ) : null}
-          <span className={active && !hasError ? 'ds-shiny-text' : ''}>{title}</span>
+          <span className={active && !hasRuntimeError ? 'ds-shiny-text' : ''}>{title}</span>
         </div>
       )}
 
@@ -424,6 +441,7 @@ function processBlockIsAutoOpenPending(block: ChatBlock, processing: boolean): b
     processing &&
     ((block.kind === 'compaction' && block.status === 'running') ||
       (block.kind === 'approval' && block.status === 'pending') ||
+      (block.kind === 'approval_review' && block.status === 'in-progress') ||
       (block.kind === 'user_input' && block.status === 'pending'))
   )
 }
@@ -439,6 +457,46 @@ function processBlockIsActive(block: ChatBlock, processing: boolean): boolean {
 
 function processBlockHasError(block: ChatBlock): boolean {
   return processBlockErrorTone(block) !== null
+}
+
+function BackgroundSubagentRowSummary({
+  block
+}: {
+  block: Extract<ChatBlock, { kind: 'user' }>
+}): ReactElement {
+  const { t } = useTranslation('common')
+  const parsed = parseBackgroundSubagentCompletionNotice(block.text)
+  const failed = parsed?.status === 'failed'
+  const label =
+    parsed?.label ||
+    block.meta?.displayText?.trim() ||
+    t('backgroundSubagentNotice.title', { defaultValue: 'Background subagent completed' })
+
+  return (
+    <span
+      data-background-subagent-row="true"
+      className="flex min-w-0 flex-1 items-center gap-2.5"
+    >
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-[13.5px] font-semibold text-ds-ink">{label}</span>
+        <span className="block truncate text-[11.5px] text-ds-faint">
+          {t('backgroundSubagentNotice.taskKind', { defaultValue: 'Background task' })}
+        </span>
+      </span>
+      <span
+        className={`inline-flex shrink-0 items-center gap-1.5 text-[11.5px] font-medium ${
+          failed
+            ? 'text-orange-700 dark:text-orange-300'
+            : 'text-emerald-700 dark:text-emerald-300'
+        }`}
+      >
+        <span className={`h-1.5 w-1.5 rounded-full ${failed ? 'bg-orange-500' : 'bg-emerald-500'}`} />
+        {failed
+          ? t('backgroundSubagentNotice.failed', { defaultValue: 'Failed' })
+          : t('backgroundSubagentNotice.completed', { defaultValue: 'Completed' })}
+      </span>
+    </span>
+  )
 }
 
 function ProcessStackRows({
@@ -476,6 +534,7 @@ function ProcessStackRows({
         const rowActive = processBlockIsActive(block, processing)
         const canToggle = canExpand && !forceOpen
         const RowIcon = processBlockIcon(block)
+        const isBackgroundSubagent = isBackgroundSubagentNoticeBlock(block)
         const handleToggle = (): void => {
           if (!canToggle) return
           if (open) {
@@ -516,16 +575,24 @@ function ProcessStackRows({
               aria-expanded={canToggle ? open : undefined}
               onClick={handleToggle}
               onKeyDown={handleKeyDown}
-              className={`group flex w-full min-w-0 items-center gap-1.5 rounded-md px-1 py-0.5 text-left text-[13.5px] leading-6 transition ${
+              className={`group flex w-full min-w-0 items-center text-left text-[13.5px] leading-6 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/25 ${
+                isBackgroundSubagent
+                  ? 'gap-2.5 rounded-[12px] border border-ds-border bg-ds-card/55 px-3 py-2.5 shadow-[0_2px_10px_rgba(42,52,72,0.035)]'
+                  : 'gap-1.5 rounded-md px-1 py-0.5'
+              } ${
                 isError
                   ? processErrorTextClass(errorTone)
                   : 'text-ds-faint hover:text-ds-muted'
-              } ${canToggle ? 'cursor-pointer hover:bg-ds-hover/45' : 'cursor-default'}`}
+              } ${canToggle ? `cursor-pointer ${isBackgroundSubagent ? 'hover:border-ds-border-strong hover:bg-ds-card' : 'hover:bg-ds-hover/45'}` : 'cursor-default'}`}
             >
               {RowIcon ? <ProcessGlyph Icon={RowIcon} /> : null}
-              <span className={`min-w-0 flex-1 truncate ${rowActive && !isError ? 'ds-shiny-text' : ''}`}>
-                <ProcessSummaryText block={block} summary={summary} workspaceRoot={workspaceRoot} />
-              </span>
+              {isBackgroundSubagent && block.kind === 'user' ? (
+                <BackgroundSubagentRowSummary block={block} />
+              ) : (
+                <span className={`min-w-0 flex-1 truncate ${rowActive && !isError ? 'ds-shiny-text' : ''}`}>
+                  <ProcessSummaryText block={block} summary={summary} workspaceRoot={workspaceRoot} />
+                </span>
+              )}
               {canExpand ? (
                 <button
                   type="button"
@@ -605,14 +672,11 @@ function ProcessEntryRow({
 
   const { verb, rest } = splitVerb(summary)
   const rowActive = isAutoOpenPending || isStreamingAssistant
-  const showActiveAnimation =
-    rowActive &&
-    !isError &&
-    !isPendingApproval(block) &&
-    !isRequestUserInputTool(block)
   const wrapSummary = (block.kind === 'system' && !canExpand) || isAssistantProcessText
   const canToggle = canExpand && !forceOpen
   const RowIcon = processBlockIcon(block)
+  const isBackgroundSubagent = isBackgroundSubagentNoticeBlock(block)
+  const showInlineGeneratedMedia = processing && processBlockHasGeneratedMedia(block)
   const handleToggle = (): void => {
     if (!canToggle) return
     setUserOpen(!open)
@@ -636,39 +700,46 @@ function ProcessEntryRow({
         aria-expanded={canToggle ? open : undefined}
         onClick={handleToggle}
         onKeyDown={handleKeyDown}
-        className={`group flex w-full items-start gap-2 rounded-md px-2 py-1 text-left text-[13.5px] leading-[1.55] transition ${
+        className={`group flex w-full text-left text-[13.5px] leading-[1.55] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/25 ${
+          isBackgroundSubagent
+            ? 'items-center gap-2.5 rounded-[12px] border border-ds-border bg-ds-card/55 px-3 py-2.5 shadow-[0_2px_10px_rgba(42,52,72,0.035)]'
+            : 'items-start gap-2 rounded-md px-2 py-1'
+        } ${
           isError
             ? processErrorTextClass(errorTone)
             : 'text-ds-faint hover:text-ds-ink'
         } ${
           canToggle
-            ? 'cursor-pointer hover:bg-ds-hover/70'
+            ? `cursor-pointer ${isBackgroundSubagent ? 'hover:border-ds-border-strong hover:bg-ds-card' : 'hover:bg-ds-hover/70'}`
             : 'cursor-default'
         }`}
       >
-        {showActiveAnimation ? (
-          <span className="ds-work-logo-slot ds-work-logo-slot-sm mr-0.5 mt-1">
-            <AnimatedWorkLogo active phase="trail" size="sm" />
-          </span>
-        ) : RowIcon ? (
+        {RowIcon ? (
           <ProcessGlyph Icon={RowIcon} className="mt-1" />
         ) : null}
-        <span
-          className={`min-w-0 flex-1 ${wrapSummary ? 'whitespace-pre-wrap break-words' : 'truncate'} ${
-            rowActive && !isError ? 'ds-shiny-text' : ''
-          }`}
-        >
+        {isBackgroundSubagent && block.kind === 'user' ? (
+          <BackgroundSubagentRowSummary block={block} />
+        ) : (
           <span
-            className={`font-medium ${isError ? '' : rowActive ? '' : 'text-ds-muted'}`}
+            role={block.kind === 'compaction' && block.status === 'running' ? 'status' : undefined}
+            aria-live={block.kind === 'compaction' && block.status === 'running' ? 'polite' : undefined}
+            data-compaction-timeline-entry={block.kind === 'compaction' ? 'true' : undefined}
+            className={`min-w-0 flex-1 ${wrapSummary ? 'whitespace-pre-wrap break-words' : 'truncate'} ${
+              rowActive && !isError ? 'ds-shiny-text' : ''
+            }`}
           >
-            {verb}
-          </span>
-          {rest ? (
-            <span className="ml-1.5 font-mono text-[13px]">
-              <ProcessSummaryText block={block} summary={rest} workspaceRoot={workspaceRoot} />
+            <span
+              className={`font-medium ${isError ? '' : rowActive ? '' : 'text-ds-muted'}`}
+            >
+              {verb}
             </span>
-          ) : null}
-        </span>
+            {rest ? (
+              <span className="ml-1.5 font-mono text-[13px]">
+                <ProcessSummaryText block={block} summary={rest} workspaceRoot={workspaceRoot} />
+              </span>
+            ) : null}
+          </span>
+        )}
         {canExpand ? (
           <button
             type="button"
@@ -710,6 +781,11 @@ function ProcessEntryRow({
           </div>
         )
       ) : null}
+      {showInlineGeneratedMedia ? (
+        <div className="ml-2 mt-2">
+          <GeneratedFilesPanel blocks={[block]} placement="timeline" />
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -724,7 +800,7 @@ function ProcessGlyph({
   return <Icon className={`${className} h-3.5 w-3.5 shrink-0 opacity-75`} strokeWidth={1.9} />
 }
 
-function describeProcessSection(
+export function describeProcessSection(
   section: ProcessSection,
   t: (key: string, opts?: Record<string, unknown>) => string,
   opts: {
@@ -753,20 +829,38 @@ function describeProcessSection(
     return t('processTextLabel')
   }
 
-  // Keep execution titles stable while the turn is live. Active thinking /
-  // running chrome is rendered at the turn bottom, not by replacing this
-  // summary with a single in-flight tool or "Thinking...".
+  if (opts.processing && processSectionHasActiveWork(section, true)) {
+    const activeBlock = [...section.blocks].reverse().find(
+      (block) =>
+        block.id === 'live-reasoning' ||
+        block.id === 'live-assistant' ||
+        blockHasPendingRuntimeWork(block)
+    )
+    const phase = activeBlock
+      ? activeBlock.kind === 'reasoning'
+        ? t('thinkingNow')
+        : activeBlock.kind === 'tool'
+          ? t('workingToolAction', { action: summarizeToolBlock(activeBlock, t) })
+          : describeProcessBlock(activeBlock, t)
+      : t('processing')
+    const workSummary = summarizeProcessWork(section.blocks, t)
+    return workSummary ? `${phase} · ${workSummary}` : phase
+  }
+
   if (section.blocks.length === 1) {
     return describeProcessBlock(section.blocks[0], t)
   }
 
-  return summarizeExecutionSection(section.blocks, t)
+  return summarizeProcessWork(section.blocks, t) || t('processSteps', { count: section.blocks.length })
 }
 
-function summarizeExecutionSection(
+/** A compact, activity-based recap for a collapsed process phase. */
+export function summarizeProcessWork(
   blocks: ChatBlock[],
   t: (key: string, opts?: Record<string, unknown>) => string
 ): string {
+  let readCount = 0
+  let searchCount = 0
   let fileCount = 0
   let commandCount = 0
   let backgroundCommandCount = 0
@@ -774,7 +868,7 @@ function summarizeExecutionSection(
   let approvalCount = 0
 
   for (const block of blocks) {
-    if (block.kind === 'approval') {
+    if (block.kind === 'approval' || block.kind === 'approval_review') {
       approvalCount += 1
       continue
     }
@@ -787,12 +881,22 @@ function summarizeExecutionSection(
       } else {
         commandCount += 1
       }
+    } else if (isReadToolBlock(block)) {
+      readCount += 1
+    } else if (isSearchToolBlock(block)) {
+      searchCount += 1
     } else {
       toolCount += 1
     }
   }
 
   const parts: string[] = []
+  if (readCount > 0) {
+    parts.push(readCount === 1 ? t('groupReadFile') : t('groupReadFiles', { count: readCount }))
+  }
+  if (searchCount > 0) {
+    parts.push(searchCount === 1 ? t('groupSearchedOnce') : t('groupSearched', { count: searchCount }))
+  }
   if (fileCount > 0) {
     parts.push(
       fileCount === 1 ? t('groupEditedFile') : t('groupEditedFiles', { count: fileCount })
@@ -821,8 +925,23 @@ function summarizeExecutionSection(
     )
   }
 
-  if (parts.length > 0) return parts.join(' · ')
-  return t('processSteps', { count: blocks.length })
+  return parts.join(' · ')
+}
+
+function isReadToolBlock(block: ToolBlock): boolean {
+  const toolName = toolNameForBlock(block)
+  return toolName === 'read' || toolName === 'read_file'
+}
+
+function isSearchToolBlock(block: ToolBlock): boolean {
+  const toolName = toolNameForBlock(block)
+  return (
+    toolName === 'grep' ||
+    toolName === 'grep_files' ||
+    toolName === 'search' ||
+    toolName === 'search_files' ||
+    toolName === 'find'
+  )
 }
 
 function processSectionIcon(section: ProcessSection): LucideIcon | null {
@@ -842,9 +961,10 @@ function processBlockIcon(block: ChatBlock): LucideIcon | null {
   if (block.kind === 'assistant') return MessageSquareQuote
   if (block.kind === 'compaction') return Minimize2
   if (block.kind === 'approval') return Wrench
+  if (block.kind === 'approval_review') return Bot
   if (block.kind === 'user_input') return MessageSquareQuote
   if (isBackgroundShellNoticeBlock(block)) return BellRing
-  if (isBackgroundSubagentNoticeBlock(block)) return BellRing
+  if (isBackgroundSubagentNoticeBlock(block)) return Sparkles
   if (block.kind !== 'tool') return null
   return toolBlockIcon(block)
 }
@@ -992,6 +1112,7 @@ type ProcessDetail =
   | { kind: 'assistant'; text: string }
   | { kind: 'tool'; text: string; isPatch: boolean; isError: boolean; filePath?: string }
   | { kind: 'approval' }
+  | { kind: 'approval_review' }
   | { kind: 'user_input' }
   | { kind: 'background_shell' }
   | { kind: 'background_subagent' }
@@ -1233,6 +1354,9 @@ export function summarizeToolBlock(
   if (rawSummary) {
     const compact = toolName ? rawSummary.replace(/^([a-z0-9_-]+)\s*:\s*/i, '') : rawSummary
     const summary = summarizeProcessText(compact, 72)
+    if (summary && normalizeProcessText(summary) === normalizeProcessText(label)) {
+      return label
+    }
     return summary ? `${label} ${summary}` : label
   }
   return label
@@ -1279,6 +1403,7 @@ function getProcessDetail(block: ChatBlock, summaryText?: string): ProcessDetail
     return { kind: 'text', text: detailText }
   }
   if (block.kind === 'approval') return { kind: 'approval' }
+  if (block.kind === 'approval_review') return { kind: 'approval_review' }
   if (block.kind === 'user_input') return { kind: 'user_input' }
   if (isBackgroundShellNoticeBlock(block)) return { kind: 'background_shell' }
   if (isBackgroundSubagentNoticeBlock(block)) return { kind: 'background_subagent' }
@@ -1351,6 +1476,9 @@ function ProcessEntryDetail({
   if (detail.kind === 'approval' && block.kind === 'approval') {
     return <MessageBubble block={block} nested allowThreadActions={allowThreadActions} />
   }
+  if (detail.kind === 'approval_review' && block.kind === 'approval_review') {
+    return <MessageBubble block={block} nested allowThreadActions={false} />
+  }
   if (detail.kind === 'user_input' && block.kind === 'user_input') {
     return <MessageBubble block={block} nested allowThreadActions={allowThreadActions} />
   }
@@ -1401,6 +1529,10 @@ function describeProcessBlock(
   }
   if (block.kind === 'approval') {
     return block.summary || t('approvalTitle')
+  }
+  if (block.kind === 'approval_review') {
+    if (block.status === 'in-progress') return t('approvalReviewInProgress')
+    return block.summary || t('approvalReviewTitle')
   }
   if (block.kind === 'user_input') {
     return t('userInputTitle')

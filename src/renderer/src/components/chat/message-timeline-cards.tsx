@@ -1,7 +1,7 @@
 import type { ReactElement, RefObject } from 'react'
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { CheckCircle2, ChevronDown, ChevronRight, FileEdit, Hammer, ListTodo, MessageSquareQuote, SearchCode, TriangleAlert } from 'lucide-react'
+import { CheckCircle2, ChevronDown, ChevronRight, FileEdit, ListTodo, MessageSquareQuote, SearchCode, TriangleAlert } from 'lucide-react'
 import type { ReviewBlock, ToolBlock } from '../../agent/types'
 import { countDiffStats, sumDiffStats } from '../../lib/diff-stats'
 import { useDeferredRender } from '../../hooks/use-deferred-render'
@@ -12,6 +12,8 @@ import type {
 } from '../../write/quoted-selection'
 import { DiffView } from '../DiffView'
 import { formatDuration } from './message-timeline-tools'
+import type { PlanBuildOrchestration } from '../../plan/plan-build'
+import { PlanBuildActions } from '../plan/PlanBuildActions'
 
 /**
  * Inline "Review Plan" card rendered under a turn whose `create_plan`
@@ -22,20 +24,23 @@ export function ReviewPlanCard({
   title,
   relativePath,
   busy,
+  graphEnabled,
   onOpen,
   onBuild
 }: {
   title: string
   relativePath: string
   busy: boolean
+  graphEnabled: boolean
   onOpen?: () => void
-  onBuild?: () => void
+  onBuild?: (orchestration: PlanBuildOrchestration) => void
 }): ReactElement {
   const { t } = useTranslation('common')
   return (
     <div
+      data-review-plan-card
       title={relativePath}
-      className="flex min-h-[64px] w-full items-center gap-3 rounded-[18px] border border-ds-border-muted bg-white/[0.78] px-4 py-3 shadow-[0_12px_34px_rgba(20,47,95,0.07)] backdrop-blur-xl dark:border-white/[0.09] dark:bg-white/[0.045]"
+      className="flex min-h-[64px] w-full flex-wrap items-center gap-3 rounded-[18px] border border-ds-border-muted bg-white/[0.78] px-4 py-3 shadow-[0_12px_34px_rgba(20,47,95,0.07)] backdrop-blur-xl dark:border-white/[0.09] dark:bg-white/[0.045]"
     >
       <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-accent/20 bg-accent/10 text-accent">
         <ListTodo className="h-5 w-5" strokeWidth={1.9} />
@@ -55,15 +60,12 @@ export function ReviewPlanCard({
         </button>
       ) : null}
       {onBuild ? (
-        <button
-          type="button"
-          onClick={onBuild}
+        <PlanBuildActions
           disabled={busy}
-          className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full bg-accent px-4 text-[13px] font-semibold text-white shadow-[0_10px_24px_rgba(59,130,216,0.22)] transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <Hammer className="h-3.5 w-3.5" strokeWidth={1.9} />
-          {t('planBuild')}
-        </button>
+          graphEnabled={graphEnabled}
+          variant="card"
+          onBuild={onBuild}
+        />
       ) : null}
     </div>
   )
@@ -377,6 +379,7 @@ export function WorkMetaRow({
   stepCount,
   durationMs,
   reasoningDurationMs,
+  summary,
   expanded,
   onToggle,
   collapsible = true
@@ -385,29 +388,31 @@ export function WorkMetaRow({
   stepCount: number
   durationMs?: number
   reasoningDurationMs?: number
+  summary?: string
   expanded: boolean
   onToggle: () => void
   collapsible?: boolean
 }): ReactElement {
   const { t } = useTranslation('common')
 
-  const mainLabel = processing
-    ? typeof durationMs === 'number'
-      ? `${t('processing')} ${formatDuration(durationMs)}`
-      : t('processing')
-    : typeof durationMs === 'number'
-      ? `${t('processed')} ${formatDuration(durationMs)}`
+  const mainLabel = typeof durationMs === 'number'
+    ? `${t('processed')} ${formatDuration(durationMs)}`
+    : processing
+      ? t('processing')
       : t('processSteps', { count: stepCount })
 
   const showThoughtSuffix =
     !processing &&
     typeof reasoningDurationMs === 'number' &&
     reasoningDurationMs >= 1000
-  const showStepSuffix = !expanded && stepCount > 0
+  const workSummary = summary?.trim() ?? ''
+  const showSummary = !expanded && workSummary.length > 0
+  const showStepSuffix = !expanded && !showSummary && stepCount > 0
 
   const content = (
     <>
-      <span className={`tabular-nums ${processing ? 'ds-shiny-text' : ''}`}>{mainLabel}</span>
+      <span className="tabular-nums">{mainLabel}</span>
+      {showSummary ? <span className="text-ds-faint">· {workSummary}</span> : null}
       {showStepSuffix ? (
         <span className="text-ds-faint">· {t('processStepCount', { count: stepCount })}</span>
       ) : null}
@@ -431,7 +436,7 @@ export function WorkMetaRow({
 
   if (!collapsible) {
     return (
-      <div className="flex w-fit max-w-full items-center gap-1.5 rounded-md py-1 text-left text-[15px] font-medium text-ds-muted">
+      <div className="flex w-full max-w-full items-center gap-1.5 border-b border-ds-border-muted/70 py-2 text-left text-[15px] font-medium text-ds-muted">
         {content}
       </div>
     )
@@ -442,7 +447,7 @@ export function WorkMetaRow({
       type="button"
       onClick={onToggle}
       aria-expanded={expanded}
-      className="group flex w-fit max-w-full items-center gap-1.5 rounded-md py-1 text-left text-[15px] font-medium text-ds-muted transition hover:opacity-85"
+      className="group flex w-full max-w-full items-center gap-1.5 border-b border-ds-border-muted/70 py-2 text-left text-[15px] font-medium text-ds-muted transition hover:opacity-85"
     >
       {content}
     </button>

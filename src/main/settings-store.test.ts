@@ -3,7 +3,6 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  DEFAULT_APPROVAL_POLICY,
   DEFAULT_CHECKPOINT_CLEANUP_ENABLED,
   DEFAULT_CHECKPOINT_CLEANUP_INTERVAL_DAYS,
   DEFAULT_GIT_CHECKPOINT_CREATE_ENABLED,
@@ -41,7 +40,11 @@ describe('JsonSettingsStore', () => {
     const loaded = await store.load()
 
     expect(loaded.guiUpdate.channel).toBe(DEFAULT_GUI_UPDATE_CHANNEL)
-    expect(loaded.agents.kun.approvalPolicy).toBe(DEFAULT_APPROVAL_POLICY)
+    expect(loaded.agents.kun).toEqual(expect.objectContaining({
+      approvalPolicy: 'auto',
+      sandboxMode: 'danger-full-access',
+      approvalReviewer: 'user'
+    }))
     expect(loaded.checkpointCleanup.intervalDays).toBe(DEFAULT_CHECKPOINT_CLEANUP_INTERVAL_DAYS)
     // Checkpoint cleanup is enabled by default to keep stale checkpoints from accumulating.
     expect(loaded.checkpointCleanup.enabled).toBe(DEFAULT_CHECKPOINT_CLEANUP_ENABLED)
@@ -65,6 +68,29 @@ describe('JsonSettingsStore', () => {
       checkpointCleanup: { intervalDays: 99 as unknown as typeof patched.checkpointCleanup.intervalDays }
     })
     expect(clamped.checkpointCleanup.intervalDays).toBe(10)
+  })
+
+  it('patches one notification source without resetting sibling preferences', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'ds-gui-settings-'))
+    const store = new JsonSettingsStore(userDataDir)
+
+    const mainDisabled = await store.patch({
+      notifications: { mainAgentTurnComplete: false }
+    })
+    expect(mainDisabled.notifications).toEqual({
+      turnComplete: true,
+      mainAgentTurnComplete: false,
+      subagentTurnComplete: false
+    })
+
+    const subagentEnabled = await store.patch({
+      notifications: { subagentTurnComplete: true }
+    })
+    expect(subagentEnabled.notifications).toEqual({
+      turnComplete: true,
+      mainAgentTurnComplete: false,
+      subagentTurnComplete: true
+    })
   })
 
   it('creates the app-managed default workspaces and welcome file', async () => {
@@ -534,6 +560,22 @@ describe('JsonSettingsStore', () => {
     expect(replaced.version).toBe(1)
   })
 
+  it('never persists plaintext credentials when protected storage is unavailable', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'ds-gui-settings-'))
+    const store = new JsonSettingsStore(userDataDir, {
+      rejectPlaintextCredentials: true
+    })
+
+    const settingsWithSecret = await store.load()
+    settingsWithSecret.provider.apiKey = 'plaintext-secret'
+    settingsWithSecret.provider.providers[0].apiKey = 'plaintext-secret'
+    await expect(store.save(settingsWithSecret))
+      .rejects.toThrow(/plaintext credentials were not written/)
+
+    const settingsPath = join(userDataDir, 'kun-settings.json')
+    await expect(readFile(settingsPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
   it('ignores null entries in persisted Claw channels and schedule tasks', async () => {
     const userDataDir = await mkdtemp(join(tmpdir(), 'ds-gui-settings-'))
 
@@ -575,6 +617,47 @@ describe('JsonSettingsStore', () => {
     expect(rewritten).toContain('sk-migrated')
     // 旧文件保留,回滚老版本时仍可读。
     expect(await readFile(join(userDataDir, 'deepseek-gui-settings.json'), 'utf8')).toContain('sk-migrated')
+  })
+
+  it('persists the versioned stream idle timeout migration for existing users', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'ds-gui-settings-'))
+    const settingsPath = join(userDataDir, 'kun-settings.json')
+    await writeFile(
+      settingsPath,
+      JSON.stringify({
+        version: 1,
+        agents: {
+          kun: {
+            runtimeTuning: {
+              maxConcurrentTurns: 256,
+              maxWallTimeMs: 86_400_000,
+              streamIdleTimeoutMs: 45_000
+            }
+          }
+        }
+      }),
+      'utf8'
+    )
+
+    const loaded = await new JsonSettingsStore(userDataDir).load()
+    expect(loaded.agents.kun.runtimeTuning).toMatchObject({
+      defaultsVersion: 1,
+      streamIdleTimeoutMs: 450_000
+    })
+
+    const persisted = JSON.parse(await readFile(settingsPath, 'utf8')) as {
+      agents: { kun: { runtimeTuning: { defaultsVersion: number; streamIdleTimeoutMs: number } } }
+    }
+    expect(persisted.agents.kun.runtimeTuning).toMatchObject({
+      defaultsVersion: 1,
+      streamIdleTimeoutMs: 450_000
+    })
+
+    const reloaded = await new JsonSettingsStore(userDataDir).load()
+    expect(reloaded.agents.kun.runtimeTuning).toMatchObject({
+      defaultsVersion: 1,
+      streamIdleTimeoutMs: 450_000
+    })
   })
 
   it('throws for non-recoverable read errors', async () => {

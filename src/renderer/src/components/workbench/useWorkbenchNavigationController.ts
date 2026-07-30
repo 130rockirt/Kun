@@ -69,7 +69,10 @@ export type WorkbenchNavigationController = {
   pickWriteAssistantWorkspace: () => Promise<void>
   sidebarView: WorkbenchSidebarView
   startNewChat: () => void
-  startNewChatInWorkspace: (workspaceRoot: string) => void
+  startNewChatInWorkspace: (
+    workspaceRoot: string,
+    options?: { forceNew?: boolean }
+  ) => Promise<string | null>
   startNewConversation: () => void
   startNewWriteAssistantConversation: () => void
   toggleConnectPhone: () => void
@@ -168,12 +171,21 @@ export function useWorkbenchNavigationController({
     worktreeBranch
   ])
 
-  const startNewChatInWorkspace = useCallback((targetWorkspaceRoot: string): void => {
+  const startNewChatInWorkspace = useCallback(async (
+    targetWorkspaceRoot: string,
+    options?: { forceNew?: boolean }
+  ): Promise<string | null> => {
     if (activeSddDraft) dismissActiveSddDraft({ closeAssistant: true })
     setConnectPhoneSidebarOpen(false)
     setRoute('chat')
-    void createThread({ workspaceRoot: targetWorkspaceRoot, useWorktreePool, worktreeBranch })
+    const threadId = await createThread({
+      workspaceRoot: targetWorkspaceRoot,
+      forceNew: options?.forceNew,
+      useWorktreePool,
+      worktreeBranch
+    })
     if (useWorktreePool) setUseWorktreePool(false)
+    return threadId
   }, [
     activeSddDraft,
     createThread,

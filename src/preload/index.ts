@@ -60,6 +60,8 @@ const api = {
   },
   getSettings: () => ipcRenderer.invoke('settings:get'),
   resetUnreadableCredentials: () => ipcRenderer.invoke('credentials:reset-unreadable'),
+  cliInstallStatus: () => ipcRenderer.invoke('cli-install:status'),
+  cliInstallAction: (action) => ipcRenderer.invoke('cli-install:action', action),
   claudeSubscriptionStatus: () => ipcRenderer.invoke('claude-subscription:status'),
   claudeSubscriptionLogin: () => ipcRenderer.invoke('claude-subscription:login'),
   claudeSubscriptionProbe: (token) => ipcRenderer.invoke('claude-subscription:probe', token),
@@ -105,6 +107,7 @@ const api = {
   restartRuntime: () => ipcRenderer.invoke('runtime:restart'),
   fetchUpstreamModels: () => ipcRenderer.invoke('upstream:models'),
   probeModelProvider: (payload) => ipcRenderer.invoke('provider:probe', payload),
+  listProviderQuotas: () => ipcRenderer.invoke('provider:quota:list'),
   fetchModelsDevCatalog: (payload) => ipcRenderer.invoke('provider:models-dev-catalog', payload),
   optimizePrompt: (payload) => ipcRenderer.invoke('prompt:optimize', payload),
   getClawStatus: () => ipcRenderer.invoke('claw:status'),
@@ -436,6 +439,30 @@ const api = {
   getComputerUsePermissions: () => ipcRenderer.invoke('computer-use:permissions'),
   requestComputerUsePermission: (kind) =>
     ipcRenderer.invoke('computer-use:request-permission', kind),
+  getBrowserUseState: (threadId) =>
+    ipcRenderer.invoke('browser-use:state:get', { threadId }),
+  mountBrowserUse: (input) =>
+    ipcRenderer.invoke('browser-use:mount', input),
+  decideBrowserUseOrigin: (input) =>
+    ipcRenderer.invoke('browser-use:origin:decide', input),
+  decideBrowserUseAction: (input) =>
+    ipcRenderer.invoke('browser-use:action:decide', input),
+  setBrowserUseControl: (input) =>
+    ipcRenderer.invoke('browser-use:control', input),
+  navigateBrowserUse: (input) =>
+    ipcRenderer.invoke('browser-use:navigate', input),
+  stopBrowserUse: (threadId) =>
+    ipcRenderer.invoke('browser-use:stop', { threadId }),
+  clearBrowserUse: (threadId) =>
+    ipcRenderer.invoke('browser-use:clear', { threadId }),
+  onBrowserUseState: (handler) => {
+    const wrapped = (
+      _: Electron.IpcRendererEvent,
+      payload: Parameters<typeof handler>[0]
+    ) => handler(payload)
+    ipcRenderer.on('browser-use:state', wrapped)
+    return () => ipcRenderer.removeListener('browser-use:state', wrapped)
+  },
   showTurnCompleteNotification: (payload) => ipcRenderer.invoke('notification:turn-complete', payload),
   getAppVersion: () => ipcRenderer.invoke('app:version'),
   getGuiUpdateState: () => ipcRenderer.invoke('gui:update-state'),

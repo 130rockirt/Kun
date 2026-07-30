@@ -6,6 +6,10 @@ import type { InteractiveToolBridge } from './interactive-tool-bridge.js'
 export type ToolExecutionContextFactoryDeps = {
   memoryEnabled: boolean
   allowedProviderIds?: readonly string[]
+  allowedSkillIds?: readonly string[]
+  allowedReadPaths?: readonly string[]
+  allowedWritePaths?: readonly string[]
+  allowedArtifactIds?: readonly string[]
   blockedProviderIds?: readonly string[]
   blockedToolNames?: readonly string[]
   blockedSkillIds?: readonly string[]
@@ -26,6 +30,13 @@ export function createToolExecutionContext(
     threadId: input.threadId,
     turnId: input.turnId,
     workspace: input.workspace,
+    ...(input.workspaceCheckpointRequestId
+      ? { workspaceCheckpointRequestId: input.workspaceCheckpointRequestId }
+      : {}),
+    ...(input.orchestration ? { orchestration: input.orchestration } : {}),
+    ...(input.messageSource ? { messageSource: input.messageSource } : {}),
+    ...(input.additionalWorkspaces?.length ? { additionalWorkspaces: input.additionalWorkspaces } : {}),
+    clientSurface: input.clientSurface,
     threadMode: input.threadMode,
     ...(input.activePlanContext ? { guiPlan: input.activePlanContext } : {}),
     ...(input.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
@@ -34,7 +45,12 @@ export function createToolExecutionContext(
     ...(input.guiDesignArtifact ? { guiDesignArtifact: input.guiDesignArtifact } : {}),
     ...(input.imContext ? { imContext: true } : {}),
     model: input.modelCapabilities,
+    ...(input.sourceResultBudgetTokens !== undefined
+      ? { sourceResultBudgetTokens: input.sourceResultBudgetTokens }
+      : {}),
     ...(input.modelProviderId ? { modelProviderId: input.modelProviderId } : {}),
+    actingModelRoute: input.actingModelRoute,
+    ...(input.approvalIntent ? { approvalIntent: input.approvalIntent } : {}),
     ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
     activeSkillIds: input.activeSkillIds,
     memoryPolicy: { enabled: deps.memoryEnabled },
@@ -44,10 +60,15 @@ export function createToolExecutionContext(
       ? { extensionToolCatalogEpoch: input.extensionToolCatalogEpoch }
       : {}),
     ...(deps.allowedProviderIds ? { allowedProviderIds: deps.allowedProviderIds } : {}),
+    ...(deps.allowedSkillIds ? { allowedSkillIds: deps.allowedSkillIds } : {}),
+    ...(deps.allowedReadPaths ? { allowedReadPaths: deps.allowedReadPaths } : {}),
+    ...(deps.allowedWritePaths ? { allowedWritePaths: deps.allowedWritePaths } : {}),
+    ...(deps.allowedArtifactIds ? { allowedArtifactIds: deps.allowedArtifactIds } : {}),
     ...(deps.blockedProviderIds ? { blockedProviderIds: deps.blockedProviderIds } : {}),
     ...(deps.blockedToolNames ? { blockedToolNames: deps.blockedToolNames } : {}),
     ...(deps.blockedSkillIds ? { blockedSkillIds: deps.blockedSkillIds } : {}),
     approvalPolicy: input.approvalPolicy,
+    approvalReviewer: input.approvalReviewer,
     sandboxMode: input.sandboxMode,
     ...(deps.runtimeDataDir ? { runtimeDataDir: deps.runtimeDataDir } : {}),
     ...(deps.artifactStore ? { artifactStore: deps.artifactStore } : {}),
@@ -55,6 +76,9 @@ export function createToolExecutionContext(
     awaitApproval: (approval) => deps.interactiveToolBridge.awaitApproval({
       approval,
       approvalPolicy: input.approvalPolicy,
+      approvalReviewer: input.approvalReviewer,
+      actingModelRoute: input.actingModelRoute,
+      intent: input.approvalIntent,
       sandboxMode: input.sandboxMode,
       signal: input.signal
     }),

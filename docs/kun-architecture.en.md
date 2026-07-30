@@ -8,6 +8,11 @@ HTTP/SSE boundary.
 Historical runtimes, legacy painting/design starter entry points, runtime diagnostics panel,
 and agent switching are no longer shown as primary product surfaces.
 
+Graph orchestration, self-evolving project agents, recovery, and governance
+remain inside this same Kun boundary. See
+[`docs/graph-mode.en.md`](./graph-mode.en.md) for the complete architecture and
+operations guide.
+
 ## Target boundary
 
 ```text

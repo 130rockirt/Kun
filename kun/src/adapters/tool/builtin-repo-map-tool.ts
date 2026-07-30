@@ -150,6 +150,7 @@ export function createRepoMapLocalTool(): LocalTool {
     },
     policy: 'auto',
     toolKind: 'tool_call',
+    sideEffect: 'read-only',
     execute: async (args, context) => withToolBoundary(async () => {
       const rawPath = typeof args.path === 'string' && args.path.trim() ? args.path.trim() : '.'
       const query = typeof args.query === 'string' ? args.query.trim() : ''

@@ -116,6 +116,61 @@ describe('Attachment store and multimodal input', () => {
     expect((await stat(join(root, `${attachment.id}.json`))).mode & 0o777).toBe(0o600)
   })
 
+  it('keeps composer leases private, reference-counts duplicate uploads, and rejects foreign release ids', async () => {
+    const store = createStore()
+    const data = png(2, 4)
+    const first = await store.create({
+      name: 'first.png',
+      data,
+      leaseId: 'lease-client-a'
+    })
+    const second = await store.create({
+      name: 'second.png',
+      data,
+      leaseId: 'lease-client-b'
+    })
+
+    expect(second.id).toBe(first.id)
+    expect(JSON.stringify(first)).not.toContain('lease-client')
+    expect(JSON.stringify(await store.get(first.id))).not.toContain('lease-client')
+    expect(await store.releaseLease(first.id, 'lease-unknown-client', false)).toBe(false)
+    expect(await store.get(first.id)).not.toBeNull()
+    expect(await store.releaseLease(first.id, 'lease-client-a', false)).toBe(true)
+    expect(await store.get(first.id)).not.toBeNull()
+    expect(await store.releaseLease(first.id, 'lease-client-b', true)).toBe(true)
+    expect(await store.get(first.id)).not.toBeNull()
+  })
+
+  it('deletes released or expired lease-managed uploads only when history does not reference them', async () => {
+    const store = createStore()
+    const released = await store.create({
+      name: 'released.png',
+      data: png(3, 4),
+      leaseId: 'lease-released'
+    })
+    expect(await store.releaseLease(released.id, 'lease-released', false)).toBe(true)
+    expect(await store.get(released.id)).toBeNull()
+
+    const expired = await store.create({
+      name: 'expired.png',
+      data: png(4, 4),
+      leaseId: 'lease-expired'
+    })
+    const referenced = await store.create({
+      name: 'referenced.png',
+      data: png(5, 4),
+      leaseId: 'lease-referenced'
+    })
+    const pruned = await store.pruneExpiredLeases(
+      new Set([referenced.id]),
+      '2026-06-04T00:00:00.000Z'
+    )
+
+    expect(pruned).toEqual({ deleted: 1, released: 2 })
+    expect(await store.get(expired.id)).toBeNull()
+    expect(await store.get(referenced.id)).not.toBeNull()
+  })
+
   it('repairs missing content when a duplicate attachment is uploaded again', async () => {
     const store = createStore()
     const data = png(2, 3)
@@ -306,6 +361,45 @@ describe('Attachment store and multimodal input', () => {
       })
     )
     expect(await readJson(diagnostics)).toMatchObject({ enabled: true, count: 1 })
+  })
+
+  it('releases an unreferenced upload lease without exposing the lease in HTTP metadata', async () => {
+    const h = buildHarness()
+    h.runtime.attachmentStore = createStore()
+    const upload = await dispatchRequest(
+      h.router,
+      new Request('http://localhost/v1/attachments', {
+        method: 'POST',
+        headers: { authorization: 'Bearer tok-1', 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name: 'pending.png',
+          dataBase64: png(6, 4).toString('base64'),
+          leaseId: 'lease-http-client'
+        })
+      })
+    )
+    const uploadedText = await upload.text()
+    expect(uploadedText).not.toContain('lease-http-client')
+    const uploaded = JSON.parse(uploadedText) as { attachment: { id: string } }
+
+    const released = await dispatchRequest(
+      h.router,
+      new Request(`http://localhost/v1/attachments/${uploaded.attachment.id}`, {
+        method: 'DELETE',
+        headers: { authorization: 'Bearer tok-1', 'content-type': 'application/json' },
+        body: JSON.stringify({ leaseId: 'lease-http-client' })
+      })
+    )
+    expect(released.status).toBe(200)
+    expect(await readJson(released)).toEqual({ released: true })
+
+    const missing = await dispatchRequest(
+      h.router,
+      new Request(`http://localhost/v1/attachments/${uploaded.attachment.id}`, {
+        headers: { authorization: 'Bearer tok-1' }
+      })
+    )
+    expect(missing.status).toBe(404)
   })
 
   it('rejects malformed base64 attachment uploads', async () => {

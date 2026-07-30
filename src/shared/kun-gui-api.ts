@@ -6,6 +6,7 @@ import type {
   ClawRuntimeStatus,
   ModelEndpointFormat,
   ModelProviderModelProfileV1,
+  ModelReasoningEffort,
   ScheduleRunResult,
   ScheduleRuntimeStatus,
   ScheduleTaskFromTextResult,
@@ -33,6 +34,13 @@ import type {
   GuiUpdateInstallResult,
   GuiUpdateState
 } from './gui-update'
+import type {
+  BrowserUseControlInput,
+  BrowserUseDecisionInput,
+  BrowserUseMountInput,
+  BrowserUseNavigationInput,
+  BrowserUseViewState
+} from './browser-use'
 import type {
   ClipboardImageReadResult,
   LocalPdfTextReadResult,
@@ -166,6 +174,8 @@ import type {
   RuntimeImageAttachmentUploadRequest,
   RuntimeImageAttachmentUploadResult
 } from './runtime-image-attachment'
+import type { CliInstallAction, CliInstallResult, CliInstallStatus } from './cli-install'
+import type { ProviderQuotaListResult } from './provider-quota'
 
 export type KunRuntimeStatusPayload = {
   state: 'starting' | 'running' | 'restarting' | 'crashed' | 'failed' | 'stopped'
@@ -285,8 +295,11 @@ export type KunProjectConfigFileResult = {
   skillRootCount: number
   disabledSkillCount: number
 }
+export type TurnCompleteNotificationSource = 'main-agent' | 'subagent'
+
 export type TurnCompleteNotificationPayload = {
   threadId?: string
+  source: TurnCompleteNotificationSource
   title: string
   body: string
 }
@@ -316,6 +329,8 @@ export type ModelProviderModelSelection = {
 }
 export type ModelProviderModelGroup = {
   providerId: string
+  /** Stable built-in preset identity; survives multi-account ids such as codex-2. */
+  presetSource?: string
   label: string
   modelIds: string[]
   modelProfiles?: Record<string, ModelProviderModelProfileV1>
@@ -532,6 +547,16 @@ export type SdkDownloadState = {
   message?: string
 }
 
+export type AntigravityReasoningEffort = Extract<ModelReasoningEffort, 'low' | 'medium' | 'high'>
+export type AntigravitySubscriptionModel = {
+  id: string
+  supportedEfforts: AntigravityReasoningEffort[]
+  defaultEffort: AntigravityReasoningEffort
+}
+export type AntigravitySubscriptionModelCatalog = {
+  models: AntigravitySubscriptionModel[]
+}
+
 export const UNREADABLE_CREDENTIAL_KEY_ERROR_CODE = 'credential_key_unreadable'
 
 export type CredentialRecoveryResetResult =
@@ -546,7 +571,7 @@ export type KunGuiApi = ExtensionIpcApi & {
     pickImportPackage: (defaultPath?: string) => Promise<DataMigrationPathPickResult>
     pickDestinationDirectory: (defaultPath?: string) => Promise<DataMigrationPathPickResult>
     estimateExport: (input: Pick<DataMigrationExportOptions,
-      'operationId' | 'selectedWorkspaceIds' | 'preset' | 'sensitiveContentAcknowledged'
+      'operationId' | 'selectedWorkspaceIds' | 'categories' | 'preset' | 'sensitiveContentAcknowledged'
     >) => Promise<DataMigrationEstimate>
     inspectPackage: (input: { packagePath: string; passphrase?: string }) => Promise<DataMigrationInspectionSummary>
     planImport: (input: {
@@ -571,6 +596,8 @@ export type KunGuiApi = ExtensionIpcApi & {
   }
   getSettings: () => Promise<AppSettingsV1>
   resetUnreadableCredentials: () => Promise<CredentialRecoveryResetResult>
+  cliInstallStatus: () => Promise<CliInstallStatus>
+  cliInstallAction: (action: CliInstallAction) => Promise<CliInstallResult>
   /** Detect an existing local Claude Code login (subscription auth). */
   claudeSubscriptionStatus: () => Promise<ClaudeSubscriptionStatus>
   /** Run the official ambient Claude subscription login flow. */
@@ -599,8 +626,8 @@ export type KunGuiApi = ExtensionIpcApi & {
   geminiSubscriptionCliInstall: () => Promise<SdkDownloadState>
   /** Subscribe to Antigravity CLI download progress. */
   onGeminiSubscriptionCliProgress: (handler: (state: SdkDownloadState) => void) => () => void
-  /** Gemini models exposed by the user's current `agy` subscription login. */
-  geminiSubscriptionModels: () => Promise<string[]>
+  /** Models and reasoning efforts exposed by the user's current `agy` subscription login. */
+  geminiSubscriptionModels: () => Promise<AntigravitySubscriptionModelCatalog>
   /** Detect the official Gemini CLI binary and its local Google OAuth login. */
   geminiCliSubscriptionStatus: () => Promise<{
     installed: boolean
@@ -634,6 +661,7 @@ export type KunGuiApi = ExtensionIpcApi & {
   restartRuntime: () => Promise<void>
   fetchUpstreamModels: () => Promise<UpstreamModelsResult>
   probeModelProvider: (payload: ModelProviderProbeRequest) => Promise<ModelProviderProbeResult>
+  listProviderQuotas: () => Promise<ProviderQuotaListResult>
   fetchModelsDevCatalog: (payload: ModelsDevCatalogRequest) => Promise<ModelsDevCatalogResult>
   optimizePrompt: (payload: PromptOptimizationRequest) => Promise<PromptOptimizationResult>
   getClawStatus: () => Promise<ClawRuntimeStatus>
@@ -714,6 +742,7 @@ export type KunGuiApi = ExtensionIpcApi & {
   createGitCheckpoint: (params: {
     workspaceRoot: string
     threadId: string
+    checkpointId?: string
   }) => Promise<GitCheckpointCreateResult>
   restoreGitCheckpoint: (params: {
     checkpointId: string
@@ -889,6 +918,15 @@ export type KunGuiApi = ExtensionIpcApi & {
   requestComputerUsePermission: (
     kind: ComputerUsePermissionKind
   ) => Promise<ComputerUsePermissions>
+  getBrowserUseState: (threadId: string) => Promise<BrowserUseViewState>
+  mountBrowserUse: (input: BrowserUseMountInput) => Promise<BrowserUseViewState>
+  decideBrowserUseOrigin: (input: BrowserUseDecisionInput) => Promise<BrowserUseViewState>
+  decideBrowserUseAction: (input: BrowserUseDecisionInput) => Promise<BrowserUseViewState>
+  setBrowserUseControl: (input: BrowserUseControlInput) => Promise<BrowserUseViewState>
+  navigateBrowserUse: (input: BrowserUseNavigationInput) => Promise<BrowserUseViewState>
+  stopBrowserUse: (threadId: string) => Promise<BrowserUseViewState>
+  clearBrowserUse: (threadId: string) => Promise<BrowserUseViewState>
+  onBrowserUseState: (handler: (state: BrowserUseViewState) => void) => () => void
   showTurnCompleteNotification: (
     payload: TurnCompleteNotificationPayload
   ) => Promise<SystemNotificationResult>

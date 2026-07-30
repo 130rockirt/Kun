@@ -2,6 +2,9 @@
   "name": "kun",
   "version": "0.1.0",
   "description": "Kun local HTTP/SSE agent runtime",
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "license": "PolyForm-Noncommercial-1.0.0",
   "type": "module",
   "private": true,
@@ -35,6 +38,10 @@
       "types": "./dist/server/index.d.ts",
       "import": "./dist/server/index.js"
     },
+    "./tui": {
+      "types": "./dist/tui/index.d.ts",
+      "import": "./dist/tui/index.js"
+    },
     "./cache": {
       "types": "./dist/cache/index.d.ts",
       "import": "./dist/cache/index.js"
@@ -56,9 +63,9 @@
     "kun": "./dist/cli/serve-entry.js"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "node ./scripts/clean-build-output.mjs && tsc -p tsconfig.build.json && node ./scripts/write-runtime-build-manifest.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "vitest run",
+    "test": "node --test ./scripts/runtime-build-manifest.test.mjs && node ./scripts/run-tests.mjs",
     "test:watch": "vitest",
     "transcript:diff": "node ./scripts/transcript-diff.mjs",
     "benchmark:replay": "npm run build && node ./dist/cli/replay-entry.js",
@@ -69,15 +76,19 @@
     "@anthropic-ai/claude-agent-sdk": "^0.3.220",
     "@computer-use/nut-js": "^4.2.0",
     "@cursor/sdk": "1.0.24",
+    "@earendil-works/pi-tui": "0.81.1",
     "@emnapi/core": "^1.10.0",
     "@emnapi/runtime": "^1.10.0",
+    "@google/gemini-cli": "0.53.0",
     "@kun/extension-api": "file:../packages/extension-api",
+    "@kun/provider-catalog": "file:../packages/provider-catalog",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@xmldom/xmldom": "^0.9.10",
     "ajv": "^8.20.0",
     "better-sqlite3": "^12.10.0",
     "create-kun-extension": "file:../packages/create-kun-extension",
     "diff": "^8.0.4",
+    "highlight.js": "^11.11.1",
     "ipaddr.js": "^2.4.0",
     "jimp": "^1.6.0",
     "proxy-agent": "^8.0.2",

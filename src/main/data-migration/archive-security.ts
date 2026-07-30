@@ -126,8 +126,12 @@ export function validateKunpackArchiveDirectory(
   let expandedBytes = 0
   for (const entry of directory) {
     if (entry.directory) throw new Error(`Kunpack directory entries are not allowed: ${entry.path}`)
-    const path = validateKunpackEntryPath(entry.path)
-    const identity = destinationIdentityKey(path)
+    const path = validateKunpackArchiveEntryPath(entry.path)
+    // Case folding, Unicode normalization, reserved names, and target path
+    // lengths are destination properties. Reject only exact archive aliases
+    // here so a valid Linux source can still be planned for rename/skip on
+    // Windows or a case-insensitive macOS volume.
+    const identity = path
     const collision = identityKeys.get(identity)
     if (collision) throw new Error(`Kunpack contains an ambiguous path collision: ${collision} / ${path}`)
     identityKeys.set(identity, path)
@@ -147,9 +151,9 @@ export function validateKunpackArchiveDirectory(
 }
 
 export function validateKunpackEntryPath(value: string): PackageRelativePath {
-  const path = PackageRelativePathSchema.parse(value)
+  const path = validateKunpackArchiveEntryPath(value)
   for (const segment of path.split('/')) {
-    if (segment.includes(':') || [...segment].some((character) => character.charCodeAt(0) <= 0x1f)) {
+    if (segment.includes(':')) {
       throw new Error(`Kunpack entry contains an illegal or ADS path segment: ${value}`)
     }
     if (/[. ]$/.test(segment)) throw new Error(`Kunpack entry contains a trailing dot or space: ${value}`)
@@ -158,6 +162,16 @@ export function validateKunpackEntryPath(value: string): PackageRelativePath {
       throw new Error(`Kunpack entry contains a reserved device name: ${value}`)
     }
     if (Buffer.byteLength(segment, 'utf8') > 255) throw new Error(`Kunpack path component is too long: ${value}`)
+  }
+  return path
+}
+
+export function validateKunpackArchiveEntryPath(value: string): PackageRelativePath {
+  const path = PackageRelativePathSchema.parse(value)
+  for (const segment of path.split('/')) {
+    if ([...segment].some((character) => character.charCodeAt(0) <= 0x1f)) {
+      throw new Error(`Kunpack entry contains an illegal control character: ${value}`)
+    }
   }
   if (Buffer.byteLength(path, 'utf8') > 32_767) throw new Error(`Kunpack path is too long: ${value}`)
   return path
@@ -202,8 +216,4 @@ export async function assertKunpackInspectionDiskBudget(input: {
   if (input.expandedBytes + safetyMargin > freeBytes) {
     throw new Error(`Kunpack import requires ${input.expandedBytes + safetyMargin} free bytes but only ${freeBytes} are available`)
   }
-}
-
-function destinationIdentityKey(path: string): string {
-  return path.normalize('NFC').toLocaleLowerCase('en-US')
 }

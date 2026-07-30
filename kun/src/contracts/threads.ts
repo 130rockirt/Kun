@@ -2,7 +2,9 @@ import { z } from 'zod'
 import { TurnSchema } from './turns.js'
 import {
   ApprovalPolicySchema,
+  ApprovalReviewerSchema,
   DEFAULT_APPROVAL_POLICY,
+  DEFAULT_APPROVAL_REVIEWER,
   DEFAULT_SANDBOX_MODE,
   SandboxModeSchema
 } from './policy.js'
@@ -182,6 +184,7 @@ export const ThreadSchema = z.object({
    */
   summary: z.string().optional(),
   workspace: z.string(),
+  additionalWorkspaces: z.array(z.string().min(1)).max(32).optional(),
   model: z.string(),
   /**
    * Optional provider id. When set, every turn on this thread routes its
@@ -217,6 +220,9 @@ export const ThreadSchema = z.object({
   status: ThreadStatus,
   approvalPolicy: ApprovalPolicySchema.default(DEFAULT_APPROVAL_POLICY),
   sandboxMode: SandboxModeSchema.default(DEFAULT_SANDBOX_MODE),
+  approvalReviewer: ApprovalReviewerSchema.default(DEFAULT_APPROVAL_REVIEWER),
+  /** Whether future model requests for this thread are retained for Agent Perspective. */
+  modelRequestCaptureEnabled: z.boolean().optional(),
   pinned: z.boolean().optional(),
   costBudgetUsd: z.number().positive().optional(),
   costBudgetWarningSent: z.boolean().optional(),
@@ -241,6 +247,7 @@ export const ThreadSummarySchema = ThreadSchema.pick({
   titleAuto: true,
   summary: true,
   workspace: true,
+  additionalWorkspaces: true,
   model: true,
   providerId: true,
   ownerExtensionId: true,
@@ -256,6 +263,8 @@ export const ThreadSummarySchema = ThreadSchema.pick({
   status: true,
   approvalPolicy: true,
   sandboxMode: true,
+  approvalReviewer: true,
+  modelRequestCaptureEnabled: true,
   pinned: true,
   costBudgetUsd: true,
   costBudgetWarningSent: true,
@@ -278,6 +287,7 @@ export const CreateThreadRequest = z.object({
   /** Marks the provided title as an auto/provisional title (see ThreadSchema.titleAuto). */
   titleAuto: z.boolean().optional(),
   workspace: z.string().min(1),
+  additionalWorkspaces: z.array(z.string().min(1)).max(32).optional(),
   model: z.string().min(1),
   /**
    * Optional provider id. The runtime keeps using its default provider
@@ -295,6 +305,8 @@ export const CreateThreadRequest = z.object({
   mode: ThreadMode.default('agent'),
   approvalPolicy: ApprovalPolicySchema.optional(),
   sandboxMode: SandboxModeSchema.optional(),
+  approvalReviewer: ApprovalReviewerSchema.optional(),
+  modelRequestCaptureEnabled: z.boolean().optional(),
   costBudgetUsd: z.number().positive().optional()
 })
 export type CreateThreadRequest = z.infer<typeof CreateThreadRequest>
@@ -310,7 +322,17 @@ export const ForkThreadRequest = z
   .object({
     relation: ThreadRelation.default('fork'),
     title: z.string().optional(),
-    turnId: z.string().trim().min(1).optional()
+    turnId: z.string().trim().min(1).optional(),
+    /** Exclude turnId itself, allowing a faithful undo branch before turn one. */
+    beforeTurn: z.boolean().optional(),
+    /**
+     * Compatibility echo only. A fork cannot replace the source reviewer;
+     * ThreadService rejects any value that differs from the captured source.
+     */
+    approvalReviewer: ApprovalReviewerSchema.optional()
+  })
+  .refine((value) => !value.beforeTurn || value.turnId !== undefined, {
+    message: 'beforeTurn requires turnId'
   })
   .optional()
 export type ForkThreadRequest = z.infer<typeof ForkThreadRequest>
@@ -377,9 +399,13 @@ export const UpdateThreadRequest = z
     /** Marks the new title as auto/provisional (true) or user-set/locked (false). */
     titleAuto: z.boolean().optional(),
     workspace: z.string().min(1).optional(),
+    additionalWorkspaces: z.array(z.string().min(1)).max(32).optional(),
+    mode: ThreadMode.optional(),
     status: ThreadUpdateStatus.optional(),
     approvalPolicy: ApprovalPolicySchema.optional(),
     sandboxMode: SandboxModeSchema.optional(),
+    approvalReviewer: ApprovalReviewerSchema.optional(),
+    modelRequestCaptureEnabled: z.boolean().optional(),
     pinned: z.boolean().optional(),
     costBudgetUsd: z.number().positive().nullable().optional(),
     costBudgetWarningSent: z.boolean().optional(),
@@ -390,9 +416,13 @@ export const UpdateThreadRequest = z
       value.title !== undefined ||
       value.titleAuto !== undefined ||
       value.workspace !== undefined ||
+      value.additionalWorkspaces !== undefined ||
+      value.mode !== undefined ||
       value.status !== undefined ||
       value.approvalPolicy !== undefined ||
       value.sandboxMode !== undefined ||
+      value.approvalReviewer !== undefined ||
+      value.modelRequestCaptureEnabled !== undefined ||
       value.pinned !== undefined ||
       value.costBudgetUsd !== undefined ||
       value.costBudgetWarningSent !== undefined ||

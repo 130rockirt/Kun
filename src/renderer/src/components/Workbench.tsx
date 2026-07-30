@@ -27,13 +27,17 @@ import { useWorkbenchUiRuntime } from './workbench/useWorkbenchUiRuntime'
 import { useWorkbenchAttachmentRuntime } from './workbench/useWorkbenchAttachmentRuntime'
 import { useWorkbenchDesignAgentRuntime } from './workbench/useWorkbenchDesignAgentRuntime'
 import { WorkbenchImageAnnotationHost } from './workbench/WorkbenchImageAnnotationHost'
+import { AgentBrowserFloatingPreview } from './AgentBrowserFloatingPreview'
 import { isWriteThreadId } from '../write/write-thread-registry'
 import { useSddDraftStore } from '../sdd/sdd-draft-store'
+import { sddDraftRefForThreadId } from '../sdd/sdd-chat-transcript'
+import { resolveLinkedSddDraft } from '../sdd/sdd-linked-draft'
 import {
   releaseSddAssistantThread,
 } from '../sdd/sdd-thread-registry'
 import { useWorkbenchLayout } from './workbench-layout'
 import { useWorkbenchPlanController } from './workbench-plan-controller'
+import { useGuiPlanStore } from '../plan/plan-store'
 import { normalizeWorkspaceRoot, workspaceRootScopeKey } from '../lib/workspace-path'
 import {
   relativeWorkspacePath,
@@ -87,6 +91,11 @@ import {
   type ExtensionRightRailViewEntry
 } from '../extensions/contribution-registry'
 import { getSlashQuery } from './chat/floating-composer-commands'
+import { useGraphStore } from '../graph/graph-store'
+import { useGraphParentObserver } from '../graph/use-graph-parent-observer'
+import { graphNodeLiveness } from '../graph/graph-liveness'
+import { openGraphChildThread } from '../graph/graph-child-navigation'
+import { formatSubagentElapsed } from './subagents/SubagentLiveness'
 
 const FILE_TREE_SIDEBAR_WIDTH = 320
 const extensionSurfaceLayoutStorage = {
@@ -108,6 +117,7 @@ export function Workbench(): ReactElement {
     threads, threadSearch, showArchivedThreads, activeThreadId, activeThreadRelation,
     activeThreadParentId, selectThread, createThread, createConversation, blocks,
     liveReasoning, liveAssistant, error, runtimeErrorDetail, runtimeStatus, busy,
+    currentTurnOrchestration,
     route, pluginHostRoute, workspaceRoot, conversationWorkspaceRoot, runtimeConnection,
     setRoute, openCode, openWrite, openDesign, ensureWriteThreadForWorkspace,
     ensureDesignThreadForWorkspace, createWriteThread, createDesignThread, openSettings,
@@ -116,12 +126,33 @@ export function Workbench(): ReactElement {
     appendLocalClawTurn, setError, sendMessage, reviewActiveThread, queuedMessages,
     extensionComposerContexts, attachExtensionComposerContext, removeExtensionComposerContext,
     removeQueuedMessage, guideQueuedMessage, interrupt, probeRuntime, composerModel, composerProviderId,
-    composerPickList, composerModelGroups, composerReasoningEffort, disabledSkillIds,
-    composerMode, setComposerMode, setComposerModel, setComposerReasoningEffort,
+    composerPickList, composerModelGroups, composerReasoningEffort, composerFastMode, disabledSkillIds,
+    composerMode, composerOrchestration, graphEnabled, setComposerMode,
+    setComposerOrchestration, setComposerModel, setComposerReasoningEffort, setComposerFastMode,
     setThreadSearch, renameThread, pinThread, archiveThread, deleteThread,
     clearActiveThreadSelection, spawnSideConversation, openSideConversationDraft, selectSideConversation, setSidePanelOpen,
     sideConversations, sidePanel
   } = useWorkbenchChatStoreState()
+  useGraphParentObserver(activeThreadId)
+  const graphChildReturnTarget = useGraphStore((state) => state.childReturnTarget)
+  const graphRuns = useGraphStore((state) => state.runs)
+  const graphChildRuns = useGraphStore((state) => state.childRuns)
+  const guiPlanSaveStatus = useGuiPlanStore((state) => state.saveStatus)
+  const [graphChildNow, setGraphChildNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!graphChildReturnTarget || activeThreadId !== graphChildReturnTarget.childThreadId) return
+    const id = globalThis.setInterval(() => setGraphChildNow(Date.now()), 1_000)
+    return () => globalThis.clearInterval(id)
+  }, [activeThreadId, graphChildReturnTarget])
+  useEffect(() => {
+    if (
+      !graphChildReturnTarget ||
+      !activeThreadId ||
+      activeThreadId === graphChildReturnTarget.parentThreadId ||
+      activeThreadId === graphChildReturnTarget.childThreadId
+    ) return
+    useGraphStore.getState().clearChildReturnTarget()
+  }, [activeThreadId, graphChildReturnTarget])
   const extensionWorkspaceRoot = useMemo(
     () => resolveActiveExtensionWorkspaceRoot(activeThreadId, threads, workspaceRoot),
     [activeThreadId, threads, workspaceRoot]
@@ -515,13 +546,13 @@ export function Workbench(): ReactElement {
     ) selectExtensionSurface(null)
   }, [activeExtensionSurface, activeExtensionSurfaceId, extensionContributionSnapshotReady, selectExtensionSurface])
   const {
-    composerFileReferences, fileTreeSidePanelView, openFilePreviewTargets,
+    composerFileReferences, fileTreeSidePanelOpen, fileTreeSidePanelView, openFilePreviewTargets,
     pinnedFilePreviewTargetKeys, preserveFilePreviewTargets, fileTreeWorkspaceRoot,
     clearComposerFileReferences, addComposerFileReference, pickComposerFileReferences,
     removeComposerFileReference, openWorkspaceFilePreviewTarget, previewWorkspaceFileFromSidebar,
     closeWorkspaceFilePreviewTarget, togglePinnedFilePreviewTarget, closeOtherFilePreviewTargets,
     togglePreserveFilePreviewTargets, addWorkspaceReferenceFromSidebar,
-    openFileTreeSidePanel, openDesignFileTreeSidePanel, setFileTreeSidePanelView,
+    toggleFileTreeSidePanel, openFileTreeSidePanel, openDesignFileTreeSidePanel, setFileTreeSidePanelView,
     clearFilePreviewTargets
   } = useWorkbenchFileTreeController({
     route,
@@ -575,12 +606,21 @@ export function Workbench(): ReactElement {
     onPlanBuildStarted: async (plan) => {
       const threadId = plan.threadId?.trim() || useChatStore.getState().activeThreadId
       const draft = useSddDraftStore.getState().activeDraft
+      dismissActiveSddDraft({ closeAssistant: true })
       if (!threadId) return
       if (draft) await renameSddAssistantThreadToDraft(threadId, draft)
       if (!releaseSddAssistantThread(threadId)) return
       await useChatStore.getState().refreshThreads()
     }
   })
+  const linkedSddDraft = useMemo(() => resolveLinkedSddDraft({
+    plan: activeGuiPlan,
+    threadDraftRef: activeThreadId ? sddDraftRefForThreadId(activeThreadId) : null
+  }), [activeGuiPlan, activeThreadId])
+  const openLinkedSddDraft = useCallback((): void => {
+    if (!linkedSddDraft) return
+    void openSddRequirementDraftFromHistory(linkedSddDraft)
+  }, [linkedSddDraft, openSddRequirementDraftFromHistory])
   useWorkbenchKeyboardShortcuts({
     composerMode,
     setComposerMode,
@@ -631,9 +671,9 @@ export function Workbench(): ReactElement {
       return
     }
     if (id === BUILTIN_RIGHT_PANEL_IDS.sideConversations) openSideChat()
-    if (id === BUILTIN_RIGHT_PANEL_IDS.files) setFileTreeSidePanelView('workspace')
+    if (id === BUILTIN_RIGHT_PANEL_IDS.files) openFileTreeSidePanel()
     openRightPanelTab(id)
-  }, [openRightPanelTab, openSideChat, setFileTreeSidePanelView, toggleTerminal])
+  }, [openFileTreeSidePanel, openRightPanelTab, openSideChat, toggleTerminal])
 
   const closeCodeRightTool = useCallback((id: RightPanelContributionId): void => {
     if (id === BUILTIN_RIGHT_PANEL_IDS.sideConversations) setSidePanelOpen(false)
@@ -788,8 +828,8 @@ export function Workbench(): ReactElement {
     activeClawChannelProviderId: activeClawChannel?.providerId,
     activeSddDraft: Boolean(activeSddDraft), activeThreadId, attachmentUploadEnabled,
     buildCodeCanvasOutboundPrompt, clearComposerAttachments, removeComposerAttachments, clearComposerFileReferences,
-    composerAttachments, composerFileReferences, composerMode, composerModelGroups,
-    composerReasoningEffort, getAttachmentScope,
+    composerAttachments, composerFileReferences, composerMode, composerModel, composerProviderId,
+    composerModelGroups, composerReasoningEffort, composerFastMode, getAttachmentScope,
     handleGuiPlanCommand, input, resetClawChannelSession, rightPanelMode, route,
     selectClawChannel, sendMessage, sendPlanTurn, sendSddAssistantPrompt,
     setAttachmentUploadError, setClawChannelModel, setError, setInput, threads, workspaceRoot,
@@ -811,11 +851,105 @@ export function Workbench(): ReactElement {
     setRightPanelMode, setRoute, setUseWorktreePool, setWriteAssistantOpen
   })
 
+  const openComposerGraph = useCallback((runId: string, nodeId?: string): void => {
+    if (!graphEnabled) return
+    const graph = useGraphStore.getState()
+    graph.selectRun(runId)
+    graph.selectNode(nodeId ?? null)
+    openRightPanelTab(BUILTIN_RIGHT_PANEL_IDS.graph)
+  }, [graphEnabled, openRightPanelTab])
+
+  const openComposerGraphChild = useCallback((
+    runId: string,
+    nodeId: string,
+    attemptId: string,
+    childThreadId: string
+  ): void => {
+    const graph = useGraphStore.getState()
+    const run = graph.runs.find((candidate) => candidate.id === runId)
+    if (!run) return
+    graph.setChildReturnTarget({
+      parentThreadId: run.threadId,
+      childThreadId,
+      runId,
+      nodeId,
+      attemptId,
+      parentEventSeq: useChatStore.getState().lastSeq,
+      childSessionStatus: 'creating',
+      observerStatus: 'connecting',
+      openedAt: new Date().toISOString()
+    })
+    void openGraphChildThread(childThreadId)
+  }, [])
+
+  const graphChildContext = useMemo(() => {
+    if (!graphEnabled) return undefined
+    const target = graphChildReturnTarget
+    if (!target || activeThreadId !== target.childThreadId) return undefined
+    const run = graphRuns.find((candidate) => candidate.id === target.runId)
+    const node = run?.nodes[target.nodeId]
+    const attempt = node?.attempts.find((candidate) => candidate.id === target.attemptId)
+    if (!run || !node || !attempt) return undefined
+    const liveness = graphNodeLiveness(node, graphChildRuns, graphChildNow)
+    return {
+      runTitle: run.plans.at(-1)?.title ?? t('graphPanelTitle'),
+      nodeTitle: node.node.title,
+      attemptNumber: attempt.attemptNumber,
+      agentName: attempt.assignment.name,
+      statusLabel: t(`graphLiveness_${liveness.kind}`),
+      activityLabel: liveness.quiet
+        ? t('graphStillWaiting', {
+            seconds: Math.floor((liveness.lastActivityAgeMs ?? 0) / 1_000)
+          })
+        : liveness.activityLabel ??
+          (liveness.child?.status === 'queued'
+            ? t('graphCreatingChildSession')
+            : t(`graphStatus_${node.status}`, { defaultValue: node.status })),
+      elapsedLabel: liveness.elapsedMs ? formatSubagentElapsed(liveness.elapsedMs) : '',
+      observerStatus: target.observerStatus
+    }
+  }, [
+    activeThreadId,
+    graphEnabled,
+    graphChildNow,
+    graphChildReturnTarget,
+    graphChildRuns,
+    graphRuns,
+    t
+  ])
+
+  const returnFromSubagent = useCallback((): void => {
+    const target = useGraphStore.getState().childReturnTarget
+    if (!target || activeThreadId !== target.childThreadId) {
+      if (activeThreadParentId) void selectThread(activeThreadParentId)
+      return
+    }
+    void (async () => {
+      await selectThread(target.parentThreadId)
+      const graph = useGraphStore.getState()
+      await graph.refreshThread(target.parentThreadId)
+      graph.selectRun(target.runId)
+      graph.selectNode(target.nodeId)
+      openRightPanelTab(BUILTIN_RIGHT_PANEL_IDS.graph)
+      graph.clearChildReturnTarget()
+    })()
+  }, [
+    activeThreadId,
+    activeThreadParentId,
+    openRightPanelTab,
+    selectThread
+  ])
+
   const chatComposerProps = useWorkbenchChatComposerProps({
-    input, setInput, composerMode, setComposerMode, busy, route, runtimeReady: runtimeConnection === 'ready',
+    input, setInput, composerMode, setComposerMode, composerOrchestration, graphEnabled,
+    setComposerOrchestration,
+    openGraph: openComposerGraph,
+    openGraphChild: openComposerGraphChild,
+    busy, currentTurnOrchestration, route, runtimeReady: runtimeConnection === 'ready',
     activeThreadId, activeClawChannelId,
     activeClawChannelModel: activeClawChannel?.model, composerModel, composerProviderId, composerPickList,
-    composerModelGroups, composerReasoningEffort, setComposerReasoningEffort,
+    composerModelGroups, composerReasoningEffort, composerFastMode,
+    setComposerReasoningEffort, setComposerFastMode,
     setClawChannelModel, setComposerModel, openProvidersSettings: () => openSettings('providers'), handleSend,
     composerAttachments,
     contextChips: extensionComposerContextChips,
@@ -835,7 +969,8 @@ export function Workbench(): ReactElement {
   const rightPanelSharedProps = buildWorkbenchRightPanelSharedProps({
     input, setInput, mode: composerMode, setMode: setComposerMode, busy, runtimeConnection,
     activeThreadId, blocks, liveReasoning, liveAssistant, composerModelGroups, composerReasoningEffort,
-    setComposerReasoningEffort, queuedMessages, removeQueuedMessage, attachments: composerAttachments,
+    setComposerReasoningEffort, queuedMessages, removeQueuedMessage, guideQueuedMessage,
+    attachments: composerAttachments,
     attachmentUploadEnabled, attachmentUploadBusy, attachmentUploadError,
     onPickAttachments: (files) => void handlePickAttachments(files),
     onPasteClipboardImage: (options) => void handlePasteClipboardImage(options),
@@ -865,13 +1000,14 @@ export function Workbench(): ReactElement {
     activeSkillWorkspace,
     activeThreadId,
     runtimeReady: runtimeConnection === 'ready',
+    graphEnabled,
     busy,
     title: t('planPanelTitle'),
     cancelLabel: t('cancel'),
     onClose: route === 'chat'
       ? () => closeRightPanelTab(BUILTIN_RIGHT_PANEL_IDS.plan)
       : closeRightPanel,
-    onBuildPlan: () => void buildGuiPlan(),
+    onBuildPlan: (orchestration) => void buildGuiPlan(orchestration),
     onVerifyPlan: () => void verifyGuiPlan(),
     onReplanChanged: (ids) => void replanChangedRequirements(ids),
     setRightPanelMode
@@ -898,6 +1034,7 @@ export function Workbench(): ReactElement {
     width: rightSidebarWidth,
     route,
     rightPanelMode,
+    graphEnabled,
     onBeginResize: beginRightResize,
     writeAssistantOpen,
     shared: rightPanelSharedProps,
@@ -976,7 +1113,7 @@ export function Workbench(): ReactElement {
       sideConversationCount: currentSideConversations.length,
       sideConversationRunningCount: currentSideRunningCount,
       files: {
-        open: true,
+        open: fileTreeSidePanelOpen,
         view: fileTreeSidePanelView,
         width: FILE_TREE_SIDEBAR_WIDTH,
         workspaceRoot: fileTreeWorkspaceRoot,
@@ -990,8 +1127,10 @@ export function Workbench(): ReactElement {
       },
       extensionItems: extensionRightRailItems,
       extensionViews: extensionRightPanelItems,
+      onOpen: openRightPanelTab,
       onActivate: activateRightPanelTab,
       onClose: closeCodeRightTool,
+      onToggleFiles: toggleFileTreeSidePanel,
       onNewSideConversation: openSideConversationDraft
     },
     workspaceRoot: extensionWorkspaceRoot
@@ -1053,7 +1192,6 @@ export function Workbench(): ReactElement {
         onNewChat={startNewChat}
         onNewChatInWorkspace={startNewChatInWorkspace}
         onNewRequirement={() => void startNewSddRequirement()}
-        onOpenRequirementDraft={(draft) => void openSddRequirementDraftFromHistory(draft)}
         onOpenSettings={(section) => openSettings(section)}
         onOpenPlugins={openPluginsView}
         onOpenExtensions={openExtensionsView}
@@ -1146,12 +1284,17 @@ export function Workbench(): ReactElement {
             activeThreadId,
             runtimeConnection,
             runtimeError: error,
-            planActionsBusy: busy,
+            planActionsBusy:
+              busy ||
+              runtimeConnection !== 'ready' ||
+              guiPlanSaveStatus === 'saving',
+            graphEnabled,
             devPreviewVisible: showDevPreviewCard,
             devPreviewUrl: latestDevPreviewUrl,
             devPreviewOpened: rightPanelMode === BUILTIN_RIGHT_PANEL_IDS.browser,
             returnParentTitle: threads.find((thread) => thread.id === activeThreadParentId)?.title?.trim() ?? '',
             showReturnBar: activeThreadRelation === 'side' && Boolean(activeThreadParentId),
+            graphChildContext,
             composerProps: chatComposerProps,
             conversationDropWorkspaceRoot: activeSkillWorkspace,
             terminalOpen,
@@ -1162,18 +1305,17 @@ export function Workbench(): ReactElement {
             onRetryConnection: () => void probeRuntime('user', { restart: true }),
             onOpenSettings: () => openSettings('agents'),
             onSelectSuggestion: (text) => setInput(text),
-            onBuildPlan: () => void buildGuiPlan(),
+            onBuildPlan: (orchestration) => void buildGuiPlan(orchestration),
             onOpenPlan: openGuiPlanPanel,
             onOpenChanges: () => setRightPanelMode(BUILTIN_RIGHT_PANEL_IDS.changes),
             onReviewChanges: () => void reviewActiveThread({ kind: 'uncommittedChanges' }),
             reviewChangesDisabled: busy || runtimeConnection !== 'ready',
             onOpenDevPreview: openDevPreview,
-            onBackToParent: () => {
-              if (activeThreadParentId) void selectThread(activeThreadParentId)
-            },
+            onBackToParent: returnFromSubagent,
             onBeginTerminalResize: beginTerminalResize,
             onToggleTerminal: toggleTerminal,
             onToggleRightWorkspace: toggleCodeRightWorkspace,
+            onOpenRequirementDraft: linkedSddDraft ? openLinkedSddDraft : undefined,
             extensionTopBarActions,
             extensionComposerActions,
             extensionMessageActions,
@@ -1203,6 +1345,7 @@ export function Workbench(): ReactElement {
             onToggleRightPanelMode: openCodeRightTool,
             planPanelEnabled: Boolean(activeGuiPlan),
             canvasEnabled: true,
+            graphEnabled,
             sideChatRunningCount: currentSideRunningCount,
             sideChatOpen: rightPanelMode === BUILTIN_RIGHT_PANEL_IDS.sideConversations,
             sideChatEnabled: runtimeConnection === 'ready' && Boolean(activeThreadId),
@@ -1224,6 +1367,7 @@ export function Workbench(): ReactElement {
         }}
       />
       )}
+      <AgentBrowserFloatingPreview activeThreadId={activeThreadId} />
       {activeExtensionAuxiliaryPanel ? (
         <div className="ds-no-drag h-[min(38vh,360px)] min-h-48 shrink-0 border-t border-ds-border-muted">
           <ExtensionViewOutlet

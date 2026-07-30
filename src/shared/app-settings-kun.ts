@@ -1,4 +1,5 @@
 import {
+  DEFAULT_APPROVAL_REVIEWER,
   DEFAULT_APPROVAL_POLICY,
   DEFAULT_DEEPSEEK_BASE_URL,
   DEFAULT_IMAGE_GENERATION_PROTOCOL,
@@ -23,15 +24,18 @@ import {
   DEFAULT_VIDEO_GENERATION_PROTOCOL,
   MODEL_REASONING_EFFORTS,
   MODEL_REASONING_REQUEST_PROTOCOLS,
+  kunToolPermissionModeSettings,
   normalizeModelEndpointFormat,
   type AppSettingsV1,
   type KunComputerUseSettingsV1,
+  type KunBrowserUseSettingsV1,
   type KunContextCompactionSettingsV1,
   type KunDesignQualitySettingsV1,
   type KunDesignQualityStrictness,
   type KunHistoryHygieneSettingsV1,
   type KunImageGenerationSettingsV1,
   type KunInstructionSettingsV1,
+  type KunLlmDebugSettingsV1,
   type ImageGenerationQuality,
   type ImageGenerationResolution,
   type KunMcpSearchSettingsV1,
@@ -62,8 +66,17 @@ import {
   type TextToSpeechProtocol,
   type VideoGenerationProtocol,
   type ApprovalPolicy,
+  type ApprovalReviewer,
   type SandboxMode
 } from './app-settings-types'
+import {
+  defaultKunGraphSettings,
+  normalizeKunGraphSettings
+} from './app-settings-graph'
+export {
+  defaultKunGraphSettings,
+  normalizeKunGraphSettings
+} from './app-settings-graph'
 import {
   normalizeModelProviderSettings,
   resolveKunRuntimeSettings
@@ -75,6 +88,7 @@ import {
 
 const LEGACY_COREAGENT_DATA_DIR = '~/.deepseekgui/coreagent'
 const LEGACY_KUN_DEFAULT_MODEL = 'deepseek-chat'
+const LEGACY_KUN_STREAM_IDLE_TIMEOUT_MS = 45_000
 // 旧版真实落盘默认值, 用于把升级前配置迁移到当前 Kun 默认端口。
 const LEGACY_LOCAL_HTTP_DEFAULT_PORT = 7878
 const PREVIOUS_KUN_DEFAULT_PORT = 8899
@@ -89,6 +103,7 @@ type LegacyLocalHttpRuntimeSettingsV1 = {
   extraCorsOrigins: string[]
   approvalPolicy: ApprovalPolicy
   sandboxMode: SandboxMode
+  approvalReviewer: ApprovalReviewer
 }
 
 type LegacyReasoningEffort = 'low' | 'medium' | 'high' | 'max'
@@ -119,7 +134,8 @@ function legacyLocalHttpRuntimeDefaults(port = LEGACY_LOCAL_HTTP_DEFAULT_PORT): 
     runtimeToken: '',
     extraCorsOrigins: ['http://localhost:5173', 'http://127.0.0.1:5173'],
     approvalPolicy: DEFAULT_APPROVAL_POLICY,
-    sandboxMode: DEFAULT_SANDBOX_MODE
+    sandboxMode: DEFAULT_SANDBOX_MODE,
+    approvalReviewer: DEFAULT_APPROVAL_REVIEWER
   }
 }
 
@@ -154,8 +170,7 @@ export function defaultKunRuntimeSettings(
     runtimeToken: '',
     dataDir: DEFAULT_KUN_DATA_DIR,
     model: DEFAULT_KUN_MODEL,
-    approvalPolicy: DEFAULT_APPROVAL_POLICY,
-    sandboxMode: DEFAULT_SANDBOX_MODE,
+    ...kunToolPermissionModeSettings('full-access'),
     tokenEconomyMode: false,
     tokenEconomy: defaultKunTokenEconomySettings(),
     toolOutputLimits: defaultKunToolOutputLimitsSettings(),
@@ -165,6 +180,7 @@ export function defaultKunRuntimeSettings(
     storage: defaultKunStorageSettings(),
     contextCompaction: defaultKunContextCompactionSettings(),
     runtimeTuning: defaultKunRuntimeTuningSettings(),
+    llmDebug: defaultKunLlmDebugSettings(),
     imageGeneration: defaultKunImageGenerationSettings(),
     speechToText: defaultKunSpeechToTextSettings(),
     textToSpeech: defaultKunTextToSpeechSettings(),
@@ -175,13 +191,41 @@ export function defaultKunRuntimeSettings(
     memoryEnabled: false,
     instructions: defaultKunInstructionSettings(),
     computerUse: defaultKunComputerUseSettings(),
-    quality: defaultKunQualitySettings()
+    browserUse: defaultKunBrowserUseSettings(),
+    quality: defaultKunQualitySettings(),
+    graph: defaultKunGraphSettings()
   }
+}
+
+/**
+ * Compatibility-only base for normalizing already persisted settings. Keep
+ * this separate from the fresh-profile default so an older partial record can
+ * never acquire Full access merely because a new field was absent.
+ */
+function legacyKunRuntimeSettingsDefaults(
+  port = DEFAULT_KUN_PORT
+): KunRuntimeSettingsV1 {
+  return {
+    ...defaultKunRuntimeSettings(port),
+    approvalPolicy: DEFAULT_APPROVAL_POLICY,
+    sandboxMode: DEFAULT_SANDBOX_MODE,
+    approvalReviewer: DEFAULT_APPROVAL_REVIEWER
+  }
+}
+
+function normalizeApprovalReviewer(value: unknown): ApprovalReviewer {
+  return value === 'agent' ? 'agent' : DEFAULT_APPROVAL_REVIEWER
 }
 
 export function defaultKunInstructionSettings(): KunInstructionSettingsV1 {
   return {
     enabled: true
+  }
+}
+
+export function defaultKunLlmDebugSettings(): KunLlmDebugSettingsV1 {
+  return {
+    defaultThreadCaptureEnabled: false
   }
 }
 
@@ -208,6 +252,21 @@ export function defaultKunComputerUseSettings(): KunComputerUseSettingsV1 {
     mode: 'auto',
     maxImageDimension: 1280,
     maxActionsPerTurn: 40
+  }
+}
+
+export function defaultKunBrowserUseSettings(): KunBrowserUseSettingsV1 {
+  return {
+    enabled: true,
+    mode: 'public',
+    approvalMode: 'auto-safe',
+    maxTabs: 2,
+    maxObservationActionsPerTurn: 30,
+    maxInteractionActionsPerTurn: 12,
+    maxSnapshotNodes: 250,
+    maxSnapshotTextChars: 20_000,
+    maxImageDimension: 1280,
+    idleTimeoutMs: 5 * 60_000
   }
 }
 
@@ -336,6 +395,8 @@ export function defaultKunStorageSettings(): KunStorageSettingsV1 {
 }
 
 export const KUN_CONTEXT_COMPACTION_DEFAULTS_VERSION = 2
+export const KUN_RUNTIME_TUNING_DEFAULTS_VERSION = 1
+export const DEFAULT_KUN_STREAM_IDLE_TIMEOUT_MS = 450_000
 
 const LEGACY_KUN_CONTEXT_COMPACTION_DEFAULTS = [
   { soft: 16_000, hard: 24_000 },
@@ -359,9 +420,10 @@ export function defaultKunContextCompactionSettings(): KunContextCompactionSetti
 
 export function defaultKunRuntimeTuningSettings(): KunRuntimeTuningSettingsV1 {
   return {
+    defaultsVersion: KUN_RUNTIME_TUNING_DEFAULTS_VERSION,
     maxConcurrentTurns: 256,
     maxWallTimeMs: 86_400_000,
-    streamIdleTimeoutMs: 450_000,
+    streamIdleTimeoutMs: DEFAULT_KUN_STREAM_IDLE_TIMEOUT_MS,
     toolStorm: {
       enabled: true,
       windowSize: 8,
@@ -377,7 +439,15 @@ export function getKunRuntimeSettings(
   settings: AppSettingsV1
 ): KunRuntimeSettingsV1 {
   const raw = (settings as { agents?: { kun?: Partial<KunRuntimeSettingsV1> } }).agents?.kun
-  return mergeKunRuntimeSettings(defaultKunRuntimeSettings(), raw)
+  return mergeKunRuntimeSettings(
+    raw ? legacyKunRuntimeSettingsDefaults() : defaultKunRuntimeSettings(),
+    raw
+      ? {
+          ...raw,
+          runtimeTuning: migrateKunRuntimeTuningDefaults(raw.runtimeTuning)
+        }
+      : raw
+  )
 }
 
 export function kunSettingsEnvelope(
@@ -483,10 +553,55 @@ export function mergeKunRuntimeSettings(
     ...currentComputerUse,
     ...(patch?.computerUse ?? {})
   })
+  const currentBrowserUse = normalizeKunBrowserUseSettings(current.browserUse)
+  const nextBrowserUse = normalizeKunBrowserUseSettings({
+    ...currentBrowserUse,
+    ...(patch?.browserUse ?? {})
+  })
   const currentQuality = normalizeKunQualitySettings(current.quality)
   const nextQuality = normalizeKunQualitySettings({
     ...currentQuality,
     ...(patch?.quality ?? {})
+  })
+  const nextGraph = normalizeKunGraphSettings({
+    ...current.graph,
+    ...(patch?.graph ?? {}),
+    workerModel: {
+      ...current.graph?.workerModel,
+      ...(patch?.graph?.workerModel ?? {})
+    },
+    scheduler: {
+      ...current.graph?.scheduler,
+      ...(patch?.graph?.scheduler ?? {})
+    },
+    context: {
+      ...current.graph?.context,
+      ...(patch?.graph?.context ?? {})
+    },
+    mailbox: {
+      ...current.graph?.mailbox,
+      ...(patch?.graph?.mailbox ?? {})
+    },
+    supervision: {
+      ...current.graph?.supervision,
+      ...(patch?.graph?.supervision ?? {})
+    },
+    writeIsolation: {
+      ...current.graph?.writeIsolation,
+      ...(patch?.graph?.writeIsolation ?? {})
+    },
+    routing: {
+      ...current.graph?.routing,
+      ...(patch?.graph?.routing ?? {})
+    },
+    learning: {
+      ...current.graph?.learning,
+      ...(patch?.graph?.learning ?? {})
+    },
+    retention: {
+      ...current.graph?.retention,
+      ...(patch?.graph?.retention ?? {})
+    }
   })
   const currentRuntimeTuning = normalizeKunRuntimeTuningSettings(current.runtimeTuning)
   const nextRuntimeTuning = normalizeKunRuntimeTuningSettings({
@@ -513,6 +628,10 @@ export function mergeKunRuntimeSettings(
         }
       : {})
   })
+  const nextLlmDebug = normalizeKunLlmDebugSettings({
+    ...current.llmDebug,
+    ...(patch?.llmDebug ?? {})
+  })
   const nextModelProfiles = normalizeKunModelProfiles(current.modelProfiles, patch?.modelProfiles)
   const nextInstructions = {
     enabled: patch?.instructions?.enabled ?? current.instructions?.enabled ?? true
@@ -529,21 +648,25 @@ export function mergeKunRuntimeSettings(
   const {
     subagents: _subagentsPatch,
     projectConfig: _projectConfigPatch,
+    graph: _graphPatch,
+    llmDebug: _llmDebugPatch,
     ...flatPatch
   } = patch ?? {}
   void _subagentsPatch
   void _projectConfigPatch
-  // NOTE: approvalPolicy/sandboxMode are merged through verbatim from the patch.
-  // The unified 6-mode UI selector already resolves a mode to its concrete
-  // {approvalPolicy, sandboxMode} pair via kunToolPermissionModeSettings before
-  // dispatching the patch. We must NOT re-canonicalize here: the mode->settings
-  // mapping is lossy (only 6 of the 6x4 policy/sandbox combos are representable),
-  // so round-tripping would silently rewrite valid non-UI values — e.g. demote
-  // approvalPolicy 'never'/'suggest' to 'on-request', or escalate a 'read-only'/
-  // 'external-sandbox' sandbox to 'danger-full-access' — on every settings merge.
+  void _graphPatch
+  void _llmDebugPatch
+  // NOTE: approvalPolicy/sandboxMode/reviewer are merged through verbatim from
+  // the patch. The three-mode UI selector resolves a deliberate selection to
+  // its complete authority snapshot before dispatching the patch. We must NOT
+  // re-canonicalize here: the projection is lossy for legacy raw combinations,
+  // so round-tripping it would silently broaden or otherwise rewrite them.
   const merged: KunRuntimeSettingsV1 = {
     ...current,
     ...flatPatch,
+    approvalReviewer: normalizeApprovalReviewer(
+      patch?.approvalReviewer ?? current.approvalReviewer
+    ),
     port: nextPort,
     tokenEconomyMode: nextTokenEconomy.enabled,
     tokenEconomy: nextTokenEconomy,
@@ -553,6 +676,7 @@ export function mergeKunRuntimeSettings(
     storage: nextStorage,
     contextCompaction: nextContextCompaction,
     runtimeTuning: nextRuntimeTuning,
+    llmDebug: nextLlmDebug,
     imageGeneration: nextImageGeneration,
     speechToText: nextSpeechToText,
     textToSpeech: nextTextToSpeech,
@@ -563,7 +687,9 @@ export function mergeKunRuntimeSettings(
     memoryEnabled: patch?.memoryEnabled ?? current.memoryEnabled ?? false,
     instructions: nextInstructions,
     computerUse: nextComputerUse,
+    browserUse: nextBrowserUse,
     quality: nextQuality,
+    graph: nextGraph,
     ...(nextSubagents !== undefined ? { subagents: nextSubagents } : {})
   }
   // Optional model slots are authoritative from mergeOptionalModelSlot: strip any
@@ -694,6 +820,7 @@ function normalizeKunImageGenerationProtocol(value: unknown): ImageGenerationPro
   if (value === 'minimax-image') return 'minimax-image'
   if (value === 'codex-responses-image') return 'codex-responses-image'
   if (value === 'grok-imagine-image') return 'grok-imagine-image'
+  if (value === 'volcengine-ark-image') return 'volcengine-ark-image'
   return DEFAULT_IMAGE_GENERATION_PROTOCOL
 }
 
@@ -808,6 +935,7 @@ function normalizeKunVideoGenerationSettings(
 
 function normalizeKunVideoGenerationProtocol(value: unknown): VideoGenerationProtocol {
   if (value === 'grok-imagine-video') return 'grok-imagine-video'
+  if (value === 'volcengine-ark-video') return 'volcengine-ark-video'
   return value === 'minimax-video' ? 'minimax-video' : DEFAULT_VIDEO_GENERATION_PROTOCOL
 }
 
@@ -823,6 +951,42 @@ function normalizeKunComputerUseSettings(
     mode,
     maxImageDimension: boundedPositiveInt(input?.maxImageDimension, defaults.maxImageDimension, 4096),
     maxActionsPerTurn: boundedPositiveInt(input?.maxActionsPerTurn, defaults.maxActionsPerTurn, 1000)
+  }
+}
+
+function normalizeKunBrowserUseSettings(
+  input: Partial<KunBrowserUseSettingsV1> | undefined
+): KunBrowserUseSettingsV1 {
+  const defaults = defaultKunBrowserUseSettings()
+  return {
+    enabled: input?.enabled !== false,
+    mode: input?.mode === 'local-development' ? 'local-development' : 'public',
+    approvalMode: input?.approvalMode === 'always-ask' ? 'always-ask' : 'auto-safe',
+    maxTabs: boundedPositiveInt(input?.maxTabs, defaults.maxTabs, 3),
+    maxObservationActionsPerTurn: boundedPositiveInt(
+      input?.maxObservationActionsPerTurn,
+      defaults.maxObservationActionsPerTurn,
+      100
+    ),
+    maxInteractionActionsPerTurn: boundedPositiveInt(
+      input?.maxInteractionActionsPerTurn,
+      defaults.maxInteractionActionsPerTurn,
+      50
+    ),
+    maxSnapshotNodes: boundedPositiveInt(input?.maxSnapshotNodes, defaults.maxSnapshotNodes, 500),
+    maxSnapshotTextChars: boundedPositiveInt(
+      input?.maxSnapshotTextChars,
+      defaults.maxSnapshotTextChars,
+      50_000
+    ),
+    maxImageDimension: Math.max(
+      320,
+      boundedPositiveInt(input?.maxImageDimension, defaults.maxImageDimension, 2048)
+    ),
+    idleTimeoutMs: Math.max(
+      30_000,
+      boundedPositiveInt(input?.idleTimeoutMs, defaults.idleTimeoutMs, 30 * 60_000)
+    )
   }
 }
 
@@ -934,6 +1098,12 @@ function boundedNonNegativeInt(value: unknown, fallback: number, max = Number.MA
   return Math.min(Math.floor(value), max)
 }
 
+function boundedRatio(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1
+    ? value
+    : fallback
+}
+
 function normalizeKunStorageSettings(
   input: Partial<KunStorageSettingsV1> | undefined
 ): KunStorageSettingsV1 {
@@ -1008,34 +1178,64 @@ function normalizeKunRuntimeTuningSettings(
   input: Partial<KunRuntimeTuningSettingsV1> | undefined
 ): KunRuntimeTuningSettingsV1 {
   const defaults = defaultKunRuntimeTuningSettings()
+  const migrated = migrateKunRuntimeTuningDefaults(input)
   return {
+    defaultsVersion: KUN_RUNTIME_TUNING_DEFAULTS_VERSION,
     maxConcurrentTurns: boundedPositiveInt(
-      input?.maxConcurrentTurns,
+      migrated.maxConcurrentTurns,
       defaults.maxConcurrentTurns,
       256
     ),
     maxWallTimeMs: boundedPositiveInt(
-      input?.maxWallTimeMs,
+      migrated.maxWallTimeMs,
       defaults.maxWallTimeMs,
       86_400_000
     ),
     streamIdleTimeoutMs: boundedNonNegativeInt(
-      input?.streamIdleTimeoutMs,
+      migrated.streamIdleTimeoutMs,
       defaults.streamIdleTimeoutMs,
       3_600_000
     ),
     toolStorm: {
-      enabled: input?.toolStorm?.enabled !== false,
-      windowSize: boundedPositiveInt(input?.toolStorm?.windowSize, defaults.toolStorm.windowSize, 128),
-      threshold: Math.max(2, boundedPositiveInt(input?.toolStorm?.threshold, defaults.toolStorm.threshold, 128))
+      enabled: migrated.toolStorm?.enabled !== false,
+      windowSize: boundedPositiveInt(migrated.toolStorm?.windowSize, defaults.toolStorm.windowSize, 128),
+      threshold: Math.max(2, boundedPositiveInt(migrated.toolStorm?.threshold, defaults.toolStorm.threshold, 128))
     },
     toolArgumentRepair: {
       maxStringBytes: boundedPositiveInt(
-        input?.toolArgumentRepair?.maxStringBytes,
+        migrated.toolArgumentRepair?.maxStringBytes,
         defaults.toolArgumentRepair.maxStringBytes,
         16 * 1024 * 1024
       )
     }
+  }
+}
+
+function normalizeKunLlmDebugSettings(
+  input: Partial<KunLlmDebugSettingsV1> | undefined
+): KunLlmDebugSettingsV1 {
+  return {
+    defaultThreadCaptureEnabled: input?.defaultThreadCaptureEnabled === true
+  }
+}
+
+export function kunRuntimeTuningDefaultsMigrationNeeded(
+  input: Partial<KunRuntimeTuningSettingsV1> | undefined
+): boolean {
+  return boundedPositiveInt(input?.defaultsVersion, 0) < KUN_RUNTIME_TUNING_DEFAULTS_VERSION
+}
+
+export function migrateKunRuntimeTuningDefaults(
+  input: Partial<KunRuntimeTuningSettingsV1> | undefined
+): Partial<KunRuntimeTuningSettingsV1> {
+  const current = input ?? {}
+  if (!kunRuntimeTuningDefaultsMigrationNeeded(current)) return current
+  return {
+    ...current,
+    defaultsVersion: KUN_RUNTIME_TUNING_DEFAULTS_VERSION,
+    ...(current.streamIdleTimeoutMs === LEGACY_KUN_STREAM_IDLE_TIMEOUT_MS
+      ? { streamIdleTimeoutMs: DEFAULT_KUN_STREAM_IDLE_TIMEOUT_MS }
+      : {})
   }
 }
 
@@ -1312,7 +1512,7 @@ export function migrateLegacyAppSettings(parsed: LegacyAppSettingsShape): Partia
   const isReasoningLegacy = rawAgentProvider === 'reasonix'
   const hasProviderSettings = typeof parsed.provider === 'object' && parsed.provider !== null
   const defaults = legacyLocalHttpRuntimeDefaults()
-  const kunDefaults = defaultKunRuntimeSettings()
+  const kunDefaults = legacyKunRuntimeSettingsDefaults()
   const legacyDeepseek = parsed.deepseek ?? {}
   const legacyLocalHttp = {
     ...defaults,
@@ -1339,7 +1539,8 @@ export function migrateLegacyAppSettings(parsed: LegacyAppSettingsShape): Partia
     runtimeToken: isReasoningLegacy ? kunDefaults.runtimeToken : legacyLocalHttp.runtimeToken,
     model: isReasoningLegacy ? legacyReasoning.model : kunDefaults.model,
     approvalPolicy: isReasoningLegacy ? kunDefaults.approvalPolicy : legacyLocalHttp.approvalPolicy,
-    sandboxMode: isReasoningLegacy ? kunDefaults.sandboxMode : legacyLocalHttp.sandboxMode
+    sandboxMode: isReasoningLegacy ? kunDefaults.sandboxMode : legacyLocalHttp.sandboxMode,
+    approvalReviewer: DEFAULT_APPROVAL_REVIEWER
   }
   const provider = normalizeModelProviderSettings({
     ...parsed.provider,
@@ -1354,7 +1555,7 @@ export function migrateLegacyAppSettings(parsed: LegacyAppSettingsShape): Partia
     routePools: parsed.provider?.routePools,
     localGateway: parsed.provider?.localGateway
   })
-  const kun = {
+  const kun: KunRuntimeSettingsV1 = {
     ...kunDefaults,
     ...legacySeed,
     ...explicitKun,
@@ -1364,6 +1565,9 @@ export function migrateLegacyAppSettings(parsed: LegacyAppSettingsShape): Partia
     runtimeToken: nonEmptyStringOrFallback(explicitKun.runtimeToken, legacySeed.runtimeToken),
     dataDir: upgradeLegacyKunDefaultDataDir(explicitKun.dataDir),
     model: upgradeLegacyKunDefaultModel(explicitKun.model, legacySeed.model),
+    approvalReviewer: normalizeApprovalReviewer(
+      explicitKun.approvalReviewer ?? legacySeed.approvalReviewer
+    ),
     tokenEconomyMode: typeof explicitKun.tokenEconomy?.enabled === 'boolean'
       ? explicitKun.tokenEconomy.enabled
       : explicitKun.tokenEconomyMode ?? kunDefaults.tokenEconomyMode,
@@ -1377,6 +1581,7 @@ export function migrateLegacyAppSettings(parsed: LegacyAppSettingsShape): Partia
     storage: normalizeKunStorageSettings(explicitKun.storage),
     contextCompaction: normalizeKunContextCompactionSettings(explicitKun.contextCompaction),
     runtimeTuning: normalizeKunRuntimeTuningSettings(explicitKun.runtimeTuning),
+    llmDebug: normalizeKunLlmDebugSettings(explicitKun.llmDebug),
     imageGeneration: normalizeKunImageGenerationSettings(explicitKun.imageGeneration),
     speechToText: normalizeKunSpeechToTextSettings(explicitKun.speechToText),
     textToSpeech: normalizeKunTextToSpeechSettings(explicitKun.textToSpeech),

@@ -20,7 +20,9 @@ import {
   isSddAssistantThread,
   isEmptySddAssistantThreadCandidate,
   markSddAssistantThread,
-  sddAssistantThreadIdForDraft
+  sddAssistantThreadIdForDraft,
+  showSddAssistantThreadInSidebar,
+  type SddThreadRegistry
 } from '../../sdd/sdd-thread-registry'
 import {
   refreshSddChatTranscriptFromProvider,
@@ -47,6 +49,28 @@ function sddDraftFromRegisteredThread(threadId: string): SddDraft | null {
     createdAt: timestamp,
     updatedAt: timestamp
   }
+}
+
+function sddThreadOwnsDraft(threadId: string, draft: SddDraft): boolean {
+  const ref = sddDraftRefForThreadId(threadId)
+  return Boolean(
+    ref &&
+    normalizeWorkspaceRoot(ref.workspaceRoot) === normalizeWorkspaceRoot(draft.workspaceRoot) &&
+    ref.draftRelativePath.trim().replaceAll('\\', '/') ===
+      draft.relativePath.trim().replaceAll('\\', '/')
+  )
+}
+
+export function shouldRestoreRequirementDraftForSidebarThread(
+  threadId: string,
+  thread: NormalizedThread | null,
+  registry?: SddThreadRegistry
+): boolean {
+  const normalizedThreadId = threadId.trim()
+  return Boolean(
+    normalizedThreadId &&
+    isSddAssistantThread(thread ?? { id: normalizedThreadId }, registry)
+  )
 }
 
 type UseWorkbenchSddThreadControllerParams = {
@@ -108,6 +132,7 @@ export function useWorkbenchSddThreadController({
   const sddDraftOperationStatus = useSddDraftStore((s) => s.operationStatus)
   const sddTitleSyncTimerRef = useRef<number | null>(null)
   const lastSyncedSddTitleRef = useRef<Record<string, string>>({})
+  const forceNewSddAssistantThreadRef = useRef(false)
 
   const titleForSddDraft = useCallback((draft: SddDraft): string => {
     const snapshot = useSddDraftStore.getState()
@@ -161,6 +186,7 @@ export function useWorkbenchSddThreadController({
         workspace: normalizeWorkspaceRoot(thread.workspace) || normalizedWorkspace
       }
       markSddAssistantThread(draft, normalizedThread.id)
+      showSddAssistantThreadInSidebar(normalizedThread.id)
       void writeSddChatTranscriptForThread({
         workspaceRoot: draft.workspaceRoot,
         draftRelativePath: draft.relativePath,
@@ -175,6 +201,7 @@ export function useWorkbenchSddThreadController({
       }))
       setRoute('chat')
       await selectThread(normalizedThread.id)
+      forceNewSddAssistantThreadRef.current = false
       void useChatStore.getState().refreshThreads()
       return normalizedThread.id
     } catch (error) {
@@ -186,8 +213,11 @@ export function useWorkbenchSddThreadController({
   const ensureSddAssistantThreadForDraft = useCallback(async (
     draft: SddDraft
   ): Promise<string | null> => {
-    const registeredThreadId = sddAssistantThreadIdForDraft(draft)
+    const registeredThreadId = forceNewSddAssistantThreadRef.current
+      ? ''
+      : sddAssistantThreadIdForDraft(draft)
     if (registeredThreadId) {
+      showSddAssistantThreadInSidebar(registeredThreadId)
       setRoute('chat')
       if (useChatStore.getState().activeThreadId !== registeredThreadId) {
         await selectThread(registeredThreadId)
@@ -240,6 +270,7 @@ export function useWorkbenchSddThreadController({
       openAssistant?: boolean
     } = {}
   ): Promise<boolean> => {
+    forceNewSddAssistantThreadRef.current = false
     useSddDraftStore.getState().setActiveDraft(draft, content, {
       lastSavedContent: options.lastSavedContent,
       saveStatus: options.saveStatus
@@ -250,19 +281,27 @@ export function useWorkbenchSddThreadController({
     setRoute('chat')
     if (options.openAssistant ?? runtimeConnection === 'ready') {
       setRightSidebarWidth((width) => Math.max(width, 420))
-      const sddThreadId = await ensureSddAssistantThreadForDraft(draft)
-      if (sddThreadId) {
-        setRightPanelMode(BUILTIN_RIGHT_PANEL_IDS.sddAi)
-      } else {
-        setRightPanelMode(null)
+      const currentThreadId = useChatStore.getState().activeThreadId?.trim() ?? ''
+      let sddThreadId = sddThreadOwnsDraft(currentThreadId, draft)
+        ? currentThreadId
+        : sddAssistantThreadIdForDraft(draft)
+      if (sddThreadId && useChatStore.getState().activeThreadId !== sddThreadId) {
+        showSddAssistantThreadInSidebar(sddThreadId)
+        await selectThread(sddThreadId)
       }
+      if (!sddThreadId && runtimeConnection === 'ready') {
+        sddThreadId = await createSddAssistantThreadForDraft(draft) ?? ''
+      }
+      if (!sddThreadId) useChatStore.getState().clearActiveThreadSelection()
+      setRightPanelMode(BUILTIN_RIGHT_PANEL_IDS.sddAi)
     } else {
       setRightPanelMode(null)
     }
     return true
   }, [
-    ensureSddAssistantThreadForDraft,
+    createSddAssistantThreadForDraft,
     runtimeConnection,
+    selectThread,
     setComposerMode,
     setInput,
     setRightPanelMode,
@@ -285,10 +324,15 @@ export function useWorkbenchSddThreadController({
     const draft = useSddDraftStore.getState().activeDraft
     if (!draft) return
     setRightSidebarWidth((width) => Math.max(width, 420))
-    const threadId = await ensureSddAssistantThreadForDraft(draft)
-    if (!threadId) return
+    const threadId = forceNewSddAssistantThreadRef.current
+      ? ''
+      : sddAssistantThreadIdForDraft(draft)
+    if (threadId && useChatStore.getState().activeThreadId !== threadId) {
+      await selectThread(threadId)
+    }
+    if (!threadId) useChatStore.getState().clearActiveThreadSelection()
     setRightPanelMode(BUILTIN_RIGHT_PANEL_IDS.sddAi)
-  }, [ensureSddAssistantThreadForDraft, setRightPanelMode, setRightSidebarWidth])
+  }, [selectThread, setRightPanelMode, setRightSidebarWidth])
 
   const toggleSddAssistantPanel = useCallback(async (): Promise<void> => {
     if (rightPanelMode === BUILTIN_RIGHT_PANEL_IDS.sddAi) {
@@ -388,7 +432,7 @@ export function useWorkbenchSddThreadController({
     const normalizedThreadId = threadId.trim()
     if (!normalizedThreadId) return null
 
-    if (isSddAssistantThread(thread ?? { id: normalizedThreadId })) {
+    if (shouldRestoreRequirementDraftForSidebarThread(normalizedThreadId, thread)) {
       return sddDraftFromRegisteredThread(normalizedThreadId)
     }
 
@@ -413,9 +457,11 @@ export function useWorkbenchSddThreadController({
   const startNewSddAssistantConversation = useCallback((): void => {
     const draft = useSddDraftStore.getState().activeDraft
     if (!draft) return
+    forceNewSddAssistantThreadRef.current = true
     setInput('')
-    void createSddAssistantThreadForDraft(draft)
-  }, [createSddAssistantThreadForDraft, setInput])
+    useChatStore.getState().clearActiveThreadSelection()
+    setRightPanelMode(BUILTIN_RIGHT_PANEL_IDS.sddAi)
+  }, [setInput, setRightPanelMode])
 
   return {
     activeSddDraft,

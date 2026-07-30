@@ -16,6 +16,14 @@ import {
   saveWriteThreadRegistry
 } from '../write/write-thread-registry'
 import { useWriteWorkspaceStore } from '../write/write-workspace-store'
+import {
+  isSddAssistantThread,
+  markSddAssistantThread,
+  readSddThreadRegistry,
+  releaseSddAssistantThread,
+  showSddAssistantThreadInSidebar
+} from '../sdd/sdd-thread-registry'
+import type { SddDraft } from '../sdd/sdd-draft-store'
 
 const registryMock = vi.hoisted(() => ({
   getProvider: vi.fn()
@@ -36,7 +44,9 @@ const applyThemeLibMock = vi.hoisted(() => ({
 
 vi.mock('../lib/apply-theme', () => applyThemeLibMock)
 
-import { createNavigationActions } from './chat-store-navigation-actions'
+import {
+  createNavigationActions
+} from './chat-store-navigation-actions'
 
 function thread(overrides: Partial<NormalizedThread> & Pick<NormalizedThread, 'id' | 'workspace'>): NormalizedThread {
   return {
@@ -62,6 +72,37 @@ class MemoryStorage implements BrowserStorageLike {
     this.values.set(key, value)
   }
 }
+
+describe('requirement session lifecycle', () => {
+  const draft: SddDraft = {
+    id: 'draft-1',
+    workspaceRoot: '/tmp/app',
+    relativePath: '.kunsdd/requirements/draft-1/requirement.md',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z'
+  }
+  const requirementThread = thread({
+    id: 'thread-sdd-1',
+    title: 'Requirement draft',
+    workspace: '/tmp/app'
+  })
+
+  it('stays bound to its draft until released into Code', () => {
+    const storage = new MemoryStorage()
+    markSddAssistantThread(draft, requirementThread.id, storage)
+
+    let registry = readSddThreadRegistry(storage)
+    expect(isSddAssistantThread(requirementThread, registry)).toBe(true)
+
+    showSddAssistantThreadInSidebar(requirementThread.id, storage)
+    registry = readSddThreadRegistry(storage)
+    expect(isSddAssistantThread(requirementThread, registry)).toBe(true)
+
+    releaseSddAssistantThread(requirementThread.id, storage)
+    registry = readSddThreadRegistry(storage)
+    expect(isSddAssistantThread(requirementThread, registry)).toBe(false)
+  })
+})
 
 function buildHarness(overrides?: {
   subscribeThreadEventsLive?: ReturnType<typeof vi.fn>
@@ -253,6 +294,7 @@ describe('chat-store navigation workspace selection', () => {
           theme: 'dark',
           uiFontScale: 1,
           chatContentMaxWidthPx: 896,
+          composerSendKey: 'enter',
           locale: 'en',
           agents: { kun: { apiKey: 'test-key', model: 'deepseek-v4-pro', baseUrl: '' } },
           disabledSkillIds: []
@@ -313,6 +355,53 @@ describe('chat-store navigation workspace selection', () => {
 
       await vi.advanceTimersByTimeAsync(900)
       expect(probeRuntime).toHaveBeenCalledWith('user')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('hydrates Graph availability during boot but starts the composer in Direct mode', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.stubGlobal('window', {
+        kunGui: {
+          getSettings: vi.fn(async () => ({
+            version: 1,
+            initialSetupCompleted: true,
+            workspaceRoot: '~/.kun/default_workspace',
+            conversationWorkspaceRoot: '~/Documents/Kun',
+            write: {
+              defaultWorkspaceRoot: '~/.kun/write_workspace',
+              activeWorkspaceRoot: '~/.kun/write_workspace',
+              workspaces: []
+            },
+            claw: { channels: [] },
+            theme: 'dark',
+            uiFontScale: 1,
+            chatContentMaxWidthPx: 896,
+            locale: 'en',
+            agents: {
+              kun: {
+                apiKey: 'test-key',
+                model: 'deepseek-v4-pro',
+                baseUrl: '',
+                graph: {
+                  enabled: true,
+                  defaultStrategy: 'graph'
+                }
+              }
+            },
+            disabledSkillIds: []
+          }))
+        }
+      })
+      const harness = buildHarness()
+      harness.state.composerOrchestration = 'graph'
+
+      await harness.actions.boot()
+
+      expect(harness.state.graphEnabled).toBe(true)
+      expect(harness.state.composerOrchestration).toBe('direct')
     } finally {
       vi.useRealTimers()
     }
@@ -592,7 +681,8 @@ describe('onClawChannelActivity routes through subscribeThreadEventsLive (not se
       },
       theme: 'dark',
       uiFontScale: 1,
-    chatContentMaxWidthPx: 896,
+      chatContentMaxWidthPx: 896,
+      composerSendKey: 'enter',
       locale: 'en',
       agents: { kun: { apiKey: 'test-key', model: 'deepseek-v4-pro', baseUrl: '' } },
       disabledSkillIds: []

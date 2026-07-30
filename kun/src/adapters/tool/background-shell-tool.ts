@@ -53,6 +53,12 @@ export function createBackgroundShellTool(options: BackgroundShellToolOptions = 
     // Keep the whole multipurpose tool in the command-execution class until
     // read-only observation actions are split into a separate tool.
     toolKind: 'command_execution',
+    effects: {
+      network: true,
+      externalWrite: true,
+      processExecution: true,
+      guiAutomation: false
+    },
     execute: async (args, context) =>
       withToolBoundary(async () => {
         const action = typeof args.action === 'string' ? args.action.trim() : ''

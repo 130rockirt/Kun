@@ -470,6 +470,15 @@ function applyProfileReasoningEffort(
     case 'openai-responses':
     case 'anthropic-thinking':
       return
+    case 'openai-chat-completions':
+      applyOpenAiChatReasoningEffort(body, effort)
+      return
+    case 'qwen-chat-completions':
+      applyQwenChatReasoningEffort(body, effort)
+      return
+    case 'thinking-toggle-chat-completions':
+      applyThinkingToggleChatReasoningEffort(body, effort, includeThinking)
+      return
     case 'deepseek-chat-completions':
       applyDeepSeekChatReasoningEffort(body, effort, nativeDeepSeekHost)
       return
@@ -480,6 +489,41 @@ function applyProfileReasoningEffort(
       applyMimoChatReasoningEffort(body, effort, includeThinking)
       return
   }
+}
+
+function applyOpenAiChatReasoningEffort(
+  body: Record<string, unknown>,
+  effort: NormalizedReasoningEffort
+): void {
+  switch (effort) {
+    case 'auto':
+      return
+    case 'off':
+      body.reasoning_effort = 'none'
+      return
+    case 'low':
+    case 'medium':
+    case 'high':
+    case 'max':
+      body.reasoning_effort = effort
+      return
+  }
+}
+
+function applyQwenChatReasoningEffort(
+  body: Record<string, unknown>,
+  effort: NormalizedReasoningEffort
+): void {
+  body.enable_thinking = effort !== 'off'
+}
+
+function applyThinkingToggleChatReasoningEffort(
+  body: Record<string, unknown>,
+  effort: NormalizedReasoningEffort,
+  includeThinking: boolean
+): void {
+  if (!includeThinking) return
+  body.thinking = { type: effort === 'off' ? 'disabled' : 'enabled' }
 }
 
 function applyDeepSeekChatReasoningEffort(

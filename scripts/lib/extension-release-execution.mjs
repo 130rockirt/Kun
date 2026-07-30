@@ -3,6 +3,8 @@ import { existsSync } from 'node:fs'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 
 const LOCAL_DEPENDENCY_PREFIXES = ['file:', 'link:', 'workspace:']
+export const REQUIRED_COMMAND_TIMEOUT_MS = 10 * 60 * 1000
+export const REQUIRED_COMPOSITE_COMMAND_TIMEOUT_MS = 20 * 60 * 1000
 
 export function npmExecutable(platform = process.platform) {
   return platform === 'win32' ? 'npm.cmd' : 'npm'
@@ -34,6 +36,13 @@ export function runRequiredNpm(options = {}) {
   })
 }
 
+export function runRequiredCompositeCommand(options = {}) {
+  return runRequiredCommand({
+    ...options,
+    timeoutMs: options.timeoutMs ?? REQUIRED_COMPOSITE_COMMAND_TIMEOUT_MS
+  })
+}
+
 export function runRequiredCommand({
   label,
   command,
@@ -41,7 +50,7 @@ export function runRequiredCommand({
   cwd,
   env = {},
   capture = false,
-  timeoutMs = 10 * 60 * 1000
+  timeoutMs = REQUIRED_COMMAND_TIMEOUT_MS
 }) {
   const result = spawnSync(command, args, {
     cwd,

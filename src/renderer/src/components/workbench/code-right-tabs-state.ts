@@ -141,6 +141,15 @@ export function retainCodeRightTabs(
   return next
 }
 
+export function codeRightTabsForGraphVisibility(
+  state: CodeRightTabsState,
+  graphEnabled: boolean
+): CodeRightTabsState {
+  return graphEnabled
+    ? state
+    : closeCodeRightTab(state, BUILTIN_RIGHT_PANEL_IDS.graph)
+}
+
 export function normalizeStoredCodeRightTabsRegistry(value: unknown): StoredCodeRightTabsRegistry {
   if (!value || typeof value !== 'object') {
     return { version: CODE_RIGHT_TABS_STATE_VERSION, workspaces: {} }

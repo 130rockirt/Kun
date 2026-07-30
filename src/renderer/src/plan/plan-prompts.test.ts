@@ -63,9 +63,21 @@ describe('plan-prompts', () => {
     expect(prompt).toContain('# Old')
   })
 
-  it('builds execution prompts that point at the plan file', () => {
-    expect(buildPlanBuildPrompt('.deepseekgui/plan/add-auth.md')).toContain(
-      'Please read and execute the GUI plan file at `.deepseekgui/plan/add-auth.md`'
+  it('embeds an authoritative plan for self-contained Graph creation', () => {
+    const prompt = buildPlanBuildPrompt(
+      '.deepseekgui/plan/add-auth.md',
+      '# Add auth\n\n- Implement login.',
+      'graph'
+    )
+    expect(prompt).toContain('.deepseekgui/plan/add-auth.md')
+    expect(prompt).toContain('authoritative implementation plan')
+    expect(prompt).toContain('# Add auth')
+    expect(prompt).toContain('make every executor objective self-contained')
+    expect(prompt).toContain('do not create a snapshot node')
+    expect(prompt).toContain('orchestration selected for this turn')
+    expect(prompt).not.toContain('normal agent execution mode')
+    expect(formatGuiPlanPromptForDisplay(prompt)).toBe(
+      'Build plan: .deepseekgui/plan/add-auth.md'
     )
   })
 

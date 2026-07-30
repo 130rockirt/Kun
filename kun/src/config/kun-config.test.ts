@@ -36,6 +36,23 @@ describe('RuntimeTuningConfigSchema turn admission', () => {
   })
 })
 
+describe('RuntimeTuningConfigSchema Agent Perspective capture', () => {
+  it('defaults an existing llmDebug block to enabled', () => {
+    expect(RuntimeTuningConfigSchema.parse({
+      llmDebug: {}
+    }).llmDebug).toEqual({ enabled: true })
+  })
+
+  it('preserves explicit facility and new-thread capture defaults', () => {
+    expect(RuntimeTuningConfigSchema.parse({
+      llmDebug: { enabled: true, defaultThreadCaptureEnabled: true }
+    }).llmDebug).toEqual({ enabled: true, defaultThreadCaptureEnabled: true })
+    expect(RuntimeTuningConfigSchema.parse({
+      llmDebug: { enabled: false, defaultThreadCaptureEnabled: false }
+    }).llmDebug).toEqual({ enabled: false, defaultThreadCaptureEnabled: false })
+  })
+})
+
 describe('default subagent parallelism', () => {
   it('defaults max parallel subagent runs to 256', () => {
     expect(DEFAULT_KUN_CAPABILITIES_CONFIG.subagents.maxParallel).toBe(256)

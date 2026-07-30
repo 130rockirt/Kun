@@ -4,6 +4,7 @@ import type { IdGenerator } from '../ports/id-generator.js'
 import type { ThreadStore } from '../ports/thread-store.js'
 import type { RuntimeEventRecorder } from '../services/runtime-event-recorder.js'
 import type { TurnService } from '../services/turn-service.js'
+import { resolveTurnClientSurface } from './turn-context-resolver.js'
 
 export type TurnLifecycleHookDeps = {
   hooks?: readonly ResolvedHook[]
@@ -29,6 +30,7 @@ export async function runTurnStartLifecycleHooks(
     threadId: input.threadId,
     turnId: input.turnId,
     prompt: turn?.prompt ?? '',
+    ...(turn ? { clientSurface: resolveTurnClientSurface(turn) } : {}),
     ...(thread?.workspace ? { workspace: thread.workspace } : {})
   }
   if (hasStart) {
@@ -59,7 +61,7 @@ export async function runTurnStartLifecycleHooks(
 
 /** TurnEnd observers are best effort and must never interrupt cleanup. */
 export async function runTurnEndLifecycleHooks(
-  deps: Pick<TurnLifecycleHookDeps, 'hooks' | 'events'>,
+  deps: Pick<TurnLifecycleHookDeps, 'hooks' | 'events' | 'threadStore' | 'turns'>,
   input: {
     threadId: string
     turnId: string
@@ -69,11 +71,17 @@ export async function runTurnEndLifecycleHooks(
 ): Promise<void> {
   if (!hasHooksForPhase(deps.hooks, 'TurnEnd')) return
   try {
+    const [turn, thread] = await Promise.all([
+      deps.turns.getTurn(input.threadId, input.turnId),
+      deps.threadStore.get(input.threadId)
+    ])
     const outcome = await runObserverHooks(deps.hooks, {
       phase: 'TurnEnd',
       threadId: input.threadId,
       turnId: input.turnId,
       status: input.status,
+      ...(turn ? { clientSurface: resolveTurnClientSurface(turn) } : {}),
+      ...(thread?.workspace ? { workspace: thread.workspace } : {}),
       ...(input.error ? { error: input.error } : {})
     })
     await recordLifecycleHookWarnings(deps.events, input, outcome.warnings)

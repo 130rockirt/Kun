@@ -1,7 +1,11 @@
 import { mkdir, open, readdir, rename, rm, stat } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import type { Database as BetterSqliteDatabase, Statement } from 'better-sqlite3'
-import type { ThreadRecord, ThreadSummary } from '../../contracts/threads.js'
+import {
+  ThreadSchema,
+  type ThreadRecord,
+  type ThreadSummary
+} from '../../contracts/threads.js'
 import type { RuntimeEvent } from '../../contracts/events.js'
 import type { TurnItem } from '../../contracts/items.js'
 import type { ThreadStore, ThreadStoreListOptions } from '../../ports/thread-store.js'
@@ -95,6 +99,10 @@ export class HybridThreadStore implements ThreadStore {
 
   async list(options: ThreadStoreListOptions = {}): Promise<ThreadSummary[]> {
     await this.ready()
+    // Missing or intentionally discarded SQLite indexes are rebuilt from the
+    // canonical JSONL metadata before the first list response. Usage/event
+    // backfill remains in the background so large histories stay responsive.
+    await this.backfill?.waitForIndex()
     if (this.db) {
       try {
         const rows = this.queryThreadRows(options)
@@ -132,13 +140,14 @@ export class HybridThreadStore implements ThreadStore {
   }
 
   async upsert(thread: ThreadRecord): Promise<ThreadRecord> {
-    assertSafeThreadId(thread.id)
+    const normalized = ThreadSchema.parse(thread)
+    assertSafeThreadId(normalized.id)
     await this.ready()
-    await this.appendMetadata(thread)
+    await this.appendMetadata(normalized)
     if (this.db) {
-      this.upsertIndexBestEffort(this.indexRecordForThread(thread))
+      this.upsertIndexBestEffort(this.indexRecordForThread(normalized))
     }
-    return thread
+    return normalized
   }
 
   async delete(threadId: string): Promise<boolean> {
@@ -324,6 +333,8 @@ export class HybridThreadStore implements ThreadStore {
         status TEXT NOT NULL,
         approval_policy TEXT NOT NULL,
         sandbox_mode TEXT NOT NULL,
+        approval_reviewer TEXT NOT NULL DEFAULT 'user',
+        model_request_capture_enabled INTEGER NOT NULL DEFAULT 0,
         cost_budget_usd REAL,
         cost_budget_warning_sent INTEGER,
         relation TEXT NOT NULL,
@@ -372,6 +383,8 @@ export class HybridThreadStore implements ThreadStore {
     `)
     addColumnIfMissing(this.db, 'threads', 'todos_json TEXT')
     addColumnIfMissing(this.db, 'threads', 'extension_metadata_json TEXT')
+    addColumnIfMissing(this.db, 'threads', 'model_request_capture_enabled INTEGER NOT NULL DEFAULT 0')
+    addColumnIfMissing(this.db, 'threads', "approval_reviewer TEXT NOT NULL DEFAULT 'user'")
     addColumnIfMissing(this.db, 'threads', 'usage_backfilled INTEGER NOT NULL DEFAULT 0')
   }
 
@@ -588,11 +601,23 @@ export class HybridThreadStore implements ThreadStore {
 
   private async rowHasReadableJsonl(row: ThreadRow): Promise<boolean> {
     if (!isSafeThreadId(row.id)) return false
-    if (row.metadata_path !== this.metadataPath(row.id)) return false
-    if (row.messages_path !== this.messagesPath(row.id)) return false
-    if (row.events_path !== this.eventsPath(row.id)) return false
     if (!(await pathExists(this.threadDir(row.id)))) return false
-    return (await pathExists(this.metadataPath(row.id))) || (await pathExists(this.legacyThreadPath(row.id)))
+    const readable =
+      (await pathExists(this.metadataPath(row.id))) ||
+      (await pathExists(this.legacyThreadPath(row.id)))
+    if (!readable) return false
+    if (
+      row.metadata_path !== this.metadataPath(row.id) ||
+      row.messages_path !== this.messagesPath(row.id) ||
+      row.events_path !== this.eventsPath(row.id)
+    ) {
+      // JSONL is canonical and the SQLite paths are derived. Moving a Runtime
+      // data directory (including the GUI's legacy migration) must not make a
+      // valid thread disappear merely because its cached absolute paths still
+      // point at the previous root.
+      this.index?.repairPaths(row.id)
+    }
+    return true
   }
 
   private threadDir(threadId: string): string {

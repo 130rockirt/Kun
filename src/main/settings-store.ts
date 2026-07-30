@@ -3,6 +3,10 @@ import { homedir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { atomicWriteFile } from '../../kun/src/adapters/file/atomic-write.js'
 import {
+  SETTINGS_FILE_NAME,
+  settingsReadCandidates
+} from './settings-file-paths'
+import {
   applyKunRuntimePatch,
   DEFAULT_GUI_UPDATE_CHANNEL,
   DEFAULT_CHECKPOINT_CLEANUP_ENABLED,
@@ -20,6 +24,7 @@ import {
   defaultScheduleSettings,
   defaultWorkflowSettings,
   getKunRuntimeSettings,
+  kunRuntimeTuningDefaultsMigrationNeeded,
   mergeModelProviderSettings,
   defaultWriteSettings,
   mergeClawSettings,
@@ -31,6 +36,7 @@ import {
   defaultTerminalSettings,
   mergeTerminalSettings,
   DEFAULT_CHAT_CONTENT_MAX_WIDTH_PX,
+  DEFAULT_COMPOSER_SEND_KEY,
   DEFAULT_UI_FONT_SCALE,
   normalizeAppBehaviorSettings,
   normalizeCheckpointCleanupSettings,
@@ -40,7 +46,8 @@ import {
   type AppSettingsPatch,
   type AppSettingsV1,
   type ClawImChannelV1,
-  type ClawImConversationV1
+  type ClawImConversationV1,
+  type KunRuntimeTuningSettingsV1
 } from '../shared/app-settings'
 
 export type { AppSettingsV1 }
@@ -59,6 +66,25 @@ export type SettingsCredentialMigration = {
     settings: AppSettingsV1,
     options?: { replaceCommitted?: boolean }
   ) => Promise<SettingsCredentialMigrationResult>
+  /**
+   * Repairs an already-migrated OAuth source whose protected value was
+   * previously flattened to an access token. Implementations must only use
+   * the backup as a recovery candidate and must not restore cleared sources.
+   */
+  repairRefreshableCredentialsFromBackup?: (
+    settings: AppSettingsV1,
+    backupSettings: AppSettingsV1
+  ) => Promise<string[]>
+}
+
+type JsonSettingsStoreOptions = {
+  credentialMigration?: SettingsCredentialMigration
+  /**
+   * Fail closed when Runtime migration prevents access to protected credential
+   * storage. Existing plaintext compatibility settings may still be read, but
+   * they must never be copied or rewritten by an ordinary settings save.
+   */
+  rejectPlaintextCredentials?: boolean
 }
 
 // 数据默认根目录从 ~/.deepseekgui 升级为 ~/.kun。老安装的既有目录由
@@ -73,15 +99,6 @@ const DEFAULT_CONVERSATION_WORKSPACE_ROOT_ABSOLUTE =
     : join(homedir(), 'Documents', 'Kun')
 const DEFAULT_CLAW_CHANNELS_ROOT = join(homedir(), '.kun', 'claw')
 const DEFAULT_WRITE_WORKSPACE_ROOT_ABSOLUTE = expandHomePath(DEFAULT_WRITE_WORKSPACE_ROOT)
-const SETTINGS_FILE_NAME = 'kun-settings.json'
-// 旧版设置文件名。userData 整目录迁移后旧文件会原样留在新目录里,
-// 首次加载从它兜底读取,load() 随后把规范化结果另存为新文件名;旧
-// 文件保留不动,用户回滚老版本时还能读到可用配置。
-const LEGACY_SETTINGS_FILE_NAME = 'deepseek-gui-settings.json'
-// 旧版 userData 目录名(更早版本还没有 app.setName 时用过小写包名)。
-// 正常情况下迁移模块已把它们 rename 走,这里是迁移失败/被跳过时的
-// 跨目录兜底。
-const COMPATIBLE_USER_DATA_DIR_NAMES = ['deepseek-gui', 'DeepSeek GUI'] as const
 const WELCOME_MARKDOWN = `# Welcome to Write
 
 This is your default writing workspace.
@@ -231,6 +248,7 @@ const defaultSettings = (): AppSettingsV1 => ({
   theme: 'system',
   uiFontScale: DEFAULT_UI_FONT_SCALE,
   chatContentMaxWidthPx: DEFAULT_CHAT_CONTENT_MAX_WIDTH_PX,
+  composerSendKey: DEFAULT_COMPOSER_SEND_KEY,
   cursorSpotlight: true,
   cursorSpotlightColor: DEFAULT_CURSOR_SPOTLIGHT_COLOR,
   provider: defaultModelProviderSettings(),
@@ -250,7 +268,9 @@ const defaultSettings = (): AppSettingsV1 => ({
   },
   gitBranchPrefix: DEFAULT_GIT_BRANCH_PREFIX,
   notifications: {
-    turnComplete: true
+    turnComplete: true,
+    mainAgentTurnComplete: true,
+    subagentTurnComplete: false
   },
   appBehavior: normalizeAppBehaviorSettings(),
   keyboardShortcuts: normalizeKeyboardShortcuts(),
@@ -289,6 +309,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+function storedKunRuntimeTuning(
+  settings: Record<string, unknown>
+): Partial<KunRuntimeTuningSettingsV1> | undefined {
+  const agents = isRecord(settings.agents) ? settings.agents : undefined
+  const kun = agents && isRecord(agents.kun) ? agents.kun : undefined
+  const runtimeTuning = kun && isRecord(kun.runtimeTuning) ? kun.runtimeTuning : undefined
+  return runtimeTuning as Partial<KunRuntimeTuningSettingsV1> | undefined
+}
+
 async function loadDefaultSettings(): Promise<AppSettingsV1> {
   const defaults = normalizeStoredSettings(defaultSettings())
   await ensureManagedWorkspaceRootsExist(defaults)
@@ -310,7 +339,7 @@ async function writeInvalidSettingsBackup(path: string, raw: string): Promise<st
 }
 
 async function writeLegacyCredentialSettingsBackup(path: string, raw: string): Promise<string | null> {
-  const backupPath = join(dirname(path), `${basename(path, '.json')}.pre-extension-credential-migration.json`)
+  const backupPath = legacyCredentialSettingsBackupPath(path)
   try {
     await writeFile(backupPath, raw, { encoding: 'utf8', flag: 'wx', mode: 0o600 })
     await chmod(backupPath, 0o600).catch(() => undefined)
@@ -326,6 +355,27 @@ async function writeLegacyCredentialSettingsBackup(path: string, raw: string): P
         return null
       }
     }
+    return null
+  }
+}
+
+function legacyCredentialSettingsBackupPath(path: string): string {
+  return join(dirname(path), `${basename(path, '.json')}.pre-extension-credential-migration.json`)
+}
+
+async function readLegacyCredentialSettingsBackup(path: string): Promise<AppSettingsV1 | null> {
+  const backupPath = legacyCredentialSettingsBackupPath(path)
+  try {
+    const metadata = await lstat(backupPath)
+    if (!metadata.isFile() || metadata.isSymbolicLink()) return null
+    const parsed = JSON.parse(await readFile(backupPath, 'utf8')) as unknown
+    if (!isRecord(parsed)) return null
+    return normalizeStoredSettings(buildMergedSettings(parsed as Partial<AppSettingsV1>))
+  } catch (error) {
+    if (isErrnoException(error) && error.code === 'ENOENT') return null
+    console.warn('[kun-gui] Pre-migration credential backup could not be read for OAuth recovery.', {
+      message: error instanceof Error ? error.message : String(error)
+    })
     return null
   }
 }
@@ -351,34 +401,10 @@ async function replaceInvalidSettingsWithDefaults(
   return defaults
 }
 
-function compatibleSettingsPaths(currentPath: string): string[] {
-  const currentUserDataDir = dirname(currentPath)
-  const currentDirName = basename(currentUserDataDir)
-  const parentDir = dirname(currentUserDataDir)
-  // 顺序:当前目录里的旧文件名(userData 迁移后的常见形态)优先,
-  // 然后才是旧目录里的新旧文件名。
-  const candidates = [join(currentUserDataDir, LEGACY_SETTINGS_FILE_NAME)]
-  for (const dirName of COMPATIBLE_USER_DATA_DIR_NAMES) {
-    if (dirName === currentDirName) continue
-    candidates.push(join(parentDir, dirName, SETTINGS_FILE_NAME))
-    candidates.push(join(parentDir, dirName, LEGACY_SETTINGS_FILE_NAME))
-  }
-  return candidates
-}
-
 async function readSettingsFileWithCompatibility(
   currentPath: string
 ): Promise<{ raw: string, sourcePath: string } | null> {
-  try {
-    return {
-      raw: await readFile(currentPath, 'utf8'),
-      sourcePath: currentPath
-    }
-  } catch (error) {
-    if (!isErrnoException(error) || error.code !== 'ENOENT') throw error
-  }
-
-  for (const candidatePath of compatibleSettingsPaths(currentPath)) {
+  for (const candidatePath of settingsReadCandidates(dirname(currentPath))) {
     try {
       return {
         raw: await readFile(candidatePath, 'utf8'),
@@ -399,7 +425,7 @@ export class JsonSettingsStore {
 
   constructor(
     userDataPath: string,
-    private readonly options: { credentialMigration?: SettingsCredentialMigration } = {}
+    private readonly options: JsonSettingsStoreOptions = {}
   ) {
     this.path = join(userDataPath, SETTINGS_FILE_NAME)
   }
@@ -437,9 +463,15 @@ export class JsonSettingsStore {
       return replaceInvalidSettingsWithDefaults(this, sourcePath, raw, 'top-level value is not an object')
     }
 
+    const persistRuntimeTuningDefaultsMigration = (() => {
+      const runtimeTuning = storedKunRuntimeTuning(parsed)
+      return runtimeTuning !== undefined &&
+        kunRuntimeTuningDefaultsMigrationNeeded(runtimeTuning)
+    })()
     const normalized = normalizeStoredSettings(buildMergedSettings(parsed as Partial<AppSettingsV1>))
     await ensureManagedWorkspaceRootsExist(normalized)
     const prepared = normalized
+    await this.repairRefreshableCredentialsFromBackup(prepared, sourcePath)
     if (this.options.credentialMigration && hasLegacyProviderPlaintext(prepared)) {
       const backupPath = await writeLegacyCredentialSettingsBackup(sourcePath, raw)
       if (!backupPath) {
@@ -451,8 +483,14 @@ export class JsonSettingsStore {
     const migration = await this.prepareCredentialMigration(prepared, false)
     if (migration === undefined) {
       this.cache = prepared
-      if (sourcePath !== this.path) {
-        await this.save(prepared)
+      if (sourcePath !== this.path || persistRuntimeTuningDefaultsMigration) {
+        if (this.rejectsPlaintextCredentials(prepared)) {
+          console.warn(
+            '[kun-gui] Settings compatibility rewrite deferred because protected credential storage is unavailable.'
+          )
+        } else {
+          await this.save(prepared)
+        }
       }
       return this.cache
     }
@@ -461,7 +499,10 @@ export class JsonSettingsStore {
       return this.cache
     }
 
-    const shouldPersist = sourcePath !== this.path || migration.removedPlaintext
+    const shouldPersist =
+      sourcePath !== this.path ||
+      migration.removedPlaintext ||
+      persistRuntimeTuningDefaultsMigration
     if (shouldPersist) {
       try {
         await this.persistSettings(migration.persistedSettings)
@@ -487,6 +528,11 @@ export class JsonSettingsStore {
     const normalized = normalizeStoredSettings(data)
     await ensureManagedWorkspaceRootsExist(normalized)
     const prepared = normalized
+    if (this.rejectsPlaintextCredentials(prepared)) {
+      throw new Error(
+        'Protected credential storage is unavailable while Kun Runtime data migration is blocked; settings containing plaintext credentials were not written'
+      )
+    }
     if (this.options.credentialMigration && hasLegacyProviderPlaintext(prepared)) {
       const currentRaw = await readFile(this.path, 'utf8').catch((error) => {
         if (isErrnoException(error) && error.code === 'ENOENT') return serializeSettingsForDisk(prepared)
@@ -564,6 +610,35 @@ export class JsonSettingsStore {
       })
       return null
     }
+  }
+
+  private async repairRefreshableCredentialsFromBackup(
+    settings: AppSettingsV1,
+    sourcePath: string
+  ): Promise<void> {
+    const credentialMigration = this.options.credentialMigration
+    const repair = credentialMigration?.repairRefreshableCredentialsFromBackup
+    if (!repair || hasLegacyProviderPlaintext(settings)) return
+    const backup = await readLegacyCredentialSettingsBackup(sourcePath)
+    if (!backup) return
+    try {
+      const repairedSourceIds = await repair.call(credentialMigration, settings, backup)
+      if (repairedSourceIds.length > 0) {
+        console.info('[kun-gui] Recovered refreshable OAuth credentials from the protected migration backup.', {
+          sourceIds: repairedSourceIds
+        })
+      }
+    } catch (error) {
+      console.warn('[kun-gui] Refreshable OAuth credential recovery was skipped.', {
+        message: error instanceof Error ? error.message : String(error)
+      })
+    }
+  }
+
+  private rejectsPlaintextCredentials(settings: AppSettingsV1): boolean {
+    return this.options.rejectPlaintextCredentials === true &&
+      !this.options.credentialMigration &&
+      hasLegacyProviderPlaintext(settings)
   }
 
   private async persistSettings(settings: AppSettingsV1): Promise<void> {

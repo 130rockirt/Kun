@@ -9,6 +9,7 @@ import {
   type PointerEventHandler,
   type ReactElement
 } from 'react'
+import { useTranslation } from 'react-i18next'
 import {
   DesignRightPanelContent,
   type DesignRightPanelContentProps
@@ -23,6 +24,7 @@ import {
   type RightPanelContributionId
 } from '../../extensions/contribution-ids'
 import type { CodeRightTabsState } from './code-right-tabs-state'
+import { codeRightTabsForGraphVisibility } from './code-right-tabs-state'
 import { CodeRightPanelTabs, codeRightTabDomIds } from './CodeRightPanelTabs'
 import {
   WorkbenchFileTreeSidePanel,
@@ -58,8 +60,14 @@ const SideConversationPanel = lazy(() =>
 const McpSkillsPanel = lazy(() =>
   import('./McpSkillsPanel').then((module) => ({ default: module.McpSkillsPanel }))
 )
+const UsageQuotaPanel = lazy(() =>
+  import('./UsageQuotaPanel').then((module) => ({ default: module.UsageQuotaPanel }))
+)
 const AgentPerspectivePanel = lazy(() =>
   import('./AgentPerspectivePanel').then((module) => ({ default: module.AgentPerspectivePanel }))
+)
+const GraphModePanel = lazy(() =>
+  import('../graph/GraphModePanel').then((module) => ({ default: module.GraphModePanel }))
 )
 
 type WriteAssistantPanelProps = ComponentProps<typeof WriteAssistantPanel>
@@ -78,8 +86,10 @@ export type WorkbenchCodeRightWorkspaceProps = {
   files: WorkbenchFileTreeSidePanelProps
   extensionItems: readonly ExtensionRightRailViewEntry[]
   extensionViews: readonly RegisteredContribution<'views.rightSidebar'>[]
+  onOpen: (id: RightPanelContributionId) => void
   onActivate: (id: RightPanelContributionId) => void
   onClose: (id: RightPanelContributionId) => void
+  onToggleFiles: () => void
   onNewSideConversation: () => void
 }
 
@@ -88,6 +98,7 @@ export type WorkbenchRightPanelProps = {
   width: number
   route: string
   rightPanelMode: RightPanelMode | null
+  graphEnabled?: boolean
   onBeginResize: PointerEventHandler<HTMLDivElement>
   design: DesignRightPanelContentProps
   writeAssistantOpen: boolean
@@ -114,6 +125,7 @@ export function WorkbenchRightPanel({
   width,
   route,
   rightPanelMode,
+  graphEnabled = false,
   onBeginResize,
   design,
   writeAssistantOpen,
@@ -131,13 +143,17 @@ export function WorkbenchRightPanel({
   onCollapse
 }: WorkbenchRightPanelProps): ReactElement | null {
   if (route === 'chat' && rightPanelMode !== BUILTIN_RIGHT_PANEL_IDS.sddAi && code) {
-    if (!visible && code.state.tabs.length === 0) return null
+    const visibleCodeState = codeRightTabsForGraphVisibility(code.state, graphEnabled)
+    if (
+      (!visible && visibleCodeState.tabs.length === 0) ||
+      (code.state.tabs.length > 0 && visibleCodeState.tabs.length === 0)
+    ) return null
     return (
       <CodeRightPanelWorkspace
         visible={visible}
         width={width}
         onBeginResize={onBeginResize}
-        code={code}
+        code={{ ...code, state: visibleCodeState }}
         changes={changes}
         browser={browser}
         planPanel={planPanel}
@@ -150,6 +166,7 @@ export function WorkbenchRightPanel({
     )
   }
   if (!visible) return null
+  if (!graphEnabled && rightPanelMode === BUILTIN_RIGHT_PANEL_IDS.graph) return null
   return (
     <>
       <div
@@ -158,7 +175,7 @@ export function WorkbenchRightPanel({
         className="ds-workbench-divider ds-no-drag relative z-20 shrink-0 cursor-col-resize"
         onPointerDown={onBeginResize}
       />
-      <div className="h-full min-h-0 shrink-0" style={{ width }}>
+      <div className="ds-sidebar-surface h-full min-h-0 shrink-0" style={{ width }}>
         <Suspense fallback={<div className="h-full w-full bg-ds-sidebar" />}>
           {design.panelMode !== 'hidden' ? (
             <DesignRightPanelContent {...design} />
@@ -180,6 +197,8 @@ export function WorkbenchRightPanel({
             <WorkspaceFilePreviewPanel {...file} className="h-full max-h-full w-full" />
           ) : rightPanelMode === BUILTIN_RIGHT_PANEL_IDS.mcpSkills ? (
             <McpSkillsPanel workspaceRoot={workspaceRoot} onOpenSettings={mcpSkills.onOpenSettings} />
+          ) : rightPanelMode === BUILTIN_RIGHT_PANEL_IDS.graph ? (
+            <GraphModePanel className="h-full max-h-full w-full" onCollapse={onCollapse} />
           ) : rightPanelMode && isExtensionContributionId(rightPanelMode) && extensionView?.id === rightPanelMode ? (
             <ExtensionViewOutlet contribution={extensionView} workspaceRoot={workspaceRoot} onClose={onCollapse} />
           ) : (
@@ -220,6 +239,7 @@ function CodeRightPanelWorkspace({
   | 'workspaceRoot'
   | 'onCollapse'
 > & { code: WorkbenchCodeRightWorkspaceProps }): ReactElement {
+  const { t } = useTranslation('common')
   const reactId = useId()
   const domIdPrefix = `code-right-${reactId}`
   const [visited, setVisited] = useState<Set<RightPanelContributionId>>(() =>
@@ -277,7 +297,29 @@ function CodeRightPanelWorkspace({
       return <WorkbenchFileTreeSidePanel {...code.files} open embedded />
     }
     if (id === BUILTIN_RIGHT_PANEL_IDS.file) {
-      return <WorkspaceFilePreviewPanel {...file} className="h-full max-h-full w-full" />
+      return (
+        <div className="ds-file-preview-workspace h-full min-h-0 min-w-0">
+          {code.files.open ? (
+            <>
+              <button
+                type="button"
+                className="ds-file-preview-explorer-backdrop"
+                onClick={code.onToggleFiles}
+                aria-label={t('fileTreeClose')}
+              />
+              <div className="ds-file-preview-explorer">
+                <WorkbenchFileTreeSidePanel {...code.files} open embedded />
+              </div>
+            </>
+          ) : null}
+          <WorkspaceFilePreviewPanel
+            {...file}
+            fileTreeOpen={code.files.open}
+            onToggleFileTree={code.onToggleFiles}
+            className="h-full max-h-full min-w-0 flex-1 border-l-0"
+          />
+        </div>
+      )
     }
     if (id === BUILTIN_RIGHT_PANEL_IDS.sideConversations) {
       return (
@@ -290,6 +332,12 @@ function CodeRightPanelWorkspace({
     }
     if (id === BUILTIN_RIGHT_PANEL_IDS.mcpSkills) {
       return <McpSkillsPanel workspaceRoot={workspaceRoot} onOpenSettings={mcpSkills.onOpenSettings} />
+    }
+    if (id === BUILTIN_RIGHT_PANEL_IDS.providerQuotas) {
+      return <UsageQuotaPanel activeThreadId={code.activeThreadId} />
+    }
+    if (id === BUILTIN_RIGHT_PANEL_IDS.graph) {
+      return <GraphModePanel className="h-full max-h-full w-full" onCollapse={onCollapse} />
     }
     if (id === BUILTIN_RIGHT_PANEL_IDS.agentPerspective) {
       return (
@@ -322,7 +370,7 @@ function CodeRightPanelWorkspace({
         onPointerDown={onBeginResize}
       />
       <div
-        className={`${visible ? 'flex' : 'hidden'} h-full min-h-0 shrink-0 flex-col bg-ds-sidebar`}
+        className={`${visible ? 'flex' : 'hidden'} ds-sidebar-surface h-full min-h-0 shrink-0 flex-col`}
         style={{ width }}
       >
         <CodeRightPanelTabs
@@ -338,7 +386,7 @@ function CodeRightPanelWorkspace({
           onCollapse={onCollapse}
         />
         <Suspense fallback={<div className="h-full w-full bg-ds-sidebar" />}>
-          <div className="relative min-h-0 flex-1 bg-ds-sidebar">
+          <div className="ds-sidebar-surface-body relative min-h-0 flex-1">
             {code.state.tabs.map((id) => {
               const active = code.state.activeId === id
               if (!visited.has(id) && !active) return null
@@ -350,7 +398,7 @@ function CodeRightPanelWorkspace({
                   role="tabpanel"
                   aria-labelledby={tabId}
                   hidden={!active}
-                  className="absolute inset-0 min-h-0"
+                  className="absolute inset-0 min-h-0 overflow-hidden"
                 >
                   {renderPanel(id)}
                 </div>

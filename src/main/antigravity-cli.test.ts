@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   antigravityCliAsset,
   antigravityCliBinaryName,
-  parseAntigravityGeminiModels
+  parseAntigravityModels
 } from './antigravity-cli'
 
 describe('Antigravity CLI integration', () => {
@@ -17,27 +17,67 @@ describe('Antigravity CLI integration', () => {
     expect(antigravityCliBinaryName('win32')).toBe('agy.exe')
   })
 
-  it('collapses effort variants to the user-facing Gemini model id', () => {
-    expect(parseAntigravityGeminiModels([
+  it('groups effort variants while retaining every account-visible model family', () => {
+    expect(parseAntigravityModels([
       'gemini-3.6-flash-high',
       'gemini-3.6-flash-medium',
       'gemini-3.6-flash-low',
       'gemini-3.5-flash-high',
       'gemini-3.5-flash-low',
       'gemini-3.1-pro-high',
+      'gemini-3.1-pro-low',
       'claude-sonnet-4-6',
+      'claude-opus-4-6-thinking',
       'gpt-oss-120b-medium',
       ''
-    ].join('\n'))).toEqual([
-      'gemini-3.6-flash',
-      'gemini-3.5-flash',
-      'gemini-3.1-pro'
-    ])
+    ].join('\n'))).toEqual({
+      models: [
+        {
+          id: 'gemini-3.6-flash',
+          supportedEfforts: ['low', 'medium', 'high'],
+          defaultEffort: 'medium'
+        },
+        {
+          id: 'gemini-3.5-flash',
+          supportedEfforts: ['low', 'high'],
+          defaultEffort: 'high'
+        },
+        {
+          id: 'gemini-3.1-pro',
+          supportedEfforts: ['low', 'high'],
+          defaultEffort: 'high'
+        },
+        {
+          id: 'claude-sonnet-4-6',
+          supportedEfforts: ['medium'],
+          defaultEffort: 'medium'
+        },
+        {
+          id: 'claude-opus-4-6-thinking',
+          supportedEfforts: ['medium'],
+          defaultEffort: 'medium'
+        },
+        {
+          id: 'gpt-oss-120b',
+          supportedEfforts: ['medium'],
+          defaultEffort: 'medium'
+        }
+      ]
+    })
   })
 
   it('ignores diagnostic text and malformed model ids', () => {
-    expect(parseAntigravityGeminiModels(
-      'Loading models...\n gemini-3.6-flash-medium \nnot/a-model\n'
-    )).toEqual(['gemini-3.6-flash'])
+    expect(parseAntigravityModels([
+      'Loading models...',
+      'gemini-3.6-flash-medium',
+      'not/a-model',
+      `model-${'x'.repeat(130)}`
+    ].join('\n'))).toEqual({
+      models: [{
+        id: 'gemini-3.6-flash',
+        supportedEfforts: ['medium'],
+        defaultEffort: 'medium'
+      }]
+    })
   })
 })

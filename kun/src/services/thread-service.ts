@@ -20,7 +20,11 @@ import type {
   ThreadSummary
 } from '../contracts/threads.js'
 import type { ExtensionThreadMetadata } from '../contracts/threads.js'
-import type { ApprovalPolicy, SandboxMode } from '../contracts/policy.js'
+import type {
+  ApprovalPolicy,
+  ApprovalReviewer,
+  SandboxMode
+} from '../contracts/policy.js'
 import type { Turn } from '../contracts/turns.js'
 import type { TurnItem } from '../contracts/items.js'
 import { createThreadRecord, toThreadSummary, touchThread } from '../domain/thread.js'
@@ -51,10 +55,20 @@ export type ThreadServiceOptions = {
   nowIso: () => string
   defaultApprovalPolicy?: ApprovalPolicy
   defaultSandboxMode?: SandboxMode
+  defaultApprovalReviewer?: ApprovalReviewer
+  defaultModelRequestCaptureEnabled?: boolean
   lifecycleFence?: ThreadLifecycleFence
   /** Abort in-process work after the fence starts rejecting new writes. */
   onDeleting?: (threadId: string) => Promise<void> | void
   onDeleted?: (threadId: string) => Promise<void> | void
+  onStatusChanged?: (
+    threadId: string,
+    status: ThreadStatus
+  ) => Promise<void> | void
+  onForked?: (
+    sourceThreadId: string,
+    targetThreadId: string
+  ) => Promise<void> | void
 }
 
 export type ListThreadsOptions = ThreadStoreListOptions
@@ -63,12 +77,15 @@ export type ForkThreadOptions = {
   relation?: ThreadRelation
   title?: string
   turnId?: string
+  beforeTurn?: boolean
+  approvalReviewer?: ApprovalReviewer
 }
 
 export type ResumeSessionOptions = {
   workspace?: string
   model?: string
   mode?: ThreadMode
+  approvalReviewer?: ApprovalReviewer
 }
 
 export type ResumeSessionResult = {
@@ -93,9 +110,13 @@ export class ThreadService {
   private readonly nowIso: () => string
   private defaultApprovalPolicy: ApprovalPolicy | undefined
   private defaultSandboxMode: SandboxMode | undefined
+  private defaultApprovalReviewer: ApprovalReviewer | undefined
+  private defaultModelRequestCaptureEnabled: boolean
   private readonly lifecycleFence?: ThreadLifecycleFence
   private readonly onDeleting?: (threadId: string) => Promise<void> | void
   private readonly onDeleted?: (threadId: string) => Promise<void> | void
+  private readonly onStatusChanged?: ThreadServiceOptions['onStatusChanged']
+  private readonly onForked?: ThreadServiceOptions['onForked']
 
   constructor(options: ThreadServiceOptions) {
     this.threadStore = options.threadStore
@@ -106,14 +127,25 @@ export class ThreadService {
     this.nowIso = options.nowIso
     this.defaultApprovalPolicy = options.defaultApprovalPolicy
     this.defaultSandboxMode = options.defaultSandboxMode
+    this.defaultApprovalReviewer = options.defaultApprovalReviewer
+    this.defaultModelRequestCaptureEnabled = options.defaultModelRequestCaptureEnabled ?? false
     this.lifecycleFence = options.lifecycleFence
     this.onDeleting = options.onDeleting
     this.onDeleted = options.onDeleted
+    this.onStatusChanged = options.onStatusChanged
+    this.onForked = options.onForked
   }
 
-  updateRuntimeDefaults(input: { approvalPolicy: ApprovalPolicy; sandboxMode: SandboxMode }): void {
+  updateRuntimeDefaults(input: {
+    approvalPolicy: ApprovalPolicy
+    sandboxMode: SandboxMode
+    approvalReviewer: ApprovalReviewer
+    modelRequestCaptureEnabled: boolean
+  }): void {
     this.defaultApprovalPolicy = input.approvalPolicy
     this.defaultSandboxMode = input.sandboxMode
+    this.defaultApprovalReviewer = input.approvalReviewer
+    this.defaultModelRequestCaptureEnabled = input.modelRequestCaptureEnabled
   }
 
   async list(options: ListThreadsOptions = {}): Promise<ThreadSummary[]> {
@@ -160,6 +192,7 @@ export class ThreadService {
       title: options.title ?? (request.title?.trim() || 'New chat'),
       ...(request.titleAuto !== undefined ? { titleAuto: request.titleAuto } : {}),
       workspace: request.workspace,
+      additionalWorkspaces: request.additionalWorkspaces,
       model: request.model,
       ...(request.providerId?.trim() ? { providerId: request.providerId.trim() } : {}),
       ...(request.accountId?.trim() ? { accountId: request.accountId.trim() } : {}),
@@ -169,6 +202,9 @@ export class ThreadService {
       mode: request.mode,
       approvalPolicy: request.approvalPolicy ?? this.defaultApprovalPolicy,
       sandboxMode: request.sandboxMode ?? this.defaultSandboxMode,
+      approvalReviewer: request.approvalReviewer ?? this.defaultApprovalReviewer,
+      modelRequestCaptureEnabled:
+        request.modelRequestCaptureEnabled ?? this.defaultModelRequestCaptureEnabled,
       ...(request.costBudgetUsd !== undefined ? { costBudgetUsd: request.costBudgetUsd } : {}),
       ...(options.relation ? { relation: options.relation } : {}),
       ...(options.parentThreadId ? { parentThreadId: options.parentThreadId } : {}),
@@ -187,7 +223,10 @@ export class ThreadService {
     await this.events.record({
       kind: 'thread_created',
       threadId: thread.id,
-      title: thread.title
+      title: thread.title,
+      approvalPolicy: thread.approvalPolicy,
+      sandboxMode: thread.sandboxMode,
+      approvalReviewer: thread.approvalReviewer
     })
     return thread
   }
@@ -197,10 +236,14 @@ export class ThreadService {
     titleAuto?: boolean
     summary?: string
     workspace?: string
+    additionalWorkspaces?: string[]
+    mode?: ThreadMode
     /** Archive or unarchive only; execution and deletion states are internal. */
     status?: ThreadUpdateStatus
     approvalPolicy?: ApprovalPolicy
     sandboxMode?: SandboxMode
+    approvalReviewer?: ApprovalReviewer
+    modelRequestCaptureEnabled?: boolean
     pinned?: boolean
     costBudgetUsd?: number | null
     costBudgetWarningSent?: boolean
@@ -217,6 +260,11 @@ export class ThreadService {
         throw new Error(`thread status is managed by the runtime: ${patch.status}`)
       }
       const { costBudgetUsd, costBudgetWarningSent, status, ...standardPatch } = patch
+      if (standardPatch.additionalWorkspaces) {
+        standardPatch.additionalWorkspaces = [...new Set(
+          standardPatch.additionalWorkspaces.map((entry) => entry.trim()).filter(Boolean)
+        )].filter((entry) => entry !== (standardPatch.workspace ?? current.workspace))
+      }
       const merged: ThreadRecord = { ...current, ...standardPatch }
       if (status === 'archived') {
         // Archival is a visibility overlay: an already-active turn can settle
@@ -251,8 +299,16 @@ export class ThreadService {
       threadId,
       title: updated.title,
       ...(updated.titleAuto !== undefined ? { titleAuto: updated.titleAuto } : {}),
-      status: updated.status
+      status: updated.status,
+      mode: updated.mode,
+      workspace: updated.workspace,
+      additionalWorkspaces: updated.additionalWorkspaces,
+      approvalPolicy: updated.approvalPolicy,
+      sandboxMode: updated.sandboxMode,
+      approvalReviewer: updated.approvalReviewer,
+      modelRequestCaptureEnabled: updated.modelRequestCaptureEnabled
     })
+    await this.onStatusChanged?.(threadId, updated.status)
     return updated
   }
 
@@ -534,6 +590,12 @@ export class ThreadService {
   async fork(threadId: string, options: ForkThreadOptions = {}): Promise<ThreadRecord> {
     const current = await this.threadStore.get(threadId)
     if (!current) throw new Error(`thread not found: ${threadId}`)
+    if (
+      options.approvalReviewer !== undefined &&
+      options.approvalReviewer !== current.approvalReviewer
+    ) {
+      throw new Error('fork approval reviewer must inherit the source thread')
+    }
     const now = this.nowIso()
     const forkId = this.ids.next('thr')
     const relation: ThreadRelation = options.relation ?? 'fork'
@@ -545,7 +607,7 @@ export class ThreadService {
       throw new Error(`turn not found: ${targetTurnId}`)
     }
     const sourceTurns = targetTurnId
-      ? current.turns.slice(0, targetTurnIndex + 1)
+      ? current.turns.slice(0, targetTurnIndex + (options.beforeTurn ? 0 : 1))
       : current.turns
     // Snapshot semantics: clone each turn as it stands now. The parent
     // loop keeps mutating its own record; we copy, never borrow.
@@ -559,7 +621,12 @@ export class ThreadService {
       id: forkId,
       title: options.title?.trim() || defaultTitle,
       workspace: current.workspace,
+      additionalWorkspaces: current.additionalWorkspaces,
       model: current.model,
+      ...(current.providerId ? { providerId: current.providerId } : {}),
+      ...(current.accountId ? { accountId: current.accountId } : {}),
+      ...(current.agentId ? { agentId: current.agentId } : {}),
+      ...(current.systemPrompt ? { systemPrompt: current.systemPrompt } : {}),
       // A fork is a fresh conversation branch, not a continuation of the
       // parent's plan workflow — the plan artifact and its workspace belong to
       // the source thread. Inheriting `mode: 'plan'` made a forked "new
@@ -571,6 +638,8 @@ export class ThreadService {
       status: 'idle',
       approvalPolicy: current.approvalPolicy,
       sandboxMode: current.sandboxMode,
+      approvalReviewer: current.approvalReviewer,
+      modelRequestCaptureEnabled: this.defaultModelRequestCaptureEnabled,
       relation,
       parentThreadId: current.id,
       forkedFromThreadId: current.id,
@@ -593,8 +662,12 @@ export class ThreadService {
     await this.events.record({
       kind: 'thread_created',
       threadId: record.id,
-      title: record.title
+      title: record.title,
+      approvalPolicy: record.approvalPolicy,
+      sandboxMode: record.sandboxMode,
+      approvalReviewer: record.approvalReviewer
     })
+    await this.onForked?.(threadId, record.id)
     return record
   }
 
@@ -611,6 +684,13 @@ export class ThreadService {
         : await this.sessionStore.loadItems(sessionId)
     if (!sourceThread && !sourceSession && sourceItems.length === 0) {
       throw new Error(`session not found: ${sessionId}`)
+    }
+    if (
+      sourceThread &&
+      options.approvalReviewer !== undefined &&
+      options.approvalReviewer !== sourceThread.approvalReviewer
+    ) {
+      throw new Error('resumed approval reviewer must inherit the source thread')
     }
 
     const now = this.nowIso()
@@ -636,6 +716,8 @@ export class ThreadService {
       status: 'idle',
       approvalPolicy: sourceThread?.approvalPolicy,
       sandboxMode: sourceThread?.sandboxMode,
+      approvalReviewer: sourceThread?.approvalReviewer ?? options.approvalReviewer,
+      modelRequestCaptureEnabled: this.defaultModelRequestCaptureEnabled,
       forkedFromThreadId: sourceThread?.id,
       forkedFromTitle: sourceThread?.title,
       forkedAt: now,
@@ -657,7 +739,10 @@ export class ThreadService {
     await this.events.record({
       kind: 'thread_created',
       threadId: resumed.id,
-      title: resumed.title
+      title: resumed.title,
+      approvalPolicy: resumed.approvalPolicy,
+      sandboxMode: resumed.sandboxMode,
+      approvalReviewer: resumed.approvalReviewer
     })
     return { thread: resumed, sessionId, messageCount: clonedItems.length }
   }
@@ -942,6 +1027,7 @@ function rebuildTurnsFromItems(input: {
       threadId: input.threadId,
       status: 'completed',
       prompt: input.fallbackPrompt,
+      orchestration: 'direct',
       steering: [],
       attachmentIds: [],
       activeSkillIds: [],
@@ -962,6 +1048,7 @@ function rebuildTurnsFromItems(input: {
       threadId: input.threadId,
       status: 'completed',
       prompt,
+      orchestration: 'direct',
       steering: [],
       attachmentIds: attachmentIdsFromItems(items),
       activeSkillIds: [],

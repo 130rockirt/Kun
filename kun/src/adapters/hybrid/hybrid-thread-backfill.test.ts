@@ -36,6 +36,28 @@ function makeDeps(
 }
 
 describe('HybridThreadBackfillCoordinator shutdown', () => {
+  it('indexes every readable thread before waiting for slow event replay', async () => {
+    const scan = deferred<{ highWater: number; usage: Usage[] }>()
+    const deps = makeDeps({
+      indexedRows: vi.fn(() => []),
+      scanEvents: vi.fn(() => scan.promise)
+    })
+    const coordinator = new HybridThreadBackfillCoordinator(deps)
+
+    coordinator.start()
+    await coordinator.waitForIndex()
+
+    expect(deps.readMissingThread).toHaveBeenCalledWith('thread_1')
+    expect(deps.upsertMissing).toHaveBeenCalledWith('thread_1', 0)
+    expect(deps.scanEvents).toHaveBeenCalledTimes(1)
+    expect(deps.markUsageBackfilled).not.toHaveBeenCalled()
+
+    scan.resolve({ highWater: 3, usage: [{ seq: 3 }] })
+    await coordinator.wait()
+    expect(deps.noteExistingHighWater).toHaveBeenCalledWith('thread_1', 3)
+    expect(deps.markUsageBackfilled).toHaveBeenCalledWith('thread_1')
+  })
+
   it('stops before scanning when shutdown races filesystem discovery', async () => {
     const ids = deferred<string[]>()
     const deps = makeDeps({ filesystemThreadIds: vi.fn(() => ids.promise) })

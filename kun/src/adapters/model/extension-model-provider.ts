@@ -749,7 +749,9 @@ function normalizeModelRequest(
       ...(request.topP !== undefined ? { topP: request.topP } : {}),
       ...(request.maxTokens !== undefined ? { maxOutputTokens: request.maxTokens } : {}),
       ...(reasoning ? { reasoningEffort: reasoning } : {}),
-      ...(request.requiredToolName ? { toolChoice: 'required' } : {})
+      ...(request.requiredToolName
+        ? { toolChoice: { type: 'tool' as const, name: request.requiredToolName } }
+        : {})
     },
     metadata: {
       threadId: request.threadId,

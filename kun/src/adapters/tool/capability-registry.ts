@@ -1,10 +1,12 @@
 import type {
   ToolHostContext,
+  ToolEffects,
   ToolProviderKind,
   ToolProviderPolicy
 } from '../../ports/tool-host.js'
 import type { LocalTool } from './local-tool-host.js'
 import { isToolAdvertisedInSandbox } from './sandbox-policy.js'
+import { isToolAllowedInOrchestration } from '../../graph/graph-tool-boundary.js'
 
 export type CapabilityToolRecord = {
   provider: ToolProviderPolicy
@@ -23,14 +25,20 @@ export type CapabilityToolSpec = {
   sideEffect?: 'read-only' | 'unknown'
   providerId: string
   providerKind: ToolProviderKind
+  effects?: ToolEffects
 }
 
 const PLAN_MODE_ALLOWED_TOOL_NAMES = new Set([
   'read',
   'grep',
+  'glob',
   'find',
   'ls',
   'repo_map',
+  'git_inspect',
+  'lsp',
+  'write',
+  'edit',
   'create_plan',
   'user_input',
   'request_user_input'
@@ -110,7 +118,13 @@ export class CapabilityRegistry {
     const specs: CapabilityToolSpec[] = []
     for (const record of this.tools.values()) {
       if (!this.canUseProvider(record.provider, context)) continue
+      if (!isToolAllowedInOrchestration({
+        toolName: record.tool.name,
+        providerId: record.provider.id,
+        providerKind: record.provider.kind
+      }, context)) continue
       if (!this.canUseTool(record.tool, context)) continue
+      if (record.tool.modelAdvertised === false) continue
       if (!isToolAdvertisedInSandbox(record.tool, context)) continue
       if (record.tool.shouldAdvertise) {
         if (!context || !record.tool.shouldAdvertise(context)) continue
@@ -122,7 +136,10 @@ export class CapabilityRegistry {
         toolKind: record.tool.toolKind,
         ...(record.tool.sideEffect ? { sideEffect: record.tool.sideEffect } : {}),
         providerId: record.provider.id,
-        providerKind: record.provider.kind
+        providerKind: record.provider.kind,
+        ...(record.tool.effects || record.provider.effects
+          ? { effects: record.tool.effects ?? record.provider.effects }
+          : {})
       })
     }
     return specs
@@ -139,6 +156,13 @@ export class CapabilityRegistry {
     if (!this.canUseProvider(record.provider, context)) {
       throw new Error(`tool ${toolName} is not advertised by provider ${record.provider.id}`)
     }
+    if (!isToolAllowedInOrchestration({
+      toolName: record.tool.name,
+      providerId: record.provider.id,
+      providerKind: record.provider.kind
+    }, context)) {
+      throw new Error(`tool ${toolName} is unavailable in the Graph capability plane`)
+    }
     if (!this.canUseTool(record.tool, context)) {
       throw new Error(`tool ${toolName} is not advertised by active tool policy`)
     }
@@ -154,6 +178,13 @@ export class CapabilityRegistry {
 
   private canUseProvider(provider: ToolProviderPolicy, context?: ToolHostContext): boolean {
     if (!provider.enabled || !provider.available) return false
+    // `gui` is reserved for capabilities that require a live desktop
+    // workbench or control the local desktop. Diagnostics may list every
+    // provider without a context, but a concrete non-GUI turn must never see
+    // or execute these tools.
+    if (context && provider.kind === 'gui' && effectiveClientSurface(context) !== 'gui') {
+      return false
+    }
     if (context?.blockedProviderIds?.includes(provider.id)) return false
     const allowed = context?.allowedProviderIds
     if (allowed && !allowed.includes(provider.id)) return false
@@ -178,6 +209,19 @@ export class CapabilityRegistry {
   }
 }
 
+function effectiveClientSurface(context: ToolHostContext): NonNullable<ToolHostContext['clientSurface']> {
+  if (context.clientSurface) return context.clientSurface
+  if (
+    context.guiPlan ||
+    context.guiDesignCanvas ||
+    context.guiDesignMode ||
+    context.guiDesignArtifact ||
+    context.agentSurface
+  ) return 'gui'
+  if (context.imContext) return 'im'
+  return 'api'
+}
+
 function isPlanModeContext(context: ToolHostContext | undefined): boolean {
   return context?.threadMode === 'plan' || Boolean(context?.guiPlan)
 }
@@ -188,6 +232,7 @@ function providerPolicy(provider: ToolProviderPolicy): ToolProviderPolicy {
     kind: provider.kind,
     enabled: provider.enabled,
     available: provider.available,
-    ...(provider.reason ? { reason: provider.reason } : {})
+    ...(provider.reason ? { reason: provider.reason } : {}),
+    ...(provider.effects ? { effects: provider.effects } : {})
   }
 }

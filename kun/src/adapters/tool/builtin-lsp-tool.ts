@@ -102,6 +102,7 @@ export function createLspLocalTool(): LocalTool {
     },
     policy: 'on-request',
     toolKind: 'command_execution',
+    sideEffect: 'read-only',
     execute: async (args, context) =>
       withToolBoundary(async () => {
         const operation = String(args.operation ?? '') as LspOperation

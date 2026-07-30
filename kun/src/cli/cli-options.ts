@@ -1,13 +1,14 @@
 import { z } from 'zod'
 import {
+  ApprovalReviewerSchema,
   ApprovalPolicySchema,
-  DEFAULT_APPROVAL_POLICY,
-  DEFAULT_SANDBOX_MODE,
-  SandboxModeSchema
+  SandboxModeSchema,
+  kunToolPermissionModeSettings
 } from '../contracts/policy.js'
 import {
   ContextCompactionConfigSchema,
   DEFAULT_KUN_MODEL,
+  DEFAULT_GRAPH_RUNTIME_CONFIG,
   DEFAULT_STORAGE_CONFIG,
   DEFAULT_TOOL_OUTPUT_LIMITS_CONFIG,
   ModelRequestRetryConfigSchema,
@@ -16,6 +17,7 @@ import {
   QualityConfigSchema,
   RolesConfigSchema,
   RuntimeTuningConfigSchema,
+  GraphRuntimeConfigSchema,
   ServeProviderConfigSchema,
   StorageConfigSchema,
   TokenEconomyConfigSchema,
@@ -36,6 +38,8 @@ import { isLoopbackHost } from '../server/loopback-host.js'
 
 export const DEFAULT_SERVE_PORT = 18899
 export const DEFAULT_SERVE_MODEL = DEFAULT_KUN_MODEL
+export const DEFAULT_FRESH_SERVE_PERMISSIONS =
+  kunToolPermissionModeSettings('full-access')
 
 /**
  * Validated CLI options for `kun serve`.
@@ -59,8 +63,15 @@ export const ServeOptionsSchema = z.object({
   endpointFormat: z.preprocess(normalizeModelEndpointFormat, z.enum(MODEL_ENDPOINT_FORMATS)).default(DEFAULT_MODEL_ENDPOINT_FORMAT),
   retry: ModelRequestRetryConfigSchema.optional(),
   model: z.string().default(DEFAULT_SERVE_MODEL),
-  approvalPolicy: ApprovalPolicySchema.default(DEFAULT_APPROVAL_POLICY),
-  sandboxMode: SandboxModeSchema.default(DEFAULT_SANDBOX_MODE),
+  approvalPolicy: ApprovalPolicySchema.default(
+    DEFAULT_FRESH_SERVE_PERMISSIONS.approvalPolicy
+  ),
+  sandboxMode: SandboxModeSchema.default(
+    DEFAULT_FRESH_SERVE_PERMISSIONS.sandboxMode
+  ),
+  approvalReviewer: ApprovalReviewerSchema.default(
+    DEFAULT_FRESH_SERVE_PERMISSIONS.approvalReviewer
+  ),
   tokenEconomyMode: z.boolean().default(false),
   tokenEconomy: TokenEconomyConfigSchema.optional(),
   toolOutputLimits: ToolOutputLimitsConfigSchema.default(DEFAULT_TOOL_OUTPUT_LIMITS_CONFIG),
@@ -74,6 +85,7 @@ export const ServeOptionsSchema = z.object({
   models: ModelConfigSchema.optional(),
   contextCompaction: ContextCompactionConfigSchema.optional(),
   runtime: RuntimeTuningConfigSchema.optional(),
+  graph: GraphRuntimeConfigSchema.default(DEFAULT_GRAPH_RUNTIME_CONFIG),
   roles: RolesConfigSchema.optional(),
   capabilities: KunCapabilitiesConfig.default(DEFAULT_KUN_CAPABILITIES_CONFIG),
   hooks: HooksConfigSchema.optional(),
@@ -106,11 +118,13 @@ export const DEFAULT_SERVE_OPTIONS: ServeOptions = {
   modelProxyUrl: '',
   endpointFormat: DEFAULT_MODEL_ENDPOINT_FORMAT,
   model: DEFAULT_SERVE_MODEL,
-  approvalPolicy: DEFAULT_APPROVAL_POLICY,
-  sandboxMode: DEFAULT_SANDBOX_MODE,
+  approvalPolicy: DEFAULT_FRESH_SERVE_PERMISSIONS.approvalPolicy,
+  sandboxMode: DEFAULT_FRESH_SERVE_PERMISSIONS.sandboxMode,
+  approvalReviewer: DEFAULT_FRESH_SERVE_PERMISSIONS.approvalReviewer,
   tokenEconomyMode: false,
   toolOutputLimits: DEFAULT_TOOL_OUTPUT_LIMITS_CONFIG,
   insecure: false,
   storage: DEFAULT_STORAGE_CONFIG,
+  graph: DEFAULT_GRAPH_RUNTIME_CONFIG,
   capabilities: DEFAULT_KUN_CAPABILITIES_CONFIG
 }

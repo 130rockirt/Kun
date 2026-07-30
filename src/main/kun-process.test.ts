@@ -43,6 +43,7 @@ function createSettings(binaryPath: string): AppSettingsV1 {
     theme: 'system',
     uiFontScale: 0.82,
     chatContentMaxWidthPx: 896,
+    composerSendKey: 'enter',
     provider: defaultModelProviderSettings(),
     agents: {
       kun: {
@@ -164,6 +165,54 @@ describe('startKunChild', () => {
     expect(logText).toContain(`ready marker received on port ${testKunPort}`)
   })
 
+  it('removes inherited Browser Use bridge authority when the feature is disabled', async () => {
+    const previousUrl = process.env.KUN_BROWSER_USE_BRIDGE_URL
+    const previousToken = process.env.KUN_BROWSER_USE_BRIDGE_TOKEN
+    const previousSigningKey = process.env.KUN_BROWSER_USE_APPROVAL_SIGNING_KEY
+    process.env.KUN_BROWSER_USE_BRIDGE_URL = 'http://127.0.0.1:65535'
+    process.env.KUN_BROWSER_USE_BRIDGE_TOKEN = 'inherited-secret-token'
+    process.env.KUN_BROWSER_USE_APPROVAL_SIGNING_KEY = 'inherited-signing-secret'
+    const script = writeScript(
+      'disabled-browser-use-env-child.js',
+      [
+        "const http = require('node:http')",
+        `const port = ${testKunPort}`,
+        "process.stdout.write('BRIDGE_URL=' + String(process.env.KUN_BROWSER_USE_BRIDGE_URL) + '\\n')",
+        "process.stdout.write('BRIDGE_TOKEN=' + String(process.env.KUN_BROWSER_USE_BRIDGE_TOKEN) + '\\n')",
+        "process.stdout.write('BRIDGE_SIGNING_KEY=' + String(process.env.KUN_BROWSER_USE_APPROVAL_SIGNING_KEY) + '\\n')",
+        "const server = http.createServer((_req, res) => {",
+        "  res.setHeader('content-type', 'application/json')",
+        "  res.end(JSON.stringify({ service: 'kun', mode: 'serve', status: 'ok' }))",
+        "})",
+        "server.listen(port, '127.0.0.1', () => {",
+        "  process.stdout.write('KUN_READY ' + JSON.stringify({ service: 'kun', mode: 'serve', port }) + '\\n')",
+        "})",
+        "setInterval(() => {}, 1_000)"
+      ].join('\n')
+    )
+    try {
+      const module = await import('./kun-process')
+      await module.startKunChild(createSettings(script))
+      await module.stopKunChildAndWait()
+      const logText = await readKunLog()
+      expect(logText).toContain('BRIDGE_URL=undefined')
+      expect(logText).toContain('BRIDGE_TOKEN=undefined')
+      expect(logText).toContain('BRIDGE_SIGNING_KEY=undefined')
+      expect(logText).not.toContain('inherited-secret-token')
+      expect(logText).not.toContain('inherited-signing-secret')
+    } finally {
+      if (previousUrl === undefined) delete process.env.KUN_BROWSER_USE_BRIDGE_URL
+      else process.env.KUN_BROWSER_USE_BRIDGE_URL = previousUrl
+      if (previousToken === undefined) delete process.env.KUN_BROWSER_USE_BRIDGE_TOKEN
+      else process.env.KUN_BROWSER_USE_BRIDGE_TOKEN = previousToken
+      if (previousSigningKey === undefined) {
+        delete process.env.KUN_BROWSER_USE_APPROVAL_SIGNING_KEY
+      } else {
+        process.env.KUN_BROWSER_USE_APPROVAL_SIGNING_KEY = previousSigningKey
+      }
+    }
+  })
+
   it('does not settle on the ready marker until the /health endpoint responds', async () => {
     if (!tempRoot) throw new Error('temp root not initialized')
     const healthSignalPath = join(tempRoot, 'allow-health')
@@ -278,6 +327,40 @@ describe('startKunChild', () => {
     const logText = await readKunLog()
     expect(logText).toContain('bind failed on port 18899')
     expect(logText).toContain('exited with code 23')
+  })
+})
+
+describe('startKunSharedRuntime', () => {
+  it('refuses to start a second writer beside an unpublished GUI-private runtime', async () => {
+    if (!tempRoot) throw new Error('temp root not initialized')
+    const body = JSON.stringify({ dataDir: tempRoot })
+    const server = createServer((socket) => {
+      socket.once('data', () => {
+        socket.end([
+          'HTTP/1.1 200 OK',
+          'Content-Type: application/json',
+          `Content-Length: ${Buffer.byteLength(body)}`,
+          'Connection: close',
+          '',
+          body
+        ].join('\r\n'))
+      })
+    })
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(testKunPort, '127.0.0.1', resolve)
+    })
+    try {
+      const module = await import('./kun-process')
+      const settings = createSettings('/tmp/unused-kun-entry.js')
+      settings.agents.kun.dataDir = tempRoot
+
+      await expect(module.startKunSharedRuntime(settings)).rejects.toThrow(
+        'older GUI-private Kun runtime'
+      )
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+    }
   })
 })
 
@@ -485,6 +568,18 @@ describe('resolveKunDataDir', () => {
 
     expect(module.resolveKunDataDir({ dataDir: '~other\\kun' })).toBe('~other\\kun')
   })
+
+  it('rejects the canonical legacy directory before managed config writes', async () => {
+    const module = await import('./kun-process')
+    const legacyDataDir = join(homedir(), '.deepseekgui', 'kun')
+
+    expect(() => module.resolveKunDataDir({ dataDir: legacyDataDir }))
+      .toThrow(/migration is required/)
+    await expect(module.syncGuiManagedKunConfig(
+      legacyDataDir,
+      defaultKunRuntimeSettings()
+    )).rejects.toThrow(/migration is required/)
+  })
 })
 
 describe('parseListeningPidsFromNetstat', () => {
@@ -673,6 +768,18 @@ describe('syncGuiManagedKunConfig', () => {
     expect(parsed.capabilities.attachments).toMatchObject({ enabled: true })
     expect(parsed.capabilities.memory).toMatchObject({ enabled: false })
     expect(parsed.capabilities.instructions).toMatchObject({ enabled: true })
+    expect(parsed.capabilities.browserUse).toEqual({
+      enabled: true,
+      mode: 'public',
+      approvalMode: 'auto-safe',
+      maxTabs: 2,
+      maxObservationActionsPerTurn: 30,
+      maxInteractionActionsPerTurn: 12,
+      maxSnapshotNodes: 250,
+      maxSnapshotTextChars: 20000,
+      maxImageDimension: 1280,
+      idleTimeoutMs: 300000
+    })
     // Subagents have no GUI enable toggle: they default ON so delegate_task + the
     // built-in profiles are always offered. maxParallel/maxChildRuns must be >=1 or
     // DelegationRuntime can never run a child. This locks the default against regressions.
@@ -792,9 +899,53 @@ describe('syncGuiManagedKunConfig', () => {
       credentialSourceId: 'settings:provider:custom',
       baseUrl: 'https://newapi.example/v1',
       endpointFormat: 'chat_completions',
+      models: ['glm-5.2'],
+      selectedModel: 'glm-5.2',
       modelProxyUrl: 'socks5://127.0.0.1:1080'
     })
     expect(JSON.stringify(parsed)).not.toContain('sk-newapi')
+    expect(KunConfigSchema.safeParse(parsed).success).toBe(true)
+  })
+
+  it('projects Ollama Cloud through the protected HTTP Chat Completions provider path', async () => {
+    if (!tempRoot) throw new Error('temp root not initialized')
+    const configPath = join(tempRoot, 'config.json')
+    const module = await import('./kun-process')
+    const settings = createSettings('/tmp/fake-kun-child.js')
+    const preset = getModelProviderPreset('ollama')
+    if (!preset) throw new Error('Ollama Cloud preset is missing')
+    const ollama = modelProviderPresetProfile(preset, 'ollama-secret')
+    settings.provider.providers.push(ollama)
+    settings.agents.kun = {
+      ...settings.agents.kun,
+      providerId: ollama.id,
+      model: 'gpt-oss:120b'
+    }
+
+    await module.syncGuiManagedKunConfig(tempRoot, resolveKunRuntimeSettings(settings), {
+      scheduleMcp: {
+        settings,
+        launch: {
+          appPath: '/tmp/deepseek-gui-test-app',
+          execPath: '/tmp/electron',
+          isPackaged: false
+        }
+      }
+    })
+
+    const parsed = JSON.parse(readFileSync(configPath, 'utf8')) as any
+    expect(parsed.serve).toMatchObject({
+      baseUrl: 'https://ollama.com/v1',
+      endpointFormat: 'chat_completions',
+      model: 'gpt-oss:120b'
+    })
+    expect(parsed.serve.providers.ollama).toMatchObject({
+      apiKey: '',
+      credentialSourceId: 'settings:provider:ollama',
+      baseUrl: 'https://ollama.com/v1',
+      endpointFormat: 'chat_completions'
+    })
+    expect(JSON.stringify(parsed)).not.toContain('ollama-secret')
     expect(KunConfigSchema.safeParse(parsed).success).toBe(true)
   })
 
@@ -979,6 +1130,60 @@ describe('syncGuiManagedKunConfig', () => {
       model: 'grok-imagine-video-1.5-preview',
       defaultResolution: '480P'
     })
+    expect(KunConfigSchema.safeParse(parsed).success).toBe(true)
+  })
+
+  it('forwards the selected Volcano Ark media gateway and dedicated key to Kun', async () => {
+    if (!tempRoot) throw new Error('temp root not initialized')
+    const configPath = join(tempRoot, 'config.json')
+    const module = await import('./kun-process')
+    const defaults = defaultKunRuntimeSettings()
+
+    await module.syncGuiManagedKunConfig(tempRoot, {
+      ...defaults,
+      imageGeneration: {
+        ...defaults.imageGeneration,
+        enabled: true,
+        providerId: 'volcengine-agent-plan',
+        protocol: 'volcengine-ark-image',
+        baseUrl: 'https://ark.cn-beijing.volces.com/api/plan/v3',
+        apiKey: 'agent-plan-key',
+        model: 'doubao-seedream-5.0-lite',
+        defaultResolution: '4K'
+      },
+      videoGeneration: {
+        ...defaults.videoGeneration,
+        enabled: true,
+        providerId: 'volcengine-agent-plan',
+        protocol: 'volcengine-ark-video',
+        baseUrl: 'https://ark.cn-beijing.volces.com/api/plan/v3',
+        apiKey: 'agent-plan-key',
+        model: 'doubao-seedance-2.0',
+        defaultDuration: 15,
+        defaultResolution: '4K'
+      }
+    })
+
+    const parsed = JSON.parse(readFileSync(configPath, 'utf8')) as any
+    expect(parsed.capabilities.imageGen).toMatchObject({
+      enabled: true,
+      protocol: 'volcengine-ark-image',
+      baseUrl: 'https://ark.cn-beijing.volces.com/api/plan/v3',
+      apiKey: 'agent-plan-key',
+      model: 'doubao-seedream-5.0-lite',
+      defaultResolution: '4K'
+    })
+    expect(parsed.capabilities.videoGen).toMatchObject({
+      enabled: true,
+      protocol: 'volcengine-ark-video',
+      baseUrl: 'https://ark.cn-beijing.volces.com/api/plan/v3',
+      apiKey: 'agent-plan-key',
+      model: 'doubao-seedance-2.0',
+      defaultDuration: 15,
+      defaultResolution: '4K'
+    })
+    expect(parsed.capabilities.imageGen.headers).toBeUndefined()
+    expect(parsed.capabilities.videoGen.headers).toBeUndefined()
     expect(KunConfigSchema.safeParse(parsed).success).toBe(true)
   })
 
@@ -1373,6 +1578,7 @@ describe('syncGuiManagedKunConfig', () => {
           summaryInputMaxBytes: 131072
         },
         runtimeTuning: {
+          defaultsVersion: 1,
           maxConcurrentTurns: 32,
           maxWallTimeMs: 7_200_000,
           streamIdleTimeoutMs: 120000,

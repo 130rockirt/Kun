@@ -70,7 +70,7 @@ Unknown locations fail validation and are never treated as arbitrary component s
 
 Rendering title/icon does not activate the extension. Opening the View checks compatibility, enablement, workspace trust, and permission, then triggers `onView:<id>`.
 
-To coordinate a right-side View with the main Agent, register capabilities as extension tools and keep bounded pointers such as the active project in `storage.workspace`. The main Agent reads and mutates authoritative state through tools while the View refreshes through Host messages. They do not share React state, DOM, runtime tokens, or private Electron IPC. The default bundled [`kun-video-editor`](../../examples/extensions/kun-video-editor/) demonstrates this pattern.
+To coordinate a right-side View with the main Agent, register capabilities as extension tools and keep bounded pointers such as the active project in `storage.workspace`. The main Agent reads and mutates authoritative state through tools while the View refreshes through Host messages. They do not share React state, DOM, runtime tokens, or private Electron IPC. The source-only [`kun-video-editor`](../../examples/extensions/kun-video-editor/) example demonstrates this pattern; it is not bundled with Kun.
 
 ## Commands
 

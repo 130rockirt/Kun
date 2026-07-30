@@ -46,6 +46,9 @@ const {
   terminateProcessTree,
   waitForPortsClosed
 } = require('./smoke-packaged-extension-desktop.cjs')
+const {
+  withTimeout: withGraphWorkbenchTimeout
+} = require('./smoke-development-graph-workbench.cjs')
 
 const root = resolve(__dirname, '..')
 const linuxUserNamespaceStepName = 'Prepare and verify Linux user namespace sandbox'
@@ -68,6 +71,49 @@ test('forces headless packaged runtime smokes onto the encrypted file-key fallba
   assert.equal(environment.ELECTRON_RUN_AS_NODE, '1')
   assert.equal(environment.KUN_DISABLE_OS_CREDENTIAL_STORE, '1')
   assert.equal(environment.KUN_PACKAGED_EXTENSION_SMOKE_REEXEC, '1')
+})
+
+test('bounds Graph workbench browser operations', async () => {
+  assert.equal(
+    await withGraphWorkbenchTimeout(Promise.resolve('completed'), 100, 'running fixture'),
+    'completed'
+  )
+  await assert.rejects(
+    withGraphWorkbenchTimeout(
+      new Promise(() => undefined),
+      10,
+      'running a stalled fixture'
+    ),
+    /Timed out while running a stalled fixture/
+  )
+})
+
+test('stops the isolated Graph runtime before reporting smoke success', () => {
+  const source = readFileSync(
+    join(root, 'scripts', 'smoke-development-graph-workbench.cjs'),
+    'utf8'
+  )
+  const stopCall = source.indexOf('stopIsolatedSharedRuntime(repositoryRoot, profile)')
+  const removeCall = source.indexOf('rm(temporaryRoot')
+  const successWrite = source.indexOf('process.stdout.write(`${JSON.stringify(result')
+  assert.ok(stopCall > 0, 'Graph smoke must stop its data-dir scoped shared Runtime')
+  assert.ok(removeCall > stopCall, 'Graph smoke must stop its shared Runtime before removing its profile')
+  assert.ok(successWrite > removeCall, 'Graph smoke must report success only after cleanup completes')
+  assert.match(source, /await stopSharedRuntime\(profile\)/u)
+})
+
+test('stops the isolated packaged Runtime before reporting desktop smoke success', () => {
+  const source = readFileSync(
+    join(root, 'scripts', 'smoke-packaged-extension-desktop.cjs'),
+    'utf8'
+  )
+  const stopCall = source.indexOf('stopIsolatedSharedRuntime(unpackedRoot, profile)')
+  const removeCall = source.indexOf('rm(path')
+  const successWrite = source.indexOf('process.stdout.write(successMessage)')
+  assert.ok(stopCall > 0, 'packaged desktop smoke must stop its data-dir scoped shared Runtime')
+  assert.ok(removeCall > stopCall, 'packaged desktop smoke must stop its shared Runtime before removing its profile')
+  assert.ok(successWrite > removeCall, 'packaged desktop smoke must report success only after cleanup completes')
+  assert.match(source, /await stopSharedRuntime\(profile\)/u)
 })
 
 test('selects host-native packaged resources and never launches desktop Electron as Node', () => {
@@ -1133,8 +1179,9 @@ test('every automated and local release path gates uploads behind packaged Exten
   ])
   assertStepAfter(release.jobs['build-linux'], 'Upload Linux artifacts', nativeEvidenceCommand)
   assertOrderedCommands(pr.jobs.package, [
-    'npm run smoke:packaged-extensions -- --resources dist/linux-unpacked/resources',
     'unshare --user --map-root-user /bin/true',
+    'xvfb-run -a npm run smoke:development-graph-workbench',
+    'npm run smoke:packaged-extensions -- --resources dist/linux-unpacked/resources',
     desktopCommand,
     appImageDesktopCommand,
     nativeEvidenceCommand
@@ -1166,6 +1213,18 @@ test('every automated and local release path gates uploads behind packaged Exten
     nativeEvidenceCommand
   ])
   assertStepAfter(pr.jobs['package-windows'], 'Upload Windows PR package', nativeEvidenceCommand)
+  for (const [jobId, stepName] of [
+    ['package', 'Smoke Graph workbench pointer interactions on native Linux'],
+    ['package-macos', 'Smoke Graph workbench pointer interactions on native macOS'],
+    ['package-windows', 'Smoke Graph workbench pointer interactions on native Windows'],
+    ['package', 'Smoke packaged Extension desktop Chromium'],
+    ['package-macos', 'Smoke packaged Extension desktop Chromium (host-native macOS)'],
+    ['package-macos-x64-runtime', 'Smoke final macOS x64 desktop Chromium'],
+    ['package-windows', 'Smoke packaged Extension desktop Chromium (host-native Windows)']
+  ]) {
+    const step = pr.jobs[jobId].steps.find((candidate) => candidate.name === stepName)
+    assert.equal(step?.['timeout-minutes'], 10, `${stepName} must have a bounded timeout`)
+  }
   assertOrderedCommands(daily.jobs['build-macos'], [
     'npm run check:extension-release-gate',
     'npm run dist:mac',

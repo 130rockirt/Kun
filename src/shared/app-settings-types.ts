@@ -2,8 +2,13 @@ import type { AppLocale } from './app-locales'
 import type { GuiUpdateChannel } from './gui-update'
 import type { KeyboardShortcutsConfigV1 } from './keyboard-shortcuts'
 import type { LocalWhisperDownloadSourceId } from './local-whisper'
-import type { ApprovalPolicy, SandboxMode } from '../../kun/src/contracts/policy.js'
+import type {
+  ApprovalPolicy,
+  ApprovalReviewer,
+  SandboxMode
+} from '../../kun/src/contracts/policy.js'
 import type { ComputerUseMode } from '../../kun/src/contracts/capabilities.js'
+import type { BrowserUseMode } from './browser-use'
 import type { ModelEndpointFormat } from '../../kun/src/contracts/model-endpoint-format.js'
 import type { ToolOutputLimitsConfig } from '../../kun/src/contracts/tool-output-limits.js'
 export {
@@ -18,9 +23,21 @@ export {
 } from '../../kun/src/contracts/model-endpoint-format.js'
 export { DEFAULT_GUI_UPDATE_CHANNEL, normalizeGuiUpdateChannel, type GuiUpdateChannel } from './gui-update'
 export {
+  APPROVAL_REVIEWERS,
+  DEFAULT_APPROVAL_REVIEWER,
   DEFAULT_APPROVAL_POLICY,
   DEFAULT_SANDBOX_MODE,
+  KUN_TOOL_PERMISSION_MODES,
+  ApprovalReviewerSchema,
+  isKunFullAccessSettings,
+  kunToolPermissionModeFromSettings,
+  kunToolPermissionModeSettings,
+  kunToolPermissionSettingsEqual,
   type ApprovalPolicy,
+  type ApprovalReviewer,
+  type KunToolPermissionMode,
+  type KunToolPermissionSettings,
+  type KunToolPermissionSettingsInput,
   type SandboxMode
 } from '../../kun/src/contracts/policy.js'
 export {
@@ -28,15 +45,6 @@ export {
   DEFAULT_TOOL_OUTPUT_MAX_LINES,
   type ToolOutputLimitsConfig
 } from '../../kun/src/contracts/tool-output-limits.js'
-export const KUN_TOOL_PERMISSION_MODES = [
-  'always-ask',
-  'read-only',
-  'sensitive-ask',
-  'workspace-write',
-  'trusted-workspace',
-  'bypass'
-] as const
-export type KunToolPermissionMode = (typeof KUN_TOOL_PERMISSION_MODES)[number]
 /**
  * Overall UI text scale factor (applied as `zoom` on the app shell).
  * Previously a fixed enum ('small' | 'medium' | 'large'); now a free numeric
@@ -70,6 +78,20 @@ export function normalizeChatContentMaxWidth(value: unknown): ChatContentMaxWidt
     Math.max(CHAT_CONTENT_MAX_WIDTH_MIN, Math.round(num / 8) * 8)
   )
 }
+/** Which key combination sends from the chat composer. The other inserts a newline. */
+export const COMPOSER_SEND_KEYS = ['enter', 'shiftEnter'] as const
+export type ComposerSendKey = (typeof COMPOSER_SEND_KEYS)[number]
+export const DEFAULT_COMPOSER_SEND_KEY: ComposerSendKey = 'enter'
+export function normalizeComposerSendKey(value: unknown): ComposerSendKey {
+  return value === 'shiftEnter' ? 'shiftEnter' : DEFAULT_COMPOSER_SEND_KEY
+}
+export function isComposerSendHotkey(
+  event: { key: string; shiftKey: boolean; metaKey: boolean; ctrlKey: boolean },
+  sendKey: ComposerSendKey = DEFAULT_COMPOSER_SEND_KEY
+): boolean {
+  if (event.key !== 'Enter' || event.metaKey || event.ctrlKey) return false
+  return sendKey === 'shiftEnter' ? event.shiftKey : !event.shiftKey
+}
 export type ScheduleRunMode = 'agent' | 'plan'
 export type ScheduleKind = 'manual' | 'interval' | 'daily' | 'at'
 export type ScheduleTaskStatus = 'idle' | 'queued' | 'running' | 'success' | 'error'
@@ -87,11 +109,12 @@ export const IMAGE_GENERATION_PROTOCOLS = [
   'openai-images',
   'minimax-image',
   'codex-responses-image',
-  'grok-imagine-image'
+  'grok-imagine-image',
+  'volcengine-ark-image'
 ] as const
 export type ImageGenerationProtocol = (typeof IMAGE_GENERATION_PROTOCOLS)[number]
 export const DEFAULT_IMAGE_GENERATION_PROTOCOL: ImageGenerationProtocol = 'openai-images'
-export const IMAGE_GENERATION_RESOLUTIONS = ['auto', '1K', '2K'] as const
+export const IMAGE_GENERATION_RESOLUTIONS = ['auto', '1K', '2K', '3K', '4K'] as const
 export type ImageGenerationResolution = (typeof IMAGE_GENERATION_RESOLUTIONS)[number]
 export const DEFAULT_IMAGE_GENERATION_RESOLUTION: ImageGenerationResolution = '1K'
 export const IMAGE_GENERATION_QUALITIES = ['auto', 'low', 'medium', 'high'] as const
@@ -116,7 +139,11 @@ export const MUSIC_GENERATION_PROTOCOLS = ['minimax-music'] as const
 export type MusicGenerationProtocol = (typeof MUSIC_GENERATION_PROTOCOLS)[number]
 export const DEFAULT_MUSIC_GENERATION_PROTOCOL: MusicGenerationProtocol = 'minimax-music'
 export const CUSTOM_VIDEO_GENERATION_PROVIDER_ID = 'custom'
-export const VIDEO_GENERATION_PROTOCOLS = ['minimax-video', 'grok-imagine-video'] as const
+export const VIDEO_GENERATION_PROTOCOLS = [
+  'minimax-video',
+  'grok-imagine-video',
+  'volcengine-ark-video'
+] as const
 export type VideoGenerationProtocol = (typeof VIDEO_GENERATION_PROTOCOLS)[number]
 export const DEFAULT_VIDEO_GENERATION_PROTOCOL: VideoGenerationProtocol = 'minimax-video'
 export const DEFAULT_CLAW_MODEL = 'auto'
@@ -177,7 +204,8 @@ export type NetworkProxySettingsV1 = {
   url: string
 }
 export type { ModelEndpointFormat }
-export const DEFAULT_MODEL_REQUEST_RETRY_MAX_ATTEMPTS = 0
+/** Number of retries after the initial model-provider request. */
+export const DEFAULT_MODEL_REQUEST_RETRY_MAX_ATTEMPTS = 5
 export const DEFAULT_MODEL_REQUEST_RETRY_INITIAL_DELAY_MS = 3_000
 export const DEFAULT_MODEL_REQUEST_RETRY_HTTP_STATUS_CODES = [429, 503] as const
 export type ModelRequestRetrySettingsV1 = {
@@ -191,11 +219,16 @@ export const MODEL_PROVIDER_MESSAGE_PARTS = ['text', 'image_url', 'input_image']
 export type ModelProviderMessagePartSupport = (typeof MODEL_PROVIDER_MESSAGE_PARTS)[number]
 export const MODEL_REASONING_EFFORTS = ['auto', 'off', 'low', 'medium', 'high', 'max'] as const
 export type ModelReasoningEffort = (typeof MODEL_REASONING_EFFORTS)[number]
+export const MODEL_SERVICE_TIERS = ['priority', 'flex'] as const
+export type ModelServiceTier = (typeof MODEL_SERVICE_TIERS)[number]
 export const MODEL_REASONING_REQUEST_PROTOCOLS = [
   'none',
   'deepseek-chat-completions',
   'glm-chat-completions',
   'mimo-chat-completions',
+  'openai-chat-completions',
+  'qwen-chat-completions',
+  'thinking-toggle-chat-completions',
   'openai-responses',
   'anthropic-thinking'
 ] as const
@@ -214,6 +247,8 @@ export type ModelProviderModelProfileV1 = {
   supportsToolCalling: boolean
   messageParts: ModelProviderMessagePartSupport[]
   reasoning?: ModelProviderReasoningCapabilityV1
+  /** Provider-advertised request service tiers supported by this model. */
+  serviceTiers?: ModelServiceTier[]
   /** Per-model wire-format override. Omitted means "inherit the provider's endpointFormat". */
   endpointFormat?: ModelEndpointFormat
   /**
@@ -418,6 +453,151 @@ export type KunSubagentsSettingsPatchV1 = Partial<
   profiles?: KunSubagentProfileV1[]
 }
 
+export const KUN_GRAPH_ROLLOUT_STAGES = [
+  'experimental',
+  'alpha',
+  'beta',
+  'learning-preview',
+  'stable'
+] as const
+export type KunGraphRolloutStage = (typeof KUN_GRAPH_ROLLOUT_STAGES)[number]
+
+export const KUN_GRAPH_LEARNING_MODES = ['off', 'suggest', 'auto_candidate'] as const
+export type KunGraphLearningMode = (typeof KUN_GRAPH_LEARNING_MODES)[number]
+
+export type KunGraphSchedulerSettingsV1 = {
+  maxNodes: number
+  maxEdges: number
+  maxConcurrentRuns: number
+  maxConcurrentNodes: number
+  maxConcurrentNodesPerRun: number
+  maxAttemptsPerNode: number
+  maxRevisions: number
+  maxLoopIterations: number
+  maxRunWallTimeMs: number
+  maxNodeWallTimeMs: number
+  maxArtifactBytes: number
+  budgetWarningRatio: number
+}
+
+export type KunGraphContextSettingsV1 = {
+  maxWorkerContextBytes: number
+  maxDependencySummaryBytes: number
+  maxInputArtifacts: number
+  maxInputMessages: number
+  maxInlineEventBytes: number
+}
+
+export type KunGraphMailboxSettingsV1 = {
+  maxMessagesPerNode: number
+  maxMessagesPerRun: number
+  maxMessageBytes: number
+  maxArtifactRefsPerMessage: number
+  maxMessagesPerMinute: number
+  defaultTtlMs: number
+  blockingReplyTimeoutMs: number
+}
+
+export type KunGraphSupervisionSettingsV1 = {
+  enabled: boolean
+  autoStart: boolean
+  coalesceWindowMs: number
+  stallTimeoutMs: number
+  repeatedFailureThreshold: number
+  requireFinalReview: boolean
+  requireHumanForCriticalRisk: boolean
+}
+
+export type KunGraphWriteIsolationSettingsV1 = {
+  mode: 'serialize' | 'lease' | 'worktree'
+  allowWorktrees: boolean
+  leaseTtlMs: number
+  preserveFailedWorktrees: boolean
+}
+
+export type KunGraphRoutingSettingsV1 = {
+  recallLimit: number
+  minTaskFit: number
+  minConfidence: number
+  explorationRatio: number
+  dormantMissedOpportunityThreshold: number
+}
+
+export type KunGraphLearningSettingsV1 = {
+  mode: KunGraphLearningMode
+  minimumDistinctSessions: number
+  minimumVerifiedEpisodes: number
+  consolidationIntervalMs: number
+  maxEpisodesPerJob: number
+  probationMinimumRuns: number
+  allowReadOnlyExploration: boolean
+}
+
+export type KunGraphRetentionSettingsV1 = {
+  graphDays: number
+  artifactDays: number
+  episodeDays: number
+  auditDays: number
+  snapshotEveryEvents: number
+  compactAfterEvents: number
+}
+
+export type KunGraphWorkerModelSettingsV1 =
+  | {
+      mode: 'inherit'
+    }
+  | {
+      mode: 'fixed'
+      providerId: string
+      model: string
+      reasoningEffort?: ModelReasoningEffort
+    }
+
+export type KunGraphSettingsV1 = {
+  enabled: boolean
+  defaultStrategy: 'direct' | 'graph'
+  rolloutStage: KunGraphRolloutStage
+  workerModel: KunGraphWorkerModelSettingsV1
+  scheduler: KunGraphSchedulerSettingsV1
+  context: KunGraphContextSettingsV1
+  mailbox: KunGraphMailboxSettingsV1
+  supervision: KunGraphSupervisionSettingsV1
+  writeIsolation: KunGraphWriteIsolationSettingsV1
+  routing: KunGraphRoutingSettingsV1
+  learning: KunGraphLearningSettingsV1
+  retention: KunGraphRetentionSettingsV1
+}
+
+export type KunGraphSettingsPatchV1 = Partial<
+  Omit<
+    KunGraphSettingsV1,
+    | 'scheduler'
+    | 'context'
+    | 'mailbox'
+    | 'supervision'
+    | 'writeIsolation'
+    | 'routing'
+    | 'learning'
+    | 'retention'
+    | 'workerModel'
+  >
+> & {
+  workerModel?: {
+    mode?: 'inherit' | 'fixed'
+    providerId?: string
+    model?: string
+    reasoningEffort?: ModelReasoningEffort
+  }
+  scheduler?: Partial<KunGraphSchedulerSettingsV1>
+  context?: Partial<KunGraphContextSettingsV1>
+  mailbox?: Partial<KunGraphMailboxSettingsV1>
+  supervision?: Partial<KunGraphSupervisionSettingsV1>
+  writeIsolation?: Partial<KunGraphWriteIsolationSettingsV1>
+  routing?: Partial<KunGraphRoutingSettingsV1>
+  learning?: Partial<KunGraphLearningSettingsV1>
+  retention?: Partial<KunGraphRetentionSettingsV1>
+}
+
 export type KunRuntimeSettingsV1 = {
   binaryPath: string
   port: number
@@ -437,6 +617,7 @@ export type KunRuntimeSettingsV1 = {
   model: string
   approvalPolicy: ApprovalPolicy
   sandboxMode: SandboxMode
+  approvalReviewer: ApprovalReviewer
   /** Compress safe tool context before each model call. */
   tokenEconomyMode: boolean
   /** Detailed token-saving behavior used when building Kun model requests. */
@@ -455,6 +636,8 @@ export type KunRuntimeSettingsV1 = {
   contextCompaction: KunContextCompactionSettingsV1
   /** Low-level loop guards and model argument repair tuning. */
   runtimeTuning: KunRuntimeTuningSettingsV1
+  /** Local Agent Perspective capture defaults. */
+  llmDebug: KunLlmDebugSettingsV1
   /** OpenAI-compatible image generation provider shared by chat agents and Write image tools. */
   imageGeneration: KunImageGenerationSettingsV1
   /** Speech-to-text provider used for voice input in the composer. */
@@ -475,10 +658,14 @@ export type KunRuntimeSettingsV1 = {
   instructions: KunInstructionSettingsV1
   /** Host computer-use (screenshot + mouse/keyboard control) settings. */
   computerUse: KunComputerUseSettingsV1
+  /** Supervised temporary first-party browser automation settings. */
+  browserUse: KunBrowserUseSettingsV1
   /** First-party design-quality linter applied to frontend output. */
   quality: KunDesignQualitySettingsV1
   /** GUI-managed subagent profiles written into kun SubagentsCapabilityConfig. */
   subagents?: KunSubagentsSettingsV1
+  /** Host-owned Graph orchestration, project-agent routing, and learning policy. */
+  graph: KunGraphSettingsV1
   /** Global small-model slot. Title & Summary default to this. Empty = follow main model. */
   smallModel?: string
   /** Provider id paired with smallModel for per-provider routing. */
@@ -518,46 +705,6 @@ export type KunInstructionSettingsV1 = {
   enabled: boolean
 }
 
-export function kunToolPermissionModeSettings(
-  mode: KunToolPermissionMode
-): Pick<KunRuntimeSettingsV1, 'approvalPolicy' | 'sandboxMode'> {
-  switch (mode) {
-    case 'always-ask':
-      return { approvalPolicy: 'always', sandboxMode: 'danger-full-access' }
-    case 'read-only':
-      return { approvalPolicy: 'on-request', sandboxMode: 'danger-full-access' }
-    case 'sensitive-ask':
-      return { approvalPolicy: 'untrusted', sandboxMode: 'danger-full-access' }
-    case 'workspace-write':
-      return { approvalPolicy: 'on-request', sandboxMode: 'workspace-write' }
-    case 'trusted-workspace':
-      return { approvalPolicy: 'auto', sandboxMode: 'workspace-write' }
-    case 'bypass':
-      return { approvalPolicy: 'auto', sandboxMode: 'danger-full-access' }
-  }
-}
-
-export function kunToolPermissionModeFromSettings(
-  settings: Pick<KunRuntimeSettingsV1, 'approvalPolicy' | 'sandboxMode'>
-): KunToolPermissionMode {
-  if (settings.approvalPolicy === 'always') return 'always-ask'
-  if (settings.approvalPolicy === 'untrusted') return 'sensitive-ask'
-  if (
-    settings.approvalPolicy === 'auto' &&
-    settings.sandboxMode === 'danger-full-access'
-  ) {
-    return 'bypass'
-  }
-  if (
-    settings.approvalPolicy === 'auto' &&
-    settings.sandboxMode === 'workspace-write'
-  ) {
-    return 'trusted-workspace'
-  }
-  if (settings.sandboxMode === 'workspace-write') return 'workspace-write'
-  return 'read-only'
-}
-
 /** Detection aggressiveness for the design-quality linter. */
 export type KunDesignQualityStrictness = 'relaxed' | 'standard' | 'strict'
 
@@ -586,6 +733,25 @@ export type KunComputerUseSettingsV1 = {
   maxImageDimension: number
   /** Hard cap on computer_use actions per turn. */
   maxActionsPerTurn: number
+}
+
+export type KunBrowserUseSettingsV1 = {
+  /** Master switch. Enabled by default; disabling removes browser_use. */
+  enabled: boolean
+  /** Public internet and exact-loopback development sessions never mix. */
+  mode: BrowserUseMode
+  /**
+   * `auto-safe` automatically grants public origins and executes validated
+   * low-risk interactions. `always-ask` preserves per-origin/per-action consent.
+   */
+  approvalMode: 'auto-safe' | 'always-ask'
+  maxTabs: number
+  maxObservationActionsPerTurn: number
+  maxInteractionActionsPerTurn: number
+  maxSnapshotNodes: number
+  maxSnapshotTextChars: number
+  maxImageDimension: number
+  idleTimeoutMs: number
 }
 
 export type KunImageGenerationSettingsV1 = {
@@ -760,6 +926,8 @@ export type KunToolArgumentRepairSettingsV1 = {
 }
 
 export type KunRuntimeTuningSettingsV1 = {
+  /** Tracks one-time migrations when runtime tuning defaults change. */
+  defaultsVersion: number
   /** Global admission cap for concurrently active turns in one Kun runtime. */
   maxConcurrentTurns: number
   /**
@@ -776,6 +944,11 @@ export type KunRuntimeTuningSettingsV1 = {
   toolArgumentRepair: KunToolArgumentRepairSettingsV1
 }
 
+export type KunLlmDebugSettingsV1 = {
+  /** Initial Agent Perspective capture state for newly created conversations. */
+  defaultThreadCaptureEnabled: boolean
+}
+
 /**
  * Compatibility shell kept because persisted settings still use the
  * `agents.kun` envelope. Prefer operating on the contained
@@ -789,6 +962,7 @@ export type KunSettingsEnvelopeV1 = {
 export type AgentRuntimeSettingsMapV1 = KunSettingsEnvelopeV1
 
 export type KunRuntimeTuningSettingsPatchV1 = {
+  defaultsVersion?: number
   maxConcurrentTurns?: number
   maxWallTimeMs?: number
   streamIdleTimeoutMs?: number
@@ -805,7 +979,7 @@ export type KunTokenEconomySettingsPatchV1 = Partial<
 export type KunRuntimeSettingsPatchV1 = Partial<
   Omit<
     KunRuntimeSettingsV1,
-    'mcpSearch' | 'projectConfig' | 'storage' | 'contextCompaction' | 'runtimeTuning' | 'tokenEconomy' | 'toolOutputLimits' | 'imageGeneration' | 'speechToText' | 'textToSpeech' | 'promptOptimization' | 'musicGeneration' | 'videoGeneration' | 'instructions' | 'computerUse' | 'quality' | 'modelProfiles' | 'subagents'
+    'mcpSearch' | 'projectConfig' | 'storage' | 'contextCompaction' | 'runtimeTuning' | 'llmDebug' | 'tokenEconomy' | 'toolOutputLimits' | 'imageGeneration' | 'speechToText' | 'textToSpeech' | 'promptOptimization' | 'musicGeneration' | 'videoGeneration' | 'instructions' | 'computerUse' | 'browserUse' | 'quality' | 'modelProfiles' | 'subagents' | 'graph'
   >
 > & {
   mcpSearch?: Partial<KunMcpSearchSettingsV1>
@@ -815,6 +989,7 @@ export type KunRuntimeSettingsPatchV1 = Partial<
   storage?: Partial<KunStorageSettingsV1>
   contextCompaction?: Partial<KunContextCompactionSettingsV1>
   runtimeTuning?: KunRuntimeTuningSettingsPatchV1
+  llmDebug?: Partial<KunLlmDebugSettingsV1>
   imageGeneration?: Partial<KunImageGenerationSettingsV1>
   speechToText?: Partial<KunSpeechToTextSettingsV1>
   textToSpeech?: Partial<KunTextToSpeechSettingsV1>
@@ -823,9 +998,11 @@ export type KunRuntimeSettingsPatchV1 = Partial<
   videoGeneration?: Partial<KunVideoGenerationSettingsV1>
   instructions?: Partial<KunInstructionSettingsV1>
   computerUse?: Partial<KunComputerUseSettingsV1>
+  browserUse?: Partial<KunBrowserUseSettingsV1>
   quality?: Partial<KunDesignQualitySettingsV1>
   modelProfiles?: Record<string, ModelProviderModelProfilePatchV1 | null>
   subagents?: KunSubagentsSettingsPatchV1
+  graph?: KunGraphSettingsPatchV1
 }
 
 export type KunSettingsEnvelopePatchV1 = {
@@ -865,7 +1042,12 @@ export type CheckpointCleanupConfigV1 = {
 }
 
 export type NotificationConfigV1 = {
+  /** Master switch for native reply-completion notifications. */
   turnComplete: boolean
+  /** Main-agent completion notifications. Missing legacy values normalize to enabled. */
+  mainAgentTurnComplete?: boolean
+  /** Subagent side-session completion notifications. Missing legacy values normalize to disabled. */
+  subagentTurnComplete?: boolean
 }
 
 export const WINDOW_CLOSE_ACTIONS = ['ask', 'tray', 'quit'] as const
@@ -2085,6 +2267,8 @@ export type AppSettingsV1 = {
   theme: 'system' | 'light' | 'dark'
   uiFontScale: UiFontScale
   chatContentMaxWidthPx: ChatContentMaxWidthPx
+  /** Enter sends (default) or Shift+Enter sends; the other key inserts a newline. */
+  composerSendKey: ComposerSendKey
   cursorSpotlight?: boolean
   cursorSpotlightColor?: string
   provider: ModelProviderSettingsV1

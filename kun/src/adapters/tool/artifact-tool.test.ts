@@ -51,4 +51,21 @@ describe('read_artifact tool', () => {
     const result = await tool.execute({ artifactId: 'art_x' }, context())
     expect(result.isError).toBe(true)
   })
+
+  it('rejects artifacts outside a delegated child capability set', async () => {
+    const store = new InMemoryArtifactStore()
+    const allowed = await store.put({ content: 'allowed' })
+    const denied = await store.put({ content: 'denied' })
+    const tool = createReadArtifactTool()
+    const scoped = {
+      ...context(store),
+      allowedArtifactIds: [allowed.meta.id]
+    }
+    await expect(tool.execute({ artifactId: allowed.meta.id }, scoped)).resolves.toMatchObject({
+      output: { content: 'allowed' }
+    })
+    await expect(tool.execute({ artifactId: denied.meta.id }, scoped)).resolves.toMatchObject({
+      isError: true
+    })
+  })
 })

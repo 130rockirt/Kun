@@ -26,6 +26,8 @@ const GUEST_MEDIA_READY_TIMEOUT_MS = 20_000
 const PROCESS_OUTPUT_LIMIT = 128 * 1024
 const POPUP_SETTLE_MS = 500
 const MAX_CLEANUP_TIMEOUT_MS = 15_000
+const MAX_REMOVE_RETRIES = 8
+const REMOVE_RETRY_DELAY_MS = 250
 const MEDIA_PLAYBACK_HANDLE_ID = 'media_packaged_playback_00000001'
 const MEDIA_IMAGE_HANDLE_ID = 'media_packaged_image_00000000001'
 
@@ -98,6 +100,7 @@ async function main() {
   let debuggingPort
   let output = ''
   let primaryError
+  let successMessage
   const cleanupErrors = []
 
   try {
@@ -243,7 +246,7 @@ async function main() {
       processState: () => processState(desktopProcess)
     })
 
-    process.stdout.write(
+    successMessage =
       `Packaged Extension desktop Chromium smoke OK (${process.platform}/${process.arch}): ` +
       `${desktopLaunchSelection.selfContained
         ? 'explicit self-contained packaged desktop executable'
@@ -255,7 +258,6 @@ async function main() {
       'copied URL, arbitrary file URL, post-release, and stale View Session denial, ' +
       'hidden kunGui/require/process, ' +
       'Host-blocked loopback fetch, and user-gesture popup denial without a new target.\n'
-    )
   } catch (error) {
     primaryError = error
   } finally {
@@ -269,8 +271,18 @@ async function main() {
         ports: [runtimePort, debuggingPort].filter(Number.isSafeInteger)
       }).catch((error) => cleanupErrors.push(error))
     }
+    await withTimeout(
+      stopIsolatedSharedRuntime(unpackedRoot, profile),
+      MAX_CLEANUP_TIMEOUT_MS + 5_000,
+      'stopping the isolated packaged Extension Kun runtime'
+    ).catch((error) => cleanupErrors.push(error))
+    releaseChildProcessHandles(desktopProcess)
     if (networkCanary) {
-      await networkCanary.close().catch((error) => cleanupErrors.push(error))
+      await withTimeout(
+        networkCanary.close(),
+        2_000,
+        'closing the packaged Extension network canary'
+      ).catch((error) => cleanupErrors.push(error))
       await waitForPortsClosed([networkCanary.port], 2_000)
         .catch((error) => cleanupErrors.push(error))
     }
@@ -279,8 +291,21 @@ async function main() {
       process.stderr.write(`Preserved packaged desktop smoke workspace: ${workspaceRoot}\n`)
     } else {
       await Promise.all([temporaryRoot, workspaceRoot].map(async (path) => {
-        await makeTreeWritable(path).catch(() => undefined)
-        await rm(path, { recursive: true, force: true })
+        await withTimeout(
+          makeTreeWritable(path),
+          MAX_CLEANUP_TIMEOUT_MS,
+          `making packaged Extension smoke directory writable: ${path}`
+        ).catch((error) => cleanupErrors.push(error))
+        await withTimeout(
+          rm(path, {
+            recursive: true,
+            force: true,
+            maxRetries: MAX_REMOVE_RETRIES,
+            retryDelay: REMOVE_RETRY_DELAY_MS
+          }),
+          MAX_CLEANUP_TIMEOUT_MS,
+          `removing packaged Extension smoke directory: ${path}`
+        )
           .catch((error) => cleanupErrors.push(error))
       }))
     }
@@ -297,6 +322,36 @@ async function main() {
       : ''
     const diagnostics = output.trim() ? `\nPackaged Electron output (tail):\n${output.trim()}` : ''
     throw new Error(`${message}${cleanupDiagnostics}${diagnostics}`)
+  }
+  process.stdout.write(successMessage)
+}
+
+async function stopIsolatedSharedRuntime(unpackedRoot, profile) {
+  const modulePath = join(unpackedRoot, 'kun', 'dist', 'cli', 'shared-runtime.js')
+  const { stopSharedRuntime } = await import(pathToFileURL(modulePath).href)
+  await stopSharedRuntime(profile)
+}
+
+function releaseChildProcessHandles(child) {
+  child?.stdout?.destroy()
+  child?.stderr?.destroy()
+  child?.unref?.()
+}
+
+async function withTimeout(operation, timeoutMs, description) {
+  let timeout
+  try {
+    return await Promise.race([
+      operation,
+      new Promise((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error(`Timed out while ${description}`)),
+          timeoutMs
+        )
+      })
+    ])
+  } finally {
+    if (timeout) clearTimeout(timeout)
   }
 }
 

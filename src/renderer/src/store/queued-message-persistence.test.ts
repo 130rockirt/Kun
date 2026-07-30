@@ -33,6 +33,7 @@ describe('queued-message-persistence', () => {
         id: 'q-1',
         text: 'finish the first change',
         deliveryState: 'pending',
+        serviceTier: 'priority',
         fileReferences: [{
           path: '/workspace/src/App.tsx',
           relativePath: 'src/App.tsx',
@@ -49,6 +50,7 @@ describe('queued-message-persistence', () => {
         id: 'q-1',
         text: 'finish the first change',
         deliveryState: 'pending',
+        serviceTier: 'priority',
         fileReferences: [expect.objectContaining({ relativePath: 'src/App.tsx' })]
       })
     ])

@@ -1,0 +1,197 @@
+/*
+ * Neutral host presentation
+ * -------------------------
+ * Keep this layer focused on the default Kun chrome. Branded modes and UI
+ * plugin scenes retain their own material recipes through their data attrs.
+ */
+
+:where(button, input, select, textarea, summary, [role='button'], [tabindex]):focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--ds-focus-ring) 72%, transparent);
+  outline-offset: 2px;
+}
+
+html:not([data-ikun-mode='on']):not([data-retroma-mode='on']):not(
+    [data-ui-plugin-presentation='on']
+  )
+  .ds-stage-surface {
+  background: var(--ds-bg-canvas);
+}
+
+html:not([data-ikun-mode='on']):not([data-retroma-mode='on']):not(
+    [data-ui-plugin-presentation='on']
+  )
+  .ds-stage-surface::before,
+html:not([data-ikun-mode='on']):not([data-retroma-mode='on']):not(
+    [data-ui-plugin-presentation='on']
+  )
+  .ds-sidebar-shell::before {
+  display: none;
+}
+
+html:not([data-ikun-mode='on']):not([data-retroma-mode='on']):not(
+    [data-ui-plugin-presentation='on']
+  )
+  :is(.ds-sidebar-shell, .ds-settings-sidebar) {
+  border-color: var(--ds-sidebar-border);
+  background: var(--ds-bg-sidebar);
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+html:not([data-ikun-mode='on']):not([data-retroma-mode='on']):not(
+    [data-ui-plugin-presentation='on']
+  )
+  .ds-sidebar-shell {
+  border-right-width: 1px;
+}
+
+html:not([data-ikun-mode='on']):not([data-retroma-mode='on']):not(
+    [data-ui-plugin-presentation='on']
+  )
+  :is(.ds-topbar-surface, .chat-topbar.ds-topbar-surface) {
+  border-color: var(--ds-border);
+  background: var(--ds-bg-canvas);
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+html:not([data-ikun-mode='on']):not([data-retroma-mode='on']):not(
+    [data-ui-plugin-presentation='on']
+  )
+  .chat-topbar.ds-topbar-surface {
+  min-height: 56px;
+}
+
+html:not([data-ikun-mode='on']):not([data-retroma-mode='on']):not(
+    [data-ui-plugin-presentation='on']
+  )
+  :is(.ds-shell, .ds-panel, .ds-card-soft, .ds-card-strong) {
+  box-shadow: none;
+}
+
+html:not([data-ikun-mode='on']):not([data-retroma-mode='on']):not(
+    [data-ui-plugin-presentation='on']
+  )
+  .ds-card-interactive:hover {
+  border-color: var(--ds-border-strong);
+  background: var(--ds-card-hover);
+  box-shadow: none;
+  transform: none;
+}
+
+html:not([data-ikun-mode='on']):not([data-retroma-mode='on']):not(
+    [data-ui-plugin-presentation='on']
+  )
+  .ds-frosted {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+html:not([data-ikun-mode='on']):not([data-retroma-mode='on']):not(
+    [data-ui-plugin-presentation='on']
+  )
+  .ds-composer-shell {
+  overflow: visible;
+  border: 1px solid var(--ds-border);
+  border-radius: var(--ds-radius-card);
+  background: var(--ds-surface-elevated);
+  box-shadow: none;
+}
+
+html:not([data-ikun-mode='on']):not([data-retroma-mode='on']):not(
+    [data-ui-plugin-presentation='on']
+  )
+  .ds-composer-shell::before,
+html:not([data-ikun-mode='on']):not([data-retroma-mode='on']):not(
+    [data-ui-plugin-presentation='on']
+  )
+  .ds-composer-shell::after {
+  display: none;
+}
+
+html:not([data-ikun-mode='on']):not([data-retroma-mode='on']):not(
+    [data-ui-plugin-presentation='on']
+  )
+  .ds-chat-composer-focus {
+  border-color: color-mix(in srgb, var(--ds-focus-ring) 58%, var(--ds-border));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ds-focus-ring) 12%, transparent);
+}
+
+html:not([data-ikun-mode='on']):not([data-retroma-mode='on']):not(
+    [data-ui-plugin-presentation='on']
+  )
+  .ds-workbench-divider::before {
+  background: none;
+}
+
+html:not([data-ikun-mode='on']):not([data-retroma-mode='on']):not(
+    [data-ui-plugin-presentation='on']
+  )
+  .ds-workbench-divider::after {
+  top: 0;
+  bottom: 0;
+  background: var(--ds-sidebar-divider);
+  box-shadow: none;
+}
+
+html:not([data-ikun-mode='on']):not([data-retroma-mode='on']):not(
+    [data-ui-plugin-presentation='on']
+  )
+  .ds-workbench-divider:hover::after {
+  background: var(--ds-border-strong);
+  box-shadow: none;
+}
+
+html:not([data-ikun-mode='on']):not([data-retroma-mode='on']):not(
+    [data-ui-plugin-presentation='on']
+  )
+  .ds-workbench-side-rail {
+  background: var(--ds-sidebar-surface-bg);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+html:not([data-ikun-mode='on']):not([data-retroma-mode='on']):not(
+    [data-ui-plugin-presentation='on']
+  )
+  :is(.ds-side-rail-button, .ds-topbar-action-button, .ds-sidebar-toggle-button) {
+  border-radius: var(--ds-radius-control);
+  box-shadow: none;
+  transform: none;
+}
+
+html:not([data-ikun-mode='on']):not([data-retroma-mode='on']):not(
+    [data-ui-plugin-presentation='on']
+  )
+  .ds-user-message-bubble {
+  border: 1px solid var(--ds-border);
+  border-radius: var(--ds-radius-card);
+  box-shadow: none;
+}
+
+html:not([data-ikun-mode='on']):not([data-retroma-mode='on']):not(
+    [data-ui-plugin-presentation='on']
+  )
+  .ds-empty-hero {
+  padding-top: 4.5rem;
+}
+
+html:not([data-ikun-mode='on']):not([data-retroma-mode='on']):not(
+    [data-ui-plugin-presentation='on']
+  )
+  .ds-empty-hero-title {
+  font-size: clamp(2rem, 4vw, 2.75rem);
+  font-weight: 500;
+  line-height: 1.12;
+  letter-spacing: -0.025em;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+  }
+}

@@ -74,6 +74,7 @@ function fakeRun(input: {
 function harness(input: {
   apiKey?: string
   run?: Run
+  sendResults?: Array<Run | Error>
   thread?: Record<string, unknown>
   items?: Array<Record<string, unknown>>
   attachmentStore?: CursorSdkRuntimeDeps['attachmentStore']
@@ -85,6 +86,10 @@ function harness(input: {
   kunContext?: CursorKunTurnContext
   contextProfile?: CursorSdkRuntimeDeps['contextProfile']
   streamLimits?: CursorSdkRuntimeDeps['streamLimits']
+  todoSyncError?: Error
+  suspendGraphLeadTurn?: (
+    input: Record<string, unknown>
+  ) => Promise<'not_graph' | 'suspended' | 'supervision_pending'>
 }) {
   const applied: unknown[] = []
   const updated: unknown[] = []
@@ -93,22 +98,31 @@ function harness(input: {
   const finished: unknown[] = []
   const createOptions: AgentOptions[] = []
   const sentMessages: unknown[] = []
+  const sentOptions: unknown[] = []
   const resumedAgentIds: string[] = []
   const resumedOptions: Array<Partial<AgentOptions> | undefined> = []
   const kunContextSignals: AbortSignal[] = []
-  const run = input.run ?? fakeRun()
+  const syncedTodos: unknown[] = []
+  const sendResults = input.sendResults ?? [input.run ?? fakeRun()]
+  let sendIndex = 0
+  const reload = vi.fn(async () => undefined)
+  const dispose = vi.fn(async () => undefined)
   const agent = {
     agentId: 'agent_1',
     model: { id: 'auto' },
-    send: async (message: unknown) => {
+    send: async (message: unknown, options: unknown) => {
       sentMessages.push(message)
-      return run
+      sentOptions.push(options)
+      const result = sendResults[Math.min(sendIndex, sendResults.length - 1)]
+      sendIndex += 1
+      if (result instanceof Error) throw result
+      return result
     },
     close: vi.fn(),
-    reload: async () => undefined,
+    reload,
     listArtifacts: async () => [],
     downloadArtifact: async () => Buffer.alloc(0),
-    [Symbol.asyncDispose]: async () => undefined
+    [Symbol.asyncDispose]: dispose
   } as SDKAgent
   const sdk: CursorSdkApi = {
     Agent: {
@@ -179,10 +193,21 @@ function harness(input: {
         materialized.set(itemId, item)
         return item
       },
+      updateTurnMetadata: async (_threadId: string, turnId: string, patch: Record<string, unknown>) => {
+        const turn = thread.turns.find((candidate) => candidate.id === turnId)
+        if (turn) Object.assign(turn, patch)
+      },
+      ...(input.suspendGraphLeadTurn
+        ? { suspendGraphLeadTurn: input.suspendGraphLeadTurn }
+        : {}),
       finishTurn: async (value: unknown) => { finished.push(value) }
     },
     events: { record: async (value: unknown) => { recorded.push(value) } },
     ids: { next: (prefix: string) => `${prefix}_1` },
+    setThreadTodos: async (threadId: string, request: unknown) => {
+      if (input.todoSyncError) throw input.todoSyncError
+      syncedTodos.push({ threadId, request })
+    },
     loadSdk: async () => {
       if (input.loadError) throw input.loadError
       return sdk
@@ -211,10 +236,14 @@ function harness(input: {
     recorded,
     finished,
     sentMessages,
+    sentOptions,
     kunContextSignals,
     resumedAgentIds,
     resumedOptions,
-    agent
+    syncedTodos,
+    agent,
+    reload,
+    dispose
   }
 }
 
@@ -301,6 +330,187 @@ describe('CursorSdkRuntime', () => {
     expect(JSON.stringify(trace)).not.toContain('cursor-secret')
   })
 
+  test('keeps Graph in plan mode and gives pending review a real second Cursor exchange', async () => {
+    const suspendGraphLeadTurn = vi.fn()
+      .mockResolvedValueOnce('supervision_pending')
+      .mockResolvedValueOnce('supervision_pending')
+      .mockResolvedValueOnce('suspended')
+    const h = harness({
+      thread: {
+        turns: [{
+          id: 'turn_1',
+          model: 'auto',
+          mode: 'agent',
+          orchestration: 'graph'
+        }]
+      },
+      kunContext: {
+        instructionBlocks: [],
+        activeSkillIds: [],
+        tools: [],
+        customTools: {},
+        graphPhase: 'supervising'
+      },
+      sendResults: [fakeRun(), fakeRun()],
+      suspendGraphLeadTurn
+    })
+
+    await expect(h.runtime.runTurn(
+      'thread_1',
+      'turn_1',
+      new AbortController().signal,
+      'cursor-subscription'
+    )).resolves.toBe('suspended')
+
+    expect(h.createOptions[0]).toMatchObject({
+      mode: 'plan',
+      local: { sandboxOptions: { enabled: true } }
+    })
+    expect(h.sentMessages).toHaveLength(2)
+    expect(h.sentMessages[1]).toContain('Host supervision gate')
+    expect(h.sentMessages[1]).toContain('call `graph_review_node`')
+    expect(suspendGraphLeadTurn).toHaveBeenNthCalledWith(1, {
+      threadId: 'thread_1',
+      turnId: 'turn_1'
+    })
+    expect(suspendGraphLeadTurn).toHaveBeenNthCalledWith(2, {
+      threadId: 'thread_1',
+      turnId: 'turn_1'
+    })
+    expect(suspendGraphLeadTurn).toHaveBeenNthCalledWith(3, {
+      threadId: 'thread_1',
+      turnId: 'turn_1',
+      force: true,
+      preserveDeliveryCursor: true,
+      allowPendingSupervision: true
+    })
+    expect(h.finished).toEqual([])
+  })
+
+  test('reminds Graph planning once before a second prose response becomes needs-correction', async () => {
+    const suspendGraphLeadTurn = vi.fn(async () => 'suspended' as const)
+    const h = harness({
+      thread: {
+        turns: [{
+          id: 'turn_1',
+          model: 'auto',
+          mode: 'agent',
+          orchestration: 'graph'
+        }]
+      },
+      kunContext: {
+        instructionBlocks: [],
+        activeSkillIds: [],
+        tools: [],
+        customTools: {},
+        graphPhase: 'planning',
+        graphPlanWasCommitted: () => false
+      },
+      sendResults: [fakeRun(), fakeRun()],
+      suspendGraphLeadTurn
+    })
+
+    await expect(h.runtime.runTurn(
+      'thread_1',
+      'turn_1',
+      new AbortController().signal,
+      'cursor-subscription'
+    )).resolves.toBe('suspended')
+
+    expect(h.sentMessages).toHaveLength(2)
+    expect(h.sentMessages[1]).toContain('Host planning gate')
+    expect(h.sentMessages[1]).toContain('call `graph_define_plan` now')
+    // Planning is not suspended on the first prose response. The only
+    // suspension happens after the bounded second exchange is exhausted.
+    expect(suspendGraphLeadTurn).toHaveBeenCalledTimes(1)
+    expect(h.finished).toEqual([])
+  })
+
+  test('syncs successful Cursor updateTodos results without redispatching the tool', async () => {
+    const h = harness({
+      run: fakeRun({
+        stream: [{
+          type: 'tool_call',
+          agent_id: 'agent_1',
+          run_id: 'run_1',
+          call_id: 'call_todos',
+          name: 'updateTodos',
+          status: 'completed',
+          result: {
+            status: 'success',
+            value: {
+              todos: [
+                { content: 'Finished step', status: 'completed' },
+                { content: 'Current step', status: 'inProgress' },
+                { content: 'Later step', status: 'pending' }
+              ],
+              totalCount: 3
+            }
+          }
+        }]
+      })
+    })
+
+    await expect(h.runtime.runTurn(
+      'thread_1',
+      'turn_1',
+      new AbortController().signal,
+      'cursor-subscription'
+    )).resolves.toBe('completed')
+
+    expect(h.syncedTodos).toEqual([{
+      threadId: 'thread_1',
+      request: {
+        todos: [
+          { content: 'Finished step', status: 'completed' },
+          { content: 'Current step', status: 'in_progress' },
+          { content: 'Later step', status: 'pending' }
+        ]
+      }
+    }])
+    expect(h.recorded).not.toContainEqual(expect.objectContaining({
+      kind: 'tool_call_ready',
+      toolName: 'updateTodos'
+    }))
+  })
+
+  test('keeps a Cursor turn successful when todo mirroring fails', async () => {
+    const h = harness({
+      todoSyncError: new Error('todo store unavailable'),
+      run: fakeRun({
+        stream: [{
+          type: 'tool_call',
+          agent_id: 'agent_1',
+          run_id: 'run_1',
+          call_id: 'call_todos',
+          name: 'updateTodos',
+          status: 'completed',
+          result: {
+            status: 'success',
+            value: {
+              todos: [{ content: 'Current step', status: 'inProgress' }],
+              totalCount: 1
+            }
+          }
+        }]
+      })
+    })
+
+    await expect(h.runtime.runTurn(
+      'thread_1',
+      'turn_1',
+      new AbortController().signal,
+      'cursor-subscription'
+    )).resolves.toBe('completed')
+    expect(h.recorded).toContainEqual(expect.objectContaining({
+      kind: 'error',
+      code: 'cursor_sdk_todo_sync_failed',
+      severity: 'warning',
+      message: expect.stringContaining('todo store unavailable')
+    }))
+    expect(h.finished).toContainEqual(expect.objectContaining({ status: 'completed' }))
+  })
+
   test('materializes cumulative partial output before a stream failure', async () => {
     const h = harness({
       streamLimits: { maxToolCalls: 1 },
@@ -367,6 +577,144 @@ describe('CursorSdkRuntime', () => {
       code: 'cursor_sdk_stream_resource_limit'
     }))
     expect(h.kunContextSignals[0]?.aborted).toBe(true)
+  })
+
+  test('rebuilds the SDK session once and continues an accepted run after authentication expires', async () => {
+    const h = harness({
+      sendResults: [
+        fakeRun({
+          stream: [{
+            type: 'tool_call',
+            agent_id: 'agent_1',
+            run_id: 'run_1',
+            call_id: 'call_1',
+            name: 'shell',
+            status: 'running',
+            args: { command: 'pwd' }
+          }, {
+            type: 'tool_call',
+            agent_id: 'agent_1',
+            run_id: 'run_1',
+            call_id: 'call_1',
+            name: 'shell',
+            status: 'completed',
+            result: { stdout: '/tmp' }
+          }, {
+            type: 'assistant',
+            agent_id: 'agent_1',
+            run_id: 'run_1',
+            message: { role: 'assistant', content: [{ type: 'text', text: 'partial result' }] }
+          }],
+          result: {
+            status: 'error',
+            error: {
+              code: 'unauthenticated',
+              message: 'Authentication error If you are logged in, try logging out and back in.'
+            }
+          }
+        }),
+        fakeRun({
+          stream: [{
+            type: 'assistant',
+            agent_id: 'agent_1',
+            run_id: 'run_2',
+            message: { role: 'assistant', content: [{ type: 'text', text: ' completed' }] }
+          }],
+          result: { id: 'run_2', result: ' completed' }
+        })
+      ]
+    })
+
+    await expect(h.runtime.runTurn(
+      'thread_1',
+      'turn_1',
+      new AbortController().signal,
+      'cursor-subscription'
+    )).resolves.toBe('completed')
+
+    expect(h.dispose).toHaveBeenCalledOnce()
+    expect(h.resumedAgentIds).toEqual(['agent_1'])
+    expect(h.createOptions[0]?.local?.enableAgentRetries).toBe(true)
+    expect(h.sentMessages).toHaveLength(2)
+    expect(String(h.sentMessages[1])).toContain('Continue the interrupted request')
+    expect(String(h.sentMessages[1])).toContain('Do not repeat tool calls')
+    expect(h.sentOptions[1]).toMatchObject({ local: { force: true } })
+    expect(h.recorded).toContainEqual(expect.objectContaining({
+      kind: 'pipeline_stage',
+      stage: 'pre_send',
+      details: expect.objectContaining({
+        reason: 'cursor_sdk_authentication_failed',
+        attempt: 2,
+        maxAttempts: 2,
+        requestAccepted: true
+      })
+    }))
+    expect(h.recorded).not.toContainEqual(expect.objectContaining({
+      kind: 'error',
+      code: 'cursor_sdk_authentication_failed'
+    }))
+    expect(h.finished).toContainEqual(expect.objectContaining({ status: 'completed' }))
+  })
+
+  test('resends the original request when authentication fails before the SDK accepts it', async () => {
+    const authenticationError = new Error('authentication transport expired')
+    authenticationError.name = 'unauthenticated'
+    const h = harness({
+      sendResults: [authenticationError, fakeRun()]
+    })
+
+    await expect(h.runtime.runTurn(
+      'thread_1',
+      'turn_1',
+      new AbortController().signal,
+      'cursor-subscription'
+    )).resolves.toBe('completed')
+
+    expect(h.dispose).toHaveBeenCalledOnce()
+    expect(h.resumedAgentIds).toEqual(['agent_1'])
+    expect(h.sentMessages).toHaveLength(2)
+    expect(h.sentMessages[1]).toEqual(h.sentMessages[0])
+    expect(h.sentOptions[1]).toMatchObject({ local: { force: true } })
+    expect(h.recorded).toContainEqual(expect.objectContaining({
+      kind: 'pipeline_stage',
+      details: expect.objectContaining({ requestAccepted: false })
+    }))
+  })
+
+  test('reports a service-side authentication failure only after the automatic retry also fails', async () => {
+    const authenticationFailure = () => fakeRun({
+      stream: [],
+      result: {
+        status: 'error',
+        error: {
+          code: 'unauthenticated',
+          message: 'Authentication error If you are logged in, try logging out and back in.'
+        }
+      }
+    })
+    const h = harness({
+      sendResults: [authenticationFailure(), authenticationFailure()]
+    })
+
+    await expect(h.runtime.runTurn(
+      'thread_1',
+      'turn_1',
+      new AbortController().signal,
+      'cursor-subscription'
+    )).resolves.toBe('failed')
+
+    expect(h.dispose).toHaveBeenCalledOnce()
+    expect(h.resumedAgentIds).toEqual(['agent_1'])
+    expect(h.sentMessages).toHaveLength(2)
+    expect(h.finished).toContainEqual(expect.objectContaining({
+      status: 'failed',
+      code: 'cursor_sdk_authentication_failed',
+      error: expect.stringContaining('automatically rebuilt the SDK session')
+    }))
+    expect(h.finished).toContainEqual(expect.objectContaining({
+      error: expect.stringContaining('Cursor SDK/service authentication failure')
+    }))
+    expect(JSON.stringify(h.finished)).not.toContain('logging out')
   })
 
   test('injects Kun instructions and custom tools into Cursor capabilities, context, and traces', async () => {
@@ -474,6 +822,8 @@ describe('CursorSdkRuntime', () => {
         threadPersona: '',
         mode: 'agent',
         sandbox: false,
+        approvalPolicy: 'auto',
+        sandboxMode: 'danger-full-access',
         settingSources: [],
         capabilities: cursorSdkCapabilities()
       }),
@@ -649,19 +999,25 @@ describe('CursorSdkRuntime', () => {
     }))
   })
 
-  test('uses plan mode and sandbox when Kun cannot auto-approve mutation', () => {
-    expect(cursorAgentExecutionOptions({
+  test('uses plan+sandbox with Cursor classifier disabled when Kun owns review', () => {
+    const approveForMe = cursorAgentExecutionOptions({
       workspace: '/tmp/work',
       apiKey: 'key',
       model: 'auto',
       name: 'test',
       planMode: false,
-      approvalPolicy: 'always',
+      approvalPolicy: 'on-request',
       sandboxMode: 'workspace-write'
-    })).toMatchObject({
-      mode: 'plan',
-      local: { settingSources: [], sandboxOptions: { enabled: true } }
     })
+    expect(approveForMe).toMatchObject({
+      mode: 'plan',
+      local: {
+        autoReview: false,
+        settingSources: [],
+        sandboxOptions: { enabled: true }
+      }
+    })
+    expect(approveForMe.local?.autoReview).toBe(false)
     expect(cursorAgentExecutionOptions({
       workspace: '/tmp/work',
       apiKey: 'key',
@@ -671,6 +1027,93 @@ describe('CursorSdkRuntime', () => {
       approvalPolicy: 'auto',
       sandboxMode: 'read-only'
     }).mode).toBe('plan')
+  })
+
+  test('uses the restricted turn snapshot after the thread is patched to full access', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-cursor-authority-snapshot-'))
+    const coordinator = new DelegatedSessionCoordinator(
+      new FileDelegatedSessionBindingStore(root)
+    )
+    const h = harness({
+      sessionCoordinator: coordinator,
+      thread: {
+        model: 'thread-full-model',
+        approvalPolicy: 'auto',
+        sandboxMode: 'danger-full-access',
+        turns: [{
+          id: 'turn_1',
+          model: 'turn-restricted-model',
+          mode: 'agent',
+          approvalPolicy: 'on-request',
+          sandboxMode: 'workspace-write',
+          actingModelRoute: {
+            model: 'turn-restricted-model',
+            providerId: 'cursor-subscription',
+            accountId: 'turn-account'
+          }
+        }]
+      }
+    })
+
+    await expect(h.runtime.runTurn(
+      'thread_1',
+      'turn_1',
+      new AbortController().signal,
+      'cursor-subscription'
+    )).resolves.toBe('completed')
+
+    expect(h.createOptions[0]).toMatchObject({
+      model: { id: 'turn-restricted-model' },
+      mode: 'plan',
+      local: { sandboxOptions: { enabled: true } }
+    })
+    expect((await coordinator.store.load('thread_1'))?.capabilityFingerprint).toBe(
+      delegatedCapabilityFingerprint({
+        systemPrompt: 'Kun system prompt',
+        threadPersona: '',
+        mode: 'plan',
+        sandbox: true,
+        approvalPolicy: 'on-request',
+        sandboxMode: 'workspace-write',
+        settingSources: [],
+        capabilities: cursorSdkCapabilities()
+      })
+    )
+  })
+
+  test('keeps a full-access turn full after the thread is patched to restricted', async () => {
+    const h = harness({
+      thread: {
+        model: 'thread-restricted-model',
+        approvalPolicy: 'on-request',
+        sandboxMode: 'workspace-write',
+        turns: [{
+          id: 'turn_1',
+          model: 'turn-full-model',
+          mode: 'agent',
+          approvalPolicy: 'auto',
+          sandboxMode: 'danger-full-access',
+          actingModelRoute: {
+            model: 'turn-full-model',
+            providerId: 'cursor-subscription',
+            accountId: 'turn-account'
+          }
+        }]
+      }
+    })
+
+    await expect(h.runtime.runTurn(
+      'thread_1',
+      'turn_1',
+      new AbortController().signal,
+      'cursor-subscription'
+    )).resolves.toBe('completed')
+
+    expect(h.createOptions[0]).toMatchObject({
+      model: { id: 'turn-full-model' },
+      mode: 'agent',
+      local: { sandboxOptions: { enabled: false } }
+    })
   })
 
   test('forwards authorized image attachments as a structured SDK message without tracing bytes', async () => {

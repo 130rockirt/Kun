@@ -12,11 +12,10 @@ const usage = {
 }
 
 /**
- * Captured from the pre-extraction AgentLoop stream path. Keep this explicit
- * reference so the extracted engine is compared with observable legacy
- * behavior rather than merely testing its own implementation details.
+ * Keep the expected side-effect order explicit: assistant content that the
+ * provider emitted before a tool call must also be persisted before that tool.
  */
-const LEGACY_TOOL_ROUND_REFERENCE = {
+const TOOL_ROUND_TIMELINE_REFERENCE = {
   requests: [{
     threadId: 'thread_1',
     turnId: 'turn_1',
@@ -47,15 +46,15 @@ const LEGACY_TOOL_ROUND_REFERENCE = {
     'stage:post_send',
     'event:assistant_reasoning_delta',
     'event:assistant_text_delta',
+    'item:assistant_reasoning',
+    'item:assistant_text',
     'item:tool_call',
     'event:tool_call_ready',
     'telemetry:pressure',
     'usage:record',
     'goal:usage',
     'event:usage',
-    'stage:response_received',
-    'item:assistant_reasoning',
-    'item:assistant_text'
+    'stage:response_received'
   ]
 } as const
 
@@ -135,7 +134,10 @@ function harness(values: readonly ModelStreamChunk[]) {
     controller,
     engine,
     setStream: (next: () => AsyncIterable<ModelStreamChunk>) => { streamFactory = next },
-    run: (options: { maxToolCallsPerStep?: number } = {}) => engine.run({
+    run: (options: {
+      maxToolCallsPerStep?: number
+      onRouteSelected?: (route: NonNullable<ModelStreamChunk['route']>) => Promise<void>
+    } = {}) => engine.run({
       threadId: 'thread_1',
       turnId: 'turn_1',
       signal: controller.signal,
@@ -156,6 +158,9 @@ function harness(values: readonly ModelStreamChunk[]) {
       },
       preSendDetails: { model: 'model_1' },
       postSendDetails: { model: 'model_1' },
+      ...(options.onRouteSelected
+        ? { onRouteSelected: options.onRouteSelected }
+        : {}),
       writeGeneratedImage: async () => {
         trace.push('image:write')
         return { markdown: '\n![generated image](generated.png)\n' }
@@ -165,6 +170,22 @@ function harness(values: readonly ModelStreamChunk[]) {
 }
 
 describe('ModelRoundEngine', () => {
+  it('dispatches the model stream before awaiting post-send telemetry', async () => {
+    const test = harness([])
+    test.setStream(() => ({
+      async *[Symbol.asyncIterator]() {
+        test.trace.push('model:dispatched')
+        yield { kind: 'completed', stopReason: 'stop' }
+      }
+    }))
+
+    await test.run()
+
+    expect(test.trace.indexOf('model:dispatched')).toBeLessThan(
+      test.trace.indexOf('stage:post_send')
+    )
+  })
+
   it('preserves stream side-effect order through final persistence', async () => {
     const test = harness([
       { kind: 'assistant_reasoning_delta', text: 'think' },
@@ -180,7 +201,82 @@ describe('ModelRoundEngine', () => {
       cacheSignatures: test.cacheSignatures,
       outcome,
       trace: test.trace
-    }).toEqual(LEGACY_TOOL_ROUND_REFERENCE)
+    }).toEqual(TOOL_ROUND_TIMELINE_REFERENCE)
+    const liveReasoning = test.recordedEvents.find(
+      (event) => event.kind === 'assistant_reasoning_delta'
+    )
+    const liveText = test.recordedEvents.find(
+      (event) => event.kind === 'assistant_text_delta'
+    )
+    expect(liveReasoning).toMatchObject({
+      item: {
+        createdAt: test.appliedItems.find((item) => item.kind === 'assistant_reasoning')?.createdAt
+      }
+    })
+    expect(liveText).toMatchObject({
+      item: {
+        createdAt: test.appliedItems.find((item) => item.kind === 'assistant_text')?.createdAt
+      }
+    })
+  })
+
+  it('freezes a committed route before persisting its tool call', async () => {
+    const route = {
+      routePoolId: 'pool',
+      targetId: 'target-b',
+      providerId: 'provider-b',
+      modelId: 'model-b',
+      requestedModelId: 'model-auto'
+    }
+    const test = harness([
+      {
+        kind: 'tool_call_complete',
+        callId: 'call_1',
+        toolName: 'read',
+        arguments: {},
+        route
+      },
+      { kind: 'completed', stopReason: 'tool_calls', route }
+    ])
+
+    await expect(test.run({
+      onRouteSelected: async (selected) => {
+        test.trace.push(`route:${selected.targetId}`)
+      }
+    })).resolves.toMatchObject({ kind: 'tool_calls' })
+
+    expect(test.trace.indexOf('route:target-b')).toBeLessThan(
+      test.trace.indexOf('item:tool_call')
+    )
+  })
+
+  it('fails closed if a provider changes target after the route is committed', async () => {
+    const test = harness([
+      {
+        kind: 'assistant_text_delta',
+        text: 'partial',
+        route: {
+          routePoolId: 'pool',
+          targetId: 'target-a',
+          providerId: 'provider-a',
+          modelId: 'model-a',
+          requestedModelId: 'model-auto'
+        }
+      },
+      {
+        kind: 'completed',
+        stopReason: 'stop',
+        route: {
+          routePoolId: 'pool',
+          targetId: 'target-b',
+          providerId: 'provider-b',
+          modelId: 'model-b',
+          requestedModelId: 'model-auto'
+        }
+      }
+    ])
+
+    await expect(test.run()).rejects.toThrow('model route changed after stream commit')
   })
 
   it('allocates distinct runtime ids when separate model steps reuse a provider call id', async () => {

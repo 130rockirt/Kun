@@ -5,6 +5,7 @@ export { ImageGenerationSettingsSection } from './settings-section-image-generat
 export { MediaGenerationSettingsSection } from './settings-section-media-generation'
 export { SpeechToTextSettingsSection } from './settings-section-speech-to-text'
 export { AgentsSettingsSection } from './settings-section-agents'
+export { LaboratorySettingsSection } from './settings-section-agents'
 export { SubagentsSettingsSection } from './settings-section-subagents'
 export { ArchivedThreadsSettingsSection } from './settings-section-archives'
 export { WorktreeSettingsSection } from './settings-section-worktree'

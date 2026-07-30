@@ -24,6 +24,7 @@ export type DesignRightPanelSharedProps = Pick<
   | 'setComposerReasoningEffort'
   | 'queuedMessages'
   | 'removeQueuedMessage'
+  | 'guideQueuedMessage'
   | 'attachments'
   | 'attachmentUploadEnabled'
   | 'attachmentUploadBusy'

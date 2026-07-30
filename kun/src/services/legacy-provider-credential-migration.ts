@@ -10,6 +10,10 @@ import { AtomicJsonFile } from '../extensions/atomic-json.js'
 import type { ExtensionPrincipal } from './extension-agent-service.js'
 import type { ExtensionCredentialStore } from './extension-credential-store.js'
 import type { ExtensionProviderAccountStore } from './extension-provider-account-store.js'
+import {
+  GeminiCodeAssistCredentialSchema,
+  type GeminiCodeAssistCredential
+} from '../contracts/gemini-code-assist.js'
 
 export { codexCliUserAgent }
 
@@ -79,6 +83,7 @@ export type LegacyProviderCredentialBinding = {
 export type LegacyProviderCredentialMaterial = {
   apiKey: string
   headers?: Record<string, string>
+  geminiAuth?: GeminiCodeAssistCredential
 }
 
 /** Reconstructs credential-derived request material without persisting it. */
@@ -104,6 +109,14 @@ export function materializeLegacyProviderCredential(rawApiKey: string): LegacyPr
       return {
         apiKey: accessToken,
         headers: grokCliProxyHeaders()
+      }
+    }
+    if (parsed.kind === 'gemini-oauth') {
+      const credential = GeminiCodeAssistCredentialSchema.safeParse(parsed)
+      if (!credential.success) return { apiKey }
+      return {
+        apiKey: credential.data.accessToken,
+        geminiAuth: credential.data
       }
     }
     return { apiKey }
@@ -267,6 +280,16 @@ export class LegacyProviderCredentialMigrationService {
     for (const sourceId of [...new Set(sourceIds.map((value) => value.trim()).filter(Boolean))]) {
       await this.forgetOne(sourceId)
     }
+  }
+
+  /** Remove one compatibility binding and the protected credential it owns. */
+  async remove(sourceId: string): Promise<boolean> {
+    const normalized = sourceId.trim()
+    if (!normalized) return false
+    const document = await this.markers.read(emptyDocument)
+    if (!document.entries[normalized]) return false
+    await this.forgetOne(normalized)
+    return true
   }
 
   private async migrateOne(

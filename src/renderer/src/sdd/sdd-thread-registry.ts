@@ -13,6 +13,7 @@ export type SddThreadRecord = {
   draftId: string
   threadId: string
   threadIds: string[]
+  visibleThreadIds: string[]
   publicThreadIds: string[]
   workspaceRoot: string
   updatedAt: string
@@ -52,6 +53,16 @@ function normalizeThreadIds(value: unknown): string[] {
 function publicThreadIdsForRecord(record: Pick<SddThreadRecord, 'publicThreadIds' | 'threadIds'>): Set<string> {
   const knownThreadIds = new Set(record.threadIds)
   return new Set(record.publicThreadIds.filter((threadId) => knownThreadIds.has(threadId)))
+}
+
+function visibleThreadIdsForRecord(
+  record: Pick<SddThreadRecord, 'visibleThreadIds' | 'publicThreadIds' | 'threadIds'>
+): Set<string> {
+  const knownThreadIds = new Set(record.threadIds)
+  return new Set(
+    [...record.visibleThreadIds, ...record.publicThreadIds]
+      .filter((threadId) => knownThreadIds.has(threadId))
+  )
 }
 
 function hiddenThreadIdsForRecord(record: SddThreadRecord): string[] {
@@ -99,6 +110,7 @@ export function normalizeSddThreadRegistry(raw: unknown): SddThreadRegistry {
     const threadIds = normalizeThreadIds(record.threadIds)
     const threadId = normalizeThreadId(record.threadId) || (threadIds[0] ?? '')
     const rawPublicThreadIds = normalizeThreadIds(record.publicThreadIds)
+    const rawVisibleThreadIds = normalizeThreadIds(record.visibleThreadIds)
     const workspaceRoot = normalizeWorkspace(record.workspaceRoot)
     if (!draftId || !threadId || !workspaceRoot) continue
     const allThreadIds = [
@@ -106,10 +118,15 @@ export function normalizeSddThreadRegistry(raw: unknown): SddThreadRegistry {
       ...threadIds.filter((id) => id !== threadId)
     ].slice(0, MAX_SDD_THREAD_IDS_PER_DRAFT)
     const publicThreadIds = rawPublicThreadIds.filter((id) => allThreadIds.includes(id))
+    const visibleThreadIds = [
+      ...rawVisibleThreadIds.filter((id) => allThreadIds.includes(id)),
+      ...publicThreadIds.filter((id) => !rawVisibleThreadIds.includes(id))
+    ]
     drafts[draftId] = {
       draftId,
       threadId: allThreadIds[0],
       threadIds: allThreadIds,
+      visibleThreadIds,
       publicThreadIds,
       workspaceRoot,
       updatedAt: normalizeIsoText(record.updatedAt)
@@ -160,6 +177,8 @@ export function markSddAssistantThread(
   ].slice(0, MAX_SDD_THREAD_IDS_PER_DRAFT)
   const publicThreadIds =
     previous?.publicThreadIds.filter((id) => id !== normalizedThreadId && threadIds.includes(id)) ?? []
+  const visibleThreadIds =
+    previous?.visibleThreadIds.filter((id) => threadIds.includes(id)) ?? []
   const next: SddThreadRegistry = {
     version: 1,
     drafts: {
@@ -168,6 +187,7 @@ export function markSddAssistantThread(
         draftId,
         threadId: normalizedThreadId,
         threadIds,
+        visibleThreadIds,
         publicThreadIds,
         workspaceRoot,
         updatedAt: new Date().toISOString()
@@ -204,6 +224,53 @@ export function publicSddThreadIds(registry: SddThreadRegistry = readSddThreadRe
   return ids
 }
 
+export function visibleSddThreadIds(registry: SddThreadRegistry = readSddThreadRegistry()): Set<string> {
+  const ids = new Set<string>()
+  for (const record of Object.values(registry.drafts)) {
+    for (const threadId of visibleThreadIdsForRecord(record)) ids.add(threadId)
+  }
+  return ids
+}
+
+export function showSddAssistantThreadInSidebar(
+  threadId: string,
+  storage: BrowserStorageLike | null = browserStorage()
+): boolean {
+  const normalizedThreadId = normalizeThreadId(threadId)
+  if (!normalizedThreadId) return false
+  const registry = readSddThreadRegistry(storage)
+  let changed = false
+  const drafts: SddThreadRegistry['drafts'] = {}
+  for (const [draftId, record] of Object.entries(registry.drafts)) {
+    if (!record.threadIds.includes(normalizedThreadId)) {
+      drafts[draftId] = record
+      continue
+    }
+    const visibleThreadIds = [
+      normalizedThreadId,
+      ...record.visibleThreadIds.filter((id) => id !== normalizedThreadId)
+    ].filter((id) => record.threadIds.includes(id))
+    changed = changed || visibleThreadIds.length !== record.visibleThreadIds.length ||
+      visibleThreadIds.some((id, index) => id !== record.visibleThreadIds[index])
+    drafts[draftId] = {
+      ...record,
+      visibleThreadIds,
+      updatedAt: new Date().toISOString()
+    }
+  }
+  if (!changed) return false
+  saveSddThreadRegistry({ version: 1, drafts }, storage)
+  return true
+}
+
+export function isSddThreadVisibleInSidebar(
+  threadId: string | null | undefined,
+  registry: SddThreadRegistry = readSddThreadRegistry()
+): boolean {
+  const id = normalizeThreadId(threadId)
+  return Boolean(id && visibleSddThreadIds(registry).has(id))
+}
+
 export function releaseSddAssistantThread(
   threadId: string,
   storage: BrowserStorageLike | null = browserStorage()
@@ -222,16 +289,54 @@ export function releaseSddAssistantThread(
       normalizedThreadId,
       ...record.publicThreadIds.filter((id) => id !== normalizedThreadId)
     ].filter((id) => record.threadIds.includes(id))
+    const visibleThreadIds = [
+      normalizedThreadId,
+      ...record.visibleThreadIds.filter((id) => id !== normalizedThreadId)
+    ].filter((id) => record.threadIds.includes(id))
     changed = changed || publicThreadIds.length !== record.publicThreadIds.length ||
-      publicThreadIds.some((id, index) => id !== record.publicThreadIds[index])
+      publicThreadIds.some((id, index) => id !== record.publicThreadIds[index]) ||
+      visibleThreadIds.length !== record.visibleThreadIds.length ||
+      visibleThreadIds.some((id, index) => id !== record.visibleThreadIds[index])
     drafts[draftId] = {
       ...record,
+      visibleThreadIds,
       publicThreadIds,
       updatedAt: new Date().toISOString()
     }
   }
   if (!changed) return false
   saveSddThreadRegistry({ version: 1, drafts }, storage)
+  return true
+}
+
+export function releaseSddAssistantThreadsForDraft(
+  draft: Pick<SddDraft, 'id' | 'workspaceRoot' | 'relativePath'>,
+  storage: BrowserStorageLike | null = browserStorage()
+): boolean {
+  const draftId = sddDraftKey(draft)
+  if (!draftId) return false
+  const registry = readSddThreadRegistry(storage)
+  const record = registry.drafts[draftId]
+  if (!record) return false
+  const publicThreadIds = [...record.threadIds]
+  const visibleThreadIds = [...record.threadIds]
+  const changed = publicThreadIds.length !== record.publicThreadIds.length ||
+    publicThreadIds.some((id, index) => id !== record.publicThreadIds[index]) ||
+    visibleThreadIds.length !== record.visibleThreadIds.length ||
+    visibleThreadIds.some((id, index) => id !== record.visibleThreadIds[index])
+  if (!changed) return false
+  saveSddThreadRegistry({
+    version: 1,
+    drafts: {
+      ...registry.drafts,
+      [draftId]: {
+        ...record,
+        visibleThreadIds,
+        publicThreadIds,
+        updatedAt: new Date().toISOString()
+      }
+    }
+  }, storage)
   return true
 }
 

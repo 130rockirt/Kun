@@ -22,6 +22,7 @@ import {
   normalizeWorkspaceRoot
 } from '../lib/workspace-path'
 import type { ClawImChannelV1 } from '@shared/app-settings'
+import type { TurnCompleteNotificationSource } from '@shared/kun-gui-api'
 import { isBackgroundShellNoticeUserMessage } from '@shared/background-shell-notice'
 import type { ChatState } from './chat-store-types'
 import { isPendingQueuedMessage } from './queued-message-persistence'
@@ -38,13 +39,17 @@ import {
   isWriteAssistantThread,
   type WriteThreadRegistry
 } from '../write/write-thread-registry'
-import { isSddAssistantThread } from '../sdd/sdd-thread-registry'
+import {
+  isSddAssistantThread,
+  type SddThreadRegistry
+} from '../sdd/sdd-thread-registry'
 import { isDesignThreadId, type DesignThreadRegistry } from '../design/design-thread-registry'
 import { readThreadWorktreeRegistry, saveThreadWorktreeRegistry, forgetThreadWorktree } from '../lib/thread-worktree-registry'
 import { notifySddChatTranscriptMirror } from '../sdd/sdd-chat-transcript'
 import { notifyDesignChatTranscriptMirror } from '../design/design-chat-transcript'
 import { useWriteWorkspaceStore } from '../write/write-workspace-store'
 import {
+  flushLiveProjection,
   mergeToolProjectionEvents,
   reduceChatProjection,
   toolBlockChildId,
@@ -55,6 +60,11 @@ import {
   terminalFailureProjectionEffects,
   type ChatProjectionEffect
 } from './chat-projection-effects'
+import {
+  receiveGraphChildRuntimeEvent,
+  receiveGraphPlanningRuntimeEvent,
+  receiveGraphRuntimeEvent
+} from '../graph/graph-store'
 import {
   armBusyWatchdog as armBusyWatchdogImpl,
   clearBusyWatchdog,
@@ -75,6 +85,7 @@ export const MAX_PENDING_CHILD_TOOL_UPDATES = 200
 const completionNotificationKeys: string[] = []
 const completionNotificationKeySet = new Set<string>()
 const watchCompletionNotificationKeys = new Map<string, string>()
+const watchCompletionNotificationSources = new Map<string, TurnCompleteNotificationSource>()
 
 export type PendingClawFeishuMirror = {
   threadId: string
@@ -84,15 +95,22 @@ export type PendingClawFeishuMirror = {
 
 const pendingClawFeishuMirrors = new Map<string, PendingClawFeishuMirror>()
 
-export function watchTurnCompletionNotification(threadId: string, now = Date.now()): void {
+export function watchTurnCompletionNotification(
+  threadId: string,
+  now = Date.now(),
+  source: TurnCompleteNotificationSource = 'main-agent'
+): void {
   const normalizedThreadId = threadId.trim()
   if (!normalizedThreadId) return
   watchCompletionNotificationKeys.delete(normalizedThreadId)
+  watchCompletionNotificationSources.delete(normalizedThreadId)
   watchCompletionNotificationKeys.set(normalizedThreadId, `watch:${normalizedThreadId}:${now}`)
+  watchCompletionNotificationSources.set(normalizedThreadId, source)
   while (watchCompletionNotificationKeys.size > MAX_WATCHED_COMPLETION_NOTIFICATIONS) {
     const oldestThreadId = watchCompletionNotificationKeys.keys().next().value
     if (!oldestThreadId) break
     watchCompletionNotificationKeys.delete(oldestThreadId)
+    watchCompletionNotificationSources.delete(oldestThreadId)
   }
 }
 
@@ -107,6 +125,7 @@ export function completionNotificationDedupeKeyForWatchedThread(
 
 export function clearWatchedCompletionNotifications(): void {
   watchCompletionNotificationKeys.clear()
+  watchCompletionNotificationSources.clear()
 }
 
 export function rememberPendingClawFeishuMirror(
@@ -283,9 +302,29 @@ export function clearWatchedCompletionNotification(threadId: string): void {
   const normalizedThreadId = threadId.trim()
   if (!normalizedThreadId) return
   watchCompletionNotificationKeys.delete(normalizedThreadId)
+  watchCompletionNotificationSources.delete(normalizedThreadId)
 }
 
-function notifyTurnComplete(threadId: string | null, state: ChatState, dedupeKey: string): void {
+export function turnCompleteNotificationSource(
+  threadId: string,
+  state: Pick<ChatState, 'threads'> &
+    Partial<Pick<ChatState, 'activeThreadId' | 'activeThreadRelation' | 'sideConversations'>>
+): TurnCompleteNotificationSource {
+  return (
+    state.threads.find((thread) => thread.id === threadId)?.relation === 'side' ||
+    (state.activeThreadId === threadId && state.activeThreadRelation === 'side') ||
+    Boolean(state.sideConversations?.[threadId])
+  )
+    ? 'subagent'
+    : 'main-agent'
+}
+
+function notifyTurnComplete(
+  threadId: string | null,
+  state: ChatState,
+  dedupeKey: string,
+  source?: TurnCompleteNotificationSource
+): void {
   if (
     !threadId ||
     typeof window === 'undefined' ||
@@ -302,6 +341,7 @@ function notifyTurnComplete(threadId: string | null, state: ChatState, dedupeKey
   void window.kunGui
     .showTurnCompleteNotification({
       threadId,
+      source: source ?? turnCompleteNotificationSource(threadId, state),
       title: i18n.t('common:turnCompleteNotificationTitle'),
       body: i18n.t('common:turnCompleteNotificationBody', { title: threadTitle })
     })
@@ -366,22 +406,7 @@ export function finalizeTurnTiming(state: ChatState): Partial<ChatState> {
 }
 
 export function flushLiveBlocks(state: ChatState, base: Partial<ChatState> = {}): Partial<ChatState> {
-  const nextBlocks = [...state.blocks]
-  const now = Date.now()
-  const createdAt = new Date(now).toISOString()
-  if (state.liveReasoning.trim()) {
-    nextBlocks.push({ kind: 'reasoning', id: `r-${now}`, createdAt, text: state.liveReasoning })
-  }
-  if (state.liveAssistant.trim()) {
-    nextBlocks.push({ kind: 'assistant', id: `a-${now}`, createdAt, text: state.liveAssistant })
-  }
-  if (nextBlocks.length === state.blocks.length) return base
-  return {
-    ...base,
-    blocks: nextBlocks,
-    liveReasoning: '',
-    liveAssistant: ''
-  }
+  return flushLiveProjection(state, Date.now(), base)
 }
 
 function goalStatusText(status: string): string {
@@ -424,16 +449,20 @@ export function isCodeThread(
   thread: NormalizedThread,
   clawChannels: ClawImChannelV1[] = [],
   writeRegistry?: WriteThreadRegistry,
-  designRegistry?: DesignThreadRegistry
+  designRegistry?: DesignThreadRegistry,
+  sddRegistry?: SddThreadRegistry
 ): boolean {
-  return thread.archived !== true && isCodeSidebarThread(thread, clawChannels, writeRegistry, designRegistry)
+  return thread.archived !== true &&
+    !isSddAssistantThread(thread, sddRegistry) &&
+    isCodeSidebarThread(thread, clawChannels, writeRegistry, designRegistry, sddRegistry)
 }
 
 export function isCodeSidebarThread(
   thread: NormalizedThread,
   clawChannels: ClawImChannelV1[] = [],
   writeRegistry?: WriteThreadRegistry,
-  designRegistry?: DesignThreadRegistry
+  designRegistry?: DesignThreadRegistry,
+  sddRegistry?: SddThreadRegistry
 ): boolean {
   const workspace = normalizeWorkspaceRoot(thread.workspace)
   return Boolean(workspace) &&
@@ -442,7 +471,6 @@ export function isCodeSidebarThread(
     !isClawWorkspacePath(thread.workspace) &&
     !isClawThread(thread, clawChannels) &&
     !isWriteAssistantThread(thread, writeRegistry) &&
-    !isSddAssistantThread(thread) &&
     !isDesignThreadId(thread.id, designRegistry)
 }
 
@@ -495,12 +523,23 @@ function notifyWriteWorkspaceFileRefresh(
   })
 }
 
-function runtimeStatusText(event: RuntimeStatusEventPayload): string {
+function compactGraphGateFailureSummary(value: string | undefined): string {
+  const normalized = value?.replace(/\s+/g, ' ').trim() ?? ''
+  if (!normalized) return ''
+  return normalized.length > 180 ? `${normalized.slice(0, 179)}…` : normalized
+}
+
+export function runtimeStatusText(event: RuntimeStatusEventPayload): string {
   if (event.kind === 'tool_result_upload_wait') {
     return i18n.t('common:toolUploadWaitStatus', { count: event.toolResultCount ?? 0 })
   }
   if (event.kind === 'model_request_retry') {
-    return i18n.t('common:modelRequestRetryStatus', {
+    const key = event.retryReason === 'network'
+      ? 'common:modelNetworkRetryStatus'
+      : event.retryReason === 'stream_transport'
+        ? 'common:modelStreamRetryStatus'
+        : 'common:modelRequestRetryStatus'
+    return i18n.t(key, {
       status: event.status ?? '',
       attempt: event.attempt ?? 0,
       max: event.maxAttempts ?? 0,
@@ -517,6 +556,26 @@ function runtimeStatusText(event: RuntimeStatusEventPayload): string {
   }
   if (event.kind === 'compaction_summary_fallback') {
     return event.message?.trim() || i18n.t('common:compactionSummaryFallbackStatus')
+  }
+  if (event.kind === 'required_tool_gate') {
+    const key = event.phase === 'retrying'
+      ? 'common:graphCreateRetryingStatus'
+      : event.phase === 'succeeded'
+        ? 'common:graphCreateSucceededStatus'
+        : event.phase === 'failed'
+          ? 'common:graphCreateFailedStatus'
+          : 'common:graphCreatePreparingStatus'
+    const base = i18n.t(key, {
+      tool: event.toolName ?? 'tool',
+      attempt: event.attempt ?? 0,
+      max: event.maxAttempts ?? 0,
+      retry: Math.max(1, (event.attempt ?? 1) - 1),
+      retryMax: Math.max(1, (event.maxAttempts ?? 1) - 1)
+    })
+    const reason = compactGraphGateFailureSummary(event.failureSummary)
+    return reason && (event.phase === 'retrying' || event.phase === 'failed')
+      ? `${base} · ${i18n.t('common:graphCreateFailureReason', { reason })}`
+      : base
   }
   return event.message?.trim() || ''
 }
@@ -636,7 +695,8 @@ export function syncTurnCompletionPoll(
         notifyTurnComplete(
           id,
           state,
-          completionNotificationDedupeKeyForWatchedThread(id)
+          completionNotificationDedupeKeyForWatchedThread(id),
+          watchCompletionNotificationSources.get(id)
         )
         clearWatchedCompletionNotification(id)
       }
@@ -668,34 +728,6 @@ export type ThreadEventSinkBinding = {
   getThreadDetail?: AgentProvider['getThreadDetail']
 }
 
-function assistantTextAfterUser(blocks: ChatBlock[], userBlockId: string): string {
-  const userIndex = blocks.findIndex((block) => block.kind === 'user' && block.id === userBlockId)
-  if (userIndex < 0) return ''
-  const parts: string[] = []
-  for (let index = userIndex + 1; index < blocks.length; index += 1) {
-    const block = blocks[index]
-    if (block.kind === 'user') break
-    if (block.kind === 'assistant' && block.text.trim()) parts.push(block.text.trim())
-  }
-  return parts.join('\n\n').trim()
-}
-
-function hasAssistantTextForCompletedTurn(
-  state: Pick<ChatState, 'blocks' | 'liveAssistant'>,
-  turnId: string | null | undefined,
-  userBlockId: string | null | undefined
-): boolean {
-  if (state.liveAssistant.trim()) return true
-  const normalizedTurnId = turnId?.trim()
-  if (normalizedTurnId) {
-    return state.blocks.some(
-      (block) => block.kind === 'assistant' && block.turnId === normalizedTurnId && block.text.trim()
-    )
-  }
-  const normalizedUserBlockId = userBlockId?.trim()
-  return normalizedUserBlockId ? !!assistantTextAfterUser(state.blocks, normalizedUserBlockId) : false
-}
-
 async function reconcileCompletedTurnFromThreadDetail(input: {
   threadId: string | null | undefined
   turnId: string | null | undefined
@@ -706,18 +738,10 @@ async function reconcileCompletedTurnFromThreadDetail(input: {
 }): Promise<void> {
   const threadId = input.threadId?.trim()
   if (!threadId) return
-  if (hasAssistantTextForCompletedTurn(input.get(), input.turnId, input.userBlockId)) return
 
   try {
     const detail = await input.loadThreadDetail(threadId)
     const loaded = hydrateBlockModelLabels(threadId, detail.blocks)
-    const hasPersistedCompletion =
-      hasAssistantTextForCompletedTurn(
-        { blocks: loaded, liveAssistant: '' } as Pick<ChatState, 'blocks' | 'liveAssistant'>,
-        input.turnId,
-        input.userBlockId
-      ) || detail.latestSeq > input.get().lastSeq
-    if (!hasPersistedCompletion) return
 
     input.set((state) => reduceChatProjection(state, {
       type: 'thread_snapshot_reconciled',
@@ -742,8 +766,7 @@ async function reconcileCompletedTurnFromThreadDetail(input: {
       runtimeErrorDetail,
       isInterruptSettledError,
       settlePendingRuntimeWork: settlePendingRuntimeWorkAfterInterrupt,
-      threadSnapshotLooksRunning,
-      hasAssistantTextForCompletedTurn
+      threadSnapshotLooksRunning
     }))
   } catch (error) {
     if (typeof window === 'undefined') return
@@ -782,8 +805,7 @@ export function buildThreadEventSink(
       runtimeErrorDetail,
       isInterruptSettledError,
       settlePendingRuntimeWork: settlePendingRuntimeWorkAfterInterrupt,
-      threadSnapshotLooksRunning,
-      hasAssistantTextForCompletedTurn
+      threadSnapshotLooksRunning
     })
   const runEffects = (effects: readonly ChatProjectionEffect[]): void => {
     for (const effect of effects) {
@@ -877,6 +899,11 @@ export function buildThreadEventSink(
       if (!get().busy) armBusyWatchdog(set, get)
       set((state) => reduce(state, { type: 'deltas_received', deltas }))
     },
+    onAssistantItem: (item) => {
+      if (!isCurrentStream()) return
+      resetBusyRecoveryAttempts()
+      set((state) => reduce(state, { type: 'assistant_item_upserted', payload: item }))
+    },
     onTool: (event) => {
       if (!isCurrentStream()) return
       runEffects([{ type: 'refresh_write_workspace', event }])
@@ -938,6 +965,12 @@ export function buildThreadEventSink(
       resetBusyRecoveryAttempts()
       set((state) => reduce(state, { type: 'approval_status_changed', payload: event }))
     },
+    onApprovalReview: (event) => {
+      if (!isCurrentStream()) return
+      resetBusyRecoveryAttempts()
+      if (!get().busy && event.status === 'in-progress') armBusyWatchdog(set, get)
+      set((state) => reduce(state, { type: 'approval_review_updated', payload: event }))
+    },
     onUserInput: (request) => {
       if (!isCurrentStream()) return
       resetBusyRecoveryAttempts()
@@ -988,11 +1021,6 @@ export function buildThreadEventSink(
       const completedThreadId = completedState.activeThreadId
       const completedTurnId = completedState.currentTurnId
       const completedUserBlockId = completedState.currentTurnUserId
-      const shouldReconcileCompletion = !hasAssistantTextForCompletedTurn(
-        completedState,
-        completedTurnId,
-        completedUserBlockId
-      )
       const completedKey = completedState.currentTurnId
         ? `turn:${completedState.currentTurnId}`
         : `active:${completedThreadId ?? 'unknown'}:${completedState.lastSeq}`
@@ -1015,7 +1043,7 @@ export function buildThreadEventSink(
         dedupeKey: completedKey,
         mirrorText: pendingMirror && assistantMirrorText ? assistantMirrorText : undefined,
         mirrorThreadId: pendingMirror?.threadId,
-        reconcile: shouldReconcileCompletion,
+        reconcile: true,
         releaseWorktree: !get().queuedMessages.some(isPendingQueuedMessage)
       }))
     },
@@ -1029,6 +1057,14 @@ export function buildThreadEventSink(
       set((current) => reduce(current, { type: 'turn_failed', error: err, options }))
       if (terminal && state.activeThreadId) {
         clearWatchedCompletionNotification(state.activeThreadId)
+        void reconcileCompletedTurnFromThreadDetail({
+          threadId: state.activeThreadId,
+          turnId: state.currentTurnId,
+          userBlockId: state.currentTurnUserId,
+          loadThreadDetail,
+          set,
+          get
+        })
       }
       if (terminal) {
         runEffects(terminalFailureProjectionEffects(
@@ -1055,6 +1091,18 @@ export function buildThreadEventSink(
         type: 'delegated_runtime_received',
         payload: runtimeState
       }))
+    },
+    onChildRuntimeEvent: (event) => {
+      if (!isCurrentStream()) return
+      receiveGraphChildRuntimeEvent(event)
+    },
+    onGraphEvent: (event) => {
+      if (!isCurrentStream()) return
+      receiveGraphRuntimeEvent(event)
+    },
+    onGraphPlanningEvent: (event) => {
+      if (!isCurrentStream()) return
+      receiveGraphPlanningRuntimeEvent(event)
     }
   }
 }

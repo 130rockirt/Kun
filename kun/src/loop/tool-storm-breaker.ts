@@ -16,6 +16,10 @@ const DEFAULT_WINDOW_SIZE = 8
 const DEFAULT_THRESHOLD = 3
 const DEFAULT_INTERACTIVE_THRESHOLD = 3
 const MUTATING_TOOL_NAMES = new Set(['write', 'edit', 'edit_diff', 'apply_patch', 'delete', 'move'])
+const GRAPH_MUTATING_TOOL_NAMES = new Set([
+  'graph_patch_run',
+  'graph_review_node'
+])
 const INTERACTIVE_TOOL_NAMES = new Set(['request_user_input', 'user_input'])
 
 /**
@@ -40,6 +44,12 @@ export class ToolStormBreaker {
   }
 
   inspect(call: ToolCallLike): { suppress: boolean; reason?: string } {
+    if (call.toolName === 'graph_define_plan') {
+      // The planning draft owns candidate hashing and the single-repair
+      // policy. Let it return unchanged_invalid_plan on the second identical
+      // submission instead of converting it into a generic third-call storm.
+      return { suppress: false }
+    }
     if (INTERACTIVE_TOOL_NAMES.has(call.toolName)) {
       this.interactiveCount += 1
       if (this.interactiveCount > this.interactiveThreshold) {
@@ -92,7 +102,27 @@ export class ToolStormBreaker {
 
 function isMutatingToolCall(call: ToolCallLike): boolean {
   if (call.toolKind === 'file_change') return true
+  if (call.toolName === 'graph_control_run') {
+    return graphControlAction(call) !== 'inspect'
+  }
+  if (call.toolName === 'graph_supervise_node') {
+    return graphAction(call) === 'guide'
+  }
+  if (GRAPH_MUTATING_TOOL_NAMES.has(call.toolName)) return true
   return MUTATING_TOOL_NAMES.has(call.toolName)
+}
+
+function graphControlAction(call: ToolCallLike): string {
+  if (call.toolName !== 'graph_control_run') return ''
+  return graphAction(call)
+}
+
+function graphAction(call: ToolCallLike): string {
+  if (!call.arguments || typeof call.arguments !== 'object' || Array.isArray(call.arguments)) {
+    return ''
+  }
+  const action = (call.arguments as Record<string, unknown>).action
+  return typeof action === 'string' ? action : ''
 }
 
 function stableStringify(value: unknown): string {

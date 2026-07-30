@@ -1,4 +1,6 @@
 import type { Turn } from '../contracts/turns.js'
+import type { ToolResultTurnItem } from '../contracts/items.js'
+import { GraphPlanningDraftV1Schema } from '../contracts/graph-planning.js'
 import { makeErrorItem, makeToolCallItem } from '../domain/item.js'
 import type { IdGenerator } from '../ports/id-generator.js'
 import type { SessionStore } from '../ports/session-store.js'
@@ -6,6 +8,7 @@ import type { ToolCallLike, ToolProviderKind } from '../ports/tool-host.js'
 import type { RuntimeEventRecorder } from '../services/runtime-event-recorder.js'
 import type { TurnService } from '../services/turn-service.js'
 import { CREATE_PLAN_TOOL_NAME } from '../adapters/tool/create-plan-tool.js'
+import { GRAPH_DEFINE_PLAN_TOOL_NAME } from '../adapters/tool/graph-define-plan-tool.js'
 import {
   DESIGN_SVG_ANIMATE_TOOL_NAME,
   DESIGN_SVG_EDIT_TOOL_NAME,
@@ -32,6 +35,17 @@ import type {
 } from './turn-execution-types.js'
 
 const MAX_SVG_COMPLETION_RECOVERY_STEPS = 3
+export const GRAPH_CREATE_RUN_TOOL_NAME = 'graph_create_run'
+export const MAX_GRAPH_CREATE_RUN_ATTEMPTS = 3
+/** @deprecated Use MAX_GRAPH_CREATE_RUN_ATTEMPTS for the total request cap. */
+export const MAX_GRAPH_CREATE_RUN_RECOVERY_STEPS = MAX_GRAPH_CREATE_RUN_ATTEMPTS - 1
+
+export type GraphCreateRunRecoveryReason = 'missing' | 'invalid' | 'mismatch'
+
+type GraphCreateRunRecoveryState = Readonly<{
+  steps: number
+  reason: GraphCreateRunRecoveryReason
+}>
 
 export type RoundToolProviderMetadata = Readonly<{
   providerId?: string
@@ -42,11 +56,15 @@ export type RoundOutcomeInput = Readonly<{
   threadId: string
   turnId: string
   streamed: ModelRoundStreamResult
+  /** Hard transport and dispatch constraint from ModelRequest. */
   requiredToolName?: string
+  /** Soft workflow completion expectation (currently Plan create_plan). */
+  softRequiredToolName?: string
   turn: Turn
   prepared: PreparedTurnContext
   modelProviderId?: string
   modelReasoningEffort?: string
+  sourceResultBudgetTokens?: number
   toolProviderMetadata: ReadonlyMap<string, RoundToolProviderMetadata>
   toolKinds: ReadonlyMap<string, ToolCallLike['toolKind'] | undefined>
   toolProviderKinds: ReadonlyMap<string, ToolProviderKind | undefined>
@@ -55,7 +73,7 @@ export type RoundOutcomeInput = Readonly<{
 
 export type RoundOutcomeCoordinatorDeps = {
   sessionStore: Pick<SessionStore, 'loadItems'>
-  turns: Pick<TurnService, 'applyItem'>
+  turns: Pick<TurnService, 'applyItem' | 'updateItem' | 'getTurn' | 'updateTurnMetadata'>
   events: Pick<RuntimeEventRecorder, 'record'>
   ids: Pick<IdGenerator, 'next'>
   dispatchToolCalls: (input: ToolDispatchInput) => Promise<ToolDispatchOutcome>
@@ -74,6 +92,8 @@ export class RoundOutcomeCoordinator {
   private readonly goalNoToolRecoveryStepsByTurn = new Map<string, number>()
   private readonly emptyPostToolRecoveryStepsByTurn = new Map<string, number>()
   private readonly svgCompletionRecoveryStepsByTurn = new Map<string, number>()
+  private readonly graphCreateRunRecoveryByTurn = new Map<string, GraphCreateRunRecoveryState>()
+  private readonly graphPlanNoToolRecoveryByTurn = new Map<string, number>()
 
   constructor(private readonly deps: RoundOutcomeCoordinatorDeps) {}
 
@@ -89,11 +109,25 @@ export class RoundOutcomeCoordinator {
     return this.emptyPostToolRecoveryStepsByTurn.get(turnId) ?? 0
   }
 
+  graphCreateRunRecoverySteps(turnId: string): number {
+    return this.graphCreateRunRecoveryByTurn.get(turnId)?.steps ?? 0
+  }
+
+  graphCreateRunRecoveryReason(turnId: string): GraphCreateRunRecoveryReason | undefined {
+    return this.graphCreateRunRecoveryByTurn.get(turnId)?.reason
+  }
+
+  graphPlanNoToolRecoverySteps(turnId: string): number {
+    return this.graphPlanNoToolRecoveryByTurn.get(turnId) ?? 0
+  }
+
   clearTurn(turnId: string): void {
     this.lastNoToolTextByTurn.delete(turnId)
     this.goalNoToolRecoveryStepsByTurn.delete(turnId)
     this.emptyPostToolRecoveryStepsByTurn.delete(turnId)
     this.svgCompletionRecoveryStepsByTurn.delete(turnId)
+    this.graphCreateRunRecoveryByTurn.delete(turnId)
+    this.graphPlanNoToolRecoveryByTurn.delete(turnId)
   }
 
   async resolve(input: RoundOutcomeInput): Promise<ModelRoundOutcome> {
@@ -103,11 +137,14 @@ export class RoundOutcomeCoordinator {
     const streamSnapshot = input.streamed.snapshot
     const completedToolCalls = [...streamSnapshot.toolCalls]
     if (completedToolCalls.length === 0) {
+      if (input.requiredToolName) {
+        return this.resolveMissingRequiredTool(input)
+      }
       if (input.svgCompletion && !input.svgCompletion.validationAfterMutation) {
         return this.recoverRequiredSvgCompletion(input, input.svgCompletion)
       }
-      if (input.requiredToolName) {
-        return this.resolveMissingRequiredTool(input, streamSnapshot.text)
+      if (input.softRequiredToolName) {
+        return this.resolveMissingSoftRequiredTool(input, streamSnapshot.text)
       }
       const hasCurrentTurnFileChange = input.prepared.history.some(
         (item) =>
@@ -138,11 +175,98 @@ export class RoundOutcomeCoordinator {
     this.lastNoToolTextByTurn.delete(input.turnId)
     this.goalNoToolRecoveryStepsByTurn.delete(input.turnId)
     this.emptyPostToolRecoveryStepsByTurn.delete(input.turnId)
+    const dispatchableToolCalls = await this.suppressMismatchedRequiredToolCalls(
+      input,
+      completedToolCalls
+    )
+    if (input.requiredToolName && dispatchableToolCalls.length === 0) {
+      if (input.requiredToolName === GRAPH_CREATE_RUN_TOOL_NAME) {
+        return this.advanceGraphCreateRunRecovery(input, 'mismatch')
+      }
+      return this.failHardRequiredTool(input, 'required_tool_mismatch', [
+        `Model called a tool other than the required \`${input.requiredToolName}\`.`,
+        'The mismatched call was suppressed and was not executed.'
+      ].join(' '))
+    }
     const dispatched = await this.deps.dispatchToolCalls(
-      this.toolDispatchInput(input, completedToolCalls, true)
+      this.toolDispatchInput(input, dispatchableToolCalls, true)
     )
     if (dispatched === 'aborted') return 'aborted'
     if (dispatched === 'budget_exhausted') return 'failed'
+    const graphCreateCalls = dispatchableToolCalls.filter(
+      (call) => call.toolName === GRAPH_CREATE_RUN_TOOL_NAME
+    )
+    if (input.requiredToolName === GRAPH_CREATE_RUN_TOOL_NAME && graphCreateCalls.length > 0) {
+      return this.resolveDispatchedGraphCreate(input, graphCreateCalls)
+    }
+    const graphDefineCalls = dispatchableToolCalls.filter(
+      (call) => call.toolName === GRAPH_DEFINE_PLAN_TOOL_NAME
+    )
+    if (graphDefineCalls.length > 0) {
+      const callIds = new Set(graphDefineCalls.map((call) => call.callId))
+      const latestItems = await this.deps.sessionStore.loadItems(input.threadId)
+      const results = latestItems.filter((item): item is ToolResultTurnItem =>
+        item.turnId === input.turnId &&
+        item.kind === 'tool_result' &&
+        item.toolName === GRAPH_DEFINE_PLAN_TOOL_NAME &&
+        callIds.has(item.callId))
+      const latestDraft = results
+        .flatMap((result) => {
+          if (!result.output || typeof result.output !== 'object') return []
+          const parsed = GraphPlanningDraftV1Schema.safeParse(
+            (result.output as Record<string, unknown>).draft
+          )
+          return parsed.success ? [parsed.data] : []
+        })
+        .sort((left, right) => right.revision - left.revision)[0]
+      if (latestDraft) {
+        await this.deps.turns.updateTurnMetadata(input.threadId, input.turnId, {
+          graphPlanningLifecycle: {
+            version: 1,
+            draftId: latestDraft.id,
+            reservedRunId: latestDraft.reservedRunId,
+            state: latestDraft.status,
+            draftRevision: latestDraft.revision
+          }
+        })
+      }
+      const paused = results.some((result) => {
+        const output = result.output
+        if (!output || typeof output !== 'object') return false
+        const record = output as Record<string, unknown>
+        const draft = record.draft
+        const state = draft && typeof draft === 'object'
+          ? (draft as Record<string, unknown>).status
+          : undefined
+        return record.retryable === false && state === 'needs_correction'
+      })
+      if (paused) return 'stop'
+      const hostError = results.find((result) => {
+        if (!result.output || typeof result.output !== 'object') return false
+        const output = result.output as Record<string, unknown>
+        const draft = output.draft
+        const state = draft && typeof draft === 'object'
+          ? (draft as Record<string, unknown>).status
+          : undefined
+        return output.code === 'graph_planning_host_error' || state === 'host_error'
+      })
+      if (hostError) {
+        const output = hostError.output as Record<string, unknown>
+        const message = typeof output.error === 'string'
+          ? output.error
+          : 'Graph planning stopped because the host could not persist or commit the draft.'
+        this.deps.rememberFailure(input.turnId, {
+          error: message,
+          code: 'graph_planning_host_error',
+          details: output,
+          severity: 'error'
+        })
+        return 'failed'
+      }
+      if (results.some((result) => result.isError !== true)) {
+        this.graphPlanNoToolRecoveryByTurn.delete(input.turnId)
+      }
+    }
     if (dispatched === 'all_suppressed') {
       if (input.prepared.dedicatedSvgTurn) {
         const latestItems = await this.deps.sessionStore.loadItems(input.threadId)
@@ -171,11 +295,20 @@ export class RoundOutcomeCoordinator {
     return 'continue'
   }
 
-  private async resolveMissingRequiredTool(
+  private async resolveMissingSoftRequiredTool(
     input: RoundOutcomeInput,
     assistantText: string
   ): Promise<ModelRoundOutcome> {
-    if (input.requiredToolName === CREATE_PLAN_TOOL_NAME && assistantText.trim()) {
+    if (input.softRequiredToolName === GRAPH_DEFINE_PLAN_TOOL_NAME) {
+      if (assistantText.trim() && isPlanClarifyingQuestion(assistantText)) return 'stop'
+      const attempts = this.graphPlanNoToolRecoveryByTurn.get(input.turnId) ?? 0
+      if (attempts === 0) {
+        this.graphPlanNoToolRecoveryByTurn.set(input.turnId, 1)
+        return 'continue'
+      }
+      return 'stop'
+    }
+    if (input.softRequiredToolName === CREATE_PLAN_TOOL_NAME && assistantText.trim()) {
       // Ambiguous plan requests may legitimately require a user clarification;
       // do not turn that question into a bogus plan artifact.
       if (isPlanClarifyingQuestion(assistantText)) return 'stop'
@@ -220,7 +353,7 @@ export class RoundOutcomeCoordinator {
           toolName: CREATE_PLAN_TOOL_NAME,
           toolKind,
           arguments: argumentsForFallback,
-          summary: 'Materialized assistant plan text into the required GUI plan.'
+          summary: 'Materialized assistant plan text into the required Kun plan.'
         })
       )
       await this.deps.events.record({
@@ -241,7 +374,7 @@ export class RoundOutcomeCoordinator {
       return 'continue'
     }
 
-    const message = `Model did not call the required \`${input.requiredToolName}\` tool for this GUI plan turn.`
+    const message = `Model did not call the expected \`${input.softRequiredToolName}\` tool for this Plan-mode turn.`
     await this.deps.events.record({
       kind: 'error',
       threadId: input.threadId,
@@ -260,6 +393,199 @@ export class RoundOutcomeCoordinator {
       })
     )
     return 'failed'
+  }
+
+  private async resolveMissingRequiredTool(input: RoundOutcomeInput): Promise<ModelRoundOutcome> {
+    if (input.requiredToolName === GRAPH_CREATE_RUN_TOOL_NAME) {
+      return this.advanceGraphCreateRunRecovery(input, 'missing')
+    }
+    return this.failHardRequiredTool(
+      input,
+      'required_tool_missing',
+      `Model did not call the required \`${input.requiredToolName}\` tool.`
+    )
+  }
+
+  private async resolveDispatchedGraphCreate(
+    input: RoundOutcomeInput,
+    calls: readonly ToolCallLike[]
+  ): Promise<ModelRoundOutcome> {
+    const callIds = new Set(calls.map((call) => call.callId))
+    const latestItems = await this.deps.sessionStore.loadItems(input.threadId)
+    const results = latestItems.filter((item): item is ToolResultTurnItem =>
+      item.turnId === input.turnId &&
+      item.kind === 'tool_result' &&
+      item.toolName === GRAPH_CREATE_RUN_TOOL_NAME &&
+      callIds.has(item.callId))
+    if (results.some((result) => result.isError !== true)) {
+      this.graphCreateRunRecoveryByTurn.delete(input.turnId)
+      const gate = await this.graphGate(input)
+      await this.recordGraphGate(input, {
+        attempt: gate?.attempt ?? 1,
+        phase: 'succeeded'
+      })
+      await this.deps.turns.updateTurnMetadata(input.threadId, input.turnId, {
+        requiredToolGate: null
+      })
+      return 'continue'
+    }
+
+    const retryable = results.length > 0 && results.every((result) =>
+      graphCreateRunResultRetryable(result.output))
+    if (retryable) {
+      return this.advanceGraphCreateRunRecovery(
+        input,
+        'invalid',
+        graphCreateRunValidationSummary(results[0]?.output)
+      )
+    }
+
+    const firstFailure = results[0]?.output
+    return this.failGraphCreateRun(
+      input,
+      'graph_create_run_failed',
+      graphCreateRunFailureMessage(firstFailure),
+      firstFailure
+    )
+  }
+
+  private async advanceGraphCreateRunRecovery(
+    input: RoundOutcomeInput,
+    reason: GraphCreateRunRecoveryReason,
+    failureSummary?: string
+  ): Promise<ModelRoundOutcome> {
+    const gate = await this.graphGate(input)
+    const completedAttempt = gate?.attempt ?? Math.max(1, this.graphCreateRunRecoverySteps(input.turnId) + 1)
+    const lastError = graphGateFailureSummary(reason, input, failureSummary ?? gate?.lastError)
+    if (completedAttempt < MAX_GRAPH_CREATE_RUN_ATTEMPTS) {
+      const nextAttempt = completedAttempt + 1
+      this.graphCreateRunRecoveryByTurn.set(input.turnId, { steps: completedAttempt, reason })
+      await this.recordGraphGate(input, {
+        attempt: nextAttempt,
+        phase: 'retrying',
+        failureSummary: lastError
+      })
+      return 'continue'
+    }
+    return this.failGraphCreateRun(
+      input,
+      'graph_create_run_failed',
+      [
+        `Graph turn could not start after ${MAX_GRAPH_CREATE_RUN_ATTEMPTS} attempts to call`,
+        `\`${GRAPH_CREATE_RUN_TOOL_NAME}\`.`,
+        lastError
+      ].join(' '),
+      { reason, failureSummary: lastError }
+    )
+  }
+
+  private async failGraphCreateRun(
+    input: RoundOutcomeInput,
+    code: 'graph_create_run_failed',
+    message: string,
+    details?: unknown
+  ): Promise<'failed'> {
+    const gate = await this.graphGate(input)
+    const attempt = gate?.attempt ?? MAX_GRAPH_CREATE_RUN_ATTEMPTS
+    const failureSummary = graphGateFailureSummary('invalid', input, message)
+    await this.recordGraphGate(input, { attempt, phase: 'failed', failureSummary })
+    this.graphCreateRunRecoveryByTurn.delete(input.turnId)
+    this.deps.rememberFailure(input.turnId, {
+      error: message,
+      code,
+      ...(details === undefined ? {} : { details }),
+      severity: 'error'
+    })
+    return 'failed'
+  }
+
+  private async suppressMismatchedRequiredToolCalls(
+    input: RoundOutcomeInput,
+    calls: readonly ToolCallLike[]
+  ): Promise<ToolCallLike[]> {
+    const required = input.requiredToolName
+    if (!required) return [...calls]
+    const allowed: ToolCallLike[] = []
+    for (const call of calls) {
+      if (call.toolName === required) {
+        allowed.push(call)
+        continue
+      }
+      const message = [
+        `Suppressed \`${call.toolName}\` because this response requires \`${required}\`.`,
+        'No tool side effect was performed.'
+      ].join(' ')
+      await this.deps.turns.updateItem(input.threadId, `item_tool_${input.turnId}_${call.callId}`, {
+        status: 'failed',
+        summary: message
+      })
+      await this.deps.events.record({
+        kind: 'error',
+        threadId: input.threadId,
+        turnId: input.turnId,
+        message,
+        code: 'required_tool_mismatch',
+        details: { requiredToolName: required, receivedToolName: call.toolName },
+        severity: 'warning'
+      })
+    }
+    return allowed
+  }
+
+  private async failHardRequiredTool(
+    input: RoundOutcomeInput,
+    code: 'required_tool_missing' | 'required_tool_mismatch',
+    message: string
+  ): Promise<'failed'> {
+    this.deps.rememberFailure(input.turnId, { error: message, code, severity: 'error' })
+    await this.deps.events.record({
+      kind: 'error', threadId: input.threadId, turnId: input.turnId, message, code, severity: 'error'
+    })
+    await this.deps.turns.applyItem(input.threadId, makeErrorItem({
+      id: this.deps.ids.next('item_error'),
+      turnId: input.turnId,
+      threadId: input.threadId,
+      message,
+      code,
+      severity: 'error'
+    }))
+    return 'failed'
+  }
+
+  private async graphGate(input: RoundOutcomeInput) {
+    const current = await this.deps.turns.getTurn(input.threadId, input.turnId)
+    const gate = current?.requiredToolGate
+    return gate?.toolName === GRAPH_CREATE_RUN_TOOL_NAME ? gate : undefined
+  }
+
+  private async recordGraphGate(
+    input: RoundOutcomeInput,
+    gate: {
+      attempt: number
+      phase: 'preparing' | 'retrying' | 'succeeded' | 'failed'
+      failureSummary?: string
+    }
+  ): Promise<void> {
+    const failureSummary = gate.failureSummary?.trim().slice(0, 2_048)
+    await this.deps.turns.updateTurnMetadata(input.threadId, input.turnId, {
+      requiredToolGate: {
+        toolName: GRAPH_CREATE_RUN_TOOL_NAME,
+        attempt: Math.max(1, gate.attempt),
+        maxAttempts: MAX_GRAPH_CREATE_RUN_ATTEMPTS,
+        phase: gate.phase,
+        ...(failureSummary ? { lastError: failureSummary } : {})
+      }
+    })
+    await this.deps.events.record({
+      kind: 'required_tool_gate',
+      threadId: input.threadId,
+      turnId: input.turnId,
+      toolName: GRAPH_CREATE_RUN_TOOL_NAME,
+      phase: gate.phase,
+      attempt: Math.max(1, gate.attempt),
+      maxAttempts: MAX_GRAPH_CREATE_RUN_ATTEMPTS,
+      ...(failureSummary ? { failureSummary } : {})
+    })
   }
 
   private async resolveEmptyPostToolResponse(input: RoundOutcomeInput): Promise<ModelRoundOutcome> {
@@ -423,6 +749,13 @@ export class RoundOutcomeCoordinator {
       threadId: input.threadId,
       turnId: input.turnId,
       workspace: prepared.workspace,
+      ...(input.turn.workspaceCheckpointRequestId
+        ? { workspaceCheckpointRequestId: input.turn.workspaceCheckpointRequestId }
+        : {}),
+      orchestration: prepared.orchestration,
+      messageSource: prepared.messageSource,
+      additionalWorkspaces: prepared.additionalWorkspaces,
+      clientSurface: prepared.clientSurface,
       threadMode: prepared.mode,
       activePlanContext: prepared.activePlanContext,
       guiDesignCanvas: input.turn.guiDesignCanvas === true,
@@ -430,13 +763,19 @@ export class RoundOutcomeCoordinator {
       agentSurface: input.turn.agentSurface ?? 'code',
       guiDesignArtifact: input.turn.guiDesignArtifact,
       modelProviderId: input.modelProviderId,
+      actingModelRoute: prepared.actingModelRoute,
+      approvalIntent: input.turn.prompt,
       reasoningEffort: input.modelReasoningEffort,
       modelCapabilities: prepared.modelCapabilities,
+      ...(input.sourceResultBudgetTokens !== undefined
+        ? { sourceResultBudgetTokens: input.sourceResultBudgetTokens }
+        : {}),
       activeSkillIds: prepared.skillResolution.activeSkillIds,
       allowedToolNames: prepared.allowedToolNames,
       extensionToolCatalogEpoch: prepared.extensionToolCatalogEpoch,
       toolProviderKinds: input.toolProviderKinds,
       approvalPolicy: prepared.approvalPolicy,
+      approvalReviewer: prepared.approvalReviewer,
       sandboxMode: prepared.sandboxMode,
       signal: prepared.signal
     }
@@ -447,4 +786,77 @@ export class RoundOutcomeCoordinator {
       imContext: input.turn.imContext === true
     }
   }
+}
+
+function graphCreateRunResultRetryable(output: unknown): boolean {
+  return Boolean(
+    output &&
+    typeof output === 'object' &&
+    !Array.isArray(output) &&
+    (output as Record<string, unknown>).retryable === true
+  )
+}
+
+function graphCreateRunFailureMessage(output: unknown): string {
+  if (output && typeof output === 'object' && !Array.isArray(output)) {
+    const error = (output as Record<string, unknown>).error
+    if (typeof error === 'string' && error.trim()) {
+      return `Graph turn could not start: ${error.trim().slice(0, 2_048)}`
+    }
+  }
+  return 'Graph turn could not start because graph_create_run failed outside recoverable validation.'
+}
+
+function graphCreateRunValidationSummary(output: unknown): string | undefined {
+  if (!output || typeof output !== 'object' || Array.isArray(output)) return undefined
+  const record = output as Record<string, unknown>
+  const error = typeof record.error === 'string' ? record.error.trim() : ''
+  const issues = Array.isArray(record.issues)
+    ? record.issues
+      .slice(0, 4)
+      .map((issue) => {
+        if (!issue || typeof issue !== 'object' || Array.isArray(issue)) return ''
+        const value = issue as Record<string, unknown>
+        const path = typeof value.path === 'string'
+          ? value.path.trim()
+          : Array.isArray(value.path)
+            ? value.path.filter((part): part is string | number =>
+              typeof part === 'string' || typeof part === 'number'
+            ).join('.')
+            : ''
+        const message = typeof value.message === 'string' ? value.message.trim() : ''
+        return [path, message].filter(Boolean).join(': ')
+      })
+      .filter(Boolean)
+      .join('; ')
+    : ''
+  const summary = [error, issues].filter(Boolean).join(' — ')
+  return summary ? redactGraphGateSummary(summary) : undefined
+}
+
+function graphGateFailureSummary(
+  reason: GraphCreateRunRecoveryReason,
+  input: RoundOutcomeInput,
+  fallback?: string
+): string {
+  const supplied = fallback?.trim()
+  if (supplied) return redactGraphGateSummary(supplied)
+  if (reason === 'mismatch') {
+    const received = input.streamed.kind === 'completed' || input.streamed.kind === 'tool_calls'
+      ? input.streamed.snapshot.toolCalls.map((call) => call.toolName).filter(Boolean).join(', ')
+      : ''
+    return redactGraphGateSummary(received
+      ? `Received a different tool call: ${received}.`
+      : 'Received a different tool call.')
+  }
+  if (reason === 'invalid') return 'graph_create_run returned retryable validation errors.'
+  return `The model did not call \`${GRAPH_CREATE_RUN_TOOL_NAME}\`.`
+}
+
+function redactGraphGateSummary(value: string): string {
+  return value
+    .replace(/(?:sk|rk|api)[_-][A-Za-z0-9._-]{12,}/gi, '[redacted]')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 2_048)
 }

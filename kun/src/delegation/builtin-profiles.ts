@@ -117,7 +117,7 @@ export const COMPONENT_DESIGNER_PROFILE: SubagentProfileConfig = {
   toolPolicy: 'inherit',
   skillsEnabled: false,
   description: '组件交互设计代理:基于现有前端实现生成单组件、可点击、响应式的 HTML 交互稿。',
-  allowedTools: ['read', 'grep', 'find', 'ls', 'write', 'edit'],
+  allowedTools: ['read', 'grep', 'glob', 'ls', 'write', 'edit'],
   blockedTools: ['delegate_task', 'generate_subagent', 'load_skill'],
   reasoningEffort: 'medium',
   systemPrompt: [

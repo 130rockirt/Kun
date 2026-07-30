@@ -228,6 +228,7 @@ export class ExtensionAgentService {
         threadId: thread.id,
         request: {
           prompt: input,
+          clientSurface: 'extension',
           model: thread.model,
           ...(thread.providerId ? { providerId: thread.providerId } : {}),
           ...(thread.accountId ? { accountId: thread.accountId } : {}),
@@ -315,6 +316,7 @@ export class ExtensionAgentService {
       threadId: thread.id,
       request: {
         prompt: input,
+        clientSurface: 'extension',
         model: binding.modelId,
         providerId: binding.providerId,
         ...(binding.accountId ? { accountId: binding.accountId } : {}),

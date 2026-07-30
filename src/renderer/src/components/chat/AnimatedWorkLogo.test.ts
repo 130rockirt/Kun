@@ -233,18 +233,24 @@ describe('AnimatedWorkLogo', () => {
     expect(html).toContain('ds-work-logo-phase-trail')
   })
 
-  it('keeps the processing work row as text-only status', () => {
+  it('keeps the processing work row as a static elapsed-time divider', () => {
     const html = renderToStaticMarkup(
       createElement(WorkMetaRow, {
         processing: true,
         stepCount: 3,
+        durationMs: 74_000,
         expanded: true,
+        collapsible: false,
         onToggle: () => undefined
       })
     )
 
-    expect(html).toContain('ds-shiny-text')
+    expect(html).toMatch(/Processed|已处理|processed/)
+    expect(html).toContain('1m 14s')
+    expect(html).toContain('border-b')
+    expect(html).not.toContain('ds-shiny-text')
     expect(html).not.toContain('ds-work-logo-slot')
+    expect(html).not.toContain('aria-expanded')
   })
 
   it('summarizes collapsed work with its step count', () => {
@@ -332,10 +338,18 @@ describe('AnimatedWorkLogo', () => {
     const appIcon = await readFile(new URL('../../../../asset/img/kun.png', import.meta.url))
     const macIcon = await readFile(new URL('../../../../asset/img/kun_mac.png', import.meta.url))
     const trayIcon = await readFile(new URL('../../../../asset/img/kun_tray.png', import.meta.url))
+    const macTrayIcon = await readFile(
+      new URL('../../../../asset/img/kun_tray_mac.png', import.meta.url)
+    )
+    const macRetinaTrayIcon = await readFile(
+      new URL('../../../../asset/img/kun_tray_mac@2x.png', import.meta.url)
+    )
 
     expect(pngDimensions(appIcon)).toEqual({ width: 1254, height: 1254 })
     expect(pngDimensions(macIcon)).toEqual({ width: 1024, height: 1024 })
     expect(pngDimensions(trayIcon)).toEqual({ width: 954, height: 994 })
+    expect(pngDimensions(macTrayIcon)).toEqual({ width: 16, height: 16 })
+    expect(pngDimensions(macRetinaTrayIcon)).toEqual({ width: 32, height: 32 })
   })
 
   it('ships the iKun figure asset used by ikun mode', async () => {

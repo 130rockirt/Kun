@@ -296,12 +296,16 @@ describe('DelegationRuntime model provider selection', () => {
         prompt: 'work',
         inheritedModel: 'gpt-5.3-codex-spark',
         inheritedProviderId: 'codex',
+        inheritedAccountId: 'acct_input_model',
+        approvalReviewer: 'agent',
         signal: new AbortController().signal
       })
 
       expect(captured).toMatchObject({
         model: 'gpt-5.3-codex-spark',
-        providerId: 'codex'
+        providerId: 'codex',
+        accountId: 'acct_input_model',
+        approvalReviewer: 'agent'
       })
     } finally {
       await rm(dir, { recursive: true, force: true })

@@ -5,6 +5,7 @@ import {
 } from './kun-system-prompt.js'
 import {
   appendKunTurnContextBlock,
+  buildClientSurfaceInstruction,
   buildKunTurnContextInstructions,
   buildThreadProfileInstruction
 } from './kun-prompt-context.js'
@@ -23,6 +24,8 @@ describe('KUN_SYSTEM_PROMPT', () => {
     }
 
     for (const volatileOrInternalValue of [
+      'GUI-native',
+      'Codex',
       'HTTP/SSE',
       'prompt_cache_hit_tokens',
       'agents.kun',
@@ -35,6 +38,38 @@ describe('KUN_SYSTEM_PROMPT', () => {
     ]) {
       expect(KUN_SYSTEM_PROMPT).not.toContain(volatileOrInternalValue)
     }
+  })
+
+  it('requires concise progress communication around tool-assisted work', () => {
+    expect(KUN_SYSTEM_PROMPT).toContain('Before the first tool call for a user request')
+    expect(KUN_SYSTEM_PROMPT).toContain('Skip this pre-action update only when answering immediately without tools')
+    expect(KUN_SYSTEM_PROMPT).toContain('meaningful phase changes')
+    expect(KUN_SYSTEM_PROMPT).toContain('Do not narrate every routine tool call')
+    expect(KUN_SYSTEM_PROMPT).toContain('Progress updates are not stopping points')
+    expect(KUN_SYSTEM_PROMPT).toContain('continue without waiting for confirmation')
+    expect(KUN_SYSTEM_PROMPT).toContain('make the final response self-contained')
+    expect(KUN_SYSTEM_PROMPT).toContain('do not ask the user to send "continue"')
+    expect(KUN_SYSTEM_PROMPT).toContain('resume automatically when the shell settles')
+    expect(KUN_SYSTEM_PROMPT).toContain('do not expose private chain-of-thought')
+  })
+})
+
+describe('buildClientSurfaceInstruction', () => {
+  it('keeps terminal turns away from desktop-only affordances without disabling runtime interaction', () => {
+    const instruction = buildClientSurfaceInstruction('tui')
+
+    expect(instruction).toContain('Kun terminal TUI')
+    expect(instruction).toContain('Do not claim to click')
+    expect(instruction).toContain('structured questions can still be shown in the terminal')
+    expect(instruction).toContain('only the tools advertised for this turn')
+  })
+
+  it('describes GUI tools as advertised capabilities rather than ambient authority', () => {
+    const instruction = buildClientSurfaceInstruction('gui')
+
+    expect(instruction).toContain('Kun desktop GUI')
+    expect(instruction).toContain('only when their matching tools are advertised')
+    expect(instruction).toContain('not extra authorization')
   })
 })
 
@@ -190,6 +225,26 @@ describe('buildToolPreferenceInstruction', () => {
     expect(instruction).toContain('while planning')
     expect(instruction).toContain('does not create a child run')
     expect(instruction).not.toContain('Issue multiple child calls')
+  })
+
+  it('makes the original Graph Lead actively inspect, wait, and guide workers', () => {
+    const instruction = buildToolPreferenceInstruction([
+      { name: 'graph_define_plan', description: 'Define and commit the planning draft' },
+      { name: 'graph_control_run', description: 'Inspect a GraphRun' },
+      { name: 'graph_supervise_node', description: 'Supervise a Graph worker' },
+      { name: 'graph_review_node', description: 'Review a submitted Graph result' }
+    ])
+
+    expect(instruction).toContain('A durable Graph planning draft already exists')
+    expect(instruction).toContain('The host supplies every execution mechanic')
+    expect(instruction).toContain('one changed correction')
+    expect(instruction).toContain('before `graph_define_plan` returns committed')
+    expect(instruction).toContain('inspect their bounded live sessions')
+    expect(instruction).toContain('wait and recheck')
+    expect(instruction).toContain('guide drift, missing evidence')
+    expect(instruction).toContain('Executors do not manage Graph flow')
+    expect(instruction).toContain('explicitly pass or revise every node')
+    expect(instruction).not.toContain('graph_create_run')
   })
 
   it('prefers specialized MCP source navigation with available built-in fallback', () => {

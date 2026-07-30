@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   AttachmentPreviewLoader,
-  attachmentPreviewFailureStateForScope
+  attachmentPreviewFailureStateForScope,
+  type AttachmentPreview
 } from './attachment-preview-loader'
 
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void; reject: (reason?: unknown) => void } {
@@ -16,7 +17,7 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void; reje
 
 describe('AttachmentPreviewLoader', () => {
   it('shares one in-flight request across StrictMode-style duplicate loads', async () => {
-    const gate = deferred<string>()
+    const gate = deferred<AttachmentPreview>()
     const run = vi.fn(() => gate.promise)
     const loader = new AttachmentPreviewLoader()
 
@@ -24,10 +25,10 @@ describe('AttachmentPreviewLoader', () => {
     const second = loader.load('thread:attachment', run)
     await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(1))
 
-    gate.resolve('data:image/png;base64,first')
+    gate.resolve({ previewUrl: 'data:image/png;base64,first' })
     await expect(Promise.all([first, second])).resolves.toEqual([
-      'data:image/png;base64,first',
-      'data:image/png;base64,first'
+      { previewUrl: 'data:image/png;base64,first' },
+      { previewUrl: 'data:image/png;base64,first' }
     ])
   })
 
@@ -41,7 +42,7 @@ describe('AttachmentPreviewLoader', () => {
       maximumActive = Math.max(maximumActive, active)
       await gate.promise
       active -= 1
-      return `preview-${index}`
+      return { previewUrl: `preview-${index}` }
     }))
 
     await vi.waitFor(() => expect(active).toBe(2))
@@ -52,8 +53,8 @@ describe('AttachmentPreviewLoader', () => {
 
   it('returns cached previews and evicts least-recently-used entries by byte budget', async () => {
     const loader = new AttachmentPreviewLoader({ maxCacheBytes: 10 })
-    const loadA = vi.fn(async () => 'aaaaaa')
-    const loadB = vi.fn(async () => 'bbbbbb')
+    const loadA = vi.fn(async () => ({ previewUrl: 'aaaaaa' }))
+    const loadB = vi.fn(async () => ({ previewUrl: 'bbbbbb' }))
 
     await loader.load('a', loadA)
     await loader.load('b', loadB)
@@ -83,10 +84,12 @@ describe('AttachmentPreviewLoader', () => {
     const loader = new AttachmentPreviewLoader()
     const run = vi.fn()
       .mockRejectedValueOnce(new Error('preview unavailable'))
-      .mockResolvedValueOnce('data:image/png;base64,recovered')
+      .mockResolvedValueOnce({ previewUrl: 'data:image/png;base64,recovered' })
 
     await expect(loader.load('attachment', run)).rejects.toThrow('preview unavailable')
-    await expect(loader.load('attachment', run)).resolves.toBe('data:image/png;base64,recovered')
+    await expect(loader.load('attachment', run)).resolves.toEqual({
+      previewUrl: 'data:image/png;base64,recovered'
+    })
     expect(run).toHaveBeenCalledTimes(2)
   })
 
@@ -94,11 +97,44 @@ describe('AttachmentPreviewLoader', () => {
     const loader = new AttachmentPreviewLoader()
     const run = vi.fn()
       .mockRejectedValueOnce(new Error('scope was not ready'))
-      .mockResolvedValueOnce('data:image/png;base64,recovered')
+      .mockResolvedValueOnce({ previewUrl: 'data:image/png;base64,recovered' })
 
     await expect(loader.load('thread-a:attachment', run)).rejects.toThrow('scope was not ready')
-    await expect(loader.load('thread-a:attachment', run)).resolves.toBe('data:image/png;base64,recovered')
-    await expect(loader.load('thread-a:attachment', run)).resolves.toBe('data:image/png;base64,recovered')
+    await expect(loader.load('thread-a:attachment', run)).resolves.toEqual({
+      previewUrl: 'data:image/png;base64,recovered'
+    })
+    await expect(loader.load('thread-a:attachment', run)).resolves.toEqual({
+      previewUrl: 'data:image/png;base64,recovered'
+    })
     expect(run).toHaveBeenCalledTimes(2)
+  })
+
+  it('retains attachment metadata when a resolved preview is reused after remount', async () => {
+    const loader = new AttachmentPreviewLoader()
+    const run = vi.fn(async () => ({
+      previewUrl: 'data:image/png;base64,AQID',
+      attachment: {
+        id: 'att_1',
+        kind: 'image' as const,
+        name: 'restored.png',
+        mimeType: 'image/png',
+        byteSize: 3,
+        width: 16,
+        height: 9
+      }
+    }))
+
+    const first = await loader.load('thread-a:att_1', run)
+    const remounted = await loader.load('thread-a:att_1', run)
+
+    expect(remounted).toEqual(first)
+    expect(remounted.attachment).toMatchObject({
+      name: 'restored.png',
+      mimeType: 'image/png',
+      byteSize: 3,
+      width: 16,
+      height: 9
+    })
+    expect(run).toHaveBeenCalledTimes(1)
   })
 })

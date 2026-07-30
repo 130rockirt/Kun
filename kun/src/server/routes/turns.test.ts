@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { InMemoryEventBus } from '../../adapters/in-memory-event-bus.js'
 import { InMemorySessionStore } from '../../adapters/in-memory-session-store.js'
 import { InMemoryThreadStore } from '../../adapters/in-memory-thread-store.js'
@@ -10,9 +10,94 @@ import { SequentialIdGenerator } from '../../ports/id-generator.js'
 import { RuntimeEventRecorder } from '../../services/runtime-event-recorder.js'
 import { TurnService } from '../../services/turn-service.js'
 import type { JsonResponse } from '../response.js'
-import { rewindThread, startTurn } from './turns.js'
+import { rewindThread, startTurn, steerTurn } from './turns.js'
+
+describe('POST /v1/threads/:id/turns/:turnId/steer execution', () => {
+  it('starts the runner after accepted steering so a suspended Graph planning turn can continue', async () => {
+    const turns = {
+      steerTurn: vi.fn(async () => undefined)
+    } as unknown as TurnService
+    const onSteered = vi.fn()
+    const response = await steerTurn(
+      turns,
+      'thread_graph_planning',
+      'turn_graph_planning',
+      new Request('http://kun.local/v1/threads/thread_graph_planning/turns/turn_graph_planning/steer', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ text: 'Continue building the Graph.' })
+      }),
+      onSteered
+    ) as JsonResponse
+
+    expect(response.status).toBe(200)
+    expect(turns.steerTurn).toHaveBeenCalledWith({
+      threadId: 'thread_graph_planning',
+      turnId: 'turn_graph_planning',
+      text: 'Continue building the Graph.'
+    })
+    expect(onSteered).toHaveBeenCalledWith({
+      threadId: 'thread_graph_planning',
+      turnId: 'turn_graph_planning'
+    })
+  })
+})
 
 describe('POST /v1/threads/:id/turns admission', () => {
+  it('rejects stale Graph submissions after safe disable while direct turns remain available', async () => {
+    const threadStore = new InMemoryThreadStore()
+    const sessionStore = new InMemorySessionStore()
+    const eventBus = new InMemoryEventBus()
+    const nowIso = () => '2026-07-26T00:00:00.000Z'
+    const turns = new TurnService({
+      threadStore,
+      sessionStore,
+      events: new RuntimeEventRecorder({
+        eventBus,
+        sessionStore,
+        allocateSeq: (threadId) => eventBus.allocateSeq(threadId),
+        nowIso
+      }),
+      inflight: new InflightTracker(),
+      steering: new SteeringQueue(),
+      compactor: new ContextCompactor(),
+      ids: new SequentialIdGenerator(),
+      nowIso
+    })
+    const threadId = 'thr_graph_disabled'
+    await threadStore.upsert(createThreadRecord({
+      id: threadId,
+      title: 'Safe disable',
+      workspace: '/tmp/workspace',
+      model: 'deepseek-v4-pro'
+    }))
+
+    const graphResponse = await startTurn(
+      turns,
+      threadId,
+      new Request(`http://kun.local/v1/threads/${threadId}/turns`, {
+        method: 'POST',
+        body: JSON.stringify({ prompt: 'graph task', orchestration: 'graph' })
+      }),
+      undefined,
+      () => false
+    ) as JsonResponse
+    expect(graphResponse.status).toBe(503)
+    expect((await threadStore.get(threadId))?.turns).toEqual([])
+
+    const directResponse = await startTurn(
+      turns,
+      threadId,
+      new Request(`http://kun.local/v1/threads/${threadId}/turns`, {
+        method: 'POST',
+        body: JSON.stringify({ prompt: 'direct task' })
+      }),
+      undefined,
+      () => false
+    ) as JsonResponse
+    expect(directResponse.status).toBe(202)
+  })
+
   it('maps an archived thread to a conflict without creating a turn', async () => {
     const threadStore = new InMemoryThreadStore()
     const sessionStore = new InMemorySessionStore()

@@ -22,7 +22,11 @@ import { Readable, Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import extractZip from 'extract-zip'
 import { fetchWithOptionalProxy } from './proxy-fetch'
-import type { SdkDownloadState } from '../shared/kun-gui-api'
+import type {
+  AntigravityReasoningEffort,
+  AntigravitySubscriptionModelCatalog,
+  SdkDownloadState
+} from '../shared/kun-gui-api'
 
 export const ANTIGRAVITY_CLI_VERSION = '1.1.5'
 const RELEASE_BASE =
@@ -183,21 +187,54 @@ export async function installAntigravityCli(options: {
   }
 }
 
-export function parseAntigravityGeminiModels(stdout: string): string[] {
-  const models = new Set<string>()
+const ANTIGRAVITY_MODEL_ID_PATTERN = /^[a-z0-9]+(?:[.-][a-z0-9]+)+$/i
+const ANTIGRAVITY_MODEL_ID_MAX_LENGTH = 128
+const ANTIGRAVITY_EFFORT_ORDER: readonly AntigravityReasoningEffort[] = [
+  'low',
+  'medium',
+  'high'
+]
+
+export function parseAntigravityModels(stdout: string): AntigravitySubscriptionModelCatalog {
+  const models = new Map<string, Set<AntigravityReasoningEffort>>()
   for (const line of stdout.split(/\r?\n/)) {
-    const model = line.trim()
-    if (!/^gemini-[a-z0-9][a-z0-9.-]*$/i.test(model)) continue
-    models.add(model.replace(/-(?:low|medium|high)$/i, ''))
+    const rawModel = line.trim()
+    if (
+      !rawModel
+      || rawModel.length > ANTIGRAVITY_MODEL_ID_MAX_LENGTH
+      || !ANTIGRAVITY_MODEL_ID_PATTERN.test(rawModel)
+    ) {
+      continue
+    }
+    const effortMatch = rawModel.match(/-(low|medium|high)$/i)
+    const effort = effortMatch?.[1]?.toLowerCase() as AntigravityReasoningEffort | undefined
+    const modelId = effort ? rawModel.slice(0, -(effort.length + 1)) : rawModel
+    if (!ANTIGRAVITY_MODEL_ID_PATTERN.test(modelId)) continue
+    const supportedEfforts = models.get(modelId) ?? new Set<AntigravityReasoningEffort>()
+    supportedEfforts.add(effort ?? 'medium')
+    models.set(modelId, supportedEfforts)
   }
-  return [...models].sort((left, right) => right.localeCompare(left, 'en'))
+  return {
+    models: [...models].map(([id, effortSet]) => {
+      const supportedEfforts = ANTIGRAVITY_EFFORT_ORDER.filter((effort) => effortSet.has(effort))
+      return {
+        id,
+        supportedEfforts,
+        defaultEffort: supportedEfforts.includes('medium')
+          ? 'medium'
+          : supportedEfforts.includes('high')
+            ? 'high'
+            : 'low'
+      }
+    })
+  }
 }
 
 export function fetchAntigravityModels(options: {
   binaryPath: string
   timeoutMs?: number
   spawnFn?: typeof spawn
-}): Promise<string[]> {
+}): Promise<AntigravitySubscriptionModelCatalog> {
   return new Promise((resolve, reject) => {
     const spawnFn = options.spawnFn ?? spawn
     const child = spawnFn(options.binaryPath, ['models'], {
@@ -214,11 +251,11 @@ export function fetchAntigravityModels(options: {
       clearTimeout(timer)
       if (error) reject(error)
       else {
-        const models = parseAntigravityGeminiModels(stdout)
-        if (models.length === 0) {
-          reject(new Error(stderr.trim() || 'Antigravity CLI returned no Gemini subscription models'))
+        const catalog = parseAntigravityModels(stdout)
+        if (catalog.models.length === 0) {
+          reject(new Error(stderr.trim() || 'Antigravity CLI returned no subscription models'))
         } else {
-          resolve(models)
+          resolve(catalog)
         }
       }
     }

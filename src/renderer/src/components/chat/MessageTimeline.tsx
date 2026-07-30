@@ -15,7 +15,9 @@ import { presentationFileArtifactsForTurn } from './presentation-file-artifacts'
 import { ReviewPlanCard, ReviewSummaryCard, TurnChangeSummary, WorkMetaRow } from './message-timeline-cards'
 import {
   ProcessSectionRow,
-  groupProcessSections
+  groupProcessSections,
+  summarizeProcessWork,
+  summarizeToolBlock
 } from './message-timeline-process'
 import { ComponentPrototypeCard } from './ComponentPrototypeCard'
 import type { OpenChildThreadHandler } from './SubagentCallCard'
@@ -61,6 +63,7 @@ import {
 } from '../../extensions/ControlledContributionSurfaces'
 import { resolveActiveExtensionWorkspaceRoot } from '../../extensions/active-extension-workspace'
 import { extractDiffFilePath, extractUnifiedDiffText } from '../../lib/diff-stats'
+import type { PlanBuildOrchestration } from '../../plan/plan-build'
 
 export { summarizeToolBlock } from './message-timeline-process'
 
@@ -78,8 +81,10 @@ type Props = {
   devPreviewCard?: ReactElement | null
   /** Disables the inline Review Plan card's Build action while a turn runs. */
   planActionsBusy?: boolean
+  /** Whether Graph can be selected for a new plan build turn. */
+  graphEnabled?: boolean
   /** Runs the active plan (Build button on the inline Review Plan card). */
-  onBuildPlan?: () => void
+  onBuildPlan?: (orchestration: PlanBuildOrchestration) => void
   /** Opens/focuses the Plan panel (Open button on the inline card). */
   onOpenPlan?: () => void
   /** Opens the current workspace changes panel from a turn summary. */
@@ -98,8 +103,6 @@ type Props = {
   onExtensionCommand?: (commandId: string, context: JsonValue) => void | Promise<unknown>
 }
 
-type CompactionTimelineBlock = Extract<ChatBlock, { kind: 'compaction' }>
-
 const TURN_PAGE_SIZE = 18
 const TIMELINE_JUMP_RAIL_FALLBACK_LEFT_PX = 16
 const TIMELINE_JUMP_RAIL_STAGE_INSET_PX = 16
@@ -109,14 +112,12 @@ const TIMELINE_JUMP_RAIL_PREVIEW_WIDTH_PX = 416
 const TIMELINE_JUMP_RAIL_PREVIEW_MARGIN_PX = 16
 const TIMELINE_JUMP_RAIL_PREVIEW_CONTAINER_GUTTER_PX = 88
 
-export function goalTimelinePaddingClass(route: 'chat' | 'claw', hasActiveGoal: boolean): string {
-  return route === 'chat' && hasActiveGoal ? 'pb-32 md:pb-40' : 'pb-10'
+export function timelineBottomPaddingClass(): string {
+  return 'pb-10'
 }
 
-export function liveTurnProgressClass(hasActiveGoal: boolean): string {
-  return hasActiveGoal
-    ? 'flex w-fit max-w-full items-center gap-2 py-0.5 text-[14px] font-medium text-ds-muted mb-16 md:mb-20'
-    : 'flex w-fit max-w-full items-center gap-2 py-0.5 text-[14px] font-medium text-ds-muted'
+export function liveTurnProgressClass(): string {
+  return 'flex w-fit max-w-full items-center gap-2 py-0.5 text-[14px] font-medium text-ds-muted'
 }
 
 export function activeTimelineTurnKey(
@@ -166,6 +167,7 @@ function blockScrollStamp(block: ChatBlock | undefined): string {
     case 'review':
       return `${block.id}:${block.kind}:${block.status}:${block.reviewText?.length ?? 0}`
     case 'approval':
+    case 'approval_review':
     case 'user_input':
     case 'compaction':
       return `${block.id}:${block.kind}:${block.status}`
@@ -327,37 +329,6 @@ export function resultPreviewSourcesForTurn(turn: Turn): ExtensionResultPreviewS
   return sources
 }
 
-function compactionDividerLabel(
-  block: CompactionTimelineBlock,
-  t: (key: string, opts?: Record<string, unknown>) => string
-): string {
-  if (block.status === 'running') return t('compactionRunning')
-  if (block.status === 'error') return block.summary || t('compactionFailed')
-  return block.auto === true ? t('compactionAutoCompleted') : t('compactionManualCompleted')
-}
-
-function CompactionDivider({ block }: { block: CompactionTimelineBlock }): ReactElement {
-  const { t } = useTranslation('common')
-  const error = block.status === 'error'
-  return (
-    <div
-      role={block.status === 'running' ? 'status' : undefined}
-      aria-live={block.status === 'running' ? 'polite' : undefined}
-      className="flex w-full items-center gap-4 py-2"
-    >
-      <span className={`h-px min-w-8 flex-1 ${error ? 'bg-red-200/80 dark:bg-red-900/50' : 'bg-ds-border-muted/80'}`} />
-      <span
-        className={`shrink-0 text-[15px] font-semibold leading-6 ${
-          error ? 'text-red-600 dark:text-red-300' : 'text-ds-faint'
-        }`}
-      >
-        {compactionDividerLabel(block, t)}
-      </span>
-      <span className={`h-px min-w-8 flex-1 ${error ? 'bg-red-200/80 dark:bg-red-900/50' : 'bg-ds-border-muted/80'}`} />
-    </div>
-  )
-}
-
 /** Non-interactive runtime error rendered directly in the conversation flow. */
 export function TimelineRuntimeError({ block }: { block: TurnRuntimeErrorBlock }): ReactElement {
   const { t } = useTranslation('common')
@@ -419,6 +390,7 @@ export function MessageTimeline({
   focusModeEnabled = false,
   devPreviewCard,
   planActionsBusy,
+  graphEnabled = false,
   onBuildPlan,
   onOpenPlan,
   onOpenChanges,
@@ -446,7 +418,6 @@ export function MessageTimeline({
     turnDurationByUserId,
     turnReasoningFirstAtByUserId,
     turnReasoningLastAtByUserId,
-    activeThreadGoal,
     activeThread
   } = useTimelineStores(activeThreadId)
   const extensionWorkspaceRoot = resolveActiveExtensionWorkspaceRoot(
@@ -724,7 +695,7 @@ export function MessageTimeline({
         </div>
       ) : null}
       <div className={`ds-message-timeline-content ds-chat-column-inset ds-chat-content-max-width mx-auto flex w-full min-w-0 flex-col gap-8 pt-8 ${
-        goalTimelinePaddingClass(heroRoute, Boolean(activeThreadGoal))
+        timelineBottomPaddingClass()
       }`}>
         {!hasContent || !activeThreadId ? (
           <MessageTimelineEmptyHero
@@ -832,6 +803,7 @@ export function MessageTimeline({
                 reasoningDurationMs={reasoningDurationMs}
                 devPreviewCard={isLatestTurn ? devPreviewCard : null}
                 planActionsBusy={planActionsBusy}
+                graphEnabled={graphEnabled}
                 onBuildPlan={onBuildPlan}
                 onOpenPlan={onOpenPlan}
                 onOpenChanges={onOpenChanges}
@@ -949,7 +921,8 @@ export type ConversationTurnProps = {
   reasoningDurationMs?: number
   devPreviewCard?: ReactElement | null
   planActionsBusy?: boolean
-  onBuildPlan?: () => void
+  graphEnabled?: boolean
+  onBuildPlan?: (orchestration: PlanBuildOrchestration) => void
   onOpenPlan?: () => void
   onOpenChanges?: () => void
   onReviewChanges?: () => void
@@ -961,8 +934,6 @@ export type ConversationTurnProps = {
   compactCards?: boolean
   /** Main-thread actions must stay disabled for isolated side conversations. */
   allowMainThreadActions?: boolean
-  /** Side conversations must not inherit the active main thread's goal spacing. */
-  showActiveGoal?: boolean
 }
 
 export function ConversationTurn({
@@ -974,6 +945,7 @@ export function ConversationTurn({
   reasoningDurationMs,
   devPreviewCard,
   planActionsBusy,
+  graphEnabled = false,
   onBuildPlan,
   onOpenPlan,
   onOpenChanges,
@@ -984,10 +956,9 @@ export function ConversationTurn({
   filePreviewWorkspaceRoot,
   viewportRef,
   compactCards = false,
-  allowMainThreadActions = true,
-  showActiveGoal = true
+  allowMainThreadActions = true
 }: ConversationTurnProps): ReactElement {
-  const activeThreadGoal = useChatStore((s) => s.activeThreadGoal)
+  const { t } = useTranslation('common')
   const forkThreadFromTurn = useChatStore((s) => s.forkThreadFromTurn)
   const rollbackWorkspaceToCheckpoint = useChatStore((s) => s.rollbackWorkspaceToCheckpoint)
   const [forking, setForking] = useState(false)
@@ -1036,15 +1007,11 @@ export function ConversationTurn({
     ),
     [turn.blocks, filePreviewWorkspaceRoot, isProcessing]
   )
-  const compactionBlocks = useMemo(
-    () => processBlocks.filter((block): block is CompactionTimelineBlock => block.kind === 'compaction'),
-    [processBlocks]
+  const workProcessBlocks = processBlocks
+  const workSummary = useMemo(
+    () => summarizeProcessWork(workProcessBlocks, t),
+    [t, workProcessBlocks]
   )
-  const workProcessBlocks = useMemo(
-    () => processBlocks.filter((block) => block.kind !== 'compaction'),
-    [processBlocks]
-  )
-  const onlyCompactionProcess = processBlocks.length > 0 && workProcessBlocks.length === 0
   const workExpanded = workExpandedOverride ?? false
   const reviewBlocks = useMemo(
     () => turn.blocks.filter((block) => block.kind === 'review'),
@@ -1059,17 +1026,6 @@ export function ConversationTurn({
     () => processSections.filter((section) => section.kind === 'reasoning').length,
     [processSections]
   )
-  // Show the live assistant bubble whenever the SSE has streamed any text
-  // into `live`. We deliberately do NOT gate on `isProcessing`: the
-  // live activity rows already cover "the agent is working", and hiding the
-  // streaming text here causes real-time updates
-  // (Feishu bot streaming) to appear only after turn_completed, which the
-  // user perceives as a long delay.
-  // Note: `live` is the generic SSE sink output across ALL channels
-  // (Kun runtime turns, claw channel replies from feishu/weixin/etc),
-  // not feishu-specific. Removing the !isProcessing gate is intentional
-  // for all streaming paths, not just feishu.
-  const showLiveAssistant = !!liveContent.trim()
   const forkTurnId =
     turn.user?.turnId?.trim() ||
     [...assistantContentBlocks].reverse().find((block) => block.turnId?.trim())?.turnId?.trim() ||
@@ -1084,19 +1040,23 @@ export function ConversationTurn({
       ? assistantContentBlocks[assistantContentBlocks.length - 1]?.id
       : undefined
 
-  // During a live turn, activity phases stay visible as one-line loading rows
-  // and intermediate assistant text remains readable between them. Completed
-  // work folds back into the turn-level summary.
+  // During a live turn, assistant text, reasoning, and tools share one ordered
+  // process timeline. Once complete, that timeline folds by default and only
+  // the final assistant text remains outside it.
 
   const hasProcess =
+    isProcessing ||
     workProcessBlocks.length > 0 ||
     (runtimeErrorBlocks.length > 0 && typeof durationMs === 'number')
-  // Live thinking / running chrome is independent of process sections and
-  // always renders at the turn bottom so it cannot interleave above text
-  // or replace completed tool summaries.
-  const showLiveThinking = isProcessing && !!liveProcessText.trim()
-  const showLiveProgress =
-    isProcessing && !onlyCompactionProcess && !showLiveThinking
+  const showLiveProgress = isProcessing
+  const showLiveThinking = Boolean(liveProcessText.trim())
+  const liveToolBlock = useMemo(
+    () => [...workProcessBlocks].reverse().find(
+      (block): block is Extract<ChatBlock, { kind: 'tool' }> =>
+        block.kind === 'tool'
+    ),
+    [workProcessBlocks]
+  )
   const forkFromTurn = async (): Promise<void> => {
     if (!allowMainThreadActions || !forkTurnId || forking) return
     setForking(true)
@@ -1125,17 +1085,16 @@ export function ConversationTurn({
 
       {hasProcess ? (
         <div className="flex flex-col gap-1 pb-2">
-          {!isProcessing ? (
-            <WorkMetaRow
-              processing={false}
-              stepCount={workProcessBlocks.length}
-              durationMs={durationMs}
-              reasoningDurationMs={reasoningDurationMs}
-              expanded={workExpanded}
-              collapsible={workProcessBlocks.length > 0}
-              onToggle={() => setWorkExpandedOverride((value) => !(value ?? false))}
-            />
-          ) : null}
+          <WorkMetaRow
+            processing={isProcessing}
+            stepCount={workProcessBlocks.length}
+            durationMs={durationMs}
+            reasoningDurationMs={reasoningDurationMs}
+            summary={workSummary}
+            expanded={isProcessing || workExpanded}
+            collapsible={!isProcessing && workProcessBlocks.length > 0}
+            onToggle={() => setWorkExpandedOverride((value) => !(value ?? false))}
+          />
           {processSections.length > 0 ? (
             <div className="flex flex-col gap-1">
               {processSections.map((section) => (
@@ -1193,14 +1152,9 @@ export function ConversationTurn({
         />
       ))}
 
-      {showLiveAssistant ? (
-        <MessageBubble
-          block={{ kind: 'assistant', id: 'live-assistant', text: liveContent }}
-          allowThreadActions={allowMainThreadActions}
-        />
+      {!isProcessing ? (
+        <GeneratedFilesPanel blocks={generatedFileBlocks} placement="turn" />
       ) : null}
-
-      <GeneratedFilesPanel blocks={generatedFileBlocks} />
 
       <PresentationFilesPanel files={presentationFiles} workspaceRoot={filePreviewWorkspaceRoot} />
 
@@ -1212,14 +1166,6 @@ export function ConversationTurn({
         <TimelineRuntimeError key={block.id} block={block} />
       ))}
 
-      {showLiveThinking ? (
-        <LiveTurnThinkingRow hasActiveGoal={showActiveGoal && Boolean(activeThreadGoal)} />
-      ) : null}
-
-      {showLiveProgress ? (
-        <LiveTurnProgressRow hasActiveGoal={showActiveGoal && Boolean(activeThreadGoal)} />
-      ) : null}
-
       {!isProcessing && devPreviewCard ? devPreviewCard : null}
 
       {planResult ? (
@@ -1227,6 +1173,7 @@ export function ConversationTurn({
           title={planResult.title?.trim() || planDisplayNameFromRelativePath(planResult.relativePath)}
           relativePath={planResult.relativePath}
           busy={planActionsBusy === true}
+          graphEnabled={graphEnabled}
           onOpen={onOpenPlan}
           onBuild={onBuildPlan}
         />
@@ -1243,25 +1190,20 @@ export function ConversationTurn({
         />
       ) : null}
 
-      {/* The compaction marker renders LAST so "已压缩上下文" sits at the very
-          bottom of the turn it belongs to — i.e. the bottom of the latest turn
-          when the compaction just happened — rather than wedged between the
-          user's question and the assistant's answer. */}
-      {compactionBlocks.map((block) => (
-        <CompactionDivider key={block.id} block={block} />
-      ))}
+      {showLiveProgress ? (
+        <LiveTurnProgressRow tool={liveToolBlock} thinking={showLiveThinking} />
+      ) : null}
     </div>
   )
 }
 
-function LiveTurnThinkingRow({ hasActiveGoal }: { hasActiveGoal: boolean }): ReactElement {
-  const { t } = useTranslation('common')
-  return (
-    <LiveTurnActivityRow hasActiveGoal={hasActiveGoal} label={t('thinkingNow')} />
-  )
-}
-
-function LiveTurnProgressRow({ hasActiveGoal }: { hasActiveGoal: boolean }): ReactElement {
+function LiveTurnProgressRow({
+  tool,
+  thinking
+}: {
+  tool?: Extract<ChatBlock, { kind: 'tool' }>
+  thinking: boolean
+}): ReactElement {
   const { t, i18n } = useTranslation('common')
   const swimMode = useWorkLogoSwimMode(true)
   const ikunVariant = useIkunWorkLogoVariant(true)
@@ -1277,13 +1219,16 @@ function LiveTurnProgressRow({ hasActiveGoal }: { hasActiveGoal: boolean }): Rea
     swimLabelKey as UiPluginLabelKey,
     i18n.language ?? 'zh'
   )
-  const label = ikunModeOn
-    ? t(IKUN_WORK_LOGO_VARIANT_LABEL_KEYS[ikunVariant])
-    : pluginLabel ?? t(swimLabelKey)
+  const label = thinking
+    ? t('thinkingNow')
+    : tool
+      ? t('workingToolAction', { action: summarizeToolBlock(tool, t) })
+      : ikunModeOn
+        ? t(IKUN_WORK_LOGO_VARIANT_LABEL_KEYS[ikunVariant])
+        : pluginLabel ?? t(swimLabelKey)
 
   return (
     <LiveTurnActivityRow
-      hasActiveGoal={hasActiveGoal}
       label={label}
       ikunVariant={ikunVariant}
       swimMode={swimMode}
@@ -1292,18 +1237,16 @@ function LiveTurnProgressRow({ hasActiveGoal }: { hasActiveGoal: boolean }): Rea
 }
 
 function LiveTurnActivityRow({
-  hasActiveGoal,
   label,
   ikunVariant,
   swimMode
 }: {
-  hasActiveGoal: boolean
   label: string
   ikunVariant?: IkunWorkLogoVariant
   swimMode?: WorkLogoSwimMode
 }): ReactElement {
   return (
-    <div className={liveTurnProgressClass(hasActiveGoal)}>
+    <div className={liveTurnProgressClass()}>
       <span className="ds-work-logo-slot ds-work-logo-slot-sm mr-0.5">
         <AnimatedWorkLogo active ikunVariant={ikunVariant} mode={swimMode} phase="trail" size="sm" />
       </span>
@@ -1321,6 +1264,7 @@ const MemoMessageTurn = memo(ConversationTurn, (prev, next) => (
   prev.reasoningDurationMs === next.reasoningDurationMs &&
   prev.devPreviewCard === next.devPreviewCard &&
   prev.planActionsBusy === next.planActionsBusy &&
+  prev.graphEnabled === next.graphEnabled &&
   prev.onBuildPlan === next.onBuildPlan &&
   prev.onOpenPlan === next.onOpenPlan &&
   prev.onOpenChanges === next.onOpenChanges &&
@@ -1331,6 +1275,5 @@ const MemoMessageTurn = memo(ConversationTurn, (prev, next) => (
   prev.filePreviewWorkspaceRoot === next.filePreviewWorkspaceRoot &&
   prev.compactCards === next.compactCards &&
   prev.allowMainThreadActions === next.allowMainThreadActions &&
-  prev.showActiveGoal === next.showActiveGoal &&
   prev.viewportRef === next.viewportRef
 ))

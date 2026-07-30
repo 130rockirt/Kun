@@ -4,11 +4,16 @@ import type {
   ToolHostContext,
   ToolHostResult,
   ToolCallLike,
-  ToolExecutionUpdate
+  ToolExecutionUpdate,
+  ToolEffects
 } from '../../ports/tool-host.js'
 import type { UserInputQuestion } from '../../ports/user-input-gate.js'
 import type { ApprovalRequest } from '../../domain/approval.js'
-import { createApprovalRequest } from '../../domain/approval.js'
+import {
+  createApprovalActionEnvelope,
+  createApprovalRequest,
+  safeApprovalActionSummary
+} from '../../domain/approval.js'
 import type { TurnItem } from '../../contracts/items.js'
 import { makeToolResultItem } from '../../domain/item.js'
 import { buildBuiltinLocalTools } from './builtin-tools.js'
@@ -30,7 +35,9 @@ import {
   type ReadTrackerOptions
 } from './read-tracker.js'
 import {
+  effectiveSandboxMode,
   externalWriteTargetsForApproval,
+  isWorkspaceApprovalCommandTool,
   sandboxBlockForTool,
   type SandboxBlock
 } from './sandbox-policy.js'
@@ -38,6 +45,9 @@ import {
   createToolOperationIdentity,
   ToolOperationJournal
 } from '../../reliability/operation-journal.js'
+import { planModeToolBlock } from './plan-mode-tool-policy.js'
+
+const KUN_ACTION_APPROVAL_GRANT_TTL_MS = 2 * 60 * 1_000
 
 /**
  * A single registered tool. Tools are pure functions that observe the
@@ -52,6 +62,8 @@ export type LocalTool = {
   toolKind: 'tool_call' | 'command_execution' | 'file_change'
   /** Host-authored side-effect classification. Unknown is denied in Plan mode. */
   sideEffect?: ToolSideEffect
+  /** Host-authored effects. Omission is intentionally treated as unknown. */
+  effects?: ToolEffects
   /**
    * Tool policy. `auto` runs the tool without asking. `on-request` and
    * `suggest` always ask the user. `never` blocks the tool. `untrusted`
@@ -59,11 +71,13 @@ export type LocalTool = {
    */
   policy: 'auto' | 'on-request' | 'suggest' | 'never' | 'untrusted'
   /**
-   * Require an interactive user decision even when the thread otherwise uses
-   * `approvalPolicy: 'auto'`. Reserve this for irreversible external effects
-   * such as sending workspace data to a third-party chat channel.
+   * Require the configured Kun reviewer even when the low-level policy would
+   * otherwise allow the call. The canonical Full access pair bypasses this
+   * Kun-level gate; protected host/OS/OAuth consent remains independent.
    */
-  requiresExplicitApproval?: boolean
+  requiresExplicitApproval?:
+    | boolean
+    | ((call: ToolCallLike, context: ToolHostContext) => boolean)
   /**
    * String argument names that are exact file mutation targets eligible for a
    * one-call external workspace grant. Tools must opt in explicitly; merely
@@ -78,6 +92,8 @@ export type LocalTool = {
    * `create_plan`.
    */
   shouldAdvertise?: (context: ToolHostContext) => boolean
+  /** Hide a legacy compatibility tool from model schemas without blocking a persisted/direct execution. */
+  modelAdvertised?: boolean
   execute: (
     args: Record<string, unknown>,
     context: ToolHostContext,
@@ -125,6 +141,14 @@ export class LocalToolHost implements ToolHost {
   private readonly readTracker: ReadTracker
   private readonly operationJournal: ToolOperationJournal
   private prepare?: (context?: ToolHostContext) => Promise<void> | void
+  private generation = 0
+  private readonly turnComponents = new Map<string, {
+    registry: CapabilityRegistry
+    hooks: readonly ResolvedHook[]
+    prepare?: (context?: ToolHostContext) => Promise<void> | void
+    generation: number
+    touchedAt: number
+  }>()
 
   constructor(options: LocalToolHostOptions) {
     this.registry = options.registry ?? CapabilityRegistry.fromLocalTools(options.tools ?? [])
@@ -143,16 +167,19 @@ export class LocalToolHost implements ToolHost {
     if (input.registry) this.registry = input.registry
     if (input.hooks) this.hooks = input.hooks
     if (input.prepare) this.prepare = input.prepare
+    this.generation += 1
+    this.pruneTurnComponents()
   }
 
   listTools(context?: ToolHostContext) {
-    const prepared = this.prepare?.(context)
+    const components = this.componentsFor(context)
+    const prepared = components.prepare?.(context)
     if (prepared && typeof (prepared as PromiseLike<void>).then === 'function') {
-      return Promise.resolve(prepared).then(() => this.registry.listTools(context))
+      return Promise.resolve(prepared).then(() => components.registry.listTools(context))
     }
     // Evaluate before Promise.resolve so existing callers retain synchronous
     // catalog-drift validation when no lazy preparation is configured.
-    return Promise.resolve(this.registry.listTools(context))
+    return Promise.resolve(components.registry.listTools(context))
   }
 
   diagnostics() {
@@ -164,11 +191,16 @@ export class LocalToolHost implements ToolHost {
     context: ToolHostContext,
     onUpdate?: (item: TurnItem) => Promise<void> | void
   ): Promise<ToolHostResult> {
-    await this.prepare?.(context)
+    const components = this.componentsFor(context)
+    await components.prepare?.(context)
     if (context.abortSignal.aborted) {
       throw new Error('tool call aborted before start')
     }
-    const { tool } = this.registry.resolveTool(call.toolName, context, call.providerId)
+    const { tool, provider } = components.registry.resolveTool(
+      call.toolName,
+      context,
+      call.providerId
+    )
     if (tool.policy === 'never') {
       throw new Error(`tool ${call.toolName} is disabled by policy`)
     }
@@ -181,7 +213,7 @@ export class LocalToolHost implements ToolHost {
     }
     let preHooks: PreToolUseOutcome
     try {
-      preHooks = await runPreToolUseHooks(this.hooks, {
+      preHooks = await runPreToolUseHooks(components.hooks, {
         call,
         context: hookContext(context)
       })
@@ -198,6 +230,19 @@ export class LocalToolHost implements ToolHost {
       }
     }
     const activeCall = preHooks.call
+    const planModeBlock = await planModeToolBlock(tool, activeCall, context)
+    if (planModeBlock) {
+      return {
+        item: this.errorToolResult(
+          context,
+          activeCall,
+          tool,
+          planModeBlock.message,
+          planModeBlock.code
+        ),
+        approved: false
+      }
+    }
     const readValidation = this.readTracker.validateBeforeTool({ context, call: activeCall })
     if (!readValidation.ok) {
       return {
@@ -245,28 +290,88 @@ export class LocalToolHost implements ToolHost {
       }
     }
     const externalPathApproval = externalWriteTargets.length > 0
+    const workspaceCommandApproval =
+      effectiveSandboxMode(context) === 'workspace-write' &&
+      isWorkspaceApprovalCommandTool({
+        name: activeCall.toolName,
+        toolKind: activeCall.toolKind ?? tool.toolKind
+      })
+    let explicitApprovalRequired: boolean
+    try {
+      explicitApprovalRequired = typeof tool.requiresExplicitApproval === 'function'
+        ? tool.requiresExplicitApproval(activeCall, context)
+        : tool.requiresExplicitApproval === true
+    } catch (error) {
+      return {
+        item: this.errorToolResult(
+          context,
+          activeCall,
+          tool,
+          error instanceof Error ? error.message : String(error),
+          'approval_classification_failed'
+        ),
+        approved: false
+      }
+    }
     // A configured hook may auto-approve ordinary tool calls, but it must not
-    // bypass an explicit user decision for an external side effect.
-    const needsApproval = externalPathApproval || tool.requiresExplicitApproval ||
+    // bypass an explicit user decision for an external side effect or an
+    // unrestricted host command exposed by workspace-write.
+    const fullAccess =
+      context.approvalPolicy === 'auto' &&
+      effectiveSandboxMode(context) === 'danger-full-access'
+    const needsApproval = !fullAccess && (
+      externalPathApproval ||
+      workspaceCommandApproval ||
+      explicitApprovalRequired ||
       (!preHooks.autoApproved && this.requiresApproval(tool, activeCall, context))
+    )
+    let kunActionApprovalGrant: ToolHostContext['kunActionApprovalGrant']
     if (needsApproval) {
       const approvalId = `appr_${randomUUID().replaceAll('-', '')}`
+      const approvalReason = externalPathApproval
+        ? 'exact external workspace file write requires approval'
+        : workspaceCommandApproval
+          ? 'host command execution from the workspace sandbox requires approval'
+          : explicitApprovalRequired
+            ? 'external side effect requires explicit approval'
+            : 'runtime tool policy requires approval'
+      const action = createApprovalActionEnvelope({
+        toolName: activeCall.toolName,
+        providerId: provider.id,
+        providerKind: provider.kind,
+        toolKind: activeCall.toolKind ?? tool.toolKind,
+        effects: tool.effects ?? provider.effects,
+        arguments: activeCall.arguments,
+        workspace: context.workspace,
+        cwd: typeof activeCall.arguments.cwd === 'string'
+          ? activeCall.arguments.cwd
+          : context.workspace,
+        exactFileTargets: externalWriteTargets.map((target) => target.path),
+        reason: approvalReason
+      })
       const approval: ApprovalRequest = createApprovalRequest({
         id: approvalId,
         threadId: context.threadId,
         turnId: context.turnId,
         toolName: activeCall.toolName,
-        summary: externalPathApproval
-          ? this.buildExternalPathApprovalSummary(
-              activeCall,
-              externalWriteTargets.map((target) => target.path)
-            )
-          : this.buildApprovalSummary(activeCall)
+        summary: safeApprovalActionSummary(action),
+        action
       })
       const resolution = await context.awaitApproval(approval)
       const decision = typeof resolution === 'string' ? resolution : resolution.decision
       if (decision !== 'allow') {
         const reason = typeof resolution === 'string' ? undefined : resolution.reason
+        const reviewer = typeof resolution === 'string'
+          ? context.approvalReviewer ?? 'user'
+          : resolution.reviewer ?? context.approvalReviewer ?? 'user'
+        const reviewDetails = typeof resolution === 'string'
+          ? {}
+          : {
+              ...(resolution.reviewId ? { reviewId: resolution.reviewId } : {}),
+              ...(resolution.riskLevel ? { riskLevel: resolution.riskLevel } : {}),
+              ...(resolution.reviewStatus ? { reviewStatus: resolution.reviewStatus } : {})
+            }
+        const actor = reviewer === 'agent' ? 'Agent reviewer' : 'User'
         return {
           item: makeToolResultItem({
             id: `item_${activeCall.callId}`,
@@ -278,16 +383,46 @@ export class LocalToolHost implements ToolHost {
             output: {
               code: 'approval_denied',
               error: reason
-                ? `User denied approval for ${activeCall.toolName}: ${reason}`
-                : `User denied approval for ${activeCall.toolName}`,
+                ? `${actor} denied approval for ${activeCall.toolName}: ${reason}`
+                : `${actor} denied approval for ${activeCall.toolName}`,
               approvalId,
-              ...(reason ? { reason } : {})
+              reviewer,
+              ...(reason ? { reason } : {}),
+              ...reviewDetails
             },
             isError: true
           }),
           approved: false
         }
       }
+      const reviewer = typeof resolution === 'string'
+        ? context.approvalReviewer ?? 'user'
+        : resolution.reviewer ?? context.approvalReviewer ?? 'user'
+      const issuedAt = new Date()
+      kunActionApprovalGrant = Object.freeze({
+        id: approvalId,
+        source: reviewer,
+        toolName: activeCall.toolName,
+        callId: activeCall.callId,
+        argumentsHash: ToolOperationJournal.argsHash(activeCall.arguments),
+        issuedAt: issuedAt.toISOString(),
+        expiresAt: new Date(
+          issuedAt.getTime() + KUN_ACTION_APPROVAL_GRANT_TTL_MS
+        ).toISOString()
+      })
+    } else if (fullAccess && explicitApprovalRequired) {
+      const issuedAt = new Date()
+      kunActionApprovalGrant = Object.freeze({
+        id: `grant_${randomUUID().replaceAll('-', '')}`,
+        source: 'full-access',
+        toolName: activeCall.toolName,
+        callId: activeCall.callId,
+        argumentsHash: ToolOperationJournal.argsHash(activeCall.arguments),
+        issuedAt: issuedAt.toISOString(),
+        expiresAt: new Date(
+          issuedAt.getTime() + KUN_ACTION_APPROVAL_GRANT_TTL_MS
+        ).toISOString()
+      })
     }
     if (context.abortSignal.aborted) {
       throw new Error('tool call aborted while waiting for approval')
@@ -336,12 +471,15 @@ export class LocalToolHost implements ToolHost {
     // accepted from a reused/caller-supplied context.
     const ungrantedContext = { ...context }
     delete ungrantedContext.approvedExternalWriteTargets
+    delete ungrantedContext.kunActionApprovalGrant
     const approvedExternalWriteTargets = Object.freeze(
       externalWriteTargets.map((target) => Object.freeze({ ...target }))
     )
-    const executionContext = externalPathApproval
-      ? { ...ungrantedContext, approvedExternalWriteTargets }
-      : ungrantedContext
+    const executionContext = {
+      ...ungrantedContext,
+      ...(externalPathApproval ? { approvedExternalWriteTargets } : {}),
+      ...(kunActionApprovalGrant ? { kunActionApprovalGrant } : {})
+    }
     let result: Awaited<ReturnType<LocalTool['execute']>>
     try {
       result = await tool.execute(activeCall.arguments, executionContext, async (update) => {
@@ -380,7 +518,7 @@ export class LocalToolHost implements ToolHost {
     }
     let hookedResult: PostToolUseOutcome
     try {
-      hookedResult = await runPostToolUseHooks(this.hooks, {
+      hookedResult = await runPostToolUseHooks(components.hooks, {
         call: activeCall,
         context: hookContext(context),
         result
@@ -409,6 +547,53 @@ export class LocalToolHost implements ToolHost {
 
   clearReadTracker(threadId?: string): void {
     this.readTracker.clear(threadId)
+  }
+
+  private componentsFor(context?: ToolHostContext): {
+    registry: CapabilityRegistry
+    hooks: readonly ResolvedHook[]
+    prepare?: (context?: ToolHostContext) => Promise<void> | void
+    generation: number
+    touchedAt: number
+  } {
+    const turnId = context?.turnId
+    const now = Date.now()
+    if (!turnId) {
+      return {
+        registry: this.registry,
+        hooks: this.hooks,
+        ...(this.prepare ? { prepare: this.prepare } : {}),
+        generation: this.generation,
+        touchedAt: now
+      }
+    }
+    const existing = this.turnComponents.get(turnId)
+    if (existing) {
+      existing.touchedAt = now
+      return existing
+    }
+    const pinned = {
+      registry: this.registry,
+      hooks: this.hooks,
+      ...(this.prepare ? { prepare: this.prepare } : {}),
+      generation: this.generation,
+      touchedAt: now
+    }
+    this.turnComponents.set(turnId, pinned)
+    this.pruneTurnComponents(now)
+    return pinned
+  }
+
+  private pruneTurnComponents(now = Date.now()): void {
+    const staleBefore = now - 6 * 60 * 60 * 1_000
+    for (const [turnId, components] of this.turnComponents) {
+      if (components.touchedAt < staleBefore) this.turnComponents.delete(turnId)
+    }
+    if (this.turnComponents.size <= 4_000) return
+    const oldest = [...this.turnComponents.entries()]
+      .sort((left, right) => left[1].touchedAt - right[1].touchedAt)
+      .slice(0, this.turnComponents.size - 2_000)
+    for (const [turnId] of oldest) this.turnComponents.delete(turnId)
   }
 
   private runtimePolicyBlock(
@@ -449,18 +634,6 @@ export class LocalToolHost implements ToolHost {
 
   private isInteractiveGuiGateTool(toolName: string): boolean {
     return toolName === 'user_input' || toolName === 'request_user_input'
-  }
-
-  private buildApprovalSummary(call: ToolCallLike): string {
-    const args = Object.entries(call.arguments)
-      .map(([key, value]) => `${key}=${JSON.stringify(value)}`)
-      .join(', ')
-    return `Run ${call.toolName}(${args})`
-  }
-
-  private buildExternalPathApprovalSummary(call: ToolCallLike, paths: readonly string[]): string {
-    const targets = paths.map((path) => JSON.stringify(path)).join(', ')
-    return `Allow ${call.toolName} to modify these exact paths outside the workspace for this call only: ${targets}`
   }
 
   private completedToolResult(
@@ -516,9 +689,13 @@ export class LocalToolHost implements ToolHost {
       inputSchema: tool.inputSchema,
       toolKind: tool.toolKind ?? 'tool_call',
       ...(tool.sideEffect ? { sideEffect: tool.sideEffect } : {}),
+      ...(tool.effects ? { effects: { ...tool.effects } } : {}),
       execute: tool.execute,
+      ...(tool.modelAdvertised === false ? { modelAdvertised: false } : {}),
       ...(tool.shouldAdvertise ? { shouldAdvertise: tool.shouldAdvertise } : {}),
-      ...(tool.requiresExplicitApproval ? { requiresExplicitApproval: true } : {}),
+      ...(tool.requiresExplicitApproval
+        ? { requiresExplicitApproval: tool.requiresExplicitApproval }
+        : {}),
       ...(tool.externalWritePathArguments?.length
         ? { externalWritePathArguments: [...tool.externalWritePathArguments] }
         : {})
@@ -561,12 +738,22 @@ async function offloadLargeToolOutput(
 
 function hookContext(
   context: ToolHostContext
-): Pick<ToolHostContext, 'threadId' | 'turnId' | 'workspace' | 'threadMode' | 'approvalPolicy' | 'sandboxMode'> {
+): Pick<
+  ToolHostContext,
+  | 'threadId'
+  | 'turnId'
+  | 'workspace'
+  | 'threadMode'
+  | 'approvalPolicy'
+  | 'sandboxMode'
+  | 'clientSurface'
+> {
   return {
     threadId: context.threadId,
     turnId: context.turnId,
     workspace: context.workspace,
     approvalPolicy: context.approvalPolicy,
+    ...(context.clientSurface ? { clientSurface: context.clientSurface } : {}),
     ...(context.sandboxMode ? { sandboxMode: context.sandboxMode } : {}),
     ...(context.threadMode ? { threadMode: context.threadMode } : {})
   }
@@ -610,8 +797,7 @@ function createUserInputTool(name: string): LocalTool {
   }
   return LocalToolHost.defineTool({
     name,
-    description:
-      'Ask the GUI user a structured question and wait for the answer. Requires a non-empty prompt, question, message, or questions[].question (prompt/message aliases allowed).',
+    description: 'Ask the user a structured question through the current interactive client and wait for the answer.',
     toolKind: 'tool_call',
     inputSchema: {
       type: 'object',
@@ -682,7 +868,7 @@ function createUserInputTool(name: string): LocalTool {
     execute: async (args, context) => {
       if (!context.awaitUserInput) {
         return {
-          output: { error: 'GUI user input is not available in this runtime context' },
+          output: { error: 'structured user input is not available in this client context' },
           isError: true
         }
       }

@@ -12,8 +12,10 @@ import type {
 } from '../contracts/threads.js'
 import {
   DEFAULT_APPROVAL_POLICY,
+  DEFAULT_APPROVAL_REVIEWER,
   DEFAULT_SANDBOX_MODE,
   type ApprovalPolicy,
+  type ApprovalReviewer,
   type SandboxMode
 } from '../contracts/policy.js'
 
@@ -29,6 +31,7 @@ export function createThreadRecord(input: {
   title: string
   titleAuto?: boolean
   workspace: string
+  additionalWorkspaces?: string[]
   model: string
   providerId?: string
   ownerExtensionId?: string
@@ -44,6 +47,8 @@ export function createThreadRecord(input: {
   status?: ThreadStatus
   approvalPolicy?: ApprovalPolicy
   sandboxMode?: SandboxMode
+  approvalReviewer?: ApprovalReviewer
+  modelRequestCaptureEnabled?: boolean
   pinned?: boolean
   costBudgetUsd?: number
   costBudgetWarningSent?: boolean
@@ -64,6 +69,9 @@ export function createThreadRecord(input: {
     title: input.title,
     ...(input.titleAuto !== undefined ? { titleAuto: input.titleAuto } : {}),
     workspace: input.workspace,
+    additionalWorkspaces: [...new Set(
+      (input.additionalWorkspaces ?? []).map((entry) => entry.trim()).filter((entry) => entry && entry !== input.workspace)
+    )],
     model: input.model,
     ...(input.providerId ? { providerId: input.providerId } : {}),
     ...(input.ownerExtensionId ? { ownerExtensionId: input.ownerExtensionId } : {}),
@@ -79,6 +87,8 @@ export function createThreadRecord(input: {
     status: input.status ?? 'idle',
     approvalPolicy: input.approvalPolicy ?? DEFAULT_APPROVAL_POLICY,
     sandboxMode: input.sandboxMode ?? DEFAULT_SANDBOX_MODE,
+    approvalReviewer: input.approvalReviewer ?? DEFAULT_APPROVAL_REVIEWER,
+    modelRequestCaptureEnabled: input.modelRequestCaptureEnabled ?? false,
     ...(input.pinned !== undefined ? { pinned: input.pinned } : {}),
     ...(input.costBudgetUsd !== undefined ? { costBudgetUsd: input.costBudgetUsd } : {}),
     ...(input.costBudgetWarningSent !== undefined ? { costBudgetWarningSent: input.costBudgetWarningSent } : {}),
@@ -105,7 +115,7 @@ export function toThreadSummary(
   thread: ThreadEntity
 ): Pick<
   ThreadEntity,
-  'id' | 'title' | 'titleAuto' | 'summary' | 'workspace' | 'model' | 'providerId' | 'agentId' | 'systemPrompt' | 'mode' | 'status' | 'approvalPolicy' | 'sandboxMode' | 'pinned' | 'createdAt' | 'updatedAt'
+  'id' | 'title' | 'titleAuto' | 'summary' | 'workspace' | 'additionalWorkspaces' | 'model' | 'providerId' | 'agentId' | 'systemPrompt' | 'mode' | 'status' | 'approvalPolicy' | 'sandboxMode' | 'approvalReviewer' | 'modelRequestCaptureEnabled' | 'pinned' | 'createdAt' | 'updatedAt'
   | 'ownerExtensionId' | 'ownerExtensionVersion' | 'accountId' | 'extensionVisibility'
   | 'extensionProfile' | 'extensionBudget' | 'toolCatalogEpoch'
   | 'costBudgetUsd' | 'costBudgetWarningSent'
@@ -119,6 +129,7 @@ export function toThreadSummary(
     ...(thread.titleAuto !== undefined ? { titleAuto: thread.titleAuto } : {}),
     ...(thread.summary ? { summary: thread.summary } : {}),
     workspace: thread.workspace,
+    additionalWorkspaces: thread.additionalWorkspaces,
     model: thread.model,
     ...(thread.providerId ? { providerId: thread.providerId } : {}),
     ...(thread.ownerExtensionId ? { ownerExtensionId: thread.ownerExtensionId } : {}),
@@ -134,6 +145,8 @@ export function toThreadSummary(
     status: thread.status,
     approvalPolicy: thread.approvalPolicy,
     sandboxMode: thread.sandboxMode,
+    approvalReviewer: thread.approvalReviewer,
+    modelRequestCaptureEnabled: thread.modelRequestCaptureEnabled,
     ...(thread.pinned !== undefined ? { pinned: thread.pinned } : {}),
     ...(thread.costBudgetUsd !== undefined ? { costBudgetUsd: thread.costBudgetUsd } : {}),
     ...(thread.costBudgetWarningSent !== undefined ? { costBudgetWarningSent: thread.costBudgetWarningSent } : {}),

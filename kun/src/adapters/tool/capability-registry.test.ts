@@ -14,12 +14,19 @@ function tool(name: string, sideEffect?: 'read-only' | 'unknown') {
   })
 }
 
-function context(activeSkillIds: string[], threadMode?: 'agent' | 'plan'): ToolHostContext {
+function context(
+  activeSkillIds: string[],
+  threadMode?: 'agent' | 'plan',
+  orchestration?: 'direct' | 'graph',
+  messageSource?: 'graph_runtime'
+): ToolHostContext {
   return {
     threadId: 'thread_1',
     turnId: 'turn_1',
     workspace: '/workspace',
     ...(threadMode ? { threadMode } : {}),
+    ...(orchestration ? { orchestration } : {}),
+    ...(messageSource ? { messageSource } : {}),
     activeSkillIds,
     approvalPolicy: 'auto',
     sandboxMode: 'danger-full-access',
@@ -47,6 +54,71 @@ describe('CapabilityRegistry managed skill policy', () => {
       .toThrow('tool bash is not advertised by active tool policy')
     expect(() => registry.resolveTool('background_shell', context(['ppt-master'])))
       .toThrow('tool background_shell is not advertised by active tool policy')
+  })
+})
+
+describe('CapabilityRegistry Graph orchestration policy', () => {
+  const providers = () => [
+    {
+      id: 'builtin',
+      kind: 'built-in' as const,
+      enabled: true,
+      available: true,
+      tools: [
+        tool('read', 'read-only'),
+        tool('task_graph'),
+        tool('design_component'),
+        tool('graph_create_run'),
+        tool('graph_control_run')
+      ]
+    },
+    {
+      id: 'delegation',
+      kind: 'delegation' as const,
+      enabled: true,
+      available: true,
+      tools: [tool('delegate_task'), tool('list_subagent_profiles', 'read-only')]
+    }
+  ]
+
+  it('hides and rejects ordinary orchestration tools for Graph user and runtime Lead turns', () => {
+    const registry = new CapabilityRegistry(providers())
+    const graph = context([], 'agent', 'graph')
+    const supervision = context([], 'agent', 'direct', 'graph_runtime')
+
+    for (const current of [graph, supervision]) {
+      expect(registry.listTools(current).map((spec) => spec.name)).toEqual([
+        'read',
+        'graph_create_run',
+        'graph_control_run'
+      ])
+      for (const name of [
+        'delegate_task',
+        'list_subagent_profiles',
+        'task_graph',
+        'design_component'
+      ]) {
+        expect(() => registry.resolveTool(name, current))
+          .toThrow('unavailable in the Graph capability plane')
+      }
+    }
+  })
+
+  it('preserves ordinary delegation and legacy task graphs for direct turns', () => {
+    const registry = new CapabilityRegistry(providers())
+    const direct = context([], 'agent', 'direct')
+
+    expect(registry.listTools(direct).map((spec) => spec.name)).toEqual([
+      'read',
+      'task_graph',
+      'design_component',
+      'graph_create_run',
+      'graph_control_run',
+      'delegate_task',
+      'list_subagent_profiles'
+    ])
+    expect(registry.resolveTool('delegate_task', direct).provider.kind).toBe('delegation')
+    expect(registry.resolveTool('task_graph', direct).provider.id).toBe('builtin')
   })
 })
 

@@ -6,6 +6,7 @@ import type { ImmutablePrefix } from '../cache/immutable-prefix.js'
 import type { PipelineStage } from '../contracts/events.js'
 import type { ModelCapabilityMetadata } from '../contracts/capabilities.js'
 import type { TurnItem } from '../contracts/items.js'
+import type { ActingTurnModelRoute } from '../contracts/turns.js'
 import { makeErrorItem } from '../domain/item.js'
 import { repairModelHistoryItems } from '../domain/model-history-repair.js'
 import { memoryPreview } from '../shared/memory-preview.js'
@@ -25,8 +26,11 @@ import {
 } from '../adapters/tool/design-svg-tool.js'
 import { resolveWorkspacePath, shellRuntimeInstruction } from '../adapters/tool/builtin-tool-utils.js'
 import { VERIFY_CHANGES_TOOL_NAME } from '../adapters/tool/builtin-verify-tool.js'
+import { GRAPH_DEFINE_PLAN_TOOL_NAME } from '../adapters/tool/graph-define-plan-tool.js'
+import { GRAPH_LEAD_MODE_INSTRUCTION } from '../prompt/graph-lead-mode.js'
 import { buildToolPreferenceInstruction } from '../prompt/kun-system-prompt.js'
 import {
+  buildClientSurfaceInstruction,
   buildKunTurnContextInstructions,
   type KunTurnContextAuthority,
   type KunTurnContextBlock
@@ -64,10 +68,14 @@ import {
   buildRuntimeContextInstruction,
   shouldInjectInitialRuntimeContext
 } from './runtime-context.js'
-import type { RoundOutcomeCoordinator } from './round-outcome-coordinator.js'
+import {
+  GRAPH_CREATE_RUN_TOOL_NAME,
+  type RoundOutcomeCoordinator
+} from './round-outcome-coordinator.js'
 import { svgArtifactCompletionState } from './svg-artifact-completion.js'
 import {
   rehydrateGeneratedImagesForForward,
+  rehydrateTransientBrowserUseOutputsForForward,
   MAX_FORWARDED_GENERATED_IMAGES
 } from './tool-result-image.js'
 import {
@@ -100,7 +108,7 @@ import { TurnToolCatalogFreezer } from './turn-tool-catalog.js'
 export type ModelStepServiceDeps = {
   threadStore: ThreadStore
   sessionStore: SessionStore
-  turns: Pick<TurnService, 'getTurn' | 'applyItem' | 'updateTurnMetadata'>
+  turns: Pick<TurnService, 'getTurn' | 'applyItem' | 'updateItem' | 'updateTurnMetadata'>
   events: Pick<RuntimeEventRecorder, 'record'>
   model: ModelClient
   compactor: import('./context-compactor.js').ContextCompactor
@@ -145,10 +153,15 @@ export type ModelStepServiceDeps = {
     sentInputTokens: number
   }) => Promise<void>
   rememberFailure: (turnId: string, failure: TurnExecutionFailure) => void
+  awaitWorkspaceCheckpoint?: (
+    checkpointRequestId: string,
+    signal: AbortSignal
+  ) => Promise<string | null>
 }
 
 export class ModelStepService {
   private readonly turnToolCatalogs = new TurnToolCatalogFreezer()
+  private readonly workspaceCheckpointGates = new Map<string, Promise<void>>()
 
   constructor(private readonly deps: ModelStepServiceDeps) {}
 
@@ -249,23 +262,46 @@ export class ModelStepService {
     const items = repairModelHistoryItems(
       effectiveHistoryAfterLatestCompaction(historyItems)
     )
-    const { providerId, accountId } = resolveCoherentProviderAccount({
+    const inheritedProviderAccount = resolveCoherentProviderAccount({
       turnProviderId: turn.providerId,
       turnAccountId: turn.accountId,
       threadProviderId: thread.providerId,
       threadAccountId: thread.accountId
     })
-    const modelRoute = await this.deps.modelRouting.resolve({
-      threadId,
-      turnId,
-      latestRequest: turn?.prompt ?? '',
-      items,
-      signal,
-      ...(providerId ? { providerId } : {}),
-      ...(accountId ? { accountId } : {}),
-      reasoningEffort: turn?.reasoningEffort,
-      candidates: [turn?.model, thread?.model, this.deps.model.model]
-    })
+    const routeProviderId = turn.actingModelRoute?.providerId ?? inheritedProviderAccount.providerId
+    const routeAccountId = turn.actingModelRoute?.accountId ?? inheritedProviderAccount.accountId
+    const modelRoute = turn.actingModelRoute
+      ? {
+          model: turn.actingModelRoute.model,
+          ...(turn.reasoningEffort ? { reasoningEffort: turn.reasoningEffort } : {})
+        }
+      : await this.deps.modelRouting.resolve({
+          threadId,
+          turnId,
+          latestRequest: turn?.prompt ?? '',
+          items,
+          signal,
+          ...(routeProviderId ? { providerId: routeProviderId } : {}),
+          ...(routeAccountId ? { accountId: routeAccountId } : {}),
+          reasoningEffort: turn?.reasoningEffort,
+          candidates: [turn?.model, thread?.model, this.deps.model.model]
+        })
+    const actingModelRoute = turn.actingModelRoute ?? {
+      model: modelRoute.model,
+      ...(routeProviderId ? { providerId: routeProviderId } : {}),
+      ...(routeAccountId ? { accountId: routeAccountId } : {})
+    }
+    const routeSelectionDeferred =
+      !turn.actingModelRoute &&
+      this.deps.model.selectsRouteTargetDuringStream?.({
+        model: modelRoute.model,
+        ...(routeProviderId ? { providerId: routeProviderId } : {})
+      }) === true
+    if (!turn.actingModelRoute && !routeSelectionDeferred) {
+      await this.deps.turns.updateTurnMetadata(threadId, turnId, { actingModelRoute })
+    }
+    const providerId = actingModelRoute.providerId
+    const accountId = actingModelRoute.accountId
     await this.deps.recordPipelineStage(threadId, turnId, 'input_routed', {
       model: modelRoute.model,
       ...(modelRoute.reasoningEffort ? { reasoningEffort: modelRoute.reasoningEffort } : {})
@@ -273,6 +309,11 @@ export class ModelStepService {
     const model = modelRoute.model
     const modelCapabilities =
       this.deps.modelCapabilities?.(model, providerId) ?? modelCapabilitiesForModel(model)
+    const serviceTier =
+      turn?.serviceTier === 'priority' &&
+      modelCapabilities.serviceTiers?.includes('priority')
+        ? 'priority' as const
+        : undefined
     const prepared = await this.deps.turnContextResolver.resolve({
       threadId,
       turnId,
@@ -280,6 +321,7 @@ export class ModelStepService {
       turn,
       history: historyItems,
       model,
+      actingModelRoute,
       modelCapabilities,
       signal,
       mode: modeContext,
@@ -397,19 +439,32 @@ export class ModelStepService {
     const createPlanSatisfied = planTurnActive
       ? hasSuccessfulCreatePlanResult(historyItems, turnId)
       : false
+    const graphCreateSatisfied = turn.orchestration === 'graph'
+      ? turn.graphPlanningLifecycle?.state === 'committed' ||
+        hasSuccessfulToolResult(historyItems, turnId, GRAPH_DEFINE_PLAN_TOOL_NAME) ||
+        hasSuccessfulToolResult(historyItems, turnId, GRAPH_CREATE_RUN_TOOL_NAME)
+      : false
     const svgCompletion = turn?.guiDesignArtifact?.kind === 'svg'
       ? svgArtifactCompletionState(historyItems, turnId)
       : null
-    const requiredToolName =
-      planTurnActive &&
+    const hardRequiredToolName =
+      svgCompletion?.mutationSucceeded &&
+            !svgCompletion.validationAfterMutation
+        ? DESIGN_SVG_VALIDATE_TOOL_NAME
+        : undefined
+    // Plan creation is deliberately a soft completion condition. A Plan turn
+    // may investigate, ask for user input, or stop on a genuine clarification
+    // before its prose is materialized through create_plan.
+    const softRequiredToolName =
+      turn.orchestration === 'graph' &&
+      !graphCreateSatisfied &&
+      toolSpecs.some((tool) => tool.name === GRAPH_DEFINE_PLAN_TOOL_NAME)
+        ? GRAPH_DEFINE_PLAN_TOOL_NAME
+        : planTurnActive &&
       !createPlanSatisfied &&
       toolSpecs.some((tool) => tool.name === CREATE_PLAN_TOOL_NAME)
         ? CREATE_PLAN_TOOL_NAME
-        : svgCompletion?.mutationSucceeded &&
-            !svgCompletion.validationAfterMutation &&
-            toolSpecs.some((tool) => tool.name === DESIGN_SVG_VALIDATE_TOOL_NAME)
-          ? DESIGN_SVG_VALIDATE_TOOL_NAME
-          : undefined
+        : undefined
     const suggestVerification =
       !planTurnActive &&
       toolSpecs.some((tool) => tool.name === VERIFY_CHANGES_TOOL_NAME) &&
@@ -422,52 +477,34 @@ export class ModelStepService {
     const emptyPostToolRecoveryStep = this.deps.roundOutcome.emptyPostToolRecoverySteps(turnId)
     const forceFinalAnswerRecovery =
       emptyPostToolRecoveryStep >= EMPTY_POST_TOOL_FINAL_ANSWER_RECOVERY_STEP
-    const requestToolSpecs = forceFinalAnswerRecovery ? [] : effectiveToolSpecs
-    const history = await this.deps.historyCompaction.compactIfNeeded({
-      items,
-      model,
-      ...(providerId ? { providerId } : {}),
-      ...(accountId ? { accountId } : {}),
-      signal,
-      threadId,
-      turnId,
-      toolSpecs: requestToolSpecs,
-      reserveModelRequest: () => this.deps.budgetGate.reserveAdditionalModelRequest(threadId, turnId)
-    })
-    if (signal.aborted) return 'aborted'
-    const postCompactionBudgetGate = await this.deps.budgetGate.recheckReservedMainModelRequest(
-      threadId,
-      turnId
-    )
-    if (postCompactionBudgetGate === 'blocked') {
-      this.deps.goalTurns.suppressResume(turnId)
-      if (dedicatedSvgTurn) {
-        const persistedCompletion = svgArtifactCompletionState(
-          await this.deps.sessionStore.loadItems(threadId),
-          turnId
-        )
-        if (persistedCompletion.validationAfterMutation) return 'stop'
-        this.deps.rememberFailure(turnId, {
-          error: 'Dedicated SVG artifact turn could not satisfy its completion gate before the budget was exhausted.',
-          code: 'svg_completion_budget_blocked',
-          severity: 'error'
-        })
-        return 'failed'
-      }
-      return 'stop'
+    const planningToolSpecs = turn.orchestration === 'graph' && !graphCreateSatisfied
+      ? effectiveToolSpecs.filter((tool) =>
+          tool.name === GRAPH_DEFINE_PLAN_TOOL_NAME ||
+          tool.name === 'request_user_input' ||
+          tool.name === 'user_input' ||
+          tool.sideEffect === 'read-only')
+      : effectiveToolSpecs
+    const requestToolSpecs = hardRequiredToolName
+      ? planningToolSpecs.filter((tool) => tool.name === hardRequiredToolName)
+      : forceFinalAnswerRecovery
+        ? []
+        : planningToolSpecs
+    if (hardRequiredToolName && (
+      requestToolSpecs.length !== 1 ||
+      requestToolSpecs[0]?.name !== hardRequiredToolName ||
+      !modelCapabilities.supportsToolCalling
+    )) {
+      return this.failRequiredToolConstraint({
+        threadId,
+        turnId,
+        code: modelCapabilities.supportsToolCalling
+          ? 'required_tool_unavailable'
+          : 'required_tool_unsupported',
+        message: modelCapabilities.supportsToolCalling
+          ? `The required tool \`${hardRequiredToolName}\` is unavailable for this turn.`
+          : `The selected model does not support the required tool \`${hardRequiredToolName}\`.`
+      })
     }
-    await this.deps.recordPipelineStage(threadId, turnId, 'input_compressed', {
-      historyItems: history.length
-    })
-    // Forward the just-generated image(s) back to a vision-capable model so it can
-    // self-review and regenerate if the result is off. Bytes come from the
-    // already-persisted attachment/file; the persisted tool output keeps NO base64
-    // (only this transient request copy carries it).
-    const forwardHistory = await rehydrateGeneratedImagesForForward(
-      history,
-      (output) => this.deps.turnAttachments.resolveGeneratedImageForForward(output, threadId, thread?.workspace),
-      MAX_FORWARDED_GENERATED_IMAGES
-    )
     const runtimeContextInstruction = shouldInjectInitialRuntimeContext({
       stepIndex,
       turnId,
@@ -480,8 +517,20 @@ export class ModelStepService {
       : null
     const toolPreferenceInstruction = buildToolPreferenceInstruction(requestToolSpecs)
     const contextBlocks: KunTurnContextBlock[] = [
+      kunContextBlock(
+        'client-surface',
+        'runtime',
+        buildClientSurfaceInstruction(prepared.clientSurface)
+      ),
       ...(runtimeContextInstruction
         ? [kunContextBlock('runtime-context', 'runtime', runtimeContextInstruction)]
+        : []),
+      ...(thread?.additionalWorkspaces?.length
+        ? [kunContextBlock(
+            'additional-workspaces',
+            'workspace',
+            `Additional workspace roots explicitly added by the user:\n${thread.additionalWorkspaces.map((path) => `- ${JSON.stringify(path)}`).join('\n')}`
+          )]
         : []),
       ...(thread.extensionProfile?.instructionOverlay?.trim()
         ? [kunContextBlock(
@@ -532,6 +581,16 @@ export class ModelStepService {
       ...(toolPreferenceInstruction
         ? [kunContextBlock('tool-guidance', 'runtime', toolPreferenceInstruction)]
         : []),
+      ...(this.deps.roundOutcome.graphPlanNoToolRecoverySteps(turnId) > 0 &&
+          !graphCreateSatisfied
+        ? [kunContextBlock(
+            'graph-plan-finalization',
+            'runtime',
+            `You inspected or described the plan but did not call \`${GRAPH_DEFINE_PLAN_TOOL_NAME}\`. ` +
+              'If no genuine user clarification is required, call it now using the advertised schema. ' +
+              'Do not replace the tool call with prose.'
+          )]
+        : []),
       ...(requestToolSpecs.some((tool) => tool.name === 'bash')
         ? [kunContextBlock('shell-runtime', 'runtime', shellRuntimeInstruction())]
         : []),
@@ -551,6 +610,7 @@ export class ModelStepService {
       contextInstructionCount: contextInstructions.length
     })
     const modeInstruction = [
+      ...(turn.orchestration === 'graph' ? [GRAPH_LEAD_MODE_INSTRUCTION] : []),
       ...(planTurnActive ? [PLAN_MODE_INSTRUCTION] : []),
       ...(turn.guiDesignArtifact?.kind === 'svg'
         ? [SVG_ARTIFACT_MODE_INSTRUCTION]
@@ -558,6 +618,79 @@ export class ModelStepService {
           ? [DESIGN_MODE_INSTRUCTION]
           : [])
     ].join('\n\n')
+    // Automatic compaction must see every non-history part of the request that
+    // will actually be sent. Building the same request with empty history gives
+    // us an authoritative overhead estimate for system/thread prompts, dynamic
+    // context, skills, tools, and attachments without mixing in cumulative
+    // provider usage.
+    const requestOverheadTokens = composeModelRequest({
+      threadId,
+      turnId,
+      model,
+      ...(providerId ? { providerId } : {}),
+      ...(accountId ? { accountId } : {}),
+      ...(modelRoute.reasoningEffort ? { reasoningEffort: modelRoute.reasoningEffort } : {}),
+      ...(serviceTier ? { serviceTier } : {}),
+      immutablePrefix: this.deps.prefix,
+      ...(thread.systemPrompt !== undefined ? { threadSystemPrompt: thread.systemPrompt } : {}),
+      ...(modeInstruction ? { modeInstruction } : {}),
+      contextInstructions,
+      history: [],
+      attachments,
+      tools: requestToolSpecs,
+      ...(hardRequiredToolName ? { requiredToolName: hardRequiredToolName } : {}),
+      ...(this.deps.tokenEconomy ? { tokenEconomy: this.deps.tokenEconomy } : {}),
+      signal
+    }).sentInputTokens
+    const history = await this.deps.historyCompaction.compactIfNeeded({
+      items,
+      model,
+      ...(providerId ? { providerId } : {}),
+      ...(accountId ? { accountId } : {}),
+      ...(serviceTier ? { serviceTier } : {}),
+      signal,
+      threadId,
+      turnId,
+      clientSurface: prepared.clientSurface,
+      toolSpecs: requestToolSpecs,
+      requestOverheadTokens,
+      reserveModelRequest: () => this.deps.budgetGate.reserveAdditionalModelRequest(threadId, turnId)
+    })
+    if (signal.aborted) return 'aborted'
+    const postCompactionBudgetGate = await this.deps.budgetGate.recheckReservedMainModelRequest(
+      threadId,
+      turnId
+    )
+    if (postCompactionBudgetGate === 'blocked') {
+      this.deps.goalTurns.suppressResume(turnId)
+      if (dedicatedSvgTurn) {
+        const persistedCompletion = svgArtifactCompletionState(
+          await this.deps.sessionStore.loadItems(threadId),
+          turnId
+        )
+        if (persistedCompletion.validationAfterMutation) return 'stop'
+        this.deps.rememberFailure(turnId, {
+          error: 'Dedicated SVG artifact turn could not satisfy its completion gate before the budget was exhausted.',
+          code: 'svg_completion_budget_blocked',
+          severity: 'error'
+        })
+        return 'failed'
+      }
+      return 'stop'
+    }
+    await this.deps.recordPipelineStage(threadId, turnId, 'input_compressed', {
+      historyItems: history.length,
+      requestOverheadTokens
+    })
+    // Forward the just-generated image(s) back to a vision-capable model so it can
+    // self-review and regenerate if the result is off. Bytes come from the
+    // already-persisted attachment/file; the persisted tool output keeps NO base64
+    // (only this transient request copy carries it).
+    const forwardHistory = await rehydrateGeneratedImagesForForward(
+      rehydrateTransientBrowserUseOutputsForForward(history),
+      (output) => this.deps.turnAttachments.resolveGeneratedImageForForward(output, threadId, thread?.workspace),
+      MAX_FORWARDED_GENERATED_IMAGES
+    )
     const composedRequest = composeModelRequest({
       threadId,
       turnId,
@@ -565,6 +698,7 @@ export class ModelStepService {
       ...(providerId ? { providerId } : {}),
       ...(accountId ? { accountId } : {}),
       ...(modelRoute.reasoningEffort ? { reasoningEffort: modelRoute.reasoningEffort } : {}),
+      ...(serviceTier ? { serviceTier } : {}),
       immutablePrefix: this.deps.prefix,
       ...(thread.systemPrompt !== undefined ? { threadSystemPrompt: thread.systemPrompt } : {}),
       ...(modeInstruction ? { modeInstruction } : {}),
@@ -572,7 +706,7 @@ export class ModelStepService {
       history: forwardHistory,
       attachments,
       tools: requestToolSpecs,
-      ...(!forceFinalAnswerRecovery && requiredToolName ? { requiredToolName } : {}),
+      ...(hardRequiredToolName ? { requiredToolName: hardRequiredToolName } : {}),
       ...(this.deps.tokenEconomy ? { tokenEconomy: this.deps.tokenEconomy } : {}),
       signal
     })
@@ -590,16 +724,29 @@ export class ModelStepService {
       ? Math.floor(modelCapabilities.contextWindowTokens * 0.85)
       : this.deps.compactor.hardCap(model, providerId)
     if (inputTokens + outputTokens > hardCap) {
+      const message =
+        `request exceeds the ${hardCap}-token context cap ` +
+        `(${inputTokens} input + ${outputTokens} output budget)`
+      this.deps.rememberFailure(turnId, {
+        error: message,
+        code: 'context_window_exceeded',
+        severity: 'warning'
+      })
       await this.deps.events.record({
         kind: 'error',
         threadId,
         turnId,
-        message: `request exceeds the ${hardCap}-token context cap (${inputTokens} input + ${outputTokens} output budget)`,
+        message,
         code: 'context_window_exceeded',
         severity: 'warning'
       })
       return 'failed'
     }
+    // Tool results become input to the *next* request. Reserve the configured
+    // output budget now so built-in source tools can return the largest honest
+    // page that has a realistic chance of fitting instead of relying on the
+    // send-time history cleaner to silently rewrite it.
+    const sourceResultBudgetTokens = Math.max(0, hardCap - inputTokens - outputTokens)
     const contextThresholds = this.deps.compactor.thresholds(model, providerId)
     const contextWindowTokens = modelCapabilities.contextWindowTokens ??
       Math.max(contextThresholds.softThreshold, contextThresholds.hardThreshold)
@@ -644,6 +791,8 @@ export class ModelStepService {
       toolCatalogFingerprint: toolCatalog.fingerprint,
       activeSkillIds: skillResolution.activeSkillIds
     }
+    let effectiveActingModelRoute: ActingTurnModelRoute = actingModelRoute
+    let streamRouteResolved = false
     const streamed = await this.deps.modelRoundEngine.run({
       threadId,
       turnId,
@@ -673,7 +822,35 @@ export class ModelStepService {
         model: request.model,
         ...clientDiagnostics
       },
+      onRouteSelected: async (route) => {
+        const resolved: ActingTurnModelRoute = {
+          model: route.modelId,
+          providerId: route.providerId,
+          ...(routeAccountId ? { accountId: routeAccountId } : {})
+        }
+        if (!routeSelectionDeferred) {
+          if (!sameActingModelRoute(actingModelRoute, resolved)) {
+            throw new Error(
+              'model route changed after the acting route was frozen: ' +
+              `${actingModelRoute.providerId ?? 'default'}/${actingModelRoute.model} -> ` +
+              `${resolved.providerId ?? 'default'}/${resolved.model}`
+            )
+          }
+          return
+        }
+        effectiveActingModelRoute = resolved
+        streamRouteResolved = true
+        await this.deps.turns.updateTurnMetadata(threadId, turnId, {
+          actingModelRoute: resolved
+        })
+      },
       writeGeneratedImage: async ({ imageBase64 }) => {
+        await this.ensureWorkspaceCheckpoint(
+          threadId,
+          turnId,
+          turn.workspaceCheckpointRequestId,
+          signal
+        )
         const imgDir = '.deepseekgui-images'
         const stamp = new Date().toISOString().replace(/\D/g, '').slice(0, 14)
         const fileName = `img-${stamp}-${randomBytes(2).toString('hex')}.png`
@@ -689,21 +866,119 @@ export class ModelStepService {
         return { markdown: `\n![generated image](${relativePath})\n` }
       }
     })
+    if (routeSelectionDeferred && streamed.kind === 'tool_calls' && !streamRouteResolved) {
+      const message = 'route pool emitted tool calls without resolving a concrete model target'
+      this.deps.rememberFailure(turnId, {
+        error: message,
+        code: 'model_route_unresolved',
+        severity: 'error'
+      })
+      await this.deps.events.record({
+        kind: 'error',
+        threadId,
+        turnId,
+        message,
+        code: 'model_route_unresolved',
+        severity: 'error'
+      })
+      return 'failed'
+    }
+    const effectivePrepared: PreparedTurnContext =
+      effectiveActingModelRoute === actingModelRoute
+        ? prepared
+        : { ...prepared, actingModelRoute: effectiveActingModelRoute }
     return this.deps.roundOutcome.resolve({
       threadId,
       turnId,
       streamed,
       ...(request.requiredToolName ? { requiredToolName: request.requiredToolName } : {}),
+      ...(softRequiredToolName ? { softRequiredToolName } : {}),
       turn,
-      prepared,
-      ...(providerId ? { modelProviderId: providerId } : {}),
+      prepared: effectivePrepared,
+      ...(effectiveActingModelRoute.providerId
+        ? { modelProviderId: effectiveActingModelRoute.providerId }
+        : {}),
       modelReasoningEffort: modelRoute.reasoningEffort ?? turn.reasoningEffort ?? 'auto',
+      sourceResultBudgetTokens,
       toolProviderMetadata,
       toolKinds,
       toolProviderKinds,
       svgCompletion
     })
   }
+
+  private async failRequiredToolConstraint(input: {
+    threadId: string
+    turnId: string
+    code: 'required_tool_unavailable' | 'required_tool_unsupported'
+    message: string
+  }): Promise<'failed'> {
+    this.deps.rememberFailure(input.turnId, { error: input.message, code: input.code, severity: 'error' })
+    await this.deps.events.record({
+      kind: 'error',
+      threadId: input.threadId,
+      turnId: input.turnId,
+      message: input.message,
+      code: input.code,
+      severity: 'error'
+    })
+    await this.deps.turns.applyItem(input.threadId, makeErrorItem({
+      id: this.deps.ids.next('item_error'),
+      threadId: input.threadId,
+      turnId: input.turnId,
+      message: input.message,
+      code: input.code,
+      severity: 'error'
+    }))
+    return 'failed'
+  }
+
+  private async ensureWorkspaceCheckpoint(
+    threadId: string,
+    turnId: string,
+    checkpointRequestId: string | undefined,
+    signal: AbortSignal
+  ): Promise<void> {
+    if (!checkpointRequestId || !this.deps.awaitWorkspaceCheckpoint) return
+    const key = `${turnId}:${checkpointRequestId}`
+    let gate = this.workspaceCheckpointGates.get(key)
+    if (!gate) {
+      gate = (async () => {
+        const checkpointId = await this.deps.awaitWorkspaceCheckpoint!(checkpointRequestId, signal)
+        if (!checkpointId) return
+        await this.deps.turns.updateTurnMetadata(threadId, turnId, {
+          workspaceCheckpointId: checkpointId
+        })
+        await this.deps.turns.updateItem(threadId, `item_${turnId}_user`, {
+          workspaceCheckpointId: checkpointId
+        })
+      })()
+      this.workspaceCheckpointGates.set(key, gate)
+    }
+    await gate
+  }
+}
+
+function hasSuccessfulToolResult(
+  items: readonly TurnItem[],
+  turnId: string,
+  toolName: string
+): boolean {
+  return items.some((item) =>
+    item.turnId === turnId &&
+    item.kind === 'tool_result' &&
+    item.toolName === toolName &&
+    item.status === 'completed' &&
+    item.isError !== true)
+}
+
+function sameActingModelRoute(
+  a: ActingTurnModelRoute,
+  b: ActingTurnModelRoute
+): boolean {
+  return a.model === b.model &&
+    a.providerId === b.providerId &&
+    a.accountId === b.accountId
 }
 
 export function buildExtensionProfileInstruction(extensionId: string, profileId: string, overlay: string): string {

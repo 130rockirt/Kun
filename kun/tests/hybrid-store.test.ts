@@ -97,6 +97,56 @@ describe('HybridThreadStore', () => {
     })
   })
 
+  it('keeps threads visible and repairs derived SQLite paths after the data directory moves', async () => {
+    if (!sqliteAvailable) return
+    const first = await createHybridStores()
+    const record = await seedThreadWithMessage(
+      first.threadStore,
+      first.sessionStore,
+      'survive data directory migration'
+    )
+    first.threadStore.close()
+
+    const sqlite = await import('better-sqlite3')
+    const Database = sqlite.default
+    const database = new Database(join(dataDir, 'index.sqlite3'))
+    database.prepare(`
+      UPDATE threads
+      SET metadata_path = @metadataPath,
+          messages_path = @messagesPath,
+          events_path = @eventsPath
+      WHERE id = @id
+    `).run({
+      id: record.id,
+      metadataPath: `/previous/runtime/root/threads/${record.id}/metadata.jsonl`,
+      messagesPath: `/previous/runtime/root/threads/${record.id}/messages.jsonl`,
+      eventsPath: `/previous/runtime/root/threads/${record.id}/events.jsonl`
+    })
+    database.close()
+
+    const reopened = await createHybridStores()
+    const summaries = await reopened.threadStore.list({ search: 'Hybrid demo' })
+    expect(summaries.map((thread) => thread.id)).toEqual([record.id])
+    reopened.threadStore.close()
+
+    const repaired = new Database(join(dataDir, 'index.sqlite3'), { readonly: true })
+    const row = repaired.prepare(`
+      SELECT metadata_path, messages_path, events_path
+      FROM threads
+      WHERE id = ?
+    `).get(record.id) as {
+      metadata_path: string
+      messages_path: string
+      events_path: string
+    }
+    repaired.close()
+    expect(row).toEqual({
+      metadata_path: join(dataDir, 'threads', record.id, 'metadata.jsonl'),
+      messages_path: join(dataDir, 'threads', record.id, 'messages.jsonl'),
+      events_path: join(dataDir, 'threads', record.id, 'events.jsonl')
+    })
+  })
+
   it('opens legacy thread.json, preserves archive search, and accepts later JSONL writes', async () => {
     const legacy = createThreadRecord({
       id: 'thr_legacy_archived',
@@ -106,15 +156,18 @@ describe('HybridThreadStore', () => {
       createdAt: '2025-01-01T00:00:00.000Z'
     })
     const archived = { ...legacy, status: 'archived' as const, updatedAt: '2025-01-02T00:00:00.000Z' }
+    const { approvalReviewer: _legacyReviewer, ...legacyWithoutReviewer } = archived
     const threadDir = join(dataDir, 'threads', legacy.id)
     await mkdir(threadDir, { recursive: true })
-    await writeFile(join(threadDir, 'thread.json'), JSON.stringify(archived), 'utf8')
+    await writeFile(join(threadDir, 'thread.json'), JSON.stringify(legacyWithoutReviewer), 'utf8')
 
     const { threadStore } = await createHybridStores()
     await threadStore.waitForBackfill()
     expect((await threadStore.list({ search: 'Legacy archive', includeArchived: true })).map((item) => item.id))
       .toEqual([legacy.id])
     expect((await threadStore.list({ archivedOnly: true })).map((item) => item.id)).toEqual([legacy.id])
+    expect((await threadStore.get(legacy.id))?.approvalReviewer).toBe('user')
+    expect((await threadStore.list({ archivedOnly: true }))[0]?.approvalReviewer).toBe('user')
 
     await threadStore.upsert({ ...archived, title: 'Legacy archive updated', updatedAt: '2025-01-03T00:00:00.000Z' })
     const metadata = await readFile(join(threadDir, 'metadata.jsonl'), 'utf8')

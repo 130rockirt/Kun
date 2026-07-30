@@ -131,6 +131,42 @@ describe('probeModelProvider', () => {
     )
   })
 
+  it('discovers Ollama Cloud models with bearer auth and preserves wire punctuation', async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({
+        object: 'list',
+        data: [
+          { id: 'gpt-oss:120b' },
+          { id: 'qwen3.5:397b' },
+          { id: 'gpt-oss:120b' }
+        ]
+      }), { status: 200 })
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await probeModelProvider({
+      baseUrl: 'https://ollama.com/v1',
+      apiKey: 'ollama-secret',
+      endpointFormat: 'chat_completions'
+    })
+
+    expect(result).toEqual({
+      ok: true,
+      latencyMs: expect.any(Number),
+      modelIds: ['gpt-oss:120b', 'qwen3.5:397b']
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://ollama.com/v1/models',
+      expect.objectContaining({
+        method: 'GET',
+        headers: {
+          Accept: 'application/json',
+          Authorization: 'Bearer ollama-secret'
+        }
+      })
+    )
+  })
+
   it('parses top-level arrays and provider-specific models envelopes without changing wire IDs', () => {
     expect(parseModelIds(JSON.stringify([
       { id: 'MiniMaxAI/MiniMax-M3' },

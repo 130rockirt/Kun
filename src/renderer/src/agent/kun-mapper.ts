@@ -1,5 +1,6 @@
 import type {
   ApprovalStatusPayload,
+  ApprovalReviewEventPayload,
   ChatBlock,
   CompactionEventPayload,
   ComponentPrototypeMetadata,
@@ -11,6 +12,7 @@ import type {
   ReviewOutput,
   ReviewTarget,
   RequestContextSnapshot,
+  RuntimeChildMetadata,
   RuntimeErrorEventPayload,
   RuntimeStatusEventPayload,
   ThreadGoal,
@@ -76,6 +78,8 @@ export function threadFromCore(thread: CoreThreadSummaryJson): NormalizedThread 
     status: thread.status,
     approvalPolicy: normalizeApprovalPolicy(thread.approvalPolicy),
     sandboxMode: normalizeSandboxMode(thread.sandboxMode),
+    approvalReviewer: normalizeApprovalReviewer(thread.approvalReviewer),
+    modelRequestCaptureEnabled: thread.modelRequestCaptureEnabled === true,
     archived: thread.status === 'archived',
     pinned: thread.pinned === true,
     ...(thread.providerId ? { providerId: thread.providerId } : {}),
@@ -117,6 +121,12 @@ function normalizeSandboxMode(value: string | undefined): NormalizedThread['sand
     default:
       return undefined
   }
+}
+
+function normalizeApprovalReviewer(
+  value: string | undefined
+): NormalizedThread['approvalReviewer'] {
+  return value === 'agent' ? 'agent' : 'user'
 }
 
 export function goalFromCore(goal: CoreThreadGoalJson): ThreadGoal {
@@ -300,8 +310,25 @@ function readItemStructuredString(
 
 function normalizeChildMetadata(
   child: CoreChildRuntimeMetadataJson | undefined
-): CoreChildRuntimeMetadataJson | undefined {
+): RuntimeChildMetadata | undefined {
   if (!child?.childId || !child.parentThreadId || !child.parentTurnId) return undefined
+  const activity = child.activity
+  const normalizedActivity = activity &&
+    ['starting', 'thinking', 'responding', 'tool', 'retrying', 'compacting', 'waiting']
+      .includes(activity.phase) &&
+    activity.label?.trim() &&
+    activity.startedAt &&
+    activity.updatedAt
+    ? {
+        phase: activity.phase,
+        label: activity.label.trim().slice(0, 500),
+        ...(activity.toolName?.trim()
+          ? { toolName: activity.toolName.trim().slice(0, 256) }
+          : {}),
+        startedAt: activity.startedAt,
+        updatedAt: activity.updatedAt
+      }
+    : undefined
   return {
     parentThreadId: child.parentThreadId,
     parentTurnId: child.parentTurnId,
@@ -310,6 +337,7 @@ function normalizeChildMetadata(
     ...(child.childProfile ? { childProfile: child.childProfile } : {}),
     ...(child.childProfileName ? { childProfileName: child.childProfileName } : {}),
     ...(child.childModel ? { childModel: child.childModel } : {}),
+    ...(child.childProviderId ? { childProviderId: child.childProviderId } : {}),
     ...(child.childToolPolicy ? { childToolPolicy: child.childToolPolicy } : {}),
     childStatus: child.childStatus,
     childSeq: child.childSeq,
@@ -322,7 +350,8 @@ function normalizeChildMetadata(
     ...(child.totalTokens !== undefined ? { totalTokens: child.totalTokens } : {}),
     ...(child.cacheHitRate !== undefined ? { cacheHitRate: child.cacheHitRate } : {}),
     ...(child.costUsd !== undefined ? { costUsd: child.costUsd } : {}),
-    ...(child.costCny !== undefined ? { costCny: child.costCny } : {})
+    ...(child.costCny !== undefined ? { costCny: child.costCny } : {}),
+    ...(normalizedActivity ? { activity: normalizedActivity } : {})
   }
 }
 
@@ -417,10 +446,14 @@ function applyRuntimeDisclosureMeta(
   }
   if (item.role === 'user' && item.guiDesignCanvas === true) meta.guiDesignCanvas = true
   if (item.role === 'user' && item.guiDesignMode === true) meta.guiDesignMode = true
-  if (item.messageSource === 'background_shell' || item.messageSource === 'background_subagent') {
+  applyClientUserMessageSourceMeta(meta, item.text ?? '')
+  if (
+    item.messageSource === 'background_shell' ||
+    item.messageSource === 'background_subagent' ||
+    item.messageSource === 'graph_runtime'
+  ) {
     meta.messageSource = item.messageSource
   }
-  applyClientUserMessageSourceMeta(meta, item.text ?? '')
   if (attachmentIds) meta.attachmentIds = attachmentIds
   if (fileReferences) meta.fileReferences = fileReferences
   if (composerContexts) meta.composerContexts = composerContexts
@@ -851,6 +884,7 @@ function toolBlockFromItem(item: CoreTurnItemJson, child?: CoreChildRuntimeMetad
   return {
     kind: 'tool',
     id: toolBlockId(item),
+    turnId: item.turnId,
     createdAt: itemCreatedAt(item),
     summary,
     status: componentDesignStatusOverride(item, componentPrototype) ?? delegateTaskStatusOverride(item, payload) ?? toolStatus(item),
@@ -1198,7 +1232,13 @@ function assistantTextBlockFromItem(item: CoreTurnItemJson): ChatBlock | null {
 
 function reasoningBlockFromItem(item: CoreTurnItemJson): ChatBlock | null {
   if (!item.text?.trim()) return null
-  return { kind: 'reasoning', id: item.id, createdAt: itemCreatedAt(item), text: item.text }
+  return {
+    kind: 'reasoning',
+    id: item.id,
+    turnId: item.turnId,
+    createdAt: itemCreatedAt(item),
+    text: item.text
+  }
 }
 
 function approvalBlockFromItem(item: CoreTurnItemJson, child?: CoreChildRuntimeMetadataJson): ChatBlock {
@@ -1207,6 +1247,7 @@ function approvalBlockFromItem(item: CoreTurnItemJson, child?: CoreChildRuntimeM
   return {
     kind: 'approval',
     id: item.id,
+    turnId: item.turnId,
     createdAt: itemCreatedAt(item),
     approvalId: item.approvalId ?? item.id,
     summary: item.summary?.trim() || 'Approval required',
@@ -1236,6 +1277,48 @@ function approvalStatusFromEvent(event: CoreRuntimeEventJson): ApprovalStatusPay
   }
 }
 
+function approvalReviewFromEvent(
+  event: CoreRuntimeEventJson
+): ApprovalReviewEventPayload | null {
+  const reviewId = event.reviewId?.trim() ?? ''
+  const approvalId = event.approvalId?.trim() ?? ''
+  if (!reviewId || !approvalId || event.reviewer !== 'agent') return null
+  const status = event.status
+  if (
+    status !== 'in-progress' &&
+    status !== 'approved' &&
+    status !== 'denied' &&
+    status !== 'timed-out' &&
+    status !== 'failed-closed' &&
+    status !== 'aborted'
+  ) return null
+  const decision =
+    event.decision === 'allow' || event.decision === 'deny'
+      ? event.decision
+      : undefined
+  const riskLevel =
+    event.riskLevel === 'low' ||
+    event.riskLevel === 'medium' ||
+    event.riskLevel === 'high' ||
+    event.riskLevel === 'critical'
+      ? event.riskLevel
+      : undefined
+  return {
+    reviewId,
+    approvalId,
+    turnId: event.turnId,
+    createdAt: event.timestamp,
+    summary: redactSecretText(event.summary?.trim() || event.toolName?.trim() || 'Tool action'),
+    ...(event.toolName?.trim() ? { toolName: event.toolName.trim() } : {}),
+    status,
+    ...(decision ? { decision } : {}),
+    ...(riskLevel ? { riskLevel } : {}),
+    ...(event.rationale?.trim()
+      ? { rationale: redactSecretText(event.rationale.trim()) }
+      : {})
+  }
+}
+
 function userInputBlockFromItem(
   item: CoreTurnItemJson
 ): Extract<ChatBlock, { kind: 'user_input' }> {
@@ -1243,6 +1326,7 @@ function userInputBlockFromItem(
   return {
     kind: 'user_input',
     id: item.id,
+    turnId: item.turnId,
     createdAt: itemCreatedAt(item),
     requestId: item.inputId ?? item.id,
     questions: userInputQuestionsFromItem(item),
@@ -1261,6 +1345,8 @@ function userInputBlockFromItem(
 function userInputRequestFromCore(input: {
   itemId?: string
   inputId?: string
+  turnId?: string
+  createdAt?: string
   prompt?: string
   questions?: CoreTurnItemJson['questions'] | CoreRuntimeEventJson['questions']
   seq?: number
@@ -1268,6 +1354,8 @@ function userInputRequestFromCore(input: {
   const fallbackId = input.inputId ?? input.itemId ?? `input_${input.seq ?? Date.now()}`
   return {
     itemId: input.itemId ?? fallbackId,
+    ...(input.turnId ? { turnId: input.turnId } : {}),
+    ...(input.createdAt ? { createdAt: input.createdAt } : {}),
     requestId: input.inputId ?? fallbackId,
     questions: questionsFromCore(input.questions, input.prompt, input.inputId ?? fallbackId)
   }
@@ -1348,6 +1436,7 @@ function reviewBlockFromItem(item: CoreTurnItemJson): ReviewBlock {
   return {
     kind: 'review',
     id: item.id,
+    turnId: item.turnId,
     createdAt: itemCreatedAt(item),
     title: item.title?.trim() || 'Code review',
     status: reviewStatus(item),
@@ -1453,7 +1542,9 @@ export function chatBlockFromItem(item: CoreTurnItemJson, child?: CoreChildRunti
     case 'tool_result':
       return toolBlockFromItem(item, child)
     case 'approval':
-      return approvalBlockFromItem(item, child)
+      return item.decisionSource === 'agent' || item.approvalReviewer === 'agent'
+        ? null
+        : approvalBlockFromItem(item, child)
     case 'user_input': {
       const block = userInputBlockFromItem(item)
       return block.questions.length > 0 ? block : null
@@ -1463,7 +1554,7 @@ export function chatBlockFromItem(item: CoreTurnItemJson, child?: CoreChildRunti
     case 'review':
       return reviewBlockFromItem(item)
     case 'error':
-      return systemErrorBlockFromItem(item)
+      return item.code === 'tool_catalog_changed' ? null : systemErrorBlockFromItem(item)
     default:
       return null
   }
@@ -1473,6 +1564,8 @@ function toolEventFromItem(item: CoreTurnItemJson, child?: CoreChildRuntimeMetad
   const block = toolBlockFromItem(item, child)
   return {
     itemId: block.id,
+    turnId: item.turnId,
+    createdAt: block.createdAt,
     summary: block.summary,
     status: block.status,
     toolKind: block.toolKind,
@@ -1493,6 +1586,7 @@ function childLifecycleToolEventFromRuntimeEvent(event: CoreRuntimeEventJson): T
   if (!child) return null
   return {
     itemId: `child_lifecycle_${child.childId}`,
+    turnId: event.turnId ?? child.parentTurnId,
     summary: child.childLabel || 'delegate_task',
     status: toolStatusFromChildStatus(child.childStatus),
     updateOnly: true,
@@ -1524,6 +1618,7 @@ function reviewFromItem(item: CoreTurnItemJson): ReviewEventPayload {
   const block = reviewBlockFromItem(item)
   return {
     itemId: block.id,
+    turnId: item.turnId,
     createdAt: block.createdAt,
     title: block.title,
     status: block.status,
@@ -1562,6 +1657,8 @@ function toolReadyFromEvent(event: CoreRuntimeEventJson): ToolEventPayload | nul
   if (!callId || !toolName) return null
   return {
     itemId: `tool_${callId}`,
+    turnId: event.turnId,
+    createdAt: event.timestamp,
     summary: toolName,
     status: 'running',
     toolKind: 'tool_call',
@@ -1603,10 +1700,13 @@ function runtimeStatusFromEvent(event: CoreRuntimeEventJson): RuntimeStatusEvent
       itemId: `runtime_status_${turnKey}_model_retry`,
       turnId: event.turnId,
       createdAt: event.timestamp,
-      status: typeof event.status === 'number' ? event.status : undefined,
+      ...(typeof event.status === 'number' ? { status: event.status } : {}),
       attempt: typeof event.attempt === 'number' ? event.attempt : undefined,
       maxAttempts: typeof event.maxAttempts === 'number' ? event.maxAttempts : undefined,
-      delayMs: typeof event.delayMs === 'number' ? event.delayMs : undefined
+      delayMs: typeof event.delayMs === 'number' ? event.delayMs : undefined,
+      retryReason: event.reason === 'network' || event.reason === 'stream_transport'
+        ? event.reason
+        : undefined
     }
   }
   if (event.kind === 'tool_catalog_changed') {
@@ -1634,6 +1734,35 @@ function runtimeStatusFromEvent(event: CoreRuntimeEventJson): RuntimeStatusEvent
       callId
     }
   }
+  if (event.kind === 'required_tool_gate') {
+    const toolName = typeof event.toolName === 'string' && event.toolName.trim() ? event.toolName.trim() : ''
+    const phase = event.phase
+    const attempt = typeof event.attempt === 'number' && event.attempt > 0 ? event.attempt : undefined
+    const maxAttempts = typeof event.maxAttempts === 'number' && event.maxAttempts > 0
+      ? event.maxAttempts
+      : undefined
+    if (
+      !toolName ||
+      (phase !== 'preparing' && phase !== 'retrying' && phase !== 'succeeded' && phase !== 'failed') ||
+      attempt === undefined ||
+      maxAttempts === undefined
+    ) return null
+    const turnKey = event.turnId ?? event.threadId ?? event.seq ?? Date.now()
+    return {
+      kind: 'required_tool_gate',
+      itemId: `runtime_status_${turnKey}_required_tool_${toolName}`,
+      turnId: event.turnId,
+      createdAt: event.timestamp,
+      toolName,
+      phase,
+      attempt,
+      maxAttempts,
+      ...(typeof event.failureSummary === 'string' && event.failureSummary.trim()
+        ? { failureSummary: redactSecretText(event.failureSummary.trim()) }
+        : {}),
+      ...(typeof event.code === 'string' && event.code.trim() ? { code: event.code.trim() } : {})
+    }
+  }
   return null
 }
 
@@ -1648,9 +1777,12 @@ const kunEventNormalizerDeps: KunEventNormalizerDeps = {
   runtimeStatus: runtimeStatusFromEvent,
   approvalAction: (event) => ({ type: 'approval_requested', event }),
   approvalStatus: approvalStatusFromEvent,
+  approvalReview: approvalReviewFromEvent,
   userInputRequest: (event) => userInputRequestFromCore({
     itemId: event.itemId,
     inputId: event.inputId,
+    turnId: event.turnId,
+    createdAt: event.timestamp,
     prompt: event.prompt,
     questions: event.questions,
     seq: event.seq
@@ -1701,6 +1833,7 @@ async function applyRuntimeProjectionAction(
   switch (action.type) {
     case 'seq_observed': sink.onSeq(action.seq); return
     case 'deltas_received': sink.onDeltas(action.deltas); return
+    case 'assistant_item_upserted': sink.onAssistantItem?.(action.payload); return
     case 'user_message_received': sink.onUserMessage(action.payload); return
     case 'tool_updated': sink.onTool(action.payload); return
     case 'compaction_updated': sink.onCompaction(action.payload); return
@@ -1708,6 +1841,7 @@ async function applyRuntimeProjectionAction(
     case 'approval_requested': await handleApprovalRequest(action.event, sink); return
     case 'approval_received': sink.onApproval(action.payload); return
     case 'approval_status_changed': sink.onApprovalStatus?.(action.payload); return
+    case 'approval_review_updated': sink.onApprovalReview?.(action.payload); return
     case 'user_input_requested': sink.onUserInput(action.payload); return
     case 'user_input_status_changed': sink.onUserInputStatus(action.payload); return
     case 'runtime_status_received': sink.onRuntimeStatus?.(action.payload); return
@@ -1751,7 +1885,11 @@ export async function dispatchKunRuntimeEvents(
         pendingDeltas.push({
           text,
           kind: event.kind === 'assistant_text_delta' ? 'agent_message' : 'agent_reasoning',
-          seq: event.seq
+          seq: event.seq,
+          threadId: event.threadId ?? event.item?.threadId,
+          turnId: event.turnId ?? event.item?.turnId,
+          itemId: event.itemId ?? event.item?.id,
+          createdAt: event.timestamp ?? event.item?.createdAt
         })
       }
       continue
@@ -1767,6 +1905,20 @@ export async function dispatchKunRuntimeEvent(
   sink: ThreadEventSink,
   handleApprovalRequest: (event: CoreRuntimeEventJson, sink: ThreadEventSink) => Promise<void>
 ): Promise<void> {
+  const child = normalizeChildMetadata(event.child)
+  if (child) {
+    sink.onChildRuntimeEvent?.({
+      child,
+      ...(typeof event.seq === 'number' ? { seq: event.seq } : {}),
+      ...(event.timestamp ? { timestamp: event.timestamp } : {})
+    })
+  }
+  if (event.kind === 'graph_event' && event.graph !== undefined) {
+    sink.onGraphEvent?.(event.graph)
+  }
+  if (event.kind === 'graph_planning' && event.planning !== undefined) {
+    sink.onGraphPlanningEvent?.(event.planning)
+  }
   const actions = runtimeProjectionActionsFromEvent(event)
   for (const action of actions) {
     await applyRuntimeProjectionAction(action, sink, handleApprovalRequest)

@@ -35,9 +35,27 @@ Each record includes:
 - start, time-to-headers, finish, duration, transport/capture errors, and truncation metadata;
 - the semantic text, reasoning, tool calls, usage, stop reason, or error decoded by Kun.
 
-Coverage is intentionally limited to HTTP-backed providers routed through `CompatModelClient`. Agent SDK transports, renderer requests, tool traffic, MCP traffic, Write inline completion, scheduled-task detection, and other Electron services are not captured by this first version. An empty Agent Perspective panel for such a turn does not mean that no non-model network traffic occurred.
+Coverage includes model requests routed through `CompatModelClient`, Gemini CLI Code Assist, Claude Agent SDK, Cursor SDK, and Antigravity CLI. Renderer requests, tool traffic, MCP traffic, Write inline completion, scheduled-task detection, and other Electron services are not captured. An empty Agent Perspective panel does not mean that no non-model network traffic occurred.
 
 The recorder never retries, rewrites, replays, or blocks a provider request because capture failed. It serializes each request body once, observes a cloned response, and isolates recorder failures from the agent-visible result.
+
+## Capture policy
+
+The Agent Perspective header owns a persistent capture switch for the selected conversation. The switch is off by default; enabling it starts capture at the next model request boundary. Disabling it lets a trace that already started finish, stops later requests from being captured, and keeps existing history readable.
+
+Settings → LLM request troubleshooting includes **Capture new conversations by default**. That setting controls only the initial state of conversations created afterward. Existing conversations, forks, side conversations, and resumed conversations retain independent state and are not rewritten when the setting changes.
+
+The recorder facility remains available by default so a conversation switch can take effect immediately. Advanced installations can disable the facility entirely in Kun runtime configuration:
+
+```yaml
+runtime:
+  llmDebug:
+    enabled: false
+```
+
+Changing the effective `runtime.llmDebug.enabled` value through runtime config apply returns `restart_required`; restart Kun to apply that advanced facility policy. Changing only `runtime.llmDebug.defaultThreadCaptureEnabled` hot-applies to later runtime-created conversations.
+
+Capture is not retroactive. Requests that start while the conversation switch or recorder facility is disabled cannot be reconstructed, while trace files written earlier remain readable after restart.
 
 ## Security and local storage
 
@@ -62,23 +80,33 @@ The default capture limit is 4 MiB for each request body and each response body.
 
 ## API
 
-The renderer uses the authenticated runtime route:
+The renderer reads traces through the authenticated runtime route:
 
 ```http
 GET /v1/threads/{threadId}/model-requests?limit=30&cursor=<opaque>
 Authorization: Bearer <runtime-token>
 ```
 
-The route first verifies that the thread exists, then returns newest-first records, an optional opaque cursor, active count, capture limits, schema version, and storage warnings. It is exposed through the constrained `window.kunGui.runtimeRequest` allowlist. There is no write or replay endpoint.
+The route first verifies that the thread exists, then returns newest-first records, an optional opaque cursor, active count, capture limits, schema version, and storage warnings. The capture switch uses the existing thread metadata contract:
+
+```http
+PATCH /v1/threads/{threadId}
+Content-Type: application/json
+
+{"modelRequestCaptureEnabled":true}
+```
+
+Both paths are exposed through the constrained `window.kunGui.runtimeRequest` allowlist. There is no trace write or replay endpoint.
 
 ## Using Agent Perspective
 
 1. Open or select a Code conversation.
 2. Select **Agent Perspective** (the scan/perspective icon) in the right rail.
-3. Pick an attempt in the left request timeline.
-4. Use **Overview**, **Request**, **Response**, and **Decoded** to compare the provider wire data with Kun's parsed result.
-5. Switch between formatted JSON and raw text where available. Copy actions copy only the already-sanitized DTO shown by the panel.
-6. Use **Load older requests** to page backward. While the panel is visible and the thread runs, it refreshes once per second and performs one final refresh when the turn settles.
+3. Turn on **Capture** in the panel header before sending the request you want to inspect.
+4. Pick an attempt in the left request timeline.
+5. Use **Overview**, **Request**, **Response**, and **Decoded** to compare the provider wire data with Kun's parsed result.
+6. Switch between formatted JSON and raw text where available. Copy actions copy only the already-sanitized DTO shown by the panel.
+7. Use **Load older requests** to page backward. While the panel is visible and the thread runs, it refreshes once per second and performs one final refresh when the turn settles.
 
 Useful diagnosis patterns:
 
@@ -86,7 +114,8 @@ Useful diagnosis patterns:
 - Provider rejects a field: compare the initial and `stream_options` fallback request bodies.
 - A retry changes the outcome: compare status, response body, timing, and attempt reason across records.
 - UI output differs from provider output: compare **Raw response** with **Decoded**.
-- Missing early data: capture begins only after the runtime containing this feature starts; requests made by older builds are not reconstructed.
+- Missing early data: confirm the conversation switch was enabled before the request began; earlier requests are not reconstructed.
+- Capture unavailable: confirm `runtime.llmDebug.enabled` is not explicitly `false`, then restart Kun after changing the setting.
 
 ## Validation targets
 

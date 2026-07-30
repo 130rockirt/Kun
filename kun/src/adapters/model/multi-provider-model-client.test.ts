@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { CompatModelClient } from './compat-model-client.js'
 import { MultiProviderModelClient } from './multi-provider-model-client.js'
-import type { ModelRequest, ModelStreamChunk } from '../../ports/model-client.js'
+import type { ModelClient, ModelRequest, ModelStreamChunk } from '../../ports/model-client.js'
 
 // Workflow / scheduled-task / IM-bridge can pick a non-runtime provider per
 // request. The same Kun process must route those requests to a per-provider
@@ -68,9 +68,12 @@ describe('MultiProviderModelClient', () => {
     })
 
     await drain(router.stream(request('deepseek-v4-pro')))
-    await drain(router.stream(request('deepseek-v4-pro', 'deepseek')))
-    await drain(router.stream(request('MiniMax-M3', 'MiniMax-Token-Plan')))
-    expect(() => router.stream(request('deepseek-v4-pro', 'unknown-provider'))).toThrow(/unknown model provider/)
+    await drain(router.stream({ ...request('deepseek-v4-pro', 'deepseek'), turnId: 'u2' }))
+    await drain(router.stream({ ...request('MiniMax-M3', 'MiniMax-Token-Plan'), turnId: 'u3' }))
+    expect(() => router.stream({
+      ...request('deepseek-v4-pro', 'unknown-provider'),
+      turnId: 'u4'
+    })).toThrow(/unknown model provider/)
 
     expect(defaultCalls).toHaveLength(2)
     expect(defaultCalls[0].url).toContain('default.example')
@@ -154,8 +157,8 @@ describe('MultiProviderModelClient', () => {
       ])
     })
 
-    await drain(router.stream(request('new-default')))
-    await drain(router.stream(request('new-provider', 'hot-provider')))
+    await drain(router.stream({ ...request('new-default'), turnId: 'u2' }))
+    await drain(router.stream({ ...request('new-provider', 'hot-provider'), turnId: 'u3' }))
 
     expect(router.model).toBe('new-default')
     expect(oldProviderCalls).toHaveLength(1)
@@ -163,5 +166,26 @@ describe('MultiProviderModelClient', () => {
     expect(newDefaultCalls).toHaveLength(1)
     expect(newProviderCalls).toHaveLength(1)
     expect(newProviderCalls[0].authorization).toBe('Bearer sk-new-provider')
+  })
+
+  it('pins one client generation for every model round in a running turn', async () => {
+    const calls: string[] = []
+    const client = (label: string): ModelClient => ({
+      provider: label,
+      model: label,
+      async *stream(input) {
+        calls.push(`${label}:${input.turnId}`)
+        yield { kind: 'assistant_text_delta' as const, text: label }
+        yield { kind: 'completed' as const, stopReason: 'stop' as const }
+      }
+    })
+    const router = new MultiProviderModelClient({ default: client('old') })
+
+    await drain(router.stream(request('model-a')))
+    router.replace({ default: client('new') })
+    await drain(router.stream(request('model-a')))
+    await drain(router.stream({ ...request('model-a'), turnId: 'u2' }))
+
+    expect(calls).toEqual(['old:u1', 'old:u1', 'new:u2'])
   })
 })

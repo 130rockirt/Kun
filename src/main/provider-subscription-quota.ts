@@ -1,0 +1,1336 @@
+import { execFile } from 'node:child_process'
+import { readFile } from 'node:fs/promises'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
+import { promisify } from 'node:util'
+import { validateClaudeSubscriptionToken } from '../shared/claude-subscription-auth'
+import type { ModelProviderProfileV1 } from '../shared/app-settings'
+import type { ProviderQuotaMetric } from '../shared/provider-quota'
+import {
+  GeminiCliOAuthSource
+} from '../../kun/src/adapters/model/gemini-cli-oauth.js'
+import {
+  readOpenCodeGoLocalQuota,
+  type OpenCodeGoLocalQuotaResult
+} from '../../kun/src/services/opencode-go-local-quota.js'
+import { parseCodexCredentials } from './codex-auth'
+import { parseGrokCredentials } from './grok-auth'
+
+const execFileAsync = promisify(execFile)
+const SUBSCRIPTION_QUOTA_TIMEOUT_MS = 12_000
+const SUBSCRIPTION_QUOTA_MAX_RESPONSE_BYTES = 256 * 1024
+
+export type SubscriptionQuotaProbeKind =
+  | 'claude-subscription'
+  | 'codex-subscription'
+  | 'grok-subscription'
+  | 'cursor-subscription'
+  | 'antigravity-subscription'
+  | 'gemini-cli-subscription'
+  | 'opencode-go-local'
+
+type SubscriptionQuotaFetch = (
+  input: string | URL,
+  init: RequestInit | undefined,
+  proxyUrl: string
+) => Promise<Response>
+
+type SubscriptionProbeContext = {
+  fetcher: SubscriptionQuotaFetch
+  proxyUrl: string
+}
+
+type CodexQuotaCredential = {
+  accessToken: string
+  accountId?: string
+}
+
+type GrokQuotaCredential = {
+  accessToken: string
+  email?: string
+}
+
+type CursorQuotaSession = {
+  cookieHeader: string
+}
+
+type GoogleQuotaCredential = {
+  accessToken: string
+  accountEmail?: string
+}
+
+export type SubscriptionQuotaRuntime = {
+  resolveClaudeToken(provider: ModelProviderProfileV1): Promise<string | undefined>
+  resolveCodexCredential(provider: ModelProviderProfileV1): Promise<CodexQuotaCredential | undefined>
+  resolveGrokCredential(provider: ModelProviderProfileV1): Promise<GrokQuotaCredential | undefined>
+  resolveCursorSession(): Promise<CursorQuotaSession | undefined>
+  resolveAntigravityCredential(
+    context: SubscriptionProbeContext
+  ): Promise<GoogleQuotaCredential | undefined>
+  resolveGeminiCliToken(context: SubscriptionProbeContext): Promise<string | undefined>
+  resolveOpenCodeGoQuota(): Promise<OpenCodeGoLocalQuotaResult | undefined>
+}
+
+export class ProviderQuotaMissingCredentialError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'ProviderQuotaMissingCredentialError'
+  }
+}
+
+export async function runSubscriptionQuotaProbe(
+  kind: SubscriptionQuotaProbeKind,
+  provider: ModelProviderProfileV1,
+  context: SubscriptionProbeContext,
+  runtimeOverrides: Partial<SubscriptionQuotaRuntime> = {}
+): Promise<{ metrics: ProviderQuotaMetric[]; summary?: string }> {
+  const runtime = { ...defaultSubscriptionQuotaRuntime, ...runtimeOverrides }
+  if (kind === 'claude-subscription') {
+    const accessToken = await runtime.resolveClaudeToken(provider)
+    if (!accessToken) {
+      throw new ProviderQuotaMissingCredentialError(
+        'Sign in with Claude Code or add a Claude setup token in Settings.'
+      )
+    }
+    return {
+      metrics: parseClaudeSubscriptionQuota(await requestSubscriptionJson(
+        'https://api.anthropic.com/api/oauth/usage',
+        {
+          headers: {
+            Accept: 'application/json',
+            Authorization: `Bearer ${accessToken}`,
+            'anthropic-beta': 'oauth-2025-04-20',
+            'User-Agent': 'claude-code/2.1.0'
+          }
+        },
+        context
+      ))
+    }
+  }
+  if (kind === 'codex-subscription') {
+    const credential = await runtime.resolveCodexCredential(provider)
+    if (!credential) {
+      throw new ProviderQuotaMissingCredentialError(
+        'Connect the ChatGPT subscription in Settings or sign in with Codex CLI.'
+      )
+    }
+    return parseCodexSubscriptionQuota(await requestSubscriptionJson(
+      'https://chatgpt.com/backend-api/wham/usage',
+      {
+        headers: {
+          Accept: 'application/json',
+          Authorization: `Bearer ${credential.accessToken}`,
+          'User-Agent': 'Kun'
+        },
+        ...(credential.accountId
+          ? { extraHeaders: { 'ChatGPT-Account-Id': credential.accountId } }
+          : {})
+      },
+      context
+    ))
+  }
+  if (kind === 'grok-subscription') {
+    const credential = await runtime.resolveGrokCredential(provider)
+    if (!credential) {
+      throw new ProviderQuotaMissingCredentialError(
+        'Connect Grok in Settings or run `grok login` before refreshing quota.'
+      )
+    }
+    const metrics = await probeGrokSubscriptionQuota(credential, context)
+    return {
+      metrics,
+      ...(credential.email ? { summary: credential.email } : {})
+    }
+  }
+  if (kind === 'cursor-subscription') {
+    const session = await runtime.resolveCursorSession()
+    if (!session) {
+      throw new ProviderQuotaMissingCredentialError(
+        'Sign in to Cursor.app on this computer before refreshing quota.'
+      )
+    }
+    return parseCursorSubscriptionQuota(await requestSubscriptionJson(
+      'https://cursor.com/api/usage-summary',
+      {
+        headers: {
+          Accept: 'application/json',
+          Cookie: session.cookieHeader
+        }
+      },
+      context
+    ))
+  }
+  if (kind === 'antigravity-subscription') {
+    const credential = await runtime.resolveAntigravityCredential(context)
+    if (!credential) {
+      throw new ProviderQuotaMissingCredentialError(
+        'Sign in to the official Antigravity app on this computer before refreshing quota.'
+      )
+    }
+    return probeGoogleCodeAssistQuota(credential, context)
+  }
+  if (kind === 'opencode-go-local') {
+    const quota = await runtime.resolveOpenCodeGoQuota()
+    if (!quota) {
+      throw new ProviderQuotaMissingCredentialError(
+        'Use OpenCode Go locally first so its local usage database contains history.'
+      )
+    }
+    return quota
+  }
+  const accessToken = await runtime.resolveGeminiCliToken(context)
+  if (!accessToken) {
+    throw new ProviderQuotaMissingCredentialError(
+      'Run Gemini CLI and sign in with Google before refreshing quota.'
+    )
+  }
+  return probeGoogleCodeAssistQuota({ accessToken }, context)
+}
+
+export function parseClaudeSubscriptionQuota(payload: unknown): ProviderQuotaMetric[] {
+  const root = requireRecord(payload, 'Claude returned an invalid usage response.')
+  const metrics: ProviderQuotaMetric[] = []
+  const windows: Array<[string, string, unknown]> = [
+    ['five-hour', '5-hour usage', root.five_hour],
+    ['seven-day', '7-day usage', root.seven_day],
+    ['seven-day-sonnet', '7-day Sonnet usage', root.seven_day_sonnet],
+    ['seven-day-opus', '7-day Opus usage', root.seven_day_opus],
+    ['seven-day-oauth-apps', '7-day OAuth apps usage', root.seven_day_oauth_apps]
+  ]
+  for (const [id, label, value] of windows) {
+    const metric = percentageWindowMetric(id, label, value, 'utilization')
+    if (metric) metrics.push(metric)
+  }
+  const limits = Array.isArray(root.limits) ? root.limits : []
+  for (const [index, value] of limits.entries()) {
+    const limit = optionalRecord(value)
+    if (!limit || limit.is_active === false) continue
+    const scope = optionalRecord(limit.scope)
+    const model = optionalRecord(scope?.model)
+    const label = stringValue(model?.display_name) ||
+      stringValue(limit.kind) ||
+      stringValue(limit.group) ||
+      `Usage limit ${index + 1}`
+    const usedPercent = numberValue(limit.percent)
+    if (usedPercent === undefined) continue
+    metrics.push({
+      id: `limit-${index}`,
+      label,
+      unit: 'percent',
+      usedPercent: clampPercentage(usedPercent),
+      ...(isoDateValue(limit.resets_at) ? { resetsAt: isoDateValue(limit.resets_at)! } : {})
+    })
+  }
+  if (metrics.length === 0) throw new Error('Claude did not return a recognized usage window.')
+  return metrics
+}
+
+export function parseCodexSubscriptionQuota(payload: unknown): {
+  metrics: ProviderQuotaMetric[]
+  summary?: string
+} {
+  const root = requireRecord(payload, 'Codex returned an invalid usage response.')
+  const rateLimit = optionalRecord(root.rate_limit)
+  const metrics: ProviderQuotaMetric[] = []
+  const primary = codexWindowMetric('primary', 'Primary usage window', rateLimit?.primary_window)
+  const secondary = codexWindowMetric('secondary', 'Weekly usage window', rateLimit?.secondary_window)
+  if (primary) metrics.push(primary)
+  if (secondary) metrics.push(secondary)
+  const additional = Array.isArray(root.additional_rate_limits) ? root.additional_rate_limits : []
+  additional.forEach((value, index) => {
+    const item = optionalRecord(value)
+    const windows = optionalRecord(item?.rate_limit)
+    const label = stringValue(item?.limit_name) || stringValue(item?.metered_feature) || `Additional limit ${index + 1}`
+    const first = codexWindowMetric(`additional-${index}-primary`, `${label} primary`, windows?.primary_window)
+    const second = codexWindowMetric(`additional-${index}-secondary`, `${label} weekly`, windows?.secondary_window)
+    if (first) metrics.push(first)
+    if (second) metrics.push(second)
+  })
+  if (metrics.length === 0) throw new Error('Codex did not return a recognized rate-limit window.')
+  const summary = stringValue(root.plan_type)
+  return { metrics, ...(summary ? { summary } : {}) }
+}
+
+export function parseCursorSubscriptionQuota(payload: unknown): {
+  metrics: ProviderQuotaMetric[]
+  summary?: string
+} {
+  const root = requireRecord(payload, 'Cursor returned an invalid usage response.')
+  const individual = optionalRecord(root.individualUsage)
+  const team = optionalRecord(root.teamUsage)
+  const plan = optionalRecord(individual?.plan)
+  const overall = optionalRecord(individual?.overall)
+  const pooled = optionalRecord(team?.pooled)
+  const metrics: ProviderQuotaMetric[] = []
+  const reset = isoDateValue(root.billingCycleEnd)
+
+  const primary = firstUsageRecord(plan, overall, pooled)
+  const primaryMetric = cursorMoneyMetric('included-plan', 'Included plan usage', primary, reset)
+  if (primaryMetric) {
+    const explicitPercent = numberValue(plan?.totalPercentUsed)
+    metrics.push({
+      ...primaryMetric,
+      ...(explicitPercent === undefined ? {} : { usedPercent: clampPercentage(explicitPercent) })
+    })
+  }
+  const autoPercent = numberValue(plan?.autoPercentUsed)
+  if (autoPercent !== undefined) {
+    metrics.push({
+      id: 'auto-composer',
+      label: 'Auto + Composer usage',
+      unit: 'percent',
+      usedPercent: clampPercentage(autoPercent),
+      ...(reset ? { resetsAt: reset } : {})
+    })
+  }
+  const apiPercent = numberValue(plan?.apiPercentUsed)
+  if (apiPercent !== undefined) {
+    metrics.push({
+      id: 'api-models',
+      label: 'Named model usage',
+      unit: 'percent',
+      usedPercent: clampPercentage(apiPercent),
+      ...(reset ? { resetsAt: reset } : {})
+    })
+  }
+  const onDemand = cursorMoneyMetric(
+    'on-demand',
+    'On-demand usage',
+    optionalRecord(individual?.onDemand),
+    reset
+  )
+  if (onDemand) metrics.push(onDemand)
+  const teamOnDemand = cursorMoneyMetric(
+    'team-on-demand',
+    'Team on-demand usage',
+    optionalRecord(team?.onDemand),
+    reset
+  )
+  if (teamOnDemand) metrics.push(teamOnDemand)
+  if (metrics.length === 0) throw new Error('Cursor did not return a recognized plan allowance.')
+  const summary = stringValue(root.membershipType)
+  return { metrics, ...(summary ? { summary } : {}) }
+}
+
+export function parseGrokSubscriptionQuota(
+  input: Uint8Array,
+  now: Date = new Date()
+): ProviderQuotaMetric[] {
+  let payloads = grpcWebDataFrames(input)
+  if (payloads.length === 0 && looksLikeProtobufPayload(input)) {
+    payloads = [input]
+  }
+  if (payloads.length === 0) {
+    throw new Error('Grok billing returned no protobuf quota payload.')
+  }
+
+  const scan: ProtobufScan = { fixed32Fields: [], varintFields: [] }
+  for (const payload of payloads) {
+    mergeProtobufScan(scan, scanProtobuf(payload, 0, [], { value: 0 }))
+  }
+  const percent = scan.fixed32Fields
+    .filter((field) =>
+      field.path.at(-1) === 1 &&
+      Number.isFinite(field.value) &&
+      field.value >= 0 &&
+      field.value <= 100
+    )
+    .sort((left, right) =>
+      left.path.length === right.path.length
+        ? left.order - right.order
+        : left.path.length - right.path.length
+    )[0]?.value
+
+  const resets = scan.varintFields
+    .filter((field) => field.value >= 1_700_000_000 && field.value <= 2_100_000_000)
+    .map((field) => ({
+      ...field,
+      date: new Date(field.value * 1_000)
+    }))
+    .filter((field) => field.date > now)
+  const preferredReset = resets
+    .filter((field) => sameNumberPath(field.path, [1, 5, 1]))
+    .sort((left, right) => left.date.getTime() - right.date.getTime())[0]
+  const reset = preferredReset ?? resets
+    .sort((left, right) => left.date.getTime() - right.date.getTime())[0]
+  const hasUsagePeriod = scan.varintFields.some((field) =>
+    startsWithNumberPath(field.path, [1, 6]) ||
+    (sameNumberPath(field.path, [1, 8, 1]) && (field.value === 1 || field.value === 2))
+  )
+  const noUsageYet =
+    percent === undefined &&
+    scan.fixed32Fields.length === 0 &&
+    reset !== undefined &&
+    hasUsagePeriod
+  const usedPercent = percent ?? (noUsageYet ? 0 : undefined)
+  if (usedPercent === undefined) {
+    throw new Error('Grok billing returned an unrecognized quota payload.')
+  }
+  return [{
+    id: 'credits',
+    label: 'Credits usage',
+    unit: 'percent',
+    usedPercent: clampPercentage(usedPercent),
+    ...(reset ? { resetsAt: reset.date.toISOString() } : {})
+  }]
+}
+
+export function parseGoogleCodeAssistQuota(payload: unknown): ProviderQuotaMetric[] {
+  const root = requireRecord(payload, 'Google Code Assist returned an invalid quota response.')
+  const metrics: ProviderQuotaMetric[] = []
+  if (Array.isArray(root.buckets)) {
+    root.buckets.forEach((value, index) => {
+      const bucket = optionalRecord(value)
+      const remainingFraction = numberValue(bucket?.remainingFraction)
+      if (!bucket || remainingFraction === undefined) return
+      const model = stringValue(bucket.modelId) || `Model ${index + 1}`
+      metrics.push(googleQuotaMetric(`bucket-${index}`, model, remainingFraction, bucket.resetTime))
+    })
+  } else {
+    const models = optionalRecord(root.models)
+    Object.entries(models ?? {}).forEach(([modelId, value]) => {
+      const model = optionalRecord(value)
+      const quota = optionalRecord(model?.quotaInfo)
+      const remainingFraction = numberValue(quota?.remainingFraction)
+      if (remainingFraction === undefined) return
+      metrics.push(googleQuotaMetric(
+        `model-${modelId}`,
+        stringValue(model?.displayName) || stringValue(model?.label) || modelId,
+        remainingFraction,
+        quota?.resetTime
+      ))
+    })
+  }
+  if (metrics.length === 0) {
+    throw new Error('Google Code Assist did not return a recognized model quota.')
+  }
+  return metrics
+}
+
+const defaultSubscriptionQuotaRuntime: SubscriptionQuotaRuntime = {
+  resolveClaudeToken,
+  resolveCodexCredential,
+  resolveGrokCredential,
+  resolveCursorSession,
+  resolveAntigravityCredential,
+  resolveOpenCodeGoQuota: readOpenCodeGoLocalQuota,
+  async resolveGeminiCliToken(context) {
+    const fetchImpl = ((input: string | URL | Request, init?: RequestInit) =>
+      context.fetcher(
+        typeof input === 'string' || input instanceof URL ? input : input.url,
+        init,
+        context.proxyUrl
+      )) as typeof fetch
+    try {
+      return await new GeminiCliOAuthSource({ fetchImpl }).accessToken()
+    } catch {
+      return undefined
+    }
+  }
+}
+
+async function probeGrokSubscriptionQuota(
+  credential: GrokQuotaCredential,
+  context: SubscriptionProbeContext
+): Promise<ProviderQuotaMetric[]> {
+  const response = await requestSubscriptionResponse(
+    'https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig',
+    {
+      method: 'POST',
+      headers: {
+        Accept: '*/*',
+        Authorization: `Bearer ${credential.accessToken}`,
+        'Content-Type': 'application/grpc-web+proto',
+        Origin: 'https://grok.com',
+        Referer: 'https://grok.com/?_s=usage',
+        'User-Agent': 'Kun',
+        'x-grpc-web': '1',
+        'x-user-agent': 'connect-es/2.1.1'
+      },
+      body: new Uint8Array([0, 0, 0, 0, 0])
+    },
+    context
+  )
+  assertGrokGrpcStatus(
+    response.headers.get('grpc-status'),
+    response.headers.get('grpc-message')
+  )
+  const bytes = await boundedResponseBytes(response)
+  const trailers = grpcWebTrailerFields(bytes)
+  assertGrokGrpcStatus(trailers['grpc-status'], trailers['grpc-message'])
+  return parseGrokSubscriptionQuota(bytes)
+}
+
+async function probeGoogleCodeAssistQuota(
+  credential: GoogleQuotaCredential,
+  context: SubscriptionProbeContext
+): Promise<{ metrics: ProviderQuotaMetric[]; summary?: string }> {
+  const headers = {
+    Accept: 'application/json',
+    Authorization: `Bearer ${credential.accessToken}`,
+    'Content-Type': 'application/json',
+    'User-Agent': 'antigravity'
+  }
+  const setup = await requestSubscriptionJson(
+    'https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist',
+    {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        metadata: {
+          ideType: 'ANTIGRAVITY',
+          platform: 'PLATFORM_UNSPECIFIED',
+          pluginType: 'GEMINI'
+        }
+      })
+    },
+    context
+  )
+  const setupRecord = requireRecord(setup, 'Google Code Assist returned an invalid setup response.')
+  const projectValue = setupRecord.cloudaicompanionProject
+  const project = typeof projectValue === 'string'
+    ? projectValue.trim()
+    : stringValue(optionalRecord(projectValue)?.id) ||
+      stringValue(optionalRecord(projectValue)?.projectId)
+  const body = JSON.stringify(project ? { project } : {})
+  let quotaPayload: unknown
+  try {
+    quotaPayload = await requestSubscriptionJson(
+      'https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota',
+      { method: 'POST', headers, body },
+      context
+    )
+    const metrics = parseGoogleCodeAssistQuota(quotaPayload)
+    return {
+      metrics,
+      ...googleSetupSummary(setupRecord, credential.accountEmail)
+    }
+  } catch {
+    quotaPayload = await requestSubscriptionJson(
+      'https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels',
+      { method: 'POST', headers, body },
+      context
+    )
+  }
+  return {
+    metrics: parseGoogleCodeAssistQuota(quotaPayload),
+    ...googleSetupSummary(setupRecord, credential.accountEmail)
+  }
+}
+
+async function resolveClaudeToken(provider: ModelProviderProfileV1): Promise<string | undefined> {
+  const configured = validateClaudeSubscriptionToken(provider.apiKey)
+  if (configured.ok) return configured.token
+  const file = await readJsonFile(join(homedir(), '.claude', '.credentials.json'))
+  const fromFile = claudeAccessToken(file)
+  if (fromFile) return fromFile
+  if (process.platform !== 'darwin') return undefined
+  try {
+    const { stdout } = await execFileAsync('/usr/bin/security', [
+      'find-generic-password',
+      '-s',
+      'Claude Code-credentials',
+      '-w'
+    ], {
+      encoding: 'utf8',
+      timeout: 5_000,
+      maxBuffer: 512 * 1024
+    })
+    return claudeAccessToken(JSON.parse(stdout.trim()) as unknown)
+  } catch {
+    return undefined
+  }
+}
+
+async function resolveCodexCredential(
+  provider: ModelProviderProfileV1
+): Promise<CodexQuotaCredential | undefined> {
+  const configured = parseCodexCredentials(provider.apiKey.trim())
+  if (configured) {
+    return {
+      accessToken: configured.accessToken,
+      accountId: configured.accountId
+    }
+  }
+  const ambient = await readJsonFile(join(
+    configuredHomeDirectory('CODEX_HOME', '.codex'),
+    'auth.json'
+  ))
+  const root = optionalRecord(ambient)
+  const tokens = optionalRecord(root?.tokens)
+  const accessToken = stringValue(tokens?.access_token) || stringValue(tokens?.accessToken)
+  if (!accessToken) return undefined
+  return {
+    accessToken,
+    ...(stringValue(tokens?.account_id) || stringValue(tokens?.accountId)
+      ? { accountId: stringValue(tokens?.account_id) || stringValue(tokens?.accountId) }
+      : {})
+  }
+}
+
+async function resolveGrokCredential(
+  provider: ModelProviderProfileV1
+): Promise<GrokQuotaCredential | undefined> {
+  const configured = parseGrokCredentials(provider.apiKey.trim())
+  if (configured && configured.expiresAt > Date.now()) {
+    return {
+      accessToken: configured.accessToken,
+      ...(configured.email ? { email: configured.email } : {})
+    }
+  }
+
+  const ambient = optionalRecord(await readJsonFile(join(
+    configuredHomeDirectory('GROK_HOME', '.grok'),
+    'auth.json'
+  )))
+  if (!ambient) return undefined
+  const candidates = Object.entries(ambient)
+    .filter(([scope, value]) =>
+      (
+        scope.startsWith('https://auth.x.ai::') ||
+        scope === 'https://accounts.x.ai/sign-in' ||
+        scope.includes('/sign-in')
+      ) &&
+      optionalRecord(value)
+    )
+    .sort(([left], [right]) => {
+      const leftPreferred = left.startsWith('https://auth.x.ai::') ? 0 : 1
+      const rightPreferred = right.startsWith('https://auth.x.ai::') ? 0 : 1
+      return leftPreferred - rightPreferred
+    })
+  for (const [, rawEntry] of candidates) {
+    const entry = optionalRecord(rawEntry)
+    const accessToken = stringValue(entry?.key)
+    if (!accessToken) continue
+    const expiresAt = isoDateValue(entry?.expires_at)
+    if (expiresAt && new Date(expiresAt).getTime() <= Date.now()) continue
+    const email = stringValue(entry?.email)
+    return {
+      accessToken,
+      ...(email ? { email } : {})
+    }
+  }
+  return undefined
+}
+
+async function resolveCursorSession(): Promise<CursorQuotaSession | undefined> {
+  const dbPath = process.platform === 'darwin'
+    ? join(homedir(), 'Library', 'Application Support', 'Cursor', 'User', 'globalStorage', 'state.vscdb')
+    : process.platform === 'linux'
+      ? join(homedir(), '.config', 'Cursor', 'User', 'globalStorage', 'state.vscdb')
+      : ''
+  if (!dbPath) return undefined
+  const accessToken = await readSqliteValue(dbPath, 'cursorAuth/accessToken')
+  if (!accessToken) return undefined
+  const claims = jwtClaims(accessToken)
+  const subject = stringValue(claims?.sub)
+  const userId = subject.split('|').filter(Boolean).at(-1) ?? ''
+  const expiry = numberValue(claims?.exp)
+  if (!/^[\w.-]+$/.test(userId) || (expiry !== undefined && expiry * 1_000 <= Date.now() + 60_000)) {
+    return undefined
+  }
+  return {
+    cookieHeader: `WorkosCursorSessionToken=${userId}%3A%3A${accessToken}`
+  }
+}
+
+async function resolveAntigravityCredential(
+  context: SubscriptionProbeContext
+): Promise<GoogleQuotaCredential | undefined> {
+  const dbPath = process.platform === 'darwin'
+    ? join(homedir(), 'Library', 'Application Support', 'Antigravity', 'User', 'globalStorage', 'state.vscdb')
+    : process.platform === 'linux'
+      ? join(homedir(), '.config', 'Antigravity', 'User', 'globalStorage', 'state.vscdb')
+      : ''
+  if (!dbPath) return undefined
+  const [authStatusValue, unifiedTokenValue] = await Promise.all([
+    readSqliteValue(dbPath, 'antigravityAuthStatus'),
+    readSqliteValue(dbPath, 'antigravityUnifiedStateSync.oauthToken')
+  ])
+  if (!authStatusValue && !unifiedTokenValue) return undefined
+  let accountEmail = ''
+  let fallbackAccessToken = ''
+  try {
+    const record = requireRecord(
+      JSON.parse(authStatusValue ?? ''),
+      'Invalid Antigravity login state.'
+    )
+    fallbackAccessToken = stringValue(record.apiKey)
+    accountEmail = stringValue(record.email)
+  } catch {
+    // The unified OAuth record below may still be usable.
+  }
+  const tokenInfo = decodeAntigravityUnifiedOAuth(unifiedTokenValue)
+  let accessToken = tokenInfo?.accessToken || fallbackAccessToken
+  if (tokenInfo?.refreshToken) {
+    const client = await discoverAntigravityOAuthClient()
+    if (client) {
+      accessToken = await refreshAntigravityAccessToken(
+        tokenInfo.refreshToken,
+        client,
+        context
+      ).catch(() => accessToken)
+    }
+  }
+  return accessToken
+    ? { accessToken, ...(accountEmail ? { accountEmail } : {}) }
+    : undefined
+}
+
+export function decodeAntigravityUnifiedOAuth(value: string | undefined): {
+  accessToken?: string
+  refreshToken?: string
+} | undefined {
+  if (!value || !isBase64(value)) return undefined
+  const outerFields = protobufLengthFields(Buffer.from(value, 'base64'))
+  for (const entry of outerFields.filter((field) => field.number === 1)) {
+    const entryFields = protobufLengthFields(entry.value)
+    const key = entryFields.find((field) => field.number === 1)?.value.toString('utf8')
+    if (key !== 'oauthTokenInfoSentinelKey') continue
+    const wrapper = entryFields.find((field) => field.number === 2)?.value
+    const encodedTokenInfo = wrapper
+      ? protobufLengthFields(wrapper).find((field) => field.number === 1)?.value.toString('utf8')
+      : undefined
+    if (!encodedTokenInfo || !isBase64(encodedTokenInfo)) return undefined
+    const tokenFields = protobufLengthFields(Buffer.from(encodedTokenInfo, 'base64'))
+    const accessToken = tokenFields
+      .find((field) => field.number === 1)?.value.toString('utf8').trim()
+    const refreshToken = tokenFields
+      .find((field) => field.number === 3)?.value.toString('utf8').trim()
+    if (!accessToken && !refreshToken) return undefined
+    return {
+      ...(accessToken ? { accessToken } : {}),
+      ...(refreshToken ? { refreshToken } : {})
+    }
+  }
+  return undefined
+}
+
+async function discoverAntigravityOAuthClient(): Promise<{
+  clientId: string
+  clientSecret: string
+} | undefined> {
+  const candidates = process.platform === 'darwin'
+    ? [
+        join(
+          '/Applications',
+          'Antigravity IDE.app',
+          'Contents',
+          'Resources',
+          'app',
+          'out',
+          'main.js'
+        ),
+        join(
+          homedir(),
+          'Applications',
+          'Antigravity IDE.app',
+          'Contents',
+          'Resources',
+          'app',
+          'out',
+          'main.js'
+        )
+      ]
+    : []
+  for (const path of candidates) {
+    try {
+      const content = await readFile(path, 'utf8')
+      const marker = 'vs/platform/cloudCode/common/oauthClient.js'
+      const start = Math.max(0, content.indexOf(marker))
+      const scope = content.slice(start, start + 4_000)
+      const clientId = scope.match(
+        /[0-9]+-[A-Za-z0-9_-]+\.apps\.googleusercontent\.com/
+      )?.[0]
+      const clientSecret = scope.match(/GOCSPX-[A-Za-z0-9_-]{28}/)?.[0]
+      if (clientId && clientSecret) return { clientId, clientSecret }
+    } catch {
+      // Try the next fixed official-app artifact.
+    }
+  }
+  return undefined
+}
+
+async function refreshAntigravityAccessToken(
+  refreshToken: string,
+  client: { clientId: string; clientSecret: string },
+  context: SubscriptionProbeContext
+): Promise<string> {
+  const response = await context.fetcher('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      client_id: client.clientId,
+      client_secret: client.clientSecret,
+      refresh_token: refreshToken,
+      grant_type: 'refresh_token'
+    }).toString(),
+    signal: AbortSignal.timeout(SUBSCRIPTION_QUOTA_TIMEOUT_MS)
+  }, context.proxyUrl)
+  if (!response.ok) throw new Error('Antigravity OAuth refresh was rejected.')
+  const payload = optionalRecord(await response.json().catch(() => undefined))
+  const accessToken = stringValue(payload?.access_token)
+  if (!accessToken) throw new Error('Antigravity OAuth refresh returned no access token.')
+  return accessToken
+}
+
+type SubscriptionRequestInput = {
+  method?: string
+  headers: Record<string, string>
+  extraHeaders?: Record<string, string>
+  body?: BodyInit
+}
+
+async function requestSubscriptionResponse(
+  url: string,
+  input: SubscriptionRequestInput,
+  context: SubscriptionProbeContext
+): Promise<Response> {
+  let response: Response
+  try {
+    response = await context.fetcher(url, {
+      method: input.method ?? 'GET',
+      headers: { ...input.headers, ...input.extraHeaders },
+      ...(input.body === undefined ? {} : { body: input.body }),
+      signal: AbortSignal.timeout(SUBSCRIPTION_QUOTA_TIMEOUT_MS)
+    }, context.proxyUrl)
+  } catch (error) {
+    if (error instanceof Error && (error.name === 'AbortError' || /abort|timeout/i.test(error.message))) {
+      throw new Error('The subscription quota request timed out.')
+    }
+    throw new Error('The subscription quota request could not reach the provider.')
+  }
+  if (!response.ok) {
+    if (response.status === 401 || response.status === 403) {
+      throw new Error('The provider did not authorize quota access for the existing login.')
+    }
+    throw new Error(`The provider quota endpoint returned HTTP ${response.status}.`)
+  }
+  return response
+}
+
+async function requestSubscriptionJson(
+  url: string,
+  input: SubscriptionRequestInput,
+  context: SubscriptionProbeContext
+): Promise<unknown> {
+  const response = await requestSubscriptionResponse(url, input, context)
+  const text = await boundedResponseText(response)
+  try {
+    return JSON.parse(text)
+  } catch {
+    throw new Error('The provider returned malformed quota data.')
+  }
+}
+
+async function boundedResponseText(response: Response): Promise<string> {
+  const declaredLength = Number(response.headers.get('content-length'))
+  if (Number.isFinite(declaredLength) && declaredLength > SUBSCRIPTION_QUOTA_MAX_RESPONSE_BYTES) {
+    throw new Error('The provider quota response was too large.')
+  }
+  if (!response.body) return ''
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let bytes = 0
+  let output = ''
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      bytes += value.byteLength
+      if (bytes > SUBSCRIPTION_QUOTA_MAX_RESPONSE_BYTES) {
+        await reader.cancel()
+        throw new Error('The provider quota response was too large.')
+      }
+      output += decoder.decode(value, { stream: true })
+    }
+    return output + decoder.decode()
+  } finally {
+    reader.releaseLock()
+  }
+}
+
+async function boundedResponseBytes(response: Response): Promise<Uint8Array> {
+  const declaredLength = Number(response.headers.get('content-length'))
+  if (
+    Number.isFinite(declaredLength) &&
+    declaredLength > SUBSCRIPTION_QUOTA_MAX_RESPONSE_BYTES
+  ) {
+    throw new Error('The provider quota response was too large.')
+  }
+  if (!response.body) return new Uint8Array()
+  const reader = response.body.getReader()
+  const chunks: Uint8Array[] = []
+  let bytes = 0
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      bytes += value.byteLength
+      if (bytes > SUBSCRIPTION_QUOTA_MAX_RESPONSE_BYTES) {
+        await reader.cancel()
+        throw new Error('The provider quota response was too large.')
+      }
+      chunks.push(value)
+    }
+  } finally {
+    reader.releaseLock()
+  }
+  const output = new Uint8Array(bytes)
+  let offset = 0
+  for (const chunk of chunks) {
+    output.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  return output
+}
+
+type ProtobufScan = {
+  fixed32Fields: Array<{ path: number[]; value: number; order: number }>
+  varintFields: Array<{ path: number[]; value: number }>
+}
+
+function scanProtobuf(
+  input: Uint8Array,
+  depth: number,
+  path: number[],
+  order: { value: number }
+): ProtobufScan {
+  const scan: ProtobufScan = { fixed32Fields: [], varintFields: [] }
+  let index = 0
+  while (index < input.length) {
+    const fieldStart = index
+    const key = readUnsignedVarint(input, index)
+    if (!key || key.value === 0) {
+      index = fieldStart + 1
+      continue
+    }
+    index = key.offset
+    const fieldNumber = Math.floor(key.value / 8)
+    const wireType = key.value % 8
+    const fieldPath = [...path, fieldNumber]
+    if (wireType === 0) {
+      const value = readUnsignedVarint(input, index)
+      if (!value) {
+        index = fieldStart + 1
+        continue
+      }
+      index = value.offset
+      scan.varintFields.push({ path: fieldPath, value: value.value })
+      continue
+    }
+    if (wireType === 1) {
+      if (index + 8 > input.length) break
+      index += 8
+      continue
+    }
+    if (wireType === 2) {
+      const length = readUnsignedVarint(input, index)
+      if (!length || length.value > input.length - length.offset) {
+        index = fieldStart + 1
+        continue
+      }
+      const start = length.offset
+      const end = start + length.value
+      if (depth < 4) {
+        mergeProtobufScan(
+          scan,
+          scanProtobuf(input.subarray(start, end), depth + 1, fieldPath, order)
+        )
+      }
+      index = end
+      continue
+    }
+    if (wireType === 5) {
+      if (index + 4 > input.length) break
+      const view = new DataView(input.buffer, input.byteOffset + index, 4)
+      scan.fixed32Fields.push({
+        path: fieldPath,
+        value: view.getFloat32(0, true),
+        order: order.value
+      })
+      order.value += 1
+      index += 4
+      continue
+    }
+    index = fieldStart + 1
+  }
+  return scan
+}
+
+function mergeProtobufScan(target: ProtobufScan, source: ProtobufScan): void {
+  target.fixed32Fields.push(...source.fixed32Fields)
+  target.varintFields.push(...source.varintFields)
+}
+
+function readUnsignedVarint(
+  input: Uint8Array,
+  initialOffset: number
+): { value: number; offset: number } | undefined {
+  let value = 0
+  let multiplier = 1
+  let offset = initialOffset
+  for (let count = 0; count < 8 && offset < input.length; count += 1) {
+    const byte = input[offset]
+    offset += 1
+    value += (byte & 0x7f) * multiplier
+    if ((byte & 0x80) === 0) {
+      return Number.isSafeInteger(value) ? { value, offset } : undefined
+    }
+    multiplier *= 128
+  }
+  return undefined
+}
+
+function grpcWebDataFrames(input: Uint8Array): Uint8Array[] {
+  const frames: Uint8Array[] = []
+  let index = 0
+  while (index < input.length) {
+    if (index + 5 > input.length) return []
+    const flags = input[index]
+    const length =
+      input[index + 1] * 0x1000000 +
+      input[index + 2] * 0x10000 +
+      input[index + 3] * 0x100 +
+      input[index + 4]
+    const start = index + 5
+    const end = start + length
+    if (end > input.length) return []
+    if ((flags & 0x80) === 0) frames.push(input.subarray(start, end))
+    index = end
+  }
+  return frames
+}
+
+function grpcWebTrailerFields(input: Uint8Array): Record<string, string> {
+  const fields: Record<string, string> = {}
+  let index = 0
+  while (index + 5 <= input.length) {
+    const flags = input[index]
+    const length =
+      input[index + 1] * 0x1000000 +
+      input[index + 2] * 0x10000 +
+      input[index + 3] * 0x100 +
+      input[index + 4]
+    const start = index + 5
+    const end = start + length
+    if (end > input.length) break
+    if ((flags & 0x80) !== 0) {
+      const text = new TextDecoder().decode(input.subarray(start, end))
+      for (const line of text.split(/\r?\n/)) {
+        const separator = line.indexOf(':')
+        if (separator <= 0) continue
+        const key = line.slice(0, separator).trim().toLowerCase()
+        const rawValue = line.slice(separator + 1).trim()
+        try {
+          fields[key] = decodeURIComponent(rawValue)
+        } catch {
+          fields[key] = rawValue
+        }
+      }
+    }
+    index = end
+  }
+  return fields
+}
+
+function looksLikeProtobufPayload(input: Uint8Array): boolean {
+  const first = input[0]
+  if (first === undefined) return false
+  const fieldNumber = first >> 3
+  const wireType = first & 0x07
+  return fieldNumber > 0 && [0, 1, 2, 5].includes(wireType)
+}
+
+function assertGrokGrpcStatus(
+  rawStatus: string | null | undefined,
+  rawMessage: string | null | undefined
+): void {
+  if (!rawStatus) return
+  const status = Number(rawStatus)
+  if (!Number.isFinite(status) || status === 0) return
+  const message = rawMessage?.trim() ?? ''
+  if (status === 7 || status === 16) {
+    throw new Error(
+      'Grok billing rejected the existing login. Reconnect Grok or run `grok login`; some accounts also require a grok.com browser session.'
+    )
+  }
+  if (status === 9 && /^no personal team\.?$/i.test(message)) {
+    throw new Error('Grok team quota is unavailable from the current billing API.')
+  }
+  throw new Error(
+    `Grok billing RPC returned status ${status}${message ? `: ${message}` : '.'}`
+  )
+}
+
+function sameNumberPath(left: number[], right: number[]): boolean {
+  return left.length === right.length &&
+    left.every((value, index) => value === right[index])
+}
+
+function startsWithNumberPath(path: number[], prefix: number[]): boolean {
+  return prefix.length <= path.length &&
+    prefix.every((value, index) => value === path[index])
+}
+
+function codexWindowMetric(
+  id: string,
+  fallbackLabel: string,
+  value: unknown
+): ProviderQuotaMetric | null {
+  const window = optionalRecord(value)
+  if (!window) return null
+  const usedPercent = numberValue(window.used_percent)
+  if (usedPercent === undefined) return null
+  const seconds = numberValue(window.limit_window_seconds)
+  const label = seconds === undefined ? fallbackLabel : `${formatWindowSeconds(seconds)} usage`
+  const resetsAt = epochToIso(window.reset_at)
+  return {
+    id,
+    label,
+    unit: 'percent',
+    usedPercent: clampPercentage(usedPercent),
+    ...(resetsAt ? { resetsAt } : {})
+  }
+}
+
+function percentageWindowMetric(
+  id: string,
+  label: string,
+  value: unknown,
+  percentKey: string
+): ProviderQuotaMetric | null {
+  const window = optionalRecord(value)
+  const usedPercent = numberValue(window?.[percentKey])
+  if (usedPercent === undefined) return null
+  const resetsAt = isoDateValue(window?.resets_at)
+  return {
+    id,
+    label,
+    unit: 'percent',
+    usedPercent: clampPercentage(usedPercent),
+    ...(resetsAt ? { resetsAt } : {})
+  }
+}
+
+function cursorMoneyMetric(
+  id: string,
+  label: string,
+  value: JsonRecord | undefined,
+  resetsAt?: string
+): ProviderQuotaMetric | null {
+  if (!value || value.enabled === false) return null
+  const usedCents = numberValue(value.used)
+  const limitCents = numberValue(value.limit)
+  const remainingCents = numberValue(value.remaining)
+  if (usedCents === undefined && limitCents === undefined && remainingCents === undefined) return null
+  const used = usedCents === undefined ? undefined : usedCents / 100
+  const limit = limitCents === undefined ? undefined : limitCents / 100
+  const remaining = remainingCents === undefined ? undefined : remainingCents / 100
+  return {
+    id,
+    label,
+    unit: 'USD',
+    ...(used === undefined ? {} : { used }),
+    ...(limit === undefined ? {} : { limit }),
+    ...(remaining === undefined ? {} : { remaining }),
+    ...percentageFields(used, limit),
+    ...(resetsAt ? { resetsAt } : {})
+  }
+}
+
+function firstUsageRecord(
+  ...values: Array<JsonRecord | undefined>
+): JsonRecord | undefined {
+  return values.find((value) => value && (
+    numberValue(value.used) !== undefined ||
+    numberValue(value.limit) !== undefined ||
+    numberValue(value.remaining) !== undefined
+  ))
+}
+
+function googleQuotaMetric(
+  id: string,
+  label: string,
+  remainingFraction: number,
+  resetTime: unknown
+): ProviderQuotaMetric {
+  const remainingPercent = clampPercentage(remainingFraction * 100)
+  const resetsAt = isoDateValue(resetTime)
+  return {
+    id,
+    label,
+    unit: 'percent',
+    usedPercent: 100 - remainingPercent,
+    ...(resetsAt ? { resetsAt } : {})
+  }
+}
+
+function googleSetupSummary(
+  setup: JsonRecord,
+  accountEmail?: string
+): { summary?: string } {
+  const tier = optionalRecord(setup.currentTier)
+  const paidTier = optionalRecord(setup.paidTier)
+  const plan = stringValue(tier?.name) ||
+    stringValue(tier?.id) ||
+    stringValue(paidTier?.name) ||
+    stringValue(paidTier?.id)
+  const parts = [plan, accountEmail].filter(Boolean)
+  return parts.length ? { summary: parts.join(' · ') } : {}
+}
+
+function claudeAccessToken(value: unknown): string | undefined {
+  const root = optionalRecord(value)
+  const oauth = optionalRecord(root?.claudeAiOauth)
+  const token = stringValue(oauth?.accessToken)
+  return token && validateClaudeSubscriptionToken(token).ok ? token : undefined
+}
+
+async function readJsonFile(path: string): Promise<unknown> {
+  try {
+    return JSON.parse(await readFile(path, 'utf8')) as unknown
+  } catch {
+    return undefined
+  }
+}
+
+function configuredHomeDirectory(
+  environmentName: 'CODEX_HOME' | 'GROK_HOME',
+  fallbackDirectory: string
+): string {
+  const override = process.env[environmentName]?.trim()
+  if (!override) return join(homedir(), fallbackDirectory)
+  if (override === '~') return homedir()
+  if (override.startsWith('~/') || override.startsWith('~\\')) {
+    return join(homedir(), override.slice(2))
+  }
+  return override
+}
+
+async function readSqliteValue(dbPath: string, key: string): Promise<string | undefined> {
+  const binary = process.platform === 'darwin' ? '/usr/bin/sqlite3' : 'sqlite3'
+  try {
+    const escapedKey = key.replaceAll("'", "''")
+    const { stdout } = await execFileAsync(binary, [
+      dbPath,
+      `SELECT value FROM ItemTable WHERE key='${escapedKey}' LIMIT 1;`
+    ], {
+      encoding: 'utf8',
+      timeout: 2_000,
+      maxBuffer: 512 * 1024
+    })
+    return stdout.trim() || undefined
+  } catch {
+    return undefined
+  }
+}
+
+function jwtClaims(token: string): JsonRecord | undefined {
+  const payload = token.split('.')[1]
+  if (!payload) return undefined
+  try {
+    return optionalRecord(JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')))
+  } catch {
+    return undefined
+  }
+}
+
+function protobufLengthFields(buffer: Buffer): Array<{ number: number; value: Buffer }> {
+  const fields: Array<{ number: number; value: Buffer }> = []
+  let offset = 0
+  while (offset < buffer.length) {
+    const tag = protobufVarint(buffer, offset)
+    if (!tag) return []
+    offset = tag.offset
+    const number = Math.floor(tag.value / 8)
+    const wireType = tag.value % 8
+    if (number <= 0 || wireType !== 2) return []
+    const length = protobufVarint(buffer, offset)
+    if (!length) return []
+    offset = length.offset
+    const end = offset + length.value
+    if (length.value < 0 || end > buffer.length) return []
+    fields.push({ number, value: buffer.subarray(offset, end) })
+    offset = end
+  }
+  return fields
+}
+
+function protobufVarint(
+  buffer: Buffer,
+  initialOffset: number
+): { value: number; offset: number } | undefined {
+  let value = 0
+  let shift = 0
+  let offset = initialOffset
+  while (offset < buffer.length && shift <= 49) {
+    const byte = buffer[offset]
+    offset += 1
+    value += (byte & 0x7f) * 2 ** shift
+    if ((byte & 0x80) === 0) return { value, offset }
+    shift += 7
+  }
+  return undefined
+}
+
+function isBase64(value: string): boolean {
+  return value.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(value)
+}
+
+function formatWindowSeconds(seconds: number): string {
+  if (seconds % 604_800 === 0) return `${seconds / 604_800}-week`
+  if (seconds % 86_400 === 0) return `${seconds / 86_400}-day`
+  if (seconds % 3_600 === 0) return `${seconds / 3_600}-hour`
+  return `${seconds}-second`
+}
+
+function percentageFields(
+  used: number | undefined,
+  limit: number | undefined
+): { usedPercent?: number } {
+  if (used === undefined || limit === undefined || limit <= 0) return {}
+  return { usedPercent: clampPercentage((used / limit) * 100) }
+}
+
+function epochToIso(value: unknown): string | undefined {
+  const numeric = numberValue(value)
+  if (numeric === undefined || numeric <= 0) return undefined
+  const date = new Date(numeric < 100_000_000_000 ? numeric * 1_000 : numeric)
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString()
+}
+
+function isoDateValue(value: unknown): string | undefined {
+  if (typeof value !== 'string' || !value.trim()) return undefined
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString()
+}
+
+type JsonRecord = Record<string, unknown>
+
+function numberValue(value: unknown): number | undefined {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : undefined
+  if (typeof value !== 'string' || !value.trim()) return undefined
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : undefined
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function optionalRecord(value: unknown): JsonRecord | undefined {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? value as JsonRecord
+    : undefined
+}
+
+function requireRecord(value: unknown, message: string): JsonRecord {
+  const record = optionalRecord(value)
+  if (!record) throw new Error(message)
+  return record
+}
+
+function clampPercentage(value: number): number {
+  return Math.min(100, Math.max(0, value))
+}

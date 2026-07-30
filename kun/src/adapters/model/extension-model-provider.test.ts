@@ -88,7 +88,12 @@ function principal(): ExtensionPrincipal {
   }
 }
 
-function request(providerId: string, accountId: string, signal = new AbortController().signal): ModelRequest {
+function request(
+  providerId: string,
+  accountId: string,
+  signal = new AbortController().signal,
+  overrides: Partial<ModelRequest> = {}
+): ModelRequest {
   return {
     threadId: 'thread_1',
     turnId: 'turn_1',
@@ -108,7 +113,8 @@ function request(providerId: string, accountId: string, signal = new AbortContro
       name: 'read', description: 'Read a file', inputSchema: { type: 'object', properties: {} }
     }],
     reasoningEffort: 'high',
-    abortSignal: signal
+    abortSignal: signal,
+    ...overrides
   }
 }
 
@@ -180,6 +186,26 @@ describe('ExtensionModelProviderRegistry', () => {
       }),
       { kind: 'completed', stopReason: 'stop' }
     ])
+  })
+
+  it('passes a hard named tool constraint to extension providers', async () => {
+    let captured: ModelProviderRequest | undefined
+    const adapter: ModelProviderAdapter = {
+      probe: async () => ({ ok: true }),
+      listModels: async () => [],
+      stream: async function* (input) {
+        captured = input
+        yield { requestId: input.requestId, sequence: 0, type: 'completed', finishReason: 'tool_calls' }
+      },
+      cancel: async () => undefined
+    }
+    const h = await harness(adapter)
+    const client = h.registry.clientMap().get(h.provider.id)!
+    await collect(client.stream(request(h.provider.id, h.account.id, undefined, {
+      requiredToolName: 'read'
+    })))
+
+    expect(captured?.generation.toolChoice).toEqual({ type: 'tool', name: 'read' })
   })
 
   it('fails explicitly on malformed streams and never falls back to another provider', async () => {

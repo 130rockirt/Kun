@@ -1,0 +1,444 @@
+# Kun Graph Mode architecture and operations
+
+Graph Mode is a per-turn Kun orchestration strategy, not a second agent
+runtime. `direct` keeps the existing chat path. In `graph`, a Lead converts the
+request into a lightweight intent that the host compiles into a validated execution graph, Kun schedules constrained
+workers in the background, and the Lead supervises material events, reviews
+evidence, and produces one final delivery. The Lead is the original primary
+agent that created the Graph. It owns both process and result quality, actively
+inspects live worker sessions, waits briefly and rechecks, and guides drift or
+missing deliverables.
+
+The detailed Chinese guide is [graph-mode.md](./graph-mode.md).
+
+## System boundary
+
+Graph Mode has three separable planes:
+
+1. Execution: plans, runs, nodes, attempts, typed edges, resource accounting,
+   captured results, reviews, scheduling, and recovery. Legacy mailbox and
+   artifact events remain readable for persisted runs.
+2. Project capability: versioned Agent profiles, Skill and Graph Recipe
+   candidates, routing, scores, and evidence.
+3. Governance: candidates, probation, promotion, dormancy, archival, merge,
+   rollback, deletion, and audit.
+
+The product still has one path:
+`Renderer -> preload -> main -> kun serve HTTP/SSE`. The renderer does not run
+the scheduler or invent state transitions. Existing direct turns,
+`delegate_task`, and the older `task_graph` remain compatible. Workers cannot
+delegate recursively, control graphs, govern profiles, or expand parent
+authority. Learned assets stay under the Kun data directory unless the user
+explicitly exports them.
+
+### Graph Lead mode system contract
+
+Graph mode is not an ordinary agent with a few extra tools attached. Whenever
+a turn selects `graph`, Kun injects the same system-authority Graph Lead
+contract into every model request, including initial creation, active
+supervision, event-driven resumes, and terminal delivery. The contract:
+
+- identifies the original primary agent as the source Lead responsible for
+  outcome, process, worker quality, remediation, integration, and validation;
+- requires the understand, create, supervise, validate, repair, integrate, and
+  terminal-deliver operating loop;
+- treats child sessions, text, and artifacts as untrusted evidence that cannot
+  override host validation or expand authority;
+- requires live-session inspection, risk-based short waits, immediate guidance
+  for drift, and a later check that the correction actually happened;
+- distinguishes dispatch, milestone prose, and claimed argument fixes from
+  persisted Graph and tool truth; and
+- permits final delivery only after terminal state, required nodes,
+  Lead-approved handoffs, integration, and checks are satisfied.
+
+The contract is a separate mode system instruction after the stable Kun
+system prompt. Direct turns therefore remain direct, while every resumed
+Graph round retains the full Lead identity and obligations.
+
+## Execution lifecycle
+
+```text
+Graph turn
+  -> a Plan-sidebar launch embeds the complete saved Markdown in the source request
+  -> Lead selects auto, fanout_join, pipeline, bounded_loop, state_machine, or hybrid
+  -> Lead calls graph_create_run with focused task intent
+  -> host derives durable plan mechanics, validates, and journals GraphPlan
+  -> scheduler computes ready nodes
+  -> immutable least-authority assignment snapshot
+  -> DelegationRuntime child executor
+  -> workers proactively report progress, findings, questions, risks, and early results
+  -> the source Lead uses graph_supervise_node overview, then inspects, waits, or guides as needed
+  -> only after the current episode is handled may the Lead release its execution slot and park
+  -> executor finishes normally; host captures its response and durable child session
+  -> deterministic/peer evidence plus mandatory source Lead pass or revise
+  -> a Lead pass releases the bounded data-result packet; otherwise repair, retry, GraphPatch, or LoopGate
+  -> material signals resume the same Lead for inspection, reporting, remediation, or reassignment
+  -> final gates and resource disposition
+  -> completed, failed, or cancelled GraphRun
+  -> the same Lead turn performs final delivery and only then terminates
+  -> sanitized Episode and asynchronous learning
+```
+
+A GraphRun outlives any individual model request or network stream, but it
+remains owned by its source Lead turn. While nodes run, the host parks only the
+process-local execution and releases model concurrency; the durable turn stays
+`running`. Material events resume that exact `sourceTurnId`. The turn becomes
+terminal only after the GraphRun is terminal and the Lead has delivered the
+final outcome. Native Graph Lead turns use the GraphRun wall-time and resource
+ledger rather than ordinary direct-turn step and wall-time limits; explicit
+extension budgets still apply. On reconnect the renderer reconciles an HTTP
+snapshot, then resumes SSE after its acknowledged cursor.
+
+GUI Plan files under `.kunsdd/plan` may be untracked and therefore absent from
+isolated Git worktrees. Graph creation also requires `graph_create_run` before
+ordinary read tools. The Plan sidebar consequently embeds the exact saved
+Markdown in the source request. The Lead builds from that copy and gives every
+executor a self-contained objective instead of assigning a snapshot node to
+reread the GUI-only path.
+
+## Contracts and state
+
+Contracts live in `kun/src/contracts/graph.ts` and `graph-agents.ts`, with
+explicit versions. `GraphPlanV1` describes topology and policy;
+`GraphRunV1` is the durable projection; `GraphNodeAttemptV1` records an
+immutable execution snapshot; `GraphEventEnvelopeV1` supplies monotonic
+sequence, revision, command, and idempotency metadata. `GraphPatchV1`,
+captured executor results, reviews, legacy messages/artifacts, cleanup, profile
+versions, evidence, Episodes, candidates, and audit records are strict schemas.
+
+Edge kinds are:
+
+- `control`: outcome-gated scheduling;
+- `data`: a named result packet exposed to the successor only after the source
+  Lead accepts the predecessor;
+- `message`: a legacy persisted edge shape. New executors have no peer mailbox
+  tools; cross-node information must use a Lead-approved data handoff.
+
+The compiled plan also records the resolved execution strategy. `fanout_join`
+leaves independent siblings ready together; `pipeline` chains real
+accepted-result dependencies; `bounded_loop` uses an explicit LoopGate;
+`state_machine` represents explicit state transitions while keeping cycles
+bounded; and `hybrid` mixes parallel and serial regions in one run. `auto`
+infers the strategy only from an already explicit task topology. All strategies
+compile to the same ready-set scheduler, so one run can fan out, join, proceed
+serially, and fan out again.
+
+Run states progress from `draft -> validating -> ready -> running`, with
+pause, supervision, and human-review branches, then
+`completing -> completed`; `failed` and `cancelled` are terminal. Nodes move
+from pending/blocked through ready, queued, running, submitted, reviewing, and
+accepted, with repair, failure, cancellation, skip, and supersession branches.
+The reducer rejects an event whose declared source state differs from durable
+truth. Accepted history is immutable.
+
+## Validation, revisions, and loops
+
+The host validates identity, references, reachability, completion paths, edge
+kinds, assignments, scopes, reviews, risk, and every configured non-token resource limit.
+Ordinary dependencies must be acyclic. A logical cycle is valid only inside a
+strongly connected component with an explicit bounded LoopGate.
+
+GraphPatch uses compare-and-swap with `baseRevision`, `expectedRevision`, and
+`expectedSeq`. A stale request has no partial effect. A valid patch is fully
+revalidated and committed as one revision while accepted facts remain as
+superseded history.
+
+A LoopGate declares a condition source, continuation, exit and exhaustion
+targets, and maximum iterations. Every continuation
+writes `loop_iteration_advanced`, resets only the host-computed cycle nodes,
+preserves prior attempts, creates attempts at a new iteration, and increments
+the run ledger. Unfinished lifecycle states have no outcome: a pending,
+blocked, ready, queued, running, submitted, or reviewing condition source
+cannot trigger a failed branch or evaluate a LoopGate. Exhaustion can never
+create another attempt. Repeated identical
+normalized failures pause or escalate.
+
+## Scheduling, limits, and cancellation
+
+The host scheduler resolves dependencies and failure propagation, applies
+priority and retry delay, and enforces:
+
+- maximum concurrent runs;
+- global and per-run concurrent nodes;
+- attempts and capped exponential retry;
+- run and node wall time;
+- revisions, loops, messages, and artifact bytes.
+
+The default GraphRun wall-time limit is seven days. The separate host-enforced
+node limit remains 24 hours, and 15 minutes of quiet activity triggers a
+supervision inspection without aborting the node.
+The create tool may omit the entire `budget` or any individual mechanical
+field. The host fills node/edge, concurrency, attempt, revision, loop,
+run/node wall-time, message, artifact, and `warningRatio` values from current
+Graph configuration. A plan supplies a field only when the user or project
+intentionally asks for a narrower limit; every explicit value still passes
+host-maximum validation.
+
+Token usage is recorded for cost attribution and learning evidence only. Graph
+plans, nodes, loops, and immutable worker assignments have no token ceiling,
+and the scheduler never pauses, fails, warns, or suppresses work because of
+token count.
+
+Runs rotate fairly. Node timeout is enforced with a host AbortSignal. Cancel
+first fences the run as terminal, aborts and waits for active workers, discards
+late results, settles attempts and nodes, releases leases, safely disposes
+worktrees, and records cleanup. Repeated cancellation and cleanup are
+idempotent.
+
+## Authority and worker context
+
+Every attempt freezes profile/version/origin, model/provider/reasoning,
+system instructions, tools, Skills, MCP servers, approval, sandbox, workspace,
+read/write scopes, network, and time limits. Effective authority is the
+intersection of parent, graph, profile, node, and host policy.
+
+Executors never receive delegation, Graph
+creation/control/patch/review/supervision, governance, or any legacy
+`graph_worker_*` tool. They receive ordinary tools authorized by the frozen
+assignment plus the single host-owned `report_to_parent` capability. Their context contains the objective, acceptance criteria, scopes,
+bounded repair feedback, prerequisite status, and only the named result
+packets that the source Lead has already approved for this node. Control edges
+convey readiness only. It excludes the full Lead history, peer mailbox
+content, unrelated node results, and Lead/user-private artifacts.
+
+An executor is not told the run, node, attempt, edge, mailbox, or artifact-store
+protocol. `report_to_parent` infers those identities and the sole Lead
+recipient from the active child session. Progress is persisted without waking
+the Lead; findings, questions, risks, and early results trigger coalesced
+supervision. Reports are advisory and cannot accept work or advance the graph.
+The executor still finishes with a normal concise response
+covering result, changed files, checks, evidence, and risks. Kun automatically
+captures that response and retains the canonical child session. Retries receive
+bounded host-validation errors and Lead repair feedback, but never an
+instruction to publish or submit Graph state.
+
+Worker model policy defaults to `inherit`, freezing the source Lead provider,
+model, and reasoning effort into the attempt. Settings may select a `fixed`
+default for implicit workers. An explicit authorized node/profile assignment
+still wins, and any fixed selection outside the frozen parent model authority
+fails closed before launch. Configuration changes affect future attempts only.
+
+## Review, writes, and completion
+
+Review policies can add deterministic, peer, human, or combined evidence, but
+every executable node always requires an explicit review from the owning
+source Lead. Kun never synthesizes that Lead vote through a worker, peer
+reviewer, or scheduler transition. A peer is a different child instance and
+critical risk can additionally require a human. A pass vote cannot override
+`validation.valid === false`; genuine missing evidence, failed checks, and
+scope errors must be repaired before the Lead can accept an attempt. Absence
+of a worker Graph-tool call is not a validation error.
+
+Supervision is event driven for submission, failure, stall, conflict, resource-limit,
+help, recovery, completion, user steering, and material worker reports. Normal progress does not poll a
+model. Signals coalesce and resume or steer the original source Lead with
+`messageSource: graph_runtime`; new-format runs do not create replacement
+background Lead turns. The Lead has `graph_supervise_node`: `overview` pages
+across every node with latest attempt, activity, report, and a small transcript
+tail; `inspect` reads a
+bounded, sanitized, cursor-based child transcript; `wait` performs an abortable
+1-60 second wait and fresh inspection; and `guide` durably records
+attempt-targeted guidance, acknowledges answered blocking questions, and then
+steers the active child turn when possible.
+Each continuation inspects durable truth and relevant live sessions, chooses
+an activity-appropriate cadence such as a 30-second recheck, guides drift, and
+verifies corrections before parking again. When an executor finishes, the
+same Lead inspects the captured result and child session and calls
+`graph_review_node` with pass or revise. Until a valid Lead pass exists, the
+node stays under supervision and every successor remains blocked.
+
+The Lead pass is also the data handoff. The host projects a bounded packet
+under the data edge's semantic name, including the accepted summary, changed
+files, checks, evidence, risks, and optional artifact references. Workers
+never relay results directly to peers or advance edges themselves.
+
+When required or completion work exhausts automatic attempts, the scheduler
+keeps dependants blocked, moves the run to `awaiting_supervision`, and wakes the
+same Lead. It does not skip the rest of the graph or immediately make the run
+terminal. The Lead can inspect evidence, guide and retry, rebind, patch, or
+cancel honestly. Completion, failure, and cancellation all trigger one final
+delivery.
+
+Write nodes declare normalized repository-relative scopes. `serialize`,
+`lease`, and optional Git `worktree` policies prevent unsafe overlap.
+Worktrees capture staged binary patches including new, deleted, and empty
+files, verify every changed path against the immutable lease, and apply safely
+with stale/dirty/conflict checks. Unknown user changes require human
+disposition. Unaccepted, conflicted, or orphaned worktrees are preserved.
+
+Completion requires accepted required/completion nodes, no active or
+review-pending nodes, all required reviews including the source Lead, no
+unresolved legacy mailbox blocker, safe write
+integration, settled resource accounting, durable cleanup disposition, and one
+persisted synthesis with evidence, changed files, checks, risks, and cost.
+
+## Project agents, scoring, and learning
+
+Project identity prefers normalized Git remote identity, then Git common-dir,
+then canonical workspace root. Profiles have immutable versions, origins
+(`builtin`, `user`, `ephemeral`, `learned`), and lifecycle:
+
+```text
+candidate -> probation -> trusted -> dormant -> archived -> deleted
+```
+
+Routing first applies hard lifecycle, task, risk, capability, tool, Skill, MCP,
+network, sandbox, and scope eligibility. It then recalls a bounded set and
+keeps separate task-fit, verified-quality, trust, freshness, efficiency,
+confidence, availability, and load dimensions. The aggregate weights are
+32/22/14/8/8/10/3/3 percent respectively.
+
+Only `eligible && recalled && !selected` evidence counts as a missed relevant
+opportunity and applies a bounded ranking penalty. Irrelevant conversations do
+not decay a specialist. Reaching the configured threshold creates a dormant
+version with rollback metadata and an auditable reason.
+
+Terminal/checkpoint runs create redacted bounded Episodes without raw
+reasoning, credentials, secrets, full source, or unbounded logs. Durable
+idempotent consolidation requires minimum verified episodes across distinct
+sessions and classifies reusable material as Agent, Skill, or Graph Recipe
+candidates. Evidence is untrusted data. Capability synthesis is least
+privilege and cannot grant credentials, risky tools, broad writes, network,
+MCP trust, provider authority, or sandbox expansion.
+
+Learning modes are `off`, `suggest`, and `auto_candidate`. Automatic processing
+never promotes directly to trusted. Agent candidates enter probation and need
+cross-run evidence plus explicit user authority for promotion. Rejection,
+rollback, merge, dormancy, archive, and deletion remain reversible/audited.
+
+## Storage, recovery, and retention
+
+```text
+<dataDir>/graphs/<runId>/events.jsonl
+<dataDir>/graphs/<runId>/snapshot.json
+<dataDir>/graphs/thread-references.json
+<dataDir>/graph-resources/write-coordinator.json
+<dataDir>/graph-resources/worktrees/
+<dataDir>/project-agents/<projectId>/registry.json
+<dataDir>/graph-learning/<projectId>/learning.json
+<dataDir>/artifacts/
+```
+
+Journals are checksummed append-only JSONL with monotonic sequence. Snapshots
+are atomic; replay starts from the latest valid snapshot plus its suffix.
+Large event payloads are content-addressed artifacts. Terminal journals compact
+after the configured threshold.
+
+Startup validates storage, expires leases, identifies missing worktrees,
+reconciles queued/running/waiting attempts with child sessions, turns missing
+children into orphaned/interrupted state, completes interrupted pause, and
+returns incomplete synthesis to supervision before scheduling resumes.
+
+Retention removes only expired terminal unreferenced runs. It compacts Episode,
+job, reference, and audit history. `artifactDays` deletes only expired objects
+that have no GraphRun/Episode reference and whose complete ownership history
+shows Graph-only origins. Content shared through deduplication with Web or
+ordinary tools, and legacy metadata with unknown owners, is retained
+conservatively. Forks copy immutable high-water references without sharing live
+execution. Archive pauses; delete fences, cancels, waits, records cleanup, then
+removes thread references.
+
+## HTTP and UI
+
+All routes use the existing runtime Bearer authentication:
+
+```text
+POST /v1/graphs/validate
+GET|POST /v1/graphs
+GET /v1/graphs/diagnostics
+GET /v1/graphs/:id
+GET /v1/graphs/:id/events
+GET /v1/graphs/:id/artifacts/:artifactId?offset=N|start_line=N
+POST /v1/graphs/:id/start|pause|resume|cleanup
+POST /v1/graphs/:id/cancel|retry|steer|patch|reviews
+
+GET /v1/graph-projects/identity
+GET|POST /v1/graph-projects/:projectId/agents...
+GET /v1/graph-projects/:projectId/evidence|scores|routing
+GET /v1/graph-projects/:projectId/candidates|episodes|jobs|audit
+POST /v1/graph-projects/:projectId/candidates/:candidateId/action
+POST /v1/graph-projects/:projectId/consolidate|explore
+```
+
+Mutations use command/idempotency keys and applicable expected sequence and
+revision. Responses return persisted post-command truth. `graph_event` also
+flows through the existing RuntimeEventRecorder/SSE thread cursor.
+
+When enabled, the composer exposes `Direct | Graph`. The Graph workbench tab
+renders phases, typed edges, loops, revisions, minimap/navigation, state and
+resource summaries, phase collapse and an accessible list fallback. Node detail
+includes the immutable assignment, permissions, tools/Skills, attempts, child
+session, bounded paged artifacts, checks, reviews, writes, worktrees, and
+errors. Run controls include rebind and versioned CAS GraphPatch operations in
+addition to the ordinary lifecycle controls.
+
+The source Lead remains visibly active while its GraphRun is nonterminal.
+Plain-text input submitted in that conversation is persisted as Lead-targeted
+Graph steering and wakes the same turn instead of admitting an unrelated turn.
+
+Artifact preview uses only the authenticated, run-scoped bounded-read route:
+the server verifies that the reference belongs to the GraphRun and the
+renderer retains only the current byte/line page. Every mutation reconciles
+persisted server truth. Status is not color-only; keyboard, ARIA, screen
+reader, localization, and reduced-motion behavior are supported.
+
+## Configuration, rollout, and safe disable
+
+Configuration is under `agents.kun.graph`, grouped into `scheduler`, `context`,
+`mailbox`, `supervision`, `writeIsolation`, `routing`, `learning`, and
+`retention`. Compatibility defaults are:
+
+```text
+enabled=false
+defaultStrategy=direct
+rolloutStage=stable
+learning.mode=off
+writeIsolation.mode=serialize
+writeIsolation.allowWorktrees=false
+```
+
+The product always runs the complete stable Graph capability set. The legacy
+`rolloutStage` field remains readable for downgrade compatibility, but it no
+longer gates loops, supervision, or learning. Those capabilities are controlled
+only by their explicit settings; promotion still requires evidence and user
+authority.
+
+Safe disable sets `enabled=false` and `defaultStrategy=direct`. It stops new
+creation, automatic supervision, and automatic learning, fences and pauses
+nonterminal runs, and waits for active workers to settle. Existing runs and
+learned data remain inspectable; do not delete the data directory as a rollback
+mechanism.
+
+Missing Graph settings migrate to compatibility defaults, so old workspaces,
+threads, and ordinary child sessions are untouched. Before downgrading, disable
+Graph and ensure no live worker remains.
+
+For backup, pause/stop Kun and copy `graphs`, `graph-resources`,
+`project-agents`, `graph-learning`, and referenced `artifacts` together.
+Restore their relative layout and let startup recovery reconcile them. Never
+restore a snapshot without its journal suffix or a registry without referenced
+learning/artifact data.
+
+## Incident triage
+
+Start with `GET /v1/graphs/diagnostics`; it exposes sanitized aggregates, not
+paths, prompts, secrets, or raw patches.
+
+- Creation failure: check enablement, orchestration, and plan validation.
+- Stuck blocked node: inspect required outcomes, the predecessor's source-Lead
+  review, approved data-result packets, loop back-edge, and terminal failure.
+- Worker does not stop: cancel and inspect worker/lease/worktree cleanup state.
+- Write conflict: preserve the worktree and resolve through review/human merge.
+- Corrupt journal: preserve the directory and restore a trusted snapshot plus
+  suffix; never truncate the only copy.
+- Orphan after restart: let recovery persist orphan/retry/supervision before
+  manual retry.
+- Running source Lead after restart: lifecycle recovery redelivers unseen
+  supervision or terminal signals and resumes an interrupted continuation
+  using the same durable turn identity.
+- Bad learned candidate: reject or roll back and inspect provenance plus audit;
+  do not edit registry JSON manually.
+
+Cleanup is idempotent. Only accepted worktrees are automatically removed.
+Unaccepted, conflicted, and orphaned worktrees stay `preserved` until their
+contents are backed up or integrated.

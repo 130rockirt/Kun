@@ -248,6 +248,11 @@ describe('typed reference registry and component migrators', () => {
       'schedule',
       'artifact'
     ]))
+    expect(DATA_MIGRATION_REFERENCE_DESCRIPTORS_V1).toContainEqual(expect.objectContaining({
+      component: 'renderer-state',
+      kind: 'workspace-file',
+      jsonPointerPatterns: ['/write/*/filePaths/*']
+    }))
   })
 
   it('applies a deterministic contiguous migrator chain', () => {

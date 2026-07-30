@@ -36,7 +36,6 @@ const { KUN_RUNTIME_REQUIRED_PATHS } = require('./after-pack.cjs')
 
 const EXTENSION_ID = 'kun-smoke.packaged'
 const DEFAULT_EXTENSION_IDS = [
-  'kun-examples.kun-video-editor',
   'kun-examples.presentation-studio',
   'kun-examples.social-media-sidebar'
 ]
@@ -134,8 +133,8 @@ async function main() {
     }
     for (const id of DEFAULT_EXTENSION_IDS) {
       const installed = listed.extensions.find((extension) => extension?.id === id)
-      if (installed?.globallyEnabled !== true) {
-        throw new Error(`Packaged default extension was not enabled through the registry: ${id}`)
+      if (installed?.globallyEnabled !== false) {
+        throw new Error(`Packaged default extension was not registered as disabled: ${id}`)
       }
       runKun(runtimeEntry, [
         'extension', 'uninstall', id, '--data-dir', profile, '--json'

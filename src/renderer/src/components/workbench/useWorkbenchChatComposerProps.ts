@@ -10,7 +10,13 @@ type UseWorkbenchChatComposerPropsInput = {
   setInput: ComposerProps['setInput']
   composerMode: ComposerProps['mode']
   setComposerMode: ComposerProps['setMode']
+  composerOrchestration: NonNullable<ComposerProps['orchestration']>
+  graphEnabled: boolean
+  setComposerOrchestration: NonNullable<ComposerProps['onOrchestrationChange']>
+  openGraph: NonNullable<ComposerProps['onOpenGraph']>
+  openGraphChild: NonNullable<ComposerProps['onOpenGraphChild']>
   busy: boolean
+  currentTurnOrchestration: ComposerProps['currentTurnOrchestration']
   route: string
   runtimeReady: boolean
   activeThreadId: string | null
@@ -21,7 +27,9 @@ type UseWorkbenchChatComposerPropsInput = {
   composerPickList: ComposerProps['composerPickList']
   composerModelGroups: ComposerProps['composerModelGroups']
   composerReasoningEffort: ComposerProps['composerReasoningEffort']
+  composerFastMode: NonNullable<ComposerProps['composerFastMode']>
   setComposerReasoningEffort: ComposerProps['onComposerReasoningEffortChange']
+  setComposerFastMode: NonNullable<ComposerProps['onComposerFastModeChange']>
   setClawChannelModel: (channelId: string, modelId: string, providerId?: string) => void | Promise<unknown>
   setComposerModel: (modelId: string, providerId?: string) => void
   openProvidersSettings: () => void
@@ -70,7 +78,13 @@ export function useWorkbenchChatComposerProps({
   setInput,
   composerMode,
   setComposerMode,
+  composerOrchestration,
+  graphEnabled,
+  setComposerOrchestration,
+  openGraph,
+  openGraphChild,
   busy,
+  currentTurnOrchestration,
   route,
   runtimeReady,
   activeThreadId,
@@ -81,7 +95,9 @@ export function useWorkbenchChatComposerProps({
   composerPickList,
   composerModelGroups,
   composerReasoningEffort,
+  composerFastMode,
   setComposerReasoningEffort,
+  setComposerFastMode,
   setClawChannelModel,
   setComposerModel,
   openProvidersSettings,
@@ -129,7 +145,13 @@ export function useWorkbenchChatComposerProps({
     setInput,
     mode: composerMode,
     setMode: setComposerMode,
+    orchestration: composerOrchestration,
+    graphEnabled,
+    onOrchestrationChange: setComposerOrchestration,
+    onOpenGraph: openGraph,
+    onOpenGraphChild: openGraphChild,
     busy,
+    currentTurnOrchestration,
     runtimeReady,
     hasActiveThread: Boolean(activeThreadId),
     composerModel: route === 'claw' ? activeClawChannelModel ?? 'auto' : composerModel,
@@ -137,6 +159,7 @@ export function useWorkbenchChatComposerProps({
     composerPickList,
     composerModelGroups,
     composerReasoningEffort: route === 'chat' || route === 'claw' ? composerReasoningEffort : undefined,
+    composerFastMode: route === 'chat' && !activeSddDraft ? composerFastMode : undefined,
     modelControlVariant: route === 'chat' && !activeSddDraft ? 'split' : 'combined',
     onComposerModelChange: (modelId, providerId) => {
       if (route === 'claw' && activeClawChannelId) {
@@ -147,6 +170,9 @@ export function useWorkbenchChatComposerProps({
     },
     onComposerReasoningEffortChange: route === 'chat' || route === 'claw'
       ? setComposerReasoningEffort
+      : undefined,
+    onComposerFastModeChange: route === 'chat' && !activeSddDraft
+      ? setComposerFastMode
       : undefined,
     onConfigureProviders: openProvidersSettings,
     onSend: handleSend,
@@ -216,22 +242,28 @@ export function useWorkbenchChatComposerProps({
     extraFileMentionCandidates,
     composerFileReferences,
     composerMode,
+    composerOrchestration,
     composerModel,
     composerModelGroups,
     composerPickList,
     composerProviderId,
     composerReasoningEffort,
+    composerFastMode,
     createThread,
+    currentTurnOrchestration,
     disabledSkillIds,
     handleGuiPlanCommand,
     handlePasteClipboardImage,
     handlePickAttachments,
     handleSend,
     guideQueuedMessage,
+    graphEnabled,
     input,
     interrupt,
     openDesignFileTreeSidePanel,
     openFileTreeSidePanel,
+    openGraph,
+    openGraphChild,
     openProvidersSettings,
     openSideConversationDraft,
     pickComposerFileReferences,
@@ -246,8 +278,10 @@ export function useWorkbenchChatComposerProps({
     runtimeSkills,
     setClawChannelModel,
     setComposerMode,
+    setComposerOrchestration,
     setComposerModel,
     setComposerReasoningEffort,
+    setComposerFastMode,
     setInput,
     setUseWorktreePool,
     setWorktreeBranch,

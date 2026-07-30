@@ -25,6 +25,7 @@ function settings(): AppSettingsV1 {
     theme: 'system',
     uiFontScale: 0.82,
     chatContentMaxWidthPx: 896,
+    composerSendKey: 'enter',
     provider: defaultModelProviderSettings(),
     agents: {
       kun: defaultKunRuntimeSettings()
@@ -394,6 +395,15 @@ describe('runtimeSettingsApplyMode', () => {
         kun: {
           ...prev.agents.kun,
           storage: { ...prev.agents.kun.storage, backend: 'file' as const }
+        }
+      }
+    })).toBe('restart')
+    expect(runtimeSettingsApplyMode(prev, {
+      ...prev,
+      agents: {
+        kun: {
+          ...prev.agents.kun,
+          browserUse: { ...prev.agents.kun.browserUse, enabled: false }
         }
       }
     })).toBe('restart')

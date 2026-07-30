@@ -8,6 +8,7 @@ import {
   inspectKunpackHeader,
   inspectKunpackPackage,
   validateKunpackArchiveDirectory,
+  validateKunpackArchiveEntryPath,
   validateKunpackEntryPath,
   validateKunpackLinkMetadata
 } from './archive-security'
@@ -83,7 +84,7 @@ describe('Kunpack archive security', () => {
     expect(validateKunpackEntryPath('payload/workspaces/ws_1/files/合法-name.txt')).toBe('payload/workspaces/ws_1/files/合法-name.txt')
   })
 
-  it('rejects case/Unicode aliases and compression or expanded-size bombs', () => {
+  it('defers case and Unicode destination aliases to import planning while rejecting bombs', () => {
     const entry = (path: string, logicalBytes = 1, compressedBytes = 1) => ({
       path,
       logicalBytes,
@@ -97,16 +98,23 @@ describe('Kunpack archive security', () => {
     expect(() => validateKunpackArchiveDirectory(
       [entry('payload/File.txt'), entry('payload/file.txt')],
       []
-    )).toThrow('ambiguous path collision')
+    )).not.toThrow()
     expect(() => validateKunpackArchiveDirectory(
       [entry('payload/café.txt'), entry('payload/cafe\u0301.txt')],
       []
-    )).toThrow('ambiguous path collision')
+    )).not.toThrow()
     expect(() => validateKunpackArchiveDirectory(
       [entry('payload/bomb.bin', 20_000, 1)],
       [],
       { ...DEFAULT_KUNPACK_INSPECTION_BUDGET, maximumCompressionRatio: 100 }
     )).toThrow('compression ratio')
+  })
+
+  it('accepts source-platform names during archive inspection and leaves target legality to planning', () => {
+    expect(validateKunpackArchiveEntryPath('payload/workspaces/ws_1/files/CON.txt'))
+      .toBe('payload/workspaces/ws_1/files/CON.txt')
+    expect(validateKunpackArchiveEntryPath('payload/workspaces/ws_1/files/name:stream'))
+      .toBe('payload/workspaces/ws_1/files/name:stream')
   })
 
   it('rejects external link targets and link loops', () => {

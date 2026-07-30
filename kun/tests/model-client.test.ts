@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
-import { CompatModelClient } from '../src/adapters/model/compat-model-client.js'
+import {
+  CompatModelClient,
+  DEFAULT_STREAM_IDLE_TIMEOUT_MS
+} from '../src/adapters/model/compat-model-client.js'
 import {
   makeAssistantReasoningItem,
   makeAssistantTextItem,
@@ -95,6 +98,10 @@ function sseStream(payloads: Array<Record<string, unknown> | '[DONE]'>): Readabl
 }
 
 describe('CompatModelClient', () => {
+  it('uses the current 7.5 minute stream idle timeout by default', () => {
+    expect(DEFAULT_STREAM_IDLE_TIMEOUT_MS).toBe(450_000)
+  })
+
   it('uses request.model over client default model', async () => {
     const response = {
       id: 'r2',
@@ -1165,7 +1172,7 @@ describe('CompatModelClient', () => {
     expect(sentHeaders[0]?.Accept).toBeUndefined()
   })
 
-  it('keeps requiredToolName as loop metadata instead of sending provider tool_choice', async () => {
+  it('serializes requiredToolName as an exact provider-native tool choice', async () => {
     const response = {
       id: 'required-tool-metadata',
       model: 'deepseek-chat',
@@ -1198,7 +1205,10 @@ describe('CompatModelClient', () => {
       // drain
     }
     expect(sentBodies[0]).toHaveProperty('tools')
-    expect(sentBodies[0]).not.toHaveProperty('tool_choice')
+    expect(sentBodies[0]).toHaveProperty('tool_choice', {
+      type: 'function',
+      function: { name: 'echo' }
+    })
   })
 
   it('passes the request abort signal to fetch', async () => {
@@ -2222,6 +2232,7 @@ describe('CompatModelClient', () => {
       apiKey: 'k',
       model: 'deepseek-v4-pro',
       modelProxyUrl: 'http://127.0.0.1:7890',
+      retry: { maxAttempts: 0 },
       fetchImpl
     })
     const chunks: ModelStreamChunk[] = []

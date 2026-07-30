@@ -24,6 +24,8 @@ class FakeProvider implements AgentProvider {
   patchMock = vi.fn()
   interruptMock = vi.fn()
   subscribeMock = vi.fn()
+  submitUserInputMock = vi.fn()
+  cancelUserInputMock = vi.fn()
   refreshThreadsMock = vi.fn()
   closeSideMock = vi.fn()
   getCapabilities() {
@@ -42,7 +44,12 @@ class FakeProvider implements AgentProvider {
   async sendUserMessage(
     threadId: string,
     text: string,
-    options?: { model?: string; reasoningEffort?: string }
+    options?: {
+      model?: string
+      providerId?: string
+      accountId?: string
+      reasoningEffort?: string
+    }
   ) {
     this.sendMock(threadId, text, options)
     return { threadId, turnId: `turn_${threadId}_${Date.now()}` }
@@ -95,8 +102,12 @@ class FakeProvider implements AgentProvider {
     })
   }
   async submitApprovalDecision() {}
-  async submitUserInputResponse() {}
-  async cancelUserInput() {}
+  async submitUserInputResponse(inputId: string, answers: unknown[]) {
+    this.submitUserInputMock(inputId, answers)
+  }
+  async cancelUserInput(inputId: string) {
+    this.cancelUserInputMock(inputId)
+  }
 }
 
 function buildHarness(overrides: Partial<ChatState> = {}): Harness {
@@ -140,7 +151,9 @@ function buildHarness(overrides: Partial<ChatState> = {}): Harness {
     turnReasoningLastAtByUserId: {},
     inspectorSelectedId: null,
     composerModel: 'deepseek-chat',
+    composerProviderId: 'deepseek',
     composerPickList: ['deepseek-chat'],
+    composerModelGroups: [],
     queuedMessages: [],
     watchTurnCompletion: {},
     unreadThreadIds: {},
@@ -198,6 +211,7 @@ function buildHarness(overrides: Partial<ChatState> = {}): Harness {
     openSideConversationDraft: () => undefined,
     sendSideMessage: async () => false,
     interruptSide: async () => undefined,
+    resolveSideUserInput: async () => undefined,
     setSideInput: () => undefined,
     setSideModel: () => undefined,
     setSideReasoningEffort: () => undefined,
@@ -275,6 +289,56 @@ describe('chat-store-side-actions', () => {
     expect(provider.forkMock).not.toHaveBeenCalled()
   })
 
+  it('keeps side user input live and resolves it against the side block', async () => {
+    const { actions, state, provider } = buildHarness()
+    const sideId = await actions.spawnSideConversation()
+    const sink = provider.subscribeMock.mock.calls.at(-1)?.[2] as ThreadEventSink
+
+    sink.onUserInput({
+      requestId: 'request-side-1',
+      itemId: 'item-side-1',
+      turnId: 'turn-side-1',
+      questions: [{
+        id: 'scope',
+        header: 'Scope',
+        question: 'Where should this be available?',
+        options: [
+          { label: 'Side only', description: 'Keep it in the side conversation.' },
+          { label: 'Everywhere', description: 'Share it with the main conversation.' }
+        ]
+      }]
+    })
+
+    expect(state.sideConversations[sideId!].blocks).toContainEqual(
+      expect.objectContaining({
+        kind: 'user_input',
+        id: 'item-side-1',
+        requestId: 'request-side-1',
+        status: 'pending',
+        live: true
+      })
+    )
+
+    await actions.resolveSideUserInput(sideId!, 'item-side-1', {
+      kind: 'submit',
+      answers: [{ id: 'scope', label: 'Side only', value: 'Side only' }]
+    })
+
+    expect(provider.submitUserInputMock).toHaveBeenCalledWith(
+      'request-side-1',
+      [{ id: 'scope', label: 'Side only', value: 'Side only' }]
+    )
+    expect(state.sideConversations[sideId!].blocks).toContainEqual(
+      expect.objectContaining({
+        kind: 'user_input',
+        id: 'item-side-1',
+        status: 'submitted',
+        live: false,
+        answers: [{ id: 'scope', label: 'Side only', value: 'Side only' }]
+      })
+    )
+  })
+
   it('spawnSideConversation with seedText immediately sends the first turn', async () => {
     const { actions, state, provider } = buildHarness()
     const id = await actions.spawnSideConversation('what is the dependency tree?')
@@ -294,12 +358,14 @@ describe('chat-store-side-actions', () => {
     const { actions, state, provider } = buildHarness()
     const id = await actions.spawnSideConversation('use the draft controls', {
       model: 'custom-side-model',
+      providerId: 'custom-side-provider',
       reasoningEffort: 'low'
     })
 
     expect(id).toBe('side_thr_main')
     expect(state.sideConversations[id!]).toMatchObject({
       model: 'custom-side-model',
+      providerId: 'custom-side-provider',
       reasoningEffort: 'low'
     })
     expect(provider.sendMock).toHaveBeenCalledWith(
@@ -307,7 +373,44 @@ describe('chat-store-side-actions', () => {
       'use the draft controls',
       expect.objectContaining({
         model: 'custom-side-model',
+        providerId: 'custom-side-provider',
         reasoningEffort: 'low'
+      })
+    )
+  })
+
+  it('keeps the selected provider bound to the side model without changing the main composer', async () => {
+    const { actions, state, provider } = buildHarness({
+      composerModel: 'gpt-5.6-sol',
+      composerProviderId: 'codex',
+      composerPickList: ['gpt-5.6-sol', 'composer-2.5'],
+      composerModelGroups: [{
+        providerId: 'cursor-subscription',
+        accountId: 'cursor-account',
+        label: 'Cursor subscription',
+        modelIds: ['composer-2.5']
+      }]
+    })
+
+    const id = await actions.spawnSideConversation()
+    actions.setSideModel(id!, 'composer-2.5', 'cursor-subscription')
+    const sent = await actions.sendSideMessage(id!, 'route through Cursor')
+
+    expect(id).toBe('side_thr_main')
+    expect(sent).toBe(true)
+    expect(state.sideConversations[id!]).toMatchObject({
+      model: 'composer-2.5',
+      providerId: 'cursor-subscription'
+    })
+    expect(state.composerModel).toBe('gpt-5.6-sol')
+    expect(state.composerProviderId).toBe('codex')
+    expect(provider.sendMock).toHaveBeenCalledWith(
+      id,
+      'route through Cursor',
+      expect.objectContaining({
+        model: 'composer-2.5',
+        providerId: 'cursor-subscription',
+        accountId: 'cursor-account'
       })
     )
   })
@@ -398,6 +501,58 @@ describe('chat-store-side-actions', () => {
       summary: 'Compacted context',
       messagesBefore: 120,
       createdAt: '2026-06-02T00:00:00.000Z'
+    })
+  })
+
+  it('keeps side assistant text intact across tools and replaces it from the authoritative snapshot', async () => {
+    const { actions, state, provider } = buildHarness()
+    const id = (await actions.spawnSideConversation())!
+    const sink = provider.subscribeMock.mock.calls.at(-1)?.[2] as ThreadEventSink
+
+    sink.onDeltas([{
+      seq: 1,
+      threadId: id,
+      turnId: 'turn_side_1',
+      itemId: 'assistant_side_1',
+      createdAt: '2026-06-02T00:00:00.000Z',
+      kind: 'agent_message',
+      text: 'partial '
+    }])
+    sink.onTool({
+      itemId: 'tool_side_1',
+      turnId: 'turn_side_1',
+      summary: 'read',
+      status: 'running'
+    })
+    sink.onDeltas([{
+      seq: 2,
+      threadId: id,
+      turnId: 'turn_side_1',
+      itemId: 'assistant_side_1',
+      kind: 'agent_message',
+      text: 'text'
+    }])
+
+    expect(state.sideConversations[id].liveAssistant).toBe('partial text')
+    expect(state.sideConversations[id].blocks.filter((block) => block.kind === 'assistant')).toEqual([])
+
+    sink.onAssistantItem?.({
+      itemId: 'assistant_side_1',
+      threadId: id,
+      turnId: 'turn_side_1',
+      kind: 'agent_message',
+      status: 'completed',
+      createdAt: '2026-06-02T00:00:00.000Z',
+      text: 'partial missing middle text'
+    })
+
+    expect(state.sideConversations[id].liveAssistant).toBe('')
+    expect(state.sideConversations[id].blocks).toContainEqual({
+      kind: 'assistant',
+      id: 'assistant_side_1',
+      turnId: 'turn_side_1',
+      createdAt: '2026-06-02T00:00:00.000Z',
+      text: 'partial missing middle text'
     })
   })
 

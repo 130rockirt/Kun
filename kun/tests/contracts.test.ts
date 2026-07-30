@@ -134,6 +134,17 @@ describe('contracts', () => {
     expect(parsed.reasoningEffort).toBe('max')
   })
 
+  it('accepts only the canonical priority service tier on start turns', () => {
+    expect(StartTurnRequest.parse({
+      prompt: 'Move faster',
+      serviceTier: 'priority'
+    }).serviceTier).toBe('priority')
+    expect(StartTurnRequest.safeParse({
+      prompt: 'Do not use the legacy label on the wire',
+      serviceTier: 'fast'
+    }).success).toBe(false)
+  })
+
   it('accepts per-turn execution policy on start turn payloads', () => {
     const parsed = StartTurnRequest.parse({
       prompt: 'Inspect without changing files',
@@ -165,6 +176,68 @@ describe('contracts', () => {
     expect(event).toMatchObject({
       kind: 'turn_failed',
       message: 'model stream exploded'
+    })
+  })
+
+  it('preserves the immutable authority snapshot on turn lifecycle events', () => {
+    const event = RuntimeEvent.parse({
+      kind: 'turn_started',
+      seq: 1,
+      timestamp: '2026-07-30T00:00:01.000Z',
+      threadId: 'thr_1',
+      turnId: 'turn_1',
+      approvalPolicy: 'on-request',
+      sandboxMode: 'workspace-write',
+      approvalReviewer: 'agent'
+    })
+
+    expect(event).toMatchObject({
+      kind: 'turn_started',
+      approvalPolicy: 'on-request',
+      sandboxMode: 'workspace-write',
+      approvalReviewer: 'agent'
+    })
+  })
+
+  it('accepts replayable automatic approval lifecycle and agent decision source', () => {
+    const started = RuntimeEvent.parse({
+      kind: 'approval_review_started',
+      seq: 1,
+      timestamp: '2026-07-30T00:00:00.000Z',
+      threadId: 'thr_1',
+      turnId: 'turn_1',
+      reviewId: 'review_1',
+      approvalId: 'approval_1',
+      toolName: 'bash',
+      reviewer: 'agent',
+      status: 'in-progress',
+      summary: 'Canonical action data unavailable'
+    })
+    const resolved = RuntimeEvent.parse({
+      kind: 'approval_resolved',
+      seq: 3,
+      timestamp: '2026-07-30T00:00:00.002Z',
+      threadId: 'thr_1',
+      turnId: 'turn_1',
+      approvalId: 'approval_1',
+      toolName: 'bash',
+      status: 'denied',
+      approvalReviewer: 'agent',
+      decisionSource: 'agent',
+      summary: 'Canonical action data unavailable',
+      reason: 'Automatic review failed closed.'
+    })
+
+    expect(started).toMatchObject({
+      kind: 'approval_review_started',
+      reviewer: 'agent',
+      status: 'in-progress'
+    })
+    expect(started).not.toHaveProperty('action')
+    expect(resolved).toMatchObject({
+      kind: 'approval_resolved',
+      status: 'denied',
+      decisionSource: 'agent'
     })
   })
 
@@ -365,6 +438,41 @@ describe('contracts', () => {
 })
 
 describe('cli', () => {
+  it('uses full access for a genuinely new serve profile', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'kun-fresh-serve-'))
+    try {
+      expect(parseServeOptions(['--data-dir', dir])).toMatchObject({
+        approvalPolicy: 'auto',
+        sandboxMode: 'danger-full-access',
+        approvalReviewer: 'user'
+      })
+      expect(validateServeOptions({ dataDir: dir })).toMatchObject({
+        approvalPolicy: 'auto',
+        sandboxMode: 'danger-full-access',
+        approvalReviewer: 'user'
+      })
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps compatibility defaults for an existing config that predates permission fields', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'kun-legacy-serve-'))
+    try {
+      const configPath = join(dir, 'config.json')
+      await writeFile(configPath, JSON.stringify({
+        serve: { dataDir: join(dir, 'data'), model: 'legacy-model' }
+      }), 'utf8')
+      expect(parseServeOptions(['--config', configPath])).toMatchObject({
+        approvalPolicy: 'on-request',
+        sandboxMode: 'workspace-write',
+        approvalReviewer: 'user'
+      })
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   it('parses serve options with the canonical flags', () => {
     const parsed = parseServeOptions([
       '--host',
@@ -381,12 +489,15 @@ describe('cli', () => {
       'auto',
       '--sandbox-mode',
       'workspace-write',
+      '--approval-reviewer',
+      'agent',
       '--token-economy',
       '--insecure'
     ])
     expect(parsed.host).toBe('127.0.0.1')
     expect(parsed.port).toBe(18787)
     expect(parsed.tokenEconomyMode).toBe(true)
+    expect(parsed.approvalReviewer).toBe('agent')
     expect(parsed.tokenEconomy?.enabled).toBe(true)
     expect(parsed.toolOutputLimits).toEqual({
       maxLines: DEFAULT_TOOL_OUTPUT_MAX_LINES,
@@ -561,6 +672,7 @@ describe('cli', () => {
           dataDir: join(dir, 'data'),
           model: 'deepseek-v4-flash',
           approvalPolicy: 'auto',
+          approvalReviewer: 'agent',
           tokenEconomy: {
             enabled: true,
             compressToolDescriptions: false,
@@ -646,6 +758,7 @@ describe('cli', () => {
       expect(parsed.port).toBe(19091)
       expect(parsed.model).toBe('deepseek-v4-pro')
       expect(parsed.approvalPolicy).toBe('auto')
+      expect(parsed.approvalReviewer).toBe('agent')
       expect(parsed.tokenEconomyMode).toBe(true)
       expect(parsed.tokenEconomy).toMatchObject({
         enabled: true,

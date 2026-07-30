@@ -3,7 +3,7 @@ import { readFile, readdir, stat } from 'node:fs/promises'
 import { spawn, spawnSync, type ChildProcess, type SpawnOptions } from 'node:child_process'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep, win32 } from 'node:path'
 import type { ToolHostContext } from '../../ports/tool-host.js'
-import { effectiveSandboxMode } from './sandbox-policy.js'
+import { effectiveSandboxMode, pathAllowedByScopes } from './sandbox-policy.js'
 import { isBackgroundShellOutputPath } from '../../services/background-shell-output.js'
 import type {
   EditInstruction,
@@ -88,9 +88,18 @@ export async function resolveWorkspacePath(
   absolutePath: string
   relativePath: string
 }> {
-  const root = workspaceRoot(context.workspace)
+  const roots = [...new Set([context.workspace, ...(context.additionalWorkspaces ?? [])].map(workspaceRoot))]
+  const root = roots[0]!
   const lexicalAbsolutePath = isAbsolute(inputPath) ? resolve(inputPath) : resolve(root, inputPath)
+  const delegatedPathBoundary = context.allowedReadPaths !== undefined
   if (
+    delegatedPathBoundary &&
+    !pathAllowedByScopes(lexicalAbsolutePath, root, context.allowedReadPaths ?? [])
+  ) {
+    throw new Error(`path is outside the delegated child read scopes: ${inputPath}`)
+  }
+  if (
+    !delegatedPathBoundary &&
     !options.enforceWorkspaceBoundary &&
     isBackgroundShellOutputPath(lexicalAbsolutePath, {
       runtimeDataDir: context.runtimeDataDir,
@@ -109,16 +118,25 @@ export async function resolveWorkspacePath(
   // danger-full-access, and lets read/ls/find/grep/lsp reach system paths
   // (e.g. C:\Windows on Windows, /etc on POSIX) instead of failing with
   // "path escapes the workspace root".
-  if (!options.enforceWorkspaceBoundary && effectiveSandboxMode(context) === 'danger-full-access') {
+  if (
+    !delegatedPathBoundary &&
+    !options.enforceWorkspaceBoundary &&
+    effectiveSandboxMode(context) === 'danger-full-access'
+  ) {
     return {
       workspaceRoot: root,
       absolutePath: lexicalAbsolutePath,
       relativePath: normalizeToolPath(relative(root, lexicalAbsolutePath) || '.')
     }
   }
-  const { physicalRoot } = await resolveExistingWorkspaceRoot(root)
+  const primaryRoot = await resolveExistingWorkspaceRoot(root)
+  const additionalRoots = await Promise.all(roots.slice(1).map((lexicalRoot) =>
+    resolveExistingWorkspaceRoot(lexicalRoot).catch(() => null)
+  ))
+  const resolvedRoots = [primaryRoot, ...additionalRoots.filter((entry) => entry !== null)]
   const resolvedAbsolute = await resolvePathThroughSymlinks(lexicalAbsolutePath)
-  const isInsideWorkspace = isPathInsideOrEqual(physicalRoot, resolvedAbsolute)
+  const matchingRoot = resolvedRoots.find((candidate) => isPathInsideOrEqual(candidate.physicalRoot, resolvedAbsolute))
+  const isInsideWorkspace = Boolean(matchingRoot)
   const isApprovedExternalPath = !options.enforceWorkspaceBoundary &&
     context.approvedExternalWriteTargets?.some((target) =>
       sameFilesystemPath(target.path, resolvedAbsolute)
@@ -130,9 +148,9 @@ export async function resolveWorkspacePath(
   // layers. External grants use the physical path that was checked so a
   // symlink alias cannot be redirected after validation.
   return {
-    workspaceRoot: root,
+    workspaceRoot: matchingRoot?.lexicalRoot ?? root,
     absolutePath: isApprovedExternalPath ? resolvedAbsolute : lexicalAbsolutePath,
-    relativePath: normalizeToolPath(relative(root, lexicalAbsolutePath) || '.')
+    relativePath: normalizeToolPath(relative(matchingRoot?.lexicalRoot ?? root, lexicalAbsolutePath) || '.')
   }
 }
 

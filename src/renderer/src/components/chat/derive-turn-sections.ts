@@ -30,9 +30,9 @@ type ResolvedFileChangeBlock = ToolBlock & {
 type DeriveTurnSectionsInput = {
   turn: Turn
   isProcessing: boolean
-  /** Reserved for call-site clarity; live thinking is rendered at the turn bottom. */
+  /** Current reasoning stream, appended to the active chronological timeline. */
   liveProcessText: string
-  /** Reserved for call-site clarity; live assistant is rendered by MessageTimeline. */
+  /** Current assistant stream, appended to the active chronological timeline. */
   liveContent: string
   workspaceRoot: string
 }
@@ -77,10 +77,9 @@ function hasGeneratedFiles(block: ToolBlock): boolean {
 }
 
 /**
- * Index of the last assistant block that carries visible (non-think) content.
- * That single segment is the turn's final answer bubble; everything before it
- * — including any consecutive narration segments — belongs inside the
- * collapsed process timeline. Returns -1 when the turn has no assistant text.
+ * Returns the last persisted assistant block with visible non-thinking text.
+ * After settlement this one block remains outside the folded process as the
+ * final answer. Every earlier assistant update stays in chronological work.
  */
 function findLastAssistantContentIndex(blocks: ChatBlock[]): number {
   for (let index = blocks.length - 1; index >= 0; index -= 1) {
@@ -94,10 +93,11 @@ function findLastAssistantContentIndex(blocks: ChatBlock[]): number {
 
 /**
  * Pure derivation of a turn's three view slices:
- *  - `processBlocks`: chronological reasoning/tool/compaction/approval
- *    trace, including in-flight assistant output while a turn is processing.
- *  - `assistantContentBlocks`: assistant content that should render as the
- *    visible message body once it is no longer part of the active work timeline.
+ *  - `processBlocks`: chronological assistant/reasoning/tool/compaction/
+ *    approval trace. It contains the whole active stream while processing and
+ *    all intermediate output after the turn settles.
+ *  - `assistantContentBlocks`: the single final assistant text shown outside
+ *    the folded process after settlement.
  *  - `turnFileChanges`: successful file_change tool blocks whose detail
  *    is a unified diff, with paths normalised for display.
  *
@@ -107,18 +107,13 @@ function findLastAssistantContentIndex(blocks: ChatBlock[]): number {
 export function deriveTurnSections({
   turn,
   isProcessing,
-  liveProcessText: _liveProcessText,
-  liveContent: _liveContent,
+  liveProcessText,
+  liveContent,
   workspaceRoot
 }: DeriveTurnSectionsInput): TurnSections {
   const processBlocks: ChatBlock[] = []
   const assistantContentBlocks: TurnAssistantBlock[] = []
   const runtimeErrorBlocks: TurnRuntimeErrorBlock[] = []
-  // Only the SINGLE last assistant text segment is the visible answer bubble
-  // (rendered outside the collapsed timeline). Every earlier "我先看看…" preface
-  // / intermediate narration stays inside 已处理 — even consecutive trailing
-  // segments. While processing, nothing is surfaced as the final body yet;
-  // everything is part of the live trace.
   const finalAssistantContentIndex = isProcessing
     ? -1
     : findLastAssistantContentIndex(turn.blocks)
@@ -131,7 +126,13 @@ export function deriveTurnSections({
     if (block.kind === 'assistant') {
       const split = splitThink(block.text)
       if (split.think) {
-        processBlocks.push({ kind: 'reasoning', id: `${block.id}-think`, text: split.think })
+        processBlocks.push({
+          kind: 'reasoning',
+          id: `${block.id}-think`,
+          turnId: block.turnId,
+          createdAt: block.createdAt,
+          text: split.think
+        })
       }
       if (split.content.trim()) {
         const contentBlock: TurnAssistantBlock = { ...block, text: split.content }
@@ -148,10 +149,23 @@ export function deriveTurnSections({
     }
   }
 
-  // Live thinking and streaming assistant text are rendered at the turn
-  // bottom / as a dedicated MessageBubble by MessageTimeline. Keep them out
-  // of processBlocks so loading chrome cannot interleave above later text
-  // or replace completed tool summaries.
+  // Live values represent the current tail after all persisted blocks. Keeping
+  // them in this same projection makes text, thought, and tool work read as one
+  // downward timeline instead of splitting assistant output into another lane.
+  if (isProcessing && liveProcessText.trim()) {
+    processBlocks.push({
+      kind: 'reasoning',
+      id: 'live-reasoning',
+      text: liveProcessText
+    })
+  }
+  if (isProcessing && liveContent.trim()) {
+    processBlocks.push({
+      kind: 'assistant',
+      id: 'live-assistant',
+      text: liveContent
+    })
+  }
 
   const turnFileChanges: ToolBlock[] = isProcessing
     ? []

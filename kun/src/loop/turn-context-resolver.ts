@@ -2,7 +2,14 @@ import type { ModelCapabilityMetadata } from '../contracts/capabilities.js'
 import type { MemoryRecord } from '../contracts/memory.js'
 import type { ThreadRecord } from '../contracts/threads.js'
 import type { Turn } from '../contracts/turns.js'
-import { DEFAULT_APPROVAL_POLICY, DEFAULT_SANDBOX_MODE } from '../contracts/policy.js'
+import type { ActingTurnModelRoute } from '../contracts/turns.js'
+import type { TurnClientSurface } from '../contracts/turns.js'
+import {
+  ApprovalReviewerSchema,
+  DEFAULT_APPROVAL_POLICY,
+  DEFAULT_APPROVAL_REVIEWER,
+  DEFAULT_SANDBOX_MODE
+} from '../contracts/policy.js'
 import type { InstructionRuntime, InstructionTurnResolution } from '../instructions/instruction-runtime.js'
 import type { MemoryStore } from '../memory/memory-store.js'
 import type { GuiPlanContext, ToolHost, ToolHostContext } from '../ports/tool-host.js'
@@ -51,6 +58,7 @@ export type TurnContextResolverInput = {
   turn: Turn
   history: readonly import('../contracts/items.js').TurnItem[]
   model: string
+  actingModelRoute?: ActingTurnModelRoute
   modelCapabilities: ModelCapabilityMetadata
   signal: AbortSignal
   mode: TurnModeContext
@@ -72,6 +80,10 @@ export type TurnContextResolverDeps = {
   interactiveToolBridge: Pick<InteractiveToolBridge, 'awaitUserInput'>
   forcedAllowedToolNames?: readonly string[]
   allowedProviderIds?: readonly string[]
+  allowedSkillIds?: readonly string[]
+  allowedReadPaths?: readonly string[]
+  allowedWritePaths?: readonly string[]
+  allowedArtifactIds?: readonly string[]
   blockedProviderIds?: readonly string[]
   blockedToolNames?: readonly string[]
   blockedSkillIds?: readonly string[]
@@ -88,31 +100,41 @@ export class TurnContextResolver {
 
   async resolve(input: TurnContextResolverInput): Promise<PreparedTurnContext> {
     const workspace = input.thread.workspace
-    const approvalPolicy = normalizeApprovalPolicy(input.thread.approvalPolicy)
-    const sandboxMode = normalizeSandboxMode(input.thread.sandboxMode)
-    // Keep the legacy dependency/read order. Besides making failures and
-    // diagnostics deterministic, the runtimes retain per-turn diagnostic
-    // snapshots, so speculative parallel resolution would be observable.
-    const attachments = await this.deps.resolveAttachments({
-      attachmentIds: input.turn.attachmentIds ?? [],
-      threadId: input.threadId,
-      workspace,
-      modelCapabilities: input.modelCapabilities
-    })
-    const skillResolution = await this.deps.skillRuntime?.resolveTurn({
-      prompt: input.turn.prompt,
-      workspace,
-      threadId: input.threadId,
-      turnId: input.turnId,
-      ...(this.deps.blockedSkillIds ? { blockedSkillIds: this.deps.blockedSkillIds } : {})
-    }) ?? EMPTY_SKILL_RESOLUTION
-    const instructionResolution = await this.deps.instructionRuntime?.resolveTurn({ workspace }) ??
-      EMPTY_INSTRUCTION_RESOLUTION
+    const clientSurface = resolveTurnClientSurface(input.turn)
+    const approvalPolicy = normalizeApprovalPolicy(
+      input.turn.approvalPolicy ?? input.thread.approvalPolicy
+    )
+    const sandboxMode = normalizeSandboxMode(
+      input.turn.sandboxMode ?? input.thread.sandboxMode
+    )
+    const approvalReviewer = normalizeApprovalReviewer(
+      input.turn.approvalReviewer ?? input.thread.approvalReviewer
+    )
     const memoryStore = this.deps.getMemoryStore?.() ?? this.deps.memoryStore
-    const memories = await retrieveMemories(memoryStore, {
-      prompt: input.turn.prompt,
-      workspace
-    })
+    // These inputs are independent snapshots. Resolve their filesystem/store
+    // I/O together so model dispatch pays the slowest branch, not their sum.
+    const [attachments, skillResolution, instructionResolution, memories] = await Promise.all([
+      this.deps.resolveAttachments({
+        attachmentIds: input.turn.attachmentIds ?? [],
+        threadId: input.threadId,
+        workspace,
+        modelCapabilities: input.modelCapabilities
+      }),
+      this.deps.skillRuntime?.resolveTurn({
+        prompt: input.turn.prompt,
+        workspace,
+        threadId: input.threadId,
+        turnId: input.turnId,
+        ...(this.deps.allowedSkillIds ? { allowedSkillIds: this.deps.allowedSkillIds } : {}),
+        ...(this.deps.blockedSkillIds ? { blockedSkillIds: this.deps.blockedSkillIds } : {})
+      }) ?? Promise.resolve(EMPTY_SKILL_RESOLUTION),
+      this.deps.instructionRuntime?.resolveTurn({ workspace }) ??
+        Promise.resolve(EMPTY_INSTRUCTION_RESOLUTION),
+      retrieveMemories(memoryStore, {
+        prompt: input.turn.prompt,
+        workspace
+      })
+    ])
     const planTurnActive = !input.mode.dedicatedSvgTurn && !input.mode.planContextStale && (
       input.mode.effectiveMode === 'plan' || Boolean(input.mode.activePlanContext)
     )
@@ -143,6 +165,10 @@ export class TurnContextResolver {
       threadId: input.threadId,
       turnId: input.turnId,
       workspace,
+      orchestration: input.turn.orchestration,
+      ...(input.turn.messageSource ? { messageSource: input.turn.messageSource } : {}),
+      additionalWorkspaces: input.thread.additionalWorkspaces,
+      clientSurface,
       threadMode: input.mode.effectiveMode,
       ...(input.mode.activePlanContext ? { activePlanContext: input.mode.activePlanContext } : {}),
       ...(input.turn.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
@@ -158,11 +184,17 @@ export class TurnContextResolver {
         : {}),
       approvalPolicy,
       sandboxMode,
+      approvalReviewer,
+      actingModelRoute: input.actingModelRoute,
       ...(userInputDisabled ? { userInputDisabled: true } : {}),
       signal: input.signal
     }, {
       memoryEnabled: Boolean(memoryStore),
       ...(this.deps.allowedProviderIds ? { allowedProviderIds: this.deps.allowedProviderIds } : {}),
+      ...(this.deps.allowedSkillIds ? { allowedSkillIds: this.deps.allowedSkillIds } : {}),
+      ...(this.deps.allowedReadPaths ? { allowedReadPaths: this.deps.allowedReadPaths } : {}),
+      ...(this.deps.allowedWritePaths ? { allowedWritePaths: this.deps.allowedWritePaths } : {}),
+      ...(this.deps.allowedArtifactIds ? { allowedArtifactIds: this.deps.allowedArtifactIds } : {}),
       ...(this.deps.blockedProviderIds ? { blockedProviderIds: this.deps.blockedProviderIds } : {}),
       ...(this.deps.blockedToolNames ? { blockedToolNames: this.deps.blockedToolNames } : {}),
       ...(this.deps.blockedSkillIds ? { blockedSkillIds: this.deps.blockedSkillIds } : {}),
@@ -174,13 +206,19 @@ export class TurnContextResolver {
       threadId: input.threadId,
       turnId: input.turnId,
       workspace,
+      orchestration: input.turn.orchestration,
+      ...(input.turn.messageSource ? { messageSource: input.turn.messageSource } : {}),
+      additionalWorkspaces: input.thread.additionalWorkspaces,
       model: input.model,
+      actingModelRoute: input.actingModelRoute,
       mode: input.mode.effectiveMode,
+      clientSurface,
       dedicatedSvgTurn: input.mode.dedicatedSvgTurn,
       planContextStale: input.mode.planContextStale,
       ...(input.mode.activePlanContext ? { activePlanContext: input.mode.activePlanContext } : {}),
       approvalPolicy,
       sandboxMode,
+      approvalReviewer,
       signal: input.signal,
       history: input.history,
       modelCapabilities: input.modelCapabilities,
@@ -201,6 +239,28 @@ export class TurnContextResolver {
       tools
     }
   }
+}
+
+export function resolveTurnClientSurface(turn: Pick<
+  Turn,
+  | 'clientSurface'
+  | 'imContext'
+  | 'guiPlan'
+  | 'guiDesignCanvas'
+  | 'guiDesignMode'
+  | 'guiDesignArtifact'
+  | 'agentSurface'
+>): TurnClientSurface {
+  if (turn.clientSurface) return turn.clientSurface
+  if (turn.imContext) return 'im'
+  if (
+    turn.guiPlan ||
+    turn.guiDesignCanvas ||
+    turn.guiDesignMode ||
+    turn.guiDesignArtifact ||
+    turn.agentSurface
+  ) return 'gui'
+  return 'api'
 }
 
 /**
@@ -253,6 +313,13 @@ function normalizeApprovalPolicy(value: string | undefined): ToolHostContext['ap
     default:
       return DEFAULT_APPROVAL_POLICY
   }
+}
+
+function normalizeApprovalReviewer(
+  value: string | undefined
+): NonNullable<ToolHostContext['approvalReviewer']> {
+  const parsed = ApprovalReviewerSchema.safeParse(value)
+  return parsed.success ? parsed.data : DEFAULT_APPROVAL_REVIEWER
 }
 
 function normalizeSandboxMode(

@@ -13,6 +13,9 @@ describe('isWorkspaceTextPreviewPath', () => {
     expect(isWorkspaceTextPreviewPath('/tmp/app/README.md')).toBe(true)
     expect(isWorkspaceTextPreviewPath('/tmp/app/.gitignore')).toBe(true)
     expect(isWorkspaceTextPreviewPath('/tmp/app/architecture.svg')).toBe(true)
+    expect(isWorkspaceTextPreviewPath('/tmp/app/install.ps1')).toBe(true)
+    expect(isWorkspaceTextPreviewPath('/tmp/app/Profile.psm1')).toBe(true)
+    expect(isWorkspaceTextPreviewPath('/tmp/app/Module.psd1')).toBe(true)
   })
 
   it('rejects common binary and media files', () => {
@@ -44,8 +47,10 @@ describe('workspaceFilePreviewKind', () => {
     expect(workspaceFilePreviewKind('budget.xlsx')).toBe('office')
     expect(workspaceFilePreviewKind('voice.mp3')).toBe('audio')
     expect(workspaceFilePreviewKind('demo.webm')).toBe('video')
+    expect(workspaceFilePreviewKind('install.ps1')).toBe('text')
     expect(workspaceFilePreviewKind('archive.zip')).toBe('unsupported')
     expect(isWorkspacePreviewPath('photo.png')).toBe(true)
+    expect(workspaceFileKindLabel('install.ps1')).toBe('PS1')
     expect(workspaceFileKindLabel('budget.xlsx')).toBe('XLSX')
   })
 })

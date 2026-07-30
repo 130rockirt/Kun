@@ -7,6 +7,7 @@ import {
   cursorSubscriptionDiscoveryPayloadSchema,
   isSafeOpenExternalUrl,
   modelsDevCatalogPayloadSchema,
+  notificationPayloadSchema,
   runtimeRequestPayloadSchema,
   scheduleTaskFromTextPayloadSchema,
   settingsPatchSchema,
@@ -27,6 +28,27 @@ import {
 } from './app-ipc-schemas'
 
 describe('app-ipc-schemas', () => {
+  it('accepts only modeled completion notification sources', () => {
+    expect(notificationPayloadSchema.parse({
+      threadId: 'thread-main',
+      source: 'main-agent',
+      title: 'Kun',
+      body: 'Done'
+    }).source).toBe('main-agent')
+    expect(notificationPayloadSchema.parse({
+      threadId: 'thread-child',
+      source: 'subagent',
+      title: 'Kun',
+      body: 'Done'
+    }).source).toBe('subagent')
+    expect(() => notificationPayloadSchema.parse({
+      threadId: 'thread-other',
+      source: 'extension',
+      title: 'Kun',
+      body: 'Done'
+    })).toThrow()
+  })
+
   it('accepts only a bounded Cursor API key for subscription discovery', () => {
     expect(cursorSubscriptionDiscoveryPayloadSchema.parse({
       apiKey: ' cursor-key '
@@ -99,6 +121,41 @@ describe('app-ipc-schemas', () => {
     })
 
     expect(payload.path).toBe('/v1/runtime/tools')
+  })
+
+  it('accepts only the modeled Kun model connection operations', () => {
+    for (const payload of [
+      { path: '/v1/model-connections', method: 'GET' },
+      { path: '/v1/model-connections', method: 'PATCH', body: '{}' },
+      { path: '/v1/model-connections/events?since_revision=1', method: 'GET' },
+      { path: '/v1/model-connections/connect', method: 'POST', body: '{}' },
+      { path: '/v1/model-connections/select', method: 'POST', body: '{}' },
+      { path: '/v1/model-connections/oauth/start', method: 'POST', body: '{}' },
+      { path: '/v1/model-connections/oauth/session_1', method: 'GET' },
+      { path: '/v1/model-connections/oauth/session_1', method: 'DELETE' },
+      {
+        path: '/v1/model-connections/oauth/session_1/submit',
+        method: 'POST',
+        body: '{}'
+      },
+      { path: '/v1/model-connections/claude/sdk', method: 'GET' },
+      { path: '/v1/model-connections/claude/sdk/install', method: 'POST', body: '{}' },
+      { path: '/v1/model-connections/provider-a', method: 'PATCH', body: '{}' },
+      { path: '/v1/model-connections/provider-a', method: 'DELETE' },
+      {
+        path: '/v1/model-connections/provider-a/credential',
+        method: 'PUT',
+        body: '{}'
+      },
+      { path: '/v1/model-connections/provider-a/credential', method: 'DELETE' },
+      { path: '/v1/model-connections/provider-a/probe', method: 'POST', body: '{}' }
+    ] as const) {
+      expect(runtimeRequestPayloadSchema.parse(payload).path).toBe(payload.path)
+    }
+    expect(() => runtimeRequestPayloadSchema.parse({
+      path: '/v1/model-connections/events',
+      method: 'DELETE'
+    })).toThrow(/runtime request path is not allowed/)
   })
 
   it('accepts only the modeled Kun route diagnostics operations', () => {
@@ -237,6 +294,100 @@ describe('app-ipc-schemas', () => {
     })).toThrow(/runtime request path is not allowed/)
   })
 
+  it('accepts only the modeled Kun Graph workbench endpoints', () => {
+    for (const payload of [
+      { path: '/v1/graphs?thread_id=thread_1', method: 'GET' },
+      { path: '/v1/graph-drafts?thread_id=thread_1', method: 'GET' },
+      { path: '/v1/graph-drafts/draft%201', method: 'GET' },
+      {
+        path: '/v1/graph-drafts/draft_1/resume',
+        method: 'POST',
+        body: '{"expectedRevision":2}'
+      },
+      {
+        path: '/v1/graph-drafts/draft_1/cancel',
+        method: 'POST',
+        body: '{"expectedRevision":2}'
+      },
+      { path: '/v1/graphs/run%201', method: 'GET' },
+      { path: '/v1/graphs/run_1/events?since_seq=3', method: 'GET' },
+      { path: '/v1/graphs/run_1/artifacts/artifact%201?offset=0', method: 'GET' },
+      { path: '/v1/graphs/run_1/start', method: 'POST', body: '{}' },
+      { path: '/v1/graphs/run_1/pause', method: 'POST', body: '{}' },
+      { path: '/v1/graphs/run_1/resume', method: 'POST', body: '{}' },
+      { path: '/v1/graphs/run_1/cleanup', method: 'POST', body: '{}' },
+      { path: '/v1/graphs/run_1/cancel', method: 'POST', body: '{}' },
+      { path: '/v1/graphs/run_1/retry', method: 'POST', body: '{}' },
+      { path: '/v1/graphs/run_1/steer', method: 'POST', body: '{}' },
+      { path: '/v1/graphs/run_1/patch', method: 'POST', body: '{}' },
+      { path: '/v1/graphs/run_1/reviews', method: 'POST', body: '{}' },
+      {
+        path: '/v1/graph-projects/identity?workspace=%2Ftmp%2Fproject',
+        method: 'GET'
+      },
+      {
+        path: '/v1/graph-projects/project_1/agents?include_archived=true',
+        method: 'GET'
+      },
+      { path: '/v1/graph-projects/project_1/evidence', method: 'GET' },
+      { path: '/v1/graph-projects/project_1/scores', method: 'GET' },
+      { path: '/v1/graph-projects/project_1/audit', method: 'GET' },
+      { path: '/v1/graph-projects/project_1/candidates', method: 'GET' },
+      { path: '/v1/graph-projects/project_1/jobs', method: 'GET' },
+      {
+        path: '/v1/graph-projects/project_1/agents/profile_1/lifecycle',
+        method: 'POST',
+        body: '{}'
+      },
+      {
+        path: '/v1/graph-projects/project_1/agents/profile_1/export',
+        method: 'GET'
+      },
+      {
+        path: '/v1/graph-projects/project_1/agents/import',
+        method: 'POST',
+        body: '{}'
+      },
+      {
+        path: '/v1/graph-projects/project_1/agents/merge',
+        method: 'POST',
+        body: '{}'
+      },
+      {
+        path: '/v1/graph-projects/project_1/candidates/candidate_1/action',
+        method: 'POST',
+        body: '{}'
+      },
+      {
+        path: '/v1/graph-projects/project_1/consolidate',
+        method: 'POST',
+        body: '{}'
+      }
+    ] as const) {
+      expect(runtimeRequestPayloadSchema.parse(payload).path).toBe(payload.path)
+    }
+
+    for (const payload of [
+      { path: '/v1/graphs', method: 'POST' },
+      { path: '/v1/graph-drafts', method: 'POST' },
+      { path: '/v1/graph-drafts/draft_1', method: 'DELETE' },
+      { path: '/v1/graph-drafts/draft_1/resume', method: 'GET' },
+      { path: '/v1/graph-drafts/draft_1/cancel', method: 'DELETE' },
+      { path: '/v1/graphs/run_1/start', method: 'DELETE' },
+      { path: '/v1/graph-projects/identity', method: 'POST' },
+      {
+        path: '/v1/graph-projects/project_1/agents/profile_1/lifecycle',
+        method: 'GET'
+      },
+      { path: '/v1/graphs/run_1/secrets', method: 'GET' },
+      { path: '/v1/graph-projects/project_1/admin', method: 'GET' }
+    ] as const) {
+      expect(() => runtimeRequestPayloadSchema.parse(payload)).toThrow(
+        /runtime request path is not allowed/
+      )
+    }
+  })
+
   it('accepts the Kun thread review endpoint', () => {
     expect(runtimeRequestPayloadSchema.parse({
       path: '/v1/threads/thr_1/review',
@@ -318,6 +469,7 @@ describe('app-ipc-schemas', () => {
         kun: {
           port: 19000,
           model: 'deepseek-chat',
+          approvalReviewer: 'agent',
           modelProfiles: {
             'custom-vision-model': {
               aliases: ['custom-vision'],
@@ -366,10 +518,15 @@ describe('app-ipc-schemas', () => {
         tone: ['专业', '科技感'],
         designSystemPreset: 'shadcn'
       },
+      notifications: {
+        mainAgentTurnComplete: false,
+        subagentTurnComplete: true
+      },
       disabledSkillIds: ['test-skill-08']
     })
 
     expect(payload.agents?.kun?.port).toBe(19000)
+    expect(payload.agents?.kun?.approvalReviewer).toBe('agent')
     expect(payload.agents?.kun?.modelProfiles?.['custom-vision-model']?.inputModalities).toEqual(['text', 'image'])
     expect(payload.agents?.kun?.modelProfiles?.['custom-vision-model']?.maxOutputTokens).toBe(32000)
     expect(payload.agents?.kun?.tokenEconomy?.enabled).toBe(true)
@@ -387,6 +544,10 @@ describe('app-ipc-schemas', () => {
     expect(payload.write?.selectionAssist?.quickActions).toHaveLength(2)
     expect(payload.design?.brandColor).toBe('#3b82d8')
     expect(payload.design?.designSystemPreset).toBe('shadcn')
+    expect(payload.notifications).toEqual({
+      mainAgentTurnComplete: false,
+      subagentTurnComplete: true
+    })
     expect(payload.disabledSkillIds).toEqual(['test-skill-08'])
   })
 
@@ -402,6 +563,12 @@ describe('app-ipc-schemas', () => {
     })).toThrow()
     expect(() => settingsPatchSchema.parse({
       workflow: { webhookPort: 9999 }
+    })).toThrow()
+  })
+
+  it('rejects unknown approval reviewers', () => {
+    expect(() => settingsPatchSchema.parse({
+      agents: { kun: { approvalReviewer: 'operator' } }
     })).toThrow()
   })
 
@@ -566,8 +733,11 @@ describe('app-ipc-schemas', () => {
     expect(payload.agents?.kun?.imageGeneration?.quality).toBe('high')
     expect(payload.schedule?.model).toBe(longModelId)
     expect(payload.workflow?.model).toBe(longModelId)
-    expect(() => settingsPatchSchema.parse({
+    expect(settingsPatchSchema.parse({
       agents: { kun: { imageGeneration: { defaultResolution: '4K' } } }
+    }).agents?.kun?.imageGeneration?.defaultResolution).toBe('4K')
+    expect(() => settingsPatchSchema.parse({
+      agents: { kun: { imageGeneration: { defaultResolution: '8K' } } }
     })).toThrow()
   })
 
@@ -815,6 +985,20 @@ describe('app-ipc-schemas', () => {
     })
 
     expect(payload.agents?.kun?.runtimeTuning?.maxConcurrentTurns).toBe(256)
+  })
+
+  it('accepts the Agent Perspective capture default', () => {
+    const payload = settingsPatchSchema.parse({
+      agents: {
+        kun: {
+          llmDebug: {
+            defaultThreadCaptureEnabled: true
+          }
+        }
+      }
+    })
+
+    expect(payload.agents?.kun?.llmDebug?.defaultThreadCaptureEnabled).toBe(true)
   })
 
   it('rejects an out-of-range maximum turn duration', () => {

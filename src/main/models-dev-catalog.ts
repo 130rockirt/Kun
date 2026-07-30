@@ -69,6 +69,7 @@ const PROFILE_MATCHES: Record<string, ModelsDevProviderMatch> = {
   'claude-subscription': catalogMatch('anthropic', 'enrichment-only'),
   'gemini-subscription': catalogMatch('google', 'enrichment-only'),
   'gemini-cli-subscription': catalogMatch('google', 'enrichment-only'),
+  ollama: catalogMatch('ollama-cloud', 'enrichment-only'),
   'grok-subscription': catalogMatch('xai', 'enrichment-only'),
   'vercel-ai-gateway': catalogMatch('vercel')
 }
@@ -110,6 +111,13 @@ const ALIYUN_TOKEN_PLAN_URLS = urlMatchMap({
   'https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1': 'alibaba-token-plan-cn',
   'https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1': 'alibaba-token-plan'
 })
+
+const ENRICHMENT_ONLY_URL_MATCHES = new Map<string, ModelsDevProviderMatch>([
+  [
+    normalizeCatalogBaseUrl('https://ollama.com/v1'),
+    catalogMatch('ollama-cloud', 'enrichment-only')
+  ]
+])
 
 // URL fallback is intentionally limited to unambiguous public endpoints.
 // MiniMax's regular API and Token Plan share the same URLs, so those entries
@@ -188,7 +196,10 @@ export function resolveModelsDevProvider(
     return ALIYUN_TOKEN_PLAN_URLS.get(baseUrl) ?? null
   }
 
-  return PROFILE_MATCHES[providerId] ?? UNAMBIGUOUS_URL_MATCHES.get(baseUrl) ?? null
+  return PROFILE_MATCHES[providerId]
+    ?? ENRICHMENT_ONLY_URL_MATCHES.get(baseUrl)
+    ?? UNAMBIGUOUS_URL_MATCHES.get(baseUrl)
+    ?? null
 }
 
 export class ModelsDevCatalogService {

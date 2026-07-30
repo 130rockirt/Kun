@@ -146,6 +146,25 @@ describe('SubagentSettingsEditor', () => {
     expect(text).toContain('Small model')
     expect(loadComposerModels).toHaveBeenCalledOnce()
 
+    const settingsTabs = renderer.root.findAllByProps({ role: 'tab' })
+      .filter((tab) => String(tab.props.id).startsWith('subagent-settings-tab-'))
+    expect(settingsTabs).toHaveLength(3)
+    expect(settingsTabs.map((tab) => tab.props.id)).toEqual([
+      'subagent-settings-tab-policy',
+      'subagent-settings-tab-profiles',
+      'subagent-settings-tab-automatic'
+    ])
+    expect(renderer.root.findByProps({ id: 'subagent-settings-panel-policy' }).props.hidden).toBe(false)
+    expect(renderer.root.findByProps({ id: 'subagent-settings-panel-profiles' }).props.hidden).toBe(true)
+    expect(renderer.root.findByProps({ id: 'subagent-settings-panel-automatic' }).props.hidden).toBe(true)
+
+    await act(async () => {
+      renderer.root.findByProps({ id: 'subagent-settings-tab-profiles' }).props.onClick()
+    })
+    expect(renderer.root.findByProps({ id: 'subagent-settings-panel-policy' }).props.hidden).toBe(true)
+    expect(renderer.root.findByProps({ id: 'subagent-settings-panel-profiles' }).props.hidden).toBe(false)
+    expect(renderer.root.findByProps({ id: 'subagent-settings-panel-automatic' }).props.hidden).toBe(true)
+
     const researchChip = buttonWithText(renderer, 'Research')
     expect(researchChip).toBeDefined()
     await act(async () => {

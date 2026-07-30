@@ -89,6 +89,41 @@ export function createAppIcon(source: string): Electron.NativeImage {
 }
 
 /**
+ * Combines explicit 1x and 2x PNGs into one NativeImage. Menu-bar artwork needs
+ * both representations because a 16px bitmap alone is visibly soft on Retina
+ * displays, while shrinking a large app icon loses its small-size geometry.
+ */
+export function createMultiScaleIcon(
+  standardSource: string,
+  retinaSource: string
+): Electron.NativeImage {
+  const standard = createAppIcon(standardSource)
+  if (standard.isEmpty()) return standard
+
+  const retina = createAppIcon(retinaSource)
+  if (retina.isEmpty()) return standard
+
+  standard.addRepresentation({
+    scaleFactor: 2,
+    dataURL: retina.toDataURL()
+  })
+  return standard
+}
+
+/**
+ * macOS already renders the owning application's icon on notification banners.
+ * Supplying Notification.icon there adds a second content image, so omit the
+ * property entirely. Windows and Linux still need the explicit app artwork.
+ */
+export function notificationIconOptions(
+  image: Electron.NativeImage,
+  platform: NodeJS.Platform = process.platform
+): Partial<Pick<Electron.NotificationConstructorOptions, 'icon'>> {
+  if (platform === 'darwin' || image.isEmpty()) return {}
+  return { icon: image }
+}
+
+/**
  * 给 Tray 选图。优先用专为托盘优化的 primary 图(通常是更小、更简化的
  * 剪影,在 16x16 / 24x24 任务栏尺寸下也清晰);primary 加载失败时回退到
  * 主应用图标,这样即使托盘专用图丢了也不至于看到 electron 默认占位。
@@ -106,8 +141,8 @@ export function pickTrayIcon(
   return primary.isEmpty() ? fallback : primary
 }
 
-export function trayIconSize(platform: NodeJS.Platform = process.platform): number {
-  return platform === 'darwin' ? 22 : 16
+export function trayIconSize(_platform: NodeJS.Platform = process.platform): number {
+  return 16
 }
 
 export function prepareTrayIcon(
@@ -117,15 +152,21 @@ export function prepareTrayIcon(
   if (image.isEmpty()) return image
 
   const size = trayIconSize(platform)
-  const resized = image.resize({
-    width: size,
-    height: size,
-    quality: 'best'
-  })
+  const currentSize = image.getSize()
+  const alreadySized = currentSize.width === size && currentSize.height === size
+  const resized = alreadySized
+    ? image
+    : image.resize({
+        width: size,
+        height: size,
+        quality: 'best'
+      })
   const result = resized.isEmpty() ? image : resized
 
   if (platform === 'darwin') {
-    result.setTemplateImage(false)
+    // Template images automatically follow light/dark menu-bar appearance and
+    // invert while selected, matching native macOS status items.
+    result.setTemplateImage(true)
   }
 
   return result

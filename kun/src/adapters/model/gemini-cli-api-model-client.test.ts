@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { ModelRequest, ModelStreamChunk } from '../../ports/model-client.js'
 import { makeToolCallItem, makeToolResultItem } from '../../domain/item.js'
 import { LlmDebugRecorder } from '../../services/llm-debug-recorder.js'
+import { GRAPH_DEFINE_PLAN_INPUT_JSON_SCHEMA } from '../tool/graph-mode-tool-provider.js'
 import { GeminiCliOAuthSource } from './gemini-cli-oauth.js'
 import {
   buildGeminiCliCodeAssistRequest,
@@ -51,6 +52,40 @@ function oauth(fetchImpl: typeof fetch): GeminiCliOAuthSource {
 }
 
 describe('GeminiCliApiModelClient', () => {
+  it('preserves the minimal graph_define_plan schema in Gemini function declarations', () => {
+    const input = request({
+      tools: [{
+        name: 'graph_define_plan',
+        description: 'Define a Graph plan',
+        inputSchema: GRAPH_DEFINE_PLAN_INPUT_JSON_SCHEMA
+      }]
+    })
+    const built = buildGeminiCliCodeAssistRequest(input, input.model, 'project')
+    const builtRequest = built.request as {
+      tools?: Array<{
+        functionDeclarations?: Array<{
+          parametersJsonSchema?: unknown
+        }>
+      }>
+    }
+    const functionDeclaration = builtRequest.tools?.[0]?.functionDeclarations?.[0]
+    const schema = functionDeclaration?.parametersJsonSchema as {
+      properties: {
+        plan: {
+          properties: Record<string, unknown>
+        }
+      }
+    }
+
+    expect(schema.properties.plan.properties).toHaveProperty('tasks')
+    expect(schema.properties.plan.properties).toHaveProperty('completionTaskKeys')
+    expect(JSON.stringify(schema)).not.toContain('"budget"')
+    expect(JSON.stringify(schema)).not.toContain('"model"')
+    expect(JSON.stringify(schema)).not.toContain('"providerId"')
+    expect(schema.properties.plan.properties).not.toHaveProperty('revision')
+    expect(schema.properties.plan.properties).not.toHaveProperty('workspaceRoot')
+  })
+
   it('streams direct Code Assist text, reasoning, tools, usage, and provider metadata', async () => {
     const requests: Array<{
       url: string
@@ -353,6 +388,47 @@ describe('GeminiCliApiModelClient', () => {
     expect(streamAttempts).toBe(2)
   })
 
+  it('retries a Code Assist fetch failure before surfacing a network error', async () => {
+    let streamAttempts = 0
+    const fetchImpl = vi.fn(async (url: string | URL | Request) => {
+      if (String(url).endsWith(':loadCodeAssist')) {
+        return new Response(JSON.stringify({
+          currentTier: { id: 'standard-tier' },
+          cloudaicompanionProject: 'project'
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      streamAttempts += 1
+      if (streamAttempts === 1) throw new TypeError('fetch failed')
+      return new Response(
+        'data: {"response":{"candidates":[{"content":{"role":"model","parts":[{"text":"recovered"}]},"finishReason":"STOP"}]}}\n\n',
+        { status: 200, headers: { 'content-type': 'text/event-stream' } }
+      )
+    }) as unknown as typeof fetch
+    const client = new GeminiCliApiModelClient({
+      model: 'gemini-2.5-flash',
+      fetchImpl,
+      oauthSource: oauth(fetchImpl),
+      retry: {
+        maxAttempts: 1,
+        initialDelayMs: 0,
+        httpStatusCodes: [429, 503]
+      }
+    })
+
+    expect(await drain(client.stream(request()))).toEqual([
+      {
+        kind: 'retrying',
+        attempt: 1,
+        maxAttempts: 1,
+        delayMs: 0,
+        reason: 'network'
+      },
+      { kind: 'assistant_text_delta', text: 'recovered' },
+      { kind: 'completed', stopReason: 'stop' }
+    ])
+    expect(streamAttempts).toBe(2)
+  })
+
   it('parses Google quota reset durations into failure metadata', async () => {
     const fetchImpl = vi.fn(async (url: string | URL | Request) => {
       if (String(url).endsWith(':loadCodeAssist')) {
@@ -372,7 +448,8 @@ describe('GeminiCliApiModelClient', () => {
     const client = new GeminiCliApiModelClient({
       model: 'gemini-2.5-flash',
       fetchImpl,
-      oauthSource: oauth(fetchImpl)
+      oauthSource: oauth(fetchImpl),
+      retry: { maxAttempts: 0 }
     })
 
     expect(await drain(client.stream(request()))).toEqual([expect.objectContaining({

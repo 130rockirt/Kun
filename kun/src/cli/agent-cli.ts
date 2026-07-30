@@ -14,6 +14,7 @@ import {
   ServeExitCode
 } from './serve.js'
 import type { ServeOptions } from './cli-options.js'
+import { runTuiCommand } from '../tui/index.js'
 
 type WritableLike = {
   write(chunk: string): unknown
@@ -30,10 +31,15 @@ export type CliIo = {
 
 export const KUN_CLI_USAGE = `kun <command> [options]
 
+Run \`kun\` without a command to open the inline terminal UI.
+
 Commands:
   serve [options]            Start the local HTTP/SSE runtime
   run [options] <prompt>     Run one agent turn without the GUI
   chat [options]             Start a line-oriented terminal chat
+  tui [options]              Open the inline terminal UI (same as bare kun)
+  runtime <command>          Inspect, stop, or restart the shared runtime
+  update [--check|--yes]     Check or update a stable standalone TUI archive
   exec [options] <tool>      List or invoke tools directly
   extension <command>        Create, validate, pack, install, and manage extensions
 
@@ -45,6 +51,7 @@ Common options:
   --provider-id <id>         Route through a configured or extension model provider
   --account-id <id>          Bind an opaque core-managed provider account
   --approval-policy <p>      on-request | untrusted | never | auto | suggest
+  --approval-reviewer <r>    user | agent
   --json                     Emit machine-readable JSON where supported
   --jsonl                    Stream one machine-readable event per line for kun run
 
@@ -71,6 +78,7 @@ const VALUE_FLAGS = new Set([
   'account-id',
   'approval-policy',
   'sandbox-mode',
+  'approval-reviewer',
   'workspace',
   'prompt',
   'p',
@@ -78,7 +86,7 @@ const VALUE_FLAGS = new Set([
   'title'
 ])
 
-export type KunCliCommand = 'serve' | 'run' | 'chat' | 'exec' | 'help'
+export type KunCliCommand = 'serve' | 'run' | 'chat' | 'tui' | 'exec' | 'runtime' | 'update' | 'version' | 'help'
 
 export function splitKunCliCommand(argv: readonly string[]): {
   command: KunCliCommand
@@ -86,20 +94,32 @@ export function splitKunCliCommand(argv: readonly string[]): {
   error?: string
 } {
   const first = argv[0]
-  if (!first || first === '--help' || first === '-h' || first === 'help') {
+  if (!first) return { command: 'tui', args: [] }
+  if (first === '--help' || first === '-h' || first === 'help') {
     return { command: 'help', args: [] }
   }
-  if (first === 'serve' || first === 'run' || first === 'chat' || first === 'exec') {
+  if (first === '--version' || first === '-V' || first === 'version') {
+    return { command: 'version', args: [] }
+  }
+  if (
+    first === 'serve' ||
+    first === 'run' ||
+    first === 'chat' ||
+    first === 'tui' ||
+    first === 'exec' ||
+    first === 'runtime' ||
+    first === 'update'
+  ) {
     return { command: first, args: [...argv.slice(1)] }
   }
-  if (first.startsWith('--')) {
-    return { command: 'serve', args: [...argv] }
+  if (first.startsWith('-')) {
+    return { command: 'tui', args: [...argv] }
   }
   return { command: 'help', args: [], error: `unknown command: ${first}` }
 }
 
 export async function runAgentCommand(
-  command: Exclude<KunCliCommand, 'serve' | 'help'>,
+  command: Exclude<KunCliCommand, 'serve' | 'runtime' | 'update' | 'version' | 'help'>,
   argv: readonly string[],
   io: CliIo
 ): Promise<number> {
@@ -108,6 +128,8 @@ export async function runAgentCommand(
       return runOneShot(argv, io)
     case 'chat':
       return runChat(argv, io)
+    case 'tui':
+      return runTuiCommand(argv, io)
     case 'exec':
       return runExec(argv, io)
   }
@@ -137,12 +159,19 @@ async function runOneShot(argv: readonly string[], io: CliIo): Promise<number> {
       ...(parsed.accountId ? { accountId: parsed.accountId } : {}),
       mode: 'agent',
       approvalPolicy: parsed.options.approvalPolicy,
-      sandboxMode: parsed.options.sandboxMode
+      sandboxMode: parsed.options.sandboxMode,
+      approvalReviewer: parsed.options.approvalReviewer
     })
     if (jsonl) writeJsonLine(io.stdout, { type: 'run_started', threadId: thread.id })
     const turn = await runtime.turnService.startTurn({
       threadId: thread.id,
-      request: { prompt, model: parsed.options.model, mode: 'agent' }
+      request: {
+        prompt,
+        model: parsed.options.model,
+        mode: 'agent',
+        clientSurface: 'cli',
+        disableUserInput: true
+      }
     })
     let streamed = false
     const unsubscribe = runtime.eventBus.subscribe(thread.id, (event) => {
@@ -194,7 +223,8 @@ async function runChat(argv: readonly string[], io: CliIo): Promise<number> {
       ...(parsed.accountId ? { accountId: parsed.accountId } : {}),
       mode: 'agent',
       approvalPolicy: parsed.options.approvalPolicy,
-      sandboxMode: parsed.options.sandboxMode
+      sandboxMode: parsed.options.sandboxMode,
+      approvalReviewer: parsed.options.approvalReviewer
     })
     const input = io.stdin ?? processStdin
     const terminal = isTtyInput(input)
@@ -247,7 +277,13 @@ async function runChatTurn(input: {
   if (!prompt || prompt === '/exit' || prompt === '/quit') return false
   const turn = await input.runtime.turnService.startTurn({
     threadId: input.threadId,
-    request: { prompt, model: input.model, mode: 'agent' }
+    request: {
+      prompt,
+      model: input.model,
+      mode: 'agent',
+      clientSurface: 'cli',
+      disableUserInput: true
+    }
   })
   let streamed = false
   const unsubscribe = input.runtime.eventBus.subscribe(input.threadId, (event) => {
@@ -371,12 +407,14 @@ function buildExecContext(options: ServeOptions, workspace: string): ToolHostCon
     threadId: 'cli_exec',
     turnId: 'cli_exec',
     workspace,
+    clientSurface: 'cli',
     threadMode: 'agent',
     model: modelCapabilitiesForModel(options.model, modelProfiles),
     memoryPolicy: { enabled: false },
     delegationPolicy: { enabled: false },
     approvalPolicy: options.approvalPolicy,
     sandboxMode: options.sandboxMode,
+    approvalReviewer: options.approvalReviewer,
     abortSignal: new AbortController().signal,
     awaitApproval: async () => (options.approvalPolicy === 'auto' ? 'allow' : 'deny')
   }

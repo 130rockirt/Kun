@@ -3,7 +3,7 @@ import { MODEL_ENDPOINT_FORMATS } from './model-endpoint-format.js'
 
 export const RUNTIME_CAPABILITY_CONTRACT_VERSION = 1
 
-export const RuntimeCapabilityStatus = z.enum(['available', 'disabled', 'unavailable'])
+export const RuntimeCapabilityStatus = z.enum(['available', 'disabled', 'unavailable', 'interaction-required'])
 export type RuntimeCapabilityStatus = z.infer<typeof RuntimeCapabilityStatus>
 
 export const RuntimeCapabilityState = z
@@ -25,11 +25,17 @@ export type ModelMessagePartSupport = z.infer<typeof ModelMessagePartSupport>
 export const ModelReasoningEffort = z.enum(['auto', 'off', 'low', 'medium', 'high', 'max'])
 export type ModelReasoningEffort = z.infer<typeof ModelReasoningEffort>
 
+export const ModelServiceTier = z.enum(['priority', 'flex'])
+export type ModelServiceTier = z.infer<typeof ModelServiceTier>
+
 export const ModelReasoningRequestProtocol = z.enum([
   'none',
   'deepseek-chat-completions',
   'glm-chat-completions',
   'mimo-chat-completions',
+  'openai-chat-completions',
+  'qwen-chat-completions',
+  'thinking-toggle-chat-completions',
   'openai-responses',
   'anthropic-thinking'
 ])
@@ -58,6 +64,8 @@ export const ModelCapabilityMetadata = z
     maxOutputTokens: z.number().int().positive().optional(),
     messageParts: z.array(ModelMessagePartSupport).min(1),
     reasoning: ModelReasoningCapabilityMetadata.optional(),
+    /** Provider-advertised request service tiers supported by this model. */
+    serviceTiers: z.array(ModelServiceTier).min(1).optional(),
     // Per-model wire-format override. Lets one provider route some models to
     // chat completions and others to Anthropic Messages / OpenAI Responses
     // (e.g. OpenCode Go). Absent means "inherit the provider/runtime format".
@@ -264,7 +272,7 @@ export type SubagentSurface = z.infer<typeof SubagentSurface>
 export const SUBAGENT_READ_ONLY_TOOL_NAMES = [
   'read',
   'grep',
-  'find',
+  'glob',
   'ls',
   'repo_map',
   'web_fetch',
@@ -416,12 +424,13 @@ export const ImageGenerationProtocol = z.enum([
   'openai-images',
   'minimax-image',
   'codex-responses-image',
-  'grok-imagine-image'
+  'grok-imagine-image',
+  'volcengine-ark-image'
 ])
 export type ImageGenerationProtocol = z.infer<typeof ImageGenerationProtocol>
 export const ImageGenerationQuality = z.enum(['auto', 'low', 'medium', 'high'])
 export type ImageGenerationQuality = z.infer<typeof ImageGenerationQuality>
-export const ImageGenerationResolution = z.enum(['auto', '1K', '2K'])
+export const ImageGenerationResolution = z.enum(['auto', '1K', '2K', '3K', '4K'])
 export type ImageGenerationResolution = z.infer<typeof ImageGenerationResolution>
 
 export const ImageGenCapabilityConfig = CapabilityToggleConfig.extend({
@@ -465,7 +474,11 @@ export const MusicGenCapabilityConfig = CapabilityToggleConfig.extend({
 }).strict()
 export type MusicGenCapabilityConfig = z.infer<typeof MusicGenCapabilityConfig>
 
-export const VideoGenerationProtocol = z.enum(['minimax-video', 'grok-imagine-video'])
+export const VideoGenerationProtocol = z.enum([
+  'minimax-video',
+  'grok-imagine-video',
+  'volcengine-ark-video'
+])
 export type VideoGenerationProtocol = z.infer<typeof VideoGenerationProtocol>
 
 export const VideoGenCapabilityConfig = CapabilityToggleConfig.extend({
@@ -499,6 +512,24 @@ export const ComputerUseCapabilityConfig = CapabilityToggleConfig.extend({
 }).strict()
 export type ComputerUseCapabilityConfig = z.infer<typeof ComputerUseCapabilityConfig>
 
+export const BrowserUseMode = z.enum(['public', 'local-development'])
+export type BrowserUseMode = z.infer<typeof BrowserUseMode>
+export const BrowserUseApprovalMode = z.enum(['auto-safe', 'always-ask'])
+export type BrowserUseApprovalMode = z.infer<typeof BrowserUseApprovalMode>
+
+export const BrowserUseCapabilityConfig = CapabilityToggleConfig.extend({
+  mode: BrowserUseMode.default('public'),
+  approvalMode: BrowserUseApprovalMode.default('auto-safe'),
+  maxTabs: z.number().int().min(1).max(3).default(2),
+  maxObservationActionsPerTurn: z.number().int().min(1).max(100).default(30),
+  maxInteractionActionsPerTurn: z.number().int().min(1).max(50).default(12),
+  maxSnapshotNodes: z.number().int().min(10).max(500).default(250),
+  maxSnapshotTextChars: z.number().int().min(1000).max(50_000).default(20_000),
+  maxImageDimension: z.number().int().min(320).max(2048).default(1280),
+  idleTimeoutMs: z.number().int().min(30_000).max(30 * 60_000).default(5 * 60_000)
+}).strict()
+export type BrowserUseCapabilityConfig = z.infer<typeof BrowserUseCapabilityConfig>
+
 export const KunCapabilitiesConfig = z
   .object({
     mcp: McpCapabilityConfig.default(() => McpCapabilityConfig.parse({})),
@@ -512,7 +543,8 @@ export const KunCapabilitiesConfig = z
     speechGen: SpeechGenCapabilityConfig.default(() => SpeechGenCapabilityConfig.parse({})),
     musicGen: MusicGenCapabilityConfig.default(() => MusicGenCapabilityConfig.parse({})),
     videoGen: VideoGenCapabilityConfig.default(() => VideoGenCapabilityConfig.parse({})),
-    computerUse: ComputerUseCapabilityConfig.default(() => ComputerUseCapabilityConfig.parse({}))
+    computerUse: ComputerUseCapabilityConfig.default(() => ComputerUseCapabilityConfig.parse({})),
+    browserUse: BrowserUseCapabilityConfig.default(() => BrowserUseCapabilityConfig.parse({}))
   })
   .strict()
 export type KunCapabilitiesConfig = z.infer<typeof KunCapabilitiesConfig>
@@ -605,6 +637,10 @@ export const RuntimeCapabilityManifest = z
     }).strict(),
     computerUse: RuntimeCapabilityState.extend({
       mode: ComputerUseMode
+    }).strict(),
+    browserUse: RuntimeCapabilityState.extend({
+      mode: BrowserUseMode,
+      approvalMode: BrowserUseApprovalMode
     }).strict()
   })
   .strict()
@@ -673,6 +709,11 @@ export function buildRuntimeCapabilityManifest(input: {
     available?: boolean
     reason?: string
   }
+  browserUse?: {
+    available?: boolean
+    interactionRequired?: boolean
+    reason?: string
+  }
 }): RuntimeCapabilityManifest {
   const config = KunCapabilitiesConfig.parse(input.config ?? {})
   const configuredMcpServers = input.mcp?.configuredServers ?? Object.keys(config.mcp.servers).length
@@ -706,9 +747,9 @@ export function buildRuntimeCapabilityManifest(input: {
     model: input.model,
     cli: {
       serve: available(),
-      run: unavailable('not implemented'),
-      chat: unavailable('not implemented'),
-      exec: unavailable('not implemented')
+      run: available(),
+      chat: available(),
+      exec: available()
     },
     mcp: {
       ...mcpState,
@@ -828,6 +869,16 @@ export function buildRuntimeCapabilityManifest(input: {
         input.computerUse?.reason ?? 'computer-use backend is unavailable on this platform'
       ),
       mode: config.computerUse.mode
+    },
+    browserUse: {
+      ...browserUseCapabilityState(
+        config.browserUse.enabled,
+        input.browserUse?.available === true,
+        input.browserUse?.interactionRequired === true,
+        input.browserUse?.reason
+      ),
+      mode: config.browserUse.mode,
+      approvalMode: config.browserUse.approvalMode
     }
   })
 }
@@ -860,6 +911,38 @@ function providerCapabilityState(
   return availableProvider
     ? { status: 'available', enabled: true, available: true }
     : { status: 'unavailable', enabled: true, available: false, reason: unavailableReason }
+}
+
+function browserUseCapabilityState(
+  enabled: boolean,
+  hostAvailable: boolean,
+  interactionRequired: boolean,
+  reason: string | undefined
+): RuntimeCapabilityState {
+  if (!enabled) {
+    return {
+      status: 'disabled',
+      enabled: false,
+      available: false,
+      reason: 'browser use is disabled by config'
+    }
+  }
+  if (interactionRequired) {
+    return {
+      status: 'interaction-required',
+      enabled: true,
+      available: false,
+      reason: reason ?? 'browser use requires a visible authenticated GUI'
+    }
+  }
+  return hostAvailable
+    ? { status: 'available', enabled: true, available: true }
+    : {
+        status: 'unavailable',
+        enabled: true,
+        available: false,
+        reason: reason ?? 'browser-use host bridge is unavailable'
+      }
 }
 
 function webCapabilityState(

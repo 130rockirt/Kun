@@ -50,6 +50,7 @@ type Props = {
   setComposerReasoningEffort: (effort: ComposerReasoningEffort) => void
   queuedMessages: QueuedUserMessage[]
   removeQueuedMessage: (id: string) => void
+  guideQueuedMessage: (id: string) => void | Promise<unknown>
   attachments?: AttachmentReference[]
   attachmentUploadEnabled?: boolean
   attachmentUploadBusy?: boolean
@@ -108,6 +109,7 @@ function DesignAIRailInner({
   setComposerReasoningEffort,
   queuedMessages,
   removeQueuedMessage,
+  guideQueuedMessage,
   attachments = [],
   attachmentUploadEnabled = false,
   attachmentUploadBusy = false,
@@ -314,9 +316,9 @@ function DesignAIRailInner({
 
   return (
     <aside
-      className={`design-ai-panel ds-no-drag relative flex min-h-0 flex-col overflow-hidden border-l border-ds-border-muted bg-white text-ds-ink backdrop-blur-xl dark:bg-ds-canvas ${className}`}
+      className={`design-ai-panel ds-sidebar-surface ds-no-drag relative flex min-h-0 flex-col overflow-hidden border-l border-ds-border-muted text-ds-ink backdrop-blur-xl ${className}`}
     >
-        <div className="design-ai-header shrink-0 border-b border-ds-border-muted bg-white/92 px-3 py-3 dark:bg-ds-card">
+        <div className="design-ai-header ds-sidebar-surface-chrome shrink-0 border-b border-ds-border-muted px-3 py-3">
           <div className="flex min-w-0 items-center gap-2">
             <button
               type="button"
@@ -411,9 +413,9 @@ function DesignAIRailInner({
           </div>
         ) : null}
 
-        <div className="design-ai-body min-h-0 flex-1 overflow-y-auto overflow-x-hidden bg-white/36 dark:bg-transparent">
+        <div className="design-ai-body ds-sidebar-surface-body min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
           {viewingChildThread ? (
-            <div className="sticky top-0 z-20 border-b border-ds-border-muted/80 bg-white/88 px-4 py-3 backdrop-blur-xl dark:bg-ds-card/88">
+            <div className="ds-sidebar-surface-chrome sticky top-0 z-20 border-b border-ds-border-muted/80 px-4 py-3 backdrop-blur-xl">
               <div className="flex items-center gap-2">
                 <button
                   type="button"
@@ -473,7 +475,7 @@ function DesignAIRailInner({
 
       <div
         data-design-rail-composer
-        className="design-ai-footer shrink-0 border-t border-ds-border-muted bg-white/92 px-4 pb-4 pt-3 dark:bg-ds-card"
+        className="design-ai-footer ds-sidebar-surface-chrome shrink-0 border-t border-ds-border-muted px-4 pb-4 pt-3"
       >
         {!viewingChildThread ? (
           <div className="mb-2 flex flex-wrap items-center gap-2">
@@ -595,6 +597,7 @@ function DesignAIRailInner({
             modelPickerMode="combobox"
             queuedMessages={queuedMessages}
             onRemoveQueuedMessage={removeQueuedMessage}
+            onGuideQueuedMessage={guideQueuedMessage}
             attachments={attachments}
             attachmentUploadEnabled={attachmentUploadEnabled}
             attachmentUploadBusy={attachmentUploadBusy}

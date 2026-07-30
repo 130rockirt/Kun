@@ -1,6 +1,6 @@
 import { mkdtemp, mkdir, readFile, readlink, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { parsePackageRelativePath } from '../../shared/data-migration'
 import { prepareZip64ArchiveEntries, writeZip64Archive } from './kunpack-zip'
@@ -100,9 +100,31 @@ describe('workspace staging and conflict commits', () => {
       operationId: 'import_links', workspaceId: 'ws_test', archivePath: source.archivePath,
       entries: source.entries, destinationRoot: destination, destinationPlatform: 'macos', supportsSymbolicLinks: true
     })
-    expect(await readlink(join(staged.stagingRoot, 'nested', 'link.txt'))).toBe('../target.txt')
+    const stagedLink = staged.files.find((file) => file.relativePath === 'nested/link.txt')!
+    const stagedTarget = staged.files.find((file) => file.relativePath === 'target.txt')!
+    expect(resolve(dirname(stagedLink.stagedPath), await readlink(stagedLink.stagedPath))).toBe(stagedTarget.stagedPath)
     await commitStagedWorkspace({ staged, strategy: 'keep-both' })
     expect(await readFile(join(destination, 'nested', 'link.txt'), 'utf8')).toBe('target')
+  })
+
+  it('stages target-illegal source names safely and publishes only the planned compatible rename', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-workspace-rename-'))
+    roots.push(root)
+    const source = await archive(root, [{ path: 'CON.txt', contents: 'portable' }])
+    const destination = join(root, 'Project')
+    const staged = await stageWorkspaceImport({
+      operationId: 'import_rename', workspaceId: 'ws_test', archivePath: source.archivePath,
+      entries: source.entries, destinationRoot: destination, destinationPlatform: 'windows', supportsSymbolicLinks: false
+    })
+    expect(staged.files[0]?.stagedPath).not.toContain('CON.txt')
+    await commitStagedWorkspace({
+      staged,
+      strategy: 'keep-both',
+      resolutions: { 'CON.txt': 'rename-source' },
+      renamedPaths: { 'CON.txt': parsePackageRelativePath('CON-file-imported.txt') }
+    })
+    expect(await readFile(join(destination, 'CON-file-imported.txt'), 'utf8')).toBe('portable')
+    await expect(readFile(join(destination, 'CON.txt'))).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
   it('preserves independently modified imported paths during rollback', async () => {

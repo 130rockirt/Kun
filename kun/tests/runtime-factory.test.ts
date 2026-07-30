@@ -10,6 +10,7 @@ import { createKunServeRuntime, seedUsageCarryover } from '../src/server/runtime
 import type { UsageSnapshot } from '../src/contracts/usage.js'
 import type { SessionStore } from '../src/ports/session-store.js'
 import { KunCapabilitiesConfig } from '../src/contracts/capabilities.js'
+import { startLlmDebugRoundIfEnabled } from '../src/services/llm-debug-recorder.js'
 
 function usage(overrides: Partial<UsageSnapshot>): UsageSnapshot {
   const promptTokens = overrides.promptTokens ?? 10
@@ -106,7 +107,7 @@ describe('runtime factory usage carryover', () => {
     })
   })
 
-  it('hot-applies model and tool capabilities into runtime info and diagnostics', async () => {
+  it('hot-applies tool capabilities without overriding the registry-owned default model', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'kun-runtime-apply-'))
     tempDirs.push(dataDir)
     const runtime = await createKunServeRuntime({
@@ -143,7 +144,7 @@ describe('runtime factory usage carryover', () => {
       })
 
       expect(applied).toEqual({ ok: true })
-      expect(runtime.info().model).toBe('model-after')
+      expect(runtime.info().model).toBe('model-before')
       expect(runtime.info().capabilities.web.fetch.available).toBe(true)
       expect(runtime.info().capabilities.instructions).toMatchObject({ enabled: false, status: 'disabled' })
       const diagnostics = await runtime.toolDiagnostics?.()
@@ -155,10 +156,13 @@ describe('runtime factory usage carryover', () => {
     }
   })
 
-  it('keeps Agent Perspective capture available when runtime llmDebug is omitted or disabled', async () => {
-    for (const [name, runtimeOptions] of [
-      ['omitted', undefined],
-      ['disabled', { llmDebug: { enabled: false } }]
+  it('keeps the recorder available while gating capture by each thread state', async () => {
+    for (const [name, runtimeOptions, expectedCapture] of [
+      ['omitted', undefined, false],
+      ['disabled', { llmDebug: { enabled: false } }, false],
+      ['enabled-default', {
+        llmDebug: { enabled: true, defaultThreadCaptureEnabled: true }
+      }, true]
     ] as const) {
       const dataDir = await mkdtemp(join(tmpdir(), `kun-runtime-llm-debug-${name}-`))
       tempDirs.push(dataDir)
@@ -181,14 +185,31 @@ describe('runtime factory usage carryover', () => {
 
       try {
         const recorder = runtime.llmDebug
+        if (name === 'disabled') {
+          expect(recorder).toBeUndefined()
+          continue
+        }
         expect(recorder).toBeDefined()
         if (!recorder) throw new Error('expected Agent Perspective recorder')
-        const round = recorder.start({
-          threadId: `thread-${name}`,
+        const thread = await runtime.threadService.create({
+          workspace: dataDir,
+          model: 'model-before',
+          mode: 'agent'
+        })
+        expect(thread.modelRequestCaptureEnabled).toBe(expectedCapture)
+        const round = await startLlmDebugRoundIfEnabled(recorder, {
+          threadId: thread.id,
           turnId: 'turn-1',
           provider: 'compat',
           model: 'model-before'
         })
+        if (!expectedCapture) {
+          expect(round).toBeUndefined()
+          await expect(recorder.listThread(thread.id)).resolves.toMatchObject({ records: [] })
+          continue
+        }
+        expect(round).toBeDefined()
+        if (!round) throw new Error('expected enabled thread trace')
         recorder.beginHttpAttempt(round, {
           endpointFormat: 'chat_completions',
           attempt: 1,
@@ -198,7 +219,7 @@ describe('runtime factory usage carryover', () => {
           bodyText: JSON.stringify({ model: 'model-before' })
         })
         await recorder.finish(round)
-        await expect(recorder.listThread(`thread-${name}`)).resolves.toMatchObject({
+        await expect(recorder.listThread(thread.id)).resolves.toMatchObject({
           records: [expect.objectContaining({
             provider: 'compat',
             model: 'model-before',
@@ -206,6 +227,93 @@ describe('runtime factory usage carryover', () => {
             endpointFormat: 'chat_completions'
           })]
         })
+      } finally {
+        await runtime.shutdown?.()
+      }
+    }
+  })
+
+  it('hot-applies the new-thread capture default without changing existing threads', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'kun-runtime-llm-debug-default-'))
+    tempDirs.push(dataDir)
+    const runtime = await createKunServeRuntime({
+      host: '127.0.0.1',
+      port: 0,
+      dataDir,
+      runtimeToken: 'tok',
+      apiKey: 'sk-default',
+      baseUrl: 'https://api.example.test/v1',
+      model: 'model-before',
+      approvalPolicy: 'auto',
+      sandboxMode: 'danger-full-access',
+      tokenEconomyMode: false,
+      insecure: false,
+      storage: { backend: 'file' },
+      capabilities: KunCapabilitiesConfig.parse({})
+    })
+
+    try {
+      const existing = await runtime.threadService.create({
+        workspace: dataDir,
+        model: 'model-before',
+        mode: 'agent'
+      })
+      expect(existing.modelRequestCaptureEnabled).toBe(false)
+
+      await expect(runtime.applyConfig({
+        runtime: {
+          llmDebug: {
+            enabled: true,
+            defaultThreadCaptureEnabled: true
+          }
+        }
+      })).resolves.toEqual({ ok: true })
+
+      const later = await runtime.threadService.create({
+        workspace: dataDir,
+        model: 'model-before',
+        mode: 'agent'
+      })
+      expect(later.modelRequestCaptureEnabled).toBe(true)
+      expect((await runtime.threadService.get(existing.id))?.modelRequestCaptureEnabled).toBe(false)
+    } finally {
+      await runtime.shutdown?.()
+    }
+  })
+
+  it('requires restart when config apply changes Agent Perspective capture policy', async () => {
+    for (const [name, runtimeOptions, appliedRuntime] of [
+      ['disable', undefined, { llmDebug: { enabled: false } }],
+      ['enable', { llmDebug: { enabled: false } }, { llmDebug: { enabled: true } }]
+    ] as const) {
+      const dataDir = await mkdtemp(join(tmpdir(), `kun-runtime-llm-debug-apply-${name}-`))
+      tempDirs.push(dataDir)
+      const runtime = await createKunServeRuntime({
+        host: '127.0.0.1',
+        port: 0,
+        dataDir,
+        runtimeToken: 'tok',
+        apiKey: 'sk-default',
+        baseUrl: 'https://api.example.test/v1',
+        model: 'model-before',
+        approvalPolicy: 'auto',
+        sandboxMode: 'danger-full-access',
+        tokenEconomyMode: false,
+        insecure: false,
+        storage: { backend: 'file' },
+        ...(runtimeOptions ? { runtime: runtimeOptions } : {}),
+        capabilities: KunCapabilitiesConfig.parse({})
+      })
+
+      try {
+        await expect(runtime.applyConfig({
+          runtime: appliedRuntime
+        })).resolves.toEqual({
+          ok: false,
+          code: 'restart_required',
+          message: 'Agent Perspective capture changes require a runtime restart'
+        })
+        expect(Boolean(runtime.llmDebug)).toBe(name === 'disable')
       } finally {
         await runtime.shutdown?.()
       }
@@ -246,7 +354,7 @@ describe('runtime factory usage carryover', () => {
     }
   })
 
-  it('hot-applies Cursor credentials but restarts when Cursor routing ownership changes', async () => {
+  it('hot-applies Cursor credentials and routing ownership through a new runtime generation', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'kun-runtime-cursor-apply-'))
     tempDirs.push(dataDir)
     const baseOptions = {
@@ -297,15 +405,11 @@ describe('runtime factory usage carryover', () => {
             }
           }
         }
-      })).resolves.toEqual({
-        ok: false,
-        code: 'restart_required',
-        message: 'delegated subscription provider routing changed and requires a runtime restart'
-      })
+      })).resolves.toEqual({ ok: true })
     } finally {
       await runtime.shutdown?.()
     }
-  })
+  }, 15_000)
 
   it('clears per-thread runtime memory when a thread is deleted', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'kun-runtime-delete-'))

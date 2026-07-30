@@ -52,6 +52,17 @@ const SIGNAL_LINE_RE =
   /\b(error|failed?|fatal|panic|exception|traceback|warning|warn|denied|timeout|timed out|not found|cannot|invalid)\b/i
 const BASE64_KEY_RE = /(?:^|_)(?:data_)?base64$/i
 const DATA_URL_RE = /^data:[^;,]+;base64,/i
+const FAILURE_SAFE_ARGUMENT_COMPACTION_TOOLS = new Set([
+  'bash',
+  'exec_command',
+  'shell',
+  'read',
+  'grep',
+  'rg',
+  'find',
+  'ls'
+])
+const ATOMIC_SOURCE_TOOL_NAMES = new Set(['read', 'grep', 'glob', 'find'])
 
 type JsonRecord = Record<string, unknown>
 
@@ -71,10 +82,20 @@ export function applyRequestHistoryHygiene(
   scope: RequestHistoryHygieneScope = {}
 ): TurnItem[] {
   const limits = normalizeOptions(options)
-  const pairedToolCallIds = new Set(
+  const failureSafeCallIds = new Set(
+    items.flatMap((item) =>
+      shouldCleanItem(item, scope) &&
+      item.kind === 'tool_call' &&
+      FAILURE_SAFE_ARGUMENT_COMPACTION_TOOLS.has(item.toolName)
+        ? [item.callId]
+        : [])
+  )
+  const compactableToolCallIds = new Set(
     items
       .flatMap((item) =>
-        shouldCleanItem(item, scope) && item.kind === 'tool_result'
+        shouldCleanItem(item, scope) &&
+        item.kind === 'tool_result' &&
+        (item.isError !== true || failureSafeCallIds.has(item.callId))
           ? [item.callId]
           : []
       )
@@ -87,12 +108,16 @@ export function applyRequestHistoryHygiene(
       // model client turns it into a real image part. The agent loop has
       // already capped how many are kept inline.
       if (isModelVisibleImageOutput(item.output)) return item
+      // Source tools construct a contiguous page to the execution budget. Do
+      // not subsequently turn that page into a head/tail/signal-line collage;
+      // the model must see exactly the persisted page and its metadata.
+      if (isAtomicSourcePage(item.toolName, item.output)) return item
       const output = compactToolResultOutput(item.output, limits)
       if (!output.changed) return item
       changed = true
       return { ...item, output: output.value }
     }
-    if (item.kind === 'tool_call' && pairedToolCallIds.has(item.callId)) {
+    if (item.kind === 'tool_call' && compactableToolCallIds.has(item.callId)) {
       const args = compactCompletedToolArguments(item.arguments, {
         toolName: item.toolName,
         maxStringBytes: limits.maxToolArgumentStringBytes,
@@ -112,6 +137,19 @@ export function applyRequestHistoryHygiene(
 
 function shouldCleanItem(item: TurnItem, scope: RequestHistoryHygieneScope): boolean {
   return !scope.currentTurnId || item.turnId === scope.currentTurnId
+}
+
+function isAtomicSourcePage(toolName: string, output: unknown): boolean {
+  if (!ATOMIC_SOURCE_TOOL_NAMES.has(toolName) || !isRecord(output)) return false
+  if (toolName === 'read') {
+    return typeof output.content === 'string' &&
+      typeof output.start_line === 'number' &&
+      typeof output.end_line === 'number' &&
+      typeof output.total_lines === 'number'
+  }
+  return Array.isArray(output.matches) &&
+    typeof output.has_more === 'boolean' &&
+    (output.next_cursor === null || typeof output.next_cursor === 'string')
 }
 
 /**
@@ -173,6 +211,18 @@ function applyCumulativeToolResultBudget(
 }
 
 function digestStaleToolResult(toolName: string, isError: boolean | undefined, output: unknown): string {
+  if (ATOMIC_SOURCE_TOOL_NAMES.has(toolName) && isRecord(output)) {
+    const path = typeof output.relative_path === 'string'
+      ? output.relative_path
+      : typeof output.path === 'string' ? output.path : 'source result'
+    const range = typeof output.start_line === 'number'
+      ? ` lines ${output.start_line}-${output.end_line ?? output.start_line}`
+      : ''
+    const continuation = typeof output.next_offset === 'number'
+      ? ` continue with offset=${output.next_offset}`
+      : typeof output.next_cursor === 'string' ? ' continue with the returned next_cursor' : ''
+    return `[cache hygiene: older ${toolName}${isError ? ' (error)' : ''} page for ${path}${range} elided to bound context;${continuation || ' re-run the source query if needed.'}]`
+  }
   const text = stringifyOutput(output)
   const tokens = estimateTokens(text)
   const firstLine = text

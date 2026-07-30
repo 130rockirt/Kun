@@ -1,5 +1,5 @@
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import {
@@ -21,6 +21,23 @@ import { syncGuiManagedKunConfig } from './runtime/kun-runtime-config-service'
 import { JsonSettingsStore } from './settings-store'
 
 describe('LegacyProviderSettingsMigrationCoordinator', () => {
+  it('does not initialize protected stores in the canonical legacy directory', async () => {
+    const runtimeFactory = vi.fn()
+    const coordinator = new LegacyProviderSettingsMigrationCoordinator(runtimeFactory)
+    const input = {
+      provider: defaultModelProviderSettings(),
+      agents: {
+        kun: {
+          ...defaultKunRuntimeSettings(),
+          dataDir: join(homedir(), '.deepseekgui', 'kun')
+        }
+      }
+    } as AppSettingsV1
+
+    await expect(coordinator.prepare(input)).rejects.toThrow(/migration is required/)
+    expect(runtimeFactory).not.toHaveBeenCalled()
+  })
+
   it('does not cache a failed credential runtime initialization', async () => {
     const runtimeFactory = vi.fn()
       .mockRejectedValueOnce(new Error('temporary DPAPI failure'))
@@ -313,6 +330,93 @@ describe('LegacyProviderSettingsMigrationCoordinator', () => {
     expect(await readFile(join(userDataDir, 'kun-settings.json'), 'utf8'))
       .not.toContain('fresh-minimax-secret')
     expect(loaded.provider.apiKey).toBe('')
+  })
+
+  it('recovers OAuth refresh material flattened to its backed-up access token', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'kun-settings-oauth-recovery-'))
+    const dataDir = join(userDataDir, 'runtime-data')
+    const plainStore = new JsonSettingsStore(userDataDir)
+    const defaults = await plainStore.load()
+    const providerDefaults = defaultModelProviderSettings()
+    const codexPreset = getModelProviderPreset('codex')!
+    const codexCredentials = JSON.stringify({
+      kind: 'codex-oauth',
+      accessToken: 'codex-access-token',
+      refreshToken: 'codex-refresh-token',
+      accountId: 'acct_codex',
+      expiresAt: Date.now() - 60_000,
+      email: 'user@openai.com'
+    })
+    const codex = modelProviderPresetProfile(codexPreset, codexCredentials)!
+    const rotatedAccessToken = [
+      Buffer.from('{}').toString('base64url'),
+      Buffer.from(JSON.stringify({
+        iss: 'https://auth.openai.com',
+        'https://api.openai.com/auth': {
+          chatgpt_account_id: 'acct_codex'
+        }
+      })).toString('base64url'),
+      'test-signature'
+    ].join('.')
+    await plainStore.save({
+      ...defaults,
+      provider: {
+        ...providerDefaults,
+        providers: [...providerDefaults.providers, codex]
+      },
+      agents: {
+        kun: {
+          ...defaultKunRuntimeSettings(),
+          dataDir,
+          providerId: codex.id,
+          model: codex.models[0]!
+        }
+      }
+    })
+
+    const migratedStore = new JsonSettingsStore(userDataDir, {
+      credentialMigration: new LegacyProviderSettingsMigrationCoordinator()
+    })
+    const migrated = await migratedStore.load()
+    const flattened = await migratedStore.patch({
+      provider: {
+        providers: migrated.provider.providers.map((provider) =>
+          provider.id === codex.id
+            ? { ...provider, apiKey: rotatedAccessToken }
+            : provider
+        )
+      }
+    })
+    expect(flattened.provider.providers.find((provider) => provider.id === codex.id)?.apiKey)
+      .toBe(rotatedAccessToken)
+
+    const recovered = await new JsonSettingsStore(userDataDir, {
+      credentialMigration: new LegacyProviderSettingsMigrationCoordinator()
+    }).load()
+    expect(recovered.provider.providers.find((provider) => provider.id === codex.id)?.apiKey)
+      .toBe(codexCredentials)
+    const persisted = await readFile(join(userDataDir, 'kun-settings.json'), 'utf8')
+    expect(persisted).not.toContain('codex-access-token')
+    expect(persisted).not.toContain('codex-refresh-token')
+
+    const replacementStore = new JsonSettingsStore(userDataDir, {
+      credentialMigration: new LegacyProviderSettingsMigrationCoordinator()
+    })
+    const current = await replacementStore.load()
+    await replacementStore.patch({
+      provider: {
+        providers: current.provider.providers.map((provider) =>
+          provider.id === codex.id
+            ? { ...provider, apiKey: 'explicit-replacement-key' }
+            : provider
+        )
+      }
+    })
+    const replaced = await new JsonSettingsStore(userDataDir, {
+      credentialMigration: new LegacyProviderSettingsMigrationCoordinator()
+    }).load()
+    expect(replaced.provider.providers.find((provider) => provider.id === codex.id)?.apiKey)
+      .toBe('explicit-replacement-key')
   })
 
   it('rolls back a secure pending migration when the ordinary settings commit fails', async () => {

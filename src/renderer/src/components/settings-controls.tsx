@@ -1,5 +1,12 @@
-import { isValidElement, useRef, useState, type ReactElement, type ReactNode } from 'react'
-import { ChevronDown, Eye, EyeOff } from 'lucide-react'
+import {
+  isValidElement,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactElement,
+  type ReactNode
+} from 'react'
+import { ChevronDown, Eye, EyeOff, type LucideIcon } from 'lucide-react'
 
 export type InlineNotice = {
   tone: 'success' | 'error' | 'info'
@@ -31,17 +38,17 @@ export function SecretInput({
 }): ReactElement {
   return (
     <div
-      className={`flex w-full min-w-0 items-stretch overflow-hidden rounded-xl bg-ds-card shadow-sm ${className} ${
+      className={`flex min-h-9 w-full min-w-0 items-stretch overflow-hidden rounded-full bg-ds-card ${className} ${
         invalid
           ? 'border border-amber-300 focus-within:border-amber-400 focus-within:ring-1 focus-within:ring-amber-200'
-          : 'border border-ds-border focus-within:border-accent/40 focus-within:ring-1 focus-within:ring-accent/30'
+          : 'border border-ds-border focus-within:border-accent/60 focus-within:ring-2 focus-within:ring-accent/15'
       }`}
     >
       <input
         type={visible ? 'text' : 'password'}
         autoComplete={autoComplete}
         placeholder={placeholder}
-        className="min-w-0 flex-1 bg-transparent px-3 py-2 text-[14px] text-ds-ink focus:outline-none"
+        className="min-w-0 flex-1 bg-transparent px-3 py-2 text-[13px] text-ds-ink focus:outline-none"
         value={value}
         onChange={(e) => onChange(e.target.value)}
       />
@@ -60,19 +67,189 @@ export function SecretInput({
 
 export function SectionJumpButton({
   label,
-  onClick
+  onClick,
+  active = false,
+  controls
 }: {
   label: string
   onClick: () => void
+  active?: boolean
+  controls?: string
 }): ReactElement {
   return (
     <button
       type="button"
+      role="tab"
+      aria-selected={active}
+      aria-controls={controls}
       onClick={onClick}
-      className="rounded-full border border-ds-border bg-ds-card px-3 py-1.5 text-[12px] font-medium text-ds-muted shadow-sm transition hover:bg-ds-hover hover:text-ds-ink"
+      className={`rounded-full border px-3 py-1.5 text-[12px] font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 ${
+        active
+          ? 'border-transparent bg-[var(--ds-control)] text-[var(--ds-control-foreground)]'
+          : 'border-ds-border bg-ds-card text-ds-muted hover:bg-ds-hover hover:text-ds-ink'
+      }`}
     >
       {label}
     </button>
+  )
+}
+
+export type SettingsTabItem<T extends string> = {
+  id: T
+  label: string
+  icon?: LucideIcon
+}
+
+export type SettingsTabsProps<T extends string> = {
+  items: readonly SettingsTabItem<T>[]
+  value: T
+  onChange: (value: T) => void
+  baseId: string
+  ariaLabel: string
+}
+
+type SettingsTabVariant = 'primary' | 'secondary'
+
+function SettingsTabList<T extends string>({
+  items,
+  value,
+  onChange,
+  baseId,
+  ariaLabel,
+  variant
+}: SettingsTabsProps<T> & {
+  variant: SettingsTabVariant
+}): ReactElement {
+  const tabRefs = useRef<Array<HTMLButtonElement | null>>([])
+  const secondary = variant === 'secondary'
+
+  const handleKeyDown = (
+    event: ReactKeyboardEvent<HTMLButtonElement>,
+    currentIndex: number
+  ): void => {
+    if (items.length === 0) return
+
+    let nextIndex: number | null = null
+    if (event.key === 'ArrowRight') {
+      nextIndex = (currentIndex + 1) % items.length
+    } else if (event.key === 'ArrowLeft') {
+      nextIndex = (currentIndex - 1 + items.length) % items.length
+    } else if (event.key === 'Home') {
+      nextIndex = 0
+    } else if (event.key === 'End') {
+      nextIndex = items.length - 1
+    }
+    if (nextIndex === null) return
+
+    event.preventDefault()
+    const nextItem = items[nextIndex]
+    if (!nextItem) return
+    onChange(nextItem.id)
+    tabRefs.current[nextIndex]?.focus()
+  }
+
+  return (
+    <div
+      role="tablist"
+      aria-label={ariaLabel}
+      aria-orientation="horizontal"
+      className={
+        secondary
+          ? 'ds-settings-subtabs flex w-full min-w-0 items-center gap-1 overflow-x-auto rounded-full border border-ds-border-muted bg-ds-main/60 p-1'
+          : 'ds-settings-tabs grid w-full grid-flow-col auto-cols-[minmax(8rem,1fr)] gap-1 overflow-x-auto rounded-full border border-ds-border bg-ds-main p-1'
+      }
+    >
+      {items.map((item, index) => {
+        const active = item.id === value
+        const Icon = item.icon
+        return (
+          <button
+            key={item.id}
+            ref={(node) => {
+              tabRefs.current[index] = node
+            }}
+            id={`${baseId}-tab-${item.id}`}
+            type="button"
+            role="tab"
+            aria-selected={active}
+            aria-controls={`${baseId}-panel-${item.id}`}
+            tabIndex={active ? 0 : -1}
+            onClick={() => onChange(item.id)}
+            onKeyDown={(event) => handleKeyDown(event, index)}
+            className={
+              secondary
+                ? `group flex h-8 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-full border px-3 text-[12px] font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 ${
+                    active
+                      ? 'border-ds-border bg-ds-card text-ds-ink'
+                      : 'border-transparent text-ds-muted hover:bg-ds-hover hover:text-ds-ink'
+                  }`
+                : `group flex h-9 min-w-0 items-center justify-center gap-2 rounded-full border px-3 text-[13px] font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 ${
+                    active
+                      ? 'border-ds-border bg-ds-card text-ds-ink'
+                      : 'border-transparent text-ds-muted hover:bg-ds-hover hover:text-ds-ink'
+                  }`
+            }
+          >
+            {Icon ? (
+              <Icon
+                aria-hidden="true"
+                className={secondary ? 'h-3.5 w-3.5 shrink-0' : 'h-4 w-4 shrink-0'}
+                strokeWidth={1.9}
+              />
+            ) : null}
+            <span className={secondary ? '' : 'truncate'}>{item.label}</span>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+export function SettingsTabs<T extends string>(
+  props: SettingsTabsProps<T>
+): ReactElement {
+  return <SettingsTabList {...props} variant="primary" />
+}
+
+export function SettingsSubTabs<T extends string>(
+  props: SettingsTabsProps<T>
+): ReactElement {
+  return <SettingsTabList {...props} variant="secondary" />
+}
+
+type SettingsTabPanelProps<T extends string> = {
+  baseId: string
+  children: ReactNode
+  className?: string
+} & ({
+  tabId: T
+  active: boolean
+} | {
+  value: T
+  activeValue: T
+})
+
+export function SettingsTabPanel<T extends string>(
+  props: SettingsTabPanelProps<T>
+): ReactElement {
+  const {
+    baseId,
+    children,
+    className = ''
+  } = props
+  const tabId = 'tabId' in props ? props.tabId : props.value
+  const active = 'active' in props ? props.active : props.value === props.activeValue
+
+  return (
+    <div
+      id={`${baseId}-panel-${tabId}`}
+      role="tabpanel"
+      aria-labelledby={`${baseId}-tab-${tabId}`}
+      hidden={!active}
+      className={`ds-settings-tab-panel ${active ? '' : 'hidden'} ${className}`}
+    >
+      {children}
+    </div>
   )
 }
 
@@ -94,7 +271,7 @@ export function InlineNoticeView({
     // instead of forcing horizontal overflow that stretches the settings panel
     // — the success notice is short so the bug only ever showed on failure (#617).
     <div
-      className={`min-w-0 break-words rounded-xl border px-3 py-2 text-[12.5px] leading-5 ${className}`}
+      className={`min-w-0 break-words rounded-[var(--ds-radius-card)] border px-3 py-2 text-[12px] leading-5 ${className}`}
     >
       {notice.message}
     </div>
@@ -104,20 +281,52 @@ export function InlineNoticeView({
 export function SettingsCard({
   title,
   children,
-  className = ''
+  className = '',
+  collapsible = false,
+  defaultOpen = false,
+  description
 }: {
   title: string
   children: ReactNode
   className?: string
+  collapsible?: boolean
+  defaultOpen?: boolean
+  description?: string
 }): ReactElement {
+  if (collapsible) {
+    return (
+      <details
+        className={`ds-settings-card ds-settings-card--collapsible group overflow-hidden rounded-[var(--ds-radius-card)] border border-ds-border bg-ds-card ${className}`}
+        open={defaultOpen || undefined}
+      >
+        <summary className="ds-settings-card-header flex cursor-pointer list-none items-center justify-between gap-4 px-5 transition hover:bg-ds-hover/55 [&::-webkit-details-marker]:hidden">
+          <span className="min-w-0">
+            <h2 className="text-[16px] font-medium leading-tight text-ds-ink">{title}</h2>
+            {description ? (
+              <span className="mt-1 block text-[12px] leading-[1.4] text-ds-muted">{description}</span>
+            ) : null}
+          </span>
+          <ChevronDown
+            className="h-4 w-4 shrink-0 text-ds-faint transition group-open:rotate-180"
+            strokeWidth={1.9}
+          />
+        </summary>
+        <div className="ds-settings-card-body divide-y divide-ds-border-muted px-2">{children}</div>
+      </details>
+    )
+  }
+
   return (
     <section
-      className={`rounded-2xl border border-ds-border bg-ds-card/95 shadow-sm shadow-black/5 dark:shadow-black/25 ${className}`}
+      className={`ds-settings-card rounded-[var(--ds-radius-card)] border border-ds-border bg-ds-card ${className}`}
     >
-      <div className="border-b border-ds-border-muted px-5 py-3">
-        <h2 className="text-[16px] font-semibold text-ds-ink">{title}</h2>
+      <div className="ds-settings-card-header px-5">
+        <h2 className="text-[16px] font-medium leading-tight text-ds-ink">{title}</h2>
+        {description ? (
+          <p className="mt-1 text-[12px] leading-[1.4] text-ds-muted">{description}</p>
+        ) : null}
       </div>
-      <div className="divide-y divide-ds-border-muted px-2 py-1">{children}</div>
+      <div className="ds-settings-card-body divide-y divide-ds-border-muted px-2">{children}</div>
     </section>
   )
 }
@@ -140,16 +349,16 @@ export function SettingRow({
 
   return (
     <div
-      className={`flex gap-3 px-3 py-4 ${
+      className={`ds-setting-row flex gap-3 px-3 py-3.5 ${
         wideControl
-          ? 'flex-col sm:gap-3.5'
+          ? 'ds-setting-row--wide flex-col sm:gap-3.5'
           : 'flex-col sm:flex-row sm:items-start sm:justify-between sm:gap-8'
       }`}
     >
       <div className={`min-w-0 ${wideControl ? 'w-full max-w-none shrink-0' : 'flex-1'}`}>
-        <div className="text-[14px] font-semibold text-ds-ink">{title}</div>
+        <div className="text-[13px] font-medium text-ds-ink">{title}</div>
         {description ? (
-          <p className="mt-0.5 text-[13px] leading-relaxed text-ds-muted">{description}</p>
+          <p className="mt-1 text-[12px] leading-[1.4] text-ds-muted">{description}</p>
         ) : null}
       </div>
       <div
@@ -245,7 +454,7 @@ export function ModelSelect({
       </select>
       {customActive ? (
         <input
-          className="w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 font-mono text-[13px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30"
+          className="w-full min-w-0 rounded-full border border-ds-border bg-ds-card px-3 py-2 font-mono text-[13px] text-ds-ink focus:border-accent/60 focus:outline-none focus:ring-2 focus:ring-accent/15"
           value={customDraft}
           placeholder={customPlaceholder}
           spellCheck={false}
@@ -284,12 +493,12 @@ export function AdvancedSettingsDisclosure({
   children: ReactNode
 }): ReactElement {
   return (
-    <details className="group overflow-hidden rounded-xl border border-ds-border-muted bg-ds-main/35">
+    <details className="ds-settings-disclosure group overflow-hidden rounded-[var(--ds-radius-card)] border border-ds-border-muted bg-ds-main/35">
       <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-left transition hover:bg-ds-hover/70 [&::-webkit-details-marker]:hidden">
         <span className="min-w-0">
-          <span className="block text-[13px] font-semibold text-ds-ink">{title}</span>
+          <span className="block text-[13px] font-medium text-ds-ink">{title}</span>
           {description ? (
-            <span className="mt-1 block text-[12.5px] leading-5 text-ds-faint">{description}</span>
+            <span className="mt-1 block text-[12px] leading-[1.4] text-ds-muted">{description}</span>
           ) : null}
         </span>
         <ChevronDown className="h-4 w-4 shrink-0 text-ds-faint transition group-open:rotate-180" strokeWidth={1.9} />
@@ -321,13 +530,13 @@ export function Toggle({
       onClick={() => {
         if (!disabled) onChange(!checked)
       }}
-      className={`relative h-7 w-12 shrink-0 rounded-full transition-colors duration-200 ease-out ${
-        checked ? 'bg-emerald-500' : 'bg-ds-faint'
+      className={`relative h-5 w-9 shrink-0 rounded-full transition-colors duration-150 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 ${
+        checked ? 'bg-[var(--ds-control)]' : 'bg-ds-faint'
       } ${disabled ? 'cursor-not-allowed opacity-60' : 'active:scale-[0.98]'}`}
     >
       <span
-        className={`absolute left-0.5 top-0.5 h-6 w-6 rounded-full bg-white shadow transition-transform duration-200 ease-out ${
-          checked ? 'translate-x-5' : 'translate-x-0'
+        className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform duration-150 ease-out ${
+          checked ? 'translate-x-4' : 'translate-x-0'
         }`}
       />
     </button>

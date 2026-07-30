@@ -1,6 +1,6 @@
 import { createReadStream, createWriteStream } from 'node:fs'
 import { createHash, randomUUID } from 'node:crypto'
-import { rm } from 'node:fs/promises'
+import { rm, stat } from 'node:fs/promises'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { dirname, join } from 'node:path'
@@ -9,6 +9,7 @@ import { z } from 'zod'
 import type { AppSettingsV1 } from '../../shared/app-settings'
 import {
   DataMigrationImportPlanSchema,
+  DataMigrationEstimateSchema,
   DataMigrationInspectionSummarySchema,
   DataMigrationOperationStatusSchema,
   DataMigrationPackageEntrySchema,
@@ -44,6 +45,7 @@ import {
 } from './application-state-migration'
 import { portableSettingsForMigration } from './export-inventory'
 import { reconstructStagedWorkspace } from './workspace-staging'
+import { sha256File } from './kunpack-zip'
 
 const operationIdSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/)
 const localPathSchema = z.string().min(1).max(32_767).refine((value) => !value.includes('\0'), 'path contains NUL')
@@ -202,16 +204,18 @@ export class DataMigrationController {
     const input = z.object({
       operationId: operationIdSchema,
       selectedWorkspaceIds: z.array(operationIdSchema),
+      categories: DataMigrationSelectionSchema.shape.categories.default(['workspace-files']),
       preset: DataMigrationSelectionSchema.shape.preset,
       sensitiveContentAcknowledged: z.boolean()
     }).strict().parse(raw)
     const [settings, runtimeThreads] = await Promise.all([this.options.store.load(), this.listRuntimeThreads()])
-    return this.exporter.estimate({
+    const inventory = await this.exporter.estimate({
       ...input,
       settings,
       runtimeThreads,
       onProgress: (progress) => this.publishProgress(progress)
     })
+    return DataMigrationEstimateSchema.parse(inventory.estimate)
   }
 
   private async inspect(raw: unknown): Promise<DataMigrationInspectionSummary> {
@@ -309,6 +313,9 @@ export class DataMigrationController {
       if (journal.phase === 'inspected') {
         throw new Error('This import stopped before staging was complete. Roll it back, then select the original package again; encrypted passphrases are never stored.')
       }
+      if (journal.phase !== 'staged' && journal.phase !== 'committing' && journal.phase !== 'verifying') {
+        throw new Error(`migration import cannot resume during ${journal.phase}; roll it back instead`)
+      }
       await this.runOperation(operationId, 'import', async () => {
         const workspaces = await this.recoverStagedWorkspaces(operationId)
         const runtimeArtifact = await this.journals.readArtifact<{
@@ -400,6 +407,7 @@ export class DataMigrationController {
     const blocking = recoverable.find((journal) => journal.operationId !== operationId)
     if (blocking) throw new Error(`migration recovery is required before starting another operation: ${blocking.operationId}`)
     const abort = new AbortController()
+    this.progress = undefined
     this.active = { operationId, kind, abort }
     try {
       return await task(abort.signal)
@@ -533,8 +541,6 @@ function runtimeSnapshotClient(runtimeFetch: DataMigrationControllerOptions['run
       const response = await runtimeFetch(`/v1/migrations/exports/${encodeURIComponent(snapshotId)}`, { signal })
       if (!response.ok || !response.body) throw new Error(`Kun snapshot download failed (${response.status})`)
       await pipeline(Readable.fromWeb(response.body as never), createWriteStream(destinationPath, { flags: 'wx', mode: 0o600 }), ...(signal ? [{ signal }] : []))
-      const { stat } = await import('node:fs/promises')
-      const { sha256File } = await import('./kunpack-zip')
       return { byteSize: (await stat(destinationPath)).size, sha256: await sha256File(destinationPath) }
     },
     release: async (snapshotId) => {

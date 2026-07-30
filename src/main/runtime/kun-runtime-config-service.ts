@@ -2,6 +2,7 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import {
   ContextCompactionConfigSchema,
+  GraphRuntimeConfigSchema,
   KunConfigSchema,
   KunServeConfigSchema,
   ModelConfigSchema,
@@ -17,6 +18,7 @@ import {
 import { HooksConfigSchema } from '../../../kun/src/hooks/hook-config.js'
 import {
   AttachmentsCapabilityConfig,
+  BrowserUseCapabilityConfig,
   ComputerUseCapabilityConfig,
   ImageGenCapabilityConfig,
   InstructionsCapabilityConfig,
@@ -43,7 +45,9 @@ import {
   type ClawScheduleMcpLaunchConfig
 } from '../claw-schedule-mcp-config'
 import {
+  browserUseConfigForRuntime,
   computerUseConfigForRuntime,
+  graphConfigForRuntime,
   imageGenConfigForRuntime,
   musicGenConfigForRuntime,
   qualityConfigForRuntime,
@@ -78,6 +82,7 @@ import {
   approvedProjectMcpServers,
   stripGeneratedProjectMcpServers
 } from '../services/project-config-service'
+import { assertManagedKunDataDirIsCurrent } from '../kun-data-dir-paths'
 
 export type ManagedRuntimeHotApplyResult = 'applied' | 'restart_required' | 'failed'
 
@@ -95,6 +100,7 @@ export async function syncGuiManagedKunConfig(
     appSettings?: AppSettingsV1
   }
 ): Promise<KunConfig> {
+  assertManagedKunDataDirIsCurrent(dataDir)
   const configPath = join(dataDir, 'config.json')
   const existing = sanitizeKunConfigSections(await readJsonObjectIfExists(configPath))
   const importedMcpServers = stripGeneratedProjectMcpServers(
@@ -125,10 +131,10 @@ export async function syncGuiManagedKunConfig(
     : undefined
   const routePools = appSettings ? routePoolsConfigForRuntime(appSettings) : undefined
   const localModelGateway = appSettings ? localModelGatewayConfigForRuntime(appSettings) : undefined
-  const defaultModelProxyUrl = options?.scheduleMcp?.settings
-    ? resolveModelProviderProxyUrl(options.scheduleMcp.settings)
+  const defaultModelProxyUrl = appSettings
+    ? resolveModelProviderProxyUrl(appSettings)
     : undefined
-  const workflowHooks = buildWorkflowHookEntries(options?.scheduleMcp?.settings.workflow)
+  const workflowHooks = buildWorkflowHookEntries(appSettings?.workflow)
   const roles = rolesConfigForRuntime(runtime)
   const next = {
     serve: {
@@ -137,12 +143,15 @@ export async function syncGuiManagedKunConfig(
       // Secrets and credential-derived headers are process-local only.
       apiKey: undefined,
       headers: undefined,
-      credentialSourceId: options?.scheduleMcp?.settings
-        ? defaultCredentialSourceId(options.scheduleMcp.settings)
+      credentialSourceId: appSettings
+        ? defaultCredentialSourceId(appSettings)
         : undefined,
       baseUrl: runtime.baseUrl.trim() || undefined,
       endpointFormat: runtime.endpointFormat,
       model: runtime.model.trim() || undefined,
+      approvalPolicy: runtime.approvalPolicy,
+      sandboxMode: runtime.sandboxMode,
+      approvalReviewer: runtime.approvalReviewer,
       modelProxyUrl: defaultModelProxyUrl || undefined,
       retry: runtime.retry,
       tokenEconomy: tokenEconomyConfigForRuntime(runtime.tokenEconomy, objectValue(serve.tokenEconomy)),
@@ -156,7 +165,12 @@ export async function syncGuiManagedKunConfig(
       runtime.contextCompaction,
       objectValue(existing?.contextCompaction)
     ),
-    runtime: runtimeTuningConfigForRuntime(runtime.runtimeTuning, objectValue(existing?.runtime)),
+    runtime: runtimeTuningConfigForRuntime(
+      runtime.runtimeTuning,
+      objectValue(existing?.runtime),
+      runtime.llmDebug
+    ),
+    graph: graphConfigForRuntime(runtime.graph),
     quality: qualityConfigForRuntime(runtime.quality, objectValue(existing?.quality)),
     ...(Object.keys(roles).length ? { roles } : {}),
     capabilities: {
@@ -172,6 +186,7 @@ export async function syncGuiManagedKunConfig(
       musicGen: musicGenConfigForRuntime(runtime.musicGeneration, objectValue(capabilities.musicGen)),
       videoGen: videoGenConfigForRuntime(runtime.videoGeneration, objectValue(capabilities.videoGen)),
       computerUse: computerUseConfigForRuntime(runtime.computerUse, objectValue(capabilities.computerUse)),
+      browserUse: browserUseConfigForRuntime(runtime.browserUse, objectValue(capabilities.browserUse)),
       memory: { ...objectValue(capabilities.memory), enabled: runtime.memoryEnabled },
       instructions: {
         ...objectValue(capabilities.instructions),
@@ -221,11 +236,13 @@ function defaultCredentialSourceId(settings: AppSettingsV1): string {
 }
 
 type KunRuntimeConfigSettings = Pick<KunRuntimeSettingsV1,
-  'apiKey' | 'baseUrl' | 'endpointFormat' | 'model' | 'mcpSearch' | 'retry' |
+  'apiKey' | 'baseUrl' | 'endpointFormat' | 'model' |
+  'approvalPolicy' | 'sandboxMode' | 'approvalReviewer' |
+  'mcpSearch' | 'retry' |
   'tokenEconomy' | 'toolOutputLimits' | 'storage' | 'contextCompaction' |
-  'runtimeTuning' | 'imageGeneration' | 'textToSpeech' | 'musicGeneration' |
-  'videoGeneration' | 'computerUse' | 'modelProfiles' | 'memoryEnabled' |
-  'instructions' | 'quality' | 'subagents' | 'smallModel' |
+  'runtimeTuning' | 'llmDebug' | 'imageGeneration' | 'textToSpeech' | 'musicGeneration' |
+  'videoGeneration' | 'computerUse' | 'browserUse' | 'modelProfiles' | 'memoryEnabled' |
+  'instructions' | 'quality' | 'subagents' | 'graph' | 'smallModel' |
   'smallModelProviderId' | 'smallModelAccountId' |
   'titleModel' | 'titleProviderId' | 'titleAccountId' |
   'summaryModel' | 'summaryProviderId' | 'summaryAccountId' |
@@ -260,6 +277,7 @@ export function buildManagedRuntimeHotApplyBody(
       model: runtime.model,
       approvalPolicy: runtime.approvalPolicy,
       sandboxMode: runtime.sandboxMode,
+      approvalReviewer: runtime.approvalReviewer,
       tokenEconomyMode: runtime.tokenEconomyMode,
       tokenEconomy: runtime.tokenEconomy,
       toolOutputLimits: runtime.toolOutputLimits,
@@ -319,6 +337,7 @@ function sanitizeKunConfigSections(
     models: parseKunConfigSection(ModelConfigSchema, existing.models),
     contextCompaction: parseKunConfigSection(ContextCompactionConfigSchema, existing.contextCompaction),
     runtime: parseKunConfigSection(RuntimeTuningConfigSchema, existing.runtime),
+    graph: parseKunConfigSection(GraphRuntimeConfigSchema, existing.graph),
     quality: parseKunConfigSection(QualityConfigSchema, existing.quality),
     capabilities: sanitizeCapabilities(existing.capabilities),
     ...('roles' in existing ? { roles: parseKunConfigSection(RolesConfigSchema, existing.roles) } : {}),
@@ -340,7 +359,8 @@ function sanitizeCapabilities(value: unknown): Record<string, unknown> {
     speechGen: SpeechGenCapabilityConfig,
     musicGen: MusicGenCapabilityConfig,
     videoGen: VideoGenCapabilityConfig,
-    computerUse: ComputerUseCapabilityConfig
+    computerUse: ComputerUseCapabilityConfig,
+    browserUse: BrowserUseCapabilityConfig
   }
   const next: Record<string, unknown> = {}
   for (const [key, schema] of Object.entries(schemas)) {
@@ -408,6 +428,7 @@ function buildWorkflowHookEntries(workflow: AppSettingsV1['workflow'] | undefine
     .map((trigger) => ({
       phase: trigger.phase,
       ...(trigger.toolNames.length ? { toolNames: trigger.toolNames } : {}),
+      clientSurfaces: ['gui'],
       workflow: trigger.workflowId,
       mode: trigger.mode,
       baseUrl,

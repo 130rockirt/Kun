@@ -31,7 +31,7 @@ afterEach(async () => {
 })
 
 describe('bundled extension seeding', () => {
-  it('installs a fresh bundle through the standard registry and is idempotent', async () => {
+  it('installs a fresh bundle disabled through the standard registry and is idempotent', async () => {
     const harness = await createHarness()
     await writeBundle(harness, '1.0.0', [])
 
@@ -42,7 +42,7 @@ describe('bundled extension seeding', () => {
     }])
     expect(await harness.registry.get('acme.demo')).toMatchObject({
       selectedVersion: '1.0.0',
-      globallyEnabled: true,
+      globallyEnabled: false,
       useDevelopment: false,
       versions: {
         '1.0.0': {
@@ -276,6 +276,73 @@ describe('bundled extension seeding', () => {
     })
   })
 
+  it('removes a retired extension that is still exclusively seed-managed', async () => {
+    const harness = await createHarness()
+    await writeBundle(harness, '1.0.0', [])
+    await seedBundledExtensions(seedOptions(harness))
+    await writeBundle(harness, '2.0.0', [])
+    await seedBundledExtensions(seedOptions(harness))
+    await retireBundle(harness)
+
+    expect(await seedBundledExtensions(seedOptions(harness))).toEqual([{
+      extensionId: 'acme.demo',
+      version: '2.0.0',
+      outcome: 'retired-removed'
+    }])
+    expect(await harness.registry.get('acme.demo')).toBeUndefined()
+    const state = JSON.parse(await readFile(
+      join(harness.paths.packageRoot, BUNDLED_EXTENSION_SEED_STATE_FILE),
+      'utf8'
+    ))
+    expect(state.extensions['acme.demo']).toMatchObject({ status: 'removed' })
+  })
+
+  it('recovers a previously misclassified retired bundle with only bundled versions', async () => {
+    const harness = await createHarness()
+    await writeBundle(harness, '1.0.0', [])
+    await seedBundledExtensions(seedOptions(harness))
+    const statePath = join(harness.paths.packageRoot, BUNDLED_EXTENSION_SEED_STATE_FILE)
+    const state = JSON.parse(await readFile(statePath, 'utf8'))
+    state.extensions['acme.demo'].status = 'user-managed'
+    await writeFile(statePath, `${JSON.stringify(state, null, 2)}\n`)
+    await retireBundle(harness)
+
+    expect(await seedBundledExtensions(seedOptions(harness))).toMatchObject([{
+      outcome: 'retired-removed'
+    }])
+    expect(await harness.registry.get('acme.demo')).toBeUndefined()
+  })
+
+  it('preserves a retired extension that the user replaced with another version', async () => {
+    const harness = await createHarness()
+    await writeBundle(harness, '1.0.0', [])
+    await seedBundledExtensions(seedOptions(harness))
+    const userArchive = join(harness.root, 'user-2.0.0.kunx')
+    await writeSource(harness.source, '2.0.0', [], 'user-owned')
+    await packKunx(harness.source, userArchive, { compatibility })
+    await harness.manager.installArchive(userArchive, {
+      grantedPermissions: [],
+      select: true,
+      enable: true
+    })
+    await harness.manager.setGlobalEnabled('acme.demo', true)
+    await retireBundle(harness)
+
+    expect(await seedBundledExtensions(seedOptions(harness))).toEqual([{
+      extensionId: 'acme.demo',
+      version: '1.0.0',
+      outcome: 'retired-user-managed'
+    }])
+    expect(await harness.registry.get('acme.demo')).toMatchObject({
+      selectedVersion: '2.0.0',
+      globallyEnabled: true,
+      versions: {
+        '1.0.0': {},
+        '2.0.0': { source: { locator: userArchive } }
+      }
+    })
+  })
+
   it('rejects a catalog digest mismatch before mutating the registry', async () => {
     const harness = await createHarness()
     await writeBundle(harness, '1.0.0', [])
@@ -307,7 +374,7 @@ async function createHarness() {
     paths,
     registry,
     manager,
-    bundles: join(root, 'bundled'),
+    bundles: join(root, 'bundled-extensions'),
     source: join(root, 'source'),
     developmentSource: join(root, 'development')
   }
@@ -328,7 +395,7 @@ async function writeBundle(
 ): Promise<{ archive: string; catalog: BundledExtensionCatalog }> {
   await mkdir(harness.bundles, { recursive: true })
   await writeSource(harness.source, version, permissions, `bundle-${version}`)
-  const archiveName = `acme-demo-${version}.kunx`
+  const archiveName = `demo-${version}.kunx`
   const archive = join(harness.bundles, archiveName)
   const packed = await packKunx(harness.source, archive, { compatibility, overwrite: true })
   const catalog: BundledExtensionCatalog = {
@@ -341,13 +408,26 @@ async function writeBundle(
       enginesKun: '*',
       apiVersion: '1.0.0',
       permissions: [...permissions].sort()
-    }]
+    }],
+    retiredExtensions: []
   }
   await writeFile(
     join(harness.bundles, BUNDLED_EXTENSION_CATALOG_FILE),
     `${JSON.stringify(catalog, null, 2)}\n`
   )
   return { archive, catalog }
+}
+
+async function retireBundle(harness: Harness): Promise<void> {
+  const catalog: BundledExtensionCatalog = {
+    schemaVersion: 1,
+    extensions: [],
+    retiredExtensions: ['acme.demo']
+  }
+  await writeFile(
+    join(harness.bundles, BUNDLED_EXTENSION_CATALOG_FILE),
+    `${JSON.stringify(catalog, null, 2)}\n`
+  )
 }
 
 async function writeSource(

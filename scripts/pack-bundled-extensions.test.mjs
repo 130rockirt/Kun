@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   BUNDLED_EXTENSION_DEFINITIONS,
+  RETIRED_BUNDLED_EXTENSION_IDS,
   bundledArchiveName,
   bundledCatalogEntry,
   bundledExtensionCatalog
@@ -25,15 +26,18 @@ test('declares every product-owned default extension', () => {
   assert.deepEqual(
     BUNDLED_EXTENSION_DEFINITIONS.map((entry) => entry.id),
     [
-      'kun-examples.kun-video-editor',
       'kun-examples.presentation-studio',
       'kun-examples.social-media-sidebar'
     ]
   )
+  assert.deepEqual(
+    RETIRED_BUNDLED_EXTENSION_IDS,
+    ['kun-examples.kun-video-editor']
+  )
 })
 
 test('derives bounded catalog entries from canonical manifests', () => {
-  const definition = BUNDLED_EXTENSION_DEFINITIONS[1]
+  const definition = BUNDLED_EXTENSION_DEFINITIONS[0]
   assert.equal(
     bundledArchiveName(manifest('presentation-studio'), definition.name),
     'presentation-studio-0.1.0.kunx'
@@ -77,13 +81,17 @@ test('sorts catalog entries and rejects duplicate extension ids', () => {
   assert.deepEqual(
     catalog.extensions.map((entry) => entry.id),
     [
-      'kun-examples.kun-video-editor',
       'kun-examples.presentation-studio',
       'kun-examples.social-media-sidebar'
     ]
   )
+  assert.deepEqual(catalog.retiredExtensions, ['kun-examples.kun-video-editor'])
   assert.throws(
     () => bundledExtensionCatalog([entries[0], entries[0]]),
     /duplicate/
+  )
+  assert.throws(
+    () => bundledExtensionCatalog(entries, [entries[0].id]),
+    /cannot retire/
   )
 })

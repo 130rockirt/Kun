@@ -58,6 +58,10 @@ type RecoveredTurnMetadata = {
   model?: string
   mode?: Turn['mode']
   guiPlan?: Turn['guiPlan']
+  actingModelRoute?: Turn['actingModelRoute']
+  approvalPolicy?: Turn['approvalPolicy']
+  sandboxMode?: Turn['sandboxMode']
+  approvalReviewer?: Turn['approvalReviewer']
 }
 
 function collectTurnMetadata(entries: ThreadMetadataLine[], threadId: string): Map<string, RecoveredTurnMetadata> {
@@ -72,7 +76,27 @@ function collectTurnMetadata(entries: ThreadMetadataLine[], threadId: string): M
         attachmentIds: mergeStringArrays(current.attachmentIds, turn.attachmentIds),
         ...(turn.model ? { model: turn.model } : current.model ? { model: current.model } : {}),
         ...(turn.mode ? { mode: turn.mode } : current.mode ? { mode: current.mode } : {}),
-        ...(turn.guiPlan ? { guiPlan: turn.guiPlan } : current.guiPlan ? { guiPlan: current.guiPlan } : {})
+        ...(turn.guiPlan ? { guiPlan: turn.guiPlan } : current.guiPlan ? { guiPlan: current.guiPlan } : {}),
+        ...(turn.actingModelRoute
+          ? { actingModelRoute: turn.actingModelRoute }
+          : current.actingModelRoute
+            ? { actingModelRoute: current.actingModelRoute }
+            : {}),
+        ...(turn.approvalPolicy
+          ? { approvalPolicy: turn.approvalPolicy }
+          : current.approvalPolicy
+            ? { approvalPolicy: current.approvalPolicy }
+            : {}),
+        ...(turn.sandboxMode
+          ? { sandboxMode: turn.sandboxMode }
+          : current.sandboxMode
+            ? { sandboxMode: current.sandboxMode }
+            : {}),
+        ...(turn.approvalReviewer
+          ? { approvalReviewer: turn.approvalReviewer }
+          : current.approvalReviewer
+            ? { approvalReviewer: current.approvalReviewer }
+            : {})
       })
     }
   }
@@ -99,7 +123,19 @@ function applyRecoveredTurnMetadata(turn: Turn, recovered: RecoveredTurnMetadata
     attachmentIds: turn.attachmentIds.length > 0 ? turn.attachmentIds : recovered.attachmentIds,
     ...(turn.model || !recovered.model ? {} : { model: recovered.model }),
     ...(turn.mode || !recovered.mode ? {} : { mode: recovered.mode }),
-    ...(turn.guiPlan || !recovered.guiPlan ? {} : { guiPlan: recovered.guiPlan })
+    ...(turn.guiPlan || !recovered.guiPlan ? {} : { guiPlan: recovered.guiPlan }),
+    ...(turn.actingModelRoute || !recovered.actingModelRoute
+      ? {}
+      : { actingModelRoute: recovered.actingModelRoute }),
+    ...(turn.approvalPolicy || !recovered.approvalPolicy
+      ? {}
+      : { approvalPolicy: recovered.approvalPolicy }),
+    ...(turn.sandboxMode || !recovered.sandboxMode
+      ? {}
+      : { sandboxMode: recovered.sandboxMode }),
+    ...(turn.approvalReviewer || !recovered.approvalReviewer
+      ? {}
+      : { approvalReviewer: recovered.approvalReviewer })
   }
 }
 
@@ -119,7 +155,7 @@ function turnFromItems(threadId: string, turnId: string, items: TurnItem[], fall
   return {
     id: turnId, threadId,
     status: hasOpenItem ? 'running' : hasFailedItem ? 'failed' : 'completed',
-    prompt, steering: [], attachmentIds: attachmentIdsFromItems(items), activeSkillIds: [],
+    prompt, orchestration: 'direct', steering: [], attachmentIds: attachmentIdsFromItems(items), activeSkillIds: [],
     injectedMemoryIds: [], injectedMemorySummaries: [], injectedInstructionSources: [],
     createdAt,
     finishedAt: hasOpenItem ? undefined : items[items.length - 1]?.finishedAt ?? fallbackTime,

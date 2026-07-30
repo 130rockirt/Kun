@@ -10,9 +10,14 @@ import type { ModelCapabilityMetadata } from '../contracts/capabilities.js'
 import type { ThreadStore } from '../ports/thread-store.js'
 import type { SessionStore } from '../ports/session-store.js'
 import type { ApprovalGate } from '../ports/approval-gate.js'
+import type { ApprovalReviewPort } from '../ports/approval-review.js'
 import type { UserInputGate } from '../ports/user-input-gate.js'
 import type { UsageService } from '../services/usage-service.js'
-import type { TurnService, TurnSettlement } from '../services/turn-service.js'
+import {
+  isHostShutdownTurnSuspension,
+  type TurnService,
+  type TurnSettlement
+} from '../services/turn-service.js'
 import type { RuntimeEventRecorder } from '../services/runtime-event-recorder.js'
 import { ThreadItemProjectionService } from '../services/thread-item-projection.js'
 import type { PipelineStage } from '../contracts/events.js'
@@ -23,7 +28,8 @@ import type {
   ToolDispatchInput,
   ToolDispatchOutcome,
   TurnExecutionFailure,
-  TurnExecutionStatus
+  TurnExecutionStatus,
+  TurnRunOutcome
 } from './turn-execution-types.js'
 import { ContextCompactor } from './context-compactor.js'
 import type { RolesConfig } from '../config/kun-config.js'
@@ -110,10 +116,24 @@ const PIPELINE_STAGE_LABELS: Record<PipelineStage, string> = {
   response_received: 'Response Received'
 }
 
+const RECOVERABLE_GRAPH_LEAD_MODEL_FAILURE_CODES = new Set([
+  'stream_idle_timeout',
+  'stream_read_error',
+  'stream_truncated'
+])
+
+// A GraphRun may live for hours, but one process-local Lead wake-up must not.
+// Durable Graph events can start a fresh episode after this one releases its
+// lease. This cap is intentionally independent of ToolStormBreaker because a
+// confused Lead can alternate valid, non-identical tools forever.
+const GRAPH_LEAD_EPISODE_MAX_MODEL_STEPS = 8
+const GRAPH_LEAD_EPISODE_MAX_ELAPSED_MS = 10 * 60_000
+
 export type AgentLoopOptions = {
   threadStore: ThreadStore
   sessionStore: SessionStore
   approvalGate: ApprovalGate
+  approvalReview?: ApprovalReviewPort
   userInputGate: UserInputGate
   model: ModelClient
   toolHost: ToolHost
@@ -150,6 +170,11 @@ export type AgentLoopOptions = {
   toolArgumentRepair?: {
     maxStringBytes?: number
   }
+  /** Desktop Git snapshot gate awaited only by the first mutating tool. */
+  awaitWorkspaceCheckpoint?: (
+    checkpointRequestId: string,
+    signal: AbortSignal
+  ) => Promise<string | null>
   /**
    * Tuning + test seams for goal auto-resume (KunAgent/Kun#370). Defaults
    * back off exponentially and bound consecutive no-progress retries; tests
@@ -164,6 +189,14 @@ export type AgentLoopOptions = {
   forcedAllowedToolNames?: readonly string[]
   /** Provider allow-list inherited from the parent turn for delegated loops. */
   allowedProviderIds?: readonly string[]
+  /** Skill allow-list captured at the delegated child boundary. */
+  allowedSkillIds?: readonly string[]
+  /** Workspace-relative read scopes captured at the delegated child boundary. */
+  allowedReadPaths?: readonly string[]
+  /** Workspace-relative write scopes captured at the delegated child boundary. */
+  allowedWritePaths?: readonly string[]
+  /** Artifact capability set captured at the delegated child boundary. */
+  allowedArtifactIds?: readonly string[]
   /**
    * Provider ids hard-blocked for this loop (e.g. a subagent profile's blocked
    * MCP servers, as `mcp:<serverId>`). Deny-list layered on top of inherit and
@@ -243,8 +276,15 @@ export class AgentLoop {
   private readonly toolExecution: ToolExecutionService
   private readonly toolCallDispatcher: ToolCallDispatcher
   private readonly turnFailures = new Map<string, TurnExecutionFailure>()
-  /** One owned runner per turn; duplicate callers share its terminal result. */
-  private readonly activeTurnRuns = new Map<string, Promise<TurnExecutionStatus>>()
+  /**
+   * One owned runner per turn. Calls made under the same execution lease share
+   * the exact promise; a Graph wake-up that has already acquired a new lease
+   * may chain its continuation behind the runner that is still parking.
+   */
+  private readonly activeTurnRuns = new Map<string, {
+    promise: Promise<TurnRunOutcome>
+    signal: AbortSignal | undefined
+  }>()
   private readonly goalTurns: GoalTurnCoordinator
 
   constructor(opts: AgentLoopOptions) {
@@ -316,7 +356,8 @@ export class AgentLoop {
       events: opts.events,
       turns: opts.turns,
       sessionStore: opts.sessionStore,
-      nowIso: opts.nowIso
+      nowIso: opts.nowIso,
+      ...(opts.approvalReview ? { approvalReview: opts.approvalReview } : {})
     })
     this.toolExecution = new ToolExecutionService({
       toolHost: opts.toolHost,
@@ -324,6 +365,9 @@ export class AgentLoop {
       turns: opts.turns,
       events: opts.events,
       nowIso: opts.nowIso,
+      ...(opts.awaitWorkspaceCheckpoint
+        ? { awaitWorkspaceCheckpoint: opts.awaitWorkspaceCheckpoint }
+        : {}),
       ...(opts.onPlanWritten ? { onPlanWritten: opts.onPlanWritten } : {})
     })
     this.toolCallDispatcher = new ToolCallDispatcher(this.toolExecution)
@@ -346,6 +390,10 @@ export class AgentLoop {
       interactiveToolBridge: this.interactiveToolBridge,
       ...(opts.forcedAllowedToolNames ? { forcedAllowedToolNames: opts.forcedAllowedToolNames } : {}),
       ...(opts.allowedProviderIds ? { allowedProviderIds: opts.allowedProviderIds } : {}),
+      ...(opts.allowedSkillIds ? { allowedSkillIds: opts.allowedSkillIds } : {}),
+      ...(opts.allowedReadPaths ? { allowedReadPaths: opts.allowedReadPaths } : {}),
+      ...(opts.allowedWritePaths ? { allowedWritePaths: opts.allowedWritePaths } : {}),
+      ...(opts.allowedArtifactIds ? { allowedArtifactIds: opts.allowedArtifactIds } : {}),
       ...(opts.blockedProviderIds ? { blockedProviderIds: opts.blockedProviderIds } : {}),
       ...(opts.blockedToolNames ? { blockedToolNames: opts.blockedToolNames } : {}),
       ...(opts.blockedSkillIds ? { blockedSkillIds: opts.blockedSkillIds } : {}),
@@ -376,6 +424,9 @@ export class AgentLoop {
       turnAttachments: this.turnAttachments,
       modelRoundEngine: this.modelRoundEngine,
       roundOutcome: this.roundOutcome,
+      ...(opts.awaitWorkspaceCheckpoint
+        ? { awaitWorkspaceCheckpoint: opts.awaitWorkspaceCheckpoint }
+        : {}),
       recordPipelineStage: (threadId, turnId, stage, details) =>
         this.recordPipelineStage(threadId, turnId, stage, details),
       recordToolCatalogDrift: (input) => this.recordToolCatalogDrift(input),
@@ -405,20 +456,40 @@ export class AgentLoop {
    * (completed, failed, or aborted). All errors are caught and
    * surfaced through the `error` runtime event.
   */
-  runTurn(threadId: string, turnId: string): Promise<TurnExecutionStatus> {
+  runTurn(threadId: string, turnId: string): Promise<TurnRunOutcome> {
     const key = activeTurnRunKey(threadId, turnId)
     const existing = this.activeTurnRuns.get(key)
-    if (existing) return existing
+    if (existing) {
+      const signal = this.opts.turns.getAbortController(turnId)
+      if (existing.signal === signal) return existing.promise
+      return existing.promise.then((outcome) => {
+        // A suspended Graph slice releases its execution lease before this
+        // promise leaves activeTurnRuns. Steering can reacquire the lease in
+        // that narrow interval, so the caller that delivered the wake-up must
+        // start the continuation after the parked runner fully settles.
+        if (
+          outcome === 'suspended' &&
+          this.opts.turns.isTurnExecutionActive(turnId)
+        ) {
+          return this.runTurn(threadId, turnId)
+        }
+        return outcome
+      })
+    }
     const run = this.runTurnOwned(threadId, turnId)
-    this.activeTurnRuns.set(key, run)
+    const active = {
+      promise: run,
+      signal: this.opts.turns.getAbortController(turnId)
+    }
+    this.activeTurnRuns.set(key, active)
     void run.then(
-      () => { if (this.activeTurnRuns.get(key) === run) this.activeTurnRuns.delete(key) },
-      () => { if (this.activeTurnRuns.get(key) === run) this.activeTurnRuns.delete(key) }
+      () => { if (this.activeTurnRuns.get(key) === active) this.activeTurnRuns.delete(key) },
+      () => { if (this.activeTurnRuns.get(key) === active) this.activeTurnRuns.delete(key) }
     )
     return run
   }
 
-  private async runTurnOwned(threadId: string, turnId: string): Promise<TurnExecutionStatus> {
+  private async runTurnOwned(threadId: string, turnId: string): Promise<TurnRunOutcome> {
     const finalizer = new TurnFinalizer(this.opts.turns)
     const settle = (input: Omit<TurnFinalizationRequest, 'threadId' | 'turnId'>) =>
       finalizer.settle({ threadId, turnId, ...input })
@@ -434,6 +505,7 @@ export class AgentLoop {
       return statusFromSettlement(settlement, 'failed')
     }
     if (signal.aborted) {
+      if (isHostShutdownTurnSuspension(signal)) return 'suspended'
       const settlement = await settle({ status: 'aborted' })
       return statusFromSettlement(settlement, 'aborted')
     }
@@ -446,8 +518,10 @@ export class AgentLoop {
     if (sdkRuntime) {
       const turn = owningThread?.turns.find((candidate) => candidate.id === turnId)
       const providerId = turn?.providerId?.trim() || owningThread?.providerId?.trim()
-      if (sdkRuntime.handlesProvider(providerId)) {
-        delegatedSdkRuntime = sdkRuntime
+      const resolvedRuntime = sdkRuntime.resolveProvider?.(providerId) ??
+        (sdkRuntime.handlesProvider(providerId) ? sdkRuntime : undefined)
+      if (resolvedRuntime) {
+        delegatedSdkRuntime = resolvedRuntime
         delegatedProviderId = providerId
       }
     }
@@ -463,8 +537,17 @@ export class AgentLoop {
     let deadline: ReturnType<typeof setTimeout> | undefined
     if (!delegatedSdkRuntime && this.opts.disableWallTimeLimit !== true) {
       deadline = setTimeout(() => {
-        wallTimeExceeded = true
-        this.opts.turns.abortTurnExecution(turnId)
+        void (async () => {
+          const graphRunOwnsLimit =
+            owningThread?.extensionBudget === undefined &&
+            await this.opts.turns.graphRunOwnsLeadLimits({ threadId, turnId })
+          if (graphRunOwnsLimit) return
+          wallTimeExceeded = true
+          this.opts.turns.abortTurnExecution(turnId)
+        })().catch(() => {
+          wallTimeExceeded = true
+          this.opts.turns.abortTurnExecution(turnId)
+        })
       }, maxWallTimeMs)
       if (typeof (deadline as { unref?: () => void }).unref === 'function') {
         ;(deadline as { unref: () => void }).unref()
@@ -473,6 +556,7 @@ export class AgentLoop {
     let goalTimer: GoalElapsedTimer | null = null
     let finalStatus: 'completed' | 'failed' | 'aborted' | undefined
     let finalError: string | undefined
+    let suspended = false
     const failWallTimeLimit = async (): Promise<TurnExecutionStatus> => {
       const extensionLimited = Boolean(
         owningThread?.extensionBudget && owningThread.extensionBudget.maxElapsedMs <= configuredWallTimeMs
@@ -504,7 +588,12 @@ export class AgentLoop {
         this.toolStormBreakers.set(turnId, new ToolStormBreaker(this.opts.toolStorm))
       }
       await this.recordPipelineStage(threadId, turnId, 'pre_start')
-      const denial = await runTurnStartLifecycleHooks(this.lifecycleHookDeps(), { threadId, turnId })
+      const resumedGraphLead = owningThread?.turns
+        .find((candidate) => candidate.id === turnId)
+        ?.graphLeadLifecycle?.resumedAt !== undefined
+      const denial = resumedGraphLead
+        ? undefined
+        : await runTurnStartLifecycleHooks(this.lifecycleHookDeps(), { threadId, turnId })
       if (denial) {
         await this.opts.events.record({
           kind: 'error',
@@ -535,11 +624,29 @@ export class AgentLoop {
       // Fire-and-forget: start LLM title generation as soon as the first-turn
       // user message is in place, in parallel with the main reply. Only uses
       // user input; never blocks the agent loop.
-      void this.threadTitle.generateAfterTurn(threadId, turnId, signal).catch(() => {})
+      if (!resumedGraphLead) {
+        void this.threadTitle.generateAfterTurn(threadId, turnId, signal).catch(() => {})
+      }
       if (delegatedSdkRuntime) {
         // The delegated SDK owns its model stream and cannot consume Kun's
-        // native mid-turn queue. Drain anything that arrived before startup,
-        // then seal admission so later guidance remains renderer-owned.
+        // native tool mutation gate. Preserve snapshot-before-mutation safety
+        // by resolving a pending desktop checkpoint before handing it control.
+        const checkpointRequestId = owningThread?.turns
+          .find((candidate) => candidate.id === turnId)
+          ?.workspaceCheckpointRequestId
+        if (checkpointRequestId && this.opts.awaitWorkspaceCheckpoint) {
+          const checkpointId = await this.opts.awaitWorkspaceCheckpoint(checkpointRequestId, signal)
+          if (checkpointId) {
+            await this.opts.turns.updateTurnMetadata(threadId, turnId, {
+              workspaceCheckpointId: checkpointId
+            })
+            await this.opts.turns.updateItem(threadId, `item_${turnId}_user`, {
+              workspaceCheckpointId: checkpointId
+            })
+          }
+        }
+        // Drain anything that arrived before startup, then seal admission so
+        // later guidance remains renderer-owned.
         await this.drainAndSealSteering(threadId, turnId, signal)
         const reportedStatus = await delegatedSdkRuntime.runTurn(
           threadId,
@@ -547,12 +654,26 @@ export class AgentLoop {
           signal,
           delegatedProviderId
         )
+        if (
+          reportedStatus === 'suspended' ||
+          isHostShutdownTurnSuspension(signal)
+        ) {
+          suspended = true
+          return 'suspended'
+        }
         const settlement = await finalizer.observeExternal({ threadId, turnId })
         finalStatus = statusFromSettlement(settlement, reportedStatus)
         finalError = errorFromSettlement(settlement)
         return finalStatus
       }
       const status = await this.loop(threadId, turnId, signal)
+      if (
+        status === 'suspended' ||
+        isHostShutdownTurnSuspension(signal)
+      ) {
+        suspended = true
+        return 'suspended'
+      }
       if (wallTimeExceeded) return failWallTimeLimit()
       const failure = status === 'failed' ? this.turnFailures.get(turnId) : undefined
       const settlement = await settle({
@@ -565,6 +686,10 @@ export class AgentLoop {
     } catch (error) {
       if (wallTimeExceeded) return failWallTimeLimit()
       if (signal.aborted) {
+        if (isHostShutdownTurnSuspension(signal)) {
+          suspended = true
+          return 'suspended'
+        }
         const settlement = await settle({ status: 'aborted' })
         finalStatus = statusFromSettlement(settlement, 'aborted')
         finalError = errorFromSettlement(settlement)
@@ -602,12 +727,14 @@ export class AgentLoop {
         // Accounting/resume are post-settlement conveniences. A late store or
         // event failure must not hide an already durable terminal outcome, nor
         // skip the unconditional transient-state cleanup below.
-        await this.goalTurns.afterTerminal({
-          threadId,
-          turnId,
-          finalStatus: finalStatus ?? 'failed',
-          timer: goalTimer
-        })
+        if (!suspended) {
+          await this.goalTurns.afterTerminal({
+            threadId,
+            turnId,
+            finalStatus: finalStatus ?? 'failed',
+            timer: goalTimer
+          })
+        }
       } finally {
         this.modelRouting.clear(threadId, turnId)
         this.toolStormBreakers.delete(turnId)
@@ -619,12 +746,14 @@ export class AgentLoop {
         }
         this.turnFailures.delete(turnId)
         this.telemetry.clearPromptPressure(threadId)
-        await runTurnEndLifecycleHooks(this.lifecycleHookDeps(), {
-          threadId,
-          turnId,
-          status: finalStatus ?? 'failed',
-          ...(finalError ? { error: finalError } : {})
-        })
+        if (!suspended) {
+          await runTurnEndLifecycleHooks(this.lifecycleHookDeps(), {
+            threadId,
+            turnId,
+            status: finalStatus ?? 'failed',
+            ...(finalError ? { error: finalError } : {})
+          })
+        }
       }
     }
   }
@@ -687,7 +816,7 @@ export class AgentLoop {
     threadId: string,
     turnId: string,
     signal: AbortSignal
-  ): Promise<TurnExecutionStatus> {
+  ): Promise<TurnRunOutcome> {
     const configuredLimits = normalizeTurnLimits(this.opts.turnLimits)
     const thread = await this.opts.threadStore.get(threadId)
     const limits = thread?.extensionBudget
@@ -699,13 +828,49 @@ export class AgentLoop {
           maxWallTimeMs: Math.min(configuredLimits.maxWallTimeMs, thread.extensionBudget.maxElapsedMs)
         }
       : configuredLimits
+    const graphRunOwnsLimits = async (): Promise<boolean> =>
+      thread?.extensionBudget === undefined &&
+      await this.opts.turns.graphRunOwnsLeadLimits({ threadId, turnId })
     const startedAt = this.opts.nowMs?.() ?? Date.now()
+    let graphSupervisionReminderUsed = false
+    let graphLeadEpisodeStartedAt: number | undefined
+    let graphLeadEpisodeModelSteps = 0
     for (let step = 0; ; step += 1) {
       if (signal.aborted) {
         await this.drainAndSealSteering(threadId, turnId, signal)
         return 'aborted'
       }
-      if (limits.maxSteps !== undefined && step >= limits.maxSteps) {
+      const now = this.opts.nowMs?.() ?? Date.now()
+      const graphLeadEpisodeActive = await graphRunOwnsLimits()
+      if (graphLeadEpisodeActive && graphLeadEpisodeStartedAt === undefined) {
+        graphLeadEpisodeStartedAt = now
+      }
+      if (
+        graphLeadEpisodeActive &&
+        (
+          graphLeadEpisodeModelSteps >= GRAPH_LEAD_EPISODE_MAX_MODEL_STEPS ||
+          now - (graphLeadEpisodeStartedAt ?? now) >= GRAPH_LEAD_EPISODE_MAX_ELAPSED_MS
+        )
+      ) {
+        const parked = await this.opts.turns.suspendGraphLeadTurn({
+          threadId,
+          turnId,
+          force: true,
+          preserveDeliveryCursor: true,
+          allowPendingSupervision: true
+        })
+        if (parked === 'suspended') return 'suspended'
+        // The run can become terminal between the ownership check and the
+        // suspension fence. Give that terminal state its normal finalization
+        // path instead of spinning forever on an already-consumed episode.
+        graphLeadEpisodeStartedAt = undefined
+        graphLeadEpisodeModelSteps = 0
+      }
+      if (
+        limits.maxSteps !== undefined &&
+        step >= limits.maxSteps &&
+        !graphLeadEpisodeActive
+      ) {
         await this.drainAndSealSteering(threadId, turnId, signal)
         const extensionLimited = Boolean(
           thread?.extensionBudget && (
@@ -725,7 +890,8 @@ export class AgentLoop {
       }
       if (
         this.opts.disableWallTimeLimit !== true &&
-        (this.opts.nowMs?.() ?? Date.now()) - startedAt >= limits.maxWallTimeMs
+        now - startedAt >= limits.maxWallTimeMs &&
+        !graphLeadEpisodeActive
       ) {
         await this.drainAndSealSteering(threadId, turnId, signal)
         const extensionLimited = Boolean(
@@ -742,14 +908,156 @@ export class AgentLoop {
         return 'failed'
       }
       await this.drainSteering(threadId, turnId, signal)
-      const stepResult = await this.modelStep(threadId, turnId, signal, step, limits.maxToolCallsPerStep)
+      let stepResult: ModelRoundOutcome
+      if (graphLeadEpisodeActive && graphLeadEpisodeStartedAt !== undefined) {
+        const deadlineAt = graphLeadEpisodeStartedAt + GRAPH_LEAD_EPISODE_MAX_ELAPSED_MS
+        const scopedController = new AbortController()
+        const abortScopedStep = () => scopedController.abort(signal.reason)
+        if (signal.aborted) abortScopedStep()
+        else signal.addEventListener('abort', abortScopedStep, { once: true })
+        let episodeDeadlineExceeded = false
+        const deadline = setTimeout(() => {
+          episodeDeadlineExceeded = true
+          scopedController.abort()
+        }, Math.max(1, deadlineAt - (this.opts.nowMs?.() ?? Date.now())))
+        if (typeof (deadline as { unref?: () => void }).unref === 'function') {
+          ;(deadline as { unref: () => void }).unref()
+        }
+        try {
+          stepResult = await this.modelStep(
+            threadId,
+            turnId,
+            scopedController.signal,
+            step,
+            limits.maxToolCallsPerStep
+          )
+        } finally {
+          clearTimeout(deadline)
+          signal.removeEventListener('abort', abortScopedStep)
+        }
+        graphLeadEpisodeModelSteps += 1
+        if (
+          !signal.aborted &&
+          (
+            episodeDeadlineExceeded ||
+            (this.opts.nowMs?.() ?? Date.now()) >= deadlineAt
+          )
+        ) {
+          const parked = await this.opts.turns.suspendGraphLeadTurn({
+            threadId,
+            turnId,
+            force: true,
+            preserveDeliveryCursor: true,
+            allowPendingSupervision: true
+          })
+          if (parked === 'suspended') return 'suspended'
+        }
+      } else {
+        stepResult = await this.modelStep(
+          threadId,
+          turnId,
+          signal,
+          step,
+          limits.maxToolCallsPerStep
+        )
+      }
       if (stepResult === 'stop') {
+        const graphSuspension = await this.opts.turns.suspendGraphLeadTurn({
+          threadId,
+          turnId
+        })
+        if (graphSuspension === 'suspended') return 'suspended'
+        if (graphSuspension === 'pending_steering') continue
+        if (graphSuspension === 'supervision_pending') {
+          if (!graphSupervisionReminderUsed) {
+            graphSupervisionReminderUsed = true
+            try {
+              await this.opts.turns.steerTurn({
+                threadId,
+                turnId,
+                messageSource: 'graph_runtime',
+                text: [
+                  'Host supervision gate: this Graph still has unresolved durable work.',
+                  'Inspect its current node and attempt status before ending this Lead slice.',
+                  'Use `graph_review_node` only for submitted/reviewing attempts.',
+                  'For an exhausted failed or repair-required node, use `graph_patch_run` to create a semantic replacement instead of reviewing it again.'
+                ].join(' ')
+              })
+              continue
+            } catch {
+              // A concurrent shutdown or user steering may close admission.
+              // Fall through to a cursor-preserving suspension.
+            }
+          }
+          const parked = await this.opts.turns.suspendGraphLeadTurn({
+            threadId,
+            turnId,
+            allowPendingSupervision: true,
+            preserveDeliveryCursor: true
+          })
+          if (parked === 'suspended') return 'suspended'
+          if (parked === 'pending_steering') continue
+        }
         // Either accepted guidance wins and forces another model interaction,
         // or the synchronous seal wins and late steer requests are rejected.
         if (this.opts.steering.sealIfEmpty(turnId)) return 'completed'
         continue
       }
-      if (stepResult === 'failed' || stepResult === 'aborted') {
+      if (stepResult === 'failed') {
+        const failure = this.turnFailures.get(turnId)
+        if (
+          failure?.code &&
+          RECOVERABLE_GRAPH_LEAD_MODEL_FAILURE_CODES.has(failure.code)
+        ) {
+          const activeTurn = await this.opts.turns.getTurn(threadId, turnId)
+          if (activeTurn?.status === 'running' && activeTurn.orchestration === 'graph') {
+            // The stream error event is durable, but thread rehydration is
+            // item-based. Persist before releasing the execution lease so a
+            // concurrent Graph wake-up cannot reuse this runner while it is
+            // still appending the diagnostic.
+            await this.opts.turns.applyItem(
+              threadId,
+              makeErrorItem({
+                id: `item_${turnId}_error`,
+                turnId,
+                threadId,
+                message: failure.error,
+                code: failure.code,
+                ...(failure.details !== undefined ? { details: failure.details } : {}),
+                severity: failure.severity ?? 'error'
+              })
+            ).catch(() => undefined)
+          }
+          const graphSuspension = await this.opts.turns.suspendGraphLeadTurn({
+            threadId,
+            turnId
+          })
+          if (graphSuspension !== 'not_graph') {
+            if (graphSuspension === 'suspended') return 'suspended'
+            if (graphSuspension === 'supervision_pending') {
+              const parked = await this.opts.turns.suspendGraphLeadTurn({
+                threadId,
+                turnId,
+                allowPendingSupervision: true,
+                preserveDeliveryCursor: true
+              })
+              if (parked === 'suspended') return 'suspended'
+            }
+            // Accepted guidance wins the suspension race, and a terminal Graph
+            // still needs its source Lead to synthesize the final response.
+            if (
+              graphSuspension === 'pending_steering' ||
+              graphSuspension === 'graph_terminal'
+            ) {
+              this.turnFailures.delete(turnId)
+              continue
+            }
+          }
+        }
+        await this.drainAndSealSteering(threadId, turnId, signal)
+        return stepResult
+      }
+      if (stepResult === 'aborted') {
         await this.drainAndSealSteering(threadId, turnId, signal)
         return stepResult
       }
@@ -779,6 +1087,10 @@ export class AgentLoop {
     const context = createToolExecutionContext(input, {
       memoryEnabled: Boolean(this.opts.memoryStore),
       ...(this.opts.allowedProviderIds ? { allowedProviderIds: this.opts.allowedProviderIds } : {}),
+      ...(this.opts.allowedSkillIds ? { allowedSkillIds: this.opts.allowedSkillIds } : {}),
+      ...(this.opts.allowedReadPaths ? { allowedReadPaths: this.opts.allowedReadPaths } : {}),
+      ...(this.opts.allowedWritePaths ? { allowedWritePaths: this.opts.allowedWritePaths } : {}),
+      ...(this.opts.allowedArtifactIds ? { allowedArtifactIds: this.opts.allowedArtifactIds } : {}),
       ...(this.opts.blockedProviderIds ? { blockedProviderIds: this.opts.blockedProviderIds } : {}),
       ...(this.opts.blockedToolNames ? { blockedToolNames: this.opts.blockedToolNames } : {}),
       ...(this.opts.blockedSkillIds ? { blockedSkillIds: this.opts.blockedSkillIds } : {}),
@@ -865,14 +1177,6 @@ export class AgentLoop {
     changeKind: 'additive' | 'breaking'
     message: string
   }): Promise<void> {
-    await this.opts.turns.applyItem(input.threadId, makeErrorItem({
-      id: `item_${input.turnId}_tool_catalog_changed_${input.fingerprint}`,
-      threadId: input.threadId,
-      turnId: input.turnId,
-      message: input.message,
-      code: 'tool_catalog_changed',
-      severity: 'info'
-    }))
     await this.opts.events.record({
       kind: 'tool_catalog_changed',
       threadId: input.threadId,

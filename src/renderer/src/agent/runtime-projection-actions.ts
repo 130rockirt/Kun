@@ -1,6 +1,8 @@
 import type { CoreRuntimeEventJson } from './kun-contract'
 import type {
   ApprovalStatusPayload,
+  ApprovalReviewEventPayload,
+  AssistantItemSnapshotPayload,
   CompactionEventPayload,
   ReviewEventPayload,
   RuntimeErrorEventPayload,
@@ -32,6 +34,7 @@ type ThreadMetadataProjection = Parameters<NonNullable<ThreadEventSink['onThread
 export type RuntimeProjectionAction =
   | { type: 'seq_observed'; seq: number }
   | { type: 'deltas_received'; deltas: ThreadDeltaEvent[] }
+  | { type: 'assistant_item_upserted'; payload: AssistantItemSnapshotPayload }
   | { type: 'user_message_received'; payload: UserMessageEventPayload }
   | { type: 'tool_updated'; payload: ToolEventPayload }
   | { type: 'compaction_updated'; payload: CompactionEventPayload }
@@ -39,6 +42,7 @@ export type RuntimeProjectionAction =
   | { type: 'approval_requested'; event: CoreRuntimeEventJson }
   | { type: 'approval_received'; payload: Parameters<ThreadEventSink['onApproval']>[0] }
   | { type: 'approval_status_changed'; payload: ApprovalStatusPayload }
+  | { type: 'approval_review_updated'; payload: ApprovalReviewEventPayload }
   | { type: 'user_input_requested'; payload: UserInputRequestPayload }
   | { type: 'user_input_status_changed'; payload: UserInputStatusPayload }
   | { type: 'runtime_status_received'; payload: RuntimeStatusEventPayload }

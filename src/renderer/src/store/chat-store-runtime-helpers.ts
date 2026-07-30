@@ -30,6 +30,7 @@ export function hasPendingRuntimeWork(block: ChatBlock): boolean {
   if (block.kind === 'compaction') return block.status === 'running'
   if (block.kind === 'review') return block.status === 'running'
   if (block.kind === 'approval') return block.status === 'pending'
+  if (block.kind === 'approval_review') return block.status === 'in-progress'
   if (block.kind === 'user_input') return block.status === 'pending'
   return false
 }
@@ -93,6 +94,10 @@ export function settlePendingRuntimeWorkAfterInterrupt(blocks: ChatBlock[]): Cha
     if (block.kind === 'approval' && block.status === 'pending') {
       changed = true
       return { ...block, status: 'error' as const }
+    }
+    if (block.kind === 'approval_review' && block.status === 'in-progress') {
+      changed = true
+      return { ...block, status: 'aborted' as const }
     }
     if (block.kind === 'user_input' && block.status === 'pending') {
       changed = true
@@ -166,7 +171,9 @@ function mergeRuntimeDisclosureMeta(
 }
 
 export function isOptimisticUserBlockId(id: string): boolean {
-  return id.startsWith('u-') || id.startsWith('q-')
+  return id.startsWith('u-') ||
+    id.startsWith('q-') ||
+    id.startsWith('graph-steering-')
 }
 
 /**
@@ -260,6 +267,7 @@ export function clearedThreadSelection(): Pick<
   | 'liveAssistant'
   | 'busy'
   | 'currentTurnId'
+  | 'currentTurnOrchestration'
   | 'currentTurnUserId'
   | 'turnStartedAtByUserId'
   | 'turnDurationByUserId'
@@ -281,6 +289,7 @@ export function clearedThreadSelection(): Pick<
     liveAssistant: '',
     busy: false,
     currentTurnId: null,
+    currentTurnOrchestration: null,
     currentTurnUserId: null,
     turnStartedAtByUserId: {},
     turnDurationByUserId: {},

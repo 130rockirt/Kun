@@ -17,19 +17,17 @@ import { spawnSync } from 'node:child_process'
 import { basename, dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { runRequiredNpm } from './lib/extension-release-execution.mjs'
-import { assertStandaloneVideoEditorHostBundle } from './pack-kun-video-editor.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const cliPath = join(root, 'kun', 'dist', 'cli', 'serve-entry.js')
 const defaultOutput = join(root, 'resources', 'bundled-extensions')
 
 export const BUNDLED_EXTENSION_CATALOG_FILE = 'catalog.json'
+const RETIRED_BUNDLED_EXTENSION_NAMES = Object.freeze(['kun-video-editor'])
+export const RETIRED_BUNDLED_EXTENSION_IDS = Object.freeze([
+  'kun-examples.kun-video-editor'
+])
 export const BUNDLED_EXTENSION_DEFINITIONS = Object.freeze([
-  Object.freeze({
-    id: 'kun-examples.kun-video-editor',
-    name: 'kun-video-editor',
-    root: join(root, 'examples', 'extensions', 'kun-video-editor')
-  }),
   Object.freeze({
     id: 'kun-examples.presentation-studio',
     name: 'presentation-studio',
@@ -89,12 +87,19 @@ export function bundledCatalogEntry(definition, manifest, archive, sha256) {
   }
 }
 
-export function bundledExtensionCatalog(entries) {
+export function bundledExtensionCatalog(
+  entries,
+  retiredExtensions = RETIRED_BUNDLED_EXTENSION_IDS
+) {
   const sorted = [...entries].sort((left, right) => left.id.localeCompare(right.id))
   if (new Set(sorted.map((entry) => entry.id)).size !== sorted.length) {
     throw new Error('Bundled extension catalog contains duplicate extension ids')
   }
-  return { schemaVersion: 1, extensions: sorted }
+  const retired = [...new Set(retiredExtensions)].sort()
+  if (retired.some((id) => sorted.some((entry) => entry.id === id))) {
+    throw new Error('Bundled extension catalog cannot retire an active extension id')
+  }
+  return { schemaVersion: 1, extensions: sorted, retiredExtensions: retired }
 }
 
 export async function packBundledExtensions({ output = defaultOutput } = {}) {
@@ -124,9 +129,6 @@ async function packBundledExtension(definition, directory) {
       args: ['--prefix', definition.root, 'run', 'build'],
       cwd: root
     })
-    if (definition.id === 'kun-examples.kun-video-editor') {
-      await assertStandaloneVideoEditorHostBundle(join(definition.root, 'dist', 'host'))
-    }
     runRequired(process.execPath, [
       cliPath,
       'extension',
@@ -194,7 +196,10 @@ async function sha256File(path) {
 }
 
 async function removeStaleBundledArchives(directory, expected) {
-  const names = BUNDLED_EXTENSION_DEFINITIONS.map((entry) => entry.name)
+  const names = [
+    ...BUNDLED_EXTENSION_DEFINITIONS.map((entry) => entry.name),
+    ...RETIRED_BUNDLED_EXTENSION_NAMES
+  ]
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     if (expected.has(entry.name)) continue
     if (!names.some((name) => entry.name.startsWith(`${name}-`) && entry.name.endsWith('.kunx'))) {

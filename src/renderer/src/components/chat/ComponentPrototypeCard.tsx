@@ -1,4 +1,12 @@
-import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+  type ReactElement
+} from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   Check,
@@ -8,6 +16,7 @@ import {
   Loader2,
   Monitor,
   MoreHorizontal,
+  MoveVertical,
   RefreshCw,
   Smartphone,
   TriangleAlert
@@ -23,6 +32,11 @@ type ComponentPrototypeCardProps = {
 }
 
 type PreviewMode = 'desktop' | 'mobile'
+
+const MIN_PREVIEW_HEIGHT = 240
+const MAX_PREVIEW_HEIGHT = 900
+const PREVIEW_HEIGHT_STEP = 32
+const PREVIEW_HEIGHT_STORAGE_PREFIX = 'kun-component-prototype-height:'
 
 export function componentPrototypeFromBlock(block: ToolBlock): ComponentPrototypeMetadata | null {
   const value = block.meta?.componentPrototype
@@ -88,12 +102,27 @@ export function componentPrototypeFrameSize(
   if (mode === 'mobile') {
     return {
       width: Math.min(360, prototype.viewport.width),
-      height: Math.min(420, Math.max(240, Math.round(prototype.viewport.height * 0.65)))
+      height: clampComponentPrototypeHeight(prototype.viewport.height)
     }
   }
   return {
     width: '100%',
-    height: Math.min(160, Math.max(124, Math.round(prototype.viewport.height * 0.25)))
+    height: clampComponentPrototypeHeight(prototype.viewport.height)
+  }
+}
+
+export function clampComponentPrototypeHeight(height: number): number {
+  if (!Number.isFinite(height)) return 460
+  return Math.min(MAX_PREVIEW_HEIGHT, Math.max(MIN_PREVIEW_HEIGHT, Math.round(height)))
+}
+
+function storedComponentPrototypeHeight(artifactId: string, fallback: number): number {
+  if (!artifactId) return fallback
+  try {
+    const value = Number(window.sessionStorage?.getItem(`${PREVIEW_HEIGHT_STORAGE_PREFIX}${artifactId}`))
+    return Number.isFinite(value) && value > 0 ? clampComponentPrototypeHeight(value) : fallback
+  } catch {
+    return fallback
   }
 }
 
@@ -128,9 +157,31 @@ export function ComponentPrototypeCard({
   const prototype = useMemo(() => componentPrototypeFromBlock(block), [block])
   const [mode, setMode] = useState<PreviewMode>('desktop')
   const [mountNonce, setMountNonce] = useState(0)
+  const defaultHeight = prototype ? componentPrototypeFrameSize(prototype, mode).height : 460
+  const [previewHeight, setPreviewHeight] = useState(() =>
+    storedComponentPrototypeHeight(prototype?.artifactId ?? '', defaultHeight)
+  )
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle')
   const [menuOpen, setMenuOpen] = useState(false)
   const menuRootRef = useRef<HTMLDivElement | null>(null)
+  const resizeStartRef = useRef<{ pointerId: number; y: number; height: number } | null>(null)
+
+  useEffect(() => {
+    if (!prototype) return
+    setPreviewHeight(storedComponentPrototypeHeight(prototype.artifactId, defaultHeight))
+  }, [defaultHeight, prototype])
+
+  useEffect(() => {
+    if (!prototype) return
+    try {
+      window.sessionStorage?.setItem(
+        `${PREVIEW_HEIGHT_STORAGE_PREFIX}${prototype.artifactId}`,
+        String(previewHeight)
+      )
+    } catch {
+      // Session persistence is best-effort; resizing remains functional.
+    }
+  }, [previewHeight, prototype])
 
   useEffect(() => {
     if (!menuOpen || typeof window === 'undefined' || typeof window.addEventListener !== 'function') return
@@ -154,6 +205,33 @@ export function ComponentPrototypeCard({
   const running = prototype.status === 'preparing' || prototype.status === 'running'
   const failed = prototype.status === 'failed' || block.status === 'error'
   const frame = componentPrototypeFrameSize(prototype, mode)
+  const resizePreview = (height: number): void => {
+    setPreviewHeight(clampComponentPrototypeHeight(height))
+  }
+  const onResizePointerDown = (event: ReactPointerEvent<HTMLDivElement>): void => {
+    resizeStartRef.current = {
+      pointerId: event.pointerId,
+      y: event.clientY,
+      height: previewHeight
+    }
+    event.currentTarget.setPointerCapture?.(event.pointerId)
+    event.preventDefault()
+  }
+  const onResizePointerMove = (event: ReactPointerEvent<HTMLDivElement>): void => {
+    const start = resizeStartRef.current
+    if (!start || start.pointerId !== event.pointerId) return
+    resizePreview(start.height + event.clientY - start.y)
+  }
+  const onResizePointerEnd = (event: ReactPointerEvent<HTMLDivElement>): void => {
+    if (resizeStartRef.current?.pointerId !== event.pointerId) return
+    resizeStartRef.current = null
+    event.currentTarget.releasePointerCapture?.(event.pointerId)
+  }
+  const onResizeKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
+    if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
+    event.preventDefault()
+    resizePreview(previewHeight + (event.key === 'ArrowDown' ? PREVIEW_HEIGHT_STEP : -PREVIEW_HEIGHT_STEP))
+  }
   const producerLabel = prototype.producer === 'main-agent'
     ? t('componentPrototypeMainAgent')
     : t('componentPrototypeSubagent')
@@ -200,7 +278,7 @@ export function ComponentPrototypeCard({
 
   return (
     <article
-      className="ds-component-prototype-card relative mx-auto w-full max-w-[600px] min-w-0 rounded-[11px] border border-ds-border bg-ds-card/95 shadow-[0_5px_18px_rgba(36,68,112,0.06)]"
+      className="ds-component-prototype-card relative mx-auto w-full max-w-[900px] min-w-0 rounded-[11px] border border-ds-border bg-ds-card/95 shadow-[0_5px_18px_rgba(36,68,112,0.06)]"
       data-component-prototype-id={prototype.artifactId}
     >
       <header className="flex h-8 items-center justify-between gap-2 rounded-t-[11px] border-b border-ds-border-muted px-3">
@@ -259,6 +337,14 @@ export function ComponentPrototypeCard({
                   setMenuOpen(false)
                 }}
               />
+              <PrototypeMenuButton
+                icon={<MoveVertical className="h-3.5 w-3.5" />}
+                label={t('componentPrototypeResetSize')}
+                onClick={() => {
+                  resizePreview(defaultHeight)
+                  setMenuOpen(false)
+                }}
+              />
               <div className="my-1 h-px bg-ds-border-muted" />
               <PrototypeMenuButton
                 icon={<Code2 className="h-3.5 w-3.5" />}
@@ -296,7 +382,7 @@ export function ComponentPrototypeCard({
         </div>
       </header>
 
-      <div className="flex justify-center overflow-auto rounded-b-[11px] bg-ds-subtle/35 p-2">
+      <div className="flex min-w-0 justify-center overflow-auto bg-ds-subtle/35 p-2 pb-1">
         {failed ? (
           <div className="flex min-h-[124px] w-full items-center justify-center px-5 py-4 text-center">
             <div className="max-w-md">
@@ -307,8 +393,8 @@ export function ComponentPrototypeCard({
           </div>
         ) : (
           <div
-            className="min-w-0 overflow-hidden bg-white transition-[width,height] duration-200"
-            style={{ width: frame.width, height: frame.height, maxWidth: '100%' }}
+            className="min-w-0 overflow-auto bg-white"
+            style={{ width: frame.width, height: previewHeight, maxWidth: '100%' }}
           >
             <DesignHtmlPreviewHost
               key={`${block.id}:${mountNonce}`}
@@ -338,6 +424,26 @@ export function ComponentPrototypeCard({
           </div>
         )}
       </div>
+      {!failed ? (
+        <div
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label={t('componentPrototypeResize')}
+          aria-valuemin={MIN_PREVIEW_HEIGHT}
+          aria-valuemax={MAX_PREVIEW_HEIGHT}
+          aria-valuenow={previewHeight}
+          tabIndex={0}
+          data-component-prototype-resize-handle
+          className="group flex h-4 w-full touch-none cursor-ns-resize items-center justify-center rounded-b-[11px] bg-ds-subtle/35 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent"
+          onPointerDown={onResizePointerDown}
+          onPointerMove={onResizePointerMove}
+          onPointerUp={onResizePointerEnd}
+          onPointerCancel={onResizePointerEnd}
+          onKeyDown={onResizeKeyDown}
+        >
+          <span className="h-1 w-10 rounded-full bg-ds-border transition-colors group-hover:bg-ds-muted group-focus-visible:bg-accent" />
+        </div>
+      ) : null}
     </article>
   )
 }

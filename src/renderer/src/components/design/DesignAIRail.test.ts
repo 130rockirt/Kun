@@ -30,6 +30,7 @@ function props(overrides: Partial<DesignAIRailProps> = {}): DesignAIRailProps {
     setComposerReasoningEffort: () => {},
     queuedMessages: [],
     removeQueuedMessage: () => {},
+    guideQueuedMessage: () => {},
     onSend: () => {},
     onInterrupt: () => {},
     onRetryConnection: () => {},
@@ -54,6 +55,24 @@ beforeEach(() => {
 })
 
 describe('DesignAIRail target toggle', () => {
+  it('offers guidance for queued plain-text messages', () => {
+    const html = renderToStaticMarkup(createElement(DesignAIRail, props({
+      busy: true,
+      activeThreadId: 'thread-current-document',
+      queuedMessages: [{ id: 'q-guide', text: 'use a smaller title' }],
+      designThreads: [{
+        id: 'thread-current-document',
+        title: 'Settings',
+        workspace: '/tmp/kun-design',
+        model: 'deepseek-chat',
+        mode: 'agent',
+        updatedAt: '2026-07-03T00:00:00.000Z'
+      }]
+    })))
+
+    expect(html).toContain('aria-label="Guide"')
+  })
+
   it('derives visible drawing titles from the first design request', () => {
     expect(designThreadTitleLooksDefault('Design Assistant', '设计助手')).toBe(true)
     expect(designThreadTitleLooksDefault('设计助手', '设计助手')).toBe(true)

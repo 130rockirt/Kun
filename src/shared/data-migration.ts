@@ -250,6 +250,7 @@ export const DATA_MIGRATION_REFERENCE_DESCRIPTORS_V1 = Object.freeze([
   { component: 'attachment', schemaVersion: 1, kind: 'workspace-file', jsonPointerPatterns: ['/localFilePath', '/workspaces/*'], required: false },
   { component: 'attachment', schemaVersion: 1, kind: 'thread-id', jsonPointerPatterns: ['/threadIds/*'], required: false },
   { component: 'memory', schemaVersion: 1, kind: 'workspace-root', jsonPointerPatterns: ['/workspace'], required: false },
+  { component: 'renderer-state', schemaVersion: 1, kind: 'workspace-file', jsonPointerPatterns: ['/write/*/filePaths/*'], required: false },
   { component: 'renderer-state', schemaVersion: 1, kind: 'workspace-root', jsonPointerPatterns: ['/design/*/workspaceRoot', '/write/*/workspaceRoot', '/plans/*/workspaceRoot', '/sdd/*/workspaceRoot', '/workspaces/*/workspaceRoot'], required: false },
   { component: 'renderer-state', schemaVersion: 1, kind: 'thread-id', jsonPointerPatterns: ['/design/*/threadId', '/write/*/threadId', '/plans/*/threadId', '/sdd/*/threadId', '/sdd/*/threadIds/*', '/sdd/*/publicThreadIds/*', '/forks/*/threadId', '/forks/*/parentThreadId', '/composer/modes/*/threadId'], required: false },
   { component: 'portable-settings', schemaVersion: 1, kind: 'workspace-root', jsonPointerPatterns: ['/workspaceRoot', '/conversationWorkspaceRoot', '/write/workspaceRoot', '/design/workspaceRoot'], required: false },
@@ -296,6 +297,10 @@ export const DataMigrationWorkspaceMappingSchema = z.object({
   destinationRoot: z.string().min(1).optional(),
   strategy: DataMigrationWorkspaceConflictStrategySchema,
   compatible: z.boolean(),
+  // Optional so recovery can still read journals written before this
+  // conflict-independent compatibility marker was introduced.
+  preflightCompatible: z.boolean().optional(),
+  estimatedPeakBytes: z.number().int().nonnegative().optional(),
   freeBytes: z.number().int().nonnegative().optional(),
   requiredBytes: z.number().int().nonnegative(),
   unresolvedIssueCount: z.number().int().nonnegative()
@@ -567,7 +572,7 @@ export type DataMigrationPathPolicyDecision =
 type MigrationPathRule = Readonly<{
   id: string
   scopes: readonly DataMigrationPathScope[]
-  kind: 'segment' | 'basename' | 'prefix' | 'suffix'
+  kind: 'segment' | 'segment-prefix' | 'basename' | 'prefix' | 'suffix'
   value: string
 }>
 
@@ -580,7 +585,7 @@ export const DATA_MIGRATION_HARD_EXCLUSION_RULES: readonly MigrationPathRule[] =
   { id: 'local-models', scopes: ['runtime', 'profile'], kind: 'segment', value: 'models' },
   { id: 'downloaded-binaries', scopes: ['runtime', 'profile'], kind: 'segment', value: 'agent-sdk' },
   { id: 'opaque-extension-data', scopes: ['runtime', 'profile'], kind: 'segment', value: 'extension-data' },
-  { id: 'migration-staging', scopes: ['workspace', 'runtime', 'profile'], kind: 'segment', value: '.kun-migration-staging' },
+  { id: 'migration-staging', scopes: ['workspace', 'runtime', 'profile'], kind: 'segment-prefix', value: '.kun-migration-staging' },
   { id: 'migration-backup', scopes: ['workspace', 'runtime', 'profile'], kind: 'segment', value: '.kun-migration-backup' },
   { id: 'migration-temporary', scopes: ['workspace', 'runtime', 'profile'], kind: 'suffix', value: '.kunpack.tmp' }
 ])
@@ -659,6 +664,8 @@ function migrationPathRuleMatches(
   switch (rule.kind) {
     case 'segment':
       return segments.some((segment) => segment.toLowerCase() === value)
+    case 'segment-prefix':
+      return segments.some((segment) => segment.toLowerCase().startsWith(value))
     case 'basename':
       return basename.toLowerCase() === value
     case 'prefix':

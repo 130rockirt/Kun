@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactElement, type ReactNode } from 'react'
 import type {
   AppSettingsV1,
+  KunBrowserUseSettingsV1,
   KunToolPermissionMode,
   ModelProviderProfileV1
 } from '@shared/app-settings'
@@ -17,6 +18,8 @@ import {
   MIN_KUN_LOCAL_PORT,
   WRITE_INLINE_COMPLETION_MODEL_IDS,
   defaultKunContextCompactionSettings,
+  defaultKunBrowserUseSettings,
+  defaultKunGraphSettings,
   defaultModelProviderSettings,
   isKunRuntimeInsecure,
   kunToolPermissionModeFromSettings,
@@ -31,19 +34,24 @@ import type {
 } from '@shared/kun-gui-api'
 import {
   Ban,
+  Bot,
   Check,
-  Eye,
+  FlaskConical,
   FolderOpen,
-  FolderPen,
+  Globe2,
   Hand,
   Loader2,
   LockKeyholeOpen,
+  Monitor,
+  Palette,
   RefreshCw,
   RotateCcw,
   Settings,
   ShieldCheck,
-  ShieldQuestion,
-  Trash2
+  Sparkles,
+  Trash2,
+  Workflow,
+  Wrench
 } from 'lucide-react'
 import { GuiUpdateControl } from './settings-gui-update'
 import { McpServersEditor } from './mcp/McpServersEditor'
@@ -52,8 +60,10 @@ import {
   InlineNoticeView,
   ModelSelect,
   SecretInput,
-  SectionJumpButton,
   SettingsCard,
+  SettingsSubTabs,
+  SettingsTabPanel,
+  SettingsTabs,
   SettingRow,
   Toggle
 } from './settings-controls'
@@ -69,9 +79,32 @@ import {
   summarizeSkillPermissionSources,
   type TokenEconomySavingsState
 } from './settings-section-agents-utils'
-import { ComputerUseSettingsPanel, DesignQualitySettingsPanel } from './settings-section-agent-panels'
+import {
+  BrowserUseSettingsPanel,
+  ComputerUseSettingsPanel,
+  DesignQualitySettingsPanel
+} from './settings-section-agent-panels'
+import { GraphModeSettingsPanel } from './settings-section-graph-panel'
+import { runTrustedUserActivation } from '../extensions/protected-user-activation'
 
 export { modelProvidersSettingsPatch } from './settings-section-providers'
+
+type AgentsSettingsPanel =
+  | 'assistant'
+  | 'permissions'
+  | 'skills'
+  | 'tools'
+  | 'project'
+  | 'runtime'
+type PermissionsSettingsPanel = 'policy' | 'quality'
+type LaboratorySettingsPanel = 'computer' | 'browser' | 'graph'
+
+function panelForSettingsSection(section: unknown): AgentsSettingsPanel {
+  if (section === 'permissions') return 'permissions'
+  if (section === 'skill') return 'skills'
+  if (section === 'mcp') return 'tools'
+  return 'assistant'
+}
 
 const TOOL_PERMISSION_OPTIONS: Array<{
   value: KunToolPermissionMode
@@ -81,44 +114,23 @@ const TOOL_PERMISSION_OPTIONS: Array<{
   iconClass: string
 }> = [
   {
-    value: 'always-ask',
-    labelKey: 'toolPermissionAlwaysAsk',
-    descriptionKey: 'toolPermissionAlwaysAskDesc',
+    value: 'ask-for-approval',
+    labelKey: 'toolPermissionAskForApproval',
+    descriptionKey: 'toolPermissionAskForApprovalDesc',
     Icon: Hand,
     iconClass: 'border-sky-400/30 bg-sky-500/10 text-sky-700 dark:text-sky-200'
   },
   {
-    value: 'read-only',
-    labelKey: 'toolPermissionReadOnly',
-    descriptionKey: 'toolPermissionReadOnlyDesc',
-    Icon: Eye,
-    iconClass: 'border-emerald-400/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-200'
-  },
-  {
-    value: 'sensitive-ask',
-    labelKey: 'toolPermissionSensitiveAsk',
-    descriptionKey: 'toolPermissionSensitiveAskDesc',
-    Icon: ShieldQuestion,
-    iconClass: 'border-amber-400/35 bg-amber-500/10 text-amber-700 dark:text-amber-200'
-  },
-  {
-    value: 'workspace-write',
-    labelKey: 'toolPermissionWorkspaceWrite',
-    descriptionKey: 'toolPermissionWorkspaceWriteDesc',
-    Icon: FolderPen,
-    iconClass: 'border-indigo-400/30 bg-indigo-500/10 text-indigo-700 dark:text-indigo-200'
-  },
-  {
-    value: 'trusted-workspace',
-    labelKey: 'toolPermissionTrustedWorkspace',
-    descriptionKey: 'toolPermissionTrustedWorkspaceDesc',
-    Icon: ShieldCheck,
+    value: 'approve-for-me',
+    labelKey: 'toolPermissionApproveForMe',
+    descriptionKey: 'toolPermissionApproveForMeDesc',
+    Icon: Bot,
     iconClass: 'border-teal-400/30 bg-teal-500/10 text-teal-700 dark:text-teal-200'
   },
   {
-    value: 'bypass',
-    labelKey: 'toolPermissionBypass',
-    descriptionKey: 'toolPermissionBypassDesc',
+    value: 'full-access',
+    labelKey: 'toolPermissionFullAccess',
+    descriptionKey: 'toolPermissionFullAccessDesc',
     Icon: LockKeyholeOpen,
     iconClass: 'border-orange-400/35 bg-orange-500/10 text-orange-700 dark:text-orange-200'
   }
@@ -166,7 +178,6 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
     effectiveWriteInlineModel,
     setWriteDebugModalOpen,
     loadWriteDebugEntries,
-    scrollToAgentSection,
     agentsSectionRef,
     skillSectionRef,
     mcpSectionRef,
@@ -247,11 +258,25 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
   const [tokenEconomySavingsState, setTokenEconomySavingsState] =
     useState<TokenEconomySavingsState>(EMPTY_TOKEN_ECONOMY_SAVINGS_STATE)
   const [mcpRawMode, setMcpRawMode] = useState(false)
+  const [activePanel, setActivePanel] = useState<AgentsSettingsPanel>(() =>
+    panelForSettingsSection(ctx.settingsSection)
+  )
+  const [activePermissionsPanel, setActivePermissionsPanel] =
+    useState<PermissionsSettingsPanel>('policy')
   const skillPermissionSummary = summarizeSkillPermissionSources(skillRoots, form.disabledSkillIds)
   const mcpPermissionSummary = useMemo(
     () => summarizeMcpPermissionSources(mcpConfigText),
     [mcpConfigText]
   )
+  useEffect(() => {
+    const requestedPanel = panelForSettingsSection(ctx.settingsSection)
+    if (ctx.settingsSection === 'agents' || requestedPanel !== 'assistant') {
+      setActivePanel(requestedPanel)
+    }
+    if (ctx.settingsSection === 'permissions') {
+      setActivePermissionsPanel('policy')
+    }
+  }, [ctx.settingsSection])
   useEffect(() => {
     let cancelled = false
     if (!tokenEconomy.enabled) {
@@ -276,6 +301,7 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
     sqlitePath: ''
   }
   const contextCompaction = kun.contextCompaction ?? defaultKunContextCompactionSettings()
+  const graph = kun.graph ?? defaultKunGraphSettings()
   const modelContext = modelContextProfileSummary({
     model: kun.model,
     fallbackSoftThreshold: contextCompaction.defaultSoftThreshold,
@@ -284,7 +310,7 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
   const runtimeTuning = kun.runtimeTuning ?? {
     maxConcurrentTurns: 256,
     maxWallTimeMs: 86400000,
-    streamIdleTimeoutMs: 45000,
+    streamIdleTimeoutMs: 450000,
     toolStorm: {
       enabled: true,
       windowSize: 8,
@@ -381,6 +407,7 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
     maxImageDimension: 1280,
     maxActionsPerTurn: 40
   }
+  const browserUse = kun.browserUse ?? defaultKunBrowserUseSettings()
   const instructions = kun.instructions ?? {
     enabled: true
   }
@@ -396,6 +423,14 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
     updateKun({
       computerUse: {
         ...computerUse,
+        ...patch
+      }
+    })
+  }
+  const updateBrowserUse = (patch: Partial<KunBrowserUseSettingsV1>): void => {
+    updateKun({
+      browserUse: {
+        ...browserUse,
         ...patch
       }
     })
@@ -458,17 +493,28 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
 
   return (
             <>
-              <div className="mb-6 flex flex-wrap gap-2">
-                <SectionJumpButton label={t('agentsQuickBase')} onClick={() => scrollToAgentSection('agents')} />
-                <SectionJumpButton label={t('agentsQuickSkill')} onClick={() => scrollToAgentSection('skill')} />
-                <SectionJumpButton label={t('agentsQuickMcp')} onClick={() => scrollToAgentSection('mcp')} />
-                <SectionJumpButton
-                  label={t('agentsQuickPermissions')}
-                  onClick={() => scrollToAgentSection('permissions')}
-                />
-              </div>
+              <SettingsTabs<AgentsSettingsPanel>
+                baseId="agents-settings"
+                ariaLabel={t('agents')}
+                items={[
+                  { id: 'assistant', label: t('agentsQuickBase'), icon: Bot },
+                  { id: 'permissions', label: t('agentsQuickPermissions'), icon: ShieldCheck },
+                  { id: 'skills', label: t('agentsQuickSkill'), icon: Sparkles },
+                  { id: 'tools', label: t('agentsQuickMcp'), icon: Wrench },
+                  { id: 'project', label: t('projectConfigTitle'), icon: FolderOpen },
+                  { id: 'runtime', label: t('kunAdvanced'), icon: Settings }
+                ]}
+                value={activePanel}
+                onChange={setActivePanel}
+              />
 
-              <div ref={agentsSectionRef}>
+              <div
+                id="agents-settings-panel-assistant"
+                ref={agentsSectionRef}
+                role="tabpanel"
+                aria-labelledby="agents-settings-tab-assistant"
+                className={activePanel === 'assistant' ? '' : 'hidden'}
+              >
                 <SettingsCard title={t('agents')}>
                   <SettingRow
                     title={t('autoStart')}
@@ -739,77 +785,109 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
                 </SettingsCard>
               </div>
 
-              <div className="mt-6" ref={permissionsSectionRef}>
-                <SettingsCard title={t('permissions')}>
-                  <div className="px-3 py-4">
-                    <InlineNoticeView notice={{ tone: 'info', message: t('permissionsBehaviorHint') }} />
-                  </div>
-                  <SettingRow
-                    title={t('toolPermissionMode')}
-                    description={t('toolPermissionModeDesc')}
-                    wideControl
-                    control={
-                      <div
-                        role="radiogroup"
-                        aria-label={t('toolPermissionMode')}
-                        className="grid gap-2 sm:grid-cols-2"
-                      >
-                        {TOOL_PERMISSION_OPTIONS.map((option) => {
-                          const selected = toolPermissionMode === option.value
-                          const PermissionIcon = option.Icon
-                          return (
-                            <button
-                              key={option.value}
-                              type="button"
-                              role="radio"
-                              aria-checked={selected}
-                              onClick={() => updateKun(kunToolPermissionModeSettings(option.value))}
-                              className={`min-h-[72px] rounded-lg border px-3 py-2.5 text-left transition ${
-                                selected
-                                  ? 'border-accent/55 bg-accent/10 text-ds-ink'
-                                  : 'border-ds-border-muted bg-ds-card/70 text-ds-ink hover:bg-ds-hover/70'
-                              }`}
-                            >
-                              <span className="flex items-start gap-2">
-                                <span
-                                  className={`mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border ${option.iconClass}`}
-                                >
-                                  <PermissionIcon className="h-4 w-4" strokeWidth={1.9} />
-                                </span>
-                                <span className="min-w-0 flex-1">
-                                  <span className="block text-[13px] font-semibold">{t(option.labelKey)}</span>
-                                  <span className="mt-1 block text-[12px] leading-snug text-ds-muted">
-                                    {t(option.descriptionKey)}
-                                  </span>
-                                </span>
-                                {selected ? <Check className="mt-0.5 h-4 w-4 shrink-0 text-accent" strokeWidth={2} /> : null}
-                              </span>
-                            </button>
-                          )
-                        })}
-                      </div>
-                    }
+              <div
+                id="agents-settings-panel-permissions"
+                role="tabpanel"
+                aria-labelledby="agents-settings-tab-permissions"
+                className={activePanel === 'permissions' ? 'grid gap-4' : 'hidden'}
+              >
+                <div ref={permissionsSectionRef} className="grid gap-4">
+                  <SettingsSubTabs<PermissionsSettingsPanel>
+                    baseId="agents-permissions"
+                    ariaLabel={t('permissions')}
+                    items={[
+                      { id: 'policy', label: t('toolPermissionMode'), icon: ShieldCheck },
+                      { id: 'quality', label: t('designQualityTitle'), icon: Palette }
+                    ]}
+                    value={activePermissionsPanel}
+                    onChange={setActivePermissionsPanel}
                   />
-                </SettingsCard>
+
+                  <SettingsTabPanel<PermissionsSettingsPanel>
+                    baseId="agents-permissions"
+                    tabId="policy"
+                    active={activePermissionsPanel === 'policy'}
+                  >
+                    <SettingsCard title={t('permissions')}>
+                      <div className="px-3 py-4">
+                        <InlineNoticeView notice={{ tone: 'info', message: t('permissionsBehaviorHint') }} />
+                      </div>
+                      <SettingRow
+                        title={t('toolPermissionMode')}
+                        description={t('toolPermissionModeDesc')}
+                        wideControl
+                        control={
+                          <div
+                            role="radiogroup"
+                            aria-label={t('toolPermissionMode')}
+                            className="grid gap-2 lg:grid-cols-3"
+                          >
+                            {TOOL_PERMISSION_OPTIONS.map((option) => {
+                              const selected = toolPermissionMode === option.value
+                              const PermissionIcon = option.Icon
+                              return (
+                                <button
+                                  key={option.value}
+                                  type="button"
+                                  role="radio"
+                                  aria-checked={selected}
+                                  onClick={(event) => runTrustedUserActivation(
+                                    event,
+                                    () => updateKun(kunToolPermissionModeSettings(option.value))
+                                  )}
+                                  className={`min-h-[72px] rounded-lg border px-3 py-2.5 text-left transition ${
+                                    selected
+                                      ? 'border-accent/55 bg-accent/10 text-ds-ink'
+                                      : 'border-ds-border-muted bg-ds-card/70 text-ds-ink hover:bg-ds-hover/70'
+                                  }`}
+                                >
+                                  <span className="flex items-start gap-2">
+                                    <span
+                                      className={`mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border ${option.iconClass}`}
+                                    >
+                                      <PermissionIcon className="h-4 w-4" strokeWidth={1.9} />
+                                    </span>
+                                    <span className="min-w-0 flex-1">
+                                      <span className="block text-[13px] font-semibold">{t(option.labelKey)}</span>
+                                      <span className="mt-1 block text-[12px] leading-snug text-ds-muted">
+                                        {t(option.descriptionKey)}
+                                      </span>
+                                    </span>
+                                    {selected ? (
+                                      <Check className="mt-0.5 h-4 w-4 shrink-0 text-accent" strokeWidth={2} />
+                                    ) : null}
+                                  </span>
+                                </button>
+                              )
+                            })}
+                          </div>
+                        }
+                      />
+                    </SettingsCard>
+                  </SettingsTabPanel>
+
+                  <SettingsTabPanel<PermissionsSettingsPanel>
+                    baseId="agents-permissions"
+                    tabId="quality"
+                    active={activePermissionsPanel === 'quality'}
+                    className="[&>div]:mt-0"
+                  >
+                    <DesignQualitySettingsPanel
+                      t={t}
+                      value={quality}
+                      selectControlClass={selectControlClass}
+                      onChange={updateQuality}
+                    />
+                  </SettingsTabPanel>
+                </div>
               </div>
 
-
-              <ComputerUseSettingsPanel
-                t={t}
-                value={computerUse}
-                selectControlClass={selectControlClass}
-                permissionRow={<ComputerUsePermissionRow t={t} />}
-                onChange={updateComputerUse}
-              />
-
-              <DesignQualitySettingsPanel
-                t={t}
-                value={quality}
-                selectControlClass={selectControlClass}
-                onChange={updateQuality}
-              />
-
-              <div className="mt-6">
+              <div
+                id="agents-settings-panel-project"
+                role="tabpanel"
+                aria-labelledby="agents-settings-tab-project"
+                className={activePanel === 'project' ? '' : 'hidden'}
+              >
                 <SettingsCard title={t('projectConfigTitle')}>
                   <div className="space-y-3 px-3 py-4">
                     <InlineNoticeView notice={{ tone: 'info', message: t('projectConfigDescription') }} />
@@ -981,7 +1059,13 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
                 </SettingsCard>
               </div>
 
-              <div ref={skillSectionRef} className="mt-6">
+              <div
+                id="agents-settings-panel-skills"
+                ref={skillSectionRef}
+                role="tabpanel"
+                aria-labelledby="agents-settings-tab-skills"
+                className={activePanel === 'skills' ? '' : 'hidden'}
+              >
                 <SettingsCard title={t('skill')}>
                   <SettingRow
                     title={t('skillsDetectedDirs')}
@@ -1119,7 +1203,13 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
                 </SettingsCard>
               </div>
 
-              <div ref={mcpSectionRef} className="mt-6">
+              <div
+                id="agents-settings-panel-tools"
+                ref={mcpSectionRef}
+                role="tabpanel"
+                aria-labelledby="agents-settings-tab-tools"
+                className={activePanel === 'tools' ? '' : 'hidden'}
+              >
                 <SettingsCard title={t('mcp')}>
                   <SettingRow
                     title={t('mcpSearchEnabled')}
@@ -1350,8 +1440,13 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
                 </SettingsCard>
               </div>
 
-
-              <div className="mt-6">
+              <div
+                id="agents-settings-panel-runtime"
+                role="tabpanel"
+                aria-labelledby="agents-settings-tab-runtime"
+                className={activePanel === 'runtime' ? 'grid items-start gap-4 xl:grid-cols-2' : 'hidden'}
+              >
+              <div>
                 <SettingsCard title={t('kunAdvanced')}>
                   <div className="px-3 py-4">
                     <AdvancedSettingsDisclosure
@@ -1770,7 +1865,7 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
                 </SettingsCard>
               </div>
 
-              <div className="mt-6">
+              <div>
                 <SettingsCard title={t('kunDiagnostics')}>
                   <div className="px-3 py-4">
                     <AdvancedSettingsDisclosure
@@ -1932,7 +2027,103 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
                   </div>
                 </SettingsCard>
               </div>
+              </div>
             </>
+  )
+}
+
+export function LaboratorySettingsSection({ ctx }: { ctx: Record<string, any> }): ReactElement {
+  const { t, form, kun, updateKun, selectControlClass } = ctx
+  const [activePanel, setActivePanel] = useState<LaboratorySettingsPanel>('computer')
+  const provider = form.provider ?? defaultModelProviderSettings()
+  const modelProviders = provider.providers as ModelProviderProfileV1[]
+  const activeProviderId = kun.providerId?.trim() || DEFAULT_MODEL_PROVIDER_ID
+  const computerUse = kun.computerUse ?? {
+    enabled: false,
+    mode: 'auto' as const,
+    maxImageDimension: 1280,
+    maxActionsPerTurn: 40
+  }
+  const browserUse = kun.browserUse ?? defaultKunBrowserUseSettings()
+  const graph = kun.graph ?? defaultKunGraphSettings()
+
+  const updateComputerUse = (patch: Record<string, unknown>): void => {
+    updateKun({
+      computerUse: {
+        ...computerUse,
+        ...patch
+      }
+    })
+  }
+  const updateBrowserUse = (patch: Partial<KunBrowserUseSettingsV1>): void => {
+    updateKun({
+      browserUse: {
+        ...browserUse,
+        ...patch
+      }
+    })
+  }
+
+  return (
+    <>
+      <SettingsTabs<LaboratorySettingsPanel>
+        baseId="laboratory-settings"
+        ariaLabel={t('agentsQuickLaboratory')}
+        items={[
+          { id: 'computer', label: t('computerUseTitle'), icon: Monitor },
+          { id: 'browser', label: t('browserUseSettingsTitle'), icon: Globe2 },
+          { id: 'graph', label: t('graphSettingsTitle'), icon: Workflow }
+        ]}
+        value={activePanel}
+        onChange={setActivePanel}
+      />
+
+      <SettingsTabPanel<LaboratorySettingsPanel>
+        baseId="laboratory-settings"
+        tabId="computer"
+        active={activePanel === 'computer'}
+        className="[&>div]:mt-0"
+      >
+        <ComputerUseSettingsPanel
+          t={t}
+          value={computerUse}
+          selectControlClass={selectControlClass}
+          permissionRow={<ComputerUsePermissionRow t={t} />}
+          onChange={updateComputerUse}
+        />
+      </SettingsTabPanel>
+
+      <SettingsTabPanel<LaboratorySettingsPanel>
+        baseId="laboratory-settings"
+        tabId="browser"
+        active={activePanel === 'browser'}
+        className="[&>div]:mt-0"
+      >
+        <BrowserUseSettingsPanel
+          t={t}
+          value={browserUse}
+          selectControlClass={selectControlClass}
+          onChange={updateBrowserUse}
+        />
+      </SettingsTabPanel>
+
+      <SettingsTabPanel<LaboratorySettingsPanel>
+        baseId="laboratory-settings"
+        tabId="graph"
+        active={activePanel === 'graph'}
+        className="[&>div]:mt-0"
+      >
+        <GraphModeSettingsPanel
+          t={t}
+          value={graph}
+          modelProviders={modelProviders}
+          leadProviderId={activeProviderId}
+          leadModel={kun.model}
+          selectControlClass={selectControlClass}
+          onChange={(patch) => updateKun({ graph: patch })}
+        />
+      </SettingsTabPanel>
+    </>
   )
 }
 

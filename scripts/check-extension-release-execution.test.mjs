@@ -6,11 +6,14 @@ import { dirname, join, resolve } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import {
+  REQUIRED_COMMAND_TIMEOUT_MS,
+  REQUIRED_COMPOSITE_COMMAND_TIMEOUT_MS,
   assertExecutableApiConformance,
   assertPathOutsideSourceTree,
   assertPublishableManifest,
   expectedApiMajors,
   npmInvocation,
+  runRequiredCompositeCommand,
   runRequiredCommand
 } from './lib/extension-release-execution.mjs'
 
@@ -91,6 +94,18 @@ test('release commands propagate a non-zero child exit', () => {
     }),
     /exit code 9/
   )
+})
+
+test('composite conformance keeps child commands bounded while allowing their full budget', () => {
+  assert.equal(REQUIRED_COMMAND_TIMEOUT_MS, 10 * 60 * 1000)
+  assert.equal(REQUIRED_COMPOSITE_COMMAND_TIMEOUT_MS, 20 * 60 * 1000)
+  assert.ok(REQUIRED_COMPOSITE_COMMAND_TIMEOUT_MS > REQUIRED_COMMAND_TIMEOUT_MS)
+  assert.doesNotThrow(() => runRequiredCompositeCommand({
+    label: 'quick composite acceptance',
+    command: process.execPath,
+    args: ['-e', 'process.exit(0)'],
+    capture: true
+  }))
 })
 
 test('windows npm invocation avoids spawning npm.cmd when npm cli is discoverable', async () => {

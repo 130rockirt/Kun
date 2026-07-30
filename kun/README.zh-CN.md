@@ -66,10 +66,10 @@ kun/
 
 ```bash
 kun serve \
-  --config ~/.deepseekgui/kun/config.json \
+  --config ~/.kun/data/config.json \
   --host 127.0.0.1 \
   --port 18899 \
-  --data-dir ~/.deepseekgui/kun \
+  --data-dir ~/.kun/data \
   --runtime-token dev-token \
   --api-key "$DEEPSEEK_API_KEY" \
   --model deepseek-v4-pro
@@ -78,14 +78,16 @@ kun serve \
 Kun 也可以在无 GUI 的情况下独立运行：
 
 ```bash
-kun run --data-dir ~/.deepseekgui/kun --workspace "$PWD" "summarize this repo"
-kun chat --data-dir ~/.deepseekgui/kun --workspace "$PWD"
-kun exec --data-dir ~/.deepseekgui/kun --workspace "$PWD" --list-tools
-kun exec --data-dir ~/.deepseekgui/kun --workspace "$PWD" read --args '{"path":"README.md"}'
+kun run --data-dir ~/.kun/data --workspace "$PWD" "summarize this repo"
+kun chat --data-dir ~/.kun/data --workspace "$PWD"
+kun --data-dir ~/.kun/data --workspace "$PWD"
+kun exec --data-dir ~/.kun/data --workspace "$PWD" --list-tools
+kun exec --data-dir ~/.kun/data --workspace "$PWD" read --args '{"path":"README.md"}'
 ```
 
 - `kun run` 会创建一个线程，执行一个回合并流式输出助手文本后退出。
 - `kun chat` 启动行式 REPL。使用 `/exit`、`/quit` 或空行退出。
+- 裸 `kun`（或别名 `kun tui`）连接或自动启动共享后台运行时，提供可与 GUI 同时使用、保留终端 scrollback 的 pi-tui 内联界面。参见 [TUI 指南](../docs/kun-tui.md)。
 - `kun exec --list-tools` 打印当前配置 / 工作区下生效的动态工具列表。
 - `kun exec <tool> --args <json>` 直接调用单个工具。`run` 或 `exec` 上可配合 `--json` 获取机器可读输出。
 
@@ -119,7 +121,7 @@ Kun 使用 JSON 配置文件管理运行时行为，避免重建后重配或硬�
 `{data-dir}/config.json`（若存在）。GUI 默认路径是：
 
 ```text
-~/.deepseekgui/kun/config.json
+~/.kun/data/config.json
 ```
 
 示例结构：
@@ -129,7 +131,7 @@ Kun 使用 JSON 配置文件管理运行时行为，避免重建后重配或硬�
   "serve": {
     "host": "127.0.0.1",
     "port": 18899,
-    "dataDir": "~/.deepseekgui/kun",
+    "dataDir": "~/.kun/data",
     "runtimeToken": "",
     "apiKey": "",
     "baseUrl": "https://api.deepseek.com/beta",
@@ -247,7 +249,7 @@ Kun 默认使用混合存储：`threads/{threadId}/messages.jsonl` 与 `events.j
 - `serve.tokenEconomy` / `tokenEconomyMode` 会压缩工具描述、工具结果和历史上下文；保留代码、路径、命令、URL、错误信号等高价值信息，同时省掉重复、超长或二进制 payload。
 - `contextCompaction` 控制长会话压缩的兜底阈值和摘要方式；模型级阈值写在 `models.profiles`。压缩时保留目标、约束、决策、已触碰文件、工具结果和未解决事项。
 - `serve.runtimeTuning.toolStorm` 会抑制同一回合内重复的相同工具调用，阻止无意义 tool loop 继续烧 token。
-- `runtime.streamIdleTimeoutMs`（`config.json` 顶层）限制流式分片之间的最大空闲间隔，超时会以 `stream_idle_timeout` 结束本轮（默认 `45000`）。本地模型预处理超大输入时会长时间静默，可调大此值；填 `0` 表示不限制。
+- `runtime.streamIdleTimeoutMs`（`config.json` 顶层）限制流式分片之间的最大空闲间隔，超时会以 `stream_idle_timeout` 结束本轮（默认 `450000`，即 7.5 分钟）。本地模型预处理超大输入时会长时间静默，可调大此值；填 `0` 表示不限制。
 - `capabilities.web` 暴露 `web_fetch` 与/或 `web_search`。内置 provider 负责 HTTP(S) 抓取；搜索功能依赖 provider 实现，未配置时会变为不可用。
 - `capabilities.skills` 扫描 `roots` 下的 `skill.json`，并在 `legacySkillMd` 为 `true` 时兼容 `SKILL.md`。
 - `capabilities.attachments` 将图片二进制从线程日志剥离，允许回合记录引用 `attachmentIds`。视觉模型直接接收图片部分，纯文本模型走受限文本 fallback。
@@ -275,7 +277,7 @@ agent 都有自包含 system prompt，不通过 Skill id 加载，即使关闭 S
 
 Hooks 允许外部命令观察并干预 agent 生命周期，无需重新编译 Kun。在
 `config.json` 顶层 `hooks` 键下配置（GUI 默认的
-`~/.deepseekgui/kun/config.json` 直接生效），主循环、子代理和 CLI
+`~/.kun/data/config.json` 直接生效），主循环、子代理和 CLI
 共用同一套 hook。
 
 ```json
@@ -362,9 +364,9 @@ HTTP 服务在 `/v1/*` 提供以下路由：
 | GET | `/v1/threads?include=side` | 列表线程（按最近更新）；未传 `include=side` 时会隐藏 side 线程 |
 | POST | `/v1/threads` | 创建线程 |
 | GET | `/v1/threads/{id}` | 获取线程 |
-| PATCH | `/v1/threads/{id}` | 更新标题/状态/审批/副线程关系（`relation: "primary"`） |
+| PATCH | `/v1/threads/{id}` | 更新标题/状态/mode/审批/sandbox/副线程关系和 `additionalWorkspaces`（`relation: "primary"`） |
 | DELETE | `/v1/threads/{id}` | 删除线程 |
-| POST | `/v1/threads/{id}/fork` | 复制线程。可选 body：`{ "relation": "fork" \| "side", "title"?: string }`。默认 `fork`；`relation: "side"` 会将结果标记为 side 并写入 `parentThreadId` |
+| POST | `/v1/threads/{id}/fork` | 复制线程。可选 body：`{ "relation": "fork" \| "side", "title"?: string, "turnId"?: string, "beforeTurn"?: boolean }`。`turnId` 限制快照终点，`beforeTurn` 会排除该 turn，用于不改写源线程的 undo；默认 relation 为 `fork`，`side` 会写入 `parentThreadId` |
 | POST | `/v1/threads/{id}/turns` | 发起一个回合 |
 | GET | `/v1/threads/{id}/turns/{turnId}` | 获取回合 |
 | POST | `/v1/threads/{id}/turns/{turnId}/steer` | 追加 steering 文本 |

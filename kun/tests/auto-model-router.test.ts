@@ -67,7 +67,7 @@ describe('auto model router', () => {
       turnId: 'turn_1',
       providerId: 'private-provider',
       accountId: 'private-account',
-      latestRequest: 'hello',
+      latestRequest: 'Help me choose the appropriate approach',
       recentContext: '',
       selectedModelMode: 'auto',
       abortSignal: new AbortController().signal

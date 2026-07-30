@@ -5,6 +5,7 @@ import {
   WorkbenchPlanPanelOverlay,
   type WorkbenchPlanPanelProps
 } from './WorkbenchPlanPanelHost'
+import type { PlanBuildOrchestration } from '../../plan/plan-build'
 
 type WorkbenchPlanPanelRuntimeOptions = {
   route: string
@@ -13,11 +14,12 @@ type WorkbenchPlanPanelRuntimeOptions = {
   activeSkillWorkspace: string
   activeThreadId: string | null
   runtimeReady: boolean
+  graphEnabled: boolean
   busy: boolean
   title: string
   cancelLabel: string
   onClose: () => void
-  onBuildPlan: () => void
+  onBuildPlan: (orchestration: PlanBuildOrchestration) => void
   onVerifyPlan: () => void
   onReplanChanged: (ids: string[]) => void
   setRightPanelMode: (mode: RightPanelMode | null) => void
@@ -30,6 +32,7 @@ export function useWorkbenchPlanPanelRuntime({
   activeSkillWorkspace,
   activeThreadId,
   runtimeReady,
+  graphEnabled,
   busy,
   title,
   cancelLabel,
@@ -50,6 +53,7 @@ export function useWorkbenchPlanPanelRuntime({
     workspaceRoot: activeSkillWorkspace,
     activeThreadId,
     runtimeReady,
+    graphEnabled,
     busy,
     className: 'h-full max-h-full w-full',
     onCollapse: onClose,

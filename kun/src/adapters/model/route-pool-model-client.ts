@@ -133,6 +133,10 @@ export class RoutePoolHealthStore {
     this.persist()
   }
 
+  flush(): Promise<void> {
+    return this.writeChain
+  }
+
   private event(pool: ModelRoutePoolConfig, target: ModelRouteTargetConfig, latencyMs: number, result: ModelRouteEvent['result'], category?: string, message?: string, testId?: string): void {
     this.events_.push({
       at: new Date(this.now()).toISOString(),
@@ -189,6 +193,13 @@ export class RoutePoolModelClient implements ModelClient {
     return [...this.pools.values()].map((pool) => structuredClone(pool))
   }
 
+  selectsRouteTargetDuringStream(
+    request: Pick<ModelRequest, 'model' | 'providerId'>
+  ): boolean {
+    const pool = this.pools.get(request.model.trim().toLowerCase())
+    return Boolean(pool && shouldRouteRequest(pool, request))
+  }
+
   stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
     const pool = this.pools.get(request.model.trim().toLowerCase())
     return pool && shouldRouteRequest(pool, request)
@@ -221,38 +232,42 @@ export class RoutePoolModelClient implements ModelClient {
       }
       let committed = false
       let failed = false
+      const pending: ModelStreamChunk[] = []
       try {
-      for await (const chunk of this.direct.stream({ ...request, model: target.modelId, providerId: target.providerId })) {
-        if (isContentChunk(chunk)) committed = true
-        if (chunk.kind === 'error') {
-          failed = true
-          const latency = Math.max(0, this.now() - started)
-          const failure = withRouteFailure(chunk.failure, route)
-          this.health.failure(pool, target, latency, failure, chunk.message, request.routeTestId)
-          if (!committed && routeFailureAllowed(pool, failure)) {
-            failures.push(`${target.providerId}/${target.modelId}: ${chunk.message}`)
-            break
+        for await (const chunk of this.direct.stream({
+          ...request,
+          model: target.modelId,
+          providerId: target.providerId
+        })) {
+          if (chunk.kind === 'error') {
+            failed = true
+            const latency = Math.max(0, this.now() - started)
+            const failure = withRouteFailure(chunk.failure, route)
+            this.health.failure(pool, target, latency, failure, chunk.message, request.routeTestId)
+            if (!committed && routeFailureAllowed(pool, failure)) {
+              // Do not expose a rejected target. The first observable route is
+              // therefore the immutable target that owns the response after
+              // any pre-content failover.
+              pending.length = 0
+              failures.push(`${target.providerId}/${target.modelId}: ${chunk.message}`)
+              break
+            }
+            for (const buffered of pending) yield attributeRouteChunk(buffered, route)
+            pending.length = 0
+            yield attributeRouteChunk({ ...chunk, failure }, route)
+            return
           }
-          yield { ...chunk, failure, route }
-          return
-        }
-        if (chunk.kind === 'usage') {
-          yield {
-            ...chunk,
-            usage: {
-              ...chunk.usage,
-              requestedModelId: route.requestedModelId,
-              actualProviderId: route.providerId,
-              actualModelId: route.modelId,
-              routePoolId: route.routePoolId,
-              routeTargetId: route.targetId
-            },
-            route
+          if (!committed && !isContentChunk(chunk)) {
+            pending.push(chunk)
+            continue
           }
-        } else {
-          yield { ...chunk, route }
+          if (!committed) {
+            committed = true
+            for (const buffered of pending) yield attributeRouteChunk(buffered, route)
+            pending.length = 0
+          }
+          yield attributeRouteChunk(chunk, route)
         }
-      }
       } catch (error) {
         failed = true
         const message = error instanceof Error ? error.message : String(error)
@@ -265,6 +280,14 @@ export class RoutePoolModelClient implements ModelClient {
         failures.push(`${target.providerId}/${target.modelId}: ${message}`)
       }
       if (!failed) {
+        // Some providers return only usage/completed markers. Publish those
+        // after the stream closes successfully so a later pre-content failure
+        // can still fail over without leaking the rejected route.
+        if (pending.length === 0 && !committed) {
+          yield { kind: 'completed', stopReason: 'stop', route }
+        } else {
+          for (const buffered of pending) yield attributeRouteChunk(buffered, route)
+        }
         this.health.success(pool, target, Math.max(0, this.now() - started), request.routeTestId)
         return
       }
@@ -294,7 +317,10 @@ export class RoutePoolModelClient implements ModelClient {
   }
 }
 
-function shouldRouteRequest(pool: ModelRoutePoolConfig, request: ModelRequest): boolean {
+function shouldRouteRequest(
+  pool: ModelRoutePoolConfig,
+  request: Pick<ModelRequest, 'providerId'>
+): boolean {
   const providerId = request.providerId?.trim().toLowerCase()
   if (!providerId) return true
   return providerId === LOCAL_MODEL_GATEWAY_PROVIDER_ID || providerId === `route-pool:${pool.id}`.toLowerCase()
@@ -317,6 +343,25 @@ function targetSupportsRequest(
 
 function isContentChunk(chunk: ModelStreamChunk): boolean {
   return chunk.kind === 'assistant_text_delta' || chunk.kind === 'assistant_reasoning_delta' || chunk.kind === 'tool_call_delta' || chunk.kind === 'tool_call_complete' || chunk.kind === 'image_generation_complete'
+}
+
+function attributeRouteChunk(
+  chunk: ModelStreamChunk,
+  route: ModelRouteTargetMetadata
+): ModelStreamChunk {
+  if (chunk.kind !== 'usage') return { ...chunk, route }
+  return {
+    ...chunk,
+    usage: {
+      ...chunk.usage,
+      requestedModelId: route.requestedModelId,
+      actualProviderId: route.providerId,
+      actualModelId: route.modelId,
+      routePoolId: route.routePoolId,
+      routeTargetId: route.targetId
+    },
+    route
+  }
 }
 
 function routeFailureAllowed(pool: ModelRoutePoolConfig, failure: ModelFailureMetadata): boolean {

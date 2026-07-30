@@ -38,11 +38,13 @@ export type QueuedUserMessage = {
   deliveryUserMessageItemId?: string
   displayText?: string
   mode?: string
+  orchestration?: 'direct' | 'graph'
   model?: string
   providerId?: string
   accountId?: string
   modelLabel?: string
   reasoningEffort?: string
+  serviceTier?: 'priority'
   attachmentIds?: string[]
   attachments?: AttachmentReference[]
   fileReferences?: UserFileReference[]
@@ -107,7 +109,9 @@ export type SendMessageOverrides = {
   accountId?: string
   modelLabel?: string
   reasoningEffort?: string
+  serviceTier?: 'priority'
   displayText?: string
+  orchestration?: 'direct' | 'graph'
   guiPlan?: GuiPlanMessageContext
   guiDesignCanvas?: boolean
   guiDesignMode?: boolean
@@ -124,14 +128,18 @@ export type InitialSetupMode = 'required' | 'preview'
 export type SettingsRouteSection =
   | 'general'
   | 'providers'
+  | 'extensions'
   | 'write'
   | 'design'
   | 'imageGeneration'
   | 'mediaGeneration'
   | 'speechToText'
   | 'agents'
+  | 'laboratory'
   | 'subagents'
   | 'archives'
+  | 'worktree'
+  | 'memory'
   | 'permissions'
   | 'skill'
   | 'mcp'
@@ -140,6 +148,7 @@ export type SettingsRouteSection =
   | 'claw'
   | 'updates'
   | 'terminal'
+  | 'debug'
   | 'dataMigration'
 export type AppRoute = 'chat' | 'write' | 'design' | 'settings' | 'plugins' | 'extensions' | 'claw' | 'schedule' | 'workflow'
 export type PluginHostRoute = 'chat' | 'claw'
@@ -163,9 +172,18 @@ export type SideConversation = {
   blocks: ChatBlock[]
   liveReasoning: string
   liveAssistant: string
+  /** Stable runtime identity for the current compatibility live overlays. */
+  liveReasoningItemId?: string
+  liveReasoningTurnId?: string
+  liveReasoningCreatedAt?: string
+  liveAssistantItemId?: string
+  liveAssistantTurnId?: string
+  liveAssistantCreatedAt?: string
   lastSeq: number
   input: string
   model: string
+  /** Provider paired with `model`; kept local to this side conversation. */
+  providerId: string
   reasoningEffort: string
   busy: boolean
   turnId: string | null
@@ -180,6 +198,7 @@ export type SidePanelState = {
 
 export type SideConversationDraftOptions = {
   model?: string
+  providerId?: string
   reasoningEffort?: string
 }
 
@@ -210,6 +229,13 @@ export type ChatState = {
   blocks: ChatBlock[]
   liveReasoning: string
   liveAssistant: string
+  /** Stable runtime identity for the current compatibility live overlays. */
+  liveReasoningItemId?: string
+  liveReasoningTurnId?: string
+  liveReasoningCreatedAt?: string
+  liveAssistantItemId?: string
+  liveAssistantTurnId?: string
+  liveAssistantCreatedAt?: string
   lastSeq: number
   /**
    * Highest delta `seq` (per-thread, monotonic) already folded into the live
@@ -240,6 +266,7 @@ export type ChatState = {
   error: string | null
   runtimeErrorDetail: string | null
   currentTurnId: string | null
+  currentTurnOrchestration: 'direct' | 'graph' | null
   currentTurnUserId: string | null
   turnStartedAtByUserId: Record<string, number>
   turnDurationByUserId: Record<string, number>
@@ -247,9 +274,13 @@ export type ChatState = {
   turnReasoningLastAtByUserId: Record<string, number>
   inspectorSelectedId: string | null
   composerMode: 'plan' | 'agent'
+  composerOrchestration: 'direct' | 'graph'
+  graphEnabled: boolean
   composerModel: string
   composerProviderId: string
   composerReasoningEffort: ModelReasoningEffort
+  /** User preference; effective only for eligible ChatGPT subscription models. */
+  composerFastMode: boolean
   composerPickList: string[]
   composerModelGroups: ModelProviderModelGroup[]
   /**
@@ -274,8 +305,10 @@ export type ChatState = {
   appendLocalClawTurn: (userText: string, replyText: string) => void
   setError: (message: string | null) => void
   setComposerMode: (mode: 'plan' | 'agent') => void
+  setComposerOrchestration: (mode: 'direct' | 'graph') => void
   setComposerModel: (modelId: string, providerId?: string) => void
   setComposerReasoningEffort: (effort: ModelReasoningEffort) => void
+  setComposerFastMode: (enabled: boolean) => void
   setComposerAgentId: (agentId: string) => void
   loadComposerModels: () => Promise<void>
   setRoute: (r: AppRoute) => void
@@ -340,7 +373,7 @@ export type ChatState = {
      * 自动创建一个时间戳子目录作为工作目录。
      */
     conversation?: boolean
-  }) => Promise<void>
+  }) => Promise<string | null>
   createConversation: () => Promise<void>
   selectThread: (id: string) => Promise<void>
   /**
@@ -398,8 +431,13 @@ export type ChatState = {
   openSideConversationDraft: () => void
   sendSideMessage: (sideId: string, text: string) => Promise<boolean>
   interruptSide: (sideId: string) => Promise<void>
+  resolveSideUserInput: (
+    sideId: string,
+    blockId: string,
+    action: { kind: 'submit'; answers: UserInputAnswer[] } | { kind: 'cancel' }
+  ) => Promise<void>
   setSideInput: (sideId: string, text: string) => void
-  setSideModel: (sideId: string, model: string) => void
+  setSideModel: (sideId: string, model: string, providerId?: string) => void
   setSideReasoningEffort: (sideId: string, effort: string) => void
   selectSideConversation: (sideId: string) => void
   setSidePanelOpen: (open: boolean) => void

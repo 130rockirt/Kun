@@ -32,6 +32,7 @@ import {
   composerReasoningEffortRequestValue,
   type ComposerReasoningEffort
 } from '../chat/FloatingComposerModelPicker'
+import { serviceTierForComposerSelection } from '../chat/composer-fast-mode'
 import type { ComposerFileReference } from '../chat/FloatingComposer'
 import type { ComposerAttachmentScope } from '../workbench-composer-attachments'
 import type { RightPanelMode } from '../chat/WorkbenchTopBar'
@@ -50,7 +51,15 @@ import {
 
 type PlanTurnOverrides = Pick<
   SendMessageOverrides,
-  'attachmentIds' | 'attachments' | 'displayText' | 'fileReferences' | 'guiPlan' | 'model' | 'reasoningEffort'
+  | 'attachmentIds'
+  | 'attachments'
+  | 'displayText'
+  | 'fileReferences'
+  | 'guiPlan'
+  | 'model'
+  | 'providerId'
+  | 'reasoningEffort'
+  | 'serviceTier'
 > & {
   workspaceRoot?: string
 }
@@ -69,8 +78,11 @@ type UseWorkbenchComposerSubmitControllerParams = {
   composerAttachments: AttachmentReference[]
   composerFileReferences: ComposerFileReference[]
   composerMode: 'plan' | 'agent'
+  composerModel: string
+  composerProviderId: string
   composerModelGroups: ModelProviderModelGroup[]
   composerReasoningEffort: ComposerReasoningEffort
+  composerFastMode: boolean
   getAttachmentScope: () => ComposerAttachmentScope
   handleGuiPlanCommand: (request?: string) => void | Promise<void>
   input: string
@@ -145,8 +157,11 @@ export function useWorkbenchComposerSubmitController({
   composerAttachments,
   composerFileReferences,
   composerMode,
+  composerModel,
+  composerProviderId,
   composerModelGroups,
   composerReasoningEffort,
+  composerFastMode,
   getAttachmentScope,
   handleGuiPlanCommand,
   input,
@@ -508,6 +523,14 @@ export function useWorkbenchComposerSubmitController({
       const fileReferences = route === 'chat' ? composerFileReferences : []
       const userFileReferences = composerReferencesToUserFileReferences(fileReferences)
       const reasoningEffort = composerReasoningEffortRequestValue(composerReasoningEffort)
+      const serviceTier = route === 'chat'
+        ? serviceTierForComposerSelection(
+            composerFastMode,
+            composerModelGroups,
+            composerModel,
+            composerProviderId
+          )
+        : undefined
       if (!v && attachmentIds.length === 0 && documentAttachments.length === 0 && fileReferences.length === 0) return
       if (attachmentIds.length > 0 && !attachmentUploadEnabled) {
         setAttachmentUploadError(t('composerAttachmentModelUnsupported'))
@@ -574,6 +597,7 @@ export function useWorkbenchComposerSubmitController({
         void sendPlanTurn(prepared.text, {
           ...(prepared.displayText ? { displayText: prepared.displayText } : {}),
           ...(reasoningEffort ? { reasoningEffort } : {}),
+          ...(serviceTier ? { serviceTier } : {}),
           ...(attachmentIds.length ? { attachmentIds } : {}),
           ...(publicAttachments.length ? { attachments: publicAttachments } : {}),
           ...(userFileReferences.length ? { fileReferences: userFileReferences } : {})
@@ -708,6 +732,7 @@ export function useWorkbenchComposerSubmitController({
         ...(outboundDisplay ? { displayText: outboundDisplay } : {}),
         ...(outboundGuiDesignCanvas ? { guiDesignCanvas: true } : {}),
         ...(reasoningEffort ? { reasoningEffort } : {}),
+        ...(serviceTier ? { serviceTier } : {}),
         ...(attachmentIds.length ? { attachmentIds } : {}),
         ...(publicAttachments.length ? { attachments: publicAttachments } : {}),
         ...(userFileReferences.length ? { fileReferences: userFileReferences } : {})
@@ -727,8 +752,11 @@ export function useWorkbenchComposerSubmitController({
     clawModelListText,
     composerAttachments,
     composerFileReferences,
+    composerFastMode,
     composerMode,
+    composerModel,
     composerModelGroups,
+    composerProviderId,
     composerReasoningEffort,
     getAttachmentScope,
     handleGuiPlanCommand,

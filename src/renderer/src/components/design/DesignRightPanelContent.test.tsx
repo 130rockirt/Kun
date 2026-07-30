@@ -29,6 +29,7 @@ function props(patch: Partial<DesignRightPanelContentProps> = {}): DesignRightPa
       setComposerReasoningEffort: vi.fn(),
       queuedMessages: [],
       removeQueuedMessage: vi.fn(),
+      guideQueuedMessage: vi.fn(),
       attachments: [],
       attachmentUploadEnabled: true,
       attachmentUploadBusy: false,

@@ -20,8 +20,8 @@ import type {
 
 /**
  * Claude Code built-in tools we let the model use directly (the overlap set we
- * deliberately did NOT bridge from kun). Listed in allowedTools so they are
- * advertised; gating still flows through canUseTool.
+ * deliberately did NOT bridge from kun). They are advertised through `tools`;
+ * `allowedTools` is reserved for calls that may bypass `canUseTool`.
  */
 export const DEFAULT_SDK_BUILTIN_TOOLS: readonly string[] = [
   'Read',
@@ -39,7 +39,7 @@ export const DEFAULT_SDK_BUILTIN_TOOLS: readonly string[] = [
 /**
  * Claude Code built-in tools we suppress on the kun-driven SDK path.
  * AskUserQuestion has no UI in this embedding (the model would ask and get no
- * answer); kun's own bridged `user_input` panel handles interactive questions.
+ * answer); kun's own bridged `user_input` gate handles interactive questions.
  */
 export const DEFAULT_SDK_DISALLOWED_TOOLS: readonly string[] = ['AskUserQuestion']
 
@@ -57,6 +57,17 @@ const AUTH_OVERRIDE_ENV_KEYS: readonly string[] = [
   'CLAUDE_CODE_USE_VERTEX',
   'CLAUDE_CODE_USE_FOUNDRY',
   'CLAUDE_CODE_USE_ANTHROPIC_AWS'
+]
+
+/**
+ * Main/Kun-only browser bridge credentials. The model-controlled Claude Code
+ * child must never inherit these, even when a caller supplies a broader
+ * `baseEnv` than the production shell allow-list.
+ */
+const PRIVATE_BROWSER_BRIDGE_ENV_KEYS: readonly string[] = [
+  'KUN_BROWSER_USE_BRIDGE_URL',
+  'KUN_BROWSER_USE_BRIDGE_TOKEN',
+  'KUN_BROWSER_USE_APPROVAL_SIGNING_KEY'
 ]
 
 const CLAUDE_OAUTH_TOKEN_PATTERN = /^sk-ant-oat[\w-]+$/
@@ -83,7 +94,15 @@ export function buildScopedEnv(
   oauthToken?: string
 ): Record<string, string | undefined> {
   const env: Record<string, string | undefined> = { ...baseEnv }
-  for (const key of AUTH_OVERRIDE_ENV_KEYS) delete env[key]
+  const deniedKeys = new Set([
+    ...AUTH_OVERRIDE_ENV_KEYS,
+    ...PRIVATE_BROWSER_BRIDGE_ENV_KEYS
+  ])
+  // Windows environment keys are case-insensitive. Filter by normalized name
+  // on every platform so alternate casing cannot bypass this child boundary.
+  for (const key of Object.keys(env)) {
+    if (deniedKeys.has(key.toUpperCase())) delete env[key]
+  }
   const token = normalizeClaudeOAuthToken(oauthToken)
   if (token) env.CLAUDE_CODE_OAUTH_TOKEN = token
   return env
@@ -103,7 +122,7 @@ export function mapApprovalPolicyToPermissionMode(
   sandboxMode?: SandboxMode
 ): SdkPermissionMode {
   if (planMode) return 'plan'
-  if (policy === 'auto' && (!sandboxMode || sandboxMode === 'danger-full-access')) {
+  if (policy === 'auto' && sandboxMode === 'danger-full-access') {
     return 'bypassPermissions'
   }
   return 'default'
@@ -157,8 +176,8 @@ export type ToolApprovalDecider = (
 
 /**
  * Bridge kun's approval engine to the SDK `canUseTool` callback. Every tool the
- * SDK is about to run is adjudicated by kun (which can route to the GUI
- * approval panel). A throwing decider denies closed (fail-safe).
+ * SDK is about to run is adjudicated by kun (which can route to the initiating
+ * client's approval UI). A throwing decider denies closed (fail-safe).
  */
 export function buildCanUseTool(decide: ToolApprovalDecider): SdkCanUseTool {
   return async (toolName, input): Promise<SdkPermissionResult> => {
@@ -186,6 +205,7 @@ export function buildCanUseTool(decide: ToolApprovalDecider): SdkCanUseTool {
 
 export interface AssembleSdkOptionsParams {
   model?: string
+  reasoningEffort?: string
   cwd: string
   kunSystemPrompt: string
   threadPersona?: string
@@ -213,14 +233,25 @@ export interface AssembleSdkOptionsParams {
 
 export function assembleSdkOptions(params: AssembleSdkOptionsParams): SdkQueryOptions {
   const builtins = params.allowSdkBuiltins === false ? [] : DEFAULT_SDK_BUILTIN_TOOLS
-  const allowedTools = [...builtins, ...params.bridgedToolModelNames]
+  const fullAccess =
+    params.approvalPolicy === 'auto' &&
+    params.sandboxMode === 'danger-full-access'
+  // Kun-bridged MCP tools remain safe to auto-allow at the SDK layer because
+  // their handler crosses LocalToolHost and performs the real Kun gate. Native
+  // tools must stay out of this list in restricted modes: the Agent SDK defines
+  // `allowedTools` as execute-without-prompt, which skips `canUseTool`.
+  const allowedTools = [
+    ...(fullAccess ? builtins : []),
+    ...params.bridgedToolModelNames
+  ]
   const options: SdkQueryOptions = {
     cwd: params.cwd,
     systemPrompt: buildClaudeSystemPrompt(params.kunSystemPrompt, params.threadPersona),
-    // `allowedTools` is an auto-approval list, not an availability boundary.
-    // Dedicated artifact turns need `tools: []` so Claude Code cannot expose
-    // native Read/Write/Edit/Bash alongside the structured kun MCP tools.
-    ...(params.allowSdkBuiltins === false ? { tools: [], strictMcpConfig: true } : {}),
+    // `tools` is the availability boundary; `allowedTools` is only an
+    // auto-approval list. Always provide both explicitly so restricted native
+    // calls reach `canUseTool`, while dedicated artifact turns expose none.
+    tools: [...builtins],
+    strictMcpConfig: true,
     allowedTools,
     disallowedTools: [...DEFAULT_SDK_DISALLOWED_TOOLS],
     permissionMode: mapApprovalPolicyToPermissionMode(
@@ -233,6 +264,7 @@ export function assembleSdkOptions(params: AssembleSdkOptionsParams): SdkQueryOp
     // Only load kun-provided config; don't auto-absorb the host's ~/.claude.
     settingSources: params.settingSources ?? [],
     ...(params.model ? { model: params.model } : {}),
+    ...sdkReasoningOptions(params.reasoningEffort),
     ...(params.mcpServers ? { mcpServers: params.mcpServers } : {}),
     ...(params.canUseTool ? { canUseTool: params.canUseTool } : {}),
     ...(params.hooks ? { hooks: params.hooks } : {}),
@@ -249,4 +281,21 @@ export function assembleSdkOptions(params: AssembleSdkOptionsParams): SdkQueryOp
       : {})
   }
   return options
+}
+
+function sdkReasoningOptions(
+  effort: string | undefined
+): Pick<SdkQueryOptions, 'effort' | 'thinking'> {
+  switch (effort?.trim().toLowerCase()) {
+    case 'low':
+    case 'medium':
+    case 'high':
+    case 'max':
+      return { effort: effort.trim().toLowerCase() as 'low' | 'medium' | 'high' | 'max', thinking: { type: 'adaptive' } }
+    case 'auto':
+    case 'adaptive':
+      return { thinking: { type: 'adaptive' } }
+    default:
+      return {}
+  }
 }

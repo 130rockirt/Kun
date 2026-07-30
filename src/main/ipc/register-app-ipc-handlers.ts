@@ -158,6 +158,7 @@ import {
 } from '../agent-sdk-installer'
 import type { JsonSettingsStore } from '../settings-store'
 import { probeModelProvider } from '../provider-connection'
+import { listProviderQuotas } from '../provider-quota'
 import { fetchModelsDevCatalog } from '../models-dev-catalog'
 import type { ClawRuntime } from '../claw-runtime'
 import type { ScheduleRuntime } from '../schedule-runtime'
@@ -191,7 +192,12 @@ import {
   removeGitBranchWorktree,
   switchGitBranch
 } from '../services/git-service'
-import { createGitCheckpoint, restoreGitCheckpoint, type GitCheckpointStorageOptions } from '../services/git-checkpoint-service'
+import {
+  createGitCheckpoint,
+  failGitCheckpointGate,
+  restoreGitCheckpoint,
+  type GitCheckpointStorageOptions
+} from '../services/git-checkpoint-service'
 import {
   abortMerge,
   abortRebase,
@@ -639,8 +645,18 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       detail: [
         `Current approval policy: ${change.current.approvalPolicy}`,
         `Current sandbox: ${change.current.sandboxMode}`,
+        `Current approval reviewer: ${change.current.approvalReviewer}`,
         `New approval policy: ${change.next.approvalPolicy}`,
         `New sandbox: ${change.next.sandboxMode}`,
+        `New approval reviewer: ${change.next.approvalReviewer}`,
+        ...(change.next.approvalPolicy === 'auto' &&
+          change.next.sandboxMode === 'danger-full-access' &&
+          change.next.approvalReviewer === 'user'
+          ? [
+              '',
+              'Full access lets Kun access any local file, execute host commands, and use network-capable tools without Kun approval.'
+            ]
+          : []),
         '',
         'This protected native prompt cannot be confirmed by extension Webviews or Direct DOM content scripts.'
       ].join('\n'),
@@ -658,7 +674,8 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     const latest = await store.load()
     const latestExecution = {
       approvalPolicy: latest.agents.kun.approvalPolicy,
-      sandboxMode: latest.agents.kun.sandboxMode
+      sandboxMode: latest.agents.kun.sandboxMode,
+      approvalReviewer: latest.agents.kun.approvalReviewer
     }
     if (!executionSettingsEqual(latestExecution, change.current)) {
       throw new Error('Kun execution settings changed while confirmation was open; retry the change.')
@@ -967,6 +984,11 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   ipcMain.handle('provider:probe', async (_, payload: unknown) => {
     const request = parseIpcPayload('provider:probe', providerProbePayloadSchema, payload)
     return probeModelProvider(request, await store.load())
+  })
+
+  ipcMain.handle('provider:quota:list', async (event) => {
+    assertTrustedWorkbenchSender(event, getMainWindow)
+    return listProviderQuotas(await store.load())
   })
 
   ipcMain.handle('provider:models-dev-catalog', async (_, payload: unknown) => {
@@ -1816,6 +1838,14 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     const request = parseIpcPayload('git:checkpoint:create', gitCheckpointCreatePayloadSchema, payload)
     const settings = await store.load()
     if (!settings.checkpointCleanup.createEnabled) {
+      if (request.checkpointId) {
+        await failGitCheckpointGate(
+          await resolveKunThreadsDataDir(),
+          request.checkpointId,
+          'disabled',
+          'Git checkpoint creation is disabled in settings.'
+        ).catch(() => undefined)
+      }
       return {
         ok: false as const,
         reason: 'disabled' as const,
@@ -1826,6 +1856,8 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       dataDir: await resolveKunThreadsDataDir(),
       workspaceRoot: request.workspaceRoot,
       threadId: request.threadId,
+      ...(request.checkpointId ? { checkpointId: request.checkpointId } : {}),
+      deferRetention: true,
       storage: resolveCheckpointStorageOptions(settings.checkpointCleanup)
     })
   })

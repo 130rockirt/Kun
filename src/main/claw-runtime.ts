@@ -1054,6 +1054,7 @@ export class ClawRuntime {
     // Permission fields are pure passthrough from the agent settings so
     // IM turns follow the same policy the user picked for the GUI.
     if (options.source === 'im') {
+      turnBody.clientSurface = 'im'
       turnBody.disableUserInput = true
       turnBody.imContext = true
       turnBody.approvalPolicy = runtimeSettings.agents.kun.approvalPolicy

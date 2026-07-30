@@ -2,9 +2,10 @@ import { randomUUID } from 'node:crypto'
 import type { ToolCallProviderMetadata } from '../../contracts/items.js'
 import type { UsageSnapshot } from '../../contracts/usage.js'
 import type { ModelClient, ModelRequest, ModelStreamChunk } from '../../ports/model-client.js'
-import type {
-  LlmDebugRound,
-  LlmDebugSink
+import {
+  startLlmDebugRoundIfEnabled,
+  type LlmDebugRound,
+  type LlmDebugSink
 } from '../../services/llm-debug-recorder.js'
 import type {
   CompatChatMessage,
@@ -15,6 +16,7 @@ import { createProxyFetch } from './proxy-fetch.js'
 import { IncrementalSseFrameBuffer } from './incremental-sse-frame-buffer.js'
 import { GeminiCliOAuthSource } from './gemini-cli-oauth.js'
 import {
+  exponentialRetryDelayMs,
   normalizeModelRequestRetryConfig,
   parseRetryAfterMs,
   retryDelayMs,
@@ -140,7 +142,7 @@ export class GeminiCliApiModelClient implements ModelClient {
   }
 
   async *stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
-    const round = this.startDebugRound(request)
+    const round = await this.startDebugRound(request)
     try {
       for await (const chunk of this.streamInner(request, round)) {
         safeDebug(() => this.debugSink?.captureChunk(round!, chunk))
@@ -216,7 +218,38 @@ export class GeminiCliApiModelClient implements ModelClient {
     let credentialRefreshAttempted = false
     let transportRetryAttempt = 0
     const retryStatuses = new Set(this.retry.httpStatusCodes)
-    while (result.response && !result.response.ok) {
+    while (true) {
+      if (result.error) {
+        if (
+          request.abortSignal.aborted ||
+          transportRetryAttempt >= this.retry.maxAttempts
+        ) break
+        const nextAttempt = transportRetryAttempt + 1
+        const delayMs = exponentialRetryDelayMs(
+          this.retry.initialDelayMs,
+          transportRetryAttempt
+        )
+        yield {
+          kind: 'retrying',
+          attempt: nextAttempt,
+          maxAttempts: this.retry.maxAttempts,
+          delayMs,
+          reason: 'network'
+        }
+        const aborted = await sleepWithAbort(delayMs, request.abortSignal)
+        if (aborted || request.abortSignal.aborted) {
+          yield {
+            kind: 'error',
+            code: 'request_aborted',
+            message: 'Gemini CLI API request was aborted during retry backoff.'
+          }
+          return
+        }
+        transportRetryAttempt = nextAttempt
+        result = await post('transport_retry')
+        continue
+      }
+      if (!result.response || result.response.ok) break
       if (result.response.status === 401 && !credentialRefreshAttempted) {
         credentialRefreshAttempted = true
         await result.response.body?.cancel().catch(() => {})
@@ -401,9 +434,9 @@ export class GeminiCliApiModelClient implements ModelClient {
     }
   }
 
-  private startDebugRound(request: ModelRequest): LlmDebugRound | null {
+  private async startDebugRound(request: ModelRequest): Promise<LlmDebugRound | null> {
     if (!this.debugSink) return null
-    return safeDebug(() => this.debugSink!.start({
+    return await startLlmDebugRoundIfEnabled(this.debugSink, {
       threadId: request.threadId,
       turnId: request.turnId,
       provider: this.provider,
@@ -413,7 +446,7 @@ export class GeminiCliApiModelClient implements ModelClient {
         ...(tool.providerKind ? { providerKind: tool.providerKind } : {}),
         ...(tool.providerId ? { providerId: tool.providerId } : {})
       }))
-    })) ?? null
+    }) ?? null
   }
 
   private async loadProject(accessToken: string, signal: AbortSignal): Promise<string> {

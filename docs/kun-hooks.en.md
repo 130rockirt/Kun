@@ -46,7 +46,7 @@ The GUI launches Kun with `--data-dir`, and `{dataDir}/config.json` is
 loaded automatically, so for GUI users the hook config lives at:
 
 ```text
-~/.deepseekgui/kun/config.json
+~/.kun/data/config.json
 ```
 
 ## The six phases

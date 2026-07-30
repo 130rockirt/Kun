@@ -1,6 +1,6 @@
 const SECRET_KEY_PATTERN = /(api[-_]?key|authorization|bearer|client[-_]?secret|password|secret|token)/i
 const SECRET_TEXT_PATTERNS = [
-  /\b(authorization|api[-_]?key|client[-_]?secret|password|token)\s*[:=]\s*((?:Bearer\s+)?[^\s,;]+)/gi,
+  /["']?\b(authorization|api[-_]?key|client[-_]?secret|password|token)["']?\s*[:=]\s*["']?((?:Bearer\s+)?(?!<redacted>)[^"'\s,;}]+)["']?/gi,
   /\bbearer\s+([^\s,;]+)/gi
 ]
 

@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import process from 'node:process'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { parseServeOptionsSafe, SERVE_USAGE, ServeExitCode } from './serve.js'
 import {
   KUN_CLI_USAGE,
@@ -13,6 +15,12 @@ import {
 } from '../server/event-loop-monitor.js'
 import { installServeCrashHandlers } from './serve-crash-handlers.js'
 import { runExtensionCommand } from './extension-cli.js'
+import { resolveSharedRuntime, runRuntimeCommand } from './shared-runtime.js'
+import { withRuntimeStartLock } from '../server/runtime-discovery.js'
+import { RuntimeBuildIdSchema } from '../contracts/runtime-info.js'
+import { readRuntimeBuildIdForEntry } from '../server/runtime-build-identity.js'
+import { KUN_VERSION } from '../version.js'
+import { runSelfUpdateCommand } from './self-update.js'
 
 export const KUN_READY_PREFIX = 'KUN_READY '
 
@@ -21,7 +29,7 @@ export const KUN_READY_PREFIX = 'KUN_READY '
  * still has the exact same KUN_READY handshake behavior.
  */
 async function serveMain(argv: readonly string[]): Promise<number> {
-  if (argv.length === 0 || argv.includes('--help') || argv.includes('-h')) {
+  if (argv.includes('--help') || argv.includes('-h')) {
     process.stdout.write(SERVE_USAGE)
     return ServeExitCode.ok
   }
@@ -33,9 +41,46 @@ async function serveMain(argv: readonly string[]): Promise<number> {
     }
     return parsed.exitCode
   }
+  const launchMode = process.env.KUN_RUNTIME_LAUNCH_MODE === 'shared' ? 'shared' : 'foreground'
+  const manifestBuildId = await readRuntimeBuildIdForEntry(import.meta.url)
+  const environmentBuildId = RuntimeBuildIdSchema.safeParse(
+    process.env.KUN_RUNTIME_BUILD_ID?.trim()
+  )
+  const buildId = manifestBuildId ?? (
+    environmentBuildId.success ? environmentBuildId.data : undefined
+  )
+  const start = async (): Promise<
+    { kind: 'existing'; existing: NonNullable<Awaited<ReturnType<typeof resolveSharedRuntime>>> } |
+    { kind: 'started'; server: KunServeHandle }
+  > => {
+    const existing = await resolveSharedRuntime(parsed.options.dataDir)
+    if (existing) return { kind: 'existing', existing }
+    return {
+      kind: 'started',
+      server: await startKunServe({
+        ...parsed.options,
+        launchMode,
+        ...(buildId ? { buildId } : {}),
+        sharedMcpConfigPath: process.env.KUN_MCP_CONFIG_PATH || join(homedir(), '.kun', 'mcp.json'),
+        ...(process.env.KUN_RUNTIME_LOG_PATH ? { logPath: process.env.KUN_RUNTIME_LOG_PATH } : {})
+      })
+    }
+  }
+  // Detached startup is already elected by the parent shared-runtime manager.
+  // Foreground `kun serve` performs the same data-dir election itself.
+  const elected = launchMode === 'foreground'
+    ? await withRuntimeStartLock(parsed.options.dataDir, start)
+    : await start()
+  if (elected.kind === 'existing') {
+    process.stderr.write(
+      `kun serve: runtime already running at ${elected.existing.discovery.baseUrl} (PID ${elected.existing.discovery.pid}); ` +
+      'use `kun runtime stop` first or choose another --data-dir.\n'
+    )
+    return ServeExitCode.runtime
+  }
   let handle: KunServeHandle | null = null
   installServeCrashHandlers(() => handle)
-  const server = await startKunServe(parsed.options)
+  const server = elected.server
   handle = server
   await selfVerifyHealth(server.host, server.port)
   const info = server.runtime.info()
@@ -49,6 +94,7 @@ async function serveMain(argv: readonly string[]): Promise<number> {
     model: info.model,
     approvalPolicy: info.approvalPolicy,
     sandboxMode: info.sandboxMode,
+    approvalReviewer: info.approvalReviewer,
     insecure: info.insecure,
     startedAt: info.startedAt,
     pid: info.pid,
@@ -62,12 +108,16 @@ async function serveMain(argv: readonly string[]): Promise<number> {
     stallThresholdMs: resolveEventLoopStallThresholdMs(process.env)
   })
   await new Promise<void>((resolve) => {
+    let stopping = false
     const stop = () => {
+      if (stopping) return
+      stopping = true
       loopMonitor.stop()
       void server.close().finally(resolve)
     }
     process.once('SIGTERM', stop)
     process.once('SIGINT', stop)
+    void server.shutdownRequested.then(stop)
   })
   return ServeExitCode.ok
 }
@@ -142,6 +192,24 @@ export async function main(argv: readonly string[]): Promise<number> {
   }
   if (command.command === 'serve') {
     return serveMain(command.args)
+  }
+  if (command.command === 'version') {
+    process.stdout.write(`kun ${KUN_VERSION}\n`)
+    return ServeExitCode.ok
+  }
+  if (command.command === 'runtime') {
+    return runRuntimeCommand(command.args, {
+      stdout: process.stdout,
+      stderr: process.stderr,
+      env: process.env
+    })
+  }
+  if (command.command === 'update') {
+    return runSelfUpdateCommand(command.args, {
+      stdout: process.stdout,
+      stderr: process.stderr,
+      env: process.env
+    })
   }
   return runAgentCommand(command.command, command.args, {
     stdin: process.stdin,

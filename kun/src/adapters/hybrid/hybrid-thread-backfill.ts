@@ -17,42 +17,64 @@ export type HybridThreadBackfillDeps<TUsage> = {
 
 /** Single-flight owner for startup index/usage recovery and stale-row cleanup. */
 export class HybridThreadBackfillCoordinator<TUsage> {
+  private indexPromise: Promise<void> | null = null
   private promise: Promise<void> | null = null
   private stopped = false
+  private rows: Array<{ id: string; usage_backfilled?: number }> = []
+  private filesystemThreadIds: string[] = []
+  private indexed = new Map<string, boolean>()
+  private readonly readableMissingThreadIds = new Set<string>()
+
   constructor(private readonly deps: HybridThreadBackfillDeps<TUsage>) {}
 
   start(): void {
     if (this.promise || this.stopped) return
-    this.promise = this.run().catch((error) => this.deps.warn('background backfill', error))
+    this.indexPromise = this.indexMissingThreads()
+      .catch((error) => this.deps.warn('background index backfill', error))
+    this.promise = this.indexPromise
+      .then(() => this.backfillUsageAndCleanStaleRows())
+      .catch((error) => this.deps.warn('background backfill', error))
   }
 
   stop(): void { this.stopped = true }
 
+  async waitForIndex(): Promise<void> { await this.indexPromise }
+
   async wait(): Promise<void> { await this.promise }
 
-  private async run(): Promise<void> {
+  private async indexMissingThreads(): Promise<void> {
     if (this.stopped) return
-    const rows = this.deps.indexedRows()
-    const indexed = new Map(rows.map((row) => [row.id, row.usage_backfilled === 1]))
-    const filesystemThreadIds = await this.deps.filesystemThreadIds()
+    this.rows = this.deps.indexedRows()
+    this.indexed = new Map(
+      this.rows.map((row) => [row.id, row.usage_backfilled === 1])
+    )
+    this.filesystemThreadIds = await this.deps.filesystemThreadIds()
     if (this.stopped) return
-    for (const threadId of filesystemThreadIds) {
+    for (const threadId of this.filesystemThreadIds) {
       if (this.stopped) return
-      const usageBackfilled = indexed.get(threadId)
+      if (this.indexed.has(threadId)) continue
+      const readable = await this.deps.readMissingThread(threadId)
+      if (this.stopped) return
+      if (!readable) continue
+      await this.deps.upsertMissing(threadId, 0)
+      if (this.stopped) return
+      this.readableMissingThreadIds.add(threadId)
+      await this.deps.yieldToEventLoop()
+    }
+  }
+
+  private async backfillUsageAndCleanStaleRows(): Promise<void> {
+    if (this.stopped) return
+    for (const threadId of this.filesystemThreadIds) {
+      if (this.stopped) return
+      const usageBackfilled = this.indexed.get(threadId)
       if (usageBackfilled === true) continue
-      if (usageBackfilled === undefined) {
-        const readable = await this.deps.readMissingThread(threadId)
-        if (this.stopped) return
-        if (!readable) continue
+      if (usageBackfilled === undefined && !this.readableMissingThreadIds.has(threadId)) {
+        continue
       }
       const scan = await this.deps.scanEvents(threadId)
       if (this.stopped) return
-      if (usageBackfilled === undefined) {
-        await this.deps.upsertMissing(threadId, scan.highWater)
-        if (this.stopped) return
-      } else {
-        this.deps.noteExistingHighWater(threadId, scan.highWater)
-      }
+      this.deps.noteExistingHighWater(threadId, scan.highWater)
       await this.deps.insertUsage(threadId, scan.usage)
       if (this.stopped) return
       this.deps.markUsageBackfilled(threadId)
@@ -60,7 +82,7 @@ export class HybridThreadBackfillCoordinator<TUsage> {
       if (this.stopped) return
     }
     try {
-      for (const row of rows) {
+      for (const row of this.rows) {
         if (this.stopped) return
         const exists = await this.deps.threadDirectoryExists(row.id)
         if (this.stopped) return

@@ -4,7 +4,11 @@ import type { Turn } from '../contracts/turns.js'
 import type { MemoryRecord } from '../contracts/memory.js'
 import type { ModelCapabilityMetadata } from '../contracts/capabilities.js'
 import type { MemoryStore } from '../memory/memory-store.js'
-import { TurnContextResolver, resolveTurnModeContext } from './turn-context-resolver.js'
+import {
+  TurnContextResolver,
+  resolveTurnClientSurface,
+  resolveTurnModeContext
+} from './turn-context-resolver.js'
 
 function capabilities(inputModalities: ModelCapabilityMetadata['inputModalities']): ModelCapabilityMetadata {
   return {
@@ -26,6 +30,7 @@ function thread(overrides: Partial<ThreadRecord> = {}): ThreadRecord {
     status: 'running',
     approvalPolicy: 'always',
     sandboxMode: 'workspace-write',
+    approvalReviewer: 'user',
     relation: 'primary',
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
@@ -38,6 +43,7 @@ function turn(overrides: Partial<Turn> = {}): Turn {
   return {
     id: 'turn_1',
     threadId: 'thread_1',
+    orchestration: 'direct',
     status: 'running',
     prompt: 'Implement the requested plan',
     createdAt: '2026-01-01T00:00:00.000Z',
@@ -53,6 +59,13 @@ function turn(overrides: Partial<Turn> = {}): Turn {
 }
 
 describe('TurnContextResolver', () => {
+  it('uses an explicit client surface and preserves legacy GUI/IM inference', () => {
+    expect(resolveTurnClientSurface(turn({ clientSurface: 'tui', agentSurface: 'code' }))).toBe('tui')
+    expect(resolveTurnClientSurface(turn({ imContext: { channel: 'lark' } as never }))).toBe('im')
+    expect(resolveTurnClientSurface(turn({ guiDesignCanvas: true }))).toBe('gui')
+    expect(resolveTurnClientSurface(turn())).toBe('api')
+  })
+
   it('snapshots plan, policy, attachments, memory, skills, instructions, and discovered tools', async () => {
     const resolutionOrder: string[] = []
     const listTools = vi.fn(async (context) => {
@@ -144,6 +157,66 @@ describe('TurnContextResolver', () => {
       allowedToolNames: ['create_plan'],
       runtimeDataDir: '/runtime'
     }))
+  })
+
+  it('resolves independent attachment, skill, instruction, and memory I/O concurrently', async () => {
+    let started = 0
+    let release!: () => void
+    const barrier = new Promise<void>((resolve) => { release = resolve })
+    const joinBarrier = async <T>(value: T): Promise<T> => {
+      started += 1
+      if (started === 4) release()
+      await barrier
+      return value
+    }
+    const resolver = new TurnContextResolver({
+      toolHost: { listTools: async () => [] },
+      resolveAttachments: async () => joinBarrier({
+        imageAttachments: [],
+        textFallbacks: [],
+        documents: []
+      }),
+      skillRuntime: {
+        resolveTurn: async () => joinBarrier({
+          activeSkillIds: [],
+          activations: [],
+          instructions: [],
+          injectedBytes: 0
+        })
+      },
+      instructionRuntime: {
+        resolveTurn: async () => joinBarrier({
+          instruction: undefined,
+          sources: [],
+          injectedBytes: 0
+        })
+      },
+      memoryStore: {
+        retrieve: async () => joinBarrier([]),
+        setLastInjected: async () => undefined
+      },
+      interactiveToolBridge: { awaitUserInput: async () => ({ status: 'cancelled' }) }
+    })
+    const inputTurn = turn({ attachmentIds: [] })
+
+    await resolver.resolve({
+      threadId: 'thread_1',
+      turnId: 'turn_1',
+      thread: thread(),
+      turn: inputTurn,
+      history: [],
+      model: 'model_1',
+      modelCapabilities: capabilities(['text']),
+      signal: new AbortController().signal,
+      mode: resolveTurnModeContext({
+        turn: inputTurn,
+        workspace: '/workspace',
+        threadMode: 'agent'
+      }),
+      goalNoToolRecoverySteps: 0
+    })
+
+    expect(started).toBe(4)
   })
 
   it('drops stale plan state and forces SVG turns to agent mode', () => {

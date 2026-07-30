@@ -237,6 +237,27 @@ describe('materializeLegacyProviderCredential', () => {
       }
     })
   })
+
+  it('unwraps Gemini Code Assist OAuth without losing refresh material', () => {
+    const material = materializeLegacyProviderCredential(JSON.stringify({
+      kind: 'gemini-oauth',
+      accessToken: 'gemini-access',
+      refreshToken: 'gemini-refresh',
+      expiresAt: Date.now() + 60_000,
+      projectId: 'project-1',
+      userTier: 'standard'
+    }))
+
+    expect(material).toMatchObject({
+      apiKey: 'gemini-access',
+      geminiAuth: {
+        kind: 'gemini-oauth',
+        accessToken: 'gemini-access',
+        refreshToken: 'gemini-refresh',
+        projectId: 'project-1'
+      }
+    })
+  })
 })
 
 function providerSource(sourceId: string, apiKey: string) {

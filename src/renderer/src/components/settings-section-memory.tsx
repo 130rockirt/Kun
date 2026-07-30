@@ -1,6 +1,20 @@
 import { useMemo, useState } from 'react'
 import type { ReactElement } from 'react'
-import { Ban, BrainCircuit, Clipboard, Download, Eye, Pencil, Plus, RotateCcw, Trash2, Upload, X } from 'lucide-react'
+import {
+  Ban,
+  BrainCircuit,
+  Clipboard,
+  Database,
+  Download,
+  Eye,
+  LayoutDashboard,
+  Pencil,
+  Plus,
+  RotateCcw,
+  Trash2,
+  Upload,
+  X
+} from 'lucide-react'
 import {
   buildMemoryImportContent,
   buildMemoryMarkdownExport,
@@ -12,9 +26,16 @@ import {
 import type { CoreMemoryRecordJson } from '../agent/kun-contract'
 import { confirmDialog } from '../lib/confirm-dialog'
 import { workspaceRootIdentityKey } from '../lib/workspace-path'
-import { SettingsCard, SettingRow, Toggle } from './settings-controls'
+import {
+  SettingsCard,
+  SettingRow,
+  SettingsTabPanel,
+  SettingsTabs,
+  Toggle
+} from './settings-controls'
 
 type MemoryScope = 'user' | 'workspace' | 'project'
+type MemorySettingsTab = 'overview' | 'records'
 
 export type MemoryDraft = {
   content: string
@@ -154,6 +175,7 @@ export function MemorySettingsSection({ ctx }: { ctx: Record<string, any> }): Re
   const [memoryDialogNotice, setMemoryDialogNotice] = useState<string | null>(null)
   const [draft, setDraft] = useState<MemoryDraft>(EMPTY_DRAFT)
   const [scopeFilter, setScopeFilter] = useState<'all' | MemoryScope>('all')
+  const [activeTab, setActiveTab] = useState<MemorySettingsTab>('overview')
 
   const filteredRecords = useMemo(() => {
     const records: CoreMemoryRecordJson[] = memoryRecords ?? []
@@ -334,46 +356,91 @@ export function MemorySettingsSection({ ctx }: { ctx: Record<string, any> }): Re
   }
 
   return (
-    <SettingsCard title={t('sectionMemory')}>
-      <SettingRow
-        title={t('memoryEnable')}
-        description={t('memoryEnableDesc')}
-        control={
-          <Toggle
-            checked={kun?.memoryEnabled ?? false}
-            onChange={(checked: boolean) => updateKun({ memoryEnabled: checked })}
-          />
-        }
-      />
-      <SettingRow
-        title={t('memoryOverview')}
-        description={t('memoryOverviewDesc')}
-        wideControl
-        control={
-          <div className="grid grid-cols-3 gap-2 text-[12px]">
-            <div className="rounded-xl border border-ds-border-muted bg-ds-main/40 px-3 py-2">
-              <div className="text-ds-faint">{t('memoryActiveCount')}</div>
-              <div className="mt-0.5 font-mono text-[15px] font-semibold text-ds-ink">
-                {memoryDiagnostics?.activeCount ?? memoryRecords?.length ?? 0}
-              </div>
-            </div>
-            <div className="rounded-xl border border-ds-border-muted bg-ds-main/40 px-3 py-2">
-              <div className="text-ds-faint">{t('memoryTombstoneCount')}</div>
-              <div className="mt-0.5 font-mono text-[15px] font-semibold text-ds-ink">
-                {memoryDiagnostics?.tombstoneCount ?? 0}
-              </div>
-            </div>
-            <div className="rounded-xl border border-ds-border-muted bg-ds-main/40 px-3 py-2">
-              <div className="text-ds-faint">{t('memoryEnabled')}</div>
-              <div className="mt-0.5 font-mono text-[15px] font-semibold text-ds-ink">
-                {memoryDiagnostics?.enabled === false ? t('memoryOff') : t('memoryOn')}
-              </div>
-            </div>
-          </div>
-        }
+    <div className="space-y-5">
+      <SettingsTabs<MemorySettingsTab>
+        baseId="memory-settings"
+        ariaLabel={t('sectionMemory')}
+        items={[
+          { id: 'overview', label: t('memoryOverview'), icon: LayoutDashboard },
+          { id: 'records', label: t('memoryRecords'), icon: Database }
+        ]}
+        value={activeTab}
+        onChange={setActiveTab}
       />
 
-      <SettingRow
+      <SettingsTabPanel
+        baseId="memory-settings"
+        tabId="overview"
+        active={activeTab === 'overview'}
+      >
+        <SettingsCard title={t('sectionMemory')}>
+          <SettingRow
+            title={t('memoryEnable')}
+            description={t('memoryEnableDesc')}
+            control={
+              <Toggle
+                checked={kun?.memoryEnabled ?? false}
+                onChange={(checked: boolean) => updateKun({ memoryEnabled: checked })}
+              />
+            }
+          />
+          <SettingRow
+            title={t('memoryOverview')}
+            description={t('memoryOverviewDesc')}
+            wideControl
+            control={
+              <div className="grid grid-cols-3 gap-2 text-[12px]">
+                <div className="rounded-xl border border-ds-border-muted bg-ds-main/40 px-3 py-2">
+                  <div className="text-ds-faint">{t('memoryActiveCount')}</div>
+                  <div className="mt-0.5 font-mono text-[15px] font-semibold text-ds-ink">
+                    {memoryDiagnostics?.activeCount ?? memoryRecords?.length ?? 0}
+                  </div>
+                </div>
+                <div className="rounded-xl border border-ds-border-muted bg-ds-main/40 px-3 py-2">
+                  <div className="text-ds-faint">{t('memoryTombstoneCount')}</div>
+                  <div className="mt-0.5 font-mono text-[15px] font-semibold text-ds-ink">
+                    {memoryDiagnostics?.tombstoneCount ?? 0}
+                  </div>
+                </div>
+                <div className="rounded-xl border border-ds-border-muted bg-ds-main/40 px-3 py-2">
+                  <div className="text-ds-faint">{t('memoryEnabled')}</div>
+                  <div className="mt-0.5 font-mono text-[15px] font-semibold text-ds-ink">
+                    {memoryDiagnostics?.enabled === false ? t('memoryOff') : t('memoryOn')}
+                  </div>
+                </div>
+              </div>
+            }
+          />
+
+          {memoryDiagnostics?.lastInjectedIds?.length ? (
+            <SettingRow
+              title={t('memoryLastInjected')}
+              description={t('memoryLastInjectedDesc')}
+              wideControl
+              control={
+                <div className="flex flex-wrap gap-1.5">
+                  {memoryDiagnostics.lastInjectedIds.map((id: string) => (
+                    <span
+                      key={id}
+                      className="rounded-lg bg-ds-hover/50 px-2 py-0.5 font-mono text-[11px] text-ds-faint"
+                    >
+                      {id.slice(0, 12)}
+                    </span>
+                  ))}
+                </div>
+              }
+            />
+          ) : null}
+        </SettingsCard>
+      </SettingsTabPanel>
+
+      <SettingsTabPanel
+        baseId="memory-settings"
+        tabId="records"
+        active={activeTab === 'records'}
+      >
+        <SettingsCard title={t('sectionMemory')}>
+          <SettingRow
         title={t('memoryRecords')}
         description={t('memoryRecordsDesc')}
         wideControl
@@ -559,27 +626,9 @@ export function MemorySettingsSection({ ctx }: { ctx: Record<string, any> }): Re
           onImport={() => void importMemories()}
         />
       ) : null}
-
-      {memoryDiagnostics?.lastInjectedIds?.length ? (
-        <SettingRow
-          title={t('memoryLastInjected')}
-          description={t('memoryLastInjectedDesc')}
-          wideControl
-          control={
-            <div className="flex flex-wrap gap-1.5">
-              {memoryDiagnostics.lastInjectedIds.map((id: string) => (
-                <span
-                  key={id}
-                  className="rounded-lg bg-ds-hover/50 px-2 py-0.5 font-mono text-[11px] text-ds-faint"
-                >
-                  {id.slice(0, 12)}
-                </span>
-              ))}
-            </div>
-          }
-        />
-      ) : null}
-    </SettingsCard>
+        </SettingsCard>
+      </SettingsTabPanel>
+    </div>
   )
 }
 

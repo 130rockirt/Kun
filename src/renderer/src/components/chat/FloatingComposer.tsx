@@ -14,7 +14,6 @@ import {
   BarChart3,
   FileText,
   Folder,
-  GitBranch,
   ImagePlus,
   ListTodo,
   Loader2,
@@ -27,6 +26,7 @@ import {
   Puzzle,
   PlayCircle,
   Send,
+  Share2,
   Sparkles,
   Square,
   Target,
@@ -38,7 +38,7 @@ import { useTranslation } from 'react-i18next'
 import type { ModelProviderModelGroup } from '@shared/kun-gui-api'
 import type { KunSpeechToTextSettingsV1 } from '@shared/app-settings'
 import { isSpeechToTextConfigured } from '@shared/speech-to-text'
-import type { AttachmentReference, ReviewTarget } from '../../agent/types'
+import type { AttachmentReference, ChatBlock, ReviewTarget } from '../../agent/types'
 import { useChatStore } from '../../store/chat-store'
 import type { AppRoute } from '../../store/chat-store-types'
 import { normalizeWorkspaceRoot } from '../../lib/workspace-path'
@@ -78,7 +78,11 @@ import {
 import { FloatingComposerAgentPicker } from './FloatingComposerAgentPicker'
 import { FloatingComposerUserInputPanel } from './FloatingComposerUserInputPanel'
 import { BackgroundShellOverlay } from './BackgroundShellOverlay'
-import { useComposerUserInput, type PendingUserInputBlock } from './use-composer-user-input'
+import {
+  useComposerUserInput,
+  type PendingUserInputBlock,
+  type ResolveUserInput
+} from './use-composer-user-input'
 import { selectLivePendingUserInput } from './user-input-panel-logic'
 import {
   FloatingComposerQueuedMessages,
@@ -113,11 +117,15 @@ import { FloatingComposerFileMentionMenu } from './FloatingComposerFileMentionMe
 import { useComposerSlashCommandMenu } from './use-composer-slash-command-menu'
 import { FloatingComposerSlashCommandMenu } from './FloatingComposerSlashCommandMenu'
 import { FloatingComposerTodoProgress } from './FloatingComposerTodoProgress'
+import { FloatingComposerGraphProgress } from './FloatingComposerGraphProgress'
+import { FloatingComposerAboveInputStack } from './FloatingComposerAboveInputStack'
 import {
   canAcceptComposerFileDrop,
   routeComposerFileDrop,
   type ComposerFileDropOptions
 } from './composer-file-drop'
+import { useComposerSendKeySetting } from '../../lib/composer-send-key-settings'
+import { isComposerSendHotkey } from '@shared/app-settings'
 
 export type { ComposerFileReference } from '../../lib/composer-file-references'
 export type { ComposerExecutionSettings } from './FloatingComposerExecutionPicker'
@@ -145,6 +153,20 @@ export function shouldSurfaceComposerUserInput(route: AppRoute, compact: boolean
   return !compact && (route === 'chat' || route === 'design')
 }
 
+export function shouldShowWorkspaceControls({
+  compact,
+  route,
+  hasActiveThread,
+  hasConversationStarted
+}: {
+  compact: boolean
+  route: AppRoute
+  hasActiveThread: boolean
+  hasConversationStarted: boolean
+}): boolean {
+  return !compact && route === 'chat' && (!hasActiveThread || !hasConversationStarted)
+}
+
 export function shouldShowUsageHistory({
   compact,
   route,
@@ -161,13 +183,28 @@ export type { DesignComposerContext } from '../../design/design-composer-context
 type Props = {
   variant?: 'default' | 'compact' | 'side'
   workspaceRootOverride?: string
-  /** Use a non-active thread for compact side-conversation usage. */
+  /** Bind compact or side composers to the thread they render. */
   activeThreadIdOverride?: string | null
+  /** Blocks owned by the thread rendered by this composer. */
+  userInputBlocksOverride?: ChatBlock[]
+  /** Resolver paired with userInputBlocksOverride. */
+  onResolveUserInput?: ResolveUserInput
   input: string
   setInput: (v: string) => void
   mode: 'plan' | 'agent'
   setMode: (m: 'plan' | 'agent') => void
+  orchestration?: 'direct' | 'graph'
+  graphEnabled?: boolean
+  onOrchestrationChange?: (mode: 'direct' | 'graph') => void
+  onOpenGraph?: (runId: string, nodeId?: string) => void
+  onOpenGraphChild?: (
+    runId: string,
+    nodeId: string,
+    attemptId: string,
+    childThreadId: string
+  ) => void
   busy: boolean
+  currentTurnOrchestration?: 'direct' | 'graph' | null
   runtimeReady: boolean
   hasActiveThread: boolean
   composerModel: string
@@ -175,8 +212,10 @@ type Props = {
   composerPickList: string[]
   composerModelGroups?: ModelProviderModelGroup[]
   composerReasoningEffort?: string
+  composerFastMode?: boolean
   onComposerModelChange: (modelId: string, providerId?: string) => void
   onComposerReasoningEffortChange?: (effort: ComposerReasoningEffort) => void
+  onComposerFastModeChange?: (enabled: boolean) => void
   onConfigureProviders?: () => void
   hideModelPicker?: boolean
   modelPickerMode?: 'select' | 'combobox'
@@ -283,11 +322,19 @@ export function FloatingComposer({
   variant = 'default',
   workspaceRootOverride,
   activeThreadIdOverride,
+  userInputBlocksOverride,
+  onResolveUserInput,
   input,
   setInput,
   mode,
   setMode,
+  orchestration = 'direct',
+  graphEnabled = false,
+  onOrchestrationChange,
+  onOpenGraph,
+  onOpenGraphChild,
   busy,
+  currentTurnOrchestration = null,
   runtimeReady,
   hasActiveThread,
   composerModel,
@@ -295,8 +342,10 @@ export function FloatingComposer({
   composerPickList,
   composerModelGroups = EMPTY_MODEL_GROUPS,
   composerReasoningEffort,
+  composerFastMode,
   onComposerModelChange,
   onComposerReasoningEffortChange,
+  onComposerFastModeChange,
   onConfigureProviders,
   hideModelPicker = false,
   modelPickerMode = 'select',
@@ -339,6 +388,7 @@ export function FloatingComposer({
   hideBtwCommand = false
 }: Props): ReactElement {
   const { t, i18n } = useTranslation('common')
+  const composerSendKey = useComposerSendKeySetting()
   const route = useChatStore((s) => s.route)
   const workspaceRoot = useChatStore((s) => s.workspaceRoot)
   const storeActiveThreadId = useChatStore((s) => s.activeThreadId)
@@ -360,21 +410,29 @@ export function FloatingComposer({
   const blocks = useChatStore((s) => s.blocks)
   const resolveUserInput = useChatStore((s) => s.resolveUserInput)
   const reorderQueuedMessage = useChatStore((s) => s.reorderQueuedMessage)
+  const openSettings = useChatStore((s) => s.openSettings)
   const compact = variant !== 'default'
   const side = variant === 'side'
-  // The pending ask-user request for the active thread, surfaced as a panel
-  // docked above this composer. The main Chat and Design composers host it, as
-  // does Write's only (compact) composer. Other compact side composers would
-  // otherwise mirror the active thread's prompt. The timeline bubble remains
-  // the record in every surface.
+  // The pending ask-user request for this composer's thread, surfaced as a
+  // panel docked above the input. Thread-scoped rails (for example SDD and
+  // side conversations) provide their own blocks + resolver because their
+  // compact route would otherwise be mistaken for a duplicate main composer.
+  const userInputBlocks = userInputBlocksOverride ?? blocks
+  const hasThreadScopedUserInput =
+    userInputBlocksOverride !== undefined && onResolveUserInput !== undefined
+  const canSurfaceUserInput =
+    hasThreadScopedUserInput || (!side && shouldSurfaceComposerUserInput(route, compact))
   const pendingUserInputBlock = useMemo<PendingUserInputBlock | null>(() => {
-    if (!shouldSurfaceComposerUserInput(route, compact)) return null
+    if (!canSurfaceUserInput) return null
     // Only surface a request the live runtime is actively awaiting. A stale
     // `pending` block rehydrated from a finished thread must not re-prompt the
     // user (issue #606) — resolving it would hit a dead gate.
-    return selectLivePendingUserInput(blocks)
-  }, [blocks, compact, route])
-  const userInput = useComposerUserInput(pendingUserInputBlock, resolveUserInput)
+    return selectLivePendingUserInput(userInputBlocks)
+  }, [canSurfaceUserInput, userInputBlocks])
+  const userInput = useComposerUserInput(
+    pendingUserInputBlock,
+    onResolveUserInput ?? resolveUserInput
+  )
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const speechToTextSettings = useSpeechToTextSettings()
   const promptOptimizationSettings = usePromptOptimizationSettings()
@@ -408,6 +466,13 @@ export function FloatingComposer({
     : null
   const activeThreadArchived = activeThread?.archived === true
   const showUsageHistoryFooter = shouldShowUsageHistory({ compact, route, runtimeReady })
+  const hasConversationStarted = blocks.some((block) => block.kind === 'user')
+  const showWorkspaceControls = shouldShowWorkspaceControls({
+    compact,
+    route,
+    hasActiveThread,
+    hasConversationStarted
+  })
   const threadUsageState = useThreadUsageState(
     activeThreadId,
     showUsageHistoryFooter && Boolean(activeThreadId),
@@ -449,12 +514,15 @@ export function FloatingComposer({
   const showIntentToolbar = !compact && route === 'chat'
   const showComposerMenuButton = showIntentToolbar
   const canTogglePlanMode = canCompose && Boolean(onPlanCommand)
+  const showGraphMenuOption = graphEnabled && Boolean(onOrchestrationChange)
+  const canToggleGraphMode = canCompose && !busy && showGraphMenuOption
+  const runningGraphTurn = graphEnabled && busy && currentTurnOrchestration === 'graph'
   const canCreateNewThread = runtimeReady && route !== 'claw' && Boolean(effectiveWorkspaceRoot) && Boolean(onNewCommand)
   const canOpenGoalPanel = canCompose && route !== 'claw'
   const canRunReview = canCompose && route !== 'claw' && Boolean(onReviewCommand)
   const canToggleWorktreeMode = canCompose && route !== 'claw' && Boolean(onToggleWorktreeMode)
   const canOpenComposerMenu = showComposerMenuButton
-    && (canPickFileReference || canPickDesignReference || canPickLocalFileReference || canTogglePlanMode || canCreateNewThread || canOpenGoalPanel || canRunReview || canToggleWorktreeMode)
+    && (canPickFileReference || canPickDesignReference || canPickLocalFileReference || canTogglePlanMode || showGraphMenuOption || canCreateNewThread || canOpenGoalPanel || canRunReview)
   const showToolbarStartControls = showComposerMenuButton
   const showExecutionSettingsPicker = showIntentToolbar
     && Boolean(executionSettings)
@@ -465,11 +533,18 @@ export function FloatingComposer({
   const inputHistory = useComposerInputHistory()
   const slashQuery = getSlashQuery(input)
   const [composerMenuOpen, setComposerMenuOpen] = useState(false)
-  const [worktreeBranches, setWorktreeBranches] = useState<string[]>([])
   const [goalPanelOpen, setGoalPanelOpen] = useState(false)
+  const [goalInputMode, setGoalInputMode] = useState(false)
   const [goalRuntimeNowMs, setGoalRuntimeNowMs] = useState(() => Date.now())
   const [promptOptimizationBusy, setPromptOptimizationBusy] = useState(false)
   const [promptOptimizationError, setPromptOptimizationError] = useState<string | null>(null)
+  useEffect(() => {
+    setGoalInputMode(false)
+    setGoalPanelOpen(false)
+  }, [activeThreadId, route])
+  useEffect(() => {
+    if (mode === 'plan') setGoalInputMode(false)
+  }, [mode])
   const fileMentions = useComposerFileMentions({
     enabled: fileReferenceEnabled,
     canCompose,
@@ -517,7 +592,7 @@ export function FloatingComposer({
       ? t('userInputComposerPlaceholder')
     : !hasActiveThread && !effectiveWorkspaceRoot
       ? t('workspaceRequiredToCreateThread')
-      : goalPanelOpen && route !== 'claw'
+      : (goalInputMode || goalPanelOpen) && route !== 'claw'
         ? t('goalComposerPlaceholder')
       : busy
         ? t('composerQueuePlaceholder')
@@ -540,7 +615,9 @@ export function FloatingComposer({
             : t('clawComposerHintNeedsInbound')
           : useWorktreePool
             ? t('composerWorktreeModeHint')
-            : t('composerShortcut')
+            : composerSendKey === 'shiftEnter'
+              ? t('composerShortcutShiftEnter')
+              : t('composerShortcut')
   const showTodoProgress = !compact
     && route === 'chat'
     && Boolean(activeThreadId)
@@ -551,25 +628,16 @@ export function FloatingComposer({
     && !composerMenuOpen
     && !goalPanelOpen
     && !pendingUserInputBlock
+  const showGraphProgress = graphEnabled
+    && !compact
+    && route === 'chat'
+    && Boolean(activeThreadId)
+    && runtimeReady
+    && slashQuery == null
+    && !composerMenuOpen
+    && !goalPanelOpen
+    && !pendingUserInputBlock
 
-  useEffect(() => {
-    if (!useWorktreePool || !effectiveWorkspaceRoot || typeof window.kunGui?.getGitBranches !== 'function') {
-      setWorktreeBranches([])
-      return
-    }
-    let cancelled = false
-    void window.kunGui.getGitBranches(effectiveWorkspaceRoot).then((result) => {
-      if (cancelled || !result.ok) return
-      const names = result.branches.map((branch) => branch.name)
-      setWorktreeBranches(names)
-      if (!worktreeBranch.trim() && result.currentBranch) {
-        onWorktreeBranchChange?.(result.currentBranch)
-      }
-    }).catch(() => undefined)
-    return () => {
-      cancelled = true
-    }
-  }, [effectiveWorkspaceRoot, onWorktreeBranchChange, useWorktreePool, worktreeBranch])
   const parsedGoalCommand = parseGoalCommand(input)
   const goalPanelDraftObjective = getGoalPanelDraftObjective(input, goalPanelOpen)
   const canSetGoalPanelDraft =
@@ -614,7 +682,7 @@ export function FloatingComposer({
       ? t('goalActiveHeading')
       : t(`goalStatusShort.${activeThreadGoal.status}`)
     : ''
-  const goalMenuChecked = activeThreadGoal?.status === 'active'
+  const goalMenuChecked = goalInputMode
   const showGoalFloater = shouldShowGoalFloater({
     compact,
     hasActiveGoal: Boolean(activeThreadGoal),
@@ -685,6 +753,7 @@ export function FloatingComposer({
     }
     if (commandId === 'plan') {
       setInput('')
+      setGoalInputMode(false)
       setMode('plan')
       onPlanCommand?.()
       draft.focusComposer()
@@ -704,11 +773,14 @@ export function FloatingComposer({
     }
     if (commandId === 'goal') {
       setInput('')
-      setGoalPanelOpen(true)
+      onOrchestrationChange?.('direct')
+      setMode('agent')
+      setGoalInputMode(true)
       draft.focusComposer()
       return
     }
     if (commandId === 'research') {
+      setGoalInputMode(false)
       setMode('agent')
       setInput(buildResearchPrompt(t('slashCommandResearchPrompt'), null))
       draft.focusComposer()
@@ -752,7 +824,9 @@ export function FloatingComposer({
     setInput('')
     setGoalPanelOpen(false)
     if (command.action === 'menu') {
-      setGoalPanelOpen(true)
+      onOrchestrationChange?.('direct')
+      setMode('agent')
+      setGoalInputMode(true)
       draft.focusComposer()
       return true
     }
@@ -780,6 +854,17 @@ export function FloatingComposer({
     setInput('')
     setGoalPanelOpen(false)
     void setActiveThreadGoal(goalPanelDraftObjective)
+    draft.focusComposer()
+    return true
+  }
+
+  const setGoalFromGoalInputMode = (): boolean => {
+    const objective = input.trim()
+    if (!goalInputMode || objective.length === 0 || objective.startsWith('/')) return false
+    inputHistory.push(input)
+    setInput('')
+    setGoalInputMode(false)
+    void setActiveThreadGoal(objective)
     draft.focusComposer()
     return true
   }
@@ -825,8 +910,23 @@ export function FloatingComposer({
     if (mode === 'plan') {
       setMode('agent')
     } else {
+      setGoalInputMode(false)
+      onOrchestrationChange?.('direct')
       setMode('plan')
       onPlanCommand?.()
+    }
+    draft.focusComposer()
+  }
+
+  const handleGraphToolbarClick = (): void => {
+    if (!canToggleGraphMode || !onOrchestrationChange) return
+    setComposerMenuOpen(false)
+    if (mode === 'agent' && orchestration === 'graph') {
+      onOrchestrationChange('direct')
+    } else {
+      setGoalInputMode(false)
+      setMode('agent')
+      onOrchestrationChange('graph')
     }
     draft.focusComposer()
   }
@@ -834,20 +934,13 @@ export function FloatingComposer({
   const handleGoalMenuClick = (): void => {
     if (!canOpenGoalPanel) return
     setComposerMenuOpen(false)
-    if (activeThreadGoal?.status === 'active') {
-      void setActiveThreadGoalStatus('paused')
-    } else if (activeThreadGoal) {
-      void setActiveThreadGoalStatus('active')
+    if (goalInputMode) {
+      setGoalInputMode(false)
     } else {
-      setGoalPanelOpen(true)
+      onOrchestrationChange?.('direct')
+      setMode('agent')
+      setGoalInputMode(true)
     }
-    draft.focusComposer()
-  }
-
-  const handleWorktreeToolbarClick = (): void => {
-    if (!onToggleWorktreeMode) return
-    setComposerMenuOpen(false)
-    onToggleWorktreeMode()
     draft.focusComposer()
   }
 
@@ -898,6 +991,9 @@ export function FloatingComposer({
     if (highlightedSlashCommand) {
       if (highlightedSlashCommand.disabled) return
       applySlashCommand(highlightedSlashCommand.id)
+      return
+    }
+    if (setGoalFromGoalInputMode()) {
       return
     }
     if (setGoalFromComposerInput()) {
@@ -968,8 +1064,7 @@ export function FloatingComposer({
   dictationPrimaryActionRef.current = primaryActionDisabled ? null : handlePrimaryAction
 
   const handleComposerKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>): void => {
-    const sendByEnter =
-      event.key === 'Enter' && !event.shiftKey && !event.metaKey && !event.ctrlKey
+    const sendByHotkey = isComposerSendHotkey(event, composerSendKey)
     const composing = draft.isComposingEvent(event)
 
     if (fileMentions.handleKeyDown(event, composing)) return
@@ -987,7 +1082,7 @@ export function FloatingComposer({
       return
     }
 
-    if (!sendByEnter || composing) return
+    if (!sendByHotkey || composing) return
 
     event.preventDefault()
     handlePrimaryAction()
@@ -1076,13 +1171,45 @@ export function FloatingComposer({
         : 'ds-floating-composer ds-no-drag ds-chat-column-inset ds-chat-content-max-width pointer-events-auto w-full pb-3 pt-0'}
     >
       <div className="relative" data-composer-stack>
-        <div
-          data-composer-floaters
-          className="pointer-events-none absolute inset-x-0 bottom-full z-30 mb-2 flex flex-col items-center gap-2"
-        >
-          {runtimeReady ? <BackgroundShellOverlay threadId={activeThreadId} /> : null}
-          {showGoalFloater && activeThreadGoal && !pendingUserInputBlock ? (
-            <div className="pointer-events-auto flex min-h-11 w-full max-w-[46rem] items-center gap-2 rounded-full border border-ds-border bg-white px-3 py-1.5 text-ds-muted shadow-[0_12px_34px_rgba(20,47,95,0.10)] backdrop-blur-xl dark:bg-ds-card">
+        <FloatingComposerAboveInputStack
+          todo={showTodoProgress && activeThreadTodos ? (
+            <FloatingComposerTodoProgress todos={activeThreadTodos} />
+          ) : null}
+          graph={(
+            <FloatingComposerGraphProgress
+              threadId={activeThreadId}
+              enabled={showGraphProgress}
+              onOpenGraph={onOpenGraph}
+              onOpenChild={onOpenGraphChild}
+            />
+          )}
+          incoming={(
+            <>
+              {runtimeReady ? <BackgroundShellOverlay threadId={activeThreadId} /> : null}
+              <FloatingComposerQueuedMessages
+                messages={queuedMessages}
+                onRemove={onRemoveQueuedMessage}
+                onGuide={onGuideQueuedMessage}
+                onReorder={reorderQueuedMessage}
+                onEdit={(message) => {
+                  returnQueuedMessageToComposer(message, onRemoveQueuedMessage, setInput)
+                  draft.focusComposer()
+                }}
+              />
+              {userInput.active ? (
+                <FloatingComposerUserInputPanel
+                  controller={userInput}
+                  t={t}
+                  variant={compact ? 'compact' : 'main'}
+                />
+              ) : null}
+            </>
+          )}
+          goal={showGoalFloater && activeThreadGoal && !pendingUserInputBlock ? (
+            <div
+              data-composer-stack-item="goal"
+              className="pointer-events-auto flex min-h-11 w-full max-w-[46rem] items-center gap-2 rounded-full border border-ds-border bg-white px-3 py-1.5 text-ds-muted shadow-[0_12px_34px_rgba(20,47,95,0.10)] backdrop-blur-xl dark:bg-ds-card"
+            >
               <Target className="h-3.5 w-3.5 shrink-0 text-ds-faint" strokeWidth={1.9} />
               <div className="flex min-w-0 flex-1 items-center gap-1.5 text-[13px] leading-5">
                 <span className="shrink-0 font-semibold text-ds-ink">
@@ -1137,20 +1264,6 @@ export function FloatingComposer({
               </div>
             </div>
           ) : null}
-          {showTodoProgress && activeThreadTodos ? (
-            <FloatingComposerTodoProgress todos={activeThreadTodos} />
-          ) : null}
-        </div>
-
-        <FloatingComposerQueuedMessages
-          messages={queuedMessages}
-          onRemove={onRemoveQueuedMessage}
-          onGuide={onGuideQueuedMessage}
-          onReorder={reorderQueuedMessage}
-          onEdit={(message) => {
-            returnQueuedMessageToComposer(message, onRemoveQueuedMessage, setInput)
-            draft.focusComposer()
-          }}
         />
 
         {composerMenuOpen && slashQuery == null ? (
@@ -1234,8 +1347,59 @@ export function FloatingComposer({
                 />
               </span>
             </button>
+            {showGraphMenuOption ? (
+              <button
+                type="button"
+                data-composer-graph-menu-item
+                disabled={!canToggleGraphMode}
+                onClick={handleGraphToolbarClick}
+                aria-label={busy
+                  ? t('graphModeNextTurnGraph', { defaultValue: 'Next turn: Graph' })
+                  : t('graphModeGraph', { defaultValue: 'Graph' })}
+                title={busy
+                  ? t('graphModeNextTurnHint', {
+                        defaultValue: 'Controls the next turn and cannot change the turn already running'
+                      })
+                  : !graphEnabled
+                    ? t('graphModeDisabledHint', {
+                        defaultValue: 'Enable experimental Graph Mode in Settings → Agents'
+                      })
+                    : t('graphModeGraphHint', {
+                        defaultValue: 'Graph: plan, delegate, supervise, review, and synthesize'
+                      })}
+                className="ds-no-drag flex h-8 w-full items-center gap-2 px-3 text-left transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent disabled:hover:text-ds-muted"
+              >
+                <Share2 className="h-3.5 w-3.5 shrink-0" strokeWidth={1.9} />
+                <span className="min-w-0 flex-1 truncate">
+                  {busy
+                    ? t('graphModeNextTurnGraph', { defaultValue: 'Next turn: Graph' })
+                    : t('graphModeGraph', { defaultValue: 'Graph' })}
+                </span>
+                <span
+                  role="switch"
+                  aria-label={busy
+                    ? t('graphModeNextTurnGraph', { defaultValue: 'Next turn: Graph' })
+                    : t('graphModeGraph', { defaultValue: 'Graph' })}
+                  aria-checked={mode === 'agent' && orchestration === 'graph'}
+                  className={`relative h-5 w-9 shrink-0 rounded-full ring-1 transition ${
+                    mode === 'agent' && orchestration === 'graph'
+                      ? 'bg-accent ring-accent/35 shadow-[inset_0_1px_0_rgba(255,255,255,0.24)]'
+                      : 'bg-ds-border-muted ring-ds-border-muted'
+                  }`}
+                >
+                  <span
+                    className={`absolute top-0.5 h-4 w-4 rounded-full bg-white ring-1 ring-black/5 transition ${
+                      mode === 'agent' && orchestration === 'graph'
+                        ? 'translate-x-[17px]'
+                        : 'translate-x-0.5'
+                    } shadow-[0_1px_4px_rgba(20,47,95,0.28)]`}
+                  />
+                </span>
+              </button>
+            ) : null}
             <button
               type="button"
+              data-composer-goal-menu-item
               disabled={!canOpenGoalPanel}
               onClick={handleGoalMenuClick}
               className="ds-no-drag flex h-8 w-full items-center gap-2 px-3 text-left transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent disabled:hover:text-ds-muted"
@@ -1258,34 +1422,6 @@ export function FloatingComposer({
                 />
               </span>
             </button>
-            {canToggleWorktreeMode ? (
-              <button
-                type="button"
-                disabled={!canToggleWorktreeMode}
-                onClick={handleWorktreeToolbarClick}
-                className="ds-no-drag flex h-8 w-full items-center gap-2 px-3 text-left transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent disabled:hover:text-ds-muted"
-              >
-                <GitBranch className="h-3.5 w-3.5 shrink-0" strokeWidth={1.9} />
-                <span className="min-w-0 flex-1 truncate">
-                  {useWorktreePool ? t('composerEnvironmentWorktree') : t('composerEnvironmentLocal')}
-                </span>
-                <span
-                  role="switch"
-                  aria-checked={useWorktreePool}
-                  className={`relative h-5 w-9 shrink-0 rounded-full ring-1 transition ${
-                    useWorktreePool
-                      ? 'bg-accent ring-accent/35 shadow-[inset_0_1px_0_rgba(255,255,255,0.24)]'
-                      : 'bg-ds-border-muted ring-ds-border-muted'
-                  }`}
-                >
-                  <span
-                    className={`absolute top-0.5 h-4 w-4 rounded-full bg-white ring-1 ring-black/5 transition ${
-                      useWorktreePool ? 'translate-x-[17px]' : 'translate-x-0.5'
-                    } shadow-[0_1px_4px_rgba(20,47,95,0.28)]`}
-                  />
-                </span>
-              </button>
-            ) : null}
           </div>
         ) : null}
 
@@ -1394,14 +1530,26 @@ export function FloatingComposer({
           </div>
         ) : null}
 
-        {userInput.active ? (
-          <FloatingComposerUserInputPanel controller={userInput} t={t} />
+        {showWorkspaceControls ? (
+          <div
+            className="ds-composer-workspace-controls ds-no-drag flex min-h-8 min-w-0 flex-wrap items-center gap-2 px-3 pb-1"
+            data-composer-workspace-controls
+          >
+            <WorkspaceProjectPicker currentWorkspaceRoot={effectiveWorkspaceRoot} />
+            <GitBranchPicker
+              workspaceRoot={effectiveWorkspaceRoot}
+              useWorktreePool={useWorktreePool}
+              worktreeBranch={worktreeBranch}
+              onWorktreeBranchChange={onWorktreeBranchChange}
+              onToggleWorktreeMode={canToggleWorktreeMode ? onToggleWorktreeMode : undefined}
+            />
+          </div>
         ) : null}
 
         <div
           className={`ds-composer-shell ds-chat-composer ds-frosted ds-no-drag flex flex-col gap-1 px-3 pb-2 pt-2 transition ${
             draft.focused ? 'ds-chat-composer-focus' : ''
-          } ${compact ? `rounded-[24px] px-3 py-2 ${side ? 'shadow-[0_14px_38px_rgba(20,47,95,0.10)]' : 'shadow-none'}` : ''}`}
+          } ${compact ? 'rounded-[var(--ds-radius-card)] px-3 py-2 shadow-none' : ''}`}
           onMouseDown={handleComposerShellMouseDown}
           onPaste={handleComposerPaste}
           onDragOver={handleComposerDragOver}
@@ -1423,7 +1571,7 @@ export function FloatingComposer({
                 return (
                   <span
                     key={chip.id}
-                    className="ds-no-drag inline-flex h-7 max-w-full items-center gap-1.5 rounded-lg border border-accent/25 bg-accent/10 px-2 text-[12px] font-medium text-ds-muted"
+                    className="ds-no-drag inline-flex h-7 max-w-full items-center gap-1.5 rounded-full border border-ds-border bg-ds-subtle px-2.5 text-[12px] font-medium text-ds-muted"
                     title={title}
                   >
                     <Icon className="h-3.5 w-3.5 shrink-0 text-accent" strokeWidth={1.8} />
@@ -1437,7 +1585,7 @@ export function FloatingComposer({
                       <button
                         type="button"
                         onClick={() => onRemoveContextChip?.(chip.id)}
-                        className="rounded-full p-0.5 text-ds-faint transition hover:bg-ds-hover hover:text-ds-ink"
+                        className="rounded-full p-0.5 text-ds-faint transition hover:bg-ds-hover hover:text-ds-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
                         aria-label={t('composerRemoveContext', 'Remove context')}
                         title={t('composerRemoveContext', 'Remove context')}
                       >
@@ -1556,21 +1704,70 @@ export function FloatingComposer({
                       <Plus className="h-5 w-5" strokeWidth={1.8} />
                     </button>
                     {mode === 'plan' ? (
-                      <span
-                        className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full bg-ds-hover px-2.5 text-[13px] font-medium text-ds-muted"
-                        title={t('slashCommandPlanTitle')}
+                      <button
+                        type="button"
+                        data-composer-plan-mode-badge
+                        onClick={handlePlanToolbarClick}
+                        className="ds-composer-mode-badge ds-no-drag inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-full bg-ds-hover px-2.5 text-[13px] font-medium text-ds-muted transition hover:text-ds-ink"
+                        title={`${t('cancel')} ${t('slashCommandPlanTitle')}`}
+                        aria-label={`${t('cancel')} ${t('slashCommandPlanTitle')}`}
                       >
                         <ListTodo className="h-3.5 w-3.5" strokeWidth={1.9} />
-                        <span>{t('slashCommandPlanTitle')}</span>
+                        <span className="ds-composer-mode-label">{t('slashCommandPlanTitle')}</span>
+                        <X className="h-3 w-3" strokeWidth={2} />
+                      </button>
+                    ) : null}
+                    {runningGraphTurn ? (
+                      <span
+                        data-composer-graph-running
+                        className="ds-composer-mode-badge inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-full bg-indigo-500/10 px-2.5 text-[13px] font-medium text-indigo-700 dark:text-indigo-200"
+                        title={t('graphModeRunning', { defaultValue: 'Running: Graph' })}
+                        aria-label={t('graphModeRunning', { defaultValue: 'Running: Graph' })}
+                      >
+                        <Share2 className="h-3.5 w-3.5" strokeWidth={1.9} />
+                        <span className="ds-composer-mode-label">
+                          {t('graphModeRunning', { defaultValue: 'Running: Graph' })}
+                        </span>
+                      </span>
+                    ) : graphEnabled && !busy && mode === 'agent' && orchestration === 'graph' ? (
+                      <span
+                        data-composer-graph-active
+                        className="ds-composer-mode-badge inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-full bg-indigo-500/10 px-2.5 text-[13px] font-medium text-indigo-700 dark:text-indigo-200"
+                        title={t('graphModeGraphHint', {
+                          defaultValue: 'Graph: plan, delegate, supervise, review, and synthesize'
+                        })}
+                        aria-label={t('graphModeGraph', { defaultValue: 'Graph' })}
+                      >
+                        <Share2 className="h-3.5 w-3.5" strokeWidth={1.9} />
+                        <span className="ds-composer-mode-label">
+                          {t('graphModeGraph', { defaultValue: 'Graph' })}
+                        </span>
                       </span>
                     ) : null}
-                    {activeThreadGoal?.status === 'active' ? (
-                      <span
-                        className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full bg-ds-hover px-2.5 text-[13px] font-medium text-ds-muted"
-                        title={t('slashCommandGoalTitle')}
+                    {goalInputMode ? (
+                      <button
+                        type="button"
+                        data-composer-goal-mode-badge
+                        onClick={() => {
+                          setGoalInputMode(false)
+                          draft.focusComposer()
+                        }}
+                        className="ds-composer-mode-badge ds-no-drag inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-full bg-ds-hover px-2.5 text-[13px] font-medium text-ds-muted transition hover:text-ds-ink"
+                        title={`${t('cancel')} ${t('slashCommandGoalTitle')}`}
+                        aria-label={`${t('cancel')} ${t('slashCommandGoalTitle')}`}
                       >
                         <Target className="h-3.5 w-3.5" strokeWidth={1.9} />
-                        <span>{t('slashCommandGoalTitle')}</span>
+                        <span className="ds-composer-mode-label">{t('slashCommandGoalTitle')}</span>
+                        <X className="h-3 w-3" strokeWidth={2} />
+                      </button>
+                    ) : activeThreadGoal?.status === 'active' ? (
+                      <span
+                        className="ds-composer-mode-badge inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-full bg-ds-hover px-2.5 text-[13px] font-medium text-ds-muted"
+                        title={t('slashCommandGoalTitle')}
+                        aria-label={t('slashCommandGoalTitle')}
+                      >
+                        <Target className="h-3.5 w-3.5" strokeWidth={1.9} />
+                        <span className="ds-composer-mode-label">{t('slashCommandGoalTitle')}</span>
                       </span>
                     ) : null}
                   </>
@@ -1581,6 +1778,7 @@ export function FloatingComposer({
                     applying={executionSettingsApplying}
                     disabled={!canCompose || busy}
                     onChange={onExecutionSettingsChange}
+                    onOpenPermissionSettings={() => openSettings('agents')}
                   />
                 ) : null}
               </div>
@@ -1601,7 +1799,7 @@ export function FloatingComposer({
                   <button
                     type="button"
                     onClick={() => dictation.stop('insert')}
-                    className="ds-no-drag flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-ds-border bg-ds-card text-ds-ink shadow-sm transition hover:bg-ds-hover"
+                    className="ds-no-drag flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-ds-border bg-ds-card text-ds-ink transition hover:bg-ds-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
                     aria-label={t('composerVoiceStop')}
                     title={t('composerVoiceStop')}
                   >
@@ -1610,7 +1808,7 @@ export function FloatingComposer({
                   <button
                     type="button"
                     onClick={() => dictation.stop('send')}
-                    className="ds-no-drag flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-zinc-950 text-white shadow-[0_10px_22px_rgba(20,47,95,0.22)] transition hover:bg-zinc-800 dark:bg-white dark:text-zinc-950 dark:hover:bg-zinc-200"
+                    className="ds-no-drag flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-control text-control-foreground transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
                     aria-label={t('composerVoiceSend')}
                     title={t('composerVoiceSend')}
                   >
@@ -1637,11 +1835,13 @@ export function FloatingComposer({
                       composerPickList={composerPickList}
                       composerModelGroups={composerModelGroups}
                       composerReasoningEffort={composerReasoningEffort}
+                      composerFastMode={composerFastMode}
                       canChangeModel={canChangeModel}
                       controlVariant={modelControlVariant}
                       stretch={stretchModelPicker || showToolbarStartControls}
                       onComposerModelChange={onComposerModelChange}
                       onComposerReasoningEffortChange={onComposerReasoningEffortChange}
+                      onComposerFastModeChange={onComposerFastModeChange}
                       onConfigureProviders={onConfigureProviders}
                     />
                   )}
@@ -1653,7 +1853,7 @@ export function FloatingComposer({
                       type="button"
                       disabled={dictation.status === 'transcribing' || !canEditComposer}
                       onClick={dictation.toggle}
-                      className="ds-no-drag flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-60"
+                      className="ds-composer-optional-action ds-composer-voice-action ds-no-drag flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-60"
                       aria-label={
                         dictation.status === 'transcribing'
                           ? t('composerVoiceTranscribing')
@@ -1677,7 +1877,7 @@ export function FloatingComposer({
                       type="button"
                       disabled={!canOptimizePrompt}
                       onClick={handlePromptOptimizationClick}
-                      className="ds-no-drag flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-60"
+                      className="ds-composer-optional-action ds-composer-prompt-optimize-action ds-no-drag flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-60"
                       aria-label={promptOptimizationBusy ? t('composerPromptOptimizing') : t('composerPromptOptimize')}
                       title={promptOptimizationBusy ? t('composerPromptOptimizing') : t('composerPromptOptimize')}
                     >
@@ -1692,7 +1892,7 @@ export function FloatingComposer({
                     <button
                       type="button"
                       onClick={() => onInterrupt()}
-                      className="ds-no-drag flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-zinc-950 text-white shadow-[0_10px_22px_rgba(20,47,95,0.22)] transition hover:bg-zinc-800 dark:bg-white dark:text-zinc-950 dark:hover:bg-zinc-200"
+                      className="ds-no-drag flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-control text-control-foreground transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
                       aria-label={t('interrupt')}
                       title={t('interrupt')}
                     >
@@ -1703,7 +1903,7 @@ export function FloatingComposer({
                     type="button"
                     disabled={primaryActionDisabled}
                     onClick={handlePrimaryAction}
-                    className="ds-composer-primary-action ds-no-drag flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-zinc-950 text-white shadow-[0_10px_22px_rgba(20,47,95,0.22)] transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:bg-ds-card disabled:text-ds-faint disabled:shadow-none dark:bg-white dark:text-zinc-950 dark:hover:bg-zinc-200 dark:disabled:bg-ds-card dark:disabled:text-ds-faint"
+                    className="ds-composer-primary-action ds-no-drag flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-control text-control-foreground transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 disabled:cursor-not-allowed disabled:bg-ds-card disabled:text-ds-faint"
                     aria-label={primaryActionLabel}
                     title={primaryActionLabel}
                   >
@@ -1722,27 +1922,6 @@ export function FloatingComposer({
       {compact ? null : (
         <div className="ds-composer-footer mt-1 flex min-h-7 flex-wrap items-center justify-between gap-x-2.5 gap-y-1.5 px-3">
           <div className="ds-composer-footer-left flex min-w-0 flex-1 flex-wrap items-center gap-2">
-            {route === 'chat' ? (
-              <WorkspaceProjectPicker currentWorkspaceRoot={effectiveWorkspaceRoot} />
-            ) : null}
-            <GitBranchPicker workspaceRoot={effectiveWorkspaceRoot} />
-            {useWorktreePool && worktreeBranches.length > 0 ? (
-              <label className="ds-no-drag inline-flex min-h-7 max-w-[220px] items-center gap-1.5 rounded-lg border border-ds-border-muted bg-ds-card px-2 py-0.5 text-[12.5px] font-medium text-ds-muted shadow-sm">
-                <GitBranch className="h-3.5 w-3.5 shrink-0" strokeWidth={1.8} />
-                <select
-                  value={worktreeBranch || worktreeBranches[0]}
-                  onChange={(event) => onWorktreeBranchChange?.(event.target.value)}
-                  className="min-w-0 bg-transparent text-ds-muted outline-none"
-                  title={t('composerWorktreeBranch')}
-                >
-                  {worktreeBranches.map((branch) => (
-                    <option key={branch} value={branch}>
-                      {branch}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            ) : null}
             {showUsageHistoryFooter ? (
               <FloatingComposerUsageHistory
                 title={

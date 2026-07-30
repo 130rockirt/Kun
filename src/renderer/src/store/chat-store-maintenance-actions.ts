@@ -181,6 +181,7 @@ function settleInterruptedTurn(set: ChatStoreSet, get: ChatStoreGet): void {
       ...finalizeTurnTiming(s),
       busy: false,
       currentTurnId: null,
+      currentTurnOrchestration: null,
       currentTurnUserId: null,
       error: null
     })
@@ -803,6 +804,7 @@ export function createMaintenanceActions(
         liveReasoning: '',
         liveAssistant: '',
         currentTurnId: null,
+        currentTurnOrchestration: null,
         currentTurnUserId: null,
         turnStartedAtByUserId,
         turnDurationByUserId,

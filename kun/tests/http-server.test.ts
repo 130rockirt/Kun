@@ -38,7 +38,7 @@ describe('HTTP server', () => {
     expect(body).toEqual({ status: 'ok', service: 'kun', mode: 'serve' })
   })
 
-  it('returns runtime info with disabled capability defaults', async () => {
+  it('returns runtime info with accurate CLI and disabled provider capability defaults', async () => {
     const h = buildHarness()
     const response = await dispatchRequest(
       h.router,
@@ -55,7 +55,12 @@ describe('HTTP server', () => {
         mcp?: { available?: boolean; reason?: string }
         web?: { available?: boolean; fetch?: { available?: boolean } }
         attachments?: { available?: boolean; allowedMimeTypes?: string[] }
-        cli?: { serve?: { available?: boolean }; run?: { available?: boolean; reason?: string } }
+        cli?: {
+          serve?: { available?: boolean }
+          run?: { available?: boolean; reason?: string }
+          chat?: { available?: boolean; reason?: string }
+          exec?: { available?: boolean; reason?: string }
+        }
         model?: { inputModalities?: string[]; supportsToolCalling?: boolean; contextWindowTokens?: number }
       }
     }
@@ -69,7 +74,9 @@ describe('HTTP server', () => {
     expect(body.capabilities?.web?.fetch?.available).toBe(false)
     expect(body.capabilities?.attachments?.allowedMimeTypes).toContain('image/png')
     expect(body.capabilities?.cli?.serve?.available).toBe(true)
-    expect(body.capabilities?.cli?.run?.available).toBe(false)
+    expect(body.capabilities?.cli?.run?.available).toBe(true)
+    expect(body.capabilities?.cli?.chat?.available).toBe(true)
+    expect(body.capabilities?.cli?.exec?.available).toBe(true)
   })
 
   it('requires auth for runtime info', async () => {
@@ -600,6 +607,27 @@ describe('HTTP server', () => {
     )
     const limitedBody = (await readJson(limited)) as { threads: Array<{ id: string }> }
     expect(limitedBody.threads).toHaveLength(1)
+  })
+
+  it('returns the complete history when the caller omits a limit', async () => {
+    const h = buildHarness()
+    await Promise.all(Array.from({ length: 501 }, (_, index) =>
+      h.threadService.create(
+        { workspace: `/tmp/history-${index}`, model: 'deepseek-chat', mode: 'agent' },
+        { id: `thr_history_${index}`, title: `History ${index}` }
+      )
+    ))
+
+    const response = await dispatchRequest(
+      h.router,
+      new Request('http://localhost/v1/threads?include_archived=true', {
+        headers: { authorization: 'Bearer tok-1' }
+      })
+    )
+    expect(response.status).toBe(200)
+    const body = (await readJson(response)) as { threads: Array<{ id: string }> }
+    expect(body.threads).toHaveLength(501)
+    expect(new Set(body.threads.map((thread) => thread.id)).size).toBe(501)
   })
 
   it('deletes threads through the HTTP layer', async () => {

@@ -6,7 +6,12 @@ import { InMemoryUserInputGate } from '../adapters/in-memory-user-input-gate.js'
 import { setSystemPrompt, type ImmutablePrefix } from '../cache/immutable-prefix.js'
 import { SUBAGENT_READ_ONLY_TOOL_NAMES, type ModelCapabilityMetadata } from '../contracts/capabilities.js'
 import type { TurnItem } from '../contracts/items.js'
-import type { ApprovalPolicy, SandboxMode } from '../contracts/policy.js'
+import {
+  DEFAULT_APPROVAL_REVIEWER,
+  type ApprovalPolicy,
+  type ApprovalReviewer,
+  type SandboxMode
+} from '../contracts/policy.js'
 import type { RuntimeTuningConfig } from '../config/kun-config.js'
 import { AgentLoop } from '../loop/agent-loop.js'
 import { normalizeRoleReasoningEffort } from '../loop/reasoning-effort.js'
@@ -24,6 +29,7 @@ import type { ArtifactStore } from '../artifacts/artifact-store.js'
 import type { ModelClient } from '../ports/model-client.js'
 import { RandomIdGenerator } from '../ports/id-generator.js'
 import type { ApprovalGate } from '../ports/approval-gate.js'
+import type { ApprovalReviewPort } from '../ports/approval-review.js'
 import type { SessionStore } from '../ports/session-store.js'
 import type { ThreadStore } from '../ports/thread-store.js'
 import type { ToolHost } from '../ports/tool-host.js'
@@ -37,6 +43,7 @@ import { UsageService } from '../services/usage-service.js'
 import type { ChildRunExecutor } from './delegation-runtime.js'
 
 export type ChildDelegatedRuntimeFactory = (input: {
+  threads: ThreadService
   turns: TurnService
   sessionStore: SessionStore
   threadStore: ThreadStore
@@ -46,6 +53,10 @@ export type ChildDelegatedRuntimeFactory = (input: {
   toolPolicy: 'readOnly' | 'inherit'
   allowedToolNames?: readonly string[]
   allowedProviderIds?: readonly string[]
+  allowedSkillIds?: readonly string[]
+  allowedReadPaths?: readonly string[]
+  allowedWritePaths?: readonly string[]
+  allowedArtifactIds?: readonly string[]
   blockedToolNames?: readonly string[]
   blockedProviderIds?: readonly string[]
   blockedSkillIds?: readonly string[]
@@ -62,6 +73,7 @@ export type ChildAgentExecutorOptions = {
   contextCompaction?: ContextCompactionConfig
   approvalPolicy?: ApprovalPolicy
   sandboxMode?: SandboxMode
+  approvalReviewer?: ApprovalReviewer
   tokenEconomy?: TokenEconomyConfig
   runtime?: RuntimeTuningConfig
   nowIso?: () => string
@@ -75,6 +87,8 @@ export type ChildAgentExecutorOptions = {
   artifactStore?: ArtifactStore
   /** Runtime-owned approval channel shared with the HTTP decision endpoint. */
   approvalGate?: ApprovalGate
+  /** Isolated automatic reviewer used when the inherited reviewer is `agent`. */
+  approvalReview?: ApprovalReviewPort
   /**
    * Host-owned provider-native runtime composition. The callback receives the
    * already narrowed child capability envelope and child turn services.
@@ -178,7 +192,10 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
     const model = input.model?.trim() || options.defaultModel
     const approvalPolicy = input.approvalPolicy ?? options.approvalPolicy ?? 'auto'
     const sandboxMode = input.sandboxMode ?? options.sandboxMode
+    const approvalReviewer =
+      input.approvalReviewer ?? options.approvalReviewer ?? DEFAULT_APPROVAL_REVIEWER
     const delegatedRuntime = options.createDelegatedRuntime?.({
+      threads,
       turns,
       sessionStore,
       threadStore,
@@ -190,6 +207,18 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
       ...(input.security?.allowedProviderIds
         ? { allowedProviderIds: input.security.allowedProviderIds }
         : {}),
+      ...(input.security?.allowedSkillIds
+        ? { allowedSkillIds: input.security.allowedSkillIds }
+        : {}),
+      ...(input.security?.allowedReadPaths
+        ? { allowedReadPaths: input.security.allowedReadPaths }
+        : {}),
+      ...(input.security?.allowedWritePaths
+        ? { allowedWritePaths: input.security.allowedWritePaths }
+        : {}),
+      ...(input.security?.allowedArtifactIds
+        ? { allowedArtifactIds: input.security.allowedArtifactIds }
+        : {}),
       ...(blockedToolNames.length ? { blockedToolNames } : {}),
       ...(blockedProviderIds.length ? { blockedProviderIds } : {}),
       ...(blockedSkillIds.length ? { blockedSkillIds } : {}),
@@ -200,6 +229,7 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
       threadStore,
       sessionStore,
       approvalGate: options.approvalGate ?? new InMemoryApprovalGate(),
+      ...(options.approvalReview ? { approvalReview: options.approvalReview } : {}),
       userInputGate: new InMemoryUserInputGate(),
       model: options.model,
       toolHost: options.toolHost,
@@ -215,6 +245,16 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
       nowIso,
       ...(forcedAllowedToolNames ? { forcedAllowedToolNames } : {}),
       ...(input.security?.allowedProviderIds ? { allowedProviderIds: input.security.allowedProviderIds } : {}),
+      ...(input.security?.allowedSkillIds ? { allowedSkillIds: input.security.allowedSkillIds } : {}),
+      ...(input.security?.allowedReadPaths
+        ? { allowedReadPaths: input.security.allowedReadPaths }
+        : {}),
+      ...(input.security?.allowedWritePaths
+        ? { allowedWritePaths: input.security.allowedWritePaths }
+        : {}),
+      ...(input.security?.allowedArtifactIds
+        ? { allowedArtifactIds: input.security.allowedArtifactIds }
+        : {}),
       ...(blockedToolNames.length ? { blockedToolNames } : {}),
       ...(blockedProviderIds.length ? { blockedProviderIds } : {}),
       ...(blockedSkillIds.length ? { blockedSkillIds } : {}),
@@ -241,10 +281,12 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
       mode: 'agent',
       approvalPolicy,
       ...(sandboxMode ? { sandboxMode } : {}),
+      approvalReviewer,
       // Route the child to the profile's provider. ThreadService threads
       // providerId into every ModelRequest, and the executor's model is the
       // MultiProviderModelClient, so this single field is all routing needs.
-      ...(input.providerId ? { providerId: input.providerId } : {})
+      ...(input.providerId ? { providerId: input.providerId } : {}),
+      ...(input.accountId ? { accountId: input.accountId } : {})
     }, {
       id: input.childId,
       title,
@@ -267,11 +309,16 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
       request: {
         prompt,
         model,
+        clientSurface: input.guiDesignCanvas ? 'gui' : input.clientSurface ?? 'api',
         ...(input.providerId ? { providerId: input.providerId } : {}),
+        ...(input.accountId ? { accountId: input.accountId } : {}),
+        approvalPolicy,
+        ...(sandboxMode ? { sandboxMode } : {}),
+        approvalReviewer,
         mode: 'agent',
         reasoningEffort: normalizeRoleReasoningEffort(input.reasoningEffort),
         ...(input.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
-        // Children have no GUI surface to answer structured input prompts.
+        // Child runs have no independent interactive surface for structured prompts.
         disableUserInput: true
       }
     })
@@ -291,7 +338,11 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
     }
     let status: 'completed' | 'failed' | 'aborted'
     try {
-      status = await loop.runTurn(thread.id, started.turnId)
+      const outcome = await loop.runTurn(thread.id, started.turnId)
+      if (outcome === 'suspended') {
+        throw new Error(`non-Graph child turn suspended unexpectedly: ${started.turnId}`)
+      }
+      status = outcome
     } finally {
       input.signal.removeEventListener('abort', abortChild)
     }

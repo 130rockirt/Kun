@@ -21,6 +21,7 @@ import {
   shouldShowVoiceDictation,
   shouldShowGoalFloater,
   shouldShowUsageHistory,
+  shouldShowWorkspaceControls,
   shouldSurfaceComposerUserInput
 } from './FloatingComposer'
 import { COMPOSER_INPUT_HISTORY_STORAGE_KEY } from './use-composer-input-history'
@@ -45,6 +46,7 @@ import {
 } from './FloatingComposerModelPicker'
 import {
   FloatingComposerExecutionPicker,
+  FloatingComposerPermissionMenuContent,
   calculateExecutionMenuPlacement
 } from './FloatingComposerExecutionPicker'
 import {
@@ -52,6 +54,7 @@ import {
   calculateQueuedMessageMenuPlacement,
   canEditQueuedComposerMessage
 } from './FloatingComposerQueuedMessages'
+import { FloatingComposerAboveInputStack } from './FloatingComposerAboveInputStack'
 import { requestContextSnapshotMatchesSelection } from './FloatingComposerContextCapacity'
 import { getGoalPanelDraftObjective } from './floating-composer-commands'
 import { useChatStore } from '../../store/chat-store'
@@ -68,11 +71,34 @@ import {
   type ComposerFileReference
 } from '../../lib/composer-file-references'
 import { filesUnderDirectory } from '../../lib/workspace-file-index'
+import type { ModelProviderModelGroup } from '@shared/kun-gui-api'
 
 const DEEPSEEK_PROVIDER_GROUP = {
   providerId: 'deepseek',
   label: 'DeepSeek',
   modelIds: ['deepseek-v4-pro', 'deepseek-v4-flash']
+}
+
+const CODEX_PROVIDER_GROUP: ModelProviderModelGroup = {
+  providerId: 'codex-2',
+  presetSource: 'codex',
+  label: 'ChatGPT subscription 2',
+  modelIds: ['gpt-5.4', 'gpt-5.4-mini'],
+  modelProfiles: {
+    'gpt-5.4': {
+      inputModalities: ['text', 'image'],
+      outputModalities: ['text'],
+      supportsToolCalling: true,
+      messageParts: ['text', 'image_url'],
+      serviceTiers: ['priority']
+    },
+    'gpt-5.4-mini': {
+      inputModalities: ['text', 'image'],
+      outputModalities: ['text'],
+      supportsToolCalling: true,
+      messageParts: ['text', 'image_url']
+    }
+  }
 }
 
 describe('FloatingComposer usage history visibility', () => {
@@ -97,6 +123,340 @@ describe('FloatingComposer usage history visibility', () => {
       route: 'write',
       runtimeReady: true
     })).toBe(false)
+  })
+})
+
+describe('FloatingComposer workspace controls visibility', () => {
+  it('shows workspace and branch controls until the conversation starts', () => {
+    expect(shouldShowWorkspaceControls({
+      compact: false,
+      route: 'chat',
+      hasActiveThread: false,
+      hasConversationStarted: false
+    })).toBe(true)
+    expect(shouldShowWorkspaceControls({
+      compact: false,
+      route: 'chat',
+      hasActiveThread: true,
+      hasConversationStarted: false
+    })).toBe(true)
+    expect(shouldShowWorkspaceControls({
+      compact: false,
+      route: 'chat',
+      hasActiveThread: true,
+      hasConversationStarted: true
+    })).toBe(false)
+    expect(shouldShowWorkspaceControls({
+      compact: true,
+      route: 'chat',
+      hasActiveThread: false,
+      hasConversationStarted: false
+    })).toBe(false)
+    expect(shouldShowWorkspaceControls({
+      compact: false,
+      route: 'write',
+      hasActiveThread: false,
+      hasConversationStarted: false
+    })).toBe(false)
+  })
+
+  it('renders the workspace and branch controls above the input shell for an empty active thread', () => {
+    useChatStore.setState({
+      activeThreadId: 'thr_empty',
+      activeThreadGoal: null,
+      activeThreadTodos: null,
+      blocks: [],
+      route: 'chat',
+      workspaceRoot: '/Users/test/code/acme-project',
+      threads: [{
+        id: 'thr_empty',
+        title: 'New chat',
+        updatedAt: '2026-07-27T00:00:00.000Z',
+        model: 'test-model',
+        mode: 'agent',
+        workspace: '/Users/test/code/acme-project'
+      }]
+    })
+
+    const html = renderToStaticMarkup(createElement(FloatingComposer, {
+      input: '',
+      setInput: () => undefined,
+      mode: 'agent',
+      setMode: () => undefined,
+      busy: false,
+      runtimeReady: false,
+      hasActiveThread: true,
+      workspaceRootOverride: '/Users/test/code/acme-project',
+      composerModel: '',
+      composerPickList: [],
+      onComposerModelChange: () => undefined,
+      queuedMessages: [],
+      onRemoveQueuedMessage: () => undefined,
+      onSend: () => undefined,
+      onInterrupt: () => undefined
+    }))
+
+    const controlsIndex = html.indexOf('data-composer-workspace-controls')
+    const composerIndex = html.indexOf('ds-composer-shell')
+    expect(controlsIndex).toBeGreaterThanOrEqual(0)
+    expect(html.slice(controlsIndex, composerIndex)).toContain('ds-workspace-project-picker')
+    expect(html.slice(controlsIndex, composerIndex)).toContain('ds-git-branch-picker')
+    expect(composerIndex).toBeGreaterThan(controlsIndex)
+  })
+})
+
+describe('FloatingComposer Graph entry', () => {
+  it('hides Graph controls and status while Graph is disabled', () => {
+    useChatStore.setState({
+      activeThreadId: null,
+      activeThreadGoal: null,
+      activeThreadTodos: null,
+      blocks: [],
+      route: 'chat',
+      workspaceRoot: '/Users/test/code/acme-project',
+      threads: []
+    })
+
+    const html = renderToStaticMarkup(createElement(FloatingComposer, {
+      input: '',
+      setInput: () => undefined,
+      mode: 'agent',
+      setMode: () => undefined,
+      orchestration: 'graph',
+      graphEnabled: false,
+      onOrchestrationChange: () => undefined,
+      busy: true,
+      currentTurnOrchestration: 'graph',
+      runtimeReady: true,
+      hasActiveThread: true,
+      composerModel: 'test-model',
+      composerPickList: ['test-model'],
+      onComposerModelChange: () => undefined,
+      queuedMessages: [],
+      onRemoveQueuedMessage: () => undefined,
+      onSend: () => undefined,
+      onInterrupt: () => undefined,
+      onPlanCommand: () => undefined
+    }))
+
+    expect(html).not.toContain('data-composer-graph-menu-item')
+    expect(html).not.toContain('data-composer-graph-running')
+    expect(html).not.toContain('data-composer-graph-active')
+    expect(html).not.toContain('data-composer-stack-item="graph"')
+  })
+
+  it('keeps Graph inside the plus menu and selects it explicitly', async () => {
+    useChatStore.setState({
+      activeThreadId: null,
+      activeThreadGoal: null,
+      activeThreadTodos: null,
+      blocks: [{ kind: 'user', id: 'user-graph', text: 'Use Graph' }],
+      route: 'chat',
+      workspaceRoot: '/Users/test/code/acme-project',
+      threads: []
+    })
+    vi.stubGlobal('document', { activeElement: null })
+    vi.stubGlobal('HTMLElement', class {})
+    vi.stubGlobal('window', {
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      requestAnimationFrame: vi.fn(() => 1),
+      cancelAnimationFrame: vi.fn(),
+      kunGui: {
+        getSettings: vi.fn(async () => ({ composerSendKey: 'enter' }))
+      }
+    })
+    const setMode = vi.fn()
+    const setOrchestration = vi.fn()
+    let renderer!: ReturnType<typeof createRenderer>
+
+    try {
+      await act(async () => {
+        renderer = createRenderer(createElement(FloatingComposer, {
+          input: '',
+          setInput: () => undefined,
+          mode: 'agent',
+          setMode,
+          orchestration: 'direct',
+          graphEnabled: true,
+          onOrchestrationChange: setOrchestration,
+          busy: false,
+          runtimeReady: true,
+          hasActiveThread: true,
+          composerModel: 'test-model',
+          composerPickList: ['test-model'],
+          onComposerModelChange: () => undefined,
+          queuedMessages: [],
+          onRemoveQueuedMessage: () => undefined,
+          onSend: () => undefined,
+          onInterrupt: () => undefined,
+          onPlanCommand: () => undefined
+        }))
+      })
+
+      expect(renderer!.root.findAllByProps({ 'data-composer-graph-menu-item': true }))
+        .toHaveLength(0)
+      expect(renderer!.root.findAllByProps({ 'data-composer-graph-active': true }))
+        .toHaveLength(0)
+
+      const plusButton = renderer!.root.findAllByType('button').find(
+        (button) => String(button.props.className).includes('ds-composer-menu-button')
+      )
+      expect(plusButton).toBeDefined()
+      await act(async () => {
+        plusButton!.props.onClick()
+      })
+
+      const graphMenuItem = renderer!.root.findByProps({
+        'data-composer-graph-menu-item': true
+      })
+      expect(graphMenuItem.props.disabled).toBe(false)
+      await act(async () => {
+        graphMenuItem.props.onClick()
+      })
+
+      expect(setMode).toHaveBeenCalledWith('agent')
+      expect(setOrchestration).toHaveBeenCalledWith('graph')
+    } finally {
+      if (renderer) {
+        await act(async () => {
+          renderer.unmount()
+        })
+      }
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('shows only a compact Graph state after explicit selection', () => {
+    useChatStore.setState({
+      activeThreadId: 'thr_graph_active',
+      activeThreadGoal: null,
+      activeThreadTodos: null,
+      blocks: [],
+      route: 'chat',
+      workspaceRoot: '/Users/test/code/acme-project',
+      threads: [{
+        id: 'thr_graph_active',
+        title: 'Graph chat',
+        updatedAt: '2026-07-27T00:00:00.000Z',
+        model: 'test-model',
+        mode: 'agent',
+        workspace: '/Users/test/code/acme-project'
+      }]
+    })
+
+    const html = renderToStaticMarkup(createElement(FloatingComposer, {
+      input: '',
+      setInput: () => undefined,
+      mode: 'agent',
+      setMode: () => undefined,
+      orchestration: 'graph',
+      graphEnabled: true,
+      onOrchestrationChange: () => undefined,
+      busy: false,
+      runtimeReady: true,
+      hasActiveThread: true,
+      composerModel: 'test-model',
+      composerPickList: ['test-model'],
+      onComposerModelChange: () => undefined,
+      queuedMessages: [],
+      onRemoveQueuedMessage: () => undefined,
+      onSend: () => undefined,
+      onInterrupt: () => undefined,
+      onPlanCommand: () => undefined
+    }))
+
+    expect(html).toContain('data-composer-graph-active')
+    expect(html).toContain('ds-composer-mode-badge')
+    expect(html).toContain('ds-composer-mode-label')
+    expect(html).not.toContain('data-composer-graph-menu-item')
+    expect(html).not.toContain('graphModeSelector')
+  })
+
+  it('shows restored running Graph truth while the disabled switch remains Direct for the next turn', async () => {
+    const previousLanguage = i18n.language
+    await i18n.changeLanguage('en')
+    useChatStore.setState({
+      activeThreadId: null,
+      activeThreadGoal: null,
+      activeThreadTodos: null,
+      blocks: [{ kind: 'user', id: 'user-graph-running', text: 'Run Graph' }],
+      route: 'chat',
+      workspaceRoot: '/Users/test/code/acme-project',
+      threads: []
+    })
+    vi.stubGlobal('document', { activeElement: null })
+    vi.stubGlobal('HTMLElement', class {})
+    vi.stubGlobal('window', {
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      requestAnimationFrame: vi.fn(() => 1),
+      cancelAnimationFrame: vi.fn(),
+      kunGui: {
+        getSettings: vi.fn(async () => ({ composerSendKey: 'enter' }))
+      }
+    })
+    let renderer!: ReturnType<typeof createRenderer>
+
+    try {
+      await act(async () => {
+        renderer = createRenderer(createElement(FloatingComposer, {
+          input: '',
+          setInput: () => undefined,
+          mode: 'agent',
+          setMode: () => undefined,
+          orchestration: 'direct',
+          graphEnabled: true,
+          onOrchestrationChange: () => undefined,
+          busy: true,
+          currentTurnOrchestration: 'graph',
+          runtimeReady: true,
+          hasActiveThread: true,
+          composerModel: 'test-model',
+          composerPickList: ['test-model'],
+          onComposerModelChange: () => undefined,
+          queuedMessages: [],
+          onRemoveQueuedMessage: () => undefined,
+          onSend: () => undefined,
+          onInterrupt: () => undefined,
+          onPlanCommand: () => undefined
+        }))
+      })
+
+      const runningBadge = renderer.root.findByProps({
+        'data-composer-graph-running': true
+      })
+      expect(runningBadge.props['aria-label']).toBe('Running: Graph')
+      expect(String(runningBadge.props.className)).toContain('ds-composer-mode-badge')
+      expect(renderer.root.findAllByProps({ 'data-composer-graph-active': true })).toHaveLength(0)
+
+      const plusButton = renderer.root.findAllByType('button').find(
+        (button) => String(button.props.className).includes('ds-composer-menu-button')
+      )
+      expect(plusButton).toBeDefined()
+      await act(async () => {
+        plusButton!.props.onClick()
+      })
+
+      const graphMenuItem = renderer.root.findByProps({
+        'data-composer-graph-menu-item': true
+      })
+      expect(graphMenuItem.props.disabled).toBe(true)
+      expect(graphMenuItem.props['aria-label']).toBe('Next turn: Graph')
+      expect(graphMenuItem.props.title).toBe(
+        'Controls the next turn and cannot change the turn already running'
+      )
+      const graphSwitch = graphMenuItem.findByProps({ role: 'switch' })
+      expect(graphSwitch.props['aria-checked']).toBe(false)
+    } finally {
+      if (renderer) {
+        await act(async () => {
+          renderer.unmount()
+        })
+      }
+      await i18n.changeLanguage(previousLanguage)
+      vi.unstubAllGlobals()
+    }
   })
 })
 
@@ -284,6 +644,28 @@ describe('FloatingComposer queued guidance', () => {
     })).toBe(false)
   })
 
+  it('disables guidance when a compact sidebar row carries structured context', async () => {
+    const previousLanguage = i18n.language
+    await i18n.changeLanguage('en')
+    try {
+      const html = renderToStaticMarkup(createElement(FloatingComposerQueuedMessages, {
+        messages: [{
+          id: 'q-design',
+          text: 'make the card smaller',
+          guiDesignMode: true
+        }],
+        onGuide: () => undefined,
+        onRemove: () => undefined
+      }))
+
+      expect(html).toContain('aria-label="Guide"')
+      expect(html).toContain('disabled=""')
+      expect(html).toContain('Only plain-text follow-ups can guide')
+    } finally {
+      await i18n.changeLanguage(previousLanguage)
+    }
+  })
+
   it('hides a durable in-flight item while keeping later pending items visible', () => {
     const html = renderToStaticMarkup(createElement(FloatingComposerQueuedMessages, {
       messages: [
@@ -306,52 +688,26 @@ describe('FloatingComposer queued guidance', () => {
     expect(html).toContain('send this next')
   })
 
-  it('anchors todo progress above the queue instead of over it', () => {
-    useChatStore.setState({
-      activeThreadId: 'thread-layout',
-      activeThreadGoal: null,
-      activeThreadTodos: {
-        threadId: 'thread-layout',
-        items: [{
-          id: 'todo-layout',
-          content: 'Keep the queue readable',
-          status: 'in_progress',
-          createdAt: '2026-07-19T00:00:00.000Z',
-          updatedAt: '2026-07-19T00:00:00.000Z'
-        }],
-        updatedAt: '2026-07-19T00:00:00.000Z'
-      },
-      route: 'chat',
-      workspaceRoot: '/workspace/deepseek-gui',
-      threads: []
-    })
-
-    const html = renderToStaticMarkup(createElement(FloatingComposer, {
-      input: '',
-      setInput: () => undefined,
-      mode: 'agent',
-      setMode: () => undefined,
-      busy: true,
-      runtimeReady: false,
-      hasActiveThread: true,
-      composerModel: '',
-      composerPickList: [],
-      onComposerModelChange: () => undefined,
-      queuedMessages: [{ id: 'q-layout', text: 'Continue with the layout' }],
-      onRemoveQueuedMessage: () => undefined,
-      onSend: () => undefined,
-      onInterrupt: () => undefined
+  it('keeps todo, Graph, incoming work, and the active goal in one ordered stack', () => {
+    const html = renderToStaticMarkup(createElement(FloatingComposerAboveInputStack, {
+      todo: createElement('div', { 'data-composer-stack-item': 'todo' }),
+      graph: createElement('div', { 'data-composer-stack-item': 'graph' }),
+      incoming: createElement('div', { 'data-composer-queue': true }),
+      goal: createElement('div', { 'data-composer-stack-item': 'goal' })
     }))
 
-    const stackIndex = html.indexOf('data-composer-stack')
-    const floatersIndex = html.indexOf('data-composer-floaters')
+    const stackIndex = html.indexOf('data-composer-above-input-stack')
+    const todoIndex = html.indexOf('data-composer-stack-item="todo"')
+    const graphIndex = html.indexOf('data-composer-stack-item="graph"')
     const queueIndex = html.indexOf('data-composer-queue')
-    const composerIndex = html.indexOf('ds-composer-shell')
+    const goalIndex = html.indexOf('data-composer-stack-item="goal"')
     expect(stackIndex).toBeGreaterThanOrEqual(0)
-    expect(floatersIndex).toBeGreaterThan(stackIndex)
-    expect(queueIndex).toBeGreaterThan(floatersIndex)
-    expect(composerIndex).toBeGreaterThan(queueIndex)
-    expect(html.slice(floatersIndex, queueIndex)).toContain('bottom-full')
+    expect(todoIndex).toBeGreaterThan(stackIndex)
+    expect(graphIndex).toBeGreaterThan(todoIndex)
+    expect(queueIndex).toBeGreaterThan(graphIndex)
+    expect(goalIndex).toBeGreaterThan(queueIndex)
+    expect(html).not.toContain('bottom-full')
+    expect(html).not.toContain('absolute')
   })
 })
 
@@ -1049,6 +1405,51 @@ describe('FloatingComposer model controls', () => {
     expect(html).not.toContain('Model and reasoning settings')
   })
 
+  it('shows an active Fast toggle for an eligible multi-account Codex subscription', () => {
+    const html = renderToStaticMarkup(
+      createElement(FloatingComposerModelPicker, {
+        compact: false,
+        mode: 'select',
+        controlVariant: 'split',
+        composerModel: 'gpt-5.4',
+        composerProviderId: 'codex-2',
+        composerPickList: ['gpt-5.4'],
+        composerModelGroups: [CODEX_PROVIDER_GROUP],
+        composerReasoningEffort: 'high',
+        composerFastMode: true,
+        canChangeModel: true,
+        onComposerModelChange: () => undefined,
+        onComposerReasoningEffortChange: () => undefined,
+        onComposerFastModeChange: () => undefined
+      })
+    )
+
+    expect(html).toContain('aria-label="Fast mode on"')
+    expect(html).toContain('aria-pressed="true"')
+    expect(html).toContain('lucide-zap')
+  })
+
+  it('hides Fast for Codex subscription models that do not advertise priority', () => {
+    const html = renderToStaticMarkup(
+      createElement(FloatingComposerModelPicker, {
+        compact: false,
+        mode: 'select',
+        controlVariant: 'split',
+        composerModel: 'gpt-5.4-mini',
+        composerProviderId: 'codex-2',
+        composerPickList: ['gpt-5.4-mini'],
+        composerModelGroups: [CODEX_PROVIDER_GROUP],
+        composerFastMode: true,
+        canChangeModel: true,
+        onComposerModelChange: () => undefined,
+        onComposerFastModeChange: () => undefined
+      })
+    )
+
+    expect(html).not.toContain('Fast mode on')
+    expect(html).not.toContain('lucide-zap')
+  })
+
   it('keeps provider setup reachable when no chat providers are available', () => {
     const html = renderToStaticMarkup(
       createElement(FloatingComposerModelPicker, {
@@ -1229,6 +1630,82 @@ describe('FloatingComposer image transfer helpers', () => {
 })
 
 describe('FloatingComposer capability controls', () => {
+  it('renders the permission menu as a compact borderless list', async () => {
+    const previousLanguage = i18n.language
+    await i18n.changeLanguage('zh')
+
+    try {
+      const html = renderToStaticMarkup(
+        createElement(FloatingComposerPermissionMenuContent, {
+          permissionMode: 'full-access',
+          onSelect: () => undefined,
+          onOpenPermissionSettings: () => undefined
+        })
+      )
+      const optionClasses = Array.from(
+        html.matchAll(/class="([^"]*ds-composer-permission-option [^"]*)"/g),
+        (match) => match[1]
+      )
+
+      expect(html).toContain('Kun 如何执行操作？')
+      expect(html).toContain('了解权限')
+      expect(html.match(/role="menuitemradio"/g)).toHaveLength(3)
+      expect(html).toContain('data-permission-mode="full-access" aria-checked="true"')
+      expect(html).toContain('lucide-check')
+      expect(optionClasses).toHaveLength(3)
+      expect(optionClasses.every((className) => !className.split(/\s+/).includes('border'))).toBe(true)
+      expect(
+        optionClasses.every(
+          (className) => !className.split(/\s+/).some((name) => name.startsWith('bg-'))
+        )
+      ).toBe(true)
+    } finally {
+      await i18n.changeLanguage(previousLanguage)
+    }
+  })
+
+  it('opens permission settings from the menu header action', async () => {
+    const onOpenPermissionSettings = vi.fn()
+    let renderer!: ReturnType<typeof createRenderer>
+
+    await act(async () => {
+      renderer = createRenderer(
+        createElement(FloatingComposerPermissionMenuContent, {
+          permissionMode: 'ask-for-approval',
+          onSelect: () => undefined,
+          onOpenPermissionSettings
+        })
+      )
+    })
+    await act(async () => {
+      renderer.root.findByProps({ role: 'menuitem' }).props.onClick()
+    })
+
+    expect(onOpenPermissionSettings).toHaveBeenCalledOnce()
+    await act(async () => {
+      renderer.unmount()
+    })
+  })
+
+  it('declares progressive container-width fallbacks for secondary toolbar controls', async () => {
+    const nodeFs = 'node:fs/promises'
+    const { readFile } = await import(/* @vite-ignore */ nodeFs)
+    const [composerSource, css] = await Promise.all([
+      readFile(new URL('./FloatingComposer.tsx', import.meta.url), 'utf8'),
+      readFile(new URL('../../styles/base-shell.css', import.meta.url), 'utf8')
+    ])
+
+    expect(composerSource).toContain('ds-composer-voice-action')
+    expect(composerSource).toContain('ds-composer-prompt-optimize-action')
+    expect(css).toContain('@container (max-width: 760px)')
+    expect(css).toContain('.ds-composer-optional-action')
+    expect(css).toContain('@container (max-width: 700px)')
+    expect(css).toContain('.ds-composer-mode-label,')
+    expect(css).toContain('.ds-composer-permission-label,')
+    expect(css).toContain('.ds-composer-context-control,')
+    expect(css).toContain('.ds-composer-agent-picker')
+  })
+
   it('shows voice dictation for every runnable speech configuration', () => {
     expect(shouldShowVoiceDictation({
       enabled: true,
@@ -1325,7 +1802,8 @@ describe('FloatingComposer capability controls', () => {
         createElement(FloatingComposerExecutionPicker, {
           value: {
             approvalPolicy: 'auto',
-            sandboxMode: 'danger-full-access'
+            sandboxMode: 'danger-full-access',
+            approvalReviewer: 'user'
           },
           onChange: () => undefined
         })
@@ -1335,8 +1813,10 @@ describe('FloatingComposer capability controls', () => {
       expect(html).not.toContain('>审批<')
       expect(html).not.toContain('>权限<')
       expect(html).toContain('aria-label="工具权限"')
-      expect(html).toContain('data-permission-mode="bypass"')
+      expect(html).toContain('data-permission-mode="full-access"')
       expect(html).toContain('lucide-lock-keyhole-open')
+      expect(html).toContain('ds-composer-permission-label')
+      expect(html).toContain('ds-composer-permission-chevron')
       expect(html).not.toContain('Full access')
       expect(html).not.toContain('Auto')
       expect(html).not.toContain('Bypass')
@@ -1345,76 +1825,45 @@ describe('FloatingComposer capability controls', () => {
     }
   })
 
-  it('renders the workspace-write permission mode in the execution picker', () => {
+  it('renders the ask-for-approval permission mode in the execution picker', () => {
     const html = renderToStaticMarkup(
       createElement(FloatingComposerExecutionPicker, {
         value: {
           approvalPolicy: 'on-request',
-          sandboxMode: 'workspace-write'
+          sandboxMode: 'workspace-write',
+          approvalReviewer: 'user'
         },
         onChange: () => undefined
       })
     )
 
-    expect(html).toContain('Ask in workspace')
-    expect(html).toContain('Asks before workspace file changes')
+    expect(html).toContain('Ask for approval')
+    expect(html).toContain('approval-worthy writes, commands, network, and external effects ask you first')
     expect(html).toContain('aria-label="Tool permission"')
-    expect(html).toContain('data-permission-mode="workspace-write"')
-    expect(html).toContain('lucide-folder-pen')
+    expect(html).toContain('data-permission-mode="ask-for-approval"')
+    expect(html).toContain('lucide-hand')
   })
 
-  it('renders the trusted workspace permission mode in the execution picker', () => {
-    const html = renderToStaticMarkup(
-      createElement(FloatingComposerExecutionPicker, {
-        value: {
-          approvalPolicy: 'auto',
-          sandboxMode: 'workspace-write'
-        },
-        onChange: () => undefined
-      })
-    )
-
-    expect(html).toContain('Trusted workspace')
-    expect(html).toContain('Workspace file changes run without prompts')
-    expect(html).toContain('aria-label="Tool permission"')
-    expect(html).toContain('data-permission-mode="trusted-workspace"')
-    expect(html).toContain('lucide-shield-check')
-  })
-
-  it('renders the sensitive-ask permission mode in the execution picker', () => {
-    const html = renderToStaticMarkup(
-      createElement(FloatingComposerExecutionPicker, {
-        value: {
-          approvalPolicy: 'untrusted',
-          sandboxMode: 'danger-full-access'
-        },
-        onChange: () => undefined
-      })
-    )
-
-    expect(html).toContain('Sensitive ask')
-    expect(html).toContain('Ordinary reads can run automatically')
-    expect(html).toContain('aria-label="Tool permission"')
-    expect(html).toContain('data-permission-mode="sensitive-ask"')
-    expect(html).toContain('lucide-shield-question')
-  })
-
-  it('marks the read-only permission mode for theme-specific presentation', () => {
+  it('renders the approve-for-me permission mode in the execution picker', () => {
     const html = renderToStaticMarkup(
       createElement(FloatingComposerExecutionPicker, {
         value: {
           approvalPolicy: 'on-request',
-          sandboxMode: 'danger-full-access'
+          sandboxMode: 'workspace-write',
+          approvalReviewer: 'agent'
         },
         onChange: () => undefined
       })
     )
 
-    expect(html).toContain('data-permission-mode="read-only"')
-    expect(html).toContain('lucide-eye')
+    expect(html).toContain('Approve for me')
+    expect(html).toContain('selected model reviews approval-worthy actions')
+    expect(html).toContain('aria-label="Tool permission"')
+    expect(html).toContain('data-permission-mode="approve-for-me"')
+    expect(html).toContain('lucide-bot')
   })
 
-  it('renders the always-ask permission label in Chinese as 永远询问', async () => {
+  it('renders approve-for-me in Chinese', async () => {
     const previousLanguage = i18n.language
     await i18n.changeLanguage('zh')
 
@@ -1422,18 +1871,18 @@ describe('FloatingComposer capability controls', () => {
       const html = renderToStaticMarkup(
         createElement(FloatingComposerExecutionPicker, {
           value: {
-            approvalPolicy: 'always',
-            sandboxMode: 'danger-full-access'
+            approvalPolicy: 'on-request',
+            sandboxMode: 'workspace-write',
+            approvalReviewer: 'agent'
           },
           onChange: () => undefined
         })
       )
 
-      expect(html).toContain('永远询问')
-      expect(html).toContain('每次工具调用都要你确认')
-      expect(html).toContain('data-permission-mode="always-ask"')
-      expect(html).toContain('lucide-hand')
-      expect(html).not.toContain('永远咨询')
+      expect(html).toContain('替我审批')
+      expect(html).toContain('由输入框所选模型审查需审批操作')
+      expect(html).toContain('data-permission-mode="approve-for-me"')
+      expect(html).toContain('lucide-bot')
     } finally {
       await i18n.changeLanguage(previousLanguage)
     }
@@ -1862,8 +2311,137 @@ describe('FloatingComposer capability controls', () => {
         webAccessAvailable: false
       })
     )
-    expect(html).toContain('title="Plan"')
+    expect(html).toContain('data-composer-plan-mode-badge')
+    expect(html).toContain('title="Cancel Plan"')
     expect(html).toContain('>Plan</span>')
+  })
+
+  it('uses goal mode input as the objective and lets both intent badges cancel', async () => {
+    const previousLanguage = i18n.language
+    const originalGoalSetter = useChatStore.getState().setActiveThreadGoal
+    const setActiveThreadGoal = vi.fn(async () => true)
+    const setInput = vi.fn()
+    const setMode = vi.fn()
+    const onSend = vi.fn()
+    let goalRenderer: ReturnType<typeof createRenderer> | undefined
+    let planRenderer: ReturnType<typeof createRenderer> | undefined
+
+    await i18n.changeLanguage('en')
+    useChatStore.setState({
+      activeThreadId: null,
+      activeThreadGoal: null,
+      activeThreadTodos: null,
+      blocks: [],
+      route: 'chat',
+      workspaceRoot: '/workspace/deepseek-gui',
+      threads: [],
+      setActiveThreadGoal
+    })
+    ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+    vi.stubGlobal('document', { activeElement: null })
+    vi.stubGlobal('HTMLElement', class {})
+    vi.stubGlobal('window', {
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      requestAnimationFrame: vi.fn(() => 1),
+      cancelAnimationFrame: vi.fn(),
+      kunGui: {
+        getSettings: vi.fn(async () => ({ composerSendKey: 'enter' }))
+      }
+    })
+
+    const props = {
+      input: 'ship the goal UX',
+      setInput,
+      mode: 'agent' as const,
+      setMode,
+      busy: false,
+      runtimeReady: true,
+      hasActiveThread: false,
+      workspaceRootOverride: '/workspace/deepseek-gui',
+      composerModel: 'test-model',
+      composerPickList: ['test-model'],
+      onComposerModelChange: () => undefined,
+      queuedMessages: [] as [],
+      onRemoveQueuedMessage: () => undefined,
+      onSend,
+      onInterrupt: () => undefined,
+      onPlanCommand: () => undefined,
+      attachmentUploadEnabled: false,
+      webAccessAvailable: false
+    }
+
+    try {
+      await act(async () => {
+        goalRenderer = createRenderer(createElement(FloatingComposer, props))
+      })
+      const renderedGoal = goalRenderer!
+      const plusButton = renderedGoal.root.findAllByType('button').find(
+        (button) => String(button.props.className).includes('ds-composer-menu-button')
+      )
+      expect(plusButton).toBeDefined()
+
+      await act(async () => {
+        plusButton!.props.onClick()
+      })
+      await act(async () => {
+        goalRenderer!.root.findByProps({ 'data-composer-goal-menu-item': true }).props.onClick()
+      })
+
+      expect(setMode).toHaveBeenCalledWith('agent')
+      expect(renderedGoal.root.findByType('textarea').props.placeholder).toBe('Type a goal for this thread')
+      const goalBadge = renderedGoal.root.findByProps({ 'data-composer-goal-mode-badge': true })
+      expect(goalBadge.props['aria-label']).toBe('Cancel Goal')
+
+      await act(async () => {
+        goalBadge.props.onClick()
+      })
+      expect(renderedGoal.root.findAllByProps({ 'data-composer-goal-mode-badge': true })).toHaveLength(0)
+
+      await act(async () => {
+        plusButton!.props.onClick()
+      })
+      await act(async () => {
+        goalRenderer!.root.findByProps({ 'data-composer-goal-menu-item': true }).props.onClick()
+      })
+      await act(async () => {
+        goalRenderer!.root.findByProps({ 'aria-label': 'Send' }).props.onClick()
+      })
+
+      expect(setActiveThreadGoal).toHaveBeenCalledWith('ship the goal UX')
+      expect(setInput).toHaveBeenCalledWith('')
+      expect(onSend).not.toHaveBeenCalled()
+      expect(renderedGoal.root.findAllByProps({ 'data-composer-goal-mode-badge': true })).toHaveLength(0)
+
+      await act(async () => {
+        planRenderer = createRenderer(createElement(FloatingComposer, {
+          ...props,
+          mode: 'plan'
+        }))
+      })
+      const renderedPlan = planRenderer!
+      const planBadge = renderedPlan.root.findByProps({ 'data-composer-plan-mode-badge': true })
+      expect(planBadge.props['aria-label']).toBe('Cancel Plan')
+      await act(async () => {
+        planBadge.props.onClick()
+      })
+      expect(setMode).toHaveBeenLastCalledWith('agent')
+    } finally {
+      if (goalRenderer) {
+        await act(async () => {
+          goalRenderer!.unmount()
+        })
+      }
+      if (planRenderer) {
+        await act(async () => {
+          planRenderer!.unmount()
+        })
+      }
+      useChatStore.setState({ setActiveThreadGoal: originalGoalSetter })
+      await i18n.changeLanguage(previousLanguage)
+      vi.unstubAllGlobals()
+      Reflect.deleteProperty(globalThis, 'IS_REACT_ACT_ENVIRONMENT')
+    }
   })
 
   it('renders image attachment thumbnails when a local preview is available', () => {
@@ -1999,7 +2577,8 @@ describe('FloatingComposer capability controls', () => {
         webAccessAvailable: false,
         executionSettings: {
           approvalPolicy: 'auto',
-          sandboxMode: 'danger-full-access'
+          sandboxMode: 'danger-full-access',
+          approvalReviewer: 'user'
         },
         onExecutionSettingsChange: () => undefined
       })

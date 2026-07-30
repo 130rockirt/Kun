@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { homedir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import {
   isKunRuntimeInsecure,
@@ -19,6 +19,7 @@ import {
 import {
   buildKunServeArgs,
   resolveKunExecutable,
+  resolveKunRuntimeBuildId,
   shouldRunKunServeAsElectronChild
 } from './resolve-kun-binary'
 import { resolveCodexOAuthApiKey } from './codex-auth'
@@ -84,6 +85,12 @@ import {
   videoGenConfigForRuntime
 } from './runtime/kun-runtime-capability-config'
 import {
+  KUN_BROWSER_USE_APPROVAL_SIGNING_KEY_ENV,
+  KUN_BROWSER_USE_BRIDGE_TOKEN_ENV,
+  KUN_BROWSER_USE_BRIDGE_URL_ENV
+} from '../../kun/src/contracts/browser-use.js'
+import { prepareBrowserUseHostForKunLaunch } from './browser-use/browser-use-host'
+import {
   buildGuiScheduleKunMcpServer,
   GUI_SCHEDULE_MCP_SERVER_NAME,
   readGuiManagedMcpServers,
@@ -94,6 +101,12 @@ import { availableBundledExtensionsDirectory } from './bundled-extension-resourc
 import { resolveOfficeCliBinary } from './officecli-resources'
 import { subagentProfilesForRuntime } from './runtime/kun-runtime-subagent-config'
 import { syncGuiManagedKunConfig } from './runtime/kun-runtime-config-service'
+import { assertManagedKunDataDirIsCurrent } from './kun-data-dir-paths'
+import {
+  ensureSharedRuntime,
+  resolveSharedRuntime,
+  type SharedRuntimeConnection
+} from '../../kun/src/cli/shared-runtime.js'
 
 export { subagentProfilesForRuntime } from './runtime/kun-runtime-subagent-config'
 export { syncGuiManagedKunConfig } from './runtime/kun-runtime-config-service'
@@ -230,8 +243,9 @@ function resolveNodeScriptCommand(command: string): string {
 
 export function resolveKunDataDir(runtime: { dataDir: string }): string {
   const trimmed = runtime.dataDir?.trim()
-  if (trimmed) return expandHomePath(trimmed)
-  return defaultKunDataDir()
+  const dataDir = trimmed ? expandHomePath(trimmed) : defaultKunDataDir()
+  assertManagedKunDataDirIsCurrent(dataDir)
+  return dataDir
 }
 
 function expandHomePath(path: string): string {
@@ -273,14 +287,84 @@ export function startKunChild(settings: AppSettingsV1): Promise<void> {
   })
 }
 
-async function startKunChildOnce(
-  settings: AppSettingsV1,
-  runtime: KunRuntimeSettingsV1
-): Promise<void> {
-  if (processController.logCapture) {
-    await processController.logCapture.close()
-    processController.logCapture = null
+/**
+ * Start (or attach to) the data-dir scoped runtime used by both the GUI and
+ * terminal clients. Unlike the legacy child controller, this process is
+ * detached and writes directly to its own log, so closing Electron does not
+ * terminate active turns or disconnect other clients.
+ */
+export async function startKunSharedRuntime(
+  settings: AppSettingsV1
+): Promise<SharedRuntimeConnection | null> {
+  const runtime = resolveKunRuntimeSettings(settings)
+  if (!runtime.autoStart) return null
+  const dataDir = resolveKunDataDir(runtime)
+  if (await hasUnpublishedKunWriter(runtime, dataDir)) {
+    throw new Error(
+      'An older GUI-private Kun runtime is already writing this data directory without shared discovery. Close or update that GUI once before starting the shared runtime.'
+    )
   }
+  // A shared runtime is elected under the data-directory start lock. Let the
+  // elected server bind an ephemeral loopback port and publish the real
+  // port/token through discovery instead of treating the GUI preference as a
+  // live connection contract.
+  const launch = await prepareKunLaunch(settings, runtime, { port: 0 })
+  return ensureSharedRuntime({
+    dataDir: launch.dataDir,
+    ...(launch.expectedBuildId ? { expectedBuildId: launch.expectedBuildId } : {}),
+    launch: {
+      command: launch.command,
+      args: launch.args,
+      env: launch.env,
+      runAsNode: launch.runAsNode
+    }
+  })
+}
+
+async function hasUnpublishedKunWriter(
+  runtime: KunRuntimeSettingsV1,
+  dataDir: string
+): Promise<boolean> {
+  if (await resolveSharedRuntime(dataDir).catch(() => null)) return false
+  try {
+    const headers = new Headers()
+    if (runtime.runtimeToken.trim()) {
+      headers.set('authorization', `Bearer ${runtime.runtimeToken.trim()}`)
+    }
+    const response = await fetch(`http://127.0.0.1:${runtime.port}/v1/runtime/info`, {
+      headers,
+      signal: AbortSignal.timeout(2_000)
+    })
+    if (!response.ok) return false
+    const body = await response.json() as { dataDir?: unknown }
+    return typeof body.dataDir === 'string' && sameRuntimePath(body.dataDir, dataDir)
+  } catch {
+    return false
+  }
+}
+
+function sameRuntimePath(left: string, right: string): boolean {
+  const normalizedLeft = resolve(left)
+  const normalizedRight = resolve(right)
+  return process.platform === 'win32'
+    ? normalizedLeft.toLowerCase() === normalizedRight.toLowerCase()
+    : normalizedLeft === normalizedRight
+}
+
+type PreparedKunLaunch = {
+  command: string
+  args: string[]
+  env: NodeJS.ProcessEnv
+  dataDir: string
+  runAsNode: boolean
+  expectedBuildId?: string
+}
+
+async function prepareKunLaunch(
+  settings: AppSettingsV1,
+  runtime: KunRuntimeSettingsV1,
+  options: { port?: number } = {}
+): Promise<PreparedKunLaunch> {
   const root = appRoot()
   const resolution = resolveKunExecutable(root, runtime.binaryPath)
   if (resolution.command === process.execPath && !existsSync(resolution.args[0])) {
@@ -288,6 +372,7 @@ async function startKunChildOnce(
       `Kun runtime build is missing at ${resolution.args[0]}. Run \`npm run build:kun\` before starting the GUI.`
     )
   }
+  const expectedBuildId = await resolveKunRuntimeBuildId(resolution)
   const dataDir = resolveKunDataDir(runtime)
   await syncGuiManagedKunConfig(dataDir, runtime, {
     scheduleMcp: {
@@ -305,44 +390,25 @@ async function startKunChildOnce(
   const args = buildKunServeArgs({
     resolution,
     host: '127.0.0.1',
-    port: runtime.port,
+    port: options.port ?? runtime.port,
     dataDir,
     approvalPolicy: runtime.approvalPolicy,
     sandboxMode: runtime.sandboxMode,
+    approvalReviewer: runtime.approvalReviewer,
     tokenEconomyMode: runtime.tokenEconomyMode,
     insecure: isKunRuntimeInsecure(runtime)
   })
-  // On macOS, libnut links AppKit and calls `[NSApplication sharedApplication]`
-  // on its first screen-grab/mouse/keyboard call. That promotes a pure-Node
-  // (ELECTRON_RUN_AS_NODE) child to a regular Cocoa app and a second Kun icon
-  // appears in the Dock. In dev, when computer-use is enabled, we instead
-  // spawn kun as a real Electron instance so it can call `app.dock.hide()`
-  // itself (see kun/src/cli/serve-entry.ts). Packaged .app executables are not
-  // generic Electron script runners: passing serve-entry.js to the main app
-  // launches the GUI process instead of kun serve, so packaged builds must use
-  // the Node helper path even when computer-use is enabled.
   const runAsElectron = shouldRunKunServeAsElectronChild({
     platform: process.platform,
     isPackaged: app.isPackaged,
     computerUseEnabled: runtime.computerUse?.enabled === true
   })
   const command = runAsElectron ? resolution.command : resolveNodeScriptCommand(resolution.command)
-  // Grok subscription tokens are refreshed ~5 minutes early (see grok-auth).
-  // Refresh here so the child process is not started with a soon-to-expire bearer.
   const runtimeApiKey = (await ensureFreshGrokCredentials(runtime.apiKey)).apiKey
-  // When the active provider is Codex/Grok, runtime.apiKey holds JSON-encoded OAuth
-  // credentials; unwrap to the bare access token so the default client sends a
-  // valid Bearer (subscription headers are written via materialize / serve.headers).
   const defaultClientApiKey = resolveCodexOAuthApiKey(runtimeApiKey).apiKey
-  // When the runtime's own (default) provider is the Claude subscription, tell
-  // the runtime so its dispatch routes default-provider turns (thread.providerId
-  // absent or equal to it) to the embedded SDK instead of the HTTP default.
   const activeProviderKind = (getModelProviderSettings(settings).providers as ModelProviderProfileV1[]).find(
     (provider) => provider.id?.trim() === getKunRuntimeSettings(settings).providerId.trim()
   )?.kind
-  // Point the runtime at the on-demand Claude Code binary (the ~222MB binary is
-  // not bundled; it's downloaded into userData). Absent in dev when it's still
-  // resolvable from kun/node_modules — the SDK auto-resolves it there.
   const claudeBinary = resolveClaudeBinary(app.getPath('userData'), [join(appRoot(), 'kun')])
   const antigravityBinary = resolveAntigravityCliBinary(app.getPath('userData'))
   const officeCliBinary = resolveOfficeCliBinary({
@@ -351,27 +417,63 @@ async function startKunChildOnce(
     appRoot: root,
     explicitPath: process.env.KUN_OFFICECLI_BINARY
   })
-  const childEnv: NodeJS.ProcessEnv = {
+  const browserUseBridge = runtime.browserUse.enabled
+    ? await prepareBrowserUseHostForKunLaunch()
+    : undefined
+  const env: NodeJS.ProcessEnv = {
     ...process.env,
-    KUN_RUNTIME_TOKEN: runtime.runtimeToken,
     DEEPSEEK_API_KEY: defaultClientApiKey || process.env.DEEPSEEK_API_KEY || '',
     ...(activeProviderKind ? { KUN_RUNTIME_PROVIDER_KIND: activeProviderKind } : {}),
     ...(claudeBinary ? { KUN_CLAUDE_BINARY: claudeBinary } : {}),
     ...(antigravityBinary ? { KUN_ANTIGRAVITY_BINARY: antigravityBinary } : {}),
-    ...(officeCliBinary ? { KUN_OFFICECLI_BINARY: officeCliBinary } : {})
+    ...(officeCliBinary ? { KUN_OFFICECLI_BINARY: officeCliBinary } : {}),
+    ...(browserUseBridge
+      ? {
+          [KUN_BROWSER_USE_BRIDGE_URL_ENV]: browserUseBridge.url,
+          [KUN_BROWSER_USE_BRIDGE_TOKEN_ENV]: browserUseBridge.token,
+          [KUN_BROWSER_USE_APPROVAL_SIGNING_KEY_ENV]:
+            browserUseBridge.approvalSigningKey
+        }
+      : {})
+  }
+  if (!browserUseBridge) {
+    delete env[KUN_BROWSER_USE_BRIDGE_URL_ENV]
+    delete env[KUN_BROWSER_USE_BRIDGE_TOKEN_ENV]
+    delete env[KUN_BROWSER_USE_APPROVAL_SIGNING_KEY_ENV]
   }
   const bundledExtensionsDirectory = availableBundledExtensionsDirectory({
     isPackaged: app.isPackaged,
     resourcesPath: process.resourcesPath,
     appRoot: root
   })
-  if (bundledExtensionsDirectory) {
-    childEnv.KUN_BUNDLED_EXTENSIONS_DIR = bundledExtensionsDirectory
+  if (bundledExtensionsDirectory) env.KUN_BUNDLED_EXTENSIONS_DIR = bundledExtensionsDirectory
+  if (!runAsElectron) env.ELECTRON_RUN_AS_NODE = '1'
+  else delete env.ELECTRON_RUN_AS_NODE
+  return {
+    command,
+    args,
+    env,
+    dataDir,
+    runAsNode: !runAsElectron,
+    ...(expectedBuildId ? { expectedBuildId } : {})
   }
-  if (!runAsElectron) childEnv.ELECTRON_RUN_AS_NODE = '1'
-  else delete childEnv.ELECTRON_RUN_AS_NODE
-  processController.child = spawn(command, args, {
-    env: childEnv,
+}
+
+async function startKunChildOnce(
+  settings: AppSettingsV1,
+  runtime: KunRuntimeSettingsV1
+): Promise<void> {
+  if (processController.logCapture) {
+    await processController.logCapture.close()
+    processController.logCapture = null
+  }
+  const launch = await prepareKunLaunch(settings, runtime)
+  processController.child = spawn(launch.command, launch.args, {
+    env: {
+      ...launch.env,
+      KUN_RUNTIME_TOKEN: runtime.runtimeToken,
+      KUN_RUNTIME_LAUNCH_MODE: 'gui'
+    },
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: false
   })
@@ -380,7 +482,7 @@ async function startKunChildOnce(
   const startedLogCapture = createKunChildLogCapture(startedChild.pid)
   processController.logCapture = startedLogCapture
   processController.stderrTail = ''
-  startedLogCapture.logLifecycle(`spawned on port ${runtime.port} using data dir ${dataDir}`)
+  startedLogCapture.logLifecycle(`spawned on port ${runtime.port} using data dir ${launch.dataDir}`)
   startedChild.stdout?.on('data', startedLogCapture.captureStdout)
   startedChild.stderr?.on('data', (chunk: Buffer | string) => {
     processController.stderrTail = appendTail(

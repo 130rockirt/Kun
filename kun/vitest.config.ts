@@ -14,6 +14,12 @@ export default defineConfig({
     },
     include: ['tests/**/*.test.ts', 'src/**/*.test.ts'],
     globals: false,
-    ...(process.platform === 'win32' ? { maxWorkers: 2 } : {})
+    ...(process.platform === 'win32'
+      ? {
+          maxWorkers: 1,
+          testTimeout: 60_000,
+          hookTimeout: 60_000
+        }
+      : {})
   }
 })

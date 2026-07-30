@@ -74,6 +74,27 @@ describe('ModelRequestTraceStore', () => {
     expect(page.records[0].toolCatalog).toEqual(exact.toolCatalog)
     expect(page.records[1].toolCatalog).toBeUndefined()
   })
+
+  it('serves repeated latest-page reads from the tail cache and keeps it current on append', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'kun-model-traces-'))
+    cleanup.push(dataDir)
+    const store = new ModelRequestTraceStore(dataDir)
+    await store.append(record('trace-1', '2026-01-01T00:00:01.000Z'))
+
+    await expect(store.list('thread-1')).resolves.toMatchObject({
+      records: [expect.objectContaining({ id: 'trace-1' })],
+      warnings: []
+    })
+
+    const root = join(dataDir, 'observability', 'model-http')
+    const path = join(root, `${Buffer.from('thread-1').toString('base64url')}.jsonl`)
+    await appendFile(path, '{"malformed-after-cache":\n')
+    await store.append(record('trace-2', '2026-01-01T00:00:02.000Z'))
+
+    const latest = await store.list('thread-1')
+    expect(latest.records.map((item) => item.id)).toEqual(['trace-2', 'trace-1'])
+    expect(latest.warnings).not.toContain('one malformed trace record was ignored')
+  })
 })
 
 function record(

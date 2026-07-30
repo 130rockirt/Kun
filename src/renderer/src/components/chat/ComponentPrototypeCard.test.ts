@@ -47,6 +47,8 @@ vi.mock('react-i18next', () => {
     componentPrototypeDesktop: 'Desktop',
     componentPrototypeMobile: 'Mobile',
     componentPrototypeRefresh: 'Refresh prototype',
+    componentPrototypeResize: 'Resize prototype height',
+    componentPrototypeResetSize: 'Reset preview size',
     componentPrototypeCopyCode: 'Copy prototype code',
     componentPrototypeLoadFailed: 'The prototype could not be loaded.',
     componentPrototypeMainAgent: 'Kun',
@@ -120,8 +122,8 @@ describe('ComponentPrototypeCard metadata helpers', () => {
   })
 
   it('clamps desktop/mobile frames and builds follow-up prompts around the artifact', () => {
-    expect(componentPrototypeFrameSize(metadata, 'desktop')).toEqual({ width: '100%', height: 130 })
-    expect(componentPrototypeFrameSize(metadata, 'mobile')).toEqual({ width: 360, height: 338 })
+    expect(componentPrototypeFrameSize(metadata, 'desktop')).toEqual({ width: '100%', height: 520 })
+    expect(componentPrototypeFrameSize(metadata, 'mobile')).toEqual({ width: 360, height: 520 })
     expect(componentPrototypeFollowUpPrompt(metadata, 'iterate')).toContain(metadata.relativePath)
     expect(componentPrototypeFollowUpPrompt(metadata, 'adopt')).toContain('采纳')
     expect(componentPrototypeFollowUpPrompt(metadata, 'adopt', 'en')).toContain('Adopt')
@@ -131,6 +133,7 @@ describe('ComponentPrototypeCard metadata helpers', () => {
 describe('ComponentPrototypeCard interactions', () => {
   let renderer: ReactTestRenderer
   const onPrompt = vi.fn()
+  const sessionValues = new Map<string, string>()
 
   const openMenu = async (): Promise<void> => {
     await act(async () => renderer.root.findByProps({ 'aria-label': 'More' }).props.onClick())
@@ -146,8 +149,13 @@ describe('ComponentPrototypeCard interactions', () => {
     actionMocks.readWorkspaceFile.mockReset().mockResolvedValue({ ok: true, content: '<html></html>' })
     actionMocks.writeText.mockReset().mockResolvedValue(undefined)
     onPrompt.mockReset()
+    sessionValues.clear()
     vi.stubGlobal('window', {
       kunGui: { readWorkspaceFile: actionMocks.readWorkspaceFile },
+      sessionStorage: {
+        getItem: (key: string) => sessionValues.get(key) ?? null,
+        setItem: (key: string, value: string) => sessionValues.set(key, value)
+      },
       setTimeout
     })
     vi.stubGlobal('navigator', { clipboard: { writeText: actionMocks.writeText } })
@@ -168,7 +176,7 @@ describe('ComponentPrototypeCard interactions', () => {
   it('renders a centered compact surface and keeps secondary controls in one overflow menu', async () => {
     const card = renderer.root.findByProps({ 'data-component-prototype-id': metadata.artifactId })
     expect(card.props.className).toContain('mx-auto')
-    expect(card.props.className).toContain('max-w-[600px]')
+    expect(card.props.className).toContain('max-w-[900px]')
     expect(renderer.root.findByProps({ 'data-prototype-webview': true })).toBeTruthy()
     expect(renderer.root.findByType('header').props.className).toContain('h-8')
     expect(renderer.root.findByType('header').findAllByType('button')).toHaveLength(1)
@@ -187,6 +195,38 @@ describe('ComponentPrototypeCard interactions', () => {
     await act(async () => menuButton('Refresh prototype').props.onClick())
     const afterRefresh = renderer.root.findByProps({ 'data-preview-host': true })
     expect(afterRefresh).not.toBe(beforeRefresh)
+  })
+
+  it('resizes by pointer and keyboard, persists the height, and resets to the viewport default', async () => {
+    const handle = renderer.root.findByProps({ 'data-component-prototype-resize-handle': true })
+    const pointerTarget = {
+      setPointerCapture: vi.fn(),
+      releasePointerCapture: vi.fn()
+    }
+    await act(async () => handle.props.onPointerDown({
+      pointerId: 7,
+      clientY: 100,
+      currentTarget: pointerTarget,
+      preventDefault: vi.fn()
+    }))
+    await act(async () => handle.props.onPointerMove({
+      pointerId: 7,
+      clientY: 220,
+      currentTarget: pointerTarget
+    }))
+    expect(renderer.root.findAll((node) => node.props.style?.height === 640)).toHaveLength(1)
+    expect(sessionValues.get(`kun-component-prototype-height:${metadata.artifactId}`)).toBe('640')
+
+    const resizedHandle = renderer.root.findByProps({ 'data-component-prototype-resize-handle': true })
+    await act(async () => resizedHandle.props.onKeyDown({
+      key: 'ArrowDown',
+      preventDefault: vi.fn()
+    }))
+    expect(renderer.root.findAll((node) => node.props.style?.height === 672)).toHaveLength(1)
+
+    await openMenu()
+    await act(async () => menuButton('Reset preview size').props.onClick())
+    expect(renderer.root.findAll((node) => node.props.style?.height === 520)).toHaveLength(1)
   })
 
   it('copies/views code and prefills the existing composer for iterate/adopt', async () => {

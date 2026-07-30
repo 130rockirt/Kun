@@ -93,6 +93,18 @@ describe('SkillRuntime project config', () => {
     await expect(runtime.availableSkillIdsForWorkspace(workspace)).resolves.toEqual(['global'])
   })
 
+  it('returns the workspace-visible catalog used by TUI skill browsing and autocomplete', async () => {
+    await writeSkill(join(workspace, '.kun', 'skills'), 'local', 'local instructions')
+    await writeProjectConfig({ skills: {} })
+    const runtime = await createRuntime()
+
+    const diagnostics = await runtime.diagnosticsForWorkspace(workspace)
+
+    expect(diagnostics.skills.map((skill) => skill.id)).toEqual(['global', 'local'])
+    expect(diagnostics.roots).toContain(join(workspace, '.kun', 'skills', 'local'))
+    expect(diagnostics.globalRoots).toContain(join(globalRoot, 'global'))
+  })
+
   it('invalidates the workspace cache when project policy changes', async () => {
     await writeSkill(join(workspace, 'first-skills'), 'first', 'first instructions')
     await writeSkill(join(workspace, 'second-skills'), 'second', 'second instructions')
@@ -139,6 +151,30 @@ describe('SkillRuntime project config', () => {
     const runtime = await SkillRuntime.create(config.skills)
 
     await expect(runtime.availableSkillIdsForWorkspace(workspace)).resolves.toEqual(['project-only'])
+  })
+
+  it('enforces a delegated skill allow-list for discovery, activation, and load_skill', async () => {
+    await writeSkill(join(workspace, '.kun', 'skills'), 'allowed', 'allowed instructions')
+    await writeSkill(join(workspace, '.kun', 'skills'), 'later-added', 'must stay hidden')
+    const runtime = await createRuntime()
+
+    await expect(runtime.availableSkillIdsForWorkspace(
+      workspace,
+      undefined,
+      ['allowed']
+    )).resolves.toEqual(['allowed'])
+    await expect(runtime.resolveTurn({
+      prompt: '/later-added',
+      workspace,
+      allowedSkillIds: ['allowed']
+    })).resolves.toMatchObject({ activeSkillIds: [] })
+    await expect(runtime.loadSkillById(
+      'later-added',
+      workspace,
+      undefined,
+      undefined,
+      ['allowed']
+    )).resolves.toMatchObject({ error: expect.stringContaining('unknown skill id') })
   })
 
   async function createRuntime(): Promise<SkillRuntime> {

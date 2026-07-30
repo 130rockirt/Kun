@@ -54,8 +54,14 @@ test('fails closed for missing, duplicate, wrong-architecture, and non-file arti
     /exactly one/
   )
 
-  const first = join(dist, 'Kun-1.2.3-linux-x86_64.AppImage')
-  await writeFile(first, 'first')
+  const appImage = join(dist, 'Kun-1.2.3-linux-x86_64.AppImage')
+  const deb = join(dist, 'Kun-1.2.3-linux-amd64.deb')
+  await writeFile(appImage, 'appimage')
+  await assert.rejects(
+    collectNativeArtifacts({ distDirectory: dist, platform: 'linux' }),
+    /exactly one native linux artifact matching \/-linux-amd64\\\.deb\$/
+  )
+  await writeFile(deb, 'deb')
   const wrongArchitecture = join(dist, 'Kun-1.2.3-linux-arm64.AppImage')
   await writeFile(wrongArchitecture, 'wrong architecture')
   await assert.rejects(
@@ -63,7 +69,10 @@ test('fails closed for missing, duplicate, wrong-architecture, and non-file arti
     /Unexpected native linux artifact.*arm64/
   )
   await rm(wrongArchitecture)
-  assert.deepEqual(await collectNativeArtifacts({ distDirectory: dist, platform: 'linux' }), [first])
+  assert.deepEqual(
+    await collectNativeArtifacts({ distDirectory: dist, platform: 'linux' }),
+    [deb, appImage]
+  )
 
   await writeFile(join(dist, 'Kun-2.0.0-linux-x86_64.AppImage'), 'duplicate')
   await assert.rejects(
@@ -72,17 +81,17 @@ test('fails closed for missing, duplicate, wrong-architecture, and non-file arti
   )
 
   await rm(join(dist, 'Kun-2.0.0-linux-x86_64.AppImage'))
-  await rm(first)
-  await mkdir(first)
+  await rm(appImage)
+  await mkdir(appImage)
   await assert.rejects(
     collectNativeArtifacts({ distDirectory: dist, platform: 'linux' }),
     /regular file/
   )
 
-  await rm(first, { recursive: true })
+  await rm(appImage, { recursive: true })
   const target = join(dist, 'target.AppImage')
   await writeFile(target, 'target')
-  await symlink(target, first)
+  await symlink(target, appImage)
   await assert.rejects(
     collectNativeArtifacts({ distDirectory: dist, platform: 'linux' }),
     /regular file/

@@ -32,17 +32,20 @@ const PLATFORM_SPECS = {
   },
   linux: {
     updateFile: 'latest-linux.yml',
-    assetPattern: /^Kun-.+-linux-x86_64\.AppImage(\.blockmap)?$/
+    // Auto-update stays on AppImage; deb is a Debian-family installer sidecar.
+    assetPattern: /^Kun-.+-linux-(?:x86_64\.AppImage(\.blockmap)?|amd64\.deb)$/
   }
 }
 
 function usage() {
   console.log(`Usage:
   node scripts/publish-r2.mjs upload --platform mac|win|linux --tag vX.Y.Z [--channel frontier|stable] [--dry-run]
-  node scripts/publish-r2.mjs promote --tag vX.Y.Z [--channel frontier|stable] [--platforms mac,win,linux] [--dry-run]
+  node scripts/publish-r2.mjs upload-tui --tag vX.Y.Z --dist <release-directory> [--channel frontier|stable] [--dry-run]
+  node scripts/publish-r2.mjs promote --tag vX.Y.Z [--channel frontier|stable] [--platforms mac,win,linux] [--require-tui] [--dry-run]
 
 If --platforms is omitted, promote uses the platform manifests already uploaded for that tag.
 If --channel is omitted, the default channel is frontier.
+Stable and Daily CI pass --require-tui so GUI and standalone TUI latest pointers advance together.
 
 Environment:
   KUN_RELEASE_ENV=scripts/release.local.env (legacy DEEPSEEK_GUI_RELEASE_ENV is also accepted)
@@ -105,7 +108,14 @@ function readArgs(argv) {
       continue
     }
     const name = arg.slice(2)
-    if (name === 'dry-run' || name === 'help' || name === 'h' || name === 'stable' || name === 'frontier') {
+    if (
+      name === 'dry-run' ||
+      name === 'help' ||
+      name === 'h' ||
+      name === 'stable' ||
+      name === 'frontier' ||
+      name === 'require-tui'
+    ) {
       flags.set(name, true)
       continue
     }
@@ -129,10 +139,21 @@ function requireFlag(flags, name) {
 
 function normalizeTag(raw) {
   const tag = raw.trim()
-  if (!/^v\d+\.\d+\.\d+$/.test(tag)) {
-    throw new Error(`Tag must look like vX.Y.Z. electron-updater cannot use four-part versions, got: ${raw}`)
+  if (!/^v\d+\.\d+\.\d+$/.test(tag) && !/^dev-\d{8}\.\d{4}$/.test(tag)) {
+    throw new Error(`Tag must look like vX.Y.Z or dev-YYYYMMDD.HHMM, got: ${raw}`)
   }
   return tag
+}
+
+export function releaseVersionForTag(tag) {
+  if (tag.startsWith('v')) return tag.slice(1)
+  const dev = tag.match(/^dev-(\d{8})\.(\d{4})$/)
+  if (dev) return `0.0.0-dev-${dev[1]}-${dev[2]}`
+  throw new Error(`Unsupported release tag: ${tag}`)
+}
+
+export function artifactVersionForTag(tag) {
+  return tag.startsWith('v') ? tag.slice(1) : tag.slice('dev-'.length)
 }
 
 function normalizeChannel(raw) {
@@ -301,8 +322,10 @@ function contentType(fileName) {
   if (fileName.endsWith('.yml') || fileName.endsWith('.yaml')) return 'text/yaml; charset=utf-8'
   if (fileName.endsWith('.json')) return 'application/json; charset=utf-8'
   if (fileName.endsWith('.zip')) return 'application/zip'
+  if (fileName.endsWith('.tar.gz') || fileName.endsWith('.tgz')) return 'application/gzip'
   if (fileName.endsWith('.dmg')) return 'application/x-apple-diskimage'
   if (fileName.endsWith('.exe')) return 'application/vnd.microsoft.portable-executable'
+  if (fileName.endsWith('.deb')) return 'application/vnd.debian.binary-package'
   return 'application/octet-stream'
 }
 
@@ -310,7 +333,7 @@ function cacheControlFor(key) {
   if (/\/latest\/latest(?:-[\w]+)?\.(?:json|yml)$/.test(key)) {
     return 'public, max-age=60, must-revalidate'
   }
-  if (/\/latest\/.+\.(?:dmg|zip|exe|AppImage|blockmap)$/.test(key)) {
+  if (/\/latest\/.+\.(?:dmg|zip|exe|AppImage|deb|blockmap)$/.test(key)) {
     return 'public, max-age=31536000, immutable'
   }
   return 'public, max-age=31536000, immutable'
@@ -319,13 +342,15 @@ function cacheControlFor(key) {
 function classifyDownload(fileName, platform) {
   const extension = fileName.endsWith('.AppImage')
     ? 'AppImage'
-    : fileName.endsWith('.dmg')
-      ? 'dmg'
-      : fileName.endsWith('.zip')
-        ? 'zip'
-        : fileName.endsWith('.exe')
-          ? 'exe'
-          : 'bin'
+    : fileName.endsWith('.deb')
+      ? 'deb'
+      : fileName.endsWith('.dmg')
+        ? 'dmg'
+        : fileName.endsWith('.zip')
+          ? 'zip'
+          : fileName.endsWith('.exe')
+            ? 'exe'
+            : 'bin'
 
   if (platform === 'mac') {
     const arch = fileName.includes('-arm64.') ? 'arm64' : 'x64'
@@ -339,7 +364,24 @@ function classifyDownload(fileName, platform) {
   if (platform === 'win') {
     return { platform, arch: 'x64', format: extension, label: 'Windows x64 installer' }
   }
+  if (extension === 'deb') {
+    return { platform, arch: 'x64', format: extension, label: 'Linux x64 deb' }
+  }
   return { platform, arch: 'x64', format: extension, label: 'Linux x64 AppImage' }
+}
+
+export function collectRequiredSidecarAssets({ entries, platform, tagVersion }) {
+  if (platform !== 'linux') return []
+
+  const expected = `Kun-${tagVersion}-linux-amd64.deb`
+  const candidates = entries.filter((name) => /^Kun-.+-linux-amd64\.deb$/.test(name)).sort()
+  if (candidates.length !== 1 || candidates[0] !== expected) {
+    throw new Error(
+      `Expected exactly one Linux deb sidecar named ${expected}, ` +
+      `found ${candidates.length}: ${candidates.join(', ') || '(none)'}`
+    )
+  }
+  return candidates
 }
 
 async function collectPlatformRelease({ distDir, platform, tag, channel, config }) {
@@ -350,14 +392,19 @@ async function collectPlatformRelease({ distDir, platform, tag, channel, config 
   const updatePath = join(distDir, spec.updateFile)
   const updateText = await readFile(updatePath, 'utf8')
   const updateMetadata = parseUpdateYml(updateText)
-  const tagVersion = tag.slice(1)
-  if (updateMetadata.version !== tagVersion) {
+  const releaseVersion = releaseVersionForTag(tag)
+  if (updateMetadata.version !== releaseVersion) {
     throw new Error(
-      `${spec.updateFile} version ${updateMetadata.version} does not match ${tag}. Rebuild with KUN_APP_VERSION=${tagVersion} (legacy DEEPSEEK_GUI_APP_VERSION is also accepted).`
+      `${spec.updateFile} version ${updateMetadata.version} does not match ${tag}. Rebuild with KUN_APP_VERSION=${releaseVersion} (legacy DEEPSEEK_GUI_APP_VERSION is also accepted).`
     )
   }
 
   const referenced = new Set(updateMetadata.files.map((file) => basename(file.url)))
+  const sidecarAssets = collectRequiredSidecarAssets({
+    entries,
+    platform,
+    tagVersion: artifactVersionForTag(tag)
+  })
   const assets = entries.filter((name) => spec.assetPattern.test(name))
   for (const name of referenced) {
     if (!entries.includes(name)) {
@@ -386,12 +433,13 @@ async function collectPlatformRelease({ distDir, platform, tag, channel, config 
       sha512,
       contentType: contentType(fileName),
       updateMetadata: fileName === spec.updateFile,
-      downloadable: downloadByName.has(fileName)
+      // deb is outside electron-updater metadata but is still a public installer.
+      downloadable: downloadByName.has(fileName) || fileName.endsWith('.deb')
     })
   }
 
   const filesByName = new Map(files.map((file) => [file.fileName, file]))
-  const downloads = updateMetadata.files.map((file) => {
+  const updateDownloads = updateMetadata.files.map((file) => {
     const fileName = basename(file.url)
     const local = filesByName.get(fileName)
     if (!local) throw new Error(`Missing collected file: ${fileName}`)
@@ -406,6 +454,23 @@ async function collectPlatformRelease({ distDir, platform, tag, channel, config 
       latestUrl: joinUrl(config.publicBaseUrl, config.prefix, 'channels', channel, 'latest', fileName)
     }
   })
+  const sidecarDownloads = sidecarAssets
+    .filter((fileName) => !downloadByName.has(fileName))
+    .sort()
+    .map((fileName) => {
+      const local = filesByName.get(fileName)
+      if (!local) throw new Error(`Missing collected file: ${fileName}`)
+      return {
+        ...classifyDownload(fileName, platform),
+        fileName,
+        size: local.size,
+        sha256: local.sha256,
+        sha512: local.sha512,
+        archiveUrl: joinUrl(config.publicBaseUrl, config.prefix, 'channels', channel, 'releases', tag, fileName),
+        latestUrl: joinUrl(config.publicBaseUrl, config.prefix, 'channels', channel, 'latest', fileName)
+      }
+    })
+  const downloads = [...updateDownloads, ...sidecarDownloads]
 
   return {
     schemaVersion: 1,
@@ -424,6 +489,85 @@ async function collectPlatformRelease({ distDir, platform, tag, channel, config 
     files,
     downloads
   }
+}
+
+export async function collectTuiRelease({ distDir, tag, channel, config }) {
+  const manifestPath = join(distDir, 'release-tui.json')
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
+  const expectedVersion = releaseVersionForTag(tag)
+  if (
+    manifest?.schemaVersion !== 1 ||
+    manifest?.component !== 'tui' ||
+    manifest?.tag !== tag ||
+    manifest?.channel !== channel ||
+    manifest?.version !== expectedVersion ||
+    manifest?.artifactVersion !== artifactVersionForTag(tag) ||
+    typeof manifest?.buildId !== 'string' ||
+    !/^[a-f0-9]{64}$/.test(manifest.buildId) ||
+    typeof manifest?.commit !== 'string' ||
+    !/^[a-f0-9]{40}$/.test(manifest.commit) ||
+    !Array.isArray(manifest?.artifacts) ||
+    manifest.artifacts.length !== 4
+  ) {
+    throw new Error('release-tui.json does not match the requested release')
+  }
+  const expectedTargets = new Set(['darwin-arm64', 'darwin-x64', 'linux-x64', 'win32-x64'])
+  const expectedNames = new Map([
+    ['darwin-arm64', `Kun-TUI-${artifactVersionForTag(tag)}-mac-arm64.tar.gz`],
+    ['darwin-x64', `Kun-TUI-${artifactVersionForTag(tag)}-mac-x64.tar.gz`],
+    ['linux-x64', `Kun-TUI-${artifactVersionForTag(tag)}-linux-x64.tar.gz`],
+    ['win32-x64', `Kun-TUI-${artifactVersionForTag(tag)}-win-x64.zip`]
+  ])
+  const files = []
+  for (const artifact of manifest.artifacts) {
+    if (!expectedTargets.delete(artifact.target)) {
+      throw new Error(`Unexpected or duplicate TUI target: ${artifact.target}`)
+    }
+    if (
+      typeof artifact.fileName !== 'string' ||
+      artifact.fileName !== expectedNames.get(artifact.target) ||
+      basename(artifact.fileName) !== artifact.fileName ||
+      !/^Kun-TUI-.+\.(?:tar\.gz|zip)$/.test(artifact.fileName) ||
+      artifact.nodeVersion !== '22.23.1' ||
+      typeof artifact.sha256 !== 'string' ||
+      !/^[a-f0-9]{64}$/.test(artifact.sha256)
+    ) {
+      throw new Error(`Invalid TUI artifact entry: ${artifact.target}`)
+    }
+    const path = join(distDir, artifact.fileName)
+    const info = await stat(path)
+    if (!info.isFile() || info.size !== artifact.size) {
+      throw new Error(`TUI artifact size mismatch: ${artifact.fileName}`)
+    }
+    const sha256 = await hashFile(path, 'sha256', 'hex')
+    if (sha256 !== artifact.sha256) {
+      throw new Error(`TUI artifact SHA-256 mismatch: ${artifact.fileName}`)
+    }
+    files.push({
+      fileName: artifact.fileName,
+      path,
+      key: `${channelBasePath(config.prefix, channel)}/releases/${tag}/${artifact.fileName}`,
+      size: info.size,
+      sha256,
+      contentType: contentType(artifact.fileName)
+    })
+  }
+  if (expectedTargets.size) {
+    throw new Error(`Missing TUI targets: ${[...expectedTargets].join(', ')}`)
+  }
+  for (const ancillary of ['release-tui.json', 'SHA256SUMS-tui.txt']) {
+    const path = join(distDir, ancillary)
+    const info = await stat(path)
+    files.push({
+      fileName: ancillary,
+      path,
+      key: `${channelBasePath(config.prefix, channel)}/releases/${tag}/${ancillary}`,
+      size: info.size,
+      sha256: await hashFile(path, 'sha256', 'hex'),
+      contentType: contentType(ancillary)
+    })
+  }
+  return { manifest, files }
 }
 
 async function putObject({ config, key, body, contentType: type, cacheControl, contentLength, dryRun }) {
@@ -515,6 +659,31 @@ async function uploadPlatform({ flags, dryRun }) {
   console.log(`  release-${platform}.json`)
 }
 
+async function uploadTui({ flags, dryRun }) {
+  const tag = normalizeTag(requireFlag(flags, 'tag'))
+  const channel = readChannel(flags)
+  const distDir = resolve(flags.get('dist') || 'dist')
+  const config = readConfig({ dryRun })
+  const release = await collectTuiRelease({ distDir, tag, channel, config })
+  console.log(`Uploading Kun ${release.manifest.version} standalone TUI assets to R2 ${channel} archive ${tag}`)
+  const uploadConcurrency = positiveInt(
+    process.env.R2_UPLOAD_CONCURRENCY || process.env.RELEASE_UPLOAD_CONCURRENCY,
+    4
+  )
+  await runConcurrently(release.files, uploadConcurrency, async (file) => {
+    await putObject({
+      config,
+      key: file.key,
+      body: createReadStream(file.path),
+      contentType: file.contentType,
+      cacheControl: 'public, max-age=31536000, immutable',
+      contentLength: file.size,
+      dryRun
+    })
+    console.log(`  ${file.fileName}`)
+  })
+}
+
 async function listReleaseKeys(config, tag, channel) {
   const prefix = `${channelBasePath(config.prefix, channel)}/releases/${tag}/`
   const keys = []
@@ -539,6 +708,69 @@ async function getJson(config, key) {
   const res = await config.client.send(new GetObjectCommand({ Bucket: config.bucket, Key: key }))
   const text = await res.Body.transformToString()
   return JSON.parse(text)
+}
+
+export function validatePromotionContract({
+  tag,
+  channel,
+  platforms,
+  platformManifests,
+  tuiManifest,
+  requireTui
+}) {
+  const expectedVersion = releaseVersionForTag(tag)
+  const platformSet = new Set(platforms)
+  if (
+    requireTui &&
+    (
+      platformSet.size !== PLATFORMS.length ||
+      PLATFORMS.some((platform) => !platformSet.has(platform))
+    )
+  ) {
+    throw new Error('Joint GUI/TUI promotion requires mac, win, and linux platform manifests')
+  }
+  const manifestPlatforms = new Set()
+  for (const manifest of platformManifests) {
+    if (
+      manifest?.version !== expectedVersion ||
+      manifest?.tag !== tag ||
+      manifest?.channel !== channel ||
+      !PLATFORMS.includes(manifest?.platform) ||
+      manifestPlatforms.has(manifest.platform) ||
+      !Array.isArray(manifest?.files) ||
+      !Array.isArray(manifest?.downloads)
+    ) {
+      throw new Error('GUI platform manifest is incompatible with the requested release')
+    }
+    manifestPlatforms.add(manifest.platform)
+  }
+  if (manifestPlatforms.size !== platformSet.size ||
+      [...platformSet].some((platform) => !manifestPlatforms.has(platform))) {
+    throw new Error('GUI platform manifests do not match the requested promotion targets')
+  }
+  if (tuiManifest) {
+    const expectedTuiTargets = new Set([
+      'darwin-arm64',
+      'darwin-x64',
+      'linux-x64',
+      'win32-x64'
+    ])
+    if (
+      tuiManifest.version !== expectedVersion ||
+      tuiManifest.tag !== tag ||
+      tuiManifest.channel !== channel ||
+      !/^[a-f0-9]{64}$/.test(tuiManifest.buildId) ||
+      !Array.isArray(tuiManifest.artifacts) ||
+      tuiManifest.artifacts.length !== expectedTuiTargets.size ||
+      tuiManifest.artifacts.some((artifact) => !expectedTuiTargets.delete(artifact?.target)) ||
+      expectedTuiTargets.size !== 0
+    ) {
+      throw new Error('Standalone TUI manifest is incompatible with the GUI release')
+    }
+  } else if (requireTui) {
+    throw new Error('Joint GUI/TUI promotion requires a standalone TUI manifest')
+  }
+  return expectedVersion
 }
 
 async function promoteRelease({ flags, dryRun }) {
@@ -577,7 +809,22 @@ async function promoteRelease({ flags, dryRun }) {
     }
     platformManifests.push(await getJson(config, key))
   }
-
+  const tuiManifestKey = `${channelBasePath(config.prefix, channel)}/releases/${tag}/release-tui.json`
+  const requireTui = flags.has('require-tui')
+  if (requireTui && !releaseKeys.includes(tuiManifestKey)) {
+    throw new Error(`Missing ${tuiManifestKey}. Upload the standalone TUI bundle before promotion.`)
+  }
+  const tuiManifest = releaseKeys.includes(tuiManifestKey)
+    ? await getJson(config, tuiManifestKey)
+    : null
+  const version = validatePromotionContract({
+    tag,
+    channel,
+    platforms,
+    platformManifests,
+    tuiManifest,
+    requireTui
+  })
   const allFiles = new Map()
   for (const manifest of platformManifests) {
     for (const file of manifest.files) {
@@ -606,11 +853,6 @@ async function promoteRelease({ flags, dryRun }) {
     }
   }
 
-  const versions = new Set(platformManifests.map((manifest) => manifest.version))
-  if (versions.size > 1) {
-    throw new Error(`Cannot promote mixed versions: ${Array.from(versions).join(', ')}`)
-  }
-  const version = platformManifests[0].version
   const releaseDates = platformManifests
     .map((manifest) => manifest.releaseDate)
     .filter(Boolean)
@@ -644,7 +886,29 @@ async function promoteRelease({ flags, dryRun }) {
           }
         ])
       ),
-      downloads
+      downloads,
+      components: {
+        gui: {
+          version,
+          platforms: platformManifests.map((manifest) => manifest.platform),
+          downloads
+        },
+        ...(tuiManifest
+          ? {
+              tui: {
+                version: tuiManifest.version,
+                buildId: tuiManifest.buildId,
+                manifestUrl: joinUrl(
+                  config.publicBaseUrl,
+                  target.basePath,
+                  'latest',
+                  'latest-tui.json'
+                ),
+                downloads: tuiManifest.artifacts
+              }
+            }
+          : {})
+      }
     }
 
     const latestKey = `${target.basePath}/latest/latest.json`
@@ -657,6 +921,34 @@ async function promoteRelease({ flags, dryRun }) {
       dryRun
     })
     console.log(`  ${target.label}/latest.json`)
+    if (tuiManifest) {
+      const latestTuiManifest = {
+        ...tuiManifest,
+        generatedAt: new Date().toISOString(),
+        artifacts: tuiManifest.artifacts.map((artifact) => ({
+          ...artifact,
+          url: joinUrl(
+            config.publicBaseUrl,
+            config.prefix,
+            'channels',
+            channel,
+            'releases',
+            tag,
+            artifact.fileName
+          )
+        }))
+      }
+      const latestTuiKey = `${target.basePath}/latest/latest-tui.json`
+      await putObject({
+        config,
+        key: latestTuiKey,
+        body: JSON.stringify(latestTuiManifest, null, 2),
+        contentType: 'application/json; charset=utf-8',
+        cacheControl: 'public, max-age=60, must-revalidate',
+        dryRun
+      })
+      console.log(`  ${target.label}/latest-tui.json`)
+    }
     console.log(`Latest manifest: ${joinUrl(config.publicBaseUrl, target.basePath, 'latest', 'latest.json')}`)
   }
 }
@@ -673,6 +965,10 @@ async function main() {
     await uploadPlatform({ flags, dryRun })
     return
   }
+  if (command === 'upload-tui') {
+    await uploadTui({ flags, dryRun })
+    return
+  }
   if (command === 'promote') {
     await promoteRelease({ flags, dryRun })
     return
@@ -680,7 +976,9 @@ async function main() {
   throw new Error(`Unknown command: ${command}`)
 }
 
-main().catch((error) => {
-  console.error(`[publish-r2] ${error instanceof Error ? error.message : String(error)}`)
-  process.exitCode = 1
-})
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    console.error(`[publish-r2] ${error instanceof Error ? error.message : String(error)}`)
+    process.exitCode = 1
+  })
+}

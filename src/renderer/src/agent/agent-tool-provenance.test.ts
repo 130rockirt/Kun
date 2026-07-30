@@ -35,6 +35,9 @@ describe('Agent Perspective tool provenance', () => {
     expect(resolveToolProvenance('read', undefined)).toMatchObject({
       source: 'kun', category: 'kun-core', inferred: true
     })
+    expect(resolveToolProvenance('git_inspect', undefined)).toMatchObject({
+      source: 'kun', category: 'kun-core', inferred: true
+    })
     expect(resolveToolProvenance('design_svg_edit', undefined)).toMatchObject({
       source: 'kun', category: 'kun-gui', inferred: true
     })

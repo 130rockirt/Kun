@@ -3,7 +3,8 @@ import { act, create, type ReactTestInstance, type ReactTestRenderer } from 'rea
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ToolBlock } from '../../agent/types'
 import i18n from '../../i18n'
-import { TurnChangeSummary } from './message-timeline-cards'
+import { PlanBuildActions } from '../plan/PlanBuildActions'
+import { ReviewPlanCard, TurnChangeSummary } from './message-timeline-cards'
 
 function change(index: number): ToolBlock {
   const path = `src/file-${index}.ts`
@@ -76,6 +77,70 @@ describe('TurnChangeSummary', () => {
     expect(onReviewChanges).toHaveBeenCalledTimes(1)
     expect(renderer!.root.findAllByProps({ 'data-turn-change-file': true })).toHaveLength(5)
     expect(buttonWithText(renderer!, 'Show fewer files')).toBeTruthy()
+
+    act(() => renderer!.unmount())
+  })
+})
+
+describe('plan build actions', () => {
+  beforeEach(async () => {
+    await i18n.changeLanguage('en')
+  })
+
+  it('renders responsive Direct and Graph actions and reports the selected orchestration', async () => {
+    const onBuild = vi.fn()
+    let renderer: ReactTestRenderer
+
+    await act(async () => {
+      renderer = create(createElement(ReviewPlanCard, {
+        title: 'Checkout plan',
+        relativePath: '.kunsdd/plan/checkout.md',
+        busy: false,
+        graphEnabled: true,
+        onOpen: vi.fn(),
+        onBuild
+      }))
+    })
+
+    const card = renderer!.root.findByProps({ 'data-review-plan-card': true })
+    const actions = renderer!.root.findByProps({ 'data-plan-build-actions-variant': 'card' })
+    expect(card.props.className).toContain('flex-wrap')
+    expect(actions.props.className).toContain('flex-wrap')
+
+    const direct = renderer!.root.findByProps({ 'data-plan-build-orchestration': 'direct' })
+    const graph = renderer!.root.findByProps({ 'data-plan-build-orchestration': 'graph' })
+    expect(direct.props.disabled).toBe(false)
+    expect(graph.props.disabled).toBe(false)
+    expect(direct.props['aria-label']).toBe('Direct build')
+    expect(graph.props['aria-label']).toBe('Graph build')
+
+    await act(async () => {
+      direct.props.onClick()
+      graph.props.onClick()
+    })
+    expect(onBuild.mock.calls).toEqual([['direct'], ['graph']])
+
+    act(() => renderer!.unmount())
+  })
+
+  it('hides Graph when Graph Mode is unavailable', async () => {
+    let renderer: ReactTestRenderer
+
+    await act(async () => {
+      renderer = create(createElement(PlanBuildActions, {
+        disabled: false,
+        graphEnabled: false,
+        variant: 'panel',
+        onBuild: vi.fn()
+      }))
+    })
+
+    const actions = renderer!.root.findByProps({ 'data-plan-build-actions-variant': 'panel' })
+    const direct = renderer!.root.findByProps({ 'data-plan-build-orchestration': 'direct' })
+    const graph = renderer!.root.findAllByProps({ 'data-plan-build-orchestration': 'graph' })
+    expect(actions.props.className).toContain('grid-cols-1')
+    expect(direct.props.disabled).toBe(false)
+    expect(graph).toHaveLength(0)
 
     act(() => renderer!.unmount())
   })

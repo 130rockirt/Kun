@@ -27,6 +27,7 @@ import { readBrowserStorageItem, writeBrowserStorageItem } from '../lib/browser-
 const COMPOSER_MODEL_STORAGE_KEY = 'kun.composerModel'
 const COMPOSER_PROVIDER_STORAGE_KEY = 'kun.composerProviderId'
 const COMPOSER_REASONING_EFFORT_STORAGE_KEY = 'kun.composerReasoningEffortByModel.v1'
+const COMPOSER_FAST_MODE_STORAGE_KEY = 'kun.composerFastMode.v1'
 const THREAD_COMPOSER_SELECTION_STORAGE_KEY = 'kun.threadComposerSelection.v1'
 const THREAD_COMPOSER_MODE_STORAGE_KEY = 'kun.threadComposerMode.v1'
 const COMPOSER_MODE_STORAGE_KEY = 'kun.composerMode'
@@ -113,6 +114,14 @@ export function persistComposerReasoningEffort(
     COMPOSER_REASONING_EFFORT_STORAGE_KEY,
     JSON.stringify(Object.fromEntries(Object.entries(map).slice(-MAX_COMPOSER_REASONING_EFFORTS)))
   )
+}
+
+export function readStoredComposerFastMode(): boolean {
+  return readBrowserStorageItem(COMPOSER_FAST_MODE_STORAGE_KEY) === 'true'
+}
+
+export function persistComposerFastMode(enabled: boolean): void {
+  writeBrowserStorageItem(COMPOSER_FAST_MODE_STORAGE_KEY, enabled ? 'true' : 'false')
 }
 
 export function composerReasoningEffortForSelection(

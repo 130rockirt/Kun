@@ -95,6 +95,7 @@ import {
   writeWorkspaceForThreadId
 } from '../write/write-thread-registry'
 import { useWriteWorkspaceStore } from '../write/write-workspace-store'
+import { useGraphStore } from '../graph/graph-store'
 import {
   clearBusyWatchdog,
   resetBusyRecoveryAttempts,
@@ -120,6 +121,7 @@ import {
   runtimeStreamRecoveringMessage,
   shouldOpenSettingsForError,
   syncTurnCompletionPoll,
+  turnCompleteNotificationSource,
   watchTurnCompletionNotification
 } from './chat-store-runtime'
 import {
@@ -146,7 +148,11 @@ function hasRuntimeUserBlockForGuidance(
       .filter((text): text is string => Boolean(text))
   )
   return blocks.some((block) => {
-    if (block.kind !== 'user' || block.id.startsWith('q-')) return false
+    if (
+      block.kind !== 'user' ||
+      block.id.startsWith('q-') ||
+      block.id.startsWith('graph-steering-')
+    ) return false
     const blockTurnId = block.turnId?.trim() || block.meta?.turnId?.trim()
     if (blockTurnId !== turnId) return false
     const blockTexts = [block.text, block.meta?.displayText]
@@ -171,6 +177,12 @@ type StoreActionContext = {
 let drainingQueuedMessages = false
 const guidingQueuedMessageIds = new Set<string>()
 const checkpointGitAvailability = new GitCheckpointAvailabilityCache()
+
+function createWorkspaceCheckpointRequestId(): string {
+  const random = globalThis.crypto?.randomUUID?.() ??
+    `${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`
+  return `gcp_${Date.now()}_${random}`
+}
 
 function localConversationErrorBlock(error: unknown, id: string): Extract<ChatBlock, { kind: 'system' }> {
   const view = describeRuntimeError(error)
@@ -246,7 +258,7 @@ export function createThreadActions(
   createThread: async (options = {}) => {
     if (get().runtimeConnection !== 'ready') {
       set({ error: i18n.t('common:runtimeActionNeedsConnection') })
-      return
+      return null
     }
     try {
       const p = getProvider()
@@ -273,14 +285,14 @@ export function createThreadActions(
       if (options.conversation) {
         if (typeof window.kunGui === 'undefined' || typeof window.kunGui.createConversationWorkspace !== 'function') {
           set({ error: i18n.t('common:workspacePickerUnavailable') })
-          return
+          return null
         }
         const created = await window.kunGui.createConversationWorkspace(
           settings.conversationWorkspaceRoot || undefined
         )
         if (!created.ok || !created.path) {
           set({ error: created.error || i18n.t('common:worktreeAcquireFailed') })
-          return
+          return null
         }
         const t = await p.createThread({
           workspace: created.path,
@@ -307,7 +319,7 @@ export function createThreadActions(
         }))
         await get().selectThread(t.id)
         await get().refreshThreads()
-        return
+        return t.id
       }
 
       let workspaceRoot =
@@ -318,12 +330,12 @@ export function createThreadActions(
         normalizeWorkspaceRoot(settings.workspaceRoot)
       if (!workspaceRoot) {
         await get().chooseWorkspace({ createThreadAfter: true })
-        return
+        return null
       }
       if (!(await workspaceDirectoryExists(workspaceRoot))) {
         set({ error: workspaceMissingError() })
         await showWorkspaceMissingDialog(workspaceRoot)
-        return
+        return null
       }
       const codeWorkspaceRoots = rememberCodeWorkspaceRoots(get().codeWorkspaceRoots, [workspaceRoot])
       set({ codeWorkspaceRoots })
@@ -364,7 +376,7 @@ export function createThreadActions(
               : {})
           })
         }
-        return
+        return reusableThreadId
       }
       // Worktree mode: checkout the selected branch into an isolated worktree
       // and bind the new thread to that workspace.
@@ -391,7 +403,7 @@ export function createThreadActions(
           workspaceRoot = wt.worktreePath
         } catch (err) {
           set({ error: err instanceof Error ? err.message : i18n.t('common:worktreeAcquireFailed') })
-          return
+          return null
         }
       }
       // Primary-agent persona snapshot: bind this thread to the picked
@@ -439,6 +451,7 @@ export function createThreadActions(
         )
       }
       await get().refreshThreads()
+      return t.id
     } catch (e) {
       set({
         error: formatRuntimeError(e),
@@ -446,6 +459,7 @@ export function createThreadActions(
           ? { route: 'settings' as const, settingsSection: 'agents' as const }
           : {})
       })
+      return null
     }
   },
 
@@ -468,6 +482,7 @@ export function createThreadActions(
         latestSeq,
         threadStatus,
         latestTurnId,
+        latestTurnOrchestration,
         latestUserMessageId,
         turnDurationByUserId = {},
         goal,
@@ -504,6 +519,7 @@ export function createThreadActions(
         error: busy ? runtimeStreamRecoveringMessage() : null,
         busy,
         currentTurnId,
+        currentTurnOrchestration: busy ? latestTurnOrchestration ?? 'direct' : null,
         currentTurnUserId,
         turnDurationByUserId,
         queuedMessages
@@ -540,14 +556,19 @@ export function createThreadActions(
       set({ error: i18n.t('common:runtimeActionNeedsConnection') })
       return
     }
-    const prevId = get().activeThreadId
-    const prevBusy = get().busy
+    const previousState = get()
+    const prevId = previousState.activeThreadId
+    const prevBusy = previousState.busy
     let nextWatch = { ...get().watchTurnCompletion }
     delete nextWatch[id]
     clearWatchedCompletionNotification(id)
     if (prevId && prevId !== id && prevBusy) {
       nextWatch[prevId] = true
-      watchTurnCompletionNotification(prevId)
+      watchTurnCompletionNotification(
+        prevId,
+        Date.now(),
+        turnCompleteNotificationSource(prevId, previousState)
+      )
     }
     const nextUnread = { ...get().unreadThreadIds }
     delete nextUnread[id]
@@ -564,6 +585,7 @@ export function createThreadActions(
         latestSeq,
         threadStatus,
         latestTurnId,
+        latestTurnOrchestration,
         latestUserMessageId,
         turnDurationByUserId = {},
         usage: threadUsage,
@@ -620,6 +642,7 @@ export function createThreadActions(
         error: null,
         busy,
         currentTurnId: busy ? latestTurnId ?? null : null,
+        currentTurnOrchestration: busy ? latestTurnOrchestration ?? 'direct' : null,
         currentTurnUserId,
         turnStartedAtByUserId: {},
         turnDurationByUserId,
@@ -700,6 +723,8 @@ export function createThreadActions(
       unreadThreadIds: { ...prevState.unreadThreadIds, [targetThreadId]: false },
       busy: true,
       currentTurnId: null,
+      currentTurnOrchestration:
+        keepExistingBlocks && prevState.busy ? prevState.currentTurnOrchestration : null,
       currentTurnUserId: null,
       turnStartedAtByUserId: {},
       turnDurationByUserId: {},
@@ -724,6 +749,7 @@ export function createThreadActions(
         latestSeq,
         threadStatus,
         latestTurnId,
+        latestTurnOrchestration,
         latestUserMessageId,
         turnDurationByUserId = {},
         goal,
@@ -752,6 +778,7 @@ export function createThreadActions(
         lastSeq: Math.max(latestSeq, s.lastSeq),
         busy,
         currentTurnId: busy ? latestTurnId ?? null : null,
+        currentTurnOrchestration: busy ? latestTurnOrchestration ?? 'direct' : null,
         currentTurnUserId,
         turnDurationByUserId,
         queuedMessages
@@ -976,23 +1003,137 @@ export function createThreadActions(
     }
     const hasPendingActiveTurn = threadHasPendingRuntimeWork(get().blocks)
     if (get().busy || hasPendingActiveTurn) {
+      const state = get()
+      const graphGuidanceIsTextOnly = !(
+        overrides?.attachmentIds?.length ||
+        overrides?.attachments?.length ||
+        overrides?.fileReferences?.length ||
+        overrides?.composerContexts?.length ||
+        overrides?.guiPlan ||
+        overrides?.guiDesignArtifact ||
+        overrides?.guiDesignCanvas ||
+        overrides?.guiDesignMode ||
+        writeContext
+      )
+      if (
+        state.route === 'chat' &&
+        state.currentTurnOrchestration === 'graph' &&
+        state.activeThreadId &&
+        state.currentTurnId &&
+        graphGuidanceIsTextOnly
+      ) {
+        const graphThreadId = state.activeThreadId
+        const graphTurnId = state.currentTurnId
+        const guidanceDisplayText = overrides?.displayText?.trim() || trimmedText
+        const guidanceMessage = {
+          text: trimmedText,
+          ...(guidanceDisplayText !== trimmedText
+            ? { displayText: guidanceDisplayText }
+            : {})
+        }
+        const graphTurnIsStillActive = (current: ChatState): boolean =>
+          current.activeThreadId === graphThreadId &&
+          current.currentTurnId === graphTurnId &&
+          current.currentTurnOrchestration === 'graph'
+        const setGraphGuidanceError = (error: unknown): void => {
+          set((current) => graphTurnIsStillActive(current)
+            ? {
+                error: i18n.t('common:guideQueuedMessageFailed', {
+                  message: formatRuntimeError(error)
+                })
+              }
+            : {})
+        }
+        const appendGraphGuidance = (
+          requestStartedAt: number,
+          requestCompletedAt: number
+        ): void => {
+          set((current) => {
+            if (!graphTurnIsStillActive(current)) return {}
+            if (hasRuntimeUserBlockForGuidance(
+              current.blocks,
+              guidanceMessage,
+              graphTurnId,
+              requestStartedAt,
+              requestCompletedAt
+            )) {
+              return { error: null }
+            }
+            return {
+              blocks: [
+                ...current.blocks,
+                {
+                  kind: 'user' as const,
+                  id: `graph-steering-${requestCompletedAt}`,
+                  turnId: graphTurnId,
+                  createdAt: new Date(requestCompletedAt).toISOString(),
+                  text: guidanceDisplayText,
+                  ...(guidanceDisplayText !== trimmedText
+                    ? { meta: { displayText: guidanceDisplayText } }
+                    : {})
+                }
+              ],
+              error: null
+            }
+          })
+        }
+        const graphSteerStartedAt = Date.now()
+        try {
+          const steered = await useGraphStore.getState().steerSourceTurn(
+            graphThreadId,
+            graphTurnId,
+            trimmedText
+          )
+          if (steered) {
+            appendGraphGuidance(graphSteerStartedAt, Date.now())
+            return true
+          }
+        } catch (error) {
+          setGraphGuidanceError(error)
+          return false
+        }
+        if (!graphTurnIsStillActive(get())) return false
+        // Before graph_create_run commits there is no GraphRun endpoint to
+        // steer. A recoverably suspended planning slice is still the same
+        // running Graph source turn, so wake it through the generic turn
+        // steering route instead of snapshotting "continue" as a new Direct
+        // turn that can never regain the draft's Graph ownership.
+        if (typeof p.steerUserMessage === 'function') {
+          const turnSteerStartedAt = Date.now()
+          try {
+            await p.steerUserMessage(
+              graphThreadId,
+              graphTurnId,
+              trimmedText,
+              guidanceMessage.displayText
+                ? { displayText: guidanceMessage.displayText }
+                : undefined
+            )
+            appendGraphGuidance(turnSteerStartedAt, Date.now())
+            return true
+          } catch (error) {
+            setGraphGuidanceError(error)
+            return false
+          }
+        }
+      }
       if (overrides?.guiPlan || writeContext) {
         set({ error: i18n.t('common:composerQueuePlaceholder') })
         return false
       }
       const now = Date.now()
-      const activeThreadId = get().activeThreadId
+      const activeThreadId = state.activeThreadId
       const threadSnap = activeThreadId
-        ? get().threads.find((thread) => thread.id === activeThreadId)
+        ? state.threads.find((thread) => thread.id === activeThreadId)
         : undefined
-      const clawModel = activeClawChannel(get())?.model
+      const clawModel = activeClawChannel(state)?.model
       const overrideModel = overrides?.model?.trim()
       const composerModel =
-        overrideModel ?? (get().route === 'claw' && clawModel ? clawModel : get().composerModel.trim())
+        overrideModel ?? (state.route === 'claw' && clawModel ? clawModel : state.composerModel.trim())
       const composerProviderId =
-        overrides?.providerId?.trim() || fallbackComposerProviderIdForSend(get())
+        overrides?.providerId?.trim() || fallbackComposerProviderIdForSend(state)
       const composerAccountId = overrides?.accountId?.trim() || accountIdForComposerSelection(
-        get().composerModelGroups,
+        state.composerModelGroups,
         composerProviderId,
         composerModel
       )
@@ -1000,6 +1141,7 @@ export function createThreadActions(
         overrides?.modelLabel ?? optimisticUserModelLabel(composerModel, threadSnap?.model)
       const displayText = overrides?.displayText?.trim()
       const reasoningEffort = overrides?.reasoningEffort?.trim()
+      const serviceTier = overrides?.serviceTier === 'priority' ? 'priority' as const : undefined
       const attachmentIds = overrides?.attachmentIds?.filter((id) => id.trim().length > 0)
       const attachments = overrides?.attachments?.filter((attachment) => attachment.id.trim().length > 0)
       const fileReferences = overrides?.fileReferences?.filter((reference) =>
@@ -1007,9 +1149,13 @@ export function createThreadActions(
         reference.relativePath.trim().length > 0 &&
         reference.name.trim().length > 0
       )
-      const composerContexts = get().route === 'chat'
-        ? overrides?.composerContexts ?? pendingComposerContexts(get())
+      const composerContexts = state.route === 'chat'
+        ? overrides?.composerContexts ?? pendingComposerContexts(state)
         : []
+      const orchestration = overrides?.orchestration ??
+        (mode === 'agent' && state.route === 'chat' && state.graphEnabled
+          ? state.composerOrchestration
+          : 'direct')
       set((s) => ({
         queuedMessages: [
           ...s.queuedMessages,
@@ -1019,11 +1165,13 @@ export function createThreadActions(
             deliveryState: 'pending' as const,
             ...(displayText ? { displayText } : {}),
             ...(mode ? { mode } : {}),
+            orchestration,
             ...(composerModel ? { model: composerModel } : {}),
             ...(composerProviderId ? { providerId: composerProviderId } : {}),
             ...(composerAccountId ? { accountId: composerAccountId } : {}),
             ...(userModelChip ? { modelLabel: userModelChip } : {}),
             ...(reasoningEffort ? { reasoningEffort } : {}),
+            ...(serviceTier ? { serviceTier } : {}),
             ...(overrides?.guiPlan ? { guiPlan: overrides.guiPlan } : {}),
             ...(overrides?.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
             ...(overrides?.guiDesignMode ? { guiDesignMode: true } : {}),
@@ -1093,14 +1241,24 @@ export function createThreadActions(
       overrides?.accountId?.trim() ??
       accountIdForComposerSelection(get().composerModelGroups, composerProviderId, composerModel)
     const reasoningEffort = queued?.reasoningEffort ?? overrides?.reasoningEffort?.trim()
+    const serviceTier =
+      (queued?.serviceTier ?? overrides?.serviceTier) === 'priority'
+        ? 'priority' as const
+        : undefined
     const guiDesignCanvas = (queued?.guiDesignCanvas ?? overrides?.guiDesignCanvas) === true
     const guiDesignMode = (queued?.guiDesignMode ?? overrides?.guiDesignMode) === true
+    const orchestration = queued?.orchestration ??
+      overrides?.orchestration ??
+      (mode === 'agent' && get().route === 'chat' && get().graphEnabled
+        ? get().composerOrchestration
+        : 'direct')
     const userModelChip =
       queued?.modelLabel ?? overrides?.modelLabel ?? optimisticUserModelLabel(composerModel, threadSnap?.model)
     const previousBlocks = get().blocks
     const previousActiveThreadId = get().activeThreadId
     const previousLastSeq = get().lastSeq
     const previousCurrentTurnId = get().currentTurnId
+    const previousCurrentTurnOrchestration = get().currentTurnOrchestration
     const previousCurrentTurnUserId = get().currentTurnUserId
     const previousTurnStartedAtByUserId = get().turnStartedAtByUserId
     const previousTurnDurationByUserId = get().turnDurationByUserId
@@ -1136,6 +1294,7 @@ export function createThreadActions(
       liveReasoning: '',
       liveAssistant: '',
       error: null,
+      currentTurnOrchestration: orchestration,
       currentTurnUserId: userBlockId,
       turnStartedAtByUserId: { ...s.turnStartedAtByUserId, [userBlockId]: now },
       queuedMessages: queued
@@ -1154,6 +1313,7 @@ export function createThreadActions(
             blocks: previousBlocks,
             busy: false,
             currentTurnId: previousCurrentTurnId,
+            currentTurnOrchestration: previousCurrentTurnOrchestration,
             currentTurnUserId: previousCurrentTurnUserId,
             turnStartedAtByUserId: previousTurnStartedAtByUserId,
             turnDurationByUserId: previousTurnDurationByUserId,
@@ -1225,6 +1385,7 @@ export function createThreadActions(
           lastSeq: previousLastSeq,
           busy: false,
           currentTurnId: previousCurrentTurnId,
+          currentTurnOrchestration: previousCurrentTurnOrchestration,
           currentTurnUserId: previousCurrentTurnUserId,
           turnStartedAtByUserId: previousTurnStartedAtByUserId,
           turnDurationByUserId: previousTurnDurationByUserId,
@@ -1255,7 +1416,7 @@ export function createThreadActions(
         model: composerModel
       })
       const settings = await rendererRuntimeClient.getSettings()
-      let workspaceCheckpointId: string | undefined
+      let workspaceCheckpointRequestId: string | undefined
       const checkpointThread = get().threads.find((thread) => thread.id === activeThreadId)
       const checkpointWorkspaceRoot = normalizeWorkspaceRoot(checkpointThread?.workspace) || normalizeWorkspaceRoot(settings.workspaceRoot)
       const checkpointWorkspaceKey = checkpointWorkspaceRoot.replaceAll('\\', '/').toLowerCase()
@@ -1265,36 +1426,38 @@ export function createThreadActions(
         checkpointGitAvailability.canAttempt(checkpointWorkspaceKey) &&
         typeof window.kunGui.createGitCheckpoint === 'function'
       ) {
-        const checkpoint = await window.kunGui.createGitCheckpoint({
+        workspaceCheckpointRequestId = createWorkspaceCheckpointRequestId()
+        const checkpoint = window.kunGui.createGitCheckpoint({
           workspaceRoot: checkpointWorkspaceRoot,
-          threadId: activeThreadId
+          threadId: activeThreadId,
+          checkpointId: workspaceCheckpointRequestId
         }).catch((error) => ({
           ok: false as const,
           reason: 'error' as const,
           message: error instanceof Error ? error.message : String(error)
         }))
-        if (checkpoint.ok) {
-          workspaceCheckpointId = checkpoint.checkpointId
-        } else if (
-          checkpoint.reason !== 'not_git_repo' &&
-          checkpoint.reason !== 'no_workspace' &&
-          checkpoint.reason !== 'disabled'
-        ) {
-          if (checkpoint.reason === 'git_unavailable') {
+        void checkpoint.then((result) => {
+          if (
+            result.ok ||
+            result.reason === 'not_git_repo' ||
+            result.reason === 'no_workspace' ||
+            result.reason === 'disabled'
+          ) return
+          if (result.reason === 'git_unavailable') {
             checkpointGitAvailability.markUnavailable(checkpointWorkspaceKey)
           }
           void window.kunGui.logError(
             'git-checkpoint',
-            checkpoint.reason === 'git_unavailable'
+            result.reason === 'git_unavailable'
               ? 'Git checkpoint disabled for this workspace because Git was not found'
               : 'Failed to create Git checkpoint',
             {
-              message: checkpoint.message,
-              reason: checkpoint.reason,
+              message: result.message,
+              reason: result.reason,
               workspaceRoot: checkpointWorkspaceRoot
             }
           ).catch(() => undefined)
-        }
+        })
       }
       let runtimeText: string
       if (channel) {
@@ -1305,12 +1468,14 @@ export function createThreadActions(
       const runtimeDisplayText = channel ? displayText : (userDisplayText ?? trimmedText)
       const { turnId, userMessageItemId } = await p.sendUserMessage(activeThreadId, runtimeText, {
         mode,
+        orchestration,
         agentSurface: queued?.agentSurface ?? overrides?.agentSurface ??
           (writeContext || get().route === 'write' ? 'write' : guiDesignMode || get().route === 'design' ? 'design' : 'code'),
         ...(composerModel ? { model: composerModel } : {}),
         ...(!channel && composerProviderId ? { providerId: composerProviderId } : {}),
         ...(!channel && composerAccountId ? { accountId: composerAccountId } : {}),
         ...(reasoningEffort ? { reasoningEffort } : {}),
+        ...(!channel && serviceTier ? { serviceTier } : {}),
         ...(runtimeDisplayText ? { displayText: runtimeDisplayText } : {}),
         ...((queued?.guiPlan ?? overrides?.guiPlan) ? { guiPlan: queued?.guiPlan ?? overrides?.guiPlan } : {}),
         ...(guiDesignCanvas ? { guiDesignCanvas: true } : {}),
@@ -1319,7 +1484,7 @@ export function createThreadActions(
           ? { guiDesignArtifact: queued?.guiDesignArtifact ?? overrides?.guiDesignArtifact }
           : {}),
         ...(attachmentIds.length ? { attachmentIds } : {}),
-        ...(workspaceCheckpointId ? { workspaceCheckpointId } : {}),
+        ...(workspaceCheckpointRequestId ? { workspaceCheckpointRequestId } : {}),
         ...(fileReferences.length ? { fileReferences } : {}),
         ...(composerContexts.length ? { composerContexts } : {})
       })
@@ -1362,8 +1527,7 @@ export function createThreadActions(
                   ...block,
                   meta: {
                     ...(block.meta ?? {}),
-                    turnId,
-                    ...(workspaceCheckpointId ? { workspaceCheckpointId } : {})
+                    turnId
                   }
                 }
               : block
@@ -1454,6 +1618,7 @@ export function createThreadActions(
           blocks: previousBlocks,
           busy: false,
           currentTurnId: previousCurrentTurnId,
+          currentTurnOrchestration: previousCurrentTurnOrchestration,
           currentTurnUserId: previousCurrentTurnUserId,
           turnStartedAtByUserId: previousTurnStartedAtByUserId,
           turnDurationByUserId: previousTurnDurationByUserId,
@@ -1475,6 +1640,7 @@ export function createThreadActions(
         error: view.summary,
         busy: false,
         currentTurnId: null,
+        currentTurnOrchestration: null,
         queuedMessages: previousQueuedMessages,
         ...(shouldOpenSettingsForError(e)
           ? { route: 'settings' as const, settingsSection: 'agents' as const }
@@ -1561,6 +1727,7 @@ export function createThreadActions(
         liveAssistant: '',
         error: null,
         currentTurnId: null,
+        currentTurnOrchestration: 'direct',
         currentTurnUserId: null
       })
       await ensureRuntimeProviderForSend({
@@ -1591,6 +1758,7 @@ export function createThreadActions(
         error: formatRuntimeError(e),
         busy: false,
         currentTurnId: null,
+        currentTurnOrchestration: null,
         currentTurnUserId: null,
         ...(shouldOpenSettingsForError(e)
           ? { route: 'settings' as const, settingsSection: 'agents' as const }

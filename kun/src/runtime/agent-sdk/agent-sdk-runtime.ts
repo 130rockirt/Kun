@@ -17,13 +17,20 @@ import type {
   ModelRequestTraceDelegated,
   ModelRequestTraceRecord
 } from '../../contracts/model-request-trace.js'
-import type { ApprovalPolicy, SandboxMode } from '../../contracts/policy.js'
 import type {
-  LlmDebugRound,
-  LlmDebugSink
+  ApprovalPolicy,
+  ApprovalReviewer,
+  SandboxMode
+} from '../../contracts/policy.js'
+import type { ActingTurnModelRoute } from '../../contracts/turns.js'
+import {
+  startLlmDebugRoundIfEnabled,
+  type LlmDebugRound,
+  type LlmDebugSink
 } from '../../services/llm-debug-recorder.js'
 import { makeAssistantReasoningItem, makeAssistantTextItem } from '../../domain/item.js'
 import { normalizeTurnLimits, type TurnLimitsConfig } from '../../loop/turn-limits.js'
+import type { TurnRunOutcome } from '../../loop/turn-execution-types.js'
 import { utf8PrefixWithinBytes } from '../../shared/utf8-text-blocks.js'
 import {
   SdkEventMapper,
@@ -48,6 +55,14 @@ import { composeSdkPromptText } from './sdk-context-assembler.js'
 import type { SdkApi, SdkMessage, SdkQueryResult } from './sdk-protocol.js'
 import type { DelegatedSessionPreparation } from '../delegated-session-binding.js'
 import type { DelegatedRuntimeCapabilities } from '../delegated-turn-runtime.js'
+import {
+  delegatedGraphPlanCanRetry,
+  delegatedGraphPlanRepairFeedback,
+  delegatedGraphPlanWasCommitted,
+  delegatedGraphRecoveryInstruction,
+  type DelegatedGraphCompletionCheck,
+  type DelegatedGraphPhase
+} from '../delegated-graph-turn-policy.js'
 
 export type TurnStatus = 'completed' | 'failed' | 'aborted'
 
@@ -63,18 +78,27 @@ class AgentSdkProtocolError extends Error {
 export interface SdkTurnContext {
   /** Workspace root the SDK runs in (cwd). */
   workspace: string
+  additionalWorkspaces?: readonly string[]
   /** The user's prompt for this turn. */
   userText: string
   /** Thread-level persona appended to the system prompt. */
   threadPersona?: string
   approvalPolicy: ApprovalPolicy
   sandboxMode?: SandboxMode
+  approvalReviewer?: ApprovalReviewer
+  actingModelRoute?: ActingTurnModelRoute
   planMode?: boolean
   /** Dedicated artifact turns disable Claude Code's raw filesystem/shell tools. */
   allowSdkBuiltins?: boolean
+  /** Preserve Kun read/grep/etc tools when Graph disables the overlapping SDK built-ins. */
+  bridgeKunBuiltinOverlaps?: boolean
+  /** Durable Graph phase for the bounded host-gated completion exchange. */
+  graphPhase?: DelegatedGraphPhase
   /** Enforce structured SVG mutation followed by a later successful validation. */
   requireSvgCompletion?: boolean
   model?: string
+  /** Per-turn Claude adaptive-thinking effort selected by the shared client. */
+  reasoningEffort?: string
   /** Prior SDK session id for multi-turn continuity. */
   resumeSessionId?: string
   /** Kun-owned local Claude state root for this thread. */
@@ -145,7 +169,7 @@ export interface SdkRuntimeDeps {
     args: Record<string, unknown>,
     signal?: AbortSignal
   ): Promise<KunToolResult>
-  /** kun's per-call permission decision (routes to the GUI approval panel). */
+  /** kun's per-call permission decision (routes to the initiating client's approval UI). */
   decideToolApproval(
     threadId: string,
     turnId: string,
@@ -158,7 +182,20 @@ export interface SdkRuntimeDeps {
   /** Upsert a turn item into the item store (turns.applyItem). */
   applyItem(threadId: string, item: TurnItem): Promise<void>
   /** Finish the turn lifecycle (turns.finishTurn). */
-  finishTurn(threadId: string, turnId: string, status: TurnStatus, error?: string): Promise<void>
+  finishTurn(
+    threadId: string,
+    turnId: string,
+    status: TurnStatus,
+    error?: string
+  ): Promise<TurnRunOutcome | void>
+  /**
+   * Check durable Graph state after the first model response. This may park an
+   * idle Graph slice, but it must not force-park pending supervision.
+   */
+  checkGraphCompletion?(
+    threadId: string,
+    turnId: string
+  ): Promise<DelegatedGraphCompletionCheck>
   /** Stage the SDK session id for commit after Kun finishes successfully. */
   saveSessionId(threadId: string, turnId: string, sessionId: string): Promise<void>
   /** Rotate an unusable native resume preparation before the portable retry. */
@@ -305,7 +342,7 @@ export class AgentSdkRuntime {
     threadId: string,
     turnId: string,
     signal: AbortSignal
-  ): Promise<'completed' | 'failed' | 'aborted'> {
+  ): Promise<TurnRunOutcome> {
     const execute = () => this.runTurnOwned(threadId, turnId, signal)
     return this.deps.runExclusive
       ? this.deps.runExclusive(threadId, execute)
@@ -316,7 +353,7 @@ export class AgentSdkRuntime {
     threadId: string,
     turnId: string,
     signal: AbortSignal
-  ): Promise<'completed' | 'failed' | 'aborted'> {
+  ): Promise<TurnRunOutcome> {
     const ctx = await this.deps.loadTurnContext(threadId, turnId)
     if (!ctx) {
       await this.deps.finishTurn(threadId, turnId, 'failed', 'no input for subscription turn')
@@ -418,10 +455,34 @@ export class AgentSdkRuntime {
       const sdk = await awaitAbortable(() => this.deps.loadSdk(), abort.signal)
 
       // Bridge kun-exclusive tools into an in-process MCP server.
-      const selectedKunTools = selectBridgeableTools(ctx.bridgeableTools)
-      const bridged = buildBridgedToolSpecs(selectedKunTools, (name, args) =>
-        this.deps.executeKunTool(threadId, turnId, name, args, abort.signal)
+      const selectedKunTools = selectBridgeableTools(
+        ctx.bridgeableTools,
+        ctx.bridgeKunBuiltinOverlaps ? { overlap: new Set() } : undefined
       )
+      let graphPlanCommitted = false
+      let graphPlanRetryAllowed = true
+      let graphPlanRepairFeedback: string | undefined
+      const bridged = buildBridgedToolSpecs(selectedKunTools, async (name, args) => {
+        const result = await this.deps.executeKunTool(
+          threadId,
+          turnId,
+          name,
+          args,
+          abort.signal
+        )
+        if (name === 'graph_define_plan') {
+          if (delegatedGraphPlanWasCommitted(result)) {
+            graphPlanCommitted = true
+            graphPlanRetryAllowed = false
+            graphPlanRepairFeedback = undefined
+          } else {
+            graphPlanRetryAllowed = delegatedGraphPlanCanRetry(result)
+            graphPlanRepairFeedback =
+              delegatedGraphPlanRepairFeedback(result)
+          }
+        }
+        return result
+      })
       let resumeSessionId = ctx.resumeSessionId
       let activeRebaseReason = ctx.sessionPreparation?.rebaseReason
       const buildOptions = (maxTurns?: number) => assembleSdkOptions({
@@ -456,6 +517,7 @@ export class AgentSdkRuntime {
           abortController: abort,
           ...(maxTurns !== undefined ? { maxTurns } : {}),
           ...(ctx.model ? { model: ctx.model } : {}),
+          ...(ctx.reasoningEffort ? { reasoningEffort: ctx.reasoningEffort } : {}),
           ...(resumeSessionId ? { resume: resumeSessionId } : {}),
           ...(this.deps.pathToClaudeCodeExecutable
             ? { pathToClaudeCodeExecutable: this.deps.pathToClaudeCodeExecutable }
@@ -519,7 +581,12 @@ export class AgentSdkRuntime {
         lastMutation: -1,
         lastValidation: -1
       }
-      const maxAttempts = ctx.requireSvgCompletion ? MAX_SVG_COMPLETION_ATTEMPTS : 1
+      const maxAttempts = ctx.graphPhase
+        ? 2
+        : ctx.requireSvgCompletion
+          ? MAX_SVG_COMPLETION_ATTEMPTS
+          : 1
+      let graphRecoveryPhase = ctx.graphPhase
       let completionGateFailed = false
       let stepLimitFailed = false
       let sdkTurnsUsed = 0
@@ -534,8 +601,17 @@ export class AgentSdkRuntime {
         const composedText = composeTurnText()
         const attemptText = attempt === 0
           ? composedText
-          : `${composedText}\n\n${svgCompletionRecoveryInstruction(svgCompletion)}`
-        const prompt = ctx.images && ctx.images.length > 0
+          : graphRecoveryPhase
+            ? delegatedGraphRecoveryInstruction(
+                graphRecoveryPhase,
+                graphPlanRepairFeedback
+              )
+            : `${composedText}\n\n${svgCompletionRecoveryInstruction(svgCompletion)}`
+        const prompt = (
+          ctx.images &&
+          ctx.images.length > 0 &&
+          !(ctx.graphPhase && attempt > 0)
+        )
           ? userMessageStream(attemptText, ctx.images)
           : attemptText
         const options = buildOptions(remainingTurns)
@@ -543,7 +619,7 @@ export class AgentSdkRuntime {
         let attemptFinalSeen = false
         let attemptMessageSeen = false
         let attemptTurns = 0
-        let trace = startAgentSdkTrace(this.deps.debugSink, {
+        let trace = await startAgentSdkTrace(this.deps.debugSink, {
           threadId,
           turnId,
           provider: ctx.sessionPreparation?.route.providerId ?? 'default',
@@ -610,7 +686,7 @@ export class AgentSdkRuntime {
               }
             }
             // `result` is terminal and already carries usage/final status. Give
-            // the Query a bounded chance to clean up before an SVG retry starts.
+            // the Query a bounded chance to clean up before a recovery query starts.
             if (attemptFinalSeen) {
               const closed = await closeIterator(iterator, abort.signal)
               if (!closed) interruptActiveStream()
@@ -672,12 +748,57 @@ export class AgentSdkRuntime {
         }
         if (timedOut) interruptActiveStream()
         activeStream = undefined
+        // Every recovery query must resume the session created by the
+        // immediately preceding query. Otherwise the model loses structured
+        // MCP tool results (notably graph_define_plan issue paths).
+        resumeSessionId = mapper.getSessionId() ?? resumeSessionId
         // Starting a query consumes at least one native model step even if a
         // malformed/aborted SDK stream omits its terminal result message.
         sdkTurnsUsed += attemptFinalSeen ? Math.max(1, attemptTurns) : 1
         if (limits.maxSteps !== undefined && sdkTurnsUsed > limits.maxSteps) stepLimitFailed = true
         if (attemptFinalSeen && mapper.getFinal()?.status === 'failed') break
-        if (signal.aborted || abort.signal.aborted || !ctx.requireSvgCompletion || svgCompletionSatisfied(svgCompletion)) {
+        if (signal.aborted || abort.signal.aborted) {
+          break
+        }
+        if (ctx.graphPhase) {
+          if (attempt > 0) break
+          if (
+            ctx.graphPhase === 'planning' &&
+            !graphPlanCommitted &&
+            !graphPlanRetryAllowed
+          ) {
+            break
+          }
+          const shouldCheckDurableGraph =
+            ctx.graphPhase === 'supervising' || graphPlanCommitted
+          const recoveryPhase = graphPlanCommitted
+            ? 'supervising'
+            : ctx.graphPhase
+          graphRecoveryPhase = recoveryPhase
+          const graphCompletion = shouldCheckDurableGraph
+            ? await this.deps.checkGraphCompletion?.(threadId, turnId) ?? 'retry_required'
+            : 'retry_required'
+          if (graphCompletion !== 'retry_required') break
+          if (limits.maxSteps !== undefined && sdkTurnsUsed >= limits.maxSteps) {
+            stepLimitFailed = true
+            break
+          }
+          await this.deps.recordEvent({
+            kind: 'error',
+            threadId,
+            turnId,
+            message: delegatedGraphRecoveryInstruction(
+              recoveryPhase,
+              graphPlanRepairFeedback
+            ),
+            code: recoveryPhase === 'planning'
+              ? 'graph_plan_submission_required'
+              : 'graph_supervision_required',
+            severity: 'warning'
+          })
+          continue
+        }
+        if (!ctx.requireSvgCompletion || svgCompletionSatisfied(svgCompletion)) {
           break
         }
         if (limits.maxSteps !== undefined && sdkTurnsUsed >= limits.maxSteps) {
@@ -728,13 +849,12 @@ export class AgentSdkRuntime {
       }
       const status: 'completed' | 'failed' | 'aborted' =
         final?.status === 'failed' ? 'failed' : 'completed'
-      await this.deps.finishTurn(
+      return (await this.deps.finishTurn(
         threadId,
         turnId,
         status,
         final?.message ? sanitizeAgentSdkError(final.message, ctx.oauthToken) : undefined
-      )
-      return status
+      )) ?? status
     } catch (err) {
       let failure = err
       try {
@@ -790,7 +910,7 @@ type AgentSdkTrace = {
   currentReasoning: string
 }
 
-function startAgentSdkTrace(
+async function startAgentSdkTrace(
   sink: LlmDebugSink | undefined,
   input: {
     threadId: string
@@ -808,11 +928,11 @@ function startAgentSdkTrace(
     oauthToken?: string
     delegated: ModelRequestTraceDelegated
   }
-): AgentSdkTrace | undefined {
+): Promise<AgentSdkTrace | undefined> {
   if (!sink?.beginSdkInvocation) return undefined
   let round: LlmDebugRound | undefined
   try {
-    round = sink.start({
+    round = await startLlmDebugRoundIfEnabled(sink, {
       threadId: input.threadId,
       turnId: input.turnId,
       provider: input.provider,
@@ -823,6 +943,7 @@ function startAgentSdkTrace(
         ...(tool.providerKind ? { providerKind: tool.providerKind } : {})
       }))
     })
+    if (!round) return undefined
     const record = sink.beginSdkInvocation(round, {
       endpointFormat: 'agent-sdk',
       target: 'agent-sdk://local/query',
@@ -1190,7 +1311,7 @@ const KUN_BRIDGED_TOOL_PREFIX = 'mcp__kun__'
 export function decideSdkBuiltinSandbox(
   toolName: string,
   input: Record<string, unknown>,
-  context: Pick<SdkTurnContext, 'workspace' | 'sandboxMode'>
+  context: Pick<SdkTurnContext, 'workspace' | 'additionalWorkspaces' | 'sandboxMode'>
 ): ToolApprovalDecision | null {
   const mode = context.sandboxMode ?? 'danger-full-access'
   if (!isKnownSdkTool(toolName)) {
@@ -1199,6 +1320,7 @@ export function decideSdkBuiltinSandbox(
   if (mode === 'danger-full-access') return null
 
   if (SDK_COMMAND_TOOLS.has(toolName)) {
+    if (mode === 'workspace-write') return null
     return denySandbox(`tool ${toolName} is blocked because the "${mode}" sandbox mode does not run host shell commands`)
   }
 
@@ -1209,7 +1331,7 @@ export function decideSdkBuiltinSandbox(
     }
     const path = sdkInputPath(input)
     if (!path) return denySandbox(`tool ${toolName} is blocked because no workspace path was provided`)
-    if (!isPathInsideWorkspace(path, context.workspace)) {
+    if (!isPathInsideAnyWorkspace(path, context.workspace, context.additionalWorkspaces)) {
       return denySandbox(`tool ${toolName} is limited to the workspace sandbox: ${path}`)
     }
   }
@@ -1225,12 +1347,25 @@ export function decideSdkBuiltinSandbox(
     if (!path && toolName === 'Read') {
       return denySandbox(`tool ${toolName} is blocked because no workspace path was provided`)
     }
-    if (path && !isPathInsideWorkspace(path, context.workspace)) {
+    if (path && !isPathInsideAnyWorkspace(path, context.workspace, context.additionalWorkspaces)) {
       return denySandbox(`tool ${toolName} is limited to workspace paths: ${path}`)
     }
   }
 
   return null
+}
+
+function isPathInsideAnyWorkspace(
+  path: string,
+  workspace: string,
+  additionalWorkspaces: readonly string[] | undefined
+): boolean {
+  if (isPathInsideWorkspace(path, workspace)) return true
+  return (additionalWorkspaces ?? []).some((root) => existsSync(workspaceAbsoluteRoot(root)) && isPathInsideWorkspace(path, root))
+}
+
+function workspaceAbsoluteRoot(workspace: string): string {
+  return isAbsolute(workspace) ? resolve(workspace) : resolve(process.cwd(), workspace)
 }
 
 function denySandbox(message: string): ToolApprovalDecision {

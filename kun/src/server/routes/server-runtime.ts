@@ -1,5 +1,6 @@
 import type { ThreadService } from '../../services/thread-service.js'
 import type { TurnService } from '../../services/turn-service.js'
+import type { TurnRunOutcome } from '../../loop/turn-execution-types.js'
 import type { UsageService } from '../../services/usage-service.js'
 import type { ReviewService } from '../../services/review-service.js'
 import type { EventBus } from '../../ports/event-bus.js'
@@ -11,6 +12,10 @@ import type { ToolHost, ToolProviderPolicy } from '../../ports/tool-host.js'
 import type { RuntimeEventRecorder } from '../../services/runtime-event-recorder.js'
 import type { LlmDebugRecorder } from '../../services/llm-debug-recorder.js'
 import type { RuntimeInfoResponse } from '../../contracts/runtime-info.js'
+import type {
+  McpCapabilityConfig,
+  McpServerConfig
+} from '../../contracts/capabilities.js'
 import type {
   RuntimeConfigApplyRequest,
   RuntimeConfigApplyResponse
@@ -42,7 +47,20 @@ import type { ModelClient } from '../../ports/model-client.js'
 import type { ModelRoutePoolConfig } from '../../contracts/model-route-pool.js'
 import type { RoutePoolHealthStore } from '../../adapters/model/route-pool-model-client.js'
 import type { RoutePoolTestService } from '../../services/route-pool-test-service.js'
-import type { RolesConfig } from '../../config/kun-config.js'
+import type { GraphRuntimeConfig, RolesConfig } from '../../config/kun-config.js'
+import type {
+  FileGraphWriteCoordinator,
+  FileGraphThreadReferenceStore,
+  FileGraphPlanningDraftStore,
+  GraphControlService,
+  GraphLearningService,
+  GraphMailbox,
+  GraphRecoveryService,
+  GraphRunStore,
+  GraphScheduler,
+  GraphSupervisor,
+  ProjectAgentRegistry
+} from '../../graph/index.js'
 import type { ImmutablePrefix } from '../../cache/immutable-prefix.js'
 import type { PublisherTrustStore } from '../../supplychain/publisher-trust-store.js'
 import type { ThreadEventStreamRegistry } from '../thread-event-stream-registry.js'
@@ -68,8 +86,14 @@ import type { ExtensionSecretRevealConsentService } from '../../services/extensi
 import type { ExtensionConfigurationService } from '../../services/extension-configuration-service.js'
 import type { ExtensionArtifactService } from '../../services/extension-artifact-service.js'
 import type { ExtensionMediaHandleService } from '../../services/extension-media-handle-service.js'
+import type { ExtensionJobService } from '../../services/extension-job-service.js'
 import type { RuntimeMigrationService } from '../../services/runtime-migration-service.js'
 import type { RuntimeMigrationImportService } from '../../services/runtime-migration-import-service.js'
+import type { ArtifactStore } from '../../artifacts/artifact-store.js'
+import type { ModelConnectionRegistry } from '../../services/model-connection-registry.js'
+import type { ModelConnectionOAuthService } from '../../services/model-connection-oauth.js'
+import type { OfficialProviderAuthService } from '../../services/official-provider-cli.js'
+import type { ProviderQuotaService } from '../../services/provider-quota-service.js'
 
 export type RuntimeToolDiagnostics = {
   providers: ToolProviderPolicy[]
@@ -126,6 +150,7 @@ export type ExtensionPlatformRuntime = {
   artifacts: ExtensionArtifactService
   viewSessions: ExtensionViewSessionService
   secretReveals: ExtensionSecretRevealConsentService
+  jobs?: ExtensionJobService
   bundledSeedResults?: readonly BundledExtensionSeedResult[]
 }
 
@@ -159,6 +184,21 @@ export type ServerRuntime = {
    * listing. Optional so test scaffolds can omit it.
    */
   delegationRuntime?: DelegationRuntime
+  graph?: {
+    control: GraphControlService
+    store: GraphRunStore
+    drafts: FileGraphPlanningDraftStore
+    config(): GraphRuntimeConfig
+    scheduler: GraphScheduler
+    supervisor: GraphSupervisor
+    mailbox: GraphMailbox
+    writes: FileGraphWriteCoordinator
+    recovery: GraphRecoveryService
+    registry: ProjectAgentRegistry
+    learning: GraphLearningService
+    references: FileGraphThreadReferenceStore
+    artifacts: ArtifactStore
+  }
   backgroundShellRuntime?: BackgroundShellRuntime
   supplyChainTrust?: PublisherTrustStore
   /** Single extension platform instance shared by HTTP, CLI-style services, tools, and model routing. */
@@ -169,6 +209,10 @@ export type ServerRuntime = {
    * scaffolds can omit it.
    */
   modelClient?: ModelClient
+  modelConnections?: ModelConnectionRegistry
+  modelConnectionOAuth?: ModelConnectionOAuthService
+  officialProviderAuth?: OfficialProviderAuthService
+  providerQuotaService?: Pick<ProviderQuotaService, 'list'>
   modelGateway?: {
     enabled(): boolean
     pools(): ModelRoutePoolConfig[]
@@ -187,7 +231,7 @@ export type ServerRuntime = {
    * one-shot internal routes can reuse the runtime's systemPrompt. Optional.
    */
   immutablePrefix?: ImmutablePrefix
-  runTurn(threadId: string, turnId: string): Promise<'completed' | 'failed' | 'aborted'> | void
+  runTurn(threadId: string, turnId: string): Promise<TurnRunOutcome> | void
   /**
    * Relaunch goal continuation turns for threads whose in-flight turn was
    * just reconciled to `failed` after a runtime restart. Returns the number
@@ -208,11 +252,20 @@ export type ServerRuntime = {
   allocateSeq: (threadId: string) => number
   nowIso: () => string
   info(): RuntimeInfoResponse
+  requestShutdown?(instanceId: string): Promise<boolean>
   applyConfig(request: RuntimeConfigApplyRequest): Promise<RuntimeConfigApplyResponse>
   toolDiagnostics?(): RuntimeToolDiagnostics | Promise<RuntimeToolDiagnostics>
   mcpOAuth?(): McpOAuthDiagnostic[] | Promise<McpOAuthDiagnostic[]>
   clearMcpOAuth?(serverId?: string): Promise<McpOAuthClearResult>
   authorizeMcpOAuth?(serverId: string): Promise<McpOAuthAuthorizeResult>
-  skills?(): SkillRuntimeDiagnostics | Promise<SkillRuntimeDiagnostics>
+  mcpConfig?(): McpCapabilityConfig
+  setMcpServer?(serverId: string, server: McpServerConfig | null): Promise<RuntimeConfigApplyResponse>
+  skills?(workspace?: string): SkillRuntimeDiagnostics | Promise<SkillRuntimeDiagnostics>
+  refreshSkills?(): Promise<void>
+  setSkillsEnabled?(enabled: boolean): Promise<RuntimeConfigApplyResponse>
+  setLocalCapabilityEnabled?(
+    id: 'attachments' | 'memory',
+    enabled: boolean
+  ): Promise<RuntimeConfigApplyResponse>
   shutdown?(): Promise<void>
 }

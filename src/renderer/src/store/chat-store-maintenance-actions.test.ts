@@ -839,6 +839,7 @@ describe('chat-store-maintenance-actions goal actions', () => {
       blocks,
       busy: true,
       currentTurnId: 'turn-1',
+      currentTurnOrchestration: 'graph',
       currentTurnUserId: 'user-1',
       liveAssistant: 'partial answer',
       liveReasoning: '',
@@ -859,6 +860,7 @@ describe('chat-store-maintenance-actions goal actions', () => {
     expect(busyWhenBackendCalled).toBe(false)
     expect(state.busy).toBe(false)
     expect(state.currentTurnId).toBeNull()
+    expect(state.currentTurnOrchestration).toBeNull()
     expect(state.currentTurnUserId).toBeNull()
     expect(state.liveAssistant).toBe('')
     expect(state.blocks.map((block) => ('status' in block ? block.status : block.kind))).toEqual([

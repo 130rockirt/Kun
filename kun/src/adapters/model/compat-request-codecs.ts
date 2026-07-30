@@ -38,6 +38,7 @@ export type CompatRequestCodecInput = {
   maxTokens?: number
   isCodex: boolean
   isCodexLite: boolean
+  serviceTiers?: readonly ('priority' | 'flex')[]
   codexNativeImageGeneration: boolean
 }
 
@@ -107,7 +108,14 @@ export class CompatRequestCodecs {
     const nativeDeepSeekHost = isDeepSeekHost(input.baseUrl)
     const geminiOpenAiHost = isGeminiOpenAiHost(input.baseUrl)
     const includeThinking = !isAzureOpenAiEndpoint(input.baseUrl) && !geminiOpenAiHost
-    this.deps.applyChatReasoning(body, input.request.reasoningEffort, {
+    const requiredToolChoice = namedToolChoice(input)
+    // DeepSeek V4 can call tools while thinking, but its Chat Completions API
+    // rejects any tool_choice parameter in thinking mode. Keep the hard named
+    // tool gate and disable thinking only for this constrained request.
+    const reasoningEffort = nativeDeepSeekHost && requiredToolChoice
+      ? 'off'
+      : input.request.reasoningEffort
+    this.deps.applyChatReasoning(body, reasoningEffort, {
       includeThinking,
       nativeDeepSeekHost,
       geminiOpenAiHost,
@@ -129,6 +137,10 @@ export class CompatRequestCodecs {
           parameters: tool.inputSchema
         }
       }))
+    }
+    if (requiredToolChoice) body.tool_choice = {
+      type: 'function',
+      function: { name: requiredToolChoice }
     }
     return body
   }
@@ -168,16 +180,30 @@ export class CompatRequestCodecs {
           }] : [])
         ]
       : []
+    const requiredToolChoice = namedToolChoice(input)
     const body: Record<string, unknown> = {
       model: input.model,
       stream: input.stream,
       input: input.isCodexLite ? [...litePrefix, ...responseInput] : responseInput,
       ...(input.isCodexLite
-        ? { store: false, tool_choice: 'auto', parallel_tool_calls: false }
+        ? {
+            store: false,
+            tool_choice: requiredToolChoice
+              ? { type: 'function', name: requiredToolChoice }
+              : 'auto',
+            parallel_tool_calls: false
+          }
         : input.isCodex ? { instructions: instructions || ' ', store: false } : {}),
       ...(input.isCodex ? { prompt_cache_key: input.request.threadId } : {})
     }
     if (input.maxTokens !== undefined && !input.isCodex) body.max_output_tokens = input.maxTokens
+    if (
+      input.isCodex &&
+      input.request.serviceTier === 'priority' &&
+      input.serviceTiers?.includes('priority')
+    ) {
+      body.service_tier = 'priority'
+    }
     if (input.request.temperature !== undefined) body.temperature = input.request.temperature
     if (input.request.topP !== undefined) body.top_p = input.request.topP
     if (input.request.responseFormat === 'json_object') body.text = { format: { type: 'json_object' } }
@@ -194,11 +220,20 @@ export class CompatRequestCodecs {
     if (!input.isCodexLite && input.isCodex && input.codexNativeImageGeneration) {
       body.tools = [...((body.tools ?? []) as Record<string, unknown>[]), { type: 'image_generation' }]
     }
+    if (requiredToolChoice && !input.isCodexLite) {
+      body.tool_choice = { type: 'function', name: requiredToolChoice }
+      // The server must not emit additional calls beside a hard-gated one.
+      body.parallel_tool_calls = false
+    }
     return body
   }
 
   private messages(input: CompatRequestCodecInput): Record<string, unknown> {
-    const anthropicThinking = input.reasoning?.requestProtocol === 'anthropic-thinking'
+    const requiredToolChoice = namedToolChoice(input)
+    // Anthropic rejects forced named tool choice together with extended
+    // thinking. The gate is an execution-safety invariant, so temporarily
+    // disable thinking for this request instead of silently weakening choice.
+    const anthropicThinking = !requiredToolChoice && input.reasoning?.requestProtocol === 'anthropic-thinking'
     const converted = this.deps.toAnthropic(input.messages, anthropicThinking)
     this.deps.applyAnthropicCacheControl(converted.messages)
     const resolvedEffort = anthropicThinking && input.reasoning
@@ -221,14 +256,26 @@ export class CompatRequestCodecs {
     }
     if (input.request.temperature !== undefined) body.temperature = input.request.temperature
     if (input.request.topP !== undefined) body.top_p = input.request.topP
-    this.deps.applyAnthropicReasoning(body, input.request.reasoningEffort, input.reasoning)
+    if (!requiredToolChoice) {
+      this.deps.applyAnthropicReasoning(body, input.request.reasoningEffort, input.reasoning)
+    }
     if (input.tools.length) {
       body.tools = input.tools.map((tool) => ({
         name: tool.name, description: tool.description, input_schema: tool.inputSchema
       }))
     }
+    if (requiredToolChoice) body.tool_choice = { type: 'tool', name: requiredToolChoice }
     return body
   }
+}
+
+function namedToolChoice(input: CompatRequestCodecInput): string | undefined {
+  const name = input.request.requiredToolName?.trim()
+  if (!name) return undefined
+  if (!input.tools.some((tool) => tool.name === name)) {
+    throw new Error(`required_tool_unsupported: required tool ${JSON.stringify(name)} is not advertised`)
+  }
+  return name
 }
 
 function isAzureOpenAiEndpoint(baseUrl: string): boolean {

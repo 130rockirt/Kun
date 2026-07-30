@@ -1,0 +1,140 @@
+import { createElement } from 'react'
+import {
+  act,
+  create,
+  type ReactTestInstance,
+  type ReactTestRenderer
+} from 'react-test-renderer'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { ChatBlock } from '../../agent/types'
+import i18n from '../../i18n'
+import { useChatStore } from '../../store/chat-store'
+import { SddAssistantPanel } from './SddAssistantPanel'
+
+function textContent(node: ReactTestInstance): string {
+  return node.children
+    .map((child) => typeof child === 'string' ? child : textContent(child))
+    .join('')
+}
+
+describe('SddAssistantPanel structured user input', () => {
+  const originalResolveUserInput = useChatStore.getState().resolveUserInput
+
+  beforeEach(async () => {
+    await i18n.changeLanguage('en')
+    ;(globalThis as { window?: unknown }).window = {
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      requestAnimationFrame: vi.fn(() => 1),
+      cancelAnimationFrame: vi.fn(),
+      setInterval,
+      clearInterval,
+      innerHeight: 900,
+      innerWidth: 1400,
+      kunGui: {
+        platform: 'darwin',
+        runtimeRequest: vi.fn(async () => ({ ok: true, status: 200, body: '{"sessions":[]}' }))
+      }
+    }
+  })
+
+  afterEach(() => {
+    useChatStore.setState({ resolveUserInput: originalResolveUserInput })
+  })
+
+  it('renders and submits the live request above the compact composer', async () => {
+    const resolveUserInput = vi.fn(async () => undefined)
+    const blocks: ChatBlock[] = [{
+      kind: 'user_input',
+      id: 'sdd-input-item',
+      requestId: 'sdd-input-request',
+      status: 'pending',
+      live: true,
+      questions: [{
+        id: 'lifecycle',
+        header: 'Lifecycle',
+        question: 'How long should the CLI details be kept?',
+        options: [
+          { label: 'Current turn', description: 'Use them once.' },
+          { label: 'Whole session', description: 'Keep them for later turns.' }
+        ]
+      }]
+    }]
+    useChatStore.setState({
+      activeThreadId: 'sdd-thread',
+      route: 'chat',
+      blocks,
+      resolveUserInput
+    })
+
+    let renderer: ReactTestRenderer | undefined
+    try {
+      await act(async () => {
+        renderer = create(createElement(SddAssistantPanel, {
+          draft: {
+            id: 'draft-1',
+            workspaceRoot: '/workspace',
+            relativePath: '.kunsdd/requirements/draft-1/requirement.md',
+            createdAt: '2026-07-30T00:00:00.000Z',
+            updatedAt: '2026-07-30T00:00:00.000Z'
+          },
+          input: '',
+          setInput: vi.fn(),
+          mode: 'agent',
+          setMode: vi.fn(),
+          busy: true,
+          runtimeConnection: 'ready',
+          activeThreadId: 'sdd-thread',
+          blocks,
+          liveReasoning: '',
+          liveAssistant: '',
+          composerModel: 'gpt-5.6',
+          composerProviderId: 'codex',
+          composerPickList: ['gpt-5.6'],
+          composerReasoningEffort: 'low',
+          setComposerModel: vi.fn(),
+          setComposerReasoningEffort: vi.fn(),
+          queuedMessages: [],
+          removeQueuedMessage: vi.fn(),
+          guideQueuedMessage: vi.fn(),
+          onSend: vi.fn(),
+          onInterrupt: vi.fn(),
+          onRetryConnection: vi.fn(),
+          onOpenSettings: vi.fn(),
+          onNewConversation: vi.fn(),
+          onApplyFramework: vi.fn(),
+          onCollapse: vi.fn()
+        }))
+      })
+
+      expect(renderer!.root.findByProps({
+        'data-user-input-variant': 'compact'
+      })).toBeDefined()
+
+      const option = renderer!.root.findAllByType('button').find((button) =>
+        textContent(button).includes('Current turn')
+      )
+      expect(option).toBeDefined()
+      await act(async () => {
+        option!.props.onClick()
+      })
+
+      const submit = renderer!.root.findAllByType('button').find((button) =>
+        textContent(button).includes('Submit answers')
+      )
+      expect(submit).toBeDefined()
+      await act(async () => {
+        submit!.props.onClick()
+      })
+
+      expect(resolveUserInput).toHaveBeenCalledWith('sdd-input-item', {
+        kind: 'submit',
+        answers: [{ id: 'lifecycle', label: 'Current turn', value: 'Current turn' }]
+      })
+    } finally {
+      if (renderer) {
+        act(() => renderer!.unmount())
+      }
+    }
+  })
+})

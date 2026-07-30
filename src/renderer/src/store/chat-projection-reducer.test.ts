@@ -26,8 +26,7 @@ const context = {
   runtimeErrorDetail: () => '',
   isInterruptSettledError: () => false,
   settlePendingRuntimeWork: (blocks: ChatState['blocks']) => blocks,
-  threadSnapshotLooksRunning: () => false,
-  hasAssistantTextForCompletedTurn: () => false
+  threadSnapshotLooksRunning: () => false
 }
 
 function state(): ChatState {
@@ -52,6 +51,149 @@ function project(initial: ChatState, actions: RuntimeProjectionAction[]): ChatSt
 }
 
 describe('chat projection reducer', () => {
+  it('updates one stable non-actionable block across an automatic review lifecycle', () => {
+    const projected = project(state(), [
+      {
+        type: 'approval_review_updated',
+        payload: {
+          reviewId: 'review_1',
+          approvalId: 'approval_1',
+          turnId: 'turn_1',
+          createdAt: '2026-07-29T00:00:00.000Z',
+          summary: 'Run tests',
+          toolName: 'exec_command',
+          status: 'in-progress'
+        }
+      },
+      {
+        type: 'approval_review_updated',
+        payload: {
+          reviewId: 'review_1',
+          approvalId: 'approval_1',
+          turnId: 'turn_1',
+          createdAt: '2026-07-29T00:00:01.000Z',
+          summary: 'Run tests',
+          toolName: 'exec_command',
+          status: 'approved',
+          decision: 'allow',
+          riskLevel: 'low',
+          rationale: 'The command only runs workspace tests.'
+        }
+      }
+    ])
+
+    expect(projected.blocks).toEqual([{
+      kind: 'approval_review',
+      id: 'approval-review-review_1',
+      reviewId: 'review_1',
+      approvalId: 'approval_1',
+      turnId: 'turn_1',
+      createdAt: '2026-07-29T00:00:00.000Z',
+      summary: 'Run tests',
+      toolName: 'exec_command',
+      status: 'approved',
+      decision: 'allow',
+      riskLevel: 'low',
+      rationale: 'The command only runs workspace tests.'
+    }])
+  })
+
+  it('renders a failed required-tool gate as an expandable runtime status, not an assistant block', () => {
+    const projected = project(state(), [{
+      type: 'runtime_status_received',
+      payload: {
+        kind: 'required_tool_gate',
+        itemId: 'graph_gate_1',
+        turnId: 'turn_graph',
+        toolName: 'graph_create_run',
+        phase: 'failed',
+        attempt: 3,
+        maxAttempts: 3,
+        failureSummary: 'plan.nodes.0: Required'
+      }
+    }])
+
+    expect(projected.blocks).toEqual([expect.objectContaining({
+      kind: 'system',
+      id: 'graph_gate_1',
+      turnId: 'turn_graph',
+      text: 'Runtime status',
+      detail: 'plan.nodes.0: Required',
+      severity: 'error'
+    })])
+    expect(projected.blocks.some((block) => block.kind === 'assistant')).toBe(false)
+  })
+
+  it('clears current-turn orchestration when a Graph turn completes', () => {
+    const projected = project({
+      ...state(),
+      busy: true,
+      currentTurnId: 'turn_graph',
+      currentTurnOrchestration: 'graph',
+      threads: [{ ...state().threads[0]!, status: 'running' }]
+    }, [{ type: 'turn_completed' }])
+
+    expect(projected.busy).toBe(false)
+    expect(projected.currentTurnId).toBeNull()
+    expect(projected.currentTurnOrchestration).toBeNull()
+    expect(projected.threads[0]).toMatchObject({
+      status: 'idle',
+      latestTurnStatus: 'completed'
+    })
+  })
+
+  it('clears current-turn orchestration when a Graph turn fails terminally', () => {
+    const projected = project({
+      ...state(),
+      busy: true,
+      currentTurnId: 'turn_graph',
+      currentTurnOrchestration: 'graph'
+    }, [{
+      type: 'turn_failed',
+      error: new Error('stopped'),
+      options: { terminal: true }
+    }])
+
+    expect(projected.busy).toBe(false)
+    expect(projected.currentTurnId).toBeNull()
+    expect(projected.currentTurnOrchestration).toBeNull()
+  })
+
+  it('settles a stale running sidebar status when a terminal event is replayed (#1028)', () => {
+    const projected = project({
+      ...state(),
+      busy: false,
+      currentTurnId: null,
+      activeThreadGoal: {
+        threadId: 'thread_1',
+        objective: 'Finish the goal',
+        status: 'complete',
+        tokensUsed: 10,
+        timeUsedSeconds: 30,
+        createdAt: '2026-07-11T00:00:00.000Z',
+        updatedAt: '2026-07-11T00:00:30.000Z'
+      },
+      threads: [{ ...state().threads[0]!, status: 'running' }]
+    }, [{ type: 'turn_completed' }])
+
+    expect(projected.threads[0]).toMatchObject({
+      status: 'idle',
+      latestTurnStatus: 'completed'
+    })
+  })
+
+  it('applies status-only thread metadata updates', () => {
+    const projected = project({
+      ...state(),
+      threads: [{ ...state().threads[0]!, status: 'running' }]
+    }, [{
+      type: 'thread_metadata_changed',
+      payload: { threadId: 'thread_1', status: 'idle' }
+    }])
+
+    expect(projected.threads[0]?.status).toBe('idle')
+  })
+
   it('produces identical state for live and replayed normalized actions', () => {
     const actions: RuntimeProjectionAction[] = [
       {
@@ -281,6 +423,52 @@ describe('chat projection reducer', () => {
     expect(projected.currentTurnUserId).toBe('item_original_user')
   })
 
+  it('reconciles Graph guidance when the stable user event arrives after the HTTP response', () => {
+    const createdAt = '2026-07-11T00:00:00.000Z'
+    const initial = {
+      ...state(),
+      busy: true,
+      currentTurnId: 'turn_graph',
+      currentTurnUserId: 'item_original_user',
+      turnStartedAtByUserId: { item_original_user: NOW - 1_000 },
+      blocks: [
+        {
+          kind: 'user' as const,
+          id: 'item_original_user',
+          turnId: 'turn_graph',
+          createdAt: '2026-07-10T23:59:00.000Z',
+          text: 'Build this as a Graph'
+        },
+        {
+          kind: 'user' as const,
+          id: 'graph-steering-1783728000000',
+          turnId: 'turn_graph',
+          createdAt,
+          text: 'Continue building the Graph.'
+        }
+      ]
+    }
+
+    const projected = project(initial, [{
+      type: 'user_message_received',
+      payload: {
+        itemId: 'item_steered',
+        turnId: 'turn_graph',
+        createdAt,
+        text: 'Continue building the Graph.'
+      }
+    }])
+
+    expect(projected.blocks).toHaveLength(2)
+    expect(projected.blocks[1]).toMatchObject({
+      kind: 'user',
+      id: 'item_steered',
+      turnId: 'turn_graph',
+      text: 'Continue building the Graph.'
+    })
+    expect(projected.currentTurnUserId).toBe('item_original_user')
+  })
+
   it('keeps only the latest automatic compaction marker for a turn', () => {
     const projected = project(state(), [
       {
@@ -387,5 +575,181 @@ describe('chat projection reducer', () => {
     expect(projected.blocks).toEqual(blocks)
     expect(projected.lastSeq).toBe(8)
     expect(projected.error).toBeNull()
+  })
+
+  it('replaces incomplete deltas with the authoritative completed item snapshot', () => {
+    const initial = {
+      ...state(),
+      busy: true,
+      currentTurnId: 'turn_1',
+      currentTurnUserId: 'user_1',
+      liveDeltaSeqFloor: 0,
+      turnReasoningFirstAtByUserId: {},
+      turnReasoningLastAtByUserId: {}
+    }
+    const projected = project(initial, [
+      {
+        type: 'deltas_received',
+        deltas: [{
+          seq: 1,
+          threadId: 'thread_1',
+          turnId: 'turn_1',
+          itemId: 'assistant_1',
+          createdAt: '2026-07-11T00:00:00.000Z',
+          kind: 'agent_message',
+          text: 'Hello '
+        }]
+      },
+      {
+        type: 'assistant_item_upserted',
+        payload: {
+          itemId: 'assistant_1',
+          threadId: 'thread_1',
+          turnId: 'turn_1',
+          kind: 'agent_message',
+          status: 'completed',
+          createdAt: '2026-07-11T00:00:00.000Z',
+          text: 'Hello missing middle world'
+        }
+      }
+    ])
+
+    expect(projected.liveAssistant).toBe('')
+    expect(projected.blocks).toContainEqual({
+      kind: 'assistant',
+      id: 'assistant_1',
+      turnId: 'turn_1',
+      createdAt: '2026-07-11T00:00:00.000Z',
+      text: 'Hello missing middle world'
+    })
+  })
+
+  it('does not flush or split live assistant text when tool and status events arrive', () => {
+    const initial = {
+      ...state(),
+      busy: true,
+      currentTurnId: 'turn_1',
+      currentTurnUserId: 'user_1',
+      liveDeltaSeqFloor: 0,
+      turnReasoningFirstAtByUserId: {},
+      turnReasoningLastAtByUserId: {}
+    }
+    const projected = project(initial, [
+      {
+        type: 'deltas_received',
+        deltas: [{
+          seq: 1,
+          turnId: 'turn_1',
+          itemId: 'assistant_1',
+          kind: 'agent_message',
+          text: 'first '
+        }]
+      },
+      {
+        type: 'tool_updated',
+        payload: {
+          itemId: 'tool_1',
+          turnId: 'turn_1',
+          summary: 'read',
+          status: 'running'
+        }
+      },
+      {
+        type: 'runtime_status_received',
+        payload: {
+          kind: 'model_request_retry',
+          itemId: 'status_1',
+          turnId: 'turn_1'
+        }
+      },
+      {
+        type: 'deltas_received',
+        deltas: [{
+          seq: 2,
+          turnId: 'turn_1',
+          itemId: 'assistant_1',
+          kind: 'agent_message',
+          text: 'second'
+        }]
+      }
+    ])
+
+    expect(projected.liveAssistant).toBe('first second')
+    expect(projected.blocks.filter((block) => block.kind === 'assistant')).toEqual([])
+    expect(projected.blocks.map((block) => block.id)).toEqual(['tool_1', 'status_1'])
+  })
+
+  it('is idempotent for repeated delta seqs and authoritative snapshots', () => {
+    const initial = {
+      ...state(),
+      busy: true,
+      currentTurnId: 'turn_1',
+      currentTurnUserId: 'user_1',
+      liveDeltaSeqFloor: 0,
+      turnReasoningFirstAtByUserId: {},
+      turnReasoningLastAtByUserId: {}
+    }
+    const delta: RuntimeProjectionAction = {
+      type: 'deltas_received',
+      deltas: [{
+        seq: 4,
+        turnId: 'turn_1',
+        itemId: 'assistant_1',
+        kind: 'agent_message',
+        text: 'hello'
+      }]
+    }
+    const snapshot: RuntimeProjectionAction = {
+      type: 'assistant_item_upserted',
+      payload: {
+        itemId: 'assistant_1',
+        threadId: 'thread_1',
+        turnId: 'turn_1',
+        kind: 'agent_message',
+        status: 'completed',
+        createdAt: '2026-07-11T00:00:00.000Z',
+        text: 'hello'
+      }
+    }
+
+    const projected = project(initial, [delta, delta, snapshot, snapshot])
+
+    expect(projected.blocks.filter((block) => block.kind === 'assistant')).toHaveLength(1)
+    expect(projected.blocks.find((block) => block.kind === 'assistant')).toMatchObject({ text: 'hello' })
+  })
+
+  it('preserves an unchanged assistant block reference during terminal snapshot reconciliation', () => {
+    const assistant = {
+      kind: 'assistant' as const,
+      id: 'assistant_1',
+      turnId: 'turn_1',
+      createdAt: '2026-07-11T00:00:00.000Z',
+      text: 'Stable markdown'
+    }
+    const initial = {
+      ...state(),
+      busy: false,
+      currentTurnId: null,
+      lastSeq: 4,
+      blocks: [
+        { kind: 'user' as const, id: 'user_1', turnId: 'turn_1', text: 'Question' },
+        assistant
+      ]
+    }
+    const projected = project(initial, [{
+      type: 'thread_snapshot_reconciled',
+      payload: {
+        threadId: 'thread_1',
+        turnId: 'turn_1',
+        userBlockId: 'user_1',
+        latestSeq: 8,
+        blocks: [
+          { kind: 'user', id: 'user_1', turnId: 'turn_1', text: 'Question' },
+          { ...assistant }
+        ]
+      }
+    }])
+
+    expect(projected.blocks.find((block) => block.id === 'assistant_1')).toBe(assistant)
   })
 })

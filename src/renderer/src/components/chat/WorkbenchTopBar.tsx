@@ -15,6 +15,8 @@ import {
   Folders,
   FolderOpen,
   Globe2,
+  Gauge,
+  GitBranch,
   LockKeyhole,
   Loader2,
   MessageCircleMore,
@@ -47,6 +49,7 @@ type Props = {
   onToggleRightPanelMode: (mode: Exclude<RightPanelMode, null>) => void
   planPanelEnabled?: boolean
   canvasEnabled?: boolean
+  graphEnabled?: boolean
   sideChatRunningCount?: number
   sideChatOpen?: boolean
   sideChatEnabled?: boolean
@@ -69,12 +72,12 @@ type WorkbenchTopActionsProps = {
 
 const TOPBAR_ICON_CLASS = 'h-4 w-4'
 const SIDE_RAIL_BUTTON_BASE =
-  'ds-side-rail-button inline-flex h-8 w-8 items-center justify-center rounded-[0.9rem] border shadow-[inset_0_1px_0_rgba(255,255,255,0.45)] transition dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]'
-const SIDE_RAIL_BUTTON_ACTIVE = 'border-ds-border-strong bg-white/70 text-ds-ink dark:bg-white/10'
+  'ds-side-rail-button inline-flex h-8 w-8 items-center justify-center rounded-[var(--ds-radius-control)] border transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30'
+const SIDE_RAIL_BUTTON_ACTIVE = 'border-ds-border-strong bg-ds-card text-ds-ink'
 const SIDE_RAIL_BUTTON_IDLE =
-  'border-transparent bg-white/38 text-ds-faint opacity-90 hover:border-ds-border-muted hover:bg-white/55 hover:text-ds-ink hover:opacity-100 dark:bg-white/4 dark:hover:bg-white/8'
+  'border-transparent bg-transparent text-ds-faint opacity-90 hover:border-ds-border-muted hover:bg-ds-hover hover:text-ds-ink hover:opacity-100'
 const TOPBAR_ACTION_BUTTON_BASE =
-  'ds-topbar-action-button inline-flex h-8 w-8 items-center justify-center rounded-[0.9rem] border shadow-[inset_0_1px_0_rgba(255,255,255,0.45)] transition dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]'
+  'ds-topbar-action-button inline-flex h-8 w-8 items-center justify-center rounded-[var(--ds-radius-control)] border transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30'
 
 function sideRailButtonClass(active: boolean, extra?: string): string {
   return `${SIDE_RAIL_BUTTON_BASE} ${active ? SIDE_RAIL_BUTTON_ACTIVE : SIDE_RAIL_BUTTON_IDLE}${extra ? ` ${extra}` : ''}`
@@ -319,7 +322,7 @@ export function WorkbenchTopActions({
         </button>
 
         {editorMenuOpen ? (
-          <div className="ds-card-strong absolute right-0 top-full z-50 mt-2 w-64 overflow-hidden rounded-[18px] border border-ds-border py-1.5 shadow-[0_18px_52px_rgba(20,47,95,0.18)] backdrop-blur-xl dark:shadow-[0_22px_58px_rgba(0,0,0,0.38)]">
+          <div className="ds-card-strong absolute right-0 top-full z-50 mt-2 w-64 overflow-hidden rounded-[var(--ds-radius-card)] border border-ds-border py-1.5 shadow-[var(--ds-shadow-overlay)]">
             <div className="border-b border-ds-border-muted px-3 pb-2 pt-1.5 text-[11px] font-semibold text-ds-faint">
               {t('editorPickerMenuTitle')}
             </div>
@@ -385,6 +388,7 @@ export function WorkbenchSideRail({
   onToggleRightPanelMode,
   planPanelEnabled = false,
   canvasEnabled = false,
+  graphEnabled = false,
   sideChatRunningCount = 0,
   sideChatOpen = false,
   sideChatEnabled = true,
@@ -409,12 +413,22 @@ export function WorkbenchSideRail({
     { mode: BUILTIN_RIGHT_PANEL_IDS.changes, label: t('rightPanelChanges'), icon: FileEdit },
     { mode: BUILTIN_RIGHT_PANEL_IDS.browser, label: t('rightPanelBrowser'), icon: Globe2 },
     ...(canvasEnabled ? [{ mode: BUILTIN_RIGHT_PANEL_IDS.canvas, label: t('rightPanelWhiteboard'), icon: Shapes }] : []),
+    ...(graphEnabled ? [{
+      mode: BUILTIN_RIGHT_PANEL_IDS.graph,
+      label: t('rightPanelGraph', { defaultValue: 'Graph' }),
+      icon: GitBranch
+    }] : []),
     { mode: BUILTIN_RIGHT_PANEL_IDS.subagents, label: t('rightPanelSubagents'), icon: Bot },
-    { mode: BUILTIN_RIGHT_PANEL_IDS.mcpSkills, label: t('rightPanelMcpSkills'), icon: Blocks }
+    { mode: BUILTIN_RIGHT_PANEL_IDS.mcpSkills, label: t('rightPanelMcpSkills'), icon: Blocks },
+    {
+      mode: BUILTIN_RIGHT_PANEL_IDS.providerQuotas,
+      label: t('rightPanelProviderQuotas'),
+      icon: Gauge
+    }
   ]
 
   return (
-    <div className="ds-workbench-side-rail ds-no-drag flex h-full w-12 shrink-0 flex-col items-center gap-1.5 border-l border-ds-border-muted bg-white/80 py-3 backdrop-blur-xl dark:bg-ds-canvas">
+    <div className="ds-workbench-side-rail ds-sidebar-surface ds-no-drag flex h-full w-12 shrink-0 flex-col items-center gap-1.5 border-l border-ds-border-muted py-3">
       {onOpenSideChat ? (
         <button
           type="button"

@@ -34,4 +34,11 @@ describe('main paths', () => {
       join(distDir, '../preload/extension-protected-surface.mjs')
     )
   })
+
+  it('resolves the isolated tray quota preload', () => {
+    const distDir = 'C:\\app\\out\\main'
+    expect(resolveNamedPreloadPath(distDir, 'tray-quota', () => true)).toBe(
+      join(distDir, '../preload/tray-quota.cjs')
+    )
+  })
 })

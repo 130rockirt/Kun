@@ -1,6 +1,21 @@
-import type { GuiDesignArtifactContextJson, GuiPlanContextJson, Turn, TurnReasoningEffort, TurnStatus } from '../contracts/turns.js'
+import type {
+  ActingTurnModelRoute,
+  GuiDesignArtifactContextJson,
+  GuiPlanContextJson,
+  Turn,
+  TurnClientSurface,
+  TurnReasoningEffort,
+  TurnServiceTier,
+  TurnStatus
+} from '../contracts/turns.js'
+import type {
+  ApprovalPolicy,
+  ApprovalReviewer,
+  SandboxMode
+} from '../contracts/policy.js'
+import type { GraphOrchestrationStrategy } from '../contracts/graph.js'
 import type { ThreadMode } from '../contracts/threads.js'
-import type { TurnItem } from '../contracts/items.js'
+import type { TurnItem, UserMessageSource } from '../contracts/items.js'
 import type { ComposerContextAttachmentJson } from '../contracts/composer-context.js'
 
 export type TurnEntity = Turn
@@ -9,10 +24,17 @@ export function createTurnRecord(input: {
   id: string
   threadId: string
   prompt: string
+  messageSource?: UserMessageSource
   model?: string
   providerId?: string
   accountId?: string
+  actingModelRoute?: ActingTurnModelRoute
   reasoningEffort?: TurnReasoningEffort
+  serviceTier?: TurnServiceTier
+  clientSurface?: TurnClientSurface
+  approvalPolicy?: ApprovalPolicy
+  sandboxMode?: SandboxMode
+  approvalReviewer?: ApprovalReviewer
   attachmentIds?: string[]
   composerContexts?: ComposerContextAttachmentJson[]
   guiPlan?: GuiPlanContextJson
@@ -21,10 +43,13 @@ export function createTurnRecord(input: {
   agentSurface?: 'code' | 'write' | 'design'
   guiDesignArtifact?: GuiDesignArtifactContextJson
   mode?: ThreadMode
+  orchestration?: GraphOrchestrationStrategy
   disableUserInput?: boolean
   imContext?: boolean
   workspaceCheckpointId?: string
+  workspaceCheckpointRequestId?: string
   extensionBudgetTokenBaseline?: number
+  graphPlanningLifecycle?: import('../contracts/turns.js').GraphPlanningLifecycle
   createdAt?: string
   status?: TurnStatus
 }): TurnEntity {
@@ -37,6 +62,8 @@ export function createTurnRecord(input: {
     threadId: input.threadId,
     status: input.status ?? 'queued',
     prompt: input.prompt,
+    ...(input.messageSource ? { messageSource: input.messageSource } : {}),
+    orchestration: input.orchestration ?? 'direct',
     steering: [],
     items: [],
     attachmentIds: [...(input.attachmentIds ?? [])],
@@ -48,7 +75,13 @@ export function createTurnRecord(input: {
     ...(model ? { model } : {}),
     ...(providerId ? { providerId } : {}),
     ...(accountId ? { accountId } : {}),
+    ...(input.actingModelRoute ? { actingModelRoute: { ...input.actingModelRoute } } : {}),
     ...(reasoningEffort ? { reasoningEffort } : {}),
+    ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
+    ...(input.clientSurface ? { clientSurface: input.clientSurface } : {}),
+    ...(input.approvalPolicy ? { approvalPolicy: input.approvalPolicy } : {}),
+    ...(input.sandboxMode ? { sandboxMode: input.sandboxMode } : {}),
+    ...(input.approvalReviewer ? { approvalReviewer: input.approvalReviewer } : {}),
     ...(input.guiPlan ? { guiPlan: input.guiPlan } : {}),
     ...(input.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
     ...(input.guiDesignMode ? { guiDesignMode: true } : {}),
@@ -58,12 +91,18 @@ export function createTurnRecord(input: {
     ...(input.disableUserInput ? { disableUserInput: true } : {}),
     ...(input.imContext ? { imContext: true } : {}),
     ...(input.workspaceCheckpointId ? { workspaceCheckpointId: input.workspaceCheckpointId } : {}),
+    ...(input.workspaceCheckpointRequestId
+      ? { workspaceCheckpointRequestId: input.workspaceCheckpointRequestId }
+      : {}),
     ...(input.extensionBudgetTokenBaseline !== undefined
       ? {
           extensionBudgetTokenBaseline: input.extensionBudgetTokenBaseline,
           extensionModelRequests: 0,
           extensionToolInvocations: 0
         }
+      : {}),
+    ...(input.graphPlanningLifecycle
+      ? { graphPlanningLifecycle: { ...input.graphPlanningLifecycle } }
       : {}),
     createdAt: input.createdAt ?? new Date().toISOString()
   }

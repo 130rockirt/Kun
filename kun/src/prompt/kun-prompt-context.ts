@@ -1,3 +1,5 @@
+import type { TurnClientSurface } from '../contracts/turns.js'
+
 export type KunTurnContextAuthority =
   | 'runtime'
   | 'user'
@@ -22,6 +24,49 @@ export function buildThreadProfileInstruction(profile: string | undefined): stri
     content,
     '</kun_thread_profile>'
   ].join('\n')
+}
+
+export function buildClientSurfaceInstruction(surface: TurnClientSurface): string {
+  const common =
+    'Use only the tools advertised for this turn. The client surface is presentation context, not extra authorization.'
+  switch (surface) {
+    case 'gui':
+      return [
+        'This turn was initiated from the Kun desktop GUI.',
+        'Desktop-specific workbench, canvas, or computer-control capabilities may be used only when their matching tools are advertised.',
+        common
+      ].join(' ')
+    case 'tui':
+      return [
+        'This turn was initiated from the Kun terminal TUI.',
+        'Do not claim to click, open, update, or inspect desktop workbench windows, sidebars, or canvases. Runtime approvals and structured questions can still be shown in the terminal when their tools are advertised.',
+        common
+      ].join(' ')
+    case 'cli':
+      return [
+        'This turn was initiated from a line-oriented or non-interactive Kun CLI.',
+        'Do not rely on desktop UI or terminal dialogs; ask for missing information in the normal response when interactive tools are unavailable.',
+        common
+      ].join(' ')
+    case 'im':
+      return [
+        'This turn was initiated through a messaging client.',
+        'Do not rely on desktop workbench, terminal controls, or structured dialogs; use messaging-specific tools only when advertised.',
+        common
+      ].join(' ')
+    case 'extension':
+      return [
+        'This turn was initiated by a Kun extension through the runtime API.',
+        'Do not assume an interactive GUI or TUI is attached.',
+        common
+      ].join(' ')
+    case 'api':
+      return [
+        'This turn was initiated through the Kun runtime API.',
+        'Do not assume an interactive GUI or TUI is attached.',
+        common
+      ].join(' ')
+  }
 }
 
 const TURN_CONTEXT_PREAMBLE = [

@@ -117,6 +117,7 @@ import {
   runtimeStreamRecoveringMessage,
   shouldOpenSettingsForError,
   syncTurnCompletionPoll,
+  turnCompleteNotificationSource,
   watchTurnCompletionNotification
 } from './chat-store-runtime'
 
@@ -168,7 +169,11 @@ export function createNavigationActions(
     const nextWatch = { ...state.watchTurnCompletion }
     if (state.activeThreadId && state.busy) {
       nextWatch[state.activeThreadId] = true
-      watchTurnCompletionNotification(state.activeThreadId)
+      watchTurnCompletionNotification(
+        state.activeThreadId,
+        Date.now(),
+        turnCompleteNotificationSource(state.activeThreadId, state)
+      )
     }
     set({
       ...clearedThreadSelection(),
@@ -188,7 +193,11 @@ export function createNavigationActions(
     const nextWatch = { ...state.watchTurnCompletion }
     if (state.activeThreadId && state.busy) {
       nextWatch[state.activeThreadId] = true
-      watchTurnCompletionNotification(state.activeThreadId)
+      watchTurnCompletionNotification(
+        state.activeThreadId,
+        Date.now(),
+        turnCompleteNotificationSource(state.activeThreadId, state)
+      )
     }
     sseAbortRef.current?.abort()
     sseAbortRef.current = null
@@ -207,7 +216,11 @@ export function createNavigationActions(
     const nextWatch = { ...state.watchTurnCompletion }
     if (state.activeThreadId && state.busy) {
       nextWatch[state.activeThreadId] = true
-      watchTurnCompletionNotification(state.activeThreadId)
+      watchTurnCompletionNotification(
+        state.activeThreadId,
+        Date.now(),
+        turnCompleteNotificationSource(state.activeThreadId, state)
+      )
     }
     sseAbortRef.current?.abort()
     sseAbortRef.current = null
@@ -260,7 +273,11 @@ export function createNavigationActions(
     const nextWatch = { ...state.watchTurnCompletion }
     if (state.activeThreadId && state.busy) {
       nextWatch[state.activeThreadId] = true
-      watchTurnCompletionNotification(state.activeThreadId)
+      watchTurnCompletionNotification(
+        state.activeThreadId,
+        Date.now(),
+        turnCompleteNotificationSource(state.activeThreadId, state)
+      )
     }
     set({
       ...clearedThreadSelection(),
@@ -629,6 +646,8 @@ export function createNavigationActions(
           workspaceLabel: workspaceLabelFromPath(workspaceRoot),
           conversationWorkspaceRoot: settings.conversationWorkspaceRoot || '',
           disabledSkillIds: settings.disabledSkillIds,
+          graphEnabled: settings.agents.kun.graph?.enabled === true,
+          composerOrchestration: 'direct',
           clawChannels: settings.claw.channels,
           activeClawChannelId: settings.claw.channels.find((channel) => channel.enabled)?.id ?? '',
           runtimeConnection: needsInitialSetup ? 'idle' : get().runtimeConnection,
@@ -853,7 +872,10 @@ export function createNavigationActions(
       const p = getProvider()
       let rawThreads: NormalizedThread[]
       try {
-        rawThreads = await p.listThreads({ limit: 200, includeArchived: true })
+        // Omitting `limit` is intentional: migrated and long-lived profiles
+        // must expose the complete inventory instead of silently hiding older
+        // conversations after an arbitrary client-side cutoff.
+        rawThreads = await p.listThreads({ includeArchived: true })
       } catch {
         rawThreads = await p.listThreads()
       }
@@ -863,8 +885,7 @@ export function createNavigationActions(
       }))
       const sddThreadRegistry = readSddThreadRegistry()
       const designRegistry = readDesignThreadRegistry()
-      const sidebarThreads = (await filterThreadsForSidebar(threads, p))
-        .filter((thread) => !isSddAssistantThread(thread, sddThreadRegistry))
+      const sidebarThreads = await filterThreadsForSidebar(threads, p)
       const forkRegistry = hydrateThreadForkRegistry(sidebarThreads, readThreadForkRegistry())
       saveThreadForkRegistry(forkRegistry)
       const enrichedThreads = enrichThreadsWithForkInfo(sidebarThreads, forkRegistry)

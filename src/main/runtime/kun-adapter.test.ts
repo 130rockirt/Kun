@@ -1,5 +1,8 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import type { AddressInfo } from 'node:net'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   defaultClawSettings,
@@ -13,7 +16,14 @@ import {
   defaultTerminalSettings,
   type AppSettingsV1
 } from '../../shared/app-settings'
-import { runtimeRequestViaHost } from './kun-adapter'
+import {
+  kunRuntimeAdapter,
+  resolveRuntimeRequestTimeoutMs,
+  runtimeRequestViaHost
+} from './kun-adapter'
+import { buildRuntimeCapabilityManifest } from '../../../kun/src/contracts/capabilities.js'
+import { modelCapabilitiesForModel } from '../../../kun/src/loop/model-context-profile.js'
+import { publishRuntimeDiscovery } from '../../../kun/src/server/runtime-discovery.js'
 
 let server: Server | null = null
 
@@ -24,6 +34,7 @@ function settingsForPort(port: number): AppSettingsV1 {
     theme: 'system',
     uiFontScale: 0.82,
     chatContentMaxWidthPx: 896,
+    composerSendKey: 'enter',
     provider: defaultModelProviderSettings(),
     agents: {
       kun: {
@@ -76,6 +87,19 @@ afterEach(async () => {
 })
 
 describe('runtimeRequestViaHost', () => {
+  it('keeps model connection long polls alive beyond their server wait window', () => {
+    expect(resolveRuntimeRequestTimeoutMs(
+      '/v1/model-connections/events?since_revision=62&wait_ms=25000',
+      'GET'
+    )).toBe(30_000)
+    expect(resolveRuntimeRequestTimeoutMs('/v1/threads', 'GET')).toBe(15_000)
+    expect(resolveRuntimeRequestTimeoutMs(
+      '/v1/model-connections/events?since_revision=62&wait_ms=25000',
+      'GET',
+      40_000
+    )).toBe(40_000)
+  })
+
   it('forwards daily usage requests to the Kun runtime with bearer auth', async () => {
     let seenUrl = ''
     let seenAuthorization = ''
@@ -256,5 +280,77 @@ describe('runtimeRequestViaHost', () => {
 
     await expect(request).rejects.toMatchObject({ name: 'AbortError' })
     expect(ensureCalls).toBe(1)
+  })
+})
+
+describe('kunRuntimeAdapter.resolveConnection', () => {
+  it('rejects an identity-less runtime before the GUI health fast path can reuse it', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-adapter-build-identity-'))
+    const dataDir = join(root, 'data')
+    const packageRoot = join(root, 'kun-package')
+    const entry = join(packageRoot, 'dist/cli/serve-entry.js')
+    const expectedBuildId = 'b'.repeat(64)
+    const startedAt = '2026-07-28T00:00:00.000Z'
+    const instanceId = 'runtime-build-compatibility'
+    const capabilities = buildRuntimeCapabilityManifest({
+      model: modelCapabilitiesForModel('fixture')
+    })
+    let liveBuildId: string | undefined
+
+    try {
+      await mkdir(join(packageRoot, 'dist/cli'), { recursive: true })
+      await writeFile(entry, '', 'utf8')
+      await writeFile(
+        join(packageRoot, 'dist/runtime-build.json'),
+        `${JSON.stringify({ version: 1, buildId: expectedBuildId })}\n`,
+        'utf8'
+      )
+      const port = await listen((_req, res) => {
+        res.setHeader('Content-Type', 'application/json')
+        res.end(JSON.stringify({
+          instanceId,
+          serviceVersion: '0.1.0',
+          ...(liveBuildId ? { buildId: liveBuildId } : {}),
+          launchMode: 'shared',
+          host: '127.0.0.1',
+          port,
+          dataDir,
+          model: 'fixture',
+          approvalPolicy: 'on-request',
+          sandboxMode: 'workspace-write',
+          insecure: false,
+          startedAt,
+          pid: process.pid,
+          capabilities
+        }))
+      })
+      const publish = async (): Promise<void> => {
+        await publishRuntimeDiscovery(dataDir, {
+          instanceId,
+          pid: process.pid,
+          startedAt,
+          host: '127.0.0.1',
+          port,
+          baseUrl: `http://127.0.0.1:${port}`,
+          runtimeToken: 'secret',
+          insecure: false,
+          ...(liveBuildId ? { buildId: liveBuildId } : {}),
+          launchMode: 'shared'
+        })
+      }
+      const settings = settingsForPort(port)
+      settings.agents.kun.dataDir = dataDir
+      settings.agents.kun.binaryPath = packageRoot
+
+      await publish()
+      await expect(kunRuntimeAdapter.resolveConnection(settings)).resolves.toBe(false)
+
+      liveBuildId = expectedBuildId
+      await publish()
+      await expect(kunRuntimeAdapter.resolveConnection(settings)).resolves.toBe(true)
+    } finally {
+      await kunRuntimeAdapter.stopAndWait()
+      await rm(root, { recursive: true, force: true })
+    }
   })
 })

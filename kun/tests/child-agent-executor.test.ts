@@ -341,7 +341,7 @@ describe('child agent executor', () => {
     })
 
     const toolNames = (seen[0]?.tools ?? []).map((tool) => tool.name).sort()
-    expect(toolNames).toEqual(['find', 'grep', 'ls', 'read', 'repo_map'])
+    expect(toolNames).toEqual(['glob', 'grep', 'ls', 'read', 'repo_map'])
     expect(seen[0]?.history?.[0]).toMatchObject({
       kind: 'user_message',
       text: 'Read-only review.\n\nInvestigate the bug'

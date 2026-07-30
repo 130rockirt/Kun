@@ -25,6 +25,10 @@ export type StoredArtifactMeta = {
   source?: ArtifactSourceKind
   /** Tool / origin label, e.g. an MCP tool name or `web_fetch`. */
   origin?: string
+  /** All origins observed since this metadata record was created. */
+  origins?: string[]
+  /** Absent on legacy metadata whose historical dedupe owners are unknown. */
+  originHistoryComplete?: true
   createdAt: string
 }
 
@@ -56,6 +60,7 @@ export type ReadRangeOptions = {
 export interface ArtifactStore {
   put(input: PutArtifactInput): Promise<PutArtifactResult>
   delete?(id: string): Promise<void>
+  list?(): Promise<StoredArtifactMeta[]>
   get(id: string): Promise<string | null>
   readRange(id: string, options: ReadRangeOptions): Promise<string | null>
   stat(id: string): Promise<StoredArtifactMeta | null>
@@ -135,6 +140,8 @@ function buildMeta(input: PutArtifactInput, id: string, nowIso: () => string): S
     ...(input.mimeType ? { mimeType: input.mimeType } : {}),
     ...(input.source ? { source: input.source } : {}),
     ...(input.origin ? { origin: input.origin } : {}),
+    origins: input.origin ? [input.origin] : [],
+    originHistoryComplete: true,
     createdAt: nowIso()
   }
 }
@@ -172,6 +179,14 @@ export class InMemoryArtifactStore implements ArtifactStore {
     if (!deduped) {
       this.contents.set(id, input.content)
       this.metas.set(id, buildMeta(input, id, this.nowIso))
+    } else if (input.origin) {
+      const current = this.metas.get(id)!
+      if (!current.origins?.includes(input.origin)) {
+        this.metas.set(id, {
+          ...current,
+          origins: [...(current.origins ?? [current.origin].filter(Boolean) as string[]), input.origin]
+        })
+      }
     }
     return { meta: this.metas.get(id)!, summary, deduped }
   }
@@ -183,6 +198,10 @@ export class InMemoryArtifactStore implements ArtifactStore {
   async delete(id: string): Promise<void> {
     this.contents.delete(id)
     this.metas.delete(id)
+  }
+
+  async list(): Promise<StoredArtifactMeta[]> {
+    return [...this.metas.values()].map((meta) => structuredClone(meta))
   }
 
   async readRange(id: string, options: ReadRangeOptions): Promise<string | null> {
@@ -256,6 +275,19 @@ export class FileArtifactStore implements ArtifactStore {
         }
       } else {
         meta = (await this.stat(id)) ?? buildMeta(input, id, this.nowIso)
+        if (input.origin && !meta.origins?.includes(input.origin)) {
+          meta = {
+            ...meta,
+            origins: [
+              ...(meta.origins ?? [meta.origin].filter(Boolean) as string[]),
+              input.origin
+            ]
+          }
+          await writeFile(this.metaPath(id), JSON.stringify(meta), {
+            encoding: 'utf8',
+            mode: 0o600
+          })
+        }
       }
       return { meta, summary, deduped }
     })
@@ -370,12 +402,10 @@ export class FileArtifactStore implements ArtifactStore {
     }
   }
 
-  private async enforceQuota(incomingBytes: number): Promise<void> {
-    const maxTotalBytes = this.limits.maxTotalBytes ?? 512 * 1024 * 1024
-    const maxArtifacts = this.limits.maxArtifacts ?? 2_000
-    if (incomingBytes > maxTotalBytes) throw new Error(`artifact exceeds ${maxTotalBytes} byte store quota`)
+  async list(): Promise<StoredArtifactMeta[]> {
+    await this.ensureDir()
     const entries = await readdir(this.dir).catch(() => [])
-    const metas = (await Promise.all(entries
+    return (await Promise.all(entries
       .filter((entry) => entry.endsWith('.json'))
       .map(async (entry) => {
         try {
@@ -384,7 +414,15 @@ export class FileArtifactStore implements ArtifactStore {
           return null
         }
       })))
-      .filter((meta): meta is StoredArtifactMeta => Boolean(meta && isValidArtifactId(meta.id)))
+      .filter((meta): meta is StoredArtifactMeta =>
+        Boolean(meta && isValidArtifactId(meta.id)))
+  }
+
+  private async enforceQuota(incomingBytes: number): Promise<void> {
+    const maxTotalBytes = this.limits.maxTotalBytes ?? 512 * 1024 * 1024
+    const maxArtifacts = this.limits.maxArtifacts ?? 2_000
+    if (incomingBytes > maxTotalBytes) throw new Error(`artifact exceeds ${maxTotalBytes} byte store quota`)
+    const metas = await this.list()
     const totalBytes = metas.reduce((sum, meta) => sum + meta.byteSize, 0)
     if (totalBytes + incomingBytes > maxTotalBytes || metas.length + 1 > maxArtifacts) {
       throw new Error('artifact store quota exceeded; remove unneeded artifacts before retrying')

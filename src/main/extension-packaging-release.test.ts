@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
@@ -34,10 +34,6 @@ function writeBundledExtensionResources(context: ReturnType<typeof packContext>)
   const root = join(afterPack._internals.packedResourcesDir(context), 'bundled-extensions')
   const extensions = [
     {
-      id: 'kun-examples.kun-video-editor',
-      archive: 'kun-video-editor-0.1.0.kunx'
-    },
-    {
       id: 'kun-examples.presentation-studio',
       archive: 'presentation-studio-0.1.0.kunx'
     },
@@ -59,6 +55,7 @@ function writeBundledExtensionResources(context: ReturnType<typeof packContext>)
   }
   writeFileSync(join(root, 'catalog.json'), `${JSON.stringify({
     schemaVersion: 1,
+    retiredExtensions: ['kun-examples.kun-video-editor'],
     extensions: extensions.map((extension) => ({
       id: extension.id,
       version: '0.1.0',
@@ -102,9 +99,12 @@ describe('Extension Platform packaged release resources', () => {
       to: 'bundled-extensions',
       filter: ['catalog.json', '*.kunx']
     }]))
-    expect(afterPack.REQUIRED_BUNDLED_EXTENSION_IDS).toContain(
+    expect(afterPack.REQUIRED_BUNDLED_EXTENSION_IDS).not.toContain(
       'kun-examples.kun-video-editor'
     )
+    expect(afterPack.REQUIRED_RETIRED_BUNDLED_EXTENSION_IDS).toEqual([
+      'kun-examples.kun-video-editor'
+    ])
     expect(afterPack.REQUIRED_BUNDLED_EXTENSION_IDS).toContain(
       'kun-examples.presentation-studio'
     )
@@ -145,11 +145,43 @@ describe('Extension Platform packaged release resources', () => {
     const context = packContext(root, 'darwin')
     writeBundledExtensionResources(context)
     writeFileSync(
-      join(afterPack._internals.packedResourcesDir(context), 'bundled-extensions', 'kun-video-editor-0.1.0.kunx'),
+      join(afterPack._internals.packedResourcesDir(context), 'bundled-extensions', 'presentation-studio-0.1.0.kunx'),
       'tampered'
     )
     expect(() => afterPack._internals.validateBundledExtensionResources(context)).toThrow(
       /digest mismatch/
+    )
+  })
+
+  it('rejects video editor and orphan archives from packaged defaults', () => {
+    const root = temporaryRoot()
+    const context = packContext(root, 'darwin')
+    writeBundledExtensionResources(context)
+    const bundledRoot = join(
+      afterPack._internals.packedResourcesDir(context),
+      'bundled-extensions'
+    )
+    const archive = 'kun-video-editor-0.4.4.kunx'
+    const bytes = Buffer.from('retired video editor archive')
+    writeFileSync(join(bundledRoot, archive), bytes)
+    const catalogPath = join(bundledRoot, 'catalog.json')
+    const catalog = JSON.parse(readFileSync(catalogPath, 'utf8'))
+    catalog.extensions.push({
+      id: 'kun-examples.kun-video-editor',
+      version: '0.4.4',
+      archive,
+      sha256: createHash('sha256').update(bytes).digest('hex')
+    })
+    writeFileSync(catalogPath, `${JSON.stringify(catalog, null, 2)}\n`)
+
+    expect(() => afterPack._internals.validateBundledExtensionResources(context)).toThrow(
+      /Unexpected bundled extension/
+    )
+
+    catalog.extensions.pop()
+    writeFileSync(catalogPath, `${JSON.stringify(catalog, null, 2)}\n`)
+    expect(() => afterPack._internals.validateBundledExtensionResources(context)).toThrow(
+      /Unexpected bundled extension archive/
     )
   })
 })

@@ -5,6 +5,10 @@ import type { InteractiveToolBridge } from './interactive-tool-bridge.js'
 export type ToolDiscoveryContextFactoryDeps = {
   memoryEnabled: boolean
   allowedProviderIds?: readonly string[]
+  allowedSkillIds?: readonly string[]
+  allowedReadPaths?: readonly string[]
+  allowedWritePaths?: readonly string[]
+  allowedArtifactIds?: readonly string[]
   blockedProviderIds?: readonly string[]
   blockedToolNames?: readonly string[]
   blockedSkillIds?: readonly string[]
@@ -28,6 +32,10 @@ export function createToolDiscoveryContext(
     threadId: input.threadId,
     turnId: input.turnId,
     workspace: input.workspace,
+    ...(input.orchestration ? { orchestration: input.orchestration } : {}),
+    ...(input.messageSource ? { messageSource: input.messageSource } : {}),
+    ...(input.additionalWorkspaces?.length ? { additionalWorkspaces: input.additionalWorkspaces } : {}),
+    clientSurface: input.clientSurface,
     threadMode: input.threadMode,
     ...(input.activePlanContext ? { guiPlan: input.activePlanContext } : {}),
     ...(input.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
@@ -36,6 +44,7 @@ export function createToolDiscoveryContext(
     ...(input.guiDesignArtifact ? { guiDesignArtifact: input.guiDesignArtifact } : {}),
     ...(input.imContext ? { imContext: true } : {}),
     model: input.modelCapabilities,
+    actingModelRoute: input.actingModelRoute,
     activeSkillIds: input.activeSkillIds,
     memoryPolicy: { enabled: deps.memoryEnabled },
     delegationPolicy: { enabled: false },
@@ -44,10 +53,15 @@ export function createToolDiscoveryContext(
       ? { extensionToolCatalogEpoch: input.extensionToolCatalogEpoch }
       : {}),
     ...(deps.allowedProviderIds ? { allowedProviderIds: deps.allowedProviderIds } : {}),
+    ...(deps.allowedSkillIds ? { allowedSkillIds: deps.allowedSkillIds } : {}),
+    ...(deps.allowedReadPaths ? { allowedReadPaths: deps.allowedReadPaths } : {}),
+    ...(deps.allowedWritePaths ? { allowedWritePaths: deps.allowedWritePaths } : {}),
+    ...(deps.allowedArtifactIds ? { allowedArtifactIds: deps.allowedArtifactIds } : {}),
     ...(deps.blockedProviderIds ? { blockedProviderIds: deps.blockedProviderIds } : {}),
     ...(deps.blockedToolNames ? { blockedToolNames: deps.blockedToolNames } : {}),
     ...(deps.blockedSkillIds ? { blockedSkillIds: deps.blockedSkillIds } : {}),
     approvalPolicy: input.approvalPolicy,
+    approvalReviewer: input.approvalReviewer,
     sandboxMode: input.sandboxMode,
     ...(deps.runtimeDataDir ? { runtimeDataDir: deps.runtimeDataDir } : {}),
     abortSignal: input.signal,

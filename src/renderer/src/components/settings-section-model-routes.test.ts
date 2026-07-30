@@ -34,7 +34,67 @@ function settings(): ModelProviderSettingsV1 {
 
 describe('ModelRoutesSettings', () => {
   afterEach(() => {
+    vi.useRealTimers()
     vi.unstubAllGlobals()
+  })
+
+  it('renders four persistent task tabs with matching panels', () => {
+    const html = renderToStaticMarkup(createElement(ModelRoutesSettings, {
+      settings: settings(),
+      onChange: () => undefined
+    }))
+
+    for (const tabId of ['gateway', 'models', 'resilience', 'monitoring']) {
+      expect(html).toContain(`id="model-routes-settings-tab-${tabId}"`)
+      expect(html).toContain(`aria-controls="model-routes-settings-panel-${tabId}"`)
+      expect(html).toContain(`id="model-routes-settings-panel-${tabId}"`)
+      expect(html).toContain(`aria-labelledby="model-routes-settings-tab-${tabId}"`)
+    }
+  })
+
+  it('pauses Runtime polling while its persistent parent panel is hidden', async () => {
+    vi.useFakeTimers()
+    const runtimeRequest = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      body: '{"localGateway":{"enabled":true},"pools":[],"metrics":{},"events":[]}'
+    }))
+    vi.stubGlobal('window', { kunGui: { runtimeRequest } })
+
+    let renderer!: ReactTestRenderer
+    await act(async () => {
+      renderer = createRenderer(createElement(ModelRoutesSettings, {
+        settings: settings(),
+        onChange: () => undefined,
+        active: false
+      }))
+    })
+    expect(runtimeRequest).not.toHaveBeenCalled()
+
+    await act(async () => {
+      renderer.update(createElement(ModelRoutesSettings, {
+        settings: settings(),
+        onChange: () => undefined,
+        active: true
+      }))
+      await Promise.resolve()
+    })
+    expect(runtimeRequest).toHaveBeenCalledOnce()
+
+    await act(async () => {
+      renderer.update(createElement(ModelRoutesSettings, {
+        settings: settings(),
+        onChange: () => undefined,
+        active: false
+      }))
+    })
+    await act(async () => {
+      vi.advanceTimersByTime(1_100)
+      await Promise.resolve()
+    })
+    expect(runtimeRequest).toHaveBeenCalledOnce()
+
+    await act(async () => renderer.unmount())
   })
 
   it('renders one local provider with multiple routed models and safety policy', () => {

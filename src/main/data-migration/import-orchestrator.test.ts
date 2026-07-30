@@ -5,7 +5,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { normalizeAppSettings, type AppSettingsV1 } from '../../shared/app-settings'
 import { JsonSettingsStore } from '../settings-store'
 import { DataMigrationExportOrchestrator, type KunMigrationSnapshotClient } from './export-orchestrator'
-import { DataMigrationImportOrchestrator, type RendererMigrationStateAdapter } from './import-orchestrator'
+import {
+  DataMigrationImportOrchestrator,
+  validateInspectionCatalogs,
+  type RendererMigrationStateAdapter
+} from './import-orchestrator'
+import { parsePackageRelativePath } from '../../shared/data-migration'
 import { DataMigrationImportTransactionCoordinator } from './import-transaction'
 import { MigrationReportStore } from './migration-reports'
 import { MigrationJournalStore } from './transaction-journal'
@@ -84,6 +89,30 @@ describe('data migration import orchestration', () => {
     const transactions = new DataMigrationImportTransactionCoordinator(journals, reports)
     const orchestrator = new DataMigrationImportOrchestrator(join(userData, 'migration-temp'), journals, transactions)
     const inspection = await orchestrator.inspect({ packagePath })
+    expect(() => validateInspectionCatalogs({
+      ...inspection.manifest,
+      componentVersions: {
+        ...inspection.manifest.componentVersions,
+        'renderer-state': 2
+      }
+    }, inspection.entries, inspection.catalogs)).toThrow('component version is unsupported')
+    expect(() => validateInspectionCatalogs({
+      ...inspection.manifest,
+      selection: {
+        ...inspection.manifest.selection,
+        categories: ['workspace-files']
+      }
+    }, inspection.entries, inspection.catalogs)).toThrow('unselected portable-settings catalog')
+    expect(() => validateInspectionCatalogs(
+      inspection.manifest,
+      inspection.entries.map((entry) => entry.kind === 'workspace-file'
+        ? {
+            ...entry,
+            path: parsePackageRelativePath(`payload/workspaces/another_owner/files/${entry.path.split('/').at(-1)}`)
+          }
+        : entry),
+      inspection.catalogs
+    )).toThrow('path does not match its owner')
     const plan = await orchestrator.plan({
       operationId: 'import_e2e',
       inspection,

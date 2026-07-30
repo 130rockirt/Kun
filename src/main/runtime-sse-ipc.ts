@@ -186,7 +186,7 @@ export function registerRuntimeSseIpc(options: {
     const request = sseStartPayloadSchema.parse(args)
     const loadedSettings = await store.load()
     const ensuredSettings = await ensureRuntime(loadedSettings)
-    const s = ensuredSettings ?? loadedSettings
+    let connectionSettings = ensuredSettings ?? loadedSettings
     const requestedId = request.streamId?.trim() ?? ''
     const id = requestedId || randomUUID()
     const existing = sseControllers.get(id)
@@ -199,28 +199,35 @@ export function registerRuntimeSseIpc(options: {
     const ac = new AbortController()
     const state: SseControllerState = { controller: ac, stoppedByClient: false }
     sseControllers.set(id, state)
-    const base = getRuntimeBaseUrlForSettings(s)
     const acknowledgedBatches = request.acknowledgedBatches === true
 
     ;(async () => {
       const wc = event.sender
-      const headers: Record<string, string> = { Accept: 'text/event-stream' }
-      runtimeAuthHeaders(s).forEach((value, key) => {
-        headers[key] = value
-      })
       let nextSinceSeq = request.sinceSeq
       let reconnectDelayMs = SSE_RECONNECT_BASE_MS
       try {
         while (!state.stoppedByClient && !ac.signal.aborted) {
-          const url = new URL(`${base}${kunThreadEventsPath(request.threadId)}`)
-          url.searchParams.set('since_seq', String(nextSinceSeq))
-          const requestHeaders = { ...headers }
-          if (nextSinceSeq > 0) {
-            requestHeaders['Last-Event-ID'] = String(nextSinceSeq)
-          } else {
-            delete requestHeaders['Last-Event-ID']
-          }
           try {
+            // A shared runtime may be restarted by the GUI, a TUI, or
+            // `kun runtime restart`. Re-resolve discovery before every SSE
+            // reconnect so the stream follows the new URL/token while
+            // retaining its sequence cursor.
+            const latestSettings = await store.load()
+            const latestEnsured = await ensureRuntime(latestSettings)
+            connectionSettings = latestEnsured ?? latestSettings
+            const base = getRuntimeBaseUrlForSettings(connectionSettings)
+            const headers: Record<string, string> = { Accept: 'text/event-stream' }
+            runtimeAuthHeaders(connectionSettings).forEach((value, key) => {
+              headers[key] = value
+            })
+            const url = new URL(`${base}${kunThreadEventsPath(request.threadId)}`)
+            url.searchParams.set('since_seq', String(nextSinceSeq))
+            const requestHeaders = { ...headers }
+            if (nextSinceSeq > 0) {
+              requestHeaders['Last-Event-ID'] = String(nextSinceSeq)
+            } else {
+              delete requestHeaders['Last-Event-ID']
+            }
             const res = await fetchSseWithStartTimeout(url, requestHeaders, ac.signal, SSE_START_TIMEOUT_MS)
             if (!res.ok || !res.body) {
               if (isFatalSseStatus(res.status)) {
