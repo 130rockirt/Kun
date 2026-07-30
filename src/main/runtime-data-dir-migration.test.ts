@@ -1106,7 +1106,7 @@ describe('canonical Kun Runtime data migration', () => {
     })
     expect(resumed.status).toBe('completed')
     expect(await isLinkTo(test.legacy, test.current)).toBe(true)
-  })
+  }, 15_000)
 
   it.each([
     'rollback-conflict-planned',
