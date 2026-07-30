@@ -1657,6 +1657,13 @@ requireLinuxUserNamespaceStep(prPackageJob, 'package')
 requireBoundedCommandStep(
   prPackageJob,
   'package',
+  'Smoke Graph workbench pointer interactions on native Linux',
+  'xvfb-run -a npm run smoke:development-graph-workbench',
+  10
+)
+requireBoundedCommandStep(
+  prPackageJob,
+  'package',
   'Smoke final Linux AppImage desktop Chromium',
   appImageDesktopCommand,
   10
@@ -1681,6 +1688,13 @@ requireOrderedCommands(prMacJob, 'package-macos', [
   'npm run smoke:packaged-extension-desktop',
   nativeEvidenceCommand
 ])
+requireBoundedCommandStep(
+  prMacJob,
+  'package-macos',
+  'Smoke Graph workbench pointer interactions on native macOS',
+  'npm run smoke:development-graph-workbench',
+  10
+)
 requireUnconditionalStepAfter(
   prMacJob,
   'package-macos',
@@ -1710,6 +1724,13 @@ requireOrderedCommands(prWindowsJob, 'package-windows', [
   'npm run smoke:packaged-extension-desktop',
   nativeEvidenceCommand
 ])
+requireBoundedCommandStep(
+  prWindowsJob,
+  'package-windows',
+  'Smoke Graph workbench pointer interactions on native Windows',
+  'npm run smoke:development-graph-workbench',
+  10
+)
 requireUnconditionalStepAfter(
   prWindowsJob,
   'package-windows',

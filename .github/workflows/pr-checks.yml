@@ -124,6 +124,7 @@ jobs:
           unshare --user --map-root-user /bin/true
 
       - name: Smoke Graph workbench pointer interactions on native Linux
+        timeout-minutes: 10
         run: xvfb-run -a npm run smoke:development-graph-workbench
 
       - name: Smoke packaged OCR dependencies
@@ -220,6 +221,7 @@ jobs:
           npm run smoke:packaged-cli -- --resources "$resources"
 
       - name: Smoke Graph workbench pointer interactions on native macOS
+        timeout-minutes: 10
         run: npm run smoke:development-graph-workbench
 
       - name: Verify packaged macOS x64 native architecture
@@ -373,6 +375,7 @@ jobs:
         run: npm run smoke:packaged-cli -- --resources dist/win-unpacked/resources
 
       - name: Smoke Graph workbench pointer interactions on native Windows
+        timeout-minutes: 10
         run: npm run smoke:development-graph-workbench
 
       - name: Smoke packaged Extension Node runtime (win-unpacked)

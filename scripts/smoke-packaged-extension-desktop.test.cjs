@@ -46,6 +46,9 @@ const {
   terminateProcessTree,
   waitForPortsClosed
 } = require('./smoke-packaged-extension-desktop.cjs')
+const {
+  withTimeout: withGraphWorkbenchTimeout
+} = require('./smoke-development-graph-workbench.cjs')
 
 const root = resolve(__dirname, '..')
 const linuxUserNamespaceStepName = 'Prepare and verify Linux user namespace sandbox'
@@ -68,6 +71,21 @@ test('forces headless packaged runtime smokes onto the encrypted file-key fallba
   assert.equal(environment.ELECTRON_RUN_AS_NODE, '1')
   assert.equal(environment.KUN_DISABLE_OS_CREDENTIAL_STORE, '1')
   assert.equal(environment.KUN_PACKAGED_EXTENSION_SMOKE_REEXEC, '1')
+})
+
+test('bounds Graph workbench browser operations', async () => {
+  assert.equal(
+    await withGraphWorkbenchTimeout(Promise.resolve('completed'), 100, 'running fixture'),
+    'completed'
+  )
+  await assert.rejects(
+    withGraphWorkbenchTimeout(
+      new Promise(() => undefined),
+      10,
+      'running a stalled fixture'
+    ),
+    /Timed out while running a stalled fixture/
+  )
 })
 
 test('selects host-native packaged resources and never launches desktop Electron as Node', () => {
@@ -1167,6 +1185,14 @@ test('every automated and local release path gates uploads behind packaged Exten
     nativeEvidenceCommand
   ])
   assertStepAfter(pr.jobs['package-windows'], 'Upload Windows PR package', nativeEvidenceCommand)
+  for (const [jobId, stepName] of [
+    ['package', 'Smoke Graph workbench pointer interactions on native Linux'],
+    ['package-macos', 'Smoke Graph workbench pointer interactions on native macOS'],
+    ['package-windows', 'Smoke Graph workbench pointer interactions on native Windows']
+  ]) {
+    const step = pr.jobs[jobId].steps.find((candidate) => candidate.name === stepName)
+    assert.equal(step?.['timeout-minutes'], 10, `${stepName} must have a bounded timeout`)
+  }
   assertOrderedCommands(daily.jobs['build-macos'], [
     'npm run check:extension-release-gate',
     'npm run dist:mac',

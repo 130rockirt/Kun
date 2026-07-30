@@ -22,6 +22,8 @@ const { developmentRendererEnvironment } = require('./development-renderer-envir
 const { findWorkbenchWindow } = require('./smoke-packaged-video-editor-desktop.cjs')
 
 const DEFAULT_TIMEOUT_MS = 120_000
+const MAX_OPERATION_TIMEOUT_MS = 30_000
+const MAX_CLEANUP_TIMEOUT_MS = 15_000
 
 async function main() {
   const repositoryRoot = resolve(join(__dirname, '..'))
@@ -56,6 +58,7 @@ async function main() {
 
   let rendererProcess
   let electronApplication
+  let electronProcess
   let rendererOutput = ''
   let electronOutput = ''
   try {
@@ -128,32 +131,45 @@ async function main() {
       chromiumSandbox: true,
       timeout: timeoutMs
     })
-    const electronProcess = electronApplication.process()
+    electronProcess = electronApplication.process()
     electronProcess.stdout?.on('data', (chunk) => {
       electronOutput = `${electronOutput}${String(chunk)}`.slice(-64 * 1024)
     })
     electronProcess.stderr?.on('data', (chunk) => {
       electronOutput = `${electronOutput}${String(chunk)}`.slice(-64 * 1024)
     })
-    await electronApplication.evaluate(({ BrowserWindow }) => {
-      const window = BrowserWindow.getAllWindows().find((candidate) => !candidate.isDestroyed())
-      window?.setBounds({ x: 20, y: 20, width: 1200, height: 900 })
-    })
+    const operationTimeoutMs = Math.min(timeoutMs, MAX_OPERATION_TIMEOUT_MS)
+    await withTimeout(
+      electronApplication.evaluate(({ BrowserWindow }) => {
+        const window = BrowserWindow.getAllWindows().find((candidate) => !candidate.isDestroyed())
+        window?.setBounds({ x: 20, y: 20, width: 1200, height: 900 })
+      }),
+      operationTimeoutMs,
+      'resizing the Graph workbench window'
+    )
     const page = await findWorkbenchWindow(electronApplication, timeoutMs)
     await page.waitForLoadState('domcontentloaded')
     await page.waitForTimeout(1_000)
     // Graph is lazy in the production workbench. The first development import
     // can make Vite optimize @xyflow/react and reload the renderer. Warm that
     // dependency before mounting so a reload cannot erase the smoke fixture.
-    await page.evaluate(async () => {
-      await import('/src/components/graph/GraphWorkbenchSmokeFixture.tsx')
-    }).catch(() => undefined)
+    await withTimeout(
+      page.evaluate(async () => {
+        await import('/src/components/graph/GraphWorkbenchSmokeFixture.tsx')
+      }),
+      operationTimeoutMs,
+      'warming the Graph workbench fixture'
+    ).catch(() => undefined)
     await page.waitForTimeout(1_500)
     await page.waitForLoadState('domcontentloaded')
-    await page.evaluate(async () => {
-      const fixture = await import('/src/components/graph/GraphWorkbenchSmokeFixture.tsx')
-      fixture.mountGraphWorkbenchSmokeFixture(1060)
-    })
+    await withTimeout(
+      page.evaluate(async () => {
+        const fixture = await import('/src/components/graph/GraphWorkbenchSmokeFixture.tsx')
+        fixture.mountGraphWorkbenchSmokeFixture(1060)
+      }),
+      operationTimeoutMs,
+      'mounting the Graph workbench fixture'
+    )
     const canvas = page.locator('[data-graph-interaction-root]')
     await canvas.waitFor({ state: 'visible', timeout: timeoutMs })
     await page.waitForTimeout(500)
@@ -285,10 +301,14 @@ async function main() {
     await page.getByRole('button', { name: 'Close details' }).click()
     await inspector.waitFor({ state: 'hidden' })
 
-    await page.evaluate(async () => {
-      const fixture = await import('/src/components/graph/GraphWorkbenchSmokeFixture.tsx')
-      fixture.setGraphWorkbenchSmokeWidth(680)
-    })
+    await withTimeout(
+      page.evaluate(async () => {
+        const fixture = await import('/src/components/graph/GraphWorkbenchSmokeFixture.tsx')
+        fixture.setGraphWorkbenchSmokeWidth(680)
+      }),
+      operationTimeoutMs,
+      'resizing the Graph workbench fixture'
+    )
     await page.waitForTimeout(120)
     await node.dblclick()
     await inspector.waitFor({ state: 'visible' })
@@ -335,17 +355,64 @@ async function main() {
       diagnostics ? `\n\n${diagnostics}` : ''
     }`)
   } finally {
-    if (electronApplication) await electronApplication.close().catch(() => undefined)
-    if (rendererProcess) {
-      await terminateProcessTree(rendererProcess, process.platform, {
+    if (electronApplication) {
+      await withTimeout(
+        electronApplication.close(),
+        MAX_CLEANUP_TIMEOUT_MS,
+        'closing the Graph workbench Electron application'
+      ).catch(() => undefined)
+    }
+    if (electronProcess) {
+      await terminateProcessTree(electronProcess, process.platform, {
+        timeoutMs: MAX_CLEANUP_TIMEOUT_MS,
         detached: process.platform !== 'win32'
       }).catch(() => undefined)
     }
-    await makeTreeWritable(temporaryRoot).catch(() => undefined)
+    if (rendererProcess) {
+      await terminateProcessTree(rendererProcess, process.platform, {
+        timeoutMs: MAX_CLEANUP_TIMEOUT_MS,
+        detached: process.platform !== 'win32'
+      }).catch(() => undefined)
+    }
     await Promise.all([
-      rm(temporaryRoot, { recursive: true, force: true }),
-      rm(workspaceRoot, { recursive: true, force: true })
+      makeTreeWritable(temporaryRoot),
+      makeTreeWritable(workspaceRoot)
+    ]).catch(() => undefined)
+    await withTimeout(
+      Promise.all([
+        rm(temporaryRoot, {
+          recursive: true,
+          force: true,
+          maxRetries: 8,
+          retryDelay: 250
+        }),
+        rm(workspaceRoot, {
+          recursive: true,
+          force: true,
+          maxRetries: 8,
+          retryDelay: 250
+        })
+      ]),
+      MAX_CLEANUP_TIMEOUT_MS,
+      'removing Graph workbench smoke directories'
+    )
+  }
+}
+
+async function withTimeout(operation, timeoutMs, description) {
+  let timeout
+  try {
+    return await Promise.race([
+      operation,
+      new Promise((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error(`Timed out while ${description}`)),
+          timeoutMs
+        )
+      })
     ])
+  } finally {
+    if (timeout) clearTimeout(timeout)
   }
 }
 
@@ -409,7 +476,11 @@ function positiveIntegerArgument(name, fallback) {
   return value
 }
 
-main().catch((error) => {
-  process.stderr.write(`${error instanceof Error ? error.stack ?? error.message : String(error)}\n`)
-  process.exitCode = 1
-})
+if (require.main === module) {
+  main().catch((error) => {
+    process.stderr.write(`${error instanceof Error ? error.stack ?? error.message : String(error)}\n`)
+    process.exitCode = 1
+  })
+}
+
+module.exports = { withTimeout }
