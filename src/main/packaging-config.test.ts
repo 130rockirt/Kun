@@ -164,8 +164,9 @@ afterEach(() => {
 
 describe('electron-builder Kun packaging', () => {
   it('ships only Chromium locales exposed by the application locale picker', () => {
-    expect(builderConfig.electronLanguages).toEqual([
+    expect(builderConfig.mac.electronLanguages).toEqual([
       'en',
+      'en_GB',
       'zh_CN',
       'zh_TW',
       'ru',
@@ -174,6 +175,19 @@ describe('electron-builder Kun packaging', () => {
       'ja',
       'ko'
     ])
+    const chromiumPakLanguages = [
+      'en-US',
+      'en-GB',
+      'zh-CN',
+      'zh-TW',
+      'ru',
+      'hi',
+      'th',
+      'ja',
+      'ko'
+    ]
+    expect(builderConfig.win.electronLanguages).toEqual(chromiumPakLanguages)
+    expect(builderConfig.linux.electronLanguages).toEqual(chromiumPakLanguages)
   })
 
   it('provides the maintainer identity required by Debian packages', () => {

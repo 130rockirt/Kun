@@ -77,6 +77,8 @@ const releaseArtifactVersion = (
 const artifactVersion = releaseArtifactVersion || releaseAppVersion || '${version}'
 const semverVersionPattern = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/
 const artifactVersionPattern = /^[0-9A-Za-z][0-9A-Za-z._-]*$/
+const chromiumPakLanguages = ['en-US', 'en-GB', 'zh-CN', 'zh-TW', 'ru', 'hi', 'th', 'ja', 'ko']
+const chromiumMacLanguages = ['en', 'en_GB', 'zh_CN', 'zh_TW', 'ru', 'hi', 'th', 'ja', 'ko']
 
 function normalizeUpdateChannel(raw) {
   const value = String(raw || '').trim()
@@ -105,9 +107,6 @@ module.exports = {
   //  - macOS TCC 权限、通知授权也都挂在这个 id 上。
   appId: 'com.xingyuzhong.deepseekgui',
   productName: 'Kun',
-  // Chromium locale packs are independent from the renderer's JSON translations.
-  // Ship only the locales exposed by APP_LOCALES (Chinese needs both script variants).
-  electronLanguages: ['en', 'zh_CN', 'zh_TW', 'ru', 'hi', 'th', 'ja', 'ko'],
   asar: true,
   asarUnpack: [
     '**/kun/dist/**/*',
@@ -222,6 +221,8 @@ module.exports = {
   afterPack: './scripts/after-pack.cjs',
   afterSign: './scripts/mac-notarize.cjs',
   mac: {
+    // macOS stores Chromium locales in language-named .lproj directories.
+    electronLanguages: chromiumMacLanguages,
     category: 'public.app-category.developer-tools',
     identity: hasExplicitMacSigningIdentity ? undefined : null,
     // We notarize in scripts/mac-notarize.cjs so APPLE_API_KEY_BASE64 can be supported.
@@ -248,6 +249,8 @@ module.exports = {
     sign: hasExplicitMacSigningIdentity
   },
   win: {
+    // Windows and Linux use BCP 47 locale names for Chromium .pak files.
+    electronLanguages: chromiumPakLanguages,
     // Windows does not mask app icons for us; use the rounded asset so
     // desktop/start-menu/taskbar shortcuts do not show a hard square edge.
     // Ship a multi-size .ico (16/24/32/48/64/72/96/128/256) so Explorer and
@@ -271,6 +274,7 @@ module.exports = {
     deleteAppDataOnUninstall: false
   },
   linux: {
+    electronLanguages: chromiumPakLanguages,
     category: 'Development',
     icon: './src/asset/img/kun.png',
     maintainer: 'Kun Contributors <1736101137@qq.com>',
