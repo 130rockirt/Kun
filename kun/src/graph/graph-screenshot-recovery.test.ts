@@ -1,4 +1,3 @@
-import { rm } from 'node:fs/promises'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { DelegationRuntime } from '../delegation/delegation-runtime.js'
 import type { ToolHostContext } from '../ports/tool-host.js'
@@ -9,18 +8,12 @@ import {
   testGraphPlan
 } from './graph-test-fixtures.test-support.js'
 import {
+  cleanupSchedulerHarnesses,
   schedulerHarness,
-  schedulerTestRoots as roots,
   waitFor
 } from '../../tests/graph-scheduler-test-harness.js'
 
-const activeSchedulers: Array<{ stop(): Promise<void> }> = []
-
-afterEach(async () => {
-  await Promise.all(activeSchedulers.splice(0).map((scheduler) => scheduler.stop()))
-  await Promise.all(roots.splice(0).map((root) =>
-    rm(root, { recursive: true, force: true })))
-})
+afterEach(cleanupSchedulerHarnesses)
 
 describe('Graph screenshot recovery path', () => {
   it('clips oversized evidence, carries Lead repair guidance, then supersedes exhausted work', async () => {
@@ -83,7 +76,6 @@ describe('Graph screenshot recovery path', () => {
       {},
       { autoLeadReview: false }
     )
-    activeSchedulers.push(harness.scheduler)
     harness.scheduler.start()
 
     const first = await submittedAttempt(harness, source.id, 1)

@@ -24,14 +24,13 @@ import {
 } from './graph-test-fixtures.test-support.js'
 import {
   autoLeadSupervision,
+  cleanupSchedulerHarnesses,
   rejectWhenAborted,
   schedulerHarness,
   schedulerTestRoots as roots,
   waitFor
 } from '../../tests/graph-scheduler-test-harness.js'
-afterEach(async () => {
-  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })))
-})
+afterEach(cleanupSchedulerHarnesses)
 describe('GraphScheduler', () => {
   it('completes regardless of a legacy Graph token ceiling', async () => {
     const root = await mkdtemp(join(tmpdir(), 'kun-graph-scheduler-'))

@@ -13,17 +13,14 @@ import {
   testGraphPlan
 } from './graph-test-fixtures.test-support.js'
 import {
+  cleanupSchedulerHarnesses,
   schedulerHarness,
-  schedulerTestRoots as roots,
   waitFor
 } from '../../tests/graph-scheduler-test-harness.js'
 
 const execFileAsync = promisify(execFile)
 
-afterEach(async () => {
-  await Promise.all(roots.splice(0).map((root) =>
-    rm(root, { recursive: true, force: true })))
-})
+afterEach(cleanupSchedulerHarnesses)
 
 describe('GraphScheduler host result validation', () => {
   it('submits a worktree scope violation for supervision without retrying the worker', async () => {

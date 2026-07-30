@@ -1,5 +1,4 @@
 import { execFile } from 'node:child_process'
-import { rm } from 'node:fs/promises'
 import { promisify } from 'node:util'
 import { afterEach, describe, expect, it } from 'vitest'
 import { GraphPlanV1Schema } from '../contracts/graph.js'
@@ -14,8 +13,8 @@ import {
   testGraphPlan
 } from './graph-test-fixtures.test-support.js'
 import {
+  cleanupSchedulerHarnesses,
   schedulerHarness,
-  schedulerTestRoots as roots,
   waitFor
 } from '../../tests/graph-scheduler-test-harness.js'
 
@@ -58,10 +57,7 @@ function compileLoopPlan(
   })
 }
 
-afterEach(async () => {
-  await Promise.all(roots.splice(0).map((root) =>
-    rm(root, { recursive: true, force: true })))
-})
+afterEach(cleanupSchedulerHarnesses)
 
 describe('GraphScheduler LoopGate repair routing', () => {
   it('routes a revised read-only review through its bounded repair LoopGate', async () => {

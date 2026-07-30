@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir } from 'node:fs/promises'
+import { mkdtemp, mkdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { FileArtifactStore } from '../src/artifacts/artifact-store.js'
@@ -21,6 +21,7 @@ import {
 } from '../src/graph/graph-test-fixtures.test-support.js'
 
 export const schedulerTestRoots: string[] = []
+const schedulerTestSchedulers: GraphScheduler[] = []
 
 export async function schedulerHarness(
   plan: ReturnType<typeof testGraphPlan>,
@@ -126,7 +127,23 @@ export async function schedulerHarness(
     nextId,
     tickIntervalMs: 5
   })
+  schedulerTestSchedulers.push(scheduler)
   return { store, control, scheduler, identity, workspace, writes }
+}
+
+export async function cleanupSchedulerHarnesses(): Promise<void> {
+  await Promise.all(
+    schedulerTestSchedulers.splice(0).map((scheduler) => scheduler.stop())
+  )
+  await Promise.all(
+    schedulerTestRoots.splice(0).map((root) =>
+      rm(root, {
+        recursive: true,
+        force: true,
+        maxRetries: 8,
+        retryDelay: 100
+      }))
+  )
 }
 
 export function autoLeadSupervision(

@@ -1,4 +1,3 @@
-import { rm } from 'node:fs/promises'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { DelegationRuntime } from '../delegation/delegation-runtime.js'
 import {
@@ -10,16 +9,13 @@ import {
   testGraphPlan
 } from './graph-test-fixtures.test-support.js'
 import {
+  cleanupSchedulerHarnesses,
   schedulerHarness,
   rejectWhenAborted,
-  schedulerTestRoots as roots,
   waitFor
 } from '../../tests/graph-scheduler-test-harness.js'
 
-afterEach(async () => {
-  await Promise.all(roots.splice(0).map((root) =>
-    rm(root, { recursive: true, force: true })))
-})
+afterEach(cleanupSchedulerHarnesses)
 
 describe('GraphScheduler host shutdown recovery', () => {
   it('does not consume the only worker attempt across shutdown and restart', async () => {

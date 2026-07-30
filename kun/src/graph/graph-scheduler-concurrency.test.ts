@@ -1,20 +1,16 @@
-import { rm } from 'node:fs/promises'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { DelegationRuntime } from '../delegation/delegation-runtime.js'
 import {
   testGraphPlan
 } from './graph-test-fixtures.test-support.js'
 import {
+  cleanupSchedulerHarnesses,
   rejectWhenAborted,
   schedulerHarness,
-  schedulerTestRoots as roots,
   waitFor
 } from '../../tests/graph-scheduler-test-harness.js'
 
-afterEach(async () => {
-  await Promise.all(roots.splice(0).map((root) =>
-    rm(root, { recursive: true, force: true })))
-})
+afterEach(cleanupSchedulerHarnesses)
 
 describe('GraphScheduler same-run concurrency', () => {
   it('keeps two independent ready nodes active at the same time', async () => {
