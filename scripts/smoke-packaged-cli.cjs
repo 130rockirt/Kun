@@ -77,7 +77,11 @@ function packagedCliInvocation(resourcesDirectory, {
     return {
       command,
       args: ['/d', '/s', '/c', `""${launcher}" ${cliArgs.join(' ')}"`],
-      options: { env: { ...process.env }, shell: false }
+      options: {
+        env: { ...process.env },
+        shell: false,
+        windowsVerbatimArguments: true
+      }
     }
   }
   throw new Error(`Unsupported packaged CLI smoke platform: ${platform}`)
