@@ -68,6 +68,14 @@ const PROTECTED_EXTENSION_ENTRY_NAMES = new Set(
     .map((entry) => entry.slice('extensions/'.length))
 )
 const RETRYABLE_WINDOWS_CODES = new Set(['EPERM', 'EBUSY', 'EACCES'])
+const BEST_EFFORT_WINDOWS_FSYNC_CODES = new Set([
+  'EPERM',
+  'EBUSY',
+  'EACCES',
+  'EINVAL',
+  'ENOSYS',
+  'ENOTSUP'
+])
 const MIGRATION_SCHEMA_VERSION = 2 as const
 const PRESERVATION_SCHEMA_VERSION = 3 as const
 const COPY_CAPACITY_MIN_RESERVE_BYTES = 5 * 1024 * 1024 * 1024
@@ -302,13 +310,29 @@ export function retryRuntimeMigrationMutation(
   throw lastError
 }
 
+export function canIgnoreRuntimeMigrationFsyncError(
+  error: unknown,
+  platform: NodeJS.Platform = process.platform
+): boolean {
+  return platform === 'win32' && BEST_EFFORT_WINDOWS_FSYNC_CODES.has(errnoCode(error) ?? '')
+}
+
+function fsyncFileBestEffort(handle: number): void {
+  try {
+    fsyncSync(handle)
+  } catch (error) {
+    if (canIgnoreRuntimeMigrationFsyncError(error)) return
+    throw error
+  }
+}
+
 function writeDurableJson(path: string, value: unknown): void {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
   const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`
   const handle = openSync(temporary, 'wx', 0o600)
   try {
     writeFileSync(handle, `${JSON.stringify(value, null, 2)}\n`, 'utf8')
-    fsyncSync(handle)
+    fsyncFileBestEffort(handle)
   } finally {
     closeSync(handle)
   }
@@ -1118,7 +1142,7 @@ function copyRegularFilePreservingMetadata(sourcePath: string, targetPath: strin
     // exact source mode has been restored on the staged file.
     const handle = openSync(partialPath, 'r')
     try {
-      fsyncSync(handle)
+      fsyncFileBestEffort(handle)
     } finally {
       closeSync(handle)
     }
@@ -1347,7 +1371,7 @@ function backUpRegularFile(
   }
   const backupHandle = openSync(backupPath, 'r+')
   try {
-    fsyncSync(backupHandle)
+    fsyncFileBestEffort(backupHandle)
   } finally {
     closeSync(backupHandle)
   }

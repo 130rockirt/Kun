@@ -16,6 +16,7 @@ import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
+  canIgnoreRuntimeMigrationFsyncError,
   markCanonicalKunRuntimeMigrationRuntimeVerified,
   retryRuntimeMigrationMutation,
   runCanonicalKunRuntimeDataMigration as runCanonicalKunRuntimeDataMigrationWithPreservation
@@ -1325,6 +1326,19 @@ describe('Windows migration retries', () => {
     })
     expect(attempts).toBe(4)
     expect(sleeps).toEqual([0, 50, 150, 350])
+  })
+
+  it('treats Windows fsync platform denials as best-effort durability', () => {
+    for (const code of ['EPERM', 'EBUSY', 'EACCES', 'EINVAL', 'ENOSYS', 'ENOTSUP']) {
+      const error = new Error('fsync unavailable') as NodeJS.ErrnoException
+      error.code = code
+      expect(canIgnoreRuntimeMigrationFsyncError(error, 'win32')).toBe(true)
+      expect(canIgnoreRuntimeMigrationFsyncError(error, 'linux')).toBe(false)
+    }
+
+    const unexpected = new Error('disk failed') as NodeJS.ErrnoException
+    unexpected.code = 'EIO'
+    expect(canIgnoreRuntimeMigrationFsyncError(unexpected, 'win32')).toBe(false)
   })
 })
 
