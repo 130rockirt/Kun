@@ -19,6 +19,8 @@ import {
 } from '../../tests/graph-scheduler-test-harness.js'
 
 const execFileAsync = promisify(execFile)
+const schedulerWaitTimeoutMs = process.platform === 'win32' ? 30_000 : 15_000
+const schedulerTestTimeoutMs = process.platform === 'win32' ? 60_000 : 30_000
 
 function task(
   key: string,
@@ -143,7 +145,7 @@ describe('GraphScheduler LoopGate repair routing', () => {
     const completed = await waitFor(async () => {
       const run = await harness.store.get('run_harness')
       return run?.status === 'completed' ? run : null
-    }, 15_000)
+    }, schedulerWaitTimeoutMs)
     await harness.scheduler.stop()
 
     expect(completed.nodes.gate.loopIteration).toBe(1)
@@ -178,7 +180,7 @@ describe('GraphScheduler LoopGate repair routing', () => {
         })
       })
     ]))
-  }, 30_000)
+  }, schedulerTestTimeoutMs)
 
   it('lets a failed condition continue once without permanently skipping exit', async () => {
     const plan = compileLoopPlan([
@@ -217,7 +219,7 @@ describe('GraphScheduler LoopGate repair routing', () => {
     const completed = await waitFor(async () => {
       const run = await harness.store.get('run_harness')
       return run?.status === 'completed' ? run : null
-    }, 15_000)
+    }, schedulerWaitTimeoutMs)
     await harness.scheduler.stop()
 
     expect(completed.budget.loopIterations).toBe(1)
@@ -243,7 +245,7 @@ describe('GraphScheduler LoopGate repair routing', () => {
         })
       })
     ]))
-  }, 30_000)
+  }, schedulerTestTimeoutMs)
 
   it('lets a skipped condition continue once and recover its exit branch', async () => {
     const compiled = compileLoopPlan([
@@ -289,7 +291,7 @@ describe('GraphScheduler LoopGate repair routing', () => {
     const completed = await waitFor(async () => {
       const run = await harness.store.get('run_harness')
       return run?.status === 'completed' ? run : null
-    }, 15_000)
+    }, schedulerWaitTimeoutMs)
     await harness.scheduler.stop()
 
     expect(completed.budget.loopIterations).toBe(1)
@@ -318,7 +320,7 @@ describe('GraphScheduler LoopGate repair routing', () => {
         })
       })
     ]))
-  }, 30_000)
+  }, schedulerTestTimeoutMs)
 
   it('completes through the normal exit and conditionally skips a distinct exhaustion target', async () => {
     const plan = compileLoopPlan([
@@ -367,7 +369,7 @@ describe('GraphScheduler LoopGate repair routing', () => {
     const completed = await waitFor(async () => {
       const run = await harness.store.get('run_harness')
       return run?.status === 'completed' ? run : null
-    }, 15_000)
+    }, schedulerWaitTimeoutMs)
     await harness.scheduler.stop()
 
     expect(completed.budget.loopIterations).toBe(1)
@@ -380,7 +382,7 @@ describe('GraphScheduler LoopGate repair routing', () => {
     expect(completed.nodes.exhaustion.lastTransitionReason)
       .toBe('LoopGate gate branch not selected')
     expect(labels).toEqual(['condition', 'condition', 'exit'])
-  }, 30_000)
+  }, schedulerTestTimeoutMs)
 
   it('completes through a distinct exhaustion target when the loop limit is reached', async () => {
     const plan = compileLoopPlan([
@@ -428,7 +430,7 @@ describe('GraphScheduler LoopGate repair routing', () => {
     const completed = await waitFor(async () => {
       const run = await harness.store.get('run_harness')
       return run?.status === 'completed' ? run : null
-    }, 15_000)
+    }, schedulerWaitTimeoutMs)
     await harness.scheduler.stop()
 
     expect(completed.budget.loopIterations).toBe(1)
@@ -441,7 +443,7 @@ describe('GraphScheduler LoopGate repair routing', () => {
     expect(completed.nodes.gate.lastTransitionReason)
       .toBe('loop gate iteration limit exhausted')
     expect(labels).toEqual(['condition', 'condition', 'exhaustion'])
-  }, 30_000)
+  }, schedulerTestTimeoutMs)
 
   it('does not ready a selected exit until its independent dependency finishes', async () => {
     const plan = compileLoopPlan([
@@ -497,7 +499,7 @@ describe('GraphScheduler LoopGate repair routing', () => {
           )
           ? run
           : null
-      }, 15_000)
+      }, schedulerWaitTimeoutMs)
       expect(waiting.nodes.exit.status).toBe('blocked')
       expect(waiting.nodes.exit.attempts).toHaveLength(0)
       expect(labels).not.toContain('exit')
@@ -506,7 +508,7 @@ describe('GraphScheduler LoopGate repair routing', () => {
       const completed = await waitFor(async () => {
         const run = await harness.store.get('run_harness')
         return run?.status === 'completed' ? run : null
-      }, 15_000)
+      }, schedulerWaitTimeoutMs)
       expect(completed.nodes.blocker.status).toBe('accepted')
       expect(completed.nodes.exit.status).toBe('accepted')
       expect(labels).toEqual(expect.arrayContaining(['condition', 'blocker', 'exit']))
@@ -514,5 +516,5 @@ describe('GraphScheduler LoopGate repair routing', () => {
       releaseBlocker?.()
       await harness.scheduler.stop()
     }
-  }, 30_000)
+  }, schedulerTestTimeoutMs)
 })
