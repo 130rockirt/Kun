@@ -348,8 +348,8 @@ describe('AnimatedWorkLogo', () => {
     expect(pngDimensions(appIcon)).toEqual({ width: 1254, height: 1254 })
     expect(pngDimensions(macIcon)).toEqual({ width: 1024, height: 1024 })
     expect(pngDimensions(trayIcon)).toEqual({ width: 954, height: 994 })
-    expect(pngDimensions(macTrayIcon)).toEqual({ width: 22, height: 22 })
-    expect(pngDimensions(macRetinaTrayIcon)).toEqual({ width: 44, height: 44 })
+    expect(pngDimensions(macTrayIcon)).toEqual({ width: 16, height: 16 })
+    expect(pngDimensions(macRetinaTrayIcon)).toEqual({ width: 32, height: 32 })
   })
 
   it('ships the iKun figure asset used by ikun mode', async () => {

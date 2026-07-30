@@ -24,6 +24,7 @@ function stream(chunks: readonly ModelStreamChunk[]): AsyncIterable<ModelStreamC
 
 function hangingStream(): AsyncIterable<ModelStreamChunk> {
   return (async function* () {
+    yield* [] as ModelStreamChunk[]
     await new Promise<void>(() => undefined)
   })()
 }
@@ -615,6 +616,7 @@ describe('ApprovalReviewService', () => {
   it('fails closed on provider errors and redacts the terminal rationale', async () => {
     const events: RuntimeEventDraft[] = []
     const streamModel = vi.fn((_request: ModelRequest) => (async function* () {
+      yield* [] as ModelStreamChunk[]
       throw new Error('provider rejected apiKey=provider-secret-value')
     })())
     const reviewer = service({ events, stream: streamModel })

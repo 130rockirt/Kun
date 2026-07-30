@@ -939,7 +939,8 @@ describe('thread event sink runtime errors', () => {
       turnStartedAtByUserId: { 'user-1': Date.now() - 1000 },
       turnDurationByUserId: {},
       turnReasoningFirstAtByUserId: {},
-      turnReasoningLastAtByUserId: {}
+      turnReasoningLastAtByUserId: {},
+      threads: []
     } as unknown as ChatState
     const set = (partial: Partial<ChatState> | ((value: ChatState) => Partial<ChatState>)): void => {
       Object.assign(state, typeof partial === 'function' ? partial(state) : partial)
@@ -984,7 +985,8 @@ describe('thread event sink runtime errors', () => {
       turnReasoningLastAtByUserId: {},
       watchTurnCompletion: { 'thr-1': true },
       unreadThreadIds: { 'thr-1': true },
-      queuedMessages: []
+      queuedMessages: [],
+      threads: []
     } as unknown as ChatState
     const set = (partial: Partial<ChatState> | ((value: ChatState) => Partial<ChatState>)): void => {
       Object.assign(state, typeof partial === 'function' ? partial(state) : partial)

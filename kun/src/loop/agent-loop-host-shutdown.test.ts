@@ -28,6 +28,7 @@ class ShutdownAwareModel implements ModelClient {
   })
 
   async *stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
+    yield* [] as ModelStreamChunk[]
     this.startedResolve?.()
     if (!request.abortSignal.aborted) {
       await new Promise<void>((resolve) => {

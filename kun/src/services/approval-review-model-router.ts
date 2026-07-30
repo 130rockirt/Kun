@@ -103,6 +103,7 @@ export class UnsupportedNativeApprovalReviewModelClient implements ModelClient {
   }
 
   async *stream(_request: ModelRequest): AsyncIterable<ModelStreamChunk> {
+    yield* [] as ModelStreamChunk[]
     throw new Error(
       `Automatic approval review is unavailable for the exact ${this.kind} route because ` +
       'that provider does not expose an isolated no-tools request API; refusing provider substitution.'

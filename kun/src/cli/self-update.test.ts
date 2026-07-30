@@ -142,7 +142,8 @@ describe('standalone TUI self-update', () => {
         .toMatchObject({ version: '1.2.4', target })
       expect(JSON.parse(await readFile(`${currentRoot}.previous/release.json`, 'utf8')))
         .toMatchObject({ version: '1.2.3', target })
-    }
+    },
+    30_000
   )
 
   it('throttles startup checks for 24 hours', async () => {

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactElement } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
 import {
   Background,
   BackgroundVariant,
@@ -51,7 +51,7 @@ export function GraphRunCanvas({
   const selectedNodeAvailable = selectedNodeId !== null &&
     incomingNodes.some((node) => node.id === selectedNodeId)
 
-  const focusSelectedNode = (
+  const focusSelectedNode = useCallback((
     instance: ReactFlowInstance<Node, Edge> | null
   ): void => {
     if (!instance || !selectedNodeId || !selectedNodeAvailable) return
@@ -62,7 +62,7 @@ export function GraphRunCanvas({
       padding: 0.45,
       duration: 220
     })
-  }
+  }, [selectedNodeAvailable, selectedNodeId])
 
   useEffect(() => {
     for (const node of nodes) layoutNodesRef.current.set(node.id, node)
@@ -84,7 +84,7 @@ export function GraphRunCanvas({
   useEffect(() => {
     if (!focusRequestKey) return
     focusSelectedNode(flowRef.current)
-  }, [focusRequestKey, selectedNodeAvailable])
+  }, [focusRequestKey, focusSelectedNode])
 
   return (
     <div

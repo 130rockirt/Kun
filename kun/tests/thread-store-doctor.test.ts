@@ -1003,6 +1003,7 @@ function createCanonicalSqliteSchema(
       status TEXT NOT NULL,
       approval_policy TEXT NOT NULL,
       sandbox_mode TEXT NOT NULL,
+      approval_reviewer TEXT NOT NULL DEFAULT 'user',
       model_request_capture_enabled INTEGER NOT NULL DEFAULT 0,
       cost_budget_usd REAL,
       cost_budget_warning_sent INTEGER,
