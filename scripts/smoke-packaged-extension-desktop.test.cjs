@@ -102,6 +102,20 @@ test('stops the isolated Graph runtime before reporting smoke success', () => {
   assert.match(source, /await stopSharedRuntime\(profile\)/u)
 })
 
+test('stops the isolated packaged Runtime before reporting desktop smoke success', () => {
+  const source = readFileSync(
+    join(root, 'scripts', 'smoke-packaged-extension-desktop.cjs'),
+    'utf8'
+  )
+  const stopCall = source.indexOf('stopIsolatedSharedRuntime(unpackedRoot, profile)')
+  const removeCall = source.indexOf('rm(path')
+  const successWrite = source.indexOf('process.stdout.write(successMessage)')
+  assert.ok(stopCall > 0, 'packaged desktop smoke must stop its data-dir scoped shared Runtime')
+  assert.ok(removeCall > stopCall, 'packaged desktop smoke must stop its shared Runtime before removing its profile')
+  assert.ok(successWrite > removeCall, 'packaged desktop smoke must report success only after cleanup completes')
+  assert.match(source, /await stopSharedRuntime\(profile\)/u)
+})
+
 test('selects host-native packaged resources and never launches desktop Electron as Node', () => {
   assert.deepEqual(platformDesktopArguments('linux'), [
     '--disable-gpu',
@@ -1202,7 +1216,11 @@ test('every automated and local release path gates uploads behind packaged Exten
   for (const [jobId, stepName] of [
     ['package', 'Smoke Graph workbench pointer interactions on native Linux'],
     ['package-macos', 'Smoke Graph workbench pointer interactions on native macOS'],
-    ['package-windows', 'Smoke Graph workbench pointer interactions on native Windows']
+    ['package-windows', 'Smoke Graph workbench pointer interactions on native Windows'],
+    ['package', 'Smoke packaged Extension desktop Chromium'],
+    ['package-macos', 'Smoke packaged Extension desktop Chromium (host-native macOS)'],
+    ['package-macos-x64-runtime', 'Smoke final macOS x64 desktop Chromium'],
+    ['package-windows', 'Smoke packaged Extension desktop Chromium (host-native Windows)']
   ]) {
     const step = pr.jobs[jobId].steps.find((candidate) => candidate.name === stepName)
     assert.equal(step?.['timeout-minutes'], 10, `${stepName} must have a bounded timeout`)

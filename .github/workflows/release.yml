@@ -231,6 +231,7 @@ jobs:
         run: npm run smoke:packaged-runtime-migration
 
       - name: Smoke packaged Extension desktop Chromium (host-native macOS)
+        timeout-minutes: 10
         run: npm run smoke:packaged-extension-desktop
 
       - name: Record commit-bound macOS artifact evidence
@@ -305,6 +306,7 @@ jobs:
           --resources dist/mac-x64-verified/Kun.app/Contents/Resources
 
       - name: Smoke final macOS x64 desktop Chromium
+        timeout-minutes: 10
         run: >-
           npm run smoke:packaged-extension-desktop --
           --resources dist/mac-x64-verified/Kun.app/Contents/Resources
@@ -382,6 +384,7 @@ jobs:
         run: npm run smoke:packaged-runtime-migration
 
       - name: Smoke packaged Extension desktop Chromium
+        timeout-minutes: 10
         run: npm run smoke:packaged-extension-desktop
 
       - name: Record commit-bound Windows artifact evidence
@@ -485,6 +488,7 @@ jobs:
         run: npm run smoke:packaged-runtime-migration
 
       - name: Smoke packaged Extension desktop Chromium
+        timeout-minutes: 10
         run: npm run smoke:packaged-extension-desktop
 
       - name: Smoke final Linux AppImage desktop Chromium

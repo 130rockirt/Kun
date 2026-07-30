@@ -1263,6 +1263,13 @@ requireOrderedCommands(releaseMacJob, 'build-macos', [
   'npm run smoke:packaged-extension-desktop',
   nativeEvidenceCommand
 ])
+requireBoundedCommandStep(
+  releaseMacJob,
+  'build-macos',
+  'Smoke packaged Extension desktop Chromium (host-native macOS)',
+  'npm run smoke:packaged-extension-desktop',
+  10
+)
 requireUnconditionalStepAfter(
   releaseMacJob,
   'build-macos',
@@ -1282,6 +1289,13 @@ requireOrderedCommands(releaseMacX64Job, 'verify-macos-x64', [
   smokeMacX64ExtensionsCommand,
   smokeMacX64DesktopCommand
 ])
+requireBoundedCommandStep(
+  releaseMacX64Job,
+  'verify-macos-x64',
+  'Smoke final macOS x64 desktop Chromium',
+  smokeMacX64DesktopCommand,
+  10
+)
 const releaseWindowsJob = workflowJob(releaseWorkflowDocument, 'build-windows', 'windows-latest')
 requireBoundedJobTimeout(releaseWindowsJob, 'build-windows', 90)
 requireOrderedCommands(releaseWindowsJob, 'build-windows', [
@@ -1292,6 +1306,13 @@ requireOrderedCommands(releaseWindowsJob, 'build-windows', [
   'npm run smoke:packaged-extension-desktop',
   nativeEvidenceCommand
 ])
+requireBoundedCommandStep(
+  releaseWindowsJob,
+  'build-windows',
+  'Smoke packaged Extension desktop Chromium',
+  'npm run smoke:packaged-extension-desktop',
+  10
+)
 requireUnconditionalStepAfter(
   releaseWindowsJob,
   'build-windows',
@@ -1311,6 +1332,13 @@ requireOrderedCommands(releaseLinuxJob, 'build-linux', [
   nativeEvidenceCommand
 ])
 requireLinuxUserNamespaceStep(releaseLinuxJob, 'build-linux')
+requireBoundedCommandStep(
+  releaseLinuxJob,
+  'build-linux',
+  'Smoke packaged Extension desktop Chromium',
+  'npm run smoke:packaged-extension-desktop',
+  10
+)
 requireBoundedCommandStep(
   releaseLinuxJob,
   'build-linux',
@@ -1373,6 +1401,13 @@ requireOrderedCommands(dailyMacJob, 'daily build-macos', [
   'npm run smoke:packaged-extension-desktop',
   nativeEvidenceCommand
 ])
+requireBoundedCommandStep(
+  dailyMacJob,
+  'daily build-macos',
+  'Smoke packaged Extension desktop Chromium (host-native macOS)',
+  'npm run smoke:packaged-extension-desktop',
+  10
+)
 requireUnconditionalStepAfter(
   dailyMacJob,
   'daily build-macos',
@@ -1392,6 +1427,13 @@ requireOrderedCommands(dailyMacX64Job, 'daily verify-macos-x64', [
   smokeMacX64ExtensionsCommand,
   smokeMacX64DesktopCommand
 ])
+requireBoundedCommandStep(
+  dailyMacX64Job,
+  'daily verify-macos-x64',
+  'Smoke final macOS x64 desktop Chromium',
+  smokeMacX64DesktopCommand,
+  10
+)
 const dailyWindowsJob = workflowJob(dailyWorkflowDocument, 'build-windows', 'windows-latest')
 requireBoundedJobTimeout(dailyWindowsJob, 'daily build-windows', 90)
 requireOrderedCommands(dailyWindowsJob, 'daily build-windows', [
@@ -1402,6 +1444,13 @@ requireOrderedCommands(dailyWindowsJob, 'daily build-windows', [
   'npm run smoke:packaged-extension-desktop',
   nativeEvidenceCommand
 ])
+requireBoundedCommandStep(
+  dailyWindowsJob,
+  'daily build-windows',
+  'Smoke packaged Extension desktop Chromium',
+  'npm run smoke:packaged-extension-desktop',
+  10
+)
 requireUnconditionalStepAfter(
   dailyWindowsJob,
   'daily build-windows',
@@ -1421,6 +1470,13 @@ requireOrderedCommands(dailyLinuxJob, 'daily build-linux', [
   nativeEvidenceCommand
 ])
 requireLinuxUserNamespaceStep(dailyLinuxJob, 'daily build-linux')
+requireBoundedCommandStep(
+  dailyLinuxJob,
+  'daily build-linux',
+  'Smoke packaged Extension desktop Chromium',
+  'npm run smoke:packaged-extension-desktop',
+  10
+)
 requireBoundedCommandStep(
   dailyLinuxJob,
   'daily build-linux',
@@ -1657,6 +1713,13 @@ requireLinuxUserNamespaceStep(prPackageJob, 'package')
 requireBoundedCommandStep(
   prPackageJob,
   'package',
+  'Smoke packaged Extension desktop Chromium',
+  'npm run smoke:packaged-extension-desktop',
+  10
+)
+requireBoundedCommandStep(
+  prPackageJob,
+  'package',
   'Smoke Graph workbench pointer interactions on native Linux',
   'xvfb-run -a npm run smoke:development-graph-workbench',
   10
@@ -1691,6 +1754,13 @@ requireOrderedCommands(prMacJob, 'package-macos', [
 requireBoundedCommandStep(
   prMacJob,
   'package-macos',
+  'Smoke packaged Extension desktop Chromium (host-native macOS)',
+  'npm run smoke:packaged-extension-desktop',
+  10
+)
+requireBoundedCommandStep(
+  prMacJob,
+  'package-macos',
   'Smoke Graph workbench pointer interactions on native macOS',
   'npm run smoke:development-graph-workbench',
   10
@@ -1714,6 +1784,13 @@ requireOrderedCommands(prMacX64Job, 'package-macos-x64-runtime', [
   smokeMacX64ExtensionsCommand,
   smokeMacX64DesktopCommand
 ])
+requireBoundedCommandStep(
+  prMacX64Job,
+  'package-macos-x64-runtime',
+  'Smoke final macOS x64 desktop Chromium',
+  smokeMacX64DesktopCommand,
+  10
+)
 const prWindowsJob = workflowJob(prWorkflowDocument, 'package-windows', 'windows-latest')
 requireBoundedJobTimeout(prWindowsJob, 'package-windows', 90)
 requireJobDependencies(prWindowsJob, 'package-windows', ['test'])
@@ -1724,6 +1801,13 @@ requireOrderedCommands(prWindowsJob, 'package-windows', [
   'npm run smoke:packaged-extension-desktop',
   nativeEvidenceCommand
 ])
+requireBoundedCommandStep(
+  prWindowsJob,
+  'package-windows',
+  'Smoke packaged Extension desktop Chromium (host-native Windows)',
+  'npm run smoke:packaged-extension-desktop',
+  10
+)
 requireBoundedCommandStep(
   prWindowsJob,
   'package-windows',

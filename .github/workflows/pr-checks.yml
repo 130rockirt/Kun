@@ -142,6 +142,7 @@ jobs:
         run: npm run smoke:packaged-runtime-migration
 
       - name: Smoke packaged Extension desktop Chromium
+        timeout-minutes: 10
         run: npm run smoke:packaged-extension-desktop
 
       - name: Smoke final Linux AppImage desktop Chromium
@@ -250,6 +251,7 @@ jobs:
         run: npm run smoke:packaged-runtime-migration
 
       - name: Smoke packaged Extension desktop Chromium (host-native macOS)
+        timeout-minutes: 10
         run: npm run smoke:packaged-extension-desktop
 
       - name: Record macOS native validation evidence
@@ -319,6 +321,7 @@ jobs:
           --resources dist/mac-x64-verified/Kun.app/Contents/Resources
 
       - name: Smoke final macOS x64 desktop Chromium
+        timeout-minutes: 10
         run: >-
           npm run smoke:packaged-extension-desktop --
           --resources dist/mac-x64-verified/Kun.app/Contents/Resources
@@ -390,6 +393,7 @@ jobs:
         run: npm run smoke:packaged-runtime-migration
 
       - name: Smoke packaged Extension desktop Chromium (host-native Windows)
+        timeout-minutes: 10
         run: npm run smoke:packaged-extension-desktop
 
       - name: Record Windows native validation evidence
