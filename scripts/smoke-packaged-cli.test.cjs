@@ -88,7 +88,9 @@ test('builds a shell-free Windows cmd invocation relative to packaged resources'
   assert.equal(invocation.options.shell, false)
 })
 
-test('extracts a deb and executes its packaged product launcher in CLI mode', (t) => {
+test('extracts a deb and executes its packaged product launcher in CLI mode', {
+  skip: process.platform === 'win32' && 'requires POSIX executable modes'
+}, (t) => {
   const directory = mkdtempSync(join(tmpdir(), 'kun-packaged-cli-deb-test-'))
   t.after(() => rmSync(directory, { recursive: true, force: true }))
   const deb = join(directory, 'Kun-1.2.3-linux-amd64.deb')

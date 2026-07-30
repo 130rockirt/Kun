@@ -26,6 +26,8 @@ const GUEST_MEDIA_READY_TIMEOUT_MS = 20_000
 const PROCESS_OUTPUT_LIMIT = 128 * 1024
 const POPUP_SETTLE_MS = 500
 const MAX_CLEANUP_TIMEOUT_MS = 15_000
+const MAX_REMOVE_RETRIES = 8
+const REMOVE_RETRY_DELAY_MS = 250
 const MEDIA_PLAYBACK_HANDLE_ID = 'media_packaged_playback_00000001'
 const MEDIA_IMAGE_HANDLE_ID = 'media_packaged_image_00000000001'
 
@@ -280,7 +282,12 @@ async function main() {
     } else {
       await Promise.all([temporaryRoot, workspaceRoot].map(async (path) => {
         await makeTreeWritable(path).catch(() => undefined)
-        await rm(path, { recursive: true, force: true })
+        await rm(path, {
+          recursive: true,
+          force: true,
+          maxRetries: MAX_REMOVE_RETRIES,
+          retryDelay: REMOVE_RETRY_DELAY_MS
+        })
           .catch((error) => cleanupErrors.push(error))
       }))
     }

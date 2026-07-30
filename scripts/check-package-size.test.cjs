@@ -3,7 +3,7 @@
 const assert = require('node:assert/strict')
 const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = require('node:fs')
 const { tmpdir } = require('node:os')
-const { join } = require('node:path')
+const { join, resolve } = require('node:path')
 const test = require('node:test')
 const {
   MIB,
@@ -16,19 +16,20 @@ const {
 } = require('./check-package-size.cjs')
 
 test('resolves platform-specific unpacked application paths', () => {
-  assert.match(packagedAppPath('/dist', 'darwin', 'arm64'), /mac-arm64\/Kun\.app$/u)
-  assert.match(packagedAppPath('/dist', 'darwin', 'x64'), /mac\/Kun\.app$/u)
+  assert.match(packagedAppPath('/dist', 'darwin', 'arm64'), /mac-arm64[\\/]Kun\.app$/u)
+  assert.match(packagedAppPath('/dist', 'darwin', 'x64'), /mac[\\/]Kun\.app$/u)
   assert.match(packagedAppPath('/dist', 'win32', 'x64'), /win-unpacked$/u)
   assert.match(packagedAppPath('/dist', 'linux', 'x64'), /linux-unpacked$/u)
 })
 
 test('parses explicit report and enforcement arguments', () => {
+  const distDir = join(tmpdir(), 'kun-package-size-dist')
   assert.deepEqual(
-    parseArgs(['--platform', 'darwin', '--arch', 'arm64', '--dist-dir', '/tmp/dist', '--enforce']),
+    parseArgs(['--platform', 'darwin', '--arch', 'arm64', '--dist-dir', distDir, '--enforce']),
     {
       platform: 'darwin',
       arch: 'arm64',
-      distDir: '/tmp/dist',
+      distDir: resolve(distDir),
       enforce: true
     }
   )

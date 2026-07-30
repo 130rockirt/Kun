@@ -1133,8 +1133,9 @@ test('every automated and local release path gates uploads behind packaged Exten
   ])
   assertStepAfter(release.jobs['build-linux'], 'Upload Linux artifacts', nativeEvidenceCommand)
   assertOrderedCommands(pr.jobs.package, [
-    'npm run smoke:packaged-extensions -- --resources dist/linux-unpacked/resources',
     'unshare --user --map-root-user /bin/true',
+    'xvfb-run -a npm run smoke:development-graph-workbench',
+    'npm run smoke:packaged-extensions -- --resources dist/linux-unpacked/resources',
     desktopCommand,
     appImageDesktopCommand,
     nativeEvidenceCommand

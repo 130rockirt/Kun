@@ -1645,9 +1645,10 @@ requireBoundedJobTimeout(prPackageJob, 'package', 60)
 requireJobDependencies(prPackageJob, 'package', ['test'])
 requireOrderedCommands(prPackageJob, 'package', [
   'npm run dist:linux',
+  'unshare --user --map-root-user /bin/true',
+  'xvfb-run -a npm run smoke:development-graph-workbench',
   'npm run smoke:packaged-extensions -- --resources dist/linux-unpacked/resources',
   nativeMediaSmokeCommand,
-  'unshare --user --map-root-user /bin/true',
   'npm run smoke:packaged-extension-desktop',
   appImageDesktopCommand,
   nativeEvidenceCommand

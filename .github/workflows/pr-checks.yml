@@ -113,6 +113,16 @@ jobs:
             --resources dist/linux-unpacked/resources \
             --deb "${deb_packages[0]}"
 
+      - name: Prepare and verify Linux user namespace sandbox
+        run: |
+          if [[ -e /proc/sys/kernel/unprivileged_userns_clone ]]; then
+            sudo sysctl -w kernel.unprivileged_userns_clone=1
+          fi
+          if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          unshare --user --map-root-user /bin/true
+
       - name: Smoke Graph workbench pointer interactions on native Linux
         run: xvfb-run -a npm run smoke:development-graph-workbench
 
@@ -126,16 +136,6 @@ jobs:
         env:
           KUN_RUN_MEDIA_SMOKE: '1'
         run: npm run smoke:extension-native-media
-
-      - name: Prepare and verify Linux user namespace sandbox
-        run: |
-          if [[ -e /proc/sys/kernel/unprivileged_userns_clone ]]; then
-            sudo sysctl -w kernel.unprivileged_userns_clone=1
-          fi
-          if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
-            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          fi
-          unshare --user --map-root-user /bin/true
 
       - name: Smoke packaged Runtime data migration
         run: npm run smoke:packaged-runtime-migration
