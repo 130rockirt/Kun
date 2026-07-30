@@ -7,6 +7,7 @@ import { validateExtensionDocumentation } from './lib/extension-docs-validation.
 import {
   assertExecutableApiConformance,
   expectedApiMajors,
+  runRequiredCompositeCommand,
   runRequiredCommand
 } from './lib/extension-release-execution.mjs'
 
@@ -1903,7 +1904,7 @@ if (expectedConformanceMajors.length > 1) {
   executedConformanceMajors.push(previousMajor)
 }
 
-runRequiredCommand({
+runRequiredCompositeCommand({
   label: `Extension API v${currentApiMajor} external packaged-artifact conformance`,
   command: process.execPath,
   args: [join(root, 'scripts/check-extension-external-project.mjs'), '--expected-api-major', String(currentApiMajor)],
