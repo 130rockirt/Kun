@@ -453,7 +453,13 @@ export class GraphRuntimeComposition {
       store: this.store,
       config: this.options.config,
       delegation: options.delegation,
-      leadTurn: options.leadTurn,
+      leadTurn: async (input) => {
+        const thread = await this.options.threadStore.get(input.run.threadId)
+        const sourceTurn = thread?.turns.find((turn) =>
+          turn.id === input.run.sourceTurnId)
+        if (sourceTurn?.status !== 'running') return
+        await options.leadTurn(input)
+      },
       nowIso: this.options.nowIso,
       nextId
     })
