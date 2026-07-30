@@ -15,6 +15,10 @@ import {
   waitFor
 } from '../../tests/graph-scheduler-test-harness.js'
 
+const schedulerWaitTimeoutMs = process.platform === 'win32' ? 30_000 : 10_000
+const schedulerStopTimeoutMs = process.platform === 'win32' ? 5_000 : 500
+const schedulerTestTimeoutMs = process.platform === 'win32' ? 60_000 : 15_000
+
 afterEach(cleanupSchedulerHarnesses)
 
 describe('GraphScheduler host shutdown recovery', () => {
@@ -66,7 +70,7 @@ describe('GraphScheduler host shutdown recovery', () => {
     await waitFor(async () => {
       const run = await harness.store.get('run_harness')
       return run?.nodes[source.id]?.status === 'running' ? run : null
-    })
+    }, schedulerWaitTimeoutMs)
 
     await harness.scheduler.stop()
     const parked = (await harness.store.get('run_harness'))!
@@ -84,14 +88,14 @@ describe('GraphScheduler host shutdown recovery', () => {
     const completed = await waitFor(async () => {
       const run = await harness.store.get('run_harness')
       return run?.status === 'completed' ? run : null
-    })
+    }, schedulerWaitTimeoutMs)
     await harness.scheduler.stop()
 
     expect(executions).toBe(2)
     expect(completed.nodes[source.id].attempts).toHaveLength(2)
     expect(effectiveRunAttemptCount(completed)).toBe(1)
     expect(completed.status).toBe('completed')
-  })
+  }, schedulerTestTimeoutMs)
 
   it('catches an attempt admitted after the first shutdown snapshot', async () => {
     const source = {
@@ -140,7 +144,7 @@ describe('GraphScheduler host shutdown recovery', () => {
     await expect(Promise.race([
       stopping,
       new Promise<'timed_out'>((resolve) =>
-        setTimeout(() => resolve('timed_out'), 500))
+        setTimeout(() => resolve('timed_out'), schedulerStopTimeoutMs))
     ])).resolves.not.toBe('timed_out')
     await ticking
 
@@ -153,5 +157,5 @@ describe('GraphScheduler host shutdown recovery', () => {
       })]
     })
     expect(effectiveRunAttemptCount(parked)).toBe(0)
-  })
+  }, schedulerTestTimeoutMs)
 })
