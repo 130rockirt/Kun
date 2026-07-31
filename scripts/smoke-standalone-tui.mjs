@@ -6,19 +6,37 @@ import { mkdtemp, readFile, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import extractZip from 'extract-zip'
 
 export function createArchiveExtractionInvocation(
   artifact,
   destination,
   pathApi = { basename, dirname }
 ) {
+  if (artifact.toLowerCase().endsWith('.zip')) {
+    return {
+      kind: 'zip',
+      artifact,
+      options: { dir: destination }
+    }
+  }
   return {
+    kind: 'tar',
     command: 'tar',
     args: ['-xf', pathApi.basename(artifact), '-C', destination],
     options: {
       cwd: pathApi.dirname(artifact),
       stdio: 'inherit'
     }
+  }
+}
+
+export async function extractArchive(artifact, destination) {
+  const extraction = createArchiveExtractionInvocation(artifact, destination)
+  if (extraction.kind === 'zip') {
+    await extractZip(extraction.artifact, extraction.options)
+  } else {
+    execFileSync(extraction.command, extraction.args, extraction.options)
   }
 }
 
@@ -29,8 +47,7 @@ async function main() {
   const expectedTarget = required(flags, 'target')
   const temporary = await mkdtemp(join(tmpdir(), 'kun-tui-smoke-'))
   try {
-    const extraction = createArchiveExtractionInvocation(artifact, temporary)
-    execFileSync(extraction.command, extraction.args, extraction.options)
+    await extractArchive(artifact, temporary)
     const root = join(temporary, 'kun')
     const release = JSON.parse(await readFile(join(root, 'release.json'), 'utf8'))
     if (release.version !== expectedVersion || release.target !== expectedTarget) {

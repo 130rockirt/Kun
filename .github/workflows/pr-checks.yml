@@ -340,7 +340,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version: '22.23.1'
           cache: npm
           cache-dependency-path: |
             package-lock.json
@@ -370,6 +370,28 @@ jobs:
 
       - name: Check Extension public release gate (host-native Windows)
         run: npm run check:extension-release-gate
+
+      - name: Build and smoke standalone TUI (host-native Windows)
+        shell: pwsh
+        run: |
+          $version = node -p "require('./kun/package.json').version"
+          $env:KUN_APP_VERSION = $version
+          $env:KUN_ARTIFACT_VERSION = $version
+          $env:KUN_UPDATE_CHANNEL = 'stable'
+          $env:RELEASE_CHANNEL = 'stable'
+          npm run build:kun
+          npm run package:tui -- `
+            --version $version `
+            --artifact-version $version `
+            --tag "v$version" `
+            --channel stable `
+            --commit $env:GITHUB_SHA `
+            --target win32-x64 `
+            --output dist/tui-pr
+          npm run smoke:standalone-tui -- `
+            --artifact "dist/tui-pr/Kun-TUI-$version-win-x64.zip" `
+            --version $version `
+            --target win32-x64
 
       - name: Build Windows NSIS installer
         run: npm run dist:win
