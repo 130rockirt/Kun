@@ -68,6 +68,29 @@ export class RuntimeEventRecorder {
     }
   }
 
+  /**
+   * Publish best-effort live state without adding it to durable replay.
+   *
+   * Transient events still share the per-thread sequence allocator and commit
+   * queue with durable events, so a later persisted event is always newer.
+   */
+  async publishTransient(draft: RuntimeEventDraft): Promise<RuntimeEvent> {
+    const lease = this.options.lifecycleFence?.acquire(draft.threadId) ?? undefined
+    if (this.options.lifecycleFence && !lease) {
+      return this.makeEvent(draft)
+    }
+    try {
+      return await this.enqueue(draft.threadId, async () => {
+        const event = await this.makeEvent(draft)
+        if (lease && !lease.isCurrent()) return event
+        this.options.eventBus.publish(event)
+        return event
+      })
+    } finally {
+      lease?.release()
+    }
+  }
+
   private async recordCommitted(
     draft: RuntimeEventDraft,
     lease?: ThreadLifecycleLease

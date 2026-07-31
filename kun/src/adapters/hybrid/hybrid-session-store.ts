@@ -2,6 +2,7 @@ import type { RuntimeEvent } from '../../contracts/events.js'
 import type { TurnItem } from '../../contracts/items.js'
 import type { AgentSession } from '../../domain/session.js'
 import type {
+  ItemHistoryCompactionResult,
   ItemHistoryCommit,
   ItemHistorySnapshot,
   SessionLatestUsageSnapshot,
@@ -59,6 +60,13 @@ export class HybridSessionStore implements SessionStore {
 
   async updateItem(threadId: string, itemId: string, patch: Partial<TurnItem>): Promise<TurnItem | null> {
     return this.delegate.updateItem(threadId, itemId, patch)
+  }
+
+  async compactItems(
+    threadId: string,
+    options?: { force?: boolean }
+  ): Promise<ItemHistoryCompactionResult> {
+    return this.delegate.compactItems(threadId, options)
   }
 
   async loadEventsSince(threadId: string, sinceSeq: number): Promise<RuntimeEvent[]> {

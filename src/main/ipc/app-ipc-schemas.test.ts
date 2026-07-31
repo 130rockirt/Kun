@@ -478,7 +478,8 @@ describe('app-ipc-schemas', () => {
               inputModalities: ['text', 'image'],
               outputModalities: ['text'],
               supportsToolCalling: true,
-              messageParts: ['text', 'image_url']
+              messageParts: ['text', 'image_url'],
+              serviceTiers: ['priority']
             }
           },
           tokenEconomy: {
@@ -529,6 +530,7 @@ describe('app-ipc-schemas', () => {
     expect(payload.agents?.kun?.approvalReviewer).toBe('agent')
     expect(payload.agents?.kun?.modelProfiles?.['custom-vision-model']?.inputModalities).toEqual(['text', 'image'])
     expect(payload.agents?.kun?.modelProfiles?.['custom-vision-model']?.maxOutputTokens).toBe(32000)
+    expect(payload.agents?.kun?.modelProfiles?.['custom-vision-model']?.serviceTiers).toEqual(['priority'])
     expect(payload.agents?.kun?.tokenEconomy?.enabled).toBe(true)
     expect(payload.agents?.kun?.tokenEconomy?.historyHygiene?.maxToolResultTokens).toBe(4000)
     expect(payload.agents?.kun?.toolOutputLimits?.maxLines).toBe(30000)
@@ -675,6 +677,49 @@ describe('app-ipc-schemas', () => {
 
     expect(payload.provider?.providers?.[0]?.retry?.maxAttempts).toBe(3)
     expect(payload.agents?.kun?.retry?.httpStatusCodes).toEqual([429, 503])
+  })
+
+  it('accepts service-tier metadata in provider and runtime model profiles', () => {
+    const payload = settingsPatchSchema.parse({
+      provider: {
+        providers: [{
+          id: 'codex',
+          modelProfiles: {
+            'gpt-5.6-sol': {
+              serviceTiers: ['priority']
+            }
+          }
+        }]
+      },
+      agents: {
+        kun: {
+          modelProfiles: {
+            'gpt-5.6-sol': {
+              serviceTiers: ['priority']
+            }
+          }
+        }
+      }
+    })
+
+    expect(
+      payload.provider?.providers?.[0]?.modelProfiles?.['gpt-5.6-sol']?.serviceTiers
+    ).toEqual(['priority'])
+    expect(
+      payload.agents?.kun?.modelProfiles?.['gpt-5.6-sol']?.serviceTiers
+    ).toEqual(['priority'])
+    expect(() => settingsPatchSchema.parse({
+      provider: {
+        providers: [{
+          id: 'codex',
+          modelProfiles: {
+            'gpt-5.6-sol': {
+              serviceTiers: ['express']
+            }
+          }
+        }]
+      }
+    })).toThrow()
   })
 
   it('accepts long provider model ids imported from upstream catalogs', () => {

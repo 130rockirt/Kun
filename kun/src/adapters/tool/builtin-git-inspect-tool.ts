@@ -5,6 +5,7 @@ const GIT_INSPECT_OPERATIONS = [
   'status',
   'branch',
   'log',
+  'grep',
   'show',
   'diff',
   'merge-base',
@@ -46,6 +47,7 @@ export function createGitInspectLocalTool(): LocalTool {
     description:
       'Run a host-allowlisted read-only Git inspection in the workspace. ' +
       'Use this in Plan mode for repository status, branches, history, revisions, diffs, merge bases, and file/tree listings. ' +
+      'Use the grep operation for tracked-file content searches; do not pass another Git subcommand in args. ' +
       'Pass the Git subcommand as operation and its remaining arguments as args.',
     inputSchema: {
       type: 'object',
@@ -59,7 +61,7 @@ export function createGitInspectLocalTool(): LocalTool {
           items: { type: 'string' },
           maxItems: 128,
           description:
-            'Arguments after the Git subcommand, for example ["--short", "--branch"] or ["production:package.json"].'
+            'Arguments after the Git subcommand, for example ["--short", "--branch"], ["-n", "needle", "--", "src"], or ["production:package.json"].'
         }
       },
       required: ['operation'],

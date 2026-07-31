@@ -34,7 +34,9 @@ describe('runtime lifecycle API', () => {
     servers.push(server)
     const baseUrl = `http://${server.host}:${server.port}`
     const headers = { authorization: 'Bearer secret', 'content-type': 'application/json' }
-    const info = await fetch(`${baseUrl}/v1/runtime/info`, { headers }).then((response) => response.json())
+    const infoResponse = await fetch(`${baseUrl}/v1/runtime/info`, { headers })
+    expect(infoResponse.headers.get('x-kun-active-turn-count')).toBe('0')
+    const info = await infoResponse.json()
     expect(info).toMatchObject({
       instanceId: server.instanceId,
       serviceVersion: '0.1.0',

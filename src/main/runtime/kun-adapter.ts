@@ -21,7 +21,7 @@ import {
 import { getKunBaseUrl } from '../kun-base-url'
 import type { RuntimeDiscoveryRecord } from '../../../kun/src/server/runtime-discovery.js'
 import {
-  resolveSharedRuntime,
+  inspectSharedRuntime,
   runtimeMatchesExpectedBuild,
   stopSharedRuntime
 } from '../../../kun/src/cli/shared-runtime.js'
@@ -121,12 +121,24 @@ async function refreshResolvedKunRuntime(settings: AppSettingsV1): Promise<boole
   const expectedBuildId = await resolveKunRuntimeBuildId(
     resolveKunExecutable(runtime.binaryPath.trim() ? '' : appRoot(), runtime.binaryPath)
   )
-  const connection = await resolveSharedRuntime(dataDir).catch(() => null)
-  if (!connection || !runtimeMatchesExpectedBuild(connection, expectedBuildId)) {
+  const inspected = await inspectSharedRuntime(dataDir).catch(() => null)
+  if (!inspected) {
     resolvedConnection = null
     return false
   }
-  resolvedConnection = connection.discovery
+  const connection = inspected.connection
+  if (
+    connection &&
+    !runtimeMatchesExpectedBuild(connection, expectedBuildId) &&
+    (connection.activeTurnCount ?? 0) === 0
+  ) {
+    resolvedConnection = null
+    return false
+  }
+  // Preserve the real endpoint while a live runtime is temporarily
+  // unresponsive. Health recovery must probe this process, not the legacy
+  // configured port, and must never elect a second writer for the data dir.
+  resolvedConnection = inspected.discovery
   return true
 }
 

@@ -36,12 +36,22 @@ describe('createGitInspectLocalTool', () => {
       { operation: 'log', args: ['--oneline', '--decorate', '-1'] },
       context(workspace)
     )
+    const grep = await tool.execute(
+      { operation: 'grep', args: ['-n', 'Test', '--', 'README.md'] },
+      context(workspace)
+    )
 
     expect(status.isError).not.toBe(true)
     expect(status.output).toMatchObject({ exit_code: 0 })
     expect(JSON.stringify(status.output)).toContain('##')
     expect(log.isError).not.toBe(true)
     expect(JSON.stringify(log.output)).toContain('test fixture')
+    expect(grep.isError).not.toBe(true)
+    expect(grep.output).toMatchObject({
+      command: ['git', 'grep', '-n', 'Test', '--', 'README.md'],
+      exit_code: 0
+    })
+    expect(JSON.stringify(grep.output)).toContain('README.md:1:# Test')
   })
 
   it('allows branch listings and rejects branch mutations', async () => {

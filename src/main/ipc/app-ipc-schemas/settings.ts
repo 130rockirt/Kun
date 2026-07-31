@@ -10,6 +10,7 @@ import {
   MODEL_PROVIDER_MESSAGE_PARTS,
   MODEL_REASONING_EFFORTS,
   MODEL_REASONING_REQUEST_PROTOCOLS,
+  MODEL_SERVICE_TIERS,
   MAX_WRITE_AUTOSAVE_DELAY_MS,
   MIN_WRITE_AUTOSAVE_DELAY_MS,
   MIN_KUN_LOCAL_PORT,
@@ -25,7 +26,8 @@ import {
   CHAT_CONTENT_MAX_WIDTH_MIN,
   CHAT_CONTENT_MAX_WIDTH_MAX,
   UI_FONT_SCALE_MIN,
-  UI_FONT_SCALE_MAX
+  UI_FONT_SCALE_MAX,
+  type ModelProviderModelProfilePatchV1
 } from '../../../shared/app-settings'
 import { GUI_UPDATE_CHANNELS } from '../../../shared/gui-update'
 import { KEYBOARD_SHORTCUT_COMMANDS } from '../../../shared/keyboard-shortcuts'
@@ -104,7 +106,8 @@ const modelProviderInputModalitySchema = z.enum(MODEL_PROVIDER_INPUT_MODALITIES)
 const modelProviderMessagePartSchema = z.enum(MODEL_PROVIDER_MESSAGE_PARTS)
 const modelReasoningEffortSchema = z.enum(MODEL_REASONING_EFFORTS)
 const modelReasoningRequestProtocolSchema = z.enum(MODEL_REASONING_REQUEST_PROTOCOLS)
-const modelProfilePatchSchema = z.object({
+const modelServiceTierSchema = z.enum(MODEL_SERVICE_TIERS)
+const modelProfilePatchShape = {
   aliases: z.array(modelIdSchema).max(50).optional(),
   contextWindowTokens: z.number().int().positive().max(10_000_000).optional(),
   maxOutputTokens: z.number().int().positive().max(1_000_000).optional(),
@@ -117,9 +120,11 @@ const modelProfilePatchSchema = z.object({
     defaultEffort: modelReasoningEffortSchema,
     requestProtocol: modelReasoningRequestProtocolSchema
   }).strict().optional(),
+  serviceTiers: z.array(modelServiceTierSchema).min(1).max(MODEL_SERVICE_TIERS.length).optional(),
   endpointFormat: modelEndpointFormatSchema.optional(),
   responsesMode: z.literal('lite').optional()
-}).strict()
+} satisfies Record<keyof ModelProviderModelProfilePatchV1, z.ZodTypeAny>
+const modelProfilePatchSchema = z.object(modelProfilePatchShape).strict()
 
 const modelProviderPatchSchema = z.object({
   apiKey: z.string().max(MAX_BODY_BYTES).optional(),

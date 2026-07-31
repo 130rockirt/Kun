@@ -296,6 +296,7 @@ describe('kunRuntimeAdapter.resolveConnection', () => {
       model: modelCapabilitiesForModel('fixture')
     })
     let liveBuildId: string | undefined
+    let activeTurnCount = 0
 
     try {
       await mkdir(join(packageRoot, 'dist/cli'), { recursive: true })
@@ -307,6 +308,7 @@ describe('kunRuntimeAdapter.resolveConnection', () => {
       )
       const port = await listen((_req, res) => {
         res.setHeader('Content-Type', 'application/json')
+        res.setHeader('x-kun-active-turn-count', String(activeTurnCount))
         res.end(JSON.stringify({
           instanceId,
           serviceVersion: '0.1.0',
@@ -348,6 +350,52 @@ describe('kunRuntimeAdapter.resolveConnection', () => {
       liveBuildId = expectedBuildId
       await publish()
       await expect(kunRuntimeAdapter.resolveConnection(settings)).resolves.toBe(true)
+
+      liveBuildId = 'a'.repeat(64)
+      activeTurnCount = 1
+      await publish()
+      await expect(kunRuntimeAdapter.resolveConnection(settings)).resolves.toBe(true)
+
+      activeTurnCount = 0
+      await expect(kunRuntimeAdapter.resolveConnection(settings)).resolves.toBe(false)
+    } finally {
+      await kunRuntimeAdapter.stopAndWait()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('retains the discovered endpoint when its live process misses a probe', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-adapter-live-unresponsive-'))
+    const dataDir = join(root, 'data')
+    const expectedBuildId = 'c'.repeat(64)
+    const packageRoot = join(root, 'kun-package')
+    const entry = join(packageRoot, 'dist/cli/serve-entry.js')
+    const settings = settingsForPort(18900)
+    settings.agents.kun.dataDir = dataDir
+    settings.agents.kun.binaryPath = packageRoot
+    try {
+      await mkdir(join(packageRoot, 'dist/cli'), { recursive: true })
+      await writeFile(entry, '', 'utf8')
+      await writeFile(
+        join(packageRoot, 'dist/runtime-build.json'),
+        `${JSON.stringify({ version: 1, buildId: expectedBuildId })}\n`,
+        'utf8'
+      )
+      await publishRuntimeDiscovery(dataDir, {
+        instanceId: 'runtime-temporarily-unresponsive',
+        pid: process.pid,
+        startedAt: '2026-07-30T05:38:57.000Z',
+        host: '127.0.0.1',
+        port: 1,
+        baseUrl: 'http://127.0.0.1:1',
+        runtimeToken: 'secret',
+        insecure: false,
+        buildId: expectedBuildId,
+        launchMode: 'shared'
+      })
+
+      await expect(kunRuntimeAdapter.resolveConnection(settings)).resolves.toBe(true)
+      expect(kunRuntimeAdapter.getBaseUrl(settings)).toBe('http://127.0.0.1:1')
     } finally {
       await kunRuntimeAdapter.stopAndWait()
       await rm(root, { recursive: true, force: true })
