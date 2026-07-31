@@ -69,6 +69,7 @@ const KUN_RUNTIME_REQUIRED_PATHS = [
 ]
 const LINUX_SANDBOX_LAUNCHER_FLAG = '--disable-setuid-sandbox'
 const LINUX_REAL_EXECUTABLE_SUFFIX = '.electron-bin'
+const MINIMUM_TUI_NODE_VERSION = '22.19.0'
 const BUNDLED_EXTENSIONS_DIR = 'bundled-extensions'
 const BUNDLED_EXTENSION_CATALOG_FILE = 'catalog.json'
 const OFFICECLI_DIR = 'officecli'
@@ -587,6 +588,47 @@ exec "$real_executable" ${LINUX_SANDBOX_LAUNCHER_FLAG} "$@"
 `
 }
 
+function windowsCliLauncherContent(productFilename) {
+  const entry = 'app.asar.unpacked\\kun\\dist\\cli\\serve-entry.js'
+  return `@echo off\r
+setlocal\r
+set "KUN_CLI_ENTRY=%~dp0..\\resources\\${entry}"\r
+set "KUN_FIRST_ARG=%~1"\r
+if "%KUN_FIRST_ARG%"=="" goto :tui\r
+if /I "%KUN_FIRST_ARG%"=="tui" goto :tui\r
+if "%KUN_FIRST_ARG%"=="--help" goto :electron\r
+if "%KUN_FIRST_ARG%"=="-h" goto :electron\r
+if "%KUN_FIRST_ARG%"=="--version" goto :electron\r
+if "%KUN_FIRST_ARG%"=="-V" goto :electron\r
+if "%KUN_FIRST_ARG:~0,1%"=="-" goto :tui\r
+goto :electron\r
+\r
+:tui\r
+where.exe node >nul 2>nul\r
+if errorlevel 1 (\r
+  >&2 echo kun tui: Node.js ^>=${MINIMUM_TUI_NODE_VERSION} is required, but node was not found on PATH.\r
+  >&2 echo Install Node.js, then open a new terminal. Download: https://nodejs.org/\r
+  >&2 echo Windows: winget install --id OpenJS.NodeJS.22 --exact\r
+  exit /b 69\r
+)\r
+for /f "delims=" %%N in ('where.exe node 2^>nul') do if not defined KUN_NODE set "KUN_NODE=%%N"\r
+set "KUN_PACKAGED_RUNTIME_EXECUTABLE=%~dp0..\\${productFilename}.exe"\r
+if /I "%KUN_NODE:~-4%"==".cmd" goto :tui-node-shim\r
+if /I "%KUN_NODE:~-4%"==".bat" goto :tui-node-shim\r
+"%KUN_NODE%" "%KUN_CLI_ENTRY%" %*\r
+exit /b %errorlevel%\r
+\r
+:tui-node-shim\r
+call "%KUN_NODE%" "%KUN_CLI_ENTRY%" %*\r
+exit /b %errorlevel%\r
+\r
+:electron\r
+set "ELECTRON_RUN_AS_NODE=1"\r
+"%~dp0..\\${productFilename}.exe" "%KUN_CLI_ENTRY%" %*\r
+exit /b %errorlevel%\r
+`
+}
+
 function installCliLaunchers(context) {
   const platform = normalizePlatform(context.electronPlatformName)
   const entryRelative = 'app.asar.unpacked/kun/dist/cli/serve-entry.js'
@@ -628,11 +670,11 @@ ELECTRON_RUN_AS_NODE=1 exec "$app_exec" "$cli_entry" "$@"
   if (platform === 'win32') {
     const binDir = join(context.appOutDir, 'bin')
     require('node:fs').mkdirSync(binDir, { recursive: true })
-    writeFileSync(join(binDir, 'kun.cmd'), `@echo off\r
-setlocal\r
-set "ELECTRON_RUN_AS_NODE=1"\r
-"%~dp0..\\${context.packager.appInfo.productFilename}.exe" "%~dp0..\\resources\\${entryRelative.replaceAll('/', '\\')}" %*\r
-`, 'utf8')
+    writeFileSync(
+      join(binDir, 'kun.cmd'),
+      windowsCliLauncherContent(context.packager.appInfo.productFilename),
+      'utf8'
+    )
   }
 }
 
@@ -742,6 +784,7 @@ exports._internals = {
   assertElfExecutable,
   installLinuxElectronLauncher,
   installCliLaunchers,
+  windowsCliLauncherContent,
   linuxElectronLauncherContent,
   linuxRealExecutableName,
   TESSERACT_NODE_LSTM_ALIASES,

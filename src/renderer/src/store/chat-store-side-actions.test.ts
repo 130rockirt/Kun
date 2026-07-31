@@ -20,6 +20,7 @@ class FakeProvider implements AgentProvider {
   readonly displayName = 'Fake'
   forkMock = vi.fn()
   sendMock = vi.fn()
+  sendGate: Promise<void> | null = null
   deleteMock = vi.fn()
   patchMock = vi.fn()
   interruptMock = vi.fn()
@@ -49,9 +50,12 @@ class FakeProvider implements AgentProvider {
       providerId?: string
       accountId?: string
       reasoningEffort?: string
+      serviceTier?: 'priority'
+      attachmentIds?: string[]
     }
   ) {
     this.sendMock(threadId, text, options)
+    if (this.sendGate) await this.sendGate
     return { threadId, turnId: `turn_${threadId}_${Date.now()}` }
   }
   async steerUserMessage() {}
@@ -215,6 +219,8 @@ function buildHarness(overrides: Partial<ChatState> = {}): Harness {
     setSideInput: () => undefined,
     setSideModel: () => undefined,
     setSideReasoningEffort: () => undefined,
+    setSideFastMode: () => undefined,
+    setSideAttachments: () => undefined,
     selectSideConversation: () => undefined,
     setSidePanelOpen: () => undefined,
     closeSideConversation: async () => undefined,
@@ -352,6 +358,180 @@ describe('chat-store-side-actions', () => {
     expect(side.busy).toBe(true)
     expect(side.turnId).toMatch(/^turn_side_thr_main_/)
     expect(side.input).toBe('')
+  })
+
+  it('sends Fast mode as priority service tier for eligible Codex branch turns', async () => {
+    const modelGroup = {
+      providerId: 'codex-2',
+      presetSource: 'codex' as const,
+      label: 'ChatGPT subscription 2',
+      modelIds: ['gpt-5.4'],
+      modelProfiles: {
+        'gpt-5.4': {
+          inputModalities: ['text' as const],
+          outputModalities: ['text' as const],
+          supportsToolCalling: true,
+          messageParts: ['text' as const],
+          serviceTiers: ['priority' as const]
+        }
+      }
+    }
+    const { actions, state, provider } = buildHarness({
+      composerModel: 'gpt-5.4',
+      composerProviderId: 'codex-2',
+      composerFastMode: true,
+      composerPickList: ['gpt-5.4'],
+      composerModelGroups: [modelGroup]
+    })
+
+    const id = await actions.spawnSideConversation('send the first turn fast', {
+      model: 'gpt-5.4',
+      providerId: 'codex-2',
+      fastMode: true
+    })
+
+    expect(id).toBe('side_thr_main')
+    expect(state.sideConversations[id!].fastMode).toBe(true)
+    expect(provider.sendMock).toHaveBeenLastCalledWith(
+      id,
+      'send the first turn fast',
+      expect.objectContaining({ serviceTier: 'priority' })
+    )
+
+    state.sideConversations[id!].busy = false
+    actions.setSideFastMode(id!, false)
+    await actions.sendSideMessage(id!, 'send the next turn normally')
+    expect(provider.sendMock).toHaveBeenLastCalledWith(
+      id,
+      'send the next turn normally',
+      expect.not.objectContaining({ serviceTier: 'priority' })
+    )
+  })
+
+  it('starts an attachment-only first branch turn', async () => {
+    const { actions, state, provider } = buildHarness()
+
+    const id = await actions.spawnSideConversation('', {
+      attachments: [{ id: 'att-only', kind: 'image' }]
+    })
+
+    expect(provider.sendMock).toHaveBeenCalledWith(
+      id,
+      '',
+      expect.objectContaining({ attachmentIds: ['att-only'] })
+    )
+    expect(state.sideConversations[id!].attachments).toEqual([])
+    expect(state.sideConversations[id!].busy).toBe(true)
+  })
+
+  it('sends branch attachments, clears them only after success, and keeps Fast mode', async () => {
+    const modelGroup = {
+      providerId: 'codex-2',
+      presetSource: 'codex' as const,
+      label: 'ChatGPT subscription 2',
+      modelIds: ['gpt-5.4'],
+      modelProfiles: {
+        'gpt-5.4': {
+          inputModalities: ['text' as const, 'image' as const],
+          outputModalities: ['text' as const],
+          supportsToolCalling: true,
+          messageParts: ['text' as const, 'image_url' as const],
+          serviceTiers: ['priority' as const]
+        }
+      }
+    }
+    const { actions, state, provider } = buildHarness({
+      composerModel: 'gpt-5.4',
+      composerProviderId: 'codex-2',
+      composerFastMode: true,
+      composerPickList: ['gpt-5.4'],
+      composerModelGroups: [modelGroup]
+    })
+    const id = await actions.spawnSideConversation(undefined, {
+      model: 'gpt-5.4',
+      providerId: 'codex-2',
+      fastMode: true
+    })
+    actions.setSideAttachments(id!, [
+      { id: 'att-side', kind: 'image', previewUrl: 'data:image/png;base64,preview' }
+    ])
+
+    await actions.sendSideMessage(id!, 'inspect this image')
+
+    expect(provider.sendMock).toHaveBeenLastCalledWith(
+      id,
+      'inspect this image',
+      expect.objectContaining({
+        serviceTier: 'priority',
+        attachmentIds: ['att-side']
+      })
+    )
+    expect(state.sideConversations[id!].attachments).toEqual([])
+  })
+
+  it('preserves attachments added while turn admission is pending', async () => {
+    const { actions, state, provider } = buildHarness()
+    const id = (await actions.spawnSideConversation())!
+    actions.setSideAttachments(id, [{ id: 'att-submitted', kind: 'image' }])
+    let releaseSend!: () => void
+    provider.sendGate = new Promise<void>((resolve) => {
+      releaseSend = resolve
+    })
+
+    const sending = actions.sendSideMessage(id, 'inspect the first image')
+    await vi.waitFor(() => expect(provider.sendMock).toHaveBeenCalled())
+    actions.setSideAttachments(id, [
+      { id: 'att-submitted', kind: 'image' },
+      { id: 'att-uploaded-later', kind: 'image' }
+    ])
+    releaseSend()
+    await sending
+
+    expect(state.sideConversations[id].attachments).toEqual([
+      expect.objectContaining({ id: 'att-uploaded-later' })
+    ])
+  })
+
+  it('sends draft attachments on the first branch turn and retains them when admission fails', async () => {
+    const { actions, state, provider } = buildHarness()
+    provider.sendMock.mockImplementationOnce(() => {
+      throw new Error('turn admission failed')
+    })
+
+    const id = await actions.spawnSideConversation('inspect draft image', {
+      attachments: [{ id: 'att-draft', kind: 'image' }]
+    })
+
+    expect(id).toBe('side_thr_main')
+    expect(provider.sendMock).toHaveBeenCalledWith(
+      id,
+      'inspect draft image',
+      expect.objectContaining({ attachmentIds: ['att-draft'] })
+    )
+    expect(state.sideConversations[id!].attachments).toEqual([
+      expect.objectContaining({ id: 'att-draft' })
+    ])
+    expect(state.sideConversations[id!].error).toBe('turn admission failed')
+  })
+
+  it('keeps attachments isolated between side conversations and the main composer', async () => {
+    const { actions, state } = buildHarness()
+    const firstId = (await actions.spawnSideConversation())!
+    state.sideConversations['side-other'] = {
+      ...state.sideConversations[firstId],
+      threadId: 'side-other',
+      attachments: [{ id: 'att-other', kind: 'image' }]
+    }
+
+    actions.setSideAttachments(firstId, [{ id: 'att-first', kind: 'image' }])
+
+    expect(state.sideConversations[firstId].attachments).toEqual([
+      expect.objectContaining({ id: 'att-first' })
+    ])
+    expect(state.sideConversations['side-other'].attachments).toEqual([
+      expect.objectContaining({ id: 'att-other' })
+    ])
+    expect(state.queuedMessages).toEqual([])
   })
 
   it('applies draft model and reasoning controls before sending the first side turn', async () => {

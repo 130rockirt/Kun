@@ -1112,6 +1112,9 @@ export function Workbench(): ReactElement {
       threadRunning: busy,
       sideConversationCount: currentSideConversations.length,
       sideConversationRunningCount: currentSideRunningCount,
+      sideAttachmentStoreAvailable: runtimeInfo?.capabilities.attachments.available === true,
+      sideDefaultModelSupportsImageInput:
+        runtimeInfo?.capabilities.model.inputModalities.includes('image') === true,
       files: {
         open: fileTreeSidePanelOpen,
         view: fileTreeSidePanelView,

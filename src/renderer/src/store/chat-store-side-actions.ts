@@ -18,6 +18,7 @@ import {
   providerIdForComposerModel
 } from './chat-store-helpers'
 import { upsertUserBlock } from './chat-store-runtime-helpers'
+import { serviceTierForComposerSelection } from '../components/chat/composer-fast-mode'
 
 type SideContext = {
   set: (partial: Partial<ChatState> | ((state: ChatState) => Partial<ChatState>)) => void
@@ -565,6 +566,8 @@ export function createSideActions(ctx: SideContext): Pick<
   | 'setSideInput'
   | 'setSideModel'
   | 'setSideReasoningEffort'
+  | 'setSideFastMode'
+  | 'setSideAttachments'
   | 'selectSideConversation'
   | 'setSidePanelOpen'
   | 'closeSideConversation'
@@ -581,6 +584,8 @@ export function createSideActions(ctx: SideContext): Pick<
     | 'setSideInput'
     | 'setSideModel'
     | 'setSideReasoningEffort'
+    | 'setSideFastMode'
+    | 'setSideAttachments'
     | 'selectSideConversation'
     | 'setSidePanelOpen'
     | 'closeSideConversation'
@@ -640,6 +645,8 @@ export function createSideActions(ctx: SideContext): Pick<
         model: draftModel,
         providerId: draftProviderId,
         reasoningEffort: draftReasoningEffort,
+        fastMode: options?.fastMode ?? state.composerFastMode,
+        attachments: [...(options?.attachments ?? [])],
         busy: false,
         turnId: null,
         userItemId: null,
@@ -652,11 +659,11 @@ export function createSideActions(ctx: SideContext): Pick<
       // Start a dedicated SSE subscription for this side thread. The
       // main `activeThreadId` and main subscription are untouched.
       startSideSubscription(forked.id, 0, ctx)
-      if (seedText && seedText.trim()) {
+      if (seedText?.trim() || side.attachments.length > 0) {
         // Call the side action directly through the closure we are
         // currently building so store-level `state.sendSideMessage`
         // shims (e.g. test harnesses) cannot swallow the seed send.
-        const started = await actions.sendSideMessage(forked.id, seedText.trim())
+        const started = await actions.sendSideMessage(forked.id, seedText?.trim() ?? '')
         if (!started) return forked.id
       }
       return forked.id
@@ -674,7 +681,10 @@ export function createSideActions(ctx: SideContext): Pick<
       if (!side) return false
       if (side.busy) return false
       const trimmed = text.trim()
-      if (!trimmed) return false
+      const attachmentIds = side.attachments
+        .map((attachment) => attachment.id.trim())
+        .filter(Boolean)
+      if (!trimmed && attachmentIds.length === 0) return false
       const provider = ctx.getProvider()
       const reasoningEffort = sideReasoningEffortRequestValue(side.reasoningEffort)
       const providerId = side.providerId.trim()
@@ -683,17 +693,28 @@ export function createSideActions(ctx: SideContext): Pick<
         providerId,
         side.model
       )
+      const serviceTier = serviceTierForComposerSelection(
+        side.fastMode,
+        state.composerModelGroups,
+        side.model,
+        providerId
+      )
       try {
         const { turnId } = await provider.sendUserMessage(sideId, trimmed, {
           model: side.model,
           ...(providerId ? { providerId } : {}),
           ...(accountId ? { accountId } : {}),
-          ...(reasoningEffort ? { reasoningEffort } : {})
+          ...(reasoningEffort ? { reasoningEffort } : {}),
+          ...(serviceTier ? { serviceTier } : {}),
+          ...(attachmentIds.length ? { attachmentIds } : {})
         })
         ctx.set((s) =>
           patchSide(s, sideId, (cur) => ({
             ...cur,
             input: '',
+            attachments: cur.attachments.filter(
+              (attachment) => !attachmentIds.includes(attachment.id.trim())
+            ),
             busy: true,
             turnId,
             error: null
@@ -834,6 +855,14 @@ export function createSideActions(ctx: SideContext): Pick<
 
     setSideReasoningEffort: (sideId, effort) => {
       ctx.set((s) => patchSide(s, sideId, (cur) => ({ ...cur, reasoningEffort: effort })))
+    },
+
+    setSideFastMode: (sideId, enabled) => {
+      ctx.set((s) => patchSide(s, sideId, (cur) => ({ ...cur, fastMode: enabled })))
+    },
+
+    setSideAttachments: (sideId, attachments) => {
+      ctx.set((s) => patchSide(s, sideId, (cur) => ({ ...cur, attachments: [...attachments] })))
     },
 
     selectSideConversation: (sideId) => {

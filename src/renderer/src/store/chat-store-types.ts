@@ -185,6 +185,9 @@ export type SideConversation = {
   /** Provider paired with `model`; kept local to this side conversation. */
   providerId: string
   reasoningEffort: string
+  /** User preference; effective only when this branch selects an eligible Codex model. */
+  fastMode: boolean
+  attachments: AttachmentReference[]
   busy: boolean
   turnId: string | null
   userItemId: string | null
@@ -200,6 +203,8 @@ export type SideConversationDraftOptions = {
   model?: string
   providerId?: string
   reasoningEffort?: string
+  fastMode?: boolean
+  attachments?: AttachmentReference[]
 }
 
 export type ChatState = {
@@ -439,6 +444,8 @@ export type ChatState = {
   setSideInput: (sideId: string, text: string) => void
   setSideModel: (sideId: string, model: string, providerId?: string) => void
   setSideReasoningEffort: (sideId: string, effort: string) => void
+  setSideFastMode: (sideId: string, enabled: boolean) => void
+  setSideAttachments: (sideId: string, attachments: AttachmentReference[]) => void
   selectSideConversation: (sideId: string) => void
   setSidePanelOpen: (open: boolean) => void
   closeSideConversation: (sideId: string) => Promise<void>

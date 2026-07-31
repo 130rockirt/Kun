@@ -21,7 +21,10 @@ export type TuiCommandIo = {
   env?: Record<string, string | undefined>
   cwd?: () => string
   fetch?: typeof fetch
+  nodeVersion?: string
 }
+
+export const MINIMUM_TUI_NODE_VERSION = '22.19.0'
 
 export async function runTuiCommand(argv: readonly string[], io: TuiCommandIo): Promise<number> {
   let parsed
@@ -40,6 +43,18 @@ export async function runTuiCommand(argv: readonly string[], io: TuiCommandIo): 
     io.stdout.write(KUN_TUI_USAGE)
     return 0
   }
+  const nodeVersion = io.nodeVersion ?? process.versions.node
+  if (!isSupportedTuiNodeVersion(nodeVersion)) {
+    const platformUpgradeHint = process.platform === 'win32'
+      ? 'Windows: winget upgrade --id OpenJS.NodeJS.22 --exact\n'
+      : ''
+    io.stderr.write(
+      `kun tui: Node.js >=${MINIMUM_TUI_NODE_VERSION} is required; current Node.js is ${nodeVersion}.\n` +
+      'Upgrade Node.js and open a new terminal. Download: https://nodejs.org/\n' +
+      platformUpgradeHint
+    )
+    return 69
+  }
   const input = (io.stdin ?? processStdin) as TerminalInput
   const output = io.stdout as TerminalOutput
   if (!input.isTTY || !output.isTTY) {
@@ -50,7 +65,6 @@ export async function runTuiCommand(argv: readonly string[], io: TuiCommandIo): 
   let controller: TuiController | undefined
   let app: import('./pi-app.js').PiTuiApplication | undefined
   try {
-    assertSupportedNodeVersion()
     let guiSettings = parsed.options.url
       ? null
       : await readGuiSharedSettings({ env: io.env ?? process.env })
@@ -167,11 +181,13 @@ export async function runTuiCommand(argv: readonly string[], io: TuiCommandIo): 
   }
 }
 
-function assertSupportedNodeVersion(): void {
-  const [major = 0, minor = 0] = process.versions.node.split('.').map(Number)
-  if (major < 22 || (major === 22 && minor < 19)) {
-    throw new Error(`pi-tui requires Node >=22.19.0; current Node is ${process.versions.node}`)
-  }
+export function isSupportedTuiNodeVersion(version: string): boolean {
+  const [major = 0, minor = 0, patch = 0] = version.split(/[.-]/u).slice(0, 3).map(Number)
+  const [requiredMajor, requiredMinor, requiredPatch] = MINIMUM_TUI_NODE_VERSION.split('.').map(Number) as [number, number, number]
+  if (![major, minor, patch].every(Number.isFinite)) return false
+  if (major !== requiredMajor) return major > requiredMajor
+  if (minor !== requiredMinor) return minor > requiredMinor
+  return patch >= requiredPatch
 }
 
 export * from './client.js'

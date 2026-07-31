@@ -213,7 +213,10 @@ export async function ensureSharedRuntime(input: {
     const logFd = openSync(logPath, 'a', 0o600)
     const runtimeToken = randomBytes(32).toString('base64url')
     const entry = fileURLToPath(new URL('./serve-entry.js', import.meta.url))
-    const command = input.launch?.command ?? process.execPath
+    const packagedRuntimeExecutable = input.launch
+      ? undefined
+      : process.env.KUN_PACKAGED_RUNTIME_EXECUTABLE?.trim()
+    const command = input.launch?.command ?? packagedRuntimeExecutable ?? process.execPath
     const args = input.launch?.args ?? [
       entry,
       'serve',
@@ -230,7 +233,9 @@ export async function ensureSharedRuntime(input: {
       KUN_RUNTIME_LOG_PATH: logPath,
       ...(expectedBuildId ? { KUN_RUNTIME_BUILD_ID: expectedBuildId } : {})
     }
-    const runAsNode = input.launch?.runAsNode ?? Boolean(process.versions.electron)
+    const runAsNode = input.launch?.runAsNode ?? Boolean(
+      packagedRuntimeExecutable || process.versions.electron
+    )
     if (runAsNode) env.ELECTRON_RUN_AS_NODE = '1'
     else delete env.ELECTRON_RUN_AS_NODE
     let child
