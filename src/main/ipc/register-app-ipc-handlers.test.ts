@@ -349,6 +349,27 @@ describe('registerAppIpcHandlers', () => {
     expect(applySettingsPatch).toHaveBeenCalledWith(payload)
   })
 
+  it('accepts ChatGPT subscription service tiers at the settings boundary', async () => {
+    const applySettingsPatch = vi.fn(async () => settings())
+    registerAppIpcHandlers(registerOptions({ applySettingsPatch }))
+    const payload = {
+      provider: {
+        providers: [{
+          id: 'codex',
+          name: 'ChatGPT 订阅',
+          modelProfiles: {
+            'gpt-5.6-sol': {
+              serviceTiers: ['priority' as const]
+            }
+          }
+        }]
+      }
+    }
+
+    await expect(handlers.get('settings:set')?.({}, payload)).resolves.toEqual(settings())
+    expect(applySettingsPatch).toHaveBeenCalledWith(payload)
+  })
+
   it('accepts strict multi-account provider source metadata with routing settings', async () => {
     const applySettingsPatch = vi.fn(async () => settings())
     registerAppIpcHandlers(registerOptions({ applySettingsPatch }))
