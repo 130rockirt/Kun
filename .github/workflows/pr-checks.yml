@@ -63,6 +63,9 @@ jobs:
       - name: Test Kun runtime
         run: npm --prefix kun run test
 
+      - name: Test bounded Kun runtime memory growth
+        run: npm --prefix kun run test:memory-growth
+
   package:
     name: Build Linux package
     runs-on: ubuntu-latest

@@ -76,6 +76,95 @@ describe('shared runtime discovery validation', () => {
     expect(fetchImpl).not.toHaveBeenCalled()
   })
 
+  it('preserves discovery when its live process temporarily misses HTTP probes', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'kun-shared-runtime-unresponsive-'))
+    const discovery = record({ buildId: 'a'.repeat(64) })
+    const fetchImpl = vi.fn(async () => new Response('', { status: 503 })) as unknown as typeof fetch
+    try {
+      await writeFile(
+        join(dataDir, 'runtime.json'),
+        `${JSON.stringify(discovery, null, 2)}\n`,
+        'utf8'
+      )
+
+      await expect(ensureSharedRuntime({
+        dataDir,
+        expectedBuildId: discovery.buildId,
+        fetch: fetchImpl,
+        launch: {
+          command: process.execPath,
+          args: ['-e', 'process.exit(99)'],
+          runAsNode: false
+        }
+      })).rejects.toThrow('preserving its discovery record')
+      await expect(stopSharedRuntime(dataDir, fetchImpl)).rejects.toThrow(
+        'discovery record was preserved'
+      )
+      expect(JSON.parse(await readFile(join(dataDir, 'runtime.json'), 'utf8'))).toMatchObject({
+        instanceId: discovery.instanceId,
+        pid: discovery.pid
+      })
+    } finally {
+      await rm(dataDir, { recursive: true, force: true })
+    }
+  })
+
+  it('defers a build handover while the elected runtime has an active turn', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'kun-shared-runtime-active-build-'))
+    const discovery = record({ buildId: 'a'.repeat(64) })
+    const capabilities = buildRuntimeCapabilityManifest({
+      model: modelCapabilitiesForModel('fixture')
+    })
+    const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        return new Response('', { status: 500 })
+      }
+      return Response.json({
+        instanceId: discovery.instanceId,
+        serviceVersion: discovery.serviceVersion,
+        buildId: discovery.buildId,
+        launchMode: discovery.launchMode,
+        host: discovery.host,
+        port: discovery.port,
+        dataDir,
+        model: 'fixture',
+        approvalPolicy: 'on-request',
+        sandboxMode: 'workspace-write',
+        insecure: false,
+        startedAt: discovery.startedAt,
+        pid: discovery.pid,
+        capabilities
+      }, {
+        headers: { 'x-kun-active-turn-count': '1' }
+      })
+    })
+    const fetchImpl = fetchMock as unknown as typeof fetch
+    try {
+      await writeFile(
+        join(dataDir, 'runtime.json'),
+        `${JSON.stringify(discovery, null, 2)}\n`,
+        'utf8'
+      )
+
+      const resolved = await ensureSharedRuntime({
+        dataDir,
+        expectedBuildId: 'b'.repeat(64),
+        fetch: fetchImpl,
+        launch: {
+          command: process.execPath,
+          args: ['-e', 'process.exit(99)'],
+          runAsNode: false
+        }
+      })
+
+      expect(resolved.discovery.instanceId).toBe(discovery.instanceId)
+      expect(resolved.activeTurnCount).toBe(1)
+      expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false)
+    } finally {
+      await rm(dataDir, { recursive: true, force: true })
+    }
+  })
+
   it('elects one GUI/TUI-independent custom launch and shuts it down explicitly', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'kun-custom-shared-runtime-'))
     const capabilities = JSON.stringify(buildRuntimeCapabilityManifest({

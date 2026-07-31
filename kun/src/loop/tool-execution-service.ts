@@ -95,6 +95,7 @@ export class ToolExecutionService {
       prepareBrowserUseToolResultForPersistence(result.item)
     )
     await this.afterResultPersisted(threadId, turnId, call, result)
+    await this.deps.turns.compactItemHistory(threadId)
   }
 
   async persistSuppressed(input: {
@@ -145,18 +146,28 @@ export class ToolExecutionService {
           let acceptingUpdates = true
           let updateFailure: unknown
           let pendingUpdates = Promise.resolve()
+          let durableProgressInitialized = false
+          let lastProgressFingerprint: string | undefined
           let result: ToolHostResult
           try {
             result = await this.deps.toolHost.execute(input.call, input.context, (item) => {
               if (!acceptingUpdates) return
+              const fingerprint = progressFingerprint(item)
+              if (fingerprint === lastProgressFingerprint) return pendingUpdates
+              lastProgressFingerprint = fingerprint
               const update = pendingUpdates.then(async () => {
+                const runningItem = { ...item, status: 'running' } as TurnItem
+                if (durableProgressInitialized) {
+                  await this.deps.turns.publishTransientItem(input.threadId, runningItem)
+                  return
+                }
                 const existing = await this.deps.turns.updateItem(input.threadId, item.id, {
-                  output: item.kind === 'tool_result' ? item.output : undefined,
-                  isError: item.kind === 'tool_result' ? item.isError : undefined,
-                  status: 'running'
-                } as Partial<TurnItem>)
-                if (existing) return
-                await this.deps.turns.applyItem(input.threadId, item)
+                    output: item.kind === 'tool_result' ? item.output : undefined,
+                    isError: item.kind === 'tool_result' ? item.isError : undefined,
+                    status: 'running'
+                  } as Partial<TurnItem>)
+                if (!existing) await this.deps.turns.applyItem(input.threadId, runningItem)
+                durableProgressInitialized = true
               })
               pendingUpdates = update.catch((error) => {
                 updateFailure ??= error
@@ -298,6 +309,11 @@ export class ToolExecutionService {
       })
     }
   }
+}
+
+function progressFingerprint(item: TurnItem): string {
+  if (item.kind !== 'tool_result') return JSON.stringify(item)
+  return JSON.stringify([item.output, item.isError, item.status])
 }
 
 function isRecoverableToolDispatchError(error: unknown): boolean {

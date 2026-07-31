@@ -100,6 +100,9 @@ jobs:
       - name: Test
         run: npm run test
 
+      - name: Test bounded Kun runtime memory growth
+        run: npm --prefix kun run test:memory-growth
+
       - name: Test joint GUI/TUI release contracts
         run: npm run test:tui-release
 

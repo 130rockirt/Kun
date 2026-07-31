@@ -115,6 +115,27 @@ class FailOnceAppendSessionStore extends InMemorySessionStore {
   }
 }
 
+class MetadataCountingThreadStore extends InMemoryThreadStore {
+  readonly hydratedGets: string[] = []
+  readonly metadataGets: string[] = []
+  readonly touches: string[] = []
+
+  override async get(threadId: string) {
+    this.hydratedGets.push(threadId)
+    return super.get(threadId)
+  }
+
+  async getMetadata(threadId: string) {
+    this.metadataGets.push(threadId)
+    return super.get(threadId)
+  }
+
+  async touch(threadId: string, _updatedAt: string): Promise<boolean> {
+    this.touches.push(threadId)
+    return Boolean(await super.get(threadId))
+  }
+}
+
 describe('TurnService startTurn', () => {
   it('defaults to 256 concurrent active turns', () => {
     expect(DEFAULT_MAX_CONCURRENT_TURNS).toBe(256)
@@ -1558,6 +1579,120 @@ describe('TurnService startTurn', () => {
     const runtimeEvents = await sessionStore.loadEventsSince(threadId, 0)
     expect(runtimeEvents.filter((event) => event.kind === 'turn_steered')).toHaveLength(0)
     await service.interruptTurn({ threadId, turnId: started.turnId })
+  })
+})
+
+describe('TurnService bounded history operations', () => {
+  it('touches metadata without hydrating the Thread for a durable item update', async () => {
+    const sessionStore = new InMemorySessionStore()
+    const threadStore = new MetadataCountingThreadStore()
+    const eventBus = new InMemoryEventBus()
+    const nowIso = () => '2026-07-31T00:00:00.000Z'
+    const threadId = 'thr_metadata_touch'
+    const turnId = 'turn_metadata_touch'
+    const item = makeAssistantTextItem({
+      id: 'assistant_metadata_touch',
+      threadId,
+      turnId,
+      text: 'running',
+      status: 'running'
+    })
+    await threadStore.upsert({
+      ...createThreadRecord({
+        id: threadId,
+        title: 'Metadata touch',
+        workspace: '/tmp/workspace',
+        model: 'test'
+      }),
+      turns: [appendTurnItem(createTurnRecord({
+        id: turnId,
+        threadId,
+        prompt: 'test',
+        status: 'running'
+      }), item)]
+    })
+    await sessionStore.appendItem(threadId, item)
+    const service = new TurnService({
+      threadStore,
+      sessionStore,
+      events: new RuntimeEventRecorder({
+        eventBus,
+        sessionStore,
+        allocateSeq: (id) => eventBus.allocateSeq(id),
+        nowIso
+      }),
+      inflight: new InflightTracker(),
+      steering: new SteeringQueue(),
+      compactor: new ContextCompactor(),
+      ids: new SequentialIdGenerator(),
+      nowIso
+    })
+
+    await service.updateItem(threadId, item.id, { text: 'completed', status: 'completed' })
+
+    expect(threadStore.touches).toEqual([threadId])
+    expect(threadStore.hydratedGets).toEqual([])
+    expect(await sessionStore.loadItems(threadId)).toMatchObject([
+      { id: item.id, text: 'completed', status: 'completed' }
+    ])
+  })
+
+  it('hydrates only metadata-identified orphan candidates during reconciliation', async () => {
+    const sessionStore = new InMemorySessionStore()
+    const threadStore = new MetadataCountingThreadStore()
+    const eventBus = new InMemoryEventBus()
+    const nowIso = () => '2026-07-31T00:00:00.000Z'
+    const idleId = 'thr_orphan_idle'
+    const activeId = 'thr_orphan_active'
+    await threadStore.upsert({
+      ...createThreadRecord({
+        id: idleId,
+        title: 'Idle history',
+        workspace: '/tmp/workspace',
+        model: 'test'
+      }),
+      turns: [finishTurn(createTurnRecord({
+        id: 'turn_idle',
+        threadId: idleId,
+        prompt: 'done',
+        status: 'completed'
+      }), 'completed')]
+    })
+    await threadStore.upsert({
+      ...createThreadRecord({
+        id: activeId,
+        title: 'Active orphan',
+        workspace: '/tmp/workspace',
+        model: 'test'
+      }),
+      turns: [createTurnRecord({
+        id: 'turn_active',
+        threadId: activeId,
+        prompt: 'running',
+        status: 'running'
+      })]
+    })
+    const service = new TurnService({
+      threadStore,
+      sessionStore,
+      events: new RuntimeEventRecorder({
+        eventBus,
+        sessionStore,
+        allocateSeq: (id) => eventBus.allocateSeq(id),
+        nowIso
+      }),
+      inflight: new InflightTracker(),
+      steering: new SteeringQueue(),
+      compactor: new ContextCompactor(),
+      ids: new SequentialIdGenerator(),
+      nowIso
+    })
+
+    await expect(service.reconcileOrphanedTurns()).resolves.toEqual([activeId])
+
+    expect(threadStore.metadataGets).toEqual(expect.arrayContaining([idleId, activeId]))
+    expect(threadStore.hydratedGets).not.toContain(idleId)
+    expect(threadStore.hydratedGets).toContain(activeId)
   })
 })
 

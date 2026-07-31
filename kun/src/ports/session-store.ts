@@ -33,6 +33,13 @@ export type ItemHistoryCommit =
   | { applied: true; revision: number }
   | { applied: false; reason: 'conflict' | 'closed'; revision?: number }
 
+export type ItemHistoryCompactionResult = {
+  compacted: boolean
+  beforeBytes: number
+  afterBytes: number
+  itemCount: number
+}
+
 /**
  * Port for persisted per-thread activity.
  *
@@ -62,6 +69,11 @@ export interface SessionStore {
     items: TurnItem[]
   ): Promise<ItemHistoryCommit>
   updateItem(threadId: string, itemId: string, patch: Partial<TurnItem>): Promise<TurnItem | null>
+  /** Atomically collapse append-only updates to the latest record per item id. */
+  compactItems?(
+    threadId: string,
+    options?: { force?: boolean }
+  ): Promise<ItemHistoryCompactionResult>
   loadEventsSince(threadId: string, sinceSeq: number): Promise<RuntimeEvent[]>
   /**
    * Optional bounded, forward-only event replay. Serve uses this when present
