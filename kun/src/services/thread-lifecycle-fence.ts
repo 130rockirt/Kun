@@ -131,10 +131,21 @@ export class ThreadLifecycleFence {
  * its decision from the durable state.
  */
 export class LifecycleFencedThreadStore implements ThreadStore {
+  readonly getMetadata?: (threadId: string) => Promise<ThreadRecord | null>
+  readonly touch?: (threadId: string, updatedAt: string) => Promise<boolean>
+
   constructor(
     readonly raw: ThreadStore,
     private readonly fence: ThreadLifecycleFence
-  ) {}
+  ) {
+    if (raw.getMetadata) {
+      this.getMetadata = (threadId) => raw.getMetadata!(threadId)
+    }
+    if (raw.touch) {
+      this.touch = (threadId, updatedAt) =>
+        this.write(threadId, false, () => raw.touch!(threadId, updatedAt))
+    }
+  }
 
   list(options?: ThreadStoreListOptions): Promise<ThreadSummary[]> {
     return this.raw.list(options)
@@ -167,6 +178,18 @@ export class LifecycleFencedThreadStore implements ThreadStore {
   delete(threadId: string): Promise<boolean> {
     return this.raw.delete(threadId)
   }
+
+  private async write<T>(threadId: string, noOp: T, operation: () => Promise<T>): Promise<T> {
+    const lease = this.fence.acquire(threadId)
+    if (!lease) return noOp
+    try {
+      if (!lease.isCurrent()) return noOp
+      const result = await operation()
+      return lease.isCurrent() ? result : noOp
+    } finally {
+      lease.release()
+    }
+  }
 }
 
 /** Session writes use the same lifecycle lease as metadata writes. */
@@ -178,6 +201,7 @@ export class LifecycleFencedSessionStore implements SessionStore {
   ) => AsyncIterable<RuntimeEvent>
   readonly loadUsageRecords?: (options?: { threadId?: string }) => Promise<SessionUsageRecord[]>
   readonly loadLatestUsageSnapshots?: (options?: { threadIds?: string[] }) => Promise<SessionLatestUsageSnapshot[]>
+  readonly compactItems?: SessionStore['compactItems']
 
   constructor(
     readonly raw: SessionStore,
@@ -195,6 +219,15 @@ export class LifecycleFencedSessionStore implements SessionStore {
     }
     if (raw.loadLatestUsageSnapshots) {
       this.loadLatestUsageSnapshots = (options) => raw.loadLatestUsageSnapshots!(options)
+    }
+    if (raw.compactItems) {
+      this.compactItems = (threadId, options) =>
+        this.write(threadId, {
+          compacted: false,
+          beforeBytes: 0,
+          afterBytes: 0,
+          itemCount: 0
+        }, () => raw.compactItems!(threadId, options))
     }
   }
 

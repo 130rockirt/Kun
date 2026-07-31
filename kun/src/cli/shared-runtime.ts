@@ -29,6 +29,12 @@ const MAX_LOG_BYTES = 5 * 1024 * 1024
 export type SharedRuntimeConnection = {
   discovery: RuntimeDiscoveryRecord
   info: RuntimeInfo
+  activeTurnCount?: number
+}
+
+export type SharedRuntimeInspection = {
+  discovery: RuntimeDiscoveryRecord
+  connection: SharedRuntimeConnection | null
 }
 
 export async function runRuntimeCommand(
@@ -129,7 +135,14 @@ export async function probeRuntimeDiscovery(
       info.serviceVersion !== record.serviceVersion ||
       info.buildId !== record.buildId
     ) return null
-    return { discovery: record, info }
+    const activeTurnCount = parseActiveTurnCount(
+      response.headers.get('x-kun-active-turn-count')
+    )
+    return {
+      discovery: record,
+      info,
+      ...(activeTurnCount !== undefined ? { activeTurnCount } : {})
+    }
   } catch {
     return null
   }
@@ -139,8 +152,26 @@ export async function resolveSharedRuntime(
   dataDir: string,
   fetchImpl: typeof fetch = fetch
 ): Promise<SharedRuntimeConnection | null> {
-  const record = await readRuntimeDiscovery(dataDir).catch(() => null)
-  return record ? probeRuntimeDiscovery(record, fetchImpl) : null
+  return (await inspectSharedRuntime(dataDir, fetchImpl))?.connection ?? null
+}
+
+/**
+ * Resolve the discovery owner separately from HTTP health. A live process can
+ * temporarily miss HTTP deadlines after system wake or during a synchronous
+ * step; callers must not erase its record and elect a second data-dir writer.
+ */
+export async function inspectSharedRuntime(
+  dataDir: string,
+  fetchImpl: typeof fetch = fetch
+): Promise<SharedRuntimeInspection | null> {
+  const discovery = await readRuntimeDiscovery(dataDir).catch(() => null)
+  if (!discovery || !safeDiscoveryUrl(discovery) || !processAlive(discovery.pid)) {
+    return null
+  }
+  return {
+    discovery,
+    connection: await probeRuntimeDiscovery(discovery, fetchImpl)
+  }
 }
 
 export async function ensureSharedRuntime(input: {
@@ -159,12 +190,16 @@ export async function ensureSharedRuntime(input: {
   const fetchImpl = input.fetch ?? fetch
   const expectedBuildId = input.expectedBuildId ??
     await readRuntimeBuildIdForEntry(import.meta.url)
-  const existing = await resolveSharedRuntime(input.dataDir, fetchImpl)
-  if (existing && runtimeMatchesExpectedBuild(existing, expectedBuildId)) return existing
+  const existing = await inspectSharedRuntime(input.dataDir, fetchImpl)
+  const reusable = reusableRuntimeConnection(existing, expectedBuildId)
+  if (reusable) return reusable
+  assertRuntimeCanBeReplaced(existing)
   return withRuntimeStartLock(input.dataDir, async () => {
-    const elected = await resolveSharedRuntime(input.dataDir, fetchImpl)
-    if (elected && runtimeMatchesExpectedBuild(elected, expectedBuildId)) return elected
-    if (elected) {
+    const elected = await inspectSharedRuntime(input.dataDir, fetchImpl)
+    const electedReusable = reusableRuntimeConnection(elected, expectedBuildId)
+    if (electedReusable) return electedReusable
+    assertRuntimeCanBeReplaced(elected)
+    if (elected?.connection) {
       await stopSharedRuntime(input.dataDir, fetchImpl)
     }
     const stale = await readRuntimeDiscovery(input.dataDir).catch(() => null)
@@ -222,6 +257,34 @@ export async function ensureSharedRuntime(input: {
     }
     throw new Error(`Kun shared runtime did not become ready; inspect ${logPath}`)
   })
+}
+
+function reusableRuntimeConnection(
+  inspected: SharedRuntimeInspection | null,
+  expectedBuildId: string | undefined
+): SharedRuntimeConnection | null {
+  const connection = inspected?.connection
+  if (!connection) return null
+  if (runtimeMatchesExpectedBuild(connection, expectedBuildId)) return connection
+  // A build produced while a turn is running must not replace that turn's
+  // process. The next ensure after the runtime becomes idle performs the
+  // normal graceful build handover.
+  return (connection.activeTurnCount ?? 0) > 0 ? connection : null
+}
+
+function parseActiveTurnCount(value: string | null): number | undefined {
+  if (value === null || !/^\d+$/u.test(value)) return undefined
+  const parsed = Number(value)
+  return Number.isSafeInteger(parsed) ? parsed : undefined
+}
+
+function assertRuntimeCanBeReplaced(
+  inspected: SharedRuntimeInspection | null
+): void {
+  if (!inspected || inspected.connection) return
+  throw new Error(
+    `Kun shared runtime process ${inspected.discovery.pid} is still alive but is not responding; preserving its discovery record instead of starting a second runtime`
+  )
 }
 
 export function runtimeMatchesExpectedBuild(
@@ -297,10 +360,15 @@ export async function stopSharedRuntime(
 ): Promise<boolean> {
   const record = await readRuntimeDiscovery(dataDir).catch(() => null)
   if (!record) return false
-  const live = await probeRuntimeDiscovery(record, fetchImpl)
-  if (!live) {
+  if (!safeDiscoveryUrl(record) || !processAlive(record.pid)) {
     await removeRuntimeDiscovery(dataDir, record.instanceId).catch(() => undefined)
     return false
+  }
+  const live = await probeRuntimeDiscovery(record, fetchImpl)
+  if (!live) {
+    throw new Error(
+      `Kun shared runtime process ${record.pid} is still alive but did not respond to the shutdown probe; its discovery record was preserved`
+    )
   }
   const response = await fetchImpl(`${record.baseUrl.replace(/\/$/u, '')}/v1/runtime/shutdown`, {
     method: 'POST',
