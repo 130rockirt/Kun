@@ -595,7 +595,9 @@ export function FloatingComposer({
       : (goalInputMode || goalPanelOpen) && route !== 'claw'
         ? t('goalComposerPlaceholder')
       : busy
-        ? t('composerQueuePlaceholder')
+        ? currentTurnOrchestration === 'graph'
+          ? t('composerGraphQueuePlaceholder')
+          : t('composerQueuePlaceholder')
         : route === 'claw'
             ? clawHasInboundConversation
               ? t('clawPlaceholder', { name: clawAgentName })
@@ -1188,6 +1190,7 @@ export function FloatingComposer({
               {runtimeReady ? <BackgroundShellOverlay threadId={activeThreadId} /> : null}
               <FloatingComposerQueuedMessages
                 messages={queuedMessages}
+                guidanceTarget={currentTurnOrchestration === 'graph' ? 'graph' : 'turn'}
                 onRemove={onRemoveQueuedMessage}
                 onGuide={onGuideQueuedMessage}
                 onReorder={reorderQueuedMessage}

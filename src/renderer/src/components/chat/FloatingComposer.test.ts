@@ -494,6 +494,55 @@ describe('FloatingComposer queued guidance', () => {
     }
   })
 
+  it('labels active Graph input as queued work with an explicit Graph guidance action', async () => {
+    const previousLanguage = i18n.language
+    await i18n.changeLanguage('en')
+    useChatStore.setState({
+      activeThreadId: 'thr_graph_queue',
+      activeThreadGoal: null,
+      activeThreadTodos: null,
+      blocks: [{ kind: 'user', id: 'user-graph', text: 'Run this as a Graph' }],
+      route: 'chat',
+      workspaceRoot: '/workspace/deepseek-gui',
+      threads: []
+    })
+
+    try {
+      const html = renderToStaticMarkup(createElement(FloatingComposer, {
+        input: '',
+        setInput: () => undefined,
+        mode: 'agent',
+        setMode: () => undefined,
+        orchestration: 'graph',
+        graphEnabled: true,
+        busy: true,
+        currentTurnOrchestration: 'graph',
+        runtimeReady: true,
+        hasActiveThread: true,
+        composerModel: 'test-model',
+        composerPickList: ['test-model'],
+        onComposerModelChange: () => undefined,
+        queuedMessages: [{
+          id: 'q-graph',
+          text: 'Reassign the blocked node',
+          guidanceEligible: true
+        }],
+        onGuideQueuedMessage: () => undefined,
+        onRemoveQueuedMessage: () => undefined,
+        onSend: () => undefined,
+        onInterrupt: () => undefined
+      }))
+
+      expect(html).toContain('sends queue until this Graph finishes')
+      expect(html).toContain('Queued · Sends after this Graph finishes')
+      expect(html).toContain('Guide current Graph')
+      expect(html).toContain('Send this input to the current Graph Lead')
+      expect(html).not.toContain('Add this input to the agent&#x27;s next model interaction')
+    } finally {
+      await i18n.changeLanguage(previousLanguage)
+    }
+  })
+
   it('returns a plain-text queued message through the edit action', async () => {
     const previousLanguage = i18n.language
     await i18n.changeLanguage('en')

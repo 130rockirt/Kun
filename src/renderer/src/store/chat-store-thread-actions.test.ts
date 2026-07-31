@@ -161,7 +161,7 @@ describe('chat-store-thread-actions queued messages', () => {
     expect(state.currentTurnOrchestration).toBe('direct')
   })
 
-  it('steers text into the active Graph source turn instead of admitting queued work', async () => {
+  it('queues active Graph text until the user explicitly guides the source turn', async () => {
     const { actions, state } = buildHarness()
     state.currentTurnId = 'turn_graph_lead'
     state.currentTurnOrchestration = 'graph'
@@ -187,6 +187,17 @@ describe('chat-store-thread-actions queued messages', () => {
       'agent'
     )).resolves.toBe(true)
 
+    expect(steer).not.toHaveBeenCalled()
+    expect(state.queuedMessages).toEqual([
+      expect.objectContaining({
+        text: 'Please reassign the blocked node.',
+        deliveryState: 'pending'
+      })
+    ])
+    expect(state.blocks).toEqual([])
+
+    await expect(actions.guideQueuedMessage(state.queuedMessages[0]!.id)).resolves.toBe(true)
+
     expect(steer).toHaveBeenCalledWith(
       'run_1',
       'Please reassign the blocked node.',
@@ -200,7 +211,7 @@ describe('chat-store-thread-actions queued messages', () => {
     }))
   })
 
-  it('resumes a suspended Graph planning turn before a GraphRun exists', async () => {
+  it('explicitly guides a suspended Graph planning turn before a GraphRun exists', async () => {
     const steerUserMessage = vi.fn(async () => undefined)
     registryMock.getProvider.mockReturnValue({ steerUserMessage })
     const listRuns = vi.spyOn(graphRuntimeClient, 'listRuns').mockResolvedValue([])
@@ -212,6 +223,12 @@ describe('chat-store-thread-actions queued messages', () => {
       'Continue building the Graph.',
       'agent'
     )).resolves.toBe(true)
+
+    expect(listRuns).not.toHaveBeenCalled()
+    expect(steerUserMessage).not.toHaveBeenCalled()
+    expect(state.queuedMessages).toHaveLength(1)
+
+    await expect(actions.guideQueuedMessage(state.queuedMessages[0]!.id)).resolves.toBe(true)
 
     expect(listRuns).toHaveBeenCalledWith('thr_existing')
     expect(steerUserMessage).toHaveBeenCalledWith(
@@ -228,7 +245,7 @@ describe('chat-store-thread-actions queued messages', () => {
     }))
   })
 
-  it('does not duplicate resumed Graph guidance when its runtime user item wins the race', async () => {
+  it('does not duplicate explicit Graph guidance when its runtime user item wins the race', async () => {
     const { actions, state } = buildHarness()
     state.currentTurnId = 'turn_graph_planning'
     state.currentTurnOrchestration = 'graph'
@@ -251,6 +268,7 @@ describe('chat-store-thread-actions queued messages', () => {
       'Continue building the Graph.',
       'agent'
     )).resolves.toBe(true)
+    await expect(actions.guideQueuedMessage(state.queuedMessages[0]!.id)).resolves.toBe(true)
 
     expect(state.blocks.filter((block) => block.kind === 'user')).toEqual([
       expect.objectContaining({ id: 'item_graph_guidance' })
@@ -280,7 +298,8 @@ describe('chat-store-thread-actions queued messages', () => {
       })
     )
 
-    const pendingSend = actions.sendMessage('Continue the Graph.', 'agent')
+    await expect(actions.sendMessage('Continue the Graph.', 'agent')).resolves.toBe(true)
+    const pendingSend = actions.guideQueuedMessage(state.queuedMessages[0]!.id)
     await vi.waitFor(() => expect(resolveSteer).toBeTypeOf('function'))
     expect(steer).toHaveBeenCalled()
     state.activeThreadId = 'thr_other'
@@ -815,6 +834,7 @@ describe('chat-store-thread-actions queued messages', () => {
     registryMock.getProvider.mockReturnValue({ steerUserMessage })
     const { actions, state } = buildHarness()
     state.currentTurnId = 'turn_active'
+    state.currentTurnOrchestration = 'graph'
     state.queuedMessages = [{
       id: 'q-attachment',
       text: 'inspect this image',
@@ -830,12 +850,24 @@ describe('chat-store-thread-actions queued messages', () => {
   })
 
   it('keeps queued input when the active turn rejects guidance', async () => {
-    const steerUserMessage = vi.fn(async () => {
-      throw new Error('turn is no longer accepting steering')
-    })
-    registryMock.getProvider.mockReturnValue({ steerUserMessage })
     const { actions, state } = buildHarness()
-    state.currentTurnId = 'turn_active'
+    state.currentTurnId = 'turn_graph_lead'
+    state.currentTurnOrchestration = 'graph'
+    const activeRun = {
+      id: 'run_reject',
+      threadId: 'thr_existing',
+      sourceTurnId: 'turn_graph_lead',
+      status: 'running',
+      lastEventSeq: 2
+    } as GraphRun
+    useGraphStore.setState({
+      threadId: 'thr_existing',
+      runs: [activeRun],
+      selectedRunId: activeRun.id
+    })
+    vi.spyOn(graphRuntimeClient, 'steer').mockRejectedValue(
+      new Error('turn is no longer accepting steering')
+    )
     state.queuedMessages = [{
       id: 'q-race',
       text: 'do not lose this follow-up',
