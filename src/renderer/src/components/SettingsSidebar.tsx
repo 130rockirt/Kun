@@ -68,6 +68,7 @@ const SETTINGS_NAVIGATION_GROUPS: SettingsNavigationGroup[] = [
     labelKey: 'settingsGroupCore',
     items: [
       { category: 'general', labelKey: 'general', icon: Globe },
+      { category: 'terminal', labelKey: 'tuiTerminal', icon: TerminalSquare },
       { category: 'providers', labelKey: 'providers', icon: ServerCog },
       { category: 'extensions', labelKey: 'extensions', icon: Puzzle, extensionOnly: true }
     ]
@@ -134,7 +135,6 @@ const SETTINGS_NAVIGATION_GROUPS: SettingsNavigationGroup[] = [
       },
       { category: 'updates', labelKey: 'updates', navigationLabelKey: 'settingsNavUpdates', icon: RefreshCw },
       { category: 'claw', labelKey: 'claw', navigationLabelKey: 'settingsNavPhone', icon: Smartphone },
-      { category: 'terminal', labelKey: 'terminal', icon: TerminalSquare },
       { category: 'debug', labelKey: 'debug', icon: Bug }
     ]
   }
@@ -159,7 +159,7 @@ const SETTINGS_CATEGORY_DESCRIPTION_KEYS: Record<SettingsCategory, string> = {
   claw: 'clawEnabledDesc',
   updates: 'guiUpdateDesc',
   debug: 'llmDebugDesc',
-  terminal: 'terminalColorModeDesc',
+  terminal: 'tuiTerminalDesc',
   dataMigration: 'dataMigrationSubtitle'
 }
 

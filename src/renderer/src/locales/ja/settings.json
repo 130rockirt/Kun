@@ -49,6 +49,8 @@
   "updates": "バージョンとアップデート",
   "debug": "トラブルシューティング",
   "terminal": "ターミナル",
+  "tuiTerminal": "TUI ターミナル",
+  "tuiTerminalDesc": "kun ターミナルコマンドを有効にし、内蔵 TUI の外観をカスタマイズします。",
   "sectionTerminal": "端子外観",
   "terminalColorMode": "カラーモード",
   "terminalColorModeDesc": "デフォルトでは、端末はアプリのネイティブ端末スタイルに従い、シェルの ANSI カラーを表示します。 「色なし」に切り替えると、端末がモノクロになります。",

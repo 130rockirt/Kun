@@ -27,6 +27,7 @@ const labels: Record<string, string> = {
   settingsGroupData: 'Data',
   settingsGroupSystem: 'System',
   general: 'General',
+  tuiTerminal: 'TUI terminal',
   providers: 'Providers',
   write: 'Write',
   agents: 'AI assistant',
@@ -141,6 +142,8 @@ describe('ArchivedThreadsSettingsSection', () => {
     expect(html).toContain('group flex h-9 w-full')
     expect(html).toContain('aria-current="page"')
     expect(html.indexOf('Basics')).toBeLessThan(html.indexOf('Workbench'))
+    expect(html.indexOf('General')).toBeLessThan(html.indexOf('TUI terminal'))
+    expect(html.indexOf('TUI terminal')).toBeLessThan(html.indexOf('Providers'))
     expect(html.indexOf('Workbench')).toBeLessThan(html.indexOf('Intelligence'))
     expect(html.indexOf('Intelligence')).toBeLessThan(html.indexOf('Data'))
     expect(html.indexOf('Data')).toBeLessThan(html.indexOf('System'))

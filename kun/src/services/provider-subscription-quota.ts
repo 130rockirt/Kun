@@ -240,12 +240,14 @@ export function parseCodexSubscriptionQuota(payload: unknown): {
     const first = codexWindowMetric(
       `additional-${index}-primary`,
       `${label} primary`,
-      windows?.primary_window
+      windows?.primary_window,
+      label
     )
     const second = codexWindowMetric(
       `additional-${index}-secondary`,
       `${label} weekly`,
-      windows?.secondary_window
+      windows?.secondary_window,
+      label
     )
     if (first) metrics.push(first)
     if (second) metrics.push(second)
@@ -1029,7 +1031,8 @@ function startsWithNumberPath(path: number[], prefix: number[]): boolean {
 function codexWindowMetric(
   id: string,
   fallbackLabel: string,
-  value: unknown
+  value: unknown,
+  scopeLabel?: string
 ): ProviderQuotaMetric | null {
   const window = optionalRecord(value)
   const usedPercent = numberValue(window?.used_percent)
@@ -1038,7 +1041,9 @@ function codexWindowMetric(
   const resetsAt = epochToIso(window?.reset_at)
   return {
     id,
-    label: seconds === undefined ? fallbackLabel : `${formatWindowSeconds(seconds)} usage`,
+    label: seconds === undefined
+      ? fallbackLabel
+      : `${scopeLabel ? `${scopeLabel} · ` : ''}${formatWindowSeconds(seconds)} usage`,
     unit: 'percent',
     usedPercent: clampPercentage(usedPercent),
     ...(resetsAt ? { resetsAt } : {})

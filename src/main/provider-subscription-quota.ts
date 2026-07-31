@@ -241,8 +241,18 @@ export function parseCodexSubscriptionQuota(payload: unknown): {
     const item = optionalRecord(value)
     const windows = optionalRecord(item?.rate_limit)
     const label = stringValue(item?.limit_name) || stringValue(item?.metered_feature) || `Additional limit ${index + 1}`
-    const first = codexWindowMetric(`additional-${index}-primary`, `${label} primary`, windows?.primary_window)
-    const second = codexWindowMetric(`additional-${index}-secondary`, `${label} weekly`, windows?.secondary_window)
+    const first = codexWindowMetric(
+      `additional-${index}-primary`,
+      `${label} primary`,
+      windows?.primary_window,
+      label
+    )
+    const second = codexWindowMetric(
+      `additional-${index}-secondary`,
+      `${label} weekly`,
+      windows?.secondary_window,
+      label
+    )
     if (first) metrics.push(first)
     if (second) metrics.push(second)
   })
@@ -1076,14 +1086,17 @@ function startsWithNumberPath(path: number[], prefix: number[]): boolean {
 function codexWindowMetric(
   id: string,
   fallbackLabel: string,
-  value: unknown
+  value: unknown,
+  scopeLabel?: string
 ): ProviderQuotaMetric | null {
   const window = optionalRecord(value)
   if (!window) return null
   const usedPercent = numberValue(window.used_percent)
   if (usedPercent === undefined) return null
   const seconds = numberValue(window.limit_window_seconds)
-  const label = seconds === undefined ? fallbackLabel : `${formatWindowSeconds(seconds)} usage`
+  const label = seconds === undefined
+    ? fallbackLabel
+    : `${scopeLabel ? `${scopeLabel} · ` : ''}${formatWindowSeconds(seconds)} usage`
   const resetsAt = epochToIso(window.reset_at)
   return {
     id,

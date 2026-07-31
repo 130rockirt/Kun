@@ -49,6 +49,8 @@
   "updates": "版本与更新",
   "debug": "排障",
   "terminal": "终端",
+  "tuiTerminal": "TUI 终端",
+  "tuiTerminalDesc": "启用 kun 终端命令并自定义内置 TUI 的外观。",
   "sectionTerminal": "终端外观",
   "terminalColorMode": "着色模式",
   "terminalColorModeDesc": "默认跟随应用原生终端样式显示 Shell 的 ANSI 色彩。切换到「不着色」可让终端以单色显示。",

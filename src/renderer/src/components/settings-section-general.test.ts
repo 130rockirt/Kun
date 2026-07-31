@@ -140,10 +140,12 @@ describe('GeneralSettingsSection workspace layout', () => {
       expect(html).toContain(`id="general-directories-tab-${tab}"`)
       expect(html).toContain(`id="general-directories-panel-${tab}"`)
     }
-    for (const tab of ['command', 'behavior', 'logs']) {
+    for (const tab of ['behavior', 'logs']) {
       expect(html).toContain(`id="general-desktop-tab-${tab}"`)
       expect(html).toContain(`id="general-desktop-panel-${tab}"`)
     }
+    expect(html).not.toContain('id="general-desktop-tab-command"')
+    expect(html).not.toContain('id="general-desktop-panel-command"')
     expect(html).toContain('legacyImportTitle')
     expect(html).toContain('gitCheckpointTitle')
     expect(html).toContain('logTitle')

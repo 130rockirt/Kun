@@ -49,6 +49,8 @@
   "updates": "버전 및 업데이트",
   "debug": "문제 해결",
   "terminal": "터미널",
+  "tuiTerminal": "TUI 터미널",
+  "tuiTerminalDesc": "kun 터미널 명령을 활성화하고 내장 TUI의 모양을 사용자 지정합니다.",
   "sectionTerminal": "터미널 외관",
   "terminalColorMode": "컬러 모드",
   "terminalColorModeDesc": "기본적으로 터미널은 앱의 기본 터미널 스타일을 따르며 셸 ANSI 색상을 표시합니다. 터미널을 단색으로 만들려면 색상 없음으로 전환합니다.",

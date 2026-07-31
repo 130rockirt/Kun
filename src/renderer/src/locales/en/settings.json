@@ -49,6 +49,8 @@
   "updates": "Version & updates",
   "debug": "Troubleshooting",
   "terminal": "Terminal",
+  "tuiTerminal": "TUI terminal",
+  "tuiTerminalDesc": "Enable the kun terminal command and customize the built-in TUI appearance.",
   "sectionTerminal": "Terminal appearance",
   "terminalColorMode": "Color mode",
   "terminalColorModeDesc": "By default the terminal follows the app's native terminal style and shows shell ANSI colors. Switch to No color to make the terminal monochrome.",

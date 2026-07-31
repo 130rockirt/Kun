@@ -45,12 +45,27 @@ describe('subscription provider quota parsers', () => {
           used_percent: 64,
           reset_after_seconds: 3_600
         }
-      }
+      },
+      additional_rate_limits: [{
+        limit_name: 'GPT-5.3-Codex-Spark',
+        rate_limit: {
+          primary_window: {
+            used_percent: 3,
+            reset_at: 1_775_000_000,
+            limit_window_seconds: 604_800
+          }
+        }
+      }]
     })).toMatchObject({
       summary: 'plus',
       metrics: [
         expect.objectContaining({ id: 'primary', usedPercent: 12 }),
-        expect.objectContaining({ id: 'secondary', usedPercent: 64 })
+        expect.objectContaining({ id: 'secondary', usedPercent: 64 }),
+        expect.objectContaining({
+          id: 'additional-0-primary',
+          label: 'GPT-5.3-Codex-Spark · 1-week usage',
+          usedPercent: 3
+        })
       ]
     })
   })
