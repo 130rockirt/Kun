@@ -3,6 +3,7 @@ import test from 'node:test'
 import {
   TUI_NODE_VERSION,
   createTuiReleaseMetadata,
+  resolveNpmCliInvocation,
   resolveTuiTarget,
   tuiArtifactName
 } from './package-tui.mjs'
@@ -25,6 +26,20 @@ test('maps the supported standalone TUI targets to canonical release names', () 
 test('rejects unsupported target architectures', () => {
   assert.throws(() => resolveTuiTarget('linux', 'arm64'), /Unsupported standalone TUI target/)
   assert.throws(() => resolveTuiTarget('win32', 'arm64'), /Unsupported standalone TUI target/)
+})
+
+test('runs npm through Node instead of a Windows cmd shim', () => {
+  assert.deepEqual(resolveNpmCliInvocation({
+    execPath: 'C:\\node\\node.exe',
+    npmExecPath: 'C:\\node\\node_modules\\npm\\bin\\npm-cli.js'
+  }), {
+    command: 'C:\\node\\node.exe',
+    args: ['C:\\node\\node_modules\\npm\\bin\\npm-cli.js']
+  })
+  assert.throws(
+    () => resolveNpmCliInvocation({ execPath: '/node', npmExecPath: '' }),
+    /npm_execpath is required/
+  )
 })
 
 test('creates release metadata from the shared GUI release version', () => {

@@ -49,6 +49,19 @@ export function tuiArtifactName(artifactVersion, target) {
   return `Kun-TUI-${artifactVersion}-${target.os}-${target.arch}.${target.format}`
 }
 
+export function resolveNpmCliInvocation({
+  execPath = process.execPath,
+  npmExecPath = process.env.npm_execpath
+} = {}) {
+  if (typeof npmExecPath !== 'string' || npmExecPath.length === 0) {
+    throw new Error('npm_execpath is required to install standalone TUI dependencies')
+  }
+  return {
+    command: execPath,
+    args: [npmExecPath]
+  }
+}
+
 export function createTuiReleaseMetadata(input) {
   if (!SEMVER.test(input.version)) throw new Error(`Invalid TUI version: ${input.version}`)
   if (!ARTIFACT_VERSION.test(input.artifactVersion)) {
@@ -225,8 +238,8 @@ async function copyOptionalFile(source, destination) {
 }
 
 function runNpmInstall(packagedKun) {
-  const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
-  execFileSync(npm, ['ci', '--omit=dev', '--no-audit', '--no-fund'], {
+  const npm = resolveNpmCliInvocation()
+  execFileSync(npm.command, [...npm.args, 'ci', '--omit=dev', '--no-audit', '--no-fund'], {
     cwd: packagedKun,
     env: {
       ...process.env,
