@@ -10,6 +10,11 @@ v0.2.33 修复 ChatGPT 订阅配置无法保存的问题。升级后，包含 Co
 - 增加共享设置类型与 IPC schema 的编译期字段完整性检查。以后新增模型 profile 字段但遗漏主进程校验时，类型检查会直接失败。
 - 增加 IPC schema 与 `settings:set` handler 回归测试，覆盖 ChatGPT 订阅生成 `serviceTiers: ["priority"]` 的真实保存路径。
 
+### 只读 Git 检索修复
+
+- `git_inspect` 现在支持安全的 `git grep`，Graph 与 Plan 模式可以检索受 Git 跟踪的文件内容，不再把检索请求错误编码成 `git show grep`。
+- Graph 规划阶段继续使用专用只读工具，不开放任意 Bash 命令；执行阶段的工作节点仍可按授权范围使用 Bash。
+
 ### Runtime 稳定性修复
 
 - 系统休眠唤醒或 Runtime 短暂繁忙时，健康检查超时不再清除仍存活进程的发现记录，也不会并行拉起第二个 Runtime。
