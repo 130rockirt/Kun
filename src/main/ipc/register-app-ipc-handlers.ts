@@ -7,7 +7,6 @@ import {
   type IpcMainInvokeEvent,
   type WebContents
 } from 'electron'
-import { watch, type FSWatcher } from 'node:fs'
 import { randomBytes, randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { basename, dirname, extname, isAbsolute, join, resolve } from 'node:path'
@@ -298,6 +297,10 @@ import {
   writeKunProjectConfig
 } from '../../../kun/src/config/project-config.js'
 import { readProjectConfigState } from '../services/project-config-service'
+import {
+  startWorkspaceFileWatcher,
+  type WorkspaceFileWatcherHandle
+} from '../services/workspace-file-watcher'
 
 type GuiUpdaterModule = typeof import('../gui-updater')
 
@@ -317,7 +320,7 @@ const extensionArtifactResolutionSchema = z.strictObject({
 })
 
 type WorkspaceFileWatchRecord = {
-  watcher: FSWatcher
+  watcher: WorkspaceFileWatcherHandle
   sender: WebContents
   path: string
   workspaceRoot: string
@@ -341,6 +344,7 @@ type RegisterAppIpcHandlersOptions = {
     body?: string,
     headers?: Record<string, string>
   ) => Promise<RuntimeRequestResult>
+  getRuntimeAuthToken: (settings: AppSettingsV1) => string
   getRuntimeSettingsSyncStatus: () => KunRuntimeSettingsSyncStatusPayload
   restartRuntime: () => Promise<void>
   fetchUpstreamModels: () => Promise<UpstreamModelsResult>
@@ -576,6 +580,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     saveSettingsPatch,
     resetUnreadableCredentials,
     runtimeRequest,
+    getRuntimeAuthToken,
     getRuntimeSettingsSyncStatus,
     restartRuntime,
     fetchUpstreamModels,
@@ -960,9 +965,8 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     }
 
     const settings = await store.load()
-    const runtimeToken = getKunRuntimeSettings(settings).runtimeToken.trim()
     const consentToken = createApprovalConsentToken({
-      runtimeToken,
+      runtimeToken: getRuntimeAuthToken(settings),
       approvalId: request.approvalId,
       decision: request.decision,
       expiresAt: Date.now() + 30_000
@@ -2200,16 +2204,53 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     }
 
     const watchId = randomUUID()
+    let watchReady = false
+    let watchFatalMessage = ''
     try {
-      const watchedDirectory = dirname(watchedPath)
-      const watchedName = basename(watchedPath)
-      // Watch the containing directory rather than the file inode. Workspace
-      // writes are atomic (`rename(temp, target)`), which replaces the inode and
-      // permanently detaches a file-level watcher after its first update on
-      // macOS/Linux. The directory remains stable across every replacement.
-      const watcher = watch(watchedDirectory, { persistent: false }, (_eventType, filename) => {
-        if (filename && basename(filename.toString()) !== watchedName) return
-        scheduleWorkspaceFileChange(watchId)
+      const watcher = startWorkspaceFileWatcher({
+        targetPath: watchedPath,
+        onChange: () => scheduleWorkspaceFileChange(watchId),
+        onFallback: ({ reason, error }) => {
+          const code = (error as NodeJS.ErrnoException | undefined)?.code
+          logError('workspace-watch', 'Workspace file watcher is using polling.', {
+            watchId,
+            path: watchedPath,
+            watcherType: 'polling',
+            reason,
+            ...(code ? { code } : {}),
+            ...(error ? { message: error.message } : {})
+          })
+        },
+        onFatalError: (error) => {
+          watchFatalMessage = error.message
+          logError('workspace-watch', 'Workspace file watcher failed.', {
+            watchId,
+            path: watchedPath,
+            message: error.message
+          })
+          if (!watchReady) return
+          const latest = workspaceFileWatchers.get(watchId)
+          if (!latest) return
+          try {
+            if (!latest.sender.isDestroyed()) {
+              latest.sender.send('file:workspace-changed', {
+                ok: false,
+                watchId,
+                workspaceRoot: latest.workspaceRoot,
+                path: latest.path,
+                message: error.message,
+                changedAt: new Date().toISOString()
+              })
+            }
+          } catch (sendError) {
+            logError('workspace-watch', 'Failed to report workspace watcher failure.', {
+              watchId,
+              message: sendError instanceof Error ? sendError.message : String(sendError)
+            })
+          } finally {
+            disposeWorkspaceFileWatch(watchId)
+          }
+        }
       })
       workspaceFileWatchers.set(watchId, {
         watcher,
@@ -2240,6 +2281,11 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
         }
         initialSize = refreshed.size
       }
+      if (watchFatalMessage) {
+        disposeWorkspaceFileWatch(watchId)
+        return { ok: false as const, message: watchFatalMessage }
+      }
+      watchReady = true
       return {
         ok: true as const,
         watchId,

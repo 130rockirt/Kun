@@ -7,11 +7,14 @@ import {
   type KeyboardEvent,
   type ReactElement
 } from 'react'
-import { ChevronUp, ExternalLink, GitBranch } from 'lucide-react'
+import { AlertTriangle, ChevronUp, ExternalLink, GitBranch, X } from 'lucide-react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import { graphNodeLiveness } from '../../graph/graph-liveness'
-import { useGraphStore } from '../../graph/graph-store'
+import {
+  selectGraphPlanningCorrectionDraft,
+  useGraphStore
+} from '../../graph/graph-store'
 import type {
   GraphChildRuntime,
   GraphNodeStatus,
@@ -491,9 +494,12 @@ export function FloatingComposerGraphProgress({
   const { t } = useTranslation('common')
   const reducedMotion = useSubagentReducedMotion()
   const runs = useGraphStore((state) => state.runs)
+  const drafts = useGraphStore((state) => state.drafts)
   const childRuns = useGraphStore((state) => state.childRuns)
   const selectedRunId = useGraphStore((state) => state.selectedRunId)
   const refreshThread = useGraphStore((state) => state.refreshThread)
+  const resumeDraft = useGraphStore((state) => state.resumeDraft)
+  const cancelDraft = useGraphStore((state) => state.cancelDraft)
   const [open, setOpen] = useState(false)
   const [now, setNow] = useState(() => Date.now())
   const [placement, setPlacement] = useState<ComposerPopoverPlacement | null>(null)
@@ -513,6 +519,9 @@ export function FloatingComposerGraphProgress({
 
   const threadRuns = threadId ? runs.filter((candidate) => candidate.threadId === threadId) : []
   const run = enabled ? selectComposerGraphRun(threadRuns, selectedRunId) : null
+  const correctionDraft = enabled
+    ? selectGraphPlanningCorrectionDraft(drafts, threadId)
+    : null
   const progress = run ? getComposerGraphProgress(run, childRuns) : null
   const currentProjection = run && progress?.currentNodeId
     ? run.nodes[progress.currentNodeId]
@@ -580,6 +589,48 @@ export function FloatingComposerGraphProgress({
       window.clearTimeout(hoverCloseTimerRef.current)
     }
   }, [])
+
+  if (!run && correctionDraft) {
+    const issue = correctionDraft.draft.issues[0]
+    return (
+      <div
+        data-composer-stack-item="graph"
+        data-graph-planning-correction
+        className="pointer-events-auto flex min-h-12 w-full max-w-[46rem] shrink-0 items-center gap-3 rounded-2xl border border-amber-400/35 bg-amber-50/95 px-3 py-2 text-left shadow-[0_10px_30px_rgba(120,72,20,0.10)] backdrop-blur-xl dark:bg-amber-950/35"
+      >
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-amber-500/15 text-amber-700 dark:text-amber-200">
+          <AlertTriangle className="h-4 w-4" strokeWidth={1.9} />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block text-[12px] font-semibold text-ds-ink">
+            {t('graphPlanningStatus_needs_correction')}
+          </span>
+          <span className="mt-0.5 block truncate text-[10px] text-ds-muted">
+            {issue
+              ? `${issue.path.length ? `${issue.path.join('.')}: ` : ''}${issue.message}`
+              : t('graphPlanningCorrectionBody')}
+          </span>
+        </span>
+        <button
+          type="button"
+          data-graph-planning-cancel
+          onClick={() => void cancelDraft(correctionDraft.draft.id)}
+          className="inline-flex h-8 shrink-0 items-center gap-1 rounded-lg px-2.5 text-[10px] font-semibold text-ds-muted transition hover:bg-amber-500/10 hover:text-ds-ink"
+        >
+          <X className="h-3.5 w-3.5" />
+          {t('graphPlanningCancel')}
+        </button>
+        <button
+          type="button"
+          data-graph-planning-resume
+          onClick={() => void resumeDraft(correctionDraft.draft.id)}
+          className="h-8 shrink-0 rounded-lg bg-indigo-600 px-3 text-[10px] font-semibold text-white transition hover:bg-indigo-500"
+        >
+          {t('graphPlanningContinue')}
+        </button>
+      </div>
+    )
+  }
 
   if (!run || !progress) return null
 

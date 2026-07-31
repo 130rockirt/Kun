@@ -10,7 +10,8 @@ import {
   liveTurnProgressClass,
   timelineBottomPaddingClass,
   resultPreviewSourcesForTurn,
-  summarizeToolBlock
+  summarizeToolBlock,
+  timelineTurnIsProcessing
 } from './MessageTimeline'
 import {
   GeneratedFilesPanel,
@@ -1418,6 +1419,25 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
     expect(html).toContain('is-active')
     expect(html).toContain('ds-work-logo-phase-trail')
     expect(html).not.toContain('running timeline detail should stay collapsed')
+  })
+
+  it('stops a Graph planning turn when its draft pauses for correction', () => {
+    expect(timelineTurnIsProcessing({
+      busy: true,
+      isLatestTurn: true,
+      turnPending: true,
+      hasLiveStream: true,
+      turnId: 'turn_1',
+      graphPlanningCorrectionTurnId: 'turn_1'
+    })).toBe(false)
+    expect(timelineTurnIsProcessing({
+      busy: true,
+      isLatestTurn: true,
+      turnPending: false,
+      hasLiveStream: false,
+      turnId: 'turn_2',
+      graphPlanningCorrectionTurnId: 'turn_1'
+    })).toBe(true)
   })
 
   it('keeps the fallback running animation visible between process events', () => {

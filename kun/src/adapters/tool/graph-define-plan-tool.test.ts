@@ -6,6 +6,7 @@ import type { ToolHostContext } from '../../ports/tool-host.js'
 import {
   FileGraphPlanningDraftStore
 } from '../../graph/graph-planning-draft-store.js'
+import { GraphPlanValidationError } from '../../graph/graph-validator.js'
 import {
   buildGraphDefinePlanTool,
   GRAPH_DEFINE_PLAN_INPUT_JSON_SCHEMA
@@ -241,6 +242,90 @@ describe('graph_define_plan', () => {
     expect(start).toHaveBeenCalledTimes(2)
     expect(get).toHaveBeenCalledWith('run_1')
     expect((await drafts.require('draft_1')).status).toBe('committed')
+  })
+
+  it('restores task titles by key when a corrected transport payload drops them', async () => {
+    const { create, drafts, get, start, tool } = await harness()
+    create
+      .mockRejectedValueOnce(new GraphPlanValidationError({
+        version: 1,
+        valid: false,
+        issues: [{
+          code: 'completion_node_not_terminal',
+          path: ['completionNodeIds', 0],
+          message: 'completion node implement has an outgoing scheduling edge',
+          severity: 'error'
+        }],
+        normalizedNodeCount: 2,
+        normalizedEdgeCount: 1
+      }))
+      .mockResolvedValueOnce({
+        run: { id: 'run_1', status: 'ready' },
+        validation: { valid: true, issues: [] }
+      })
+    start.mockResolvedValue({ id: 'run_1', status: 'running' })
+    get.mockRejectedValue(new Error('run not found'))
+    const task = (key: string, title: string, dependsOn: string[] = []) => ({
+      key,
+      kind: 'work' as const,
+      title,
+      objective: `Complete ${key}.`,
+      dependsOn,
+      dataFrom: [],
+      acceptanceCriteria: [`${key} is complete.`],
+      readScopes: ['.'],
+      writeScopes: ['src']
+    })
+    const invalid = {
+      plan: {
+        title: 'Implement and validate TimeKV',
+        tasks: [
+          task('implement', 'Implement TimeKV class with tests and analysis'),
+          task(
+            'validate',
+            'Stress-test TimeKV against brute force and measure performance',
+            ['implement']
+          )
+        ],
+        // A completion task cannot have an outgoing scheduling edge.
+        completionTaskKeys: ['implement']
+      }
+    }
+
+    await expect(tool.execute(invalid, context())).resolves.toMatchObject({
+      isError: true,
+      output: {
+        code: 'graph_plan_invalid',
+        retryable: true,
+        draft: { status: 'repairing', repairCount: 1 }
+      }
+    })
+
+    const corrected = {
+      plan: {
+        ...invalid.plan,
+        tasks: invalid.plan.tasks.map(({ title: _transportDroppedTitle, ...entry }) => entry),
+        completionTaskKeys: ['validate']
+      }
+    }
+    await expect(tool.execute(corrected, context())).resolves.toMatchObject({
+      output: {
+        status: 'committed',
+        draft: { status: 'committed', committedRunId: 'run_1' }
+      }
+    })
+
+    expect(await drafts.readCandidate('draft_1')).toMatchObject({
+      tasks: [
+        { key: 'implement', title: 'Implement TimeKV class with tests and analysis' },
+        {
+          key: 'validate',
+          title: 'Stress-test TimeKV against brute force and measure performance'
+        }
+      ],
+      completionTaskKeys: ['validate']
+    })
+    expect(create).toHaveBeenCalledTimes(2)
   })
 
   it('recovers a durable ready run when create reports a post-commit failure', async () => {

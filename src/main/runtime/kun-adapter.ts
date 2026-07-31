@@ -98,11 +98,16 @@ export function getRuntimeBaseUrlForSettings(settings: AppSettingsV1): string {
   return kunRuntimeAdapter.getBaseUrl(settings)
 }
 
+/** Resolve the bearer token for the active Kun connection. */
+export function getRuntimeAuthToken(settings: AppSettingsV1): string {
+  const runtime = getKunRuntimeSettings(settings)
+  return resolvedConnection?.runtimeToken ?? runtime.runtimeToken.trim()
+}
+
 /** Build the bearer-token authorization header for Kun requests. */
 export function runtimeAuthHeaders(settings: AppSettingsV1): Headers {
-  const runtime = getKunRuntimeSettings(settings)
   const headers = new Headers()
-  const token = resolvedConnection?.runtimeToken ?? runtime.runtimeToken.trim()
+  const token = getRuntimeAuthToken(settings)
   if (token) {
     headers.set('Authorization', `Bearer ${token}`)
   }

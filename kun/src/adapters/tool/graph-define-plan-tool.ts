@@ -22,6 +22,7 @@ import type { ToolHostContext } from '../../ports/tool-host.js'
 import type { RuntimeEventRecorder } from '../../services/runtime-event-recorder.js'
 import { isHostShutdownTurnSuspension } from '../../services/turn-service.js'
 import { graphCreateBudgetDefaults } from './graph-create-run-tool.js'
+import { restoreMissingTaskTitles } from './graph-plan-candidate-repair.js'
 import { LocalToolHost, type LocalTool } from './local-tool-host.js'
 
 export const GRAPH_DEFINE_PLAN_TOOL_NAME = 'graph_define_plan'
@@ -126,9 +127,17 @@ export function buildGraphDefinePlanTool(options: {
           )
         }
 
-        const candidate = typeof args === 'object' && args !== null && 'plan' in args
+        const submittedCandidate = typeof args === 'object' && args !== null && 'plan' in args
           ? (args as { plan?: unknown }).plan
           : undefined
+        const previousCandidate = await options.drafts.readCandidate(draft.id)
+        const candidate = restoreMissingTaskTitles(
+          submittedCandidate,
+          previousCandidate
+        )
+        const effectiveArgs = typeof args === 'object' && args !== null
+          ? { ...args, plan: candidate }
+          : args
         const candidateHash = hashCandidate(candidate)
         if (draft.candidateHash === candidateHash && draft.issues.length > 0) {
           draft = await transitionDraft(options, draft, {
@@ -153,7 +162,7 @@ export function buildGraphDefinePlanTool(options: {
           candidateHash,
           issues: []
         })
-        const parsed = GraphDefinePlanInputSchema.safeParse(args)
+        const parsed = GraphDefinePlanInputSchema.safeParse(effectiveArgs)
         if (!parsed.success) {
           return recordInvalidCandidate(options, draft, candidateHash, parsed.error.issues)
         }

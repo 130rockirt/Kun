@@ -875,17 +875,21 @@ export function createThreadActions(
       if (!state.busy) void get().drainQueuedMessages()
       return false
     }
+    const guidanceThreadId = state.activeThreadId
+    const guidanceTurnId = state.currentTurnId
+    const guidingGraphTurn = state.currentTurnOrchestration === 'graph'
     const delegated = state.lastDelegatedRuntimeState
     if (
-      delegated?.threadId === state.activeThreadId &&
-      delegated.turnId === state.currentTurnId &&
+      !guidingGraphTurn &&
+      delegated?.threadId === guidanceThreadId &&
+      delegated.turnId === guidanceTurnId &&
       delegated.capabilities.liveSteering === false
     ) {
       set({ error: i18n.t('common:guideQueuedMessageUnsupported') })
       return false
     }
     const provider = getProvider()
-    if (typeof provider.steerUserMessage !== 'function') {
+    if (!guidingGraphTurn && typeof provider.steerUserMessage !== 'function') {
       set({ error: i18n.t('common:guideQueuedMessageUnsupported') })
       return false
     }
@@ -893,20 +897,44 @@ export function createThreadActions(
     guidingQueuedMessageIds.add(id)
     const requestStartedAt = Date.now()
     try {
-      await provider.steerUserMessage(
-        state.activeThreadId,
-        state.currentTurnId,
-        message.text,
-        message.displayText ? { displayText: message.displayText } : undefined
-      )
+      const graphSteered = guidingGraphTurn
+        ? await useGraphStore.getState().steerSourceTurn(
+            guidanceThreadId,
+            guidanceTurnId,
+            message.text
+          )
+        : false
+      if (!graphSteered) {
+        if (typeof provider.steerUserMessage !== 'function') {
+          set({ error: i18n.t('common:guideQueuedMessageUnsupported') })
+          return false
+        }
+        await provider.steerUserMessage(
+          guidanceThreadId,
+          guidanceTurnId,
+          message.text,
+          message.displayText ? { displayText: message.displayText } : undefined
+        )
+      }
       const requestCompletedAt = Date.now()
+      if (get().activeThreadId !== guidanceThreadId) {
+        const durableQueuedMessages = queuedMessagesForThread(guidanceThreadId)
+        saveQueuedMessagesForThread(
+          guidanceThreadId,
+          (durableQueuedMessages.length > 0
+            ? durableQueuedMessages
+            : state.queuedMessages
+          ).filter((candidate) => candidate.id !== id)
+        )
+        return true
+      }
       set((current) => {
         const stillQueued = current.queuedMessages.some((candidate) => candidate.id === id)
         if (!stillQueued) return { error: null }
         const runtimeMessageAlreadyVisible = hasRuntimeUserBlockForGuidance(
           current.blocks,
           message,
-          state.currentTurnId!,
+          guidanceTurnId,
           requestStartedAt,
           requestCompletedAt
         )
@@ -920,7 +948,7 @@ export function createThreadActions(
                 {
                   kind: 'user' as const,
                   id: message.id,
-                  turnId: state.currentTurnId!,
+                  turnId: guidanceTurnId,
                   createdAt: new Date(requestCompletedAt).toISOString(),
                   text: displayText,
                   ...(message.modelLabel ? { modelLabel: message.modelLabel } : {}),
@@ -1004,119 +1032,6 @@ export function createThreadActions(
     const hasPendingActiveTurn = threadHasPendingRuntimeWork(get().blocks)
     if (get().busy || hasPendingActiveTurn) {
       const state = get()
-      const graphGuidanceIsTextOnly = !(
-        overrides?.attachmentIds?.length ||
-        overrides?.attachments?.length ||
-        overrides?.fileReferences?.length ||
-        overrides?.composerContexts?.length ||
-        overrides?.guiPlan ||
-        overrides?.guiDesignArtifact ||
-        overrides?.guiDesignCanvas ||
-        overrides?.guiDesignMode ||
-        writeContext
-      )
-      if (
-        state.route === 'chat' &&
-        state.currentTurnOrchestration === 'graph' &&
-        state.activeThreadId &&
-        state.currentTurnId &&
-        graphGuidanceIsTextOnly
-      ) {
-        const graphThreadId = state.activeThreadId
-        const graphTurnId = state.currentTurnId
-        const guidanceDisplayText = overrides?.displayText?.trim() || trimmedText
-        const guidanceMessage = {
-          text: trimmedText,
-          ...(guidanceDisplayText !== trimmedText
-            ? { displayText: guidanceDisplayText }
-            : {})
-        }
-        const graphTurnIsStillActive = (current: ChatState): boolean =>
-          current.activeThreadId === graphThreadId &&
-          current.currentTurnId === graphTurnId &&
-          current.currentTurnOrchestration === 'graph'
-        const setGraphGuidanceError = (error: unknown): void => {
-          set((current) => graphTurnIsStillActive(current)
-            ? {
-                error: i18n.t('common:guideQueuedMessageFailed', {
-                  message: formatRuntimeError(error)
-                })
-              }
-            : {})
-        }
-        const appendGraphGuidance = (
-          requestStartedAt: number,
-          requestCompletedAt: number
-        ): void => {
-          set((current) => {
-            if (!graphTurnIsStillActive(current)) return {}
-            if (hasRuntimeUserBlockForGuidance(
-              current.blocks,
-              guidanceMessage,
-              graphTurnId,
-              requestStartedAt,
-              requestCompletedAt
-            )) {
-              return { error: null }
-            }
-            return {
-              blocks: [
-                ...current.blocks,
-                {
-                  kind: 'user' as const,
-                  id: `graph-steering-${requestCompletedAt}`,
-                  turnId: graphTurnId,
-                  createdAt: new Date(requestCompletedAt).toISOString(),
-                  text: guidanceDisplayText,
-                  ...(guidanceDisplayText !== trimmedText
-                    ? { meta: { displayText: guidanceDisplayText } }
-                    : {})
-                }
-              ],
-              error: null
-            }
-          })
-        }
-        const graphSteerStartedAt = Date.now()
-        try {
-          const steered = await useGraphStore.getState().steerSourceTurn(
-            graphThreadId,
-            graphTurnId,
-            trimmedText
-          )
-          if (steered) {
-            appendGraphGuidance(graphSteerStartedAt, Date.now())
-            return true
-          }
-        } catch (error) {
-          setGraphGuidanceError(error)
-          return false
-        }
-        if (!graphTurnIsStillActive(get())) return false
-        // Before graph_create_run commits there is no GraphRun endpoint to
-        // steer. A recoverably suspended planning slice is still the same
-        // running Graph source turn, so wake it through the generic turn
-        // steering route instead of snapshotting "continue" as a new Direct
-        // turn that can never regain the draft's Graph ownership.
-        if (typeof p.steerUserMessage === 'function') {
-          const turnSteerStartedAt = Date.now()
-          try {
-            await p.steerUserMessage(
-              graphThreadId,
-              graphTurnId,
-              trimmedText,
-              guidanceMessage.displayText
-                ? { displayText: guidanceMessage.displayText }
-                : undefined
-            )
-            appendGraphGuidance(turnSteerStartedAt, Date.now())
-            return true
-          } catch (error) {
-            setGraphGuidanceError(error)
-            return false
-          }
-        }
-      }
       if (overrides?.guiPlan || writeContext) {
         set({ error: i18n.t('common:composerQueuePlaceholder') })
         return false
