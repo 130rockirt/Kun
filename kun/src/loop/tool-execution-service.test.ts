@@ -33,7 +33,9 @@ function makeService(input: {
   const turns = {
     updateItem: vi.fn(async () => { lifecycle.push('update'); return null }),
     updateTurnMetadata: vi.fn(async () => { lifecycle.push('turn-metadata') }),
-    applyItem: vi.fn(async () => { lifecycle.push('apply') })
+    applyItem: vi.fn(async () => { lifecycle.push('apply') }),
+    publishTransientItem: vi.fn(async () => { lifecycle.push('transient') }),
+    compactItemHistory: vi.fn(async () => { lifecycle.push('compact') })
   } as unknown as TurnService
   const service = new ToolExecutionService({
     toolHost: {
@@ -162,7 +164,7 @@ describe('ToolExecutionService', () => {
       arguments: { markdown: '# Plan' }
     }, result)
 
-    expect(lifecycle).toEqual(['update', 'apply', 'plan'])
+    expect(lifecycle).toEqual(['update', 'apply', 'plan', 'compact'])
   })
 
   it('persists storm suppression as a failed result and public event', async () => {
@@ -219,5 +221,56 @@ describe('ToolExecutionService', () => {
 
     await emitUpdate?.(runningItem)
     expect(lifecycle).toEqual(['update', 'apply'])
+  })
+
+  it('persists the first progress state and publishes only changed later snapshots transiently', async () => {
+    const first = makeToolResultItem({
+      id: 'item_call_1',
+      threadId: 'thread_1',
+      turnId: 'turn_1',
+      callId: 'call_1',
+      toolName: 'read',
+      output: { output: 'a', partial: true },
+      status: 'running'
+    })
+    const second = makeToolResultItem({
+      id: 'item_call_1',
+      threadId: 'thread_1',
+      turnId: 'turn_1',
+      callId: 'call_1',
+      toolName: 'read',
+      output: { output: 'ab', partial: true },
+      status: 'running'
+    })
+    const setup = makeService({
+      execute: async (_call, _context, onUpdate) => {
+        await onUpdate?.(first)
+        await onUpdate?.(first)
+        await onUpdate?.(second)
+        return {
+          item: makeToolResultItem({
+            id: first.id,
+            threadId: first.threadId,
+            turnId: first.turnId,
+            callId: 'call_1',
+            toolName: 'read',
+            output: { output: 'ab', partial: false }
+          }),
+          approved: true
+        }
+      }
+    })
+
+    await setup.service.executeSafely({
+      threadId: 'thread_1',
+      turnId: 'turn_1',
+      call,
+      context
+    })
+
+    expect(setup.turns.updateItem).toHaveBeenCalledTimes(1)
+    expect(setup.turns.applyItem).toHaveBeenCalledTimes(1)
+    expect(setup.turns.publishTransientItem).toHaveBeenCalledTimes(1)
+    expect(setup.lifecycle).toEqual(['update', 'apply', 'transient'])
   })
 })

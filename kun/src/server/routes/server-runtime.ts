@@ -252,6 +252,7 @@ export type ServerRuntime = {
   allocateSeq: (threadId: string) => number
   nowIso: () => string
   info(): RuntimeInfoResponse
+  activeTurnCount?(): number
   requestShutdown?(instanceId: string): Promise<boolean>
   applyConfig(request: RuntimeConfigApplyRequest): Promise<RuntimeConfigApplyResponse>
   toolDiagnostics?(): RuntimeToolDiagnostics | Promise<RuntimeToolDiagnostics>

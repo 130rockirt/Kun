@@ -2491,6 +2491,7 @@ export async function createKunServeRuntime(
 	    allocateSeq,
 	    nowIso,
 	    applyConfig,
+	    activeTurnCount: () => activeRuntimeRuns.size,
 	    info: () => {
 	      const memory = process.memoryUsage()
 	      const peakRssBytes = Math.max(memory.rss, process.resourceUsage().maxRSS * 1024)
@@ -3365,10 +3366,10 @@ export async function startKunServe(
     shutdownRequested,
     close: async () => {
       try {
-        await server.close()
+        await runtime.shutdown?.()
       } finally {
         try {
-          await runtime.shutdown?.()
+          await server.close()
         } finally {
           await removeRuntimeDiscovery(options.dataDir, discovery.instanceId).catch(() => undefined)
         }

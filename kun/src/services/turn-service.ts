@@ -1424,6 +1424,19 @@ export class TurnService {
     const summaries = await this.deps.threadStore.list({ includeSide: true })
     const reconciledThreadIds = new Set<string>()
     for (const summary of summaries) {
+      const metadata = await (
+        this.deps.threadStore.getMetadata?.(summary.id) ??
+        this.deps.threadStore.get(summary.id)
+      ).catch(() => null)
+      if (!metadata?.turns.some((turn) => turn.status === 'running' || turn.status === 'queued')) {
+        continue
+      }
+      await this.deps.sessionStore.compactItems?.(summary.id).catch((error) => {
+        console.warn(
+          `[kun] item history compaction skipped for ${summary.id}: ` +
+          `${error instanceof Error ? error.message : String(error)}`
+        )
+      })
       const thread = await this.deps.threadStore.get(summary.id).catch(() => null)
       if (!thread) continue
       for (const turn of thread.turns) {
@@ -1583,6 +1596,26 @@ export class TurnService {
     })
   }
 
+  async publishTransientItem(threadId: string, item: TurnItem): Promise<void> {
+    await this.deps.events.publishTransient({
+      kind: 'item_updated',
+      threadId,
+      turnId: item.turnId,
+      itemId: item.id,
+      item
+    })
+  }
+
+  async compactItemHistory(threadId: string): Promise<void> {
+    if (!this.deps.sessionStore.compactItems) return
+    await this.deps.sessionStore.compactItems(threadId).catch((error) => {
+      console.warn(
+        `[kun] item history compaction skipped for ${threadId}: ` +
+        `${error instanceof Error ? error.message : String(error)}`
+      )
+    })
+  }
+
   async updateItem(
     threadId: string,
     itemId: string,
@@ -1590,15 +1623,19 @@ export class TurnService {
   ): Promise<TurnItem | null> {
     const updatedInSession = await this.deps.sessionStore.updateItem(threadId, itemId, patch)
     const updatedItems: TurnItem[] = []
-    await this.upsertThread(threadId, (current) => {
-      const turns = current.turns.map((turn) => {
-        const existing = turn.items.find((item) => item.id === itemId)
-        if (!existing) return turn
-        updatedItems[0] = { ...existing, ...patch } as TurnItem
-        return replaceTurnItem(turn, itemId, patch)
+    if (this.deps.threadStore.touch) {
+      await this.deps.threadStore.touch(threadId, this.deps.nowIso())
+    } else {
+      await this.upsertThread(threadId, (current) => {
+        const turns = current.turns.map((turn) => {
+          const existing = turn.items.find((item) => item.id === itemId)
+          if (!existing) return turn
+          updatedItems[0] = { ...existing, ...patch } as TurnItem
+          return replaceTurnItem(turn, itemId, patch)
+        })
+        return { ...current, turns }
       })
-      return { ...current, turns }
-    })
+    }
     const updated = updatedItems[0] ?? updatedInSession
     if (!updated) return null
     await this.deps.events.record({

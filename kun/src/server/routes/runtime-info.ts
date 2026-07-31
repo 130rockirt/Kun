@@ -4,7 +4,16 @@ import { jsonResponse, type JsonResponse } from '../response.js'
 import type { ServerRuntime } from './server-runtime.js'
 
 export function runtimeInfoJsonResponse(runtime: ServerRuntime): JsonResponse {
-  return jsonResponse(RuntimeInfoResponse.parse(runtime.info()))
+  const response = jsonResponse(RuntimeInfoResponse.parse(runtime.info()))
+  const activeTurnCount = runtime.activeTurnCount?.()
+  if (
+    typeof activeTurnCount === 'number' &&
+    Number.isSafeInteger(activeTurnCount) &&
+    activeTurnCount >= 0
+  ) {
+    response.headers['x-kun-active-turn-count'] = String(activeTurnCount)
+  }
+  return response
 }
 
 export async function runtimeToolDiagnosticsJsonResponse(runtime: ServerRuntime): Promise<JsonResponse> {

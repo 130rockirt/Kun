@@ -115,6 +115,7 @@ import {
 } from './runtime/kun-adapter'
 import { waitForRuntimeTurnsIdle } from './runtime/managed-runtime-idle'
 import {
+  isKunChildRunning,
   resolveKunDataDir,
   setKunUnexpectedExitHandler,
   syncGuiManagedKunConfig,
@@ -1315,11 +1316,12 @@ async function resolveManagedKunLaunchSettings(
 
 async function ensureKunRuntime(settings: AppSettingsV1): Promise<AppSettingsV1> {
   const currentSettings = settings
-  await kunRuntimeAdapter.resolveConnection(currentSettings)
+  const connectionResolved = await kunRuntimeAdapter.resolveConnection(currentSettings)
 
   const runtime = getKunRuntimeSettings(currentSettings)
 
-  const healthy = await kunRuntimeHealthMonitor.waitForHealthy(currentSettings, 2_000)
+  const healthy = connectionResolved &&
+    await kunRuntimeHealthMonitor.waitForHealthy(currentSettings, 2_000)
   if (healthy) {
     const threadApi = await probeThreadApi(currentSettings)
     if (threadApi.ok) {
@@ -1336,14 +1338,9 @@ async function ensureKunRuntime(settings: AppSettingsV1): Promise<AppSettingsV1>
     )
   }
 
-  // A managed child that is alive but failed the probe is hung (blocked event
-  // loop) or merely busy — not absent. The launch path below cannot recover it
-  // on its own: resolveAvailablePort skips our own child when reclaiming the
-  // port (isCurrentKunChildPid) and startKunChild early-returns while
-  // isChildRunning() stays true, so it would pick a fresh port, never spawn,
-  // and fail every request until the ~90s watchdog finally force-restarts
-  // (KunAgent/Kun#621). Stop the hung child here so the relaunch spawns a fresh
-  // process on the SAME port instead.
+  // A process that is alive but failed the probe may only be busy or waking
+  // from system sleep. Give it a real recovery window before deciding what to
+  // do; replacing a shared runtime here would orphan its in-flight turn.
   if (kunRuntimeAdapter.isChildRunning()) {
     // Never tear down a child still inside its (deliberately generous) startup
     // window — interrupting a slow-but-healthy boot is the #544 restart storm.
@@ -1360,9 +1357,17 @@ async function ensureKunRuntime(settings: AppSettingsV1): Promise<AppSettingsV1>
         }
         throw runtimeJsonError(threadApi.error, threadApi.message)
       }
+      if (!isKunChildRunning()) {
+        throw runtimeJsonError(
+          'runtime_unhealthy',
+          'Kun is still running but temporarily unresponsive. Its active runtime was preserved; retry after it recovers.'
+        )
+      }
+      // The legacy GUI-private child can be replaced safely in place. Shared
+      // daemons are never stopped by an ordinary ensure request.
       logWarn(
         'runtime-start',
-        `managed Kun child stopped responding on port ${runtime.port}; restarting it in place`
+        `GUI-private Kun child stopped responding on port ${runtime.port}; restarting it in place`
       )
       await kunRuntimeAdapter.stopSharedAndWait(currentSettings)
     }

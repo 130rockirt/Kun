@@ -139,6 +139,37 @@ export class HybridThreadStore implements ThreadStore {
     return thread
   }
 
+  async getMetadata(threadId: string): Promise<ThreadRecord | null> {
+    if (!isSafeThreadId(threadId)) return null
+    await this.ready()
+    return this.documents.readMetadata(threadId)
+  }
+
+  async touch(threadId: string, updatedAt: string): Promise<boolean> {
+    if (!isSafeThreadId(threadId)) return false
+    await this.ready()
+    const current = await this.documents.readMetadata(threadId)
+    if (!current) return false
+    const next = ThreadSchema.parse({ ...current, updatedAt })
+    await this.appendMetadata(next)
+    if (this.db) {
+      try {
+        this.cachedStatement(`
+          UPDATE threads
+          SET updated_at = @updated_at, updated_at_ms = @updated_at_ms
+          WHERE id = @id
+        `).run({
+          id: threadId,
+          updated_at: next.updatedAt,
+          updated_at_ms: Date.parse(next.updatedAt)
+        })
+      } catch (error) {
+        warnSqlite('touch thread metadata', error)
+      }
+    }
+    return true
+  }
+
   async upsert(thread: ThreadRecord): Promise<ThreadRecord> {
     const normalized = ThreadSchema.parse(thread)
     assertSafeThreadId(normalized.id)
@@ -293,10 +324,10 @@ export class HybridThreadStore implements ThreadStore {
       this.backfill = new HybridThreadBackfillCoordinator({
         indexedRows: () => this.db!.prepare('SELECT id, usage_backfilled FROM threads').all() as Array<{ id: string; usage_backfilled?: number }>,
         filesystemThreadIds: () => this.threadIdsFromFilesystem(),
-        readMissingThread: async (threadId) => Boolean(await this.readThreadFromDisk(threadId)),
+        readMissingThread: async (threadId) => Boolean(await this.readThreadMetadataFromDisk(threadId)),
         scanEvents: (threadId) => this.scanEventsForBackfill(threadId),
         upsertMissing: async (threadId, highWater) => {
-          const thread = await this.readThreadFromDisk(threadId)
+          const thread = await this.readThreadMetadataFromDisk(threadId)
           if (thread) this.upsertIndexBestEffort({ ...this.indexRecordForThread(thread), eventSeqHighWater: highWater })
         },
         noteExistingHighWater: (threadId, highWater) => this.noteEventHighWaterSync(threadId, highWater),
@@ -556,6 +587,10 @@ export class HybridThreadStore implements ThreadStore {
     return this.documents.readThread(threadId)
   }
 
+  private async readThreadMetadataFromDisk(threadId: string): Promise<ThreadRecord | null> {
+    return this.documents.readMetadata(threadId)
+  }
+
   private async readLatestMetadata(threadId: string): Promise<ThreadRecord | null> {
     return this.documents.readLatestMetadata(threadId)
   }
@@ -584,7 +619,7 @@ export class HybridThreadStore implements ThreadStore {
   private async listFromFilesystem(): Promise<ThreadSummary[]> {
     const summaries: ThreadSummary[] = []
     for (const threadId of await this.threadIdsFromFilesystem()) {
-      const thread = await this.readThreadFromDisk(threadId)
+      const thread = await this.readThreadMetadataFromDisk(threadId)
       if (thread) summaries.push(toThreadSummary(thread))
     }
     return summaries.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))

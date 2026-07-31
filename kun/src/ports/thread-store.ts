@@ -16,6 +16,10 @@ export type ThreadStoreListOptions = {
 export interface ThreadStore {
   list(options?: ThreadStoreListOptions): Promise<ThreadSummary[]>
   get(threadId: string): Promise<ThreadRecord | null>
+  /** Read the durable Thread/Turn projection without hydrating item history. */
+  getMetadata?(threadId: string): Promise<ThreadRecord | null>
+  /** Update only rebuildable Thread metadata, without hydrating item history. */
+  touch?(threadId: string, updatedAt: string): Promise<boolean>
   upsert(thread: ThreadRecord): Promise<ThreadRecord>
   delete(threadId: string): Promise<boolean>
 }
