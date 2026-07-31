@@ -128,6 +128,7 @@ function registerOptions(overrides: Partial<Parameters<typeof import('./register
       movedItems: ['secret.key']
     })),
     runtimeRequest: vi.fn() as never,
+    getRuntimeAuthToken: (current: AppSettingsV1) => current.agents.kun.runtimeToken.trim(),
     getRuntimeSettingsSyncStatus: () => ({
       state: 'idle' as const,
       generation: 0,
@@ -472,9 +473,11 @@ describe('registerAppIpcHandlers', () => {
     expect(saveSettingsPatch).not.toHaveBeenCalled()
   })
 
-  it('requires a trusted workbench sender and native confirmation for user approvals', async () => {
+  it('uses the resolved shared runtime token after trusted native approval', async () => {
     const current = settings()
-    current.agents.kun.runtimeToken = 'approval-runtime-secret'
+    const resolvedRuntimeToken = 'approval-runtime-secret'
+    const getRuntimeAuthToken = vi.fn(() => resolvedRuntimeToken)
+    expect(current.agents.kun.runtimeToken).toBe('')
     const mainFrame = { processId: 10, routingId: 20 }
     const contents = { id: 7, mainFrame }
     const mainWindow = { isDestroyed: () => false, webContents: contents }
@@ -487,6 +490,7 @@ describe('registerAppIpcHandlers', () => {
     registerAppIpcHandlers(registerOptions({
       store: { load: vi.fn(async () => current) } as never,
       getMainWindow: () => mainWindow as never,
+      getRuntimeAuthToken,
       runtimeRequest
     }))
     const handler = handlers.get('approval:decide')!
@@ -506,10 +510,11 @@ describe('registerAppIpcHandlers', () => {
     electronMock.showMessageBox.mockResolvedValueOnce({ response: 0 })
     await expect(handler({ sender: contents, senderFrame: mainFrame }, payload))
       .resolves.toMatchObject({ confirmed: true, response: { ok: true } })
+    expect(getRuntimeAuthToken).toHaveBeenCalledWith(current)
     const headers = runtimeRequest.mock.calls[0]?.[3] as Record<string, string>
     const consent = headers[KUN_APPROVAL_CONSENT_HEADER]
     expect(consent).toMatch(/^v1\./)
-    expect(new ApprovalConsentVerifier('approval-runtime-secret').verifyAndConsume({
+    expect(new ApprovalConsentVerifier(resolvedRuntimeToken).verifyAndConsume({
       token: consent,
       approvalId: 'approval-1',
       decision: 'allow'

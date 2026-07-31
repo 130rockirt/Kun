@@ -58,6 +58,7 @@ import { FloatingComposerAboveInputStack } from './FloatingComposerAboveInputSta
 import { requestContextSnapshotMatchesSelection } from './FloatingComposerContextCapacity'
 import { getGoalPanelDraftObjective } from './floating-composer-commands'
 import { useChatStore } from '../../store/chat-store'
+import { useGraphStore } from '../../graph/graph-store'
 import i18n from '../../i18n'
 import {
   buildComposerFileContextPrompt,
@@ -456,6 +457,115 @@ describe('FloatingComposer Graph entry', () => {
       }
       await i18n.changeLanguage(previousLanguage)
       vi.unstubAllGlobals()
+    }
+  })
+
+  it('replaces the running Graph badge when planning pauses for correction', async () => {
+    const previousGraphState = useGraphStore.getState()
+    useChatStore.setState({
+      activeThreadId: 'thr_graph_correction',
+      activeThreadGoal: null,
+      activeThreadTodos: null,
+      blocks: [{
+        kind: 'user',
+        id: 'user_graph_correction',
+        turnId: 'turn_graph_correction',
+        text: 'Implement TimeKV'
+      }],
+      route: 'chat',
+      workspaceRoot: '/Users/test/code/acme-project',
+      threads: []
+    })
+    useGraphStore.setState({
+      runs: [],
+      drafts: [{
+        draft: {
+          version: 1,
+          id: 'draft_graph_correction',
+          reservedRunId: 'run_reserved',
+          threadId: 'thr_graph_correction',
+          sourceTurnId: 'turn_graph_correction',
+          projectId: 'project_1',
+          goal: 'Implement TimeKV.',
+          revision: 3,
+          status: 'needs_correction',
+          issues: [],
+          repairCount: 1,
+          createdAt: '2026-07-31T00:00:00.000Z',
+          updatedAt: '2026-07-31T00:00:01.000Z'
+        },
+        tasks: []
+      }],
+      selectedRunId: null,
+      refreshThread: vi.fn().mockResolvedValue(undefined)
+    })
+    ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+    vi.stubGlobal('document', { activeElement: null })
+    vi.stubGlobal('HTMLElement', class {})
+    vi.stubGlobal('window', {
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      requestAnimationFrame: vi.fn(() => 1),
+      cancelAnimationFrame: vi.fn(),
+      setInterval: vi.fn(() => 1),
+      clearInterval: vi.fn(),
+      kunGui: {
+        getSettings: vi.fn(async () => ({ composerSendKey: 'enter' })),
+        runtimeRequest: vi.fn(async () => ({
+          ok: true,
+          status: 200,
+          body: JSON.stringify({ sessions: [], running: 0 })
+        }))
+      }
+    })
+    let renderer!: ReturnType<typeof createRenderer>
+
+    try {
+      await act(async () => {
+        renderer = createRenderer(createElement(FloatingComposer, {
+          input: '',
+          setInput: () => undefined,
+          mode: 'agent',
+          setMode: () => undefined,
+          orchestration: 'direct',
+          graphEnabled: true,
+          onOrchestrationChange: () => undefined,
+          busy: true,
+          currentTurnOrchestration: 'graph',
+          runtimeReady: true,
+          hasActiveThread: true,
+          composerModel: 'test-model',
+          composerPickList: ['test-model'],
+          onComposerModelChange: () => undefined,
+          queuedMessages: [],
+          onRemoveQueuedMessage: () => undefined,
+          onSend: () => undefined,
+          onInterrupt: () => undefined,
+          onPlanCommand: () => undefined
+        }))
+      })
+
+      expect(renderer.root.findAllByProps({
+        'data-composer-graph-needs-correction': true
+      })).toHaveLength(1)
+      expect(renderer.root.findAllByProps({
+        'data-composer-graph-running': true
+      })).toHaveLength(0)
+      expect(renderer.root.findAllByProps({
+        'data-graph-planning-correction': true
+      })).toHaveLength(1)
+    } finally {
+      if (renderer) {
+        await act(async () => renderer.unmount())
+      }
+      useGraphStore.setState({
+        runs: previousGraphState.runs,
+        drafts: previousGraphState.drafts,
+        selectedRunId: previousGraphState.selectedRunId,
+        refreshThread: previousGraphState.refreshThread
+      })
+      vi.unstubAllGlobals()
+      delete (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT
     }
   })
 })

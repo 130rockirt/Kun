@@ -4,7 +4,11 @@ import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import i18n from '../../i18n'
 import { useGraphStore } from '../../graph/graph-store'
-import type { GraphPlanNode, GraphRun } from '../../graph/graph-types'
+import type {
+  GraphPlanNode,
+  GraphPlanningDraftView,
+  GraphRun
+} from '../../graph/graph-types'
 import {
   FloatingComposerGraphPreview,
   FloatingComposerGraphProgress
@@ -132,6 +136,7 @@ describe('FloatingComposerGraphProgress', () => {
       useGraphStore.setState({
         threadId: 'thread_1',
         runs: [graphRun()],
+        drafts: [],
         childRuns: {},
         childReturnTarget: null,
         selectedRunId: 'run_1',
@@ -340,6 +345,60 @@ describe('FloatingComposerGraphProgress', () => {
     await act(async () => trigger.props.onPointerEnter())
     expect(renderer!.root.find((instance) =>
       instance.props['aria-haspopup'] === 'dialog').props['aria-expanded']).toBe(true)
+    act(() => renderer!.unmount())
+  })
+
+  it('replaces the running surface with correction actions when planning pauses', async () => {
+    const resumeDraft = vi.fn().mockResolvedValue(undefined)
+    const cancelDraft = vi.fn().mockResolvedValue(undefined)
+    const correction: GraphPlanningDraftView = {
+      draft: {
+        version: 1,
+        id: 'draft_correction',
+        reservedRunId: 'run_reserved',
+        threadId: 'thread_1',
+        sourceTurnId: 'turn_1',
+        projectId: 'project_1',
+        goal: 'Implement and verify TimeKV.',
+        revision: 3,
+        status: 'needs_correction',
+        issues: [{
+          code: 'invalid_type',
+          path: ['plan', 'tasks', 0, 'title'],
+          message: 'Expected string, received undefined',
+          repairHint: 'Restore the task title.'
+        }],
+        repairCount: 1,
+        createdAt: '2026-07-31T00:00:00.000Z',
+        updatedAt: '2026-07-31T00:00:01.000Z'
+      },
+      tasks: []
+    }
+    act(() => {
+      useGraphStore.setState({
+        runs: [],
+        drafts: [correction],
+        selectedRunId: null,
+        resumeDraft,
+        cancelDraft
+      })
+    })
+
+    let renderer: ReactTestRenderer
+    await act(async () => {
+      renderer = create(createElement(FloatingComposerGraphProgress, {
+        threadId: 'thread_1',
+        enabled: true
+      }))
+    })
+
+    expect(renderer!.root.findByProps({ 'data-graph-planning-correction': true })).toBeDefined()
+    await act(async () => {
+      renderer!.root.findByProps({ 'data-graph-planning-resume': true }).props.onClick()
+      renderer!.root.findByProps({ 'data-graph-planning-cancel': true }).props.onClick()
+    })
+    expect(resumeDraft).toHaveBeenCalledWith('draft_correction')
+    expect(cancelDraft).toHaveBeenCalledWith('draft_correction')
     act(() => renderer!.unmount())
   })
 

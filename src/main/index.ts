@@ -109,6 +109,7 @@ import { fetchUpstreamModelIds, modelListFromSharedConnections } from './upstrea
 import {
   kunRuntimeAdapter,
   getRuntimeBaseUrlForSettings,
+  getRuntimeAuthToken,
   runtimeAuthHeaders,
   runtimeRequestViaHost,
   type RuntimeRequestInit
@@ -2224,6 +2225,7 @@ app.whenReady().then(async () => {
       if (cleanup) await browserUseManager.clear(cleanup.threadId, cleanup.reason)
       return result
     },
+    getRuntimeAuthToken,
     getRuntimeSettingsSyncStatus: () => runtimeSettingsSyncStatus,
     restartRuntime: async () => {
       const settings = await store.load()

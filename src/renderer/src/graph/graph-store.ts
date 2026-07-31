@@ -25,6 +25,8 @@ import type {
   ProjectIdentity
 } from './graph-types'
 
+export { selectGraphPlanningCorrectionDraft } from './graph-planning-selection'
+
 type GraphViewState = {
   threadId: string | null
   workspace: string
