@@ -4,7 +4,23 @@ import { execFileSync, spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { mkdtemp, readFile, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
+
+export function createArchiveExtractionInvocation(
+  artifact,
+  destination,
+  pathApi = { basename, dirname }
+) {
+  return {
+    command: 'tar',
+    args: ['-xf', pathApi.basename(artifact), '-C', destination],
+    options: {
+      cwd: pathApi.dirname(artifact),
+      stdio: 'inherit'
+    }
+  }
+}
 
 async function main() {
   const flags = readFlags(process.argv.slice(2))
@@ -13,7 +29,8 @@ async function main() {
   const expectedTarget = required(flags, 'target')
   const temporary = await mkdtemp(join(tmpdir(), 'kun-tui-smoke-'))
   try {
-    execFileSync('tar', ['-xf', artifact, '-C', temporary], { stdio: 'inherit' })
+    const extraction = createArchiveExtractionInvocation(artifact, temporary)
+    execFileSync(extraction.command, extraction.args, extraction.options)
     const root = join(temporary, 'kun')
     const release = JSON.parse(await readFile(join(root, 'release.json'), 'utf8'))
     if (release.version !== expectedVersion || release.target !== expectedTarget) {
@@ -177,7 +194,10 @@ function required(flags, name) {
   return value
 }
 
-main().catch((error) => {
-  process.stderr.write(`[smoke-standalone-tui] ${error instanceof Error ? error.message : String(error)}\n`)
-  process.exitCode = 1
-})
+const invokedPath = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).href : ''
+if (invokedPath === import.meta.url) {
+  main().catch((error) => {
+    process.stderr.write(`[smoke-standalone-tui] ${error instanceof Error ? error.message : String(error)}\n`)
+    process.exitCode = 1
+  })
+}
