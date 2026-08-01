@@ -599,7 +599,8 @@ describe('canonical Kun Runtime data migration', () => {
       .toBe('not-a-sqlite-database')
     expect(JSON.parse(await readFile(result.journalPath, 'utf8')).sqliteQuickCheck)
       .toBe('invalid')
-  })
+  // Windows file-system scanning can delay the synchronous promoted-index check.
+  }, 20_000)
 
   it('backs up a populated destination and salvages non-conflicting identity data', async () => {
     const test = await fixture()
