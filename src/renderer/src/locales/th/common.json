@@ -1959,6 +1959,7 @@
   "approvalExpired": "หมดอายุเนื่องจากเทิร์นสิ้นสุดลง",
   "approvalSubmitting": "กำลังส่งการตัดสินใจ...",
   "approvalFailed": "คำขอล้มเหลว",
+  "approvalNativeConfirmationCancelled": "การยืนยันของระบบถูกยกเลิก โปรดลองอีกครั้ง",
   "approvalReviewTitle": "Kun approval review",
   "approvalReviewInProgress": "Kun is reviewing this action…",
   "approvalReviewApproved": "Approved by Kun",

@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import { join, resolve } from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ExtensionViewSessionRegistry } from '../extensions/extension-view-sessions'
+import { NativeDialogCoordinator } from '../native-dialog-coordinator'
 import {
   registerExtensionIpcHandlers,
   startExtensionNotificationPump,
@@ -2421,6 +2422,50 @@ describe('extension IPC security bridge', () => {
       'POST',
       JSON.stringify({ decision: 'allow' })
     ))
+    stop()
+  })
+
+  it('waits for a pending Main-owned dialog before opening a secret reveal prompt (#1053)', async () => {
+    const state = fixture()
+    state.runtimeRequest.mockImplementation(async (path: string, method?: string) => {
+      if (path === '/v1/extensions/secret-reveal-requests' && method === 'GET') {
+        return {
+          ok: true,
+          status: 200,
+          body: JSON.stringify({
+            requests: [{
+              id: 'secret_reveal_12345678-1234-1234-1234-123456789abc',
+              extensionId: 'acme.example',
+              extensionVersion: '1.2.3',
+              accountId: 'account-123',
+              operation: 'sign-request'
+            }]
+          })
+        }
+      }
+      return { ok: true, status: 200, body: '{}' }
+    })
+    electronMock.showMessageBox.mockResolvedValue({ response: 1 })
+    const nativeDialogs = new NativeDialogCoordinator()
+    let releaseBlockingDialog!: () => void
+    const blockingDialog = nativeDialogs.run(state.mainContents, () => new Promise<void>((resolve) => {
+      releaseBlockingDialog = resolve
+    }))
+
+    const stop = startExtensionSecretRevealConsentPump({
+      ...state.options,
+      nativeDialogs
+    }, 10_000)
+    await vi.waitFor(() => expect(releaseBlockingDialog).toBeTypeOf('function'))
+    await vi.waitFor(() => expect(state.runtimeRequest).toHaveBeenCalledWith(
+      '/v1/extensions/secret-reveal-requests',
+      'GET'
+    ))
+    expect(electronMock.showMessageBox).not.toHaveBeenCalled()
+
+    releaseBlockingDialog()
+    await blockingDialog
+    await vi.waitFor(() => expect(electronMock.showMessageBox).toHaveBeenCalledOnce())
     stop()
   })
 

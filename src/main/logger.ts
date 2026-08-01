@@ -94,8 +94,11 @@ export function logWarn(category: string, message: string, detail?: unknown): vo
   void writeLogLine('warn', category, full)
 }
 
-export function logInfo(category: string, message: string): void {
-  void writeLogLine('info', category, message)
+export function logInfo(category: string, message: string, detail?: unknown): void {
+  const full = detail !== undefined
+    ? `${message} 鈥?detail: ${safeStringify(detail)}`
+    : message
+  void writeLogLine('info', category, full)
 }
 
 /**

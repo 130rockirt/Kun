@@ -667,7 +667,18 @@ export function buildRouter(runtime: ServerRuntime): Router {
   })
   router.add('GET', '/v1/threads/:id', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
-    return getThread(runtime.threadService, ctx.params.id, runtime.sessionStore, runtime.userInputGate)
+    // The active approval gate is process-local. When a manager lease belongs
+    // to another runtime, obtain the detail snapshot from that execution owner
+    // so its live approval state cannot be mistaken for expired locally.
+    const forwarded = await runtime.forwardThreadControl?.(request, ctx.params.id)
+    if (forwarded) return forwarded
+    return getThread(
+      runtime.threadService,
+      ctx.params.id,
+      runtime.sessionStore,
+      runtime.userInputGate,
+      runtime.approvalGate
+    )
   })
   router.add('GET', '/v1/threads/:id/model-requests', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()

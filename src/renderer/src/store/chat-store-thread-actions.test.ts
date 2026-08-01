@@ -1802,6 +1802,94 @@ describe('chat-store-thread-actions recoverActiveTurn settles interrupted work',
     expect(tool?.status).toBe('running')
   })
 
+  it('reuses the SSE recovery wrapper after recovering a live turn', async () => {
+    vi.useFakeTimers()
+    try {
+      const provider = providerWith('running')
+      provider.subscribeThreadEvents.mockRejectedValueOnce(
+        Object.assign(new Error('sse error 404'), { status: 404 })
+      )
+      registryMock.getProvider.mockReturnValue(provider)
+
+      const { actions, state } = buildHarness()
+      // Keep this recovery state isolated from other tests that intentionally
+      // exercise reconnects for the default harness thread.
+      state.activeThreadId = 'thr_sse_recovery'
+      state.busy = true
+
+      await actions.recoverActiveTurn()
+      await vi.advanceTimersByTimeAsync(249)
+      expect(state.recoverActiveTurn).not.toHaveBeenCalled()
+
+      await vi.advanceTimersByTimeAsync(1)
+      expect(state.recoverActiveTurn).toHaveBeenCalledOnce()
+      expect(provider.subscribeThreadEvents).toHaveBeenCalledWith(
+        'thr_sse_recovery',
+        3,
+        expect.any(Object),
+        expect.any(AbortSignal)
+      )
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('re-fetches a live approval snapshot and re-subscribes after an SSE 404', async () => {
+    vi.useFakeTimers()
+    try {
+      let subscriptions = 0
+      const provider = {
+        getThreadDetail: vi.fn(async () => ({
+          blocks: [
+            { id: 'u1', kind: 'user', text: 'Run focused tests' },
+            {
+              id: 'approval-appr_live',
+              kind: 'approval',
+              approvalId: 'appr_live',
+              summary: 'Run focused tests',
+              status: 'pending'
+            }
+          ],
+          latestSeq: 4,
+          threadStatus: 'running',
+          latestTurnId: 'turn_approval',
+          latestTurnOrchestration: 'direct' as const,
+          latestUserMessageId: 'u1'
+        })),
+        subscribeThreadEvents: vi.fn(async (
+          _threadId: string,
+          _sinceSeq: number,
+          sink: ThreadEventSink
+        ) => {
+          subscriptions += 1
+          if (subscriptions === 1) {
+            sink.onError(Object.assign(new Error('stream route unavailable'), { status: 404 }))
+            return { streamId: 'stream_404' }
+          }
+          return await new Promise<{ streamId: string }>(() => undefined)
+        })
+      }
+      registryMock.getProvider.mockReturnValue(provider)
+
+      const { actions, state } = buildHarness()
+      state.activeThreadId = 'thr_sse_approval_recovery'
+      state.busy = true
+      state.recoverActiveTurn = actions.recoverActiveTurn
+
+      await actions.recoverActiveTurn()
+      await vi.advanceTimersByTimeAsync(250)
+      await Promise.resolve()
+
+      expect(provider.getThreadDetail).toHaveBeenCalledTimes(2)
+      expect(provider.subscribeThreadEvents).toHaveBeenCalledTimes(2)
+      expect(state.blocks).toContainEqual(expect.objectContaining({
+        kind: 'approval', approvalId: 'appr_live', status: 'pending'
+      }))
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('restores a running Graph turn without changing the next-turn Direct selection', async () => {
     const provider = providerWith('running', 'graph')
     registryMock.getProvider.mockReturnValue(provider)

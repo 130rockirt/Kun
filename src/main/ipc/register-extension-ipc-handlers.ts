@@ -77,6 +77,7 @@ import {
   MAX_EXTENSION_IPC_BODY_BYTES
 } from './app-ipc-schemas/extensions'
 import type { ExtensionContentScriptController } from '../extensions/extension-content-script-controller'
+import { NativeDialogCoordinator } from '../native-dialog-coordinator'
 import type {
   ExtensionDescriptorResolver,
   ResolvedExtensionView
@@ -123,6 +124,8 @@ export type RegisterExtensionIpcHandlersOptions = {
   contentScripts: ExtensionContentScriptController
   getWorkbenchEnvironment: () => Promise<ExtensionWorkbenchEnvironment>
   logError?: (category: string, message: string, detail?: unknown) => void
+  /** Shared per-window queue for Main-owned native confirmations. */
+  nativeDialogs?: NativeDialogCoordinator
 }
 
 export type ExtensionWorkbenchEnvironment = {
@@ -144,6 +147,8 @@ export function startExtensionSecretRevealConsentPump(
   let polling = false
   let timer: NodeJS.Timeout | undefined
   const handled = new Set<string>()
+  const pendingDecisions = new Map<string, 'allow' | 'deny'>()
+  const nativeDialogs = options.nativeDialogs ?? new NativeDialogCoordinator()
 
   const schedule = (): void => {
     if (disposed) return
@@ -179,27 +184,40 @@ export function startExtensionSecretRevealConsentPump(
         !accountId ||
         !operation
       ) return
-      handled.add(requestId)
-      const decision = await dialog.showMessageBox(parent, {
-        type: 'warning',
-        title: 'Reveal provider secret to extension',
-        message: `${extensionId} ${extensionVersion} requests raw credential access.`,
-        detail: [
-          `Account: ${accountId.slice(0, 256)}`,
-          `Operation: ${operation.slice(0, 256)}`,
-          'The secret will be returned only to this extension\'s Node host for this single request. Webviews and content scripts cannot access it.'
-        ].join('\n\n'),
-        buttons: ['Deny', 'Allow once'],
-        defaultId: 0,
-        cancelId: 0,
-        noLink: true,
-        normalizeAccessKeys: true
-      })
-      await options.runtimeRequest(
+      let decision = pendingDecisions.get(requestId)
+      if (!decision) {
+        const confirmation = await nativeDialogs.run(parent.webContents, async () => {
+          if (parent.isDestroyed()) {
+            throw new Error('Secret reveal confirmation window is unavailable.')
+          }
+          return dialog.showMessageBox(parent, {
+            type: 'warning',
+            title: 'Reveal provider secret to extension',
+            message: `${extensionId} ${extensionVersion} requests raw credential access.`,
+            detail: [
+              `Account: ${accountId.slice(0, 256)}`,
+              `Operation: ${operation.slice(0, 256)}`,
+              'The secret will be returned only to this extension\'s Node host for this single request. Webviews and content scripts cannot access it.'
+            ].join('\n\n'),
+            buttons: ['Deny', 'Allow once'],
+            defaultId: 0,
+            cancelId: 0,
+            noLink: true,
+            normalizeAccessKeys: true
+          })
+        })
+        decision = confirmation.response === 1 ? 'allow' : 'deny'
+        pendingDecisions.set(requestId, decision)
+      }
+      const decisionResult = await options.runtimeRequest(
         `/v1/extensions/secret-reveal-requests/${encodeURIComponent(requestId)}/decision`,
         'POST',
-        JSON.stringify({ decision: decision.response === 1 ? 'allow' : 'deny' })
+        JSON.stringify({ decision })
       )
+      if (decisionResult.ok || decisionResult.status === 404) {
+        pendingDecisions.delete(requestId)
+        handled.add(requestId)
+      }
     } catch (error) {
       options.logError?.('extension-account', 'Secret reveal consent pump failed.', {
         message: error instanceof Error ? error.message : String(error)

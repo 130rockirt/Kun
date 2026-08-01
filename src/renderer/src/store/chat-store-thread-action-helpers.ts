@@ -7,6 +7,17 @@ import {
   readThreadComposerSelection
 } from './chat-store-helpers'
 
+const SSE_RECOVERY_INITIAL_DELAY_MS = 250
+const SSE_RECOVERY_AUTH_DELAY_MS = 2_000
+const SSE_RECOVERY_MAX_DELAY_MS = 10_000
+
+type SseRecoveryState = {
+  attempts: number
+  timer?: ReturnType<typeof setTimeout>
+}
+
+const sseRecoveries = new Map<string, SseRecoveryState>()
+
 export function fallbackComposerProviderIdForSend(state: ChatState): string {
   return state.route === 'claw' ? '' : state.composerProviderId.trim()
 }
@@ -67,12 +78,67 @@ export function subscribeThreadEventsWithRecovery(
   signal: AbortSignal,
   get: ChatStoreGet
 ): void {
-  void provider.subscribeThreadEvents(threadId, sinceSeq, sink, signal)
-    .catch(() => undefined)
+  const pendingRecovery = sseRecoveries.get(threadId)
+  if (pendingRecovery?.timer) {
+    clearTimeout(pendingRecovery.timer)
+    pendingRecovery.timer = undefined
+  }
+  let terminalError: Error | undefined
+  const recoverySink: ThreadEventSink = {
+    ...sink,
+    onSeq: (seq) => {
+      resetSseRecovery(threadId)
+      sink.onSeq(seq)
+    },
+    onError: (error, options) => {
+      terminalError = error
+      sink.onError(error, options)
+    }
+  }
+  void provider.subscribeThreadEvents(threadId, sinceSeq, recoverySink, signal)
+    .catch((error) => {
+      terminalError = error instanceof Error ? error : new Error(String(error))
+    })
     .then(() => {
       if (signal.aborted) return
       const state = get()
       if (state.activeThreadId !== threadId || !state.busy) return
-      void state.recoverActiveTurn()
+      scheduleSseRecovery(threadId, terminalError, get)
     })
+}
+
+function resetSseRecovery(threadId: string): void {
+  const state = sseRecoveries.get(threadId)
+  if (state?.timer) clearTimeout(state.timer)
+  sseRecoveries.delete(threadId)
+}
+
+function scheduleSseRecovery(
+  threadId: string,
+  error: Error | undefined,
+  get: ChatStoreGet
+): void {
+  const state = sseRecoveries.get(threadId) ?? { attempts: 0 }
+  if (state.timer) return
+  state.attempts = Math.min(state.attempts + 1, 8)
+  const status = sseStatus(error)
+  const baseDelay = status === 401 || status === 403
+    ? SSE_RECOVERY_AUTH_DELAY_MS
+    : SSE_RECOVERY_INITIAL_DELAY_MS
+  const delay = Math.min(baseDelay * (2 ** (state.attempts - 1)), SSE_RECOVERY_MAX_DELAY_MS)
+  state.timer = setTimeout(() => {
+    state.timer = undefined
+    const current = get()
+    if (current.activeThreadId !== threadId || !current.busy) {
+      sseRecoveries.delete(threadId)
+      return
+    }
+    void current.recoverActiveTurn()
+  }, delay)
+  sseRecoveries.set(threadId, state)
+}
+
+function sseStatus(error: Error | undefined): number | undefined {
+  const value = error as (Error & { status?: unknown }) | undefined
+  return typeof value?.status === 'number' ? value.status : undefined
 }

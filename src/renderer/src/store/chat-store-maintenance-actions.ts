@@ -1239,7 +1239,11 @@ export function createMaintenanceActions(
         set((s) => ({
           blocks: s.blocks.map((b) =>
             b.id === blockId && b.kind === 'approval' && b.status === 'submitting'
-              ? { ...b, status: 'pending' as const, errorMessage: undefined }
+              ? {
+                  ...b,
+                  status: 'pending' as const,
+                  errorMessage: i18n.t('common:approvalNativeConfirmationCancelled')
+                }
               : b
           )
         }))

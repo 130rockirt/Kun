@@ -55,6 +55,8 @@ export type CoreThreadJson = CoreThreadSummaryJson & {
   latestSeq?: number
   /** Request ids the runtime is still actively awaiting (live ask-user gate). */
   pendingUserInputIds?: string[]
+  /** Approval ids the runtime is still actively awaiting (live approval gate). */
+  pendingApprovalIds?: string[]
 }
 
 export type CoreAttachmentMetadataJson = {

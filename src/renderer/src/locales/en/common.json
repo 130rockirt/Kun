@@ -1959,6 +1959,7 @@
   "approvalExpired": "Expired because the turn ended",
   "approvalSubmitting": "Submitting decision…",
   "approvalFailed": "Request failed",
+  "approvalNativeConfirmationCancelled": "Native confirmation was cancelled. Please try again.",
   "approvalReviewTitle": "Kun approval review",
   "approvalReviewInProgress": "Kun is reviewing this action…",
   "approvalReviewApproved": "Approved by Kun",

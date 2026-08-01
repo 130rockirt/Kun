@@ -70,7 +70,10 @@ import { IncrementalSseParser, parseRuntimeEventFrame } from './sse.js'
 
 const ThreadDetailResponse = ThreadSchema.extend({
   latestSeq: z.number().int().nonnegative().default(0),
-  pendingUserInputIds: z.array(z.string()).default([])
+  pendingUserInputIds: z.array(z.string()).default([]),
+  // Omitted by older servers. Keep omission distinct from an authoritative
+  // empty gate so clients do not hide legacy pending approval records.
+  pendingApprovalIds: z.array(z.string()).optional()
 })
 
 const UserInputResolutionResponse = z.object({

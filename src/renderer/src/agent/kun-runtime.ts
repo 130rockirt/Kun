@@ -85,6 +85,14 @@ import type { ComposerContextAttachment } from '@kun/extension-api'
 
 const MAX_PENDING_SSE_DISPATCH_BATCHES = 32
 
+/** Preserves the native SSE failure status for the store's recovery policy. */
+export class KunSseSubscriptionError extends Error {
+  constructor(message: string, readonly status?: number) {
+    super(message)
+    this.name = 'KunSseSubscriptionError'
+  }
+}
+
 function createSseStreamId(): string {
   return globalThis.crypto?.randomUUID?.() ?? `sse-${Date.now()}-${Math.random().toString(16).slice(2)}`
 }
@@ -343,6 +351,22 @@ export class KunRuntimeProvider implements AgentProvider {
       for (const block of blocks) {
         if (block.kind === 'user_input' && pendingUserInputIds.has(block.requestId)) {
           block.live = true
+        }
+      }
+    }
+    // Manual approval history is event-sourced. A recovered snapshot includes
+    // the currently live approval-gate ids, which distinguish an actionable
+    // pending request from one that expired while the GUI was disconnected
+    // (for example after an SSE 404).
+    if (Array.isArray(thread.pendingApprovalIds)) {
+      const pendingApprovalIds = new Set(thread.pendingApprovalIds)
+      for (const block of blocks) {
+        if (
+          block.kind === 'approval' &&
+          block.status === 'pending' &&
+          !pendingApprovalIds.has(block.approvalId)
+        ) {
+          block.status = 'expired'
         }
       }
     }
@@ -1150,7 +1174,7 @@ export class KunRuntimeProvider implements AgentProvider {
       })
       const offErr = rendererRuntimeClient.onSseError(({ streamId: sid, message, status }) => {
         if (sid !== streamId) return
-        sink.onError(new Error(message ?? `sse error ${status ?? ''}`))
+        sink.onError(new KunSseSubscriptionError(message ?? `sse error ${status ?? ''}`, status))
         finish()
       })
       const offEnd = rendererRuntimeClient.onSseEnd(({ streamId: sid }) => {

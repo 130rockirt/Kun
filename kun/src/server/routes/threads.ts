@@ -20,8 +20,10 @@ import type { ForkThreadOptions, ListThreadsOptions, ThreadService } from '../..
 import type { RuntimeError } from './runtime-error.js'
 import type { SessionStore } from '../../ports/session-store.js'
 import type { UserInputGate } from '../../ports/user-input-gate.js'
+import type { ApprovalGate } from '../../ports/approval-gate.js'
 import type { Turn } from '../../contracts/turns.js'
-import type { TurnItem } from '../../contracts/items.js'
+import type { ApprovalTurnItem, TurnItem } from '../../contracts/items.js'
+import type { ApprovalRequest } from '../../domain/approval.js'
 import { placeCompactionsChronologically } from '../../loop/compaction-history.js'
 
 /**
@@ -82,7 +84,8 @@ export async function getThread(
   service: ThreadService,
   threadId: string,
   sessionStore?: SessionStore,
-  userInputGate?: UserInputGate
+  userInputGate?: UserInputGate,
+  approvalGate?: ApprovalGate
 ): Promise<JsonResponse> {
   const thread = await service.get(threadId)
   if (!thread) {
@@ -91,6 +94,7 @@ export async function getThread(
       404
     )
   }
+  const pendingApprovals = approvalGate?.pending(threadId) ?? []
   let latestSeq = 0
   let sessionItems: TurnItem[] = []
   if (sessionStore) {
@@ -99,17 +103,89 @@ export async function getThread(
       sessionStore.loadItems(threadId)
     ])
     sessionItems = await healSessionItemsForFinishedTurns(thread, sessionItems, sessionStore)
+  } else if (pendingApprovals.length > 0) {
+    // Tests and lightweight embedded callers can omit the session store. Use
+    // the thread's in-memory items as the merge base so recovering a live
+    // approval never replaces the rest of that turn with only the card.
+    sessionItems = thread.turns.flatMap((turn) => turn.items)
   }
+  // Tool approvals intentionally remain event-only in history. A live gate is
+  // the authoritative source during SSE recovery, so materialize only the
+  // currently actionable requests rather than replaying the full events log
+  // on every thread-detail poll.
+  sessionItems = mergePendingApprovalItems(sessionItems, pendingApprovals)
   const hydratedThread = hydrateThreadItemsFromSession(thread, sessionItems)
   // Request ids the runtime is still actively awaiting. The renderer uses these
   // to tell a live ask-user prompt (answerable across reconnects) apart from a
   // stale `pending` item rehydrated from a finished thread (issue #606).
   const pendingUserInputIds = userInputGate?.pending(threadId).map((request) => request.id) ?? []
+  // The renderer uses this live-gate list to distinguish an actionable approval
+  // from a stale pending card rehydrated after its runtime request expired.
+  const pendingApprovalIds = approvalGate
+    ? pendingApprovals.map((request) => request.id)
+    : undefined
   return jsonResponse({
     ...ThreadSchema.parse(hydratedThread),
     latestSeq,
-    pendingUserInputIds
+    pendingUserInputIds,
+    ...(pendingApprovalIds ? { pendingApprovalIds } : {})
   })
+}
+
+function mergePendingApprovalItems(
+  sessionItems: TurnItem[],
+  pendingApprovals: readonly ApprovalRequest[]
+): TurnItem[] {
+  if (pendingApprovals.length === 0) return sessionItems
+  const byApprovalId = new Map(pendingApprovals.map((approval) => [approval.id, approval]))
+  const foundApprovalIds = new Set<string>()
+  const merged = sessionItems.map((item) => {
+    if (item.kind !== 'approval') return item
+    const approval = byApprovalId.get(item.approvalId)
+    if (!approval) return item
+    foundApprovalIds.add(approval.id)
+    return approvalItemFromRequest(approval, item)
+  })
+  const additions = pendingApprovals
+    .filter((approval) => !foundApprovalIds.has(approval.id))
+    .map((approval) => approvalItemFromRequest(approval))
+    .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id))
+
+  for (const item of additions) {
+    const firstLaterItem = merged.findIndex(
+      (candidate) => candidate.turnId === item.turnId && candidate.createdAt > item.createdAt
+    )
+    if (firstLaterItem >= 0) {
+      merged.splice(firstLaterItem, 0, item)
+      continue
+    }
+    const lastTurnItem = merged.reduce(
+      (index, candidate, candidateIndex) => candidate.turnId === item.turnId ? candidateIndex : index,
+      -1
+    )
+    if (lastTurnItem >= 0) merged.splice(lastTurnItem + 1, 0, item)
+    else merged.push(item)
+  }
+  return merged
+}
+
+function approvalItemFromRequest(
+  approval: ApprovalRequest,
+  existing?: ApprovalTurnItem
+): ApprovalTurnItem {
+  return {
+    id: existing?.id ?? `item_${approval.id}`,
+    turnId: approval.turnId,
+    threadId: approval.threadId,
+    role: 'tool',
+    createdAt: existing?.createdAt ?? approval.createdAt,
+    kind: 'approval',
+    approvalId: approval.id,
+    toolName: approval.toolName,
+    summary: approval.summary,
+    status: 'pending',
+    approvalReviewer: 'user'
+  }
 }
 
 type FinishedTurnStatus = Extract<Turn['status'], 'completed' | 'failed' | 'aborted'>

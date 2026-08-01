@@ -137,6 +137,7 @@ import { expandHomePath } from './settings-store'
 import { KunRuntimeSupervisor, type KunRuntimeStatus } from './kun-runtime-supervisor'
 import { managedKunHostCanAutoStart } from './managed-runtime-startup-policy'
 import { configureLogger, logError, logInfo, logWarn, pruneOnStartup } from './logger'
+import { NativeDialogCoordinator } from './native-dialog-coordinator'
 import { cleanupUnusedGitCheckpointsIfDue } from './services/git-checkpoint-service'
 import { resolveMainWindowCloseDecision } from './window-close-behavior'
 import { turnCompleteNotificationDisabledReason } from './notification-preferences'
@@ -467,6 +468,7 @@ let trayQuotaWindowReady: Promise<void> | null = null
 let trayQuotaToggleGeneration = 0
 let disposeTrayQuotaIpc: (() => void) | null = null
 let closeWindowPromptOpen = false
+const nativeDialogCoordinator = new NativeDialogCoordinator()
 let checkpointCleanupTimer: ReturnType<typeof setInterval> | null = null
 const extensionViewSessions = new ExtensionViewSessionRegistry()
 const extensionExternalBrowsers = new ExtensionExternalBrowserManager(extensionViewSessions)
@@ -760,7 +762,7 @@ function windowCloseLabels(locale: AppSettingsV1['locale']): {
     return {
       title: '关闭窗口',
       message: '关闭窗口时要怎么处理？',
-      detail: '选择最小化到托盘时，Kun 会继续在后台运行；选择退出应用会结束后台服务。',
+      detail: '最小化到托盘会让 Kun 继续在后台运行，不会影响当前任务。退出应用会关闭桌面端及仅桌面服务；共享 Kun 运行时会继续等待审批，可在下次打开桌面端或 TUI 中处理。若运行时重启或所属任务被取消，待审批操作会被取消。',
       minimizeToTray: '最小化到托盘',
       quit: '退出应用',
       cancel: '取消',
@@ -770,7 +772,7 @@ function windowCloseLabels(locale: AppSettingsV1['locale']): {
   return {
     title: 'Close window',
     message: 'What should Kun do when this window closes?',
-    detail: 'Minimize to tray keeps Kun running in the background. Quit app stops the background service.',
+    detail: 'Minimize to tray keeps Kun running in the background and does not interrupt the current task. Quitting closes the desktop app and desktop-only services, while the shared Kun runtime continues waiting for approvals that can be handled when the desktop app or TUI is opened again. Pending approvals are cancelled if the runtime restarts or their turn is cancelled.',
     minimizeToTray: 'Minimize to tray',
     quit: 'Quit app',
     cancel: 'Cancel',
@@ -1066,17 +1068,22 @@ async function promptWindowCloseAction(window: BrowserWindow): Promise<void> {
   try {
     const settings = await store.load()
     const labels = windowCloseLabels(settings.locale)
-    const result = await dialog.showMessageBox(window, {
-      type: 'question',
-      title: labels.title,
-      message: labels.message,
-      detail: labels.detail,
-      buttons: [labels.minimizeToTray, labels.quit, labels.cancel],
-      defaultId: 0,
-      cancelId: 2,
-      noLink: true,
-      checkboxLabel: labels.remember,
-      checkboxChecked: false
+    const result = await nativeDialogCoordinator.run(window.webContents, async () => {
+      if (window.isDestroyed()) {
+        throw new Error('Close-window prompt parent was destroyed.')
+      }
+      return dialog.showMessageBox(window, {
+        type: 'question',
+        title: labels.title,
+        message: labels.message,
+        detail: labels.detail,
+        buttons: [labels.minimizeToTray, labels.quit, labels.cancel],
+        defaultId: 0,
+        cancelId: 2,
+        noLink: true,
+        checkboxLabel: labels.remember,
+        checkboxChecked: false
+      })
     })
     if (result.response === 0) {
       if (result.checkboxChecked) {
@@ -2528,6 +2535,7 @@ app.whenReady().then(async () => {
     }
   )
   const extensionContentScripts = new ExtensionContentScriptController(extensionDescriptors, {
+    deferReloadUntil: (frame) => nativeDialogCoordinator.deferUntilIdle(frame),
     onDiagnostic: (diagnostic) => {
       logWarn('extension-content-script', diagnostic.message, {
         code: diagnostic.code,
@@ -2795,6 +2803,8 @@ app.whenReady().then(async () => {
     loadGuiUpdaterModule,
     resolveLogDirectory: () => resolveLogDirectory(app),
     logError,
+    logInfo,
+    nativeDialogs: nativeDialogCoordinator,
     workspacePreviewProtocols
   })
   const disposeBrowserUseIpc = registerBrowserUseIpc({
@@ -2889,7 +2899,8 @@ app.whenReady().then(async () => {
         locale: settings.locale
       })
     },
-    logError
+    logError,
+    nativeDialogs: nativeDialogCoordinator
   }
   const extensionIpcRegistration = registerExtensionIpcHandlers(extensionIpcOptions)
   publishExtensionWorkbenchEnvironmentChanged = () =>

@@ -1116,7 +1116,7 @@ describe('chat-store-maintenance-actions goal actions', () => {
     expect(refreshThreads).toHaveBeenCalledTimes(1)
   })
 
-  it('restores a pending approval when the protected native prompt is cancelled', async () => {
+  it('restores a pending approval with retry feedback when the protected native prompt is cancelled', async () => {
     const { actions, provider, state } = buildHarness()
     provider.submitApprovalDecision.mockResolvedValueOnce('cancelled')
     state.blocks = [{
@@ -1134,7 +1134,10 @@ describe('chat-store-maintenance-actions goal actions', () => {
       'allow',
       true
     )
-    expect(state.blocks[0]).toMatchObject({ status: 'pending' })
+    expect(state.blocks[0]).toMatchObject({
+      status: 'pending',
+      errorMessage: 'Native confirmation was cancelled. Please try again.'
+    })
   })
 
   it('does not overwrite an SSE-expired approval when submission resolves later', async () => {

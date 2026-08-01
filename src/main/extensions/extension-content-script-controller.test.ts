@@ -203,6 +203,35 @@ describe('ExtensionContentScriptController', () => {
     expect(frame.reload).toHaveBeenCalled()
   })
 
+  it('defers a protected-surface reload until the parent native dialog is idle', async () => {
+    let releaseDialog!: () => void
+    let dialogOpen = true
+    const dialogIdle = new Promise<void>((resolve) => {
+      releaseDialog = resolve
+    })
+    const resolveHostContentScript = vi.fn(async () => resolved('documentEnd'))
+    const controller = new ExtensionContentScriptController({
+      resolveHostContentScript
+    } as never, {
+      deferReloadUntil: () => dialogOpen ? dialogIdle : undefined
+    })
+    const frame = frameFixture()
+    await controller.sync(frame.frame, syncRequest)
+
+    await controller.sync(frame.frame, {
+      surface: null,
+      protectedSurface: 'tool-approval',
+      descriptors: []
+    })
+    await vi.advanceTimersByTimeAsync(30)
+    expect(frame.reload).not.toHaveBeenCalled()
+
+    dialogOpen = false
+    releaseDialog()
+    await Promise.resolve()
+    expect(frame.reload).toHaveBeenCalledTimes(1)
+  })
+
   it('revokes scripts when an external CLI/runtime permission change fails revalidation', async () => {
     const { controller, resolveHostContentScript } = controllerFor(resolved('documentEnd'))
     const frame = frameFixture()

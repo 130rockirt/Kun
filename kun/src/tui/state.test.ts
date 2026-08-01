@@ -39,6 +39,33 @@ function event(value: Partial<RuntimeEvent> & Pick<RuntimeEvent, 'kind' | 'seq'>
 }
 
 describe('thread projection', () => {
+  it('uses an approval liveness list when the server provides one', () => {
+    const approval = {
+      id: 'item_approval',
+      turnId: 'turn_approval',
+      threadId: 'thr_1',
+      role: 'tool' as const,
+      status: 'pending' as const,
+      createdAt: '2026-07-22T00:00:00.000Z',
+      kind: 'approval' as const,
+      approvalId: 'approval_1',
+      toolName: 'bash',
+      summary: 'Run tests'
+    }
+    const snapshot = {
+      ...detail(),
+      pendingApprovalIds: [],
+      turns: [{ id: 'turn_approval', status: 'running', items: [approval] }]
+    } as unknown as ThreadDetail
+
+    expect(projectThreadSnapshot(snapshot).pendingApproval).toBeUndefined()
+    expect(projectThreadSnapshot({ ...snapshot, pendingApprovalIds: ['approval_1'] }))
+      .toMatchObject({ pendingApproval: { approvalId: 'approval_1' } })
+    // Older servers omit the field, which must preserve their legacy behavior.
+    expect(projectThreadSnapshot({ ...snapshot, pendingApprovalIds: undefined }))
+      .toMatchObject({ pendingApproval: { approvalId: 'approval_1' } })
+  })
+
   it('appends delta fragments once by sequence and accepts an authoritative completion snapshot', () => {
     const initial = projectThreadSnapshot(detail())
     const assistantItem = {

@@ -107,8 +107,14 @@ export type ThreadProjection = {
 export function projectThreadSnapshot(thread: ThreadDetail): ThreadProjection {
   const items = thread.turns.flatMap((turn) => turn.items)
   const running = [...thread.turns].reverse().find((turn) => turn.status === 'running' || turn.status === 'queued')
+  const pendingApprovalIds = Array.isArray(thread.pendingApprovalIds)
+    ? new Set(thread.pendingApprovalIds)
+    : undefined
   const pendingApprovalItem = [...items].reverse().find(
-    (item): item is ApprovalTurnItem => item.kind === 'approval' && item.status === 'pending'
+    (item): item is ApprovalTurnItem =>
+      item.kind === 'approval' &&
+      item.status === 'pending' &&
+      (!pendingApprovalIds || pendingApprovalIds.has(item.approvalId))
   )
   const pendingInputItem = [...items].reverse().find(
     (item): item is UserInputTurnItem =>
