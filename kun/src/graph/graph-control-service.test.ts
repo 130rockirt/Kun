@@ -124,7 +124,6 @@ describe('GraphControlService', () => {
         text: 'Use the smaller fixture.'
       })
     )
-
     const cancelled = await control.cancel('run_notifications', {
       commandId: 'command_cancel_notifications',
       idempotencyKey: 'cancel_notifications',
@@ -197,7 +196,6 @@ describe('GraphControlService', () => {
       idempotencyKey: 'patch_revision_budget_1'
     })
     expect(first.budget.revisions).toBe(1)
-
     await expect(control.applyPatch(first.id, {
       version: 1,
       patchId: 'patch_revision_budget_2',

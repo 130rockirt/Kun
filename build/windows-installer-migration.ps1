@@ -1,7 +1,8 @@
 param(
   [Parameter(Mandatory = $true)]
   [ValidateSet('ResolvePath', 'ResolveSource', 'StopProcesses', 'Recover', 'Prepare', 'FallbackCleanup', 'Restore', 'UpdatePath')]
-  [string]$Action
+  [string]$Action,
+  [string]$ResultPath = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -54,11 +55,32 @@ function Test-LegacyLeaf([string]$Leaf) {
     [string]::Equals($Leaf, 'deepseek-gui', [StringComparison]::OrdinalIgnoreCase)
 }
 
+function Resolve-LegacySourceTarget([string]$Source) {
+  if ([string]::IsNullOrWhiteSpace($Source)) {
+    return ''
+  }
+  $sourceLeaf = Split-Path -Leaf $Source
+  $sourceParent = Split-Path -Parent $Source
+  if (Test-LegacyLeaf $sourceLeaf) {
+    return Join-Path $sourceParent 'Kun'
+  }
+  if ([string]::Equals($sourceLeaf, 'Kun', [StringComparison]::OrdinalIgnoreCase) -and
+      (Test-LegacyLeaf (Split-Path -Leaf $sourceParent))) {
+    return Join-Path (Split-Path -Parent $sourceParent) 'Kun'
+  }
+  return ''
+}
+
 function Resolve-InstallTarget {
   $source = Normalize-FullPath (Get-EnvironmentValue 'KUN_INSTALLER_SOURCE')
   $candidate = Normalize-FullPath (Get-EnvironmentValue 'KUN_INSTALLER_CANDIDATE')
   if ([string]::IsNullOrWhiteSpace($candidate)) {
     throw 'The candidate installation path is empty.'
+  }
+
+  $legacySourceTarget = Resolve-LegacySourceTarget $source
+  if (-not [string]::IsNullOrWhiteSpace($legacySourceTarget)) {
+    return $legacySourceTarget
   }
 
   $leaf = Split-Path -Leaf $candidate
@@ -113,7 +135,10 @@ function Resolve-RegisteredInstallSource {
 }
 
 function Write-ResolvedInstallTarget([string]$Target) {
-  $resultPath = Normalize-FullPath (Get-EnvironmentValue 'KUN_INSTALLER_RESULT')
+  $resultPath = Normalize-FullPath $ResultPath
+  if ([string]::IsNullOrWhiteSpace($resultPath)) {
+    $resultPath = Normalize-FullPath (Get-EnvironmentValue 'KUN_INSTALLER_RESULT')
+  }
   if (-not [string]::IsNullOrWhiteSpace($resultPath)) {
     [IO.File]::WriteAllBytes($resultPath, [Text.Encoding]::Unicode.GetBytes($Target))
   }
@@ -622,7 +647,7 @@ try {
       Write-ResolvedInstallTarget (Resolve-InstallTarget)
     }
     'ResolveSource' {
-      [Console]::Out.Write((Resolve-RegisteredInstallSource))
+      Write-ResolvedInstallTarget (Resolve-RegisteredInstallSource)
     }
     'StopProcesses' {
       Stop-InstallRootProcesses

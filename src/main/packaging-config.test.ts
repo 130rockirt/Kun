@@ -486,6 +486,9 @@ describe('electron-builder Kun packaging', () => {
     expect(installerScript).toContain('Var /GLOBAL KunInstallerSecondarySourceDir')
     expect(installerScript).toContain('Var /GLOBAL KunInstallerTargetDir')
     expect(installerScript).toContain('Call KunRefreshInstallPaths')
+    expect(installerScript).toContain(
+      'ReadRegStr $R9 HKEY_CURRENT_USER "${UNINSTALL_REGISTRY_KEY}" UninstallString'
+    )
     expect(installerScript).toContain('Function KunInstallDirectoryPagePre')
     expect(installerScript).toContain('Function KunInstallDirectoryPageLeave')
     expect(installerScript).toContain('Function KunInstallFilesPagePre')
@@ -515,6 +518,7 @@ describe('electron-builder Kun packaging', () => {
     expect(migrationScript).toContain('function Stop-InstallRootProcesses')
     expect(migrationScript).toContain("Assert-SafeInstallRoot $root 'Application root'")
     expect(migrationScript).toContain('Test-LegacyLeaf')
+    expect(migrationScript).toContain('function Resolve-LegacySourceTarget')
     expect(migrationScript).toContain('Test-ReparsePoint')
     expect(migrationScript).toContain('Test-KnownApplicationEntry')
     expect(migrationScript).toContain('Get-ValidatedJournalRecord')

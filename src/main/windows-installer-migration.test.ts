@@ -5,6 +5,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync
@@ -24,18 +25,29 @@ function makeTempRoot(): string {
 }
 
 function runHelper(input: {
-  action: 'ResolvePath' | 'Recover' | 'Prepare' | 'FallbackCleanup' | 'Restore'
+  action: 'ResolvePath' | 'ResolveSource' | 'Recover' | 'Prepare' | 'FallbackCleanup' | 'Restore'
   source?: string
   secondary?: string
   candidate?: string
   target?: string
   journal?: string
+  resultPath?: string
+  uninstallCommand?: string
 }) {
   const systemRoot = process.env.SystemRoot ?? 'C:\\Windows'
   const powershell = join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
   return spawnSync(
     powershell,
-    ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', helperPath, '-Action', input.action],
+    [
+      '-NoProfile',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-File',
+      helperPath,
+      '-Action',
+      input.action,
+      ...(input.resultPath ? ['-ResultPath', input.resultPath] : [])
+    ],
     {
       encoding: 'utf8',
       env: {
@@ -45,6 +57,7 @@ function runHelper(input: {
         KUN_INSTALLER_CANDIDATE: input.candidate ?? '',
         KUN_INSTALLER_TARGET: input.target ?? '',
         KUN_INSTALLER_JOURNAL: input.journal ?? join(makeTempRoot(), 'journal.json'),
+        KUN_INSTALLER_UNINSTALL_STRING: input.uninstallCommand ?? '',
         KUN_INSTALLER_SELF_PID: String(process.pid)
       }
     }
@@ -53,6 +66,12 @@ function runHelper(input: {
 
 function processError(result: ReturnType<typeof runHelper>): string {
   return String(result.stderr ?? '')
+}
+
+function readJournal(path: string): { Records: Array<{ Stash: string }> } {
+  return JSON.parse(readFileSync(path, 'utf8').replace(/^\uFEFF/, '')) as {
+    Records: Array<{ Stash: string }>
+  }
 }
 
 afterEach(() => {
@@ -67,6 +86,7 @@ windowsOnly('Windows installer migration helper', () => {
     ['C:\\Users\\me\\AppData\\Local\\Programs\\DeepSeek GUI', '', 'C:\\Users\\me\\AppData\\Local\\Programs\\Kun'],
     ['D:\\Apps\\deepseek-gui', '', 'D:\\Apps\\Kun'],
     ['D:\\Apps\\DeepSeek GUI\\Kun', '', 'D:\\Apps\\Kun'],
+    ['D:\\Legacy\\DeepSeek GUI', 'C:\\Users\\me\\AppData\\Local\\Programs\\Kun', 'D:\\Legacy\\Kun'],
     ['D:\\Apps\\Custom AI', 'D:\\Apps\\Custom AI', 'D:\\Apps\\Custom AI'],
     ['', 'D:\\Apps', 'D:\\Apps\\Kun'],
     ['', 'D:\\KunTools', 'D:\\KunTools\\Kun'],
@@ -77,6 +97,23 @@ windowsOnly('Windows installer migration helper', () => {
 
     expect(result.status, processError(result)).toBe(0)
     expect(result.stdout).toBe(expected)
+  })
+
+  it('writes a recovered install source to the explicit result path', () => {
+    const root = makeTempRoot()
+    const source = join(root, 'DeepSeek GUI')
+    const resultPath = join(root, 'resolved-source.txt')
+    mkdirSync(source, { recursive: true })
+    const canonicalSource = realpathSync.native(source)
+    const result = runHelper({
+      action: 'ResolveSource',
+      resultPath,
+      uninstallCommand: `"${join(source, 'Uninstall Kun.exe')}" /currentuser`
+    })
+
+    expect(result.status, processError(result)).toBe(0)
+    expect(result.stdout).toBe(canonicalSource)
+    expect(readFileSync(resultPath, 'utf16le')).toBe(canonicalSource)
   })
 
   it('preserves unknown top-level content and restores it after fallback cleanup', () => {
@@ -93,9 +130,7 @@ windowsOnly('Windows installer migration helper', () => {
     expect(existsSync(join(source, 'notes.txt'))).toBe(false)
     expect(existsSync(join(source, 'Kun.exe'))).toBe(true)
 
-    const journalData = JSON.parse(readFileSync(journal, 'utf8')) as {
-      Records: Array<{ Stash: string }>
-    }
+    const journalData = readJournal(journal)
     expect(readFileSync(join(journalData.Records[0].Stash, 'content', 'notes.txt'), 'utf8')).toBe(
       'keep me'
     )
@@ -176,9 +211,7 @@ windowsOnly('Windows installer migration helper', () => {
     expect(restored.stderr).toContain('conflicts with existing paths')
     expect(readFileSync(join(source, 'personal.txt'), 'utf8')).toBe('conflict')
     expect(existsSync(journal)).toBe(true)
-    const journalData = JSON.parse(readFileSync(journal, 'utf8')) as {
-      Records: Array<{ Stash: string }>
-    }
+    const journalData = readJournal(journal)
     expect(readFileSync(join(journalData.Records[0].Stash, 'content', 'personal.txt'), 'utf8')).toBe(
       'original'
     )
