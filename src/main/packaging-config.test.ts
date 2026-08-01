@@ -510,7 +510,7 @@ describe('electron-builder Kun packaging', () => {
     expect(installerScript).not.toContain('DeleteRegKey SHELL_CONTEXT')
     expect(installerScript).not.toContain('Stop-Process -Id')
 
-    expect(migrationScript).toContain("ValidateSet('ResolvePath', 'Recover', 'Prepare'")
+    expect(migrationScript).toContain("ValidateSet('ResolvePath', 'ResolveSource', 'Recover', 'Prepare'")
     expect(migrationScript).toContain('Test-LegacyLeaf')
     expect(migrationScript).toContain('Test-ReparsePoint')
     expect(migrationScript).toContain('Test-KnownApplicationEntry')
