@@ -8,6 +8,9 @@ import { basename, dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import extractZip from 'extract-zip'
 
+const TEMPORARY_DIRECTORY_REMOVE_RETRIES = 10
+const TEMPORARY_DIRECTORY_REMOVE_DELAY_MS = 250
+
 export function createArchiveExtractionInvocation(
   artifact,
   destination,
@@ -102,8 +105,41 @@ async function main() {
     )
     process.stdout.write(`Standalone TUI smoke passed: ${expectedTarget} ${expectedVersion}\n`)
   } finally {
-    await rm(temporary, { recursive: true, force: true })
+    await removeTemporaryDirectory(temporary)
   }
+}
+
+export async function removeTemporaryDirectory(
+  directory,
+  {
+    remove = rm,
+    platform = process.platform,
+    maxRetries = TEMPORARY_DIRECTORY_REMOVE_RETRIES,
+    retryDelayMs = TEMPORARY_DIRECTORY_REMOVE_DELAY_MS,
+    wait = delay
+  } = {}
+) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await remove(directory, { recursive: true, force: true })
+      return
+    } catch (error) {
+      if (!isRetryableWindowsRemoveError(error, platform) || attempt >= maxRetries) {
+        throw error
+      }
+      await wait(retryDelayMs)
+    }
+  }
+}
+
+export function isRetryableWindowsRemoveError(error, platform = process.platform) {
+  return platform === 'win32' &&
+    error instanceof Error &&
+    ['EBUSY', 'ENOTEMPTY', 'EPERM'].includes(error.code)
+}
+
+function delay(milliseconds) {
+  return new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds))
 }
 
 async function smokeHeadlessRuntime(node, entry, env, dataDir) {
