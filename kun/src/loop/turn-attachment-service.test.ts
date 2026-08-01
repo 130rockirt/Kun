@@ -207,14 +207,45 @@ describe('TurnAttachmentService', () => {
     })
   })
 
-  it('only supplies workspace-local image references to generate_image', () => {
+  it('supplies attachment IDs for temporary images and paths for workspace images', () => {
+    const instructions = imageGenerationReferenceInstructions({
+      imageAttachments: [
+        {
+          id: 'att_temp', name: 'pasted.png', mimeType: 'image/png', dataBase64: 'aW1hZ2U=',
+          localFilePath: '/tmp/clipboard.png'
+        },
+        {
+          id: 'att_workspace', name: 'ref.png', mimeType: 'image/png', dataBase64: 'aW1hZ2U=',
+          localFilePath: '/workspace/assets/ref.png'
+        }
+      ],
+      textFallbacks: [],
+      workspace: '/workspace',
+      tools: [{
+        name: 'generate_image',
+        inputSchema: {
+          type: 'object',
+          properties: { reference_attachment_ids: {}, reference_image_paths: {} }
+        }
+      }]
+    })
+
+    expect(instructions).toHaveLength(1)
+    expect(instructions[0]).toContain('pasted.png: attachment ID att_temp')
+    expect(instructions[0]).not.toContain('/tmp/clipboard.png')
+    expect(instructions[0]).toContain('ref.png: attachment ID att_workspace; workspace path assets/ref.png')
+    expect(instructions[0]).toContain('reference_attachment_ids')
+    expect(instructions[0]).toContain('reference_image_paths')
+  })
+
+  it('does not advertise image-to-image when the tool schema lacks reference inputs', () => {
     expect(imageGenerationReferenceInstructions({
       imageAttachments: [{
-        id: 'att', name: 'ref.png', mimeType: 'image/png', dataBase64: 'aW1hZ2U=', localFilePath: '/workspace/ref.png'
+        id: 'att', name: 'ref.png', mimeType: 'image/png', dataBase64: 'aW1hZ2U='
       }],
       textFallbacks: [],
       workspace: '/workspace',
-      tools: [{ name: 'generate_image' }]
-    })).toEqual([expect.stringContaining('ref.png: ref.png')])
+      tools: [{ name: 'generate_image', inputSchema: { type: 'object', properties: {} } }]
+    })).toEqual([])
   })
 })

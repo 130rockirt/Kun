@@ -47,7 +47,8 @@ async function fixture() {
 
 describe('GraphControlService', () => {
   it('durably validates, creates, starts, pauses, resumes, and cancels a run', async () => {
-    const { control, pauseActive } = await fixture()
+    const { control, store, pauseActive } = await fixture()
+    const create = vi.spyOn(store, 'create')
     const created = await control.create({
       runId: 'run_1',
       threadId: 'thread_1',
@@ -58,6 +59,7 @@ describe('GraphControlService', () => {
       idempotencyKey: 'create_1',
       start: true
     })
+    expect(create.mock.calls[0]?.[0]).not.toHaveProperty('start')
     expect(created.run.status).toBe('running')
     const paused = await control.pause('run_1', {
       commandId: 'command_pause',

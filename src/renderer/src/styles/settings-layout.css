@@ -3,9 +3,34 @@
   max-width: 920px;
 }
 
+.ds-settings-content--providers {
+  max-width: 1240px;
+}
+
+.ds-settings-page--providers {
+  gap: 16px;
+}
+
+.ds-provider-workspace {
+  min-height: min(760px, calc(100vh - 96px));
+  background: var(--ds-surface-card);
+}
+
+.ds-provider-workspace > .ds-settings-tab-panel:not([hidden]) {
+  gap: 0;
+}
+
+.ds-provider-workspace .ds-settings-tabs {
+  max-width: 420px;
+}
+
 .ds-settings-scroller {
   padding: 56px 24px 128px 16px;
   scrollbar-gutter: stable;
+}
+
+.ds-settings-scroller--providers {
+  padding-top: 32px;
 }
 
 .ds-settings-page {
@@ -144,6 +169,10 @@
 @media (max-width: 1050px) {
   .ds-settings-content {
     width: 100%;
+  }
+
+  .ds-provider-workspace {
+    min-height: 0;
   }
 
   .ds-settings-page--shortcuts .ds-settings-card-body > div:last-child {

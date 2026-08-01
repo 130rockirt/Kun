@@ -1393,10 +1393,14 @@ export function SettingsView(): ReactElement {
       <div className="ds-settings-stage relative min-h-0 min-w-0 flex-1 overflow-hidden">
         <div
           ref={settingsScrollerRef}
-          className="ds-settings-scroller ds-no-drag h-full min-h-0 overflow-y-auto"
+          className={`ds-settings-scroller ds-no-drag h-full min-h-0 overflow-y-auto ${
+            category === 'providers' ? 'ds-settings-scroller--providers' : ''
+          }`}
         >
-          <div className="ds-settings-content mx-auto">
-          <div className="ds-settings-page-header flex items-start justify-between gap-5">
+          <div className={`ds-settings-content mx-auto ${
+            category === 'providers' ? 'ds-settings-content--providers' : ''
+          }`}>
+          {category !== 'providers' ? <div className="ds-settings-page-header flex items-start justify-between gap-5">
             <div className="min-w-0">
               <h1 className="truncate text-[24px] font-medium leading-tight tracking-[-0.02em] text-ds-ink">
                 {categoryTitle}
@@ -1427,7 +1431,7 @@ export function SettingsView(): ReactElement {
                       ? t('applyFailed')
                       : t('autoApplyHint')}
             </span> : null}
-          </div>
+          </div> : null}
 
           {category !== 'extensions' && category !== 'dataMigration' && category !== 'storage' && saveStatus === 'error' && saveError ? (
             <div

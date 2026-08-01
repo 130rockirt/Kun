@@ -1064,6 +1064,17 @@ export function createMaintenanceActions(
     }
 
     const trimmedBlocks = state.blocks.slice(0, idx)
+    const attachmentIds = [...new Set([
+      ...(targetBlock.meta?.attachmentIds ?? []),
+      ...(targetBlock.meta?.attachments ?? []).map((attachment) => attachment.id)
+    ].map((id) => id.trim()).filter(Boolean))]
+    const attachments = (targetBlock.meta?.attachments ?? []).filter((attachment) =>
+      attachment.id.trim().length > 0
+    )
+    const attachmentOverrides = {
+      ...(attachmentIds.length ? { attachmentIds } : {}),
+      ...(attachments.length ? { attachments } : {})
+    }
 
     const droppedUserIds = state.blocks
       .slice(idx)
@@ -1113,8 +1124,11 @@ export function createMaintenanceActions(
       if (canvasResend) {
         await get().sendMessage(canvasResend.text, 'agent', {
           displayText: canvasResend.displayText,
-          guiDesignCanvas: true
+          guiDesignCanvas: true,
+          ...attachmentOverrides
         })
+      } else if (attachmentIds.length > 0) {
+        await get().sendMessage(trimmed, undefined, attachmentOverrides)
       } else {
         await get().sendMessage(trimmed)
       }

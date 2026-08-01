@@ -223,22 +223,38 @@ export function imageGenerationReferenceInstructions(input: {
   imageAttachments: readonly ModelInputAttachment[]
   textFallbacks: readonly ModelTextAttachmentFallback[]
   workspace: string
-  tools: readonly Pick<ModelToolSpec, 'name'>[]
+  tools: readonly Pick<ModelToolSpec, 'name' | 'inputSchema'>[]
 }): string[] {
-  if (!input.tools.some((tool) => tool.name === 'generate_image')) return []
+  const generateImage = input.tools.find((tool) => tool.name === 'generate_image')
+  if (!generateImage || !toolSchemaHasProperty(generateImage.inputSchema, 'reference_attachment_ids')) {
+    return []
+  }
   const references = [...input.imageAttachments, ...input.textFallbacks]
     .filter((attachment) => attachment.mimeType.startsWith('image/'))
     .map((attachment) => ({
+      id: attachment.id,
       name: attachment.name,
       path: workspaceRelativeAttachmentPath(attachment.localFilePath, input.workspace)
     }))
-    .filter((attachment): attachment is { name: string; path: string } => Boolean(attachment.path))
   if (references.length === 0) return []
   return [[
     'Image-to-image reference images are available for this turn:',
-    ...references.map((reference) => `- ${reference.name}: ${reference.path}`),
-    'For image edits, restyles, redraws, or transformations, call `generate_image` with the matching workspace-relative path(s) in `reference_image_paths`.'
+    ...references.map((reference) => [
+      `- ${reference.name}: attachment ID ${reference.id}`,
+      ...(reference.path ? [`; workspace path ${reference.path}`] : [])
+    ].join('')),
+    'For uploaded, pasted, or canvas-exported images without a workspace path, call `generate_image` with the matching ID(s) in `reference_attachment_ids`.',
+    'For images that also have a workspace-relative path, you may instead use `reference_image_paths`. Do not copy temporary files into the workspace.'
   ].join('\n')]
+}
+
+function toolSchemaHasProperty(inputSchema: Record<string, unknown>, property: string): boolean {
+  const properties = inputSchema.properties
+  return Boolean(
+    properties &&
+    typeof properties === 'object' &&
+    Object.prototype.hasOwnProperty.call(properties, property)
+  )
 }
 
 function buildTextAttachmentFallback(

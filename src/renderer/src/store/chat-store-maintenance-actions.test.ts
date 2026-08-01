@@ -946,6 +946,86 @@ describe('chat-store-maintenance-actions rewind and resend', () => {
     expect(sendMessage).toHaveBeenCalledWith('Refactor this module')
   })
 
+  it('preserves image attachments when editing and resending a user message', async () => {
+    const prepareCodeCanvasResend = vi.fn(async () => null)
+    const { actions, provider, sendMessage, state } = buildHarness({
+      maintenanceDependencies: {
+        prepareCodeCanvasResend
+      }
+    })
+    const attachment = {
+      id: 'att_image_1',
+      kind: 'image' as const,
+      name: 'reference.png',
+      mimeType: 'image/png',
+      width: 1280,
+      height: 720,
+      previewUrl: 'data:image/png;base64,AQID'
+    }
+    Object.assign(state, {
+      route: 'chat',
+      busy: false,
+      blocks: [
+        {
+          kind: 'user',
+          id: 'user_1',
+          text: 'old image prompt',
+          meta: {
+            turnId: 'turn_1',
+            attachmentIds: ['att_image_1'],
+            attachments: [attachment]
+          }
+        },
+        { kind: 'assistant', id: 'assistant_1', text: 'old answer' }
+      ],
+      queuedMessages: [],
+      turnStartedAtByUserId: {},
+      turnDurationByUserId: {},
+      turnReasoningFirstAtByUserId: {},
+      turnReasoningLastAtByUserId: {}
+    })
+
+    await actions.rewindAndResend('user_1', '  Redesign this reference  ')
+
+    expect(provider.rewindThread).toHaveBeenCalledWith('thr_existing', 'turn_1')
+    expect(sendMessage).toHaveBeenCalledWith('Redesign this reference', undefined, {
+      attachmentIds: ['att_image_1'],
+      attachments: [attachment]
+    })
+  })
+
+  it('preserves ID-only historical image attachments when resending', async () => {
+    const prepareCodeCanvasResend = vi.fn(async () => null)
+    const { actions, sendMessage, state } = buildHarness({
+      maintenanceDependencies: {
+        prepareCodeCanvasResend
+      }
+    })
+    Object.assign(state, {
+      route: 'chat',
+      busy: false,
+      blocks: [
+        {
+          kind: 'user',
+          id: 'user_1',
+          text: 'old image prompt',
+          meta: { turnId: 'turn_1', attachmentIds: ['att_image_1'] }
+        }
+      ],
+      queuedMessages: [],
+      turnStartedAtByUserId: {},
+      turnDurationByUserId: {},
+      turnReasoningFirstAtByUserId: {},
+      turnReasoningLastAtByUserId: {}
+    })
+
+    await actions.rewindAndResend('user_1', 'Inspect this image again')
+
+    expect(sendMessage).toHaveBeenCalledWith('Inspect this image again', undefined, {
+      attachmentIds: ['att_image_1']
+    })
+  })
+
   it('restores checkpoints against the thread workspace when resending under another global picker root', async () => {
     const previousWindow = globalThis.window
     const restoreGitCheckpoint = vi.fn(async () => ({

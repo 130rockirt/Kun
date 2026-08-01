@@ -85,12 +85,13 @@ export class GraphControlService {
   async create(input: CreateValidatedGraphRunInput): Promise<GraphCommandResultV1> {
     this.assertGraphCreationEnabled()
     await this.options.authorizeCreate?.(input)
-    const created = await this.options.store.create(input)
+    const { start, ...storeInput } = input
+    const created = await this.options.store.create(storeInput)
     let run = await this.ensureReady(created.run, {
       commandId: input.commandId,
       idempotencyKey: input.idempotencyKey
     })
-    if (input.start ?? input.plan.autoStart) {
+    if (start ?? input.plan.autoStart) {
       run = await this.start(run.id, {
         commandId: `${input.commandId}_start`,
         idempotencyKey: `${input.idempotencyKey}:start`,

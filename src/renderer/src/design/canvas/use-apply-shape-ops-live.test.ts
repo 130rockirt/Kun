@@ -460,11 +460,23 @@ describe('generated image canvas fallback helpers', () => {
     })
   })
 
-  it('extracts generated image paths from assistant markdown image output', () => {
+  it('extracts generated image paths from native image output in the Kun-owned directory', () => {
     const blocks: ChatBlock[] = [
       {
         kind: 'assistant',
         id: 'assistant-1',
+        text: 'Done.\n![generated image](.kun/images/native.png)\n'
+      }
+    ]
+
+    expect(latestGeneratedImageRelativePathForTurn(blocks)).toBe('.kun/images/native.png')
+  })
+
+  it('continues recognizing legacy generated image markdown paths', () => {
+    const blocks: ChatBlock[] = [
+      {
+        kind: 'assistant',
+        id: 'assistant-legacy',
         text: 'Done.\n![generated image](.deepseekgui-images/native.png)\n'
       }
     ]
