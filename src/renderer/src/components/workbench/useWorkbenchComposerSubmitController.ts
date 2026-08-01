@@ -469,6 +469,12 @@ export function useWorkbenchComposerSubmitController({
       const providerId =
         writeState.assistantProviderId.trim() || providerIdForComposerModel(composerModelGroups, model)
       const reasoningEffort = composerReasoningEffortRequestValue(composerReasoningEffort)
+      const serviceTier = serviceTierForComposerSelection(
+        composerFastMode,
+        composerModelGroups,
+        model,
+        providerId
+      )
       const sent = await sendMessage(prompt, composerMode === 'plan' ? 'plan' : 'agent', {
         ...(!v && documentAttachments.length > 0
           ? { displayText: t('composerFileOnlyDisplay', { count: documentAttachments.length }) }
@@ -478,6 +484,7 @@ export function useWorkbenchComposerSubmitController({
         ...(model ? { model } : {}),
         ...(providerId ? { providerId } : {}),
         ...(reasoningEffort ? { reasoningEffort } : {}),
+        ...(serviceTier ? { serviceTier } : {}),
         ...(attachmentIds.length ? { attachmentIds } : {}),
         ...(publicAttachments.length ? { attachments: publicAttachments } : {}),
         writeContext: {
@@ -503,6 +510,7 @@ export function useWorkbenchComposerSubmitController({
     composerAttachments,
     composerMode,
     composerModelGroups,
+    composerFastMode,
     composerReasoningEffort,
     getAttachmentScope,
     sendMessage,

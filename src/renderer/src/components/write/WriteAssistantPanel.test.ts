@@ -34,8 +34,10 @@ describe('WriteAssistantPanel', () => {
       composerModel: '',
       composerPickList: [],
       composerReasoningEffort: 'max',
+      composerFastMode: false,
       setComposerModel: () => undefined,
       setComposerReasoningEffort: () => undefined,
+      setComposerFastMode: () => undefined,
       queuedMessages: [],
       removeQueuedMessage: () => undefined,
       guideQueuedMessage: () => undefined,
@@ -104,8 +106,10 @@ describe('WriteAssistantPanel', () => {
       composerModel: '',
       composerPickList: [],
       composerReasoningEffort: 'max',
+      composerFastMode: false,
       setComposerModel: () => undefined,
       setComposerReasoningEffort: () => undefined,
+      setComposerFastMode: () => undefined,
       queuedMessages: [{ id: 'q-guide', text: 'keep the opening shorter' }],
       removeQueuedMessage: () => undefined,
       guideQueuedMessage: () => undefined,
@@ -119,5 +123,74 @@ describe('WriteAssistantPanel', () => {
     }))
 
     expect(html).toContain('aria-label="Guide"')
+  })
+
+  it('shows separate reasoning and Fast controls for Codex models', () => {
+    useChatStore.setState({
+      activeThreadId: 'thr_write',
+      activeThreadGoal: null,
+      route: 'write',
+      workspaceRoot: '/workspace',
+      threads: []
+    })
+    useWriteWorkspaceStore.setState({
+      workspaceRoot: '/workspace',
+      activeFilePath: '/workspace/draft.md'
+    })
+
+    const html = renderToStaticMarkup(createElement(WriteAssistantPanel, {
+      input: '',
+      setInput: () => undefined,
+      mode: 'agent',
+      setMode: () => undefined,
+      busy: false,
+      runtimeConnection: 'ready',
+      activeThreadId: 'thr_write',
+      blocks: [],
+      liveReasoning: '',
+      liveAssistant: '',
+      composerModel: 'gpt-5.4',
+      composerProviderId: 'codex',
+      composerPickList: ['gpt-5.4'],
+      composerModelGroups: [{
+        providerId: 'codex',
+        presetSource: 'codex',
+        label: 'Codex',
+        modelIds: ['gpt-5.4'],
+        modelProfiles: {
+          'gpt-5.4': {
+            inputModalities: ['text'],
+            outputModalities: ['text'],
+            supportsToolCalling: true,
+            messageParts: ['text'],
+            reasoning: {
+              supportedEfforts: ['off', 'low', 'medium', 'high', 'max'],
+              defaultEffort: 'high',
+              requestProtocol: 'openai-responses'
+            },
+            serviceTiers: ['priority']
+          }
+        }
+      }],
+      composerReasoningEffort: 'high',
+      composerFastMode: true,
+      setComposerModel: () => undefined,
+      setComposerReasoningEffort: () => undefined,
+      setComposerFastMode: () => undefined,
+      queuedMessages: [],
+      removeQueuedMessage: () => undefined,
+      guideQueuedMessage: () => undefined,
+      onSend: () => undefined,
+      onInterrupt: () => undefined,
+      onRetryConnection: () => undefined,
+      onOpenSettings: () => undefined,
+      onNewConversation: () => undefined,
+      onPickWorkspace: () => undefined,
+      onCollapse: () => undefined
+    }))
+
+    expect(html).toContain('Codex · gpt-5.4')
+    expect(html).toContain('aria-label="Reasoning: High"')
+    expect(html).toContain('aria-label="Fast mode on"')
   })
 })

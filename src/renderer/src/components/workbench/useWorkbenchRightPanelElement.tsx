@@ -67,7 +67,9 @@ type WorkbenchRightPanelElementOptions = Pick<
     | 'composerPickList'
     | 'skillCommands'
     | 'disabledSkillIds'
+    | 'composerFastMode'
     | 'setComposerModel'
+    | 'setComposerFastMode'
     | 'onNewConversation'
     | 'onPickWorkspace'
   >

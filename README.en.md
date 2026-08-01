@@ -27,7 +27,7 @@
 </p>
 
 <p align="center">
-  <img src="./docs/assets/readme/kun-hero.jpg" alt="Kun hero image showing the AI agent workspace Code interface and its shared GUI and TUI runtime" width="100%">
+  <img src="./docs/assets/readme/kun-hero-code.jpg" alt="Kun hero featuring the current Code workspace for the local-first AI agent experience" width="100%">
 </p>
 
 ## What is Kun?
@@ -47,7 +47,6 @@ Kun is not another chat box that only produces an answer. It keeps requirements,
 | **Model choice** | Kun is not tied to one model. It supports subscription sign-ins, Coding Plans, Token Plans, APIs, OpenAI/Anthropic-compatible services, and self-hosted models. |
 | **Platforms** | macOS on Apple Silicon or Intel, Windows x64, and Linux x64. |
 | **Where data lives** | Sessions, preferences, logs, and runtime data stay local by default. When you choose a cloud model, prompts, attachments, and task context are sent to that provider. |
-| **License** | [PolyForm Noncommercial 1.0.0](./LICENSE): learning, research, and noncommercial use are allowed; commercial use needs separate written permission. |
 
 ## Get started in 5 minutes
 
@@ -85,23 +84,38 @@ The GUI and TUI automatically connect to the same local runtime. For servers or 
 | **Research: multimodal work** | PDFs, images, web leads, or questions | Read material, collect evidence, organize conclusions, and preserve a reusable work context | Research notes, structured conclusions, proposals, and next tasks |
 | **Automate: tasks and Agent Graph** | A repeated process, schedule, or complex objective | Use Schedules, Loops, Hooks, MCP, Skills, and constrained subagents | Automation records, task state, evidence, and resumable execution history |
 
+### Current interface screenshots
+
 <p align="center">
-  <img src="./docs/assets/readme/create-workspaces.webp" alt="Kun Code and Write workspaces: a code task workbench beside a writing editor with AI actions">
+  <img src="./docs/assets/readme/code-workspace-current.webp" alt="Current Kun Code workspace with projects, sessions, model selection, and the task input area">
 </p>
 
 <p align="center">
-  <img src="./docs/assets/readme/research-prototype.webp" alt="Kun turns a research brief into a prototype and reads a PDF inside the research workspace">
+  <img src="./docs/assets/readme/write-workspace-current.webp" alt="Current Kun Write workspace with a writing space, document canvas, writing assistant, and quick actions">
 </p>
 
 <p align="center">
-  <img src="./docs/assets/readme/shared-runtime.webp" alt="Kun desktop GUI and terminal TUI share threads and Agent Graph work through one runtime">
+  <img src="./docs/assets/readme/design-workspace-current.webp" alt="Current Kun Design workspace with a design canvas, design assets, and the Agent work trace">
+</p>
+
+<p align="center">
+  <img src="./docs/assets/readme/automation-schedule-current.webp" alt="Current Kun automation interface with scheduled tasks, run results, and task controls">
 </p>
 
 <details>
-  <summary>See more real Code and Write demos</summary>
+  <summary>More demos (historical interface material and earlier recordings)</summary>
   <p align="center">
-    <a href="src/asset/img/code.mp4"><img src="src/asset/img/code.gif" width="410" alt="Real interaction demo of Kun Code mode"></a>
-    <a href="src/asset/img/write.mp4"><img src="src/asset/img/write.gif" width="410" alt="Real interaction demo of Kun Write mode"></a>
+    <img src="./docs/assets/readme/create-workspaces.webp" alt="Earlier combined Kun Code and Write workspace material">
+  </p>
+  <p align="center">
+    <img src="./docs/assets/readme/research-prototype.webp" alt="Earlier Kun research and prototype workflow material">
+  </p>
+  <p align="center">
+    <img src="./docs/assets/readme/shared-runtime.webp" alt="Earlier visual material for Kun GUI, TUI, and Graph runtime continuity">
+  </p>
+  <p align="center">
+    <a href="src/asset/img/code.mp4"><img src="src/asset/img/code.gif" width="410" alt="Earlier real interaction recording of Kun Code mode"></a>
+    <a href="src/asset/img/write.mp4"><img src="src/asset/img/write.gif" width="410" alt="Earlier real interaction recording of Kun Write mode"></a>
   </p>
 </details>
 
@@ -198,10 +212,6 @@ Use Direct for questions, focused edits, and short tasks. Use the experimental A
 ### Which operating systems are supported?
 
 The desktop app supports macOS, Windows x64, and Linux x64. A standalone TUI is also available for servers and environments without a desktop.
-
-### Is Kun open source? Can I use it commercially?
-
-Kun's source is available to inspect and contributions are welcome, but it uses the PolyForm Noncommercial 1.0.0 license rather than an OSI-approved open-source license. Learning, research, and noncommercial use are allowed. Commercial use, distribution, SaaS, hosting, resale, or integration into a commercial product needs separate written permission. Organizations using Kun only for internal employee productivity can request a free written internal-use authorization by email.
 
 ## Run from source
 

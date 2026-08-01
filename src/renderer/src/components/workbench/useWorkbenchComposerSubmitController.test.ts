@@ -422,4 +422,41 @@ describe('useWorkbenchComposerSubmitController', () => {
       expect.objectContaining({ serviceTier: 'priority' })
     ))
   })
+
+  it('snapshots the priority service tier for an eligible Codex Write send', async () => {
+    const sendMessage = vi.fn(async () => true)
+    const modelGroup: ModelProviderModelGroup = {
+      providerId: 'codex-2',
+      presetSource: 'codex',
+      label: 'ChatGPT subscription 2',
+      modelIds: ['gpt-5.4'],
+      modelProfiles: {
+        'gpt-5.4': {
+          inputModalities: ['text'],
+          outputModalities: ['text'],
+          supportsToolCalling: true,
+          messageParts: ['text'],
+          serviceTiers: ['priority']
+        }
+      }
+    }
+    useWriteWorkspaceStore.setState({
+      assistantModel: 'gpt-5.4',
+      assistantProviderId: 'codex-2'
+    })
+    const controller = useWorkbenchComposerSubmitController(controllerParams({
+      input: 'polish it',
+      composerModelGroups: [modelGroup],
+      composerFastMode: true,
+      sendMessage
+    }))
+
+    controller.sendWritePrompt('polish it')
+
+    await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledWith(
+      expect.any(String),
+      'agent',
+      expect.objectContaining({ serviceTier: 'priority' })
+    ))
+  })
 })

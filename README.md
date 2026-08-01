@@ -27,7 +27,7 @@
 </p>
 
 <p align="center">
-  <img src="./docs/assets/readme/kun-hero.jpg" alt="Kun 品牌首图：AI Agent 工作台的 Code 界面与共享 GUI、TUI 运行时" width="100%">
+  <img src="./docs/assets/readme/kun-hero-code.jpg" alt="Kun Hero：以当前 Code 工作台为主视觉的本地优先 AI Agent 工作空间" width="100%">
 </p>
 
 ## Kun 是什么
@@ -47,7 +47,6 @@ Kun 是一款本地优先的 AI Agent 工作台，面向需要把想法真正推
 | **模型是否受限** | 不绑定单一模型，支持多模型选择；可接入订阅登录、Coding Plan、Token Plan、API、OpenAI/Anthropic 兼容服务和自托管模型。 |
 | **支持哪些系统** | macOS（Apple Silicon / Intel）、Windows x64 和 Linux x64。 |
 | **数据在哪里** | 会话、偏好、日志和运行时数据默认保存在本机；若选择云端模型，提示、附件和任务上下文会发送给该 Provider。 |
-| **许可证** | [PolyForm Noncommercial 1.0.0](./LICENSE)：学习、研究和非商业用途可用；商业使用需单独书面授权。 |
 
 ## 5 分钟开始
 
@@ -85,23 +84,38 @@ GUI 和 TUI 会自动连接同一个本地运行时。服务器或无桌面环�
 | **Research：多模态研究** | PDF、图片、网页线索或问题 | 阅读资料、提取证据、组织结论、形成可继续的工作上下文 | 研究笔记、结构化结论、方案和后续任务 |
 | **Automate：任务与 Agent Graph** | 重复流程、定时任务或复杂目标 | 使用 Schedule、Loop、Hook、MCP、Skills 和受限子代理持续执行 | 自动化记录、任务状态、证据和可恢复的执行历史 |
 
+### 当前界面实拍
+
 <p align="center">
-  <img src="./docs/assets/readme/create-workspaces.webp" alt="Kun 的 Code 与 Write 工作区：左侧为代码任务工作台，右侧为写作编辑与 AI 操作菜单">
+  <img src="./docs/assets/readme/code-workspace-current.webp" alt="Kun 当前 Code 工作台：项目、会话、模型选择和任务输入区">
 </p>
 
 <p align="center">
-  <img src="./docs/assets/readme/research-prototype.webp" alt="Kun 从需求简报生成原型，以及在工作台中阅读 PDF 并进行研究">
+  <img src="./docs/assets/readme/write-workspace-current.webp" alt="Kun 当前 Write 工作台：写作空间、文档画布、写作助手和快捷操作">
 </p>
 
 <p align="center">
-  <img src="./docs/assets/readme/shared-runtime.webp" alt="Kun 桌面 GUI 与终端 TUI 共用线程和 Graph 任务的示意">
+  <img src="./docs/assets/readme/design-workspace-current.webp" alt="Kun 当前 Design 工作台：设计画布、设计资产和 Agent 工作过程">
+</p>
+
+<p align="center">
+  <img src="./docs/assets/readme/automation-schedule-current.webp" alt="Kun 当前自动化界面：定时任务、运行结果和任务控制">
 </p>
 
 <details>
-  <summary>查看更多 Code 与 Write 实机演示</summary>
+  <summary>更多演示（历史界面素材与早期操作录屏）</summary>
   <p align="center">
-    <a href="src/asset/img/code.mp4"><img src="src/asset/img/code.gif" width="410" alt="Kun Code 模式的真实操作演示"></a>
-    <a href="src/asset/img/write.mp4"><img src="src/asset/img/write.gif" width="410" alt="Kun Write 模式的真实操作演示"></a>
+    <img src="./docs/assets/readme/create-workspaces.webp" alt="早期 Kun Code 与 Write 工作区组合素材">
+  </p>
+  <p align="center">
+    <img src="./docs/assets/readme/research-prototype.webp" alt="早期 Kun 研究与原型工作流素材">
+  </p>
+  <p align="center">
+    <img src="./docs/assets/readme/shared-runtime.webp" alt="早期 Kun GUI、TUI 与 Graph 运行时示意素材">
+  </p>
+  <p align="center">
+    <a href="src/asset/img/code.mp4"><img src="src/asset/img/code.gif" width="410" alt="Kun Code 模式的早期真实操作录屏"></a>
+    <a href="src/asset/img/write.mp4"><img src="src/asset/img/write.gif" width="410" alt="Kun Write 模式的早期真实操作录屏"></a>
   </p>
 </details>
 
@@ -199,10 +213,6 @@ Kun 是本地优先的 AI Agent 工作台，用同一个运行时提供桌面 GU
 
 桌面版支持 macOS、Windows x64 和 Linux x64；也提供独立 TUI 以适配服务器或无桌面环境。
 
-### Kun 是开源软件吗？可以商业使用吗？
-
-Kun 的源代码可查看并接受贡献，但许可证是 PolyForm Noncommercial 1.0.0，并非 OSI 意义上的开源许可证。学习、研究和非商业用途可用；商业使用、商业分发、SaaS、托管、转售或集成到商业产品中需要单独书面授权。企业仅用于内部员工提效时，可邮件联系申请免费内部使用授权。
-
 ## 从源码运行
 
 环境要求：
@@ -277,12 +287,8 @@ Kun 使用 [PolyForm Noncommercial License 1.0.0](./LICENSE)，仅供学习、�
 
 ## 致谢
 
-感谢 [LobsterAI](https://github.com/netease-youdao/LobsterAI)、DeepSeek、Xiaomi MiMo、MiniMax，以及所有提交 issue、建议、代码和文档的贡献者。
+感谢所有提交 issue、建议、代码和文档的贡献者。
 
 <a href="https://github.com/KunAgent/Kun/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=KunAgent/Kun" alt="Kun contributors">
 </a>
-
-## Star 历史
-
-[在 GitHub 上关注 Kun 的 Star 与最新发布](https://github.com/KunAgent/Kun)

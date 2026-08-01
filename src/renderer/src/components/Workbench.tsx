@@ -1098,7 +1098,9 @@ export function Workbench(): ReactElement {
       composerPickList: writeAssistantPickList,
       skillCommands: runtimeSkills,
       disabledSkillIds,
+      composerFastMode,
       setComposerModel: setWriteAssistantModel,
+      setComposerFastMode,
       onNewConversation: startNewWriteAssistantConversation,
       onPickWorkspace: () => void pickWriteAssistantWorkspace()
     },
