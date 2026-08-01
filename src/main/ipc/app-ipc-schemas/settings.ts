@@ -1364,6 +1364,10 @@ const settingsPatchObjectSchema = z.object({
   workflow: workflowSettingsPatchSchema.optional(),
   design: designSettingsPatchSchema.optional(),
   terminal: terminalSettingsPatchSchema.optional(),
+  connectors: z.object({
+    enabled: z.boolean().optional(),
+    port: z.number().int().min(MIN_KUN_LOCAL_PORT).max(65_535).optional()
+  }).strict().optional(),
   guiUpdate: z.object({
     channel: z.enum(GUI_UPDATE_CHANNELS).optional()
   }).strict().optional(),

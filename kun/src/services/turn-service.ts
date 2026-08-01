@@ -15,6 +15,10 @@ import type { RuntimeErrorSeverity } from '../contracts/errors.js'
 import type { SessionStore } from '../ports/session-store.js'
 import type { ThreadStore } from '../ports/thread-store.js'
 import type { MigrationMaintenanceLock } from '../ports/migration-maintenance-lock.js'
+import {
+  ThreadExecutionBusyError,
+  type ThreadExecutionLeasePort
+} from '../ports/thread-execution-lease.js'
 import type { IdGenerator } from '../ports/id-generator.js'
 import type { ModelClient } from '../ports/model-client.js'
 import type { ImmutablePrefix } from '../cache/immutable-prefix.js'
@@ -63,6 +67,8 @@ export type TurnServiceDeps = {
   /** Reject turn admission while this thread is being destructively removed. */
   lifecycleFence?: ThreadLifecycleFence
   migrationMaintenance?: MigrationMaintenanceLock
+  /** Cross-runtime ownership fence supplied by the stable Service Manager. */
+  executionLeases?: ThreadExecutionLeasePort
   /** Dispose machine-local continuation state after a successful manual compaction. */
   onCompacted?: (threadId: string) => Promise<void>
   /** Resolve durable Graph ownership without coupling TurnService to the Graph store. */
@@ -137,6 +143,7 @@ export type GraphLeadSuspensionResult =
   | 'pending_steering'
   | 'supervision_pending'
   | 'suspended'
+  | 'suspended_pending_supervision'
 
 export type GraphLeadResumeResult = 'resumed' | 'already_running'
 
@@ -175,6 +182,7 @@ export class TurnService {
   private readonly inflightTurns = new Map<string, AbortController>()
   /** Turn ids that own one global admission slot. */
   private readonly admittedTurnThreads = new Map<string, string>()
+  private readonly leasedTurns = new Set<string>()
   /** Steering requests that are restoring a parked Graph lease before enqueueing. */
   private readonly graphSteeringResumeFences = new Map<string, number>()
   private maxConcurrentTurns: number
@@ -211,6 +219,8 @@ export class TurnService {
     if (this.deps.migrationMaintenance?.isLocked()) {
       throw new TurnConflictError('runtime migration maintenance is in progress')
     }
+    const currentOwner = await this.deps.executionLeases?.owner(input.threadId)
+    if (currentOwner) throw new ThreadExecutionBusyError(currentOwner)
     let attemptedTurnId: string | undefined
     try {
       const started = await this.withThreadMutation(input.threadId, async () => {
@@ -236,6 +246,10 @@ export class TurnService {
         }
         attemptedTurnId = turnId
         try {
+          if (this.deps.executionLeases) {
+            await this.deps.executionLeases.acquire(input.threadId, turnId)
+            this.leasedTurns.add(turnId)
+          }
           const composerContexts = ComposerContextAttachmentSchema.array().parse(
             input.request.composerContexts ?? []
           )
@@ -311,6 +325,9 @@ export class TurnService {
           const next = {
             ...touchThread(thread, this.deps.nowIso()),
             status: 'running' as const,
+            ...(thread.agentSurface === undefined && thread.turns.length === 0 && input.request.agentSurface
+              ? { agentSurface: input.request.agentSurface }
+              : {}),
             ...(input.request.approvalPolicy !== undefined
               ? { approvalPolicy: input.request.approvalPolicy }
               : {}),
@@ -1096,7 +1113,9 @@ export class TurnService {
         updatedAt: now
       })
       this.releaseRuntimeTurnExecution(input.threadId, input.turnId)
-      return 'suspended'
+      return attached.supervisionPending
+        ? 'suspended_pending_supervision'
+        : 'suspended'
     })
   }
 
@@ -1480,6 +1499,7 @@ export class TurnService {
           }
           if (
             suspension === 'suspended' ||
+            suspension === 'suspended_pending_supervision' ||
             suspension === 'pending_steering' ||
             suspension === 'graph_terminal'
           ) {
@@ -1710,6 +1730,9 @@ export class TurnService {
     this.inflightTurns.delete(turnId)
     this.deps.inflight.end(turnId)
     this.admittedTurnThreads.delete(turnId)
+    if (this.leasedTurns.delete(turnId)) {
+      void this.deps.executionLeases?.release(threadId, turnId).catch(() => undefined)
+    }
   }
 
   private finalizeOpenItems(

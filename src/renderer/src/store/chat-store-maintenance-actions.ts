@@ -95,9 +95,20 @@ import {
   writeWorkspaceForThreadId
 } from '../write/write-thread-registry'
 import {
+  designDocKey,
   forgetDesignThread,
+  readDesignThreadRegistry,
+  replaceDesignThreadsForDocument,
   saveDesignThreadRegistry
 } from '../design/design-thread-registry'
+import {
+  beginDesignChatHistoryMutation,
+  deleteDesignChatDirForDoc,
+  deleteDesignChatTranscriptForThread,
+  endDesignChatHistoryMutation,
+  persistDesignChatMetaForDoc
+} from '../design/design-chat-transcript'
+import { flushDesignPersistenceQueue } from '../design/design-persistence-coordinator'
 import {
   clearBusyWatchdog,
   resetBusyRecoveryAttempts,
@@ -200,6 +211,10 @@ export type MaintenanceActionDependencies = {
     options: PrepareCodeCanvasResendOptions
   ) => Promise<PreparedCodeCanvasResend | null>
   requestCodeCanvasPanelOpen?: () => void
+  deleteDesignChatDirForDoc?: typeof deleteDesignChatDirForDoc
+  deleteDesignChatTranscriptForThread?: typeof deleteDesignChatTranscriptForThread
+  persistDesignChatMetaForDoc?: typeof persistDesignChatMetaForDoc
+  flushDesignPersistenceQueue?: typeof flushDesignPersistenceQueue
 }
 
 /**
@@ -220,10 +235,18 @@ function resolveCheckpointExpectedWorkspaceRoot(state: {
 export function createMaintenanceActions(
   { set, get, sseAbortRef }: StoreActionContext,
   dependencies: MaintenanceActionDependencies = {}
-): Pick<ChatState, 'renameActiveThread' | 'renameThread' | 'pinThread' | 'archiveThread' | 'compactActiveThread' | 'forkActiveThread' | 'forkThreadFromTurn' | 'setActiveThreadGoal' | 'setActiveThreadGoalStatus' | 'clearActiveThreadGoal' | 'setActiveThreadTodoStatus' | 'clearActiveThreadTodos' | 'syncPlanTodosFromMarkdown' | 'resumeSessionIntoThread' | 'deleteThread' | 'rewindAndResend' | 'rollbackWorkspaceToCheckpoint' | 'resolveApproval' | 'resolveUserInput' | 'interrupt'> {
+): Pick<ChatState, 'renameActiveThread' | 'renameThread' | 'pinThread' | 'archiveThread' | 'compactActiveThread' | 'forkActiveThread' | 'forkThreadFromTurn' | 'setActiveThreadGoal' | 'setActiveThreadGoalStatus' | 'clearActiveThreadGoal' | 'setActiveThreadTodoStatus' | 'clearActiveThreadTodos' | 'syncPlanTodosFromMarkdown' | 'resumeSessionIntoThread' | 'deleteThread' | 'clearDesignHistory' | 'rewindAndResend' | 'rollbackWorkspaceToCheckpoint' | 'resolveApproval' | 'resolveUserInput' | 'interrupt'> {
   const prepareCanvasResend = dependencies.prepareCodeCanvasResend ?? prepareCodeCanvasResend
   const openCodeCanvasPanel =
     dependencies.requestCodeCanvasPanelOpen ?? requestCodeCanvasPanelOpen
+  const deleteDesignChatDir =
+    dependencies.deleteDesignChatDirForDoc ?? deleteDesignChatDirForDoc
+  const deleteDesignChatTranscript =
+    dependencies.deleteDesignChatTranscriptForThread ?? deleteDesignChatTranscriptForThread
+  const persistDesignChatMeta =
+    dependencies.persistDesignChatMetaForDoc ?? persistDesignChatMetaForDoc
+  const flushDesignPersistence =
+    dependencies.flushDesignPersistenceQueue ?? flushDesignPersistenceQueue
   const forkActiveThreadWithOptions = async (options: { turnId?: string } = {}): Promise<void> => {
     const { activeThreadId, busy, blocks } = get()
     if (!activeThreadId) return
@@ -662,6 +685,281 @@ export function createMaintenanceActions(
           : {})
       })
       return null
+    }
+  },
+
+  clearDesignHistory: async (workspaceRoot, docId, options = {}) => {
+    const targetWorkspace = normalizeWorkspaceRoot(workspaceRoot)
+    const targetDoc = docId.trim()
+    const emptyResult = {
+      cleared: false,
+      deletedThreadIds: [] as string[],
+      retainedThreadIds: [] as string[],
+      recreatedThreadId: null as string | null
+    }
+    if (!targetWorkspace || !targetDoc) {
+      set({ error: i18n.t('common:workspaceRequiredToCreateThread') })
+      return emptyResult
+    }
+    const registry = readDesignThreadRegistry()
+    const originalRecord = registry.workspaces[designDocKey(targetWorkspace, targetDoc)]
+    const originalThreadIds = [...new Set([
+      ...(originalRecord?.threadIds ?? []),
+      ...(options.includeThreadIds ?? []).map((threadId) => threadId.trim()).filter(Boolean)
+    ])]
+    const replaceRememberedThreads = (
+      threadIds: readonly string[],
+      preferredActiveThreadId?: string | null
+    ): void => {
+      saveDesignThreadRegistry(replaceDesignThreadsForDocument(
+        targetWorkspace,
+        targetDoc,
+        threadIds,
+        preferredActiveThreadId,
+        readDesignThreadRegistry()
+      ))
+    }
+    const restoreOriginalRecord = (): void => {
+      replaceRememberedThreads(originalThreadIds, originalRecord?.activeThreadId)
+    }
+    const fail = (
+      message: string,
+      retainedThreadIds: string[],
+      deletedThreadIds = originalThreadIds.filter((id) => !retainedThreadIds.includes(id))
+    ) => {
+      set({ error: message })
+      return {
+        ...emptyResult,
+        deletedThreadIds,
+        retainedThreadIds
+      }
+    }
+
+    const historyMutationToken = beginDesignChatHistoryMutation(targetWorkspace, targetDoc)
+    if (!historyMutationToken) {
+      return fail(i18n.t('common:designAgentBusy'), originalThreadIds, [])
+    }
+    let historyMutationReleased = false
+    const releaseHistoryMutation = (): void => {
+      if (historyMutationReleased) return
+      historyMutationReleased = true
+      endDesignChatHistoryMutation(historyMutationToken)
+    }
+
+    try {
+      // An empty registry can still have a stale local mirror after an earlier
+      // interrupted cleanup. Make the operation idempotently finish that work,
+      // but do not create a brand-new conversation when there was no history.
+      if (originalThreadIds.length === 0) {
+        await flushDesignPersistence(targetWorkspace)
+        const mirrorDeleted = await deleteDesignChatDir({
+          workspaceRoot: targetWorkspace,
+          docId: targetDoc
+        })
+        if (!mirrorDeleted) {
+          return fail('Failed to delete the local design conversation history.', [])
+        }
+        set({ error: null })
+        return { ...emptyResult, cleared: true }
+      }
+
+      if (get().runtimeConnection !== 'ready') {
+        return fail(
+          i18n.t('common:runtimeActionNeedsConnection'),
+          originalThreadIds,
+          []
+        )
+      }
+
+    const provider = getProvider()
+    // A registered thread can be absent from the renderer's paged snapshot.
+    // Ask Kun before deleting so an unloaded/racing active turn is treated as
+    // busy instead of being destroyed underneath the agent.
+    for (const threadId of originalThreadIds) {
+      const localThread = get().threads.find((thread) => thread.id === threadId)
+      if (
+        localThread && (
+          threadSnapshotLooksRunning([], localThread.status) ||
+          threadSnapshotLooksRunning([], localThread.latestTurnStatus)
+        )
+      ) {
+        return fail(i18n.t('common:designAgentBusy'), originalThreadIds, [])
+      }
+      try {
+        const detail = await provider.getThreadDetail(threadId)
+        if (threadSnapshotLooksRunning(detail.blocks, detail.threadStatus)) {
+          return fail(i18n.t('common:designAgentBusy'), originalThreadIds, [])
+        }
+      } catch (error) {
+        if (getRuntimeErrorCode(error) !== 'not_found') {
+          return fail(formatRuntimeError(error), originalThreadIds, [])
+        }
+      }
+    }
+    const runtimeDeletedIds: string[] = []
+    const runtimeFailedIds: string[] = []
+    const failureMessages: string[] = []
+    await Promise.all(originalThreadIds.map(async (threadId) => {
+      try {
+        await provider.deleteThread(threadId)
+        runtimeDeletedIds.push(threadId)
+      } catch (error) {
+        // A retry after an interrupted local cleanup commonly reaches a thread
+        // already removed from Kun. That is success for this idempotent action.
+        if (getRuntimeErrorCode(error) === 'not_found') {
+          runtimeDeletedIds.push(threadId)
+          return
+        }
+        runtimeFailedIds.push(threadId)
+        failureMessages.push(`${threadId}: ${formatRuntimeError(error)}`)
+      }
+    }))
+
+    const runtimeDeletedSet = new Set(runtimeDeletedIds)
+    const orderedRuntimeDeletedIds = originalThreadIds.filter((id) => runtimeDeletedSet.has(id))
+    const orderedRuntimeFailedIds = originalThreadIds.filter((id) => runtimeFailedIds.includes(id))
+    const preferredRetainedActive = originalRecord?.activeThreadId &&
+      orderedRuntimeFailedIds.includes(originalRecord.activeThreadId)
+      ? originalRecord.activeThreadId
+      : orderedRuntimeFailedIds[0]
+    // Removing successful ids before flushing prevents an in-flight transcript
+    // refresh from enqueueing a new mirror after cleanup begins.
+    replaceRememberedThreads(orderedRuntimeFailedIds, preferredRetainedActive)
+
+    for (const threadId of orderedRuntimeDeletedIds) {
+      forgetQueuedMessagesForThread(threadId)
+      saveWriteThreadRegistry(forgetWriteThread(threadId))
+      saveThreadForkRegistry(forgetThreadFork(threadId))
+      releaseThreadWorktreeIfNeeded(threadId)
+    }
+
+    const deletingActive = Boolean(get().activeThreadId && runtimeDeletedSet.has(get().activeThreadId!))
+    if (deletingActive) {
+      sseAbortRef.current?.abort()
+      sseAbortRef.current = null
+      clearBusyWatchdog()
+    }
+    set((state) => {
+      const watchTurnCompletion = { ...state.watchTurnCompletion }
+      const unreadThreadIds = { ...state.unreadThreadIds }
+      for (const threadId of orderedRuntimeDeletedIds) {
+        delete watchTurnCompletion[threadId]
+        delete unreadThreadIds[threadId]
+        clearWatchedCompletionNotification(threadId)
+      }
+      return {
+        threads: state.threads.filter((thread) => !runtimeDeletedSet.has(thread.id)),
+        watchTurnCompletion,
+        unreadThreadIds,
+        ...(deletingActive ? clearedThreadSelection() : {}),
+        error: null
+      }
+    })
+
+    await flushDesignPersistence(targetWorkspace)
+
+    if (orderedRuntimeFailedIds.length === 0) {
+      const mirrorDeleted = await deleteDesignChatDir({
+        workspaceRoot: targetWorkspace,
+        docId: targetDoc
+      })
+      if (!mirrorDeleted) {
+        // Keep the old ids as a durable retry journal. The next attempt treats
+        // Kun's not_found response as success and retries only local cleanup.
+        restoreOriginalRecord()
+        return fail(
+          'The conversations were deleted from Kun, but the local design history could not be removed.',
+          originalThreadIds,
+          orderedRuntimeDeletedIds
+        )
+      }
+
+      if (options.recreate === false) {
+        await get().refreshThreads()
+        set({ error: null })
+        return {
+          cleared: true,
+          deletedThreadIds: originalThreadIds,
+          retainedThreadIds: [],
+          recreatedThreadId: null
+        }
+      }
+
+      set({ error: null })
+      // The mirror directory is now gone and every older hydrate/persist read
+      // carries a stale epoch, so replacement-thread persistence can resume.
+      releaseHistoryMutation()
+      const recreatedThreadId = await get().createDesignThread(
+        targetWorkspace,
+        targetDoc,
+        { activate: false, suppressSettingsRedirect: true }
+      )
+      if (!recreatedThreadId && !get().error) {
+        set({ error: 'Design history was cleared, but a new conversation could not be created.' })
+      }
+      return {
+        cleared: true,
+        deletedThreadIds: originalThreadIds,
+        retainedThreadIds: [],
+        recreatedThreadId
+      }
+    }
+
+    // Runtime partial failure: preserve failed threads and their mirrors, while
+    // permanently removing mirrors belonging to successfully deleted threads.
+    if (orderedRuntimeDeletedIds.length === 0) {
+      await get().refreshThreads()
+      return fail(
+        `Design history could not be cleared: ${failureMessages.join('; ')}`,
+        originalThreadIds,
+        []
+      )
+    }
+    const mirrorDeleteResults = await Promise.all(orderedRuntimeDeletedIds.map(async (threadId) => ({
+      threadId,
+      deleted: await deleteDesignChatTranscript({
+        workspaceRoot: targetWorkspace,
+        docId: targetDoc,
+        threadId
+      })
+    })))
+    const mirrorFailedIds = mirrorDeleteResults
+      .filter((result) => !result.deleted)
+      .map((result) => result.threadId)
+    for (const threadId of mirrorFailedIds) {
+      failureMessages.push(`${threadId}: failed to delete the local transcript`)
+    }
+    const retainedSet = new Set([...orderedRuntimeFailedIds, ...mirrorFailedIds])
+    const retainedThreadIds = originalThreadIds.filter((id) => retainedSet.has(id))
+    const preferredActive = originalRecord?.activeThreadId && retainedSet.has(originalRecord.activeThreadId)
+      ? originalRecord.activeThreadId
+      : retainedThreadIds[0]
+    replaceRememberedThreads(retainedThreadIds, preferredActive)
+
+    const metaPersisted = await persistDesignChatMeta({
+      workspaceRoot: targetWorkspace,
+      docId: targetDoc,
+      mutationToken: historyMutationToken
+    })
+    if (!metaPersisted) {
+      restoreOriginalRecord()
+      failureMessages.push('failed to update the local design conversation index')
+      await get().refreshThreads()
+      return fail(
+        `Design history was only partially cleared: ${failureMessages.join('; ')}`,
+        originalThreadIds,
+        orderedRuntimeDeletedIds
+      )
+    }
+
+    await get().refreshThreads()
+    return fail(
+      `Design history was only partially cleared: ${failureMessages.join('; ')}`,
+      retainedThreadIds,
+      orderedRuntimeDeletedIds
+    )
+    } finally {
+      releaseHistoryMutation()
     }
   },
 

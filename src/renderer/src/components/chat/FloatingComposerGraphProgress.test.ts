@@ -184,18 +184,55 @@ describe('FloatingComposerGraphProgress', () => {
     ])
   })
 
-  it.each(['submitted', 'reviewing', 'repair_required'] as const)(
-    'flows into a %s node but not out toward waiting downstream work',
+  it.each(['submitted', 'reviewing'] as const)(
+    'keeps edges into a %s node static while no Lead lease exists',
     (status) => {
       const run = graphRun()
       run.nodes.implement!.status = status
 
       expect(layoutComposerGraph(run).edges.map((edge) => [edge.id, edge.flowing])).toEqual([
-        ['edge_audit_build', true],
+        ['edge_audit_build', false],
         ['edge_build_review', false]
       ])
+      expect(getComposerGraphProgress(run).activeCount).toBe(0)
     }
   )
+
+  it('flows into a review node only while the Lead holds active review work', () => {
+    const run = graphRun()
+    run.nodes.implement!.status = 'reviewing'
+    run.supervision = {
+      version: 1,
+      runId: run.id,
+      lastEventSeq: run.lastEventSeq,
+      leadActive: true,
+      liveness: 'active_review',
+      pendingActions: [{
+        obligationId: 'obligation_review',
+        pendingAction: 'review_required',
+        nodeIds: ['implement'],
+        liveness: 'active_review',
+        retryCount: 0,
+        noProgressCount: 0,
+        canWake: false
+      }],
+      canWake: false,
+      updatedAt: run.updatedAt
+    }
+
+    expect(layoutComposerGraph(run).edges.map((edge) => [edge.id, edge.flowing])).toEqual([
+      ['edge_audit_build', true],
+      ['edge_build_review', false]
+    ])
+    expect(getComposerGraphProgress(run).activeCount).toBe(1)
+  })
+
+  it('continues showing retry preparation as processing work', () => {
+    const run = graphRun()
+    run.nodes.implement!.status = 'repair_required'
+
+    expect(layoutComposerGraph(run).edges[0]?.flowing).toBe(true)
+  })
 
   it('separates zero accepted completion from an actively running node', () => {
     const run = graphRun()

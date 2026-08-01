@@ -22,6 +22,7 @@ import {
   GraphRunSummaryV1Schema,
   GraphRunV1Schema,
   GraphSteeringV1Schema,
+  GraphSupervisionObligationV1Schema,
   GraphTimestampSchema,
   GraphValidationResultV1Schema,
   GraphWorkerResultV1Schema
@@ -129,10 +130,14 @@ const GraphSupervisionEventPayload = z.object({
     'recovery',
     'completion',
     'user_steering',
-    'worker_report'
+    'worker_report',
+    'scheduler_error'
   ]),
   nodeIds: z.array(GraphNodeIdSchema).max(1_000).default([]),
   digest: GraphBoundedSummarySchema
+}).strict()
+const GraphSupervisionObligationEventPayload = z.object({
+  obligation: GraphSupervisionObligationV1Schema
 }).strict()
 const GraphRunSummaryEventPayload = z.object({
   summary: GraphRunSummaryV1Schema
@@ -164,6 +169,30 @@ export const GraphDomainEventV1Schema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('steering_status_changed'), payload: GraphSteeringStatusEventPayload }).strict(),
   z.object({ type: z.literal('cleanup_updated'), payload: GraphCleanupEventPayload }).strict(),
   z.object({ type: z.literal('supervision_requested'), payload: GraphSupervisionEventPayload }).strict(),
+  z.object({
+    type: z.literal('supervision_obligation_opened'),
+    payload: GraphSupervisionObligationEventPayload
+  }).strict(),
+  z.object({
+    type: z.literal('supervision_delivery_started'),
+    payload: GraphSupervisionObligationEventPayload
+  }).strict(),
+  z.object({
+    type: z.literal('supervision_retry_scheduled'),
+    payload: GraphSupervisionObligationEventPayload
+  }).strict(),
+  z.object({
+    type: z.literal('supervision_obligation_resolved'),
+    payload: GraphSupervisionObligationEventPayload
+  }).strict(),
+  z.object({
+    type: z.literal('supervision_attention_required'),
+    payload: GraphSupervisionObligationEventPayload
+  }).strict(),
+  z.object({
+    type: z.literal('supervision_obligation_updated'),
+    payload: GraphSupervisionObligationEventPayload
+  }).strict(),
   z.object({ type: z.literal('run_summary_recorded'), payload: GraphRunSummaryEventPayload }).strict(),
   z.object({ type: z.literal('payload_externalized'), payload: GraphPayloadExternalizedEventPayload }).strict()
 ])

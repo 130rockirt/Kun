@@ -31,6 +31,11 @@ const GraphJournalRecordSchema = z.object({
 }).strict()
 type GraphJournalRecord = z.infer<typeof GraphJournalRecordSchema>
 
+const PersistedGraphJournalRecordSchema = z.object({
+  checksum: z.string().regex(/^[a-f0-9]{64}$/),
+  envelope: z.unknown()
+}).strict()
+
 const GraphSnapshotRecordSchema = z.object({
   checksum: z.string().regex(/^[a-f0-9]{64}$/),
   state: GraphRunV1Schema,
@@ -42,6 +47,12 @@ const GraphSnapshotRecordSchema = z.object({
   }).strict()).max(2_048).default([])
 }).strict()
 type GraphSnapshotRecord = z.infer<typeof GraphSnapshotRecordSchema>
+
+const PersistedGraphSnapshotRecordSchema = z.object({
+  checksum: z.string().regex(/^[a-f0-9]{64}$/),
+  state: z.unknown(),
+  recentCommands: z.unknown().optional()
+}).strict()
 
 const GraphOutboxSchema = z.array(GraphEventEnvelopeV1Schema).max(10_000)
 
@@ -275,7 +286,7 @@ export class FileGraphRunStore implements GraphRunStore {
   async list(filter: GraphRunListFilter = {}): Promise<GraphRunV1[]> {
     await this.ensureRoot()
     const runs: GraphRunV1[] = []
-    const candidates = this.index.candidates(filter)
+    const candidates = await this.index.candidates(filter)
     for (const entry of candidates) {
       const run = await this.get(entry.runId).catch((error) => {
         const diagnostic = diagnosticForStoreError(entry.runId, error)
@@ -395,13 +406,21 @@ export class FileGraphRunStore implements GraphRunStore {
         if (index === rawLines.length - 1) break
         throw new GraphStoreCorruptionError(`invalid journal JSON at ${runId}:${index + 1}`)
       }
+      const persisted = PersistedGraphJournalRecordSchema.safeParse(raw)
+      if (!persisted.success) {
+        if (index === rawLines.length - 1) break
+        throw new GraphStoreCorruptionError(`invalid journal record at ${runId}:${index + 1}`)
+      }
+      // Hash the exact persisted JSON before Zod applies compatibility
+      // defaults or transforms. Schema evolution must not make an intact old
+      // record look corrupt merely because its normalized shape changed.
+      if (checksumJson(persisted.data.envelope) !== persisted.data.checksum) {
+        throw new GraphStoreCorruptionError(`journal checksum mismatch at ${runId}:${index + 1}`)
+      }
       const parsed = GraphJournalRecordSchema.safeParse(raw)
       if (!parsed.success) {
         if (index === rawLines.length - 1) break
         throw new GraphStoreCorruptionError(`invalid journal record at ${runId}:${index + 1}`)
-      }
-      if (checksumJson(parsed.data.envelope) !== parsed.data.checksum) {
-        throw new GraphStoreCorruptionError(`journal checksum mismatch at ${runId}:${index + 1}`)
       }
       const previousSeq = records.at(-1)?.envelope.graphSeq ??
         parsed.data.envelope.graphSeq - 1
@@ -419,16 +438,21 @@ export class FileGraphRunStore implements GraphRunStore {
   ): Promise<GraphSnapshotRecord | undefined> {
     try {
       const raw = JSON.parse(await readFile(this.snapshotPath(runId), 'utf8')) as unknown
-      const parsed = GraphSnapshotRecordSchema.safeParse(raw)
-      if (!parsed.success) return undefined
+      const persisted = PersistedGraphSnapshotRecordSchema.safeParse(raw)
+      if (!persisted.success) return undefined
       const currentChecksum = checksumJson({
-        state: parsed.data.state,
-        recentCommands: parsed.data.recentCommands
+        state: persisted.data.state,
+        recentCommands: persisted.data.recentCommands ?? []
       })
-      const legacyChecksum = checksumJson(parsed.data.state)
-      if (currentChecksum !== parsed.data.checksum && legacyChecksum !== parsed.data.checksum) {
+      const legacyChecksum = checksumJson(persisted.data.state)
+      if (
+        currentChecksum !== persisted.data.checksum &&
+        legacyChecksum !== persisted.data.checksum
+      ) {
         return undefined
       }
+      const parsed = GraphSnapshotRecordSchema.safeParse(raw)
+      if (!parsed.success) return undefined
       if (parsed.data.state.lastEventSeq > journalHighWater) return undefined
       return parsed.data
     } catch {
@@ -625,10 +649,18 @@ export class FileGraphRunStore implements GraphRunStore {
 
   private async ensureRoot(): Promise<void> {
     if (!this.ready) {
-      this.ready = (async () => {
+      const attempt = (async () => {
         await mkdir(this.options.rootDir, { recursive: true, mode: 0o700 })
         await this.index.initialize()
       })()
+      this.ready = attempt
+      void attempt.catch(() => {
+        // Initialization can observe a transiently unavailable/corrupt index
+        // while the manager is taking ownership of an existing data directory.
+        // Do not permanently poison this store instance: a later request must
+        // be able to retry after the underlying condition has been repaired.
+        if (this.ready === attempt) this.ready = undefined
+      })
     }
     return this.ready
   }

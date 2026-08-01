@@ -6,7 +6,11 @@ import {
   deleteArtifactDir,
   persistArtifactMeta
 } from './design-artifact-persistence'
-import { deleteDocumentDir, ensureDocumentDir } from './design-document-persistence'
+import {
+  ensureDocumentDir,
+  flushDocumentsIndex,
+  removePersistedDesignDocument
+} from './design-document-persistence'
 import { defaultPreviewNodeSizeForDesignTarget, hashDesignSystem, normalizeDesignTarget } from './design-context'
 import { parseProjectDesignMdWithOfficialLint } from './design-md/design-md-adapter'
 import { PROJECT_DESIGN_MD_PATH } from './design-md/design-md-paths'
@@ -64,13 +68,34 @@ export const useDesignWorkspaceStore = create<DesignWorkspaceState>((set, get) =
     getWorkspaceRoot: () => get().workspaceRoot,
     setFileError: (fileError) => set({ fileError })
   })
-  const persistIndex = (): void => persistDesignWorkspaceIndex(get())
-  const persistIndexNow = (): void => persistDesignWorkspaceIndex(get(), true)
+  const indexState = (): Pick<DesignWorkspaceState, 'workspaceRoot' | 'documents' | 'activeDocumentId'> => {
+    const state = get()
+    if (!state.drawingCreationOpen && !state.drawingCreationDocumentId) return state
+    const documents = state.drawingCreationDocumentId
+      ? state.documents.filter((document) => document.id !== state.drawingCreationDocumentId)
+      : state.documents
+    const activeDocumentId =
+      state.activeDocumentId !== state.drawingCreationDocumentId &&
+      documents.some((document) => document.id === state.activeDocumentId)
+        ? state.activeDocumentId
+        : state.drawingCreationReturnDocumentId &&
+            documents.some((document) => document.id === state.drawingCreationReturnDocumentId)
+          ? state.drawingCreationReturnDocumentId
+          : documents[0]?.id ?? null
+    return { workspaceRoot: state.workspaceRoot, documents, activeDocumentId }
+  }
+  const persistIndex = (): void => persistDesignWorkspaceIndex(indexState())
+  const persistIndexNow = (): void => persistDesignWorkspaceIndex(indexState(), true)
 
   return {
     workspaceRoot: '',
     documents: [],
     activeDocumentId: null,
+    drawingCreationOpen: false,
+    drawingCreationReturnDocumentId: null,
+    drawingCreationDocumentId: null,
+    drawingCreationSubmitting: false,
+    drawingHistoryMutation: null,
     artifacts: [],
     activeArtifactId: null,
     canvasView: readPersistedCanvasView(),
@@ -111,6 +136,10 @@ export const useDesignWorkspaceStore = create<DesignWorkspaceState>((set, get) =
         workspaceRoot: normalized,
         documents: [],
         activeDocumentId: null,
+        drawingCreationOpen: false,
+        drawingCreationReturnDocumentId: null,
+        drawingCreationDocumentId: null,
+        drawingCreationSubmitting: false,
         artifacts: [],
         activeArtifactId: null,
         fileError: null,
@@ -157,6 +186,7 @@ export const useDesignWorkspaceStore = create<DesignWorkspaceState>((set, get) =
         const doc: DesignDocument = {
           id,
           title: (title ?? '').trim() || id,
+          ...(options?.titleOrigin ? { titleOrigin: options.titleOrigin } : {}),
           createdAt,
           updatedAt: createdAt,
           order,
@@ -164,7 +194,13 @@ export const useDesignWorkspaceStore = create<DesignWorkspaceState>((set, get) =
           activeArtifactId: null
         }
         const documents = [...state.documents, doc]
-        return { documents, activeDocumentId: id, ...projectActiveDoc(documents, id), fileError: null }
+        return {
+          documents,
+          activeDocumentId: id,
+          ...(options?.transient ? { drawingCreationDocumentId: id } : {}),
+          ...projectActiveDoc(documents, id),
+          fileError: null
+        }
       })
       void ensureDocumentDir(get().workspaceRoot, id)
       if (options?.transient) persistIndex()
@@ -172,33 +208,184 @@ export const useDesignWorkspaceStore = create<DesignWorkspaceState>((set, get) =
       return id
     },
 
-    renameDocument: (documentId, title) => {
-      const trimmed = title.trim()
-      set((state) => ({
-        documents: state.documents.map((d) =>
-          d.id === documentId ? { ...d, title: trimmed || d.title, updatedAt: new Date().toISOString() } : d
-        )
-      }))
-      persistIndex()
+    beginDrawingCreation: () => {
+      if (get().drawingCreationSubmitting) return
+      resetDesignWorkspaceTransientStores()
+      set((state) => {
+        const provisionalId =
+          state.drawingCreationDocumentId &&
+          state.documents.some((document) => document.id === state.drawingCreationDocumentId)
+            ? state.drawingCreationDocumentId
+            : null
+        return {
+          drawingCreationOpen: true,
+          drawingCreationReturnDocumentId:
+            state.drawingCreationOpen
+              ? state.drawingCreationReturnDocumentId
+              : state.activeDocumentId,
+          activeDocumentId: provisionalId,
+          ...projectActiveDoc(state.documents, provisionalId),
+          fileError: null
+        }
+      })
     },
 
-    removeDocument: (documentId) => {
-      const workspaceRoot = get().workspaceRoot
-      markDesignDocumentRemoved(workspaceRoot, documentId)
-      const doc = get().documents.find((d) => d.id === documentId)
-      if (doc) {
-        for (const artifact of doc.artifacts) {
-          markDesignArtifactRemoved(workspaceRoot, artifact.id)
-        }
+    beginDrawingSubmission: () => {
+      if (get().drawingCreationSubmitting) return false
+      set({ drawingCreationSubmitting: true })
+      return true
+    },
+
+    endDrawingSubmission: () => set({ drawingCreationSubmitting: false }),
+
+    finishDrawingCreation: (documentId) => {
+      const targetId = (documentId ?? get().activeDocumentId ?? '').trim()
+      if (!targetId || !get().documents.some((doc) => doc.id === targetId)) {
+        set({ drawingCreationSubmitting: false })
+        return
       }
+      markDesignDocumentUserCreated(get().workspaceRoot, targetId)
+      set((state) => ({
+        drawingCreationOpen: false,
+        drawingCreationReturnDocumentId: null,
+        drawingCreationDocumentId: null,
+        drawingCreationSubmitting: false,
+        activeDocumentId: targetId,
+        ...projectActiveDoc(state.documents, targetId),
+        fileError: null
+      }))
+      persistIndexNow()
+    },
+
+    cancelDrawingCreation: () => {
+      set((state) => {
+        if (!state.drawingCreationOpen) return { drawingCreationSubmitting: false }
+        const committedDocuments = state.documents.filter(
+          (document) => document.id !== state.drawingCreationDocumentId
+        )
+        const targetId =
+          state.drawingCreationReturnDocumentId &&
+          committedDocuments.some((doc) => doc.id === state.drawingCreationReturnDocumentId)
+            ? state.drawingCreationReturnDocumentId
+            : committedDocuments[0]?.id ?? null
+        return {
+          drawingCreationOpen: false,
+          drawingCreationReturnDocumentId: null,
+          drawingCreationSubmitting: false,
+          activeDocumentId: targetId,
+          ...projectActiveDoc(state.documents, targetId),
+          fileError: null
+        }
+      })
+    },
+
+    renameDocument: (documentId, title, options) => {
+      const trimmed = title.trim()
+      if (!trimmed) return
+      set((state) => ({
+        documents: state.documents.map((d) =>
+          d.id === documentId
+            ? {
+                ...d,
+                title: trimmed,
+                titleOrigin: options?.titleOrigin ?? 'user',
+                updatedAt: new Date().toISOString()
+              }
+            : d
+        )
+      }))
+      persistIndexNow()
+    },
+
+    beginDrawingHistoryMutation: (workspaceRoot, documentId, kind) => {
+      const normalizedWorkspaceRoot = normalizeDesignWorkspaceRoot(workspaceRoot)
+      const normalizedDocumentId = documentId.trim()
+      if (!normalizedWorkspaceRoot || !normalizedDocumentId || get().drawingHistoryMutation) {
+        return false
+      }
+      set({
+        drawingHistoryMutation: {
+          workspaceRoot: normalizedWorkspaceRoot,
+          documentId: normalizedDocumentId,
+          kind
+        }
+      })
+      return true
+    },
+
+    endDrawingHistoryMutation: (workspaceRoot, documentId) => {
+      const current = get().drawingHistoryMutation
+      if (
+        !current ||
+        current.workspaceRoot !== normalizeDesignWorkspaceRoot(workspaceRoot) ||
+        current.documentId !== documentId.trim()
+      ) return
+      set({ drawingHistoryMutation: null })
+    },
+
+    removeDocument: async (documentId) => {
+      const snapshot = get()
+      const workspaceRoot = snapshot.workspaceRoot
+      const doc = snapshot.documents.find((d) => d.id === documentId)
+      if (!workspaceRoot || !doc) return false
+      const removingProvisionalDrawing = snapshot.drawingCreationDocumentId === documentId
+      const fallbackDocuments = removingProvisionalDrawing
+        ? snapshot.documents.filter((document) => document.id !== documentId)
+        : snapshot.documents
+      const fallbackActiveDocumentId = removingProvisionalDrawing
+        ? snapshot.drawingCreationReturnDocumentId &&
+            fallbackDocuments.some(
+              (document) => document.id === snapshot.drawingCreationReturnDocumentId
+            )
+          ? snapshot.drawingCreationReturnDocumentId
+          : fallbackDocuments[0]?.id ?? null
+        : snapshot.activeDocumentId
+      const removed = await removePersistedDesignDocument({
+        workspaceRoot,
+        documentId,
+        fallbackDocuments,
+        fallbackActiveDocumentId
+      })
+      if (!removed) return false
+
+      markDesignDocumentRemoved(workspaceRoot, documentId)
+      for (const artifact of doc.artifacts) {
+        markDesignArtifactRemoved(workspaceRoot, artifact.id)
+      }
+      if (
+        normalizeDesignWorkspaceRoot(get().workspaceRoot) !==
+          normalizeDesignWorkspaceRoot(workspaceRoot)
+      ) return true
       set((state) => {
         const documents = state.documents.filter((d) => d.id !== documentId)
         const activeDocumentId =
           state.activeDocumentId === documentId ? documents[0]?.id ?? null : state.activeDocumentId
-        return { documents, activeDocumentId, ...projectActiveDoc(documents, activeDocumentId), fileError: null }
+        const drawingCreationReturnDocumentId =
+          state.drawingCreationReturnDocumentId === documentId
+            ? documents[0]?.id ?? null
+            : state.drawingCreationReturnDocumentId
+        return {
+          documents,
+          activeDocumentId,
+          drawingCreationReturnDocumentId,
+          drawingCreationDocumentId:
+            state.drawingCreationDocumentId === documentId
+              ? null
+              : state.drawingCreationDocumentId,
+          ...projectActiveDoc(documents, activeDocumentId),
+          fileError: null
+        }
       })
-      persistIndexNow()
-      afterFlushingDesignWorkspace(workspaceRoot, () => { void deleteDocumentDir(workspaceRoot, documentId) })
+      // A debounced index write can be scheduled while the directory deletion
+      // is in flight. Replace it with the final in-memory projection so that a
+      // stale documents.json cannot resurrect the deleted drawing.
+      const finalIndexState = indexState()
+      await flushDocumentsIndex(
+        finalIndexState.workspaceRoot,
+        finalIndexState.documents,
+        finalIndexState.activeDocumentId
+      )
+      return true
     },
 
     switchActiveDocument: (documentId) => {
@@ -629,8 +816,6 @@ export const useDesignWorkspaceStore = create<DesignWorkspaceState>((set, get) =
           loadGeneration !== settingsLoadGeneration ||
           normalizeDesignWorkspaceRoot(get().workspaceRoot) !== normalizeDesignWorkspaceRoot(workspaceRoot)
         ) return
-        // Always land on an active 设计稿 so the canvas has somewhere to render.
-        if (get().documents.length === 0) get().createDocument()
       } finally {
         if (loadGeneration === settingsLoadGeneration) set({ settingsLoaded: true })
       }
@@ -674,6 +859,10 @@ export const useDesignWorkspaceStore = create<DesignWorkspaceState>((set, get) =
       set({
         documents: [],
         activeDocumentId: null,
+        drawingCreationOpen: false,
+        drawingCreationReturnDocumentId: null,
+        drawingCreationDocumentId: null,
+        drawingCreationSubmitting: false,
         artifacts: [],
         activeArtifactId: null,
         fileError: null,

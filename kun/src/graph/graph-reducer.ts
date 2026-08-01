@@ -270,6 +270,63 @@ export function applyGraphEvent(
     }
     case 'supervision_requested':
       break
+    case 'supervision_obligation_opened':
+    case 'supervision_delivery_started':
+    case 'supervision_retry_scheduled':
+    case 'supervision_obligation_resolved':
+    case 'supervision_attention_required':
+    case 'supervision_obligation_updated': {
+      const obligation = event.payload.obligation
+      const requiredState = event.type === 'supervision_obligation_opened'
+        ? 'pending'
+        : event.type === 'supervision_delivery_started'
+          ? 'delivering'
+          : event.type === 'supervision_retry_scheduled'
+            ? 'retry_scheduled'
+            : event.type === 'supervision_obligation_resolved'
+              ? 'resolved'
+              : event.type === 'supervision_attention_required'
+                ? 'needs_attention'
+                : undefined
+      if (requiredState && obligation.state !== requiredState) {
+        throw new GraphReducerError(
+          `${event.type} requires obligation state ${requiredState}`
+        )
+      }
+      const index = next.supervisionObligations.findIndex((entry) =>
+        entry.id === obligation.id)
+      if (index < 0) {
+        if (obligation.state === 'resolved') {
+          throw new GraphReducerError('a supervision obligation cannot be created as resolved')
+        }
+        next.supervisionObligations.push(obligation)
+        break
+      }
+      const previous = next.supervisionObligations[index]!
+      if (
+        previous.kind !== obligation.kind ||
+        previous.graphRevision !== obligation.graphRevision ||
+        !isDeepStrictEqual(previous.nodeIds, obligation.nodeIds) ||
+        !isDeepStrictEqual(previous.attemptIds, obligation.attemptIds)
+      ) {
+        throw new GraphReducerError(`supervision obligation subject changed: ${obligation.id}`)
+      }
+      const transitions: Record<typeof previous.state, readonly typeof obligation.state[]> = {
+        pending: ['pending', 'delivering', 'retry_scheduled', 'resolved', 'needs_attention'],
+        delivering: ['delivering', 'awaiting_action', 'retry_scheduled', 'resolved', 'needs_attention'],
+        awaiting_action: ['awaiting_action', 'delivering', 'retry_scheduled', 'resolved', 'needs_attention'],
+        retry_scheduled: ['retry_scheduled', 'pending', 'delivering', 'resolved', 'needs_attention'],
+        needs_attention: ['needs_attention', 'pending', 'delivering', 'resolved'],
+        resolved: ['resolved']
+      }
+      if (!transitions[previous.state].includes(obligation.state)) {
+        throw new GraphReducerError(
+          `illegal supervision obligation transition ${previous.state} -> ${obligation.state}`
+        )
+      }
+      next.supervisionObligations[index] = obligation
+      break
+    }
     case 'run_summary_recorded':
       next.summary = event.payload.summary
       break
@@ -305,6 +362,7 @@ function createRun(envelope: GraphEventEnvelopeV1): GraphRunV1 {
     artifacts: [],
     cleanup: [],
     steering: [],
+    supervisionObligations: [],
     budget: {
       version: GRAPH_CONTRACT_VERSION,
       limits: plan.budget,

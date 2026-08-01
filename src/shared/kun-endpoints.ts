@@ -129,6 +129,14 @@ export const KUN_GRAPH_RETRY_TEMPLATE = '/v1/graphs/{id}/retry'
 export const KUN_GRAPH_STEER_TEMPLATE = '/v1/graphs/{id}/steer'
 export const KUN_GRAPH_PATCH_TEMPLATE = '/v1/graphs/{id}/patch'
 export const KUN_GRAPH_REVIEWS_TEMPLATE = '/v1/graphs/{id}/reviews'
+export const KUN_GRAPH_SUPERVISION_TEMPLATE = '/v1/graphs/{id}/supervision'
+export const KUN_GRAPH_SUPERVISION_WAKE_TEMPLATE = '/v1/graphs/{id}/supervision/wake'
+export function kunGraphSupervisionPath(runId: string): string {
+  return `${kunGraphPath(runId)}/supervision`
+}
+export function kunGraphSupervisionWakePath(runId: string): string {
+  return `${kunGraphSupervisionPath(runId)}/wake`
+}
 export function kunGraphActionPath(
   runId: string,
   action: 'start' | 'pause' | 'resume' | 'cleanup' | 'cancel' | 'retry' | 'steer' | 'patch' | 'reviews'

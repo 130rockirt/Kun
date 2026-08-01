@@ -211,9 +211,11 @@ describe('resolveTuiConnection', () => {
       runtimeInfo: { buildId: expectedBuildId }
     })
     expect(ensureRuntime).toHaveBeenCalledWith({
+      controlDir: expect.stringContaining('.kun'),
       dataDir: root,
       fetch: fetchImpl,
-      expectedBuildId
+      expectedBuildId,
+      runtimeFlavor: 'production'
     })
   })
 

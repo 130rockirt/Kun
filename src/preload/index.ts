@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webFrame, webUtils } from 'electron'
 import type { KunGuiApi } from '../shared/kun-gui-api'
+import type { AppEnvironmentInfo } from '../shared/app-environment'
 import { registerExtensionContentScriptPreload } from './extension-content-script'
 
 registerExtensionContentScriptPreload({ contextBridge, ipcRenderer, webFrame })
@@ -11,9 +12,99 @@ const HOME_DIR_ARG = '--kun-home-dir='
 const homeDirFromArgs =
   process.argv.find((arg) => arg.startsWith(HOME_DIR_ARG))?.slice(HOME_DIR_ARG.length) ?? ''
 
+const APP_ENVIRONMENT_ARG = '--kun-app-environment='
+const appEnvironment = parseAppEnvironment(
+  process.argv.find((arg) => arg.startsWith(APP_ENVIRONMENT_ARG))?.slice(APP_ENVIRONMENT_ARG.length)
+)
+
+function parseAppEnvironment(encoded: string | undefined): AppEnvironmentInfo {
+  if (encoded) {
+    try {
+      const parsed = JSON.parse(decodeURIComponent(encoded)) as Partial<AppEnvironmentInfo>
+      if (
+        (parsed.flavor === 'production' || parsed.flavor === 'development') &&
+        parsed.runtimeFlavor === parsed.flavor &&
+        typeof parsed.appName === 'string' &&
+        typeof parsed.appId === 'string' &&
+        typeof parsed.profilePath === 'string' &&
+        typeof parsed.isPackaged === 'boolean'
+      ) {
+        return Object.freeze(parsed as AppEnvironmentInfo)
+      }
+    } catch {
+      // Fall through to a safe production-shaped snapshot. Main always sends
+      // the argument; the fallback keeps isolated renderer tests compatible.
+    }
+  }
+  return Object.freeze({
+    flavor: 'production',
+    appName: 'Kun',
+    appId: 'com.xingyuzhong.deepseekgui',
+    runtimeFlavor: 'production',
+    profilePath: '',
+    isPackaged: false
+  })
+}
+
 const api = {
   platform: process.platform,
   homeDir: homeDirFromArgs,
+  appEnvironment,
+  sharedClientState: {
+    read: () => ipcRenderer.invoke('shared-client-state:get'),
+    write: (expectedRevision, entries) =>
+      ipcRenderer.invoke('shared-client-state:put', { expectedRevision, entries })
+  },
+  connectors: {
+    health: () => ipcRenderer.invoke('connectors:health'),
+    start: () => ipcRenderer.invoke('connectors:start'),
+    stop: () => ipcRenderer.invoke('connectors:stop'),
+    catalog: () => ipcRenderer.invoke('connectors:catalog'),
+    provider: (service) => ipcRenderer.invoke('connectors:provider', { service }),
+    action: (actionId) => ipcRenderer.invoke('connectors:action', { actionId }),
+    connections: () => ipcRenderer.invoke('connectors:connections'),
+    connect: (input) => ipcRenderer.invoke('connectors:connect', input),
+    disconnect: (input) => ipcRenderer.invoke('connectors:disconnect', input),
+    setDefault: (input) => ipcRenderer.invoke('connectors:set-default', input),
+    oauthConfigs: () => ipcRenderer.invoke('connectors:oauth-configs'),
+    saveOAuthConfig: (input) => ipcRenderer.invoke('connectors:oauth-config:save', input),
+    deleteOAuthConfig: (service) => ipcRenderer.invoke('connectors:oauth-config:delete', { service }),
+    startOAuth: (input) => ipcRenderer.invoke('connectors:oauth:start', input),
+    pollOAuth: (input) => ipcRenderer.invoke('connectors:oauth:poll', input),
+    cancelOAuth: (input) => ipcRenderer.invoke('connectors:oauth:cancel', input),
+    startDeviceRegistration: (input) =>
+      ipcRenderer.invoke('connectors:device-registration:start', input),
+    pollDeviceRegistration: (input) =>
+      ipcRenderer.invoke('connectors:device-registration:poll', input),
+    cancelDeviceRegistration: (input) =>
+      ipcRenderer.invoke('connectors:device-registration:cancel', input),
+    openSetupHelp: (service) => ipcRenderer.invoke('connectors:setup-help', { service }),
+    policy: () => ipcRenderer.invoke('connectors:policy'),
+    updatePolicy: (input) => ipcRenderer.invoke('connectors:policy:update', input),
+    runs: (query) => ipcRenderer.invoke('connectors:runs', query ?? {}),
+    run: (id) => ipcRenderer.invoke('connectors:run', { id })
+  },
+  storageRelocation: {
+    getStatus: () => ipcRenderer.invoke('storage-relocation:status'),
+    pickDestination: (defaultPath) =>
+      ipcRenderer.invoke('storage-relocation:pick-destination', { defaultPath }),
+    preflight: (destinationRoot) =>
+      ipcRenderer.invoke('storage-relocation:preflight', { destinationRoot }),
+    schedule: (input) => ipcRenderer.invoke('storage-relocation:schedule', input),
+    restoreDefault: (interruptActiveWork) =>
+      ipcRenderer.invoke('storage-relocation:restore-default', { interruptActiveWork }),
+    cancel: (operationId) => ipcRenderer.invoke('storage-relocation:cancel', { operationId }),
+    retry: (operationId) => ipcRenderer.invoke('storage-relocation:retry', { operationId }),
+    rollback: (operationId) => ipcRenderer.invoke('storage-relocation:rollback', { operationId }),
+    onProgress: (handler) => {
+      const wrapped = (
+        _: Electron.IpcRendererEvent,
+        payload: Parameters<typeof handler>[0]
+      ) => handler(payload)
+      ipcRenderer.on('storage-relocation:progress', wrapped)
+      return () => ipcRenderer.removeListener('storage-relocation:progress', wrapped)
+    }
+  },
   dataMigration: {
     pickExportPackage: (defaultPath) => ipcRenderer.invoke('data-migration:pick-export', { defaultPath }),
     pickImportPackage: (defaultPath) => ipcRenderer.invoke('data-migration:pick-import', { defaultPath }),

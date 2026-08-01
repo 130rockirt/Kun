@@ -32,6 +32,8 @@ import {
 } from '../../design/design-types'
 import { collectAgentDrawingArtifactIds, groupDesignArtifacts } from '../../design/design-artifact-actions'
 import { findDesignBoardArtifact } from '../../design/design-board'
+import { displayDrawingTitle } from '../../design/design-drawing-title'
+import { drawingHistoryMutationMatches } from '../../design/design-drawing-history'
 import { useCanvasShapeStore } from '../../design/canvas/canvas-shape-store'
 import { useCanvasSelectionStore } from '../../design/canvas/canvas-selection-store'
 import { embeddedArtifactOf, isArtifactFrame, isHtmlFrame, shapeBounds } from '../../design/canvas/canvas-types'
@@ -51,6 +53,7 @@ type Props = {
   onDesignOpen: () => void
   onOpenSettings: (section?: SettingsRouteSection) => void
   onToggleTheme: () => void
+  onDeleteDrawing?: (documentId: string) => void | Promise<void>
 }
 
 export function getDesignSidebarVisibleArtifacts(artifacts: readonly DesignArtifact[]): DesignArtifact[] {
@@ -66,8 +69,11 @@ export function getDesignSidebarDocumentArtifactCount(doc: Pick<DesignDocument, 
   return getDesignSidebarVisibleArtifacts(doc.artifacts).filter((artifact) => isFileDesignArtifactKind(artifact.kind)).length
 }
 
-export function getDesignSidebarDocumentLabel(doc: Pick<DesignDocument, 'id'>): string {
-  return doc.id
+export function getDesignSidebarDocumentLabel(
+  doc: Pick<DesignDocument, 'id' | 'title' | 'titleOrigin'>,
+  untitledLabel = 'Untitled drawing'
+): string {
+  return displayDrawingTitle(doc, untitledLabel)
 }
 
 export function getDesignSidebarArtifactVersionBadge(artifact: DesignArtifact): string | null {
@@ -87,7 +93,8 @@ export function DesignSidebar({
   onWriteOpen,
   onDesignOpen,
   onOpenSettings,
-  onToggleTheme
+  onToggleTheme,
+  onDeleteDrawing
 }: Props): ReactElement {
   const { t } = useTranslation('common')
   const [isDarkMode, setIsDarkMode] = useState(
@@ -102,20 +109,24 @@ export function DesignSidebar({
     return () => observer.disconnect()
   }, [])
   const documents = useDesignWorkspaceStore((s) => s.documents)
+  const workspaceRoot = useDesignWorkspaceStore((s) => s.workspaceRoot)
   const activeDocumentId = useDesignWorkspaceStore((s) => s.activeDocumentId)
   const artifacts = useDesignWorkspaceStore((s) => s.artifacts)
   const activeArtifactId = useDesignWorkspaceStore((s) => s.activeArtifactId)
   const setActiveArtifact = useDesignWorkspaceStore((s) => s.setActiveArtifact)
   const removeArtifact = useDesignWorkspaceStore((s) => s.removeArtifact)
   const renameArtifact = useDesignWorkspaceStore((s) => s.renameArtifact)
-  const createDocument = useDesignWorkspaceStore((s) => s.createDocument)
+  const drawingCreationDocumentId = useDesignWorkspaceStore((s) => s.drawingCreationDocumentId)
+  const drawingCreationSubmitting = useDesignWorkspaceStore((s) => s.drawingCreationSubmitting)
+  const drawingHistoryMutation = useDesignWorkspaceStore((s) => s.drawingHistoryMutation)
+  const beginDrawingCreation = useDesignWorkspaceStore((s) => s.beginDrawingCreation)
+  const cancelDrawingCreation = useDesignWorkspaceStore((s) => s.cancelDrawingCreation)
   const renameDocument = useDesignWorkspaceStore((s) => s.renameDocument)
   const removeDocument = useDesignWorkspaceStore((s) => s.removeDocument)
   const switchActiveDocument = useDesignWorkspaceStore((s) => s.switchActiveDocument)
   const designSystemHash = useDesignWorkspaceStore((s) => s.designSystemHash)
   const closeImplementPanel = useDesignWorkspaceStore((s) => s.closeImplementPanel)
   const setDesignIntentMode = useDesignWorkspaceStore((s) => s.setDesignIntentMode)
-  const setCanvasAssistantOpen = useDesignWorkspaceStore((s) => s.setCanvasAssistantOpen)
   const activeArtifact = artifacts.find((a) => a.id === activeArtifactId) ?? null
 
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -164,14 +175,15 @@ export function DesignSidebar({
     () => visibleArtifacts.filter((artifact) => artifact.kind === 'html' && agentDrawingArtifactIds.has(artifact.id)),
     [agentDrawingArtifactIds, visibleArtifacts]
   )
-  const sortedDocuments = useMemo(
-    () => [...documents].sort((a, b) => a.order - b.order || a.createdAt.localeCompare(b.createdAt)),
-    [documents]
-  )
+  const sortedDocuments = useMemo(() => {
+    return documents
+      .filter((doc) => doc.id !== drawingCreationDocumentId)
+      .sort((a, b) => a.order - b.order || a.createdAt.localeCompare(b.createdAt))
+  }, [documents, drawingCreationDocumentId])
 
   const focusComposer = (): void => {
     requestAnimationFrame(() => {
-      document.querySelector<HTMLTextAreaElement>('[data-design-rail-composer] textarea')?.focus()
+      document.querySelector<HTMLTextAreaElement>('[data-design-start-composer] textarea')?.focus()
     })
   }
 
@@ -199,20 +211,23 @@ export function DesignSidebar({
     setEditingDocId(null)
   }
 
-  // New 设计稿: a fresh top-level container (its own canvas + conversation).
+  // New drawing: enter the transient launcher. The document is created only
+  // after the first prompt is accepted.
   const handleNewDocument = (): void => {
+    if (drawingCreationSubmitting) return
     closeImplementPanel()
     setDesignIntentMode('generate')
-    setCanvasAssistantOpen(true)
+    beginDrawingCreation()
     useCanvasSelectionStore.getState().clearSelection()
-    createDocument()
     focusComposer()
   }
 
   const handleSelectDocument = (documentId: string): void => {
+    if (drawingCreationSubmitting) return
     if (documentId === activeDocumentId) return
     closeImplementPanel()
     useCanvasSelectionStore.getState().clearSelection()
+    cancelDrawingCreation()
     switchActiveDocument(documentId)
   }
 
@@ -460,8 +475,13 @@ export function DesignSidebar({
 
   const renderDocument = (doc: DesignDocument): ReactElement => {
     const isActive = doc.id === activeDocumentId
+    const historyMutationPending = drawingHistoryMutationMatches(
+      drawingHistoryMutation,
+      workspaceRoot,
+      doc.id
+    )
     const artifactCount = getDesignSidebarDocumentArtifactCount(doc)
-    const documentLabel = getDesignSidebarDocumentLabel(doc)
+    const documentLabel = getDesignSidebarDocumentLabel(doc, t('designUntitledDrawing'))
     return (
       <li key={doc.id}>
         {editingDocId === doc.id ? (
@@ -481,9 +501,13 @@ export function DesignSidebar({
         ) : (
           <SidebarTreeRow
             active={isActive}
+            disabled={
+              drawingCreationSubmitting ||
+              (historyMutationPending && drawingHistoryMutation?.kind === 'delete')
+            }
             onClick={() => handleSelectDocument(doc.id)}
             onDoubleClick={() => beginRenameDoc(doc.id, documentLabel)}
-            title={`@${documentLabel}`}
+            title={documentLabel}
             className="min-h-[34px]"
             buttonClassName="items-center gap-2 px-2.5 py-2"
             trailing={
@@ -495,6 +519,7 @@ export function DesignSidebar({
               <>
                 <SidebarIconButton
                   onClick={() => beginRenameDoc(doc.id, documentLabel)}
+                  disabled={historyMutationPending || drawingCreationSubmitting}
                   title={t('designRenameDocument')}
                   ariaLabel={t('designRenameDocument')}
                   stopPropagation
@@ -502,9 +527,13 @@ export function DesignSidebar({
                   <Pencil className="h-3.5 w-3.5" strokeWidth={1.9} />
                 </SidebarIconButton>
                 <SidebarIconButton
-                  onClick={() => removeDocument(doc.id)}
+                  onClick={() => {
+                    if (onDeleteDrawing) void onDeleteDrawing(doc.id)
+                    else void removeDocument(doc.id)
+                  }}
                   title={t('designDeleteDocument')}
                   ariaLabel={t('designDeleteDocument')}
+                  disabled={Boolean(drawingHistoryMutation) || drawingCreationSubmitting}
                   tone="danger"
                   stopPropagation
                 >
@@ -519,7 +548,7 @@ export function DesignSidebar({
               <Folder className="h-3.5 w-3.5 shrink-0 text-ds-muted" strokeWidth={1.9} />
             )}
             <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
-              <span className="min-w-0 truncate font-mono">{documentLabel}</span>
+              <span className="min-w-0 truncate">{documentLabel}</span>
             </span>
           </SidebarTreeRow>
         )}
@@ -540,6 +569,8 @@ export function DesignSidebar({
                   icon={<Settings className="h-4 w-4" strokeWidth={1.75} />}
                   label={t('settings')}
                   onClick={() => onOpenSettings('design')}
+                  disabled={drawingCreationSubmitting}
+                  disabledHint={t('designDrawingPreparing')}
                   variant="footer"
                 />
               </div>
@@ -564,11 +595,15 @@ export function DesignSidebar({
             onCodeOpen={onCodeOpen}
             onWriteOpen={onWriteOpen}
             onDesignOpen={onDesignOpen}
+            disabled={drawingCreationSubmitting}
+            disabledReason={t('designDrawingPreparing')}
           />
           <SidebarCommandRow
             icon={<FilePlus2 className="h-4 w-4" strokeWidth={1.9} />}
             label={t('designNewDocument')}
             onClick={handleNewDocument}
+            disabled={drawingCreationSubmitting}
+            disabledHint={t('designDrawingPreparing')}
             variant="accent"
           />
         </div>

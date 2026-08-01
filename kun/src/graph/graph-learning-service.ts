@@ -1,5 +1,4 @@
-import { mkdir, readFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { join } from 'node:path'
 import {
   GRAPH_CONTRACT_VERSION,
   GraphAgentProfileVersionV1Schema,
@@ -14,7 +13,8 @@ import {
   type ProjectIdentityV1
 } from '../contracts/index.js'
 import type { GraphRuntimeConfig } from '../config/kun-config.js'
-import { atomicWriteFile } from '../adapters/file/atomic-write.js'
+import { AtomicJsonFile } from '../extensions/atomic-json.js'
+import { withManagerDataMutex } from '../manager/data-mutex.js'
 import type { ProjectAgentRegistry } from './project-agent-registry.js'
 import {
   GraphLearningStateSchema,
@@ -642,7 +642,8 @@ export class GraphLearningService {
 
   private enqueue<T>(projectId: string, operation: () => Promise<T>): Promise<T> {
     const previous = this.queues.get(projectId) ?? Promise.resolve()
-    const run = previous.catch(() => undefined).then(operation)
+    const run = previous.catch(() => undefined).then(() =>
+      withManagerDataMutex(`graph-learning:${projectId}`, operation))
     const guard = run.then(() => undefined, () => undefined)
     this.queues.set(projectId, guard)
     return run.finally(() => {
@@ -651,25 +652,23 @@ export class GraphLearningService {
   }
 
   private async load(projectId: string): Promise<GraphLearningState> {
-    const text = await readFile(this.statePath(projectId), 'utf8').catch((error) => {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
-      throw error
-    })
-    return text
-      ? GraphLearningStateSchema.parse(JSON.parse(text))
-      : {
-          version: GRAPH_CONTRACT_VERSION,
-          episodes: [],
-          jobs: [],
-          updatedAt: this.nowIso()
-        }
+    return new AtomicJsonFile(
+      this.statePath(projectId),
+      (value) => GraphLearningStateSchema.parse(value)
+    ).read(() => ({
+      version: GRAPH_CONTRACT_VERSION,
+      episodes: [],
+      jobs: [],
+      updatedAt: this.nowIso()
+    }))
   }
 
   private async persist(projectId: string, state: GraphLearningState): Promise<void> {
     state.updatedAt = this.nowIso()
-    const path = this.statePath(projectId)
-    await mkdir(dirname(path), { recursive: true, mode: 0o700 })
-    await atomicWriteFile(path, `${JSON.stringify(GraphLearningStateSchema.parse(state))}\n`)
+    await new AtomicJsonFile(
+      this.statePath(projectId),
+      (value) => GraphLearningStateSchema.parse(value)
+    ).write(GraphLearningStateSchema.parse(state))
   }
 
   private statePath(projectId: string): string {

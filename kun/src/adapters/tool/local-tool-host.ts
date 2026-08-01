@@ -73,11 +73,18 @@ export type LocalTool = {
   /**
    * Require the configured Kun reviewer even when the low-level policy would
    * otherwise allow the call. The canonical Full access pair bypasses this
-   * Kun-level gate; protected host/OS/OAuth consent remains independent.
+   * Kun-level gate unless `requiresApprovalInFullAccess` is also set;
+   * protected host/OS/OAuth consent remains independent.
    */
   requiresExplicitApproval?:
     | boolean
     | ((call: ToolCallLike, context: ToolHostContext) => boolean)
+  /**
+   * Keep the explicit approval boundary even for the canonical Full access
+   * pair. Reserved for external systems whose mutations cannot be rolled back
+   * locally (for example sending mail or deleting a cloud resource).
+   */
+  requiresApprovalInFullAccess?: boolean
   /**
    * String argument names that are exact file mutation targets eligible for a
    * one-call external workspace grant. Tools must opt in explicitly; merely
@@ -319,12 +326,14 @@ export class LocalToolHost implements ToolHost {
     const fullAccess =
       context.approvalPolicy === 'auto' &&
       effectiveSandboxMode(context) === 'danger-full-access'
-    const needsApproval = !fullAccess && (
+    const needsApproval = (
+      tool.requiresApprovalInFullAccess === true && explicitApprovalRequired
+    ) || (!fullAccess && (
       externalPathApproval ||
       workspaceCommandApproval ||
       explicitApprovalRequired ||
       (!preHooks.autoApproved && this.requiresApproval(tool, activeCall, context))
-    )
+    ))
     let kunActionApprovalGrant: ToolHostContext['kunActionApprovalGrant']
     if (needsApproval) {
       const approvalId = `appr_${randomUUID().replaceAll('-', '')}`
@@ -472,11 +481,13 @@ export class LocalToolHost implements ToolHost {
     const ungrantedContext = { ...context }
     delete ungrantedContext.approvedExternalWriteTargets
     delete ungrantedContext.kunActionApprovalGrant
+    delete ungrantedContext.activeToolCallId
     const approvedExternalWriteTargets = Object.freeze(
       externalWriteTargets.map((target) => Object.freeze({ ...target }))
     )
     const executionContext = {
       ...ungrantedContext,
+      activeToolCallId: activeCall.callId,
       ...(externalPathApproval ? { approvedExternalWriteTargets } : {}),
       ...(kunActionApprovalGrant ? { kunActionApprovalGrant } : {})
     }
@@ -695,6 +706,9 @@ export class LocalToolHost implements ToolHost {
       ...(tool.shouldAdvertise ? { shouldAdvertise: tool.shouldAdvertise } : {}),
       ...(tool.requiresExplicitApproval
         ? { requiresExplicitApproval: tool.requiresExplicitApproval }
+        : {}),
+      ...(tool.requiresApprovalInFullAccess
+        ? { requiresApprovalInFullAccess: true }
         : {}),
       ...(tool.externalWritePathArguments?.length
         ? { externalWritePathArguments: [...tool.externalWritePathArguments] }

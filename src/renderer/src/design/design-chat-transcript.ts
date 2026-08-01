@@ -8,7 +8,10 @@ import {
   saveDesignThreadRegistry,
   type DesignThreadWorkspaceRecord
 } from './design-thread-registry'
-import { writeDesignWorkspaceFile } from './design-persistence-coordinator'
+import {
+  normalizeDesignPersistenceWorkspaceRoot,
+  writeDesignWorkspaceFile
+} from './design-persistence-coordinator'
 
 /**
  * Mirrors Design Assistant conversations into the owning design document dir:
@@ -29,6 +32,66 @@ export type DesignChatMeta = {
 type ChatStateLike = {
   activeThreadId: string | null
   blocks: ChatBlock[]
+}
+
+export type DesignChatHistoryMutationToken = {
+  key: string
+  epoch: number
+}
+
+type DesignChatHistoryMutationState = {
+  epoch: number
+  suspended: boolean
+}
+
+const chatHistoryMutationStates = new Map<string, DesignChatHistoryMutationState>()
+
+function chatHistoryMutationKey(workspaceRoot: string, docId: string): string {
+  return `${normalizeDesignPersistenceWorkspaceRoot(workspaceRoot)}\0${docId.trim()}`
+}
+
+/**
+ * Fence transcript/meta hydration while a drawing's history is being removed.
+ * Incrementing the epoch also invalidates reads which began before the clear.
+ */
+export function beginDesignChatHistoryMutation(
+  workspaceRoot: string,
+  docId: string
+): DesignChatHistoryMutationToken | null {
+  const key = chatHistoryMutationKey(workspaceRoot, docId)
+  if (!normalizeDesignPersistenceWorkspaceRoot(workspaceRoot) || !docId.trim()) return null
+  const current = chatHistoryMutationStates.get(key) ?? { epoch: 0, suspended: false }
+  if (current.suspended) return null
+  const next = { epoch: current.epoch + 1, suspended: true }
+  chatHistoryMutationStates.set(key, next)
+  return { key, epoch: next.epoch }
+}
+
+export function endDesignChatHistoryMutation(token: DesignChatHistoryMutationToken): void {
+  const current = chatHistoryMutationStates.get(token.key)
+  if (!current || current.epoch !== token.epoch) return
+  chatHistoryMutationStates.set(token.key, { ...current, suspended: false })
+}
+
+function captureDesignChatHistoryEpoch(workspaceRoot: string, docId: string): number | null {
+  const state = chatHistoryMutationStates.get(chatHistoryMutationKey(workspaceRoot, docId))
+  return state?.suspended ? null : state?.epoch ?? 0
+}
+
+function designChatHistoryAccessIsCurrent(input: {
+  workspaceRoot: string
+  docId: string
+}, epoch: number, mutationToken?: DesignChatHistoryMutationToken): boolean {
+  const key = chatHistoryMutationKey(input.workspaceRoot, input.docId)
+  const state = chatHistoryMutationStates.get(key) ?? { epoch: 0, suspended: false }
+  if (mutationToken) {
+    return mutationToken.key === key && mutationToken.epoch === state.epoch && state.suspended
+  }
+  return !state.suspended && state.epoch === epoch
+}
+
+export function clearDesignChatHistoryMutationsForTests(): void {
+  chatHistoryMutationStates.clear()
 }
 
 function safePathSegment(value: string): string {
@@ -62,7 +125,7 @@ export function serializeDesignChatTranscript(
   const lines: string[] = [
     '# 设计 Agent 对话记录',
     '',
-    ...(options.docId ? [`- 设计稿: ${options.docId}`] : []),
+    ...(options.docId ? [`- 绘画目录: ${options.docId}`] : []),
     `- 线程: ${options.threadId}`,
     `- 更新时间: ${options.generatedAt ?? new Date().toISOString()}`
   ]
@@ -93,6 +156,87 @@ export function serializeDesignChatTranscript(
     }
   }
   return `${lines.join('\n')}\n`
+}
+
+export function firstUserPromptFromDesignTranscript(raw: string): string {
+  const match = raw.match(/(?:^|\n)## 用户\s*\n+([\s\S]*?)(?=\n(?:---\s*\n|##\s)|$)/)
+  return match?.[1]?.trim() ?? ''
+}
+
+function threadStillBelongsToDoc(input: {
+  workspaceRoot: string
+  docId: string
+  threadId: string
+}): boolean {
+  const ref = designDocRefForThreadId(input.threadId)
+  return Boolean(
+    ref &&
+    normalizeDesignPersistenceWorkspaceRoot(ref.workspaceRoot) ===
+      normalizeDesignPersistenceWorkspaceRoot(input.workspaceRoot) &&
+    ref.docId === input.docId
+  )
+}
+
+function missingEntryMessage(message: string): boolean {
+  return /(?:enoent|no such file|not found)/i.test(message)
+}
+
+async function deleteDesignChatEntry(input: {
+  workspaceRoot: string
+  path: string
+}): Promise<boolean> {
+  if (typeof window.kunGui?.deleteWorkspaceEntry !== 'function') return false
+  try {
+    const result = await window.kunGui.deleteWorkspaceEntry(input)
+    return result.ok || missingEntryMessage(result.message)
+  } catch (error) {
+    return missingEntryMessage(error instanceof Error ? error.message : String(error))
+  }
+}
+
+export async function deleteDesignChatTranscriptForThread(input: {
+  workspaceRoot: string
+  docId: string
+  threadId: string
+}): Promise<boolean> {
+  const path = designChatTranscriptRelativePath(input.docId, input.threadId)
+  if (!path) return false
+  return deleteDesignChatEntry({
+    workspaceRoot: input.workspaceRoot,
+    path
+  })
+}
+
+export async function deleteDesignChatDirForDoc(input: {
+  workspaceRoot: string
+  docId: string
+}): Promise<boolean> {
+  const path = designChatDir(input.docId)
+  if (!path) return false
+  return deleteDesignChatEntry({
+    workspaceRoot: input.workspaceRoot,
+    path
+  })
+}
+
+export async function readFirstDesignPromptFromMirrors(input: {
+  workspaceRoot: string
+  docId: string
+  threadIds: readonly string[]
+}): Promise<string> {
+  if (typeof window.kunGui?.readWorkspaceFile !== 'function') return ''
+  for (const threadId of input.threadIds) {
+    const path = designChatTranscriptRelativePath(input.docId, threadId)
+    if (!path) continue
+    const read = await window.kunGui.readWorkspaceFile({
+      workspaceRoot: input.workspaceRoot,
+      path
+    }).catch(() => null)
+    if (!read?.ok) continue
+    const prompt = firstUserPromptFromDesignTranscript(read.content)
+    if (prompt) return prompt
+  }
+  return ''
 }
 
 export function parseDesignChatMeta(raw: string): DesignChatMeta | null {
@@ -133,10 +277,26 @@ function validThreadIds(ids: Array<{ id: string }>): string[] {
   return [...ordered]
 }
 
+function snapshotDesignThreadRecord(
+  record: Readonly<DesignThreadWorkspaceRecord>
+): DesignThreadWorkspaceRecord | null {
+  const threadIds = validThreadIds(record.threadIds.map((id) => ({ id })))
+  if (threadIds.length === 0) return null
+  const requestedActiveThreadId = record.activeThreadId.trim()
+  return {
+    activeThreadId: threadIds.includes(requestedActiveThreadId)
+      ? requestedActiveThreadId
+      : threadIds[0],
+    threadIds
+  }
+}
+
 export async function hydrateDesignChatMetaForDoc(input: {
   workspaceRoot: string
   docId: string
 }): Promise<boolean> {
+  const historyEpoch = captureDesignChatHistoryEpoch(input.workspaceRoot, input.docId)
+  if (historyEpoch === null) return false
   const metaPath = designChatMetaPath(input.docId)
   if (!metaPath || typeof window.kunGui?.readWorkspaceFile !== 'function') return false
   try {
@@ -148,6 +308,7 @@ export async function hydrateDesignChatMetaForDoc(input: {
     const meta = parseDesignChatMeta(read.content)
     const metaThreadIds = meta ? validThreadIds(meta.threads) : []
     if (!meta || metaThreadIds.length === 0) return false
+    if (!designChatHistoryAccessIsCurrent(input, historyEpoch)) return false
 
     const registry = readDesignThreadRegistry()
     const key = designDocKey(input.workspaceRoot, input.docId)
@@ -161,6 +322,7 @@ export async function hydrateDesignChatMetaForDoc(input: {
         : threadIds.includes(meta.activeThreadId)
           ? meta.activeThreadId
           : threadIds[0]
+    if (!designChatHistoryAccessIsCurrent(input, historyEpoch)) return false
     saveDesignThreadRegistry(
       normalizeDesignThreadRegistry({
         ...registry,
@@ -180,10 +342,24 @@ export async function persistDesignChatMetaForDoc(input: {
   workspaceRoot: string
   docId: string
   stampThreadId?: string
+  mutationToken?: DesignChatHistoryMutationToken
+  /**
+   * Stable binding captured by the caller before asynchronous disk access.
+   * Initial drawing creation uses this so a transient renderer-registry loss
+   * cannot prevent the document directory from recording its owning thread.
+   */
+  record?: Readonly<DesignThreadWorkspaceRecord>
 }): Promise<boolean> {
+  const explicitRecord = input.record ? snapshotDesignThreadRecord(input.record) : null
+  if (input.record && !explicitRecord) return false
+  const historyEpoch = input.mutationToken?.epoch ??
+    captureDesignChatHistoryEpoch(input.workspaceRoot, input.docId)
+  if (historyEpoch === null) return false
   const metaPath = designChatMetaPath(input.docId)
-  const record = recordForDesignDoc(input.workspaceRoot, input.docId)
-  if (!metaPath || !record) return false
+  if (
+    !metaPath ||
+    !designChatHistoryAccessIsCurrent(input, historyEpoch, input.mutationToken)
+  ) return false
   if (
     typeof window.kunGui?.writeWorkspaceFile !== 'function' ||
     typeof window.kunGui?.readWorkspaceFile !== 'function'
@@ -202,6 +378,13 @@ export async function persistDesignChatMetaForDoc(input: {
     // Missing or unreadable meta is regenerated from the current registry.
   }
 
+  if (!designChatHistoryAccessIsCurrent(input, historyEpoch, input.mutationToken)) return false
+  // Normal history updates re-read after the asynchronous disk read so a
+  // cleared/reduced registry cannot be resurrected. Initial creation instead
+  // supplies an explicit immutable snapshot and is protected by the same
+  // history-mutation epoch fence above.
+  const record = explicitRecord ?? recordForDesignDoc(input.workspaceRoot, input.docId)
+  if (!record) return false
   const previousById = new Map((previous?.threads ?? []).map((entry) => [entry.id, entry]))
   const now = new Date().toISOString()
   const meta: DesignChatMeta = {
@@ -215,6 +398,7 @@ export async function persistDesignChatMetaForDoc(input: {
   }
 
   try {
+    if (!designChatHistoryAccessIsCurrent(input, historyEpoch, input.mutationToken)) return false
     const written = await writeDesignWorkspaceFile({
       workspaceRoot: input.workspaceRoot,
       path: metaPath,
@@ -233,6 +417,7 @@ export async function writeDesignChatTranscriptForThread(input: {
   blocks: ChatBlock[]
 }): Promise<boolean> {
   if (typeof window.kunGui?.writeWorkspaceFile !== 'function') return false
+  if (!threadStillBelongsToDoc(input)) return false
   const transcriptPath = designChatTranscriptRelativePath(input.docId, input.threadId)
   if (!transcriptPath) return false
   try {
@@ -245,6 +430,7 @@ export async function writeDesignChatTranscriptForThread(input: {
       })
     })
     if (!written.ok) return false
+    if (!threadStillBelongsToDoc(input)) return false
     await persistDesignChatMetaForDoc({
       workspaceRoot: input.workspaceRoot,
       docId: input.docId,
@@ -279,6 +465,7 @@ export async function refreshDesignChatTranscriptFromProvider(input: {
   if (!threadId) return
   try {
     const detail = await getProvider().getThreadDetail(threadId)
+    if (!threadStillBelongsToDoc({ ...input, threadId })) return
     await writeDesignChatTranscriptForThread({
       workspaceRoot: input.workspaceRoot,
       docId: input.docId,

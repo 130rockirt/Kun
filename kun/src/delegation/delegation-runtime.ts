@@ -34,6 +34,8 @@ import type { SubagentRoutingDocument } from './subagent-router.js'
 import { BUILTIN_SUBAGENT_PROFILES } from './builtin-profiles.js'
 import { BUILTIN_AGENT_CATALOG_BY_ID } from './builtin-agent-catalog.js'
 import { resolveTurnClientSurface } from '../loop/turn-context-resolver.js'
+import { AtomicJsonFile, isManagerAtomicJsonPath } from '../extensions/atomic-json.js'
+import { withManagerDataMutex } from '../manager/data-mutex.js'
 
 const ChildRunUsage = z.object({
   promptTokens: z.number().int().nonnegative().default(0),
@@ -267,7 +269,17 @@ export class FileDelegationStore {
 
   async upsert(record: ChildRunRecord): Promise<void> {
     await this.ensureRoot()
-    await writeFile(join(this.rootDir, `${record.id}.json`), JSON.stringify(record, null, 2), { encoding: 'utf8', mode: 0o600 })
+    const path = join(this.rootDir, `${record.id}.json`)
+    await withManagerDataMutex(`delegation-run:${record.id}`, () =>
+      isManagerAtomicJsonPath(path)
+        ? new AtomicJsonFile(
+            path,
+            (value) => ChildRunRecord.parse(value)
+          ).write(record)
+        : writeFile(path, JSON.stringify(record, null, 2), {
+            encoding: 'utf8',
+            mode: 0o600
+          }))
   }
 
   async list(parentThreadId?: string): Promise<ChildRunRecord[]> {

@@ -19,6 +19,8 @@ export type CoreItemStatus =
 export type CoreThreadSummaryJson = {
   id: string
   title: string
+  /** Durable product surface that owns the thread. Absent for legacy Code threads. */
+  agentSurface?: 'code' | 'write' | 'design'
   /** Whether the title is auto/provisional (see ThreadSchema.titleAuto on the core). */
   titleAuto?: boolean
   /** Optional whole-conversation summary produced by the summarize route. */

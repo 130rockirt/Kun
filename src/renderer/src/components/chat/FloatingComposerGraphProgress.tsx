@@ -319,7 +319,7 @@ export function FloatingComposerGraphPreview({
   const inspectedProjection = inspectedNode ? run.nodes[inspectedNode.id] : undefined
   const inspectedAttempt = inspectedProjection?.attempts.at(-1)
   const inspectedLiveness = inspectedProjection
-    ? graphNodeLiveness(inspectedProjection, childRuns, now)
+    ? graphNodeLiveness(inspectedProjection, childRuns, now, run.supervision)
     : null
 
   return (
@@ -415,15 +415,21 @@ export function FloatingComposerGraphPreview({
                   ? 'failed'
                   : inspectedNode.status === 'accepted'
                     ? 'done'
-                    : inspectedNode.status === 'blocked'
+                  : inspectedNode.status === 'blocked'
                       ? 'queued'
-                      : inspectedNode.status === 'reviewing' ||
-                          inspectedNode.status === 'repair_required'
+                      : inspectedLiveness && [
+                          'active_review',
+                          'waiting_lead',
+                          'retry_scheduled',
+                          'needs_attention',
+                          'waiting_human',
+                          'retrying'
+                        ].includes(inspectedLiveness.kind)
                         ? 'awaiting-permission'
                         : 'running'
               }
               compact
-              animate={!terminal && inspectedNode.status === 'running'}
+              animate={!terminal && inspectedLiveness?.kind === 'working'}
             />
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2 text-[11px]">
@@ -527,7 +533,7 @@ export function FloatingComposerGraphProgress({
     ? run.nodes[progress.currentNodeId]
     : undefined
   const currentLiveness = currentProjection
-    ? graphNodeLiveness(currentProjection, childRuns, now)
+    ? graphNodeLiveness(currentProjection, childRuns, now, run?.supervision)
     : null
 
   useEffect(() => {

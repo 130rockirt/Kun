@@ -82,7 +82,14 @@ describe('DesignSidebar helpers', () => {
     expect(getDesignSidebarArtifactVersionBadge(svg)).toBe('v3')
   })
 
-  it('uses the document ID as the sidebar label', () => {
-    expect(getDesignSidebarDocumentLabel({ id: 'a1b2c3d4' })).toBe('a1b2c3d4')
+  it('uses the drawing title as the sidebar label and never exposes an id fallback', () => {
+    expect(getDesignSidebarDocumentLabel({
+      id: 'a1b2c3d4',
+      title: 'Travel dashboard'
+    })).toBe('Travel dashboard')
+    expect(getDesignSidebarDocumentLabel({
+      id: 'a1b2c3d4',
+      title: 'a1b2c3d4'
+    })).toBe('Untitled drawing')
   })
 })

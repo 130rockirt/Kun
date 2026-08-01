@@ -44,6 +44,7 @@ import {
   upsertScore
 } from './project-agent-registry-policy.js'
 import { graphPhysicalPathIdentity } from './graph-platform-path.js'
+import { withManagerDataMutex } from '../manager/data-mutex.js'
 
 export { scoreProfile } from './project-agent-registry-policy.js'
 import type {
@@ -660,7 +661,8 @@ export class FileProjectAgentRegistry implements ProjectAgentRegistry {
 
   private enqueue<T>(projectId: string, operation: () => Promise<T>): Promise<T> {
     const previous = this.queues.get(projectId) ?? Promise.resolve()
-    const run = previous.catch(() => undefined).then(operation)
+    const run = previous.catch(() => undefined).then(() =>
+      withManagerDataMutex(`project-agent-registry:${projectId}`, operation))
     const guard = run.then(() => undefined, () => undefined)
     this.queues.set(projectId, guard)
     return run.finally(() => {

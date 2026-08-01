@@ -140,6 +140,7 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
   const {
     t,
     tCommon,
+    openStorageSettings,
     form,
     kun,
     update,
@@ -224,6 +225,9 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
     splitSettingsList,
     listSettingsText
   } = ctx
+  const productionManagedDataDir = typeof window !== 'undefined' &&
+    window.kunGui?.appEnvironment?.flavor === 'production'
+  const windowsStorageManagement = productionManagedDataDir && window.kunGui?.platform === 'win32'
   const mcpSearch = kun.mcpSearch ?? {
     enabled: false,
     mode: 'auto',
@@ -702,12 +706,22 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
                     title={t('kunDataDir')}
                     description={t('kunDataDirDesc')}
                     control={
-                      <input
-                        className="w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30 md:max-w-md"
-                        placeholder={DEFAULT_KUN_DATA_DIR}
-                        value={compactHomePath(kun.dataDir)}
-                        onChange={(e) => updateKun({ dataDir: expandHomePath(e.target.value) })}
-                      />
+                      <div className="flex w-full min-w-0 gap-2 md:max-w-md">
+                        <input
+                          readOnly={productionManagedDataDir}
+                          className="min-w-0 flex-1 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm read-only:cursor-default read-only:text-ds-muted focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30"
+                          placeholder={DEFAULT_KUN_DATA_DIR}
+                          value={compactHomePath(kun.dataDir)}
+                          onChange={(e) => {
+                            if (!productionManagedDataDir) {
+                              updateKun({ dataDir: expandHomePath(e.target.value) })
+                            }
+                          }}
+                        />
+                        {windowsStorageManagement ? (
+                          <button type="button" className="secondary-button shrink-0" onClick={openStorageSettings}>{t('storageRelocation')}</button>
+                        ) : null}
+                      </div>
                     }
                   />
                   <SettingRow

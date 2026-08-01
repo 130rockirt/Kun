@@ -1,0 +1,3 @@
+# Materialized only by scripts/prepare-open-connector-runtime.cjs.
+# Keep the lock file in source control, never the expanded third-party runtime.
+/current/*

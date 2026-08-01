@@ -34,4 +34,11 @@ describe('ManagedRuntimeShutdownCoordinator', () => {
     expect(stop).toHaveBeenCalledTimes(2)
     expect(coordinator.isQuitInProgress).toBe(false)
   })
+
+  it('treats storage relocation as terminal quit intent', () => {
+    const coordinator = new ManagedRuntimeShutdownCoordinator(async () => undefined)
+    coordinator.setStorageRelocationQuit(true)
+    expect(coordinator.isStorageRelocationQuit).toBe(true)
+    expect(coordinator.isQuitInProgress).toBe(true)
+  })
 })

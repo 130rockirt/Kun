@@ -10,7 +10,7 @@ import type { RuntimeEvent } from '../../contracts/events.js'
 import type { TurnItem } from '../../contracts/items.js'
 import type { ThreadStore, ThreadStoreListOptions } from '../../ports/thread-store.js'
 import type { SessionLatestUsageSnapshot, SessionUsageRecord } from '../../ports/session-store.js'
-import { toThreadSummary } from '../../domain/thread.js'
+import { resolveThreadAgentSurface, toThreadSummary } from '../../domain/thread.js'
 import { assertSafeThreadId, isSafeThreadId } from '../../contracts/thread-id.js'
 import { readJsonl } from '../file/file-thread-store.js'
 import {
@@ -109,7 +109,7 @@ export class HybridThreadStore implements ThreadStore {
         const summaries: ThreadSummary[] = []
         for (const row of rows) {
           if (await this.rowHasReadableJsonl(row)) {
-            summaries.push(summaryFromRow(row))
+            summaries.push(summaryFromRow(await this.ensureRowAgentSurface(row)))
           } else {
             this.deleteIndexRow(row.id)
           }
@@ -360,6 +360,7 @@ export class HybridThreadStore implements ThreadStore {
         title TEXT NOT NULL,
         workspace TEXT NOT NULL,
         model TEXT NOT NULL,
+        agent_surface TEXT,
         mode TEXT NOT NULL,
         status TEXT NOT NULL,
         approval_policy TEXT NOT NULL,
@@ -417,6 +418,7 @@ export class HybridThreadStore implements ThreadStore {
     addColumnIfMissing(this.db, 'threads', 'model_request_capture_enabled INTEGER NOT NULL DEFAULT 0')
     addColumnIfMissing(this.db, 'threads', "approval_reviewer TEXT NOT NULL DEFAULT 'user'")
     addColumnIfMissing(this.db, 'threads', 'usage_backfilled INTEGER NOT NULL DEFAULT 0')
+    addColumnIfMissing(this.db, 'threads', 'agent_surface TEXT')
   }
 
   private cachedStatement(sql: string): Statement {
@@ -493,6 +495,26 @@ export class HybridThreadStore implements ThreadStore {
 
   private findRow(threadId: string): ThreadRow | null {
     return this.index?.find(threadId) ?? null
+  }
+
+  /**
+   * Old SQLite indexes predate durable surface ownership. Resolve a null cell
+   * once from canonical metadata, including conservative homogeneous-history
+   * inference, then persist even the Code fallback so later lists stay index-only.
+   */
+  private async ensureRowAgentSurface(row: ThreadRow): Promise<ThreadRow> {
+    if (row.agent_surface !== null) return row
+    const thread = await this.readThreadMetadataFromDisk(row.id)
+    const agentSurface = thread ? resolveThreadAgentSurface(thread) : 'code'
+    if (this.db) {
+      try {
+        this.cachedStatement('UPDATE threads SET agent_surface = @agent_surface WHERE id = @id')
+          .run({ id: row.id, agent_surface: agentSurface })
+      } catch (error) {
+        warnSqlite('backfill thread agent surface', error)
+      }
+    }
+    return { ...row, agent_surface: agentSurface }
   }
 
   private upsertIndexBestEffort(record: ThreadIndexRecord): void {

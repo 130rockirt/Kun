@@ -226,6 +226,7 @@ export class KunRuntimeProvider implements AgentProvider {
     title?: string
     titleAuto?: boolean
     mode?: KunThreadMode
+    agentSurface?: 'code' | 'write' | 'design'
     agentId?: string
     providerId?: string
     accountId?: string
@@ -263,6 +264,7 @@ export class KunRuntimeProvider implements AgentProvider {
         workspace,
         title: input.title,
         ...(input.titleAuto !== undefined ? { titleAuto: input.titleAuto } : {}),
+        ...(input.agentSurface ? { agentSurface: input.agentSurface } : {}),
         model: requestedModel || runtime.model,
         mode: normalizeThreadMode(input.mode),
         approvalPolicy: runtime.approvalPolicy,

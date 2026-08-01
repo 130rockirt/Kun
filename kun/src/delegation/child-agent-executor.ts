@@ -339,7 +339,10 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
     let status: 'completed' | 'failed' | 'aborted'
     try {
       const outcome = await loop.runTurn(thread.id, started.turnId)
-      if (outcome === 'suspended') {
+      if (
+        outcome === 'suspended' ||
+        outcome === 'suspended_pending_supervision'
+      ) {
         throw new Error(`non-Graph child turn suspended unexpectedly: ${started.turnId}`)
       }
       status = outcome

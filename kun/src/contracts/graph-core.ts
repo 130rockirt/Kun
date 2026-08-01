@@ -623,6 +623,78 @@ export const GraphRunSummaryV1Schema = z.object({
 }).strict()
 export type GraphRunSummaryV1 = z.infer<typeof GraphRunSummaryV1Schema>
 
+export const GraphSupervisionObligationKindSchema = z.enum([
+  'review_required',
+  'repair_required',
+  'stall',
+  'conflict',
+  'budget',
+  'help',
+  'recovery',
+  'completion',
+  'user_steering',
+  'worker_report',
+  'scheduler_error'
+])
+export type GraphSupervisionObligationKind = z.infer<
+  typeof GraphSupervisionObligationKindSchema
+>
+
+export const GraphSupervisionObligationStateSchema = z.enum([
+  'pending',
+  'delivering',
+  'awaiting_action',
+  'retry_scheduled',
+  'resolved',
+  'needs_attention'
+])
+export type GraphSupervisionObligationState = z.infer<
+  typeof GraphSupervisionObligationStateSchema
+>
+
+/**
+ * Durable liveness record for one actionable source-Lead responsibility.
+ * Prompt delivery is intentionally separate from semantic resolution.
+ */
+export const GraphSupervisionObligationV1Schema = z.object({
+  version: z.literal(GRAPH_CONTRACT_VERSION),
+  id: Identifier,
+  kind: GraphSupervisionObligationKindSchema,
+  reason: z.enum([
+    'submitted',
+    'failure',
+    'stall',
+    'conflict',
+    'budget',
+    'help',
+    'recovery',
+    'completion',
+    'user_steering',
+    'worker_report',
+    'scheduler_error'
+  ]),
+  graphRevision: z.number().int().positive(),
+  nodeIds: z.array(GraphNodeIdSchema).max(1_000).default([]),
+  attemptIds: z.array(GraphAttemptIdSchema).max(1_000).default([]),
+  digest: BoundedSummary,
+  state: GraphSupervisionObligationStateSchema,
+  deliveryAttempts: z.number().int().nonnegative().default(0),
+  noProgressCount: z.number().int().nonnegative().default(0),
+  lastProgressSeq: z.number().int().nonnegative().default(0),
+  lastDeliveredSeq: z.number().int().nonnegative().optional(),
+  leaseUntil: Timestamp.optional(),
+  nextWakeAt: Timestamp.optional(),
+  lastDeliveredAt: Timestamp.optional(),
+  lastError: BoundedSummary.optional(),
+  attentionReason: BoundedSummary.optional(),
+  createdAt: Timestamp,
+  updatedAt: Timestamp,
+  resolvedAt: Timestamp.optional()
+}).strict()
+export type GraphSupervisionObligationV1 = z.infer<
+  typeof GraphSupervisionObligationV1Schema
+>
+
 export const GraphNodeProjectionV1Schema = z.object({
   node: GraphNodeV1Schema,
   status: GraphNodeStatusSchema,
@@ -650,6 +722,7 @@ export const GraphRunV1Schema = z.object({
   artifacts: z.array(GraphArtifactReferenceV1Schema),
   cleanup: z.array(GraphCleanupRecordV1Schema),
   steering: z.array(GraphSteeringV1Schema),
+  supervisionObligations: z.array(GraphSupervisionObligationV1Schema).max(10_000).default([]),
   budget: GraphBudgetLedgerV1Schema,
   summary: GraphRunSummaryV1Schema.optional(),
   lastEventSeq: z.number().int().nonnegative(),

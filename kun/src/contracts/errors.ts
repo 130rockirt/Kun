@@ -15,6 +15,7 @@ export const KunErrorCode = z.enum([
   'not_found',
   'conflict',
   'rate_limited',
+  'thread_busy',
   'turn_in_progress',
   'turn_not_running',
   'approval_not_pending',

@@ -26,6 +26,9 @@ const LEGACY_R2_PUBLIC_BASE_URL = 'https://deepseek-gui.com/api/r2'
 const DEFAULT_R2_RELEASE_PREFIX = 'deepseek-gui'
 const UPDATE_FEED_PROBE_TIMEOUT_MS = 5_000
 const { autoUpdater } = electronUpdater
+const DEVELOPMENT_APP_FLAVOR = process.env.KUN_APP_FLAVOR === 'development'
+const DEVELOPMENT_UPDATE_MESSAGE =
+  'kun-dv is a source/testing application and cannot use the production Kun update channel.'
 
 function envWithLegacyFallback(kunName: string, legacyName: string): string {
   return process.env[kunName]?.trim() || process.env[legacyName]?.trim() || ''
@@ -492,6 +495,7 @@ async function configureReachableUpdaterChannel(channel: GuiUpdateChannel): Prom
 }
 
 export function setGuiUpdateChannel(channel: GuiUpdateChannel): void {
+  if (DEVELOPMENT_APP_FLAVOR) return
   configureUpdaterChannel(channel)
 }
 
@@ -574,6 +578,8 @@ export function initializeGuiUpdater(
   if (initialized) return
   initialized = true
 
+  if (DEVELOPMENT_APP_FLAVOR) return
+
   autoUpdater.autoDownload = false
   autoUpdater.autoInstallOnAppQuit = false
   configureUpdaterChannel(configuredChannel)
@@ -639,6 +645,7 @@ export function initializeGuiUpdater(
 }
 
 export async function showPostUpdateReleaseNotes(): Promise<void> {
+  if (DEVELOPMENT_APP_FLAVOR) return
   if (!app.isPackaged) return
 
   const currentVersion = app.getVersion().trim()
@@ -686,6 +693,15 @@ export function getGuiUpdateState(): GuiUpdateState {
 
 export async function checkGuiUpdate(channel?: GuiUpdateChannel): Promise<GuiUpdateInfo> {
   const selectedChannel = await resolveUpdateChannel(channel)
+  if (DEVELOPMENT_APP_FLAVOR) {
+    return {
+      ok: false,
+      currentVersion: app.getVersion(),
+      channel: selectedChannel,
+      code: 'unsupported',
+      message: DEVELOPMENT_UPDATE_MESSAGE
+    }
+  }
   await configureReachableUpdaterChannel(selectedChannel)
 
   if (!macAutoUpdateAllowed()) {
@@ -719,6 +735,14 @@ export async function checkGuiUpdate(channel?: GuiUpdateChannel): Promise<GuiUpd
 
 export async function downloadGuiUpdate(channel?: GuiUpdateChannel): Promise<GuiUpdateDownloadResult> {
   const selectedChannel = await resolveUpdateChannel(channel)
+  if (DEVELOPMENT_APP_FLAVOR) {
+    return {
+      ok: false,
+      currentVersion: app.getVersion(),
+      code: 'unsupported',
+      message: DEVELOPMENT_UPDATE_MESSAGE
+    }
+  }
   await configureReachableUpdaterChannel(selectedChannel)
 
   if (!macAutoUpdateAllowed()) {
@@ -766,6 +790,14 @@ export async function downloadGuiUpdate(channel?: GuiUpdateChannel): Promise<Gui
 }
 
 export async function installGuiUpdate(): Promise<GuiUpdateInstallResult> {
+  if (DEVELOPMENT_APP_FLAVOR) {
+    return {
+      ok: false,
+      currentVersion: app.getVersion(),
+      code: 'unsupported',
+      message: DEVELOPMENT_UPDATE_MESSAGE
+    }
+  }
   let updateInstallQuitMarked = false
   try {
     if (!downloaded) {

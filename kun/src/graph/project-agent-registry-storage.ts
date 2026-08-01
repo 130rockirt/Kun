@@ -1,7 +1,6 @@
-import { mkdir, readFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
-import { atomicWriteFile } from '../adapters/file/atomic-write.js'
+import { join } from 'node:path'
 import { GRAPH_CONTRACT_VERSION, type ProjectIdentityV1 } from '../contracts/index.js'
+import { AtomicJsonFile } from '../extensions/atomic-json.js'
 import {
   ProjectAgentRegistryStateSchema,
   type ProjectAgentRegistryState
@@ -11,11 +10,10 @@ export async function loadProjectAgentRegistryState(
   rootDir: string,
   projectId: string
 ): Promise<ProjectAgentRegistryState | null> {
-  const text = await readFile(registryStatePath(rootDir, projectId), 'utf8').catch((error) => {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
-    throw error
-  })
-  return text === null ? null : ProjectAgentRegistryStateSchema.parse(JSON.parse(text))
+  return new AtomicJsonFile<ProjectAgentRegistryState | null>(
+    registryStatePath(rootDir, projectId),
+    (value) => value === null ? null : ProjectAgentRegistryStateSchema.parse(value)
+  ).read(() => null)
 }
 
 export async function loadOrCreateProjectAgentRegistryState(
@@ -44,9 +42,10 @@ export async function persistProjectAgentRegistryState(
 ): Promise<void> {
   state.updatedAt = nowIso()
   const parsed = ProjectAgentRegistryStateSchema.parse(state)
-  const path = registryStatePath(rootDir, state.identity.projectId)
-  await mkdir(dirname(path), { recursive: true, mode: 0o700 })
-  await atomicWriteFile(path, `${JSON.stringify(parsed)}\n`)
+  await new AtomicJsonFile(
+    registryStatePath(rootDir, state.identity.projectId),
+    (value) => ProjectAgentRegistryStateSchema.parse(value)
+  ).write(parsed)
 }
 
 function registryStatePath(rootDir: string, projectId: string): string {

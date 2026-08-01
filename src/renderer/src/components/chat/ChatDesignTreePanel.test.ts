@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { DesignArtifact, DesignDocument } from '../../design/design-types'
 import { designArtifactDirectoryReference, designDocumentScreenCount } from './ChatDesignTreePanel'
+import { designDocumentComposerFileReference } from '../../design/design-document-file-reference'
 
 const createdAt = '2026-06-20T00:00:00.000Z'
 
@@ -34,6 +35,19 @@ describe('ChatDesignTreePanel helpers', () => {
       relativePath: '.kun-design/doc_1/home',
       type: 'directory',
       workspaceRoot: '/workspace'
+    })
+  })
+
+  it('uses the drawing title for a document reference while retaining the stable id path', () => {
+    const doc = {
+      id: 'doc_1',
+      title: 'Warm travel dashboard'
+    }
+
+    expect(designDocumentComposerFileReference(doc, '/workspace')).toMatchObject({
+      name: 'Warm travel dashboard',
+      path: '/workspace/.kun-design/doc_1',
+      relativePath: '.kun-design/doc_1'
     })
   })
 })

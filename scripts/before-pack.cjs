@@ -52,6 +52,15 @@ async function beforePack(context) {
       stdio: 'inherit'
     }
   )
+
+  execFileSync(
+    process.execPath,
+    [join(__dirname, 'prepare-open-connector-runtime.cjs')],
+    {
+      cwd: join(__dirname, '..'),
+      stdio: 'inherit'
+    }
+  )
 }
 
 exports._internals = {

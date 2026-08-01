@@ -3,9 +3,9 @@ import type { GraphRuntimeConfig } from '../config/kun-config.js'
 import type { GraphRunV1 } from '../contracts/graph.js'
 import type {
   FileGraphPlanningDraftStore,
-  FileGraphRunStore,
   GraphControlService,
-  GraphSupervisor
+  GraphSupervisor,
+  GraphRunStore
 } from '../graph/index.js'
 import { terminalRequiredFailure } from '../graph/graph-scheduler-policy.js'
 import type { IdGenerator } from '../ports/id-generator.js'
@@ -13,7 +13,7 @@ import type { ThreadStore } from '../ports/thread-store.js'
 import type { RuntimeEventRecorder } from '../services/runtime-event-recorder.js'
 
 type PlanningCommitRecoveryContext = {
-  store: FileGraphRunStore
+  store: GraphRunStore
   drafts: FileGraphPlanningDraftStore
   control: GraphControlService
   runtimeEvents: Pick<RuntimeEventRecorder, 'record'>
@@ -21,7 +21,7 @@ type PlanningCommitRecoveryContext = {
 }
 
 type LeadOwnershipRecoveryContext = {
-  store: FileGraphRunStore
+  store: GraphRunStore
   drafts: FileGraphPlanningDraftStore
   supervisor: GraphSupervisor
   config: () => GraphRuntimeConfig
@@ -183,7 +183,7 @@ export async function recoverGraphLeadOwnership(
       !durableSupervisionPending
     ) continue
     const latestSignals = unseenSignals.slice(-32)
-    context.supervisor.redeliver({
+    await context.supervisor.redeliverNow({
       runId: run.id,
       reason: recoveredReason(
         terminal,
@@ -272,6 +272,11 @@ function recoveredDigest(input: {
       'Inspect the failed or repair-required node and use graph_patch_run ' +
       'to create a semantic replacement.'
   }
+  if (input.planningLifecycleNeedsRecovery && input.planningDraft) {
+    return `Recovered stale Graph planning lifecycle for GraphRun ${input.run.id}; ` +
+      `durable draft ${input.planningDraft.id} is ${input.planningDraft.status} at revision ` +
+      `${input.planningDraft.revision}.`
+  }
   if (input.latestSignals.length > 0) {
     return input.latestSignals
       .map((signal) => signal.digest)
@@ -281,11 +286,6 @@ function recoveredDigest(input: {
   }
   if (input.terminal) {
     return `Recovered terminal GraphRun ${input.run.id} with status ${input.run.status}.`
-  }
-  if (input.planningLifecycleNeedsRecovery && input.planningDraft) {
-    return `Recovered stale Graph planning lifecycle for GraphRun ${input.run.id}; ` +
-      `durable draft ${input.planningDraft.id} is ${input.planningDraft.status} at revision ` +
-      `${input.planningDraft.revision}.`
   }
   return input.durableSupervisionPending
     ? `Recovered pending Lead supervision for GraphRun ${input.run.id}.`

@@ -6,15 +6,14 @@ import {
   Loader2,
   MessageSquare,
   PanelRightClose,
-  Plus,
   Sparkles,
   StopCircle,
   Target,
+  Trash2,
   X
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { formatRelativeTime } from '../../lib/format-relative-time'
-import { deriveThreadTitleFromPrompt } from '../../lib/thread-title'
 import type { AttachmentReference, NormalizedThread, RuntimeConnectionStatus, ChatBlock } from '../../agent/types'
 import { getProvider } from '../../agent/registry'
 import type { QueuedUserMessage } from '../../store/chat-store-types'
@@ -22,6 +21,7 @@ import { threadSnapshotLooksRunning } from '../../store/chat-store-runtime-helpe
 import type { ModelProviderModelGroup } from '@shared/kun-gui-api'
 import { DESIGN_ASSISTANT_THREAD_TITLE } from '../../design/design-thread-registry'
 import { useDesignWorkspaceStore } from '../../design/design-workspace-store'
+import { drawingHistoryMutationMatches } from '../../design/design-drawing-history'
 import { defaultFrameSizeForDesignTarget } from '../../design/design-context'
 import { cancelDesignPagesRun } from '../../design/design-pages-run'
 import { LazyMessageTimeline } from '../chat/LazyMessageTimeline'
@@ -46,8 +46,10 @@ type Props = {
   composerPickList: string[]
   composerModelGroups?: ModelProviderModelGroup[]
   composerReasoningEffort: ComposerReasoningEffort
+  composerFastMode: boolean
   setComposerModel: (modelId: string, providerId?: string) => void
   setComposerReasoningEffort: (effort: ComposerReasoningEffort) => void
+  setComposerFastMode: (enabled: boolean) => void
   queuedMessages: QueuedUserMessage[]
   removeQueuedMessage: (id: string) => void
   guideQueuedMessage: (id: string) => void | Promise<unknown>
@@ -65,10 +67,14 @@ type Props = {
   onRetryConnection: () => void
   onOpenSettings: (section?: string) => void
   onConfigureProviders?: () => void
-  onNewConversation: () => void
+  drawingTitle: string
+  onClearHistory: () => void | Promise<void>
+  hasRegisteredHistory?: boolean
   designThreads: NormalizedThread[]
+  designHistoryThreadIds: string[]
   onSwitchThread: (threadId: string) => void
   onCollapse: () => void
+  drawingCreationSubmitting?: boolean
   className?: string
 }
 
@@ -81,12 +87,85 @@ export function designThreadTitleLooksDefault(
   return raw === DESIGN_ASSISTANT_THREAD_TITLE || raw === localizedDefaultTitle?.trim()
 }
 
-export function deriveDesignThreadTitleFromBlocks(blocks: readonly ChatBlock[]): string {
-  const firstUser = blocks.find((block) => block.kind === 'user')
-  if (!firstUser || firstUser.kind !== 'user') return ''
-  const text = (firstUser.meta?.displayText ?? firstUser.text).trim()
-  if (!text) return ''
-  return deriveThreadTitleFromPrompt(text)
+export type DesignHistoryMenuEntry = {
+  id: string
+  title: string
+  updatedAt: string | null
+}
+
+export function designHistoryMenuEntries(options: {
+  registeredThreadIds: readonly string[]
+  designThreads: readonly NormalizedThread[]
+  localizedDefaultTitle: string
+  fallbackTitle: (index: number) => string
+}): DesignHistoryMenuEntry[] {
+  const sourceIds = options.registeredThreadIds.length > 0
+    ? options.registeredThreadIds
+    : options.designThreads.map((thread) => thread.id)
+  return [...new Set(sourceIds)].map((id, index) => {
+    const thread = options.designThreads.find((candidate) => candidate.id === id) ?? null
+    return {
+      id,
+      title: thread && !designThreadTitleLooksDefault(thread.title, options.localizedDefaultTitle)
+        ? thread.title
+        : options.fallbackTitle(index),
+      updatedAt: thread?.updatedAt ?? null
+    }
+  })
+}
+
+export function canClearDesignHistory(options: {
+  runtimeConnection: RuntimeConnectionStatus
+  busy: boolean
+  viewingChildThread: boolean
+  hasHistory: boolean
+}): boolean {
+  return (
+    options.runtimeConnection === 'ready' &&
+    !options.busy &&
+    !options.viewingChildThread &&
+    options.hasHistory
+  )
+}
+
+export function designHistoryInteractionsLocked(options: {
+  historyClearing: boolean
+  historyMutationPending: boolean
+}): boolean {
+  return options.historyClearing || options.historyMutationPending
+}
+
+export function hasClearableDesignHistory(options: {
+  hasRegisteredHistory: boolean
+  registeredHistoryCount?: number
+  designThreads: readonly NormalizedThread[]
+  showingDocumentThread: boolean
+  blocks: readonly ChatBlock[]
+  liveReasoning: string
+  liveAssistant: string
+}): boolean {
+  const registeredHistoryCount = options.registeredHistoryCount ?? (options.hasRegisteredHistory ? 1 : 0)
+  if (registeredHistoryCount > 1) return true
+  if (options.designThreads.length === 0) return registeredHistoryCount > 0
+  if (options.designThreads.length > 1) return true
+  if (
+    options.designThreads.some((thread) =>
+      Boolean(thread.preview?.trim() || thread.summary?.trim())
+    )
+  ) return true
+  return options.showingDocumentThread && (
+    options.blocks.length > 0 ||
+    options.liveReasoning.trim().length > 0 ||
+    options.liveAssistant.trim().length > 0
+  )
+}
+
+export function designRailHeaderTitle(options: {
+  drawingTitle: string
+  fallbackTitle: string
+  viewingChildThread: boolean
+}): string {
+  return options.drawingTitle.trim() || options.fallbackTitle
 }
 
 function DesignAIRailInner({
@@ -105,8 +184,10 @@ function DesignAIRailInner({
   composerPickList,
   composerModelGroups = [],
   composerReasoningEffort,
+  composerFastMode,
   setComposerModel,
   setComposerReasoningEffort,
+  setComposerFastMode,
   queuedMessages,
   removeQueuedMessage,
   guideQueuedMessage,
@@ -124,10 +205,14 @@ function DesignAIRailInner({
   onRetryConnection,
   onOpenSettings,
   onConfigureProviders,
-  onNewConversation,
+  drawingTitle,
+  onClearHistory,
+  hasRegisteredHistory = false,
   designThreads,
+  designHistoryThreadIds,
   onSwitchThread,
   onCollapse,
+  drawingCreationSubmitting: drawingCreationSubmittingOverride,
   className = ''
 }: Props): ReactElement {
   const { t, i18n } = useTranslation('common')
@@ -140,6 +225,11 @@ function DesignAIRailInner({
   const multiPageMode = useDesignWorkspaceStore((s) => s.multiPageMode)
   const setMultiPageMode = useDesignWorkspaceStore((s) => s.setMultiPageMode)
   const pagesRun = useDesignWorkspaceStore((s) => s.pagesRun)
+  const activeDocumentId = useDesignWorkspaceStore((s) => s.activeDocumentId)
+  const storeDrawingCreationSubmitting = useDesignWorkspaceStore((s) => s.drawingCreationSubmitting)
+  const drawingCreationSubmitting =
+    drawingCreationSubmittingOverride ?? storeDrawingCreationSubmitting
+  const drawingHistoryMutation = useDesignWorkspaceStore((s) => s.drawingHistoryMutation)
   const [threadListOpen, setThreadListOpen] = useState(false)
   const threadListRef = useRef<HTMLDivElement | null>(null)
   const threadPillRef = useRef<HTMLButtonElement | null>(null)
@@ -148,7 +238,7 @@ function DesignAIRailInner({
   const [childStatus, setChildStatus] = useState<string | undefined>(undefined)
   const [childLoading, setChildLoading] = useState(false)
   const [childError, setChildError] = useState<string | null>(null)
-  const [threadTitleOverrides, setThreadTitleOverrides] = useState<Record<string, string>>({})
+  const [historyClearing, setHistoryClearing] = useState(false)
 
   useEffect(() => {
     if (!threadListOpen) return
@@ -169,32 +259,6 @@ function DesignAIRailInner({
       window.removeEventListener('keydown', onKeyDown)
     }
   }, [threadListOpen])
-
-  useEffect(() => {
-    const missing = designThreads.filter(
-      (thread) =>
-        designThreadTitleLooksDefault(thread.title, t('designRailTitle')) &&
-        !threadTitleOverrides[thread.id]
-    )
-    if (missing.length === 0) return
-    let cancelled = false
-    for (const thread of missing) {
-      void getProvider()
-        .getThreadDetail(thread.id)
-        .then((detail) => {
-          if (cancelled) return
-          const title = deriveDesignThreadTitleFromBlocks(detail.blocks)
-          if (!title || designThreadTitleLooksDefault(title, t('designRailTitle'))) return
-          setThreadTitleOverrides((current) =>
-            current[thread.id] ? current : { ...current, [thread.id]: title }
-          )
-        })
-        .catch(() => undefined)
-    }
-    return () => {
-      cancelled = true
-    }
-  }, [designThreads, t, threadTitleOverrides])
 
   useEffect(() => {
     setChildThreadId(null)
@@ -241,9 +305,16 @@ function DesignAIRailInner({
     }
   }, [childThreadId])
 
-
-  const activeThread = designThreads.find((th) => th.id === activeThreadId) ?? null
-  const showingDocumentThread = Boolean(activeThread)
+  const historyMenuEntries = designHistoryMenuEntries({
+    registeredThreadIds: designHistoryThreadIds,
+    designThreads,
+    localizedDefaultTitle: t('designRailTitle'),
+    fallbackTitle: (index) => t('designRailDrawingFallback', { number: index + 1 })
+  })
+  const registeredHistoryThreadIds = historyMenuEntries.map((entry) => entry.id)
+  const showingDocumentThread = Boolean(
+    activeThreadId && registeredHistoryThreadIds.includes(activeThreadId)
+  )
   const viewingChildThread = Boolean(childThreadId)
 
   const timelineBlocks = viewingChildThread ? childBlocks : showingDocumentThread ? blocks : []
@@ -255,7 +326,18 @@ function DesignAIRailInner({
     : showingDocumentThread && (
       blocks.length > 0 || liveReasoning.trim().length > 0 || liveAssistant.trim().length > 0
     )
+  const pendingCreationText = input.trim()
+  const showPendingCreationEcho =
+    !viewingChildThread &&
+    drawingCreationSubmitting &&
+    !hasTimeline &&
+    (pendingCreationText.length > 0 || attachments.length > 0)
   const runActive = Boolean(pagesRun)
+  const historyMutationPending = drawingHistoryMutationMatches(
+    drawingHistoryMutation,
+    workspaceRoot,
+    activeDocumentId
+  )
   const activeArtifact = artifacts.find((artifact) => artifact.id === activeArtifactId) ?? null
   const designTargetContextChip = contextChips.find((chip) => chip.kind === 'design-target') ?? null
   const targetSize = defaultFrameSizeForDesignTarget(designTarget)
@@ -270,10 +352,40 @@ function DesignAIRailInner({
     })
   const designTargetStatusTitle = `${t('designTargetContextStatus')}: ${designTargetLabel} - ${designTargetDetail}`
   const primaryContextChip = contextChips.find((chip) => chip.kind !== 'design-target') ?? null
-  // Keep the composer + new-conversation locked across the whole multi-page run,
+  // Keep the composer + destructive history action locked across the whole multi-page run,
   // even during the brief idle gaps between page turns.
-  const effectiveBusy = (showingDocumentThread && busy) || runActive
-  const canCreateConversation = runtimeConnection === 'ready' && !effectiveBusy && !viewingChildThread
+  const composerBusy = (showingDocumentThread && busy) || runActive
+  const historyLocked = designHistoryInteractionsLocked({
+    historyClearing,
+    historyMutationPending
+  })
+  const composerDisabled = historyLocked || drawingCreationSubmitting
+
+  useEffect(() => {
+    if (historyLocked) setThreadListOpen(false)
+  }, [historyLocked])
+
+  const effectiveBusy = composerBusy || composerDisabled
+  const designHistoryRunning = designThreads.some((thread) =>
+    threadSnapshotLooksRunning([], thread.status) ||
+    threadSnapshotLooksRunning([], thread.latestTurnStatus)
+  )
+  const hasClearableHistory = hasClearableDesignHistory({
+    hasRegisteredHistory,
+    registeredHistoryCount: Math.max(registeredHistoryThreadIds.length, hasRegisteredHistory ? 1 : 0),
+    designThreads,
+    showingDocumentThread,
+    blocks,
+    liveReasoning,
+    liveAssistant
+  })
+  const hasLegacyHistory = registeredHistoryThreadIds.length > 1
+  const canClearHistory = canClearDesignHistory({
+    runtimeConnection,
+    busy: effectiveBusy || designHistoryRunning,
+    viewingChildThread,
+    hasHistory: hasClearableHistory
+  })
   const showMultiPageToggle =
     designIntentMode === 'generate' && !runActive && activeArtifact?.kind !== 'canvas'
   const contextLabel = primaryContextChip
@@ -281,30 +393,25 @@ function DesignAIRailInner({
     : ''
   const showContextControls =
     !viewingChildThread && (runActive || Boolean(primaryContextChip) || showMultiPageToggle)
-  const titleForDesignThread = (thread: NormalizedThread, index: number): string => {
-    const localizedDefault = t('designRailTitle')
-    if (!designThreadTitleLooksDefault(thread.title, localizedDefault)) return thread.title
-    const fromActiveBlocks =
-      thread.id === activeThreadId && !viewingChildThread
-        ? deriveDesignThreadTitleFromBlocks(blocks)
-        : ''
-    return (
-      fromActiveBlocks ||
-      threadTitleOverrides[thread.id] ||
-      t('designRailDrawingFallback', { number: index + 1 })
-    )
-  }
-  const activeThreadIndex = activeThread
-    ? Math.max(0, designThreads.findIndex((thread) => thread.id === activeThread.id))
-    : 0
-  const activeThreadTitle = activeThread ? titleForDesignThread(activeThread, activeThreadIndex) : ''
-  const headerTitle = viewingChildThread
-    ? t('subagentSessionBannerTitle')
-    : activeThreadTitle || t('designRailTitle')
+  const headerTitle = designRailHeaderTitle({
+    drawingTitle,
+    fallbackTitle: t('designRailTitle'),
+    viewingChildThread
+  })
 
   const openChildThread = (threadId: string): void => {
     setThreadListOpen(false)
     setChildThreadId(threadId)
+  }
+
+  const clearHistory = async (): Promise<void> => {
+    if (!canClearHistory || historyClearing) return
+    setHistoryClearing(true)
+    try {
+      await onClearHistory()
+    } finally {
+      setHistoryClearing(false)
+    }
   }
 
   const closeChildThread = (): void => {
@@ -329,87 +436,83 @@ function DesignAIRailInner({
             >
               <PanelRightClose className="h-4 w-4" strokeWidth={1.85} />
             </button>
-            <button
-              ref={threadPillRef}
-              type="button"
-              onClick={() => {
-                if (viewingChildThread) return
-                setThreadListOpen((v) => !v)
-              }}
-              className="flex min-w-0 flex-1 items-center gap-2 rounded-full bg-ds-subtle px-3 py-2 transition hover:bg-ds-hover dark:bg-white/[0.08] dark:hover:bg-white/[0.12]"
-              title={viewingChildThread ? t('subagentSessionBannerTitle') : t('designRailSwitchThread')}
-              aria-label={viewingChildThread ? t('subagentSessionBannerTitle') : t('designRailSwitchThread')}
-            >
-              <Sparkles className="h-4 w-4 shrink-0 text-accent" strokeWidth={1.8} />
-              <span className="min-w-0 truncate text-[13px] font-semibold text-ds-ink">
-                {headerTitle}
-              </span>
-              {!viewingChildThread ? (
+            {hasLegacyHistory && !viewingChildThread ? (
+              <button
+                ref={threadPillRef}
+                type="button"
+                onClick={() => {
+                  if (!historyLocked) setThreadListOpen((v) => !v)
+                }}
+                disabled={historyLocked}
+                className="flex min-w-0 flex-1 items-center gap-2 rounded-full bg-ds-subtle px-3 py-2 transition hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-45 dark:bg-white/[0.08] dark:hover:bg-white/[0.12]"
+                title={t('designRailSwitchThread')}
+                aria-label={t('designRailSwitchThread')}
+              >
+                <Sparkles className="h-4 w-4 shrink-0 text-accent" strokeWidth={1.8} />
+                <span className="min-w-0 truncate text-[13px] font-semibold text-ds-ink">
+                  {headerTitle}
+                </span>
                 <ChevronDown
                   className="ml-auto h-3 w-3 shrink-0 text-ds-faint transition-transform"
                   style={threadListOpen ? { transform: 'rotate(180deg)' } : undefined}
                   strokeWidth={2}
                 />
-              ) : null}
-            </button>
+              </button>
+            ) : (
+              <div
+                className="flex min-w-0 flex-1 items-center gap-2 rounded-full bg-ds-subtle px-3 py-2 dark:bg-white/[0.08]"
+                title={headerTitle}
+              >
+                <Sparkles className="h-4 w-4 shrink-0 text-accent" strokeWidth={1.8} />
+                <span className="min-w-0 truncate text-[13px] font-semibold text-ds-ink">
+                  {headerTitle}
+                </span>
+              </div>
+            )}
             <button
               type="button"
-              onClick={onNewConversation}
-              disabled={!canCreateConversation}
+              onClick={() => void clearHistory()}
+              disabled={!canClearHistory}
               className="ds-sidebar-toggle-button shrink-0 disabled:cursor-not-allowed disabled:opacity-45"
-              title={t('designRailNewConversation')}
-              aria-label={t('designRailNewConversation')}
+              title={t('designRailClear')}
+              aria-label={t('designRailClear')}
             >
-              <Plus className="h-4 w-4" strokeWidth={2.1} />
+              <Trash2 className="h-4 w-4" strokeWidth={1.9} />
             </button>
           </div>
         </div>
 
-        {threadListOpen && !viewingChildThread ? (
+        {threadListOpen && hasLegacyHistory && !viewingChildThread ? (
           <div
             ref={threadListRef}
             className="absolute left-2 right-2 top-[58px] z-[60] max-h-[280px] overflow-y-auto rounded-2xl border border-ds-border bg-white p-1.5 shadow-[0_14px_34px_rgba(20,47,95,0.16)] dark:bg-ds-card"
           >
-            {designThreads.length === 0 ? (
-              <p className="px-2.5 py-3 text-center text-[12.5px] text-ds-faint">
-                {t('designRailEmpty')}
-              </p>
-            ) : (
-              designThreads.map((thread, index) => (
+            {historyMenuEntries.map((entry) => {
+              return (
                 <button
-                  key={thread.id}
+                  key={entry.id}
                   type="button"
+                  disabled={historyLocked}
                   onClick={() => {
-                    onSwitchThread(thread.id)
+                    if (historyLocked) return
+                    onSwitchThread(entry.id)
                     setThreadListOpen(false)
                   }}
-                  className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left transition ${
-                    thread.id === activeThreadId
+                  className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left transition disabled:cursor-not-allowed disabled:opacity-45 ${
+                    entry.id === activeThreadId
                       ? 'bg-accent/10 text-accent'
                       : 'text-ds-ink hover:bg-ds-hover'
                   }`}
                 >
-                  <span className="min-w-0 flex-1 truncate text-[13px]">{titleForDesignThread(thread, index)}</span>
-                  <span className="shrink-0 text-[11px] text-ds-faint tabular-nums">
-                    {formatRelativeTime(thread.updatedAt, i18n.language)}
-                  </span>
+                  <span className="min-w-0 flex-1 truncate text-[13px]">{entry.title}</span>
+                  {entry.updatedAt ? (
+                    <span className="shrink-0 text-[11px] text-ds-faint tabular-nums">
+                      {formatRelativeTime(entry.updatedAt, i18n.language)}
+                    </span>
+                  ) : null}
                 </button>
-              ))
-            )}
-            <div className="mt-0.5 border-t border-ds-border-muted/60 pt-1">
-              <button
-                type="button"
-                onClick={() => {
-                  onNewConversation()
-                  setThreadListOpen(false)
-                }}
-                disabled={!canCreateConversation}
-                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ds-muted transition hover:bg-ds-hover disabled:opacity-45"
-              >
-                <Plus className="h-3.5 w-3.5" strokeWidth={2} />
-                <span>{t('designRailNewConversation')}</span>
-              </button>
-            </div>
+              )
+            })}
           </div>
         ) : null}
 
@@ -459,6 +562,29 @@ function DesignAIRailInner({
               onOpenChildThread={openChildThread}
               compactCards
             />
+          ) : showPendingCreationEcho ? (
+            <div
+              data-design-pending-user-echo
+              aria-live="polite"
+              className="flex min-h-full flex-col justify-end gap-2 px-4 py-5"
+            >
+              <div className="ml-auto max-w-[88%] rounded-2xl rounded-br-md bg-accent px-3.5 py-2.5 text-[13px] leading-5 text-white shadow-sm">
+                {pendingCreationText ? <p className="whitespace-pre-wrap break-words">{pendingCreationText}</p> : null}
+                {attachments.length > 0 ? (
+                  <div className={`${pendingCreationText ? 'mt-2 border-t border-white/20 pt-2' : ''} space-y-1 text-[11.5px] text-white/85`}>
+                    {attachments.map((attachment) => (
+                      <div key={attachment.id} className="truncate">
+                        {attachment.name || attachment.id}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+              <div className="ml-auto flex items-center gap-1.5 pr-1 text-[11.5px] text-ds-faint">
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-accent" strokeWidth={2} />
+                {t('designDrawingPreparing')}
+              </div>
+            </div>
           ) : !viewingChildThread ? (
             <div className="flex h-full items-center justify-center px-7 text-center">
               <div className="max-w-[260px]">
@@ -579,12 +705,13 @@ function DesignAIRailInner({
         ) : (
           <FloatingComposer
             variant="compact"
+            disabled={composerDisabled}
             workspaceRootOverride={workspaceRoot}
             input={input}
             setInput={setInput}
             mode={mode}
             setMode={setMode}
-            busy={effectiveBusy}
+            busy={composerBusy}
             runtimeReady={runtimeConnection === 'ready'}
             hasActiveThread={showingDocumentThread}
             composerModel={composerModel}
@@ -592,9 +719,13 @@ function DesignAIRailInner({
             composerPickList={composerPickList}
             composerModelGroups={composerModelGroups}
             composerReasoningEffort={composerReasoningEffort}
+            composerFastMode={composerFastMode}
             onComposerModelChange={setComposerModel}
             onComposerReasoningEffortChange={setComposerReasoningEffort}
+            onComposerFastModeChange={setComposerFastMode}
             modelPickerMode="combobox"
+            modelControlVariant="split"
+            showProviderInModelLabel
             queuedMessages={queuedMessages}
             onRemoveQueuedMessage={removeQueuedMessage}
             onGuideQueuedMessage={guideQueuedMessage}

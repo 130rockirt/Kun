@@ -159,6 +159,7 @@ describe('Graph renderer store', () => {
       artifactPage: null,
       artifactContent: '',
       artifactLoading: false,
+      wakingObligationId: null,
       loading: false,
       error: null
     })

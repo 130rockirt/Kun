@@ -44,7 +44,12 @@ export function graphElements(
     return [
       node.id,
       projection
-        ? graphNodeLiveness(projection, options.childRuns ?? {}, options.now)
+        ? graphNodeLiveness(
+            projection,
+            options.childRuns ?? {},
+            options.now,
+            run.supervision
+          )
         : null
     ] as const
   }))
@@ -117,7 +122,9 @@ export function graphElements(
                   {liveness?.activityLabel ??
                     (status === 'blocked'
                       ? options.waitingUpstreamLabel ?? 'Waiting for upstream node'
-                      : status.replaceAll('_', ' '))}
+                      : liveness && !['idle', 'done', 'failed'].includes(liveness.kind)
+                        ? liveness.kind.replaceAll('_', ' ')
+                        : status.replaceAll('_', ' '))}
                   {liveness?.activityToolName ? ` · ${liveness.activityToolName}` : ''}
                   {liveness?.elapsedMs ? ` · ${formatSubagentElapsed(liveness.elapsedMs)}` : ''}
                 </span>
@@ -137,14 +144,13 @@ export function graphElements(
                 </button>
               ) : null}
             </div>
-            {liveness && ['working', 'reviewing', 'retrying', 'waiting_human'].includes(liveness.kind) ? (
+            {liveness && ['working', 'active_review', 'retrying'].includes(liveness.kind) ? (
               <div className="mt-2 overflow-hidden rounded-full">
                 <SubagentLivenessLane
-                  status={liveness.kind === 'reviewing' || liveness.kind === 'waiting_human'
-                    || liveness.kind === 'retrying'
+                  status={liveness.kind === 'active_review' || liveness.kind === 'retrying'
                     ? 'awaiting-permission'
                     : 'running'}
-                  animate={!reducedMotion}
+                  animate={!reducedMotion && graphLivenessIsProcessing(liveness)}
                 />
               </div>
             ) : null}

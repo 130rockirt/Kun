@@ -36,6 +36,14 @@ class MemoryStorage implements BrowserStorageLike {
   }
 }
 
+function deferredValue<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((done) => {
+    resolve = done
+  })
+  return { promise, resolve }
+}
+
 function thread(id: string): NormalizedThread {
   return {
     id,
@@ -119,6 +127,191 @@ describe('chat-store-thread-actions queued messages', () => {
     useWriteWorkspaceStore.getState().resetWorkspace()
     rendererRuntimeClient.invalidateSettings()
     vi.unstubAllGlobals()
+  })
+
+  it('never falls back to the active Code thread for a thread-bound Design send', async () => {
+    const sendUserMessage = vi.fn()
+    registryMock.getProvider.mockReturnValue({ sendUserMessage })
+    const { actions, state } = buildHarness()
+    state.busy = false
+    state.route = 'design'
+    state.activeThreadId = 'thr_existing'
+
+    await expect(actions.sendMessage('draw the home page', 'agent', {
+      agentSurface: 'design',
+      expectedThreadId: 'thr_design'
+    })).resolves.toBe(false)
+
+    expect(sendUserMessage).not.toHaveBeenCalled()
+    expect(state.blocks).toEqual([])
+    expect(state.error).toContain('no longer active')
+  })
+
+  it('cancels a thread-bound Design send if the user leaves Design during setup', async () => {
+    const pendingSettings = deferredValue<{
+      agents: { kun: { providerId: string; model: string } }
+      codePromptPrefix: string
+    }>()
+    const sendUserMessage = vi.fn()
+    registryMock.getProvider.mockReturnValue({
+      sendUserMessage,
+      subscribeThreadEvents: vi.fn(async () => undefined)
+    })
+    vi.stubGlobal('window', {
+      kunGui: {
+        getSettings: vi.fn(() => pendingSettings.promise),
+        workspaceDirectoryExists: vi.fn(async () => true),
+        logError: vi.fn(async () => undefined)
+      }
+    })
+    const { actions, state } = buildHarness()
+    state.busy = false
+    state.route = 'design'
+
+    const sending = actions.sendMessage('draw the home page', 'agent', {
+      agentSurface: 'design',
+      expectedThreadId: 'thr_existing'
+    })
+    await vi.waitFor(() => {
+      expect(state.blocks).toContainEqual(expect.objectContaining({
+        kind: 'user',
+        text: 'draw the home page'
+      }))
+    })
+
+    state.route = 'chat'
+    pendingSettings.resolve({
+      agents: { kun: { providerId: 'deepseek', model: 'deepseek-v4-pro' } },
+      codePromptPrefix: ''
+    })
+
+    await expect(sending).resolves.toBe(false)
+    expect(sendUserMessage).not.toHaveBeenCalled()
+    expect(state.blocks).toEqual([])
+    expect(state.busy).toBe(false)
+    expect(state.error).toContain('no longer active')
+  })
+
+  it('does not project an accepted Design turn into a thread selected while the provider is pending', async () => {
+    const pendingSend = deferredValue<{
+      threadId: string
+      turnId: string
+      userMessageItemId: string
+    }>()
+    const subscribeThreadEvents = vi.fn(async () => undefined)
+    const sendUserMessage = vi.fn(() => pendingSend.promise)
+    registryMock.getProvider.mockReturnValue({ sendUserMessage, subscribeThreadEvents })
+    vi.stubGlobal('window', {
+      kunGui: {
+        getSettings: vi.fn(async () => ({
+          agents: { kun: { providerId: 'deepseek', model: 'deepseek-v4-pro' } },
+          codePromptPrefix: ''
+        })),
+        workspaceDirectoryExists: vi.fn(async () => true),
+        logError: vi.fn(async () => undefined)
+      }
+    })
+    const { actions, state } = buildHarness()
+    state.busy = false
+    state.route = 'design'
+
+    const sending = actions.sendMessage('draw the home page', 'agent', {
+      agentSurface: 'design',
+      expectedThreadId: 'thr_existing'
+    })
+    await vi.waitFor(() => expect(sendUserMessage).toHaveBeenCalledOnce())
+
+    state.route = 'chat'
+    state.activeThreadId = 'thr_code'
+    state.threads = [...state.threads, thread('thr_code')]
+    state.blocks = [{ kind: 'user', id: 'code-user', text: 'Code question' }]
+    state.busy = false
+    state.currentTurnId = null
+    state.currentTurnUserId = null
+    pendingSend.resolve({
+      threadId: 'thr_existing',
+      turnId: 'turn_design',
+      userMessageItemId: 'user_design'
+    })
+
+    await expect(sending).resolves.toBe(true)
+    expect(state.activeThreadId).toBe('thr_code')
+    expect(state.blocks).toEqual([{ kind: 'user', id: 'code-user', text: 'Code question' }])
+    expect(state.busy).toBe(false)
+    expect(state.currentTurnId).toBeNull()
+    expect(subscribeThreadEvents).not.toHaveBeenCalled()
+  })
+
+  it('ignores an older thread detail response after a newer selection wins', async () => {
+    const first = deferredValue<{
+      blocks: ChatBlock[]
+      latestSeq: number
+      threadStatus: 'idle'
+    }>()
+    const second = deferredValue<{
+      blocks: ChatBlock[]
+      latestSeq: number
+      threadStatus: 'idle'
+    }>()
+    registryMock.getProvider.mockReturnValue({
+      getThreadDetail: vi.fn((id: string) => id === 'thr_first' ? first.promise : second.promise),
+      subscribeThreadEvents: vi.fn(async () => undefined)
+    })
+    const { actions, state } = buildHarness()
+    state.busy = false
+    state.composerPickList = []
+    state.composerModelGroups = []
+    state.threads = [thread('thr_existing'), thread('thr_first'), thread('thr_second')]
+
+    const selectFirst = actions.selectThread('thr_first')
+    const selectSecond = actions.selectThread('thr_second')
+    second.resolve({
+      blocks: [{ kind: 'user', id: 'u-second', text: 'second selection' }],
+      latestSeq: 2,
+      threadStatus: 'idle'
+    })
+    await selectSecond
+    first.resolve({
+      blocks: [{ kind: 'user', id: 'u-first', text: 'stale selection' }],
+      latestSeq: 1,
+      threadStatus: 'idle'
+    })
+    await selectFirst
+
+    expect(state.activeThreadId).toBe('thr_second')
+    expect(state.blocks).toEqual([
+      expect.objectContaining({ id: 'u-second', text: 'second selection' })
+    ])
+  })
+
+  it('does not let a pending selection replace a thread activated synchronously', async () => {
+    const pending = deferredValue<{
+      blocks: ChatBlock[]
+      latestSeq: number
+      threadStatus: 'idle'
+    }>()
+    registryMock.getProvider.mockReturnValue({
+      getThreadDetail: vi.fn(() => pending.promise),
+      subscribeThreadEvents: vi.fn(async () => undefined)
+    })
+    const { actions, state } = buildHarness()
+    state.busy = false
+    state.composerPickList = []
+    state.composerModelGroups = []
+    state.threads = [thread('thr_existing'), thread('thr_old'), thread('thr_drawing')]
+
+    const selectingOldThread = actions.selectThread('thr_old')
+    state.activeThreadId = 'thr_drawing'
+    state.blocks = []
+    pending.resolve({
+      blocks: [{ kind: 'user', id: 'u-old', text: 'late old selection' }],
+      latestSeq: 1,
+      threadStatus: 'idle'
+    })
+    await selectingOldThread
+
+    expect(state.activeThreadId).toBe('thr_drawing')
+    expect(state.blocks).toEqual([])
   })
 
   it('snapshots active-turn model and reasoning selections into the next queued input', async () => {
@@ -1086,7 +1279,7 @@ describe('chat-store-thread-actions queued messages', () => {
     expect(errorBlock?.text).not.toContain('secret-token')
   })
 
-  it('forwards GUI design canvas turns to the runtime provider', async () => {
+  it('returns a thread-bound Design turn as soon as runtime accepts it', async () => {
     const provider = {
       connect: vi.fn(async () => undefined),
       sendUserMessage: vi.fn(async () => ({
@@ -1108,19 +1301,37 @@ describe('chat-store-thread-actions queued messages', () => {
     })
     const { actions, state } = buildHarness()
     state.busy = false
+    state.route = 'design'
+    const pendingRefresh = deferredValue<void>()
+    state.refreshThreads = vi.fn(() => pendingRefresh.promise)
 
     await expect(actions.sendMessage('draw an architecture map', 'agent', {
-      guiDesignCanvas: true
+      displayText: 'Draw an architecture map',
+      guiDesignCanvas: true,
+      agentSurface: 'design',
+      expectedThreadId: 'thr_existing',
+      serviceTier: 'priority'
     })).resolves.toBe(true)
 
     expect(provider.sendUserMessage).toHaveBeenCalledWith(
       'thr_existing',
       'draw an architecture map',
-      expect.objectContaining({ guiDesignCanvas: true })
+      expect.objectContaining({
+        guiDesignCanvas: true,
+        agentSurface: 'design',
+        displayText: 'Draw an architecture map',
+        serviceTier: 'priority'
+      })
     )
     expect(state.blocks.find((block) => block.kind === 'user')).toMatchObject({
-      meta: { guiDesignCanvas: true }
+      text: 'Draw an architecture map',
+      meta: {
+        displayText: 'Draw an architecture map',
+        guiDesignCanvas: true
+      }
     })
+    expect(state.refreshThreads).toHaveBeenCalledOnce()
+    pendingRefresh.resolve()
   })
 
   it('forwards the selected reasoning effort with the next turn', async () => {

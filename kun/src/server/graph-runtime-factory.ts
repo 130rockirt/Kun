@@ -2,6 +2,8 @@ import { join } from 'node:path'
 import { buildGraphModeLocalTools } from '../adapters/tool/graph-mode-tool-provider.js'
 import { emitPlanningEvent } from '../adapters/tool/graph-define-plan-tool.js'
 import type { ArtifactStore } from '../artifacts/artifact-store.js'
+import type { ServiceManagerConnection } from '../manager/manager-client.js'
+import { ManagerRemoteGraphRunStore } from '../manager/remote-data-stores.js'
 import type { GraphRuntimeConfig } from '../config/kun-config.js'
 import type { GraphRunV1 } from '../contracts/graph.js'
 import type { ThreadStatus } from '../contracts/threads.js'
@@ -24,7 +26,9 @@ import {
   GraphSupervisor,
   GraphWorkerSessionRegistry,
   graphPhysicalPathsEqual,
-  type GraphParentAuthority
+  type GraphLeadDeliveryResult,
+  type GraphParentAuthority,
+  type GraphRunStore
 } from '../graph/index.js'
 import type { IdGenerator } from '../ports/id-generator.js'
 import type { SessionStore } from '../ports/session-store.js'
@@ -50,12 +54,13 @@ export type GraphRuntimeStartOptions = {
     reasons: string[]
     nodeIds: string[]
     digest: string
-  }) => Promise<void>
+  }) => Promise<GraphLeadDeliveryResult | void>
+  isLeadTurnActive?: (run: GraphRunV1) => boolean
   authorityForRun: (run: GraphRunV1) => Promise<GraphParentAuthority> | GraphParentAuthority
 }
 
 export class GraphRuntimeComposition {
-  readonly store: FileGraphRunStore
+  readonly store: GraphRunStore
   readonly drafts: FileGraphPlanningDraftStore
   readonly writes: FileGraphWriteCoordinator
   readonly control: GraphControlService
@@ -84,16 +89,19 @@ export class GraphRuntimeComposition {
     sessionStore?: Pick<SessionStore, 'loadItems'>
     ids: IdGenerator
     nowIso: () => string
+    serviceManager?: ServiceManagerConnection
   }) {
     const nextId = (prefix: string): string => options.ids.next(prefix)
-    this.store = new FileGraphRunStore({
-      rootDir: join(options.dataDir, 'graphs'),
-      config: options.config,
-      artifactStore: options.artifactStore,
-      runtimeEvents: options.runtimeEvents,
-      nowIso: options.nowIso,
-      nextId
-    })
+    this.store = options.serviceManager
+      ? new ManagerRemoteGraphRunStore(options.serviceManager, options.config)
+      : new FileGraphRunStore({
+          rootDir: join(options.dataDir, 'graphs'),
+          config: options.config,
+          artifactStore: options.artifactStore,
+          runtimeEvents: options.runtimeEvents,
+          nowIso: options.nowIso,
+          nextId
+        })
     this.drafts = new FileGraphPlanningDraftStore({
       rootDir: join(options.dataDir, 'graph-planning'),
       nowIso: options.nowIso
@@ -457,9 +465,27 @@ export class GraphRuntimeComposition {
         const thread = await this.options.threadStore.get(input.run.threadId)
         const sourceTurn = thread?.turns.find((turn) =>
           turn.id === input.run.sourceTurnId)
-        if (sourceTurn?.status !== 'running') return
-        await options.leadTurn(input)
+        if (sourceTurn?.status !== 'running') {
+          return input.run.status === 'completed' ||
+            input.run.status === 'failed' ||
+            input.run.status === 'cancelled'
+            ? { status: 'terminal' as const }
+            : {
+                status: 'orphaned' as const,
+                reason: sourceTurn
+                  ? `Graph source turn ${sourceTurn.id} is ${sourceTurn.status}`
+                  : `Graph source turn not found: ${input.run.sourceTurnId}`
+              }
+        }
+        const delivery = await options.leadTurn(input)
+        return delivery ?? {
+          status: 'delivered' as const,
+          sourceTurnId: input.run.sourceTurnId,
+          deliveredSeq: input.run.lastEventSeq,
+          executionActive: options.isLeadTurnActive?.(input.run) ?? false
+        }
       },
+      isLeadTurnActive: options.isLeadTurnActive,
       nowIso: this.options.nowIso,
       nextId
     })
@@ -502,7 +528,14 @@ export class GraphRuntimeComposition {
       runtimeEvents: this.options.runtimeEvents,
       ids: this.options.ids
     })
-    this.supervisor.start()
+    for (const runId of recoveredReadyRunIds) {
+      const run = await this.store.get(runId)
+      if (run?.status !== 'ready') continue
+      await this.control.start(run.id, {
+        commandId: this.options.ids.next('graph_plan_recovery_start'),
+        idempotencyKey: `graph-plan-recovery-start:${run.id}`
+      })
+    }
     await recoverGraphLeadOwnership({
       store: this.store,
       drafts: this.drafts,
@@ -512,15 +545,8 @@ export class GraphRuntimeComposition {
       handleSourceTurnTerminal: (threadId, sourceTurnId, status) =>
         this.handleSourceTurnTerminal(threadId, sourceTurnId, status)
     })
+    this.supervisor.start()
     this.scheduler.start()
-    for (const runId of recoveredReadyRunIds) {
-      const run = await this.store.get(runId)
-      if (run?.status !== 'ready') continue
-      await this.control.start(run.id, {
-        commandId: this.options.ids.next('graph_plan_recovery_start'),
-        idempotencyKey: `graph-plan-recovery-start:${run.id}`
-      })
-    }
     this.learning.start()
     this.trackBackground('Graph retention failed', this.runRetention())
     this.retentionTimer = setInterval(() => {

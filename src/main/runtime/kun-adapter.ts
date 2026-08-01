@@ -25,6 +25,7 @@ import {
   runtimeMatchesExpectedBuild,
   stopSharedRuntime
 } from '../../../kun/src/cli/shared-runtime.js'
+import { resolveCliRuntimeFlavor } from '../../../kun/src/cli/runtime-flavor.js'
 
 const KUN_RUNTIME_ID = 'kun' as const
 let resolvedConnection: RuntimeDiscoveryRecord | null = null
@@ -80,7 +81,9 @@ export const kunRuntimeAdapter = {
 
   async stopSharedAndWait(settings: AppSettingsV1): Promise<void> {
     const dataDir = expandDataDir(getKunRuntimeSettings(settings).dataDir)
-    await stopSharedRuntime(dataDir)
+    await stopSharedRuntime(dataDir, fetch, {
+      runtimeFlavor: resolveCliRuntimeFlavor({ env: process.env })
+    })
     resolvedConnection = null
     await stopKunChildAndWait()
   },
@@ -126,7 +129,9 @@ async function refreshResolvedKunRuntime(settings: AppSettingsV1): Promise<boole
   const expectedBuildId = await resolveKunRuntimeBuildId(
     resolveKunExecutable(runtime.binaryPath.trim() ? '' : appRoot(), runtime.binaryPath)
   )
-  const inspected = await inspectSharedRuntime(dataDir).catch(() => null)
+  const inspected = await inspectSharedRuntime(dataDir, fetch, {
+    runtimeFlavor: resolveCliRuntimeFlavor({ env: process.env })
+  }).catch(() => null)
   if (!inspected) {
     resolvedConnection = null
     return false

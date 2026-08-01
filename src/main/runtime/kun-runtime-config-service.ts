@@ -20,6 +20,7 @@ import {
   AttachmentsCapabilityConfig,
   BrowserUseCapabilityConfig,
   ComputerUseCapabilityConfig,
+  ConnectorsCapabilityConfig,
   ImageGenCapabilityConfig,
   InstructionsCapabilityConfig,
   McpCapabilityConfig,
@@ -34,6 +35,7 @@ import {
 import {
   DEFAULT_MODEL_PROVIDER_ID,
   getKunRuntimeSettings,
+  normalizeOpenConnectorDesktopSettings,
   resolveKunRuntimeSettings,
   resolveModelProviderProxyUrl,
   type AppSettingsV1,
@@ -136,6 +138,12 @@ export async function syncGuiManagedKunConfig(
     : undefined
   const workflowHooks = buildWorkflowHookEntries(appSettings?.workflow)
   const roles = rolesConfigForRuntime(runtime)
+  const connectors = appSettings
+    ? connectorCapabilityConfigForRuntime(
+        objectValue(capabilities.connectors),
+        normalizeOpenConnectorDesktopSettings(appSettings.connectors)
+      )
+    : objectValue(capabilities.connectors)
   const next = {
     serve: {
       ...serve,
@@ -176,6 +184,7 @@ export async function syncGuiManagedKunConfig(
     capabilities: {
       ...capabilities,
       attachments: enabledByDefault(objectValue(capabilities.attachments)),
+      connectors,
       web: {
         ...enabledByDefault(objectValue(capabilities.web)),
         fetchEnabled: objectValue(capabilities.web).fetchEnabled === false ? false : true
@@ -349,6 +358,7 @@ function sanitizeCapabilities(value: unknown): Record<string, unknown> {
   const raw = objectValue(value)
   const schemas: Record<string, SafeParseSchema> = {
     mcp: McpCapabilityConfig,
+    connectors: ConnectorsCapabilityConfig,
     web: WebCapabilityConfig,
     instructions: InstructionsCapabilityConfig,
     skills: SkillsCapabilityConfig,
@@ -435,6 +445,17 @@ function buildWorkflowHookEntries(workflow: AppSettingsV1['workflow'] | undefine
       ...(secret ? { secret } : {}),
       ...(trigger.timeoutMs > 0 ? { timeoutMs: trigger.timeoutMs } : {})
     }))
+}
+
+function connectorCapabilityConfigForRuntime(
+  existing: Record<string, unknown>,
+  settings: { enabled: boolean; port: number }
+): Record<string, unknown> {
+  return {
+    ...existing,
+    enabled: settings.enabled,
+    baseUrl: `http://127.0.0.1:${settings.port}`
+  }
 }
 
 function enabledByDefault(existing: Record<string, unknown>): Record<string, unknown> {

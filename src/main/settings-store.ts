@@ -34,6 +34,8 @@ import {
   mergeWorkflowSettings,
   mergeWriteSettings,
   defaultTerminalSettings,
+  defaultOpenConnectorDesktopSettings,
+  mergeOpenConnectorDesktopSettings,
   mergeTerminalSettings,
   DEFAULT_CHAT_CONTENT_MAX_WIDTH_PX,
   DEFAULT_COMPOSER_SEND_KEY,
@@ -77,6 +79,11 @@ export type SettingsCredentialMigration = {
   ) => Promise<string[]>
 }
 
+export type SettingsDocumentBackend = {
+  read(): Promise<{ revision: number; value: string | null }>
+  write(expectedRevision: number, value: string): Promise<{ revision: number; value: string }>
+}
+
 type JsonSettingsStoreOptions = {
   credentialMigration?: SettingsCredentialMigration
   /**
@@ -85,6 +92,8 @@ type JsonSettingsStoreOptions = {
    * they must never be copied or rewritten by an ordinary settings save.
    */
   rejectPlaintextCredentials?: boolean
+  /** Manager-owned CAS backend used by both production and DV profiles. */
+  documentBackend?: SettingsDocumentBackend
 }
 
 // 数据默认根目录从 ~/.deepseekgui 升级为 ~/.kun。老安装的既有目录由
@@ -284,7 +293,8 @@ const defaultSettings = (): AppSettingsV1 => ({
   schedule: defaultScheduleSettings(),
   workflow: defaultWorkflowSettings(),
   design: defaultDesignSettings(),
-  terminal: defaultTerminalSettings()
+  terminal: defaultTerminalSettings(),
+  connectors: defaultOpenConnectorDesktopSettings()
 })
 
 function buildMergedSettings(parsed: Partial<AppSettingsV1>): AppSettingsV1 {
@@ -422,6 +432,7 @@ async function readSettingsFileWithCompatibility(
 export class JsonSettingsStore {
   private path: string
   private cache: AppSettingsV1 | null = null
+  private documentRevision: number | undefined
 
   constructor(
     userDataPath: string,
@@ -431,12 +442,21 @@ export class JsonSettingsStore {
   }
 
   async load(): Promise<AppSettingsV1> {
-    if (this.cache) return this.cache
+    const document = this.options.documentBackend
+      ? await this.options.documentBackend.read()
+      : undefined
+    if (this.cache && (!document || document.revision === this.documentRevision)) return this.cache
+    if (document) {
+      this.cache = null
+      this.documentRevision = document.revision
+    }
 
     let raw = ''
     let sourcePath = this.path
     try {
-      const loaded = await readSettingsFileWithCompatibility(this.path)
+      const loaded = document
+        ? (document.value === null ? null : { raw: document.value, sourcePath: this.path })
+        : await readSettingsFileWithCompatibility(this.path)
       if (!loaded) {
         this.cache = await loadDefaultSettings()
         return this.cache
@@ -534,10 +554,12 @@ export class JsonSettingsStore {
       )
     }
     if (this.options.credentialMigration && hasLegacyProviderPlaintext(prepared)) {
-      const currentRaw = await readFile(this.path, 'utf8').catch((error) => {
-        if (isErrnoException(error) && error.code === 'ENOENT') return serializeSettingsForDisk(prepared)
-        throw error
-      })
+      const currentRaw = this.options.documentBackend
+        ? (await this.options.documentBackend.read()).value ?? serializeSettingsForDisk(prepared)
+        : await readFile(this.path, 'utf8').catch((error) => {
+            if (isErrnoException(error) && error.code === 'ENOENT') return serializeSettingsForDisk(prepared)
+            throw error
+          })
       const backupPath = await writeLegacyCredentialSettingsBackup(this.path, currentRaw)
       if (!backupPath) {
         throw new Error('Failed to create the pre-migration settings backup; ordinary settings were not changed')
@@ -590,6 +612,7 @@ export class JsonSettingsStore {
       workflow: mergeWorkflowSettings(cur.workflow, partial.workflow),
       design: mergeDesignSettings(cur.design, partial.design),
       terminal: mergeTerminalSettings(cur.terminal, partial.terminal),
+      connectors: mergeOpenConnectorDesktopSettings(cur.connectors, partial.connectors),
       guiUpdate: { ...cur.guiUpdate, ...(partial.guiUpdate ?? {}) }
     })
     await this.save(next)
@@ -642,8 +665,15 @@ export class JsonSettingsStore {
   }
 
   private async persistSettings(settings: AppSettingsV1): Promise<void> {
+    const serialized = serializeSettingsForDisk(settings)
+    if (this.options.documentBackend) {
+      const revision = this.documentRevision ?? (await this.options.documentBackend.read()).revision
+      const committed = await this.options.documentBackend.write(revision, serialized)
+      this.documentRevision = committed.revision
+      return
+    }
     await mkdir(dirname(this.path), { recursive: true })
-    await atomicWriteFile(this.path, serializeSettingsForDisk(settings))
+    await atomicWriteFile(this.path, serialized)
   }
 }
 
@@ -651,6 +681,6 @@ export function getRuntimeBaseUrl(port: number): string {
   return `http://127.0.0.1:${port}`
 }
 
-export function devServerHintUrl(): string | undefined {
-  return process.env.ELECTRON_RENDERER_URL
+export function devServerHintUrl(isPackaged = false): string | undefined {
+  return isPackaged ? undefined : process.env.ELECTRON_RENDERER_URL
 }

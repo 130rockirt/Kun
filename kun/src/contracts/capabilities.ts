@@ -219,6 +219,44 @@ export const WebCapabilityConfig = CapabilityToggleConfig.extend({
 }).strict()
 export type WebCapabilityConfig = z.infer<typeof WebCapabilityConfig>
 
+const ConnectorBaseUrl = z.string().url().superRefine((value, ctx) => {
+  let url: URL
+  try {
+    url = new URL(value)
+  } catch {
+    ctx.addIssue({ code: 'custom', message: 'connector baseUrl must be a valid URL' })
+    return
+  }
+  if (
+    url.protocol !== 'http:' ||
+    (url.hostname !== '127.0.0.1' && url.hostname !== '[::1]' && url.hostname !== '::1') ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash ||
+    (url.pathname !== '' && url.pathname !== '/')
+  ) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'connector baseUrl must be an origin-only loopback HTTP URL using 127.0.0.1 or ::1'
+    })
+  }
+})
+
+/**
+ * Host-visible OpenConnector transport settings. Authentication is
+ * deliberately absent: the runtime token is accepted only from the
+ * KUN_OPENCONNECTOR_RUNTIME_TOKEN process environment variable.
+ */
+export const ConnectorsCapabilityConfig = CapabilityToggleConfig.extend({
+  baseUrl: ConnectorBaseUrl.default('http://127.0.0.1:18898'),
+  timeoutMs: z.number().int().min(250).max(10 * 60_000).default(30_000),
+  maxResultBytes: z.number().int().min(1_024).max(32 * 1024 * 1024).default(2 * 1024 * 1024),
+  maxSearchResults: z.number().int().min(1).max(50).default(10),
+  maxFileBytes: z.number().int().min(1_024).max(1024 * 1024 * 1024).default(100 * 1024 * 1024)
+}).strict()
+export type ConnectorsCapabilityConfig = z.infer<typeof ConnectorsCapabilityConfig>
+
 export const SkillsCapabilityConfig = CapabilityToggleConfig.extend({
   roots: z.array(z.string().min(1)).default([]),
   workspaceRoots: z.array(z.string().min(1)).default([]),
@@ -533,6 +571,7 @@ export type BrowserUseCapabilityConfig = z.infer<typeof BrowserUseCapabilityConf
 export const KunCapabilitiesConfig = z
   .object({
     mcp: McpCapabilityConfig.default(() => McpCapabilityConfig.parse({})),
+    connectors: ConnectorsCapabilityConfig.default(() => ConnectorsCapabilityConfig.parse({})),
     web: WebCapabilityConfig.default(() => WebCapabilityConfig.parse({})),
     instructions: InstructionsCapabilityConfig.default(() => InstructionsCapabilityConfig.parse({ enabled: true })),
     skills: SkillsCapabilityConfig.default(() => SkillsCapabilityConfig.parse({})),
@@ -576,6 +615,12 @@ export const RuntimeCapabilityManifest = z
           advertisedToolCount: z.number().int().nonnegative()
         })
         .strict()
+    }).strict(),
+    connectors: RuntimeCapabilityState.extend({
+      baseUrl: ConnectorBaseUrl,
+      protocolVersion: z.string().min(1).optional(),
+      runtimeVersion: z.string().min(1).optional(),
+      lastCheckedAt: z.string().min(1).optional()
     }).strict(),
     web: RuntimeCapabilityState.extend({
       fetch: RuntimeCapabilityState,
@@ -659,6 +704,13 @@ export function buildRuntimeCapabilityManifest(input: {
       indexedToolCount?: number
       advertisedToolCount?: number
     }
+  }
+  connectors?: {
+    available?: boolean
+    reason?: string
+    protocolVersion?: string
+    runtimeVersion?: string
+    lastCheckedAt?: string
   }
   web?: {
     fetchAvailable?: boolean
@@ -763,6 +815,24 @@ export function buildRuntimeCapabilityManifest(input: {
         indexedToolCount: input.mcp?.search?.indexedToolCount ?? mcpToolCount,
         advertisedToolCount: input.mcp?.search?.advertisedToolCount ?? mcpToolCount
       }
+    },
+    connectors: {
+      ...providerCapabilityState(
+        config.connectors.enabled,
+        'connectors are disabled by config',
+        input.connectors?.available === true,
+        input.connectors?.reason ?? 'OpenConnector sidecar is unavailable'
+      ),
+      baseUrl: config.connectors.baseUrl,
+      ...(input.connectors?.protocolVersion
+        ? { protocolVersion: input.connectors.protocolVersion }
+        : {}),
+      ...(input.connectors?.runtimeVersion
+        ? { runtimeVersion: input.connectors.runtimeVersion }
+        : {}),
+      ...(input.connectors?.lastCheckedAt
+        ? { lastCheckedAt: input.connectors.lastCheckedAt }
+        : {})
     },
     web: {
       ...webState,

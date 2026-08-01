@@ -47,7 +47,8 @@ describe('MessageTimelineEmptyHero — chat init welcome', () => {
 
     expect(html).toContain('ds-chat-empty-hero')
     expect(html).toContain('What would you like to do with Kun today?')
-    expect(html).toContain('Describe your idea, or start a new task')
+    expect(html).toContain('Open a terminal and run kun to use the TUI.')
+    expect(html).toContain('Settings in the bottom-left, then General → Desktop &amp; system → Terminal')
     expect(html).not.toContain('ds-runtime-wake-stage')
     expect(html).not.toContain('ds-kun-state-')
     expect(html).not.toContain('ds-initial-usage-heatmap')
@@ -61,7 +62,8 @@ describe('MessageTimelineEmptyHero — chat init welcome', () => {
 
     expect(html).toContain('ds-chat-empty-hero')
     expect(html).toContain('What would you like to do with Kun today?')
-    expect(html).toContain('Describe your idea, or start a new task')
+    expect(html).toContain('Open a terminal and run kun to use the TUI.')
+    expect(html).toContain('Settings in the bottom-left, then General → Desktop &amp; system → Terminal')
     expect(html).not.toContain('aria-hidden="true"')
     expect(html).not.toContain('ds-kun-state-')
     expect(html).not.toContain('ds-initial-usage-heatmap')
@@ -145,7 +147,8 @@ describe('MessageTimelineEmptyHero — runtime offline hero (issue #78, zh-CN)',
     const html = renderEmptyHero()
 
     expect(html).toContain('今天想和 Kun 一起做什么？')
-    expect(html).toContain('描述你的想法，或从一个新任务开始')
+    expect(html).toContain('打开终端，输入 kun 即可使用 TUI。')
+    expect(html).toContain('左下角「设置」→「通用」→「桌面与系统」→「终端」')
     expect(html).not.toContain('ds-kun-state-')
     expect(html).not.toContain('ds-initial-usage-heatmap')
   })

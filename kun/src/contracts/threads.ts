@@ -24,6 +24,10 @@ export type ThreadUpdateStatus = z.infer<typeof ThreadUpdateStatus>
 export const ThreadMode = z.enum(['agent', 'plan'])
 export type ThreadMode = z.infer<typeof ThreadMode>
 
+/** Product surface that owns a thread. Missing legacy values are resolved conservatively. */
+export const ThreadAgentSurface = z.enum(['code', 'write', 'design'])
+export type ThreadAgentSurface = z.infer<typeof ThreadAgentSurface>
+
 /**
  * Discriminator describing how a thread relates to its origin.
  *
@@ -186,6 +190,8 @@ export const ThreadSchema = z.object({
   workspace: z.string(),
   additionalWorkspaces: z.array(z.string().min(1)).max(32).optional(),
   model: z.string(),
+  /** Durable product-surface ownership. Missing legacy values resolve from homogeneous turn history. */
+  agentSurface: ThreadAgentSurface.optional(),
   /**
    * Optional provider id. When set, every turn on this thread routes its
    * model request to the matching per-provider client; absent → use the
@@ -249,6 +255,7 @@ export const ThreadSummarySchema = ThreadSchema.pick({
   workspace: true,
   additionalWorkspaces: true,
   model: true,
+  agentSurface: true,
   providerId: true,
   ownerExtensionId: true,
   ownerExtensionVersion: true,
@@ -289,6 +296,8 @@ export const CreateThreadRequest = z.object({
   workspace: z.string().min(1),
   additionalWorkspaces: z.array(z.string().min(1)).max(32).optional(),
   model: z.string().min(1),
+  /** Durable product-surface ownership for renderer-created threads. */
+  agentSurface: ThreadAgentSurface.optional(),
   /**
    * Optional provider id. The runtime keeps using its default provider
    * when omitted (backwards compatible). When set to a configured

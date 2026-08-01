@@ -89,7 +89,12 @@ function harness(input: {
   todoSyncError?: Error
   suspendGraphLeadTurn?: (
     input: Record<string, unknown>
-  ) => Promise<'not_graph' | 'suspended' | 'supervision_pending'>
+  ) => Promise<
+    | 'not_graph'
+    | 'suspended'
+    | 'supervision_pending'
+    | 'suspended_pending_supervision'
+  >
 }) {
   const applied: unknown[] = []
   const updated: unknown[] = []
@@ -334,7 +339,7 @@ describe('CursorSdkRuntime', () => {
     const suspendGraphLeadTurn = vi.fn()
       .mockResolvedValueOnce('supervision_pending')
       .mockResolvedValueOnce('supervision_pending')
-      .mockResolvedValueOnce('suspended')
+      .mockResolvedValueOnce('suspended_pending_supervision')
     const h = harness({
       thread: {
         turns: [{
@@ -360,7 +365,7 @@ describe('CursorSdkRuntime', () => {
       'turn_1',
       new AbortController().signal,
       'cursor-subscription'
-    )).resolves.toBe('suspended')
+    )).resolves.toBe('suspended_pending_supervision')
 
     expect(h.createOptions[0]).toMatchObject({
       mode: 'plan',

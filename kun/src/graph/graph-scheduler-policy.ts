@@ -12,6 +12,7 @@ import {
   type GraphReviewResultV1,
   type GraphRunSummaryV1,
   type GraphRunV1,
+  type GraphVerifiedCheckResultV1,
   type GraphWorkerResultV1
 } from '../contracts/graph.js'
 import type { GraphRuntimeConfig } from '../config/kun-config.js'
@@ -625,10 +626,21 @@ export function deterministicSummary(run: GraphRunV1, completedAt: string): Grap
     changedFiles: [...new Set(acceptedAttempts.flatMap((attempt) =>
       attempt.result?.changedFiles ?? []))].slice(0, 10_000),
     validationResults: acceptedAttempts.flatMap((attempt) =>
-      attempt.result?.verifiedChecks ?? []).slice(0, 512),
+      attempt.result?.verifiedChecks?.map(projectGraphVerifiedCheckResult) ?? []).slice(0, 512),
     totalTokens: run.budget.totalTokens,
     totalElapsedMs: run.budget.elapsedMs,
     completedAt
+  }
+}
+
+export function projectGraphVerifiedCheckResult(
+  check: GraphVerifiedCheckResultV1
+): GraphCheckResultV1 {
+  return {
+    name: check.name,
+    status: check.status,
+    summary: check.summary,
+    artifactRefs: check.artifactRefs
   }
 }
 

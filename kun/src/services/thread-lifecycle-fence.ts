@@ -194,10 +194,16 @@ export class LifecycleFencedThreadStore implements ThreadStore {
 
 /** Session writes use the same lifecycle lease as metadata writes. */
 export class LifecycleFencedSessionStore implements SessionStore {
+  readonly allocateEventSeq?: (threadId: string) => Promise<number>
   readonly iterateEventsSince?: (
     threadId: string,
     sinceSeq: number,
     options?: { maxRecordBytes?: number }
+  ) => AsyncIterable<RuntimeEvent>
+  readonly watchEventsSince?: (
+    threadId: string,
+    sinceSeq: number,
+    signal: AbortSignal
   ) => AsyncIterable<RuntimeEvent>
   readonly loadUsageRecords?: (options?: { threadId?: string }) => Promise<SessionUsageRecord[]>
   readonly loadLatestUsageSnapshots?: (options?: { threadIds?: string[] }) => Promise<SessionLatestUsageSnapshot[]>
@@ -213,6 +219,13 @@ export class LifecycleFencedSessionStore implements SessionStore {
     if (raw.iterateEventsSince) {
       this.iterateEventsSince = (threadId, sinceSeq, options) =>
         raw.iterateEventsSince!(threadId, sinceSeq, options)
+    }
+    if (raw.allocateEventSeq) {
+      this.allocateEventSeq = (threadId) => raw.allocateEventSeq!(threadId)
+    }
+    if (raw.watchEventsSince) {
+      this.watchEventsSince = (threadId, sinceSeq, signal) =>
+        raw.watchEventsSince!(threadId, sinceSeq, signal)
     }
     if (raw.loadUsageRecords) {
       this.loadUsageRecords = (options) => raw.loadUsageRecords!(options)

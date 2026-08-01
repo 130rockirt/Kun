@@ -252,6 +252,103 @@ describe('Graph runtime shutdown recovery', () => {
       start: true
     })).run
     runId = run.id
+    const sourceNode = run.plans.at(-1)!.nodes[0]!
+    run = await appendGraphEvent(seed, run, 'ready_pending_review', {
+      type: 'node_status_changed',
+      payload: {
+        nodeId: sourceNode.id,
+        from: 'pending',
+        to: 'ready',
+        reason: 'persisted submitted-result fixture'
+      }
+    })
+    const attempt = GraphNodeAttemptV1Schema.parse({
+      version: GRAPH_CONTRACT_VERSION,
+      id: 'attempt_pending_review',
+      runId: run.id,
+      nodeId: sourceNode.id,
+      revision: run.currentRevision,
+      attemptNumber: 1,
+      iteration: 0,
+      commandId: 'attempt_pending_review',
+      idempotencyKey: 'attempt_pending_review',
+      status: 'queued',
+      assignment: {
+        ...testAssignmentSnapshot(),
+        workspaceRoot: workspace
+      },
+      queuedAt: '2026-07-30T15:10:00.000Z',
+      tokenUsage: 0,
+      elapsedMs: 0
+    })
+    const submittedEvents = [
+      { type: 'attempt_created' as const, payload: { attempt } },
+      {
+        type: 'attempt_status_changed' as const,
+        payload: {
+          nodeId: sourceNode.id,
+          attemptId: attempt.id,
+          from: 'queued' as const,
+          to: 'running' as const
+        }
+      },
+      {
+        type: 'node_status_changed' as const,
+        payload: {
+          nodeId: sourceNode.id,
+          from: 'queued' as const,
+          to: 'running' as const,
+          reason: 'persisted submitted-result fixture'
+        }
+      },
+      {
+        type: 'result_submitted' as const,
+        payload: {
+          nodeId: sourceNode.id,
+          attemptId: attempt.id,
+          result: {
+            version: GRAPH_CONTRACT_VERSION,
+            summary: 'The worker result is waiting for the source Lead.',
+            artifactRefs: [],
+            changedFiles: [],
+            checks: [],
+            evidence: ['Persisted evidence requires explicit Lead review.'],
+            risks: [],
+            suggestedMessages: []
+          },
+          validation: {
+            version: GRAPH_CONTRACT_VERSION,
+            valid: true,
+            issues: [],
+            normalizedNodeCount: 1,
+            normalizedEdgeCount: 1
+          },
+          tokenUsage: 0,
+          elapsedMs: 0
+        }
+      },
+      {
+        type: 'attempt_status_changed' as const,
+        payload: {
+          nodeId: sourceNode.id,
+          attemptId: attempt.id,
+          from: 'running' as const,
+          to: 'submitted' as const
+        }
+      },
+      {
+        type: 'node_status_changed' as const,
+        payload: {
+          nodeId: sourceNode.id,
+          from: 'running' as const,
+          to: 'submitted' as const,
+          reason: 'worker result submitted'
+        }
+      }
+    ]
+    for (const [index, event] of submittedEvents.entries()) {
+      run = await appendGraphEvent(seed, run, `pending_review_${index}`, event)
+    }
     run = (await seed.store.append(run.id, {
       expectedSeq: run.lastEventSeq,
       graphRevision: run.currentRevision,

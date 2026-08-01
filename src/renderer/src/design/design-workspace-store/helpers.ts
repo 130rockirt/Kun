@@ -359,6 +359,7 @@ export async function rehydrateDesignWorkspaceArtifacts({
       loaded.push({
         id: entry.id,
         title: entry.title,
+        ...(entry.titleOrigin ? { titleOrigin: entry.titleOrigin } : {}),
         order: entry.order,
         createdAt: entry.createdAt,
         updatedAt: entry.updatedAt,

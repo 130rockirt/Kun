@@ -9,6 +9,7 @@ import type {
   DesignViewport
 } from './design-types'
 import type { DesignContext, DesignTarget } from './design-context'
+import type { DrawingHistoryMutation } from './design-drawing-history'
 
 /** Progress of an in-flight Stitch-style multi-page generation run. */
 export type DesignPagesRunState = {
@@ -40,6 +41,16 @@ export type DesignWorkspaceState = {
   documents: DesignDocument[]
   /** Active 设计稿 id; null = none (empty workspace). */
   activeDocumentId: string | null
+  /** Transient launcher state for a new drawing. Never persisted to documents.json. */
+  drawingCreationOpen: boolean
+  /** Previously active drawing restored when the transient launcher is cancelled. */
+  drawingCreationReturnDocumentId: string | null
+  /** Hidden provisional drawing reused until first send commits or cleanup succeeds. */
+  drawingCreationDocumentId: string | null
+  /** Guards the launcher's first submission from creating duplicate drawings. */
+  drawingCreationSubmitting: boolean
+  /** A destructive drawing-history operation currently owning the document. */
+  drawingHistoryMutation: DrawingHistoryMutation | null
   /** Projection of the active 设计稿's 画布 (artifacts). Do not mutate directly. */
   artifacts: DesignArtifact[]
   /** Projection of the active 设计稿's active 画布 id. */
@@ -91,11 +102,36 @@ export type DesignWorkspaceState = {
   setCanvasBackground: (background: 'light' | 'dark') => void
   setActiveArtifact: (artifactId: string | null) => void
   /** Create a new 设计稿 (empty), make it active, and return its id. */
-  createDocument: (title?: string, options?: { transient?: boolean }) => string
+  createDocument: (
+    title?: string,
+    options?: { transient?: boolean; titleOrigin?: 'generated' | 'user' }
+  ) => string
+  /** Open the new-drawing launcher without creating a document or changing the persisted active id. */
+  beginDrawingCreation: () => void
+  /** Atomically claim the launcher's first submission. Returns false when one is already in flight. */
+  beginDrawingSubmission: () => boolean
+  /** Release the launcher submission claim after rollback or cancellation. */
+  endDrawingSubmission: () => void
+  /** Commit the active provisional drawing and leave the launcher. */
+  finishDrawingCreation: (documentId?: string) => void
+  /** Leave the launcher and restore the drawing that was active before it opened. */
+  cancelDrawingCreation: () => void
   /** Rename a 设计稿 (persisted to documents.json). */
-  renameDocument: (documentId: string, title: string) => void
+  renameDocument: (
+    documentId: string,
+    title: string,
+    options?: { titleOrigin?: 'generated' | 'user' }
+  ) => void
+  /** Acquire a per-drawing destructive-history lock before confirmation. */
+  beginDrawingHistoryMutation: (
+    workspaceRoot: string,
+    documentId: string,
+    kind: 'clear' | 'delete'
+  ) => boolean
+  /** Release the matching destructive-history lock. */
+  endDrawingHistoryMutation: (workspaceRoot: string, documentId: string) => void
   /** Delete a 设计稿 and all its 画布 (on-disk dirs + index entry). */
-  removeDocument: (documentId: string) => void
+  removeDocument: (documentId: string) => Promise<boolean>
   /** Switch the active 设计稿 (re-projects artifacts; thread switch is wired by the workbench). */
   switchActiveDocument: (documentId: string) => void
   /** Return the active 设计稿 id, creating a default 设计稿 if none exists yet. */

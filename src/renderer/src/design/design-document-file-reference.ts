@@ -1,5 +1,7 @@
 import type { ComposerFileReference } from '../lib/composer-file-references'
+import i18n from '../i18n'
 import { documentDirPath } from './design-document-persistence'
+import { displayDrawingTitle } from './design-drawing-title'
 import type { DesignDocument } from './design-types'
 
 function trimTrailingSlash(value: string): string {
@@ -12,7 +14,7 @@ function workspaceAbsolutePath(workspaceRoot: string, relativePath: string): str
 }
 
 export function designDocumentComposerFileReference(
-  document: Pick<DesignDocument, 'id' | 'title'>,
+  document: Pick<DesignDocument, 'id' | 'title' | 'titleOrigin'>,
   workspaceRoot: string
 ): ComposerFileReference {
   const root = trimTrailingSlash(workspaceRoot)
@@ -20,14 +22,14 @@ export function designDocumentComposerFileReference(
   return {
     path: workspaceAbsolutePath(root, relativePath),
     relativePath,
-    name: document.id,
+    name: displayDrawingTitle(document, i18n.t('common:designUntitledDrawing')),
     type: 'directory',
     ...(root ? { workspaceRoot: root } : {})
   }
 }
 
 export function designDocumentComposerFileReferences(
-  documents: readonly Pick<DesignDocument, 'id' | 'title'>[],
+  documents: readonly Pick<DesignDocument, 'id' | 'title' | 'titleOrigin'>[],
   workspaceRoot: string
 ): ComposerFileReference[] {
   return documents

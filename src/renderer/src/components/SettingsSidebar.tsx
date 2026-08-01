@@ -9,6 +9,7 @@ import {
   FlaskConical,
   GitBranch,
   Globe,
+  HardDrive,
   Keyboard,
   Mic,
   PackageOpen,
@@ -46,6 +47,7 @@ export type SettingsCategory =
   | 'debug'
   | 'terminal'
   | 'extensions'
+  | 'storage'
   | 'dataMigration'
 
 type SettingsNavigationItem = {
@@ -54,6 +56,7 @@ type SettingsNavigationItem = {
   navigationLabelKey?: string
   icon: LucideIcon
   extensionOnly?: boolean
+  windowsOnly?: boolean
 }
 
 type SettingsNavigationGroup = {
@@ -107,6 +110,7 @@ const SETTINGS_NAVIGATION_GROUPS: SettingsNavigationGroup[] = [
     labelKey: 'settingsGroupData',
     items: [
       { category: 'archives', labelKey: 'archives', navigationLabelKey: 'settingsNavArchives', icon: Archive },
+      { category: 'storage', labelKey: 'storageRelocation', icon: HardDrive, windowsOnly: true },
       {
         category: 'dataMigration',
         labelKey: 'dataMigration',
@@ -160,6 +164,7 @@ const SETTINGS_CATEGORY_DESCRIPTION_KEYS: Record<SettingsCategory, string> = {
   updates: 'guiUpdateDesc',
   debug: 'llmDebugDesc',
   terminal: 'terminalColorModeDesc',
+  storage: 'storageRelocationSubtitle',
   dataMigration: 'dataMigrationSubtitle'
 }
 
@@ -180,12 +185,14 @@ export function SettingsSidebar({
   goBack,
   setCategory,
   extensionSettingsAvailable = false,
+  platform = 'unknown',
   t
 }: {
   category: SettingsCategory
   goBack: () => void
   setCategory: Dispatch<SetStateAction<SettingsCategory>>
   extensionSettingsAvailable?: boolean
+  platform?: string
   t: (key: string) => string
 }): ReactElement {
   return (
@@ -214,7 +221,10 @@ export function SettingsSidebar({
         className="ds-no-drag min-h-0 flex-1 overflow-y-auto overscroll-contain px-3.5 pb-5"
       >
         {SETTINGS_NAVIGATION_GROUPS.map((group, groupIndex) => {
-          const items = group.items.filter((item) => !item.extensionOnly || extensionSettingsAvailable)
+          const items = group.items.filter((item) =>
+            (!item.extensionOnly || extensionSettingsAvailable) &&
+            (!item.windowsOnly || platform === 'win32')
+          )
           if (items.length === 0) return null
           const headingId = `settings-nav-group-${group.id}`
           return (

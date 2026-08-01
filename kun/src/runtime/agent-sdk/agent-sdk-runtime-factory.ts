@@ -1135,15 +1135,25 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
             deps.turns,
             { threadId, turnId }
           )
-          if (graphCompletion === 'suspended') {
-            outcome = 'suspended'
+          if (
+            graphCompletion === 'suspended' ||
+            graphCompletion === 'suspended_pending_supervision'
+          ) {
+            outcome = graphCompletion
           } else {
             await deps.turns.finishTurn({ threadId, turnId, status, ...(error ? { error } : {}) })
           }
         } else {
           await deps.turns.finishTurn({ threadId, turnId, status, ...(error ? { error } : {}) })
         }
-        if ((outcome === 'completed' || outcome === 'suspended') && deps.sessionCoordinator) {
+        if (
+          (
+            outcome === 'completed' ||
+            outcome === 'suspended' ||
+            outcome === 'suspended_pending_supervision'
+          ) &&
+          deps.sessionCoordinator
+        ) {
           const preparation = sessionPreparationsByTurn.get(key)
           if (preparation) {
             try {

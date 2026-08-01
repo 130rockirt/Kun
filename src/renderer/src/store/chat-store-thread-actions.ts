@@ -247,6 +247,7 @@ function activeWriteMessageContextMatches(context: WriteAssistantMessageContext)
 export function createThreadActions(
   { set, get, sseAbortRef }: StoreActionContext
 ): Pick<ChatState, 'createThread' | 'createConversation' | 'recoverActiveTurn' | 'selectThread' | 'subscribeThreadEventsLive' | 'drainQueuedMessages' | 'removeQueuedMessage' | 'reorderQueuedMessage' | 'guideQueuedMessage' | 'sendMessage' | 'reviewActiveThread'> {
+  let threadSelectionGeneration = 0
   const persistActiveQueuedMessages = (): void => {
     const state = get()
     if (state.activeThreadId) {
@@ -556,9 +557,15 @@ export function createThreadActions(
       set({ error: i18n.t('common:runtimeActionNeedsConnection') })
       return
     }
+    const selectionGeneration = ++threadSelectionGeneration
     const previousState = get()
     const prevId = previousState.activeThreadId
     const prevBusy = previousState.busy
+    const selectionStillCurrent = (): boolean => {
+      if (selectionGeneration !== threadSelectionGeneration) return false
+      const currentId = get().activeThreadId
+      return currentId === prevId || currentId === id
+    }
     let nextWatch = { ...get().watchTurnCompletion }
     delete nextWatch[id]
     clearWatchedCompletionNotification(id)
@@ -595,6 +602,7 @@ export function createThreadActions(
         goal,
         todos
       } = await p.getThreadDetail(id)
+      if (!selectionStillCurrent()) return
       // A subagent's `side` thread has no locally-stored per-turn model labels
       // (it was never sent through the composer). Backfill the user blocks with
       // the child thread's resolved model so the session shows "which model",
@@ -675,6 +683,7 @@ export function createThreadActions(
         void get().drainQueuedMessages()
       }
     } catch (e) {
+      if (!selectionStillCurrent()) return
       set({
         error: formatRuntimeError(e),
         ...(shouldOpenSettingsForError(e)
@@ -688,6 +697,7 @@ export function createThreadActions(
     if (get().runtimeConnection !== 'ready') return
     const targetThreadId = threadId.trim()
     if (!targetThreadId) return
+    threadSelectionGeneration += 1
     // Live-only entry point for claw channel events (e.g. Feishu / Lark
     // bot replies). Three things happen in parallel:
     //   1. Synchronously switch the chat view to this thread + mark busy
@@ -978,6 +988,15 @@ export function createThreadActions(
     const trimmedText = text.trim()
     if (!trimmedText) return false
     const queued = overrides?.queued
+    const expectedThreadId = (queued?.expectedThreadId ?? overrides?.expectedThreadId ?? '').trim()
+    const requestedAgentSurface = queued?.agentSurface ?? overrides?.agentSurface
+    const expectedThreadStillActive = (): boolean => Boolean(
+      !expectedThreadId ||
+      (
+        get().activeThreadId === expectedThreadId &&
+        (requestedAgentSurface !== 'design' || get().route === 'design')
+      )
+    )
     let writeContext = queued?.writeContext ?? overrides?.writeContext
     const requireActiveWriteContext = Boolean(writeContext && !queued)
     const activeWriteContextIsValid = (): boolean => Boolean(
@@ -988,6 +1007,12 @@ export function createThreadActions(
     if (!activeWriteContextIsValid()) return false
     if (get().runtimeConnection !== 'ready') {
       set({ error: i18n.t('common:runtimeActionNeedsConnection') })
+      return false
+    }
+    if (!expectedThreadStillActive()) {
+      set({
+        error: i18n.t('common:designThreadChangedBeforeSend')
+      })
       return false
     }
     if (get().route !== 'claw') {
@@ -1087,6 +1112,7 @@ export function createThreadActions(
             ...(userModelChip ? { modelLabel: userModelChip } : {}),
             ...(reasoningEffort ? { reasoningEffort } : {}),
             ...(serviceTier ? { serviceTier } : {}),
+            ...(expectedThreadId ? { expectedThreadId } : {}),
             ...(overrides?.guiPlan ? { guiPlan: overrides.guiPlan } : {}),
             ...(overrides?.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
             ...(overrides?.guiDesignMode ? { guiDesignMode: true } : {}),
@@ -1132,6 +1158,12 @@ export function createThreadActions(
       ? overrides?.composerContexts ?? pendingComposerContexts(get())
       : [])
     let activeThreadId = get().activeThreadId
+    if (!expectedThreadStillActive()) {
+      set({
+        error: i18n.t('common:designThreadChangedBeforeSend')
+      })
+      return false
+    }
     const displayText = queued?.displayText ?? overrides?.displayText?.trim() ?? trimmedText
     const userDisplayText = displayText !== trimmedText ? displayText : undefined
     const generatedTitle = deriveThreadTitleFromPrompt(displayText)
@@ -1175,12 +1207,17 @@ export function createThreadActions(
     const previousCurrentTurnId = get().currentTurnId
     const previousCurrentTurnOrchestration = get().currentTurnOrchestration
     const previousCurrentTurnUserId = get().currentTurnUserId
+    const previousLiveReasoning = get().liveReasoning
+    const previousLiveAssistant = get().liveAssistant
     const previousTurnStartedAtByUserId = get().turnStartedAtByUserId
     const previousTurnDurationByUserId = get().turnDurationByUserId
     const previousTurnReasoningFirstAtByUserId = get().turnReasoningFirstAtByUserId
     const previousTurnReasoningLastAtByUserId = get().turnReasoningLastAtByUserId
     const previousQueuedMessages = get().queuedMessages
     resetBusyRecoveryAttempts()
+    // Any thread-detail request that started before this send is now stale. It
+    // must not replace the optimistic user block or the live turn state.
+    threadSelectionGeneration += 1
     set((s) => ({
       busy: true,
       blocks: [
@@ -1381,10 +1418,35 @@ export function createThreadActions(
         runtimeText = buildCodeRuntimePrompt(settings, trimmedText)
       }
       const runtimeDisplayText = channel ? displayText : (userDisplayText ?? trimmedText)
+      if (!expectedThreadStillActive()) {
+        const current = get()
+        if (current.activeThreadId === activeThreadId) {
+          set({
+            blocks: previousBlocks,
+            lastSeq: previousLastSeq,
+            busy: false,
+            liveReasoning: previousLiveReasoning,
+            liveAssistant: previousLiveAssistant,
+            currentTurnId: previousCurrentTurnId,
+            currentTurnOrchestration: previousCurrentTurnOrchestration,
+            currentTurnUserId: previousCurrentTurnUserId,
+            turnStartedAtByUserId: previousTurnStartedAtByUserId,
+            turnDurationByUserId: previousTurnDurationByUserId,
+            turnReasoningFirstAtByUserId: previousTurnReasoningFirstAtByUserId,
+            turnReasoningLastAtByUserId: previousTurnReasoningLastAtByUserId,
+            queuedMessages: previousQueuedMessages,
+            error: i18n.t('common:designThreadChangedBeforeSend')
+          })
+          persistActiveQueuedMessages()
+        } else {
+          set({ error: i18n.t('common:designThreadChangedBeforeSend') })
+        }
+        return false
+      }
       const { turnId, userMessageItemId } = await p.sendUserMessage(activeThreadId, runtimeText, {
         mode,
         orchestration,
-        agentSurface: queued?.agentSurface ?? overrides?.agentSurface ??
+        agentSurface: requestedAgentSurface ??
           (writeContext || get().route === 'write' ? 'write' : guiDesignMode || get().route === 'design' ? 'design' : 'code'),
         ...(composerModel ? { model: composerModel } : {}),
         ...(!channel && composerProviderId ? { providerId: composerProviderId } : {}),
@@ -1404,6 +1466,17 @@ export function createThreadActions(
         ...(composerContexts.length ? { composerContexts } : {})
       })
       runtimeTurnAccepted = true
+      // The runtime accepted this scoped turn, but the user may have switched
+      // threads while the provider request was in flight. Leave the accepted
+      // turn on its original thread and let persistence/reload surface it later;
+      // never project its busy state, blocks, or SSE into the newly active view.
+      if (expectedThreadId && get().activeThreadId !== activeThreadId) {
+        if (userMessageItemId && userModelChip) {
+          rememberTurnModel(activeThreadId, userMessageItemId, userModelChip)
+        }
+        void get().refreshThreads()
+        return true
+      }
       if (queued) {
         set((state) => ({
           queuedMessages: state.queuedMessages.map((message) => message.id === queued.id
@@ -1520,7 +1593,11 @@ export function createThreadActions(
           }))
         }
       }
-      await get().refreshThreads()
+      if ((queued?.agentSurface ?? overrides?.agentSurface) === 'design') {
+        void get().refreshThreads()
+      } else {
+        await get().refreshThreads()
+      }
       return true
     } catch (e) {
       clearBusyWatchdog()

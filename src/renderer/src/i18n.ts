@@ -1,6 +1,7 @@
 import i18n, { type BackendModule } from 'i18next'
 import { initReactI18next } from 'react-i18next'
 import enCommon from './locales/en/common.json'
+import enConnectors from './locales/en/connectors.json'
 import enSettings from './locales/en/settings.json'
 import { APP_LOCALES } from '@shared/app-locales'
 
@@ -9,13 +10,15 @@ const englishGraphResources = Object.fromEntries(
     key.startsWith('graph') || key === 'rightPanelGraph')
 )
 const englishGraphSettingsResources = Object.fromEntries(
-  Object.entries(enSettings).filter(([key]) => key.startsWith('graphSettings'))
+  Object.entries(enSettings).filter(([key]) =>
+    key.startsWith('graphSettings') || key.startsWith('storageRelocation')
+  )
 )
 
 /**
  * Graph Mode launches with complete English and Chinese copy. Other active
- * locales receive an explicit English Graph bundle so controls never render
- * raw translation keys while native translations can be added incrementally.
+ * locales receive an explicit English Graph/Storage bundle so controls never
+ * render raw translation keys while native translations can be added incrementally.
  */
 export function withGraphCommonFallback<T extends Record<string, unknown>>(locale: T): T {
   return {
@@ -55,7 +58,9 @@ const lazyLocaleBackend: BackendModule = {
         null,
         namespace === 'common'
           ? withGraphCommonFallback(resource)
-          : withGraphSettingsFallback(resource)
+          : namespace === 'settings'
+            ? withGraphSettingsFallback(resource)
+            : resource
       )
     }, (error: unknown) => {
       callback(
@@ -68,7 +73,7 @@ const lazyLocaleBackend: BackendModule = {
 
 void i18n.use(lazyLocaleBackend).use(initReactI18next).init({
   resources: {
-    en: { common: enCommon, settings: enSettings }
+    en: { common: enCommon, connectors: enConnectors, settings: enSettings }
   },
   partialBundledLanguages: true,
   lng: 'en',
@@ -78,7 +83,7 @@ void i18n.use(lazyLocaleBackend).use(initReactI18next).init({
   interpolation: { escapeValue: false },
   react: { useSuspense: false },
   defaultNS: 'common',
-  ns: ['common', 'settings']
+  ns: ['common', 'connectors', 'settings']
 })
 
 export default i18n

@@ -1,4 +1,5 @@
 import { lazy, Suspense, useEffect } from 'react'
+import { appWindowTitleForFlavor } from '@shared/app-environment'
 import { useChatStore } from './store/chat-store'
 import { supportsDesktopTitleBar, WindowsTitleBar } from './components/WindowsTitleBar'
 import { RuntimeStatusBanner } from './components/RuntimeStatusBanner'
@@ -43,6 +44,7 @@ export default function AppShell(): React.ReactElement {
   const boot = useChatStore((s) => s.boot)
   const initialSetupOpen = useChatStore((s) => s.initialSetupOpen)
   const platform = typeof window !== 'undefined' ? window.kunGui?.platform ?? 'unknown' : 'unknown'
+  const appEnvironment = typeof window !== 'undefined' ? window.kunGui?.appEnvironment : undefined
   const hasDesktopTitleBar = supportsDesktopTitleBar(platform)
 
   useEffect(() => {
@@ -57,6 +59,11 @@ export default function AppShell(): React.ReactElement {
       if (frame) window.cancelAnimationFrame(frame)
     }
   }, [boot])
+
+  useEffect(() => {
+    if (!appEnvironment?.flavor || typeof document === 'undefined') return
+    document.title = appWindowTitleForFlavor(appEnvironment.flavor)
+  }, [appEnvironment?.flavor])
 
   return (
     <ExtensionSettingsServiceProvider service={extensionSettingsService}>

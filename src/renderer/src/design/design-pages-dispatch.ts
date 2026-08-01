@@ -23,6 +23,9 @@ export type DesignPagesDispatchOptions = {
   resolveProviderId: (model: string) => string
   labels?: RunDesignPagesDeps['labels']
   reasoningEffort?: string
+  serviceTier?: 'priority'
+  expectedThreadId?: string
+  onFirstSendSettled?: RunDesignPagesDeps['onFirstSendSettled']
   runPages?: DesignPagesRunInvoker
 }
 
@@ -53,7 +56,10 @@ export function buildDesignPagesRunOptions({
   promptState,
   resolveProviderId,
   labels,
-  reasoningEffort
+  reasoningEffort,
+  serviceTier,
+  expectedThreadId,
+  onFirstSendSettled
 }: DesignPagesDispatchOptions): RunDesignPagesDeps {
   const model = promptState.assistantModel.trim()
   const providerId = promptState.assistantProviderId.trim() || resolveProviderId(model)
@@ -64,9 +70,12 @@ export function buildDesignPagesRunOptions({
     ...(model ? { model } : {}),
     ...(providerId ? { providerId } : {}),
     ...(reasoningEffort ? { reasoningEffort } : {}),
+    ...(serviceTier ? { serviceTier } : {}),
+    ...(expectedThreadId ? { expectedThreadId } : {}),
     ...(promptState.generationPrompt ? { generationPrompt: promptState.generationPrompt } : {}),
     designContext: promptState.designContext,
-    ...(labels ? { labels } : {})
+    ...(labels ? { labels } : {}),
+    ...(onFirstSendSettled ? { onFirstSendSettled } : {})
   }
 }
 

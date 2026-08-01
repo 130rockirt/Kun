@@ -1,0 +1,695 @@
+import { randomBytes, randomUUID } from 'node:crypto'
+import { closeSync, openSync } from 'node:fs'
+import { mkdir } from 'node:fs/promises'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { spawn } from 'node:child_process'
+import { z } from 'zod'
+import {
+  RuntimeFlavorSchema,
+  RuntimeRegistrationSchema,
+  ThreadExecutionLeaseSchema,
+  type RuntimeFlavor,
+  type RuntimeRegistration,
+  type ThreadExecutionLease
+} from '../contracts/runtime-flavor.js'
+import {
+  ThreadExecutionBusyError,
+  type ThreadExecutionLeasePort
+} from '../ports/thread-execution-lease.js'
+import { isLoopbackHost } from '../server/loopback-host.js'
+import {
+  readRuntimeDiscovery,
+  removeRuntimeDiscovery,
+  type RuntimeDiscoveryRecord
+} from '../server/runtime-discovery.js'
+import {
+  KUN_MANAGER_PROTOCOL_VERSION,
+  defaultKunControlDir,
+  defaultProductionSettingsPath,
+  readManagerDiscovery,
+  removeManagerDiscovery,
+  withManagerStartLock,
+  type ManagerDiscoveryRecord
+} from './manager-discovery.js'
+import { KUN_MANAGER_CAPABILITIES } from './service-manager.js'
+
+const START_TIMEOUT_MS = 30_000
+const POLL_MS = 100
+const LEGACY_HANDOVER_TIMEOUT_MS = 5 * 60_000
+
+const ManagerHealthSchema = z.object({
+  status: z.literal('ok'),
+  service: z.literal('kun-service-manager'),
+  protocolVersion: z.literal(KUN_MANAGER_PROTOCOL_VERSION),
+  instanceId: z.string(),
+  pid: z.number().int().positive(),
+  startedAt: z.string().datetime(),
+  serviceVersion: z.string(),
+  capabilities: z.array(z.string())
+})
+
+export type ServiceManagerConnection = {
+  discovery: ManagerDiscoveryRecord
+}
+
+export class ManagerRevisionConflictError extends Error {
+  constructor(readonly currentRevision: number) {
+    super(`shared document changed concurrently; current revision is ${currentRevision}`)
+    this.name = 'ManagerRevisionConflictError'
+  }
+}
+
+export class ManagerRevisionedDocumentClient {
+  constructor(
+    private readonly manager: ServiceManagerConnection,
+    private readonly key: 'settings' | 'client-state'
+  ) {}
+
+  async read(): Promise<{ revision: number; value: string | null }> {
+    const body = await requestManagerJson(this.manager, `/v1/documents/${this.key}`, {})
+    return z.object({
+      snapshot: z.object({
+        revision: z.number().int().nonnegative(),
+        value: z.string().nullable()
+      })
+    }).parse(body).snapshot
+  }
+
+  async write(expectedRevision: number, value: string): Promise<{ revision: number; value: string }> {
+    const response = await requestManagerResponse(this.manager, `/v1/documents/${this.key}`, {
+      method: 'PUT',
+      body: { expectedRevision, value }
+    })
+    if (response.status === 409) {
+      const conflict = z.object({ currentRevision: z.number().int().nonnegative() })
+        .safeParse(await response.json().catch(() => null))
+      if (conflict.success) throw new ManagerRevisionConflictError(conflict.data.currentRevision)
+    }
+    return z.object({
+      snapshot: z.object({
+        revision: z.number().int().nonnegative(),
+        value: z.string()
+      })
+    }).parse(await requireManagerJson(response)).snapshot
+  }
+}
+
+export class ManagerResourceLeaseClient {
+  private readonly resources = new Map<string, {
+    held: boolean
+    timer: ReturnType<typeof setInterval>
+    onAcquired: () => void | Promise<void>
+    onLost: () => void | Promise<void>
+  }>()
+
+  constructor(
+    private readonly manager: ServiceManagerConnection,
+    private readonly flavor: RuntimeFlavor,
+    private readonly instanceId: string
+  ) {}
+
+  async maintain(input: {
+    resource: string
+    onAcquired: () => void | Promise<void>
+    onLost: () => void | Promise<void>
+  }): Promise<boolean> {
+    if (this.resources.has(input.resource)) throw new Error(`resource lease already maintained: ${input.resource}`)
+    const timer = setInterval(() => void this.tick(input.resource), 3_000)
+    timer.unref?.()
+    this.resources.set(input.resource, { held: false, timer, ...input })
+    await this.tick(input.resource)
+    return this.resources.get(input.resource)?.held === true
+  }
+
+  async shutdown(): Promise<void> {
+    const resources = [...this.resources.entries()]
+    this.resources.clear()
+    await Promise.all(resources.map(async ([resource, state]) => {
+      clearInterval(state.timer)
+      if (state.held) await this.release(resource).catch(() => undefined)
+    }))
+  }
+
+  private async tick(resource: string): Promise<void> {
+    const state = this.resources.get(resource)
+    if (!state) return
+    try {
+      const body = await requestManagerJson(
+        this.manager,
+        `/v1/leases/resources/${encodeURIComponent(resource)}/acquire`,
+        {
+          method: 'POST',
+          body: { ownerFlavor: this.flavor, ownerInstanceId: this.instanceId }
+        }
+      )
+      const acquired = z.object({ acquired: z.boolean() }).parse(body).acquired
+      if (acquired && !state.held) {
+        state.held = true
+        await state.onAcquired()
+      } else if (!acquired && state.held) {
+        state.held = false
+        await state.onLost()
+      }
+    } catch {
+      if (state.held) {
+        state.held = false
+        await state.onLost()
+      }
+    }
+  }
+
+  private async release(resource: string): Promise<void> {
+    await requestManagerJson(
+      this.manager,
+      `/v1/leases/resources/${encodeURIComponent(resource)}/release`,
+      {
+        method: 'POST',
+        body: { ownerFlavor: this.flavor, ownerInstanceId: this.instanceId }
+      }
+    )
+  }
+}
+
+export async function resolveServiceManager(
+  controlDir = defaultKunControlDir(),
+  fetchImpl: typeof fetch = fetch
+): Promise<ServiceManagerConnection | null> {
+  const discovery = await readManagerDiscovery(controlDir).catch(() => null)
+  if (!discovery || !safeManagerUrl(discovery) || !processIsAlive(discovery.pid)) return null
+  try {
+    const response = await fetchImpl(`${discovery.baseUrl}/health`, {
+      signal: AbortSignal.timeout(2_000)
+    })
+    if (!response.ok) return null
+    const health = ManagerHealthSchema.parse(await response.json())
+    if (
+      health.instanceId !== discovery.instanceId ||
+      health.pid !== discovery.pid ||
+      health.startedAt !== discovery.startedAt ||
+      health.serviceVersion !== discovery.serviceVersion ||
+      !KUN_MANAGER_CAPABILITIES.every((capability) => health.capabilities.includes(capability))
+    ) return null
+    return { discovery }
+  } catch {
+    return null
+  }
+}
+
+export async function ensureServiceManager(input: {
+  flavor: RuntimeFlavor
+  controlDir?: string
+  fetch?: typeof fetch
+  timeoutMs?: number
+  allowDevelopmentBootstrap?: boolean
+  dataDir: string
+  settingsPath?: string
+  launch?: {
+    command: string
+    args: string[]
+    env?: NodeJS.ProcessEnv
+    runAsNode?: boolean
+  }
+}): Promise<ServiceManagerConnection> {
+  const controlDir = input.controlDir ?? defaultKunControlDir()
+  const settingsPath = input.settingsPath ?? defaultProductionSettingsPath()
+  const fetchImpl = input.fetch ?? fetch
+  const existing = await resolveServiceManager(controlDir, fetchImpl)
+  if (existing) {
+    if (existing.discovery.dataDir !== input.dataDir || existing.discovery.settingsPath !== settingsPath) {
+      throw new Error(
+        'Kun Service Manager owns a different canonical data or settings path'
+      )
+    }
+    return existing
+  }
+  if (input.flavor === 'development' && !input.allowDevelopmentBootstrap) {
+    throw new Error(
+      'kun-dv requires the compatible Kun Service Manager installed by the production application; start or update Kun first'
+    )
+  }
+  return withManagerStartLock(controlDir, async () => {
+    const elected = await resolveServiceManager(controlDir, fetchImpl)
+    if (elected) {
+      if (elected.discovery.dataDir !== input.dataDir || elected.discovery.settingsPath !== settingsPath) {
+        throw new Error('Kun Service Manager owns a different canonical data or settings path')
+      }
+      return elected
+    }
+    const stale = await readManagerDiscovery(controlDir).catch(() => null)
+    if (stale && !processIsAlive(stale.pid)) {
+      await removeManagerDiscovery(controlDir, stale.instanceId).catch(() => undefined)
+    } else if (stale) {
+      throw new Error(`Kun Service Manager process ${stale.pid} is alive but unavailable`)
+    }
+    // The Manager owns the canonical data plane for both flavor slots. Even
+    // an explicitly allowed source-DV bootstrap must drain a pre-manager
+    // production writer before opening shared stores; otherwise the DV
+    // Runtime and legacy production Runtime can concurrently mutate JSONL.
+    await handoverLegacyProductionRuntime({
+      dataDir: input.dataDir,
+      fetch: fetchImpl,
+      timeoutMs: Math.max(input.timeoutMs ?? START_TIMEOUT_MS, LEGACY_HANDOVER_TIMEOUT_MS)
+    })
+    await mkdir(controlDir, { recursive: true, mode: 0o700 })
+    const logPath = join(controlDir, 'manager.log')
+    const logFd = openSync(logPath, 'a', 0o600)
+    const managerToken = randomBytes(32).toString('base64url')
+    const instanceId = randomUUID()
+    const entry = fileURLToPath(new URL('./manager-entry.js', import.meta.url))
+    const command = input.launch?.command ?? process.execPath
+    const args = input.launch?.args ?? [entry]
+    const runAsNode = input.launch?.runAsNode ?? Boolean(process.versions.electron)
+    let child
+    try {
+      child = spawn(command, args, {
+        detached: true,
+        windowsHide: true,
+        stdio: ['ignore', logFd, logFd],
+        env: {
+          ...process.env,
+          ...(input.launch?.env ?? {}),
+          ...(runAsNode ? { ELECTRON_RUN_AS_NODE: '1' } : {}),
+          // The spawning runtime may be recovering from a dead manager and
+          // therefore still carry its old client endpoint. A manager is the
+          // physical writer and must not proxy AtomicJsonFile operations to a
+          // predecessor (or recursively to itself).
+          KUN_MANAGER_BASE_URL: '',
+          KUN_MANAGER_CONTROL_DIR: controlDir,
+          KUN_MANAGER_TOKEN: managerToken,
+          KUN_MANAGER_INSTANCE_ID: instanceId,
+          KUN_MANAGER_DATA_DIR: input.dataDir,
+          KUN_MANAGER_SETTINGS_PATH: settingsPath,
+          KUN_MANAGER_LOG_PATH: logPath
+        }
+      })
+      child.unref()
+    } finally {
+      closeSync(logFd)
+    }
+    const deadline = Date.now() + (input.timeoutMs ?? START_TIMEOUT_MS)
+    while (Date.now() < deadline) {
+      const connection = await resolveServiceManager(controlDir, fetchImpl)
+      if (connection) return connection
+      if (child.exitCode !== null) break
+      await delay(POLL_MS)
+    }
+    throw new Error(`Kun Service Manager did not become ready; inspect ${logPath}`)
+  })
+}
+
+/**
+ * A pre-manager runtime owns the canonical JSONL files directly. The manager
+ * must never open those stores concurrently. Manager-aware runtimes advertise
+ * their protocol in the authenticated info response and can remain alive
+ * while a crashed manager is restarted; older direct writers are drained and
+ * stopped before manager storage is composed.
+ */
+async function handoverLegacyProductionRuntime(input: {
+  dataDir: string
+  fetch: typeof fetch
+  timeoutMs: number
+}): Promise<void> {
+  const discovery = await readRuntimeDiscovery(input.dataDir, 'production').catch(() => null)
+  if (!discovery) return
+  if (!processIsAlive(discovery.pid)) {
+    await removeRuntimeDiscovery(input.dataDir, discovery.instanceId, 'production').catch(() => undefined)
+    return
+  }
+  const deadline = Date.now() + input.timeoutMs
+  for (;;) {
+    const probe = await probeLegacyHandoverRuntime(discovery, input.fetch)
+    if (!probe) {
+      if (!processIsAlive(discovery.pid)) {
+        await removeRuntimeDiscovery(input.dataDir, discovery.instanceId, 'production').catch(() => undefined)
+        return
+      }
+      throw new Error(
+        `Existing Kun runtime process ${discovery.pid} is alive but cannot be verified; ` +
+        'the Service Manager will not open shared data until that process exits'
+      )
+    }
+    if (probe.managerProtocolVersion === KUN_MANAGER_PROTOCOL_VERSION) return
+    if (probe.activeTurnCount !== undefined && probe.activeTurnCount > 0) {
+      if (Date.now() >= deadline) {
+        throw new Error(
+          'Timed out waiting for the legacy production Runtime to finish its active turn; ' +
+          'DV remains disabled until the production Runtime can be handed over safely'
+        )
+      }
+      await delay(500)
+      continue
+    }
+    const response = await input.fetch(`${discovery.baseUrl.replace(/\/$/u, '')}/v1/runtime/shutdown`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${discovery.runtimeToken}`,
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({ instanceId: discovery.instanceId }),
+      signal: AbortSignal.timeout(5_000)
+    })
+    if (!response.ok) {
+      throw new Error(`Legacy Kun runtime handover failed with HTTP ${response.status}`)
+    }
+    while (Date.now() < deadline) {
+      if (!processIsAlive(discovery.pid)) {
+        await removeRuntimeDiscovery(input.dataDir, discovery.instanceId, 'production').catch(() => undefined)
+        return
+      }
+      await delay(POLL_MS)
+    }
+    throw new Error('Timed out waiting for the legacy production Runtime to release shared data')
+  }
+}
+
+async function probeLegacyHandoverRuntime(
+  discovery: RuntimeDiscoveryRecord,
+  fetchImpl: typeof fetch
+): Promise<{ activeTurnCount?: number; managerProtocolVersion?: number } | null> {
+  if (!safeRuntimeDiscovery(discovery)) return null
+  try {
+    const response = await fetchImpl(`${discovery.baseUrl.replace(/\/$/u, '')}/v1/runtime/info`, {
+      headers: discovery.runtimeToken
+        ? { authorization: `Bearer ${discovery.runtimeToken}` }
+        : {},
+      signal: AbortSignal.timeout(2_000)
+    })
+    if (!response.ok) return null
+    const body = z.object({
+      instanceId: z.string(),
+      pid: z.number().int().positive().optional(),
+      startedAt: z.string()
+    }).passthrough().safeParse(await response.json())
+    if (!body.success ||
+      body.data.instanceId !== discovery.instanceId ||
+      body.data.startedAt !== discovery.startedAt ||
+      (body.data.pid !== undefined && body.data.pid !== discovery.pid)) return null
+    const activeTurnCount = parseNonnegativeHeader(response.headers.get('x-kun-active-turn-count'))
+    const managerProtocolVersion = parseNonnegativeHeader(
+      response.headers.get('x-kun-manager-protocol-version')
+    )
+    return {
+      ...(activeTurnCount !== undefined ? { activeTurnCount } : {}),
+      ...(managerProtocolVersion !== undefined ? { managerProtocolVersion } : {})
+    }
+  } catch {
+    return null
+  }
+}
+
+function safeRuntimeDiscovery(record: RuntimeDiscoveryRecord): boolean {
+  try {
+    const url = new URL(record.baseUrl)
+    return url.protocol === 'http:' &&
+      isLoopbackHost(url.hostname) &&
+      isLoopbackHost(record.host) &&
+      Number(url.port || '80') === record.port &&
+      url.username === '' &&
+      url.password === ''
+  } catch {
+    return false
+  }
+}
+
+function parseNonnegativeHeader(value: string | null): number | undefined {
+  if (!value || !/^\d+$/u.test(value)) return undefined
+  const parsed = Number(value)
+  return Number.isSafeInteger(parsed) ? parsed : undefined
+}
+
+export async function registerRuntimeWithManager(input: {
+  manager: ServiceManagerConnection
+  registration: RuntimeRegistration
+  fetch?: typeof fetch
+}): Promise<RuntimeRegistration> {
+  const response = await requestManagerJson(input.manager, `/v1/runtimes/${input.registration.flavor}/register`, {
+    method: 'PUT',
+    body: input.registration,
+    fetch: input.fetch
+  })
+  const parsed = z.object({ registration: RuntimeRegistrationSchema }).parse(response)
+  return parsed.registration
+}
+
+export async function heartbeatRuntimeWithManager(input: {
+  manager: ServiceManagerConnection
+  flavor: RuntimeFlavor
+  instanceId: string
+  fetch?: typeof fetch
+}): Promise<boolean> {
+  const response = await requestManagerResponse(input.manager, `/v1/runtimes/${input.flavor}/heartbeat`, {
+    method: 'POST',
+    body: { instanceId: input.instanceId },
+    fetch: input.fetch
+  })
+  return response.ok
+}
+
+export async function unregisterRuntimeWithManager(input: {
+  manager: ServiceManagerConnection
+  flavor: RuntimeFlavor
+  instanceId: string
+  fetch?: typeof fetch
+}): Promise<void> {
+  await requestManagerResponse(input.manager, `/v1/runtimes/${input.flavor}/${encodeURIComponent(input.instanceId)}`, {
+    method: 'DELETE',
+    fetch: input.fetch
+  }).catch(() => undefined)
+}
+
+export async function readManagerRuntime(
+  manager: ServiceManagerConnection,
+  flavor: RuntimeFlavor,
+  fetchImpl: typeof fetch = fetch
+): Promise<RuntimeRegistration | null> {
+  const parsedFlavor = RuntimeFlavorSchema.parse(flavor)
+  const response = await requestManagerJson(manager, `/v1/runtimes/${parsedFlavor}`, { fetch: fetchImpl })
+  return z.object({ registration: RuntimeRegistrationSchema.nullable() }).parse(response).registration
+}
+
+export class ManagerThreadExecutionLeaseClient implements ThreadExecutionLeasePort {
+  private readonly renewals = new Map<string, {
+    lease: ThreadExecutionLease
+    timer: ReturnType<typeof setInterval>
+  }>()
+  private onLeaseLost: ((lease: ThreadExecutionLease) => void) | undefined
+
+  constructor(
+    private readonly manager: ServiceManagerConnection,
+    private readonly flavor: RuntimeFlavor,
+    private readonly instanceId: string
+  ) {}
+
+  setLeaseLostHandler(handler: (lease: ThreadExecutionLease) => void): void {
+    this.onLeaseLost = handler
+  }
+
+  async acquire(threadId: string, turnId: string): Promise<ThreadExecutionLease> {
+    const response = await requestManagerResponse(
+      this.manager,
+      `/v1/leases/threads/${encodeURIComponent(threadId)}/acquire`,
+      {
+        method: 'POST',
+        body: { turnId, ownerFlavor: this.flavor, ownerInstanceId: this.instanceId }
+      }
+    )
+    if (response.status === 409) {
+      const body = await response.json().catch(() => null)
+      const owner = z.object({ owner: ThreadExecutionLeaseSchema }).safeParse(body)
+      if (owner.success) throw new ThreadExecutionBusyError(owner.data.owner)
+    }
+    const parsed = z.object({ lease: ThreadExecutionLeaseSchema }).parse(
+      await requireManagerJson(response)
+    )
+    this.startRenewal(parsed.lease)
+    return parsed.lease
+  }
+
+  async release(threadId: string, turnId: string): Promise<void> {
+    this.stopRenewal(threadId, turnId)
+    await requestManagerJson(
+      this.manager,
+      `/v1/leases/threads/${encodeURIComponent(threadId)}/release`,
+      {
+        method: 'POST',
+        body: { turnId, ownerFlavor: this.flavor, ownerInstanceId: this.instanceId }
+      }
+    )
+  }
+
+  async owner(threadId: string): Promise<ThreadExecutionLease | null> {
+    const body = await requestManagerJson(
+      this.manager,
+      `/v1/leases/threads/${encodeURIComponent(threadId)}`,
+      {}
+    )
+    return z.object({ lease: ThreadExecutionLeaseSchema.nullable() }).parse(body).lease
+  }
+
+  shutdown(): void {
+    for (const { timer } of this.renewals.values()) clearInterval(timer)
+    this.renewals.clear()
+  }
+
+  private startRenewal(lease: ThreadExecutionLease): void {
+    this.stopRenewal(lease.threadId)
+    const timer = setInterval(() => void this.renew(lease.threadId), 5_000)
+    timer.unref?.()
+    this.renewals.set(lease.threadId, { lease, timer })
+  }
+
+  private async renew(threadId: string): Promise<void> {
+    const current = this.renewals.get(threadId)
+    if (!current) return
+    try {
+      const response = await requestManagerResponse(
+        this.manager,
+        `/v1/leases/threads/${encodeURIComponent(threadId)}/renew`,
+        {
+          method: 'POST',
+          body: {
+            turnId: current.lease.turnId,
+            ownerFlavor: this.flavor,
+            ownerInstanceId: this.instanceId
+          }
+        }
+      )
+      const parsed = z.object({ lease: ThreadExecutionLeaseSchema }).parse(
+        await requireManagerJson(response)
+      )
+      const latest = this.renewals.get(threadId)
+      if (latest?.lease.turnId === current.lease.turnId) latest.lease = parsed.lease
+    } catch {
+      this.stopRenewal(threadId, current.lease.turnId)
+      this.onLeaseLost?.(current.lease)
+    }
+  }
+
+  private stopRenewal(threadId: string, turnId?: string): void {
+    const current = this.renewals.get(threadId)
+    if (!current || (turnId && current.lease.turnId !== turnId)) return
+    clearInterval(current.timer)
+    this.renewals.delete(threadId)
+  }
+}
+
+export async function forwardRequestToExecutionOwner(input: {
+  manager: ServiceManagerConnection
+  currentInstanceId: string
+  request: Request
+  threadId?: string
+  control?: { kind: 'approval' | 'user-input'; id: string }
+}): Promise<Response | null> {
+  let lease: ThreadExecutionLease | null = null
+  let registration: RuntimeRegistration | null = null
+  if (input.threadId) {
+    const owner = await requestManagerJson(
+      input.manager,
+      `/v1/leases/threads/${encodeURIComponent(input.threadId)}`,
+      {}
+    )
+    lease = z.object({ lease: ThreadExecutionLeaseSchema.nullable() }).parse(owner).lease
+    if (lease) registration = await readManagerRuntime(input.manager, lease.ownerFlavor)
+  } else if (input.control) {
+    const owner = await requestManagerJson(
+      input.manager,
+      `/v1/controls/${input.control.kind}/${encodeURIComponent(input.control.id)}/owner`,
+      {}
+    )
+    const parsed = z.object({
+      threadId: z.string().nullable(),
+      lease: ThreadExecutionLeaseSchema.nullable(),
+      registration: RuntimeRegistrationSchema.nullable()
+    }).parse(owner)
+    lease = parsed.lease
+    registration = parsed.registration
+  }
+  if (!lease || lease.ownerInstanceId === input.currentInstanceId) return null
+  if (!registration || registration.instanceId !== lease.ownerInstanceId) {
+    throw new Error('thread execution owner is unavailable')
+  }
+  const sourceUrl = new URL(input.request.url)
+  const targetUrl = new URL(`${sourceUrl.pathname}${sourceUrl.search}`, registration.baseUrl)
+  const headers = new Headers(input.request.headers)
+  headers.set('authorization', `Bearer ${registration.runtimeToken}`)
+  headers.delete('host')
+  headers.delete('content-length')
+  const method = input.request.method.toUpperCase()
+  const body = method === 'GET' || method === 'HEAD'
+    ? undefined
+    : await input.request.arrayBuffer()
+  return fetch(targetUrl, {
+    method,
+    headers,
+    ...(body === undefined ? {} : { body }),
+    redirect: 'manual',
+    signal: input.request.signal
+  })
+}
+
+export async function requestManagerJson(
+  manager: ServiceManagerConnection,
+  path: string,
+  options: { method?: string; body?: unknown; fetch?: typeof fetch; timeoutMs?: number }
+): Promise<unknown> {
+  return requireManagerJson(await requestManagerResponse(manager, path, options))
+}
+
+export async function requestManagerResponse(
+  manager: ServiceManagerConnection,
+  path: string,
+  options: { method?: string; body?: unknown; fetch?: typeof fetch; timeoutMs?: number }
+): Promise<Response> {
+  const fetchImpl = options.fetch ?? fetch
+  return fetchImpl(`${manager.discovery.baseUrl}${path}`, {
+    method: options.method ?? 'GET',
+    headers: {
+      authorization: `Bearer ${manager.discovery.managerToken}`,
+      ...(options.body === undefined ? {} : { 'content-type': 'application/json' })
+    },
+    ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
+    signal: AbortSignal.timeout(options.timeoutMs ?? 5_000)
+  })
+}
+
+async function requireManagerJson(response: Response): Promise<unknown> {
+  if (!response.ok) {
+    const body = await response.text().catch(() => '')
+    throw new Error(`Kun Service Manager request failed with HTTP ${response.status}: ${body.slice(0, 1_024)}`)
+  }
+  return response.json()
+}
+
+function safeManagerUrl(record: ManagerDiscoveryRecord): boolean {
+  try {
+    const url = new URL(record.baseUrl)
+    return url.protocol === 'http:' &&
+      isLoopbackHost(url.hostname) &&
+      isLoopbackHost(record.host) &&
+      Number(url.port || '80') === record.port &&
+      (url.pathname === '/' || url.pathname === '') &&
+      url.username === '' &&
+      url.password === ''
+  } catch {
+    return false
+  }
+}
+
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return String((error as { code?: unknown })?.code ?? '') === 'EPERM'
+  }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+export function defaultManagerControlDirForTests(home = homedir()): string {
+  return defaultKunControlDir(home)
+}

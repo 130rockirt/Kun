@@ -283,7 +283,7 @@ describe('GraphControlService', () => {
     ])
   })
 
-  it('rejects stale, duplicate, unrequired, and premature external reviews', async () => {
+  it('replays equivalent reviews and rejects conflicting, unrequired, and premature reviews', async () => {
     const { control, store, resumeActive } = await fixture()
     const source = testGraphPlan().nodes[0]!
     await control.create({
@@ -329,18 +329,33 @@ describe('GraphControlService', () => {
       expect.objectContaining({ id: 'run_review', lastEventSeq: reviewed.lastEventSeq })
     )
     resumeActive.mockClear()
-    await expect(control.recordReview('run_review', review, {
+    await expect(control.recordReview('run_review', {
+      ...review,
+      reviewId: 'human_review_replayed',
+      createdAt: '2026-07-29T01:00:00.000Z'
+    }, {
       commandId: 'human_review_replay',
-      idempotencyKey: 'human_review_replay'
+      idempotencyKey: 'human_review_replay',
+      expectedSeq: submitted.lastEventSeq
     })).resolves.toMatchObject({ id: 'run_review' })
     expect(resumeActive).toHaveBeenCalledOnce()
     await expect(control.recordReview('run_review', {
       ...review,
-      reviewId: 'human_review_duplicate'
+      reviewId: 'human_review_conflicting_outcome',
+      outcome: 'revise',
+      repairInstructions: 'Collect the missing evidence.'
     }, {
-      commandId: 'human_review_duplicate',
-      idempotencyKey: 'human_review_duplicate'
-    })).rejects.toThrow(/already exists/)
+      commandId: 'human_review_conflicting_outcome',
+      idempotencyKey: 'human_review_conflicting_outcome'
+    })).rejects.toThrow(/conflicting human review already exists/)
+    await expect(control.recordReview('run_review', {
+      ...review,
+      reviewId: 'human_review_conflicting_content',
+      summary: 'A materially different approval.'
+    }, {
+      commandId: 'human_review_conflicting_content',
+      idempotencyKey: 'human_review_conflicting_content'
+    })).rejects.toThrow(/conflicting human review already exists/)
     await expect(control.recordReview('run_review', {
       ...review,
       reviewId: 'deterministic_review',
@@ -349,6 +364,49 @@ describe('GraphControlService', () => {
       commandId: 'deterministic_review',
       idempotencyKey: 'deterministic_review'
     }, 'system')).rejects.toThrow(/not required/)
+
+    let advanced = await control.get('run_review')
+    for (const [index, event] of [
+      {
+        type: 'attempt_status_changed' as const,
+        payload: {
+          nodeId: source.id,
+          attemptId: attempt.id,
+          from: 'submitted' as const,
+          to: 'accepted' as const
+        }
+      },
+      {
+        type: 'node_status_changed' as const,
+        payload: {
+          nodeId: source.id,
+          from: 'submitted' as const,
+          to: 'accepted' as const,
+          reason: 'test review reconciliation'
+        }
+      }
+    ].entries()) {
+      advanced = (await store.append(advanced.id, {
+        expectedSeq: advanced.lastEventSeq,
+        graphRevision: advanced.currentRevision,
+        commandId: `advance_review_${index}`,
+        idempotencyKey: `advance-review:${index}`,
+        event
+      })).state
+    }
+    resumeActive.mockClear()
+    await expect(control.recordReview('run_review', {
+      ...review,
+      reviewId: 'human_review_after_reconciliation',
+      createdAt: '2026-07-29T02:00:00.000Z'
+    }, {
+      commandId: 'human_review_after_reconciliation',
+      idempotencyKey: 'human_review_after_reconciliation',
+      expectedSeq: submitted.lastEventSeq
+    })).resolves.toMatchObject({
+      nodes: { [source.id]: expect.objectContaining({ status: 'accepted' }) }
+    })
+    expect(resumeActive).not.toHaveBeenCalled()
   })
 
   it('rejects a pass review when host validation is invalid', async () => {

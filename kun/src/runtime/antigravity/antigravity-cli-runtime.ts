@@ -214,7 +214,10 @@ export class AntigravityCliRuntime implements DelegatedTurnRuntime {
         this.deps.turns,
         { threadId, turnId }
       )
-      if (graphCompletion === 'suspended') return 'suspended'
+      if (
+        graphCompletion === 'suspended' ||
+        graphCompletion === 'suspended_pending_supervision'
+      ) return graphCompletion
       await this.deps.turns.finishTurn({
         threadId,
         turnId,
@@ -433,7 +436,11 @@ export class AntigravityCliRuntime implements DelegatedTurnRuntime {
         })
       )
       const suspension = await this.deps.turns.suspendGraphLeadTurn?.({ threadId, turnId })
-      const outcome: TurnRunOutcome = suspension === 'suspended' ? 'suspended' : 'completed'
+      const outcome: TurnRunOutcome =
+        suspension === 'suspended' ||
+        suspension === 'suspended_pending_supervision'
+          ? suspension
+          : 'completed'
       if (outcome === 'completed') {
         await this.deps.turns.finishTurn({ threadId, turnId, status: 'completed' })
       }

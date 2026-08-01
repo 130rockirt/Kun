@@ -882,7 +882,8 @@ describe('AgentLoop interruption', () => {
       return finishTurn(input)
     }
 
-    await expect(loop.runTurn(threadId, started.turnId)).resolves.toBe('suspended')
+    await expect(loop.runTurn(threadId, started.turnId))
+      .resolves.toBe('suspended_pending_supervision')
 
     expect(model.requests).toHaveLength(8)
     expect(suspensionInputs).toEqual([
@@ -988,7 +989,7 @@ describe('AgentLoop interruption', () => {
       await model.waitForStart()
       await vi.advanceTimersByTimeAsync(10 * 60_000)
 
-      await expect(run).resolves.toBe('suspended')
+      await expect(run).resolves.toBe('suspended_pending_supervision')
       expect(model.requests).toHaveLength(1)
       expect(model.requests[0]?.abortSignal.aborted).toBe(true)
       expect(finishTurnCalls).toBe(0)

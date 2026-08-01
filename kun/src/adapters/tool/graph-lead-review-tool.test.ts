@@ -5,6 +5,7 @@ import {
   testGraphEnvelope,
   testGraphPlan
 } from '../../graph/graph-test-fixtures.test-support.js'
+import { graphReviewSemanticKey } from '../../graph/graph-control-service.js'
 import { replayGraphEvents } from '../../graph/graph-reducer.js'
 import { GraphWorkerSessionRegistry } from '../../graph/graph-worker-sessions.js'
 import type { ToolHostContext } from '../../ports/tool-host.js'
@@ -150,11 +151,56 @@ describe('Graph Lead review tool', () => {
       }),
       expect.objectContaining({
         commandId: 'graph_command_2',
-        idempotencyKey: 'graph-review:graph_review_1',
+        idempotencyKey: graphReviewSemanticKey(run.id, 'attempt_latest', 'lead'),
         expectedRevision: 1
       }),
       'lead'
     )
+  })
+
+  it('reuses one semantic command key when the same Lead decision is replayed', async () => {
+    const run = reviewableRun()
+    let next = 0
+    const recordReview = vi.fn(async (
+      _runId: string,
+      review: ReturnType<typeof reviewableRun>['reviews'][number],
+      _command: { commandId: string; idempotencyKey: string },
+      _authority: 'lead'
+    ) => {
+      if (run.reviews.length === 0) {
+        run.reviews.push(review)
+        run.nodes.research!.status = 'accepted'
+        run.nodes.research!.attempts[0]!.status = 'accepted'
+        run.status = 'completed'
+      }
+      return run
+    })
+    const reviewTool = reviewTools(
+      run,
+      recordReview,
+      (prefix) => `${prefix}_${++next}`
+    ).find((tool) => tool.name === 'graph_review_node')!
+    const input = {
+      runId: run.id,
+      nodeId: 'research',
+      outcome: 'pass' as const,
+      summary: 'The inspected evidence satisfies the node contract.',
+      evidence: ['Confirmed the relevant source path.']
+    }
+
+    const first = await reviewTool.execute(input, context())
+    const replay = await reviewTool.execute(input, context())
+
+    expect(first.isError).not.toBe(true)
+    expect(replay.isError).not.toBe(true)
+    expect(recordReview).toHaveBeenCalledTimes(2)
+    const firstReview = recordReview.mock.calls[0]![1]
+    const replayReview = recordReview.mock.calls[1]![1]
+    expect(firstReview.reviewId).not.toBe(replayReview.reviewId)
+    expect(recordReview.mock.calls.map((call) => call[2].idempotencyKey)).toEqual([
+      graphReviewSemanticKey(run.id, 'attempt_latest', 'lead'),
+      graphReviewSemanticKey(run.id, 'attempt_latest', 'lead')
+    ])
   })
 
   it('preserves revision instructions and rejects stale or invalid pass targets', async () => {

@@ -103,11 +103,11 @@ describe('delegated Graph turn policy', () => {
   test('forces a safe park only after the bounded recovery exchange is exhausted', async () => {
     const suspendGraphLeadTurn = vi.fn()
       .mockResolvedValueOnce('supervision_pending')
-      .mockResolvedValueOnce('suspended')
+      .mockResolvedValueOnce('suspended_pending_supervision')
     await expect(parkDelegatedGraphTurnAfterRecovery(
       { suspendGraphLeadTurn },
       { threadId: 'thread_1', turnId: 'turn_1' }
-    )).resolves.toBe('suspended')
+    )).resolves.toBe('suspended_pending_supervision')
     expect(suspendGraphLeadTurn).toHaveBeenLastCalledWith({
       threadId: 'thread_1',
       turnId: 'turn_1',

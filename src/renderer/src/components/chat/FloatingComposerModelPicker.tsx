@@ -47,6 +47,7 @@ type Props = {
   stretch?: boolean
   composerReasoningEffort?: string
   composerFastMode?: boolean
+  showProviderInModelLabel?: boolean
   onComposerModelChange: (modelId: string, providerId?: string) => void
   onComposerReasoningEffortChange?: (effort: ComposerReasoningEffort) => void
   onComposerFastModeChange?: (enabled: boolean) => void
@@ -127,6 +128,7 @@ export function FloatingComposerModelPicker({
   stretch = false,
   composerReasoningEffort = 'max',
   composerFastMode = false,
+  showProviderInModelLabel = false,
   onComposerModelChange,
   onComposerReasoningEffortChange,
   onComposerFastModeChange,
@@ -196,6 +198,10 @@ export function FloatingComposerModelPicker({
   const modelLabel = needsProviderSetup
     ? t('composerNoProvidersShort')
     : fullModelLabel(composerModel, t('autoLabel'))
+  const splitModelLabel =
+    showProviderInModelLabel && selectedProviderGroup?.label
+      ? `${selectedProviderGroup.label} · ${modelLabel}`
+      : modelLabel
   const controlsTitle = reasoningEnabled
     ? `${modelLabel} / ${currentReasoningLabel}`
     : modelLabel
@@ -759,9 +765,9 @@ export function FloatingComposerModelPicker({
           aria-expanded={menuOpen}
           aria-haspopup="menu"
           aria-label={t('composerModel')}
-          title={modelLabel}
+          title={splitModelLabel}
         >
-          <span className="min-w-0 truncate">{modelLabel}</span>
+          <span className="min-w-0 truncate">{splitModelLabel}</span>
           <ChevronDown className="h-3.5 w-3.5 shrink-0 text-ds-faint" strokeWidth={1.8} />
         </button>
 

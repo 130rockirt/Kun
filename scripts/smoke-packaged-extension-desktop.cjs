@@ -276,6 +276,11 @@ async function main() {
       MAX_CLEANUP_TIMEOUT_MS + 5_000,
       'stopping the isolated packaged Extension Kun runtime'
     ).catch((error) => cleanupErrors.push(error))
+    await withTimeout(
+      stopIsolatedServiceManager(home, profile),
+      MAX_CLEANUP_TIMEOUT_MS + 5_000,
+      'stopping the isolated packaged Extension Kun Service Manager'
+    ).catch((error) => cleanupErrors.push(error))
     releaseChildProcessHandles(desktopProcess)
     if (networkCanary) {
       await withTimeout(
@@ -327,9 +332,149 @@ async function main() {
 }
 
 async function stopIsolatedSharedRuntime(unpackedRoot, profile) {
+  const discoveryPath = join(profile, 'runtime.json')
+  const owner = await readDiscoveryOwner(discoveryPath)
   const modulePath = join(unpackedRoot, 'kun', 'dist', 'cli', 'shared-runtime.js')
   const { stopSharedRuntime } = await import(pathToFileURL(modulePath).href)
-  await stopSharedRuntime(profile)
+  let stopError
+  try {
+    await stopSharedRuntime(profile)
+  } catch (error) {
+    stopError = error
+  }
+  if (owner && await processIsAlive(owner.pid)) {
+    await terminateVerifiedIsolatedProcess({
+      owner,
+      kind: 'runtime',
+      expectedDataDir: profile
+    })
+  }
+  if (stopError && (!owner || await processIsAlive(owner.pid))) throw stopError
+}
+
+async function stopIsolatedServiceManager(home, profile) {
+  const discoveryPath = join(home, '.kun', 'control', 'manager.json')
+  const owner = await readDiscoveryOwner(discoveryPath)
+  if (!owner) return
+  if (resolve(owner.dataDir ?? '') !== resolve(profile)) {
+    throw new Error('Refusing to stop an isolated Kun Service Manager whose dataDir does not match the smoke profile')
+  }
+  try {
+    await fetch(`${String(owner.baseUrl).replace(/\/$/u, '')}/v1/manager/shutdown`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${owner.managerToken}`,
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({ instanceId: owner.instanceId }),
+      signal: AbortSignal.timeout(5_000)
+    })
+  } catch {
+    // The manager may already be closing. PID and command verification below
+    // decides whether a bounded termination fallback is permitted.
+  }
+  if (await waitForProcessExit(owner.pid, 5_000)) return
+  await terminateVerifiedIsolatedProcess({
+    owner,
+    kind: 'manager',
+    expectedDataDir: profile
+  })
+}
+
+async function readDiscoveryOwner(path) {
+  try {
+    const value = JSON.parse(await readFile(path, 'utf8'))
+    return value && Number.isSafeInteger(value.pid) && value.pid > 0 &&
+      typeof value.instanceId === 'string'
+      ? value
+      : undefined
+  } catch (error) {
+    if (error?.code === 'ENOENT' || error instanceof SyntaxError) return undefined
+    throw error
+  }
+}
+
+async function terminateVerifiedIsolatedProcess({ owner, kind, expectedDataDir }) {
+  if (!await processIsAlive(owner.pid)) return
+  const command = processCommandLine(owner.pid)
+  const verified = isVerifiedIsolatedKunCommand({
+    command,
+    kind,
+    expectedDataDir,
+    discoveryDataDir: owner.dataDir
+  })
+  if (!verified) {
+    throw new Error(
+      `Refusing to terminate unverified PID ${owner.pid} while cleaning the packaged Extension smoke`
+    )
+  }
+  if (process.platform === 'win32') {
+    const result = spawnSync('taskkill', ['/PID', String(owner.pid), '/T', '/F'], {
+      windowsHide: true,
+      encoding: 'utf8'
+    })
+    if (result.error && await processIsAlive(owner.pid)) throw result.error
+  } else {
+    try {
+      process.kill(owner.pid, 'SIGTERM')
+    } catch {
+      return
+    }
+    if (!await waitForProcessExit(owner.pid, 3_000)) {
+      try {
+        process.kill(owner.pid, 'SIGKILL')
+      } catch {
+        return
+      }
+    }
+  }
+  if (!await waitForProcessExit(owner.pid, 2_000)) {
+    throw new Error(`Verified isolated Kun ${kind} PID ${owner.pid} did not exit`)
+  }
+}
+
+function isVerifiedIsolatedKunCommand({ command, kind, expectedDataDir, discoveryDataDir }) {
+  if (!command || !expectedDataDir) return false
+  if (kind === 'runtime') {
+    return command.includes('serve-entry.js') && command.includes(resolve(expectedDataDir))
+  }
+  return kind === 'manager' &&
+    command.includes('manager-entry.js') &&
+    resolve(discoveryDataDir ?? '') === resolve(expectedDataDir)
+}
+
+function processCommandLine(pid) {
+  if (process.platform === 'win32') {
+    const result = spawnSync('powershell', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      `(Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}').CommandLine`
+    ], { windowsHide: true, encoding: 'utf8' })
+    return result.status === 0 ? String(result.stdout).trim() : ''
+  }
+  const result = spawnSync('ps', ['-p', String(pid), '-o', 'command='], {
+    encoding: 'utf8'
+  })
+  return result.status === 0 ? String(result.stdout).trim() : ''
+}
+
+async function processIsAlive(pid) {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return error?.code === 'EPERM'
+  }
+}
+
+async function waitForProcessExit(pid, timeoutMs) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (!await processIsAlive(pid)) return true
+    await delay(100)
+  }
+  return !await processIsAlive(pid)
 }
 
 function releaseChildProcessHandles(child) {
@@ -2430,9 +2575,12 @@ module.exports = {
   waitForSuccessfulGuestInspection,
   isExtensionGuestTarget,
   isWorkbenchTarget,
+  isVerifiedIsolatedKunCommand,
   platformDesktopArguments,
   resolveDesktopLaunchSelection,
   runPackagedKun,
+  stopIsolatedServiceManager,
+  stopIsolatedSharedRuntime,
   terminateProcessTree,
   waitForPortsClosed
 }

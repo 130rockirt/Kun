@@ -47,9 +47,17 @@ export function createGraphRuntimeStartOptions(input: {
     delegation: input.delegation,
     steerTurn: input.steerTurn,
     leadTurn: async ({ run, reasons, nodeIds, digest }) => {
-      if (input.isShuttingDown?.()) return
+      if (input.isShuttingDown?.()) {
+        return {
+          status: 'deferred' as const,
+          reason: 'Graph runtime is shutting down.',
+          retryAfterMs: 60_000
+        }
+      }
       const thread = await input.threads.get(run.threadId)
-      if (!thread) return
+      if (!thread) {
+        return { status: 'orphaned' as const, reason: `source thread not found: ${run.threadId}` }
+      }
       const prompt = graphLeadPrompt({
         runId: run.id,
         runStatus: run.status,
@@ -58,15 +66,28 @@ export function createGraphRuntimeStartOptions(input: {
         digest
       })
       const sourceTurn = thread.turns.find((turn) => turn.id === run.sourceTurnId)
-      if (!sourceTurn) return
+      if (!sourceTurn) {
+        return { status: 'orphaned' as const, reason: `source turn not found: ${run.sourceTurnId}` }
+      }
       if (sourceTurn.status !== 'running') {
         // Legacy GraphRuns may have been detached from an already-terminal
         // source turn. Preserve immutable history instead of fabricating a
         // replacement Lead turn.
-        return
+        return run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled'
+          ? { status: 'terminal' as const }
+          : {
+              status: 'orphaned' as const,
+              reason: `Graph source turn ${sourceTurn.id} is ${sourceTurn.status}`
+            }
       }
       if (input.isTurnExecutionActive(sourceTurn.id)) {
-        if (input.isShuttingDown?.()) return
+        if (input.isShuttingDown?.()) {
+          return {
+            status: 'deferred' as const,
+            reason: 'Graph runtime is shutting down.',
+            retryAfterMs: 60_000
+          }
+        }
         await input.steerTurn({
           threadId: run.threadId,
           turnId: sourceTurn.id,
@@ -85,9 +106,20 @@ export function createGraphRuntimeStartOptions(input: {
             run.status === 'failed' ||
             run.status === 'cancelled'
         })
-        return
+        return {
+          status: 'delivered' as const,
+          sourceTurnId: sourceTurn.id,
+          deliveredSeq: run.lastEventSeq,
+          executionActive: true
+        }
       }
-      if (input.isShuttingDown?.()) return
+      if (input.isShuttingDown?.()) {
+        return {
+          status: 'deferred' as const,
+          reason: 'Graph runtime is shutting down.',
+          retryAfterMs: 60_000
+        }
+      }
       const previousDeliveredSeq =
         sourceTurn.graphLeadLifecycle?.runId === run.id
           ? sourceTurn.graphLeadLifecycle.lastDeliveredSeq
@@ -104,7 +136,11 @@ export function createGraphRuntimeStartOptions(input: {
       })
       if (input.isShuttingDown?.()) {
         await input.runAgentTurn(run.threadId, sourceTurn.id)
-        return
+        return {
+          status: 'deferred' as const,
+          reason: 'Graph runtime shut down while reacquiring the source turn.',
+          retryAfterMs: 60_000
+        }
       }
       await input.steerTurn({
         threadId: run.threadId,
@@ -122,19 +158,36 @@ export function createGraphRuntimeStartOptions(input: {
           run.status === 'failed' ||
           run.status === 'cancelled'
       })
-      if (resumed === 'already_running') return
+      if (resumed === 'already_running') {
+        return {
+          status: 'delivered' as const,
+          sourceTurnId: sourceTurn.id,
+          deliveredSeq: run.lastEventSeq,
+          executionActive: true
+        }
+      }
       let outcome = await input.runAgentTurn(run.threadId, sourceTurn.id)
       // A wake-up can reacquire the execution lease during the tiny interval
       // between a previous slice parking and its active-run promise settling.
       // Once that promise is gone, start the continuation that owns the lease.
       while (
-        outcome === 'suspended' &&
+        (outcome === 'suspended' || outcome === 'suspended_pending_supervision') &&
         !input.isShuttingDown?.() &&
         input.isTurnExecutionActive(sourceTurn.id)
       ) {
         outcome = await input.runAgentTurn(run.threadId, sourceTurn.id)
       }
+      return {
+        status: 'delivered' as const,
+        sourceTurnId: sourceTurn.id,
+        deliveredSeq: run.lastEventSeq,
+        executionActive: input.isTurnExecutionActive(sourceTurn.id),
+        ...(outcome === ('suspended_pending_supervision' as TurnRunOutcome)
+          ? { parkedWithPendingSupervision: true }
+          : {})
+      }
     },
+    isLeadTurnActive: (run) => input.isTurnExecutionActive(run.sourceTurnId),
     authorityForRun: async (run) => {
       const thread = await input.threads.get(run.threadId)
       const sourceTurn = thread?.turns.find((turn) => turn.id === run.sourceTurnId)

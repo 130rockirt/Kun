@@ -60,7 +60,8 @@
     }
   },
   "bin": {
-    "kun": "./dist/cli/serve-entry.js"
+    "kun": "./dist/cli/serve-entry.js",
+    "kun-dv": "./dist/cli/serve-entry.js"
   },
   "scripts": {
     "build": "node ./scripts/clean-build-output.mjs && tsc -p tsconfig.build.json && node ./scripts/write-runtime-build-manifest.mjs",

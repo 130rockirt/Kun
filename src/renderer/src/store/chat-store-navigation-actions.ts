@@ -82,6 +82,7 @@ import {
   DESIGN_ASSISTANT_THREAD_TITLE,
   activeDesignThreadForWorkspace,
   designDocKey,
+  forgetDesignThread,
   isDesignThreadId,
   markDesignThread,
   readDesignThreadRegistry,
@@ -356,7 +357,8 @@ export function createNavigationActions(
       const thread = await p.createThread({
         workspace: targetWorkspace,
         title: WRITE_ASSISTANT_THREAD_TITLE,
-        mode: 'agent'
+        mode: 'agent',
+        agentSurface: 'write'
       })
       saveWriteThreadRegistry(markWriteThread(
         targetWorkspace,
@@ -425,12 +427,13 @@ export function createNavigationActions(
     if (existing) {
       set({ route: 'design' })
       await get().selectThread(existing.id)
-      return existing.id
+      return get().activeThreadId === existing.id ? existing.id : null
     }
     return get().createDesignThread(targetWorkspace, targetDoc)
   },
 
-  createDesignThread: async (workspaceRoot, docId) => {
+  createDesignThread: async (workspaceRoot, docId, options = {}) => {
+    const activate = options.activate !== false
     const targetWorkspace =
       normalizeWorkspaceRoot(workspaceRoot) || normalizeWorkspaceRoot(get().workspaceRoot)
     if (!targetWorkspace) {
@@ -443,37 +446,97 @@ export function createNavigationActions(
     }
     if (!(await workspaceDirectoryExists(targetWorkspace))) {
       set({ error: workspaceMissingError() })
-      await showWorkspaceMissingDialog(targetWorkspace)
+      if (!options.suppressSettingsRedirect) {
+        await showWorkspaceMissingDialog(targetWorkspace)
+      }
       return null
     }
     const targetDoc = (docId ?? '').trim()
     try {
       const provider = getProvider()
+      const pickedAgentId = get().composerAgentId?.trim() ?? ''
+      const personaProfile = pickedAgentId
+        ? (await rendererRuntimeClient.getSettings()).agents?.kun?.subagents?.profiles?.find(
+          (profile) => profile.id === pickedAgentId &&
+            profile.enabled &&
+            (profile.mode === 'primary' || profile.mode === 'all')
+        )
+        : undefined
       const thread = await provider.createThread({
         workspace: targetWorkspace,
         title: DESIGN_ASSISTANT_THREAD_TITLE,
         titleAuto: true,
-        mode: 'agent'
+        mode: 'agent',
+        agentSurface: 'design',
+        ...(personaProfile?.providerId?.trim()
+          ? { providerId: personaProfile.providerId.trim() }
+          : {}),
+        ...(personaProfile?.model?.trim() ? { model: personaProfile.model.trim() } : {}),
+        ...(personaProfile ? {
+          agentId: personaProfile.id,
+          ...(personaProfile.systemPrompt ? { systemPrompt: personaProfile.systemPrompt } : {})
+        } : {})
       })
       const nextRegistry = markDesignThread(targetWorkspace, targetDoc, thread.id)
       saveDesignThreadRegistry(nextRegistry)
-      void persistDesignChatMetaForDoc({
+      const record = nextRegistry.workspaces[designDocKey(targetWorkspace, targetDoc)]
+      const bindingPersisted = Boolean(record) && await persistDesignChatMetaForDoc({
         workspaceRoot: targetWorkspace,
         docId: targetDoc,
-        stampThreadId: thread.id
-      }).catch(() => undefined)
+        stampThreadId: thread.id,
+        record
+      })
+      if (!bindingPersisted) {
+        let cleanupError: unknown = null
+        try {
+          await provider.deleteThread(thread.id)
+          saveDesignThreadRegistry(forgetDesignThread(thread.id, readDesignThreadRegistry()))
+        } catch (error) {
+          cleanupError = error
+          // Keep a recoverable binding so the first-submit rollback can retry
+          // deletion instead of losing the new runtime thread's identity.
+          saveDesignThreadRegistry(markDesignThread(
+            targetWorkspace,
+            targetDoc,
+            thread.id,
+            readDesignThreadRegistry()
+          ))
+        }
+        const cleanupDetail = cleanupError
+          ? ` Runtime cleanup also failed: ${formatRuntimeError(cleanupError)}`
+          : ''
+        throw new Error(`Could not persist the Design drawing conversation binding.${cleanupDetail}`)
+      }
+      // If another renderer registry write raced the disk operation, restore
+      // the live binding before exposing the thread to the Design controller.
+      saveDesignThreadRegistry(markDesignThread(
+        targetWorkspace,
+        targetDoc,
+        thread.id,
+        readDesignThreadRegistry()
+      ))
+      if (activate) get().clearActiveThreadSelection?.()
       set((s) => ({
-        route: 'design',
+        ...(activate
+          ? {
+              ...clearedThreadSelection(),
+              route: 'design' as const,
+              activeThreadId: thread.id,
+              activeThreadRelation: 'primary' as const
+            }
+          : {}),
         threads: s.threads.some((item) => item.id === thread.id) ? s.threads : [thread, ...s.threads],
-        error: null
+        ...(activate ? { error: null } : {})
       }))
-      await get().refreshThreads()
-      await get().selectThread(thread.id)
+      // A new thread is known to be empty and is already present in the local
+      // list. Do not refresh before its first turn: an eventually-consistent
+      // list response could omit the fresh id and clear the atomic selection.
+      // The accepted Design turn performs background list reconciliation.
       return thread.id
     } catch (e) {
       set({
         error: formatRuntimeError(e),
-        ...(shouldOpenSettingsForError(e)
+        ...(!options.suppressSettingsRedirect && shouldOpenSettingsForError(e)
           ? { route: 'settings' as const, settingsSection: 'agents' as const }
           : {})
       })
@@ -975,7 +1038,9 @@ export function createNavigationActions(
       const activeThreadIsManagedInCodeRoute =
         get().route === 'chat' &&
         activeThread != null &&
-        (isWriteAssistantThread(activeThread, writeRegistry) ||
+        (activeThread.agentSurface === 'write' ||
+          activeThread.agentSurface === 'design' ||
+          isWriteAssistantThread(activeThread, writeRegistry) ||
           isClawThread(activeThread, get().clawChannels) ||
           isDesignThreadId(activeThread.id, designRegistry) ||
           isInternalDeepSeekGuiWorkspace(activeThread.workspace))

@@ -200,6 +200,18 @@ export function buildEventStreamResponse(input: {
           if (closed) return
         }
         replaying = false
+        if (input.sessionStore.watchEventsSince) {
+          void (async () => {
+            for await (const event of input.sessionStore.watchEventsSince!(
+              input.threadId,
+              lastDeliveredSeq,
+              input.request.signal
+            )) {
+              if (closed) return
+              deliver(event)
+            }
+          })().catch(() => close())
+        }
         heartbeatTimer = setInterval(() => {
           if (closed) return
           // Heartbeats are subject to the same backpressure policy as live

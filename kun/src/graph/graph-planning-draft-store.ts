@@ -8,7 +8,8 @@ import {
   type GraphPlanningDraftV1,
   type GraphPlanningIssueV1
 } from '../contracts/graph.js'
-import { atomicWriteFile } from '../adapters/file/atomic-write.js'
+import { AtomicJsonFile } from '../extensions/atomic-json.js'
+import { withManagerDataMutex } from '../manager/data-mutex.js'
 
 export type CreateGraphPlanningDraftInput = {
   id: string
@@ -83,13 +84,10 @@ export class FileGraphPlanningDraftStore {
   }
 
   async get(draftId: string): Promise<GraphPlanningDraftV1 | null> {
-    try {
-      const raw = await readFile(this.draftPath(draftId), 'utf8')
-      return GraphPlanningDraftV1Schema.parse(JSON.parse(raw))
-    } catch (error) {
-      if (String((error as { code?: unknown })?.code ?? '') === 'ENOENT') return null
-      throw error
-    }
+    return new AtomicJsonFile<GraphPlanningDraftV1 | null>(
+      this.draftPath(draftId),
+      (value) => value === null ? null : GraphPlanningDraftV1Schema.parse(value)
+    ).read(() => null)
   }
 
   async require(draftId: string): Promise<GraphPlanningDraftV1> {
@@ -158,45 +156,37 @@ export class FileGraphPlanningDraftStore {
 
   async writeCandidate(draftId: string, candidate: unknown): Promise<void> {
     await this.require(draftId)
-    await atomicWriteFile(
-      this.candidatePath(draftId),
-      `${JSON.stringify(candidate, null, 2)}\n`
-    )
+    await new AtomicJsonFile(this.candidatePath(draftId), (value) => value).write(candidate)
   }
 
   async readCandidate(draftId: string): Promise<unknown | null> {
-    try {
-      return JSON.parse(await readFile(this.candidatePath(draftId), 'utf8'))
-    } catch (error) {
-      if (String((error as { code?: unknown })?.code ?? '') === 'ENOENT') return null
-      throw error
-    }
+    return new AtomicJsonFile<unknown | null>(
+      this.candidatePath(draftId),
+      (value) => value
+    ).read(() => null)
   }
 
   async writeCommitPlan(draftId: string, plan: GraphPlanV1): Promise<void> {
     await this.require(draftId)
     const parsed = GraphPlanV1Schema.parse(plan)
-    await atomicWriteFile(
+    await new AtomicJsonFile(
       this.commitPlanPath(draftId),
-      `${JSON.stringify(parsed, null, 2)}\n`
-    )
+      (value) => GraphPlanV1Schema.parse(value)
+    ).write(parsed)
   }
 
   async readCommitPlan(draftId: string): Promise<GraphPlanV1 | null> {
-    try {
-      const raw = await readFile(this.commitPlanPath(draftId), 'utf8')
-      return GraphPlanV1Schema.parse(JSON.parse(raw))
-    } catch (error) {
-      if (String((error as { code?: unknown })?.code ?? '') === 'ENOENT') return null
-      throw error
-    }
+    return new AtomicJsonFile<GraphPlanV1 | null>(
+      this.commitPlanPath(draftId),
+      (value) => value === null ? null : GraphPlanV1Schema.parse(value)
+    ).read(() => null)
   }
 
   private async writeDraft(draft: GraphPlanningDraftV1): Promise<void> {
-    await atomicWriteFile(
+    await new AtomicJsonFile(
       this.draftPath(draft.id),
-      `${JSON.stringify(draft, null, 2)}\n`
-    )
+      (value) => GraphPlanningDraftV1Schema.parse(value)
+    ).write(draft)
   }
 
   private draftsDir(): string {
@@ -217,7 +207,8 @@ export class FileGraphPlanningDraftStore {
 
   private enqueue<T>(key: string, operation: () => Promise<T>): Promise<T> {
     const previous = this.queues.get(key) ?? Promise.resolve()
-    const next = previous.catch(() => undefined).then(operation)
+    const next = previous.catch(() => undefined).then(() =>
+      withManagerDataMutex(`graph-planning:${key}`, operation))
     const tracked = next.finally(() => {
       if (this.queues.get(key) === tracked) this.queues.delete(key)
     })

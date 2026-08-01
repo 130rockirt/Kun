@@ -209,6 +209,7 @@ npm install --registry=https://registry.npmmirror.com
 | [docs/DESIGN_MODE.md](docs/DESIGN_MODE.md) | Design 画布、原型、设计系统与 Design → Code |
 | [docs/workflow-loop.md](docs/workflow-loop.md) | 可视化 Loop 工作流 |
 | [docs/project-mcp-skills.md](docs/project-mcp-skills.md) | 项目级配置、MCP 与 Skill 发现 |
+| [docs/openconnector-connectors.md](docs/openconnector-connectors.md) | 内置本地 OpenConnector、OAuth、审批、文件边界与发布 smoke |
 | [docs/extensions/README.md](docs/extensions/README.md) | Kun Extension 开放平台 |
 | [kun/README.zh-CN.md](kun/README.zh-CN.md) | Kun 运行时、CLI、环境变量和 HTTP API |
 | [docs/DEVELOPMENT.zh-CN.md](docs/DEVELOPMENT.zh-CN.md) | 本地开发和发布流程 |

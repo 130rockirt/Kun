@@ -277,6 +277,21 @@ describe('electron-builder Kun packaging', () => {
       .toContain('Copyright (c) 2025 Addy Osmani')
   })
 
+  it('copies the OpenConnector production dependency tree with an explicit matcher', () => {
+    expect(builderConfig.extraResources).toEqual(expect.arrayContaining([
+      {
+        from: 'resources/open-connector/current',
+        to: 'open-connector/current',
+        filter: ['**/*']
+      },
+      {
+        from: 'resources/open-connector/current/node_modules',
+        to: 'open-connector/current/node_modules',
+        filter: ['**/*']
+      }
+    ]))
+  })
+
   it('bundles one pinned OfficeCLI target with its manifests and legal notices', () => {
     expect(builderConfig.extraResources).toEqual(expect.arrayContaining([
       {
@@ -519,6 +534,17 @@ describe('electron-builder Kun packaging', () => {
     expect(migrationScript).toContain('Invoke-RestoreJournal')
     expect(migrationScript).toContain("[Environment]::GetEnvironmentVariable('Path', 'User')")
     expect(migrationScript).not.toMatch(/Remove-Item[^\n]*(?:APPDATA|USERPROFILE|\.kun|\.deepseekgui)/i)
+  })
+
+  it('builds kun-dv with an isolated application identity and no production updater feed', () => {
+    const developmentConfig = loadBuilderConfigWithEnv({ KUN_APP_FLAVOR: 'development' })
+
+    expect(developmentConfig.appId).toBe('com.xingyuzhong.deepseekgui.dv')
+    expect(developmentConfig.productName).toBe('kun-dv')
+    expect(developmentConfig.artifactName).toContain('kun-dv-')
+    expect(developmentConfig.nsis.shortcutName).toBe('kun-dv')
+    expect(developmentConfig.extraMetadata.kunAppFlavor).toBe('development')
+    expect(developmentConfig.publish).toEqual([])
   })
 
   it('keeps sandboxed preload free of Node builtin imports', () => {

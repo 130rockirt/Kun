@@ -211,6 +211,7 @@ describe('KunRuntimeProvider', () => {
         providerId: 'codex',
         accountId: 'account:codex',
         model: 'gpt-live',
+        agentSurface: 'design',
         modelRequestCaptureEnabled: false
       })
       return {
@@ -219,6 +220,7 @@ describe('KunRuntimeProvider', () => {
         body: JSON.stringify({
           id: 'thr_live',
           title: 'Live',
+          agentSurface: 'design',
           workspace: '/tmp/workspace',
           model: 'gpt-live',
           providerId: 'codex',
@@ -236,8 +238,10 @@ describe('KunRuntimeProvider', () => {
       workspaceDirectoryExists: vi.fn(async () => true)
     })
 
-    await expect(new KunRuntimeProvider().createThread({ workspace: '/tmp/workspace' }))
-      .resolves.toMatchObject({ id: 'thr_live', model: 'gpt-live' })
+    await expect(new KunRuntimeProvider().createThread({
+      workspace: '/tmp/workspace',
+      agentSurface: 'design'
+    })).resolves.toMatchObject({ id: 'thr_live', model: 'gpt-live', agentSurface: 'design' })
   })
 
   it('starts MCP OAuth authorization through the authenticated runtime bridge', async () => {

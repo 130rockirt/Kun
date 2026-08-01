@@ -31,4 +31,18 @@ describe('AppShell', () => {
     expect(html).toContain('Loading')
     expect(html).toContain('bg-ds-card')
   })
+
+  it('does not render a DV overlay in the development workbench', () => {
+    vi.stubGlobal('window', {
+      kunGui: {
+        platform: 'darwin',
+        appEnvironment: { flavor: 'development', appName: 'kun-dv' }
+      }
+    })
+
+    const html = renderToStaticMarkup(createElement(AppShell))
+
+    expect(html).not.toContain('data-testid="kun-dv-badge"')
+    expect(html).not.toContain('kun-dv · DV')
+  })
 })

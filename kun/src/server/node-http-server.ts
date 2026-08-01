@@ -77,6 +77,15 @@ async function handleNodeRequest(
       adapted.dispose()
     }
   } catch {
+    // A streaming body can fail after status/headers were already written, or
+    // the peer can disconnect while the response is draining. Sending a
+    // second 500 response would throw ERR_HTTP_HEADERS_SENT and crash a
+    // detached Runtime/Manager. Close only that socket once the response has
+    // started; there is no valid HTTP response left to replace it with.
+    if (outgoing.headersSent || outgoing.writableEnded || outgoing.destroyed) {
+      if (!outgoing.writableEnded && !outgoing.destroyed) outgoing.destroy()
+      return
+    }
     const body = JSON.stringify({
       code: 'internal_error',
       message: 'Internal server error.'

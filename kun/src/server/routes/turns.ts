@@ -15,6 +15,7 @@ import { jsonResponse, type JsonResponse } from '../response.js'
 import { readJsonBody } from '../read-json-body.js'
 import { ERRORS } from './runtime-error.js'
 import { TurnCapacityError, TurnConflictError, type TurnService } from '../../services/turn-service.js'
+import { ThreadExecutionBusyError } from '../../ports/thread-execution-lease.js'
 
 export async function startTurn(
   turns: TurnService,
@@ -40,6 +41,13 @@ export async function startTurn(
     onStarted?.(response)
     return jsonResponse(response, 202)
   } catch (error) {
+    if (error instanceof ThreadExecutionBusyError) {
+      return jsonResponse({
+        code: 'thread_busy',
+        message: error.message,
+        details: { owner: error.owner }
+      }, 409)
+    }
     if (error instanceof TurnCapacityError) {
       return ERRORS.rateLimited(error.message, { maxConcurrentTurns: error.maxConcurrentTurns })
     }

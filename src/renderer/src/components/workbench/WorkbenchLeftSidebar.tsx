@@ -17,6 +17,7 @@ export type WorkbenchLeftSidebarProps = {
   sidebarView: CodeSidebarProps['activeView']
   connectPhoneSidebarOpen: boolean
   extensionsActive: boolean
+  connectorsActive: boolean
   extensionView?: RegisteredContribution<'views.leftSidebar'>
   workspaceRoot?: string
   onCloseExtensionView?: () => void
@@ -31,12 +32,14 @@ export type WorkbenchLeftSidebarProps = {
   onPinThread: CodeSidebarProps['onPinThread']
   onArchiveThread: CodeSidebarProps['onArchiveThread']
   onDeleteThread: CodeSidebarProps['onDeleteThread']
+  onDeleteDrawing: (documentId: string) => void | Promise<void>
   onRestoreThread: CodeSidebarProps['onRestoreThread']
   onNewChat: CodeSidebarProps['onNewChat']
   onNewChatInWorkspace: CodeSidebarProps['onNewChatInWorkspace']
   onNewRequirement: CodeSidebarProps['onNewRequirement']
   onOpenSettings: (section?: SettingsRouteSection) => void
   onOpenPlugins: CodeSidebarProps['onOpenPlugins']
+  onOpenConnectors: CodeSidebarProps['onOpenConnectors']
   onOpenExtensions: CodeSidebarProps['onOpenExtensions']
   onToggleTheme: CodeSidebarProps['onToggleTheme']
   onToggleConnectPhone: CodeSidebarProps['onToggleConnectPhone']
@@ -62,6 +65,7 @@ export function WorkbenchLeftSidebar({
   sidebarView,
   connectPhoneSidebarOpen,
   extensionsActive,
+  connectorsActive,
   extensionView,
   workspaceRoot,
   onCloseExtensionView,
@@ -76,12 +80,14 @@ export function WorkbenchLeftSidebar({
   onPinThread,
   onArchiveThread,
   onDeleteThread,
+  onDeleteDrawing,
   onRestoreThread,
   onNewChat,
   onNewChatInWorkspace,
   onNewRequirement,
   onOpenSettings,
   onOpenPlugins,
+  onOpenConnectors,
   onOpenExtensions,
   onToggleTheme,
   onToggleConnectPhone,
@@ -110,6 +116,7 @@ export function WorkbenchLeftSidebar({
             onDesignOpen={onDesignOpen}
             onOpenSettings={onOpenSettings}
             onToggleTheme={onToggleTheme}
+            onDeleteDrawing={onDeleteDrawing}
           />
         ) : route === 'write' ? (
           <Suspense fallback={<SidebarFallback />}>
@@ -130,6 +137,7 @@ export function WorkbenchLeftSidebar({
             activeView={sidebarView}
             connectPhoneSidebarOpen={connectPhoneSidebarOpen}
             pluginsActive={route === 'plugins'}
+            connectorsActive={connectorsActive}
             extensionsActive={extensionsActive}
             runtimeReady={runtimeReady}
             threadSearch={threadSearch}
@@ -146,6 +154,7 @@ export function WorkbenchLeftSidebar({
             onNewRequirement={onNewRequirement}
             onOpenSettings={onOpenSettings}
             onOpenPlugins={onOpenPlugins}
+            onOpenConnectors={onOpenConnectors}
             onOpenExtensions={onOpenExtensions}
             onToggleTheme={onToggleTheme}
             focusModeEnabled={focusModeEnabled}

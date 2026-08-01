@@ -12,6 +12,8 @@ export type DesignAssistantModelOptions = {
   promptState: DesignTurnPromptState
   resolveProviderId: (model: string) => string
   reasoningEffort?: string
+  serviceTier?: 'priority'
+  expectedThreadId?: string
 }
 
 export type DesignTurnSendOptions = DesignAssistantModelOptions & {
@@ -34,14 +36,18 @@ export type CodeCanvasSendOptions = {
 function buildAssistantModelOverrides({
   promptState,
   resolveProviderId,
-  reasoningEffort
+  reasoningEffort,
+  serviceTier,
+  expectedThreadId
 }: DesignAssistantModelOptions): SendMessageOverrides {
   const model = promptState.assistantModel.trim()
   const providerId = promptState.assistantProviderId.trim() || resolveProviderId(model)
   return {
     ...(model ? { model } : {}),
     ...(providerId ? { providerId } : {}),
-    ...(reasoningEffort ? { reasoningEffort } : {})
+    ...(reasoningEffort ? { reasoningEffort } : {}),
+    ...(serviceTier ? { serviceTier } : {}),
+    ...(expectedThreadId ? { expectedThreadId } : {})
   }
 }
 

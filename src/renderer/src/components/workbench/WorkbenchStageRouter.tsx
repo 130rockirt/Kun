@@ -5,6 +5,9 @@ import { WorkbenchConversationStage, type WorkbenchConversationStageProps } from
 const PluginMarketplaceView = lazy(() =>
   import('../PluginMarketplaceView').then((module) => ({ default: module.PluginMarketplaceView }))
 )
+const ConnectorCenter = lazy(() =>
+  import('../connectors/ConnectorCenter').then((module) => ({ default: module.ConnectorCenter }))
+)
 const ScheduleTasksView = lazy(() =>
   import('../schedule/ScheduleTasksView').then((module) => ({ default: module.ScheduleTasksView }))
 )
@@ -72,7 +75,7 @@ export function WorkbenchStageRouter({
   return (
     <main
       className={`ds-drag ds-stage-surface relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${
-        route === 'plugins' ? 'px-0' : ''
+        route === 'plugins' || route === 'connectors' ? 'px-0' : ''
       }`}
     >
       <div className="ds-stage-route-host relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
@@ -85,6 +88,13 @@ export function WorkbenchStageRouter({
               workspaceRoot={extensions.workspaceRoot}
               onOpenIntegrations={extensions.onOpenIntegrations}
               onOpenView={extensions.onOpenView}
+            />
+          </Suspense>
+        ) : route === 'connectors' ? (
+          <Suspense fallback={<div className="h-full bg-ds-main" />}>
+            <ConnectorCenter
+              leftSidebarCollapsed={leftSidebarCollapsed}
+              onToggleLeftSidebar={onToggleLeftSidebar}
             />
           </Suspense>
         ) : route === 'plugins' ? (

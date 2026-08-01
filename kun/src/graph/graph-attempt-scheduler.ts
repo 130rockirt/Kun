@@ -1,11 +1,13 @@
 import {
   GRAPH_CONTRACT_VERSION,
+  type GraphDomainEventV1,
   type GraphNodeAttemptV1,
   type GraphNodeProjectionV1,
   type GraphRunV1
 } from '../contracts/graph.js'
 import type { ChildRunRecord } from '../delegation/delegation-runtime.js'
 import { buildGraphWorkerContext } from './graph-worker-context.js'
+import { GraphRunConflictError } from './graph-run-store.js'
 import type { GraphPathLease } from './graph-write-coordinator.js'
 import {
   currentIterationAttemptCount,
@@ -91,18 +93,20 @@ export abstract class GraphAttemptScheduler {
       let awaitingSupervision = false
       await this.withRunQueue(runId, async () => {
         const run = await this.requireRun(runId)
-        if (run.status !== 'running') return
-        await this.transitionRun(
-          run,
-          'awaiting_supervision',
-          'Subagent runtime is temporarily unavailable.'
-        )
+        if (run.status !== 'running' && run.status !== 'awaiting_supervision') return
+        if (run.status === 'running') {
+          await this.transitionRun(
+            run,
+            'awaiting_supervision',
+            'Subagent runtime is temporarily unavailable.'
+          )
+        }
         awaitingSupervision = true
       })
       if (awaitingSupervision) {
         await this.requestSupervision(
           runId,
-          'failure',
+          'recovery',
           [nodeId],
           'Subagent runtime is unavailable; the GraphRun is awaiting remediation.'
         )
@@ -176,13 +180,12 @@ export abstract class GraphAttemptScheduler {
         tokenUsage: 0,
         elapsedMs: 0
       }
-      run = (await this.options.store.append(run.id, {
-        expectedSeq: run.lastEventSeq,
-        graphRevision: run.currentRevision,
-        commandId: attempt.commandId,
-        idempotencyKey: attempt.idempotencyKey,
-        event: { type: 'attempt_created', payload: { attempt } }
-      })).state
+      run = await this.appendEventWithConflictRetry(
+        run,
+        { type: 'attempt_created', payload: { attempt } },
+        attempt.commandId,
+        attempt.idempotencyKey
+      )
       return { run, nodeId, attempt, lease: writeClaim.lease }
       })
     } catch (error) {
@@ -194,6 +197,11 @@ export abstract class GraphAttemptScheduler {
           )
         })
       }
+      // Supervisor/review events legitimately advance the durable sequence
+      // while admission is resolving authority or acquiring a write lease.
+      // An optimistic conflict is therefore a retryable scheduler race, not
+      // evidence that the node itself failed admission.
+      if (error instanceof GraphRunConflictError) return false
       await this.handleAdmissionFailure(runId, nodeId, error)
       return false
     }
@@ -251,9 +259,15 @@ export abstract class GraphAttemptScheduler {
       await this.withRunQueue(runId, async () => {
         let run = await this.requireRun(runId)
         const node = run.nodes[nodeId]
-        if (!node || node.status !== 'ready' || run.status !== 'running') return
+        if (
+          !node ||
+          node.status !== 'ready' ||
+          (run.status !== 'running' && run.status !== 'awaiting_supervision')
+        ) return
         run = await this.transitionNode(run, nodeId, 'failed', message)
-        await this.transitionRun(run, 'awaiting_supervision', message)
+        if (run.status === 'running') {
+          await this.transitionRun(run, 'awaiting_supervision', message)
+        }
         settled = true
       })
     } catch (stateError) {
@@ -436,12 +450,9 @@ export abstract class GraphAttemptScheduler {
         existingResult: attempt.result
       })
       const { result, validation } = finalized
-      run = (await this.options.store.append(run.id, {
-        expectedSeq: run.lastEventSeq,
-        graphRevision: run.currentRevision,
-        commandId: `result_${attemptId}`,
-        idempotencyKey: attempt.result ? `result-final:${attemptId}` : `result:${attemptId}`,
-        event: {
+      run = await this.appendEventWithConflictRetry(
+        run,
+        {
           type: 'result_submitted',
           payload: {
             nodeId,
@@ -451,8 +462,10 @@ export abstract class GraphAttemptScheduler {
             tokenUsage: child.usage.totalTokens,
             elapsedMs: child.durationMs ?? 0
           }
-        }
-      })).state
+        },
+        `result_${attemptId}`,
+        attempt.result ? `result-final:${attemptId}` : `result:${attemptId}`
+      )
       run = await this.transitionAttempt(
         run,
         nodeId,
@@ -552,8 +565,22 @@ export abstract class GraphAttemptScheduler {
   }
 
   protected async integrateWrite(attemptId: string): Promise<'applied' | 'conflict'> {
+    const writeState = await this.options.writes.list()
     const lease = this.leases.get(attemptId) ??
-      (await this.options.writes.list()).leases.find((entry) => entry.attemptId === attemptId)
+      writeState.leases.find((entry) => entry.attemptId === attemptId)
+    if (
+      lease?.state === 'released' &&
+      (
+        lease.releaseDisposition === 'accepted' ||
+        writeState.worktrees.some((entry) =>
+          entry.attemptId === attemptId &&
+          (entry.state === 'accepted' || entry.state === 'cleaned'))
+      )
+    ) {
+      this.stopLeaseHeartbeat(attemptId)
+      this.leases.delete(attemptId)
+      return 'applied'
+    }
     if (lease && !await this.options.writes.isActive(lease.leaseId)) return 'conflict'
     let worktree
     try {
@@ -648,6 +675,32 @@ export abstract class GraphAttemptScheduler {
       )
     }
     return run
+  }
+
+  protected async appendEventWithConflictRetry(
+    initialRun: GraphRunV1,
+    event: GraphDomainEventV1,
+    commandId: string,
+    idempotencyKey: string
+  ): Promise<GraphRunV1> {
+    let run = initialRun
+    for (let retry = 0; retry < 5; retry += 1) {
+      try {
+        return (await this.options.store.append(run.id, {
+          expectedSeq: run.lastEventSeq,
+          graphRevision: run.currentRevision,
+          commandId,
+          idempotencyKey,
+          event
+        })).state
+      } catch (error) {
+        if (!(error instanceof GraphRunConflictError) || retry === 4) throw error
+        run = await this.requireRun(run.id)
+      }
+    }
+    throw new GraphRunConflictError(
+      `GraphRun ${initialRun.id} durable append retry exhausted`
+    )
   }
 
   abstract tick(): Promise<void>

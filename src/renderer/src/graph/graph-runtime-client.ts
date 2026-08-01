@@ -15,7 +15,9 @@ import {
   kunGraphProjectAgentsPath,
   kunGraphProjectCandidateActionPath,
   kunGraphProjectCollectionPath,
-  kunGraphProjectConsolidatePath
+  kunGraphProjectConsolidatePath,
+  kunGraphSupervisionPath,
+  kunGraphSupervisionWakePath
 } from '@shared/kun-endpoints'
 import type {
   GraphAgentEvidence,
@@ -30,6 +32,7 @@ import type {
   GraphPatchOperation,
   GraphPlanningDraftView,
   GraphRun,
+  GraphSupervisionProjection,
   ProjectIdentity
 } from './graph-types'
 
@@ -68,6 +71,17 @@ async function request<T>(
   return parse<T>(response, `Graph request failed (${response.status})`)
 }
 
+async function withSupervision(run: GraphRun): Promise<GraphRun> {
+  if (run.supervision) return run
+  try {
+    const supervision = await graphRuntimeClient.getSupervision(run.id)
+    return { ...run, supervision }
+  } catch {
+    // Keep GraphRun compatibility with older runtimes that do not expose the projection.
+    return run
+  }
+}
+
 export const graphRuntimeClient = {
   delegationDiagnostics(parentThreadId: string): Promise<GraphDelegationDiagnostics> {
     return request(kunDelegationDiagnosticsPath(parentThreadId))
@@ -79,8 +93,21 @@ export const graphRuntimeClient = {
     return Promise.all(page.runs.map((run) => graphRuntimeClient.getRun(run.id)))
   },
 
-  getRun(runId: string): Promise<GraphRun> {
-    return request(kunGraphPath(runId))
+  async getRun(runId: string): Promise<GraphRun> {
+    return withSupervision(await request(kunGraphPath(runId)))
+  },
+
+  getSupervision(runId: string): Promise<GraphSupervisionProjection> {
+    return request(kunGraphSupervisionPath(runId))
+  },
+
+  wakeLead(runId: string, obligationId?: string): Promise<GraphSupervisionProjection> {
+    const commandId = graphId('user_graph_wake')
+    return request(kunGraphSupervisionWakePath(runId), 'POST', {
+      commandId,
+      idempotencyKey: commandId,
+      ...(obligationId ? { obligationId } : {})
+    })
   },
 
   async listDrafts(threadId?: string): Promise<GraphPlanningDraftView[]> {
@@ -123,30 +150,33 @@ export const graphRuntimeClient = {
     return request(`${kunGraphArtifactPath(runId, artifactId)}?${query}`)
   },
 
-  command(runId: string, action: 'start' | 'pause' | 'resume' | 'cleanup'): Promise<GraphRun> {
+  async command(
+    runId: string,
+    action: 'start' | 'pause' | 'resume' | 'cleanup'
+  ): Promise<GraphRun> {
     const commandId = graphId(`user_${action}`)
-    return request(kunGraphActionPath(runId, action), 'POST', {
+    return withSupervision(await request(kunGraphActionPath(runId, action), 'POST', {
       commandId,
       idempotencyKey: commandId
-    })
+    }))
   },
 
   async cancel(runId: string, reason: string): Promise<GraphRun> {
     const commandId = graphId('user_cancel')
-    return request(kunGraphActionPath(runId, 'cancel'), 'POST', {
+    return withSupervision(await request(kunGraphActionPath(runId, 'cancel'), 'POST', {
       commandId,
       idempotencyKey: commandId,
       reason
-    })
+    }))
   },
 
   async retry(runId: string, nodeId: string): Promise<GraphRun> {
     const commandId = graphId('user_retry')
-    return request(kunGraphActionPath(runId, 'retry'), 'POST', {
+    return withSupervision(await request(kunGraphActionPath(runId, 'retry'), 'POST', {
       commandId,
       idempotencyKey: commandId,
       nodeId
-    })
+    }))
   },
 
   async review(
@@ -156,7 +186,7 @@ export const graphRuntimeClient = {
     outcome: 'pass' | 'fail'
   ): Promise<GraphRun> {
     const commandId = graphId('human_review')
-    return request(kunGraphActionPath(run.id, 'reviews'), 'POST', {
+    return withSupervision(await request(kunGraphActionPath(run.id, 'reviews'), 'POST', {
       commandId,
       idempotencyKey: commandId,
       expectedSeq: run.lastEventSeq,
@@ -178,7 +208,7 @@ export const graphRuntimeClient = {
           : {}),
         createdAt: new Date().toISOString()
       }
-    })
+    }))
   },
 
   async patch(
@@ -188,7 +218,7 @@ export const graphRuntimeClient = {
   ): Promise<GraphRun> {
     const commandId = graphId('user_patch')
     const patchId = graphId('graph_patch')
-    return request(kunGraphActionPath(run.id, 'patch'), 'POST', {
+    return withSupervision(await request(kunGraphActionPath(run.id, 'patch'), 'POST', {
       commandId,
       idempotencyKey: patchId,
       expectedSeq: run.lastEventSeq,
@@ -204,7 +234,7 @@ export const graphRuntimeClient = {
         operations,
         createdAt: new Date().toISOString()
       }
-    })
+    }))
   },
 
   async steer(
@@ -215,12 +245,12 @@ export const graphRuntimeClient = {
       { kind: 'attempt'; nodeId: string; attemptId: string }
   ): Promise<GraphRun> {
     const commandId = graphId('user_steer')
-    return request(kunGraphActionPath(runId, 'steer'), 'POST', {
+    return withSupervision(await request(kunGraphActionPath(runId, 'steer'), 'POST', {
       commandId,
       idempotencyKey: commandId,
       target,
       text
-    })
+    }))
   },
 
   identity(workspace: string): Promise<ProjectIdentity> {

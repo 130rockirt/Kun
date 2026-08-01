@@ -2978,6 +2978,16 @@ describe('FloatingComposer input history and shortcut hint', () => {
     }
   })
 
+  it('hard-disables editing and submission for external destructive operations', () => {
+    const html = renderToStaticMarkup(createElement(FloatingComposer, baseComposerProps({
+      disabled: true,
+      input: 'keep this draft'
+    })))
+
+    expect(html).toMatch(/<textarea[^>]*disabled=""/)
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*aria-label="Send"/)
+  })
+
   it('restores previous sent text with ArrowUp when the caret is on the first line', async () => {
     const storage = new MemoryStorage()
     storage.setItem(COMPOSER_INPUT_HISTORY_STORAGE_KEY, JSON.stringify(['previous prompt']))

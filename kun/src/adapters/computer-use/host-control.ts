@@ -28,6 +28,31 @@ export type HostScreenshot = {
 export type ScrollDirection = 'up' | 'down' | 'left' | 'right'
 export type MouseButton = 'left' | 'right' | 'middle'
 
+export interface HostControlController {
+  ensureReady(): Promise<HostControlAvailability>
+  screenSize(): Promise<{ width: number; height: number }>
+  capture(): Promise<HostScreenshot>
+  cursorPosition(): Promise<{ x: number; y: number }>
+  moveTo(x: number, y: number): Promise<void>
+  click(
+    x?: number,
+    y?: number,
+    button?: MouseButton,
+    count?: 1 | 2,
+    modifiers?: string[]
+  ): Promise<void>
+  drag(x1: number, y1: number, x2: number, y2: number): Promise<void>
+  scroll(
+    x: number | undefined,
+    y: number | undefined,
+    direction: ScrollDirection,
+    amount?: number
+  ): Promise<void>
+  typeText(text: string): Promise<void>
+  pressHotkey(keyStr: string): Promise<void>
+  wait(ms: number, signal?: AbortSignal): Promise<void>
+}
+
 type ScreenContext = {
   logicalWidth: number
   logicalHeight: number
@@ -139,7 +164,7 @@ async function loadModule<T>(specifier: string): Promise<T | null> {
   }
 }
 
-export class HostController {
+export class HostController implements HostControlController {
   private nut: NutApi | null = null
   private jimp: JimpModule | null = null
   private loadAttempted = false

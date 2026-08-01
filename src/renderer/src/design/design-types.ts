@@ -158,6 +158,8 @@ export function inferDesignArtifactFoundationRole(
 export type DesignDocument = {
   id: string
   title: string
+  /** How the visible title was chosen. Missing means a legacy document. */
+  titleOrigin?: 'generated' | 'user'
   createdAt: string
   updatedAt: string
   /** Sidebar ordering (ascending); ties broken by createdAt. */

@@ -239,4 +239,25 @@ describe('Kun runtime config service', () => {
       await rm(dataDir, { recursive: true, force: true })
     }
   })
+
+  it('projects connector enablement and loopback port without persisting a runtime token', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'kun-runtime-config-connectors-'))
+    const settings = normalizeAppSettings({
+      ...normalizeAppSettings({} as AppSettingsV1),
+      connectors: { enabled: true, port: 19_432 }
+    })
+    try {
+      await syncGuiManagedKunConfig(dataDir, resolveKunRuntimeSettings(settings), {
+        appSettings: settings
+      })
+      const config = JSON.parse(await readFile(join(dataDir, 'config.json'), 'utf8'))
+      expect(config.capabilities.connectors).toMatchObject({
+        enabled: true,
+        baseUrl: 'http://127.0.0.1:19432'
+      })
+      expect(JSON.stringify(config.capabilities.connectors)).not.toContain('token')
+    } finally {
+      await rm(dataDir, { recursive: true, force: true })
+    }
+  })
 })

@@ -8,7 +8,7 @@ import {
   type GraphRunStatus,
   type GraphRunV1
 } from '../contracts/graph.js'
-import { atomicWriteFile } from '../adapters/file/atomic-write.js'
+import { AtomicJsonFile } from '../extensions/atomic-json.js'
 
 const EntrySchema = z.object({
   runId: GraphRunIdSchema,
@@ -23,38 +23,43 @@ type Entry = z.infer<typeof EntrySchema>
 
 export class FileGraphRunIndex {
   private readonly entries = new Map<string, Entry>()
-  private writeQueue = Promise.resolve()
+  private readonly file: AtomicJsonFile<Entry[]>
 
-  constructor(private readonly rootDir: string) {}
+  constructor(private readonly rootDir: string) {
+    this.file = new AtomicJsonFile(this.path(), (value) => IndexSchema.parse(value))
+  }
 
   async initialize(): Promise<void> {
-    try {
-      const parsed = IndexSchema.parse(JSON.parse(await readFile(this.path(), 'utf8')))
-      for (const entry of parsed) this.entries.set(entry.runId, entry)
-      return
-    } catch {
-      // Rebuild once from bounded snapshot metadata.
-    }
-    const directories = await readdir(this.rootDir, { withFileTypes: true })
+    const rebuilt = new Map<string, Entry>()
+    const directories = await readdir(this.rootDir, { withFileTypes: true }).catch(() => [])
     for (const directory of directories) {
       if (!directory.isDirectory() || !GraphRunIdSchema.safeParse(directory.name).success) continue
       try {
         const snapshot = SnapshotStateSchema.parse(JSON.parse(
           await readFile(join(this.rootDir, directory.name, 'snapshot.json'), 'utf8')
         ))
-        this.entries.set(directory.name, entryFor(snapshot.state))
+        rebuilt.set(directory.name, entryFor(snapshot.state))
       } catch {
         // A direct read will surface corruption diagnostics for this run.
       }
     }
-    await this.persist()
+    const entries = await this.file.update(
+      () => [],
+      (current) => {
+        const merged = new Map<string, Entry>(rebuilt)
+        for (const entry of current) merged.set(entry.runId, entry)
+        return [...merged.values()]
+      }
+    )
+    this.apply(entries)
   }
 
-  candidates(filter: {
+  async candidates(filter: {
     threadId?: string
     projectId?: string
     statuses?: GraphRunStatus[]
-  }): Entry[] {
+  }): Promise<Entry[]> {
+    await this.refresh()
     return [...this.entries.values()]
       .filter((entry) => !filter.threadId || entry.threadId === filter.threadId)
       .filter((entry) => !filter.projectId || entry.projectId === filter.projectId)
@@ -63,20 +68,29 @@ export class FileGraphRunIndex {
   }
 
   async update(state: GraphRunV1): Promise<void> {
-    this.entries.set(state.id, entryFor(state))
-    await this.persist()
+    const nextEntry = entryFor(state)
+    const entries = await this.file.update(
+      () => [],
+      (current) => [...current.filter((entry) => entry.runId !== state.id), nextEntry]
+    )
+    this.apply(entries)
   }
 
   async remove(runId: string): Promise<void> {
-    this.entries.delete(runId)
-    await this.persist()
+    const entries = await this.file.update(
+      () => [],
+      (current) => current.filter((entry) => entry.runId !== runId)
+    )
+    this.apply(entries)
   }
 
-  private async persist(): Promise<void> {
-    const operation = this.writeQueue.catch(() => undefined).then(() =>
-      atomicWriteFile(this.path(), `${JSON.stringify(IndexSchema.parse([...this.entries.values()]))}\n`))
-    this.writeQueue = operation.then(() => undefined, () => undefined)
-    await operation
+  private async refresh(): Promise<void> {
+    this.apply(await this.file.read(() => []))
+  }
+
+  private apply(entries: Entry[]): void {
+    this.entries.clear()
+    for (const entry of entries) this.entries.set(entry.runId, entry)
   }
 
   private path(): string {

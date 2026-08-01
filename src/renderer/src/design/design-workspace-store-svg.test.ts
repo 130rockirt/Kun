@@ -321,7 +321,7 @@ describe('SVG design workspace versions', () => {
     })
     gate.resolve()
 
-    await expect(operation).rejects.toThrow('active workspace or design document changed')
+    await expect(operation).rejects.toThrow('active workspace or drawing changed')
     expect(useDesignWorkspaceStore.getState().documents.flatMap((document) => document.artifacts)
       .some((artifact) => artifact.id === 'svg-context')).toBe(false)
     expect(files.has('.kun-design/doc/svg-context/v1.svg')).toBe(false)

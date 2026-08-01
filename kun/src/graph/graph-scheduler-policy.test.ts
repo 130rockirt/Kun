@@ -3,11 +3,15 @@ import type {
   GraphNodeAttemptV1,
   GraphNodeProjectionV1
 } from '../contracts/graph.js'
-import { GraphReviewResultV1Schema } from '../contracts/graph.js'
+import {
+  GraphReviewResultV1Schema,
+  GraphRunSummaryV1Schema
+} from '../contracts/graph.js'
 import { applyGraphEvent } from './graph-reducer.js'
 import {
   dependencyDecision,
   deterministicReview,
+  deterministicSummary,
   outcomeOf,
   parseWorkerResult,
   validationFailureSummary,
@@ -179,6 +183,58 @@ describe('Graph deterministic evidence', () => {
       'review_2',
       '2026-07-26T00:00:00.000Z'
     ).outcome).toBe('pass')
+  })
+
+  it('projects host-only verification details out of the durable run summary', () => {
+    const plan = testGraphPlan({
+      nodes: [projection.node],
+      edges: [],
+      completionNodeIds: [projection.node.id]
+    })
+    const run = structuredClone(applyGraphEvent(undefined, testGraphEnvelope(1, {
+      type: 'run_created',
+      payload: { plan, projectId: 'project_1', sourceTurnId: 'turn_1' }
+    })))
+    const attempt: GraphNodeAttemptV1 = {
+      ...baseAttempt,
+      status: 'accepted',
+      result: {
+        version: 1,
+        summary: 'Host verification completed.',
+        artifactRefs: [],
+        changedFiles: [],
+        reportedChecks: [],
+        verifiedChecks: [{
+          name: 'verification',
+          status: 'passed',
+          summary: 'Host verification passed.',
+          artifactRefs: [],
+          command: ['npm', 'test'],
+          exitCode: 0,
+          workspaceRevision: 'abc123:clean',
+          outputSummary: 'All tests passed.'
+        }],
+        evidence: ['host evidence'],
+        risks: [],
+        suggestedMessages: []
+      }
+    }
+    run.nodes.research = {
+      ...run.nodes.research,
+      status: 'accepted',
+      attempts: [attempt],
+      acceptedAttemptId: attempt.id
+    }
+
+    const summary = deterministicSummary(run, '2026-07-26T12:00:00.000Z')
+
+    expect(() => GraphRunSummaryV1Schema.parse(summary)).not.toThrow()
+    expect(summary.validationResults).toEqual([{
+      name: 'verification',
+      status: 'passed',
+      summary: 'Host verification passed.',
+      artifactRefs: []
+    }])
   })
 
   it('treats an empty optional artifact list as valid executor output', () => {

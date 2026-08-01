@@ -2,6 +2,7 @@
 export class ManagedRuntimeShutdownCoordinator {
   private quitRequested = false
   private updateInstallQuit = false
+  private storageRelocationQuit = false
   private stoppedForQuit = false
   private stopPromise: Promise<void> | null = null
 
@@ -20,7 +21,7 @@ export class ManagedRuntimeShutdownCoordinator {
   }
 
   get isQuitInProgress(): boolean {
-    return this.quitRequested || this.updateInstallQuit
+    return this.quitRequested || this.updateInstallQuit || this.storageRelocationQuit
   }
 
   requestQuit(): void {
@@ -29,6 +30,14 @@ export class ManagedRuntimeShutdownCoordinator {
 
   setUpdateInstallQuit(active: boolean): void {
     this.updateInstallQuit = active
+  }
+
+  get isStorageRelocationQuit(): boolean {
+    return this.storageRelocationQuit
+  }
+
+  setStorageRelocationQuit(active: boolean): void {
+    this.storageRelocationQuit = active
   }
 
   stop(): Promise<void> {

@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto'
 import {
   GRAPH_CONTRACT_VERSION,
   type GraphNodeAttemptV1,
@@ -6,14 +5,19 @@ import {
   type GraphArtifactReferenceV1,
   type GraphReviewResultV1,
   type GraphRunSummaryV1,
-  type GraphRunV1
+  type GraphRunV1,
+  type GraphSupervisionObligationV1
 } from '../contracts/graph.js'
 import type { GraphRuntimeConfig } from '../config/kun-config.js'
+import { redactSecretText } from '../config/secret-redaction.js'
 import type {
   ChildRunRecord,
   DelegationRuntime
 } from '../delegation/delegation-runtime.js'
-import type { GraphSupervisionPort } from './graph-scheduler.js'
+import type {
+  GraphLeadDeliveryResult,
+  GraphSupervisionPort
+} from './graph-scheduler.js'
 import {
   GraphRunConflictError,
   type GraphRunStore
@@ -25,22 +29,51 @@ import {
 } from './graph-rollout-policy.js'
 import { graphBlockedProviderIds } from './graph-security-policy.js'
 import { normalizeGraphReviewResult } from './graph-review-normalizer.js'
+import { graphPeerReviewTimeoutMs } from './graph-peer-review-task.js'
+import {
+  errorMessage,
+  projectGraphVerifiedCheckResult,
+  terminalRequiredFailure
+} from './graph-scheduler-policy.js'
+import {
+  graphSupervisionObligationForSignal,
+  graphSupervisionObligationIsActionable,
+  graphLatestSemanticProgressSeq,
+  graphSupervisionRetryDelayMs,
+  graphSupervisionSignalForObligation
+} from './graph-supervision-obligation.js'
+import {
+  graphSupervisionProjection,
+  type GraphSupervisionProjectionV1
+} from './graph-supervision-view.js'
+
+const SUPERVISION_DELIVERY_LEASE_MS = 30_000
+const SUPERVISION_OBLIGATION_SWEEP_MS = 1_000
+const MAX_NO_PROGRESS_EPISODES = 3
 
 export class GraphSupervisor implements GraphSupervisionPort {
+  private started = false
   private readonly pending = new Map<string, {
     reasons: Set<Parameters<GraphSupervisionPort['signal']>[0]['reason']>
     nodeIds: Set<string>
     digests: string[]
+    obligationIds: Set<string>
     timer?: NodeJS.Timeout
   }>()
   private readonly queues = new Map<string, Promise<unknown>>()
   private readonly leadQueues = new Map<string, Promise<unknown>>()
-  private readonly activeReviewControllers = new Set<AbortController>()
+  private readonly activeReviewControllers = new Map<AbortController, {
+    runId: string
+    nodeId: string
+    attemptId: string
+    leaseUntil: string
+  }>()
   private readonly nowIso: () => string
   private readonly nowMs: () => number
   private readonly nextId: (prefix: string) => string
   private stopped = false
   private sweepTimer?: NodeJS.Timeout
+  private obligationSweepTimer?: NodeJS.Timeout
 
   constructor(private readonly options: {
     store: GraphRunStore
@@ -51,7 +84,8 @@ export class GraphSupervisor implements GraphSupervisionPort {
       reasons: string[]
       nodeIds: string[]
       digest: string
-    }) => Promise<void>
+    }) => Promise<GraphLeadDeliveryResult | void>
+    isLeadTurnActive?: (run: GraphRunV1) => boolean
     synthesize?: (run: GraphRunV1) => Promise<GraphRunSummaryV1>
     nowIso?: () => string
     nowMs?: () => number
@@ -64,13 +98,17 @@ export class GraphSupervisor implements GraphSupervisionPort {
   }
 
   start(): void {
+    this.started = true
     this.reconfigure()
+    for (const [runId, pending] of this.pending) this.schedulePending(runId, pending)
   }
 
   reconfigure(): void {
     if (this.stopped) return
     if (this.sweepTimer) clearInterval(this.sweepTimer)
+    if (this.obligationSweepTimer) clearInterval(this.obligationSweepTimer)
     this.sweepTimer = undefined
+    this.obligationSweepTimer = undefined
     if (!graphLeadLifecycleSupervisionEnabled(this.options.config())) {
       this.clearPending()
       return
@@ -86,74 +124,88 @@ export class GraphSupervisor implements GraphSupervisionPort {
       )
     }, interval)
     this.sweepTimer.unref?.()
+    this.obligationSweepTimer = setInterval(() => {
+      runGraphBackgroundTask(
+        'Graph supervisor obligation sweep failed',
+        this.sweepObligations()
+      )
+    }, SUPERVISION_OBLIGATION_SWEEP_MS)
+    this.obligationSweepTimer.unref?.()
   }
 
   async signal(
     input: Parameters<GraphSupervisionPort['signal']>[0]
   ): Promise<void> {
     if (this.stopped || !graphLeadLifecycleSupervisionEnabled(this.options.config())) return
-    const appended = await this.withRunQueue(input.runId, async () => {
-      for (let retry = 0; retry < 5; retry += 1) {
-        const run = await this.options.store.get(input.runId)
-        if (!run) return null
-        const episodeKey = supervisionEpisodeKey(run, input)
-        try {
-          return await this.options.store.append(run.id, {
-            expectedSeq: run.lastEventSeq,
-            graphRevision: run.currentRevision,
-            commandId: this.nextId('graph_supervision'),
-            idempotencyKey: `supervision:${run.id}:${episodeKey}`,
-            event: {
-              type: 'supervision_requested',
-              payload: {
-                signalId: this.nextId('graph_signal'),
-                reason: input.reason,
-                nodeIds: input.nodeIds,
-                digest: input.digest.slice(0, 4_096)
-              }
-            }
-          })
-        } catch (error) {
-          if (!(error instanceof GraphRunConflictError) || retry === 4) throw error
-        }
-      }
-      return null
-    })
-    if (!appended || appended.duplicate) return
-    if (!graphLeadLifecycleSupervisionEnabled(this.options.config())) return
-    this.queuePending(input)
+    const obligation = await this.withRunQueue(
+      input.runId,
+      () => this.persistSignalAndObligation(input, true)
+    )
+    if (!obligation || !this.obligationCanQueue(obligation)) return
+    this.queuePending(input, [obligation.id])
   }
 
   redeliver(
     input: Parameters<GraphSupervisionPort['signal']>[0]
   ): void {
     if (this.stopped || !graphLeadLifecycleSupervisionEnabled(this.options.config())) return
-    this.queuePending(input)
+    runGraphBackgroundTask(
+      `Graph supervisor redelivery preparation failed for ${input.runId}`,
+      this.prepareRedelivery(input)
+    )
+  }
+
+  async redeliverNow(
+    input: Parameters<GraphSupervisionPort['signal']>[0]
+  ): Promise<void> {
+    if (this.stopped || !graphLeadLifecycleSupervisionEnabled(this.options.config())) return
+    await this.prepareRedelivery(input)
+    await this.flush(input.runId)
+  }
+
+  private prepareRedelivery(
+    input: Parameters<GraphSupervisionPort['signal']>[0]
+  ): Promise<void> {
+    return this.withRunQueue(input.runId, async () => {
+      const obligation = await this.persistSignalAndObligation(input, false)
+      if (obligation && this.obligationCanQueue(obligation)) {
+        this.queuePending(input, [obligation.id])
+      }
+    })
   }
 
   private queuePending(
-    input: Parameters<GraphSupervisionPort['signal']>[0]
+    input: Parameters<GraphSupervisionPort['signal']>[0],
+    obligationIds: readonly string[]
   ): void {
     const pending = this.pending.get(input.runId) ?? {
       reasons: new Set(),
       nodeIds: new Set(),
-      digests: []
+      digests: [],
+      obligationIds: new Set()
     }
     pending.reasons.add(input.reason)
     for (const nodeId of input.nodeIds) pending.nodeIds.add(nodeId)
+    for (const obligationId of obligationIds) pending.obligationIds.add(obligationId)
     pending.digests.push(input.digest.slice(0, 4_096))
     if (pending.digests.length > 32) pending.digests.shift()
-    if (!pending.timer) {
-      pending.timer = setTimeout(() => {
-        pending.timer = undefined
-        runGraphBackgroundTask(
-          `Graph supervisor flush failed for ${input.runId}`,
-          this.flush(input.runId)
-        )
-      }, this.options.config().supervision.coalesceWindowMs)
-      pending.timer.unref?.()
-    }
     this.pending.set(input.runId, pending)
+    if (this.started) this.schedulePending(input.runId, pending)
+  }
+
+  private schedulePending(
+    runId: string,
+    pending: { timer?: NodeJS.Timeout }
+  ): void {
+    if (pending.timer) return
+    pending.timer = setTimeout(() => {
+      pending.timer = undefined
+      runGraphBackgroundTask(
+        `Graph supervisor flush failed for ${runId}`,
+        this.flush(runId)
+      )
+    }, this.options.config().supervision.coalesceWindowMs)
+    pending.timer.unref?.()
   }
 
   async flush(runId: string): Promise<void> {
@@ -167,58 +219,503 @@ export class GraphSupervisor implements GraphSupervisionPort {
     if (pending.timer) clearTimeout(pending.timer)
     this.pending.delete(runId)
     await this.withLeadQueue(runId, async () => {
-      const run = await this.withRunQueue(runId, () => this.options.store.get(runId))
-      if (!run) return
-      if (
-        !this.options.leadTurn ||
-        (
-          isTerminal(run.status) &&
-          !pending.reasons.has('completion') &&
-          !pending.reasons.has('failure')
+      const claimed = await this.withRunQueue(
+        runId,
+        () => this.claimObligations(runId, [...pending.obligationIds])
+      )
+      if (!claimed || claimed.obligations.length === 0) return
+      const { run, obligations } = claimed
+      if (!this.options.leadTurn) {
+        await this.scheduleInfrastructureRetry(
+          runId,
+          obligations,
+          'Graph source Lead delivery is unavailable.'
         )
-      ) return
+        return
+      }
       const deliveredSteeringIds = run.steering
         .filter((entry) =>
           (entry.target.kind === 'lead' || entry.target.kind === 'run') &&
           (entry.status === 'persisted' || entry.status === 'delivered'))
         .map((entry) => entry.steeringId)
       try {
-        await this.options.leadTurn({
+        const rawDelivery = await this.options.leadTurn({
           run,
           reasons: [...pending.reasons],
           nodeIds: [...pending.nodeIds],
           digest: pending.digests.join('\n').slice(0, 16_384)
         })
-        await this.acknowledgeLeadSteering(runId, deliveredSteeringIds)
+        const delivery: GraphLeadDeliveryResult = rawDelivery ?? {
+          status: 'delivered',
+          sourceTurnId: run.sourceTurnId,
+          deliveredSeq: run.lastEventSeq,
+          executionActive: this.options.isLeadTurnActive?.(run) ?? false
+        }
+        if (delivery.status === 'delivered') {
+          await this.acknowledgeLeadSteering(runId, deliveredSteeringIds)
+          await this.recordDelivered(runId, obligations, delivery)
+          if (delivery.parkedWithPendingSupervision || !delivery.executionActive) {
+            await this.rearmAfterNoProgress(runId, obligations.map((entry) => entry.id))
+          }
+          return
+        }
+        if (delivery.status === 'deferred') {
+          await this.scheduleInfrastructureRetry(runId, obligations, delivery.reason)
+          return
+        }
+        if (delivery.status === 'orphaned') {
+          await this.markNeedsAttention(runId, obligations, delivery.reason)
+          return
+        }
+        await this.resolveObligations(runId, obligations, 'source Lead is terminal')
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
-        if (
-          /active turn|capacity|not active|no longer accepting steering|steering queue/i.test(message) &&
-          !this.stopped &&
-          graphLeadLifecycleSupervisionEnabled(this.options.config())
-        ) {
-          const retry = this.pending.get(runId) ?? {
-            reasons: new Set(),
-            nodeIds: new Set(),
-            digests: []
-          }
-          for (const reason of pending.reasons) retry.reasons.add(reason)
-          for (const nodeId of pending.nodeIds) retry.nodeIds.add(nodeId)
-          retry.digests.push(...pending.digests)
-          retry.timer = setTimeout(() => {
-            retry.timer = undefined
-            runGraphBackgroundTask(
-              `Graph supervisor retry failed for ${runId}`,
-              this.flush(runId)
-            )
-          }, Math.max(500, this.options.config().supervision.coalesceWindowMs))
-          retry.timer.unref?.()
-          this.pending.set(runId, retry)
-        } else {
-          console.warn(`[kun] Graph Lead supervision failed: ${message.slice(0, 512)}`)
-        }
+        await this.scheduleInfrastructureRetry(runId, obligations, message)
+        console.warn(`[kun] Graph Lead supervision deferred: ${message.slice(0, 512)}`)
       }
     })
+  }
+
+  async projection(runId: string): Promise<GraphSupervisionProjectionV1 | null> {
+    const run = await this.options.store.get(runId)
+    return run
+      ? graphSupervisionProjection(run, {
+          leadActive: this.options.isLeadTurnActive?.(run) ?? false,
+          nowMs: this.nowMs(),
+          peerReviewLeases: [...this.activeReviewControllers.values()]
+            .filter((lease) => lease.runId === run.id)
+            .map(({ nodeId, attemptId, leaseUntil }) => ({
+              nodeId,
+              attemptId,
+              leaseUntil
+            }))
+        })
+      : null
+  }
+
+  async wake(
+    runId: string,
+    obligationId?: string,
+    idempotencyKey?: string
+  ): Promise<GraphRunV1 | null> {
+    const run = await this.options.store.get(runId)
+    if (!run) return null
+    if (isTerminal(run.status)) return run
+    const targets = run.supervisionObligations.filter((obligation) =>
+      obligation.state !== 'resolved' &&
+      (!obligationId || obligation.id === obligationId))
+    for (const obligation of targets) {
+      const updated = await this.updateObligation(
+        runId,
+        obligation.id,
+        (_latest, current) => {
+          if (current.state === 'resolved') return null
+          if (current.state === 'delivering' && future(current.leaseUntil, this.nowMs())) {
+            return null
+          }
+          if (
+            current.state === 'awaiting_action' &&
+            this.options.isLeadTurnActive?.(_latest)
+          ) return null
+          const next = {
+            ...current,
+            state: 'retry_scheduled' as const,
+            nextWakeAt: this.nowIso(),
+            updatedAt: this.nowIso()
+          }
+          delete next.leaseUntil
+          return next
+        },
+        'manual-wake',
+        idempotencyKey
+          ? `manual-wake:${idempotencyKey}:${obligation.id}`
+          : undefined
+      )
+      if (updated?.changed) {
+        this.queuePending(
+          graphSupervisionSignalForObligation(runId, updated.obligation),
+          [updated.obligation.id]
+        )
+      }
+    }
+    return this.options.store.get(runId)
+  }
+
+  private async persistSignalAndObligation(
+    input: Parameters<GraphSupervisionPort['signal']>[0],
+    recordRequest: boolean
+  ): Promise<GraphSupervisionObligationV1 | null> {
+    for (let retry = 0; retry < 5; retry += 1) {
+      let run = await this.options.store.get(input.runId)
+      if (!run) return null
+      const candidate = graphSupervisionObligationForSignal(run, input, this.nowIso())
+      let obligation = run.supervisionObligations.find((entry) => entry.id === candidate.id)
+      try {
+        if (!obligation) {
+          const appended = await this.options.store.append(run.id, {
+            expectedSeq: run.lastEventSeq,
+            graphRevision: run.currentRevision,
+            commandId: this.nextId('graph_supervision'),
+            idempotencyKey: `supervision-obligation:${candidate.id}`,
+            event: {
+              type: 'supervision_obligation_opened',
+              payload: { obligation: candidate }
+            }
+          })
+          run = appended.state
+          obligation = run.supervisionObligations.find((entry) => entry.id === candidate.id)
+        }
+        if (recordRequest) {
+          const appended = await this.options.store.append(run.id, {
+            expectedSeq: run.lastEventSeq,
+            graphRevision: run.currentRevision,
+            commandId: this.nextId('graph_supervision'),
+            idempotencyKey: `supervision:${run.id}:${candidate.id}`,
+            event: {
+              type: 'supervision_requested',
+              payload: {
+                signalId: this.nextId('graph_signal'),
+                reason: input.reason,
+                nodeIds: input.nodeIds,
+                digest: input.digest.slice(0, 4_096)
+              }
+            }
+          })
+          run = appended.state
+          obligation = run.supervisionObligations.find((entry) => entry.id === candidate.id)
+        }
+        return obligation ?? null
+      } catch (error) {
+        if (!(error instanceof GraphRunConflictError) || retry === 4) throw error
+      }
+    }
+    return null
+  }
+
+  private obligationCanQueue(obligation: GraphSupervisionObligationV1): boolean {
+    if (obligation.state === 'resolved' || obligation.state === 'needs_attention') return false
+    const now = this.nowMs()
+    if (obligation.state === 'delivering' && future(obligation.leaseUntil, now)) return false
+    if (
+      (obligation.state === 'retry_scheduled' || obligation.state === 'awaiting_action') &&
+      future(obligation.nextWakeAt, now)
+    ) return false
+    return true
+  }
+
+  private async claimObligations(
+    runId: string,
+    obligationIds: readonly string[]
+  ): Promise<{ run: GraphRunV1; obligations: GraphSupervisionObligationV1[] } | null> {
+    const claimed: GraphSupervisionObligationV1[] = []
+    for (const obligationId of obligationIds) {
+      const result = await this.updateObligation(
+        runId,
+        obligationId,
+        (run, current) => {
+          if (!graphSupervisionObligationIsActionable(run, current)) {
+            return resolvedObligation(current, this.nowIso(), 'durable action predicate resolved')
+          }
+          if (current.state === 'needs_attention' || current.state === 'resolved') return null
+          if (current.state === 'delivering' && future(current.leaseUntil, this.nowMs())) return null
+          if (
+            (current.state === 'retry_scheduled' || current.state === 'awaiting_action') &&
+            future(current.nextWakeAt, this.nowMs())
+          ) return null
+          if (current.state === 'awaiting_action' && this.options.isLeadTurnActive?.(run)) return null
+          const next = {
+            ...current,
+            state: 'delivering' as const,
+            deliveryAttempts: current.deliveryAttempts + 1,
+            leaseUntil: this.timestampAfter(SUPERVISION_DELIVERY_LEASE_MS),
+            updatedAt: this.nowIso()
+          }
+          delete next.nextWakeAt
+          delete next.lastError
+          return next
+        },
+        'claim'
+      )
+      if (result?.changed && result.obligation.state === 'delivering') {
+        claimed.push(result.obligation)
+      }
+    }
+    const run = await this.options.store.get(runId)
+    return run ? { run, obligations: claimed } : null
+  }
+
+  private async recordDelivered(
+    runId: string,
+    obligations: readonly GraphSupervisionObligationV1[],
+    delivery: Extract<GraphLeadDeliveryResult, { status: 'delivered' }>
+  ): Promise<void> {
+    for (const obligation of obligations) {
+      await this.updateObligation(
+        runId,
+        obligation.id,
+        (run, current) => {
+          if (
+            !graphSupervisionObligationIsActionable(run, current) ||
+            isTerminal(run.status)
+          ) {
+            return resolvedObligation(current, this.nowIso(), 'source Lead delivery completed')
+          }
+          const next = {
+            ...current,
+            state: 'awaiting_action' as const,
+            // This cursor describes the snapshot that entered the source
+            // turn. Obligation/steering events appended after delivery must
+            // remain distinguishable from semantic progress by the Lead.
+            lastDeliveredSeq: Math.max(
+              current.lastDeliveredSeq ?? 0,
+              delivery.deliveredSeq
+            ),
+            lastDeliveredAt: this.nowIso(),
+            nextWakeAt: this.timestampAfter(
+              graphSupervisionRetryDelayMs(current.noProgressCount)
+            ),
+            updatedAt: this.nowIso()
+          }
+          delete next.leaseUntil
+          delete next.lastError
+          return next
+        },
+        `delivered-${obligation.deliveryAttempts}`
+      )
+    }
+  }
+
+  private async scheduleInfrastructureRetry(
+    runId: string,
+    obligations: readonly GraphSupervisionObligationV1[],
+    error: string
+  ): Promise<void> {
+    for (const obligation of obligations) {
+      await this.updateObligation(
+        runId,
+        obligation.id,
+        (run, current) => {
+          if (!graphSupervisionObligationIsActionable(run, current)) {
+            return resolvedObligation(current, this.nowIso(), 'durable action predicate resolved')
+          }
+          const next = {
+            ...current,
+            state: 'retry_scheduled' as const,
+            nextWakeAt: this.timestampAfter(
+              graphSupervisionRetryDelayMs(Math.max(0, current.deliveryAttempts - 1))
+            ),
+            lastError: sanitizeError(error),
+            updatedAt: this.nowIso()
+          }
+          delete next.leaseUntil
+          return next
+        },
+        `delivery-retry-${obligation.deliveryAttempts}`
+      )
+    }
+  }
+
+  private async rearmAfterNoProgress(
+    runId: string,
+    obligationIds: readonly string[]
+  ): Promise<void> {
+    const attention: GraphSupervisionObligationV1[] = []
+    for (const obligationId of obligationIds) {
+      const before = await this.options.store.get(runId)
+      const current = before?.supervisionObligations.find((entry) => entry.id === obligationId)
+      const latestSemanticProgressSeq = current
+        ? graphLatestSemanticProgressSeq(
+            await this.options.store.events(runId, current.lastProgressSeq),
+            current.lastProgressSeq
+          )
+        : undefined
+      const result = await this.updateObligation(
+        runId,
+        obligationId,
+        (run, current) => {
+          if (!graphSupervisionObligationIsActionable(run, current)) {
+            return resolvedObligation(current, this.nowIso(), 'durable action predicate resolved')
+          }
+          if (current.state !== 'awaiting_action') return null
+          if (
+            latestSemanticProgressSeq !== undefined &&
+            latestSemanticProgressSeq > current.lastProgressSeq
+          ) {
+            const next = {
+              ...current,
+              state: 'retry_scheduled' as const,
+              noProgressCount: 0,
+              lastProgressSeq: latestSemanticProgressSeq,
+              nextWakeAt: this.timestampAfter(graphSupervisionRetryDelayMs(0)),
+              updatedAt: this.nowIso()
+            }
+            delete next.leaseUntil
+            return next
+          }
+          const noProgressCount = current.noProgressCount + 1
+          if (noProgressCount >= MAX_NO_PROGRESS_EPISODES) {
+            const next = {
+              ...current,
+              state: 'needs_attention' as const,
+              noProgressCount,
+              attentionReason:
+                'The source Lead completed three supervision episodes without resolving the required action.',
+              updatedAt: this.nowIso()
+            }
+            delete next.nextWakeAt
+            delete next.leaseUntil
+            return next
+          }
+          const next = {
+            ...current,
+            state: 'retry_scheduled' as const,
+            noProgressCount,
+            nextWakeAt: this.timestampAfter(
+              graphSupervisionRetryDelayMs(noProgressCount - 1)
+            ),
+            updatedAt: this.nowIso()
+          }
+          delete next.leaseUntil
+          return next
+        },
+        `no-progress-${obligationId}`
+      )
+      if (result?.obligation.state === 'needs_attention') attention.push(result.obligation)
+    }
+    if (attention.length > 0) {
+      await this.transitionRunToHuman(
+        runId,
+        attention[0]!.attentionReason ?? 'Graph supervision requires human attention.'
+      )
+    }
+  }
+
+  private async markNeedsAttention(
+    runId: string,
+    obligations: readonly GraphSupervisionObligationV1[],
+    reason: string
+  ): Promise<void> {
+    for (const obligation of obligations) {
+      await this.updateObligation(
+        runId,
+        obligation.id,
+        (_run, current) => {
+          if (current.state === 'resolved') return null
+          const next = {
+            ...current,
+            state: 'needs_attention' as const,
+            attentionReason: sanitizeError(reason),
+            updatedAt: this.nowIso()
+          }
+          delete next.nextWakeAt
+          delete next.leaseUntil
+          return next
+        },
+        'attention'
+      )
+    }
+    await this.transitionRunToHuman(runId, reason)
+  }
+
+  private async resolveObligations(
+    runId: string,
+    obligations: readonly GraphSupervisionObligationV1[],
+    reason: string
+  ): Promise<void> {
+    for (const obligation of obligations) {
+      await this.updateObligation(
+        runId,
+        obligation.id,
+        (_run, current) => current.state === 'resolved'
+          ? null
+          : resolvedObligation(current, this.nowIso(), reason),
+        'resolved'
+      )
+    }
+  }
+
+  private async updateObligation(
+    runId: string,
+    obligationId: string,
+    update: (
+      run: GraphRunV1,
+      current: GraphSupervisionObligationV1
+    ) => GraphSupervisionObligationV1 | null,
+    operation: string,
+    stableIdempotencyKey?: string
+  ): Promise<{
+    run: GraphRunV1
+    obligation: GraphSupervisionObligationV1
+    changed: boolean
+  } | null> {
+    for (let retry = 0; retry < 5; retry += 1) {
+      const run = await this.options.store.get(runId)
+      if (!run) return null
+      const current = run.supervisionObligations.find((entry) => entry.id === obligationId)
+      if (!current) return null
+      const next = update(run, current)
+      if (!next) return { run, obligation: current, changed: false }
+      try {
+        const appended = await this.options.store.append(run.id, {
+          expectedSeq: run.lastEventSeq,
+          graphRevision: run.currentRevision,
+          commandId: this.nextId('graph_supervision'),
+          idempotencyKey: stableIdempotencyKey ?? [
+              'supervision-obligation',
+              obligationId,
+              operation,
+              String(run.lastEventSeq)
+            ].join(':').slice(0, 256),
+          event: {
+            type: obligationEventType(next.state),
+            payload: { obligation: next }
+          }
+        })
+        const updated = appended.state.supervisionObligations.find((entry) =>
+          entry.id === obligationId)!
+        return { run: appended.state, obligation: updated, changed: !appended.duplicate }
+      } catch (error) {
+        if (!(error instanceof GraphRunConflictError) || retry === 4) throw error
+      }
+    }
+    return null
+  }
+
+  private async transitionRunToHuman(runId: string, reason: string): Promise<void> {
+    for (let retry = 0; retry < 5; retry += 1) {
+      const run = await this.options.store.get(runId)
+      if (!run || run.status === 'awaiting_human' || isTerminal(run.status)) return
+      if (![
+        'running',
+        'paused',
+        'pausing',
+        'awaiting_supervision',
+        'completing'
+      ].includes(run.status)) return
+      try {
+        await this.options.store.append(run.id, {
+          expectedSeq: run.lastEventSeq,
+          graphRevision: run.currentRevision,
+          commandId: this.nextId('graph_supervision'),
+          idempotencyKey: `supervision-attention:${run.id}:${run.currentRevision}`,
+          event: {
+            type: 'run_status_changed',
+            payload: {
+              from: run.status,
+              to: 'awaiting_human',
+              reason: sanitizeError(reason)
+            }
+          }
+        })
+        return
+      } catch (error) {
+        if (!(error instanceof GraphRunConflictError) || retry === 4) throw error
+      }
+    }
+  }
+
+  private timestampAfter(delayMs: number): string {
+    return new Date(this.nowMs() + Math.max(0, delayMs)).toISOString()
   }
 
   async review(input: {
@@ -226,6 +723,7 @@ export class GraphSupervisor implements GraphSupervisionPort {
     node: GraphNodeProjectionV1
     attempt: GraphNodeAttemptV1
     kind: 'peer' | 'lead'
+    signal?: AbortSignal
   }): Promise<GraphReviewResultV1> {
     const delegation = this.options.delegation()
     if (!graphSupervisionEnabled(this.options.config()) || !delegation?.enabled()) {
@@ -243,17 +741,25 @@ export class GraphSupervisor implements GraphSupervisionPort {
     }
     const result = input.attempt.result
     const controller = new AbortController()
-    this.activeReviewControllers.add(controller)
+    const forwardAbort = (): void => controller.abort(
+      input.signal?.reason ?? new Error('Graph peer review was aborted')
+    )
+    if (input.signal?.aborted) forwardAbort()
+    else input.signal?.addEventListener('abort', forwardAbort, { once: true })
+    const reviewTimeoutMs = graphPeerReviewTimeoutMs(input.run, input.attempt)
+    this.activeReviewControllers.set(controller, {
+      runId: input.run.id,
+      nodeId: input.node.node.id,
+      attemptId: input.attempt.id,
+      leaseUntil: this.timestampAfter(reviewTimeoutMs)
+    })
     const timeout = setTimeout(
-      () => controller.abort(),
-      Math.min(
-        input.attempt.assignment.maxWallTimeMs,
-        this.options.config().scheduler.maxNodeWallTimeMs
-      )
+      () => controller.abort(new Error('Graph peer review timed out')),
+      reviewTimeoutMs
     )
     timeout.unref?.()
     try {
-      const record = await delegation.runChild({
+      const record = await abortableReviewChild(delegation.runChild({
         parentThreadId: input.run.threadId,
         parentTurnId: input.run.sourceTurnId,
         label: `Review: ${input.node.node.title}`,
@@ -316,7 +822,7 @@ export class GraphSupervisor implements GraphSupervisionPort {
         },
         returnFormat: 'evidence',
         signal: controller.signal
-      })
+      }), controller.signal)
       const parsed = parseReview(record.summary ?? '')
       return normalizeGraphReviewResult({
         reviewId: this.nextId('graph_review'),
@@ -339,15 +845,28 @@ export class GraphSupervisor implements GraphSupervisionPort {
         repairInstructions: parsed.repairInstructions,
         createdAt: this.nowIso()
       })
+    } catch (error) {
+      return normalizeGraphReviewResult({
+        reviewId: this.nextId('graph_review'),
+        nodeId: input.node.node.id,
+        attemptId: input.attempt.id,
+        reviewerKind: input.kind,
+        outcome: 'needs_human',
+        summary: `Independent reviewer could not complete: ${sanitizeError(errorMessage(error))}`,
+        evidence: [],
+        artifactRefs: [],
+        createdAt: this.nowIso()
+      })
     } finally {
       clearTimeout(timeout)
       this.activeReviewControllers.delete(controller)
+      input.signal?.removeEventListener('abort', forwardAbort)
     }
   }
 
   /** Abort reviewer children without waiting for source-Lead queues. */
   quiesceReviews(): void {
-    for (const controller of this.activeReviewControllers) {
+    for (const controller of this.activeReviewControllers.keys()) {
       controller.abort(new Error('Graph runtime is shutting down'))
     }
   }
@@ -399,16 +918,137 @@ export class GraphSupervisor implements GraphSupervisionPort {
       changedFiles: [...new Set(accepted.flatMap((attempt) =>
         attempt.result?.changedFiles ?? []))].slice(0, 10_000),
       validationResults: accepted.flatMap((attempt) =>
-        attempt.result?.verifiedChecks ?? []).slice(0, 512),
+        attempt.result?.verifiedChecks?.map(projectGraphVerifiedCheckResult) ?? []).slice(0, 512),
       totalTokens: run.budget.totalTokens,
       totalElapsedMs: run.budget.elapsedMs,
       completedAt: this.nowIso()
     }
   }
 
+  async sweepObligations(): Promise<number> {
+    if (!graphLeadLifecycleSupervisionEnabled(this.options.config())) return 0
+    const runs = await this.options.store.list({
+      statuses: [
+        'running',
+        'paused',
+        'awaiting_supervision',
+        'awaiting_human',
+        'completing',
+        'completed',
+        'failed',
+        'cancelled'
+      ]
+    })
+    let queued = 0
+    for (const snapshot of runs) {
+      if (this.stopped) break
+      for (const node of Object.values(snapshot.nodes)) {
+        const attempt = node.attempts.at(-1)
+        if (
+          !attempt ||
+          !['submitted', 'reviewing'].includes(node.status) ||
+          !['submitted', 'reviewing'].includes(attempt.status) ||
+          snapshot.reviews.some((review) =>
+            review.attemptId === attempt.id && review.reviewerKind === 'lead') ||
+          snapshot.supervisionObligations.some((obligation) =>
+            obligation.kind === 'review_required' &&
+            obligation.attemptIds.includes(attempt.id))
+        ) continue
+        await this.signal({
+          runId: snapshot.id,
+          reason: 'submitted',
+          nodeIds: [node.node.id],
+          digest: `Source Lead review is required for submitted attempt ${attempt.id}.`
+        })
+        queued += 1
+      }
+      const exhausted = terminalRequiredFailure(snapshot, this.options.config())
+      if (
+        exhausted &&
+        !snapshot.supervisionObligations.some((obligation) =>
+          obligation.kind === 'repair_required' &&
+          obligation.graphRevision === snapshot.currentRevision &&
+          obligation.nodeIds.includes(exhausted.node.id))
+      ) {
+        await this.signal({
+          runId: snapshot.id,
+          reason: 'failure',
+          nodeIds: [exhausted.node.id],
+          digest: `Required node ${exhausted.node.id} exhausted automatic attempts.`
+        })
+        queued += 1
+      }
+
+      let run = await this.options.store.get(snapshot.id)
+      if (!run) continue
+      const activeObligations = run.supervisionObligations.filter((obligation) =>
+        obligation.state !== 'resolved' && obligation.state !== 'needs_attention')
+      if (
+        run.status === 'awaiting_supervision' &&
+        activeObligations.length === 0 &&
+        !isTerminal(run.status)
+      ) {
+        await this.signal({
+          runId: run.id,
+          reason: 'recovery',
+          nodeIds: [],
+          digest: 'GraphRun is awaiting source Lead supervision without an active obligation.'
+        })
+        queued += 1
+        run = await this.options.store.get(run.id) ?? run
+      }
+
+      for (const obligation of run.supervisionObligations) {
+        if (obligation.state === 'resolved') continue
+        if (obligation.state === 'needs_attention') {
+          if (run.status !== 'awaiting_human' && !isTerminal(run.status)) {
+            await this.transitionRunToHuman(
+              run.id,
+              obligation.attentionReason ?? 'Graph supervision requires human attention.'
+            )
+            run = await this.options.store.get(run.id) ?? run
+          }
+          continue
+        }
+        if (!graphSupervisionObligationIsActionable(run, obligation)) {
+          await this.resolveObligations(run.id, [obligation], 'durable action predicate resolved')
+          continue
+        }
+        if (obligation.state === 'delivering') {
+          if (!future(obligation.leaseUntil, this.nowMs())) {
+            await this.scheduleInfrastructureRetry(
+              run.id,
+              [obligation],
+              'Graph supervision delivery lease expired.'
+            )
+          }
+          continue
+        }
+        if (obligation.state === 'awaiting_action') {
+          if (this.options.isLeadTurnActive?.(run)) continue
+          if (!future(obligation.nextWakeAt, this.nowMs())) {
+            await this.rearmAfterNoProgress(run.id, [obligation.id])
+          }
+          continue
+        }
+        if (
+          (obligation.state === 'pending' || obligation.state === 'retry_scheduled') &&
+          !future(obligation.nextWakeAt, this.nowMs())
+        ) {
+          this.queuePending(
+            graphSupervisionSignalForObligation(run.id, obligation),
+            [obligation.id]
+          )
+          queued += 1
+        }
+      }
+    }
+    return queued
+  }
+
   async sweepStalls(): Promise<number> {
     if (!graphLeadLifecycleSupervisionEnabled(this.options.config())) return 0
-    const runs = await this.options.store.list({ statuses: ['running'] })
+    const runs = await this.options.store.list({ statuses: ['running', 'awaiting_supervision'] })
     let signaled = 0
     const now = this.nowMs()
     const childRunsByThread = new Map<string, Map<string, ChildRunRecord>>()
@@ -465,7 +1105,9 @@ export class GraphSupervisor implements GraphSupervisionPort {
     this.stopped = true
     this.quiesceReviews()
     if (this.sweepTimer) clearInterval(this.sweepTimer)
+    if (this.obligationSweepTimer) clearInterval(this.obligationSweepTimer)
     this.sweepTimer = undefined
+    this.obligationSweepTimer = undefined
     this.clearPending()
     await Promise.allSettled([
       ...this.queues.values(),
@@ -574,32 +1216,79 @@ function canonicalPeerReviewArtifactRefs(
   return matched
 }
 
-function normalizeFailure(value: string): string {
-  return value.toLowerCase().replace(/\d+/g, '#').replace(/\s+/g, ' ').trim()
+function abortableReviewChild<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let settled = false
+    const finish = (complete: () => void): void => {
+      if (settled) return
+      settled = true
+      signal.removeEventListener('abort', onAbort)
+      complete()
+    }
+    const onAbort = (): void => finish(() => reject(
+      signal.reason instanceof Error
+        ? signal.reason
+        : new Error('Graph peer review was aborted')
+    ))
+    signal.addEventListener('abort', onAbort, { once: true })
+    if (signal.aborted) {
+      onAbort()
+      return
+    }
+    operation.then(
+      (value) => finish(() => resolve(value)),
+      (error) => finish(() => reject(error))
+    )
+  })
 }
 
-function supervisionEpisodeKey(
-  run: GraphRunV1,
-  input: Parameters<GraphSupervisionPort['signal']>[0]
-): string {
-  const nodes = [...new Set(input.nodeIds)].sort().map((nodeId) => {
-    const node = run.nodes[nodeId]
-    const attempt = node?.attempts.at(-1)
-    return {
-      nodeId,
-      status: node?.status,
-      attemptId: attempt?.id,
-      attemptStatus: attempt?.status,
-      failure: attempt?.normalizedFailure
-    }
-  })
-  return createHash('sha256').update(JSON.stringify({
-    revision: run.currentRevision,
-    reason: input.reason,
-    nodes,
-    digest: normalizeFailure(input.digest).slice(0, 4_096),
-    latestSteeringId: run.steering.at(-1)?.steeringId
-  })).digest('hex').slice(0, 32)
+function future(value: string | undefined, nowMs: number): boolean {
+  if (!value) return false
+  const parsed = Date.parse(value)
+  return Number.isFinite(parsed) && parsed > nowMs
+}
+
+function resolvedObligation(
+  current: GraphSupervisionObligationV1,
+  nowIso: string,
+  _reason: string
+): GraphSupervisionObligationV1 {
+  const next = {
+    ...current,
+    state: 'resolved' as const,
+    updatedAt: nowIso,
+    resolvedAt: nowIso
+  }
+  delete next.leaseUntil
+  delete next.nextWakeAt
+  delete next.lastError
+  delete next.attentionReason
+  return next
+}
+
+function sanitizeError(value: string): string {
+  return redactSecretText(value)
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 4_096) || 'Graph supervision failed without a diagnostic.'
+}
+
+function obligationEventType(
+  state: GraphSupervisionObligationV1['state']
+):
+  | 'supervision_delivery_started'
+  | 'supervision_retry_scheduled'
+  | 'supervision_obligation_resolved'
+  | 'supervision_attention_required'
+  | 'supervision_obligation_updated' {
+  switch (state) {
+    case 'delivering': return 'supervision_delivery_started'
+    case 'retry_scheduled': return 'supervision_retry_scheduled'
+    case 'resolved': return 'supervision_obligation_resolved'
+    case 'needs_attention': return 'supervision_attention_required'
+    default: return 'supervision_obligation_updated'
+  }
 }
 
 function isTerminal(status: GraphRunV1['status']): boolean {

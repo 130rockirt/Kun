@@ -207,6 +207,8 @@ type Props = {
     attemptId: string,
     childThreadId: string
   ) => void
+  /** Hard-disable editing and submission for an external destructive operation. */
+  disabled?: boolean
   busy: boolean
   currentTurnOrchestration?: 'direct' | 'graph' | null
   runtimeReady: boolean
@@ -217,6 +219,7 @@ type Props = {
   composerModelGroups?: ModelProviderModelGroup[]
   composerReasoningEffort?: string
   composerFastMode?: boolean
+  showProviderInModelLabel?: boolean
   onComposerModelChange: (modelId: string, providerId?: string) => void
   onComposerReasoningEffortChange?: (effort: ComposerReasoningEffort) => void
   onComposerFastModeChange?: (enabled: boolean) => void
@@ -337,6 +340,7 @@ export function FloatingComposer({
   onOrchestrationChange,
   onOpenGraph,
   onOpenGraphChild,
+  disabled = false,
   busy,
   currentTurnOrchestration = null,
   runtimeReady,
@@ -347,6 +351,7 @@ export function FloatingComposer({
   composerModelGroups = EMPTY_MODEL_GROUPS,
   composerReasoningEffort,
   composerFastMode,
+  showProviderInModelLabel = false,
   onComposerModelChange,
   onComposerReasoningEffortChange,
   onComposerFastModeChange,
@@ -499,8 +504,8 @@ export function FloatingComposer({
     activeClawChannel?.remoteSession?.chatId?.trim()
   )
 
-  const canEditComposer = route === 'claw' ? clawHasInboundConversation : true
-  const canCompose = runtimeReady && (
+  const canEditComposer = !disabled && (route === 'claw' ? clawHasInboundConversation : true)
+  const canCompose = !disabled && runtimeReady && (
     route === 'claw'
       ? clawHasInboundConversation
       : (hasActiveThread || !!effectiveWorkspaceRoot)
@@ -1865,6 +1870,7 @@ export function FloatingComposer({
                       composerModelGroups={composerModelGroups}
                       composerReasoningEffort={composerReasoningEffort}
                       composerFastMode={composerFastMode}
+                      showProviderInModelLabel={showProviderInModelLabel}
                       canChangeModel={canChangeModel}
                       controlVariant={modelControlVariant}
                       stretch={stretchModelPicker || showToolbarStartControls}

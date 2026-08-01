@@ -2,6 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defaultDesignSettings, type AppSettingsV1 } from '@shared/app-settings'
 import { rendererRuntimeClient } from '../agent/runtime-client'
 import { useDesignWorkspaceStore } from './design-workspace-store'
+import {
+  flushPendingDocumentsIndexes,
+  persistDocumentsIndex
+} from './design-document-persistence'
+import { flushDesignPersistenceQueue } from './design-persistence-coordinator'
 import { buildHtmlSiblingManifest } from './design-pages'
 import type { DesignArtifact, DesignDocument } from './design-types'
 
@@ -63,7 +68,16 @@ describe('design workspace store', () => {
 
   beforeEach(() => {
     writeWorkspaceFile.mockClear()
-    vi.stubGlobal('window', { kunGui: { writeWorkspaceFile } })
+    vi.stubGlobal('window', {
+      kunGui: {
+        writeWorkspaceFile,
+        deleteWorkspaceEntry: vi.fn(async () => ({
+          ok: true as const,
+          path: '/workspace/.kun-design/deleted',
+          deletedAt: '2026-07-01T00:00:00.000Z'
+        }))
+      }
+    })
     const canvas = artifact('canvas', 'canvas')
     const screen = artifact('screen', 'html')
     const doc: DesignDocument = {
@@ -79,6 +93,11 @@ describe('design workspace store', () => {
       workspaceRoot: '/workspace',
       documents: [doc],
       activeDocumentId: 'doc',
+      drawingCreationOpen: false,
+      drawingCreationReturnDocumentId: null,
+      drawingCreationDocumentId: null,
+      drawingCreationSubmitting: false,
+      drawingHistoryMutation: null,
       artifacts: [canvas, screen],
       activeArtifactId: canvas.id,
       designIntentMode: 'modify',
@@ -510,6 +529,103 @@ describe('design workspace store', () => {
     expect(state.activeArtifactId).toBeNull()
   })
 
+  it('marks explicit drawing renames so legacy-title backfill cannot overwrite them', () => {
+    useDesignWorkspaceStore.getState().renameDocument('doc', '我的设计')
+    expect(useDesignWorkspaceStore.getState().documents[0]).toMatchObject({
+      title: '我的设计',
+      titleOrigin: 'user'
+    })
+  })
+
+  it('allows only one in-flight submission from the drawing launcher', () => {
+    const state = useDesignWorkspaceStore.getState()
+    state.beginDrawingCreation()
+
+    expect(useDesignWorkspaceStore.getState().beginDrawingSubmission()).toBe(true)
+    expect(useDesignWorkspaceStore.getState().beginDrawingSubmission()).toBe(false)
+    expect(useDesignWorkspaceStore.getState().drawingCreationSubmitting).toBe(true)
+
+    const provisionalId = useDesignWorkspaceStore
+      .getState()
+      .createDocument('Provisional', { transient: true })
+    useDesignWorkspaceStore.getState().beginDrawingCreation()
+    expect(useDesignWorkspaceStore.getState().activeDocumentId).toBe(provisionalId)
+    expect(useDesignWorkspaceStore.getState().drawingCreationSubmitting).toBe(true)
+
+    useDesignWorkspaceStore.getState().endDrawingSubmission()
+    expect(useDesignWorkspaceStore.getState().beginDrawingSubmission()).toBe(true)
+
+    useDesignWorkspaceStore.getState().cancelDrawingCreation()
+    expect(useDesignWorkspaceStore.getState().drawingCreationSubmitting).toBe(false)
+    expect(useDesignWorkspaceStore.getState().activeDocumentId).toBe('doc')
+    expect(useDesignWorkspaceStore.getState().drawingCreationDocumentId).toBe(provisionalId)
+
+    useDesignWorkspaceStore.getState().beginDrawingCreation()
+    expect(useDesignWorkspaceStore.getState().activeDocumentId).toBe(provisionalId)
+  })
+
+  it('serializes destructive history operations per drawing', () => {
+    const state = useDesignWorkspaceStore.getState()
+    expect(state.beginDrawingHistoryMutation('/workspace/', 'doc', 'clear')).toBe(true)
+    expect(useDesignWorkspaceStore.getState().beginDrawingHistoryMutation(
+      '/workspace',
+      'doc',
+      'delete'
+    )).toBe(false)
+    expect(useDesignWorkspaceStore.getState().drawingHistoryMutation).toEqual({
+      workspaceRoot: '/workspace',
+      documentId: 'doc',
+      kind: 'clear'
+    })
+    useDesignWorkspaceStore.getState().endDrawingHistoryMutation('/different', 'doc')
+    expect(useDesignWorkspaceStore.getState().drawingHistoryMutation).not.toBeNull()
+    useDesignWorkspaceStore.getState().endDrawingHistoryMutation('/workspace', 'doc')
+    expect(useDesignWorkspaceStore.getState().drawingHistoryMutation).toBeNull()
+  })
+
+  it('keeps a provisional drawing out of the durable index until commit', async () => {
+    useDesignWorkspaceStore.getState().beginDrawingCreation()
+    useDesignWorkspaceStore.getState().renameDocument('doc', 'Renamed while drafting')
+    await flushDesignPersistenceQueue('/workspace')
+    const launcherIndexWrite = writeWorkspaceFile.mock.calls
+      .map(([request]) => request)
+      .reverse()
+      .find((request) => request.path === '.kun-design/documents.json')
+    expect(JSON.parse(launcherIndexWrite?.content ?? '{}')).toMatchObject({
+      activeDocumentId: 'doc',
+      documents: [{ id: 'doc', title: 'Renamed while drafting' }]
+    })
+
+    writeWorkspaceFile.mockClear()
+    expect(useDesignWorkspaceStore.getState().beginDrawingSubmission()).toBe(true)
+    const provisionalId = useDesignWorkspaceStore
+      .getState()
+      .createDocument('Travel dashboard', { transient: true })
+
+    await flushPendingDocumentsIndexes('/workspace')
+    await flushDesignPersistenceQueue('/workspace')
+    const pendingIndexWrite = writeWorkspaceFile.mock.calls
+      .map(([request]) => request)
+      .reverse()
+      .find((request) => request.path === '.kun-design/documents.json')
+    expect(JSON.parse(pendingIndexWrite?.content ?? '{}')).toMatchObject({
+      activeDocumentId: 'doc',
+      documents: [{ id: 'doc' }]
+    })
+
+    writeWorkspaceFile.mockClear()
+    useDesignWorkspaceStore.getState().finishDrawingCreation(provisionalId)
+    await flushDesignPersistenceQueue('/workspace')
+    const committedIndexWrite = writeWorkspaceFile.mock.calls
+      .map(([request]) => request)
+      .reverse()
+      .find((request) => request.path === '.kun-design/documents.json')
+    expect(JSON.parse(committedIndexWrite?.content ?? '{}')).toMatchObject({
+      activeDocumentId: provisionalId,
+      documents: [{ id: 'doc' }, { id: provisionalId, title: 'Travel dashboard' }]
+    })
+  })
+
   it('uses the generated ID as the default new 设计稿 title', () => {
     const id = useDesignWorkspaceStore.getState().createDocument()
 
@@ -527,8 +643,9 @@ describe('design workspace store', () => {
     })
 
     const id = useDesignWorkspaceStore.getState().createDocument('Second')
-    await Promise.resolve()
-    await Promise.resolve()
+    await vi.waitFor(() => {
+      expect(createWorkspaceDirectory).toHaveBeenCalledTimes(2)
+    })
 
     expect(createWorkspaceDirectory).toHaveBeenCalledWith({ path: '.kun-design', workspaceRoot: '/workspace' })
     expect(createWorkspaceDirectory).toHaveBeenCalledWith({ path: `.kun-design/${id}`, workspaceRoot: '/workspace' })
@@ -630,13 +747,109 @@ describe('design workspace store', () => {
     expect(state.activeDocumentId).toBe(second)
   })
 
-  it('removeDocument drops it and falls back to a remaining 设计稿', () => {
+  it('removeDocument drops it and falls back to a remaining 设计稿', async () => {
     const second = useDesignWorkspaceStore.getState().createDocument('Second')
-    useDesignWorkspaceStore.getState().removeDocument(second)
+    await expect(useDesignWorkspaceStore.getState().removeDocument(second)).resolves.toBe(true)
     const state = useDesignWorkspaceStore.getState()
     expect(state.documents.map((d) => d.id)).toEqual(['doc'])
     expect(state.activeDocumentId).toBe('doc')
     expect(state.artifacts.map((a) => a.id).sort()).toEqual(['canvas', 'screen'])
+  })
+
+  it('keeps a legacy untitled drawing eligible for backfill after a blank rename', () => {
+    useDesignWorkspaceStore.setState((state) => ({
+      documents: state.documents.map((document) =>
+        document.id === 'doc'
+          ? { ...document, title: document.id, titleOrigin: undefined }
+          : document
+      )
+    }))
+
+    useDesignWorkspaceStore.getState().renameDocument('doc', '   ')
+
+    expect(useDesignWorkspaceStore.getState().documents[0]).toMatchObject({
+      id: 'doc',
+      title: 'doc'
+    })
+    expect(useDesignWorkspaceStore.getState().documents[0].titleOrigin).toBeUndefined()
+  })
+
+  it('keeps a drawing in memory when its directory cannot be deleted', async () => {
+    vi.stubGlobal('window', {
+      kunGui: {
+        writeWorkspaceFile,
+        deleteWorkspaceEntry: vi.fn(async () => ({
+          ok: false as const,
+          message: 'EACCES: permission denied'
+        }))
+      }
+    })
+
+    await expect(useDesignWorkspaceStore.getState().removeDocument('doc')).resolves.toBe(false)
+
+    expect(useDesignWorkspaceStore.getState().documents.map((document) => document.id))
+      .toContain('doc')
+  })
+
+  it('persists an explicit empty index after deleting the last drawing', async () => {
+    await expect(useDesignWorkspaceStore.getState().removeDocument('doc')).resolves.toBe(true)
+    await flushDesignPersistenceQueue('/workspace')
+
+    expect(useDesignWorkspaceStore.getState()).toMatchObject({
+      documents: [],
+      activeDocumentId: null,
+      artifacts: [],
+      activeArtifactId: null
+    })
+    const indexWrite = writeWorkspaceFile.mock.calls
+      .map(([request]) => request)
+      .reverse()
+      .find((request) => request.path === '.kun-design/documents.json')
+    expect(JSON.parse(indexWrite?.content ?? '{}')).toEqual({
+      version: 1,
+      activeDocumentId: null,
+      documents: []
+    })
+  })
+
+  it('overwrites a stale index write queued while drawing deletion is in flight', async () => {
+    const deletion = deferred<{
+      ok: true
+      path: string
+      deletedAt: string
+    }>()
+    const deleteWorkspaceEntry = vi.fn(() => deletion.promise)
+    vi.stubGlobal('window', {
+      kunGui: { writeWorkspaceFile, deleteWorkspaceEntry }
+    })
+
+    const removal = useDesignWorkspaceStore.getState().removeDocument('doc')
+    await vi.waitFor(() => expect(deleteWorkspaceEntry).toHaveBeenCalledTimes(1))
+
+    const staleState = useDesignWorkspaceStore.getState()
+    persistDocumentsIndex(
+      staleState.workspaceRoot,
+      staleState.documents,
+      staleState.activeDocumentId
+    )
+    deletion.resolve({
+      ok: true,
+      path: '/workspace/.kun-design/doc',
+      deletedAt: '2026-07-01T00:00:00.000Z'
+    })
+
+    await expect(removal).resolves.toBe(true)
+    await flushPendingDocumentsIndexes('/workspace')
+    await flushDesignPersistenceQueue('/workspace')
+
+    const indexWrites = writeWorkspaceFile.mock.calls
+      .map(([request]) => request)
+      .filter((request) => request.path === '.kun-design/documents.json')
+    expect(JSON.parse(indexWrites.at(-1)?.content ?? '{}')).toEqual({
+      version: 1,
+      activeDocumentId: null,
+      documents: []
+    })
   })
 
   it('keeps settings unloaded until existing design documents are rehydrated', async () => {
@@ -695,5 +908,42 @@ describe('design workspace store', () => {
     expect(state.documents.map((doc) => ({ id: doc.id, title: doc.title }))).toEqual([
       { id: 'existing-doc', title: 'Existing design' }
     ])
+  })
+
+  it('keeps a fresh workspace empty instead of auto-creating a drawing', async () => {
+    const readWorkspaceFile = vi.fn(async () => ({ ok: false as const, error: 'missing' }))
+    const listWorkspaceDirectory = vi.fn(async () => ({
+      ok: true as const,
+      entries: [] as Array<{ name: string; type: 'file' | 'directory' }>
+    }))
+    vi.spyOn(rendererRuntimeClient, 'getSettings').mockResolvedValue(
+      settingsWithDesign({ defaultWorkspaceRoot: '/workspace' })
+    )
+    vi.stubGlobal('window', {
+      kunGui: { writeWorkspaceFile, readWorkspaceFile, listWorkspaceDirectory }
+    })
+    useDesignWorkspaceStore.setState({
+      workspaceRoot: '',
+      documents: [],
+      activeDocumentId: null,
+      artifacts: [],
+      activeArtifactId: null,
+      settingsLoaded: true,
+      designSystemHash: '',
+      fileError: null
+    })
+
+    await useDesignWorkspaceStore.getState().loadDesignSettings()
+
+    expect(useDesignWorkspaceStore.getState()).toMatchObject({
+      settingsLoaded: true,
+      documents: [],
+      activeDocumentId: null,
+      artifacts: [],
+      activeArtifactId: null
+    })
+    expect(writeWorkspaceFile).not.toHaveBeenCalledWith(
+      expect.objectContaining({ path: '.kun-design/documents.json' })
+    )
   })
 })

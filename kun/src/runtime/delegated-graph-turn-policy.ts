@@ -173,12 +173,16 @@ export function delegatedGraphPlanCanRetry(
 export type DelegatedGraphCompletionCheck =
   | 'complete'
   | 'suspended'
+  | 'suspended_pending_supervision'
   | 'retry_required'
 
 export function delegatedGraphCompletionCheck(
   suspension: GraphLeadSuspensionResult | undefined
 ): DelegatedGraphCompletionCheck {
-  if (suspension === 'suspended') return 'suspended'
+  if (
+    suspension === 'suspended' ||
+    suspension === 'suspended_pending_supervision'
+  ) return suspension
   if (suspension === 'supervision_pending' || suspension === 'pending_steering') {
     return 'retry_required'
   }
@@ -203,9 +207,12 @@ type GraphSuspensionPort = {
 export async function parkDelegatedGraphTurnAfterRecovery(
   turns: GraphSuspensionPort,
   input: { threadId: string; turnId: string }
-): Promise<'suspended' | 'complete'> {
+): Promise<'suspended' | 'suspended_pending_supervision' | 'complete'> {
   const suspension = await turns.suspendGraphLeadTurn?.(input)
-  if (suspension === 'suspended') return 'suspended'
+  if (
+    suspension === 'suspended' ||
+    suspension === 'suspended_pending_supervision'
+  ) return suspension
   if (suspension !== 'supervision_pending' && suspension !== 'pending_steering') {
     return 'complete'
   }
@@ -215,5 +222,7 @@ export async function parkDelegatedGraphTurnAfterRecovery(
     preserveDeliveryCursor: true,
     allowPendingSupervision: true
   })
-  return parked === 'suspended' ? 'suspended' : 'complete'
+  return parked === 'suspended' || parked === 'suspended_pending_supervision'
+    ? parked
+    : 'complete'
 }

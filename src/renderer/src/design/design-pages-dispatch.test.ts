@@ -47,7 +47,9 @@ describe('design pages dispatch', () => {
       sendMessage,
       promptState,
       resolveProviderId,
-      reasoningEffort: 'medium'
+      reasoningEffort: 'medium',
+      serviceTier: 'priority',
+      expectedThreadId: 'thr_design'
     })
 
     expect(options).toMatchObject({
@@ -56,6 +58,8 @@ describe('design pages dispatch', () => {
       model: 'deepseek-chat',
       providerId: 'deepseek',
       reasoningEffort: 'medium',
+      serviceTier: 'priority',
+      expectedThreadId: 'thr_design',
       generationPrompt: 'Use a product-grade design system.',
       designContext: { designTarget: 'web' }
     })
@@ -89,6 +93,7 @@ describe('design pages dispatch', () => {
 
   it('runs the injected multi-page runner with the built options', async () => {
     const runPages = vi.fn(async (_deps: RunDesignPagesDeps) => undefined)
+    const onFirstSendSettled = vi.fn()
 
     await runDesignPagesDispatch({
       brief: 'Design an ops app',
@@ -96,6 +101,7 @@ describe('design pages dispatch', () => {
       sendMessage,
       promptState,
       resolveProviderId: () => 'deepseek',
+      onFirstSendSettled,
       runPages
     })
 
@@ -104,7 +110,8 @@ describe('design pages dispatch', () => {
       workspaceRoot: '/workspace',
       model: 'deepseek-chat',
       providerId: 'deepseek',
-      generationPrompt: 'Use a product-grade design system.'
+      generationPrompt: 'Use a product-grade design system.',
+      onFirstSendSettled
     }))
   })
 })

@@ -11,6 +11,7 @@ import type { ComputerUseMode } from '../../kun/src/contracts/capabilities.js'
 import type { BrowserUseMode } from './browser-use'
 import type { ModelEndpointFormat } from '../../kun/src/contracts/model-endpoint-format.js'
 import type { ToolOutputLimitsConfig } from '../../kun/src/contracts/tool-output-limits.js'
+export { DEFAULT_OPEN_CONNECTOR_PORT } from './open-connector'
 export {
   DEFAULT_MODEL_ENDPOINT_FORMAT,
   inferModelEndpointFormatFromUrl,
@@ -2259,6 +2260,15 @@ export type TerminalSettingsPatchV1 = {
   colors?: Partial<TerminalColorSettingsV1>
 }
 
+export type OpenConnectorDesktopSettingsV1 = {
+  /** Enables Kun's first-party local OpenConnector capability. */
+  enabled: boolean
+  /** Stable loopback port used by the sidecar and user-supplied OAuth callbacks. */
+  port: number
+}
+
+export type OpenConnectorDesktopSettingsPatchV1 = Partial<OpenConnectorDesktopSettingsV1>
+
 export type AppSettingsV1 = {
   version: 1
   /** Persisted independently from credentials so SDK/subscription providers do not reopen onboarding. */
@@ -2290,13 +2300,14 @@ export type AppSettingsV1 = {
   design: DesignSettingsV1
   guiUpdate: GuiUpdateConfigV1
   terminal: TerminalSettingsV1
+  connectors?: OpenConnectorDesktopSettingsV1
   codePromptPrefix: string
   /** User-disabled skill IDs. Disabled skills are hidden from command surfaces. */
   disabledSkillIds: string[]
 }
 
 export type AppSettingsPatch = Partial<
-  Omit<AppSettingsV1, 'provider' | 'agents' | 'log' | 'checkpointCleanup' | 'notifications' | 'appBehavior' | 'keyboardShortcuts' | 'write' | 'claw' | 'schedule' | 'design' | 'workflow' | 'guiUpdate' | 'terminal'>
+  Omit<AppSettingsV1, 'provider' | 'agents' | 'log' | 'checkpointCleanup' | 'notifications' | 'appBehavior' | 'keyboardShortcuts' | 'write' | 'claw' | 'schedule' | 'design' | 'workflow' | 'guiUpdate' | 'terminal' | 'connectors'>
 > & {
   provider?: ModelProviderSettingsPatchV1
   agents?: KunSettingsEnvelopePatchV1
@@ -2312,4 +2323,5 @@ export type AppSettingsPatch = Partial<
   design?: DesignSettingsPatchV1
   guiUpdate?: Partial<GuiUpdateConfigV1>
   terminal?: TerminalSettingsPatchV1
+  connectors?: OpenConnectorDesktopSettingsPatchV1
 }

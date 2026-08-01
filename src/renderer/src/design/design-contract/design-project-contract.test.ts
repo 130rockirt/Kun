@@ -121,8 +121,9 @@ describe('design project contract', () => {
 
     expect(markdown).toContain('# DESIGN.md: Ops app')
     expect(markdown).toContain('Project brief: `.kun-design/doc/design.md`')
-    expect(markdown).toContain('## Design Document')
-    expect(markdown).toContain('- Document: Ops app (`doc`)')
+    expect(markdown).toContain('## Drawing')
+    expect(markdown).toContain('- Drawing: Ops app')
+    expect(markdown).not.toContain('(`doc`)')
     expect(markdown).toContain('## Design Mode')
     expect(markdown).toContain('- Recommended surface: `whiteboard`')
     expect(markdown).toContain('- code-bridge (active): 78/100; tools design.bind_code, design.implement')

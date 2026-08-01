@@ -73,6 +73,8 @@ function GraphWorkbenchSmokeView(): ReactElement {
         onRefresh={() => undefined}
         onCommand={() => undefined}
         onCancel={() => undefined}
+        wakingObligationId={null}
+        onWakeLead={() => undefined}
         onRetry={() => undefined}
         onReview={() => undefined}
         onPatch={async () => undefined}

@@ -41,6 +41,7 @@ import type {
   BrowserUseNavigationInput,
   BrowserUseViewState
 } from './browser-use'
+import type { StorageRelocationApi } from './storage-relocation'
 import type {
   ClipboardImageReadResult,
   LocalPdfTextReadResult,
@@ -176,6 +177,7 @@ import type {
 } from './runtime-image-attachment'
 import type { CliInstallAction, CliInstallResult, CliInstallStatus } from './cli-install'
 import type { ProviderQuotaListResult } from './provider-quota'
+import type { OpenConnectorApi } from './open-connector'
 
 export type KunRuntimeStatusPayload = {
   state: 'starting' | 'running' | 'restarting' | 'crashed' | 'failed' | 'stopped'
@@ -566,6 +568,20 @@ export type CredentialRecoveryResetResult =
 export type KunGuiApi = ExtensionIpcApi & {
   platform: string
   homeDir: string
+  /** Immutable process identity selected before Electron profile locking. */
+  appEnvironment: import('./app-environment').AppEnvironmentInfo
+  /** Manager-backed durable mappings shared by Kun and kun-dv profiles. */
+  sharedClientState: {
+    read: () => Promise<import('./app-environment').RevisionedSnapshot<Record<string, string>>>
+    write: (
+      expectedRevision: number,
+      entries: Record<string, string>
+    ) => Promise<import('./app-environment').RevisionedSnapshot<Record<string, string>>>
+  }
+  /** Constrained native management surface for the bundled local connector runtime. */
+  connectors: OpenConnectorApi
+  /** Windows production storage-root relocation and recovery surface. */
+  storageRelocation: StorageRelocationApi
   dataMigration: {
     pickExportPackage: (defaultPath?: string) => Promise<DataMigrationPathPickResult>
     pickImportPackage: (defaultPath?: string) => Promise<DataMigrationPathPickResult>

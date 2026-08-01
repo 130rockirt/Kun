@@ -6,6 +6,7 @@ import type { BrowserStorageLike } from '../lib/browser-storage'
 import {
   emptyDesignThreadRegistry,
   markDesignThread,
+  readDesignThreadRegistry,
   saveDesignThreadRegistry
 } from '../design/design-thread-registry'
 import {
@@ -56,6 +57,7 @@ function thread(overrides: Partial<NormalizedThread> & Pick<NormalizedThread, 'i
     model: overrides.model ?? 'deepseek-v4-pro',
     mode: overrides.mode ?? 'agent',
     workspace: overrides.workspace,
+    ...(overrides.agentSurface ? { agentSurface: overrides.agentSurface } : {}),
     ...(overrides.status ? { status: overrides.status } : {}),
     ...(overrides.archived !== undefined ? { archived: overrides.archived } : {})
   }
@@ -71,6 +73,17 @@ class MemoryStorage implements BrowserStorageLike {
   setItem(key: string, value: string): void {
     this.values.set(key, value)
   }
+}
+
+function deferred<T>(): {
+  promise: Promise<T>
+  resolve: (value: T) => void
+} {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((done) => {
+    resolve = done
+  })
+  return { promise, resolve }
 }
 
 describe('requirement session lifecycle', () => {
@@ -424,6 +437,239 @@ describe('chat-store navigation workspace selection', () => {
     expect(harness.state.error).toBeTruthy()
   })
 
+  it('can create a replacement Design thread without stealing route or selection', async () => {
+    const storage = new MemoryStorage()
+    const created = thread({
+      id: 'thr_design_replacement',
+      title: 'Design Assistant',
+      workspace: '/Users/zxy/project'
+    })
+    registryMock.getProvider.mockReturnValue({
+      createThread: vi.fn(async () => created)
+    })
+    vi.stubGlobal('window', {
+      localStorage: storage,
+      kunGui: {
+        workspaceDirectoryExists: vi.fn(async () => true),
+        readWorkspaceFile: vi.fn(async () => ({ ok: false as const, error: 'missing' })),
+        writeWorkspaceFile: vi.fn(async (payload: { path: string; content: string }) => ({
+          ok: true as const,
+          path: payload.path,
+          size: payload.content.length
+        }))
+      }
+    })
+    const harness = buildHarness()
+
+    await expect(harness.actions.createDesignThread(
+      '/Users/zxy/project',
+      'drawing-1',
+      { activate: false, suppressSettingsRedirect: true }
+    )).resolves.toBe('thr_design_replacement')
+
+    expect(harness.state.route).toBe('chat')
+    expect(harness.state.activeThreadId).toBe('thr_default')
+    expect(harness.selectThread).not.toHaveBeenCalled()
+    expect(harness.state.threads.some((item) => item.id === created.id)).toBe(true)
+  })
+
+  it('waits for the initial Design directory binding before exposing a created thread', async () => {
+    const storage = new MemoryStorage()
+    const created = thread({
+      id: 'thr_design_waiting',
+      title: 'Design Assistant',
+      workspace: '/Users/zxy/project'
+    })
+    const pendingWrite = deferred<{
+      ok: true
+      path: string
+      size: number
+    }>()
+    const writeStarted = deferred<void>()
+    registryMock.getProvider.mockReturnValue({
+      createThread: vi.fn(async () => created),
+      deleteThread: vi.fn(async () => undefined)
+    })
+    vi.stubGlobal('window', {
+      localStorage: storage,
+      kunGui: {
+        workspaceDirectoryExists: vi.fn(async () => true),
+        readWorkspaceFile: vi.fn(async () => ({ ok: false as const, error: 'missing' })),
+        writeWorkspaceFile: vi.fn(() => {
+          writeStarted.resolve()
+          return pendingWrite.promise
+        })
+      }
+    })
+    const harness = buildHarness()
+    let settled = false
+
+    const creation = harness.actions.createDesignThread('/Users/zxy/project', 'drawing-waiting')
+      .then((result) => {
+        settled = true
+        return result
+      })
+    await writeStarted.promise
+
+    expect(settled).toBe(false)
+    expect(harness.state.activeThreadId).toBe('thr_default')
+    expect(harness.state.threads.some((item) => item.id === created.id)).toBe(false)
+
+    pendingWrite.resolve({
+      ok: true,
+      path: '.kun-design/drawing-waiting/chat/meta.json',
+      size: 1
+    })
+    await expect(creation).resolves.toBe('thr_design_waiting')
+    expect(harness.state.activeThreadId).toBe('thr_design_waiting')
+  })
+
+  it('rejects and cleans up a new Design thread when its initial directory binding fails', async () => {
+    const storage = new MemoryStorage()
+    const created = thread({
+      id: 'thr_design_unbound',
+      title: 'Design Assistant',
+      workspace: '/Users/zxy/project'
+    })
+    const deleteThread = vi.fn(async () => undefined)
+    registryMock.getProvider.mockReturnValue({
+      createThread: vi.fn(async () => created),
+      deleteThread
+    })
+    vi.stubGlobal('window', {
+      localStorage: storage,
+      kunGui: {
+        workspaceDirectoryExists: vi.fn(async () => true),
+        readWorkspaceFile: vi.fn(async () => ({ ok: false as const, error: 'missing' })),
+        writeWorkspaceFile: vi.fn(async () => ({
+          ok: false as const,
+          message: 'disk full'
+        }))
+      }
+    })
+    const harness = buildHarness()
+
+    await expect(harness.actions.createDesignThread(
+      '/Users/zxy/project',
+      'drawing-unbound'
+    )).resolves.toBeNull()
+
+    expect(deleteThread).toHaveBeenCalledWith('thr_design_unbound')
+    expect(readDesignThreadRegistry(storage).workspaces[
+      `/Users/zxy/project${String.fromCharCode(0)}drawing-unbound`
+    ]).toBeUndefined()
+    expect(harness.state.activeThreadId).toBe('thr_default')
+    expect(harness.state.threads.some((item) => item.id === created.id)).toBe(false)
+    expect(harness.state.error).toContain('Design drawing conversation binding')
+  })
+
+  it('retains a recoverable registry binding when failed initial persistence cannot delete the thread', async () => {
+    const storage = new MemoryStorage()
+    const created = thread({
+      id: 'thr_design_retry_cleanup',
+      title: 'Design Assistant',
+      workspace: '/Users/zxy/project'
+    })
+    registryMock.getProvider.mockReturnValue({
+      createThread: vi.fn(async () => created),
+      deleteThread: vi.fn(async () => {
+        throw new Error('runtime unavailable')
+      })
+    })
+    vi.stubGlobal('window', {
+      localStorage: storage,
+      kunGui: {
+        workspaceDirectoryExists: vi.fn(async () => true),
+        readWorkspaceFile: vi.fn(async () => ({ ok: false as const, error: 'missing' })),
+        writeWorkspaceFile: vi.fn(async () => ({
+          ok: false as const,
+          message: 'disk full'
+        }))
+      }
+    })
+    const harness = buildHarness()
+
+    await expect(harness.actions.createDesignThread(
+      '/Users/zxy/project',
+      'drawing-retry-cleanup'
+    )).resolves.toBeNull()
+
+    expect(readDesignThreadRegistry(storage).workspaces[
+      `/Users/zxy/project${String.fromCharCode(0)}drawing-retry-cleanup`
+    ]).toEqual({
+      activeThreadId: 'thr_design_retry_cleanup',
+      threadIds: ['thr_design_retry_cleanup']
+    })
+    expect(harness.state.error).toContain('Runtime cleanup also failed')
+  })
+
+  it('atomically activates a new Design thread and snapshots the selected Agent persona', async () => {
+    const storage = new MemoryStorage()
+    const created = thread({
+      id: 'thr_design_new',
+      title: 'Design Assistant',
+      workspace: '/Users/zxy/project'
+    })
+    const createThread = vi.fn(async () => created)
+    registryMock.getProvider.mockReturnValue({ createThread })
+    vi.stubGlobal('window', {
+      localStorage: storage,
+      kunGui: {
+        workspaceDirectoryExists: vi.fn(async () => true),
+        readWorkspaceFile: vi.fn(async () => ({ ok: false as const, error: 'missing' })),
+        writeWorkspaceFile: vi.fn(async (payload: { path: string; content: string }) => ({
+          ok: true as const,
+          path: payload.path,
+          size: payload.content.length
+        })),
+        getSettings: vi.fn(async () => ({
+          agents: {
+            kun: {
+              subagents: {
+                profiles: [{
+                  id: 'codex-primary',
+                  name: 'Codex',
+                  enabled: true,
+                  mode: 'primary',
+                  providerId: 'codex',
+                  model: 'gpt-5.6-luna',
+                  systemPrompt: 'Design with Codex.'
+                }]
+              }
+            }
+          }
+        }))
+      }
+    })
+    const harness = buildHarness()
+    harness.state.composerAgentId = 'codex-primary'
+    harness.state.blocks = [{ kind: 'user', id: 'u-old', text: 'old conversation' }]
+    harness.state.busy = true
+
+    await expect(harness.actions.createDesignThread(
+      '/Users/zxy/project',
+      'drawing-new'
+    )).resolves.toBe('thr_design_new')
+
+    expect(createThread).toHaveBeenCalledWith(expect.objectContaining({
+      workspace: '/Users/zxy/project',
+      agentSurface: 'design',
+      agentId: 'codex-primary',
+      providerId: 'codex',
+      model: 'gpt-5.6-luna',
+      systemPrompt: 'Design with Codex.'
+    }))
+    expect(harness.state.activeThreadId).toBe('thr_design_new')
+    expect(harness.state.route).toBe('design')
+    expect(harness.state.blocks).toEqual([])
+    expect(harness.state.busy).toBe(false)
+    expect(harness.selectThread).not.toHaveBeenCalled()
+    expect(harness.refreshThreads).not.toHaveBeenCalled()
+    expect(readDesignThreadRegistry(storage).workspaces[
+      `/Users/zxy/project${String.fromCharCode(0)}drawing-new`
+    ]?.activeThreadId).toBe('thr_design_new')
+  })
+
   it('openCode does not keep a registered design thread active in Code mode', async () => {
     const storage = new MemoryStorage()
     saveDesignThreadRegistry(
@@ -451,6 +697,33 @@ describe('chat-store navigation workspace selection', () => {
         title: 'Code task',
         workspace: '/Users/zxy/project',
         updatedAt: '2026-06-12T09:00:00.000Z'
+      })
+    ]
+
+    await harness.actions.openCode()
+
+    expect(harness.state.route).toBe('chat')
+    expect(harness.selectThread).toHaveBeenCalledWith('thr_code')
+  })
+
+  it('openCode does not keep a durably classified Design thread active without a registry', async () => {
+    const harness = buildHarness()
+    harness.state.activeThreadId = 'thr_design_durable'
+    harness.state.workspaceRoot = '/Users/zxy/project'
+    harness.state.threads = [
+      thread({
+        id: 'thr_design_durable',
+        title: 'Renamed drawing conversation',
+        workspace: '/Users/zxy/project',
+        agentSurface: 'design',
+        updatedAt: '2026-08-01T10:00:00.000Z'
+      }),
+      thread({
+        id: 'thr_code',
+        title: 'Code task',
+        workspace: '/Users/zxy/project',
+        agentSurface: 'code',
+        updatedAt: '2026-08-01T09:00:00.000Z'
       })
     ]
 
@@ -627,7 +900,8 @@ describe('write assistant file conversation selection', () => {
     expect(createThread).toHaveBeenCalledWith({
       workspace,
       title: 'Write Assistant',
-      mode: 'agent'
+      mode: 'agent',
+      agentSurface: 'write'
     })
     expect(activeWriteThreadForWorkspace(
       workspace,

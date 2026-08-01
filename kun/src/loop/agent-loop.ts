@@ -468,7 +468,10 @@ export class AgentLoop {
         // that narrow interval, so the caller that delivered the wake-up must
         // start the continuation after the parked runner fully settles.
         if (
-          outcome === 'suspended' &&
+          (
+            outcome === 'suspended' ||
+            outcome === 'suspended_pending_supervision'
+          ) &&
           this.opts.turns.isTurnExecutionActive(turnId)
         ) {
           return this.runTurn(threadId, turnId)
@@ -656,8 +659,12 @@ export class AgentLoop {
         )
         if (
           reportedStatus === 'suspended' ||
-          isHostShutdownTurnSuspension(signal)
+          reportedStatus === 'suspended_pending_supervision'
         ) {
+          suspended = true
+          return reportedStatus
+        }
+        if (isHostShutdownTurnSuspension(signal)) {
           suspended = true
           return 'suspended'
         }
@@ -669,8 +676,12 @@ export class AgentLoop {
       const status = await this.loop(threadId, turnId, signal)
       if (
         status === 'suspended' ||
-        isHostShutdownTurnSuspension(signal)
+        status === 'suspended_pending_supervision'
       ) {
+        suspended = true
+        return status
+      }
+      if (isHostShutdownTurnSuspension(signal)) {
         suspended = true
         return 'suspended'
       }
@@ -859,7 +870,10 @@ export class AgentLoop {
           preserveDeliveryCursor: true,
           allowPendingSupervision: true
         })
-        if (parked === 'suspended') return 'suspended'
+        if (
+          parked === 'suspended' ||
+          parked === 'suspended_pending_supervision'
+        ) return parked
         // The run can become terminal between the ownership check and the
         // suspension fence. Give that terminal state its normal finalization
         // path instead of spinning forever on an already-consumed episode.
@@ -950,7 +964,10 @@ export class AgentLoop {
             preserveDeliveryCursor: true,
             allowPendingSupervision: true
           })
-          if (parked === 'suspended') return 'suspended'
+          if (
+            parked === 'suspended' ||
+            parked === 'suspended_pending_supervision'
+          ) return parked
         }
       } else {
         stepResult = await this.modelStep(
@@ -966,7 +983,10 @@ export class AgentLoop {
           threadId,
           turnId
         })
-        if (graphSuspension === 'suspended') return 'suspended'
+        if (
+          graphSuspension === 'suspended' ||
+          graphSuspension === 'suspended_pending_supervision'
+        ) return graphSuspension
         if (graphSuspension === 'pending_steering') continue
         if (graphSuspension === 'supervision_pending') {
           if (!graphSupervisionReminderUsed) {
@@ -995,7 +1015,10 @@ export class AgentLoop {
             allowPendingSupervision: true,
             preserveDeliveryCursor: true
           })
-          if (parked === 'suspended') return 'suspended'
+          if (
+            parked === 'suspended' ||
+            parked === 'suspended_pending_supervision'
+          ) return parked
           if (parked === 'pending_steering') continue
         }
         // Either accepted guidance wins and forces another model interaction,
@@ -1033,7 +1056,10 @@ export class AgentLoop {
             turnId
           })
           if (graphSuspension !== 'not_graph') {
-            if (graphSuspension === 'suspended') return 'suspended'
+            if (
+              graphSuspension === 'suspended' ||
+              graphSuspension === 'suspended_pending_supervision'
+            ) return graphSuspension
             if (graphSuspension === 'supervision_pending') {
               const parked = await this.opts.turns.suspendGraphLeadTurn({
                 threadId,
@@ -1041,7 +1067,10 @@ export class AgentLoop {
                 allowPendingSupervision: true,
                 preserveDeliveryCursor: true
               })
-              if (parked === 'suspended') return 'suspended'
+              if (
+                parked === 'suspended' ||
+                parked === 'suspended_pending_supervision'
+              ) return parked
             }
             // Accepted guidance wins the suspension race, and a terminal Graph
             // still needs its source Lead to synthesize the final response.
