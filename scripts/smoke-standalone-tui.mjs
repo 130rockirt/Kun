@@ -49,6 +49,8 @@ async function main() {
   const expectedVersion = required(flags, 'version')
   const expectedTarget = required(flags, 'target')
   const temporary = await mkdtemp(join(tmpdir(), 'kun-tui-smoke-'))
+  const managerControlDir = join(temporary, 'manager', 'control')
+  const runtimeDataDir = join(temporary, 'headless-runtime')
   try {
     await extractArchive(artifact, temporary)
     const root = join(temporary, 'kun')
@@ -69,7 +71,10 @@ async function main() {
     await stat(geminiEntry)
     const environment = {
       ...process.env,
-      KUN_STANDALONE_ROOT: root
+      KUN_STANDALONE_ROOT: root,
+      KUN_MANAGER_BASE_URL: '',
+      KUN_MANAGER_CONTROL_DIR: managerControlDir,
+      KUN_MANAGER_SETTINGS_PATH: join(temporary, 'manager', 'kun-settings.json')
     }
     if (process.platform === 'linux') {
       delete environment.DISPLAY
@@ -82,7 +87,7 @@ async function main() {
     expectContains(node, [entry, 'tui', '--help'], environment, 'kun [tui options]')
     expectContains(
       node,
-      [entry, 'runtime', 'status', '--data-dir', join(temporary, 'data')],
+      [entry, 'runtime', 'status', '--data-dir', runtimeDataDir],
       environment,
       'Kun runtime: stopped'
     )
@@ -90,7 +95,7 @@ async function main() {
       node,
       entry,
       environment,
-      join(temporary, 'headless-runtime')
+      runtimeDataDir
     )
     execFileSync(
       node,
@@ -105,8 +110,32 @@ async function main() {
     )
     process.stdout.write(`Standalone TUI smoke passed: ${expectedTarget} ${expectedVersion}\n`)
   } finally {
+    await shutdownIsolatedManager(managerControlDir)
     await removeTemporaryDirectory(temporary)
   }
+}
+
+async function shutdownIsolatedManager(controlDir) {
+  let discovery
+  try {
+    discovery = JSON.parse(await readFile(join(controlDir, 'manager.json'), 'utf8'))
+  } catch {
+    return
+  }
+  try {
+    await fetch(`${discovery.baseUrl}/v1/manager/shutdown`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${discovery.managerToken}`,
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({ instanceId: discovery.instanceId }),
+      signal: AbortSignal.timeout(5_000)
+    })
+  } catch {
+    // The manager may exit before the response is fully observed.
+  }
+  await delay(250)
 }
 
 export async function removeTemporaryDirectory(

@@ -33,6 +33,7 @@ import {
   withManagerStartLock,
   type ManagerDiscoveryRecord
 } from './manager-discovery.js'
+import { sameCanonicalPath } from './canonical-path.js'
 import { KUN_MANAGER_CAPABILITIES } from './service-manager.js'
 
 const START_TIMEOUT_MS = 30_000
@@ -217,7 +218,7 @@ export async function ensureServiceManager(input: {
   const fetchImpl = input.fetch ?? fetch
   const existing = await resolveServiceManager(controlDir, fetchImpl)
   if (existing) {
-    if (existing.discovery.dataDir !== input.dataDir || existing.discovery.settingsPath !== settingsPath) {
+    if (!managerOwnsPaths(existing.discovery, input.dataDir, settingsPath)) {
       throw new Error(
         'Kun Service Manager owns a different canonical data or settings path'
       )
@@ -232,7 +233,7 @@ export async function ensureServiceManager(input: {
   return withManagerStartLock(controlDir, async () => {
     const elected = await resolveServiceManager(controlDir, fetchImpl)
     if (elected) {
-      if (elected.discovery.dataDir !== input.dataDir || elected.discovery.settingsPath !== settingsPath) {
+      if (!managerOwnsPaths(elected.discovery, input.dataDir, settingsPath)) {
         throw new Error('Kun Service Manager owns a different canonical data or settings path')
       }
       return elected
@@ -297,6 +298,15 @@ export async function ensureServiceManager(input: {
     }
     throw new Error(`Kun Service Manager did not become ready; inspect ${logPath}`)
   })
+}
+
+function managerOwnsPaths(
+  discovery: ManagerDiscoveryRecord,
+  dataDir: string,
+  settingsPath: string
+): boolean {
+  return sameCanonicalPath(discovery.dataDir, dataDir) &&
+    sameCanonicalPath(discovery.settingsPath, settingsPath)
 }
 
 /**
