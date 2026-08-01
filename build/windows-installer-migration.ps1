@@ -643,7 +643,7 @@ try {
       Write-ResolvedInstallTarget (Resolve-InstallTarget)
     }
     'ResolveSource' {
-      [Console]::Out.Write((Resolve-RegisteredInstallSource))
+      Write-ResolvedInstallTarget (Resolve-RegisteredInstallSource)
     }
     'StopProcesses' {
       Stop-InstallRootProcesses
