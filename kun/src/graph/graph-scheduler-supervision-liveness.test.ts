@@ -59,9 +59,16 @@ describe('Graph scheduler supervision liveness', () => {
       }
     })
     supervisors.push(runtimeSupervisor)
-    runtimeSupervisor.start()
     harness.scheduler.start()
 
+    await waitFor(async () => {
+      const run = await harness.store.get('run_harness')
+      const obligation = run?.supervisionObligations.find((entry) =>
+        entry.kind === 'review_required' && entry.state === 'pending')
+      return obligation ? run : null
+    })
+    await runtimeSupervisor.sweepObligations()
+    await runtimeSupervisor.flush('run_harness')
     await waitFor(async () => {
       const run = await harness.store.get('run_harness')
       const obligation = run?.supervisionObligations.find((entry) =>
@@ -78,6 +85,20 @@ describe('Graph scheduler supervision liveness', () => {
       return leadEpisodes === 2 && obligation?.noProgressCount === 2 ? run : null
     })
     nowMs += 5_000
+    await runtimeSupervisor.sweepObligations()
+    await runtimeSupervisor.flush('run_harness')
+    await waitFor(async () => {
+      const run = await harness.store.get('run_harness')
+      const finish = run?.nodes.finish
+      const attempt = finish?.attempts.at(-1)
+      const obligation = attempt
+        ? run?.supervisionObligations.find((entry) =>
+            entry.kind === 'review_required' &&
+            entry.attemptIds.includes(attempt.id) &&
+            entry.state === 'pending')
+        : undefined
+      return finish?.status === 'reviewing' && obligation ? run : null
+    })
     await runtimeSupervisor.sweepObligations()
     await runtimeSupervisor.flush('run_harness')
     let completed: GraphRunV1
