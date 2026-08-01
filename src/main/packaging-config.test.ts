@@ -487,6 +487,9 @@ describe('electron-builder Kun packaging', () => {
     expect(installerScript).toContain('Var /GLOBAL KunInstallerTargetDir')
     expect(installerScript).toContain('Call KunRefreshInstallPaths')
     expect(installerScript).toContain('-ResultPath "$KunInstallerResultPath"')
+    expect(installerScript).toContain(
+      'ReadRegStr $R9 HKEY_CURRENT_USER "${UNINSTALL_REGISTRY_KEY}" UninstallString'
+    )
     expect(installerScript).toContain('Function KunInstallDirectoryPagePre')
     expect(installerScript).toContain('Function KunInstallDirectoryPageLeave')
     expect(installerScript).toContain('Function KunInstallFilesPagePre')
