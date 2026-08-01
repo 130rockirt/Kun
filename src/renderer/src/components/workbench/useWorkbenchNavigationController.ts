@@ -67,7 +67,6 @@ export type WorkbenchNavigationController = {
   exploreSddRequirementInDesign: () => void
   openCodeMode: () => void
   openPluginsView: () => void
-  openConnectorsView: () => void
   openExtensionsView: () => void
   openScheduleView: () => void
   openThread: (id: string) => void
@@ -269,11 +268,6 @@ export function useWorkbenchNavigationController({
     setRoute('extensions')
   }, [setConnectPhoneSidebarOpen, setRoute])
 
-  const openConnectorsView = useCallback((): void => {
-    setConnectPhoneSidebarOpen(false)
-    setRoute('connectors')
-  }, [setConnectPhoneSidebarOpen, setRoute])
-
   const openScheduleView = useCallback((): void => {
     setConnectPhoneSidebarOpen(false)
     openSchedule()
@@ -356,7 +350,6 @@ export function useWorkbenchNavigationController({
     exploreSddRequirementInDesign,
     openCodeMode,
     openPluginsView,
-    openConnectorsView,
     openExtensionsView,
     openScheduleView,
     openThread,

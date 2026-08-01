@@ -92,11 +92,13 @@ describe('design workspace store', () => {
     useDesignWorkspaceStore.setState({
       workspaceRoot: '/workspace',
       documents: [doc],
+      workspaceFolders: [],
       activeDocumentId: 'doc',
       drawingCreationOpen: false,
       drawingCreationReturnDocumentId: null,
       drawingCreationDocumentId: null,
       drawingCreationSubmitting: false,
+      drawingCreationFolderId: null,
       drawingHistoryMutation: null,
       artifacts: [canvas, screen],
       activeArtifactId: canvas.id,
@@ -945,5 +947,25 @@ describe('design workspace store', () => {
     expect(writeWorkspaceFile).not.toHaveBeenCalledWith(
       expect.objectContaining({ path: '.kun-design/documents.json' })
     )
+  })
+
+  it('moves drawings between logical folders and promotes direct drawings when deleting a folder', () => {
+    const store = useDesignWorkspaceStore.getState()
+    const parentId = store.createWorkspaceFolder('Product')
+    const childId = store.createWorkspaceFolder('Mobile', parentId)
+    expect(parentId).toBeTruthy()
+    expect(childId).toBeTruthy()
+
+    store.moveDocument('doc', childId)
+    expect(useDesignWorkspaceStore.getState().documents[0]).toMatchObject({
+      id: 'doc',
+      folderId: childId
+    })
+
+    useDesignWorkspaceStore.getState().removeWorkspaceFolder(childId ?? '')
+    expect(useDesignWorkspaceStore.getState()).toMatchObject({
+      workspaceFolders: [{ id: parentId, name: 'Product', parentId: null }],
+      documents: [{ id: 'doc', folderId: parentId }]
+    })
   })
 })

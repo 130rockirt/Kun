@@ -117,6 +117,13 @@ export type DesignArtifact = {
   role?: 'design-system' | 'logo'
 }
 
+/** A logical Design-sidebar directory. It does not alter on-disk artifact paths. */
+export type DesignWorkspaceFolder = {
+  id: string
+  name: string
+  parentId: string | null
+}
+
 export function currentDesignArtifactVersion(
   artifact: Pick<DesignArtifact, 'relativePath' | 'versions'>
 ): DesignArtifactVersion | undefined {
@@ -164,6 +171,8 @@ export type DesignDocument = {
   updatedAt: string
   /** Sidebar ordering (ascending); ties broken by createdAt. */
   order: number
+  /** Logical Design-sidebar folder; null/absent means the workspace root. */
+  folderId?: string | null
   /** The 画布 in this 设计稿 (newest first, matching the flat list convention). */
   artifacts: DesignArtifact[]
   /** Last-active 画布 within this 设计稿; null when empty. */

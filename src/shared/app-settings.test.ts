@@ -27,6 +27,7 @@ import {
   defaultTerminalSettings,
   defaultWriteSelectionAssistSettings,
   defaultDesignSettings,
+  normalizeDesignSettings,
   defaultWriteSettings,
   getModelProviderPreset,
   defaultKeyboardShortcuts,
@@ -97,6 +98,28 @@ describe('application locale settings', () => {
   it('falls back to English for an unsupported persisted locale', () => {
     const input = { ...settings(), locale: 'fr' } as unknown as AppSettingsV1
     expect(normalizeAppSettings(input).locale).toBe('en')
+  })
+})
+
+describe('design workspace settings', () => {
+  it('migrates a legacy default workspace into the Design workspace list', () => {
+    expect(normalizeDesignSettings({ defaultWorkspaceRoot: ' /tmp/design/ ' })).toMatchObject({
+      defaultWorkspaceRoot: '/tmp/design',
+      workspaces: ['/tmp/design'],
+      activeWorkspaceRoot: '/tmp/design'
+    })
+  })
+
+  it('deduplicates workspace roots and keeps a valid selected workspace', () => {
+    expect(normalizeDesignSettings({
+      defaultWorkspaceRoot: '/tmp/default/',
+      workspaces: ['/tmp/default', '/tmp/mobile/', '/tmp/mobile'],
+      activeWorkspaceRoot: '/tmp/mobile/'
+    })).toMatchObject({
+      defaultWorkspaceRoot: '/tmp/default',
+      workspaces: ['/tmp/default', '/tmp/mobile'],
+      activeWorkspaceRoot: '/tmp/mobile'
+    })
   })
 })
 

@@ -60,6 +60,13 @@ import {
   resetDesignWorkspaceTransientStores
 } from './design-workspace-lifecycle'
 import { persistDesignWorkspaceIndex } from './design-workspace-index-persistence'
+import {
+  createDesignWorkspaceFolder,
+  createDesignWorkspaceFolderId,
+  deleteDesignWorkspaceFolder,
+  designFolderNameExists,
+  renameDesignWorkspaceFolder
+} from './design-workspace-folders'
 
 export const useDesignWorkspaceStore = create<DesignWorkspaceState>((set, get) => {
   let workspaceGeneration = 0
@@ -68,7 +75,10 @@ export const useDesignWorkspaceStore = create<DesignWorkspaceState>((set, get) =
     getWorkspaceRoot: () => get().workspaceRoot,
     setFileError: (fileError) => set({ fileError })
   })
-  const indexState = (): Pick<DesignWorkspaceState, 'workspaceRoot' | 'documents' | 'activeDocumentId'> => {
+  const indexState = (): Pick<
+    DesignWorkspaceState,
+    'workspaceRoot' | 'documents' | 'activeDocumentId' | 'workspaceFolders'
+  > => {
     const state = get()
     if (!state.drawingCreationOpen && !state.drawingCreationDocumentId) return state
     const documents = state.drawingCreationDocumentId
@@ -82,7 +92,12 @@ export const useDesignWorkspaceStore = create<DesignWorkspaceState>((set, get) =
             documents.some((document) => document.id === state.drawingCreationReturnDocumentId)
           ? state.drawingCreationReturnDocumentId
           : documents[0]?.id ?? null
-    return { workspaceRoot: state.workspaceRoot, documents, activeDocumentId }
+    return {
+      workspaceRoot: state.workspaceRoot,
+      documents,
+      activeDocumentId,
+      workspaceFolders: state.workspaceFolders
+    }
   }
   const persistIndex = (): void => persistDesignWorkspaceIndex(indexState())
   const persistIndexNow = (): void => persistDesignWorkspaceIndex(indexState(), true)
@@ -90,11 +105,13 @@ export const useDesignWorkspaceStore = create<DesignWorkspaceState>((set, get) =
   return {
     workspaceRoot: '',
     documents: [],
+    workspaceFolders: [],
     activeDocumentId: null,
     drawingCreationOpen: false,
     drawingCreationReturnDocumentId: null,
     drawingCreationDocumentId: null,
     drawingCreationSubmitting: false,
+    drawingCreationFolderId: null,
     drawingHistoryMutation: null,
     artifacts: [],
     activeArtifactId: null,
@@ -135,11 +152,13 @@ export const useDesignWorkspaceStore = create<DesignWorkspaceState>((set, get) =
       set({
         workspaceRoot: normalized,
         documents: [],
+        workspaceFolders: [],
         activeDocumentId: null,
         drawingCreationOpen: false,
         drawingCreationReturnDocumentId: null,
         drawingCreationDocumentId: null,
         drawingCreationSubmitting: false,
+        drawingCreationFolderId: null,
         artifacts: [],
         activeArtifactId: null,
         fileError: null,
@@ -183,6 +202,10 @@ export const useDesignWorkspaceStore = create<DesignWorkspaceState>((set, get) =
       if (!options?.transient) markDesignDocumentUserCreated(get().workspaceRoot, id)
       set((state) => {
         const order = state.documents.reduce((max, d) => Math.max(max, d.order), -1) + 1
+        const requestedFolderId = options?.folderId ?? state.drawingCreationFolderId
+        const folderId = requestedFolderId && state.workspaceFolders.some((folder) => folder.id === requestedFolderId)
+          ? requestedFolderId
+          : null
         const doc: DesignDocument = {
           id,
           title: (title ?? '').trim() || id,
@@ -190,6 +213,7 @@ export const useDesignWorkspaceStore = create<DesignWorkspaceState>((set, get) =
           createdAt,
           updatedAt: createdAt,
           order,
+          folderId,
           artifacts: [],
           activeArtifactId: null
         }
@@ -208,7 +232,7 @@ export const useDesignWorkspaceStore = create<DesignWorkspaceState>((set, get) =
       return id
     },
 
-    beginDrawingCreation: () => {
+    beginDrawingCreation: (options) => {
       if (get().drawingCreationSubmitting) return
       resetDesignWorkspaceTransientStores()
       set((state) => {
@@ -219,6 +243,10 @@ export const useDesignWorkspaceStore = create<DesignWorkspaceState>((set, get) =
             : null
         return {
           drawingCreationOpen: true,
+          drawingCreationFolderId:
+            options?.folderId && state.workspaceFolders.some((folder) => folder.id === options.folderId)
+              ? options.folderId
+              : null,
           drawingCreationReturnDocumentId:
             state.drawingCreationOpen
               ? state.drawingCreationReturnDocumentId
@@ -250,6 +278,7 @@ export const useDesignWorkspaceStore = create<DesignWorkspaceState>((set, get) =
         drawingCreationReturnDocumentId: null,
         drawingCreationDocumentId: null,
         drawingCreationSubmitting: false,
+        drawingCreationFolderId: null,
         activeDocumentId: targetId,
         ...projectActiveDoc(state.documents, targetId),
         fileError: null
@@ -272,6 +301,7 @@ export const useDesignWorkspaceStore = create<DesignWorkspaceState>((set, get) =
           drawingCreationOpen: false,
           drawingCreationReturnDocumentId: null,
           drawingCreationSubmitting: false,
+          drawingCreationFolderId: null,
           activeDocumentId: targetId,
           ...projectActiveDoc(state.documents, targetId),
           fileError: null
@@ -294,6 +324,58 @@ export const useDesignWorkspaceStore = create<DesignWorkspaceState>((set, get) =
             : d
         )
       }))
+      persistIndexNow()
+    },
+
+    moveDocument: (documentId, folderId) => {
+      const targetFolderId = folderId?.trim() || null
+      set((state) => {
+        const document = state.documents.find((item) => item.id === documentId)
+        if (!document) return {}
+        if (targetFolderId && !state.workspaceFolders.some((folder) => folder.id === targetFolderId)) return {}
+        if ((document.folderId ?? null) === targetFolderId) return {}
+        return {
+          documents: state.documents.map((item) =>
+            item.id === documentId
+              ? { ...item, folderId: targetFolderId, updatedAt: new Date().toISOString() }
+              : item
+          )
+        }
+      })
+      persistIndexNow()
+    },
+
+    createWorkspaceFolder: (name, parentId = null) => {
+      const state = get()
+      const targetParentId = parentId?.trim() || null
+      if (designFolderNameExists(state.workspaceFolders, name, targetParentId)) return null
+      const id = createDesignWorkspaceFolderId()
+      const workspaceFolders = createDesignWorkspaceFolder(state.workspaceFolders, { id, name, parentId: targetParentId })
+      if (!workspaceFolders.some((folder) => folder.id === id)) return null
+      set({ workspaceFolders })
+      persistIndexNow()
+      return id
+    },
+
+    renameWorkspaceFolder: (folderId, name) => {
+      const workspaceFolders = renameDesignWorkspaceFolder(get().workspaceFolders, folderId, name)
+      if (workspaceFolders === get().workspaceFolders) return
+      set({ workspaceFolders })
+      persistIndexNow()
+    },
+
+    removeWorkspaceFolder: (folderId) => {
+      const state = get()
+      const deleted = deleteDesignWorkspaceFolder(state.workspaceFolders, folderId)
+      if (!state.workspaceFolders.some((folder) => folder.id === folderId)) return
+      set({
+        workspaceFolders: deleted.folders,
+        documents: state.documents.map((document) =>
+          document.folderId === folderId
+            ? { ...document, folderId: deleted.parentId, updatedAt: new Date().toISOString() }
+            : document
+        )
+      })
       persistIndexNow()
     },
 
@@ -344,7 +426,8 @@ export const useDesignWorkspaceStore = create<DesignWorkspaceState>((set, get) =
         workspaceRoot,
         documentId,
         fallbackDocuments,
-        fallbackActiveDocumentId
+        fallbackActiveDocumentId,
+        fallbackFolders: snapshot.workspaceFolders
       })
       if (!removed) return false
 
@@ -383,7 +466,8 @@ export const useDesignWorkspaceStore = create<DesignWorkspaceState>((set, get) =
       await flushDocumentsIndex(
         finalIndexState.workspaceRoot,
         finalIndexState.documents,
-        finalIndexState.activeDocumentId
+        finalIndexState.activeDocumentId,
+        finalIndexState.workspaceFolders
       )
       return true
     },
@@ -764,7 +848,13 @@ export const useDesignWorkspaceStore = create<DesignWorkspaceState>((set, get) =
           const design = settings.design
           const hasStoredViewport = readBrowserStorageItem(VIEWPORT_KEY) !== null
           const hasStoredView = readBrowserStorageItem(CANVAS_VIEW_KEY) !== null
-          const resolvedWorkspaceRoot = get().workspaceRoot || design.defaultWorkspaceRoot || builtinDesignWorkspaceRoot() || ''
+          const resolvedWorkspaceRoot =
+            get().workspaceRoot ||
+            design.activeWorkspaceRoot ||
+            design.defaultWorkspaceRoot ||
+            design.workspaces[0] ||
+            builtinDesignWorkspaceRoot() ||
+            ''
           if (normalizeDesignWorkspaceRoot(get().workspaceRoot) !== normalizeDesignWorkspaceRoot(resolvedWorkspaceRoot)) {
             get().setWorkspaceRoot(resolvedWorkspaceRoot)
           }

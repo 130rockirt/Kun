@@ -2122,8 +2122,12 @@ export type DesignCanvasViewSetting = 'preview' | 'code'
 export type DesignCanvasBackgroundSetting = 'light' | 'dark'
 
 export type DesignSettingsV1 = {
-  /** Workspace root for design artifacts; empty = fall back to the active code/write workspace. */
+  /** Workspace root for design artifacts; empty = use the built-in Design workspace. */
   defaultWorkspaceRoot: string
+  /** Design workspace roots shown in the Design sidebar. */
+  workspaces: string[]
+  /** Last active Design workspace root; falls back to the default workspace. */
+  activeWorkspaceRoot: string
 
   // --- Design system (shared source of truth for design + code) ---
   /** Anchor brand color (CSS color) injected into the design agent's context. */

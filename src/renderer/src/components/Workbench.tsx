@@ -854,7 +854,7 @@ export function Workbench(): ReactElement {
   })
 
   const {
-    closeRightPanel, exploreSddRequirementInDesign, openCodeMode, openPluginsView, openConnectorsView, openExtensionsView, openScheduleView,
+    closeRightPanel, exploreSddRequirementInDesign, openCodeMode, openPluginsView, openExtensionsView, openScheduleView,
     openThread, openWorkflowView, openWriteMode, pickWriteAssistantWorkspace, sidebarView,
     startNewChat, startNewChatInWorkspace, startNewConversation, startNewWriteAssistantConversation,
     toggleConnectPhone
@@ -1201,7 +1201,6 @@ export function Workbench(): ReactElement {
         sidebarView={sidebarView}
         connectPhoneSidebarOpen={connectPhoneSidebarOpen}
         extensionsActive={route === 'extensions'}
-        connectorsActive={route === 'connectors'}
         extensionView={activeExtensionLeftSidebar}
         workspaceRoot={extensionWorkspaceRoot}
         onCloseExtensionView={() => selectExtensionSurface(null)}
@@ -1223,7 +1222,6 @@ export function Workbench(): ReactElement {
         onNewRequirement={() => void startNewSddRequirement()}
         onOpenSettings={(section) => openSettings(section)}
         onOpenPlugins={openPluginsView}
-        onOpenConnectors={openConnectorsView}
         onOpenExtensions={openExtensionsView}
         onToggleTheme={toggleTheme}
         onToggleConnectPhone={toggleConnectPhone}

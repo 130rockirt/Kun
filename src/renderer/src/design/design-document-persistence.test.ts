@@ -5,6 +5,7 @@ import {
   flushPendingDocumentsIndexes,
   parseDocumentsIndex,
   persistDocumentsIndex,
+  readDesignDocumentsIndex,
   removePersistedDesignDocument,
   serializeDocumentsIndex
 } from './design-document-persistence'
@@ -47,12 +48,68 @@ describe('design documents index persistence', () => {
     }))).toEqual({
       version: 1,
       activeDocumentId: null,
+      folders: [],
       documents: []
+    })
+  })
+
+  it('keeps legacy drawings in the root while accepting a version 2 folder tree', () => {
+    const legacy = parseDocumentsIndex(JSON.stringify({
+      version: 1,
+      activeDocumentId: 'legacy',
+      documents: [{ ...document('legacy'), artifacts: undefined }]
+    }))
+    expect(legacy).toMatchObject({
+      version: 1,
+      folders: [],
+      documents: [{ id: 'legacy', folderId: null }]
+    })
+
+    const folders = [
+      { id: 'design', name: 'Design', parentId: null },
+      { id: 'mobile', name: 'Mobile', parentId: 'design' }
+    ]
+    const modern = parseDocumentsIndex(serializeDocumentsIndex([
+      { ...document('modern'), folderId: 'mobile' }
+    ], 'modern', folders))
+    expect(modern).toMatchObject({
+      version: 2,
+      folders,
+      documents: [{ id: 'modern', folderId: 'mobile' }]
+    })
+  })
+
+  it('reads a lightweight workspace index without loading artifact directories', async () => {
+    const content = serializeDocumentsIndex([
+      { ...document('mobile'), folderId: 'mobile' }
+    ], 'mobile', [{ id: 'mobile', name: 'Mobile', parentId: null }])
+    const readWorkspaceFile = vi.fn(async () => ({
+      ok: true as const,
+      path: documentsIndexPath(),
+      content,
+      size: content.length,
+      truncated: false,
+      mtimeMs: 0
+    }))
+    vi.stubGlobal('window', { kunGui: { readWorkspaceFile } })
+
+    await expect(readDesignDocumentsIndex('/workspace/mobile')).resolves.toMatchObject({
+      activeDocumentId: 'mobile',
+      folders: [{ id: 'mobile', name: 'Mobile' }],
+      documents: [{ id: 'mobile', folderId: 'mobile' }]
+    })
+    expect(readWorkspaceFile).toHaveBeenCalledWith({
+      path: documentsIndexPath(),
+      workspaceRoot: '/workspace/mobile'
     })
   })
 
   it('round-trips the visible title origin without requiring it for legacy indexes', () => {
     const generated = { ...document('generated'), titleOrigin: 'generated' as const }
+    expect(JSON.parse(serializeDocumentsIndex([generated], generated.id))).toMatchObject({
+      version: 1,
+      activeDocumentId: generated.id
+    })
     expect(parseDocumentsIndex(serializeDocumentsIndex([generated], generated.id)))
       .toMatchObject({
         documents: [{ id: 'generated', titleOrigin: 'generated' }]

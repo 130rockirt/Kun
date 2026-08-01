@@ -361,6 +361,7 @@ export async function rehydrateDesignWorkspaceArtifacts({
         title: entry.title,
         ...(entry.titleOrigin ? { titleOrigin: entry.titleOrigin } : {}),
         order: entry.order,
+        folderId: entry.folderId,
         createdAt: entry.createdAt,
         updatedAt: entry.updatedAt,
         artifacts,
@@ -408,7 +409,12 @@ export async function rehydrateDesignWorkspaceArtifacts({
         const activeDocumentId = documents.some((d) => d.id === index.activeDocumentId)
           ? index.activeDocumentId
           : documents[0]?.id ?? null
-        return { documents, activeDocumentId, ...projectActiveDoc(documents, activeDocumentId) }
+        return {
+          documents,
+          workspaceFolders: index.folders,
+          activeDocumentId,
+          ...projectActiveDoc(documents, activeDocumentId)
+        }
       }
       // Merge with disk truth. Drop only the single empty stub 设计稿 that an
       // eager pre-rehydrate board-ensure may have auto-created. User-created
@@ -435,7 +441,12 @@ export async function rehydrateDesignWorkspaceArtifacts({
         : documents.some((d) => d.id === index.activeDocumentId)
           ? index.activeDocumentId
           : documents[0]?.id ?? null
-      return { documents, activeDocumentId, ...projectActiveDoc(documents, activeDocumentId) }
+      return {
+        documents,
+        workspaceFolders: index.folders,
+        activeDocumentId,
+        ...projectActiveDoc(documents, activeDocumentId)
+      }
     })
     if (!hydrationIsCurrent()) return
     persistIndex()

@@ -6,7 +6,8 @@
  * and recovered by scanning each 设计稿 dir on rehydrate. Presence of this file
  * also marks "the legacy → nested migration has run" (see the store).
  */
-import type { DesignDocument } from './design-types'
+import type { DesignDocument, DesignWorkspaceFolder } from './design-types'
+import { normalizeDesignWorkspaceFolders } from './design-workspace-folders'
 import {
   deleteDesignWorkspaceEntry,
   flushDesignPersistenceQueue,
@@ -67,11 +68,13 @@ export type DesignDocumentIndexEntry = {
   createdAt: string
   updatedAt: string
   activeArtifactId: string | null
+  folderId: string | null
 }
 
 export type DesignDocumentsIndex = {
-  version: 1
+  version: 1 | 2
   activeDocumentId: string | null
+  folders: DesignWorkspaceFolder[]
   documents: DesignDocumentIndexEntry[]
 }
 
@@ -86,19 +89,33 @@ function toIndexEntry(doc: DesignDocument): DesignDocumentIndexEntry {
     order: doc.order,
     createdAt: doc.createdAt,
     updatedAt: doc.updatedAt,
-    activeArtifactId: doc.activeArtifactId
+    activeArtifactId: doc.activeArtifactId,
+    folderId: doc.folderId?.trim() || null
   }
 }
 
 export function serializeDocumentsIndex(
   documents: readonly DesignDocument[],
-  activeDocumentId: string | null
+  activeDocumentId: string | null,
+  folders: readonly DesignWorkspaceFolder[] = []
 ): string {
-  const index: DesignDocumentsIndex = {
-    version: 1,
-    activeDocumentId,
-    documents: documents.map(toIndexEntry)
-  }
+  const normalizedFolders = normalizeDesignWorkspaceFolders(folders)
+  const entries = documents.map(toIndexEntry)
+  // Keep an untouched root-only index in its legacy representation. This lets
+  // existing workspaces upgrade lazily: the first folder or non-root move is
+  // the structural change that introduces version 2.
+  const index = normalizedFolders.length > 0 || entries.some((entry) => entry.folderId)
+    ? {
+        version: 2,
+        activeDocumentId,
+        folders: normalizedFolders,
+        documents: entries
+      }
+    : {
+        version: 1,
+        activeDocumentId,
+        documents: entries.map(({ folderId: _folderId, ...entry }) => entry)
+      }
   return `${JSON.stringify(index, null, 2)}\n`
 }
 
@@ -113,6 +130,8 @@ export function parseDocumentsIndex(raw: string): DesignDocumentsIndex | null {
   if (!parsed || typeof parsed !== 'object') return null
   const source = parsed as Record<string, unknown>
   if (!Array.isArray(source.documents)) return null
+  const folders = normalizeDesignWorkspaceFolders(source.folders)
+  const folderIds = new Set(folders.map((folder) => folder.id))
   const documents: DesignDocumentIndexEntry[] = []
   source.documents.forEach((value, fallbackOrder) => {
     if (!value || typeof value !== 'object') return
@@ -128,14 +147,29 @@ export function parseDocumentsIndex(raw: string): DesignDocumentsIndex | null {
       order: isNum(o.order) ? o.order : fallbackOrder,
       createdAt,
       updatedAt: isStr(o.updatedAt) ? o.updatedAt : createdAt,
-      activeArtifactId: isStr(o.activeArtifactId) ? o.activeArtifactId : null
+      activeArtifactId: isStr(o.activeArtifactId) ? o.activeArtifactId : null,
+      folderId: isStr(o.folderId) && folderIds.has(o.folderId) ? o.folderId : null
     })
   })
   const activeDocumentId =
     isStr(source.activeDocumentId) && documents.some((d) => d.id === source.activeDocumentId)
       ? source.activeDocumentId
       : documents[0]?.id ?? null
-  return { version: 1, activeDocumentId, documents }
+  return { version: source.version === 1 ? 1 : 2, activeDocumentId, folders, documents }
+}
+
+/** Read only the lightweight Design navigation index for a workspace. */
+export async function readDesignDocumentsIndex(workspaceRoot: string): Promise<DesignDocumentsIndex> {
+  const normalizedRoot = normalizeDesignPersistenceWorkspaceRoot(workspaceRoot)
+  if (!normalizedRoot || typeof window === 'undefined' || !window.kunGui?.readWorkspaceFile) {
+    return { version: 2, activeDocumentId: null, folders: [], documents: [] }
+  }
+  const read = await window.kunGui.readWorkspaceFile({
+    path: documentsIndexPath(),
+    workspaceRoot: normalizedRoot
+  }).catch(() => null)
+  const parsed = read?.ok ? parseDocumentsIndex(read.content) : null
+  return parsed ?? { version: 2, activeDocumentId: null, folders: [], documents: [] }
 }
 
 type PendingDocumentsIndex = {
@@ -162,11 +196,12 @@ function flushPendingDocumentsIndex(workspaceRoot: string): Promise<void> {
 export function persistDocumentsIndex(
   workspaceRoot: string,
   documents: readonly DesignDocument[],
-  activeDocumentId: string | null
+  activeDocumentId: string | null,
+  folders: readonly DesignWorkspaceFolder[] = []
 ): void {
   workspaceRoot = normalizeDesignPersistenceWorkspaceRoot(workspaceRoot)
   if (!workspaceRoot) return
-  const content = serializeDocumentsIndex(documents, activeDocumentId)
+  const content = serializeDocumentsIndex(documents, activeDocumentId, folders)
   const existing = pendingDocumentsIndexes.get(workspaceRoot)
   if (existing?.timer) clearTimeout(existing.timer)
   const pending: PendingDocumentsIndex = { content, timer: null }
@@ -186,14 +221,15 @@ export function persistDocumentsIndex(
 export function flushDocumentsIndex(
   workspaceRoot: string,
   documents: readonly DesignDocument[],
-  activeDocumentId: string | null
+  activeDocumentId: string | null,
+  folders: readonly DesignWorkspaceFolder[] = []
 ): Promise<void> {
   workspaceRoot = normalizeDesignPersistenceWorkspaceRoot(workspaceRoot)
   if (!workspaceRoot) return Promise.resolve()
   const existing = pendingDocumentsIndexes.get(workspaceRoot)
   if (existing?.timer) clearTimeout(existing.timer)
   pendingDocumentsIndexes.set(workspaceRoot, {
-    content: serializeDocumentsIndex(documents, activeDocumentId),
+    content: serializeDocumentsIndex(documents, activeDocumentId, folders),
     timer: null
   })
   return flushPendingDocumentsIndex(workspaceRoot)
@@ -222,6 +258,7 @@ export async function removePersistedDesignDocument(input: {
   documentId: string
   fallbackDocuments: readonly DesignDocument[]
   fallbackActiveDocumentId: string | null
+  fallbackFolders?: readonly DesignWorkspaceFolder[]
 }): Promise<boolean> {
   const workspaceRoot = normalizeDesignPersistenceWorkspaceRoot(input.workspaceRoot)
   const documentId = input.documentId.trim()
@@ -235,6 +272,7 @@ export async function removePersistedDesignDocument(input: {
 
   let documents = input.fallbackDocuments.slice()
   let activeDocumentId = input.fallbackActiveDocumentId
+  let folders = normalizeDesignWorkspaceFolders(input.fallbackFolders ?? [])
   if (
     typeof window !== 'undefined' &&
     typeof window.kunGui?.readWorkspaceFile === 'function'
@@ -247,6 +285,7 @@ export async function removePersistedDesignDocument(input: {
     if (parsed) {
       documents = parsed.documents.map((entry) => ({ ...entry, artifacts: [] }))
       activeDocumentId = parsed.activeDocumentId
+      folders = parsed.folders
     }
   }
 
@@ -264,7 +303,7 @@ export async function removePersistedDesignDocument(input: {
   const written = await writeDesignWorkspaceFile({
     path: documentsIndexPath(),
     workspaceRoot,
-    content: serializeDocumentsIndex(remaining, nextActiveDocumentId)
+    content: serializeDocumentsIndex(remaining, nextActiveDocumentId, folders)
   })
   if (!written.ok) return false
 
@@ -280,7 +319,7 @@ export async function removePersistedDesignDocument(input: {
   await writeDesignWorkspaceFile({
     path: documentsIndexPath(),
     workspaceRoot,
-    content: serializeDocumentsIndex(documents, originalActiveDocumentId)
+    content: serializeDocumentsIndex(documents, originalActiveDocumentId, folders)
   })
   return false
 }

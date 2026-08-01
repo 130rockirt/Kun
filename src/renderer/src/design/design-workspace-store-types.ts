@@ -6,7 +6,8 @@ import type {
   DesignDocument,
   DesignDirectionStatus,
   DesignIntentMode,
-  DesignViewport
+  DesignViewport,
+  DesignWorkspaceFolder
 } from './design-types'
 import type { DesignContext, DesignTarget } from './design-context'
 import type { DrawingHistoryMutation } from './design-drawing-history'
@@ -39,6 +40,8 @@ export type DesignWorkspaceState = {
   workspaceRoot: string
   /** 设计稿 (design documents) — top-level containers, source of truth. */
   documents: DesignDocument[]
+  /** Logical multi-level folders used by the Design sidebar. */
+  workspaceFolders: DesignWorkspaceFolder[]
   /** Active 设计稿 id; null = none (empty workspace). */
   activeDocumentId: string | null
   /** Transient launcher state for a new drawing. Never persisted to documents.json. */
@@ -49,6 +52,8 @@ export type DesignWorkspaceState = {
   drawingCreationDocumentId: string | null
   /** Guards the launcher's first submission from creating duplicate drawings. */
   drawingCreationSubmitting: boolean
+  /** Folder selected before the transient drawing launcher creates its document. */
+  drawingCreationFolderId: string | null
   /** A destructive drawing-history operation currently owning the document. */
   drawingHistoryMutation: DrawingHistoryMutation | null
   /** Projection of the active 设计稿's 画布 (artifacts). Do not mutate directly. */
@@ -104,10 +109,10 @@ export type DesignWorkspaceState = {
   /** Create a new 设计稿 (empty), make it active, and return its id. */
   createDocument: (
     title?: string,
-    options?: { transient?: boolean; titleOrigin?: 'generated' | 'user' }
+    options?: { transient?: boolean; titleOrigin?: 'generated' | 'user'; folderId?: string | null }
   ) => string
   /** Open the new-drawing launcher without creating a document or changing the persisted active id. */
-  beginDrawingCreation: () => void
+  beginDrawingCreation: (options?: { folderId?: string | null }) => void
   /** Atomically claim the launcher's first submission. Returns false when one is already in flight. */
   beginDrawingSubmission: () => boolean
   /** Release the launcher submission claim after rollback or cancellation. */
@@ -122,6 +127,13 @@ export type DesignWorkspaceState = {
     title: string,
     options?: { titleOrigin?: 'generated' | 'user' }
   ) => void
+  /** Move a design document into a logical folder; null returns it to the workspace root. */
+  moveDocument: (documentId: string, folderId: string | null) => void
+  /** Create a logical folder under the optional parent and return its id. */
+  createWorkspaceFolder: (name: string, parentId?: string | null) => string | null
+  renameWorkspaceFolder: (folderId: string, name: string) => void
+  /** Delete a logical folder while promoting its children and documents to the parent. */
+  removeWorkspaceFolder: (folderId: string) => void
   /** Acquire a per-drawing destructive-history lock before confirmation. */
   beginDrawingHistoryMutation: (
     workspaceRoot: string,

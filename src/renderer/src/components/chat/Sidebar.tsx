@@ -3,7 +3,6 @@ import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   Clock3,
-  Cable,
   FileQuestion,
   Focus,
   LayoutGrid,
@@ -44,7 +43,6 @@ type Props = {
   activeView: 'chat' | 'write' | 'claw' | 'schedule' | 'workflow' | 'subagents'
   connectPhoneSidebarOpen: boolean
   pluginsActive: boolean
-  connectorsActive: boolean
   extensionsActive: boolean
   runtimeReady: boolean
   threadSearch: string
@@ -64,7 +62,6 @@ type Props = {
   onNewRequirement: () => void
   onOpenSettings: (section?: SettingsRouteSection) => void
   onOpenPlugins: () => void
-  onOpenConnectors: () => void
   onOpenExtensions: () => void
   onToggleTheme: () => void
   focusModeEnabled: boolean
@@ -84,7 +81,6 @@ export function Sidebar({
   activeView,
   connectPhoneSidebarOpen,
   pluginsActive,
-  connectorsActive,
   extensionsActive,
   runtimeReady,
   threadSearch,
@@ -101,7 +97,6 @@ export function Sidebar({
   onNewRequirement,
   onOpenSettings,
   onOpenPlugins,
-  onOpenConnectors,
   onOpenExtensions,
   onToggleTheme,
   focusModeEnabled,
@@ -243,12 +238,6 @@ export function Sidebar({
           label={t('plugins')}
           onClick={onOpenPlugins}
           active={pluginsActive}
-        />
-        <SidebarCommandRow
-          icon={<Cable className="h-4 w-4" strokeWidth={1.75} />}
-          label={i18n.language.toLowerCase().startsWith('zh') ? '连接器' : 'Connectors'}
-          onClick={onOpenConnectors}
-          active={connectorsActive}
         />
         <SidebarCommandRow
           icon={<Puzzle className="h-4 w-4" strokeWidth={1.75} />}
