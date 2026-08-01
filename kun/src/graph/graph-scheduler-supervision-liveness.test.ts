@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { GraphReviewResultV1, GraphRunV1 } from '../contracts/graph.js'
 import type { DelegationRuntime } from '../delegation/delegation-runtime.js'
 import type { GraphSupervisionPort } from './graph-scheduler-types.js'
+import { GraphRunConflictError } from './graph-run-store.js'
 import { GraphSupervisor } from './graph-supervisor.js'
 import {
   testCompletedChild,
@@ -344,25 +345,34 @@ async function recordLeadPass(
   nodeIds: readonly string[]
 ): Promise<void> {
   for (const nodeId of nodeIds) {
-    const run = await harness.store.get(runId)
-    const node = run?.nodes[nodeId]
-    const attempt = node?.attempts.at(-1)
-    if (!run || !node || !attempt?.result || !attempt.validation) continue
-    const review: GraphReviewResultV1 = {
-      version: 1,
-      reviewId: `lead_${run.id}_${attempt.id}`,
-      nodeId,
-      attemptId: attempt.id,
-      reviewerKind: 'lead',
-      outcome: 'pass',
-      summary: 'Source Lead accepted the host-validated result.',
-      evidence: [],
-      artifactRefs: [],
-      createdAt: new Date().toISOString()
+    for (let retry = 0; retry < 5; retry += 1) {
+      const run = await harness.store.get(runId)
+      const node = run?.nodes[nodeId]
+      const attempt = node?.attempts.at(-1)
+      if (!run || !node || !attempt?.result || !attempt.validation) break
+      if (run.reviews.some((entry) =>
+        entry.attemptId === attempt.id && entry.reviewerKind === 'lead')) break
+      const review: GraphReviewResultV1 = {
+        version: 1,
+        reviewId: `lead_${run.id}_${attempt.id}`,
+        nodeId,
+        attemptId: attempt.id,
+        reviewerKind: 'lead',
+        outcome: 'pass',
+        summary: 'Source Lead accepted the host-validated result.',
+        evidence: [],
+        artifactRefs: [],
+        createdAt: new Date().toISOString()
+      }
+      try {
+        await harness.control.recordReview(run.id, review, {
+          commandId: `lead_command_${run.id}_${attempt.id}`,
+          idempotencyKey: `lead-review:${run.id}:${attempt.id}`
+        }, 'lead')
+        break
+      } catch (error) {
+        if (!(error instanceof GraphRunConflictError) || retry === 4) throw error
+      }
     }
-    await harness.control.recordReview(run.id, review, {
-      commandId: `lead_command_${run.id}_${attempt.id}`,
-      idempotencyKey: `lead-review:${run.id}:${attempt.id}`
-    }, 'lead')
   }
 }
