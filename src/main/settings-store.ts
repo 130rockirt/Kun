@@ -34,8 +34,6 @@ import {
   mergeWorkflowSettings,
   mergeWriteSettings,
   defaultTerminalSettings,
-  defaultOpenConnectorDesktopSettings,
-  mergeOpenConnectorDesktopSettings,
   mergeTerminalSettings,
   DEFAULT_CHAT_CONTENT_MAX_WIDTH_PX,
   DEFAULT_COMPOSER_SEND_KEY,
@@ -293,8 +291,7 @@ const defaultSettings = (): AppSettingsV1 => ({
   schedule: defaultScheduleSettings(),
   workflow: defaultWorkflowSettings(),
   design: defaultDesignSettings(),
-  terminal: defaultTerminalSettings(),
-  connectors: defaultOpenConnectorDesktopSettings()
+  terminal: defaultTerminalSettings()
 })
 
 function buildMergedSettings(parsed: Partial<AppSettingsV1>): AppSettingsV1 {
@@ -612,7 +609,6 @@ export class JsonSettingsStore {
       workflow: mergeWorkflowSettings(cur.workflow, partial.workflow),
       design: mergeDesignSettings(cur.design, partial.design),
       terminal: mergeTerminalSettings(cur.terminal, partial.terminal),
-      connectors: mergeOpenConnectorDesktopSettings(cur.connectors, partial.connectors),
       guiUpdate: { ...cur.guiUpdate, ...(partial.guiUpdate ?? {}) }
     })
     await this.save(next)

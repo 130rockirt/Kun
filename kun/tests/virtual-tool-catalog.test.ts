@@ -70,15 +70,15 @@ describe('VirtualToolCatalog', () => {
     catalog.replaceAll([
       ...entries,
       {
-        id: 'connector:slack',
+        id: 'skill:slack',
         name: 'post',
-        kind: 'connector',
+        kind: 'skill',
         description: 'Post to a Slack channel'
       }
     ])
 
     expect(frozen.pendingUpdate()).toBe(true)
-    expect(frozen.has('connector:slack')).toBe(false)
+    expect(frozen.has('skill:slack')).toBe(false)
     expect(frozen.search('slack channel')).toEqual([])
   })
 

@@ -20,7 +20,6 @@ import type {
 export type ToolProviderKind =
   | 'built-in'
   | 'mcp'
-  | 'connector'
   | 'web'
   | 'skill'
   | 'memory'

@@ -94,11 +94,9 @@ import type { ModelConnectionRegistry } from '../../services/model-connection-re
 import type { ModelConnectionOAuthService } from '../../services/model-connection-oauth.js'
 import type { OfficialProviderAuthService } from '../../services/official-provider-cli.js'
 import type { ProviderQuotaService } from '../../services/provider-quota-service.js'
-import type { ConnectorClientDiagnostic } from '../../adapters/tool/connector-client.js'
 
 export type RuntimeToolDiagnostics = {
   providers: ToolProviderPolicy[]
-  connectors?: ConnectorClientDiagnostic
   mcpServers: McpServerDiagnostic[]
   mcpOAuth?: McpOAuthDiagnostic[]
   mcpSearch?: McpSearchRuntimeDiagnostic

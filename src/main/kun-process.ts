@@ -105,7 +105,6 @@ import { availableBundledExtensionsDirectory } from './bundled-extension-resourc
 import { resolveOfficeCliBinary } from './officecli-resources'
 import { subagentProfilesForRuntime } from './runtime/kun-runtime-subagent-config'
 import { syncGuiManagedKunConfig } from './runtime/kun-runtime-config-service'
-import { openConnectorKunEnvironment } from './connectors/open-connector-kun-environment'
 import { assertManagedKunDataDirIsCurrent } from './kun-data-dir-paths'
 import {
   ensureSharedRuntime,
@@ -488,7 +487,6 @@ async function prepareKunLaunch(
     : undefined
   const env: NodeJS.ProcessEnv = {
     ...process.env,
-    ...openConnectorKunEnvironment(),
     DEEPSEEK_API_KEY: defaultClientApiKey || process.env.DEEPSEEK_API_KEY || '',
     ...(activeProviderKind ? { KUN_RUNTIME_PROVIDER_KIND: activeProviderKind } : {}),
     ...(claudeBinary ? { KUN_CLAUDE_BINARY: claudeBinary } : {}),

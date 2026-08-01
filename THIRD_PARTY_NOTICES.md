@@ -1,33 +1,5 @@
 # Third-Party Notices
 
-## OpenConnector runtime
-
-Kun distributes the OpenConnector 1.4.0 local connector runtime as a separate,
-checksum-pinned sidecar. It is licensed under the Apache License, Version 2.0.
-Its complete license and notices are included in packaged applications at
-`open-connector/current/LICENSE.txt` and `open-connector/current/NOTICE.md`.
-
-OpenConnector provider names and APIs are used solely for interoperability;
-their trademarks and service marks remain the property of their respective
-owners.
-
-## China connector brand icons
-
-Kun bundles local copies of the official site/app icons for identification in
-the connector catalog. The assets are loaded from the installation package and
-are never fetched by the renderer at runtime.
-
-- Feishu icon: `www.feishu.cn` / `p1-hera.feishucdn.com`
-- DingTalk icon: `www.dingtalk.com` / `gw.alicdn.com`
-- WeCom icon: `work.weixin.qq.com` / `wwcdn.weixin.qq.com`
-- QQ Mail icon: `mail.qq.com` / `res.wx.qq.com`
-- NetEase Mail icon: `mail.163.com`
-
-Feishu, DingTalk, WeCom, QQ Mail, NetEase Mail, their names, logos, and related
-marks are the property of their respective owners. They are reproduced only to
-identify interoperable third-party services; no endorsement or affiliation is
-implied.
-
 ## agent-skills adapted subagent instructions
 
 Kun includes standalone subagent instructions adapted from the `agents/` and

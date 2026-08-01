@@ -27,7 +27,7 @@
 </p>
 
 <p align="center">
-  <img src="./docs/assets/readme/kun-hero-code.jpg" alt="Kun hero featuring the current Code workspace for the local-first AI agent experience" width="100%">
+  <img src="./docs/assets/readme/kun-hero-gui-tui-character-demo.jpg" alt="Kun character and mascot with a desktop Code GUI and terminal TUI populated by fictional demo data" width="100%">
 </p>
 
 ## What is Kun?
@@ -84,40 +84,25 @@ The GUI and TUI automatically connect to the same local runtime. For servers or 
 | **Research: multimodal work** | PDFs, images, web leads, or questions | Read material, collect evidence, organize conclusions, and preserve a reusable work context | Research notes, structured conclusions, proposals, and next tasks |
 | **Automate: tasks and Agent Graph** | A repeated process, schedule, or complex objective | Use Schedules, Loops, Hooks, MCP, Skills, and constrained subagents | Automation records, task state, evidence, and resumable execution history |
 
-### Current interface screenshots
+### Current interface previews
+
+These interfaces are based on the current release and use fictional demo workspaces, tasks, and file names; no real user data is shown.
 
 <p align="center">
-  <img src="./docs/assets/readme/code-workspace-current.webp" alt="Current Kun Code workspace with projects, sessions, model selection, and the task input area">
+  <img src="./docs/assets/readme/code-workspace-demo.webp" alt="Current Kun Code workspace using demo data for projects, sessions, model selection, and the task input area">
 </p>
 
 <p align="center">
-  <img src="./docs/assets/readme/write-workspace-current.webp" alt="Current Kun Write workspace with a writing space, document canvas, writing assistant, and quick actions">
+  <img src="./docs/assets/readme/write-workspace-demo.webp" alt="Current Kun Write workspace using demo data for the writing space, document canvas, writing assistant, and quick actions">
 </p>
 
 <p align="center">
-  <img src="./docs/assets/readme/design-workspace-current.webp" alt="Current Kun Design workspace with a design canvas, design assets, and the Agent work trace">
+  <img src="./docs/assets/readme/design-workspace-demo.webp" alt="Current Kun Design workspace using demo data for the design canvas, design assets, and Agent work trace">
 </p>
 
 <p align="center">
-  <img src="./docs/assets/readme/automation-schedule-current.webp" alt="Current Kun automation interface with scheduled tasks, run results, and task controls">
+  <img src="./docs/assets/readme/automation-schedule-demo.webp" alt="Current Kun automation interface using demo data for scheduled tasks, run results, and task controls">
 </p>
-
-<details>
-  <summary>More demos (historical interface material and earlier recordings)</summary>
-  <p align="center">
-    <img src="./docs/assets/readme/create-workspaces.webp" alt="Earlier combined Kun Code and Write workspace material">
-  </p>
-  <p align="center">
-    <img src="./docs/assets/readme/research-prototype.webp" alt="Earlier Kun research and prototype workflow material">
-  </p>
-  <p align="center">
-    <img src="./docs/assets/readme/shared-runtime.webp" alt="Earlier visual material for Kun GUI, TUI, and Graph runtime continuity">
-  </p>
-  <p align="center">
-    <a href="src/asset/img/code.mp4"><img src="src/asset/img/code.gif" width="410" alt="Earlier real interaction recording of Kun Code mode"></a>
-    <a href="src/asset/img/write.mp4"><img src="src/asset/img/write.gif" width="410" alt="Earlier real interaction recording of Kun Write mode"></a>
-  </p>
-</details>
 
 ## From requirement to acceptance
 

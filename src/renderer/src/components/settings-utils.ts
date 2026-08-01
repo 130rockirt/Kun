@@ -18,7 +18,6 @@ import {
   mergeWorkflowSettings,
   mergeWriteSettings,
   mergeTerminalSettings,
-  mergeOpenConnectorDesktopSettings,
   normalizeAppBehaviorSettings,
   normalizeClawSettings,
   normalizeDesignSettings,
@@ -115,7 +114,6 @@ export function mergeSettings(current: AppSettingsV1, patch: SettingsPatch): App
     workflow: mergeWorkflowSettings(safeCurrent.workflow, patch.workflow),
     design: mergeDesignSettings(safeCurrent.design, patch.design),
     terminal: mergeTerminalSettings(safeCurrent.terminal, patch.terminal),
-    connectors: mergeOpenConnectorDesktopSettings(safeCurrent.connectors, patch.connectors),
     guiUpdate: {
       ...safeCurrent.guiUpdate,
       ...(patch.guiUpdate ?? {})

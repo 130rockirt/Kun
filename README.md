@@ -27,7 +27,7 @@
 </p>
 
 <p align="center">
-  <img src="./docs/assets/readme/kun-hero-code.jpg" alt="Kun Hero：以当前 Code 工作台为主视觉的本地优先 AI Agent 工作空间" width="100%">
+  <img src="./docs/assets/readme/kun-hero-gui-tui-character-demo.jpg" alt="Kun Hero：使用虚构演示数据展示人物、吉祥物、桌面 Code GUI 与终端 TUI" width="100%">
 </p>
 
 ## Kun 是什么
@@ -84,40 +84,25 @@ GUI 和 TUI 会自动连接同一个本地运行时。服务器或无桌面环�
 | **Research：多模态研究** | PDF、图片、网页线索或问题 | 阅读资料、提取证据、组织结论、形成可继续的工作上下文 | 研究笔记、结构化结论、方案和后续任务 |
 | **Automate：任务与 Agent Graph** | 重复流程、定时任务或复杂目标 | 使用 Schedule、Loop、Hook、MCP、Skills 和受限子代理持续执行 | 自动化记录、任务状态、证据和可恢复的执行历史 |
 
-### 当前界面实拍
+### 当前界面演示
+
+以下界面基于当前版本，并使用虚构的演示工作区、任务和文件名，不包含真实用户数据。
 
 <p align="center">
-  <img src="./docs/assets/readme/code-workspace-current.webp" alt="Kun 当前 Code 工作台：项目、会话、模型选择和任务输入区">
+  <img src="./docs/assets/readme/code-workspace-demo.webp" alt="Kun 当前 Code 工作台：使用演示数据展示项目、会话、模型选择和任务输入区">
 </p>
 
 <p align="center">
-  <img src="./docs/assets/readme/write-workspace-current.webp" alt="Kun 当前 Write 工作台：写作空间、文档画布、写作助手和快捷操作">
+  <img src="./docs/assets/readme/write-workspace-demo.webp" alt="Kun 当前 Write 工作台：使用演示数据展示写作空间、文档画布、写作助手和快捷操作">
 </p>
 
 <p align="center">
-  <img src="./docs/assets/readme/design-workspace-current.webp" alt="Kun 当前 Design 工作台：设计画布、设计资产和 Agent 工作过程">
+  <img src="./docs/assets/readme/design-workspace-demo.webp" alt="Kun 当前 Design 工作台：使用演示数据展示设计画布、设计资产和 Agent 工作过程">
 </p>
 
 <p align="center">
-  <img src="./docs/assets/readme/automation-schedule-current.webp" alt="Kun 当前自动化界面：定时任务、运行结果和任务控制">
+  <img src="./docs/assets/readme/automation-schedule-demo.webp" alt="Kun 当前自动化界面：使用演示数据展示定时任务、运行结果和任务控制">
 </p>
-
-<details>
-  <summary>更多演示（历史界面素材与早期操作录屏）</summary>
-  <p align="center">
-    <img src="./docs/assets/readme/create-workspaces.webp" alt="早期 Kun Code 与 Write 工作区组合素材">
-  </p>
-  <p align="center">
-    <img src="./docs/assets/readme/research-prototype.webp" alt="早期 Kun 研究与原型工作流素材">
-  </p>
-  <p align="center">
-    <img src="./docs/assets/readme/shared-runtime.webp" alt="早期 Kun GUI、TUI 与 Graph 运行时示意素材">
-  </p>
-  <p align="center">
-    <a href="src/asset/img/code.mp4"><img src="src/asset/img/code.gif" width="410" alt="Kun Code 模式的早期真实操作录屏"></a>
-    <a href="src/asset/img/write.mp4"><img src="src/asset/img/write.gif" width="410" alt="Kun Write 模式的早期真实操作录屏"></a>
-  </p>
-</details>
 
 ## 从需求到验收
 

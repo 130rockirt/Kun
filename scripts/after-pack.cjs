@@ -73,17 +73,6 @@ const MINIMUM_TUI_NODE_VERSION = '22.19.0'
 const BUNDLED_EXTENSIONS_DIR = 'bundled-extensions'
 const BUNDLED_EXTENSION_CATALOG_FILE = 'catalog.json'
 const OFFICECLI_DIR = 'officecli'
-const OPEN_CONNECTOR_DIR = 'open-connector/current'
-const OPEN_CONNECTOR_LOCK = {
-  schemaVersion: 1,
-  name: 'open-connector',
-  version: '1.4.0',
-  protocolVersion: '1',
-  nodeRange: '>=22',
-  entrypoint: 'dist/server/index.js',
-  archiveSha256: '1275d22c83cabb16161f01cb7acfbe1a2ebb0c7696f3a3b5129d8bc7dbd6454f',
-  archiveSizeBytes: 12441728
-}
 const TESSERACT_NODE_LSTM_ALIASES = new Map([
   ['tesseract-core.js', './tesseract-core-lstm'],
   ['tesseract-core-simd.js', './tesseract-core-simd-lstm'],
@@ -511,51 +500,6 @@ function assertRegularNonSymlink(path, label) {
   }
 }
 
-function validateBundledOpenConnectorRuntime(context) {
-  const root = join(packedResourcesDir(context), OPEN_CONNECTOR_DIR)
-  for (const [relativePath, label] of [
-    ['runtime.json', 'runtime metadata'],
-    ['dist/server/index.js', 'runtime entrypoint'],
-    ['catalog/apps/providers.json.gz', 'generated catalog bundle'],
-    ['package.json', 'runtime package manifest'],
-    ['LICENSE.txt', 'runtime license'],
-    ['NOTICE.md', 'runtime notice'],
-    ['.kun-openconnector-runtime.json', 'prepared runtime marker']
-  ]) {
-    assertRegularNonSymlink(join(root, ...relativePath.split('/')), `OpenConnector ${label}`)
-  }
-  const runtime = JSON.parse(readFileSync(join(root, 'runtime.json'), 'utf8'))
-  const packageManifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
-  const marker = JSON.parse(readFileSync(join(root, '.kun-openconnector-runtime.json'), 'utf8'))
-  if (
-    runtime.schemaVersion !== OPEN_CONNECTOR_LOCK.schemaVersion ||
-    runtime.name !== OPEN_CONNECTOR_LOCK.name ||
-    runtime.version !== OPEN_CONNECTOR_LOCK.version ||
-    runtime.protocolVersion !== OPEN_CONNECTOR_LOCK.protocolVersion ||
-    runtime.nodeRange !== OPEN_CONNECTOR_LOCK.nodeRange ||
-    runtime.entrypoint !== OPEN_CONNECTOR_LOCK.entrypoint ||
-    marker.schemaVersion !== 1 ||
-    marker.archiveSha256 !== OPEN_CONNECTOR_LOCK.archiveSha256 ||
-    marker.archiveSizeBytes !== OPEN_CONNECTOR_LOCK.archiveSizeBytes
-  ) {
-    throw new Error('[after-pack] Bundled OpenConnector runtime does not match the pinned release contract')
-  }
-  if (
-    packageManifest.name !== '@oomol-lab/open-connector' ||
-    packageManifest.version !== OPEN_CONNECTOR_LOCK.version ||
-    !packageManifest.dependencies ||
-    typeof packageManifest.dependencies !== 'object'
-  ) {
-    throw new Error('[after-pack] Bundled OpenConnector package manifest is invalid')
-  }
-  for (const dependency of Object.keys(packageManifest.dependencies)) {
-    assertRegularNonSymlink(
-      join(root, 'node_modules', ...dependency.split('/'), 'package.json'),
-      `OpenConnector production dependency ${dependency}`
-    )
-  }
-}
-
 function maybeAdhocSignMacApp(context) {
   if (normalizePlatform(context.electronPlatformName) !== 'darwin') {
     return
@@ -811,7 +755,6 @@ async function afterPack(context) {
   validatePackedApplicationPayload(context)
   validateBundledExtensionResources(context)
   validateBundledOfficeCli(context)
-  validateBundledOpenConnectorRuntime(context)
   await maybeSignBundledOfficeCli(context)
   prunePackedWhisperResources(context)
   ensureNodePtyHelpersExecutable(context)
@@ -824,8 +767,6 @@ exports.KUN_RUNTIME_REQUIRED_PATHS = KUN_RUNTIME_REQUIRED_PATHS
 exports.REQUIRED_BUNDLED_EXTENSION_IDS = REQUIRED_BUNDLED_EXTENSION_IDS
 exports.REQUIRED_RETIRED_BUNDLED_EXTENSION_IDS = REQUIRED_RETIRED_BUNDLED_EXTENSION_IDS
 exports.LINUX_SANDBOX_LAUNCHER_FLAG = LINUX_SANDBOX_LAUNCHER_FLAG
-exports.OPEN_CONNECTOR_DIR = OPEN_CONNECTOR_DIR
-exports.OPEN_CONNECTOR_LOCK = OPEN_CONNECTOR_LOCK
 exports._internals = {
   appBundlePath,
   packedResourcesDir,
@@ -843,7 +784,6 @@ exports._internals = {
   validateBundledKunRuntime,
   validateBundledExtensionResources,
   validateBundledOfficeCli,
-  validateBundledOpenConnectorRuntime,
   maybeSignBundledOfficeCli,
   normalizeArch,
   prunePackedWhisperResources,

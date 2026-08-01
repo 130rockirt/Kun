@@ -177,7 +177,6 @@ import type {
 } from './runtime-image-attachment'
 import type { CliInstallAction, CliInstallResult, CliInstallStatus } from './cli-install'
 import type { ProviderQuotaListResult } from './provider-quota'
-import type { OpenConnectorApi } from './open-connector'
 
 export type KunRuntimeStatusPayload = {
   state: 'starting' | 'running' | 'restarting' | 'crashed' | 'failed' | 'stopped'
@@ -578,8 +577,6 @@ export type KunGuiApi = ExtensionIpcApi & {
       entries: Record<string, string>
     ) => Promise<import('./app-environment').RevisionedSnapshot<Record<string, string>>>
   }
-  /** Constrained native management surface for the bundled local connector runtime. */
-  connectors: OpenConnectorApi
   /** Windows production storage-root relocation and recovery surface. */
   storageRelocation: StorageRelocationApi
   dataMigration: {

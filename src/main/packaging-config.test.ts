@@ -277,21 +277,6 @@ describe('electron-builder Kun packaging', () => {
       .toContain('Copyright (c) 2025 Addy Osmani')
   })
 
-  it('copies the OpenConnector production dependency tree with an explicit matcher', () => {
-    expect(builderConfig.extraResources).toEqual(expect.arrayContaining([
-      {
-        from: 'resources/open-connector/current',
-        to: 'open-connector/current',
-        filter: ['**/*']
-      },
-      {
-        from: 'resources/open-connector/current/node_modules',
-        to: 'open-connector/current/node_modules',
-        filter: ['**/*']
-      }
-    ]))
-  })
-
   it('bundles one pinned OfficeCLI target with its manifests and legal notices', () => {
     expect(builderConfig.extraResources).toEqual(expect.arrayContaining([
       {

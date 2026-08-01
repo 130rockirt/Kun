@@ -84,7 +84,6 @@ import {
   mergeScheduleSettings,
   mergeWriteSettings,
   mergeTerminalSettings,
-  mergeOpenConnectorDesktopSettings,
   MIN_KUN_LOCAL_PORT,
   normalizeAppSettings,
   normalizeAppBehaviorSettings,
@@ -246,20 +245,6 @@ import {
 } from './computer-use/computer-use-host'
 import { registerBrowserUseIpc } from './browser-use/register-browser-use-ipc'
 import { browserUseCleanupForRuntimeRequest } from './browser-use/thread-lifecycle'
-import { OpenConnectorSidecar } from './connectors/open-connector-sidecar'
-import {
-  setOpenConnectorKunInstanceProofKey,
-  setOpenConnectorKunRuntimeToken
-} from './connectors/open-connector-kun-environment'
-import { OpenConnectorAdminClient } from './connectors/open-connector-admin-client'
-import {
-  isTrustedWorkbenchUrl,
-  registerOpenConnectorIpc
-} from './connectors/open-connector-ipc'
-import {
-  defaultOpenConnectorDesktopSettings,
-  normalizeOpenConnectorDesktopSettings
-} from '../shared/app-settings-connectors'
 import {
   appWindowTitleForFlavor,
   createAppEnvironmentInfo,
@@ -267,6 +252,25 @@ import {
 } from '../shared/app-environment'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
+
+/** Compare only the immutable renderer origin and entry document; query/hash are UI state. */
+function isTrustedWorkbenchUrl(candidate: string, trustedRendererUrl: string): boolean {
+  try {
+    const actual = new URL(candidate)
+    const expected = new URL(trustedRendererUrl)
+    return actual.protocol === expected.protocol &&
+      actual.username === expected.username &&
+      actual.password === expected.password &&
+      actual.host === expected.host &&
+      normalizeWorkbenchPathname(actual.pathname) === normalizeWorkbenchPathname(expected.pathname)
+  } catch {
+    return false
+  }
+}
+
+function normalizeWorkbenchPathname(pathname: string): string {
+  return pathname.length > 1 ? pathname.replace(/\/+$/, '') : pathname
+}
 
 function developmentRendererUrl(): string | undefined {
   return devServerHintUrl(app.isPackaged)
@@ -468,8 +472,6 @@ const extensionViewSessions = new ExtensionViewSessionRegistry()
 const extensionExternalBrowsers = new ExtensionExternalBrowserManager(extensionViewSessions)
 let protectedCredentialSurface: ProtectedCredentialSurfaceController | null = null
 let bindExtensionMainWindow: ((window: BrowserWindow) => void) | undefined
-let openConnectorSidecar: OpenConnectorSidecar | null = null
-let disposeOpenConnectorIpc: (() => void) | null = null
 let shutdownDesktopResourceLeases: (() => Promise<void>) | null = null
 let terminalPtyController: TerminalPtyController | null = null
 
@@ -569,7 +571,6 @@ const runtimeShutdown = new ManagedRuntimeShutdownCoordinator(async () => {
   ])
   await stopWeixinBridgeRuntime()
   await shutdownLocalWhisperService()
-  await openConnectorSidecar?.stop()
   // The shared Kun service outlives ordinary GUI/TUI clients. Only an update
   // install must stop it so old application files can be replaced safely.
   if (runtimeShutdown.isUpdateInstallQuit || runtimeShutdown.isStorageRelocationQuit) {
@@ -2549,53 +2550,16 @@ app.whenReady().then(async () => {
     retentionDays: initial.log.retentionDays
   })
   traceStartup('logger configured')
-  let connectorSettings = normalizeOpenConnectorDesktopSettings(
-    initial.connectors ?? defaultOpenConnectorDesktopSettings()
-  )
-  const connectorSidecar = new OpenConnectorSidecar({
-    userDataDir: app.getPath('userData'),
-    isPackaged: app.isPackaged,
-    resourcesPath: process.resourcesPath,
-    appRoot: app.getAppPath(),
-    execPath: resolveClawScheduleMcpCommand(getClawScheduleMcpLaunchConfig()),
-    environment: process.env,
-    onRuntimeToken: setOpenConnectorKunRuntimeToken,
-    onInstanceProofKey: setOpenConnectorKunInstanceProofKey,
-    log: (level, message, details) => {
-      if (level === 'error') logError('open-connector', message, details)
-      else if (level === 'warn') logWarn('open-connector', message, details)
-      else logInfo('open-connector', details ? `${message} ${JSON.stringify(details)}` : message)
-    }
-  })
-  openConnectorSidecar = connectorSidecar
   let ownsDesktopBackgroundServices = false
   const startDesktopBackgroundServices = async (): Promise<void> => {
     if (scheduleRuntime || workflowRuntime || clawRuntime || telegramRuntime) return
     ownsDesktopBackgroundServices = true
     const settings = await store.load()
-    connectorSettings = normalizeOpenConnectorDesktopSettings(
-      settings.connectors ?? defaultOpenConnectorDesktopSettings()
-    )
     await syncClawScheduleMcpConfig(settings, getClawScheduleMcpLaunchConfig()).catch((error) => {
       console.error('[claw-schedule-mcp] failed to sync config on desktop-host acquisition:', error)
     })
     void runCheckpointCleanup(settings, { force: true, reason: 'startup' })
     syncCheckpointCleanupTimer(settings)
-    if (connectorSettings.enabled) {
-      const secretsReady = await connectorSidecar.prepareSecrets()
-        .then(() => true)
-        .catch((error) => {
-          logWarn('open-connector', 'Connector credentials are unavailable; Kun will continue without connectors.', {
-            message: error instanceof Error ? error.message : String(error)
-          })
-          return false
-        })
-      if (secretsReady) void connectorSidecar.start(connectorSettings.port).catch((error) => {
-        logWarn('open-connector', 'Enabled connector sidecar failed to start.', {
-          message: error instanceof Error ? error.message : String(error)
-        })
-      })
-    }
     scheduleRuntime = createScheduleRuntime({ store, runtimeRequest, logError, powerSaveBlocker })
     scheduleRuntime.sync(settings)
     workflowRuntime = createWorkflowRuntime({ store, runtimeRequest, logError, powerSaveBlocker })
@@ -2638,8 +2602,7 @@ app.whenReady().then(async () => {
       workflow?.stop(),
       claw?.stop(),
       telegram?.stop(),
-      stopWeixinBridgeRuntime(),
-      connectorSidecar.stop()
+      stopWeixinBridgeRuntime()
     ])
   }
   const desktopResourceLeases = new ManagerResourceLeaseClient(
@@ -2713,7 +2676,6 @@ app.whenReady().then(async () => {
       workflow: mergeWorkflowSettings(prev.workflow, effectivePartial.workflow),
       design: mergeDesignSettings(prev.design, effectivePartial.design),
       terminal: mergeTerminalSettings(prev.terminal, effectivePartial.terminal),
-      connectors: mergeOpenConnectorDesktopSettings(prev.connectors, effectivePartial.connectors),
       guiUpdate: { ...prev.guiUpdate, ...(effectivePartial.guiUpdate ?? {}) }
     })
     if (prev.log.enabled !== next.log.enabled || prev.log.retentionDays !== next.log.retentionDays) {
@@ -2724,27 +2686,6 @@ app.whenReady().then(async () => {
       throw new Error(`Invalid runtime settings: ${runtimeValidationError}`)
     }
     const saved = await store.patch(effectivePartial)
-    connectorSettings = normalizeOpenConnectorDesktopSettings(
-      saved.connectors ?? defaultOpenConnectorDesktopSettings()
-    )
-    const connectorHealth = ownsDesktopBackgroundServices
-      ? await openConnectorSidecar?.reconcile(connectorSettings.enabled, connectorSettings.port)
-      .catch((error) => ({
-        state: 'unavailable' as const,
-        enabled: connectorSettings.enabled,
-        managed: false,
-        baseUrl: openConnectorSidecar?.baseUrl ?? `http://127.0.0.1:${connectorSettings.port}`,
-        port: connectorSettings.port,
-        message: error instanceof Error ? error.message : String(error),
-        checkedAt: new Date().toISOString()
-      }))
-      : undefined
-    if (ownsDesktopBackgroundServices && connectorSettings.enabled && connectorHealth?.state !== 'running') {
-      logWarn('open-connector', 'Connector settings were saved, but the sidecar is unavailable.', {
-        state: connectorHealth?.state ?? 'unavailable',
-        message: connectorHealth?.message
-      })
-    }
     updateBrowserUseHostSettings(saved)
     updateComputerUseHostSettings(saved)
     if (ownsDesktopBackgroundServices) {
@@ -2855,18 +2796,6 @@ app.whenReady().then(async () => {
     resolveLogDirectory: () => resolveLogDirectory(app),
     logError,
     workspacePreviewProtocols
-  })
-  const openConnectorAdminClient = new OpenConnectorAdminClient(connectorSidecar, {
-    port: () => connectorSettings.port,
-    openExternal: (url) => shell.openExternal(url)
-  })
-  disposeOpenConnectorIpc = registerOpenConnectorIpc({
-    ipcMain,
-    getMainWindow: () => mainWindow,
-    getTrustedRendererUrl: resolveMainRendererUrl,
-    getPort: () => connectorSettings.port,
-    sidecar: connectorSidecar,
-    client: openConnectorAdminClient
   })
   const disposeBrowserUseIpc = registerBrowserUseIpc({
     ipcMain,
@@ -2985,8 +2914,6 @@ app.whenReady().then(async () => {
     extensionIpcOptions
   )
   app.once('before-quit', () => {
-    disposeOpenConnectorIpc?.()
-    disposeOpenConnectorIpc = null
     disposeTrayQuotaIpc?.()
     disposeTrayQuotaIpc = null
     destroyTrayQuotaPopover()

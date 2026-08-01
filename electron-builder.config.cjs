@@ -221,21 +221,6 @@ module.exports = {
       to: 'officecli/legal',
       filter: ['LICENSE', 'NOTICE', 'THIRD-PARTY-NOTICES.txt']
     },
-    {
-      // Prepared from the checksum-pinned OpenConnector release archive by
-      // scripts/prepare-open-connector-runtime.cjs before electron-builder runs.
-      from: 'resources/open-connector/current',
-      to: 'open-connector/current',
-      filter: ['**/*']
-    },
-    {
-      // electron-builder intentionally skips a node_modules directory at the
-      // root of a generic matcher. Copy the sidecar production tree from its
-      // own matcher so the relocatable runtime can resolve its dependencies.
-      from: 'resources/open-connector/current/node_modules',
-      to: 'open-connector/current/node_modules',
-      filter: ['**/*']
-    }
   ],
   artifactName: `${productName}-${artifactVersion}-\${os}-\${arch}.\${ext}`,
   ...(developmentFlavor

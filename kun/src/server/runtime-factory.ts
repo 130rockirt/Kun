@@ -74,8 +74,6 @@ import { createReadArtifactTool } from '../adapters/tool/artifact-tool.js'
 import { FileArtifactStore, type ArtifactStore } from '../artifacts/artifact-store.js'
 import { createTaskGraphTool } from '../adapters/tool/task-graph-tool.js'
 import { buildMcpToolProviders } from '../adapters/tool/mcp-tool-provider.js'
-import { buildConnectorToolProviders } from '../adapters/tool/connector-tool-provider.js'
-import type { ConnectorClientDiagnostic } from '../adapters/tool/connector-client.js'
 import { buildMemoryToolProviders } from '../adapters/tool/memory-tool-provider.js'
 import { buildSkillToolProviders } from '../adapters/tool/skill-tool-provider.js'
 import { buildDelegationToolProviders } from '../adapters/tool/delegation-tool-provider.js'
@@ -846,12 +844,11 @@ export async function createKunServeRuntime(
     ? extensionCredentialKeyProvider.encryptor
     : undefined
   // Independent I/O; all must still finish before the server listens.
-  let [mcpProviders, connectorProviders, skillRuntime] = await Promise.all([
+  let [mcpProviders, skillRuntime] = await Promise.all([
     buildMcpToolProviders(activeOptions.capabilities?.mcp, {
       oauthStorageDir: join(activeOptions.dataDir, 'mcp-oauth'),
       ...(oauthEncryptor ? { oauthEncryptor } : {})
     }),
-    buildConnectorToolProviders(activeOptions.capabilities?.connectors),
     SkillRuntime.create(activeOptions.capabilities?.skills),
     seedUsageCarryover({ threadStore, sessionStore, usageService })
   ])
@@ -1104,7 +1101,6 @@ export async function createKunServeRuntime(
     },
     graphToolsProvider,
     ...mcpProviders.providers,
-    ...connectorProviders.providers,
     ...webProviders.providers,
     ...buildMemoryToolProviders(memoryStore),
     ...buildSkillToolProviders(skillRuntime),
@@ -1310,7 +1306,6 @@ export async function createKunServeRuntime(
         advertisedToolCount: mcpProviders.search.advertisedToolCount
       }
     },
-    connectors: connectorCapabilityManifest(connectorProviders.diagnostics()),
     web: {
       fetchAvailable: webProviders.fetchAvailable,
       searchAvailable: webProviders.searchAvailable,
@@ -2076,7 +2071,6 @@ export async function createKunServeRuntime(
 	        advertisedToolCount: mcpProviders.search.advertisedToolCount
 	      }
 	    },
-	    connectors: connectorCapabilityManifest(connectorProviders.diagnostics()),
 	    web: {
 	      fetchAvailable: webProviders.fetchAvailable,
 	      searchAvailable: webProviders.searchAvailable,
@@ -2189,12 +2183,11 @@ export async function createKunServeRuntime(
 	    const nextOAuthEncryptor = nextMcpHasOAuth
 	      ? extensionCredentialKeyProvider.encryptor
 	      : undefined
-	    const [nextMcpProviders, nextConnectorProviders, nextSkillRuntime] = await Promise.all([
+	    const [nextMcpProviders, nextSkillRuntime] = await Promise.all([
 	      buildMcpToolProviders(nextOptions.capabilities?.mcp, {
 	        oauthStorageDir: join(activeOptions.dataDir, 'mcp-oauth'),
 	        ...(nextOAuthEncryptor ? { oauthEncryptor: nextOAuthEncryptor } : {})
 	      }),
-	      buildConnectorToolProviders(nextOptions.capabilities?.connectors),
 	      SkillRuntime.create(nextOptions.capabilities?.skills)
 	    ])
 	    let stagedGenerationCommitted = false
@@ -2250,7 +2243,6 @@ export async function createKunServeRuntime(
 	      },
 	      graphToolsProvider,
 	      ...nextMcpProviders.providers,
-	      ...nextConnectorProviders.providers,
 	      ...nextWebProviders.providers,
 	      ...buildMemoryToolProviders(nextMemoryStore),
 	      ...buildSkillToolProviders(nextSkillRuntime),
@@ -2359,7 +2351,6 @@ export async function createKunServeRuntime(
 	    }
 	    const nextLoop = new AgentLoop(nextLoopOptions)
 	    const previousMcpProviders = mcpProviders
-	    const previousConnectorProviders = connectorProviders
 	    activeOptions = nextOptions
 	    await graphRuntime.reconfigureBackgroundServices()
 	    modelProfiles = nextModelProfiles
@@ -2377,7 +2368,6 @@ export async function createKunServeRuntime(
 	    skillRuntime = nextSkillRuntime
 	    instructionRuntime = nextInstructionRuntime
 	    mcpProviders = nextMcpProviders
-	    connectorProviders = nextConnectorProviders
 	    webProviders = nextWebProviders
 	    attachmentStore = nextAttachmentStore
 	    memoryStore = nextMemoryStore
@@ -2438,7 +2428,6 @@ export async function createKunServeRuntime(
 	      }
 	    })
 	    void previousMcpProviders.close().catch(() => undefined)
-	    previousConnectorProviders.close()
 	    stagedGenerationCommitted = true
 	    return { ok: true }
 	    } catch (error) {
@@ -2450,7 +2439,6 @@ export async function createKunServeRuntime(
 	    } finally {
 	      if (!stagedGenerationCommitted) {
 	        await nextMcpProviders.close().catch(() => undefined)
-	        nextConnectorProviders.close()
 	      }
 	    }
 	  }
@@ -2598,7 +2586,6 @@ export async function createKunServeRuntime(
     },
 	    toolDiagnostics: async () => ({
 	      providers: registry.diagnostics(),
-	      connectors: connectorProviders.diagnostics(),
 	      mcpServers: mcpProviders.diagnostics,
       mcpOAuth: mcpProviders.oauth,
       mcpSearch: mcpProviders.search,
@@ -2724,9 +2711,8 @@ export async function createKunServeRuntime(
 	        await extensionAccountAudit.flush()
 	        extensionTools.disposeAll()
 	        await extensionModelProviders.disposeAll()
-        shutdownAllLspSessions()
+	        shutdownAllLspSessions()
 	        await mcpProviders.close()
-	        connectorProviders.close()
 	        await migrationService.shutdown()
 	        await migrationImportService.shutdown()
 	        await routeHealth.flush()
@@ -3124,22 +3110,6 @@ function mergeRuntimeConfigApplyOptions(
     capabilities: request.capabilities ?? current.capabilities,
     hooks: request.hooks ?? current.hooks,
     quality: request.quality ?? current.quality
-  }
-}
-
-function connectorCapabilityManifest(diagnostic: ConnectorClientDiagnostic): {
-  available: boolean
-  reason?: string
-  protocolVersion?: string
-  runtimeVersion?: string
-  lastCheckedAt?: string
-} {
-  return {
-    available: diagnostic.available,
-    ...(diagnostic.lastError ? { reason: diagnostic.lastError } : {}),
-    ...(diagnostic.protocolVersion ? { protocolVersion: diagnostic.protocolVersion } : {}),
-    ...(diagnostic.runtimeVersion ? { runtimeVersion: diagnostic.runtimeVersion } : {}),
-    ...(diagnostic.lastCheckedAt ? { lastCheckedAt: diagnostic.lastCheckedAt } : {})
   }
 }
 

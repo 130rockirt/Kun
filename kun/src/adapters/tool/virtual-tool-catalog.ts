@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 
-export type VirtualToolKind = 'builtin' | 'mcp' | 'skill' | 'connector'
+export type VirtualToolKind = 'builtin' | 'mcp' | 'skill'
 
 export type VirtualToolEntry<T = unknown> = {
   id: string

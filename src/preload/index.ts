@@ -55,35 +55,6 @@ const api = {
     write: (expectedRevision, entries) =>
       ipcRenderer.invoke('shared-client-state:put', { expectedRevision, entries })
   },
-  connectors: {
-    health: () => ipcRenderer.invoke('connectors:health'),
-    start: () => ipcRenderer.invoke('connectors:start'),
-    stop: () => ipcRenderer.invoke('connectors:stop'),
-    catalog: () => ipcRenderer.invoke('connectors:catalog'),
-    provider: (service) => ipcRenderer.invoke('connectors:provider', { service }),
-    action: (actionId) => ipcRenderer.invoke('connectors:action', { actionId }),
-    connections: () => ipcRenderer.invoke('connectors:connections'),
-    connect: (input) => ipcRenderer.invoke('connectors:connect', input),
-    disconnect: (input) => ipcRenderer.invoke('connectors:disconnect', input),
-    setDefault: (input) => ipcRenderer.invoke('connectors:set-default', input),
-    oauthConfigs: () => ipcRenderer.invoke('connectors:oauth-configs'),
-    saveOAuthConfig: (input) => ipcRenderer.invoke('connectors:oauth-config:save', input),
-    deleteOAuthConfig: (service) => ipcRenderer.invoke('connectors:oauth-config:delete', { service }),
-    startOAuth: (input) => ipcRenderer.invoke('connectors:oauth:start', input),
-    pollOAuth: (input) => ipcRenderer.invoke('connectors:oauth:poll', input),
-    cancelOAuth: (input) => ipcRenderer.invoke('connectors:oauth:cancel', input),
-    startDeviceRegistration: (input) =>
-      ipcRenderer.invoke('connectors:device-registration:start', input),
-    pollDeviceRegistration: (input) =>
-      ipcRenderer.invoke('connectors:device-registration:poll', input),
-    cancelDeviceRegistration: (input) =>
-      ipcRenderer.invoke('connectors:device-registration:cancel', input),
-    openSetupHelp: (service) => ipcRenderer.invoke('connectors:setup-help', { service }),
-    policy: () => ipcRenderer.invoke('connectors:policy'),
-    updatePolicy: (input) => ipcRenderer.invoke('connectors:policy:update', input),
-    runs: (query) => ipcRenderer.invoke('connectors:runs', query ?? {}),
-    run: (id) => ipcRenderer.invoke('connectors:run', { id })
-  },
   storageRelocation: {
     getStatus: () => ipcRenderer.invoke('storage-relocation:status'),
     pickDestination: (defaultPath) =>

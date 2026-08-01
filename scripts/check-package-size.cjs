@@ -115,8 +115,7 @@ function buildReport(options) {
     join(resources, 'THIRD_PARTY_NOTICES.md'),
     join(resources, 'officecli'),
     join(resources, 'whisper'),
-    join(resources, 'bundled-extensions'),
-    join(resources, 'open-connector')
+    join(resources, 'bundled-extensions')
   ]
   const components = [
     { name: 'application', path: appPath },
@@ -131,8 +130,7 @@ function buildReport(options) {
     { name: 'extra-resources', paths: extraResourcePaths },
     { name: 'officecli', path: join(resources, 'officecli') },
     { name: 'whisper', path: join(resources, 'whisper') },
-    { name: 'bundled-extensions', path: join(resources, 'bundled-extensions') },
-    { name: 'open-connector-runtime', path: join(resources, 'open-connector') }
+    { name: 'bundled-extensions', path: join(resources, 'bundled-extensions') }
   ].map((component) => ({
     ...component,
     bytes: component.paths

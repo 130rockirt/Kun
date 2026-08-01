@@ -1,7 +1,6 @@
 import i18n, { type BackendModule } from 'i18next'
 import { initReactI18next } from 'react-i18next'
 import enCommon from './locales/en/common.json'
-import enConnectors from './locales/en/connectors.json'
 import enSettings from './locales/en/settings.json'
 import { APP_LOCALES } from '@shared/app-locales'
 
@@ -73,7 +72,7 @@ const lazyLocaleBackend: BackendModule = {
 
 void i18n.use(lazyLocaleBackend).use(initReactI18next).init({
   resources: {
-    en: { common: enCommon, connectors: enConnectors, settings: enSettings }
+    en: { common: enCommon, settings: enSettings }
   },
   partialBundledLanguages: true,
   lng: 'en',
@@ -83,7 +82,7 @@ void i18n.use(lazyLocaleBackend).use(initReactI18next).init({
   interpolation: { escapeValue: false },
   react: { useSuspense: false },
   defaultNS: 'common',
-  ns: ['common', 'connectors', 'settings']
+  ns: ['common', 'settings']
 })
 
 export default i18n

@@ -67,8 +67,7 @@ test('reports root and Kun dependencies plus aggregate extra resources', (t) => 
     ['officecli/officecli', 19],
     ['whisper/darwin-arm64/whisper-cli', 23],
     ['bundled-extensions/catalog.json', 29],
-    ['THIRD_PARTY_NOTICES.md', 31],
-    ['open-connector/current/runtime.json', 37]
+    ['THIRD_PARTY_NOTICES.md', 31]
   ]
   for (const [relativePath, bytes] of files) {
     const path = join(resources, relativePath)
@@ -86,6 +85,5 @@ test('reports root and Kun dependencies plus aggregate extra resources', (t) => 
   )
   assert.equal(componentBytes['root-unpacked-node_modules'], 13)
   assert.equal(componentBytes['kun-unpacked-node_modules'], 17)
-  assert.equal(componentBytes['open-connector-runtime'], 37)
-  assert.equal(componentBytes['extra-resources'], 19 + 23 + 29 + 31 + 37)
+  assert.equal(componentBytes['extra-resources'], 19 + 23 + 29 + 31)
 })

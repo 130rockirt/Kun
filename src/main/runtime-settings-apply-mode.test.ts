@@ -43,7 +43,6 @@ function settings(): AppSettingsV1 {
     workflow: defaultWorkflowSettings(),
     design: defaultDesignSettings(),
     terminal: defaultTerminalSettings(),
-    connectors: { enabled: false, port: 18_898 },
     guiUpdate: { channel: 'stable' },
     codePromptPrefix: '',
     disabledSkillIds: []
@@ -407,14 +406,6 @@ describe('runtimeSettingsApplyMode', () => {
           browserUse: { ...prev.agents.kun.browserUse, enabled: false }
         }
       }
-    })).toBe('restart')
-    expect(runtimeSettingsApplyMode(prev, {
-      ...prev,
-      connectors: { enabled: true, port: prev.connectors!.port }
-    })).toBe('restart')
-    expect(runtimeSettingsApplyMode(prev, {
-      ...prev,
-      connectors: { enabled: false, port: prev.connectors!.port + 1 }
     })).toBe('restart')
   })
 

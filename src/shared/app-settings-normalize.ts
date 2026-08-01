@@ -49,9 +49,6 @@ import { normalizeWorkflowSettings } from './app-settings-workflow'
 import { normalizeWriteSettings } from './app-settings-write'
 import { normalizeDesignSettings } from './app-settings-design'
 import { normalizeTerminalSettings, type TerminalSettingsPatchV1 } from './app-settings-terminal'
-import {
-  normalizeOpenConnectorDesktopSettings
-} from './app-settings-connectors'
 
 export function normalizeAppSettings(settings: AppSettingsV1): AppSettingsV1 {
   const migrated = shouldMigrateLegacySettings(settings)
@@ -70,7 +67,6 @@ export function normalizeAppSettings(settings: AppSettingsV1): AppSettingsV1 {
     design?: DesignSettingsPatchV1
     guiUpdate?: Partial<GuiUpdateConfigV1>
     terminal?: TerminalSettingsPatchV1
-    connectors?: Parameters<typeof normalizeOpenConnectorDesktopSettings>[0]
   }
   const providerSettings = normalizeModelProviderSettings(maybeSettings.provider)
   const rawKun = maybeSettings.agents?.kun
@@ -149,7 +145,6 @@ export function normalizeAppSettings(settings: AppSettingsV1): AppSettingsV1 {
     workflow: normalizeWorkflowSettings(maybeSettings.workflow),
     design: normalizeDesignSettings(maybeSettings.design),
     terminal: normalizeTerminalSettings(maybeSettings.terminal),
-    connectors: normalizeOpenConnectorDesktopSettings(maybeSettings.connectors),
     guiUpdate: {
       channel: normalizeGuiUpdateChannel(
         maybeSettings.guiUpdate?.channel ?? DEFAULT_GUI_UPDATE_CHANNEL

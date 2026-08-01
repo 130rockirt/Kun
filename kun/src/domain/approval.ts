@@ -219,7 +219,6 @@ function inferApprovalActionKind(
   if (input.toolKind === 'file_change' || input.exactFileTargets?.length) {
     return 'file'
   }
-  if (input.providerKind === 'connector') return 'external-effect'
   if (effects.externalWrite) return 'file'
   if (input.providerKind === 'mcp') return 'mcp'
   if (effects.network || input.providerKind === 'web') return 'network'
@@ -256,10 +255,7 @@ function collectApprovalTargets(
   }
   for (const path of input.exactFileTargets ?? []) add({ kind: 'file', value: path })
   const targetEntries = [
-    ...Object.entries(args),
-    ...(input.providerKind === 'connector' && isPlainRecord(args.input)
-      ? Object.entries(args.input)
-      : [])
+    ...Object.entries(args)
   ]
   for (const [rawKey, value] of targetEntries) {
     const key = rawKey.toLowerCase()

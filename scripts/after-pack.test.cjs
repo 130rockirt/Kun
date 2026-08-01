@@ -20,8 +20,6 @@ const { dirname, join } = require('node:path')
 const test = require('node:test')
 const {
   KUN_RUNTIME_REQUIRED_PATHS,
-  OPEN_CONNECTOR_DIR,
-  OPEN_CONNECTOR_LOCK,
   LINUX_SANDBOX_LAUNCHER_FLAG,
   _internals: {
     installLinuxElectronLauncher,
@@ -33,7 +31,6 @@ const {
     claudeAgentSdkPlatformPackage,
     prunePackedApplicationPayload,
     validatePackedApplicationPayload,
-    validateBundledOpenConnectorRuntime,
     TESSERACT_NODE_LSTM_ALIASES,
     TESSERACT_LSTM_CORE_FILES,
     BETTER_SQLITE_BUILD_PATHS
@@ -60,55 +57,6 @@ test('requires the Graph execution plane in every packaged Kun runtime', () => {
   ]) {
     assert.equal(KUN_RUNTIME_REQUIRED_PATHS.includes(relativePath), true, relativePath)
   }
-})
-
-test('requires a pinned OpenConnector runtime in packaged application resources', (t) => {
-  const { context } = payloadFixture(t)
-  const root = join(
-    context.appOutDir,
-    'Kun.app',
-    'Contents',
-    'Resources',
-    ...OPEN_CONNECTOR_DIR.split('/')
-  )
-  for (const [relativePath, contents] of [
-    ['runtime.json', JSON.stringify({
-      schemaVersion: OPEN_CONNECTOR_LOCK.schemaVersion,
-      name: OPEN_CONNECTOR_LOCK.name,
-      version: OPEN_CONNECTOR_LOCK.version,
-      protocolVersion: OPEN_CONNECTOR_LOCK.protocolVersion,
-      nodeRange: OPEN_CONNECTOR_LOCK.nodeRange,
-      entrypoint: OPEN_CONNECTOR_LOCK.entrypoint
-    })],
-    ['dist/server/index.js', 'export {}'],
-    ['catalog/apps/providers.json.gz', 'compressed catalog'],
-    ['package.json', JSON.stringify({
-      name: '@oomol-lab/open-connector',
-      version: OPEN_CONNECTOR_LOCK.version,
-      dependencies: { hono: '^4.12.27' }
-    })],
-    ['node_modules/hono/package.json', JSON.stringify({ name: 'hono', version: '4.12.27' })],
-    ['LICENSE.txt', 'Apache-2.0'],
-    ['NOTICE.md', 'notice'],
-    ['.kun-openconnector-runtime.json', JSON.stringify({
-      schemaVersion: 1,
-      archiveSha256: OPEN_CONNECTOR_LOCK.archiveSha256,
-      archiveSizeBytes: OPEN_CONNECTOR_LOCK.archiveSizeBytes
-    })]
-  ]) writeFixture(join(root, ...relativePath.split('/')), contents)
-
-  assert.doesNotThrow(() => validateBundledOpenConnectorRuntime(context))
-  rmSync(join(root, 'catalog', 'apps', 'providers.json.gz'))
-  assert.throws(() => validateBundledOpenConnectorRuntime(context), /generated catalog bundle/)
-  writeFixture(join(root, 'catalog', 'apps', 'providers.json.gz'), 'compressed catalog')
-  rmSync(join(root, 'node_modules', 'hono', 'package.json'))
-  assert.throws(() => validateBundledOpenConnectorRuntime(context), /production dependency hono/)
-  writeFixture(
-    join(root, 'node_modules', 'hono', 'package.json'),
-    JSON.stringify({ name: 'hono', version: '4.12.27' })
-  )
-  writeFixture(join(root, 'runtime.json'), JSON.stringify({ version: 'bad' }))
-  assert.throws(() => validateBundledOpenConnectorRuntime(context), /does not match/)
 })
 
 function fixture(t, executableName = 'kun-gui') {

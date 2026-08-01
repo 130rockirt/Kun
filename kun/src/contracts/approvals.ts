@@ -29,7 +29,6 @@ export const ApprovalActionEnvelopeSchema = z.object({
   providerKind: z.enum([
     'built-in',
     'mcp',
-    'connector',
     'web',
     'skill',
     'memory',
