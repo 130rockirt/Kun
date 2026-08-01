@@ -5,6 +5,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync
@@ -102,6 +103,8 @@ windowsOnly('Windows installer migration helper', () => {
     const root = makeTempRoot()
     const source = join(root, 'DeepSeek GUI')
     const resultPath = join(root, 'resolved-source.txt')
+    mkdirSync(source, { recursive: true })
+    const canonicalSource = realpathSync.native(source)
     const result = runHelper({
       action: 'ResolveSource',
       resultPath,
@@ -109,8 +112,8 @@ windowsOnly('Windows installer migration helper', () => {
     })
 
     expect(result.status, processError(result)).toBe(0)
-    expect(result.stdout).toBe(source)
-    expect(readFileSync(resultPath, 'utf16le')).toBe(source)
+    expect(result.stdout).toBe(canonicalSource)
+    expect(readFileSync(resultPath, 'utf16le')).toBe(canonicalSource)
   })
 
   it('preserves unknown top-level content and restores it after fallback cleanup', () => {
