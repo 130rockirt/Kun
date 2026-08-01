@@ -67,6 +67,7 @@ windowsOnly('Windows installer migration helper', () => {
     ['C:\\Users\\me\\AppData\\Local\\Programs\\DeepSeek GUI', '', 'C:\\Users\\me\\AppData\\Local\\Programs\\Kun'],
     ['D:\\Apps\\deepseek-gui', '', 'D:\\Apps\\Kun'],
     ['D:\\Apps\\DeepSeek GUI\\Kun', '', 'D:\\Apps\\Kun'],
+    ['D:\\Legacy\\DeepSeek GUI', 'C:\\Users\\me\\AppData\\Local\\Programs\\Kun', 'D:\\Legacy\\Kun'],
     ['D:\\Apps\\Custom AI', 'D:\\Apps\\Custom AI', 'D:\\Apps\\Custom AI'],
     ['', 'D:\\Apps', 'D:\\Apps\\Kun'],
     ['', 'D:\\KunTools', 'D:\\KunTools\\Kun'],

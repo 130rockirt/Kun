@@ -515,6 +515,7 @@ describe('electron-builder Kun packaging', () => {
     expect(migrationScript).toContain('function Stop-InstallRootProcesses')
     expect(migrationScript).toContain("Assert-SafeInstallRoot $root 'Application root'")
     expect(migrationScript).toContain('Test-LegacyLeaf')
+    expect(migrationScript).toContain('function Resolve-LegacySourceTarget')
     expect(migrationScript).toContain('Test-ReparsePoint')
     expect(migrationScript).toContain('Test-KnownApplicationEntry')
     expect(migrationScript).toContain('Get-ValidatedJournalRecord')

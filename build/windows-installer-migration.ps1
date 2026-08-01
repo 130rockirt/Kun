@@ -54,11 +54,32 @@ function Test-LegacyLeaf([string]$Leaf) {
     [string]::Equals($Leaf, 'deepseek-gui', [StringComparison]::OrdinalIgnoreCase)
 }
 
+function Resolve-LegacySourceTarget([string]$Source) {
+  if ([string]::IsNullOrWhiteSpace($Source)) {
+    return ''
+  }
+  $sourceLeaf = Split-Path -Leaf $Source
+  $sourceParent = Split-Path -Parent $Source
+  if (Test-LegacyLeaf $sourceLeaf) {
+    return Join-Path $sourceParent 'Kun'
+  }
+  if ([string]::Equals($sourceLeaf, 'Kun', [StringComparison]::OrdinalIgnoreCase) -and
+      (Test-LegacyLeaf (Split-Path -Leaf $sourceParent))) {
+    return Join-Path (Split-Path -Parent $sourceParent) 'Kun'
+  }
+  return ''
+}
+
 function Resolve-InstallTarget {
   $source = Normalize-FullPath (Get-EnvironmentValue 'KUN_INSTALLER_SOURCE')
   $candidate = Normalize-FullPath (Get-EnvironmentValue 'KUN_INSTALLER_CANDIDATE')
   if ([string]::IsNullOrWhiteSpace($candidate)) {
     throw 'The candidate installation path is empty.'
+  }
+
+  $legacySourceTarget = Resolve-LegacySourceTarget $source
+  if (-not [string]::IsNullOrWhiteSpace($legacySourceTarget)) {
+    return $legacySourceTarget
   }
 
   $leaf = Split-Path -Leaf $candidate
