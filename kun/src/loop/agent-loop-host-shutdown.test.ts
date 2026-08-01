@@ -359,7 +359,8 @@ describe('AgentLoop host shutdown suspension', () => {
       }
     })
 
-    await expect(loop.runTurn(threadId, started.turnId)).resolves.toBe('suspended')
+    await expect(loop.runTurn(threadId, started.turnId))
+      .resolves.toBe('suspended_pending_supervision')
 
     expect(model.calls).toBe(2)
     expect(await turns.getTurn(threadId, started.turnId)).toMatchObject({

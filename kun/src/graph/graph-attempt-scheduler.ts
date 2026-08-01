@@ -27,6 +27,7 @@ import type {
 import { graphWorkerSecuritySnapshot } from './graph-worker-security.js'
 import { resolveGraphAttemptAssignment } from './graph-attempt-routing.js'
 import { finalizeGraphWorkerResult } from './graph-worker-result-finalizer.js'
+import { GraphAttemptLeaseManager } from './graph-attempt-leases.js'
 
 type ActiveAttempt = {
   runId: string
@@ -42,17 +43,17 @@ export abstract class GraphAttemptScheduler {
   protected readonly active = new Map<string, ActiveAttempt>()
   protected readonly fencedRuns = new Set<string>()
   private readonly cancellingRuns = new Set<string>()
-  private readonly leases = new Map<string, GraphPathLease>()
-  private readonly leaseHeartbeats = new Map<string, {
-    runId: string
-    timer: NodeJS.Timeout
-  }>()
+  private readonly leaseManager: GraphAttemptLeaseManager
   private readonly retryNotBefore = new Map<string, number>()
   protected readonly nowIso: () => string
   protected readonly nextId: (prefix: string) => string
 
   constructor(protected readonly options: GraphSchedulerOptions) {
     this.nowIso = options.nowIso ?? (() => new Date().toISOString())
+    this.leaseManager = new GraphAttemptLeaseManager({
+      writes: options.writes,
+      config: options.config
+    })
     let next = 0
     this.nextId = options.nextId ?? ((prefix) => `${prefix}_${Date.now()}_${++next}`)
   }
@@ -207,14 +208,21 @@ export abstract class GraphAttemptScheduler {
     }
     if (!preparation) return false
     const abort = new AbortController()
-    this.leases.set(preparation.attempt.id, preparation.lease)
-    this.startLeaseHeartbeat(
+    this.leaseManager.track(preparation.attempt.id, preparation.lease)
+    this.leaseManager.startHeartbeat({
       runId,
-      nodeId,
-      preparation.attempt.id,
-      preparation.lease,
-      abort
-    )
+      attemptId: preparation.attempt.id,
+      lease: preparation.lease,
+      abort,
+      onRenewalFailure: (error) => {
+        void this.requestSupervision(
+          runId,
+          'conflict',
+          [nodeId],
+          `Write lease renewal failed for ${preparation.attempt.id}: ${errorMessage(error)}`
+        )
+      }
+    })
     const active: ActiveAttempt = {
       runId,
       nodeId,
@@ -559,63 +567,26 @@ export abstract class GraphAttemptScheduler {
       }
       return run
     })
-    await this.options.writes.release(lease.leaseId, interrupted ? 'cancelled' : 'failed')
-    this.stopLeaseHeartbeat(attemptId)
-    this.leases.delete(attemptId)
+    await this.releaseWrite(attemptId, interrupted ? 'cancelled' : 'failed')
   }
 
   protected async integrateWrite(attemptId: string): Promise<'applied' | 'conflict'> {
-    const writeState = await this.options.writes.list()
-    const lease = this.leases.get(attemptId) ??
-      writeState.leases.find((entry) => entry.attemptId === attemptId)
-    if (
-      lease?.state === 'released' &&
-      (
-        lease.releaseDisposition === 'accepted' ||
-        writeState.worktrees.some((entry) =>
-          entry.attemptId === attemptId &&
-          (entry.state === 'accepted' || entry.state === 'cleaned'))
-      )
-    ) {
-      this.stopLeaseHeartbeat(attemptId)
-      this.leases.delete(attemptId)
-      return 'applied'
-    }
-    if (lease && !await this.options.writes.isActive(lease.leaseId)) return 'conflict'
-    let worktree
-    try {
-      worktree = await this.options.writes.captureWorktree(attemptId)
-    } catch {
-      return 'conflict'
-    }
-    if (worktree) {
-      const integrated = await this.options.writes.integrate(attemptId)
-      if (integrated.outcome !== 'applied') return 'conflict'
-    }
-    if (lease) await this.options.writes.release(lease.leaseId, 'accepted')
-    this.stopLeaseHeartbeat(attemptId)
-    this.leases.delete(attemptId)
-    return 'applied'
+    return this.leaseManager.integrate(attemptId)
   }
 
   protected async releaseWrite(
     attemptId: string,
     disposition: 'failed' | 'cancelled'
   ): Promise<void> {
-    const lease = this.leases.get(attemptId)
-    if (lease) await this.options.writes.release(lease.leaseId, disposition)
-    this.stopLeaseHeartbeat(attemptId)
-    this.leases.delete(attemptId)
+    await this.leaseManager.release(attemptId, disposition)
   }
 
   protected stopRunLeaseHeartbeats(runId: string): void {
-    for (const [attemptId, heartbeat] of this.leaseHeartbeats) {
-      if (heartbeat.runId === runId) this.stopLeaseHeartbeat(attemptId)
-    }
+    this.leaseManager.stopRunHeartbeats(runId)
   }
 
   protected stopAllLeaseHeartbeats(): void {
-    for (const attemptId of this.leaseHeartbeats.keys()) this.stopLeaseHeartbeat(attemptId)
+    this.leaseManager.stopAllHeartbeats()
   }
 
   protected abortOverdueAttempts(now = Date.now()): void {
@@ -624,38 +595,6 @@ export abstract class GraphAttemptScheduler {
         attempt.abort.abort(new Error('Graph node wall-time budget exhausted'))
       }
     }
-  }
-
-  private startLeaseHeartbeat(
-    runId: string,
-    nodeId: string,
-    attemptId: string,
-    lease: GraphPathLease,
-    abort: AbortController
-  ): void {
-    const timer = setInterval(() => {
-      void this.options.writes.renew(lease.leaseId).catch((error) => {
-        this.stopLeaseHeartbeat(attemptId)
-        abort.abort(new Error(`Graph write lease renewal failed: ${errorMessage(error)}`))
-        void this.requestSupervision(
-          runId,
-          'conflict',
-          [nodeId],
-          `Write lease renewal failed for ${attemptId}: ${errorMessage(error)}`
-        )
-      })
-    }, Math.max(
-      250,
-      Math.min(60_000, Math.floor(this.options.config().writeIsolation.leaseTtlMs / 3))
-    ))
-    timer.unref?.()
-    this.leaseHeartbeats.set(attemptId, { runId, timer })
-  }
-
-  private stopLeaseHeartbeat(attemptId: string): void {
-    const heartbeat = this.leaseHeartbeats.get(attemptId)
-    if (heartbeat) clearInterval(heartbeat.timer)
-    this.leaseHeartbeats.delete(attemptId)
   }
 
   protected async maybeRetry(runInput: GraphRunV1, nodeId: string): Promise<GraphRunV1> {

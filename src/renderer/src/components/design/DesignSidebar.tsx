@@ -3,30 +3,15 @@ import {
   useMemo,
   useRef,
   useState,
-  type DragEvent,
   type FormEvent,
   type ReactElement
 } from 'react'
 import {
-  ChevronDown,
-  ChevronRight,
-  Check,
-  FileCode2,
   FilePlus2,
-  Folder,
   FolderPlus,
-  FolderOpen,
-  Layers,
   Moon,
-  MoveRight,
-  Palette,
-  Pencil,
-  RotateCcw,
   Settings,
-  Spline,
   Sun,
-  Trash2,
-  TriangleAlert
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { SettingsRouteSection } from '../../store/chat-store'
@@ -36,27 +21,20 @@ import { workspaceLabelFromPath } from '../../lib/workspace-label'
 import { WorkspaceModeTabs } from '../chat/WorkspaceModeTabs'
 import { useDesignWorkspaceStore } from '../../design/design-workspace-store'
 import {
-  currentDesignArtifactVersion,
-  designArtifactVersionLabel,
-  designArtifactVersionNumber,
-  isFileDesignArtifactKind,
   type DesignArtifact,
   type DesignDocument,
   type DesignWorkspaceFolder
 } from '../../design/design-types'
 import {
-  designChildFolders,
   designFolderDescendantIds,
   designFolderNameExists
 } from '../../design/design-workspace-folders'
-import { readDesignDocumentsIndex, type DesignDocumentsIndex } from '../../design/design-document-persistence'
+import { readDesignDocumentsIndex } from '../../design/design-document-persistence'
 import { normalizeDesignWorkspaceRoot } from '../../design/design-workspace-lifecycle'
 import { builtinDesignWorkspaceRoot } from '../../design/design-workspace-store/helpers'
 import { designDocKey, readDesignThreadRegistry } from '../../design/design-thread-registry'
 import { collectAgentDrawingArtifactIds, groupDesignArtifacts } from '../../design/design-artifact-actions'
 import { findDesignBoardArtifact } from '../../design/design-board'
-import { displayDrawingTitle } from '../../design/design-drawing-title'
-import { drawingHistoryMutationMatches } from '../../design/design-drawing-history'
 import { useCanvasShapeStore } from '../../design/canvas/canvas-shape-store'
 import { useCanvasSelectionStore } from '../../design/canvas/canvas-selection-store'
 import { embeddedArtifactOf, isArtifactFrame, isHtmlFrame, shapeBounds } from '../../design/canvas/canvas-types'
@@ -64,16 +42,32 @@ import { useCanvasViewportStore } from '../../design/canvas/canvas-viewport-stor
 import {
   SidebarCommandRow,
   SidebarFrame,
-  SidebarIconButton,
-  SidebarSectionHeader,
-  SidebarTreeRow
+  SidebarIconButton
 } from '../sidebar/SidebarPrimitives'
 import {
   SidebarActionDialog,
   SidebarFolderDialog,
   type SidebarActionDialogState
 } from '../chat/SidebarProjectOverlays'
-import { CanvasLayersPanel } from './canvas/CanvasLayersPanel'
+import { DesignSidebarArtifactTree } from './DesignSidebarArtifactTree'
+import { DesignSidebarWorkspaceTree } from './DesignSidebarWorkspaceTree'
+import {
+  getDesignSidebarVisibleArtifacts,
+  sameDesignWorkspace,
+  uniqueDesignWorkspaceRoots,
+  workspaceIndexSnapshot,
+  type DraggedDocument,
+  type WorkspaceIndexSnapshot
+} from './design-sidebar-model'
+
+export {
+  getDesignSidebarArtifactVersionBadge,
+  getDesignSidebarDocumentArtifactCount,
+  getDesignSidebarDocumentLabel,
+  getDesignSidebarDocumentScreenCount,
+  getDesignSidebarVisibleArtifacts,
+  sortDesignSidebarDocuments
+} from './design-sidebar-model'
 
 type Props = {
   onCodeOpen: () => void
@@ -84,12 +78,6 @@ type Props = {
   onDeleteDrawing?: (documentId: string) => void | Promise<void>
 }
 
-type WorkspaceIndexSnapshot = {
-  documents: DesignDocument[]
-  folders: DesignWorkspaceFolder[]
-  activeDocumentId: string | null
-}
-
 type FolderDialogState = {
   mode: 'create' | 'rename'
   workspaceRoot: string
@@ -97,82 +85,6 @@ type FolderDialogState = {
   folder?: DesignWorkspaceFolder
   value: string
   error?: string
-}
-
-type DraggedDocument = {
-  workspaceRoot: string
-  documentId: string
-}
-
-function sameWorkspace(left: string, right: string): boolean {
-  return normalizeDesignWorkspaceRoot(left) === normalizeDesignWorkspaceRoot(right)
-}
-
-function uniqueWorkspaceRoots(roots: readonly string[]): string[] {
-  const seen = new Set<string>()
-  return roots.flatMap((root) => {
-    const normalized = normalizeDesignWorkspaceRoot(root)
-    if (!normalized || seen.has(normalized)) return []
-    seen.add(normalized)
-    return [normalized]
-  })
-}
-
-export function sortDesignSidebarDocuments(
-  documents: readonly DesignDocument[],
-  isRunning: (document: DesignDocument) => boolean
-): DesignDocument[] {
-  return documents.slice().sort((left, right) => {
-    const runningDifference = Number(isRunning(right)) - Number(isRunning(left))
-    if (runningDifference !== 0) return runningDifference
-    return right.updatedAt.localeCompare(left.updatedAt) || right.createdAt.localeCompare(left.createdAt)
-  })
-}
-
-function workspaceIndexSnapshot(index: DesignDocumentsIndex): WorkspaceIndexSnapshot {
-  return {
-    activeDocumentId: index.activeDocumentId,
-    folders: index.folders,
-    documents: index.documents.map((document) => ({ ...document, artifacts: [] }))
-  }
-}
-
-function designFolderOptions(
-  folders: readonly DesignWorkspaceFolder[],
-  parentId: string | null = null,
-  prefix = ''
-): Array<{ id: string; label: string }> {
-  return designChildFolders(folders, parentId).flatMap((folder) => [
-    { id: folder.id, label: `${prefix}${folder.name}` },
-    ...designFolderOptions(folders, folder.id, `${prefix}— `)
-  ])
-}
-
-export function getDesignSidebarVisibleArtifacts(artifacts: readonly DesignArtifact[]): DesignArtifact[] {
-  return artifacts.filter((artifact) => artifact.node?.boardHidden !== true)
-}
-
-export function getDesignSidebarDocumentScreenCount(doc: Pick<DesignDocument, 'artifacts'>): number {
-  return getDesignSidebarVisibleArtifacts(doc.artifacts).filter((artifact) => artifact.kind === 'html').length
-}
-
-/** Visible first-class HTML/SVG artifacts; excludes the implementation board. */
-export function getDesignSidebarDocumentArtifactCount(doc: Pick<DesignDocument, 'artifacts'>): number {
-  return getDesignSidebarVisibleArtifacts(doc.artifacts).filter((artifact) => isFileDesignArtifactKind(artifact.kind)).length
-}
-
-export function getDesignSidebarDocumentLabel(
-  doc: Pick<DesignDocument, 'id' | 'title' | 'titleOrigin'>,
-  untitledLabel = 'Untitled drawing'
-): string {
-  return displayDrawingTitle(doc, untitledLabel)
-}
-
-export function getDesignSidebarArtifactVersionBadge(artifact: DesignArtifact): string | null {
-  const current = currentDesignArtifactVersion(artifact)
-  const versionNumber = current ? designArtifactVersionNumber(current) : null
-  if ((versionNumber ?? artifact.versions.length) <= 1 && artifact.versions.length <= 1) return null
-  return designArtifactVersionLabel(current, Math.max(1, artifact.versions.length))
 }
 
 /**
@@ -282,7 +194,7 @@ export function DesignSidebar({
     () => visibleArtifacts.filter((artifact) => artifact.kind === 'html' && agentDrawingArtifactIds.has(artifact.id)),
     [agentDrawingArtifactIds, visibleArtifacts]
   )
-  const knownWorkspaceRoots = useMemo(() => uniqueWorkspaceRoots([
+  const knownWorkspaceRoots = useMemo(() => uniqueDesignWorkspaceRoots([
     defaultWorkspaceRoot,
     ...configuredWorkspaceRoots,
     workspaceRoot
@@ -297,7 +209,7 @@ export function DesignSidebar({
         settings.design.defaultWorkspaceRoot || builtinDesignWorkspaceRoot()
       )
       setDefaultWorkspaceRoot(defaultRoot)
-      setConfiguredWorkspaceRoots(uniqueWorkspaceRoots([defaultRoot, ...settings.design.workspaces]))
+      setConfiguredWorkspaceRoots(uniqueDesignWorkspaceRoots([defaultRoot, ...settings.design.workspaces]))
     }).catch(() => undefined)
     return () => {
       disposed = true
@@ -314,7 +226,7 @@ export function DesignSidebar({
 
   useEffect(() => {
     let disposed = false
-    const rootsToLoad = knownWorkspaceRoots.filter((root) => !sameWorkspace(root, workspaceRoot))
+    const rootsToLoad = knownWorkspaceRoots.filter((root) => !sameDesignWorkspace(root, workspaceRoot))
     void Promise.all(rootsToLoad.map(async (root) => [root, workspaceIndexSnapshot(
       await readDesignDocumentsIndex(root)
     )] as const)).then((entries) => {
@@ -380,14 +292,14 @@ export function DesignSidebar({
     const effectiveDefaultRoot = normalizeDesignWorkspaceRoot(
       settings.design.defaultWorkspaceRoot || builtinDesignWorkspaceRoot()
     )
-    const roots = uniqueWorkspaceRoots([
+    const roots = uniqueDesignWorkspaceRoots([
       effectiveDefaultRoot,
       ...settings.design.workspaces,
       workspaceRoot,
       ...(options?.remove ? [] : [normalizedRoot])
-    ]).filter((candidate) => !options?.remove || !sameWorkspace(candidate, normalizedRoot))
+    ]).filter((candidate) => !options?.remove || !sameDesignWorkspace(candidate, normalizedRoot))
     const nextActive = options?.remove
-      ? uniqueWorkspaceRoots([effectiveDefaultRoot, ...roots])[0] ?? ''
+      ? uniqueDesignWorkspaceRoots([effectiveDefaultRoot, ...roots])[0] ?? ''
       : normalizedRoot
     const saved = await rendererRuntimeClient.setSettings({
       design: { workspaces: roots, activeWorkspaceRoot: nextActive }
@@ -396,14 +308,14 @@ export function DesignSidebar({
       saved.design.defaultWorkspaceRoot || builtinDesignWorkspaceRoot()
     )
     setDefaultWorkspaceRoot(savedDefaultRoot)
-    setConfiguredWorkspaceRoots(uniqueWorkspaceRoots([savedDefaultRoot, ...saved.design.workspaces]))
+    setConfiguredWorkspaceRoots(uniqueDesignWorkspaceRoots([savedDefaultRoot, ...saved.design.workspaces]))
   }
 
   const activateWorkspace = async (root: string, documentId?: string): Promise<boolean> => {
     const normalizedRoot = normalizeDesignWorkspaceRoot(root)
     if (!normalizedRoot || navigationLocked || workspaceSwitchingRef.current) return false
     const store = useDesignWorkspaceStore.getState()
-    if (!sameWorkspace(store.workspaceRoot, normalizedRoot)) {
+    if (!sameDesignWorkspace(store.workspaceRoot, normalizedRoot)) {
       const activation = ++workspaceActivationRef.current
       workspaceSwitchingRef.current = true
       setWorkspaceSwitching(true)
@@ -442,7 +354,7 @@ export function DesignSidebar({
   }
 
   const handleSelectDocument = async (root: string, documentId: string): Promise<void> => {
-    if (navigationLocked || (sameWorkspace(root, workspaceRoot) && documentId === activeDocumentId)) return
+    if (navigationLocked || (sameDesignWorkspace(root, workspaceRoot) && documentId === activeDocumentId)) return
     closeImplementPanel()
     useCanvasSelectionStore.getState().clearSelection()
     cancelDrawingCreation()
@@ -457,7 +369,7 @@ export function DesignSidebar({
   }
 
   const handleRemoveWorkspace = (root: string): void => {
-    if (navigationLocked || sameWorkspace(root, resolvedDefaultWorkspaceRoot)) return
+    if (navigationLocked || sameDesignWorkspace(root, resolvedDefaultWorkspaceRoot)) return
     setFolderActionDialog({
       title: t('sidebarWorkspaceRemoveDialogTitle', { name: workspaceLabelFromPath(root) }),
       description: t('sidebarWorkspaceRemoveDialogDescription'),
@@ -467,9 +379,9 @@ export function DesignSidebar({
       submitting: false,
       onConfirm: async () => {
         await persistWorkspaceSelection(root, { remove: true })
-        if (sameWorkspace(root, workspaceRoot)) {
-          const fallback = uniqueWorkspaceRoots([defaultWorkspaceRoot, ...configuredWorkspaceRoots])
-            .find((candidate) => !sameWorkspace(candidate, root))
+        if (sameDesignWorkspace(root, workspaceRoot)) {
+          const fallback = uniqueDesignWorkspaceRoots([defaultWorkspaceRoot, ...configuredWorkspaceRoots])
+            .find((candidate) => !sameDesignWorkspace(candidate, root))
           if (fallback) await activateWorkspace(fallback)
         }
       }
@@ -550,209 +462,30 @@ export function DesignSidebar({
     if (!boardArtifact) setActiveArtifact(artifact.id)
   }
 
-  const renderArtifactStatus = (artifact: DesignArtifact): ReactElement | null => {
-    const implemented = Boolean(artifact.implementedAt)
-    if (!implemented) return null
-    const drift = (artifact.implementedAt ?? '') < artifact.updatedAt
-    const codeDrift =
-      !drift &&
-      Boolean(artifact.implementedDesignSystemHash) &&
-      Boolean(designSystemHash) &&
-      artifact.implementedDesignSystemHash !== designSystemHash
-    const title = drift ? t('designDrift') : codeDrift ? t('designCodeDrift') : t('designImplemented')
-    const Icon = drift ? RotateCcw : codeDrift ? TriangleAlert : Check
-    return (
-      <span
-        title={title}
-        aria-label={title}
-        className={`inline-flex h-5 w-5 shrink-0 items-center justify-center ${
-          drift ? 'text-[#c98a3a]' : codeDrift ? 'text-[#c0392b]' : 'text-[#2e9e6b]'
-        }`}
-      >
-        <Icon className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
-      </span>
-    )
-  }
-
-  const renderArtifactRows = (items: DesignArtifact[]): ReactElement => (
-    <ul className="space-y-1">
-      {items.map((artifact) => {
-        const active = artifact.id === activeArtifactId || artifact.id === selectedEmbeddedArtifactId
-        const status = renderArtifactStatus(artifact)
-        const versionBadge = getDesignSidebarArtifactVersionBadge(artifact)
-        return (
-          <li key={artifact.id}>
-            {editingId === artifact.id ? (
-              <div className="flex min-h-[34px] items-center rounded-[8px] bg-[var(--ds-sidebar-row-active)] px-2.5 py-1 shadow-[inset_0_0_0_1px_var(--ds-sidebar-row-ring)]">
-                <input
-                  autoFocus
-                  value={draft}
-                  onChange={(e) => setDraft(e.target.value)}
-                  onBlur={() => commitRename(artifact.id)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') commitRename(artifact.id)
-                    else if (e.key === 'Escape') setEditingId(null)
-                  }}
-                  className="h-7 min-w-0 flex-1 rounded-md border border-[var(--ds-sidebar-row-ring)] bg-[var(--ds-sidebar-field-focus)] px-2 text-[13px] text-[#1f2733] outline-none focus:border-[#3b82d8] dark:text-white"
-                />
-              </div>
-            ) : (
-              <SidebarTreeRow
-                active={active}
-                onClick={() => artifact.kind === 'svg'
-                  ? handleSelectAgentDrawing(artifact)
-                  : setActiveArtifact(artifact.id)}
-                onDoubleClick={() => beginRename(artifact.id, artifact.title)}
-                title={artifact.title}
-                className="min-h-[34px]"
-                buttonClassName="items-center gap-2 px-2.5 py-2"
-                trailing={
-                  <>
-                    {versionBadge ? (
-                      <span className="text-[11.5px] text-ds-faint">{versionBadge}</span>
-                    ) : null}
-                    {status}
-                  </>
-                }
-                actions={
-                  <SidebarIconButton
-                    onClick={() => removeArtifact(artifact.id)}
-                    title={t('designDeleteArtifact')}
-                    ariaLabel={t('designDeleteArtifact')}
-                    tone="danger"
-                    stopPropagation
-                  >
-                    <Trash2 className="h-3.5 w-3.5" strokeWidth={1.9} />
-                  </SidebarIconButton>
-                }
-              >
-                {artifact.kind === 'canvas' ? (
-                  <Layers className="h-3.5 w-3.5 shrink-0 text-ds-muted" strokeWidth={1.9} />
-                ) : artifact.kind === 'svg' ? (
-                  <Spline className="h-3.5 w-3.5 shrink-0 text-[#6557ff]" strokeWidth={1.9} />
-                ) : (
-                  <FileCode2 className="h-3.5 w-3.5 shrink-0 text-ds-muted" strokeWidth={1.9} />
-                )}
-                <span className="min-w-0 flex-1 truncate">{artifact.title}</span>
-              </SidebarTreeRow>
-            )}
-          </li>
-        )
-      })}
-    </ul>
-  )
-
-  const renderAgentDrawingRows = (items: DesignArtifact[]): ReactElement => {
-    const scrollable = items.length > 5
-    return (
-      <div className={scrollable ? 'max-h-[190px] overflow-y-auto pr-1' : undefined}>
-        <ul className="space-y-1">
-          {items.map((artifact) => {
-            const active = artifact.id === activeArtifactId || artifact.id === selectedHtmlArtifactId
-            const status = renderArtifactStatus(artifact)
-            const versionBadge = getDesignSidebarArtifactVersionBadge(artifact)
-            return (
-              <li key={artifact.id}>
-                {editingId === artifact.id ? (
-                  <div className="flex min-h-[34px] items-center rounded-[8px] bg-[var(--ds-sidebar-row-active)] px-2.5 py-1 shadow-[inset_0_0_0_1px_var(--ds-sidebar-row-ring)]">
-                    <input
-                      autoFocus
-                      value={draft}
-                      onChange={(e) => setDraft(e.target.value)}
-                      onBlur={() => commitRename(artifact.id)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') commitRename(artifact.id)
-                        else if (e.key === 'Escape') setEditingId(null)
-                      }}
-                      className="h-7 min-w-0 flex-1 rounded-md border border-[var(--ds-sidebar-row-ring)] bg-[var(--ds-sidebar-field-focus)] px-2 text-[13px] text-[#1f2733] outline-none focus:border-[#3b82d8] dark:text-white"
-                    />
-                  </div>
-                ) : (
-                  <SidebarTreeRow
-                    active={active}
-                    onClick={() => handleSelectAgentDrawing(artifact)}
-                    onDoubleClick={() => beginRename(artifact.id, artifact.title)}
-                    title={artifact.title}
-                    className="min-h-[34px]"
-                    buttonClassName="items-center gap-2 px-2.5 py-2"
-                    trailing={
-                      <>
-                        {versionBadge ? (
-                          <span className="text-[11.5px] text-ds-faint">{versionBadge}</span>
-                        ) : null}
-                        {status}
-                      </>
-                    }
-                    actions={
-                      <SidebarIconButton
-                        onClick={() => removeArtifact(artifact.id)}
-                        title={t('designDeleteArtifact')}
-                        ariaLabel={t('designDeleteArtifact')}
-                        tone="danger"
-                        stopPropagation
-                      >
-                        <Trash2 className="h-3.5 w-3.5" strokeWidth={1.9} />
-                      </SidebarIconButton>
-                    }
-                  >
-                    <Palette className="h-3.5 w-3.5 shrink-0 text-ds-muted" strokeWidth={1.9} />
-                    <span className="min-w-0 flex-1 truncate">{artifact.title}</span>
-                  </SidebarTreeRow>
-                )}
-              </li>
-            )
-          })}
-        </ul>
-      </div>
-    )
-  }
-
-  const renderAgentDrawingsSection = (items: DesignArtifact[]): ReactElement => {
-    const toggleLabel = t(agentDrawingsOpen ? 'designAgentDrawingsCollapse' : 'designAgentDrawingsExpand')
-    return (
-      <section>
-        <button
-          type="button"
-          onClick={() => setAgentDrawingsOpen((open) => !open)}
-          title={toggleLabel}
-          aria-label={toggleLabel}
-          className="flex w-full items-center gap-1 px-2.5 pb-2 pt-5 text-left text-[12px] font-normal text-[#9aa5b5] transition hover:text-ds-muted dark:text-white/35 dark:hover:text-white/55"
-        >
-          {agentDrawingsOpen ? (
-            <ChevronDown className="h-3.5 w-3.5 shrink-0" strokeWidth={1.8} />
-          ) : (
-            <ChevronRight className="h-3.5 w-3.5 shrink-0" strokeWidth={1.8} />
-          )}
-          <span className="min-w-0 flex-1 truncate">{t('designAgentDrawingsTitle')}</span>
-          <span className="shrink-0 text-[11.5px] text-ds-faint">{items.length}</span>
-        </button>
-        {agentDrawingsOpen ? renderAgentDrawingRows(items) : null}
-      </section>
-    )
-  }
-
-  // The board canvas is an implementation surface, so keep the tree focused on
-  // user-created drafts while exposing board layers below.
   const renderActiveDocBody = (): ReactElement => {
-    const items = [
-      ...grouped.html.filter((artifact) => !agentDrawingArtifactIds.has(artifact.id)),
-      ...grouped.svg
-    ]
     return (
-      <div className="ml-3 mt-0.5 space-y-1 border-l border-[var(--ds-sidebar-row-ring)] pl-2">
-        {items.length > 0 ? (
-          renderArtifactRows(items)
-        ) : agentDrawingArtifacts.length === 0 && activeArtifact?.kind !== 'canvas' ? (
-          <div className="px-2.5 py-1.5 text-[12px] leading-5 text-ds-faint">{t('designDocEmpty')}</div>
-        ) : null}
-        {agentDrawingArtifacts.length > 0 ? renderAgentDrawingsSection(agentDrawingArtifacts) : null}
-        {activeArtifact?.kind === 'canvas' ? (
-          <section>
-            <SidebarSectionHeader label={t('canvasLayersTitle')} />
-            <CanvasLayersPanel />
-          </section>
-        ) : null}
-      </div>
+      <DesignSidebarArtifactTree
+        activeArtifact={activeArtifact}
+        activeArtifactId={activeArtifactId}
+        agentDrawingArtifactIds={agentDrawingArtifactIds}
+        agentDrawingArtifacts={agentDrawingArtifacts}
+        agentDrawingsOpen={agentDrawingsOpen}
+        designSystemHash={designSystemHash}
+        draft={draft}
+        editingId={editingId}
+        grouped={grouped}
+        selectedEmbeddedArtifactId={selectedEmbeddedArtifactId}
+        selectedHtmlArtifactId={selectedHtmlArtifactId}
+        t={t}
+        onBeginRename={beginRename}
+        onCommitRename={commitRename}
+        onRemoveArtifact={removeArtifact}
+        onSelectAgentDrawing={handleSelectAgentDrawing}
+        onSetActiveArtifact={setActiveArtifact}
+        setAgentDrawingsOpen={setAgentDrawingsOpen}
+        setDraft={setDraft}
+        setEditingId={setEditingId}
+      />
     )
   }
 
@@ -769,7 +502,7 @@ export function DesignSidebar({
 
   const deleteFolder = (root: string, folder: DesignWorkspaceFolder, folders: readonly DesignWorkspaceFolder[]): void => {
     if (navigationLocked) return
-    const snapshot = sameWorkspace(root, workspaceRoot)
+    const snapshot = sameDesignWorkspace(root, workspaceRoot)
       ? { documents, folders }
       : workspaceIndexes[root] ?? { documents: [], folders, activeDocumentId: null }
     const directCount = snapshot.documents.filter((document) => document.folderId === folder.id).length
@@ -794,352 +527,6 @@ export function DesignSidebar({
     })
   }
 
-  const renderDocument = (
-    root: string,
-    doc: DesignDocument,
-    folders: readonly DesignWorkspaceFolder[]
-  ): ReactElement => {
-    const isCurrentWorkspace = sameWorkspace(root, workspaceRoot)
-    const isActive = isCurrentWorkspace && doc.id === activeDocumentId
-    const historyMutationPending = isCurrentWorkspace && drawingHistoryMutationMatches(
-      drawingHistoryMutation,
-      workspaceRoot,
-      doc.id
-    )
-    const artifactCount = isCurrentWorkspace ? getDesignSidebarDocumentArtifactCount(doc) : 0
-    const documentLabel = getDesignSidebarDocumentLabel(doc, t('designUntitledDrawing'))
-    const movableFolders = designFolderOptions(folders)
-    return (
-      <li key={`${root}:${doc.id}`}>
-        {isActive && editingDocId === doc.id ? (
-          <div className="flex min-h-[34px] items-center rounded-[8px] bg-[var(--ds-sidebar-row-active)] px-2.5 py-1 shadow-[inset_0_0_0_1px_var(--ds-sidebar-row-ring)]">
-            <input
-              autoFocus
-              value={docDraft}
-              onChange={(e) => setDocDraft(e.target.value)}
-              onBlur={() => commitRenameDoc(doc.id)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') commitRenameDoc(doc.id)
-                else if (e.key === 'Escape') setEditingDocId(null)
-              }}
-              className="h-7 min-w-0 flex-1 rounded-md border border-[var(--ds-sidebar-row-ring)] bg-[var(--ds-sidebar-field-focus)] px-2 text-[13px] text-[#1f2733] outline-none focus:border-[#3b82d8] dark:text-white"
-            />
-          </div>
-        ) : (
-          <SidebarTreeRow
-            active={isActive}
-            disabled={navigationLocked || (historyMutationPending && drawingHistoryMutation?.kind === 'delete')}
-            draggable={!navigationLocked}
-            onDragStart={(event: DragEvent<HTMLDivElement>) => {
-              event.dataTransfer.effectAllowed = 'move'
-              event.dataTransfer.setData('application/x-kun-design-document', JSON.stringify({
-                workspaceRoot: root,
-                documentId: doc.id
-              } satisfies DraggedDocument))
-              setDraggingDocument({ workspaceRoot: root, documentId: doc.id })
-            }}
-            onDragEnd={() => {
-              setDraggingDocument(null)
-              setDragOverFolderKey(null)
-            }}
-            onClick={() => void handleSelectDocument(root, doc.id)}
-            onDoubleClick={() => {
-              if (navigationLocked) return
-              void activateWorkspace(root, doc.id).then((activated) => {
-                if (activated) beginRenameDoc(doc.id, documentLabel)
-              })
-            }}
-            title={documentLabel}
-            className="min-h-[34px]"
-            buttonClassName="items-center gap-2 px-2.5 py-2"
-            trailing={
-              moveDocumentId === doc.id && isCurrentWorkspace ? (
-                <select
-                  value={doc.folderId ?? ''}
-                  aria-label={t('designMoveDocument')}
-                  onPointerDown={(event) => event.stopPropagation()}
-                  onClick={(event) => event.stopPropagation()}
-                  onChange={(event) => void moveDocumentToFolder(root, doc.id, event.target.value || null)}
-                  className="max-w-[110px] rounded border border-[var(--ds-sidebar-row-ring)] bg-[var(--ds-sidebar-field-focus)] px-1 py-0.5 text-[11px] text-ds-muted outline-none"
-                >
-                  <option value="">{t('designWorkspaceRoot')}</option>
-                  {movableFolders.map((folder) => <option key={folder.id} value={folder.id}>{folder.label}</option>)}
-                </select>
-              ) : artifactCount > 0 ? (
-                <span className="text-[11.5px] text-ds-faint">{artifactCount}</span>
-              ) : null
-            }
-            actionsVisibility="hidden"
-            actionsLayout="inline"
-            actions={
-              <>
-                <SidebarIconButton
-                  onClick={() => void openMoveDocumentMenu(root, doc.id)}
-                  disabled={navigationLocked || historyMutationPending}
-                  title={t('designMoveDocument')}
-                  ariaLabel={t('designMoveDocument')}
-                  stopPropagation
-                  className="h-6 w-6"
-                >
-                  <MoveRight className="h-3.5 w-3.5" strokeWidth={1.8} />
-                </SidebarIconButton>
-                <SidebarIconButton
-                  onClick={() => {
-                    if (navigationLocked) return
-                    void activateWorkspace(root, doc.id).then((activated) => {
-                      if (activated) beginRenameDoc(doc.id, documentLabel)
-                    })
-                  }}
-                  disabled={navigationLocked || historyMutationPending}
-                  title={t('designRenameDocument')}
-                  ariaLabel={t('designRenameDocument')}
-                  stopPropagation
-                  className="h-6 w-6"
-                >
-                  <Pencil className="h-3.5 w-3.5" strokeWidth={1.9} />
-                </SidebarIconButton>
-                <SidebarIconButton
-                  onClick={() => void deleteDocumentInWorkspace(root, doc.id)}
-                  title={t('designDeleteDocument')}
-                  ariaLabel={t('designDeleteDocument')}
-                  disabled={navigationLocked || Boolean(drawingHistoryMutation)}
-                  tone="danger"
-                  stopPropagation
-                  className="h-6 w-6"
-                >
-                  <Trash2 className="h-3.5 w-3.5" strokeWidth={1.9} />
-                </SidebarIconButton>
-              </>
-            }
-          >
-            {isActive ? (
-              <FolderOpen className="h-3.5 w-3.5 shrink-0 text-[#3b82d8]" strokeWidth={1.9} />
-            ) : (
-              <Folder className="h-3.5 w-3.5 shrink-0 text-ds-muted" strokeWidth={1.9} />
-            )}
-            <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
-              <span className="min-w-0 truncate">{documentLabel}</span>
-            </span>
-          </SidebarTreeRow>
-        )}
-        {isActive ? renderActiveDocBody() : null}
-      </li>
-    )
-  }
-
-  const renderFolder = (
-    root: string,
-    folder: DesignWorkspaceFolder,
-    snapshot: WorkspaceIndexSnapshot
-  ): ReactElement => {
-    const folderKey = `${normalizeDesignWorkspaceRoot(root)}:${folder.id}`
-    const collapsed = collapsedFolders[folderKey] === true
-    const children = designChildFolders(snapshot.folders, folder.id)
-    const folderDocuments = sortDesignSidebarDocuments(
-      snapshot.documents.filter((document) => document.folderId === folder.id),
-      (document) => documentIsRunning(root, document)
-    )
-    const folderDocumentCount = snapshot.documents.filter((document) =>
-      designFolderDescendantIds(snapshot.folders, folder.id).has(document.folderId ?? '')
-    ).length
-    const isDragOver = dragOverFolderKey === folderKey
-    return (
-      <li key={folderKey}>
-        <SidebarTreeRow
-          title={folder.name}
-          ariaLabel={t('designFolderAriaLabel', { name: folder.name, count: folderDocumentCount })}
-          disabled={navigationLocked}
-          onClick={() => setCollapsedFolders((current) => ({ ...current, [folderKey]: !collapsed }))}
-          onDragOver={(event) => {
-            const dragged = draggingDocument ?? (() => {
-              try { return JSON.parse(event.dataTransfer.getData('application/x-kun-design-document')) as DraggedDocument } catch { return null }
-            })()
-            if (!dragged || !sameWorkspace(dragged.workspaceRoot, root) || navigationLocked) return
-            event.preventDefault()
-            event.dataTransfer.dropEffect = 'move'
-            setDragOverFolderKey(folderKey)
-          }}
-          onDragLeave={() => setDragOverFolderKey((current) => current === folderKey ? null : current)}
-          onDrop={(event) => {
-            event.preventDefault()
-            const dragged = draggingDocument ?? (() => {
-              try { return JSON.parse(event.dataTransfer.getData('application/x-kun-design-document')) as DraggedDocument } catch { return null }
-            })()
-            setDragOverFolderKey(null)
-            setDraggingDocument(null)
-            if (!dragged || !sameWorkspace(dragged.workspaceRoot, root) || navigationLocked) return
-            void moveDocumentToFolder(root, dragged.documentId, folder.id)
-          }}
-          className={`min-h-[32px] ${isDragOver ? 'bg-accent/10 shadow-[inset_0_0_0_1px_rgba(79,124,255,0.32)]' : ''}`}
-          buttonClassName="items-center gap-1.5 px-2 py-1.5"
-          actionsVisibility="hidden"
-          actionsLayout="inline"
-          actions={
-            <>
-              <SidebarIconButton
-                onClick={() => openFolderDialog(root, 'create', folder.id)}
-                disabled={navigationLocked}
-                title={t('sidebarFolderCreateChild')}
-                ariaLabel={t('sidebarFolderCreateChild')}
-                stopPropagation
-                className="h-6 w-6"
-              >
-                <FolderPlus className="h-3.5 w-3.5" strokeWidth={1.8} />
-              </SidebarIconButton>
-              <SidebarIconButton
-                onClick={() => void handleNewDocument(root, folder.id)}
-                disabled={navigationLocked}
-                title={t('designNewDocument')}
-                ariaLabel={t('designNewDocument')}
-                stopPropagation
-                className="h-6 w-6"
-              >
-                <FilePlus2 className="h-3.5 w-3.5" strokeWidth={1.8} />
-              </SidebarIconButton>
-              <SidebarIconButton
-                onClick={() => openFolderDialog(root, 'rename', folder.parentId, folder)}
-                disabled={navigationLocked}
-                title={t('sidebarFolderRename')}
-                ariaLabel={t('sidebarFolderRename')}
-                stopPropagation
-                className="h-6 w-6"
-              >
-                <Pencil className="h-3.5 w-3.5" strokeWidth={1.8} />
-              </SidebarIconButton>
-              <SidebarIconButton
-                onClick={() => deleteFolder(root, folder, snapshot.folders)}
-                disabled={navigationLocked}
-                title={t('sidebarFolderDelete')}
-                ariaLabel={t('sidebarFolderDelete')}
-                tone="danger"
-                stopPropagation
-                className="h-6 w-6"
-              >
-                <Trash2 className="h-3.5 w-3.5" strokeWidth={1.8} />
-              </SidebarIconButton>
-            </>
-          }
-        >
-          {collapsed ? (
-            <ChevronRight className="h-3 w-3 shrink-0 text-ds-faint" strokeWidth={2} />
-          ) : (
-            <ChevronDown className="h-3 w-3 shrink-0 text-ds-faint" strokeWidth={2} />
-          )}
-          {collapsed ? (
-            <Folder className="h-3.5 w-3.5 shrink-0 text-ds-muted" strokeWidth={1.8} />
-          ) : (
-            <FolderOpen className="h-3.5 w-3.5 shrink-0 text-ds-muted" strokeWidth={1.8} />
-          )}
-          <span className="min-w-0 flex-1 truncate">{folder.name}</span>
-          {folderDocumentCount > 0 ? <span className="text-[11.5px] text-ds-faint">{folderDocumentCount}</span> : null}
-        </SidebarTreeRow>
-        {!collapsed ? (
-          <ul className="ml-3 mt-0.5 space-y-0.5 border-l border-[var(--ds-sidebar-row-ring)] pl-2">
-            {children.map((child) => renderFolder(root, child, snapshot))}
-            {folderDocuments.map((document) => renderDocument(root, document, snapshot.folders))}
-          </ul>
-        ) : null}
-      </li>
-    )
-  }
-
-  const renderWorkspace = (root: string): ReactElement => {
-    const isCurrentWorkspace = sameWorkspace(root, workspaceRoot)
-    const snapshot = isCurrentWorkspace
-      ? { documents, folders: workspaceFolders, activeDocumentId }
-      : workspaceIndexes[root] ?? { documents: [], folders: [], activeDocumentId: null }
-    const collapsed = collapsedWorkspaces[root] === true
-    const rootFolders = designChildFolders(snapshot.folders, null)
-    const rootDocuments = sortDesignSidebarDocuments(
-      snapshot.documents.filter((document) => !document.folderId),
-      (document) => documentIsRunning(root, document)
-    )
-    const isDragOver = dragOverFolderKey === `${root}:root`
-    return (
-      <section key={root} className="mb-2">
-        <SidebarTreeRow
-          title={root}
-          onClick={() => setCollapsedWorkspaces((current) => ({ ...current, [root]: !collapsed }))}
-          onDragOver={(event) => {
-            const dragged = draggingDocument
-            if (!dragged || !sameWorkspace(dragged.workspaceRoot, root) || navigationLocked) return
-            event.preventDefault()
-            event.dataTransfer.dropEffect = 'move'
-            setDragOverFolderKey(`${root}:root`)
-          }}
-          onDragLeave={() => setDragOverFolderKey((current) => current === `${root}:root` ? null : current)}
-          onDrop={(event) => {
-            event.preventDefault()
-            const dragged = draggingDocument
-            setDragOverFolderKey(null)
-            setDraggingDocument(null)
-            if (!dragged || !sameWorkspace(dragged.workspaceRoot, root) || navigationLocked) return
-            void moveDocumentToFolder(root, dragged.documentId, null)
-          }}
-          className={`min-h-[36px] text-[13.5px] ${isDragOver ? 'bg-accent/10 shadow-[inset_0_0_0_1px_rgba(79,124,255,0.32)]' : ''}`}
-          buttonClassName="items-center gap-2 px-2.5 py-2"
-          actionsVisibility="hidden"
-          actionsLayout="inline"
-          actions={
-            <>
-              <SidebarIconButton
-                onClick={() => openFolderDialog(root, 'create')}
-                disabled={navigationLocked}
-                title={t('sidebarFolderCreate')}
-                ariaLabel={t('sidebarFolderCreate')}
-                stopPropagation
-                className="h-6 w-6"
-              >
-                <FolderPlus className="h-3.5 w-3.5" strokeWidth={1.8} />
-              </SidebarIconButton>
-              <SidebarIconButton
-                onClick={() => void handleNewDocument(root)}
-                disabled={navigationLocked}
-                title={t('designNewDocument')}
-                ariaLabel={t('designNewDocument')}
-                stopPropagation
-                className="h-6 w-6"
-              >
-                <FilePlus2 className="h-3.5 w-3.5" strokeWidth={1.8} />
-              </SidebarIconButton>
-              {!sameWorkspace(root, resolvedDefaultWorkspaceRoot) ? (
-                <SidebarIconButton
-                  onClick={() => handleRemoveWorkspace(root)}
-                  disabled={navigationLocked}
-                  title={t('sidebarWorkspaceRemove')}
-                  ariaLabel={t('sidebarWorkspaceRemove')}
-                  tone="danger"
-                  stopPropagation
-                  className="h-6 w-6"
-                >
-                  <Trash2 className="h-3.5 w-3.5" strokeWidth={1.8} />
-                </SidebarIconButton>
-              ) : null}
-            </>
-          }
-        >
-          {collapsed ? (
-            <ChevronRight className="h-3.5 w-3.5 shrink-0 text-ds-faint" strokeWidth={2} />
-          ) : (
-            <ChevronDown className="h-3.5 w-3.5 shrink-0 text-ds-faint" strokeWidth={2} />
-          )}
-          {collapsed ? (
-            <Folder className="h-4 w-4 shrink-0 text-ds-muted" strokeWidth={1.75} />
-          ) : (
-            <FolderOpen className="h-4 w-4 shrink-0 text-ds-muted" strokeWidth={1.75} />
-          )}
-          <span className="min-w-0 flex-1 truncate">{workspaceLabelFromPath(root)}</span>
-          <span className="max-w-[34%] truncate text-[11.5px] text-ds-faint">{root}</span>
-        </SidebarTreeRow>
-        {!collapsed ? (
-          <ul className="mt-1 space-y-0.5 pl-4">
-            {rootFolders.map((folder) => renderFolder(root, folder, snapshot))}
-            {rootDocuments.map((document) => renderDocument(root, document, snapshot.folders))}
-          </ul>
-        ) : null}
-      </section>
-    )
-  }
 
   const confirmFolderAction = (): void => {
     const action = folderActionDialog
@@ -1219,7 +606,44 @@ export function DesignSidebar({
                 <p className="mt-1 text-[13px] leading-5 text-ds-faint">{t('designSidebarEmpty')}</p>
               </div>
             ) : (
-              <div className="space-y-0.5">{knownWorkspaceRoots.map(renderWorkspace)}</div>
+              <DesignSidebarWorkspaceTree
+                activeDocumentId={activeDocumentId}
+                collapsedFolders={collapsedFolders}
+                collapsedWorkspaces={collapsedWorkspaces}
+                docDraft={docDraft}
+                documents={documents}
+                draggingDocument={draggingDocument}
+                dragOverFolderKey={dragOverFolderKey}
+                drawingHistoryMutation={drawingHistoryMutation}
+                editingDocId={editingDocId}
+                moveDocumentId={moveDocumentId}
+                navigationLocked={navigationLocked}
+                resolvedDefaultWorkspaceRoot={resolvedDefaultWorkspaceRoot}
+                t={t}
+                workspaceFolders={workspaceFolders}
+                workspaceIndexes={workspaceIndexes}
+                workspaceRoot={workspaceRoot}
+                workspaceRoots={knownWorkspaceRoots}
+                onActivateWorkspace={activateWorkspace}
+                onBeginRenameDocument={beginRenameDoc}
+                onCommitRenameDocument={commitRenameDoc}
+                onDeleteDocument={deleteDocumentInWorkspace}
+                onDeleteFolder={deleteFolder}
+                onDocumentIsRunning={documentIsRunning}
+                onMoveDocumentToFolder={moveDocumentToFolder}
+                onNewDocument={handleNewDocument}
+                onOpenFolderDialog={openFolderDialog}
+                onOpenMoveDocumentMenu={openMoveDocumentMenu}
+                onRemoveWorkspace={handleRemoveWorkspace}
+                onSelectDocument={handleSelectDocument}
+                renderActiveDocumentContent={renderActiveDocBody}
+                setCollapsedFolders={setCollapsedFolders}
+                setCollapsedWorkspaces={setCollapsedWorkspaces}
+                setDocDraft={setDocDraft}
+                setDraggingDocument={setDraggingDocument}
+                setDragOverFolderKey={setDragOverFolderKey}
+                setEditingDocId={setEditingDocId}
+              />
             )}
           </div>
         </div>

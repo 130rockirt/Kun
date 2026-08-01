@@ -24,6 +24,11 @@ import type { RuntimeEventRecorder } from '../services/runtime-event-recorder.js
 import { applyGraphEvent } from './graph-reducer.js'
 import { assertValidGraphPlan } from './graph-validator.js'
 import { FileGraphRunIndex } from './graph-run-index.js'
+import {
+  checksumJson,
+  diagnosticForStoreError,
+  isTerminalRunStatus
+} from './graph-run-store-support.js'
 
 const GraphJournalRecordSchema = z.object({
   checksum: z.string().regex(/^[a-f0-9]{64}$/),
@@ -691,27 +696,5 @@ export class FileGraphRunStore implements GraphRunStore {
     } finally {
       if (this.queues.get(runId) === guard) this.queues.delete(runId)
     }
-  }
-}
-
-function checksumJson(value: unknown): string {
-  return createHash('sha256').update(JSON.stringify(value)).digest('hex')
-}
-
-function isTerminalRunStatus(status: GraphRunStatus): boolean {
-  return status === 'completed' || status === 'failed' || status === 'cancelled'
-}
-
-function diagnosticForStoreError(runId: string, error: unknown): GraphStoreDiagnostic {
-  const message = error instanceof Error ? error.message : String(error)
-  return {
-    runId,
-    code: /artifact/i.test(message)
-      ? 'missing_artifact'
-      : /journal|checksum|sequence/i.test(message)
-        ? 'corrupt_journal'
-        : 'invalid_state',
-    message: message.slice(0, 2_048),
-    retryable: /snapshot|artifact|missing/i.test(message)
   }
 }

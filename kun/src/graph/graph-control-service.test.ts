@@ -79,7 +79,6 @@ describe('GraphControlService', () => {
     })
     expect(cancelled.status).toBe('cancelled')
   })
-
   it('notifies supervision after durable user steering and cancellation', async () => {
     const { store } = await fixture()
     const onSteering = vi.fn(async () => undefined)
@@ -136,7 +135,6 @@ describe('GraphControlService', () => {
       'No longer needed.'
     )
   })
-
   it('rejects stale revisions and preserves accepted facts during patches', async () => {
     const { control } = await fixture()
     const created = await control.create({
@@ -167,7 +165,6 @@ describe('GraphControlService', () => {
       expectedRevision: 1
     })).rejects.toBeInstanceOf(GraphRunConflictError)
   })
-
   it('enforces the durable Graph revision budget before applying another patch', async () => {
     const { control } = await fixture()
     const base = testGraphPlan()

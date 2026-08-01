@@ -190,7 +190,7 @@ describe('loadWorkspaceFileIndex design document references', () => {
     expect(index.directories).toContainEqual(expect.objectContaining({
       path: `${root}/.kun-design/doc_1`,
       relativePath: '.kun-design/doc_1',
-      name: 'doc_1',
+      name: 'Untitled drawing',
       type: 'directory',
       workspaceRoot: root
     }))

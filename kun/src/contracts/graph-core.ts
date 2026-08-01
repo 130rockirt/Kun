@@ -20,6 +20,22 @@ import {
   GraphRiskClassSchema,
   GraphRunStatusSchema
 } from './graph-status.js'
+import {
+  GraphBoundedSummarySchema,
+  GraphIdentifierSchema,
+  GraphIdempotencyKeySchema,
+  GraphTimestampSchema,
+  GraphToolProviderIdSchema
+} from './graph-contract-primitives.js'
+import { GraphArtifactReferenceV1Schema, GraphCheckResultV1Schema, GraphVerifiedCheckResultV1Schema, type GraphArtifactReferenceV1, type GraphCheckResultV1, type GraphVerifiedCheckResultV1 } from './graph-contract-artifacts.js'
+export {
+  GraphBoundedSummarySchema,
+  GraphIdentifierSchema,
+  GraphIdempotencyKeySchema,
+  GraphTimestampSchema,
+  GraphToolProviderIdSchema
+} from './graph-contract-primitives.js'
+export * from './graph-contract-artifacts.js'
 export {
   GraphBudgetLedgerV1Schema,
   GraphBudgetV1InputSchema,
@@ -31,30 +47,7 @@ export {
 export const GRAPH_CONTRACT_VERSION = 1 as const
 export const GRAPH_EVENT_VERSION = 1 as const
 
-export const GraphIdentifierSchema = z.string().trim().min(1).max(128).regex(
-  /^[A-Za-z0-9][A-Za-z0-9._-]*$/,
-  'identifier must be portable and path safe'
-)
-export const GraphIdempotencyKeySchema = z.string().trim().min(1).max(256).regex(
-  /^[A-Za-z0-9][A-Za-z0-9._:,@=-]*$/,
-  'idempotency key contains unsupported characters'
-)
-/**
- * Tool provider ids are opaque capability-registry keys, not filesystem-safe
- * Graph entity ids. Core providers use simple names while MCP and extension
- * providers legitimately use qualified forms such as `mcp:facade` and
- * `extension:com.example.tools`.
- */
-export const GraphToolProviderIdSchema = z.string().trim().min(1).max(256).refine(
-  (value) => !Array.from(value).some(
-    (character) => character.charCodeAt(0) <= 0x1f || character.charCodeAt(0) === 0x7f
-  ),
-  'tool provider id contains control characters'
-)
-export const GraphTimestampSchema = z.string().datetime({ offset: true })
 const BoundedText = z.string().max(32_768)
-export const GraphBoundedSummarySchema = z.string().max(4_096)
-const Sha256 = z.string().regex(/^[a-f0-9]{64}$/)
 const RelativePath = GraphRelativePathSchema
 
 const Identifier = GraphIdentifierSchema
@@ -78,38 +71,6 @@ export const GraphCommandIdSchema = Identifier
 export type GraphCommandId = z.infer<typeof GraphCommandIdSchema>
 export const GraphProfileIdSchema = Identifier
 export type GraphProfileId = z.infer<typeof GraphProfileIdSchema>
-
-export const GraphArtifactReferenceV1Schema = z.object({
-  version: z.literal(GRAPH_CONTRACT_VERSION),
-  artifactId: Identifier,
-  contentHash: Sha256,
-  mimeType: z.string().trim().min(1).max(256),
-  byteLength: z.number().int().nonnegative(),
-  summary: BoundedSummary,
-  logicalNames: z.array(z.string().trim().min(1).max(256)).max(128).optional(),
-  producerNodeId: GraphNodeIdSchema.optional(),
-  producerAttemptId: GraphAttemptIdSchema.optional(),
-  visibility: z.enum(['run', 'dependency', 'lead', 'user']),
-  retention: z.enum(['run', 'thread', 'project', 'pinned']).default('run'),
-  createdAt: Timestamp
-}).strict()
-export type GraphArtifactReferenceV1 = z.infer<typeof GraphArtifactReferenceV1Schema>
-
-export const GraphCheckResultV1Schema = z.object({
-  name: z.string().trim().min(1).max(256),
-  status: z.enum(['passed', 'failed', 'skipped', 'not_run']),
-  summary: BoundedSummary,
-  artifactRefs: z.array(GraphArtifactReferenceV1Schema).max(32).default([])
-}).strict()
-export type GraphCheckResultV1 = z.infer<typeof GraphCheckResultV1Schema>
-
-export const GraphVerifiedCheckResultV1Schema = GraphCheckResultV1Schema.extend({
-  command: z.array(z.string().min(1).max(4_096)).min(1).max(64),
-  exitCode: z.number().int().nullable(),
-  workspaceRevision: z.string().max(256),
-  outputSummary: BoundedSummary
-}).strict()
-export type GraphVerifiedCheckResultV1 = z.infer<typeof GraphVerifiedCheckResultV1Schema>
 
 export const GraphWorkerResultV1Schema = z.object({
   version: z.literal(GRAPH_CONTRACT_VERSION),

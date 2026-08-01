@@ -129,9 +129,7 @@ describe('GraphScheduler LoopGate repair routing', () => {
         createdAt: new Date().toISOString()
       }, {
         commandId: `${reviewId}_command`,
-        idempotencyKey: reviewId,
-        expectedSeq: waiting.lastEventSeq,
-        expectedRevision: waiting.currentRevision
+        idempotencyKey: reviewId
       }, 'lead')
       return attempt
     }

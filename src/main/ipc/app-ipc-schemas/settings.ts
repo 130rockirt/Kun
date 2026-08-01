@@ -1288,6 +1288,8 @@ export const workflowCodeCheckPayloadSchema = z
   .strict()
 const designSettingsPatchSchema = z.object({
   defaultWorkspaceRoot: defaultPathSchema,
+  workspaces: z.array(trimmedString(MAX_PATH_LENGTH)).max(256).optional(),
+  activeWorkspaceRoot: defaultPathSchema,
   brandColor: z.string().trim().max(32).optional(),
   tone: z.array(trimmedString(32)).max(12).optional(),
   designSystemPreset: z

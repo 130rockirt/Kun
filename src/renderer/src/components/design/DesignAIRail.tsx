@@ -19,7 +19,6 @@ import { getProvider } from '../../agent/registry'
 import type { QueuedUserMessage } from '../../store/chat-store-types'
 import { threadSnapshotLooksRunning } from '../../store/chat-store-runtime-helpers'
 import type { ModelProviderModelGroup } from '@shared/kun-gui-api'
-import { DESIGN_ASSISTANT_THREAD_TITLE } from '../../design/design-thread-registry'
 import { useDesignWorkspaceStore } from '../../design/design-workspace-store'
 import { drawingHistoryMutationMatches } from '../../design/design-drawing-history'
 import { defaultFrameSizeForDesignTarget } from '../../design/design-context'
@@ -29,6 +28,23 @@ import { FloatingComposer } from '../chat/FloatingComposer'
 import type { DesignComposerContext } from '../chat/FloatingComposer'
 import type { ComposerReasoningEffort } from '../chat/FloatingComposerModelPicker'
 import { DesignTargetToggle } from './DesignTargetToggle'
+import {
+  canClearDesignHistory,
+  designHistoryInteractionsLocked,
+  designHistoryMenuEntries,
+  designRailHeaderTitle,
+  hasClearableDesignHistory
+} from './design-ai-rail-history'
+
+export {
+  canClearDesignHistory,
+  designHistoryInteractionsLocked,
+  designHistoryMenuEntries,
+  designRailHeaderTitle,
+  designThreadTitleLooksDefault,
+  hasClearableDesignHistory,
+  type DesignHistoryMenuEntry
+} from './design-ai-rail-history'
 
 type Props = {
   input: string
@@ -76,96 +92,6 @@ type Props = {
   onCollapse: () => void
   drawingCreationSubmitting?: boolean
   className?: string
-}
-
-export function designThreadTitleLooksDefault(
-  title: string | null | undefined,
-  localizedDefaultTitle?: string
-): boolean {
-  const raw = title?.trim() ?? ''
-  if (!raw) return true
-  return raw === DESIGN_ASSISTANT_THREAD_TITLE || raw === localizedDefaultTitle?.trim()
-}
-
-export type DesignHistoryMenuEntry = {
-  id: string
-  title: string
-  updatedAt: string | null
-}
-
-export function designHistoryMenuEntries(options: {
-  registeredThreadIds: readonly string[]
-  designThreads: readonly NormalizedThread[]
-  localizedDefaultTitle: string
-  fallbackTitle: (index: number) => string
-}): DesignHistoryMenuEntry[] {
-  const sourceIds = options.registeredThreadIds.length > 0
-    ? options.registeredThreadIds
-    : options.designThreads.map((thread) => thread.id)
-  return [...new Set(sourceIds)].map((id, index) => {
-    const thread = options.designThreads.find((candidate) => candidate.id === id) ?? null
-    return {
-      id,
-      title: thread && !designThreadTitleLooksDefault(thread.title, options.localizedDefaultTitle)
-        ? thread.title
-        : options.fallbackTitle(index),
-      updatedAt: thread?.updatedAt ?? null
-    }
-  })
-}
-
-export function canClearDesignHistory(options: {
-  runtimeConnection: RuntimeConnectionStatus
-  busy: boolean
-  viewingChildThread: boolean
-  hasHistory: boolean
-}): boolean {
-  return (
-    options.runtimeConnection === 'ready' &&
-    !options.busy &&
-    !options.viewingChildThread &&
-    options.hasHistory
-  )
-}
-
-export function designHistoryInteractionsLocked(options: {
-  historyClearing: boolean
-  historyMutationPending: boolean
-}): boolean {
-  return options.historyClearing || options.historyMutationPending
-}
-
-export function hasClearableDesignHistory(options: {
-  hasRegisteredHistory: boolean
-  registeredHistoryCount?: number
-  designThreads: readonly NormalizedThread[]
-  showingDocumentThread: boolean
-  blocks: readonly ChatBlock[]
-  liveReasoning: string
-  liveAssistant: string
-}): boolean {
-  const registeredHistoryCount = options.registeredHistoryCount ?? (options.hasRegisteredHistory ? 1 : 0)
-  if (registeredHistoryCount > 1) return true
-  if (options.designThreads.length === 0) return registeredHistoryCount > 0
-  if (options.designThreads.length > 1) return true
-  if (
-    options.designThreads.some((thread) =>
-      Boolean(thread.preview?.trim() || thread.summary?.trim())
-    )
-  ) return true
-  return options.showingDocumentThread && (
-    options.blocks.length > 0 ||
-    options.liveReasoning.trim().length > 0 ||
-    options.liveAssistant.trim().length > 0
-  )
-}
-
-export function designRailHeaderTitle(options: {
-  drawingTitle: string
-  fallbackTitle: string
-  viewingChildThread: boolean
-}): string {
-  return options.drawingTitle.trim() || options.fallbackTitle
 }
 
 function DesignAIRailInner({

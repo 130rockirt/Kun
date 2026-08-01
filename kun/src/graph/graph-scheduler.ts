@@ -1,41 +1,31 @@
 import {
   GRAPH_CONTRACT_VERSION,
-  GraphReviewResultV1Schema,
   type GraphDomainEventV1,
   type GraphNodeAttemptV1,
   type GraphNodeProjectionV1,
-  type GraphReviewResultV1,
   type GraphRunV1
 } from '../contracts/graph.js'
-import {
-  GraphRunConflictError,
-} from './graph-run-store.js'
+import { GraphRunConflictError } from './graph-run-store.js'
 import { GraphAttemptScheduler } from './graph-attempt-scheduler.js'
 import {
-  budgetWarningKinds,
   deterministicReview,
-  deterministicSummary,
   effectiveReviewKinds,
   errorMessage,
   findAttempt,
   GRAPH_HOST_SHUTDOWN_ATTEMPT_FAILURE,
   hasPendingExternalReview,
   isTerminalRunStatus,
-  maxBudgetRatio,
   reviewDisposition,
   rotate,
   terminalRequiredFailure,
   validationFailureSummary
 } from './graph-scheduler-policy.js'
 import {
-  LOOP_GATE_EXHAUSTED_REASON,
-  LOOP_GATE_EXIT_REASON,
   loopGateHandlesNodeOutcome,
-  loopGateWaivesIncompleteNode,
-  loopResetNodeIds,
-  outcomeOf
+  loopGateWaivesIncompleteNode
 } from './graph-loop-policy.js'
-import { selectLoopGateBranch } from './graph-loop-branch-selector.js'
+import { evaluateGraphLoopGates } from './graph-loop-gate-evaluator.js'
+import { finishGraphRun, tryCompleteGraphRun } from './graph-run-completion.js'
 import { reconcileGraphReadiness } from './graph-readiness-reconciler.js'
 import type {
   GraphSchedulerOptions,
@@ -46,11 +36,8 @@ import {
   deliverNodeSteering,
   handleNodeAttemptSteering
 } from './graph-steering-delivery.js'
-import {
-  GraphPeerReviewShutdownError,
-  graphPeerReviewTimeoutMs
-} from './graph-peer-review-task.js'
-import { graphReviewSemanticKey } from './graph-review-idempotency.js'
+import { GraphPeerReviewCoordinator } from './graph-peer-review-coordinator.js'
+import { enforceGraphBudgets, recordGraphReconcileFailure } from './graph-scheduler-maintenance.js'
 export type {
   GraphLeadDeliveryResult,
   GraphSchedulerOptions,
@@ -63,16 +50,24 @@ export {
 export class GraphScheduler extends GraphAttemptScheduler {
   private readonly runQueues = new Map<string, Promise<unknown>>()
   private readonly cleanupTasks = new Set<Promise<void>>()
-  private readonly activePeerReviews = new Map<string, {
-    runId: string
-    controller: AbortController
-    promise: Promise<void>
-  }>()
+  private readonly peerReviews: GraphPeerReviewCoordinator
   private timer?: NodeJS.Timeout
   private ticking = false
   private stopping = false
   private currentTick?: Promise<void>
   private fairCursor = 0
+  constructor(options: GraphSchedulerOptions) {
+    super(options)
+    this.peerReviews = new GraphPeerReviewCoordinator({
+      store: options.store,
+      nextId: this.nextId,
+      nowIso: this.nowIso,
+      isStopping: () => this.stopping,
+      onResume: (runId) => this.resumeRun(runId),
+      withRunQueue: (runId, operation) => this.withRunQueue(runId, operation),
+      requireRun: (runId) => this.requireRun(runId)
+    })
+  }
   start(): void {
     if (this.timer) return
     this.stopping = false
@@ -93,9 +88,7 @@ export class GraphScheduler extends GraphAttemptScheduler {
     for (const attempt of this.active.values()) {
       attempt.abort.abort(new Error(GRAPH_HOST_SHUTDOWN_ATTEMPT_FAILURE))
     }
-    for (const review of this.activePeerReviews.values()) {
-      review.controller.abort(new GraphPeerReviewShutdownError())
-    }
+    this.peerReviews.abortAll()
     await this.currentTick?.catch(() => undefined)
     // A scheduleNode already inside tickOnce may publish its active handle
     // after the first snapshot. Once currentTick drains no new admission is
@@ -103,11 +96,9 @@ export class GraphScheduler extends GraphAttemptScheduler {
     for (const attempt of this.active.values()) {
       attempt.abort.abort(new Error(GRAPH_HOST_SHUTDOWN_ATTEMPT_FAILURE))
     }
-    for (const review of this.activePeerReviews.values()) {
-      review.controller.abort(new GraphPeerReviewShutdownError())
-    }
+    this.peerReviews.abortAll()
     await Promise.allSettled([...this.active.values()].map((attempt) => attempt.promise))
-    await Promise.allSettled([...this.activePeerReviews.values()].map((review) => review.promise))
+    await Promise.allSettled(this.peerReviews.pending())
     this.stopAllLeaseHeartbeats()
     await Promise.allSettled([...this.cleanupTasks])
   }
@@ -250,7 +241,7 @@ export class GraphScheduler extends GraphAttemptScheduler {
         run = await this.evaluateLoopGates(run)
         if (
           run.status === 'running' ||
-          ![...this.activePeerReviews.values()].some((review) => review.runId === run.id)
+          !this.peerReviews.hasActiveForRun(run.id)
         ) {
           run = await this.enforceBudgets(run)
         }
@@ -281,59 +272,20 @@ export class GraphScheduler extends GraphAttemptScheduler {
     return reconciled
   }
   private async evaluateLoopGates(runInput: GraphRunV1): Promise<GraphRunV1> {
-    let run = runInput
-    for (const projection of Object.values(run.nodes)) {
-      if (projection.node.kind !== 'loop_gate' || projection.status !== 'ready') continue
-      const gate = projection.node.loopGate!
-      const source = run.nodes[gate.condition.sourceNodeId]
-      const sourceOutcome = source ? outcomeOf(source) : undefined
-      if (!sourceOutcome) continue // Unfinished sources have no outcome.
-      const continues = new Set<string>(gate.condition.outcomeIn).has(sourceOutcome)
-      const iterationExhausted = projection.loopIteration >= Math.min(
-        gate.maxIterations,
-        run.budget.limits.maxLoopIterations
-      )
-      const exhausted = continues && iterationExhausted
-      if (continues && !exhausted) {
-        const resetNodeIds = loopResetNodeIds(
-          run.plans.at(-1)!,
-          projection.node.id,
-          gate.continueTargetNodeId,
-          gate.condition.sourceNodeId
-        )
-        run = (await this.options.store.append(run.id, {
-          expectedSeq: run.lastEventSeq,
-          graphRevision: run.currentRevision,
-          commandId: `loop_advance_${run.id}_${projection.loopIteration + 1}`,
-          idempotencyKey: `loop-advance:${run.id}:${projection.node.id}:${projection.loopIteration + 1}`,
-          event: {
-            type: 'loop_iteration_advanced',
-            payload: {
-              gateNodeId: projection.node.id,
-              continueTargetNodeId: gate.continueTargetNodeId,
-              resetNodeIds,
-              iteration: projection.loopIteration + 1
-            }
-          }
-        })).state
-        run = await this.bumpLoopBudget(run)
-      } else {
-        run = await selectLoopGateBranch(
-          run,
-          projection.node.id,
-          exhausted,
-          (current, nodeId, to, reason) =>
-            this.transitionNode(current, nodeId, to, reason)
-        )
-      }
-      if (!continues || exhausted) {
-        run = await this.transitionNode(run, projection.node.id, 'skipped',
-          exhausted
-            ? LOOP_GATE_EXHAUSTED_REASON
-            : LOOP_GATE_EXIT_REASON)
-      }
-    }
-    return run
+    return evaluateGraphLoopGates(runInput, {
+      appendLoopAdvance: async (run, projection, resetNodeIds) => (await this.options.store.append(run.id, {
+        expectedSeq: run.lastEventSeq,
+        graphRevision: run.currentRevision,
+        commandId: `loop_advance_${run.id}_${projection.loopIteration + 1}`,
+        idempotencyKey: `loop-advance:${run.id}:${projection.node.id}:${projection.loopIteration + 1}`,
+        event: { type: 'loop_iteration_advanced', payload: {
+          gateNodeId: projection.node.id, continueTargetNodeId: projection.node.loopGate!.continueTargetNodeId,
+          resetNodeIds, iteration: projection.loopIteration + 1
+        } }
+      })).state,
+      bumpLoopBudget: (run) => this.bumpLoopBudget(run),
+      transitionNode: (run, nodeId, to, reason) => this.transitionNode(run, nodeId, to, reason)
+    })
   }
   private async reconcileSubmitted(
     runInput: GraphRunV1,
@@ -511,201 +463,28 @@ export class GraphScheduler extends GraphAttemptScheduler {
         })).state
         continue
       }
-      this.launchPeerReview(run, node, attempt, this.options.supervision?.())
+      this.peerReviews.launch(run, node, attempt, this.options.supervision?.())
     }
     return run
-  }
-
-  private launchPeerReview(
-    run: GraphRunV1,
-    node: GraphNodeProjectionV1,
-    attempt: GraphNodeAttemptV1,
-    supervision: GraphSupervisionPort | undefined
-  ): void {
-    const taskKey = graphReviewSemanticKey(run.id, attempt.id, 'peer')
-    if (this.stopping || this.activePeerReviews.has(taskKey)) return
-    const controller = new AbortController()
-    const operation = this.executePeerReview(
-      run,
-      node,
-      attempt,
-      supervision,
-      controller
-    ).catch((error) => {
-      console.warn(
-        `[kun] Graph peer review task failed for ${run.id}/${attempt.id}: ${errorMessage(error)}`
-      )
-    })
-    let tracked!: Promise<void>
-    tracked = operation.finally(() => {
-      if (this.activePeerReviews.get(taskKey)?.promise === tracked) {
-        this.activePeerReviews.delete(taskKey)
-      }
-      if (!this.stopping) {
-        void this.resumeRun(run.id)
-      }
-    })
-    this.activePeerReviews.set(taskKey, { runId: run.id, controller, promise: tracked })
-  }
-
-  private async executePeerReview(
-    run: GraphRunV1,
-    node: GraphNodeProjectionV1,
-    attempt: GraphNodeAttemptV1,
-    supervision: GraphSupervisionPort | undefined,
-    controller: AbortController
-  ): Promise<void> {
-    let review: GraphReviewResultV1
-    try {
-      if (!supervision?.review) {
-        throw new Error('Independent peer reviewer runtime is unavailable.')
-      }
-      const rawReview = await abortablePeerReview(
-        Promise.resolve().then(() => supervision.review!({
-          run,
-          node,
-          attempt,
-          kind: 'peer',
-          signal: controller.signal
-        })),
-        controller,
-        graphPeerReviewTimeoutMs(run, attempt)
-      )
-      review = GraphReviewResultV1Schema.parse(rawReview)
-      if (
-        review.nodeId !== node.node.id ||
-        review.attemptId !== attempt.id ||
-        review.reviewerKind !== 'peer'
-      ) {
-        throw new Error('Independent peer reviewer returned mismatched review provenance.')
-      }
-    } catch (error) {
-      if (this.stopping || error instanceof GraphPeerReviewShutdownError) return
-      review = GraphReviewResultV1Schema.parse({
-        version: GRAPH_CONTRACT_VERSION,
-        reviewId: this.nextId('graph_review'),
-        nodeId: node.node.id,
-        attemptId: attempt.id,
-        reviewerKind: 'peer',
-        outcome: 'needs_human',
-        summary: `Independent peer review could not complete: ${errorMessage(error)}`.slice(0, 4_096),
-        evidence: [],
-        artifactRefs: [],
-        createdAt: this.nowIso()
-      })
-    }
-    if (this.stopping) return
-    await this.persistPeerReview(run.id, review)
-  }
-
-  private async persistPeerReview(
-    runId: string,
-    review: GraphReviewResultV1
-  ): Promise<void> {
-    for (let retry = 0; retry < 5; retry += 1) {
-      try {
-        await this.withRunQueue(runId, async () => {
-          const run = await this.requireRun(runId)
-          if (run.reviews.some((entry) =>
-            entry.nodeId === review.nodeId &&
-            entry.attemptId === review.attemptId &&
-            entry.reviewerKind === 'peer')) return
-          const node = run.nodes[review.nodeId]
-          const attempt = node?.attempts.find((entry) => entry.id === review.attemptId)
-          if (
-            !node ||
-            !attempt ||
-            node.attempts.at(-1)?.id !== attempt.id ||
-            isTerminalRunStatus(run.status) ||
-            !['submitted', 'reviewing'].includes(node.status) ||
-            !['submitted', 'reviewing'].includes(attempt.status)
-          ) return
-          await this.options.store.append(run.id, {
-            expectedSeq: run.lastEventSeq,
-            graphRevision: run.currentRevision,
-            commandId: `review_${review.reviewId}`,
-            idempotencyKey: graphReviewSemanticKey(run.id, attempt.id, 'peer'),
-            event: { type: 'review_recorded', payload: { review } }
-          })
-        })
-        return
-      } catch (error) {
-        if (!(error instanceof GraphRunConflictError) || retry === 4) throw error
-      }
-    }
   }
 
   private async recordReconcileFailure(run: GraphRunV1, error: unknown): Promise<void> {
-    const message = errorMessage(error).slice(0, 4_096)
-    console.warn(`[kun] Graph scheduler reconcile failed for ${run.id}: ${message}`)
-    let failedRun = run
-    try {
-      failedRun = await this.withRunQueue(run.id, async () => {
-        const latest = await this.requireRun(run.id)
-        if (latest.status !== 'running' && latest.status !== 'completing') return latest
-        return this.transitionRun(
-          latest,
-          'awaiting_supervision',
-          `scheduler reconciliation failed: ${message}`.slice(0, 4_096)
-        )
-      })
-      await this.requestSupervision(
-        failedRun.id,
-        'scheduler_error',
-        Object.values(failedRun.nodes)
-          .filter((node) => node.status === 'submitted' || node.status === 'reviewing')
-          .map((node) => node.node.id),
-        `Graph scheduler reconciliation failed and requires recovery: ${message}`
-      )
-    } catch (signalError) {
-      console.warn(
-        `[kun] Graph scheduler could not persist recovery for ${run.id}: ` +
-        errorMessage(signalError).slice(0, 512)
-      )
-    }
+    await recordGraphReconcileFailure(run, error, {
+      withRunQueue: (runId, operation) => this.withRunQueue(runId, operation),
+      requireRun: (runId) => this.requireRun(runId),
+      transitionRun: (current, to, reason) => this.transitionRun(current, to, reason),
+      requestSupervision: (runId, reason, nodeIds, digest) => this.requestSupervision(runId, reason, nodeIds, digest)
+    })
   }
 
   private async enforceBudgets(run: GraphRunV1): Promise<GraphRunV1> {
-    const elapsedMs = Math.max(
-      run.budget.elapsedMs,
-      Date.parse(this.nowIso()) - Date.parse(run.createdAt)
-    )
-    if (
-      elapsedMs >= run.budget.limits.maxWallTimeMs ||
-      elapsedMs - run.budget.elapsedMs >= 1_000
-    ) {
-      run = await this.updateBudget(run, { elapsedMs }, 'scheduler wall time accounting')
-    }
-    const exhausted =
-      run.budget.elapsedMs >= run.budget.limits.maxWallTimeMs ||
-      run.budget.artifactBytes >= run.budget.limits.maxArtifactBytes
-    // Creating an attempt consumes one slot, but reaching the exact attempt
-    // limit must not abort that in-flight worker. scheduleNode fences any
-    // subsequent attempt before creation, and terminalRequiredFailure handles
-    // a node that finishes unsuccessfully without retry capacity.
-    if (exhausted) return this.failForBudget(run, 'GraphRun hard budget exhausted')
-    const ratio = maxBudgetRatio(run)
-    if (ratio >= run.budget.limits.warningRatio) {
-      const warningKinds = budgetWarningKinds(run)
-      if (warningKinds.some((kind) => !run.budget.warningKinds.includes(kind))) {
-        const ledger = {
-          ...run.budget,
-          warningKinds: [...new Set([...run.budget.warningKinds, ...warningKinds])]
-        }
-        run = (await this.options.store.append(run.id, {
-          expectedSeq: run.lastEventSeq,
-          graphRevision: run.currentRevision,
-          commandId: `budget_warning_${run.lastEventSeq + 1}`,
-          idempotencyKey: `budget-warning:${run.id}:${warningKinds.join(',')}`,
-          event: {
-            type: 'budget_warning',
-            payload: { ledger, reason: 'GraphRun budget warning threshold reached' }
-          }
-        })).state
-        await this.requestSupervision(run.id, 'budget', [], 'GraphRun budget warning threshold reached.')
-      }
-    }
-    return run
+    return enforceGraphBudgets(run, {
+      nowIso: this.nowIso,
+      updateBudget: (current, fields, reason) => this.updateBudget(current, fields, reason),
+      failForBudget: (current, reason) => this.failForBudget(current, reason),
+      append: (current, event, key) => this.append(current, event, key),
+      requestSupervision: (runId, reason, nodeIds, digest) => this.requestSupervision(runId, reason, nodeIds, digest)
+    })
   }
   protected async failForBudget(run: GraphRunV1, reason: string): Promise<GraphRunV1> {
     const next = await this.failRun(run, reason)
@@ -756,50 +535,23 @@ export class GraphScheduler extends GraphAttemptScheduler {
     void task.finally(() => this.cleanupTasks.delete(task))
   }
   private async tryComplete(runInput: GraphRunV1): Promise<GraphRunV1> {
-    let run = runInput
-    const required = Object.values(run.nodes).filter((node) =>
-      node.node.required && node.node.kind !== 'loop_gate')
-    if (!required.length || !required.every((node) =>
-      node.status === 'accepted' ||
-      node.status === 'superseded' ||
-      loopGateWaivesIncompleteNode(run, node.node.id))) return run
-    if (this.options.mailbox.unresolvedBlockers(run).length) return run
-    if (!run.plans.at(-1)!.completionNodeIds.every((id) =>
-      run.nodes[id]?.status === 'accepted' ||
-      run.nodes[id]?.status === 'superseded' ||
-      loopGateWaivesIncompleteNode(run, id))) return run
-    if (Object.values(run.nodes).some((node) =>
-      ['pending', 'blocked', 'ready', 'queued', 'running', 'submitted', 'reviewing'].includes(
-        node.status
-      ))) return run
-    run = await this.transitionRun(run, 'completing', 'all completion gates passed')
-    return this.finishCompletion(run)
+    return tryCompleteGraphRun(runInput, this.completionOptions())
   }
   private async finishCompletion(initialRun: GraphRunV1): Promise<GraphRunV1> {
-    let run = initialRun
-    if (run.status !== 'completing') return run
-    if (!run.summary) {
-      const summary = this.options.supervision?.()?.synthesize
-        ? await this.options.supervision()!.synthesize!(run)
-        : deterministicSummary(run, this.nowIso())
-      run = (await this.options.store.append(run.id, {
-        expectedSeq: run.lastEventSeq,
-        graphRevision: run.currentRevision,
-        commandId: `summary_${run.id}`,
-        idempotencyKey: `summary:${run.id}:${run.currentRevision}`,
-        event: { type: 'run_summary_recorded', payload: { summary } }
-      })).state
+    return finishGraphRun(initialRun, this.completionOptions())
+  }
+  private completionOptions() {
+    return {
+      mailbox: this.options.mailbox,
+      supervision: () => this.options.supervision?.(),
+      nowIso: this.nowIso,
+      nextId: this.nextId,
+      append: (run: GraphRunV1, event: GraphDomainEventV1, key: string) => this.append(run, event, key),
+      transitionRun: (run: GraphRunV1, to: GraphRunV1['status'], reason: string) => this.transitionRun(run, to, reason),
+      recordTerminalCleanup: (run: GraphRunV1) => this.recordTerminalCleanup(run),
+      requestSupervision: (runId: string, reason: 'completion', nodeIds: string[], digest: string) => this.requestSupervision(runId, reason, nodeIds, digest),
+      onTerminal: this.options.onTerminal
     }
-    run = await this.recordTerminalCleanup(run)
-    run = await this.transitionRun(run, 'completed', 'final synthesis recorded')
-    await this.requestSupervision(
-      run.id,
-      'completion',
-      [],
-      run.summary!.finalAnswer.slice(0, 4_096)
-    )
-    await this.options.onTerminal?.(run)
-    return run
   }
   private recordTerminalCleanup(run: GraphRunV1): Promise<GraphRunV1> {
     this.stopRunLeaseHeartbeats(run.id)
@@ -945,39 +697,4 @@ export class GraphScheduler extends GraphAttemptScheduler {
     if (!run) throw new Error(`GraphRun not found: ${runId}`)
     return run
   }
-}
-
-function abortablePeerReview<T>(
-  operation: Promise<T>,
-  controller: AbortController,
-  timeoutMs: number
-): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    let settled = false
-    const finish = (complete: () => void): void => {
-      if (settled) return
-      settled = true
-      clearTimeout(timeout)
-      controller.signal.removeEventListener('abort', onAbort)
-      complete()
-    }
-    const onAbort = (): void => finish(() => reject(
-      controller.signal.reason instanceof Error
-        ? controller.signal.reason
-        : new Error('Graph peer review was aborted')
-    ))
-    const timeout = setTimeout(() => {
-      controller.abort(new Error('Graph peer review timed out'))
-    }, Math.max(1, timeoutMs))
-    timeout.unref?.()
-    controller.signal.addEventListener('abort', onAbort, { once: true })
-    if (controller.signal.aborted) {
-      onAbort()
-      return
-    }
-    operation.then(
-      (value) => finish(() => resolve(value)),
-      (error) => finish(() => reject(error))
-    )
-  })
 }

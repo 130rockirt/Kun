@@ -999,6 +999,7 @@ function createCanonicalSqliteSchema(
       title ${titleCheck},
       workspace TEXT NOT NULL,
       model TEXT NOT NULL,
+      agent_surface TEXT,
       mode TEXT NOT NULL,
       status TEXT NOT NULL,
       approval_policy TEXT NOT NULL,

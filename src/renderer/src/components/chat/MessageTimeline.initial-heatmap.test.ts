@@ -34,7 +34,7 @@ describe('MessageTimeline empty hero routing', () => {
     const html = renderHero()
 
     expect(html).toContain('What would you like to do with Kun today?')
-    expect(html).toContain('Describe your idea, or start a new task')
+    expect(html).toContain('Open a terminal and run kun to use the TUI.')
     expect(html).not.toContain('ds-initial-usage-heatmap')
     expect(html).not.toContain('Expand calendar')
   })
