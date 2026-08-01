@@ -342,7 +342,7 @@ async function stopIsolatedSharedRuntime(unpackedRoot, profile) {
   } catch (error) {
     stopError = error
   }
-  if (owner && await processIsAlive(owner.pid)) {
+  if (owner && !await waitForPidExit(owner.pid, 5_000)) {
     await terminateVerifiedIsolatedProcess({
       owner,
       kind: 'runtime',

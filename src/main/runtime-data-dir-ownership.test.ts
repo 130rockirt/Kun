@@ -92,6 +92,7 @@ describe('Runtime data directory ownership detection', () => {
 
   it('returns only other Kun Runtime processes using the selected directory', () => {
     const ownPid = process.pid
+    const otherPid = ownPid + 1
     expect(activeKunRuntimePidsForDataDir('/home/zoe/.deepseekgui/kun', {
       platform: 'linux',
       processCommands: () => [
@@ -100,7 +101,7 @@ describe('Runtime data directory ownership detection', () => {
           command: 'kun serve --data-dir /home/zoe/.deepseekgui/kun'
         },
         {
-          pid: 4242,
+          pid: otherPid,
           command: 'node /opt/kun/serve-entry.js serve --data-dir /home/zoe/.deepseekgui/kun'
         },
         {
@@ -108,7 +109,7 @@ describe('Runtime data directory ownership detection', () => {
           command: 'kun serve --data-dir /home/other/.kun/data'
         }
       ]
-    })).toEqual([4242])
+    })).toEqual([otherPid])
   })
 
   it('detects a live Runtime lease even when its environment is not visible', async () => {
