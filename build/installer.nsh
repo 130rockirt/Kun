@@ -34,7 +34,7 @@ Var /GLOBAL KunInstallerStopResult
 !macro customInit
   InitPluginsDir
   StrCpy $KunInstallerPowerShellPath "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe"
-  File /oname=$PLUGINSDIR\kun-windows-installer-migration.ps1 "${PROJECT_DIR}/build/windows-installer-migration.ps1"
+  File /oname=$PLUGINSDIR\kun-windows-installer-migration.ps1 "${PROJECT_DIR}\build\windows-installer-migration.ps1"
   StrCpy $KunInstallerHelperPath "$PLUGINSDIR\kun-windows-installer-migration.ps1"
   StrCpy $KunInstallerResultPath "$PLUGINSDIR\kun-windows-installer-result.txt"
   System::Call 'kernel32::GetCurrentProcessId() i .r0'
@@ -186,8 +186,10 @@ Var /GLOBAL KunInstallerStopResult
       Goto KunResolveResultReady
 
       KunResolveResultMissing:
-        StrCpy $KunInstallerHelperExitCode 1
-        StrCpy $KunInstallerHelperOutput "The path resolver did not produce a result."
+        ${if} $KunInstallerHelperOutput == ""
+          StrCpy $KunInstallerHelperExitCode 1
+          StrCpy $KunInstallerHelperOutput "The path resolver did not produce a result."
+        ${endif}
 
       KunResolveResultReady:
         Delete "$KunInstallerResultPath"

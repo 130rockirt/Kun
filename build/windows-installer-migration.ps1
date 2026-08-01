@@ -85,11 +85,10 @@ function Resolve-InstallTarget {
 
 function Write-ResolvedInstallTarget([string]$Target) {
   $resultPath = Normalize-FullPath (Get-EnvironmentValue 'KUN_INSTALLER_RESULT')
-  if ([string]::IsNullOrWhiteSpace($resultPath)) {
-    [Console]::Out.Write($Target)
-    return
+  if (-not [string]::IsNullOrWhiteSpace($resultPath)) {
+    [IO.File]::WriteAllBytes($resultPath, [Text.Encoding]::Unicode.GetBytes($Target))
   }
-  [IO.File]::WriteAllBytes($resultPath, [Text.Encoding]::Unicode.GetBytes($Target))
+  [Console]::Out.Write($Target)
 }
 
 function Get-JournalPath {
