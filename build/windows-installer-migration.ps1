@@ -1,6 +1,6 @@
 param(
   [Parameter(Mandatory = $true)]
-  [ValidateSet('ResolvePath', 'Recover', 'Prepare', 'FallbackCleanup', 'Restore', 'UpdatePath')]
+  [ValidateSet('ResolvePath', 'ResolveSource', 'Recover', 'Prepare', 'FallbackCleanup', 'Restore', 'UpdatePath')]
   [string]$Action
 )
 
@@ -81,6 +81,35 @@ function Resolve-InstallTarget {
   }
 
   return Join-Path $candidate 'Kun'
+}
+
+function Resolve-RegisteredInstallSource {
+  $source = Normalize-FullPath (Get-EnvironmentValue 'KUN_INSTALLER_SOURCE')
+  if (-not [string]::IsNullOrWhiteSpace($source)) {
+    return $source
+  }
+
+  $uninstallCommand = Get-EnvironmentValue 'KUN_INSTALLER_UNINSTALL_STRING'
+  if ([string]::IsNullOrWhiteSpace($uninstallCommand)) {
+    return ''
+  }
+
+  $match = [Text.RegularExpressions.Regex]::Match(
+    $uninstallCommand.Trim(),
+    '^(?:"(?<path>[^"]+)"|(?<path>.*?\.exe))(?:\s|$)',
+    [Text.RegularExpressions.RegexOptions]::IgnoreCase
+  )
+  if (-not $match.Success) {
+    return ''
+  }
+
+  $uninstaller = Normalize-FullPath $match.Groups['path'].Value
+  $leaf = Split-Path -Leaf $uninstaller
+  if (-not $leaf.StartsWith('Uninstall ', [StringComparison]::OrdinalIgnoreCase) -and
+      -not [string]::Equals($leaf, 'old-uninstaller.exe', [StringComparison]::OrdinalIgnoreCase)) {
+    return ''
+  }
+  return Split-Path -Parent $uninstaller
 }
 
 function Write-ResolvedInstallTarget([string]$Target) {
@@ -235,6 +264,33 @@ function Test-KnownApplicationEntry([IO.FileSystemInfo]$Entry) {
     'vulkan-1.dll'
   )
   return $knownFiles -contains $Entry.Name.ToLowerInvariant()
+}
+
+function Get-ExtendedLengthPath([string]$PathValue) {
+  $normalized = Normalize-FullPath $PathValue
+  if ($normalized.StartsWith('\\')) {
+    return '\\?\UNC\' + $normalized.Substring(2)
+  }
+  return '\\?\' + $normalized
+}
+
+function Remove-KnownApplicationEntry([IO.FileSystemInfo]$Entry) {
+  try {
+    Remove-Item -LiteralPath $Entry.FullName -Recurse -Force
+    return
+  } catch {
+    if (-not (Test-Path -LiteralPath $Entry.FullName)) {
+      return
+    }
+  }
+
+  $extendedPath = Get-ExtendedLengthPath $Entry.FullName
+  if ($Entry.PSIsContainer) {
+    [IO.Directory]::Delete($extendedPath, $true)
+  } else {
+    [IO.File]::SetAttributes($extendedPath, [IO.FileAttributes]::Normal)
+    [IO.File]::Delete($extendedPath)
+  }
 }
 
 function Test-AppOwnedProcessPath([string]$ExecutablePath, [string[]]$Roots) {
@@ -501,7 +557,7 @@ function Invoke-FallbackCleanup {
 
   foreach ($entry in @(Get-ChildItem -LiteralPath $source -Force)) {
     if (Test-KnownApplicationEntry $entry) {
-      Remove-Item -LiteralPath $entry.FullName -Recurse -Force
+      Remove-KnownApplicationEntry $entry
     }
   }
 
@@ -555,6 +611,9 @@ try {
   switch ($Action) {
     'ResolvePath' {
       Write-ResolvedInstallTarget (Resolve-InstallTarget)
+    }
+    'ResolveSource' {
+      [Console]::Out.Write((Resolve-RegisteredInstallSource))
     }
     'Recover' {
       Invoke-RestoreJournal

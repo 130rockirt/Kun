@@ -189,6 +189,7 @@ try {
   $legacyTarget = Join-Path $root 'legacy\Kun'
   Move-RegisteredInstall $seed $legacySource
   Convert-ShortcutsToLegacy
+  Set-ItemProperty -LiteralPath $script:installRegistryPath -Name InstallLocation -Value ''
   Set-Content -LiteralPath (Join-Path $legacySource 'legacy-note.txt') -Value 'keep legacy note'
   Invoke-Installer @('--updated', '/currentuser')
   Assert-RegisteredLocation $legacyTarget

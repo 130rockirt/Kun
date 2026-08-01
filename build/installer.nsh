@@ -165,10 +165,28 @@ Var /GLOBAL KunInstallerStopResult
 
   Function KunReadRegisteredSource
     ReadRegStr $KunInstallerSourceDir SHELL_CONTEXT "${INSTALL_REGISTRY_KEY}" InstallLocation
+    ${if} $KunInstallerSourceDir == ""
+      ReadRegStr $R9 SHELL_CONTEXT "${UNINSTALL_REGISTRY_KEY}" UninstallString
+      System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_SOURCE", "").r0'
+      System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_UNINSTALL_STRING", "$R9").r0'
+      !insertmacro kunRunMigrationHelper ResolveSource
+      ${if} $KunInstallerHelperExitCode == 0
+        StrCpy $KunInstallerSourceDir $KunInstallerHelperOutput
+      ${endif}
+    ${endif}
     StrCpy $KunInstallerPrimarySourceDir $KunInstallerSourceDir
     StrCpy $KunInstallerSecondarySourceDir ""
     ${if} $installMode == "all"
       ReadRegStr $KunInstallerSecondarySourceDir HKEY_CURRENT_USER "${INSTALL_REGISTRY_KEY}" InstallLocation
+      ${if} $KunInstallerSecondarySourceDir == ""
+        ReadRegStr $R9 HKEY_CURRENT_USER "${UNINSTALL_REGISTRY_KEY}" UninstallString
+        System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_SOURCE", "").r0'
+        System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_UNINSTALL_STRING", "$R9").r0'
+        !insertmacro kunRunMigrationHelper ResolveSource
+        ${if} $KunInstallerHelperExitCode == 0
+          StrCpy $KunInstallerSecondarySourceDir $KunInstallerHelperOutput
+        ${endif}
+      ${endif}
     ${endif}
   FunctionEnd
 
