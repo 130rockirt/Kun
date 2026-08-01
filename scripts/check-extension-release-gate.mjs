@@ -1000,7 +1000,13 @@ check(
   rootPackage.scripts?.['build:bundled-extensions'] ===
     'node ./scripts/pack-bundled-extensions.mjs --output ./resources/bundled-extensions' &&
     rootPackage.scripts?.build?.includes('npm run build:bundled-extensions') &&
-    rootPackage.scripts?.dev?.includes('npm run build:bundled-extensions'),
+    (
+      rootPackage.scripts?.dev?.includes('npm run build:bundled-extensions') ||
+      (
+        rootPackage.scripts?.dev?.includes('npm run dev:app') &&
+        rootPackage.scripts?.['dev:app']?.includes('npm run build:bundled-extensions')
+      )
+    ),
   'Kun build and dev must generate the canonical default extension catalog before launch'
 )
 for (const marker of [
