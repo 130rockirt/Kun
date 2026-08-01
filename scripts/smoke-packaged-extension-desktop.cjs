@@ -373,7 +373,7 @@ async function stopIsolatedServiceManager(home, profile) {
     // The manager may already be closing. PID and command verification below
     // decides whether a bounded termination fallback is permitted.
   }
-  if (await waitForProcessExit(owner.pid, 5_000)) return
+  if (await waitForPidExit(owner.pid, 5_000)) return
   await terminateVerifiedIsolatedProcess({
     owner,
     kind: 'manager',
@@ -420,7 +420,7 @@ async function terminateVerifiedIsolatedProcess({ owner, kind, expectedDataDir }
     } catch {
       return
     }
-    if (!await waitForProcessExit(owner.pid, 3_000)) {
+    if (!await waitForPidExit(owner.pid, 3_000)) {
       try {
         process.kill(owner.pid, 'SIGKILL')
       } catch {
@@ -428,7 +428,7 @@ async function terminateVerifiedIsolatedProcess({ owner, kind, expectedDataDir }
       }
     }
   }
-  if (!await waitForProcessExit(owner.pid, 2_000)) {
+  if (!await waitForPidExit(owner.pid, 2_000)) {
     throw new Error(`Verified isolated Kun ${kind} PID ${owner.pid} did not exit`)
   }
 }
@@ -468,7 +468,7 @@ async function processIsAlive(pid) {
   }
 }
 
-async function waitForProcessExit(pid, timeoutMs) {
+async function waitForPidExit(pid, timeoutMs) {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     if (!await processIsAlive(pid)) return true
