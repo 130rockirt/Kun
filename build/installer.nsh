@@ -38,6 +38,7 @@ Var /GLOBAL KunInstallerStopResult
   File /oname=$PLUGINSDIR\kun-windows-installer-migration.ps1 "${PROJECT_DIR}\build\windows-installer-migration.ps1"
   StrCpy $KunInstallerHelperPath "$PLUGINSDIR\kun-windows-installer-migration.ps1"
   StrCpy $KunInstallerResultPath "$PLUGINSDIR\kun-windows-installer-result.txt"
+  System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_RESULT", "$KunInstallerResultPath").r0'
   System::Call 'kernel32::GetCurrentProcessId() i .r0'
   StrCpy $KunInstallerCurrentPid $0
   StrCpy $KunInstallerMigrationPrepared 0

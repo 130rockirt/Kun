@@ -486,6 +486,15 @@ describe('electron-builder Kun packaging', () => {
     expect(installerScript).toContain('Var /GLOBAL KunInstallerSecondarySourceDir')
     expect(installerScript).toContain('Var /GLOBAL KunInstallerTargetDir')
     expect(installerScript).toContain('Call KunRefreshInstallPaths')
+    const customInit = installerScript.slice(
+      installerScript.indexOf('!macro customInit'),
+      installerScript.indexOf('!macro customCheckAppRunning')
+    )
+    const resultEnvironment = 'System::Call \'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_RESULT", "$KunInstallerResultPath").r0\''
+    expect(customInit).toContain(resultEnvironment)
+    expect(customInit.indexOf(resultEnvironment)).toBeLessThan(
+      customInit.indexOf('Call KunRefreshInstallPaths')
+    )
     expect(installerScript).toContain('Function KunInstallDirectoryPagePre')
     expect(installerScript).toContain('Function KunInstallDirectoryPageLeave')
     expect(installerScript).toContain('Function KunInstallFilesPagePre')
