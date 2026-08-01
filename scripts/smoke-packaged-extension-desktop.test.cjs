@@ -104,14 +104,15 @@ test('stops the isolated Graph runtime before reporting smoke success', () => {
 })
 
 test('only recognizes data-dir scoped Kun smoke Runtime and Manager commands', () => {
-  const profile = '/tmp/kun-packaged-smoke/home/.kun/data'
+  const profile = join(root, '.tmp', 'kun-packaged-smoke', 'home', '.kun', 'data')
+  const unrelatedProfile = join(root, '.tmp', 'another-kun-smoke', 'home', '.kun', 'data')
   assert.equal(isVerifiedIsolatedKunCommand({
-    command: `/Applications/Kun.app/Contents/Frameworks/Kun Helper.app/Contents/MacOS/Kun Helper /app/kun/dist/cli/serve-entry.js serve --data-dir ${profile}`,
+    command: `Kun Helper /app/kun/dist/cli/serve-entry.js serve --data-dir ${profile}`,
     kind: 'runtime',
     expectedDataDir: profile
   }), true)
   assert.equal(isVerifiedIsolatedKunCommand({
-    command: '/app/kun/dist/cli/serve-entry.js serve --data-dir /Users/me/.kun/data',
+    command: `/app/kun/dist/cli/serve-entry.js serve --data-dir ${unrelatedProfile}`,
     kind: 'runtime',
     expectedDataDir: profile
   }), false)
@@ -125,7 +126,7 @@ test('only recognizes data-dir scoped Kun smoke Runtime and Manager commands', (
     command: '/app/kun/dist/manager/manager-entry.js',
     kind: 'manager',
     expectedDataDir: profile,
-    discoveryDataDir: '/Users/me/.kun/data'
+    discoveryDataDir: unrelatedProfile
   }), false)
 })
 
