@@ -5,6 +5,7 @@ import { join, posix, win32 } from 'node:path'
 import test from 'node:test'
 import {
   createArchiveExtractionInvocation,
+  createHeadlessRuntimeStopInvocation,
   extractArchive,
   isRetryableWindowsRemoveError,
   removeTemporaryDirectory
@@ -87,4 +88,12 @@ test('only retries known Windows temporary-directory lock errors', () => {
   const missing = new Error('missing directory')
   missing.code = 'ENOENT'
   assert.equal(isRetryableWindowsRemoveError(missing, 'win32'), false)
+})
+
+test('terminates the full Windows headless runtime process tree', () => {
+  assert.deepEqual(createHeadlessRuntimeStopInvocation(1234, 'win32'), {
+    command: 'taskkill',
+    args: ['/pid', '1234', '/t', '/f']
+  })
+  assert.equal(createHeadlessRuntimeStopInvocation(1234, 'darwin'), null)
 })

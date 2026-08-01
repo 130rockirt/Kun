@@ -138,6 +138,12 @@ export function isRetryableWindowsRemoveError(error, platform = process.platform
     ['EBUSY', 'ENOTEMPTY', 'EPERM'].includes(error.code)
 }
 
+export function createHeadlessRuntimeStopInvocation(pid, platform = process.platform) {
+  return platform === 'win32'
+    ? { command: 'taskkill', args: ['/pid', String(pid), '/t', '/f'] }
+    : null
+}
+
 function delay(milliseconds) {
   return new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds))
 }
@@ -199,7 +205,9 @@ async function smokeHeadlessRuntime(node, entry, env, dataDir) {
   } finally {
     if (child.exitCode === null && child.signalCode === null) {
       const exited = once(child, 'exit')
-      child.kill()
+      const stop = createHeadlessRuntimeStopInvocation(child.pid)
+      if (stop) execFileSync(stop.command, stop.args, { stdio: 'ignore' })
+      else child.kill()
       await Promise.race([
         exited,
         new Promise((resolvePromise) => setTimeout(resolvePromise, 5_000))
