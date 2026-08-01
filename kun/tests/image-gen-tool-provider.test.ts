@@ -594,9 +594,190 @@ describe('Image gen tool provider', () => {
     expect(body.tools[0]).toMatchObject({
       type: 'image_generation',
       action: 'edit',
-      model: 'gpt-image-2',
+      model: 'gpt-image-2'
+    })
+    expect(body.tools[0]).not.toHaveProperty('input_fidelity')
+  })
+
+  it('omits input_fidelity for the routed gpt-image-2-codex model name', async () => {
+    const requests: Array<Record<string, any>> = []
+    vi.stubGlobal('fetch', vi.fn(async (_url: string | URL, init?: RequestInit) => {
+      requests.push(JSON.parse(String(init?.body)) as Record<string, any>)
+      return new Response([
+        `data: ${JSON.stringify({
+          type: 'response.output_item.done',
+          item: { type: 'image_generation_call', result: png(8, 8).toString('base64') }
+        })}`,
+        'data: [DONE]'
+      ].join('\n\n'), {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' }
+      })
+    }))
+    const client = new CodexResponsesImageClient('https://chatgpt.com/backend-api/codex', 'codex-access')
+
+    await client.edit({
+      prompt: 'edit the reference',
+      model: 'gpt-image-2-codex',
+      images: [{ name: 'reference.png', mimeType: 'image/png', data: png(16, 16) }],
+      timeoutMs: 1_000,
+      signal: new AbortController().signal
+    })
+
+    expect(requests).toHaveLength(1)
+    expect(requests[0].tools[0]).toMatchObject({ action: 'edit', model: 'gpt-image-2-codex' })
+    expect(requests[0].tools[0]).not.toHaveProperty('input_fidelity')
+    expect(requests[0].input[0].content[1]).toMatchObject({ type: 'input_image', detail: 'high' })
+  })
+
+  it('retries a Codex image edit once without input_fidelity when the model rejects it', async () => {
+    const requests: Array<Record<string, any>> = []
+    const resultBase64 = png(8, 8).toString('base64')
+    vi.stubGlobal('fetch', vi.fn(async (_url: string | URL, init?: RequestInit) => {
+      requests.push(JSON.parse(String(init?.body)) as Record<string, any>)
+      if (requests.length === 1) {
+        return new Response(JSON.stringify({
+          error: {
+            message: 'The model gpt-image-next-codex does not support input_fidelity.',
+            type: 'invalid_request_error',
+            code: 'invalid_input_fidelity_model'
+          }
+        }), { status: 400, headers: { 'content-type': 'application/json' } })
+      }
+      return new Response([
+        `data: ${JSON.stringify({
+          type: 'response.output_item.done',
+          item: { type: 'image_generation_call', result: resultBase64 }
+        })}`,
+        'data: [DONE]'
+      ].join('\n\n'), {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' }
+      })
+    }))
+    const client = new CodexResponsesImageClient('https://chatgpt.com/backend-api/codex', 'codex-access')
+
+    const image = await client.edit({
+      prompt: 'preserve the composition and change the shoes',
+      model: 'gpt-image-next',
+      images: [{ name: 'reference.png', mimeType: 'image/png', data: png(16, 16) }],
+      timeoutMs: 1_000,
+      signal: new AbortController().signal
+    })
+
+    expect(image.data.byteLength).toBeGreaterThan(0)
+    expect(requests).toHaveLength(2)
+    expect(requests[0].tools[0]).toMatchObject({
+      type: 'image_generation',
+      action: 'edit',
+      model: 'gpt-image-next',
       input_fidelity: 'high'
     })
+    expect(requests[1].tools[0]).toMatchObject({
+      type: 'image_generation',
+      action: 'edit',
+      model: 'gpt-image-next'
+    })
+    expect(requests[1].tools[0]).not.toHaveProperty('input_fidelity')
+    for (const body of requests) {
+      expect(body.tool_choice).toMatchObject({ type: 'allowed_tools' })
+      expect(body.input[0].content).toEqual([
+        { type: 'input_text', text: 'preserve the composition and change the shoes' },
+        {
+          type: 'input_image',
+          image_url: expect.stringMatching(/^data:image\/png;base64,/),
+          detail: 'high'
+        }
+      ])
+    }
+  })
+
+  it('does not retry unrelated Codex image edit errors without input_fidelity', async () => {
+    const requests: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (_url: string | URL, init?: RequestInit) => {
+      requests.push(String(init?.body))
+      return new Response(JSON.stringify({
+        error: { code: 'content_policy_violation', message: 'Request blocked by content policy.' }
+      }), { status: 400, headers: { 'content-type': 'application/json' } })
+    }))
+    const client = new CodexResponsesImageClient('https://chatgpt.com/backend-api/codex', 'codex-access')
+
+    await expect(client.edit({
+      prompt: 'edit the reference',
+      model: 'gpt-image-next',
+      images: [{ name: 'reference.png', mimeType: 'image/png', data: png(16, 16) }],
+      timeoutMs: 1_000,
+      signal: new AbortController().signal
+    })).rejects.toThrow(/content_policy_violation/)
+
+    expect(requests).toHaveLength(1)
+    expect(JSON.parse(requests[0]).tools[0]).toHaveProperty('input_fidelity', 'high')
+  })
+
+  it('does not retry input_fidelity errors returned with a non-400 status', async () => {
+    const requests: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (_url: string | URL, init?: RequestInit) => {
+      requests.push(String(init?.body))
+      return new Response(JSON.stringify({
+        error: {
+          code: 'invalid_input_fidelity_model',
+          message: 'The routed model does not support input_fidelity.'
+        }
+      }), { status: 422, headers: { 'content-type': 'application/json' } })
+    }))
+    const client = new CodexResponsesImageClient('https://chatgpt.com/backend-api/codex', 'codex-access')
+
+    await expect(client.edit({
+      prompt: 'edit the reference',
+      model: 'gpt-image-next',
+      images: [{ name: 'reference.png', mimeType: 'image/png', data: png(16, 16) }],
+      timeoutMs: 1_000,
+      signal: new AbortController().signal
+    })).rejects.toThrow(/invalid_input_fidelity_model/)
+
+    expect(requests).toHaveLength(1)
+  })
+
+  it('keeps input_fidelity omitted after its retry enters tool_choice fallback', async () => {
+    const requests: Array<Record<string, any>> = []
+    vi.stubGlobal('fetch', vi.fn(async (_url: string | URL, init?: RequestInit) => {
+      requests.push(JSON.parse(String(init?.body)) as Record<string, any>)
+      if (requests.length === 1) {
+        return new Response(JSON.stringify({
+          error: { code: 'invalid_input_fidelity_model', message: 'input_fidelity is unsupported' }
+        }), { status: 400 })
+      }
+      if (requests.length === 2) {
+        return new Response('Tool choice allowed_tools not found in tools parameter.', { status: 400 })
+      }
+      return new Response([
+        `data: ${JSON.stringify({
+          type: 'response.output_item.done',
+          item: { type: 'image_generation_call', result: png(8, 8).toString('base64') }
+        })}`,
+        'data: [DONE]'
+      ].join('\n\n'), {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' }
+      })
+    }))
+    const client = new CodexResponsesImageClient('https://chatgpt.com/backend-api/codex', 'codex-access')
+
+    const image = await client.edit({
+      prompt: 'edit the reference',
+      model: 'gpt-image-next',
+      images: [{ name: 'reference.png', mimeType: 'image/png', data: png(16, 16) }],
+      timeoutMs: 1_000,
+      signal: new AbortController().signal
+    })
+
+    expect(image.data.byteLength).toBeGreaterThan(0)
+    expect(requests).toHaveLength(3)
+    expect(requests[0].tools[0]).toHaveProperty('input_fidelity', 'high')
+    expect(requests[1].tools[0]).not.toHaveProperty('input_fidelity')
+    expect(requests[1].tool_choice).toMatchObject({ type: 'allowed_tools' })
+    expect(requests[2].tools[0]).not.toHaveProperty('input_fidelity')
+    expect(requests[2].tool_choice).toBe('required')
   })
 
   it('uses the latest Codex partial image when the final image item is absent', async () => {

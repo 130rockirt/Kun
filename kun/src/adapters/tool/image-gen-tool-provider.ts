@@ -790,6 +790,18 @@ function isCodexToolChoiceError(status: number, body: string): boolean {
   return /tool[_ ]choice|allowed_tools|image_generation.*tools|tools.*image_generation/i.test(body)
 }
 
+function codexImageModelSupportsInputFidelity(model: string): boolean {
+  const normalized = model.trim().toLowerCase()
+  return normalized !== 'gpt-image-2' && normalized !== 'gpt-image-2-codex'
+}
+
+function isCodexInputFidelityModelError(status: number, body: string): boolean {
+  if (status !== 400) return false
+  if (/invalid_input_fidelity_model/i.test(body)) return true
+  return /input_fidelity.{0,200}(?:does not support|not supported|unsupported)/is.test(body) ||
+    /(?:does not support|not supported|unsupported).{0,200}input_fidelity/is.test(body)
+}
+
 function extractCodexResponsesImage(body: string): GeneratedImage | null {
   const events = parseCodexResponsesImageEvents(body)
   const failure = events.find((event) => event.type === 'response.failed' || event.type === 'error')
@@ -1100,7 +1112,12 @@ export class CodexResponsesImageClient implements ImageGenClient {
     inputImages: { name: string; mimeType: string; data: Buffer }[]
   ): Promise<GeneratedImage> {
     const signal = withTimeout(request.signal, request.timeoutMs)
-    const buildBody = (toolChoiceMode: CodexImageToolChoiceMode) => JSON.stringify({
+    const shouldRequestInputFidelity = inputImages.length > 0 &&
+      codexImageModelSupportsInputFidelity(request.model)
+    const buildBody = (
+      toolChoiceMode: CodexImageToolChoiceMode,
+      includeInputFidelity: boolean
+    ) => JSON.stringify({
       model: CODEX_IMAGE_RESPONSES_MODEL,
       input: [
         {
@@ -1126,7 +1143,7 @@ export class CodexResponsesImageClient implements ImageGenClient {
           output_format: 'png',
           background: 'opaque',
           partial_images: 1,
-          ...(inputImages.length > 0 ? { input_fidelity: 'high' } : {}),
+          ...(includeInputFidelity ? { input_fidelity: 'high' } : {}),
           ...(request.size ? { size: request.size } : {})
         }
       ],
@@ -1147,7 +1164,12 @@ export class CodexResponsesImageClient implements ImageGenClient {
 
     let lastHttpError: ImageGenHttpError | null = null
     let lastEmptyResponse = ''
-    for (const mode of ['allowed_tools', 'required', 'none'] satisfies CodexImageToolChoiceMode[]) {
+    let includeInputFidelity = shouldRequestInputFidelity
+    let retriedWithoutInputFidelity = false
+    const post = async (
+      mode: CodexImageToolChoiceMode,
+      withInputFidelity: boolean
+    ): Promise<{ response: Response; text: string }> => {
       let response: Response
       try {
         response = await fetch(this.endpointUrl, {
@@ -1158,13 +1180,33 @@ export class CodexResponsesImageClient implements ImageGenClient {
             Accept: 'text/event-stream',
             'Content-Type': 'application/json'
           },
-          body: buildBody(mode),
+          body: buildBody(mode, withInputFidelity),
           signal
         })
       } catch (error) {
         throw imageFetchFailure(this.endpointUrl, error, request)
       }
-      const text = await readLimitedResponseText(response, MAX_CODEX_IMAGE_SSE_BYTES)
+      return {
+        response,
+        text: await readLimitedResponseText(response, MAX_CODEX_IMAGE_SSE_BYTES)
+      }
+    }
+
+    for (const mode of ['allowed_tools', 'required', 'none'] satisfies CodexImageToolChoiceMode[]) {
+      let { response, text } = await post(mode, includeInputFidelity)
+      if (
+        !response.ok &&
+        includeInputFidelity &&
+        !retriedWithoutInputFidelity &&
+        isCodexInputFidelityModelError(response.status, text)
+      ) {
+        // Retry immediately in the same tool-choice mode. Once the provider has
+        // established that this routed model rejects the field, keep it omitted
+        // from any later tool-choice compatibility attempts in this request.
+        includeInputFidelity = false
+        retriedWithoutInputFidelity = true
+        ;({ response, text } = await post(mode, false))
+      }
       if (!response.ok) {
         const error = new ImageGenHttpError(response.status, text)
         lastHttpError = error
