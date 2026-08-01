@@ -607,7 +607,8 @@ describe('Attachment store and multimodal input', () => {
 
     expect(await h.loop.runTurn(h.threadId, h.turnId)).toBe('completed')
     const instructions = seenRequests.at(-1)?.contextInstructions?.join('\n') ?? ''
-    expect(instructions).not.toContain('reference_image_paths')
+    expect(instructions).toContain(`attachment ID ${attachment.id}`)
+    expect(instructions).toContain('reference_attachment_ids')
     expect(instructions).not.toContain(localFilePath)
   })
 
@@ -1004,7 +1005,10 @@ function generateImageTool(): LocalTool {
   return {
     name: 'generate_image',
     description: 'Generate or edit an image.',
-    inputSchema: { type: 'object' },
+    inputSchema: {
+      type: 'object',
+      properties: { reference_attachment_ids: {}, reference_image_paths: {} }
+    },
     toolKind: 'tool_call',
     policy: 'auto',
     async execute() {
