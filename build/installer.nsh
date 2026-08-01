@@ -20,7 +20,11 @@ Var /GLOBAL KunInstallerStopResult
 !endif
 
 !macro kunRunMigrationHelper ACTION
+  !ifndef BUILD_UNINSTALLER
+  nsExec::ExecToStack `"$KunInstallerPowerShellPath" -NoProfile -ExecutionPolicy Bypass -File "$KunInstallerHelperPath" -Action ${ACTION} -ResultPath "$KunInstallerResultPath"`
+  !else
   nsExec::ExecToStack `"$KunInstallerPowerShellPath" -NoProfile -ExecutionPolicy Bypass -File "$KunInstallerHelperPath" -Action ${ACTION}`
+  !endif
   Pop $KunInstallerHelperExitCode
   Pop $KunInstallerHelperOutput
 !macroend

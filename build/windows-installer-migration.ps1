@@ -1,7 +1,8 @@
 param(
   [Parameter(Mandatory = $true)]
   [ValidateSet('ResolvePath', 'ResolveSource', 'StopProcesses', 'Recover', 'Prepare', 'FallbackCleanup', 'Restore', 'UpdatePath')]
-  [string]$Action
+  [string]$Action,
+  [string]$ResultPath = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -134,7 +135,10 @@ function Resolve-RegisteredInstallSource {
 }
 
 function Write-ResolvedInstallTarget([string]$Target) {
-  $resultPath = Normalize-FullPath (Get-EnvironmentValue 'KUN_INSTALLER_RESULT')
+  $resultPath = Normalize-FullPath $ResultPath
+  if ([string]::IsNullOrWhiteSpace($resultPath)) {
+    $resultPath = Normalize-FullPath (Get-EnvironmentValue 'KUN_INSTALLER_RESULT')
+  }
   if (-not [string]::IsNullOrWhiteSpace($resultPath)) {
     [IO.File]::WriteAllBytes($resultPath, [Text.Encoding]::Unicode.GetBytes($Target))
   }
