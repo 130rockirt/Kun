@@ -55,6 +55,12 @@ function processError(result: ReturnType<typeof runHelper>): string {
   return String(result.stderr ?? '')
 }
 
+function readJournal(path: string): { Records: Array<{ Stash: string }> } {
+  return JSON.parse(readFileSync(path, 'utf8').replace(/^\uFEFF/, '')) as {
+    Records: Array<{ Stash: string }>
+  }
+}
+
 afterEach(() => {
   while (tempRoots.length > 0) {
     const root = tempRoots.pop()
@@ -94,9 +100,7 @@ windowsOnly('Windows installer migration helper', () => {
     expect(existsSync(join(source, 'notes.txt'))).toBe(false)
     expect(existsSync(join(source, 'Kun.exe'))).toBe(true)
 
-    const journalData = JSON.parse(readFileSync(journal, 'utf8')) as {
-      Records: Array<{ Stash: string }>
-    }
+    const journalData = readJournal(journal)
     expect(readFileSync(join(journalData.Records[0].Stash, 'content', 'notes.txt'), 'utf8')).toBe(
       'keep me'
     )
@@ -177,9 +181,7 @@ windowsOnly('Windows installer migration helper', () => {
     expect(restored.stderr).toContain('conflicts with existing paths')
     expect(readFileSync(join(source, 'personal.txt'), 'utf8')).toBe('conflict')
     expect(existsSync(journal)).toBe(true)
-    const journalData = JSON.parse(readFileSync(journal, 'utf8')) as {
-      Records: Array<{ Stash: string }>
-    }
+    const journalData = readJournal(journal)
     expect(readFileSync(join(journalData.Records[0].Stash, 'content', 'personal.txt'), 'utf8')).toBe(
       'original'
     )
