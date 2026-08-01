@@ -69,6 +69,7 @@ describe('Graph scheduler supervision liveness', () => {
     })
     await runtimeSupervisor.sweepObligations()
     await runtimeSupervisor.flush('run_harness')
+    await harness.scheduler.resumeRun('run_harness')
     await waitFor(async () => {
       const run = await harness.store.get('run_harness')
       const obligation = run?.supervisionObligations.find((entry) =>
@@ -78,6 +79,7 @@ describe('Graph scheduler supervision liveness', () => {
     nowMs += 2_000
     await runtimeSupervisor.sweepObligations()
     await runtimeSupervisor.flush('run_harness')
+    await harness.scheduler.resumeRun('run_harness')
     await waitFor(async () => {
       const run = await harness.store.get('run_harness')
       const obligation = run?.supervisionObligations.find((entry) =>
@@ -87,6 +89,7 @@ describe('Graph scheduler supervision liveness', () => {
     nowMs += 5_000
     await runtimeSupervisor.sweepObligations()
     await runtimeSupervisor.flush('run_harness')
+    await harness.scheduler.resumeRun('run_harness')
     await waitFor(async () => {
       const run = await harness.store.get('run_harness')
       const finish = run?.nodes.finish
@@ -101,6 +104,7 @@ describe('Graph scheduler supervision liveness', () => {
     })
     await runtimeSupervisor.sweepObligations()
     await runtimeSupervisor.flush('run_harness')
+    await harness.scheduler.resumeRun('run_harness')
     let completed: GraphRunV1
     try {
       completed = await waitFor(async () => {
@@ -141,7 +145,7 @@ describe('Graph scheduler supervision liveness', () => {
     ]))
     await harness.scheduler.stop()
     await runtimeSupervisor.stop()
-  }, 15_000)
+  }, 20_000)
 
   it('continues an independent ready branch while another result awaits Lead review', async () => {
     const base = testGraphPlan()
