@@ -3,15 +3,16 @@ Var /GLOBAL KunInstallerSourceDir
 Var /GLOBAL KunInstallerPrimarySourceDir
 Var /GLOBAL KunInstallerSecondarySourceDir
 Var /GLOBAL KunInstallerTargetDir
-Var /GLOBAL KunInstallerHelperPath
 Var /GLOBAL KunInstallerResultPath
 Var /GLOBAL KunInstallerResultHandle
+Var /GLOBAL KunInstallerJournalPath
+Var /GLOBAL KunInstallerMigrationPrepared
+Var /GLOBAL KunInstallerRestoreInteractive
+!endif
+Var /GLOBAL KunInstallerHelperPath
 Var /GLOBAL KunInstallerPowerShellPath
 Var /GLOBAL KunInstallerHelperExitCode
 Var /GLOBAL KunInstallerHelperOutput
-Var /GLOBAL KunInstallerJournalPath
-Var /GLOBAL KunInstallerMigrationPrepared
-!endif
 Var /GLOBAL KunInstallerCurrentPid
 !ifdef BUILD_UNINSTALLER
 Var /GLOBAL KunInstallerStopAttempt
@@ -40,6 +41,9 @@ Var /GLOBAL KunInstallerStopResult
   System::Call 'kernel32::GetCurrentProcessId() i .r0'
   StrCpy $KunInstallerCurrentPid $0
   StrCpy $KunInstallerMigrationPrepared 0
+  !ifndef BUILD_UNINSTALLER
+    StrCpy $KunInstallerRestoreInteractive 0
+  !endif
 
   ${if} ${isUpdated}
     # electron-updater always passes --updated, including older Kun versions
@@ -69,6 +73,10 @@ Var /GLOBAL KunInstallerStopResult
       Return
     ${endif}
 
+    InitPluginsDir
+    StrCpy $KunInstallerPowerShellPath "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe"
+    File /oname=$PLUGINSDIR\kun-windows-installer-migration.ps1 "${PROJECT_DIR}\build\windows-installer-migration.ps1"
+    StrCpy $KunInstallerHelperPath "$PLUGINSDIR\kun-windows-installer-migration.ps1"
     System::Call 'kernel32::GetCurrentProcessId() i .r0'
     StrCpy $KunInstallerCurrentPid $0
     System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_APP_ROOT", "$INSTDIR").r0'
@@ -78,10 +86,10 @@ Var /GLOBAL KunInstallerStopResult
     KunStopProcessesFromInstallDir:
       IntOp $KunInstallerStopAttempt $KunInstallerStopAttempt + 1
       DetailPrint "Checking for running ${PRODUCT_NAME} processes under $INSTDIR."
-      nsExec::Exec `"$PowerShellPath" -NoProfile -ExecutionPolicy Bypass -Command "$$ErrorActionPreference='SilentlyContinue';$$r=[IO.Path]::GetFullPath($$env:KUN_INSTALLER_APP_ROOT).TrimEnd('\');$$s=[int]$$env:KUN_INSTALLER_SELF_PID;function owned($$x){if(!$$x.StartsWith($$r+'\','OrdinalIgnoreCase')){return $$false};$$q=$$x.Substring($$r.Length+1);return $$q.Equals('Kun.exe','OrdinalIgnoreCase') -or $$q.Equals('DeepSeek GUI.exe','OrdinalIgnoreCase') -or $$q.StartsWith('resources\','OrdinalIgnoreCase') -or $$q.StartsWith('bin\','OrdinalIgnoreCase')};function p{@(gcim Win32_Process|?{if(!$$_.ExecutablePath){$$false}else{$$x=[IO.Path]::GetFullPath($$_.ExecutablePath);$$n=[IO.Path]::GetFileName($$x);$$_.ProcessId -ne $$s -and (owned $$x) -and !$$n.StartsWith('Uninstall ','OrdinalIgnoreCase') -and !$$n.Equals('old-uninstaller.exe','OrdinalIgnoreCase')}})};$$a=p;if($$a.Count -eq 0){exit 1};$$a|%{& $$env:SystemRoot\System32\taskkill.exe /PID $$_.ProcessId /T /F|Out-Null};Start-Sleep -Milliseconds 500;if((p).Count -gt 0){exit 0}else{exit 1}`
-      Pop $KunInstallerStopResult
+      !insertmacro kunRunMigrationHelper StopProcesses
+      StrCpy $KunInstallerStopResult $KunInstallerHelperExitCode
 
-      ${if} $KunInstallerStopResult != 0
+      ${if} $KunInstallerStopResult == 0
         Goto KunInstallDirProcessesStopped
       ${endif}
 
@@ -103,18 +111,26 @@ Var /GLOBAL KunInstallerStopResult
   !else
     Call KunPrepareInstallMigration
     StrCpy $appExe "$INSTDIR\${APP_EXECUTABLE_FILENAME}"
+    ${ifNot} ${Silent}
+      SetSilent silent
+      StrCpy $KunInstallerRestoreInteractive 1
+    ${endif}
   !endif
 !macroend
 
 !macro customUnInstallCheck
   StrCpy $KunInstallerSourceDir $KunInstallerPrimarySourceDir
   Call KunHandleOldUninstallerResult
+  ${if} $installMode != "all"
+    Call KunRestoreInteractiveInstaller
+  ${endif}
 !macroend
 
 !macro customUnInstallCheckCurrentUser
   StrCpy $KunInstallerSourceDir $KunInstallerSecondarySourceDir
   Call KunHandleOldUninstallerResult
   StrCpy $KunInstallerSourceDir $KunInstallerPrimarySourceDir
+  Call KunRestoreInteractiveInstaller
 !macroend
 
 !macro customInstall
@@ -274,6 +290,13 @@ Var /GLOBAL KunInstallerStopResult
       ${endif}
       ClearErrors
       StrCpy $R0 0
+  FunctionEnd
+
+  Function KunRestoreInteractiveInstaller
+    ${if} $KunInstallerRestoreInteractive == 1
+      SetSilent normal
+      StrCpy $KunInstallerRestoreInteractive 0
+    ${endif}
   FunctionEnd
 !endif
 !macroend

@@ -1,6 +1,6 @@
 param(
   [Parameter(Mandatory = $true)]
-  [ValidateSet('ResolvePath', 'ResolveSource', 'Recover', 'Prepare', 'FallbackCleanup', 'Restore', 'UpdatePath')]
+  [ValidateSet('ResolvePath', 'ResolveSource', 'StopProcesses', 'Recover', 'Prepare', 'FallbackCleanup', 'Restore', 'UpdatePath')]
   [string]$Action
 )
 
@@ -347,6 +347,15 @@ function Stop-AppProcesses([string[]]$Roots) {
   }
 }
 
+function Stop-InstallRootProcesses {
+  $root = Normalize-FullPath (Get-EnvironmentValue 'KUN_INSTALLER_APP_ROOT')
+  if ([string]::IsNullOrWhiteSpace($root)) {
+    return
+  }
+  Assert-SafeInstallRoot $root 'Application root'
+  Stop-AppProcesses @($root)
+}
+
 function Get-InstallSources {
   $sources = @(
     (Get-EnvironmentValue 'KUN_INSTALLER_SOURCE'),
@@ -614,6 +623,9 @@ try {
     }
     'ResolveSource' {
       [Console]::Out.Write((Resolve-RegisteredInstallSource))
+    }
+    'StopProcesses' {
+      Stop-InstallRootProcesses
     }
     'Recover' {
       Invoke-RestoreJournal
