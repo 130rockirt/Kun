@@ -64,8 +64,29 @@ import {
 import { resolveActiveExtensionWorkspaceRoot } from '../../extensions/active-extension-workspace'
 import { extractDiffFilePath, extractUnifiedDiffText } from '../../lib/diff-stats'
 import type { PlanBuildOrchestration } from '../../plan/plan-build'
+import {
+  selectGraphPlanningCorrectionDraft,
+  useGraphStore
+} from '../../graph/graph-store'
 
 export { summarizeToolBlock } from './message-timeline-process'
+
+export function timelineTurnIsProcessing(input: {
+  busy: boolean
+  isLatestTurn: boolean
+  turnPending: boolean
+  hasLiveStream: boolean
+  turnId?: string
+  graphPlanningCorrectionTurnId?: string | null
+}): boolean {
+  if (
+    input.graphPlanningCorrectionTurnId &&
+    input.turnId === input.graphPlanningCorrectionTurnId
+  ) {
+    return false
+  }
+  return (input.busy && input.isLatestTurn) || input.turnPending || input.hasLiveStream
+}
 
 type Props = {
   blocks: ChatBlock[]
@@ -420,6 +441,9 @@ export function MessageTimeline({
     turnReasoningLastAtByUserId,
     activeThread
   } = useTimelineStores(activeThreadId)
+  const graphPlanningCorrectionTurnId = useGraphStore((state) =>
+    selectGraphPlanningCorrectionDraft(state.drafts, activeThreadId)?.draft.sourceTurnId ?? null
+  )
   const extensionWorkspaceRoot = resolveActiveExtensionWorkspaceRoot(
     activeThreadId,
     activeThread ? [activeThread] : [],
@@ -480,6 +504,12 @@ export function MessageTimeline({
   const visibleTurns = useMemo(
     () => (hiddenTurnCount > 0 ? turns.slice(hiddenTurnCount) : turns),
     [hiddenTurnCount, turns]
+  )
+  const graphPlanningPaused = Boolean(
+    graphPlanningCorrectionTurnId &&
+    turns.some((turn) =>
+      turn.turnId === graphPlanningCorrectionTurnId &&
+      turn.user?.id === currentTurnUserId)
   )
   const visibleTurnAnchors = useMemo(
     () => {
@@ -581,11 +611,11 @@ export function MessageTimeline({
   // Tick a clock while a turn is running so the live "Worked for Xs" updates.
   const [tickNow, setTickNow] = useState(() => Date.now())
   useEffect(() => {
-    if (!busy || !currentTurnUserId) return
+    if (!busy || !currentTurnUserId || graphPlanningPaused) return
     setTickNow(Date.now())
     const id = window.setInterval(() => setTickNow(Date.now()), 1000)
     return () => window.clearInterval(id)
-  }, [busy, currentTurnUserId])
+  }, [busy, currentTurnUserId, graphPlanningPaused])
 
   const jumpToTurn = (key: string): void => {
     const target = turnRefMap.current.get(key)
@@ -748,7 +778,14 @@ export function MessageTimeline({
           const turnPending = threadHasPendingRuntimeWork(turn.blocks)
           const isLatestTurn = index === visibleTurns.length - 1
           const hasLiveStream = isLatestTurn && !!(liveReasoning.trim() || live.trim())
-          const turnIsProcessing = (busy && isLatestTurn) || turnPending || hasLiveStream
+          const turnIsProcessing = timelineTurnIsProcessing({
+            busy,
+            isLatestTurn,
+            turnPending,
+            hasLiveStream,
+            turnId: turn.turnId,
+            graphPlanningCorrectionTurnId
+          })
           const showForkPoint =
             forkBoundaryTurnCount !== undefined && absoluteTurnIndex === forkBoundaryTurnCount
           const turnKey = stableTurnKey(turn, absoluteTurnIndex)

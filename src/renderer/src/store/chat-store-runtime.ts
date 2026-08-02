@@ -466,6 +466,8 @@ export function isCodeSidebarThread(
 ): boolean {
   const workspace = normalizeWorkspaceRoot(thread.workspace)
   return Boolean(workspace) &&
+    thread.agentSurface !== 'design' &&
+    thread.agentSurface !== 'write' &&
     !isInternalTemporaryWorkspace(thread.workspace) &&
     !isInternalDeepSeekGuiWorkspace(thread.workspace) &&
     !isClawWorkspacePath(thread.workspace) &&

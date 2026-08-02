@@ -49,6 +49,14 @@ export type ItemHistoryCompactionResult = {
  * JSONL and keep a small in-memory window for fast access.
  */
 export interface SessionStore {
+  /**
+   * Atomically reserve the next durable event sequence number.
+   *
+   * Manager-backed stores implement this so multiple runtime processes never
+   * derive the same value from a shared high-water mark. Local stores may omit
+   * it; RuntimeEventRecorder retains its process-local allocator fallback.
+   */
+  allocateEventSeq?(threadId: string): Promise<number>
   appendEvent(threadId: string, event: RuntimeEvent): Promise<void>
   appendItem(threadId: string, item: TurnItem): Promise<void>
   /**
@@ -75,6 +83,16 @@ export interface SessionStore {
     options?: { force?: boolean }
   ): Promise<ItemHistoryCompactionResult>
   loadEventsSince(threadId: string, sinceSeq: number): Promise<RuntimeEvent[]>
+  /**
+   * Optional cross-process live feed. The normal EventBus remains the fast
+   * path for events produced by this runtime; shared stores use this feed to
+   * relay events produced by the other flavor.
+   */
+  watchEventsSince?(
+    threadId: string,
+    sinceSeq: number,
+    signal: AbortSignal
+  ): AsyncIterable<RuntimeEvent>
   /**
    * Optional bounded, forward-only event replay. Serve uses this when present
    * so a long JSONL backlog is never materialized as one giant array.

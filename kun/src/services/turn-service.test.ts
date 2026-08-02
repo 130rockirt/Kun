@@ -141,6 +141,65 @@ describe('TurnService startTurn', () => {
     expect(DEFAULT_MAX_CONCURRENT_TURNS).toBe(256)
   })
 
+  it('claims an empty legacy thread on its first surfaced turn without reclassifying existing history', async () => {
+    const sessionStore = new InMemorySessionStore()
+    const threadStore = new InMemoryThreadStore()
+    const eventBus = new InMemoryEventBus()
+    const nowIso = () => '2026-08-01T00:00:00.000Z'
+    const service = new TurnService({
+      threadStore,
+      sessionStore,
+      events: new RuntimeEventRecorder({
+        eventBus,
+        sessionStore,
+        allocateSeq: (threadId) => eventBus.allocateSeq(threadId),
+        nowIso
+      }),
+      inflight: new InflightTracker(),
+      steering: new SteeringQueue(),
+      compactor: new ContextCompactor(),
+      ids: new SequentialIdGenerator(),
+      nowIso
+    })
+
+    const empty = createThreadRecord({
+      id: 'thr_empty_legacy',
+      title: 'Empty legacy',
+      workspace: '/tmp/workspace',
+      model: 'test-model'
+    })
+    await threadStore.upsert(empty)
+    const designTurn = await service.startTurn({
+      threadId: empty.id,
+      request: { prompt: 'draw a page', model: 'test-model', agentSurface: 'design' }
+    })
+    expect((await threadStore.get(empty.id))?.agentSurface).toBe('design')
+    await service.interruptTurn({ threadId: empty.id, turnId: designTurn.turnId })
+
+    const existing = createThreadRecord({
+      id: 'thr_existing_legacy',
+      title: 'Existing legacy',
+      workspace: '/tmp/workspace',
+      model: 'test-model'
+    })
+    await threadStore.upsert({
+      ...existing,
+      turns: [finishTurn(createTurnRecord({
+        id: 'turn_existing',
+        threadId: existing.id,
+        prompt: 'prior Code turn',
+        model: existing.model
+      }), 'completed', nowIso())]
+    })
+    const laterDesignTurn = await service.startTurn({
+      threadId: existing.id,
+      request: { prompt: 'misdirected design request', model: 'test-model', agentSurface: 'design' }
+    })
+    expect((await threadStore.get(existing.id))?.agentSurface).toBeUndefined()
+    expect((await threadStore.list()).find((thread) => thread.id === existing.id)?.agentSurface).toBe('code')
+    await service.interruptTurn({ threadId: existing.id, turnId: laterDesignTurn.turnId })
+  })
+
   it('binds submitted attachments to the final thread before persisting the turn', async () => {
     const root = await mkdtemp(join(tmpdir(), 'kun-turn-attachment-'))
     try {
@@ -642,6 +701,7 @@ describe('TurnService startTurn', () => {
     const steering = new SteeringQueue()
     const nowIso = () => '2026-07-28T12:00:00.000Z'
     let graphLastEventSeq = 7
+    let supervisionPending = false
     const service = new TurnService({
       threadStore,
       sessionStore,
@@ -656,7 +716,12 @@ describe('TurnService startTurn', () => {
       compactor: new ContextCompactor(),
       maxConcurrentTurns: 1,
       resolveGraphLeadRun: async ({ turnId }) => turnId === 'turn_1'
-        ? { runId: 'run_1', lastEventSeq: graphLastEventSeq, terminal: false }
+        ? {
+            runId: 'run_1',
+            lastEventSeq: graphLastEventSeq,
+            terminal: false,
+            supervisionPending
+          }
         : null,
       ids: new SequentialIdGenerator(),
       nowIso
@@ -716,10 +781,20 @@ describe('TurnService startTurn', () => {
     })).resolves.toBe('resumed')
     expect(service.isTurnExecutionActive(source.turnId)).toBe(true)
     graphLastEventSeq = 9
+    supervisionPending = true
     await expect(service.suspendGraphLeadTurn({
       threadId: 'thr_graph_lead',
       turnId: source.turnId
-    })).resolves.toBe('suspended')
+    })).resolves.toBe('supervision_pending')
+    expect(service.isTurnExecutionActive(source.turnId)).toBe(true)
+    await expect(service.suspendGraphLeadTurn({
+      threadId: 'thr_graph_lead',
+      turnId: source.turnId,
+      force: true,
+      preserveDeliveryCursor: true,
+      allowPendingSupervision: true
+    })).resolves.toBe('suspended_pending_supervision')
+    expect(service.isTurnExecutionActive(source.turnId)).toBe(false)
     expect(await service.getTurn('thr_graph_lead', source.turnId)).toMatchObject({
       status: 'running',
       graphLeadLifecycle: {
@@ -734,6 +809,7 @@ describe('TurnService startTurn', () => {
       lastDeliveredSeq: 9,
       terminal: false
     })).resolves.toBe('resumed')
+    supervisionPending = false
     await service.steerTurn({
       threadId: 'thr_graph_lead',
       turnId: source.turnId,

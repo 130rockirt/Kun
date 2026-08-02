@@ -1,5 +1,6 @@
 import type {
-  ThreadGoal, ThreadMode, ThreadRecord, ThreadRelation, ThreadStatus, ThreadSummary, ThreadTodoList
+  ThreadAgentSurface, ThreadGoal, ThreadMode, ThreadRecord, ThreadRelation, ThreadStatus,
+  ThreadSummary, ThreadTodoList
 } from '../../contracts/threads.js'
 import {
   DEFAULT_APPROVAL_REVIEWER,
@@ -8,9 +9,11 @@ import {
   type SandboxMode
 } from '../../contracts/policy.js'
 import type { ThreadStoreListOptions } from '../../ports/thread-store.js'
+import { resolveThreadAgentSurface } from '../../domain/thread.js'
 
 export type ThreadRow = {
   id: string; title: string; workspace: string; model: string; mode: ThreadMode; status: ThreadStatus
+  agent_surface: ThreadAgentSurface | null
   approval_policy: ApprovalPolicy; sandbox_mode: SandboxMode
   approval_reviewer: ApprovalReviewer | null
   cost_budget_usd: number | null
@@ -33,6 +36,7 @@ export function rowFromIndexRecord(record: ThreadIndexRecord, paths: {
   const thread = record.thread
   return {
     id: thread.id, title: thread.title, workspace: thread.workspace, model: thread.model,
+    agent_surface: resolveThreadAgentSurface(thread),
     mode: thread.mode, status: thread.status, approval_policy: thread.approvalPolicy,
     sandbox_mode: thread.sandboxMode,
     approval_reviewer: thread.approvalReviewer ?? DEFAULT_APPROVAL_REVIEWER,
@@ -69,6 +73,7 @@ export function summaryFromRow(row: ThreadRow): ThreadSummary {
   const extension = parseJson<ExtensionThreadMetadata>(row.extension_metadata_json)
   return {
     id: row.id, title: row.title, workspace: row.workspace, model: row.model, mode: row.mode,
+    agentSurface: row.agent_surface ?? 'code',
     status: row.status, approvalPolicy: row.approval_policy, sandboxMode: row.sandbox_mode,
     approvalReviewer: row.approval_reviewer ?? DEFAULT_APPROVAL_REVIEWER,
     modelRequestCaptureEnabled: Boolean(row.model_request_capture_enabled),

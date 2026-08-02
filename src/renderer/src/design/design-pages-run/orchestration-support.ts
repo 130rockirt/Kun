@@ -51,8 +51,12 @@ export type RunDesignPagesDeps = {
   model?: string
   providerId?: string
   reasoningEffort?: string
+  serviceTier?: 'priority'
+  expectedThreadId?: string
   generationPrompt?: string
   designContext?: DesignContext
+  /** Reports whether the first runtime send was accepted, before waiting for that turn to finish. */
+  onFirstSendSettled?: (sent: boolean) => void
   /**
    * When false, skip the design.md / design-system / logo foundation and just
    * plan + generate pages (the legacy flow). Defaults to true.
@@ -370,8 +374,16 @@ export async function runTurn(opts: {
   signal: { cancelled: boolean }
   timeoutMs: number
   artifactId?: string
+  onSendSettled?: (sent: boolean) => void
 }): Promise<'complete' | 'cancelled' | 'timeout' | 'send-failed'> {
-  const sent = await opts.sendMessage(opts.prompt, 'agent', opts.overrides)
+  let sent: boolean
+  try {
+    sent = await opts.sendMessage(opts.prompt, 'agent', opts.overrides)
+  } catch (error) {
+    opts.onSendSettled?.(false)
+    throw error
+  }
+  opts.onSendSettled?.(sent)
   if (!sent) return 'send-failed'
   const result = await waitForTurnComplete(opts.signal, opts.timeoutMs)
   if (result !== 'complete') return result

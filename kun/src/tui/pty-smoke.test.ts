@@ -6,6 +6,7 @@ import process from 'node:process'
 import * as pty from 'node-pty'
 import { afterEach, describe, expect, it } from 'vitest'
 import { resolveSharedRuntime, stopSharedRuntime } from '../cli/shared-runtime.js'
+import { readManagerDiscovery } from '../manager/manager-discovery.js'
 import { readRuntimeBuildIdForEntry } from '../server/runtime-build-identity.js'
 import { startKunServe, type KunServeHandle } from '../server/runtime-factory.js'
 import {
@@ -23,6 +24,7 @@ const servers: KunServeHandle[] = []
 afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => server.close().catch(() => undefined)))
   await Promise.all(roots.map((root) => stopSharedRuntime(root).catch(() => false)))
+  await Promise.all(roots.map((root) => stopIsolatedManager(join(root, 'control'))))
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })))
 })
 
@@ -69,7 +71,11 @@ describe.skipIf(process.platform === 'win32' || !existsSync(cliEntry))('kun tui 
       cols: 88,
       rows: 26,
       cwd: worktreeRoot,
-      env: stringEnvironment(process.env)
+      env: stringEnvironment({
+        ...process.env,
+        KUN_MANAGER_CONTROL_DIR: join(root, 'control'),
+        KUN_MANAGER_SETTINGS_PATH: join(root, 'settings.json')
+      })
     })
     let output = ''
     const dataSubscription = terminal.onData((data) => { output += data })
@@ -222,7 +228,11 @@ describe.skipIf(process.platform === 'win32' || !existsSync(cliEntry))('kun tui 
       cols: 88,
       rows: 26,
       cwd: worktreeRoot,
-      env: stringEnvironment(process.env)
+      env: stringEnvironment({
+        ...process.env,
+        KUN_MANAGER_CONTROL_DIR: join(root, 'control'),
+        KUN_MANAGER_SETTINGS_PATH: join(root, 'settings.json')
+      })
     })
     let output = ''
     const dataSubscription = terminal.onData((data) => { output += data })
@@ -329,7 +339,6 @@ describe.skipIf(process.platform === 'win32' || !existsSync(cliEntry))('kun tui 
         commandId: 'command_pty_graph',
         idempotencyKey: 'create_pty_graph'
       })
-
       await waitFor(() => sanitizeTerminalText(output).includes('/graph status'), 10_000)
       terminal.resize(52, 16)
       const beforePointer = output.length
@@ -398,4 +407,22 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string)
       (error) => { clearTimeout(timer); reject(error) }
     )
   })
+}
+
+async function stopIsolatedManager(controlDir: string): Promise<void> {
+  const discovery = await readManagerDiscovery(controlDir).catch(() => null)
+  if (!discovery) return
+  try {
+    process.kill(discovery.pid, 'SIGTERM')
+  } catch {
+    return
+  }
+  await waitFor(() => {
+    try {
+      process.kill(discovery.pid, 0)
+      return false
+    } catch {
+      return true
+    }
+  }, 5_000).catch(() => undefined)
 }

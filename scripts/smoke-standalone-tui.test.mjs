@@ -5,7 +5,10 @@ import { join, posix, win32 } from 'node:path'
 import test from 'node:test'
 import {
   createArchiveExtractionInvocation,
-  extractArchive
+  createHeadlessRuntimeStopInvocation,
+  extractArchive,
+  isRetryableWindowsRemoveError,
+  removeTemporaryDirectory
 } from './smoke-standalone-tui.mjs'
 
 const ZIP_FIXTURE = Buffer.from(
@@ -55,4 +58,42 @@ test('extracts ZIP contents through the Node ZIP implementation', async () => {
   } finally {
     await rm(temporary, { recursive: true, force: true })
   }
+})
+
+test('retries transient Windows file locks while removing the smoke directory', async () => {
+  let attempts = 0
+  const delays = []
+  await removeTemporaryDirectory('C:\\Temp\\kun-tui-smoke', {
+    platform: 'win32',
+    remove: async () => {
+      attempts += 1
+      if (attempts < 3) {
+        const error = new Error('resource busy')
+        error.code = 'EBUSY'
+        throw error
+      }
+    },
+    wait: async (milliseconds) => { delays.push(milliseconds) }
+  })
+  assert.equal(attempts, 3)
+  assert.deepEqual(delays, [250, 250])
+})
+
+test('only retries known Windows temporary-directory lock errors', () => {
+  const busy = new Error('resource busy')
+  busy.code = 'EBUSY'
+  assert.equal(isRetryableWindowsRemoveError(busy, 'win32'), true)
+  assert.equal(isRetryableWindowsRemoveError(busy, 'linux'), false)
+
+  const missing = new Error('missing directory')
+  missing.code = 'ENOENT'
+  assert.equal(isRetryableWindowsRemoveError(missing, 'win32'), false)
+})
+
+test('terminates the full Windows headless runtime process tree', () => {
+  assert.deepEqual(createHeadlessRuntimeStopInvocation(1234, 'win32'), {
+    command: 'taskkill',
+    args: ['/pid', '1234', '/t', '/f']
+  })
+  assert.equal(createHeadlessRuntimeStopInvocation(1234, 'darwin'), null)
 })

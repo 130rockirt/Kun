@@ -49,12 +49,18 @@ function generatedFileImageUrl(file: unknown): string {
   return generatedFileAbsolutePath(file) || generatedFileRelativePath(file)
 }
 
+const GENERATED_IMAGE_PATH_PREFIXES = ['.kun/images/', '.deepseekgui-images/'] as const
+
+function isGeneratedImagePath(path: string): boolean {
+  return GENERATED_IMAGE_PATH_PREFIXES.some((prefix) => path.startsWith(prefix))
+}
+
 function latestGeneratedImageMarkdownPath(text: string): string | null {
   let latest: string | null = null
   const re = /!\[[^\]]*]\(([^)\s]+)\)/g
   for (const match of text.matchAll(re)) {
     const path = match[1]?.trim()
-    if (path?.startsWith('.deepseekgui-images/')) latest = path
+    if (path && isGeneratedImagePath(path)) latest = path
   }
   return latest
 }

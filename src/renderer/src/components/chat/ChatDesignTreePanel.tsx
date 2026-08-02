@@ -12,6 +12,7 @@ import { useEffect, useMemo, useState, type ReactElement } from 'react'
 import type { DesignArtifact, DesignDocument } from '../../design/design-types'
 import { artifactDirOf } from '../../design/design-artifact-persistence'
 import { designDocumentComposerFileReference } from '../../design/design-document-file-reference'
+import { displayDrawingTitle } from '../../design/design-drawing-title'
 import type { ChatFileTreeReference } from './ChatFileTreePanel'
 import {
   SidebarIconButton,
@@ -137,11 +138,12 @@ export function ChatDesignTreePanel({
     const isExpanded = expanded.has(doc.id)
     const active = doc.id === activeDocumentId
     const screenCount = designDocumentScreenCount(doc)
+    const drawingTitle = displayDrawingTitle(doc, t('designUntitledDrawing'))
     const documentRow = (
       <SidebarTreeRow
         key={doc.id}
         active={active}
-        title={`.kun-design/${doc.id}`}
+        title={drawingTitle}
         onClick={() => toggleDocument(doc.id)}
         buttonClassName="items-center gap-1.5 px-2.5 py-2 text-[12.5px]"
         trailing={
@@ -169,7 +171,7 @@ export function ChatDesignTreePanel({
           <Folder className="h-3.5 w-3.5 shrink-0 text-ds-muted" strokeWidth={1.75} />
         )}
         <span className="min-w-0 flex-1">
-          <span className="block truncate font-mono">{doc.id}</span>
+          <span className="block truncate">{drawingTitle}</span>
           <span className="block truncate text-[10.5px] leading-4 text-ds-faint">
             {t('designFileTreeScreenCount', { count: screenCount })}
           </span>

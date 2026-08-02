@@ -5,7 +5,8 @@ import {
   getDesignSidebarDocumentArtifactCount,
   getDesignSidebarDocumentLabel,
   getDesignSidebarDocumentScreenCount,
-  getDesignSidebarVisibleArtifacts
+  getDesignSidebarVisibleArtifacts,
+  sortDesignSidebarDocuments
 } from './DesignSidebar'
 
 function artifact(id: string, kind: DesignArtifact['kind'], patch: Partial<DesignArtifact> = {}): DesignArtifact {
@@ -82,7 +83,37 @@ describe('DesignSidebar helpers', () => {
     expect(getDesignSidebarArtifactVersionBadge(svg)).toBe('v3')
   })
 
-  it('uses the document ID as the sidebar label', () => {
-    expect(getDesignSidebarDocumentLabel({ id: 'a1b2c3d4' })).toBe('a1b2c3d4')
+  it('uses the drawing title as the sidebar label and never exposes an id fallback', () => {
+    expect(getDesignSidebarDocumentLabel({
+      id: 'a1b2c3d4',
+      title: 'Travel dashboard'
+    })).toBe('Travel dashboard')
+    expect(getDesignSidebarDocumentLabel({
+      id: 'a1b2c3d4',
+      title: 'a1b2c3d4'
+    })).toBe('Untitled drawing')
+  })
+
+  it('keeps running drawings first and otherwise uses recent activity', () => {
+    const documents: DesignDocument[] = [
+      {
+        id: 'old', title: 'Old', order: 0,
+        createdAt: '2026-06-20T00:00:00.000Z', updatedAt: '2026-06-20T00:00:00.000Z',
+        activeArtifactId: null, artifacts: []
+      },
+      {
+        id: 'recent', title: 'Recent', order: 1,
+        createdAt: '2026-06-21T00:00:00.000Z', updatedAt: '2026-06-22T00:00:00.000Z',
+        activeArtifactId: null, artifacts: []
+      },
+      {
+        id: 'running', title: 'Running', order: 2,
+        createdAt: '2026-06-19T00:00:00.000Z', updatedAt: '2026-06-19T00:00:00.000Z',
+        activeArtifactId: null, artifacts: []
+      }
+    ]
+
+    expect(sortDesignSidebarDocuments(documents, (document) => document.id === 'running').map((document) => document.id))
+      .toEqual(['running', 'recent', 'old'])
   })
 })

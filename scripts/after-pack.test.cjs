@@ -24,6 +24,7 @@ const {
   _internals: {
     installLinuxElectronLauncher,
     installCliLaunchers,
+    windowsCliLauncherContent,
     linuxElectronLauncherContent,
     linuxRealExecutableName,
     packedKunPruneArgs,
@@ -380,7 +381,61 @@ test('writes a relocatable Windows kun.cmd launcher', (t) => {
     }
   })
   const contents = readFileSync(join(appOutDir, 'bin', 'kun.cmd'), 'utf8')
-  assert.match(contents, /ELECTRON_RUN_AS_NODE=1/)
+  assert.match(contents, /Node\.js \^>=22\.19\.0 is required/)
+  assert.match(contents, /winget install --id OpenJS\.NodeJS\.22 --exact/)
+  assert.match(contents, /for \/f "delims=" %%N in \('where\.exe node/)
+  assert.match(contents, /"%KUN_NODE%" "%KUN_CLI_ENTRY%" %\*/)
+  assert.match(contents, /:tui-node-shim[\s\S]*call "%KUN_NODE%"/)
+  assert.doesNotMatch(contents, /call node "%KUN_CLI_ENTRY%"/)
+  assert.match(contents, /KUN_PACKAGED_RUNTIME_EXECUTABLE=%~dp0\.\.\\Kun\.exe/)
+  assert.match(contents, /:electron[\s\S]*ELECTRON_RUN_AS_NODE=1/)
   assert.match(contents, /%~dp0\.\.\\Kun\.exe/)
   assert.match(contents, /app\.asar\.unpacked\\kun\\dist\\cli\\serve-entry\.js/)
+})
+
+test('routes bare and explicit Windows TUI commands through system Node', () => {
+  const contents = windowsCliLauncherContent('Kun')
+  assert.match(contents, /if "%KUN_FIRST_ARG%"=="" goto :tui/)
+  assert.match(contents, /if \/I "%KUN_FIRST_ARG%"=="tui" goto :tui/)
+  assert.match(contents, /where\.exe node/)
+  assert.doesNotMatch(contents, /node -e/)
+  assert.match(contents, /goto :electron/)
+})
+
+test('packages flavor-fixed kun-dv launchers without a production CLI alias', (t) => {
+  const macOut = mkdtempSync(join(tmpdir(), 'kun-dv-mac-cli-launcher-'))
+  const winOut = mkdtempSync(join(tmpdir(), 'kun-dv-win-cli-launcher-'))
+  t.after(() => {
+    rmSync(macOut, { recursive: true, force: true })
+    rmSync(winOut, { recursive: true, force: true })
+  })
+  installCliLaunchers({
+    appOutDir: macOut,
+    electronPlatformName: 'darwin',
+    packager: {
+      appInfo: { productFilename: 'kun-dv' },
+      executableName: 'kun-dv',
+      config: { extraMetadata: { kunAppFlavor: 'development' } }
+    }
+  })
+  const macLauncher = join(macOut, 'kun-dv.app', 'Contents', 'Resources', 'bin', 'kun-dv')
+  const macContents = readFileSync(macLauncher, 'utf8')
+  assert.match(macContents, /KUN_APP_FLAVOR=development/)
+  assert.match(macContents, /KUN_RUNTIME_FLAVOR=development/)
+  assert.equal(existsSync(join(macOut, 'kun-dv.app', 'Contents', 'Resources', 'bin', 'kun')), false)
+
+  installCliLaunchers({
+    appOutDir: winOut,
+    electronPlatformName: 'win32',
+    packager: {
+      appInfo: { productFilename: 'kun-dv' },
+      executableName: 'kun-dv',
+      config: { extraMetadata: { kunAppFlavor: 'development' } }
+    }
+  })
+  const windowsContents = readFileSync(join(winOut, 'bin', 'kun-dv.cmd'), 'utf8')
+  assert.match(windowsContents, /set "KUN_APP_FLAVOR=development"/)
+  assert.match(windowsContents, /set "KUN_RUNTIME_FLAVOR=development"/)
+  assert.match(windowsContents, /\\kun-dv\.exe/)
+  assert.equal(existsSync(join(winOut, 'bin', 'kun.cmd')), false)
 })

@@ -26,9 +26,12 @@ type WorkbenchDesignAgentRuntimeOptions = {
   composerAttachments: DesignPromptControllerOptions['composerAttachments']
   composerModelGroups: DesignPromptControllerOptions['composerModelGroups']
   composerReasoningEffort: CodeCanvasPromptControllerOptions['composerReasoningEffort']
+  designComposerReasoningEffort: DesignPromptControllerOptions['composerReasoningEffort']
+  composerFastMode: DesignPromptControllerOptions['composerFastMode']
   designContextSuppressedIds: DesignPromptControllerOptions['designContextSuppressedIds']
   designHtmlElementContext: DesignPromptControllerOptions['designHtmlElementContext']
   designWorkspaceRoot: DesignThreadBindingOptions['designWorkspaceRoot']
+  clearDesignHistory: DesignPromptControllerOptions['clearDesignHistory']
   ensureDesignThreadForWorkspace: DesignPromptControllerOptions['ensureDesignThreadForWorkspace']
   getAttachmentScope: DesignPromptControllerOptions['getAttachmentScope']
   clearActiveThreadSelection: DesignThreadBindingOptions['clearActiveThreadSelection']
@@ -60,10 +63,13 @@ export function useWorkbenchDesignAgentRuntime({
   composerAttachments,
   composerModelGroups,
   composerReasoningEffort,
+  designComposerReasoningEffort,
+  composerFastMode,
   createThread,
   designContextSuppressedIds,
   designHtmlElementContext,
   designWorkspaceRoot,
+  clearDesignHistory,
   ensureDesignThreadForWorkspace,
   getAttachmentScope,
   clearActiveThreadSelection,
@@ -82,7 +88,12 @@ export function useWorkbenchDesignAgentRuntime({
   threads,
   workspaceRoot
 }: WorkbenchDesignAgentRuntimeOptions) {
-  const { designThreads, switchDesignThread } = useDesignThreadBinding({
+  const {
+    designThreads,
+    designHistoryThreadIds,
+    hasRegisteredHistory,
+    switchDesignThread
+  } = useDesignThreadBinding({
     threads,
     workspaceRoot,
     designWorkspaceRoot,
@@ -116,7 +127,8 @@ export function useWorkbenchDesignAgentRuntime({
     workspaceRoot,
     composerAttachments,
     attachmentUploadEnabled,
-    composerReasoningEffort,
+    composerReasoningEffort: designComposerReasoningEffort,
+    composerFastMode,
     composerModelGroups,
     designContextSuppressedIds,
     designHtmlElementContext,
@@ -125,6 +137,7 @@ export function useWorkbenchDesignAgentRuntime({
     setError,
     setDesignAssistantOpen,
     ensureDesignThreadForWorkspace,
+    clearDesignHistory,
     sendMessage,
     getAttachmentScope,
     clearComposerAttachments,
@@ -136,6 +149,8 @@ export function useWorkbenchDesignAgentRuntime({
     ...codeCanvasPrompt,
     ...designPrompt,
     designThreads,
+    designHistoryThreadIds,
+    hasRegisteredHistory,
     switchDesignThread
   }
 }

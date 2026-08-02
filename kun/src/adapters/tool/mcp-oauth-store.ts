@@ -3,8 +3,7 @@ import type {
   OAuthClientInformationMixed,
   OAuthTokens
 } from '@modelcontextprotocol/sdk/shared/auth.js'
-import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
-import { dirname } from 'node:path'
+import { AtomicJsonFile } from '../../extensions/atomic-json.js'
 import type { SecretEncryptor } from '../../security/secret-store.js'
 import { isEncryptedEnvelope } from '../../security/secret-store.js'
 
@@ -44,44 +43,33 @@ type EncryptedMcpOAuthState = { __enc: string }
  * created with restrictive permissions because they hold bearer tokens.
  */
 export class FileMcpOAuthStore {
+  private readonly file: AtomicJsonFile<McpOAuthState | EncryptedMcpOAuthState>
+
   constructor(
     private readonly storagePath: string,
     /** Optional encryptor; when present, bearer tokens are encrypted at rest. */
     private readonly encryptor?: SecretEncryptor
-  ) {}
+  ) {
+    this.file = new AtomicJsonFile(storagePath, validateStoredState)
+  }
 
   get path(): string {
     return this.storagePath
   }
 
   async read(): Promise<McpOAuthState> {
-    try {
-      const parsed = JSON.parse(await readFile(this.storagePath, 'utf8')) as unknown
-      if (isEncryptedMcpOAuthState(parsed)) return this.decryptEnvelope(parsed)
-      if (!isMcpOAuthState(parsed)) return {}
-      return this.decryptLegacyState(parsed)
-    } catch (error) {
-      if (isNodeErrorCode(error, 'ENOENT')) return {}
-      throw error
-    }
+    return this.decodeStoredState(await this.file.read(() => ({})))
   }
 
   async update(update: (state: McpOAuthState) => McpOAuthState): Promise<void> {
-    const next = update(await this.read())
-    await mkdir(dirname(this.storagePath), { recursive: true, mode: 0o700 })
-    const temporaryPath = `${this.storagePath}.${process.pid}.${Date.now()}.tmp`
-    try {
-      await writeFile(temporaryPath, `${JSON.stringify(this.encryptState(next), null, 2)}\n`, { mode: 0o600 })
-      await chmod(temporaryPath, 0o600).catch(() => undefined)
-      await rename(temporaryPath, this.storagePath)
-      await chmod(this.storagePath, 0o600).catch(() => undefined)
-    } finally {
-      await rm(temporaryPath, { force: true }).catch(() => undefined)
-    }
+    await this.file.update(
+      () => ({}),
+      (stored) => this.encryptState(update(this.decodeStoredState(stored)))
+    )
   }
 
   async clear(): Promise<void> {
-    await rm(this.storagePath, { force: true })
+    await this.file.write({})
   }
 
   /** Encrypt all persisted OAuth state, including client secrets and PKCE data. */
@@ -112,6 +100,19 @@ export class FileMcpOAuthStore {
       throw new Error('MCP OAuth token store could not be decrypted; restore the original key or re-authorize the connector', { cause: error })
     }
   }
+
+  private decodeStoredState(
+    stored: McpOAuthState | EncryptedMcpOAuthState
+  ): McpOAuthState {
+    return isEncryptedMcpOAuthState(stored)
+      ? this.decryptEnvelope(stored)
+      : this.decryptLegacyState(stored)
+  }
+}
+
+function validateStoredState(value: unknown): McpOAuthState | EncryptedMcpOAuthState {
+  if (isEncryptedMcpOAuthState(value)) return value
+  return isMcpOAuthState(value) ? value : {}
 }
 
 function isEncryptedMcpOAuthState(value: unknown): value is EncryptedMcpOAuthState {

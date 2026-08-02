@@ -115,6 +115,7 @@ import {
   cancelGraphPlanningDraft,
   createGraphRun,
   getGraphRun,
+  getGraphSupervision,
   getGraphPlanningDraft,
   graphRunCommand,
   graphRunEvents,
@@ -126,7 +127,8 @@ import {
   resumeGraphPlanningDraft,
   reviewGraphNode,
   steerGraphRun,
-  validateGraphPlan
+  validateGraphPlan,
+  wakeGraphSupervision
 } from './graphs.js'
 import {
   consolidateLearning,
@@ -419,7 +421,15 @@ export function buildRouter(runtime: ServerRuntime): Router {
   })
   router.add('GET', '/v1/graphs/:id', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
-    return getGraphRun(runtime.graph?.control, ctx.params.id)
+    return getGraphRun(runtime.graph?.control, runtime.graph?.supervisor, ctx.params.id)
+  })
+  router.add('GET', '/v1/graphs/:id/supervision', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return getGraphSupervision(runtime.graph?.supervisor, ctx.params.id)
+  })
+  router.add('POST', '/v1/graphs/:id/supervision/wake', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return wakeGraphSupervision(runtime.graph?.supervisor, ctx.params.id, request)
   })
   router.add('GET', '/v1/graphs/:id/events', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
@@ -657,7 +667,18 @@ export function buildRouter(runtime: ServerRuntime): Router {
   })
   router.add('GET', '/v1/threads/:id', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
-    return getThread(runtime.threadService, ctx.params.id, runtime.sessionStore, runtime.userInputGate)
+    // The active approval gate is process-local. When a manager lease belongs
+    // to another runtime, obtain the detail snapshot from that execution owner
+    // so its live approval state cannot be mistaken for expired locally.
+    const forwarded = await runtime.forwardThreadControl?.(request, ctx.params.id)
+    if (forwarded) return forwarded
+    return getThread(
+      runtime.threadService,
+      ctx.params.id,
+      runtime.sessionStore,
+      runtime.userInputGate,
+      runtime.approvalGate
+    )
   })
   router.add('GET', '/v1/threads/:id/model-requests', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
@@ -739,6 +760,8 @@ export function buildRouter(runtime: ServerRuntime): Router {
   })
   router.add('POST', '/v1/threads/:id/turns/:turnId/steer', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    const forwarded = await runtime.forwardThreadControl?.(request, ctx.params.id)
+    if (forwarded) return forwarded
     return steerTurn(
       runtime.turnService,
       ctx.params.id,
@@ -751,14 +774,20 @@ export function buildRouter(runtime: ServerRuntime): Router {
   })
   router.add('GET', '/v1/threads/:id/turns/:turnId/steering', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    const forwarded = await runtime.forwardThreadControl?.(request, ctx.params.id)
+    if (forwarded) return forwarded
     return getSteeringQueue(runtime.turnService, ctx.params.id, ctx.params.turnId)
   })
   router.add('PATCH', '/v1/threads/:id/turns/:turnId/steering', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    const forwarded = await runtime.forwardThreadControl?.(request, ctx.params.id)
+    if (forwarded) return forwarded
     return replaceSteeringQueue(runtime.turnService, ctx.params.id, ctx.params.turnId, request)
   })
   router.add('POST', '/v1/threads/:id/turns/:turnId/interrupt', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    const forwarded = await runtime.forwardThreadControl?.(request, ctx.params.id)
+    if (forwarded) return forwarded
     return interruptTurn(runtime.turnService, ctx.params.id, ctx.params.turnId, request)
   })
   router.add('POST', '/v1/threads/:id/compact', async (request, ctx) => {
@@ -783,6 +812,8 @@ export function buildRouter(runtime: ServerRuntime): Router {
   })
   router.add('POST', '/v1/approvals/:id', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    const forwarded = await runtime.forwardControlById?.(request, 'approval', ctx.params.id)
+    if (forwarded) return forwarded
     return decideApproval({
       approvalId: ctx.params.id,
       request,
@@ -793,6 +824,8 @@ export function buildRouter(runtime: ServerRuntime): Router {
   })
   router.add('POST', '/v1/user-inputs/:id', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    const forwarded = await runtime.forwardControlById?.(request, 'user-input', ctx.params.id)
+    if (forwarded) return forwarded
     return resolveUserInput({
       inputId: ctx.params.id,
       request,
@@ -802,6 +835,8 @@ export function buildRouter(runtime: ServerRuntime): Router {
   })
   router.add('POST', '/v1/user-input/:id', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    const forwarded = await runtime.forwardControlById?.(request, 'user-input', ctx.params.id)
+    if (forwarded) return forwarded
     return resolveUserInput({
       inputId: ctx.params.id,
       request,

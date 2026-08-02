@@ -19,6 +19,20 @@ import { InMemoryUserInputGate } from '../adapters/in-memory-user-input-gate.js'
 import { InMemoryEventBus } from '../adapters/in-memory-event-bus.js'
 import { FileSessionStore, FileThreadStore } from '../adapters/file/index.js'
 import { HybridSessionStore, HybridThreadStore } from '../adapters/hybrid/index.js'
+import {
+  createManagerRemoteStores,
+  ManagerRemoteAttachmentStore,
+  ManagerRemoteArtifactStore,
+  ManagerRemoteMemoryStore
+} from '../manager/remote-data-stores.js'
+import {
+  ManagerThreadExecutionLeaseClient,
+  registerRuntimeWithManager,
+  forwardRequestToExecutionOwner,
+  unregisterRuntimeWithManager,
+  type ServiceManagerConnection
+} from '../manager/manager-client.js'
+import { KUN_MANAGER_PROTOCOL_VERSION } from '../manager/manager-discovery.js'
 import { CompatModelClient } from '../adapters/model/compat-model-client.js'
 import { GeminiCliApiModelClient } from '../adapters/model/gemini-cli-api-model-client.js'
 import { GeminiCodeAssistModelClient } from '../adapters/model/gemini-code-assist-model-client.js'
@@ -57,7 +71,7 @@ import { LocalToolHost, buildDefaultLocalTools } from '../adapters/tool/local-to
 import { ExtensionToolRegistry } from '../adapters/tool/extension-tool-provider.js'
 import { shutdownAllLspSessions } from '../adapters/tool/lsp-client.js'
 import { createReadArtifactTool } from '../adapters/tool/artifact-tool.js'
-import { FileArtifactStore } from '../artifacts/artifact-store.js'
+import { FileArtifactStore, type ArtifactStore } from '../artifacts/artifact-store.js'
 import { createTaskGraphTool } from '../adapters/tool/task-graph-tool.js'
 import { buildMcpToolProviders } from '../adapters/tool/mcp-tool-provider.js'
 import { buildMemoryToolProviders } from '../adapters/tool/memory-tool-provider.js'
@@ -159,7 +173,8 @@ import {
 import { SkillRuntime } from '../skills/skill-runtime.js'
 import { InstructionRuntime } from '../instructions/instruction-runtime.js'
 import { resolveConfiguredHooks, type HooksConfig } from '../hooks/hook-config.js'
-import { FileMemoryStore } from '../memory/memory-store.js'
+import { FileMemoryStore, type MemoryStore } from '../memory/memory-store.js'
+import { AtomicJsonFile } from '../extensions/atomic-json.js'
 import { DelegationRuntime, FileDelegationStore } from '../delegation/delegation-runtime.js'
 import {
   createChildAgentExecutor,
@@ -176,6 +191,7 @@ import {
 } from '../security/secret-store.js'
 import type { LocalTool } from '../adapters/tool/local-tool-host.js'
 import type { FaultInjectionController } from '../services/fault-injection-controller.js'
+import type { RuntimeFlavor } from '../contracts/runtime-flavor.js'
 import { InMemoryPublisherTrustStore } from '../supplychain/publisher-trust-store.js'
 import {
   CURRENT_MANIFEST_VERSION,
@@ -301,6 +317,11 @@ export type KunServeRuntimeOptions = {
   instanceId?: string
   buildId?: string
   launchMode?: 'foreground' | 'shared' | 'gui'
+  runtimeFlavor?: RuntimeFlavor
+  /** Discovery can live outside canonical data (the DV slot uses ~/.kun/control). */
+  discoveryDir?: string
+  /** Stable manager connection that exclusively owns canonical persistent stores. */
+  serviceManager?: ServiceManagerConnection
   logPath?: string
   /** Test-only fault injection; absent in normal production startup. */
   faultInjection?: FaultInjectionController
@@ -329,7 +350,8 @@ export async function createKunServeRuntime(
   const stores = await createPersistentStores({
     dataDir: options.dataDir,
     storage: options.storage,
-    nowIso: () => new Date().toISOString()
+    nowIso: () => new Date().toISOString(),
+    serviceManager: options.serviceManager
   })
   // Persisted thread/session files are shared by several asynchronous loops.
   // Put a lifecycle fence in front of every non-destructive write so a deleted
@@ -361,7 +383,8 @@ export async function createKunServeRuntime(
   let tokenEconomy = tokenEconomyConfigForOptions(activeOptions)
   const ids = new RandomIdGenerator()
   const nowIso = () => new Date().toISOString()
-  const allocateSeq = (threadId: string) => eventBus.allocateSeq(threadId)
+  const allocateSeq = (threadId: string) =>
+    sessionStore.allocateEventSeq?.(threadId) ?? eventBus.allocateSeq(threadId)
   // Agent Perspective is a visible runtime capability, so capture is available
   // by default. Advanced configurations can explicitly opt out when local
   // sensitive-content retention or request-path overhead is undesirable.
@@ -434,7 +457,9 @@ export async function createKunServeRuntime(
     onForked: (sourceThreadId, targetThreadId) =>
       handleGraphThreadFork?.(sourceThreadId, targetThreadId)
   })
-  const artifactStore = new FileArtifactStore(join(activeOptions.dataDir, 'artifacts'), nowIso)
+  const artifactStore: ArtifactStore = activeOptions.serviceManager
+    ? new ManagerRemoteArtifactStore(activeOptions.serviceManager)
+    : new FileArtifactStore(join(activeOptions.dataDir, 'artifacts'), nowIso)
   const graphConfig = (): GraphRuntimeConfig =>
     activeOptions.graph ?? DEFAULT_GRAPH_RUNTIME_CONFIG
   const graphRuntime = new GraphRuntimeComposition({
@@ -445,7 +470,8 @@ export async function createKunServeRuntime(
     threadStore,
     sessionStore,
     ids,
-    nowIso
+    nowIso,
+    ...(activeOptions.serviceManager ? { serviceManager: activeOptions.serviceManager } : {})
   })
   const resolveGraphLeadRun = async (input: {
     threadId: string
@@ -470,6 +496,11 @@ export async function createKunServeRuntime(
 	            run.status === 'cancelled',
 	          supervisionPending:
 	            run.status === 'awaiting_supervision' ||
+	            run.supervisionObligations.some((obligation) =>
+	              obligation.state === 'pending' ||
+	              obligation.state === 'delivering' ||
+	              obligation.state === 'awaiting_action' ||
+	              obligation.state === 'retry_scheduled') ||
 	            Object.values(run.nodes).some((node) =>
 	              node.status === 'submitted' || node.status === 'reviewing')
 	        }
@@ -823,7 +854,14 @@ export async function createKunServeRuntime(
   ])
   let instructionRuntime = new InstructionRuntime(activeOptions.capabilities?.instructions)
   const migrationMaintenance = new ScopedMigrationMaintenanceLock()
-  let attachmentStore: FileAttachmentStore | undefined
+  let attachmentStore: AttachmentStore | undefined
+  const executionLeases = options.serviceManager
+    ? new ManagerThreadExecutionLeaseClient(
+        options.serviceManager,
+        options.runtimeFlavor ?? 'production',
+        options.instanceId ?? 'embedded'
+      )
+    : undefined
   const turnService = new TurnService({
     threadStore,
     sessionStore,
@@ -839,6 +877,7 @@ export async function createKunServeRuntime(
     contextCompaction: options.contextCompaction,
     maxConcurrentTurns: activeOptions.runtime?.turnLimits?.maxConcurrentTurns,
     lifecycleFence,
+    executionLeases,
     onCompacted: (threadId) => delegatedSessions.invalidate(threadId),
     resolveGraphLeadRun,
     createGraphPlanningDraft: (input) => graphRuntime.createPlanningDraft(input),
@@ -851,6 +890,26 @@ export async function createKunServeRuntime(
 	    ids,
 	    nowIso
   })
+  executionLeases?.setLeaseLostHandler((lease) => {
+    turnService.abortTurnExecution(lease.turnId)
+  })
+  const forwardThreadControl = options.serviceManager
+    ? (request: Request, threadId: string) => forwardRequestToExecutionOwner({
+        manager: options.serviceManager!,
+        currentInstanceId: options.instanceId ?? 'embedded',
+        request,
+        threadId
+      })
+    : undefined
+  const forwardControlById = options.serviceManager
+    ? (request: Request, kind: 'approval' | 'user-input', id: string) =>
+        forwardRequestToExecutionOwner({
+          manager: options.serviceManager!,
+          currentInstanceId: options.instanceId ?? 'embedded',
+          request,
+          control: { kind, id }
+        })
+    : undefined
   abortThreadExecution = (threadId) => turnService.abortThreadExecution(threadId)
   const backgroundShellRuntime = new BackgroundShellRuntime({
     events,
@@ -901,19 +960,22 @@ export async function createKunServeRuntime(
 	  }
 	  const reviewService = new ReviewService(reviewDeps)
 	  let webProviders = buildWebToolProviders(activeOptions.capabilities?.web)
-	  attachmentStore = activeOptions.capabilities?.attachments.enabled
-	    ? new FileAttachmentStore({
-	        rootDir: join(activeOptions.dataDir, 'attachments'),
-	        config: activeOptions.capabilities.attachments,
-	        nowIso
-	      })
-	    : undefined
+	  attachmentStore = createPersistentAttachmentStore(activeOptions, nowIso)
 	  const pruneUnsentAttachments = async (store: AttachmentStore | undefined): Promise<void> => {
 	    if (!store?.pruneExpiredLeases) return
 	    const now = Date.parse(nowIso())
 	    if (!Number.isFinite(now)) return
 	    const summaries = await threadService.list({ includeArchived: true, includeSide: true })
-	    const threads = await Promise.all(summaries.map((thread) => threadService.get(thread.id)))
+	    const threads = []
+	    // Manager-backed stores serialize access to the physical data files.
+	    // Avoid enqueueing every historical thread at once: on large profiles
+	    // that made later requests hit their client timeout, disconnect, and
+	    // trigger a crash in older stable Managers while writing the response.
+	    for (let offset = 0; offset < summaries.length; offset += 8) {
+	      threads.push(...await Promise.all(
+	        summaries.slice(offset, offset + 8).map((thread) => threadService.get(thread.id))
+	      ))
+	    }
 	    const referencedIds = new Set(
 	      threads.flatMap((thread) =>
 	        thread?.turns.flatMap((turn) => turn.attachmentIds) ?? []
@@ -938,13 +1000,7 @@ export async function createKunServeRuntime(
 	      })
 	  }, 60 * 60 * 1_000)
 	  attachmentPruneTimer.unref()
-	  let memoryStore = activeOptions.capabilities?.memory.enabled
-	    ? new FileMemoryStore({
-	        rootDir: join(activeOptions.dataDir, 'memory'),
-	        config: activeOptions.capabilities.memory,
-	        nowIso
-	      })
-	    : undefined
+	  let memoryStore = createPersistentMemoryStore(activeOptions, nowIso)
 	  const migrationService = new RuntimeMigrationService({
 	    rootDir: join(activeOptions.dataDir, 'migrations', 'exports'),
 	    threads: threadService,
@@ -1365,7 +1421,7 @@ export async function createKunServeRuntime(
     skillRuntime: SkillRuntime
     instructionRuntime: InstructionRuntime
     attachmentStore?: AttachmentStore
-    memoryStore?: FileMemoryStore
+    memoryStore?: MemoryStore
   }) => {
     const providerConfigs = Object.fromEntries(
       Object.entries(input.options.providers ?? {}).map(([id, provider]) => [id, { ...provider }])
@@ -1549,7 +1605,11 @@ export async function createKunServeRuntime(
 	        .then(() => 'suspended' as const)
 	    }
 	    return trackRuntimeRun(loop.runTurn(threadId, turnId).then(async (outcome) => {
-	      if (outcome !== 'suspended' && !shuttingDown) {
+	      if (
+	        outcome !== 'suspended' &&
+	        outcome !== 'suspended_pending_supervision' &&
+	        !shuttingDown
+	      ) {
 	        await graphRuntime.handleSourceTurnTerminal(threadId, turnId, outcome)
 	      }
 	      return outcome
@@ -2135,21 +2195,9 @@ export async function createKunServeRuntime(
 	    const nextInstructionRuntime = new InstructionRuntime(
 	      nextOptions.capabilities?.instructions
 	    )
-	    const nextAttachmentStore = nextOptions.capabilities?.attachments.enabled
-	      ? new FileAttachmentStore({
-	          rootDir: join(activeOptions.dataDir, 'attachments'),
-	          config: nextOptions.capabilities.attachments,
-	          nowIso
-	        })
-	      : undefined
+	    const nextAttachmentStore = createPersistentAttachmentStore(nextOptions, nowIso)
 	    await pruneUnsentAttachments(nextAttachmentStore)
-	    const nextMemoryStore = nextOptions.capabilities?.memory.enabled
-	      ? new FileMemoryStore({
-	          rootDir: join(activeOptions.dataDir, 'memory'),
-	          config: nextOptions.capabilities.memory,
-	          nowIso
-	        })
-	      : undefined
+	    const nextMemoryStore = createPersistentMemoryStore(nextOptions, nowIso)
 	    const nextWebProviders = buildWebToolProviders(nextOptions.capabilities?.web)
 	    const nextImageGenProviders = buildImageGenToolProviders(nextOptions.capabilities?.imageGen, {
 	      attachmentStore: nextAttachmentStore,
@@ -2488,6 +2536,11 @@ export async function createKunServeRuntime(
 	    },
 	    runtimeToken: activeOptions.runtimeToken,
 	    insecure: activeOptions.insecure,
+	    ...(options.serviceManager
+	      ? { managerProtocolVersion: KUN_MANAGER_PROTOCOL_VERSION }
+	      : {}),
+	    ...(forwardThreadControl ? { forwardThreadControl } : {}),
+	    ...(forwardControlById ? { forwardControlById } : {}),
 	    allocateSeq,
 	    nowIso,
 	    applyConfig,
@@ -2635,6 +2688,7 @@ export async function createKunServeRuntime(
     shutdown: async () => {
       try {
         shuttingDown = true
+        executionLeases?.shutdown()
         clearInterval(attachmentPruneTimer)
 	        await shutdownGraphExecutionForHost({
 	          graphRuntime,
@@ -2657,7 +2711,7 @@ export async function createKunServeRuntime(
 	        await extensionAccountAudit.flush()
 	        extensionTools.disposeAll()
 	        await extensionModelProviders.disposeAll()
-        shutdownAllLspSessions()
+	        shutdownAllLspSessions()
 	        await mcpProviders.close()
 	        await migrationService.shutdown()
 	        await migrationImportService.shutdown()
@@ -3076,32 +3130,13 @@ async function persistRuntimeMcpConfig(
   mcp: KunCapabilitiesConfig['mcp']
 ): Promise<void> {
   const target = join(dataDir, 'config.json')
-  let current: Record<string, unknown> = {}
-  try {
-    const parsed = JSON.parse(await readFile(target, 'utf8')) as unknown
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      current = parsed as Record<string, unknown>
-    }
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error
-  }
-  const rawCapabilities = current.capabilities
-  const capabilities = rawCapabilities && typeof rawCapabilities === 'object' && !Array.isArray(rawCapabilities)
-    ? rawCapabilities as Record<string, unknown>
-    : {}
-  const next = {
+  await updateRuntimeJson(target, (current) => ({
     ...current,
     capabilities: {
-      ...capabilities,
+      ...objectSection(current.capabilities),
       mcp
     }
-  }
-  await mkdir(dataDir, { recursive: true, mode: 0o700 })
-  const temporary = `${target}.${process.pid}.tmp`
-  await writeFile(temporary, `${JSON.stringify(next, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
-  await chmod(temporary, 0o600).catch(() => undefined)
-  await rename(temporary, target)
-  await chmod(target, 0o600).catch(() => undefined)
+  }))
 }
 
 async function persistRuntimeSkillsConfig(
@@ -3109,24 +3144,10 @@ async function persistRuntimeSkillsConfig(
   skills: KunCapabilitiesConfig['skills']
 ): Promise<void> {
   const target = join(dataDir, 'config.json')
-  let current: Record<string, unknown> = {}
-  try {
-    const parsed = JSON.parse(await readFile(target, 'utf8')) as unknown
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) current = parsed as Record<string, unknown>
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error
-  }
-  const rawCapabilities = current.capabilities
-  const capabilities = rawCapabilities && typeof rawCapabilities === 'object' && !Array.isArray(rawCapabilities)
-    ? rawCapabilities as Record<string, unknown>
-    : {}
-  const next = { ...current, capabilities: { ...capabilities, skills } }
-  await mkdir(dataDir, { recursive: true, mode: 0o700 })
-  const temporary = `${target}.${process.pid}.${randomUUID()}.tmp`
-  await writeFile(temporary, `${JSON.stringify(next, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
-  await chmod(temporary, 0o600).catch(() => undefined)
-  await rename(temporary, target)
-  await chmod(target, 0o600).catch(() => undefined)
+  await updateRuntimeJson(target, (current) => ({
+    ...current,
+    capabilities: { ...objectSection(current.capabilities), skills }
+  }))
 }
 
 async function persistRuntimeCapabilitySection(
@@ -3135,51 +3156,34 @@ async function persistRuntimeCapabilitySection(
   value: KunCapabilitiesConfig[typeof id]
 ): Promise<void> {
   const target = join(dataDir, 'config.json')
-  let current: Record<string, unknown> = {}
-  try {
-    const parsed = JSON.parse(await readFile(target, 'utf8')) as unknown
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) current = parsed as Record<string, unknown>
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error
-  }
-  const rawCapabilities = current.capabilities
-  const capabilities = rawCapabilities && typeof rawCapabilities === 'object' && !Array.isArray(rawCapabilities)
-    ? rawCapabilities as Record<string, unknown>
-    : {}
-  const next = { ...current, capabilities: { ...capabilities, [id]: value } }
-  await mkdir(dataDir, { recursive: true, mode: 0o700 })
-  const temporary = `${target}.${process.pid}.${randomUUID()}.tmp`
-  await writeFile(temporary, `${JSON.stringify(next, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
-  await chmod(temporary, 0o600).catch(() => undefined)
-  await rename(temporary, target)
-  await chmod(target, 0o600).catch(() => undefined)
+  await updateRuntimeJson(target, (current) => ({
+    ...current,
+    capabilities: { ...objectSection(current.capabilities), [id]: value }
+  }))
 }
 
 async function persistSharedMcpConfig(
   target: string,
   mcp: KunCapabilitiesConfig['mcp']
 ): Promise<void> {
-  const directory = dirname(target)
-  let current: Record<string, unknown> = {}
-  try {
-    const parsed = JSON.parse(await readFile(target, 'utf8')) as unknown
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      current = parsed as Record<string, unknown>
-    }
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error
-  }
-  const next = {
+  await updateRuntimeJson(target, (current) => ({
     ...current,
     servers: structuredClone(mcp.servers)
-  }
-  await mkdir(directory, { recursive: true, mode: 0o700 })
-  await chmod(directory, 0o700).catch(() => undefined)
-  const temporary = `${target}.${process.pid}.${randomUUID()}.tmp`
-  await writeFile(temporary, `${JSON.stringify(next, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
-  await chmod(temporary, 0o600).catch(() => undefined)
-  await rename(temporary, target)
-  await chmod(target, 0o600).catch(() => undefined)
+  }))
+}
+
+async function updateRuntimeJson(
+  path: string,
+  mutate: (current: Record<string, unknown>) => Record<string, unknown>
+): Promise<void> {
+  const file = new AtomicJsonFile(path, (value) => objectSection(value))
+  await file.update(() => ({}), mutate)
+}
+
+function objectSection(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {}
 }
 
 function tokenEconomyConfigForOptions(
@@ -3218,7 +3222,9 @@ async function createPersistentStores(input: {
   dataDir: string
   storage?: StorageConfig
   nowIso: () => string
+  serviceManager?: ServiceManagerConnection
 }): Promise<{ threadStore: ThreadStore; sessionStore: SessionStore; shutdown?: () => Promise<void> }> {
+  if (input.serviceManager) return createManagerRemoteStores(input.serviceManager)
   const storage = input.storage ?? DEFAULT_STORAGE_CONFIG
   if (storage.backend === 'file') {
     return {
@@ -3283,6 +3289,7 @@ export async function startKunServe(
   // discovery rendezvous identify the exact same process incarnation.
   const startedAt = options.startedAt ?? new Date().toISOString()
   const instanceId = options.instanceId ?? randomUUID()
+  process.env.KUN_RUNTIME_INSTANCE_ID = instanceId
   const serveOptions = { ...options, startedAt, instanceId }
   const runtime = await createKunServeRuntime(serveOptions)
   let requestShutdown!: () => void
@@ -3307,8 +3314,28 @@ export async function startKunServe(
     throw error
   }
   let discovery: Awaited<ReturnType<typeof publishRuntimeDiscovery>>
+  const runtimeFlavor = options.runtimeFlavor ?? 'production'
+  let registeredWithManager = false
   try {
-    discovery = await publishRuntimeDiscovery(options.dataDir, {
+    if (options.serviceManager) {
+      await registerRuntimeWithManager({
+        manager: options.serviceManager,
+        registration: {
+          flavor: runtimeFlavor,
+          instanceId,
+          pid: process.pid,
+          startedAt,
+          host: server.host,
+          port: server.port,
+          baseUrl: runtimeBaseUrl(server.host, server.port),
+          runtimeToken: options.runtimeToken,
+          ...(options.buildId ? { buildId: options.buildId } : {}),
+          ...(options.logPath ? { logPath: options.logPath } : {})
+        }
+      })
+      registeredWithManager = true
+    }
+    discovery = await publishRuntimeDiscovery(options.discoveryDir ?? options.dataDir, {
       pid: process.pid,
       startedAt,
       host: server.host,
@@ -3317,12 +3344,20 @@ export async function startKunServe(
       runtimeToken: options.runtimeToken,
       insecure: options.insecure,
       serviceVersion: KUN_SERVICE_VERSION,
+      ...(runtimeFlavor === 'development' ? { flavor: runtimeFlavor } : {}),
       ...(options.buildId ? { buildId: options.buildId } : {}),
       launchMode: options.launchMode ?? 'foreground',
       ...(options.logPath ? { logPath: options.logPath } : {}),
       instanceId
     })
   } catch (error) {
+    if (registeredWithManager && options.serviceManager) {
+      await unregisterRuntimeWithManager({
+        manager: options.serviceManager,
+        flavor: runtimeFlavor,
+        instanceId
+      })
+    }
     await server.close().catch(() => undefined)
     await runtime.shutdown?.().catch(() => undefined)
     throw error
@@ -3331,7 +3366,7 @@ export async function startKunServe(
   // clients stop spinning on them, without delaying readiness. Then resume
   // goals that were interrupted mid-run so an active goal doesn't sit "in
   // progress" forever with nothing running (KunAgent/Kun#370).
-  void runtime.turnService
+  if (!options.serviceManager) void runtime.turnService
     .reconcileOrphanedTurns()
     .then(async (threadIds) => {
       if (threadIds.length > 0) {
@@ -3349,7 +3384,7 @@ export async function startKunServe(
     })
   // Settle subagent (child-run) records left 'queued'/'running' by the previous
   // process, so a restart doesn't leave them stuck in-flight forever (#621).
-  void runtime.delegationRuntime
+  if (!options.serviceManager) void runtime.delegationRuntime
     ?.reconcileOrphanedChildRuns()
     .then((count) => {
       if (count > 0) {
@@ -3371,11 +3406,53 @@ export async function startKunServe(
         try {
           await server.close()
         } finally {
-          await removeRuntimeDiscovery(options.dataDir, discovery.instanceId).catch(() => undefined)
+          if (registeredWithManager && options.serviceManager) {
+            await unregisterRuntimeWithManager({
+              manager: options.serviceManager,
+              flavor: runtimeFlavor,
+              instanceId
+            })
+            registeredWithManager = false
+          }
+          await removeRuntimeDiscovery(
+            options.discoveryDir ?? options.dataDir,
+            discovery.instanceId,
+            options.runtimeFlavor ?? 'production'
+          ).catch(() => undefined)
         }
       }
     }
   }
+}
+
+function createPersistentMemoryStore(
+  options: KunServeRuntimeOptions,
+  nowIso: () => string
+): MemoryStore | undefined {
+  const config = options.capabilities?.memory
+  if (!config?.enabled) return undefined
+  return options.serviceManager
+    ? new ManagerRemoteMemoryStore(options.serviceManager, config)
+    : new FileMemoryStore({
+        rootDir: join(options.dataDir, 'memory'),
+        config,
+        nowIso
+      })
+}
+
+function createPersistentAttachmentStore(
+  options: KunServeRuntimeOptions,
+  nowIso: () => string
+): AttachmentStore | undefined {
+  const config = options.capabilities?.attachments
+  if (!config?.enabled) return undefined
+  return options.serviceManager
+    ? new ManagerRemoteAttachmentStore(options.serviceManager, config)
+    : new FileAttachmentStore({
+        rootDir: join(options.dataDir, 'attachments'),
+        config,
+        nowIso
+      })
 }
 
 function runtimeBaseUrl(host: string, port: number): string {

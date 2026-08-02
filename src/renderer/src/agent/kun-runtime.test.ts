@@ -211,6 +211,7 @@ describe('KunRuntimeProvider', () => {
         providerId: 'codex',
         accountId: 'account:codex',
         model: 'gpt-live',
+        agentSurface: 'design',
         modelRequestCaptureEnabled: false
       })
       return {
@@ -219,6 +220,7 @@ describe('KunRuntimeProvider', () => {
         body: JSON.stringify({
           id: 'thr_live',
           title: 'Live',
+          agentSurface: 'design',
           workspace: '/tmp/workspace',
           model: 'gpt-live',
           providerId: 'codex',
@@ -236,8 +238,10 @@ describe('KunRuntimeProvider', () => {
       workspaceDirectoryExists: vi.fn(async () => true)
     })
 
-    await expect(new KunRuntimeProvider().createThread({ workspace: '/tmp/workspace' }))
-      .resolves.toMatchObject({ id: 'thr_live', model: 'gpt-live' })
+    await expect(new KunRuntimeProvider().createThread({
+      workspace: '/tmp/workspace',
+      agentSurface: 'design'
+    })).resolves.toMatchObject({ id: 'thr_live', model: 'gpt-live', agentSurface: 'design' })
   })
 
   it('starts MCP OAuth authorization through the authenticated runtime bridge', async () => {
@@ -461,6 +465,56 @@ describe('KunRuntimeProvider', () => {
     const staleDetail = await new KunRuntimeProvider().getThreadDetail('thr_1')
     const staleBlock = staleDetail.blocks.find((block) => block.kind === 'user_input')
     expect(staleBlock?.kind === 'user_input' && staleBlock.live).toBeFalsy()
+  })
+
+  it('expires a recovered approval when the runtime approval gate no longer awaits it', async () => {
+    const threadBody = (pendingApprovalIds: string[]): string =>
+      JSON.stringify({
+        id: 'thr_approval',
+        title: 'Demo',
+        workspace: '/tmp',
+        model: 'deepseek-chat',
+        mode: 'agent',
+        status: 'running',
+        createdAt: 't0',
+        updatedAt: 't1',
+        latestSeq: 12,
+        pendingApprovalIds,
+        turns: [{
+          id: 'turn_approval',
+          threadId: 'thr_approval',
+          status: 'running',
+          prompt: 'run command',
+          createdAt: 't0',
+          items: [{
+            id: 'item_approval',
+            turnId: 'turn_approval',
+            threadId: 'thr_approval',
+            role: 'tool',
+            status: 'pending',
+            createdAt: 't1',
+            kind: 'approval',
+            approvalId: 'approval_live',
+            toolName: 'bash',
+            summary: 'Run tests'
+          }]
+        }]
+      })
+
+    installDsGui({
+      runtimeRequest: vi.fn(async () => ({ ok: true, status: 200, body: threadBody(['approval_live']) }))
+    })
+    const liveDetail = await new KunRuntimeProvider().getThreadDetail('thr_approval')
+    expect(liveDetail.blocks.find((block) => block.kind === 'approval'))
+      .toMatchObject({ status: 'pending' })
+
+    resetProviderCacheForTests()
+    installDsGui({
+      runtimeRequest: vi.fn(async () => ({ ok: true, status: 200, body: threadBody([]) }))
+    })
+    const staleDetail = await new KunRuntimeProvider().getThreadDetail('thr_approval')
+    expect(staleDetail.blocks.find((block) => block.kind === 'approval'))
+      .toMatchObject({ status: 'expired' })
   })
 
   it('coalesces tool_call and tool_result pairs into one tool block on thread load', async () => {
@@ -1427,6 +1481,48 @@ describe('KunRuntimeProvider', () => {
       itemId: 'item_text',
       createdAt: 't1'
     }])
+  })
+
+  it('preserves a fatal SSE status for stream recovery', async () => {
+    let onSseError: ((payload: { streamId: string; message?: string; status?: number }) => void) | null = null
+    const onError = vi.fn()
+    const sink: ThreadEventSink = {
+      onSeq: vi.fn(),
+      onDeltas: vi.fn(),
+      onUserMessage: vi.fn(),
+      onTool: vi.fn(),
+      onCompaction: vi.fn(),
+      onApproval: vi.fn(),
+      onUserInput: vi.fn(),
+      onUserInputStatus: vi.fn(),
+      onGoal: vi.fn(),
+      onTodos: vi.fn(),
+      onTurnComplete: vi.fn(),
+      onError
+    }
+    installDsGui({
+      onSseError: vi.fn((handler) => {
+        onSseError = handler
+        return () => undefined
+      }),
+      startSse: vi.fn(async (_threadId, _sinceSeq, streamId) => {
+        queueMicrotask(() => onSseError?.({
+          streamId: streamId ?? 'stream-1',
+          message: 'stream route unavailable',
+          status: 404
+        }))
+        return { streamId: streamId ?? 'stream-1' }
+      })
+    })
+
+    await new KunRuntimeProvider().subscribeThreadEvents('thr_1', 0, sink, new AbortController().signal)
+
+    const [error] = onError.mock.calls[0] ?? []
+    expect(error).toMatchObject({
+      name: 'KunSseSubscriptionError',
+      message: 'stream route unavailable',
+      status: 404
+    })
   })
 
   it('advances the renderer cursor after dispatch and only then acknowledges the SSE batch', async () => {

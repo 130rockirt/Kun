@@ -58,6 +58,17 @@ export function imagePreviewDisplaySize(
   }
 }
 
+export function imagePreviewStageStyle(imageSize: ImagePreviewSize | null): CSSProperties {
+  return {
+    minWidth: '100%',
+    minHeight: '100%',
+    ...(imageSize ? {
+      width: `${imageSize.width + PREVIEW_PADDING}px`,
+      height: `${imageSize.height + PREVIEW_PADDING}px`
+    } : {})
+  }
+}
+
 export function ImagePreviewLightbox({
   open,
   src,
@@ -74,6 +85,7 @@ export function ImagePreviewLightbox({
   const [zoom, setZoom] = useState(1)
   const [naturalSize, setNaturalSize] = useState<ImagePreviewSize | null>(null)
   const [viewportSize, setViewportSize] = useState<ImagePreviewSize | null>(null)
+  const frameRef = useRef<HTMLDivElement>(null)
   const viewportRef = useRef<HTMLDivElement>(null)
   const titleId = useId()
   const closeLabel = t('imagePreviewClose')
@@ -101,11 +113,11 @@ export function ImagePreviewLightbox({
 
   useLayoutEffect(() => {
     if (!open) return
-    const viewport = viewportRef.current
-    if (!viewport) return
+    const frame = frameRef.current
+    if (!frame) return
 
     const updateViewportSize = (): void => {
-      const nextSize = { width: viewport.clientWidth, height: viewport.clientHeight }
+      const nextSize = { width: frame.clientWidth, height: frame.clientHeight }
       setViewportSize((current) =>
         current?.width === nextSize.width && current.height === nextSize.height
           ? current
@@ -120,7 +132,7 @@ export function ImagePreviewLightbox({
     }
 
     const resizeObserver = new ResizeObserver(updateViewportSize)
-    resizeObserver.observe(viewport)
+    resizeObserver.observe(frame)
     return () => resizeObserver.disconnect()
   }, [open])
 
@@ -129,26 +141,22 @@ export function ImagePreviewLightbox({
   const imageSize = naturalSize && viewportSize
     ? imagePreviewDisplaySize(naturalSize, viewportSize, zoom)
     : null
-  const stageStyle: CSSProperties = viewportSize ? {
-    width: `${Math.max(viewportSize.width, (imageSize?.width ?? 0) + PREVIEW_PADDING)}px`,
-    height: `${Math.max(viewportSize.height, (imageSize?.height ?? 0) + PREVIEW_PADDING)}px`
-  } : {
-    width: '100%',
-    height: '100%'
-  }
+  const stageStyle = imagePreviewStageStyle(imageSize)
   const imageStyle: CSSProperties | undefined = imageSize ? {
     width: `${imageSize.width}px`,
     height: `${imageSize.height}px`
   } : undefined
   const imageWidth = imageSize?.width ?? 0
   const imageHeight = imageSize?.height ?? 0
+  const viewportWidth = viewportSize?.width ?? 0
+  const viewportHeight = viewportSize?.height ?? 0
 
   useLayoutEffect(() => {
     const viewport = viewportRef.current
     if (!viewport || imageWidth <= 0 || imageHeight <= 0) return
     viewport.scrollLeft = Math.max(0, (viewport.scrollWidth - viewport.clientWidth) / 2)
     viewport.scrollTop = Math.max(0, (viewport.scrollHeight - viewport.clientHeight) / 2)
-  }, [imageHeight, imageWidth])
+  }, [imageHeight, imageWidth, viewportHeight, viewportWidth])
 
   if (!open || typeof document === 'undefined') return null
 
@@ -202,21 +210,23 @@ export function ImagePreviewLightbox({
       </div>
       <div className="flex h-full w-full items-center justify-center px-4 py-20 sm:px-8">
         <div
-          ref={viewportRef}
-          className="h-full w-full max-w-[min(1120px,calc(100vw-32px))] overflow-auto rounded-[18px] border border-white/16 bg-[rgba(255,250,242,0.96)] shadow-[0_30px_90px_rgba(0,0,0,0.42)] dark:bg-zinc-950/88"
+          ref={frameRef}
+          className="h-full w-full max-w-[min(1120px,calc(100vw-32px))] overflow-hidden rounded-[18px] border border-white/16 bg-[rgba(255,250,242,0.96)] shadow-[0_30px_90px_rgba(0,0,0,0.42)] dark:bg-zinc-950/88"
         >
-          <div className="flex items-center justify-center p-2" style={stageStyle}>
-            <img
-              src={src}
-              alt={alt}
-              className={`${imageSize ? 'max-w-none' : 'h-auto w-auto max-h-full max-w-full'} block shrink-0 select-none object-contain`}
-              style={imageStyle}
-              draggable={false}
-              onLoad={(event) => {
-                const image = event.currentTarget
-                setNaturalSize({ width: image.naturalWidth, height: image.naturalHeight })
-              }}
-            />
+          <div ref={viewportRef} className="h-full w-full overflow-auto">
+            <div className="flex items-center justify-center p-2" style={stageStyle}>
+              <img
+                src={src}
+                alt={alt}
+                className={`${imageSize ? 'max-w-none' : 'h-auto w-auto max-h-full max-w-full'} block shrink-0 select-none object-contain`}
+                style={imageStyle}
+                draggable={false}
+                onLoad={(event) => {
+                  const image = event.currentTarget
+                  setNaturalSize({ width: image.naturalWidth, height: image.naturalHeight })
+                }}
+              />
+            </div>
           </div>
         </div>
       </div>

@@ -222,28 +222,28 @@ function SharedDefaultModelPicker({
   }, [defaultProvider?.id, open, providers])
 
   return (
-    <div className="border-b border-ds-border-muted bg-ds-main/20 px-5 py-4">
+    <section className="ds-provider-default-model grid gap-3 border-t border-ds-border-muted pt-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <div className="text-[13px] font-semibold text-ds-ink">
-            {zh ? 'GUI / TUI 默认模型' : 'Default model for GUI / TUI'}
+          <div className="text-[15px] font-semibold text-ds-ink">
+            {zh ? '默认模型' : 'Default model'}
           </div>
-          <p className="mt-1 text-[11.5px] leading-5 text-ds-faint">
+          <p className="mt-1 text-[12px] leading-5 text-ds-faint">
             {zh
-              ? '选择共享的供应商与模型，新建 GUI 和 TUI 会话都会自动使用它。'
-              : 'Choose the shared provider and model used automatically by new GUI and TUI sessions.'}
+              ? '新建 GUI 和 TUI 会话将自动使用这个供应商与模型。'
+              : 'New GUI and TUI sessions will automatically use this provider and model.'}
           </p>
         </div>
         <StatusPill tone={error ? 'warning' : snapshot ? 'success' : 'muted'}>
           {error
             ? (zh ? '等待运行时' : 'Waiting for runtime')
             : snapshot
-              ? (zh ? '修改会自动生效' : 'Changes apply automatically')
+              ? (zh ? '自动生效' : 'Auto apply')
               : (zh ? '正在连接' : 'Connecting')}
         </StatusPill>
       </div>
 
-      <div ref={rootRef} className="relative mt-3 max-w-[760px]">
+      <div ref={rootRef} className="relative max-w-[820px]">
         <label className="mb-1.5 block text-[11.5px] font-semibold text-ds-muted">
           {zh ? '默认模型' : 'Default model'}
         </label>
@@ -378,9 +378,9 @@ function SharedDefaultModelPicker({
         ) : null}
       </div>
       {error ? (
-        <p className="mt-2 text-[11.5px] text-amber-600 dark:text-amber-400">{error}</p>
+        <p className="text-[11.5px] text-amber-600 dark:text-amber-400">{error}</p>
       ) : null}
-    </div>
+    </section>
   )
 }
 
@@ -1653,9 +1653,11 @@ function GeminiCliApiSubscriptionSection({
   )
 }
 
-const fieldLabelClass = 'grid gap-1.5 text-[12px] font-semibold text-ds-muted'
+const fieldLabelClass = 'grid gap-2 text-[13px] font-semibold text-ds-ink'
 const textInputClass =
-  'w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] font-normal text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30'
+  'h-11 w-full min-w-0 rounded-lg border border-ds-border bg-ds-card px-3.5 text-[14px] font-normal text-ds-ink transition focus:border-accent/55 focus:outline-none focus:ring-2 focus:ring-accent/15'
+const providerSelectControlClass =
+  'h-11 w-full min-w-0 rounded-lg border border-ds-border bg-ds-card px-3.5 text-[14px] font-normal text-ds-ink transition focus:border-accent/55 focus:outline-none focus:ring-2 focus:ring-accent/15 disabled:cursor-not-allowed disabled:opacity-55'
 function retryStatusCodesText(codes: readonly number[] | undefined): string {
   return (codes?.length ? codes : defaultModelRequestRetrySettings().httpStatusCodes).join(',')
 }
@@ -1685,9 +1687,9 @@ function DetailSection({
   children?: ReactNode
 }): ReactElement {
   return (
-    <section className="grid gap-3 border-t border-ds-border-muted pt-3 first:border-t-0 first:pt-0">
+    <section className="grid gap-4 border-t border-ds-border-muted pt-5 first:border-t-0 first:pt-0">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="text-[12.5px] font-semibold text-ds-muted">{title}</h3>
+        <h3 className="text-[15px] font-semibold text-ds-ink">{title}</h3>
         {action}
       </div>
       {children}
@@ -1844,14 +1846,12 @@ function ProviderListGroup({
   children: ReactNode
 }): ReactElement {
   return (
-    <div className="grid gap-2">
+    <div className="grid gap-2.5">
       <div className="flex items-center gap-2 px-1">
-        <span className="text-[11.5px] font-semibold text-ds-muted">{label}</span>
-        <span className="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-ds-main/60 px-1.5 text-[10.5px] font-medium text-ds-faint">
-          {count}
-        </span>
+        <span className="text-[11px] font-semibold uppercase tracking-[0.04em] text-ds-faint">{label}</span>
+        <span className="text-[11px] font-medium text-ds-faint">· {count}</span>
       </div>
-      <div className="grid max-h-[332px] gap-2 overflow-y-auto overscroll-contain pr-1 [scrollbar-gutter:stable]">
+      <div className="grid max-h-[360px] gap-1 overflow-y-auto overscroll-contain pr-1 [scrollbar-gutter:stable]">
         {children}
       </div>
     </div>
@@ -3283,15 +3283,6 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
     })
   }
 
-  const providerKindLabel = (item: ModelProviderProfileV1): string => {
-    if (item.id === DEFAULT_MODEL_PROVIDER_ID) return t('modelProviderDefaultBadge')
-    const source = resolveModelProviderPresetSource(item)
-    if (source?.mode === 'token-plan') return t('modelProviderTokenPlanBadge')
-    if (source?.preset.category === 'subscription') return t('modelProviderPlanBadge')
-    if (source) return t('modelProviderPresetBadge')
-    return t('modelProviderCustomBadge')
-  }
-
   const activeProbe = activeProvider ? probeStates[activeProvider.id] : undefined
   const activeProbeFresh = Boolean(
     activeProvider &&
@@ -3389,33 +3380,46 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
         type="button"
         aria-pressed={selected}
         onClick={() => setSelectedProviderId(item.id)}
-        className={`h-[60px] w-full min-w-0 overflow-hidden rounded-xl border px-3 py-2.5 text-left transition ${
+        className={`group relative min-h-[58px] w-full min-w-0 overflow-hidden rounded-lg border px-3 py-2.5 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 ${
           selected
-            ? 'border-accent/60 bg-ds-main/45 ring-1 ring-accent/30'
-            : 'border-ds-border bg-ds-card hover:bg-ds-hover'
+            ? 'border-accent/20 bg-accent/[0.08]'
+            : 'border-transparent hover:border-ds-border-muted hover:bg-ds-hover'
         }`}
       >
-        <div className="flex min-w-0 items-center gap-1.5">
-          <span className="min-w-0 flex-1 truncate text-[13.5px] font-semibold text-ds-ink">
-            {item.name.trim() || item.id}
+        {selected ? <span aria-hidden="true" className="absolute inset-y-2 left-0 w-0.5 rounded-full bg-accent" /> : null}
+        <div className="flex min-w-0 items-center gap-2.5">
+          <span className={`grid h-8 w-8 shrink-0 place-items-center rounded-lg border ${
+            selected
+              ? 'border-accent/20 bg-ds-card text-accent'
+              : 'border-ds-border-muted bg-ds-main/45 text-ds-faint group-hover:text-ds-muted'
+          }`}>
+            <ServerCog className="h-4 w-4" strokeWidth={1.8} />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="flex min-w-0 items-center gap-1.5">
+              <span className="min-w-0 flex-1 truncate text-[13.5px] font-semibold text-ds-ink">
+                {item.name.trim() || item.id}
+              </span>
+              {configuredCredential ? (
+                <span className="h-2 w-2 shrink-0 rounded-full bg-emerald-500" title={t('modelProviderReady')} />
+              ) : null}
+            </span>
+            <span className="mt-0.5 flex min-w-0 items-center gap-1.5 truncate text-[11.5px] text-ds-faint">
+              {inUse ? <span>{t('modelProviderInUse')}</span> : null}
+              {inUse ? <span aria-hidden="true">·</span> : null}
+              <span>{t('modelProviderModelCount', { total: providerModelCount(item) })}</span>
+              {item.models.some((model) =>
+                modelSupportsImageInput(profileForModel(item, model))
+              ) ? <ImageIcon className="h-3 w-3 shrink-0" strokeWidth={1.9} /> : null}
+            </span>
           </span>
           {isDraft ? <ProviderBadge tone="warning">{t('modelProviderDraftBadge')}</ProviderBadge> : null}
-          {inUse ? <ProviderBadge tone="accent">{t('modelProviderInUse')}</ProviderBadge> : null}
-          {!isDraft && missingKey ? <ProviderBadge tone="warning">{t('modelProviderMissingKey')}</ProviderBadge> : null}
-        </div>
-        <div className="mt-1 flex min-w-0 items-center gap-x-1.5 overflow-hidden whitespace-nowrap text-[12px] text-ds-faint">
-          <span>{t('modelProviderModelCount', { total: providerModelCount(item) })}</span>
-          <span aria-hidden="true">·</span>
-          <span>{providerKindLabel(item)}</span>
-          {configuredCredential ? <KeyRound className="h-3 w-3" strokeWidth={1.9} /> : null}
-          {item.image ? <ImageIcon className="h-3 w-3" strokeWidth={1.9} /> : null}
-          {item.models.some((model) =>
-            modelSupportsImageInput(profileForModel(item, model))
-          ) ? <span className="text-[11px] font-semibold text-ds-muted">{t('modelProviderVisionBadge')}</span> : null}
-          {item.speech ? <Mic className="h-3 w-3" strokeWidth={1.9} /> : null}
-          {item.textToSpeech ? <AudioLines className="h-3 w-3" strokeWidth={1.9} /> : null}
-          {item.music ? <Music2 className="h-3 w-3" strokeWidth={1.9} /> : null}
-          {item.video ? <Clapperboard className="h-3 w-3" strokeWidth={1.9} /> : null}
+          {!isDraft && missingKey ? (
+            <span className="inline-flex shrink-0 items-center text-amber-500" title={t('modelProviderMissingKey')}>
+              <AlertCircle className="h-4 w-4" />
+              <span className="sr-only">{t('modelProviderMissingKey')}</span>
+            </span>
+          ) : null}
         </div>
       </button>
     )
@@ -3512,9 +3516,30 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
           </p>
         </div>
       ) : null}
-      <section className="ds-settings-card rounded-2xl border border-ds-border bg-ds-card/95 shadow-sm shadow-black/5 dark:shadow-black/25">
-        <header className="flex flex-wrap items-center gap-4 border-b border-ds-border-muted px-5 py-3">
-          <div className="min-w-0 flex-1 basis-80">
+      <section className="ds-provider-workspace overflow-hidden rounded-xl border border-ds-border bg-ds-card">
+        <header className="grid min-h-[76px] border-b border-ds-border-muted lg:grid-cols-[268px_minmax(0,1fr)]">
+          <div className="flex items-center justify-between gap-3 border-b border-ds-border-muted px-4 py-3 lg:border-b-0 lg:border-r">
+            <div className="min-w-0">
+              <h2 className="truncate text-[16px] font-semibold text-ds-ink">{t('providers')}</h2>
+              <p className="mt-0.5 truncate text-[11.5px] text-ds-faint">
+                {zh
+                  ? `${displayProviders.length} 个已配置`
+                  : `${displayProviders.length} configured`}
+              </p>
+            </div>
+            {workspaceMode === 'providers' ? <button
+              ref={addProviderButtonRef}
+              type="button"
+              aria-haspopup="dialog"
+              aria-expanded={addMenuOpen}
+              onClick={openAddProviderDialog}
+              className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-ds-border bg-ds-card px-2.5 text-[12px] font-medium text-ds-ink transition hover:border-accent/35 hover:bg-ds-hover"
+            >
+              <Plus className="h-3.5 w-3.5" strokeWidth={2} />
+              {t('modelProviderAdd')}
+            </button> : null}
+          </div>
+          <div className="flex min-w-0 items-center px-4 py-3 sm:px-6">
             <SettingsTabs<ProviderWorkspaceMode>
               baseId="provider-workspace"
               ariaLabel={t('providers')}
@@ -3526,34 +3551,17 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
               onChange={setWorkspaceMode}
             />
           </div>
-          {workspaceMode === 'providers' ? <button
-            ref={addProviderButtonRef}
-            type="button"
-            aria-haspopup="dialog"
-            aria-expanded={addMenuOpen}
-            onClick={openAddProviderDialog}
-            className="inline-flex h-9 shrink-0 items-center gap-2 rounded-full bg-accent px-4 text-[12.5px] font-semibold text-white shadow-sm transition hover:opacity-90"
-          >
-            <Plus className="h-3.5 w-3.5" strokeWidth={2} />
-            {t('modelProviderAdd')}
-          </button> : null}
         </header>
-        <SharedDefaultModelPicker
-          snapshot={sharedConnections}
-          error={sharedConnectionsError}
-          zh={zh}
-          onSelect={(connection, model) => void selectSharedModel(connection, model)}
-        />
         <SettingsTabPanel<ProviderWorkspaceMode>
           baseId="provider-workspace"
           tabId="providers"
           active={workspaceMode === 'providers'}
         >
-          <div className="grid gap-4 p-4">
-          <label className="grid gap-1.5 lg:hidden">
+          <div className="grid min-w-0">
+            <label className="grid gap-1.5 px-4 py-4 lg:hidden">
             <span className="text-[12px] font-semibold text-ds-muted">{t('modelProviderCompactSelect')}</span>
             <select
-              className={selectControlClass}
+              className={providerSelectControlClass}
               value={activeProvider?.id ?? ''}
               onChange={(event) => setSelectedProviderId(event.target.value)}
             >
@@ -3562,23 +3570,21 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
               ))}
             </select>
           </label>
-          <div className="grid gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
-            <aside className="hidden min-w-0 content-start gap-3 lg:grid">
-              {displayProviders.length > 5 ? (
-                <label className="relative block">
-                  <Search
-                    className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ds-faint"
-                    strokeWidth={1.9}
-                  />
-                  <input
-                    value={providerListQuery}
-                    onChange={(event) => setProviderListQuery(event.target.value)}
-                    placeholder={t('modelProviderSearchPlaceholder')}
-                    aria-label={t('modelProviderSearchPlaceholder')}
-                    className="w-full rounded-xl border border-ds-border bg-ds-card py-2 pl-9 pr-3 text-[12.5px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30"
-                  />
-                </label>
-              ) : null}
+          <div className="grid min-w-0 lg:grid-cols-[268px_minmax(0,1fr)]">
+            <aside className="hidden min-w-0 content-start gap-4 border-r border-ds-border-muted bg-ds-sidebar/45 p-4 lg:grid">
+              <label className="relative block">
+                <Search
+                  className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ds-faint"
+                  strokeWidth={1.9}
+                />
+                <input
+                  value={providerListQuery}
+                  onChange={(event) => setProviderListQuery(event.target.value)}
+                  placeholder={t('modelProviderSearchPlaceholder')}
+                  aria-label={t('modelProviderSearchPlaceholder')}
+                  className="h-10 w-full rounded-lg border border-ds-border bg-ds-card pl-9 pr-3 text-[12.5px] text-ds-ink transition placeholder:text-ds-faint focus:border-accent/50 focus:outline-none focus:ring-2 focus:ring-accent/15"
+                />
+              </label>
               {grouped ? (
                 <>
                   {planProviders.length > 0 ? (
@@ -3602,61 +3608,76 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
               ) : null}
             </aside>
             {activeProvider ? (
-              <div className="grid min-w-0 content-start gap-4 rounded-2xl border border-ds-border-muted bg-ds-main/30 p-4">
-                <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="grid min-w-0 content-start gap-5 px-4 py-5 sm:px-6 sm:py-6 lg:px-8">
+                <div className="flex flex-wrap items-start justify-between gap-4 border-b border-ds-border-muted pb-5">
                   <div className="min-w-0">
-                    <div className="flex min-w-0 items-center gap-2">
-                      <span className="min-w-0 truncate text-[15px] font-semibold text-ds-ink">
-                        {activeProvider.name.trim() || activeProvider.id}
-                      </span>
-                      <span className="truncate font-mono text-[11.5px] text-ds-faint">{activeProvider.id}</span>
+                    <div className="flex min-w-0 items-center gap-1.5 text-[11.5px] text-ds-faint">
+                      <span>{t('providers')}</span>
+                      <span aria-hidden="true">/</span>
+                      <span className="truncate">{activeProvider.id}</span>
                     </div>
-                    <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                    <div className="mt-2 flex flex-wrap items-center gap-2.5">
+                      <h2 className="min-w-0 truncate text-[28px] font-semibold leading-none tracking-[-0.025em] text-ds-ink">
+                        {activeProvider.name.trim() || activeProvider.id}
+                      </h2>
                       {isDraftActive ? (
                         <StatusPill tone="warning">{t('modelProviderDraftBadge')}</StatusPill>
-                      ) : activeKunProviderId === activeProvider.id ? (
-                        <StatusPill tone="success" icon={<CheckCircle2 className="h-3 w-3" strokeWidth={2} />}>
-                          {t('modelProviderInUse')}
-                        </StatusPill>
-                      ) : null}
-                      <StatusPill
-                        tone={activeProbeBlocked ? 'warning' : 'success'}
-                        icon={activeProbeBlocked ? <AlertCircle className="h-3 w-3" /> : undefined}
-                      >
-                        {activeProbeBlocked ? t('modelProviderNeedsConfiguration') : t('modelProviderReady')}
-                      </StatusPill>
-                      {!isDraftActive ? (
+                      ) : (
                         <StatusPill
-                          tone={saveStatus === 'error' ? 'error' : saveStatus === 'saved' ? 'success' : 'muted'}
-                          title={saveStatus === 'error' ? saveError : undefined}
+                          tone={activeProbeBlocked ? 'warning' : 'success'}
+                          icon={activeProbeBlocked
+                            ? <AlertCircle className="h-3 w-3" />
+                            : <CheckCircle2 className="h-3 w-3" strokeWidth={2} />}
                         >
-                          {saveStatus === 'saving'
-                            ? t('applying')
-                            : saveStatus === 'error'
-                              ? t('applyFailed')
-                              : saveStatus === 'saved'
-                                ? t('applied')
-                                : t('autoApplyHint')}
+                          {activeProbeBlocked ? t('modelProviderNeedsConfiguration') : t('modelProviderReady')}
                         </StatusPill>
+                      )}
+                    </div>
+                    <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[12.5px] text-ds-muted">
+                      <span>{t(MODEL_ENDPOINT_FORMAT_LABEL_KEYS[activeProvider.endpointFormat])}</span>
+                      <span aria-hidden="true">·</span>
+                      <span>{t('modelProviderModelCount', { total: providerModelCount(activeProvider) })}</span>
+                      {activeKunProviderId === activeProvider.id ? (
+                        <>
+                          <span aria-hidden="true">·</span>
+                          <span>{t('modelProviderInUse')}</span>
+                        </>
                       ) : null}
                     </div>
                   </div>
-                  <button
-                    type="button"
-                    disabled={probeBusy || activeProbeBlocked}
-                    title={activeMissingCredential
-                      ? t('modelProviderPresetMissingKeyForProbe')
-                      : activeBaseUrlInvalid
-                        ? t('modelProviderInvalidUrl')
-                        : undefined}
-                    onClick={() => void runProbe(activeProvider, 'test')}
-                    className="inline-flex h-8 items-center gap-1.5 rounded-full border border-ds-border bg-ds-card px-3 text-[12px] font-medium text-ds-muted shadow-sm transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {probeBusy && activeProbe?.mode === 'test'
-                      ? <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.9} />
-                      : <PlugZap className="h-3.5 w-3.5" strokeWidth={1.9} />}
-                    {t('modelProviderTestConnection')}
-                  </button>
+                  <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+                    {!isDraftActive ? (
+                      <StatusPill
+                        tone={saveStatus === 'error' ? 'error' : saveStatus === 'saved' ? 'success' : 'muted'}
+                        icon={saveStatus === 'saved' ? <Check className="h-3 w-3" strokeWidth={2.2} /> : undefined}
+                        title={saveStatus === 'error' ? saveError : undefined}
+                      >
+                        {saveStatus === 'saving'
+                          ? t('applying')
+                          : saveStatus === 'error'
+                            ? t('applyFailed')
+                            : saveStatus === 'saved'
+                              ? t('applied')
+                              : t('autoApplyHint')}
+                      </StatusPill>
+                    ) : null}
+                    <button
+                      type="button"
+                      disabled={probeBusy || activeProbeBlocked}
+                      title={activeMissingCredential
+                        ? t('modelProviderPresetMissingKeyForProbe')
+                        : activeBaseUrlInvalid
+                          ? t('modelProviderInvalidUrl')
+                          : undefined}
+                      onClick={() => void runProbe(activeProvider, 'test')}
+                      className="inline-flex h-9 items-center gap-2 rounded-lg border border-ds-border bg-ds-card px-3 text-[12.5px] font-medium text-ds-ink transition hover:border-accent/35 hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-55"
+                    >
+                      {probeBusy && activeProbe?.mode === 'test'
+                        ? <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.9} />
+                        : <PlugZap className="h-3.5 w-3.5" strokeWidth={1.9} />}
+                      {t('modelProviderTestConnection')}
+                    </button>
+                  </div>
                 </div>
                 <SettingsSubTabs<ProviderTaskTab>
                   baseId="provider-settings"
@@ -3728,6 +3749,7 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                       <label className={fieldLabelClass}>
                         {t('modelProviderApiKey')}
                         <SecretInput
+                          className="min-h-11 !rounded-lg"
                           value={activeProvider.apiKey}
                           onChange={(value) => updateModelProvider(activeProvider.id, { apiKey: value })}
                           visible={showApiKey}
@@ -3772,6 +3794,7 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                       <label className={fieldLabelClass}>
                         {t('modelProviderApiKey')}
                         <SecretInput
+                          className="min-h-11 !rounded-lg"
                           value={activeProvider.apiKey}
                           onChange={(value) => updateModelProvider(activeProvider.id, { apiKey: value })}
                           visible={showApiKey}
@@ -3840,7 +3863,7 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                   <label className={fieldLabelClass}>
                     {t('modelProviderEndpointFormat')}
                     <select
-                      className={selectControlClass}
+                      className={providerSelectControlClass}
                       value={activeProvider.endpointFormat}
                       disabled={isOAuthSubscriptionProvider(activeProvider) || isDelegatedEndpointProvider(activeProvider)}
                       onChange={(e) => updateModelProvider(activeProvider.id, {
@@ -3884,6 +3907,12 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                     </p>
                   ) : null}
                 </DetailSection>
+                <SharedDefaultModelPicker
+                  snapshot={sharedConnections}
+                  error={sharedConnectionsError}
+                  zh={zh}
+                  onSelect={(connection, model) => void selectSharedModel(connection, model)}
+                />
                 </SettingsTabPanel>
                 <SettingsTabPanel<ProviderTaskTab>
                   baseId="provider-settings"
@@ -4459,6 +4488,7 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
           baseId="provider-workspace"
           tabId="routes"
           active={workspaceMode === 'routes'}
+          className="p-4 sm:p-6"
         >
           <ModelRoutesSettings
             settings={provider}

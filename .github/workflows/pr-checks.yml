@@ -366,7 +366,7 @@ jobs:
         run: npm ci
 
       - name: Test Runtime data migration on native Windows
-        run: npx vitest run src/main/kun-data-dir-paths.test.ts src/main/legacy-data-migration.test.ts src/main/runtime-data-dir-migration.test.ts src/main/runtime-data-dir-ownership.test.ts --reporter=dot
+        run: npx vitest run src/main/kun-data-dir-paths.test.ts src/main/legacy-data-migration.test.ts src/main/runtime-data-dir-migration.test.ts src/main/runtime-data-dir-ownership.test.ts src/main/windows-installer-migration.test.ts --reporter=dot
 
       - name: Test Graph Mode on native Windows
         run: npm run test:graph:platform
@@ -398,6 +398,9 @@ jobs:
 
       - name: Build Windows NSIS installer
         run: npm run dist:win
+
+      - name: Smoke Windows installer path migration
+        run: npm run smoke:windows-installer-migration
 
       - name: Smoke packaged Kun terminal command (win-unpacked)
         run: npm run smoke:packaged-cli -- --resources dist/win-unpacked/resources

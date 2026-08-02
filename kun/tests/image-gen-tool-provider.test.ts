@@ -461,7 +461,8 @@ describe('Image gen tool provider', () => {
       'ChatGPT-Account-Id': 'acct_123',
       originator: 'codex_cli_rs'
     })
-    expect(JSON.parse(requests[0].body)).toMatchObject({
+    const generationBody = JSON.parse(requests[0].body)
+    expect(generationBody).toMatchObject({
       model: 'gpt-5.5',
       input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'tiny square' }] }],
       instructions: 'You must fulfill image generation requests by using the image_generation tool.',
@@ -483,6 +484,7 @@ describe('Image gen tool provider', () => {
       stream: true,
       store: false
     })
+    expect(generationBody.tools[0]).not.toHaveProperty('input_fidelity')
   })
 
   it('posts Grok subscription image requests with native ratios and 1K/2K resolutions', async () => {
@@ -586,7 +588,7 @@ describe('Image gen tool provider', () => {
       {
         type: 'input_image',
         image_url: expect.stringMatching(/^data:image\/png;base64,/),
-        detail: 'auto'
+        detail: 'high'
       }
     ])
     expect(body.tools[0]).toMatchObject({
@@ -594,6 +596,188 @@ describe('Image gen tool provider', () => {
       action: 'edit',
       model: 'gpt-image-2'
     })
+    expect(body.tools[0]).not.toHaveProperty('input_fidelity')
+  })
+
+  it('omits input_fidelity for the routed gpt-image-2-codex model name', async () => {
+    const requests: Array<Record<string, any>> = []
+    vi.stubGlobal('fetch', vi.fn(async (_url: string | URL, init?: RequestInit) => {
+      requests.push(JSON.parse(String(init?.body)) as Record<string, any>)
+      return new Response([
+        `data: ${JSON.stringify({
+          type: 'response.output_item.done',
+          item: { type: 'image_generation_call', result: png(8, 8).toString('base64') }
+        })}`,
+        'data: [DONE]'
+      ].join('\n\n'), {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' }
+      })
+    }))
+    const client = new CodexResponsesImageClient('https://chatgpt.com/backend-api/codex', 'codex-access')
+
+    await client.edit({
+      prompt: 'edit the reference',
+      model: 'gpt-image-2-codex',
+      images: [{ name: 'reference.png', mimeType: 'image/png', data: png(16, 16) }],
+      timeoutMs: 1_000,
+      signal: new AbortController().signal
+    })
+
+    expect(requests).toHaveLength(1)
+    expect(requests[0].tools[0]).toMatchObject({ action: 'edit', model: 'gpt-image-2-codex' })
+    expect(requests[0].tools[0]).not.toHaveProperty('input_fidelity')
+    expect(requests[0].input[0].content[1]).toMatchObject({ type: 'input_image', detail: 'high' })
+  })
+
+  it('retries a Codex image edit once without input_fidelity when the model rejects it', async () => {
+    const requests: Array<Record<string, any>> = []
+    const resultBase64 = png(8, 8).toString('base64')
+    vi.stubGlobal('fetch', vi.fn(async (_url: string | URL, init?: RequestInit) => {
+      requests.push(JSON.parse(String(init?.body)) as Record<string, any>)
+      if (requests.length === 1) {
+        return new Response(JSON.stringify({
+          error: {
+            message: 'The model gpt-image-next-codex does not support input_fidelity.',
+            type: 'invalid_request_error',
+            code: 'invalid_input_fidelity_model'
+          }
+        }), { status: 400, headers: { 'content-type': 'application/json' } })
+      }
+      return new Response([
+        `data: ${JSON.stringify({
+          type: 'response.output_item.done',
+          item: { type: 'image_generation_call', result: resultBase64 }
+        })}`,
+        'data: [DONE]'
+      ].join('\n\n'), {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' }
+      })
+    }))
+    const client = new CodexResponsesImageClient('https://chatgpt.com/backend-api/codex', 'codex-access')
+
+    const image = await client.edit({
+      prompt: 'preserve the composition and change the shoes',
+      model: 'gpt-image-next',
+      images: [{ name: 'reference.png', mimeType: 'image/png', data: png(16, 16) }],
+      timeoutMs: 1_000,
+      signal: new AbortController().signal
+    })
+
+    expect(image.data.byteLength).toBeGreaterThan(0)
+    expect(requests).toHaveLength(2)
+    expect(requests[0].tools[0]).toMatchObject({
+      type: 'image_generation',
+      action: 'edit',
+      model: 'gpt-image-next',
+      input_fidelity: 'high'
+    })
+    expect(requests[1].tools[0]).toMatchObject({
+      type: 'image_generation',
+      action: 'edit',
+      model: 'gpt-image-next'
+    })
+    expect(requests[1].tools[0]).not.toHaveProperty('input_fidelity')
+    for (const body of requests) {
+      expect(body.tool_choice).toMatchObject({ type: 'allowed_tools' })
+      expect(body.input[0].content).toEqual([
+        { type: 'input_text', text: 'preserve the composition and change the shoes' },
+        {
+          type: 'input_image',
+          image_url: expect.stringMatching(/^data:image\/png;base64,/),
+          detail: 'high'
+        }
+      ])
+    }
+  })
+
+  it('does not retry unrelated Codex image edit errors without input_fidelity', async () => {
+    const requests: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (_url: string | URL, init?: RequestInit) => {
+      requests.push(String(init?.body))
+      return new Response(JSON.stringify({
+        error: { code: 'content_policy_violation', message: 'Request blocked by content policy.' }
+      }), { status: 400, headers: { 'content-type': 'application/json' } })
+    }))
+    const client = new CodexResponsesImageClient('https://chatgpt.com/backend-api/codex', 'codex-access')
+
+    await expect(client.edit({
+      prompt: 'edit the reference',
+      model: 'gpt-image-next',
+      images: [{ name: 'reference.png', mimeType: 'image/png', data: png(16, 16) }],
+      timeoutMs: 1_000,
+      signal: new AbortController().signal
+    })).rejects.toThrow(/content_policy_violation/)
+
+    expect(requests).toHaveLength(1)
+    expect(JSON.parse(requests[0]).tools[0]).toHaveProperty('input_fidelity', 'high')
+  })
+
+  it('does not retry input_fidelity errors returned with a non-400 status', async () => {
+    const requests: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (_url: string | URL, init?: RequestInit) => {
+      requests.push(String(init?.body))
+      return new Response(JSON.stringify({
+        error: {
+          code: 'invalid_input_fidelity_model',
+          message: 'The routed model does not support input_fidelity.'
+        }
+      }), { status: 422, headers: { 'content-type': 'application/json' } })
+    }))
+    const client = new CodexResponsesImageClient('https://chatgpt.com/backend-api/codex', 'codex-access')
+
+    await expect(client.edit({
+      prompt: 'edit the reference',
+      model: 'gpt-image-next',
+      images: [{ name: 'reference.png', mimeType: 'image/png', data: png(16, 16) }],
+      timeoutMs: 1_000,
+      signal: new AbortController().signal
+    })).rejects.toThrow(/invalid_input_fidelity_model/)
+
+    expect(requests).toHaveLength(1)
+  })
+
+  it('keeps input_fidelity omitted after its retry enters tool_choice fallback', async () => {
+    const requests: Array<Record<string, any>> = []
+    vi.stubGlobal('fetch', vi.fn(async (_url: string | URL, init?: RequestInit) => {
+      requests.push(JSON.parse(String(init?.body)) as Record<string, any>)
+      if (requests.length === 1) {
+        return new Response(JSON.stringify({
+          error: { code: 'invalid_input_fidelity_model', message: 'input_fidelity is unsupported' }
+        }), { status: 400 })
+      }
+      if (requests.length === 2) {
+        return new Response('Tool choice allowed_tools not found in tools parameter.', { status: 400 })
+      }
+      return new Response([
+        `data: ${JSON.stringify({
+          type: 'response.output_item.done',
+          item: { type: 'image_generation_call', result: png(8, 8).toString('base64') }
+        })}`,
+        'data: [DONE]'
+      ].join('\n\n'), {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' }
+      })
+    }))
+    const client = new CodexResponsesImageClient('https://chatgpt.com/backend-api/codex', 'codex-access')
+
+    const image = await client.edit({
+      prompt: 'edit the reference',
+      model: 'gpt-image-next',
+      images: [{ name: 'reference.png', mimeType: 'image/png', data: png(16, 16) }],
+      timeoutMs: 1_000,
+      signal: new AbortController().signal
+    })
+
+    expect(image.data.byteLength).toBeGreaterThan(0)
+    expect(requests).toHaveLength(3)
+    expect(requests[0].tools[0]).toHaveProperty('input_fidelity', 'high')
+    expect(requests[1].tools[0]).not.toHaveProperty('input_fidelity')
+    expect(requests[1].tool_choice).toMatchObject({ type: 'allowed_tools' })
+    expect(requests[2].tools[0]).not.toHaveProperty('input_fidelity')
+    expect(requests[2].tool_choice).toBe('required')
   })
 
   it('uses the latest Codex partial image when the final image item is absent', async () => {
@@ -733,7 +917,7 @@ describe('Image gen tool provider', () => {
     expect(output.quality).toBe('auto')
     expect(output.warnings).toEqual([])
     expect(output.files[0]).toMatchObject({ mimeType: 'image/png', width: 1024, height: 576 })
-    expect(output.files[0].relativePath.startsWith('.deepseekgui-images/')).toBe(true)
+    expect(output.files[0].relativePath.startsWith('.kun/images/')).toBe(true)
     expect(existsSync(output.files[0].absolutePath)).toBe(true)
     expect(JSON.stringify(output)).not.toMatch(/base64|b64_json/)
     expect(client.generateCalls[0]).toMatchObject({
@@ -832,7 +1016,8 @@ describe('Image gen tool provider', () => {
   it('rejects generated-image writes through an escaping workspace symlink', async () => {
     const outside = await mkdtemp(join(tmpdir(), 'kun-imagegen-outside-'))
     try {
-      await symlink(outside, join(workspace, '.deepseekgui-images'), process.platform === 'win32' ? 'junction' : 'dir')
+      await mkdir(join(workspace, '.kun'), { recursive: true })
+      await symlink(outside, join(workspace, '.kun', 'images'), process.platform === 'win32' ? 'junction' : 'dir')
       const client = fakeClient()
       const host = hostFor(client)
 
@@ -1073,6 +1258,7 @@ describe('Image gen tool provider', () => {
     const minimaxTool = minimaxTools.find((tool) => tool.name === 'generate_image')!
     expect(minimaxTool.description).not.toContain('image-to-image')
     expect((minimaxTool.inputSchema.properties as Record<string, unknown>)).not.toHaveProperty('reference_image_paths')
+    expect((minimaxTool.inputSchema.properties as Record<string, unknown>)).not.toHaveProperty('reference_attachment_ids')
 
     const openaiTools = await new LocalToolHost({
       registry: new CapabilityRegistry(buildImageGenToolProviders(imageGenConfig()).providers)
@@ -1080,6 +1266,7 @@ describe('Image gen tool provider', () => {
     const openaiTool = openaiTools.find((tool) => tool.name === 'generate_image')!
     expect(openaiTool.description).toContain('image-to-image')
     expect((openaiTool.inputSchema.properties as Record<string, unknown>)).toHaveProperty('reference_image_paths')
+    expect((openaiTool.inputSchema.properties as Record<string, unknown>)).toHaveProperty('reference_attachment_ids')
 
     const codexTools = await new LocalToolHost({
       registry: new CapabilityRegistry(
@@ -1089,6 +1276,106 @@ describe('Image gen tool provider', () => {
     const codexTool = codexTools.find((tool) => tool.name === 'generate_image')!
     expect(codexTool.description).toContain('image-to-image')
     expect((codexTool.inputSchema.properties as Record<string, unknown>)).toHaveProperty('reference_image_paths')
+    expect((codexTool.inputSchema.properties as Record<string, unknown>)).toHaveProperty('reference_attachment_ids')
+  })
+
+  it('edits directly from an authorized attachment and reports the actual mode', async () => {
+    const client = fakeClient()
+    const attachmentStoreInstance = attachmentStore(join(workspace, 'attachments'))
+    const bytes = png(17, 19)
+    const attachment = await attachmentStoreInstance.create({
+      name: 'clipboard.png',
+      data: bytes,
+      mimeType: 'image/png',
+      threadId: 'thr_1',
+      workspace
+    })
+    const host = hostFor(client, attachmentStoreInstance)
+
+    const result = await host.execute({
+      callId: 'call_attachment_edit',
+      toolName: 'generate_image',
+      arguments: { prompt: 'preserve layout', reference_attachment_ids: [attachment.id] }
+    }, buildContext())
+
+    expect(result.item).toMatchObject({ kind: 'tool_result', isError: false })
+    if (result.item.kind !== 'tool_result') return
+    expect(result.item.output).toMatchObject({
+      endpoint: 'edits', mode: 'edit', referenceImageCount: 1
+    })
+    expect(client.generateCalls).toHaveLength(0)
+    expect(client.editCalls).toHaveLength(1)
+    const request = client.editCalls[0] as { images: Array<{ name: string; data: Buffer }> }
+    expect(request.images[0].name).toBe('clipboard.png')
+    expect(request.images[0].data.equals(bytes)).toBe(true)
+  })
+
+  it('applies the reference limit across paths and attachment IDs', async () => {
+    await writeFile(join(workspace, 'ref.png'), png(8, 8))
+    const client = fakeClient()
+    const attachmentStoreInstance = attachmentStore(join(workspace, 'attachments'))
+    const attachment = await attachmentStoreInstance.create({
+      name: 'attached.png', data: png(8, 8), mimeType: 'image/png',
+      threadId: 'thr_1', workspace
+    })
+    const host = new LocalToolHost({
+      registry: new CapabilityRegistry(buildImageGenToolProviders(
+        imageGenConfig({ maxReferenceImages: 1 }),
+        { client, attachmentStore: attachmentStoreInstance }
+      ).providers)
+    })
+
+    const result = await host.execute({
+      callId: 'call_reference_limit',
+      toolName: 'generate_image',
+      arguments: {
+        prompt: 'too many',
+        reference_image_paths: ['ref.png'],
+        reference_attachment_ids: [attachment.id]
+      }
+    }, buildContext())
+
+    expect(result.item).toMatchObject({ kind: 'tool_result', isError: true })
+    expect(JSON.stringify(result.item)).toContain('invalid_reference_count')
+    expect(client.generateCalls).toHaveLength(0)
+    expect(client.editCalls).toHaveLength(0)
+  })
+
+  it('rejects missing, unauthorized, non-image, and oversized reference attachments', async () => {
+    const client = fakeClient()
+    const attachmentStoreInstance = attachmentStore(join(workspace, 'attachments'), {
+      maxImageBytes: 12 * 1024 * 1024
+    })
+    const unauthorized = await attachmentStoreInstance.create({
+      name: 'private.png', data: png(8, 8), mimeType: 'image/png', threadId: 'other_thread'
+    })
+    const notImage = await attachmentStoreInstance.create({
+      name: 'notes.txt', data: Buffer.from('not an image'), mimeType: 'text/plain', threadId: 'thr_1'
+    })
+    const oversized = await attachmentStoreInstance.create({
+      name: 'large.png',
+      data: Buffer.concat([png(8, 8), Buffer.alloc(10 * 1024 * 1024)]),
+      mimeType: 'image/png',
+      threadId: 'thr_1'
+    })
+    const host = hostFor(client, attachmentStoreInstance)
+
+    for (const id of [
+      'att_000000000000000000000000',
+      unauthorized.id,
+      notImage.id,
+      oversized.id
+    ]) {
+      const result = await host.execute({
+        callId: `call_${id}`,
+        toolName: 'generate_image',
+        arguments: { prompt: 'invalid ref', reference_attachment_ids: [id] }
+      }, buildContext())
+      expect(result.item).toMatchObject({ kind: 'tool_result', isError: true })
+      expect(JSON.stringify(result.item)).toContain('invalid_reference_attachment')
+    }
+    expect(client.generateCalls).toHaveLength(0)
+    expect(client.editCalls).toHaveLength(0)
   })
 
   it('rejects reference paths that escape the workspace or are not images', async () => {

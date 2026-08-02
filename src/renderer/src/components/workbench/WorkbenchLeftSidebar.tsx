@@ -31,6 +31,7 @@ export type WorkbenchLeftSidebarProps = {
   onPinThread: CodeSidebarProps['onPinThread']
   onArchiveThread: CodeSidebarProps['onArchiveThread']
   onDeleteThread: CodeSidebarProps['onDeleteThread']
+  onDeleteDrawing: (documentId: string) => void | Promise<void>
   onRestoreThread: CodeSidebarProps['onRestoreThread']
   onNewChat: CodeSidebarProps['onNewChat']
   onNewChatInWorkspace: CodeSidebarProps['onNewChatInWorkspace']
@@ -76,6 +77,7 @@ export function WorkbenchLeftSidebar({
   onPinThread,
   onArchiveThread,
   onDeleteThread,
+  onDeleteDrawing,
   onRestoreThread,
   onNewChat,
   onNewChatInWorkspace,
@@ -110,6 +112,7 @@ export function WorkbenchLeftSidebar({
             onDesignOpen={onDesignOpen}
             onOpenSettings={onOpenSettings}
             onToggleTheme={onToggleTheme}
+            onDeleteDrawing={onDeleteDrawing}
           />
         ) : route === 'write' ? (
           <Suspense fallback={<SidebarFallback />}>

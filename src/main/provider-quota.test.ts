@@ -367,12 +367,27 @@ describe('provider quota parsers', () => {
           reset_at: 1_800_086_400,
           limit_window_seconds: 604_800
         }
-      }
+      },
+      additional_rate_limits: [{
+        limit_name: 'codex_spark',
+        rate_limit: {
+          primary_window: {
+            used_percent: 7,
+            reset_at: 1_800_172_800,
+            limit_window_seconds: 604_800
+          }
+        }
+      }]
     })).toMatchObject({
       summary: 'plus',
       metrics: [
         { id: 'primary', label: '5-hour usage', usedPercent: 45 },
-        { id: 'secondary', label: '1-week usage', usedPercent: 12 }
+        { id: 'secondary', label: '1-week usage', usedPercent: 12 },
+        {
+          id: 'additional-0-primary',
+          label: 'Spark - 1-week usage',
+          usedPercent: 7
+        }
       ]
     })
   })

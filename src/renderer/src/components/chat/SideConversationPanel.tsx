@@ -7,6 +7,7 @@ import {
   type ReactElement
 } from 'react'
 import { useTranslation } from 'react-i18next'
+import { modelSupportsImageInput } from '@shared/app-settings'
 import { useShallow } from 'zustand/react/shallow'
 import {
   ArrowDownToLine,
@@ -19,6 +20,7 @@ import {
   X
 } from 'lucide-react'
 import { useChatStore } from '../../store/chat-store'
+import type { AttachmentReference } from '../../agent/types'
 import type { SideConversation } from '../../store/chat-store-types'
 import { threadHasPendingRuntimeWork } from '../../store/chat-store-runtime-helpers'
 import { ConversationTurn } from './MessageTimeline'
@@ -26,11 +28,19 @@ import { FloatingComposer } from './FloatingComposer'
 import { groupTurns, stableTurnKey } from './message-timeline-turns'
 import { InjectedMemoryLookupProvider } from './injected-memory-lookup'
 import { TimelineFilePreviewWorkspaceProvider } from './timeline-file-preview-workspace'
+import { modelProfileForComposerSelection } from '../workbench/useWorkbenchComposerCapabilities'
+import {
+  runtimeImagePreviewUrl,
+  runtimeImageSourceForFile,
+  uploadRuntimeImageAttachment
+} from '../../lib/runtime-image-attachment'
 
 type Props = {
   className?: string
   rightOffset?: number
   variant?: 'floating' | 'docked'
+  attachmentStoreAvailable?: boolean
+  defaultModelSupportsImageInput?: boolean
   onRequestClose?: () => void
   onTitleChange?: (title: string) => void
 }
@@ -165,6 +175,8 @@ export function SideConversationPanel({
   className,
   rightOffset = 24,
   variant = 'floating',
+  attachmentStoreAvailable = false,
+  defaultModelSupportsImageInput = false,
   onRequestClose,
   onTitleChange
 }: Props): ReactElement | null {
@@ -173,6 +185,10 @@ export function SideConversationPanel({
   const [draftModel, setDraftModel] = useState('')
   const [draftProviderId, setDraftProviderId] = useState('')
   const [draftReasoningEffort, setDraftReasoningEffort] = useState('max')
+  const [draftFastMode, setDraftFastMode] = useState(false)
+  const [draftAttachments, setDraftAttachments] = useState<AttachmentReference[]>([])
+  const [attachmentUploadBusy, setAttachmentUploadBusy] = useState(false)
+  const [attachmentUploadError, setAttachmentUploadError] = useState<string | null>(null)
   const [minimized, setMinimized] = useState(false)
   const [switchMenuOpen, setSwitchMenuOpen] = useState(false)
   const [moreMenuOpen, setMoreMenuOpen] = useState(false)
@@ -180,6 +196,7 @@ export function SideConversationPanel({
   const moreMenuRef = useRef<HTMLDivElement | null>(null)
   const previousParentRef = useRef<string | null>(null)
   const previousActiveRef = useRef<string | null | undefined>(undefined)
+  const draftAttachmentGenerationRef = useRef(0)
 
   const sideData = useChatStore(
     useShallow((s) => ({
@@ -194,6 +211,7 @@ export function SideConversationPanel({
       composerPickList: s.composerPickList,
       composerModelGroups: s.composerModelGroups,
       composerReasoningEffort: s.composerReasoningEffort,
+      composerFastMode: s.composerFastMode,
       spawnSideConversation: s.spawnSideConversation,
       sendSideMessage: s.sendSideMessage,
       interruptSide: s.interruptSide,
@@ -201,6 +219,8 @@ export function SideConversationPanel({
       setSideInput: s.setSideInput,
       setSideModel: s.setSideModel,
       setSideReasoningEffort: s.setSideReasoningEffort,
+      setSideFastMode: s.setSideFastMode,
+      setSideAttachments: s.setSideAttachments,
       selectSideConversation: s.selectSideConversation,
       setSidePanelOpen: s.setSidePanelOpen,
       openSideConversationDraft: s.openSideConversationDraft,
@@ -247,7 +267,12 @@ export function SideConversationPanel({
     setDraftModel(sideData.composerModel)
     setDraftProviderId(sideData.composerProviderId)
     setDraftReasoningEffort(sideData.composerReasoningEffort || 'max')
+    setDraftFastMode(sideData.composerFastMode)
+    setDraftAttachments([])
+    setAttachmentUploadError(null)
+    draftAttachmentGenerationRef.current += 1
   }, [
+    sideData.composerFastMode,
     sideData.composerModel,
     sideData.composerProviderId,
     sideData.composerReasoningEffort,
@@ -262,13 +287,22 @@ export function SideConversationPanel({
     setDraftModel(sideData.composerModel)
     setDraftProviderId(sideData.composerProviderId)
     setDraftReasoningEffort(sideData.composerReasoningEffort || 'max')
+    setDraftFastMode(sideData.composerFastMode)
+    setDraftAttachments([])
+    setAttachmentUploadError(null)
+    draftAttachmentGenerationRef.current += 1
   }, [
     activeId,
     showDraft,
+    sideData.composerFastMode,
     sideData.composerModel,
     sideData.composerProviderId,
     sideData.composerReasoningEffort
   ])
+
+  useEffect(() => {
+    setAttachmentUploadError(null)
+  }, [activeId])
 
   useEffect(() => {
     onTitleChange?.(reportedTitle)
@@ -324,13 +358,20 @@ export function SideConversationPanel({
 
   const sendDraft = (): void => {
     const text = draftInput.trim()
-    if (!text) return
-    setDraftInput('')
-    void sideData.spawnSideConversation(text, {
-      model: effectiveDraftModel,
-      providerId: effectiveDraftProviderId,
-      reasoningEffort: effectiveDraftReasoningEffort
-    })
+    if (!text && draftAttachments.length === 0) return
+    void (async () => {
+      const sideId = await sideData.spawnSideConversation(text, {
+        model: effectiveDraftModel,
+        providerId: effectiveDraftProviderId,
+        reasoningEffort: effectiveDraftReasoningEffort,
+        fastMode: draftFastMode,
+        attachments: draftAttachments
+      })
+      if (!sideId) return
+      setDraftInput('')
+      setDraftAttachments([])
+      setAttachmentUploadError(null)
+    })()
   }
 
   const sendActiveSide = (): void => {
@@ -371,7 +412,125 @@ export function SideConversationPanel({
   const composerProviderId = activeSide?.providerId ?? effectiveDraftProviderId
   const composerReasoningEffort =
     activeSide?.reasoningEffort ?? effectiveDraftReasoningEffort
+  const composerFastMode = activeSide?.fastMode ?? draftFastMode
+  const composerAttachments = activeSide?.attachments ?? draftAttachments
   const runtimeReady = sideData.runtimeConnection === 'ready'
+  const attachmentWorkspace = (parentThread?.workspace || sideData.workspaceRoot).trim()
+  const selectedProviderId = composerProviderId.trim()
+  const selectedProviderGroup = selectedProviderId
+    ? sideData.composerModelGroups.find((group) => group.providerId === selectedProviderId)
+    : undefined
+  const selectedModelProfile = selectedProviderId
+    ? selectedProviderGroup
+      ? modelProfileForComposerSelection(
+          [selectedProviderGroup],
+          composerModel,
+          selectedProviderId
+        )
+      : undefined
+    : modelProfileForComposerSelection(
+        sideData.composerModelGroups,
+        composerModel
+      )
+  const selectedModelSupportsImages = composerModel.trim().toLowerCase() === 'auto'
+    ? defaultModelSupportsImageInput
+    : selectedModelProfile
+      ? modelSupportsImageInput(selectedModelProfile)
+      : false
+  const attachmentUploadEnabled = runtimeReady && attachmentStoreAvailable
+
+  const appendUploadedAttachment = (
+    targetSideId: string | null,
+    draftGeneration: number,
+    attachment: AttachmentReference
+  ): void => {
+    if (targetSideId) {
+      const target = useChatStore.getState().sideConversations[targetSideId]
+      if (!target) return
+      const byId = new Map(target.attachments.map((item) => [item.id, item]))
+      byId.set(attachment.id, attachment)
+      useChatStore.getState().setSideAttachments(targetSideId, [...byId.values()])
+      return
+    }
+    if (draftAttachmentGenerationRef.current !== draftGeneration) return
+    setDraftAttachments((current) => {
+      const byId = new Map(current.map((item) => [item.id, item]))
+      byId.set(attachment.id, attachment)
+      return [...byId.values()]
+    })
+  }
+
+  const uploadImages = async (
+    files?: File[],
+    options: { clipboard?: boolean; silentNoImage?: boolean } = {}
+  ): Promise<void> => {
+    if (!attachmentUploadEnabled || !attachmentWorkspace) {
+      setAttachmentUploadError(t('composerAttachmentUnavailable'))
+      return
+    }
+    if (!selectedModelSupportsImages) {
+      setAttachmentUploadError(t('composerAttachmentModelUnsupported'))
+      return
+    }
+    const imageFiles = files?.filter((file) => file.type.startsWith('image/')) ?? []
+    if (!options.clipboard && imageFiles.length !== (files?.length ?? 0)) {
+      setAttachmentUploadError(t('composerAttachmentUnsupportedType'))
+      return
+    }
+    const targetSideId = activeSide?.threadId ?? null
+    const draftGeneration = draftAttachmentGenerationRef.current
+    const targetIsCurrent = (): boolean => targetSideId
+      ? useChatStore.getState().sidePanel.activeSideId === targetSideId
+      : useChatStore.getState().sidePanel.activeSideId === null &&
+        draftAttachmentGenerationRef.current === draftGeneration
+    setAttachmentUploadBusy(true)
+    setAttachmentUploadError(null)
+    try {
+      const sources = options.clipboard ? [null] : imageFiles
+      for (const file of sources) {
+        const localFilePath = file && typeof window.kunGui?.getPathForFile === 'function'
+          ? window.kunGui.getPathForFile(file)
+          : ''
+        const result = await uploadRuntimeImageAttachment({
+          source: file
+            ? await runtimeImageSourceForFile(file, localFilePath)
+            : { kind: 'clipboard' },
+          ...(file?.name ? { name: file.name } : {}),
+          ...(targetSideId ? { threadId: targetSideId } : { workspace: attachmentWorkspace })
+        })
+        appendUploadedAttachment(targetSideId, draftGeneration, {
+          id: result.attachment.id,
+          kind: 'image',
+          name: result.attachment.name,
+          mimeType: result.attachment.mimeType,
+          width: result.attachment.width,
+          height: result.attachment.height,
+          previewUrl: runtimeImagePreviewUrl(result)
+        })
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (
+        targetIsCurrent() &&
+        (!options.silentNoImage || !/clipboard does not currently contain an image/i.test(message))
+      ) {
+        setAttachmentUploadError(message)
+      }
+    } finally {
+      setAttachmentUploadBusy(false)
+    }
+  }
+
+  const removeAttachment = (id: string): void => {
+    if (activeSide) {
+      sideData.setSideAttachments(
+        activeSide.threadId,
+        activeSide.attachments.filter((attachment) => attachment.id !== id)
+      )
+      return
+    }
+    setDraftAttachments((current) => current.filter((attachment) => attachment.id !== id))
+  }
 
   return (
     <aside
@@ -544,6 +703,17 @@ export function SideConversationPanel({
           composerPickList={sideData.composerPickList}
           composerModelGroups={sideData.composerModelGroups}
           composerReasoningEffort={composerReasoningEffort}
+          composerFastMode={composerFastMode}
+          attachments={composerAttachments}
+          attachmentUploadEnabled={attachmentUploadEnabled}
+          attachmentUploadBusy={attachmentUploadBusy}
+          attachmentUploadError={attachmentUploadError}
+          onPickAttachments={(files) => void uploadImages(files)}
+          onPasteClipboardImage={(options) => uploadImages(undefined, {
+            clipboard: true,
+            silentNoImage: options?.silentNoImage
+          })}
+          onRemoveAttachment={removeAttachment}
           modelControlVariant="split"
           onComposerModelChange={(model, providerId) => {
             if (activeSide) {
@@ -556,6 +726,10 @@ export function SideConversationPanel({
           onComposerReasoningEffortChange={(effort) => {
             if (activeSide) sideData.setSideReasoningEffort(activeSide.threadId, effort)
             else setDraftReasoningEffort(effort)
+          }}
+          onComposerFastModeChange={(enabled) => {
+            if (activeSide) sideData.setSideFastMode(activeSide.threadId, enabled)
+            else setDraftFastMode(enabled)
           }}
           queuedMessages={EMPTY_QUEUED_MESSAGES}
           onRemoveQueuedMessage={noop}

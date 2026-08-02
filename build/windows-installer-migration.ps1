@@ -1,0 +1,792 @@
+param(
+  [Parameter(Mandatory = $true)]
+  [ValidateSet('ResolvePath', 'ResolveSource', 'StopProcesses', 'Recover', 'Prepare', 'FallbackCleanup', 'Restore', 'UpdatePath')]
+  [string]$Action,
+  [string]$ResultPath = ''
+)
+
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version 2.0
+
+function Get-EnvironmentValue([string]$Name) {
+  return [Environment]::GetEnvironmentVariable($Name, 'Process')
+}
+
+function Write-InstallerDiagnostic([string]$Message) {
+  $diagnosticPath = Get-EnvironmentValue 'KUN_INSTALLER_DIAGNOSTIC_PATH'
+  if ([string]::IsNullOrWhiteSpace($diagnosticPath)) {
+    return
+  }
+
+  try {
+    $fullPath = [IO.Path]::GetFullPath($diagnosticPath)
+    [IO.Directory]::CreateDirectory((Split-Path -Parent $fullPath)) | Out-Null
+    [IO.File]::AppendAllText(
+      $fullPath,
+      ([DateTime]::UtcNow.ToString('o') + ' ' + $Message + [Environment]::NewLine),
+      [Text.Encoding]::UTF8
+    )
+  } catch {
+    # Diagnostics are opt-in test evidence and must never change installer behavior.
+  }
+}
+
+function Normalize-FullPath([string]$PathValue) {
+  if ([string]::IsNullOrWhiteSpace($PathValue)) {
+    return ''
+  }
+
+  $trimmedPath = $PathValue.Trim()
+  if (-not [IO.Path]::IsPathRooted($trimmedPath)) {
+    throw "Installer paths must be absolute: $trimmedPath"
+  }
+  $fullPath = [IO.Path]::GetFullPath($trimmedPath)
+  $root = [IO.Path]::GetPathRoot($fullPath)
+  while ($fullPath.Length -gt $root.Length -and ($fullPath.EndsWith('\') -or $fullPath.EndsWith('/'))) {
+    $fullPath = $fullPath.Substring(0, $fullPath.Length - 1)
+  }
+  return $fullPath
+}
+
+function Test-PathEqual([string]$Left, [string]$Right) {
+  if ([string]::IsNullOrWhiteSpace($Left) -or [string]::IsNullOrWhiteSpace($Right)) {
+    return $false
+  }
+  return [string]::Equals(
+    (Normalize-FullPath $Left),
+    (Normalize-FullPath $Right),
+    [StringComparison]::OrdinalIgnoreCase
+  )
+}
+
+function Test-PathWithin([string]$PathValue, [string]$RootValue) {
+  if ([string]::IsNullOrWhiteSpace($PathValue) -or [string]::IsNullOrWhiteSpace($RootValue)) {
+    return $false
+  }
+  $path = Normalize-FullPath $PathValue
+  $root = Normalize-FullPath $RootValue
+  return (Test-PathEqual $path $root) -or
+    $path.StartsWith($root.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)
+}
+
+function Test-LegacyLeaf([string]$Leaf) {
+  return [string]::Equals($Leaf, 'DeepSeek GUI', [StringComparison]::OrdinalIgnoreCase) -or
+    [string]::Equals($Leaf, 'deepseek-gui', [StringComparison]::OrdinalIgnoreCase)
+}
+
+function Resolve-LegacySourceTarget([string]$Source) {
+  if ([string]::IsNullOrWhiteSpace($Source)) {
+    return ''
+  }
+  $sourceLeaf = Split-Path -Leaf $Source
+  $sourceParent = Split-Path -Parent $Source
+  if (Test-LegacyLeaf $sourceLeaf) {
+    return Join-Path $sourceParent 'Kun'
+  }
+  if ([string]::Equals($sourceLeaf, 'Kun', [StringComparison]::OrdinalIgnoreCase) -and
+      (Test-LegacyLeaf (Split-Path -Leaf $sourceParent))) {
+    return Join-Path (Split-Path -Parent $sourceParent) 'Kun'
+  }
+  return ''
+}
+
+function Resolve-InstallTarget {
+  $source = Normalize-FullPath (Get-EnvironmentValue 'KUN_INSTALLER_SOURCE')
+  $candidate = Normalize-FullPath (Get-EnvironmentValue 'KUN_INSTALLER_CANDIDATE')
+  if ([string]::IsNullOrWhiteSpace($candidate)) {
+    throw 'The candidate installation path is empty.'
+  }
+
+  $legacySourceTarget = Resolve-LegacySourceTarget $source
+  if (-not [string]::IsNullOrWhiteSpace($legacySourceTarget)) {
+    return $legacySourceTarget
+  }
+
+  $leaf = Split-Path -Leaf $candidate
+  $parent = Split-Path -Parent $candidate
+
+  if ([string]::Equals($leaf, 'Kun', [StringComparison]::OrdinalIgnoreCase)) {
+    $parentLeaf = Split-Path -Leaf $parent
+    if (Test-LegacyLeaf $parentLeaf) {
+      return Join-Path (Split-Path -Parent $parent) 'Kun'
+    }
+    return $candidate
+  }
+
+  if (Test-LegacyLeaf $leaf) {
+    return Join-Path $parent 'Kun'
+  }
+
+  if (-not [string]::IsNullOrWhiteSpace($source) -and (Test-PathEqual $source $candidate)) {
+    return $candidate
+  }
+
+  return Join-Path $candidate 'Kun'
+}
+
+function Resolve-RegisteredInstallSource {
+  $source = Normalize-FullPath (Get-EnvironmentValue 'KUN_INSTALLER_SOURCE')
+  if (-not [string]::IsNullOrWhiteSpace($source)) {
+    return $source
+  }
+
+  $uninstallCommand = Get-EnvironmentValue 'KUN_INSTALLER_UNINSTALL_STRING'
+  if ([string]::IsNullOrWhiteSpace($uninstallCommand)) {
+    return ''
+  }
+
+  $match = [Text.RegularExpressions.Regex]::Match(
+    $uninstallCommand.Trim(),
+    '^(?:"(?<path>[^"]+)"|(?<path>.*?\.exe))(?:\s|$)',
+    [Text.RegularExpressions.RegexOptions]::IgnoreCase
+  )
+  if (-not $match.Success) {
+    return ''
+  }
+
+  $uninstaller = Normalize-FullPath $match.Groups['path'].Value
+  $leaf = Split-Path -Leaf $uninstaller
+  if (-not $leaf.StartsWith('Uninstall ', [StringComparison]::OrdinalIgnoreCase) -and
+      -not [string]::Equals($leaf, 'old-uninstaller.exe', [StringComparison]::OrdinalIgnoreCase)) {
+    return ''
+  }
+  return Split-Path -Parent $uninstaller
+}
+
+function Write-ResolvedInstallTarget([string]$Target) {
+  $resultPath = Normalize-FullPath $ResultPath
+  if ([string]::IsNullOrWhiteSpace($resultPath)) {
+    $resultPath = Join-Path $PSScriptRoot 'kun-windows-installer-result.txt'
+  }
+  [IO.File]::WriteAllBytes($resultPath, [Text.Encoding]::Unicode.GetBytes($Target))
+  [Console]::Out.Write($Target)
+}
+
+function Get-JournalPath {
+  $journalPath = Normalize-FullPath (Get-EnvironmentValue 'KUN_INSTALLER_JOURNAL')
+  if ([string]::IsNullOrWhiteSpace($journalPath)) {
+    throw 'KUN_INSTALLER_JOURNAL is required for migration actions.'
+  }
+  return $journalPath
+}
+
+function Write-Journal([hashtable]$Journal) {
+  $journalPath = Get-JournalPath
+  $journalParent = Split-Path -Parent $journalPath
+  [IO.Directory]::CreateDirectory($journalParent) | Out-Null
+  $temporaryPath = "$journalPath.tmp"
+  $Journal.UpdatedAt = [DateTime]::UtcNow.ToString('o')
+  $Journal | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $temporaryPath -Encoding UTF8
+  Move-Item -LiteralPath $temporaryPath -Destination $journalPath -Force
+}
+
+function Read-Journal {
+  $journalPath = Get-JournalPath
+  if (-not (Test-Path -LiteralPath $journalPath -PathType Leaf)) {
+    return $null
+  }
+  return Get-Content -LiteralPath $journalPath -Raw | ConvertFrom-Json
+}
+
+function Remove-Journal {
+  $journalPath = Get-JournalPath
+  if (Test-Path -LiteralPath $journalPath) {
+    Remove-Item -LiteralPath $journalPath -Force
+  }
+  $parent = Split-Path -Parent $journalPath
+  if (Test-Path -LiteralPath $parent -PathType Container) {
+    $remaining = @(Get-ChildItem -LiteralPath $parent -Force)
+    if ($remaining.Count -eq 0) {
+      Remove-Item -LiteralPath $parent -Force
+    }
+  }
+}
+
+function Get-PathHash([string]$PathValue) {
+  $sha = [Security.Cryptography.SHA256]::Create()
+  try {
+    $bytes = [Text.Encoding]::UTF8.GetBytes((Normalize-FullPath $PathValue).ToLowerInvariant())
+    $hash = $sha.ComputeHash($bytes)
+    return ([BitConverter]::ToString($hash).Replace('-', '').Substring(0, 16)).ToLowerInvariant()
+  } finally {
+    $sha.Dispose()
+  }
+}
+
+function Get-PreservationRoot([string]$Source) {
+  $parent = Split-Path -Parent $Source
+  return Join-Path $parent ('.kun-installer-preserved-' + (Get-PathHash $Source))
+}
+
+function Test-ReparsePoint([string]$PathValue) {
+  if (-not (Test-Path -LiteralPath $PathValue)) {
+    return $false
+  }
+  $item = Get-Item -LiteralPath $PathValue -Force
+  return (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)
+}
+
+function Get-UnsafeRoots {
+  $userPrograms = $null
+  if ($env:LOCALAPPDATA) {
+    $userPrograms = Join-Path $env:LOCALAPPDATA 'Programs'
+  }
+  $candidates = @(
+    $env:USERPROFILE,
+    $env:LOCALAPPDATA,
+    $env:APPDATA,
+    $env:ProgramFiles,
+    ${env:ProgramFiles(x86)},
+    $env:ProgramW6432,
+    $env:WINDIR,
+    $env:SystemRoot,
+    $env:TEMP,
+    $userPrograms
+  )
+
+  return @($candidates | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object {
+    Normalize-FullPath $_
+  } | Select-Object -Unique)
+}
+
+function Assert-NoReparsePathComponents([string]$PathValue, [string]$Label) {
+  $current = Normalize-FullPath $PathValue
+  while (-not [string]::IsNullOrWhiteSpace($current)) {
+    if ((Test-Path -LiteralPath $current) -and (Test-ReparsePoint $current)) {
+      throw "$Label path contains a reparse point: $current"
+    }
+    $parent = Split-Path -Parent $current
+    if ([string]::IsNullOrWhiteSpace($parent) -or (Test-PathEqual $parent $current)) {
+      break
+    }
+    $current = $parent
+  }
+}
+
+function Assert-NoReparsePointsInTree([IO.FileSystemInfo]$Entry, [string]$Label) {
+  $pending = [Collections.Generic.Stack[string]]::new()
+  $pending.Push($Entry.FullName)
+  while ($pending.Count -gt 0) {
+    $current = $pending.Pop()
+    if (Test-ReparsePoint $current) {
+      throw "$Label contains a reparse point: $current"
+    }
+    if (-not (Test-Path -LiteralPath $current -PathType Container)) {
+      continue
+    }
+    foreach ($child in @(Get-ChildItem -LiteralPath $current -Force)) {
+      if (($child.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "$Label contains a reparse point: $($child.FullName)"
+      }
+      if ($child.PSIsContainer) {
+        $pending.Push($child.FullName)
+      }
+    }
+  }
+}
+
+function Assert-SafeInstallRoot([string]$PathValue, [string]$Label) {
+  $normalized = Normalize-FullPath $PathValue
+  if ([string]::IsNullOrWhiteSpace($normalized)) {
+    return
+  }
+
+  if (Test-PathEqual $normalized ([IO.Path]::GetPathRoot($normalized))) {
+    throw "$Label path is a shared or protected root: $normalized"
+  }
+
+  foreach ($unsafe in (Get-UnsafeRoots)) {
+    if (Test-PathEqual $normalized $unsafe) {
+      throw "$Label path is a shared or protected root: $normalized"
+    }
+  }
+
+  foreach ($systemRoot in @($env:WINDIR, $env:SystemRoot)) {
+    if (-not [string]::IsNullOrWhiteSpace($systemRoot) -and (Test-PathWithin $normalized $systemRoot)) {
+      throw "$Label path is inside a Windows system directory: $normalized"
+    }
+  }
+
+  Assert-NoReparsePathComponents $normalized $Label
+}
+
+function Test-KnownApplicationEntry([IO.FileSystemInfo]$Entry) {
+  if ($Entry.PSIsContainer) {
+    return @('resources', 'locales', 'bin') -contains $Entry.Name.ToLowerInvariant()
+  }
+
+  $knownFiles = @(
+    'kun.exe',
+    'deepseek gui.exe',
+    'uninstall kun.exe',
+    'uninstall deepseek gui.exe',
+    'uninstallericon.ico',
+    'chrome_100_percent.pak',
+    'chrome_200_percent.pak',
+    'd3dcompiler_47.dll',
+    'dxcompiler.dll',
+    'dxil.dll',
+    'ffmpeg.dll',
+    'icudtl.dat',
+    'libegl.dll',
+    'libglesv2.dll',
+    'license.electron.txt',
+    'licenses.chromium.html',
+    'resources.pak',
+    'snapshot_blob.bin',
+    'v8_context_snapshot.bin',
+    'vk_swiftshader.dll',
+    'vk_swiftshader_icd.json',
+    'vulkan-1.dll'
+  )
+  return $knownFiles -contains $Entry.Name.ToLowerInvariant()
+}
+
+function Get-ExtendedLengthPath([string]$PathValue) {
+  $normalized = Normalize-FullPath $PathValue
+  if ($normalized.StartsWith('\\')) {
+    return '\\?\UNC\' + $normalized.Substring(2)
+  }
+  return '\\?\' + $normalized
+}
+
+function Remove-KnownApplicationEntry([IO.FileSystemInfo]$Entry) {
+  if ($Entry.PSIsContainer -and (Test-ReparsePoint $Entry.FullName)) {
+    throw "Recognized application directory is a reparse point: $($Entry.FullName)"
+  }
+
+  try {
+    Remove-Item -LiteralPath $Entry.FullName -Recurse -Force
+    return
+  } catch {
+    if (-not (Test-Path -LiteralPath $Entry.FullName)) {
+      return
+    }
+  }
+
+  $extendedPath = Get-ExtendedLengthPath $Entry.FullName
+  if ($Entry.PSIsContainer) {
+    [IO.Directory]::Delete($extendedPath, $true)
+  } else {
+    [IO.File]::SetAttributes($extendedPath, [IO.FileAttributes]::Normal)
+    [IO.File]::Delete($extendedPath)
+  }
+}
+
+function Test-AppOwnedProcessPath([string]$ExecutablePath, [string[]]$Roots) {
+  if ([string]::IsNullOrWhiteSpace($ExecutablePath)) {
+    return $false
+  }
+
+  $fullExecutable = Normalize-FullPath $ExecutablePath
+  foreach ($rootValue in $Roots) {
+    if ([string]::IsNullOrWhiteSpace($rootValue)) {
+      continue
+    }
+    $root = Normalize-FullPath $rootValue
+    $relative = $fullExecutable.Substring([Math]::Min($root.Length, $fullExecutable.Length)).TrimStart('\', '/')
+    $isUnderRoot = $fullExecutable.Length -gt $root.Length -and
+      $fullExecutable.StartsWith($root + '\', [StringComparison]::OrdinalIgnoreCase)
+    if (-not $isUnderRoot) {
+      continue
+    }
+
+    $relativeLower = $relative.ToLowerInvariant()
+    if ($relativeLower -eq 'kun.exe' -or $relativeLower -eq 'deepseek gui.exe' -or
+        $relativeLower.StartsWith('resources\') -or $relativeLower.StartsWith('bin\')) {
+      return $true
+    }
+  }
+  return $false
+}
+
+function Stop-AppProcesses([string[]]$Roots) {
+  $currentPidValue = Get-EnvironmentValue 'KUN_INSTALLER_SELF_PID'
+  $currentPid = 0
+  [void][int]::TryParse($currentPidValue, [ref]$currentPid)
+
+  for ($attempt = 0; $attempt -lt 6; $attempt += 1) {
+    $processes = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+      $_.ProcessId -ne $currentPid -and (Test-AppOwnedProcessPath $_.ExecutablePath $Roots)
+    })
+    if ($processes.Count -eq 0) {
+      return
+    }
+
+    foreach ($process in $processes) {
+      & "$env:SystemRoot\System32\taskkill.exe" /PID $process.ProcessId /T /F | Out-Null
+    }
+    Start-Sleep -Milliseconds 500
+  }
+
+  $remaining = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+    $_.ProcessId -ne $currentPid -and (Test-AppOwnedProcessPath $_.ExecutablePath $Roots)
+  })
+  if ($remaining.Count -gt 0) {
+    throw ('Unable to stop application processes: ' + (($remaining | ForEach-Object { $_.ProcessId }) -join ', '))
+  }
+}
+
+function Stop-InstallRootProcesses {
+  $root = Normalize-FullPath (Get-EnvironmentValue 'KUN_INSTALLER_APP_ROOT')
+  if ([string]::IsNullOrWhiteSpace($root)) {
+    return
+  }
+  Assert-SafeInstallRoot $root 'Application root'
+  Stop-AppProcesses @($root)
+}
+
+function Assert-ApplicationSourceIdentity([string]$Source) {
+  $identityFiles = @('Kun.exe', 'DeepSeek GUI.exe')
+  if (-not ($identityFiles | Where-Object {
+    Test-Path -LiteralPath (Join-Path $Source $_) -PathType Leaf
+  })) {
+    throw "The registered source has no application identity executable: $Source"
+  }
+}
+
+function Assert-TrustedSecondarySource([string]$Source) {
+  $profile = Normalize-FullPath $env:USERPROFILE
+  if ([string]::IsNullOrWhiteSpace($profile) -or -not (Test-PathWithin $Source $profile) -or
+      (Test-PathEqual $Source $profile)) {
+    throw "The current-user installation source is outside the current user profile: $Source"
+  }
+}
+
+function Get-InstallSources {
+  $primary = Normalize-FullPath (Get-EnvironmentValue 'KUN_INSTALLER_SOURCE')
+  $secondary = Normalize-FullPath (Get-EnvironmentValue 'KUN_INSTALLER_SECONDARY_SOURCE')
+  if (-not [string]::IsNullOrWhiteSpace($secondary)) {
+    Assert-TrustedSecondarySource $secondary
+  }
+  $sources = @($primary, $secondary)
+  $normalizedSources = @()
+  foreach ($sourceValue in $sources) {
+    $source = Normalize-FullPath $sourceValue
+    if ([string]::IsNullOrWhiteSpace($source)) {
+      continue
+    }
+    if (-not ($normalizedSources | Where-Object { Test-PathEqual $_ $source })) {
+      $normalizedSources += $source
+    }
+  }
+  return $normalizedSources
+}
+
+function Get-JournalRecords($Journal) {
+  if ($null -ne $Journal.PSObject.Properties['Records']) {
+    return @($Journal.Records)
+  }
+  if ($null -ne $Journal.PSObject.Properties['Stash']) {
+    return @($Journal)
+  }
+  throw 'The preservation journal contains no recovery records.'
+}
+
+function Get-ValidatedJournalRecord($Record) {
+  $source = Normalize-FullPath ([string]$Record.Source)
+  $target = Normalize-FullPath ([string]$Record.Target)
+  $stash = Normalize-FullPath ([string]$Record.Stash)
+  $destination = Normalize-FullPath ([string]$Record.RestoreDestination)
+  if ([string]::IsNullOrWhiteSpace($source) -or [string]::IsNullOrWhiteSpace($target) -or
+      [string]::IsNullOrWhiteSpace($stash) -or [string]::IsNullOrWhiteSpace($destination)) {
+    throw 'The preservation journal contains an empty path.'
+  }
+
+  Assert-SafeInstallRoot $source 'Journal source'
+  Assert-SafeInstallRoot $target 'Journal target'
+  if (-not (Test-PathEqual $stash (Get-PreservationRoot $source))) {
+    throw "The preservation journal references an unexpected recovery directory: $stash"
+  }
+  if (-not (Test-PathEqual $destination $source) -and -not (Test-PathEqual $destination $target)) {
+    throw "The preservation journal references an unexpected restore destination: $destination"
+  }
+  if (Test-ReparsePoint $stash) {
+    throw "The preservation directory is a reparse point: $stash"
+  }
+  $content = Join-Path $stash 'content'
+  if (Test-ReparsePoint $content) {
+    throw "The preservation content directory is a reparse point: $content"
+  }
+
+  return @{
+    Source = $source
+    Target = $target
+    RestoreDestination = $destination
+    Stash = $stash
+    Content = $content
+  }
+}
+
+function Invoke-RestoreJournal {
+  $journal = Read-Journal
+  if ($null -eq $journal) {
+    return
+  }
+
+  $remainingRecords = @()
+  foreach ($recordValue in (Get-JournalRecords $journal)) {
+    $record = Get-ValidatedJournalRecord $recordValue
+    if (-not (Test-Path -LiteralPath $record.Content -PathType Container)) {
+      if (Test-Path -LiteralPath $record.Stash) {
+        Remove-Item -LiteralPath $record.Stash -Recurse -Force
+      }
+      continue
+    }
+
+    Assert-SafeInstallRoot $record.RestoreDestination 'Restore destination'
+    [IO.Directory]::CreateDirectory($record.RestoreDestination) | Out-Null
+    $collisions = @()
+    foreach ($entry in @(Get-ChildItem -LiteralPath $record.Content -Force)) {
+      $destinationEntry = Join-Path $record.RestoreDestination $entry.Name
+      if (Test-Path -LiteralPath $destinationEntry) {
+        $collisions += $entry.Name
+        continue
+      }
+      Move-Item -LiteralPath $entry.FullName -Destination $destinationEntry
+    }
+
+    if ($collisions.Count -gt 0) {
+      $remainingRecords += @{
+        Source = $record.Source
+        Target = $record.Target
+        RestoreDestination = $record.RestoreDestination
+        Stash = $record.Stash
+        Entries = $collisions
+      }
+    } else {
+      Remove-Item -LiteralPath $record.Stash -Recurse -Force
+    }
+  }
+
+  if ($remainingRecords.Count -gt 0) {
+    $updated = @{
+      SchemaVersion = 2
+      Phase = 'restore-conflict'
+      Records = $remainingRecords
+    }
+    Write-Journal $updated
+    $collisionNames = @($remainingRecords | ForEach-Object { $_['Entries'] })
+    throw ('Preserved install content conflicts with existing paths: ' + ($collisionNames -join ', '))
+  }
+
+  Remove-Journal
+}
+
+function Invoke-Prepare {
+  Invoke-RestoreJournal
+
+  $sources = @(Get-InstallSources)
+  $target = Normalize-FullPath (Get-EnvironmentValue 'KUN_INSTALLER_TARGET')
+  if ([string]::IsNullOrWhiteSpace($target)) {
+    throw 'KUN_INSTALLER_TARGET is required.'
+  }
+
+  Assert-SafeInstallRoot $target 'Target'
+  if ((Test-Path -LiteralPath $target) -and -not (Test-Path -LiteralPath $target -PathType Container)) {
+    throw "The target exists but is not a directory: $target"
+  }
+  foreach ($source in $sources) {
+    Assert-SafeInstallRoot $source 'Source'
+  }
+
+  $targetIsSource = $sources | Where-Object { Test-PathEqual $_ $target }
+  if (-not $targetIsSource -and (Test-Path -LiteralPath $target -PathType Container)) {
+    $targetEntries = @(Get-ChildItem -LiteralPath $target -Force)
+    if ($targetEntries.Count -gt 0) {
+      throw "The canonical target already contains files and cannot be merged safely: $target"
+    }
+  }
+
+  $preparedSources = @()
+  foreach ($source in $sources) {
+    if (-not (Test-Path -LiteralPath $source -PathType Container)) {
+      continue
+    }
+    Assert-ApplicationSourceIdentity $source
+    $entries = @(Get-ChildItem -LiteralPath $source -Force)
+    if ($entries.Count -eq 0) {
+      continue
+    }
+    if (-not ($entries | Where-Object { Test-KnownApplicationEntry $_ })) {
+      throw "The registered source has no recognized application payload: $source"
+    }
+    $knownDirectories = @($entries | Where-Object {
+      $_.PSIsContainer -and (Test-KnownApplicationEntry $_)
+    })
+    foreach ($directory in $knownDirectories) {
+      Assert-NoReparsePointsInTree $directory 'Recognized application directory'
+    }
+    $unknown = @($entries | Where-Object { -not (Test-KnownApplicationEntry $_) })
+    $stash = Get-PreservationRoot $source
+    if ($unknown.Count -gt 0) {
+      if (Test-Path -LiteralPath $stash) {
+        throw "A preservation directory already exists without a recoverable journal: $stash"
+      }
+    }
+    $preparedSources += @{
+      Source = $source
+      Stash = $stash
+      Unknown = $unknown
+    }
+  }
+
+  Stop-AppProcesses @($sources + $target)
+
+  $journal = @{
+    SchemaVersion = 2
+    Phase = 'preserving'
+    Records = @()
+  }
+  foreach ($set in $preparedSources) {
+    $record = @{
+      Source = $set.Source
+      Target = $target
+      RestoreDestination = if (Test-PathEqual $set.Source $target) { $target } else { $set.Source }
+      Stash = $set.Stash
+      Entries = @($set.Unknown | ForEach-Object { $_.Name })
+    }
+    $journal.Records += $record
+    Write-Journal $journal
+    if ($set.Unknown.Count -eq 0) {
+      continue
+    }
+    $content = Join-Path $set.Stash 'content'
+    [IO.Directory]::CreateDirectory($content) | Out-Null
+    $stashItem = Get-Item -LiteralPath $set.Stash -Force
+    $stashItem.Attributes = $stashItem.Attributes -bor [IO.FileAttributes]::Hidden
+    foreach ($entry in $set.Unknown) {
+      Move-Item -LiteralPath $entry.FullName -Destination (Join-Path $content $entry.Name)
+    }
+  }
+
+  $journal.Phase = 'preserved'
+  if ($journal.Records.Count -gt 0) {
+    Write-Journal $journal
+  }
+}
+
+function Assert-FallbackCleanupSource([string]$Source) {
+  $journal = Read-Journal
+  if ($null -ne $journal) {
+    $matchesJournal = Get-JournalRecords $journal | Where-Object {
+      Test-PathEqual ([string]$_.Source) $Source
+    }
+    if ($matchesJournal) {
+      return
+    }
+    throw "The cleanup source does not match the preservation journal: $Source"
+  }
+
+  $target = Normalize-FullPath (Get-EnvironmentValue 'KUN_INSTALLER_TARGET')
+  if (-not (Test-PathEqual $Source $target)) {
+    throw "The cleanup source has no preservation journal and does not match the install target: $Source"
+  }
+  Assert-ApplicationSourceIdentity $Source
+}
+
+function Invoke-FallbackCleanup {
+  $source = Normalize-FullPath (Get-EnvironmentValue 'KUN_INSTALLER_SOURCE')
+  if ([string]::IsNullOrWhiteSpace($source) -or -not (Test-Path -LiteralPath $source -PathType Container)) {
+    return
+  }
+  Assert-SafeInstallRoot $source 'Source'
+  Assert-FallbackCleanupSource $source
+
+  $knownEntries = @(Get-ChildItem -LiteralPath $source -Force | Where-Object {
+    Test-KnownApplicationEntry $_
+  })
+  foreach ($entry in $knownEntries) {
+    if ($entry.PSIsContainer) {
+      Assert-NoReparsePointsInTree $entry 'Recognized application directory'
+    }
+  }
+  foreach ($entry in $knownEntries) {
+    Remove-KnownApplicationEntry $entry
+  }
+
+  if (@(Get-ChildItem -LiteralPath $source -Force).Count -eq 0) {
+    Remove-Item -LiteralPath $source -Force
+  }
+}
+
+function Remove-EmptyLegacyContainers {
+  $candidates = @()
+  foreach ($source in @(Get-InstallSources)) {
+    $candidates += $source
+    $parent = Split-Path -Parent $source
+    if (Test-LegacyLeaf (Split-Path -Leaf $parent)) {
+      $candidates += $parent
+    }
+  }
+
+  foreach ($candidate in @($candidates | Select-Object -Unique)) {
+    if ((Test-Path -LiteralPath $candidate -PathType Container) -and
+        @(Get-ChildItem -LiteralPath $candidate -Force).Count -eq 0) {
+      Assert-SafeInstallRoot $candidate 'Empty legacy container'
+      Remove-Item -LiteralPath $candidate -Force
+    }
+  }
+}
+
+function Update-UserPath {
+  $sources = @(Get-InstallSources)
+  $target = Normalize-FullPath (Get-EnvironmentValue 'KUN_INSTALLER_TARGET')
+  if ([string]::IsNullOrWhiteSpace($target)) {
+    throw 'KUN_INSTALLER_TARGET is required for PATH reconciliation.'
+  }
+
+  $sourceBins = @($sources | ForEach-Object { Join-Path $_ 'bin' })
+  $targetBin = Join-Path $target 'bin'
+  $current = [Environment]::GetEnvironmentVariable('Path', 'User')
+  $parts = @($current -split ';' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+  $kept = @($parts | Where-Object {
+    $candidatePart = $_.TrimEnd('\')
+    $isSourceBin = $sourceBins | Where-Object {
+      [string]::Equals($candidatePart, $_.TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase)
+    }
+    -not $isSourceBin -and
+      -not [string]::Equals($candidatePart, $targetBin.TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase)
+  })
+  [Environment]::SetEnvironmentVariable('Path', (($kept + $targetBin) -join ';'), 'User')
+}
+
+try {
+  Write-InstallerDiagnostic (
+    "START action=$Action source=$(Get-EnvironmentValue 'KUN_INSTALLER_SOURCE') " +
+    "target=$(Get-EnvironmentValue 'KUN_INSTALLER_TARGET') " +
+    "journal=$(Get-EnvironmentValue 'KUN_INSTALLER_JOURNAL')"
+  )
+  switch ($Action) {
+    'ResolvePath' {
+      Write-ResolvedInstallTarget (Resolve-InstallTarget)
+    }
+    'ResolveSource' {
+      Write-ResolvedInstallTarget (Resolve-RegisteredInstallSource)
+    }
+    'StopProcesses' {
+      Stop-InstallRootProcesses
+    }
+    'Recover' {
+      Invoke-RestoreJournal
+    }
+    'Prepare' {
+      Invoke-Prepare
+    }
+    'FallbackCleanup' {
+      Invoke-FallbackCleanup
+    }
+    'Restore' {
+      Invoke-RestoreJournal
+      Remove-EmptyLegacyContainers
+    }
+    'UpdatePath' {
+      Update-UserPath
+    }
+  }
+  Write-InstallerDiagnostic "SUCCESS action=$Action"
+} catch {
+  Write-InstallerDiagnostic "FAIL action=$Action error=$($_.Exception.Message)"
+  [Console]::Error.WriteLine($_.Exception.Message)
+  exit 1
+}

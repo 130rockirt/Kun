@@ -19,8 +19,7 @@ import {
 import {
   buildKunServeArgs,
   resolveKunExecutable,
-  resolveKunRuntimeBuildId,
-  shouldRunKunServeAsElectronChild
+  resolveKunRuntimeBuildId
 } from './resolve-kun-binary'
 import { resolveCodexOAuthApiKey } from './codex-auth'
 import { ensureFreshGrokCredentials } from './grok-auth'
@@ -91,6 +90,11 @@ import {
 } from '../../kun/src/contracts/browser-use.js'
 import { prepareBrowserUseHostForKunLaunch } from './browser-use/browser-use-host'
 import {
+  KUN_COMPUTER_USE_BRIDGE_TOKEN_ENV,
+  KUN_COMPUTER_USE_BRIDGE_URL_ENV
+} from '../../kun/src/contracts/computer-use-bridge.js'
+import { prepareComputerUseHostForKunLaunch } from './computer-use/computer-use-host'
+import {
   buildGuiScheduleKunMcpServer,
   GUI_SCHEDULE_MCP_SERVER_NAME,
   readGuiManagedMcpServers,
@@ -107,12 +111,53 @@ import {
   resolveSharedRuntime,
   type SharedRuntimeConnection
 } from '../../kun/src/cli/shared-runtime.js'
+import {
+  allowsDevelopmentManagerBootstrap,
+  resolveCliRuntimeFlavor
+} from '../../kun/src/cli/runtime-flavor.js'
+import {
+  ensureServiceManager,
+  type ServiceManagerConnection
+} from '../../kun/src/manager/manager-client.js'
 
 export { subagentProfilesForRuntime } from './runtime/kun-runtime-subagent-config'
 export { syncGuiManagedKunConfig } from './runtime/kun-runtime-config-service'
 
 export type { KunUnexpectedExitInfo } from './runtime/kun-process-controller'
 export { resolveKunStartupTimeoutMs } from './runtime/kun-runtime-health-monitor'
+
+let serviceManagerSettingsPath: string | undefined
+
+export async function ensureKunServiceManager(input: {
+  dataDir?: string
+  settingsPath: string
+}): Promise<ServiceManagerConnection> {
+  serviceManagerSettingsPath = input.settingsPath
+  const resolution = resolveKunExecutable(appRoot(), '')
+  const serveEntry = resolution.args[0]
+  if (!serveEntry || !existsSync(serveEntry)) {
+    throw new Error(
+      `Kun Service Manager build is missing next to ${serveEntry || 'the bundled runtime entry'}. Run \`npm run build:kun\` first.`
+    )
+  }
+  const managerEntry = join(dirname(serveEntry), '..', 'manager', 'manager-entry.js')
+  const flavor = resolveCliRuntimeFlavor({ env: process.env })
+  return ensureServiceManager({
+    flavor,
+    allowDevelopmentBootstrap: allowsDevelopmentManagerBootstrap({
+      flavor,
+      env: process.env,
+      isPackaged: app.isPackaged
+    }),
+    dataDir: input.dataDir ?? defaultKunDataDir(),
+    settingsPath: input.settingsPath,
+    launch: {
+      command: resolveNodeScriptCommand(process.execPath),
+      args: [managerEntry],
+      runAsNode: true
+    }
+  })
+}
 
 /**
  * Called when a READY kun child exits without the GUI asking for it.
@@ -299,7 +344,8 @@ export async function startKunSharedRuntime(
   const runtime = resolveKunRuntimeSettings(settings)
   if (!runtime.autoStart) return null
   const dataDir = resolveKunDataDir(runtime)
-  if (await hasUnpublishedKunWriter(runtime, dataDir)) {
+  const runtimeFlavor = resolveCliRuntimeFlavor({ env: process.env })
+  if (await hasUnpublishedKunWriter(runtime, dataDir, runtimeFlavor)) {
     throw new Error(
       'An older GUI-private Kun runtime is already writing this data directory without shared discovery. Close or update that GUI once before starting the shared runtime.'
     )
@@ -309,8 +355,28 @@ export async function startKunSharedRuntime(
   // port/token through discovery instead of treating the GUI preference as a
   // live connection contract.
   const launch = await prepareKunLaunch(settings, runtime, { port: 0 })
+  const serveEntry = launch.args.find((argument) => /serve-entry\.js$/u.test(argument))
+  if (!serveEntry) throw new Error('Kun service-manager entry could not be resolved from the runtime launch')
+  const managerEntry = join(dirname(serveEntry), '..', 'manager', 'manager-entry.js')
+  const manager = await ensureServiceManager({
+    flavor: runtimeFlavor,
+    allowDevelopmentBootstrap: allowsDevelopmentManagerBootstrap({
+      flavor: runtimeFlavor,
+      env: process.env,
+      isPackaged: app.isPackaged
+    }),
+    dataDir: launch.dataDir,
+    ...(serviceManagerSettingsPath ? { settingsPath: serviceManagerSettingsPath } : {}),
+    launch: {
+      command: resolveNodeScriptCommand(process.execPath),
+      args: [managerEntry],
+      runAsNode: true
+    }
+  })
   return ensureSharedRuntime({
     dataDir: launch.dataDir,
+    runtimeFlavor,
+    manager,
     ...(launch.expectedBuildId ? { expectedBuildId: launch.expectedBuildId } : {}),
     launch: {
       command: launch.command,
@@ -323,9 +389,10 @@ export async function startKunSharedRuntime(
 
 async function hasUnpublishedKunWriter(
   runtime: KunRuntimeSettingsV1,
-  dataDir: string
+  dataDir: string,
+  runtimeFlavor = resolveCliRuntimeFlavor({ env: process.env })
 ): Promise<boolean> {
-  if (await resolveSharedRuntime(dataDir).catch(() => null)) return false
+  if (await resolveSharedRuntime(dataDir, fetch, { runtimeFlavor }).catch(() => null)) return false
   try {
     const headers = new Headers()
     if (runtime.runtimeToken.trim()) {
@@ -398,12 +465,7 @@ async function prepareKunLaunch(
     tokenEconomyMode: runtime.tokenEconomyMode,
     insecure: isKunRuntimeInsecure(runtime)
   })
-  const runAsElectron = shouldRunKunServeAsElectronChild({
-    platform: process.platform,
-    isPackaged: app.isPackaged,
-    computerUseEnabled: runtime.computerUse?.enabled === true
-  })
-  const command = runAsElectron ? resolution.command : resolveNodeScriptCommand(resolution.command)
+  const command = resolveNodeScriptCommand(resolution.command)
   const runtimeApiKey = (await ensureFreshGrokCredentials(runtime.apiKey)).apiKey
   const defaultClientApiKey = resolveCodexOAuthApiKey(runtimeApiKey).apiKey
   const activeProviderKind = (getModelProviderSettings(settings).providers as ModelProviderProfileV1[]).find(
@@ -420,6 +482,9 @@ async function prepareKunLaunch(
   const browserUseBridge = runtime.browserUse.enabled
     ? await prepareBrowserUseHostForKunLaunch()
     : undefined
+  const computerUseBridge = runtime.computerUse.enabled
+    ? await prepareComputerUseHostForKunLaunch()
+    : undefined
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     DEEPSEEK_API_KEY: defaultClientApiKey || process.env.DEEPSEEK_API_KEY || '',
@@ -434,6 +499,12 @@ async function prepareKunLaunch(
           [KUN_BROWSER_USE_APPROVAL_SIGNING_KEY_ENV]:
             browserUseBridge.approvalSigningKey
         }
+      : {}),
+    ...(computerUseBridge
+      ? {
+          [KUN_COMPUTER_USE_BRIDGE_URL_ENV]: computerUseBridge.url,
+          [KUN_COMPUTER_USE_BRIDGE_TOKEN_ENV]: computerUseBridge.token
+        }
       : {})
   }
   if (!browserUseBridge) {
@@ -441,20 +512,23 @@ async function prepareKunLaunch(
     delete env[KUN_BROWSER_USE_BRIDGE_TOKEN_ENV]
     delete env[KUN_BROWSER_USE_APPROVAL_SIGNING_KEY_ENV]
   }
+  if (!computerUseBridge) {
+    delete env[KUN_COMPUTER_USE_BRIDGE_URL_ENV]
+    delete env[KUN_COMPUTER_USE_BRIDGE_TOKEN_ENV]
+  }
   const bundledExtensionsDirectory = availableBundledExtensionsDirectory({
     isPackaged: app.isPackaged,
     resourcesPath: process.resourcesPath,
     appRoot: root
   })
   if (bundledExtensionsDirectory) env.KUN_BUNDLED_EXTENSIONS_DIR = bundledExtensionsDirectory
-  if (!runAsElectron) env.ELECTRON_RUN_AS_NODE = '1'
-  else delete env.ELECTRON_RUN_AS_NODE
+  env.ELECTRON_RUN_AS_NODE = '1'
   return {
     command,
     args,
     env,
     dataDir,
-    runAsNode: !runAsElectron,
+    runAsNode: true,
     ...(expectedBuildId ? { expectedBuildId } : {})
   }
 }

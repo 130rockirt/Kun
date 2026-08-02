@@ -925,6 +925,7 @@ const REQUIRED_SQLITE_COLUMNS: Readonly<Record<string, readonly SqliteColumnExpe
     sqliteColumn('title', 'TEXT', true),
     sqliteColumn('workspace', 'TEXT', true),
     sqliteColumn('model', 'TEXT', true),
+    sqliteColumn('agent_surface', 'TEXT', false),
     sqliteColumn('mode', 'TEXT', true),
     sqliteColumn('status', 'TEXT', true),
     sqliteColumn('approval_policy', 'TEXT', true),
@@ -1257,7 +1258,7 @@ function probeHybridThreadStoreWrites(db: BetterSqliteDatabase): boolean {
     const [firstId, secondId] = findWriteProbeThreadIds(db)
     const threadUpsert = db.prepare(`
       INSERT INTO threads (
-        id, title, workspace, model, mode, status, approval_policy, sandbox_mode, approval_reviewer,
+        id, title, workspace, model, agent_surface, mode, status, approval_policy, sandbox_mode, approval_reviewer,
         model_request_capture_enabled,
         cost_budget_usd, cost_budget_warning_sent, relation, parent_thread_id,
         forked_from_thread_id, forked_from_title, forked_at, forked_from_message_count,
@@ -1265,7 +1266,7 @@ function probeHybridThreadStoreWrites(db: BetterSqliteDatabase): boolean {
         created_at, updated_at, created_at_ms, updated_at_ms, preview, message_count,
         event_seq_high_water, metadata_path, messages_path, events_path, search_text
       ) VALUES (
-        @id, @title, @workspace, @model, @mode, @status, @approval_policy, @sandbox_mode, @approval_reviewer,
+        @id, @title, @workspace, @model, @agent_surface, @mode, @status, @approval_policy, @sandbox_mode, @approval_reviewer,
         @model_request_capture_enabled,
         @cost_budget_usd, @cost_budget_warning_sent, @relation, @parent_thread_id,
         @forked_from_thread_id, @forked_from_title, @forked_at, @forked_from_message_count,
@@ -1274,6 +1275,7 @@ function probeHybridThreadStoreWrites(db: BetterSqliteDatabase): boolean {
         @event_seq_high_water, @metadata_path, @messages_path, @events_path, @search_text
       ) ON CONFLICT(id) DO UPDATE SET
         title=excluded.title, workspace=excluded.workspace, model=excluded.model,
+        agent_surface=excluded.agent_surface,
         mode=excluded.mode, status=excluded.status,
         approval_policy=excluded.approval_policy, sandbox_mode=excluded.sandbox_mode,
         approval_reviewer=excluded.approval_reviewer,
@@ -1388,6 +1390,7 @@ function threadWriteProbeRow(id: string, title: string): Record<string, string |
     title,
     workspace: root,
     model: 'deepseek-chat',
+    agent_surface: 'code',
     mode: 'agent',
     status: 'idle',
     approval_policy: 'on-request',

@@ -191,7 +191,7 @@ describe('Graph Mode panel projection', () => {
       .not.toContain('ds-subagent-lane-sweep')
   })
 
-  it('animates only edges flowing into processing nodes', () => {
+  it('keeps waiting review edges static until the Lead has an active lease', () => {
     const nodes = [
       node('start', 'phase_1'),
       node('side', 'phase_1'),
@@ -205,9 +205,35 @@ describe('Graph Mode panel projection', () => {
     ])
     run.nodes.working!.status = 'reviewing'
 
-    const projected = graphElements(run)
+    const waiting = graphElements(run)
 
-    expect(projected.edges.map((edge) => [edge.id, edge.animated])).toEqual([
+    expect(waiting.edges.map((edge) => [edge.id, edge.animated])).toEqual([
+      ['into_working', false],
+      ['side_into_working', false],
+      ['out_of_working', false]
+    ])
+
+    run.supervision = {
+      version: 1,
+      runId: run.id,
+      lastEventSeq: run.lastEventSeq,
+      leadActive: true,
+      liveness: 'active_review',
+      pendingActions: [{
+        obligationId: 'obligation_review',
+        pendingAction: 'review_required',
+        nodeIds: ['working'],
+        liveness: 'active_review',
+        retryCount: 0,
+        noProgressCount: 0,
+        canWake: false
+      }],
+      canWake: false,
+      updatedAt: run.updatedAt
+    }
+
+    const activeReview = graphElements(run)
+    expect(activeReview.edges.map((edge) => [edge.id, edge.animated])).toEqual([
       ['into_working', true],
       ['side_into_working', true],
       ['out_of_working', false]

@@ -6,8 +6,6 @@ import {
   customMcpConfigFragment,
   auditMcpConfigSupplyChain,
   auditMarketplaceInstall,
-  googleWorkspaceMcpServerIds,
-  googleWorkspaceMcpServers,
   isAllowedDocsUrl,
   isHttpsUrl,
   mcpConfigHasServer,
@@ -25,14 +23,14 @@ describe('PluginMarketplaceView MCP config helpers', () => {
     expect(recommendedMarketplaceItemIds()).not.toContain('filesystem')
   })
 
-  it('recommends mainstream MCP servers for reasoning, memory, and web search', () => {
+  it('recommends mainstream MCP servers without duplicating built-in connector products', () => {
     expect(recommendedMarketplaceItemIds()).toEqual(expect.arrayContaining([
       'sequential-thinking',
       'memory',
       'brave-search',
-      'vercel',
-      'google-workspace'
+      'vercel'
     ]))
+    expect(recommendedMarketplaceItemIds()).not.toContain('google-workspace')
   })
 
   it('builds remote OAuth MCP server config using Kun-supported transport fields', () => {
@@ -64,27 +62,6 @@ describe('PluginMarketplaceView MCP config helpers', () => {
         })
       }
     })
-  })
-
-  it('covers every official Google Workspace MCP server in the recommended connector', () => {
-    expect(googleWorkspaceMcpServerIds()).toEqual([
-      'google_gmail',
-      'google_drive',
-      'google_calendar',
-      'google_people',
-      'google_chat'
-    ])
-
-    const config = buildRemoteMcpConfig(googleWorkspaceMcpServers())
-    expect(Object.keys(config.servers as Record<string, unknown>)).toEqual(googleWorkspaceMcpServerIds())
-    for (const server of Object.values(config.servers as Record<string, any>)) {
-      expect(server).toMatchObject({
-        enabled: true,
-        transport: 'streamable-http',
-        trustScope: 'user'
-      })
-      expect(server.url).toMatch(/^https:\/\//)
-    }
   })
 
   it('rejects non-https remote MCP server URLs', () => {

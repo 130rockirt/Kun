@@ -83,6 +83,8 @@ export type WorkbenchCodeRightWorkspaceProps = {
   threadRunning: boolean
   sideConversationCount: number
   sideConversationRunningCount: number
+  sideAttachmentStoreAvailable: boolean
+  sideDefaultModelSupportsImageInput: boolean
   files: WorkbenchFileTreeSidePanelProps
   extensionItems: readonly ExtensionRightRailViewEntry[]
   extensionViews: readonly RegisteredContribution<'views.rightSidebar'>[]
@@ -325,6 +327,8 @@ function CodeRightPanelWorkspace({
       return (
         <SideConversationPanel
           variant="docked"
+          attachmentStoreAvailable={code.sideAttachmentStoreAvailable}
+          defaultModelSupportsImageInput={code.sideDefaultModelSupportsImageInput}
           onRequestClose={() => code.onClose(id)}
           onTitleChange={(title) => updateTitle(id, title)}
         />

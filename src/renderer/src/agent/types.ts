@@ -193,6 +193,8 @@ export type UserInputAnswer = {
 export type NormalizedThread = {
   id: string
   title: string
+  /** Durable product surface that owns this thread. Absent for legacy Code threads. */
+  agentSurface?: 'code' | 'write' | 'design'
   /** Whether the title is auto/provisional (true) vs user-set/locked (false); absent = legacy. */
   titleAuto?: boolean
   updatedAt: string
@@ -696,7 +698,7 @@ export interface AgentProvider {
   }
   connect(): Promise<void>
   listThreads(options?: ThreadListOptions): Promise<NormalizedThread[]>
-  createThread(input: { workspace?: string; title?: string; titleAuto?: boolean; mode?: string; agentId?: string; providerId?: string; accountId?: string; model?: string; systemPrompt?: string }): Promise<NormalizedThread>
+  createThread(input: { workspace?: string; title?: string; titleAuto?: boolean; mode?: string; agentSurface?: 'code' | 'write' | 'design'; agentId?: string; providerId?: string; accountId?: string; model?: string; systemPrompt?: string }): Promise<NormalizedThread>
   getThreadDetail(threadId: string): Promise<{
     blocks: ChatBlock[]
     latestSeq: number

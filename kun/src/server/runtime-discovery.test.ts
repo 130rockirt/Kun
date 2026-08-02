@@ -63,6 +63,22 @@ describe('runtime discovery', () => {
     expect((await readRuntimeDiscovery(root))?.instanceId).toBe('legacy-server')
   })
 
+  it('keeps development discovery separate from the production compatibility record', async () => {
+    const root = await tempRoot()
+    const production = await publishRuntimeDiscovery(root, input({ instanceId: 'production-runtime' }))
+    const development = await publishRuntimeDiscovery(root, input({
+      instanceId: 'development-runtime',
+      flavor: 'development',
+      port: 18999,
+      baseUrl: 'http://127.0.0.1:18999'
+    }))
+
+    expect(await readRuntimeDiscovery(root)).toEqual(production)
+    expect(await readRuntimeDiscovery(root, 'development')).toEqual(development)
+    expect(runtimeDiscoveryPath(root)).toBe(join(root, 'runtime.json'))
+    expect(runtimeDiscoveryPath(root, 'development')).toBe(join(root, 'runtime.development.json'))
+  })
+
   it('atomically publishes an owner-only record', async () => {
     const root = await tempRoot()
     const record = await publishRuntimeDiscovery(root, input({ instanceId: 'server-a' }))

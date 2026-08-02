@@ -50,6 +50,9 @@ function normalizeQueuedMessage(value: unknown): QueuedUserMessage | null {
   }
   if (source.serviceTier === 'priority') normalized.serviceTier = 'priority'
   else delete normalized.serviceTier
+  const expectedThreadId = normalizedString(source.expectedThreadId)
+  if (expectedThreadId) normalized.expectedThreadId = expectedThreadId
+  else delete normalized.expectedThreadId
   return normalized
 }
 

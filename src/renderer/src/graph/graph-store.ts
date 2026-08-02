@@ -3,6 +3,10 @@ import type { RuntimeChildEventPayload } from '../agent/types'
 import { graphRuntimeClient } from './graph-runtime-client'
 import { steerGraphSourceTurn } from './graph-source-turn-steering'
 import {
+  createGraphLeadWakeAction,
+  mergeGraphRunSnapshots
+} from './graph-supervision-store'
+import {
   graphChildRuntimeFromEvent,
   mergeGraphChildDiagnostics,
   mergeGraphChildRuntime,
@@ -25,6 +29,8 @@ import type {
   ProjectIdentity
 } from './graph-types'
 
+export { selectGraphPlanningCorrectionDraft } from './graph-planning-selection'
+
 type GraphViewState = {
   threadId: string | null
   workspace: string
@@ -45,6 +51,7 @@ type GraphViewState = {
   artifactPage: GraphArtifactPage | null
   artifactContent: string
   artifactLoading: boolean
+  wakingObligationId: string | null
   loading: boolean
   error: string | null
   refreshThread: (threadId: string | null) => Promise<void>
@@ -70,6 +77,7 @@ type GraphViewState = {
   cancelDraft: (draftId: string) => Promise<void>
   retryNode: (nodeId: string) => Promise<void>
   reviewNode: (nodeId: string, outcome: 'pass' | 'fail') => Promise<void>
+  wakeLead: (obligationId?: string) => Promise<void>
   patch: (operations: GraphPatchOperation[], reason: string) => Promise<void>
   rebindNode: (nodeId: string, profileId: string) => Promise<void>
   steer: (text: string, nodeId?: string) => Promise<void>
@@ -99,17 +107,6 @@ function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-function mergeRunSnapshots(
-  current: readonly GraphRun[],
-  incoming: readonly GraphRun[]
-): GraphRun[] {
-  const currentById = new Map(current.map((run) => [run.id, run]))
-  return incoming.map((run) => {
-    const previous = currentById.get(run.id)
-    return previous && previous.lastEventSeq > run.lastEventSeq ? previous : run
-  })
-}
-
 export const useGraphStore = create<GraphViewState>((set, get) => ({
   threadId: null,
   workspace: '',
@@ -130,6 +127,7 @@ export const useGraphStore = create<GraphViewState>((set, get) => ({
   artifactPage: null,
   artifactContent: '',
   artifactLoading: false,
+  wakingObligationId: null,
   loading: false,
   error: null,
 
@@ -157,7 +155,7 @@ export const useGraphStore = create<GraphViewState>((set, get) => ({
       ])
       if (get().threadId !== threadId) return
       const current = get()
-      const mergedRuns = mergeRunSnapshots(current.runs, runs)
+      const mergedRuns = mergeGraphRunSnapshots(current.runs, runs)
       const previousRunId = current.selectedRunId
       const previousNodeId = current.selectedNodeId
       const selectedRunId = mergedRuns.some((run) => run.id === previousRunId)
@@ -428,6 +426,11 @@ export const useGraphStore = create<GraphViewState>((set, get) => ({
       set({ error: message(error) })
     }
   },
+
+  wakeLead: createGraphLeadWakeAction({
+    get: () => get(),
+    update: (updater) => set((state) => updater(state))
+  }),
 
   patch: async (operations, reason) => {
     const run = get().runs.find((item) => item.id === get().selectedRunId)

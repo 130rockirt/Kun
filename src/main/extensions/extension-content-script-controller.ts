@@ -57,6 +57,12 @@ export type ExtensionContentScriptControllerOptions = {
   onDiagnostic?: (diagnostic: ExtensionHostContentScriptDiagnosticRecord) => void
   now?: () => number
   scheduleReload?: (callback: () => void) => NodeJS.Timeout
+  /**
+   * Return the native-dialog idle promise for a frame when a Main-owned modal
+   * is open. Direct DOM grants are still revoked immediately; only the reload
+   * that removes arbitrary page effects waits for the modal to finish.
+   */
+  deferReloadUntil?: (frame: WebContents) => Promise<void> | undefined
 }
 
 /**
@@ -469,18 +475,38 @@ export class ExtensionContentScriptController {
     if (state.reloadScheduled || isDestroyed(state.frame)) return
     state.reloadScheduled = true
     state.reloadTimer = this.scheduleReloadCallback(() => {
-      state.reloadTimer = undefined
-      state.reloadScheduled = false
-      if (isDestroyed(state.frame)) return
-      try {
-        state.frame.reload()
-      } catch (error) {
-        this.emit({
-          code: 'HOST_DOM_SURFACE_RELOAD_FAILED',
-          message: boundedErrorMessage(error, 'Failed to reload the affected workbench surface.')
-        })
-      }
+      this.flushScheduledReload(state)
     })
+  }
+
+  private flushScheduledReload(state: FrameState): void {
+    state.reloadTimer = undefined
+    if (!state.reloadScheduled || isDestroyed(state.frame)) {
+      state.reloadScheduled = false
+      return
+    }
+    const deferred = this.options.deferReloadUntil?.(state.frame)
+    if (deferred) {
+      void deferred.then(
+        () => this.flushScheduledReload(state),
+        () => this.reloadScheduledFrame(state)
+      )
+      return
+    }
+    this.reloadScheduledFrame(state)
+  }
+
+  private reloadScheduledFrame(state: FrameState): void {
+    state.reloadScheduled = false
+    if (isDestroyed(state.frame)) return
+    try {
+      state.frame.reload()
+    } catch (error) {
+      this.emit({
+        code: 'HOST_DOM_SURFACE_RELOAD_FAILED',
+        message: boundedErrorMessage(error, 'Failed to reload the affected workbench surface.')
+      })
+    }
   }
 
   private updateRevalidation(state: FrameState): void {

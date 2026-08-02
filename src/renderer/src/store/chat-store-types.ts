@@ -45,6 +45,8 @@ export type QueuedUserMessage = {
   modelLabel?: string
   reasoningEffort?: string
   serviceTier?: 'priority'
+  /** Renderer-only guard that prevents a scoped send from falling back to another thread. */
+  expectedThreadId?: string
   attachmentIds?: string[]
   attachments?: AttachmentReference[]
   fileReferences?: UserFileReference[]
@@ -110,6 +112,8 @@ export type SendMessageOverrides = {
   modelLabel?: string
   reasoningEffort?: string
   serviceTier?: 'priority'
+  /** Renderer-only guard that prevents Design/Write-style sends from changing thread identity. */
+  expectedThreadId?: string
   displayText?: string
   orchestration?: 'direct' | 'graph'
   guiPlan?: GuiPlanMessageContext
@@ -122,6 +126,28 @@ export type SendMessageOverrides = {
   fileReferences?: UserFileReference[]
   composerContexts?: ComposerContextAttachment[]
   writeContext?: WriteAssistantMessageContext
+}
+
+export type ClearDesignHistoryOptions = {
+  /** Create and bind one empty replacement thread after the old history is gone. */
+  recreate?: boolean
+  /** Known provisional ids to clean even if the renderer registry write failed. */
+  includeThreadIds?: string[]
+}
+
+export type CreateDesignThreadOptions = {
+  /** Select the new thread and navigate to Design. Defaults to true. */
+  activate?: boolean
+  /** Keep the current route when creation fails during background maintenance. */
+  suppressSettingsRedirect?: boolean
+}
+
+export type ClearDesignHistoryResult = {
+  /** True only when no runtime thread or local chat mirror remains to retry. */
+  cleared: boolean
+  deletedThreadIds: string[]
+  retainedThreadIds: string[]
+  recreatedThreadId: string | null
 }
 
 export type InitialSetupMode = 'required' | 'preview'
@@ -149,6 +175,7 @@ export type SettingsRouteSection =
   | 'updates'
   | 'terminal'
   | 'debug'
+  | 'storage'
   | 'dataMigration'
 export type AppRoute = 'chat' | 'write' | 'design' | 'settings' | 'plugins' | 'extensions' | 'claw' | 'schedule' | 'workflow'
 export type PluginHostRoute = 'chat' | 'claw'
@@ -185,6 +212,9 @@ export type SideConversation = {
   /** Provider paired with `model`; kept local to this side conversation. */
   providerId: string
   reasoningEffort: string
+  /** User preference; effective only when this branch selects an eligible Codex model. */
+  fastMode: boolean
+  attachments: AttachmentReference[]
   busy: boolean
   turnId: string | null
   userItemId: string | null
@@ -200,6 +230,8 @@ export type SideConversationDraftOptions = {
   model?: string
   providerId?: string
   reasoningEffort?: string
+  fastMode?: boolean
+  attachments?: AttachmentReference[]
 }
 
 export type ChatState = {
@@ -317,7 +349,16 @@ export type ChatState = {
   ensureWriteThreadForWorkspace: (workspaceRoot?: string, activeFilePath?: string) => Promise<string | null>
   createWriteThread: (workspaceRoot?: string, activeFilePath?: string) => Promise<string | null>
   ensureDesignThreadForWorkspace: (workspaceRoot?: string, docId?: string) => Promise<string | null>
-  createDesignThread: (workspaceRoot?: string, docId?: string) => Promise<string | null>
+  createDesignThread: (
+    workspaceRoot?: string,
+    docId?: string,
+    options?: CreateDesignThreadOptions
+  ) => Promise<string | null>
+  clearDesignHistory: (
+    workspaceRoot: string,
+    docId: string,
+    options?: ClearDesignHistoryOptions
+  ) => Promise<ClearDesignHistoryResult>
   selectWriteThread: (threadId: string, workspaceRoot?: string) => Promise<void>
   openSettings: (section?: SettingsRouteSection) => void
   openPlugins: (host?: PluginHostRoute) => void
@@ -439,6 +480,8 @@ export type ChatState = {
   setSideInput: (sideId: string, text: string) => void
   setSideModel: (sideId: string, model: string, providerId?: string) => void
   setSideReasoningEffort: (sideId: string, effort: string) => void
+  setSideFastMode: (sideId: string, enabled: boolean) => void
+  setSideAttachments: (sideId: string, attachments: AttachmentReference[]) => void
   selectSideConversation: (sideId: string) => void
   setSidePanelOpen: (open: boolean) => void
   closeSideConversation: (sideId: string) => Promise<void>

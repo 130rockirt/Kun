@@ -111,7 +111,8 @@ export const useDesignAssistantStore = create<DesignAssistantState>((set, get) =
     const provider = getProvider()
     const thread = await provider.createThread({
       workspace: workspaceRoot,
-      title: 'Design Assistant'
+      title: 'Design Assistant',
+      agentSurface: 'design'
     })
     const threadId = thread.id
     writeDesignAssistantThreadId(workspaceRoot, threadId)

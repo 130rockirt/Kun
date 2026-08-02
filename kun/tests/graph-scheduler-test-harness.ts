@@ -29,6 +29,7 @@ export async function schedulerHarness(
   configPatch: Parameters<typeof testGraphConfig>[0] = {},
   options: {
     autoLeadReview?: boolean
+    supervision?: GraphSchedulerOptions['supervision']
     verifyChecks?: GraphSchedulerOptions['verifyChecks']
   } = {}
 ) {
@@ -121,7 +122,9 @@ export async function schedulerHarness(
     }),
     artifactStore: artifacts,
     ...(options.verifyChecks ? { verifyChecks: options.verifyChecks } : {}),
-    ...(options.autoLeadReview === false
+    ...(options.supervision
+      ? { supervision: options.supervision }
+      : options.autoLeadReview === false
       ? {}
       : { supervision: () => autoLeadSupervision(store, control, nextId) }),
     nextId,

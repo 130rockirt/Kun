@@ -841,7 +841,10 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
         { threadId, turnId }
       )
       const outcome: TurnRunOutcome =
-        graphCompletion === 'suspended' ? 'suspended' : 'completed'
+        graphCompletion === 'suspended' ||
+        graphCompletion === 'suspended_pending_supervision'
+          ? graphCompletion
+          : 'completed'
       if (outcome === 'completed') {
         await this.deps.turns.finishTurn({ threadId, turnId, status: 'completed' })
       }

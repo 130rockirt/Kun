@@ -1,5 +1,3 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
-import { dirname } from 'node:path'
 import type { ModelCapabilityMetadata } from '../../contracts/capabilities.js'
 import type {
   ModelFailureMetadata,
@@ -13,6 +11,7 @@ import type {
   ModelRouteTargetMetadata,
   ModelStreamChunk
 } from '../../ports/model-client.js'
+import { AtomicJsonFile } from '../../extensions/atomic-json.js'
 
 export type RouteTargetMetrics = {
   successes: number
@@ -59,8 +58,7 @@ export class RoutePoolHealthStore {
   async load(): Promise<void> {
     if (!this.filePath) return
     try {
-      const parsed = JSON.parse(await readFile(this.filePath, 'utf8')) as PersistedHealth
-      if (parsed.version !== 1) return
+      const parsed = await this.file().read(emptyPersistedHealth)
       for (const [key, metrics] of Object.entries(parsed.metrics ?? {})) {
         this.states.set(key, { ...metrics, consecutiveFailures: 0, halfOpenAttempts: 0 })
       }
@@ -157,14 +155,53 @@ export class RoutePoolHealthStore {
   private persist(): void {
     if (!this.filePath) return
     const payload: PersistedHealth = { version: 1, ...this.snapshot() }
-    const filePath = this.filePath
     this.writeChain = this.writeChain.then(async () => {
-      await mkdir(dirname(filePath), { recursive: true })
-      const temporary = `${filePath}.tmp`
-      await writeFile(temporary, `${JSON.stringify(payload, null, 2)}\n`, 'utf8')
-      await rename(temporary, filePath)
+      await this.file().update(emptyPersistedHealth, (current) => mergePersistedHealth(current, payload))
     }).catch(() => undefined)
   }
+
+  private file(): AtomicJsonFile<PersistedHealth> {
+    return new AtomicJsonFile(this.filePath!, validatePersistedHealth)
+  }
+}
+
+function emptyPersistedHealth(): PersistedHealth {
+  return { version: 1, metrics: {}, events: [] }
+}
+
+function validatePersistedHealth(value: unknown): PersistedHealth {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('invalid route health state')
+  }
+  const record = value as Partial<PersistedHealth>
+  if (record.version !== 1 || !record.metrics || typeof record.metrics !== 'object' ||
+    !Array.isArray(record.events)) throw new Error('invalid route health state')
+  return value as PersistedHealth
+}
+
+function mergePersistedHealth(current: PersistedHealth, next: PersistedHealth): PersistedHealth {
+  const metrics: Record<string, RouteTargetMetrics> = { ...current.metrics }
+  for (const [key, value] of Object.entries(next.metrics)) {
+    const prior = metrics[key]
+    metrics[key] = prior
+      ? {
+          ...prior,
+          ...value,
+          successes: Math.max(prior.successes, value.successes),
+          failures: Math.max(prior.failures, value.failures),
+          consecutiveFailures: value.lastAttemptAt &&
+            (!prior.lastAttemptAt || value.lastAttemptAt >= prior.lastAttemptAt)
+            ? value.consecutiveFailures
+            : prior.consecutiveFailures
+        }
+      : value
+  }
+  const events = [...current.events, ...next.events]
+    .filter((event, index, all) => all.findIndex((candidate) =>
+      JSON.stringify(candidate) === JSON.stringify(event)) === index)
+    .sort((left, right) => left.at.localeCompare(right.at))
+    .slice(-MAX_ROUTE_EVENTS)
+  return { version: 1, metrics, events }
 }
 
 export class RoutePoolModelClient implements ModelClient {

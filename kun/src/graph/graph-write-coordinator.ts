@@ -7,6 +7,8 @@ import { z } from 'zod'
 import type { ArtifactStore } from '../artifacts/artifact-store.js'
 import type { GraphRuntimeConfig } from '../config/kun-config.js'
 import { atomicWriteFile } from '../adapters/file/atomic-write.js'
+import { AtomicJsonFile } from '../extensions/atomic-json.js'
+import { withManagerDataMutex } from '../manager/data-mutex.js'
 import {
   GraphRelativePathSchema,
   graphRelativePathsOverlap,
@@ -36,7 +38,9 @@ const PathLeaseSchema = z.object({
   state: z.enum(['active', 'released', 'expired', 'orphaned']),
   acquiredAt: Timestamp,
   expiresAt: Timestamp,
-  releasedAt: Timestamp.optional()
+  releasedAt: Timestamp.optional(),
+  // Optional for backward compatibility with pre-disposition write state.
+  releaseDisposition: z.enum(['accepted', 'failed', 'cancelled']).optional()
 }).strict()
 export type GraphPathLease = z.infer<typeof PathLeaseSchema>
 
@@ -81,6 +85,7 @@ export type GraphResourceCleanupResult = {
 
 export class FileGraphWriteCoordinator {
   private queue: Promise<unknown> = Promise.resolve()
+  private readonly stateFile: AtomicJsonFile<WriteState>
   private readonly nowIso: () => string
   private readonly nextId: (prefix: string) => string
 
@@ -91,6 +96,7 @@ export class FileGraphWriteCoordinator {
     nowIso?: () => string
     nextId?: (prefix: string) => string
   }) {
+    this.stateFile = new AtomicJsonFile(this.statePath(), (value) => WriteStateSchema.parse(value))
     this.nowIso = options.nowIso ?? (() => new Date().toISOString())
     let next = 0
     this.nextId = options.nextId ?? ((prefix) => `${prefix}_${Date.now()}_${++next}`)
@@ -178,12 +184,14 @@ export class FileGraphWriteCoordinator {
       const state = await this.load()
       const lease = state.leases.find((entry) => entry.leaseId === leaseId)
       if (!lease) throw new Error(`Graph path lease not found: ${leaseId}`)
-      if (lease.state === 'active') {
+      const releasedNow = lease.state === 'active'
+      if (releasedNow) {
         lease.state = 'released'
         lease.releasedAt = this.nowIso()
+        lease.releaseDisposition = disposition
       }
       const worktree = state.worktrees.find((entry) => entry.attemptId === lease.attemptId)
-      if (worktree) {
+      if (worktree && releasedNow) {
         if (
           disposition !== 'accepted' &&
           this.options.config().writeIsolation.preserveFailedWorktrees
@@ -239,6 +247,7 @@ export class FileGraphWriteCoordinator {
       if (lease.state === 'active') {
         lease.state = 'released'
         lease.releasedAt = this.nowIso()
+        lease.releaseDisposition = 'cancelled'
       }
       const worktree = state.worktrees.find((entry) => entry.attemptId === lease.attemptId)
       if (worktree && worktree.state === 'active') {
@@ -424,6 +433,7 @@ export class FileGraphWriteCoordinator {
         if (lease.state === 'active') {
           lease.state = 'released'
           lease.releasedAt = this.nowIso()
+          lease.releaseDisposition = 'cancelled'
         }
         results.push({
           resourceKind: 'lease',
@@ -577,24 +587,18 @@ export class FileGraphWriteCoordinator {
   }
 
   private enqueue<T>(operation: () => Promise<T>): Promise<T> {
-    const run = this.queue.catch(() => undefined).then(operation)
+    const run = this.queue.catch(() => undefined).then(() =>
+      withManagerDataMutex('graph-write-coordinator', operation))
     this.queue = run.then(() => undefined, () => undefined)
     return run
   }
 
   private async load(): Promise<WriteState> {
-    const text = await readFile(this.statePath(), 'utf8').catch((error) => {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
-      throw error
-    })
-    return text
-      ? WriteStateSchema.parse(JSON.parse(text))
-      : { leases: [], worktrees: [] }
+    return this.stateFile.read(() => ({ leases: [], worktrees: [] }))
   }
 
   private async persist(state: WriteState): Promise<void> {
-    await mkdir(this.options.rootDir, { recursive: true, mode: 0o700 })
-    await atomicWriteFile(this.statePath(), `${JSON.stringify(WriteStateSchema.parse(state))}\n`)
+    await this.stateFile.write(WriteStateSchema.parse(state))
   }
 
   private statePath(): string {
@@ -605,7 +609,6 @@ export class FileGraphWriteCoordinator {
     return join(this.options.rootDir, 'worktrees')
   }
 }
-
 export function scopesOverlap(
   left: readonly string[],
   right: readonly string[],
@@ -615,7 +618,6 @@ export function scopesOverlap(
     ? graphHostRelativePathsOverlap(left, right)
     : graphRelativePathsOverlap(left, right, caseInsensitive)
 }
-
 function writeClaimsConflict(
   mode: GraphRuntimeConfig['writeIsolation']['mode'],
   allowWorktrees: boolean,
@@ -627,7 +629,6 @@ function writeClaimsConflict(
   if (mode === 'worktree' && allowWorktrees) return false
   return scopesOverlap(left, right)
 }
-
 function normalizeScopes(scopes: readonly string[]): string[] {
   return [...new Set(scopes.map((scope) => {
     try {
@@ -637,7 +638,6 @@ function normalizeScopes(scopes: readonly string[]): string[] {
     }
   }))].sort()
 }
-
 async function git(cwd: string, args: string[]): Promise<string> {
   const result = await execFileAsync('git', ['-C', cwd, ...args], {
     encoding: 'utf8',
@@ -646,7 +646,6 @@ async function git(cwd: string, args: string[]): Promise<string> {
   })
   return result.stdout
 }
-
 async function workspaceChangeSnapshot(
   workspaceRoot: string
 ): Promise<Record<string, string>> {

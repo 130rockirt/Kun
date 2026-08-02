@@ -25,6 +25,8 @@ describe('design turn dispatch', () => {
       promptState,
       resolveProviderId,
       reasoningEffort: 'medium',
+      serviceTier: 'priority',
+      expectedThreadId: 'thr_design',
       target: 'canvas',
       attachmentIds: [attachment.id],
       attachments: [attachment]
@@ -36,6 +38,8 @@ describe('design turn dispatch', () => {
       model: 'deepseek-chat',
       providerId: 'deepseek',
       reasoningEffort: 'medium',
+      serviceTier: 'priority',
+      expectedThreadId: 'thr_design',
       guiDesignCanvas: true,
       guiDesignMode: true,
       attachmentIds: [attachment.id],

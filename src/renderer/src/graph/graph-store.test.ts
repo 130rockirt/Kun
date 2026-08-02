@@ -34,6 +34,7 @@ import {
   receiveGraphChildRuntimeEvent,
   receiveGraphPlanningRuntimeEvent,
   receiveGraphRuntimeEvent,
+  selectGraphPlanningCorrectionDraft,
   useGraphStore
 } from './graph-store'
 
@@ -158,6 +159,7 @@ describe('Graph renderer store', () => {
       artifactPage: null,
       artifactContent: '',
       artifactLoading: false,
+      wakingObligationId: null,
       loading: false,
       error: null
     })
@@ -167,6 +169,20 @@ describe('Graph renderer store', () => {
       childRuns: []
     })
     client.listDrafts.mockResolvedValue([])
+  })
+
+  it('selects only a paused correction draft for the active thread', () => {
+    const correcting = planningDraft('needs_correction', 2)
+    const repairing = planningDraft('repairing', 3)
+    repairing.draft.id = 'draft_repairing'
+    repairing.draft.threadId = 'thread_2'
+
+    expect(selectGraphPlanningCorrectionDraft(
+      [repairing, correcting],
+      'thread_1'
+    )).toBe(correcting)
+    expect(selectGraphPlanningCorrectionDraft([repairing], 'thread_2')).toBeNull()
+    expect(selectGraphPlanningCorrectionDraft([correcting], null)).toBeNull()
   })
 
   it('reconciles an SSE hint against durable HTTP truth without optimistic mutation', async () => {

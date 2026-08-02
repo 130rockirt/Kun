@@ -643,6 +643,26 @@ describe('ThreadService.list with relation filter', () => {
   })
 })
 
+describe('ThreadService agent surface ownership', () => {
+  it('persists explicit ownership in create/list and carries it through fork and resume', async () => {
+    const { service } = buildService()
+    const created = await service.create(
+      {
+        workspace: '/tmp/design',
+        model: 'deepseek-chat',
+        mode: 'agent',
+        agentSurface: 'design'
+      },
+      { id: 'thr_design_surface', title: 'Design drawing' }
+    )
+
+    expect(created.agentSurface).toBe('design')
+    expect((await service.list()).find((thread) => thread.id === created.id)?.agentSurface).toBe('design')
+    expect((await service.fork(created.id)).agentSurface).toBe('design')
+    expect((await service.resumeSession(created.id)).thread.agentSurface).toBe('design')
+  })
+})
+
 describe('ThreadService.resumeSession', () => {
   it('uses the Kun default model when resuming item-only legacy sessions', async () => {
     const { service, sessionStore } = buildService()

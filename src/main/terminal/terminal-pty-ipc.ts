@@ -164,7 +164,12 @@ export type RegisterTerminalPtyIpcOptions = {
   getTerminalColorMode?: () => TerminalColorMode | Promise<TerminalColorMode>
 }
 
-export function registerTerminalPtyIpc(options: RegisterTerminalPtyIpcOptions): void {
+export type TerminalPtyController = {
+  listSessionIds: () => string[]
+  disposeAll: () => void
+}
+
+export function registerTerminalPtyIpc(options: RegisterTerminalPtyIpcOptions): TerminalPtyController {
   const { ipcMain, getMainWindow, logError, getTerminalColorMode } = options
   const sessions = new Map<string, TerminalSession>()
 
@@ -372,5 +377,11 @@ export function registerTerminalPtyIpc(options: RegisterTerminalPtyIpcOptions): 
   const mainWindow = getMainWindow()
   if (mainWindow && !mainWindow.isDestroyed()) {
     attachSenderCleanup(mainWindow.webContents)
+  }
+  return {
+    listSessionIds: () => [...sessions.keys()],
+    disposeAll: () => {
+      for (const sessionId of [...sessions.keys()]) disposeSession(sessionId, true)
+    }
   }
 }

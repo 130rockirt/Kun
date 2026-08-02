@@ -15,19 +15,35 @@ import './styles/workflow-canvas.css'
 import './styles/graph-workbench.css'
 import './styles/neutral-polish.css'
 import './styles/provider-quota-panel.css'
-import App from './App'
-import './i18n'
 import { applyCursorSpotlight } from './lib/apply-theme'
 import { installCursorSpotlightTracking } from './lib/cursor-spotlight'
 import { installDataMigrationRendererRpc } from './data-migration/renderer-state-rpc'
+import { installSharedBusinessStorage } from './lib/shared-business-storage'
 
 document.documentElement.dataset.platform = window.kunGui?.platform ?? 'unknown'
 applyCursorSpotlight(true)
 installCursorSpotlightTracking()
-installDataMigrationRendererRpc()
+const storageRelocationMode = new URLSearchParams(window.location.search).get('storageRelocation') === '1'
+if (!storageRelocationMode) installDataMigrationRendererRpc()
 
-ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>
-)
+void bootstrap()
+
+async function bootstrap(): Promise<void> {
+  await import('./i18n')
+  if (storageRelocationMode) {
+    const { StorageRelocationBootView } = await import('./components/StorageRelocationBootView')
+    ReactDOM.createRoot(document.getElementById('root')!).render(
+      <React.StrictMode>
+        <StorageRelocationBootView />
+      </React.StrictMode>
+    )
+    return
+  }
+  await installSharedBusinessStorage()
+  const { default: App } = await import('./App')
+  ReactDOM.createRoot(document.getElementById('root')!).render(
+    <React.StrictMode>
+      <App />
+    </React.StrictMode>
+  )
+}

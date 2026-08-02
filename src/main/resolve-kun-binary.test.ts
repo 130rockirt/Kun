@@ -6,7 +6,6 @@ import {
   buildKunServeArgs,
   resolveKunExecutable,
   resolveKunRuntimeBuildId,
-  shouldRunKunServeAsElectronChild,
   type KunBinaryResolution
 } from './resolve-kun-binary'
 
@@ -150,35 +149,5 @@ describe('buildKunServeArgs', () => {
     expect(args).toContain('false')
     expect(args).toContain('--approval-reviewer')
     expect(args).toContain('user')
-  })
-})
-
-describe('shouldRunKunServeAsElectronChild', () => {
-  it('uses the Electron child path only for macOS dev computer-use launches', () => {
-    expect(shouldRunKunServeAsElectronChild({
-      platform: 'darwin',
-      isPackaged: false,
-      computerUseEnabled: true
-    })).toBe(true)
-
-    expect(shouldRunKunServeAsElectronChild({
-      platform: 'darwin',
-      isPackaged: true,
-      computerUseEnabled: true
-    })).toBe(false)
-  })
-
-  it('keeps the regular Node helper path when computer-use is disabled or off macOS', () => {
-    expect(shouldRunKunServeAsElectronChild({
-      platform: 'darwin',
-      isPackaged: false,
-      computerUseEnabled: false
-    })).toBe(false)
-
-    expect(shouldRunKunServeAsElectronChild({
-      platform: 'linux',
-      isPackaged: false,
-      computerUseEnabled: true
-    })).toBe(false)
   })
 })

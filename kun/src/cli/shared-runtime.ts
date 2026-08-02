@@ -20,6 +20,14 @@ import {
 } from './gui-settings-bridge.js'
 import { readRuntimeBuildIdForEntry } from '../server/runtime-build-identity.js'
 import { DEFAULT_FRESH_SERVE_PERMISSIONS } from './cli-options.js'
+import type { RuntimeFlavor } from '../contracts/runtime-flavor.js'
+import { defaultKunControlDir } from '../manager/manager-discovery.js'
+import type { ServiceManagerConnection } from '../manager/manager-client.js'
+import {
+  resolveCliRuntimeFlavor,
+  runtimeBuildIdForFlavor,
+  runtimeDisplayName
+} from './runtime-flavor.js'
 
 const START_TIMEOUT_MS = 30_000
 const STOP_TIMEOUT_MS = 15_000
@@ -30,11 +38,17 @@ export type SharedRuntimeConnection = {
   discovery: RuntimeDiscoveryRecord
   info: RuntimeInfo
   activeTurnCount?: number
+  managerProtocolVersion?: number
 }
 
 export type SharedRuntimeInspection = {
   discovery: RuntimeDiscoveryRecord
   connection: SharedRuntimeConnection | null
+}
+
+export type SharedRuntimeScope = {
+  runtimeFlavor?: RuntimeFlavor
+  controlDir?: string
 }
 
 export async function runRuntimeCommand(
@@ -56,6 +70,9 @@ export async function runRuntimeCommand(
     return 64
   }
   const environment = io.env ?? {}
+  const runtimeFlavor = resolveCliRuntimeFlavor({ env: environment })
+  const runtimeLabel = runtimeDisplayName(runtimeFlavor)
+  const scope = { runtimeFlavor }
   const dataDirResult = runtimeDataDir(argv.slice(1), environment)
   if (!dataDirResult.ok) {
     io.stderr.write(`kun runtime: ${dataDirResult.message}\n`)
@@ -76,14 +93,14 @@ export async function runRuntimeCommand(
         )
         return 0
       }
-      const connection = await resolveSharedRuntime(dataDir, fetchImpl)
+      const connection = await resolveSharedRuntime(dataDir, fetchImpl, scope)
       if (!connection) {
-        io.stdout.write(`Kun runtime: stopped\nData directory: ${dataDir}\n`)
+        io.stdout.write(`${runtimeLabel}: stopped\nData directory: ${dataDir}\n`)
         return 0
       }
       const record = connection.discovery
       io.stdout.write([
-        'Kun runtime: healthy',
+        `${runtimeLabel}: healthy`,
         `Version: ${record.serviceVersion}`,
         `PID: ${record.pid}`,
         `URL: ${record.baseUrl}`,
@@ -98,14 +115,19 @@ export async function runRuntimeCommand(
       throw new Error('an older GUI runtime is using this data directory; close or update the GUI before stop/restart')
     }
     if (command === 'stop') {
-      const stopped = await stopSharedRuntime(dataDir, fetchImpl)
-      io.stdout.write(stopped ? 'Kun runtime stopped.\n' : 'Kun runtime is not running.\n')
+      const stopped = await stopSharedRuntime(dataDir, fetchImpl, scope)
+      io.stdout.write(stopped ? `${runtimeLabel} stopped.\n` : `${runtimeLabel} is not running.\n`)
       return 0
     }
-    await stopSharedRuntime(dataDir, fetchImpl)
+    await stopSharedRuntime(dataDir, fetchImpl, scope)
     if (guiSettings) await syncGuiProviderCatalogToConfig(dataDir, guiSettings)
-    const restarted = await ensureSharedRuntime({ dataDir, env: io.env, fetch: fetchImpl })
-    io.stdout.write(`Kun runtime restarted at ${restarted.discovery.baseUrl}.\n`)
+    const restarted = await ensureSharedRuntime({
+      dataDir,
+      env: io.env,
+      fetch: fetchImpl,
+      runtimeFlavor
+    })
+    io.stdout.write(`${runtimeLabel} restarted at ${restarted.discovery.baseUrl}.\n`)
     return 0
   } catch (error) {
     io.stderr.write(`kun runtime: ${error instanceof Error ? error.message : String(error)}\n`)
@@ -138,10 +160,14 @@ export async function probeRuntimeDiscovery(
     const activeTurnCount = parseActiveTurnCount(
       response.headers.get('x-kun-active-turn-count')
     )
+    const managerProtocolVersion = parsePositiveIntegerHeader(
+      response.headers.get('x-kun-manager-protocol-version')
+    )
     return {
       discovery: record,
       info,
-      ...(activeTurnCount !== undefined ? { activeTurnCount } : {})
+      ...(activeTurnCount !== undefined ? { activeTurnCount } : {}),
+      ...(managerProtocolVersion !== undefined ? { managerProtocolVersion } : {})
     }
   } catch {
     return null
@@ -150,9 +176,10 @@ export async function probeRuntimeDiscovery(
 
 export async function resolveSharedRuntime(
   dataDir: string,
-  fetchImpl: typeof fetch = fetch
+  fetchImpl: typeof fetch = fetch,
+  scope: SharedRuntimeScope = {}
 ): Promise<SharedRuntimeConnection | null> {
-  return (await inspectSharedRuntime(dataDir, fetchImpl))?.connection ?? null
+  return (await inspectSharedRuntime(dataDir, fetchImpl, scope))?.connection ?? null
 }
 
 /**
@@ -162,9 +189,12 @@ export async function resolveSharedRuntime(
  */
 export async function inspectSharedRuntime(
   dataDir: string,
-  fetchImpl: typeof fetch = fetch
+  fetchImpl: typeof fetch = fetch,
+  scope: SharedRuntimeScope = {}
 ): Promise<SharedRuntimeInspection | null> {
-  const discovery = await readRuntimeDiscovery(dataDir).catch(() => null)
+  const flavor = scope.runtimeFlavor ?? 'production'
+  const discoveryDir = runtimeDiscoveryDirectory(dataDir, flavor, scope.controlDir)
+  const discovery = await readRuntimeDiscovery(discoveryDir, flavor).catch(() => null)
   if (!discovery || !safeDiscoveryUrl(discovery) || !processAlive(discovery.pid)) {
     return null
   }
@@ -176,6 +206,9 @@ export async function inspectSharedRuntime(
 
 export async function ensureSharedRuntime(input: {
   dataDir: string
+  runtimeFlavor?: RuntimeFlavor
+  controlDir?: string
+  manager?: ServiceManagerConnection
   expectedBuildId?: string
   env?: Record<string, string | undefined>
   fetch?: typeof fetch
@@ -188,32 +221,44 @@ export async function ensureSharedRuntime(input: {
   }
 }): Promise<SharedRuntimeConnection> {
   const fetchImpl = input.fetch ?? fetch
-  const expectedBuildId = input.expectedBuildId ??
-    await readRuntimeBuildIdForEntry(import.meta.url)
-  const existing = await inspectSharedRuntime(input.dataDir, fetchImpl)
+  const runtimeFlavor = input.runtimeFlavor ?? resolveCliRuntimeFlavor({ env: input.env ?? process.env })
+  const controlDir = input.controlDir ?? defaultKunControlDir()
+  const discoveryDir = runtimeDiscoveryDirectory(input.dataDir, runtimeFlavor, controlDir)
+  const scope = { runtimeFlavor, controlDir }
+  const sourceBuildId = input.expectedBuildId ?? await readRuntimeBuildIdForEntry(import.meta.url)
+  const expectedBuildId = runtimeBuildIdForFlavor(
+    sourceBuildId,
+    runtimeFlavor
+  )
+  const existing = await inspectSharedRuntime(input.dataDir, fetchImpl, scope)
   const reusable = reusableRuntimeConnection(existing, expectedBuildId)
   if (reusable) return reusable
   assertRuntimeCanBeReplaced(existing)
-  return withRuntimeStartLock(input.dataDir, async () => {
-    const elected = await inspectSharedRuntime(input.dataDir, fetchImpl)
+  return withRuntimeStartLock(discoveryDir, async () => {
+    const elected = await inspectSharedRuntime(input.dataDir, fetchImpl, scope)
     const electedReusable = reusableRuntimeConnection(elected, expectedBuildId)
     if (electedReusable) return electedReusable
     assertRuntimeCanBeReplaced(elected)
     if (elected?.connection) {
-      await stopSharedRuntime(input.dataDir, fetchImpl)
+      await stopSharedRuntime(input.dataDir, fetchImpl, scope)
     }
-    const stale = await readRuntimeDiscovery(input.dataDir).catch(() => null)
-    if (stale) await removeRuntimeDiscovery(input.dataDir, stale.instanceId).catch(() => undefined)
+    const stale = await readRuntimeDiscovery(discoveryDir, runtimeFlavor).catch(() => null)
+    if (stale) {
+      await removeRuntimeDiscovery(discoveryDir, stale.instanceId, runtimeFlavor).catch(() => undefined)
+    }
     await prepareFreshSharedRuntimeCapabilities(input.dataDir)
 
     const logsDir = join(input.dataDir, 'logs')
     await mkdir(logsDir, { recursive: true, mode: 0o700 })
-    const logPath = join(logsDir, 'runtime.log')
+    const logPath = join(logsDir, runtimeFlavor === 'development' ? 'runtime.development.log' : 'runtime.log')
     await rotateLog(logPath)
     const logFd = openSync(logPath, 'a', 0o600)
     const runtimeToken = randomBytes(32).toString('base64url')
     const entry = fileURLToPath(new URL('./serve-entry.js', import.meta.url))
-    const command = input.launch?.command ?? process.execPath
+    const packagedRuntimeExecutable = input.launch
+      ? undefined
+      : process.env.KUN_PACKAGED_RUNTIME_EXECUTABLE?.trim()
+    const command = input.launch?.command ?? packagedRuntimeExecutable ?? process.execPath
     const args = input.launch?.args ?? [
       entry,
       'serve',
@@ -227,10 +272,24 @@ export async function ensureSharedRuntime(input: {
       ...(input.launch?.env ?? {}),
       KUN_RUNTIME_TOKEN: runtimeToken,
       KUN_RUNTIME_LAUNCH_MODE: 'shared',
+      KUN_RUNTIME_FLAVOR: runtimeFlavor,
+      KUN_RUNTIME_DISCOVERY_DIR: discoveryDir,
       KUN_RUNTIME_LOG_PATH: logPath,
-      ...(expectedBuildId ? { KUN_RUNTIME_BUILD_ID: expectedBuildId } : {})
+      ...(input.manager
+        ? {
+            KUN_MANAGER_CONTROL_DIR: controlDir,
+            KUN_MANAGER_BASE_URL: input.manager.discovery.baseUrl,
+            KUN_MANAGER_INSTANCE_ID: input.manager.discovery.instanceId,
+            KUN_MANAGER_TOKEN: input.manager.discovery.managerToken,
+            KUN_MANAGER_DATA_DIR: input.manager.discovery.dataDir,
+            KUN_MANAGER_SETTINGS_PATH: input.manager.discovery.settingsPath
+          }
+        : {}),
+      ...(sourceBuildId ? { KUN_RUNTIME_BUILD_ID: sourceBuildId } : {})
     }
-    const runAsNode = input.launch?.runAsNode ?? Boolean(process.versions.electron)
+    const runAsNode = input.launch?.runAsNode ?? Boolean(
+      packagedRuntimeExecutable || process.versions.electron
+    )
     if (runAsNode) env.ELECTRON_RUN_AS_NODE = '1'
     else delete env.ELECTRON_RUN_AS_NODE
     let child
@@ -248,7 +307,7 @@ export async function ensureSharedRuntime(input: {
 
     const deadline = Date.now() + (input.timeoutMs ?? START_TIMEOUT_MS)
     while (Date.now() < deadline) {
-      const connection = await resolveSharedRuntime(input.dataDir, fetchImpl)
+      const connection = await resolveSharedRuntime(input.dataDir, fetchImpl, scope)
       if (connection && runtimeMatchesExpectedBuild(connection, expectedBuildId)) {
         return connection
       }
@@ -256,7 +315,7 @@ export async function ensureSharedRuntime(input: {
       await delay(POLL_MS)
     }
     throw new Error(`Kun shared runtime did not become ready; inspect ${logPath}`)
-  })
+  }, runtimeFlavor)
 }
 
 function reusableRuntimeConnection(
@@ -273,6 +332,15 @@ function reusableRuntimeConnection(
 }
 
 function parseActiveTurnCount(value: string | null): number | undefined {
+  return parseNonnegativeIntegerHeader(value)
+}
+
+function parsePositiveIntegerHeader(value: string | null): number | undefined {
+  const parsed = parseNonnegativeIntegerHeader(value)
+  return parsed !== undefined && parsed > 0 ? parsed : undefined
+}
+
+function parseNonnegativeIntegerHeader(value: string | null): number | undefined {
   if (value === null || !/^\d+$/u.test(value)) return undefined
   const parsed = Number(value)
   return Number.isSafeInteger(parsed) ? parsed : undefined
@@ -356,12 +424,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export async function stopSharedRuntime(
   dataDir: string,
-  fetchImpl: typeof fetch = fetch
+  fetchImpl: typeof fetch = fetch,
+  scope: SharedRuntimeScope = {}
 ): Promise<boolean> {
-  const record = await readRuntimeDiscovery(dataDir).catch(() => null)
+  const runtimeFlavor = scope.runtimeFlavor ?? 'production'
+  const discoveryDir = runtimeDiscoveryDirectory(dataDir, runtimeFlavor, scope.controlDir)
+  const record = await readRuntimeDiscovery(discoveryDir, runtimeFlavor).catch(() => null)
   if (!record) return false
   if (!safeDiscoveryUrl(record) || !processAlive(record.pid)) {
-    await removeRuntimeDiscovery(dataDir, record.instanceId).catch(() => undefined)
+    await removeRuntimeDiscovery(discoveryDir, record.instanceId, runtimeFlavor).catch(() => undefined)
     return false
   }
   const live = await probeRuntimeDiscovery(record, fetchImpl)
@@ -382,11 +453,19 @@ export async function stopSharedRuntime(
   if (!response.ok) throw new Error(`runtime shutdown failed with HTTP ${response.status}`)
   const deadline = Date.now() + STOP_TIMEOUT_MS
   while (Date.now() < deadline) {
-    const current = await readRuntimeDiscovery(dataDir).catch(() => null)
+    const current = await readRuntimeDiscovery(discoveryDir, runtimeFlavor).catch(() => null)
     if (!current || current.instanceId !== record.instanceId) return true
     await delay(POLL_MS)
   }
   throw new Error('timed out waiting for the Kun runtime to stop')
+}
+
+export function runtimeDiscoveryDirectory(
+  dataDir: string,
+  flavor: RuntimeFlavor,
+  controlDir = defaultKunControlDir()
+): string {
+  return flavor === 'production' ? dataDir : controlDir
 }
 
 function safeDiscoveryUrl(record: RuntimeDiscoveryRecord): boolean {

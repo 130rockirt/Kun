@@ -851,7 +851,7 @@ export class ModelStepService {
           turn.workspaceCheckpointRequestId,
           signal
         )
-        const imgDir = '.deepseekgui-images'
+        const imgDir = '.kun/images'
         const stamp = new Date().toISOString().replace(/\D/g, '').slice(0, 14)
         const fileName = `img-${stamp}-${randomBytes(2).toString('hex')}.png`
         const relativePath = `${imgDir}/${fileName}`

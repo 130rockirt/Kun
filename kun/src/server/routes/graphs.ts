@@ -8,6 +8,7 @@ import {
   GraphReviewResultV1Schema,
   GraphRunIdSchema,
   GraphRunStatusSchema,
+  type GraphRunV1,
   GraphSteeringV1Schema
 } from '../../contracts/graph.js'
 import {
@@ -18,7 +19,8 @@ import {
   type FileGraphPlanningDraftStore,
   GraphRunConflictError,
   GraphRunNotFoundError,
-  GraphStoreCorruptionError
+  GraphStoreCorruptionError,
+  type GraphSupervisor
 } from '../../graph/index.js'
 import {
   TurnCapacityError,
@@ -88,6 +90,10 @@ const RecordGraphReviewRequestSchema = GraphCommandContextSchema.extend({
   review: GraphReviewResultV1Schema
 }).strict()
 
+const WakeGraphSupervisionRequestSchema = GraphCommandContextSchema.extend({
+  obligationId: PortableId.optional()
+}).strict()
+
 const GraphDraftCommandSchema = z.object({
   expectedRevision: z.number().int().positive()
 }).strict()
@@ -140,7 +146,10 @@ export async function createGraphRun(
       ...parsed.data,
       runId: parsed.data.runId ?? graphs.allocateId('graph_run')
     })
-    return jsonResponse(result, 202)
+    return jsonResponse({
+      ...result,
+      run: publicGraphRun(result.run)
+    }, 202)
   } catch (error) {
     return graphErrorResponse(error)
   }
@@ -218,11 +227,54 @@ function decodeListCursor(value: string | null): number | null {
 
 export async function getGraphRun(
   graphs: GraphControlService | undefined,
+  supervisor: GraphSupervisor | undefined,
   runId: string
 ): Promise<JsonResponse> {
   if (!graphs) return ERRORS.unavailable('Graph Mode runtime is unavailable')
   try {
-    return jsonResponse(await graphs.get(runId))
+    const run = await graphs.get(runId)
+    const supervision = await supervisor?.projection(runId)
+    const projected = publicGraphRun(run)
+    return jsonResponse(supervision ? { ...projected, supervision } : projected)
+  } catch (error) {
+    return graphErrorResponse(error)
+  }
+}
+
+export async function getGraphSupervision(
+  supervisor: GraphSupervisor | undefined,
+  runId: string
+): Promise<JsonResponse> {
+  if (!supervisor) return ERRORS.unavailable('Graph Mode runtime is unavailable')
+  try {
+    const projection = await supervisor.projection(runId)
+    return projection
+      ? jsonResponse(projection)
+      : ERRORS.notFound(`GraphRun not found: ${runId}`)
+  } catch (error) {
+    return graphErrorResponse(error)
+  }
+}
+
+export async function wakeGraphSupervision(
+  supervisor: GraphSupervisor | undefined,
+  runId: string,
+  request: Request
+): Promise<JsonResponse | Response> {
+  if (!supervisor) return ERRORS.unavailable('Graph Mode runtime is unavailable')
+  const parsed = await parseBody(request, WakeGraphSupervisionRequestSchema)
+  if (!parsed.ok) return parsed.response
+  try {
+    const run = await supervisor.wake(
+      runId,
+      parsed.data.obligationId,
+      parsed.data.idempotencyKey
+    )
+    if (!run) return ERRORS.notFound(`GraphRun not found: ${runId}`)
+    const projection = await supervisor.projection(runId)
+    return projection
+      ? jsonResponse(projection)
+      : ERRORS.notFound(`GraphRun not found: ${runId}`)
   } catch (error) {
     return graphErrorResponse(error)
   }
@@ -469,7 +521,7 @@ export async function graphRunCommand(
   if (!parsed.ok) return parsed.response
   try {
     const run = await graphs[action](runId, parsed.data)
-    return jsonResponse(run)
+    return jsonResponse(publicGraphRun(run))
   } catch (error) {
     return graphErrorResponse(error)
   }
@@ -484,7 +536,7 @@ export async function cancelGraphRun(
   const parsed = await parseBody(request, CancelGraphRunRequestSchema)
   if (!parsed.ok) return parsed.response
   try {
-    return jsonResponse(await graphs.cancel(runId, parsed.data))
+    return jsonResponse(publicGraphRun(await graphs.cancel(runId, parsed.data)))
   } catch (error) {
     return graphErrorResponse(error)
   }
@@ -499,7 +551,9 @@ export async function retryGraphNode(
   const parsed = await parseBody(request, RetryGraphNodeRequestSchema)
   if (!parsed.ok) return parsed.response
   try {
-    return jsonResponse(await graphs.retryNode(runId, parsed.data.nodeId, parsed.data))
+    return jsonResponse(publicGraphRun(
+      await graphs.retryNode(runId, parsed.data.nodeId, parsed.data)
+    ))
   } catch (error) {
     return graphErrorResponse(error)
   }
@@ -514,7 +568,7 @@ export async function steerGraphRun(
   const parsed = await parseBody(request, SteerGraphRunRequestSchema)
   if (!parsed.ok) return parsed.response
   try {
-    return jsonResponse(await graphs.steer(
+    return jsonResponse(publicGraphRun(await graphs.steer(
       runId,
       {
         version: GRAPH_CONTRACT_VERSION,
@@ -526,7 +580,7 @@ export async function steerGraphRun(
         createdAt: new Date().toISOString()
       },
       parsed.data
-    ))
+    )))
   } catch (error) {
     return graphErrorResponse(error)
   }
@@ -541,7 +595,9 @@ export async function patchGraphRun(
   const parsed = await parseBody(request, ApplyGraphPatchRequestSchema)
   if (!parsed.ok) return parsed.response
   try {
-    return jsonResponse(await graphs.applyPatch(runId, parsed.data.patch, parsed.data))
+    return jsonResponse(publicGraphRun(
+      await graphs.applyPatch(runId, parsed.data.patch, parsed.data)
+    ))
   } catch (error) {
     return graphErrorResponse(error)
   }
@@ -556,10 +612,17 @@ export async function reviewGraphNode(
   const parsed = await parseBody(request, RecordGraphReviewRequestSchema)
   if (!parsed.ok) return parsed.response
   try {
-    return jsonResponse(await graphs.recordReview(runId, parsed.data.review, parsed.data))
+    return jsonResponse(publicGraphRun(
+      await graphs.recordReview(runId, parsed.data.review, parsed.data)
+    ))
   } catch (error) {
     return graphErrorResponse(error)
   }
+}
+
+function publicGraphRun(run: GraphRunV1): Omit<GraphRunV1, 'supervisionObligations'> {
+  const { supervisionObligations: _internalSupervision, ...projection } = run
+  return projection
 }
 
 async function parseBody<T extends z.ZodType>(

@@ -310,6 +310,8 @@ describe('app-ipc-schemas', () => {
         body: '{"expectedRevision":2}'
       },
       { path: '/v1/graphs/run%201', method: 'GET' },
+      { path: '/v1/graphs/run_1/supervision', method: 'GET' },
+      { path: '/v1/graphs/run_1/supervision/wake', method: 'POST', body: '{}' },
       { path: '/v1/graphs/run_1/events?since_seq=3', method: 'GET' },
       { path: '/v1/graphs/run_1/artifacts/artifact%201?offset=0', method: 'GET' },
       { path: '/v1/graphs/run_1/start', method: 'POST', body: '{}' },
@@ -374,6 +376,8 @@ describe('app-ipc-schemas', () => {
       { path: '/v1/graph-drafts/draft_1/resume', method: 'GET' },
       { path: '/v1/graph-drafts/draft_1/cancel', method: 'DELETE' },
       { path: '/v1/graphs/run_1/start', method: 'DELETE' },
+      { path: '/v1/graphs/run_1/supervision', method: 'POST' },
+      { path: '/v1/graphs/run_1/supervision/wake', method: 'GET' },
       { path: '/v1/graph-projects/identity', method: 'POST' },
       {
         path: '/v1/graph-projects/project_1/agents/profile_1/lifecycle',

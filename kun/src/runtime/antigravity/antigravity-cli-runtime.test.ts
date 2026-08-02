@@ -114,7 +114,7 @@ describe('AntigravityCliRuntime', () => {
     }))
   })
 
-  it('refuses Graph mode explicitly without launching the unsupported CLI', async () => {
+  it('preserves pending Graph supervision without launching the unsupported CLI', async () => {
     const threadStore = new InMemoryThreadStore()
     const sessionStore = new InMemorySessionStore()
     const turn = TurnSchema.parse({
@@ -154,7 +154,9 @@ describe('AntigravityCliRuntime', () => {
       })
     )
     const applyItem = vi.fn(async () => undefined)
-    const suspendGraphLeadTurn = vi.fn(async () => 'suspended' as const)
+    const suspendGraphLeadTurn = vi.fn()
+      .mockResolvedValueOnce('supervision_pending')
+      .mockResolvedValueOnce('suspended_pending_supervision')
     const finishTurn = vi.fn(async () => undefined)
     const spawnFn = vi.fn()
     const runtime = new AntigravityCliRuntime({
@@ -179,13 +181,20 @@ describe('AntigravityCliRuntime', () => {
       turn.id,
       new AbortController().signal,
       'gemini-subscription'
-    )).resolves.toBe('suspended')
+    )).resolves.toBe('suspended_pending_supervision')
 
     expect(spawnFn).not.toHaveBeenCalled()
     expect(finishTurn).not.toHaveBeenCalled()
     expect(suspendGraphLeadTurn).toHaveBeenCalledWith({
       threadId: turn.threadId,
       turnId: turn.id
+    })
+    expect(suspendGraphLeadTurn).toHaveBeenLastCalledWith({
+      threadId: turn.threadId,
+      turnId: turn.id,
+      force: true,
+      preserveDeliveryCursor: true,
+      allowPendingSupervision: true
     })
     expect(applyItem).toHaveBeenCalledWith(
       turn.threadId,

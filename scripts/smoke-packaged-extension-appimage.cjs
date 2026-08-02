@@ -86,6 +86,8 @@ function createAppImageExtractionInvocation({
 
 function createAppImageSmokeInvocation({
   appImage,
+  appRoot,
+  appRun,
   resourcesDir,
   desktopSmokePath = join(__dirname, 'smoke-packaged-extension-desktop.cjs'),
   environment = process.env
@@ -95,7 +97,8 @@ function createAppImageSmokeInvocation({
   delete env.APPDIR
   delete env.APPIMAGE
   delete env.OWD
-  env.APPIMAGE_EXTRACT_AND_RUN = '1'
+  env.APPDIR = resolve(appRoot)
+  env.APPIMAGE = resolve(appImage)
 
   return {
     command: process.execPath,
@@ -104,7 +107,7 @@ function createAppImageSmokeInvocation({
       '--resources',
       resolve(resourcesDir),
       '--desktop-executable',
-      resolve(appImage)
+      resolve(appRun)
     ],
     options: {
       env,
@@ -148,6 +151,8 @@ function runAppImageSmoke(options = {}) {
 
     const smoke = createAppImageSmokeInvocation({
       appImage,
+      appRoot: layout.appRoot,
+      appRun: layout.appRun,
       resourcesDir: layout.resourcesDir,
       desktopSmokePath: options.desktopSmokePath,
       environment: options.environment

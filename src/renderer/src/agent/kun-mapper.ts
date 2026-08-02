@@ -69,6 +69,7 @@ export function threadFromCore(thread: CoreThreadSummaryJson): NormalizedThread 
   return {
     id: thread.id,
     title: thread.title?.trim() || thread.id.slice(0, 8),
+    ...(thread.agentSurface ? { agentSurface: thread.agentSurface } : {}),
     ...(thread.titleAuto !== undefined ? { titleAuto: thread.titleAuto } : {}),
     ...(thread.summary?.trim() ? { summary: thread.summary.trim() } : {}),
     updatedAt: thread.updatedAt,

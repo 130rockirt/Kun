@@ -8,6 +8,12 @@ import { useWriteWorkspaceStore } from '../../write/write-workspace-store'
 import type { SddDraft } from '../../sdd/sdd-draft-store'
 import { useSddDraftStore } from '../../sdd/sdd-draft-store'
 import { markSddAssistantThread } from '../../sdd/sdd-thread-registry'
+import {
+  designDocRefForThreadId,
+  isDesignThreadId,
+  readDesignThreadRegistry,
+  type DesignThreadRegistry
+} from '../../design/design-thread-registry'
 import { formatWorkspacePickerError } from '../../lib/format-workspace-picker-error'
 import type { RightPanelMode } from '../chat/WorkbenchTopBar'
 import { BUILTIN_RIGHT_PANEL_IDS } from '../../extensions/contribution-ids'
@@ -78,6 +84,14 @@ export type WorkbenchNavigationController = {
   toggleConnectPhone: () => void
 }
 
+export function isWorkbenchDesignThread(
+  threadId: string,
+  thread: NormalizedThread | null,
+  registry: DesignThreadRegistry = readDesignThreadRegistry()
+): boolean {
+  return thread?.agentSurface === 'design' || isDesignThreadId(threadId, registry)
+}
+
 export function useWorkbenchNavigationController({
   activeSddDraft,
   activeThreadId,
@@ -133,6 +147,28 @@ export function useWorkbenchNavigationController({
     setConnectPhoneSidebarOpen(false)
     void (async () => {
       const thread = threads.find((item) => item.id === id) ?? null
+      const designRegistry = readDesignThreadRegistry()
+      if (isWorkbenchDesignThread(id, thread, designRegistry)) {
+        const designRef = designDocRefForThreadId(id, designRegistry)
+        openDesign()
+        // A durable Design thread can outlive a renderer-local registry. In that
+        // orphan case we still route to Design, but do not attach it to an
+        // unrelated drawing. Registered threads can safely restore their owner.
+        if (!designRef) return
+
+        const designStore = useDesignWorkspaceStore.getState()
+        designStore.setWorkspaceRoot(designRef.workspaceRoot)
+        if (!useDesignWorkspaceStore.getState().documents.some(
+          (document) => document.id === designRef.docId
+        )) {
+          await useDesignWorkspaceStore.getState().rehydrateArtifacts().catch(() => undefined)
+        }
+        const restoredDesignStore = useDesignWorkspaceStore.getState()
+        if (!restoredDesignStore.documents.some((document) => document.id === designRef.docId)) return
+        restoredDesignStore.switchActiveDocument(designRef.docId)
+        await selectThread(id)
+        return
+      }
       const sddDraft = await findSddDraftForSidebarThread(id, thread)
       if (sddDraft) {
         markSddAssistantThread(sddDraft, id)
@@ -147,6 +183,7 @@ export function useWorkbenchNavigationController({
   }, [
     dismissActiveSddDraft,
     findSddDraftForSidebarThread,
+    openDesign,
     openSddRequirementDraftFromHistory,
     selectThread,
     setConnectPhoneSidebarOpen,

@@ -27,7 +27,12 @@ import type {
 } from '../contracts/policy.js'
 import type { Turn } from '../contracts/turns.js'
 import type { TurnItem } from '../contracts/items.js'
-import { createThreadRecord, toThreadSummary, touchThread } from '../domain/thread.js'
+import {
+  createThreadRecord,
+  resolveThreadAgentSurface,
+  toThreadSummary,
+  touchThread
+} from '../domain/thread.js'
 import type { AgentSession } from '../domain/session.js'
 import { repairModelHistoryItems } from '../domain/model-history-repair.js'
 import type { RuntimeEventRecorder } from './runtime-event-recorder.js'
@@ -194,6 +199,7 @@ export class ThreadService {
       workspace: request.workspace,
       additionalWorkspaces: request.additionalWorkspaces,
       model: request.model,
+      ...(request.agentSurface ? { agentSurface: request.agentSurface } : {}),
       ...(request.providerId?.trim() ? { providerId: request.providerId.trim() } : {}),
       ...(request.accountId?.trim() ? { accountId: request.accountId.trim() } : {}),
       ...(options.extensionMetadata ?? {}),
@@ -623,6 +629,7 @@ export class ThreadService {
       workspace: current.workspace,
       additionalWorkspaces: current.additionalWorkspaces,
       model: current.model,
+      agentSurface: resolveThreadAgentSurface(current),
       ...(current.providerId ? { providerId: current.providerId } : {}),
       ...(current.accountId ? { accountId: current.accountId } : {}),
       ...(current.agentId ? { agentId: current.agentId } : {}),
@@ -712,6 +719,9 @@ export class ThreadService {
       title: `${sourceTitle} resumed`,
       workspace: options.workspace ?? sourceThread?.workspace ?? '~',
       model: options.model ?? sourceThread?.model ?? DEFAULT_KUN_MODEL,
+      agentSurface: sourceThread
+        ? resolveThreadAgentSurface(sourceThread)
+        : resolveThreadAgentSurface({ turns: sourceTurns }),
       mode: options.mode ?? sourceThread?.mode ?? 'agent',
       status: 'idle',
       approvalPolicy: sourceThread?.approvalPolicy,

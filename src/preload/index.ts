@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webFrame, webUtils } from 'electron'
 import type { KunGuiApi } from '../shared/kun-gui-api'
+import type { AppEnvironmentInfo } from '../shared/app-environment'
 import { registerExtensionContentScriptPreload } from './extension-content-script'
 
 registerExtensionContentScriptPreload({ contextBridge, ipcRenderer, webFrame })
@@ -11,9 +12,70 @@ const HOME_DIR_ARG = '--kun-home-dir='
 const homeDirFromArgs =
   process.argv.find((arg) => arg.startsWith(HOME_DIR_ARG))?.slice(HOME_DIR_ARG.length) ?? ''
 
+const APP_ENVIRONMENT_ARG = '--kun-app-environment='
+const appEnvironment = parseAppEnvironment(
+  process.argv.find((arg) => arg.startsWith(APP_ENVIRONMENT_ARG))?.slice(APP_ENVIRONMENT_ARG.length)
+)
+
+function parseAppEnvironment(encoded: string | undefined): AppEnvironmentInfo {
+  if (encoded) {
+    try {
+      const parsed = JSON.parse(decodeURIComponent(encoded)) as Partial<AppEnvironmentInfo>
+      if (
+        (parsed.flavor === 'production' || parsed.flavor === 'development') &&
+        parsed.runtimeFlavor === parsed.flavor &&
+        typeof parsed.appName === 'string' &&
+        typeof parsed.appId === 'string' &&
+        typeof parsed.profilePath === 'string' &&
+        typeof parsed.isPackaged === 'boolean'
+      ) {
+        return Object.freeze(parsed as AppEnvironmentInfo)
+      }
+    } catch {
+      // Fall through to a safe production-shaped snapshot. Main always sends
+      // the argument; the fallback keeps isolated renderer tests compatible.
+    }
+  }
+  return Object.freeze({
+    flavor: 'production',
+    appName: 'Kun',
+    appId: 'com.xingyuzhong.deepseekgui',
+    runtimeFlavor: 'production',
+    profilePath: '',
+    isPackaged: false
+  })
+}
+
 const api = {
   platform: process.platform,
   homeDir: homeDirFromArgs,
+  appEnvironment,
+  sharedClientState: {
+    read: () => ipcRenderer.invoke('shared-client-state:get'),
+    write: (expectedRevision, entries) =>
+      ipcRenderer.invoke('shared-client-state:put', { expectedRevision, entries })
+  },
+  storageRelocation: {
+    getStatus: () => ipcRenderer.invoke('storage-relocation:status'),
+    pickDestination: (defaultPath) =>
+      ipcRenderer.invoke('storage-relocation:pick-destination', { defaultPath }),
+    preflight: (destinationRoot) =>
+      ipcRenderer.invoke('storage-relocation:preflight', { destinationRoot }),
+    schedule: (input) => ipcRenderer.invoke('storage-relocation:schedule', input),
+    restoreDefault: (interruptActiveWork) =>
+      ipcRenderer.invoke('storage-relocation:restore-default', { interruptActiveWork }),
+    cancel: (operationId) => ipcRenderer.invoke('storage-relocation:cancel', { operationId }),
+    retry: (operationId) => ipcRenderer.invoke('storage-relocation:retry', { operationId }),
+    rollback: (operationId) => ipcRenderer.invoke('storage-relocation:rollback', { operationId }),
+    onProgress: (handler) => {
+      const wrapped = (
+        _: Electron.IpcRendererEvent,
+        payload: Parameters<typeof handler>[0]
+      ) => handler(payload)
+      ipcRenderer.on('storage-relocation:progress', wrapped)
+      return () => ipcRenderer.removeListener('storage-relocation:progress', wrapped)
+    }
+  },
   dataMigration: {
     pickExportPackage: (defaultPath) => ipcRenderer.invoke('data-migration:pick-export', { defaultPath }),
     pickImportPackage: (defaultPath) => ipcRenderer.invoke('data-migration:pick-import', { defaultPath }),

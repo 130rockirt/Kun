@@ -249,11 +249,20 @@ export type ServerRuntime = {
   }): Promise<'completed' | 'failed' | 'aborted'> | void
   runtimeToken: string
   insecure: boolean
-  allocateSeq: (threadId: string) => number
+  allocateSeq: (threadId: string) => number | Promise<number>
   nowIso: () => string
   info(): RuntimeInfoResponse
+  /** Present only when all canonical persistence is fenced by the manager. */
+  managerProtocolVersion?: number
   activeTurnCount?(): number
   requestShutdown?(instanceId: string): Promise<boolean>
+  /** Forward active-turn controls to the flavor that currently owns the lease. */
+  forwardThreadControl?(request: Request, threadId: string): Promise<Response | null>
+  forwardControlById?(
+    request: Request,
+    kind: 'approval' | 'user-input',
+    id: string
+  ): Promise<Response | null>
   applyConfig(request: RuntimeConfigApplyRequest): Promise<RuntimeConfigApplyResponse>
   toolDiagnostics?(): RuntimeToolDiagnostics | Promise<RuntimeToolDiagnostics>
   mcpOAuth?(): McpOAuthDiagnostic[] | Promise<McpOAuthDiagnostic[]>

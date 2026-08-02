@@ -2,7 +2,7 @@ import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from 'node:
 import { chmod, mkdir, open, readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { ExtensionCredentialProtection } from '../contracts/extension-providers.js'
-import { atomicWriteFile } from '../adapters/file/atomic-write.js'
+import { AtomicJsonFile } from '../extensions/atomic-json.js'
 import type { KeyProviderResult } from '../security/secret-store.js'
 
 export type ExtensionCredentialPayload = {
@@ -58,6 +58,7 @@ export class ExtensionCredentialStore {
   private readonly nowIso: () => string
   private readonly keyPath: string
   private readonly encryptedPath: string
+  private readonly encryptedFile: AtomicJsonFile<EncryptedCredentialDocument>
   private initialized?: Promise<void>
   private primaryActive = false
   private keyProviderActive = false
@@ -69,6 +70,10 @@ export class ExtensionCredentialStore {
     this.nowIso = options.nowIso ?? (() => new Date().toISOString())
     this.keyPath = join(options.dataDir, 'credentials', 'master.key')
     this.encryptedPath = join(options.dataDir, 'credentials', 'credentials.enc.json')
+    this.encryptedFile = new AtomicJsonFile(
+      this.encryptedPath,
+      (value) => validateEncryptedDocument(value, options.profileId)
+    )
   }
 
   async protection(): Promise<ExtensionCredentialProtection & { backend?: string; reason?: string }> {
@@ -114,9 +119,16 @@ export class ExtensionCredentialStore {
       throw new Error('protected credential storage is unavailable')
     }
     await this.serialize(async () => {
-      const document = await this.readEncryptedDocument()
-      document.credentials[reference] = this.encryptFallback(reference, value)
-      await this.writeEncryptedDocument(document)
+      await this.encryptedFile.update(
+        () => this.emptyEncryptedDocument(),
+        (document) => ({
+          ...document,
+          credentials: {
+            ...document.credentials,
+            [reference]: this.encryptFallback(reference, value)
+          }
+        })
+      )
     })
   }
 
@@ -149,10 +161,15 @@ export class ExtensionCredentialStore {
       throw new Error('protected credential storage is unavailable')
     }
     await this.serialize(async () => {
-      const document = await this.readEncryptedDocument()
-      if (!(reference in document.credentials)) return
-      delete document.credentials[reference]
-      await this.writeEncryptedDocument(document)
+      await this.encryptedFile.update(
+        () => this.emptyEncryptedDocument(),
+        (document) => {
+          if (!(reference in document.credentials)) return document
+          const credentials = { ...document.credentials }
+          delete credentials[reference]
+          return { ...document, credentials }
+        }
+      )
     })
   }
 
@@ -185,20 +202,11 @@ export class ExtensionCredentialStore {
   }
 
   private async readEncryptedDocument(): Promise<EncryptedCredentialDocument> {
-    try {
-      const value = JSON.parse(await readFile(this.encryptedPath, 'utf8')) as unknown
-      return validateEncryptedDocument(value, this.options.profileId)
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
-        return { schemaVersion: 1, profileId: this.options.profileId, credentials: {} }
-      }
-      throw error
-    }
+    return this.encryptedFile.read(() => this.emptyEncryptedDocument())
   }
 
-  private async writeEncryptedDocument(document: EncryptedCredentialDocument): Promise<void> {
-    await atomicWriteFile(this.encryptedPath, `${JSON.stringify(document, null, 2)}\n`)
-    await chmod(this.encryptedPath, 0o600).catch(() => undefined)
+  private emptyEncryptedDocument(): EncryptedCredentialDocument {
+    return { schemaVersion: 1, profileId: this.options.profileId, credentials: {} }
   }
 
   private serialize<T>(action: () => Promise<T>): Promise<T> {

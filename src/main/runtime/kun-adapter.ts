@@ -25,6 +25,7 @@ import {
   runtimeMatchesExpectedBuild,
   stopSharedRuntime
 } from '../../../kun/src/cli/shared-runtime.js'
+import { resolveCliRuntimeFlavor } from '../../../kun/src/cli/runtime-flavor.js'
 
 const KUN_RUNTIME_ID = 'kun' as const
 let resolvedConnection: RuntimeDiscoveryRecord | null = null
@@ -80,7 +81,9 @@ export const kunRuntimeAdapter = {
 
   async stopSharedAndWait(settings: AppSettingsV1): Promise<void> {
     const dataDir = expandDataDir(getKunRuntimeSettings(settings).dataDir)
-    await stopSharedRuntime(dataDir)
+    await stopSharedRuntime(dataDir, fetch, {
+      runtimeFlavor: resolveCliRuntimeFlavor({ env: process.env })
+    })
     resolvedConnection = null
     await stopKunChildAndWait()
   },
@@ -98,11 +101,16 @@ export function getRuntimeBaseUrlForSettings(settings: AppSettingsV1): string {
   return kunRuntimeAdapter.getBaseUrl(settings)
 }
 
+/** Resolve the bearer token for the active Kun connection. */
+export function getRuntimeAuthToken(settings: AppSettingsV1): string {
+  const runtime = getKunRuntimeSettings(settings)
+  return resolvedConnection?.runtimeToken ?? runtime.runtimeToken.trim()
+}
+
 /** Build the bearer-token authorization header for Kun requests. */
 export function runtimeAuthHeaders(settings: AppSettingsV1): Headers {
-  const runtime = getKunRuntimeSettings(settings)
   const headers = new Headers()
-  const token = resolvedConnection?.runtimeToken ?? runtime.runtimeToken.trim()
+  const token = getRuntimeAuthToken(settings)
   if (token) {
     headers.set('Authorization', `Bearer ${token}`)
   }
@@ -121,7 +129,9 @@ async function refreshResolvedKunRuntime(settings: AppSettingsV1): Promise<boole
   const expectedBuildId = await resolveKunRuntimeBuildId(
     resolveKunExecutable(runtime.binaryPath.trim() ? '' : appRoot(), runtime.binaryPath)
   )
-  const inspected = await inspectSharedRuntime(dataDir).catch(() => null)
+  const inspected = await inspectSharedRuntime(dataDir, fetch, {
+    runtimeFlavor: resolveCliRuntimeFlavor({ env: process.env })
+  }).catch(() => null)
   if (!inspected) {
     resolvedConnection = null
     return false

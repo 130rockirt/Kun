@@ -79,11 +79,23 @@ const semverVersionPattern = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)
 const artifactVersionPattern = /^[0-9A-Za-z][0-9A-Za-z._-]*$/
 const chromiumPakLanguages = ['en-US', 'en-GB', 'zh-CN', 'zh-TW', 'ru', 'hi', 'th', 'ja', 'ko']
 const chromiumMacLanguages = ['en', 'en_GB', 'zh_CN', 'zh_TW', 'ru', 'hi', 'th', 'ja', 'ko']
+const appFlavor = normalizeAppFlavor(process.env.KUN_APP_FLAVOR || 'production')
+const developmentFlavor = appFlavor === 'development'
+const appId = developmentFlavor
+  ? 'com.xingyuzhong.deepseekgui.dv'
+  : 'com.xingyuzhong.deepseekgui'
+const productName = developmentFlavor ? 'kun-dv' : 'Kun'
 
 function normalizeUpdateChannel(raw) {
   const value = String(raw || '').trim()
   if (value === 'stable' || value === 'frontier') return value
   throw new Error(`KUN_UPDATE_CHANNEL (or legacy DEEPSEEK_GUI_UPDATE_CHANNEL) must be "stable" or "frontier", got: ${raw}`)
+}
+
+function normalizeAppFlavor(raw) {
+  const value = String(raw || '').trim()
+  if (value === 'production' || value === 'development') return value
+  throw new Error(`KUN_APP_FLAVOR must be "production" or "development", got: ${raw}`)
 }
 
 if (releaseAppVersion && !semverVersionPattern.test(releaseAppVersion)) {
@@ -99,14 +111,14 @@ if (releaseArtifactVersion && !artifactVersionPattern.test(releaseArtifactVersio
 }
 
 module.exports = {
-  // appId 永远保持旧值,即使品牌已改名 Kun:
+  // 正式版 appId 永远保持旧值；DV 使用独立 appId，绝不进入正式更新链路：
   //  - macOS 端 Squirrel.Mac 校验更新包签名时锚定 bundle identifier,
   //    换了 id 老版本会拒绝安装新版本;
   //  - Windows 端 NSIS 以 appId 派生卸载 GUID,换了 id 升级安装不会
   //    卸载旧版本,用户会装出两份应用;
   //  - macOS TCC 权限、通知授权也都挂在这个 id 上。
-  appId: 'com.xingyuzhong.deepseekgui',
-  productName: 'Kun',
+  appId,
+  productName,
   asar: true,
   asarUnpack: [
     '**/kun/dist/**/*',
@@ -208,15 +220,19 @@ module.exports = {
       from: 'resources/officecli/legal',
       to: 'officecli/legal',
       filter: ['LICENSE', 'NOTICE', 'THIRD-PARTY-NOTICES.txt']
-    }
+    },
   ],
-  artifactName: `Kun-${artifactVersion}-\${os}-\${arch}.\${ext}`,
-  publish: [
-    {
-      provider: 'generic',
-      url: genericUpdateUrl
-    }
-  ],
+  artifactName: `${productName}-${artifactVersion}-\${os}-\${arch}.\${ext}`,
+  ...(developmentFlavor
+    ? { publish: [] }
+    : {
+        publish: [
+          {
+            provider: 'generic',
+            url: genericUpdateUrl
+          }
+        ]
+      }),
   beforePack: './scripts/before-pack.cjs',
   afterPack: './scripts/after-pack.cjs',
   afterSign: './scripts/mac-notarize.cjs',
@@ -261,7 +277,10 @@ module.exports = {
   },
   nsis: {
     oneClick: false,
-    allowToChangeInstallationDirectory: true,
+    // The stock assisted directory page appends APP_FILENAME by substring and
+    // turns a registered `DeepSeek GUI` location into `DeepSeek GUI\Kun`.
+    // installer.nsh adds one MUI directory page with component-aware migration.
+    allowToChangeInstallationDirectory: false,
     perMachine: false,
     allowElevation: true,
     selectPerMachineByDefault: false,
@@ -269,8 +288,8 @@ module.exports = {
     // 明确创建快捷方式；always 在覆盖安装时也会重建（即使用户曾删掉桌面图标）
     createDesktopShortcut: 'always',
     createStartMenuShortcut: true,
-    shortcutName: 'Kun',
-    uninstallDisplayName: 'Kun',
+    shortcutName: productName,
+    uninstallDisplayName: productName,
     deleteAppDataOnUninstall: false
   },
   linux: {
@@ -294,6 +313,7 @@ module.exports = {
   },
   extraMetadata: {
     ...(releaseAppVersion ? { version: releaseAppVersion } : {}),
+    kunAppFlavor: appFlavor,
     updateChannel,
     buildHints: {
       macSigningEnabled: hasExplicitMacSigningIdentity,

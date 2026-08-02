@@ -32,6 +32,21 @@ function makeSink(): ThreadEventSink {
 }
 
 describe('runtime projection action normalization', () => {
+  it('preserves the durable product surface from thread summaries', () => {
+    const thread = threadFromCore({
+      id: 'thread_design',
+      title: 'Landing page',
+      agentSurface: 'design',
+      model: 'model_1',
+      mode: 'agent',
+      status: 'idle',
+      createdAt: '2026-07-29T00:00:00.000Z',
+      updatedAt: '2026-07-29T00:00:00.000Z'
+    })
+
+    expect(thread.agentSurface).toBe('design')
+  })
+
   it('defaults a legacy thread without reviewer metadata to manual user review', () => {
     const thread = threadFromCore({
       id: 'thread_1',

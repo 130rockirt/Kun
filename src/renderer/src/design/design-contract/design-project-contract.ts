@@ -222,9 +222,9 @@ function buildDesignDocumentSection(options: BuildDesignProjectContractMarkdownO
   const document = options.document
   const artifacts = options.artifacts ?? document?.artifacts ?? []
   return [
-    '## Design Document',
+    '## Drawing',
     '',
-    `- Document: ${document ? `${document.title} (${code(document.id)})` : '`TBD`'}`,
+    `- Drawing: ${document?.title.trim() || '`TBD`'}`,
     `- Artifacts: ${artifacts.length}`,
     `- HTML screens: ${artifacts.filter((artifact) => artifact.kind === 'html').length}`,
     `- SVG artifacts: ${artifacts.filter((artifact) => artifact.kind === 'svg').length}`,

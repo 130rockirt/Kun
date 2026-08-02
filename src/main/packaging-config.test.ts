@@ -462,28 +462,127 @@ describe('electron-builder Kun packaging', () => {
     })
   })
 
-  it('uses a process-tree shutdown guard for Windows overwrite installs', () => {
-    const installerScript = readFileSync(join(process.cwd(), 'build/installer.nsh'), 'utf8')
+  it('migrates Windows install roots without changing identity or touching user data', () => {
+    const installerScript = readFileSync(join(process.cwd(), 'build/installer.nsh'), 'utf8').replace(
+      /\r\n/g,
+      '\n'
+    )
+    const migrationScript = readFileSync(
+      join(process.cwd(), 'build/windows-installer-migration.ps1'),
+      'utf8'
+    )
 
+    expect(builderConfig.appId).toBe('com.xingyuzhong.deepseekgui')
+    expect(builderConfig.productName).toBe('Kun')
     expect(builderConfig.nsis.include).toBe('build/installer.nsh')
+    expect(builderConfig.nsis.allowToChangeInstallationDirectory).toBe(false)
+    expect(builderConfig.nsis.deleteAppDataOnUninstall).toBe(false)
     expect(installerScript).toContain('!macro customInit')
     expect(installerScript).toContain('${if} ${isUpdated}')
     expect(installerScript).toContain('SetSilent silent')
+    expect(installerScript).toContain('customPageAfterChangeDir')
+    expect(installerScript).toContain('MUI_PAGE_CUSTOMFUNCTION_PRE KunInstallDirectoryPagePre')
+    expect(installerScript).toContain('MUI_PAGE_CUSTOMFUNCTION_LEAVE KunInstallDirectoryPageLeave')
+    expect(installerScript).toContain('MUI_PAGE_CUSTOMFUNCTION_PRE KunInstallFilesPagePre')
+    expect(installerScript).toContain('Var /GLOBAL KunInstallerSourceDir')
+    expect(installerScript).toContain('Var /GLOBAL KunInstallerPrimarySourceDir')
+    expect(installerScript).toContain('Var /GLOBAL KunInstallerSecondarySourceDir')
+    expect(installerScript).toContain('Var /GLOBAL KunInstallerTargetDir')
+    expect(installerScript).toContain('Var /GLOBAL KunInstallerSnapshotMode')
+    expect(installerScript).toContain('Call KunRefreshInstallPaths')
+    expect(installerScript).toContain(
+      'ReadRegStr $R9 HKEY_CURRENT_USER "${UNINSTALL_REGISTRY_KEY}" UninstallString'
+    )
+    expect(installerScript).toContain('Function KunReadMigrationResult')
+    expect(installerScript).toContain('IfErrors KunMigrationResultMissing')
+    expect(installerScript).toContain('Function KunGetInQuotes')
+    expect(installerScript).toContain('Function KunGetFileParent')
+    expect(installerScript).toContain('Function KunRecoverSourceFromUninstallString')
+    expect(installerScript).toContain('Call KunGetInQuotes')
+    expect(installerScript).toContain('Call KunGetFileParent')
+    expect(installerScript).not.toContain('!insertmacro GetInQuotes')
+    expect(installerScript).not.toContain('Call GetFileParent')
+    expect(installerScript).not.toContain('!insertmacro kunRunMigrationHelper ResolveSource')
+    expect(installerScript).toContain('${if} $KunInstallerSnapshotMode != $installMode')
+    expect(installerScript).toContain('${andIf} $installMode != "all"')
+    expect(installerScript).not.toContain('KUN_INSTALLER_RESULT')
+    expect(installerScript).not.toContain('!insertmacro kunRunMigrationHelper Recover')
+    expect(installerScript).toContain('Function KunInstallDirectoryPagePre')
+    expect(installerScript).toContain('Function KunInstallDirectoryPageLeave')
+    expect(installerScript).toContain('Function KunInstallFilesPagePre')
+    expect(installerScript).toContain('FileReadUTF16LE $KunInstallerResultHandle')
+    expect(installerScript).toContain('${andIf} ${Silent}\n    Call KunPrepareInstallMigration')
+    expect(installerScript).toContain('StrCpy $appExe "$INSTDIR\\${APP_EXECUTABLE_FILENAME}"')
     expect(installerScript).toContain('customCheckAppRunning')
     expect(installerScript).toContain('customUnInstallCheck')
     expect(installerScript).toContain('customUnInstallCheckCurrentUser')
-    expect(installerScript).toContain('kunContinueAfterOldUninstallerFailure')
-    expect(installerScript).toContain('KUN_INSTALLER_UNINSTALL_EXE')
-    expect(installerScript).toContain('${UNINSTALL_FILENAME}')
-    expect(installerScript).toContain('old-uninstaller.exe')
-    expect(installerScript).toContain('$$_.ExecutablePath')
-    expect(installerScript).toContain("$$r=[IO.Path]::GetFullPath")
-    expect(installerScript).toContain('taskkill.exe /PID $$_.ProcessId /T /F')
-    expect(installerScript).toContain('RMDir /r "$INSTDIR"')
+    expect(installerScript).toContain('Function KunRetireCurrentUserShellState')
+    expect(installerScript).toContain(
+      'ReadRegStr $KunInstallerCurrentUserShortcutName HKEY_CURRENT_USER "${INSTALL_REGISTRY_KEY}" ShortcutName'
+    )
+    expect(installerScript).toContain('Delete "$DESKTOP\\${SHORTCUT_NAME}.lnk"')
+    expect(installerScript).toContain('Delete "$SMPROGRAMS\\${SHORTCUT_NAME}.lnk"')
+    expect(installerScript).toContain('SetShellVarContext current')
+    expect(installerScript).toContain('SetShellVarContext all')
+    expect(installerScript).toContain(
+      'DeleteRegKey HKEY_CURRENT_USER "${UNINSTALL_REGISTRY_KEY}"'
+    )
+    expect(installerScript).toContain(
+      'DeleteRegKey HKEY_CURRENT_USER "${INSTALL_REGISTRY_KEY}"'
+    )
+    expect(installerScript).toContain('KunHandleOldUninstallerResult')
+    expect(installerScript).toContain('FallbackCleanup')
+    expect(installerScript).toContain('Restore')
+    expect(installerScript).toContain('UpdatePath')
+    expect(installerScript).toContain('!insertmacro kunRunMigrationHelper StopProcesses')
     expect(installerScript).toContain('!ifdef BUILD_UNINSTALLER')
     expect(installerScript).toContain('${ifNot} ${isUpdated}')
     expect(installerScript).toContain('MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "$(appCannotBeClosed)"')
+    expect(installerScript).not.toContain('RMDir /r "$INSTDIR"')
+    expect(installerScript).not.toContain('DeleteRegKey SHELL_CONTEXT')
     expect(installerScript).not.toContain('Stop-Process -Id')
+
+    expect(migrationScript).toContain("ValidateSet('ResolvePath', 'ResolveSource', 'StopProcesses', 'Recover', 'Prepare'")
+    expect(migrationScript).toContain('old-uninstaller.exe')
+    expect(migrationScript).toContain("Join-Path $PSScriptRoot 'kun-windows-installer-result.txt'")
+    expect(migrationScript).toContain('function Test-AppOwnedProcessPath')
+    expect(migrationScript).toContain('Test-AppOwnedProcessPath $_.ExecutablePath $Roots')
+    expect(migrationScript).toContain('& "$env:SystemRoot\\System32\\taskkill.exe" /PID $process.ProcessId /T /F')
+    expect(migrationScript).toContain('function Stop-InstallRootProcesses')
+    expect(migrationScript).toContain("Assert-SafeInstallRoot $root 'Application root'")
+    expect(migrationScript).toContain('Test-LegacyLeaf')
+    expect(migrationScript).toContain('function Resolve-LegacySourceTarget')
+    expect(migrationScript).toContain('Test-ReparsePoint')
+    expect(migrationScript).toContain('Test-KnownApplicationEntry')
+    expect(migrationScript).toContain('function Assert-NoReparsePathComponents')
+    expect(migrationScript).toContain('function Assert-ApplicationSourceIdentity')
+    expect(migrationScript).toContain('function Assert-FallbackCleanupSource')
+    expect(migrationScript).toContain('The cleanup source does not match the preservation journal')
+    expect(migrationScript).toContain('function Write-InstallerDiagnostic')
+    expect(migrationScript).toContain("Get-EnvironmentValue 'KUN_INSTALLER_DIAGNOSTIC_PATH'")
+    expect(migrationScript).toContain('$preparedSources += @{')
+    expect(migrationScript).toContain('if ($set.Unknown.Count -eq 0)')
+    expect(migrationScript).toContain('function Assert-TrustedSecondarySource')
+    expect(migrationScript).toContain('function Assert-NoReparsePointsInTree')
+    expect(migrationScript).toContain(
+      "Assert-NoReparsePointsInTree $directory 'Recognized application directory'"
+    )
+    expect(migrationScript).toContain('Get-ValidatedJournalRecord')
+    expect(migrationScript).toContain("Get-EnvironmentValue 'KUN_INSTALLER_SECONDARY_SOURCE'")
+    expect(migrationScript).toContain('Invoke-RestoreJournal')
+    expect(migrationScript).toContain("[Environment]::GetEnvironmentVariable('Path', 'User')")
+    expect(migrationScript).not.toMatch(/Remove-Item[^\n]*(?:APPDATA|USERPROFILE|\.kun|\.deepseekgui)/i)
+  })
+
+  it('builds kun-dv with an isolated application identity and no production updater feed', () => {
+    const developmentConfig = loadBuilderConfigWithEnv({ KUN_APP_FLAVOR: 'development' })
+
+    expect(developmentConfig.appId).toBe('com.xingyuzhong.deepseekgui.dv')
+    expect(developmentConfig.productName).toBe('kun-dv')
+    expect(developmentConfig.artifactName).toContain('kun-dv-')
+    expect(developmentConfig.nsis.shortcutName).toBe('kun-dv')
+    expect(developmentConfig.extraMetadata.kunAppFlavor).toBe('development')
+    expect(developmentConfig.publish).toEqual([])
   })
 
   it('keeps sandboxed preload free of Node builtin imports', () => {

@@ -293,6 +293,54 @@ export type GraphMessage = {
   createdAt: string
 }
 
+export type GraphSupervisionLiveness =
+  | 'idle'
+  | 'waiting_for_lead'
+  | 'active_review'
+  | 'retry_scheduled'
+  | 'needs_attention'
+
+export type GraphSupervisionItem = {
+  obligationId: string
+  pendingAction:
+    | 'review_required'
+    | 'repair_required'
+    | 'stall'
+    | 'conflict'
+    | 'budget'
+    | 'help'
+    | 'recovery'
+    | 'completion'
+    | 'user_steering'
+    | 'worker_report'
+    | 'scheduler_error'
+  nodeIds: string[]
+  liveness: Exclude<GraphSupervisionLiveness, 'idle'>
+  retryCount: number
+  noProgressCount: number
+  nextWakeAt?: string
+  lastWakeAt?: string
+  lastError?: string
+  attentionReason?: string
+  canWake: boolean
+}
+
+export type GraphSupervisionProjection = {
+  version: 1
+  runId: string
+  lastEventSeq: number
+  leadActive: boolean
+  liveness: GraphSupervisionLiveness
+  pendingActions: GraphSupervisionItem[]
+  peerReviewLeases?: Array<{
+    nodeId: string
+    attemptId: string
+    leaseUntil: string
+  }>
+  canWake: boolean
+  updatedAt: string
+}
+
 export type GraphRun = {
   version: 1
   id: string
@@ -339,6 +387,7 @@ export type GraphRun = {
     status: string
     createdAt: string
   }>
+  supervision?: GraphSupervisionProjection
   budget: {
     limits: {
       maxWallTimeMs: number

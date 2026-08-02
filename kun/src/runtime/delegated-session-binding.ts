@@ -1,8 +1,10 @@
-import { createHash, randomUUID, scryptSync } from 'node:crypto'
-import { mkdir, readFile, rename, rm, unlink, writeFile } from 'node:fs/promises'
+import { createHash, scryptSync } from 'node:crypto'
+import { mkdir, rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import type { TurnItem } from '../contracts/items.js'
 import { effectiveHistoryAfterLatestCompaction } from '../loop/compaction-history.js'
+import { AtomicJsonFile } from '../extensions/atomic-json.js'
+import { withManagerDataMutex } from '../manager/data-mutex.js'
 
 export type DelegatedProviderKind = 'agent-sdk' | 'cursor-sdk' | 'antigravity-cli'
 export type DelegatedContinuationMode = 'native' | 'portable'
@@ -65,43 +67,28 @@ export class FileDelegatedSessionBindingStore implements DelegatedSessionBinding
   }
 
   async load(threadId: string): Promise<DelegatedSessionBinding | null> {
-    const path = this.bindingPath(threadId)
-    try {
-      const parsed = JSON.parse(await readFile(path, 'utf8')) as unknown
-      const binding = parseBinding(parsed)
-      if (!binding || binding.threadId !== threadId) {
-        await unlink(path).catch(() => undefined)
-        return null
-      }
-      return binding
-    } catch (error) {
-      if (isMissingFile(error)) return null
-      await unlink(path).catch(() => undefined)
+    const file = this.bindingFile(threadId)
+    const binding = await file.read(() => null).catch(async () => {
+      await file.delete().catch(() => undefined)
+      return null
+    })
+    if (!binding || binding.threadId !== threadId) {
+      if (binding) await file.delete().catch(() => undefined)
       return null
     }
+    return binding
   }
 
   async save(binding: DelegatedSessionBinding): Promise<void> {
     const parsed = parseBinding(binding)
     if (!parsed) throw new Error('invalid delegated session binding')
-    await mkdir(this.bindingDir, { recursive: true, mode: 0o700 })
-    const target = this.bindingPath(binding.threadId)
-    const temporary = `${target}.${process.pid}.${randomUUID()}.tmp`
-    await writeFile(temporary, `${JSON.stringify(parsed, null, 2)}\n`, {
-      encoding: 'utf8',
-      mode: 0o600
-    })
-    try {
-      await rename(temporary, target)
-    } catch (error) {
-      await unlink(temporary).catch(() => undefined)
-      throw error
-    }
+    await withManagerDataMutex(`delegated-session:${binding.threadId}`, () =>
+      this.bindingFile(binding.threadId).write(parsed))
   }
 
   async delete(threadId: string): Promise<void> {
     await Promise.allSettled([
-      unlink(this.bindingPath(threadId)),
+      this.bindingFile(threadId).delete(),
       rm(this.providerStateRoot(threadId), { recursive: true, force: true })
     ])
   }
@@ -121,6 +108,13 @@ export class FileDelegatedSessionBindingStore implements DelegatedSessionBinding
 
   private bindingPath(threadId: string): string {
     return join(this.bindingDir, `${threadKey(threadId)}.json`)
+  }
+
+  private bindingFile(threadId: string): AtomicJsonFile<DelegatedSessionBinding | null> {
+    return new AtomicJsonFile(
+      this.bindingPath(threadId),
+      (value) => parseBinding(value)
+    )
   }
 
   private providerStateRoot(threadId: string): string {
@@ -423,15 +417,6 @@ function boundedString(value: unknown, max = MAX_IDENTITY_LENGTH): value is stri
 
 function hexDigest(value: unknown): value is string {
   return typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)
-}
-
-function isMissingFile(error: unknown): boolean {
-  return Boolean(
-    error &&
-    typeof error === 'object' &&
-    'code' in error &&
-    (error as { code?: unknown }).code === 'ENOENT'
-  )
 }
 
 export function delegatedSessionRoot(dataDir: string): string {

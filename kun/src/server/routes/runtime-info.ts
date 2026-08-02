@@ -5,6 +5,13 @@ import type { ServerRuntime } from './server-runtime.js'
 
 export function runtimeInfoJsonResponse(runtime: ServerRuntime): JsonResponse {
   const response = jsonResponse(RuntimeInfoResponse.parse(runtime.info()))
+  if (
+    typeof runtime.managerProtocolVersion === 'number' &&
+    Number.isSafeInteger(runtime.managerProtocolVersion) &&
+    runtime.managerProtocolVersion > 0
+  ) {
+    response.headers['x-kun-manager-protocol-version'] = String(runtime.managerProtocolVersion)
+  }
   const activeTurnCount = runtime.activeTurnCount?.()
   if (
     typeof activeTurnCount === 'number' &&

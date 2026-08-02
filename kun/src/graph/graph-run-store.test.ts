@@ -1,4 +1,5 @@
-import { appendFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -58,6 +59,23 @@ async function createRun(store: FileGraphRunStore) {
 }
 
 describe('FileGraphRunStore', () => {
+  it('retries initialization after a transient index read failure', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-graph-store-retry-'))
+    roots.push(root)
+    const graphsDir = join(root, 'graphs')
+    await mkdir(graphsDir)
+    await writeFile(join(graphsDir, 'index.json'), '{invalid', 'utf8')
+    const store = new FileGraphRunStore({
+      rootDir: graphsDir,
+      config: () => testGraphConfig()
+    })
+
+    await expect(store.list()).rejects.toMatchObject({ code: 'EXTENSION_JSON_INVALID' })
+    await writeFile(join(graphsDir, 'index.json'), '[]\n', 'utf8')
+
+    await expect(store.list()).resolves.toEqual([])
+  })
+
   it('creates, snapshots, lists, reloads, and emits through RuntimeEventRecorder', async () => {
     const { store, runtimeEvents } = await fixture()
     const created = await createRun(store)
@@ -365,6 +383,38 @@ describe('FileGraphRunStore', () => {
     await expect(store.get('run_1')).rejects.toBeInstanceOf(GraphStoreCorruptionError)
   })
 
+  it('validates legacy journal checksums before compatibility defaults are applied', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-graph-checksum-compat-'))
+    roots.push(root)
+    const store = new FileGraphRunStore({
+      rootDir: join(root, 'graphs'),
+      config: () => testGraphConfig({ context: { maxInlineEventBytes: 64 * 1_024 } })
+    })
+    await createRun(store)
+    const journalPath = join(root, 'graphs', 'run_1', 'events.jsonl')
+    const record = JSON.parse((await readFile(journalPath, 'utf8')).trim()) as {
+      checksum: string
+      envelope: {
+        event: {
+          payload: {
+            plan: {
+              nodes: Array<{ assignment: { blockedTools?: string[] } }>
+            }
+          }
+        }
+      }
+    }
+    delete record.envelope.event.payload.plan.nodes[0]!.assignment.blockedTools
+    record.checksum = checksumJsonForTest(record.envelope)
+    await writeFile(journalPath, `${JSON.stringify(record)}\n`, 'utf8')
+
+    const reloaded = new FileGraphRunStore({
+      rootDir: join(root, 'graphs'),
+      config: () => testGraphConfig()
+    })
+    await expect(reloaded.get('run_1')).resolves.toMatchObject({ id: 'run_1' })
+  })
+
   it('requires a terminal state before physical removal', async () => {
     const { store } = await fixture()
     await createRun(store)
@@ -414,6 +464,21 @@ describe('FileGraphRunStore', () => {
     expect(lines).toHaveLength(2)
     expect(JSON.parse(lines[0]!).envelope.graphSeq).toBe(4)
 
+    const snapshotPath = join(root, 'graphs', 'run_1', 'snapshot.json')
+    const snapshot = JSON.parse(await readFile(snapshotPath, 'utf8')) as {
+      checksum: string
+      state: {
+        plans: Array<{ nodes: Array<{ assignment: { blockedTools?: string[] } }> }>
+      }
+      recentCommands: unknown[]
+    }
+    delete snapshot.state.plans[0]!.nodes[0]!.assignment.blockedTools
+    snapshot.checksum = checksumJsonForTest({
+      state: snapshot.state,
+      recentCommands: snapshot.recentCommands
+    })
+    await writeFile(snapshotPath, `${JSON.stringify(snapshot)}\n`, 'utf8')
+
     const reloaded = new FileGraphRunStore(options)
     expect(await reloaded.get('run_1')).toMatchObject({
       status: 'cancelled',
@@ -441,3 +506,7 @@ describe('FileGraphRunStore', () => {
     })
   })
 })
+
+function checksumJsonForTest(value: unknown): string {
+  return createHash('sha256').update(JSON.stringify(value)).digest('hex')
+}

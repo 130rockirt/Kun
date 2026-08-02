@@ -26,8 +26,15 @@ import type {
 /** Terminal status exposed by the public AgentLoop turn boundary. */
 export type TurnExecutionStatus = 'completed' | 'failed' | 'aborted'
 
-/** One process-local execution slice may park while its durable turn remains active. */
-export type TurnRunOutcome = TurnExecutionStatus | 'suspended'
+/**
+ * One process-local execution slice may park while its durable turn remains
+ * active. Pending-supervision parks stay distinct so the host can schedule a
+ * future Lead wake without treating an ordinary idle suspension as work.
+ */
+export type TurnRunOutcome =
+  | TurnExecutionStatus
+  | 'suspended'
+  | 'suspended_pending_supervision'
 
 /** Failure metadata retained until the lifecycle facade finalizes a turn. */
 export type TurnExecutionFailure = {

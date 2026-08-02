@@ -942,23 +942,25 @@ check(
 if (typeof packagedAppImageSmokeModule.createAppImageSmokeInvocation === 'function') {
   const invocation = packagedAppImageSmokeModule.createAppImageSmokeInvocation({
     appImage: '/release/Kun-1.2.3-linux-x86_64.AppImage',
+    appRoot: '/extract/squashfs-root',
+    appRun: '/extract/squashfs-root/AppRun',
     resourcesDir: '/extract/squashfs-root/resources',
     desktopSmokePath: '/repo/scripts/smoke-packaged-extension-desktop.cjs',
     environment: { APPDIR: '/untrusted', APPIMAGE: '/untrusted', ELECTRON_RUN_AS_NODE: '1' }
   })
   check(
     invocation.command === process.execPath &&
-      invocation.options.env.APPIMAGE_EXTRACT_AND_RUN === '1' &&
+      invocation.options.env.APPIMAGE_EXTRACT_AND_RUN === undefined &&
       invocation.options.env.ELECTRON_RUN_AS_NODE === undefined &&
-      invocation.options.env.APPDIR === undefined &&
-      invocation.options.env.APPIMAGE === undefined &&
+      invocation.options.env.APPDIR === resolve('/extract/squashfs-root') &&
+      invocation.options.env.APPIMAGE === resolve('/release/Kun-1.2.3-linux-x86_64.AppImage') &&
       invocation.args.includes('--desktop-executable') &&
-      invocation.args.includes(resolve('/release/Kun-1.2.3-linux-x86_64.AppImage')) &&
+      invocation.args.includes(resolve('/extract/squashfs-root/AppRun')) &&
       invocation.args.includes(resolve('/extract/squashfs-root/resources')) &&
       invocation.options.timeout === undefined &&
       invocation.options.killSignal === undefined &&
       !invocation.args.some((argument) => argument.endsWith('app.asar')),
-    'Final Linux AppImage smoke must let the desktop smoke own bounded cleanup while directly launching the final artifact'
+    'Final Linux AppImage smoke must launch the verified AppRun with bounded desktop cleanup'
   )
 }
 
@@ -1000,7 +1002,13 @@ check(
   rootPackage.scripts?.['build:bundled-extensions'] ===
     'node ./scripts/pack-bundled-extensions.mjs --output ./resources/bundled-extensions' &&
     rootPackage.scripts?.build?.includes('npm run build:bundled-extensions') &&
-    rootPackage.scripts?.dev?.includes('npm run build:bundled-extensions'),
+    (
+      rootPackage.scripts?.dev?.includes('npm run build:bundled-extensions') ||
+      (
+        rootPackage.scripts?.dev?.includes('npm run dev:app') &&
+        rootPackage.scripts?.['dev:app']?.includes('npm run build:bundled-extensions')
+      )
+    ),
   'Kun build and dev must generate the canonical default extension catalog before launch'
 )
 for (const marker of [

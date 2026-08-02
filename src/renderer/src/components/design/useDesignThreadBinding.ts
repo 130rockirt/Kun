@@ -1,12 +1,19 @@
 import { useCallback, useEffect, useMemo } from 'react'
 import type { NormalizedThread } from '../../agent/types'
+import { getProvider } from '../../agent/registry'
 import { refreshDesignChatTranscriptFromProvider } from '../../design/design-chat-transcript'
 import {
   designThreadSelectionSyncForDocument,
   designThreadsForDocument,
+  recoverOrphanDesignThreadForDocument,
+  registeredDesignThreadIdsForDocument,
   switchDesignThreadForDocument
 } from '../../design/design-thread-workbench'
+import { readDesignThreadRegistry } from '../../design/design-thread-registry'
+import { drawingHistoryMutationMatches } from '../../design/design-drawing-history'
 import { useDesignWorkspaceStore } from '../../design/design-workspace-store'
+import { normalizeDesignWorkspaceRoot } from '../../design/design-workspace-lifecycle'
+import { useChatStore } from '../../store/chat-store'
 
 export type DesignThreadBindingOptions = {
   threads: NormalizedThread[]
@@ -21,6 +28,8 @@ export type DesignThreadBindingOptions = {
 
 export type DesignThreadBindingState = {
   designThreads: NormalizedThread[]
+  designHistoryThreadIds: string[]
+  hasRegisteredHistory: boolean
   switchDesignThread: (threadId: string) => Promise<void>
 }
 
@@ -35,6 +44,13 @@ export function useDesignThreadBinding({
   clearActiveThreadSelection
 }: DesignThreadBindingOptions): DesignThreadBindingState {
   const effectiveWorkspaceRoot = designWorkspaceRoot || workspaceRoot
+  const drawingCreationSubmitting = useDesignWorkspaceStore(
+    (state) => state.drawingCreationSubmitting
+  )
+  const drawingCreationDocumentId = useDesignWorkspaceStore(
+    (state) => state.drawingCreationDocumentId
+  )
+  const documents = useDesignWorkspaceStore((state) => state.documents)
   const designThreads = useMemo(() => {
     return designThreadsForDocument({
       threads,
@@ -42,18 +58,45 @@ export function useDesignThreadBinding({
       docId: activeDocumentId
     })
   }, [activeDocumentId, effectiveWorkspaceRoot, threads])
+  const designHistoryThreadIds = registeredDesignThreadIdsForDocument({
+    workspaceRoot: effectiveWorkspaceRoot,
+    docId: activeDocumentId,
+    registry: readDesignThreadRegistry()
+  })
+  const hasRegisteredHistory = designHistoryThreadIds.length > 0
 
   const switchDesignThread = useCallback(async (threadId: string): Promise<void> => {
     const designStore = useDesignWorkspaceStore.getState()
+    const expectedWorkspaceRoot = designStore.workspaceRoot || workspaceRoot
+    const expectedDocumentId = designStore.activeDocumentId
+    const canSwitch = (): boolean => {
+      const latest = useDesignWorkspaceStore.getState()
+      return (
+        normalizeDesignWorkspaceRoot(latest.workspaceRoot || workspaceRoot) ===
+          normalizeDesignWorkspaceRoot(expectedWorkspaceRoot) &&
+        latest.activeDocumentId === expectedDocumentId &&
+        !drawingHistoryMutationMatches(
+          latest.drawingHistoryMutation,
+          expectedWorkspaceRoot,
+          expectedDocumentId
+        )
+      )
+    }
+    if (!canSwitch()) return
     await switchDesignThreadForDocument({
-      workspaceRoot: designStore.workspaceRoot || workspaceRoot,
-      docId: designStore.activeDocumentId,
+      workspaceRoot: expectedWorkspaceRoot,
+      docId: expectedDocumentId,
       threadId,
-      selectThread
+      selectThread,
+      canSwitch
     })
   }, [selectThread, workspaceRoot])
 
   useEffect(() => {
+    if (
+      drawingCreationSubmitting &&
+      activeDocumentId === drawingCreationDocumentId
+    ) return
     const sync = designThreadSelectionSyncForDocument({
       route,
       activeThreadId,
@@ -72,6 +115,8 @@ export function useDesignThreadBinding({
     activeDocumentId,
     activeThreadId,
     clearActiveThreadSelection,
+    drawingCreationDocumentId,
+    drawingCreationSubmitting,
     effectiveWorkspaceRoot,
     route,
     selectThread,
@@ -86,5 +131,39 @@ export function useDesignThreadBinding({
     })
   }, [activeDocumentId, effectiveWorkspaceRoot, route])
 
-  return { designThreads, switchDesignThread }
+  useEffect(() => {
+    if (route !== 'design' || !activeDocumentId || !effectiveWorkspaceRoot) return
+    let cancelled = false
+    const expectedWorkspaceRoot = normalizeDesignWorkspaceRoot(effectiveWorkspaceRoot)
+    const expectedDocumentId = activeDocumentId
+    const isCurrent = (): boolean => {
+      if (cancelled || useChatStore.getState().route !== 'design') return false
+      const designState = useDesignWorkspaceStore.getState()
+      return normalizeDesignWorkspaceRoot(designState.workspaceRoot || workspaceRoot) ===
+        expectedWorkspaceRoot && designState.activeDocumentId === expectedDocumentId
+    }
+    void recoverOrphanDesignThreadForDocument({
+      route,
+      workspaceRoot: expectedWorkspaceRoot,
+      docId: expectedDocumentId,
+      documents,
+      threads,
+      getThreadDetail: async (threadId) => getProvider().getThreadDetail(threadId),
+      selectThread,
+      isCurrent
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [
+    activeDocumentId,
+    documents,
+    effectiveWorkspaceRoot,
+    route,
+    selectThread,
+    threads,
+    workspaceRoot
+  ])
+
+  return { designThreads, designHistoryThreadIds, hasRegisteredHistory, switchDesignThread }
 }

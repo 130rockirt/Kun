@@ -4,10 +4,15 @@ import type { AttachmentReference } from '../../agent/types'
 import type { ModelProviderModelGroup } from '@shared/kun-gui-api'
 import { providerIdForComposerModel } from '../../store/chat-store-helpers'
 import type { ComposerAttachmentScope } from '../workbench-composer-attachments'
+import type {
+  ClearDesignHistoryOptions,
+  ClearDesignHistoryResult
+} from '../../store/chat-store-types'
 import {
   composerReasoningEffortRequestValue,
   type ComposerReasoningEffort
 } from '../chat/FloatingComposerModelPicker'
+import { serviceTierForComposerSelection } from '../chat/composer-fast-mode'
 import { useCanvasSelectionStore } from '../../design/canvas/canvas-selection-store'
 import type { DesignHtmlElementContext } from '../../design/design-composer-context'
 import {
@@ -17,6 +22,11 @@ import {
 import { routeDesignPrompt } from '../../design/design-prompt-router'
 import type { DesignPromptSource } from '../../design/design-quality-repair-dispatch'
 import { useDesignWorkspaceStore } from '../../design/design-workspace-store'
+import { deriveDrawingTitleFromPrompt } from '../../design/design-drawing-title'
+import { removePersistedDesignDocument } from '../../design/design-document-persistence'
+import { designDocKey, readDesignThreadRegistry } from '../../design/design-thread-registry'
+import { normalizeDesignWorkspaceRoot } from '../../design/design-workspace-lifecycle'
+import type { DesignDocument } from '../../design/design-types'
 import {
   submitDesignTurn,
   type DesignTurnSubmitSendMessage
@@ -31,6 +41,7 @@ export type DesignPromptControllerOptions = {
   composerAttachments: AttachmentReference[]
   attachmentUploadEnabled: boolean
   composerReasoningEffort: ComposerReasoningEffort
+  composerFastMode: boolean
   composerModelGroups: readonly ModelProviderModelGroup[]
   designContextSuppressedIds: ReadonlySet<string>
   designHtmlElementContext: DesignHtmlElementContext | null
@@ -39,6 +50,11 @@ export type DesignPromptControllerOptions = {
   setError: (error: string | null) => void
   setDesignAssistantOpen: (open: boolean) => void
   ensureDesignThreadForWorkspace: (workspaceRoot: string, docId: string) => Promise<string | null>
+  clearDesignHistory: (
+    workspaceRoot: string,
+    docId: string,
+    options?: ClearDesignHistoryOptions
+  ) => Promise<ClearDesignHistoryResult>
   sendMessage: DesignTurnSubmitSendMessage
   getAttachmentScope: () => ComposerAttachmentScope
   clearComposerAttachments: (scope?: ComposerAttachmentScope) => void
@@ -52,6 +68,14 @@ export type SendDesignPromptOptions = {
   svgArtifactId?: string
 }
 
+type PreparedDrawing = {
+  docId: string
+  created: boolean
+  workspaceRoot: string
+  fallbackDocuments: readonly DesignDocument[]
+  fallbackActiveDocumentId: string | null
+}
+
 export function useDesignPromptController({
   route,
   runtimeConnection,
@@ -60,6 +84,7 @@ export function useDesignPromptController({
   composerAttachments,
   attachmentUploadEnabled,
   composerReasoningEffort,
+  composerFastMode,
   composerModelGroups,
   designContextSuppressedIds,
   designHtmlElementContext,
@@ -68,6 +93,7 @@ export function useDesignPromptController({
   setError,
   setDesignAssistantOpen,
   ensureDesignThreadForWorkspace,
+  clearDesignHistory,
   sendMessage,
   getAttachmentScope,
   clearComposerAttachments,
@@ -75,34 +101,238 @@ export function useDesignPromptController({
 }: DesignPromptControllerOptions) {
   const { t } = useTranslation()
 
-  function generateDesignPages(brief: string): void {
+  const currentDesignServiceTier = (): 'priority' | undefined => {
+    const state = useDesignWorkspaceStore.getState()
+    const model = state.assistantModel.trim()
+    const providerId = state.assistantProviderId.trim() ||
+      providerIdForComposerModel(composerModelGroups, model)
+    return serviceTierForComposerSelection(
+      composerFastMode,
+      composerModelGroups,
+      model,
+      providerId
+    )
+  }
+
+  const prepareDrawingForFirstPrompt = (titleSource: string): PreparedDrawing | null => {
+    const state = useDesignWorkspaceStore.getState()
+    const shouldCreate =
+      state.drawingCreationOpen || state.documents.length === 0 || !state.activeDocumentId
+    if (!shouldCreate) {
+      return {
+        docId: state.ensureActiveDocument(),
+        created: false,
+        workspaceRoot: state.workspaceRoot || workspaceRoot,
+        fallbackDocuments: state.documents,
+        fallbackActiveDocumentId: state.activeDocumentId
+      }
+    }
+    if (!state.drawingCreationOpen) state.beginDrawingCreation()
+    const creationState = useDesignWorkspaceStore.getState()
+    if (!creationState.beginDrawingSubmission()) return null
+    try {
+      const title = deriveDrawingTitleFromPrompt(titleSource) || t('designUntitledDrawing')
+      const reusableDocumentId =
+        creationState.drawingCreationDocumentId &&
+        creationState.documents.some(
+          (document) => document.id === creationState.drawingCreationDocumentId
+        )
+          ? creationState.drawingCreationDocumentId
+          : null
+      if (reusableDocumentId) {
+        creationState.renameDocument(reusableDocumentId, title, { titleOrigin: 'generated' })
+        const latest = useDesignWorkspaceStore.getState()
+        return {
+          docId: reusableDocumentId,
+          created: true,
+          workspaceRoot: latest.workspaceRoot || workspaceRoot,
+          fallbackDocuments: latest.documents,
+          fallbackActiveDocumentId: latest.activeDocumentId
+        }
+      }
+      const docId = useDesignWorkspaceStore.getState().createDocument(title, {
+          transient: true,
+          titleOrigin: 'generated'
+        })
+      const latest = useDesignWorkspaceStore.getState()
+      return {
+        docId,
+        created: true,
+        workspaceRoot: latest.workspaceRoot || workspaceRoot,
+        fallbackDocuments: latest.documents,
+        fallbackActiveDocumentId: latest.activeDocumentId
+      }
+    } catch (error) {
+      useDesignWorkspaceStore.getState().endDrawingSubmission()
+      throw error
+    }
+  }
+
+  const rollbackFirstPromptDrawing = async (
+    drawing: PreparedDrawing,
+    threadId?: string | null
+  ): Promise<boolean> => {
+    let threadDeleteError: unknown = null
+    const documentId = drawing.docId
+    const cleanupWorkspaceRoot = drawing.workspaceRoot
+    const registeredThreadIds = readDesignThreadRegistry().workspaces[
+      designDocKey(cleanupWorkspaceRoot, documentId)
+    ]?.threadIds ?? []
+    if (threadId || registeredThreadIds.length > 0) {
+      try {
+        const result = await clearDesignHistory(
+          cleanupWorkspaceRoot,
+          documentId,
+          {
+            recreate: false,
+            ...(threadId ? { includeThreadIds: [threadId] } : {})
+          }
+        )
+        if (!result.cleared) {
+          threadDeleteError = new Error('The provisional drawing conversation could not be deleted.')
+        }
+      } catch (error) {
+        threadDeleteError = error
+      }
+    }
+    const state = useDesignWorkspaceStore.getState()
+    const stillInCreationWorkspace =
+      normalizeDesignWorkspaceRoot(state.workspaceRoot) ===
+      normalizeDesignWorkspaceRoot(cleanupWorkspaceRoot)
+    if (stillInCreationWorkspace) state.endDrawingSubmission()
+    // If Kun or a local mirror could not be removed, keep the provisional
+    // drawing hidden in the launcher so its surviving thread never becomes an
+    // orphan. A retry reuses this same document and conversation.
+    if (threadDeleteError) {
+      const message = threadDeleteError instanceof Error
+        ? threadDeleteError.message
+        : String(threadDeleteError)
+      if (stillInCreationWorkspace) state.setFileError(message)
+      setError(message)
+      return false
+    }
+
+    let removed = false
+    if (
+      stillInCreationWorkspace &&
+      state.documents.some((document) => document.id === documentId)
+    ) {
+      removed = await state.removeDocument(documentId)
+    } else {
+      removed = await removePersistedDesignDocument({
+        workspaceRoot: cleanupWorkspaceRoot,
+        documentId,
+        fallbackDocuments: drawing.fallbackDocuments,
+        fallbackActiveDocumentId: drawing.fallbackActiveDocumentId
+      })
+    }
+    if (!removed) {
+      const message = 'The provisional drawing directory could not be deleted.'
+      const latest = useDesignWorkspaceStore.getState()
+      if (
+        normalizeDesignWorkspaceRoot(latest.workspaceRoot) ===
+        normalizeDesignWorkspaceRoot(cleanupWorkspaceRoot)
+      ) latest.setFileError(message)
+      setError(message)
+      return false
+    }
+    return true
+  }
+
+  async function generateDesignPages(brief: string): Promise<boolean> {
     const designState = useDesignWorkspaceStore.getState()
     const designWorkspaceRoot = designState.workspaceRoot || workspaceRoot
     if (!designWorkspaceRoot) {
       setError(t('workspaceRequiredToCreateThread'))
-      return
+      return false
     }
-    void (async () => {
-      const docId = useDesignWorkspaceStore.getState().ensureActiveDocument()
-      const threadId = await ensureDesignThreadForWorkspace(designWorkspaceRoot, docId)
+    let drawing: ReturnType<typeof prepareDrawingForFirstPrompt> = null
+    let provisionalThreadId: string | null = null
+    try {
+      drawing = prepareDrawingForFirstPrompt(brief)
+      if (!drawing) return false
+      const threadId = await ensureDesignThreadForWorkspace(designWorkspaceRoot, drawing.docId)
+      provisionalThreadId = drawing.created ? threadId : null
       if (!threadId) {
+        if (drawing.created) await rollbackFirstPromptDrawing(drawing)
         setInput(brief)
-        return
+        return false
       }
-      await runDesignPagesDispatch({
+      const currentState = useDesignWorkspaceStore.getState()
+      if (
+        (currentState.workspaceRoot || designWorkspaceRoot) !== designWorkspaceRoot ||
+        currentState.activeDocumentId !== drawing.docId
+      ) {
+        const message = 'Design turn was cancelled because the active workspace or drawing changed.'
+        if (drawing.created) await rollbackFirstPromptDrawing(drawing, threadId)
+        currentState.setFileError(message)
+        setError(message)
+        setInput(brief)
+        return false
+      }
+
+      let settleFirstSend: (sent: boolean) => void = () => undefined
+      const firstSend = new Promise<boolean>((resolve) => {
+        let settled = false
+        settleFirstSend = (sent) => {
+          if (settled) return
+          settled = true
+          resolve(sent)
+        }
+      })
+      void runDesignPagesDispatch({
         brief,
         workspaceRoot: designWorkspaceRoot,
         sendMessage,
         promptState: useDesignWorkspaceStore.getState(),
         resolveProviderId: (model) => providerIdForComposerModel(composerModelGroups, model),
         reasoningEffort: composerReasoningEffortRequestValue(composerReasoningEffort),
-        labels: buildDesignPagesRunLabels(t)
+        serviceTier: currentDesignServiceTier(),
+        expectedThreadId: threadId,
+        labels: buildDesignPagesRunLabels(t),
+        onFirstSendSettled: settleFirstSend
+      }).catch((error) => {
+        settleFirstSend(false)
+        const message = error instanceof Error ? error.message : String(error)
+        useDesignWorkspaceStore.getState().setFileError(message)
+        setError(message)
       })
-    })()
+
+      const firstSendSucceeded = await firstSend
+      if (!firstSendSucceeded) {
+        if (drawing.created) await rollbackFirstPromptDrawing(drawing, threadId)
+        setInput(brief)
+        return false
+      }
+      if (drawing.created) {
+        useDesignWorkspaceStore.getState().finishDrawingCreation(drawing.docId)
+      }
+      return true
+    } catch (error) {
+      if (drawing?.created) {
+        await rollbackFirstPromptDrawing(drawing, provisionalThreadId)
+      }
+      const message = error instanceof Error ? error.message : String(error)
+      useDesignWorkspaceStore.getState().setFileError(message)
+      setError(message)
+      setInput(brief)
+      return false
+    }
   }
 
   async function sendDesignPrompt(value: string, options: SendDesignPromptOptions = {}): Promise<boolean> {
     const source = options.source ?? 'user'
+    const initialDesignState = useDesignWorkspaceStore.getState()
+    if (initialDesignState.drawingHistoryMutation) return false
+    const creatingDrawing =
+      initialDesignState.drawingCreationOpen ||
+      initialDesignState.documents.length === 0 ||
+      !initialDesignState.activeDocumentId
+    if (creatingDrawing && (busy || initialDesignState.drawingCreationSubmitting)) return false
+    if (creatingDrawing && runtimeConnection !== 'ready') {
+      setError(t('runtimeActionNeedsConnection'))
+      return false
+    }
     const attachmentScope = getAttachmentScope()
     const promptRoute = routeDesignPrompt({
       value,
@@ -126,9 +356,9 @@ export function useDesignPromptController({
     }
     setDesignAssistantOpen(true)
     if (promptRoute.kind === 'multi-page') {
-      setInput('')
-      generateDesignPages(promptRoute.brief)
-      return true
+      const started = await generateDesignPages(promptRoute.brief)
+      if (started) setInput('')
+      return started
     }
     const {
       text: routeText,
@@ -138,14 +368,25 @@ export function useDesignPromptController({
       attachmentIds,
       attachments
     } = promptRoute
-    if (promptRoute.shouldClearInput) setInput('')
+    let provisionalDrawingId: string | null = null
+    let provisionalThreadId: string | null = null
+    let provisionalDrawing: PreparedDrawing | null = null
     try {
+      // The drawing title comes from the user's raw description. Attachment-only
+      // creation intentionally falls back to the localized untitled placeholder.
+      const drawing = prepareDrawingForFirstPrompt(routeText)
+      if (!drawing) return false
+      const docId = drawing.docId
+      if (drawing.created) {
+        provisionalDrawingId = docId
+        provisionalDrawing = drawing
+      }
       const dispatchState = useDesignWorkspaceStore.getState()
-      const docId = dispatchState.ensureActiveDocument()
       const dispatchWorkspaceRoot = dispatchState.workspaceRoot || designWorkspaceRoot
       const threadId = await ensureDesignThreadForWorkspace(designWorkspaceRoot, docId)
+      provisionalThreadId = drawing.created ? threadId : null
       if (!threadId) {
-        setInput(routeText)
+        if (drawing.created) await rollbackFirstPromptDrawing(drawing)
         return false
       }
       const currentState = useDesignWorkspaceStore.getState()
@@ -153,10 +394,10 @@ export function useDesignPromptController({
         (currentState.workspaceRoot || designWorkspaceRoot) !== dispatchWorkspaceRoot ||
         currentState.activeDocumentId !== docId
       ) {
-        const message = 'Design turn was cancelled because the active workspace or design document changed.'
+        const message = 'Design turn was cancelled because the active workspace or drawing changed.'
+        if (drawing.created) await rollbackFirstPromptDrawing(drawing, threadId)
         currentState.setFileError(message)
         setError(message)
-        setInput(routeText)
         return false
       }
       const result = await submitDesignTurn({
@@ -167,30 +408,45 @@ export function useDesignPromptController({
         sendMessage,
         resolveProviderId: (model) => providerIdForComposerModel(composerModelGroups, model),
         reasoningEffort: composerReasoningEffortRequestValue(composerReasoningEffort),
+        serviceTier: currentDesignServiceTier(),
+        expectedThreadId: threadId,
         attachmentIds,
         attachments,
-        suppressedIds: designContextSuppressedIds,
-        htmlElementContext: designHtmlElementContext,
+        // A launcher submission starts from an empty canvas. Do not leak a
+        // suppressed chip or DOM element captured from the previously open drawing.
+        suppressedIds: drawing.created ? new Set<string>() : designContextSuppressedIds,
+        htmlElementContext: drawing.created ? null : designHtmlElementContext,
         explicitScreenShapeId: options.screenShapeId,
         explicitSvgArtifactId: options.svgArtifactId,
         clearAutoRepairScope: clearDesignAutoRepairScope
       })
       if (result.status === 'missing-board' || result.status === 'file-error') {
-        setInput(routeText)
+        if (drawing.created) await rollbackFirstPromptDrawing(drawing, threadId)
         return false
       }
       if (result.status === 'sent') {
+        if (drawing.created) {
+          useDesignWorkspaceStore.getState().finishDrawingCreation(docId)
+          provisionalDrawingId = null
+          provisionalThreadId = null
+          provisionalDrawing = null
+        }
         clearHtmlElementContext()
         if (result.clearAttachments) clearComposerAttachments(attachmentScope)
+        if (promptRoute.shouldClearInput) {
+          setInput((current) => current === value ? '' : current)
+        }
         return true
       }
-      setInput(routeText)
+      if (drawing.created) await rollbackFirstPromptDrawing(drawing, threadId)
       return false
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
+      if (provisionalDrawingId && provisionalDrawing) {
+        await rollbackFirstPromptDrawing(provisionalDrawing, provisionalThreadId)
+      }
       useDesignWorkspaceStore.getState().setFileError(message)
       setError(message)
-      setInput(routeText)
       return false
     }
   }

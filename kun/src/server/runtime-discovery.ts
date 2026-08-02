@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { z } from 'zod'
 import { atomicWriteFile } from '../adapters/file/atomic-write.js'
 import { RuntimeBuildIdSchema } from '../contracts/runtime-info.js'
+import { RuntimeFlavorSchema, type RuntimeFlavor } from '../contracts/runtime-flavor.js'
 import { KUN_VERSION } from '../version.js'
 
 export const RUNTIME_DISCOVERY_VERSION = 2 as const
@@ -30,6 +31,7 @@ export const RuntimeDiscoveryRecordSchema = z.object({
   runtimeToken: z.string().max(16_384),
   insecure: z.boolean(),
   serviceVersion: z.string().min(1).max(128),
+  flavor: RuntimeFlavorSchema.optional(),
   buildId: RuntimeBuildIdSchema.optional(),
   launchMode: z.enum(['foreground', 'shared', 'gui']),
   logPath: z.string().min(1).max(4_096).optional()
@@ -46,8 +48,14 @@ export type PublishRuntimeDiscoveryInput = Omit<
   launchMode?: RuntimeDiscoveryRecord['launchMode']
 }
 
-export function runtimeDiscoveryPath(dataDir: string): string {
-  return join(dataDir, RUNTIME_DISCOVERY_FILENAME)
+export function runtimeDiscoveryPath(
+  dataDir: string,
+  flavor: RuntimeFlavor = 'production'
+): string {
+  return join(
+    dataDir,
+    flavor === 'production' ? RUNTIME_DISCOVERY_FILENAME : `runtime.${flavor}.json`
+  )
 }
 
 export function createRuntimeDiscoveryRecord(
@@ -63,9 +71,10 @@ export function createRuntimeDiscoveryRecord(
 }
 
 export async function readRuntimeDiscovery(
-  dataDir: string
+  dataDir: string,
+  flavor: RuntimeFlavor = 'production'
 ): Promise<RuntimeDiscoveryRecord | null> {
-  const path = runtimeDiscoveryPath(dataDir)
+  const path = runtimeDiscoveryPath(dataDir, flavor)
   let details
   try {
     details = await stat(path)
@@ -91,7 +100,8 @@ export async function publishRuntimeDiscovery(
 ): Promise<RuntimeDiscoveryRecord> {
   const record = createRuntimeDiscoveryRecord(input)
   await withDiscoveryLock(dataDir, record.instanceId, async () => {
-    const path = runtimeDiscoveryPath(dataDir)
+    const flavor = record.flavor ?? 'production'
+    const path = runtimeDiscoveryPath(dataDir, flavor)
     await atomicWriteFile(path, `${JSON.stringify(record, null, 2)}\n`)
     // On Windows atomicWriteFile can fall back to overwriting an existing
     // destination, where writeFile's mode does not tighten prior permissions.
@@ -109,12 +119,13 @@ export async function publishRuntimeDiscovery(
  */
 export async function removeRuntimeDiscovery(
   dataDir: string,
-  instanceId: string
+  instanceId: string,
+  flavor: RuntimeFlavor = 'production'
 ): Promise<boolean> {
   return withDiscoveryLock(dataDir, instanceId, async () => {
-    const current = await readRuntimeDiscovery(dataDir)
+    const current = await readRuntimeDiscovery(dataDir, flavor)
     if (!current || current.instanceId !== instanceId) return false
-    await rm(runtimeDiscoveryPath(dataDir), { force: true })
+    await rm(runtimeDiscoveryPath(dataDir, flavor), { force: true })
     return true
   })
 }
@@ -122,9 +133,13 @@ export async function removeRuntimeDiscovery(
 /** Serialize shared-runtime election for one data directory. */
 export async function withRuntimeStartLock<T>(
   dataDir: string,
-  action: () => Promise<T>
+  action: () => Promise<T>,
+  flavor: RuntimeFlavor = 'production'
 ): Promise<T> {
-  return withFileLock(dataDir, RUNTIME_START_LOCK_FILENAME, randomUUID(), action)
+  const filename = flavor === 'production'
+    ? RUNTIME_START_LOCK_FILENAME
+    : `.runtime-start.${flavor}.lock`
+  return withFileLock(dataDir, filename, randomUUID(), action)
 }
 
 async function withDiscoveryLock<T>(

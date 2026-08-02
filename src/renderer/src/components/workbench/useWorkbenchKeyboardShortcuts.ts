@@ -28,6 +28,17 @@ const DESKTOP_SHORTCUT_COMMANDS: Partial<Record<KeyboardShortcutCommandId, Deskt
 
 type ComposerMode = 'agent' | 'plan'
 
+export function isWorkbenchNavigationShortcutLocked(
+  commandId: KeyboardShortcutCommandId,
+  navigationLocked: boolean
+): boolean {
+  return navigationLocked && (
+    commandId === 'new-chat' ||
+    commandId === 'choose-workspace' ||
+    commandId === 'settings'
+  )
+}
+
 type UseWorkbenchKeyboardShortcutsInput = {
   composerMode: ComposerMode
   setComposerMode: (mode: ComposerMode) => void
@@ -39,6 +50,7 @@ type UseWorkbenchKeyboardShortcutsInput = {
   useWorktreePool: boolean
   setUseWorktreePool: (enabled: boolean) => void
   worktreeBranch: string
+  navigationLocked?: boolean
 }
 
 export function useWorkbenchKeyboardShortcuts({
@@ -51,7 +63,8 @@ export function useWorkbenchKeyboardShortcuts({
   openSettings,
   useWorktreePool,
   setUseWorktreePool,
-  worktreeBranch
+  worktreeBranch,
+  navigationLocked = false
 }: UseWorkbenchKeyboardShortcutsInput): void {
   const keyboardShortcuts = useKeyboardShortcutSettings()
   const shortcutPlatform = typeof window === 'undefined' ? undefined : window.kunGui?.platform
@@ -74,6 +87,8 @@ export function useWorkbenchKeyboardShortcuts({
       )
       if (!commandId) return
       event.preventDefault()
+
+      if (isWorkbenchNavigationShortcutLocked(commandId, navigationLocked)) return
 
       if (commandId === 'toggle-plan-mode') {
         if (composerMode === 'plan') {
@@ -114,6 +129,7 @@ export function useWorkbenchKeyboardShortcuts({
     createThread,
     handleGuiPlanCommand,
     keyboardShortcutBindings,
+    navigationLocked,
     openSettings,
     setComposerMode,
     setUseWorktreePool,

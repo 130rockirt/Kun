@@ -192,6 +192,8 @@ export type ToolHostContext = {
   approvedExternalWriteTargets?: readonly ApprovedExternalWriteTarget[]
   /** Internal one-call Kun approval proof, visible only while executing the approved tool. */
   kunActionApprovalGrant?: Readonly<KunActionApprovalGrant>
+  /** Host-injected active tool-call id. Callers cannot supply or persist it. */
+  activeToolCallId?: string
   /** Kun runtime data root; used to allow sandbox-safe reads of background shell output files. */
   runtimeDataDir?: string
   /** Store used to offload oversized tool results from model context. */

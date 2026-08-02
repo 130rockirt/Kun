@@ -11,6 +11,7 @@ import {
 } from '../../contracts/index.js'
 import {
   graphPhysicalPathsEqual,
+  graphReviewSemanticKey,
   type GraphControlService,
   type GraphRunStore,
   type ProjectAgentRegistry
@@ -81,14 +82,25 @@ export function buildGraphLeadReviewTool(options: {
         if (!attempt) {
           throw new Error(`Graph node ${input.nodeId} has no attempt to review`)
         }
+        const existingReview = run.reviews.find((candidate) =>
+          candidate.nodeId === input.nodeId &&
+          candidate.attemptId === attempt.id &&
+          candidate.reviewerKind === 'lead')
         if (
-          node.attempts.at(-1)?.id !== attempt.id ||
-          !['submitted', 'reviewing'].includes(node.status) ||
-          !['submitted', 'reviewing'].includes(attempt.status)
+          !existingReview &&
+          (
+            node.attempts.at(-1)?.id !== attempt.id ||
+            !['submitted', 'reviewing'].includes(node.status) ||
+            !['submitted', 'reviewing'].includes(attempt.status)
+          )
         ) {
           throw new Error(`attempt ${attempt.id} is not a submitted result awaiting review`)
         }
-        if (input.outcome === 'pass' && attempt.validation?.valid !== true) {
+        if (
+          !existingReview &&
+          input.outcome === 'pass' &&
+          attempt.validation?.valid !== true
+        ) {
           throw new Error(`cannot pass invalid attempt ${attempt.id}`)
         }
         const review = GraphReviewResultV1Schema.parse({
@@ -112,7 +124,7 @@ export function buildGraphLeadReviewTool(options: {
         return {
           output: await options.control.recordReview(input.runId, review, {
             commandId: options.nextId('graph_command'),
-            idempotencyKey: `graph-review:${review.reviewId}`,
+            idempotencyKey: graphReviewSemanticKey(input.runId, attempt.id, 'lead'),
             expectedRevision: run.currentRevision
           }, 'lead')
         }

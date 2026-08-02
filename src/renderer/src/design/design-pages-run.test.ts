@@ -4,6 +4,7 @@ import { useDesignWorkspaceStore } from './design-workspace-store'
 import { runDesignPages } from './design-pages-run'
 import type { ChatBlock } from '../agent/types'
 import type { DesignDocument } from './design-types'
+import type { SendMessageOverrides } from '../store/chat-store-types'
 
 const createdAt = '2026-06-28T00:00:00.000Z'
 
@@ -73,7 +74,12 @@ describe('runDesignPages parallel fanout', () => {
   })
 
   it('pre-creates all pages and sends one fanout turn for page generation', async () => {
-    const sendMessage = vi.fn(async (prompt: string) => {
+    const onFirstSendSettled = vi.fn()
+    const sendMessage = vi.fn(async (
+      prompt: string,
+      _mode?: string,
+      _overrides?: SendMessageOverrides
+    ) => {
       if (prompt.includes('PLAN a multi-page')) {
         pushRuntimeTurn(prompt, [
           {
@@ -109,10 +115,22 @@ describe('runDesignPages parallel fanout', () => {
       brief: 'IKUN community',
       workspaceRoot: '/workspace',
       sendMessage,
-      foundation: false
+      foundation: false,
+      serviceTier: 'priority',
+      expectedThreadId: 'thr_design',
+      onFirstSendSettled
     })
 
+    expect(onFirstSendSettled).toHaveBeenCalledTimes(1)
+    expect(onFirstSendSettled).toHaveBeenCalledWith(true)
     expect(sendMessage).toHaveBeenCalledTimes(2)
+    for (const call of sendMessage.mock.calls) {
+      expect(call[2]).toEqual(expect.objectContaining({
+        agentSurface: 'design',
+        serviceTier: 'priority',
+        expectedThreadId: 'thr_design'
+      }))
+    }
     const fanoutPrompt = String(sendMessage.mock.calls[1]?.[0] ?? '')
     expect(fanoutPrompt).toContain('fan out a multi-page design build')
     expect(fanoutPrompt).toContain('delegate_task')
@@ -148,6 +166,27 @@ describe('runDesignPages parallel fanout', () => {
     expect(projectDesignMdWrite?.content).toContain('IKUN community')
     expect(projectDesignMdWrite?.content).toContain('Join community')
     expect(projectDesignMdWrite?.content).toContain('../')
+  })
+
+  it('reports a rejected first runtime send exactly once and stops before creating pages', async () => {
+    const onFirstSendSettled = vi.fn()
+    const sendMessage = vi.fn(async () => false)
+
+    await runDesignPages({
+      brief: 'IKUN community',
+      workspaceRoot: '/workspace',
+      sendMessage,
+      foundation: false,
+      onFirstSendSettled
+    })
+
+    expect(onFirstSendSettled).toHaveBeenCalledTimes(1)
+    expect(onFirstSendSettled).toHaveBeenCalledWith(false)
+    expect(sendMessage).toHaveBeenCalledTimes(1)
+    expect(useDesignWorkspaceStore.getState().artifacts).toEqual([])
+    expect(useDesignWorkspaceStore.getState().fileError).toBe(
+      'Could not start the multi-page planning turn.'
+    )
   })
 
   it('pre-creates app-target page drafts with mobile preview proportions and prototype links', async () => {

@@ -3,15 +3,16 @@ import type { ToolHostContext } from '../../ports/tool-host.js'
 import type { CapabilityToolProvider } from './capability-registry.js'
 import { LocalToolHost } from './local-tool-host.js'
 import {
-  HostController,
+  type HostControlController,
   type HostScreenshot,
   type MouseButton,
   type ScrollDirection
 } from '../computer-use/host-control.js'
+import { computerUseControllerFromEnvironment } from '../computer-use/remote-host-control.js'
 
 export type ComputerUseToolProviderOptions = {
-  /** Injectable controller for tests; defaults to the nut.js-backed one. */
-  controller?: HostController
+  /** Injectable controller for tests; defaults to the initiating GUI bridge. */
+  controller?: HostControlController
 }
 
 export type ComputerUseToolProviderDiagnostic = {
@@ -154,7 +155,7 @@ export async function buildComputerUseToolProviders(
   }
 
   const controller =
-    options.controller ?? new HostController({ maxImageDimension: config.maxImageDimension })
+    options.controller ?? computerUseControllerFromEnvironment()
   const readiness = await controller.ensureReady()
   if (!readiness.available) {
     const reason = readiness.reason ?? 'computer-use backend is unavailable'

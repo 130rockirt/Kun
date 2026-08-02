@@ -34,6 +34,7 @@ const MAX_STACK_HINT_LENGTH = 200
 const MAX_MODEL_LENGTH = 128
 const MAX_EFFORT_LENGTH = 32
 const MAX_PATH_LENGTH = 1024
+const MAX_WORKSPACES = 80
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -71,6 +72,24 @@ function normalizeTone(value: unknown): string[] {
   return out
 }
 
+function normalizeWorkspacePath(value: unknown): string {
+  return trimmedString(value, MAX_PATH_LENGTH).replaceAll('\\', '/').replace(/\/+$/, '')
+}
+
+function normalizeWorkspaceRoots(value: unknown, defaultWorkspaceRoot: string): string[] {
+  const roots = Array.isArray(value) ? value : []
+  const seen = new Set<string>()
+  const normalized: string[] = []
+  for (const candidate of [defaultWorkspaceRoot, ...roots]) {
+    const root = normalizeWorkspacePath(candidate)
+    if (!root || seen.has(root)) continue
+    seen.add(root)
+    normalized.push(root)
+    if (normalized.length >= MAX_WORKSPACES) break
+  }
+  return normalized
+}
+
 function normalizeDesignSystemPreset(value: unknown): DesignSystemPreset {
   return oneOf(value, DESIGN_SYSTEM_PRESETS, 'none')
 }
@@ -78,6 +97,8 @@ function normalizeDesignSystemPreset(value: unknown): DesignSystemPreset {
 export function defaultDesignSettings(): DesignSettingsV1 {
   return {
     defaultWorkspaceRoot: '',
+    workspaces: [],
+    activeWorkspaceRoot: '',
     brandColor: '',
     tone: [],
     designSystemPreset: 'none',
@@ -103,8 +124,16 @@ export function defaultDesignSettings(): DesignSettingsV1 {
 
 export function normalizeDesignSettings(input: DesignSettingsPatchV1 | undefined): DesignSettingsV1 {
   const source = isRecord(input) ? (input as DesignSettingsPatchV1) : {}
+  const defaultWorkspaceRoot = normalizeWorkspacePath(source.defaultWorkspaceRoot)
+  const workspaces = normalizeWorkspaceRoots(source.workspaces, defaultWorkspaceRoot)
+  const requestedActiveWorkspaceRoot = normalizeWorkspacePath(source.activeWorkspaceRoot)
+  const activeWorkspaceRoot = workspaces.includes(requestedActiveWorkspaceRoot)
+    ? requestedActiveWorkspaceRoot
+    : defaultWorkspaceRoot || workspaces[0] || ''
   return {
-    defaultWorkspaceRoot: trimmedString(source.defaultWorkspaceRoot, MAX_PATH_LENGTH),
+    defaultWorkspaceRoot,
+    workspaces,
+    activeWorkspaceRoot,
     brandColor: trimmedString(source.brandColor, MAX_BRAND_COLOR_LENGTH),
     tone: normalizeTone(source.tone),
     designSystemPreset: normalizeDesignSystemPreset(source.designSystemPreset),

@@ -26,6 +26,8 @@ import { useWorkbenchWriteAssistantRuntime } from './workbench/useWorkbenchWrite
 import { useWorkbenchUiRuntime } from './workbench/useWorkbenchUiRuntime'
 import { useWorkbenchAttachmentRuntime } from './workbench/useWorkbenchAttachmentRuntime'
 import { useWorkbenchDesignAgentRuntime } from './workbench/useWorkbenchDesignAgentRuntime'
+import { useDesignDrawingTitleBackfill } from './design/useDesignDrawingTitleBackfill'
+import { useWorkbenchDesignHistoryController } from './workbench/useWorkbenchDesignHistoryController'
 import { WorkbenchImageAnnotationHost } from './workbench/WorkbenchImageAnnotationHost'
 import { AgentBrowserFloatingPreview } from './AgentBrowserFloatingPreview'
 import { isWriteThreadId } from '../write/write-thread-registry'
@@ -120,7 +122,7 @@ export function Workbench(): ReactElement {
     currentTurnOrchestration,
     route, pluginHostRoute, workspaceRoot, conversationWorkspaceRoot, runtimeConnection,
     setRoute, openCode, openWrite, openDesign, ensureWriteThreadForWorkspace,
-    ensureDesignThreadForWorkspace, createWriteThread, createDesignThread, openSettings,
+    ensureDesignThreadForWorkspace, createWriteThread, clearDesignHistory, openSettings,
     openPlugins, openClaw, openSchedule, openWorkflow, chooseWorkspace, clawChannels,
     activeClawChannelId, selectClawChannel, resetClawChannelSession, setClawChannelModel,
     appendLocalClawTurn, setError, sendMessage, reviewActiveThread, queuedMessages,
@@ -303,6 +305,8 @@ export function Workbench(): ReactElement {
   const {
     designWorkspaceRoot, designAssistantOpen, setDesignAssistantOpen, designImplementOpen,
     designImplementTitle, designActiveDocumentId, designAssistantModel, setDesignAssistantModel,
+    designComposerReasoningEffort, setDesignComposerReasoningEffort,
+    designDrawingTitle, designDrawingCreationSubmitting,
     canvasDocument, canvasDocumentKey, canvasSelectedIds, designAssistantPickList,
     resolvedDesignAssistantProviderId, selectCanvasShape, designContextChips,
     designContextSuppressedIds, designHtmlElementContext, removeDesignContextChip,
@@ -313,6 +317,13 @@ export function Workbench(): ReactElement {
     composerModelGroups,
     setInput
   })
+  useDesignDrawingTitleBackfill({
+    workspaceRoot: designWorkspaceRoot,
+    documents: designDocuments,
+    threads,
+    runtimeConnection
+  })
+  const { clearActiveDrawingHistory, deleteDrawing } = useWorkbenchDesignHistoryController()
   const designDocumentFileMentionCandidates = useMemo(() => {
     const root = normalizeWorkspaceRoot(designWorkspaceRoot || workspaceRoot)
     return root ? designDocumentComposerFileReferences(designDocuments, root) : []
@@ -631,7 +642,8 @@ export function Workbench(): ReactElement {
     openSettings,
     useWorktreePool,
     setUseWorktreePool,
-    worktreeBranch
+    worktreeBranch,
+    navigationLocked: designDrawingCreationSubmitting
   })
 
   const showDevPreviewCard =
@@ -769,6 +781,8 @@ export function Workbench(): ReactElement {
   const {
     buildCodeCanvasOutboundPrompt,
     designThreads,
+    designHistoryThreadIds,
+    hasRegisteredHistory: designHasRegisteredHistory,
     handleDesignQualityRepairRequest,
     handleDesignRuntimeQualityFindings,
     implementDesignInCode,
@@ -787,10 +801,13 @@ export function Workbench(): ReactElement {
     composerAttachments,
     composerModelGroups,
     composerReasoningEffort,
+    designComposerReasoningEffort,
+    composerFastMode,
     createThread,
     designContextSuppressedIds,
     designHtmlElementContext,
     designWorkspaceRoot,
+    clearDesignHistory,
     ensureDesignThreadForWorkspace,
     getAttachmentScope,
     clearActiveThreadSelection,
@@ -890,7 +907,7 @@ export function Workbench(): ReactElement {
     const node = run?.nodes[target.nodeId]
     const attempt = node?.attempts.find((candidate) => candidate.id === target.attemptId)
     if (!run || !node || !attempt) return undefined
-    const liveness = graphNodeLiveness(node, graphChildRuns, graphChildNow)
+    const liveness = graphNodeLiveness(node, graphChildRuns, graphChildNow, run.supervision)
     return {
       runTitle: run.plans.at(-1)?.title ?? t('graphPanelTitle'),
       nodeTitle: node.node.title,
@@ -969,7 +986,8 @@ export function Workbench(): ReactElement {
   const rightPanelSharedProps = buildWorkbenchRightPanelSharedProps({
     input, setInput, mode: composerMode, setMode: setComposerMode, busy, runtimeConnection,
     activeThreadId, blocks, liveReasoning, liveAssistant, composerModelGroups, composerReasoningEffort,
-    setComposerReasoningEffort, queuedMessages, removeQueuedMessage, guideQueuedMessage,
+    setComposerReasoningEffort,
+    queuedMessages, removeQueuedMessage, guideQueuedMessage,
     attachments: composerAttachments,
     attachmentUploadEnabled, attachmentUploadBusy, attachmentUploadError,
     onPickAttachments: (files) => void handlePickAttachments(files),
@@ -1057,16 +1075,22 @@ export function Workbench(): ReactElement {
         composerModel: designAssistantModel,
         composerProviderId: resolvedDesignAssistantProviderId,
         composerPickList: designAssistantPickList,
-        setComposerModel: setDesignAssistantModel
+        setComposerModel: setDesignAssistantModel,
+        composerReasoningEffort: designComposerReasoningEffort,
+        composerFastMode,
+        setComposerReasoningEffort: setDesignComposerReasoningEffort,
+        setComposerFastMode
       },
       contextChips: designContextChips,
       input,
       onRemoveContextChip: removeDesignContextChip,
       onSendPrompt: sendDesignPrompt,
-      createThread: createDesignThread,
+      drawingTitle: designDrawingTitle,
+      onClearHistory: clearActiveDrawingHistory,
+      hasRegisteredHistory: designHasRegisteredHistory,
       threads: designThreads,
-      onSwitchThread: switchDesignThread,
-      fallbackWorkspaceRoot: workspaceRoot
+      historyThreadIds: designHistoryThreadIds,
+      onSwitchThread: switchDesignThread
     },
     write: {
       composerModel: writeAssistantModel,
@@ -1074,7 +1098,9 @@ export function Workbench(): ReactElement {
       composerPickList: writeAssistantPickList,
       skillCommands: runtimeSkills,
       disabledSkillIds,
+      composerFastMode,
       setComposerModel: setWriteAssistantModel,
+      setComposerFastMode,
       onNewConversation: startNewWriteAssistantConversation,
       onPickWorkspace: () => void pickWriteAssistantWorkspace()
     },
@@ -1112,6 +1138,9 @@ export function Workbench(): ReactElement {
       threadRunning: busy,
       sideConversationCount: currentSideConversations.length,
       sideConversationRunningCount: currentSideRunningCount,
+      sideAttachmentStoreAvailable: runtimeInfo?.capabilities.attachments.available === true,
+      sideDefaultModelSupportsImageInput:
+        runtimeInfo?.capabilities.model.inputModalities.includes('image') === true,
       files: {
         open: fileTreeSidePanelOpen,
         view: fileTreeSidePanelView,
@@ -1188,6 +1217,7 @@ export function Workbench(): ReactElement {
         onPinThread={pinThread}
         onArchiveThread={(id) => archiveThread(id, true)}
         onDeleteThread={deleteThread}
+        onDeleteDrawing={deleteDrawing}
         onRestoreThread={(id) => archiveThread(id, false)}
         onNewChat={startNewChat}
         onNewChatInWorkspace={startNewChatInWorkspace}
@@ -1244,6 +1274,24 @@ export function Workbench(): ReactElement {
           },
           onRuntimeQualityFindings: handleDesignRuntimeQualityFindings,
           onRequestQualityRepair: handleDesignQualityRepairRequest,
+          drawingStart: {
+            ...rightPanelSharedProps,
+            leftSidebarCollapsed,
+            onToggleLeftSidebar: toggleLeftSidebar,
+            workspaceRoot: designWorkspaceRoot || workspaceRoot,
+            composerModel: designAssistantModel,
+            composerProviderId: resolvedDesignAssistantProviderId,
+            composerPickList: designAssistantPickList,
+            setComposerModel: setDesignAssistantModel,
+            composerReasoningEffort: designComposerReasoningEffort,
+            composerFastMode,
+            setComposerReasoningEffort: setDesignComposerReasoningEffort,
+            setComposerFastMode,
+            queuedMessages: [],
+            contextChips: designContextChips.filter((chip) => chip.kind === 'design-target'),
+            onRemoveContextChip: removeDesignContextChip,
+            onSend: () => void sendDesignPrompt(input)
+          },
           rightPanel
         }}
         write={{

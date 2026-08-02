@@ -9,13 +9,15 @@ const englishGraphResources = Object.fromEntries(
     key.startsWith('graph') || key === 'rightPanelGraph')
 )
 const englishGraphSettingsResources = Object.fromEntries(
-  Object.entries(enSettings).filter(([key]) => key.startsWith('graphSettings'))
+  Object.entries(enSettings).filter(([key]) =>
+    key.startsWith('graphSettings') || key.startsWith('storageRelocation')
+  )
 )
 
 /**
  * Graph Mode launches with complete English and Chinese copy. Other active
- * locales receive an explicit English Graph bundle so controls never render
- * raw translation keys while native translations can be added incrementally.
+ * locales receive an explicit English Graph/Storage bundle so controls never
+ * render raw translation keys while native translations can be added incrementally.
  */
 export function withGraphCommonFallback<T extends Record<string, unknown>>(locale: T): T {
   return {
@@ -55,7 +57,9 @@ const lazyLocaleBackend: BackendModule = {
         null,
         namespace === 'common'
           ? withGraphCommonFallback(resource)
-          : withGraphSettingsFallback(resource)
+          : namespace === 'settings'
+            ? withGraphSettingsFallback(resource)
+            : resource
       )
     }, (error: unknown) => {
       callback(

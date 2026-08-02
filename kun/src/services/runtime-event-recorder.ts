@@ -18,7 +18,7 @@ export type RuntimeEventDraft = RuntimeEvent extends infer Event
 export type RuntimeEventRecorderOptions = {
   eventBus: EventBus
   sessionStore: SessionStore
-  allocateSeq: (threadId: string) => number
+  allocateSeq: (threadId: string) => number | Promise<number>
   nowIso: () => string
   observers?: RuntimeEventObserver[]
   /** Optional per-thread deletion fence used by serve persistence. */
@@ -153,7 +153,7 @@ export class RuntimeEventRecorder {
       // we awaited the store; never move the floor backwards.
       floor = Math.max(persisted, this.lastIssuedSeq.get(threadId) ?? 0)
     }
-    const allocated = this.options.allocateSeq(threadId)
+    const allocated = await this.options.allocateSeq(threadId)
     const seq = Math.max(allocated, floor + 1)
     this.noteIssuedSeq(threadId, seq)
     return seq

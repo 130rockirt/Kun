@@ -39,6 +39,7 @@ const {
   waitForSuccessfulGuestInspection,
   isExtensionGuestTarget,
   isWorkbenchTarget,
+  isVerifiedIsolatedKunCommand,
   platformDesktopArguments,
   resolvedDesktopResourceCandidates,
   resolveDesktopLaunchSelection,
@@ -99,7 +100,34 @@ test('stops the isolated Graph runtime before reporting smoke success', () => {
   assert.ok(stopCall > 0, 'Graph smoke must stop its data-dir scoped shared Runtime')
   assert.ok(removeCall > stopCall, 'Graph smoke must stop its shared Runtime before removing its profile')
   assert.ok(successWrite > removeCall, 'Graph smoke must report success only after cleanup completes')
-  assert.match(source, /await stopSharedRuntime\(profile\)/u)
+  assert.match(source, /stopIsolatedServiceManager\(home, profile\)/u)
+})
+
+test('only recognizes data-dir scoped Kun smoke Runtime and Manager commands', () => {
+  const profile = join(root, '.tmp', 'kun-packaged-smoke', 'home', '.kun', 'data')
+  const unrelatedProfile = join(root, '.tmp', 'another-kun-smoke', 'home', '.kun', 'data')
+  assert.equal(isVerifiedIsolatedKunCommand({
+    command: `Kun Helper /app/kun/dist/cli/serve-entry.js serve --data-dir ${profile}`,
+    kind: 'runtime',
+    expectedDataDir: profile
+  }), true)
+  assert.equal(isVerifiedIsolatedKunCommand({
+    command: `/app/kun/dist/cli/serve-entry.js serve --data-dir ${unrelatedProfile}`,
+    kind: 'runtime',
+    expectedDataDir: profile
+  }), false)
+  assert.equal(isVerifiedIsolatedKunCommand({
+    command: '/app/kun/dist/manager/manager-entry.js',
+    kind: 'manager',
+    expectedDataDir: profile,
+    discoveryDataDir: profile
+  }), true)
+  assert.equal(isVerifiedIsolatedKunCommand({
+    command: '/app/kun/dist/manager/manager-entry.js',
+    kind: 'manager',
+    expectedDataDir: profile,
+    discoveryDataDir: unrelatedProfile
+  }), false)
 })
 
 test('stops the isolated packaged Runtime before reporting desktop smoke success', () => {
@@ -114,6 +142,12 @@ test('stops the isolated packaged Runtime before reporting desktop smoke success
   assert.ok(removeCall > stopCall, 'packaged desktop smoke must stop its shared Runtime before removing its profile')
   assert.ok(successWrite > removeCall, 'packaged desktop smoke must report success only after cleanup completes')
   assert.match(source, /await stopSharedRuntime\(profile\)/u)
+  const gracefulRuntimeExitWait = source.indexOf('await waitForPidExit(owner.pid, 5_000)')
+  const runtimeTerminationFallback = source.indexOf("kind: 'runtime'")
+  assert.ok(gracefulRuntimeExitWait > stopCall, 'desktop smoke must allow its Runtime to exit after shutdown')
+  assert.ok(runtimeTerminationFallback > gracefulRuntimeExitWait, 'desktop smoke must only force-stop a Runtime after the exit wait')
+  assert.match(source, /stopIsolatedServiceManager\(home, profile\)/u)
+  assert.match(source, /Refusing to terminate unverified PID/u)
 })
 
 test('selects host-native packaged resources and never launches desktop Electron as Node', () => {

@@ -1,5 +1,7 @@
-import { useCallback, useMemo, type Dispatch, type SetStateAction } from 'react'
+import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react'
+import { useTranslation } from 'react-i18next'
 import type { ModelProviderModelGroup } from '@shared/kun-gui-api'
+import type { ModelReasoningEffort } from '@shared/app-settings'
 import {
   buildComposerAssistantPickList,
   resolveComposerAssistantProviderId
@@ -8,6 +10,11 @@ import { useDesignComposerContextState } from '../design/useDesignComposerContex
 import { useCanvasSelectionStore } from '../../design/canvas/canvas-selection-store'
 import { useCanvasShapeStore } from '../../design/canvas/canvas-shape-store'
 import { useDesignWorkspaceStore } from '../../design/design-workspace-store'
+import { displayDrawingTitle } from '../../design/design-drawing-title'
+import {
+  composerReasoningEffortForSelection,
+  persistComposerReasoningEffort
+} from '../../store/chat-store-helpers'
 
 type UseWorkbenchDesignRuntimeInput = {
   route: string
@@ -22,12 +29,17 @@ export function useWorkbenchDesignRuntime({
   composerModelGroups,
   setInput
 }: UseWorkbenchDesignRuntimeInput) {
+  const { t } = useTranslation('common')
   const designWorkspaceRoot = useDesignWorkspaceStore((s) => s.workspaceRoot)
   const designAssistantOpen = useDesignWorkspaceStore((s) => s.canvasAssistantOpen)
   const setDesignAssistantOpen = useDesignWorkspaceStore((s) => s.setCanvasAssistantOpen)
   const designImplementOpen = useDesignWorkspaceStore((s) => s.implementOpen)
   const designImplementTitle = useDesignWorkspaceStore((s) => s.implementTitle)
   const designActiveDocumentId = useDesignWorkspaceStore((s) => s.activeDocumentId)
+  const designDocuments = useDesignWorkspaceStore((s) => s.documents)
+  const designDrawingCreationOpen = useDesignWorkspaceStore((s) => s.drawingCreationOpen)
+  const designDrawingCreationSubmitting = useDesignWorkspaceStore((s) => s.drawingCreationSubmitting)
+  const cancelDrawingCreation = useDesignWorkspaceStore((s) => s.cancelDrawingCreation)
   const designAssistantModel = useDesignWorkspaceStore((s) => s.assistantModel)
   const designAssistantProviderId = useDesignWorkspaceStore((s) => s.assistantProviderId)
   const setDesignAssistantModel = useDesignWorkspaceStore((s) => s.setAssistantModel)
@@ -52,6 +64,38 @@ export function useWorkbenchDesignRuntime({
       storedProviderId: designAssistantProviderId
     })
   }, [composerModelGroups, designAssistantModel, designAssistantProviderId])
+  const [designComposerReasoningEffort, setDesignComposerReasoningEffortState] =
+    useState<ModelReasoningEffort>(() => composerReasoningEffortForSelection(
+      composerModelGroups,
+      designAssistantModel,
+      resolvedDesignAssistantProviderId
+    ))
+  useEffect(() => {
+    setDesignComposerReasoningEffortState(composerReasoningEffortForSelection(
+      composerModelGroups,
+      designAssistantModel,
+      resolvedDesignAssistantProviderId
+    ))
+  }, [composerModelGroups, designAssistantModel, resolvedDesignAssistantProviderId])
+  const setDesignComposerReasoningEffort = useCallback((effort: ModelReasoningEffort): void => {
+    persistComposerReasoningEffort(
+      designAssistantModel,
+      resolvedDesignAssistantProviderId,
+      effort
+    )
+    setDesignComposerReasoningEffortState(effort)
+  }, [designAssistantModel, resolvedDesignAssistantProviderId])
+  const activeDrawing = useMemo(
+    () => designDocuments.find((document) => document.id === designActiveDocumentId) ?? null,
+    [designActiveDocumentId, designDocuments]
+  )
+  const designDrawingTitle = activeDrawing
+    ? displayDrawingTitle(activeDrawing, t('designUntitledDrawing'))
+    : t('designUntitledDrawing')
+
+  useEffect(() => {
+    if (route !== 'design' && designDrawingCreationOpen) cancelDrawingCreation()
+  }, [cancelDrawingCreation, designDrawingCreationOpen, route])
   const selectCanvasShape = useCallback((shapeId: string): void => {
     useCanvasSelectionStore.getState().select([shapeId])
   }, [])
@@ -63,8 +107,13 @@ export function useWorkbenchDesignRuntime({
     designImplementOpen,
     designImplementTitle,
     designActiveDocumentId,
+    designDrawingCreationOpen,
+    designDrawingCreationSubmitting,
+    designDrawingTitle,
     designAssistantModel,
     setDesignAssistantModel,
+    designComposerReasoningEffort,
+    setDesignComposerReasoningEffort,
     canvasDocument,
     canvasDocumentKey,
     canvasSelectedIds,

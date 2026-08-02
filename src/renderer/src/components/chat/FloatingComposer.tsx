@@ -126,6 +126,10 @@ import {
 } from './composer-file-drop'
 import { useComposerSendKeySetting } from '../../lib/composer-send-key-settings'
 import { isComposerSendHotkey } from '@shared/app-settings'
+import {
+  selectGraphPlanningCorrectionDraft,
+  useGraphStore
+} from '../../graph/graph-store'
 
 export type { ComposerFileReference } from '../../lib/composer-file-references'
 export type { ComposerExecutionSettings } from './FloatingComposerExecutionPicker'
@@ -203,6 +207,8 @@ type Props = {
     attemptId: string,
     childThreadId: string
   ) => void
+  /** Hard-disable editing and submission for an external destructive operation. */
+  disabled?: boolean
   busy: boolean
   currentTurnOrchestration?: 'direct' | 'graph' | null
   runtimeReady: boolean
@@ -213,6 +219,7 @@ type Props = {
   composerModelGroups?: ModelProviderModelGroup[]
   composerReasoningEffort?: string
   composerFastMode?: boolean
+  showProviderInModelLabel?: boolean
   onComposerModelChange: (modelId: string, providerId?: string) => void
   onComposerReasoningEffortChange?: (effort: ComposerReasoningEffort) => void
   onComposerFastModeChange?: (enabled: boolean) => void
@@ -333,6 +340,7 @@ export function FloatingComposer({
   onOrchestrationChange,
   onOpenGraph,
   onOpenGraphChild,
+  disabled = false,
   busy,
   currentTurnOrchestration = null,
   runtimeReady,
@@ -343,6 +351,7 @@ export function FloatingComposer({
   composerModelGroups = EMPTY_MODEL_GROUPS,
   composerReasoningEffort,
   composerFastMode,
+  showProviderInModelLabel = false,
   onComposerModelChange,
   onComposerReasoningEffortChange,
   onComposerFastModeChange,
@@ -395,6 +404,9 @@ export function FloatingComposer({
   const activeThreadId = activeThreadIdOverride === undefined
     ? storeActiveThreadId
     : activeThreadIdOverride
+  const graphPlanningCorrectionDraft = useGraphStore((state) =>
+    selectGraphPlanningCorrectionDraft(state.drafts, activeThreadId)
+  )
   const usageRefreshKey = useChatStore((s) => s.usageRefreshKey)
   const threads = useChatStore((s) => s.threads)
   const compactActiveThread = useChatStore((s) => s.compactActiveThread)
@@ -492,8 +504,8 @@ export function FloatingComposer({
     activeClawChannel?.remoteSession?.chatId?.trim()
   )
 
-  const canEditComposer = route === 'claw' ? clawHasInboundConversation : true
-  const canCompose = runtimeReady && (
+  const canEditComposer = !disabled && (route === 'claw' ? clawHasInboundConversation : true)
+  const canCompose = !disabled && runtimeReady && (
     route === 'claw'
       ? clawHasInboundConversation
       : (hasActiveThread || !!effectiveWorkspaceRoot)
@@ -516,7 +528,14 @@ export function FloatingComposer({
   const canTogglePlanMode = canCompose && Boolean(onPlanCommand)
   const showGraphMenuOption = graphEnabled && Boolean(onOrchestrationChange)
   const canToggleGraphMode = canCompose && !busy && showGraphMenuOption
-  const runningGraphTurn = graphEnabled && busy && currentTurnOrchestration === 'graph'
+  const graphPlanningNeedsCorrection = Boolean(
+    graphEnabled &&
+    busy &&
+    currentTurnOrchestration === 'graph' &&
+    graphPlanningCorrectionDraft
+  )
+  const runningGraphTurn = graphEnabled && busy &&
+    currentTurnOrchestration === 'graph' && !graphPlanningNeedsCorrection
   const canCreateNewThread = runtimeReady && route !== 'claw' && Boolean(effectiveWorkspaceRoot) && Boolean(onNewCommand)
   const canOpenGoalPanel = canCompose && route !== 'claw'
   const canRunReview = canCompose && route !== 'claw' && Boolean(onReviewCommand)
@@ -595,7 +614,9 @@ export function FloatingComposer({
       : (goalInputMode || goalPanelOpen) && route !== 'claw'
         ? t('goalComposerPlaceholder')
       : busy
-        ? t('composerQueuePlaceholder')
+        ? currentTurnOrchestration === 'graph'
+          ? t('composerGraphQueuePlaceholder')
+          : t('composerQueuePlaceholder')
         : route === 'claw'
             ? clawHasInboundConversation
               ? t('clawPlaceholder', { name: clawAgentName })
@@ -1188,6 +1209,7 @@ export function FloatingComposer({
               {runtimeReady ? <BackgroundShellOverlay threadId={activeThreadId} /> : null}
               <FloatingComposerQueuedMessages
                 messages={queuedMessages}
+                guidanceTarget={currentTurnOrchestration === 'graph' ? 'graph' : 'turn'}
                 onRemove={onRemoveQueuedMessage}
                 onGuide={onGuideQueuedMessage}
                 onReorder={reorderQueuedMessage}
@@ -1717,7 +1739,19 @@ export function FloatingComposer({
                         <X className="h-3 w-3" strokeWidth={2} />
                       </button>
                     ) : null}
-                    {runningGraphTurn ? (
+                    {graphPlanningNeedsCorrection ? (
+                      <span
+                        data-composer-graph-needs-correction
+                        className="ds-composer-mode-badge inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-full bg-amber-500/10 px-2.5 text-[13px] font-medium text-amber-700 dark:text-amber-200"
+                        title={t('graphPlanningStatus_needs_correction')}
+                        aria-label={t('graphPlanningStatus_needs_correction')}
+                      >
+                        <Share2 className="h-3.5 w-3.5" strokeWidth={1.9} />
+                        <span className="ds-composer-mode-label">
+                          {t('graphPlanningStatus_needs_correction')}
+                        </span>
+                      </span>
+                    ) : runningGraphTurn ? (
                       <span
                         data-composer-graph-running
                         className="ds-composer-mode-badge inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-full bg-indigo-500/10 px-2.5 text-[13px] font-medium text-indigo-700 dark:text-indigo-200"
@@ -1836,6 +1870,7 @@ export function FloatingComposer({
                       composerModelGroups={composerModelGroups}
                       composerReasoningEffort={composerReasoningEffort}
                       composerFastMode={composerFastMode}
+                      showProviderInModelLabel={showProviderInModelLabel}
                       canChangeModel={canChangeModel}
                       controlVariant={modelControlVariant}
                       stretch={stretchModelPicker || showToolbarStartControls}

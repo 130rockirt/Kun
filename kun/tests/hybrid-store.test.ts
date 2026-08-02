@@ -62,6 +62,62 @@ describe('HybridThreadStore', () => {
     })
   })
 
+  it('backfills legacy agent surfaces from metadata once, including the Code fallback', async () => {
+    if (!sqliteAvailable) return
+    const first = await createHybridStores()
+    const legacyDesign = createThreadRecord({
+      id: 'thr_legacy_design_surface',
+      title: 'Legacy design',
+      workspace: '/tmp/project',
+      model: 'deepseek-chat',
+      createdAt: '2026-08-01T00:00:00.000Z'
+    })
+    await first.threadStore.upsert({
+      ...legacyDesign,
+      turns: [0, 1].map((index) => createTurnRecord({
+        id: `turn_legacy_design_${index}`,
+        threadId: legacyDesign.id,
+        prompt: `design ${index}`,
+        model: legacyDesign.model,
+        agentSurface: 'design',
+        createdAt: `2026-08-01T00:00:0${index + 1}.000Z`
+      }))
+    })
+    const legacyCode = createThreadRecord({
+      id: 'thr_legacy_code_surface',
+      title: 'Legacy code',
+      workspace: '/tmp/project',
+      model: 'deepseek-chat',
+      createdAt: '2026-08-01T00:00:00.000Z'
+    })
+    await first.threadStore.upsert(legacyCode)
+    first.threadStore.close()
+
+    const sqlite = await import('better-sqlite3')
+    const Database = sqlite.default
+    const database = new Database(join(dataDir, 'index.sqlite3'))
+    database.prepare('UPDATE threads SET agent_surface = NULL').run()
+    database.close()
+
+    const reopened = await createHybridStores()
+    const summaries = await reopened.threadStore.list({ includeArchived: true })
+    expect(summaries.find((thread) => thread.id === legacyDesign.id)?.agentSurface).toBe('design')
+    expect(summaries.find((thread) => thread.id === legacyCode.id)?.agentSurface).toBe('code')
+
+    const indexed = new Database(join(dataDir, 'index.sqlite3'), { readonly: true })
+    const rows = indexed.prepare(`
+      SELECT id, agent_surface
+      FROM threads
+      WHERE id IN (?, ?)
+      ORDER BY id
+    `).all(legacyCode.id, legacyDesign.id) as Array<{ id: string; agent_surface: string | null }>
+    indexed.close()
+    expect(rows).toEqual([
+      { id: legacyCode.id, agent_surface: 'code' },
+      { id: legacyDesign.id, agent_surface: 'design' }
+    ])
+  })
+
   it('lists existing SQLite rows without replaying damaged message or event logs', async () => {
     const first = await createHybridStores()
     const record = await seedThreadWithMessage(first.threadStore, first.sessionStore, 'indexed already')

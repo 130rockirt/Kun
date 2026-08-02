@@ -1,13 +1,17 @@
 import type {
   GraphChildRuntime,
-  GraphNodeProjection
+  GraphNodeProjection,
+  GraphSupervisionProjection
 } from './graph-types'
 
 export const GRAPH_ACTIVITY_QUIET_MS = 30_000
 
 export type GraphLivenessKind =
   | 'working'
-  | 'reviewing'
+  | 'active_review'
+  | 'waiting_lead'
+  | 'retry_scheduled'
+  | 'needs_attention'
   | 'retrying'
   | 'waiting_dependency'
   | 'waiting_human'
@@ -31,7 +35,7 @@ export type GraphNodeLiveness = {
 
 const PROCESSING_GRAPH_LIVENESS_KINDS = new Set<GraphLivenessKind>([
   'working',
-  'reviewing',
+  'active_review',
   'retrying'
 ])
 
@@ -62,7 +66,8 @@ export function childRuntimeForNode(
 export function graphNodeLiveness(
   node: GraphNodeProjection,
   childRuns: Readonly<Record<string, GraphChildRuntime>>,
-  now = Date.now()
+  now = Date.now(),
+  supervision?: GraphSupervisionProjection
 ): GraphNodeLiveness {
   const attempt = node.attempts.at(-1)
   const child = attempt?.childThreadId
@@ -81,10 +86,10 @@ export function graphNodeLiveness(
     node.status === 'superseded' ||
     node.status === 'failed' ||
     node.status === 'cancelled'
+  const supervisionKind = supervisionLivenessForNode(node, supervision, now)
   const activelyRunning = !nodeTerminal && (
     node.status === 'running' ||
-    node.status === 'reviewing' ||
-    node.status === 'submitted' ||
+    supervisionKind === 'active_review' ||
     child?.status === 'running'
   )
   const elapsedMs = activelyRunning && startMs !== undefined
@@ -106,7 +111,7 @@ export function graphNodeLiveness(
   } else if (node.status === 'blocked' || node.status === 'pending') {
     kind = 'waiting_dependency'
   } else if (node.status === 'reviewing' || node.status === 'submitted') {
-    kind = 'reviewing'
+    kind = supervisionKind ?? 'waiting_lead'
   } else if (node.status === 'repair_required' || activity?.phase === 'retrying') {
     kind = 'retrying'
   } else if (node.status === 'queued' || child?.status === 'queued') {
@@ -124,11 +129,42 @@ export function graphNodeLiveness(
     ...(child ? { child } : {}),
     ...(attempt?.childThreadId ? { childThreadId: attempt.childThreadId } : {}),
     ...(attempt ? { attemptNumber: attempt.attemptNumber } : {}),
-    ...(!nodeTerminal && activity?.label ? { activityLabel: activity.label } : {}),
-    ...(!nodeTerminal && activity?.toolName ? { activityToolName: activity.toolName } : {}),
+    ...(!nodeTerminal && !supervisionKind && activity?.label
+      ? { activityLabel: activity.label }
+      : {}),
+    ...(!nodeTerminal && !supervisionKind && activity?.toolName
+      ? { activityToolName: activity.toolName }
+      : {}),
     ...(startedAt ? { startedAt } : {}),
     elapsedMs,
     ...(lastActivityAgeMs !== undefined ? { lastActivityAgeMs } : {}),
     quiet
   }
+}
+
+function supervisionLivenessForNode(
+  node: GraphNodeProjection,
+  supervision: GraphSupervisionProjection | undefined,
+  now: number
+): Extract<GraphLivenessKind,
+  'active_review' | 'waiting_lead' | 'retry_scheduled' | 'needs_attention'> | undefined {
+  const matching = supervision?.pendingActions.filter((action) =>
+    action.nodeIds.includes(node.node.id)) ?? []
+  if (matching.some((action) => action.liveness === 'needs_attention')) {
+    return 'needs_attention'
+  }
+  if (supervision?.peerReviewLeases?.some((lease) =>
+    lease.nodeId === node.node.id &&
+    lease.attemptId === node.attempts.at(-1)?.id &&
+    Date.parse(lease.leaseUntil) > now)) {
+    return 'active_review'
+  }
+  if (matching.some((action) => action.liveness === 'active_review')) {
+    return 'active_review'
+  }
+  if (matching.some((action) => action.liveness === 'retry_scheduled')) {
+    return 'retry_scheduled'
+  }
+  if (matching.length) return 'waiting_lead'
+  return undefined
 }

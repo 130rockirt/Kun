@@ -17,10 +17,22 @@ import type { GraphRunStore } from './graph-run-store.js'
 import type { FileGraphWriteCoordinator } from './graph-write-coordinator.js'
 import type { GraphWorkerSessionRegistry } from './graph-worker-sessions.js'
 
+export type GraphLeadDeliveryResult =
+  | {
+      status: 'delivered'
+      sourceTurnId: string
+      deliveredSeq: number
+      executionActive: boolean
+      parkedWithPendingSupervision?: boolean
+    }
+  | { status: 'deferred'; reason: string; retryAfterMs: number }
+  | { status: 'orphaned'; reason: string }
+  | { status: 'terminal' }
+
 export type GraphSupervisionPort = {
   signal(input: {
     runId: string
-    reason: 'submitted' | 'failure' | 'stall' | 'conflict' | 'budget' | 'help' | 'recovery' | 'completion' | 'user_steering' | 'worker_report'
+    reason: 'submitted' | 'failure' | 'stall' | 'conflict' | 'budget' | 'help' | 'recovery' | 'completion' | 'user_steering' | 'worker_report' | 'scheduler_error'
     nodeIds: string[]
     digest: string
   }): Promise<void> | void
@@ -29,6 +41,7 @@ export type GraphSupervisionPort = {
     node: GraphNodeProjectionV1
     attempt: GraphNodeAttemptV1
     kind: 'peer' | 'lead'
+    signal?: AbortSignal
   }): Promise<GraphReviewResultV1>
   synthesize?(run: GraphRunV1): Promise<GraphRunSummaryV1>
 }

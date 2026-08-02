@@ -17,8 +17,10 @@ import {
   type AppSettingsV1
 } from '../../shared/app-settings'
 import {
+  getRuntimeAuthToken,
   kunRuntimeAdapter,
   resolveRuntimeRequestTimeoutMs,
+  runtimeAuthHeaders,
   runtimeRequestViaHost
 } from './kun-adapter'
 import { buildRuntimeCapabilityManifest } from '../../../kun/src/contracts/capabilities.js'
@@ -371,6 +373,7 @@ describe('kunRuntimeAdapter.resolveConnection', () => {
     const packageRoot = join(root, 'kun-package')
     const entry = join(packageRoot, 'dist/cli/serve-entry.js')
     const settings = settingsForPort(18900)
+    settings.agents.kun.runtimeToken = ''
     settings.agents.kun.dataDir = dataDir
     settings.agents.kun.binaryPath = packageRoot
     try {
@@ -396,6 +399,8 @@ describe('kunRuntimeAdapter.resolveConnection', () => {
 
       await expect(kunRuntimeAdapter.resolveConnection(settings)).resolves.toBe(true)
       expect(kunRuntimeAdapter.getBaseUrl(settings)).toBe('http://127.0.0.1:1')
+      expect(getRuntimeAuthToken(settings)).toBe('secret')
+      expect(runtimeAuthHeaders(settings).get('Authorization')).toBe('Bearer secret')
     } finally {
       await kunRuntimeAdapter.stopAndWait()
       await rm(root, { recursive: true, force: true })

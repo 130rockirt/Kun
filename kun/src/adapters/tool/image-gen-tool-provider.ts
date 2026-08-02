@@ -5,14 +5,14 @@ import type {
   ImageGenerationResolution,
   KunCapabilitiesConfig
 } from '../../contracts/capabilities.js'
-import type { AttachmentStore } from '../../attachments/attachment-store.js'
+import type { AttachmentContent, AttachmentStore } from '../../attachments/attachment-store.js'
 import { detectImage } from '../../attachments/attachment-store.js'
 import type { ToolHostContext } from '../../ports/tool-host.js'
 import type { CapabilityToolProvider } from './capability-registry.js'
 import { resolveWorkspacePath } from './builtin-tool-utils.js'
 import { LocalToolHost } from './local-tool-host.js'
 
-const GENERATED_IMAGE_DIR = '.deepseekgui-images'
+const GENERATED_IMAGE_DIR = '.kun/images'
 const MAX_REFERENCE_IMAGE_BYTES = 10 * 1024 * 1024
 const REFERENCE_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp'])
 const ASPECT_RATIOS = new Set(['1:1', '4:3', '3:4', '16:9', '9:16', '3:2', '2:3', '21:9'])
@@ -279,7 +279,7 @@ export function buildImageGenToolProviders(
     description: [
       'Generate an image from a text prompt using the configured image provider.',
       supportsEdit
-        ? 'Optionally pass reference_image_paths (image files inside the workspace) to guide the result (image-to-image).'
+        ? 'Optionally pass reference_image_paths (workspace files) and/or reference_attachment_ids (authorized image attachments from the current thread) to guide the result (image-to-image).'
         : '',
       `The generated image is saved under ${GENERATED_IMAGE_DIR}/ in the workspace and returned as an inline attachment preview.`,
       'Generates exactly one image per call; call again for variations.',
@@ -307,6 +307,12 @@ export function buildImageGenToolProviders(
                 items: { type: 'string' },
                 maxItems: config.maxReferenceImages,
                 description: 'Workspace-relative paths of reference images for image-to-image guidance'
+              },
+              reference_attachment_ids: {
+                type: 'array',
+                items: { type: 'string' },
+                maxItems: config.maxReferenceImages,
+                description: 'Authorized image attachment IDs from the current thread or workspace for image-to-image guidance'
               }
             }
           : {})
@@ -331,8 +337,10 @@ export function buildImageGenToolProviders(
 
       const references = await collectReferenceImages(
         args.reference_image_paths,
+        args.reference_attachment_ids,
         context,
-        config.maxReferenceImages
+        config.maxReferenceImages,
+        options.attachmentStore
       )
       if ('error' in references) return references.error
 
@@ -437,6 +445,8 @@ export function buildImageGenToolProviders(
           ...(size ? { size } : {}),
           quality: config.quality,
           endpoint,
+          mode: endpoint === 'edits' ? 'edit' : 'generation',
+          referenceImageCount: references.images.length,
           warnings,
           telemetry: telemetry(startedAt, client.id)
         }
@@ -455,20 +465,31 @@ type ReferenceImages = { images: { name: string; mimeType: string; data: Buffer 
 type ReferenceError = { error: { output: unknown; isError: true } }
 
 async function collectReferenceImages(
-  value: unknown,
+  pathValue: unknown,
+  attachmentIdValue: unknown,
   context: ToolHostContext,
-  maxCount: number
+  maxCount: number,
+  attachmentStore: AttachmentStore | undefined
 ): Promise<ReferenceImages | ReferenceError> {
-  if (value === undefined || value === null) return { images: [] }
-  if (!Array.isArray(value)) {
-    return { error: toolError('invalid_reference_path', 'reference_image_paths must be an array of strings') }
+  const paths = parseReferenceStrings(pathValue, 'reference_image_paths', 'invalid_reference_path')
+  if ('error' in paths) return paths
+  const attachmentIds = parseReferenceStrings(
+    attachmentIdValue,
+    'reference_attachment_ids',
+    'invalid_reference_attachment'
+  )
+  if ('error' in attachmentIds) return attachmentIds
+  if (paths.values.length + attachmentIds.values.length > maxCount) {
+    return {
+      error: toolError(
+        'invalid_reference_count',
+        `at most ${maxCount} reference images are allowed across reference_image_paths and reference_attachment_ids`
+      )
+    }
   }
-  const paths = value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
-  if (paths.length > maxCount) {
-    return { error: toolError('invalid_reference_path', `at most ${maxCount} reference images are allowed`) }
-  }
+
   const images: ReferenceImages['images'] = []
-  for (const rawPath of paths) {
+  for (const rawPath of paths.values) {
     let resolved: string
     try {
       resolved = (await resolveWorkspacePath(rawPath, context, { enforceWorkspaceBoundary: true })).absolutePath
@@ -481,16 +502,80 @@ async function collectReferenceImages(
     } catch {
       return { error: toolError('invalid_reference_path', `reference image not found: ${rawPath}`) }
     }
-    if (data.byteLength > MAX_REFERENCE_IMAGE_BYTES) {
-      return { error: toolError('invalid_reference_path', `reference image exceeds ${MAX_REFERENCE_IMAGE_BYTES} byte limit: ${rawPath}`) }
+    const validated = validateReferenceImage(data, rawPath, 'invalid_reference_path')
+    if ('error' in validated) return validated
+    images.push({
+      name: rawPath.split(/[\\/]/).pop() || 'reference.png',
+      mimeType: validated.mimeType,
+      data
+    })
+  }
+
+  if (attachmentIds.values.length > 0 && !attachmentStore) {
+    return {
+      error: toolError(
+        'invalid_reference_attachment',
+        'reference attachments are unavailable because the attachment store is disabled'
+      )
     }
-    const detected = detectImage(data)
-    if (!detected || !REFERENCE_MIME_TYPES.has(detected.mimeType)) {
-      return { error: toolError('invalid_reference_path', `reference image must be png, jpeg, or webp: ${rawPath}`) }
+  }
+  for (const id of attachmentIds.values) {
+    let attachment: AttachmentContent
+    try {
+      attachment = await attachmentStore!.resolveContent(id, {
+        threadId: context.threadId,
+        workspace: context.workspace
+      })
+    } catch {
+      return {
+        error: toolError(
+          'invalid_reference_attachment',
+          `reference attachment is unavailable or unauthorized: ${id}`
+        )
+      }
     }
-    images.push({ name: rawPath.split('/').pop() || 'reference.png', mimeType: detected.mimeType, data })
+    const validated = validateReferenceImage(
+      attachment.data,
+      id,
+      'invalid_reference_attachment'
+    )
+    if ('error' in validated) return validated
+    images.push({ name: attachment.name, mimeType: validated.mimeType, data: attachment.data })
   }
   return { images }
+}
+
+type ReferenceErrorCode = 'invalid_reference_path' | 'invalid_reference_attachment'
+
+function parseReferenceStrings(
+  value: unknown,
+  field: string,
+  code: ReferenceErrorCode
+): { values: string[] } | ReferenceError {
+  if (value === undefined || value === null) return { values: [] }
+  if (!Array.isArray(value) || value.some((entry) => typeof entry !== 'string')) {
+    return { error: toolError(code, `${field} must be an array of strings`) }
+  }
+  return { values: value.map((entry) => entry.trim()).filter(Boolean) }
+}
+
+function validateReferenceImage(
+  data: Buffer,
+  label: string,
+  code: ReferenceErrorCode
+): { mimeType: string } | ReferenceError {
+  if (data.byteLength > MAX_REFERENCE_IMAGE_BYTES) {
+    return {
+      error: toolError(code, `reference image exceeds ${MAX_REFERENCE_IMAGE_BYTES} byte limit: ${label}`)
+    }
+  }
+  const detected = detectImage(data)
+  if (!detected || !REFERENCE_MIME_TYPES.has(detected.mimeType)) {
+    return {
+      error: toolError(code, `reference image must be png, jpeg, or webp: ${label}`)
+    }
+  }
+  return { mimeType: detected.mimeType }
 }
 
 type ImagesApiPayload = { data?: { b64_json?: string; url?: string }[] }
@@ -703,6 +788,18 @@ function summarizeCodexResponsesImage(body: string): string {
 function isCodexToolChoiceError(status: number, body: string): boolean {
   if (status !== 400) return false
   return /tool[_ ]choice|allowed_tools|image_generation.*tools|tools.*image_generation/i.test(body)
+}
+
+function codexImageModelSupportsInputFidelity(model: string): boolean {
+  const normalized = model.trim().toLowerCase()
+  return normalized !== 'gpt-image-2' && normalized !== 'gpt-image-2-codex'
+}
+
+function isCodexInputFidelityModelError(status: number, body: string): boolean {
+  if (status !== 400) return false
+  if (/invalid_input_fidelity_model/i.test(body)) return true
+  return /input_fidelity.{0,200}(?:does not support|not supported|unsupported)/is.test(body) ||
+    /(?:does not support|not supported|unsupported).{0,200}input_fidelity/is.test(body)
 }
 
 function extractCodexResponsesImage(body: string): GeneratedImage | null {
@@ -1015,7 +1112,12 @@ export class CodexResponsesImageClient implements ImageGenClient {
     inputImages: { name: string; mimeType: string; data: Buffer }[]
   ): Promise<GeneratedImage> {
     const signal = withTimeout(request.signal, request.timeoutMs)
-    const buildBody = (toolChoiceMode: CodexImageToolChoiceMode) => JSON.stringify({
+    const shouldRequestInputFidelity = inputImages.length > 0 &&
+      codexImageModelSupportsInputFidelity(request.model)
+    const buildBody = (
+      toolChoiceMode: CodexImageToolChoiceMode,
+      includeInputFidelity: boolean
+    ) => JSON.stringify({
       model: CODEX_IMAGE_RESPONSES_MODEL,
       input: [
         {
@@ -1026,7 +1128,7 @@ export class CodexResponsesImageClient implements ImageGenClient {
             ...inputImages.map((image) => ({
               type: 'input_image',
               image_url: imageDataUrl(image),
-              detail: 'auto'
+              detail: 'high'
             }))
           ]
         }
@@ -1041,6 +1143,7 @@ export class CodexResponsesImageClient implements ImageGenClient {
           output_format: 'png',
           background: 'opaque',
           partial_images: 1,
+          ...(includeInputFidelity ? { input_fidelity: 'high' } : {}),
           ...(request.size ? { size: request.size } : {})
         }
       ],
@@ -1061,7 +1164,12 @@ export class CodexResponsesImageClient implements ImageGenClient {
 
     let lastHttpError: ImageGenHttpError | null = null
     let lastEmptyResponse = ''
-    for (const mode of ['allowed_tools', 'required', 'none'] satisfies CodexImageToolChoiceMode[]) {
+    let includeInputFidelity = shouldRequestInputFidelity
+    let retriedWithoutInputFidelity = false
+    const post = async (
+      mode: CodexImageToolChoiceMode,
+      withInputFidelity: boolean
+    ): Promise<{ response: Response; text: string }> => {
       let response: Response
       try {
         response = await fetch(this.endpointUrl, {
@@ -1072,13 +1180,33 @@ export class CodexResponsesImageClient implements ImageGenClient {
             Accept: 'text/event-stream',
             'Content-Type': 'application/json'
           },
-          body: buildBody(mode),
+          body: buildBody(mode, withInputFidelity),
           signal
         })
       } catch (error) {
         throw imageFetchFailure(this.endpointUrl, error, request)
       }
-      const text = await readLimitedResponseText(response, MAX_CODEX_IMAGE_SSE_BYTES)
+      return {
+        response,
+        text: await readLimitedResponseText(response, MAX_CODEX_IMAGE_SSE_BYTES)
+      }
+    }
+
+    for (const mode of ['allowed_tools', 'required', 'none'] satisfies CodexImageToolChoiceMode[]) {
+      let { response, text } = await post(mode, includeInputFidelity)
+      if (
+        !response.ok &&
+        includeInputFidelity &&
+        !retriedWithoutInputFidelity &&
+        isCodexInputFidelityModelError(response.status, text)
+      ) {
+        // Retry immediately in the same tool-choice mode. Once the provider has
+        // established that this routed model rejects the field, keep it omitted
+        // from any later tool-choice compatibility attempts in this request.
+        includeInputFidelity = false
+        retriedWithoutInputFidelity = true
+        ;({ response, text } = await post(mode, false))
+      }
       if (!response.ok) {
         const error = new ImageGenHttpError(response.status, text)
         lastHttpError = error

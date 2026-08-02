@@ -127,6 +127,9 @@ const LlmDebugSettingsSection = lazy(() =>
 const DataMigrationSettingsSection = lazy(() =>
   import('./settings-section-data-migration').then((module) => ({ default: module.DataMigrationSettingsSection }))
 )
+const StorageRelocationSettingsSection = lazy(() =>
+  import('./settings-section-storage-relocation').then((module) => ({ default: module.StorageRelocationSettingsSection }))
+)
 const WriteDebugLogModal = lazy(() =>
   import('./settings-debug-log').then((module) => ({ default: module.WriteDebugLogModal }))
 )
@@ -494,6 +497,10 @@ export function SettingsView(): ReactElement {
       setCategory('dataMigration')
       return
     }
+    if (settingsSection === 'storage') {
+      setCategory('storage')
+      return
+    }
     setCategory('agents')
   }, [settingsSection])
 
@@ -519,6 +526,7 @@ export function SettingsView(): ReactElement {
       settingsSection === 'updates' ||
       settingsSection === 'terminal' ||
       settingsSection === 'debug' ||
+      settingsSection === 'storage' ||
       settingsSection === 'dataMigration' ||
       category !== 'agents'
     ) {
@@ -526,7 +534,7 @@ export function SettingsView(): ReactElement {
     }
     if (!agentsSectionReady) return
     const refs: Record<
-      Exclude<SettingsRouteSection, 'general' | 'providers' | 'extensions' | 'write' | 'design' | 'imageGeneration' | 'mediaGeneration' | 'speechToText' | 'laboratory' | 'subagents' | 'archives' | 'worktree' | 'memory' | 'claw' | 'shortcuts' | 'easterEgg' | 'updates' | 'terminal' | 'debug' | 'dataMigration'>,
+      Exclude<SettingsRouteSection, 'general' | 'providers' | 'extensions' | 'write' | 'design' | 'imageGeneration' | 'mediaGeneration' | 'speechToText' | 'laboratory' | 'subagents' | 'archives' | 'worktree' | 'memory' | 'claw' | 'shortcuts' | 'easterEgg' | 'updates' | 'terminal' | 'debug' | 'storage' | 'dataMigration'>,
       HTMLDivElement | null
     > = {
       agents: agentsSectionRef.current,
@@ -1257,6 +1265,7 @@ export function SettingsView(): ReactElement {
   const settingsSectionContext = {
     t,
     tCommon,
+    openStorageSettings: () => setCategory('storage'),
     settingsSection,
     form,
     provider,
@@ -1377,16 +1386,21 @@ export function SettingsView(): ReactElement {
         setCategory={setCategory}
         goBack={goBack}
         extensionSettingsAvailable={extensionSettingsAvailable}
+        platform={window.kunGui.platform}
         t={t}
       />
 
       <div className="ds-settings-stage relative min-h-0 min-w-0 flex-1 overflow-hidden">
         <div
           ref={settingsScrollerRef}
-          className="ds-settings-scroller ds-no-drag h-full min-h-0 overflow-y-auto"
+          className={`ds-settings-scroller ds-no-drag h-full min-h-0 overflow-y-auto ${
+            category === 'providers' ? 'ds-settings-scroller--providers' : ''
+          }`}
         >
-          <div className="ds-settings-content mx-auto">
-          <div className="ds-settings-page-header flex items-start justify-between gap-5">
+          <div className={`ds-settings-content mx-auto ${
+            category === 'providers' ? 'ds-settings-content--providers' : ''
+          }`}>
+          {category !== 'providers' ? <div className="ds-settings-page-header flex items-start justify-between gap-5">
             <div className="min-w-0">
               <h1 className="truncate text-[24px] font-medium leading-tight tracking-[-0.02em] text-ds-ink">
                 {categoryTitle}
@@ -1395,7 +1409,7 @@ export function SettingsView(): ReactElement {
                 {categoryDescription}
               </p>
             </div>
-            {category !== 'extensions' && category !== 'dataMigration' ? <span
+            {category !== 'extensions' && category !== 'dataMigration' && category !== 'storage' ? <span
               title={saveStatus === 'error' && saveError ? saveError : undefined}
               className={`shrink-0 rounded-full px-3 py-1 text-[12px] font-medium ${
                 portError
@@ -1417,9 +1431,9 @@ export function SettingsView(): ReactElement {
                       ? t('applyFailed')
                       : t('autoApplyHint')}
             </span> : null}
-          </div>
+          </div> : null}
 
-          {category !== 'extensions' && category !== 'dataMigration' && saveStatus === 'error' && saveError ? (
+          {category !== 'extensions' && category !== 'dataMigration' && category !== 'storage' && saveStatus === 'error' && saveError ? (
             <div
               role="alert"
               className="mb-5 rounded-[var(--ds-radius-card)] border border-red-200 bg-red-50 px-4 py-3 text-[13px] leading-5 text-red-800 dark:border-red-500/25 dark:bg-red-500/10 dark:text-red-200"
@@ -1462,12 +1476,13 @@ export function SettingsView(): ReactElement {
               {category === 'terminal' ? <TerminalSettingsSection ctx={settingsSectionContext} /> : null}
               {category === 'debug' ? <LlmDebugSettingsSection ctx={settingsSectionContext} /> : null}
               {category === 'dataMigration' ? <DataMigrationSettingsSection /> : null}
+              {category === 'storage' ? <StorageRelocationSettingsSection /> : null}
             </Suspense>
           </div>
           </div>
         </div>
       </div>
-      {category !== 'extensions' && category !== 'dataMigration' && saveStatus === 'error' && saveError ? (
+      {category !== 'extensions' && category !== 'dataMigration' && category !== 'storage' && saveStatus === 'error' && saveError ? (
         <div
           role="alert"
           className="ds-no-drag fixed bottom-6 right-8 z-30 flex max-w-[min(560px,calc(100vw-3rem))] items-center gap-3 rounded-2xl border border-red-300/70 bg-red-50/95 px-4 py-3 text-red-900 shadow-2xl shadow-red-950/10 backdrop-blur dark:border-red-500/30 dark:bg-red-950/90 dark:text-red-100"

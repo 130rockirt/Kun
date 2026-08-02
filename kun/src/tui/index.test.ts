@@ -20,6 +20,25 @@ describe('runTuiCommand', () => {
     expect(fetch).not.toHaveBeenCalled()
   })
 
+  it('rejects unsupported Node before checking TTY or runtime discovery', async () => {
+    let stderr = ''
+    const fetch = vi.fn()
+    const code = await runTuiCommand([], {
+      stdin: { isTTY: false } as unknown as NodeJS.ReadableStream,
+      stdout: { isTTY: false, write: () => undefined },
+      stderr: { write: (chunk) => { stderr += chunk } },
+      fetch: fetch as unknown as typeof globalThis.fetch,
+      nodeVersion: '22.13.0'
+    })
+
+    expect(code).toBe(69)
+    expect(stderr).toContain('Node.js >=22.19.0 is required')
+    expect(stderr).toContain('current Node.js is 22.13.0')
+    expect(stderr).toContain('https://nodejs.org/')
+    expect(stderr).not.toContain('a TTY is required')
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
   it('rejects non-TTY use before discovery or terminal output', async () => {
     let stderr = ''
     let stdout = ''
@@ -28,7 +47,8 @@ describe('runTuiCommand', () => {
       stdin: { isTTY: false } as unknown as NodeJS.ReadableStream,
       stdout: { isTTY: false, write: (chunk: string) => { stdout += chunk } },
       stderr: { write: (chunk) => { stderr += chunk } },
-      fetch: fetch as unknown as typeof globalThis.fetch
+      fetch: fetch as unknown as typeof globalThis.fetch,
+      nodeVersion: '22.19.0'
     })
     expect(code).toBe(64)
     expect(stderr).toContain('a TTY is required')
@@ -61,7 +81,8 @@ describe('runTuiCommand', () => {
         stdout: { isTTY: true, write: () => undefined },
         stderr: { write: (chunk) => { stderr += chunk } },
         env: { KUN_GUI_SETTINGS_PATH: settingsPath },
-        fetch: fetch as unknown as typeof globalThis.fetch
+        fetch: fetch as unknown as typeof globalThis.fetch,
+        nodeVersion: '22.19.0'
       })
 
       expect(code).toBe(70)

@@ -1,13 +1,14 @@
+import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import { DesignRightPanelContent, type DesignRightPanelContentProps } from './DesignRightPanelContent'
 
 vi.mock('./DesignAIRail', () => ({
-  DesignAIRail: () => <div data-testid="design-air-rail" />
+  DesignAIRail: () => createElement('div', { 'data-testid': 'design-air-rail' })
 }))
 
 vi.mock('./DesignImplementPanel', () => ({
-  DesignImplementPanel: () => <div data-testid="design-implement-panel" />
+  DesignImplementPanel: () => createElement('div', { 'data-testid': 'design-implement-panel' })
 }))
 
 function props(patch: Partial<DesignRightPanelContentProps> = {}): DesignRightPanelContentProps {
@@ -57,12 +58,18 @@ function props(patch: Partial<DesignRightPanelContentProps> = {}): DesignRightPa
       composerProviderId: 'deepseek',
       composerPickList: [],
       setComposerModel: vi.fn(),
+      composerReasoningEffort: 'medium',
+      composerFastMode: false,
+      setComposerReasoningEffort: vi.fn(),
+      setComposerFastMode: vi.fn(),
       contextChips: [],
       onRemoveContextChip: vi.fn(),
       onSend: vi.fn(),
       onOpenSettings: vi.fn(),
-      onNewConversation: vi.fn(),
+      drawingTitle: 'Untitled drawing',
+      onClearHistory: vi.fn(),
       designThreads: [],
+      designHistoryThreadIds: [],
       onSwitchThread: vi.fn(),
       onCollapse: vi.fn()
     },
@@ -72,18 +79,20 @@ function props(patch: Partial<DesignRightPanelContentProps> = {}): DesignRightPa
 
 describe('DesignRightPanelContent', () => {
   it('renders nothing when hidden', () => {
-    expect(renderToStaticMarkup(<DesignRightPanelContent {...props()} />)).toBe('')
+    expect(renderToStaticMarkup(createElement(DesignRightPanelContent, props()))).toBe('')
   })
 
   it('renders the implement panel in implement mode', () => {
-    expect(renderToStaticMarkup(
-      <DesignRightPanelContent {...props({ panelMode: 'implement' })} />
-    )).toContain('design-implement-panel')
+    expect(renderToStaticMarkup(createElement(
+      DesignRightPanelContent,
+      props({ panelMode: 'implement' })
+    ))).toContain('design-implement-panel')
   })
 
   it('renders the design assistant rail in assistant mode', () => {
-    expect(renderToStaticMarkup(
-      <DesignRightPanelContent {...props({ panelMode: 'assistant' })} />
-    )).toContain('design-air-rail')
+    expect(renderToStaticMarkup(createElement(
+      DesignRightPanelContent,
+      props({ panelMode: 'assistant' })
+    ))).toContain('design-air-rail')
   })
 })

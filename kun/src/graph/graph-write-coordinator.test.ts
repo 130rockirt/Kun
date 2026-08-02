@@ -148,6 +148,37 @@ describe('FileGraphWriteCoordinator', () => {
     await expect(coordinator.renew(claim.lease.leaseId)).rejects.toThrow(/expired/)
   })
 
+  it('persists an accepted release disposition for idempotent integration replay', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-graph-writes-'))
+    roots.push(root)
+    const workspace = join(root, 'workspace')
+    await mkdir(workspace)
+    const coordinator = new FileGraphWriteCoordinator({
+      rootDir: join(root, 'state'),
+      config: () => testGraphConfig({ writeIsolation: { mode: 'lease' } })
+    })
+    const claim = await coordinator.acquire({
+      runId: 'run_replay',
+      nodeId: 'node_replay',
+      attemptId: 'attempt_replay',
+      workspaceRoot: workspace,
+      scopes: []
+    })
+    if (!claim.acquired) throw new Error('expected lease claim')
+
+    await expect(coordinator.release(claim.lease.leaseId, 'accepted')).resolves.toMatchObject({
+      state: 'released',
+      releaseDisposition: 'accepted'
+    })
+    await expect(coordinator.release(claim.lease.leaseId, 'failed')).resolves.toMatchObject({
+      state: 'released',
+      releaseDisposition: 'accepted'
+    })
+    expect((await coordinator.list()).leases[0]).toMatchObject({
+      releaseDisposition: 'accepted'
+    })
+  })
+
   it('integrates disjoint parallel worktrees including new files and is idempotent', async () => {
     const { repository, coordinator } = await worktreeHarness()
     const first = await coordinator.acquire({

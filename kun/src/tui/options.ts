@@ -5,6 +5,8 @@ import type {
   ApprovalReviewer,
   SandboxMode
 } from '../contracts/policy.js'
+import type { RuntimeFlavor } from '../contracts/runtime-flavor.js'
+import { resolveCliRuntimeFlavor } from '../cli/runtime-flavor.js'
 
 export const DEFAULT_TUI_DATA_DIR = join(homedir(), '.kun', 'data')
 
@@ -49,6 +51,7 @@ export type TuiOptions = {
   continueLatest: boolean
   graphPrompt?: string
   noStart: boolean
+  runtimeFlavor?: RuntimeFlavor
   model?: string
   providerId?: string
   accountId?: string
@@ -183,6 +186,7 @@ export function parseTuiOptions(
       continueLatest,
       ...(nonEmpty(values.get('graph')) ? { graphPrompt: nonEmpty(values.get('graph')) } : {}),
       noStart,
+      runtimeFlavor: resolveCliRuntimeFlavor({ env }),
       ...(nonEmpty(values.get('model')) ? { model: nonEmpty(values.get('model')) } : {}),
       ...(nonEmpty(values.get('provider-id')) ? { providerId: nonEmpty(values.get('provider-id')) } : {}),
       ...(nonEmpty(values.get('account-id')) ? { accountId: nonEmpty(values.get('account-id')) } : {}),

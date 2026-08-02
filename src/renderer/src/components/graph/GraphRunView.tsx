@@ -12,7 +12,10 @@ import {
   UserRoundCheck
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { graphNodeLiveness } from '../../graph/graph-liveness'
+import {
+  graphLivenessIsProcessing,
+  graphNodeLiveness
+} from '../../graph/graph-liveness'
 import { useGraphStore } from '../../graph/graph-store'
 import type {
   GraphArtifactPage,
@@ -26,6 +29,7 @@ import {
   useSubagentReducedMotion
 } from '../subagents/SubagentLiveness'
 import { filterGraphElementsByPhases } from './graph-elements'
+import { GraphSupervisionBanner } from './GraphSupervisionBanner'
 import { GraphRunWorkspace } from './GraphRunWorkspace'
 import {
   statusTone,
@@ -49,6 +53,8 @@ export function GraphRunView({
   onRefresh,
   onCommand,
   onCancel,
+  wakingObligationId,
+  onWakeLead,
   onRetry,
   onReview,
   onPatch,
@@ -76,6 +82,8 @@ export function GraphRunView({
   onRefresh: () => void
   onCommand: (action: 'start' | 'pause' | 'resume' | 'cleanup') => void
   onCancel: () => void
+  wakingObligationId: string | null
+  onWakeLead: (obligationId?: string) => void
   onRetry: (nodeId: string) => void
   onReview: (nodeId: string, outcome: 'pass' | 'fail') => void
   onPatch: (operations: GraphPatchOperation[], reason: string) => Promise<void>
@@ -121,13 +129,30 @@ export function GraphRunView({
       : { nodes: [], edges: [] },
     [collapsedPhases, elements, run]
   )
-  const activeProjection = run
-    ? Object.values(run.nodes).find((node) =>
-        ['queued', 'submitted', 'running', 'reviewing', 'repair_required'].includes(node.status))
-    : undefined
-  const activeLiveness = activeProjection
-    ? graphNodeLiveness(activeProjection, childRuns, now)
-    : null
+  const livenessEntries = run
+    ? Object.values(run.nodes).map((node) => ({
+        node,
+        liveness: graphNodeLiveness(node, childRuns, now, run.supervision)
+      }))
+    : []
+  const runIsTerminal = Boolean(run && terminalRunStatuses.has(run.status))
+  const activeEntry = runIsTerminal
+    ? undefined
+    : (
+        livenessEntries.find((entry) => graphLivenessIsProcessing(entry.liveness)) ??
+        livenessEntries.find((entry) => [
+          'queued',
+          'submitted',
+          'running',
+          'reviewing',
+          'repair_required'
+        ].includes(entry.node.status))
+      )
+  const activeProjection = activeEntry?.node
+  const activeLiveness = activeEntry?.liveness ?? null
+  const activeAgents = runIsTerminal
+    ? 0
+    : livenessEntries.filter((entry) => graphLivenessIsProcessing(entry.liveness)).length
   useEffect(() => {
     if (!run || !activeProjection || terminalRunStatuses.has(run.status)) return
     const id = globalThis.setInterval(() => setNow(Date.now()), 1_000)
@@ -156,8 +181,6 @@ export function GraphRunView({
     counts[node.status] = (counts[node.status] ?? 0) + 1
     return counts
   }, {})
-  const activeAgents = Object.values(run.nodes).filter((node) =>
-    ['queued', 'submitted', 'running', 'reviewing', 'repair_required'].includes(node.status)).length
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="graph-run-overview shrink-0 border-b border-ds-border-muted bg-ds-sidebar px-3 pb-2.5 pt-2">
@@ -225,6 +248,13 @@ export function GraphRunView({
             detail={t('graphMetricTotal')}
           />
         </div>
+
+        <GraphSupervisionBanner
+          run={run}
+          supervision={run.supervision}
+          wakingObligationId={wakingObligationId}
+          onWakeLead={onWakeLead}
+        />
 
         {activeProjection && activeLiveness ? (
           <div

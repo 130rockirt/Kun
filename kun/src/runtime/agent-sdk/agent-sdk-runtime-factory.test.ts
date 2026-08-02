@@ -1224,7 +1224,7 @@ describe('createAgentSdkRuntime turn context', () => {
     const finishTurn = vi.fn(async () => undefined)
     const suspendGraphLeadTurn = vi.fn()
       .mockResolvedValueOnce('supervision_pending')
-      .mockResolvedValueOnce('suspended')
+      .mockResolvedValueOnce('suspended_pending_supervision')
     const runtime = createAgentSdkRuntime({
       registry: {} as never,
       turns: { finishTurn, suspendGraphLeadTurn } as never,
@@ -1252,7 +1252,7 @@ describe('createAgentSdkRuntime turn context', () => {
       'thread_1',
       'turn_1',
       'completed'
-    )).resolves.toBe('suspended')
+    )).resolves.toBe('suspended_pending_supervision')
 
     expect(suspendGraphLeadTurn).toHaveBeenNthCalledWith(1, {
       threadId: 'thread_1',

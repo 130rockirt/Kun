@@ -7,18 +7,22 @@ type Props = {
   onCodeOpen: () => void
   onWriteOpen: () => void
   onDesignOpen: () => void
+  disabled?: boolean
+  disabledReason?: string
 }
 
 export function WorkspaceModeTabs({
   activeView,
   onCodeOpen,
   onWriteOpen,
-  onDesignOpen
+  onDesignOpen,
+  disabled = false,
+  disabledReason
 }: Props): ReactElement {
   const { t } = useTranslation('common')
 
   const tabClass = (active: boolean): string =>
-    `workspace-mode-tab group inline-flex min-h-8 flex-1 min-w-0 items-center justify-center gap-1.5 rounded-full border px-2 py-0.5 text-[13px] outline-none transition-[background-color,border-color,color] duration-150 focus-visible:ring-2 focus-visible:ring-accent/30 ${
+    `workspace-mode-tab group inline-flex min-h-8 flex-1 min-w-0 items-center justify-center gap-1.5 rounded-full border px-2 py-0.5 text-[13px] outline-none transition-[background-color,border-color,color] duration-150 focus-visible:ring-2 focus-visible:ring-accent/30 disabled:cursor-not-allowed disabled:opacity-55 ${
       active
         ? 'border-ds-border bg-ds-card font-medium text-ds-ink'
         : 'border-transparent font-normal text-ds-muted hover:bg-ds-hover hover:text-ds-ink'
@@ -43,9 +47,10 @@ export function WorkspaceModeTabs({
         data-cursor-spotlight-target
         role="tab"
         aria-selected={activeView === 'chat'}
+        disabled={disabled}
         onClick={onCodeOpen}
         className={tabClass(activeView === 'chat')}
-        title={t('code')}
+        title={disabled ? disabledReason : t('code')}
       >
         <Code2 className={iconClass(activeView === 'chat')} strokeWidth={1.9} />
         <span className="workspace-mode-tab-label whitespace-nowrap">{t('code')}</span>
@@ -56,9 +61,10 @@ export function WorkspaceModeTabs({
         data-cursor-spotlight-target
         role="tab"
         aria-selected={activeView === 'write'}
+        disabled={disabled}
         onClick={onWriteOpen}
         className={tabClass(activeView === 'write')}
-        title={t('write')}
+        title={disabled ? disabledReason : t('write')}
       >
         <PencilLine className={iconClass(activeView === 'write')} strokeWidth={1.9} />
         <span className="workspace-mode-tab-label whitespace-nowrap">{t('write')}</span>
@@ -69,9 +75,10 @@ export function WorkspaceModeTabs({
         data-cursor-spotlight-target
         role="tab"
         aria-selected={activeView === 'design'}
+        disabled={disabled}
         onClick={onDesignOpen}
         className={tabClass(activeView === 'design')}
-        title={t('design')}
+        title={disabled ? disabledReason : t('design')}
       >
         <Palette className={iconClass(activeView === 'design')} strokeWidth={1.9} />
         <span className="workspace-mode-tab-label whitespace-nowrap">{t('design')}</span>

@@ -5,6 +5,7 @@ import type {
   ThreadTodoList,
   ThreadRelation,
   ThreadStatus,
+  ThreadAgentSurface,
   ExtensionAgentProfileSnapshot,
   ExtensionRunBudget,
   ExtensionThreadVisibility,
@@ -33,6 +34,7 @@ export function createThreadRecord(input: {
   workspace: string
   additionalWorkspaces?: string[]
   model: string
+  agentSurface?: ThreadAgentSurface
   providerId?: string
   ownerExtensionId?: string
   ownerExtensionVersion?: string
@@ -73,6 +75,7 @@ export function createThreadRecord(input: {
       (input.additionalWorkspaces ?? []).map((entry) => entry.trim()).filter((entry) => entry && entry !== input.workspace)
     )],
     model: input.model,
+    ...(input.agentSurface ? { agentSurface: input.agentSurface } : {}),
     ...(input.providerId ? { providerId: input.providerId } : {}),
     ...(input.ownerExtensionId ? { ownerExtensionId: input.ownerExtensionId } : {}),
     ...(input.ownerExtensionVersion ? { ownerExtensionVersion: input.ownerExtensionVersion } : {}),
@@ -115,7 +118,7 @@ export function toThreadSummary(
   thread: ThreadEntity
 ): Pick<
   ThreadEntity,
-  'id' | 'title' | 'titleAuto' | 'summary' | 'workspace' | 'additionalWorkspaces' | 'model' | 'providerId' | 'agentId' | 'systemPrompt' | 'mode' | 'status' | 'approvalPolicy' | 'sandboxMode' | 'approvalReviewer' | 'modelRequestCaptureEnabled' | 'pinned' | 'createdAt' | 'updatedAt'
+  'id' | 'title' | 'titleAuto' | 'summary' | 'workspace' | 'additionalWorkspaces' | 'model' | 'agentSurface' | 'providerId' | 'agentId' | 'systemPrompt' | 'mode' | 'status' | 'approvalPolicy' | 'sandboxMode' | 'approvalReviewer' | 'modelRequestCaptureEnabled' | 'pinned' | 'createdAt' | 'updatedAt'
   | 'ownerExtensionId' | 'ownerExtensionVersion' | 'accountId' | 'extensionVisibility'
   | 'extensionProfile' | 'extensionBudget' | 'toolCatalogEpoch'
   | 'costBudgetUsd' | 'costBudgetWarningSent'
@@ -131,6 +134,7 @@ export function toThreadSummary(
     workspace: thread.workspace,
     additionalWorkspaces: thread.additionalWorkspaces,
     model: thread.model,
+    agentSurface: resolveThreadAgentSurface(thread),
     ...(thread.providerId ? { providerId: thread.providerId } : {}),
     ...(thread.ownerExtensionId ? { ownerExtensionId: thread.ownerExtensionId } : {}),
     ...(thread.ownerExtensionVersion ? { ownerExtensionVersion: thread.ownerExtensionVersion } : {}),
@@ -162,4 +166,21 @@ export function toThreadSummary(
     createdAt: thread.createdAt,
     updatedAt: thread.updatedAt
   }
+}
+
+/**
+ * Resolves legacy ownership without allowing one stray turn to steal a Code
+ * conversation. An explicit thread value is authoritative; otherwise only a
+ * non-empty history whose every turn names the same non-Code surface is
+ * inferred as Write or Design. Empty, mixed, and partially annotated history
+ * remains Code.
+ */
+export function resolveThreadAgentSurface(
+  thread: Pick<ThreadEntity, 'agentSurface' | 'turns'>
+): ThreadAgentSurface {
+  if (thread.agentSurface) return thread.agentSurface
+  if (thread.turns.length === 0) return 'code'
+  const candidate = thread.turns[0]?.agentSurface
+  if (candidate !== 'write' && candidate !== 'design') return 'code'
+  return thread.turns.every((turn) => turn.agentSurface === candidate) ? candidate : 'code'
 }

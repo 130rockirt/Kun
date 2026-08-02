@@ -50,6 +50,7 @@ TestResults.xml
 ### Tool data
 .workbuddy/
 .kun-design/
+.kun/images/
 .kun-canvas/
 .kunsdd/
 openspec/

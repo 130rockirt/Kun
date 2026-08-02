@@ -78,6 +78,7 @@ function makeThread(overrides: Partial<NormalizedThread> & Pick<NormalizedThread
     model: overrides.model ?? 'deepseek-v4-pro',
     mode: overrides.mode ?? 'agent',
     workspace: overrides.workspace ?? '/workspace/deepseek-gui',
+    ...(overrides.agentSurface ? { agentSurface: overrides.agentSurface } : {}),
     ...(overrides.archived !== undefined ? { archived: overrides.archived } : {}),
     ...(overrides.status ? { status: overrides.status } : {}),
     ...(overrides.relation ? { relation: overrides.relation } : {}),
@@ -144,6 +145,30 @@ describe('code thread classification', () => {
     expect(isCodeSidebarThread(design, [], undefined, designRegistry)).toBe(false)
     expect(isCodeThread(design, [], undefined, designRegistry)).toBe(false)
   })
+
+  it.each(['design', 'write'] as const)(
+    'excludes durably classified %s threads without renderer registry data',
+    (agentSurface) => {
+      const ownedThread = makeThread({
+        id: `thr_${agentSurface}_durable`,
+        title: 'Renamed by the user',
+        agentSurface
+      })
+
+      expect(isCodeSidebarThread(
+        ownedThread,
+        [],
+        emptyWriteThreadRegistry(),
+        emptyDesignThreadRegistry()
+      )).toBe(false)
+      expect(isCodeThread(
+        ownedThread,
+        [],
+        emptyWriteThreadRegistry(),
+        emptyDesignThreadRegistry()
+      )).toBe(false)
+    }
+  )
 
   it('excludes leaked default write assistant threads even without registry data', () => {
     const writeAssistant = makeThread({

@@ -17,7 +17,7 @@ export function assertSvgPrepareContext(
     state.activeDocumentId !== context.documentId ||
     !state.documents.some((document) => document.id === context.documentId)
   ) {
-    throw new Error('SVG preparation was cancelled because the active workspace or design document changed.')
+    throw new Error('SVG preparation was cancelled because the active workspace or drawing changed.')
   }
   return state
 }

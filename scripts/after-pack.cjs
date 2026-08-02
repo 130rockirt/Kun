@@ -69,6 +69,7 @@ const KUN_RUNTIME_REQUIRED_PATHS = [
 ]
 const LINUX_SANDBOX_LAUNCHER_FLAG = '--disable-setuid-sandbox'
 const LINUX_REAL_EXECUTABLE_SUFFIX = '.electron-bin'
+const MINIMUM_TUI_NODE_VERSION = '22.19.0'
 const BUNDLED_EXTENSIONS_DIR = 'bundled-extensions'
 const BUNDLED_EXTENSION_CATALOG_FILE = 'catalog.json'
 const OFFICECLI_DIR = 'officecli'
@@ -587,13 +588,61 @@ exec "$real_executable" ${LINUX_SANDBOX_LAUNCHER_FLAG} "$@"
 `
 }
 
+function windowsCliLauncherContent(productFilename, development = false) {
+  const entry = 'app.asar.unpacked\\kun\\dist\\cli\\serve-entry.js'
+  return `@echo off\r
+setlocal\r
+${development ? 'set "KUN_APP_FLAVOR=development"\r\nset "KUN_RUNTIME_FLAVOR=development"\r\n' : ''}
+set "KUN_CLI_ENTRY=%~dp0..\\resources\\${entry}"\r
+set "KUN_FIRST_ARG=%~1"\r
+if "%KUN_FIRST_ARG%"=="" goto :tui\r
+if /I "%KUN_FIRST_ARG%"=="tui" goto :tui\r
+if "%KUN_FIRST_ARG%"=="--help" goto :electron\r
+if "%KUN_FIRST_ARG%"=="-h" goto :electron\r
+if "%KUN_FIRST_ARG%"=="--version" goto :electron\r
+if "%KUN_FIRST_ARG%"=="-V" goto :electron\r
+if "%KUN_FIRST_ARG:~0,1%"=="-" goto :tui\r
+goto :electron\r
+\r
+:tui\r
+where.exe node >nul 2>nul\r
+if errorlevel 1 (\r
+  >&2 echo kun tui: Node.js ^>=${MINIMUM_TUI_NODE_VERSION} is required, but node was not found on PATH.\r
+  >&2 echo Install Node.js, then open a new terminal. Download: https://nodejs.org/\r
+  >&2 echo Windows: winget install --id OpenJS.NodeJS.22 --exact\r
+  exit /b 69\r
+)\r
+for /f "delims=" %%N in ('where.exe node 2^>nul') do if not defined KUN_NODE set "KUN_NODE=%%N"\r
+set "KUN_PACKAGED_RUNTIME_EXECUTABLE=%~dp0..\\${productFilename}.exe"\r
+if /I "%KUN_NODE:~-4%"==".cmd" goto :tui-node-shim\r
+if /I "%KUN_NODE:~-4%"==".bat" goto :tui-node-shim\r
+"%KUN_NODE%" "%KUN_CLI_ENTRY%" %*\r
+exit /b %errorlevel%\r
+\r
+:tui-node-shim\r
+call "%KUN_NODE%" "%KUN_CLI_ENTRY%" %*\r
+exit /b %errorlevel%\r
+\r
+:electron\r
+set "ELECTRON_RUN_AS_NODE=1"\r
+"%~dp0..\\${productFilename}.exe" "%KUN_CLI_ENTRY%" %*\r
+exit /b %errorlevel%\r
+`
+}
+
 function installCliLaunchers(context) {
   const platform = normalizePlatform(context.electronPlatformName)
   const entryRelative = 'app.asar.unpacked/kun/dist/cli/serve-entry.js'
+  const development = context.packager.appInfo.productFilename === 'kun-dv' ||
+    context.packager.config?.extraMetadata?.kunAppFlavor === 'development'
+  const launcherName = development ? 'kun-dv' : 'kun'
+  const flavorShellEnv = development
+    ? 'KUN_APP_FLAVOR=development KUN_RUNTIME_FLAVOR=development '
+    : ''
   if (platform === 'darwin') {
     const resources = packedResourcesDir(context)
     const binDir = join(resources, 'bin')
-    const launcher = join(binDir, 'kun')
+    const launcher = join(binDir, launcherName)
     require('node:fs').mkdirSync(binDir, { recursive: true, mode: 0o755 })
     writeFileSync(launcher, `#!/bin/sh
 set -eu
@@ -606,7 +655,7 @@ link_hops=0
 while [ -L "$launcher_path" ]; do
   link_hops=$((link_hops + 1))
   if [ "$link_hops" -gt 40 ]; then
-    echo "kun: too many symbolic links while resolving launcher" >&2
+    echo "${launcherName}: too many symbolic links while resolving launcher" >&2
     exit 1
   fi
   launcher_dir=$(CDPATH= cd -P "$(dirname "$launcher_path")" && pwd -P)
@@ -620,7 +669,7 @@ self_dir=$(CDPATH= cd -P "$(dirname "$launcher_path")" && pwd -P)
 resources_dir=$(CDPATH= cd -P "$self_dir/.." && pwd -P)
 app_exec="$resources_dir/../MacOS/${context.packager.appInfo.productFilename}"
 cli_entry="$resources_dir/${entryRelative}"
-ELECTRON_RUN_AS_NODE=1 exec "$app_exec" "$cli_entry" "$@"
+${flavorShellEnv}ELECTRON_RUN_AS_NODE=1 exec "$app_exec" "$cli_entry" "$@"
 `, { encoding: 'utf8', mode: 0o755 })
     chmodSync(launcher, 0o755)
     return
@@ -628,11 +677,11 @@ ELECTRON_RUN_AS_NODE=1 exec "$app_exec" "$cli_entry" "$@"
   if (platform === 'win32') {
     const binDir = join(context.appOutDir, 'bin')
     require('node:fs').mkdirSync(binDir, { recursive: true })
-    writeFileSync(join(binDir, 'kun.cmd'), `@echo off\r
-setlocal\r
-set "ELECTRON_RUN_AS_NODE=1"\r
-"%~dp0..\\${context.packager.appInfo.productFilename}.exe" "%~dp0..\\resources\\${entryRelative.replaceAll('/', '\\')}" %*\r
-`, 'utf8')
+    writeFileSync(
+      join(binDir, `${launcherName}.cmd`),
+      windowsCliLauncherContent(context.packager.appInfo.productFilename, development),
+      'utf8'
+    )
   }
 }
 
@@ -742,6 +791,7 @@ exports._internals = {
   assertElfExecutable,
   installLinuxElectronLauncher,
   installCliLaunchers,
+  windowsCliLauncherContent,
   linuxElectronLauncherContent,
   linuxRealExecutableName,
   TESSERACT_NODE_LSTM_ALIASES,

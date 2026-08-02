@@ -45,12 +45,26 @@ describe('subscription provider quota parsers', () => {
           used_percent: 64,
           reset_after_seconds: 3_600
         }
-      }
+      },
+      additional_rate_limits: [{
+        metered_feature: 'codex_spark',
+        rate_limit: {
+          primary_window: {
+            used_percent: 8,
+            limit_window_seconds: 604_800
+          }
+        }
+      }]
     })).toMatchObject({
       summary: 'plus',
       metrics: [
         expect.objectContaining({ id: 'primary', usedPercent: 12 }),
-        expect.objectContaining({ id: 'secondary', usedPercent: 64 })
+        expect.objectContaining({ id: 'secondary', usedPercent: 64 }),
+        expect.objectContaining({
+          id: 'additional-0-primary',
+          label: 'Spark - 1-week usage',
+          usedPercent: 8
+        })
       ]
     })
   })

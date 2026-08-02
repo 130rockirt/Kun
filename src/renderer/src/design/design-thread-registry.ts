@@ -134,13 +134,28 @@ export function readDesignThreadRegistry(
   storage: BrowserStorageLike | null = browserStorage()
 ): DesignThreadRegistry {
   if (!storage) return emptyDesignThreadRegistry()
+  let registry = emptyDesignThreadRegistry()
   try {
     const raw = storage.getItem(DESIGN_THREAD_REGISTRY_KEY)
-    const registry = normalizeDesignThreadRegistry(raw ? JSON.parse(raw) : null)
-    return mergeLegacyDesignAssistantThreads(registry, readLegacyDesignAssistantRegistry(storage))
+    registry = normalizeDesignThreadRegistry(raw ? JSON.parse(raw) : null)
   } catch {
-    return emptyDesignThreadRegistry()
+    // A corrupt current value must not hide a still-valid legacy binding.
+    // Continue below so the legacy key can repair the registry in one pass.
   }
+  const legacy = readLegacyDesignAssistantRegistry(storage)
+  if (legacy === null) return registry
+  const merged = mergeLegacyDesignAssistantThreads(registry, legacy)
+  // The old key must be consumed, not merely merged on every read. Otherwise
+  // clearing a migrated drawing can be undone by the next registry read.
+  try {
+    storage.setItem(DESIGN_THREAD_REGISTRY_KEY, JSON.stringify(merged))
+    if (storage.removeItem) storage.removeItem(LEGACY_DESIGN_ASSISTANT_THREAD_REGISTRY_KEY)
+    else storage.setItem(LEGACY_DESIGN_ASSISTANT_THREAD_REGISTRY_KEY, '{}')
+  } catch {
+    // Keep the successfully parsed in-memory view even when storage is full
+    // or unavailable. A later read can retry the one-time migration.
+  }
+  return merged
 }
 
 export function saveDesignThreadRegistry(
@@ -236,6 +251,35 @@ export function forgetDesignThread(
       activeThreadId: record.activeThreadId === id ? threadIds[0] : record.activeThreadId,
       threadIds
     }
+  }
+  return normalizeDesignThreadRegistry({ version: 1, workspaces })
+}
+
+/**
+ * Replace the complete remembered thread set for one design document without
+ * disturbing other documents. Passing an empty list removes the document
+ * scope, which is the durable "no current history" state used between a
+ * successful clear and best-effort replacement-thread creation.
+ */
+export function replaceDesignThreadsForDocument(
+  workspaceRoot: string,
+  docId: string,
+  threadIds: readonly string[],
+  activeThreadId?: string | null,
+  registry: DesignThreadRegistry = readDesignThreadRegistry()
+): DesignThreadRegistry {
+  const key = designDocKey(workspaceRoot, docId)
+  if (!key) return registry
+  const ids = normalizeThreadIds(threadIds)
+  const workspaces = { ...registry.workspaces }
+  if (ids.length === 0) {
+    delete workspaces[key]
+    return normalizeDesignThreadRegistry({ version: 1, workspaces })
+  }
+  const active = activeThreadId?.trim()
+  workspaces[key] = {
+    activeThreadId: active && ids.includes(active) ? active : ids[0],
+    threadIds: ids
   }
   return normalizeDesignThreadRegistry({ version: 1, workspaces })
 }

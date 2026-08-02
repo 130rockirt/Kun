@@ -112,7 +112,21 @@ const FILE_KEYS = new Set([
   'cwd'
 ])
 const URL_KEYS = new Set(['url', 'uri', 'endpoint', 'origin', 'host'])
-const RECIPIENT_KEYS = new Set(['recipient', 'channel', 'conversation', 'room', 'user'])
+const RECIPIENT_KEYS = new Set([
+  'recipient',
+  'recipients',
+  'to',
+  'cc',
+  'bcc',
+  'email',
+  'emails',
+  'channel',
+  'channel_id',
+  'conversation',
+  'chat_id',
+  'room',
+  'user'
+])
 
 export type ApprovalActionEnvelopeInput = {
   toolName: string
@@ -202,9 +216,10 @@ function inferApprovalActionKind(
   effects: ToolEffects
 ): ApprovalActionKind {
   if (input.toolKind === 'command_execution' || effects.processExecution) return 'command'
-  if (input.toolKind === 'file_change' || effects.externalWrite || input.exactFileTargets?.length) {
+  if (input.toolKind === 'file_change' || input.exactFileTargets?.length) {
     return 'file'
   }
+  if (effects.externalWrite) return 'file'
   if (input.providerKind === 'mcp') return 'mcp'
   if (effects.network || input.providerKind === 'web') return 'network'
   if (effects.guiAutomation || input.providerKind === 'extension') return 'external-effect'
@@ -239,7 +254,10 @@ function collectApprovalTargets(
     targets.push({ kind: target.kind, value })
   }
   for (const path of input.exactFileTargets ?? []) add({ kind: 'file', value: path })
-  for (const [rawKey, value] of Object.entries(args)) {
+  const targetEntries = [
+    ...Object.entries(args)
+  ]
+  for (const [rawKey, value] of targetEntries) {
     const key = rawKey.toLowerCase()
     const targetKind = COMMAND_KEYS.has(key)
       ? 'command' as const

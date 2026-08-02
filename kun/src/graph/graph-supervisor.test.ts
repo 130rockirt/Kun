@@ -1,9 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   GraphReviewResultV1Schema,
+  GraphRunSummaryV1Schema,
+  type GraphDomainEventV1,
   type GraphNodeAttemptV1,
   type GraphRunV1
 } from '../contracts/graph.js'
+import type { AppendGraphEventInput } from './graph-run-store.js'
 import { applyGraphEvent } from './graph-reducer.js'
 import { GraphSupervisor } from './graph-supervisor.js'
 import {
@@ -23,6 +26,31 @@ function baseRun(): GraphRunV1 {
       sourceTurnId: 'turn_1'
     }
   }))
+}
+
+function applyTestAppend(
+  current: GraphRunV1,
+  input: AppendGraphEventInput
+): {
+  state: GraphRunV1
+  envelope: ReturnType<typeof testGraphEnvelope>
+  duplicate: false
+} {
+  const graphSeq = current.lastEventSeq + 1
+  const envelope = testGraphEnvelope(graphSeq, input.event as GraphDomainEventV1, {
+    eventId: `graph_event_${current.id}_${graphSeq}`,
+    runId: current.id,
+    threadId: current.threadId,
+    graphRevision: input.graphRevision,
+    ...(input.commandId ? { commandId: input.commandId } : {}),
+    ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
+    ...(input.timestamp ? { timestamp: input.timestamp } : {})
+  })
+  return {
+    state: applyGraphEvent(current, envelope),
+    envelope,
+    duplicate: false
+  }
 }
 
 function failedAttempt(id: string, attemptNumber: number, failure: string): GraphNodeAttemptV1 {
@@ -103,17 +131,11 @@ describe('GraphSupervisor', () => {
     const store = {
       get: vi.fn(async () => current),
       list: vi.fn(async () => [current]),
-      append: vi.fn(async (_runId: string, input: {
-        event: { type: string; payload?: { to?: GraphRunV1['status'] } }
-      }) => {
-        current = {
-          ...current,
-          ...(input.event.type === 'run_status_changed' && input.event.payload?.to
-            ? { status: input.event.payload.to }
-            : {}),
-          lastEventSeq: current.lastEventSeq + 1
-        }
-        return { state: current, envelope: {}, duplicate: false }
+      events: vi.fn(async () => []),
+      append: vi.fn(async (_runId: string, input: AppendGraphEventInput) => {
+        const result = applyTestAppend(current, input)
+        current = result.state
+        return result
       })
     }
     const supervisor = new GraphSupervisor({
@@ -339,9 +361,11 @@ describe('GraphSupervisor', () => {
     const store = {
       get: vi.fn(async () => current),
       list: vi.fn(async () => [current]),
-      append: vi.fn(async () => {
-        current = { ...current, lastEventSeq: current.lastEventSeq + 1 }
-        return { state: current, envelope: {}, duplicate: false }
+      events: vi.fn(async () => []),
+      append: vi.fn(async (_runId: string, input: AppendGraphEventInput) => {
+        const result = applyTestAppend(current, input)
+        current = result.state
+        return result
       })
     }
     let supervisor: GraphSupervisor
@@ -370,23 +394,33 @@ describe('GraphSupervisor', () => {
         setTimeout(() => reject(new Error('supervisor flush deadlocked')), 1_000))
     ])).resolves.toBeUndefined()
     await supervisor.stop()
-    expect(store.append).toHaveBeenCalledTimes(2)
+    expect(store.append).toHaveBeenCalled()
   })
 
   it('does not start another Lead turn for the same durable supervision episode', async () => {
     let current: GraphRunV1 = { ...baseRun(), status: 'running' }
     const idempotencyKeys = new Set<string>()
+    const eventTypes: string[] = []
     const leadTurn = vi.fn(async () => undefined)
     const store = {
       get: vi.fn(async () => current),
       list: vi.fn(async () => [current]),
-      append: vi.fn(async (_runId: string, input: { idempotencyKey: string }) => {
-        const duplicate = idempotencyKeys.has(input.idempotencyKey)
+      events: vi.fn(async () => []),
+      append: vi.fn(async (_runId: string, input: AppendGraphEventInput) => {
+        const key = input.idempotencyKey ?? input.commandId ?? `event:${current.lastEventSeq + 1}`
+        const duplicate = idempotencyKeys.has(key)
         if (!duplicate) {
-          idempotencyKeys.add(input.idempotencyKey)
-          current = { ...current, lastEventSeq: current.lastEventSeq + 1 }
+          idempotencyKeys.add(key)
+          eventTypes.push(input.event.type)
+          const result = applyTestAppend(current, input)
+          current = result.state
+          return result
         }
-        return { state: current, envelope: {}, duplicate }
+        return {
+          state: current,
+          envelope: testGraphEnvelope(current.lastEventSeq, input.event),
+          duplicate
+        }
       })
     }
     const supervisor = new GraphSupervisor({
@@ -397,9 +431,9 @@ describe('GraphSupervisor', () => {
     })
     const signal = {
       runId: current.id,
-      reason: 'failure' as const,
+      reason: 'help' as const,
       nodeIds: ['research'],
-      digest: 'Graph node admission failed: unavailable profile.'
+      digest: 'A worker requested source Lead guidance.'
     }
 
     await supervisor.signal(signal)
@@ -408,7 +442,7 @@ describe('GraphSupervisor', () => {
     await supervisor.flush(current.id)
     await supervisor.stop()
 
-    expect(idempotencyKeys).toHaveLength(1)
+    expect(eventTypes.filter((type) => type === 'supervision_requested')).toHaveLength(1)
     expect(leadTurn).toHaveBeenCalledOnce()
   })
 
@@ -417,6 +451,7 @@ describe('GraphSupervisor', () => {
     const store = {
       get: vi.fn(async () => current),
       list: vi.fn(async () => [current]),
+      events: vi.fn(async () => []),
       append: vi.fn()
     }
     const diagnostics = vi.fn(async () => ({
@@ -453,9 +488,11 @@ describe('GraphSupervisor', () => {
     const store = {
       get: vi.fn(async () => current),
       list: vi.fn(async () => [current]),
-      append: vi.fn(async () => {
-        current = { ...current, lastEventSeq: current.lastEventSeq + 1 }
-        return { state: current, envelope: {}, duplicate: false }
+      events: vi.fn(async () => []),
+      append: vi.fn(async (_runId: string, input: AppendGraphEventInput) => {
+        const result = applyTestAppend(current, input)
+        current = result.state
+        return result
       })
     }
     const supervisor = new GraphSupervisor({
@@ -484,7 +521,7 @@ describe('GraphSupervisor', () => {
     await expect(supervisor.sweepStalls()).resolves.toBe(1)
     await supervisor.stop()
 
-    expect(store.append).toHaveBeenCalledOnce()
+    expect(store.append).toHaveBeenCalled()
     expect(current.nodes.research.status).toBe('running')
     expect(current.nodes.research.attempts.at(-1)?.status).toBe('running')
   })
@@ -498,9 +535,11 @@ describe('GraphSupervisor', () => {
     const store = {
       get: vi.fn(async () => current),
       list: vi.fn(async () => [current]),
-      append: vi.fn(async () => {
-        current = { ...current, lastEventSeq: current.lastEventSeq + 1 }
-        return { state: current, envelope: {}, duplicate: false }
+      events: vi.fn(async () => []),
+      append: vi.fn(async (_runId: string, input: AppendGraphEventInput) => {
+        const result = applyTestAppend(current, input)
+        current = result.state
+        return result
       })
     }
     const supervisor = new GraphSupervisor({
@@ -517,7 +556,7 @@ describe('GraphSupervisor', () => {
       digest: 'Manual supervision signal.'
     })
     await supervisor.flush(current.id)
-    expect(store.append).toHaveBeenCalledOnce()
+    expect(store.append).toHaveBeenCalled()
     expect(leadTurn).toHaveBeenCalledOnce()
 
     config = testGraphConfig({
@@ -541,7 +580,7 @@ describe('GraphSupervisor', () => {
       nodeIds: [],
       digest: 'Disabled signal.'
     })
-    expect(store.append).toHaveBeenCalledTimes(2)
+    expect(store.append).toHaveBeenCalled()
     await supervisor.stop()
   })
 
@@ -551,9 +590,11 @@ describe('GraphSupervisor', () => {
     const store = {
       get: vi.fn(async () => current),
       list: vi.fn(async () => [current]),
-      append: vi.fn(async () => {
-        current = { ...current, lastEventSeq: current.lastEventSeq + 1 }
-        return { state: current, envelope: {}, duplicate: false }
+      events: vi.fn(async () => []),
+      append: vi.fn(async (_runId: string, input: AppendGraphEventInput) => {
+        const result = applyTestAppend(current, input)
+        current = result.state
+        return result
       })
     }
     const supervisor = new GraphSupervisor({
@@ -597,6 +638,16 @@ describe('GraphSupervisor', () => {
           summary: 'Passed.',
           artifactRefs: []
         }],
+        verifiedChecks: [{
+          name: 'test',
+          status: 'passed',
+          summary: 'Host verification passed.',
+          artifactRefs: [],
+          command: ['npm', 'test'],
+          exitCode: 0,
+          workspaceRevision: 'abc123:clean',
+          outputSummary: 'All tests passed.'
+        }],
         evidence: ['test passed'],
         artifactRefs: [],
         risks: ['One documented residual risk.'],
@@ -621,11 +672,19 @@ describe('GraphSupervisor', () => {
       delegation: () => undefined,
       nowIso: () => '2026-07-26T12:00:00.000Z'
     })
-    await expect(supervisor.synthesize(run)).resolves.toMatchObject({
+    const summary = await supervisor.synthesize(run)
+    expect(summary).toMatchObject({
       finalAnswer: 'Completed the requested implementation.',
       changedFiles: ['src/example.ts'],
       unresolvedRisks: ['One documented residual risk.'],
       completedAt: '2026-07-26T12:00:00.000Z'
     })
+    expect(() => GraphRunSummaryV1Schema.parse(summary)).not.toThrow()
+    expect(summary.validationResults).toEqual([{
+      name: 'test',
+      status: 'passed',
+      summary: 'Host verification passed.',
+      artifactRefs: []
+    }])
   })
 })

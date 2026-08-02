@@ -8,7 +8,6 @@ const { mkdir, mkdtemp, rm, writeFile } = require('node:fs/promises')
 const { createConnection, createServer } = require('node:net')
 const { tmpdir } = require('node:os')
 const { dirname, extname, join, resolve } = require('node:path')
-const { pathToFileURL } = require('node:url')
 const { _electron } = require('playwright-core')
 const { makeTreeWritable } = require('./smoke-packaged-extensions.cjs')
 const {
@@ -17,6 +16,8 @@ const {
   desktopSmokeWorkspaceParent,
   desktopUserDataCandidates,
   platformDesktopArguments,
+  stopIsolatedServiceManager,
+  stopIsolatedSharedRuntime,
   terminateProcessTree
 } = require('./smoke-packaged-extension-desktop.cjs')
 const { developmentRendererEnvironment } = require('./development-renderer-environment.cjs')
@@ -380,6 +381,11 @@ async function main() {
       MAX_CLEANUP_TIMEOUT_MS + 5_000,
       'stopping the isolated Graph workbench Kun runtime'
     ).catch((error) => cleanupErrors.push(error))
+    await withTimeout(
+      stopIsolatedServiceManager(home, profile),
+      MAX_CLEANUP_TIMEOUT_MS + 5_000,
+      'stopping the isolated Graph workbench Kun Service Manager'
+    ).catch((error) => cleanupErrors.push(error))
     if (electronClosePromise) {
       await withTimeout(
         electronClosePromise,
@@ -434,12 +440,6 @@ async function main() {
   }
   if (primaryError) throw primaryError
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`)
-}
-
-async function stopIsolatedSharedRuntime(repositoryRoot, profile) {
-  const modulePath = join(repositoryRoot, 'kun', 'dist', 'cli', 'shared-runtime.js')
-  const { stopSharedRuntime } = await import(pathToFileURL(modulePath).href)
-  await stopSharedRuntime(profile)
 }
 
 function releaseChildProcessHandles(child) {

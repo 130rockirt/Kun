@@ -48,6 +48,8 @@ const firstSide: SideConversation = {
   model: 'gpt-5.6',
   providerId: 'codex',
   reasoningEffort: 'low',
+  fastMode: false,
+  attachments: [],
   busy: false,
   turnId: null,
   userItemId: null,
@@ -95,6 +97,7 @@ describe('SideConversationPanel', () => {
       composerPickList: ['gpt-5.6'],
       composerModelGroups: [],
       composerReasoningEffort: 'low',
+      composerFastMode: false,
       sideConversations: { [firstSide.threadId]: firstSide },
       sidePanel: { open: true, activeSideId: firstSide.threadId }
     })
@@ -152,6 +155,230 @@ describe('SideConversationPanel', () => {
     })
     expect(useChatStore.getState().composerModel).toBe('gpt-5.6')
     expect(useChatStore.getState().composerProviderId).toBe('codex')
+
+    act(() => renderer!.unmount())
+  })
+
+  it('shows Fast mode for an eligible Codex model and keeps it local to the branch', () => {
+    useChatStore.setState({
+      composerModelGroups: [{
+        providerId: 'codex',
+        presetSource: 'codex',
+        label: 'ChatGPT subscription',
+        modelIds: ['gpt-5.6'],
+        modelProfiles: {
+          'gpt-5.6': {
+            inputModalities: ['text'],
+            outputModalities: ['text'],
+            supportsToolCalling: true,
+            messageParts: ['text'],
+            serviceTiers: ['priority']
+          }
+        }
+      }]
+    })
+    let renderer: ReactTestRenderer
+    act(() => {
+      renderer = create(createElement(SideConversationPanel, { variant: 'docked' }))
+    })
+
+    const composer = renderer!.root.findByType(FloatingComposer)
+    expect(composer.props.composerFastMode).toBe(false)
+    const fastButton = renderer!.root.findByProps({ 'aria-label': 'Fast mode off' })
+
+    act(() => {
+      fastButton.props.onClick()
+    })
+
+    expect(useChatStore.getState().sideConversations['side-1'].fastMode).toBe(true)
+    expect(useChatStore.getState().composerFastMode).toBe(false)
+
+    act(() => renderer!.unmount())
+  })
+
+  it('uploads, previews, and removes a pasted image only in the active branch', async () => {
+    const uploadRuntimeImageAttachment = vi.fn(async () => ({
+      ok: true as const,
+      attachment: {
+        id: 'att-side-image',
+        name: 'clipboard.webp',
+        kind: 'image' as const,
+        mimeType: 'image/webp',
+        byteSize: 3,
+        width: 4,
+        height: 5,
+        hash: 'hash',
+        threadIds: ['side-1'],
+        workspaces: ['/workspace'],
+        createdAt: 't0',
+        updatedAt: 't0'
+      },
+      preview: {
+        dataBase64: 'AQID',
+        mimeType: 'image/webp',
+        byteSize: 3,
+        width: 4,
+        height: 5
+      },
+      compression: { sourceBytes: 3, outputBytes: 3, fallbackBytes: 3, wasCompressed: false }
+    }))
+    Object.assign(globalThis.window.kunGui, { uploadRuntimeImageAttachment })
+    useChatStore.setState({
+      composerModelGroups: [{
+        providerId: 'codex',
+        presetSource: 'codex',
+        label: 'ChatGPT subscription',
+        modelIds: ['gpt-5.6'],
+        modelProfiles: {
+          'gpt-5.6': {
+            inputModalities: ['text', 'image'],
+            outputModalities: ['text'],
+            supportsToolCalling: true,
+            messageParts: ['text', 'image_url']
+          }
+        }
+      }]
+    })
+    let renderer: ReactTestRenderer
+    await act(async () => {
+      renderer = create(createElement(SideConversationPanel, {
+        variant: 'docked',
+        attachmentStoreAvailable: true
+      }))
+    })
+
+    let composer = renderer!.root.findByType(FloatingComposer)
+    expect(composer.props.attachmentUploadEnabled).toBe(true)
+    await act(async () => {
+      await composer.props.onPasteClipboardImage()
+    })
+
+    expect(uploadRuntimeImageAttachment).toHaveBeenCalledWith({
+      source: { kind: 'clipboard' },
+      threadId: 'side-1'
+    })
+    expect(useChatStore.getState().sideConversations['side-1'].attachments).toEqual([
+      expect.objectContaining({
+        id: 'att-side-image',
+        previewUrl: 'data:image/webp;base64,AQID'
+      })
+    ])
+
+    composer = renderer!.root.findByType(FloatingComposer)
+    act(() => composer.props.onRemoveAttachment('att-side-image'))
+    expect(useChatStore.getState().sideConversations['side-1'].attachments).toEqual([])
+
+    act(() => renderer!.unmount())
+  })
+
+  it('passes draft images to branch creation without changing main attachments', async () => {
+    const spawnSideConversation = vi.fn(async () => 'side-new')
+    const uploadRuntimeImageAttachment = vi.fn(async () => ({
+      ok: true as const,
+      attachment: {
+        id: 'att-draft-image',
+        name: 'clipboard.webp',
+        kind: 'image' as const,
+        mimeType: 'image/webp',
+        byteSize: 3,
+        width: 4,
+        height: 5,
+        hash: 'hash',
+        threadIds: [],
+        workspaces: ['/workspace'],
+        createdAt: 't0',
+        updatedAt: 't0'
+      },
+      preview: { dataBase64: 'AQID', mimeType: 'image/webp', byteSize: 3, width: 4, height: 5 },
+      compression: { sourceBytes: 3, outputBytes: 3, fallbackBytes: 3, wasCompressed: false }
+    }))
+    Object.assign(globalThis.window.kunGui, { uploadRuntimeImageAttachment })
+    useChatStore.setState({
+      sidePanel: { open: true, activeSideId: null },
+      spawnSideConversation,
+      composerModelGroups: [{
+        providerId: 'codex',
+        label: 'Codex',
+        modelIds: ['gpt-5.6'],
+        modelProfiles: {
+          'gpt-5.6': {
+            inputModalities: ['text', 'image'],
+            outputModalities: ['text'],
+            supportsToolCalling: true,
+            messageParts: ['text', 'image_url']
+          }
+        }
+      }]
+    })
+    let renderer: ReactTestRenderer
+    await act(async () => {
+      renderer = create(createElement(SideConversationPanel, {
+        variant: 'docked',
+        attachmentStoreAvailable: true
+      }))
+    })
+
+    let composer = renderer!.root.findByType(FloatingComposer)
+    await act(async () => {
+      await composer.props.onPasteClipboardImage()
+    })
+    composer = renderer!.root.findByType(FloatingComposer)
+    act(() => composer.props.setInput('inspect draft'))
+    composer = renderer!.root.findByType(FloatingComposer)
+    await act(async () => {
+      composer.props.onSend()
+      await Promise.resolve()
+    })
+
+    expect(uploadRuntimeImageAttachment).toHaveBeenCalledWith({
+      source: { kind: 'clipboard' },
+      workspace: '/workspace'
+    })
+    expect(spawnSideConversation).toHaveBeenCalledWith(
+      'inspect draft',
+      expect.objectContaining({
+        attachments: [expect.objectContaining({ id: 'att-draft-image' })]
+      })
+    )
+    expect(useChatStore.getState().queuedMessages).toEqual([])
+
+    act(() => renderer!.unmount())
+  })
+
+  it('does not upload images for a text-only branch model', async () => {
+    const uploadRuntimeImageAttachment = vi.fn()
+    Object.assign(globalThis.window.kunGui, { uploadRuntimeImageAttachment })
+    useChatStore.setState({
+      composerModelGroups: [{
+        providerId: 'codex',
+        label: 'Codex',
+        modelIds: ['gpt-5.6'],
+        modelProfiles: {
+          'gpt-5.6': {
+            inputModalities: ['text'],
+            outputModalities: ['text'],
+            supportsToolCalling: true,
+            messageParts: ['text']
+          }
+        }
+      }]
+    })
+    let renderer: ReactTestRenderer
+    await act(async () => {
+      renderer = create(createElement(SideConversationPanel, {
+        variant: 'docked',
+        attachmentStoreAvailable: true
+      }))
+    })
+
+    const composer = renderer!.root.findByType(FloatingComposer)
+    await act(async () => {
+      await composer.props.onPasteClipboardImage()
+    })
+
+    expect(uploadRuntimeImageAttachment).not.toHaveBeenCalled()
+    expect(renderer!.root.findByType(FloatingComposer).props.attachmentUploadError)
+      .toBe(i18n.t('composerAttachmentModelUnsupported'))
 
     act(() => renderer!.unmount())
   })

@@ -57,14 +57,23 @@ import {
 import { createApprovalConsentToken, KUN_APPROVAL_CONSENT_HEADER } from '../server/approval-consent.js'
 import { isLoopbackHost } from '../server/loopback-host.js'
 import { readRuntimeDiscovery, type RuntimeDiscoveryRecord } from '../server/runtime-discovery.js'
-import { ensureSharedRuntime } from '../cli/shared-runtime.js'
+import { ensureSharedRuntime, runtimeDiscoveryDirectory } from '../cli/shared-runtime.js'
+import {
+  allowsDevelopmentManagerBootstrap,
+  runtimeBuildIdForFlavor
+} from '../cli/runtime-flavor.js'
 import { readRuntimeBuildIdForEntry } from '../server/runtime-build-identity.js'
 import type { TuiOptions } from './options.js'
+import { defaultKunControlDir } from '../manager/manager-discovery.js'
+import { ensureServiceManager } from '../manager/manager-client.js'
 import { IncrementalSseParser, parseRuntimeEventFrame } from './sse.js'
 
 const ThreadDetailResponse = ThreadSchema.extend({
   latestSeq: z.number().int().nonnegative().default(0),
-  pendingUserInputIds: z.array(z.string()).default([])
+  pendingUserInputIds: z.array(z.string()).default([]),
+  // Omitted by older servers. Keep omission distinct from an authoritative
+  // empty gate so clients do not hide legacy pending approval records.
+  pendingApprovalIds: z.array(z.string()).optional()
 })
 
 const UserInputResolutionResponse = z.object({
@@ -336,6 +345,11 @@ const GraphRunsResponse = z.object({
   nextCursor: z.string().optional()
 })
 
+// The Graph detail route can include additive public projections such as
+// supervision state. Keep the durable Graph contract strict while allowing
+// clients to consume newer runtime projections without rejecting the run.
+const PublicGraphRunResponse = GraphRunV1Schema.passthrough()
+
 export type ThreadDetail = z.infer<typeof ThreadDetailResponse>
 export type UserInputAnswer = z.infer<typeof UserInputAnswerSchema>
 export type RuntimeTools = z.infer<typeof RuntimeToolsResponse>
@@ -412,14 +426,36 @@ export async function resolveTuiConnection(
     }, fetchImpl)
   }
 
-  const expectedBuildId = deps?.expectedBuildId ??
-    await readRuntimeBuildIdForEntry(import.meta.url)
+  const runtimeFlavor = options.runtimeFlavor ?? 'production'
+  const sourceBuildId = deps?.expectedBuildId ?? await readRuntimeBuildIdForEntry(import.meta.url)
+  const expectedBuildId = runtimeBuildIdForFlavor(
+    sourceBuildId,
+    runtimeFlavor
+  )
   const ensureRuntime = deps?.ensureRuntime ?? ensureSharedRuntime
+  const controlDir = process.env.KUN_MANAGER_CONTROL_DIR?.trim() || defaultKunControlDir()
+  const managerSettingsPath = process.env.KUN_MANAGER_SETTINGS_PATH?.trim()
   const startExpectedRuntime = async (): Promise<TuiConnection> => {
+    const manager = deps?.ensureRuntime
+      ? undefined
+      : await ensureServiceManager({
+          flavor: runtimeFlavor,
+          allowDevelopmentBootstrap: allowsDevelopmentManagerBootstrap({
+            flavor: runtimeFlavor,
+            env: process.env
+          }),
+          controlDir,
+          dataDir: options.dataDir,
+          ...(managerSettingsPath ? { settingsPath: managerSettingsPath } : {}),
+          fetch: fetchImpl
+        })
     const started = await ensureRuntime({
       dataDir: options.dataDir,
       fetch: fetchImpl,
-      ...(expectedBuildId ? { expectedBuildId } : {})
+      runtimeFlavor,
+      controlDir,
+      ...(manager ? { manager } : {}),
+      ...(sourceBuildId ? { expectedBuildId: sourceBuildId } : {})
     })
     return {
       baseUrl: started.discovery.baseUrl,
@@ -428,7 +464,8 @@ export async function resolveTuiConnection(
       discovered: true
     }
   }
-  const discovery = await readRuntimeDiscovery(options.dataDir).catch(() => null)
+  const discoveryDir = runtimeDiscoveryDirectory(options.dataDir, runtimeFlavor, controlDir)
+  const discovery = await readRuntimeDiscovery(discoveryDir, runtimeFlavor).catch(() => null)
   if (discovery) {
     assertSafeDiscovery(discovery)
     try {
@@ -1061,12 +1098,12 @@ export class KunTuiClient {
   }
 
   getGraphRun(runId: string) {
-    return this.request(`/v1/graphs/${segment(runId)}`, GraphRunV1Schema)
+    return this.request(`/v1/graphs/${segment(runId)}`, PublicGraphRunResponse)
   }
 
   steerGraphRun(runId: string, text: string) {
     const commandId = `tui_steer_${randomUUID()}`
-    return this.request(`/v1/graphs/${segment(runId)}/steer`, GraphRunV1Schema, {
+    return this.request(`/v1/graphs/${segment(runId)}/steer`, PublicGraphRunResponse, {
       method: 'POST',
       body: {
         commandId,

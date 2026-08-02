@@ -4,7 +4,11 @@ import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import i18n from '../../i18n'
 import { useGraphStore } from '../../graph/graph-store'
-import type { GraphPlanNode, GraphRun } from '../../graph/graph-types'
+import type {
+  GraphPlanNode,
+  GraphPlanningDraftView,
+  GraphRun
+} from '../../graph/graph-types'
 import {
   FloatingComposerGraphPreview,
   FloatingComposerGraphProgress
@@ -132,6 +136,7 @@ describe('FloatingComposerGraphProgress', () => {
       useGraphStore.setState({
         threadId: 'thread_1',
         runs: [graphRun()],
+        drafts: [],
         childRuns: {},
         childReturnTarget: null,
         selectedRunId: 'run_1',
@@ -179,18 +184,55 @@ describe('FloatingComposerGraphProgress', () => {
     ])
   })
 
-  it.each(['submitted', 'reviewing', 'repair_required'] as const)(
-    'flows into a %s node but not out toward waiting downstream work',
+  it.each(['submitted', 'reviewing'] as const)(
+    'keeps edges into a %s node static while no Lead lease exists',
     (status) => {
       const run = graphRun()
       run.nodes.implement!.status = status
 
       expect(layoutComposerGraph(run).edges.map((edge) => [edge.id, edge.flowing])).toEqual([
-        ['edge_audit_build', true],
+        ['edge_audit_build', false],
         ['edge_build_review', false]
       ])
+      expect(getComposerGraphProgress(run).activeCount).toBe(0)
     }
   )
+
+  it('flows into a review node only while the Lead holds active review work', () => {
+    const run = graphRun()
+    run.nodes.implement!.status = 'reviewing'
+    run.supervision = {
+      version: 1,
+      runId: run.id,
+      lastEventSeq: run.lastEventSeq,
+      leadActive: true,
+      liveness: 'active_review',
+      pendingActions: [{
+        obligationId: 'obligation_review',
+        pendingAction: 'review_required',
+        nodeIds: ['implement'],
+        liveness: 'active_review',
+        retryCount: 0,
+        noProgressCount: 0,
+        canWake: false
+      }],
+      canWake: false,
+      updatedAt: run.updatedAt
+    }
+
+    expect(layoutComposerGraph(run).edges.map((edge) => [edge.id, edge.flowing])).toEqual([
+      ['edge_audit_build', true],
+      ['edge_build_review', false]
+    ])
+    expect(getComposerGraphProgress(run).activeCount).toBe(1)
+  })
+
+  it('continues showing retry preparation as processing work', () => {
+    const run = graphRun()
+    run.nodes.implement!.status = 'repair_required'
+
+    expect(layoutComposerGraph(run).edges[0]?.flowing).toBe(true)
+  })
 
   it('separates zero accepted completion from an actively running node', () => {
     const run = graphRun()
@@ -340,6 +382,60 @@ describe('FloatingComposerGraphProgress', () => {
     await act(async () => trigger.props.onPointerEnter())
     expect(renderer!.root.find((instance) =>
       instance.props['aria-haspopup'] === 'dialog').props['aria-expanded']).toBe(true)
+    act(() => renderer!.unmount())
+  })
+
+  it('replaces the running surface with correction actions when planning pauses', async () => {
+    const resumeDraft = vi.fn().mockResolvedValue(undefined)
+    const cancelDraft = vi.fn().mockResolvedValue(undefined)
+    const correction: GraphPlanningDraftView = {
+      draft: {
+        version: 1,
+        id: 'draft_correction',
+        reservedRunId: 'run_reserved',
+        threadId: 'thread_1',
+        sourceTurnId: 'turn_1',
+        projectId: 'project_1',
+        goal: 'Implement and verify TimeKV.',
+        revision: 3,
+        status: 'needs_correction',
+        issues: [{
+          code: 'invalid_type',
+          path: ['plan', 'tasks', 0, 'title'],
+          message: 'Expected string, received undefined',
+          repairHint: 'Restore the task title.'
+        }],
+        repairCount: 1,
+        createdAt: '2026-07-31T00:00:00.000Z',
+        updatedAt: '2026-07-31T00:00:01.000Z'
+      },
+      tasks: []
+    }
+    act(() => {
+      useGraphStore.setState({
+        runs: [],
+        drafts: [correction],
+        selectedRunId: null,
+        resumeDraft,
+        cancelDraft
+      })
+    })
+
+    let renderer: ReactTestRenderer
+    await act(async () => {
+      renderer = create(createElement(FloatingComposerGraphProgress, {
+        threadId: 'thread_1',
+        enabled: true
+      }))
+    })
+
+    expect(renderer!.root.findByProps({ 'data-graph-planning-correction': true })).toBeDefined()
+    await act(async () => {
+      renderer!.root.findByProps({ 'data-graph-planning-resume': true }).props.onClick()
+      renderer!.root.findByProps({ 'data-graph-planning-cancel': true }).props.onClick()
+    })
+    expect(resumeDraft).toHaveBeenCalledWith('draft_correction')
+    expect(cancelDraft).toHaveBeenCalledWith('draft_correction')
     act(() => renderer!.unmount())
   })
 

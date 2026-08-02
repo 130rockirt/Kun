@@ -47,22 +47,34 @@ import { PAGE_TIMEOUT_MS, PARALLEL_PAGES_TIMEOUT_MS, PLAN_TIMEOUT_MS, assistantT
  * runner never asks an agent to generate a separate HTML style-guide artifact.
  */
 export async function runDesignPages(deps: RunDesignPagesDeps): Promise<void> {
+  let firstSendSettled = false
+  const settleFirstSend = (sent: boolean): void => {
+    if (firstSendSettled) return
+    firstSendSettled = true
+    deps.onFirstSendSettled?.(sent)
+  }
   const signal = { cancelled: false }
-  if (!beginDesignPagesRun(signal)) return
+  if (!beginDesignPagesRun(signal)) {
+    settleFirstSend(false)
+    return
+  }
   const store = useDesignWorkspaceStore.getState()
   store.setFileError(null)
   const withFoundation = deps.foundation !== false
-  // Capture the active 设计稿 once so every generated artifact lands in the same one.
-  const docId = store.ensureActiveDocument()
 
   const overrides = (display: string): SendMessageOverrides => ({
     displayText: display,
+    agentSurface: 'design',
     ...(deps.model ? { model: deps.model } : {}),
     ...(deps.providerId ? { providerId: deps.providerId } : {}),
-    ...(deps.reasoningEffort ? { reasoningEffort: deps.reasoningEffort } : {})
+    ...(deps.reasoningEffort ? { reasoningEffort: deps.reasoningEffort } : {}),
+    ...(deps.serviceTier ? { serviceTier: deps.serviceTier } : {}),
+    ...(deps.expectedThreadId ? { expectedThreadId: deps.expectedThreadId } : {})
   })
 
   try {
+    // Capture the active 设计稿 once so every generated artifact lands in the same one.
+    const docId = store.ensureActiveDocument()
     const foundationBuiltIds = new Set<string>()
     let designMdRef: string | undefined
     let designSystemRef: string | undefined
@@ -96,7 +108,8 @@ export async function runDesignPages(deps: RunDesignPagesDeps): Promise<void> {
         prompt: specPrompt,
         overrides: overrides(specDisplay),
         signal,
-        timeoutMs: PLAN_TIMEOUT_MS
+        timeoutMs: PLAN_TIMEOUT_MS,
+        onSendSettled: settleFirstSend
       })
       if (status === 'cancelled') return
       if (status === 'send-failed') {
@@ -125,7 +138,8 @@ export async function runDesignPages(deps: RunDesignPagesDeps): Promise<void> {
         prompt: planPrompt,
         overrides: overrides(planDisplay),
         signal,
-        timeoutMs: PLAN_TIMEOUT_MS
+        timeoutMs: PLAN_TIMEOUT_MS,
+        onSendSettled: settleFirstSend
       })
       if (status === 'cancelled') return
       if (status === 'send-failed') {
@@ -393,6 +407,7 @@ export async function runDesignPages(deps: RunDesignPagesDeps): Promise<void> {
   } catch (error) {
     store.setFileError(error instanceof Error ? error.message : String(error))
   } finally {
+    settleFirstSend(false)
     finishDesignPagesRun(signal)
     useDesignWorkspaceStore.getState().setPagesRun(null)
   }

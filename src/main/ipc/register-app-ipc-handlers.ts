@@ -7,8 +7,7 @@ import {
   type IpcMainInvokeEvent,
   type WebContents
 } from 'electron'
-import { watch, type FSWatcher } from 'node:fs'
-import { randomBytes, randomUUID } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { basename, dirname, extname, isAbsolute, join, resolve } from 'node:path'
 import { access, copyFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
@@ -131,6 +130,7 @@ import {
   createApprovalConsentToken,
   KUN_APPROVAL_CONSENT_HEADER
 } from '../approval-consent'
+import { NativeDialogCoordinator } from '../native-dialog-coordinator'
 import {
   KunExecutionSettingsConsentService,
   executionSettingsEqual,
@@ -298,6 +298,10 @@ import {
   writeKunProjectConfig
 } from '../../../kun/src/config/project-config.js'
 import { readProjectConfigState } from '../services/project-config-service'
+import {
+  startWorkspaceFileWatcher,
+  type WorkspaceFileWatcherHandle
+} from '../services/workspace-file-watcher'
 
 type GuiUpdaterModule = typeof import('../gui-updater')
 
@@ -317,7 +321,7 @@ const extensionArtifactResolutionSchema = z.strictObject({
 })
 
 type WorkspaceFileWatchRecord = {
-  watcher: FSWatcher
+  watcher: WorkspaceFileWatcherHandle
   sender: WebContents
   path: string
   workspaceRoot: string
@@ -341,6 +345,7 @@ type RegisterAppIpcHandlersOptions = {
     body?: string,
     headers?: Record<string, string>
   ) => Promise<RuntimeRequestResult>
+  getRuntimeAuthToken: (settings: AppSettingsV1) => string
   getRuntimeSettingsSyncStatus: () => KunRuntimeSettingsSyncStatusPayload
   restartRuntime: () => Promise<void>
   fetchUpstreamModels: () => Promise<UpstreamModelsResult>
@@ -362,7 +367,51 @@ type RegisterAppIpcHandlersOptions = {
   loadGuiUpdaterModule: () => Promise<GuiUpdaterModule>
   resolveLogDirectory: () => string
   logError: (category: string, message: string, detail?: unknown) => void
+  logInfo?: (category: string, message: string, detail?: unknown) => void
+  nativeDialogs?: NativeDialogCoordinator
   workspacePreviewProtocols: WorkspacePreviewProtocolRegistry
+}
+
+type DialogParentState = {
+  destroyed: boolean
+  visible?: boolean
+  minimized?: boolean
+  focused?: boolean
+}
+
+type OptionalDialogParentMethods = Partial<Pick<BrowserWindow,
+  'isVisible' | 'isMinimized' | 'isFocused' | 'restore' | 'show' | 'focus'>>
+
+function dialogParentState(parent: BrowserWindow): DialogParentState {
+  if (parent.isDestroyed()) return { destroyed: true }
+  const window = parent as BrowserWindow & OptionalDialogParentMethods
+  return {
+    destroyed: false,
+    ...(window.isVisible ? { visible: window.isVisible() } : {}),
+    ...(window.isMinimized ? { minimized: window.isMinimized() } : {}),
+    ...(window.isFocused ? { focused: window.isFocused() } : {})
+  }
+}
+
+function revealDialogParent(parent: BrowserWindow): void {
+  const window = parent as BrowserWindow & OptionalDialogParentMethods
+  if (window.isMinimized?.()) window.restore?.()
+  if (window.isVisible && !window.isVisible()) window.show?.()
+  window.focus?.()
+}
+
+function dialogParentIsAvailable(parent: BrowserWindow): boolean {
+  if (parent.isDestroyed()) return false
+  try {
+    const contents = parent.webContents as unknown as { isDestroyed?: () => boolean }
+    return contents.isDestroyed?.() !== true
+  } catch {
+    return false
+  }
+}
+
+function approvalLogReference(approvalId: string): string {
+  return `sha256:${createHash('sha256').update(approvalId).digest('hex').slice(0, 16)}`
 }
 
 function parseIpcPayload<T>(channel: string, schema: z.ZodType<T>, payload: unknown): T {
@@ -386,22 +435,30 @@ function withoutRendererProjectConfigGrants(partial: AppSettingsPatch): AppSetti
   }
 }
 
+function trustedWorkbenchSenderIsCurrent(
+  event: Pick<IpcMainInvokeEvent, 'sender' | 'senderFrame'>,
+  window: BrowserWindow | null
+): boolean {
+  const senderFrame = event.senderFrame
+  const mainFrame = window?.webContents.mainFrame
+  return Boolean(
+    window &&
+    !window.isDestroyed() &&
+    event.sender.id === window.webContents.id &&
+    senderFrame &&
+    senderFrame.detached !== true &&
+    mainFrame &&
+    mainFrame.detached !== true &&
+    senderFrame.processId === mainFrame.processId &&
+    senderFrame.routingId === mainFrame.routingId
+  )
+}
+
 function assertTrustedWorkbenchSender(
   event: Pick<IpcMainInvokeEvent, 'sender' | 'senderFrame'>,
   getMainWindow: () => BrowserWindow | null
 ): void {
-  const window = getMainWindow()
-  const senderFrame = event.senderFrame
-  const mainFrame = window?.webContents.mainFrame
-  if (
-    !window ||
-    window.isDestroyed() ||
-    event.sender.id !== window.webContents.id ||
-    !senderFrame ||
-    !mainFrame ||
-    senderFrame.processId !== mainFrame.processId ||
-    senderFrame.routingId !== mainFrame.routingId
-  ) {
+  if (!trustedWorkbenchSenderIsCurrent(event, getMainWindow())) {
     throw new Error('IPC sender is not the trusted workbench frame.')
   }
 }
@@ -576,6 +633,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     saveSettingsPatch,
     resetUnreadableCredentials,
     runtimeRequest,
+    getRuntimeAuthToken,
     getRuntimeSettingsSyncStatus,
     restartRuntime,
     fetchUpstreamModels,
@@ -594,8 +652,19 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     readGuiUpdateState,
     loadGuiUpdaterModule,
     resolveLogDirectory,
-    logError
+    logError,
+    logInfo: logInfoHandler = () => undefined
   } = options
+  const nativeDialogs = options.nativeDialogs ?? new NativeDialogCoordinator()
+  const showMainWindowMessageBox = (
+    parent: BrowserWindow,
+    messageBoxOptions: Electron.MessageBoxOptions
+  ): Promise<Electron.MessageBoxReturnValue> => nativeDialogs.run(parent.webContents, async () => {
+    if (parent.isDestroyed()) {
+      throw new Error('Native dialog parent window is unavailable.')
+    }
+    return dialog.showMessageBox(parent, messageBoxOptions)
+  })
   setLocalWhisperProgressEmitter((payload) => {
     getMainWindow()?.webContents.send('speech:local-whisper:progress', payload)
   })
@@ -638,7 +707,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     if (!parent || parent.isDestroyed() || !senderFrame) {
       throw new Error('Protected execution-settings window is unavailable.')
     }
-    const confirmation = await dialog.showMessageBox(parent, {
+    const confirmation = await showMainWindowMessageBox(parent, {
       type: 'warning',
       title: 'Change Kun execution permissions',
       message: 'Apply this tool approval and sandbox configuration?',
@@ -805,7 +874,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     if (!parent || parent.isDestroyed()) {
       throw new Error('Credential recovery window is unavailable.')
     }
-    const confirmation = await dialog.showMessageBox(parent, {
+    const confirmation = await showMainWindowMessageBox(parent, {
       type: 'warning',
       title: 'Reset encrypted credentials',
       message: 'Reset the credentials that Windows can no longer decrypt?',
@@ -943,26 +1012,73 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       const parent = getMainWindow()
       if (!parent || parent.isDestroyed()) throw new Error('Protected approval window is unavailable.')
       const allow = request.decision === 'allow'
-      const confirmation = await dialog.showMessageBox(parent, {
-        type: 'warning',
-        title: allow ? 'Approve tool action' : 'Deny tool action',
-        message: allow
-          ? 'Allow this pending Kun tool action once?'
-          : 'Deny this pending Kun tool action?',
-        detail: `Approval: ${request.approvalId}\n\nThis protected native prompt cannot be controlled by extension Webviews or Direct DOM content scripts.`,
-        buttons: [allow ? 'Allow once' : 'Deny', 'Cancel'],
-        defaultId: 1,
-        cancelId: 1,
-        noLink: true,
-        normalizeAccessKeys: true
+      const approvalRef = approvalLogReference(request.approvalId)
+      const startedAt = Date.now()
+      let confirmation: Electron.MessageBoxReturnValue
+      try {
+        confirmation = await nativeDialogs.run(parent.webContents, async () => {
+          if (parent.isDestroyed()) {
+            throw new Error('Protected approval window was closed before confirmation.')
+          }
+          const windowBeforeReveal = dialogParentState(parent)
+          revealDialogParent(parent)
+          logInfoHandler('approval', 'Opening protected native approval dialog.', {
+            approvalRef,
+            decision: request.decision,
+            platform: process.platform,
+            windowBeforeReveal,
+            windowAfterReveal: dialogParentState(parent)
+          })
+          return dialog.showMessageBox(parent, {
+            type: 'warning',
+            title: allow ? 'Approve tool action' : 'Deny tool action',
+            message: allow
+              ? 'Allow this pending Kun tool action once?'
+              : 'Deny this pending Kun tool action?',
+            detail: `Approval reference: ${approvalRef}\n\nThis protected native prompt cannot be controlled by extension Webviews or Direct DOM content scripts.`,
+            buttons: [allow ? 'Allow once' : 'Deny', 'Cancel'],
+            defaultId: 1,
+            cancelId: 1,
+            noLink: true,
+            normalizeAccessKeys: true
+          })
+        })
+      } catch (error) {
+        logError('approval', 'Protected native approval dialog failed.', {
+          approvalRef,
+          decision: request.decision,
+          durationMs: Date.now() - startedAt,
+          platform: process.platform,
+          window: dialogParentState(parent),
+          message: error instanceof Error ? error.message : String(error)
+        })
+        throw error
+      }
+      logInfoHandler('approval', 'Protected native approval dialog resolved.', {
+        approvalRef,
+        decision: request.decision,
+        response: confirmation.response,
+        confirmed: confirmation.response === 0,
+        durationMs: Date.now() - startedAt,
+        platform: process.platform,
+        window: dialogParentState(parent)
       })
       if (confirmation.response !== 0) return { confirmed: false as const }
+      if (!dialogParentIsAvailable(parent) || !trustedWorkbenchSenderIsCurrent(event, parent)) {
+        logInfoHandler('approval', 'Protected native approval confirmation was not submitted.', {
+          approvalRef,
+          decision: request.decision,
+          reason: 'parent_or_sender_unavailable_after_confirmation',
+          platform: process.platform,
+          window: dialogParentState(parent)
+        })
+        return { confirmed: false as const }
+      }
     }
 
     const settings = await store.load()
-    const runtimeToken = getKunRuntimeSettings(settings).runtimeToken.trim()
     const consentToken = createApprovalConsentToken({
-      runtimeToken,
+      runtimeToken: getRuntimeAuthToken(settings),
       approvalId: request.approvalId,
       decision: request.decision,
       expiresAt: Date.now() + 30_000
@@ -1353,8 +1469,8 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       noLink: true
     }
     const mainWindow = getMainWindow()
-    if (mainWindow) {
-      await dialog.showMessageBox(mainWindow, options)
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      await showMainWindowMessageBox(mainWindow, options)
       return
     }
     await dialog.showMessageBox(options)
@@ -1375,8 +1491,8 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       noLink: true
     }
     const mainWindow = getMainWindow()
-    const result = mainWindow
-      ? await dialog.showMessageBox(mainWindow, options)
+    const result = mainWindow && !mainWindow.isDestroyed()
+      ? await showMainWindowMessageBox(mainWindow, options)
       : await dialog.showMessageBox(options)
     return result.response === 0
   })
@@ -1715,8 +1831,8 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       noLink: true
     }
     const mainWindow = getMainWindow()
-    const confirmation = mainWindow
-      ? await dialog.showMessageBox(mainWindow, confirmationOptions)
+    const confirmation = mainWindow && !mainWindow.isDestroyed()
+      ? await showMainWindowMessageBox(mainWindow, confirmationOptions)
       : await dialog.showMessageBox(confirmationOptions)
     if (confirmation.response !== 0) {
       return projectConfigFileResult(canonicalRoot, current)
@@ -2200,16 +2316,53 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     }
 
     const watchId = randomUUID()
+    let watchReady = false
+    let watchFatalMessage = ''
     try {
-      const watchedDirectory = dirname(watchedPath)
-      const watchedName = basename(watchedPath)
-      // Watch the containing directory rather than the file inode. Workspace
-      // writes are atomic (`rename(temp, target)`), which replaces the inode and
-      // permanently detaches a file-level watcher after its first update on
-      // macOS/Linux. The directory remains stable across every replacement.
-      const watcher = watch(watchedDirectory, { persistent: false }, (_eventType, filename) => {
-        if (filename && basename(filename.toString()) !== watchedName) return
-        scheduleWorkspaceFileChange(watchId)
+      const watcher = startWorkspaceFileWatcher({
+        targetPath: watchedPath,
+        onChange: () => scheduleWorkspaceFileChange(watchId),
+        onFallback: ({ reason, error }) => {
+          const code = (error as NodeJS.ErrnoException | undefined)?.code
+          logError('workspace-watch', 'Workspace file watcher is using polling.', {
+            watchId,
+            path: watchedPath,
+            watcherType: 'polling',
+            reason,
+            ...(code ? { code } : {}),
+            ...(error ? { message: error.message } : {})
+          })
+        },
+        onFatalError: (error) => {
+          watchFatalMessage = error.message
+          logError('workspace-watch', 'Workspace file watcher failed.', {
+            watchId,
+            path: watchedPath,
+            message: error.message
+          })
+          if (!watchReady) return
+          const latest = workspaceFileWatchers.get(watchId)
+          if (!latest) return
+          try {
+            if (!latest.sender.isDestroyed()) {
+              latest.sender.send('file:workspace-changed', {
+                ok: false,
+                watchId,
+                workspaceRoot: latest.workspaceRoot,
+                path: latest.path,
+                message: error.message,
+                changedAt: new Date().toISOString()
+              })
+            }
+          } catch (sendError) {
+            logError('workspace-watch', 'Failed to report workspace watcher failure.', {
+              watchId,
+              message: sendError instanceof Error ? sendError.message : String(sendError)
+            })
+          } finally {
+            disposeWorkspaceFileWatch(watchId)
+          }
+        }
       })
       workspaceFileWatchers.set(watchId, {
         watcher,
@@ -2240,6 +2393,11 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
         }
         initialSize = refreshed.size
       }
+      if (watchFatalMessage) {
+        disposeWorkspaceFileWatch(watchId)
+        return { ok: false as const, message: watchFatalMessage }
+      }
+      watchReady = true
       return {
         ok: true as const,
         watchId,

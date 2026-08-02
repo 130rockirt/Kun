@@ -10,7 +10,7 @@ import {
   defaultModelProviderSettings
 } from '../shared/app-settings'
 import { DEFAULT_GUI_UPDATE_CHANNEL } from '../shared/gui-update'
-import { JsonSettingsStore } from './settings-store'
+import { devServerHintUrl, JsonSettingsStore } from './settings-store'
 
 type SettingsStoreModule = typeof import('./settings-store')
 
@@ -31,6 +31,28 @@ async function withMockedHome<T>(
 describe('JsonSettingsStore', () => {
   afterEach(() => {
     vi.restoreAllMocks()
+  })
+
+  it('shares manager-backed settings revisions across independent profiles', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'kun-shared-settings-'))
+    let revision = 0
+    let value: string | null = null
+    const backend = {
+      async read() {
+        return { revision, value }
+      },
+      async write(expectedRevision: number, next: string) {
+        if (expectedRevision !== revision) throw new Error('revision conflict')
+        value = next
+        revision += 1
+        return { revision, value: next }
+      }
+    }
+    const production = new JsonSettingsStore(userDataDir, { documentBackend: backend })
+    const development = new JsonSettingsStore(userDataDir, { documentBackend: backend })
+    expect((await development.load()).locale).toBe('en')
+    await production.patch({ locale: 'zh' })
+    expect((await development.load()).locale).toBe('zh')
   })
 
   it('defaults GUI updates to the stable channel for new settings', async () => {
@@ -843,6 +865,18 @@ describe('JsonSettingsStore', () => {
       expect(entries.filter((entry) => entry.includes('.tmp'))).toEqual([])
     } finally {
       await rm(userDataDir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('development renderer URL boundary', () => {
+  it('ignores renderer URL injection in packaged applications', () => {
+    vi.stubEnv('ELECTRON_RENDERER_URL', 'https://attacker.example/')
+    try {
+      expect(devServerHintUrl(true)).toBeUndefined()
+      expect(devServerHintUrl(false)).toBe('https://attacker.example/')
+    } finally {
+      vi.unstubAllEnvs()
     }
   })
 })

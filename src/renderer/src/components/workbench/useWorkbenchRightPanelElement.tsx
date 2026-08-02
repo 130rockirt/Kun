@@ -1,6 +1,5 @@
 import type { ComponentProps, ReactElement } from 'react'
 import type { SettingsRouteSection } from '../../store/chat-store'
-import { useDesignWorkspaceStore } from '../../design/design-workspace-store'
 import { WorkbenchPlanPanel, type WorkbenchPlanPanelProps } from './WorkbenchPlanPanelHost'
 import { WorkbenchRightPanelHost } from './WorkbenchRightPanelHost'
 
@@ -19,6 +18,14 @@ type ComposerModelProps<T extends {
   composerPickList: string[]
   setComposerModel: (modelId: string, providerId?: string) => void
 }> = Pick<T, 'composerModel' | 'composerProviderId' | 'composerPickList' | 'setComposerModel'>
+
+type DesignAssistantComposerProps = ComposerModelProps<DesignAssistantProps> & Pick<
+  DesignAssistantProps,
+  | 'composerReasoningEffort'
+  | 'composerFastMode'
+  | 'setComposerReasoningEffort'
+  | 'setComposerFastMode'
+>
 
 type WorkbenchRightPanelElementOptions = Pick<
   RightPanelHostProps,
@@ -41,15 +48,17 @@ type WorkbenchRightPanelElementOptions = Pick<
     implementTitle: DesignImplementProps['title']
     implementationWorkspaceRoot: DesignImplementProps['workspaceRoot']
     implementationComposer: ComposerModelProps<DesignImplementProps>
-    assistantComposer: ComposerModelProps<DesignAssistantProps>
+    assistantComposer: DesignAssistantComposerProps
     contextChips: DesignAssistantProps['contextChips']
     input: string
     onRemoveContextChip: DesignAssistantProps['onRemoveContextChip']
     onSendPrompt: (prompt: string) => void
-    createThread: (workspaceRoot?: string, docId?: string) => Promise<string | null>
+    drawingTitle: DesignAssistantProps['drawingTitle']
+    onClearHistory: DesignAssistantProps['onClearHistory']
+    hasRegisteredHistory: DesignAssistantProps['hasRegisteredHistory']
     threads: DesignAssistantProps['designThreads']
+    historyThreadIds: DesignAssistantProps['designHistoryThreadIds']
     onSwitchThread: DesignAssistantProps['onSwitchThread']
-    fallbackWorkspaceRoot: string
   }
   write: Pick<
     WriteAssistantProps,
@@ -58,7 +67,9 @@ type WorkbenchRightPanelElementOptions = Pick<
     | 'composerPickList'
     | 'skillCommands'
     | 'disabledSkillIds'
+    | 'composerFastMode'
     | 'setComposerModel'
+    | 'setComposerFastMode'
     | 'onNewConversation'
     | 'onPickWorkspace'
   >
@@ -165,12 +176,11 @@ export function useWorkbenchRightPanelElement({
           onRemoveContextChip: design.onRemoveContextChip,
           onSend: () => design.onSendPrompt(design.input),
           onOpenSettings: (section) => openSettings((section ?? 'design') as SettingsRouteSection),
-          onNewConversation: () => {
-            const designStore = useDesignWorkspaceStore.getState()
-            const root = designStore.workspaceRoot || design.fallbackWorkspaceRoot
-            if (root) void design.createThread(root, designStore.ensureActiveDocument())
-          },
+          drawingTitle: design.drawingTitle,
+          onClearHistory: design.onClearHistory,
+          hasRegisteredHistory: design.hasRegisteredHistory,
           designThreads: design.threads,
+          designHistoryThreadIds: design.historyThreadIds,
           onSwitchThread: (id) => void design.onSwitchThread(id),
           onCollapse
         }

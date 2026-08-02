@@ -1034,7 +1034,7 @@ describe('AgentSdkRuntime.runTurn', () => {
   test('gives pending Graph supervision one real SDK recovery exchange before parking', async () => {
     const prompts: string[] = []
     const checkGraphCompletion = vi.fn(async () => 'retry_required' as const)
-    const finishTurn = vi.fn(async () => 'suspended' as const)
+    const finishTurn = vi.fn(async () => 'suspended_pending_supervision' as const)
     const sdk = fakeSdkAttempts([
       svgSdkTextAttempt('Everything looks complete.'),
       svgSdkTextAttempt('Still prose only.')
@@ -1065,7 +1065,7 @@ describe('AgentSdkRuntime.runTurn', () => {
       'th',
       'tn',
       new AbortController().signal
-    )).resolves.toBe('suspended')
+    )).resolves.toBe('suspended_pending_supervision')
 
     expect(checkGraphCompletion).toHaveBeenCalledTimes(1)
     expect(prompts).toHaveLength(2)

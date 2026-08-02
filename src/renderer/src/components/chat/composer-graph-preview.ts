@@ -15,15 +15,12 @@ const terminalRunStatuses = new Set(['completed', 'failed', 'cancelled'])
 // superseded, failed, or cancelled node may close scheduler work, but it has
 // not passed Graph acceptance and must not advance the accepted-work bar.
 const completedNodeStatuses = new Set<GraphNodeStatus>(['accepted'])
-const activeNodeStatuses = new Set<GraphNodeStatus>([
+const currentNodeStatuses = new Set<GraphNodeStatus>([
   'queued',
   'running',
   'submitted',
   'reviewing',
-  'repair_required'
-])
-const currentNodeStatuses = new Set<GraphNodeStatus>([
-  ...activeNodeStatuses,
+  'repair_required',
   'ready'
 ])
 const activeChildStatuses = new Set<GraphChildRuntime['status']>(['queued', 'running'])
@@ -221,7 +218,9 @@ export function getComposerGraphProgress(
   }
   const projectionIsActive = (projection: GraphNodeProjection): boolean =>
     !runTerminal && (
-      activeNodeStatuses.has(projection.status) ||
+      graphLivenessIsProcessing(
+        graphNodeLiveness(projection, childRuns, Date.now(), run.supervision)
+      ) ||
       activeChildStatuses.has(childForProjection(projection)?.status ?? 'completed')
     )
   const active = projections.filter(projectionIsActive)
@@ -284,7 +283,7 @@ export function layoutComposerGraph(
     const attempt = projection.attempts.at(-1)
     const childThreadId = attempt?.childThreadId
     const processing = !runTerminal && graphLivenessIsProcessing(
-      graphNodeLiveness(projection, childRuns)
+      graphNodeLiveness(projection, childRuns, Date.now(), run.supervision)
     )
     const layoutNode: ComposerGraphLayoutNode = {
       id: node.id,

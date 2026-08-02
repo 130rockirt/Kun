@@ -91,6 +91,8 @@ export function GraphModePanel({
     cancelDraft,
     retryNode,
     reviewNode,
+    wakeLead,
+    wakingObligationId,
     patch,
     rebindNode,
     steer,
@@ -265,6 +267,8 @@ export function GraphModePanel({
           onRefresh={() => void refreshSelectedRun()}
           onCommand={(action) => void command(action)}
           onCancel={() => void cancel()}
+          wakingObligationId={wakingObligationId}
+          onWakeLead={(obligationId) => void wakeLead(obligationId)}
           onRetry={(nodeId) => void retryNode(nodeId)}
           onReview={(nodeId, outcome) => void reviewNode(nodeId, outcome)}
           onPatch={(operations, reason) => patch(operations, reason)}

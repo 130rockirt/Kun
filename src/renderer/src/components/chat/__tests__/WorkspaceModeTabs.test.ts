@@ -96,4 +96,15 @@ describe('WorkspaceModeTabs', () => {
     expect(html).not.toContain('role="switch"')
     expect(html.match(/role="tab"/g)?.length).toBe(3)
   })
+
+  it('can lock all workspace navigation while a scoped submission is being prepared', () => {
+    const html = renderToStaticMarkup(createElement(WorkspaceModeTabs, {
+      ...props('design'),
+      disabled: true,
+      disabledReason: 'Preparing the drawing'
+    }))
+
+    expect(html.match(/disabled=""/g)?.length).toBe(3)
+    expect(html.match(/title="Preparing the drawing"/g)?.length).toBe(3)
+  })
 })

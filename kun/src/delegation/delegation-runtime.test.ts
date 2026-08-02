@@ -79,6 +79,7 @@ describe('DelegationRuntime abort handling', () => {
 
       expect(runtime.abortChild(record.id)).toBe(true)
       await waitFor(() => childSignal?.aborted === true)
+      await runtime.abortDetachedChildrenForThread('parent')
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -88,12 +89,18 @@ describe('DelegationRuntime abort handling', () => {
     const dir = await mkdtemp(join(tmpdir(), 'kun-delegation-'))
     try {
       let childSignal: AbortSignal | undefined
+      let releaseAbortCleanup = (): void => undefined
+      const abortCleanup = new Promise<void>((resolve) => {
+        releaseAbortCleanup = resolve
+      })
+      const store = new FileDelegationStore(dir)
       const runtime = new DelegationRuntime({
         config: subagentConfig(),
-        store: new FileDelegationStore(dir),
+        store,
         executor: async (input) => {
           childSignal = input.signal
           await new Promise<void>((resolve) => input.signal.addEventListener('abort', () => resolve(), { once: true }))
+          await abortCleanup
           throw new Error('aborted')
         }
       })
@@ -106,9 +113,71 @@ describe('DelegationRuntime abort handling', () => {
       })
 
       await waitFor(() => childSignal !== undefined)
-      expect(runtime.abortDetachedChildrenForThread('thr_other')).toBe(0)
-      expect(runtime.abortDetachedChildrenForThread('thr_delete')).toBe(1)
+      expect(await runtime.abortDetachedChildrenForThread('thr_other')).toBe(0)
+      const aborting = runtime.abortDetachedChildrenForThread('thr_delete')
       await waitFor(() => childSignal?.aborted === true)
+      let drained = false
+      void aborting.then(() => {
+        drained = true
+      })
+      await Promise.resolve()
+      expect(drained).toBe(false)
+
+      releaseAbortCleanup()
+      expect(await aborting).toBe(1)
+      expect(await runtime.abortDetachedChildrenForThread('thr_delete')).toBe(0)
+      expect((await store.list())[0]?.status).toBe('aborted')
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('drains a foreground child detached immediately before its parent thread is deleted', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'kun-delegation-'))
+    try {
+      let childId = ''
+      let childSignal: AbortSignal | undefined
+      let releaseAbortCleanup = (): void => undefined
+      const abortCleanup = new Promise<void>((resolve) => {
+        releaseAbortCleanup = resolve
+      })
+      const store = new FileDelegationStore(dir)
+      const runtime = new DelegationRuntime({
+        config: subagentConfig(),
+        store,
+        executor: async (input) => {
+          childSignal = input.signal
+          await new Promise<void>((resolve) => input.signal.addEventListener('abort', () => resolve(), { once: true }))
+          await abortCleanup
+          throw new Error('aborted')
+        }
+      })
+      const running = runtime.runChild({
+        parentThreadId: 'thr_dynamic_delete',
+        parentTurnId: 'turn_dynamic_delete',
+        prompt: 'foreground work',
+        signal: new AbortController().signal,
+        onStart: (startedChildId) => {
+          childId = startedChildId
+        }
+      })
+
+      await waitFor(() => childId.length > 0 && childSignal !== undefined)
+      expect(await runtime.detachChild(childId)).toBe(true)
+      const aborting = runtime.abortDetachedChildrenForThread('thr_dynamic_delete')
+      await waitFor(() => childSignal?.aborted === true)
+      let drained = false
+      void aborting.then(() => {
+        drained = true
+      })
+      await Promise.resolve()
+      expect(drained).toBe(false)
+
+      releaseAbortCleanup()
+      expect(await aborting).toBe(1)
+      await running
+      expect(await runtime.abortDetachedChildrenForThread('thr_dynamic_delete')).toBe(0)
+      expect((await store.list())[0]?.status).toBe('aborted')
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

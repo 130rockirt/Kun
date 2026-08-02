@@ -64,13 +64,13 @@ export function GraphNodeInspector({
   const [activeTab, setActiveTab] = useState<'overview' | 'execution' | 'evidence'>('overview')
   const [rebindProfileId, setRebindProfileId] = useState('')
   const attempt = node.attempts.at(-1)
-  const liveness = graphNodeLiveness(node, childRuns, now)
+  const liveness = graphNodeLiveness(node, childRuns, now, run.supervision)
   const childOpeningState = childReturnTarget?.runId === run.id &&
     childReturnTarget.nodeId === node.node.id
     ? childReturnTarget.childSessionStatus
     : null
   useEffect(() => {
-    if (!['working', 'reviewing', 'retrying', 'waiting_human'].includes(liveness.kind)) return
+    if (!['working', 'active_review', 'retrying', 'waiting_human'].includes(liveness.kind)) return
     const id = globalThis.setInterval(() => setNow(Date.now()), 1_000)
     return () => globalThis.clearInterval(id)
   }, [liveness.kind])
@@ -135,7 +135,10 @@ export function GraphNodeInspector({
                   ? 'failed'
                   : liveness.kind === 'waiting_dependency' || liveness.kind === 'queued'
                     ? 'queued'
-                    : liveness.kind === 'reviewing' ||
+                    : liveness.kind === 'active_review' ||
+                        liveness.kind === 'waiting_lead' ||
+                        liveness.kind === 'retry_scheduled' ||
+                        liveness.kind === 'needs_attention' ||
                         liveness.kind === 'waiting_human' ||
                         liveness.kind === 'retrying'
                       ? 'awaiting-permission'
@@ -183,7 +186,10 @@ export function GraphNodeInspector({
               ? 'done'
               : liveness.kind === 'failed'
                 ? 'failed'
-                : liveness.kind === 'reviewing' ||
+                : liveness.kind === 'active_review' ||
+                    liveness.kind === 'waiting_lead' ||
+                    liveness.kind === 'retry_scheduled' ||
+                    liveness.kind === 'needs_attention' ||
                     liveness.kind === 'waiting_human' ||
                     liveness.kind === 'retrying'
                   ? 'awaiting-permission'
@@ -191,7 +197,7 @@ export function GraphNodeInspector({
                     ? 'queued'
                     : 'running'
           }
-          animate={!reducedMotion}
+          animate={!reducedMotion && ['working', 'active_review', 'retrying'].includes(liveness.kind)}
         />
       </div>
       {attempt && ['submitted', 'reviewing', 'repair_required'].includes(node.status) ? (

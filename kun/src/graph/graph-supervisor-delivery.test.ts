@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { GraphRunV1 } from '../contracts/graph.js'
+import type { GraphDomainEventV1, GraphRunV1 } from '../contracts/graph.js'
 import { applyGraphEvent } from './graph-reducer.js'
+import type { AppendGraphEventInput } from './graph-run-store.js'
 import { GraphSupervisor } from './graph-supervisor.js'
 import {
   testGraphConfig,
@@ -17,6 +18,27 @@ function baseRun(): GraphRunV1 {
       sourceTurnId: 'turn_1'
     }
   }))
+}
+
+function applyTestAppend(
+  current: GraphRunV1,
+  input: AppendGraphEventInput
+) {
+  const graphSeq = current.lastEventSeq + 1
+  const envelope = testGraphEnvelope(graphSeq, input.event as GraphDomainEventV1, {
+    eventId: `graph_event_${current.id}_${graphSeq}`,
+    runId: current.id,
+    threadId: current.threadId,
+    graphRevision: input.graphRevision,
+    ...(input.commandId ? { commandId: input.commandId } : {}),
+    ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
+    ...(input.timestamp ? { timestamp: input.timestamp } : {})
+  })
+  return {
+    state: applyGraphEvent(current, envelope),
+    envelope,
+    duplicate: false as const
+  }
 }
 
 describe('GraphSupervisor delivery', () => {
@@ -43,30 +65,11 @@ describe('GraphSupervisor delivery', () => {
     const store = {
       get: vi.fn(async () => current),
       list: vi.fn(async () => [current]),
-      append: vi.fn(async (_runId: string, input: {
-        event: {
-          type: string
-          payload?: {
-            steeringId?: string
-            to?: 'handled'
-          }
-        }
-      }) => {
-        if (
-          input.event.type === 'steering_status_changed' &&
-          input.event.payload?.steeringId &&
-          input.event.payload.to === 'handled'
-        ) {
-          current = {
-            ...current,
-            steering: current.steering.map((entry) =>
-              entry.steeringId === input.event.payload!.steeringId
-                ? { ...entry, status: 'handled' as const }
-                : entry)
-          }
-        }
-        current = { ...current, lastEventSeq: current.lastEventSeq + 1 }
-        return { state: current, envelope: {}, duplicate: false }
+      events: vi.fn(async () => []),
+      append: vi.fn(async (_runId: string, input: AppendGraphEventInput) => {
+        const result = applyTestAppend(current, input)
+        current = result.state
+        return result
       })
     }
     let leadStarted!: () => void

@@ -84,6 +84,11 @@ function runtime(): ServerRuntime {
         get: vi.fn(async (id: string) => ({
           id,
           lastEventSeq: 2,
+          supervisionObligations: [{
+            id: 'obligation_private',
+            digest: 'private model output',
+            lastError: 'token=secret /private/worktree'
+          }],
           artifacts: [{
             version: 1,
             artifactId: 'art_abcdef',
@@ -154,6 +159,30 @@ function runtime(): ServerRuntime {
       scheduler: {
         diagnostics: vi.fn(() => ({ active: [], fairCursor: 0 }))
       },
+      supervisor: {
+        projection: vi.fn(async (runId: string) => ({
+          version: 1,
+          runId,
+          lastEventSeq: 2,
+          leadActive: false,
+          liveness: 'waiting_for_lead',
+          peerReviewLeases: [],
+          pendingActions: [{
+            obligationId: 'obligation_1',
+            pendingAction: 'review_required',
+            nodeIds: ['node_1'],
+            liveness: 'waiting_for_lead',
+            retryCount: 1,
+            noProgressCount: 0,
+            nextWakeAt: '2026-07-31T00:02:00.000Z',
+            lastError: 'The source Lead wake failed; automatic retry remains scheduled.',
+            canWake: true
+          }],
+          canWake: true,
+          updatedAt: '2026-07-31T00:01:00.000Z'
+        })),
+        wake: vi.fn(async (runId: string) => ({ id: runId }))
+      },
       config: vi.fn(() => ({ enabled: true }))
     }
   } as unknown as ServerRuntime
@@ -185,6 +214,74 @@ describe('Graph HTTP routes', () => {
       headers
     )).status).toBe(400)
     expect(testRuntime.graph!.control.retryNode).not.toHaveBeenCalled()
+  })
+
+  it('exposes only the bounded supervision projection and wakes the same source Lead', async () => {
+    const testRuntime = runtime()
+    const headers = { authorization: 'Bearer graph-route-token' }
+    const graph = await dispatch(
+      testRuntime,
+      'GET',
+      '/v1/graphs/run_1',
+      undefined,
+      headers
+    )
+    expect(graph.status).toBe(200)
+    expect(JSON.parse(graph.body)).toMatchObject({
+      id: 'run_1',
+      supervision: { liveness: 'waiting_for_lead' }
+    })
+    expect(graph.body).not.toContain('supervisionObligations')
+    expect(graph.body).not.toContain('private model output')
+    expect(graph.body).not.toContain('token=secret')
+
+    const projection = await dispatch(
+      testRuntime,
+      'GET',
+      '/v1/graphs/run_1/supervision',
+      undefined,
+      headers
+    )
+    expect(projection.status).toBe(200)
+    expect(JSON.parse(projection.body)).toMatchObject({
+      runId: 'run_1',
+      liveness: 'waiting_for_lead',
+      pendingActions: [{
+        obligationId: 'obligation_1',
+        retryCount: 1,
+        canWake: true
+      }]
+    })
+    expect(projection.body).not.toContain('digest')
+    expect(projection.body).not.toContain('sourceTurnId')
+
+    const invalidWake = await dispatch(
+      testRuntime,
+      'POST',
+      '/v1/graphs/run_1/supervision/wake',
+      { obligationId: 'obligation_1' },
+      headers
+    )
+    expect(invalidWake.status).toBe(400)
+    expect(testRuntime.graph!.supervisor.wake).not.toHaveBeenCalled()
+
+    const wake = await dispatch(
+      testRuntime,
+      'POST',
+      '/v1/graphs/run_1/supervision/wake',
+      {
+        commandId: 'command_wake_1',
+        idempotencyKey: 'wake-1',
+        obligationId: 'obligation_1'
+      },
+      headers
+    )
+    expect(wake.status).toBe(200)
+    expect(testRuntime.graph!.supervisor.wake).toHaveBeenCalledWith(
+      'run_1',
+      'obligation_1',
+      'wake-1'
+    )
   })
 
   it('returns a bounded summary page instead of full GraphRun snapshots', async () => {

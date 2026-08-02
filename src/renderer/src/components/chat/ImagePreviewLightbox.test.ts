@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { imagePreviewDisplaySize } from './ImagePreviewLightbox'
+import { imagePreviewDisplaySize, imagePreviewStageStyle } from './ImagePreviewLightbox'
 
 describe('ImagePreviewLightbox', () => {
   const portrait = { width: 1_000, height: 2_000 }
@@ -32,6 +32,29 @@ describe('ImagePreviewLightbox', () => {
       width: 900,
       height: 1_800
     })
+  })
+
+  it('sizes the stage from the image plus padding instead of copying the viewport', () => {
+    expect(imagePreviewStageStyle({ width: 375, height: 750 })).toEqual({
+      minWidth: '100%',
+      minHeight: '100%',
+      width: '391px',
+      height: '766px'
+    })
+    expect(imagePreviewStageStyle(null)).toEqual({
+      minWidth: '100%',
+      minHeight: '100%'
+    })
+  })
+
+  it('does not create horizontal overflow when a portrait image only needs vertical scrolling', () => {
+    const imageSize = imagePreviewDisplaySize(portrait, viewport, 1.25)
+    const stageStyle = imagePreviewStageStyle(imageSize)
+
+    expect(imageSize).toEqual({ width: 375, height: 750 })
+    expect(Number.parseFloat(String(stageStyle.width))).toBeLessThan(viewport.width)
+    expect(Number.parseFloat(String(stageStyle.height))).toBeGreaterThan(viewport.height)
+    expect(stageStyle.minWidth).toBe('100%')
   })
 
   it('keeps small images at their natural size until the user zooms in', () => {

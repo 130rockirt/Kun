@@ -40,7 +40,7 @@ rmSync(zipPath, { force: true })
 console.log(`[zip-mac-app] Creating ${zipPath}`)
 execFileSync(
   'ditto',
-  ['-c', '-k', '--sequesterRsrc', '--keepParent', appName, zipPath],
+  ['-c', '-k', '--zlibCompressionLevel', '9', '--sequesterRsrc', '--keepParent', appName, zipPath],
   {
     cwd: appOutDir,
     stdio: 'inherit'

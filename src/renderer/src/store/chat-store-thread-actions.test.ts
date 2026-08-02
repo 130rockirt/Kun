@@ -36,6 +36,14 @@ class MemoryStorage implements BrowserStorageLike {
   }
 }
 
+function deferredValue<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((done) => {
+    resolve = done
+  })
+  return { promise, resolve }
+}
+
 function thread(id: string): NormalizedThread {
   return {
     id,
@@ -121,6 +129,191 @@ describe('chat-store-thread-actions queued messages', () => {
     vi.unstubAllGlobals()
   })
 
+  it('never falls back to the active Code thread for a thread-bound Design send', async () => {
+    const sendUserMessage = vi.fn()
+    registryMock.getProvider.mockReturnValue({ sendUserMessage })
+    const { actions, state } = buildHarness()
+    state.busy = false
+    state.route = 'design'
+    state.activeThreadId = 'thr_existing'
+
+    await expect(actions.sendMessage('draw the home page', 'agent', {
+      agentSurface: 'design',
+      expectedThreadId: 'thr_design'
+    })).resolves.toBe(false)
+
+    expect(sendUserMessage).not.toHaveBeenCalled()
+    expect(state.blocks).toEqual([])
+    expect(state.error).toContain('no longer active')
+  })
+
+  it('cancels a thread-bound Design send if the user leaves Design during setup', async () => {
+    const pendingSettings = deferredValue<{
+      agents: { kun: { providerId: string; model: string } }
+      codePromptPrefix: string
+    }>()
+    const sendUserMessage = vi.fn()
+    registryMock.getProvider.mockReturnValue({
+      sendUserMessage,
+      subscribeThreadEvents: vi.fn(async () => undefined)
+    })
+    vi.stubGlobal('window', {
+      kunGui: {
+        getSettings: vi.fn(() => pendingSettings.promise),
+        workspaceDirectoryExists: vi.fn(async () => true),
+        logError: vi.fn(async () => undefined)
+      }
+    })
+    const { actions, state } = buildHarness()
+    state.busy = false
+    state.route = 'design'
+
+    const sending = actions.sendMessage('draw the home page', 'agent', {
+      agentSurface: 'design',
+      expectedThreadId: 'thr_existing'
+    })
+    await vi.waitFor(() => {
+      expect(state.blocks).toContainEqual(expect.objectContaining({
+        kind: 'user',
+        text: 'draw the home page'
+      }))
+    })
+
+    state.route = 'chat'
+    pendingSettings.resolve({
+      agents: { kun: { providerId: 'deepseek', model: 'deepseek-v4-pro' } },
+      codePromptPrefix: ''
+    })
+
+    await expect(sending).resolves.toBe(false)
+    expect(sendUserMessage).not.toHaveBeenCalled()
+    expect(state.blocks).toEqual([])
+    expect(state.busy).toBe(false)
+    expect(state.error).toContain('no longer active')
+  })
+
+  it('does not project an accepted Design turn into a thread selected while the provider is pending', async () => {
+    const pendingSend = deferredValue<{
+      threadId: string
+      turnId: string
+      userMessageItemId: string
+    }>()
+    const subscribeThreadEvents = vi.fn(async () => undefined)
+    const sendUserMessage = vi.fn(() => pendingSend.promise)
+    registryMock.getProvider.mockReturnValue({ sendUserMessage, subscribeThreadEvents })
+    vi.stubGlobal('window', {
+      kunGui: {
+        getSettings: vi.fn(async () => ({
+          agents: { kun: { providerId: 'deepseek', model: 'deepseek-v4-pro' } },
+          codePromptPrefix: ''
+        })),
+        workspaceDirectoryExists: vi.fn(async () => true),
+        logError: vi.fn(async () => undefined)
+      }
+    })
+    const { actions, state } = buildHarness()
+    state.busy = false
+    state.route = 'design'
+
+    const sending = actions.sendMessage('draw the home page', 'agent', {
+      agentSurface: 'design',
+      expectedThreadId: 'thr_existing'
+    })
+    await vi.waitFor(() => expect(sendUserMessage).toHaveBeenCalledOnce())
+
+    state.route = 'chat'
+    state.activeThreadId = 'thr_code'
+    state.threads = [...state.threads, thread('thr_code')]
+    state.blocks = [{ kind: 'user', id: 'code-user', text: 'Code question' }]
+    state.busy = false
+    state.currentTurnId = null
+    state.currentTurnUserId = null
+    pendingSend.resolve({
+      threadId: 'thr_existing',
+      turnId: 'turn_design',
+      userMessageItemId: 'user_design'
+    })
+
+    await expect(sending).resolves.toBe(true)
+    expect(state.activeThreadId).toBe('thr_code')
+    expect(state.blocks).toEqual([{ kind: 'user', id: 'code-user', text: 'Code question' }])
+    expect(state.busy).toBe(false)
+    expect(state.currentTurnId).toBeNull()
+    expect(subscribeThreadEvents).not.toHaveBeenCalled()
+  })
+
+  it('ignores an older thread detail response after a newer selection wins', async () => {
+    const first = deferredValue<{
+      blocks: ChatBlock[]
+      latestSeq: number
+      threadStatus: 'idle'
+    }>()
+    const second = deferredValue<{
+      blocks: ChatBlock[]
+      latestSeq: number
+      threadStatus: 'idle'
+    }>()
+    registryMock.getProvider.mockReturnValue({
+      getThreadDetail: vi.fn((id: string) => id === 'thr_first' ? first.promise : second.promise),
+      subscribeThreadEvents: vi.fn(async () => undefined)
+    })
+    const { actions, state } = buildHarness()
+    state.busy = false
+    state.composerPickList = []
+    state.composerModelGroups = []
+    state.threads = [thread('thr_existing'), thread('thr_first'), thread('thr_second')]
+
+    const selectFirst = actions.selectThread('thr_first')
+    const selectSecond = actions.selectThread('thr_second')
+    second.resolve({
+      blocks: [{ kind: 'user', id: 'u-second', text: 'second selection' }],
+      latestSeq: 2,
+      threadStatus: 'idle'
+    })
+    await selectSecond
+    first.resolve({
+      blocks: [{ kind: 'user', id: 'u-first', text: 'stale selection' }],
+      latestSeq: 1,
+      threadStatus: 'idle'
+    })
+    await selectFirst
+
+    expect(state.activeThreadId).toBe('thr_second')
+    expect(state.blocks).toEqual([
+      expect.objectContaining({ id: 'u-second', text: 'second selection' })
+    ])
+  })
+
+  it('does not let a pending selection replace a thread activated synchronously', async () => {
+    const pending = deferredValue<{
+      blocks: ChatBlock[]
+      latestSeq: number
+      threadStatus: 'idle'
+    }>()
+    registryMock.getProvider.mockReturnValue({
+      getThreadDetail: vi.fn(() => pending.promise),
+      subscribeThreadEvents: vi.fn(async () => undefined)
+    })
+    const { actions, state } = buildHarness()
+    state.busy = false
+    state.composerPickList = []
+    state.composerModelGroups = []
+    state.threads = [thread('thr_existing'), thread('thr_old'), thread('thr_drawing')]
+
+    const selectingOldThread = actions.selectThread('thr_old')
+    state.activeThreadId = 'thr_drawing'
+    state.blocks = []
+    pending.resolve({
+      blocks: [{ kind: 'user', id: 'u-old', text: 'late old selection' }],
+      latestSeq: 1,
+      threadStatus: 'idle'
+    })
+    await selectingOldThread
+
+    expect(state.activeThreadId).toBe('thr_drawing')
+    expect(state.blocks).toEqual([])
+  })
+
   it('snapshots active-turn model and reasoning selections into the next queued input', async () => {
     const { actions, state } = buildHarness()
     state.composerModel = 'deepseek-v4-flash'
@@ -161,7 +354,7 @@ describe('chat-store-thread-actions queued messages', () => {
     expect(state.currentTurnOrchestration).toBe('direct')
   })
 
-  it('steers text into the active Graph source turn instead of admitting queued work', async () => {
+  it('queues active Graph text until the user explicitly guides the source turn', async () => {
     const { actions, state } = buildHarness()
     state.currentTurnId = 'turn_graph_lead'
     state.currentTurnOrchestration = 'graph'
@@ -187,6 +380,17 @@ describe('chat-store-thread-actions queued messages', () => {
       'agent'
     )).resolves.toBe(true)
 
+    expect(steer).not.toHaveBeenCalled()
+    expect(state.queuedMessages).toEqual([
+      expect.objectContaining({
+        text: 'Please reassign the blocked node.',
+        deliveryState: 'pending'
+      })
+    ])
+    expect(state.blocks).toEqual([])
+
+    await expect(actions.guideQueuedMessage(state.queuedMessages[0]!.id)).resolves.toBe(true)
+
     expect(steer).toHaveBeenCalledWith(
       'run_1',
       'Please reassign the blocked node.',
@@ -200,7 +404,7 @@ describe('chat-store-thread-actions queued messages', () => {
     }))
   })
 
-  it('resumes a suspended Graph planning turn before a GraphRun exists', async () => {
+  it('explicitly guides a suspended Graph planning turn before a GraphRun exists', async () => {
     const steerUserMessage = vi.fn(async () => undefined)
     registryMock.getProvider.mockReturnValue({ steerUserMessage })
     const listRuns = vi.spyOn(graphRuntimeClient, 'listRuns').mockResolvedValue([])
@@ -212,6 +416,12 @@ describe('chat-store-thread-actions queued messages', () => {
       'Continue building the Graph.',
       'agent'
     )).resolves.toBe(true)
+
+    expect(listRuns).not.toHaveBeenCalled()
+    expect(steerUserMessage).not.toHaveBeenCalled()
+    expect(state.queuedMessages).toHaveLength(1)
+
+    await expect(actions.guideQueuedMessage(state.queuedMessages[0]!.id)).resolves.toBe(true)
 
     expect(listRuns).toHaveBeenCalledWith('thr_existing')
     expect(steerUserMessage).toHaveBeenCalledWith(
@@ -228,7 +438,7 @@ describe('chat-store-thread-actions queued messages', () => {
     }))
   })
 
-  it('does not duplicate resumed Graph guidance when its runtime user item wins the race', async () => {
+  it('does not duplicate explicit Graph guidance when its runtime user item wins the race', async () => {
     const { actions, state } = buildHarness()
     state.currentTurnId = 'turn_graph_planning'
     state.currentTurnOrchestration = 'graph'
@@ -251,6 +461,7 @@ describe('chat-store-thread-actions queued messages', () => {
       'Continue building the Graph.',
       'agent'
     )).resolves.toBe(true)
+    await expect(actions.guideQueuedMessage(state.queuedMessages[0]!.id)).resolves.toBe(true)
 
     expect(state.blocks.filter((block) => block.kind === 'user')).toEqual([
       expect.objectContaining({ id: 'item_graph_guidance' })
@@ -280,7 +491,8 @@ describe('chat-store-thread-actions queued messages', () => {
       })
     )
 
-    const pendingSend = actions.sendMessage('Continue the Graph.', 'agent')
+    await expect(actions.sendMessage('Continue the Graph.', 'agent')).resolves.toBe(true)
+    const pendingSend = actions.guideQueuedMessage(state.queuedMessages[0]!.id)
     await vi.waitFor(() => expect(resolveSteer).toBeTypeOf('function'))
     expect(steer).toHaveBeenCalled()
     state.activeThreadId = 'thr_other'
@@ -815,6 +1027,7 @@ describe('chat-store-thread-actions queued messages', () => {
     registryMock.getProvider.mockReturnValue({ steerUserMessage })
     const { actions, state } = buildHarness()
     state.currentTurnId = 'turn_active'
+    state.currentTurnOrchestration = 'graph'
     state.queuedMessages = [{
       id: 'q-attachment',
       text: 'inspect this image',
@@ -830,12 +1043,24 @@ describe('chat-store-thread-actions queued messages', () => {
   })
 
   it('keeps queued input when the active turn rejects guidance', async () => {
-    const steerUserMessage = vi.fn(async () => {
-      throw new Error('turn is no longer accepting steering')
-    })
-    registryMock.getProvider.mockReturnValue({ steerUserMessage })
     const { actions, state } = buildHarness()
-    state.currentTurnId = 'turn_active'
+    state.currentTurnId = 'turn_graph_lead'
+    state.currentTurnOrchestration = 'graph'
+    const activeRun = {
+      id: 'run_reject',
+      threadId: 'thr_existing',
+      sourceTurnId: 'turn_graph_lead',
+      status: 'running',
+      lastEventSeq: 2
+    } as GraphRun
+    useGraphStore.setState({
+      threadId: 'thr_existing',
+      runs: [activeRun],
+      selectedRunId: activeRun.id
+    })
+    vi.spyOn(graphRuntimeClient, 'steer').mockRejectedValue(
+      new Error('turn is no longer accepting steering')
+    )
     state.queuedMessages = [{
       id: 'q-race',
       text: 'do not lose this follow-up',
@@ -1054,7 +1279,7 @@ describe('chat-store-thread-actions queued messages', () => {
     expect(errorBlock?.text).not.toContain('secret-token')
   })
 
-  it('forwards GUI design canvas turns to the runtime provider', async () => {
+  it('returns a thread-bound Design turn as soon as runtime accepts it', async () => {
     const provider = {
       connect: vi.fn(async () => undefined),
       sendUserMessage: vi.fn(async () => ({
@@ -1076,19 +1301,37 @@ describe('chat-store-thread-actions queued messages', () => {
     })
     const { actions, state } = buildHarness()
     state.busy = false
+    state.route = 'design'
+    const pendingRefresh = deferredValue<void>()
+    state.refreshThreads = vi.fn(() => pendingRefresh.promise)
 
     await expect(actions.sendMessage('draw an architecture map', 'agent', {
-      guiDesignCanvas: true
+      displayText: 'Draw an architecture map',
+      guiDesignCanvas: true,
+      agentSurface: 'design',
+      expectedThreadId: 'thr_existing',
+      serviceTier: 'priority'
     })).resolves.toBe(true)
 
     expect(provider.sendUserMessage).toHaveBeenCalledWith(
       'thr_existing',
       'draw an architecture map',
-      expect.objectContaining({ guiDesignCanvas: true })
+      expect.objectContaining({
+        guiDesignCanvas: true,
+        agentSurface: 'design',
+        displayText: 'Draw an architecture map',
+        serviceTier: 'priority'
+      })
     )
     expect(state.blocks.find((block) => block.kind === 'user')).toMatchObject({
-      meta: { guiDesignCanvas: true }
+      text: 'Draw an architecture map',
+      meta: {
+        displayText: 'Draw an architecture map',
+        guiDesignCanvas: true
+      }
     })
+    expect(state.refreshThreads).toHaveBeenCalledOnce()
+    pendingRefresh.resolve()
   })
 
   it('forwards the selected reasoning effort with the next turn', async () => {
@@ -1557,6 +1800,94 @@ describe('chat-store-thread-actions recoverActiveTurn settles interrupted work',
     // A genuinely live turn must keep its running block so the GUI reconnects.
     const tool = state.blocks.find((block) => block.kind === 'tool')
     expect(tool?.status).toBe('running')
+  })
+
+  it('reuses the SSE recovery wrapper after recovering a live turn', async () => {
+    vi.useFakeTimers()
+    try {
+      const provider = providerWith('running')
+      provider.subscribeThreadEvents.mockRejectedValueOnce(
+        Object.assign(new Error('sse error 404'), { status: 404 })
+      )
+      registryMock.getProvider.mockReturnValue(provider)
+
+      const { actions, state } = buildHarness()
+      // Keep this recovery state isolated from other tests that intentionally
+      // exercise reconnects for the default harness thread.
+      state.activeThreadId = 'thr_sse_recovery'
+      state.busy = true
+
+      await actions.recoverActiveTurn()
+      await vi.advanceTimersByTimeAsync(249)
+      expect(state.recoverActiveTurn).not.toHaveBeenCalled()
+
+      await vi.advanceTimersByTimeAsync(1)
+      expect(state.recoverActiveTurn).toHaveBeenCalledOnce()
+      expect(provider.subscribeThreadEvents).toHaveBeenCalledWith(
+        'thr_sse_recovery',
+        3,
+        expect.any(Object),
+        expect.any(AbortSignal)
+      )
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('re-fetches a live approval snapshot and re-subscribes after an SSE 404', async () => {
+    vi.useFakeTimers()
+    try {
+      let subscriptions = 0
+      const provider = {
+        getThreadDetail: vi.fn(async () => ({
+          blocks: [
+            { id: 'u1', kind: 'user', text: 'Run focused tests' },
+            {
+              id: 'approval-appr_live',
+              kind: 'approval',
+              approvalId: 'appr_live',
+              summary: 'Run focused tests',
+              status: 'pending'
+            }
+          ],
+          latestSeq: 4,
+          threadStatus: 'running',
+          latestTurnId: 'turn_approval',
+          latestTurnOrchestration: 'direct' as const,
+          latestUserMessageId: 'u1'
+        })),
+        subscribeThreadEvents: vi.fn(async (
+          _threadId: string,
+          _sinceSeq: number,
+          sink: ThreadEventSink
+        ) => {
+          subscriptions += 1
+          if (subscriptions === 1) {
+            sink.onError(Object.assign(new Error('stream route unavailable'), { status: 404 }))
+            return { streamId: 'stream_404' }
+          }
+          return await new Promise<{ streamId: string }>(() => undefined)
+        })
+      }
+      registryMock.getProvider.mockReturnValue(provider)
+
+      const { actions, state } = buildHarness()
+      state.activeThreadId = 'thr_sse_approval_recovery'
+      state.busy = true
+      state.recoverActiveTurn = actions.recoverActiveTurn
+
+      await actions.recoverActiveTurn()
+      await vi.advanceTimersByTimeAsync(250)
+      await Promise.resolve()
+
+      expect(provider.getThreadDetail).toHaveBeenCalledTimes(2)
+      expect(provider.subscribeThreadEvents).toHaveBeenCalledTimes(2)
+      expect(state.blocks).toContainEqual(expect.objectContaining({
+        kind: 'approval', approvalId: 'appr_live', status: 'pending'
+      }))
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('restores a running Graph turn without changing the next-turn Direct selection', async () => {

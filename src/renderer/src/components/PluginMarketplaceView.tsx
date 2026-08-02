@@ -752,39 +752,6 @@ const RECOMMENDED_ITEMS: MarketplaceItem[] = [
       })
   },
   {
-    id: 'google-workspace',
-    kind: 'mcp',
-    titleKey: 'pluginMcpGoogleWorkspaceTitle',
-    descriptionKey: 'pluginMcpGoogleWorkspaceDesc',
-    group: 'recommended',
-    sourceLabel: 'OAuth',
-    statusTone: 'warning',
-    serverIds: googleWorkspaceMcpServerIds(),
-    oauth: {
-      docsUrl: 'https://developers.google.com/workspace/guides/configure-mcp-servers',
-      permissionKeys: [
-        'pluginOAuthGooglePermissionGmail',
-        'pluginOAuthGooglePermissionDrive',
-        'pluginOAuthGooglePermissionDocs',
-        'pluginOAuthGooglePermissionCalendar',
-        'pluginOAuthGooglePermissionPeople',
-        'pluginOAuthGooglePermissionChat'
-      ],
-      setupKeys: [
-        'pluginOAuthGoogleSetupProject',
-        'pluginOAuthGoogleSetupApis',
-        'pluginOAuthGoogleSetupConsent',
-        'pluginOAuthGoogleSetupAuthenticate',
-        'pluginOAuthSetupInstall',
-        'pluginOAuthSetupRestart'
-      ],
-      noteKey: 'pluginOAuthGoogleNote'
-    },
-    supplyChain: { source: 'remote-mcp', permissions: ['network', 'secret', 'file'] },
-    mcpConfig: () =>
-      buildRemoteMcpConfig(googleWorkspaceMcpServers())
-  },
-  {
     id: 'context7',
     kind: 'mcp',
     titleKey: 'pluginMcpContext7Title',

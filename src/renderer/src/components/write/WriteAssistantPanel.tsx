@@ -41,8 +41,10 @@ type Props = {
   skillCommands?: CoreRuntimeSkillJson[]
   disabledSkillIds?: string[]
   composerReasoningEffort: ComposerReasoningEffort
+  composerFastMode: boolean
   setComposerModel: (modelId: string, providerId?: string) => void
   setComposerReasoningEffort: (effort: ComposerReasoningEffort) => void
+  setComposerFastMode: (enabled: boolean) => void
   queuedMessages: QueuedUserMessage[]
   removeQueuedMessage: (id: string) => void
   guideQueuedMessage: (id: string) => void | Promise<unknown>
@@ -84,8 +86,10 @@ export function WriteAssistantPanel({
   skillCommands = EMPTY_SKILL_COMMANDS,
   disabledSkillIds,
   composerReasoningEffort,
+  composerFastMode,
   setComposerModel,
   setComposerReasoningEffort,
+  setComposerFastMode,
   queuedMessages,
   removeQueuedMessage,
   guideQueuedMessage,
@@ -321,9 +325,13 @@ export function WriteAssistantPanel({
           skillCommands={skillCommands}
           disabledSkillIds={disabledSkillIds}
           composerReasoningEffort={composerReasoningEffort}
+          composerFastMode={composerFastMode}
           onComposerModelChange={setComposerModel}
           onComposerReasoningEffortChange={setComposerReasoningEffort}
+          onComposerFastModeChange={setComposerFastMode}
           modelPickerMode="combobox"
+          modelControlVariant="split"
+          showProviderInModelLabel
           queuedMessages={queuedMessages}
           onRemoveQueuedMessage={removeQueuedMessage}
           onGuideQueuedMessage={guideQueuedMessage}

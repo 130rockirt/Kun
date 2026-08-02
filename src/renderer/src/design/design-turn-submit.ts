@@ -70,6 +70,8 @@ export type SubmitDesignTurnOptions = SubmitDesignTurnDeps & {
   sendMessage: DesignTurnSubmitSendMessage
   resolveProviderId: (model: string) => string
   reasoningEffort?: string
+  serviceTier?: 'priority'
+  expectedThreadId?: string
   attachmentIds?: string[]
   attachments?: AttachmentReference[]
   suppressedIds?: ReadonlySet<string>
@@ -114,7 +116,7 @@ export async function submitDesignTurn(
     }
     return !boardId || findDesignBoardArtifact(state.artifacts)?.id === boardId
   }
-  const contextError = 'Design turn was cancelled because the active workspace or design document changed.'
+  const contextError = 'Design turn was cancelled because the active workspace or drawing changed.'
   if (!turnContext.documentId || !contextMatches()) return fail(contextError)
 
   let latestDesignState = initialDesignState
@@ -230,6 +232,8 @@ export async function submitDesignTurn(
         promptState: promptState as DesignTurnPromptState,
         resolveProviderId: options.resolveProviderId,
         ...(options.reasoningEffort ? { reasoningEffort: options.reasoningEffort } : {}),
+        ...(options.serviceTier ? { serviceTier: options.serviceTier } : {}),
+        ...(options.expectedThreadId ? { expectedThreadId: options.expectedThreadId } : {}),
         target: resolvedTarget.target,
         attachmentIds: options.attachmentIds ?? [],
         attachments: options.attachments ?? [],

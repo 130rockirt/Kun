@@ -4,7 +4,9 @@ import type {
   GraphChildRuntime,
   GraphNodeProjection,
   GraphNodeStatus,
-  GraphPlanNode
+  GraphPlanNode,
+  GraphSupervisionLiveness,
+  GraphSupervisionProjection
 } from './graph-types'
 import {
   graphLivenessIsProcessing,
@@ -71,6 +73,30 @@ function child(
   }
 }
 
+function supervision(
+  liveness: Exclude<GraphSupervisionLiveness, 'idle'>,
+  nodeId = 'node_1'
+): GraphSupervisionProjection {
+  return {
+    version: 1,
+    runId: 'run_1',
+    lastEventSeq: 7,
+    leadActive: liveness === 'active_review',
+    liveness,
+    pendingActions: [{
+      obligationId: 'obligation_1',
+      pendingAction: 'review_required',
+      nodeIds: [nodeId],
+      liveness,
+      retryCount: liveness === 'retry_scheduled' ? 1 : 0,
+      noProgressCount: liveness === 'needs_attention' ? 3 : 0,
+      canWake: liveness !== 'active_review'
+    }],
+    canWake: liveness !== 'active_review',
+    updatedAt: '2026-07-28T00:01:00.000Z'
+  }
+}
+
 describe('Graph node liveness projection', () => {
   it('keeps a zero-accepted running node visibly active without fake percent', () => {
     const live = graphNodeLiveness(
@@ -92,8 +118,8 @@ describe('Graph node liveness projection', () => {
 
   it.each([
     ['blocked', 'waiting_dependency'],
-    ['submitted', 'reviewing'],
-    ['reviewing', 'reviewing'],
+    ['submitted', 'waiting_lead'],
+    ['reviewing', 'waiting_lead'],
     ['repair_required', 'retrying'],
     ['accepted', 'done'],
     ['failed', 'failed']
@@ -103,8 +129,8 @@ describe('Graph node liveness projection', () => {
 
   it.each([
     ['running', true],
-    ['submitted', true],
-    ['reviewing', true],
+    ['submitted', false],
+    ['reviewing', false],
     ['repair_required', true],
     ['blocked', false],
     ['queued', false],
@@ -114,6 +140,62 @@ describe('Graph node liveness projection', () => {
     expect(graphLivenessIsProcessing(
       graphNodeLiveness(projection(status), {}, NOW)
     )).toBe(processing)
+  })
+
+  it.each([
+    ['active_review', true],
+    ['waiting_for_lead', false],
+    ['retry_scheduled', false],
+    ['needs_attention', false]
+  ] as const)('projects supervision state %s without inventing processing', (state, processing) => {
+    const live = graphNodeLiveness(
+      projection('reviewing'),
+      {},
+      NOW,
+      supervision(state)
+    )
+
+    expect(live.kind).toBe(state === 'waiting_for_lead' ? 'waiting_lead' : state)
+    expect(graphLivenessIsProcessing(live)).toBe(processing)
+  })
+
+  it('does not apply another node supervision lease to this node', () => {
+    const live = graphNodeLiveness(
+      projection('submitted'),
+      {},
+      NOW,
+      supervision('active_review', 'node_other')
+    )
+
+    expect(live.kind).toBe('waiting_lead')
+    expect(graphLivenessIsProcessing(live)).toBe(false)
+  })
+
+  it('shows active review only for the matching unexpired peer-review lease', () => {
+    const reviewProjection = projection('reviewing', [attempt(1)])
+    const view = supervision('waiting_for_lead')
+    view.peerReviewLeases = [{
+      nodeId: 'node_1',
+      attemptId: 'attempt_1',
+      leaseUntil: '2026-07-28T00:01:30.000Z'
+    }]
+
+    const active = graphNodeLiveness(reviewProjection, {}, NOW, view)
+    expect(active.kind).toBe('active_review')
+    expect(graphLivenessIsProcessing(active)).toBe(true)
+
+    view.peerReviewLeases[0]!.leaseUntil = '2026-07-28T00:00:59.000Z'
+    expect(graphNodeLiveness(reviewProjection, {}, NOW, view).kind).toBe('waiting_lead')
+    view.peerReviewLeases[0] = {
+      nodeId: 'node_1',
+      attemptId: 'attempt_other',
+      leaseUntil: '2026-07-28T00:01:30.000Z'
+    }
+    expect(graphNodeLiveness(reviewProjection, {}, NOW, view).kind).toBe('waiting_lead')
+
+    view.peerReviewLeases[0]!.attemptId = 'attempt_1'
+    view.pendingActions[0]!.liveness = 'needs_attention'
+    expect(graphNodeLiveness(reviewProjection, {}, NOW, view).kind).toBe('needs_attention')
   })
 
   it('surfaces the second attempt explicitly', () => {

@@ -36,6 +36,7 @@ import {
 import { applyPatchToPlan } from './graph-patch-service.js'
 
 export { applyPatchToPlan } from './graph-patch-service.js'
+export { graphReviewSemanticKey } from './graph-review-idempotency.js'
 
 export type GraphCommandContext = {
   commandId: string
@@ -84,12 +85,13 @@ export class GraphControlService {
   async create(input: CreateValidatedGraphRunInput): Promise<GraphCommandResultV1> {
     this.assertGraphCreationEnabled()
     await this.options.authorizeCreate?.(input)
-    const created = await this.options.store.create(input)
+    const { start, ...storeInput } = input
+    const created = await this.options.store.create(storeInput)
     let run = await this.ensureReady(created.run, {
       commandId: input.commandId,
       idempotencyKey: input.idempotencyKey
     })
-    if (input.start ?? input.plan.autoStart) {
+    if (start ?? input.plan.autoStart) {
       run = await this.start(run.id, {
         commandId: `${input.commandId}_start`,
         idempotencyKey: `${input.idempotencyKey}:start`,
@@ -314,10 +316,6 @@ export class GraphControlService {
     conflictRetries = 0
   ): Promise<GraphRunV1> {
     const run = await this.get(runId)
-    this.assertCommandPreconditions(run, command)
-    if (isTerminalRunStatus(run.status)) {
-      throw new GraphRunConflictError(`cannot review terminal GraphRun ${runId}`)
-    }
     const review = GraphReviewResultV1Schema.parse(reviewInput)
     const node = run.nodes[review.nodeId]
     if (!node) {
@@ -326,6 +324,44 @@ export class GraphControlService {
     const attempt = node.attempts.find((entry) => entry.id === review.attemptId)
     if (!attempt) {
       throw new GraphRunNotFoundError(`${runId}/${review.nodeId}/${review.attemptId}`)
+    }
+    const allowedKind = reviewerAuthority === 'system'
+      ? 'deterministic'
+      : reviewerAuthority
+    if (review.reviewerKind !== allowedKind) {
+      throw new GraphRunConflictError(
+        `${reviewerAuthority} authority cannot submit ${review.reviewerKind} review`
+      )
+    }
+    if (
+      review.reviewerInstanceId &&
+      review.reviewerInstanceId === attempt.childThreadId
+    ) {
+      throw new GraphRunConflictError('a worker cannot independently review its own attempt')
+    }
+    const existing = run.reviews.find((entry) =>
+      entry.nodeId === review.nodeId &&
+      entry.attemptId === review.attemptId &&
+      entry.reviewerKind === review.reviewerKind)
+    if (existing) {
+      if (graphReviewsSemanticallyEqual(existing, review)) {
+        if (
+          !isTerminalRunStatus(run.status) &&
+          node.attempts.at(-1)?.id === attempt.id &&
+          ['submitted', 'reviewing'].includes(node.status) &&
+          ['submitted', 'reviewing'].includes(attempt.status)
+        ) {
+          await this.options.resumeActive?.(run)
+        }
+        return this.get(runId)
+      }
+      throw new GraphRunConflictError(
+        `conflicting ${review.reviewerKind} review already exists for attempt ${attempt.id}; record a different decision on a new attempt`
+      )
+    }
+    this.assertCommandPreconditions(run, command)
+    if (isTerminalRunStatus(run.status)) {
+      throw new GraphRunConflictError(`cannot review terminal GraphRun ${runId}`)
     }
     if (node.attempts.at(-1)?.id !== attempt.id) {
       throw new GraphRunConflictError(`cannot review stale attempt ${attempt.id}`)
@@ -351,42 +387,25 @@ export class GraphControlService {
         `${review.reviewerKind} review is not required for node ${node.node.id}`
       )
     }
-    const allowedKind = reviewerAuthority === 'system'
-      ? 'deterministic'
-      : reviewerAuthority
-    if (review.reviewerKind !== allowedKind) {
-      throw new GraphRunConflictError(
-        `${reviewerAuthority} authority cannot submit ${review.reviewerKind} review`
-      )
-    }
-    if (
-      review.reviewerInstanceId &&
-      review.reviewerInstanceId === attempt.childThreadId
-    ) {
-      throw new GraphRunConflictError('a worker cannot independently review its own attempt')
-    }
-    const existing = run.reviews.find((entry) =>
-      entry.nodeId === review.nodeId &&
-      entry.attemptId === review.attemptId &&
-      entry.reviewerKind === review.reviewerKind)
-    if (existing) {
-      if (existing.reviewId === review.reviewId && isDeepStrictEqual(existing, review)) {
-        await this.options.resumeActive?.(run)
-        return this.get(runId)
-      }
-      throw new GraphRunConflictError(
-        `${review.reviewerKind} review already exists for attempt ${attempt.id}`
-      )
-    }
     let reviewed: GraphRunV1
     try {
-      reviewed = (await this.options.store.append(run.id, {
+      const appended = await this.options.store.append(run.id, {
         expectedSeq: run.lastEventSeq,
         graphRevision: run.currentRevision,
         commandId: command.commandId,
         idempotencyKey: command.idempotencyKey,
         event: { type: 'review_recorded', payload: { review } }
-      })).state
+      })
+      const persisted = appended.state.reviews.find((entry) =>
+        entry.nodeId === review.nodeId &&
+        entry.attemptId === review.attemptId &&
+        entry.reviewerKind === review.reviewerKind)
+      if (!persisted || !graphReviewsSemanticallyEqual(persisted, review)) {
+        throw new GraphRunConflictError(
+          `conflicting ${review.reviewerKind} review already exists for attempt ${attempt.id}; record a different decision on a new attempt`
+        )
+      }
+      reviewed = appended.state
     } catch (error) {
       if (
         error instanceof GraphRunConflictError &&
@@ -611,4 +630,19 @@ export class GraphControlService {
       )
     }
   }
+}
+
+function graphReviewsSemanticallyEqual(
+  left: GraphReviewResultV1,
+  right: GraphReviewResultV1
+): boolean {
+  return isDeepStrictEqual(reviewSemanticContent(left), reviewSemanticContent(right))
+}
+
+function reviewSemanticContent(review: GraphReviewResultV1): Omit<
+  GraphReviewResultV1,
+  'reviewId' | 'createdAt'
+> {
+  const { reviewId: _reviewId, createdAt: _createdAt, ...content } = review
+  return content
 }

@@ -239,4 +239,5 @@ describe('Kun runtime config service', () => {
       await rm(dataDir, { recursive: true, force: true })
     }
   })
+
 })
