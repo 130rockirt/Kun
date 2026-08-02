@@ -536,6 +536,8 @@ describe('electron-builder Kun packaging', () => {
     expect(migrationScript).toContain('function Assert-ApplicationSourceIdentity')
     expect(migrationScript).toContain('function Assert-FallbackCleanupSource')
     expect(migrationScript).toContain('The cleanup source does not match the preservation journal')
+    expect(migrationScript).toContain('$preparedSources += @{')
+    expect(migrationScript).toContain('if ($set.Unknown.Count -eq 0)')
     expect(migrationScript).toContain('function Assert-TrustedSecondarySource')
     expect(migrationScript).toContain('function Assert-NoReparsePointsInTree')
     expect(migrationScript).toContain(

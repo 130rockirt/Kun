@@ -175,6 +175,30 @@ windowsOnly('Windows installer migration helper', () => {
     expect(existsSync(journal)).toBe(false)
   })
 
+  it('authorizes fallback cleanup for a validated source without unknown content', () => {
+    const root = makeTempRoot()
+    const source = join(root, 'DeepSeek GUI')
+    const target = join(root, 'Kun')
+    const journal = join(root, 'recovery', 'journal.json')
+    mkdirSync(join(source, 'resources'), { recursive: true })
+    writeFileSync(join(source, 'Kun.exe'), 'app')
+
+    const prepared = runHelper({ action: 'Prepare', source, target, journal })
+    expect(prepared.status, processError(prepared)).toBe(0)
+    expect(existsSync(journal)).toBe(true)
+
+    // The old uninstaller removes the identity executable before fallback
+    // cleanup, so the validated preparation record becomes the authorization.
+    rmSync(join(source, 'Kun.exe'))
+    const cleaned = runHelper({ action: 'FallbackCleanup', source, target, journal })
+    expect(cleaned.status, processError(cleaned)).toBe(0)
+    expect(existsSync(source)).toBe(false)
+
+    const restored = runHelper({ action: 'Restore', source, target, journal })
+    expect(restored.status, processError(restored)).toBe(0)
+    expect(existsSync(journal)).toBe(false)
+  })
+
   it('recovers an interrupted preservation journal idempotently', () => {
     const root = makeTempRoot()
     const source = join(root, 'Custom Install')

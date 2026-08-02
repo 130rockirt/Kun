@@ -17,6 +17,8 @@ loaded Ubuntu runners.
 - Allow normal Linux filesystem/lease persistence latency while still failing a
   genuinely hung shutdown within the test's overall timeout.
 - Unblock the native Linux package and smoke gates without changing runtime code.
+- Keep the native Windows migration gate fail-closed while allowing a validated
+  source to be cleaned after its old uninstaller removes the identity executable.
 
 **Non-Goals:**
 
@@ -45,6 +47,13 @@ loaded Ubuntu runners.
   The desktop smoke launcher now runs the verified extracted `AppRun` with
   `APPDIR`/`APPIMAGE` set. The release-gate fixture must provide those paths so
   it validates the same invocation shape instead of calling `resolve(undefined)`.
+- **Use the preparation journal as the fallback-cleanup authorization record.**
+  `Prepare` already validates source identity, safe roots, reparse points, and
+  recognized payload before the old uninstaller runs. It now records every
+  validated source, including sources with no unknown content, because the old
+  uninstaller legitimately removes `Kun.exe` before fallback cleanup. Cleanup
+  without a matching record remains rejected unless the source still equals the
+  target and retains a valid identity executable.
 
 ## Risks / Trade-offs
 
@@ -53,10 +62,13 @@ loaded Ubuntu runners.
   the complete durable-state assertions after the race.
 - [Risk] Mac-local tests cannot prove Linux-native AppImage behavior → Mitigated
   by requiring the native Linux PR job to pass before merge and release.
+- [Risk] A preparation record could authorize the wrong Windows directory →
+  Mitigated by writing it only after the existing safe-root, application
+  identity, recognized-payload, and reparse-point checks all pass.
 
 ## Migration Plan
 
-No runtime or data migration is needed. Update the test, run the local checks,
-align the release-gate fixture with the launcher contract, then rely on the
-native Linux PR job for package/smoke evidence. Revert the scoped changes if CI
-exposes a new regression.
+No runtime or data migration is needed. Update the tests and release-gate
+fixtures, run the local checks, then rely on native Linux and Windows PR jobs
+for package/smoke evidence. Revert the scoped changes if CI exposes a new
+regression.

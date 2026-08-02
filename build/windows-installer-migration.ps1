@@ -579,7 +579,7 @@ function Invoke-Prepare {
     }
   }
 
-  $preservationSets = @()
+  $preparedSources = @()
   foreach ($source in $sources) {
     if (-not (Test-Path -LiteralPath $source -PathType Container)) {
       continue
@@ -599,16 +599,16 @@ function Invoke-Prepare {
       Assert-NoReparsePointsInTree $directory 'Recognized application directory'
     }
     $unknown = @($entries | Where-Object { -not (Test-KnownApplicationEntry $_) })
+    $stash = Get-PreservationRoot $source
     if ($unknown.Count -gt 0) {
-      $stash = Get-PreservationRoot $source
       if (Test-Path -LiteralPath $stash) {
         throw "A preservation directory already exists without a recoverable journal: $stash"
       }
-      $preservationSets += @{
-        Source = $source
-        Stash = $stash
-        Unknown = $unknown
-      }
+    }
+    $preparedSources += @{
+      Source = $source
+      Stash = $stash
+      Unknown = $unknown
     }
   }
 
@@ -619,11 +619,7 @@ function Invoke-Prepare {
     Phase = 'preserving'
     Records = @()
   }
-  foreach ($set in $preservationSets) {
-    $content = Join-Path $set.Stash 'content'
-    [IO.Directory]::CreateDirectory($content) | Out-Null
-    $stashItem = Get-Item -LiteralPath $set.Stash -Force
-    $stashItem.Attributes = $stashItem.Attributes -bor [IO.FileAttributes]::Hidden
+  foreach ($set in $preparedSources) {
     $record = @{
       Source = $set.Source
       Target = $target
@@ -633,6 +629,13 @@ function Invoke-Prepare {
     }
     $journal.Records += $record
     Write-Journal $journal
+    if ($set.Unknown.Count -eq 0) {
+      continue
+    }
+    $content = Join-Path $set.Stash 'content'
+    [IO.Directory]::CreateDirectory($content) | Out-Null
+    $stashItem = Get-Item -LiteralPath $set.Stash -Force
+    $stashItem.Attributes = $stashItem.Attributes -bor [IO.FileAttributes]::Hidden
     foreach ($entry in $set.Unknown) {
       Move-Item -LiteralPath $entry.FullName -Destination (Join-Path $content $entry.Name)
     }

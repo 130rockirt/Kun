@@ -3,12 +3,14 @@
 - [x] 1.1 Set the Graph shutdown completion assertion budget to 5 seconds for all platforms while preserving the existing 15-second test timeout and durable-state assertions.
 - [x] 1.2 Verify the production scheduler, packaging configuration, and release notes remain unchanged.
 - [x] 1.3 Update the release-gate AppImage fixture to pass explicit extracted `appRoot` and `appRun` paths to the smoke invocation helper.
+- [x] 1.4 Record every validated Windows installation source before old-uninstaller cleanup and cover the no-unknown-content path.
 
 ## 2. Local verification
 
 - [x] 2.1 Run the shutdown-recovery test serially 10 times and confirm every run passes.
 - [x] 2.2 Run `npm run test:graph:platform` and confirm the Kun and renderer Graph suites pass.
 - [x] 2.3 Run `npm run build:kun`, `npm run typecheck`, `npm run lint`, `npm run test`, `npm run build`, and `git diff --check`.
+- [x] 2.4 Re-run the focused packaging configuration and release-gate checks after the Windows migration fix.
 
 ## 3. Native CI and release
 

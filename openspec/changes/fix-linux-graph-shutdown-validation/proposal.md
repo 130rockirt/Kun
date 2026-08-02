@@ -14,10 +14,13 @@ but the test reports a timeout and blocks all Linux packaging and release gates.
   assertions unchanged.
 - Keep the extension release-gate fixture aligned with the AppImage smoke
   invocation contract by supplying the extracted AppDir and `AppRun` paths.
+- Record every validated Windows installation source before invoking the old
+  uninstaller, so fallback cleanup remains authorized after the old executable
+  has been removed even when there is no unknown content to preserve.
 - Record the Linux Graph CI validation contract in a standalone OpenSpec
   capability.
-- Do not change GraphScheduler production behavior, public APIs, packaging
-  configuration, or user-facing release notes.
+- Do not change GraphScheduler production behavior, public APIs,
+  electron-builder configuration, or user-facing release notes.
 
 ## Capabilities
 
@@ -36,7 +39,9 @@ None.
 - Test: `kun/src/graph/graph-scheduler-shutdown-recovery.test.ts`.
 - Release-gate validation: `scripts/check-extension-release-gate.mjs` must pass
   the resolved AppImage extraction paths to the final desktop smoke fixture.
+- Windows migration helper: `build/windows-installer-migration.ps1` records
+  validated cleanup sources before the old uninstaller removes their identity
+  executable.
 - CI/release eligibility: the Graph platform suite can proceed to Linux
   AppImage/deb packaging and native smoke validation.
-- No runtime protocol, API, dependency, or packaged application behavior
-  changes.
+- No runtime protocol, API, dependency, or release-note changes.

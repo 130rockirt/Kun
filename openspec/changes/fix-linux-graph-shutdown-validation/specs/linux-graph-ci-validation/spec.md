@@ -46,3 +46,25 @@ artifacts when that suite passes.
 - **WHEN** any Graph platform test fails
 - **THEN** the workflow SHALL stop before `dist:linux` and SHALL not publish
   Linux artifacts
+
+### Requirement: Windows fallback cleanup uses a validated preparation record
+
+The Windows migration helper SHALL record each existing installation source
+after validating its safe root, application identity, recognized payload, and
+reparse-point boundaries, even when that source has no unknown content to
+preserve.
+
+#### Scenario: Old uninstaller removes the identity executable
+
+- **WHEN** preparation validates a registered source and the old uninstaller
+  subsequently removes its identity executable
+- **THEN** fallback cleanup SHALL accept that exact source through its matching
+  preparation record
+- **AND** the helper SHALL remove only recognized application payload
+
+#### Scenario: Unprepared source is presented for fallback cleanup
+
+- **WHEN** fallback cleanup receives a source without a matching preparation
+  record
+- **THEN** it SHALL reject a source that differs from the install target or no
+  longer contains an application identity executable
