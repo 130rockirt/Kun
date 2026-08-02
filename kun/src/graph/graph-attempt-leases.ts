@@ -40,8 +40,10 @@ export class GraphAttemptLeaseManager {
 
   async integrate(attemptId: string): Promise<'applied' | 'conflict'> {
     const writeState = await this.options.writes.list()
-    const lease = this.leases.get(attemptId) ??
-      writeState.leases.find((entry) => entry.attemptId === attemptId)
+    // Concurrent reviews can release the durable lease while this manager still
+    // holds its acquisition snapshot, so persisted state is authoritative here.
+    const persistedLease = writeState.leases.find((entry) => entry.attemptId === attemptId)
+    const lease = persistedLease ?? this.leases.get(attemptId)
     if (
       lease?.state === 'released' &&
       (
