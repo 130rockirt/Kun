@@ -322,6 +322,8 @@ type ForegroundChildControl = {
   parentThreadId: string
   unlinkParent: () => void
   resolveDetached: () => void
+  detachedSettlement: Promise<void>
+  resolveDetachedSettlement: () => void
 }
 
 export class DelegationRuntime {
@@ -677,12 +679,16 @@ export class DelegationRuntime {
     else input.signal.addEventListener('abort', abortFromParent, { once: true })
     let resolveDetached = (): void => undefined
     const detached = new Promise<void>((resolve) => { resolveDetached = resolve })
+    let resolveDetachedSettlement = (): void => undefined
+    const detachedSettlement = new Promise<void>((resolve) => { resolveDetachedSettlement = resolve })
     const control: ForegroundChildControl = {
       state,
       controller,
       parentThreadId: input.parentThreadId,
       unlinkParent: () => input.signal.removeEventListener('abort', abortFromParent),
-      resolveDetached
+      resolveDetached,
+      detachedSettlement,
+      resolveDetachedSettlement
     }
     this.foregroundChildren.set(record.id, control)
     const execution = this.executeChild({
@@ -731,15 +737,15 @@ export class DelegationRuntime {
     // continues under the detached controller and reports back on completion.
     control.unlinkParent()
     this.foregroundChildren.delete(record.id)
-    const completion = execution
+    void execution
       .then((settled) => this.notifyDetachedChild(settled))
       .catch(() => undefined)
       .finally(() => {
         this.detachedAborts.delete(record.id)
         this.detachedParentThreads.delete(record.id)
         this.detachedSettlements.delete(record.id)
+        control.resolveDetachedSettlement()
       })
-    this.detachedSettlements.set(record.id, completion)
     return state.record
   }
 
@@ -907,8 +913,9 @@ export class DelegationRuntime {
     })
     if (!changed) return false
     control.unlinkParent()
-    this.detachedAborts.set(childId, control.controller)
     this.detachedParentThreads.set(childId, control.parentThreadId)
+    this.detachedSettlements.set(childId, control.detachedSettlement)
+    this.detachedAborts.set(childId, control.controller)
     control.resolveDetached()
     return true
   }
