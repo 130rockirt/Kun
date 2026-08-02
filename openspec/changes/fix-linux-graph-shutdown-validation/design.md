@@ -54,6 +54,11 @@ loaded Ubuntu runners.
   uninstaller legitimately removes `Kun.exe` before fallback cleanup. Cleanup
   without a matching record remains rejected unless the source still equals the
   target and retains a valid identity executable.
+- **Make native installer failures observable only when the smoke opts in.**
+  The helper appends action boundaries and caught error messages to a path
+  supplied through `KUN_INSTALLER_DIAGNOSTIC_PATH`. The Windows smoke sets that
+  path inside its disposable root and prints it only after an unexpected exit;
+  diagnostic write failures are ignored so production behavior is unchanged.
 
 ## Risks / Trade-offs
 

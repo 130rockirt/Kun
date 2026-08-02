@@ -68,3 +68,15 @@ preserve.
   record
 - **THEN** it SHALL reject a source that differs from the install target or no
   longer contains an application identity executable
+
+### Requirement: Windows migration smoke exposes helper failures
+
+The Windows migration smoke SHALL opt into bounded helper diagnostics and print
+them when an installer exits with an unexpected code.
+
+#### Scenario: Silent installer helper fails
+
+- **WHEN** a helper action fails inside a silent NSIS migration scenario
+- **THEN** the smoke log SHALL identify the failed action and its caught error
+- **AND** normal installer runs without the diagnostic environment variable
+  SHALL not create that log

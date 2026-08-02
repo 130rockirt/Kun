@@ -17,6 +17,9 @@ but the test reports a timeout and blocks all Linux packaging and release gates.
 - Record every validated Windows installation source before invoking the old
   uninstaller, so fallback cleanup remains authorized after the old executable
   has been removed even when there is no unknown content to preserve.
+- Surface opt-in Windows helper action/error diagnostics when the native smoke
+  observes an unexpected installer exit, without changing normal installer
+  output or behavior.
 - Record the Linux Graph CI validation contract in a standalone OpenSpec
   capability.
 - Do not change GraphScheduler production behavior, public APIs,

@@ -12,6 +12,25 @@ function Get-EnvironmentValue([string]$Name) {
   return [Environment]::GetEnvironmentVariable($Name, 'Process')
 }
 
+function Write-InstallerDiagnostic([string]$Message) {
+  $diagnosticPath = Get-EnvironmentValue 'KUN_INSTALLER_DIAGNOSTIC_PATH'
+  if ([string]::IsNullOrWhiteSpace($diagnosticPath)) {
+    return
+  }
+
+  try {
+    $fullPath = [IO.Path]::GetFullPath($diagnosticPath)
+    [IO.Directory]::CreateDirectory((Split-Path -Parent $fullPath)) | Out-Null
+    [IO.File]::AppendAllText(
+      $fullPath,
+      ([DateTime]::UtcNow.ToString('o') + ' ' + $Message + [Environment]::NewLine),
+      [Text.Encoding]::UTF8
+    )
+  } catch {
+    # Diagnostics are opt-in test evidence and must never change installer behavior.
+  }
+}
+
 function Normalize-FullPath([string]$PathValue) {
   if ([string]::IsNullOrWhiteSpace($PathValue)) {
     return ''
@@ -733,6 +752,11 @@ function Update-UserPath {
 }
 
 try {
+  Write-InstallerDiagnostic (
+    "START action=$Action source=$(Get-EnvironmentValue 'KUN_INSTALLER_SOURCE') " +
+    "target=$(Get-EnvironmentValue 'KUN_INSTALLER_TARGET') " +
+    "journal=$(Get-EnvironmentValue 'KUN_INSTALLER_JOURNAL')"
+  )
   switch ($Action) {
     'ResolvePath' {
       Write-ResolvedInstallTarget (Resolve-InstallTarget)
@@ -760,7 +784,9 @@ try {
       Update-UserPath
     }
   }
+  Write-InstallerDiagnostic "SUCCESS action=$Action"
 } catch {
+  Write-InstallerDiagnostic "FAIL action=$Action error=$($_.Exception.Message)"
   [Console]::Error.WriteLine($_.Exception.Message)
   exit 1
 }

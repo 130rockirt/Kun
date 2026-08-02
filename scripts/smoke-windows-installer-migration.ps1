@@ -14,6 +14,8 @@ if (-not $AllowLocal -and $env:CI -ne 'true') {
 }
 
 $root = Join-Path ([IO.Path]::GetTempPath()) ('kun-installer-migration-smoke-' + [guid]::NewGuid().ToString('N'))
+$diagnosticPath = Join-Path $root 'installer-helper-diagnostics.log'
+$previousDiagnosticPath = [Environment]::GetEnvironmentVariable('KUN_INSTALLER_DIAGNOSTIC_PATH', 'Process')
 $markerName = '.kun-installer-migration-smoke-' + [guid]::NewGuid().ToString('N')
 $installRegistryPath = $null
 $uninstallRegistryPath = $null
@@ -48,6 +50,10 @@ function Invoke-Installer(
   $process = Start-Process -FilePath $script:InstallerPath -ArgumentList $Arguments -Wait -PassThru
   $stopwatch.Stop()
   Write-Host "[$Scenario] Installer exited with $($process.ExitCode) after $([math]::Round($stopwatch.Elapsed.TotalSeconds, 1))s."
+  if ($process.ExitCode -ne $ExpectedExitCode -and (Test-Path -LiteralPath $script:diagnosticPath -PathType Leaf)) {
+    Write-Host "[$Scenario] Installer helper diagnostics:"
+    Write-Host (Get-Content -LiteralPath $script:diagnosticPath -Raw)
+  }
   Assert-True ($process.ExitCode -eq $ExpectedExitCode) "Installer exited with $($process.ExitCode), expected $ExpectedExitCode. Arguments: $argumentText"
 }
 
@@ -169,6 +175,7 @@ function Add-DataSentinel([string]$Directory) {
 
 try {
   [IO.Directory]::CreateDirectory($root) | Out-Null
+  [Environment]::SetEnvironmentVariable('KUN_INSTALLER_DIAGNOSTIC_PATH', $diagnosticPath, 'Process')
   if ([string]::IsNullOrWhiteSpace($InstallerPath)) {
     $candidate = Get-ChildItem -Path (Join-Path (Get-Location) 'dist') -Filter 'Kun-*-win-x64.exe' |
       Sort-Object LastWriteTimeUtc -Descending |
@@ -300,6 +307,7 @@ try {
 
   Write-Host 'Windows installer migration smoke passed.'
 } finally {
+  [Environment]::SetEnvironmentVariable('KUN_INSTALLER_DIAGNOSTIC_PATH', $previousDiagnosticPath, 'Process')
   foreach ($sentinel in $sentinels) {
     Remove-Item -LiteralPath $sentinel -Force -ErrorAction SilentlyContinue
   }
