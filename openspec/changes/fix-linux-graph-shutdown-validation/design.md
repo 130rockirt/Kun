@@ -91,6 +91,11 @@ loaded Ubuntu runners.
   Windows PowerShell helpers can exceed the cross-platform five-second default
   during runner load; assertions, process exit checks, and fail-closed behavior
   remain unchanged.
+- Desktop Chromium smokes already create and populate an isolated app-data
+  directory. When their dedicated environment flag is present, main bootstrap
+  now binds Electron's `appData` special path to that directory before its first
+  `getPath` call. This avoids dependence on Windows Known Folder discovery after
+  installer mutation tests and does not affect ordinary or packaged launches.
 
 ## Risks / Trade-offs
 

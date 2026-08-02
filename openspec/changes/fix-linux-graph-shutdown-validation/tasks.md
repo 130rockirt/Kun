@@ -12,6 +12,7 @@
 - [x] 1.10 Retire registered, canonical, and legacy current-user shortcuts during that scope migration.
 - [x] 1.11 Align the multi-checkpoint Graph supervision-liveness fixture with the existing 60-second Vitest budget.
 - [x] 1.12 Use a bounded 15-second root Vitest timeout for native Windows filesystem and PowerShell checks.
+- [x] 1.13 Bind Electron appData to the pre-created isolated directory for desktop smokes.
 
 ## 2. Local verification
 

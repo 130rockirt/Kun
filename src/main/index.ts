@@ -51,7 +51,11 @@ import {
   configureDevelopmentRendererHttpCache,
   reloadRenderer
 } from './dev-renderer-cache'
-import { configureAppIdentity, readPackagedAppFlavor } from './app-identity'
+import {
+  configureAppIdentity,
+  configureDesktopSmokeAppDataPath,
+  readPackagedAppFlavor
+} from './app-identity'
 import { shouldStartHidden, syncLoginItemSettings } from './desktop-behavior'
 import { resolveLogDirectory, resolveNamedPreloadPath, resolvePreloadPath } from './main-paths'
 import {
@@ -405,9 +409,10 @@ const appFlavor = resolveAppFlavor({
   env: process.env,
   packagedFlavor: app.isPackaged ? readPackagedAppFlavor(app.getAppPath()) : undefined
 })
+const desktopSmokeAppDataPath = configureDesktopSmokeAppDataPath()
 const appIdentity = configureAppIdentity({
   flavor: appFlavor,
-  appDataPath: app.getPath('appData')
+  appDataPath: desktopSmokeAppDataPath ?? app.getPath('appData')
 })
 process.env.KUN_APP_FLAVOR = appIdentity.flavor
 process.env.KUN_RUNTIME_FLAVOR = appIdentity.runtimeFlavor

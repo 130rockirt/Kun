@@ -12,6 +12,18 @@ import {
 /** Kept for production branding and compatibility tests. */
 export const APP_PRODUCT_NAME = PRODUCTION_APP_NAME
 
+export function configureDesktopSmokeAppDataPath(
+  env: NodeJS.ProcessEnv = process.env
+): string | undefined {
+  if (env.KUN_PACKAGED_EXTENSION_DESKTOP_SMOKE !== '1') return undefined
+  const appDataPath = env.APPDATA?.trim()
+  if (!appDataPath) {
+    throw new Error('The isolated desktop smoke requires an APPDATA path')
+  }
+  app.setPath('appData', appDataPath)
+  return appDataPath
+}
+
 export function configureAppIdentity(options: {
   flavor?: AppFlavor
   appDataPath?: string

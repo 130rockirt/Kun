@@ -52,4 +52,28 @@ describe('app identity bootstrap', () => {
     configureAppIdentity()
     expect(setAppUserModelId).not.toHaveBeenCalled()
   })
+
+  it('pins appData to the existing isolated desktop smoke directory', async () => {
+    const { configureDesktopSmokeAppDataPath } = await import('./app-identity')
+    expect(configureDesktopSmokeAppDataPath({
+      KUN_PACKAGED_EXTENSION_DESKTOP_SMOKE: '1',
+      APPDATA: ' C:\\smoke\\app-data '
+    })).toBe('C:\\smoke\\app-data')
+    expect(setPath).toHaveBeenCalledWith('appData', 'C:\\smoke\\app-data')
+    expect(getPath).not.toHaveBeenCalled()
+  })
+
+  it('leaves appData untouched outside isolated desktop smoke launches', async () => {
+    const { configureDesktopSmokeAppDataPath } = await import('./app-identity')
+    expect(configureDesktopSmokeAppDataPath({ APPDATA: 'C:\\ordinary\\app-data' })).toBeUndefined()
+    expect(setPath).not.toHaveBeenCalled()
+  })
+
+  it('fails closed when an isolated desktop smoke omits APPDATA', async () => {
+    const { configureDesktopSmokeAppDataPath } = await import('./app-identity')
+    expect(() => configureDesktopSmokeAppDataPath({
+      KUN_PACKAGED_EXTENSION_DESKTOP_SMOKE: '1'
+    })).toThrow('requires an APPDATA path')
+    expect(setPath).not.toHaveBeenCalled()
+  })
 })

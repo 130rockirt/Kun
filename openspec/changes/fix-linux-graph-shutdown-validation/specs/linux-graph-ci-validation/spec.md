@@ -155,3 +155,19 @@ per-test budget while retaining the existing two-worker concurrency.
 - **THEN** Vitest SHALL allow the test up to 15 seconds to return
 - **AND** non-Windows platforms SHALL retain the default timeout
 - **AND** migration assertions and helper exit validation SHALL remain unchanged
+
+### Requirement: Desktop smoke app data is explicitly isolated
+
+The Electron main bootstrap SHALL bind the `appData` special path to the
+pre-created isolated desktop-smoke directory only when the dedicated desktop
+smoke environment is active.
+
+#### Scenario: Windows Known Folder discovery is unavailable after installer smoke
+
+- **WHEN** a desktop smoke launches with
+  `KUN_PACKAGED_EXTENSION_DESKTOP_SMOKE=1` and a non-empty `APPDATA`
+- **THEN** main bootstrap SHALL call `app.setPath('appData', APPDATA)` before the
+  first `app.getPath('appData')`
+- **AND** an isolated smoke without `APPDATA` SHALL fail closed
+- **AND** an ordinary application launch SHALL not override Electron's `appData`
+  path
