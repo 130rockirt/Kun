@@ -495,6 +495,14 @@ describe('electron-builder Kun packaging', () => {
     )
     expect(installerScript).toContain('Function KunReadMigrationResult')
     expect(installerScript).toContain('IfErrors KunMigrationResultMissing')
+    expect(installerScript).toContain('Function KunGetInQuotes')
+    expect(installerScript).toContain('Function KunGetFileParent')
+    expect(installerScript).toContain('Function KunRecoverSourceFromUninstallString')
+    expect(installerScript).toContain('Call KunGetInQuotes')
+    expect(installerScript).toContain('Call KunGetFileParent')
+    expect(installerScript).not.toContain('!insertmacro GetInQuotes')
+    expect(installerScript).not.toContain('Call GetFileParent')
+    expect(installerScript).not.toContain('!insertmacro kunRunMigrationHelper ResolveSource')
     expect(installerScript).toContain('${if} $KunInstallerSnapshotMode != $installMode')
     expect(installerScript).toContain('${andIf} $installMode != "all"')
     expect(installerScript).not.toContain('KUN_INSTALLER_RESULT')
@@ -508,6 +516,20 @@ describe('electron-builder Kun packaging', () => {
     expect(installerScript).toContain('customCheckAppRunning')
     expect(installerScript).toContain('customUnInstallCheck')
     expect(installerScript).toContain('customUnInstallCheckCurrentUser')
+    expect(installerScript).toContain('Function KunRetireCurrentUserShellState')
+    expect(installerScript).toContain(
+      'ReadRegStr $KunInstallerCurrentUserShortcutName HKEY_CURRENT_USER "${INSTALL_REGISTRY_KEY}" ShortcutName'
+    )
+    expect(installerScript).toContain('Delete "$DESKTOP\\${SHORTCUT_NAME}.lnk"')
+    expect(installerScript).toContain('Delete "$SMPROGRAMS\\${SHORTCUT_NAME}.lnk"')
+    expect(installerScript).toContain('SetShellVarContext current')
+    expect(installerScript).toContain('SetShellVarContext all')
+    expect(installerScript).toContain(
+      'DeleteRegKey HKEY_CURRENT_USER "${UNINSTALL_REGISTRY_KEY}"'
+    )
+    expect(installerScript).toContain(
+      'DeleteRegKey HKEY_CURRENT_USER "${INSTALL_REGISTRY_KEY}"'
+    )
     expect(installerScript).toContain('KunHandleOldUninstallerResult')
     expect(installerScript).toContain('FallbackCleanup')
     expect(installerScript).toContain('Restore')
@@ -536,6 +558,10 @@ describe('electron-builder Kun packaging', () => {
     expect(migrationScript).toContain('function Assert-ApplicationSourceIdentity')
     expect(migrationScript).toContain('function Assert-FallbackCleanupSource')
     expect(migrationScript).toContain('The cleanup source does not match the preservation journal')
+    expect(migrationScript).toContain('function Write-InstallerDiagnostic')
+    expect(migrationScript).toContain("Get-EnvironmentValue 'KUN_INSTALLER_DIAGNOSTIC_PATH'")
+    expect(migrationScript).toContain('$preparedSources += @{')
+    expect(migrationScript).toContain('if ($set.Unknown.Count -eq 0)')
     expect(migrationScript).toContain('function Assert-TrustedSecondarySource')
     expect(migrationScript).toContain('function Assert-NoReparsePointsInTree')
     expect(migrationScript).toContain(

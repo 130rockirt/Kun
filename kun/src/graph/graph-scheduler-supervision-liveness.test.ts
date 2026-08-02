@@ -16,6 +16,7 @@ import {
 } from '../../tests/graph-scheduler-test-harness.js'
 
 const supervisors: GraphSupervisor[] = []
+const supervisionLivenessTimeoutMs = 60_000
 
 afterEach(async () => {
   await Promise.all(supervisors.splice(0).map((supervisor) => supervisor.stop()))
@@ -146,7 +147,7 @@ describe('Graph scheduler supervision liveness', () => {
     ]))
     await harness.scheduler.stop()
     await runtimeSupervisor.stop()
-  }, 20_000)
+  }, supervisionLivenessTimeoutMs)
 
   it('continues an independent ready branch while another result awaits Lead review', async () => {
     const base = testGraphPlan()

@@ -12,6 +12,25 @@ function Get-EnvironmentValue([string]$Name) {
   return [Environment]::GetEnvironmentVariable($Name, 'Process')
 }
 
+function Write-InstallerDiagnostic([string]$Message) {
+  $diagnosticPath = Get-EnvironmentValue 'KUN_INSTALLER_DIAGNOSTIC_PATH'
+  if ([string]::IsNullOrWhiteSpace($diagnosticPath)) {
+    return
+  }
+
+  try {
+    $fullPath = [IO.Path]::GetFullPath($diagnosticPath)
+    [IO.Directory]::CreateDirectory((Split-Path -Parent $fullPath)) | Out-Null
+    [IO.File]::AppendAllText(
+      $fullPath,
+      ([DateTime]::UtcNow.ToString('o') + ' ' + $Message + [Environment]::NewLine),
+      [Text.Encoding]::UTF8
+    )
+  } catch {
+    # Diagnostics are opt-in test evidence and must never change installer behavior.
+  }
+}
+
 function Normalize-FullPath([string]$PathValue) {
   if ([string]::IsNullOrWhiteSpace($PathValue)) {
     return ''
@@ -579,7 +598,7 @@ function Invoke-Prepare {
     }
   }
 
-  $preservationSets = @()
+  $preparedSources = @()
   foreach ($source in $sources) {
     if (-not (Test-Path -LiteralPath $source -PathType Container)) {
       continue
@@ -599,16 +618,16 @@ function Invoke-Prepare {
       Assert-NoReparsePointsInTree $directory 'Recognized application directory'
     }
     $unknown = @($entries | Where-Object { -not (Test-KnownApplicationEntry $_) })
+    $stash = Get-PreservationRoot $source
     if ($unknown.Count -gt 0) {
-      $stash = Get-PreservationRoot $source
       if (Test-Path -LiteralPath $stash) {
         throw "A preservation directory already exists without a recoverable journal: $stash"
       }
-      $preservationSets += @{
-        Source = $source
-        Stash = $stash
-        Unknown = $unknown
-      }
+    }
+    $preparedSources += @{
+      Source = $source
+      Stash = $stash
+      Unknown = $unknown
     }
   }
 
@@ -619,11 +638,7 @@ function Invoke-Prepare {
     Phase = 'preserving'
     Records = @()
   }
-  foreach ($set in $preservationSets) {
-    $content = Join-Path $set.Stash 'content'
-    [IO.Directory]::CreateDirectory($content) | Out-Null
-    $stashItem = Get-Item -LiteralPath $set.Stash -Force
-    $stashItem.Attributes = $stashItem.Attributes -bor [IO.FileAttributes]::Hidden
+  foreach ($set in $preparedSources) {
     $record = @{
       Source = $set.Source
       Target = $target
@@ -633,6 +648,13 @@ function Invoke-Prepare {
     }
     $journal.Records += $record
     Write-Journal $journal
+    if ($set.Unknown.Count -eq 0) {
+      continue
+    }
+    $content = Join-Path $set.Stash 'content'
+    [IO.Directory]::CreateDirectory($content) | Out-Null
+    $stashItem = Get-Item -LiteralPath $set.Stash -Force
+    $stashItem.Attributes = $stashItem.Attributes -bor [IO.FileAttributes]::Hidden
     foreach ($entry in $set.Unknown) {
       Move-Item -LiteralPath $entry.FullName -Destination (Join-Path $content $entry.Name)
     }
@@ -730,6 +752,11 @@ function Update-UserPath {
 }
 
 try {
+  Write-InstallerDiagnostic (
+    "START action=$Action source=$(Get-EnvironmentValue 'KUN_INSTALLER_SOURCE') " +
+    "target=$(Get-EnvironmentValue 'KUN_INSTALLER_TARGET') " +
+    "journal=$(Get-EnvironmentValue 'KUN_INSTALLER_JOURNAL')"
+  )
   switch ($Action) {
     'ResolvePath' {
       Write-ResolvedInstallTarget (Resolve-InstallTarget)
@@ -757,7 +784,9 @@ try {
       Update-UserPath
     }
   }
+  Write-InstallerDiagnostic "SUCCESS action=$Action"
 } catch {
+  Write-InstallerDiagnostic "FAIL action=$Action error=$($_.Exception.Message)"
   [Console]::Error.WriteLine($_.Exception.Message)
   exit 1
 }
