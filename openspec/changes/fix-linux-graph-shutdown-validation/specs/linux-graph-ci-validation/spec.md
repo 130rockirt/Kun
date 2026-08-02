@@ -142,3 +142,16 @@ state checks while allowing the complete multi-checkpoint scenario the existing
 - **AND** the test-level timeout SHALL be 60 seconds
 - **AND** the Lead episode, worker start, accepted node, and resolved obligation
   assertions SHALL remain unchanged
+
+### Requirement: Root Windows tests allow native process startup
+
+The root Vitest configuration SHALL give Windows tests a bounded 15-second
+per-test budget while retaining the existing two-worker concurrency.
+
+#### Scenario: Native migration checks run under Windows runner load
+
+- **WHEN** root migration tests perform synchronous filesystem operations or
+  launch the Windows PowerShell migration helper
+- **THEN** Vitest SHALL allow the test up to 15 seconds to return
+- **AND** non-Windows platforms SHALL retain the default timeout
+- **AND** migration assertions and helper exit validation SHALL remain unchanged

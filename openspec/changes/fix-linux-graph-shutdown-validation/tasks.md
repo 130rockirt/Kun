@@ -11,6 +11,7 @@
 - [x] 1.9 Retire the fixed Kun HKCU registration after validated current-user to all-users cleanup.
 - [x] 1.10 Retire registered, canonical, and legacy current-user shortcuts during that scope migration.
 - [x] 1.11 Align the multi-checkpoint Graph supervision-liveness fixture with the existing 60-second Vitest budget.
+- [x] 1.12 Use a bounded 15-second root Vitest timeout for native Windows filesystem and PowerShell checks.
 
 ## 2. Local verification
 

@@ -86,6 +86,11 @@ loaded Ubuntu runners.
   Windows runner even though no checkpoint had demonstrated a deadlock. The
   fixture now uses the repository's existing 60-second Vitest ceiling; every
   10-second checkpoint and all liveness assertions remain unchanged.
+- Root Vitest keeps its existing two-worker Windows concurrency but uses a
+  15-second per-test ceiling there. Native filesystem migration and synchronous
+  Windows PowerShell helpers can exceed the cross-platform five-second default
+  during runner load; assertions, process exit checks, and fail-closed behavior
+  remain unchanged.
 
 ## Risks / Trade-offs
 

@@ -32,6 +32,8 @@ but the test reports a timeout and blocks all Linux packaging and release gates.
 - Allow the deterministic supervision-liveness fixture its full configured
   Vitest budget on slower native Windows runners while retaining its bounded
   state waits and liveness assertions.
+- Give root Vitest cases a 15-second per-test budget on Windows so synchronous
+  native filesystem and PowerShell validation can complete under runner load.
 - Record the Linux Graph CI validation contract in a standalone OpenSpec
   capability.
 - Do not change GraphScheduler production behavior, public APIs,
