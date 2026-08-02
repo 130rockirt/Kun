@@ -9,6 +9,7 @@
 - [x] 1.7 Allow the Windows preservation round-trip test 15 seconds for its three native PowerShell helper processes.
 - [x] 1.8 Make quoted uninstall-source parsing self-contained during NSIS `customHeader` expansion.
 - [x] 1.9 Retire the fixed Kun HKCU registration after validated current-user to all-users cleanup.
+- [x] 1.10 Retire registered, canonical, and legacy current-user shortcuts during that scope migration.
 
 ## 2. Local verification
 

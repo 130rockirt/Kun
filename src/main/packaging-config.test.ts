@@ -516,6 +516,14 @@ describe('electron-builder Kun packaging', () => {
     expect(installerScript).toContain('customCheckAppRunning')
     expect(installerScript).toContain('customUnInstallCheck')
     expect(installerScript).toContain('customUnInstallCheckCurrentUser')
+    expect(installerScript).toContain('Function KunRetireCurrentUserShellState')
+    expect(installerScript).toContain(
+      'ReadRegStr $KunInstallerCurrentUserShortcutName HKEY_CURRENT_USER "${INSTALL_REGISTRY_KEY}" ShortcutName'
+    )
+    expect(installerScript).toContain('Delete "$DESKTOP\\${SHORTCUT_NAME}.lnk"')
+    expect(installerScript).toContain('Delete "$SMPROGRAMS\\${SHORTCUT_NAME}.lnk"')
+    expect(installerScript).toContain('SetShellVarContext current')
+    expect(installerScript).toContain('SetShellVarContext all')
     expect(installerScript).toContain(
       'DeleteRegKey HKEY_CURRENT_USER "${UNINSTALL_REGISTRY_KEY}"'
     )

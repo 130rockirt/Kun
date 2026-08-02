@@ -9,6 +9,8 @@ Var /GLOBAL KunInstallerJournalPath
 Var /GLOBAL KunInstallerMigrationPrepared
 Var /GLOBAL KunInstallerSnapshotMode
 Var /GLOBAL KunInstallerRestoreInteractive
+Var /GLOBAL KunInstallerCurrentUserShortcutName
+Var /GLOBAL KunInstallerCurrentUserMenuDirectory
 !endif
 Var /GLOBAL KunInstallerHelperPath
 Var /GLOBAL KunInstallerPowerShellPath
@@ -127,10 +129,9 @@ Var /GLOBAL KunInstallerStopResult
   Call KunHandleOldUninstallerResult
   # installSection invokes this callback only while an all-users install is
   # retiring an existing current-user registration. The old uninstaller usually
-  # removes these fixed Kun keys itself; fallback cleanup must finish the same
-  # scoped transition after the validated application payload is gone.
-  DeleteRegKey HKEY_CURRENT_USER "${UNINSTALL_REGISTRY_KEY}"
-  DeleteRegKey HKEY_CURRENT_USER "${INSTALL_REGISTRY_KEY}"
+  # removes this shell state itself; fallback cleanup must finish the same scoped
+  # transition after the validated application payload is gone.
+  Call KunRetireCurrentUserShellState
   StrCpy $KunInstallerSourceDir $KunInstallerPrimarySourceDir
   Call KunRestoreInteractiveInstaller
 !macroend
@@ -270,6 +271,34 @@ Var /GLOBAL KunInstallerStopResult
       SetErrorLevel 2
       Quit
     ${endif}
+  FunctionEnd
+
+  Function KunRetireCurrentUserShellState
+    ReadRegStr $KunInstallerCurrentUserShortcutName HKEY_CURRENT_USER "${INSTALL_REGISTRY_KEY}" ShortcutName
+    ReadRegStr $KunInstallerCurrentUserMenuDirectory HKEY_CURRENT_USER "${INSTALL_REGISTRY_KEY}" MenuDirectory
+    SetShellVarContext current
+
+    ${if} $KunInstallerCurrentUserShortcutName != ""
+      Delete "$DESKTOP\$KunInstallerCurrentUserShortcutName.lnk"
+      Delete "$SMPROGRAMS\$KunInstallerCurrentUserShortcutName.lnk"
+      ${if} $KunInstallerCurrentUserMenuDirectory != ""
+        Delete "$SMPROGRAMS\$KunInstallerCurrentUserMenuDirectory\$KunInstallerCurrentUserShortcutName.lnk"
+      ${endif}
+    ${endif}
+
+    Delete "$DESKTOP\${SHORTCUT_NAME}.lnk"
+    Delete "$SMPROGRAMS\${SHORTCUT_NAME}.lnk"
+    Delete "$DESKTOP\DeepSeek GUI.lnk"
+    Delete "$SMPROGRAMS\DeepSeek GUI.lnk"
+    ${if} $KunInstallerCurrentUserMenuDirectory != ""
+      Delete "$SMPROGRAMS\$KunInstallerCurrentUserMenuDirectory\${SHORTCUT_NAME}.lnk"
+      Delete "$SMPROGRAMS\$KunInstallerCurrentUserMenuDirectory\DeepSeek GUI.lnk"
+      RMDir "$SMPROGRAMS\$KunInstallerCurrentUserMenuDirectory"
+    ${endif}
+
+    DeleteRegKey HKEY_CURRENT_USER "${UNINSTALL_REGISTRY_KEY}"
+    DeleteRegKey HKEY_CURRENT_USER "${INSTALL_REGISTRY_KEY}"
+    SetShellVarContext all
   FunctionEnd
 
   Function KunReadRegisteredSource

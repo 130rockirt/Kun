@@ -111,11 +111,11 @@ content on a native runner.
 - **AND** all preparation, cleanup, restoration, and journal assertions SHALL
   remain unchanged
 
-### Requirement: Windows scope migration retires the old registration
+### Requirement: Windows scope migration retires old user shell state
 
-The Windows installer SHALL remove the fixed Kun current-user install and
-uninstall registration keys after validated cleanup succeeds during a
-current-user to all-users migration.
+The Windows installer SHALL remove the fixed Kun current-user install/uninstall
+registration keys and application shortcuts after validated cleanup succeeds
+during a current-user to all-users migration.
 
 #### Scenario: Current-user installation is migrated for all users
 
@@ -123,5 +123,7 @@ current-user to all-users migration.
   application payload
 - **THEN** the exact Kun `INSTALL_REGISTRY_KEY` and `UNINSTALL_REGISTRY_KEY`
   entries under `HKEY_CURRENT_USER` SHALL be removed
+- **AND** the registered, canonical Kun, and legacy DeepSeek GUI current-user
+  desktop/start-menu shortcuts SHALL be removed
 - **AND** registration cleanup SHALL occur only after fail-closed payload cleanup
   succeeds

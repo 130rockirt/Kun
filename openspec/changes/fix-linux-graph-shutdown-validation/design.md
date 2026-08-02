@@ -76,8 +76,11 @@ loaded Ubuntu runners.
   electron-builder invokes `customUnInstallCheckCurrentUser` only when an
   all-users install retires a current-user copy. Because Kun's callback replaces
   the default result handler to support validated fallback cleanup, it also
-  removes the exact Kun HKCU install/uninstall keys after that cleanup succeeds.
-  No dynamic or parent registry path is deleted.
+  reads the registered shortcut metadata, removes the old user's registered,
+  canonical, and legacy application links, and removes the exact Kun HKCU
+  install/uninstall keys after that cleanup succeeds. No dynamic or parent
+  registry path is deleted, and the shell context is restored to all-users
+  before the new installation continues.
 
 ## Risks / Trade-offs
 

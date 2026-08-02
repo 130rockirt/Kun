@@ -27,6 +27,8 @@ but the test reports a timeout and blocks all Linux packaging and release gates.
   startup budget while retaining all migration safety assertions.
 - Remove only the fixed Kun HKCU install/uninstall registrations after a
   validated current-user to all-users transition succeeds.
+- Remove the retired current-user Kun/legacy shortcuts while preserving the
+  new all-users shortcut scope.
 - Record the Linux Graph CI validation contract in a standalone OpenSpec
   capability.
 - Do not change GraphScheduler production behavior, public APIs,
