@@ -137,11 +137,9 @@ function Resolve-RegisteredInstallSource {
 function Write-ResolvedInstallTarget([string]$Target) {
   $resultPath = Normalize-FullPath $ResultPath
   if ([string]::IsNullOrWhiteSpace($resultPath)) {
-    $resultPath = Normalize-FullPath (Get-EnvironmentValue 'KUN_INSTALLER_RESULT')
+    $resultPath = Join-Path $PSScriptRoot 'kun-windows-installer-result.txt'
   }
-  if (-not [string]::IsNullOrWhiteSpace($resultPath)) {
-    [IO.File]::WriteAllBytes($resultPath, [Text.Encoding]::Unicode.GetBytes($Target))
-  }
+  [IO.File]::WriteAllBytes($resultPath, [Text.Encoding]::Unicode.GetBytes($Target))
   [Console]::Out.Write($Target)
 }
 
@@ -232,6 +230,42 @@ function Get-UnsafeRoots {
   } | Select-Object -Unique)
 }
 
+function Assert-NoReparsePathComponents([string]$PathValue, [string]$Label) {
+  $current = Normalize-FullPath $PathValue
+  while (-not [string]::IsNullOrWhiteSpace($current)) {
+    if ((Test-Path -LiteralPath $current) -and (Test-ReparsePoint $current)) {
+      throw "$Label path contains a reparse point: $current"
+    }
+    $parent = Split-Path -Parent $current
+    if ([string]::IsNullOrWhiteSpace($parent) -or (Test-PathEqual $parent $current)) {
+      break
+    }
+    $current = $parent
+  }
+}
+
+function Assert-NoReparsePointsInTree([IO.FileSystemInfo]$Entry, [string]$Label) {
+  $pending = [Collections.Generic.Stack[string]]::new()
+  $pending.Push($Entry.FullName)
+  while ($pending.Count -gt 0) {
+    $current = $pending.Pop()
+    if (Test-ReparsePoint $current) {
+      throw "$Label contains a reparse point: $current"
+    }
+    if (-not (Test-Path -LiteralPath $current -PathType Container)) {
+      continue
+    }
+    foreach ($child in @(Get-ChildItem -LiteralPath $current -Force)) {
+      if (($child.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "$Label contains a reparse point: $($child.FullName)"
+      }
+      if ($child.PSIsContainer) {
+        $pending.Push($child.FullName)
+      }
+    }
+  }
+}
+
 function Assert-SafeInstallRoot([string]$PathValue, [string]$Label) {
   $normalized = Normalize-FullPath $PathValue
   if ([string]::IsNullOrWhiteSpace($normalized)) {
@@ -254,9 +288,7 @@ function Assert-SafeInstallRoot([string]$PathValue, [string]$Label) {
     }
   }
 
-  if (Test-ReparsePoint $normalized) {
-    throw "$Label path is a reparse point: $normalized"
-  }
+  Assert-NoReparsePathComponents $normalized $Label
 }
 
 function Test-KnownApplicationEntry([IO.FileSystemInfo]$Entry) {
@@ -300,6 +332,10 @@ function Get-ExtendedLengthPath([string]$PathValue) {
 }
 
 function Remove-KnownApplicationEntry([IO.FileSystemInfo]$Entry) {
+  if ($Entry.PSIsContainer -and (Test-ReparsePoint $Entry.FullName)) {
+    throw "Recognized application directory is a reparse point: $($Entry.FullName)"
+  }
+
   try {
     Remove-Item -LiteralPath $Entry.FullName -Recurse -Force
     return
@@ -536,6 +572,12 @@ function Invoke-Prepare {
     if (-not ($entries | Where-Object { Test-KnownApplicationEntry $_ })) {
       throw "The registered source has no recognized application payload: $source"
     }
+    $knownDirectories = @($entries | Where-Object {
+      $_.PSIsContainer -and (Test-KnownApplicationEntry $_)
+    })
+    foreach ($directory in $knownDirectories) {
+      Assert-NoReparsePointsInTree $directory 'Recognized application directory'
+    }
     $unknown = @($entries | Where-Object { -not (Test-KnownApplicationEntry $_) })
     if ($unknown.Count -gt 0) {
       $stash = Get-PreservationRoot $source
@@ -589,10 +631,16 @@ function Invoke-FallbackCleanup {
   }
   Assert-SafeInstallRoot $source 'Source'
 
-  foreach ($entry in @(Get-ChildItem -LiteralPath $source -Force)) {
-    if (Test-KnownApplicationEntry $entry) {
-      Remove-KnownApplicationEntry $entry
+  $knownEntries = @(Get-ChildItem -LiteralPath $source -Force | Where-Object {
+    Test-KnownApplicationEntry $_
+  })
+  foreach ($entry in $knownEntries) {
+    if ($entry.PSIsContainer) {
+      Assert-NoReparsePointsInTree $entry 'Recognized application directory'
     }
+  }
+  foreach ($entry in $knownEntries) {
+    Remove-KnownApplicationEntry $entry
   }
 
   if (@(Get-ChildItem -LiteralPath $source -Force).Count -eq 0) {

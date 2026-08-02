@@ -6,7 +6,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2.0
 
-if (-not [Environment]::Is64BitOperatingSystem -or $env:OS -ne 'Windows_NT') {
+if (-not [Environment]::Is64BitOperatingSystem -or [Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
   throw 'This smoke test requires 64-bit Windows.'
 }
 if (-not $AllowLocal -and $env:CI -ne 'true') {
@@ -20,10 +20,11 @@ $uninstallRegistryPath = $null
 $installRegistryPaths = @()
 $uninstallRegistryPaths = @()
 $sentinels = @()
+$currentScenario = 'smoke setup'
 
 function Assert-True([bool]$Condition, [string]$Message) {
   if (-not $Condition) {
-    throw $Message
+    throw "[$script:currentScenario] $Message"
   }
 }
 
@@ -35,9 +36,19 @@ function Test-PathEqual([string]$Left, [string]$Right) {
   return [string]::Equals((Normalize-Path $Left), (Normalize-Path $Right), [StringComparison]::OrdinalIgnoreCase)
 }
 
-function Invoke-Installer([string[]]$Arguments, [int]$ExpectedExitCode = 0) {
+function Invoke-Installer(
+  [string]$Scenario,
+  [string[]]$Arguments,
+  [int]$ExpectedExitCode = 0
+) {
+  $script:currentScenario = $Scenario
+  $argumentText = $Arguments -join ' '
+  Write-Host "[$Scenario] Starting installer: $argumentText"
+  $stopwatch = [Diagnostics.Stopwatch]::StartNew()
   $process = Start-Process -FilePath $script:InstallerPath -ArgumentList $Arguments -Wait -PassThru
-  Assert-True ($process.ExitCode -eq $ExpectedExitCode) "Installer exited with $($process.ExitCode), expected $ExpectedExitCode."
+  $stopwatch.Stop()
+  Write-Host "[$Scenario] Installer exited with $($process.ExitCode) after $([math]::Round($stopwatch.Elapsed.TotalSeconds, 1))s."
+  Assert-True ($process.ExitCode -eq $ExpectedExitCode) "Installer exited with $($process.ExitCode), expected $ExpectedExitCode. Arguments: $argumentText"
 }
 
 function Find-KunRegistration(
@@ -131,6 +142,14 @@ function Assert-KunShortcuts([ValidateSet('CurrentUser', 'AllUsers')][string]$Sc
   }
 }
 
+function Assert-NoKunShortcuts([ValidateSet('CurrentUser', 'AllUsers')][string]$Scope) {
+  foreach ($shortcut in @(Get-ShortcutPaths $Scope)) {
+    Assert-True (-not (Test-Path -LiteralPath $shortcut)) "Kun shortcut remains: $shortcut"
+    $legacyShortcut = Join-Path (Split-Path -Parent $shortcut) 'DeepSeek GUI.lnk'
+    Assert-True (-not (Test-Path -LiteralPath $legacyShortcut)) "Legacy shortcut remains: $legacyShortcut"
+  }
+}
+
 function Convert-ShortcutsToLegacy {
   foreach ($shortcut in @(Get-ShortcutPaths 'CurrentUser')) {
     if (Test-Path -LiteralPath $shortcut) {
@@ -180,7 +199,7 @@ try {
 
   $seedParent = Join-Path $root 'seed'
   $seed = Join-Path $seedParent 'Kun'
-  Invoke-Installer @('/S', '/currentuser', "/D=$seedParent")
+  Invoke-Installer 'seed current-user install' @('/S', '/currentuser', "/D=$seedParent")
   Find-KunRegistration $seed
   Assert-RegisteredLocation $seed
   Assert-KunShortcuts 'CurrentUser'
@@ -191,7 +210,7 @@ try {
   Convert-ShortcutsToLegacy
   Set-ItemProperty -LiteralPath $script:installRegistryPath -Name InstallLocation -Value ''
   Set-Content -LiteralPath (Join-Path $legacySource 'legacy-note.txt') -Value 'keep legacy note'
-  Invoke-Installer @('--updated', '/currentuser')
+  Invoke-Installer 'legacy uninstall-source recovery' @('--updated', '/currentuser')
   Assert-RegisteredLocation $legacyTarget
   Assert-True ((Get-Content -LiteralPath (Join-Path $legacySource 'legacy-note.txt') -Raw).Trim() -eq 'keep legacy note') 'Legacy unknown content was not preserved.'
   Assert-True (-not (Test-Path -LiteralPath (Join-Path $legacyTarget 'legacy-note.txt'))) 'Legacy unknown content leaked into the canonical target.'
@@ -202,7 +221,7 @@ try {
   $nestedTarget = Join-Path $root 'nested\Kun'
   Move-RegisteredInstall $legacyTarget $nestedSource
   Set-Content -LiteralPath (Join-Path $nestedSource 'nested-note.txt') -Value 'keep nested note'
-  Invoke-Installer @('/S', '/currentuser')
+  Invoke-Installer 'nested legacy path migration' @('/S', '/currentuser')
   Assert-RegisteredLocation $nestedTarget
   Assert-True (Test-Path -LiteralPath (Join-Path $nestedSource 'nested-note.txt')) 'Nested unknown content was not restored.'
   Assert-PathReconciled $nestedTarget @($legacyTarget, $nestedSource)
@@ -210,13 +229,13 @@ try {
   $custom = Join-Path $root 'custom\My AI Tools'
   Move-RegisteredInstall $nestedTarget $custom
   Set-Content -LiteralPath (Join-Path $custom 'custom-note.txt') -Value 'keep custom note'
-  Invoke-Installer @('/S', '/currentuser')
+  Invoke-Installer 'custom path reinstall' @('/S', '/currentuser')
   Assert-RegisteredLocation $custom
   Assert-True (Test-Path -LiteralPath (Join-Path $custom 'custom-note.txt')) 'Custom install content was not restored in place.'
 
   $programsRoot = Join-Path $env:LOCALAPPDATA 'Programs'
   Set-RegisteredLocation $programsRoot
-  Invoke-Installer @('/S', '/currentuser') 2
+  Invoke-Installer 'protected root rejection' @('/S', '/currentuser') 2
   Assert-True (Test-Path -LiteralPath (Join-Path $custom 'Kun.exe')) 'Protected-root rejection changed the actual installation.'
   Set-RegisteredLocation $custom
 
@@ -225,18 +244,18 @@ try {
   [IO.Directory]::CreateDirectory($junctionBacking) | Out-Null
   [IO.Directory]::CreateDirectory((Split-Path -Parent $junctionTarget)) | Out-Null
   New-Item -ItemType Junction -Path $junctionTarget -Target $junctionBacking | Out-Null
-  Invoke-Installer @('/S', '/currentuser', "/D=$junctionTarget") 2
+  Invoke-Installer 'reparse target rejection' @('/S', '/currentuser', "/D=$junctionTarget") 2
   Assert-True (Test-Path -LiteralPath (Join-Path $custom 'Kun.exe')) 'Reparse-target rejection changed the source installation.'
 
   $linkedSource = Join-Path $root 'linked-source'
   New-Item -ItemType Junction -Path $linkedSource -Target $custom | Out-Null
   Set-RegisteredLocation $linkedSource
-  Invoke-Installer @('/S', '/currentuser') 2
+  Invoke-Installer 'reparse source rejection' @('/S', '/currentuser') 2
   Assert-True (Test-Path -LiteralPath (Join-Path $custom 'Kun.exe')) 'Reparse-source rejection changed the installation.'
   Set-RegisteredLocation $custom
 
   Move-Item -LiteralPath (Join-Path $custom 'Uninstall Kun.exe') -Destination (Join-Path $custom 'old-uninstaller.missing')
-  Invoke-Installer @('/S', '/currentuser')
+  Invoke-Installer 'missing uninstaller fallback cleanup' @('/S', '/currentuser')
   Assert-RegisteredLocation $custom
   Assert-True (Test-Path -LiteralPath (Join-Path $custom 'old-uninstaller.missing')) 'Fallback cleanup deleted preserved unknown content.'
 
@@ -245,33 +264,33 @@ try {
   Move-RegisteredInstall $custom $conflictSource
   [IO.Directory]::CreateDirectory($conflictTarget) | Out-Null
   Set-Content -LiteralPath (Join-Path $conflictTarget 'occupied.txt') -Value 'do not overwrite'
-  Invoke-Installer @('/S', '/currentuser') 2
+  Invoke-Installer 'occupied target rejection' @('/S', '/currentuser') 2
   Assert-True (Test-Path -LiteralPath (Join-Path $conflictSource 'Kun.exe')) 'Conflict handling changed the source installation.'
   Assert-True (Test-Path -LiteralPath (Join-Path $conflictTarget 'occupied.txt')) 'Conflict handling changed the target directory.'
 
   Remove-Item -LiteralPath $conflictTarget -Recurse -Force
-  Invoke-Installer @('/S', '/currentuser')
+  Invoke-Installer 'conflict retry migration' @('/S', '/currentuser')
   Assert-RegisteredLocation $conflictTarget
 
   foreach ($sentinel in $sentinels) {
     Assert-True (Test-Path -LiteralPath $sentinel) "User-data sentinel was removed: $sentinel"
   }
 
-  $finalUninstaller = Join-Path $conflictTarget 'Uninstall Kun.exe'
-  $uninstall = Start-Process -FilePath $finalUninstaller -ArgumentList @('/S', '/currentuser') -Wait -PassThru
-  Assert-True ($uninstall.ExitCode -eq 0) "Final smoke uninstaller exited with $($uninstall.ExitCode)."
-  foreach ($sentinel in $sentinels) {
-    Assert-True (Test-Path -LiteralPath $sentinel) "Uninstall removed a user-data sentinel: $sentinel"
-  }
-
+  $previousUserInstallRegistryPath = $script:installRegistryPath
+  $previousUserUninstallRegistryPath = $script:uninstallRegistryPath
   $machineParent = Join-Path $root 'machine'
   $machineTarget = Join-Path $machineParent 'Kun'
-  Invoke-Installer @('/S', '/allusers', "/D=$machineParent")
+  Invoke-Installer 'current-user to all-users migration' @('/S', '/allusers', "/D=$machineParent")
+  Assert-True (-not (Test-Path -LiteralPath $previousUserInstallRegistryPath)) 'The current-user install registration remains after all-users migration.'
+  Assert-True (-not (Test-Path -LiteralPath $previousUserUninstallRegistryPath)) 'The current-user uninstall registration remains after all-users migration.'
+  Assert-True (-not (Test-Path -LiteralPath (Join-Path $conflictTarget 'Kun.exe'))) 'The current-user application payload remains after all-users migration.'
+  Assert-NoKunShortcuts 'CurrentUser'
   Find-KunRegistration $machineTarget 'HKLM'
   Assert-RegisteredLocation $machineTarget
   Assert-PathReconciled $machineTarget @($conflictTarget)
   Assert-KunShortcuts 'AllUsers'
 
+  $script:currentScenario = 'all-users uninstall'
   $machineUninstaller = Join-Path $machineTarget 'Uninstall Kun.exe'
   $machineUninstall = Start-Process -FilePath $machineUninstaller -ArgumentList @('/S', '/allusers') -Wait -PassThru
   Assert-True ($machineUninstall.ExitCode -eq 0) "All-users smoke uninstaller exited with $($machineUninstall.ExitCode)."

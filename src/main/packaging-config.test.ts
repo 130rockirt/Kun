@@ -463,7 +463,10 @@ describe('electron-builder Kun packaging', () => {
   })
 
   it('migrates Windows install roots without changing identity or touching user data', () => {
-    const installerScript = readFileSync(join(process.cwd(), 'build/installer.nsh'), 'utf8')
+    const installerScript = readFileSync(join(process.cwd(), 'build/installer.nsh'), 'utf8').replace(
+      /\r\n/g,
+      '\n'
+    )
     const migrationScript = readFileSync(
       join(process.cwd(), 'build/windows-installer-migration.ps1'),
       'utf8'
@@ -485,13 +488,16 @@ describe('electron-builder Kun packaging', () => {
     expect(installerScript).toContain('Var /GLOBAL KunInstallerPrimarySourceDir')
     expect(installerScript).toContain('Var /GLOBAL KunInstallerSecondarySourceDir')
     expect(installerScript).toContain('Var /GLOBAL KunInstallerTargetDir')
+    expect(installerScript).toContain('Var /GLOBAL KunInstallerSnapshotMode')
     expect(installerScript).toContain('Call KunRefreshInstallPaths')
     expect(installerScript).toContain(
       'ReadRegStr $R9 HKEY_CURRENT_USER "${UNINSTALL_REGISTRY_KEY}" UninstallString'
     )
-    expect(installerScript).toContain(
-      'SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_RESULT", "$KunInstallerResultPath").r0'
-    )
+    expect(installerScript).toContain('Function KunReadMigrationResult')
+    expect(installerScript).toContain('IfErrors KunMigrationResultMissing')
+    expect(installerScript).toContain('${if} $KunInstallerSnapshotMode != $installMode')
+    expect(installerScript).toContain('${andIf} $installMode != "all"')
+    expect(installerScript).not.toContain('KUN_INSTALLER_RESULT')
     expect(installerScript).toContain('Function KunInstallDirectoryPagePre')
     expect(installerScript).toContain('Function KunInstallDirectoryPageLeave')
     expect(installerScript).toContain('Function KunInstallFilesPagePre')
@@ -515,6 +521,7 @@ describe('electron-builder Kun packaging', () => {
 
     expect(migrationScript).toContain("ValidateSet('ResolvePath', 'ResolveSource', 'StopProcesses', 'Recover', 'Prepare'")
     expect(migrationScript).toContain('old-uninstaller.exe')
+    expect(migrationScript).toContain("Join-Path $PSScriptRoot 'kun-windows-installer-result.txt'")
     expect(migrationScript).toContain('function Test-AppOwnedProcessPath')
     expect(migrationScript).toContain('Test-AppOwnedProcessPath $_.ExecutablePath $Roots')
     expect(migrationScript).toContain('& "$env:SystemRoot\\System32\\taskkill.exe" /PID $process.ProcessId /T /F')
@@ -524,6 +531,11 @@ describe('electron-builder Kun packaging', () => {
     expect(migrationScript).toContain('function Resolve-LegacySourceTarget')
     expect(migrationScript).toContain('Test-ReparsePoint')
     expect(migrationScript).toContain('Test-KnownApplicationEntry')
+    expect(migrationScript).toContain('function Assert-NoReparsePathComponents')
+    expect(migrationScript).toContain('function Assert-NoReparsePointsInTree')
+    expect(migrationScript).toContain(
+      "Assert-NoReparsePointsInTree $directory 'Recognized application directory'"
+    )
     expect(migrationScript).toContain('Get-ValidatedJournalRecord')
     expect(migrationScript).toContain("Get-EnvironmentValue 'KUN_INSTALLER_SECONDARY_SOURCE'")
     expect(migrationScript).toContain('Invoke-RestoreJournal')

@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process'
 import {
+  copyFileSync,
   existsSync,
   mkdtempSync,
   mkdirSync,
@@ -33,9 +34,12 @@ function runHelper(input: {
   journal?: string
   resultPath?: string
   uninstallCommand?: string
+  scriptPath?: string
 }) {
   const systemRoot = process.env.SystemRoot ?? 'C:\\Windows'
   const powershell = join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+  const resultPath = input.resultPath ??
+    (input.scriptPath ? undefined : join(makeTempRoot(), 'resolver-result.txt'))
   return spawnSync(
     powershell,
     [
@@ -43,10 +47,10 @@ function runHelper(input: {
       '-ExecutionPolicy',
       'Bypass',
       '-File',
-      helperPath,
+      input.scriptPath ?? helperPath,
       '-Action',
       input.action,
-      ...(input.resultPath ? ['-ResultPath', input.resultPath] : [])
+      ...(resultPath ? ['-ResultPath', resultPath] : [])
     ],
     {
       encoding: 'utf8',
@@ -93,10 +97,11 @@ windowsOnly('Windows installer migration helper', () => {
     ['', 'D:\\Unicode 测试\\', 'D:\\Unicode 测试\\Kun']
   ])('resolves source %s and candidate %s to %s', (source, candidateOverride, expected) => {
     const candidate = candidateOverride || source
-    const result = runHelper({ action: 'ResolvePath', source, candidate })
+    const resultPath = join(makeTempRoot(), 'resolved-path.txt')
+    const result = runHelper({ action: 'ResolvePath', source, candidate, resultPath })
 
     expect(result.status, processError(result)).toBe(0)
-    expect(result.stdout).toBe(expected)
+    expect(readFileSync(resultPath, 'utf16le')).toBe(expected)
   })
 
   it('writes a recovered install source to the explicit result path', () => {
@@ -108,6 +113,26 @@ windowsOnly('Windows installer migration helper', () => {
     const result = runHelper({
       action: 'ResolveSource',
       resultPath,
+      uninstallCommand: `"${join(source, 'Uninstall Kun.exe')}" /currentuser`
+    })
+
+    expect(result.status, processError(result)).toBe(0)
+    expect(result.stdout).toBe(canonicalSource)
+    expect(readFileSync(resultPath, 'utf16le')).toBe(canonicalSource)
+  })
+
+  it('writes resolver output beside the helper without cross-process result state', () => {
+    const root = makeTempRoot()
+    const copiedHelper = join(root, 'migration.ps1')
+    const source = join(root, 'DeepSeek GUI')
+    const resultPath = join(root, 'kun-windows-installer-result.txt')
+    mkdirSync(source, { recursive: true })
+    copyFileSync(helperPath, copiedHelper)
+    const canonicalSource = realpathSync.native(source)
+
+    const result = runHelper({
+      action: 'ResolveSource',
+      scriptPath: copiedHelper,
       uninstallCommand: `"${join(source, 'Uninstall Kun.exe')}" /currentuser`
     })
 
@@ -234,6 +259,81 @@ windowsOnly('Windows installer migration helper', () => {
     expect(readFileSync(join(source, 'Kun.exe'), 'utf8')).toBe('legacy')
     expect(readFileSync(join(target, 'occupied.txt'), 'utf8')).toBe('occupied')
     expect(existsSync(journal)).toBe(false)
+  })
+
+  it('rejects recognized application directory reparse points before migration prepare', () => {
+    const root = makeTempRoot()
+    const source = join(root, 'Kun')
+    const externalResources = join(root, 'external-resources')
+    const journal = join(root, 'recovery', 'journal.json')
+    mkdirSync(source, { recursive: true })
+    mkdirSync(externalResources, { recursive: true })
+    writeFileSync(join(source, 'Kun.exe'), 'app')
+    writeFileSync(join(externalResources, 'keep.txt'), 'keep')
+    symlinkSync(externalResources, join(source, 'resources'), 'junction')
+
+    const result = runHelper({ action: 'Prepare', source, target: source, journal })
+
+    expect(result.status).not.toBe(0)
+    expect(result.stderr).toContain('Recognized application directory contains a reparse point')
+    expect(readFileSync(join(source, 'Kun.exe'), 'utf8')).toBe('app')
+    expect(readFileSync(join(externalResources, 'keep.txt'), 'utf8')).toBe('keep')
+    expect(existsSync(journal)).toBe(false)
+  })
+
+  it('rejects nested reparse points inside recognized application directories', () => {
+    const root = makeTempRoot()
+    const source = join(root, 'Kun')
+    const resources = join(source, 'resources')
+    const externalResources = join(root, 'external-nested')
+    const journal = join(root, 'recovery', 'journal.json')
+    mkdirSync(resources, { recursive: true })
+    mkdirSync(externalResources, { recursive: true })
+    writeFileSync(join(source, 'Kun.exe'), 'app')
+    writeFileSync(join(externalResources, 'keep.txt'), 'keep')
+    symlinkSync(externalResources, join(resources, 'nested-link'), 'junction')
+
+    const result = runHelper({ action: 'Prepare', source, target: source, journal })
+
+    expect(result.status).not.toBe(0)
+    expect(result.stderr).toContain('Recognized application directory contains a reparse point')
+    expect(readFileSync(join(source, 'Kun.exe'), 'utf8')).toBe('app')
+    expect(readFileSync(join(externalResources, 'keep.txt'), 'utf8')).toBe('keep')
+  })
+
+  it('rejects install roots below a reparse-point ancestor', () => {
+    const root = makeTempRoot()
+    const externalParent = join(root, 'external-parent')
+    const linkedParent = join(root, 'linked-parent')
+    const source = join(linkedParent, 'Kun')
+    const journal = join(root, 'recovery', 'journal.json')
+    mkdirSync(join(externalParent, 'Kun'), { recursive: true })
+    writeFileSync(join(externalParent, 'Kun', 'Kun.exe'), 'app')
+    symlinkSync(externalParent, linkedParent, 'junction')
+
+    const result = runHelper({ action: 'Prepare', source, target: source, journal })
+
+    expect(result.status).not.toBe(0)
+    expect(result.stderr).toContain('path contains a reparse point')
+    expect(readFileSync(join(externalParent, 'Kun', 'Kun.exe'), 'utf8')).toBe('app')
+  })
+
+  it('rejects recognized application directories that are reparse points during cleanup', () => {
+    const root = makeTempRoot()
+    const source = join(root, 'Kun')
+    const externalResources = join(root, 'external-resources')
+    const journal = join(root, 'recovery', 'journal.json')
+    mkdirSync(source, { recursive: true })
+    mkdirSync(externalResources, { recursive: true })
+    writeFileSync(join(source, 'Kun.exe'), 'app')
+    writeFileSync(join(externalResources, 'keep.txt'), 'keep')
+    symlinkSync(externalResources, join(source, 'resources'), 'junction')
+
+    const result = runHelper({ action: 'FallbackCleanup', source, target: source, journal })
+
+    expect(result.status).not.toBe(0)
+    expect(result.stderr).toContain('Recognized application directory contains a reparse point')
+    expect(readFileSync(join(externalResources, 'keep.txt'), 'utf8')).toBe('keep')
   })
 
   it('rejects protected roots and reparse-point install roots', () => {

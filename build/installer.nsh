@@ -7,6 +7,7 @@ Var /GLOBAL KunInstallerResultPath
 Var /GLOBAL KunInstallerResultHandle
 Var /GLOBAL KunInstallerJournalPath
 Var /GLOBAL KunInstallerMigrationPrepared
+Var /GLOBAL KunInstallerSnapshotMode
 Var /GLOBAL KunInstallerRestoreInteractive
 !endif
 Var /GLOBAL KunInstallerHelperPath
@@ -38,10 +39,10 @@ Var /GLOBAL KunInstallerStopResult
   File /oname=$PLUGINSDIR\kun-windows-installer-migration.ps1 "${PROJECT_DIR}\build\windows-installer-migration.ps1"
   StrCpy $KunInstallerHelperPath "$PLUGINSDIR\kun-windows-installer-migration.ps1"
   StrCpy $KunInstallerResultPath "$PLUGINSDIR\kun-windows-installer-result.txt"
-  System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_RESULT", "$KunInstallerResultPath").r0'
   System::Call 'kernel32::GetCurrentProcessId() i .r0'
   StrCpy $KunInstallerCurrentPid $0
   StrCpy $KunInstallerMigrationPrepared 0
+  StrCpy $KunInstallerSnapshotMode ""
   !ifndef BUILD_UNINSTALLER
     StrCpy $KunInstallerRestoreInteractive 0
   !endif
@@ -176,8 +177,23 @@ Var /GLOBAL KunInstallerStopResult
     System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_SECONDARY_SOURCE", "$KunInstallerSecondarySourceDir").r0'
     System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_TARGET", "$KunInstallerTargetDir").r0'
     System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_JOURNAL", "$KunInstallerJournalPath").r0'
-    System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_RESULT", "$KunInstallerResultPath").r0'
     System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_SELF_PID", "$KunInstallerCurrentPid").r0'
+  FunctionEnd
+
+  Function KunReadMigrationResult
+    ClearErrors
+    StrCpy $KunInstallerHelperOutput ""
+    FileOpen $KunInstallerResultHandle "$KunInstallerResultPath" r
+    IfErrors KunMigrationResultMissing
+    FileReadUTF16LE $KunInstallerResultHandle $KunInstallerHelperOutput
+    FileClose $KunInstallerResultHandle
+    Delete "$KunInstallerResultPath"
+    Return
+
+    KunMigrationResultMissing:
+      StrCpy $KunInstallerHelperExitCode 1
+      StrCpy $KunInstallerHelperOutput "The path resolver did not produce a result file."
+      Delete "$KunInstallerResultPath"
   FunctionEnd
 
   Function KunReadRegisteredSource
@@ -185,18 +201,24 @@ Var /GLOBAL KunInstallerStopResult
     ${if} $KunInstallerSourceDir == ""
       ReadRegStr $R9 SHELL_CONTEXT "${UNINSTALL_REGISTRY_KEY}" UninstallString
       ${if} $R9 == ""
+      ${andIf} $installMode != "all"
         ReadRegStr $R9 HKEY_CURRENT_USER "${UNINSTALL_REGISTRY_KEY}" UninstallString
       ${endif}
-      System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_SOURCE", "").r0'
-      System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_UNINSTALL_STRING", "$R9").r0'
-      System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_RESULT", "$KunInstallerResultPath").r0'
-      Delete "$KunInstallerResultPath"
-      !insertmacro kunRunMigrationHelper ResolveSource
-      ${if} $KunInstallerHelperExitCode == 0
-        FileOpen $KunInstallerResultHandle "$KunInstallerResultPath" r
-        FileReadUTF16LE $KunInstallerResultHandle $KunInstallerSourceDir
-        FileClose $KunInstallerResultHandle
+      ${if} $R9 != ""
+        System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_SOURCE", "").r0'
+        System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_UNINSTALL_STRING", "$R9").r0'
         Delete "$KunInstallerResultPath"
+        !insertmacro kunRunMigrationHelper ResolveSource
+        ${if} $KunInstallerHelperExitCode == 0
+          Call KunReadMigrationResult
+        ${endif}
+        ${if} $KunInstallerHelperExitCode != 0
+        ${orIf} $KunInstallerHelperOutput == ""
+          MessageBox MB_OK|MB_ICONSTOP "Kun found an existing uninstall registration but could not recover its installation directory.$\r$\n$KunInstallerHelperOutput" /SD IDOK
+          SetErrorLevel 2
+          Quit
+        ${endif}
+        StrCpy $KunInstallerSourceDir $KunInstallerHelperOutput
       ${endif}
     ${endif}
     StrCpy $KunInstallerPrimarySourceDir $KunInstallerSourceDir
@@ -205,16 +227,21 @@ Var /GLOBAL KunInstallerStopResult
       ReadRegStr $KunInstallerSecondarySourceDir HKEY_CURRENT_USER "${INSTALL_REGISTRY_KEY}" InstallLocation
       ${if} $KunInstallerSecondarySourceDir == ""
         ReadRegStr $R9 HKEY_CURRENT_USER "${UNINSTALL_REGISTRY_KEY}" UninstallString
-        System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_SOURCE", "").r0'
-        System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_UNINSTALL_STRING", "$R9").r0'
-        System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_RESULT", "$KunInstallerResultPath").r0'
-        Delete "$KunInstallerResultPath"
-        !insertmacro kunRunMigrationHelper ResolveSource
-        ${if} $KunInstallerHelperExitCode == 0
-          FileOpen $KunInstallerResultHandle "$KunInstallerResultPath" r
-          FileReadUTF16LE $KunInstallerResultHandle $KunInstallerSecondarySourceDir
-          FileClose $KunInstallerResultHandle
+        ${if} $R9 != ""
+          System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_SOURCE", "").r0'
+          System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_UNINSTALL_STRING", "$R9").r0'
           Delete "$KunInstallerResultPath"
+          !insertmacro kunRunMigrationHelper ResolveSource
+          ${if} $KunInstallerHelperExitCode == 0
+            Call KunReadMigrationResult
+          ${endif}
+          ${if} $KunInstallerHelperExitCode != 0
+          ${orIf} $KunInstallerHelperOutput == ""
+            MessageBox MB_OK|MB_ICONSTOP "Kun found a current-user uninstall registration but could not recover its installation directory.$\r$\n$KunInstallerHelperOutput" /SD IDOK
+            SetErrorLevel 2
+            Quit
+          ${endif}
+          StrCpy $KunInstallerSecondarySourceDir $KunInstallerHelperOutput
         ${endif}
       ${endif}
     ${endif}
@@ -226,21 +253,7 @@ Var /GLOBAL KunInstallerStopResult
     Delete "$KunInstallerResultPath"
     !insertmacro kunRunMigrationHelper ResolvePath
     ${if} $KunInstallerHelperExitCode == 0
-      ClearErrors
-      FileOpen $KunInstallerResultHandle "$KunInstallerResultPath" r
-      IfErrors KunResolveResultMissing
-      FileReadUTF16LE $KunInstallerResultHandle $KunInstallerHelperOutput
-      FileClose $KunInstallerResultHandle
-      Goto KunResolveResultReady
-
-      KunResolveResultMissing:
-        ${if} $KunInstallerHelperOutput == ""
-          StrCpy $KunInstallerHelperExitCode 1
-          StrCpy $KunInstallerHelperOutput "The path resolver did not produce a result."
-        ${endif}
-
-      KunResolveResultReady:
-        Delete "$KunInstallerResultPath"
+      Call KunReadMigrationResult
     ${endif}
     ${if} $KunInstallerHelperExitCode != 0
     ${orIf} $KunInstallerHelperOutput == ""
@@ -253,7 +266,13 @@ Var /GLOBAL KunInstallerStopResult
   FunctionEnd
 
   Function KunRefreshInstallPaths
-    Call KunReadRegisteredSource
+    # The old uninstaller removes its registration. Keep the first source snapshot
+    # for the selected mode and only refresh it if the user changes install mode.
+    ${if} $KunInstallerSnapshotMode != $installMode
+      Call KunReadRegisteredSource
+      StrCpy $KunInstallerSnapshotMode $installMode
+    ${endif}
+    StrCpy $KunInstallerSourceDir $KunInstallerPrimarySourceDir
     Call KunResolveInstallTarget
     Call KunSetMigrationEnvironment
   FunctionEnd
