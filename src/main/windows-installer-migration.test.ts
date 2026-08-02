@@ -162,6 +162,9 @@ windowsOnly('Windows installer migration helper', () => {
       'keep me'
     )
 
+    // A successful old uninstaller removes the identity executable before the
+    // installer asks the helper to clean allowlisted leftovers.
+    rmSync(join(source, 'Kun.exe'))
     const cleaned = runHelper({ action: 'FallbackCleanup', source, target, journal })
     expect(cleaned.status, processError(cleaned)).toBe(0)
     expect(existsSync(join(source, 'Kun.exe'))).toBe(false)
@@ -245,6 +248,27 @@ windowsOnly('Windows installer migration helper', () => {
     expect(result.stderr).toContain('outside the current user profile')
     expect(readFileSync(join(secondary, 'resources', 'keep.txt'), 'utf8')).toBe('keep')
     expect(existsSync(journal)).toBe(false)
+  })
+
+  it('rejects fallback cleanup when the source does not match its preservation journal', () => {
+    const root = makeTempRoot()
+    const source = join(root, 'DeepSeek GUI')
+    const other = join(root, 'Other Electron App')
+    const target = join(root, 'Kun')
+    const journal = join(root, 'recovery', 'journal.json')
+    mkdirSync(source, { recursive: true })
+    mkdirSync(join(other, 'resources'), { recursive: true })
+    writeFileSync(join(source, 'Kun.exe'), 'app')
+    writeFileSync(join(source, 'notes.txt'), 'keep')
+    writeFileSync(join(other, 'resources', 'keep.txt'), 'keep')
+
+    const prepared = runHelper({ action: 'Prepare', source, target, journal })
+    expect(prepared.status, processError(prepared)).toBe(0)
+    const result = runHelper({ action: 'FallbackCleanup', source: other, target, journal })
+
+    expect(result.status).not.toBe(0)
+    expect(result.stderr).toContain('does not match the preservation journal')
+    expect(readFileSync(join(other, 'resources', 'keep.txt'), 'utf8')).toBe('keep')
   })
 
   it('rejects fallback cleanup without an application identity executable', () => {

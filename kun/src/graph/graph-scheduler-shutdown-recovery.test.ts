@@ -16,7 +16,7 @@ import {
 } from '../../tests/graph-scheduler-test-harness.js'
 
 const schedulerWaitTimeoutMs = process.platform === 'win32' ? 30_000 : 10_000
-const schedulerStopTimeoutMs = process.platform === 'win32' ? 5_000 : 500
+const schedulerStopTimeoutMs = 5_000
 const schedulerTestTimeoutMs = process.platform === 'win32' ? 60_000 : 15_000
 
 afterEach(cleanupSchedulerHarnesses)

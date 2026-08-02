@@ -70,7 +70,7 @@ test('requires one exact non-symlink final Linux x64 AppImage artifact', (t) => 
   assert.throws(() => resolveSingleLinuxAppImage(dist), /found 2/)
 })
 
-test('builds FUSE-free validation and direct-AppImage desktop invocations', () => {
+test('builds FUSE-free validation and verified-AppRun desktop invocations', () => {
   const extraction = createAppImageExtractionInvocation({
     appImage: '/release/Kun-1.2.3-linux-x86_64.AppImage',
     extractionDirectory: '/tmp/kun-appimage-extract',
@@ -96,6 +96,8 @@ test('builds FUSE-free validation and direct-AppImage desktop invocations', () =
 
   const smoke = createAppImageSmokeInvocation({
     appImage: '/release/Kun-1.2.3-linux-x86_64.AppImage',
+    appRoot: '/tmp/kun-appimage-extract/squashfs-root',
+    appRun: '/tmp/kun-appimage-extract/squashfs-root/AppRun',
     resourcesDir: '/tmp/kun-appimage-extract/squashfs-root/resources',
     desktopSmokePath: '/repo/scripts/smoke-packaged-extension-desktop.cjs',
     environment: { ELECTRON_RUN_AS_NODE: '1' }
@@ -106,19 +108,19 @@ test('builds FUSE-free validation and direct-AppImage desktop invocations', () =
     '--resources',
     resolve('/tmp/kun-appimage-extract/squashfs-root/resources'),
     '--desktop-executable',
-    resolve('/release/Kun-1.2.3-linux-x86_64.AppImage')
+    resolve('/tmp/kun-appimage-extract/squashfs-root/AppRun')
   ])
   assert.equal(smoke.options.shell, false)
   assert.equal(smoke.options.timeout, undefined)
   assert.equal(smoke.options.killSignal, undefined)
   assert.equal(smoke.options.env.ELECTRON_RUN_AS_NODE, undefined)
-  assert.equal(smoke.options.env.APPIMAGE_EXTRACT_AND_RUN, '1')
-  assert.equal(smoke.options.env.APPDIR, undefined)
-  assert.equal(smoke.options.env.APPIMAGE, undefined)
+  assert.equal(smoke.options.env.APPIMAGE_EXTRACT_AND_RUN, undefined)
+  assert.equal(smoke.options.env.APPDIR, resolve('/tmp/kun-appimage-extract/squashfs-root'))
+  assert.equal(smoke.options.env.APPIMAGE, resolve('/release/Kun-1.2.3-linux-x86_64.AppImage'))
   assert.ok(!smoke.args.some((argument) => argument.endsWith('app.asar')))
 })
 
-test('extracts and validates before launching the final AppImage itself', {
+test('extracts and validates before launching the verified AppRun', {
   skip: process.platform === 'win32' && 'requires POSIX executable modes'
 }, (t) => {
   assert.doesNotThrow(() => assertLinuxX64('linux', 'x64'))
@@ -154,13 +156,13 @@ test('extracts and validates before launching the final AppImage itself', {
     '--resources',
     join(extractedRoot, 'resources'),
     '--desktop-executable',
-    appImage
+    join(extractedRoot, 'AppRun')
   ])
   assert.ok(!desktopInvocation.args.some((argument) => argument.endsWith('app.asar')))
   assert.equal(desktopInvocation.options.shell, false)
-  assert.equal(desktopInvocation.options.env.APPIMAGE_EXTRACT_AND_RUN, '1')
-  assert.equal(desktopInvocation.options.env.APPDIR, undefined)
-  assert.equal(desktopInvocation.options.env.APPIMAGE, undefined)
+  assert.equal(desktopInvocation.options.env.APPIMAGE_EXTRACT_AND_RUN, undefined)
+  assert.equal(desktopInvocation.options.env.APPDIR, extractedRoot)
+  assert.equal(desktopInvocation.options.env.APPIMAGE, appImage)
   assert.equal(statSync(appImage).mode & 0o111, 0o111)
 })
 

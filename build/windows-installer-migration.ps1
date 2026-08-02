@@ -644,13 +644,32 @@ function Invoke-Prepare {
   }
 }
 
+function Assert-FallbackCleanupSource([string]$Source) {
+  $journal = Read-Journal
+  if ($null -ne $journal) {
+    $matchesJournal = Get-JournalRecords $journal | Where-Object {
+      Test-PathEqual ([string]$_.Source) $Source
+    }
+    if ($matchesJournal) {
+      return
+    }
+    throw "The cleanup source does not match the preservation journal: $Source"
+  }
+
+  $target = Normalize-FullPath (Get-EnvironmentValue 'KUN_INSTALLER_TARGET')
+  if (-not (Test-PathEqual $Source $target)) {
+    throw "The cleanup source has no preservation journal and does not match the install target: $Source"
+  }
+  Assert-ApplicationSourceIdentity $Source
+}
+
 function Invoke-FallbackCleanup {
   $source = Normalize-FullPath (Get-EnvironmentValue 'KUN_INSTALLER_SOURCE')
   if ([string]::IsNullOrWhiteSpace($source) -or -not (Test-Path -LiteralPath $source -PathType Container)) {
     return
   }
   Assert-SafeInstallRoot $source 'Source'
-  Assert-ApplicationSourceIdentity $source
+  Assert-FallbackCleanupSource $source
 
   $knownEntries = @(Get-ChildItem -LiteralPath $source -Force | Where-Object {
     Test-KnownApplicationEntry $_

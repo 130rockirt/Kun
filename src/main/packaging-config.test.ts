@@ -534,6 +534,8 @@ describe('electron-builder Kun packaging', () => {
     expect(migrationScript).toContain('Test-KnownApplicationEntry')
     expect(migrationScript).toContain('function Assert-NoReparsePathComponents')
     expect(migrationScript).toContain('function Assert-ApplicationSourceIdentity')
+    expect(migrationScript).toContain('function Assert-FallbackCleanupSource')
+    expect(migrationScript).toContain('The cleanup source does not match the preservation journal')
     expect(migrationScript).toContain('function Assert-TrustedSecondarySource')
     expect(migrationScript).toContain('function Assert-NoReparsePointsInTree')
     expect(migrationScript).toContain(
