@@ -342,6 +342,8 @@ export class DelegationRuntime {
   private readonly detachedAborts = new Map<string, AbortController>()
   /** Parent thread for each live detached child, used by thread deletion. */
   private readonly detachedParentThreads = new Map<string, string>()
+  /** Completion of each detached execution, including persistence and parent notification. */
+  private readonly detachedSettlements = new Map<string, Promise<void>>()
   /**
    * Foreground children are executed through an independently-owned signal
    * that is linked to the parent until the user presses Ctrl+B. Keeping this
@@ -623,7 +625,7 @@ export class DelegationRuntime {
       const state: ChildExecutionState = { record, commits: Promise.resolve() }
       // Surface ChildRunExecutor's resolved fields via the closure shared with
       // the synchronous path. The same executor block runs inside executeChild.
-      void this.executeChild({
+      const completion = this.executeChild({
         state,
         queuedAt,
         profileName,
@@ -661,8 +663,10 @@ export class DelegationRuntime {
           input.signal.removeEventListener('abort', logIgnoredParentAbort)
           this.detachedAborts.delete(record.id)
           this.detachedParentThreads.delete(record.id)
+          this.detachedSettlements.delete(record.id)
           console.warn(`[kun] detached subagent finished background tracking child=${record.id}`)
         })
+      this.detachedSettlements.set(record.id, completion)
       return record
     }
 
@@ -727,13 +731,15 @@ export class DelegationRuntime {
     // continues under the detached controller and reports back on completion.
     control.unlinkParent()
     this.foregroundChildren.delete(record.id)
-    void execution
+    const completion = execution
       .then((settled) => this.notifyDetachedChild(settled))
       .catch(() => undefined)
       .finally(() => {
         this.detachedAborts.delete(record.id)
         this.detachedParentThreads.delete(record.id)
+        this.detachedSettlements.delete(record.id)
       })
+    this.detachedSettlements.set(record.id, completion)
     return state.record
   }
 
@@ -954,13 +960,17 @@ export class DelegationRuntime {
    * children already inherit the parent turn signal; detached children do not,
    * so deletion must cancel their independent controllers explicitly.
    */
-  abortDetachedChildrenForThread(parentThreadId: string): number {
+  async abortDetachedChildrenForThread(parentThreadId: string): Promise<number> {
+    const settlements: Promise<void>[] = []
     let aborted = 0
     for (const [childId, controller] of this.detachedAborts) {
       if (this.detachedParentThreads.get(childId) !== parentThreadId) continue
+      const settlement = this.detachedSettlements.get(childId)
+      if (settlement) settlements.push(settlement)
       controller.abort()
       aborted += 1
     }
+    await Promise.allSettled(settlements)
     return aborted
   }
 

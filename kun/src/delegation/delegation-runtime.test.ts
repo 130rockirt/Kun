@@ -106,9 +106,9 @@ describe('DelegationRuntime abort handling', () => {
       })
 
       await waitFor(() => childSignal !== undefined)
-      expect(runtime.abortDetachedChildrenForThread('thr_other')).toBe(0)
-      expect(runtime.abortDetachedChildrenForThread('thr_delete')).toBe(1)
-      await waitFor(() => childSignal?.aborted === true)
+      expect(await runtime.abortDetachedChildrenForThread('thr_other')).toBe(0)
+      expect(await runtime.abortDetachedChildrenForThread('thr_delete')).toBe(1)
+      expect(childSignal?.aborted).toBe(true)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

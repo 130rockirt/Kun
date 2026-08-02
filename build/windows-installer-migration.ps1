@@ -417,11 +417,30 @@ function Stop-InstallRootProcesses {
   Stop-AppProcesses @($root)
 }
 
+function Assert-ApplicationSourceIdentity([string]$Source) {
+  $identityFiles = @('Kun.exe', 'DeepSeek GUI.exe')
+  if (-not ($identityFiles | Where-Object {
+    Test-Path -LiteralPath (Join-Path $Source $_) -PathType Leaf
+  })) {
+    throw "The registered source has no application identity executable: $Source"
+  }
+}
+
+function Assert-TrustedSecondarySource([string]$Source) {
+  $profile = Normalize-FullPath $env:USERPROFILE
+  if ([string]::IsNullOrWhiteSpace($profile) -or -not (Test-PathWithin $Source $profile) -or
+      (Test-PathEqual $Source $profile)) {
+    throw "The current-user installation source is outside the current user profile: $Source"
+  }
+}
+
 function Get-InstallSources {
-  $sources = @(
-    (Get-EnvironmentValue 'KUN_INSTALLER_SOURCE'),
-    (Get-EnvironmentValue 'KUN_INSTALLER_SECONDARY_SOURCE')
-  )
+  $primary = Normalize-FullPath (Get-EnvironmentValue 'KUN_INSTALLER_SOURCE')
+  $secondary = Normalize-FullPath (Get-EnvironmentValue 'KUN_INSTALLER_SECONDARY_SOURCE')
+  if (-not [string]::IsNullOrWhiteSpace($secondary)) {
+    Assert-TrustedSecondarySource $secondary
+  }
+  $sources = @($primary, $secondary)
   $normalizedSources = @()
   foreach ($sourceValue in $sources) {
     $source = Normalize-FullPath $sourceValue
@@ -565,6 +584,7 @@ function Invoke-Prepare {
     if (-not (Test-Path -LiteralPath $source -PathType Container)) {
       continue
     }
+    Assert-ApplicationSourceIdentity $source
     $entries = @(Get-ChildItem -LiteralPath $source -Force)
     if ($entries.Count -eq 0) {
       continue
@@ -630,6 +650,7 @@ function Invoke-FallbackCleanup {
     return
   }
   Assert-SafeInstallRoot $source 'Source'
+  Assert-ApplicationSourceIdentity $source
 
   $knownEntries = @(Get-ChildItem -LiteralPath $source -Force | Where-Object {
     Test-KnownApplicationEntry $_

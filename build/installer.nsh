@@ -56,12 +56,6 @@ Var /GLOBAL KunInstallerStopResult
   ${endif}
 
   Call KunRefreshInstallPaths
-  !insertmacro kunRunMigrationHelper Recover
-  ${if} $KunInstallerHelperExitCode != 0
-    MessageBox MB_OK|MB_ICONSTOP "Kun could not recover files preserved by an interrupted installation.$\r$\n$KunInstallerHelperOutput" /SD IDOK
-    SetErrorLevel 2
-    Quit
-  ${endif}
 
   ${if} ${UAC_IsInnerInstance}
   ${andIf} ${Silent}

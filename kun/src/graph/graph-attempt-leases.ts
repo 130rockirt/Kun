@@ -56,7 +56,22 @@ export class GraphAttemptLeaseManager {
       this.stop(attemptId)
       return 'applied'
     }
-    if (lease && !await this.options.writes.isActive(lease.leaseId)) return 'conflict'
+    if (lease && !await this.options.writes.isActive(lease.leaseId)) {
+      const latestState = await this.options.writes.list()
+      const latestLease = latestState.leases.find((entry) => entry.attemptId === attemptId)
+      const alreadyAccepted = latestLease?.state === 'released' &&
+        (
+          latestLease.releaseDisposition === 'accepted' ||
+          latestState.worktrees.some((entry) =>
+            entry.attemptId === attemptId &&
+            (entry.state === 'accepted' || entry.state === 'cleaned'))
+        )
+      if (alreadyAccepted) {
+        this.stop(attemptId)
+        return 'applied'
+      }
+      return 'conflict'
+    }
     let worktree
     try {
       worktree = await this.options.writes.captureWorktree(attemptId)

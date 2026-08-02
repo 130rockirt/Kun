@@ -35,6 +35,7 @@ function runHelper(input: {
   resultPath?: string
   uninstallCommand?: string
   scriptPath?: string
+  userProfile?: string
 }) {
   const systemRoot = process.env.SystemRoot ?? 'C:\\Windows'
   const powershell = join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
@@ -56,6 +57,7 @@ function runHelper(input: {
       encoding: 'utf8',
       env: {
         ...process.env,
+        ...(input.userProfile ? { USERPROFILE: input.userProfile } : {}),
         KUN_INSTALLER_SOURCE: input.source ?? '',
         KUN_INSTALLER_SECONDARY_SOURCE: input.secondary ?? '',
         KUN_INSTALLER_CANDIDATE: input.candidate ?? '',
@@ -207,16 +209,56 @@ windowsOnly('Windows installer migration helper', () => {
       source,
       target: source,
       journal,
-      secondary
+      secondary,
+      userProfile: root
     })
     expect(result.status, processError(result)).toBe(0)
     expect(existsSync(join(source, 'personal.txt'))).toBe(false)
     expect(existsSync(join(secondary, 'personal.txt'))).toBe(false)
 
-    const restored = runHelper({ action: 'Restore', source, target: source, journal, secondary })
+    const restored = runHelper({
+      action: 'Restore', source, target: source, journal, secondary, userProfile: root
+    })
     expect(restored.status, processError(restored)).toBe(0)
     expect(readFileSync(join(source, 'personal.txt'), 'utf8')).toBe(source)
     expect(readFileSync(join(secondary, 'personal.txt'), 'utf8')).toBe(secondary)
+  })
+
+  it('rejects a current-user secondary source outside the current user profile', () => {
+    const root = makeTempRoot()
+    const userProfile = join(root, 'profile')
+    const source = join(root, 'Machine Kun')
+    const secondary = join(root, 'other-app')
+    const journal = join(root, 'recovery', 'journal.json')
+    mkdirSync(userProfile, { recursive: true })
+    for (const directory of [source, secondary]) {
+      mkdirSync(join(directory, 'resources'), { recursive: true })
+      writeFileSync(join(directory, 'Kun.exe'), 'app')
+      writeFileSync(join(directory, 'resources', 'keep.txt'), 'keep')
+    }
+
+    const result = runHelper({
+      action: 'Prepare', source, target: source, journal, secondary, userProfile
+    })
+
+    expect(result.status).not.toBe(0)
+    expect(result.stderr).toContain('outside the current user profile')
+    expect(readFileSync(join(secondary, 'resources', 'keep.txt'), 'utf8')).toBe('keep')
+    expect(existsSync(journal)).toBe(false)
+  })
+
+  it('rejects fallback cleanup without an application identity executable', () => {
+    const root = makeTempRoot()
+    const source = join(root, 'Other Electron App')
+    const journal = join(root, 'recovery', 'journal.json')
+    mkdirSync(join(source, 'resources'), { recursive: true })
+    writeFileSync(join(source, 'resources', 'keep.txt'), 'keep')
+
+    const result = runHelper({ action: 'FallbackCleanup', source, target: source, journal })
+
+    expect(result.status).not.toBe(0)
+    expect(result.stderr).toContain('no application identity executable')
+    expect(readFileSync(join(source, 'resources', 'keep.txt'), 'utf8')).toBe('keep')
   })
 
   it('retains the recovery directory and journal when restoration would overwrite a file', () => {

@@ -498,6 +498,7 @@ describe('electron-builder Kun packaging', () => {
     expect(installerScript).toContain('${if} $KunInstallerSnapshotMode != $installMode')
     expect(installerScript).toContain('${andIf} $installMode != "all"')
     expect(installerScript).not.toContain('KUN_INSTALLER_RESULT')
+    expect(installerScript).not.toContain('!insertmacro kunRunMigrationHelper Recover')
     expect(installerScript).toContain('Function KunInstallDirectoryPagePre')
     expect(installerScript).toContain('Function KunInstallDirectoryPageLeave')
     expect(installerScript).toContain('Function KunInstallFilesPagePre')
@@ -532,6 +533,8 @@ describe('electron-builder Kun packaging', () => {
     expect(migrationScript).toContain('Test-ReparsePoint')
     expect(migrationScript).toContain('Test-KnownApplicationEntry')
     expect(migrationScript).toContain('function Assert-NoReparsePathComponents')
+    expect(migrationScript).toContain('function Assert-ApplicationSourceIdentity')
+    expect(migrationScript).toContain('function Assert-TrustedSecondarySource')
     expect(migrationScript).toContain('function Assert-NoReparsePointsInTree')
     expect(migrationScript).toContain(
       "Assert-NoReparsePointsInTree $directory 'Recognized application directory'"
