@@ -189,6 +189,7 @@ Var /GLOBAL KunInstallerStopResult
       ${endif}
       System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_SOURCE", "").r0'
       System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_UNINSTALL_STRING", "$R9").r0'
+      System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_RESULT", "$KunInstallerResultPath").r0'
       Delete "$KunInstallerResultPath"
       !insertmacro kunRunMigrationHelper ResolveSource
       ${if} $KunInstallerHelperExitCode == 0
@@ -206,6 +207,7 @@ Var /GLOBAL KunInstallerStopResult
         ReadRegStr $R9 HKEY_CURRENT_USER "${UNINSTALL_REGISTRY_KEY}" UninstallString
         System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_SOURCE", "").r0'
         System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_UNINSTALL_STRING", "$R9").r0'
+        System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_RESULT", "$KunInstallerResultPath").r0'
         Delete "$KunInstallerResultPath"
         !insertmacro kunRunMigrationHelper ResolveSource
         ${if} $KunInstallerHelperExitCode == 0
