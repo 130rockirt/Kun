@@ -127,3 +127,18 @@ during a current-user to all-users migration.
   desktop/start-menu shortcuts SHALL be removed
 - **AND** registration cleanup SHALL occur only after fail-closed payload cleanup
   succeeds
+
+### Requirement: Supervision liveness validation tolerates native runner load
+
+The deterministic Graph supervision-liveness fixture SHALL retain its bounded
+state checks while allowing the complete multi-checkpoint scenario the existing
+60-second Vitest test budget.
+
+#### Scenario: A loaded native runner completes deterministic supervision
+
+- **WHEN** the fixture redelivers two parked prose-only Lead episodes and
+  completes the reviewed run
+- **THEN** each scheduler-state wait SHALL remain bounded at 10 seconds
+- **AND** the test-level timeout SHALL be 60 seconds
+- **AND** the Lead episode, worker start, accepted node, and resolved obligation
+  assertions SHALL remain unchanged

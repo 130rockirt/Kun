@@ -81,6 +81,11 @@ loaded Ubuntu runners.
   install/uninstall keys after that cleanup succeeds. No dynamic or parent
   registry path is deleted, and the shell context is restored to all-users
   before the new installation continues.
+- The supervision-liveness fixture drives four independently bounded scheduler
+  checkpoints. Its former 20-second outer timeout could expire first on a busy
+  Windows runner even though no checkpoint had demonstrated a deadlock. The
+  fixture now uses the repository's existing 60-second Vitest ceiling; every
+  10-second checkpoint and all liveness assertions remain unchanged.
 
 ## Risks / Trade-offs
 

@@ -29,6 +29,9 @@ but the test reports a timeout and blocks all Linux packaging and release gates.
   validated current-user to all-users transition succeeds.
 - Remove the retired current-user Kun/legacy shortcuts while preserving the
   new all-users shortcut scope.
+- Allow the deterministic supervision-liveness fixture its full configured
+  Vitest budget on slower native Windows runners while retaining its bounded
+  state waits and liveness assertions.
 - Record the Linux Graph CI validation contract in a standalone OpenSpec
   capability.
 - Do not change GraphScheduler production behavior, public APIs,
