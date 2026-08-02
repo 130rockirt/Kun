@@ -93,3 +93,17 @@ registered uninstaller path inside NSIS before resolving the canonical target.
 - **THEN** NSIS SHALL recover that directory with its native quoted-path parser
 - **AND** target resolution SHALL receive the non-empty recovered source without
   depending on a child-process result file
+
+### Requirement: Windows preservation validation tolerates native process startup
+
+The Windows migration test SHALL allow up to 15 seconds for its three
+synchronous PowerShell helper processes to prepare, clean, and restore preserved
+content on a native runner.
+
+#### Scenario: Native helper startup exceeds the default unit-test budget
+
+- **WHEN** the preservation round trip is correct but three native PowerShell
+  startups take longer than the default 5-second unit-test timeout
+- **THEN** the test SHALL continue for no more than 15 seconds
+- **AND** all preparation, cleanup, restoration, and journal assertions SHALL
+  remain unchanged

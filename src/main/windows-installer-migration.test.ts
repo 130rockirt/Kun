@@ -173,7 +173,7 @@ windowsOnly('Windows installer migration helper', () => {
     expect(restored.status, processError(restored)).toBe(0)
     expect(readFileSync(join(source, 'notes.txt'), 'utf8')).toBe('keep me')
     expect(existsSync(journal)).toBe(false)
-  })
+  }, 15_000)
 
   it('authorizes fallback cleanup for a validated source without unknown content', () => {
     const root = makeTempRoot()

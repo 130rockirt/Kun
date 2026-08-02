@@ -23,6 +23,8 @@ but the test reports a timeout and blocks all Linux packaging and release gates.
 - Recover quoted registered uninstaller paths with the same native NSIS
   `GetInQuotes`/`GetFileParent` path used by electron-builder, avoiding an empty
   cross-process `ResolveSource` result.
+- Give the three-process Windows preservation round-trip test a 15-second native
+  startup budget while retaining all migration safety assertions.
 - Record the Linux Graph CI validation contract in a standalone OpenSpec
   capability.
 - Do not change GraphScheduler production behavior, public APIs,

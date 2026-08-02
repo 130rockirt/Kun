@@ -66,6 +66,11 @@ loaded Ubuntu runners.
   round trip that returned an empty source even though `ResolveSource` exited
   successfully. PowerShell still normalizes the resulting source and enforces
   all target, identity, payload, journal, and reparse-point checks.
+- **Budget the full Windows preservation round trip explicitly.** The focused
+  test synchronously starts PowerShell for `Prepare`, `FallbackCleanup`, and
+  `Restore`. Native runner startup can put the correct round trip just beyond
+  Vitest's 5-second default, so that one test receives a 15-second ceiling while
+  keeping every behavioral assertion intact.
 
 ## Risks / Trade-offs
 

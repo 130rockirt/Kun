@@ -6,6 +6,7 @@
 - [x] 1.4 Record every validated Windows installation source before old-uninstaller cleanup and cover the no-unknown-content path.
 - [x] 1.5 Add opt-in helper diagnostics so the native Windows smoke reports the exact silent installer failure.
 - [x] 1.6 Recover the registered source natively in NSIS and remove the failing `ResolveSource` child-process round trip.
+- [x] 1.7 Allow the Windows preservation round-trip test 15 seconds for its three native PowerShell helper processes.
 
 ## 2. Local verification
 
