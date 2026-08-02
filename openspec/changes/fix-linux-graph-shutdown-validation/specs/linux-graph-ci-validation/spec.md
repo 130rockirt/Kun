@@ -110,3 +110,18 @@ content on a native runner.
 - **THEN** the test SHALL continue for no more than 15 seconds
 - **AND** all preparation, cleanup, restoration, and journal assertions SHALL
   remain unchanged
+
+### Requirement: Windows scope migration retires the old registration
+
+The Windows installer SHALL remove the fixed Kun current-user install and
+uninstall registration keys after validated cleanup succeeds during a
+current-user to all-users migration.
+
+#### Scenario: Current-user installation is migrated for all users
+
+- **WHEN** an all-users install successfully retires the validated current-user
+  application payload
+- **THEN** the exact Kun `INSTALL_REGISTRY_KEY` and `UNINSTALL_REGISTRY_KEY`
+  entries under `HKEY_CURRENT_USER` SHALL be removed
+- **AND** registration cleanup SHALL occur only after fail-closed payload cleanup
+  succeeds

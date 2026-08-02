@@ -125,6 +125,12 @@ Var /GLOBAL KunInstallerStopResult
 !macro customUnInstallCheckCurrentUser
   StrCpy $KunInstallerSourceDir $KunInstallerSecondarySourceDir
   Call KunHandleOldUninstallerResult
+  # installSection invokes this callback only while an all-users install is
+  # retiring an existing current-user registration. The old uninstaller usually
+  # removes these fixed Kun keys itself; fallback cleanup must finish the same
+  # scoped transition after the validated application payload is gone.
+  DeleteRegKey HKEY_CURRENT_USER "${UNINSTALL_REGISTRY_KEY}"
+  DeleteRegKey HKEY_CURRENT_USER "${INSTALL_REGISTRY_KEY}"
   StrCpy $KunInstallerSourceDir $KunInstallerPrimarySourceDir
   Call KunRestoreInteractiveInstaller
 !macroend

@@ -516,6 +516,12 @@ describe('electron-builder Kun packaging', () => {
     expect(installerScript).toContain('customCheckAppRunning')
     expect(installerScript).toContain('customUnInstallCheck')
     expect(installerScript).toContain('customUnInstallCheckCurrentUser')
+    expect(installerScript).toContain(
+      'DeleteRegKey HKEY_CURRENT_USER "${UNINSTALL_REGISTRY_KEY}"'
+    )
+    expect(installerScript).toContain(
+      'DeleteRegKey HKEY_CURRENT_USER "${INSTALL_REGISTRY_KEY}"'
+    )
     expect(installerScript).toContain('KunHandleOldUninstallerResult')
     expect(installerScript).toContain('FallbackCleanup')
     expect(installerScript).toContain('Restore')

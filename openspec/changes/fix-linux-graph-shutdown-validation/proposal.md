@@ -25,6 +25,8 @@ but the test reports a timeout and blocks all Linux packaging and release gates.
   include and an empty cross-process `ResolveSource` result.
 - Give the three-process Windows preservation round-trip test a 15-second native
   startup budget while retaining all migration safety assertions.
+- Remove only the fixed Kun HKCU install/uninstall registrations after a
+  validated current-user to all-users transition succeeds.
 - Record the Linux Graph CI validation contract in a standalone OpenSpec
   capability.
 - Do not change GraphScheduler production behavior, public APIs,

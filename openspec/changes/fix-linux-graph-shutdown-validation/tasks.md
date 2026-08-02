@@ -8,6 +8,7 @@
 - [x] 1.6 Recover the registered source natively in NSIS and remove the failing `ResolveSource` child-process round trip.
 - [x] 1.7 Allow the Windows preservation round-trip test 15 seconds for its three native PowerShell helper processes.
 - [x] 1.8 Make quoted uninstall-source parsing self-contained during NSIS `customHeader` expansion.
+- [x] 1.9 Retire the fixed Kun HKCU registration after validated current-user to all-users cleanup.
 
 ## 2. Local verification
 

@@ -72,6 +72,12 @@ loaded Ubuntu runners.
   `Restore`. Native runner startup can put the correct round trip just beyond
   Vitest's 5-second default, so that one test receives a 15-second ceiling while
   keeping every behavioral assertion intact.
+- **Finish the cross-scope registration transition in the custom callback.**
+  electron-builder invokes `customUnInstallCheckCurrentUser` only when an
+  all-users install retires a current-user copy. Because Kun's callback replaces
+  the default result handler to support validated fallback cleanup, it also
+  removes the exact Kun HKCU install/uninstall keys after that cleanup succeeds.
+  No dynamic or parent registry path is deleted.
 
 ## Risks / Trade-offs
 
