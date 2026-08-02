@@ -80,3 +80,16 @@ them when an installer exits with an unexpected code.
 - **THEN** the smoke log SHALL identify the failed action and its caught error
 - **AND** normal installer runs without the diagnostic environment variable
   SHALL not create that log
+
+### Requirement: Windows registered source recovery is process-local
+
+The Windows installer SHALL recover the parent directory from its quoted
+registered uninstaller path inside NSIS before resolving the canonical target.
+
+#### Scenario: InstallLocation is empty but UninstallString is valid
+
+- **WHEN** a current-user registration has an empty `InstallLocation` and a
+  quoted `UninstallString` under the legacy installation directory
+- **THEN** NSIS SHALL recover that directory with its native quoted-path parser
+- **AND** target resolution SHALL receive the non-empty recovered source without
+  depending on a child-process result file

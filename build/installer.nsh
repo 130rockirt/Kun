@@ -190,6 +190,21 @@ Var /GLOBAL KunInstallerStopResult
       Delete "$KunInstallerResultPath"
   FunctionEnd
 
+  Function KunRecoverSourceFromUninstallString
+    StrCpy $KunInstallerSourceDir ""
+    !insertmacro GetInQuotes $KunInstallerSourceDir "$R9"
+    ${if} $KunInstallerSourceDir != ""
+      Push $KunInstallerSourceDir
+      Call GetFileParent
+      Pop $KunInstallerSourceDir
+    ${endif}
+    ${if} $KunInstallerSourceDir == ""
+      MessageBox MB_OK|MB_ICONSTOP "Kun found an existing uninstall registration but could not recover its installation directory." /SD IDOK
+      SetErrorLevel 2
+      Quit
+    ${endif}
+  FunctionEnd
+
   Function KunReadRegisteredSource
     ReadRegStr $KunInstallerSourceDir SHELL_CONTEXT "${INSTALL_REGISTRY_KEY}" InstallLocation
     ${if} $KunInstallerSourceDir == ""
@@ -199,20 +214,7 @@ Var /GLOBAL KunInstallerStopResult
         ReadRegStr $R9 HKEY_CURRENT_USER "${UNINSTALL_REGISTRY_KEY}" UninstallString
       ${endif}
       ${if} $R9 != ""
-        System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_SOURCE", "").r0'
-        System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_UNINSTALL_STRING", "$R9").r0'
-        Delete "$KunInstallerResultPath"
-        !insertmacro kunRunMigrationHelper ResolveSource
-        ${if} $KunInstallerHelperExitCode == 0
-          Call KunReadMigrationResult
-        ${endif}
-        ${if} $KunInstallerHelperExitCode != 0
-        ${orIf} $KunInstallerHelperOutput == ""
-          MessageBox MB_OK|MB_ICONSTOP "Kun found an existing uninstall registration but could not recover its installation directory.$\r$\n$KunInstallerHelperOutput" /SD IDOK
-          SetErrorLevel 2
-          Quit
-        ${endif}
-        StrCpy $KunInstallerSourceDir $KunInstallerHelperOutput
+        Call KunRecoverSourceFromUninstallString
       ${endif}
     ${endif}
     StrCpy $KunInstallerPrimarySourceDir $KunInstallerSourceDir
@@ -222,20 +224,8 @@ Var /GLOBAL KunInstallerStopResult
       ${if} $KunInstallerSecondarySourceDir == ""
         ReadRegStr $R9 HKEY_CURRENT_USER "${UNINSTALL_REGISTRY_KEY}" UninstallString
         ${if} $R9 != ""
-          System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_SOURCE", "").r0'
-          System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_UNINSTALL_STRING", "$R9").r0'
-          Delete "$KunInstallerResultPath"
-          !insertmacro kunRunMigrationHelper ResolveSource
-          ${if} $KunInstallerHelperExitCode == 0
-            Call KunReadMigrationResult
-          ${endif}
-          ${if} $KunInstallerHelperExitCode != 0
-          ${orIf} $KunInstallerHelperOutput == ""
-            MessageBox MB_OK|MB_ICONSTOP "Kun found a current-user uninstall registration but could not recover its installation directory.$\r$\n$KunInstallerHelperOutput" /SD IDOK
-            SetErrorLevel 2
-            Quit
-          ${endif}
-          StrCpy $KunInstallerSecondarySourceDir $KunInstallerHelperOutput
+          Call KunRecoverSourceFromUninstallString
+          StrCpy $KunInstallerSecondarySourceDir $KunInstallerSourceDir
         ${endif}
       ${endif}
     ${endif}

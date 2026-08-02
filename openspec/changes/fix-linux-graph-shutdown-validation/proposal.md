@@ -20,6 +20,9 @@ but the test reports a timeout and blocks all Linux packaging and release gates.
 - Surface opt-in Windows helper action/error diagnostics when the native smoke
   observes an unexpected installer exit, without changing normal installer
   output or behavior.
+- Recover quoted registered uninstaller paths with the same native NSIS
+  `GetInQuotes`/`GetFileParent` path used by electron-builder, avoiding an empty
+  cross-process `ResolveSource` result.
 - Record the Linux Graph CI validation contract in a standalone OpenSpec
   capability.
 - Do not change GraphScheduler production behavior, public APIs,

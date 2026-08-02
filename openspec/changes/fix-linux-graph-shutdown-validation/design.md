@@ -59,6 +59,13 @@ loaded Ubuntu runners.
   supplied through `KUN_INSTALLER_DIAGNOSTIC_PATH`. The Windows smoke sets that
   path inside its disposable root and prints it only after an unexpected exit;
   diagnostic write failures are ignored so production behavior is unchanged.
+- **Recover registered sources natively in NSIS.** electron-builder already
+  parses its quoted `UninstallString` with `GetInQuotes` and `GetFileParent`
+  before launching the old uninstaller. The migration snapshot now uses the
+  same functions, avoiding the environment-variable and UTF-16 result-file
+  round trip that returned an empty source even though `ResolveSource` exited
+  successfully. PowerShell still normalizes the resulting source and enforces
+  all target, identity, payload, journal, and reparse-point checks.
 
 ## Risks / Trade-offs
 
