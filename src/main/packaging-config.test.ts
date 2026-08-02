@@ -495,11 +495,13 @@ describe('electron-builder Kun packaging', () => {
     )
     expect(installerScript).toContain('Function KunReadMigrationResult')
     expect(installerScript).toContain('IfErrors KunMigrationResultMissing')
+    expect(installerScript).toContain('Function KunGetInQuotes')
+    expect(installerScript).toContain('Function KunGetFileParent')
     expect(installerScript).toContain('Function KunRecoverSourceFromUninstallString')
-    expect(installerScript).toContain(
-      '!insertmacro GetInQuotes $KunInstallerSourceDir "$R9"'
-    )
-    expect(installerScript).toContain('Call GetFileParent')
+    expect(installerScript).toContain('Call KunGetInQuotes')
+    expect(installerScript).toContain('Call KunGetFileParent')
+    expect(installerScript).not.toContain('!insertmacro GetInQuotes')
+    expect(installerScript).not.toContain('Call GetFileParent')
     expect(installerScript).not.toContain('!insertmacro kunRunMigrationHelper ResolveSource')
     expect(installerScript).toContain('${if} $KunInstallerSnapshotMode != $installMode')
     expect(installerScript).toContain('${andIf} $installMode != "all"')

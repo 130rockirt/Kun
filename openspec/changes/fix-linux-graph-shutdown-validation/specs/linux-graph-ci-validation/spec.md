@@ -90,9 +90,12 @@ registered uninstaller path inside NSIS before resolving the canonical target.
 
 - **WHEN** a current-user registration has an empty `InstallLocation` and a
   quoted `UninstallString` under the legacy installation directory
-- **THEN** NSIS SHALL recover that directory with its native quoted-path parser
+- **THEN** NSIS SHALL recover that directory with installer-local quoted-path
+  and parent-directory parsers available during `customHeader` expansion
 - **AND** target resolution SHALL receive the non-empty recovered source without
   depending on a child-process result file
+- **AND** compilation SHALL not depend on macros loaded later by
+  electron-builder's `installUtil.nsh`
 
 ### Requirement: Windows preservation validation tolerates native process startup
 

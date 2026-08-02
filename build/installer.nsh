@@ -190,12 +190,73 @@ Var /GLOBAL KunInstallerStopResult
       Delete "$KunInstallerResultPath"
   FunctionEnd
 
+  Function KunGetInQuotes
+    Exch $R0
+    Push $R1
+    Push $R2
+
+    StrCpy $R1 -1
+    KunGetInQuotesFindStart:
+      IntOp $R1 $R1 + 1
+      StrCpy $R2 $R0 1 $R1
+      StrCmp $R2 "" KunGetInQuotesInvalid
+      StrCmp $R2 '"' KunGetInQuotesStart KunGetInQuotesFindStart
+
+    KunGetInQuotesStart:
+      IntOp $R1 $R1 + 1
+      StrCpy $R0 $R0 "" $R1
+      StrCpy $R1 0
+
+    KunGetInQuotesFindEnd:
+      IntOp $R1 $R1 + 1
+      StrCpy $R2 $R0 1 $R1
+      StrCmp $R2 "" KunGetInQuotesInvalid
+      StrCmp $R2 '"' KunGetInQuotesDone KunGetInQuotesFindEnd
+
+    KunGetInQuotesInvalid:
+      StrCpy $R0 ""
+      Goto KunGetInQuotesReturn
+
+    KunGetInQuotesDone:
+      StrCpy $R0 $R0 $R1
+
+    KunGetInQuotesReturn:
+      Pop $R2
+      Pop $R1
+      Exch $R0
+  FunctionEnd
+
+  Function KunGetFileParent
+    Exch $R0
+    Push $R1
+    Push $R2
+    Push $R3
+
+    StrCpy $R1 0
+    StrLen $R2 $R0
+
+    KunGetFileParentLoop:
+      IntOp $R1 $R1 + 1
+      IntCmp $R1 $R2 KunGetFileParentDone 0 KunGetFileParentDone
+      StrCpy $R3 $R0 1 -$R1
+      StrCmp $R3 "\" KunGetFileParentDone KunGetFileParentLoop
+
+    KunGetFileParentDone:
+      StrCpy $R0 $R0 -$R1
+      Pop $R3
+      Pop $R2
+      Pop $R1
+      Exch $R0
+  FunctionEnd
+
   Function KunRecoverSourceFromUninstallString
     StrCpy $KunInstallerSourceDir ""
-    !insertmacro GetInQuotes $KunInstallerSourceDir "$R9"
+    Push "$R9"
+    Call KunGetInQuotes
+    Pop $KunInstallerSourceDir
     ${if} $KunInstallerSourceDir != ""
       Push $KunInstallerSourceDir
-      Call GetFileParent
+      Call KunGetFileParent
       Pop $KunInstallerSourceDir
     ${endif}
     ${if} $KunInstallerSourceDir == ""
