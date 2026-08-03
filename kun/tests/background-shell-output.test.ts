@@ -53,8 +53,10 @@ describe('background-shell-output', () => {
     await writer.close()
     const persisted = await readFile(live.output_file, 'utf-8')
     expect(persisted.startsWith('hello\n')).toBe(true)
-    expect((await stat(writer.paths.outputDir)).mode & 0o777).toBe(0o700)
-    expect((await stat(live.output_file)).mode & 0o777).toBe(0o600)
+    if (process.platform !== 'win32') {
+      expect((await stat(writer.paths.outputDir)).mode & 0o777).toBe(0o700)
+      expect((await stat(live.output_file)).mode & 0o777).toBe(0o600)
+    }
     const summary = await readBackgroundShellOutputSummary(live.output_file)
     expect(summary.truncated).toBe(true)
   })

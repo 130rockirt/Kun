@@ -92,7 +92,11 @@ describe('scanThreadStore replacement detection', () => {
     await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })))
   })
 
-  it('reports changed when the path is atomically replaced after handle fstat', async () => {
+  it('reports changed when the path is atomically replaced after handle fstat', async (testContext) => {
+    if (process.platform === 'win32') {
+      testContext.skip()
+      return
+    }
     const root = await mkdtemp(join(tmpdir(), 'kun-thread-store-doctor-race-'))
     roots.push(root)
     const thread = createThreadRecord({

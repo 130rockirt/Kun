@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import {
   ExtensionManifestSchema,
   MediaCreateCacheTargetResultSchema,
@@ -18,7 +18,7 @@ import {
 } from './extension-host-broker.js'
 import { ExtensionMediaHandleService } from './extension-media-handle-service.js'
 
-const WORKSPACE_ROOT = '/tmp/workspace'
+const WORKSPACE_ROOT = resolve('/tmp/workspace')
 const WORKSPACE_ID = extensionWorkspaceKey(WORKSPACE_ROOT)
 
 const manifest = ExtensionManifestSchema.parse({
@@ -885,8 +885,8 @@ describe('ExtensionHostBroker', () => {
   })
 
   it('routes workspace commands to their owning Host and disposes one Host generation only', async () => {
-    const workspaceA = '/tmp/workspace-a'
-    const workspaceB = '/tmp/workspace-b'
+    const workspaceA = resolve('/tmp/workspace-a')
+    const workspaceB = resolve('/tmp/workspace-b')
     const principalA: HostPrincipal = {
       ...principal,
       lifecycleNonce: 'host-workspace-a',
@@ -964,8 +964,8 @@ describe('ExtensionHostBroker', () => {
   })
 
   it('disposes broker registrations only in the revoked extension workspace', async () => {
-    const workspaceA = '/tmp/workspace-a'
-    const workspaceB = '/tmp/workspace-b'
+    const workspaceA = resolve('/tmp/workspace-a')
+    const workspaceB = resolve('/tmp/workspace-b')
     const invokeExtension = vi.fn(async (
       _extensionId: string,
       _event: string,

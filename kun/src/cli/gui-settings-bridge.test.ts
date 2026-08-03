@@ -161,7 +161,9 @@ describe('GUI settings bridge', () => {
     expect(config.serve.providers.codex.apiKey).toBe('')
     expect(config.serve.providers.codex.credentialSourceId).toBe('settings:provider:codex')
     expect(config.capabilities.futureGuiCapability).toEqual({ enabled: true, protocol: 'future-v2' })
-    expect((await stat(configPath)).mode & 0o777).toBe(0o600)
+    if (process.platform !== 'win32') {
+      expect((await stat(configPath)).mode & 0o777).toBe(0o600)
+    }
     expect(result?.applyRequest.serve?.providers?.codex?.models).toEqual(['gpt-5.6-luna', 'gpt-5.6-sol'])
     expect(result?.applyRequest.serve).toMatchObject({
       approvalPolicy: 'auto',

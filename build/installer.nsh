@@ -31,9 +31,23 @@ Var /GLOBAL KunInstallerStopResult
 !endif
 
 !macro kunRunMigrationHelper ACTION
-  nsExec::ExecToStack `"$KunInstallerPowerShellPath" -NoProfile -ExecutionPolicy Bypass -File "$KunInstallerHelperPath" -Action ${ACTION}`
+  !ifdef BUILD_UNINSTALLER
+    nsExec::ExecToStack `"$KunInstallerPowerShellPath" -NoProfile -ExecutionPolicy Bypass -File "$KunInstallerHelperPath" -Action ${ACTION}`
+  !else
+    nsExec::ExecToStack `"$KunInstallerPowerShellPath" -NoProfile -ExecutionPolicy Bypass -File "$KunInstallerHelperPath" -Action ${ACTION} -ResultPath "$KunInstallerResultPath"`
+  !endif
   Pop $KunInstallerHelperExitCode
   Pop $KunInstallerHelperOutput
+!macroend
+
+!macro kunSetEnvironmentFromRegister NAME REGISTER
+  # System::Call reparses quoted variable expansions. Copy arbitrary registry
+  # text into a local NSIS register and let the plugin read it directly so an
+  # UninstallString containing quotes is preserved verbatim.
+  Push $9
+  StrCpy $9 ${REGISTER}
+  System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("${NAME}", r9).r0'
+  Pop $9
 !macroend
 
 !macro customPageAfterChangeDir
@@ -263,7 +277,7 @@ Var /GLOBAL KunInstallerStopResult
 
   Function KunResolveRegisteredSource
     System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_SOURCE", "$KunInstallerSourceDir").r0'
-    System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_UNINSTALL_STRING", "$R9").r0'
+    !insertmacro kunSetEnvironmentFromRegister "KUN_INSTALLER_UNINSTALL_STRING" $R9
     Delete "$KunInstallerResultPath"
     !insertmacro kunRunMigrationHelper ResolveSource
     ${if} $KunInstallerHelperExitCode == 0
@@ -284,7 +298,35 @@ Var /GLOBAL KunInstallerStopResult
     ${endif}
     ReadEnvStr $KunInstallerUpdateSourceDir "KUN_INSTALLER_UPDATE_SOURCE"
     ${if} $KunInstallerUpdateSourceDir == ""
-      DetailPrint "Automatic update source marker is unavailable; using compatible single-registration selection."
+      # Older Kun versions did not export the running application directory.
+      # Select an unambiguous single registration explicitly because the
+      # updater's --updated path may otherwise retain the default install mode.
+      ReadRegStr $R0 HKEY_CURRENT_USER "${INSTALL_REGISTRY_KEY}" InstallLocation
+      ReadRegStr $R1 HKEY_CURRENT_USER "${UNINSTALL_REGISTRY_KEY}" UninstallString
+      ReadRegStr $R2 HKEY_LOCAL_MACHINE "${INSTALL_REGISTRY_KEY}" InstallLocation
+      ReadRegStr $R3 HKEY_LOCAL_MACHINE "${UNINSTALL_REGISTRY_KEY}" UninstallString
+      ${if} $R0 == ""
+      ${andIf} $R1 == ""
+        ${if} $R2 != ""
+        ${orIf} $R3 != ""
+          StrCpy $hasPerMachineInstallation 1
+          StrCpy $hasPerUserInstallation 0
+          !insertmacro setInstallModePerAllUsers
+          DetailPrint "Automatic update selected the only registered all-users ${PRODUCT_NAME} installation."
+        ${else}
+          DetailPrint "Automatic update found no existing ${PRODUCT_NAME} registration; keeping the requested install mode."
+        ${endif}
+        Return
+      ${endif}
+      ${if} $R2 == ""
+      ${andIf} $R3 == ""
+        StrCpy $hasPerMachineInstallation 0
+        StrCpy $hasPerUserInstallation 1
+        !insertmacro setInstallModePerUser
+        DetailPrint "Automatic update selected the only registered current-user ${PRODUCT_NAME} installation."
+        Return
+      ${endif}
+      DetailPrint "Automatic update source marker is unavailable with registrations in both scopes; keeping the requested install mode."
       Return
     ${endif}
 
@@ -293,9 +335,9 @@ Var /GLOBAL KunInstallerStopResult
     ReadRegStr $R2 HKEY_LOCAL_MACHINE "${INSTALL_REGISTRY_KEY}" InstallLocation
     ReadRegStr $R3 HKEY_LOCAL_MACHINE "${UNINSTALL_REGISTRY_KEY}" UninstallString
     System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_CURRENT_USER_SOURCE", "$R0").r0'
-    System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_CURRENT_USER_UNINSTALL_STRING", "$R1").r0'
+    !insertmacro kunSetEnvironmentFromRegister "KUN_INSTALLER_CURRENT_USER_UNINSTALL_STRING" $R1
     System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_ALL_USERS_SOURCE", "$R2").r0'
-    System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_ALL_USERS_UNINSTALL_STRING", "$R3").r0'
+    !insertmacro kunSetEnvironmentFromRegister "KUN_INSTALLER_ALL_USERS_UNINSTALL_STRING" $R3
     Delete "$KunInstallerResultPath"
     !insertmacro kunRunMigrationHelper ResolveUpdateScope
     ${if} $KunInstallerHelperExitCode == 0

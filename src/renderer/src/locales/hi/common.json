@@ -470,6 +470,8 @@
   "designPrototypePlayUnavailable": "प्रोटोटाइप चलाने से पहले कम से कम एक स्क्रीन बनाएं",
   "designPrototypeBack": "वापस",
   "designPrototypeClose": "प्रोटोटाइप बंद करें",
+  "designPrototypeOpenBrowser": "ब्राउज़र में खोलें",
+  "designPrototypeOpenBrowserFailed": "प्रोटोटाइप को ब्राउज़र में नहीं खोला जा सका।",
   "designPrototypeViewportMode": "प्रोटोटाइप व्यूपोर्ट",
   "designPrototypeViewportWebDetail": "{{width}} x {{height}} web prototype",
   "designPrototypeViewportAppDetail": "{{width}} x {{height}} phone prototype",

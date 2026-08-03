@@ -148,7 +148,7 @@ describe('PPT Master local tool', () => {
       join(skillDir, 'scripts', 'svg_to_pptx.py'),
       projectPath,
       '--output',
-      expect.stringMatching(/\/presentations\/\.brief\.[^.]+\.tmp\.pptx$/),
+      expect.stringMatching(/[\\/]presentations[\\/]\.brief\.[^.]+\.tmp\.pptx$/),
       '--quiet'
     ])
   })

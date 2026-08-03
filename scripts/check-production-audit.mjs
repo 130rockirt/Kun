@@ -6,6 +6,9 @@ import { fileURLToPath } from 'node:url'
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const registry = 'https://registry.npmjs.org'
+const npmCliPath = process.env.npm_execpath
+const npmCommand = npmCliPath ? process.execPath : 'npm'
+const npmPrefixArgs = npmCliPath ? [npmCliPath] : []
 const allowedModeratePackages = new Set([
   '@computer-use/default-clipboard-provider',
   '@computer-use/libnut',
@@ -42,8 +45,8 @@ console.log(
 
 function audit(target) {
   const result = spawnSync(
-    'npm',
-    ['audit', '--omit=dev', '--json', `--registry=${registry}`],
+    npmCommand,
+    [...npmPrefixArgs, 'audit', '--omit=dev', '--json', `--registry=${registry}`],
     {
       cwd: target.cwd,
       encoding: 'utf8',

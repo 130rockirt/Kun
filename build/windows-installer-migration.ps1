@@ -327,6 +327,7 @@ function Write-InstallerResult([string]$Value) {
     $resultPath = Join-Path $PSScriptRoot 'kun-windows-installer-result.txt'
   }
   [IO.File]::WriteAllBytes($resultPath, [Text.Encoding]::Unicode.GetBytes($Value))
+  Write-InstallerDiagnostic "RESULT path=$resultPath length=$($Value.Length)"
   [Console]::Out.Write($Value)
 }
 
@@ -386,12 +387,23 @@ function Convert-IdentityToSid([string]$Identity) {
   )
 }
 
+function Get-FileSystemSecurity([string]$PathValue) {
+  $sections = [Security.AccessControl.AccessControlSections]::All
+  if ([IO.Directory]::Exists($PathValue)) {
+    return [IO.Directory]::GetAccessControl($PathValue, $sections)
+  }
+  if ([IO.File]::Exists($PathValue)) {
+    return [IO.File]::GetAccessControl($PathValue, $sections)
+  }
+  throw "The ACL target does not exist: $PathValue"
+}
+
 function Test-JournalAclSecure([string]$PathValue, [string]$Mode) {
   try {
     if (Test-ReparsePoint $PathValue) {
       return $false
     }
-    $security = Get-Acl -LiteralPath $PathValue
+    $security = Get-FileSystemSecurity $PathValue
     $owner = Convert-IdentityToSid $security.Owner
     $expectedOwner = Get-JournalAclOwnerSid $Mode
     $systemSid = [Security.Principal.SecurityIdentifier]::new('S-1-5-18')
@@ -443,7 +455,7 @@ function Set-SecureJournalDirectoryAcl([string]$Directory, [string]$Mode) {
     )
     [void]$security.AddAccessRule($rule)
   }
-  Set-Acl -LiteralPath $Directory -AclObject $security
+  [IO.Directory]::SetAccessControl($Directory, $security)
 }
 
 function Set-SecureJournalFileAcl([string]$PathValue, [string]$Mode) {
@@ -461,7 +473,7 @@ function Set-SecureJournalFileAcl([string]$PathValue, [string]$Mode) {
     )
     [void]$security.AddAccessRule($rule)
   }
-  Set-Acl -LiteralPath $PathValue -AclObject $security
+  [IO.File]::SetAccessControl($PathValue, $security)
 }
 
 function Assert-JournalStorageTrusted {

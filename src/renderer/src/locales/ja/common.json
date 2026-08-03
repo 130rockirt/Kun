@@ -470,6 +470,8 @@
   "designPrototypePlayUnavailable": "プロトタイプを再生する前に少なくとも 1 つの画面を作成する",
   "designPrototypeBack": "戻る",
   "designPrototypeClose": "プロトタイプを閉じる",
+  "designPrototypeOpenBrowser": "ブラウザーで開く",
+  "designPrototypeOpenBrowserFailed": "ブラウザーでプロトタイプを開けませんでした。",
   "designPrototypeViewportMode": "プロトタイプのビューポート",
   "designPrototypeViewportWebDetail": "{{width}} x {{height}} web prototype",
   "designPrototypeViewportAppDetail": "{{width}} x {{height}} phone prototype",

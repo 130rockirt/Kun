@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { resolve } from 'node:path'
 import { InMemoryEventBus } from '../adapters/in-memory-event-bus.js'
 import { InMemorySessionStore } from '../adapters/in-memory-session-store.js'
 import { InMemoryThreadStore } from '../adapters/in-memory-thread-store.js'
@@ -16,7 +17,7 @@ import {
 } from './extension-agent-service.js'
 import { ExtensionAgentProfileRegistry } from './extension-agent-profile-registry.js'
 
-const workspace = '/tmp/kun-extension-workspace'
+const workspace = resolve('/tmp/kun-extension-workspace')
 
 function createHarness(headless = false) {
   const threadStore = new InMemoryThreadStore()

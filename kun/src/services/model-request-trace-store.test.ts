@@ -32,8 +32,10 @@ describe('ModelRequestTraceStore', () => {
     const root = join(dataDir, 'observability', 'model-http')
     const files = await import('node:fs/promises').then((fs) => fs.readdir(root))
     expect(files).toHaveLength(1)
-    expect((await stat(root)).mode & 0o777).toBe(0o700)
-    expect((await stat(join(root, files[0]))).mode & 0o777).toBe(0o600)
+    if (process.platform !== 'win32') {
+      expect((await stat(root)).mode & 0o777).toBe(0o700)
+      expect((await stat(join(root, files[0]))).mode & 0o777).toBe(0o600)
+    }
   })
 
   it('ignores a malformed trailing line and deletes only the selected thread', async () => {

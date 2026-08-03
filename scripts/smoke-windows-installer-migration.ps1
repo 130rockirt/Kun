@@ -60,6 +60,28 @@ function Invoke-Installer(
   Assert-True ($process.ExitCode -eq $ExpectedExitCode) "Installer exited with $($process.ExitCode), expected $ExpectedExitCode. Arguments: $argumentText"
 }
 
+function Invoke-Uninstaller(
+  [string]$Scenario,
+  [string]$InstallLocation,
+  [ValidateSet('/currentuser', '/allusers')][string]$Mode
+) {
+  $script:currentScenario = $Scenario
+  $source = Join-Path $InstallLocation 'Uninstall Kun.exe'
+  $copy = Join-Path $script:root ('kun-smoke-uninstaller-' + [guid]::NewGuid().ToString('N') + '.exe')
+  Copy-Item -LiteralPath $source -Destination $copy
+  try {
+    # NSIS uninstallers normally launch a temporary child and let the original
+    # process exit early. Running our own copy with _?= as the final, unquoted
+    # argument makes -Wait observe the real uninstall lifecycle.
+    $arguments = @('/S', $Mode, ('_?={0}' -f $InstallLocation))
+    Write-Host "[$Scenario] Starting copied uninstaller: $($arguments -join ' ')"
+    $process = Start-Process -FilePath $copy -ArgumentList $arguments -Wait -PassThru
+    Assert-True ($process.ExitCode -eq 0) "Uninstaller exited with $($process.ExitCode)."
+  } finally {
+    Remove-Item -LiteralPath $copy -Force -ErrorAction SilentlyContinue
+  }
+}
+
 function Find-KunRegistration(
   [string]$ExpectedLocation,
   [ValidateSet('HKCU', 'HKLM')][string]$Hive = 'HKCU'
@@ -282,10 +304,7 @@ try {
   $script:currentScenario = 'Unicode packaged CLI smoke'
   & node (Join-Path $PSScriptRoot 'smoke-packaged-cli.cjs') '--resources' (Join-Path $unicodeTarget 'resources')
   Assert-True ($LASTEXITCODE -eq 0) 'The packaged CLI did not run from the Unicode install directory.'
-  $script:currentScenario = 'Unicode current-user uninstall'
-  $unicodeUninstaller = Join-Path $unicodeTarget 'Uninstall Kun.exe'
-  $unicodeUninstall = Start-Process -FilePath $unicodeUninstaller -ArgumentList @('/S', '/currentuser') -Wait -PassThru
-  Assert-True ($unicodeUninstall.ExitCode -eq 0) "Unicode smoke uninstaller exited with $($unicodeUninstall.ExitCode)."
+  Invoke-Uninstaller 'Unicode current-user uninstall' $unicodeTarget '/currentuser'
   Assert-PathEntryRemoved $unicodeTarget
   Assert-NoKunShortcuts 'CurrentUser'
 
@@ -460,10 +479,7 @@ try {
   $automaticUpdateDiagnostics = Get-Content -LiteralPath $diagnosticPath -Raw
   Assert-True ($automaticUpdateDiagnostics -match [regex]::Escape("source=$machineTarget")) 'The automatic update did not validate the running all-users source.'
 
-  $script:currentScenario = 'all-users uninstall'
-  $machineUninstaller = Join-Path $machineTarget 'Uninstall Kun.exe'
-  $machineUninstall = Start-Process -FilePath $machineUninstaller -ArgumentList @('/S', '/allusers') -Wait -PassThru
-  Assert-True ($machineUninstall.ExitCode -eq 0) "All-users smoke uninstaller exited with $($machineUninstall.ExitCode)."
+  Invoke-Uninstaller 'all-users uninstall' $machineTarget '/allusers'
   Assert-PathEntryRemoved $machineTarget
   foreach ($sentinel in $sentinels) {
     Assert-True (Test-Path -LiteralPath $sentinel) "All-users uninstall removed a user-data sentinel: $sentinel"

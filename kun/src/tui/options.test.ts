@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { resolve } from 'node:path'
 import { parseTuiOptions } from './options.js'
 
 describe('parseTuiOptions', () => {
@@ -27,7 +28,7 @@ describe('parseTuiOptions', () => {
         runtimeToken: 'flag-token',
         dataDir: '/tmp/kun-tui-data',
         dataDirSource: 'argument',
-        workspace: '/tmp/project',
+        workspace: resolve('/tmp/project'),
         threadId: 'thr_1',
         continueLatest: true,
         graphPrompt: '实现 TUI Graph 看板',

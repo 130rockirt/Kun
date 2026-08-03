@@ -27,7 +27,7 @@ describe('official provider CLI authentication', () => {
       command: process.execPath,
       displayName: 'Gemini CLI'
     })
-    expect(command?.args[0]).toContain('@google/gemini-cli')
+    expect(command?.args[0].replaceAll('\\', '/')).toContain('@google/gemini-cli')
   })
 
   it('rejects an Antigravity download before extraction when its checksum is invalid', async () => {

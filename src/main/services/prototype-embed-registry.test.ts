@@ -1,4 +1,5 @@
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { realpath } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -47,7 +48,7 @@ describe('prototype embed registry', () => {
 
     expect(result.ok).toBe(true)
     if (!result.ok) return
-    expect(result.absolutePath).toBe(join(workspace, relativePath))
+    expect(result.absolutePath).toBe(await realpath(join(workspace, relativePath)))
     expect(isAuthorizedPrototypeFileUrl(result.fileUrl)).toBe(true)
   })
 

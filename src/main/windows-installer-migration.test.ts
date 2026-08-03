@@ -16,6 +16,7 @@ import { join, parse } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 
 const helperPath = join(process.cwd(), 'build/windows-installer-migration.ps1')
+const smokePath = join(process.cwd(), 'scripts/smoke-windows-installer-migration.ps1')
 const windowsOnly = process.platform === 'win32' ? describe : describe.skip
 const tempRoots: string[] = []
 
@@ -135,6 +136,25 @@ afterEach(() => {
     const root = tempRoots.pop()
     if (root) rmSync(root, { recursive: true, force: true })
   }
+})
+
+describe('Windows installer migration ACL contract', () => {
+  it('uses the Windows filesystem ACL API without the optional PowerShell security module', () => {
+    const script = readFileSync(helperPath, 'utf8')
+
+    expect(script).not.toMatch(/\b(?:Get|Set)-Acl\b/u)
+    expect(script).toContain('[IO.Directory]::GetAccessControl')
+    expect(script).toContain('[IO.Directory]::SetAccessControl')
+    expect(script).toContain('[IO.File]::SetAccessControl')
+  })
+
+  it('waits for the real NSIS uninstall lifecycle before starting another installer', () => {
+    const script = readFileSync(smokePath, 'utf8')
+
+    expect(script).toContain("$arguments = @('/S', $Mode, ('_?={0}' -f $InstallLocation))")
+    expect(script).toContain('Start-Process -FilePath $copy -ArgumentList $arguments -Wait -PassThru')
+    expect(script).not.toMatch(/Start-Process -FilePath \$(?:unicode|machine)Uninstaller/u)
+  })
 })
 
 windowsOnly('Windows installer migration helper', () => {

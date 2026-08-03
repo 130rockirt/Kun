@@ -79,7 +79,11 @@ describe('JSONL tail repair', () => {
     expect(await inspectJsonlTail(noPrefix)).toMatchObject({ status: 'invalid', reason: 'no_valid_prefix' })
   })
 
-  it('detects an append through an already-open descriptor across replacement', async () => {
+  it('detects an append through an already-open descriptor across replacement', async (testContext) => {
+    if (process.platform === 'win32') {
+      testContext.skip()
+      return
+    }
     const valid = JSON.stringify({ ok: true })
     const path = await makeFile(`${valid}\n{"broken":`)
     const held = await open(path, 'a')

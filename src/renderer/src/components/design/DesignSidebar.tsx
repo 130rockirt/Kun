@@ -1,11 +1,4 @@
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type FormEvent,
-  type ReactElement
-} from 'react'
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactElement } from 'react'
 import {
   FilePlus2,
   FolderPlus,
@@ -284,6 +277,7 @@ export function DesignSidebar({
   }
 
   const runningDesignThreadIds = useMemo(() => {
+    void chatThreads
     const registry = readDesignThreadRegistry()
     return new Set(Object.values(registry.workspaces).flatMap((record) => record.threadIds))
   }, [chatThreads])

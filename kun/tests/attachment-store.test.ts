@@ -111,9 +111,11 @@ describe('Attachment store and multimodal input', () => {
     const attachment = await store.create({ name: 'shot.png', data: png(2, 3), threadId: 'thr_1' })
     const root = join(dir, 'attachments')
 
-    expect((await stat(root)).mode & 0o777).toBe(0o700)
-    expect((await stat(join(root, `${attachment.id}.bin`))).mode & 0o777).toBe(0o600)
-    expect((await stat(join(root, `${attachment.id}.json`))).mode & 0o777).toBe(0o600)
+    if (process.platform !== 'win32') {
+      expect((await stat(root)).mode & 0o777).toBe(0o700)
+      expect((await stat(join(root, `${attachment.id}.bin`))).mode & 0o777).toBe(0o600)
+      expect((await stat(join(root, `${attachment.id}.json`))).mode & 0o777).toBe(0o600)
+    }
   })
 
   it('keeps composer leases private, reference-counts duplicate uploads, and rejects foreign release ids', async () => {
