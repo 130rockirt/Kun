@@ -37,6 +37,7 @@ import {
 } from './cli-install-service'
 
 const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')!
+const hostPlatform = process.platform
 
 describe('CLI install service on Linux', () => {
   let directory = ''
@@ -82,8 +83,10 @@ describe('CLI install service on Linux', () => {
     expect(wrapper).toContain('# Kun CLI launcher')
     expect(wrapper).toContain(`app_image='${process.env.APPIMAGE}'`)
     expect(wrapper).toContain('KUN_CLI_ENTRY=1 exec "$app_image" "$@"')
-    expect((await lstat(commandPath)).mode & 0o111).not.toBe(0)
-    await expect(access(commandPath, constants.X_OK)).resolves.toBeUndefined()
+    if (hostPlatform !== 'win32') {
+      expect((await lstat(commandPath)).mode & 0o111).not.toBe(0)
+      await expect(access(commandPath, constants.X_OK)).resolves.toBeUndefined()
+    }
 
     const shellConfig = await readFile(join(directory, '.zshrc'), 'utf8')
     expect(shellConfig).toContain('# >>> Kun CLI >>>')

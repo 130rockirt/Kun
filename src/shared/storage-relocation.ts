@@ -3,6 +3,7 @@ import { z } from 'zod'
 export const STORAGE_RELOCATION_SCHEMA_VERSION = 1 as const
 export const STORAGE_RELOCATION_MINIMUM_RESERVE_BYTES = 5 * 1024 * 1024 * 1024
 export const STORAGE_RELOCATION_RESERVE_RATIO = 0.1
+export const STORAGE_RELOCATION_PROGRESS_MESSAGE_MAX_LENGTH = 2_000
 
 export const StorageRelocationPhaseSchema = z.enum([
   'prepared',
@@ -84,7 +85,7 @@ export const StorageRelocationProgressSchema = z.object({
   totalItems: z.number().int().nonnegative(),
   currentItem: z.string().max(2_048).optional(),
   cancellable: z.boolean(),
-  message: z.string().max(2_000).optional(),
+  message: z.string().max(STORAGE_RELOCATION_PROGRESS_MESSAGE_MAX_LENGTH).optional(),
   updatedAt: z.string().datetime()
 }).strict()
 export type StorageRelocationProgress = z.infer<typeof StorageRelocationProgressSchema>

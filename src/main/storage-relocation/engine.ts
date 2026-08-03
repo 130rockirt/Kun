@@ -1,5 +1,4 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { execFile } from 'node:child_process'
 import {
   constants,
   createReadStream
@@ -23,9 +22,9 @@ import {
 } from 'node:fs/promises'
 import { basename, dirname, join, relative, resolve, sep } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { promisify } from 'node:util'
 import {
   STORAGE_RELOCATION_SCHEMA_VERSION,
+  STORAGE_RELOCATION_PROGRESS_MESSAGE_MAX_LENGTH,
   StorageRelocationOperationJournalSchema,
   StorageRelocationPreflightPlanSchema,
   StorageRelocationProgressSchema,
@@ -47,6 +46,7 @@ import {
   STORAGE_RELOCATION_OWNERSHIP_MARKER,
   STORAGE_RELOCATION_ROOT_NAMES,
   backupRootPath,
+  copyWindowsAcls,
   hardenStorageDestinationAcl,
   inspectStorageRoot,
   inspectWindowsVolume,
@@ -75,8 +75,6 @@ const TRANSIENT_RELATIVE_PATHS = new Set([
   'data/.runtime-discovery.lock',
   'data/.kun-runtime-owner.json'
 ])
-const execFileAsync = promisify(execFile)
-
 export type StorageRelocationEngineOptions = {
   homeDir: string
   userDataPath: string
@@ -905,32 +903,6 @@ async function ensureDestinationForOperation(journal: StorageRelocationOperation
   }
 }
 
-async function copyWindowsAcls(sourceRoot: string, targetRoot: string): Promise<void> {
-  if (process.platform !== 'win32') return
-  const script = [
-    '$source = (Get-Item -LiteralPath $args[0] -Force).FullName',
-    '$target = (Get-Item -LiteralPath $args[1] -Force).FullName',
-    'Set-Acl -LiteralPath $target -AclObject (Get-Acl -LiteralPath $source)',
-    '$sourceRootItem = Get-Item -LiteralPath $source -Force',
-    '$targetRootItem = Get-Item -LiteralPath $target -Force',
-    '$targetRootItem.CreationTimeUtc = $sourceRootItem.CreationTimeUtc',
-    'Get-ChildItem -LiteralPath $source -Force -Recurse | Where-Object { -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) } | ForEach-Object {',
-    '  $relative = $_.FullName.Substring($source.Length).TrimStart("\\")',
-    '  $copy = Join-Path $target $relative',
-    '  if (Test-Path -LiteralPath $copy) {',
-    '    Set-Acl -LiteralPath $copy -AclObject (Get-Acl -LiteralPath $_.FullName)',
-    '    $copyItem = Get-Item -LiteralPath $copy -Force',
-    '    $copyItem.CreationTimeUtc = $_.CreationTimeUtc',
-    '  }',
-    '}'
-  ].join('; ')
-  await execFileAsync(
-    'powershell.exe',
-    ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script, sourceRoot, targetRoot],
-    { windowsHide: true, timeout: 15 * 60_000, maxBuffer: 256 * 1024 }
-  )
-}
-
 async function fingerprintTree(rootPath: string): Promise<FingerprintResult> {
   const hash = createHash('sha256')
   const inventory: StorageTreeInventory = { files: 0, directories: 0, links: 0, bytes: 0 }
@@ -1106,9 +1078,14 @@ function progressFromJournal(
     completedItems: journal.roots.filter((root) => root.activated || root.targetFingerprint).length,
     totalItems: journal.roots.length,
     cancellable: journal.phase === 'prepared' || journal.phase === 'copying' || journal.phase === 'verifying',
-    ...(journal.error ? { message: journal.error.message } : {}),
+    ...(journal.error ? { message: progressMessage(journal.error.message) } : {}),
     updatedAt: now.toISOString()
   })
+}
+
+function progressMessage(message: string): string {
+  if (message.length <= STORAGE_RELOCATION_PROGRESS_MESSAGE_MAX_LENGTH) return message
+  return `${message.slice(0, STORAGE_RELOCATION_PROGRESS_MESSAGE_MAX_LENGTH - 3)}...`
 }
 
 function locationFromJournal(

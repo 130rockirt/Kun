@@ -9,6 +9,10 @@ import type {
 } from '../../shared/storage-relocation'
 
 const execFileAsync = promisify(execFile)
+const WINDOWS_STORAGE_RELOCATION_VOLUME_ROOT_ENV = 'KUN_STORAGE_RELOCATION_VOLUME_ROOT'
+const WINDOWS_STORAGE_RELOCATION_DESTINATION_PATH_ENV = 'KUN_STORAGE_RELOCATION_DESTINATION_PATH'
+const WINDOWS_STORAGE_RELOCATION_ACL_SOURCE_PATH_ENV = 'KUN_STORAGE_RELOCATION_ACL_SOURCE_PATH'
+const WINDOWS_STORAGE_RELOCATION_ACL_TARGET_PATH_ENV = 'KUN_STORAGE_RELOCATION_ACL_TARGET_PATH'
 
 export const STORAGE_RELOCATION_ROOT_NAMES = ['.kun', '.deepseekgui'] as const
 export const STORAGE_RELOCATION_CONTROL_DIR = 'storage-relocation'
@@ -93,14 +97,19 @@ export async function inspectWindowsVolume(path: string): Promise<StorageRelocat
   const driveRoot = win32.parse(win32.resolve(path)).root
   if (process.platform === 'win32') {
     const script = [
-      '$d = [System.IO.DriveInfo]::new($args[0])',
+      '$d = [System.IO.DriveInfo]::new($env:KUN_STORAGE_RELOCATION_VOLUME_ROOT)',
       '$o = @{ root=$d.RootDirectory.FullName; driveType=$d.DriveType.ToString(); fileSystem=$d.DriveFormat; availableBytes=$d.AvailableFreeSpace }',
       '$o | ConvertTo-Json -Compress'
     ].join('; ')
     const { stdout } = await execFileAsync(
       'powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script, driveRoot],
-      { windowsHide: true, timeout: 10_000, maxBuffer: 64 * 1024 }
+      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script],
+      {
+        windowsHide: true,
+        timeout: 10_000,
+        maxBuffer: 64 * 1024,
+        env: { ...process.env, [WINDOWS_STORAGE_RELOCATION_VOLUME_ROOT_ENV]: driveRoot }
+      }
     )
     const parsed = JSON.parse(stdout.trim()) as Partial<StorageRelocationVolumeInfo>
     return {
@@ -152,7 +161,7 @@ export async function ensureDestinationIsEmpty(path: string): Promise<void> {
 export async function hardenStorageDestinationAcl(path: string): Promise<void> {
   if (process.platform !== 'win32') return
   const script = [
-    '$path = $args[0]',
+    '$path = $env:KUN_STORAGE_RELOCATION_DESTINATION_PATH',
     '$identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()',
     '$acl = New-Object System.Security.AccessControl.DirectorySecurity',
     '$acl.SetOwner($identity.User)',
@@ -170,8 +179,48 @@ export async function hardenStorageDestinationAcl(path: string): Promise<void> {
   ].join('; ')
   await execFileAsync(
     'powershell.exe',
-    ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script, path],
-    { windowsHide: true, timeout: 30_000, maxBuffer: 64 * 1024 }
+    ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script],
+    {
+      windowsHide: true,
+      timeout: 30_000,
+      maxBuffer: 64 * 1024,
+      env: { ...process.env, [WINDOWS_STORAGE_RELOCATION_DESTINATION_PATH_ENV]: path }
+    }
+  )
+}
+
+export async function copyWindowsAcls(sourceRoot: string, targetRoot: string): Promise<void> {
+  if (process.platform !== 'win32') return
+  const script = [
+    `$source = (Get-Item -LiteralPath $env:${WINDOWS_STORAGE_RELOCATION_ACL_SOURCE_PATH_ENV} -Force).FullName`,
+    `$target = (Get-Item -LiteralPath $env:${WINDOWS_STORAGE_RELOCATION_ACL_TARGET_PATH_ENV} -Force).FullName`,
+    'Set-Acl -LiteralPath $target -AclObject (Get-Acl -LiteralPath $source)',
+    '$sourceRootItem = Get-Item -LiteralPath $source -Force',
+    '$targetRootItem = Get-Item -LiteralPath $target -Force',
+    '$targetRootItem.CreationTimeUtc = $sourceRootItem.CreationTimeUtc',
+    'Get-ChildItem -LiteralPath $source -Force -Recurse | Where-Object { -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) } | ForEach-Object {',
+    '  $relative = $_.FullName.Substring($source.Length).TrimStart("\\")',
+    '  $copy = Join-Path $target $relative',
+    '  if (Test-Path -LiteralPath $copy) {',
+    '    Set-Acl -LiteralPath $copy -AclObject (Get-Acl -LiteralPath $_.FullName)',
+    '    $copyItem = Get-Item -LiteralPath $copy -Force',
+    '    $copyItem.CreationTimeUtc = $_.CreationTimeUtc',
+    '  }',
+    '}'
+  ].join('; ')
+  await execFileAsync(
+    'powershell.exe',
+    ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script],
+    {
+      windowsHide: true,
+      timeout: 15 * 60_000,
+      maxBuffer: 256 * 1024,
+      env: {
+        ...process.env,
+        [WINDOWS_STORAGE_RELOCATION_ACL_SOURCE_PATH_ENV]: sourceRoot,
+        [WINDOWS_STORAGE_RELOCATION_ACL_TARGET_PATH_ENV]: targetRoot
+      }
+    }
   )
 }
 

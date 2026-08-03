@@ -141,22 +141,29 @@ windowsOnly('Windows installer migration helper', () => {
   })
 
   it('lets an explicit target override a registered legacy branded source', () => {
-    const resultPath = join(makeTempRoot(), 'resolved-path.txt')
+    const root = makeTempRoot()
+    const source = join(root, 'Legacy', 'DeepSeek GUI')
+    const candidate = join(root, 'Chosen Apps')
+    mkdirSync(source, { recursive: true })
+    mkdirSync(candidate, { recursive: true })
+    const canonicalCandidate = realpathSync.native(candidate)
+    const resultPath = join(root, 'resolved-path.txt')
     const result = runHelper({
       action: 'ResolvePath',
-      source: 'D:\\Legacy\\DeepSeek GUI',
-      candidate: 'E:\\Chosen Apps',
+      source,
+      candidate,
       candidateExplicit: true,
       resultPath
     })
 
     expect(result.status, processError(result)).toBe(0)
-    expect(readFileSync(resultPath, 'utf16le')).toBe('E:\\Chosen Apps\\Kun')
+    expect(readFileSync(resultPath, 'utf16le')).toBe(join(canonicalCandidate, 'Kun'))
   })
 
   it('uses development-flavor identity without appending or cleaning production Kun', () => {
     const root = makeTempRoot()
     const candidate = join(root, 'kun-dv')
+    mkdirSync(candidate, { recursive: true })
     const resultPath = join(root, 'resolved-path.txt')
     const result = runHelper({
       action: 'ResolvePath',
@@ -168,7 +175,7 @@ windowsOnly('Windows installer migration helper', () => {
     })
 
     expect(result.status, processError(result)).toBe(0)
-    expect(readFileSync(resultPath, 'utf16le')).toBe(candidate)
+    expect(readFileSync(resultPath, 'utf16le')).toBe(realpathSync.native(candidate))
   })
 
   it('writes a recovered install source to the explicit result path', () => {

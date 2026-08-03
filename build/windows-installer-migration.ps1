@@ -418,7 +418,7 @@ function Test-JournalAclSecure([string]$PathValue, [string]$Mode) {
     }
     return $true
   } catch {
-    Write-InstallerDiagnostic "Recovery journal ACL validation failed for $PathValue: $($_.Exception.Message)"
+    Write-InstallerDiagnostic "Recovery journal ACL validation failed for ${PathValue}: $($_.Exception.Message)"
     return $false
   }
 }
