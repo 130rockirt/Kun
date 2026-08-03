@@ -119,9 +119,6 @@ export async function recoverGraphLeadOwnership(
     if (!sourceTurn) continue
     const terminal = isTerminal(run)
     if (sourceTurn.status !== 'running') {
-      // Older runtimes persisted host-shutdown aborts before stopping. Once all
-      // completion gates pass, the idempotent scheduler may finish synthesis.
-      if (sourceTurn.status === 'aborted' && run.status === 'completing') continue
       if (
         !terminal &&
         (sourceTurn.status === 'completed' ||

@@ -1,5 +1,6 @@
 const { existsSync, rmSync } = require('node:fs')
 const { spawnSync } = require('node:child_process')
+const { dirname, join } = require('node:path')
 
 const REQUIRED_PATHS = [
   'kun/package-lock.json',
@@ -24,7 +25,7 @@ const KUN_SQLITE_MODULE_PATH = 'kun/node_modules/better-sqlite3'
 function run(command, args) {
   return spawnSync(command, args, {
     stdio: 'inherit',
-    shell: process.platform === 'win32',
+    shell: false,
     env: {
       ...process.env,
       npm_config_audit: 'false',
@@ -33,9 +34,23 @@ function run(command, args) {
   })
 }
 
+function npmInvocation(args) {
+  if (process.platform !== 'win32') return { command: 'npm', args }
+  const candidates = [
+    process.env.npm_execpath,
+    join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js')
+  ].filter((candidate) => candidate && existsSync(candidate))
+  const npmCli = candidates[0]
+  if (!npmCli) {
+    throw new Error('Unable to locate npm-cli.js for a shell-free Windows npm invocation.')
+  }
+  return { command: process.execPath, args: [npmCli, ...args] }
+}
+
 function ensureKunInstall() {
   if (!REQUIRED_PATHS.every((path) => existsSync(path))) {
-    const installKun = run('npm', ['--prefix', 'kun', 'ci'])
+    const npm = npmInvocation(['--prefix', 'kun', 'ci'])
+    const installKun = run(npm.command, npm.args)
     if (installKun.status !== 0) {
       process.exit(installKun.status || 1)
     }

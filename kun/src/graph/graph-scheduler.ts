@@ -25,7 +25,11 @@ import {
   loopGateWaivesIncompleteNode
 } from './graph-loop-policy.js'
 import { evaluateGraphLoopGates } from './graph-loop-gate-evaluator.js'
-import { finishGraphRun, tryCompleteGraphRun } from './graph-run-completion.js'
+import {
+  finishGraphRun,
+  isGraphRunCompletionFinalizing,
+  tryCompleteGraphRun
+} from './graph-run-completion.js'
 import { reconcileGraphReadiness } from './graph-readiness-reconciler.js'
 import type {
   GraphSchedulerOptions,
@@ -209,6 +213,17 @@ export class GraphScheduler extends GraphAttemptScheduler {
       ) return run
       if (run.status === 'completing') return this.finishCompletion(run)
       run = await this.options.mailbox.expire(run, `scheduler_${run.id}_${run.lastEventSeq}`)
+      if (
+        (run.status === 'awaiting_supervision' || run.status === 'awaiting_human') &&
+        isGraphRunCompletionFinalizing(run, this.options.mailbox)
+      ) {
+        run = await this.transitionRun(
+          run,
+          'completing',
+          'retry persisted final synthesis after supervision interruption'
+        )
+        return this.finishCompletion(run)
+      }
       run = await this.reconcileSubmitted(run, (request) => deferredSupervision.push(request))
       const exhaustedRequiredNode = terminalRequiredFailure(run, this.options.config())
       if (exhaustedRequiredNode) {

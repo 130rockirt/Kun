@@ -9,7 +9,7 @@ import { useTranslation } from 'react-i18next'
 import { useChatStore } from '../../store/chat-store'
 import { openGraphChildThread } from '../../graph/graph-child-navigation'
 import { useGraphStore } from '../../graph/graph-store'
-import type { GraphPlanningDraftView } from '../../graph/graph-types'
+import type { GraphPlanningDraftView, GraphRun } from '../../graph/graph-types'
 import { GraphAgentsView } from './GraphAgentsView'
 import { GraphLearningView } from './GraphLearningView'
 import { GraphPlanningCard } from './GraphPlanningCard'
@@ -33,6 +33,67 @@ export {
 
 type View = 'run' | 'agents' | 'learning'
 
+export const GRAPH_DASHBOARD_SNAPSHOT_REFRESH_INTERVAL_MS = 5_000
+
+const liveGraphRunStatuses = new Set<GraphRun['status']>([
+  'draft',
+  'validating',
+  'ready',
+  'running',
+  'pausing',
+  'awaiting_supervision',
+  'completing'
+])
+
+const livePlanningDraftStatuses = new Set<GraphPlanningDraftView['draft']['status']>([
+  'planning',
+  'validating',
+  'repairing',
+  'committing'
+])
+
+export function graphDashboardNeedsSnapshotRefresh(
+  runs: readonly Pick<GraphRun, 'status'>[],
+  drafts: readonly Pick<GraphPlanningDraftView, 'draft'>[],
+  sourceGraphTurnActive: boolean
+): boolean {
+  return sourceGraphTurnActive ||
+    runs.some((run) => liveGraphRunStatuses.has(run.status)) ||
+    drafts.some((draft) => livePlanningDraftStatuses.has(draft.draft.status))
+}
+
+export function useGraphDashboardSnapshotRefresh({
+  active,
+  threadId,
+  shouldRefresh,
+  refreshThread
+}: {
+  active: boolean
+  threadId: string | null
+  shouldRefresh: boolean
+  refreshThread: (threadId: string, options?: { silent?: boolean }) => Promise<void>
+}): void {
+  useEffect(() => {
+    if (!active || !threadId || !shouldRefresh) return
+    let disposed = false
+    let timeout: ReturnType<typeof globalThis.setTimeout> | null = null
+    const scheduleRefresh = (): void => {
+      timeout = globalThis.setTimeout(() => {
+        void refreshThread(threadId, { silent: true })
+        .catch(() => undefined)
+        .finally(() => {
+          if (!disposed) scheduleRefresh()
+        })
+      }, GRAPH_DASHBOARD_SNAPSHOT_REFRESH_INTERVAL_MS)
+    }
+    scheduleRefresh()
+    return () => {
+      disposed = true
+      if (timeout !== null) globalThis.clearTimeout(timeout)
+    }
+  }, [active, refreshThread, shouldRefresh, threadId])
+}
+
 export function selectGraphPlanningDraft(
   drafts: readonly GraphPlanningDraftView[],
   hasRun: boolean
@@ -48,15 +109,19 @@ export function selectGraphPlanningDraft(
 
 export function GraphModePanel({
   className = '',
-  onCollapse
+  onCollapse,
+  active = true
 }: {
   className?: string
   onCollapse?: () => void
+  active?: boolean
 }): ReactElement {
   const { t } = useTranslation('common')
   const reducedMotion = usePrefersReducedMotion()
   const activeThreadId = useChatStore((state) => state.activeThreadId)
   const workspaceRoot = useChatStore((state) => state.workspaceRoot)
+  const threadBusy = useChatStore((state) => state.busy)
+  const currentTurnOrchestration = useChatStore((state) => state.currentTurnOrchestration)
   const [view, setView] = useState<View>('run')
   const [steering, setSteering] = useState('')
   const {
@@ -110,10 +175,25 @@ export function GraphModePanel({
   const graphThreadId = childReturnTarget?.childThreadId === activeThreadId
     ? childReturnTarget.parentThreadId
     : activeThreadId
+  const sourceGraphTurnActive = graphThreadId === activeThreadId &&
+    threadBusy && currentTurnOrchestration === 'graph'
+  const shouldRefreshSnapshot = graphDashboardNeedsSnapshotRefresh(
+    runs,
+    drafts,
+    sourceGraphTurnActive
+  )
 
   useEffect(() => {
+    if (!active) return
     void refreshThread(graphThreadId)
-  }, [graphThreadId, refreshThread])
+  }, [active, graphThreadId, refreshThread])
+
+  useGraphDashboardSnapshotRefresh({
+    active,
+    threadId: graphThreadId,
+    shouldRefresh: shouldRefreshSnapshot,
+    refreshThread
+  })
 
   useEffect(() => {
     void refreshProject(workspaceRoot)

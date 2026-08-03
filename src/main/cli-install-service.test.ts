@@ -224,6 +224,15 @@ describe('CLI install service on Windows', () => {
     expect(process.env.PATH).not.toContain(join(directory, 'bin'))
   })
 
+  it('recognizes an existing Windows PATH entry with a trailing separator', async () => {
+    process.env.PATH = `${process.env.PATH};${join(directory, 'bin')}\\`
+
+    await expect(cliInstallStatus()).resolves.toMatchObject({
+      state: 'installed',
+      pathConfigured: true
+    })
+  })
+
   it('refuses to enable a missing or non-regular packaged launcher', async () => {
     await rm(join(directory, 'bin', 'kun.cmd'))
     const missing = await runCliInstallAction('install')

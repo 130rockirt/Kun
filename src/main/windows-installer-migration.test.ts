@@ -26,7 +26,7 @@ function makeTempRoot(): string {
 }
 
 function runHelper(input: {
-  action: 'ResolvePath' | 'ResolveSource' | 'ResolveUpdateScope' | 'ResolveUninstaller' | 'Recover' | 'Prepare' | 'FallbackCleanup' | 'Restore'
+  action: 'ResolvePath' | 'ResolveSource' | 'ResolveUpdateScope' | 'ResolveUninstaller' | 'Recover' | 'Prepare' | 'FallbackCleanup' | 'Restore' | 'ValidatePayload'
   source?: string
   secondary?: string
   currentUserSource?: string
@@ -114,6 +114,22 @@ function readJournal(path: string): { Records: Array<{ Stash: string }> } {
   }
 }
 
+function writePackagedInstallPayload(root: string, executable = 'Kun.exe') {
+  writeFileSync(join(root, executable), 'application executable')
+  const resources = join(root, 'resources')
+  mkdirSync(join(resources, 'app.asar.unpacked', 'kun', 'dist', 'cli'), { recursive: true })
+  writeFileSync(join(resources, 'app.asar'), 'packaged application')
+  writeFileSync(
+    join(resources, 'app.asar.unpacked', 'kun', 'dist', 'cli', 'serve-entry.js'),
+    'runtime entry'
+  )
+  mkdirSync(join(resources, 'app.asar.unpacked', 'kun', 'dist', 'manager'), { recursive: true })
+  writeFileSync(
+    join(resources, 'app.asar.unpacked', 'kun', 'dist', 'manager', 'manager-entry.js'),
+    'service manager entry'
+  )
+}
+
 afterEach(() => {
   while (tempRoots.length > 0) {
     const root = tempRoots.pop()
@@ -122,6 +138,52 @@ afterEach(() => {
 })
 
 windowsOnly('Windows installer migration helper', () => {
+  it('validates the installed application payload before PATH is updated', () => {
+    const target = join(makeTempRoot(), 'Kun')
+    mkdirSync(target, { recursive: true })
+    writePackagedInstallPayload(target)
+
+    const result = runHelper({ action: 'ValidatePayload', target })
+
+    expect(result.status, processError(result)).toBe(0)
+  })
+
+  it.each([
+    ['application executable', (target: string) => join(target, 'Kun.exe')],
+    ['resources\\app.asar', (target: string) => join(target, 'resources', 'app.asar')],
+    [
+      'unpacked Kun runtime entry',
+      (target: string) => join(target, 'resources', 'app.asar.unpacked', 'kun', 'dist', 'cli', 'serve-entry.js')
+    ],
+    [
+      'unpacked Kun service manager entry',
+      (target: string) => join(target, 'resources', 'app.asar.unpacked', 'kun', 'dist', 'manager', 'manager-entry.js')
+    ]
+  ])('rejects an incomplete installed payload missing %s', (label, missingPath) => {
+    const target = join(makeTempRoot(), 'Kun')
+    mkdirSync(target, { recursive: true })
+    writePackagedInstallPayload(target)
+    rmSync(missingPath(target))
+
+    const result = runHelper({ action: 'ValidatePayload', target })
+
+    expect(result.status).not.toBe(0)
+    expect(processError(result)).toContain('payload is missing')
+    expect(processError(result)).toContain(label)
+  })
+
+  it('rejects an empty installed payload file', () => {
+    const target = join(makeTempRoot(), 'Kun')
+    mkdirSync(target, { recursive: true })
+    writePackagedInstallPayload(target)
+    writeFileSync(join(target, 'resources', 'app.asar'), '')
+
+    const result = runHelper({ action: 'ValidatePayload', target })
+
+    expect(result.status).not.toBe(0)
+    expect(processError(result)).toContain('payload is empty for resources\\app.asar')
+  })
+
   it.each([
     ['C:\\Users\\me\\AppData\\Local\\Programs\\DeepSeek GUI', '', 'C:\\Users\\me\\AppData\\Local\\Programs\\Kun'],
     ['D:\\Apps\\deepseek-gui', '', 'D:\\Apps\\Kun'],

@@ -31,6 +31,10 @@ import type {
 
 export { selectGraphPlanningCorrectionDraft } from './graph-planning-selection'
 
+type GraphThreadRefreshOptions = {
+  silent?: boolean
+}
+
 type GraphViewState = {
   threadId: string | null
   workspace: string
@@ -54,7 +58,7 @@ type GraphViewState = {
   wakingObligationId: string | null
   loading: boolean
   error: string | null
-  refreshThread: (threadId: string | null) => Promise<void>
+  refreshThread: (threadId: string | null, options?: GraphThreadRefreshOptions) => Promise<void>
   refreshProject: (workspace: string) => Promise<void>
   refreshSelectedRun: () => Promise<void>
   selectRun: (runId: string | null) => void
@@ -131,8 +135,9 @@ export const useGraphStore = create<GraphViewState>((set, get) => ({
   loading: false,
   error: null,
 
-  refreshThread: async (threadId) => {
-    set({ threadId, loading: true, error: null })
+  refreshThread: async (threadId, options) => {
+    const silent = options?.silent === true
+    set(silent ? { threadId } : { threadId, loading: true, error: null })
     if (!threadId) {
       set({
         runs: [],
@@ -174,10 +179,10 @@ export const useGraphStore = create<GraphViewState>((set, get) => ({
         artifactPage: null,
         artifactContent: '',
         artifactLoading: false,
-        loading: false
+        ...(silent ? {} : { loading: false, error: null })
       })
     } catch (error) {
-      set({ loading: false, error: message(error) })
+      if (!silent) set({ loading: false, error: message(error) })
     }
   },
 

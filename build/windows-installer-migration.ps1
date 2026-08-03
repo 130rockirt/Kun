@@ -1,6 +1,6 @@
 param(
   [Parameter(Mandatory = $true)]
-  [ValidateSet('ResolvePath', 'ResolveSource', 'ResolveUpdateScope', 'ResolveUninstaller', 'StopProcesses', 'Recover', 'Prepare', 'FallbackCleanup', 'Restore', 'UpdatePath')]
+  [ValidateSet('ResolvePath', 'ResolveSource', 'ResolveUpdateScope', 'ResolveUninstaller', 'StopProcesses', 'Recover', 'Prepare', 'FallbackCleanup', 'Restore', 'ValidatePayload', 'UpdatePath')]
   [string]$Action,
   [string]$ResultPath = ''
 )
@@ -875,6 +875,55 @@ function Assert-PackagedApplicationPayload([string]$Source) {
   }
 }
 
+function Get-ExpectedApplicationExecutable {
+  $configured = (Get-EnvironmentValue 'KUN_INSTALLER_APP_EXECUTABLE').Trim()
+  $executable = if ([string]::IsNullOrWhiteSpace($configured)) {
+    (Get-CanonicalLeaf) + '.exe'
+  } else {
+    $configured
+  }
+  if ([string]::IsNullOrWhiteSpace($executable) -or
+      -not [string]::Equals([IO.Path]::GetFileName($executable), $executable, [StringComparison]::Ordinal) -or
+      $executable.IndexOfAny([IO.Path]::GetInvalidFileNameChars()) -ge 0) {
+    throw "The configured application executable is invalid: $executable"
+  }
+  return $executable
+}
+
+function Assert-NonEmptyPayloadFile([string]$PathValue, [string]$Label) {
+  if (-not (Test-Path -LiteralPath $PathValue -PathType Leaf)) {
+    throw "The installed Kun payload is missing ${Label}: $PathValue"
+  }
+
+  $item = Get-Item -LiteralPath $PathValue -Force
+  if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+    throw "The installed Kun payload must not use a reparse point for ${Label}: $PathValue"
+  }
+  if ($item.Length -le 0) {
+    throw "The installed Kun payload is empty for ${Label}: $PathValue"
+  }
+}
+
+function Assert-PackagedInstallPayload {
+  $target = Normalize-FullPath (Get-EnvironmentValue 'KUN_INSTALLER_TARGET')
+  if ([string]::IsNullOrWhiteSpace($target)) {
+    throw 'The installed Kun payload target is not configured.'
+  }
+  Assert-SafeInstallRoot $target 'Installed application root'
+  if (-not (Test-Path -LiteralPath $target -PathType Container)) {
+    throw "The installed Kun payload directory is missing: $target"
+  }
+
+  Assert-NonEmptyPayloadFile (Join-Path $target (Get-ExpectedApplicationExecutable)) 'the application executable'
+  Assert-NonEmptyPayloadFile (Join-Path $target 'resources\app.asar') 'resources\app.asar'
+  Assert-NonEmptyPayloadFile (
+    Join-Path $target 'resources\app.asar.unpacked\kun\dist\cli\serve-entry.js'
+  ) 'the unpacked Kun runtime entry'
+  Assert-NonEmptyPayloadFile (
+    Join-Path $target 'resources\app.asar.unpacked\kun\dist\manager\manager-entry.js'
+  ) 'the unpacked Kun service manager entry'
+}
+
 function Test-AppSpecificUninstaller([string]$Source) {
   if ([string]::IsNullOrWhiteSpace($Source)) {
     return $false
@@ -1316,6 +1365,9 @@ try {
     'Restore' {
       Invoke-RestoreJournal
       Remove-EmptyLegacyContainers
+    }
+    'ValidatePayload' {
+      Assert-PackagedInstallPayload
     }
     'UpdatePath' {
       Update-UserPath

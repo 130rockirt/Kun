@@ -6,6 +6,7 @@ type MockUpdater = EventEmitter & {
   autoDownload: boolean
   autoInstallOnAppQuit: boolean
   allowPrerelease: boolean
+  allowDowngrade: boolean
   forceDevUpdateConfig: boolean
   logger: unknown
   setFeedURL: ReturnType<typeof vi.fn>
@@ -22,12 +23,15 @@ let appIsPackaged: boolean
 let mockedFiles: Map<string, string>
 let showMessageBox: ReturnType<typeof vi.fn>
 let openExternal: ReturnType<typeof vi.fn>
+let relaunchApp: ReturnType<typeof vi.fn>
+let exitApp: ReturnType<typeof vi.fn>
 
 function createUpdater(): MockUpdater {
   return Object.assign(new EventEmitter(), {
     autoDownload: true,
     autoInstallOnAppQuit: true,
     allowPrerelease: false,
+    allowDowngrade: true,
     forceDevUpdateConfig: false,
     logger: null,
     setFeedURL: vi.fn(),
@@ -48,6 +52,8 @@ beforeEach(() => {
   mockedFiles = new Map()
   showMessageBox = vi.fn().mockResolvedValue({ response: 1 })
   openExternal = vi.fn().mockResolvedValue(undefined)
+  relaunchApp = vi.fn()
+  exitApp = vi.fn()
   vi.doMock('node:fs/promises', () => ({
     mkdir: vi.fn().mockResolvedValue(undefined),
     readFile: vi.fn(async (path: string) => {
@@ -67,7 +73,9 @@ beforeEach(() => {
       getAppPath: () => '/tmp/deepseek-gui-updater-test-app',
       getPath: () => '/tmp/deepseek-gui-updater-test-user-data',
       getVersion: () => appVersion,
-      getLocale: () => 'en-US'
+      getLocale: () => 'en-US',
+      relaunch: relaunchApp,
+      exit: exitApp
     },
     autoUpdater: nativeUpdater,
     BrowserWindow: class {},
@@ -203,6 +211,15 @@ describe('checkGuiUpdate feed URL', () => {
 })
 
 describe('installGuiUpdate', () => {
+  it('explicitly prevents automatic downgrade when changing update channels', async () => {
+    const module = await import('./gui-updater')
+    module.initializeGuiUpdater(() => null, () => 'frontier')
+    module.setGuiUpdateChannel('frontier')
+    module.setGuiUpdateChannel('stable')
+
+    expect(updater.allowDowngrade).toBe(false)
+  })
+
   it('passes the running Windows install directory to the spawned NSIS updater', async () => {
     const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')
     const execPathDescriptor = Object.getOwnPropertyDescriptor(process, 'execPath')
@@ -283,7 +300,10 @@ describe('installGuiUpdate', () => {
     await Promise.resolve()
 
     expect(beforeInstall).toHaveBeenCalledTimes(1)
-    expect(setUpdateInstallQuitting).not.toHaveBeenCalled()
+    expect(setUpdateInstallQuitting).toHaveBeenCalledWith(true)
+    expect(setUpdateInstallQuitting.mock.invocationCallOrder[0]).toBeLessThan(
+      beforeInstall.mock.invocationCallOrder[0]
+    )
     expect(updater.quitAndInstall).not.toHaveBeenCalled()
 
     finishCleanup()
@@ -328,7 +348,7 @@ describe('installGuiUpdate', () => {
 
     finishCleanup()
     await expect(installing).resolves.toEqual({ ok: true })
-    expect(setUpdateInstallQuitting).toHaveBeenCalledTimes(2)
+    expect(setUpdateInstallQuitting).toHaveBeenCalledTimes(1)
     expect(setUpdateInstallQuitting).toHaveBeenLastCalledWith(true)
     expect(updater.quitAndInstall).toHaveBeenCalledWith(true, true)
   })
@@ -355,6 +375,137 @@ describe('installGuiUpdate', () => {
       message: 'quit failed'
     })
     expect(setUpdateInstallQuitting.mock.calls).toEqual([[true], [false]])
+    expect(relaunchApp).toHaveBeenCalledOnce()
+    expect(exitApp).toHaveBeenCalledWith(0)
+  })
+
+  it('relaunches the old application when electron-updater emits an install error', async () => {
+    const module = await import('./gui-updater')
+    const setUpdateInstallQuitting = vi.fn()
+    updater.quitAndInstall.mockImplementation(() => {
+      updater.emit('error', new Error('installer could not start'))
+    })
+    module.initializeGuiUpdater(
+      () => null,
+      () => 'stable',
+      async () => undefined,
+      undefined,
+      setUpdateInstallQuitting
+    )
+    updater.emit('update-downloaded', { version: '0.2.0', releaseDate: '2026-06-06T00:00:00.000Z' })
+
+    await expect(module.installGuiUpdate()).resolves.toMatchObject({
+      ok: false,
+      code: 'install_failed',
+      message: 'installer could not start'
+    })
+    expect(setUpdateInstallQuitting.mock.calls).toEqual([[true], [false]])
+    expect(relaunchApp).toHaveBeenCalledOnce()
+    expect(exitApp).toHaveBeenCalledWith(0)
+  })
+
+  it('recovers when electron-updater reports an asynchronous NSIS launch failure', async () => {
+    const module = await import('./gui-updater')
+    const setUpdateInstallQuitting = vi.fn()
+    updater.quitAndInstall.mockImplementation(() => {
+      queueMicrotask(() => updater.emit('error', new Error('async installer launch failed')))
+    })
+    module.initializeGuiUpdater(
+      () => null,
+      () => 'stable',
+      async () => undefined,
+      undefined,
+      setUpdateInstallQuitting
+    )
+    updater.emit('update-downloaded', { version: '0.2.0', releaseDate: '2026-06-06T00:00:00.000Z' })
+
+    await expect(module.installGuiUpdate()).resolves.toEqual({ ok: true })
+    await Promise.resolve()
+
+    expect(module.getGuiUpdateState()).toMatchObject({
+      status: 'error',
+      code: 'install_failed',
+      message: 'async installer launch failed'
+    })
+    expect(setUpdateInstallQuitting.mock.calls).toEqual([[true], [false]])
+    expect(relaunchApp).toHaveBeenCalledOnce()
+    expect(exitApp).toHaveBeenCalledWith(0)
+  })
+
+  it('relaunches after a partially completed update preflight fails', async () => {
+    const module = await import('./gui-updater')
+    const setUpdateInstallQuitting = vi.fn()
+    module.initializeGuiUpdater(
+      () => null,
+      () => 'stable',
+      async () => {
+        throw new Error('shared manager stop timed out')
+      },
+      undefined,
+      setUpdateInstallQuitting
+    )
+    updater.emit('update-downloaded', { version: '0.2.0', releaseDate: '2026-06-06T00:00:00.000Z' })
+
+    await expect(module.installGuiUpdate()).resolves.toMatchObject({
+      ok: false,
+      code: 'install_failed',
+      message: 'shared manager stop timed out'
+    })
+    await Promise.resolve()
+
+    expect(setUpdateInstallQuitting.mock.calls).toEqual([[true], [false]])
+    expect(relaunchApp).toHaveBeenCalledOnce()
+    expect(exitApp).toHaveBeenCalledWith(0)
+  })
+
+  it('shares one install operation when the action is triggered twice', async () => {
+    const module = await import('./gui-updater')
+    let finishCleanup = (): void => {
+      throw new Error('cleanup resolver was not set')
+    }
+    module.initializeGuiUpdater(
+      () => null,
+      () => 'stable',
+      () => new Promise<void>((resolve) => { finishCleanup = resolve })
+    )
+    updater.emit('update-downloaded', { version: '0.2.0', releaseDate: '2026-06-06T00:00:00.000Z' })
+
+    const first = module.installGuiUpdate()
+    const second = module.installGuiUpdate()
+    expect(second).toBe(first)
+
+    await Promise.resolve()
+    finishCleanup()
+    await expect(first).resolves.toEqual({ ok: true })
+    expect(updater.quitAndInstall).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('downloadGuiUpdate recovery', () => {
+  it('clears stale download state so an interrupted download can be retried', async () => {
+    process.env.KUN_UPDATE_URL = 'https://updates.example.test/'
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }))
+    const module = await import('./gui-updater')
+    module.initializeGuiUpdater(() => null, () => 'stable')
+    updater.emit('update-available', { version: '0.2.0', releaseDate: '2026-06-06T00:00:00.000Z' })
+    updater.downloadUpdate
+      .mockRejectedValueOnce(new Error('connection reset'))
+      .mockResolvedValueOnce(['C:\\Temp\\Kun-0.2.0.exe'])
+
+    await expect(module.downloadGuiUpdate()).resolves.toMatchObject({
+      ok: false,
+      code: 'download_failed'
+    })
+    await expect(module.installGuiUpdate()).resolves.toMatchObject({
+      ok: false,
+      code: 'install_failed',
+      message: 'The update has not finished downloading yet.'
+    })
+    await expect(module.downloadGuiUpdate()).resolves.toEqual({
+      ok: true,
+      paths: ['C:\\Temp\\Kun-0.2.0.exe']
+    })
+    expect(updater.downloadUpdate).toHaveBeenCalledTimes(2)
   })
 })
 

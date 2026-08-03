@@ -193,6 +193,13 @@ Var /GLOBAL KunInstallerStopResult
     Quit
   ${endif}
 
+  !insertmacro kunRunMigrationHelper ValidatePayload
+  ${if} $KunInstallerHelperExitCode != 0
+    MessageBox MB_OK|MB_ICONSTOP "Kun installation is incomplete. No PATH changes were made; run the installer again to repair it.$\r$\n$KunInstallerHelperOutput" /SD IDOK
+    SetErrorLevel 2
+    Quit
+  ${endif}
+
   !insertmacro kunRunMigrationHelper UpdatePath
   ${if} $KunInstallerHelperExitCode != 0
     DetailPrint "Kun could not update the user PATH: $KunInstallerHelperOutput"

@@ -211,6 +211,7 @@ import {
   classifyManagedRuntimeHotApplyResponse
 } from './runtime/kun-runtime-config-service'
 import { ManagedRuntimeShutdownCoordinator } from './runtime/managed-runtime-shutdown-coordinator'
+import { inspectPackagedInstallHealth } from './packaged-install-health'
 import {
   registerKunExtensionProtocol,
 } from './extensions/extension-resource-protocol'
@@ -481,6 +482,7 @@ let protectedCredentialSurface: ProtectedCredentialSurfaceController | null = nu
 let bindExtensionMainWindow: ((window: BrowserWindow) => void) | undefined
 let shutdownDesktopResourceLeases: (() => Promise<void>) | null = null
 let terminalPtyController: TerminalPtyController | null = null
+let activeServiceManager: ServiceManagerConnection | null = null
 
 type GuiUpdaterModule = typeof import('./gui-updater')
 
@@ -583,6 +585,9 @@ const runtimeShutdown = new ManagedRuntimeShutdownCoordinator(async () => {
   if (runtimeShutdown.isUpdateInstallQuit || runtimeShutdown.isStorageRelocationQuit) {
     const settings = await store.load()
     await kunRuntimeAdapter.stopSharedAndWait(settings)
+    if (runtimeShutdown.isUpdateInstallQuit) {
+      await shutdownActiveServiceManagerForUpdate()
+    }
     if (runtimeShutdown.isStorageRelocationQuit) {
       const dataDir = resolveKunDataDir(resolveKunRuntimeSettings(settings))
       await Promise.all([
@@ -605,6 +610,10 @@ function stopManagedRuntimes(): Promise<void> {
   return runtimeShutdown.stop()
 }
 
+function prepareManagedRuntimesForUpdate(): Promise<void> {
+  return runtimeShutdown.prepareForUpdate()
+}
+
 async function loadGuiUpdaterModule(): Promise<GuiUpdaterModule> {
   if (!guiUpdaterModulePromise) {
     guiUpdaterModulePromise = import('./gui-updater')
@@ -613,7 +622,7 @@ async function loadGuiUpdaterModule(): Promise<GuiUpdaterModule> {
           module.initializeGuiUpdater(
             () => mainWindow,
             async () => (await store.load()).guiUpdate.channel,
-            stopManagedRuntimesForQuit,
+            prepareManagedRuntimesForUpdate,
             async () => (await store.load()).locale,
             setUpdateInstallQuitting
           )
@@ -1959,7 +1968,7 @@ async function interruptStorageRelocationWork(manager: ServiceManagerConnection)
   throw new Error('active_writer: Timed out waiting for active Kun writes to stop.')
 }
 
-async function shutdownServiceManagerForRelocation(manager: ServiceManagerConnection): Promise<void> {
+async function shutdownServiceManagerAndWait(manager: ServiceManagerConnection): Promise<void> {
   await requestManagerJson(manager, '/v1/manager/shutdown', {
     method: 'POST',
     body: { instanceId: manager.discovery.instanceId },
@@ -1975,6 +1984,13 @@ async function shutdownServiceManagerForRelocation(manager: ServiceManagerConnec
     }
   }
   throw new Error('active_writer: Kun Service Manager did not exit before migration.')
+}
+
+async function shutdownActiveServiceManagerForUpdate(): Promise<void> {
+  const manager = activeServiceManager
+  if (!manager) return
+  await shutdownServiceManagerAndWait(manager)
+  if (activeServiceManager === manager) activeServiceManager = null
 }
 
 async function runStorageRelocationMaintenance(productionSettingsPath: string): Promise<void> {
@@ -2037,7 +2053,7 @@ async function runStorageRelocationMaintenance(productionSettingsPath: string): 
         if (!Array.isArray(body.threads)) throw new Error('Runtime thread verification returned invalid data.')
       } catch (error) {
         if (settings) await kunRuntimeAdapter.stopSharedAndWait(settings).catch(() => undefined)
-        if (manager) await shutdownServiceManagerForRelocation(manager).catch(() => undefined)
+        if (manager) await shutdownServiceManagerAndWait(manager).catch(() => undefined)
         throw error
       }
     }
@@ -2379,6 +2395,20 @@ app.whenReady().then(async () => {
   traceStartup('app.whenReady:start')
   if (!gotSingleInstanceLock) return
 
+  const installHealth = inspectPackagedInstallHealth({
+    isPackaged: app.isPackaged,
+    executablePath: process.execPath,
+    resourcesPath: process.resourcesPath
+  })
+  if (!installHealth.ok) {
+    dialog.showErrorBox(
+      'Kun installation needs repair',
+      `The installed application is incomplete (${installHealth.missing.join(', ')}). Reinstall Kun and try again.`
+    )
+    app.quit()
+    return
+  }
+
   try {
     const cleared = await clearDevelopmentRendererHttpCache(
       session.defaultSession,
@@ -2408,6 +2438,7 @@ app.whenReady().then(async () => {
   const serviceManager = await ensureKunServiceManager({
     settingsPath: productionSettingsPath
   })
+  activeServiceManager = serviceManager
   const sharedSettingsBackend = new ManagerRevisionedDocumentClient(serviceManager, 'settings')
   const sharedClientStateDocument = new ManagerRevisionedDocumentClient(serviceManager, 'client-state')
   ipcMain.handle('shared-client-state:get', async () => {
@@ -2870,7 +2901,8 @@ app.whenReady().then(async () => {
       await interruptStorageRelocationWork(serviceManager)
       runtimeShutdown.setStorageRelocationQuit(true)
       await runtimeShutdown.stopForQuit()
-      await shutdownServiceManagerForRelocation(serviceManager)
+      await shutdownServiceManagerAndWait(serviceManager)
+      if (activeServiceManager === serviceManager) activeServiceManager = null
       mainWindow?.destroy()
       app.relaunch()
       app.exit(0)

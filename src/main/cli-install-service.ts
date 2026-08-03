@@ -289,9 +289,12 @@ function shellConfigPath(): { path: string; kind: 'posix' | 'fish' } | null {
 }
 
 function pathContains(path: string): boolean {
-  const expected = process.platform === 'win32' ? path.toLowerCase() : path
+  const normalize = (value: string): string => process.platform === 'win32'
+    ? value.trim().replace(/[\\/]+$/u, '').toLowerCase()
+    : value
+  const expected = normalize(path)
   return (process.env.PATH ?? '').split(process.platform === 'win32' ? ';' : ':')
-    .some((entry) => (process.platform === 'win32' ? entry.toLowerCase() : entry) === expected)
+    .some((entry) => normalize(entry) === expected)
 }
 
 function errorCode(error: unknown): string {

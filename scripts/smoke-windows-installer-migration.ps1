@@ -174,6 +174,17 @@ function Assert-PathReconciled([string]$ExpectedLocation, [string[]]$RejectedLoc
   }
 }
 
+function Assert-PathEntryRemoved([string]$InstallLocation) {
+  $parts = @([Environment]::GetEnvironmentVariable('Path', 'User') -split ';' | Where-Object {
+    -not [string]::IsNullOrWhiteSpace($_)
+  })
+  $binPath = Join-Path $InstallLocation 'bin'
+  $remaining = @($parts | Where-Object {
+    [string]::Equals($_.TrimEnd('\'), $binPath.TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase)
+  })
+  Assert-True ($remaining.Count -eq 0) "PATH entry remains after uninstall: $binPath"
+}
+
 function Get-ShortcutPaths([ValidateSet('CurrentUser', 'AllUsers')][string]$Scope) {
   if ($Scope -eq 'AllUsers') {
     return @(
@@ -252,6 +263,31 @@ try {
   Add-DataSentinel (Join-Path $env:APPDATA 'DeepSeek GUI')
   Add-DataSentinel (Join-Path $HOME '.kun')
   Add-DataSentinel (Join-Path $HOME '.deepseekgui')
+
+  $unicodeDirectoryName = -join @(
+    [char]0x4E2D # U+4E2D
+    [char]0x6587 # U+6587
+    [char]0x20
+    [char]0x5B89 # U+5B89
+    [char]0x88C5 # U+88C5
+    [char]0x76EE # U+76EE
+    [char]0x5F55 # U+5F55
+  )
+  $unicodeParent = Join-Path $root $unicodeDirectoryName
+  $unicodeTarget = Join-Path $unicodeParent 'Kun'
+  Invoke-Installer 'Unicode current-user install' @('/S', '/currentuser', ('"/D={0}"' -f $unicodeParent))
+  Find-KunRegistration $unicodeTarget
+  Assert-RegisteredLocation $unicodeTarget
+  Assert-PathReconciled $unicodeTarget @()
+  $script:currentScenario = 'Unicode packaged CLI smoke'
+  & node (Join-Path $PSScriptRoot 'smoke-packaged-cli.cjs') '--resources' (Join-Path $unicodeTarget 'resources')
+  Assert-True ($LASTEXITCODE -eq 0) 'The packaged CLI did not run from the Unicode install directory.'
+  $script:currentScenario = 'Unicode current-user uninstall'
+  $unicodeUninstaller = Join-Path $unicodeTarget 'Uninstall Kun.exe'
+  $unicodeUninstall = Start-Process -FilePath $unicodeUninstaller -ArgumentList @('/S', '/currentuser') -Wait -PassThru
+  Assert-True ($unicodeUninstall.ExitCode -eq 0) "Unicode smoke uninstaller exited with $($unicodeUninstall.ExitCode)."
+  Assert-PathEntryRemoved $unicodeTarget
+  Assert-NoKunShortcuts 'CurrentUser'
 
   $seedParent = Join-Path $root 'seed'
   $seed = Join-Path $seedParent 'Kun'
@@ -428,6 +464,7 @@ try {
   $machineUninstaller = Join-Path $machineTarget 'Uninstall Kun.exe'
   $machineUninstall = Start-Process -FilePath $machineUninstaller -ArgumentList @('/S', '/allusers') -Wait -PassThru
   Assert-True ($machineUninstall.ExitCode -eq 0) "All-users smoke uninstaller exited with $($machineUninstall.ExitCode)."
+  Assert-PathEntryRemoved $machineTarget
   foreach ($sentinel in $sentinels) {
     Assert-True (Test-Path -LiteralPath $sentinel) "All-users uninstall removed a user-data sentinel: $sentinel"
   }

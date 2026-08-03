@@ -74,7 +74,7 @@ async function waitForRun(
 }
 
 describe('Graph runtime shutdown recovery', () => {
-  it('does not cancel an aborted legacy owner while completing and finalizes once', async () => {
+  it('finishes a summarized run after its failed source turn is recovered', async () => {
     const root = await mkdtemp(join(tmpdir(), 'kun-graph-shutdown-recovery-'))
     const workspace = join(root, 'workspace')
     await mkdir(workspace)
@@ -123,23 +123,45 @@ describe('Graph runtime shutdown recovery', () => {
       idempotencyKey: 'create_shutdown_recovery',
       start: true
     })
-	    await seed.store.append(created.run.id, {
-      expectedSeq: created.run.lastEventSeq,
-      graphRevision: created.run.currentRevision,
-      commandId: 'enter_completing',
-      idempotencyKey: 'enter_completing',
-      event: {
-        type: 'run_status_changed',
-        payload: {
-          from: 'running',
-          to: 'completing',
-          reason: 'all completion gates passed'
+    let run = created.run
+    for (const node of run.plans.at(-1)!.nodes) {
+      run = await acceptPersistedNode(seed, run, node.id, workspace)
+    }
+    run = await appendGraphEvent(seed, run, 'enter_completing', {
+      type: 'run_status_changed',
+      payload: {
+        from: 'running',
+        to: 'completing',
+        reason: 'all completion gates passed'
+      }
+    })
+    run = await appendGraphEvent(seed, run, 'persist_final_summary', {
+      type: 'run_summary_recorded',
+      payload: {
+        summary: {
+          version: GRAPH_CONTRACT_VERSION,
+          finalAnswer: 'The accepted Graph report is durable.',
+          evidenceRefs: [],
+          unresolvedRisks: [],
+          changedFiles: [],
+          validationResults: [],
+          totalTokens: 0,
+          totalElapsedMs: 0,
+          completedAt: '2026-07-30T15:00:00.000Z'
         }
-	      }
-	    })
+      }
+    })
+    await appendGraphEvent(seed, run, 'hold_final_summary_for_recovery', {
+      type: 'run_status_changed',
+      payload: {
+        from: 'completing',
+        to: 'awaiting_supervision',
+        reason: 'scheduler recovery required after summary persistence'
+      }
+    })
 	    await threadStore.upsert({
 	      ...thread,
-	      turns: [{ ...sourceTurn, status: 'aborted' }]
+	      turns: [{ ...sourceTurn, status: 'failed' }]
 	    })
 
     const firstRestart = composition()
@@ -168,7 +190,7 @@ describe('Graph runtime shutdown recovery', () => {
       entry.event.type === 'run_status_changed' &&
       entry.event.payload.to === 'cancelled')).toHaveLength(0)
     expect((await threadStore.get(thread.id))?.turns[0]).toMatchObject({
-      status: 'aborted'
+      status: 'failed'
     })
     expect(leadTurn).not.toHaveBeenCalled()
     await secondRestart.stop()
@@ -681,4 +703,101 @@ async function appendGraphEvent(
     idempotencyKey: key,
     event
   })).state
+}
+
+async function acceptPersistedNode(
+  runtime: GraphRuntimeComposition,
+  run: GraphRunV1,
+  nodeId: string,
+  workspace: string
+): Promise<GraphRunV1> {
+  let next = await appendGraphEvent(runtime, run, `${nodeId}_ready`, {
+    type: 'node_status_changed',
+    payload: {
+      nodeId,
+      from: 'pending',
+      to: 'ready',
+      reason: 'persisted accepted-result fixture'
+    }
+  })
+  const attempt = GraphNodeAttemptV1Schema.parse({
+    version: GRAPH_CONTRACT_VERSION,
+    id: `attempt_${nodeId}_accepted`,
+    runId: next.id,
+    nodeId,
+    revision: next.currentRevision,
+    attemptNumber: 1,
+    iteration: 0,
+    commandId: `attempt_${nodeId}_accepted`,
+    idempotencyKey: `attempt_${nodeId}_accepted`,
+    status: 'queued',
+    assignment: {
+      ...testAssignmentSnapshot(),
+      workspaceRoot: workspace
+    },
+    queuedAt: '2026-07-30T15:00:00.000Z',
+    tokenUsage: 0,
+    elapsedMs: 0
+  })
+  const events = [
+    { type: 'attempt_created' as const, payload: { attempt } },
+    {
+      type: 'attempt_status_changed' as const,
+      payload: {
+        nodeId,
+        attemptId: attempt.id,
+        from: 'queued' as const,
+        to: 'running' as const
+      }
+    },
+    {
+      type: 'node_status_changed' as const,
+      payload: {
+        nodeId,
+        from: 'queued' as const,
+        to: 'running' as const,
+        reason: 'persisted accepted-result fixture'
+      }
+    },
+    {
+      type: 'attempt_status_changed' as const,
+      payload: {
+        nodeId,
+        attemptId: attempt.id,
+        from: 'running' as const,
+        to: 'submitted' as const
+      }
+    },
+    {
+      type: 'node_status_changed' as const,
+      payload: {
+        nodeId,
+        from: 'running' as const,
+        to: 'submitted' as const,
+        reason: 'persisted accepted-result fixture'
+      }
+    },
+    {
+      type: 'attempt_status_changed' as const,
+      payload: {
+        nodeId,
+        attemptId: attempt.id,
+        from: 'submitted' as const,
+        to: 'accepted' as const
+      }
+    },
+    {
+      type: 'node_status_changed' as const,
+      payload: {
+        nodeId,
+        from: 'submitted' as const,
+        to: 'accepted' as const,
+        reason: 'persisted accepted-result fixture'
+      }
+    }
+  ]
+  for (const [index, event] of events.entries()) {
+    next = await appendGraphEvent(runtime, next, `${nodeId}_accepted_${index}`, event)
+  }
+  return next
 }

@@ -18,13 +18,24 @@ type CompletionOptions = {
 
 export async function tryCompleteGraphRun(initialRun: GraphRunV1, options: CompletionOptions): Promise<GraphRunV1> {
   let run = initialRun
-  const required = Object.values(run.nodes).filter((node) => node.node.required && node.node.kind !== 'loop_gate')
-  if (!required.length || !required.every((node) => node.status === 'accepted' || node.status === 'superseded' || loopGateWaivesIncompleteNode(run, node.node.id))) return run
+  if (!graphRunCompletionGatesPassed(run)) return run
   if (options.mailbox.unresolvedBlockers(run).length) return run
-  if (!run.plans.at(-1)!.completionNodeIds.every((id) => run.nodes[id]?.status === 'accepted' || run.nodes[id]?.status === 'superseded' || loopGateWaivesIncompleteNode(run, id))) return run
-  if (Object.values(run.nodes).some((node) => ['pending', 'blocked', 'ready', 'queued', 'running', 'submitted', 'reviewing'].includes(node.status))) return run
   run = await options.transitionRun(run, 'completing', 'all completion gates passed')
   return finishGraphRun(run, options)
+}
+
+export function graphRunCompletionGatesPassed(run: GraphRunV1): boolean {
+  const required = Object.values(run.nodes).filter((node) => node.node.required && node.node.kind !== 'loop_gate')
+  if (!required.length || !required.every((node) =>
+    node.status === 'accepted' ||
+    node.status === 'superseded' ||
+    loopGateWaivesIncompleteNode(run, node.node.id))) return false
+  if (!run.plans.at(-1)!.completionNodeIds.every((id) =>
+    run.nodes[id]?.status === 'accepted' ||
+    run.nodes[id]?.status === 'superseded' ||
+    loopGateWaivesIncompleteNode(run, id))) return false
+  return !Object.values(run.nodes).some((node) =>
+    ['pending', 'blocked', 'ready', 'queued', 'running', 'submitted', 'reviewing'].includes(node.status))
 }
 
 export async function finishGraphRun(initialRun: GraphRunV1, options: CompletionOptions): Promise<GraphRunV1> {
@@ -45,4 +56,21 @@ export async function finishGraphRun(initialRun: GraphRunV1, options: Completion
   await options.requestSupervision(run.id, 'completion', [], run.summary!.finalAnswer.slice(0, 4_096))
   await options.onTerminal?.(run)
   return run
+}
+
+/**
+ * Summary persistence is the first durable step of terminal finalization.
+ * A later cleanup or status-transition failure may temporarily move the run
+ * back to supervision. Only summaries whose current revision still satisfies
+ * the normal completion gates receive that protection.
+ */
+export function isGraphRunCompletionFinalizing(
+  run: GraphRunV1,
+  mailbox: Pick<GraphMailbox, 'unresolvedBlockers'>
+): boolean {
+  return run.status === 'completing' || (
+    run.summary !== undefined &&
+    graphRunCompletionGatesPassed(run) &&
+    mailbox.unresolvedBlockers(run).length === 0
+  )
 }

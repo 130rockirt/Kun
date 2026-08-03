@@ -208,6 +208,33 @@ describe('Graph renderer store', () => {
     expect(client.listRuns).toHaveBeenCalledTimes(2)
   })
 
+  it('keeps periodic Graph snapshot reconciliation silent', async () => {
+    let resolveRuns!: (runs: GraphRun[]) => void
+    client.listRuns.mockReturnValueOnce(new Promise<GraphRun[]>((resolve) => {
+      resolveRuns = resolve
+    }))
+    useGraphStore.setState({
+      threadId: 'thread_1',
+      loading: false,
+      error: 'Keep an unrelated action error visible.'
+    })
+
+    const refresh = useGraphStore.getState().refreshThread('thread_1', { silent: true })
+    expect(useGraphStore.getState()).toMatchObject({
+      loading: false,
+      error: 'Keep an unrelated action error visible.'
+    })
+
+    resolveRuns([run('run_1', 2)])
+    await refresh
+
+    expect(useGraphStore.getState()).toMatchObject({
+      loading: false,
+      error: 'Keep an unrelated action error visible.',
+      runs: [{ id: 'run_1', lastEventSeq: 2 }]
+    })
+  })
+
   it('reconciles planning events and resumes with the current draft revision', async () => {
     useGraphStore.setState({
       threadId: 'thread_1',

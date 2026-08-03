@@ -51,6 +51,20 @@ function Require-Command([string]$Name) {
   }
 }
 
+function Assert-WindowsSigningConfiguration {
+  $hasCredential = -not [string]::IsNullOrWhiteSpace($env:WIN_CSC_LINK) -or
+    -not [string]::IsNullOrWhiteSpace($env:CSC_LINK)
+  if (-not $hasCredential) {
+    Write-Err 'Windows release signing requires WIN_CSC_LINK (or CSC_LINK).'
+    exit 1
+  }
+
+  if ([string]::IsNullOrWhiteSpace($env:WIN_CSC_PUBLISHER_NAME)) {
+    Write-Err 'Windows release signing requires WIN_CSC_PUBLISHER_NAME to match the signing certificate subject.'
+    exit 1
+  }
+}
+
 function Load-LocalReleaseEnv([string]$RootPath) {
   $configured = [Environment]::GetEnvironmentVariable('KUN_RELEASE_ENV', 'Process')
   if (-not $configured) {
@@ -83,6 +97,8 @@ function Load-LocalReleaseEnv([string]$RootPath) {
 $Root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 Set-Location $Root
 Load-LocalReleaseEnv $Root
+Assert-WindowsSigningConfiguration
+$env:KUN_REQUIRE_WINDOWS_SIGNING = '1'
 
 if ($Stable -and $Frontier) {
   Write-Err 'Use only one of -Stable or -Frontier.'
@@ -202,6 +218,21 @@ Write-Info 'Building Windows installer...'
 & npm run dist:win
 if ($LASTEXITCODE -ne 0) {
   Write-Err 'Windows build failed (npm run dist:win).'
+  exit 1
+}
+
+$installer = @(Get-ChildItem -Path (Join-Path $Root 'dist') -Filter 'Kun-*-win-x64.exe' -File)
+if ($installer.Count -ne 1) {
+  Write-Err "Expected exactly one Windows installer, found $($installer.Count)."
+  exit 1
+}
+
+Write-Info 'Verifying Windows code signatures and secure timestamps...'
+try {
+  & (Join-Path $Root 'scripts\verify-windows-signing.ps1') `
+    -FilePath $installer.FullName, (Join-Path $Root 'dist\win-unpacked\Kun.exe')
+} catch {
+  Write-Err "Windows code-signing verification failed: $($_.Exception.Message)"
   exit 1
 }
 

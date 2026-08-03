@@ -930,7 +930,9 @@ export async function createKunServeRuntime(
 	    transitionGraphPlanningDraft: (input) =>
 	      graphRuntime.transitionPlanningDraft(input),
 	    cancelGraphSourceRuns: ({ threadId, sourceTurnId }) =>
-	      graphRuntime.handleSourceTurnTerminal(threadId, sourceTurnId, 'aborted'),
+	      graphRuntime.handleSourceTurnTerminal(threadId, sourceTurnId, 'aborted', {
+	        forceCancel: true
+	      }),
 	    migrationMaintenance,
 	    ids,
 	    nowIso

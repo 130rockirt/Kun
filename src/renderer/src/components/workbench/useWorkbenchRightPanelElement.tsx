@@ -79,7 +79,9 @@ type WorkbenchRightPanelElementOptions = Pick<
     | 'composerModel'
     | 'composerProviderId'
     | 'composerPickList'
+    | 'composerFastMode'
     | 'setComposerModel'
+    | 'setComposerFastMode'
     | 'onApplyFramework'
     | 'onNewConversation'
   >

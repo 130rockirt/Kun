@@ -200,7 +200,11 @@ export function WorkbenchRightPanel({
           ) : rightPanelMode === BUILTIN_RIGHT_PANEL_IDS.mcpSkills ? (
             <McpSkillsPanel workspaceRoot={workspaceRoot} onOpenSettings={mcpSkills.onOpenSettings} />
           ) : rightPanelMode === BUILTIN_RIGHT_PANEL_IDS.graph ? (
-            <GraphModePanel className="h-full max-h-full w-full" onCollapse={onCollapse} />
+            <GraphModePanel
+              className="h-full max-h-full w-full"
+              onCollapse={onCollapse}
+              active={visible}
+            />
           ) : rightPanelMode && isExtensionContributionId(rightPanelMode) && extensionView?.id === rightPanelMode ? (
             <ExtensionViewOutlet contribution={extensionView} workspaceRoot={workspaceRoot} onClose={onCollapse} />
           ) : (
@@ -341,7 +345,13 @@ function CodeRightPanelWorkspace({
       return <UsageQuotaPanel activeThreadId={code.activeThreadId} />
     }
     if (id === BUILTIN_RIGHT_PANEL_IDS.graph) {
-      return <GraphModePanel className="h-full max-h-full w-full" onCollapse={onCollapse} />
+      return (
+        <GraphModePanel
+          className="h-full max-h-full w-full"
+          onCollapse={onCollapse}
+          active={visible && code.state.activeId === id}
+        />
+      )
     }
     if (id === BUILTIN_RIGHT_PANEL_IDS.agentPerspective) {
       return (
